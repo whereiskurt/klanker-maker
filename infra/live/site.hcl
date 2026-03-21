@@ -3,6 +3,7 @@ locals {
   site = {
     label           = "km"
     tf_state_prefix = "tf-km"
+    domain          = "klankermaker.ai"
     random_suffix   = get_env("KMGUID", "")
   }
 
@@ -34,6 +35,9 @@ locals {
     region         = local.region.full
     encrypt        = true
   }
+
+  # KMS key alias for SOPS encryption
+  kms_alias = "alias/km-sops"
 
   # Module base path relative to repo root
   module_base = "${dirname(find_in_parent_folders("CLAUDE.md"))}/infra/modules"
