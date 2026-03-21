@@ -1,0 +1,69 @@
+# Project State
+
+## Project Reference
+
+See: .planning/PROJECT.md (updated 2026-03-21)
+
+**Core value:** A sandbox is a declarative policy object that compiles into a controlled, auditable execution environment
+**Current focus:** Phase 1 — Schema, Compiler & AWS Foundation
+
+## Current Position
+
+Phase: 1 of 5 (Schema, Compiler & AWS Foundation)
+Plan: 0 of TBD in current phase
+Status: Ready to plan
+Last activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
+
+Progress: [░░░░░░░░░░] 0%
+
+## Performance Metrics
+
+**Velocity:**
+- Total plans completed: 0
+- Average duration: —
+- Total execution time: 0 hours
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| - | - | - | - |
+
+**Recent Trend:**
+- Last 5 plans: —
+- Trend: —
+
+*Updated after each plan completion*
+
+## Accumulated Context
+
+### Decisions
+
+Decisions are logged in PROJECT.md Key Decisions table.
+Recent decisions affecting current work:
+
+- [Roadmap]: SG-first security model must be established in Phase 2 — VPC Security Groups are the real enforcement boundary; proxy sidecars are a policy layer on top
+- [Roadmap]: Profile inheritance semantics (child overrides parent, no additive merge on allowlists) must be defined and tested in Phase 1 before any IAM compilation code is written
+- [Roadmap]: INFR (AWS account setup) is assigned to Phase 1 because provisioning in Phase 2 depends on the account structure, Route53, KMS, and S3 being present
+- [Roadmap]: MAIL (email/SES) is assigned to Phase 4 alongside artifact hardening — it depends on a working sandbox runtime but is independent of the sidecar enforcement layer
+- [Roadmap revision 2026-03-21]: ECS/Fargate is a v1 substrate alongside EC2 — `runtime.substrate: ec2 | ecs` is the selection mechanism; the compiler must produce different Terragrunt artifacts per substrate; Phase 2 includes both ec2-instance and ecs-cluster/ecs-task/ecs-service modules from defcon.run.34
+- [Roadmap revision 2026-03-21]: Sidecar model differs by substrate — EC2 sidecars are OS-level processes injected into the instance; ECS sidecars are additional containers in the Fargate task definition; NETW-02, NETW-03, OBSV-01, OBSV-02 must work on both
+- [Roadmap revision 2026-03-21]: Kubernetes (k8s/EKS) positioned as v2 PLAT-01; Docker/local substrate remains out of scope for v1
+
+### Pending Todos
+
+None yet.
+
+### Blockers/Concerns
+
+- [Phase 2]: ECS substrate introduces a second Terraform module path (ecs-cluster, ecs-task, ecs-service) — compiler branch logic for substrate selection needs careful design to avoid divergence
+- [Phase 3]: On ECS, DNS and HTTP proxy sidecars run as containers in the task definition; iptables DNAT rules used for EC2 interception do not apply — ECS needs a different traffic interception approach (likely environment-variable proxy configuration or VPC endpoint routing)
+- [Phase 3]: iptables DNAT interaction with IMDSv2 hop limit not fully resolved on EC2 — research recommends `/gsd:research-phase` before Phase 3 planning
+- [Phase 3]: HTTPS proxy mode (SNI-only vs. full MITM) is a security trade-off that needs an explicit decision before Phase 3 implementation
+- [Phase 4]: Filesystem policy enforcement mechanism (seccomp, Linux mount namespaces, OverlayFS) not decided — research recommends `/gsd:research-phase` before Phase 4 planning
+
+## Session Continuity
+
+Last session: 2026-03-21
+Stopped at: Roadmap revised (ECS v1 substrate added); ready to run `/gsd:plan-phase 1`
+Resume file: None

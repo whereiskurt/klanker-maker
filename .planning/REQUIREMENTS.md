@@ -25,12 +25,17 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **PROV-06**: Sandbox auto-destroys after idle timeout with no activity
 - [ ] **PROV-07**: Sandbox teardown policy is configurable (destroy/stop/retain)
 - [ ] **PROV-08**: Every sandbox resource is tagged with `fabric:sandbox-id` for tracking and cost attribution
+- [ ] **PROV-09**: Operator can specify substrate (`ec2` or `ecs`) in the profile's `runtime.substrate` field and `fabric create` provisions the corresponding infrastructure
+- [ ] **PROV-10**: ECS substrate provisions an AWS Fargate task with sidecar containers for enforcement (DNS proxy, HTTP proxy, audit log) defined in the task definition
+- [ ] **PROV-11**: EC2 sandboxes use spot instances by default; on-demand fallback is configurable per profile
+- [ ] **PROV-12**: ECS sandboxes use Fargate Spot capacity provider by default; on-demand fallback is configurable per profile
+- [ ] **PROV-13**: Sandbox handles spot interruption gracefully — uploads artifacts to S3 before termination when possible
 
 ### Network & Security
 
 - [ ] **NETW-01**: Security Groups enforce egress restrictions as the primary enforcement layer
-- [ ] **NETW-02**: DNS proxy sidecar filters outbound DNS by allowlisted suffixes
-- [ ] **NETW-03**: HTTP proxy sidecar filters outbound HTTP/S by allowlisted hosts and methods
+- [ ] **NETW-02**: DNS proxy sidecar filters outbound DNS by allowlisted suffixes (works on both EC2 and ECS substrates)
+- [ ] **NETW-03**: HTTP proxy sidecar filters outbound HTTP/S by allowlisted hosts and methods (works on both EC2 and ECS substrates)
 - [ ] **NETW-04**: IAM role is session-scoped with configurable duration and region lock
 - [ ] **NETW-05**: IMDSv2 is enforced (http-tokens=required) on all sandbox EC2 instances
 - [ ] **NETW-06**: Secrets are injected via SSM Parameter Store with allowlist of permitted secret refs
@@ -39,8 +44,8 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Observability & Artifacts
 
-- [ ] **OBSV-01**: Audit log sidecar captures command execution logs
-- [ ] **OBSV-02**: Audit log sidecar captures network traffic logs
+- [ ] **OBSV-01**: Audit log sidecar captures command execution logs (works on both EC2 and ECS substrates)
+- [ ] **OBSV-02**: Audit log sidecar captures network traffic logs (works on both EC2 and ECS substrates)
 - [ ] **OBSV-03**: Log destination is configurable (CloudWatch/S3/stdout)
 - [ ] **OBSV-04**: Filesystem policy enforces writable and read-only paths
 - [ ] **OBSV-05**: Artifacts upload to S3 on sandbox exit with configurable size limits
@@ -64,6 +69,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **INFR-05**: S3 buckets for artifacts with lifecycle policies and cross-region replication
 - [ ] **INFR-06**: Terragrunt per-sandbox directory isolation (no workspace sharing)
 - [ ] **INFR-07**: Domain registered in management account and connected to application account
+- [ ] **INFR-08**: All infrastructure modules and application code from defcon.run.34 (Terraform modules: network, ec2spot, ecs-cluster, ecs-task, ecs-service, secrets; Terragrunt patterns: site.hcl, service.hcl; Go application: apps/local/configui/) are copied into the Fabric repo, renamed, and adapted — no runtime or build-time dependency on defcon.run.34 exists
 
 ### ConfigUI
 
@@ -89,7 +95,7 @@ Deferred to future release. Tracked but not in current roadmap.
 
 ### Platform Expansion
 
-- **PLAT-01**: ECS/Fargate substrate option
+- **PLAT-01**: Kubernetes substrate option (k8s/EKS) — natural v2 extension after EC2 and ECS are working
 - **PLAT-02**: Docker/local substrate for development
 - **PLAT-03**: Sandbox REST API server (persistent control plane)
 - **PLAT-04**: Multi-cloud support (GCP, Azure)
@@ -105,7 +111,8 @@ Explicitly excluded. Documented to prevent scope creep.
 
 | Feature | Reason |
 |---------|--------|
-| Container-based isolation (Docker/ECS) | EC2 VM-level isolation is stronger and simpler for v1; containers add escape risk |
+| Docker/local substrate | Development convenience only; adds complexity without isolation guarantees; v2 candidate |
+| Kubernetes substrate (k8s/EKS) | EC2 and ECS cover v1 use cases; k8s is a near-future v2 extension (PLAT-01) |
 | Multi-cloud implementation | Schema is cloud-neutral but v1 implements AWS only |
 | Full OPA policy engine | YAML allowlists cover 90% of use cases; OPA adds operator complexity |
 | Real-time collaboration / multi-user editing | Single-operator model for v1; multi-tenancy is a major scope increase |
@@ -119,56 +126,64 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SCHM-01 | — | Pending |
-| SCHM-02 | — | Pending |
-| SCHM-03 | — | Pending |
-| SCHM-04 | — | Pending |
-| SCHM-05 | — | Pending |
-| PROV-01 | — | Pending |
-| PROV-02 | — | Pending |
-| PROV-03 | — | Pending |
-| PROV-04 | — | Pending |
-| PROV-05 | — | Pending |
-| PROV-06 | — | Pending |
-| PROV-07 | — | Pending |
-| PROV-08 | — | Pending |
-| NETW-01 | — | Pending |
-| NETW-02 | — | Pending |
-| NETW-03 | — | Pending |
-| NETW-04 | — | Pending |
-| NETW-05 | — | Pending |
-| NETW-06 | — | Pending |
-| NETW-07 | — | Pending |
-| NETW-08 | — | Pending |
-| OBSV-01 | — | Pending |
-| OBSV-02 | — | Pending |
-| OBSV-03 | — | Pending |
-| OBSV-04 | — | Pending |
-| OBSV-05 | — | Pending |
-| OBSV-06 | — | Pending |
-| OBSV-07 | — | Pending |
-| MAIL-01 | — | Pending |
-| MAIL-02 | — | Pending |
-| MAIL-03 | — | Pending |
-| MAIL-04 | — | Pending |
-| MAIL-05 | — | Pending |
-| INFR-01 | — | Pending |
-| INFR-02 | — | Pending |
-| INFR-03 | — | Pending |
-| INFR-04 | — | Pending |
-| INFR-05 | — | Pending |
-| INFR-06 | — | Pending |
-| INFR-07 | — | Pending |
-| CFUI-01 | — | Pending |
-| CFUI-02 | — | Pending |
-| CFUI-03 | — | Pending |
-| CFUI-04 | — | Pending |
+| SCHM-01 | Phase 1 | Pending |
+| SCHM-02 | Phase 1 | Pending |
+| SCHM-03 | Phase 1 | Pending |
+| SCHM-04 | Phase 1 | Pending |
+| SCHM-05 | Phase 1 | Pending |
+| INFR-01 | Phase 1 | Pending |
+| INFR-02 | Phase 1 | Pending |
+| INFR-03 | Phase 1 | Pending |
+| INFR-04 | Phase 1 | Pending |
+| INFR-05 | Phase 1 | Pending |
+| INFR-06 | Phase 1 | Pending |
+| INFR-07 | Phase 1 | Pending |
+| INFR-08 | Phase 1 | Pending |
+| PROV-01 | Phase 2 | Pending |
+| PROV-02 | Phase 2 | Pending |
+| PROV-08 | Phase 2 | Pending |
+| PROV-09 | Phase 2 | Pending |
+| PROV-10 | Phase 2 | Pending |
+| PROV-11 | Phase 2 | Pending |
+| PROV-12 | Phase 2 | Pending |
+| NETW-01 | Phase 2 | Pending |
+| NETW-04 | Phase 2 | Pending |
+| NETW-05 | Phase 2 | Pending |
+| NETW-06 | Phase 2 | Pending |
+| NETW-07 | Phase 2 | Pending |
+| NETW-08 | Phase 2 | Pending |
+| PROV-03 | Phase 3 | Pending |
+| PROV-04 | Phase 3 | Pending |
+| PROV-05 | Phase 3 | Pending |
+| PROV-06 | Phase 3 | Pending |
+| PROV-07 | Phase 3 | Pending |
+| NETW-02 | Phase 3 | Pending |
+| NETW-03 | Phase 3 | Pending |
+| OBSV-01 | Phase 3 | Pending |
+| OBSV-02 | Phase 3 | Pending |
+| OBSV-03 | Phase 3 | Pending |
+| OBSV-04 | Phase 4 | Pending |
+| OBSV-05 | Phase 4 | Pending |
+| OBSV-06 | Phase 4 | Pending |
+| OBSV-07 | Phase 4 | Pending |
+| PROV-13 | Phase 4 | Pending |
+| MAIL-01 | Phase 4 | Pending |
+| MAIL-02 | Phase 4 | Pending |
+| MAIL-03 | Phase 4 | Pending |
+| MAIL-04 | Phase 4 | Pending |
+| MAIL-05 | Phase 4 | Pending |
+| CFUI-01 | Phase 5 | Pending |
+| CFUI-02 | Phase 5 | Pending |
+| CFUI-03 | Phase 5 | Pending |
+| CFUI-04 | Phase 5 | Pending |
 
 **Coverage:**
-- v1 requirements: 43 total
-- Mapped to phases: 0
-- Unmapped: 43 ⚠️
+- v1 requirements: 49 total
+- Mapped to phases: 49
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-21*
-*Last updated: 2026-03-21 after initial definition*
+*Last updated: 2026-03-21 — PROV-09, PROV-10 added; ECS moved from Out of Scope to v1; k8s added to v2; Docker/local remains out of scope*
+*Last updated: 2026-03-21 — INFR-08 added: no cross-repo dependency on defcon.run.34; all modules and app code must be copied and adapted into Fabric repo*
+*Last updated: 2026-03-21 — PROV-11, PROV-12, PROV-13 added: spot instances by default for EC2 and ECS, graceful interruption handling with artifact upload*
