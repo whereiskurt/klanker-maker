@@ -1,0 +1,56 @@
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: circular-b
+extends: circular-a
+
+spec:
+  lifecycle:
+    ttl: "1h"
+    idleTimeout: "30m"
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    spot: false
+    instanceType: t3.micro
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: []
+      allowedHosts: []
+      allowedMethods: []
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+  observability:
+    commandLog:
+      destination: stdout
+      logGroup: ""
+    networkLog:
+      destination: stdout
+      logGroup: ""
+  policy:
+    allowShellEscape: false
+  agent:
+    maxConcurrentTasks: 1
+    taskTimeout: "10m"

@@ -1,0 +1,70 @@
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: child-of-open-dev
+  labels:
+    tier: development
+    custom: "true"
+extends: open-dev
+
+spec:
+  lifecycle:
+    ttl: "2h"
+    idleTimeout: "30m"
+    teardownPolicy: destroy
+
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+
+  sourceAccess:
+    mode: allowlist
+
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".example.com"
+      allowedHosts: []
+      allowedMethods:
+        - GET
+
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/network
+
+  policy:
+    allowShellEscape: false
+
+  agent:
+    maxConcurrentTasks: 4
+    taskTimeout: "30m"
