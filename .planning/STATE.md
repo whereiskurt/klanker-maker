@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 01-schema-compiler-aws-foundation/01-01-PLAN.md
-last_updated: "2026-03-21T21:23:43.298Z"
+stopped_at: Completed 01-02-PLAN.md (Terraform module copy & adapt)
+last_updated: "2026-03-21T21:25:43.979Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 4
-  completed_plans: 1
+  completed_plans: 2
   percent: 0
 ---
 
@@ -51,6 +51,7 @@ Progress: [░░░░░░░░░░] 0%
 
 *Updated after each plan completion*
 | Phase 01-schema-compiler-aws-foundation P01 | 5 | 2 tasks | 14 files |
+| Phase 01-schema-compiler-aws-foundation P02 | 25 | 2 tasks | 22 files |
 
 ## Accumulated Context
 
@@ -68,6 +69,9 @@ Recent decisions affecting current work:
 - [Roadmap revision 2026-03-21]: Kubernetes (k8s/EKS) positioned as v2 PLAT-01; Docker/local substrate remains out of scope for v1
 - [Phase 01-schema-compiler-aws-foundation]: go:embed requires schema inside package directory tree — schema lives at schemas/ root for tooling and pkg/profile/schemas/ for embedding
 - [Phase 01-schema-compiler-aws-foundation]: ValidateSchema uses YAML->JSON->jsonschema pipeline; jsonschema/v6 AddResource requires parsed JSON value not raw bytes
+- [Phase 01-02]: Network module security groups have no egress — Phase 2 profile compiler adds per-profile egress rules based on allowlists
+- [Phase 01-02]: ECS service module has no load balancer — sandboxes use service discovery; FARGATE_SPOT preferred capacity strategy
+- [Phase 01-02]: ec2spot IMDSv2 enforced (http_tokens=required); SSH removed; SSM-only access
 
 ### Pending Todos
 
@@ -83,6 +87,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-21T21:23:43.296Z
-Stopped at: Completed 01-schema-compiler-aws-foundation/01-01-PLAN.md
+Last session: 2026-03-21T21:25:43.977Z
+Stopped at: Completed 01-02-PLAN.md (Terraform module copy & adapt)
 Resume file: None

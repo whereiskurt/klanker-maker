@@ -34,7 +34,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Operator can write a profile that extends a base profile via `extends`, and inheritance overrides are applied correctly (child values override, not extend, parent allowlists)
   4. All four built-in profiles (open-dev, restricted-dev, hardened, sealed) are present and pass `km validate` out of the box
   5. AWS multi-account structure (management, terraform, application) is provisioned with SSO access, Route53 delegation, KMS keys, S3 artifact buckets, and Terragrunt per-sandbox directory isolation in place — all Terraform modules (network, ec2spot, ecs-cluster, ecs-task, ecs-service, secrets, and Terragrunt site.hcl/service.hcl patterns) are present inside the Klanker Maker repo under their own module paths, renamed and adapted, with no reference to defcon.run.34
-**Plans:** 1/4 plans executed
+**Plans:** 2/4 plans executed
 
 Plans:
 - [ ] 01-01-PLAN.md — Go project scaffold, SandboxProfile types, JSON Schema, schema+semantic validation (TDD)
@@ -101,7 +101,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Schema, Compiler & AWS Foundation | 1/4 | In Progress|  |
+| 1. Schema, Compiler & AWS Foundation | 2/4 | In Progress|  |
 | 2. Core Provisioning & Security Baseline | 0/TBD | Not started | - |
 | 3. Sidecar Enforcement & Lifecycle Management | 0/TBD | Not started | - |
 | 4. Lifecycle Hardening, Artifacts & Email | 0/TBD | Not started | - |
