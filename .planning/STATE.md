@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Phase 1 context gathered
-last_updated: "2026-03-21T20:47:51.699Z"
+stopped_at: Completed 01-schema-compiler-aws-foundation/01-01-PLAN.md
+last_updated: "2026-03-21T21:23:43.298Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 5
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 4
+  completed_plans: 1
   percent: 0
 ---
 
@@ -50,6 +50,7 @@ Progress: [░░░░░░░░░░] 0%
 - Trend: —
 
 *Updated after each plan completion*
+| Phase 01-schema-compiler-aws-foundation P01 | 5 | 2 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -65,6 +66,8 @@ Recent decisions affecting current work:
 - [Roadmap revision 2026-03-21]: ECS/Fargate is a v1 substrate alongside EC2 — `runtime.substrate: ec2 | ecs` is the selection mechanism; the compiler must produce different Terragrunt artifacts per substrate; Phase 2 includes both ec2-instance and ecs-cluster/ecs-task/ecs-service modules from defcon.run.34
 - [Roadmap revision 2026-03-21]: Sidecar model differs by substrate — EC2 sidecars are OS-level processes injected into the instance; ECS sidecars are additional containers in the Fargate task definition; NETW-02, NETW-03, OBSV-01, OBSV-02 must work on both
 - [Roadmap revision 2026-03-21]: Kubernetes (k8s/EKS) positioned as v2 PLAT-01; Docker/local substrate remains out of scope for v1
+- [Phase 01-schema-compiler-aws-foundation]: go:embed requires schema inside package directory tree — schema lives at schemas/ root for tooling and pkg/profile/schemas/ for embedding
+- [Phase 01-schema-compiler-aws-foundation]: ValidateSchema uses YAML->JSON->jsonschema pipeline; jsonschema/v6 AddResource requires parsed JSON value not raw bytes
 
 ### Pending Todos
 
@@ -80,6 +83,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-21T20:47:51.697Z
-Stopped at: Phase 1 context gathered
-Resume file: .planning/phases/01-schema-compiler-aws-foundation/01-CONTEXT.md
+Last session: 2026-03-21T21:23:43.296Z
+Stopped at: Completed 01-schema-compiler-aws-foundation/01-01-PLAN.md
+Resume file: None

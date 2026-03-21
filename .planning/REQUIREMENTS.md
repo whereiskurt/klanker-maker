@@ -9,9 +9,9 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Schema & Validation
 
-- [ ] **SCHM-01**: Operator can define a SandboxProfile in YAML with apiVersion, kind, metadata, spec sections
-- [ ] **SCHM-02**: Schema supports lifecycle, runtime, execution, sourceAccess, network, identity, sidecars, observability, policy, and agent sections
-- [ ] **SCHM-03**: Operator can run `km validate <profile.yaml>` and get clear error messages for invalid profiles
+- [x] **SCHM-01**: Operator can define a SandboxProfile in YAML with apiVersion, kind, metadata, spec sections
+- [x] **SCHM-02**: Schema supports lifecycle, runtime, execution, sourceAccess, network, identity, sidecars, observability, policy, and agent sections
+- [x] **SCHM-03**: Operator can run `km validate <profile.yaml>` and get clear error messages for invalid profiles
 - [ ] **SCHM-04**: Profile can extend a base profile via `extends` field, inheriting and overriding specific sections
 - [ ] **SCHM-05**: Four built-in profiles ship with Klanker Maker: open-dev, restricted-dev, hardened, sealed
 
@@ -129,9 +129,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SCHM-01 | Phase 1 | Pending |
-| SCHM-02 | Phase 1 | Pending |
-| SCHM-03 | Phase 1 | Pending |
+| SCHM-01 | Phase 1 | Complete |
+| SCHM-02 | Phase 1 | Complete |
+| SCHM-03 | Phase 1 | Complete |
 | SCHM-04 | Phase 1 | Pending |
 | SCHM-05 | Phase 1 | Pending |
 | INFR-01 | Phase 1 | Pending |
