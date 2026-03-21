@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: "Checkpoint reached: 01-04 Task 2 AWS infrastructure human-verify"
-last_updated: "2026-03-21T21:36:38.844Z"
+stopped_at: Phase 2 context gathered
+last_updated: "2026-03-21T22:28:58.146Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 5
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 4
-  completed_plans: 3
+  completed_plans: 4
   percent: 0
 ---
 
@@ -91,6 +91,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-21T21:36:38.842Z
-Stopped at: Checkpoint reached: 01-04 Task 2 AWS infrastructure human-verify
-Resume file: None
+Last session: 2026-03-21T22:28:58.140Z
+Stopped at: Phase 2 context gathered
+Resume file: .planning/phases/02-core-provisioning-security-baseline/02-CONTEXT.md
