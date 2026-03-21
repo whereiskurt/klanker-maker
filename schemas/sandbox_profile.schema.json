@@ -1,0 +1,333 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://klankermaker.ai/schemas/sandbox-profile/v1alpha1",
+  "title": "SandboxProfile",
+  "description": "A declarative policy object that defines a controlled, auditable execution environment",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "const": "klankermaker.ai/v1alpha1",
+      "description": "API version of the SandboxProfile resource"
+    },
+    "kind": {
+      "type": "string",
+      "const": "SandboxProfile",
+      "description": "Resource kind"
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique name for this profile"
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Arbitrary key-value labels for organization and filtering"
+        }
+      }
+    },
+    "extends": {
+      "type": "string",
+      "description": "Name of the parent profile to inherit from"
+    },
+    "spec": {
+      "type": "object",
+      "required": [
+        "lifecycle",
+        "runtime",
+        "execution",
+        "sourceAccess",
+        "network",
+        "identity",
+        "sidecars",
+        "observability",
+        "policy",
+        "agent"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "lifecycle": {
+          "type": "object",
+          "required": ["ttl", "idleTimeout", "teardownPolicy"],
+          "additionalProperties": false,
+          "properties": {
+            "ttl": {
+              "type": "string",
+              "pattern": "^[0-9]+(s|m|h|d)$",
+              "description": "Maximum sandbox lifetime as a duration string (e.g. 24h)"
+            },
+            "idleTimeout": {
+              "type": "string",
+              "pattern": "^[0-9]+(s|m|h|d)$",
+              "description": "Duration after which an idle sandbox is torn down"
+            },
+            "teardownPolicy": {
+              "type": "string",
+              "enum": ["destroy", "stop", "retain"],
+              "description": "What happens when the sandbox expires"
+            }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "required": ["substrate", "instanceType", "region"],
+          "additionalProperties": false,
+          "properties": {
+            "substrate": {
+              "type": "string",
+              "enum": ["ec2", "ecs"],
+              "description": "Compute backend: ec2 (EC2 instance) or ecs (Fargate task)"
+            },
+            "spot": {
+              "type": "boolean",
+              "description": "Use spot instances (EC2 only)"
+            },
+            "instanceType": {
+              "type": "string",
+              "minLength": 1,
+              "description": "EC2 instance type or ECS task CPU/memory size"
+            },
+            "region": {
+              "type": "string",
+              "minLength": 1,
+              "description": "AWS region to provision in"
+            }
+          }
+        },
+        "execution": {
+          "type": "object",
+          "required": ["shell", "workingDir"],
+          "additionalProperties": false,
+          "properties": {
+            "shell": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Path to the shell executable"
+            },
+            "workingDir": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Initial working directory"
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Additional environment variables to inject"
+            }
+          }
+        },
+        "sourceAccess": {
+          "type": "object",
+          "required": ["mode"],
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["allowlist", "none"],
+              "description": "Access mode: allowlist or none"
+            },
+            "github": {
+              "type": "object",
+              "required": ["allowedRepos"],
+              "additionalProperties": false,
+              "properties": {
+                "allowedRepos": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "List of allowed GitHub repository patterns"
+                },
+                "allowedRefs": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "List of allowed git refs (branches, tags)"
+                },
+                "permissions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": ["read", "write"]
+                  },
+                  "description": "Allowed permission levels"
+                }
+              }
+            }
+          }
+        },
+        "network": {
+          "type": "object",
+          "required": ["egress"],
+          "additionalProperties": false,
+          "properties": {
+            "egress": {
+              "type": "object",
+              "required": ["allowedDNSSuffixes", "allowedHosts", "allowedMethods"],
+              "additionalProperties": false,
+              "properties": {
+                "allowedDNSSuffixes": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "DNS suffix patterns allowed for resolution (e.g. .amazonaws.com)"
+                },
+                "allowedHosts": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Explicit hostnames allowed for egress"
+                },
+                "allowedMethods": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+                  },
+                  "description": "HTTP methods permitted for egress"
+                }
+              }
+            }
+          }
+        },
+        "identity": {
+          "type": "object",
+          "required": ["roleSessionDuration", "allowedRegions", "sessionPolicy"],
+          "additionalProperties": false,
+          "properties": {
+            "roleSessionDuration": {
+              "type": "string",
+              "pattern": "^[0-9]+(s|m|h)$",
+              "description": "Maximum duration for assumed role sessions"
+            },
+            "allowedRegions": {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 1,
+              "description": "AWS regions the sandbox may access"
+            },
+            "sessionPolicy": {
+              "type": "string",
+              "enum": ["minimal", "standard", "elevated"],
+              "description": "IAM session policy scope"
+            }
+          }
+        },
+        "sidecars": {
+          "type": "object",
+          "required": ["dnsProxy", "httpProxy", "auditLog", "tracing"],
+          "additionalProperties": false,
+          "properties": {
+            "dnsProxy": { "$ref": "#/$defs/SidecarConfig" },
+            "httpProxy": { "$ref": "#/$defs/SidecarConfig" },
+            "auditLog": { "$ref": "#/$defs/SidecarConfig" },
+            "tracing": { "$ref": "#/$defs/SidecarConfig" }
+          }
+        },
+        "observability": {
+          "type": "object",
+          "required": ["commandLog", "networkLog"],
+          "additionalProperties": false,
+          "properties": {
+            "commandLog": { "$ref": "#/$defs/LogDestination" },
+            "networkLog": { "$ref": "#/$defs/LogDestination" }
+          }
+        },
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowShellEscape": {
+              "type": "boolean",
+              "description": "Permit shell escape sequences. Set false for hardened profiles."
+            },
+            "allowedCommands": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Allowlist of commands the agent may invoke"
+            },
+            "filesystemPolicy": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "readOnlyPaths": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Paths that are read-only within the sandbox"
+                },
+                "writablePaths": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Paths that are writable within the sandbox"
+                }
+              }
+            }
+          }
+        },
+        "agent": {
+          "type": "object",
+          "required": ["maxConcurrentTasks", "taskTimeout"],
+          "additionalProperties": false,
+          "properties": {
+            "maxConcurrentTasks": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum number of parallel tasks the agent may run"
+            },
+            "taskTimeout": {
+              "type": "string",
+              "pattern": "^[0-9]+(s|m|h)$",
+              "description": "Maximum duration for a single agent task"
+            },
+            "allowedTools": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Tool names the agent is permitted to use"
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "SidecarConfig": {
+      "type": "object",
+      "required": ["enabled", "image"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether this sidecar is active"
+        },
+        "image": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Container image reference for this sidecar"
+        }
+      }
+    },
+    "LogDestination": {
+      "type": "object",
+      "required": ["destination"],
+      "additionalProperties": false,
+      "properties": {
+        "destination": {
+          "type": "string",
+          "enum": ["cloudwatch", "s3", "stdout"],
+          "description": "Log backend destination"
+        },
+        "logGroup": {
+          "type": "string",
+          "description": "CloudWatch log group or S3 prefix"
+        }
+      }
+    }
+  }
+}
