@@ -31,11 +31,13 @@ A sandbox is a declarative policy object that compiles into a controlled, audita
 - [ ] Network policy enforcement — DNS proxy sidecar for allowlist DNS filtering
 - [ ] Network policy enforcement — HTTP proxy sidecar for allowlist HTTP filtering
 - [ ] Audit log sidecar — command logging and network logging
+- [ ] Tracing sidecar — OpenTelemetry trace/span collection with MLflow experiment tracking integration
 - [ ] Identity management — AWS IAM role assumption with scoped session duration and regions
 - [ ] GitHub source access — allowlist mode with repo/ref/permission controls
 - [ ] Secrets injection — allowlist mode with SSM Parameter Store refs
 - [ ] Lifecycle management — TTL-based auto-destroy, idle timeout, teardown policy (destroy/stop/retain)
 - [ ] Observability — command log, network log, configurable log destination (CloudWatch/S3/stdout)
+- [ ] Observability — OTel traces exported to configurable collector endpoint; MLflow runs logged per sandbox session
 - [ ] Filesystem policy — writable/read-only path enforcement
 - [ ] Artifact upload on exit with size limits
 - [ ] Four built-in profiles: open-dev, restricted-dev, hardened, sealed
@@ -90,7 +92,8 @@ The SandboxProfile schema uses Kubernetes-style `apiVersion/kind/metadata/spec` 
 | Allowlist-first security | Explicit allows beat broad access + denies; more legible and secure | — Pending |
 | SandboxProfile vs Sandbox separation | Profile = reusable template, Sandbox = instantiated; prevents pet servers | — Pending |
 | tiogo-style Go architecture | Cobra/Viper, internal/pkg layout, Config DI — proven across multiple projects | — Pending |
-| Three sidecars in v1 (DNS proxy, HTTP proxy, audit log) | Full enforcement from day one, not retrofit later | — Pending |
+| Four sidecars in v1 (DNS proxy, HTTP proxy, audit log, tracing) | Full enforcement + observability from day one, not retrofit later | — Pending |
+| OTel + MLflow for tracing | OTel is the vendor-neutral standard for traces/spans; MLflow tracks agent experiment runs; together they give end-to-end sandbox observability | — Pending |
 | ConfigUI from defcon.run.34 | Proven Go HTTP server + web UI, adapt rather than rebuild | — Pending |
 
 ---

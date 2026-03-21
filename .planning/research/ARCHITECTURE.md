@@ -57,6 +57,10 @@
 │  │  (allowlist  │  │  (allowlist  │  │  (command log +        │   │
 │  │  DNS filter) │  │  HTTP filter)│  │   network log)         │   │
 │  └──────────────┘  └──────────────┘  └────────────────────────┘   │
+│  ┌────────────────────────────────────────────────────────────┐    │
+│  │  Tracing Sidecar (OTel collector + MLflow run logger)      │    │
+│  │  Collects traces/spans, propagates context through proxies │    │
+│  └────────────────────────────────────────────────────────────┘    │
 │  iptables DNAT rules intercept all outbound DNS (53) + HTTP (80,   │
 │  443) traffic before it leaves the instance and route through       │
 │  local proxy processes                                              │
@@ -70,6 +74,10 @@
 │  │  CloudWatch    │  │  S3 Bucket    │  │  stdout (local dev)  │  │
 │  │  (log groups)  │  │  (audit dump) │  │                      │  │
 │  └────────────────┘  └───────────────┘  └──────────────────────┘  │
+│  ┌────────────────┐  ┌───────────────┐                            │
+│  │  OTel          │  │  MLflow       │                            │
+│  │  Collector     │  │  Tracking     │                            │
+│  └────────────────┘  └───────────────┘                            │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -86,6 +94,7 @@
 | DNS Proxy sidecar | Intercept all DNS queries, allow only allowlisted suffixes/hosts | Small Go or dnscrypt-proxy process; iptables DNAT port 53 |
 | HTTP Proxy sidecar | Intercept all HTTP/HTTPS traffic, enforce domain allowlist | Squid or custom Go proxy; iptables DNAT port 80/443 |
 | Audit Log sidecar | Record commands executed and network connections made | Go daemon tailing shell history + proxy logs; ships to log destination |
+| Tracing sidecar | Collect OTel traces/spans from workload, propagate trace context through proxies, log MLflow runs per sandbox session | Go process running OTel collector agent + MLflow client; exports to configured endpoints |
 | ConfigUI | Web dashboard: profile editor, sandbox status, AWS resource view | TypeScript frontend + Go HTTP server (adapted from defcon.run.34 `apps/`) |
 | Terraform state | Source of truth for running sandboxes and their current state | S3 backend (existing pattern) |
 
@@ -139,7 +148,8 @@ km/
 ├── sidecars/                    # Sidecar source / configuration templates
 │   ├── dns-proxy/               # DNS allowlist proxy
 │   ├── http-proxy/              # HTTP/HTTPS allowlist proxy (Squid config templates)
-│   └── audit-log/               # Audit log daemon
+│   ├── audit-log/               # Audit log daemon
+│   └── tracing/                 # OTel trace collector + MLflow run logger
 └── ui/                          # TypeScript ConfigUI (adapted from defcon.run.34)
     ├── src/
     │   ├── components/

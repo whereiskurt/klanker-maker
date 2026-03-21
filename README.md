@@ -81,11 +81,17 @@ spec:
     dnsProxy: { enabled: true }
     httpProxy: { enabled: true }
     auditLog: { enabled: true }
+    tracing: { enabled: true }
 
   observability:
     logDestination: cloudwatch
     commandLog: true
     networkLog: true
+    tracing:
+      otelCollectorEndpoint: "http://otel-collector:4317"
+      mlflow:
+        trackingUri: "http://mlflow:5000"
+        experimentName: "sandbox-runs"
 ```
 
 ### GitHub Source Access
@@ -148,6 +154,7 @@ Klanker Maker uses **explicit allowlists everywhere** — if it's not allowed, i
 - **Filesystem**: Writable/read-only path enforcement
 - **Metadata**: IMDSv2 enforced on all EC2 instances
 - **Audit**: Command and network logging with secret redaction
+- **Tracing**: OTel traces/spans per sandbox session, MLflow experiment tracking for agent run history
 
 ## Architecture
 

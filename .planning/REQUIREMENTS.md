@@ -51,6 +51,9 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **OBSV-05**: Artifacts upload to S3 on sandbox exit with configurable size limits
 - [ ] **OBSV-06**: S3 artifact storage supports multi-region replication
 - [ ] **OBSV-07**: Secret patterns are redacted from audit logs before storage
+- [ ] **OBSV-08**: Tracing sidecar collects OpenTelemetry traces and spans from sandbox workloads and exports to a configurable OTel collector endpoint
+- [ ] **OBSV-09**: Each sandbox session is logged as an MLflow run with sandbox metadata (profile, sandbox-id, duration, exit status) as run parameters
+- [ ] **OBSV-10**: OTel trace context is propagated through proxy sidecars so outbound HTTP requests carry trace headers
 
 ### Email & Communication
 
@@ -166,6 +169,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OBSV-05 | Phase 4 | Pending |
 | OBSV-06 | Phase 4 | Pending |
 | OBSV-07 | Phase 4 | Pending |
+| OBSV-08 | Phase 3 | Pending |
+| OBSV-09 | Phase 3 | Pending |
+| OBSV-10 | Phase 3 | Pending |
 | PROV-13 | Phase 4 | Pending |
 | MAIL-01 | Phase 4 | Pending |
 | MAIL-02 | Phase 4 | Pending |
@@ -178,8 +184,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CFUI-04 | Phase 5 | Pending |
 
 **Coverage:**
-- v1 requirements: 49 total
-- Mapped to phases: 49
+- v1 requirements: 52 total
+- Mapped to phases: 52
 - Unmapped: 0
 
 ---
@@ -187,3 +193,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 *Last updated: 2026-03-21 — PROV-09, PROV-10 added; ECS moved from Out of Scope to v1; k8s added to v2; Docker/local remains out of scope*
 *Last updated: 2026-03-21 — INFR-08 added: no cross-repo dependency on defcon.run.34; all modules and app code must be copied and adapted into Klanker Maker repo*
 *Last updated: 2026-03-21 — PROV-11, PROV-12, PROV-13 added: spot instances by default for EC2 and ECS, graceful interruption handling with artifact upload*
+*Last updated: 2026-03-21 — OBSV-08, OBSV-09, OBSV-10 added: OTel tracing sidecar, MLflow experiment tracking per sandbox session, trace context propagation through proxy sidecars*
