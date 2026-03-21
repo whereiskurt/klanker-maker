@@ -5,7 +5,6 @@ metadata:
   labels:
     tier: production
     security: sealed
-    builtin: "true"
 
 spec:
   lifecycle:
@@ -15,7 +14,7 @@ spec:
 
   runtime:
     substrate: ec2
-    spot: false
+    spot: true
     instanceType: t3.micro
     region: us-east-1
 
@@ -24,7 +23,7 @@ spec:
     workingDir: /workspace
 
   sourceAccess:
-    mode: none
+    mode: allowlist
 
   network:
     egress:

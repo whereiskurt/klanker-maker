@@ -5,7 +5,6 @@ metadata:
   labels:
     tier: production
     security: hardened
-    builtin: "true"
 
 spec:
   lifecycle:
@@ -15,7 +14,7 @@ spec:
 
   runtime:
     substrate: ec2
-    spot: false
+    spot: true
     instanceType: t3.small
     region: us-east-1
 
@@ -25,13 +24,6 @@ spec:
 
   sourceAccess:
     mode: allowlist
-    github:
-      allowedRepos:
-        - "github.com/whereiskurt/*"
-      allowedRefs:
-        - "main"
-      permissions:
-        - read
 
   network:
     egress:

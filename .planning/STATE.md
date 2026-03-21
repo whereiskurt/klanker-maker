@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 01-02-PLAN.md (Terraform module copy & adapt)
-last_updated: "2026-03-21T21:25:43.979Z"
+stopped_at: "Checkpoint reached: 01-04 Task 2 AWS infrastructure human-verify"
+last_updated: "2026-03-21T21:36:38.844Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 4
-  completed_plans: 2
+  completed_plans: 3
   percent: 0
 ---
 
@@ -52,6 +52,7 @@ Progress: [░░░░░░░░░░] 0%
 *Updated after each plan completion*
 | Phase 01-schema-compiler-aws-foundation P01 | 5 | 2 tasks | 14 files |
 | Phase 01-schema-compiler-aws-foundation P02 | 25 | 2 tasks | 22 files |
+| Phase 01-schema-compiler-aws-foundation P04 | 45 | 1 tasks | 21 files |
 
 ## Accumulated Context
 
@@ -72,6 +73,9 @@ Recent decisions affecting current work:
 - [Phase 01-02]: Network module security groups have no egress — Phase 2 profile compiler adds per-profile egress rules based on allowlists
 - [Phase 01-02]: ECS service module has no load balancer — sandboxes use service discovery; FARGATE_SPOT preferred capacity strategy
 - [Phase 01-02]: ec2spot IMDSv2 enforced (http_tokens=required); SSH removed; SSM-only access
+- [Phase 01-04]: CLI architecture: cmd/ entry point -> internal/app/cmd/ Cobra commands -> pkg/ libraries (tiogo pattern)
+- [Phase 01-04]: km validate adds file's directory to search paths for extends resolution; schema validation on child bytes, semantic on merged struct
+- [Phase 01-04]: Plan 03 artifacts (inherit.go, builtins.go) implemented as Rule 3 auto-fix — blocking dependency for Plan 04
 
 ### Pending Todos
 
@@ -87,6 +91,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-21T21:25:43.977Z
-Stopped at: Completed 01-02-PLAN.md (Terraform module copy & adapt)
+Last session: 2026-03-21T21:36:38.842Z
+Stopped at: Checkpoint reached: 01-04 Task 2 AWS infrastructure human-verify
 Resume file: None

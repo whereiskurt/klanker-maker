@@ -65,13 +65,13 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Infrastructure Foundation
 
-- [ ] **INFR-01**: AWS multi-account setup: management account, terraform account, application account (defcon.run.34 pattern)
-- [ ] **INFR-02**: AWS SSO configured for operator access across accounts
-- [ ] **INFR-03**: Route53 hosted zone configured in management account, delegated to application account
-- [ ] **INFR-04**: KMS keys provisioned for SOPS encryption
-- [ ] **INFR-05**: S3 buckets for artifacts with lifecycle policies and cross-region replication
+- [x] **INFR-01**: AWS multi-account setup: management account, terraform account, application account (defcon.run.34 pattern)
+- [x] **INFR-02**: AWS SSO configured for operator access across accounts
+- [x] **INFR-03**: Route53 hosted zone configured in management account, delegated to application account
+- [x] **INFR-04**: KMS keys provisioned for SOPS encryption
+- [x] **INFR-05**: S3 buckets for artifacts with lifecycle policies and cross-region replication
 - [x] **INFR-06**: Terragrunt per-sandbox directory isolation (no workspace sharing)
-- [ ] **INFR-07**: Domain registered in management account and connected to application account
+- [x] **INFR-07**: Domain registered in management account and connected to application account
 - [x] **INFR-08**: All infrastructure modules and application code from defcon.run.34 (Terraform modules: network, ec2spot, ecs-cluster, ecs-task, ecs-service, secrets; Terragrunt patterns: site.hcl, service.hcl; Go application: apps/local/configui/) are copied into the Klanker Maker repo, renamed, and adapted — no runtime or build-time dependency on defcon.run.34 exists
 
 ### ConfigUI
@@ -134,13 +134,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SCHM-03 | Phase 1 | Complete |
 | SCHM-04 | Phase 1 | Pending |
 | SCHM-05 | Phase 1 | Pending |
-| INFR-01 | Phase 1 | Pending |
-| INFR-02 | Phase 1 | Pending |
-| INFR-03 | Phase 1 | Pending |
-| INFR-04 | Phase 1 | Pending |
-| INFR-05 | Phase 1 | Pending |
+| INFR-01 | Phase 1 | Complete |
+| INFR-02 | Phase 1 | Complete |
+| INFR-03 | Phase 1 | Complete |
+| INFR-04 | Phase 1 | Complete |
+| INFR-05 | Phase 1 | Complete |
 | INFR-06 | Phase 1 | Complete |
-| INFR-07 | Phase 1 | Pending |
+| INFR-07 | Phase 1 | Complete |
 | INFR-08 | Phase 1 | Complete |
 | PROV-01 | Phase 2 | Pending |
 | PROV-02 | Phase 2 | Pending |
