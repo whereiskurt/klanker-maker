@@ -13,10 +13,10 @@
 | Technology | Version | Purpose | Why Recommended |
 |------------|---------|---------|-----------------|
 | Go | 1.23+ | Language runtime | Project already Go-first; slog, range-over-func, and toolchain management stabilized in 1.21-1.23; use latest stable |
-| github.com/spf13/cobra | v1.10.2 | CLI command tree (`fabric create/destroy/list/validate`) | De facto standard for production Go CLIs; used by kubectl, hugo, docker CLI; provides persistent flags, completion, and nested subcommand structure that tiogo already patterns against |
+| github.com/spf13/cobra | v1.10.2 | CLI command tree (`km create/destroy/list/validate`) | De facto standard for production Go CLIs; used by kubectl, hugo, docker CLI; provides persistent flags, completion, and nested subcommand structure that tiogo already patterns against |
 | github.com/spf13/viper | v1.21.0 | Config file + env var binding | Hierarchical config (file → env → flags) with zero boilerplate; integrates with cobra via `BindPFlags`; maintenance-mode means no breaking changes |
 | github.com/rs/zerolog | v1.34.0 | Structured, JSON-first logging for CLI and sidecars | Zero-allocation JSON output; slog is stdlib but zerolog is better for sidecar audit logs that ship to CloudWatch/S3 because its stream-based API produces clean JSON lines without the slog text prefix noise; imported by 28k+ Go projects |
-| github.com/goccy/go-yaml | v1.x | YAML parsing for SandboxProfile | go-yaml/yaml (gopkg.in) is now archived; goccy/go-yaml is the actively maintained replacement, passes 60+ more YAML spec test cases, and provides path-based error messages which are required for `fabric validate` to give useful schema errors |
+| github.com/goccy/go-yaml | v1.x | YAML parsing for SandboxProfile | go-yaml/yaml (gopkg.in) is now archived; goccy/go-yaml is the actively maintained replacement, passes 60+ more YAML spec test cases, and provides path-based error messages which are required for `km validate` to give useful schema errors |
 | github.com/santhosh-tekuri/jsonschema/v6 | v6.0.2 | SandboxProfile schema validation | JSON Schema Draft 2020-12 compliance; validates YAML via JSON conversion; `jv` CLI tool ships with the library for offline schema testing; preferred over go-playground/validator because the profile schema is declarative (apiVersion/kind/spec), not struct-tag-based |
 | github.com/aws/aws-sdk-go-v2 | v1.41.4 | AWS API calls (EC2, IAM, SSM, STS) | v2 is the current AWS SDK for Go; context-propagating, modular (import only `service/ec2`, `service/iam`, etc.); v1 is EOL |
 
@@ -25,7 +25,7 @@
 | Technology | Version | Purpose | Why Recommended |
 |------------|---------|---------|-----------------|
 | OpenTofu | 1.9.1 | IaC engine (replaces Terraform OSS) | HashiCorp declared Terraform OSS BSL end-of-life for July 2025; OpenTofu is the MPL 2.0 community fork under Linux Foundation governance; drop-in replacement with identical HCL and provider compatibility; Terragrunt fully supports it via `terraform_binary = "tofu"` |
-| Terragrunt | 0.77.x | Orchestrates OpenTofu modules, DRY config | Project's existing defcon.run.34 patterns use Terragrunt; `fabric create` compiles SandboxProfile to Terragrunt inputs and runs `terragrunt apply`; `site.hcl` / service-level `terragrunt.hcl` hierarchy is proven |
+| Terragrunt | 0.77.x | Orchestrates OpenTofu modules, DRY config | Project's existing defcon.run.34 patterns use Terragrunt; `km create` compiles SandboxProfile to Terragrunt inputs and runs `terragrunt apply`; `site.hcl` / service-level `terragrunt.hcl` hierarchy is proven |
 | tenv | latest | Version manager for OpenTofu + Terragrunt | Successor to tfenv/tofuenv; manages multiple OpenTofu/Terragrunt versions per project; install via `brew install tenv` on macOS |
 | AWS Provider (OpenTofu Registry) | ~5.x | EC2, VPC, IAM, SSM resources | Standard provider; lock via `.terraform.lock.hcl` equivalent |
 
@@ -33,7 +33,7 @@
 
 | Technology | Version | Purpose | Why Recommended |
 |------------|---------|---------|-----------------|
-| github.com/miekg/dns | v1.1.72 | DNS proxy sidecar (allowlist DNS filtering) | The canonical Go DNS library; full server + client API; every DNS-in-Go project builds on it; v2 is in development at codeberg.org/miekg/dns but v1.1.72 (Jan 2026) is the stable production choice for v1 of Fabric; migrate to v2 post-MVP |
+| github.com/miekg/dns | v1.1.72 | DNS proxy sidecar (allowlist DNS filtering) | The canonical Go DNS library; full server + client API; every DNS-in-Go project builds on it; v2 is in development at codeberg.org/miekg/dns but v1.1.72 (Jan 2026) is the stable production choice for v1 of Klanker Maker; migrate to v2 post-MVP |
 | github.com/elazarl/goproxy | v1.8.2 | HTTP/HTTPS proxy sidecar (allowlist HTTP filtering) | Provides `ConnectAction` (Accept/Reject/MITM/Hijack) for HTTP CONNECT interception; `DstHostIs` and regex condition API enables clean allowlist implementation; the MITM mode with custom CA cert is how you inspect HTTPS traffic for allowlist enforcement |
 | github.com/rs/zerolog | v1.34.0 | Audit log sidecar (command + network log, JSON lines) | Same library as CLI; produces newline-delimited JSON that CloudWatch Logs Insights and S3 Select can query natively; zero-allocation path keeps sidecar overhead minimal |
 
@@ -56,11 +56,11 @@
 
 | Library | Version | Purpose | When to Use |
 |---------|---------|---------|-------------|
-| github.com/google/uuid | v1.x | Generate sandbox IDs | Every `fabric create` needs a stable, unique sandbox ID |
+| github.com/google/uuid | v1.x | Generate sandbox IDs | Every `km create` needs a stable, unique sandbox ID |
 | github.com/hashicorp/hcl/v2 | v2.x | Parse/write Terragrunt HCL inputs | When compiling SandboxProfile → Terragrunt input files programmatically |
 | github.com/zclconf/go-cty | v1.x | HCL type system (required by hcl/v2) | Automatically required when using hcl/v2 |
 | golang.org/x/sys | latest | Low-level syscalls for sidecar process isolation | When implementing filesystem path enforcement or namespace operations in sidecars |
-| github.com/aws/aws-sdk-go-v2/service/ec2 | module version | EC2 describe/status calls | `fabric list` / `fabric status` — querying running sandbox instances |
+| github.com/aws/aws-sdk-go-v2/service/ec2 | module version | EC2 describe/status calls | `km list` / `km status` — querying running sandbox instances |
 | github.com/aws/aws-sdk-go-v2/service/ssm | module version | SSM Parameter Store for secrets injection | Secrets allowlist resolution at sandbox create time |
 | github.com/aws/aws-sdk-go-v2/service/sts | module version | IAM role assumption (scoped sessions) | Identity management — `AssumeRole` with session duration limits |
 | github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs | module version | CloudWatch log shipping from sidecars | Observability destination when profile specifies CloudWatch |
@@ -177,10 +177,10 @@ pnpm dlx shadcn@latest init
 - For network audit: hook into the HTTP proxy and DNS proxy log streams rather than duplicating capture
 - Emit structured zerolog JSON to stdout → captured by CloudWatch agent → shipped to configured destination
 
-**For the Go CLI (`fabric`) command structure:**
-- Follow tiogo pattern: `cmd/fabric/main.go` → `internal/app/cmd/` (one file per subcommand) → `pkg/` (reusable libs)
+**For the Go CLI (`km`) command structure:**
+- Follow tiogo pattern: `cmd/km/main.go` → `internal/app/cmd/` (one file per subcommand) → `pkg/` (reusable libs)
 - Central `Config` struct with Viper binding, passed by pointer via cobra `PersistentPreRunE`
-- Schema validation (`fabric validate`) runs before any AWS API calls in `fabric create`
+- Schema validation (`km validate`) runs before any AWS API calls in `km create`
 
 **For the ConfigUI:**
 - Serve the Vite-built static bundle from the Go HTTP server (embed with `//go:embed dist/*`)
@@ -221,5 +221,5 @@ pnpm dlx shadcn@latest init
 
 ---
 
-*Stack research for: Fabric — policy-driven sandbox platform*
+*Stack research for: Klanker Maker — policy-driven sandbox platform*
 *Researched: 2026-03-21*

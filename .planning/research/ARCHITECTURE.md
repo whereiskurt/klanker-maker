@@ -12,7 +12,7 @@
 ┌────────────────────────────────────────────────────────────────────┐
 │                        Operator Interface Layer                     │
 ├───────────────────────────────────┬────────────────────────────────┤
-│  Go CLI (fabric)                  │  TypeScript ConfigUI            │
+│  Go CLI (km)                  │  TypeScript ConfigUI            │
 │  create / destroy / list          │  Profile editor + live status   │
 │  validate / status                │  AWS resource discovery         │
 └───────────────────────────────────┴────────────────────────────────┘
@@ -22,7 +22,7 @@
 │                        Compilation Layer                            │
 ├────────────────────────────────────────────────────────────────────┤
 │  SandboxProfile (YAML)                                              │
-│    apiVersion: fabric.run/v1alpha1                                  │
+│    apiVersion: klankermaker.ai/v1alpha1                                  │
 │    kind: SandboxProfile                                             │
 │    spec: { lifecycle, runtime, network, identity, sidecars, ... }  │
 │                    │                                                │
@@ -79,7 +79,7 @@
 |-----------|----------------|----------------|
 | SandboxProfile YAML | Declarative policy object: what is allowed, how long, what can be accessed | YAML with Kubernetes-style `apiVersion/kind/metadata/spec` |
 | Profile Compiler | Translate profile spec → Terragrunt `inputs` block + `user-data` script | Go library, invoked by CLI |
-| `fabric` CLI | User-facing lifecycle: validate, create, destroy, list, status | Go + Cobra/Viper (`cmd/` → `internal/app/cmd/` → `pkg/`) |
+| `km` CLI | User-facing lifecycle: validate, create, destroy, list, status | Go + Cobra/Viper (`cmd/` → `internal/app/cmd/` → `pkg/`) |
 | Terragrunt | Orchestrate Terraform module execution with compiled inputs | Existing HCL pattern from defcon.run.34 |
 | Terraform modules | Provision actual AWS resources: VPC, EC2, IAM, security groups | Adapted from defcon.run.34 `modules/network`, `modules/ec2spot`, `modules/secrets` |
 | user-data script | Bootstrap sandbox on first boot: install sidecars, configure iptables, start processes | Bash, embedded in compiled output |
@@ -92,18 +92,18 @@
 ## Recommended Project Structure
 
 ```
-fabric/
+km/
 ├── cmd/
-│   └── fabric/
+│   └── km/
 │       └── main.go              # Binary entry point
 ├── internal/
 │   └── app/
 │       ├── cmd/                 # Cobra command implementations
-│       │   ├── create.go        # fabric create <profile>
-│       │   ├── destroy.go       # fabric destroy <sandbox-id>
-│       │   ├── list.go          # fabric list
-│       │   ├── status.go        # fabric status <sandbox-id>
-│       │   └── validate.go      # fabric validate <profile.yaml>
+│       │   ├── create.go        # km create <profile>
+│       │   ├── destroy.go       # km destroy <sandbox-id>
+│       │   ├── list.go          # km list
+│       │   ├── status.go        # km status <sandbox-id>
+│       │   └── validate.go      # km validate <profile.yaml>
 │       └── config/
 │           └── config.go        # Central Config struct (Viper-backed)
 ├── pkg/
@@ -151,7 +151,7 @@ fabric/
 
 ### Structure Rationale
 
-- **`pkg/profile/`:** Schema and validation are decoupled from compilation. The CLI calls validate independently (`fabric validate`) and the compiler calls it internally before generating outputs.
+- **`pkg/profile/`:** Schema and validation are decoupled from compilation. The CLI calls validate independently (`km validate`) and the compiler calls it internally before generating outputs.
 - **`pkg/compiler/`:** Isolated compilation logic makes it testable without invoking Terraform. Input generation and user-data generation are separate files because they have different output targets.
 - **`infra/modules/`:** Terraform modules are stable versioned artifacts (following defcon.run.34 pattern). The CLI never edits them — only the `live/sandbox/terragrunt.hcl` inputs file changes between sandbox instances.
 - **`profiles/`:** Built-in profiles ship with the binary as embedded files. User-defined profiles live wherever the operator keeps them.
@@ -163,9 +163,9 @@ fabric/
 
 **What:** The profile compiler produces static artifacts (HCL inputs, user-data script) that are then handed to Terragrunt. The CLI does not call AWS APIs directly for provisioning — that is entirely Terraform's job.
 
-**When to use:** Always. This is the core Fabric architecture. It keeps the compiler testable (no real AWS needed), keeps provisioning idempotent (Terraform handles drift), and keeps audit trails clean (compiled inputs are diffs against state).
+**When to use:** Always. This is the core Klanker Maker architecture. It keeps the compiler testable (no real AWS needed), keeps provisioning idempotent (Terraform handles drift), and keeps audit trails clean (compiled inputs are diffs against state).
 
-**Trade-offs:** Slightly longer feedback loop for `fabric create` (compile → terragrunt apply). The upside is full Terraform safety guarantees: plan before apply, state tracking, destroy idempotency.
+**Trade-offs:** Slightly longer feedback loop for `km create` (compile → terragrunt apply). The upside is full Terraform safety guarantees: plan before apply, state tracking, destroy idempotency.
 
 **Example:**
 ```go
@@ -181,7 +181,7 @@ func Compile(profile *profile.SandboxProfile) (*CompiledArtifacts, error) {
 
 **What:** Each sandbox EC2 instance runs three local sidecar processes: a DNS proxy, an HTTP proxy, and an audit log daemon. iptables DNAT rules redirect all outbound traffic through the local proxies before it leaves the instance. The workload process does not know about the proxies — enforcement is transparent.
 
-**When to use:** Always for Fabric sandboxes. The transparency is intentional: workloads written for unrestricted environments run unchanged in sandboxes, and the enforcement is non-bypassable from userspace (iptables rules run in kernel).
+**When to use:** Always for Klanker Maker sandboxes. The transparency is intentional: workloads written for unrestricted environments run unchanged in sandboxes, and the enforcement is non-bypassable from userspace (iptables rules run in kernel).
 
 **Trade-offs:** Requires iptables configuration in user-data. HTTPS inspection requires the HTTP proxy to act as a CONNECT terminator (or enforce SNI allowlists without full MITM). Full HTTPS content inspection is complex — allowlist by domain at the TLS SNI level is the practical approach.
 
@@ -206,7 +206,7 @@ iptables -t nat -A OUTPUT -p tcp --dport 443 -j REDIRECT --to-ports 3128
 
 **Example:**
 ```yaml
-apiVersion: fabric.run/v1alpha1
+apiVersion: klankermaker.ai/v1alpha1
 kind: SandboxProfile
 metadata:
   name: agent-goose
@@ -221,7 +221,7 @@ spec:
 
 ### Pattern 4: Sandbox vs. SandboxProfile Separation
 
-**What:** A `SandboxProfile` is a reusable template. A `Sandbox` is an instantiated running environment with its own ID, timestamps, and state. `fabric create` takes a profile and produces a sandbox ID. Destroying a sandbox does not affect the profile.
+**What:** A `SandboxProfile` is a reusable template. A `Sandbox` is an instantiated running environment with its own ID, timestamps, and state. `km create` takes a profile and produces a sandbox ID. Destroying a sandbox does not affect the profile.
 
 **When to use:** Always. This prevents "pet servers" — you always know the authoritative definition of what should be running (the profile), not just what is running (the instance).
 
@@ -229,10 +229,10 @@ spec:
 
 ## Data Flow
 
-### fabric create Flow
+### km create Flow
 
 ```
-Operator runs: fabric create agent-goose.yaml
+Operator runs: km create agent-goose.yaml
     │
     ▼
 [CLI: cmd/create.go]
@@ -279,10 +279,10 @@ Operator runs: fabric create agent-goose.yaml
     expires: 2026-03-21T14:00:00Z
 ```
 
-### fabric destroy Flow
+### km destroy Flow
 
 ```
-Operator runs: fabric destroy sandbox-a1b2c3d4
+Operator runs: km destroy sandbox-a1b2c3d4
     │
     ▼
 [CLI: cmd/destroy.go]
@@ -307,8 +307,8 @@ Operator runs: fabric destroy sandbox-a1b2c3d4
 [HTTP Proxy]       → request log     → [Audit Log daemon] → [Log destination]
 
 Log destination (per profile spec):
-    CloudWatch Logs group: /fabric/sandboxes/<sandbox-id>/
-    S3:                    s3://<bucket>/fabric/<sandbox-id>/audit.log
+    CloudWatch Logs group: /km/sandboxes/<sandbox-id>/
+    S3:                    s3://<bucket>/km/<sandbox-id>/audit.log
     stdout:                (local dev only)
 ```
 
@@ -383,7 +383,7 @@ In practice: Phase 1 = schema + compiler + Terraform modules (the compilation pi
 
 ### Anti-Pattern 4: TTL Enforcement in the CLI Process
 
-**What people do:** Have `fabric create` spawn a background process that sleeps until TTL expires and then calls `fabric destroy`.
+**What people do:** Have `km create` spawn a background process that sleeps until TTL expires and then calls `km destroy`.
 
 **Why it's wrong:** The CLI process can be killed, the operator's laptop can close, or the background process can be missed. TTL enforcement cannot be reliable if it lives in the client.
 
@@ -424,7 +424,7 @@ In practice: Phase 1 = schema + compiler + Terraform modules (the compilation pi
 
 ### Scaling Priorities
 
-1. **First bottleneck:** Sandbox list/status — `fabric list` must scan Terraform state files or AWS tags across N sandboxes. At 50+ this becomes slow. An index (DynamoDB or S3 manifest updated at create/destroy time) solves this. V1 can skip this; it becomes necessary by v2.
+1. **First bottleneck:** Sandbox list/status — `km list` must scan Terraform state files or AWS tags across N sandboxes. At 50+ this becomes slow. An index (DynamoDB or S3 manifest updated at create/destroy time) solves this. V1 can skip this; it becomes necessary by v2.
 2. **Second bottleneck:** Audit log volume — a busy agent workload generates significant log volume. CloudWatch Log Insights handles this at scale; S3 + Athena for bulk analysis. No architecture change needed, just configuration.
 
 ## Sources
@@ -440,5 +440,5 @@ In practice: Phase 1 = schema + compiler + Terraform modules (the compilation pi
 - Reference implementation: defcon.run.34 (`infra/terraform/modules/`, `infra/terraform/live/`) — HIGH confidence, inspected directly
 
 ---
-*Architecture research for: policy-driven sandbox/execution environment platform (Fabric)*
+*Architecture research for: policy-driven sandbox/execution environment platform (Klanker Maker)*
 *Researched: 2026-03-21*

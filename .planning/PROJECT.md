@@ -1,8 +1,8 @@
-# Fabric
+# Klanker Maker
 
 ## What This Is
 
-Fabric is an open-source, policy-driven sandbox platform that lets you define execution environments as declarative YAML profiles and compile them into real AWS infrastructure. It provides a Go CLI (`fabric create/destroy/list/validate`) and a web-based ConfigUI for managing sandbox profiles and monitoring running sandboxes. The primary use case is spinning up isolated, observable, policy-constrained EC2 environments for agent workloads (like Goose), but the sandbox model is workload-agnostic.
+Klanker Maker is an open-source, policy-driven sandbox platform that lets you define execution environments as declarative YAML profiles and compile them into real AWS infrastructure. It provides a Go CLI (`km create/destroy/list/validate`) and a web-based ConfigUI for managing sandbox profiles and monitoring running sandboxes. The primary use case is spinning up isolated, observable, policy-constrained EC2 environments for agent workloads (like Goose), but the sandbox model is workload-agnostic.
 
 ## Core Value
 
@@ -23,10 +23,10 @@ A sandbox is a declarative policy object that compiles into a controlled, audita
 - [ ] SandboxProfile YAML schema with validation (apiVersion, kind, metadata, spec)
 - [ ] Schema supports: lifecycle, runtime, execution, sourceAccess, network, identity, sidecars, observability sections
 - [ ] Profile inheritance via `extends` field
-- [ ] `fabric validate` — validate a SandboxProfile YAML against the schema
-- [ ] `fabric create <profile>` — compile profile to Terragrunt inputs, apply EC2 + IAM + networking
-- [ ] `fabric destroy <sandbox-id>` — tear down a running sandbox
-- [ ] `fabric list` / `fabric status` — show running sandboxes and their state
+- [ ] `km validate` — validate a SandboxProfile YAML against the schema
+- [ ] `km create <profile>` — compile profile to Terragrunt inputs, apply EC2 + IAM + networking
+- [ ] `km destroy <sandbox-id>` — tear down a running sandbox
+- [ ] `km list` / `km status` — show running sandboxes and their state
 - [ ] EC2 sandbox provisioning via Terraform/Terragrunt (VPC, security groups, IAM roles, EC2 instance)
 - [ ] Network policy enforcement — DNS proxy sidecar for allowlist DNS filtering
 - [ ] Network policy enforcement — HTTP proxy sidecar for allowlist HTTP filtering
@@ -57,10 +57,10 @@ A sandbox is a declarative policy object that compiles into a controlled, audita
 
 ## Context
 
-Fabric is built on proven infrastructure patterns from defcon.run.34 (`~/working/defcon.run.34`), specifically:
+Klanker Maker is built on proven infrastructure patterns from defcon.run.34 (`~/working/defcon.run.34`), specifically:
 
 - **Terraform modules**: network (VPC, ALB, security groups), ec2spot, secrets (SSM/Secrets Manager) — adapted and renamed for sandbox provisioning
-- **ConfigUI**: Go HTTP server with embedded web UI for infrastructure management, AWS integration, SOPS secrets, terminal multiplexing — becomes Fabric's management dashboard
+- **ConfigUI**: Go HTTP server with embedded web UI for infrastructure management, AWS integration, SOPS secrets, terminal multiplexing — becomes Klanker Maker's management dashboard
 - **Terragrunt patterns**: site.hcl configuration, service definitions, multi-region deployment patterns
 
 The Go CLI follows the architecture established in tiogo (`github.com/whereiskurt/tiogo`):
@@ -68,7 +68,7 @@ The Go CLI follows the architecture established in tiogo (`github.com/whereiskur
 - Central Config struct with Viper integration, passed via dependency injection
 - Logrus structured logging, embedded templates, AES credential encryption
 
-The SandboxProfile schema uses Kubernetes-style `apiVersion/kind/metadata/spec` structure at `fabric.run/v1alpha1`.
+The SandboxProfile schema uses Kubernetes-style `apiVersion/kind/metadata/spec` structure at `klankermaker.ai/v1alpha1`.
 
 ## Constraints
 

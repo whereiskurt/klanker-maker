@@ -1,4 +1,4 @@
-# Requirements: Fabric
+# Requirements: Klanker Maker
 
 **Defined:** 2026-03-21
 **Core Value:** A sandbox is a declarative policy object that compiles into a controlled, auditable execution environment
@@ -11,21 +11,21 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [ ] **SCHM-01**: Operator can define a SandboxProfile in YAML with apiVersion, kind, metadata, spec sections
 - [ ] **SCHM-02**: Schema supports lifecycle, runtime, execution, sourceAccess, network, identity, sidecars, observability, policy, and agent sections
-- [ ] **SCHM-03**: Operator can run `fabric validate <profile.yaml>` and get clear error messages for invalid profiles
+- [ ] **SCHM-03**: Operator can run `km validate <profile.yaml>` and get clear error messages for invalid profiles
 - [ ] **SCHM-04**: Profile can extend a base profile via `extends` field, inheriting and overriding specific sections
-- [ ] **SCHM-05**: Four built-in profiles ship with Fabric: open-dev, restricted-dev, hardened, sealed
+- [ ] **SCHM-05**: Four built-in profiles ship with Klanker Maker: open-dev, restricted-dev, hardened, sealed
 
 ### Provisioning & Lifecycle
 
-- [ ] **PROV-01**: Operator can run `fabric create <profile>` to compile profile into Terragrunt inputs and provision EC2 + VPC + IAM
-- [ ] **PROV-02**: Operator can run `fabric destroy <sandbox-id>` to cleanly tear down all sandbox resources
-- [ ] **PROV-03**: Operator can run `fabric list` to see all running sandboxes with status
-- [ ] **PROV-04**: Operator can run `fabric status <sandbox-id>` to see detailed sandbox state
+- [ ] **PROV-01**: Operator can run `km create <profile>` to compile profile into Terragrunt inputs and provision EC2 + VPC + IAM
+- [ ] **PROV-02**: Operator can run `km destroy <sandbox-id>` to cleanly tear down all sandbox resources
+- [ ] **PROV-03**: Operator can run `km list` to see all running sandboxes with status
+- [ ] **PROV-04**: Operator can run `km status <sandbox-id>` to see detailed sandbox state
 - [ ] **PROV-05**: Sandbox auto-destroys after TTL expires
 - [ ] **PROV-06**: Sandbox auto-destroys after idle timeout with no activity
 - [ ] **PROV-07**: Sandbox teardown policy is configurable (destroy/stop/retain)
-- [ ] **PROV-08**: Every sandbox resource is tagged with `fabric:sandbox-id` for tracking and cost attribution
-- [ ] **PROV-09**: Operator can specify substrate (`ec2` or `ecs`) in the profile's `runtime.substrate` field and `fabric create` provisions the corresponding infrastructure
+- [ ] **PROV-08**: Every sandbox resource is tagged with `km:sandbox-id` for tracking and cost attribution
+- [ ] **PROV-09**: Operator can specify substrate (`ec2` or `ecs`) in the profile's `runtime.substrate` field and `km create` provisions the corresponding infrastructure
 - [ ] **PROV-10**: ECS substrate provisions an AWS Fargate task with sidecar containers for enforcement (DNS proxy, HTTP proxy, audit log) defined in the task definition
 - [ ] **PROV-11**: EC2 sandboxes use spot instances by default; on-demand fallback is configurable per profile
 - [ ] **PROV-12**: ECS sandboxes use Fargate Spot capacity provider by default; on-demand fallback is configurable per profile
@@ -39,7 +39,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **NETW-04**: IAM role is session-scoped with configurable duration and region lock
 - [ ] **NETW-05**: IMDSv2 is enforced (http-tokens=required) on all sandbox EC2 instances
 - [ ] **NETW-06**: Secrets are injected via SSM Parameter Store with allowlist of permitted secret refs
-- [ ] **NETW-07**: SOPS encrypts secrets at rest with KMS keys provisioned as part of Fabric infrastructure
+- [ ] **NETW-07**: SOPS encrypts secrets at rest with KMS keys provisioned as part of Klanker Maker infrastructure
 - [ ] **NETW-08**: GitHub source access controls allowlist repos, refs, and permissions (clone/fetch/push)
 
 ### Observability & Artifacts
@@ -69,7 +69,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **INFR-05**: S3 buckets for artifacts with lifecycle policies and cross-region replication
 - [ ] **INFR-06**: Terragrunt per-sandbox directory isolation (no workspace sharing)
 - [ ] **INFR-07**: Domain registered in management account and connected to application account
-- [ ] **INFR-08**: All infrastructure modules and application code from defcon.run.34 (Terraform modules: network, ec2spot, ecs-cluster, ecs-task, ecs-service, secrets; Terragrunt patterns: site.hcl, service.hcl; Go application: apps/local/configui/) are copied into the Fabric repo, renamed, and adapted — no runtime or build-time dependency on defcon.run.34 exists
+- [ ] **INFR-08**: All infrastructure modules and application code from defcon.run.34 (Terraform modules: network, ec2spot, ecs-cluster, ecs-task, ecs-service, secrets; Terragrunt patterns: site.hcl, service.hcl; Go application: apps/local/configui/) are copied into the Klanker Maker repo, renamed, and adapted — no runtime or build-time dependency on defcon.run.34 exists
 
 ### ConfigUI
 
@@ -91,7 +91,7 @@ Deferred to future release. Tracked but not in current roadmap.
 
 - **COST-01**: Cost budgeting per sandbox with spend limits
 - **COST-02**: Warm pool / pre-provisioned sandboxes for faster startup
-- **COST-03**: `fabric gc` for orphan detection and cleanup
+- **COST-03**: `km gc` for orphan detection and cleanup
 
 ### Platform Expansion
 
@@ -185,5 +185,5 @@ Which phases cover which requirements. Updated during roadmap creation.
 ---
 *Requirements defined: 2026-03-21*
 *Last updated: 2026-03-21 — PROV-09, PROV-10 added; ECS moved from Out of Scope to v1; k8s added to v2; Docker/local remains out of scope*
-*Last updated: 2026-03-21 — INFR-08 added: no cross-repo dependency on defcon.run.34; all modules and app code must be copied and adapted into Fabric repo*
+*Last updated: 2026-03-21 — INFR-08 added: no cross-repo dependency on defcon.run.34; all modules and app code must be copied and adapted into Klanker Maker repo*
 *Last updated: 2026-03-21 — PROV-11, PROV-12, PROV-13 added: spot instances by default for EC2 and ECS, graceful interruption handling with artifact upload*

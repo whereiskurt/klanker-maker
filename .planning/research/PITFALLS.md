@@ -35,23 +35,23 @@ Design the security model in two layers from day one:
 ### Pitfall 2: Terraform Destroy Leaves Orphaned Resources That Accumulate Silently
 
 **What goes wrong:**
-`terraform destroy` (or `terragrunt destroy`) fails on AWS resource dependency violations — most commonly: security groups that AWS won't delete while an ENI (elastic network interface) is still attached, VPCs that won't delete while subnets exist, or IAM instance profiles that won't delete while an EC2 instance is still terminating. The destroy command exits with an error, the sandbox is marked as "destroyed" in Fabric's state, but real AWS resources persist. These orphans accrue cost and may hold residual IAM credentials that are still valid.
+`terraform destroy` (or `terragrunt destroy`) fails on AWS resource dependency violations — most commonly: security groups that AWS won't delete while an ENI (elastic network interface) is still attached, VPCs that won't delete while subnets exist, or IAM instance profiles that won't delete while an EC2 instance is still terminating. The destroy command exits with an error, the sandbox is marked as "destroyed" in Klanker Maker's state, but real AWS resources persist. These orphans accrue cost and may hold residual IAM credentials that are still valid.
 
-For Fabric specifically, the inherited ec2spot module uses `aws_spot_instance_request` which has a known Terraform behavior: destroying the spot request does not automatically terminate the fulfilled EC2 instance. The actual instance requires a separate `aws_instance` resource or explicit termination logic.
+For Klanker Maker specifically, the inherited ec2spot module uses `aws_spot_instance_request` which has a known Terraform behavior: destroying the spot request does not automatically terminate the fulfilled EC2 instance. The actual instance requires a separate `aws_instance` resource or explicit termination logic.
 
 **Why it happens:**
 Happy-path testing: `apply` succeeds, `destroy` is run immediately after with no running workloads. Production failures happen when a workload has been running for 30 minutes — ENIs get attached by the OS, security groups get referenced by other resources created at runtime, or AWS takes longer than Terraform's timeout to terminate instances.
 
 **How to avoid:**
-- Implement a destroy pre-flight that calls AWS API directly (not Terraform state) to enumerate all resources tagged with the sandbox ID. Tag every resource at creation with `fabric:sandbox-id = <id>`.
-- Add a sandbox-level garbage collector: a scheduled process (or a `fabric gc` command) that lists all AWS resources with the `fabric:` tag prefix and verifies they have corresponding live Terraform state. Any tagged resource without state is an orphan — alert and optionally destroy.
+- Implement a destroy pre-flight that calls AWS API directly (not Terraform state) to enumerate all resources tagged with the sandbox ID. Tag every resource at creation with `km:sandbox-id = <id>`.
+- Add a sandbox-level garbage collector: a scheduled process (or a `km gc` command) that lists all AWS resources with the `km:` tag prefix and verifies they have corresponding live Terraform state. Any tagged resource without state is an orphan — alert and optionally destroy.
 - For the ec2spot module specifically: ensure the `spot_type = "one-time"` and add explicit `aws_ec2_instance_state` or use `aws_instance` with a spot_instance_request_id rather than relying on `aws_spot_instance_request` cleanup behavior.
 - Test destroy with a running workload (active connections, open files) — not just an idle instance.
 
 **Warning signs:**
 - Destroy command in CI only tested on freshly-created instances
 - No resource tagging strategy defined upfront
-- No orphan detection in `fabric list` or `fabric status`
+- No orphan detection in `km list` or `km status`
 - Cost anomalies in AWS Cost Explorer after sandbox sessions
 
 **Phase to address:** Phase — Core Provisioning (tagging and teardown correctness from day one); Phase — Lifecycle Management (gc and orphan detection).
@@ -72,12 +72,12 @@ Inheritance semantics are not explicitly defined before implementation begins. "
 - Define inheritance semantics explicitly in the schema spec before writing any compiler code: for allow-lists (actions, resources, repos, secrets), child values OVERRIDE parent values — not extend them. A child that specifies `allowedActions` gets exactly those actions.
 - For fields that should be additive (e.g., `metadata.labels`), explicitly document that they merge.
 - Write a compiler test that takes `open-dev` as parent and a minimal child profile, and asserts the resulting IAM policy JSON contains only the child's actions.
-- Use IAM Access Analyzer to validate generated policies against a reference policy — integrate this into the `fabric validate` command.
+- Use IAM Access Analyzer to validate generated policies against a reference policy — integrate this into the `km validate` command.
 
 **Warning signs:**
 - Inheritance semantics not documented in the schema spec
 - No test asserting that a restricted child of a permissive parent produces a restricted policy
-- `fabric validate` only checks YAML schema validity, not compiled IAM policy scope
+- `km validate` only checks YAML schema validity, not compiled IAM policy scope
 - IAM policies with `*` in Action or Resource fields in the compiled output
 
 **Phase to address:** Phase — YAML Schema + Compiler. Define semantics in the spec before writing the compiler.
@@ -87,14 +87,14 @@ Inheritance semantics are not explicitly defined before implementation begins. "
 ### Pitfall 4: Spot Instance Interruption During Active Workloads Creates Ungraceful Termination
 
 **What goes wrong:**
-AWS Spot instances receive a 2-minute interruption notice before termination. If Fabric uses spot instances (the inherited ec2spot module does), a running agent workload gets killed mid-execution with no artifact upload, no audit log flush, and no cleanup. The sandbox state machine never receives a termination signal, leaving the sandbox stuck in "running" state. Artifacts and logs for that session are lost.
+AWS Spot instances receive a 2-minute interruption notice before termination. If Klanker Maker uses spot instances (the inherited ec2spot module does), a running agent workload gets killed mid-execution with no artifact upload, no audit log flush, and no cleanup. The sandbox state machine never receives a termination signal, leaving the sandbox stuck in "running" state. Artifacts and logs for that session are lost.
 
 **Why it happens:**
 Spot is chosen for cost savings and works fine in testing (spot interruptions are rare at low volume). The interruption handling path is not tested because it requires actually triggering a spot interruption or mocking AWS metadata. It gets deferred until a real interruption happens in production.
 
 **How to avoid:**
 - Poll the EC2 instance metadata endpoint for the spot interruption notice (`/latest/meta-data/spot/termination-time`) inside the audit log sidecar. On detection: flush all pending logs, trigger artifact upload if configured, and emit a `SANDBOX_INTERRUPTED` lifecycle event.
-- Set the sandbox state to `interrupted` via a pre-termination hook (user data script calling back to Fabric or writing to a well-known S3 prefix).
+- Set the sandbox state to `interrupted` via a pre-termination hook (user data script calling back to Klanker Maker or writing to a well-known S3 prefix).
 - Consider using `on-demand` instances for workloads with strict completion requirements, and use spot only for low-priority or resumable workloads. Expose this as a profile option (`runtime.instance_market: spot|on-demand`).
 - Test the interruption path explicitly with `aws ec2 terminate-instances` on the underlying spot instance during a test run.
 
@@ -121,11 +121,11 @@ The extends mechanism is implemented as a recursive "load parent, merge" operati
 **How to avoid:**
 - Implement cycle detection in the profile loader as a depth-first search over the `extends` graph before any compilation begins. Return a structured error with the cycle path: `A -> B -> C -> A`.
 - Enforce a max inheritance depth (e.g., 5 levels) as a hard limit.
-- Add `fabric validate` test cases with circular profiles and profiles with depth > 5.
+- Add `km validate` test cases with circular profiles and profiles with depth > 5.
 
 **Warning signs:**
 - Profile loader implemented as simple recursive function with no visited-set tracking
-- `fabric validate` does not test for cycles
+- `km validate` does not test for cycles
 - No max-depth limit documented in the schema spec
 
 **Phase to address:** Phase — YAML Schema + Compiler.
@@ -135,7 +135,7 @@ The extends mechanism is implemented as a recursive "load parent, merge" operati
 ### Pitfall 6: Terragrunt Concurrent Init Corrupts Lock Files When Multiple Sandboxes Provision Simultaneously
 
 **What goes wrong:**
-When two `fabric create` commands run concurrently (two users, or a test suite), both invoke `terragrunt apply` which begins with `terraform init`. Concurrent inits sharing a provider cache directory (e.g., `TF_PLUGIN_CACHE_DIR`) corrupt the `.terraform.lock.hcl` file, causing one or both applies to fail with "inconsistent dependency lock file" errors. This is a known Terragrunt bug with multiple open GitHub issues (issues #2020, #2646, #4534).
+When two `km create` commands run concurrently (two users, or a test suite), both invoke `terragrunt apply` which begins with `terraform init`. Concurrent inits sharing a provider cache directory (e.g., `TF_PLUGIN_CACHE_DIR`) corrupt the `.terraform.lock.hcl` file, causing one or both applies to fail with "inconsistent dependency lock file" errors. This is a known Terragrunt bug with multiple open GitHub issues (issues #2020, #2646, #4534).
 
 **Why it happens:**
 The default Terraform behavior is to share a provider cache across invocations. Terragrunt's `run-all` parallel execution or concurrent independent invocations hit this race condition. It's not caught in testing because single-user development always provisions one sandbox at a time.
@@ -144,7 +144,7 @@ The default Terraform behavior is to share a provider cache across invocations. 
 - Use Terragrunt's Provider Cache Server (`terragrunt provider-cache`) instead of `TF_PLUGIN_CACHE_DIR`. The cache server handles concurrent requests safely.
 - Or: give each sandbox its own working directory with its own `.terraform/` directory, never sharing plugin caches between concurrent operations.
 - Pin provider versions explicitly in all modules. Consistent provider versions eliminate checksum mismatches.
-- Add a concurrency test: spin up two `fabric create` commands simultaneously and verify both succeed.
+- Add a concurrency test: spin up two `km create` commands simultaneously and verify both succeed.
 
 **Warning signs:**
 - `TF_PLUGIN_CACHE_DIR` set globally in shell environment without concurrency controls
@@ -182,7 +182,7 @@ Common mistakes when connecting to external services.
 | SSM Parameter Store (secrets injection) | Compiling secret ARNs into the Terraform module directly | Compile secret paths into userdata/environment variables at provision time; the IAM role grants `ssm:GetParameter` scoped to those paths only |
 | CloudWatch Logs (audit destination) | Assuming the CW agent starts before the workload | Use systemd `After=cloudwatch-agent.service` in workload unit; add a startup readiness check in the audit sidecar |
 | GitHub source access via deploy key | Storing deploy key in userdata in plaintext | Store deploy key in SSM SecureString; pull at instance init via `aws ssm get-parameter --with-decryption`; delete from memory after use |
-| Terragrunt remote state (S3 + DynamoDB lock) | Reusing the same DynamoDB table partition key format as defcon.run.34 | Use a sandbox-scoped key: `fabric/<sandbox-id>/terraform.tfstate.lock` to prevent lock collisions across sandboxes |
+| Terragrunt remote state (S3 + DynamoDB lock) | Reusing the same DynamoDB table partition key format as defcon.run.34 | Use a sandbox-scoped key: `km/<sandbox-id>/terraform.tfstate.lock` to prevent lock collisions across sandboxes |
 | EC2 spot price data source | `data.aws_ec2_spot_price.price` call fails in regions with no recent price history | Add a fallback: if spot price lookup fails, use on-demand price as a ceiling |
 
 ---
@@ -193,10 +193,10 @@ Patterns that work at small scale but fail as usage grows.
 
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| Terragrunt dependency graph recalculation on every apply | `fabric create` takes 60+ seconds before any AWS call is made | Pin Terragrunt to a version before 0.50.15; or restructure so sandbox modules have minimal cross-dependencies | ~5 concurrent sandboxes |
-| All sandbox state in one S3 bucket with no partitioning | Terraform state list operations slow to enumerate; DynamoDB lock table hot partition | Use `fabric/<env>/<region>/<sandbox-id>/` key prefix; consider separate DynamoDB table per environment | ~50 total sandboxes |
+| Terragrunt dependency graph recalculation on every apply | `km create` takes 60+ seconds before any AWS call is made | Pin Terragrunt to a version before 0.50.15; or restructure so sandbox modules have minimal cross-dependencies | ~5 concurrent sandboxes |
+| All sandbox state in one S3 bucket with no partitioning | Terraform state list operations slow to enumerate; DynamoDB lock table hot partition | Use `km/<env>/<region>/<sandbox-id>/` key prefix; consider separate DynamoDB table per environment | ~50 total sandboxes |
 | Audit log sidecar writing to local disk then syncing | Disk fills during long workload runs; data lost on spot interruption | Stream directly to CloudWatch Logs or S3 via the CW agent; local disk only as a buffer | Workloads > 1 hour |
-| `fabric list` polling EC2 describe-instances for every call | Rate limiting from AWS DescribeInstances API at high frequency | Cache state in a local file (`~/.fabric/state.json`) updated on create/destroy; validate against AWS on explicit `--refresh` flag | >20 concurrent sandboxes |
+| `km list` polling EC2 describe-instances for every call | Rate limiting from AWS DescribeInstances API at high frequency | Cache state in a local file (`~/.km/state.json`) updated on create/destroy; validate against AWS on explicit `--refresh` flag | >20 concurrent sandboxes |
 | Single VPC shared across all sandboxes | Security group limits (AWS default: 5 SGs per ENI, 500 rules per SG) hit; blast radius if VPC misconfigured | Per-sandbox VPC or at minimum per-sandbox subnet and security group; VPC resource limits are generous for ephemeral environments | >100 active sandboxes |
 
 ---
@@ -223,10 +223,10 @@ Common user experience mistakes in this domain.
 
 | Pitfall | User Impact | Better Approach |
 |---------|-------------|-----------------|
-| `fabric create` blocks for 3-5 minutes with no output | User thinks CLI crashed; kills it mid-provision, leaving partial resources | Stream Terraform output in real time or print progress dots; print sandbox ID immediately and stream status |
-| Validation errors are Terraform errors (HCL syntax) not YAML schema errors | User gets "Error: Invalid function argument" from Terraform when the YAML profile was the actual problem | Run `fabric validate` as a pre-flight inside `fabric create`; surface YAML errors before any Terraform call |
-| Destroy requires the same YAML profile file that was used to create | Profile file moved/deleted = sandbox can never be destroyed | Store compiled Terragrunt inputs at provision time under `~/.fabric/sandboxes/<id>/`; destroy operates on stored state, not the profile file |
-| `fabric list` shows sandbox IDs but no human context | Operator cannot remember which sandbox belongs to which workload | Store `metadata.name` and `metadata.labels` from the profile in local state; display them in list output |
+| `km create` blocks for 3-5 minutes with no output | User thinks CLI crashed; kills it mid-provision, leaving partial resources | Stream Terraform output in real time or print progress dots; print sandbox ID immediately and stream status |
+| Validation errors are Terraform errors (HCL syntax) not YAML schema errors | User gets "Error: Invalid function argument" from Terraform when the YAML profile was the actual problem | Run `km validate` as a pre-flight inside `km create`; surface YAML errors before any Terraform call |
+| Destroy requires the same YAML profile file that was used to create | Profile file moved/deleted = sandbox can never be destroyed | Store compiled Terragrunt inputs at provision time under `~/.km/sandboxes/<id>/`; destroy operates on stored state, not the profile file |
+| `km list` shows sandbox IDs but no human context | Operator cannot remember which sandbox belongs to which workload | Store `metadata.name` and `metadata.labels` from the profile in local state; display them in list output |
 | No warning before a sandbox is auto-destroyed by TTL | Workload in progress gets killed without notice | Emit a CloudWatch event / write to audit log 5 minutes before TTL expiry; if workload is active (based on recent audit log writes), optionally send a notification |
 
 ---
@@ -240,9 +240,9 @@ Things that appear complete but are missing critical pieces.
 - [ ] **Audit logging:** Sidecar writes logs — but CloudWatch log group was never created. Verify: check log group exists before the instance sends its first log line.
 - [ ] **IAM policy compilation:** Profile compiles to an IAM policy JSON — but the policy exceeds the 6,144 character IAM managed policy size limit for complex profiles. Verify: measure compiled policy size for the `open-dev` built-in profile.
 - [ ] **Secrets injection:** Secrets are fetched from SSM at boot — but the IAM role allows `ssm:GetParameter` with `Resource: *`. Verify: confirm resource ARNs are scoped to the specific parameter paths listed in the profile.
-- [ ] **Spot interruption:** Sandbox handles normal TTL destroy — but a spot interruption leaves the sandbox stuck in "running" state. Verify: terminate the underlying instance while Fabric believes it's running; check that status reconciliation catches it.
+- [ ] **Spot interruption:** Sandbox handles normal TTL destroy — but a spot interruption leaves the sandbox stuck in "running" state. Verify: terminate the underlying instance while Klanker Maker believes it's running; check that status reconciliation catches it.
 - [ ] **Profile extends:** Child profile produces a narrower IAM policy than its parent — not an additive union. Verify: compile a minimal child of `open-dev` and assert the action list matches the child spec exactly.
-- [ ] **Concurrent creates:** Two `fabric create` commands run simultaneously — Terragrunt provider cache is not corrupted. Verify: run a concurrency test in CI.
+- [ ] **Concurrent creates:** Two `km create` commands run simultaneously — Terragrunt provider cache is not corrupted. Verify: run a concurrency test in CI.
 
 ---
 
@@ -252,11 +252,11 @@ When pitfalls occur despite prevention, how to recover.
 
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| Orphaned resources after failed destroy | MEDIUM | 1. `aws resourcegroupstaggingapi get-resources --tag-filters Key=fabric:sandbox-id,Values=<id>` to find all tagged resources. 2. Terminate EC2 first, then delete security groups, then VPC. 3. Remove stale Terraform state with `terraform state rm`. |
+| Orphaned resources after failed destroy | MEDIUM | 1. `aws resourcegroupstaggingapi get-resources --tag-filters Key=km:sandbox-id,Values=<id>` to find all tagged resources. 2. Terminate EC2 first, then delete security groups, then VPC. 3. Remove stale Terraform state with `terraform state rm`. |
 | IAM policy too permissive due to inheritance bug | HIGH | 1. Immediately revoke the over-permissive role via SCP or explicit Deny. 2. Review CloudTrail for actions taken under the role. 3. Fix compiler inheritance semantics. 4. Recompile and re-apply all active sandbox roles. |
 | Proxy bypass discovered (workload accessing unauthorized destinations) | HIGH | 1. Destroy the sandbox immediately. 2. Review CloudTrail for API calls from the instance profile. 3. Add security group egress rules to block direct internet access. 4. Verify enforcement model follows SG-first approach. |
 | Terragrunt lock file corruption under concurrency | LOW | 1. Delete `.terraform.lock.hcl` in the affected sandbox working directory. 2. Re-run `terragrunt init`. 3. Re-apply. |
-| Spot interruption leaves sandbox in "running" state | LOW | 1. `fabric status <id>` triggers reconciliation against EC2 API. 2. Mark sandbox as `interrupted`. 3. Retrieve logs from CloudWatch for the session. |
+| Spot interruption leaves sandbox in "running" state | LOW | 1. `km status <id>` triggers reconciliation against EC2 API. 2. Mark sandbox as `interrupted`. 3. Retrieve logs from CloudWatch for the session. |
 | Sandbox stuck destroying (security group dependency violation) | MEDIUM | 1. Identify the blocking ENI: `aws ec2 describe-network-interfaces --filters Name=group-id,Values=<sg-id>`. 2. Detach/delete the ENI manually. 3. Re-run `terragrunt destroy`. |
 
 ---
@@ -294,5 +294,5 @@ How roadmap phases should address these pitfalls.
 - defcon.run.34 ec2spot module (`~/working/defcon.run.34/infra/terraform/modules/ec2spot/v1.0.0/main.tf`) — direct inspection of inherited module; identified `aws_spot_instance_request` teardown gap and open SSH egress in security group
 
 ---
-*Pitfalls research for: policy-driven sandbox platform (Fabric)*
+*Pitfalls research for: policy-driven sandbox platform (Klanker Maker)*
 *Researched: 2026-03-21*
