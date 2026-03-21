@@ -34,7 +34,13 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Operator can write a profile that extends a base profile via `extends`, and inheritance overrides are applied correctly (child values override, not extend, parent allowlists)
   4. All four built-in profiles (open-dev, restricted-dev, hardened, sealed) are present and pass `km validate` out of the box
   5. AWS multi-account structure (management, terraform, application) is provisioned with SSO access, Route53 delegation, KMS keys, S3 artifact buckets, and Terragrunt per-sandbox directory isolation in place — all Terraform modules (network, ec2spot, ecs-cluster, ecs-task, ecs-service, secrets, and Terragrunt site.hcl/service.hcl patterns) are present inside the Klanker Maker repo under their own module paths, renamed and adapted, with no reference to defcon.run.34
-**Plans**: TBD
+**Plans:** 4 plans
+
+Plans:
+- [ ] 01-01-PLAN.md — Go project scaffold, SandboxProfile types, JSON Schema, schema+semantic validation (TDD)
+- [ ] 01-02-PLAN.md — Copy and adapt Terraform modules + Terragrunt hierarchy from defcon.run.34
+- [ ] 01-03-PLAN.md — Profile inheritance resolver + four built-in profiles (TDD)
+- [ ] 01-04-PLAN.md — km validate CLI command + AWS foundation infrastructure verification
 
 ### Phase 2: Core Provisioning & Security Baseline
 **Goal**: Operators can create and destroy sandboxes via `km create/destroy` on either EC2 or ECS substrate using spot capacity by default, with VPC Security Group egress as the primary enforcement boundary, IMDSv2 enforced on EC2, and every resource tagged for tracking — all using Terraform modules that live inside the Klanker Maker repo
@@ -95,7 +101,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Schema, Compiler & AWS Foundation | 0/TBD | Not started | - |
+| 1. Schema, Compiler & AWS Foundation | 0/4 | Planning complete | - |
 | 2. Core Provisioning & Security Baseline | 0/TBD | Not started | - |
 | 3. Sidecar Enforcement & Lifecycle Management | 0/TBD | Not started | - |
 | 4. Lifecycle Hardening, Artifacts & Email | 0/TBD | Not started | - |
