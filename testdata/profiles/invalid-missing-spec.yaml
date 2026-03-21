@@ -1,0 +1,6 @@
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: missing-spec
+  labels:
+    tier: development

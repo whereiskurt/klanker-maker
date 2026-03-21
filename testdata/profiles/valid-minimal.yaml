@@ -1,0 +1,98 @@
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: open-dev
+  labels:
+    tier: development
+    team: platform
+
+spec:
+  lifecycle:
+    ttl: "24h"
+    idleTimeout: "2h"
+    teardownPolicy: destroy
+
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    env:
+      SANDBOX_MODE: open-dev
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "github.com/whereiskurt/*"
+      allowedRefs:
+        - "main"
+        - "develop"
+      permissions:
+        - read
+
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+        - ".github.com"
+        - ".pypi.org"
+      allowedHosts:
+        - "api.github.com"
+        - "pypi.org"
+      allowedMethods:
+        - GET
+        - POST
+
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+      - us-west-2
+    sessionPolicy: minimal
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/network
+
+  policy:
+    allowShellEscape: false
+    allowedCommands:
+      - git
+      - python3
+      - pip
+    filesystemPolicy:
+      readOnlyPaths: []
+      writablePaths:
+        - /workspace
+        - /tmp
+
+  agent:
+    maxConcurrentTasks: 4
+    taskTimeout: "30m"
+    allowedTools:
+      - bash
+      - read_file
+      - write_file
