@@ -34,8 +34,8 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Network & Security
 
 - [x] **NETW-01**: Security Groups enforce egress restrictions as the primary enforcement layer
-- [ ] **NETW-02**: DNS proxy sidecar filters outbound DNS by allowlisted suffixes (works on both EC2 and ECS substrates)
-- [ ] **NETW-03**: HTTP proxy sidecar filters outbound HTTP/S by allowlisted hosts and methods (works on both EC2 and ECS substrates)
+- [x] **NETW-02**: DNS proxy sidecar filters outbound DNS by allowlisted suffixes (works on both EC2 and ECS substrates)
+- [x] **NETW-03**: HTTP proxy sidecar filters outbound HTTP/S by allowlisted hosts and methods (works on both EC2 and ECS substrates)
 - [x] **NETW-04**: IAM role is session-scoped with configurable duration and region lock
 - [x] **NETW-05**: IMDSv2 is enforced (http-tokens=required) on all sandbox EC2 instances
 - [x] **NETW-06**: Secrets are injected via SSM Parameter Store with allowlist of permitted secret refs
@@ -53,7 +53,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **OBSV-07**: Secret patterns are redacted from audit logs before storage
 - [x] **OBSV-08**: Tracing sidecar collects OpenTelemetry traces and spans from sandbox workloads and exports to a configurable OTel collector endpoint
 - [x] **OBSV-09**: Each sandbox session is logged as an MLflow run with sandbox metadata (profile, sandbox-id, duration, exit status) as run parameters
-- [ ] **OBSV-10**: OTel trace context is propagated through proxy sidecars so outbound HTTP requests carry trace headers
+- [x] **OBSV-10**: OTel trace context is propagated through proxy sidecars so outbound HTTP requests carry trace headers
 
 ### Email & Communication
 
@@ -160,8 +160,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PROV-05 | Phase 3 | Pending |
 | PROV-06 | Phase 3 | Pending |
 | PROV-07 | Phase 3 | Pending |
-| NETW-02 | Phase 3 | Pending |
-| NETW-03 | Phase 3 | Pending |
+| NETW-02 | Phase 3 | Complete |
+| NETW-03 | Phase 3 | Complete |
 | OBSV-01 | Phase 3 | Complete |
 | OBSV-02 | Phase 3 | Complete |
 | OBSV-03 | Phase 3 | Complete |
@@ -171,7 +171,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OBSV-07 | Phase 4 | Pending |
 | OBSV-08 | Phase 3 | Complete |
 | OBSV-09 | Phase 3 | Complete |
-| OBSV-10 | Phase 3 | Pending |
+| OBSV-10 | Phase 3 | Complete |
 | PROV-13 | Phase 4 | Pending |
 | MAIL-01 | Phase 4 | Pending |
 | MAIL-02 | Phase 4 | Pending |

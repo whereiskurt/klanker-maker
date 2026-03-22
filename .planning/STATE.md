@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 03-02-PLAN.md (audit log sidecar + CloudWatch helpers)
-last_updated: "2026-03-22T04:52:16.980Z"
+stopped_at: Completed 03-sidecar-enforcement-lifecycle-management-00-PLAN.md
+last_updated: "2026-03-22T04:54:27.921Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 5
   completed_phases: 1
   total_plans: 14
-  completed_plans: 9
+  completed_plans: 11
   percent: 0
 ---
 
@@ -58,6 +58,8 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 02-core-provisioning-security-baseline P03 | 8 | 2 tasks | 6 files |
 | Phase 03-sidecar-enforcement-lifecycle-management P03 | 7min | 2 tasks | 5 files |
 | Phase 03-sidecar-enforcement-lifecycle-management P02 | 12min | 2 tasks | 6 files |
+| Phase 03-sidecar-enforcement-lifecycle-management P01 | 8min | 2 tasks | 6 files |
+| Phase 03-sidecar-enforcement-lifecycle-management P00 | 15 | 2 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -94,6 +96,10 @@ Recent decisions affecting current work:
 - [Phase 03-03]: OTel sidecar config uses env-var substitution for AWS_REGION/OTEL_S3_BUCKET/SANDBOX_ID — zero Go config parsing needed
 - [Phase 03-02]: Package layout: auditlog.go (package auditlog) + cmd/main.go (package main) in subdirectory — Go disallows two packages in one directory; cmd/ pattern separates library from binary
 - [Phase 03-02]: CloudWatchBackend interface in auditlog package decouples sidecar from AWS SDK — tests run without credentials; CWLogsAPI interface in pkg/aws follows same narrow-interface pattern as TagAPI
+- [Phase 03-01]: DNS/HTTP proxy library code in dnsproxy/httpproxy subdirs to resolve Go package conflict between library and main
+- [Phase 03-01]: InjectTraceContext() exported as testable function since goproxy CONNECT handler chain breaks on first non-nil result
+- [Phase 03]: Sidecar library packages use subdirectories (dnsproxy/, httpproxy/, auditlog/) with package main at parent for binary entry points
+- [Phase 03]: Wave-0 stubs: dns-proxy, audit-log, http-proxy packages pre-built by linter; scheduler, lifecycle, list-cmd, status-cmd remain as failing stubs for Plans 03-04/03-05
 
 ### Pending Todos
 
@@ -109,6 +115,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T04:52:16.978Z
-Stopped at: Completed 03-02-PLAN.md (audit log sidecar + CloudWatch helpers)
+Last session: 2026-03-22T04:54:27.919Z
+Stopped at: Completed 03-sidecar-enforcement-lifecycle-management-00-PLAN.md
 Resume file: None
