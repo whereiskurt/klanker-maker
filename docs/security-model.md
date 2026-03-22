@@ -57,32 +57,35 @@ The Application account is treated as a hostile environment. Its IAM boundaries,
 
 ---
 
-## 3. VPC Isolation
+## 3. VPC and Network Isolation
 
-Each sandbox gets its own VPC. There is no VPC peering, no shared subnets, no Transit Gateway attachments between sandboxes.
+Klanker Maker uses a **shared regional VPC** provisioned once per region by `km init`. All sandboxes in a region share this VPC and its subnets. Isolation between sandboxes is enforced at the **Security Group layer**, not the VPC layer.
 
-**VPC configuration** (from `infra/modules/ec2spot/v1.0.0/main.tf`):
+**Why a shared VPC instead of per-sandbox VPCs?** AWS imposes a default limit of 5 VPCs per region (increasable, but not infinitely). A shared VPC avoids hitting VPC limits, reduces provisioning time (no VPC/IGW/subnet creation per sandbox), and simplifies networking. The tradeoff is that sandboxes share a network — but Security Groups, iptables DNAT through sidecars, and IAM scoping provide the actual enforcement boundaries.
 
-- CIDR: `10.0.0.0/16` per sandbox
-- Subnets: one per availability zone, created with `cidrsubnet("10.0.0.0/16", 8, count.index)`
+**VPC configuration** (from `infra/modules/network/v1.0.0/main.tf`, provisioned by `km init`):
+
+- CIDR: configurable (default `10.0.0.0/16`)
+- Subnets: public and private subnets across multiple availability zones
 - DNS support: enabled (`enable_dns_support = true`, `enable_dns_hostnames = true`)
 - Internet Gateway: one per VPC, for outbound connectivity through proxy sidecars
+- NAT Gateway: optional for private subnet egress
 
-**Security Groups:**
+**Per-Sandbox Security Groups:**
 
-Two security groups enforce L3/L4 network policy:
+Each sandbox gets its own Security Groups, compiled from its SandboxProfile by the profile compiler. Two security groups enforce L3/L4 network policy:
 
 1. **`sandbox_mgmt`** -- Management plane access.
    - Zero ingress rules. No SSH. No RDP. No inbound ports of any kind.
    - Egress rules are compiled from the SandboxProfile by the profile compiler. The baseline emits TCP/443 (HTTPS for SSM agent and API traffic) and UDP/53 (DNS resolution). No default "allow all" egress.
    - SSM Session Manager is the only path into the instance, gated by IAM policy.
 
-2. **`sandbox_internal`** -- Intra-VPC sidecar communication.
+2. **`sandbox_internal`** -- Intra-sandbox sidecar communication.
    - Single ingress rule: `self = true` (all protocols, all ports, but only from members of the same security group).
    - This allows the DNS proxy (port 5353), HTTP proxy (port 3128), and audit log sidecar to communicate with the main workload on the same host.
-   - No cross-VPC or cross-sandbox communication.
+   - No cross-sandbox communication — each sandbox's `sandbox_internal` group only allows traffic from its own members.
 
-**Why per-sandbox VPCs?** A shared VPC with security group isolation leaves a lateral movement path: an agent that compromises one sandbox's instance could ARP-spoof, exploit VPC-level vulnerabilities, or reach other instances on the same subnet. Per-sandbox VPCs eliminate this class of attack entirely. The cost is one VPC per sandbox (AWS allows 5 VPCs per region by default, increasable to hundreds via service quota request).
+**Residual risk:** Sandboxes share a VPC, so a compromised instance could theoretically attempt ARP spoofing or subnet-level attacks against other sandbox instances. This is mitigated by: (1) Security Groups blocking all cross-sandbox traffic, (2) the short-lived nature of sandboxes (TTL-enforced), (3) per-sandbox IAM roles with no cross-sandbox permissions, and (4) full audit logging of all network activity. For deployments requiring stronger isolation, the ec2spot module supports an optional per-sandbox VPC mode (pass `vpc_id = ""`) at the cost of VPC quota consumption.
 
 ---
 

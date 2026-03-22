@@ -413,7 +413,7 @@
       "y": 153,
       "width": 300,
       "height": 20,
-      "text": "Per-Sandbox VPC (10.0.0.0/16)",
+      "text": "Shared Regional VPC (10.0.0.0/16)",
       "fontSize": 16,
       "fontFamily": 3,
       "textAlign": "left",

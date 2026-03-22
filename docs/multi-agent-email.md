@@ -192,7 +192,7 @@ The core pattern for multi-agent orchestration is straightforward:
 
 This works because:
 
-- No shared VPC is required. Sandboxes have no network path to each other.
+- Sandboxes share a regional VPC but Security Groups block all cross-sandbox traffic — no network path to each other.
 - No shared IAM is required. Each sandbox has its own scoped role.
 - No shared state is required. Email is the message bus.
 - Every message is persisted in S3. There is a complete audit trail.

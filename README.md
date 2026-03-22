@@ -2,7 +2,7 @@
 
 **Define a sandbox policy. Set a budget. Let your klankers run.**
 
-Klanker Maker is an open-source platform that turns declarative YAML profiles into budget-capped, policy-locked AWS sandboxes. Every sandbox gets its own VPC, IAM boundary, network allowlists, and a dollar ceiling — when the budget runs out, the sandbox stops. No surprises on your AWS bill.
+Klanker Maker is an open-source platform that turns declarative YAML profiles into budget-capped, policy-locked AWS sandboxes. Every sandbox gets its own Security Group boundary, IAM role, network allowlists, and a dollar ceiling — when the budget runs out, the sandbox stops. No surprises on your AWS bill.
 
 The idea is simple: you shouldn't have to choose between giving AI agents real infrastructure access and keeping your AWS account safe. Define what an agent is allowed to do, how much it can spend, and walk away.
 
@@ -67,7 +67,7 @@ That's what Klanker Maker builds. The sandbox is a **compiled policy object** �
 - **Automatic lifecycle** — TTL auto-destroy, idle timeout, artifact upload on exit (including on spot interruption), and email notifications for every lifecycle event.
 - **Spot-first economics** — EC2 Spot and Fargate Spot by default. A `t3.medium` spot instance in `us-east-1` costs ~$0.01/hr. Run 10 agent sandboxes for a full workday for under $1 in compute.
 
-The difference between Klanker Maker and the other sandbox platforms: this is **pure AWS infrastructure** — no orchestration layer to trust, no shared runtime, no container escape surface. Each sandbox is its own VPC with its own Security Groups. The isolation is physical, not logical.
+The difference between Klanker Maker and the other sandbox platforms: this is **pure AWS infrastructure** — no orchestration layer to trust, no shared runtime, no container escape surface. Each region has a shared VPC (provisioned once by `km init`), and every sandbox gets its own Security Groups, IAM role, and sidecar enforcement. The isolation is at the network policy and identity layer, backed by real AWS primitives.
 
 ## AWS Account Architecture
 
@@ -81,7 +81,7 @@ Klanker Maker uses a **three-account model** following AWS Organizations best pr
 │  │   Management     │  │   Terraform      │  │   Application       │ │
 │  │   Account        │  │   Account        │  │   Account           │ │
 │  │                  │  │                  │  │                     │ │
-│  │  Route53 zone    │  │  S3 state        │  │  Sandbox VPCs       │ │
+│  │  Route53 zone    │  │  S3 state        │  │  Regional VPCs       │ │
 │  │  Domain reg      │  │  DynamoDB locks   │  │  EC2 / ECS          │ │
 │  │  Organizations   │  │  Provisioning     │  │  IAM roles          │ │
 │  │  SSO config      │  │  role             │  │  Security Groups    │ │
@@ -109,7 +109,7 @@ Klanker Maker uses a **three-account model** following AWS Organizations best pr
 |---------|------|----------------|--------------|
 | **Management** | DNS, identity, org root | Route53 hosted zone, domain registration, AWS SSO, Organizations root | Domain and identity are org-wide — they don't belong in a sandbox blast radius |
 | **Terraform** | State and provisioning | S3 state buckets, DynamoDB lock tables, cross-account provisioning role | Terraform state contains every resource ARN and secret path — isolating it limits exposure if the application account is compromised |
-| **Application** | Sandbox execution | VPCs, EC2/ECS instances, IAM sandbox roles, SES, Lambda handlers, DynamoDB budget table, S3 artifacts, CloudWatch Logs | This is where agents run — if an agent escapes its sandbox, it can only reach resources in this account, not state or DNS |
+| **Application** | Sandbox execution | Regional VPCs, EC2/ECS instances, IAM sandbox roles, SES, Lambda handlers, DynamoDB budget table, S3 artifacts, CloudWatch Logs | This is where agents run — if an agent escapes its sandbox, it can only reach resources in this account, not state or DNS |
 
 The operator authenticates via **AWS SSO** with named profiles:
 
@@ -191,12 +191,13 @@ See [`docs/sandbox-architecture.excalidraw`](docs/sandbox-architecture.excalidra
 ```
 
 1. **Configure** with `km configure` — set your domain, account IDs, SSO URL, region (once)
-2. **Initialize** with `km init --region us-east-1` — provisions shared VPC and network (once per region)
-3. **Define** a SandboxProfile in YAML — budget, lifecycle, network policy, identity, sidecars
-4. **Validate** with `km validate <profile.yaml>`
-5. **Create** with `km create <profile>` — compiles to Terragrunt inputs, provisions infrastructure
-6. **Monitor** with `km list` / `km status` or the ConfigUI web dashboard
-7. **Destroy** with `km destroy <sandbox-id>` — clean teardown of all resources
+2. **Bootstrap** with `km bootstrap` — creates S3 state buckets, DynamoDB lock tables, and KMS keys for your configured regions (once)
+3. **Initialize** with `km init --region us-east-1` — provisions shared VPC and network (once per region)
+4. **Define** a SandboxProfile in YAML — budget, lifecycle, network policy, identity, sidecars
+5. **Validate** with `km validate <profile.yaml>`
+6. **Create** with `km create <profile>` — compiles to Terragrunt inputs, provisions infrastructure
+7. **Monitor** with `km list` / `km status` or the ConfigUI web dashboard
+8. **Destroy** with `km destroy <sandbox-id>` — clean teardown of all resources
 
 ## SandboxProfile
 
@@ -308,7 +309,7 @@ Sandboxes can communicate through email (SES). Each sandbox gets a unique addres
 
 | Substrate | How It Works | Cost |
 |-----------|-------------|------|
-| **EC2 Spot** (default) | Per-sandbox VPC, spot instance, SSM access, sidecar systemd services | ~$0.01/hr for t3.medium |
+| **EC2 Spot** (default) | Shared regional VPC, per-sandbox SG, spot instance, SSM access, sidecar systemd services | ~$0.01/hr for t3.medium |
 | **EC2 On-Demand** | Same as above, guaranteed capacity | ~$0.04/hr for t3.medium |
 | **ECS Fargate Spot** | Fargate task with sidecar containers, service discovery | ~$0.01/hr for 1 vCPU / 2GB |
 | **ECS Fargate** | Same as above, guaranteed capacity | ~$0.04/hr for 1 vCPU / 2GB |
@@ -405,6 +406,9 @@ go install github.com/whereiskurt/klankrmkr/cmd/km@latest
 
 # Configure your platform (once)
 km configure
+
+# Bootstrap state backends and KMS (once)
+km bootstrap
 
 # Initialize the region (once per region)
 km init --region us-east-1
