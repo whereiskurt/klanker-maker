@@ -1,2 +1,80 @@
-<!-- placeholder: replaced in Task 2 -->
-{{define "sandbox_detail"}}{{end}}
+{{define "sandbox_detail"}}
+<div class="detail-card">
+  <div class="detail-header">
+    <h2 class="detail-title">Sandbox: <code>{{.Record.SandboxID}}</code></h2>
+    <div class="detail-actions">
+      <button class="btn btn-danger"
+              hx-post="/api/sandboxes/{{.Record.SandboxID}}/destroy"
+              hx-confirm="Destroy sandbox {{.Record.SandboxID}}? This cannot be undone."
+              hx-target="#sandbox-detail"
+              hx-swap="innerHTML">
+        Destroy
+      </button>
+      <button class="btn btn-secondary" disabled title="TTL extension coming in a future plan">
+        Extend TTL
+      </button>
+    </div>
+  </div>
+
+  <div class="detail-meta">
+    <dl class="meta-grid">
+      <dt>Profile</dt><dd>{{.Record.Profile}}</dd>
+      <dt>Substrate</dt><dd><span class="badge badge-substrate-{{.Record.Substrate}}">{{.Record.Substrate}}</span></dd>
+      <dt>Status</dt><dd><span class="badge badge-{{.Record.Status}}">{{.Record.Status}}</span></dd>
+      <dt>Region</dt><dd>{{if .Record.Region}}{{.Record.Region}}{{else}}<span class="text-muted">—</span>{{end}}</dd>
+      <dt>TTL Remaining</dt><dd>{{if .Record.TTLRemaining}}{{.Record.TTLRemaining}}{{else}}<span class="text-muted">—</span>{{end}}</dd>
+    </dl>
+  </div>
+
+  {{if .Location}}
+  <section class="detail-section">
+    <h3 class="section-title">AWS Resources ({{.Location.ResourceCount}})</h3>
+    {{if .Location.ResourceARNs}}
+    <ul class="resource-list">
+      {{range .Location.ResourceARNs}}
+      <li class="resource-arn"><code>{{.}}</code></li>
+      {{end}}
+    </ul>
+    {{else}}
+    <p class="text-muted">No tagged resources found.</p>
+    {{end}}
+  </section>
+  {{end}}
+
+  <section class="detail-section">
+    <h3 class="section-title">Profile YAML</h3>
+    {{if .ProfileYAML}}
+    <pre class="code-block"><code>{{.ProfileYAML}}</code></pre>
+    {{else}}
+    <p class="text-muted">{{if .ProfileNote}}{{.ProfileNote}}{{else}}Profile file not available on disk.{{end}}</p>
+    {{end}}
+  </section>
+
+  <section class="detail-section collapsible" id="audit-log-section">
+    <h3 class="section-title collapsible-header">
+      <button class="collapsible-toggle" aria-expanded="false" aria-controls="audit-log-content"
+              onclick="toggleCollapsible(this)">
+        Audit Log &#9660;
+      </button>
+    </h3>
+    <div class="collapsible-content" id="audit-log-content"
+         hx-get="/api/sandboxes/{{.Record.SandboxID}}/logs"
+         hx-trigger="revealed"
+         hx-swap="innerHTML">
+      <p class="text-muted">Loading audit log entries...</p>
+    </div>
+  </section>
+</div>
+
+<script>
+function toggleCollapsible(btn) {
+  var expanded = btn.getAttribute('aria-expanded') === 'true';
+  btn.setAttribute('aria-expanded', !expanded);
+  var contentId = btn.getAttribute('aria-controls');
+  var content = document.getElementById(contentId);
+  if (content) {
+    content.classList.toggle('collapsible-content--open', !expanded);
+  }
+}
+</script>
+{{end}}

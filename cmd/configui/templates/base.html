@@ -1,2 +1,35 @@
-<!-- placeholder: replaced in Task 2 -->
-{{define "base"}}<!DOCTYPE html><html><body>{{block "content" .}}{{end}}</body></html>{{end}}
+{{define "base.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KlankerMaker ConfigUI</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/htmx.org@2/dist/htmx.min.js" defer></script>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-brand">
+    <span class="nav-logo">&#9632;</span>
+    KlankerMaker
+  </div>
+  <ul class="nav-links">
+    <li><a href="/" class="nav-link{{if eq .ActivePage "dashboard"}} nav-link--active{{end}}">Dashboard</a></li>
+    <li><a href="/editor" class="nav-link{{if eq .ActivePage "editor"}} nav-link--active{{end}}">Profiles</a></li>
+    <li><a href="/secrets" class="nav-link{{if eq .ActivePage "secrets"}} nav-link--active{{end}}">Secrets</a></li>
+  </ul>
+</nav>
+
+<main class="main-content">
+  <div id="toast-area" class="toast-area" aria-live="polite"></div>
+  {{block "content" .}}{{end}}
+</main>
+
+<footer class="footer">
+  <span>KlankerMaker ConfigUI</span>
+</footer>
+
+</body>
+</html>
+{{end}}

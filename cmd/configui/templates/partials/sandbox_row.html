@@ -1,2 +1,27 @@
-<!-- placeholder: replaced in Task 2 -->
-{{define "sandbox_row"}}{{end}}
+{{define "sandbox_rows"}}
+{{if .Sandboxes}}
+  {{range .Sandboxes}}{{template "sandbox_row" .}}{{end}}
+{{else}}
+  <tr class="empty-state">
+    <td colspan="7">No sandboxes running.</td>
+  </tr>
+{{end}}
+{{end}}
+
+{{define "sandbox_row"}}
+<tr class="table-row"
+    hx-get="/api/sandboxes/{{.SandboxID}}"
+    hx-target="#sandbox-detail"
+    hx-swap="innerHTML"
+    hx-on:click="document.querySelectorAll('.table-row').forEach(r => r.classList.remove('row--selected')); this.classList.add('row--selected')"
+    title="Click to view details for {{.SandboxID}}"
+    style="cursor:pointer">
+  <td class="cell-id" title="{{.SandboxID}}">{{truncateID .SandboxID}}</td>
+  <td>{{.Profile}}</td>
+  <td><span class="badge badge-substrate-{{.Substrate}}">{{.Substrate}}</span></td>
+  <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+  <td>{{if .TTLRemaining}}{{.TTLRemaining}}{{else}}<span class="text-muted">&#8212;</span>{{end}}</td>
+  <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+  <td class="col-budget col-disabled text-muted">&#8212;</td>
+</tr>
+{{end}}

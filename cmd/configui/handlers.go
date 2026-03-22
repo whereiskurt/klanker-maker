@@ -232,6 +232,7 @@ func ptrInt32(i int32) *int32 { return &i }
 
 // buildTestTemplates creates minimal Go templates for unit testing without loading
 // files from disk. All template names used by handlers must be present.
+// It registers the same template functions as the production main.go.
 func buildTestTemplates() *template.Template {
 	const tmplStr = `
 {{define "dashboard.html"}}<!DOCTYPE html><html><body>
@@ -270,5 +271,8 @@ func buildTestTemplates() *template.Template {
 </ul>
 {{end}}
 `
-	return template.Must(template.New("").Parse(tmplStr))
+	funcs := template.FuncMap{
+		"truncateID": func(id string) string { return id },
+	}
+	return template.Must(template.New("").Funcs(funcs).Parse(tmplStr))
 }

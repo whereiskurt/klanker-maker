@@ -20,6 +20,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -30,6 +31,22 @@ import (
 	"github.com/rs/zerolog/log"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 )
+
+// templateFuncs defines custom functions available in HTML templates.
+var templateFuncs = template.FuncMap{
+	// truncateID shortens a long sandbox ID to the last 12 chars with "…" prefix for display.
+	"truncateID": func(id string) string {
+		if len(id) <= 16 {
+			return id
+		}
+		// Keep prefix up to first '-', then last 8 chars
+		parts := strings.SplitN(id, "-", 2)
+		if len(parts) == 2 && len(parts[0]) <= 4 {
+			return parts[0] + "-…" + id[len(id)-8:]
+		}
+		return "…" + id[len(id)-12:]
+	},
+}
 
 //go:embed templates
 var templatesFS embed.FS
@@ -52,7 +69,7 @@ func main() {
 	flag.Parse()
 
 	// Parse embedded templates — glob all .html files under templates/.
-	tmpl, err := template.New("").ParseFS(templatesFS,
+	tmpl, err := template.New("").Funcs(templateFuncs).ParseFS(templatesFS,
 		"templates/*.html",
 		"templates/partials/*.html",
 	)

@@ -1,2 +1,42 @@
-<!-- placeholder: replaced in Task 2 -->
-{{define "dashboard.html"}}{{template "base" .}}{{end}}
+{{define "dashboard.html"}}{{template "base.html" .}}{{end}}
+
+{{define "content"}}
+<div class="page-header">
+  <h1 class="page-title">Sandbox Dashboard</h1>
+  <span class="sandbox-count">{{.Count}} sandbox{{if ne .Count 1}}es{{end}} running</span>
+</div>
+
+<div class="table-wrapper">
+  <table class="table" id="sandboxes-table">
+    <thead>
+      <tr>
+        <th>Sandbox ID</th>
+        <th>Profile</th>
+        <th>Substrate</th>
+        <th>Status</th>
+        <th>TTL Remaining</th>
+        <th>Created At</th>
+        <th class="col-budget col-disabled" title="Available in Phase 6">Budget (soon)</th>
+      </tr>
+    </thead>
+    <tbody
+      hx-get="/api/sandboxes"
+      hx-trigger="every 10s"
+      hx-swap="innerHTML"
+      hx-headers='{"HX-Request": "true"}'
+    >
+      {{if .Sandboxes}}
+        {{range .Sandboxes}}{{template "sandbox_row" .}}{{end}}
+      {{else}}
+        <tr class="empty-state">
+          <td colspan="7">No sandboxes running. Use <code>km create &lt;profile.yaml&gt;</code> to provision one.</td>
+        </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+<div id="sandbox-detail" class="detail-panel" aria-live="polite">
+  <p class="detail-hint">Click a row to view sandbox details.</p>
+</div>
+{{end}}
