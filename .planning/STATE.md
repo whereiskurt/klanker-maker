@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 05-configui-01-PLAN.md
-last_updated: "2026-03-22T17:42:43.197Z"
+stopped_at: Completed 05-configui-02-PLAN.md
+last_updated: "2026-03-22T17:50:30.426Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 23
-  completed_plans: 20
+  completed_plans: 22
   percent: 0
 ---
 
@@ -69,6 +69,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 04-lifecycle-hardening-artifacts-email P05 | 282s | 2 tasks | 11 files |
 | Phase 02-core-provisioning-security-baseline P04 | 1 | 2 tasks | 0 files |
 | Phase 05-configui P01 | 426s | 2 tasks | 9 files |
+| Phase 05-configui P02 | 4min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -133,6 +134,9 @@ Recent decisions affecting current work:
 - [Phase 05-configui]: package main for all cmd/configui files — Go prohibits two packages per directory; handler logic co-located with main since no separate library consumer
 - [Phase 05-configui]: buildTestTemplates() in handlers.go with inline template strings — test isolation without filesystem; truncateID no-op registered for test compatibility
 - [Phase 05-configui]: handleSandboxLogs graceful degradation when cwClient nil or call fails — logs are informational, not critical path
+- [Phase Phase 05-configui]: handleProfileList dual-mode: HTMX returns profile_list HTML partial; plain API returns JSON array — single handler, no route duplication
+- [Phase Phase 05-configui]: Hidden textarea for Monaco initial content — avoids html/template HTML-escaping of YAML special characters
+- [Phase Phase 05-configui]: handleProfileSave: validation errors are warnings (save proceeds) — operators may save work-in-progress profiles
 
 ### Pending Todos
 
@@ -148,6 +152,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T17:42:43.195Z
-Stopped at: Completed 05-configui-01-PLAN.md
+Last session: 2026-03-22T17:50:30.424Z
+Stopped at: Completed 05-configui-02-PLAN.md
 Resume file: None

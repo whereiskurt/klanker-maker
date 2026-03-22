@@ -114,7 +114,7 @@ Plans:
   2. The live sandbox status dashboard updates in real time (polling) showing all running sandboxes, their status, substrate type, and time remaining on TTL without a page refresh
   3. Operator can click into a sandbox in the dashboard and see the AWS resources it provisioned (EC2 instance ID or ECS task ARN, VPC, security groups, IAM role) discovered from AWS
   4. Operator can manage SOPS secrets from the ConfigUI — encrypting a new secret and decrypting an existing one without using the CLI
-**Plans:** 1/4 plans executed
+**Plans:** 3/4 plans executed
 
 Plans:
 - [ ] 05-01-PLAN.md — Server scaffold + dashboard + sandbox detail (CFUI-02, CFUI-03)
@@ -147,5 +147,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 2. Core Provisioning & Security Baseline | 4/4 | Complete   | 2026-03-22 |
 | 3. Sidecar Enforcement & Lifecycle Management | 5/6 | In Progress|  |
 | 4. Lifecycle Hardening, Artifacts & Email | 4/5 | In Progress|  |
-| 5. ConfigUI | 1/4 | In Progress|  |
+| 5. ConfigUI | 3/4 | In Progress|  |
 | 6. Budget Enforcement | 0/TBD | Not started | - |
