@@ -1,0 +1,125 @@
+package cmd
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"text/tabwriter"
+
+	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/spf13/cobra"
+	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+)
+
+// defaultStateBucket is the S3 bucket used for sandbox state storage.
+// TODO: move to config when multi-bucket support is needed.
+const defaultStateBucket = "tf-km-state"
+
+// NewListCmd creates the "km list" subcommand.
+// Usage: km list [--json] [--tags]
+//
+// Scans S3 (default) or AWS resource tags for running sandboxes and prints
+// a table of sandbox ID, profile, substrate, region, status, and TTL remaining.
+func NewListCmd(cfg *config.Config) *cobra.Command {
+	return NewListCmdWithLister(cfg, nil)
+}
+
+// NewListCmdWithLister builds the list command with an optional custom lister.
+// If lister is nil, the real AWS-backed lister is used. This overload is used
+// in tests to inject fake lister implementations.
+func NewListCmdWithLister(_ *config.Config, lister SandboxLister) *cobra.Command {
+	var jsonOutput bool
+	var useTagScan bool
+
+	cmd := &cobra.Command{
+		Use:          "list",
+		Short:        "List all running sandboxes",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runList(cmd, lister, jsonOutput, useTagScan)
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output as JSON array")
+	cmd.Flags().BoolVar(&useTagScan, "tags", false, "Use AWS tag scan instead of S3 state scan")
+	return cmd
+}
+
+// SandboxLister abstracts the sandbox discovery mechanism for testability.
+type SandboxLister interface {
+	ListSandboxes(ctx context.Context, useTagScan bool) ([]kmaws.SandboxRecord, error)
+}
+
+// runList is the command RunE logic, accepting an explicit lister for testability.
+func runList(cmd *cobra.Command, lister SandboxLister, jsonOutput, useTagScan bool) error {
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if lister == nil {
+		awsProfile := "klanker-terraform"
+		awsCfg, err := kmaws.LoadAWSConfig(ctx, awsProfile)
+		if err != nil {
+			return fmt.Errorf("load AWS config: %w", err)
+		}
+		lister = newRealLister(awsCfg, defaultStateBucket)
+	}
+
+	records, err := lister.ListSandboxes(ctx, useTagScan)
+	if err != nil {
+		return fmt.Errorf("list sandboxes: %w", err)
+	}
+
+	if len(records) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "No running sandboxes.")
+		return nil
+	}
+
+	if jsonOutput {
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(records)
+	}
+
+	return printSandboxTable(cmd, records)
+}
+
+// awsSandboxLister is the real AWS-backed SandboxLister implementation.
+type awsSandboxLister struct {
+	s3Client  kmaws.S3ListAPI
+	tagClient kmaws.TagAPI
+	bucket    string
+}
+
+// newRealLister creates an awsSandboxLister from an AWS config.
+func newRealLister(awsCfg awssdk.Config, bucket string) *awsSandboxLister {
+	return &awsSandboxLister{
+		s3Client:  s3.NewFromConfig(awsCfg),
+		tagClient: resourcegroupstaggingapi.NewFromConfig(awsCfg),
+		bucket:    bucket,
+	}
+}
+
+// ListSandboxes implements SandboxLister using real AWS clients.
+func (l *awsSandboxLister) ListSandboxes(ctx context.Context, useTagScan bool) ([]kmaws.SandboxRecord, error) {
+	if useTagScan {
+		return kmaws.ListAllSandboxesByTags(ctx, l.tagClient, l.bucket)
+	}
+	return kmaws.ListAllSandboxesByS3(ctx, l.s3Client, l.bucket)
+}
+
+// printSandboxTable writes a human-readable tab-aligned table to cmd.OutOrStdout.
+func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord) error {
+	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "SANDBOX ID\tPROFILE\tSUBSTRATE\tREGION\tSTATUS\tTTL")
+	for _, r := range records {
+		ttl := r.TTLRemaining
+		if ttl == "" {
+			ttl = "-"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			r.SandboxID, r.Profile, r.Substrate, r.Region, r.Status, ttl)
+	}
+	return w.Flush()
+}
