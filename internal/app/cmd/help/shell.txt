@@ -1,0 +1,32 @@
+Open an interactive shell into a running sandbox.
+
+Automatically detects the sandbox substrate and dispatches the correct
+AWS CLI command — no knowledge of the underlying infrastructure required.
+
+  EC2 sandboxes:  aws ssm start-session --target <instance-id>
+  ECS sandboxes:  aws ecs execute-command --cluster <arn> --task <arn>
+                  --interactive --command /bin/bash
+
+Usage:
+  km shell <sandbox-id>
+
+Prerequisites:
+  - The sandbox must be in "running" state
+  - AWS CLI must be installed and on PATH
+  - For EC2: AWS Systems Manager Session Manager plugin installed
+  - For ECS: ECS Exec must be enabled on the task (--enable-execute-command)
+  - Valid AWS credentials with appropriate SSM/ECS permissions
+
+Examples:
+  # Shell into a running EC2 sandbox
+  km shell sb-a1b2c3d4
+
+  # Shell into a running ECS sandbox
+  km shell sb-e5f6g7h8
+
+Error Handling:
+  If the sandbox is stopped, km shell will exit with a message suggesting
+  how to top up the compute budget to resume it.
+
+  If the substrate is not supported (e.g., k8s in a future version), an
+  informative error is returned.
