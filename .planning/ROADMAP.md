@@ -177,6 +177,11 @@ Plans:
   2. `make ecr-push` builds Docker images for each sidecar and pushes to ECR
   3. Compiler emits resolvable ECR image URIs in ECS service.hcl (not literal ${var.*} strings)
   4. EC2 sandbox user-data successfully downloads sidecar binaries from S3 at boot
+**Plans:** 2 plans
+
+Plans:
+- [ ] 08-01-PLAN.md — Makefile + Dockerfiles for sidecar build and deployment pipeline
+- [ ] 08-02-PLAN.md — Fix ECS compiler to emit resolvable ECR image URIs
 
 ### Phase 9: Live Infrastructure & Operator Docs
 **Goal**: All Terraform modules that exist but have no live deployment are deployable via Terragrunt, and operators have a setup guide documenting the full bootstrap procedure
@@ -204,5 +209,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 5. ConfigUI | 4/4 | Complete   | 2026-03-22 |
 | 6. Budget Enforcement & Platform Configuration | 9/9 | Complete   | 2026-03-22 |
 | 7. Unwired Code Paths | 2/2 | Complete   | 2026-03-22 |
-| 8. Sidecar Build & Deployment Pipeline | 0/0 | Pending    |  |
+| 8. Sidecar Build & Deployment Pipeline | 0/2 | Planning   |  |
 | 9. Live Infrastructure & Operator Docs | 0/0 | Pending    |  |
