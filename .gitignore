@@ -6,3 +6,9 @@
 # Sandbox directories — per-sandbox generated dirs are ephemeral artifacts.
 # The _template/ directory IS committed (contains the base terragrunt.hcl).
 infra/live/sandboxes/sb-*/
+infra/live/*/network/.terragrunt-cache/
+infra/live/*/network/.terraform*
+infra/live/*/network/outputs.json
+infra/live/*/sandboxes/sb-*/
+infra/live/*/region.hcl
+infra/live/network/

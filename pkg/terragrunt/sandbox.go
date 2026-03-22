@@ -8,12 +8,11 @@ import (
 )
 
 // CreateSandboxDir creates a new per-sandbox directory under
-// <repoRoot>/infra/live/sandboxes/<sandboxID>/ and copies the
-// _template/terragrunt.hcl file into it. Returns the absolute path to the
-// newly created directory.
-func CreateSandboxDir(repoRoot, sandboxID string) (string, error) {
-	templateDir := filepath.Join(repoRoot, "infra", "live", "sandboxes", "_template")
-	sandboxDir := filepath.Join(repoRoot, "infra", "live", "sandboxes", sandboxID)
+// <repoRoot>/infra/live/<regionLabel>/sandboxes/<sandboxID>/ and copies the
+// _template/terragrunt.hcl file into it. Returns the absolute path.
+func CreateSandboxDir(repoRoot, regionLabel, sandboxID string) (string, error) {
+	templateDir := filepath.Join(repoRoot, "infra", "live", "_template")
+	sandboxDir := filepath.Join(repoRoot, "infra", "live", regionLabel, "sandboxes", sandboxID)
 
 	if err := os.MkdirAll(sandboxDir, 0o755); err != nil {
 		return "", fmt.Errorf("create sandbox directory %s: %w", sandboxDir, err)
@@ -32,18 +31,14 @@ func CreateSandboxDir(repoRoot, sandboxID string) (string, error) {
 // PopulateSandboxDir writes the profile-compiled service.hcl into sandboxDir,
 // and optionally writes user-data.sh if userData is non-empty.
 func PopulateSandboxDir(sandboxDir, serviceHCL, userData string) error {
-	// Write service.hcl — always required.
 	if err := os.WriteFile(filepath.Join(sandboxDir, "service.hcl"), []byte(serviceHCL), 0o644); err != nil {
 		return fmt.Errorf("write service.hcl: %w", err)
 	}
-
-	// Write user-data.sh — only when content is provided.
 	if userData != "" {
 		if err := os.WriteFile(filepath.Join(sandboxDir, "user-data.sh"), []byte(userData), 0o755); err != nil {
 			return fmt.Errorf("write user-data.sh: %w", err)
 		}
 	}
-
 	return nil
 }
 
@@ -55,7 +50,6 @@ func CleanupSandboxDir(sandboxDir string) error {
 	return nil
 }
 
-// copyFile copies a single file from src to dst, preserving content.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {

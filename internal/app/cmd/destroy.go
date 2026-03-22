@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	"github.com/whereiskurt/klankrmkr/pkg/compiler"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
 )
@@ -94,32 +95,31 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool) er
 
 	fmt.Printf("Destroying sandbox %s (%d resources)...\n", sandboxID, location.ResourceCount)
 
-	// Step 4: Locate (or reconstruct) sandbox directory
+	// Step 4: Locate sandbox directory by scanning region directories
 	repoRoot := findRepoRoot()
-	sandboxDir := filepath.Join(repoRoot, "infra", "live", "sandboxes", sandboxID)
+	sandboxDir, regionLabel := findSandboxDir(repoRoot, sandboxID)
 
-	dirExists := false
-	if _, err := os.Stat(sandboxDir); err == nil {
-		dirExists = true
-	}
-
-	if !dirExists {
-		// Sandbox directory doesn't exist locally — re-create from template.
-		// We need the terragrunt.hcl for state key resolution during destroy.
-		log.Debug().Str("sandboxDir", sandboxDir).Msg("sandbox directory not found locally — recreating from template")
-		sandboxDir, err = terragrunt.CreateSandboxDir(repoRoot, sandboxID)
-		if err != nil {
-			return fmt.Errorf("failed to recreate sandbox directory for destroy: %w", err)
+	if sandboxDir == "" {
+		// Not found locally — determine region from AWS resource tags and recreate
+		regionLabel = determineRegionFromTags(location)
+		if regionLabel == "" {
+			regionLabel = "use1" // fallback to default
 		}
-		// Write minimal service.hcl with only the sandbox_id so Terragrunt
-		// can resolve the state key without the full profile artifacts.
+		log.Debug().Str("regionLabel", regionLabel).Msg("sandbox directory not found locally — recreating from template")
+		var createErr error
+		sandboxDir, createErr = terragrunt.CreateSandboxDir(repoRoot, regionLabel, sandboxID)
+		if createErr != nil {
+			return fmt.Errorf("failed to recreate sandbox directory for destroy: %w", createErr)
+		}
+		// Write minimal service.hcl with sandbox_id + region for state key resolution
 		minimalHCL := fmt.Sprintf("# Minimal service.hcl for state resolution during destroy\n"+
-			"locals {\n  sandbox_id = %q\n}\n", sandboxID)
-		if err := terragrunt.PopulateSandboxDir(sandboxDir, minimalHCL, ""); err != nil {
+			"locals {\n  sandbox_id = %q\n  region_label = %q\n  region_full = \"\"\n}\n", sandboxID, regionLabel)
+		if populateErr := terragrunt.PopulateSandboxDir(sandboxDir, minimalHCL, ""); populateErr != nil {
 			_ = terragrunt.CleanupSandboxDir(sandboxDir)
-			return fmt.Errorf("failed to populate sandbox directory for destroy: %w", err)
+			return fmt.Errorf("failed to populate sandbox directory for destroy: %w", populateErr)
 		}
 	}
+	_ = regionLabel // used above for directory creation
 
 	// Step 5: For EC2 substrate, explicitly terminate spot instance before destroy.
 	// Critical: aws_spot_instance_request destroy cancels the spot REQUEST but leaves
@@ -156,4 +156,54 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool) er
 
 	fmt.Printf("Sandbox %s destroyed successfully.\n", sandboxID)
 	return nil
+}
+
+// findSandboxDir scans region directories for the sandbox ID.
+// Returns (sandboxDir, regionLabel) or ("", "") if not found.
+func findSandboxDir(repoRoot, sandboxID string) (string, string) {
+	liveDir := filepath.Join(repoRoot, "infra", "live")
+	entries, err := os.ReadDir(liveDir)
+	if err != nil {
+		return "", ""
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == "_template" {
+			continue
+		}
+		candidate := filepath.Join(liveDir, entry.Name(), "sandboxes", sandboxID)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, entry.Name()
+		}
+	}
+	return "", ""
+}
+
+// determineRegionFromTags extracts the region label from sandbox discovery results.
+func determineRegionFromTags(location *awspkg.SandboxLocation) string {
+	if location == nil || len(location.ResourceARNs) == 0 {
+		return ""
+	}
+	// Parse region from first ARN: arn:aws:<service>:<region>:<account>:...
+	arn := location.ResourceARNs[0]
+	parts := splitARN(arn)
+	if len(parts) >= 4 {
+		return compiler.RegionLabel(parts[3])
+	}
+	return ""
+}
+
+func splitARN(arn string) []string {
+	// Simple ARN split: arn:partition:service:region:account:resource
+	result := []string{}
+	current := ""
+	for _, c := range arn {
+		if c == ':' {
+			result = append(result, current)
+			current = ""
+		} else {
+			current += string(c)
+		}
+	}
+	result = append(result, current)
+	return result
 }

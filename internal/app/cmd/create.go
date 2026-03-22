@@ -132,16 +132,19 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		return fmt.Errorf("AWS credential validation failed — check that profile %q is configured: %w", awsProfile, err)
 	}
 
-	// Step 6: Load shared network config from km init outputs
+	// Step 6: Load shared network config for the profile's region
 	repoRoot := findRepoRoot()
-	networkOutputs, err := LoadNetworkOutputs(repoRoot)
+	region := resolvedProfile.Spec.Runtime.Region
+	regionLabel := compiler.RegionLabel(region)
+	networkOutputs, err := LoadNetworkOutputs(repoRoot, regionLabel)
 	if err != nil {
-		return fmt.Errorf("failed to load network config: %w\nRun 'km init' to provision the shared VPC first", err)
+		return fmt.Errorf("failed to load network config for %s: %w\nRun 'km init --region %s' first", region, err, region)
 	}
 	network := &compiler.NetworkConfig{
 		VPCID:             networkOutputs.VPCID,
 		PublicSubnets:     networkOutputs.PublicSubnets,
 		AvailabilityZones: networkOutputs.AvailabilityZones,
+		RegionLabel:       regionLabel,
 	}
 
 	// Step 7: Compile profile into Terragrunt artifacts
@@ -151,7 +154,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	}
 
 	// Step 8: Create sandbox directory
-	sandboxDir, err := terragrunt.CreateSandboxDir(repoRoot, sandboxID)
+	sandboxDir, err := terragrunt.CreateSandboxDir(repoRoot, regionLabel, sandboxID)
 	if err != nil {
 		return fmt.Errorf("failed to create sandbox directory: %w", err)
 	}

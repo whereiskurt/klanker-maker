@@ -10,11 +10,11 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klankrmkr/pkg/compiler"
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
 )
 
 // NetworkOutputs holds the Terraform outputs from the shared network module.
-// These are written to infra/live/network/outputs.json and read by km create.
 type NetworkOutputs struct {
 	VPCID             string   `json:"vpc_id"`
 	PublicSubnets     []string `json:"public_subnets"`
@@ -24,46 +24,85 @@ type NetworkOutputs struct {
 
 func NewInitCmd(cfg *config.Config) *cobra.Command {
 	var awsProfile string
+	var region string
 
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Initialize shared infrastructure (VPC, subnets, security groups)",
-		Long: `Provisions the shared VPC and networking that all sandboxes use.
-Run this once before your first km create. Safe to re-run — idempotent via Terraform.`,
+		Short: "Initialize shared infrastructure (VPC, subnets, security groups) for a region",
+		Long: `Provisions the shared VPC and networking that all sandboxes in a region use.
+Run this once per region before your first km create targeting that region.
+Safe to re-run — idempotent via Terraform.
+
+Examples:
+  km init --region us-east-1
+  km init --region ca-central-1 --aws-profile klanker-application`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if awsProfile == "" {
 				awsProfile = "klanker-application"
 			}
-			return runInit(cfg, awsProfile)
+			return runInit(cfg, awsProfile, region)
 		},
 	}
 
 	cmd.Flags().StringVar(&awsProfile, "aws-profile", "klanker-application",
 		"AWS CLI profile to use for provisioning")
+	cmd.Flags().StringVar(&region, "region", "us-east-1",
+		"AWS region to initialize (e.g. us-east-1, ca-central-1)")
 
 	return cmd
 }
 
-func runInit(cfg *config.Config, awsProfile string) error {
+func runInit(cfg *config.Config, awsProfile, region string) error {
 	ctx := context.Background()
+	regionLabel := compiler.RegionLabel(region)
 
-	// Validate AWS credentials first
+	// Validate AWS credentials
 	awsCfg, err := awspkg.LoadAWSConfig(ctx, awsProfile)
 	if err != nil {
 		return fmt.Errorf("failed to load AWS config (profile=%s): %w", awsProfile, err)
 	}
 	if err := awspkg.ValidateCredentials(ctx, awsCfg); err != nil {
-		return fmt.Errorf("AWS credential validation failed — check that profile %q is configured: %w", awsProfile, err)
+		return fmt.Errorf("AWS credential validation failed: %w", err)
 	}
 
 	repoRoot := findRepoRoot()
-	networkDir := filepath.Join(repoRoot, "infra", "live", "network")
 
-	if _, err := os.Stat(networkDir); os.IsNotExist(err) {
-		return fmt.Errorf("network directory not found at %s", networkDir)
+	// Create region directory structure: infra/live/<region>/network/ and infra/live/<region>/sandboxes/
+	regionDir := filepath.Join(repoRoot, "infra", "live", regionLabel)
+	networkDir := filepath.Join(regionDir, "network")
+	sandboxesDir := filepath.Join(regionDir, "sandboxes")
+
+	if err := os.MkdirAll(networkDir, 0o755); err != nil {
+		return fmt.Errorf("creating network directory: %w", err)
+	}
+	if err := os.MkdirAll(sandboxesDir, 0o755); err != nil {
+		return fmt.Errorf("creating sandboxes directory: %w", err)
 	}
 
-	fmt.Println("Initializing shared network infrastructure...")
+	// Write region.hcl for this region
+	regionHCL := fmt.Sprintf(`locals {
+  region_label = "%s"
+  region_full  = "%s"
+}
+`, regionLabel, region)
+	if err := os.WriteFile(filepath.Join(regionDir, "region.hcl"), []byte(regionHCL), 0o644); err != nil {
+		return fmt.Errorf("writing region.hcl: %w", err)
+	}
+
+	// Copy network terragrunt template
+	templateSrc := filepath.Join(repoRoot, "infra", "live", "_template", "network.terragrunt.hcl")
+	networkTgDst := filepath.Join(networkDir, "terragrunt.hcl")
+	if _, err := os.Stat(networkTgDst); os.IsNotExist(err) {
+		srcData, readErr := os.ReadFile(templateSrc)
+		if readErr != nil {
+			return fmt.Errorf("reading network template: %w", readErr)
+		}
+		if writeErr := os.WriteFile(networkTgDst, srcData, 0o644); writeErr != nil {
+			return fmt.Errorf("writing network terragrunt.hcl: %w", writeErr)
+		}
+	}
+
+	fmt.Printf("Initializing shared network for %s (%s)...\n", region, regionLabel)
 
 	// Run terragrunt apply
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
@@ -84,12 +123,12 @@ func runInit(cfg *config.Config, awsProfile string) error {
 	}
 
 	outputsFile := filepath.Join(networkDir, "outputs.json")
-	if err := os.WriteFile(outputsFile, outputJSON, 0644); err != nil {
+	if err := os.WriteFile(outputsFile, outputJSON, 0o644); err != nil {
 		return fmt.Errorf("writing outputs.json: %w", err)
 	}
 
 	// Display summary
-	fmt.Printf("\nShared network initialized:\n")
+	fmt.Printf("\nShared network initialized for %s:\n", region)
 	if v, ok := outputMap["vpc_id"]; ok {
 		fmt.Printf("  VPC:     %v\n", extractValue(v))
 	}
@@ -100,11 +139,10 @@ func runInit(cfg *config.Config, awsProfile string) error {
 		fmt.Printf("  AZs:     %v\n", extractValue(v))
 	}
 
-	fmt.Println("\nReady for km create.")
+	fmt.Printf("\nReady for: km create --region %s <profile.yaml>\n", region)
 	return nil
 }
 
-// extractValue extracts the "value" field from a Terraform output map.
 func extractValue(v interface{}) interface{} {
 	if m, ok := v.(map[string]interface{}); ok {
 		if val, exists := m["value"]; exists {
@@ -114,14 +152,14 @@ func extractValue(v interface{}) interface{} {
 	return v
 }
 
-// LoadNetworkOutputs reads the shared network outputs from outputs.json.
-func LoadNetworkOutputs(repoRoot string) (*NetworkOutputs, error) {
-	outputsFile := filepath.Join(repoRoot, "infra", "live", "network", "outputs.json")
+// LoadNetworkOutputs reads the shared network outputs for a specific region.
+func LoadNetworkOutputs(repoRoot, regionLabel string) (*NetworkOutputs, error) {
+	outputsFile := filepath.Join(repoRoot, "infra", "live", regionLabel, "network", "outputs.json")
 
 	data, err := os.ReadFile(outputsFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("shared network not initialized — run 'km init' first")
+			return nil, fmt.Errorf("network not initialized for region %s — run 'km init --region <region>' first", regionLabel)
 		}
 		return nil, fmt.Errorf("reading network outputs: %w", err)
 	}
@@ -132,7 +170,6 @@ func LoadNetworkOutputs(repoRoot string) (*NetworkOutputs, error) {
 	}
 
 	outputs := &NetworkOutputs{}
-
 	if err := extractTFOutput(raw, "vpc_id", &outputs.VPCID); err != nil {
 		return nil, err
 	}
@@ -142,7 +179,6 @@ func LoadNetworkOutputs(repoRoot string) (*NetworkOutputs, error) {
 	if err := extractTFOutput(raw, "availability_zones", &outputs.AvailabilityZones); err != nil {
 		return nil, err
 	}
-	// Optional
 	_ = extractTFOutput(raw, "sandbox_mgmt_sg_id", &outputs.SandboxMgmtSGID)
 
 	return outputs, nil
@@ -153,17 +189,14 @@ func extractTFOutput(raw map[string]json.RawMessage, key string, target interfac
 	if !ok {
 		return fmt.Errorf("missing output %q", key)
 	}
-
 	var wrapper struct {
 		Value json.RawMessage `json:"value"`
 	}
 	if err := json.Unmarshal(data, &wrapper); err != nil {
 		return fmt.Errorf("parsing output %q: %w", key, err)
 	}
-
 	if err := json.Unmarshal(wrapper.Value, target); err != nil {
 		return fmt.Errorf("parsing output %q value: %w", key, err)
 	}
-
 	return nil
 }

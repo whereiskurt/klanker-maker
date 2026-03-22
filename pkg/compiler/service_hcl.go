@@ -22,6 +22,8 @@ const ec2ServiceHCLTemplate = `locals {
 
   sandbox_id       = "{{ .SandboxID }}"
   substrate_module = "ec2spot"
+  region_label     = "{{ .RegionLabel }}"
+  region_full      = "{{ .Region }}"
 
   module_inputs = {
     sandbox_id         = "{{ .SandboxID }}"
@@ -71,6 +73,8 @@ const ecsServiceHCLTemplate = `locals {
 
   sandbox_id       = "{{ .SandboxID }}"
   substrate_module = "ecs"
+  region_label     = "{{ .RegionLabel }}"
+  region_full      = "{{ .Region }}"
 
   module_inputs = {
     sandbox_id     = "{{ .SandboxID }}"
@@ -164,6 +168,7 @@ type ec2HCLParams struct {
 	ProfileName       string
 	SandboxID         string
 	Region            string
+	RegionLabel       string
 	InstanceType      string
 	UseSpot           bool
 	UserDataBase64    string
@@ -183,6 +188,7 @@ type ecsHCLParams struct {
 	ProfileName           string
 	SandboxID             string
 	Region                string
+	RegionLabel           string
 	TaskCPU               int
 	TaskMemory            int
 	MainImage             string
@@ -235,6 +241,7 @@ type NetworkConfig struct {
 	VPCID             string
 	PublicSubnets     []string
 	AvailabilityZones []string
+	RegionLabel       string
 }
 
 func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot bool, sgRules []SGRule, iamPolicy *IAMSessionPolicy, userData string, network *NetworkConfig) (string, error) {
@@ -247,6 +254,7 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		ProfileName:       p.Metadata.Name,
 		SandboxID:         sandboxID,
 		Region:            p.Spec.Runtime.Region,
+		RegionLabel:       network.RegionLabel,
 		InstanceType:      p.Spec.Runtime.InstanceType,
 		UseSpot:           useSpot,
 		UserDataBase64:    userData,
@@ -299,6 +307,7 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		ProfileName:           p.Metadata.Name,
 		SandboxID:             sandboxID,
 		Region:                p.Spec.Runtime.Region,
+		RegionLabel:           network.RegionLabel,
 		TaskCPU:               ecsDefaultCPU,
 		TaskMemory:            ecsDefaultMemory,
 		MainImage:             mainImage,

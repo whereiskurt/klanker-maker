@@ -24,7 +24,7 @@ func makeFakeSandboxDir(t *testing.T) string {
 func makeFakeRepoRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	templateDir := filepath.Join(root, "infra", "live", "sandboxes", "_template")
+	templateDir := filepath.Join(root, "infra", "live", "_template")
 	if err := os.MkdirAll(templateDir, 0o755); err != nil {
 		t.Fatalf("failed to create template dir: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestCreateSandboxDir(t *testing.T) {
 	repoRoot := makeFakeRepoRoot(t)
 	sandboxID := "sb-a1b2c3d4"
 
-	sandboxDir, err := terragrunt.CreateSandboxDir(repoRoot, sandboxID)
+	sandboxDir, err := terragrunt.CreateSandboxDir(repoRoot, "use1", sandboxID)
 	if err != nil {
 		t.Fatalf("CreateSandboxDir failed: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestCreateSandboxDir(t *testing.T) {
 	}
 
 	// Expected path
-	expected := filepath.Join(repoRoot, "infra", "live", "sandboxes", sandboxID)
+	expected := filepath.Join(repoRoot, "infra", "live", "use1", "sandboxes", sandboxID)
 	if sandboxDir != expected {
 		t.Errorf("sandbox dir = %q, want %q", sandboxDir, expected)
 	}
