@@ -137,7 +137,7 @@ Plans:
   8. Operator runs `km budget add <sandbox-id> --ai 3.00` and the sandbox's AI budget increases by $3; if proxy was blocking, it unblocks; if IAM was revoked, it's restored; if EC2 was stopped, it's started; if ECS task was terminated, it's re-provisioned from the stored S3 profile
   9. DynamoDB budget table is a global table replicated to all regions where agents run — budget reads from within the sandbox hit the local regional replica with sub-millisecond latency
   10. Operator runs `km shell <sandbox-id>` and gets an interactive shell into the sandbox — the command auto-detects the substrate (EC2 via SSM Session Manager, ECS via ECS Exec) and dispatches the correct underlying AWS CLI call without the operator needing to know which substrate is running
-**Plans:** 7/7 plans complete
+**Plans:** 9 plans (7 complete + 2 gap closure)
 
 Plans:
 - [ ] 06-01-PLAN.md — Config struct + km configure wizard + km bootstrap stub (CONF-01, CONF-03, CONF-04)
@@ -147,6 +147,8 @@ Plans:
 - [ ] 06-05-PLAN.md — Budget enforcer Lambda + compute tracking + dual-layer enforcement (BUDG-03, BUDG-07)
 - [ ] 06-06-PLAN.md — km budget add + km status budget display + budget init in create (BUDG-06, BUDG-08, BUDG-09)
 - [ ] 06-07-PLAN.md — ConfigUI budget dashboard + end-to-end checkpoint (BUDG-09)
+- [ ] 06-08-PLAN.md — Gap closure: wire spot rate into compiler + create flow (BUDG-03)
+- [ ] 06-09-PLAN.md — Gap closure: km shell substrate-abstracted interactive shell (CONF-05)
 
 ## Progress
 
@@ -160,4 +162,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 3. Sidecar Enforcement & Lifecycle Management | 5/6 | In Progress|  |
 | 4. Lifecycle Hardening, Artifacts & Email | 4/5 | In Progress|  |
 | 5. ConfigUI | 4/4 | Complete   | 2026-03-22 |
-| 6. Budget Enforcement & Platform Configuration | 7/7 | Complete   | 2026-03-22 |
+| 6. Budget Enforcement & Platform Configuration | 7/9 | In Progress|  |
