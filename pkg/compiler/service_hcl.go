@@ -84,6 +84,14 @@ const ecsServiceHCLTemplate = `locals {
     use_spot       = {{ .UseSpot }}
     task_cpu       = {{ .TaskCPU }}
     task_memory    = {{ .TaskMemory }}
+{{- if .EffectiveWritablePaths }}
+
+    volumes = [
+{{- range .EffectiveWritablePaths }}
+      { name = "{{ volumeName . }}", scope = "task" },
+{{- end }}
+    ]
+{{- end }}
 
     containers = [
       {
@@ -94,6 +102,9 @@ const ecsServiceHCLTemplate = `locals {
         memory_reservation = {{ .MainMemoryReservation }}
         essential          = true
         command            = []
+{{- if .HasFilesystemPolicy }}
+        readonlyRootFilesystem = true
+{{- end }}
         environment = [
           { name = "SANDBOX_ID",    value = "{{ .SandboxID }}" },
           { name = "KM_LABEL",      value = "km" },
@@ -101,6 +112,13 @@ const ecsServiceHCLTemplate = `locals {
           { name = "HTTPS_PROXY",   value = "http://localhost:3128" },
           { name = "NO_PROXY",      value = "169.254.169.254,169.254.170.2,localhost,127.0.0.1" },
         ]
+{{- if .EffectiveWritablePaths }}
+        mountPoints = [
+{{- range .EffectiveWritablePaths }}
+          { sourceVolume = "{{ volumeName . }}", containerPath = "{{ . }}", readOnly = false },
+{{- end }}
+        ]
+{{- end }}
         port_mappings     = []
         log_stream_prefix = "main"
       },
@@ -232,6 +250,9 @@ type ecsHCLParams struct {
 	AllowedDNSSuffixes string // comma-separated allowed DNS suffixes
 	AllowedHTTPHosts   string // comma-separated allowed HTTP hosts
 	ArtifactsBucket    string // S3 bucket for sidecar OTel traces (KM_ARTIFACTS_BUCKET)
+	// Filesystem enforcement fields (populated from profile policy)
+	HasFilesystemPolicy    bool     // true if FilesystemPolicy is set
+	EffectiveWritablePaths []string // WritablePaths + auto-injected /tmp when readonlyRootFilesystem is true
 }
 
 // ============================================================
@@ -261,6 +282,14 @@ var templateFuncs = template.FuncMap{
 			quoted[i] = fmt.Sprintf("%q", s)
 		}
 		return strings.Join(quoted, ", ")
+	},
+	// volumeName converts an absolute path to a valid ECS volume name.
+	// e.g. "/tmp" -> "vol-tmp", "/workspace/data" -> "vol-workspace-data"
+	"volumeName": func(path string) string {
+		// Strip leading slash, replace remaining slashes with dashes
+		name := strings.TrimPrefix(path, "/")
+		name = strings.ReplaceAll(name, "/", "-")
+		return "vol-" + name
 	},
 }
 
@@ -354,6 +383,26 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		AllowedDNSSuffixes:    strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
 		AllowedHTTPHosts:      strings.Join(p.Spec.Network.Egress.AllowedHosts, ","),
 		ArtifactsBucket:       os.Getenv("KM_ARTIFACTS_BUCKET"),
+	}
+
+	// Populate filesystem enforcement fields (nil-safe).
+	if p.Spec.Policy.FilesystemPolicy != nil {
+		params.HasFilesystemPolicy = true
+		// Collect the declared writable paths.
+		writablePaths := make([]string, len(p.Spec.Policy.FilesystemPolicy.WritablePaths))
+		copy(writablePaths, p.Spec.Policy.FilesystemPolicy.WritablePaths)
+		// Auto-inject /tmp when readonlyRootFilesystem is enabled and /tmp is not already listed.
+		hasTmp := false
+		for _, wp := range writablePaths {
+			if wp == "/tmp" {
+				hasTmp = true
+				break
+			}
+		}
+		if !hasTmp {
+			writablePaths = append([]string{"/tmp"}, writablePaths...)
+		}
+		params.EffectiveWritablePaths = writablePaths
 	}
 
 	var buf bytes.Buffer
