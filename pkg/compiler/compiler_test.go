@@ -444,3 +444,90 @@ func TestCompileECSTagging(t *testing.T) {
 		t.Errorf("ECS ServiceHCL should contain sandbox_id at least twice, got %d occurrences\nGot:\n%s", count, artifacts.ServiceHCL)
 	}
 }
+
+// ============================================================
+// Budget enforcer compiler integration tests (BUDG-03, BUDG-07)
+// ============================================================
+
+// TestCompileEC2WithBudget verifies that a budget profile produces budget_enforcer_inputs
+// in the EC2 service.hcl.
+func TestCompileEC2WithBudget(t *testing.T) {
+	p := loadTestProfile(t, "ec2-with-budget.yaml")
+	id := "sb-budgec2a"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile(EC2, with budget) error = %v", err)
+	}
+
+	hcl := artifacts.ServiceHCL
+
+	// Budget block should be present
+	if !strings.Contains(hcl, "budget_enforcer_inputs") {
+		t.Errorf("EC2 ServiceHCL should contain budget_enforcer_inputs when budget is set\nGot:\n%s", hcl)
+	}
+	// Compute and AI limits should appear
+	if !strings.Contains(hcl, "compute_limit_usd") {
+		t.Errorf("EC2 ServiceHCL budget block missing compute_limit_usd\nGot:\n%s", hcl)
+	}
+	if !strings.Contains(hcl, "ai_limit_usd") {
+		t.Errorf("EC2 ServiceHCL budget block missing ai_limit_usd\nGot:\n%s", hcl)
+	}
+}
+
+// TestCompileEC2NoBudget verifies that a profile without budget does NOT include
+// budget_enforcer_inputs in service.hcl.
+func TestCompileEC2NoBudget(t *testing.T) {
+	p := loadTestProfile(t, "ec2-basic.yaml")
+	id := "sb-nobudget"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile(EC2, no budget) error = %v", err)
+	}
+
+	if strings.Contains(artifacts.ServiceHCL, "budget_enforcer_inputs") {
+		t.Errorf("EC2 ServiceHCL should NOT contain budget_enforcer_inputs when budget is nil\nGot:\n%s", artifacts.ServiceHCL)
+	}
+}
+
+// TestCompileEC2BudgetCAInjection verifies that a budget profile injects CA cert
+// setup into the EC2 user-data script.
+func TestCompileEC2BudgetCAInjection(t *testing.T) {
+	p := loadTestProfile(t, "ec2-with-budget.yaml")
+	id := "sb-budgca01"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile(EC2, with budget) error = %v", err)
+	}
+
+	ud := artifacts.UserData
+
+	// CA cert injection and budget environment variables should be present
+	if !strings.Contains(ud, "km-proxy-ca.crt") {
+		t.Errorf("UserData should contain CA cert injection for budget-enabled profile\nGot:\n%s", ud)
+	}
+	if !strings.Contains(ud, "KM_BUDGET_ENABLED") {
+		t.Errorf("UserData should contain KM_BUDGET_ENABLED for budget-enabled profile\nGot:\n%s", ud)
+	}
+	if !strings.Contains(ud, "/run/km") {
+		t.Errorf("UserData should create /run/km for budget_remaining file\nGot:\n%s", ud)
+	}
+}
+
+// TestCompileEC2NoBudgetNoCACert verifies that no CA cert injection occurs
+// when budget is not configured.
+func TestCompileEC2NoBudgetNoCACert(t *testing.T) {
+	p := loadTestProfile(t, "ec2-basic.yaml")
+	id := "sb-nocert01"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile(EC2, no budget) error = %v", err)
+	}
+
+	if strings.Contains(artifacts.UserData, "km-proxy-ca.crt") {
+		t.Errorf("UserData should NOT contain CA cert injection when budget is nil\nGot:\n%s", artifacts.UserData)
+	}
+}

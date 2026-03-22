@@ -260,7 +260,36 @@ chmod +x /opt/km/bin/km-upload-artifacts
 {{- end }}
 
 # ============================================================
-# 7. Sandbox ready signal
+# 7. Budget enforcement setup (if enabled)
+# ============================================================
+{{- if .BudgetEnabled }}
+echo "[km-bootstrap] Setting up budget enforcement environment..."
+
+# Install goproxy CA cert for MITM proxy so budget-tracked traffic
+# (HTTP/HTTPS via km-http-proxy) can be inspected for AI spend tracking.
+# The CA cert is stored in S3 at sidecars/km-proxy-ca.crt.
+aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-proxy-ca.crt" \
+  /usr/local/share/ca-certificates/km-proxy-ca.crt 2>&1 || \
+  echo "[km-bootstrap] WARNING: could not fetch proxy CA cert; AI spend tracking may be incomplete"
+
+if [ -f /usr/local/share/ca-certificates/km-proxy-ca.crt ]; then
+  update-ca-certificates
+  echo "[km-bootstrap] Proxy CA cert installed"
+fi
+
+# Export budget environment variables for in-sandbox processes
+export KM_BUDGET_ENABLED=true
+export KM_BUDGET_TABLE="{{ .BudgetTable }}"
+
+# Create /run/km/ for budget_remaining file (written by km-http-proxy when AI budget checked)
+mkdir -p /run/km
+chmod 755 /run/km
+
+echo "[km-bootstrap] Budget enforcement environment configured"
+{{- end }}
+
+# ============================================================
+# 8. Sandbox ready signal
 # ============================================================
 echo "[km-bootstrap] SANDBOX_READY sandbox_id={{ .SandboxID }}"
 `
@@ -285,6 +314,9 @@ type userDataParams struct {
 	NotificationsEmail   string // notifications@{emailDomain} — from address for spot notifications
 	OperatorEmail        string // from KM_OPERATOR_EMAIL env var — for spot notification
 	AWSRegion            string // from IMDS region — for spot notification ses send-email CLI call
+	// Budget enforcement fields (BUDG-03, BUDG-07)
+	BudgetEnabled bool   // true when profile.spec.budget is set
+	BudgetTable   string // DynamoDB table name from KM_BUDGET_TABLE env var
 }
 
 // generateUserData produces the EC2 bootstrap user-data.sh content for the given profile.
@@ -304,6 +336,11 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		emailDomain = emailDomainOverride[0]
 	}
 
+	budgetTable := os.Getenv("KM_BUDGET_TABLE")
+	if budgetTable == "" {
+		budgetTable = "km-budgets"
+	}
+
 	params := userDataParams{
 		SandboxID:          sandboxID,
 		SecretPaths:        secretPaths,
@@ -317,6 +354,9 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		NotificationsEmail: "notifications@" + emailDomain,
 		OperatorEmail:      os.Getenv("KM_OPERATOR_EMAIL"),
 		AWSRegion:          p.Spec.Runtime.Region,
+		// Budget enforcement fields — enable when profile.spec.budget is set.
+		BudgetEnabled: p.Spec.Budget != nil,
+		BudgetTable:   budgetTable,
 	}
 
 	// Populate filesystem policy fields (nil-safe)

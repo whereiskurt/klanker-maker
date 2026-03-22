@@ -1,0 +1,76 @@
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: ec2-budget-test
+  labels:
+    tier: test
+
+spec:
+  lifecycle:
+    ttl: "4h"
+    idleTimeout: "1h"
+    teardownPolicy: destroy
+
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+
+  sourceAccess:
+    mode: allowlist
+
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+      allowedHosts:
+        - "api.github.com"
+      allowedMethods:
+        - GET
+
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+
+  sidecars:
+    dnsProxy:
+      enabled: false
+      image: ""
+    httpProxy:
+      enabled: false
+      image: ""
+    auditLog:
+      enabled: false
+      image: ""
+    tracing:
+      enabled: false
+      image: ""
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/network
+
+  policy:
+    allowShellEscape: false
+
+  agent:
+    maxConcurrentTasks: 2
+    taskTimeout: "15m"
+
+  budget:
+    compute:
+      maxSpendUSD: 5.0
+    ai:
+      maxSpendUSD: 2.0
+    warningThreshold: 0.8
