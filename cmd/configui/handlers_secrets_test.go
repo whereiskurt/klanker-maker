@@ -74,9 +74,11 @@ func (m *mockSSM) DeleteParameter(_ context.Context, input *ssm.DeleteParameterI
 
 // newSecretsHandler creates a Handler with SSM mock injected, minimal templates for testing.
 func newSecretsHandler(ssmc SSMAPI) *Handler {
+	testTmpl := buildTestTemplates()
 	return &Handler{
-		tmpl:      buildTestTemplates(),
-		ssmClient: ssmc,
+		tmpl:        testTmpl,
+		secretsTmpl: testTmpl,
+		ssmClient:   ssmc,
 	}
 }
 

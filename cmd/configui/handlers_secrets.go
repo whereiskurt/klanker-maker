@@ -100,7 +100,10 @@ func (h *Handler) handleSecretsPage(w http.ResponseWriter, r *http.Request) {
 		log.Warn().Err(err).Msg("configui: list secrets failed for page render")
 		records = []secretRecord{}
 	}
-	h.render(w, "secrets.html", records)
+	h.renderWith(h.secretsTmpl, w, "secrets.html", struct {
+		ActivePage string
+		Secrets    []secretRecord
+	}{"secrets", records})
 }
 
 // handleSecretsList handles GET /api/secrets.

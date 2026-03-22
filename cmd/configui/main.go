@@ -71,14 +71,17 @@ func main() {
 	profilesDir := flag.String("profiles-dir", profilesDirDefault, "Path to profiles directory on disk")
 	flag.Parse()
 
-	// Parse embedded templates — glob all .html files under templates/.
-	tmpl, err := template.New("").Funcs(templateFuncs).ParseFS(templatesFS,
-		"templates/*.html",
+	// Parse templates: base + partials as shared set, then clone per page to avoid
+	// {{define "content"}} collisions between dashboard.html and editor.html.
+	base := template.Must(template.New("").Funcs(templateFuncs).ParseFS(templatesFS,
+		"templates/base.html",
 		"templates/partials/*.html",
-	)
-	if err != nil {
-		log.Fatal().Err(err).Msg("configui: failed to parse templates")
-	}
+	))
+	dashTmpl := template.Must(template.Must(base.Clone()).ParseFS(templatesFS, "templates/dashboard.html"))
+	editorTmpl := template.Must(template.Must(base.Clone()).ParseFS(templatesFS, "templates/editor.html"))
+	secretsTmpl := template.Must(template.Must(base.Clone()).ParseFS(templatesFS, "templates/secrets.html"))
+	// Combined tmpl for partials-only rendering (HTMX partial responses)
+	tmpl := dashTmpl
 
 	// Load AWS config from environment / shared credentials / instance metadata.
 	ctx := context.Background()
@@ -105,6 +108,8 @@ func main() {
 
 	handler := &Handler{
 		tmpl:        tmpl,
+		editorTmpl:  editorTmpl,
+		secretsTmpl: secretsTmpl,
 		lister:      listerAdapter,
 		finder:      finderAdapter,
 		cwClient:    cwClient,

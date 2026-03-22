@@ -58,7 +58,7 @@ func (h *Handler) handleEditorPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.render(w, "editor.html", data)
+	h.renderWith(h.editorTmpl, w, "editor.html", data)
 }
 
 // handleValidate serves POST /api/validate.

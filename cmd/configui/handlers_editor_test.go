@@ -52,8 +52,10 @@ spec:
 		t.Fatalf("write child-profile.yaml: %v", err)
 	}
 
+	testTmpl := buildEditorTestTemplates()
 	h := &Handler{
-		tmpl:        buildEditorTestTemplates(),
+		tmpl:        testTmpl,
+		editorTmpl:  testTmpl,
 		lister:      &mockLister{},
 		finder:      nil,
 		cwClient:    nil,

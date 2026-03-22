@@ -6,6 +6,10 @@
   <span class="sandbox-count">{{.Count}} sandbox{{if ne .Count 1}}es{{end}} running</span>
 </div>
 
+{{if .Error}}
+<div class="alert alert-warning">{{.Error}}</div>
+{{end}}
+
 <div class="table-wrapper">
   <table class="table" id="sandboxes-table">
     <thead>

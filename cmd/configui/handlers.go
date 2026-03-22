@@ -63,7 +63,9 @@ type CWLogsFilterAPI interface {
 
 // Handler holds all dependencies for the ConfigUI HTTP handlers.
 type Handler struct {
-	tmpl        *template.Template
+	tmpl        *template.Template // default (dashboard) template set — used for partials
+	editorTmpl  *template.Template // editor page template set
+	secretsTmpl *template.Template // secrets page template set
 	lister      SandboxLister
 	finder      SandboxFinder
 	cwClient    CWLogsFilterAPI
@@ -75,10 +77,17 @@ type Handler struct {
 	bucket      string
 }
 
+// BasePage provides fields common to all full-page templates (nav active state).
+type BasePage struct {
+	ActivePage string
+}
+
 // DashboardData is the template data for the dashboard page.
 type DashboardData struct {
+	BasePage
 	Sandboxes []kmaws.SandboxRecord
 	Count     int
+	Error     string
 }
 
 // DetailData is the template data for the sandbox detail partial.
@@ -99,16 +108,19 @@ type LogEntry struct {
 // HX-Request header. Full-page requests get base.html + dashboard content; HTMX requests
 // get only the sandbox rows partial for tbody innerHTML swapping.
 func (h *Handler) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	var errMsg string
 	records, err := h.lister.ListSandboxes(r.Context(), h.bucket)
 	if err != nil {
 		log.Error().Err(err).Msg("configui: list sandboxes failed")
-		http.Error(w, "failed to list sandboxes", http.StatusInternalServerError)
-		return
+		errMsg = "Unable to list sandboxes: " + err.Error()
+		records = nil
 	}
 
 	data := DashboardData{
+		BasePage:  BasePage{ActivePage: "dashboard"},
 		Sandboxes: records,
 		Count:     len(records),
+		Error:     errMsg,
 	}
 
 	if isHTMXRequest(r) {
@@ -356,8 +368,12 @@ func isHTMXRequest(r *http.Request) bool {
 // render executes the named template from h.tmpl with the given data.
 // On error it logs and writes a 500 response.
 func (h *Handler) render(w http.ResponseWriter, name string, data any) {
+	h.renderWith(h.tmpl, w, name, data)
+}
+
+func (h *Handler) renderWith(t *template.Template, w http.ResponseWriter, name string, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := h.tmpl.ExecuteTemplate(w, name, data); err != nil {
+	if err := t.ExecuteTemplate(w, name, data); err != nil {
 		log.Error().Err(err).Str("template", name).Msg("configui: template render error")
 		http.Error(w, "render error", http.StatusInternalServerError)
 	}
