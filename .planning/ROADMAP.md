@@ -136,7 +136,16 @@ Plans:
   7. At 80% of either budget pool, the operator receives a warning email; the threshold is configurable via `spec.budget.warningThreshold`
   8. Operator runs `km budget add <sandbox-id> --ai 3.00` and the sandbox's AI budget increases by $3; if proxy was blocking, it unblocks; if IAM was revoked, it's restored; if EC2 was stopped, it's started; if ECS task was terminated, it's re-provisioned from the stored S3 profile
   9. DynamoDB budget table is a global table replicated to all regions where agents run — budget reads from within the sandbox hit the local regional replica with sub-millisecond latency
-**Plans**: TBD
+**Plans:** 7 plans
+
+Plans:
+- [ ] 06-01-PLAN.md — Config struct + km configure wizard + km bootstrap stub (CONF-01, CONF-03, CONF-04)
+- [ ] 06-02-PLAN.md — BudgetSpec types + DynamoDB module + BudgetAPI + PricingAPI (BUDG-01, BUDG-02, BUDG-05)
+- [ ] 06-03-PLAN.md — Hardcoded domain replacement across codebase (CONF-02)
+- [ ] 06-04-PLAN.md — Bedrock MITM proxy interception + SSE token metering (BUDG-04)
+- [ ] 06-05-PLAN.md — Budget enforcer Lambda + compute tracking + dual-layer enforcement (BUDG-03, BUDG-07)
+- [ ] 06-06-PLAN.md — km budget add + km status budget display + budget init in create (BUDG-06, BUDG-08, BUDG-09)
+- [ ] 06-07-PLAN.md — ConfigUI budget dashboard + end-to-end checkpoint (BUDG-09)
 
 ## Progress
 
@@ -150,4 +159,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 3. Sidecar Enforcement & Lifecycle Management | 5/6 | In Progress|  |
 | 4. Lifecycle Hardening, Artifacts & Email | 4/5 | In Progress|  |
 | 5. ConfigUI | 4/4 | Complete   | 2026-03-22 |
-| 6. Budget Enforcement & Platform Configuration | 0/TBD | Not started | - |
+| 6. Budget Enforcement & Platform Configuration | 0/7 | Not started | - |
