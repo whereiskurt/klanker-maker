@@ -1,32 +1,38 @@
 Open an interactive shell into a running sandbox.
 
-Automatically detects the sandbox substrate and dispatches the correct
-AWS CLI command — no knowledge of the underlying infrastructure required.
-
-  EC2 sandboxes:  aws ssm start-session --target <instance-id>
-  ECS sandboxes:  aws ecs execute-command --cluster <arn> --task <arn>
-                  --interactive --command /bin/bash
+Automatically detects the sandbox substrate (EC2 or ECS Fargate) and
+dispatches the correct AWS CLI command — SSM Session Manager for EC2,
+ECS Exec for Fargate containers. No need to know which substrate is
+running; km shell handles the abstraction.
 
 Usage:
   km shell <sandbox-id>
 
-Prerequisites:
-  - The sandbox must be in "running" state
-  - AWS CLI must be installed and on PATH
-  - For EC2: AWS Systems Manager Session Manager plugin installed
-  - For ECS: ECS Exec must be enabled on the task (--enable-execute-command)
-  - Valid AWS credentials with appropriate SSM/ECS permissions
-
 Examples:
-  # Shell into a running EC2 sandbox
+  # Open a shell into a sandbox
   km shell sb-a1b2c3d4
 
-  # Shell into a running ECS sandbox
-  km shell sb-e5f6g7h8
+Prerequisites:
+  - AWS CLI v2 installed with Session Manager plugin
+  - AWS credentials configured (profile: klanker-terraform)
+  - Sandbox must be in running state
+
+How It Works:
+
+  EC2 Sandboxes:
+    Discovers the EC2 instance ID from sandbox metadata, then runs
+    'aws ssm start-session' to open an interactive terminal via SSM
+    Session Manager. Requires the SSM agent running on the instance
+    (installed by default in sandbox AMIs).
+
+  ECS Fargate Sandboxes:
+    Discovers the ECS cluster and task ARN from sandbox metadata, then
+    runs 'aws ecs execute-command' to open an interactive /bin/bash
+    session in the running container. Requires ECS Exec enabled on the
+    task (configured by default in sandbox task definitions).
 
 Error Handling:
-  If the sandbox is stopped, km shell will exit with a message suggesting
-  how to top up the compute budget to resume it.
-
-  If the substrate is not supported (e.g., k8s in a future version), an
-  informative error is returned.
+  - Sandbox not found: exits with error and guidance
+  - Sandbox stopped/suspended: exits with message to start or top up budget
+  - Unknown substrate: exits with error listing supported substrates
+  - AWS CLI not installed: exits with installation guidance
