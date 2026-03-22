@@ -177,9 +177,15 @@ Sandboxes are accessed exclusively through **AWS SSM Session Manager**:
 | **Audit** | Command + network logging | Secret-redacted; delivered to CloudWatch/S3 |
 | **Budget** | Compute + AI spend tracking | DynamoDB real-time metering; proxy 403 + IAM revocation at ceiling |
 
-### Architecture Diagram
+### Architecture Diagrams
 
-See [`docs/sandbox-architecture.excalidraw`](docs/sandbox-architecture.excalidraw) for a visual overview — open it in [excalidraw.com](https://excalidraw.com) or the VS Code Excalidraw extension.
+See [`docs/sandbox-architecture.excalidraw`](docs/sandbox-architecture.excalidraw) — open in [excalidraw.com](https://excalidraw.com) or the VS Code Excalidraw extension. Three frames:
+
+**Frame 1 — Security & Network Architecture.** The 3-account model (Management, Terraform, Application) with DNS delegation and cross-account role assumption arrows. Inside the Application account: the shared regional VPC containing per-sandbox Security Group boundaries, the EC2/ECS workload running an AI agent, 4 sidecars (DNS proxy, HTTP proxy, audit log, tracing) with iptables DNAT forcing all traffic through them. Egress flows through the proxies to the Internet box showing allowed hosts vs everything else blocked. A second sandbox ghost shows SGs blocking lateral movement. Per-sandbox controls (IAM scoping, IMDSv2, SSM, source access, filesystem policy, secrets) listed alongside. AWS services (SSM Params, S3 Artifacts, CloudWatch, SES) below.
+
+**Frame 2 — Budget Enforcement Flow.** A left-to-right pipeline: Agent makes Bedrock API call → HTTP Proxy intercepts response → extract input/output tokens → price against model rates (Haiku ~$0.25/MTok, Sonnet ~$3/MTok) → atomic DynamoDB increment. From DynamoDB, two paths fork: at 80% → SES warning email to operator; at 100% → dual-layer enforcement (proxy returns 403 + Lambda revokes IAM Bedrock permissions) + compute suspension. A `km budget add` arrow curves back to DynamoDB showing the top-up and resume flow. The `km status` output shows per-model spend breakdown.
+
+**Frame 3 — Sandbox Lifecycle & Pipeline.** The provisioning pipeline left to right: `km configure` (once) → `km bootstrap` (once, S3 + DynamoDB + KMS) → `km init` (per region, shared VPC) → Compiler (YAML→HCL) → `km create` (terragrunt apply, per sandbox) → running (km list/status/logs) → `km destroy`. Below: four automatic exit triggers — TTL expiry (EventBridge → Lambda → artifacts → email → destroy), idle timeout (CW Logs polling), spot interruption (2-min warning artifact upload), and budget exhausted (suspended, not destroyed, resume with top-up). Teardown policies (destroy/stop/retain) at the bottom.
 
 ## How It Works
 

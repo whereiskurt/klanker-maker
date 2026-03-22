@@ -1,19 +1,25 @@
 # Go build artifacts
 *.exe
 *.test
+*.bak
 
+# macOS
+.DS_Store
+
+# Terraform / Terragrunt
+.terraform/
+.terraform.lock.hcl
+.terragrunt-cache/
 
 # Sandbox directories — per-sandbox generated dirs are ephemeral artifacts.
 # The _template/ directory IS committed (contains the base terragrunt.hcl).
 infra/live/sandboxes/sb-*/
-infra/live/*/network/.terragrunt-cache/
-infra/live/*/network/.terraform*
 infra/live/*/network/outputs.json
 infra/live/*/sandboxes/sb-*/
 infra/live/*/region.hcl
 infra/live/network/
 
-### Some application artifacts that we build and get left behind sometimes.
+# Compiled binaries
 /km
 /dns-proxy
 /http-proxy
