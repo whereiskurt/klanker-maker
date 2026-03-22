@@ -3,6 +3,7 @@ package compiler
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"strings"
 	"text/template"
 
@@ -94,59 +95,87 @@ const ecsServiceHCLTemplate = `locals {
         essential          = true
         command            = []
         environment = [
-          { name = "SANDBOX_ID", value = "{{ .SandboxID }}" },
-          { name = "KM_LABEL", value = "km" }
+          { name = "SANDBOX_ID",    value = "{{ .SandboxID }}" },
+          { name = "KM_LABEL",      value = "km" },
+          { name = "HTTP_PROXY",    value = "http://localhost:3128" },
+          { name = "HTTPS_PROXY",   value = "http://localhost:3128" },
+          { name = "NO_PROXY",      value = "169.254.169.254,169.254.170.2,localhost,127.0.0.1" },
         ]
         port_mappings     = []
         log_stream_prefix = "main"
       },
       {
-        name               = "dns-proxy"
-        image              = "DNS_PROXY_IMAGE_PLACEHOLDER"
+        name               = "km-dns-proxy"
+        image              = "${var.dns_proxy_image}"
         cpu                = 128
         memory             = 256
         memory_reservation = 128
-        essential          = true
+        essential          = false
         command            = []
-        environment        = [{ name = "SANDBOX_ID", value = "{{ .SandboxID }}" }]
-        port_mappings      = []
-        log_stream_prefix  = "dns-proxy"
+        environment = [
+          { name = "SANDBOX_ID",       value = "{{ .SandboxID }}" },
+          { name = "ALLOWED_SUFFIXES", value = "{{ .AllowedDNSSuffixes }}" },
+          { name = "UPSTREAM_DNS",     value = "169.254.169.253" },
+        ]
+        port_mappings     = []
+        log_stream_prefix = "dns-proxy"
       },
       {
-        name               = "http-proxy"
-        image              = "HTTP_PROXY_IMAGE_PLACEHOLDER"
+        name               = "km-http-proxy"
+        image              = "${var.http_proxy_image}"
         cpu                = 128
         memory             = 256
         memory_reservation = 128
-        essential          = true
+        essential          = false
         command            = []
-        environment        = [{ name = "SANDBOX_ID", value = "{{ .SandboxID }}" }]
-        port_mappings      = []
-        log_stream_prefix  = "http-proxy"
+        environment = [
+          { name = "SANDBOX_ID",    value = "{{ .SandboxID }}" },
+          { name = "ALLOWED_HOSTS", value = "{{ .AllowedHTTPHosts }}" },
+          { name = "PROXY_PORT",    value = "3128" },
+        ]
+        port_mappings     = []
+        log_stream_prefix = "http-proxy"
       },
       {
-        name               = "audit-log"
-        image              = "AUDIT_LOG_IMAGE_PLACEHOLDER"
+        name               = "km-audit-log"
+        image              = "${var.audit_log_image}"
+        cpu                = 64
+        memory             = 128
+        memory_reservation = 64
+        essential          = true
+        command            = []
+        environment = [
+          { name = "SANDBOX_ID",      value = "{{ .SandboxID }}" },
+          { name = "AUDIT_LOG_DEST",  value = "cloudwatch" },
+          { name = "CW_LOG_GROUP",    value = "/km/sandboxes/{{ .SandboxID }}/" },
+          { name = "AWS_REGION",      value = "{{ .Region }}" },
+        ]
+        log_configuration = {
+          log_driver = "awslogs"
+          options = {
+            "awslogs-group"         = "/km/sidecars/{{ .SandboxID }}"
+            "awslogs-region"        = "{{ .Region }}"
+            "awslogs-stream-prefix" = "audit-log"
+          }
+        }
+        port_mappings     = []
+        log_stream_prefix = "audit-log"
+      },
+      {
+        name               = "km-tracing"
+        image              = "${var.tracing_image}"
         cpu                = 64
         memory             = 128
         memory_reservation = 64
         essential          = false
         command            = []
-        environment        = [{ name = "SANDBOX_ID", value = "{{ .SandboxID }}" }]
-        port_mappings      = []
-        log_stream_prefix  = "audit-log"
-      },
-      {
-        name               = "tracing"
-        image              = "TRACING_IMAGE_PLACEHOLDER"
-        cpu                = 64
-        memory             = 128
-        memory_reservation = 64
-        essential          = false
-        command            = []
-        environment        = [{ name = "SANDBOX_ID", value = "{{ .SandboxID }}" }]
-        port_mappings      = []
-        log_stream_prefix  = "tracing"
+        environment = [
+          { name = "SANDBOX_ID",     value = "{{ .SandboxID }}" },
+          { name = "OTEL_S3_BUCKET", value = "{{ .ArtifactsBucket }}" },
+          { name = "AWS_REGION",     value = "{{ .Region }}" },
+        ]
+        port_mappings     = []
+        log_stream_prefix = "tracing"
       }
     ]
 
@@ -199,6 +228,10 @@ type ecsHCLParams struct {
 	VPCID                 string
 	PublicSubnets         []string
 	SGEgressRules         []SGRule
+	// Sidecar configuration fields (populated from profile network spec and env vars)
+	AllowedDNSSuffixes string // comma-separated allowed DNS suffixes
+	AllowedHTTPHosts   string // comma-separated allowed HTTP hosts
+	ArtifactsBucket    string // S3 bucket for sidecar OTel traces (KM_ARTIFACTS_BUCKET)
 }
 
 // ============================================================
@@ -318,6 +351,9 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		VPCID:                 network.VPCID,
 		PublicSubnets:         network.PublicSubnets,
 		SGEgressRules:         sgRules,
+		AllowedDNSSuffixes:    strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
+		AllowedHTTPHosts:      strings.Join(p.Spec.Network.Egress.AllowedHosts, ","),
+		ArtifactsBucket:       os.Getenv("KM_ARTIFACTS_BUCKET"),
 	}
 
 	var buf bytes.Buffer

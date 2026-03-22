@@ -3,6 +3,7 @@ package compiler
 import (
 	"encoding/base64"
 	"fmt"
+	"os"
 
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
 )
@@ -79,8 +80,10 @@ func compileEC2(p *profile.SandboxProfile, sandboxID string, onDemand bool, netw
 	iamPolicy := compileIAMPolicy(p)
 	secretPaths := compileSecrets(p)
 
-	// Generate user-data.sh first — it gets embedded into service.hcl
-	userData, err := generateUserData(p, sandboxID, secretPaths)
+	// Generate user-data.sh first — it gets embedded into service.hcl.
+	// KM_ARTIFACTS_BUCKET is read from the environment; may be empty in tests.
+	artifactsBucket := os.Getenv("KM_ARTIFACTS_BUCKET")
+	userData, err := generateUserData(p, sandboxID, secretPaths, artifactsBucket)
 	if err != nil {
 		return nil, fmt.Errorf("generate user-data.sh: %w", err)
 	}
