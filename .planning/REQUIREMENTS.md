@@ -89,7 +89,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **BUDG-04**: AI/token spend tracked per Bedrock Anthropic model (Haiku, Sonnet, Opus); http-proxy sidecar intercepts `InvokeModel` responses, extracts `usage.input_tokens`/`usage.output_tokens`, multiplies by model rate, increments DynamoDB budget record
 - [ ] **BUDG-05**: Model pricing sourced from AWS Price List API (cached, refreshed daily) — supports all Anthropic models available on Bedrock
 - [ ] **BUDG-06**: At 80% budget threshold (configurable via `spec.budget.warningThreshold`), operator receives warning email via SES using existing `SendLifecycleNotification` pattern
-- [ ] **BUDG-07**: At 100% AI budget, http-proxy returns 403 for Bedrock calls (immediate enforcement, no Lambda delay); at 100% compute budget, EventBridge-triggered Lambda revokes sandbox IAM permissions
+- [ ] **BUDG-07**: Dual-layer enforcement — at 100% AI budget, http-proxy returns 403 for Bedrock calls (immediate, real-time); the same EventBridge-triggered Lambda that checks compute spend also reads DynamoDB AI spend records and revokes the instance profile's Bedrock IAM permissions as a backstop (catches SDK/CLI calls that bypass the proxy); at 100% compute budget, Lambda revokes all sandbox IAM permissions
 - [ ] **BUDG-08**: Operator can top up a sandbox budget via `km budget add <sandbox-id> --compute <amount> --ai <amount>` which updates DynamoDB limits and restores IAM if revoked
 - [ ] **BUDG-09**: `km status <sandbox-id>` shows current spend vs budget for both compute and AI pools, including per-model AI breakdown
 
