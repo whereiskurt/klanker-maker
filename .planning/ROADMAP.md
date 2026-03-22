@@ -54,7 +54,13 @@ Plans:
   5. Every AWS resource created by `km create` carries a `km:sandbox-id` tag matching the sandbox ID, visible in the AWS console
   6. EC2 instances are created with IMDSv2 enforced (`http-tokens=required`) — direct calls to the metadata endpoint without a session token fail from within the sandbox
   7. Secrets referenced in the profile's allowlist are injected into the sandbox via SSM Parameter Store; secrets not on the allowlist are inaccessible; SOPS encrypted secrets decrypt correctly via KMS
-**Plans**: TBD
+**Plans:** 4 plans
+
+Plans:
+- [ ] 02-01-PLAN.md — Profile compiler package (EC2 + ECS service.hcl, user-data, SG, IAM, secrets)
+- [ ] 02-02-PLAN.md — Terragrunt runner + AWS SDK helpers (tag discovery, spot termination)
+- [ ] 02-03-PLAN.md — km create + km destroy CLI commands
+- [ ] 02-04-PLAN.md — End-to-end AWS verification checkpoint
 
 ### Phase 3: Sidecar Enforcement & Lifecycle Management
 **Goal**: Running sandboxes on either substrate enforce network policy via DNS and HTTP proxy sidecars, produce auditable logs and OpenTelemetry traces, log MLflow experiment runs per session, and auto-terminate based on TTL and idle policy — operators can observe all running sandboxes
@@ -102,7 +108,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Schema, Compiler & AWS Foundation | 3/4 | In Progress|  |
-| 2. Core Provisioning & Security Baseline | 0/TBD | Not started | - |
+| 2. Core Provisioning & Security Baseline | 0/4 | Not started | - |
 | 3. Sidecar Enforcement & Lifecycle Management | 0/TBD | Not started | - |
 | 4. Lifecycle Hardening, Artifacts & Email | 0/TBD | Not started | - |
 | 5. ConfigUI | 0/TBD | Not started | - |
