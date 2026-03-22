@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 06-04-PLAN.md
-last_updated: "2026-03-22T20:35:38.775Z"
+stopped_at: Completed 06-05-PLAN.md
+last_updated: "2026-03-22T20:39:20.846Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 30
-  completed_plans: 27
+  completed_plans: 28
   percent: 0
 ---
 
@@ -76,6 +76,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 06-budget-enforcement-platform-configuration P01 | 8min | 2 tasks | 7 files |
 | Phase 06-budget-enforcement-platform-configuration P03 | 955 | 2 tasks | 14 files |
 | Phase 06-budget-enforcement-platform-configuration P04 | 218s | 2 tasks | 5 files |
+| Phase 06-budget-enforcement-platform-configuration P05 | 399s | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -160,6 +161,9 @@ Recent decisions affecting current work:
 - [Phase 06-04]: AlwaysMitm registered before OkConnect for Bedrock MITM (goproxy first-match ordering)
 - [Phase 06-04]: IncrementAISpend in fire-and-forget goroutine — response never held pending DynamoDB
 - [Phase 06-04]: budgetCache.UpdateLocalSpend called synchronously before goroutine so follow-on requests see optimistic increment
+- [Phase 06-05]: Budget enforcer uses DynamoDB SET (not ADD) for compute spend — Lambda recalculates absolute cost from CreatedAt each minute, so SET is idempotent
+- [Phase 06-05]: Spot rate embedded in EventBridge payload at sandbox creation time — pricing API resolution deferred as TODO in budget_enforcer_inputs compiler output
+- [Phase 06-05]: Per-sandbox Lambda naming (km-budget-enforcer-{sandbox-id}) — one Lambda per sandbox for resource isolation and sandbox-scoped IAM conditions
 
 ### Pending Todos
 
@@ -175,6 +179,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T20:35:38.772Z
-Stopped at: Completed 06-04-PLAN.md
+Last session: 2026-03-22T20:39:20.843Z
+Stopped at: Completed 06-05-PLAN.md
 Resume file: None
