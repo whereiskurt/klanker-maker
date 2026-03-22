@@ -17,30 +17,30 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Provisioning & Lifecycle
 
-- [ ] **PROV-01**: Operator can run `km create <profile>` to compile profile into Terragrunt inputs and provision EC2 + VPC + IAM
+- [x] **PROV-01**: Operator can run `km create <profile>` to compile profile into Terragrunt inputs and provision EC2 + VPC + IAM
 - [x] **PROV-02**: Operator can run `km destroy <sandbox-id>` to cleanly tear down all sandbox resources
 - [ ] **PROV-03**: Operator can run `km list` to see all running sandboxes with status
 - [ ] **PROV-04**: Operator can run `km status <sandbox-id>` to see detailed sandbox state
 - [ ] **PROV-05**: Sandbox auto-destroys after TTL expires
 - [ ] **PROV-06**: Sandbox auto-destroys after idle timeout with no activity
 - [ ] **PROV-07**: Sandbox teardown policy is configurable (destroy/stop/retain)
-- [ ] **PROV-08**: Every sandbox resource is tagged with `km:sandbox-id` for tracking and cost attribution
-- [ ] **PROV-09**: Operator can specify substrate (`ec2` or `ecs`) in the profile's `runtime.substrate` field and `km create` provisions the corresponding infrastructure
-- [ ] **PROV-10**: ECS substrate provisions an AWS Fargate task with sidecar containers for enforcement (DNS proxy, HTTP proxy, audit log) defined in the task definition
-- [ ] **PROV-11**: EC2 sandboxes use spot instances by default; on-demand fallback is configurable per profile
-- [ ] **PROV-12**: ECS sandboxes use Fargate Spot capacity provider by default; on-demand fallback is configurable per profile
+- [x] **PROV-08**: Every sandbox resource is tagged with `km:sandbox-id` for tracking and cost attribution
+- [x] **PROV-09**: Operator can specify substrate (`ec2` or `ecs`) in the profile's `runtime.substrate` field and `km create` provisions the corresponding infrastructure
+- [x] **PROV-10**: ECS substrate provisions an AWS Fargate task with sidecar containers for enforcement (DNS proxy, HTTP proxy, audit log) defined in the task definition
+- [x] **PROV-11**: EC2 sandboxes use spot instances by default; on-demand fallback is configurable per profile
+- [x] **PROV-12**: ECS sandboxes use Fargate Spot capacity provider by default; on-demand fallback is configurable per profile
 - [ ] **PROV-13**: Sandbox handles spot interruption gracefully — uploads artifacts to S3 before termination when possible
 
 ### Network & Security
 
-- [ ] **NETW-01**: Security Groups enforce egress restrictions as the primary enforcement layer
+- [x] **NETW-01**: Security Groups enforce egress restrictions as the primary enforcement layer
 - [ ] **NETW-02**: DNS proxy sidecar filters outbound DNS by allowlisted suffixes (works on both EC2 and ECS substrates)
 - [ ] **NETW-03**: HTTP proxy sidecar filters outbound HTTP/S by allowlisted hosts and methods (works on both EC2 and ECS substrates)
-- [ ] **NETW-04**: IAM role is session-scoped with configurable duration and region lock
+- [x] **NETW-04**: IAM role is session-scoped with configurable duration and region lock
 - [ ] **NETW-05**: IMDSv2 is enforced (http-tokens=required) on all sandbox EC2 instances
-- [ ] **NETW-06**: Secrets are injected via SSM Parameter Store with allowlist of permitted secret refs
+- [x] **NETW-06**: Secrets are injected via SSM Parameter Store with allowlist of permitted secret refs
 - [ ] **NETW-07**: SOPS encrypts secrets at rest with KMS keys provisioned as part of Klanker Maker infrastructure
-- [ ] **NETW-08**: GitHub source access controls allowlist repos, refs, and permissions (clone/fetch/push)
+- [x] **NETW-08**: GitHub source access controls allowlist repos, refs, and permissions (clone/fetch/push)
 
 ### Observability & Artifacts
 
@@ -142,19 +142,19 @@ Which phases cover which requirements. Updated during roadmap creation.
 | INFR-06 | Phase 1 | Complete |
 | INFR-07 | Phase 1 | Complete |
 | INFR-08 | Phase 1 | Complete |
-| PROV-01 | Phase 2 | Pending |
+| PROV-01 | Phase 2 | Complete |
 | PROV-02 | Phase 2 | Complete |
-| PROV-08 | Phase 2 | Pending |
-| PROV-09 | Phase 2 | Pending |
-| PROV-10 | Phase 2 | Pending |
-| PROV-11 | Phase 2 | Pending |
-| PROV-12 | Phase 2 | Pending |
-| NETW-01 | Phase 2 | Pending |
-| NETW-04 | Phase 2 | Pending |
+| PROV-08 | Phase 2 | Complete |
+| PROV-09 | Phase 2 | Complete |
+| PROV-10 | Phase 2 | Complete |
+| PROV-11 | Phase 2 | Complete |
+| PROV-12 | Phase 2 | Complete |
+| NETW-01 | Phase 2 | Complete |
+| NETW-04 | Phase 2 | Complete |
 | NETW-05 | Phase 2 | Pending |
-| NETW-06 | Phase 2 | Pending |
+| NETW-06 | Phase 2 | Complete |
 | NETW-07 | Phase 2 | Pending |
-| NETW-08 | Phase 2 | Pending |
+| NETW-08 | Phase 2 | Complete |
 | PROV-03 | Phase 3 | Pending |
 | PROV-04 | Phase 3 | Pending |
 | PROV-05 | Phase 3 | Pending |

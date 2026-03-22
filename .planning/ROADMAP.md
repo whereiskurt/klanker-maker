@@ -54,7 +54,7 @@ Plans:
   5. Every AWS resource created by `km create` carries a `km:sandbox-id` tag matching the sandbox ID, visible in the AWS console
   6. EC2 instances are created with IMDSv2 enforced (`http-tokens=required`) — direct calls to the metadata endpoint without a session token fail from within the sandbox
   7. Secrets referenced in the profile's allowlist are injected into the sandbox via SSM Parameter Store; secrets not on the allowlist are inaccessible; SOPS encrypted secrets decrypt correctly via KMS
-**Plans:** 1/4 plans executed
+**Plans:** 2/4 plans executed
 
 Plans:
 - [ ] 02-01-PLAN.md — Profile compiler package (EC2 + ECS service.hcl, user-data, SG, IAM, secrets)
@@ -108,7 +108,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Schema, Compiler & AWS Foundation | 3/4 | In Progress|  |
-| 2. Core Provisioning & Security Baseline | 1/4 | In Progress|  |
+| 2. Core Provisioning & Security Baseline | 2/4 | In Progress|  |
 | 3. Sidecar Enforcement & Lifecycle Management | 0/TBD | Not started | - |
 | 4. Lifecycle Hardening, Artifacts & Email | 0/TBD | Not started | - |
 | 5. ConfigUI | 0/TBD | Not started | - |
