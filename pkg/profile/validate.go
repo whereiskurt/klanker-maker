@@ -236,13 +236,8 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 		})
 	}
 
-	// Rule 3: spot instances are only supported on EC2
-	if p.Spec.Runtime.Spot && p.Spec.Runtime.Substrate == "ecs" {
-		errs = append(errs, ValidationError{
-			Path:    "spec.runtime.spot",
-			Message: "spot instances are not supported on ECS substrate; set spot: false or change substrate to ec2",
-		})
-	}
+	// Rule 3: spot is valid on both substrates
+	// EC2: spot instance request; ECS: FARGATE_SPOT capacity provider
 
 	return errs
 }

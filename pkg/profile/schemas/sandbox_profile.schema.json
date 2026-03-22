@@ -217,6 +217,11 @@
               "type": "string",
               "enum": ["minimal", "standard", "elevated"],
               "description": "IAM session policy scope"
+            },
+            "allowedSecretPaths": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "SSM Parameter Store paths the sandbox may read at boot"
             }
           }
         },
