@@ -106,6 +106,9 @@ type IdentitySpec struct {
 	AllowedRegions []string `yaml:"allowedRegions"`
 	// SessionPolicy is the IAM session policy scope: minimal, standard, etc.
 	SessionPolicy string `yaml:"sessionPolicy"`
+	// AllowedSecretPaths is the allowlist of SSM Parameter Store paths the sandbox
+	// may read at boot time. Secrets are injected as environment variables via user-data.
+	AllowedSecretPaths []string `yaml:"allowedSecretPaths,omitempty"`
 }
 
 // SidecarsSpec defines the sidecar processes that run alongside the sandbox.

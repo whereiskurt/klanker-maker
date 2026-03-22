@@ -82,16 +82,31 @@ resource "aws_security_group" "ec2spot" {
   # No egress rules — Phase 2 profile compiler adds per-profile egress
 
   tags = {
-    Name             = "km-ec2spot-${var.region_label}"
-    "km:sandbox-id"  = var.sandbox_id
+    Name            = "km-ec2spot-${var.region_label}"
+    "km:sandbox-id" = var.sandbox_id
   }
+}
+
+# Egress rules compiled from the sandbox profile (NETW-01)
+# The profile compiler populates sg_egress_rules via service.hcl module_inputs.
+resource "aws_security_group_rule" "ec2spot_egress" {
+  count = local.total_ec2spot_count > 0 ? length(var.sg_egress_rules) : 0
+
+  type              = "egress"
+  from_port         = var.sg_egress_rules[count.index].from_port
+  to_port           = var.sg_egress_rules[count.index].to_port
+  protocol          = var.sg_egress_rules[count.index].protocol
+  cidr_blocks       = var.sg_egress_rules[count.index].cidr_blocks
+  description       = var.sg_egress_rules[count.index].description
+  security_group_id = aws_security_group.ec2spot[0].id
 }
 
 # IAM role for SSM access (no SSH needed)
 resource "aws_iam_role" "ec2spot_ssm" {
   count = local.total_ec2spot_count > 0 ? 1 : 0
 
-  name = "km-ec2spot-ssm-${var.region_label}-${var.km_random_suffix}"
+  name                 = "km-ec2spot-ssm-${var.region_label}-${var.km_random_suffix}"
+  max_session_duration = var.iam_session_policy.max_session_duration
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -107,9 +122,34 @@ resource "aws_iam_role" "ec2spot_ssm" {
   })
 
   tags = {
-    Name             = "km-ec2spot-ssm-${var.region_label}"
-    "km:sandbox-id"  = var.sandbox_id
+    Name            = "km-ec2spot-ssm-${var.region_label}"
+    "km:sandbox-id" = var.sandbox_id
   }
+}
+
+# Optional region-lock inline policy (NETW-04): restricts API calls to allowed regions only.
+# Only created when iam_session_policy.allowed_regions is non-empty.
+resource "aws_iam_role_policy" "ec2spot_region_lock" {
+  count = (local.total_ec2spot_count > 0 && length(var.iam_session_policy.allowed_regions) > 0) ? 1 : 0
+
+  name = "km-ec2spot-region-lock-${var.region_label}"
+  role = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "*"
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:RequestedRegion" = var.iam_session_policy.allowed_regions
+          }
+        }
+      }
+    ]
+  })
 }
 
 resource "aws_iam_role_policy_attachment" "ec2spot_ssm" {
@@ -126,8 +166,8 @@ resource "aws_iam_instance_profile" "ec2spot" {
   role = aws_iam_role.ec2spot_ssm[0].name
 
   tags = {
-    Name             = "km-ec2spot-profile-${var.region_label}"
-    "km:sandbox-id"  = var.sandbox_id
+    Name            = "km-ec2spot-profile-${var.region_label}"
+    "km:sandbox-id" = var.sandbox_id
   }
 }
 
@@ -166,8 +206,8 @@ resource "aws_spot_instance_request" "ec2spot" {
   wait_for_fulfillment        = true
 
   tags = {
-    Name             = each.value.instance_name
-    "km:sandbox-id"  = each.value.sandbox_id
+    Name            = each.value.instance_name
+    "km:sandbox-id" = each.value.sandbox_id
   }
 
   lifecycle {

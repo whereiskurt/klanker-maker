@@ -53,3 +53,24 @@ variable "availability_zones" {
   type        = list(string)
   description = "List of availability zones"
 }
+
+variable "sg_egress_rules" {
+  type = list(object({
+    from_port   = number
+    to_port     = number
+    protocol    = string
+    cidr_blocks = list(string)
+    description = string
+  }))
+  description = "Security group egress rules compiled from profile. Empty list = no egress allowed."
+  default     = []
+}
+
+variable "iam_session_policy" {
+  type = object({
+    max_session_duration = optional(number, 3600)
+    allowed_regions      = optional(list(string), [])
+  })
+  description = "IAM session policy constraints compiled from profile."
+  default     = {}
+}
