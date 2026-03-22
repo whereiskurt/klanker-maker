@@ -68,6 +68,7 @@ spec:
 func TestHandleValidate_ValidYAML(t *testing.T) {
 	h, _ := newEditorTestHandler(t)
 
+	// Full valid profile with all required spec fields.
 	validYAML := `apiVersion: klankermaker.ai/v1alpha1
 kind: SandboxProfile
 metadata:
@@ -82,6 +83,64 @@ spec:
     spot: false
     instanceType: t3.medium
     region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "github.com/*"
+      allowedRefs:
+        - "main"
+      permissions:
+        - read
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+      allowedHosts:
+        - "api.github.com"
+      allowedMethods:
+        - GET
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /km/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /km/network
+  policy:
+    allowShellEscape: false
+    allowedCommands:
+      - bash
+    filesystemPolicy:
+      readOnlyPaths: []
+      writablePaths:
+        - /workspace
+  agent:
+    maxConcurrentTasks: 4
+    taskTimeout: "30m"
+    allowedTools:
+      - bash
 `
 	req := httptest.NewRequest(http.MethodPost, "/api/validate", strings.NewReader(validYAML))
 	w := httptest.NewRecorder()
