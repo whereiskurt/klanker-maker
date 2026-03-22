@@ -194,12 +194,13 @@ Plans:
   3. `infra/live/use1/ses/terragrunt.hcl` exists and deploys SES domain verification with Route53 records
   4. Budget enforcer Lambda is deployable per-sandbox via the existing Terraform module
   5. OPERATOR-GUIDE.md documents the full setup procedure: AWS accounts, SSO, km configure, km bootstrap, km init, live infra deployment
-**Plans:** 3/3 plans complete
+**Plans:** 4 plans (3 complete + 1 gap closure)
 
 Plans:
 - [ ] 09-01-PLAN.md — Makefile Lambda build targets + shared Terragrunt live configs (PROV-05, BUDG-02, MAIL-01)
 - [ ] 09-02-PLAN.md — Per-sandbox budget-enforcer compiler extension + km create wiring (BUDG-06, BUDG-07)
 - [ ] 09-03-PLAN.md — OPERATOR-GUIDE.md full bootstrap documentation (INFR-01, INFR-02)
+- [ ] 09-04-PLAN.md — Gap closure: fix budget-enforcer lambda_zip_path dist/build mismatch (BUDG-06, BUDG-07)
 
 ### Phase 10: SCP Sandbox Containment — org-level EC2 breakout prevention
 
@@ -241,5 +242,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Budget Enforcement & Platform Configuration | 9/9 | Complete   | 2026-03-22 |
 | 7. Unwired Code Paths | 2/2 | Complete   | 2026-03-22 |
 | 8. Sidecar Build & Deployment Pipeline | 2/2 | Complete   | 2026-03-22 |
-| 9. Live Infrastructure & Operator Docs | 3/3 | Complete   | 2026-03-22 |
+| 9. Live Infrastructure & Operator Docs | 3/4 | Gap Closure | 2026-03-22 |
 | 10. SCP Sandbox Containment | 0/2 | Planned    |  |
