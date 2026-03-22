@@ -14,9 +14,9 @@ Implement `km create` and `km destroy` commands that compile a SandboxProfile in
 ## Implementation Decisions
 
 ### Compiler Design
-- Output format: JSON tfvars (`terraform.tfvars.json`) — unambiguous escaping, easy to generate from Go structs via json.Marshal
-- Single tfvars file per sandbox — Terragrunt handles module orchestration via dependencies
-- Substrate branching via flag in tfvars: `substrate="ec2"` or `"ecs"` — Terragrunt conditionally includes the right modules. Compiler stays simple.
+- Output format: HCL `service.hcl` via `text/template` — revised from JSON tfvars to match existing Terragrunt template from Phase 1 (`infra/live/sandboxes/_template/service.hcl`)
+- Single service.hcl per sandbox — Terragrunt includes it via the sandbox directory hierarchy
+- Substrate branching via `substrate_module` local in service.hcl — maps to the correct module path. Compiler stays simple.
 - Basic user-data bootstrap script generated in Phase 2: SSM agent, IMDSv2 config, basic networking. Phase 3 adds sidecar injection to this script.
 
 ### Create/Destroy UX
