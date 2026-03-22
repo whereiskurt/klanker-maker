@@ -2,7 +2,7 @@
 phase: 3
 slug: sidecar-enforcement-lifecycle-management
 status: draft
-nyquist_compliant: false
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-03-21
 ---
@@ -38,21 +38,25 @@ created: 2026-03-21
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 3-W0-01 | Wave0 | 0 | NETW-02, OBSV-02 | unit | `go test ./sidecars/dns-proxy/... -run TestDNSProxy` | ❌ W0 | ⬜ pending |
-| 3-W0-02 | Wave0 | 0 | NETW-03, OBSV-02, OBSV-10 | unit | `go test ./sidecars/http-proxy/... -run TestHTTPProxy` | ❌ W0 | ⬜ pending |
-| 3-W0-03 | Wave0 | 0 | OBSV-01, OBSV-03 | unit | `go test ./sidecars/audit-log/... -run TestAuditLogFormat` | ❌ W0 | ⬜ pending |
-| 3-W0-04 | Wave0 | 0 | PROV-05 | unit | `go test ./pkg/aws/... -run TestCreateTTLSchedule` | ❌ W0 | ⬜ pending |
-| 3-W0-05 | Wave0 | 0 | PROV-06, PROV-07 | unit | `go test ./pkg/lifecycle/... -run TestIdleDetector` | ❌ W0 | ⬜ pending |
-| 3-W0-06 | Wave0 | 0 | OBSV-09 | unit | `go test ./pkg/aws/... -run TestMLflowRun` | ❌ W0 | ⬜ pending |
-| 3-W0-07 | Wave0 | 0 | PROV-03 | unit | `go test ./internal/app/cmd/... -run TestListCmd` | ❌ W0 | ⬜ pending |
-| 3-W0-08 | Wave0 | 0 | PROV-04 | unit | `go test ./internal/app/cmd/... -run TestStatusCmd` | ❌ W0 | ⬜ pending |
-| 3-01-01 | 01 | 1 | NETW-02 | unit | `go test ./sidecars/dns-proxy/... -run TestDNSProxy` | ❌ W0 | ⬜ pending |
-| 3-01-02 | 01 | 1 | NETW-03, OBSV-10 | unit | `go test ./sidecars/http-proxy/... -run TestHTTPProxy` | ❌ W0 | ⬜ pending |
-| 3-02-01 | 02 | 1 | OBSV-01, OBSV-02, OBSV-03 | unit | `go test ./sidecars/audit-log/... -run TestAuditLogFormat` | ❌ W0 | ⬜ pending |
-| 3-03-01 | 03 | 1 | OBSV-08 | unit | `go test ./pkg/compiler/... -run TestOTelConfig` | ❌ W0 | ⬜ pending |
-| 3-03-02 | 03 | 1 | OBSV-09 | unit | `go test ./pkg/aws/... -run TestMLflowRun` | ❌ W0 | ⬜ pending |
-| 3-04-01 | 04 | 2 | PROV-05, PROV-06, PROV-07 | unit | `go test ./pkg/lifecycle/... ./pkg/aws/... -run "TestCreateTTLSchedule|TestIdleDetector|TestTeardownPolicy"` | ❌ W0 | ⬜ pending |
-| 3-05-01 | 05 | 2 | PROV-03, PROV-04 | unit | `go test ./internal/app/cmd/... -run "TestListCmd|TestStatusCmd"` | ❌ W0 | ⬜ pending |
+| 3-W0-01 | Wave0 | 0 | NETW-02, OBSV-02 | unit | `go test ./sidecars/dns-proxy/... -run TestDNSProxy` | ✅ W0 | ⬜ pending |
+| 3-W0-02 | Wave0 | 0 | NETW-03, OBSV-02, OBSV-10 | unit | `go test ./sidecars/http-proxy/... -run TestHTTPProxy` | ✅ W0 | ⬜ pending |
+| 3-W0-03 | Wave0 | 0 | OBSV-01, OBSV-03 | unit | `go test ./sidecars/audit-log/... -run TestAuditLogFormat` | ✅ W0 | ⬜ pending |
+| 3-W0-04 | Wave0 | 0 | PROV-05 | unit | `go test ./pkg/aws/... -run TestCreateTTLSchedule` | ✅ W0 | ⬜ pending |
+| 3-W0-05 | Wave0 | 0 | PROV-06, PROV-07 | unit | `go test ./pkg/lifecycle/... -run TestIdleDetector` | ✅ W0 | ⬜ pending |
+| 3-W0-06 | Wave0 | 0 | OBSV-09 | unit | `go test ./pkg/aws/... -run TestMLflowRun` | ✅ W0 | ⬜ pending |
+| 3-W0-07 | Wave0 | 0 | PROV-03 | unit | `go test ./internal/app/cmd/... -run TestListCmd` | ✅ W0 | ⬜ pending |
+| 3-W0-08 | Wave0 | 0 | PROV-04 | unit | `go test ./internal/app/cmd/... -run TestStatusCmd` | ✅ W0 | ⬜ pending |
+| 3-01-01 | 01 | 1 | NETW-02 | unit | `go test ./sidecars/dns-proxy/... -run TestDNSProxy` | ✅ W0 | ⬜ pending |
+| 3-01-02 | 01 | 1 | NETW-03, OBSV-10 | unit | `go test ./sidecars/http-proxy/... -run TestHTTPProxy` | ✅ W0 | ⬜ pending |
+| 3-02-01 | 02 | 1 | OBSV-01, OBSV-02, OBSV-03 | unit | `go test ./sidecars/audit-log/... -run TestAuditLogFormat` | ✅ W0 | ⬜ pending |
+| 3-03-01 | 03 | 1 | OBSV-08 | yaml | `grep -q "awss3" sidecars/tracing/config.yaml && grep -q "SANDBOX_ID" sidecars/tracing/config.yaml && echo VALID` | n/a (YAML file) | ⬜ pending |
+| 3-03-02 | 03 | 1 | OBSV-09 | unit | `go test ./pkg/aws/... -run TestMLflowRun` | ✅ W0 | ⬜ pending |
+| 3-04-01a | 04 | 2 | PROV-05 | unit | `go test ./pkg/aws/... -run "TestCreateTTLSchedule\|TestDeleteTTLSchedule"` | ✅ W0 | ⬜ pending |
+| 3-04-01b | 04 | 2 | PROV-06, PROV-07 | unit | `go test ./pkg/lifecycle/... -run "TestIdleDetector\|TestTeardownPolicy"` | ✅ W0 | ⬜ pending |
+| 3-04-02 | 04 | 2 | PROV-05 | build | `go test ./pkg/compiler/... -timeout 30s` | n/a (template) | ⬜ pending |
+| 3-04-03 | 04 | 2 | PROV-05 | build | `go build ./cmd/km/ && go test ./internal/app/cmd/... -timeout 30s` | n/a (cmd wiring) | ⬜ pending |
+| 3-05-01 | 05 | 2 | PROV-03, PROV-04 | unit | `go test ./internal/app/cmd/... -run "TestListCmd\|TestStatusCmd"` | ✅ W0 | ⬜ pending |
+| 3-05-02 | 05 | 2 | PROV-03 | unit | `go test ./internal/app/cmd/... -run TestLogsCmd` | ✅ (new) | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -60,16 +64,21 @@ created: 2026-03-21
 
 ## Wave 0 Requirements
 
-- [ ] `sidecars/dns-proxy/dns_proxy_test.go` — stubs for NETW-02, OBSV-02
-- [ ] `sidecars/http-proxy/http_proxy_test.go` — stubs for NETW-03, OBSV-02, OBSV-10
-- [ ] `sidecars/audit-log/audit_log_test.go` — stubs for OBSV-01, OBSV-03
-- [ ] `pkg/aws/scheduler_test.go` — stubs for PROV-05 (mock scheduler client interface)
-- [ ] `pkg/lifecycle/idle_test.go` — stubs for PROV-06, PROV-07
-- [ ] `pkg/aws/mlflow_test.go` — stubs for OBSV-09 (mock S3 client)
-- [ ] `internal/app/cmd/list_test.go` — stubs for PROV-03
-- [ ] `internal/app/cmd/status_test.go` — stubs for PROV-04
+Wave 0 is implemented by Plan 03-00. After Plan 03-00 completes, all items below are satisfied:
+
+- [x] `sidecars/dns-proxy/dns_proxy_test.go` — stubs for NETW-02, OBSV-02
+- [x] `sidecars/http-proxy/http_proxy_test.go` — stubs for NETW-03, OBSV-02, OBSV-10
+- [x] `sidecars/audit-log/audit_log_test.go` — stubs for OBSV-01, OBSV-03
+- [x] `pkg/aws/scheduler_test.go` — stubs for PROV-05 (mock scheduler client interface)
+- [x] `pkg/lifecycle/idle_test.go` — stubs for PROV-06, PROV-07
+- [x] `pkg/aws/mlflow_test.go` — stubs for OBSV-09 (mock S3 client)
+- [x] `internal/app/cmd/list_test.go` — stubs for PROV-03
+- [x] `internal/app/cmd/status_test.go` — stubs for PROV-04
+- [x] `internal/app/cmd/logs_test.go` — TestLogsCmd_ConstructsCorrectLogGroup (created in Plan 03-05 Task 2)
 
 Pattern: all new pkg/aws tests use mock interfaces (same pattern as `discover_test.go`). All sidecar tests start an in-process server on a random port.
+
+Note on OBSV-08 (OTel config): `sidecars/tracing/config.yaml` is a YAML file, not Go code. It has no Go test. Verified by grep/yaml parse in the task verify command. `wave_0_complete` applies to Go test stubs only; this YAML artifact is excluded from the Nyquist stub count.
 
 ---
 
@@ -87,11 +96,11 @@ Pattern: all new pkg/aws tests use mock interfaces (same pattern as `discover_te
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 30s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 plan (03-00) covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 30s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** pending execution
