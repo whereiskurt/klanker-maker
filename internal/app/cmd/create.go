@@ -12,6 +12,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/pricing"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
@@ -150,6 +151,32 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		AvailabilityZones: networkOutputs.AvailabilityZones,
 		RegionLabel:       regionLabel,
 		EmailDomain:       "sandboxes." + networkDomain,
+	}
+
+	// Step 6b: Resolve spot rate for budget enforcement (BUDG-03).
+	// When budget.compute is set, we need a non-zero spot rate so the Lambda enforcer
+	// can calculate compute spend as spot_rate * elapsed_minutes / 60. Without this,
+	// compute spend is always $0.00 and enforcement never triggers.
+	if resolvedProfile.Spec.Budget != nil && resolvedProfile.Spec.Budget.Compute != nil {
+		instanceType := resolvedProfile.Spec.Runtime.InstanceType
+		if instanceType == "" {
+			instanceType = "t3.medium" // conservative default
+		}
+		// The AWS Pricing API is only available in us-east-1 (global endpoint).
+		pricingCfg := awsCfg.Copy()
+		pricingCfg.Region = "us-east-1"
+		pricingClient := pricing.NewFromConfig(pricingCfg)
+		spotRate, pricingErr := awspkg.GetSpotRate(ctx, pricingClient, instanceType, region)
+		if pricingErr != nil || spotRate == 0 {
+			// Static fallback — non-fatal, GetSpotRate uses on-demand approximation
+			// which may return 0 for spot. Static table provides reasonable estimates.
+			spotRate = staticSpotRate(instanceType)
+			log.Warn().
+				Str("instanceType", instanceType).
+				Float64("fallbackRate", spotRate).
+				Msg("Pricing API unavailable or returned zero — using static spot rate fallback")
+		}
+		network.SpotRateUSD = spotRate
 	}
 
 	// Step 7: Compile profile into Terragrunt artifacts
