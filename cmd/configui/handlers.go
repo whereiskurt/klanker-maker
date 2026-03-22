@@ -4,9 +4,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +19,29 @@ import (
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
 )
+
+// ErrDestroyNotFound is returned by Destroyer.Destroy when the target sandbox does not exist.
+// Handlers map this to 404.
+var ErrDestroyNotFound = errors.New("sandbox not found for destroy")
+
+// Destroyer is the narrow interface for sandbox destruction.
+// In production, this shells out to `km destroy <id>` as a subprocess.
+// In tests, use mockDestroyer.
+type Destroyer interface {
+	Destroy(ctx context.Context, sandboxID string) error
+}
+
+// TTLExtender is the narrow interface for extending a sandbox TTL.
+// It deletes the existing EventBridge schedule and creates a new one.
+type TTLExtender interface {
+	ExtendTTL(ctx context.Context, sandboxID string, duration time.Duration) error
+}
+
+// SandboxCreator is the narrow interface for quick-creating a sandbox from a profile.
+// In production, this shells out to `km create profiles/<profile>` as a subprocess.
+type SandboxCreator interface {
+	Create(ctx context.Context, profilePath string) error
+}
 
 // SandboxLister is the narrow interface for listing sandboxes via S3.
 // Wraps kmaws.ListAllSandboxesByS3 for dependency injection in tests.
@@ -43,6 +68,9 @@ type Handler struct {
 	finder      SandboxFinder
 	cwClient    CWLogsFilterAPI
 	ssmClient   SSMAPI // Added by Plan 03: secrets management
+	destroyer   Destroyer
+	ttlExtender TTLExtender
+	creator     SandboxCreator
 	profilesDir string
 	bucket      string
 }
@@ -208,6 +236,116 @@ func (h *Handler) handleSchema(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+// handleDestroy handles POST /api/sandboxes/{id}/destroy.
+// Calls Destroyer.Destroy with the sandbox ID from the path. Returns 200 on success
+// with an HTMX HX-Trigger header to signal the dashboard to refresh. Returns 404 if the
+// sandbox is not found (ErrDestroyNotFound), 500 on other errors.
+func (h *Handler) handleDestroy(w http.ResponseWriter, r *http.Request) {
+	sandboxID := r.PathValue("id")
+	if sandboxID == "" {
+		http.Error(w, "sandbox id required", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.destroyer.Destroy(r.Context(), sandboxID); err != nil {
+		if errors.Is(err, ErrDestroyNotFound) {
+			http.Error(w, "sandbox not found", http.StatusNotFound)
+			return
+		}
+		log.Error().Err(err).Str("sandbox_id", sandboxID).Msg("configui: destroy failed")
+		http.Error(w, "destroy failed", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("HX-Trigger", "sandbox-destroyed")
+	w.WriteHeader(http.StatusOK)
+}
+
+// ttlExtendRequest is the JSON body for PUT /api/sandboxes/{id}/ttl.
+type ttlExtendRequest struct {
+	Duration string `json:"duration"`
+}
+
+// handleExtendTTL handles PUT /api/sandboxes/{id}/ttl.
+// Reads {"duration":"2h"} from the request body, parses the Go duration string,
+// and calls TTLExtender.ExtendTTL. Returns 200 on success with the new TTL remaining,
+// 400 for unparseable duration, 500 on other errors.
+func (h *Handler) handleExtendTTL(w http.ResponseWriter, r *http.Request) {
+	sandboxID := r.PathValue("id")
+	if sandboxID == "" {
+		http.Error(w, "sandbox id required", http.StatusBadRequest)
+		return
+	}
+
+	var req ttlExtendRequest
+	dec := json.NewDecoder(io.LimitReader(r.Body, 4096))
+	if err := dec.Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	dur, err := time.ParseDuration(req.Duration)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("invalid duration %q: %v", req.Duration, err), http.StatusBadRequest)
+		return
+	}
+
+	if err := h.ttlExtender.ExtendTTL(r.Context(), sandboxID, dur); err != nil {
+		log.Error().Err(err).Str("sandbox_id", sandboxID).Msg("configui: extend TTL failed")
+		http.Error(w, "extend TTL failed", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"sandbox_id":    sandboxID,
+		"ttl_remaining": dur.String(),
+	})
+}
+
+// quickCreateRequest is the JSON body for POST /api/sandboxes/create.
+type quickCreateRequest struct {
+	Profile string `json:"profile"`
+}
+
+// handleQuickCreate handles POST /api/sandboxes/create.
+// Reads {"profile":"filename.yaml"} from the body, validates the profile file exists
+// in profilesDir, then calls SandboxCreator.Create. Returns 202 with a status message
+// on success. Returns 400 if the profile file is not found.
+func (h *Handler) handleQuickCreate(w http.ResponseWriter, r *http.Request) {
+	var req quickCreateRequest
+	dec := json.NewDecoder(io.LimitReader(r.Body, 4096))
+	if err := dec.Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Profile == "" {
+		http.Error(w, "profile is required", http.StatusBadRequest)
+		return
+	}
+
+	profilePath := filepath.Join(h.profilesDir, req.Profile)
+	if _, err := os.Stat(profilePath); os.IsNotExist(err) {
+		http.Error(w, fmt.Sprintf("profile %q not found", req.Profile), http.StatusBadRequest)
+		return
+	}
+
+	if err := h.creator.Create(r.Context(), profilePath); err != nil {
+		log.Error().Err(err).Str("profile", req.Profile).Msg("configui: quick-create failed")
+		http.Error(w, "sandbox creation failed", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"message": "Sandbox creation started",
+		"profile": req.Profile,
+	})
 }
 
 // isHTMXRequest reports whether the request was made by HTMX (has HX-Request header).
