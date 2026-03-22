@@ -95,13 +95,14 @@ Plans:
   4. Secret values (SSM parameter values, tokens) present in the sandbox environment are redacted from audit logs before storage — the raw secret value does not appear in CloudWatch or S3 logs
   5. Each sandbox agent has a unique email address provisioned via SES; the agent can send email from within the sandbox; the operator receives lifecycle event notifications (expiry, errors, limits) via email
   6. Cross-account agent orchestration via email is demonstrable: an agent in one sandbox can trigger an action in another sandbox by sending a correctly structured email
-**Plans:** 3/4 plans executed
+**Plans:** 5 plans
 
 Plans:
 - [ ] 04-01-PLAN.md — ArtifactsSpec schema + RedactingDestination + S3 artifact uploader (OBSV-05, OBSV-07)
 - [ ] 04-02-PLAN.md — SES Terraform module + Go SES helpers (MAIL-01, MAIL-02, MAIL-03, MAIL-04, MAIL-05)
 - [ ] 04-03-PLAN.md — Filesystem enforcement + spot interruption in compiler templates + teardown artifact callback (OBSV-04, PROV-13)
 - [ ] 04-04-PLAN.md — Create/destroy wiring: SES email + artifacts + lifecycle notifications + S3 replication (OBSV-05, OBSV-06, MAIL-02, MAIL-03, MAIL-04, MAIL-05)
+- [ ] 04-05-PLAN.md — Gap closure: TTL handler Lambda + idle/error lifecycle notification wiring (MAIL-04, OBSV-05)
 
 ### Phase 5: ConfigUI
 **Goal**: Operators can manage profiles and monitor live sandboxes through a web dashboard without using the CLI — the ConfigUI Go application is copied and adapted from defcon.run.34 into `apps/local/configui/` inside the Klanker Maker repo, with all defcon.run.34-specific references renamed and no external dependency on that repo
@@ -124,5 +125,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 1. Schema, Compiler & AWS Foundation | 3/4 | In Progress|  |
 | 2. Core Provisioning & Security Baseline | 2/4 | In Progress|  |
 | 3. Sidecar Enforcement & Lifecycle Management | 5/6 | In Progress|  |
-| 4. Lifecycle Hardening, Artifacts & Email | 3/4 | In Progress|  |
+| 4. Lifecycle Hardening, Artifacts & Email | 4/5 | In Progress|  |
 | 5. ConfigUI | 0/TBD | Not started | - |
