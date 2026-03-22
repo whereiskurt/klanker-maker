@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Phase 3 context gathered
-last_updated: "2026-03-22T03:38:40.454Z"
+stopped_at: Completed 03-03-PLAN.md (OTel sidecar config + MLflow S3 run logging)
+last_updated: "2026-03-22T04:50:31.124Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 5
   completed_phases: 1
-  total_plans: 8
-  completed_plans: 7
+  total_plans: 14
+  completed_plans: 8
   percent: 0
 ---
 
@@ -56,6 +56,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 02-core-provisioning-security-baseline P02 | 4 | 2 tasks | 9 files |
 | Phase 02-core-provisioning-security-baseline P01 | 353s | 2 tasks | 12 files |
 | Phase 02-core-provisioning-security-baseline P03 | 8 | 2 tasks | 6 files |
+| Phase 03-sidecar-enforcement-lifecycle-management P03 | 7min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -87,6 +88,9 @@ Recent decisions affecting current work:
 - [Phase 02-core-provisioning-security-baseline]: findRepoRoot() walks up from source path anchor then falls back to cwd — works in both tests and production without environment variables
 - [Phase 02-core-provisioning-security-baseline]: AWS credential validation is the gate between profile parsing and compilation — STS GetCallerIdentity called before any compile or filesystem work
 - [Phase 02-core-provisioning-security-baseline]: destroy reconstructs minimal sandbox dir from template when missing locally — only sandbox_id in service.hcl for Terragrunt state key resolution
+- [Phase 03-03]: ExitStatus stored as *int in MLflowRun so exit_status=0 (success) is preserved through JSON omitempty serialization
+- [Phase 03-03]: S3RunAPI narrow interface (PutObject + GetObject) for MLflow run logging — real *s3.Client satisfies it directly
+- [Phase 03-03]: OTel sidecar config uses env-var substitution for AWS_REGION/OTEL_S3_BUCKET/SANDBOX_ID — zero Go config parsing needed
 
 ### Pending Todos
 
@@ -102,6 +106,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T03:38:40.447Z
-Stopped at: Phase 3 context gathered
-Resume file: .planning/phases/03-sidecar-enforcement-lifecycle-management/03-CONTEXT.md
+Last session: 2026-03-22T04:50:31.122Z
+Stopped at: Completed 03-03-PLAN.md (OTel sidecar config + MLflow S3 run logging)
+Resume file: None

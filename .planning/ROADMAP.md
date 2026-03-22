@@ -74,7 +74,7 @@ Plans:
   5. Operator runs `km list` and sees all running sandboxes with status and substrate type; `km status <sandbox-id>` shows detailed state for a specific sandbox
   6. A tracing sidecar collects OTel traces/spans from the sandbox workload and exports them to the configured collector endpoint; trace context is propagated through the HTTP proxy sidecar on outbound requests
   7. Each sandbox session is recorded as an MLflow run with sandbox metadata (profile name, sandbox-id, duration, exit status) as run parameters; operators can query MLflow to see agent execution history across sandbox sessions
-**Plans:** 6 plans
+**Plans:** 1/6 plans executed
 
 Plans:
 - [ ] 03-00-PLAN.md — Wave 0: test stub scaffolding for all Phase 3 packages (Nyquist compliance)
@@ -117,6 +117,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 |-------|----------------|--------|-----------|
 | 1. Schema, Compiler & AWS Foundation | 3/4 | In Progress|  |
 | 2. Core Provisioning & Security Baseline | 2/4 | In Progress|  |
-| 3. Sidecar Enforcement & Lifecycle Management | 0/6 | Not started | - |
+| 3. Sidecar Enforcement & Lifecycle Management | 1/6 | In Progress|  |
 | 4. Lifecycle Hardening, Artifacts & Email | 0/TBD | Not started | - |
 | 5. ConfigUI | 0/TBD | Not started | - |
