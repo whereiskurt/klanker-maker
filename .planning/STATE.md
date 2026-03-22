@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 08-01-PLAN.md
-last_updated: "2026-03-22T22:45:55.662Z"
+stopped_at: Completed 08-02-PLAN.md
+last_updated: "2026-03-22T22:46:05.106Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 10
@@ -84,6 +84,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 07-unwired-code-paths P01 | 92s | 1 tasks | 2 files |
 | Phase 07-unwired-code-paths P02 | 197s | 2 tasks | 6 files |
 | Phase 08-sidecar-build-deployment-pipeline P01 | 127s | 2 tasks | 6 files |
+| Phase 08-sidecar-build-deployment-pipeline P02 | 2min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -188,6 +189,9 @@ Recent decisions affecting current work:
 - [Phase 07-02]: Source-level verification test pattern for MLflow wiring: os.ReadFile(source_file) + strings.Contains checks for call site presence
 - [Phase 08-01]: tracing ecr-push uses sidecars/tracing/ as Docker build context (not repo root) — tracing is not a Go binary, no shared pkg/ imports needed
 - [Phase 08-01]: audit-log Dockerfile builds from ./sidecars/audit-log/cmd/ not ./sidecars/audit-log/ — cmd/ holds package main; root is package auditlog library
+- [Phase 08-02]: ECR URI computation reads KM_ACCOUNTS_APPLICATION at generateECSServiceHCL call time — consistent with KM_ARTIFACTS_BUCKET pattern already in the function
+- [Phase 08-02]: PLACEHOLDER_ECR/ prefix used when KM_ACCOUNTS_APPLICATION is unset — parseable HCL, distinguishable from real URIs, no special-casing needed
+- [Phase 08-02]: KM_SIDECAR_VERSION defaults to 'latest' when unset — deploy pipeline sets explicit tag; local dev gets a usable default
 
 ### Roadmap Evolution
 
@@ -207,6 +211,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T22:45:49.684Z
-Stopped at: Completed 08-01-PLAN.md
+Last session: 2026-03-22T22:46:05.104Z
+Stopped at: Completed 08-02-PLAN.md
 Resume file: None
