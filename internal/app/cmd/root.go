@@ -44,6 +44,7 @@ Use km validate to check profile syntax and semantics before provisioning.`,
 	root.AddCommand(NewLogsCmd(cfg))
 	root.AddCommand(NewConfigureCmd(cfg))
 	root.AddCommand(NewBootstrapCmd(cfg))
+	root.AddCommand(NewBudgetCmd(cfg))
 
 	return root
 }
