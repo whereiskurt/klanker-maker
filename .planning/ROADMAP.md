@@ -21,6 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 3: Sidecar Enforcement & Lifecycle Management** - DNS proxy, HTTP proxy, audit log, and tracing sidecars on both substrates; OTel trace collection and MLflow experiment tracking per sandbox session; TTL auto-destroy, `km list/status`, observability
 - [ ] **Phase 4: Lifecycle Hardening, Artifacts & Email** - Profile inheritance, filesystem policy, artifact upload, spot interruption handling, secret redaction, email/SES agent communication
 - [ ] **Phase 5: ConfigUI** - Web dashboard for profile editing, live sandbox status, and AWS resource discovery — ConfigUI Go code copied and adapted from defcon.run.34 with no external dependency
+- [ ] **Phase 6: Budget Enforcement** - Per-sandbox compute and AI spend tracking via DynamoDB global table, http-proxy Bedrock interception for real-time token metering, threshold warnings via SES, hard enforcement via IAM revocation and proxy 403s, operator top-up via CLI
 
 ## Phase Details
 
@@ -115,10 +116,24 @@ Plans:
   4. Operator can manage SOPS secrets from the ConfigUI — encrypting a new secret and decrypting an existing one without using the CLI
 **Plans**: TBD
 
+### Phase 6: Budget Enforcement
+**Goal**: Operators can set per-sandbox dollar budgets for compute and AI (Bedrock Anthropic models), with real-time spend tracking, threshold warnings, and hard enforcement — sandboxes that exceed their budget are blocked from further API calls or compute, and operators can top up budgets without destroying the sandbox
+**Depends on**: Phase 5
+**Requirements**: BUDG-01, BUDG-02, BUDG-03, BUDG-04, BUDG-05, BUDG-06, BUDG-07, BUDG-08, BUDG-09
+**Success Criteria** (what must be TRUE):
+  1. Operator creates a sandbox with `spec.budget.compute.maxSpendUSD: 2.00` and `spec.budget.ai.maxSpendUSD: 5.00`; DynamoDB global table stores the budget limits alongside the sandbox record using the defcon.run.34 single-table pattern
+  2. A running sandbox's compute spend is tracked as spot rate × elapsed minutes; `km status` shows current compute spend vs budget; when compute budget is exhausted, a Lambda revokes the sandbox IAM role permissions and the operator receives an email notification
+  3. An agent inside a sandbox makes Bedrock InvokeModel calls (Haiku, Sonnet, or Opus); the http-proxy sidecar intercepts each response, extracts token usage, prices it against the model's rate from AWS Price List API, and increments the DynamoDB spend record; `km status` shows per-model AI spend breakdown
+  4. When AI budget reaches 100%, the http-proxy returns HTTP 403 for subsequent Bedrock calls — the agent receives an immediate error, not a timeout; the operator receives an email notification
+  5. At 80% of either budget pool, the operator receives a warning email; the threshold is configurable via `spec.budget.warningThreshold`
+  6. Operator runs `km budget add <sandbox-id> --ai 3.00` and the sandbox's AI budget increases by $3; if IAM was revoked or proxy was blocking, enforcement is lifted and the sandbox resumes normal operation
+  7. DynamoDB budget table is a global table replicated to all regions where agents run — budget reads from within the sandbox hit the local regional replica with sub-millisecond latency
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -127,3 +142,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 3. Sidecar Enforcement & Lifecycle Management | 5/6 | In Progress|  |
 | 4. Lifecycle Hardening, Artifacts & Email | 4/5 | In Progress|  |
 | 5. ConfigUI | 0/TBD | Not started | - |
+| 6. Budget Enforcement | 0/TBD | Not started | - |

@@ -81,6 +81,18 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **CFUI-03**: AWS resource discovery showing what each sandbox provisioned
 - [ ] **CFUI-04**: SOPS secrets management UI for encrypt/decrypt operations
 
+### Budget Enforcement
+
+- [ ] **BUDG-01**: Per-sandbox budget with separate compute and AI spend pools defined in profile YAML (`spec.budget.compute.maxSpendUSD`, `spec.budget.ai.maxSpendUSD`)
+- [ ] **BUDG-02**: DynamoDB global table (single-table design, extending defcon.run.34 auth pattern) stores budget limits and running spend per sandbox, replicated to all regions where agents run for low-latency local reads
+- [ ] **BUDG-03**: Compute spend tracked as instance type spot rate × elapsed minutes (per-minute billing); rate sourced from AWS Price List API at sandbox creation
+- [ ] **BUDG-04**: AI/token spend tracked per Bedrock Anthropic model (Haiku, Sonnet, Opus); http-proxy sidecar intercepts `InvokeModel` responses, extracts `usage.input_tokens`/`usage.output_tokens`, multiplies by model rate, increments DynamoDB budget record
+- [ ] **BUDG-05**: Model pricing sourced from AWS Price List API (cached, refreshed daily) — supports all Anthropic models available on Bedrock
+- [ ] **BUDG-06**: At 80% budget threshold (configurable via `spec.budget.warningThreshold`), operator receives warning email via SES using existing `SendLifecycleNotification` pattern
+- [ ] **BUDG-07**: At 100% AI budget, http-proxy returns 403 for Bedrock calls (immediate enforcement, no Lambda delay); at 100% compute budget, EventBridge-triggered Lambda revokes sandbox IAM permissions
+- [ ] **BUDG-08**: Operator can top up a sandbox budget via `km budget add <sandbox-id> --compute <amount> --ai <amount>` which updates DynamoDB limits and restores IAM if revoked
+- [ ] **BUDG-09**: `km status <sandbox-id>` shows current spend vs budget for both compute and AI pools, including per-model AI breakdown
+
 ## v2 Requirements
 
 Deferred to future release. Tracked but not in current roadmap.
@@ -92,7 +104,6 @@ Deferred to future release. Tracked but not in current roadmap.
 
 ### Cost & Operations
 
-- **COST-01**: Cost budgeting per sandbox with spend limits
 - **COST-02**: Warm pool / pre-provisioned sandboxes for faster startup
 - **COST-03**: `km gc` for orphan detection and cleanup
 
@@ -182,9 +193,18 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CFUI-02 | Phase 5 | Pending |
 | CFUI-03 | Phase 5 | Pending |
 | CFUI-04 | Phase 5 | Pending |
+| BUDG-01 | Phase 6 | Pending |
+| BUDG-02 | Phase 6 | Pending |
+| BUDG-03 | Phase 6 | Pending |
+| BUDG-04 | Phase 6 | Pending |
+| BUDG-05 | Phase 6 | Pending |
+| BUDG-06 | Phase 6 | Pending |
+| BUDG-07 | Phase 6 | Pending |
+| BUDG-08 | Phase 6 | Pending |
+| BUDG-09 | Phase 6 | Pending |
 
 **Coverage:**
-- v1 requirements: 52 total
+- v1 requirements: 61 total
 - Mapped to phases: 52
 - Unmapped: 0
 
@@ -194,3 +214,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 *Last updated: 2026-03-21 — INFR-08 added: no cross-repo dependency on defcon.run.34; all modules and app code must be copied and adapted into Klanker Maker repo*
 *Last updated: 2026-03-21 — PROV-11, PROV-12, PROV-13 added: spot instances by default for EC2 and ECS, graceful interruption handling with artifact upload*
 *Last updated: 2026-03-21 — OBSV-08, OBSV-09, OBSV-10 added: OTel tracing sidecar, MLflow experiment tracking per sandbox session, trace context propagation through proxy sidecars*
+*Last updated: 2026-03-22 — COST-01 promoted from v2, expanded into BUDG-01 through BUDG-09: per-sandbox budget enforcement with DynamoDB global table, http-proxy Bedrock metering, threshold warnings, hard enforcement, operator top-up*
