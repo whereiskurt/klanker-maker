@@ -7,6 +7,35 @@ import (
 	"testing"
 )
 
+// TestRunCreate_MLflow verifies that create.go contains WriteMLflowRun wiring.
+// This is a source-level verification test — the actual MLflow S3 write is tested
+// in pkg/aws/mlflow_test.go. This test confirms the call site exists and follows
+// the non-fatal pattern.
+func TestRunCreate_MLflow(t *testing.T) {
+	src, err := os.ReadFile("create.go")
+	if err != nil {
+		t.Fatalf("read create.go: %v", err)
+	}
+	s := string(src)
+
+	checks := []struct {
+		name    string
+		pattern string
+	}{
+		{"WriteMLflowRun call", "WriteMLflowRun"},
+		{"MLflowRun struct literal", "awspkg.MLflowRun{"},
+		{"non-fatal pattern", "non-fatal"},
+		{"SandboxID field", "SandboxID:"},
+		{"ProfileName field", "ProfileName:"},
+		{"Experiment field", `Experiment:`},
+	}
+	for _, c := range checks {
+		if !strings.Contains(s, c.pattern) {
+			t.Errorf("create.go missing %s (expected %q)", c.name, c.pattern)
+		}
+	}
+}
+
 // TestCreateCmd_FlagRegistration verifies that the create command exposes
 // --on-demand and --aws-profile flags.
 func TestCreateCmd_FlagRegistration(t *testing.T) {

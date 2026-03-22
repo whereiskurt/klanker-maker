@@ -1,10 +1,35 @@
 package cmd_test
 
 import (
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
 )
+
+// TestRunDestroy_MLflow verifies that destroy.go contains FinalizeMLflowRun wiring.
+func TestRunDestroy_MLflow(t *testing.T) {
+	src, err := os.ReadFile("destroy.go")
+	if err != nil {
+		t.Fatalf("read destroy.go: %v", err)
+	}
+	s := string(src)
+
+	checks := []struct {
+		name    string
+		pattern string
+	}{
+		{"FinalizeMLflowRun call", "FinalizeMLflowRun"},
+		{"MLflowMetrics struct literal", "awspkg.MLflowMetrics{"},
+		{"non-fatal pattern", "non-fatal"},
+		{"ExitStatus field", "ExitStatus:"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(s, c.pattern) {
+			t.Errorf("destroy.go missing %s (expected %q)", c.name, c.pattern)
+		}
+	}
+}
 
 // TestDestroyCmd_RequiresSandboxIDArg verifies that km destroy with no args
 // exits non-zero.
