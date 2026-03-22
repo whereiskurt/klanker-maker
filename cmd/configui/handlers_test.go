@@ -1,4 +1,4 @@
-package configui
+package main
 
 import (
 	"context"
