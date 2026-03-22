@@ -1,7 +1,7 @@
 # Klanker Maker (km)
 
 <p align="center">
-  <img src="docs/klanker.blackdone.jpeg" alt="Klanker Maker — robots working inside a sandboxed dome" width="480" />
+  <img src="docs/klankerdome-480-12-sierra.gif" alt="Klanker Maker — robots working inside a sandboxed dome" width="480" />
   <br />
   <sub>Art by Mike Wigmore (<a href="https://github.com/mikewigmore">@mikewigmore</a>)</sub>
 </p>
