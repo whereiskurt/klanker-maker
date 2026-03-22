@@ -1,0 +1,35 @@
+# Klankrmkr OTel Collector sidecar configuration
+# Deployed as: /etc/km/tracing/config.yaml on EC2 (via user-data)
+#               or mounted as ConfigMap-like env in ECS task definition
+# Environment variables required:
+#   AWS_REGION, OTEL_S3_BUCKET, SANDBOX_ID
+# Run: otelcol-contrib --config /etc/km/tracing/config.yaml
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+exporters:
+  awss3:
+    s3_uploader:
+      region: ${AWS_REGION}
+      s3_bucket: ${OTEL_S3_BUCKET}
+      s3_prefix: "traces/${SANDBOX_ID}"
+    marshaler: otlp_json
+    timeout: 30s
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [awss3]
