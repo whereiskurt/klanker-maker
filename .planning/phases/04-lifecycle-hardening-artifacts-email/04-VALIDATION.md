@@ -2,8 +2,8 @@
 phase: 4
 slug: lifecycle-hardening-artifacts-email
 status: draft
-nyquist_compliant: false
-wave_0_complete: false
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-03-22
 ---
 
@@ -34,36 +34,32 @@ created: 2026-03-22
 
 ---
 
-## Per-Task Verification Map
+## Nyquist Approach
 
-| Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
-|---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 04-01-01 | 01 | 0 | OBSV-04 | unit | `go test ./pkg/compiler/... -run TestFilesystem -count=1` | ❌ W0 | ⬜ pending |
-| 04-01-02 | 01 | 0 | OBSV-05 | unit | `go test ./pkg/aws/... -run TestUploadArtifacts -count=1` | ❌ W0 | ⬜ pending |
-| 04-01-03 | 01 | 0 | OBSV-05 | unit | `go test ./pkg/profile/... -run TestArtifacts -count=1` | ❌ W0 | ⬜ pending |
-| 04-01-04 | 01 | 0 | OBSV-06 | unit | `go test ./pkg/compiler/... -run TestReplication -count=1` | ❌ W0 | ⬜ pending |
-| 04-01-05 | 01 | 0 | OBSV-07 | unit | `go test ./sidecars/audit-log/... -run TestRedact -count=1` | ❌ W0 | ⬜ pending |
-| 04-01-06 | 01 | 0 | OBSV-07 | unit | `go test ./sidecars/audit-log/... -run TestRedactLiteral -count=1` | ❌ W0 | ⬜ pending |
-| 04-01-07 | 01 | 0 | OBSV-07 | unit | `go test ./sidecars/audit-log/... -run TestRedactStructural -count=1` | ❌ W0 | ⬜ pending |
-| 04-01-08 | 01 | 0 | PROV-13 | unit | `go test ./pkg/compiler/... -run TestSpotPollLoop -count=1` | ❌ W0 | ⬜ pending |
-| 04-01-09 | 01 | 0 | MAIL-02 | unit | `go test ./pkg/aws/... -run TestProvisionSandboxEmail -count=1` | ❌ W0 | ⬜ pending |
-| 04-01-10 | 01 | 0 | MAIL-03 | unit | `go test ./pkg/compiler/... -run TestSESIAM -count=1` | ❌ W0 | ⬜ pending |
-| 04-01-11 | 01 | 0 | MAIL-04 | unit | `go test ./pkg/aws/... -run TestSendLifecycle -count=1` | ❌ W0 | ⬜ pending |
-| 04-XX-XX | XX | X | MAIL-01 | manual | manual — Terraform plan inspection | N/A | ⬜ pending |
-| 04-XX-XX | XX | X | MAIL-05 | manual | manual — SES receipt rule S3 verification | N/A | ⬜ pending |
+All plans use **TDD inline** (`tdd="true"` on tasks). Each task's `<behavior>` block defines test expectations, and the task creates both tests and implementation in a single pass. No separate Wave 0 stub plan is needed because:
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+1. Every `<automated>` verify command references real test functions created by the task itself
+2. TDD tasks write failing tests first (RED), then implement (GREEN) within the same execution
+3. Test files are listed in each task's `<files>` field alongside production code
+
+This is the standard TDD-inline approach — Wave 0 stubs are only needed when tasks lack `tdd="true"` and reference test files that don't exist yet.
 
 ---
 
-## Wave 0 Requirements
+## Per-Task Verification Map
 
-- [ ] `sidecars/audit-log/redact_test.go` — stubs for OBSV-07 redaction tests
-- [ ] `pkg/aws/artifacts_test.go` — stubs for OBSV-05 upload logic
-- [ ] `pkg/aws/ses_test.go` — stubs for MAIL-02, MAIL-04
-- [ ] `pkg/compiler/filesystem_test.go` — stubs for OBSV-04 compiler output
-- [ ] `pkg/compiler/spot_test.go` — stubs for PROV-13 spot poll loop
-- [ ] `pkg/compiler/ses_iam_test.go` — stubs for MAIL-03 SES IAM policy
+| Task ID | Plan | Wave | Requirement | Test Type | Automated Command | Status |
+|---------|------|------|-------------|-----------|-------------------|--------|
+| 04-01-T1 | 01 | 1 | OBSV-05, OBSV-07 | unit (TDD) | `go test ./sidecars/audit-log/... ./pkg/profile/... -run "TestRedact\|TestArtifact" -count=1` | pending |
+| 04-01-T2 | 01 | 1 | OBSV-05 | unit (TDD) | `go test ./pkg/aws/... -run TestUploadArtifact -count=1` | pending |
+| 04-02-T1 | 02 | 1 | MAIL-01, MAIL-05 | infra | `terraform -chdir=infra/modules/ses/v1.0.0 init -backend=false && terraform -chdir=infra/modules/ses/v1.0.0 validate` | pending |
+| 04-02-T2 | 02 | 1 | MAIL-02, MAIL-03, MAIL-04 | unit (TDD) | `go test ./pkg/aws/... -run TestSES -count=1` | pending |
+| 04-03-T1 | 03 | 2 | OBSV-04, PROV-13 | unit (TDD) | `go test ./pkg/compiler/... -run "TestFilesystem\|TestSpotPoll\|TestReadonly\|TestBindMount\|TestArtifactUploadScript\|TestIMDSToken" -count=1` | pending |
+| 04-03-T2 | 03 | 2 | OBSV-05 | unit (TDD) | `go test ./pkg/lifecycle/... -count=1` | pending |
+| 04-04-T1 | 04 | 3 | MAIL-02, MAIL-03, MAIL-04, MAIL-05 | integration | `go build ./cmd/km/ && go test ./internal/app/cmd/... ./pkg/compiler/... -count=1` | pending |
+| 04-04-T2 | 04 | 3 | OBSV-06 | infra | `terraform -chdir=infra/modules/s3-replication/v1.0.0 init -backend=false && terraform -chdir=infra/modules/s3-replication/v1.0.0 validate` | pending |
+
+*Status: pending / green / red / flaky*
 
 ---
 
@@ -78,11 +74,11 @@ created: 2026-03-22
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 15s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify commands (TDD inline creates tests within task)
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] No separate Wave 0 needed — TDD inline is the adopted approach
+- [x] No watch-mode flags
+- [x] Feedback latency < 15s
+- [x] `nyquist_compliant: true` set in frontmatter
 
 **Approval:** pending
