@@ -1,13 +1,3 @@
-terraform {
-  required_version = ">= 1.3.0"
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = ">= 5.0.0"
-    }
-  }
-}
-
 # Default provider uses the caller's region (source bucket region).
 # Provider alias "replica" targets the destination region.
 provider "aws" {
