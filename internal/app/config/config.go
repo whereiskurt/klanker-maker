@@ -22,6 +22,19 @@ type Config struct {
 
 	// Version is the km CLI version string, injected at build time.
 	Version string
+
+	// StateBucket is the S3 bucket used for Terraform state and sandbox metadata.
+	// Set via KM_STATE_BUCKET environment variable.
+	StateBucket string
+
+	// TTLLambdaARN is the Lambda function ARN for TTL sandbox teardown.
+	// Set via KM_TTL_LAMBDA_ARN environment variable.
+	// If empty, TTL schedules are not created.
+	TTLLambdaARN string
+
+	// SchedulerRoleARN is the IAM role ARN that EventBridge Scheduler assumes
+	// to invoke the TTL Lambda. Set via KM_SCHEDULER_ROLE_ARN environment variable.
+	SchedulerRoleARN string
 }
 
 // Load reads configuration from (in order of increasing precedence):
@@ -37,6 +50,9 @@ func Load() (*Config, error) {
 	// Defaults
 	v.SetDefault("profile_search_paths", []string{"./profiles", "~/.km/profiles"})
 	v.SetDefault("log_level", "info")
+	v.SetDefault("state_bucket", "")
+	v.SetDefault("ttl_lambda_arn", "")
+	v.SetDefault("scheduler_role_arn", "")
 
 	// Config file
 	v.SetConfigName("config")
@@ -61,6 +77,9 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		ProfileSearchPaths: v.GetStringSlice("profile_search_paths"),
 		LogLevel:           v.GetString("log_level"),
+		StateBucket:        v.GetString("state_bucket"),
+		TTLLambdaARN:       v.GetString("ttl_lambda_arn"),
+		SchedulerRoleARN:   v.GetString("scheduler_role_arn"),
 	}
 
 	return cfg, nil

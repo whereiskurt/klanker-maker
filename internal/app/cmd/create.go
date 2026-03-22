@@ -1,12 +1,18 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
@@ -175,6 +181,59 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 			log.Warn().Err(cleanErr).Msg("failed to clean up sandbox directory after apply failure")
 		}
 		return fmt.Errorf("provisioning failed for sandbox %s", sandboxID)
+	}
+
+	// Step 11: Write sandbox metadata to S3 so km list/status can read it without tag API calls.
+	// Non-fatal: sandbox is provisioned even if metadata write fails.
+	now := time.Now().UTC()
+	var ttlExpiry *time.Time
+	if resolvedProfile.Spec.Lifecycle.TTL != "" {
+		if d, parseErr := time.ParseDuration(resolvedProfile.Spec.Lifecycle.TTL); parseErr == nil {
+			t := now.Add(d)
+			ttlExpiry = &t
+		} else {
+			log.Warn().Str("ttl", resolvedProfile.Spec.Lifecycle.TTL).Err(parseErr).
+				Msg("failed to parse TTL duration — TTL schedule not created")
+		}
+	}
+
+	if cfg.StateBucket != "" {
+		meta := awspkg.SandboxMetadata{
+			SandboxID:   sandboxID,
+			ProfileName: resolvedProfile.Metadata.Name,
+			Substrate:   string(resolvedProfile.Spec.Runtime.Substrate),
+			Region:      resolvedProfile.Spec.Runtime.Region,
+			CreatedAt:   now,
+			TTLExpiry:   ttlExpiry,
+		}
+		metaJSON, _ := json.Marshal(meta)
+		s3Client := s3.NewFromConfig(awsCfg)
+		_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:      aws.String(cfg.StateBucket),
+			Key:         aws.String("tf-km/sandboxes/" + sandboxID + "/metadata.json"),
+			Body:        bytes.NewReader(metaJSON),
+			ContentType: aws.String("application/json"),
+		})
+		if putErr != nil {
+			log.Warn().Err(putErr).Str("sandbox_id", sandboxID).
+				Msg("failed to write sandbox metadata (non-fatal)")
+		}
+	} else {
+		log.Debug().Msg("KM_STATE_BUCKET not set — skipping sandbox metadata write")
+	}
+
+	// Step 12: Create EventBridge TTL schedule if TTL is configured and Lambda ARN is set.
+	// Non-fatal: sandbox is provisioned; operator can re-schedule manually if this fails.
+	if ttlExpiry != nil && cfg.TTLLambdaARN != "" {
+		schedInput := compiler.BuildTTLScheduleInput(sandboxID, *ttlExpiry, cfg.TTLLambdaARN, cfg.SchedulerRoleARN)
+		schedulerClient := scheduler.NewFromConfig(awsCfg)
+		if err := awspkg.CreateTTLSchedule(ctx, schedulerClient, schedInput); err != nil {
+			log.Error().Err(err).Str("sandbox_id", sandboxID).
+				Msg("failed to create TTL schedule (non-fatal — sandbox is provisioned)")
+		} else {
+			log.Info().Str("sandbox_id", sandboxID).Time("ttl_expiry", *ttlExpiry).
+				Msg("TTL schedule created")
+		}
 	}
 
 	fmt.Printf("Sandbox %s created successfully.\n", sandboxID)

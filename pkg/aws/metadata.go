@@ -1,0 +1,18 @@
+// Package aws — metadata.go
+// SandboxMetadata is the schema for the JSON object written to
+// s3://<state-bucket>/tf-km/sandboxes/<sandbox-id>/metadata.json
+// after a successful km create. It is read by km list and km status.
+package aws
+
+import "time"
+
+// SandboxMetadata describes a provisioned sandbox.
+// Written by km create; read by km list/status without AWS tag API calls.
+type SandboxMetadata struct {
+	SandboxID   string     `json:"sandbox_id"`
+	ProfileName string     `json:"profile_name"`
+	Substrate   string     `json:"substrate"`
+	Region      string     `json:"region"`
+	CreatedAt   time.Time  `json:"created_at"`
+	TTLExpiry   *time.Time `json:"ttl_expiry,omitempty"`
+}

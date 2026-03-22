@@ -10,11 +10,12 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
+	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	"github.com/whereiskurt/klankrmkr/pkg/compiler"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klankrmkr/pkg/compiler"
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
 )
 
@@ -144,12 +145,21 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool) er
 		log.Debug().Err(outputErr).Msg("could not get terragrunt output before destroy — skipping spot termination")
 	}
 
-	// Step 6: Run terragrunt destroy (streams output in real time)
+	// Step 6: Cancel the EventBridge TTL schedule so it does not fire after resources are gone.
+	// Idempotent — DeleteTTLSchedule ignores ResourceNotFoundException.
+	// Done before terragrunt destroy so the schedule is cancelled even if destroy partially fails.
+	schedulerClient := scheduler.NewFromConfig(awsCfg)
+	if err := awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID); err != nil {
+		// Log warning but do not fail destroy — the schedule will fire but find no resources.
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("failed to delete TTL schedule (non-fatal)")
+	}
+
+	// Step 7: Run terragrunt destroy (streams output in real time)
 	if err := runner.Destroy(ctx, sandboxDir); err != nil {
 		return fmt.Errorf("terragrunt destroy failed for sandbox %s: %w", sandboxID, err)
 	}
 
-	// Step 7: Clean up local sandbox directory
+	// Step 9: Clean up local sandbox directory
 	if err := terragrunt.CleanupSandboxDir(sandboxDir); err != nil {
 		log.Warn().Err(err).Str("sandboxDir", sandboxDir).Msg("failed to clean up local sandbox directory")
 	}
