@@ -18,7 +18,7 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Provisioning & Lifecycle
 
 - [ ] **PROV-01**: Operator can run `km create <profile>` to compile profile into Terragrunt inputs and provision EC2 + VPC + IAM
-- [ ] **PROV-02**: Operator can run `km destroy <sandbox-id>` to cleanly tear down all sandbox resources
+- [x] **PROV-02**: Operator can run `km destroy <sandbox-id>` to cleanly tear down all sandbox resources
 - [ ] **PROV-03**: Operator can run `km list` to see all running sandboxes with status
 - [ ] **PROV-04**: Operator can run `km status <sandbox-id>` to see detailed sandbox state
 - [ ] **PROV-05**: Sandbox auto-destroys after TTL expires
@@ -143,7 +143,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | INFR-07 | Phase 1 | Complete |
 | INFR-08 | Phase 1 | Complete |
 | PROV-01 | Phase 2 | Pending |
-| PROV-02 | Phase 2 | Pending |
+| PROV-02 | Phase 2 | Complete |
 | PROV-08 | Phase 2 | Pending |
 | PROV-09 | Phase 2 | Pending |
 | PROV-10 | Phase 2 | Pending |
