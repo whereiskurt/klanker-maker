@@ -167,6 +167,21 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool) er
 		sandboxProfile, _ = profilepkg.Parse(profileBytes)
 	}
 
+	// Step 7b: Destroy the budget-enforcer BEFORE the main sandbox.
+	// The budget-enforcer Lambda depends on sandbox resources (IAM role, instance ID),
+	// so it must be destroyed first to avoid dangling references.
+	// Non-fatal: proceed with main sandbox destroy even if enforcer destroy fails.
+	budgetEnforcerDir := filepath.Join(sandboxDir, "budget-enforcer")
+	if _, statErr := os.Stat(budgetEnforcerDir); statErr == nil {
+		fmt.Printf("Destroying budget enforcer for sandbox %s...\n", sandboxID)
+		if beErr := runner.Destroy(ctx, budgetEnforcerDir); beErr != nil {
+			log.Warn().Err(beErr).Str("sandbox_id", sandboxID).
+				Msg("budget-enforcer destroy failed (non-fatal — proceeding with main sandbox destroy)")
+		} else {
+			log.Info().Str("sandbox_id", sandboxID).Msg("budget enforcer destroyed")
+		}
+	}
+
 	// Step 8: Run terragrunt destroy (streams output in real time)
 	destroyFunc := func(dCtx context.Context, sid string) error {
 		return runner.Destroy(dCtx, sandboxDir)

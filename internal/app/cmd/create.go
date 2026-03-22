@@ -341,6 +341,31 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		}
 	}
 
+	// Step 12c: Deploy per-sandbox budget-enforcer Lambda + EventBridge schedule.
+	// Non-fatal: consistent with the "km create budget init is non-fatal" pattern
+	// established in Phase 06-06. Sandbox is provisioned even if enforcer deploy fails.
+	if artifacts.BudgetEnforcerHCL != "" {
+		budgetEnforcerDir := filepath.Join(sandboxDir, "budget-enforcer")
+		if mkErr := os.MkdirAll(budgetEnforcerDir, 0o755); mkErr != nil {
+			log.Warn().Err(mkErr).Str("sandbox_id", sandboxID).
+				Msg("failed to create budget-enforcer directory (non-fatal)")
+		} else {
+			hclPath := filepath.Join(budgetEnforcerDir, "terragrunt.hcl")
+			if writeErr := os.WriteFile(hclPath, []byte(artifacts.BudgetEnforcerHCL), 0o644); writeErr != nil {
+				log.Warn().Err(writeErr).Str("sandbox_id", sandboxID).
+					Msg("failed to write budget-enforcer/terragrunt.hcl (non-fatal)")
+			} else {
+				fmt.Printf("Step 12c: Deploying budget enforcer Lambda for %s...\n", sandboxID)
+				if beErr := runner.Apply(ctx, budgetEnforcerDir); beErr != nil {
+					log.Warn().Err(beErr).Str("sandbox_id", sandboxID).
+						Msg("budget-enforcer apply failed (non-fatal — sandbox is provisioned)")
+				} else {
+					log.Info().Str("sandbox_id", sandboxID).Msg("budget enforcer Lambda deployed")
+				}
+			}
+		}
+	}
+
 	// Step 13: Provision SES email identity for the sandbox.
 	// Non-fatal: sandbox is still usable without email.
 	// Derive email domain from config; default to "klankermaker.ai" when not set.
