@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 07-02-PLAN.md
-last_updated: "2026-03-22T22:28:49.145Z"
+stopped_at: Completed 08-01-PLAN.md
+last_updated: "2026-03-22T22:45:55.662Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
-  total_phases: 9
-  completed_phases: 7
-  total_plans: 34
-  completed_plans: 34
+  total_phases: 10
+  completed_phases: 8
+  total_plans: 36
+  completed_plans: 36
   percent: 0
 ---
 
@@ -83,6 +83,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 06-budget-enforcement-platform-configuration P09 | 286s | 2 tasks | 5 files |
 | Phase 07-unwired-code-paths P01 | 92s | 1 tasks | 2 files |
 | Phase 07-unwired-code-paths P02 | 197s | 2 tasks | 6 files |
+| Phase 08-sidecar-build-deployment-pipeline P01 | 127s | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -185,6 +186,12 @@ Recent decisions affecting current work:
 - [Phase 07-02]: MLflow writes in create/destroy are non-fatal (log.Warn + continue) — sandbox lifecycle must not be blocked by observability failures
 - [Phase 07-02]: site.hcl accounts block defaults to empty string for KM_ACCOUNTS_* — consuming modules not yet deployed in live (Phase 9 concern)
 - [Phase 07-02]: Source-level verification test pattern for MLflow wiring: os.ReadFile(source_file) + strings.Contains checks for call site presence
+- [Phase 08-01]: tracing ecr-push uses sidecars/tracing/ as Docker build context (not repo root) — tracing is not a Go binary, no shared pkg/ imports needed
+- [Phase 08-01]: audit-log Dockerfile builds from ./sidecars/audit-log/cmd/ not ./sidecars/audit-log/ — cmd/ holds package main; root is package auditlog library
+
+### Roadmap Evolution
+
+- Phase 10 added: SCP Sandbox Containment — org-level EC2 breakout prevention (SCP as account-level backstop for sandbox IAM containment)
 
 ### Pending Todos
 
@@ -200,6 +207,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T22:25:19.957Z
-Stopped at: Completed 07-02-PLAN.md
+Last session: 2026-03-22T22:45:49.684Z
+Stopped at: Completed 08-01-PLAN.md
 Resume file: None
