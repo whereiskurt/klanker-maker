@@ -17,17 +17,6 @@ import (
 	tagtypes "github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi/types"
 )
 
-// SandboxMetadata is the JSON record written to S3 at
-// tf-km/sandboxes/<sandbox-id>/metadata.json by km create.
-type SandboxMetadata struct {
-	SandboxID   string     `json:"sandbox_id"`
-	ProfileName string     `json:"profile_name"`
-	Substrate   string     `json:"substrate"`
-	Region      string     `json:"region"`
-	CreatedAt   time.Time  `json:"created_at"`
-	TTLExpiry   *time.Time `json:"ttl_expiry,omitempty"`
-}
-
 // SandboxRecord is the unified view of a sandbox used by km list and km status output.
 type SandboxRecord struct {
 	SandboxID    string     `json:"sandbox_id"`
