@@ -87,6 +87,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **CONF-02**: Domain name is configurable — SES email addresses (`{sandbox-id}@sandboxes.{domain}`), JSON Schema `$id` URL, `apiVersion` in profiles, and ConfigUI branding all derive from the configured domain, not hardcoded `klankermaker.ai`
 - [ ] **CONF-03**: AWS account numbers (management, terraform, application) and SSO start URL are configurable — referenced by Terragrunt hierarchy, IAM policies, and `km` CLI commands without hardcoding
 - [ ] **CONF-04**: `km init` or `km configure` command walks the operator through initial setup: domain, accounts, region, SSO — writes the config file and validates AWS access
+- [ ] **CONF-05**: `km shell <sandbox-id>` opens an interactive shell into a running sandbox — abstracts the substrate (EC2: SSM Session Manager, ECS: ECS Exec, future k8s: kubectl exec). Operator never needs to know the underlying AWS CLI incantation
 
 ### Budget Enforcement
 
@@ -204,6 +205,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CONF-02 | Phase 6 | Pending |
 | CONF-03 | Phase 6 | Pending |
 | CONF-04 | Phase 6 | Pending |
+| CONF-05 | Phase 6 | Pending |
 | BUDG-01 | Phase 6 | Pending |
 | BUDG-02 | Phase 6 | Pending |
 | BUDG-03 | Phase 6 | Pending |
@@ -215,7 +217,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BUDG-09 | Phase 6 | Pending |
 
 **Coverage:**
-- v1 requirements: 65 total
+- v1 requirements: 66 total
 - Mapped to phases: 52
 - Unmapped: 0
 
