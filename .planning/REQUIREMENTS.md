@@ -19,11 +19,11 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **PROV-01**: Operator can run `km create <profile>` to compile profile into Terragrunt inputs and provision EC2 + VPC + IAM
 - [x] **PROV-02**: Operator can run `km destroy <sandbox-id>` to cleanly tear down all sandbox resources
-- [ ] **PROV-03**: Operator can run `km list` to see all running sandboxes with status
-- [ ] **PROV-04**: Operator can run `km status <sandbox-id>` to see detailed sandbox state
-- [ ] **PROV-05**: Sandbox auto-destroys after TTL expires
-- [ ] **PROV-06**: Sandbox auto-destroys after idle timeout with no activity
-- [ ] **PROV-07**: Sandbox teardown policy is configurable (destroy/stop/retain)
+- [x] **PROV-03**: Operator can run `km list` to see all running sandboxes with status
+- [x] **PROV-04**: Operator can run `km status <sandbox-id>` to see detailed sandbox state
+- [x] **PROV-05**: Sandbox auto-destroys after TTL expires
+- [x] **PROV-06**: Sandbox auto-destroys after idle timeout with no activity
+- [x] **PROV-07**: Sandbox teardown policy is configurable (destroy/stop/retain)
 - [x] **PROV-08**: Every sandbox resource is tagged with `km:sandbox-id` for tracking and cost attribution
 - [x] **PROV-09**: Operator can specify substrate (`ec2` or `ecs`) in the profile's `runtime.substrate` field and `km create` provisions the corresponding infrastructure
 - [x] **PROV-10**: ECS substrate provisions an AWS Fargate task with sidecar containers for enforcement (DNS proxy, HTTP proxy, audit log) defined in the task definition
@@ -155,11 +155,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | NETW-06 | Phase 2 | Complete |
 | NETW-07 | Phase 2 | Complete |
 | NETW-08 | Phase 2 | Complete |
-| PROV-03 | Phase 3 | Pending |
-| PROV-04 | Phase 3 | Pending |
-| PROV-05 | Phase 3 | Pending |
-| PROV-06 | Phase 3 | Pending |
-| PROV-07 | Phase 3 | Pending |
+| PROV-03 | Phase 3 | Complete |
+| PROV-04 | Phase 3 | Complete |
+| PROV-05 | Phase 3 | Complete |
+| PROV-06 | Phase 3 | Complete |
+| PROV-07 | Phase 3 | Complete |
 | NETW-02 | Phase 3 | Complete |
 | NETW-03 | Phase 3 | Complete |
 | OBSV-01 | Phase 3 | Complete |
