@@ -1,0 +1,189 @@
+// Package auditlog implements the km audit-log sidecar.
+// It reads JSON-line audit events from an io.Reader (stdin in production)
+// and routes them to a configured destination: stdout, CloudWatch Logs, or S3.
+//
+// JSON event schema (LOCKED — matches 03-CONTEXT.md):
+//
+//	{
+//	  "timestamp":  "2026-03-21T12:00:00Z",
+//	  "sandbox_id": "sb-a1b2c3d4",
+//	  "event_type": "shell_command" | "dns_query" | "http_request",
+//	  "source":     "audit-log" | "dns-proxy" | "http-proxy",
+//	  "detail":     { ... event-specific fields ... }
+//	}
+package auditlog
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"time"
+
+	"github.com/rs/zerolog/log"
+)
+
+// AuditEvent is the canonical JSON schema for audit log events.
+type AuditEvent struct {
+	Timestamp time.Time              `json:"timestamp"`
+	SandboxID string                 `json:"sandbox_id"`
+	EventType string                 `json:"event_type"` // shell_command, dns_query, http_request
+	Source    string                 `json:"source"`
+	Detail    map[string]interface{} `json:"detail"`
+}
+
+// Destination receives audit events.
+type Destination interface {
+	Write(ctx context.Context, event AuditEvent) error
+	Flush(ctx context.Context) error
+}
+
+// CloudWatchBackend is the minimal interface for pushing log messages.
+// It allows mock injection in tests without depending on the AWS SDK directly.
+type CloudWatchBackend interface {
+	// EnsureLogGroup creates the log group and stream if they do not exist.
+	EnsureLogGroup(ctx context.Context, logGroup, logStream string) error
+	// PutLogMessages sends messages to the given log group/stream.
+	PutLogMessages(ctx context.Context, logGroup, logStream string, messages []string) error
+}
+
+// Process reads newline-delimited JSON from r, parses each line as an AuditEvent,
+// and routes it to dest. Invalid JSON lines emit a zerolog warning and are skipped.
+// Process returns when r is exhausted (EOF) or on a read error.
+func Process(ctx context.Context, r io.Reader, dest Destination) error {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var ev AuditEvent
+		if err := json.Unmarshal(line, &ev); err != nil {
+			log.Warn().Str("raw", string(line)).Err(err).Msg("audit-log: skipping invalid JSON line")
+			continue
+		}
+
+		if err := dest.Write(ctx, ev); err != nil {
+			log.Error().Err(err).Msg("audit-log: failed to write event to destination")
+		}
+	}
+	return scanner.Err()
+}
+
+// ---- StdoutDest ----
+
+// stdoutDest writes JSON-marshaled events as newline-delimited JSON to w.
+// In production, w is os.Stdout.
+type stdoutDest struct {
+	w io.Writer
+}
+
+// NewStdoutDest creates a Destination that writes JSON events to w.
+// In production, pass os.Stdout.
+func NewStdoutDest(w io.Writer) Destination {
+	return &stdoutDest{w: w}
+}
+
+// Write encodes event as JSON and writes it followed by a newline.
+func (d *stdoutDest) Write(_ context.Context, event AuditEvent) error {
+	b, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("audit-log stdout: marshal event: %w", err)
+	}
+	b = append(b, '\n')
+	_, err = d.w.Write(b)
+	return err
+}
+
+// Flush is a no-op for stdout.
+func (d *stdoutDest) Flush(_ context.Context) error { return nil }
+
+// ---- cloudWatchDest ----
+
+// cloudWatchDest buffers events and flushes them to CloudWatch Logs.
+// It flushes on every Flush() call, or when the buffer reaches cwFlushThreshold.
+type cloudWatchDest struct {
+	backend   CloudWatchBackend
+	logGroup  string
+	logStream string
+	buf       []AuditEvent
+}
+
+const cwFlushThreshold = 25
+
+// NewCloudWatchDest creates a Destination that buffers events and sends them to CloudWatch.
+// backend provides PutLogMessages and EnsureLogGroup (use a real CW client or a mock).
+// logGroup is e.g. "/km/sandboxes/sb-a1b2c3d4/" and logStream is "audit".
+func NewCloudWatchDest(backend CloudWatchBackend, logGroup, logStream string) Destination {
+	return &cloudWatchDest{
+		backend:   backend,
+		logGroup:  logGroup,
+		logStream: logStream,
+	}
+}
+
+// Write appends event to the internal buffer. If the buffer reaches
+// cwFlushThreshold, it is flushed immediately.
+func (d *cloudWatchDest) Write(ctx context.Context, event AuditEvent) error {
+	d.buf = append(d.buf, event)
+	if len(d.buf) >= cwFlushThreshold {
+		return d.flush(ctx)
+	}
+	return nil
+}
+
+// Flush sends all buffered events to CloudWatch and clears the buffer.
+func (d *cloudWatchDest) Flush(ctx context.Context) error {
+	return d.flush(ctx)
+}
+
+func (d *cloudWatchDest) flush(ctx context.Context) error {
+	if len(d.buf) == 0 {
+		return nil
+	}
+
+	msgs := make([]string, 0, len(d.buf))
+	for _, ev := range d.buf {
+		b, err := json.Marshal(ev)
+		if err != nil {
+			log.Warn().Err(err).Msg("audit-log: skipping unmarshalable event on flush")
+			continue
+		}
+		msgs = append(msgs, string(b))
+	}
+	d.buf = d.buf[:0]
+
+	if len(msgs) == 0 {
+		return nil
+	}
+
+	if err := d.backend.PutLogMessages(ctx, d.logGroup, d.logStream, msgs); err != nil {
+		return fmt.Errorf("audit-log CloudWatch flush: %w", err)
+	}
+	return nil
+}
+
+// ---- s3Dest (stub) ----
+
+// s3Dest is a stub destination that falls back to stdout.
+// Full S3 archive delivery is Phase 4 scope.
+type s3Dest struct {
+	fallback Destination
+}
+
+// NewS3Dest creates a stub S3 destination. It logs a warning and routes to w.
+// Full S3 archive is Phase 4 scope; this stub avoids silent data loss.
+func NewS3Dest(w io.Writer) Destination {
+	log.Warn().Msg("audit-log: S3 dest configured — flushing at exit not yet implemented; falling back to stdout")
+	return &s3Dest{fallback: NewStdoutDest(w)}
+}
+
+// Write delegates to the stdout fallback.
+func (d *s3Dest) Write(ctx context.Context, event AuditEvent) error {
+	return d.fallback.Write(ctx, event)
+}
+
+// Flush is a no-op for the S3 stub.
+func (d *s3Dest) Flush(_ context.Context) error { return nil }
