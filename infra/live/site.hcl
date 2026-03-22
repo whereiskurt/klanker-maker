@@ -7,6 +7,13 @@ locals {
     random_suffix   = get_env("KMGUID", "")
   }
 
+  # Account IDs from km-config.yaml via KM_* env vars (CONF-03)
+  accounts = {
+    management  = get_env("KM_ACCOUNTS_MANAGEMENT", "")
+    terraform   = get_env("KM_ACCOUNTS_TERRAFORM", "")
+    application = get_env("KM_ACCOUNTS_APPLICATION", "")
+  }
+
   # Secrets loaded from SOPS-encrypted file or plaintext fallback
   # SOPS decrypt happens on-the-fly; plaintext file is for local development only
   secret_values = jsondecode(
