@@ -43,6 +43,12 @@ type IdleDetector struct {
 	// OnIdle is called once when idle is detected. The sandboxID is passed as argument.
 	OnIdle func(sandboxID string)
 
+	// OnIdleNotify is called when idle is detected, to send a lifecycle notification.
+	// Called with (sandboxID). If nil, no notification is sent.
+	// Failure is best-effort: logged as warning. Decoupled from OnIdle for separation
+	// of concerns (teardown action vs. notification).
+	OnIdleNotify func(sandboxID string)
+
 	// nowFn allows tests to inject a controlled clock. Defaults to time.Now.
 	nowFn func() time.Time
 }
@@ -78,6 +84,9 @@ func (d *IdleDetector) Run(ctx context.Context) error {
 		if d.isIdle(ctx, now) {
 			if d.OnIdle != nil {
 				d.OnIdle(d.SandboxID)
+			}
+			if d.OnIdleNotify != nil {
+				d.OnIdleNotify(d.SandboxID)
 			}
 			return nil
 		}

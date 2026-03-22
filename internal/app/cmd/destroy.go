@@ -188,9 +188,20 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool) er
 			sandboxProfile.Spec.Artifacts.Paths, sandboxProfile.Spec.Artifacts.MaxSizeMB)
 		return err
 	}
+	// Step 8 (continued): build SES client for notification callback.
+	const emailDomain = "sandboxes.klankermaker.ai"
+	sesClient := sesv2.NewFromConfig(awsCfg)
+
 	callbacks := lifecycle.TeardownCallbacks{
 		Destroy:         destroyFunc,
 		UploadArtifacts: uploadFunc,
+		OnNotify: func(nCtx context.Context, sid string, event string) error {
+			operatorEmail := os.Getenv("KM_OPERATOR_EMAIL")
+			if operatorEmail == "" {
+				return nil
+			}
+			return awspkg.SendLifecycleNotification(nCtx, sesClient, operatorEmail, sid, event, emailDomain)
+		},
 	}
 	if err := lifecycle.ExecuteTeardown(ctx, "destroy", sandboxID, callbacks); err != nil {
 		return fmt.Errorf("terragrunt destroy failed for sandbox %s: %w", sandboxID, err)
@@ -202,20 +213,11 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool) er
 	}
 
 	// Step 10: Clean up SES email identity (idempotent — swallows NotFoundException).
-	const emailDomain = "sandboxes.klankermaker.ai"
-	sesClient := sesv2.NewFromConfig(awsCfg)
 	if err := awspkg.CleanupSandboxEmail(ctx, sesClient, sandboxID, emailDomain); err != nil {
 		log.Warn().Err(err).Msg("failed to cleanup sandbox email (non-fatal)")
 	}
 
 	fmt.Printf("Sandbox %s destroyed successfully.\n", sandboxID)
-
-	// Step 11: Send lifecycle notification if operator email is configured.
-	if operatorEmail := os.Getenv("KM_OPERATOR_EMAIL"); operatorEmail != "" {
-		if err := awspkg.SendLifecycleNotification(ctx, sesClient, operatorEmail, sandboxID, "destroyed", emailDomain); err != nil {
-			log.Warn().Err(err).Msg("failed to send destroyed lifecycle notification (non-fatal)")
-		}
-	}
 
 	return nil
 }

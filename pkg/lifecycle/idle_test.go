@@ -152,3 +152,73 @@ func TestTeardownPolicy_Retain(t *testing.T) {
 		t.Fatalf("ExecuteTeardown(retain) returned error: %v", err)
 	}
 }
+
+// --------------------------------------------------------------------------
+// OnIdleNotify tests
+// --------------------------------------------------------------------------
+
+// TestIdleDetector_OnIdleNotifyCalled verifies OnIdleNotify is called when idle fires.
+func TestIdleDetector_OnIdleNotifyCalled(t *testing.T) {
+	now := time.Now()
+	oldEventTime := now.Add(-3 * time.Second)
+
+	mock := &mockCWLogsClient{
+		events: []kmaws.LogEvent{
+			{Timestamp: oldEventTime.UnixMilli(), Message: "old event"},
+		},
+	}
+
+	var notifiedID string
+	d := &lifecycle.IdleDetector{
+		SandboxID:    "sb-notify01",
+		IdleTimeout:  1 * time.Second,
+		PollInterval: 1 * time.Millisecond,
+		CWClient:     mock,
+		LogGroup:     "/km/sandboxes/sb-notify01/",
+		LogStream:    "audit",
+		OnIdle:       func(id string) {},
+		OnIdleNotify: func(id string) { notifiedID = id },
+	}
+	d.SetNowFn(func() time.Time { return now })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	_ = d.Run(ctx)
+
+	if notifiedID != "sb-notify01" {
+		t.Errorf("expected OnIdleNotify to be called with sb-notify01, got %q", notifiedID)
+	}
+}
+
+// TestIdleDetector_OnIdleNotifyNilSafe verifies nil OnIdleNotify does not panic.
+func TestIdleDetector_OnIdleNotifyNilSafe(t *testing.T) {
+	now := time.Now()
+	oldEventTime := now.Add(-3 * time.Second)
+
+	mock := &mockCWLogsClient{
+		events: []kmaws.LogEvent{
+			{Timestamp: oldEventTime.UnixMilli(), Message: "old event"},
+		},
+	}
+
+	d := &lifecycle.IdleDetector{
+		SandboxID:    "sb-nilnotify",
+		IdleTimeout:  1 * time.Second,
+		PollInterval: 1 * time.Millisecond,
+		CWClient:     mock,
+		LogGroup:     "/km/sandboxes/sb-nilnotify/",
+		LogStream:    "audit",
+		OnIdle:       func(id string) {},
+		OnIdleNotify: nil, // explicitly nil — must not panic
+	}
+	d.SetNowFn(func() time.Time { return now })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	if err := d.Run(ctx); err != nil && err != context.DeadlineExceeded {
+		t.Errorf("unexpected error with nil OnIdleNotify: %v", err)
+	}
+	// Test passes if no panic occurred
+}

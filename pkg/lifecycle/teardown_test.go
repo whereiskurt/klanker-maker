@@ -197,3 +197,73 @@ func TestUploadArtifactsErrorDoesNotBlockTeardown(t *testing.T) {
 		t.Error("expected Destroy to still be called after upload failure")
 	}
 }
+
+// --------------------------------------------------------------------------
+// OnNotify tests
+// --------------------------------------------------------------------------
+
+// TestOnNotifyCalledAfterSuccessfulDestroy verifies OnNotify is called with "destroyed"
+// event on successful destroy policy execution.
+func TestOnNotifyCalledAfterSuccessfulDestroy(t *testing.T) {
+	var notifyEvent string
+	cbs := TeardownCallbacks{
+		Destroy: func(ctx context.Context, sandboxID string) error { return nil },
+		OnNotify: func(ctx context.Context, sandboxID string, event string) error {
+			notifyEvent = event
+			return nil
+		},
+	}
+	if err := ExecuteTeardown(context.Background(), "destroy", "sb-001", cbs); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if notifyEvent != "destroyed" {
+		t.Errorf("expected OnNotify event %q, got %q", "destroyed", notifyEvent)
+	}
+}
+
+// TestOnNotifyCalledWithErrorOnDestroyFailure verifies OnNotify is called with "error"
+// event when the Destroy callback returns an error.
+func TestOnNotifyCalledWithErrorOnDestroyFailure(t *testing.T) {
+	destroyErr := errors.New("terragrunt destroy failed")
+	var notifyEvent string
+	cbs := TeardownCallbacks{
+		Destroy: func(ctx context.Context, sandboxID string) error { return destroyErr },
+		OnNotify: func(ctx context.Context, sandboxID string, event string) error {
+			notifyEvent = event
+			return nil
+		},
+	}
+	err := ExecuteTeardown(context.Background(), "destroy", "sb-001", cbs)
+	if err == nil {
+		t.Fatal("expected destroy error to be propagated")
+	}
+	if notifyEvent != "error" {
+		t.Errorf("expected OnNotify event %q on destroy failure, got %q", "error", notifyEvent)
+	}
+}
+
+// TestOnNotifyNilIsBackwardCompatible verifies that nil OnNotify does not panic.
+func TestOnNotifyNilIsBackwardCompatible(t *testing.T) {
+	cbs := TeardownCallbacks{
+		Destroy:  func(ctx context.Context, sandboxID string) error { return nil },
+		OnNotify: nil,
+	}
+	if err := ExecuteTeardown(context.Background(), "destroy", "sb-001", cbs); err != nil {
+		t.Fatalf("nil OnNotify should not cause error: %v", err)
+	}
+}
+
+// TestOnNotifyFailureDoesNotAffectTeardown verifies that OnNotify errors are swallowed.
+func TestOnNotifyFailureDoesNotAffectTeardown(t *testing.T) {
+	notifyErr := errors.New("SES unreachable")
+	cbs := TeardownCallbacks{
+		Destroy: func(ctx context.Context, sandboxID string) error { return nil },
+		OnNotify: func(ctx context.Context, sandboxID string, event string) error {
+			return notifyErr
+		},
+	}
+	// Teardown itself should succeed even if OnNotify fails.
+	if err := ExecuteTeardown(context.Background(), "destroy", "sb-001", cbs); err != nil {
+		t.Fatalf("OnNotify failure should not propagate teardown error: %v", err)
+	}
+}

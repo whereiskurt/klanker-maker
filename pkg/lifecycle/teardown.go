@@ -20,6 +20,13 @@ type TeardownCallbacks struct {
 	// If nil, the upload step is skipped.
 	// Failure is best-effort: a warning is logged but teardown proceeds regardless.
 	UploadArtifacts func(ctx context.Context, sandboxID string) error
+
+	// OnNotify sends a lifecycle notification after teardown completes or on error.
+	// Called with (ctx, sandboxID, event) where event is "destroyed", "stopped",
+	// "retained", or "error".
+	// If nil, no notification is sent (backward compatible with existing callers).
+	// Failure is best-effort: logged as warning, does not affect teardown result.
+	OnNotify func(ctx context.Context, sandboxID string, event string) error
 }
 
 // ExecuteTeardown dispatches to the appropriate teardown action based on policy.
@@ -32,6 +39,14 @@ type TeardownCallbacks struct {
 //
 // UploadArtifacts (if set) is called before the policy dispatch for ALL policies,
 // including "retain". Failure is best-effort: logged as a warning, teardown continues.
+//
+// OnNotify (if set) is called after policy dispatch with the event name:
+//   - "destroyed" on successful destroy
+//   - "stopped" on successful stop
+//   - "retained" on retain policy
+//   - "error" when Destroy or Stop returns an error
+//
+// OnNotify failure is best-effort: logged as a warning, does not affect return value.
 func ExecuteTeardown(ctx context.Context, policy string, sandboxID string, callbacks TeardownCallbacks) error {
 	// Upload artifacts before any teardown action (best-effort for all policies).
 	if callbacks.UploadArtifacts != nil {
@@ -40,24 +55,46 @@ func ExecuteTeardown(ctx context.Context, policy string, sandboxID string, callb
 		}
 	}
 
+	// notify is a helper to call OnNotify if set; logs warning on failure.
+	notify := func(event string) {
+		if callbacks.OnNotify == nil {
+			return
+		}
+		if err := callbacks.OnNotify(ctx, sandboxID, event); err != nil {
+			log.Warn().Err(err).Str("sandbox_id", sandboxID).Str("event", event).
+				Msg("lifecycle notification failed (best-effort)")
+		}
+	}
+
 	switch policy {
 	case "destroy":
 		if callbacks.Destroy == nil {
 			return fmt.Errorf("teardown policy=destroy: Destroy callback is nil")
 		}
-		return callbacks.Destroy(ctx, sandboxID)
+		if err := callbacks.Destroy(ctx, sandboxID); err != nil {
+			notify("error")
+			return err
+		}
+		notify("destroyed")
+		return nil
 
 	case "stop":
 		if callbacks.Stop == nil {
 			return fmt.Errorf("teardown policy=stop: Stop callback is nil")
 		}
-		return callbacks.Stop(ctx, sandboxID)
+		if err := callbacks.Stop(ctx, sandboxID); err != nil {
+			notify("error")
+			return err
+		}
+		notify("stopped")
+		return nil
 
 	case "retain":
 		log.Info().
 			Str("sandbox_id", sandboxID).
 			Str("policy", "retain").
 			Msg("teardown policy=retain; operator action required")
+		notify("retained")
 		return nil
 
 	default:
