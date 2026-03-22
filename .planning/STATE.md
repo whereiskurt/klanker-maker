@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 09-03-PLAN.md
-last_updated: "2026-03-22T23:14:33.045Z"
+stopped_at: Completed 09-04-PLAN.md
+last_updated: "2026-03-22T23:27:58.532Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 10
   completed_phases: 9
-  total_plans: 41
-  completed_plans: 39
+  total_plans: 42
+  completed_plans: 40
   percent: 0
 ---
 
@@ -88,6 +88,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 09-live-infrastructure-operator-docs P01 | 20min | 2 tasks | 4 files |
 | Phase 09-live-infrastructure-operator-docs P02 | 128s | 2 tasks | 5 files |
 | Phase 09 P03 | 94s | 1 tasks | 1 files |
+| Phase 09-live-infrastructure-operator-docs P04 | 3min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -201,6 +202,7 @@ Recent decisions affecting current work:
 - [Phase 09-02]: budget-enforcer destroy fires before main sandbox destroy — Lambda depends on sandbox IAM role and instance ID which main module manages
 - [Phase 09]: OPERATOR-GUIDE.md documents km configure as the SSO/config entry point (INFR-02) — satisfies requirement through documentation, not code
 - [Phase 09]: Deployment ordering in operator guide: network first, then dynamodb-budget/ses/ttl-handler in any order, all before km create
+- [Phase 09-04]: lambda_zip_path uses build/budget-enforcer.zip matching Makefile build-lambdas output — dist/ path never existed and caused terragrunt apply to fail at Terraform validation
 
 ### Roadmap Evolution
 
@@ -220,6 +222,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T23:14:33.043Z
-Stopped at: Completed 09-03-PLAN.md
+Last session: 2026-03-22T23:27:58.530Z
+Stopped at: Completed 09-04-PLAN.md
 Resume file: None
