@@ -34,6 +34,8 @@ github.com/aws/aws-sdk-go-v2/service/s3 v1.97.1 h1:csi9NLpFZXb9fxY7rS1xVzgPRGMt7
 github.com/aws/aws-sdk-go-v2/service/s3 v1.97.1/go.mod h1:qXVal5H0ChqXP63t6jze5LmFalc7+ZE7wOdLtZ0LCP0=
 github.com/aws/aws-sdk-go-v2/service/scheduler v1.17.21 h1:PXsWg8Shok6JwNQ2ImU9kQbsj4PkE3FH/7v86XxJftQ=
 github.com/aws/aws-sdk-go-v2/service/scheduler v1.17.21/go.mod h1:RXpd3Unqzl4PxmAur766LbHn2pZHK+gtf5ElvIFf+ik=
+github.com/aws/aws-sdk-go-v2/service/sesv2 v1.60.1 h1:vcU2PQ6/w4/somGiLRh21oUR3XOo7siz7lfkVtCiRQs=
+github.com/aws/aws-sdk-go-v2/service/sesv2 v1.60.1/go.mod h1:nLnJ93FXJeFHnJZEbm473c1BFHkg/kuCk7PDpv7OnnI=
 github.com/aws/aws-sdk-go-v2/service/signin v1.0.8 h1:0GFOLzEbOyZABS3PhYfBIx2rNBACYcKty+XGkTgw1ow=
 github.com/aws/aws-sdk-go-v2/service/signin v1.0.8/go.mod h1:LXypKvk85AROkKhOG6/YEcHFPoX+prKTowKnVdcaIxE=
 github.com/aws/aws-sdk-go-v2/service/ssm v1.68.3 h1:bBoWhx8lsFLTXintRX64ZBXcmFZbGqUmaPUrjXECqIc=
