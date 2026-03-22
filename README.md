@@ -3,7 +3,7 @@
 <p align="center">
   <img src="docs/klanker.blackdone.jpeg" alt="Klanker Maker — robots working inside a sandboxed dome" width="480" />
   <br />
-  <sub>Image credit: generated with <a href="https://chatgpt.com">ChatGPT</a> (DALL-E)</sub>
+  <sub>Art by Mike Wigmore (<a href="https://github.com/mikewigmore">@mikewigmore</a>)</sub>
 </p>
 
 **Define a sandbox policy. Set a budget. Let your klankers run.**
