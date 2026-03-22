@@ -19,6 +19,9 @@ infra/live/*/sandboxes/sb-*/
 infra/live/*/region.hcl
 infra/live/network/
 
+# Build output directory (cross-compiled sidecar binaries)
+build/
+
 # Compiled binaries
 /km
 /dns-proxy
