@@ -66,7 +66,7 @@ let parentEditor = null;
 let validateDebounceTimer = null;
 
 const DEBOUNCE_MS = 500;
-const NEW_PROFILE_TEMPLATE = `apiVersion: klankermaker.ai/v1alpha1
+const NEW_PROFILE_TEMPLATE = `apiVersion: {{.Domain}}/v1alpha1
 kind: SandboxProfile
 metadata:
   name: new-profile

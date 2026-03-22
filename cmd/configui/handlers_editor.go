@@ -36,13 +36,19 @@ type EditorData struct {
 	ActivePage     string
 	ProfileContent string
 	ProfileName    string
+	Domain         string // base domain for profile template branding (e.g. "klankermaker.ai")
 }
 
 // handleEditorPage serves GET /editor — the Monaco YAML profile editor page.
 // If ?profile=name is provided it pre-loads that profile's content for editing.
 func (h *Handler) handleEditorPage(w http.ResponseWriter, r *http.Request) {
+	domain := h.domain
+	if domain == "" {
+		domain = "klankermaker.ai"
+	}
 	data := EditorData{
 		ActivePage: "editor",
+		Domain:     domain,
 	}
 
 	// Pre-load a profile if ?profile= query param is present.

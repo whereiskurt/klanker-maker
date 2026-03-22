@@ -119,6 +119,7 @@ func main() {
 		creator:     creator,
 		profilesDir: *profilesDir,
 		bucket:      *bucket,
+		domain:      envOrDefault("KM_DOMAIN", "klankermaker.ai"),
 	}
 
 	// Static file server from embedded FS (strip "static" prefix).

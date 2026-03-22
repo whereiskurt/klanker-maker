@@ -3,7 +3,7 @@ locals {
   site = {
     label           = "km"
     tf_state_prefix = "tf-km"
-    domain          = "klankermaker.ai"
+    domain          = get_env("KM_DOMAIN", "klankermaker.ai")
     random_suffix   = get_env("KMGUID", "")
   }
 

@@ -75,6 +75,7 @@ type Handler struct {
 	creator     SandboxCreator
 	profilesDir string
 	bucket      string
+	domain      string // base domain for branding (e.g. "klankermaker.ai"); from KM_DOMAIN env
 }
 
 // BasePage provides fields common to all full-page templates (nav active state).
