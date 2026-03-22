@@ -31,6 +31,11 @@ type CompiledArtifacts struct {
 
 	// SecretPaths is the list of SSM parameter paths to inject at boot time.
 	SecretPaths []string
+
+	// BudgetEnforcerHCL is the content for budget-enforcer/terragrunt.hcl
+	// (empty if no budget defined). Written to sandbox-dir/budget-enforcer/
+	// and applied by km create after the main sandbox apply.
+	BudgetEnforcerHCL string
 }
 
 // SGRule is a single SG egress rule emitted by the compiler.
@@ -97,13 +102,23 @@ func compileEC2(p *profile.SandboxProfile, sandboxID string, onDemand bool, netw
 		return nil, fmt.Errorf("generate EC2 service.hcl: %w", err)
 	}
 
+	// Generate budget-enforcer HCL when budget is defined in the profile.
+	var budgetEnforcerHCL string
+	if p.Spec.Budget != nil {
+		budgetEnforcerHCL, err = generateBudgetEnforcerHCL(sandboxID)
+		if err != nil {
+			return nil, fmt.Errorf("generate budget-enforcer HCL: %w", err)
+		}
+	}
+
 	return &CompiledArtifacts{
-		SandboxID:     sandboxID,
-		ServiceHCL:    svcHCL,
-		UserData:      userData,
-		SGEgressRules: sgRules,
-		IAMPolicy:     iamPolicy,
-		SecretPaths:   secretPaths,
+		SandboxID:         sandboxID,
+		ServiceHCL:        svcHCL,
+		UserData:          userData,
+		SGEgressRules:     sgRules,
+		IAMPolicy:         iamPolicy,
+		SecretPaths:       secretPaths,
+		BudgetEnforcerHCL: budgetEnforcerHCL,
 	}, nil
 }
 
@@ -123,12 +138,23 @@ func compileECS(p *profile.SandboxProfile, sandboxID string, onDemand bool, netw
 		return nil, fmt.Errorf("generate ECS service.hcl: %w", err)
 	}
 
+	// Generate budget-enforcer HCL when budget is defined in the profile.
+	var budgetEnforcerHCL string
+	if p.Spec.Budget != nil {
+		var beErr error
+		budgetEnforcerHCL, beErr = generateBudgetEnforcerHCL(sandboxID)
+		if beErr != nil {
+			return nil, fmt.Errorf("generate budget-enforcer HCL: %w", beErr)
+		}
+	}
+
 	return &CompiledArtifacts{
-		SandboxID:     sandboxID,
-		ServiceHCL:    svcHCL,
-		UserData:      "", // ECS containers handle their own setup — no bootstrap script
-		SGEgressRules: sgRules,
-		IAMPolicy:     iamPolicy,
-		SecretPaths:   secretPaths,
+		SandboxID:         sandboxID,
+		ServiceHCL:        svcHCL,
+		UserData:          "", // ECS containers handle their own setup — no bootstrap script
+		SGEgressRules:     sgRules,
+		IAMPolicy:         iamPolicy,
+		SecretPaths:       secretPaths,
+		BudgetEnforcerHCL: budgetEnforcerHCL,
 	}, nil
 }
