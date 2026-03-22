@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"text/template"
 
@@ -86,6 +87,14 @@ for PATH_KEY in "${!SECRET_PATHS[@]}"; do
 done
 {{- else }}
 echo "[km-bootstrap] No secrets to inject"
+{{- end }}
+
+# ============================================================
+# 3.5. Email address: expose sandbox email as env var
+# ============================================================
+{{- if .SandboxEmail }}
+export KM_EMAIL_ADDRESS="{{ .SandboxEmail }}"
+echo "[km-bootstrap] KM_EMAIL_ADDRESS={{ .SandboxEmail }}"
 {{- end }}
 
 # ============================================================
@@ -236,6 +245,12 @@ chmod +x /opt/km/bin/km-upload-artifacts
       {{- if .ArtifactPaths }}
       /opt/km/bin/km-upload-artifacts || true
       {{- end }}
+      {{- if .OperatorEmail }}
+      aws sesv2 send-email --from-email-address "notifications@sandboxes.klankermaker.ai" \
+        --destination "ToAddresses={{ .OperatorEmail }}" \
+        --content "Simple={Subject={Data='km sandbox spot-interruption: {{ .SandboxID }}'},Body={Text={Data='Sandbox {{ .SandboxID }} received spot interruption notice. Artifacts uploaded (best-effort).'}}}" \
+        --region "${AWS_DEFAULT_REGION}" 2>&1 || echo "[km-spot] WARN: failed to send spot notification"
+      {{- end }}
       echo "[km-spot] Shutdown handler complete"
       break
     fi
@@ -265,6 +280,10 @@ type userDataParams struct {
 	UseSpot           bool
 	ArtifactPaths     []string
 	ArtifactMaxSizeMB int
+	// Email fields (MAIL-02 through MAIL-05)
+	SandboxEmail  string // {sandbox-id}@sandboxes.klankermaker.ai
+	OperatorEmail string // from KM_OPERATOR_EMAIL env var — for spot notification
+	AWSRegion     string // from IMDS region — for spot notification ses send-email CLI call
 }
 
 // generateUserData produces the EC2 bootstrap user-data.sh content for the given profile.
@@ -277,6 +296,8 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		return "", err
 	}
 
+	const emailDomain = "sandboxes.klankermaker.ai"
+
 	params := userDataParams{
 		SandboxID:          sandboxID,
 		SecretPaths:        secretPaths,
@@ -285,6 +306,10 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		AllowedHTTPHosts:   strings.Join(p.Spec.Network.Egress.AllowedHosts, ","),
 		KMArtifactsBucket:  artifactsBucket,
 		UseSpot:            useSpot,
+		// Email fields — every sandbox gets an email identity.
+		SandboxEmail:  sandboxID + "@" + emailDomain,
+		OperatorEmail: os.Getenv("KM_OPERATOR_EMAIL"),
+		AWSRegion:     p.Spec.Runtime.Region,
 	}
 
 	// Populate filesystem policy fields (nil-safe)

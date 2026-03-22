@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
+	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
@@ -197,6 +198,14 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		}
 	}
 
+	// Determine artifact bucket for S3 operations.
+	artifactBucket := os.Getenv("KM_ARTIFACTS_BUCKET")
+	if artifactBucket == "" {
+		artifactBucket = "km-sandbox-artifacts-ea554771"
+	}
+
+	s3Client := s3.NewFromConfig(awsCfg)
+
 	if cfg.StateBucket != "" {
 		meta := awspkg.SandboxMetadata{
 			SandboxID:   sandboxID,
@@ -207,7 +216,6 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 			TTLExpiry:   ttlExpiry,
 		}
 		metaJSON, _ := json.Marshal(meta)
-		s3Client := s3.NewFromConfig(awsCfg)
 		_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
 			Bucket:      aws.String(cfg.StateBucket),
 			Key:         aws.String("tf-km/sandboxes/" + sandboxID + "/metadata.json"),
@@ -220,6 +228,24 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		}
 	} else {
 		log.Debug().Msg("KM_STATE_BUCKET not set — skipping sandbox metadata write")
+	}
+
+	// Step 11b: Store profile YAML in S3 so km destroy can load it for artifact upload.
+	// Non-fatal: artifact upload in destroy will be skipped with a warning if unavailable.
+	profileYAML, _ := os.ReadFile(profilePath)
+	if len(profileYAML) > 0 {
+		_, profilePutErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:      aws.String(artifactBucket),
+			Key:         aws.String("artifacts/" + sandboxID + "/.km-profile.yaml"),
+			Body:        bytes.NewReader(profileYAML),
+			ContentType: aws.String("application/x-yaml"),
+		})
+		if profilePutErr != nil {
+			log.Warn().Err(profilePutErr).Str("sandbox_id", sandboxID).
+				Msg("failed to store profile in S3 (non-fatal — artifact upload in destroy may be skipped)")
+		} else {
+			log.Debug().Str("sandbox_id", sandboxID).Msg("profile stored in S3 for destroy retrieval")
+		}
 	}
 
 	// Step 12: Create EventBridge TTL schedule if TTL is configured and Lambda ARN is set.
@@ -236,7 +262,27 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		}
 	}
 
+	// Step 13: Provision SES email identity for the sandbox.
+	// Non-fatal: sandbox is still usable without email.
+	const emailDomain = "sandboxes.klankermaker.ai"
+	sesClient := sesv2.NewFromConfig(awsCfg)
+	emailAddr, emailErr := awspkg.ProvisionSandboxEmail(ctx, sesClient, sandboxID, emailDomain)
+	if emailErr != nil {
+		log.Warn().Err(emailErr).Msg("failed to provision sandbox email (non-fatal)")
+	} else {
+		log.Info().Str("email", emailAddr).Msg("sandbox email provisioned")
+		fmt.Fprintf(os.Stdout, "Email: %s\n", emailAddr)
+	}
+
 	fmt.Printf("Sandbox %s created successfully.\n", sandboxID)
+
+	// Step 14: Send lifecycle notification if operator email is configured.
+	if operatorEmail := os.Getenv("KM_OPERATOR_EMAIL"); operatorEmail != "" {
+		if err := awspkg.SendLifecycleNotification(ctx, sesClient, operatorEmail, sandboxID, "created", emailDomain); err != nil {
+			log.Warn().Err(err).Msg("failed to send created lifecycle notification (non-fatal)")
+		}
+	}
+
 	return nil
 }
 

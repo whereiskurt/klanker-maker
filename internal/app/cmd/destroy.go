@@ -4,18 +4,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
+	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/compiler"
+	"github.com/whereiskurt/klankrmkr/pkg/lifecycle"
+	profilepkg "github.com/whereiskurt/klankrmkr/pkg/profile"
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
 )
 
@@ -154,8 +160,39 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool) er
 		log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("failed to delete TTL schedule (non-fatal)")
 	}
 
-	// Step 7: Run terragrunt destroy (streams output in real time)
-	if err := runner.Destroy(ctx, sandboxDir); err != nil {
+	// Step 7: Attempt to load sandbox profile from S3 for artifact upload.
+	// Profile is stored during km create at artifacts/{sandbox-id}/.km-profile.yaml.
+	// If unavailable (missing or S3 unreachable), artifact upload is skipped with a warning.
+	artifactBucket := os.Getenv("KM_ARTIFACTS_BUCKET")
+	if artifactBucket == "" {
+		artifactBucket = "km-sandbox-artifacts-ea554771"
+	}
+	s3Client := s3.NewFromConfig(awsCfg)
+	var sandboxProfile *profilepkg.SandboxProfile
+	profileBytes, profileLoadErr := downloadProfileFromS3(ctx, s3Client, artifactBucket, sandboxID)
+	if profileLoadErr != nil {
+		log.Warn().Err(profileLoadErr).Msg("could not load sandbox profile from S3; skipping artifact upload in destroy path")
+	} else {
+		sandboxProfile, _ = profilepkg.Parse(profileBytes)
+	}
+
+	// Step 8: Run terragrunt destroy (streams output in real time)
+	destroyFunc := func(dCtx context.Context, sid string) error {
+		return runner.Destroy(dCtx, sandboxDir)
+	}
+	uploadFunc := func(uCtx context.Context, sid string) error {
+		if sandboxProfile == nil || sandboxProfile.Spec.Artifacts == nil || len(sandboxProfile.Spec.Artifacts.Paths) == 0 {
+			return nil
+		}
+		_, _, err := awspkg.UploadArtifacts(uCtx, s3Client, artifactBucket, sid,
+			sandboxProfile.Spec.Artifacts.Paths, sandboxProfile.Spec.Artifacts.MaxSizeMB)
+		return err
+	}
+	callbacks := lifecycle.TeardownCallbacks{
+		Destroy:         destroyFunc,
+		UploadArtifacts: uploadFunc,
+	}
+	if err := lifecycle.ExecuteTeardown(ctx, "destroy", sandboxID, callbacks); err != nil {
 		return fmt.Errorf("terragrunt destroy failed for sandbox %s: %w", sandboxID, err)
 	}
 
@@ -164,8 +201,38 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool) er
 		log.Warn().Err(err).Str("sandboxDir", sandboxDir).Msg("failed to clean up local sandbox directory")
 	}
 
+	// Step 10: Clean up SES email identity (idempotent — swallows NotFoundException).
+	const emailDomain = "sandboxes.klankermaker.ai"
+	sesClient := sesv2.NewFromConfig(awsCfg)
+	if err := awspkg.CleanupSandboxEmail(ctx, sesClient, sandboxID, emailDomain); err != nil {
+		log.Warn().Err(err).Msg("failed to cleanup sandbox email (non-fatal)")
+	}
+
 	fmt.Printf("Sandbox %s destroyed successfully.\n", sandboxID)
+
+	// Step 11: Send lifecycle notification if operator email is configured.
+	if operatorEmail := os.Getenv("KM_OPERATOR_EMAIL"); operatorEmail != "" {
+		if err := awspkg.SendLifecycleNotification(ctx, sesClient, operatorEmail, sandboxID, "destroyed", emailDomain); err != nil {
+			log.Warn().Err(err).Msg("failed to send destroyed lifecycle notification (non-fatal)")
+		}
+	}
+
 	return nil
+}
+
+// downloadProfileFromS3 retrieves the sandbox profile YAML stored at
+// artifacts/{sandboxID}/.km-profile.yaml in the given S3 bucket.
+func downloadProfileFromS3(ctx context.Context, client *s3.Client, bucket, sandboxID string) ([]byte, error) {
+	key := "artifacts/" + sandboxID + "/.km-profile.yaml"
+	resp, err := client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get profile from S3 s3://%s/%s: %w", bucket, key, err)
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
 }
 
 // findSandboxDir scans region directories for the sandbox ID.

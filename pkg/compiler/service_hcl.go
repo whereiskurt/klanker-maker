@@ -111,6 +111,9 @@ const ecsServiceHCLTemplate = `locals {
           { name = "HTTP_PROXY",    value = "http://localhost:3128" },
           { name = "HTTPS_PROXY",   value = "http://localhost:3128" },
           { name = "NO_PROXY",      value = "169.254.169.254,169.254.170.2,localhost,127.0.0.1" },
+{{- if .HasEmail }}
+          { name = "KM_EMAIL_ADDRESS", value = "{{ .SandboxEmail }}" },
+{{- end }}
         ]
 {{- if .EffectiveWritablePaths }}
         mountPoints = [
@@ -202,6 +205,36 @@ const ecsServiceHCLTemplate = `locals {
       {{ sgRuleHCL . }},
 {{- end }}
     ]
+{{- if .HasEmail }}
+
+    task_role_policy_statements = [
+      {
+        effect   = "Allow"
+        actions  = ["ses:SendEmail", "ses:SendRawEmail"]
+        resources = ["*"]
+        condition = {
+          test     = "StringEquals"
+          variable = "ses:FromAddress"
+          values   = ["{{ .SandboxEmail }}"]
+        }
+      },
+      {
+        effect    = "Allow"
+        actions   = ["s3:ListObjectsV2", "s3:GetObject"]
+        resources = ["arn:aws:s3:::{{ .ArtifactBucket }}/mail/{{ .SandboxID }}/*"]
+      },
+      {
+        effect    = "Allow"
+        actions   = ["s3:ListBucket"]
+        resources = ["arn:aws:s3:::{{ .ArtifactBucket }}"]
+        condition = {
+          test     = "StringLike"
+          variable = "s3:prefix"
+          values   = ["mail/{{ .SandboxID }}/*"]
+        }
+      },
+    ]
+{{- end }}
   }
 }
 `
@@ -253,6 +286,10 @@ type ecsHCLParams struct {
 	// Filesystem enforcement fields (populated from profile policy)
 	HasFilesystemPolicy    bool     // true if FilesystemPolicy is set
 	EffectiveWritablePaths []string // WritablePaths + auto-injected /tmp when readonlyRootFilesystem is true
+	// Email fields (MAIL-02 through MAIL-05)
+	HasEmail       bool   // always true in Phase 4 — every sandbox gets an email identity
+	SandboxEmail   string // {sandbox-id}@sandboxes.klankermaker.ai
+	ArtifactBucket string // km-sandbox-artifacts-ea554771 (for S3 inbox read IAM)
 }
 
 // ============================================================
@@ -365,6 +402,14 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		// We keep the placeholder here; real image set at provision time.
 	}
 
+	// Email domain and bucket constants for Phase 4.
+	const emailDomain = "sandboxes.klankermaker.ai"
+	const defaultArtifactBucket = "km-sandbox-artifacts-ea554771"
+	artifactBucket := os.Getenv("KM_ARTIFACTS_BUCKET")
+	if artifactBucket == "" {
+		artifactBucket = defaultArtifactBucket
+	}
+
 	params := ecsHCLParams{
 		ProfileName:           p.Metadata.Name,
 		SandboxID:             sandboxID,
@@ -382,7 +427,11 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		SGEgressRules:         sgRules,
 		AllowedDNSSuffixes:    strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
 		AllowedHTTPHosts:      strings.Join(p.Spec.Network.Egress.AllowedHosts, ","),
-		ArtifactsBucket:       os.Getenv("KM_ARTIFACTS_BUCKET"),
+		ArtifactsBucket:       artifactBucket,
+		// Email fields — every Phase 4 sandbox gets an email identity.
+		HasEmail:       true,
+		SandboxEmail:   sandboxID + "@" + emailDomain,
+		ArtifactBucket: artifactBucket,
 	}
 
 	// Populate filesystem enforcement fields (nil-safe).
