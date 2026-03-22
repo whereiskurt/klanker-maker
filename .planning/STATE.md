@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 04-03-PLAN.md — Filesystem enforcement, spot handling, ECS spot handler module
-last_updated: "2026-03-22T13:50:18.648Z"
+stopped_at: Completed 04-04-PLAN.md — SES email wiring, artifact upload callbacks, IAM permissions, S3 replication module
+last_updated: "2026-03-22T13:59:34.559Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 5
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 18
-  completed_plans: 16
+  completed_plans: 17
   percent: 0
 ---
 
@@ -65,6 +65,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 04-lifecycle-hardening-artifacts-email P01 | 237s | 2 tasks | 8 files |
 | Phase 04-lifecycle-hardening-artifacts-email P02 | 3min | 2 tasks | 5 files |
 | Phase 04-lifecycle-hardening-artifacts-email P03 | 5min | 3 tasks | 10 files |
+| Phase 04-lifecycle-hardening-artifacts-email P04 | 371s | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -119,6 +120,9 @@ Recent decisions affecting current work:
 - [Phase 04-03]: Two-step bind mount required for EC2 read-only enforcement (mount --bind then remount,bind,ro)
 - [Phase 04-03]: ECS Fargate writable volumes use scope=task named volumes, not linuxParameters.tmpfs (Fargate does not support tmpfs)
 - [Phase 04-03]: UploadArtifacts called for ALL teardown policies including retain — data preservation always desired
+- [Phase 04-lifecycle-hardening-artifacts-email]: Profile YAML stored in S3 at artifacts/{sandbox-id}/.km-profile.yaml to enable destroy-path artifact upload without passing profile through command args
+- [Phase 04-lifecycle-hardening-artifacts-email]: SES IAM uses ses:FromAddress StringEquals condition — each sandbox can only send from its own address, preventing cross-sandbox email abuse
+- [Phase 04-lifecycle-hardening-artifacts-email]: S3 replication excludes mail/ prefix — inbox objects are ephemeral; only artifacts/ is replicated for durability
 
 ### Pending Todos
 
@@ -134,6 +138,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T13:50:18.646Z
-Stopped at: Completed 04-03-PLAN.md — Filesystem enforcement, spot handling, ECS spot handler module
+Last session: 2026-03-22T13:59:34.557Z
+Stopped at: Completed 04-04-PLAN.md — SES email wiring, artifact upload callbacks, IAM permissions, S3 replication module
 Resume file: None
