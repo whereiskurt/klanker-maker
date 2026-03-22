@@ -1,0 +1,246 @@
+package cmd_test
+
+import (
+	"context"
+	"os/exec"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/spf13/cobra"
+	"github.com/whereiskurt/klankrmkr/internal/app/cmd"
+	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+)
+
+// ---- Helpers ----
+
+func runShellCmd(t *testing.T, fetcher cmd.SandboxFetcher, capturedArgs *[]string, args ...string) error {
+	t.Helper()
+	cfg := &config.Config{}
+	root := &cobra.Command{Use: "km"}
+	shellCmd := cmd.NewShellCmdWithFetcher(cfg, fetcher, func(c *exec.Cmd) error {
+		*capturedArgs = c.Args
+		return nil
+	})
+	root.AddCommand(shellCmd)
+
+	root.SetArgs(append([]string{"shell"}, args...))
+
+	return root.Execute()
+}
+
+// ---- Tests ----
+
+// TestShellCmd_EC2 verifies that an EC2 sandbox dispatches to
+// `aws ssm start-session --target <instance-id> --region <region>`.
+func TestShellCmd_EC2(t *testing.T) {
+	createdAt := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+
+	fetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID: "sb-ec2",
+			Profile:   "open-dev",
+			Substrate: "ec2",
+			Region:    "us-east-1",
+			Status:    "running",
+			CreatedAt: createdAt,
+			Resources: []string{
+				"arn:aws:ec2:us-east-1:123456789012:instance/i-0abc123def456",
+				"arn:aws:ec2:us-east-1:123456789012:security-group/sg-0def456",
+			},
+		},
+	}
+
+	var capturedArgs []string
+	err := runShellCmd(t, fetcher, &capturedArgs, "sb-ec2")
+	if err != nil {
+		t.Fatalf("shell command returned error: %v", err)
+	}
+
+	// Must include SSM start-session
+	if len(capturedArgs) < 4 {
+		t.Fatalf("expected at least 4 args, got %d: %v", len(capturedArgs), capturedArgs)
+	}
+
+	fullCmd := strings.Join(capturedArgs, " ")
+	if !strings.Contains(fullCmd, "ssm") {
+		t.Errorf("expected 'ssm' in command, got: %s", fullCmd)
+	}
+	if !strings.Contains(fullCmd, "start-session") {
+		t.Errorf("expected 'start-session' in command, got: %s", fullCmd)
+	}
+	if !strings.Contains(fullCmd, "--target") {
+		t.Errorf("expected '--target' in command, got: %s", fullCmd)
+	}
+	if !strings.Contains(fullCmd, "i-0abc123def456") {
+		t.Errorf("expected instance ID 'i-0abc123def456' in command, got: %s", fullCmd)
+	}
+	if !strings.Contains(fullCmd, "--region") {
+		t.Errorf("expected '--region' in command, got: %s", fullCmd)
+	}
+	if !strings.Contains(fullCmd, "us-east-1") {
+		t.Errorf("expected region 'us-east-1' in command, got: %s", fullCmd)
+	}
+}
+
+// TestShellCmd_ECS verifies that an ECS sandbox dispatches to
+// `aws ecs execute-command --cluster <arn> --task <arn> --interactive --command /bin/bash --region <region>`.
+func TestShellCmd_ECS(t *testing.T) {
+	createdAt := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+
+	fetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID: "sb-ecs",
+			Profile:   "ecs-dev",
+			Substrate: "ecs",
+			Region:    "us-west-2",
+			Status:    "running",
+			CreatedAt: createdAt,
+			Resources: []string{
+				"arn:aws:ecs:us-west-2:123456789012:cluster/sb-ecs-cluster",
+				"arn:aws:ecs:us-west-2:123456789012:task/sb-ecs-cluster/abc123task456",
+				"arn:aws:ecs:us-west-2:123456789012:service/sb-ecs-cluster/sb-ecs-service",
+			},
+		},
+	}
+
+	var capturedArgs []string
+	err := runShellCmd(t, fetcher, &capturedArgs, "sb-ecs")
+	if err != nil {
+		t.Fatalf("shell command returned error: %v", err)
+	}
+
+	fullCmd := strings.Join(capturedArgs, " ")
+	if !strings.Contains(fullCmd, "ecs") {
+		t.Errorf("expected 'ecs' in command, got: %s", fullCmd)
+	}
+	if !strings.Contains(fullCmd, "execute-command") {
+		t.Errorf("expected 'execute-command' in command, got: %s", fullCmd)
+	}
+	if !strings.Contains(fullCmd, "--cluster") {
+		t.Errorf("expected '--cluster' in command, got: %s", fullCmd)
+	}
+	if !strings.Contains(fullCmd, "sb-ecs-cluster") {
+		t.Errorf("expected cluster ARN in command, got: %s", fullCmd)
+	}
+	if !strings.Contains(fullCmd, "--task") {
+		t.Errorf("expected '--task' in command, got: %s", fullCmd)
+	}
+	if !strings.Contains(fullCmd, "abc123task456") {
+		t.Errorf("expected task ARN in command, got: %s", fullCmd)
+	}
+	if !strings.Contains(fullCmd, "--interactive") {
+		t.Errorf("expected '--interactive' in command, got: %s", fullCmd)
+	}
+	if !strings.Contains(fullCmd, "--command") {
+		t.Errorf("expected '--command' in command, got: %s", fullCmd)
+	}
+	if !strings.Contains(fullCmd, "/bin/bash") {
+		t.Errorf("expected '/bin/bash' in command, got: %s", fullCmd)
+	}
+	if !strings.Contains(fullCmd, "--region") {
+		t.Errorf("expected '--region' in command, got: %s", fullCmd)
+	}
+	if !strings.Contains(fullCmd, "us-west-2") {
+		t.Errorf("expected region 'us-west-2' in command, got: %s", fullCmd)
+	}
+}
+
+// TestShellCmd_StoppedSandbox verifies that a stopped sandbox returns an error.
+func TestShellCmd_StoppedSandbox(t *testing.T) {
+	createdAt := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+
+	fetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID: "sb-stopped",
+			Profile:   "open-dev",
+			Substrate: "ec2",
+			Region:    "us-east-1",
+			Status:    "stopped",
+			CreatedAt: createdAt,
+			Resources: []string{
+				"arn:aws:ec2:us-east-1:123456789012:instance/i-0abc123def456",
+			},
+		},
+	}
+
+	var capturedArgs []string
+	err := runShellCmd(t, fetcher, &capturedArgs, "sb-stopped")
+	if err == nil {
+		t.Fatal("expected error for stopped sandbox, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "stopped") {
+		t.Errorf("expected error to contain 'stopped', got: %v", err)
+	}
+}
+
+// TestShellCmd_UnknownSubstrate verifies that an unsupported substrate returns an error.
+func TestShellCmd_UnknownSubstrate(t *testing.T) {
+	createdAt := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+
+	fetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID: "sb-k8s",
+			Profile:   "k8s-dev",
+			Substrate: "k8s",
+			Region:    "us-east-1",
+			Status:    "running",
+			CreatedAt: createdAt,
+		},
+	}
+
+	var capturedArgs []string
+	err := runShellCmd(t, fetcher, &capturedArgs, "sb-k8s")
+	if err == nil {
+		t.Fatal("expected error for unknown substrate, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "k8s") {
+		t.Errorf("expected error to mention substrate 'k8s', got: %v", err)
+	}
+}
+
+// TestShellCmd_MissingInstanceID verifies that an EC2 sandbox with no instance ARN returns an error.
+func TestShellCmd_MissingInstanceID(t *testing.T) {
+	createdAt := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+
+	fetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID: "sb-noinstance",
+			Profile:   "open-dev",
+			Substrate: "ec2",
+			Region:    "us-east-1",
+			Status:    "running",
+			CreatedAt: createdAt,
+			Resources: []string{
+				// Only a security group, no instance ARN
+				"arn:aws:ec2:us-east-1:123456789012:security-group/sg-0def456",
+			},
+		},
+	}
+
+	var capturedArgs []string
+	err := runShellCmd(t, fetcher, &capturedArgs, "sb-noinstance")
+	if err == nil {
+		t.Fatal("expected error for missing instance ID, got nil")
+	}
+}
+
+// Compile-time check that fakeFetcher (defined in status_test.go) implements SandboxFetcher.
+var _ cmd.SandboxFetcher = (*fakeFetcher)(nil)
+
+// Compile-time check that the ShellExecFunc type is correct.
+var _ cmd.ShellExecFunc = func(c *exec.Cmd) error { return nil }
+
+// fakeShellFetcher provides a sandbox record inline for shell tests that need
+// a standalone fetcher (avoids conflict with fakeFetcher in status_test.go).
+type fakeShellFetcher struct {
+	record *kmaws.SandboxRecord
+	err    error
+}
+
+func (f *fakeShellFetcher) FetchSandbox(_ context.Context, _ string) (*kmaws.SandboxRecord, error) {
+	return f.record, f.err
+}
