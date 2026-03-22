@@ -3,10 +3,11 @@
 //
 // Environment variables:
 //
-//	AUDIT_LOG_DEST   — destination: "stdout" (default), "cloudwatch", "s3"
-//	SANDBOX_ID       — sandbox identifier (e.g. "sb-a1b2c3d4")
-//	CW_LOG_GROUP     — CloudWatch log group (default: "/km/sandboxes/<SANDBOX_ID>/")
-//	AWS_REGION       — AWS region for CloudWatch (default: "us-east-1")
+//	AUDIT_LOG_DEST        — destination: "stdout" (default), "cloudwatch", "s3"
+//	SANDBOX_ID            — sandbox identifier (e.g. "sb-a1b2c3d4")
+//	CW_LOG_GROUP          — CloudWatch log group (default: "/km/sandboxes/<SANDBOX_ID>/")
+//	AWS_REGION            — AWS region for CloudWatch (default: "us-east-1")
+//	IDLE_TIMEOUT_MINUTES  — if set and dest is cloudwatch, starts idle detection goroutine
 //
 // On EC2: piped from shell audit hook (PROMPT_COMMAND in /etc/profile.d/km-audit.sh)
 // and receives events from dns-proxy and http-proxy via systemd journal pipe.
@@ -18,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -27,6 +29,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	lifecycle "github.com/whereiskurt/klankrmkr/pkg/lifecycle"
 	auditlog "github.com/whereiskurt/klankrmkr/sidecars/audit-log"
 )
 
@@ -47,9 +50,41 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	dest, err := buildDest(ctx, destName, cwLogGroup)
+	// Pre-create CW client when dest is cloudwatch so it can be shared with
+	// both the destination and the idle detector.
+	var cwClient kmaws.CWLogsAPI
+	if destName == "cloudwatch" {
+		var err error
+		cwClient, err = newCWClient(ctx, envOr("AWS_REGION", "us-east-1"))
+		if err != nil {
+			log.Fatal().Err(err).Msg("audit-log: failed to create CloudWatch client")
+		}
+	}
+
+	dest, err := buildDest(ctx, destName, cwLogGroup, cwClient)
 	if err != nil {
 		log.Fatal().Err(err).Msg("audit-log: failed to initialize destination")
+	}
+
+	// Wire IdleDetector when IDLE_TIMEOUT_MINUTES is set and dest is cloudwatch.
+	idleTimeoutStr := envOr("IDLE_TIMEOUT_MINUTES", "")
+	if idleTimeoutStr != "" && destName == "cloudwatch" {
+		idleMinutes, parseErr := strconv.Atoi(idleTimeoutStr)
+		if parseErr != nil {
+			log.Warn().Str("IDLE_TIMEOUT_MINUTES", idleTimeoutStr).Err(parseErr).
+				Msg("audit-log: invalid IDLE_TIMEOUT_MINUTES, idle detection disabled")
+		} else {
+			detector := newIdleDetector(sandboxID, idleMinutes, cwClient, cwLogGroup, "audit", func(id string) {
+				log.Warn().Str("sandbox_id", id).Msg("audit-log: sandbox idle timeout reached, signaling shutdown")
+				cancel()
+			})
+			go func() {
+				if runErr := detector.Run(ctx); runErr != nil && runErr != context.Canceled {
+					log.Error().Err(runErr).Msg("audit-log: idle detector error")
+				}
+			}()
+			log.Info().Int("idle_timeout_minutes", idleMinutes).Msg("audit-log: idle detector started")
+		}
 	}
 
 	// Handle SIGTERM/SIGINT: flush and exit cleanly.
@@ -83,23 +118,55 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// buildDest constructs the configured destination. For cloudwatch, it uses
-// the real AWS SDK CloudWatch Logs client via pkg/aws helpers.
-func buildDest(ctx context.Context, destName, cwLogGroup string) (auditlog.Destination, error) {
+// newCWClient constructs an AWS CloudWatch Logs client for the given region.
+func newCWClient(ctx context.Context, region string) (kmaws.CWLogsAPI, error) {
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+	if err != nil {
+		return nil, fmt.Errorf("load AWS config: %w", err)
+	}
+	return cloudwatchlogs.NewFromConfig(cfg), nil
+}
+
+// buildDest constructs the configured destination and wraps it with a
+// RedactingDestination so that secret patterns are scrubbed before any
+// output reaches CloudWatch, S3, or stdout.
+//
+// cwClient is the pre-created CloudWatch Logs client; it is nil for non-cloudwatch dests.
+func buildDest(ctx context.Context, destName, cwLogGroup string, cwClient kmaws.CWLogsAPI) (auditlog.Destination, error) {
+	var inner auditlog.Destination
+
 	switch destName {
 	case "cloudwatch":
-		region := envOr("AWS_REGION", "us-east-1")
-		backend, err := newRealCWBackend(ctx, region, cwLogGroup, "audit")
+		backend, err := newRealCWBackend(ctx, cwClient, cwLogGroup, "audit")
 		if err != nil {
 			return nil, fmt.Errorf("build cloudwatch dest: %w", err)
 		}
-		return auditlog.NewCloudWatchDest(backend, cwLogGroup, "audit"), nil
+		inner = auditlog.NewCloudWatchDest(backend, cwLogGroup, "audit")
 
 	case "s3":
-		return auditlog.NewS3Dest(os.Stdout), nil
+		inner = auditlog.NewS3Dest(os.Stdout)
 
 	default: // "stdout" or anything else
-		return auditlog.NewStdoutDest(os.Stdout), nil
+		inner = auditlog.NewStdoutDest(os.Stdout)
+	}
+
+	// Wrap every destination with RedactingDestination — this ensures secret
+	// patterns (AWS keys, Bearer tokens, long hex strings) are scrubbed before
+	// reaching CloudWatch, S3, or stdout. Pass nil literals; regex patterns cover
+	// the standard secret formats. OBSV-07 requirement.
+	return auditlog.NewRedactingDestination(inner, nil), nil
+}
+
+// newIdleDetector constructs a lifecycle.IdleDetector for the given sandbox.
+// idleMinutes is the number of minutes of inactivity before OnIdle fires.
+func newIdleDetector(sandboxID string, idleMinutes int, cwClient kmaws.CWLogsAPI, logGroup, logStream string, onIdle func(string)) *lifecycle.IdleDetector {
+	return &lifecycle.IdleDetector{
+		SandboxID:   sandboxID,
+		IdleTimeout: time.Duration(idleMinutes) * time.Minute,
+		CWClient:    cwClient,
+		LogGroup:    logGroup,
+		LogStream:   logStream,
+		OnIdle:      onIdle,
 	}
 }
 
@@ -108,12 +175,10 @@ type realCWBackend struct {
 	client kmaws.CWLogsAPI
 }
 
-func newRealCWBackend(ctx context.Context, region, logGroup, logStream string) (*realCWBackend, error) {
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
-	if err != nil {
-		return nil, fmt.Errorf("load AWS config: %w", err)
-	}
-	client := cloudwatchlogs.NewFromConfig(cfg)
+// newRealCWBackend uses a pre-created CW client (passed in from main) to avoid
+// creating a second AWS session. It calls EnsureLogGroup to create the log group
+// and stream if they do not exist.
+func newRealCWBackend(ctx context.Context, client kmaws.CWLogsAPI, logGroup, logStream string) (*realCWBackend, error) {
 	backend := &realCWBackend{client: client}
 	if err := backend.EnsureLogGroup(ctx, logGroup, logStream); err != nil {
 		return nil, fmt.Errorf("ensure log group: %w", err)
