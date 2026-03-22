@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 09-01-PLAN.md
-last_updated: "2026-03-22T23:10:01.114Z"
+stopped_at: Completed 09-02-PLAN.md
+last_updated: "2026-03-22T23:10:44.121Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 10
   completed_phases: 8
   total_plans: 41
-  completed_plans: 37
+  completed_plans: 38
   percent: 0
 ---
 
@@ -86,6 +86,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 08-sidecar-build-deployment-pipeline P01 | 127s | 2 tasks | 6 files |
 | Phase 08-sidecar-build-deployment-pipeline P02 | 2min | 1 tasks | 2 files |
 | Phase 09-live-infrastructure-operator-docs P01 | 20min | 2 tasks | 4 files |
+| Phase 09-live-infrastructure-operator-docs P02 | 128s | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -195,6 +196,8 @@ Recent decisions affecting current work:
 - [Phase 08-02]: KM_SIDECAR_VERSION defaults to 'latest' when unset — deploy pipeline sets explicit tag; local dev gets a usable default
 - [Phase 09-01]: Lambda binaries use GOARCH=arm64 (not amd64) matching architectures=[arm64] in Terraform modules — mismatch causes exec format error
 - [Phase 09-01]: KM_ROUTE53_ZONE_ID referenced inline in ses/terragrunt.hcl only — not added to site.hcl per plan spec
+- [Phase 09-02]: Budget enforcer terragrunt.hcl reads budget_enforcer_inputs from sibling service.hcl via read_terragrunt_config — template is substrate-agnostic
+- [Phase 09-02]: budget-enforcer destroy fires before main sandbox destroy — Lambda depends on sandbox IAM role and instance ID which main module manages
 
 ### Roadmap Evolution
 
@@ -214,6 +217,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T23:10:01.112Z
-Stopped at: Completed 09-01-PLAN.md
+Last session: 2026-03-22T23:10:44.118Z
+Stopped at: Completed 09-02-PLAN.md
 Resume file: None

@@ -194,7 +194,7 @@ Plans:
   3. `infra/live/use1/ses/terragrunt.hcl` exists and deploys SES domain verification with Route53 records
   4. Budget enforcer Lambda is deployable per-sandbox via the existing Terraform module
   5. OPERATOR-GUIDE.md documents the full setup procedure: AWS accounts, SSO, km configure, km bootstrap, km init, live infra deployment
-**Plans:** 3 plans
+**Plans:** 2/3 plans executed
 
 Plans:
 - [ ] 09-01-PLAN.md — Makefile Lambda build targets + shared Terragrunt live configs (PROV-05, BUDG-02, MAIL-01)
@@ -241,5 +241,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Budget Enforcement & Platform Configuration | 9/9 | Complete   | 2026-03-22 |
 | 7. Unwired Code Paths | 2/2 | Complete   | 2026-03-22 |
 | 8. Sidecar Build & Deployment Pipeline | 2/2 | Complete   | 2026-03-22 |
-| 9. Live Infrastructure & Operator Docs | 0/3 | Planned    |  |
+| 9. Live Infrastructure & Operator Docs | 2/3 | In Progress|  |
 | 10. SCP Sandbox Containment | 0/2 | Planned    |  |
