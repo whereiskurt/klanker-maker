@@ -39,11 +39,11 @@ created: 2026-03-22
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
 | 07-01-01 | 01 | 1 | OBSV-07 | unit | `go test ./sidecars/audit-log/... -v -count=1` | ✅ | ⬜ pending |
-| 07-01-02 | 01 | 1 | OBSV-09 | unit | `go test ./internal/app/cmd/ -run TestMLflow -v -count=1` | ❌ W0 | ⬜ pending |
-| 07-02-01 | 02 | 1 | PROV-06 | unit | `go test ./sidecars/audit-log/... -v -count=1` | ❌ W0 | ⬜ pending |
+| 07-01-02 | 01 | 1 | PROV-06 | unit | `go test ./sidecars/audit-log/... -v -count=1` | ✅ | ⬜ pending |
+| 07-02-01 | 02 | 1 | OBSV-09 | unit | `go test ./internal/app/cmd/... -run TestMLflow -v -count=1` | ✅ (planned in task) | ⬜ pending |
 | 07-02-02 | 02 | 1 | CONF-03 | integration | `grep -c 'get_env.*KM_ACCOUNTS' infra/live/site.hcl` | ✅ | ⬜ pending |
-| 07-03-01 | 03 | 1 | SCHM-04 | existing | `go test ./pkg/profile/... -run TestResolve -v -count=1` | ✅ | ⬜ pending |
-| 07-03-02 | 03 | 1 | SCHM-05 | existing | `go test ./pkg/profile/... -run TestBuiltin -v -count=1` | ✅ | ⬜ pending |
+| 07-02-03 | 02 | 1 | SCHM-04 | existing | `go test ./pkg/profile/... -run TestResolve -v -count=1` | ✅ | ⬜ pending |
+| 07-02-04 | 02 | 1 | SCHM-05 | existing | `go test ./pkg/profile/... -run TestBuiltin -v -count=1` | ✅ | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
