@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Phase 5 context gathered
-last_updated: "2026-03-22T16:10:18.817Z"
+stopped_at: Completed 05-configui-01-PLAN.md
+last_updated: "2026-03-22T17:42:43.197Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 6
   completed_phases: 4
-  total_plans: 19
-  completed_plans: 19
+  total_plans: 23
+  completed_plans: 20
   percent: 0
 ---
 
@@ -68,6 +68,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 04-lifecycle-hardening-artifacts-email P04 | 371s | 2 tasks | 8 files |
 | Phase 04-lifecycle-hardening-artifacts-email P05 | 282s | 2 tasks | 11 files |
 | Phase 02-core-provisioning-security-baseline P04 | 1 | 2 tasks | 0 files |
+| Phase 05-configui P01 | 426s | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -129,6 +130,9 @@ Recent decisions affecting current work:
 - [Phase 04-lifecycle-hardening-artifacts-email]: OnNotify/OnIdleNotify: optional callbacks (nil-safe, best-effort) — backward compatible; past-tense event names match ses.go convention
 - [Phase 02-core-provisioning-security-baseline]: All 6 E2E tests passed on real AWS — EC2 spot, EC2 on-demand, ECS Fargate Spot, EC2 destroy, ECS destroy, secrets injection verified with zero orphaned resources
 - [Phase 02-core-provisioning-security-baseline]: IMDSv2 enforced on EC2 (http_tokens=required) and SSM-only access confirmed on real AWS infrastructure
+- [Phase 05-configui]: package main for all cmd/configui files — Go prohibits two packages per directory; handler logic co-located with main since no separate library consumer
+- [Phase 05-configui]: buildTestTemplates() in handlers.go with inline template strings — test isolation without filesystem; truncateID no-op registered for test compatibility
+- [Phase 05-configui]: handleSandboxLogs graceful degradation when cwClient nil or call fails — logs are informational, not critical path
 
 ### Pending Todos
 
@@ -144,6 +148,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T16:10:18.809Z
-Stopped at: Phase 5 context gathered
-Resume file: .planning/phases/05-configui/05-CONTEXT.md
+Last session: 2026-03-22T17:42:43.195Z
+Stopped at: Completed 05-configui-01-PLAN.md
+Resume file: None

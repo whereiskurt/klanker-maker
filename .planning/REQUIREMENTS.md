@@ -77,8 +77,8 @@ Requirements for initial release. Each maps to roadmap phases.
 ### ConfigUI
 
 - [ ] **CFUI-01**: Web-based profile editor for creating/editing SandboxProfile YAML
-- [ ] **CFUI-02**: Live sandbox status dashboard showing running sandboxes
-- [ ] **CFUI-03**: AWS resource discovery showing what each sandbox provisioned
+- [x] **CFUI-02**: Live sandbox status dashboard showing running sandboxes
+- [x] **CFUI-03**: AWS resource discovery showing what each sandbox provisioned
 - [ ] **CFUI-04**: SOPS secrets management UI for encrypt/decrypt operations
 
 ### Budget Enforcement
@@ -190,8 +190,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MAIL-04 | Phase 4 | Complete |
 | MAIL-05 | Phase 4 | Complete |
 | CFUI-01 | Phase 5 | Pending |
-| CFUI-02 | Phase 5 | Pending |
-| CFUI-03 | Phase 5 | Pending |
+| CFUI-02 | Phase 5 | Complete |
+| CFUI-03 | Phase 5 | Complete |
 | CFUI-04 | Phase 5 | Pending |
 | BUDG-01 | Phase 6 | Pending |
 | BUDG-02 | Phase 6 | Pending |
