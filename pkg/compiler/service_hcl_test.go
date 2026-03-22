@@ -199,6 +199,84 @@ func TestSpotRateEC2ZeroFallback(t *testing.T) {
 	}
 }
 
+// TestECSServiceHCLImageURIs verifies ECR URIs are emitted when KM_ACCOUNTS_APPLICATION is set.
+func TestECSServiceHCLImageURIs(t *testing.T) {
+	t.Setenv("KM_ACCOUNTS_APPLICATION", "123456789012")
+	t.Setenv("KM_SIDECAR_VERSION", "")
+
+	p := baseECSProfile()
+	out, err := generateECSServiceHCL(p, "test-sb", false, nil, baseECSNetwork())
+	if err != nil {
+		t.Fatalf("generateECSServiceHCL failed: %v", err)
+	}
+
+	// Must contain real ECR URIs for all 4 sidecars
+	for _, sidecar := range []string{"dns-proxy", "http-proxy", "audit-log", "tracing"} {
+		expected := "123456789012.dkr.ecr.us-east-1.amazonaws.com/km-" + sidecar + ":"
+		if !strings.Contains(out, expected) {
+			t.Errorf("expected ECR URI %q in output, got:\n%s", expected, out)
+		}
+	}
+
+	// Must NOT contain any ${var.*_image} literals
+	for _, bad := range []string{"${var.dns_proxy_image}", "${var.http_proxy_image}", "${var.audit_log_image}", "${var.tracing_image}"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("found broken HCL literal %q in output — should have been replaced with ECR URI", bad)
+		}
+	}
+}
+
+// TestECSServiceHCLImageURIsPlaceholder verifies PLACEHOLDER_ECR prefix when KM_ACCOUNTS_APPLICATION is empty.
+func TestECSServiceHCLImageURIsPlaceholder(t *testing.T) {
+	t.Setenv("KM_ACCOUNTS_APPLICATION", "")
+
+	p := baseECSProfile()
+	out, err := generateECSServiceHCL(p, "test-sb", false, nil, baseECSNetwork())
+	if err != nil {
+		t.Fatalf("generateECSServiceHCL failed: %v", err)
+	}
+
+	// Must contain PLACEHOLDER_ECR/ prefix for each sidecar
+	for _, sidecar := range []string{"dns-proxy", "http-proxy", "audit-log", "tracing"} {
+		expected := "PLACEHOLDER_ECR/km-" + sidecar + ":"
+		if !strings.Contains(out, expected) {
+			t.Errorf("expected placeholder URI %q in output, got:\n%s", expected, out)
+		}
+	}
+
+	// Must NOT contain any ${var.*_image} literals
+	for _, bad := range []string{"${var.dns_proxy_image}", "${var.http_proxy_image}", "${var.audit_log_image}", "${var.tracing_image}"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("found broken HCL literal %q in output — placeholder did not replace it", bad)
+		}
+	}
+}
+
+// TestECSServiceHCLImageVersion verifies KM_SIDECAR_VERSION controls the image tag.
+func TestECSServiceHCLImageVersion(t *testing.T) {
+	t.Setenv("KM_ACCOUNTS_APPLICATION", "123456789012")
+	t.Setenv("KM_SIDECAR_VERSION", "v1.2.3")
+
+	p := baseECSProfile()
+	out, err := generateECSServiceHCL(p, "test-sb", false, nil, baseECSNetwork())
+	if err != nil {
+		t.Fatalf("generateECSServiceHCL failed: %v", err)
+	}
+
+	// All sidecar images must end with :v1.2.3
+	for _, sidecar := range []string{"dns-proxy", "http-proxy", "audit-log", "tracing"} {
+		expected := "km-" + sidecar + ":v1.2.3"
+		if !strings.Contains(out, expected) {
+			t.Errorf("expected image tag :v1.2.3 for %s, got:\n%s", sidecar, out)
+		}
+	}
+
+	// Must NOT contain :latest when version is explicitly set
+	if strings.Contains(out, ":latest") {
+		t.Error("found :latest tag in output when KM_SIDECAR_VERSION=v1.2.3 — version not applied")
+	}
+}
+
 // TestSpotRateECSNonZero verifies that a NetworkConfig with non-zero SpotRateUSD
 // produces spot_rate != 0.0 in the ECS service.hcl output (BUDG-03).
 func TestSpotRateECSNonZero(t *testing.T) {

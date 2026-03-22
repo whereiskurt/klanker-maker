@@ -150,7 +150,7 @@ const ecsServiceHCLTemplate = `locals {
       },
       {
         name               = "km-dns-proxy"
-        image              = "${var.dns_proxy_image}"
+        image              = "{{ .DNSProxyImage }}"
         cpu                = 128
         memory             = 256
         memory_reservation = 128
@@ -166,7 +166,7 @@ const ecsServiceHCLTemplate = `locals {
       },
       {
         name               = "km-http-proxy"
-        image              = "${var.http_proxy_image}"
+        image              = "{{ .HTTPProxyImage }}"
         cpu                = 128
         memory             = 256
         memory_reservation = 128
@@ -182,7 +182,7 @@ const ecsServiceHCLTemplate = `locals {
       },
       {
         name               = "km-audit-log"
-        image              = "${var.audit_log_image}"
+        image              = "{{ .AuditLogImage }}"
         cpu                = 64
         memory             = 128
         memory_reservation = 64
@@ -207,7 +207,7 @@ const ecsServiceHCLTemplate = `locals {
       },
       {
         name               = "km-tracing"
-        image              = "${var.tracing_image}"
+        image              = "{{ .TracingImage }}"
         cpu                = 64
         memory             = 128
         memory_reservation = 64
@@ -333,6 +333,12 @@ type ecsHCLParams struct {
 	AllowedDNSSuffixes string // comma-separated allowed DNS suffixes
 	AllowedHTTPHosts   string // comma-separated allowed HTTP hosts
 	ArtifactsBucket    string // S3 bucket for sidecar OTel traces (KM_ARTIFACTS_BUCKET)
+	// Sidecar image URIs (computed from KM_ACCOUNTS_APPLICATION + region + KM_SIDECAR_VERSION)
+	// PLACEHOLDER_ECR/ prefix used when KM_ACCOUNTS_APPLICATION is unset.
+	DNSProxyImage  string // ECR URI for km-dns-proxy sidecar
+	HTTPProxyImage string // ECR URI for km-http-proxy sidecar
+	AuditLogImage  string // ECR URI for km-audit-log sidecar
+	TracingImage   string // ECR URI for km-tracing sidecar
 	// Filesystem enforcement fields (populated from profile policy)
 	HasFilesystemPolicy    bool     // true if FilesystemPolicy is set
 	EffectiveWritablePaths []string // WritablePaths + auto-injected /tmp when readonlyRootFilesystem is true
@@ -507,6 +513,24 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 
 	hasBudget, computeLimit, aiLimit, warningThreshold := budgetHCLFields(p)
 
+	// Compute ECR image URIs for sidecar containers (PROV-10).
+	// KM_ACCOUNTS_APPLICATION provides the AWS account ID for the ECR registry.
+	// KM_SIDECAR_VERSION controls the image tag; defaults to "latest" when unset.
+	accountID := os.Getenv("KM_ACCOUNTS_APPLICATION")
+	imageTag := os.Getenv("KM_SIDECAR_VERSION")
+	if imageTag == "" {
+		imageTag = "latest"
+	}
+	var ecrRegistry string
+	if accountID != "" {
+		ecrRegistry = fmt.Sprintf("%s.dkr.ecr.%s.amazonaws.com", accountID, p.Spec.Runtime.Region)
+	} else {
+		ecrRegistry = "PLACEHOLDER_ECR"
+	}
+	sidecarImage := func(name string) string {
+		return ecrRegistry + "/km-" + name + ":" + imageTag
+	}
+
 	params := ecsHCLParams{
 		ProfileName:           p.Metadata.Name,
 		SandboxID:             sandboxID,
@@ -525,6 +549,11 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		AllowedDNSSuffixes:    strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
 		AllowedHTTPHosts:      strings.Join(p.Spec.Network.Egress.AllowedHosts, ","),
 		ArtifactsBucket:       artifactBucket,
+		// Sidecar ECR image URIs computed from KM_ACCOUNTS_APPLICATION + region + KM_SIDECAR_VERSION.
+		DNSProxyImage:  sidecarImage("dns-proxy"),
+		HTTPProxyImage: sidecarImage("http-proxy"),
+		AuditLogImage:  sidecarImage("audit-log"),
+		TracingImage:   sidecarImage("tracing"),
 		// Email fields — every Phase 4 sandbox gets an email identity.
 		HasEmail:       true,
 		SandboxEmail:   sandboxID + "@" + emailDomain,
