@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 05-configui-03-PLAN.md
-last_updated: "2026-03-22T17:51:01.017Z"
+stopped_at: Completed 05-configui-04-PLAN.md
+last_updated: "2026-03-22T18:47:02.235Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 6
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 23
-  completed_plans: 22
+  completed_plans: 23
   percent: 0
 ---
 
@@ -71,6 +71,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 05-configui P01 | 426s | 2 tasks | 9 files |
 | Phase 05-configui P02 | 4min | 2 tasks | 6 files |
 | Phase 05-configui P03 | 5min | 2 tasks | 6 files |
+| Phase 05-configui P04 | 60min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -141,6 +142,8 @@ Recent decisions affecting current work:
 - [Phase 05-configui]: [Phase 05-configui P03]: SSMAPI narrow interface in handlers_secrets.go; stub file from Plan 02 deleted to resolve redeclaration conflict
 - [Phase 05-configui]: [Phase 05-configui P03]: handleSecretDecrypt returns pii-blur HTML for HTMX requests, JSON for plain API — enables both UI reveal and CLI/API access
 - [Phase 05-configui]: [Phase 05-configui P03]: secrets.html is self-contained (not using block override) — avoids multi-page Go template content block conflict in shared parse set
+- [Phase 05-configui]: Per-page template cloning in Go html/template prevents content block collision — clone base template per render, parse page template into clone
+- [Phase 05-configui]: Dashboard graceful degradation: ListSandboxes AWS failure renders warning banner instead of HTTP 500 — operators can access editor/secrets without AWS credentials
 
 ### Pending Todos
 
@@ -156,6 +159,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T17:51:01.015Z
-Stopped at: Completed 05-configui-03-PLAN.md
+Last session: 2026-03-22T18:47:02.233Z
+Stopped at: Completed 05-configui-04-PLAN.md
 Resume file: None
