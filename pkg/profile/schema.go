@@ -4,6 +4,7 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -12,7 +13,11 @@ import (
 //go:embed schemas/sandbox_profile.schema.json
 var sandboxProfileSchemaJSON []byte
 
-const schemaID = "https://klankermaker.ai/schemas/sandbox-profile/v1alpha1"
+// defaultSchemaDomain is the fallback domain when no domain is configured.
+const defaultSchemaDomain = "klankermaker.ai"
+
+// schemaID is the default schema $id URI using the default domain.
+const schemaID = "https://" + defaultSchemaDomain + "/schemas/sandbox-profile/v1alpha1"
 
 var (
 	compiledSchema     *jsonschema.Schema
@@ -34,20 +39,50 @@ func Schema() *jsonschema.Schema {
 }
 
 func compileSchema() (*jsonschema.Schema, error) {
+	return compileSchemaForDomain(defaultSchemaDomain)
+}
+
+// SchemaForDomain returns a compiled JSON Schema for SandboxProfile with the given domain
+// substituted into the schema $id. Unlike Schema(), this is not cached — it is intended
+// for use when the configured domain differs from the default.
+// When domain is empty, the default domain ("klankermaker.ai") is used.
+func SchemaForDomain(domain string) (*jsonschema.Schema, error) {
+	if domain == "" {
+		domain = defaultSchemaDomain
+	}
+	return compileSchemaForDomain(domain)
+}
+
+// compileSchemaForDomain compiles the embedded JSON Schema with the given domain substituted
+// for the __SCHEMA_DOMAIN__ placeholder in the $id and apiVersion pattern.
+func compileSchemaForDomain(domain string) (*jsonschema.Schema, error) {
+	// Replace the __SCHEMA_DOMAIN__ placeholder with the configured domain.
+	schemaJSON := bytes.ReplaceAll(sandboxProfileSchemaJSON,
+		[]byte("__SCHEMA_DOMAIN__"),
+		[]byte(domain),
+	)
+
+	id := "https://" + domain + "/schemas/sandbox-profile/v1alpha1"
+
+	// Sanity check: placeholder should be fully replaced.
+	if strings.Contains(string(schemaJSON), "__SCHEMA_DOMAIN__") {
+		return nil, fmt.Errorf("schema placeholder __SCHEMA_DOMAIN__ not fully replaced")
+	}
+
 	c := jsonschema.NewCompiler()
 
 	// Parse the embedded JSON schema document.
 	// AddResource requires the doc to be a parsed JSON value (any), not raw []byte.
-	schemaDoc, err := jsonschema.UnmarshalJSON(bytes.NewReader(sandboxProfileSchemaJSON))
+	schemaDoc, err := jsonschema.UnmarshalJSON(bytes.NewReader(schemaJSON))
 	if err != nil {
 		return nil, fmt.Errorf("parsing embedded schema JSON: %w", err)
 	}
 
-	if err := c.AddResource(schemaID, schemaDoc); err != nil {
+	if err := c.AddResource(id, schemaDoc); err != nil {
 		return nil, fmt.Errorf("loading schema resource: %w", err)
 	}
 
-	schema, err := c.Compile(schemaID)
+	schema, err := c.Compile(id)
 	if err != nil {
 		return nil, fmt.Errorf("compiling schema: %w", err)
 	}

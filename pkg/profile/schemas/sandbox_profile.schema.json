@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://klankermaker.ai/schemas/sandbox-profile/v1alpha1",
+  "$id": "https://__SCHEMA_DOMAIN__/schemas/sandbox-profile/v1alpha1",
   "title": "SandboxProfile",
   "description": "A declarative policy object that defines a controlled, auditable execution environment",
   "type": "object",
@@ -9,8 +9,8 @@
   "properties": {
     "apiVersion": {
       "type": "string",
-      "const": "klankermaker.ai/v1alpha1",
-      "description": "API version of the SandboxProfile resource"
+      "pattern": "^.+/v1alpha1$",
+      "description": "API version of the SandboxProfile resource (e.g. klankermaker.ai/v1alpha1)"
     },
     "kind": {
       "type": "string",

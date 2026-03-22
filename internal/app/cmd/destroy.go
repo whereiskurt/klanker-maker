@@ -189,7 +189,12 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool) er
 		return err
 	}
 	// Step 8 (continued): build SES client for notification callback.
-	const emailDomain = "sandboxes.klankermaker.ai"
+	// Derive email domain from config; default to "klankermaker.ai" when not set.
+	destroyBaseDomain := cfg.Domain
+	if destroyBaseDomain == "" {
+		destroyBaseDomain = "klankermaker.ai"
+	}
+	emailDomain := "sandboxes." + destroyBaseDomain
 	sesClient := sesv2.NewFromConfig(awsCfg)
 
 	callbacks := lifecycle.TeardownCallbacks{

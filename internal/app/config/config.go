@@ -42,8 +42,9 @@ type Config struct {
 
 	// Domain is the base domain for the platform (e.g. "klankermaker.ai").
 	// Set via km-config.yaml domain key or KM_DOMAIN environment variable.
-	// Used to derive email addresses (sandboxes.{Domain}), schema $id, and
-	// apiVersion prefixes so forks work with any domain without code changes.
+	// When empty, callers default to "klankermaker.ai". Used to derive email
+	// addresses (sandboxes.{Domain}), schema $id, and apiVersion prefixes so
+	// forks work with any domain without code changes.
 	Domain string
 
 	// ManagementAccountID is the AWS account ID for the management/root account.

@@ -147,11 +147,18 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	if err != nil {
 		return fmt.Errorf("failed to load network config for %s: %w\nRun 'km init --region %s' first", region, err, region)
 	}
+	// Derive email domain early so the compiler can use it.
+	// This must be computed before calling compiler.Compile.
+	networkDomain := cfg.Domain
+	if networkDomain == "" {
+		networkDomain = "klankermaker.ai"
+	}
 	network := &compiler.NetworkConfig{
 		VPCID:             networkOutputs.VPCID,
 		PublicSubnets:     networkOutputs.PublicSubnets,
 		AvailabilityZones: networkOutputs.AvailabilityZones,
 		RegionLabel:       regionLabel,
+		EmailDomain:       "sandboxes." + networkDomain,
 	}
 
 	// Step 7: Compile profile into Terragrunt artifacts
@@ -264,7 +271,12 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 
 	// Step 13: Provision SES email identity for the sandbox.
 	// Non-fatal: sandbox is still usable without email.
-	const emailDomain = "sandboxes.klankermaker.ai"
+	// Derive email domain from config; default to "klankermaker.ai" when not set.
+	baseDomain := cfg.Domain
+	if baseDomain == "" {
+		baseDomain = "klankermaker.ai"
+	}
+	emailDomain := "sandboxes." + baseDomain
 	sesClient := sesv2.NewFromConfig(awsCfg)
 	emailAddr, emailErr := awspkg.ProvisionSandboxEmail(ctx, sesClient, sandboxID, emailDomain)
 	if emailErr != nil {

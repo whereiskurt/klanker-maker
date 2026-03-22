@@ -288,7 +288,7 @@ type ecsHCLParams struct {
 	EffectiveWritablePaths []string // WritablePaths + auto-injected /tmp when readonlyRootFilesystem is true
 	// Email fields (MAIL-02 through MAIL-05)
 	HasEmail       bool   // always true in Phase 4 — every sandbox gets an email identity
-	SandboxEmail   string // {sandbox-id}@sandboxes.klankermaker.ai
+	SandboxEmail   string // {sandbox-id}@{emailDomain} (from NetworkConfig.EmailDomain)
 	ArtifactBucket string // km-sandbox-artifacts-ea554771 (for S3 inbox read IAM)
 }
 
@@ -341,6 +341,10 @@ type NetworkConfig struct {
 	PublicSubnets     []string
 	AvailabilityZones []string
 	RegionLabel       string
+	// EmailDomain is the sandboxes subdomain (e.g. "sandboxes.klankermaker.ai").
+	// When empty, defaults to "sandboxes.klankermaker.ai". Derived from Config.Domain
+	// as "sandboxes."+domain so forks use their own domain without code changes.
+	EmailDomain string
 }
 
 func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot bool, sgRules []SGRule, iamPolicy *IAMSessionPolicy, userData string, network *NetworkConfig) (string, error) {
@@ -402,8 +406,11 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		// We keep the placeholder here; real image set at provision time.
 	}
 
-	// Email domain and bucket constants for Phase 4.
-	const emailDomain = "sandboxes.klankermaker.ai"
+	// Email domain for Phase 4: use domain from NetworkConfig when set, otherwise default.
+	emailDomain := "sandboxes.klankermaker.ai"
+	if network != nil && network.EmailDomain != "" {
+		emailDomain = network.EmailDomain
+	}
 	const defaultArtifactBucket = "km-sandbox-artifacts-ea554771"
 	artifactBucket := os.Getenv("KM_ARTIFACTS_BUCKET")
 	if artifactBucket == "" {

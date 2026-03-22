@@ -9,8 +9,8 @@
   "properties": {
     "apiVersion": {
       "type": "string",
-      "const": "klankermaker.ai/v1alpha1",
-      "description": "API version of the SandboxProfile resource"
+      "pattern": "^.+/v1alpha1$",
+      "description": "API version of the SandboxProfile resource (e.g. klankermaker.ai/v1alpha1)"
     },
     "kind": {
       "type": "string",

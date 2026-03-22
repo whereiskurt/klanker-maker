@@ -246,7 +246,7 @@ chmod +x /opt/km/bin/km-upload-artifacts
       /opt/km/bin/km-upload-artifacts || true
       {{- end }}
       {{- if .OperatorEmail }}
-      aws sesv2 send-email --from-email-address "notifications@sandboxes.klankermaker.ai" \
+      aws sesv2 send-email --from-email-address "{{ .NotificationsEmail }}" \
         --destination "ToAddresses={{ .OperatorEmail }}" \
         --content "Simple={Subject={Data='km sandbox spot-interruption: {{ .SandboxID }}'},Body={Text={Data='Sandbox {{ .SandboxID }} received spot interruption notice. Artifacts uploaded (best-effort).'}}}" \
         --region "${AWS_DEFAULT_REGION}" 2>&1 || echo "[km-spot] WARN: failed to send spot notification"
@@ -281,22 +281,28 @@ type userDataParams struct {
 	ArtifactPaths     []string
 	ArtifactMaxSizeMB int
 	// Email fields (MAIL-02 through MAIL-05)
-	SandboxEmail  string // {sandbox-id}@sandboxes.klankermaker.ai
-	OperatorEmail string // from KM_OPERATOR_EMAIL env var — for spot notification
-	AWSRegion     string // from IMDS region — for spot notification ses send-email CLI call
+	SandboxEmail         string // {sandbox-id}@{emailDomain} (config-derived)
+	NotificationsEmail   string // notifications@{emailDomain} — from address for spot notifications
+	OperatorEmail        string // from KM_OPERATOR_EMAIL env var — for spot notification
+	AWSRegion            string // from IMDS region — for spot notification ses send-email CLI call
 }
 
 // generateUserData produces the EC2 bootstrap user-data.sh content for the given profile.
 // It is only called for ec2 substrate sandboxes.
 // artifactsBucket is from the KM_ARTIFACTS_BUCKET env var; may be empty string.
 // useSpot indicates whether the EC2 instance uses spot pricing (enables spot poll loop).
-func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths []string, artifactsBucket string, useSpot bool) (string, error) {
+// emailDomain is the sandboxes subdomain (e.g. "sandboxes.klankermaker.ai"); defaults to
+// "sandboxes.klankermaker.ai" when not provided (variadic for backward compatibility).
+func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths []string, artifactsBucket string, useSpot bool, emailDomainOverride ...string) (string, error) {
 	tmpl, err := template.New("userdata").Parse(userDataTemplate)
 	if err != nil {
 		return "", err
 	}
 
-	const emailDomain = "sandboxes.klankermaker.ai"
+	emailDomain := "sandboxes.klankermaker.ai"
+	if len(emailDomainOverride) > 0 && emailDomainOverride[0] != "" {
+		emailDomain = emailDomainOverride[0]
+	}
 
 	params := userDataParams{
 		SandboxID:          sandboxID,
@@ -307,9 +313,10 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		KMArtifactsBucket:  artifactsBucket,
 		UseSpot:            useSpot,
 		// Email fields — every sandbox gets an email identity.
-		SandboxEmail:  sandboxID + "@" + emailDomain,
-		OperatorEmail: os.Getenv("KM_OPERATOR_EMAIL"),
-		AWSRegion:     p.Spec.Runtime.Region,
+		SandboxEmail:       sandboxID + "@" + emailDomain,
+		NotificationsEmail: "notifications@" + emailDomain,
+		OperatorEmail:      os.Getenv("KM_OPERATOR_EMAIL"),
+		AWSRegion:          p.Spec.Runtime.Region,
 	}
 
 	// Populate filesystem policy fields (nil-safe)
