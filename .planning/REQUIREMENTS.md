@@ -83,10 +83,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Platform Configuration
 
-- [ ] **CONF-01**: All platform-specific values (domain name, AWS account IDs, SSO start URL, region preferences) are defined in a single configuration file (e.g. `km-config.yaml` or `.klankermaker.yaml`) — operators checking out the repo set their own values before first use, AWS SSO-style configure flow
+- [x] **CONF-01**: All platform-specific values (domain name, AWS account IDs, SSO start URL, region preferences) are defined in a single configuration file (e.g. `km-config.yaml` or `.klankermaker.yaml`) — operators checking out the repo set their own values before first use, AWS SSO-style configure flow
 - [ ] **CONF-02**: Domain name is configurable — SES email addresses (`{sandbox-id}@sandboxes.{domain}`), JSON Schema `$id` URL, `apiVersion` in profiles, and ConfigUI branding all derive from the configured domain, not hardcoded `klankermaker.ai`
-- [ ] **CONF-03**: AWS account numbers (management, terraform, application) and SSO start URL are configurable — referenced by Terragrunt hierarchy, IAM policies, and `km` CLI commands without hardcoding
-- [ ] **CONF-04**: `km init` or `km configure` command walks the operator through initial setup: domain, accounts, region, SSO — writes the config file and validates AWS access
+- [x] **CONF-03**: AWS account numbers (management, terraform, application) and SSO start URL are configurable — referenced by Terragrunt hierarchy, IAM policies, and `km` CLI commands without hardcoding
+- [x] **CONF-04**: `km init` or `km configure` command walks the operator through initial setup: domain, accounts, region, SSO — writes the config file and validates AWS access
 - [ ] **CONF-05**: `km shell <sandbox-id>` opens an interactive shell into a running sandbox — abstracts the substrate (EC2: SSM Session Manager, ECS: ECS Exec, future k8s: kubectl exec). Operator never needs to know the underlying AWS CLI incantation
 
 ### Budget Enforcement
@@ -201,10 +201,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CFUI-02 | Phase 5 | Complete |
 | CFUI-03 | Phase 5 | Complete |
 | CFUI-04 | Phase 5 | Complete |
-| CONF-01 | Phase 6 | Pending |
+| CONF-01 | Phase 6 | Complete |
 | CONF-02 | Phase 6 | Pending |
-| CONF-03 | Phase 6 | Pending |
-| CONF-04 | Phase 6 | Pending |
+| CONF-03 | Phase 6 | Complete |
+| CONF-04 | Phase 6 | Complete |
 | CONF-05 | Phase 6 | Pending |
 | BUDG-01 | Phase 6 | Complete |
 | BUDG-02 | Phase 6 | Complete |

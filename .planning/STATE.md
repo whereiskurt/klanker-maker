@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 06-02-PLAN.md
-last_updated: "2026-03-22T20:17:50.470Z"
+stopped_at: Completed 06-01-PLAN.md
+last_updated: "2026-03-22T20:20:32.507Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 30
-  completed_plans: 24
+  completed_plans: 25
   percent: 0
 ---
 
@@ -73,6 +73,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 05-configui P03 | 5min | 2 tasks | 6 files |
 | Phase 05-configui P04 | 60min | 2 tasks | 9 files |
 | Phase 06-budget-enforcement-platform-configuration P02 | 15min | 2 tasks | 11 files |
+| Phase 06-budget-enforcement-platform-configuration P01 | 8min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -148,6 +149,9 @@ Recent decisions affecting current work:
 - [Phase 06-02]: BudgetAPI uses DynamoDB ADD expression for atomic spend increment — eliminates read-modify-write races under concurrent sandbox workloads
 - [Phase 06-02]: GetBedrockModelRates returns static fallback when client=nil or API unreachable — budget calculations work without Pricing API access
 - [Phase 06-02]: DynamoDB Streams enabled with NEW_AND_OLD_IMAGES — enables Lambda budget enforcement triggers to read before/after spend values
+- [Phase 06-budget-enforcement-platform-configuration]: Two-viper merge: v1 loads ~/.km/config.yaml, v2 loads ./km-config.yaml; isSetByEnv() guard ensures KM_* env vars always win over km-config.yaml
+- [Phase 06-budget-enforcement-platform-configuration]: BudgetTableName defaults to 'km-budgets' in config.go SetDefault — budget plans have usable default without mandatory configuration
+- [Phase 06-budget-enforcement-platform-configuration]: km configure io.Reader/io.Writer injection for testability; --non-interactive flag for scripted/CI usage; findKMConfigPath() cwd-first for test binary portability
 
 ### Pending Todos
 
@@ -163,6 +167,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T20:17:50.468Z
-Stopped at: Completed 06-02-PLAN.md
+Last session: 2026-03-22T20:20:32.505Z
+Stopped at: Completed 06-01-PLAN.md
 Resume file: None
