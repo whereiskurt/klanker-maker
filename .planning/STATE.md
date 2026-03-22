@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 03-sidecar-enforcement-lifecycle-management-00-PLAN.md
-last_updated: "2026-03-22T04:54:27.921Z"
+stopped_at: Completed 03-04-PLAN.md
+last_updated: "2026-03-22T05:07:46.620Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 5
   completed_phases: 1
   total_plans: 14
-  completed_plans: 11
+  completed_plans: 12
   percent: 0
 ---
 
@@ -60,6 +60,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 03-sidecar-enforcement-lifecycle-management P02 | 12min | 2 tasks | 6 files |
 | Phase 03-sidecar-enforcement-lifecycle-management P01 | 8min | 2 tasks | 6 files |
 | Phase 03-sidecar-enforcement-lifecycle-management P00 | 15 | 2 tasks | 14 files |
+| Phase 03-sidecar-enforcement-lifecycle-management P04 | 568s | 3 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -100,6 +101,9 @@ Recent decisions affecting current work:
 - [Phase 03-01]: InjectTraceContext() exported as testable function since goproxy CONNECT handler chain breaks on first non-nil result
 - [Phase 03]: Sidecar library packages use subdirectories (dnsproxy/, httpproxy/, auditlog/) with package main at parent for binary entry points
 - [Phase 03]: Wave-0 stubs: dns-proxy, audit-log, http-proxy packages pre-built by linter; scheduler, lifecycle, list-cmd, status-cmd remain as failing stubs for Plans 03-04/03-05
+- [Phase Phase 03-04]: SandboxMetadata defined in pkg/aws/metadata.go — sandbox.go stub expected Plan 03-04 to create it
+- [Phase Phase 03-04]: DeleteTTLSchedule called BEFORE terragrunt destroy — schedule cancelled even if destroy partially fails
+- [Phase Phase 03-04]: TTL schedule creation is non-fatal in km create — sandbox provisioned even if EventBridge call fails
 
 ### Pending Todos
 
@@ -115,6 +119,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T04:54:27.919Z
-Stopped at: Completed 03-sidecar-enforcement-lifecycle-management-00-PLAN.md
+Last session: 2026-03-22T05:07:46.618Z
+Stopped at: Completed 03-04-PLAN.md
 Resume file: None
