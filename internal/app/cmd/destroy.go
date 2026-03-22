@@ -203,6 +203,18 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool) er
 		return fmt.Errorf("terragrunt destroy failed for sandbox %s: %w", sandboxID, err)
 	}
 
+	// Step 8a: Finalize MLflow run record (OBSV-09).
+	// Non-fatal: destroy has already succeeded.
+	if mlflowErr := awspkg.FinalizeMLflowRun(ctx, s3Client, artifactBucket, sandboxID, "klankrmkr",
+		awspkg.MLflowMetrics{
+			ExitStatus: 0,
+		}); mlflowErr != nil {
+		log.Warn().Err(mlflowErr).Str("sandbox_id", sandboxID).
+			Msg("failed to finalize MLflow run record (non-fatal)")
+	} else {
+		log.Info().Str("sandbox_id", sandboxID).Msg("MLflow run finalized")
+	}
+
 	// Step 9: Clean up local sandbox directory
 	if err := terragrunt.CleanupSandboxDir(sandboxDir); err != nil {
 		log.Warn().Err(err).Str("sandboxDir", sandboxDir).Msg("failed to clean up local sandbox directory")

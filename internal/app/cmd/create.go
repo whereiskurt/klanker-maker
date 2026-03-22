@@ -231,6 +231,24 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 
 	s3Client := s3.NewFromConfig(awsCfg)
 
+	// Step 11a: Record MLflow run for session tracking (OBSV-09).
+	// Non-fatal: sandbox is provisioned even if MLflow write fails.
+	mlflowRun := awspkg.MLflowRun{
+		SandboxID:   sandboxID,
+		ProfileName: resolvedProfile.Metadata.Name,
+		Substrate:   string(resolvedProfile.Spec.Runtime.Substrate),
+		Region:      resolvedProfile.Spec.Runtime.Region,
+		TTL:         resolvedProfile.Spec.Lifecycle.TTL,
+		StartTime:   now,
+		Experiment:  "klankrmkr",
+	}
+	if mlflowErr := awspkg.WriteMLflowRun(ctx, s3Client, artifactBucket, mlflowRun); mlflowErr != nil {
+		log.Warn().Err(mlflowErr).Str("sandbox_id", sandboxID).
+			Msg("failed to write MLflow run record (non-fatal)")
+	} else {
+		log.Info().Str("sandbox_id", sandboxID).Msg("MLflow run record written")
+	}
+
 	if cfg.StateBucket != "" {
 		meta := awspkg.SandboxMetadata{
 			SandboxID:   sandboxID,
