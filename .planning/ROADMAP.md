@@ -74,7 +74,14 @@ Plans:
   5. Operator runs `km list` and sees all running sandboxes with status and substrate type; `km status <sandbox-id>` shows detailed state for a specific sandbox
   6. A tracing sidecar collects OTel traces/spans from the sandbox workload and exports them to the configured collector endpoint; trace context is propagated through the HTTP proxy sidecar on outbound requests
   7. Each sandbox session is recorded as an MLflow run with sandbox metadata (profile name, sandbox-id, duration, exit status) as run parameters; operators can query MLflow to see agent execution history across sandbox sessions
-**Plans**: TBD
+**Plans:** 5 plans
+
+Plans:
+- [ ] 03-01-PLAN.md — DNS proxy + HTTP proxy sidecar binaries (NETW-02, NETW-03, OBSV-10)
+- [ ] 03-02-PLAN.md — Audit log sidecar + CloudWatch Logs helpers (OBSV-01, OBSV-02, OBSV-03)
+- [ ] 03-03-PLAN.md — OTel tracing sidecar config + MLflow S3 run logging (OBSV-08, OBSV-09)
+- [ ] 03-04-PLAN.md — Compiler integration: EC2 user-data + ECS service.hcl + EventBridge TTL + lifecycle package (PROV-05, PROV-06, PROV-07)
+- [ ] 03-05-PLAN.md — km list, km status, km logs CLI commands (PROV-03, PROV-04)
 
 ### Phase 4: Lifecycle Hardening, Artifacts & Email
 **Goal**: Sandboxes enforce filesystem access policy and upload artifacts on exit (including on spot interruption); secret patterns are scrubbed from audit logs; agent sandboxes can send and receive email; the platform is ready for real agent workloads
@@ -109,6 +116,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 |-------|----------------|--------|-----------|
 | 1. Schema, Compiler & AWS Foundation | 3/4 | In Progress|  |
 | 2. Core Provisioning & Security Baseline | 2/4 | In Progress|  |
-| 3. Sidecar Enforcement & Lifecycle Management | 0/TBD | Not started | - |
+| 3. Sidecar Enforcement & Lifecycle Management | 0/5 | Not started | - |
 | 4. Lifecycle Hardening, Artifacts & Email | 0/TBD | Not started | - |
 | 5. ConfigUI | 0/TBD | Not started | - |
