@@ -20,16 +20,16 @@ func makeFakeSandboxDir(t *testing.T) string {
 	return dir
 }
 
-// Helper: create a fake repo root with _template directory and terragrunt.hcl.
+// Helper: create a fake repo root with templates directory and sandbox.terragrunt.hcl.
 func makeFakeRepoRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	templateDir := filepath.Join(root, "infra", "live", "_template")
+	templateDir := filepath.Join(root, "infra", "templates")
 	if err := os.MkdirAll(templateDir, 0o755); err != nil {
 		t.Fatalf("failed to create template dir: %v", err)
 	}
 	content := `locals { sandbox_id = "SANDBOX_ID_PLACEHOLDER" }`
-	if err := os.WriteFile(filepath.Join(templateDir, "terragrunt.hcl"), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(templateDir, "sandbox.terragrunt.hcl"), []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write terragrunt.hcl: %v", err)
 	}
 	return root

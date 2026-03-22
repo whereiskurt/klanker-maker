@@ -167,7 +167,7 @@ func findSandboxDir(repoRoot, sandboxID string) (string, string) {
 		return "", ""
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == "_template" {
+		if !entry.IsDir() {
 			continue
 		}
 		candidate := filepath.Join(liveDir, entry.Name(), "sandboxes", sandboxID)
