@@ -44,9 +44,9 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Observability & Artifacts
 
-- [ ] **OBSV-01**: Audit log sidecar captures command execution logs (works on both EC2 and ECS substrates)
-- [ ] **OBSV-02**: Audit log sidecar captures network traffic logs (works on both EC2 and ECS substrates)
-- [ ] **OBSV-03**: Log destination is configurable (CloudWatch/S3/stdout)
+- [x] **OBSV-01**: Audit log sidecar captures command execution logs (works on both EC2 and ECS substrates)
+- [x] **OBSV-02**: Audit log sidecar captures network traffic logs (works on both EC2 and ECS substrates)
+- [x] **OBSV-03**: Log destination is configurable (CloudWatch/S3/stdout)
 - [ ] **OBSV-04**: Filesystem policy enforces writable and read-only paths
 - [ ] **OBSV-05**: Artifacts upload to S3 on sandbox exit with configurable size limits
 - [ ] **OBSV-06**: S3 artifact storage supports multi-region replication
@@ -162,9 +162,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PROV-07 | Phase 3 | Pending |
 | NETW-02 | Phase 3 | Pending |
 | NETW-03 | Phase 3 | Pending |
-| OBSV-01 | Phase 3 | Pending |
-| OBSV-02 | Phase 3 | Pending |
-| OBSV-03 | Phase 3 | Pending |
+| OBSV-01 | Phase 3 | Complete |
+| OBSV-02 | Phase 3 | Complete |
+| OBSV-03 | Phase 3 | Complete |
 | OBSV-04 | Phase 4 | Pending |
 | OBSV-05 | Phase 4 | Pending |
 | OBSV-06 | Phase 4 | Pending |

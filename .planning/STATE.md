@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 03-03-PLAN.md (OTel sidecar config + MLflow S3 run logging)
-last_updated: "2026-03-22T04:50:31.124Z"
+stopped_at: Completed 03-02-PLAN.md (audit log sidecar + CloudWatch helpers)
+last_updated: "2026-03-22T04:52:16.980Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 5
   completed_phases: 1
   total_plans: 14
-  completed_plans: 8
+  completed_plans: 9
   percent: 0
 ---
 
@@ -57,6 +57,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 02-core-provisioning-security-baseline P01 | 353s | 2 tasks | 12 files |
 | Phase 02-core-provisioning-security-baseline P03 | 8 | 2 tasks | 6 files |
 | Phase 03-sidecar-enforcement-lifecycle-management P03 | 7min | 2 tasks | 5 files |
+| Phase 03-sidecar-enforcement-lifecycle-management P02 | 12min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -91,6 +92,8 @@ Recent decisions affecting current work:
 - [Phase 03-03]: ExitStatus stored as *int in MLflowRun so exit_status=0 (success) is preserved through JSON omitempty serialization
 - [Phase 03-03]: S3RunAPI narrow interface (PutObject + GetObject) for MLflow run logging — real *s3.Client satisfies it directly
 - [Phase 03-03]: OTel sidecar config uses env-var substitution for AWS_REGION/OTEL_S3_BUCKET/SANDBOX_ID — zero Go config parsing needed
+- [Phase 03-02]: Package layout: auditlog.go (package auditlog) + cmd/main.go (package main) in subdirectory — Go disallows two packages in one directory; cmd/ pattern separates library from binary
+- [Phase 03-02]: CloudWatchBackend interface in auditlog package decouples sidecar from AWS SDK — tests run without credentials; CWLogsAPI interface in pkg/aws follows same narrow-interface pattern as TagAPI
 
 ### Pending Todos
 
@@ -106,6 +109,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T04:50:31.122Z
-Stopped at: Completed 03-03-PLAN.md (OTel sidecar config + MLflow S3 run logging)
+Last session: 2026-03-22T04:52:16.978Z
+Stopped at: Completed 03-02-PLAN.md (audit log sidecar + CloudWatch helpers)
 Resume file: None
