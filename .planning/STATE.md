@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 04-04-PLAN.md — SES email wiring, artifact upload callbacks, IAM permissions, S3 replication module
-last_updated: "2026-03-22T13:59:34.559Z"
+stopped_at: Completed 04-05-PLAN.md — TTL handler Lambda + lifecycle notification callbacks (OnNotify, OnIdleNotify)
+last_updated: "2026-03-22T14:32:17.001Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 5
   completed_phases: 3
-  total_plans: 18
-  completed_plans: 17
+  total_plans: 19
+  completed_plans: 18
   percent: 0
 ---
 
@@ -66,6 +66,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 04-lifecycle-hardening-artifacts-email P02 | 3min | 2 tasks | 5 files |
 | Phase 04-lifecycle-hardening-artifacts-email P03 | 5min | 3 tasks | 10 files |
 | Phase 04-lifecycle-hardening-artifacts-email P04 | 371s | 2 tasks | 8 files |
+| Phase 04-lifecycle-hardening-artifacts-email P05 | 282s | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -123,6 +124,8 @@ Recent decisions affecting current work:
 - [Phase 04-lifecycle-hardening-artifacts-email]: Profile YAML stored in S3 at artifacts/{sandbox-id}/.km-profile.yaml to enable destroy-path artifact upload without passing profile through command args
 - [Phase 04-lifecycle-hardening-artifacts-email]: SES IAM uses ses:FromAddress StringEquals condition — each sandbox can only send from its own address, preventing cross-sandbox email abuse
 - [Phase 04-lifecycle-hardening-artifacts-email]: S3 replication excludes mail/ prefix — inbox objects are ephemeral; only artifacts/ is replicated for durability
+- [Phase 04-lifecycle-hardening-artifacts-email]: TTL Lambda scope: artifact upload + notification + schedule cleanup only; actual terragrunt destroy delegated (Lambda has no km binary)
+- [Phase 04-lifecycle-hardening-artifacts-email]: OnNotify/OnIdleNotify: optional callbacks (nil-safe, best-effort) — backward compatible; past-tense event names match ses.go convention
 
 ### Pending Todos
 
@@ -138,6 +141,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T13:59:34.557Z
-Stopped at: Completed 04-04-PLAN.md — SES email wiring, artifact upload callbacks, IAM permissions, S3 replication module
+Last session: 2026-03-22T14:32:16.999Z
+Stopped at: Completed 04-05-PLAN.md — TTL handler Lambda + lifecycle notification callbacks (OnNotify, OnIdleNotify)
 Resume file: None
