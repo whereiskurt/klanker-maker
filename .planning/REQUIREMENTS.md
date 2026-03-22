@@ -215,8 +215,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BUDG-07 | Phase 6 | Complete |
 | BUDG-08 | Phase 6 | Complete |
 | BUDG-09 | Phase 6 | Complete |
-| PROV-06 | Phase 7 | Pending |
-| OBSV-07 | Phase 7 | Pending |
+| PROV-06 | Phase 7 | Complete |
+| OBSV-07 | Phase 7 | Complete |
 | OBSV-09 | Phase 7 | Pending |
 | CONF-03 | Phase 7 | Pending |
 

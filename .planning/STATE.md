@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 06-09-PLAN.md
-last_updated: "2026-03-22T21:38:37.100Z"
+stopped_at: Completed 07-01-PLAN.md
+last_updated: "2026-03-22T22:23:23.646Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
-  total_phases: 6
+  total_phases: 9
   completed_phases: 6
-  total_plans: 32
-  completed_plans: 32
+  total_plans: 34
+  completed_plans: 33
   percent: 0
 ---
 
@@ -81,6 +81,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 06-budget-enforcement-platform-configuration P07 | 4min | 1 tasks | 6 files |
 | Phase 06-budget-enforcement-platform-configuration P08 | 222s | 2 tasks | 5 files |
 | Phase 06-budget-enforcement-platform-configuration P09 | 286s | 2 tasks | 5 files |
+| Phase 07-unwired-code-paths P01 | 92s | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -178,6 +179,8 @@ Recent decisions affecting current work:
 - [Phase 06-09]: ShellExecFunc package-level type for DI — tests capture exec.Cmd.Args without executing AWS CLI
 - [Phase 06-09]: ECS dispatch passes full cluster/task ARNs (not just IDs) — aws ecs execute-command accepts ARNs directly
 - [Phase 06-09]: Rule 3 auto-fix: spot_rate.go created to provide staticSpotRate() referenced in create.go and spot_rate_test.go but missing from package
+- [Phase 07-01]: buildDest() takes cwClient param — single CW session shared between destination and idle detector
+- [Phase 07-01]: newIdleDetector() helper extracted for testability; OnIdle calls cancel() only, TTL Lambda handles actual destroy
 
 ### Pending Todos
 
@@ -193,6 +196,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T21:30:49.067Z
-Stopped at: Completed 06-09-PLAN.md
+Last session: 2026-03-22T22:23:23.643Z
+Stopped at: Completed 07-01-PLAN.md
 Resume file: None
