@@ -201,10 +201,35 @@ Plans:
 - [ ] 09-02-PLAN.md — Per-sandbox budget-enforcer compiler extension + km create wiring (BUDG-06, BUDG-07)
 - [ ] 09-03-PLAN.md — OPERATOR-GUIDE.md full bootstrap documentation (INFR-01, INFR-02)
 
+### Phase 10: SCP Sandbox Containment — org-level EC2 breakout prevention
+
+**Goal:** AWS Organizations Service Control Policy (SCP) that prevents sandbox IAM roles from EC2/network/IAM breakout — even if the sandbox role's IAM policy is misconfigured. The SCP is the org-level backstop that makes sandbox containment a property of the account, not just the role.
+
+**Requirements:** SCP-01, SCP-02, SCP-03, SCP-04, SCP-05, SCP-06, SCP-07, SCP-08, SCP-09, SCP-10, SCP-11, SCP-12
+- SCP-01: SCP denies Security Group mutation (create/modify/delete) for non-provisioner roles
+- SCP-02: SCP denies network escape (create VPC/subnet/route/NAT/IGW/peering/transit gateway) for non-provisioner roles
+- SCP-03: SCP denies instance mutation (RunInstances, ModifyInstanceAttribute, ModifyInstanceMetadataOptions) for non-provisioner/lifecycle roles
+- SCP-04: SCP denies IAM escalation (CreateRole, AttachRolePolicy, PassRole, AssumeRole) for non-provisioner/lifecycle roles
+- SCP-05: SCP denies storage exfiltration (CreateSnapshot, CopySnapshot, CreateImage, ExportImage) for non-provisioner roles
+- SCP-06: SCP denies SSM cross-instance pivoting (SendCommand, StartSession) for non-operator roles
+- SCP-07: SCP denies Organizations/account discovery for all roles
+- SCP-08: SCP enforces region lock matching `km configure` allowed regions
+- SCP-09: Budget-enforcer Lambda scoped to only modify sandbox roles (km-ec2spot-ssm-*, km-ecs-task-*), not arbitrary IAM
+- SCP-10: Terraform module `infra/modules/scp/` with variables for account IDs, allowed regions, role ARN patterns
+- SCP-11: `km bootstrap` wires SCP creation into Management account provisioning flow
+- SCP-12: Carve-outs for km-provisioner-*, km-lifecycle-*, km-ttl-handler, km-ecs-spot-handler, km-budget-enforcer-* verified against existing role naming conventions
+
+**Depends on:** Phase 6 (budget-enforcer role naming must be stable)
+**Plans:** 2 plans
+
+Plans:
+- [ ] 10-01-PLAN.md — SCP Terraform module + Terragrunt management account deployment unit (SCP-01 through SCP-08, SCP-10)
+- [ ] 10-02-PLAN.md — Wire SCP deployment into km bootstrap command (SCP-09, SCP-11, SCP-12)
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -217,27 +242,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 7. Unwired Code Paths | 2/2 | Complete   | 2026-03-22 |
 | 8. Sidecar Build & Deployment Pipeline | 2/2 | Complete   | 2026-03-22 |
 | 9. Live Infrastructure & Operator Docs | 0/3 | Planned    |  |
-
-### Phase 10: SCP Sandbox Containment — org-level EC2 breakout prevention
-
-**Goal:** AWS Organizations Service Control Policy (SCP) that prevents sandbox IAM roles from EC2/network/IAM breakout — even if the sandbox role's IAM policy is misconfigured. The SCP is the org-level backstop that makes sandbox containment a property of the account, not just the role.
-
-**Requirements:**
-- SCP denies Security Group mutation (create/modify/delete) for non-provisioner roles
-- SCP denies network escape (create VPC/subnet/route/NAT/IGW/peering/transit gateway) for non-provisioner roles
-- SCP denies instance mutation (RunInstances, ModifyInstanceAttribute, ModifyInstanceMetadataOptions) for non-provisioner/lifecycle roles
-- SCP denies IAM escalation (CreateRole, AttachRolePolicy, PassRole, AssumeRole) for non-provisioner/lifecycle roles
-- SCP denies storage exfiltration (CreateSnapshot, CopySnapshot, CreateImage, ExportImage) for non-provisioner roles
-- SCP denies SSM cross-instance pivoting (SendCommand, StartSession) for non-operator roles
-- SCP denies Organizations/account discovery for all roles
-- SCP enforces region lock matching `km configure` allowed regions
-- Budget-enforcer Lambda scoped to only modify sandbox roles (km-ec2spot-ssm-*, km-ecs-task-*), not arbitrary IAM
-- Terraform module `infra/modules/scp/` with variables for account IDs, allowed regions, role ARN patterns
-- `km bootstrap` wires SCP creation into Management account provisioning flow
-- Carve-outs for km-provisioner-*, km-lifecycle-*, km-ttl-handler, km-ecs-spot-handler, km-budget-enforcer-* verified against existing role naming conventions
-
-**Depends on:** Phase 6 (budget-enforcer role naming must be stable)
-**Plans:** 0 plans
-
-Plans:
-- [ ] TBD (run /gsd:plan-phase 10 to break down)
+| 10. SCP Sandbox Containment | 0/2 | Planned    |  |
