@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 06-06-PLAN.md
-last_updated: "2026-03-22T20:48:08.835Z"
+stopped_at: "Completed 06-07-PLAN.md (checkpoint:human-verify pending)"
+last_updated: "2026-03-22T20:58:08.513Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 6
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 30
-  completed_plans: 29
+  completed_plans: 30
   percent: 0
 ---
 
@@ -78,6 +78,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 06-budget-enforcement-platform-configuration P04 | 218s | 2 tasks | 5 files |
 | Phase 06-budget-enforcement-platform-configuration P05 | 399s | 2 tasks | 11 files |
 | Phase 06-budget-enforcement-platform-configuration P06 | 374s | 2 tasks | 6 files |
+| Phase 06-budget-enforcement-platform-configuration P07 | 4min | 1 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -168,6 +169,8 @@ Recent decisions affecting current work:
 - [Phase 06-06]: EC2 auto-resume uses DescribeInstances tag filter not stored instance ID — avoids metadata schema changes and handles multi-instance sandboxes
 - [Phase 06-06]: BudgetFetcher is parallel DI interface to SandboxFetcher — allows independent testing and graceful degradation of budget fetch errors in km status
 - [Phase 06-06]: km create budget init is non-fatal Step 12b — sandbox provisioned even if DynamoDB SetBudgetLimits write fails
+- [Phase 06-07]: DashboardSandbox wrapper embeds SandboxRecord+Budget pointer — avoids modifying pkg/aws.SandboxRecord (shared type) while giving templates budget data
+- [Phase 06-07]: dynoBudgetFetcher treats DynamoDB errors as HasBudget=false — budget display is informational, not critical path; no HTTP 500 from budget failures
 
 ### Pending Todos
 
@@ -183,6 +186,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T20:48:08.833Z
-Stopped at: Completed 06-06-PLAN.md
+Last session: 2026-03-22T20:58:08.511Z
+Stopped at: Completed 06-07-PLAN.md (checkpoint:human-verify pending)
 Resume file: None
