@@ -1,0 +1,33 @@
+Validate checks sandbox profiles for schema correctness and semantic consistency.
+
+Each profile is parsed, and if it contains an 'extends' field, the full
+inheritance chain is resolved before validation runs. This ensures the
+fully-merged profile is what gets checked — not just the overlay.
+
+Usage:
+  km validate <profile.yaml> [profile2.yaml ...]
+
+Examples:
+  # Validate a single profile
+  km validate profiles/ds-gpu.yaml
+
+  # Validate multiple profiles at once
+  km validate profiles/*.yaml
+
+  # Validate a profile that inherits from a base
+  km validate profiles/custom.yaml
+
+What Gets Checked:
+  - YAML syntax and structure
+  - JSON Schema conformance (apiVersion, kind, metadata, spec)
+  - Semantic rules: port ranges, CIDR formats, TTL bounds
+  - Service dependency consistency (e.g. mlflow requires s3)
+  - Inheritance chain resolution (extends field)
+  - Budget field validation (thresholds between 0-100, non-negative limits)
+
+Exit Codes:
+  0 — All profiles are valid
+  1 — One or more profiles are invalid or unreadable
+
+Validation runs locally — no AWS credentials or network access required.
+Use this in CI pipelines to catch profile errors before provisioning.

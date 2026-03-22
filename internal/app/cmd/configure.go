@@ -55,13 +55,7 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 	cmd := &cobra.Command{
 		Use:   "configure",
 		Short: "Interactive wizard to set up km-config.yaml",
-		Long: `Configure walks through the platform settings and writes km-config.yaml
-to the repo root (or --output-dir). Run this once when setting up a new deployment.
-
-The generated km-config.yaml controls domain, AWS account IDs, SSO settings, and
-the default region. Add km-config.yaml to .gitignore — it contains account IDs.
-
-Use --non-interactive with explicit flags for scripted/CI setup.`,
+		Long:  helpText("configure"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runConfigure(in, out, outputDir, nonInteractive, domain,
 				managementAcct, terraformAcct, applicationAcct,

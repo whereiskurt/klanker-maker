@@ -29,13 +29,7 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize shared infrastructure (VPC, subnets, security groups) for a region",
-		Long: `Provisions the shared VPC and networking that all sandboxes in a region use.
-Run this once per region before your first km create targeting that region.
-Safe to re-run — idempotent via Terraform.
-
-Examples:
-  km init --region us-east-1
-  km init --region ca-central-1 --aws-profile klanker-application`,
+		Long:  helpText("init"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if awsProfile == "" {
 				awsProfile = "klanker-application"

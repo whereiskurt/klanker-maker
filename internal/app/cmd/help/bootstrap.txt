@@ -1,0 +1,38 @@
+Validate config and preview what shared infrastructure bootstrap would create.
+
+Bootstrap reads km-config.yaml and shows (with --dry-run, the default)
+the infrastructure that would be provisioned for the platform. This
+is a safe, read-only operation in its current form.
+
+Usage:
+  km bootstrap [flags]
+
+Examples:
+  # Preview what would be created (default, safe)
+  km bootstrap
+
+  # Explicitly request dry-run mode
+  km bootstrap --dry-run
+
+Flags:
+  --dry-run   Print what would be created without making any changes
+              (default: true)
+
+Infrastructure Preview:
+  The dry-run output shows what a full bootstrap would provision:
+
+  - S3 bucket for Terraform state and sandbox metadata
+  - DynamoDB table for Terraform state locking
+  - DynamoDB table for sandbox budget tracking
+  - KMS key for state bucket encryption
+
+Prerequisites:
+  - km-config.yaml must exist (run 'km configure' first)
+  - The config must be loadable and contain valid account IDs
+
+Bootstrap validates that km-config.yaml exists and is parseable before
+showing the infrastructure plan. If the config file is missing or
+malformed, the command exits with an error and guidance.
+
+Note: Full provisioning (actually creating the resources) is planned
+for a future release. Currently only dry-run mode is supported.

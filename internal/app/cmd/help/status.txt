@@ -1,0 +1,35 @@
+Show detailed state for a single sandbox.
+
+Displays resource ARNs, metadata (profile, substrate, region), timestamps
+(created, TTL expiry), and budget breakdown if the sandbox has budget
+tracking enabled.
+
+Usage:
+  km status <sandbox-id>
+
+Examples:
+  # Show status for a sandbox
+  km status sb-a1b2c3d4
+
+Output Sections:
+
+  Metadata:
+    Sandbox ID, profile name, substrate type (ec2spot/ecs-fargate),
+    AWS region, and current state (running/stopped/suspended).
+
+  Resources:
+    ARNs for the primary compute resource (EC2 instance or ECS task),
+    security groups, IAM role, and any attached services (MLflow, etc.).
+
+  Timestamps:
+    Created time, last activity, TTL expiry (if configured), and
+    idle timeout status.
+
+  Budget (if enabled):
+    Compute: $X.XX / $Y.YY spent (Z% of limit)
+    AI:      $X.XX / $Y.YY spent (Z% of limit)
+    Warning thresholds and enforcement status are shown when limits
+    are approached. Color-coded: green (<80%), yellow (80-99%), red (100%+).
+
+The sandbox is discovered via S3 state lookup. Budget data is fetched
+from the DynamoDB budget table if the sandbox has a budget record.

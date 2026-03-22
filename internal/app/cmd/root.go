@@ -17,9 +17,7 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "km",
 		Short: "klankrmkr — sandbox profile management CLI",
-		Long: `km manages sandbox profiles and environments for the klankrmkr platform.
-
-Use km validate to check profile syntax and semantics before provisioning.`,
+		Long:  helpText("root"),
 		Version: cfg.Version,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			return configureLogging(logLevel)

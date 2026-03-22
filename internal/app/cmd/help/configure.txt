@@ -1,0 +1,50 @@
+Interactive wizard to set up km-config.yaml for your platform deployment.
+
+Configure walks through the platform settings and writes km-config.yaml
+to the repo root (or --output-dir). Run this once when setting up a new
+deployment or fork of the klankrmkr platform.
+
+Usage:
+  km configure [flags]
+
+Examples:
+  # Run the interactive wizard
+  km configure
+
+  # Non-interactive setup for CI/scripts
+  km configure --non-interactive \
+    --domain myplatform.dev \
+    --management-account 111111111111 \
+    --terraform-account 222222222222 \
+    --application-account 333333333333 \
+    --sso-start-url https://my-sso.awsapps.com/start \
+    --sso-region us-east-1 \
+    --region us-east-1
+
+  # Write config to a custom directory
+  km configure --output-dir /tmp/km-test
+
+Flags:
+  --non-interactive          Skip prompts; use flag values directly
+  --output-dir string        Directory to write km-config.yaml
+  --domain string            Base domain (e.g. myplatform.dev)
+  --management-account       AWS management account ID
+  --terraform-account        AWS Terraform account ID
+  --application-account      AWS application account ID (optional for
+                             2-account topology)
+  --sso-start-url string     AWS SSO start URL
+  --sso-region string        AWS SSO region
+  --region string            Primary AWS region for sandboxes
+
+Account Topologies:
+  2-account:  Management + Terraform (simpler, Terraform account runs
+              sandboxes directly)
+  3-account:  Management + Terraform + Application (production setup,
+              sandboxes run in isolated Application account)
+
+  The wizard detects 2-account vs 3-account based on whether you provide
+  an application account ID. For 3-account setups, DNS delegation
+  guidance is printed after config generation.
+
+The generated km-config.yaml should be added to .gitignore — it
+contains AWS account IDs specific to your deployment.

@@ -45,16 +45,7 @@ func NewDestroyCmd(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "destroy <sandbox-id>",
 		Short: "Destroy a provisioned sandbox",
-		Long: `Destroy discovers the sandbox by its tag in AWS and tears it down.
-
-For EC2 spot sandboxes, the instance is explicitly terminated before Terraform
-destroy runs. This is critical: 'aws_spot_instance_request' destroy cancels the
-spot request but leaves the instance running — explicit termination is required.
-
-After a successful destroy, the local sandbox directory is removed.
-
-Exit code 0 — sandbox destroyed successfully
-Exit code 1 — sandbox not found, destruction failed, or cleanup failed`,
+		Long:  helpText("destroy"),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if awsProfile == "" {

@@ -1,0 +1,33 @@
+Tail audit logs for a sandbox from CloudWatch Logs.
+
+Reads from the log group /km/sandboxes/<sandbox-id>/ and the named
+stream (default: "audit"). With --follow, streams log events
+continuously until you press Ctrl+C.
+
+Usage:
+  km logs <sandbox-id> [flags]
+
+Examples:
+  # Show recent audit log entries
+  km logs sb-a1b2c3d4
+
+  # Stream logs continuously
+  km logs sb-a1b2c3d4 --follow
+
+  # Read a specific log stream
+  km logs sb-a1b2c3d4 --stream application
+
+Flags:
+  --follow          Stream logs continuously until Ctrl+C
+  --stream string   Log stream name within the sandbox log group
+                    (default: "audit")
+
+Available Log Streams:
+  audit        Command execution and security events (default)
+  application  Application-level logs from sandbox services
+  system       OS-level and sidecar logs
+
+The audit stream captures all commands executed inside the sandbox,
+network connections, and file access events recorded by the audit-log
+sidecar. Logs are retained according to the CloudWatch log group
+retention policy (default: 30 days).

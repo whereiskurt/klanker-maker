@@ -23,6 +23,7 @@ func NewLogsCmd(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "logs <sandbox-id>",
 		Short:        "Tail audit logs for a sandbox",
+		Long:         helpText("logs"),
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

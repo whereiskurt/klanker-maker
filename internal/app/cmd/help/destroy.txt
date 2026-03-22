@@ -1,0 +1,34 @@
+Destroy discovers the sandbox by its tag in AWS and tears it down.
+
+For EC2 spot sandboxes, the instance is explicitly terminated before
+Terraform destroy runs. This is critical: 'aws_spot_instance_request'
+destroy cancels the spot request but leaves the instance running —
+explicit termination is required to avoid orphaned resources.
+
+Usage:
+  km destroy <sandbox-id> [flags]
+
+Examples:
+  # Destroy a sandbox
+  km destroy sb-a1b2c3d4
+
+  # Use a specific AWS profile
+  km destroy sb-a1b2c3d4 --aws-profile my-profile
+
+Flags:
+  --aws-profile string   AWS CLI profile to use (default: klanker-terraform)
+  --force                Skip confirmation prompt
+
+What Happens:
+  1. Sandbox ID format is validated (must match sb-[a-f0-9]{8})
+  2. AWS credentials are loaded and verified
+  3. Sandbox is discovered via tag-based lookup (fails if not found)
+  4. Substrate check — EC2 spot instances are explicitly terminated
+  5. Terragrunt destroy runs (streams output in real time)
+  6. Local sandbox directory is removed on success
+  7. TTL scheduler is deleted (if it exists)
+  8. S3 state artifacts are cleaned up
+
+Exit Codes:
+  0 — Sandbox destroyed successfully
+  1 — Sandbox not found, destruction failed, or cleanup failed

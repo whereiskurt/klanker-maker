@@ -26,13 +26,7 @@ func NewValidateCmd(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "validate <profile.yaml> [profile2.yaml ...]",
 		Short: "Validate one or more sandbox profile YAML files",
-		Long: `Validate checks sandbox profiles for schema correctness and semantic consistency.
-
-For profiles with an 'extends' field, the full inheritance chain is resolved before
-validation runs. This ensures the fully-merged profile is what gets checked.
-
-Exit code 0 — all profiles valid
-Exit code 1 — one or more profiles invalid or unreadable`,
+		Long:  helpText("validate"),
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runValidate(cfg, args)

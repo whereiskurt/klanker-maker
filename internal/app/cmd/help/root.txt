@@ -1,0 +1,31 @@
+km — sandbox profile management CLI for the klankrmkr platform.
+
+km manages the full lifecycle of sandbox environments: from profile
+validation and compilation, through provisioning and monitoring, to
+teardown. Sandboxes run on AWS using EC2 spot instances or ECS Fargate,
+with configurable networking, security, and budget enforcement.
+
+Getting Started:
+
+  1. km configure          Set up km-config.yaml with your domain and accounts
+  2. km bootstrap          Verify config and preview shared infrastructure
+  3. km init --region X    Provision shared VPC/networking in a region
+  4. km validate prof.yaml Check a profile before provisioning
+  5. km create prof.yaml   Provision a sandbox from the profile
+
+Day-to-Day:
+
+  km list                  Show all running sandboxes
+  km status <sandbox-id>   Detailed state, resources, and budget for a sandbox
+  km logs <sandbox-id>     Tail audit logs from CloudWatch
+  km budget add <id>       Top up compute or AI budget for a sandbox
+  km destroy <sandbox-id>  Tear down a sandbox and clean up resources
+
+Configuration:
+
+  km reads platform settings from km-config.yaml at the repo root.
+  Run 'km configure' to generate this file interactively.
+  Environment variables (KM_DOMAIN, KM_PRIMARY_REGION, etc.) override
+  km-config.yaml values.
+
+Use "km <command> --help" for detailed help on any command.

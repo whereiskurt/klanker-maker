@@ -1,0 +1,41 @@
+Create validates, compiles, and provisions a new sandbox from the given profile.
+
+The command runs through a strict pipeline: validate the profile, verify AWS
+credentials, compile to Terragrunt artifacts, create the sandbox directory,
+and run 'terragrunt apply'. Output is streamed to the terminal in real time.
+
+Usage:
+  km create <profile.yaml> [flags]
+
+Examples:
+  # Create a sandbox from a profile
+  km create profiles/ds-gpu.yaml
+
+  # Force on-demand instances instead of spot
+  km create profiles/ds-gpu.yaml --on-demand
+
+  # Use a specific AWS profile
+  km create profiles/ds-gpu.yaml --aws-profile my-profile
+
+Flags:
+  --on-demand            Override spot: true in the profile — use on-demand
+                         instances instead of spot instances
+  --aws-profile string   AWS CLI profile to use (default: klanker-terraform)
+
+What Happens:
+  1. Profile is parsed and validated (fails fast on invalid input)
+  2. AWS credentials are verified (fails before any provisioning)
+  3. Profile is compiled into Terragrunt HCL artifacts
+  4. Sandbox directory is created under sandboxes/<sandbox-id>/
+  5. Terragrunt apply runs (streams output in real time)
+  6. Budget record initialized in DynamoDB (if profile has budget)
+  7. TTL scheduler created (if profile has TTL)
+  8. Welcome email sent (if SES is configured)
+
+On Failure:
+  The local sandbox directory is removed automatically. AWS resources that
+  were partially created must be cleaned up manually with 'km destroy'.
+
+Exit Codes:
+  0 — Sandbox created successfully
+  1 — Validation, compilation, or provisioning failed

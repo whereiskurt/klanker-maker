@@ -1,0 +1,34 @@
+List shows all running sandboxes across your AWS account.
+
+By default, sandboxes are discovered by scanning S3 state objects. Use
+--tags for a slower but more thorough scan via AWS Resource Groups
+Tagging API (catches orphaned resources without state files).
+
+Usage:
+  km list [flags]
+
+Examples:
+  # List all sandboxes (table format)
+  km list
+
+  # Output as JSON for scripting
+  km list --json
+
+  # Use tag-based discovery (slower, more thorough)
+  km list --tags
+
+Flags:
+  --json    Output as JSON array instead of a table
+  --tags    Use AWS tag scan instead of S3 state scan
+
+Table Columns:
+  SANDBOX ID    Unique identifier (sb-XXXXXXXX)
+  PROFILE       Source profile name
+  SUBSTRATE     ec2spot or ecs-fargate
+  REGION        AWS region
+  STATUS        running, stopped, or unknown
+  TTL           Time remaining before auto-teardown (or "none")
+
+The S3 scan reads from the tf-km-state bucket and is fast. The tag
+scan queries the Resource Groups Tagging API and catches sandboxes
+whose state files may have been lost or corrupted.

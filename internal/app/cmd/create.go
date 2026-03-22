@@ -49,17 +49,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create <profile.yaml>",
 		Short: "Provision a new sandbox from a profile",
-		Long: `Create validates, compiles, and provisions a new sandbox from the given profile.
-
-The profile is validated before any AWS resources are created. AWS credentials
-are verified before compilation or provisioning begins. Terragrunt output is
-streamed to the terminal in real time.
-
-If provisioning fails, the local sandbox directory is removed. AWS resources
-that were partially created must be cleaned up manually with 'km destroy'.
-
-Exit code 0 — sandbox created successfully
-Exit code 1 — validation, compilation, or provisioning failed`,
+		Long:  helpText("create"),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if awsProfile == "" {

@@ -52,6 +52,7 @@ func NewStatusCmdWithFetchers(cfg *config.Config, fetcher SandboxFetcher, budget
 	cmd := &cobra.Command{
 		Use:          "status <sandbox-id>",
 		Short:        "Show detailed state for a sandbox",
+		Long:         helpText("status"),
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

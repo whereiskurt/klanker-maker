@@ -1,0 +1,13 @@
+Manage budget limits for sandboxes.
+
+The budget command group provides tools to view and modify budget
+allocations for sandbox compute and AI spend. Budgets are tracked
+in DynamoDB and enforced by the budget-enforcer Lambda.
+
+Usage:
+  km budget <subcommand> [flags]
+
+Available Subcommands:
+  add    Add budget (top-up) to a sandbox
+
+Use "km budget <subcommand> --help" for details on each subcommand.

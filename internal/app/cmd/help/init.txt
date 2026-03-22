@@ -1,0 +1,33 @@
+Provisions the shared VPC and networking that all sandboxes in a region use.
+
+Run this once per region before your first 'km create' targeting that region.
+Safe to re-run — idempotent via Terraform. The shared infrastructure includes
+a VPC, public subnets across availability zones, and a sandbox management
+security group.
+
+Usage:
+  km init [flags]
+
+Examples:
+  # Initialize the default region (us-east-1)
+  km init
+
+  # Initialize a specific region
+  km init --region ca-central-1
+
+  # Use a non-default AWS profile
+  km init --region us-east-1 --aws-profile klanker-application
+
+What Gets Created:
+  - VPC with DNS support enabled
+  - Public subnets across 2+ availability zones
+  - Internet gateway and route tables
+  - Sandbox management security group (egress-only by default)
+
+Prerequisites:
+  - AWS credentials configured (profile: klanker-application)
+  - km-config.yaml present (run 'km configure' first)
+  - Terraform and Terragrunt installed
+
+The outputs (VPC ID, subnet IDs, security group ID) are stored in
+Terraform state and automatically referenced by 'km create'.

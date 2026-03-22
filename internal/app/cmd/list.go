@@ -37,6 +37,7 @@ func NewListCmdWithLister(_ *config.Config, lister SandboxLister) *cobra.Command
 	cmd := &cobra.Command{
 		Use:          "list",
 		Short:        "List all running sandboxes",
+		Long:         helpText("list"),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runList(cmd, lister, jsonOutput, useTagScan)

@@ -1,0 +1,45 @@
+Add budget (top-up) to a sandbox and auto-resume if suspended.
+
+Increases the compute and/or AI budget limits for a sandbox by the
+specified amounts. If the sandbox was suspended due to budget
+exhaustion, it is automatically resumed after the top-up.
+
+Usage:
+  km budget add <sandbox-id> [flags]
+
+Examples:
+  # Add $10 to compute budget
+  km budget add sb-a1b2c3d4 --compute 10.00
+
+  # Add $5 to AI budget
+  km budget add sb-a1b2c3d4 --ai 5.00
+
+  # Top up both budgets at once
+  km budget add sb-a1b2c3d4 --compute 25.00 --ai 10.00
+
+Flags:
+  --compute float   Amount in USD to add to the compute budget limit
+  --ai float        Amount in USD to add to the AI budget limit
+
+At least one of --compute or --ai must be specified.
+
+What Happens:
+  1. Current budget limits are read from DynamoDB
+  2. New limits are calculated (additive — current + top-up)
+  3. Updated limits are written to DynamoDB
+  4. If sandbox was suspended (compute exhausted):
+     - EC2 instances are started (or ECS tasks restarted)
+  5. If AI access was revoked (AI budget exhausted):
+     - Bedrock IAM policy is reattached to the sandbox role
+  6. Summary is printed showing old and new limits
+
+Auto-Resume:
+  When a sandbox hits its budget limit, the budget-enforcer Lambda
+  suspends it (stops EC2, revokes IAM). Adding budget via 'km budget add'
+  detects this state and automatically resumes the sandbox — no manual
+  intervention needed beyond the top-up.
+
+Budget Tracking:
+  Compute spend is tracked by the budget-enforcer Lambda (1-minute polls).
+  AI spend is tracked by the http-proxy sidecar (real-time Bedrock
+  request interception). Both are stored in the DynamoDB budget table.

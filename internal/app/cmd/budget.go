@@ -57,6 +57,7 @@ func NewBudgetCmdWithDeps(cfg *config.Config, budgetClient kmaws.BudgetAPI, ec2C
 	budget := &cobra.Command{
 		Use:          "budget",
 		Short:        "Manage budget limits for a sandbox",
+		Long:         helpText("budget"),
 		SilenceUsage: true,
 	}
 
@@ -73,6 +74,7 @@ func newBudgetAddCmd(cfg *config.Config, budgetClient kmaws.BudgetAPI, ec2Client
 	add := &cobra.Command{
 		Use:          "add <sandbox-id>",
 		Short:        "Add budget (top-up) to a sandbox and auto-resume if suspended",
+		Long:         helpText("budget_add"),
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

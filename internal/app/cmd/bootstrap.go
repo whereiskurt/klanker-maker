@@ -20,15 +20,7 @@ func NewBootstrapCmd(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "bootstrap",
 		Short: "Validate config and show what infrastructure bootstrap would create",
-		Long: `Bootstrap validates km-config.yaml and shows (with --dry-run) the
-infrastructure that would be created for the platform:
-
-  - S3 bucket for Terraform state and sandbox metadata
-  - DynamoDB table for Terraform state locking
-  - KMS key for state bucket encryption
-
-Full implementation (actual provisioning) is a future plan.
---dry-run is the default and safe to run in any environment.`,
+		Long:  helpText("bootstrap"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBootstrap(cfg, dryRun)
 		},
