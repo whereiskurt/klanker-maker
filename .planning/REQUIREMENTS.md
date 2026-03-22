@@ -37,9 +37,9 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **NETW-02**: DNS proxy sidecar filters outbound DNS by allowlisted suffixes (works on both EC2 and ECS substrates)
 - [ ] **NETW-03**: HTTP proxy sidecar filters outbound HTTP/S by allowlisted hosts and methods (works on both EC2 and ECS substrates)
 - [x] **NETW-04**: IAM role is session-scoped with configurable duration and region lock
-- [ ] **NETW-05**: IMDSv2 is enforced (http-tokens=required) on all sandbox EC2 instances
+- [x] **NETW-05**: IMDSv2 is enforced (http-tokens=required) on all sandbox EC2 instances
 - [x] **NETW-06**: Secrets are injected via SSM Parameter Store with allowlist of permitted secret refs
-- [ ] **NETW-07**: SOPS encrypts secrets at rest with KMS keys provisioned as part of Klanker Maker infrastructure
+- [x] **NETW-07**: SOPS encrypts secrets at rest with KMS keys provisioned as part of Klanker Maker infrastructure
 - [x] **NETW-08**: GitHub source access controls allowlist repos, refs, and permissions (clone/fetch/push)
 
 ### Observability & Artifacts
@@ -151,9 +151,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PROV-12 | Phase 2 | Complete |
 | NETW-01 | Phase 2 | Complete |
 | NETW-04 | Phase 2 | Complete |
-| NETW-05 | Phase 2 | Pending |
+| NETW-05 | Phase 2 | Complete |
 | NETW-06 | Phase 2 | Complete |
-| NETW-07 | Phase 2 | Pending |
+| NETW-07 | Phase 2 | Complete |
 | NETW-08 | Phase 2 | Complete |
 | PROV-03 | Phase 3 | Pending |
 | PROV-04 | Phase 3 | Pending |
