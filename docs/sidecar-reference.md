@@ -1,0 +1,396 @@
+# Klanker Maker Sidecar Reference
+
+Every Klanker Maker sandbox runs four sidecars that enforce network policy,
+collect audit telemetry, and export traces. On EC2 they run as systemd
+services. On ECS Fargate they run as sidecar containers in the task
+definition sharing the `awsvpc` network namespace with the main container.
+
+---
+
+## 1. DNS Proxy
+
+| | |
+|---|---|
+| **Binary** | `sidecars/dns-proxy/` (Go, `github.com/miekg/dns`) |
+| **Listens** | UDP :53 and TCP :53 (concurrent servers) |
+| **Purpose** | Filter DNS queries against an allowlist of domain suffixes |
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `ALLOWED_SUFFIXES` | Yes | *(empty -- denies all)* | Comma-separated domain suffixes, e.g. `.amazonaws.com,.github.com` |
+| `UPSTREAM_DNS` | No | `169.254.169.253` | Upstream resolver (AWS VPC DNS). Port 53 is appended automatically if omitted. |
+| `DNS_PORT` | No | `53` | Listen port for both UDP and TCP servers |
+| `SANDBOX_ID` | No | `unknown` | Sandbox identifier attached to every log line |
+
+### Behavior
+
+1. Each incoming query is checked against `ALLOWED_SUFFIXES` using
+   case-insensitive suffix matching. A trailing DNS dot is stripped before
+   comparison. A name matches if it equals a suffix or ends with `.<suffix>`.
+2. **Allowed** -- the query is forwarded to `UPSTREAM_DNS` and the upstream
+   response is returned to the client.
+3. **Denied** -- an `NXDOMAIN` (RCODE 3) response is returned immediately.
+4. If the upstream resolver returns an error, the proxy responds with
+   `SERVFAIL` and logs the error.
+
+### Log Format
+
+JSON to stdout via `zerolog`. Every query emits:
+
+```json
+{
+  "level": "info",
+  "sandbox_id": "sb-a1b2c3d4",
+  "event_type": "dns_query",
+  "domain": "api.github.com.",
+  "allowed": true,
+  "time": "2026-03-22T10:00:00Z"
+}
+```
+
+Startup emits `event_type: "dns_proxy_start"` with `addr`, `upstream`, and
+`allowed_suffixes`. Upstream errors emit `event_type: "dns_upstream_error"`.
+
+### Health Check
+
+```
+dig +short +timeout=2 @127.0.0.1 health.check || exit 1
+```
+
+The proxy will respond with `NXDOMAIN` for any name not in the allowlist,
+which is sufficient to prove the process is alive and listening. On ECS, use
+the `CMD` health check form:
+
+```json
+["CMD-SHELL", "dig +short +timeout=2 @127.0.0.1 health.check || exit 1"]
+```
+
+### EC2 Deployment
+
+Runs as a systemd service (`km-dns-proxy.service`). An iptables DNAT rule
+redirects all outbound DNS traffic through the proxy (see
+[iptables DNAT](#iptables-dnat-on-ec2) below).
+
+### ECS Deployment
+
+Sidecar container in the task definition. Because Fargate uses `awsvpc`
+network mode, the DNS proxy shares the same network namespace as the main
+container. The main container's `/etc/resolv.conf` points to `127.0.0.1`.
+
+---
+
+## 2. HTTP Proxy
+
+| | |
+|---|---|
+| **Binary** | `sidecars/http-proxy/` (Go, `github.com/elazarl/goproxy`) |
+| **Listens** | TCP :3128 (standard Squid-compatible port) |
+| **Purpose** | Filter HTTP/HTTPS by host allowlist; Bedrock token metering (Phase 6) |
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `ALLOWED_HOSTS` | Yes | *(empty -- denies all)* | Comma-separated hostnames, e.g. `api.github.com,bedrock-runtime.us-east-1.amazonaws.com` |
+| `PROXY_PORT` | No | `3128` | Listen port |
+| `SANDBOX_ID` | No | `unknown` | Sandbox identifier attached to every log line |
+
+### Behavior
+
+The proxy handles two request types:
+
+- **HTTPS (CONNECT tunnel)** -- the client issues `CONNECT host:443`. If the
+  host is in `ALLOWED_HOSTS` (case-insensitive, port stripped), the tunnel is
+  established (`OkConnect`). W3C `traceparent` headers are injected into the
+  CONNECT request via the OTel propagation API. Denied hosts receive
+  `RejectConnect` (client sees HTTP 403).
+- **Plain HTTP (forward proxy)** -- allowed hosts are forwarded normally.
+  Denied hosts receive a `403 Forbidden` response with body
+  `Blocked by km sandbox policy`.
+
+**Bedrock interception** (Phase 6): The proxy will intercept
+`InvokeModel` responses from Bedrock, extract input/output token counts from
+the response body, and increment counters in DynamoDB for quota enforcement.
+
+### Log Format
+
+JSON to stdout via `zerolog`. Blocked requests emit:
+
+```json
+{
+  "level": "info",
+  "sandbox_id": "sb-a1b2c3d4",
+  "event_type": "http_blocked",
+  "host": "evil.example.com:443",
+  "time": "2026-03-22T10:00:00Z"
+}
+```
+
+Startup emits `event_type: "http_proxy_start"` with `addr`, `allowed_hosts`,
+and `sandbox_id`.
+
+### Health Check
+
+```
+curl -sf -o /dev/null -x http://127.0.0.1:3128 http://health.check/ || exit 1
+```
+
+The proxy will return 403 for an unrecognized host, but that confirms the
+process is alive. On ECS:
+
+```json
+["CMD-SHELL", "curl -sf -o /dev/null -x http://127.0.0.1:3128 http://health.check/ || exit 1"]
+```
+
+### EC2 Deployment
+
+Runs as a systemd service (`km-http-proxy.service`). An iptables DNAT rule
+redirects outbound HTTP (port 80) and HTTPS (port 443) traffic through the
+proxy (see [iptables DNAT](#iptables-dnat-on-ec2) below).
+
+### ECS Deployment
+
+Sidecar container in the task definition. The main container has
+`HTTP_PROXY=http://127.0.0.1:3128` and `HTTPS_PROXY=http://127.0.0.1:3128`
+set as environment variables so all SDK and CLI traffic routes through
+the proxy.
+
+---
+
+## 3. Audit Log
+
+| | |
+|---|---|
+| **Binary** | `sidecars/audit-log/cmd/` (Go) |
+| **Input** | JSON-line events from stdin |
+| **Purpose** | Route audit events to a configured destination with secret redaction |
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `AUDIT_LOG_DEST` | No | `stdout` | Destination: `stdout`, `cloudwatch`, or `s3` |
+| `SANDBOX_ID` | No | `unknown` | Sandbox identifier |
+| `CW_LOG_GROUP` | No | `/km/sandboxes/{SANDBOX_ID}/` | CloudWatch Logs group name |
+| `AWS_REGION` | No | `us-east-1` | AWS region for CloudWatch |
+
+### Event Schema
+
+All events conform to the locked JSON schema:
+
+```json
+{
+  "timestamp":  "2026-03-22T10:00:00Z",
+  "sandbox_id": "sb-a1b2c3d4",
+  "event_type": "shell_command",
+  "source":     "audit-log",
+  "detail":     { "command": "ls -la" }
+}
+```
+
+`event_type` values: `shell_command`, `dns_query`, `http_request`.
+`source` values: `audit-log`, `dns-proxy`, `http-proxy`.
+
+### Destinations
+
+| Destination | Behavior |
+|---|---|
+| **StdoutDest** | Writes JSON events as newline-delimited lines to stdout |
+| **CloudWatchDest** | Batches events (flush threshold: 25) and sends to CloudWatch Logs via `PutLogEvents`. Creates the log group and stream on startup. |
+| **S3Dest** | Stub -- falls back to stdout with a warning. Full S3 archive delivery is Phase 4 scope. |
+
+### Secret Redaction
+
+The `RedactingDestination` wrapper scans all string values in the `detail`
+map (recursively into nested maps and slices) and replaces matches with
+`[REDACTED]`. Structural fields (`sandbox_id`, `event_type`, `timestamp`,
+`source`) are never modified.
+
+Built-in patterns:
+- AWS access key IDs: `AKIA[A-Z0-9]{16}`
+- Bearer tokens: `Bearer [A-Za-z0-9\-._~+/]+=*`
+- Hex strings (40+ chars): `[0-9a-f]{40,}`
+- Literal SSM parameter values provided at construction time
+
+### Signal Handling
+
+On `SIGTERM` or `SIGINT`, the sidecar flushes all buffered events to the
+destination and exits cleanly with code 0. This ensures no audit data is
+lost during sandbox teardown.
+
+### Health Check
+
+The audit-log sidecar reads from stdin and has no listen port. Health is
+verified by checking the process is alive:
+
+```json
+["CMD-SHELL", "pgrep -f audit-log || exit 1"]
+```
+
+### EC2 Deployment
+
+Piped from the shell audit hook. A `PROMPT_COMMAND` in
+`/etc/profile.d/km-audit.sh` emits JSON events to a named pipe. The
+audit-log sidecar reads from that pipe. It also receives forwarded events
+from the DNS proxy and HTTP proxy via systemd journal piping.
+
+### ECS Deployment
+
+The `awslogs` log driver captures container stdout for each sidecar. The
+audit-log sidecar processes events piped from other containers via shared
+volumes or direct stdout aggregation.
+
+---
+
+## 4. Tracing
+
+| | |
+|---|---|
+| **Directory** | `sidecars/tracing/` (scaffolding phase) |
+| **Binary** | `otelcol-contrib` with custom config |
+| **Purpose** | OTel trace/span collection from sandbox workloads, export to S3 |
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `OTEL_COLLECTOR_ENDPOINT` | No | `0.0.0.0:4317` (gRPC), `0.0.0.0:4318` (HTTP) | Collector listen endpoints |
+| `MLFLOW_TRACKING_URI` | Planned | -- | MLflow tracking server URI |
+| `MLFLOW_EXPERIMENT_NAME` | Planned | -- | MLflow experiment name |
+| `SANDBOX_ID` | Yes | -- | Used for S3 prefix partitioning |
+| `AWS_REGION` | Yes | -- | Region for S3 exporter |
+| `OTEL_S3_BUCKET` | Yes | -- | S3 bucket for trace export |
+
+### Configuration
+
+The collector runs with `sidecars/tracing/config.yaml`:
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+exporters:
+  awss3:
+    s3_uploader:
+      region: ${AWS_REGION}
+      s3_bucket: ${OTEL_S3_BUCKET}
+      s3_prefix: "traces/${SANDBOX_ID}"
+    marshaler: otlp_json
+    timeout: 30s
+```
+
+Traces are batched (10s / 1024 spans) and exported as OTLP JSON to
+`s3://<bucket>/traces/<sandbox-id>/`.
+
+### Planned Features
+
+- **MLflow run logging**: Each sandbox session creates an MLflow run with
+  metadata (profile name, sandbox-id, duration, exit status).
+
+### Health Check
+
+```
+curl -sf http://127.0.0.1:13133/health || exit 1
+```
+
+The OTel collector exposes a health check extension on port 13133 by default.
+
+### EC2 Deployment
+
+Runs as a standalone `otelcol-contrib` process with the config file at
+`/etc/km/tracing/config.yaml`.
+
+### ECS Deployment
+
+OTel sidecar container in the task definition. Shares the network namespace
+with the main container so workloads can send traces to `localhost:4317`
+(gRPC) or `localhost:4318` (HTTP).
+
+---
+
+## iptables DNAT on EC2
+
+On EC2 instances, iptables rules transparently redirect traffic through the
+DNS and HTTP proxies. This ensures enforcement even if the workload does not
+honor proxy environment variables.
+
+```bash
+# Redirect all outbound DNS (UDP + TCP port 53) to the DNS proxy
+iptables -t nat -A OUTPUT -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:53
+iptables -t nat -A OUTPUT -p tcp --dport 53 -j DNAT --to-destination 127.0.0.1:53
+
+# Redirect outbound HTTP and HTTPS to the HTTP proxy
+iptables -t nat -A OUTPUT -p tcp --dport 80  -j DNAT --to-destination 127.0.0.1:3128
+iptables -t nat -A OUTPUT -p tcp --dport 443 -j DNAT --to-destination 127.0.0.1:3128
+```
+
+The DNAT rules are installed during instance bootstrap (user-data) after the
+sidecar systemd services have started. Rules exclude traffic originating from
+the proxy processes themselves (by UID match) to prevent redirect loops:
+
+```bash
+# Exclude proxy UID from DNAT to avoid loops
+iptables -t nat -A OUTPUT -m owner --uid-owner km-proxy -j RETURN
+```
+
+---
+
+## Container Dependency Ordering on ECS
+
+In the ECS task definition, the `dependsOn` field ensures sidecars are
+healthy before the main container starts:
+
+```
+dns-proxy    -->  (HEALTHY)  --+
+http-proxy   -->  (HEALTHY)  --+--> main container starts
+audit-log    -->  (START)    --+
+tracing      -->  (HEALTHY)  --+
+```
+
+The task definition uses the `dependsOn` directive with `condition` set to
+`HEALTHY` for sidecars that expose health checks (dns-proxy, http-proxy,
+tracing) and `START` for the audit-log sidecar (which has no listen port).
+
+All four sidecars have `essential: true` by default. If any sidecar exits,
+the entire task is stopped -- this prevents unmonitored or unfiltered
+workload execution.
+
+---
+
+## Debugging Blocked Requests
+
+When a sandbox user reports that a request is unexpectedly blocked, use the
+`km logs` command to stream sidecar logs in real time:
+
+```bash
+# Stream DNS proxy logs for a running sandbox
+km logs --sandbox sb-a1b2c3d4 --stream dns-proxy
+
+# Stream HTTP proxy logs
+km logs --sandbox sb-a1b2c3d4 --stream http-proxy
+
+# Stream all sidecar logs interleaved
+km logs --sandbox sb-a1b2c3d4 --stream all
+```
+
+### Common issues
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `NXDOMAIN` for a valid domain | Domain suffix missing from `ALLOWED_SUFFIXES` | Add the suffix to the sandbox profile's `network.dns_allowlist` |
+| `403 Forbidden` from HTTP proxy | Host missing from `ALLOWED_HOSTS` | Add the host to the sandbox profile's `network.http_allowlist` |
+| Timeouts (no NXDOMAIN or 403) | Upstream DNS unreachable or proxy not running | Check `km logs --stream dns-proxy` for `dns_upstream_error` events; verify sidecar health with `km status sb-a1b2c3d4` |
+| Audit events missing | `AUDIT_LOG_DEST` misconfigured or CloudWatch permissions | Check `km logs --stream audit-log` for initialization errors |
+| Traces not appearing in S3 | `OTEL_S3_BUCKET` not set or IAM missing `s3:PutObject` | Verify env vars and task role permissions |
