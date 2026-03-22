@@ -39,6 +39,28 @@ type Spec struct {
 	// Artifacts defines optional artifact collection and upload settings.
 	// When nil, artifact collection is disabled.
 	Artifacts *ArtifactsSpec `yaml:"artifacts,omitempty"`
+	// Budget defines optional spend limits for compute and AI usage.
+	// When nil, budget enforcement is disabled.
+	Budget *BudgetSpec `yaml:"budget,omitempty"`
+}
+
+// BudgetSpec defines optional spend limits for compute and AI workloads in a sandbox.
+// Both Compute and AI sub-sections are optional (pointer, omitempty).
+// WarningThreshold is the fraction of the limit at which alerts are triggered (default 0.8 when zero).
+type BudgetSpec struct {
+	Compute          *ComputeBudget `yaml:"compute,omitempty"`
+	AI               *AIBudget      `yaml:"ai,omitempty"`
+	WarningThreshold float64        `yaml:"warningThreshold,omitempty"` // default 0.8 when zero
+}
+
+// ComputeBudget caps EC2/Fargate compute spend for the sandbox.
+type ComputeBudget struct {
+	MaxSpendUSD float64 `yaml:"maxSpendUSD"`
+}
+
+// AIBudget caps Bedrock model spend for the sandbox across all models.
+type AIBudget struct {
+	MaxSpendUSD float64 `yaml:"maxSpendUSD"`
 }
 
 // ArtifactsSpec defines artifact collection paths and S3 upload settings.

@@ -56,6 +56,37 @@
       ],
       "additionalProperties": false,
       "properties": {
+        "budget": {
+          "type": "object",
+          "description": "Optional spend limits for compute and AI workloads",
+          "additionalProperties": false,
+          "properties": {
+            "compute": {
+              "type": "object",
+              "description": "Compute (EC2/Fargate) spend limit",
+              "additionalProperties": false,
+              "properties": {
+                "maxSpendUSD": { "type": "number", "minimum": 0, "description": "Maximum compute spend in USD" }
+              },
+              "required": ["maxSpendUSD"]
+            },
+            "ai": {
+              "type": "object",
+              "description": "Bedrock AI model spend limit",
+              "additionalProperties": false,
+              "properties": {
+                "maxSpendUSD": { "type": "number", "minimum": 0, "description": "Maximum AI spend in USD" }
+              },
+              "required": ["maxSpendUSD"]
+            },
+            "warningThreshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Fraction of limit at which warning alerts fire (default 0.8)"
+            }
+          }
+        },
         "artifacts": {
           "type": "object",
           "description": "Optional artifact collection and S3 upload settings",

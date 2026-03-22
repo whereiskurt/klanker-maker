@@ -209,3 +209,186 @@ func TestMetadataLabels(t *testing.T) {
 		t.Errorf("expected metadata.labels.tier to be set, got: %v", p.Metadata.Labels)
 	}
 }
+
+// TestBudgetSpecParsesFromYAML verifies that BudgetSpec round-trips from YAML with
+// compute and AI budget limits.
+func TestBudgetSpecParsesFromYAML(t *testing.T) {
+	yamlData := `
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: budget-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+      allowedMethods: ["GET"]
+  identity:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: false
+      image: "km-otel:latest"
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+  policy:
+    allowShellEscape: false
+  agent:
+    maxConcurrentTasks: 2
+    taskTimeout: 30m
+  budget:
+    compute:
+      maxSpendUSD: 2.00
+    ai:
+      maxSpendUSD: 5.00
+    warningThreshold: 0.8
+`
+
+	p, err := profile.Parse([]byte(yamlData))
+	if err != nil {
+		t.Fatalf("expected profile with budget to parse without error, got: %v", err)
+	}
+
+	if p.Spec.Budget == nil {
+		t.Fatal("expected spec.budget to be populated, got nil")
+	}
+
+	b := p.Spec.Budget
+	if b.Compute == nil {
+		t.Fatal("expected spec.budget.compute to be populated, got nil")
+	}
+	if b.Compute.MaxSpendUSD != 2.00 {
+		t.Errorf("expected compute.maxSpendUSD=2.00, got %f", b.Compute.MaxSpendUSD)
+	}
+	if b.AI == nil {
+		t.Fatal("expected spec.budget.ai to be populated, got nil")
+	}
+	if b.AI.MaxSpendUSD != 5.00 {
+		t.Errorf("expected ai.maxSpendUSD=5.00, got %f", b.AI.MaxSpendUSD)
+	}
+	if b.WarningThreshold != 0.8 {
+		t.Errorf("expected warningThreshold=0.8, got %f", b.WarningThreshold)
+	}
+}
+
+// TestBudgetSpecWarningThresholdDefault verifies that warningThreshold defaults
+// to zero when omitted (caller can treat zero as "use default 0.8").
+func TestBudgetSpecWarningThresholdDefault(t *testing.T) {
+	yamlData := `
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: budget-threshold-default
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+      allowedMethods: ["GET"]
+  identity:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: false
+      image: "km-otel:latest"
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+  policy:
+    allowShellEscape: false
+  agent:
+    maxConcurrentTasks: 2
+    taskTimeout: 30m
+  budget:
+    ai:
+      maxSpendUSD: 10.00
+`
+
+	p, err := profile.Parse([]byte(yamlData))
+	if err != nil {
+		t.Fatalf("expected profile with partial budget to parse without error, got: %v", err)
+	}
+
+	if p.Spec.Budget == nil {
+		t.Fatal("expected spec.budget to be populated, got nil")
+	}
+	// warningThreshold omitted — zero value from Go zero-initialization
+	if p.Spec.Budget.WarningThreshold != 0 {
+		t.Errorf("expected default warningThreshold=0 (unset), got %f", p.Spec.Budget.WarningThreshold)
+	}
+	if p.Spec.Budget.Compute != nil {
+		t.Errorf("expected compute to be nil when omitted, got %+v", p.Spec.Budget.Compute)
+	}
+}
+
+// TestBudgetSpecOptional verifies that a profile without spec.budget is still valid.
+func TestBudgetSpecOptional(t *testing.T) {
+	data, err := os.ReadFile("../../testdata/profiles/valid-minimal.yaml")
+	if err != nil {
+		t.Fatalf("failed to read test fixture: %v", err)
+	}
+
+	p, err := profile.Parse(data)
+	if err != nil {
+		t.Fatalf("expected profile without budget to parse without error, got: %v", err)
+	}
+
+	// Budget is optional — nil means not specified
+	if p.Spec.Budget != nil {
+		t.Logf("valid-minimal.yaml has budget set: %+v (acceptable)", p.Spec.Budget)
+	}
+}
