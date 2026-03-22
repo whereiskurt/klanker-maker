@@ -63,7 +63,7 @@ func Compile(p *profile.SandboxProfile, sandboxID string, onDemand bool, network
 	case "ec2":
 		return compileEC2(p, sandboxID, onDemand, network)
 	case "ecs":
-		return compileECS(p, sandboxID, onDemand)
+		return compileECS(p, sandboxID, onDemand, network)
 	default:
 		return nil, fmt.Errorf("unknown substrate %q: must be \"ec2\" or \"ecs\"", substrate)
 	}
@@ -105,7 +105,7 @@ func compileEC2(p *profile.SandboxProfile, sandboxID string, onDemand bool, netw
 }
 
 // compileECS handles the ECS substrate compilation path.
-func compileECS(p *profile.SandboxProfile, sandboxID string, onDemand bool) (*CompiledArtifacts, error) {
+func compileECS(p *profile.SandboxProfile, sandboxID string, onDemand bool, network *NetworkConfig) (*CompiledArtifacts, error) {
 	// onDemand=true overrides profile's spot=true
 	useSpot := p.Spec.Runtime.Spot && !onDemand
 
@@ -115,7 +115,7 @@ func compileECS(p *profile.SandboxProfile, sandboxID string, onDemand bool) (*Co
 	secretPaths := compileSecrets(p)
 
 	// Generate service.hcl (ECS-specific template; no user-data.sh for ECS)
-	svcHCL, err := generateECSServiceHCL(p, sandboxID, useSpot)
+	svcHCL, err := generateECSServiceHCL(p, sandboxID, useSpot, sgRules, network)
 	if err != nil {
 		return nil, fmt.Errorf("generate ECS service.hcl: %w", err)
 	}

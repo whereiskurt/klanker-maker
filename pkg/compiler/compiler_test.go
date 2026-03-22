@@ -324,7 +324,7 @@ func TestCompileECS(t *testing.T) {
 	if artifacts.UserData != "" {
 		t.Errorf("Compile(ECS) UserData should be empty for ECS substrate, got %q", artifacts.UserData)
 	}
-	if !strings.Contains(artifacts.ServiceHCL, `substrate_module = "ecs-cluster"`) {
+	if !strings.Contains(artifacts.ServiceHCL, `substrate_module = "ecs"`) {
 		t.Errorf("Compile(ECS) ServiceHCL missing substrate_module = \"ecs-cluster\"\nGot:\n%s", artifacts.ServiceHCL)
 	}
 }
@@ -377,8 +377,8 @@ func TestCompileECSFargateSpot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile(ECS, spot=true) error = %v", err)
 	}
-	if !strings.Contains(artifacts.ServiceHCL, "FARGATE_SPOT") {
-		t.Errorf("ECS spot=true ServiceHCL should contain FARGATE_SPOT\nGot:\n%s", artifacts.ServiceHCL)
+	if !strings.Contains(artifacts.ServiceHCL, "use_spot       = true") {
+		t.Errorf("ECS spot=true ServiceHCL should contain use_spot = true\nGot:\n%s", artifacts.ServiceHCL)
 	}
 
 	// spot=false
@@ -388,11 +388,8 @@ func TestCompileECSFargateSpot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile(ECS, spot=false) error = %v", err)
 	}
-	if strings.Contains(artifactsNoSpot.ServiceHCL, "FARGATE_SPOT") {
-		t.Errorf("ECS spot=false ServiceHCL should NOT contain FARGATE_SPOT\nGot:\n%s", artifactsNoSpot.ServiceHCL)
-	}
-	if !strings.Contains(artifactsNoSpot.ServiceHCL, "FARGATE") {
-		t.Errorf("ECS spot=false ServiceHCL should contain FARGATE capacity provider\nGot:\n%s", artifactsNoSpot.ServiceHCL)
+	if !strings.Contains(artifactsNoSpot.ServiceHCL, "use_spot       = false") {
+		t.Errorf("ECS spot=false ServiceHCL should contain use_spot = false\nGot:\n%s", artifactsNoSpot.ServiceHCL)
 	}
 }
 
@@ -405,15 +402,12 @@ func TestCompileECSOnDemandOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile(ECS, spot=true, onDemand=true) error = %v", err)
 	}
-	if strings.Contains(artifacts.ServiceHCL, "FARGATE_SPOT") {
-		t.Errorf("ECS onDemand=true override should NOT contain FARGATE_SPOT\nGot:\n%s", artifacts.ServiceHCL)
-	}
-	if !strings.Contains(artifacts.ServiceHCL, "FARGATE") {
-		t.Errorf("ECS onDemand=true override should contain FARGATE\nGot:\n%s", artifacts.ServiceHCL)
+	if !strings.Contains(artifacts.ServiceHCL, "use_spot       = false") {
+		t.Errorf("ECS onDemand=true override should contain use_spot = false\nGot:\n%s", artifacts.ServiceHCL)
 	}
 }
 
-func TestCompileECSServiceDiscovery(t *testing.T) {
+func TestCompileECSNetworkConfig(t *testing.T) {
 	p := loadTestProfile(t, "ecs-basic.yaml")
 	id := "sb-ecssd001"
 
@@ -424,11 +418,14 @@ func TestCompileECSServiceDiscovery(t *testing.T) {
 
 	hcl := artifacts.ServiceHCL
 
-	if !strings.Contains(hcl, "service_discovery") {
-		t.Errorf("ECS ServiceHCL missing service_discovery\nGot:\n%s", hcl)
+	if !strings.Contains(hcl, "vpc-test123") {
+		t.Errorf("ECS ServiceHCL missing vpc_id\nGot:\n%s", hcl)
+	}
+	if !strings.Contains(hcl, "subnet-pub1") {
+		t.Errorf("ECS ServiceHCL missing public_subnets\nGot:\n%s", hcl)
 	}
 	if !strings.Contains(hcl, id) {
-		t.Errorf("ECS ServiceHCL service_discovery missing sandbox ID %q\nGot:\n%s", id, hcl)
+		t.Errorf("ECS ServiceHCL missing sandbox ID %q\nGot:\n%s", id, hcl)
 	}
 }
 

@@ -97,6 +97,7 @@ locals {
         subnet_id              = local.effective_subnets[instance_idx % length(local.effective_subnets)]
         sandbox_id             = ec2spot.sandbox_id
         user_data_base64       = ec2spot.user_data_base64
+        use_spot               = ec2spot.use_spot
         instance_name          = "km-sandbox-${ec2spot.sandbox_id}-${instance_idx}"
       }
     ]
@@ -105,6 +106,13 @@ locals {
   ec2spot_map = {
     for ec2spot in local.ec2spot_instances :
     ec2spot.key => ec2spot
+    if ec2spot.use_spot
+  }
+
+  ec2_ondemand_map = {
+    for ec2spot in local.ec2spot_instances :
+    ec2spot.key => ec2spot
+    if !ec2spot.use_spot
   }
 }
 
@@ -131,7 +139,7 @@ data "aws_ami" "base_ami" {
   }
 }
 
-# Get spot price for instances
+# Get spot price for spot instances only
 data "aws_ec2_spot_price" "price" {
   for_each = local.ec2spot_map
 
@@ -325,4 +333,35 @@ resource "aws_ec2_tag" "ec2spot_region" {
   resource_id = aws_spot_instance_request.ec2spot[each.key].spot_instance_id
   key         = "Region"
   value       = var.region_label
+}
+
+# ============================================================
+# On-demand instances (when use_spot = false / --on-demand flag)
+# ============================================================
+
+resource "aws_instance" "ec2_ondemand" {
+  for_each = local.ec2_ondemand_map
+
+  ami                    = data.aws_ami.base_ami[0].image_id
+  instance_type          = each.value.instance_type
+  user_data_base64       = each.value.user_data_base64 != "" ? each.value.user_data_base64 : base64encode(local.default_user_data)
+  subnet_id              = each.value.subnet_id
+  availability_zone      = each.value.availability_zone
+  vpc_security_group_ids = [aws_security_group.ec2spot[0].id]
+  iam_instance_profile   = aws_iam_instance_profile.ec2spot[0].name
+
+  metadata_options {
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+    http_endpoint               = "enabled"
+  }
+
+  associate_public_ip_address = true
+
+  tags = {
+    Name            = each.value.instance_name
+    "km:sandbox-id" = each.value.sandbox_id
+    "km:label"      = var.km_label
+    "Region"        = var.region_label
+  }
 }

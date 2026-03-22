@@ -35,6 +35,7 @@ variable "ec2spots" {
     block_duration_minutes = optional(number, 0)
     user_data              = optional(string, "")
     user_data_base64       = optional(string, "")
+    use_spot               = optional(bool, true)
   }))
   description = "List of EC2 spot instance configurations per region"
   default     = []
