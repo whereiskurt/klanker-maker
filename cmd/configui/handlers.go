@@ -42,6 +42,7 @@ type Handler struct {
 	lister      SandboxLister
 	finder      SandboxFinder
 	cwClient    CWLogsFilterAPI
+	ssmClient   SSMAPI // Added by Plan 03: secrets management
 	profilesDir string
 	bucket      string
 }
@@ -240,6 +241,19 @@ func buildTestTemplates() *template.Template {
 <p>Total sandboxes: {{.Count}}</p>
 {{template "sandbox_rows" .}}
 </body></html>{{end}}
+
+{{define "secrets.html"}}<!DOCTYPE html><html><body>
+<h1>Secrets Management</h1>
+<table><tbody id="secrets-table-body">
+{{range .}}<tr><td class="secret-name">{{.Name}}</td><td>{{.Type}}</td><td>{{.LastModified}}</td><td>{{.Version}}</td></tr>
+{{end}}
+</tbody></table>
+</body></html>{{end}}
+
+{{define "secret_rows"}}
+{{range .}}<tr><td class="secret-name">{{.Name}}</td><td>{{.Type}}</td><td>{{.LastModified}}</td><td>{{.Version}}</td></tr>
+{{end}}
+{{end}}
 
 {{define "sandbox_rows"}}
 {{range .Sandboxes}}<tr><td>{{.SandboxID}}</td><td>{{.Profile}}</td><td>{{.Substrate}}</td><td>{{.Status}}</td><td>{{.TTLRemaining}}</td></tr>
