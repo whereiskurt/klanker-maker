@@ -1,12 +1,14 @@
 // Package config provides the central configuration struct for the km CLI.
 // Configuration is loaded from ~/.km/config.yaml, environment variables (KM_ prefix),
-// and CLI flags (highest precedence).
+// and CLI flags (highest precedence). A repo-root km-config.yaml is also loaded
+// (merged via viper) to supply platform-level fields like Domain and AccountIDs.
 package config
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -35,26 +37,73 @@ type Config struct {
 	// SchedulerRoleARN is the IAM role ARN that EventBridge Scheduler assumes
 	// to invoke the TTL Lambda. Set via KM_SCHEDULER_ROLE_ARN environment variable.
 	SchedulerRoleARN string
+
+	// --- Platform fields (from km-config.yaml at repo root) ---
+
+	// Domain is the base domain for the platform (e.g. "klankermaker.ai").
+	// Set via km-config.yaml domain key or KM_DOMAIN environment variable.
+	// Used to derive email addresses (sandboxes.{Domain}), schema $id, and
+	// apiVersion prefixes so forks work with any domain without code changes.
+	Domain string
+
+	// ManagementAccountID is the AWS account ID for the management/root account.
+	// Maps to km-config.yaml key accounts.management.
+	ManagementAccountID string
+
+	// TerraformAccountID is the AWS account ID used for Terraform/infrastructure operations.
+	// Maps to km-config.yaml key accounts.terraform.
+	TerraformAccountID string
+
+	// ApplicationAccountID is the AWS account ID where sandboxes are provisioned.
+	// Maps to km-config.yaml key accounts.application.
+	ApplicationAccountID string
+
+	// SSOStartURL is the AWS SSO portal URL.
+	// Maps to km-config.yaml key sso.start_url.
+	SSOStartURL string
+
+	// SSORegion is the AWS region where the SSO instance is hosted.
+	// Maps to km-config.yaml key sso.region.
+	SSORegion string
+
+	// PrimaryRegion is the default AWS region for infrastructure operations.
+	// Maps to km-config.yaml key region.
+	PrimaryRegion string
+
+	// BudgetTableName is the DynamoDB table name for sandbox budget tracking.
+	// Maps to km-config.yaml key budget_table_name. Defaults to "km-budgets".
+	BudgetTableName string
+}
+
+// isSetByEnv returns true if the given viper key has been overridden by an environment
+// variable (KM_ prefix). Viper maps "foo.bar" -> KM_FOO_BAR (dots become underscores).
+func isSetByEnv(_ *viper.Viper, key string) bool {
+	envKey := "KM_" + strings.ToUpper(strings.NewReplacer(".", "_", "-", "_").Replace(key))
+	return os.Getenv(envKey) != ""
 }
 
 // Load reads configuration from (in order of increasing precedence):
 //  1. Defaults
 //  2. ~/.km/config.yaml
-//  3. Environment variables with KM_ prefix
-//  4. CLI flags (applied by the root command after Load returns)
+//  3. ./km-config.yaml (repo-root platform configuration, merged on top)
+//  4. Environment variables with KM_ prefix
+//  5. CLI flags (applied by the root command after Load returns)
 //
 // Returns a Config with all values resolved from the above sources.
 func Load() (*Config, error) {
 	v := viper.New()
 
-	// Defaults
+	// Defaults for existing fields
 	v.SetDefault("profile_search_paths", []string{"./profiles", "~/.km/profiles"})
 	v.SetDefault("log_level", "info")
 	v.SetDefault("state_bucket", "")
 	v.SetDefault("ttl_lambda_arn", "")
 	v.SetDefault("scheduler_role_arn", "")
 
-	// Config file
+	// Defaults for new platform fields
+	v.SetDefault("budget_table_name", "km-budgets")
+
+	// Primary config file: ~/.km/config.yaml
 	v.SetConfigName("config")
 	v.SetConfigType("yaml")
 	home, err := os.UserHomeDir()
@@ -74,12 +123,49 @@ func Load() (*Config, error) {
 	v.SetEnvPrefix("KM")
 	v.AutomaticEnv()
 
+	// Secondary config file: km-config.yaml in current directory (repo root).
+	// Values in km-config.yaml are merged on top of ~/.km/config.yaml but environment
+	// variables (set via AutomaticEnv above) retain highest precedence.
+	v2 := viper.New()
+	v2.SetConfigName("km-config")
+	v2.SetConfigType("yaml")
+	v2.AddConfigPath(".")
+	if err := v2.ReadInConfig(); err == nil {
+		// Merge platform keys from v2 into v only when not already overridden by env.
+		for _, key := range []string{
+			"domain",
+			"accounts.management",
+			"accounts.terraform",
+			"accounts.application",
+			"sso.start_url",
+			"sso.region",
+			"region",
+			"budget_table_name",
+		} {
+			if v2.IsSet(key) && !isSetByEnv(v, key) {
+				v.Set(key, v2.Get(key))
+			}
+		}
+	}
+	// Not finding km-config.yaml is fine — continue with existing config.
+
 	cfg := &Config{
+		// Existing fields
 		ProfileSearchPaths: v.GetStringSlice("profile_search_paths"),
 		LogLevel:           v.GetString("log_level"),
 		StateBucket:        v.GetString("state_bucket"),
 		TTLLambdaARN:       v.GetString("ttl_lambda_arn"),
 		SchedulerRoleARN:   v.GetString("scheduler_role_arn"),
+
+		// New platform fields
+		Domain:               v.GetString("domain"),
+		ManagementAccountID:  v.GetString("accounts.management"),
+		TerraformAccountID:   v.GetString("accounts.terraform"),
+		ApplicationAccountID: v.GetString("accounts.application"),
+		SSOStartURL:          v.GetString("sso.start_url"),
+		SSORegion:            v.GetString("sso.region"),
+		PrimaryRegion:        v.GetString("region"),
+		BudgetTableName:      v.GetString("budget_table_name"),
 	}
 
 	return cfg, nil
