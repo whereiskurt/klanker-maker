@@ -48,20 +48,20 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **OBSV-02**: Audit log sidecar captures network traffic logs (works on both EC2 and ECS substrates)
 - [x] **OBSV-03**: Log destination is configurable (CloudWatch/S3/stdout)
 - [ ] **OBSV-04**: Filesystem policy enforces writable and read-only paths
-- [ ] **OBSV-05**: Artifacts upload to S3 on sandbox exit with configurable size limits
+- [x] **OBSV-05**: Artifacts upload to S3 on sandbox exit with configurable size limits
 - [ ] **OBSV-06**: S3 artifact storage supports multi-region replication
-- [ ] **OBSV-07**: Secret patterns are redacted from audit logs before storage
+- [x] **OBSV-07**: Secret patterns are redacted from audit logs before storage
 - [x] **OBSV-08**: Tracing sidecar collects OpenTelemetry traces and spans from sandbox workloads and exports to a configurable OTel collector endpoint
 - [x] **OBSV-09**: Each sandbox session is logged as an MLflow run with sandbox metadata (profile, sandbox-id, duration, exit status) as run parameters
 - [x] **OBSV-10**: OTel trace context is propagated through proxy sidecars so outbound HTTP requests carry trace headers
 
 ### Email & Communication
 
-- [ ] **MAIL-01**: SES is configured globally with Route53 domain verification
-- [ ] **MAIL-02**: Each sandbox agent gets its own email address (agent-id@domain)
-- [ ] **MAIL-03**: Agents inside sandboxes can send email via SES
-- [ ] **MAIL-04**: Operator receives email notifications for sandbox lifecycle events (expiry, errors, limits)
-- [ ] **MAIL-05**: Cross-account agent orchestration is possible via email
+- [x] **MAIL-01**: SES is configured globally with Route53 domain verification
+- [x] **MAIL-02**: Each sandbox agent gets its own email address (agent-id@domain)
+- [x] **MAIL-03**: Agents inside sandboxes can send email via SES
+- [x] **MAIL-04**: Operator receives email notifications for sandbox lifecycle events (expiry, errors, limits)
+- [x] **MAIL-05**: Cross-account agent orchestration is possible via email
 
 ### Infrastructure Foundation
 
@@ -166,18 +166,18 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OBSV-02 | Phase 3 | Complete |
 | OBSV-03 | Phase 3 | Complete |
 | OBSV-04 | Phase 4 | Pending |
-| OBSV-05 | Phase 4 | Pending |
+| OBSV-05 | Phase 4 | Complete |
 | OBSV-06 | Phase 4 | Pending |
-| OBSV-07 | Phase 4 | Pending |
+| OBSV-07 | Phase 4 | Complete |
 | OBSV-08 | Phase 3 | Complete |
 | OBSV-09 | Phase 3 | Complete |
 | OBSV-10 | Phase 3 | Complete |
 | PROV-13 | Phase 4 | Pending |
-| MAIL-01 | Phase 4 | Pending |
-| MAIL-02 | Phase 4 | Pending |
-| MAIL-03 | Phase 4 | Pending |
-| MAIL-04 | Phase 4 | Pending |
-| MAIL-05 | Phase 4 | Pending |
+| MAIL-01 | Phase 4 | Complete |
+| MAIL-02 | Phase 4 | Complete |
+| MAIL-03 | Phase 4 | Complete |
+| MAIL-04 | Phase 4 | Complete |
+| MAIL-05 | Phase 4 | Complete |
 | CFUI-01 | Phase 5 | Pending |
 | CFUI-02 | Phase 5 | Pending |
 | CFUI-03 | Phase 5 | Pending |

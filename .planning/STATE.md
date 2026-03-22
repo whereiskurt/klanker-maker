@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Phase 4 context gathered
-last_updated: "2026-03-22T05:33:53.829Z"
+stopped_at: Completed 04-02-PLAN.md — SES Terraform module and Go helpers
+last_updated: "2026-03-22T13:42:30.821Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 5
   completed_phases: 2
-  total_plans: 14
-  completed_plans: 13
+  total_plans: 18
+  completed_plans: 15
   percent: 0
 ---
 
@@ -62,6 +62,8 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 03-sidecar-enforcement-lifecycle-management P00 | 15 | 2 tasks | 14 files |
 | Phase 03-sidecar-enforcement-lifecycle-management P04 | 568s | 3 tasks | 14 files |
 | Phase 03-sidecar-enforcement-lifecycle-management P05 | 10min | 2 tasks | 9 files |
+| Phase 04-lifecycle-hardening-artifacts-email P01 | 237s | 2 tasks | 8 files |
+| Phase 04-lifecycle-hardening-artifacts-email P02 | 3min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -107,6 +109,11 @@ Recent decisions affecting current work:
 - [Phase Phase 03-04]: TTL schedule creation is non-fatal in km create — sandbox provisioned even if EventBridge call fails
 - [Phase 03-05]: SandboxLister/SandboxFetcher DI interfaces exported (uppercase) so cmd_test (external package) can inject fakes without AWS credentials
 - [Phase 03-05]: SandboxRecord placed in pkg/aws (not cmd) so it can be shared with future plans that read sandbox state
+- [Phase 04-01]: Regex patterns compiled once at NewRedactingDestination construction — safe for concurrent use, zero allocation per Write call
+- [Phase 04-01]: UploadArtifacts returns ArtifactSkippedEvent slice for size-limit violations; PutObject failures are logged but not returned
+- [Phase 04-01]: S3PutAPI narrow interface (PutObject only) for artifact uploads — mirrors S3RunAPI pattern from mlflow.go
+- [Phase 04-lifecycle-hardening-artifacts-email]: SES receipt rule 'position' attribute removed — not supported in provider v6 at rule level (only on actions)
+- [Phase 04-lifecycle-hardening-artifacts-email]: CleanupSandboxEmail swallows sesv2types.NotFoundException for idempotent km destroy retries
 
 ### Pending Todos
 
@@ -122,6 +129,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T05:33:53.823Z
-Stopped at: Phase 4 context gathered
-Resume file: .planning/phases/04-lifecycle-hardening-artifacts-email/04-CONTEXT.md
+Last session: 2026-03-22T13:42:30.820Z
+Stopped at: Completed 04-02-PLAN.md — SES Terraform module and Go helpers
+Resume file: None
