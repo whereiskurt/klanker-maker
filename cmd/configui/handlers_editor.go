@@ -95,9 +95,10 @@ func (h *Handler) handleValidate(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleProfileList serves GET /api/profiles.
-// Returns a JSON array of ProfileEntry objects for each .yaml file in h.profilesDir.
+// If called by HTMX (HX-Request header present), returns the profile_list HTML partial.
+// Otherwise returns a JSON array of ProfileEntry objects for each .yaml file in h.profilesDir.
 // Checks each file for an "extends:" line to populate HasExtends.
-func (h *Handler) handleProfileList(w http.ResponseWriter, _ *http.Request) {
+func (h *Handler) handleProfileList(w http.ResponseWriter, r *http.Request) {
 	entries, err := os.ReadDir(h.profilesDir)
 	if err != nil {
 		log.Error().Err(err).Str("dir", h.profilesDir).Msg("configui: read profiles dir")
@@ -122,6 +123,12 @@ func (h *Handler) handleProfileList(w http.ResponseWriter, _ *http.Request) {
 			Name:       name,
 			HasExtends: hasExtends,
 		})
+	}
+
+	// HTMX requests get the HTML partial; plain API requests get JSON.
+	if isHTMXRequest(r) {
+		h.render(w, "profile_list", profiles)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

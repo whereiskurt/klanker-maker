@@ -394,6 +394,7 @@ func buildEditorTestTemplates() *template.Template {
 {{define "sandbox_detail"}}detail{{end}}
 {{define "sandbox_logs"}}logs{{end}}
 {{define "editor.html"}}<!DOCTYPE html><html><body>editor page {{if .ProfileContent}}{{.ProfileContent}}{{end}}</body></html>{{end}}
+{{define "profile_list"}}{{range .}}<div class="profile-item" data-name="{{.Name}}">{{.Name}}</div>{{end}}{{end}}
 `
 	funcs := template.FuncMap{
 		"truncateID": func(id string) string { return id },

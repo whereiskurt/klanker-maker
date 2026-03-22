@@ -1,0 +1,564 @@
+{{define "editor.html"}}{{template "base.html" .}}{{end}}
+
+{{define "content"}}
+<div class="page-header">
+  <h1 class="page-title">Profile Editor</h1>
+  <div class="editor-actions">
+    <button class="btn btn-secondary" id="btn-new" type="button">New Profile</button>
+    <button class="btn btn-primary" id="btn-save" type="button" disabled>Save</button>
+  </div>
+</div>
+
+<div class="editor-layout">
+  <!-- Left sidebar: profile list -->
+  <aside class="editor-sidebar" id="editor-sidebar">
+    <div class="sidebar-header">
+      <span class="sidebar-title">Profiles</span>
+    </div>
+    <div id="profile-list-container"
+         hx-get="/api/profiles"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+      <p class="loading-text">Loading profiles&hellip;</p>
+    </div>
+  </aside>
+
+  <!-- Main editor area -->
+  <section class="editor-main">
+    <div class="editor-status-bar" id="editor-status-bar">
+      <span id="status-filename" class="status-filename">No profile selected</span>
+      <span id="status-validation" class="status-validation status-valid">valid</span>
+      <span id="status-save" class="status-save"></span>
+    </div>
+    <!-- Monaco editor container -->
+    <div id="editor" style="min-height:600px; width:100%;"></div>
+
+    <!-- Parent profile diff panel (collapsed by default) -->
+    <details class="extends-panel" id="extends-panel" style="display:none;">
+      <summary class="extends-summary">Parent profile (read-only)</summary>
+      <div id="parent-editor" style="min-height:300px; width:100%;"></div>
+    </details>
+  </section>
+</div>
+
+<!-- Hidden textarea for Go template to inject initial YAML content safely -->
+<textarea id="profile-content" style="display:none;">{{.ProfileContent}}</textarea>
+<input type="hidden" id="profile-name" value="{{.ProfileName}}" />
+
+<!-- Import map for Monaco Editor and monaco-yaml -->
+<script type="importmap">
+{
+  "imports": {
+    "monaco-editor": "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/+esm",
+    "monaco-yaml": "https://cdn.jsdelivr.net/npm/monaco-yaml@5.2.0/+esm"
+  }
+}
+</script>
+
+<script type="module">
+import * as monaco from 'monaco-editor';
+import { configureMonacoYaml } from 'monaco-yaml';
+
+// ─── State ───────────────────────────────────────────────────────────────────
+let currentProfileName = document.getElementById('profile-name').value || '';
+let editor = null;
+let parentEditor = null;
+let validateDebounceTimer = null;
+
+const DEBOUNCE_MS = 500;
+const NEW_PROFILE_TEMPLATE = `apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: new-profile
+spec:
+  lifecycle:
+    ttl: "24h"
+    idleTimeout: "4h"
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    spot: false
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos: []
+      allowedRefs:
+        - main
+      permissions:
+        - read
+  network:
+    egress:
+      allowedDNSSuffixes: []
+      allowedHosts: []
+      allowedMethods:
+        - GET
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /km/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /km/network
+  policy:
+    allowShellEscape: false
+    allowedCommands:
+      - bash
+    filesystemPolicy:
+      readOnlyPaths: []
+      writablePaths:
+        - /workspace
+        - /tmp
+  agent:
+    maxConcurrentTasks: 4
+    taskTimeout: "30m"
+    allowedTools:
+      - bash
+`;
+
+// ─── Initialize Monaco ────────────────────────────────────────────────────────
+async function init() {
+  // Fetch JSON Schema for autocomplete
+  let schema = {};
+  try {
+    const schemaRes = await fetch('/api/schema');
+    if (schemaRes.ok) {
+      schema = await schemaRes.json();
+    }
+  } catch (e) {
+    console.warn('configui: failed to fetch schema', e);
+  }
+
+  // Configure monaco-yaml with the SandboxProfile schema
+  configureMonacoYaml(monaco, {
+    enableSchemaRequest: false,
+    schemas: [
+      {
+        uri: '/api/schema',
+        fileMatch: ['*.yaml', '*.yml'],
+        schema: schema,
+      },
+    ],
+  });
+
+  // Create main editor instance
+  editor = monaco.editor.create(document.getElementById('editor'), {
+    language: 'yaml',
+    theme: 'vs-dark',
+    automaticLayout: true,
+    minimap: { enabled: false },
+    scrollBeyondLastLine: false,
+    fontSize: 13,
+    lineNumbers: 'on',
+    wordWrap: 'on',
+    tabSize: 2,
+  });
+
+  // Set initial content from hidden textarea (avoids html/template escaping)
+  const initialContent = document.getElementById('profile-content').value;
+  if (initialContent.trim()) {
+    editor.setValue(initialContent);
+    setCurrentProfile(currentProfileName);
+    triggerValidate();
+  }
+
+  // Create read-only parent profile editor
+  parentEditor = monaco.editor.create(document.getElementById('parent-editor'), {
+    language: 'yaml',
+    theme: 'vs-dark',
+    automaticLayout: true,
+    readOnly: true,
+    minimap: { enabled: false },
+    scrollBeyondLastLine: false,
+    fontSize: 13,
+    lineNumbers: 'on',
+  });
+
+  // Debounced validation on content change
+  editor.onDidChangeModelContent(() => {
+    clearTimeout(validateDebounceTimer);
+    validateDebounceTimer = setTimeout(triggerValidate, DEBOUNCE_MS);
+    // Enable save button when content changes
+    const saveBtn = document.getElementById('btn-save');
+    if (currentProfileName) {
+      saveBtn.disabled = false;
+    }
+  });
+
+  // Wire up buttons
+  document.getElementById('btn-save').addEventListener('click', saveProfile);
+  document.getElementById('btn-new').addEventListener('click', newProfile);
+
+  // Highlight active profile in list on page load
+  updateProfileListHighlight();
+}
+
+// ─── Validation ───────────────────────────────────────────────────────────────
+async function triggerValidate() {
+  const content = editor.getValue();
+  const statusEl = document.getElementById('status-validation');
+  try {
+    const res = await fetch('/api/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/yaml' },
+      body: content,
+    });
+    if (!res.ok) {
+      statusEl.textContent = 'validate error';
+      statusEl.className = 'status-validation status-error';
+      return;
+    }
+    const errors = await res.json();
+    const model = editor.getModel();
+    if (!model) return;
+
+    if (errors.length === 0) {
+      monaco.editor.setModelMarkers(model, 'km-validate', []);
+      statusEl.textContent = 'valid';
+      statusEl.className = 'status-validation status-valid';
+    } else {
+      const markers = errors.map(e => ({
+        severity: monaco.MarkerSeverity.Error,
+        message: e.path ? `${e.path}: ${e.message}` : e.message,
+        startLineNumber: 1,
+        startColumn: 1,
+        endLineNumber: 1,
+        endColumn: 1,
+      }));
+      monaco.editor.setModelMarkers(model, 'km-validate', markers);
+      statusEl.textContent = `${errors.length} error${errors.length !== 1 ? 's' : ''}`;
+      statusEl.className = 'status-validation status-error';
+    }
+  } catch (e) {
+    console.warn('configui: validate failed', e);
+    statusEl.textContent = 'validate failed';
+    statusEl.className = 'status-validation status-error';
+  }
+}
+
+// ─── Profile Load ─────────────────────────────────────────────────────────────
+async function loadProfile(name) {
+  if (!name) return;
+  try {
+    const res = await fetch(`/api/profiles/${encodeURIComponent(name)}`);
+    if (!res.ok) {
+      showToast(`Failed to load ${name}: ${res.status}`, 'error');
+      return;
+    }
+    const content = await res.text();
+    editor.setValue(content);
+    setCurrentProfile(name);
+    document.getElementById('btn-save').disabled = false;
+    triggerValidate();
+
+    // Check for extends and load parent
+    if (content.includes('extends:')) {
+      const match = content.match(/^extends:\s*(.+)$/m);
+      if (match) {
+        loadParentProfile(match[1].trim());
+      }
+    } else {
+      document.getElementById('extends-panel').style.display = 'none';
+    }
+  } catch (e) {
+    showToast(`Error loading ${name}`, 'error');
+  }
+}
+
+async function loadParentProfile(parentName) {
+  try {
+    const res = await fetch(`/api/profiles/${encodeURIComponent(parentName)}`);
+    if (!res.ok) return;
+    const content = await res.text();
+    parentEditor.setValue(content);
+    document.getElementById('extends-panel').style.display = 'block';
+  } catch (e) {
+    // Parent not found — just hide the panel
+    document.getElementById('extends-panel').style.display = 'none';
+  }
+}
+
+// ─── Profile Save ─────────────────────────────────────────────────────────────
+async function saveProfile() {
+  if (!currentProfileName) {
+    const name = prompt('Enter profile filename (e.g. my-profile.yaml):');
+    if (!name) return;
+    setCurrentProfile(name);
+  }
+  const content = editor.getValue();
+  const statusEl = document.getElementById('status-save');
+  statusEl.textContent = 'Saving…';
+  try {
+    const res = await fetch(`/api/profiles/${encodeURIComponent(currentProfileName)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/yaml' },
+      body: content,
+    });
+    if (res.ok) {
+      statusEl.textContent = 'Saved';
+      setTimeout(() => { statusEl.textContent = ''; }, 2000);
+      document.getElementById('btn-save').disabled = true;
+      // Refresh profile list
+      htmx.ajax('GET', '/api/profiles', '#profile-list-container');
+    } else {
+      statusEl.textContent = 'Save failed';
+    }
+  } catch (e) {
+    statusEl.textContent = 'Save error';
+  }
+}
+
+// ─── New Profile ──────────────────────────────────────────────────────────────
+function newProfile() {
+  setCurrentProfile('');
+  editor.setValue(NEW_PROFILE_TEMPLATE);
+  document.getElementById('extends-panel').style.display = 'none';
+  document.getElementById('btn-save').disabled = false;
+  triggerValidate();
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function setCurrentProfile(name) {
+  currentProfileName = name;
+  document.getElementById('profile-name').value = name;
+  document.getElementById('status-filename').textContent = name || 'No profile selected';
+  updateProfileListHighlight();
+}
+
+function updateProfileListHighlight() {
+  document.querySelectorAll('.profile-item').forEach(el => {
+    if (el.dataset.name === currentProfileName) {
+      el.classList.add('profile-item--active');
+    } else {
+      el.classList.remove('profile-item--active');
+    }
+  });
+}
+
+function showToast(message, type) {
+  const area = document.getElementById('toast-area');
+  if (!area) return;
+  const toast = document.createElement('div');
+  toast.className = `toast toast--${type || 'info'}`;
+  toast.textContent = message;
+  area.appendChild(toast);
+  setTimeout(() => toast.remove(), 4000);
+}
+
+// Expose loadProfile globally so profile list partial can call it
+window.kmLoadProfile = loadProfile;
+
+// ─── Profile list: handle clicks from HTMX-rendered partial ──────────────────
+document.addEventListener('click', e => {
+  const item = e.target.closest('.profile-item');
+  if (item && item.dataset.name) {
+    loadProfile(item.dataset.name);
+  }
+});
+
+// Re-highlight active item after HTMX swaps the profile list
+document.body.addEventListener('htmx:afterSwap', e => {
+  if (e.detail.target && e.detail.target.id === 'profile-list-container') {
+    updateProfileListHighlight();
+  }
+});
+
+init().catch(console.error);
+</script>
+
+<style>
+/* ─── Editor layout ─────────────────────────────────────────────────────────── */
+.editor-layout {
+  display: flex;
+  gap: 0;
+  height: calc(100vh - var(--nav-height) - 110px);
+  min-height: 600px;
+}
+
+.editor-sidebar {
+  width: 220px;
+  min-width: 160px;
+  background: var(--color-bg-card);
+  border-right: 1px solid var(--color-border);
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.sidebar-header {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-nav);
+}
+
+.sidebar-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+.profile-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 13px;
+  color: var(--color-text);
+  gap: 6px;
+  user-select: none;
+}
+
+.profile-item:hover {
+  background: var(--color-bg-hover);
+}
+
+.profile-item--active {
+  background: var(--color-bg-selected);
+  color: var(--color-text-link);
+}
+
+.badge-extends {
+  font-size: 10px;
+  padding: 1px 5px;
+  background: var(--color-ecs-bg);
+  color: var(--color-ecs);
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+/* ─── Editor main ───────────────────────────────────────────────────────────── */
+.editor-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.editor-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--color-bg-card);
+  border-bottom: 1px solid var(--color-border);
+  font-size: 12px;
+}
+
+.status-filename {
+  font-family: monospace;
+  color: var(--color-text);
+  flex: 1;
+}
+
+.status-validation {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.status-valid {
+  background: var(--color-running-bg);
+  color: var(--color-running);
+}
+
+.status-error {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+.status-save {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.editor-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ─── Extends panel ─────────────────────────────────────────────────────────── */
+.extends-panel {
+  border-top: 1px solid var(--color-border);
+}
+
+.extends-summary {
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--color-text-muted);
+  background: var(--color-bg-card);
+  user-select: none;
+}
+
+.extends-summary:hover {
+  color: var(--color-text);
+}
+
+/* ─── Loading text ──────────────────────────────────────────────────────────── */
+.loading-text {
+  padding: 12px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+/* ─── Buttons ───────────────────────────────────────────────────────────────── */
+.btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: opacity 0.15s;
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.btn-primary {
+  background: var(--color-btn-primary-bg);
+  color: var(--color-text-link);
+  border-color: var(--color-btn-primary);
+}
+
+.btn-primary:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.btn-secondary {
+  background: var(--color-bg-card);
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+</style>
+{{end}}

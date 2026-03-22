@@ -152,9 +152,26 @@ func (h *Handler) handleSecretDecrypt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	value := aws.ToString(out.Parameter.Value)
+
+	// HTMX requests from the "Reveal" button get inline HTML with pii-blur toggle.
+	if isHTMXRequest(r) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		// Escape value for safe HTML embedding
+		safeVal := strings.ReplaceAll(value, "&", "&amp;")
+		safeVal = strings.ReplaceAll(safeVal, "<", "&lt;")
+		safeVal = strings.ReplaceAll(safeVal, ">", "&gt;")
+		safeVal = strings.ReplaceAll(safeVal, `"`, "&#34;")
+		_, _ = fmt.Fprintf(w,
+			`<span class="pii-blur" onclick="this.classList.toggle('pii-blur')" title="Click to toggle blur">%s</span>`,
+			safeVal,
+		)
+		return
+	}
+
 	rec := secretValueRecord{
 		Name:  aws.ToString(out.Parameter.Name),
-		Value: aws.ToString(out.Parameter.Value),
+		Value: value,
 		Type:  string(out.Parameter.Type),
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

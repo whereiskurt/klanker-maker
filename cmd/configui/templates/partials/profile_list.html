@@ -1,0 +1,12 @@
+{{define "profile_list"}}
+{{if .}}
+  {{range .}}
+  <div class="profile-item" data-name="{{.Name}}" role="button" tabindex="0">
+    <span class="profile-name">{{.Name}}</span>
+    {{if .HasExtends}}<span class="badge-extends">extends</span>{{end}}
+  </div>
+  {{end}}
+{{else}}
+  <p class="loading-text">No profiles found.</p>
+{{end}}
+{{end}}

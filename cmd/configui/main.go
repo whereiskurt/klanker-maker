@@ -27,6 +27,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
@@ -88,6 +89,7 @@ func main() {
 	s3Client := s3.NewFromConfig(awsCfg)
 	tagClient := resourcegroupstaggingapi.NewFromConfig(awsCfg)
 	cwClient := cloudwatchlogs.NewFromConfig(awsCfg)
+	ssmClient := ssm.NewFromConfig(awsCfg)
 
 	// Wrap real AWS clients in adapters satisfying the narrow Handler interfaces.
 	listerAdapter := &s3ListerAdapter{client: s3Client}
@@ -98,6 +100,7 @@ func main() {
 		lister:      listerAdapter,
 		finder:      finderAdapter,
 		cwClient:    cwClient,
+		ssmClient:   ssmClient,
 		profilesDir: *profilesDir,
 		bucket:      *bucket,
 	}
@@ -117,12 +120,21 @@ func main() {
 	mux.HandleFunc("GET /api/schema", handler.handleSchema)
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
 
-	// Stub routes for Plans 02-03 (editor, secrets, validate).
-	mux.HandleFunc("GET /editor", stubHandler("editor coming in Plan 02"))
-	mux.HandleFunc("GET /secrets", stubHandler("secrets coming in Plan 03"))
-	mux.HandleFunc("POST /api/validate", stubHandler("validate coming in Plan 02"))
-	mux.HandleFunc("GET /api/profiles", stubHandler("profiles listing coming in Plan 02"))
-	mux.HandleFunc("POST /api/sandboxes/{id}/destroy", stubHandler("destroy action coming in Plan 02"))
+	// Editor routes (Plan 02).
+	mux.HandleFunc("GET /editor", handler.handleEditorPage)
+	mux.HandleFunc("POST /api/validate", handler.handleValidate)
+	mux.HandleFunc("GET /api/profiles", handler.handleProfileList)
+	mux.HandleFunc("GET /api/profiles/{name}", handler.handleProfileGet)
+	mux.HandleFunc("PUT /api/profiles/{name}", handler.handleProfileSave)
+	// Destroy action stub — full implementation TBD.
+	mux.HandleFunc("POST /api/sandboxes/{id}/destroy", stubHandler("destroy action coming soon"))
+
+	// Secrets routes (Plan 03).
+	mux.HandleFunc("GET /secrets", handler.handleSecretsPage)
+	mux.HandleFunc("GET /api/secrets", handler.handleSecretsList)
+	mux.HandleFunc("GET /api/secrets/{name...}", handler.handleSecretDecrypt)
+	mux.HandleFunc("PUT /api/secrets/{name...}", handler.handleSecretPut)
+	mux.HandleFunc("DELETE /api/secrets/{name...}", handler.handleSecretDelete)
 
 	// Wrap with request logging middleware.
 	srv := &http.Server{
