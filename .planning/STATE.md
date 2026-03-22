@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 08-02-PLAN.md
-last_updated: "2026-03-22T22:49:22.800Z"
+stopped_at: Completed 09-01-PLAN.md
+last_updated: "2026-03-22T23:10:01.114Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 10
   completed_phases: 8
-  total_plans: 36
-  completed_plans: 36
+  total_plans: 41
+  completed_plans: 37
   percent: 0
 ---
 
@@ -85,6 +85,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 07-unwired-code-paths P02 | 197s | 2 tasks | 6 files |
 | Phase 08-sidecar-build-deployment-pipeline P01 | 127s | 2 tasks | 6 files |
 | Phase 08-sidecar-build-deployment-pipeline P02 | 2min | 1 tasks | 2 files |
+| Phase 09-live-infrastructure-operator-docs P01 | 20min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -192,6 +193,8 @@ Recent decisions affecting current work:
 - [Phase 08-02]: ECR URI computation reads KM_ACCOUNTS_APPLICATION at generateECSServiceHCL call time — consistent with KM_ARTIFACTS_BUCKET pattern already in the function
 - [Phase 08-02]: PLACEHOLDER_ECR/ prefix used when KM_ACCOUNTS_APPLICATION is unset — parseable HCL, distinguishable from real URIs, no special-casing needed
 - [Phase 08-02]: KM_SIDECAR_VERSION defaults to 'latest' when unset — deploy pipeline sets explicit tag; local dev gets a usable default
+- [Phase 09-01]: Lambda binaries use GOARCH=arm64 (not amd64) matching architectures=[arm64] in Terraform modules — mismatch causes exec format error
+- [Phase 09-01]: KM_ROUTE53_ZONE_ID referenced inline in ses/terragrunt.hcl only — not added to site.hcl per plan spec
 
 ### Roadmap Evolution
 
@@ -211,6 +214,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T22:46:05.104Z
-Stopped at: Completed 08-02-PLAN.md
+Last session: 2026-03-22T23:10:01.112Z
+Stopped at: Completed 09-01-PLAN.md
 Resume file: None
