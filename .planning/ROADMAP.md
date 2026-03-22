@@ -95,7 +95,7 @@ Plans:
   4. Secret values (SSM parameter values, tokens) present in the sandbox environment are redacted from audit logs before storage — the raw secret value does not appear in CloudWatch or S3 logs
   5. Each sandbox agent has a unique email address provisioned via SES; the agent can send email from within the sandbox; the operator receives lifecycle event notifications (expiry, errors, limits) via email
   6. Cross-account agent orchestration via email is demonstrable: an agent in one sandbox can trigger an action in another sandbox by sending a correctly structured email
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 
 Plans:
 - [ ] 04-01-PLAN.md — ArtifactsSpec schema + RedactingDestination + S3 artifact uploader (OBSV-05, OBSV-07)
@@ -124,5 +124,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 1. Schema, Compiler & AWS Foundation | 3/4 | In Progress|  |
 | 2. Core Provisioning & Security Baseline | 2/4 | In Progress|  |
 | 3. Sidecar Enforcement & Lifecycle Management | 5/6 | In Progress|  |
-| 4. Lifecycle Hardening, Artifacts & Email | 2/4 | In Progress|  |
+| 4. Lifecycle Hardening, Artifacts & Email | 3/4 | In Progress|  |
 | 5. ConfigUI | 0/TBD | Not started | - |

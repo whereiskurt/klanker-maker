@@ -29,7 +29,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **PROV-10**: ECS substrate provisions an AWS Fargate task with sidecar containers for enforcement (DNS proxy, HTTP proxy, audit log) defined in the task definition
 - [x] **PROV-11**: EC2 sandboxes use spot instances by default; on-demand fallback is configurable per profile
 - [x] **PROV-12**: ECS sandboxes use Fargate Spot capacity provider by default; on-demand fallback is configurable per profile
-- [ ] **PROV-13**: Sandbox handles spot interruption gracefully — uploads artifacts to S3 before termination when possible
+- [x] **PROV-13**: Sandbox handles spot interruption gracefully — uploads artifacts to S3 before termination when possible
 
 ### Network & Security
 
@@ -47,7 +47,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **OBSV-01**: Audit log sidecar captures command execution logs (works on both EC2 and ECS substrates)
 - [x] **OBSV-02**: Audit log sidecar captures network traffic logs (works on both EC2 and ECS substrates)
 - [x] **OBSV-03**: Log destination is configurable (CloudWatch/S3/stdout)
-- [ ] **OBSV-04**: Filesystem policy enforces writable and read-only paths
+- [x] **OBSV-04**: Filesystem policy enforces writable and read-only paths
 - [x] **OBSV-05**: Artifacts upload to S3 on sandbox exit with configurable size limits
 - [ ] **OBSV-06**: S3 artifact storage supports multi-region replication
 - [x] **OBSV-07**: Secret patterns are redacted from audit logs before storage
@@ -165,14 +165,14 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OBSV-01 | Phase 3 | Complete |
 | OBSV-02 | Phase 3 | Complete |
 | OBSV-03 | Phase 3 | Complete |
-| OBSV-04 | Phase 4 | Pending |
+| OBSV-04 | Phase 4 | Complete |
 | OBSV-05 | Phase 4 | Complete |
 | OBSV-06 | Phase 4 | Pending |
 | OBSV-07 | Phase 4 | Complete |
 | OBSV-08 | Phase 3 | Complete |
 | OBSV-09 | Phase 3 | Complete |
 | OBSV-10 | Phase 3 | Complete |
-| PROV-13 | Phase 4 | Pending |
+| PROV-13 | Phase 4 | Complete |
 | MAIL-01 | Phase 4 | Complete |
 | MAIL-02 | Phase 4 | Complete |
 | MAIL-03 | Phase 4 | Complete |

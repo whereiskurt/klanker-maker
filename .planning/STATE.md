@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 04-02-PLAN.md — SES Terraform module and Go helpers
-last_updated: "2026-03-22T13:42:30.821Z"
+stopped_at: Completed 04-03-PLAN.md — Filesystem enforcement, spot handling, ECS spot handler module
+last_updated: "2026-03-22T13:50:18.648Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 18
-  completed_plans: 15
+  completed_plans: 16
   percent: 0
 ---
 
@@ -64,6 +64,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 03-sidecar-enforcement-lifecycle-management P05 | 10min | 2 tasks | 9 files |
 | Phase 04-lifecycle-hardening-artifacts-email P01 | 237s | 2 tasks | 8 files |
 | Phase 04-lifecycle-hardening-artifacts-email P02 | 3min | 2 tasks | 5 files |
+| Phase 04-lifecycle-hardening-artifacts-email P03 | 5min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -114,6 +115,10 @@ Recent decisions affecting current work:
 - [Phase 04-01]: S3PutAPI narrow interface (PutObject only) for artifact uploads — mirrors S3RunAPI pattern from mlflow.go
 - [Phase 04-lifecycle-hardening-artifacts-email]: SES receipt rule 'position' attribute removed — not supported in provider v6 at rule level (only on actions)
 - [Phase 04-lifecycle-hardening-artifacts-email]: CleanupSandboxEmail swallows sesv2types.NotFoundException for idempotent km destroy retries
+- [Phase 04-03]: IMDS token TTL changed from 60s to 21600s — spot poll loop runs for hours, 60s token would expire
+- [Phase 04-03]: Two-step bind mount required for EC2 read-only enforcement (mount --bind then remount,bind,ro)
+- [Phase 04-03]: ECS Fargate writable volumes use scope=task named volumes, not linuxParameters.tmpfs (Fargate does not support tmpfs)
+- [Phase 04-03]: UploadArtifacts called for ALL teardown policies including retain — data preservation always desired
 
 ### Pending Todos
 
@@ -129,6 +134,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T13:42:30.820Z
-Stopped at: Completed 04-02-PLAN.md — SES Terraform module and Go helpers
+Last session: 2026-03-22T13:50:18.646Z
+Stopped at: Completed 04-03-PLAN.md — Filesystem enforcement, spot handling, ECS spot handler module
 Resume file: None
