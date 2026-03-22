@@ -1,19 +1,71 @@
 // Package httpproxy provides HTTP/HTTPS CONNECT proxy logic for the km sidecar.
 // It enforces a host allowlist and injects W3C traceparent headers on allowed
 // outbound CONNECT requests.
+//
+// When budget enforcement is enabled via WithBudgetEnforcement, the proxy uses
+// AlwaysMitm for bedrock-runtime hosts to intercept SSE responses and meter AI
+// token usage per sandbox. Non-Bedrock HTTPS traffic continues to use OkConnect
+// passthrough (no MITM).
 package httpproxy
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/elazarl/goproxy"
 	"github.com/rs/zerolog/log"
+	"github.com/whereiskurt/klankrmkr/pkg/aws"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 )
+
+// bedrockHostRegex matches bedrock-runtime endpoints in any AWS region.
+var bedrockHostRegex = regexp.MustCompile(`^bedrock-runtime\..+\.amazonaws\.com`)
+
+// BudgetUpdater is called after each Bedrock response to write the remaining
+// AI budget to a sidecar-local file (e.g. /run/km/budget_remaining).
+// Set to nil to skip the file update.
+type BudgetUpdater func(remaining float64)
+
+// budgetEnforcementOptions holds all state needed for Bedrock MITM budget enforcement.
+type budgetEnforcementOptions struct {
+	client      aws.BudgetAPI
+	tableName   string
+	modelRates  map[string]aws.BedrockModelRate
+	cache       *budgetCache
+	onBudgetUpdate BudgetUpdater
+}
+
+// ProxyOption is a functional option applied to a proxy during NewProxy.
+type ProxyOption func(*goproxy.ProxyHttpServer, *proxyConfig)
+
+// proxyConfig accumulates optional proxy configuration across ProxyOption calls.
+type proxyConfig struct {
+	budget *budgetEnforcementOptions
+}
+
+// WithBudgetEnforcement enables Bedrock MITM interception and DynamoDB spend
+// tracking for the proxy. When the sandbox AI budget is exhausted, the proxy
+// returns 403 before forwarding the request.
+//
+// onBudgetUpdate may be nil; if provided it is called after each Bedrock
+// response with the remaining AI budget (limit - spent).
+func WithBudgetEnforcement(client aws.BudgetAPI, tableName string, modelRates map[string]aws.BedrockModelRate, onBudgetUpdate BudgetUpdater) ProxyOption {
+	return func(_ *goproxy.ProxyHttpServer, cfg *proxyConfig) {
+		cfg.budget = &budgetEnforcementOptions{
+			client:         client,
+			tableName:      tableName,
+			modelRates:     modelRates,
+			cache:          NewBudgetCache(),
+			onBudgetUpdate: onBudgetUpdate,
+		}
+	}
+}
 
 // IsHostAllowed reports whether host is in the allowed list.
 // The port is stripped from "host:port" before comparison.
@@ -48,14 +100,165 @@ func InjectTraceContext(ctx context.Context, h http.Header) {
 //
 // otel.SetTextMapPropagator must be called before NewProxy for header injection
 // to produce traceparent values (a no-op propagator is the safe default).
-func NewProxy(allowed []string, sandboxID string) *goproxy.ProxyHttpServer {
+//
+// Optional ProxyOption values extend the proxy with additional behavior (e.g.
+// Bedrock MITM budget enforcement via WithBudgetEnforcement).
+func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.ProxyHttpServer {
 	// Ensure W3C TraceContext propagation is registered.
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = false
 
-	// CONNECT (HTTPS) handler.
+	// Apply functional options to build the proxy config.
+	cfg := &proxyConfig{}
+	for _, opt := range opts {
+		opt(proxy, cfg)
+	}
+
+	// -------------------------------------------------------------------------
+	// Budget enforcement: Bedrock MITM handlers (registered BEFORE OkConnect).
+	// -------------------------------------------------------------------------
+	if cfg.budget != nil {
+		be := cfg.budget
+
+		// Pre-flight OnRequest check: reject requests to Bedrock when the sandbox
+		// AI budget is already exhausted (cached check — no DynamoDB read).
+		proxy.OnRequest(goproxy.ReqHostMatches(bedrockHostRegex)).DoFunc(
+			func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+				entry := be.cache.Get(sandboxID)
+				if entry != nil && entry.AILimit > 0 && entry.AISpent >= entry.AILimit {
+					log.Info().
+						Str("sandbox_id", sandboxID).
+						Str("event_type", "ai_budget_exhausted_preflight").
+						Str("host", req.Host).
+						Float64("spent", entry.AISpent).
+						Float64("limit", entry.AILimit).
+						Msg("")
+					modelID := ExtractModelID(req.URL.Path)
+					return req, BedrockBlockedResponse(req, sandboxID, modelID, entry.AISpent, entry.AILimit)
+				}
+				return req, nil
+			},
+		)
+
+		// MITM handler: AlwaysMitm for bedrock-runtime hosts.
+		// This MUST be registered before the general CONNECT handler so goproxy
+		// first-match semantics route Bedrock CONNECT through MITM.
+		proxy.OnRequest(goproxy.ReqHostMatches(bedrockHostRegex)).HandleConnect(goproxy.AlwaysMitm)
+
+		// OnResponse: intercept Bedrock InvokeModel responses, extract tokens, price, increment.
+		proxy.OnResponse(goproxy.ReqHostMatches(bedrockHostRegex)).DoFunc(
+			func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
+				if resp == nil || ctx.Req == nil {
+					return resp
+				}
+				req := ctx.Req
+
+				// Read the full response body (capped at 10MB).
+				bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxResponseBodySize)))
+				_ = resp.Body.Close()
+				// Replace body immediately so client always gets the response data.
+				resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
+				if err != nil {
+					log.Warn().
+						Str("sandbox_id", sandboxID).
+						Str("event_type", "bedrock_body_read_error").
+						Err(err).
+						Msg("")
+					return resp
+				}
+
+				// Check cached budget again post-body-read (covers races between preflight
+				// and response interception, e.g. concurrent requests draining budget).
+				entry := be.cache.Get(sandboxID)
+				if entry != nil && entry.AILimit > 0 && entry.AISpent >= entry.AILimit {
+					modelID := ExtractModelID(req.URL.Path)
+					log.Info().
+						Str("sandbox_id", sandboxID).
+						Str("event_type", "ai_budget_exhausted_response").
+						Str("model", modelID).
+						Float64("spent", entry.AISpent).
+						Float64("limit", entry.AILimit).
+						Msg("")
+					return BedrockBlockedResponse(req, sandboxID, modelID, entry.AISpent, entry.AILimit)
+				}
+
+				// Extract tokens from the response body.
+				inputTokens, outputTokens, parseErr := ExtractBedrockTokens(bytes.NewReader(bodyBytes))
+				if parseErr != nil || (inputTokens == 0 && outputTokens == 0) {
+					// No tokens to record — pass through unchanged.
+					return resp
+				}
+
+				// Look up model rate (fall back to zero cost if model unknown).
+				modelID := ExtractModelID(req.URL.Path)
+				var costUSD float64
+				if rate, ok := be.modelRates[modelID]; ok {
+					costUSD = CalculateCost(inputTokens, outputTokens, rate.InputPricePer1KTokens, rate.OutputPricePer1KTokens)
+				}
+
+				log.Info().
+					Str("sandbox_id", sandboxID).
+					Str("event_type", "bedrock_tokens_metered").
+					Str("model", modelID).
+					Int("input_tokens", inputTokens).
+					Int("output_tokens", outputTokens).
+					Float64("cost_usd", costUSD).
+					Msg("")
+
+				// Optimistically update local cache before DynamoDB round-trip.
+				be.cache.UpdateLocalSpend(sandboxID, costUSD)
+
+				// Fire-and-forget DynamoDB increment — don't block the response path.
+				go func() {
+					updatedSpend, incrementErr := aws.IncrementAISpend(
+						context.Background(),
+						be.client,
+						be.tableName,
+						sandboxID,
+						modelID,
+						inputTokens,
+						outputTokens,
+						costUSD,
+					)
+					if incrementErr != nil {
+						log.Error().
+							Str("sandbox_id", sandboxID).
+							Str("event_type", "bedrock_spend_increment_error").
+							Err(incrementErr).
+							Msg("")
+						return
+					}
+
+					// Refresh cache with authoritative DynamoDB value.
+					cachedEntry := be.cache.Get(sandboxID)
+					if cachedEntry != nil {
+						// Update the cache's AISpent with the authoritative value from DynamoDB.
+						// Re-set the entry so the TTL clock resets on the authoritative value.
+						cachedEntry.AISpent = updatedSpend
+						be.cache.Set(sandboxID, cachedEntry)
+					}
+
+					if be.onBudgetUpdate != nil {
+						limit := float64(0)
+						if cachedEntry != nil {
+							limit = cachedEntry.AILimit
+						}
+						remaining := limit - updatedSpend
+						be.onBudgetUpdate(remaining)
+					}
+				}()
+
+				return resp
+			},
+		)
+	}
+
+	// -------------------------------------------------------------------------
+	// General CONNECT (HTTPS) handler — OkConnect for allowed non-Bedrock hosts.
+	// -------------------------------------------------------------------------
 	proxy.OnRequest().HandleConnectFunc(func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
 		if !IsHostAllowed(host, allowed) {
 			log.Info().
