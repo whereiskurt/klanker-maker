@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
@@ -266,6 +267,42 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		} else {
 			log.Info().Str("sandbox_id", sandboxID).Time("ttl_expiry", *ttlExpiry).
 				Msg("TTL schedule created")
+		}
+	}
+
+	// Step 12b: Write initial budget limits to DynamoDB if profile has a budget section.
+	// Non-fatal: sandbox is provisioned even if budget write fails.
+	if resolvedProfile.Spec.Budget != nil {
+		tableName := cfg.BudgetTableName
+		if tableName == "" {
+			tableName = "km-budgets"
+		}
+		budgetClient := dynamodbpkg.NewFromConfig(awsCfg)
+
+		var computeLimit, aiLimit float64
+		if resolvedProfile.Spec.Budget.Compute != nil {
+			computeLimit = resolvedProfile.Spec.Budget.Compute.MaxSpendUSD
+		}
+		if resolvedProfile.Spec.Budget.AI != nil {
+			aiLimit = resolvedProfile.Spec.Budget.AI.MaxSpendUSD
+		}
+		warningThreshold := resolvedProfile.Spec.Budget.WarningThreshold
+		if warningThreshold == 0 {
+			warningThreshold = 0.80 // default 80%
+		}
+
+		if budgetErr := awspkg.SetBudgetLimits(ctx, budgetClient, tableName, sandboxID, computeLimit, aiLimit, warningThreshold); budgetErr != nil {
+			log.Warn().Err(budgetErr).Str("sandbox_id", sandboxID).
+				Msg("failed to write budget limits (non-fatal)")
+		} else {
+			log.Info().
+				Str("sandbox_id", sandboxID).
+				Float64("compute_limit", computeLimit).
+				Float64("ai_limit", aiLimit).
+				Float64("warning_threshold", warningThreshold).
+				Msg("Budget limits set")
+			fmt.Printf("Budget limits set: compute $%.2f, AI $%.2f, warning at %.0f%%\n",
+				computeLimit, aiLimit, warningThreshold*100)
 		}
 	}
 

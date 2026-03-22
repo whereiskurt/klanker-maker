@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"sort"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/spf13/cobra"
@@ -13,25 +17,45 @@ import (
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 )
 
+// ANSI color codes for terminal output.
+// Disabled when output is not a TTY.
+const (
+	ansiGreen  = "\033[32m"
+	ansiYellow = "\033[33m"
+	ansiRed    = "\033[31m"
+	ansiReset  = "\033[0m"
+)
+
+// BudgetFetcher abstracts fetching budget data for a sandbox.
+type BudgetFetcher interface {
+	FetchBudget(ctx context.Context, sandboxID string) (*kmaws.BudgetSummary, error)
+}
+
 // NewStatusCmd creates the "km status" subcommand.
 // Usage: km status <sandbox-id>
 //
 // Prints detailed state for a sandbox: resources (ARNs), metadata (profile, substrate),
-// and timestamps (created, TTL expiry).
+// and timestamps (created, TTL expiry), plus budget breakdown if available.
 func NewStatusCmd(cfg *config.Config) *cobra.Command {
 	return NewStatusCmdWithFetcher(cfg, nil)
 }
 
 // NewStatusCmdWithFetcher builds the status command with an optional custom fetcher.
 // If fetcher is nil, the real AWS-backed fetcher is used. Used in tests for DI.
-func NewStatusCmdWithFetcher(_ *config.Config, fetcher SandboxFetcher) *cobra.Command {
+func NewStatusCmdWithFetcher(cfg *config.Config, fetcher SandboxFetcher) *cobra.Command {
+	return NewStatusCmdWithFetchers(cfg, fetcher, nil)
+}
+
+// NewStatusCmdWithFetchers builds the status command with optional custom fetchers for
+// both sandbox metadata and budget data. Pass nil for real AWS-backed clients.
+func NewStatusCmdWithFetchers(cfg *config.Config, fetcher SandboxFetcher, budgetFetcher BudgetFetcher) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "status <sandbox-id>",
 		Short:        "Show detailed state for a sandbox",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStatus(cmd, fetcher, args[0])
+			return runStatus(cmd, cfg, fetcher, budgetFetcher, args[0])
 		},
 	}
 	return cmd
@@ -43,7 +67,7 @@ type SandboxFetcher interface {
 }
 
 // runStatus is the command RunE logic for km status.
-func runStatus(cmd *cobra.Command, fetcher SandboxFetcher, sandboxID string) error {
+func runStatus(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, budgetFetcher BudgetFetcher, sandboxID string) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -56,6 +80,18 @@ func runStatus(cmd *cobra.Command, fetcher SandboxFetcher, sandboxID string) err
 			return fmt.Errorf("load AWS config: %w", err)
 		}
 		fetcher = newRealFetcher(awsCfg, defaultStateBucket)
+
+		// Also initialize real budget fetcher if not injected
+		if budgetFetcher == nil {
+			tableName := cfg.BudgetTableName
+			if tableName == "" {
+				tableName = "km-budgets"
+			}
+			budgetFetcher = &realBudgetFetcher{
+				client:    dynamodb.NewFromConfig(awsCfg),
+				tableName: tableName,
+			}
+		}
 	}
 
 	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
@@ -66,7 +102,15 @@ func runStatus(cmd *cobra.Command, fetcher SandboxFetcher, sandboxID string) err
 		return fmt.Errorf("fetch sandbox status: %w", err)
 	}
 
-	printSandboxStatus(cmd, rec)
+	// Fetch budget data (graceful degradation — may be nil if sandbox has no budget)
+	var budget *kmaws.BudgetSummary
+	if budgetFetcher != nil {
+		budget, _ = budgetFetcher.FetchBudget(ctx, sandboxID)
+		// Ignore error: sandbox may have no budget defined. Budget section simply omitted.
+	}
+
+	isTTY := isTerminal(cmd.OutOrStdout())
+	printSandboxStatus(cmd, rec, budget, isTTY)
 	return nil
 }
 
@@ -116,8 +160,50 @@ func (f *awsSandboxFetcher) FetchSandbox(ctx context.Context, sandboxID string) 
 	return rec, nil
 }
 
-// printSandboxStatus prints detailed sandbox information.
-func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord) {
+// realBudgetFetcher is the real AWS-backed BudgetFetcher.
+type realBudgetFetcher struct {
+	client    kmaws.BudgetAPI
+	tableName string
+}
+
+// FetchBudget reads budget data from DynamoDB for a sandbox.
+func (f *realBudgetFetcher) FetchBudget(ctx context.Context, sandboxID string) (*kmaws.BudgetSummary, error) {
+	return kmaws.GetBudget(ctx, f.client, f.tableName, sandboxID)
+}
+
+// isTerminal returns true if the writer is a real TTY (supports ANSI codes).
+func isTerminal(w io.Writer) bool {
+	if f, ok := w.(*os.File); ok {
+		fi, err := f.Stat()
+		if err != nil {
+			return false
+		}
+		// Check for character device (terminal)
+		return (fi.Mode() & os.ModeCharDevice) != 0
+	}
+	return false
+}
+
+// colorPercent wraps a percentage string with ANSI color codes based on threshold.
+// green < 80%, yellow 80-99%, red >= 100%.
+func colorPercent(percent float64, isTTY bool) string {
+	if !isTTY {
+		return fmt.Sprintf("%.1f%%", percent)
+	}
+	var colorCode string
+	switch {
+	case percent >= 100.0:
+		colorCode = ansiRed
+	case percent >= 80.0:
+		colorCode = ansiYellow
+	default:
+		colorCode = ansiGreen
+	}
+	return fmt.Sprintf("%s%.1f%%%s", colorCode, percent, ansiReset)
+}
+
+// printSandboxStatus prints detailed sandbox information including optional budget section.
+func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *kmaws.BudgetSummary, isTTY bool) {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "Sandbox ID:  %s\n", rec.SandboxID)
 	fmt.Fprintf(out, "Profile:     %s\n", rec.Profile)
@@ -133,5 +219,52 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord) {
 		for _, arn := range rec.Resources {
 			fmt.Fprintf(out, "  - %s\n", arn)
 		}
+	}
+
+	// Budget section — only printed when budget data is available and has non-zero limits
+	if budget != nil && (budget.ComputeLimit > 0 || budget.AILimit > 0) {
+		fmt.Fprintf(out, "Budget:\n")
+
+		if budget.ComputeLimit > 0 {
+			pct := 0.0
+			if budget.ComputeLimit > 0 {
+				pct = (budget.ComputeSpent / budget.ComputeLimit) * 100
+			}
+			fmt.Fprintf(out, "  Compute: $%.2f / $%.2f (%s)\n",
+				budget.ComputeSpent, budget.ComputeLimit, colorPercent(pct, isTTY))
+		}
+
+		if budget.AILimit > 0 {
+			pct := 0.0
+			if budget.AILimit > 0 {
+				pct = (budget.AISpent / budget.AILimit) * 100
+			}
+			fmt.Fprintf(out, "  AI:      $%.2f / $%.2f (%s)\n",
+				budget.AISpent, budget.AILimit, colorPercent(pct, isTTY))
+
+			// Per-model breakdown (sorted for deterministic output)
+			if len(budget.AIByModel) > 0 {
+				models := make([]string, 0, len(budget.AIByModel))
+				for modelID := range budget.AIByModel {
+					models = append(models, modelID)
+				}
+				sort.Strings(models)
+				for _, modelID := range models {
+					ms := budget.AIByModel[modelID]
+					fmt.Fprintf(out, "    %-30s $%.2f (%dK in / %dK out)\n",
+						modelID+":",
+						ms.SpentUSD,
+						ms.InputTokens/1000,
+						ms.OutputTokens/1000,
+					)
+				}
+			}
+		}
+
+		warnPct := budget.WarningThreshold
+		if warnPct == 0 {
+			warnPct = 0.80
+		}
+		fmt.Fprintf(out, "  Warning threshold: %.0f%%\n", warnPct*100)
 	}
 }
