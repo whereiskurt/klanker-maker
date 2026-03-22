@@ -26,4 +26,5 @@ infra/live/network/
 /audit-log
 /tracing
 /configui
+/budget-enforcer
 /excalidraw.log

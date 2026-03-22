@@ -1,5 +1,11 @@
 # Klanker Maker (km)
 
+<p align="center">
+  <img src="docs/klanker.blackdone.jpeg" alt="Klanker Maker — robots working inside a sandboxed dome" width="480" />
+  <br />
+  <sub>Image credit: generated with <a href="https://chatgpt.com">ChatGPT</a> (DALL-E)</sub>
+</p>
+
 **Define a sandbox policy. Set a budget. Let your klankers run.**
 
 Klanker Maker is an open-source platform that turns declarative YAML profiles into budget-capped, policy-locked AWS sandboxes. Every sandbox gets its own Security Group boundary, IAM role, network allowlists, and a dollar ceiling — when the budget runs out, the sandbox stops. No surprises on your AWS bill.
