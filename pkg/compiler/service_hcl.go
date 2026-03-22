@@ -40,7 +40,7 @@ const ec2ServiceHCLTemplate = `locals {
         spot_price_offset      = 0.0005
         block_duration_minutes = 0
 {{- end }}
-        user_data = ""  # written by km create into the sandbox directory
+        user_data_base64 = "{{ .UserDataBase64 }}"
       }
     ]
 
@@ -209,13 +209,14 @@ const ecsServiceHCLTemplate = `locals {
 
 // ec2HCLParams holds the data for the EC2 service.hcl template.
 type ec2HCLParams struct {
-	ProfileName   string
-	SandboxID     string
-	Region        string
-	InstanceType  string
-	UseSpot       bool
-	SGEgressRules []SGRule
-	IAMPolicy     *IAMSessionPolicy
+	ProfileName    string
+	SandboxID      string
+	Region         string
+	InstanceType   string
+	UseSpot        bool
+	UserDataBase64 string
+	SGEgressRules  []SGRule
+	IAMPolicy      *IAMSessionPolicy
 }
 
 // ============================================================
@@ -271,7 +272,7 @@ var templateFuncs = template.FuncMap{
 // ============================================================
 
 // generateEC2ServiceHCL produces the service.hcl content for an EC2/ec2spot sandbox.
-func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot bool, sgRules []SGRule, iamPolicy *IAMSessionPolicy) (string, error) {
+func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot bool, sgRules []SGRule, iamPolicy *IAMSessionPolicy, userData string) (string, error) {
 	tmpl, err := template.New("ec2-service-hcl").Funcs(templateFuncs).Parse(ec2ServiceHCLTemplate)
 	if err != nil {
 		return "", fmt.Errorf("parse ec2 service.hcl template: %w", err)
@@ -283,6 +284,7 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		Region:        p.Spec.Runtime.Region,
 		InstanceType:  p.Spec.Runtime.InstanceType,
 		UseSpot:       useSpot,
+		UserDataBase64: userData,
 		SGEgressRules: sgRules,
 		IAMPolicy:     iamPolicy,
 	}

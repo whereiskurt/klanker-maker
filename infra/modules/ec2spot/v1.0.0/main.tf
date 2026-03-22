@@ -96,6 +96,7 @@ locals {
         availability_zone      = local.effective_azs[instance_idx % length(local.effective_azs)]
         subnet_id              = local.effective_subnets[instance_idx % length(local.effective_subnets)]
         sandbox_id             = ec2spot.sandbox_id
+        user_data_base64       = ec2spot.user_data_base64
         instance_name          = "km-sandbox-${ec2spot.sandbox_id}-${instance_idx}"
       }
     ]
@@ -263,7 +264,8 @@ resource "aws_spot_instance_request" "ec2spot" {
   ami                    = data.aws_ami.base_ami[0].image_id
   instance_type          = each.value.instance_type
   spot_price             = format("%.6f", (data.aws_ec2_spot_price.price[each.key].spot_price * each.value.spot_price_multiplier) + each.value.spot_price_offset)
-  user_data              = each.value.user_data != "" ? each.value.user_data : local.default_user_data
+  user_data_base64       = each.value.user_data_base64 != "" ? each.value.user_data_base64 : base64encode(local.default_user_data)
+  user_data              = null  # use user_data_base64 instead
   subnet_id              = each.value.subnet_id
   availability_zone      = each.value.availability_zone
   vpc_security_group_ids = [aws_security_group.ec2spot[0].id]

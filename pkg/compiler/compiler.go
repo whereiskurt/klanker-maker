@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"encoding/base64"
 	"fmt"
 
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
@@ -78,16 +79,19 @@ func compileEC2(p *profile.SandboxProfile, sandboxID string, onDemand bool) (*Co
 	iamPolicy := compileIAMPolicy(p)
 	secretPaths := compileSecrets(p)
 
-	// Generate service.hcl
-	svcHCL, err := generateEC2ServiceHCL(p, sandboxID, useSpot, sgRules, iamPolicy)
-	if err != nil {
-		return nil, fmt.Errorf("generate EC2 service.hcl: %w", err)
-	}
-
-	// Generate user-data.sh
+	// Generate user-data.sh first — it gets embedded into service.hcl
 	userData, err := generateUserData(p, sandboxID, secretPaths)
 	if err != nil {
 		return nil, fmt.Errorf("generate user-data.sh: %w", err)
+	}
+
+	// Base64-encode user-data for safe embedding in HCL
+	userDataB64 := base64.StdEncoding.EncodeToString([]byte(userData))
+
+	// Generate service.hcl (includes user-data inline in ec2spots[].user_data_base64)
+	svcHCL, err := generateEC2ServiceHCL(p, sandboxID, useSpot, sgRules, iamPolicy, userDataB64)
+	if err != nil {
+		return nil, fmt.Errorf("generate EC2 service.hcl: %w", err)
 	}
 
 	return &CompiledArtifacts{
