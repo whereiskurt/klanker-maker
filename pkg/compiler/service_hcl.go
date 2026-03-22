@@ -401,6 +401,10 @@ type NetworkConfig struct {
 	// When empty, defaults to "sandboxes.klankermaker.ai". Derived from Config.Domain
 	// as "sandboxes."+domain so forks use their own domain without code changes.
 	EmailDomain string
+	// SpotRateUSD is the resolved spot instance hourly rate in USD.
+	// Populated by create.go from the AWS Pricing API (or static fallback table)
+	// before calling Compile(). Zero when no budget or rate lookup is skipped.
+	SpotRateUSD float64
 }
 
 // budgetHCLFields extracts the budget-related template fields from a SandboxProfile.
@@ -446,7 +450,7 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		IAMPolicy:         iamPolicy,
 		// Budget enforcement fields
 		HasBudget:        hasBudget,
-		SpotRateUSD:      0.0, // TODO: resolve from pricing API or static table at compile time
+		SpotRateUSD:      network.SpotRateUSD,
 		ComputeLimit:     computeLimit,
 		AILimit:          aiLimit,
 		WarningThreshold: warningThreshold,
@@ -527,7 +531,7 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		ArtifactBucket: artifactBucket,
 		// Budget enforcement fields
 		HasBudget:        hasBudget,
-		SpotRateUSD:      0.0, // TODO: resolve from pricing API or static table at compile time
+		SpotRateUSD:      network.SpotRateUSD,
 		ComputeLimit:     computeLimit,
 		AILimit:          aiLimit,
 		WarningThreshold: warningThreshold,
