@@ -41,17 +41,20 @@ variable "ec2spots" {
 
 variable "vpc_id" {
   type        = string
-  description = "VPC ID where EC2 spot instances will be created"
+  description = "VPC ID where EC2 spot instances will be created. If empty, a per-sandbox VPC is created."
+  default     = ""
 }
 
 variable "public_subnets" {
   type        = list(string)
-  description = "List of public subnet IDs"
+  description = "List of public subnet IDs. If empty, subnets are created in the per-sandbox VPC."
+  default     = []
 }
 
 variable "availability_zones" {
   type        = list(string)
-  description = "List of availability zones"
+  description = "List of availability zones. If empty, first two AZs in the region are used."
+  default     = []
 }
 
 variable "sg_egress_rules" {

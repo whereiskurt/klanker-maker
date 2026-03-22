@@ -1,0 +1,25 @@
+# Klanker Maker
+
+This file serves as the Terragrunt repo root anchor for `find_in_parent_folders("CLAUDE.md")`.
+
+## Project
+
+Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
+
+## CLI
+
+- `km validate <profile.yaml>` — validate a SandboxProfile
+- `km create <profile.yaml>` — provision a sandbox
+- `km destroy <sandbox-id>` — teardown a sandbox
+
+## Architecture
+
+- `cmd/km/` — CLI entry point
+- `internal/app/cmd/` — Cobra commands
+- `pkg/profile/` — Schema, validation, inheritance
+- `pkg/compiler/` — Profile → Terragrunt artifacts
+- `pkg/terragrunt/` — Terragrunt runner
+- `pkg/aws/` — AWS SDK helpers
+- `infra/modules/` — Terraform modules
+- `infra/live/` — Terragrunt hierarchy
+- `profiles/` — Built-in SandboxProfile YAML files

@@ -1,4 +1,78 @@
+## Per-sandbox VPC (created when vpc_id is empty)
+data "aws_availability_zones" "available" {
+  count = var.vpc_id == "" ? 1 : 0
+  state = "available"
+}
+
 locals {
+  # Use provided or auto-discovered AZs
+  effective_azs     = length(var.availability_zones) > 0 ? var.availability_zones : (var.vpc_id == "" ? slice(data.aws_availability_zones.available[0].names, 0, 2) : [])
+  create_vpc        = var.vpc_id == ""
+}
+
+resource "aws_vpc" "sandbox" {
+  count      = local.create_vpc ? 1 : 0
+  cidr_block = "10.0.0.0/16"
+
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = {
+    Name            = "km-sandbox-${var.sandbox_id}"
+    "km:sandbox-id" = var.sandbox_id
+  }
+}
+
+resource "aws_internet_gateway" "sandbox" {
+  count  = local.create_vpc ? 1 : 0
+  vpc_id = aws_vpc.sandbox[0].id
+
+  tags = {
+    Name            = "km-sandbox-${var.sandbox_id}-igw"
+    "km:sandbox-id" = var.sandbox_id
+  }
+}
+
+resource "aws_subnet" "sandbox" {
+  count             = local.create_vpc ? length(local.effective_azs) : 0
+  vpc_id            = aws_vpc.sandbox[0].id
+  cidr_block        = cidrsubnet("10.0.0.0/16", 8, count.index)
+  availability_zone = local.effective_azs[count.index]
+
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name            = "km-sandbox-${var.sandbox_id}-${local.effective_azs[count.index]}"
+    "km:sandbox-id" = var.sandbox_id
+  }
+}
+
+resource "aws_route_table" "sandbox" {
+  count  = local.create_vpc ? 1 : 0
+  vpc_id = aws_vpc.sandbox[0].id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.sandbox[0].id
+  }
+
+  tags = {
+    Name            = "km-sandbox-${var.sandbox_id}-rt"
+    "km:sandbox-id" = var.sandbox_id
+  }
+}
+
+resource "aws_route_table_association" "sandbox" {
+  count          = local.create_vpc ? length(local.effective_azs) : 0
+  subnet_id      = aws_subnet.sandbox[count.index].id
+  route_table_id = aws_route_table.sandbox[0].id
+}
+
+locals {
+  # Resolve effective VPC, subnets, AZs — either provided or auto-created
+  effective_vpc_id  = local.create_vpc ? aws_vpc.sandbox[0].id : var.vpc_id
+  effective_subnets = length(var.public_subnets) > 0 ? var.public_subnets : aws_subnet.sandbox[*].id
+
   # Filter EC2 spot instances for the current region
   region_ec2spots = [
     for ec2spot in var.ec2spots :
@@ -19,8 +93,8 @@ locals {
         spot_price_offset      = ec2spot.spot_price_offset
         block_duration_minutes = ec2spot.block_duration_minutes
         user_data              = ec2spot.user_data
-        availability_zone      = var.availability_zones[instance_idx % length(var.availability_zones)]
-        subnet_id              = var.public_subnets[instance_idx % length(var.public_subnets)]
+        availability_zone      = local.effective_azs[instance_idx % length(local.effective_azs)]
+        subnet_id              = local.effective_subnets[instance_idx % length(local.effective_subnets)]
         sandbox_id             = ec2spot.sandbox_id
         instance_name          = "km-sandbox-${ec2spot.sandbox_id}-${instance_idx}"
       }
@@ -42,12 +116,12 @@ data "aws_ami" "base_ami" {
 
   filter {
     name   = "name"
-    values = ["al2023-ami-2023.*-arm64"]
+    values = ["al2023-ami-2023.*-x86_64"]
   }
 
   filter {
     name   = "architecture"
-    values = ["arm64"]
+    values = ["x86_64"]
   }
 
   filter {
@@ -76,7 +150,7 @@ resource "aws_security_group" "ec2spot" {
 
   name        = "km-ec2spot-${var.km_label}-${var.region_label}"
   description = "Security group for km sandbox EC2 spot hosts (SSM-only access)"
-  vpc_id      = var.vpc_id
+  vpc_id      = local.effective_vpc_id
 
   # No SSH ingress — SSM-only access via IAM role
   # No egress rules — Phase 2 profile compiler adds per-profile egress
@@ -105,7 +179,7 @@ resource "aws_security_group_rule" "ec2spot_egress" {
 resource "aws_iam_role" "ec2spot_ssm" {
   count = local.total_ec2spot_count > 0 ? 1 : 0
 
-  name                 = "km-ec2spot-ssm-${var.region_label}-${var.km_random_suffix}"
+  name                 = "km-ec2spot-ssm-${var.sandbox_id}-${var.region_label}"
   max_session_duration = var.iam_session_policy.max_session_duration
 
   assume_role_policy = jsonencode({
@@ -162,7 +236,7 @@ resource "aws_iam_role_policy_attachment" "ec2spot_ssm" {
 resource "aws_iam_instance_profile" "ec2spot" {
   count = local.total_ec2spot_count > 0 ? 1 : 0
 
-  name = "km-ec2spot-profile-${var.region_label}-${var.km_random_suffix}"
+  name = "km-ec2spot-profile-${var.sandbox_id}-${var.region_label}"
   role = aws_iam_role.ec2spot_ssm[0].name
 
   tags = {
