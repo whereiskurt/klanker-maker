@@ -96,10 +96,10 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **BUDG-03**: Compute spend tracked as instance type spot rate × elapsed minutes (per-minute billing); rate sourced from AWS Price List API at sandbox creation
 - [x] **BUDG-04**: AI/token spend tracked per Bedrock Anthropic model (Haiku, Sonnet, Opus); http-proxy sidecar intercepts `InvokeModel` responses, extracts `usage.input_tokens`/`usage.output_tokens`, multiplies by model rate, increments DynamoDB budget record
 - [x] **BUDG-05**: Model pricing sourced from AWS Price List API (cached, refreshed daily) — supports all Anthropic models available on Bedrock
-- [ ] **BUDG-06**: At 80% budget threshold (configurable via `spec.budget.warningThreshold`), operator receives warning email via SES using existing `SendLifecycleNotification` pattern
+- [x] **BUDG-06**: At 80% budget threshold (configurable via `spec.budget.warningThreshold`), operator receives warning email via SES using existing `SendLifecycleNotification` pattern
 - [x] **BUDG-07**: Dual-layer enforcement — at 100% AI budget, http-proxy returns 403 for Bedrock calls (immediate, real-time); the same EventBridge-triggered Lambda that checks compute spend also reads DynamoDB AI spend records and revokes the instance profile's Bedrock IAM permissions as a backstop (catches SDK/CLI calls that bypass the proxy); at 100% compute budget, Lambda suspends the sandbox: EC2 instances are stopped (`StopInstances` — preserves EBS, no compute charges, resumable on top-up); ECS Fargate tasks trigger artifact upload then stop (tasks are ephemeral — top-up re-provisions from stored profile in S3)
-- [ ] **BUDG-08**: Operator can top up a sandbox budget via `km budget add <sandbox-id> --compute <amount> --ai <amount>` which updates DynamoDB limits and resumes enforcement: for AI, restores Bedrock IAM and proxy unblocks; for compute, EC2 instances are started (`StartInstances` — resumes from stopped state), ECS Fargate tasks are re-provisioned from the stored profile in S3
-- [ ] **BUDG-09**: `km status <sandbox-id>` shows current spend vs budget for both compute and AI pools, including per-model AI breakdown
+- [x] **BUDG-08**: Operator can top up a sandbox budget via `km budget add <sandbox-id> --compute <amount> --ai <amount>` which updates DynamoDB limits and resumes enforcement: for AI, restores Bedrock IAM and proxy unblocks; for compute, EC2 instances are started (`StartInstances` — resumes from stopped state), ECS Fargate tasks are re-provisioned from the stored profile in S3
+- [x] **BUDG-09**: `km status <sandbox-id>` shows current spend vs budget for both compute and AI pools, including per-model AI breakdown
 
 ## v2 Requirements
 
@@ -211,10 +211,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BUDG-03 | Phase 6 | Complete |
 | BUDG-04 | Phase 6 | Complete |
 | BUDG-05 | Phase 6 | Complete |
-| BUDG-06 | Phase 6 | Pending |
+| BUDG-06 | Phase 6 | Complete |
 | BUDG-07 | Phase 6 | Complete |
-| BUDG-08 | Phase 6 | Pending |
-| BUDG-09 | Phase 6 | Pending |
+| BUDG-08 | Phase 6 | Complete |
+| BUDG-09 | Phase 6 | Complete |
 
 **Coverage:**
 - v1 requirements: 66 total
