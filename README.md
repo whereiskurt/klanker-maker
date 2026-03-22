@@ -79,35 +79,9 @@ The difference between Klanker Maker and the other sandbox platforms: this is **
 
 Klanker Maker uses a **three-account model** following AWS Organizations best practices. Sandboxes run in a dedicated application account — completely separated from the account that provisions them and the account that owns the domain.
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        AWS Organizations                            │
-│                                                                     │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────┐ │
-│  │   Management     │  │   Terraform      │  │   Application       │ │
-│  │   Account        │  │   Account        │  │   Account           │ │
-│  │                  │  │                  │  │                     │ │
-│  │  Route53 zone    │  │  S3 state        │  │  Regional VPCs       │ │
-│  │  Domain reg      │  │  DynamoDB locks   │  │  EC2 / ECS          │ │
-│  │  Organizations   │  │  Provisioning     │  │  IAM roles          │ │
-│  │  SSO config      │  │  role             │  │  Security Groups    │ │
-│  │                  │  │                  │  │  SSM parameters     │ │
-│  │                  │  │                  │  │  KMS keys           │ │
-│  │                  │  │                  │  │  SES email           │ │
-│  │                  │  │                  │  │  CloudWatch Logs    │ │
-│  │                  │  │                  │  │  S3 artifacts       │ │
-│  │                  │  │                  │  │  Lambda handlers    │ │
-│  │                  │  │                  │  │  DynamoDB budgets   │ │
-│  │                  │  │                  │  │  EventBridge sched  │ │
-│  └─────────────────┘  └─────────────────┘  └─────────────────────┘ │
-│        │                      │                      │              │
-│        │  DNS delegation      │  assume role          │              │
-│        ├─────────────────────▶├─────────────────────▶│              │
-│        │                      │  terragrunt apply     │              │
-│                                                                     │
-│  AWS SSO ──────────────────── operator access to all three ─────── │
-└─────────────────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="docs/frame1-security-network.svg" alt="Security & Network Architecture — 3 accounts, shared VPC, per-sandbox Security Groups" />
+</p>
 
 ### Why Three Accounts?
 
@@ -185,22 +159,13 @@ Sandboxes are accessed exclusively through **AWS SSM Session Manager**:
 
 ### Architecture Diagrams
 
-See [`docs/sandbox-architecture.excalidraw`](docs/sandbox-architecture.excalidraw) — open in [excalidraw.com](https://excalidraw.com) or the VS Code Excalidraw extension. Three frames:
-
-**Frame 1 — Security & Network Architecture.** The 3-account model (Management, Terraform, Application) with DNS delegation and cross-account role assumption arrows. Inside the Application account: the shared regional VPC containing per-sandbox Security Group boundaries, the EC2/ECS workload running an AI agent, 4 sidecars (DNS proxy, HTTP proxy, audit log, tracing) with iptables DNAT forcing all traffic through them. Egress flows through the proxies to the Internet box showing allowed hosts vs everything else blocked. A second sandbox ghost shows SGs blocking lateral movement. Per-sandbox controls (IAM scoping, IMDSv2, SSM, source access, filesystem policy, secrets) listed alongside. AWS services (SSM Params, S3 Artifacts, CloudWatch, SES) below.
-
-**Frame 2 — Budget Enforcement Flow.** A left-to-right pipeline: Agent makes Bedrock API call → HTTP Proxy intercepts response → extract input/output tokens → price against model rates (Haiku ~$0.25/MTok, Sonnet ~$3/MTok) → atomic DynamoDB increment. From DynamoDB, two paths fork: at 80% → SES warning email to operator; at 100% → dual-layer enforcement (proxy returns 403 + Lambda revokes IAM Bedrock permissions) + compute suspension. A `km budget add` arrow curves back to DynamoDB showing the top-up and resume flow. The `km status` output shows per-model spend breakdown.
-
-**Frame 3 — Sandbox Lifecycle & Pipeline.** The provisioning pipeline left to right: `km configure` (once) → `km bootstrap` (once, S3 + DynamoDB + KMS) → `km init` (per region, shared VPC) → Compiler (YAML→HCL) → `km create` (terragrunt apply, per sandbox) → running (km list/status/logs) → `km destroy`. Below: four automatic exit triggers — TTL expiry (EventBridge → Lambda → artifacts → email → destroy), idle timeout (CW Logs polling), spot interruption (2-min warning artifact upload), and budget exhausted (suspended, not destroyed, resume with top-up). Teardown policies (destroy/stop/retain) at the bottom.
+Editable source: [`docs/sandbox-architecture.excalidraw`](docs/sandbox-architecture.excalidraw) — open in [excalidraw.com](https://excalidraw.com) or the VS Code Excalidraw extension.
 
 ## How It Works
 
-```
-┌─────────────────┐     ┌──────────┐     ┌──────────────┐     ┌─────────────────┐
-│ SandboxProfile   │────▶│ Compiler │────▶│  Terragrunt  │────▶│  AWS Sandbox    │
-│ (YAML)           │     │          │     │  Artifacts   │     │  (EC2 or ECS)   │
-└─────────────────┘     └──────────┘     └──────────────┘     └─────────────────┘
-```
+<p align="center">
+  <img src="docs/frame3-lifecycle-pipeline.svg" alt="Sandbox Lifecycle & Pipeline — configure through destroy, automatic exit triggers" />
+</p>
 
 1. **Configure** with `km configure` — set your domain, account IDs, SSO URL, region (once)
 2. **Bootstrap** with `km bootstrap` — creates S3 state buckets, DynamoDB lock tables, and KMS keys for your configured regions (once)
@@ -331,6 +296,10 @@ Spot interruption handlers automatically upload artifacts to S3 before instances
 ## Budget Enforcement
 
 Budget enforcement tracks two spend pools per sandbox, stored in a **DynamoDB global table** replicated to every region where agents run. Reads from within the sandbox hit the local regional replica with sub-millisecond latency.
+
+<p align="center">
+  <img src="docs/frame2-budget-enforcement.svg" alt="Budget Enforcement Flow — proxy metering, DynamoDB tracking, dual-layer enforcement" />
+</p>
 
 ### Compute Budget
 
