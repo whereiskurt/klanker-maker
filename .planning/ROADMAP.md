@@ -21,7 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 3: Sidecar Enforcement & Lifecycle Management** - DNS proxy, HTTP proxy, audit log, and tracing sidecars on both substrates; OTel trace collection and MLflow experiment tracking per sandbox session; TTL auto-destroy, `km list/status`, observability
 - [ ] **Phase 4: Lifecycle Hardening, Artifacts & Email** - Profile inheritance, filesystem policy, artifact upload, spot interruption handling, secret redaction, email/SES agent communication
 - [x] **Phase 5: ConfigUI** - Web dashboard for profile editing, live sandbox status, and AWS resource discovery — fresh Go application at `cmd/configui/` inspired by defcon.run.34 patterns, with no external dependency (completed 2026-03-22)
-- [ ] **Phase 6: Budget Enforcement** - Per-sandbox compute and AI spend tracking via DynamoDB global table, http-proxy Bedrock interception for real-time token metering, threshold warnings via SES, hard enforcement via IAM revocation and proxy 403s, operator top-up via CLI
+- [ ] **Phase 6: Budget Enforcement & Platform Configuration** - Per-sandbox compute and AI spend tracking via DynamoDB global table, http-proxy Bedrock interception for real-time token metering, threshold warnings via SES, hard enforcement via IAM revocation and proxy 403s, operator top-up via CLI; plus full platform configurability (domain, accounts, SSO, region) so forks work out of the box
 
 ## Phase Details
 
@@ -122,18 +122,20 @@ Plans:
 - [ ] 05-03-PLAN.md — SOPS secrets management UI (CFUI-04)
 - [ ] 05-04-PLAN.md — Dashboard actions + visual verification checkpoint (CFUI-01, CFUI-02, CFUI-03, CFUI-04)
 
-### Phase 6: Budget Enforcement
-**Goal**: Operators can set per-sandbox dollar budgets for compute and AI (Bedrock Anthropic models), with real-time spend tracking, threshold warnings, and hard enforcement — sandboxes that exceed their budget are blocked from further API calls or compute, and operators can top up budgets without destroying the sandbox
+### Phase 6: Budget Enforcement & Platform Configuration
+**Goal**: Operators can set per-sandbox dollar budgets for compute and AI (Bedrock Anthropic models), with real-time spend tracking, threshold warnings, and hard enforcement; the platform is fully configurable for any domain and AWS account structure so anyone can fork and deploy their own instance
 **Depends on**: Phase 5
-**Requirements**: BUDG-01, BUDG-02, BUDG-03, BUDG-04, BUDG-05, BUDG-06, BUDG-07, BUDG-08, BUDG-09
+**Requirements**: CONF-01, CONF-02, CONF-03, CONF-04, BUDG-01, BUDG-02, BUDG-03, BUDG-04, BUDG-05, BUDG-06, BUDG-07, BUDG-08, BUDG-09
 **Success Criteria** (what must be TRUE):
-  1. Operator creates a sandbox with `spec.budget.compute.maxSpendUSD: 2.00` and `spec.budget.ai.maxSpendUSD: 5.00`; DynamoDB global table stores the budget limits alongside the sandbox record using the defcon.run.34 single-table pattern
-  2. A running sandbox's compute spend is tracked as spot rate × elapsed minutes; `km status` shows current compute spend vs budget; when compute budget is exhausted, the Lambda suspends the sandbox (EC2: `StopInstances` preserving EBS; ECS Fargate: artifact upload then task stop) and the operator receives an email notification
-  3. An agent inside a sandbox makes Bedrock InvokeModel calls (Haiku, Sonnet, or Opus); the http-proxy sidecar intercepts each response, extracts token usage, prices it against the model's rate from AWS Price List API, and increments the DynamoDB spend record; `km status` shows per-model AI spend breakdown
-  4. When AI budget reaches 100%, the http-proxy returns HTTP 403 for subsequent Bedrock calls (real-time enforcement); additionally, the compute-budget Lambda also reads DynamoDB AI spend records and revokes the instance profile's Bedrock IAM permissions as a backstop for SDK/CLI calls that bypass the proxy — the operator receives an email notification from whichever layer fires first
-  5. At 80% of either budget pool, the operator receives a warning email; the threshold is configurable via `spec.budget.warningThreshold`
-  6. Operator runs `km budget add <sandbox-id> --ai 3.00` and the sandbox's AI budget increases by $3; if proxy was blocking, it unblocks; if IAM was revoked, it's restored; if EC2 was stopped, it's started; if ECS task was terminated, it's re-provisioned from the stored S3 profile
-  7. DynamoDB budget table is a global table replicated to all regions where agents run — budget reads from within the sandbox hit the local regional replica with sub-millisecond latency
+  1. Operator runs `km configure` (or `km init`) and is walked through setting domain, AWS account IDs, SSO start URL, and region — a config file is written and all subsequent commands use these values
+  2. A fork of the repo with a different domain (e.g. `mysandboxes.example.com`) works end-to-end after running `km configure` — SES emails, JSON Schema `$id`, profile `apiVersion`, and ConfigUI branding all reflect the configured domain with no hardcoded `klankermaker.ai` references
+  3. Operator creates a sandbox with `spec.budget.compute.maxSpendUSD: 2.00` and `spec.budget.ai.maxSpendUSD: 5.00`; DynamoDB global table stores the budget limits alongside the sandbox record using the defcon.run.34 single-table pattern
+  4. A running sandbox's compute spend is tracked as spot rate × elapsed minutes; `km status` shows current compute spend vs budget; when compute budget is exhausted, the Lambda suspends the sandbox (EC2: `StopInstances` preserving EBS; ECS Fargate: artifact upload then task stop) and the operator receives an email notification
+  5. An agent inside a sandbox makes Bedrock InvokeModel calls (Haiku, Sonnet, or Opus); the http-proxy sidecar intercepts each response, extracts token usage, prices it against the model's rate from AWS Price List API, and increments the DynamoDB spend record; `km status` shows per-model AI spend breakdown
+  6. When AI budget reaches 100%, the http-proxy returns HTTP 403 for subsequent Bedrock calls (real-time enforcement); additionally, the compute-budget Lambda also reads DynamoDB AI spend records and revokes the instance profile's Bedrock IAM permissions as a backstop for SDK/CLI calls that bypass the proxy — the operator receives an email notification from whichever layer fires first
+  7. At 80% of either budget pool, the operator receives a warning email; the threshold is configurable via `spec.budget.warningThreshold`
+  8. Operator runs `km budget add <sandbox-id> --ai 3.00` and the sandbox's AI budget increases by $3; if proxy was blocking, it unblocks; if IAM was revoked, it's restored; if EC2 was stopped, it's started; if ECS task was terminated, it's re-provisioned from the stored S3 profile
+  9. DynamoDB budget table is a global table replicated to all regions where agents run — budget reads from within the sandbox hit the local regional replica with sub-millisecond latency
 **Plans**: TBD
 
 ## Progress
@@ -148,4 +150,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 3. Sidecar Enforcement & Lifecycle Management | 5/6 | In Progress|  |
 | 4. Lifecycle Hardening, Artifacts & Email | 4/5 | In Progress|  |
 | 5. ConfigUI | 4/4 | Complete   | 2026-03-22 |
-| 6. Budget Enforcement | 0/TBD | Not started | - |
+| 6. Budget Enforcement & Platform Configuration | 0/TBD | Not started | - |
