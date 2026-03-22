@@ -1,6 +1,12 @@
 {{define "dashboard.html"}}{{template "base.html" .}}{{end}}
 
 {{define "content"}}
+<style>
+.budget-ok { color: #22c55e; }
+.budget-warn { color: #eab308; }
+.budget-exceeded { color: #ef4444; font-weight: 600; }
+</style>
+
 <div class="page-header">
   <h1 class="page-title">Sandbox Dashboard</h1>
   <span class="sandbox-count">{{.Count}} sandbox{{if ne .Count 1}}es{{end}} running</span>
@@ -20,7 +26,8 @@
         <th>Status</th>
         <th>TTL Remaining</th>
         <th>Created At</th>
-        <th class="col-budget col-disabled" title="Available in Phase 6">Budget (soon)</th>
+        <th class="col-budget" title="Compute spend vs. limit">Compute Budget</th>
+        <th class="col-budget" title="AI spend vs. limit">AI Budget</th>
       </tr>
     </thead>
     <tbody
@@ -33,7 +40,7 @@
         {{range .Sandboxes}}{{template "sandbox_row" .}}{{end}}
       {{else}}
         <tr class="empty-state">
-          <td colspan="7">No sandboxes running. Use <code>km create &lt;profile.yaml&gt;</code> to provision one.</td>
+          <td colspan="8">No sandboxes running. Use <code>km create &lt;profile.yaml&gt;</code> to provision one.</td>
         </tr>
       {{end}}
     </tbody>

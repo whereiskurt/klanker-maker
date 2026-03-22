@@ -63,19 +63,20 @@ type CWLogsFilterAPI interface {
 
 // Handler holds all dependencies for the ConfigUI HTTP handlers.
 type Handler struct {
-	tmpl        *template.Template // default (dashboard) template set — used for partials
-	editorTmpl  *template.Template // editor page template set
-	secretsTmpl *template.Template // secrets page template set
-	lister      SandboxLister
-	finder      SandboxFinder
-	cwClient    CWLogsFilterAPI
-	ssmClient   SSMAPI // Added by Plan 03: secrets management
-	destroyer   Destroyer
-	ttlExtender TTLExtender
-	creator     SandboxCreator
-	profilesDir string
-	bucket      string
-	domain      string // base domain for branding (e.g. "klankermaker.ai"); from KM_DOMAIN env
+	tmpl          *template.Template // default (dashboard) template set — used for partials
+	editorTmpl    *template.Template // editor page template set
+	secretsTmpl   *template.Template // secrets page template set
+	lister        SandboxLister
+	finder        SandboxFinder
+	cwClient      CWLogsFilterAPI
+	ssmClient     SSMAPI // Added by Plan 03: secrets management
+	destroyer     Destroyer
+	ttlExtender   TTLExtender
+	creator       SandboxCreator
+	budgetFetcher BudgetFetcher // Added by Plan 07: budget dashboard columns; nil = no budget display
+	profilesDir   string
+	bucket        string
+	domain        string // base domain for branding (e.g. "klankermaker.ai"); from KM_DOMAIN env
 }
 
 // BasePage provides fields common to all full-page templates (nav active state).
@@ -83,10 +84,17 @@ type BasePage struct {
 	ActivePage string
 }
 
+// DashboardSandbox is a sandbox record augmented with optional budget display data.
+// Budget is nil when no BudgetFetcher is configured or when budget fetch fails.
+type DashboardSandbox struct {
+	kmaws.SandboxRecord
+	Budget *BudgetDisplayData
+}
+
 // DashboardData is the template data for the dashboard page.
 type DashboardData struct {
 	BasePage
-	Sandboxes []kmaws.SandboxRecord
+	Sandboxes []DashboardSandbox
 	Count     int
 	Error     string
 }
@@ -117,10 +125,25 @@ func (h *Handler) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		records = nil
 	}
 
+	// Build DashboardSandbox slice, enriching each record with budget data if a fetcher
+	// is configured. Budget fetch errors are silently degraded to nil (shows dash in UI).
+	sandboxes := make([]DashboardSandbox, 0, len(records))
+	for _, rec := range records {
+		ds := DashboardSandbox{SandboxRecord: rec}
+		if h.budgetFetcher != nil {
+			if bdata, berr := h.budgetFetcher.GetBudget(r.Context(), rec.SandboxID); berr == nil {
+				ds.Budget = bdata
+			} else {
+				log.Warn().Err(berr).Str("sandbox_id", rec.SandboxID).Msg("configui: budget fetch failed; degrading to no-budget display")
+			}
+		}
+		sandboxes = append(sandboxes, ds)
+	}
+
 	data := DashboardData{
 		BasePage:  BasePage{ActivePage: "dashboard"},
-		Sandboxes: records,
-		Count:     len(records),
+		Sandboxes: sandboxes,
+		Count:     len(sandboxes),
 		Error:     errMsg,
 	}
 
@@ -165,7 +188,7 @@ func (h *Handler) handleSandboxDetail(w http.ResponseWriter, r *http.Request) {
 		if listErr == nil {
 			for _, rec := range records {
 				if rec.SandboxID == sandboxID {
-					record = rec
+					record = rec // SandboxRecord (plain, not DashboardSandbox)
 					break
 				}
 			}
@@ -411,7 +434,13 @@ func buildTestTemplates() *template.Template {
 {{end}}
 
 {{define "sandbox_rows"}}
-{{range .Sandboxes}}<tr><td>{{.SandboxID}}</td><td>{{.Profile}}</td><td>{{.Substrate}}</td><td>{{.Status}}</td><td>{{.TTLRemaining}}</td></tr>
+{{range .Sandboxes}}<tr>
+  <td>{{.SandboxID}}</td><td>{{.Profile}}</td><td>{{.Substrate}}</td><td>{{.Status}}</td><td>{{.TTLRemaining}}</td>
+  {{if and .Budget .Budget.HasBudget}}
+  <td class="{{.Budget.CSSClass}}">{{.Budget.ComputeSpent}} / {{.Budget.ComputeLimit}}</td>
+  <td class="{{.Budget.CSSClass}}">{{.Budget.AISpent}} / {{.Budget.AILimit}}</td>
+  {{else}}<td>&#8212;</td><td>&#8212;</td>{{end}}
+</tr>
 {{end}}
 {{end}}
 

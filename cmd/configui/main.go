@@ -26,6 +26,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
@@ -96,10 +97,15 @@ func main() {
 	cwClient := cloudwatchlogs.NewFromConfig(awsCfg)
 	ssmClient := ssm.NewFromConfig(awsCfg)
 	schedulerClient := scheduler.NewFromConfig(awsCfg)
+	dynamoClient := dynamodb.NewFromConfig(awsCfg)
 
 	// Wrap real AWS clients in adapters satisfying the narrow Handler interfaces.
 	listerAdapter := &s3ListerAdapter{client: s3Client}
 	finderAdapter := &tagFinderAdapter{client: tagClient}
+
+	// Budget fetcher: uses DynamoDB table name from KM_BUDGET_TABLE (default "km-budgets").
+	budgetTableName := envOrDefault("KM_BUDGET_TABLE", "km-budgets")
+	budgetFetcher := &dynoBudgetFetcher{client: dynamoClient, tableName: budgetTableName}
 
 	// Production action implementations.
 	destroyer := &kmDestroyerImpl{}
@@ -107,19 +113,20 @@ func main() {
 	creator := &kmCreatorImpl{}
 
 	handler := &Handler{
-		tmpl:        tmpl,
-		editorTmpl:  editorTmpl,
-		secretsTmpl: secretsTmpl,
-		lister:      listerAdapter,
-		finder:      finderAdapter,
-		cwClient:    cwClient,
-		ssmClient:   ssmClient,
-		destroyer:   destroyer,
-		ttlExtender: ttlExtender,
-		creator:     creator,
-		profilesDir: *profilesDir,
-		bucket:      *bucket,
-		domain:      envOrDefault("KM_DOMAIN", "klankermaker.ai"),
+		tmpl:          tmpl,
+		editorTmpl:    editorTmpl,
+		secretsTmpl:   secretsTmpl,
+		lister:        listerAdapter,
+		finder:        finderAdapter,
+		cwClient:      cwClient,
+		ssmClient:     ssmClient,
+		destroyer:     destroyer,
+		ttlExtender:   ttlExtender,
+		creator:       creator,
+		budgetFetcher: budgetFetcher,
+		profilesDir:   *profilesDir,
+		bucket:        *bucket,
+		domain:        envOrDefault("KM_DOMAIN", "klankermaker.ai"),
 	}
 
 	// Static file server from embedded FS (strip "static" prefix).

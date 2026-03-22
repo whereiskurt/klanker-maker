@@ -3,7 +3,7 @@
   {{range .Sandboxes}}{{template "sandbox_row" .}}{{end}}
 {{else}}
   <tr class="empty-state">
-    <td colspan="7">No sandboxes running.</td>
+    <td colspan="8">No sandboxes running.</td>
   </tr>
 {{end}}
 {{end}}
@@ -22,6 +22,16 @@
   <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
   <td>{{if .TTLRemaining}}{{.TTLRemaining}}{{else}}<span class="text-muted">&#8212;</span>{{end}}</td>
   <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
-  <td class="col-budget col-disabled text-muted">&#8212;</td>
+  {{if and .Budget .Budget.HasBudget}}
+  <td class="col-budget {{.Budget.CSSClass}}">
+    <span title="{{.Budget.ComputePct}}% of limit">{{.Budget.ComputeSpent}} / {{.Budget.ComputeLimit}}</span>
+  </td>
+  <td class="col-budget {{.Budget.CSSClass}}">
+    <span title="{{.Budget.AIPct}}% of limit">{{.Budget.AISpent}} / {{.Budget.AILimit}}</span>
+  </td>
+  {{else}}
+  <td class="col-budget text-muted">&#8212;</td>
+  <td class="col-budget text-muted">&#8212;</td>
+  {{end}}
 </tr>
 {{end}}
