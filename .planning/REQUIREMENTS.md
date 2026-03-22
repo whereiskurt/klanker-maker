@@ -94,7 +94,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **BUDG-01**: Per-sandbox budget with separate compute and AI spend pools defined in profile YAML (`spec.budget.compute.maxSpendUSD`, `spec.budget.ai.maxSpendUSD`)
 - [x] **BUDG-02**: DynamoDB global table (single-table design, extending defcon.run.34 auth pattern) stores budget limits and running spend per sandbox, replicated to all regions where agents run for low-latency local reads
 - [ ] **BUDG-03**: Compute spend tracked as instance type spot rate × elapsed minutes (per-minute billing); rate sourced from AWS Price List API at sandbox creation
-- [ ] **BUDG-04**: AI/token spend tracked per Bedrock Anthropic model (Haiku, Sonnet, Opus); http-proxy sidecar intercepts `InvokeModel` responses, extracts `usage.input_tokens`/`usage.output_tokens`, multiplies by model rate, increments DynamoDB budget record
+- [x] **BUDG-04**: AI/token spend tracked per Bedrock Anthropic model (Haiku, Sonnet, Opus); http-proxy sidecar intercepts `InvokeModel` responses, extracts `usage.input_tokens`/`usage.output_tokens`, multiplies by model rate, increments DynamoDB budget record
 - [x] **BUDG-05**: Model pricing sourced from AWS Price List API (cached, refreshed daily) — supports all Anthropic models available on Bedrock
 - [ ] **BUDG-06**: At 80% budget threshold (configurable via `spec.budget.warningThreshold`), operator receives warning email via SES using existing `SendLifecycleNotification` pattern
 - [ ] **BUDG-07**: Dual-layer enforcement — at 100% AI budget, http-proxy returns 403 for Bedrock calls (immediate, real-time); the same EventBridge-triggered Lambda that checks compute spend also reads DynamoDB AI spend records and revokes the instance profile's Bedrock IAM permissions as a backstop (catches SDK/CLI calls that bypass the proxy); at 100% compute budget, Lambda suspends the sandbox: EC2 instances are stopped (`StopInstances` — preserves EBS, no compute charges, resumable on top-up); ECS Fargate tasks trigger artifact upload then stop (tasks are ephemeral — top-up re-provisions from stored profile in S3)
@@ -209,7 +209,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BUDG-01 | Phase 6 | Complete |
 | BUDG-02 | Phase 6 | Complete |
 | BUDG-03 | Phase 6 | Pending |
-| BUDG-04 | Phase 6 | Pending |
+| BUDG-04 | Phase 6 | Complete |
 | BUDG-05 | Phase 6 | Complete |
 | BUDG-06 | Phase 6 | Pending |
 | BUDG-07 | Phase 6 | Pending |

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 06-03-PLAN.md
-last_updated: "2026-03-22T20:29:48.309Z"
+stopped_at: Completed 06-04-PLAN.md
+last_updated: "2026-03-22T20:35:38.775Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 30
-  completed_plans: 26
+  completed_plans: 27
   percent: 0
 ---
 
@@ -75,6 +75,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 06-budget-enforcement-platform-configuration P02 | 15min | 2 tasks | 11 files |
 | Phase 06-budget-enforcement-platform-configuration P01 | 8min | 2 tasks | 7 files |
 | Phase 06-budget-enforcement-platform-configuration P03 | 955 | 2 tasks | 14 files |
+| Phase 06-budget-enforcement-platform-configuration P04 | 218s | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -156,6 +157,9 @@ Recent decisions affecting current work:
 - [Phase 06-budget-enforcement-platform-configuration]: Config.Domain is empty by default — callers use empty check with klankermaker.ai fallback to preserve TestLoadBackwardCompat compatibility
 - [Phase 06-budget-enforcement-platform-configuration]: JSON schema  uses __SCHEMA_DOMAIN__ placeholder replaced at compileSchemaForDomain() call time; apiVersion changed from const to pattern ^.+/v1alpha1$
 - [Phase 06-budget-enforcement-platform-configuration]: NetworkConfig.EmailDomain threads domain through compiler pipeline without changing Compile() signature
+- [Phase 06-04]: AlwaysMitm registered before OkConnect for Bedrock MITM (goproxy first-match ordering)
+- [Phase 06-04]: IncrementAISpend in fire-and-forget goroutine — response never held pending DynamoDB
+- [Phase 06-04]: budgetCache.UpdateLocalSpend called synchronously before goroutine so follow-on requests see optimistic increment
 
 ### Pending Todos
 
@@ -171,6 +175,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T20:29:48.307Z
-Stopped at: Completed 06-03-PLAN.md
+Last session: 2026-03-22T20:35:38.772Z
+Stopped at: Completed 06-04-PLAN.md
 Resume file: None
