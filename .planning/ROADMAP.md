@@ -161,7 +161,7 @@ Plans:
   3. Every `km create` records an MLflow run with sandbox metadata; every `km destroy` finalizes the run with duration and exit status
   4. Account IDs from km-config.yaml are consumed by site.hcl via get_env() — cross-account IAM and provider configs reference configured values
   5. Profile extends and built-in profiles are verified working and tracked as complete
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 07-01-PLAN.md — Wire RedactingDestination + IdleDetector into audit-log sidecar binary (PROV-06, OBSV-07)
@@ -203,6 +203,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 4. Lifecycle Hardening, Artifacts & Email | 5/5 | Complete   | 2026-03-22 |
 | 5. ConfigUI | 4/4 | Complete   | 2026-03-22 |
 | 6. Budget Enforcement & Platform Configuration | 9/9 | Complete   | 2026-03-22 |
-| 7. Unwired Code Paths | 0/2 | Planning   |  |
+| 7. Unwired Code Paths | 2/2 | Complete   | 2026-03-22 |
 | 8. Sidecar Build & Deployment Pipeline | 0/0 | Pending    |  |
 | 9. Live Infrastructure & Operator Docs | 0/0 | Pending    |  |
