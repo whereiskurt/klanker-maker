@@ -20,7 +20,7 @@ KM_ARTIFACTS_BUCKET ?=
 
 SIDECARS := dns-proxy http-proxy audit-log
 
-.PHONY: sidecars ecr-push ecr-login ecr-repos build-sidecars
+.PHONY: sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas
 
 ## sidecars: cross-compile Go sidecars and upload binaries + tracing config to S3
 sidecars:
@@ -61,6 +61,18 @@ ecr-repos:
 	  aws ecr describe-repositories --region $(REGION) --repository-names $$name 2>/dev/null || \
 	  aws ecr create-repository --region $(REGION) --repository-name $$name; \
 	done
+
+## build-lambdas: cross-compile Go Lambda binaries for arm64 and package as deployment zips
+build-lambdas:
+	@mkdir -p build
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/bootstrap ./cmd/ttl-handler/
+	cd build && zip -j ttl-handler.zip bootstrap && rm bootstrap
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/bootstrap ./cmd/budget-enforcer/
+	cd build && zip -j budget-enforcer.zip bootstrap && rm bootstrap
+	@echo ""
+	@echo "Lambda deployment packages built:"
+	@echo "  build/ttl-handler.zip"
+	@echo "  build/budget-enforcer.zip"
 
 ## ecr-push: build and push Docker images for all 4 sidecars to ECR
 ecr-push: ecr-login ecr-repos
