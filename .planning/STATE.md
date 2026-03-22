@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 06-08-PLAN.md
-last_updated: "2026-03-22T21:29:52.096Z"
+stopped_at: Completed 06-09-PLAN.md
+last_updated: "2026-03-22T21:30:49.069Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 6
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 32
-  completed_plans: 31
+  completed_plans: 32
   percent: 0
 ---
 
@@ -80,6 +80,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 06-budget-enforcement-platform-configuration P06 | 374s | 2 tasks | 6 files |
 | Phase 06-budget-enforcement-platform-configuration P07 | 4min | 1 tasks | 6 files |
 | Phase 06-budget-enforcement-platform-configuration P08 | 222s | 2 tasks | 5 files |
+| Phase 06-budget-enforcement-platform-configuration P09 | 286s | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -174,6 +175,9 @@ Recent decisions affecting current work:
 - [Phase 06-07]: dynoBudgetFetcher treats DynamoDB errors as HasBudget=false — budget display is informational, not critical path; no HTTP 500 from budget failures
 - [Phase 06-budget-enforcement-platform-configuration]: NetworkConfig.SpotRateUSD threads spot rate through compiler pipeline without changing Compile() signature — consistent with EmailDomain pattern
 - [Phase 06-budget-enforcement-platform-configuration]: staticSpotRate() in separate spot_rate.go isolates lookup table from command logic; unknown instance families get 0.10/hr conservative fallback
+- [Phase 06-09]: ShellExecFunc package-level type for DI — tests capture exec.Cmd.Args without executing AWS CLI
+- [Phase 06-09]: ECS dispatch passes full cluster/task ARNs (not just IDs) — aws ecs execute-command accepts ARNs directly
+- [Phase 06-09]: Rule 3 auto-fix: spot_rate.go created to provide staticSpotRate() referenced in create.go and spot_rate_test.go but missing from package
 
 ### Pending Todos
 
@@ -189,6 +193,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T21:29:52.094Z
-Stopped at: Completed 06-08-PLAN.md
+Last session: 2026-03-22T21:30:49.067Z
+Stopped at: Completed 06-09-PLAN.md
 Resume file: None
