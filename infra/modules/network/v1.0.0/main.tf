@@ -181,7 +181,7 @@ resource "aws_security_group" "sandbox_mgmt" {
 # Security Group: Sandbox internal (intra-VPC communication between sidecars and main container)
 resource "aws_security_group" "sandbox_internal" {
   name        = "${var.km_label}-${var.region_label}-sandbox-internal"
-  description = "Sandbox intra-task communication (sidecars <-> main container)"
+  description = "Sandbox intra-task communication (sidecars and main container)"
   vpc_id      = aws_vpc.vpc.id
 
   ingress {

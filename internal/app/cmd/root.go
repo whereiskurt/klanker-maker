@@ -35,6 +35,7 @@ Use km validate to check profile syntax and semantics before provisioning.`,
 	)
 
 	// Register subcommands
+	root.AddCommand(NewInitCmd(cfg))
 	root.AddCommand(NewValidateCmd(cfg))
 	root.AddCommand(NewCreateCmd(cfg))
 	root.AddCommand(NewDestroyCmd(cfg))

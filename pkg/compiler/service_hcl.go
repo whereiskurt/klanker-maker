@@ -25,9 +25,9 @@ const ec2ServiceHCLTemplate = `locals {
 
   module_inputs = {
     sandbox_id         = "{{ .SandboxID }}"
-    vpc_id             = ""  # populated at provision time from network module outputs
-    public_subnets     = []  # populated at provision time from network module outputs
-    availability_zones = []  # populated at provision time from network module outputs
+    vpc_id             = "{{ .VPCID }}"
+    public_subnets     = [{{ joinStrings .PublicSubnets }}]
+    availability_zones = [{{ joinStrings .AvailabilityZones }}]
 
     ec2spots = [
       {
@@ -209,14 +209,17 @@ const ecsServiceHCLTemplate = `locals {
 
 // ec2HCLParams holds the data for the EC2 service.hcl template.
 type ec2HCLParams struct {
-	ProfileName    string
-	SandboxID      string
-	Region         string
-	InstanceType   string
-	UseSpot        bool
-	UserDataBase64 string
-	SGEgressRules  []SGRule
-	IAMPolicy      *IAMSessionPolicy
+	ProfileName       string
+	SandboxID         string
+	Region            string
+	InstanceType      string
+	UseSpot           bool
+	UserDataBase64    string
+	VPCID             string
+	PublicSubnets     []string
+	AvailabilityZones []string
+	SGEgressRules     []SGRule
+	IAMPolicy         *IAMSessionPolicy
 }
 
 // ============================================================
@@ -272,21 +275,31 @@ var templateFuncs = template.FuncMap{
 // ============================================================
 
 // generateEC2ServiceHCL produces the service.hcl content for an EC2/ec2spot sandbox.
-func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot bool, sgRules []SGRule, iamPolicy *IAMSessionPolicy, userData string) (string, error) {
+// NetworkConfig holds shared VPC/subnet info from km init.
+type NetworkConfig struct {
+	VPCID             string
+	PublicSubnets     []string
+	AvailabilityZones []string
+}
+
+func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot bool, sgRules []SGRule, iamPolicy *IAMSessionPolicy, userData string, network *NetworkConfig) (string, error) {
 	tmpl, err := template.New("ec2-service-hcl").Funcs(templateFuncs).Parse(ec2ServiceHCLTemplate)
 	if err != nil {
 		return "", fmt.Errorf("parse ec2 service.hcl template: %w", err)
 	}
 
 	params := ec2HCLParams{
-		ProfileName:   p.Metadata.Name,
-		SandboxID:     sandboxID,
-		Region:        p.Spec.Runtime.Region,
-		InstanceType:  p.Spec.Runtime.InstanceType,
-		UseSpot:       useSpot,
-		UserDataBase64: userData,
-		SGEgressRules: sgRules,
-		IAMPolicy:     iamPolicy,
+		ProfileName:       p.Metadata.Name,
+		SandboxID:         sandboxID,
+		Region:            p.Spec.Runtime.Region,
+		InstanceType:      p.Spec.Runtime.InstanceType,
+		UseSpot:           useSpot,
+		UserDataBase64:    userData,
+		VPCID:             network.VPCID,
+		PublicSubnets:     network.PublicSubnets,
+		AvailabilityZones: network.AvailabilityZones,
+		SGEgressRules:     sgRules,
+		IAMPolicy:         iamPolicy,
 	}
 
 	var buf bytes.Buffer

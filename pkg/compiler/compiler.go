@@ -57,11 +57,11 @@ type IAMSessionPolicy struct {
 //   - onDemand: when true, overrides profile's spot=true to force on-demand provisioning
 //
 // Compile is a pure function with no AWS side effects — fully testable without credentials.
-func Compile(p *profile.SandboxProfile, sandboxID string, onDemand bool) (*CompiledArtifacts, error) {
+func Compile(p *profile.SandboxProfile, sandboxID string, onDemand bool, network *NetworkConfig) (*CompiledArtifacts, error) {
 	substrate := p.Spec.Runtime.Substrate
 	switch substrate {
 	case "ec2":
-		return compileEC2(p, sandboxID, onDemand)
+		return compileEC2(p, sandboxID, onDemand, network)
 	case "ecs":
 		return compileECS(p, sandboxID, onDemand)
 	default:
@@ -70,7 +70,7 @@ func Compile(p *profile.SandboxProfile, sandboxID string, onDemand bool) (*Compi
 }
 
 // compileEC2 handles the EC2 substrate compilation path.
-func compileEC2(p *profile.SandboxProfile, sandboxID string, onDemand bool) (*CompiledArtifacts, error) {
+func compileEC2(p *profile.SandboxProfile, sandboxID string, onDemand bool, network *NetworkConfig) (*CompiledArtifacts, error) {
 	// onDemand=true overrides profile's spot=true
 	useSpot := p.Spec.Runtime.Spot && !onDemand
 
@@ -89,7 +89,7 @@ func compileEC2(p *profile.SandboxProfile, sandboxID string, onDemand bool) (*Co
 	userDataB64 := base64.StdEncoding.EncodeToString([]byte(userData))
 
 	// Generate service.hcl (includes user-data inline in ec2spots[].user_data_base64)
-	svcHCL, err := generateEC2ServiceHCL(p, sandboxID, useSpot, sgRules, iamPolicy, userDataB64)
+	svcHCL, err := generateEC2ServiceHCL(p, sandboxID, useSpot, sgRules, iamPolicy, userDataB64, network)
 	if err != nil {
 		return nil, fmt.Errorf("generate EC2 service.hcl: %w", err)
 	}

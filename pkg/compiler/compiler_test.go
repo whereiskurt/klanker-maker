@@ -10,6 +10,15 @@ import (
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
 )
 
+// testNetwork returns a test NetworkConfig for use in compiler tests.
+func testNetwork() *compiler.NetworkConfig {
+	return &compiler.NetworkConfig{
+		VPCID:             "vpc-test123",
+		PublicSubnets:     []string{"subnet-pub1", "subnet-pub2"},
+		AvailabilityZones: []string{"us-east-1a", "us-east-1b"},
+	}
+}
+
 // loadTestProfile reads and parses a testdata profile YAML file.
 func loadTestProfile(t *testing.T, filename string) *profile.SandboxProfile {
 	t.Helper()
@@ -50,7 +59,7 @@ func TestCompileEC2(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
 	id := compiler.GenerateSandboxID()
 
-	artifacts, err := compiler.Compile(p, id, false)
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -73,7 +82,7 @@ func TestCompileEC2ServiceHCL(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
 	id := "sb-testec2a"
 
-	artifacts, err := compiler.Compile(p, id, false)
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -100,7 +109,7 @@ func TestCompileEC2UserData(t *testing.T) {
 	p := loadTestProfile(t, "ec2-with-secrets.yaml")
 	id := "sb-testud01"
 
-	artifacts, err := compiler.Compile(p, id, false)
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -126,7 +135,7 @@ func TestCompileEC2Spot(t *testing.T) {
 	id := "sb-spottest"
 
 	// spot=true (from profile) and onDemand=false -> should have spot config
-	artifacts, err := compiler.Compile(p, id, false)
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile(spot=true, onDemand=false) error = %v", err)
 	}
@@ -135,7 +144,7 @@ func TestCompileEC2Spot(t *testing.T) {
 	}
 
 	// onDemand=true override: should NOT have spot config
-	artifactsOD, err := compiler.Compile(p, id, true)
+	artifactsOD, err := compiler.Compile(p, id, true, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile(spot=true, onDemand=true) error = %v", err)
 	}
@@ -148,7 +157,7 @@ func TestCompileTagging(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
 	id := "sb-tagtest1"
 
-	artifacts, err := compiler.Compile(p, id, false)
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -166,7 +175,7 @@ func TestCompileSGEgressRulesInServiceHCL(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
 	id := "sb-sgrules1"
 
-	artifacts, err := compiler.Compile(p, id, false)
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -195,7 +204,7 @@ func TestCompileIAMPolicyInServiceHCL(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
 	id := "sb-iampol01"
 
-	artifacts, err := compiler.Compile(p, id, false)
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -223,7 +232,7 @@ func TestCompileSecretsInjection(t *testing.T) {
 	p := loadTestProfile(t, "ec2-with-secrets.yaml")
 	id := "sb-sectest1"
 
-	artifacts, err := compiler.Compile(p, id, false)
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -247,7 +256,7 @@ func TestCompileSecretsInjection(t *testing.T) {
 
 	// Empty allowlist
 	pEmpty := loadTestProfile(t, "ec2-basic.yaml")
-	artifactsEmpty, err := compiler.Compile(pEmpty, id, false)
+	artifactsEmpty, err := compiler.Compile(pEmpty, id, false, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile(empty secrets) error = %v", err)
 	}
@@ -262,7 +271,7 @@ func TestCompileGitHubToken(t *testing.T) {
 	p := loadTestProfile(t, "ec2-with-secrets.yaml")
 	id := "sb-ghtest01"
 
-	artifacts, err := compiler.Compile(p, id, false)
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -285,7 +294,7 @@ func TestCompileGitHubToken(t *testing.T) {
 
 	// Profile without github -> no github token
 	pNoGH := loadTestProfile(t, "ec2-basic.yaml")
-	artifactsNoGH, err := compiler.Compile(pNoGH, id, false)
+	artifactsNoGH, err := compiler.Compile(pNoGH, id, false, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile(no github) error = %v", err)
 	}
@@ -304,7 +313,7 @@ func TestCompileECS(t *testing.T) {
 	p := loadTestProfile(t, "ecs-basic.yaml")
 	id := "sb-ecstest1"
 
-	artifacts, err := compiler.Compile(p, id, false)
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile(ECS) error = %v", err)
 	}
@@ -324,7 +333,7 @@ func TestCompileECSContainers(t *testing.T) {
 	p := loadTestProfile(t, "ecs-basic.yaml")
 	id := "sb-ecscont1"
 
-	artifacts, err := compiler.Compile(p, id, false)
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile(ECS) error = %v", err)
 	}
@@ -344,7 +353,7 @@ func TestCompileECSTaskConfig(t *testing.T) {
 	p := loadTestProfile(t, "ecs-basic.yaml")
 	id := "sb-ecstask1"
 
-	artifacts, err := compiler.Compile(p, id, false)
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile(ECS) error = %v", err)
 	}
@@ -364,7 +373,7 @@ func TestCompileECSFargateSpot(t *testing.T) {
 	p := loadTestProfile(t, "ecs-basic.yaml") // spot: true
 	id := "sb-ecsspot1"
 
-	artifacts, err := compiler.Compile(p, id, false)
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile(ECS, spot=true) error = %v", err)
 	}
@@ -375,7 +384,7 @@ func TestCompileECSFargateSpot(t *testing.T) {
 	// spot=false
 	pNoSpot := loadTestProfile(t, "ecs-basic.yaml")
 	pNoSpot.Spec.Runtime.Spot = false
-	artifactsNoSpot, err := compiler.Compile(pNoSpot, id, false)
+	artifactsNoSpot, err := compiler.Compile(pNoSpot, id, false, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile(ECS, spot=false) error = %v", err)
 	}
@@ -392,7 +401,7 @@ func TestCompileECSOnDemandOverride(t *testing.T) {
 	id := "sb-ecsod001"
 
 	// onDemand=true overrides spot=true -> use FARGATE not FARGATE_SPOT
-	artifacts, err := compiler.Compile(p, id, true)
+	artifacts, err := compiler.Compile(p, id, true, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile(ECS, spot=true, onDemand=true) error = %v", err)
 	}
@@ -408,7 +417,7 @@ func TestCompileECSServiceDiscovery(t *testing.T) {
 	p := loadTestProfile(t, "ecs-basic.yaml")
 	id := "sb-ecssd001"
 
-	artifacts, err := compiler.Compile(p, id, false)
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile(ECS) error = %v", err)
 	}
@@ -427,7 +436,7 @@ func TestCompileECSTagging(t *testing.T) {
 	p := loadTestProfile(t, "ecs-basic.yaml")
 	id := "sb-ecstag01"
 
-	artifacts, err := compiler.Compile(p, id, false)
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
 	if err != nil {
 		t.Fatalf("Compile(ECS) error = %v", err)
 	}
