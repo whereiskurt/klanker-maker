@@ -56,6 +56,27 @@
       ],
       "additionalProperties": false,
       "properties": {
+        "artifacts": {
+          "type": "object",
+          "description": "Optional artifact collection and S3 upload settings",
+          "additionalProperties": false,
+          "properties": {
+            "paths": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Glob patterns or directory paths to collect as artifacts"
+            },
+            "maxSizeMB": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Maximum file size in MB to upload; 0 means unlimited"
+            },
+            "replicationRegion": {
+              "type": "string",
+              "description": "Optional secondary AWS region to replicate artifacts to"
+            }
+          }
+        },
         "lifecycle": {
           "type": "object",
           "required": ["ttl", "idleTimeout", "teardownPolicy"],
@@ -217,11 +238,6 @@
               "type": "string",
               "enum": ["minimal", "standard", "elevated"],
               "description": "IAM session policy scope"
-            },
-            "allowedSecretPaths": {
-              "type": "array",
-              "items": { "type": "string" },
-              "description": "SSM Parameter Store paths the sandbox may read at boot"
             }
           }
         },

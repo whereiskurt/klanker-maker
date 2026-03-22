@@ -23,7 +23,8 @@ type Metadata struct {
 	Labels map[string]string `yaml:"labels,omitempty"`
 }
 
-// Spec contains all 10 required sections of a SandboxProfile.
+// Spec contains all required sections of a SandboxProfile.
+// Artifacts is optional; all other sections are required.
 type Spec struct {
 	Lifecycle     LifecycleSpec     `yaml:"lifecycle"`
 	Runtime       RuntimeSpec       `yaml:"runtime"`
@@ -35,6 +36,20 @@ type Spec struct {
 	Observability ObservabilitySpec `yaml:"observability"`
 	Policy        PolicySpec        `yaml:"policy"`
 	Agent         AgentSpec         `yaml:"agent"`
+	// Artifacts defines optional artifact collection and upload settings.
+	// When nil, artifact collection is disabled.
+	Artifacts *ArtifactsSpec `yaml:"artifacts,omitempty"`
+}
+
+// ArtifactsSpec defines artifact collection paths and S3 upload settings.
+type ArtifactsSpec struct {
+	// Paths is a list of glob patterns or directory paths to collect as artifacts.
+	Paths []string `yaml:"paths"`
+	// MaxSizeMB is the maximum file size in megabytes to upload.
+	// Set to 0 for unlimited.
+	MaxSizeMB int `yaml:"maxSizeMB"`
+	// ReplicationRegion is an optional secondary AWS region to replicate artifacts to.
+	ReplicationRegion string `yaml:"replicationRegion,omitempty"`
 }
 
 // LifecycleSpec controls sandbox lifetime and teardown behavior.

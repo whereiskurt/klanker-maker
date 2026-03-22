@@ -19,6 +19,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -163,6 +165,108 @@ func (d *cloudWatchDest) flush(ctx context.Context) error {
 		return fmt.Errorf("audit-log CloudWatch flush: %w", err)
 	}
 	return nil
+}
+
+// ---- RedactingDestination ----
+
+// RedactingDestination wraps another Destination and redacts secrets in the
+// event Detail map before forwarding. It replaces:
+//   - AWS access key IDs (AKIA...)
+//   - Bearer tokens
+//   - Hex strings of 40+ characters
+//   - Literal secret values provided at construction (e.g. SSM secrets)
+//
+// Structural fields (SandboxID, EventType, Timestamp, Source) are never modified.
+// Regex patterns are compiled once at construction and are safe for concurrent use.
+type RedactingDestination struct {
+	inner    Destination
+	patterns []*regexp.Regexp
+	literals []string
+}
+
+// NewRedactingDestination creates a RedactingDestination wrapping inner.
+// literals is a list of exact secret strings (e.g. SSM values) to redact.
+// Pass nil or an empty slice if no literals are needed.
+func NewRedactingDestination(inner Destination, literals []string) *RedactingDestination {
+	return &RedactingDestination{
+		inner:    inner,
+		patterns: compileDefaultPatterns(),
+		literals: literals,
+	}
+}
+
+// compileDefaultPatterns returns the three default redaction regex patterns.
+// Patterns are compiled once and are safe for concurrent use.
+func compileDefaultPatterns() []*regexp.Regexp {
+	return []*regexp.Regexp{
+		regexp.MustCompile(`AKIA[A-Z0-9]{16}`),
+		regexp.MustCompile(`Bearer [A-Za-z0-9\-._~+/]+=*`),
+		regexp.MustCompile(`[0-9a-f]{40,}`),
+	}
+}
+
+// redactString replaces literal secrets first, then applies regex patterns.
+// Each match is replaced with "[REDACTED]".
+func redactString(s string, patterns []*regexp.Regexp, literals []string) string {
+	for _, lit := range literals {
+		if lit != "" {
+			s = strings.ReplaceAll(s, lit, "[REDACTED]")
+		}
+	}
+	for _, p := range patterns {
+		s = p.ReplaceAllString(s, "[REDACTED]")
+	}
+	return s
+}
+
+// redactValue recursively redacts secrets within an interface{} value.
+// Strings are redacted directly; maps and slices are recursed into.
+// Non-string scalar values (numbers, booleans) are passed through unchanged.
+func redactValue(v interface{}, patterns []*regexp.Regexp, literals []string) interface{} {
+	switch val := v.(type) {
+	case string:
+		return redactString(val, patterns, literals)
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(val))
+		for k, item := range val {
+			out[k] = redactValue(item, patterns, literals)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, len(val))
+		for i, item := range val {
+			out[i] = redactValue(item, patterns, literals)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+// Write clones event.Detail, applies redaction to all values, then forwards
+// the modified event to the inner Destination. Structural fields are untouched.
+func (d *RedactingDestination) Write(ctx context.Context, event AuditEvent) error {
+	// Clone the detail map so the original event is not mutated.
+	redactedDetail := make(map[string]interface{}, len(event.Detail))
+	for k, v := range event.Detail {
+		redactedDetail[k] = redactValue(v, d.patterns, d.literals)
+	}
+
+	// Build a new event with the redacted detail; structural fields copied as-is.
+	redacted := AuditEvent{
+		Timestamp: event.Timestamp,
+		SandboxID: event.SandboxID,
+		EventType: event.EventType,
+		Source:    event.Source,
+		Detail:    redactedDetail,
+	}
+
+	return d.inner.Write(ctx, redacted)
+}
+
+// Flush delegates to the inner Destination.
+func (d *RedactingDestination) Flush(ctx context.Context) error {
+	return d.inner.Flush(ctx)
 }
 
 // ---- s3Dest (stub) ----
