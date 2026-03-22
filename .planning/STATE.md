@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 04-05-PLAN.md — TTL handler Lambda + lifecycle notification callbacks (OnNotify, OnIdleNotify)
-last_updated: "2026-03-22T14:36:39.512Z"
+stopped_at: Completed 02-04-PLAN.md — E2E AWS verification of km create and km destroy
+last_updated: "2026-03-22T15:22:16.257Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
-  total_phases: 5
-  completed_phases: 3
+  total_phases: 6
+  completed_phases: 4
   total_plans: 19
-  completed_plans: 18
+  completed_plans: 19
   percent: 0
 ---
 
@@ -67,6 +67,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 04-lifecycle-hardening-artifacts-email P03 | 5min | 3 tasks | 10 files |
 | Phase 04-lifecycle-hardening-artifacts-email P04 | 371s | 2 tasks | 8 files |
 | Phase 04-lifecycle-hardening-artifacts-email P05 | 282s | 2 tasks | 11 files |
+| Phase 02-core-provisioning-security-baseline P04 | 1 | 2 tasks | 0 files |
 
 ## Accumulated Context
 
@@ -126,6 +127,8 @@ Recent decisions affecting current work:
 - [Phase 04-lifecycle-hardening-artifacts-email]: S3 replication excludes mail/ prefix — inbox objects are ephemeral; only artifacts/ is replicated for durability
 - [Phase 04-lifecycle-hardening-artifacts-email]: TTL Lambda scope: artifact upload + notification + schedule cleanup only; actual terragrunt destroy delegated (Lambda has no km binary)
 - [Phase 04-lifecycle-hardening-artifacts-email]: OnNotify/OnIdleNotify: optional callbacks (nil-safe, best-effort) — backward compatible; past-tense event names match ses.go convention
+- [Phase 02-core-provisioning-security-baseline]: All 6 E2E tests passed on real AWS — EC2 spot, EC2 on-demand, ECS Fargate Spot, EC2 destroy, ECS destroy, secrets injection verified with zero orphaned resources
+- [Phase 02-core-provisioning-security-baseline]: IMDSv2 enforced on EC2 (http_tokens=required) and SSM-only access confirmed on real AWS infrastructure
 
 ### Pending Todos
 
@@ -141,6 +144,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T14:32:16.999Z
-Stopped at: Completed 04-05-PLAN.md — TTL handler Lambda + lifecycle notification callbacks (OnNotify, OnIdleNotify)
+Last session: 2026-03-22T15:22:16.254Z
+Stopped at: Completed 02-04-PLAN.md — E2E AWS verification of km create and km destroy
 Resume file: None
