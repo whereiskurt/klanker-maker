@@ -1,0 +1,8 @@
+# Go build artifacts
+*.exe
+*.test
+/km
+
+# Sandbox directories — per-sandbox generated dirs are ephemeral artifacts.
+# The _template/ directory IS committed (contains the base terragrunt.hcl).
+infra/live/sandboxes/sb-*/
