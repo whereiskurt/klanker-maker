@@ -20,7 +20,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Core Provisioning & Security Baseline** - `km create/destroy` for EC2 and ECS substrates using Terraform modules copied and adapted within this repo, substrate-aware Terragrunt artifact generation, SG-first security model, IMDSv2, secrets, GitHub source access, spot instances by default for both substrates (completed 2026-03-22)
 - [ ] **Phase 3: Sidecar Enforcement & Lifecycle Management** - DNS proxy, HTTP proxy, audit log, and tracing sidecars on both substrates; OTel trace collection and MLflow experiment tracking per sandbox session; TTL auto-destroy, `km list/status`, observability
 - [ ] **Phase 4: Lifecycle Hardening, Artifacts & Email** - Profile inheritance, filesystem policy, artifact upload, spot interruption handling, secret redaction, email/SES agent communication
-- [ ] **Phase 5: ConfigUI** - Web dashboard for profile editing, live sandbox status, and AWS resource discovery — ConfigUI Go code copied and adapted from defcon.run.34 with no external dependency
+- [ ] **Phase 5: ConfigUI** - Web dashboard for profile editing, live sandbox status, and AWS resource discovery — fresh Go application at `cmd/configui/` inspired by defcon.run.34 patterns, with no external dependency
 - [ ] **Phase 6: Budget Enforcement** - Per-sandbox compute and AI spend tracking via DynamoDB global table, http-proxy Bedrock interception for real-time token metering, threshold warnings via SES, hard enforcement via IAM revocation and proxy 403s, operator top-up via CLI
 
 ## Phase Details
@@ -106,7 +106,7 @@ Plans:
 - [ ] 04-05-PLAN.md — Gap closure: TTL handler Lambda + idle/error lifecycle notification wiring (MAIL-04, OBSV-05)
 
 ### Phase 5: ConfigUI
-**Goal**: Operators can manage profiles and monitor live sandboxes through a web dashboard without using the CLI — the ConfigUI Go application is copied and adapted from defcon.run.34 into `apps/local/configui/` inside the Klanker Maker repo, with all defcon.run.34-specific references renamed and no external dependency on that repo
+**Goal**: Operators can manage profiles and monitor live sandboxes through a web dashboard without using the CLI — the ConfigUI is a fresh Go application at `cmd/configui/` inspired by defcon.run.34 patterns, built entirely from source within the Klanker Maker repo with no external dependency on that repo
 **Depends on**: Phase 4
 **Requirements**: CFUI-01, CFUI-02, CFUI-03, CFUI-04
 **Success Criteria** (what must be TRUE):
@@ -114,7 +114,13 @@ Plans:
   2. The live sandbox status dashboard updates in real time (polling) showing all running sandboxes, their status, substrate type, and time remaining on TTL without a page refresh
   3. Operator can click into a sandbox in the dashboard and see the AWS resources it provisioned (EC2 instance ID or ECS task ARN, VPC, security groups, IAM role) discovered from AWS
   4. Operator can manage SOPS secrets from the ConfigUI — encrypting a new secret and decrypting an existing one without using the CLI
-**Plans**: TBD
+**Plans:** 4 plans
+
+Plans:
+- [ ] 05-01-PLAN.md — Server scaffold + dashboard + sandbox detail (CFUI-02, CFUI-03)
+- [ ] 05-02-PLAN.md — Profile editor with Monaco + validation (CFUI-01)
+- [ ] 05-03-PLAN.md — SOPS secrets management UI (CFUI-04)
+- [ ] 05-04-PLAN.md — Dashboard actions + visual verification checkpoint (CFUI-01, CFUI-02, CFUI-03, CFUI-04)
 
 ### Phase 6: Budget Enforcement
 **Goal**: Operators can set per-sandbox dollar budgets for compute and AI (Bedrock Anthropic models), with real-time spend tracking, threshold warnings, and hard enforcement — sandboxes that exceed their budget are blocked from further API calls or compute, and operators can top up budgets without destroying the sandbox
@@ -141,5 +147,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 2. Core Provisioning & Security Baseline | 4/4 | Complete   | 2026-03-22 |
 | 3. Sidecar Enforcement & Lifecycle Management | 5/6 | In Progress|  |
 | 4. Lifecycle Hardening, Artifacts & Email | 4/5 | In Progress|  |
-| 5. ConfigUI | 0/TBD | Not started | - |
+| 5. ConfigUI | 0/4 | Not started | - |
 | 6. Budget Enforcement | 0/TBD | Not started | - |
