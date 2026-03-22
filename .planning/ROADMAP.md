@@ -161,6 +161,11 @@ Plans:
   3. Every `km create` records an MLflow run with sandbox metadata; every `km destroy` finalizes the run with duration and exit status
   4. Account IDs from km-config.yaml are consumed by site.hcl via get_env() — cross-account IAM and provider configs reference configured values
   5. Profile extends and built-in profiles are verified working and tracked as complete
+**Plans:** 2 plans
+
+Plans:
+- [ ] 07-01-PLAN.md — Wire RedactingDestination + IdleDetector into audit-log sidecar binary (PROV-06, OBSV-07)
+- [ ] 07-02-PLAN.md — Wire MLflow into create/destroy + site.hcl account IDs + SCHM-04/SCHM-05 verification (OBSV-09, CONF-03, SCHM-04, SCHM-05)
 
 ### Phase 8: Sidecar Build & Deployment Pipeline
 **Goal**: Sidecar binaries and container images are buildable and deployable via a single command — EC2 sandboxes can download sidecars from S3 at boot, ECS sandboxes pull sidecar images from ECR
@@ -198,6 +203,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 4. Lifecycle Hardening, Artifacts & Email | 5/5 | Complete   | 2026-03-22 |
 | 5. ConfigUI | 4/4 | Complete   | 2026-03-22 |
 | 6. Budget Enforcement & Platform Configuration | 9/9 | Complete   | 2026-03-22 |
-| 7. Unwired Code Paths | 0/0 | Pending    |  |
+| 7. Unwired Code Paths | 0/2 | Planning   |  |
 | 8. Sidecar Build & Deployment Pipeline | 0/0 | Pending    |  |
 | 9. Live Infrastructure & Operator Docs | 0/0 | Pending    |  |
