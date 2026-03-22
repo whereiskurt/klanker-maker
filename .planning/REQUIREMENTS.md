@@ -12,8 +12,8 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **SCHM-01**: Operator can define a SandboxProfile in YAML with apiVersion, kind, metadata, spec sections
 - [x] **SCHM-02**: Schema supports lifecycle, runtime, execution, sourceAccess, network, identity, sidecars, observability, policy, and agent sections
 - [x] **SCHM-03**: Operator can run `km validate <profile.yaml>` and get clear error messages for invalid profiles
-- [ ] **SCHM-04**: Profile can extend a base profile via `extends` field, inheriting and overriding specific sections
-- [ ] **SCHM-05**: Four built-in profiles ship with Klanker Maker: open-dev, restricted-dev, hardened, sealed
+- [ ] **SCHM-04**: Profile can extend a base profile via `extends` field, inheriting and overriding specific sections (code exists, needs verification — Phase 7)
+- [ ] **SCHM-05**: Four built-in profiles ship with Klanker Maker: open-dev, restricted-dev, hardened, sealed (code exists, needs verification — Phase 7)
 
 ### Provisioning & Lifecycle
 
@@ -151,8 +151,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SCHM-01 | Phase 1 | Complete |
 | SCHM-02 | Phase 1 | Complete |
 | SCHM-03 | Phase 1 | Complete |
-| SCHM-04 | Phase 1 | Pending |
-| SCHM-05 | Phase 1 | Pending |
+| SCHM-04 | Phase 7 | Pending |
+| SCHM-05 | Phase 7 | Pending |
 | INFR-01 | Phase 1 | Complete |
 | INFR-02 | Phase 1 | Complete |
 | INFR-03 | Phase 1 | Complete |
@@ -215,10 +215,14 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BUDG-07 | Phase 6 | Complete |
 | BUDG-08 | Phase 6 | Complete |
 | BUDG-09 | Phase 6 | Complete |
+| PROV-06 | Phase 7 | Pending |
+| OBSV-07 | Phase 7 | Pending |
+| OBSV-09 | Phase 7 | Pending |
+| CONF-03 | Phase 7 | Pending |
 
 **Coverage:**
 - v1 requirements: 66 total
-- Mapped to phases: 52
+- Mapped to phases: 56
 - Unmapped: 0
 
 ---

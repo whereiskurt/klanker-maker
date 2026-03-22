@@ -150,16 +150,54 @@ Plans:
 - [ ] 06-08-PLAN.md — Gap closure: wire spot rate into compiler + create flow (BUDG-03)
 - [ ] 06-09-PLAN.md — Gap closure: km shell substrate-abstracted interactive shell (CONF-05)
 
+### Phase 7: Unwired Code Paths
+**Goal**: Close code-level integration gaps where implementations exist but are never called — idle detection, secret redaction, MLflow session tracking, and account ID propagation all become active in production code paths
+**Depends on**: Phase 6
+**Requirements**: PROV-06, OBSV-07, OBSV-09, CONF-03, SCHM-04, SCHM-05
+**Gap Closure:** Closes gaps from v1.0 milestone audit
+**Success Criteria** (what must be TRUE):
+  1. IdleDetector is invoked on a schedule for running sandboxes — idle sandboxes are detected and acted on per teardown policy
+  2. Audit log sidecar binary wraps log output with RedactingDestination — secret patterns present in sandbox environment are scrubbed before reaching CloudWatch/S3
+  3. Every `km create` records an MLflow run with sandbox metadata; every `km destroy` finalizes the run with duration and exit status
+  4. Account IDs from km-config.yaml are consumed by site.hcl via get_env() — cross-account IAM and provider configs reference configured values
+  5. Profile extends and built-in profiles are verified working and tracked as complete
+
+### Phase 8: Sidecar Build & Deployment Pipeline
+**Goal**: Sidecar binaries and container images are buildable and deployable via a single command — EC2 sandboxes can download sidecars from S3 at boot, ECS sandboxes pull sidecar images from ECR
+**Depends on**: Phase 7
+**Requirements**: NETW-02, NETW-03, OBSV-01, OBSV-02, PROV-10
+**Gap Closure:** Closes gaps from v1.0 milestone audit
+**Success Criteria** (what must be TRUE):
+  1. `make sidecars` cross-compiles all 4 sidecar binaries for linux/amd64 and uploads to S3
+  2. `make ecr-push` builds Docker images for each sidecar and pushes to ECR
+  3. Compiler emits resolvable ECR image URIs in ECS service.hcl (not literal ${var.*} strings)
+  4. EC2 sandbox user-data successfully downloads sidecar binaries from S3 at boot
+
+### Phase 9: Live Infrastructure & Operator Docs
+**Goal**: All Terraform modules that exist but have no live deployment are deployable via Terragrunt, and operators have a setup guide documenting the full bootstrap procedure
+**Depends on**: Phase 8
+**Requirements**: PROV-05, BUDG-02, BUDG-06, BUDG-07, MAIL-01, INFR-01, INFR-02
+**Gap Closure:** Closes gaps from v1.0 milestone audit
+**Success Criteria** (what must be TRUE):
+  1. `infra/live/use1/ttl-handler/terragrunt.hcl` exists and deploys the TTL Lambda + EventBridge schedule
+  2. `infra/live/use1/dynamodb-budget/terragrunt.hcl` exists and deploys the budget global table
+  3. `infra/live/use1/ses/terragrunt.hcl` exists and deploys SES domain verification with Route53 records
+  4. Budget enforcer Lambda is deployable per-sandbox via the existing Terraform module
+  5. OPERATOR-GUIDE.md documents the full setup procedure: AWS accounts, SSO, km configure, km bootstrap, km init, live infra deployment
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Schema, Compiler & AWS Foundation | 3/4 | In Progress|  |
+| 1. Schema, Compiler & AWS Foundation | 4/4 | Complete   | 2026-03-21 |
 | 2. Core Provisioning & Security Baseline | 4/4 | Complete   | 2026-03-22 |
-| 3. Sidecar Enforcement & Lifecycle Management | 5/6 | In Progress|  |
-| 4. Lifecycle Hardening, Artifacts & Email | 4/5 | In Progress|  |
+| 3. Sidecar Enforcement & Lifecycle Management | 6/6 | Complete   | 2026-03-22 |
+| 4. Lifecycle Hardening, Artifacts & Email | 5/5 | Complete   | 2026-03-22 |
 | 5. ConfigUI | 4/4 | Complete   | 2026-03-22 |
-| 6. Budget Enforcement & Platform Configuration | 7/9 | In Progress|  |
+| 6. Budget Enforcement & Platform Configuration | 9/9 | Complete   | 2026-03-22 |
+| 7. Unwired Code Paths | 0/0 | Pending    |  |
+| 8. Sidecar Build & Deployment Pipeline | 0/0 | Pending    |  |
+| 9. Live Infrastructure & Operator Docs | 0/0 | Pending    |  |
