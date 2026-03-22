@@ -65,7 +65,7 @@ inputs = merge(
   {
     # Platform-level inputs resolved from site variables.
     # These are not stored in service.hcl because they are account/region globals.
-    lambda_zip_path    = "${local.repo_root}/dist/budget-enforcer.zip"
+    lambda_zip_path    = "${local.repo_root}/build/budget-enforcer.zip"
     budget_table_name  = "${local.site_vars.locals.site.label}-budgets"
     budget_table_arn   = local.budget_table_arn
     state_bucket       = get_env("KM_ARTIFACTS_BUCKET", "")

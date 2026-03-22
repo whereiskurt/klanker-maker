@@ -19,6 +19,7 @@ func TestGenerateBudgetEnforcerHCL_EC2(t *testing.T) {
 		"budget-enforcer/v1.0.0",
 		"sb-ec2test1",                    // sandbox_id in state key
 		"lambda_zip_path",                // required module input
+		"build/budget-enforcer.zip",      // path matches Makefile build-lambdas output
 		"budget_table_arn",               // constructed from accounts.application
 		"budget_enforcer_inputs",         // reads inputs from service.hcl
 		"read_terragrunt_config",         // standard Terragrunt pattern
@@ -48,6 +49,7 @@ func TestGenerateBudgetEnforcerHCL_ECS(t *testing.T) {
 		"budget-enforcer/v1.0.0",
 		"sb-ecstest2",
 		"budget_enforcer_inputs",
+		"build/budget-enforcer.zip",      // path matches Makefile build-lambdas output
 		"sandboxes/sb-ecstest2/budget-enforcer/terraform.tfstate",
 	}
 	for _, want := range checks {
