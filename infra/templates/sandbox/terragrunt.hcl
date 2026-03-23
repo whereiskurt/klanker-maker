@@ -17,7 +17,7 @@ locals {
 
 # Include root terragrunt.hcl (remote_state + provider generation)
 include "root" {
-  path = find_in_parent_folders("terragrunt.hcl")
+  path = find_in_parent_folders("root.hcl")
 }
 
 # Override the remote_state key to include region + sandbox_id for isolation

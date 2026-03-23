@@ -34,3 +34,6 @@ build/
 /github-token-refresher
 
 /excalidraw.log
+
+#
+/km-config.yaml

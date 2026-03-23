@@ -108,8 +108,10 @@ The `km` CLI selects the right profile per command:
 | Command | AWS Profile | Account |
 |---------|-------------|---------|
 | `km configure` | — | No AWS access needed; writes `km-config.yaml` |
-| `km configure github` | — | Configures GitHub App token integration |
-| `km bootstrap` | `klanker-terraform` | Terraform - deploys SCP policy to management account |
+| `km configure github` | — | Configures GitHub App token integration (manual SSM setup) |
+| `km configure github --setup` | `klanker-terraform` | One-click GitHub App creation via manifest flow + auto SSM storage |
+| `km bootstrap` | `klanker-terraform` | Terraform - deploys SCP containment policy via management account |
+| `km bootstrap --show-prereqs` | — | Prints the IAM role and trust policy to create in management account |
 | `km init` | `klanker-application` | Application - provisions shared VPC/network |
 | `km create` | `klanker-terraform` | Terraform - assumes role into Application to provision |
 | `km destroy` | `klanker-terraform` | Terraform - assumes role into Application to teardown |
@@ -150,18 +152,39 @@ Sandboxes are accessed exclusively through **AWS SSM Session Manager**:
 - **Full session audit** - every session and every command is logged to CloudTrail and CloudWatch. There is no "off the record."
 - **No bastion hosts** - no jump boxes, no VPN. SSM connects through the agent, even in private subnets with no internet access.
 
+### SCP Sandbox Containment
+
+Even if a sandbox IAM role is misconfigured — or an agent finds a way to escalate within the application account — the **Service Control Policy (SCP)** acts as an org-level backstop that cannot be bypassed from within the account. SCPs are enforced by AWS Organizations at the API layer, before IAM policy evaluation.
+
+The `km-sandbox-containment` SCP is deployed to the management account and attached to the application account. It contains 6 deny statements:
+
+| Statement | What It Blocks | Why It Matters |
+|-----------|---------------|----------------|
+| **DenyInfraAndStorage** | SG mutation, VPC/subnet/route/IGW/NAT creation, VPC peering, Transit Gateway, snapshot/image creation and export | A compromised sandbox cannot open new network paths, create escape routes to the internet, peer with other VPCs, or exfiltrate data via EBS snapshots or AMI copies |
+| **DenyInstanceMutation** | `RunInstances`, `ModifyInstanceAttribute`, `ModifyInstanceMetadataOptions` | Prevents launching rogue EC2 instances or disabling IMDSv2 (which would enable SSRF credential theft via the metadata service) |
+| **DenyIAMEscalation** | `CreateRole`, `AttachRolePolicy`, `DetachRolePolicy`, `PassRole`, `AssumeRole` | Blocks the classic IAM privilege escalation chain: create a new admin role → attach `AdministratorAccess` → assume it |
+| **DenySSMPivot** | `SendCommand`, `StartSession` | Prevents a compromised sandbox from using SSM to pivot laterally into other sandbox instances |
+| **DenyOrgDiscovery** | `organizations:List*`, `organizations:Describe*` | Prevents enumeration of the org structure, other accounts, and OUs — information useful for targeting lateral movement |
+| **DenyOutsideRegion** | All regional actions outside allowed regions | Region-locks the entire account to prevent resource creation in regions where there's no monitoring or VPC infrastructure |
+
+Each statement uses `ArnNotLike` conditions to carve out trusted operator roles (SSO, provisioner, lifecycle handlers). The carve-outs are minimal — for example, the budget enforcer Lambda only gets an IAM carve-out (it needs `AttachRolePolicy`/`DetachRolePolicy` to revoke Bedrock access), not a network or instance carve-out.
+
+The SCP is deployed via `km bootstrap --dry-run=false`. Run `km bootstrap --show-prereqs` to see the exact IAM role and trust policy that must be created in the management account first.
+
 ### Defense in Depth
 
 | Layer | Control | Enforcement |
 |-------|---------|-------------|
+| **Organization** | SCP sandbox containment | Org-level deny on SG/network/IAM/instance/SSM/region — cannot be bypassed from within the account |
 | **Account** | Three-account isolation | Sandbox blast radius limited to Application account; state and DNS unreachable |
 | **Network** | VPC Security Groups | Primary boundary - blocks all egress except proxy paths |
 | **DNS** | DNS proxy sidecar | Allowlisted suffixes only; non-matching → NXDOMAIN |
 | **HTTP** | HTTP proxy sidecar | Allowlisted hosts only; non-matching → 403 Forbidden |
 | **Identity** | Scoped IAM sessions | Region-locked, time-limited, minimal permissions |
+| **Email** | Ed25519 signed email | Per-sandbox key pairs; profile-controlled signing, verification, and encryption policies |
 | **Secrets** | SSM Parameter Store + KMS | Allowlisted refs only; per-sandbox encryption key with auto-rotation |
 | **Metadata** | IMDSv2 enforced | Token-required; blocks SSRF credential theft via instance metadata |
-| **Source** | GitHub repo allowlist | Per-repo, per-ref, per-permission (clone/fetch/push) |
+| **Source** | GitHub App scoped tokens | Per-repo, per-ref, per-permission; short-lived installation tokens refreshed via Lambda |
 | **Filesystem** | Path-level enforcement | Writable vs read-only directories at OS level |
 | **Audit** | Command + network logging | Secret-redacted; delivered to CloudWatch/S3 |
 | **Budget** | Compute + AI spend tracking | DynamoDB real-time metering; proxy 403 + IAM revocation at ceiling |
@@ -251,6 +274,11 @@ spec:
     auditLog: { enabled: true }
     tracing: { enabled: true }
 
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: optional
+
   artifacts:
     paths: ["/workspace/output/**"]
     maxSizeMB: 100
@@ -290,9 +318,17 @@ Klanker Maker is workload-agnostic - any agent that runs on Linux works inside a
 | [nanoclaw](https://github.com/qwibitai/nanoclaw) | Anthropic Agent SDK agent connected to messaging apps | **HTTP proxy** - controls which external APIs the agent can call |
 | [gobii-platform](https://github.com/gobii-ai/gobii-platform) | Always-on AI workforce | **Idle timeout** - shuts down workers that stop producing; artifact upload preserves state |
 
-### Multi-Agent Orchestration via Email
+### Multi-Agent Orchestration via Signed Email
 
-Sandboxes can communicate through email (SES). Each sandbox gets a unique address derived from its ID (e.g., `sb-a1b2c3d4@sandboxes.klankermaker.ai`). An agent in one sandbox can trigger work in another by sending a structured email - enabling multi-agent pipelines without shared network access. This is how you build agent fleets where each worker is physically isolated but logically connected.
+Sandboxes communicate through **digitally signed email** (SES + Ed25519). Each sandbox gets a unique address derived from its ID (e.g., `sb-a1b2c3d4@sandboxes.klankermaker.ai`) and an Ed25519 key pair at creation time.
+
+- **Signing** — outbound emails are signed with the sender's Ed25519 private key (stored in SSM, KMS-encrypted). The signature and sender ID are attached as `X-KM-Signature` and `X-KM-Sender-ID` headers.
+- **Verification** — the receiver fetches the sender's public key from the `km-identities` DynamoDB table and verifies the signature. When `verifyInbound: required`, unsigned or invalid emails are rejected.
+- **Encryption** — optional X25519 key exchange (NaCl box). When `encryption: required`, the sender encrypts the body with the recipient's public key. When `encryption: optional`, it encrypts if the recipient has a published key, plaintext otherwise.
+
+Profile controls (`spec.email.signing`, `spec.email.verifyInbound`, `spec.email.encryption`) govern policy per sandbox. Hardened and sealed profiles default to `signing: required`; open-dev defaults to `signing: optional`.
+
+This enables multi-agent pipelines where each worker is physically isolated but logically connected — with cryptographic proof of sender identity and optional confidentiality.
 
 ## Substrates
 
@@ -367,7 +403,7 @@ km CLI / ConfigUI
 ├── pkg/
 │   ├── profile/             SandboxProfile schema, validation, inheritance
 │   ├── compiler/            Profile → Terragrunt artifacts (EC2 + ECS paths)
-│   ├── aws/                 SDK helpers (S3, SES, CloudWatch, EC2 metadata, DynamoDB)
+│   ├── aws/                 SDK helpers (S3, SES, CloudWatch, EC2 metadata, DynamoDB, identity/signing)
 │   ├── terragrunt/          Runner + per-sandbox state isolation
 │   └── lifecycle/           TTL scheduling, idle detection, teardown
 ├── sidecars/
@@ -386,6 +422,9 @@ km CLI / ConfigUI
     │   ├── ecs-spot-handler/  Lambda: Fargate Spot interruption → artifact upload
     │   ├── secrets/         SSM Parameter Store + KMS encryption
     │   ├── ses/             SES domain, DKIM, inbound email → S3
+    │   ├── scp/             SCP sandbox containment (deployed to management account)
+    │   ├── dynamodb-budget/ Budget enforcement table
+    │   ├── dynamodb-identities/ Sandbox identity public key table
     │   ├── s3-replication/  Cross-region artifact replication
     │   └── ttl-handler/     Lambda: TTL expiry → artifacts + email + self-cleanup
     └── live/                Terragrunt hierarchy (site.hcl, per-sandbox isolation)
@@ -400,8 +439,11 @@ go install github.com/whereiskurt/klankrmkr/cmd/km@latest
 # Configure your platform (once)
 km configure
 
-# Bootstrap state backends and KMS (once)
-km bootstrap
+# See what's needed in the management account before bootstrap
+km bootstrap --show-prereqs
+
+# Bootstrap SCP containment policy (once — requires km-org-admin role in management account)
+km bootstrap --dry-run=false
 
 # Initialize the region (once per region)
 km init --region us-east-1

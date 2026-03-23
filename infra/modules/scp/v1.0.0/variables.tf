@@ -23,7 +23,7 @@ variable "trusted_role_arns" {
   description = <<-EOT
     Role ARN patterns (supports wildcards) exempt from the general containment Deny statements.
     These roles can mutate security groups, network resources, IAM, storage, and SSM.
-    Default includes AWSReservedSSO_*_* for operator SSO roles.
+    Default includes SSO roles (with aws-reserved/sso.amazonaws.com/ path prefix).
 
     Callers should add km-provisioner-* and km-lifecycle-* patterns when dedicated
     provisioner roles are introduced (currently not yet deployed).
@@ -33,6 +33,6 @@ variable "trusted_role_arns" {
     specific Deny statements (IAM escalation and SSM pivot, respectively).
   EOT
   default = [
-    "arn:aws:iam::*:role/AWSReservedSSO_*_*",
+    "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
   ]
 }

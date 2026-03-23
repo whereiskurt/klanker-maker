@@ -436,3 +436,27 @@ Plans:
 - [ ] 17-01-PLAN.md — EmailSpec type + JSON schema extension (alias, allowedSenders) + DynamoDB identities v1.1.0 GSI + built-in profile defaults
 - [ ] 17-02-PLAN.md — Identity extension (FetchPublicKeyByAlias, MatchesAllowList, PublishIdentity) + mailbox reader library (mailbox.go)
 - [ ] 17-03-PLAN.md — CLI wiring (create.go PublishIdentity call + km status alias/allowedSenders display)
+
+### Phase 18: Loose Ends — km init deploys all regional infra, km uninit teardown, bootstrap KMS, github-token graceful skip
+
+**Goal:** Close all operational gaps discovered during live testing — `km init` deploys all regional infrastructure (not just the VPC), `km uninit` tears it all down, bootstrap creates the KMS platform key, github-token module skips gracefully when unconfigured, and `km configure` populates `state_bucket` automatically.
+
+**Requirements:**
+- `km init` deploys all regional infrastructure in one command: network (VPC/subnets/SGs), DynamoDB budget table, DynamoDB identities table, SES domain/DKIM/receipt rules, S3 replication, TTL handler Lambda — not just the network
+- `km init` is idempotent — re-running applies any missing resources without destroying existing ones
+- `km uninit --region <region>` tears down all regional infrastructure in reverse dependency order: sandboxes first (error if active, `--force` to override), then TTL handler, SES, S3 replication, DynamoDB tables, network last
+- `km uninit` refuses to run if active sandboxes exist in the region unless `--force` is passed
+- `km bootstrap` creates KMS key with alias `alias/km-platform` if it doesn't exist (already implemented — verify it works end-to-end with `km create`)
+- `km bootstrap --show-prereqs` output matches the actual working policy (SSO path fix, three-statement least-privilege, tag permissions, SCP enable step — already implemented, verify accuracy)
+- GitHub token module (`infra/modules/github-token`) defaults `sandbox_iam_role_arn` variable or the compiler skips generating github-token HCL entirely when GitHub App is not configured (no SSM params for app-id/installation-id)
+- `km configure` auto-detects or prompts for `state_bucket` and writes it to `km-config.yaml` — `km list`/`km status` fail without it
+- `km create` non-fatal warnings for github-token and identity are clearly labeled as "skipped (not configured)" rather than error stack traces
+- Remove stale top-level `infra/live/network/` directory remnants (untracked cache files) if any remain
+- `root.hcl` rename is complete and all Terragrunt configs reference `root.hcl` (already done — verify no regressions)
+- `km doctor` checks that all regional infra is deployed (DynamoDB tables, SES, TTL handler) not just network/VPC
+
+**Depends on:** Phase 15 (km doctor, bootstrap), Phase 14 (identity table)
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 18 to break down)

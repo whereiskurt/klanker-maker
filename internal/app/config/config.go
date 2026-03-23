@@ -162,6 +162,7 @@ func Load() (*Config, error) {
 			"identity_table_name",
 			"artifacts_bucket",
 			"aws_profile",
+			"state_bucket",
 		} {
 			if v2.IsSet(key) && !isSetByEnv(v, key) {
 				v.Set(key, v2.Get(key))

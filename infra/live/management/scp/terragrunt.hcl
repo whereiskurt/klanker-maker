@@ -71,7 +71,7 @@ inputs = {
   # They are handled inside the module with statement-specific carve-outs (IAM and SSM only).
   trusted_role_arns = [
     # Operator SSO roles — must always be able to manage infrastructure
-    "arn:aws:iam::${local.accounts.application}:role/AWSReservedSSO_*_*",
+    "arn:aws:iam::${local.accounts.application}:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
     # Future dedicated provisioner role (not yet deployed as of Phase 10)
     "arn:aws:iam::${local.accounts.application}:role/km-provisioner-*",
     # Future dedicated lifecycle role (not yet deployed as of Phase 10)

@@ -29,60 +29,45 @@ locals {
   trusted_arns_ssm = [
     "arn:aws:iam::${var.application_account_id}:role/km-ec2spot-ssm-*",
     "arn:aws:iam::${var.application_account_id}:role/km-github-token-refresher-*",
-    "arn:aws:iam::*:role/AWSReservedSSO_*_*",
+    "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
   ]
 }
 
 # ============================================================
-# SCP policy document — 8 deny statements
+# SCP policy document — 5 deny statements (consolidated to fit
+# 5,120-byte SCP limit with full SSO role path ARNs)
 # ============================================================
 
 data "aws_iam_policy_document" "sandbox_containment" {
 
-  # 1. Deny security group mutation for non-trusted roles
+  # 1. Deny SG mutation, network escape, and storage exfiltration for non-trusted roles.
+  #    Consolidated from 3 statements — all use trusted_arns_base condition.
   statement {
-    sid    = "DenySGMutation"
+    sid    = "DenyInfraAndStorage"
     effect = "Deny"
 
     actions = [
+      # SG mutation
       "ec2:CreateSecurityGroup",
       "ec2:DeleteSecurityGroup",
-      "ec2:AuthorizeSecurityGroupIngress",
-      "ec2:AuthorizeSecurityGroupEgress",
-      "ec2:RevokeSecurityGroupIngress",
-      "ec2:RevokeSecurityGroupEgress",
+      "ec2:AuthorizeSecurityGroup*",
+      "ec2:RevokeSecurityGroup*",
       "ec2:ModifySecurityGroupRules",
-      "ec2:UpdateSecurityGroupRuleDescriptionsIngress",
-      "ec2:UpdateSecurityGroupRuleDescriptionsEgress",
-    ]
-
-    resources = ["*"]
-
-    condition {
-      test     = "ArnNotLike"
-      variable = "aws:PrincipalARN"
-      values   = local.trusted_arns_base
-    }
-  }
-
-  # 2. Deny network escape (VPC, subnet, route, IGW, NAT, peering, TGW) for non-trusted roles
-  statement {
-    sid    = "DenyNetworkEscape"
-    effect = "Deny"
-
-    actions = [
+      # Network escape
       "ec2:CreateVpc",
       "ec2:CreateSubnet",
       "ec2:CreateRouteTable",
       "ec2:CreateRoute",
-      "ec2:CreateInternetGateway",
-      "ec2:AttachInternetGateway",
-      "ec2:CreateEgressOnlyInternetGateway",
+      "ec2:*InternetGateway",
       "ec2:CreateNatGateway",
-      "ec2:CreateVpcPeeringConnection",
-      "ec2:AcceptVpcPeeringConnection",
-      "ec2:CreateTransitGateway",
-      "ec2:CreateTransitGatewayVpcAttachment",
+      "ec2:*VpcPeeringConnection",
+      "ec2:CreateTransitGateway*",
+      # Storage exfiltration
+      "ec2:CreateSnapshot",
+      "ec2:CopySnapshot",
+      "ec2:CreateImage",
+      "ec2:CopyImage",
+      "ec2:ExportImage",
     ]
 
     resources = ["*"]
@@ -94,7 +79,7 @@ data "aws_iam_policy_document" "sandbox_containment" {
     }
   }
 
-  # 3. Deny instance mutation for non-trusted roles + spot handler exception
+  # 2. Deny instance mutation for non-trusted roles + spot handler exception.
   #    km-ecs-spot-handler launches Spot instances as part of normal platform operation.
   #    km-ecs-task-* is intentionally NOT carved out — that IS the sandbox workload.
   statement {
@@ -116,7 +101,7 @@ data "aws_iam_policy_document" "sandbox_containment" {
     }
   }
 
-  # 4. Deny IAM escalation for non-trusted roles + budget-enforcer exception
+  # 3. Deny IAM escalation for non-trusted roles + budget-enforcer exception.
   #    km-budget-enforcer-* needs AttachRolePolicy/DetachRolePolicy to revoke
   #    Bedrock access on budget breach. It does NOT need CreateRole or PassRole.
   statement {
@@ -140,30 +125,9 @@ data "aws_iam_policy_document" "sandbox_containment" {
     }
   }
 
-  # 5. Deny storage exfiltration (snapshots, images, export) for non-trusted roles
-  statement {
-    sid    = "DenyStorageExfiltration"
-    effect = "Deny"
-
-    actions = [
-      "ec2:CreateSnapshot",
-      "ec2:CopySnapshot",
-      "ec2:CreateImage",
-      "ec2:CopyImage",
-      "ec2:ExportImage",
-    ]
-
-    resources = ["*"]
-
-    condition {
-      test     = "ArnNotLike"
-      variable = "aws:PrincipalARN"
-      values   = local.trusted_arns_base
-    }
-  }
-
-  # 6. Deny SSM cross-instance pivoting — only SSM instance roles and operator SSO can use SSM
-  #    This prevents a compromised sandbox from using SSM to pivot to other instances.
+  # 4. Deny SSM cross-instance pivoting + Organizations discovery.
+  #    Consolidated: SSM pivot uses restricted SSM roles; Org discovery has no condition
+  #    (applies to ALL roles — management account exempt by AWS design).
   statement {
     sid    = "DenySSMPivot"
     effect = "Deny"
@@ -182,58 +146,43 @@ data "aws_iam_policy_document" "sandbox_containment" {
     }
   }
 
-  # 7. Deny Organizations account/structure discovery — NO condition, applies to ALL roles.
-  #    The management account itself is exempt by AWS design (SCPs don't apply there).
-  #    Application account roles should never need to enumerate the org structure.
   statement {
-    sid    = "DenyOrganizationsDiscovery"
+    sid    = "DenyOrgDiscovery"
     effect = "Deny"
 
     actions = [
-      "organizations:ListAccounts",
-      "organizations:DescribeOrganization",
-      "organizations:ListRoots",
-      "organizations:ListOrganizationalUnitsForParent",
-      "organizations:ListChildren",
+      "organizations:List*",
+      "organizations:Describe*",
     ]
 
     resources = ["*"]
   }
 
-  # 8. Region lock — deny all actions outside allowed regions, except global services.
+  # 5. Region lock — deny all actions outside allowed regions, except global services.
   #    Uses not_actions (NotAction) pattern so global services work regardless of region.
   #    NO trusted role carve-out — region lock applies to ALL roles including operators.
   statement {
-    sid    = "DenyOutsideAllowedRegions"
+    sid    = "DenyOutsideRegion"
     effect = "Deny"
 
     not_actions = [
-      # IAM and STS are global
       "iam:*",
       "sts:*",
-      # Organizations (global control plane)
       "organizations:*",
-      # AWS Support and Health
       "support:*",
       "health:*",
       "trustedadvisor:*",
-      # CloudFront, WAF, Shield (edge services, us-east-1 only in API but global in scope)
       "cloudfront:*",
       "waf:*",
       "shield:*",
-      # Route 53 (global DNS)
       "route53:*",
       "route53domains:*",
-      # Billing and cost management (global)
       "budgets:*",
       "ce:*",
       "cur:*",
-      # Global Accelerator and Network Manager
       "globalaccelerator:*",
       "networkmanager:*",
-      # AWS Marketplace pricing
       "pricing:*",
-      # S3 account-level settings (not bucket operations — those are regional)
       "s3:GetAccountPublicAccessBlock",
       "s3:ListAllMyBuckets",
       "s3:PutAccountPublicAccessBlock",

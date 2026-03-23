@@ -292,6 +292,7 @@ Recent decisions affecting current work:
 - Phase 15 added: km doctor — platform health check and bootstrap verification (validates config, AWS creds, bootstrap resources, per-region infra, active sandboxes)
 - Phase 16 added: Documentation refresh — update operator guide, user manual, and all docs for Phases 6-15 features (budget, SCP, sidecars, GitHub App, identity, km doctor)
 - Phase 17 added: Sandbox Email Mailbox & Access Control — aliases, allow-lists, self-mail, S3 reader (human-friendly sandbox names, profile-driven sender restrictions, mailbox reading library)
+- Phase 18 added: Loose Ends — km init deploys all regional infra, km uninit teardown, bootstrap KMS, github-token graceful skip, state_bucket auto-config (discovered during live testing 2026-03-23)
 
 ### Pending Todos
 
