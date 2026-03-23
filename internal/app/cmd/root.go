@@ -34,6 +34,7 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 
 	// Register subcommands
 	root.AddCommand(NewInitCmd(cfg))
+	root.AddCommand(NewUninitCmd(cfg))
 	root.AddCommand(NewValidateCmd(cfg))
 	root.AddCommand(NewCreateCmd(cfg))
 	root.AddCommand(NewDestroyCmd(cfg))
