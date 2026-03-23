@@ -36,6 +36,11 @@ type CompiledArtifacts struct {
 	// (empty if no budget defined). Written to sandbox-dir/budget-enforcer/
 	// and applied by km create after the main sandbox apply.
 	BudgetEnforcerHCL string
+
+	// GitHubTokenHCL is the content for github-token/terragrunt.hcl
+	// (empty if sourceAccess.github is nil). Written to sandbox-dir/github-token/
+	// and applied by km create when GitHub access is configured.
+	GitHubTokenHCL string
 }
 
 // SGRule is a single SG egress rule emitted by the compiler.
@@ -111,6 +116,15 @@ func compileEC2(p *profile.SandboxProfile, sandboxID string, onDemand bool, netw
 		}
 	}
 
+	// Generate github-token HCL when sourceAccess.github is configured.
+	var gitHubTokenHCL string
+	if p.Spec.SourceAccess.GitHub != nil {
+		gitHubTokenHCL, err = generateGitHubTokenHCL(sandboxID, p)
+		if err != nil {
+			return nil, fmt.Errorf("generate github-token HCL: %w", err)
+		}
+	}
+
 	return &CompiledArtifacts{
 		SandboxID:         sandboxID,
 		ServiceHCL:        svcHCL,
@@ -119,6 +133,7 @@ func compileEC2(p *profile.SandboxProfile, sandboxID string, onDemand bool, netw
 		IAMPolicy:         iamPolicy,
 		SecretPaths:       secretPaths,
 		BudgetEnforcerHCL: budgetEnforcerHCL,
+		GitHubTokenHCL:    gitHubTokenHCL,
 	}, nil
 }
 
@@ -148,6 +163,16 @@ func compileECS(p *profile.SandboxProfile, sandboxID string, onDemand bool, netw
 		}
 	}
 
+	// Generate github-token HCL when sourceAccess.github is configured.
+	var gitHubTokenHCL string
+	if p.Spec.SourceAccess.GitHub != nil {
+		var ghErr error
+		gitHubTokenHCL, ghErr = generateGitHubTokenHCL(sandboxID, p)
+		if ghErr != nil {
+			return nil, fmt.Errorf("generate github-token HCL: %w", ghErr)
+		}
+	}
+
 	return &CompiledArtifacts{
 		SandboxID:         sandboxID,
 		ServiceHCL:        svcHCL,
@@ -156,5 +181,6 @@ func compileECS(p *profile.SandboxProfile, sandboxID string, onDemand bool, netw
 		IAMPolicy:         iamPolicy,
 		SecretPaths:       secretPaths,
 		BudgetEnforcerHCL: budgetEnforcerHCL,
+		GitHubTokenHCL:    gitHubTokenHCL,
 	}, nil
 }

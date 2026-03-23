@@ -631,3 +631,160 @@ func TestCompileEC2NoBudgetNoCACert(t *testing.T) {
 		t.Errorf("UserData should NOT contain CA cert injection when budget is nil\nGot:\n%s", artifacts.UserData)
 	}
 }
+
+// ============================================================
+// GitHub token HCL compiler integration tests (GH-02, GH-04, GH-05)
+// ============================================================
+
+// TestGitHubTokenHCL verifies that Compile() produces a non-empty GitHubTokenHCL
+// when sourceAccess.github is set.
+func TestGitHubTokenHCL(t *testing.T) {
+	p := loadTestProfile(t, "ec2-with-secrets.yaml") // has sourceAccess.github
+	id := "sb-ghtkn001"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	if artifacts.GitHubTokenHCL == "" {
+		t.Error("Compile() GitHubTokenHCL should not be empty when sourceAccess.github is set")
+	}
+	if !strings.Contains(artifacts.GitHubTokenHCL, "github-token") {
+		t.Errorf("GitHubTokenHCL should reference github-token module\nGot:\n%s", artifacts.GitHubTokenHCL)
+	}
+	if !strings.Contains(artifacts.GitHubTokenHCL, id) {
+		t.Errorf("GitHubTokenHCL should contain sandbox_id %q\nGot:\n%s", id, artifacts.GitHubTokenHCL)
+	}
+}
+
+// TestNoGitHubTokenHCL verifies that Compile() produces empty GitHubTokenHCL
+// when sourceAccess.github is nil.
+func TestNoGitHubTokenHCL(t *testing.T) {
+	p := loadTestProfile(t, "ec2-basic.yaml") // no sourceAccess.github
+	id := "sb-nghtkn01"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	if artifacts.GitHubTokenHCL != "" {
+		t.Errorf("Compile() GitHubTokenHCL should be empty when sourceAccess.github is nil\nGot:\n%s", artifacts.GitHubTokenHCL)
+	}
+}
+
+// TestServiceHCLEC2GitHubInputs verifies that EC2 service.hcl contains
+// github_token_inputs when sourceAccess.github is configured.
+func TestServiceHCLEC2GitHubInputs(t *testing.T) {
+	p := loadTestProfile(t, "ec2-with-secrets.yaml")
+	id := "sb-ghec2hcl"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	hcl := artifacts.ServiceHCL
+
+	if !strings.Contains(hcl, "github_token_inputs") {
+		t.Errorf("EC2 ServiceHCL should contain github_token_inputs when sourceAccess.github is set\nGot:\n%s", hcl)
+	}
+	// Should include sandbox_id
+	if !strings.Contains(hcl, "sandbox_id") {
+		t.Errorf("EC2 ServiceHCL github_token_inputs missing sandbox_id\nGot:\n%s", hcl)
+	}
+	// Should include ssm_parameter_name
+	if !strings.Contains(hcl, "ssm_parameter_name") {
+		t.Errorf("EC2 ServiceHCL github_token_inputs missing ssm_parameter_name\nGot:\n%s", hcl)
+	}
+	// SSM path should be sandbox-scoped
+	if !strings.Contains(hcl, "/sandbox/"+id+"/github-token") {
+		t.Errorf("EC2 ServiceHCL github_token_inputs should have SSM path /sandbox/%s/github-token\nGot:\n%s", id, hcl)
+	}
+	// allowed_repos must be present
+	if !strings.Contains(hcl, "allowed_repos") {
+		t.Errorf("EC2 ServiceHCL github_token_inputs missing allowed_repos\nGot:\n%s", hcl)
+	}
+	// permissions must be present
+	if !strings.Contains(hcl, "permissions") {
+		t.Errorf("EC2 ServiceHCL github_token_inputs missing permissions\nGot:\n%s", hcl)
+	}
+}
+
+// TestServiceHCLECSGitHubInputs verifies that ECS service.hcl contains
+// github_token_inputs when sourceAccess.github is configured.
+func TestServiceHCLECSGitHubInputs(t *testing.T) {
+	p := loadTestProfile(t, "ecs-with-github.yaml")
+	id := "sb-ghecs001"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile(ECS) error = %v", err)
+	}
+
+	hcl := artifacts.ServiceHCL
+
+	if !strings.Contains(hcl, "github_token_inputs") {
+		t.Errorf("ECS ServiceHCL should contain github_token_inputs when sourceAccess.github is set\nGot:\n%s", hcl)
+	}
+	// SSM path should be sandbox-scoped
+	if !strings.Contains(hcl, "/sandbox/"+id+"/github-token") {
+		t.Errorf("ECS ServiceHCL github_token_inputs should have SSM path /sandbox/%s/github-token\nGot:\n%s", id, hcl)
+	}
+	// allowed_repos from profile
+	if !strings.Contains(hcl, "myorg/myrepo") {
+		t.Errorf("ECS ServiceHCL github_token_inputs missing allowed_repos from profile\nGot:\n%s", hcl)
+	}
+}
+
+// TestServiceHCLEC2NoGitHubInputs verifies that EC2 service.hcl does NOT contain
+// github_token_inputs when sourceAccess.github is nil.
+func TestServiceHCLEC2NoGitHubInputs(t *testing.T) {
+	p := loadTestProfile(t, "ec2-basic.yaml") // no github
+	id := "sb-noghec21"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	if strings.Contains(artifacts.ServiceHCL, "github_token_inputs") {
+		t.Errorf("EC2 ServiceHCL should NOT contain github_token_inputs when sourceAccess.github is nil\nGot:\n%s", artifacts.ServiceHCL)
+	}
+}
+
+// TestServiceHCLECSNoGitHubInputs verifies that ECS service.hcl does NOT contain
+// github_token_inputs when sourceAccess.github is nil.
+func TestServiceHCLECSNoGitHubInputs(t *testing.T) {
+	p := loadTestProfile(t, "ecs-basic.yaml") // no github
+	id := "sb-noghecs1"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile(ECS) error = %v", err)
+	}
+
+	if strings.Contains(artifacts.ServiceHCL, "github_token_inputs") {
+		t.Errorf("ECS ServiceHCL should NOT contain github_token_inputs when sourceAccess.github is nil\nGot:\n%s", artifacts.ServiceHCL)
+	}
+}
+
+// TestGitHubTokenHCLECS verifies that ECS Compile() also produces GitHubTokenHCL
+// when sourceAccess.github is set.
+func TestGitHubTokenHCLECS(t *testing.T) {
+	p := loadTestProfile(t, "ecs-with-github.yaml")
+	id := "sb-ghecshcl"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile(ECS) error = %v", err)
+	}
+
+	if artifacts.GitHubTokenHCL == "" {
+		t.Error("Compile(ECS) GitHubTokenHCL should not be empty when sourceAccess.github is set")
+	}
+	if !strings.Contains(artifacts.GitHubTokenHCL, "github-token") {
+		t.Errorf("ECS GitHubTokenHCL should reference github-token module\nGot:\n%s", artifacts.GitHubTokenHCL)
+	}
+}

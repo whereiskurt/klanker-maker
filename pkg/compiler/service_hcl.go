@@ -7,6 +7,7 @@ import (
 	"strings"
 	"text/template"
 
+	pkggithub "github.com/whereiskurt/klankrmkr/pkg/github"
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
 )
 
@@ -79,6 +80,17 @@ const ec2ServiceHCLTemplate = `locals {
     ai_limit_usd      = {{ .AILimit }}
 {{- end }}
     warning_threshold = {{ .WarningThreshold }}
+  }
+{{- end }}
+{{- if .HasGitHub }}
+
+  # GitHub token inputs: EventBridge 45-minute schedule + Lambda for token refresh.
+  # Consumed by github-token/terragrunt.hcl via read_terragrunt_config.
+  github_token_inputs = {
+    sandbox_id         = "{{ .SandboxID }}"
+    ssm_parameter_name = "{{ .GitHubSSMPath }}"
+    allowed_repos      = [{{ joinStrings .GitHubAllowedRepos }}]
+    permissions        = {{ .GitHubPermissions }}
   }
 {{- end }}
 }
@@ -280,6 +292,17 @@ const ecsServiceHCLTemplate = `locals {
     warning_threshold = {{ .WarningThreshold }}
   }
 {{- end }}
+{{- if .HasGitHub }}
+
+  # GitHub token inputs: EventBridge 45-minute schedule + Lambda for token refresh.
+  # Consumed by github-token/terragrunt.hcl via read_terragrunt_config.
+  github_token_inputs = {
+    sandbox_id         = "{{ .SandboxID }}"
+    ssm_parameter_name = "{{ .GitHubSSMPath }}"
+    allowed_repos      = [{{ joinStrings .GitHubAllowedRepos }}]
+    permissions        = {{ .GitHubPermissions }}
+  }
+{{- end }}
 }
 `
 
@@ -307,6 +330,11 @@ type ec2HCLParams struct {
 	ComputeLimit     float64 // compute max spend USD (0 = not set)
 	AILimit          float64 // AI max spend USD (0 = not set)
 	WarningThreshold float64 // warning fraction (default 0.8)
+	// GitHub token inputs (GH-02, GH-04, GH-05)
+	HasGitHub          bool     // true when sourceAccess.github is set
+	GitHubSSMPath      string   // /sandbox/{sandbox-id}/github-token
+	GitHubAllowedRepos []string // from profile.sourceAccess.github.allowedRepos
+	GitHubPermissions  string   // HCL map literal e.g. { contents = "read" }
 }
 
 // ============================================================
@@ -352,6 +380,30 @@ type ecsHCLParams struct {
 	ComputeLimit     float64 // compute max spend USD (0 = not set)
 	AILimit          float64 // AI max spend USD (0 = not set)
 	WarningThreshold float64 // warning fraction (default 0.8)
+	// GitHub token inputs (GH-02, GH-04, GH-05)
+	HasGitHub          bool     // true when sourceAccess.github is set
+	GitHubSSMPath      string   // /sandbox/{sandbox-id}/github-token
+	GitHubAllowedRepos []string // from profile.sourceAccess.github.allowedRepos
+	GitHubPermissions  string   // HCL map literal e.g. { contents = "read" }
+}
+
+// ============================================================
+// GitHub permissions HCL helper
+// ============================================================
+
+// permissionsToHCL converts a compiled permissions map to an HCL map literal.
+// Used in both EC2 and ECS github_token_inputs blocks.
+//
+// Example: {"contents": "read"} -> { contents = "read" }
+func permissionsToHCL(perms map[string]string) string {
+	if len(perms) == 0 {
+		return "{}"
+	}
+	parts := make([]string, 0, len(perms))
+	for k, v := range perms {
+		parts = append(parts, fmt.Sprintf("%s = %q", k, v))
+	}
+	return "{ " + strings.Join(parts, ", ") + " }"
 }
 
 // ============================================================
@@ -460,6 +512,15 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		ComputeLimit:     computeLimit,
 		AILimit:          aiLimit,
 		WarningThreshold: warningThreshold,
+	}
+
+	// Populate GitHub token fields when sourceAccess.github is configured.
+	if p.Spec.SourceAccess.GitHub != nil {
+		params.HasGitHub = true
+		params.GitHubSSMPath = fmt.Sprintf("/sandbox/%s/github-token", sandboxID)
+		params.GitHubAllowedRepos = p.Spec.SourceAccess.GitHub.AllowedRepos
+		compiledPerms := pkggithub.CompilePermissions(p.Spec.SourceAccess.GitHub.Permissions)
+		params.GitHubPermissions = permissionsToHCL(compiledPerms)
 	}
 
 	var buf bytes.Buffer
@@ -584,6 +645,15 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 			writablePaths = append([]string{"/tmp"}, writablePaths...)
 		}
 		params.EffectiveWritablePaths = writablePaths
+	}
+
+	// Populate GitHub token fields when sourceAccess.github is configured.
+	if p.Spec.SourceAccess.GitHub != nil {
+		params.HasGitHub = true
+		params.GitHubSSMPath = fmt.Sprintf("/sandbox/%s/github-token", sandboxID)
+		params.GitHubAllowedRepos = p.Spec.SourceAccess.GitHub.AllowedRepos
+		compiledPerms := pkggithub.CompilePermissions(p.Spec.SourceAccess.GitHub.Permissions)
+		params.GitHubPermissions = permissionsToHCL(compiledPerms)
 	}
 
 	var buf bytes.Buffer
