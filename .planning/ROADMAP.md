@@ -315,11 +315,11 @@ Plans:
 - `km create` generates Ed25519 key pair via Go `crypto/ed25519` stdlib — no external dependencies for signing
 - Private key stored in SSM Parameter Store at `/sandbox/{sandbox-id}/signing-key`, encrypted with per-sandbox KMS key
 - Public key published to DynamoDB `km-identities` table: `{ sandbox_id, public_key (base64), created_at, email_address }`
-- `km-identities` table provisioned alongside `km-budgets` in bootstrap or init (same DynamoDB global table replication pattern)
+- `km-identities` table provisioned alongside `km-budgets` in bootstrap or init (same DynamoDB module pattern; `replica_regions` variable available for global table replication when needed, defaulting to single-region for v1)
 - Outbound email signing: sandbox reads private key from SSM, signs email body with Ed25519, attaches `X-KM-Signature` and `X-KM-Sender-ID` headers
 - Inbound email verification: receiving sandbox fetches sender's public key from `km-identities` DynamoDB, calls `ed25519.Verify()`
 - Profile schema additions under `spec.email`: `signing` (required|optional|off), `verifyInbound` (required|optional|off), `encryption` (required|optional|off)
-- When `verifyInbound: required`, unsigned or invalid-signature emails are rejected (not delivered to sandbox inbox)
+- Inbound verification library: `VerifyEmailSignature()` validates Ed25519 signatures on received email bodies. When `verifyInbound: required`, the library returns an error for unsigned or invalid-signature emails. NOTE: Phase 14 provides the verification library only; wiring into an SES receipt handler (Lambda/SNS trigger) to enforce rejection at delivery time requires a future phase — no inbound receipt pipeline exists yet beyond the S3 storage action from Phase 4
 - Optional encryption via `golang.org/x/crypto/nacl/box` — Ed25519 keys converted to X25519 for key exchange, NaCl box for authenticated encryption
 - When `encryption: optional`, encrypt if recipient's public key exists in DynamoDB, send plaintext if not
 - When `encryption: required`, reject send if recipient has no published public key
