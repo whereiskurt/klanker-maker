@@ -329,12 +329,13 @@ Plans:
 - Open-dev and restricted-dev profiles default to `signing: optional, verifyInbound: optional`
 
 **Depends on:** Phase 4 (SES email infrastructure), Phase 6 (SSM/KMS/DynamoDB patterns)
-**Plans:** 3/3 plans complete
+**Plans:** 4 plans (3 complete + 1 gap closure)
 
 Plans:
 - [ ] 14-01-PLAN.md — EmailSpec schema + DynamoDB identities module + config + built-in profile defaults (IDENT-SCHEMA, IDENT-DYNAMO, IDENT-CONFIG)
 - [ ] 14-02-PLAN.md — Core identity library: Ed25519 keygen, SSM storage, DynamoDB publish, email signing/verification, NaCl encryption (TDD) (IDENT-KEYGEN, IDENT-SSM, IDENT-PUBLISH, IDENT-SIGN, IDENT-VERIFY, IDENT-ENCRYPT, IDENT-CLEANUP, IDENT-SEND-SIGNED)
 - [ ] 14-03-PLAN.md — Wire identity into km create (non-fatal) + km destroy (cleanup) + km status (display) (IDENT-CREATE-WIRE, IDENT-DESTROY-WIRE, IDENT-STATUS-WIRE)
+- [ ] 14-04-PLAN.md — Gap closure: add Signing/Verify Inbound/Encryption policy fields to km status Identity section (IDENT-STATUS-WIRE)
 
 ### Phase 15: km doctor — platform health check and bootstrap verification
 
