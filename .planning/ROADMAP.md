@@ -360,7 +360,7 @@ Plans:
 - After manifest exchange, automatically runs `km configure github` logic to store credentials in SSM — no manual copy-paste of App ID or PEM files
 
 **Depends on:** Phase 6 (config/bootstrap patterns), Phase 10 (SCP), Phase 13 (GitHub App config), Phase 14 (identity table)
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 15-01-PLAN.md — km doctor command with parallel platform health checks, colored output, JSON/quiet modes
@@ -406,7 +406,31 @@ Plans:
 - All docs reviewed for stale references to old paths (e.g., `infra/live/sandboxes/_template/` → `infra/templates/sandbox/`)
 
 **Depends on:** Phase 15 (all features must be implemented before documenting)
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 16 to break down)
+- [ ] 16-01-PLAN.md — Operator guide, user manual, and README updates
+- [ ] 16-02-PLAN.md — Budget guide and security model updates
+- [ ] 16-03-PLAN.md — Multi-agent email guide and sidecar reference updates
+
+### Phase 17: Sandbox Email Mailbox & Access Control — aliases, allow-lists, self-mail, S3 reader
+
+**Goal:** Sandbox aliases (human-friendly dot-notation names like `research.team-a`), profile-driven email allow-lists controlling which sandboxes can send to this sandbox (even if they have valid public keys), implicit self-mail capability for long-term agent memory, and a Go library for reading/parsing raw MIME emails stored in S3 by the SES receipt rule.
+
+**Requirements:**
+- Sandbox alias field in profile schema (`spec.email.alias`) — optional dot-notation name (e.g., `research.team-a`, `build.frontend`) registered in `km-identities` DynamoDB alongside sandbox ID
+- Alias lookup: `FetchPublicKeyByAlias()` resolves alias → sandbox identity record, enabling addressing by name instead of ID
+- `km-identities` DynamoDB table gains a GSI on alias for efficient alias→identity lookups
+- Email allow-list in profile schema (`spec.email.allowedSenders[]`) — array of patterns: `"self"` (always implicit), specific sandbox IDs (`sb-a1b2c3d4`), alias patterns with wildcards (`build.*`), or `"*"` for open access
+- Allow-list enforcement: receiving sandbox checks sender against allow-list before accepting email, even if sender has a valid signature — separate from signature verification
+- Self-mail always permitted regardless of allow-list configuration — sandbox can email its own address for persistent storage / long-term memory
+- `pkg/aws/mailbox.go` library: `ListMailboxMessages()` lists S3 objects under the sandbox's mail prefix, `ReadMessage()` fetches and parses a raw MIME message, `ParseSignedMessage()` extracts `X-KM-Sender-ID`, `X-KM-Signature`, `X-KM-Encrypted` headers and body
+- Mailbox reader handles both signed/encrypted and plaintext messages gracefully
+- `km status` displays alias (if set) and allow-list summary alongside existing identity fields
+- Built-in profile defaults: hardened/sealed get restrictive allow-lists (`self` only), open-dev/restricted-dev get `"*"` (any sandbox)
+
+**Depends on:** Phase 4 (SES email/S3 storage), Phase 14 (identity/signing infrastructure)
+**Plans:** 3 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 17 to break down)

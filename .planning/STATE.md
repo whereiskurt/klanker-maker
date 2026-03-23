@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 14-04-PLAN.md
-last_updated: "2026-03-23T04:28:31.319Z"
+stopped_at: Completed 15-02-PLAN.md
+last_updated: "2026-03-23T04:47:52.102Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
-  total_phases: 16
+  total_phases: 17
   completed_phases: 14
-  total_plans: 56
-  completed_plans: 54
+  total_plans: 59
+  completed_plans: 55
   percent: 0
 ---
 
@@ -103,6 +103,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust P02 | 5min | 2 tasks | 4 files |
 | Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust P03 | 365 | 2 tasks | 5 files |
 | Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust P04 | 4min | 2 tasks | 5 files |
+| Phase 15 P02 | 506s | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -253,6 +254,9 @@ Recent decisions affecting current work:
 - [Phase 14]: NewStatusCmdWithFetchers delegates to NewStatusCmdWithAllFetchers(nil) — backward-compatible extension for identity DI; IdentityFetcher is 4th parameter
 - [Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust]: Conditionally add policy DynamoDB attributes only when non-empty — empty string means 'not specified'; omitted attrs preserve legacy row compatibility without schema migration
 - [Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust]: Display 'unknown' when IdentityRecord policy field is empty string in km status — signals field exists but was not set at provisioning time (legacy sandbox)
+- [Phase 15]: githubManifestBaseURL package-level var for test injection — same pattern as GitHubAPIBaseURL in pkg/github/token.go
+- [Phase 15]: ReceiveManifestCodeWithPortCb port callback — allows tests to send HTTP before timeout without polling; base ReceiveManifestCode delegates to no-op callback
+- [Phase 15]: redirect_url in manifest JSON body (not query param) — GitHub manifest flow requires it in body for callback redirect
 
 ### Roadmap Evolution
 
@@ -261,6 +265,7 @@ Recent decisions affecting current work:
 - Phase 14 added: Sandbox Identity & Signed Email — Ed25519 key pairs for inter-sandbox trust (signed/encrypted email, public keys in DynamoDB, profile-controlled policies)
 - Phase 15 added: km doctor — platform health check and bootstrap verification (validates config, AWS creds, bootstrap resources, per-region infra, active sandboxes)
 - Phase 16 added: Documentation refresh — update operator guide, user manual, and all docs for Phases 6-15 features (budget, SCP, sidecars, GitHub App, identity, km doctor)
+- Phase 17 added: Sandbox Email Mailbox & Access Control — aliases, allow-lists, self-mail, S3 reader (human-friendly sandbox names, profile-driven sender restrictions, mailbox reading library)
 
 ### Pending Todos
 
@@ -276,6 +281,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T04:23:55.268Z
-Stopped at: Completed 14-04-PLAN.md
+Last session: 2026-03-23T04:47:52.100Z
+Stopped at: Completed 15-02-PLAN.md
 Resume file: None
