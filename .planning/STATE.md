@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 17-02-PLAN.md
-last_updated: "2026-03-23T05:21:35.346Z"
+stopped_at: Completed 17-03-PLAN.md
+last_updated: "2026-03-23T05:27:56.402Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 17
-  completed_phases: 15
+  completed_phases: 16
   total_plans: 62
-  completed_plans: 58
+  completed_plans: 59
   percent: 0
 ---
 
@@ -107,6 +107,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 15-km-doctor-platform-health-check-and-bootstrap-verification P01 | 9min | 2 tasks | 4 files |
 | Phase 17-sandbox-email-mailbox-access-control-aliases-allow-lists-self-mail-s3-reader P01 | 220s | 2 tasks | 12 files |
 | Phase 17 P02 | 352s | 2 tasks | 5 files |
+| Phase 17-sandbox-email-mailbox-access-control-aliases-allow-lists-self-mail-s3-reader P03 | 184s | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -269,6 +270,8 @@ Recent decisions affecting current work:
 - [Phase 17-02]: MatchesAllowList exported for cross-package use by mailbox.go ParseSignedMessage
 - [Phase 17-02]: ParseSignedMessage enforces allow-list before signature verification; signature failure sets SignatureOK=false without error
 - [Phase 17-02]: ListMailboxMessages uses mail/ prefix flat (Option A per research); no per-recipient subdirectory filtering
+- [Phase 17-03]: Alias line conditionally omitted (identity.Alias == '') — consistent with TTL Expiry conditional display pattern already established in printSandboxStatus
+- [Phase 17-03]: Allowed Senders always shown in Identity section (joined list or 'not configured') — more useful than omitting; operator needs to know if allow-list is active
 
 ### Roadmap Evolution
 
@@ -293,6 +296,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T05:21:35.344Z
-Stopped at: Completed 17-02-PLAN.md
+Last session: 2026-03-23T05:27:56.400Z
+Stopped at: Completed 17-03-PLAN.md
 Resume file: None

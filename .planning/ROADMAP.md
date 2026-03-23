@@ -430,7 +430,7 @@ Plans:
 - Built-in profile defaults: hardened/sealed get restrictive allow-lists (`self` only), open-dev/restricted-dev get `"*"` (any sandbox)
 
 **Depends on:** Phase 4 (SES email/S3 storage), Phase 14 (identity/signing infrastructure)
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [ ] 17-01-PLAN.md — EmailSpec type + JSON schema extension (alias, allowedSenders) + DynamoDB identities v1.1.0 GSI + built-in profile defaults
