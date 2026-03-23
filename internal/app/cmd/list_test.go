@@ -153,3 +153,48 @@ func TestListCmd_Empty(t *testing.T) {
 		t.Errorf("expected 'No running sandboxes' message, got:\n%s", out)
 	}
 }
+
+// TestListCmd_EmptyStateBucketError verifies that km list returns a clear error
+// when StateBucket is empty and no lister is injected (real lister path).
+func TestListCmd_EmptyStateBucketError(t *testing.T) {
+	cfg := &config.Config{StateBucket: ""}
+	root := &cobra.Command{Use: "km"}
+	// nil lister forces the real lister construction path
+	listCmd := cmd.NewListCmdWithLister(cfg, nil)
+	root.AddCommand(listCmd)
+
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"list"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error when StateBucket is empty, got nil")
+	}
+	if !strings.Contains(err.Error(), "state bucket not configured") {
+		t.Errorf("expected 'state bucket not configured' in error, got: %v", err)
+	}
+}
+
+// TestListCmd_RealBucketFromConfig verifies that when StateBucket is set, the real
+// lister path is attempted (will fail on AWS config load in test env — that's OK;
+// what matters is the error is NOT about a missing bucket).
+func TestListCmd_RealBucketFromConfig(t *testing.T) {
+	cfg := &config.Config{StateBucket: "my-custom-bucket"}
+	root := &cobra.Command{Use: "km"}
+	listCmd := cmd.NewListCmdWithLister(cfg, nil)
+	root.AddCommand(listCmd)
+
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"list"})
+
+	err := root.Execute()
+	// We expect an error (AWS config won't load in unit tests), but it must NOT
+	// be about the bucket being unconfigured.
+	if err != nil && strings.Contains(err.Error(), "state bucket not configured") {
+		t.Errorf("should not get 'state bucket not configured' when StateBucket is set; got: %v", err)
+	}
+}

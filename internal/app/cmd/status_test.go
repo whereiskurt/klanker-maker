@@ -249,6 +249,51 @@ func TestStatusCmd_BudgetOmittedWhenNoBudget(t *testing.T) {
 	}
 }
 
+// TestStatusCmd_EmptyStateBucketError verifies that km status returns a clear error
+// when StateBucket is empty and no fetcher is injected (real fetcher path).
+func TestStatusCmd_EmptyStateBucketError(t *testing.T) {
+	cfg := &config.Config{StateBucket: ""}
+	root := &cobra.Command{Use: "km"}
+	// nil fetcher forces the real fetcher construction path
+	statusCmd := cmd.NewStatusCmdWithFetcher(cfg, nil)
+	root.AddCommand(statusCmd)
+
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status", "sb-test"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error when StateBucket is empty, got nil")
+	}
+	if !strings.Contains(err.Error(), "state bucket not configured") {
+		t.Errorf("expected 'state bucket not configured' in error, got: %v", err)
+	}
+}
+
+// TestStatusCmd_RealBucketFromConfig verifies that when StateBucket is set, the real
+// fetcher path is attempted (will fail on AWS config load in test env — that's OK;
+// what matters is the error is NOT about a missing bucket).
+func TestStatusCmd_RealBucketFromConfig(t *testing.T) {
+	cfg := &config.Config{StateBucket: "my-custom-bucket"}
+	root := &cobra.Command{Use: "km"}
+	statusCmd := cmd.NewStatusCmdWithFetcher(cfg, nil)
+	root.AddCommand(statusCmd)
+
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status", "sb-test"})
+
+	err := root.Execute()
+	// We expect an error (AWS config won't load in unit tests), but it must NOT
+	// be about the bucket being unconfigured.
+	if err != nil && strings.Contains(err.Error(), "state bucket not configured") {
+		t.Errorf("should not get 'state bucket not configured' when StateBucket is set; got: %v", err)
+	}
+}
+
 // TestStatusCmd_BudgetGracefulDegradation verifies that budget fetch error does not
 // cause the status command to fail — it just omits the budget section.
 func TestStatusCmd_BudgetGracefulDegradation(t *testing.T) {
