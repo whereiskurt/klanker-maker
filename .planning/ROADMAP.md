@@ -335,3 +335,28 @@ Plans:
 - [ ] 14-01-PLAN.md — EmailSpec schema + DynamoDB identities module + config + built-in profile defaults (IDENT-SCHEMA, IDENT-DYNAMO, IDENT-CONFIG)
 - [ ] 14-02-PLAN.md — Core identity library: Ed25519 keygen, SSM storage, DynamoDB publish, email signing/verification, NaCl encryption (TDD) (IDENT-KEYGEN, IDENT-SSM, IDENT-PUBLISH, IDENT-SIGN, IDENT-VERIFY, IDENT-ENCRYPT, IDENT-CLEANUP, IDENT-SEND-SIGNED)
 - [ ] 14-03-PLAN.md — Wire identity into km create (non-fatal) + km destroy (cleanup) + km status (display) (IDENT-CREATE-WIRE, IDENT-DESTROY-WIRE, IDENT-STATUS-WIRE)
+
+### Phase 15: km doctor — platform health check and bootstrap verification
+
+**Goal:** `km doctor` command that validates the entire platform setup — config, AWS credentials, bootstrap resources, per-region infrastructure, and active sandboxes — and outputs a structured health report with actionable remediation for any issues found.
+
+**Requirements:**
+- `km doctor` Cobra command in `internal/app/cmd/doctor.go` with colored terminal output (✓/✗/⚠ symbols)
+- Config check: verify `km-config.yaml` exists and contains required fields (domain, account IDs, SSO URL, primary region)
+- AWS credential check: `sts:GetCallerIdentity` against each configured profile (management, terraform, application) — report authenticated identity or auth failure
+- Bootstrap check: verify S3 state bucket (`s3:HeadBucket`), DynamoDB lock table (`dynamodb:DescribeTable`), KMS key (`kms:DescribeKey` by alias)
+- SCP check: verify SCP policy attached to Application account OU (`organizations:ListPoliciesForTarget`) — only if management credentials available
+- GitHub App check: verify SSM parameters `/km/config/github/app-id` and `/km/config/github/installation-id` exist — report "not configured" if missing (informational, not error)
+- Per-region check for each initialized region: VPC exists with km tags (`ec2:DescribeVpcs`), subnets present, DynamoDB budget table (`km-budgets`), DynamoDB identity table (`km-identities`)
+- Sandbox summary: count active/suspended/expired sandboxes via existing `km list` logic
+- Exit code: 0 if all checks pass, 1 if any errors found — enables CI/scripted usage
+- `--json` flag for machine-readable output (array of check results with name, status, message, remediation)
+- `--quiet` flag that only shows failures and warnings (skip passing checks)
+- Each check is independent and non-fatal — a failed AWS call for one check doesn't prevent other checks from running
+- Checks run in parallel where possible (credential checks, region checks) for speed
+
+**Depends on:** Phase 6 (config/bootstrap patterns), Phase 10 (SCP), Phase 13 (GitHub App config), Phase 14 (identity table)
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 15 to break down)

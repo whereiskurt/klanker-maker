@@ -235,6 +235,7 @@ Recent decisions affecting current work:
 - Phase 10 added: SCP Sandbox Containment — org-level EC2 breakout prevention (SCP as account-level backstop for sandbox IAM containment)
 - Phase 13 added: GitHub App Token Integration — scoped repo access for sandboxes (short-lived installation tokens via GitHub App, SSM storage, Lambda refresh every 45min)
 - Phase 14 added: Sandbox Identity & Signed Email — Ed25519 key pairs for inter-sandbox trust (signed/encrypted email, public keys in DynamoDB, profile-controlled policies)
+- Phase 15 added: km doctor — platform health check and bootstrap verification (validates config, AWS creds, bootstrap resources, per-region infra, active sandboxes)
 
 ### Pending Todos
 
