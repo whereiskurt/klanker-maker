@@ -1,0 +1,314 @@
+// Package aws_test — mailbox_test.go
+// Unit tests for the mailbox reader library: ListMailboxMessages, ReadMessage, ParseSignedMessage.
+package aws_test
+
+import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+)
+
+// ============================================================
+// Mock: MailboxS3API
+// ============================================================
+
+type mockMailboxS3API struct {
+	listCalled    bool
+	listInput     *s3.ListObjectsV2Input
+	listPages     []*s3.ListObjectsV2Output // returned in sequence
+	listCallCount int
+	listErr       error
+
+	getCalled bool
+	getInput  *s3.GetObjectInput
+	getBody   []byte
+	getErr    error
+}
+
+func (m *mockMailboxS3API) ListObjectsV2(ctx context.Context, input *s3.ListObjectsV2Input, opts ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	m.listCalled = true
+	m.listInput = input
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+	if len(m.listPages) == 0 {
+		return &s3.ListObjectsV2Output{}, nil
+	}
+	page := m.listPages[m.listCallCount%len(m.listPages)]
+	m.listCallCount++
+	return page, nil
+}
+
+func (m *mockMailboxS3API) GetObject(ctx context.Context, input *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	m.getCalled = true
+	m.getInput = input
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
+	return &s3.GetObjectOutput{
+		Body: io.NopCloser(bytes.NewReader(m.getBody)),
+	}, nil
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+
+// buildTestMIME constructs a raw MIME message for mailbox testing.
+// If sigB64 is non-empty, X-KM-Signature header is added.
+// If encrypted is true, X-KM-Encrypted: true header is added.
+func buildTestMIME(from, to, subject, senderID, body, sigB64 string, encrypted bool) []byte {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("From: %s\r\n", from))
+	sb.WriteString(fmt.Sprintf("To: %s\r\n", to))
+	sb.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
+	if senderID != "" {
+		sb.WriteString(fmt.Sprintf("X-KM-Sender-ID: %s\r\n", senderID))
+	}
+	if sigB64 != "" {
+		sb.WriteString(fmt.Sprintf("X-KM-Signature: %s\r\n", sigB64))
+	}
+	if encrypted {
+		sb.WriteString("X-KM-Encrypted: true\r\n")
+	}
+	sb.WriteString("MIME-Version: 1.0\r\n")
+	sb.WriteString("Content-Type: text/plain; charset=\"UTF-8\"\r\n")
+	sb.WriteString("\r\n")
+	sb.WriteString(body)
+	return []byte(sb.String())
+}
+
+// makeTestEd25519Keys generates a real Ed25519 pair for mailbox tests.
+func makeMailboxTestKeys(t *testing.T) (pubKeyB64, privKeyB64 string, pub ed25519.PublicKey, priv ed25519.PrivateKey) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ed25519.GenerateKey: %v", err)
+	}
+	pubKeyB64 = base64.StdEncoding.EncodeToString(pub)
+	privKeyB64 = base64.StdEncoding.EncodeToString([]byte(priv))
+	return pubKeyB64, privKeyB64, pub, priv
+}
+
+// signBody signs body bytes with Ed25519 private key.
+func signBody(t *testing.T, priv ed25519.PrivateKey, body string) string {
+	t.Helper()
+	sig := ed25519.Sign(priv, []byte(body))
+	return base64.StdEncoding.EncodeToString(sig)
+}
+
+// ============================================================
+// ListMailboxMessages tests
+// ============================================================
+
+func TestListMailboxMessages_ReturnsAllKeys(t *testing.T) {
+	mockS3 := &mockMailboxS3API{
+		listPages: []*s3.ListObjectsV2Output{
+			{
+				Contents: []s3types.Object{
+					{Key: aws.String("mail/msg-001.eml")},
+					{Key: aws.String("mail/msg-002.eml")},
+				},
+				IsTruncated: aws.Bool(false),
+			},
+		},
+	}
+
+	keys, err := kmaws.ListMailboxMessages(context.Background(), mockS3, "km-artifacts", "sb-recv01", "example.com")
+	if err != nil {
+		t.Fatalf("ListMailboxMessages returned error: %v", err)
+	}
+	if len(keys) != 2 {
+		t.Errorf("expected 2 keys, got %d: %v", len(keys), keys)
+	}
+	if keys[0] != "mail/msg-001.eml" {
+		t.Errorf("keys[0] = %q; want %q", keys[0], "mail/msg-001.eml")
+	}
+}
+
+func TestListMailboxMessages_EmptyBucket(t *testing.T) {
+	mockS3 := &mockMailboxS3API{
+		listPages: []*s3.ListObjectsV2Output{
+			{
+				Contents:    []s3types.Object{},
+				IsTruncated: aws.Bool(false),
+			},
+		},
+	}
+
+	keys, err := kmaws.ListMailboxMessages(context.Background(), mockS3, "km-artifacts", "sb-recv02", "example.com")
+	if err != nil {
+		t.Fatalf("ListMailboxMessages returned error for empty bucket: %v", err)
+	}
+	if len(keys) != 0 {
+		t.Errorf("expected 0 keys for empty bucket, got %d", len(keys))
+	}
+}
+
+// ============================================================
+// ReadMessage tests
+// ============================================================
+
+func TestReadMessage_ReturnsRawBytes(t *testing.T) {
+	wantBody := []byte("From: a@example.com\r\n\r\nHello world")
+	mockS3 := &mockMailboxS3API{
+		getBody: wantBody,
+	}
+
+	got, err := kmaws.ReadMessage(context.Background(), mockS3, "km-artifacts", "mail/msg-001.eml")
+	if err != nil {
+		t.Fatalf("ReadMessage returned error: %v", err)
+	}
+	if !bytes.Equal(got, wantBody) {
+		t.Errorf("ReadMessage returned %q; want %q", got, wantBody)
+	}
+}
+
+func TestReadMessage_ErrorOnMissingKey(t *testing.T) {
+	mockS3 := &mockMailboxS3API{
+		getErr: &s3types.NoSuchKey{},
+	}
+
+	_, err := kmaws.ReadMessage(context.Background(), mockS3, "km-artifacts", "mail/missing.eml")
+	if err == nil {
+		t.Fatal("expected error for missing key, got nil")
+	}
+}
+
+// ============================================================
+// ParseSignedMessage tests
+// ============================================================
+
+func TestParseSignedMessage_ParsesHeaders(t *testing.T) {
+	pubKeyB64, privKeyB64, _, priv := makeMailboxTestKeys(t)
+	_ = privKeyB64
+	body := "Hello from sandbox!"
+	sigB64 := signBody(t, priv, body)
+
+	rawMIME := buildTestMIME("sender@example.com", "recv@example.com", "Test subject",
+		"sb-sender01", body, sigB64, false)
+
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv01", pubKeyB64, []string{"*"})
+	if err != nil {
+		t.Fatalf("ParseSignedMessage returned error: %v", err)
+	}
+	if msg.From != "sender@example.com" {
+		t.Errorf("From = %q; want %q", msg.From, "sender@example.com")
+	}
+	if msg.To != "recv@example.com" {
+		t.Errorf("To = %q; want %q", msg.To, "recv@example.com")
+	}
+	if msg.Subject != "Test subject" {
+		t.Errorf("Subject = %q; want %q", msg.Subject, "Test subject")
+	}
+	if msg.SenderID != "sb-sender01" {
+		t.Errorf("SenderID = %q; want %q", msg.SenderID, "sb-sender01")
+	}
+}
+
+func TestParseSignedMessage_SignatureOK_ValidSig(t *testing.T) {
+	pubKeyB64, _, _, priv := makeMailboxTestKeys(t)
+	body := "Signed body content"
+	sigB64 := signBody(t, priv, body)
+
+	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-sender02", body, sigB64, false)
+
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv02", pubKeyB64, []string{"*"})
+	if err != nil {
+		t.Fatalf("ParseSignedMessage returned error: %v", err)
+	}
+	if !msg.SignatureOK {
+		t.Error("expected SignatureOK=true for valid Ed25519 signature")
+	}
+	if msg.Plaintext {
+		t.Error("expected Plaintext=false when X-KM-Signature is present")
+	}
+}
+
+func TestParseSignedMessage_SignatureOK_InvalidSig(t *testing.T) {
+	pubKeyB64, _, _, _ := makeMailboxTestKeys(t)
+	body := "Signed body"
+	invalidSig := base64.StdEncoding.EncodeToString(make([]byte, 64)) // all zeros
+
+	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-sender03", body, invalidSig, false)
+
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv03", pubKeyB64, []string{"*"})
+	if err != nil {
+		t.Fatalf("ParseSignedMessage should not return error for invalid sig; got: %v", err)
+	}
+	if msg.SignatureOK {
+		t.Error("expected SignatureOK=false for invalid signature")
+	}
+}
+
+func TestParseSignedMessage_Plaintext_NoSignatureHeader(t *testing.T) {
+	pubKeyB64, _, _, _ := makeMailboxTestKeys(t)
+	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-sender04", "plain body", "", false)
+
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv04", pubKeyB64, []string{"*"})
+	if err != nil {
+		t.Fatalf("ParseSignedMessage returned error for plaintext: %v", err)
+	}
+	if !msg.Plaintext {
+		t.Error("expected Plaintext=true when X-KM-Signature header is absent")
+	}
+}
+
+func TestParseSignedMessage_SenderNotOnAllowList_ReturnsError(t *testing.T) {
+	pubKeyB64, _, _, priv := makeMailboxTestKeys(t)
+	body := "Unauthorized"
+	sigB64 := signBody(t, priv, body)
+	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-stranger", body, sigB64, false)
+
+	_, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv05", pubKeyB64, []string{"self"})
+	if err == nil {
+		t.Fatal("expected error for sender not on allow-list, got nil")
+	}
+	if !errors.Is(err, kmaws.ErrSenderNotAllowed) {
+		t.Errorf("expected ErrSenderNotAllowed; got: %v", err)
+	}
+}
+
+func TestParseSignedMessage_SelfMail_AlwaysPermitted(t *testing.T) {
+	pubKeyB64, _, _, priv := makeMailboxTestKeys(t)
+	body := "Self message"
+	sigB64 := signBody(t, priv, body)
+	// senderID == receiverSandboxID = "sb-self01"
+	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-self01", body, sigB64, false)
+
+	// allowedSenders is empty — self-mail should bypass
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-self01", pubKeyB64, []string{})
+	if err != nil {
+		t.Fatalf("ParseSignedMessage should permit self-mail; got error: %v", err)
+	}
+	if msg.SenderID != "sb-self01" {
+		t.Errorf("SenderID = %q; want %q", msg.SenderID, "sb-self01")
+	}
+}
+
+func TestParseSignedMessage_EncryptedBody(t *testing.T) {
+	pubKeyB64, _, _, priv := makeMailboxTestKeys(t)
+	body := base64.StdEncoding.EncodeToString([]byte("encrypted-ciphertext"))
+	sigB64 := signBody(t, priv, body)
+	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-enc01", body, sigB64, true)
+
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv-enc", pubKeyB64, []string{"*"})
+	if err != nil {
+		t.Fatalf("ParseSignedMessage returned error for encrypted body: %v", err)
+	}
+	if !msg.Encrypted {
+		t.Error("expected Encrypted=true when X-KM-Encrypted: true is present")
+	}
+}
