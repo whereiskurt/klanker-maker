@@ -456,7 +456,7 @@ Plans:
 - `km doctor` checks that all regional infra is deployed (DynamoDB tables, SES, TTL handler) not just network/VPC
 
 **Depends on:** Phase 15 (km doctor, bootstrap), Phase 14 (identity table)
-**Plans:** 4 plans
+**Plans:** 1/4 plans executed
 
 Plans:
 - [ ] 18-01-PLAN.md — Expand km init to all 6 regional modules + km configure state_bucket
