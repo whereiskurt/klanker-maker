@@ -4,13 +4,7 @@ locals {
   region   = read_terragrunt_config(find_in_parent_folders("site.hcl")).locals.region
 }
 
-# Include root for retry config and default provider skeleton.
-# The generate "provider" below overrides the root provider with management account assume_role.
-include "root" {
-  path = find_in_parent_folders("terragrunt.hcl")
-}
-
-# Override provider: Organizations API is global; must operate from management account.
+# Provider: Organizations API is global; must operate from management account.
 # The km-org-admin role is provisioned in the management account with Organizations permissions.
 generate "provider" {
   path      = "provider.tf"
@@ -87,4 +81,27 @@ inputs = {
     # TTL handler — tears down sandboxes on expiry
     "arn:aws:iam::${local.accounts.application}:role/km-ttl-handler",
   ]
+}
+
+# Retry configuration for transient AWS API errors
+errors {
+  retry "transient_network" {
+    retryable_errors = concat(
+      get_default_retryable_errors(), [
+        "(?s).*dial tcp .*: i/o timeout.*",
+        "(?s).*no such host.*",
+        "(?s).*connection reset by peer.*",
+        "(?s).*context deadline exceeded.*",
+        "(?s).*request send failed.*",
+        "(?s).*[aA]ccess [dD]enied for [lL]og[dD]estination.*",
+        "(?s).*bucket must exist.*",
+        "(?s).*bucket must have versioning enabled.*",
+        "(?s).*reading S3 Bucket CORS Configuration.*couldn't find resource.*",
+        "(?s).*Missing Resource Identity After Create.*",
+      ]
+    )
+
+    max_attempts       = 6
+    sleep_interval_sec = 10
+  }
 }

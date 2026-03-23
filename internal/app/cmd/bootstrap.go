@@ -171,6 +171,16 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 
 	// Non-dry-run: deploy SCP sandbox-containment policy.
 	if loadedCfg.ManagementAccountID != "" {
+		// Export config values as env vars for Terragrunt's site.hcl get_env() calls.
+		os.Setenv("KM_ACCOUNTS_MANAGEMENT", loadedCfg.ManagementAccountID)
+		os.Setenv("KM_ACCOUNTS_APPLICATION", loadedCfg.ApplicationAccountID)
+		if loadedCfg.Domain != "" {
+			os.Setenv("KM_DOMAIN", loadedCfg.Domain)
+		}
+		if loadedCfg.PrimaryRegion != "" {
+			os.Setenv("KM_REGION", loadedCfg.PrimaryRegion)
+		}
+
 		scpDir := filepath.Join(findRepoRoot(), "infra", "live", "management", "scp")
 		fmt.Fprintln(w, "Deploying SCP sandbox-containment policy...")
 		if err := ApplyTerragruntFunc(ctx, scpDir); err != nil {

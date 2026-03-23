@@ -78,7 +78,7 @@ The difference between Klanker Maker and the other sandbox platforms: this is **
 
 ## AWS Account Architecture
 
-Klanker Maker uses a **three-account model** following AWS Organizations best practices. Sandboxes run in a dedicated application account - completely separated from the account that provisions them and the account that owns the domain.
+Klanker Maker follows AWS Organizations best practices, supporting either a **three-account** or **two-account** topology. In both models, sandboxes run in a dedicated application account - completely separated from the account that owns the domain and applies SCP policies.
 
 <p align="center">
   <img src="docs/frame1-security-network.svg" alt="Security & Network Architecture - 3 accounts, shared VPC, per-sandbox Security Groups" />
@@ -91,6 +91,8 @@ Klanker Maker uses a **three-account model** following AWS Organizations best pr
 | **Management** | DNS, identity, org root | Route53 hosted zone, domain registration, AWS SSO, Organizations root | Domain and identity are org-wide - they don't belong in a sandbox blast radius |
 | **Terraform** | State and provisioning | S3 state buckets, DynamoDB lock tables, cross-account provisioning role | Terraform state contains every resource ARN and secret path - isolating it limits exposure if the application account is compromised |
 | **Application** | Sandbox execution | Regional VPCs, EC2/ECS instances, IAM sandbox roles, SES, Lambda handlers, DynamoDB budget table, S3 artifacts, CloudWatch Logs | This is where agents run - if an agent escapes its sandbox, it can only reach resources in this account, not state or DNS |
+
+In a **two-account topology**, the Terraform and Application accounts are the same - set both account IDs to the same value during `km configure`. This is simpler for development while keeping the management account separate for SCP policies and DNS.
 
 The operator authenticates via **AWS SSO** with named profiles:
 
@@ -105,12 +107,18 @@ The `km` CLI selects the right profile per command:
 
 | Command | AWS Profile | Account |
 |---------|-------------|---------|
+| `km configure` | — | No AWS access needed; writes `km-config.yaml` |
+| `km configure github` | — | Configures GitHub App token integration |
+| `km bootstrap` | `klanker-terraform` | Terraform - deploys SCP policy to management account |
 | `km init` | `klanker-application` | Application - provisions shared VPC/network |
 | `km create` | `klanker-terraform` | Terraform - assumes role into Application to provision |
 | `km destroy` | `klanker-terraform` | Terraform - assumes role into Application to teardown |
 | `km list` | `klanker-terraform` | Terraform - reads state from S3 |
 | `km status` | `klanker-terraform` | Terraform - reads state + discovers resources |
 | `km logs` | `klanker-terraform` | Terraform - reads CloudWatch Logs |
+| `km budget` | `klanker-terraform` | Terraform - reads/updates DynamoDB budget table |
+| `km shell` | `klanker-application` | Application - SSM session into sandbox instance |
+| `km doctor` | `klanker-terraform` | Terraform - validates platform health across all accounts |
 
 ### Platform Configuration
 
@@ -169,13 +177,16 @@ Editable source: [`docs/sandbox-architecture.excalidraw`](docs/sandbox-architect
 </p>
 
 1. **Configure** with `km configure` - set your domain, account IDs, SSO URL, region (once)
-2. **Bootstrap** with `km bootstrap` - creates S3 state buckets, DynamoDB lock tables, and KMS keys for your configured regions (once)
+2. **Bootstrap** with `km bootstrap` - deploys SCP containment policy to management account (once)
 3. **Initialize** with `km init --region us-east-1` - provisions shared VPC and network (once per region)
-4. **Define** a SandboxProfile in YAML - budget, lifecycle, network policy, identity, sidecars
-5. **Validate** with `km validate <profile.yaml>`
-6. **Create** with `km create <profile>` - compiles to Terragrunt inputs, provisions infrastructure
-7. **Monitor** with `km list` / `km status` or the ConfigUI web dashboard
-8. **Destroy** with `km destroy <sandbox-id>` - clean teardown of all resources
+4. **Check** with `km doctor` - validates platform health, credentials, and infrastructure
+5. **Define** a SandboxProfile in YAML - budget, lifecycle, network policy, identity, sidecars
+6. **Validate** with `km validate <profile.yaml>`
+7. **Create** with `km create <profile>` - compiles to Terragrunt inputs, provisions infrastructure
+8. **Monitor** with `km list` / `km status` / `km logs` or the ConfigUI web dashboard
+9. **Connect** with `km shell <sandbox-id>` - SSM session into the sandbox (no SSH keys)
+10. **Top-up** with `km budget add <sandbox-id>` - add compute or AI budget
+11. **Destroy** with `km destroy <sandbox-id>` - clean teardown of all resources
 
 ## SandboxProfile
 
@@ -351,7 +362,7 @@ km CLI / ConfigUI
 ├── cmd/km/                  CLI entry point
 ├── cmd/configui/            Web dashboard (Go + embedded HTML)
 ├── cmd/ttl-handler/         Lambda: TTL expiry + artifact upload
-├── internal/app/cmd/        Cobra commands (create, destroy, list, validate, status, logs)
+├── internal/app/cmd/        Cobra commands (configure, bootstrap, init, validate, create, destroy, list, status, logs, budget, shell, doctor)
 ├── internal/app/config/     Configuration (config.yaml, env vars, CLI flags)
 ├── pkg/
 │   ├── profile/             SandboxProfile schema, validation, inheritance
@@ -395,6 +406,9 @@ km bootstrap
 # Initialize the region (once per region)
 km init --region us-east-1
 
+# Check platform health
+km doctor
+
 # Validate a profile
 km validate profiles/restricted-dev.yaml
 
@@ -406,7 +420,10 @@ km list
 km status sb-a1b2c3d4
 
 # Connect (via SSM - no SSH, no keys)
-aws ssm start-session --target i-0abc123def456
+km shell sb-a1b2c3d4
+
+# View logs
+km logs sb-a1b2c3d4
 
 # Destroy
 km destroy sb-a1b2c3d4

@@ -8,14 +8,8 @@ locals {
   region_full   = local.region_config.locals.region_full
 }
 
-include "root" {
-  path = find_in_parent_folders("terragrunt.hcl")
-}
-
-# Override the root-generated provider block to add the replica alias provider.
-# The s3-replication module requires provider "aws" { alias = "replica" } targeting
-# the destination region. Using the same block name "provider" with
-# if_exists = "overwrite_terragrunt" ensures only one provider.tf is generated.
+# Provider with replica alias for cross-region replication.
+# Standalone (no root include) to avoid duplicate generate "provider" blocks.
 generate "provider" {
   path      = "provider.tf"
   if_exists = "overwrite_terragrunt"
@@ -83,4 +77,27 @@ inputs = {
   source_bucket_arn       = "arn:aws:s3:::${get_env("KM_ARTIFACTS_BUCKET", "")}"
   destination_region      = get_env("KM_REPLICA_REGION", "us-west-2")
   destination_bucket_name = "${get_env("KM_ARTIFACTS_BUCKET", "")}-replica"
+}
+
+# Retry configuration for transient AWS API errors
+errors {
+  retry "transient_network" {
+    retryable_errors = concat(
+      get_default_retryable_errors(), [
+        "(?s).*dial tcp .*: i/o timeout.*",
+        "(?s).*no such host.*",
+        "(?s).*connection reset by peer.*",
+        "(?s).*context deadline exceeded.*",
+        "(?s).*request send failed.*",
+        "(?s).*[aA]ccess [dD]enied for [lL]og[dD]estination.*",
+        "(?s).*bucket must exist.*",
+        "(?s).*bucket must have versioning enabled.*",
+        "(?s).*reading S3 Bucket CORS Configuration.*couldn't find resource.*",
+        "(?s).*Missing Resource Identity After Create.*",
+      ]
+    )
+
+    max_attempts       = 6
+    sleep_interval_sec = 10
+  }
 }

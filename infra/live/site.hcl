@@ -14,14 +14,13 @@ locals {
     application = get_env("KM_ACCOUNTS_APPLICATION", "")
   }
 
-  # Secrets loaded from SOPS-encrypted file or plaintext fallback
-  # SOPS decrypt happens on-the-fly; plaintext file is for local development only
+  # Secrets loaded from SOPS-encrypted file or plaintext fallback.
+  # Uses a single run_cmd with shell logic to avoid HCL eager-evaluating
+  # both ternary branches (which would call sops on a non-existent file).
   secret_values = jsondecode(
-    fileexists("${get_terragrunt_dir()}/.secrets.sops.json")
-    ? run_cmd("--terragrunt-quiet", "sops", "--decrypt", "${get_terragrunt_dir()}/.secrets.sops.json")
-    : fileexists("${get_terragrunt_dir()}/.secrets.json")
-    ? file("${get_terragrunt_dir()}/.secrets.json")
-    : "{}"
+    run_cmd("--terragrunt-quiet", "sh", "-c",
+      "if [ -f '${get_terragrunt_dir()}/.secrets.sops.json' ]; then sops --decrypt '${get_terragrunt_dir()}/.secrets.sops.json'; elif [ -f '${get_terragrunt_dir()}/.secrets.json' ]; then cat '${get_terragrunt_dir()}/.secrets.json'; else echo '{}'; fi"
+    )
   )
 
   # Sandbox configuration — Phase 2 compiler will populate per-sandbox values

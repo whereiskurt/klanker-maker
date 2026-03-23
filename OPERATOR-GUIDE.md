@@ -10,8 +10,9 @@ sandbox. Follow the sections in order.
 
 ### AWS Accounts
 
-Klanker Maker requires an AWS Organizations setup with three accounts, each with a distinct
-role:
+Klanker Maker supports two AWS Organizations topologies:
+
+**3-account topology** (recommended for production):
 
 | Account | Role | Purpose |
 |---------|------|---------|
@@ -19,8 +20,17 @@ role:
 | Terraform | Infrastructure execution account | Terraform and Terragrunt run with credentials from this account; state bucket lives here |
 | Application | Sandbox workload account | EC2 instances and ECS tasks run here; sandboxes are provisioned into this account |
 
-All three accounts must exist and be member accounts of the same AWS Organization before
-proceeding.
+**2-account topology** (simpler for development):
+
+| Account | Role | Purpose |
+|---------|------|---------|
+| Management | Billing owner, SCP policy root | AWS Organizations root; SCP policies applied here |
+| Application | Terraform + sandbox workload account | Infrastructure operations and sandbox workloads share this account |
+
+In the 2-account topology, set the Terraform and Application account IDs to the same value
+during `km configure`. The configure wizard detects this automatically.
+
+All accounts must be member accounts of the same AWS Organization before proceeding.
 
 ### AWS SSO (IAM Identity Center)
 
@@ -60,12 +70,17 @@ project memory index if your setup is split across management and application ac
 
 ### Terraform State Backend
 
-Before the first `terragrunt apply`, ensure the S3 state bucket and DynamoDB lock table
-exist in the Terraform account. These are created once per environment outside of
-Terragrunt:
+Terragrunt automatically creates the S3 state bucket and DynamoDB lock table on the first
+`terragrunt apply` if they do not already exist. The bucket name, lock table name, and
+region are configured in `infra/live/site.hcl` and derived from the `km-config.yaml`
+values set during `km configure`.
+
+No manual creation is required. If you prefer to pre-create the backend resources (e.g.,
+for stricter control over bucket policies), you can create them manually before the first
+apply:
 
 ```bash
-# In the Terraform account
+# Optional — only if you want to pre-create the backend
 aws s3 mb s3://YOUR-TF-STATE-BUCKET --region us-east-1
 aws s3api put-bucket-versioning \
   --bucket YOUR-TF-STATE-BUCKET \
@@ -78,22 +93,28 @@ aws dynamodb create-table \
   --region us-east-1
 ```
 
-Update `infra/live/site.hcl` with the bucket name, lock table name, and region.
+### Environment Variables
 
-### Required Environment Variables
+The `km` CLI commands (`km bootstrap`, `km create`, etc.) read configuration from
+`km-config.yaml` and automatically pass values to Terragrunt. You do **not** need to
+export `KM_ACCOUNTS_*` or `KM_DOMAIN` env vars for `km` commands.
 
-Set these in your shell before running any `km` commands or `terragrunt apply`:
+Environment variables are only needed when running `terragrunt apply` directly (e.g.,
+deploying shared infrastructure in Section 4). Set these in your shell or a per-project
+`.env` file:
 
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `KM_DOMAIN` | Base domain for sandboxes | `example.com` |
-| `KM_ARTIFACTS_BUCKET` | S3 bucket for Lambda zips, sidecar binaries, artifacts | `my-km-artifacts` |
 | `KM_ACCOUNTS_MANAGEMENT` | AWS account ID for the management account | `111111111111` |
 | `KM_ACCOUNTS_TERRAFORM` | AWS account ID for the Terraform account | `222222222222` |
 | `KM_ACCOUNTS_APPLICATION` | AWS account ID for the application (sandbox) account | `333333333333` |
+| `KM_ARTIFACTS_BUCKET` | S3 bucket for Lambda zips, sidecar binaries, artifacts | `my-km-artifacts` |
 | `KM_ROUTE53_ZONE_ID` | Route53 hosted zone ID for `sandboxes.<domain>` | `Z1234ABCDEFGH` |
 | `KM_OPERATOR_EMAIL` | Operator email for sandbox expiry notifications | `ops@example.com` |
 | `KM_REGION` | AWS region (default: us-east-1) | `us-east-1` |
+
+Environment variables override values from `km-config.yaml` when both are present.
 
 ---
 
@@ -101,8 +122,8 @@ Set these in your shell before running any `km` commands or `terragrunt apply`:
 
 ### Run km configure
 
-`km configure` is an interactive command that writes the operator configuration file. Run
-it once per environment:
+`km configure` is an interactive wizard that generates the platform configuration file.
+Run it once per environment:
 
 ```bash
 km configure
@@ -110,25 +131,32 @@ km configure
 
 The command prompts for:
 
-- Domain name (e.g., `example.com`)
-- Management account ID
-- Terraform account ID
-- Application account ID
-- AWS SSO start URL (e.g., `https://myorg.awsapps.com/start`)
-- AWS region (default: `us-east-1`)
-- Artifacts S3 bucket name
-- Operator email address
+- Base domain (e.g., `klankermaker.ai`)
+- Management AWS account ID
+- Terraform AWS account ID
+- Application AWS account ID
+- SSO start URL (e.g., `https://myorg.awsapps.com/start`)
+- SSO region (e.g., `us-east-1`)
+- Primary region (e.g., `us-east-1`)
 
-The command writes `~/.km/config.yaml` (global) and optionally `./km-config.yaml` (project
-root). Environment variables (`KM_*`) always take precedence over both config files.
+The command writes `./km-config.yaml` at the repo root. If the Terraform and Application
+account IDs match, it detects a 2-account topology and prints a confirmation. For a
+3-account topology, it prints DNS delegation instructions.
 
-For non-interactive use (CI/CD or scripted setup):
+For non-interactive use (CI/CD or scripted setup), pass values as flags:
 
 ```bash
-km configure --non-interactive
+km configure --non-interactive \
+  --domain klankermaker.ai \
+  --management-account 111111111111 \
+  --terraform-account 222222222222 \
+  --application-account 333333333333 \
+  --sso-start-url https://myorg.awsapps.com/start \
+  --sso-region us-east-1 \
+  --region us-east-1
 ```
 
-In non-interactive mode all values are read from environment variables. No prompts are shown.
+All flags are required in non-interactive mode.
 
 ### Verify AWS Access
 
@@ -148,20 +176,50 @@ If you use AWS SSO, run `aws sso login` first:
 aws sso login --sso-session <session-name>
 ```
 
-### Set Environment Variables
+### Set Environment Variables (for direct Terragrunt use)
 
-Add these exports to your shell profile or a per-project `.env` file:
+If you plan to run `terragrunt apply` directly (Section 4), export these values. You can
+derive them from `km-config.yaml`:
 
 ```bash
 export KM_DOMAIN=example.com
-export KM_ARTIFACTS_BUCKET=my-km-artifacts
 export KM_ACCOUNTS_MANAGEMENT=111111111111
 export KM_ACCOUNTS_TERRAFORM=222222222222
 export KM_ACCOUNTS_APPLICATION=333333333333
+export KM_ARTIFACTS_BUCKET=my-km-artifacts
 export KM_ROUTE53_ZONE_ID=Z1234ABCDEFGH
 export KM_OPERATOR_EMAIL=ops@example.com
 export KM_REGION=us-east-1
 ```
+
+### Bootstrap SCP Policy
+
+Before deploying shared infrastructure, bootstrap the SCP sandbox-containment policy.
+This step requires credentials that can assume the `km-org-admin` role in the management
+account.
+
+Preview what will be created:
+
+```bash
+km bootstrap
+```
+
+Deploy:
+
+```bash
+km bootstrap --dry-run=false
+```
+
+`km bootstrap` reads account IDs and region from `km-config.yaml` and passes them to
+Terragrunt automatically — no environment variable exports are needed.
+
+The SCP policy constrains the application account to prevent sandbox workloads from
+escaping their containment boundary (security group mutation, network escape, IAM
+escalation, etc.). The bootstrap step must complete before creating sandboxes.
+
+**Prerequisite**: The `km-org-admin` IAM role must exist in the management account with
+an Organizations permissions policy and a trust relationship allowing your operator
+credentials to assume it.
 
 ---
 
@@ -216,6 +274,9 @@ repositories must exist (created by Terragrunt on first `km create` for an ECS s
 
 Shared infrastructure is deployed once per environment. It must be in place before the
 first `km create` call. Deploy in the order listed below.
+
+**Note:** These steps run `terragrunt apply` directly, so the `KM_*` environment
+variables listed in Section 1 must be exported in your shell.
 
 ### a. Network
 
@@ -384,6 +445,27 @@ sandbox:
 
 ## 7. Troubleshooting
 
+### "Cannot assume IAM Role" during km bootstrap
+
+The `km-org-admin` role does not exist in the management account, or the trust policy does
+not allow your current credentials to assume it. Verify:
+
+1. The role exists in the management account:
+
+   ```bash
+   aws iam get-role --role-name km-org-admin --profile <management-profile>
+   ```
+
+2. The trust policy includes your operator principal (SSO role or IAM user).
+
+3. You are authenticated to the correct account. Check with:
+
+   ```bash
+   aws sts get-caller-identity
+   ```
+
+   The output should show the account/role that is trusted by the `km-org-admin` role.
+
 ### "exec format error" in Lambda logs
 
 The Lambda binary was compiled for the wrong architecture. Rebuild with:
@@ -410,8 +492,9 @@ If the records are missing, re-run `cd infra/live/use1/ses && terragrunt apply`.
 
 ### Terragrunt "state bucket not found" or "NoSuchBucket"
 
-The S3 state bucket does not exist yet. Create it manually in the Terraform account (see
-Prerequisites — Terraform State Backend) before running any `terragrunt apply`.
+Terragrunt normally auto-creates the S3 state bucket on first run. If auto-creation fails
+(e.g., due to IAM permissions), create the bucket manually in the Terraform account (see
+Prerequisites — Terraform State Backend) and retry.
 
 ### "KM_ROUTE53_ZONE_ID: invalid hosted zone ID" during ses apply
 
