@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 14-01-PLAN.md
-last_updated: "2026-03-23T03:41:54.820Z"
+stopped_at: Completed 14-02-PLAN.md
+last_updated: "2026-03-23T03:50:19.545Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 15
   completed_phases: 13
   total_plans: 55
-  completed_plans: 51
+  completed_plans: 52
   percent: 0
 ---
 
@@ -100,6 +100,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 13-github-app-token-integration-scoped-repo-access-for-sandboxes P03 | 18min | 2 tasks | 7 files |
 | Phase 13-github-app-token-integration-scoped-repo-access-for-sandboxes P04 | 396s | 2 tasks | 7 files |
 | Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust P01 | 31540187 | 2 tasks | 14 files |
+| Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust P02 | 5min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -243,6 +244,9 @@ Recent decisions affecting current work:
 - [Phase 14]: EmailSpec is a pointer on Spec (same pattern as Budget/Artifacts) — nil means email policy not specified
 - [Phase 14]: dynamodb-identities uses sandbox_id (S) as sole hash key — one identity row per sandbox, no sort key unlike budget table
 - [Phase 14]: No DynamoDB Streams on identities table — identity reads are on-demand lookups, no Lambda trigger needed
+- [Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust]: SignEmailBody signs body only (not headers) — simpler to verify, headers can change in transit through SES
+- [Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust]: SendSignedEmail uses Content.Raw (not Content.Simple) — SES Simple strips custom X-KM-* headers; Raw MIME preserves them
+- [Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust]: box.SealAnonymous / box.OpenAnonymous for NaCl encryption — sender identity in X-KM-Sender-ID header, not ciphertext
 
 ### Roadmap Evolution
 
@@ -265,6 +269,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T03:41:54.817Z
-Stopped at: Completed 14-01-PLAN.md
+Last session: 2026-03-23T03:50:19.542Z
+Stopped at: Completed 14-02-PLAN.md
 Resume file: None
