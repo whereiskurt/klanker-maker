@@ -456,7 +456,10 @@ Plans:
 - `km doctor` checks that all regional infra is deployed (DynamoDB tables, SES, TTL handler) not just network/VPC
 
 **Depends on:** Phase 15 (km doctor, bootstrap), Phase 14 (identity table)
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 18 to break down)
+- [ ] 18-01-PLAN.md — Expand km init to all 6 regional modules + km configure state_bucket
+- [ ] 18-02-PLAN.md — New km uninit command with active-sandbox guard
+- [ ] 18-03-PLAN.md — GitHub token graceful skip on ParameterNotFound
+- [ ] 18-04-PLAN.md — km doctor regional checks + bootstrap/root.hcl verification
