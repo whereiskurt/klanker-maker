@@ -19,7 +19,10 @@ This document describes the security architecture of Klanker Maker, a policy-dri
 11. [Audit Trail](#11-audit-trail)
 12. [Budget as Security](#12-budget-as-security)
 13. [Spot Interruption Security](#13-spot-interruption-security)
-14. [Threat Model](#14-threat-model)
+14. [Service Control Policies](#14-service-control-policies)
+15. [GitHub App Token Security](#15-github-app-token-security)
+16. [Sandbox Identity and Email Signing](#16-sandbox-identity-and-email-signing)
+17. [Threat Model](#17-threat-model)
 
 ---
 
@@ -416,7 +419,207 @@ For ECS-based sandboxes, the `ecs-spot-handler` module (`infra/modules/ecs-spot-
 
 ---
 
-## 14. Threat Model
+## 14. Service Control Policies
+
+Service Control Policies (SCPs) are AWS Organizations policies that apply at the account level, independent of IAM role policies. SCPs provide a backstop that prevents sandbox role EC2/network/IAM breakout even if a sandbox's IAM role policy is misconfigured or bypassed.
+
+**Why SCPs matter:** IAM role policies are enforced by the IAM service. If an agent somehow obtains a more permissive role (e.g., via cross-role assumption or a confused deputy attack), IAM alone cannot stop it. SCPs are evaluated before IAM -- they are organization-level denies that no role within the target account can override. Even the account root cannot override an SCP.
+
+**Deployment:** The `infra/modules/scp/v1.0.0` module deploys a single SCP named `km-sandbox-containment` and attaches it to the Application account via `aws_organizations_policy_attachment`. The Management account is exempt from SCPs by AWS design.
+
+### Deny Statements
+
+The SCP has eight deny statements. Each uses `ArnNotLike` on `aws:PrincipalARN` to carve out trusted platform roles (note: `NotPrincipal` is not supported in SCPs -- `ArnNotLike` on the condition variable achieves the same effect).
+
+#### 1. DenySGMutation
+
+Denies Security Group mutation (create, delete, authorize/revoke ingress and egress rules, modify rules) for all roles not in `trusted_arns_base`. Prevents a compromised sandbox from widening its own egress rules.
+
+#### 2. DenyNetworkEscape
+
+Denies creation of VPCs, subnets, route tables, internet gateways, NAT gateways, VPC peering connections, and Transit Gateway attachments. Prevents network pivoting to new network contexts outside the controlled VPC.
+
+#### 3. DenyInstanceMutation
+
+Denies `ec2:RunInstances`, `ec2:ModifyInstanceAttribute`, and `ec2:ModifyInstanceMetadataOptions`. Trusted roles: `trusted_arns_instance` = base roles + `km-ecs-spot-handler` (which launches Spot instances as part of normal platform operation).
+
+**Important:** `km-ecs-task-*` is intentionally NOT carved out. The ECS task role IS the sandbox workload. If the task role could run new instances, it would escape its compute budget and IAM scope. The SCP enforces this at the organization level regardless of the task role's IAM policy.
+
+#### 4. DenyIAMEscalation
+
+Denies `iam:CreateRole`, `iam:AttachRolePolicy`, `iam:DetachRolePolicy`, `iam:PassRole`, and `iam:AssumeRole`. Trusted roles: `trusted_arns_iam` = base roles + `km-budget-enforcer-*`.
+
+The budget-enforcer Lambda carve-out is precise: it needs `AttachRolePolicy`/`DetachRolePolicy` to revoke Bedrock IAM permissions on budget breach, but it does NOT need `CreateRole` or `PassRole`. The SCP allows the enforcer to do exactly what it needs without granting broader IAM escalation.
+
+#### 5. DenyStorageExfiltration
+
+Denies EBS snapshot creation, snapshot copying, AMI creation, AMI copying, and image export. Prevents a sandbox from exfiltrating EBS data by creating a snapshot and sharing it with an attacker-controlled account.
+
+#### 6. DenySSMPivot
+
+Denies `ssm:SendCommand` and `ssm:StartSession`. Trusted roles: `trusted_arns_ssm` = only `km-ec2spot-ssm-*` instance roles, `km-github-token-refresher-*`, and operator SSO roles.
+
+This prevents a compromised sandbox from using SSM to pivot to other instances in the account. The GitHub token refresher is listed here (not in base/instance/iam carve-outs) because it only needs SSM `GetParameter`/`PutParameter`, not instance session access.
+
+#### 7. DenyOrganizationsDiscovery
+
+Denies `organizations:ListAccounts`, `organizations:DescribeOrganization`, `organizations:ListRoots`, `organizations:ListOrganizationalUnitsForParent`, and `organizations:ListChildren`. This statement has **no condition** -- it applies to all roles in the Application account without exception. Application account roles have no legitimate reason to enumerate org structure. The management account is exempt by AWS design.
+
+#### 8. DenyOutsideAllowedRegions
+
+Denies all actions outside the configured `allowed_regions` using `StringNotEquals` on `aws:RequestedRegion`. Uses `not_actions` (NotAction) so global AWS services (IAM, STS, Organizations, Route53, billing, CloudFront, health, pricing) work regardless of region. **This statement has no trusted role carve-out** -- it applies to all roles including operators. Region lock at the SCP layer enforces the geographic boundary even if a sandbox or operator role has no IAM region condition.
+
+### Carve-Out Summary
+
+| Statement | Trusted Roles (carve-out) |
+|-----------|--------------------------|
+| DenySGMutation | `trusted_arns_base` (operator SSO + provisioner roles) |
+| DenyNetworkEscape | `trusted_arns_base` |
+| DenyInstanceMutation | `trusted_arns_instance` = base + `km-ecs-spot-handler` |
+| DenyIAMEscalation | `trusted_arns_iam` = base + `km-budget-enforcer-*` |
+| DenyStorageExfiltration | `trusted_arns_base` |
+| DenySSMPivot | `trusted_arns_ssm` = `km-ec2spot-ssm-*` + `km-github-token-refresher-*` + SSO roles |
+| DenyOrganizationsDiscovery | None (applies to all) |
+| DenyOutsideAllowedRegions | None (applies to all, uses NotAction for global services) |
+
+---
+
+## 15. GitHub App Token Security
+
+GitHub repository access uses short-lived GitHub App installation tokens rather than personal access tokens (PATs) or SSH keys. This eliminates long-lived credentials in the sandbox environment.
+
+### Token Lifecycle
+
+1. **App installation**: The operator installs the GitHub App on their organization and registers the App's private key and installation ID via `km configure github`. The App's RSA private key is stored in SSM Parameter Store at `/km/config/github/private-key` as a KMS-encrypted SecureString.
+
+2. **Token generation**: At sandbox creation, and then every 45 minutes, the `km-github-token-refresher-{sandbox-id}` Lambda generates a short-lived installation token:
+   - Reads the App's RSA private key from SSM.
+   - Mints a 10-minute GitHub App JWT (RS256, signed with the RSA key).
+   - Exchanges the JWT for an installation token via `POST /app/installations/{id}/access_tokens`, scoped to the repositories listed in `sourceAccess.github.allowedRepos`.
+   - Writes the token to SSM at `/sandbox/{sandbox-id}/github-token` as a KMS-encrypted SecureString.
+
+3. **Token refresh**: The Lambda is triggered by EventBridge Scheduler every 45 minutes. GitHub installation tokens expire after 1 hour; the 45-minute refresh interval ensures the token never expires during normal sandbox operation.
+
+4. **Token consumption**: Inside the sandbox, the `GIT_ASKPASS` helper script reads the token from SSM at git operation time (not at boot). The token is never placed in environment variables or written to disk.
+
+### Token Scope
+
+The installation token is scoped at request time to exactly the repositories listed in the profile's `sourceAccess.github.allowedRepos`. The token has no access to other repositories in the organization. The `permissions` profile field maps to GitHub API permission levels:
+- `read` → `contents: read`
+- `push` → `contents: write`
+
+### KMS Encryption
+
+Each GitHub token sandbox gets a dedicated KMS key (`alias/km-github-token-{sandbox-id}`) with a three-principal policy:
+
+| Principal | Permissions |
+|-----------|------------|
+| Account root | `kms:*` (administration) |
+| Lambda role | `kms:Encrypt`, `kms:Decrypt`, `kms:GenerateDataKey` |
+| Sandbox IAM role | `kms:Decrypt` (read token from SSM) |
+
+The sandbox role can decrypt the token (to use it via GIT_ASKPASS) but cannot encrypt or manage the KMS key.
+
+### Security Properties
+
+| Property | SSH Keys or PATs | GitHub App Tokens |
+|----------|-----------------|-------------------|
+| Credential lifetime | Permanent until revoked | 1 hour maximum |
+| Scope | All repos accessible to key | Only repos in profile allowedRepos |
+| Storage | Often in `~/.ssh` or env vars | KMS-encrypted SSM, never in env |
+| Compromise impact | Full org access permanently | Single sandbox, expires in ≤1 hour |
+| Rotation | Manual | Automatic every 45 minutes |
+
+---
+
+## 16. Sandbox Identity and Email Signing
+
+Each sandbox has a cryptographic identity -- an Ed25519 key pair generated at creation time. This identity supports three capabilities: signing outbound emails, verifying inbound emails, and optional end-to-end encryption between sandboxes.
+
+### Key Generation
+
+At `km create`, two key pairs are generated:
+
+1. **Ed25519 signing key** (`GenerateSandboxIdentity`): A 64-byte Ed25519 private key (seed + public key concatenated). Used for signing email bodies.
+2. **X25519 encryption key** (`GenerateEncryptionKey`): A 32-byte NaCl box key pair. Used for end-to-end encryption. This is separate from the Ed25519 key by design -- the signing key proves identity, the encryption key provides confidentiality.
+
+Both private keys are stored in SSM Parameter Store as KMS-encrypted SecureStrings:
+
+- `/sandbox/{sandbox-id}/signing-key` — Ed25519 private key (base64)
+- `/sandbox/{sandbox-id}/encryption-key` — X25519 private key (base64)
+
+### DynamoDB Identity Record
+
+The public keys are published to the `km-identities` DynamoDB table. Each sandbox has one row keyed by `sandbox_id` (the sole hash key -- no sort key). The row contains:
+
+| Attribute | Description |
+|-----------|-------------|
+| `sandbox_id` | Hash key, string |
+| `public_key` | Base64-encoded Ed25519 public key (32 bytes) |
+| `email_address` | `{sandbox-id}@{domain}` |
+| `encryption_public_key` | Base64-encoded X25519 public key (32 bytes) |
+| `signing_policy` | `required`, `optional`, or `off` |
+| `verify_inbound_policy` | `required`, `optional`, or `off` |
+| `encryption_policy` | `required`, `optional`, or `off` |
+| `alias` | Human-friendly dot-notation name (from Phase 17, optional) |
+| `allowed_senders` | DynamoDB StringSet of allow-list patterns (from Phase 17, optional) |
+
+Empty string means "not specified" -- the attribute is omitted from the row to preserve backward compatibility with sandboxes created before identity was added.
+
+### Email Signing
+
+When a sandbox sends email (`SendSignedEmail`), the flow is:
+
+1. Read the Ed25519 private key from SSM (KMS-decrypted).
+2. Apply the encryption policy gate (see below).
+3. Sign the email body (not headers) with Ed25519: `ed25519.Sign(priv, []byte(body))`.
+4. Build a raw MIME message with custom headers:
+   - `X-KM-Sender-ID: {sandbox-id}` — identifies the sender
+   - `X-KM-Signature: {base64-ed25519-signature}` — Ed25519 signature over the body
+   - `X-KM-Encrypted: true` — present only if body is encrypted
+5. Send via SES `Content.Raw` (not `Content.Simple` -- the Simple message type strips custom headers).
+
+Headers are not signed. Only the body is signed. This simplifies verification: the body is the stable content, while headers may be modified in transit by SES or email relays.
+
+### Email Verification
+
+When a sandbox receives an email with an `X-KM-Signature` header:
+
+1. Extract `X-KM-Sender-ID` to identify the sender sandbox.
+2. Fetch the sender's public key from DynamoDB (`FetchPublicKey` on `km-identities`).
+3. Call `VerifyEmailSignature(pubKeyB64, body, sigB64)`: decodes the public key and signature from base64, calls `ed25519.Verify`.
+4. If verification fails, `SignatureOK = false` is set on the message record (not treated as a hard error -- the message is still delivered but flagged).
+
+### Optional Encryption
+
+When `spec.email.encryption` is `required` or `optional`:
+
+1. The sender fetches the recipient's `encryption_public_key` from DynamoDB.
+2. Encrypts the body using `box.SealAnonymous(nil, plaintext, recipientPubKey, rand.Reader)` (NaCl box anonymous seal). The sender's identity is NOT embedded in the ciphertext -- it is carried in the `X-KM-Sender-ID` header instead.
+3. The base64-encoded ciphertext replaces the plaintext body. The `X-KM-Encrypted: true` header signals the recipient.
+4. The recipient decrypts using `box.OpenAnonymous(nil, ciphertext, pubKey, privKey)` with their X25519 private key from SSM.
+
+For `encryption: required`, if the recipient has no published encryption key, the send fails with an error. For `encryption: optional`, the message is sent in plaintext if the recipient has no key.
+
+### Profile Controls
+
+```yaml
+spec:
+  email:
+    signing:      "required"    # Sign all outbound email
+    verifyInbound: "required"   # Reject unsigned inbound email
+    encryption:   "optional"    # Encrypt if recipient has a key
+```
+
+| Field | Values | Effect |
+|-------|--------|--------|
+| `spec.email.signing` | `required`, `optional`, `off` | Controls whether outbound email is signed |
+| `spec.email.verifyInbound` | `required`, `optional`, `off` | Controls inbound signature verification policy |
+| `spec.email.encryption` | `required`, `optional`, `off` | Controls end-to-end encryption for outbound email |
+
+---
+
+## 17. Threat Model
 
 ### Scenario: Agent Sandbox Escape
 
