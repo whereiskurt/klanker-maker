@@ -266,8 +266,11 @@ func TestCompileSecretsInjection(t *testing.T) {
 	}
 }
 
+// TestCompileGitHubToken verifies the new GIT_ASKPASS behavior:
+// - SecretPaths does NOT include /km/github/app-token (removed from security.go)
+// - UserData contains km-git-askpass credential helper script
+// - UserData does NOT contain "export GITHUB_TOKEN"
 func TestCompileGitHubToken(t *testing.T) {
-	// Profile with github sourceAccess -> github token SSM path injected
 	p := loadTestProfile(t, "ec2-with-secrets.yaml")
 	id := "sb-ghtest01"
 
@@ -276,23 +279,22 @@ func TestCompileGitHubToken(t *testing.T) {
 		t.Fatalf("Compile() error = %v", err)
 	}
 
-	found := false
+	// security.go should NO LONGER inject /km/github/app-token into SecretPaths
 	for _, sp := range artifacts.SecretPaths {
 		if sp == "/km/github/app-token" {
-			found = true
-			break
+			t.Errorf("SecretPaths should NOT contain /km/github/app-token (GIT_ASKPASS reads SSM at git time); got %v", artifacts.SecretPaths)
 		}
 	}
-	if !found {
-		t.Errorf("SecretPaths missing /km/github/app-token for profile with github sourceAccess; got %v", artifacts.SecretPaths)
+
+	// UserData should inject GIT_ASKPASS credential helper, not GITHUB_TOKEN env var
+	if !strings.Contains(artifacts.UserData, "km-git-askpass") {
+		t.Errorf("UserData should contain km-git-askpass script for profile with github sourceAccess\nGot:\n%s", artifacts.UserData)
+	}
+	if !strings.Contains(artifacts.UserData, "GIT_ASKPASS") {
+		t.Errorf("UserData should export GIT_ASKPASS for profile with github sourceAccess\nGot:\n%s", artifacts.UserData)
 	}
 
-	// Also check user-data includes GITHUB_TOKEN injection
-	if !strings.Contains(artifacts.UserData, "GITHUB_TOKEN") {
-		t.Errorf("UserData should inject GITHUB_TOKEN for profile with github sourceAccess\nGot:\n%s", artifacts.UserData)
-	}
-
-	// Profile without github -> no github token
+	// Profile without github -> no GIT_ASKPASS injection
 	pNoGH := loadTestProfile(t, "ec2-basic.yaml")
 	artifactsNoGH, err := compiler.Compile(pNoGH, id, false, testNetwork())
 	if err != nil {
@@ -302,6 +304,104 @@ func TestCompileGitHubToken(t *testing.T) {
 		if sp == "/km/github/app-token" {
 			t.Errorf("SecretPaths should NOT contain /km/github/app-token for profile without github; got %v", artifactsNoGH.SecretPaths)
 		}
+	}
+}
+
+// TestGitHubUserDataGITASKPASS verifies that the GIT_ASKPASS credential helper in
+// userdata.go reads the sandbox-scoped SSM path and implements Username/Password prompts.
+func TestGitHubUserDataGITASKPASS(t *testing.T) {
+	p := loadTestProfile(t, "ec2-with-secrets.yaml")
+	id := "sb-ghaskps1"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	ud := artifacts.UserData
+
+	// km-git-askpass script must read from /sandbox/${SANDBOX_ID}/github-token
+	if !strings.Contains(ud, "/sandbox/${SANDBOX_ID}/github-token") {
+		t.Errorf("GIT_ASKPASS script should read from /sandbox/$${SANDBOX_ID}/github-token\nGot:\n%s", ud)
+	}
+	// Script must handle Username prompt (echo x-access-token)
+	if !strings.Contains(ud, "x-access-token") {
+		t.Errorf("GIT_ASKPASS script should echo x-access-token for Username prompts\nGot:\n%s", ud)
+	}
+	// Script must handle Password prompt
+	if !strings.Contains(ud, "Password") {
+		t.Errorf("GIT_ASKPASS script should handle Password prompts\nGot:\n%s", ud)
+	}
+	// SANDBOX_ID must be exported before the script uses it
+	if !strings.Contains(ud, "SANDBOX_ID") {
+		t.Errorf("UserData should set SANDBOX_ID for use in GIT_ASKPASS script\nGot:\n%s", ud)
+	}
+}
+
+// TestGitHubUserDataNoGITHUBTOKENExport verifies that the old GITHUB_TOKEN export
+// pattern is completely absent from userdata when GitHub is configured.
+func TestGitHubUserDataNoGITHUBTOKENExport(t *testing.T) {
+	p := loadTestProfile(t, "ec2-with-secrets.yaml")
+	id := "sb-noghenv1"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	if strings.Contains(artifacts.UserData, "export GITHUB_TOKEN") {
+		t.Errorf("UserData should NOT contain 'export GITHUB_TOKEN' (replaced by GIT_ASKPASS)\nGot:\n%s", artifacts.UserData)
+	}
+}
+
+// TestCompileSecretsNoGitHubAppToken verifies that compileSecrets does not inject
+// /km/github/app-token even when sourceAccess.github is configured.
+func TestCompileSecretsNoGitHubAppToken(t *testing.T) {
+	p := loadTestProfile(t, "ec2-with-secrets.yaml")
+	id := "sb-nosecgh1"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	// /km/github/app-token must NOT appear — token is per-sandbox at /sandbox/{id}/github-token
+	for _, sp := range artifacts.SecretPaths {
+		if sp == "/km/github/app-token" {
+			t.Errorf("compileSecrets should not inject /km/github/app-token; got %v", artifacts.SecretPaths)
+		}
+	}
+
+	// Profile-defined secret paths should still be present
+	defined := []string{"/km/sandboxes/my-sandbox/api-key", "/km/sandboxes/my-sandbox/db-password"}
+	for _, path := range defined {
+		found := false
+		for _, sp := range artifacts.SecretPaths {
+			if sp == path {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("SecretPaths missing profile-defined path %q; got %v", path, artifacts.SecretPaths)
+		}
+	}
+}
+
+// TestCompileSecretsNoGitHubUnchanged verifies that a profile without github
+// still produces its expected SecretPaths with no github-related entries.
+func TestCompileSecretsNoGitHubUnchanged(t *testing.T) {
+	p := loadTestProfile(t, "ec2-basic.yaml")
+	id := "sb-noghsec1"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile(no github) error = %v", err)
+	}
+
+	// ec2-basic.yaml has no allowedSecretPaths and no github -> SecretPaths empty
+	if len(artifacts.SecretPaths) != 0 {
+		t.Errorf("SecretPaths should be empty for profile with no allowedSecretPaths, got %v", artifacts.SecretPaths)
 	}
 }
 

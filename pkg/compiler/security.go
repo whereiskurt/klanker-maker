@@ -52,18 +52,15 @@ func compileIAMPolicy(p *profile.SandboxProfile) *IAMSessionPolicy {
 }
 
 // compileSecrets builds the list of SSM parameter paths to inject at boot.
-// It reads identity.allowedSecretPaths from the profile and appends
-// /km/github/app-token if sourceAccess.github is configured.
+// It reads identity.allowedSecretPaths from the profile.
+// Note: The GitHub token is NOT injected via SecretPaths — it is stored per-sandbox
+// at /sandbox/{sandbox-id}/github-token and read at git-operation time by the
+// GIT_ASKPASS credential helper script installed in section 4 of userdata.go.
 func compileSecrets(p *profile.SandboxProfile) []string {
 	var paths []string
 
 	// Add profile-defined secret paths
 	paths = append(paths, p.Spec.Identity.AllowedSecretPaths...)
-
-	// Add GitHub App token path if GitHub access is configured
-	if p.Spec.SourceAccess.GitHub != nil {
-		paths = append(paths, "/km/github/app-token")
-	}
 
 	return paths
 }

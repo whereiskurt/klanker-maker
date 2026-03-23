@@ -98,21 +98,31 @@ echo "[km-bootstrap] KM_EMAIL_ADDRESS={{ .SandboxEmail }}"
 {{- end }}
 
 # ============================================================
-# 4. GitHub token injection (if GitHub access is configured)
+# 4. GitHub credential helper: GIT_ASKPASS (if GitHub access is configured)
+# EC2 only — token fetched from per-sandbox SSM at git-operation time.
+# ECS credential helper delivery is deferred to a future phase.
 # ============================================================
 {{- if .HasGitHub }}
-echo "[km-bootstrap] Injecting GitHub App token..."
-GITHUB_TOKEN=$(aws ssm get-parameter \
-  --name "/km/github/app-token" \
+echo "[km-bootstrap] Installing GIT_ASKPASS credential helper..."
+SANDBOX_ID="{{ .SandboxID }}"
+export SANDBOX_ID
+mkdir -p /opt/km/bin
+cat > /opt/km/bin/km-git-askpass << 'ASKPASS'
+#!/bin/bash
+TOKEN=$(aws ssm get-parameter \
+  --name "/sandbox/${SANDBOX_ID}/github-token" \
   --with-decryption \
   --query "Parameter.Value" \
-  --output text 2>&1)
-if [ $? -eq 0 ]; then
-  export GITHUB_TOKEN
-  echo "[km-bootstrap] GITHUB_TOKEN injected"
-else
-  echo "[km-bootstrap] WARNING: failed to fetch GitHub App token" >&2
-fi
+  --output text 2>/dev/null || echo "")
+case "$1" in
+  *Username*) echo "x-access-token" ;;
+  *Password*) echo "$TOKEN" ;;
+  *)          echo "" ;;
+esac
+ASKPASS
+chmod +x /opt/km/bin/km-git-askpass
+export GIT_ASKPASS=/opt/km/bin/km-git-askpass
+echo "[km-bootstrap] GIT_ASKPASS credential helper installed"
 {{- end }}
 
 # ============================================================
