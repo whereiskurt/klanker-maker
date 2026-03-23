@@ -13,10 +13,15 @@
   - [km list](#km-list)
   - [km status](#km-status)
   - [km logs](#km-logs)
+  - [km doctor](#km-doctor)
+  - [km configure github](#km-configure-github)
+  - [km budget add](#km-budget-add)
 - [Walkthrough: Claude Code in a Sandbox](#walkthrough-claude-code-in-a-sandbox)
 - [Walkthrough: Goose with Budget Cap](#walkthrough-goose-with-budget-cap)
 - [Walkthrough: Security Agent in a Sealed Sandbox](#walkthrough-security-agent-in-a-sealed-sandbox)
 - [Profile Authoring Guide](#profile-authoring-guide)
+  - [Profile spec.email](#profile-specemail)
+  - [Profile sourceAccess.github](#profile-sourceaccessgithub)
 - [Lifecycle and Teardown](#lifecycle-and-teardown)
 - [Troubleshooting](#troubleshooting)
 
@@ -461,6 +466,185 @@ km logs sb-7f3a9e12 --stream network
 2026-03-22T18:16:12Z [cmd]  npm test
 2026-03-22T18:17:45Z [net]  BLOCK dns evil.example.com → NXDOMAIN
 ```
+
+---
+
+### km doctor
+
+Check platform health and bootstrap verification.
+
+```
+km doctor [--json] [--quiet]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--json` | `false` | Output results as a JSON array |
+| `--quiet` | `false` | Suppress OK and SKIPPED results; show only WARN and ERROR |
+
+**What it checks:**
+
+| Check | Description |
+|-------|-------------|
+| Config | Required config fields: domain, account IDs, SSO start URL, primary region |
+| Credentials | AWS credentials via STS `GetCallerIdentity` |
+| State Bucket | S3 state bucket exists and is accessible |
+| Budget Table | DynamoDB `km-budgets` table exists |
+| Identity Table | DynamoDB `km-identities` table exists (WARN if absent, not ERROR) |
+| KMS Key | KMS alias `km-platform` exists |
+| SCP | `km-sandbox-containment` SCP attached to the application account |
+| GitHub App Config | SSM parameters for GitHub App exist (WARN if missing — GitHub integration is optional) |
+| VPC | km-managed VPC exists in the primary region |
+| Active Sandboxes | Lists running sandboxes and reports count |
+
+All checks run in parallel. Results are sorted alphabetically and include a remediation hint for failures.
+
+**Exit codes:** 0 if all checks pass (warnings don't fail), 1 if any check returns ERROR.
+
+**Example output:**
+
+```bash
+km doctor
+```
+
+```
+✓ Active Sandboxes                    total=2 (running=2)
+✓ Budget Table (km-budgets)           table "km-budgets" exists
+✓ Config                              domain=klankermaker.ai region=us-east-1
+✓ Credentials (klanker-terraform)     authenticated as arn:aws:iam::333333333333:role/...
+⚠ GitHub App Config                   parameter not found — GitHub integration not configured
+  → Run 'km configure github' to set up GitHub App integration
+✓ KMS Key (km-platform)               key "alias/km-platform" exists
+✓ SCP (Sandbox Containment)           policy "km-sandbox-containment" attached to account 333333333333
+✓ State Bucket                        bucket "tf-km-state-use1" is accessible
+✓ VPC (us-east-1)                     found 1 km-managed VPC(s) in us-east-1
+
+9 checks passed, 1 warnings, 0 errors
+```
+
+**JSON output:**
+
+```bash
+km doctor --json | jq '.[] | select(.status != "OK")'
+```
+
+**CI usage (exit code only):**
+
+```bash
+km doctor --quiet && echo "healthy" || echo "issues found"
+```
+
+---
+
+### km configure github
+
+Configure GitHub App credentials for sandbox source-access tokens. Credentials are stored in SSM Parameter Store and read at `km create` time to provision the per-sandbox token refresh Lambda.
+
+```
+km configure github [--setup] [--non-interactive] [--app-client-id <id>] [--private-key-file <path>] [--installation-id <id>] [--force]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--setup` | `false` | One-click GitHub App creation via manifest flow (opens browser) |
+| `--non-interactive` | `false` | Skip interactive prompts; use flag values directly |
+| `--app-client-id` | `""` | GitHub App client ID (e.g. `Iv1.abc123`) |
+| `--private-key-file` | `""` | Path to the GitHub App private key PEM file |
+| `--installation-id` | `""` | GitHub App installation ID for the target org/user |
+| `--force` | `false` | Overwrite existing SSM parameters |
+
+**Automated setup (recommended):**
+
+```bash
+km configure github --setup
+```
+
+Opens your browser to the GitHub App creation page, waits for the OAuth callback, exchanges the manifest code for credentials, and writes them to SSM automatically. If the browser does not open, copy the printed URL manually.
+
+After App creation, if no installation is found, install the App on your org and then run:
+
+```bash
+km configure github --installation-id <ID>
+```
+
+**Manual flow:**
+
+```bash
+# Interactive (prompts for each value)
+km configure github
+
+# Non-interactive (for CI or scripts)
+km configure github \
+  --non-interactive \
+  --app-client-id "Iv1.abc123" \
+  --private-key-file /path/to/private-key.pem \
+  --installation-id 12345678
+```
+
+**SSM parameters written:**
+
+| Parameter | Type | Contents |
+|-----------|------|----------|
+| `/km/config/github/app-client-id` | String | GitHub App client ID |
+| `/km/config/github/private-key` | SecureString | PEM-encoded RSA private key |
+| `/km/config/github/installation-id` | String | Installation ID |
+
+These parameters are required before `km create` can provision sandboxes with `sourceAccess.github` profiles.
+
+---
+
+### km budget add
+
+Add budget to a sandbox and auto-resume it if suspended.
+
+```
+km budget add <sandbox-id> [--compute <amount>] [--ai <amount>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--compute` | `0` | Amount in USD to add to the compute budget limit |
+| `--ai` | `0` | Amount in USD to add to the AI budget limit |
+
+**Example:**
+
+```bash
+# Top up $5 compute and $3 AI
+km budget add sb-7f3a9e12 --compute 5.00 --ai 3.00
+```
+
+**Output:**
+
+```
+Budget updated: compute $2.00/$7.00, AI $4.80/$7.80
+Sandbox sb-7f3a9e12 resumed.
+```
+
+**What it does:**
+
+1. Reads current budget limits from DynamoDB (`km-budgets` table)
+2. Adds the top-up amounts to current limits (additive — not a replacement)
+3. Writes the new limits back to DynamoDB
+4. Auto-resumes the sandbox:
+   - **EC2**: starts stopped instances via `StartInstances`
+   - **ECS**: re-provisions the Fargate task using the stored profile YAML from S3
+5. Restores the `AmazonBedrockFullAccess` IAM policy if the budget enforcer detached it
+
+**Budget states visible in km status:**
+
+```
+Sandbox ID:  sb-7f3a9e12
+...
+Budget:
+  Compute:  $2.00 / $7.00  (29%)
+  AI:       $4.80 / $7.80  (62%)
+    claude-3-5-sonnet:  $3.20
+    claude-3-haiku:     $1.60
+```
+
+When compute spend reaches 80% of the limit, a warning email is sent (if `KM_OPERATOR_EMAIL` is set). At 100%, the EC2 instance is stopped or the ECS task is stopped. The sandbox is not destroyed — use `km budget add` to resume.
+
+When AI spend (tracked by the http-proxy MITM) reaches 100%, the Bedrock IAM policy is detached from the sandbox role, causing API calls to return 403. `km budget add` re-attaches it.
 
 ---
 
@@ -960,6 +1144,96 @@ spec:
 | `observability` | No | Command and network log destinations |
 | `agent` | No | Concurrent tasks, timeout, allowed tools |
 | `artifacts` | No | Paths to collect on exit, max size, replication region |
+
+---
+
+### Profile spec.email
+
+`spec.email` controls sandbox email behavior — signed outbound email, verified inbound email, and encrypted messages for inter-sandbox communication.
+
+```yaml
+spec:
+  email:
+    # Enable Ed25519 signing of all outbound emails
+    signing: true
+
+    # Verify Ed25519 signatures on inbound emails (discard unsigned)
+    verifyInbound: true
+
+    # Enable NaCl encryption for outbound emails to known sandbox recipients
+    encryption: false
+
+    # Human-friendly alias (e.g. "agent-1" → agent-1@sandboxes.klankermaker.ai)
+    alias: "agent-1"
+
+    # Only accept email from these sender addresses
+    allowedSenders:
+      - "sb-a1b2c3d4@sandboxes.klankermaker.ai"
+      - "ops@klankermaker.ai"
+```
+
+**Fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `signing` | boolean | `false` | Signs outbound email body with the sandbox Ed25519 private key. Adds `X-KM-Signature` and `X-KM-Sender-ID` headers |
+| `verifyInbound` | boolean | `false` | Verifies `X-KM-Signature` on inbound email. Messages with invalid or missing signatures are discarded |
+| `encryption` | boolean | `false` | Encrypts outbound email bodies using NaCl `box.SealAnonymous` for recipients whose public key is in the `km-identities` table |
+| `alias` | string | `""` | Human-friendly alias. Must be lowercase dot-notation (e.g. `my-agent`). Resolved to `{alias}@sandboxes.klankermaker.ai`. Stored in the `km-identities` GSI for lookup |
+| `allowedSenders` | list | `[]` | When non-empty, only emails from listed addresses are delivered. Acts as an allowlist on the SES receipt rule |
+
+**How signing works:** The sandbox Ed25519 private key is stored encrypted in KMS. When sending email, the signing sidecar calls KMS to decrypt the key, signs the message body, and adds `X-KM-Signature: {base64}` and `X-KM-Sender-ID: {sandbox-id}` to the headers. The recipient retrieves the sender's public key from `km-identities` by `sandbox_id` (or alias) to verify.
+
+**How encryption works:** NaCl `box.SealAnonymous` is used — the sender does not need a private key for encryption, only the recipient's public key from `km-identities`. The sender's identity is carried in `X-KM-Sender-ID`, not the ciphertext. SES `Content.Raw` is used for sending (not `Content.Simple`) to preserve custom headers through the SES delivery pipeline.
+
+See [Multi-Agent Email](multi-agent-email.md) for the full protocol, SES receipt rules, and multi-sandbox orchestration patterns.
+
+---
+
+### Profile sourceAccess.github
+
+`sourceAccess.github` gives sandboxes access to private GitHub repositories using short-lived GitHub App installation tokens. No long-lived credentials are stored in the sandbox.
+
+```yaml
+spec:
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "github.com/mycompany/api-service"
+        - "github.com/mycompany/*"
+      allowedRefs:
+        - "main"
+        - "feature/*"
+      permissions:
+        - read
+        - write
+```
+
+**Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mode` | `allowlist` | Must be `allowlist` — sandboxes only get access to explicitly listed repos |
+| `github.allowedRepos` | list | Repository patterns the sandbox can access. Supports `*` wildcard within an org |
+| `github.allowedRefs` | list | Branch/tag patterns the sandbox can push to |
+| `github.permissions` | list | `read` (clone), `write` (push), or both |
+
+**How it works:**
+
+When `km create` runs with a profile that has `sourceAccess.github`, it provisions:
+
+1. A per-sandbox Lambda (`km-github-token-refresher-{sandbox-id}`) that generates a GitHub App installation token scoped to `allowedRepos` and `permissions`
+2. An EventBridge Scheduler schedule that fires the Lambda every 45 minutes
+3. An SSM SecureString parameter at `/sandbox/{sandbox-id}/github-token` (KMS-encrypted) that holds the current token
+
+Inside the sandbox, `GIT_ASKPASS` is set to a helper script that reads the token from SSM at git time. The token is never exposed in environment variables or process listings.
+
+**Prerequisites:** `km configure github` must be run first to store the GitHub App credentials in SSM. See the [km configure github](#km-configure-github) section.
+
+**Token scoping:** The installation token is generated via `POST /app/installations/{id}/access_tokens` with a `repositories` body scoped to the sandbox's `allowedRepos`. GitHub enforces repo scope at the API level — the token cannot access repos outside the allowlist even if the installation covers more repos.
+
+**Cleanup:** The token refresh Lambda and EventBridge schedule are destroyed when the sandbox is destroyed.
 
 ---
 

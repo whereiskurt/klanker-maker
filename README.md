@@ -429,12 +429,23 @@ km destroy sb-a1b2c3d4
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Schema, Compiler & AWS Foundation | In Progress |
+| 1 | Schema, Compiler & AWS Foundation | **Complete** |
 | 2 | Core Provisioning & Security Baseline | **Complete** |
-| 3 | Sidecar Enforcement & Lifecycle Management | In Progress |
-| 4 | Lifecycle Hardening, Artifacts & Email | In Progress |
-| 5 | ConfigUI Web Dashboard | In Progress |
-| 6 | Budget Enforcement & Platform Configuration | Planned |
+| 3 | Sidecar Enforcement & Lifecycle Management | **Complete** |
+| 4 | Lifecycle Hardening, Artifacts & Email | **Complete** |
+| 5 | ConfigUI Web Dashboard | **Complete** |
+| 6 | Budget Enforcement & Platform Configuration | **Complete** |
+| 7 | Unwired Code Paths | **Complete** |
+| 8 | Sidecar Build & Deployment Pipeline | **Complete** |
+| 9 | Live Infrastructure & Operator Docs | **Complete** |
+| 10 | SCP Sandbox Containment | **Complete** |
+| 11 | Sandbox Auto-Destroy & Metadata Wiring | **Complete** |
+| 12 | ECS Budget Top-Up & S3 Replication | **Complete** |
+| 13 | GitHub App Token Integration | **Complete** |
+| 14 | Sandbox Identity & Signed Email | **Complete** |
+| 15 | km doctor — Platform Health Check | **Complete** |
+| 16 | Documentation Refresh (Phases 6-15) | In Progress |
+| 17 | Sandbox Email Mailbox & Access Control | Planned |
 
 See [.planning/ROADMAP.md](.planning/ROADMAP.md) for detailed phase breakdowns and success criteria.
 
