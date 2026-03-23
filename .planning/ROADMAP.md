@@ -360,7 +360,7 @@ Plans:
 - After manifest exchange, automatically runs `km configure github` logic to store credentials in SSM — no manual copy-paste of App ID or PEM files
 
 **Depends on:** Phase 6 (config/bootstrap patterns), Phase 10 (SCP), Phase 13 (GitHub App config), Phase 14 (identity table)
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 15-01-PLAN.md — km doctor command with parallel platform health checks, colored output, JSON/quiet modes
