@@ -406,7 +406,7 @@ Plans:
 - All docs reviewed for stale references to old paths (e.g., `infra/live/sandboxes/_template/` → `infra/templates/sandbox/`)
 
 **Depends on:** Phase 15 (all features must be implemented before documenting)
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 - [ ] 16-01-PLAN.md — Operator guide, user manual, and README updates
