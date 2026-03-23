@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 16-02-PLAN.md
-last_updated: "2026-03-23T05:42:53.709Z"
+stopped_at: Completed 16-01-PLAN.md
+last_updated: "2026-03-23T05:43:51.974Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 17
-  completed_phases: 16
+  completed_phases: 17
   total_plans: 62
-  completed_plans: 61
+  completed_plans: 62
   percent: 0
 ---
 
@@ -110,6 +110,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 17-sandbox-email-mailbox-access-control-aliases-allow-lists-self-mail-s3-reader P03 | 184s | 2 tasks | 3 files |
 | Phase 16-documentation-refresh-operator-guide-user-manual-and-docs-for-phases-6-15-features P03 | 133s | 2 tasks | 2 files |
 | Phase 16 P02 | 3min | 2 tasks | 2 files |
+| Phase 16-documentation-refresh P01 | 12min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -280,6 +281,8 @@ Recent decisions affecting current work:
 - [Phase 16]: km-ecs-task-* not carved out from DenyInstanceMutation SCP — task role is the sandbox workload, must stay contained
 - [Phase 16]: GitHub App tokens stored at /sandbox/{sandbox-id}/github-token, read by GIT_ASKPASS at git time not at boot
 - [Phase 16]: Ed25519 signs body only (not headers) — simpler verification, headers may change in SES transit
+- [Phase 16-01]: Operator guide sections 11-17 added sequentially after existing section 10 for Phase 6-15 features
+- [Phase 16-01]: User manual new command sections placed before walkthroughs; profile sections as subsections of Profile Authoring Guide
 
 ### Roadmap Evolution
 
@@ -304,6 +307,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T05:42:53.705Z
-Stopped at: Completed 16-02-PLAN.md
+Last session: 2026-03-23T05:43:51.971Z
+Stopped at: Completed 16-01-PLAN.md
 Resume file: None
