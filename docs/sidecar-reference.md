@@ -5,6 +5,17 @@ collect audit telemetry, and export traces. On EC2 they run as systemd
 services. On ECS Fargate they run as sidecar containers in the task
 definition sharing the `awsvpc` network namespace with the main container.
 
+## Table of Contents
+
+1. [DNS Proxy](#1-dns-proxy)
+2. [HTTP Proxy](#2-http-proxy)
+3. [Audit Log](#3-audit-log)
+4. [Tracing](#4-tracing)
+5. [Build and Deployment Pipeline](#5-build-and-deployment-pipeline)
+6. [iptables DNAT on EC2](#iptables-dnat-on-ec2)
+7. [Container Dependency Ordering on ECS](#container-dependency-ordering-on-ecs)
+8. [Debugging Blocked Requests](#debugging-blocked-requests)
+
 ---
 
 ## 1. DNS Proxy
@@ -317,6 +328,155 @@ Runs as a standalone `otelcol-contrib` process with the config file at
 OTel sidecar container in the task definition. Shares the network namespace
 with the main container so workloads can send traces to `localhost:4317`
 (gRPC) or `localhost:4318` (HTTP).
+
+---
+
+## 5. Build and Deployment Pipeline
+
+Sidecars are distributed in two forms depending on the sandbox substrate:
+
+- **EC2**: Pre-compiled Go binaries delivered via S3 and installed as systemd services.
+- **ECS Fargate**: Docker images pushed to ECR and referenced in the ECS task definition.
+
+The `Makefile` at the repository root drives both pipelines.
+
+---
+
+### Build Pipeline (`make sidecars`)
+
+`make sidecars` cross-compiles the three Go sidecar binaries for `linux/amd64` and uploads them to S3. It also uploads the tracing OTel collector config file.
+
+```bash
+# KM_ARTIFACTS_BUCKET must be set in your environment
+export KM_ARTIFACTS_BUCKET=km-sandbox-artifacts-ea554771
+
+make sidecars
+```
+
+**What it builds:**
+
+| Sidecar | Source | Output |
+|---------|--------|--------|
+| `dns-proxy` | `./sidecars/dns-proxy/` | `build/dns-proxy` |
+| `http-proxy` | `./sidecars/http-proxy/` | `build/http-proxy` |
+| `audit-log` | `./sidecars/audit-log/cmd/` | `build/audit-log` |
+| `tracing` | `sidecars/tracing/config.yaml` | config file only (not a Go binary — see below) |
+
+**What it uploads to S3:**
+
+```
+s3://{KM_ARTIFACTS_BUCKET}/sidecars/dns-proxy
+s3://{KM_ARTIFACTS_BUCKET}/sidecars/http-proxy
+s3://{KM_ARTIFACTS_BUCKET}/sidecars/audit-log
+s3://{KM_ARTIFACTS_BUCKET}/sidecars/tracing/config.yaml
+```
+
+**Local-only build (no S3 upload):**
+
+```bash
+make build-sidecars
+```
+
+Produces the same binaries in `build/` without requiring AWS credentials or `KM_ARTIFACTS_BUCKET`.
+
+---
+
+### Build Context Notes
+
+**`audit-log`** — The Dockerfile builds from `./sidecars/audit-log/cmd/`, not the package root. The `sidecars/audit-log/` directory is a Go library package (`package auditlog`); the `cmd/` subdirectory holds `package main`. Go prohibits two packages in the same directory, so `cmd/` separates the library from the binary entry point.
+
+```dockerfile
+# sidecars/audit-log/Dockerfile
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /sidecar ./sidecars/audit-log/cmd/
+```
+
+**`dns-proxy` and `http-proxy`** — Follow the same `cmd/` library-separation pattern. Each sidecar has a `dnsproxy/` or `httpproxy/` subdirectory for the library code and a `main.go` at the sidecar root for the binary entry point.
+
+**`tracing`** — Not a Go binary. The tracing sidecar runs `otelcol-contrib` (the OpenTelemetry Collector Contrib distribution) with a custom YAML configuration. There is no Go compilation step for tracing.
+
+---
+
+### Docker Images for ECS (`make ecr-push`)
+
+`make ecr-push` builds Docker images for all four sidecars and pushes them to ECR in the application account. It depends on `ecr-login` (authenticates Docker to ECR) and `ecr-repos` (ensures the repositories exist).
+
+```bash
+# KM_ACCOUNTS_APPLICATION and AWS_DEFAULT_REGION must be set
+make ecr-push
+```
+
+**ECR URI pattern:**
+
+```
+{application-account-id}.dkr.ecr.{region}.amazonaws.com/km-{sidecar-name}:{version}
+```
+
+**Repository names:**
+
+| Sidecar | ECR Repository |
+|---------|----------------|
+| dns-proxy | `km-dns-proxy` |
+| http-proxy | `km-http-proxy` |
+| audit-log | `km-audit-log` |
+| tracing | `km-tracing` |
+
+**Image versioning:**
+
+`KM_SIDECAR_VERSION` controls the Docker tag. When unset it defaults to `latest`. The deploy pipeline always sets an explicit tag (e.g., a Git SHA or semantic version). Local development can omit the variable and use `latest`.
+
+```bash
+# Deploy pipeline: set explicit version
+KM_SIDECAR_VERSION=v1.2.0 make ecr-push
+
+# Local dev: omit for 'latest'
+make ecr-push
+```
+
+**Tracing build context:**
+
+The tracing `ecr-push` target uses `sidecars/tracing/` as its Docker build context, not the repo root. This is correct: the tracing Dockerfile only copies `config.yaml` from its own directory and has no dependency on Go source or shared packages.
+
+```dockerfile
+# sidecars/tracing/Dockerfile
+FROM otel/opentelemetry-collector-contrib:latest
+COPY config.yaml /etc/otelcol-contrib/config.yaml
+```
+
+Compare with Go sidecar Dockerfiles (e.g., `dns-proxy`), which use the repo root as build context to access `go.mod`, `go.sum`, and all shared packages.
+
+---
+
+### PLACEHOLDER_ECR Prefix
+
+When the compiler generates ECS task definition HCL and `KM_ACCOUNTS_APPLICATION` is unset (for example, during local development or CI without AWS credentials), the ECR URI is prefixed with `PLACEHOLDER_ECR/`:
+
+```hcl
+# Example compiler output when KM_ACCOUNTS_APPLICATION is unset
+container_image = "PLACEHOLDER_ECR/km-dns-proxy:latest"
+```
+
+This produces valid, parseable HCL that is visually distinguishable from a real ECR URI. It is not a special-cased string — the runtime would fail to pull the image, making the misconfiguration obvious at deploy time.
+
+---
+
+### S3 Binary Delivery for EC2
+
+EC2 sandboxes receive sidecar binaries as pre-compiled static files downloaded from S3 during instance startup. There is no Docker daemon on EC2 sandbox instances.
+
+**Delivery flow:**
+
+1. `make sidecars` uploads compiled binaries to `s3://{artifacts-bucket}/sidecars/`.
+2. EC2 instance user-data (bootstrap script) downloads binaries on first boot:
+   ```bash
+   aws s3 cp s3://${KM_ARTIFACTS_BUCKET}/sidecars/dns-proxy  /usr/local/bin/km-dns-proxy
+   aws s3 cp s3://${KM_ARTIFACTS_BUCKET}/sidecars/http-proxy /usr/local/bin/km-http-proxy
+   aws s3 cp s3://${KM_ARTIFACTS_BUCKET}/sidecars/audit-log  /usr/local/bin/km-audit-log
+   aws s3 cp s3://${KM_ARTIFACTS_BUCKET}/sidecars/tracing/config.yaml /etc/km/tracing/config.yaml
+   chmod +x /usr/local/bin/km-dns-proxy /usr/local/bin/km-http-proxy /usr/local/bin/km-audit-log
+   ```
+3. Systemd unit files start each sidecar as a managed service.
+
+**Contrast with ECS:** On ECS Fargate, sidecars are Docker containers defined in the task definition. The ECS scheduler pulls images from ECR automatically — no S3 binary download or systemd unit files are needed.
 
 ---
 
