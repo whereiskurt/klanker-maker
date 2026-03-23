@@ -165,7 +165,7 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 		}
 		fmt.Fprintln(w)
 
-		fmt.Fprintln(w, "Run 'km bootstrap' (without --dry-run) to provision. [Not yet implemented]")
+		fmt.Fprintln(w, "Run 'km bootstrap --dry-run=false' to provision.")
 		return nil
 	}
 
