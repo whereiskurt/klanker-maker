@@ -270,5 +270,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8. Sidecar Build & Deployment Pipeline | 2/2 | Complete   | 2026-03-22 |
 | 9. Live Infrastructure & Operator Docs | 4/4 | Complete   | 2026-03-23 |
 | 10. SCP Sandbox Containment | 2/2 | Complete    | 2026-03-23 |
-| 11. Sandbox Auto-Destroy & Metadata Wiring | 2/2 | Complete   | 2026-03-23 |
+| 11. Sandbox Auto-Destroy & Metadata Wiring | 2/2 | Complete    | 2026-03-23 |
 | 12. ECS Budget Top-Up & S3 Replication | 0/0 | Planned   | — |
