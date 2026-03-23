@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 12-02-PLAN.md
-last_updated: "2026-03-23T02:33:11.514Z"
+stopped_at: Completed 12-01-PLAN.md
+last_updated: "2026-03-23T02:36:13.017Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 14
-  completed_phases: 11
-  total_plans: 50
-  completed_plans: 45
+  completed_phases: 12
+  total_plans: 53
+  completed_plans: 46
   percent: 0
 ---
 
@@ -94,6 +94,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 11-sandbox-auto-destroy-metadata-wiring P01 | 185s | 1 tasks | 6 files |
 | Phase 11-sandbox-auto-destroy-metadata-wiring P02 | 406s | 2 tasks | 12 files |
 | Phase 12-ecs-budget-topup-s3-replication P02 | 61s | 1 tasks | 1 files |
+| Phase 12-ecs-budget-topup-s3-replication P01 | 216s | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -222,6 +223,8 @@ Recent decisions affecting current work:
 - [Phase 11-02]: EventBridge publish in idle sidecar is best-effort — failure logged but sidecar still exits via cancel()
 - [Phase 12-02]: generate 'provider' block must use same name as root to overwrite root provider.tf via overwrite_terragrunt — misname causes duplicate provider blocks
 - [Phase 12-02]: Replica region read from KM_REPLICA_REGION env var (default us-west-2); no dependency block since source bucket is pre-existing
+- [Phase 12-01]: reprovisionECSSandbox uses existing sandboxID — never generates new; source-level verification pattern for non-DI-injectable functions
+- [Phase 12-01]: ArtifactsBucket and AWSProfile added to Config struct (KM_ARTIFACTS_BUCKET, KM_AWS_PROFILE env vars) for ECS budget top-up path
 
 ### Roadmap Evolution
 
@@ -243,6 +246,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T02:33:11.511Z
-Stopped at: Completed 12-02-PLAN.md
+Last session: 2026-03-23T02:36:13.015Z
+Stopped at: Completed 12-01-PLAN.md
 Resume file: None
