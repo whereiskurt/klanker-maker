@@ -428,9 +428,8 @@ Plans:
 - Mailbox reader handles both signed/encrypted and plaintext messages gracefully
 - `km status` displays alias (if set) and allow-list summary alongside existing identity fields
 - Built-in profile defaults: hardened/sealed get restrictive allow-lists (`self` only), open-dev/restricted-dev get `"*"` (any sandbox)
-- GitHub App permission refinement: tighten manifest from `contents: write` to `contents: read` + `pull_requests: write` — sandboxes should create PRs and feature branches, not push directly to protected branches. Branch protection rules enforce review requirements regardless, but least-privilege permissions are the first layer. Update `BuildManifestJSON()` in `configure_github.go` and the `spec.sourceAccess.github.permissions` schema to reflect the narrower scope
 
-**Depends on:** Phase 4 (SES email/S3 storage), Phase 14 (identity/signing infrastructure), Phase 13 (GitHub App — permission refinement)
+**Depends on:** Phase 4 (SES email/S3 storage), Phase 14 (identity/signing infrastructure)
 **Plans:** 3 plans
 
 Plans:
