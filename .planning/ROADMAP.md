@@ -329,7 +329,7 @@ Plans:
 - Open-dev and restricted-dev profiles default to `signing: optional, verifyInbound: optional`
 
 **Depends on:** Phase 4 (SES email infrastructure), Phase 6 (SSM/KMS/DynamoDB patterns)
-**Plans:** 4 plans (3 complete + 1 gap closure)
+**Plans:** 4/4 plans complete
 
 Plans:
 - [ ] 14-01-PLAN.md — EmailSpec schema + DynamoDB identities module + config + built-in profile defaults (IDENT-SCHEMA, IDENT-DYNAMO, IDENT-CONFIG)

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 14-03-PLAN.md
-last_updated: "2026-03-23T04:02:12.531Z"
+stopped_at: Completed 14-04-PLAN.md
+last_updated: "2026-03-23T04:23:55.270Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 15
   completed_phases: 14
-  total_plans: 55
-  completed_plans: 53
+  total_plans: 56
+  completed_plans: 54
   percent: 0
 ---
 
@@ -102,6 +102,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust P01 | 31540187 | 2 tasks | 14 files |
 | Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust P02 | 5min | 2 tasks | 4 files |
 | Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust P03 | 365 | 2 tasks | 5 files |
+| Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust P04 | 4min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -250,6 +251,8 @@ Recent decisions affecting current work:
 - [Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust]: box.SealAnonymous / box.OpenAnonymous for NaCl encryption — sender identity in X-KM-Sender-ID header, not ciphertext
 - [Phase 14]: KMS alias for identity keys uses KM_PLATFORM_KMS_KEY_ARN env var with alias/km-platform fallback — same as GitHub token Step 13a; cfg.Label/cfg.Region do not exist on Config
 - [Phase 14]: NewStatusCmdWithFetchers delegates to NewStatusCmdWithAllFetchers(nil) — backward-compatible extension for identity DI; IdentityFetcher is 4th parameter
+- [Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust]: Conditionally add policy DynamoDB attributes only when non-empty — empty string means 'not specified'; omitted attrs preserve legacy row compatibility without schema migration
+- [Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust]: Display 'unknown' when IdentityRecord policy field is empty string in km status — signals field exists but was not set at provisioning time (legacy sandbox)
 
 ### Roadmap Evolution
 
@@ -272,6 +275,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T04:02:12.528Z
-Stopped at: Completed 14-03-PLAN.md
+Last session: 2026-03-23T04:23:55.268Z
+Stopped at: Completed 14-04-PLAN.md
 Resume file: None
