@@ -261,7 +261,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -277,6 +277,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 10. SCP Sandbox Containment | 2/2 | Complete    | 2026-03-23 |
 | 11. Sandbox Auto-Destroy & Metadata Wiring | 2/2 | Complete    | 2026-03-23 |
 | 12. ECS Budget Top-Up & S3 Replication | 2/2 | Complete    | 2026-03-23 |
+| 13. GitHub App Token Integration | 0/4 | Planned | — |
 
 ### Phase 13: GitHub App Token Integration — scoped repo access for sandboxes
 
@@ -298,10 +299,13 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 - Token audit: Lambda logs token generation events to CloudWatch with repo scope and sandbox ID
 
 **Depends on:** Phase 6 (SSM/KMS patterns), Phase 10 (SCP must allow github-token-refresher Lambda through)
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 13 to break down)
+- [ ] 13-01-PLAN.md — pkg/github/ core library: JWT generation, token exchange, permission mapping (TDD) (GH-03, GH-08, GH-13)
+- [ ] 13-02-PLAN.md — github-token Terraform module + SCP carve-out + Makefile build target (GH-06, GH-07, GH-10, GH-13)
+- [ ] 13-03-PLAN.md — Compiler: GIT_ASKPASS credential helper + github_token_inputs in service.hcl (GH-02, GH-04, GH-05, GH-11, GH-12)
+- [ ] 13-04-PLAN.md — CLI: km configure github + create/destroy token wiring (GH-01, GH-03, GH-05, GH-09)
 
 ### Phase 14: Sandbox Identity & Signed Email — Ed25519 key pairs for inter-sandbox trust
 
