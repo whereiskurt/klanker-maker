@@ -277,7 +277,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 10. SCP Sandbox Containment | 2/2 | Complete    | 2026-03-23 |
 | 11. Sandbox Auto-Destroy & Metadata Wiring | 2/2 | Complete    | 2026-03-23 |
 | 12. ECS Budget Top-Up & S3 Replication | 2/2 | Complete    | 2026-03-23 |
-| 13. GitHub App Token Integration | 2/4 | In Progress|  |
+| 13. GitHub App Token Integration | 3/4 | In Progress|  |
 
 ### Phase 13: GitHub App Token Integration — scoped repo access for sandboxes
 
@@ -299,7 +299,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 - Token audit: Lambda logs token generation events to CloudWatch with repo scope and sandbox ID
 
 **Depends on:** Phase 6 (SSM/KMS patterns), Phase 10 (SCP must allow github-token-refresher Lambda through)
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 
 Plans:
 - [ ] 13-01-PLAN.md — pkg/github/ core library: JWT generation, token exchange, permission mapping (TDD) (GH-03, GH-08, GH-13)
@@ -338,7 +338,7 @@ Plans:
 
 ### Phase 15: km doctor — platform health check and bootstrap verification
 
-**Goal:** `km doctor` command that validates the entire platform setup — config, AWS credentials, bootstrap resources, per-region infrastructure, and active sandboxes — and outputs a structured health report with actionable remediation for any issues found.
+**Goal:** `km doctor` command that validates the entire platform setup — config, AWS credentials, bootstrap resources, per-region infrastructure, and active sandboxes — and outputs a structured health report with actionable remediation for any issues found. Also includes `km configure github --setup` manifest flow for one-click GitHub App creation.
 
 **Requirements:**
 - `km doctor` Cobra command in `internal/app/cmd/doctor.go` with colored terminal output (✓/✗/⚠ symbols)
@@ -354,6 +354,10 @@ Plans:
 - `--quiet` flag that only shows failures and warnings (skip passing checks)
 - Each check is independent and non-fatal — a failed AWS call for one check doesn't prevent other checks from running
 - Checks run in parallel where possible (credential checks, region checks) for speed
+- `km configure github --setup` manifest flow: generates GitHub App manifest JSON (permissions: `contents: write`, no webhook), opens browser to `https://github.com/settings/apps/new?manifest=...`, operator clicks "Create GitHub App", exchanges temporary code for App credentials via `POST /app-manifests/{code}/conversions`, stores App ID + private key + installation ID in SSM automatically
+- Manifest flow pre-fills: app name (`klanker-maker-sandbox`), permissions (`contents: read/write`), no webhook URL, no events — minimal App with exactly what sandboxes need
+- After manifest exchange, automatically runs `km configure github` logic to store credentials in SSM — no manual copy-paste of App ID or PEM files
+- `km doctor` reports GitHub App status including installation scope (which org, how many repos accessible)
 
 **Depends on:** Phase 6 (config/bootstrap patterns), Phase 10 (SCP), Phase 13 (GitHub App config), Phase 14 (identity table)
 **Plans:** 0 plans
