@@ -297,3 +297,30 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 13 to break down)
+
+### Phase 14: Sandbox Identity & Signed Email — Ed25519 key pairs for inter-sandbox trust
+
+**Goal:** Every sandbox gets an Ed25519 key pair at creation. Private key stored in SSM (KMS-encrypted), public key published to a DynamoDB `km-identities` table. Outbound emails are digitally signed, inbound emails can require signature verification, and encryption is optionally layered on via X25519 key exchange. Profile controls (`email.signing`, `email.verifyInbound`, `email.encryption`) govern behavior per sandbox.
+
+**Requirements:**
+- `km create` generates Ed25519 key pair via Go `crypto/ed25519` stdlib — no external dependencies for signing
+- Private key stored in SSM Parameter Store at `/sandbox/{sandbox-id}/signing-key`, encrypted with per-sandbox KMS key
+- Public key published to DynamoDB `km-identities` table: `{ sandbox_id, public_key (base64), created_at, email_address }`
+- `km-identities` table provisioned alongside `km-budgets` in bootstrap or init (same DynamoDB global table replication pattern)
+- Outbound email signing: sandbox reads private key from SSM, signs email body with Ed25519, attaches `X-KM-Signature` and `X-KM-Sender-ID` headers
+- Inbound email verification: receiving sandbox fetches sender's public key from `km-identities` DynamoDB, calls `ed25519.Verify()`
+- Profile schema additions under `spec.email`: `signing` (required|optional|off), `verifyInbound` (required|optional|off), `encryption` (required|optional|off)
+- When `verifyInbound: required`, unsigned or invalid-signature emails are rejected (not delivered to sandbox inbox)
+- Optional encryption via `golang.org/x/crypto/nacl/box` — Ed25519 keys converted to X25519 for key exchange, NaCl box for authenticated encryption
+- When `encryption: optional`, encrypt if recipient's public key exists in DynamoDB, send plaintext if not
+- When `encryption: required`, reject send if recipient has no published public key
+- `km status` displays public key, signing policy, and encryption policy alongside email address and budget
+- `km destroy` cleans up: SSM signing key parameter + DynamoDB `km-identities` row (same cleanup patterns as budget)
+- Hardened and sealed built-in profiles default to `signing: required, verifyInbound: required`
+- Open-dev and restricted-dev profiles default to `signing: optional, verifyInbound: optional`
+
+**Depends on:** Phase 4 (SES email infrastructure), Phase 6 (SSM/KMS/DynamoDB patterns)
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 14 to break down)
