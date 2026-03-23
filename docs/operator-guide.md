@@ -616,7 +616,7 @@ The init command:
 
 1. Creates the region directory structure: `infra/live/<region-label>/network/` and `infra/live/<region-label>/sandboxes/`
 2. Writes `region.hcl` with the region label and full region name
-3. Copies the network Terragrunt template from `infra/templates/network.terragrunt.hcl`
+3. Copies the network Terragrunt template from `infra/templates/network/`
 4. Runs `terragrunt apply` against the `network/v1.0.0` module
 5. Saves outputs to `infra/live/<region-label>/network/outputs.json`
 
@@ -866,3 +866,532 @@ When deploying additional regions, consider whether you need:
 - **Bidirectional replication** (both directions) — two module instances, one per direction
 
 SES is region-specific. If you need email in a new region, deploy the SES module there too and verify the domain in that region.
+
+---
+
+## 11. km bootstrap
+
+`km bootstrap` validates your platform configuration and provisions the shared bootstrap infrastructure: Terraform state backend, DynamoDB tables, KMS key, and the SCP containment policy. Run it once after `km configure` and before `km init`.
+
+```bash
+# Dry run (default) — shows what would be created without making changes
+km bootstrap
+
+# Provision for real — requires management account credentials for SCP deployment
+km bootstrap --dry-run=false
+```
+
+### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dry-run` | `true` | Print planned resources without making any AWS API calls |
+
+### Prerequisite
+
+`km bootstrap` requires a `km-config.yaml` file (in the current directory or the repo root). Create it with `km configure` first:
+
+```bash
+km configure
+# Set domain, primary region, management/terraform/application account IDs, SSO start URL
+```
+
+### What it provisions
+
+**Dry run output:**
+
+```
+Config: /path/to/km-config.yaml
+Domain:  klankermaker.ai
+Region:  us-east-1
+Management account: 111111111111
+Application account: 333333333333
+
+Dry run — the following infrastructure would be created:
+
+  S3 bucket:         km-terraform-state-<hash>
+    Purpose:         Terraform state and sandbox metadata
+    Encryption:      aws:kms (KMS key below)
+    Versioning:      enabled
+
+  DynamoDB table:    km-terraform-lock
+    Purpose:         Terraform state locking
+    Billing:         PAY_PER_REQUEST
+
+  KMS key:           km-terraform-state
+    Purpose:         S3 state bucket encryption
+    Deletion window: 30 days
+
+  DynamoDB table:    km-budgets
+    Purpose:         Sandbox budget enforcement tracking
+    Billing:         PAY_PER_REQUEST
+
+  SCP Policy:        km-sandbox-containment
+    Target:          Application account (333333333333)
+    Threat coverage: SG mutation, network escape, instance mutation,
+                     IAM escalation, storage exfiltration, SSM pivot,
+                     Organizations discovery, region lock
+    Trusted roles:   AWSReservedSSO_*_*, km-provisioner-*, km-lifecycle-*,
+                     km-ecs-spot-handler, km-ttl-handler
+    Deploy via:      km bootstrap (management account credentials required)
+
+Run 'km bootstrap --dry-run=false' to provision.
+```
+
+The `km-identities` DynamoDB table (for sandbox identity / Ed25519 public keys) is provisioned separately via the `infra/live/{region}/dynamodb-identities/` Terragrunt unit.
+
+### SCP deployment
+
+With `--dry-run=false` and a management account ID configured, `km bootstrap` runs `terragrunt apply` against `infra/live/management/scp/` to attach the `km-sandbox-containment` SCP to the application account. This requires credentials for the management account.
+
+If no management account is configured (single-account setup), SCP deployment is skipped with a notice.
+
+---
+
+## 12. Budget Enforcement Infrastructure
+
+Budget enforcement is a three-part system: DynamoDB tables for limit and spend tracking, a per-sandbox Lambda for compute cost enforcement, and an EventBridge schedule for periodic evaluation.
+
+### DynamoDB km-budgets Table
+
+The `km-budgets` table stores budget limits and cumulative spend per sandbox.
+
+**Table schema:**
+
+| Attribute | Type | Role |
+|-----------|------|------|
+| `sandbox_id` | String (S) | Hash key |
+| `compute_limit` | Number (N) | Maximum compute spend in USD |
+| `ai_limit` | Number (N) | Maximum AI API spend in USD |
+| `compute_spent` | Number (N) | Accumulated compute spend via ADD expression |
+| `ai_spent` | Number (N) | Accumulated AI API spend via ADD expression |
+| `warning_threshold` | Number (N) | Fraction (0–1) at which warning email fires (default 0.80) |
+| `created_at` | String (S) | ISO8601 sandbox creation timestamp |
+| `spot_rate_usd` | Number (N) | EC2 spot instance rate (USD/hr, embedded at creation time) |
+
+DynamoDB Streams are enabled with `NEW_AND_OLD_IMAGES` so the budget enforcer Lambda can read before/after spend values on stream events.
+
+### Budget Enforcer Lambda
+
+Each sandbox gets a dedicated Lambda named `km-budget-enforcer-{sandbox-id}`. The Lambda:
+
+1. Reads the sandbox's `spot_rate_usd` and `created_at` from DynamoDB
+2. Calculates accumulated compute cost: `(now - created_at) * spot_rate_usd`
+3. Writes the computed value back with DynamoDB SET (idempotent — Lambda recalculates absolute cost each run)
+4. If compute spend exceeds `compute_limit`: stops the EC2 instance or ECS task and sends a warning notification
+5. If AI spend exceeds `ai_limit` (tracked by http-proxy MITM): detaches the Bedrock IAM policy from the sandbox role
+
+The Lambda is triggered by an EventBridge Scheduler schedule (one per sandbox) that fires every minute.
+
+**Naming convention:** `km-budget-enforcer-{sandbox-id}` (e.g., `km-budget-enforcer-sb-7f3a9e12`)
+
+**Build:** `make build-lambdas` produces `build/budget-enforcer.zip` (Go, arm64, `provided.al2023` runtime).
+
+### Budget Top-Up with km budget add
+
+When a sandbox is suspended due to budget exhaustion:
+
+```bash
+# Add $5 to the compute budget and $3 to the AI budget
+km budget add sb-7f3a9e12 --compute 5.00 --ai 3.00
+
+# Output:
+# Budget updated: compute $2.00/$7.00, AI $4.80/$7.80
+# Sandbox sb-7f3a9e12 resumed.
+```
+
+`km budget add` reads the current budget from DynamoDB, adds the top-up amount, writes the new limits, then auto-resumes the sandbox:
+- **EC2**: starts stopped instances via `StartInstances`
+- **ECS**: re-provisions the task by re-running `terragrunt apply` with the stored profile
+- **IAM**: re-attaches `AmazonBedrockFullAccess` if it was detached by the budget enforcer
+
+See the [Budget Guide](budget-guide.md) for detailed AI spend metering (per-model token pricing, proxy interception, DynamoDB ADD atomics).
+
+---
+
+## 13. SCP Sandbox Containment
+
+The `km-sandbox-containment` SCP is an AWS Organizations Service Control Policy applied to the application account. It provides a second layer of defense — even if a sandbox IAM role is misconfigured or a policy is missing, the SCP blocks the most dangerous breakout actions.
+
+### Deployment
+
+Deploy via `km bootstrap --dry-run=false` (requires management account credentials), or apply directly:
+
+```bash
+cd infra/live/management/scp
+terragrunt apply
+```
+
+The Terragrunt unit runs against the management account profile (`klanker-terraform` by default in the SCP apply path). It creates the `km-sandbox-containment` SCP and attaches it to the application account.
+
+### Prerequisites
+
+The management account must have Organizations SCPs enabled:
+
+```bash
+aws organizations enable-policy-type \
+  --root-id r-xxxx \
+  --policy-type SERVICE_CONTROL_POLICY \
+  --profile klanker-management
+```
+
+### Deny Statements
+
+The SCP has 8 deny statements:
+
+| Statement | Blocked Actions | Carve-outs |
+|-----------|----------------|------------|
+| `DenySGMutation` | Create/delete/modify security groups | `trusted_arns_base` (SSO, provisioner, lifecycle roles) |
+| `DenyNetworkEscape` | Create VPC, subnet, route table, IGW, NAT gateway, VPC peering, Transit Gateway | `trusted_arns_base` |
+| `DenyInstanceMutation` | `RunInstances`, `ModifyInstanceAttribute`, `ModifyInstanceMetadataOptions` | `trusted_arns_instance` (base + `km-ecs-spot-handler`) |
+| `DenyIAMEscalation` | `CreateRole`, `AttachRolePolicy`, `DetachRolePolicy`, `PassRole`, `AssumeRole` | `trusted_arns_iam` (base + `km-budget-enforcer-*`) |
+| `DenyStorageExfiltration` | `CreateSnapshot`, `CopySnapshot`, `CreateImage`, `CopyImage`, `ExportImage` | `trusted_arns_base` |
+| `DenySSMPivot` | `SendCommand`, `StartSession` | `trusted_arns_ssm` (EC2 SSM roles, `km-github-token-refresher-*`, SSO roles only) |
+| `DenyOrganizationsDiscovery` | `ListAccounts`, `DescribeOrganization`, `ListRoots`, etc. | **None** — applies to ALL roles |
+| `DenyOutsideAllowedRegions` | All regional actions outside `var.allowed_regions` | Global services (`iam:*`, `sts:*`, `route53:*`, `s3:ListAllMyBuckets`, etc.) are excluded via `NotAction`; **no role carve-out** |
+
+**Key design decisions:**
+
+- `km-ecs-task-*` is intentionally NOT carved out from any deny — it IS the sandbox workload and must be fully contained
+- `DenyOrganizationsDiscovery` has no condition — all application account roles are blocked from enumerating the org structure
+- Region lock uses `NotAction` (not `Deny` on specific actions) so global services work regardless of the requested region; it applies to operators too, not just sandbox roles
+- `km-budget-enforcer-*` gets an IAM carve-out specifically for `AttachRolePolicy`/`DetachRolePolicy` (Bedrock revocation on budget breach) — it does not need `CreateRole` or `PassRole`
+
+### Trusted Role Arns (variables.tf)
+
+Pass `trusted_role_arns` to the module with your SSO permission set ARNs and any provisioner/lifecycle roles:
+
+```hcl
+# infra/live/management/scp/terragrunt.hcl
+inputs = {
+  application_account_id = "333333333333"
+  allowed_regions        = ["us-east-1", "us-west-2"]
+  trusted_role_arns = [
+    "arn:aws:iam::*:role/AWSReservedSSO_KMAdministratorAccess_*",
+    "arn:aws:iam::333333333333:role/km-provisioner",
+    "arn:aws:iam::333333333333:role/km-ttl-handler",
+  ]
+}
+```
+
+See [Security Model](security-model.md) for the full threat analysis of each SCP statement.
+
+---
+
+## 14. Sidecar Build Pipeline
+
+Klanker Maker sidecars are platform-level processes injected into every sandbox at launch time. On EC2, they are OS-level binaries; on ECS Fargate, they are sidecar containers in the task definition.
+
+### Sidecars
+
+| Sidecar | Role | EC2 Artifact | ECS Image |
+|---------|------|-------------|-----------|
+| `dns-proxy` | DNS allowlist enforcement — NXDOMAIN for unlisted names | S3 binary | `km-dns-proxy` ECR image |
+| `http-proxy` | HTTP/HTTPS MITM proxy — enforces host allowlist, meters AI API calls | S3 binary | `km-http-proxy` ECR image |
+| `audit-log` | Command and process audit logging to CloudWatch | S3 binary | `km-audit-log` ECR image |
+| `tracing` | OpenTelemetry trace collection (config only) | S3 config.yaml | `km-tracing` ECR image |
+
+### Building EC2 Binaries (make sidecars)
+
+`make sidecars` cross-compiles the three Go sidecars for `linux/amd64` and uploads them to the artifacts S3 bucket under `sidecars/`:
+
+```bash
+# Set the artifacts bucket
+export KM_ARTIFACTS_BUCKET=km-artifacts-333333333333-use1
+
+# Cross-compile and upload
+make sidecars
+```
+
+Output:
+```
+s3://km-artifacts-333333333333-use1/sidecars/dns-proxy
+s3://km-artifacts-333333333333-use1/sidecars/http-proxy
+s3://km-artifacts-333333333333-use1/sidecars/audit-log
+s3://km-artifacts-333333333333-use1/sidecars/tracing/config.yaml
+```
+
+**Build flags:** `GOOS=linux GOARCH=amd64 CGO_ENABLED=0`
+
+To compile locally without uploading:
+```bash
+make build-sidecars
+# Writes: build/dns-proxy, build/http-proxy, build/audit-log
+```
+
+### Building ECS Container Images (make ecr-push)
+
+`make ecr-push` builds Docker images for all four sidecars and pushes them to ECR. It calls `ecr-login` and `ecr-repos` first to ensure repositories exist:
+
+```bash
+# Build and push with default VERSION=latest
+make ecr-push
+
+# Build and push a specific version tag
+VERSION=1.2.3 make ecr-push
+```
+
+ECR repository names: `km-dns-proxy`, `km-http-proxy`, `km-audit-log`, `km-tracing`
+
+The ECR registry is derived from the calling AWS account: `{account-id}.dkr.ecr.{region}.amazonaws.com`
+
+**Platform:** `linux/amd64` (Docker `buildx build --platform`)
+
+**Tracing build context:** `sidecars/tracing/` (tracing is not a Go binary and does not import shared packages from `pkg/`)
+
+**Audit-log build context:** Uses `sidecars/audit-log/Dockerfile` building from `sidecars/audit-log/cmd/` (the `cmd/` subdirectory holds `package main`; the root is the `auditlog` library package)
+
+### Building Lambda Deployment Packages (make build-lambdas)
+
+Lambda functions (ttl-handler, budget-enforcer, github-token-refresher) are Go binaries built for `linux/arm64`:
+
+```bash
+make build-lambdas
+```
+
+Output:
+```
+build/ttl-handler.zip          — TTL auto-destroy handler
+build/budget-enforcer.zip      — Per-sandbox compute spend enforcer
+build/github-token-refresher.zip — GitHub installation token refresh
+```
+
+All Lambda zips use `GOARCH=arm64` matching the `architectures=[arm64]` Terraform variable in each Lambda module (mismatch causes exec format error).
+
+### KM_SIDECAR_VERSION
+
+The `KM_SIDECAR_VERSION` environment variable controls which ECR image tag the compiler emits for ECS task definitions. Defaults to `latest` when unset. The deploy pipeline sets an explicit version tag (e.g., `1.2.3`) using `VERSION=1.2.3 make ecr-push` and then `KM_SIDECAR_VERSION=1.2.3 km create ...`.
+
+---
+
+## 15. GitHub App Setup
+
+GitHub App integration provides sandboxes with short-lived, scoped installation tokens for private repository access. Each sandbox gets a dedicated Lambda (`km-github-token-refresher-{sandbox-id}`) that refreshes the token into SSM every 45 minutes.
+
+### Automated Setup (--setup flag)
+
+The fastest path uses the GitHub manifest flow — one command opens the browser, creates the App, and stores credentials in SSM automatically:
+
+```bash
+km configure github --setup
+```
+
+Flow:
+1. Starts a local HTTP callback server on a random port
+2. Builds the GitHub App manifest JSON (name: `klanker-maker-sandbox`, contents:write permissions)
+3. Opens `https://github.com/settings/apps/new?manifest=...` in the system browser
+4. Waits up to 5 minutes for the GitHub OAuth callback
+5. Exchanges the code for App credentials via `POST /app-manifests/{code}/conversions`
+6. Writes three SSM parameters (see below)
+7. Fetches installations via `GET /app/installations` — if found, writes installation ID automatically
+
+If the browser does not open, the URL is printed so you can copy it manually. The callback server listens only on `127.0.0.1`.
+
+**If no installations are found after App creation:**
+
+```bash
+# 1. Visit the App's installation URL (printed by km configure github --setup):
+#    https://github.com/apps/klanker-maker-sandbox/installations/new
+# 2. Select the org or account to install on
+# 3. Note the installation ID from the URL
+# 4. Register it:
+km configure github --installation-id <ID>
+```
+
+### Manual Setup
+
+If you create the GitHub App manually in GitHub Settings:
+
+```bash
+km configure github
+# Interactive wizard prompts for:
+# - GitHub App Client ID (e.g. Iv1.abc123)
+# - Path to private key PEM file (downloaded from GitHub App settings)
+# - Installation ID
+```
+
+Or non-interactively (for CI):
+
+```bash
+km configure github \
+  --non-interactive \
+  --app-client-id "Iv1.abc123" \
+  --private-key-file /path/to/private-key.pem \
+  --installation-id 12345678
+```
+
+To overwrite existing parameters:
+
+```bash
+km configure github --force ...
+```
+
+### SSM Parameter Layout
+
+`km configure github` writes three SSM parameters in the `klanker-terraform` AWS profile:
+
+| Parameter | Type | Contents |
+|-----------|------|----------|
+| `/km/config/github/app-client-id` | String | GitHub App client ID (e.g. `Iv1.abc123`) |
+| `/km/config/github/private-key` | SecureString | Full PEM-encoded RSA private key |
+| `/km/config/github/installation-id` | String | Installation ID for the target org/user |
+
+The private key is stored as a SecureString using the SSM default service KMS key (or the platform KMS key when configured).
+
+### GitHub Token Refresh Lambda
+
+When `km create` is run with a profile that includes `sourceAccess.github`, it provisions:
+
+- Lambda: `km-github-token-refresher-{sandbox-id}` (Go, arm64, `provided.al2023`)
+- EventBridge Scheduler schedule firing every 45 minutes
+- SSM path for the token: `/sandbox/{sandbox-id}/github-token` (KMS-encrypted)
+
+The Lambda generates a GitHub App installation token, encrypts it with the platform KMS key, and puts it in SSM. The sandbox reads it at git time via `GIT_ASKPASS` — the token never appears in environment variables.
+
+**IAM / SCP interaction:** `km-github-token-refresher-*` is carved out of `DenySSMPivot` only (it needs `ssm:GetParameter` and `ssm:PutParameter`). It is not carved out from instance mutation, IAM escalation, or network escape statements.
+
+**Cleanup:** The Lambda and EventBridge schedule are destroyed when the sandbox is destroyed via `km destroy`.
+
+---
+
+## 16. DynamoDB km-identities Table
+
+The `km-identities` table stores sandbox identity records — Ed25519 key pairs generated at sandbox creation time for signed email and inter-sandbox trust.
+
+### Table Schema
+
+| Attribute | Type | Role |
+|-----------|------|------|
+| `sandbox_id` | String (S) | Hash key (sole key — no sort key) |
+| `public_key` | String (S) | Base64-encoded Ed25519 public key |
+| `created_at` | String (S) | ISO8601 creation timestamp |
+| `email_sign_policy` | String (S) | Profile's `spec.email.signing` value (omitted if not set) |
+| `email_verify_policy` | String (S) | Profile's `spec.email.verifyInbound` value (omitted if not set) |
+| `email_encrypt_policy` | String (S) | Profile's `spec.email.encryption` value (omitted if not set) |
+| `alias` | String (S) | Human-friendly alias from `spec.email.alias` (omitted if not set) |
+| `allowed_senders` | StringSet (SS) | Allowed sender addresses from `spec.email.allowedSenders` (omitted if not set) |
+
+**Design notes:**
+- `sandbox_id` is the sole hash key — one identity row per sandbox
+- No DynamoDB Streams — identity reads are on-demand lookups, no Lambda trigger needed
+- Empty-string attributes are omitted (not written) to preserve legacy row compatibility without schema migration
+- A GSI (`alias-index`) is available for looking up identity records by alias
+
+### Provisioning
+
+The `km-identities` table is deployed separately from the `km-budgets` table:
+
+```bash
+# Deploy the identities DynamoDB table
+cd infra/live/use1/dynamodb-identities
+terragrunt apply
+```
+
+`km doctor` checks for the table's existence and reports `WARN` (not `ERROR`) if absent — the identity table is treated as optional infrastructure.
+
+### Key Generation
+
+Ed25519 key pairs are generated at `km create` time using KMS. The private key is stored encrypted in KMS (alias: `km-platform` or from `KM_PLATFORM_KMS_KEY_ARN`). The public key is stored in plaintext in `km-identities` for verification by other sandboxes.
+
+See [Multi-Agent Email](multi-agent-email.md) for the full signed email and NaCl encryption protocol.
+
+---
+
+## 17. km doctor
+
+`km doctor` checks platform health and bootstrap verification. Run it after initial setup and when sandboxes behave unexpectedly.
+
+```bash
+km doctor
+```
+
+### What It Checks
+
+All checks run in parallel. Results are sorted alphabetically by check name.
+
+| Check | What it verifies |
+|-------|-----------------|
+| `Config` | Required config fields present: `domain`, `management_account_id`, `terraform_account_id`, `application_account_id`, `sso_start_url`, `primary_region` |
+| `Credentials (klanker-terraform)` | STS `GetCallerIdentity` succeeds with the configured AWS profile |
+| `State Bucket` | S3 `HeadBucket` on the configured state bucket |
+| `Budget Table (km-budgets)` | DynamoDB `DescribeTable` on `km-budgets` (or custom budget table name) |
+| `Identity Table (km-identities)` | DynamoDB `DescribeTable` on `km-identities` — reported as WARN not ERROR if absent |
+| `KMS Key (km-platform)` | KMS `DescribeKey` on `alias/km-platform` |
+| `SCP (Sandbox Containment)` | Organizations `ListPoliciesForTarget` on the application account — verifies `km-sandbox-containment` is attached |
+| `GitHub App Config` | SSM `GetParameter` for `/km/config/github/app-client-id` and `installation-id` — reported as WARN if missing (GitHub integration is optional) |
+| `VPC (us-east-1)` | EC2 `DescribeVpcs` filtered by `km:managed=true` in the primary region |
+| `Active Sandboxes` | Lists all sandboxes from the state bucket and reports a count summary |
+
+If `KM_REPLICA_REGION` is set, a second `VPC` check runs for the replica region.
+
+### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--json` | `false` | Output results as a JSON array |
+| `--quiet` | `false` | Suppress OK and SKIPPED results; show only WARN and ERROR |
+
+### Exit Codes
+
+- `0` — all checks passed (OK or WARN — warnings do not fail)
+- `1` — one or more checks returned ERROR
+
+### Output Formats
+
+**Standard (terminal):**
+
+```
+✓ Active Sandboxes                    total=2 (running=2)
+✓ Budget Table (km-budgets)           table "km-budgets" exists
+✓ Config                              domain=klankermaker.ai region=us-east-1
+✓ Credentials (klanker-terraform)     authenticated as arn:aws:iam::333333333333:role/...
+⚠ GitHub App Config                   parameter "/km/config/github/app-client-id" not found — GitHub integration not configured
+  → Run 'km configure github' to set up GitHub App integration
+✓ Identity Table (km-identities)      table "km-identities" exists
+✓ KMS Key (km-platform)               key "alias/km-platform" exists
+✓ SCP (Sandbox Containment)           policy "km-sandbox-containment" attached to account 333333333333
+✓ State Bucket                        bucket "tf-km-state-use1" is accessible
+✓ VPC (us-east-1)                     found 1 km-managed VPC(s) in us-east-1
+
+11 checks passed, 1 warnings, 0 errors
+```
+
+**JSON output (for CI):**
+
+```bash
+km doctor --json | jq '.[] | select(.status != "OK")'
+```
+
+```json
+{
+  "name": "GitHub App Config",
+  "status": "WARN",
+  "message": "parameter \"/km/config/github/app-client-id\" not found — GitHub integration not configured",
+  "remediation": "Run 'km configure github' to set up GitHub App integration"
+}
+```
+
+**Quiet mode (CI — exit code only):**
+
+```bash
+km doctor --quiet && echo "platform healthy" || echo "platform has issues"
+```
+
+### CI Usage Patterns
+
+```yaml
+# GitHub Actions — block deploys if platform health fails
+- name: Platform health check
+  run: km doctor --quiet
+  env:
+    KM_STATE_BUCKET: ${{ vars.KM_STATE_BUCKET }}
+    AWS_PROFILE: klanker-terraform
+
+# Parse errors programmatically
+- name: Check for errors
+  run: |
+    ERRORS=$(km doctor --json | jq '[.[] | select(.status == "ERROR")] | length')
+    if [ "$ERRORS" -gt 0 ]; then exit 1; fi
+```
+
+**Nil-client behavior:** Any AWS client that fails to initialize (expired credentials, missing config) causes its checks to return `SKIPPED` — `km doctor` never panics on missing clients.
