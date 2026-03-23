@@ -25,6 +25,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
@@ -67,7 +68,18 @@ func main() {
 	}
 
 	// Wire IdleDetector when IDLE_TIMEOUT_MINUTES is set and dest is cloudwatch.
+	// Create an EventBridge client for publishing SandboxIdle events on idle timeout.
 	idleTimeoutStr := envOr("IDLE_TIMEOUT_MINUTES", "")
+	var ebClient kmaws.EventBridgeAPI
+	if idleTimeoutStr != "" {
+		awsCfg, ebErr := config.LoadDefaultConfig(ctx, config.WithRegion(envOr("AWS_REGION", "us-east-1")))
+		if ebErr != nil {
+			log.Warn().Err(ebErr).Msg("audit-log: failed to create EventBridge client; idle destroy disabled")
+		} else {
+			ebClient = eventbridge.NewFromConfig(awsCfg)
+		}
+	}
+
 	if idleTimeoutStr != "" && destName == "cloudwatch" {
 		idleMinutes, parseErr := strconv.Atoi(idleTimeoutStr)
 		if parseErr != nil {
@@ -75,7 +87,12 @@ func main() {
 				Msg("audit-log: invalid IDLE_TIMEOUT_MINUTES, idle detection disabled")
 		} else {
 			detector := newIdleDetector(sandboxID, idleMinutes, cwClient, cwLogGroup, "audit", func(id string) {
-				log.Warn().Str("sandbox_id", id).Msg("audit-log: sandbox idle timeout reached, signaling shutdown")
+				log.Warn().Str("sandbox_id", id).Msg("audit-log: sandbox idle timeout reached, publishing idle event")
+				if ebClient != nil {
+					if err := kmaws.PublishSandboxIdleEvent(ctx, ebClient, id); err != nil {
+						log.Error().Err(err).Str("sandbox_id", id).Msg("audit-log: failed to publish idle event")
+					}
+				}
 				cancel()
 			})
 			go func() {

@@ -242,6 +242,23 @@ resource "aws_iam_role_policy_attachment" "ec2spot_ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# Policy: EventBridge PutEvents so the audit-log sidecar can publish SandboxIdle events (PROV-06)
+# Note: PutEvents does not support resource-level restrictions for the default event bus.
+resource "aws_iam_role_policy" "ec2spot_eventbridge" {
+  count = local.total_ec2spot_count > 0 ? 1 : 0
+  name  = "km-${var.sandbox_id}-eventbridge"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["events:PutEvents"]
+      Resource = ["*"]
+    }]
+  })
+}
+
 resource "aws_iam_instance_profile" "ec2spot" {
   count = local.total_ec2spot_count > 0 ? 1 : 0
 

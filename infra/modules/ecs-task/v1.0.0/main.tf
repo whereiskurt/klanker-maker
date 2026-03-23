@@ -115,6 +115,27 @@ resource "aws_iam_role_policy_attachment" "execution_role_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+# Policy: EventBridge PutEvents so the audit-log sidecar container can publish SandboxIdle events (PROV-06)
+# Note: ECS sidecar containers use the task role (task_role_arn) for AWS API calls at runtime.
+# This policy is attached to the execution role which handles ECR pull and log creation.
+# When the compiler sets task_role_arn, ensure that role also has events:PutEvents.
+# Note: PutEvents does not support resource-level restrictions for the default event bus.
+resource "aws_iam_role_policy" "ecs_task_eventbridge" {
+  for_each = local.tasks_map
+
+  name = "km-${each.value.family}-eventbridge"
+  role = aws_iam_role.execution_role[each.key].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["events:PutEvents"]
+      Resource = ["*"]
+    }]
+  })
+}
+
 # Custom policy for SSM Parameter Store access (for secrets)
 resource "aws_iam_role_policy" "ssm_access" {
   for_each = local.tasks_map

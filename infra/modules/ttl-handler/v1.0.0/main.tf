@@ -155,3 +155,85 @@ resource "aws_lambda_permission" "eventbridge_scheduler" {
   function_name = aws_lambda_function.ttl_handler.function_name
   principal     = "scheduler.amazonaws.com"
 }
+
+# ============================================================
+# EventBridge rule: route SandboxIdle events to TTL Lambda (PROV-06)
+# ============================================================
+
+resource "aws_cloudwatch_event_rule" "sandbox_idle" {
+  name        = "km-sandbox-idle"
+  description = "Routes SandboxIdle events from audit-log sidecar to TTL Lambda for sandbox teardown"
+
+  event_pattern = jsonencode({
+    source      = ["km.sandbox"]
+    detail-type = ["SandboxIdle"]
+  })
+
+  tags = {
+    "km:component" = "ttl-handler"
+    "km:managed"   = "true"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "idle_to_ttl" {
+  rule      = aws_cloudwatch_event_rule.sandbox_idle.name
+  target_id = "km-ttl-handler-idle"
+  arn       = aws_lambda_function.ttl_handler.arn
+
+  # Transform EventBridge envelope to match TTLEvent struct shape
+  input_transformer {
+    input_paths = {
+      sandbox_id = "$.detail.sandbox_id"
+    }
+    input_template = <<-TEMPLATE
+    {"sandbox_id": <sandbox_id>, "event_type": "idle"}
+    TEMPLATE
+  }
+}
+
+# Lambda permission: allow EventBridge Events to invoke the TTL Lambda (for idle events)
+# Note: This is separate from eventbridge_scheduler (which allows the Scheduler service).
+resource "aws_lambda_permission" "eventbridge_events" {
+  statement_id  = "AllowEventBridgeEventsInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.ttl_handler.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.sandbox_idle.arn
+}
+
+# ============================================================
+# IAM policies: sandbox resource teardown (PROV-05/PROV-06)
+# ============================================================
+
+# Policy: Tag API for discovering sandbox resources by km:sandbox-id tag
+resource "aws_iam_role_policy" "tag_discovery" {
+  name = "km-ttl-handler-tag-discovery"
+  role = aws_iam_role.ttl_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["tag:GetResources"]
+      Resource = "*"
+    }]
+  })
+}
+
+# Policy: EC2 terminate for destroying sandbox instances after TTL/idle
+resource "aws_iam_role_policy" "ec2_teardown" {
+  name = "km-ttl-handler-ec2-teardown"
+  role = aws_iam_role.ttl_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "ec2:TerminateInstances",
+        "ec2:DescribeInstances",
+      ]
+      Resource = "*"
+    }]
+  })
+}
