@@ -102,6 +102,8 @@ spec:
     signing: optional
     verifyInbound: optional
     encryption: off
+    allowedSenders:
+      - "*"
 
   agent:
     maxConcurrentTasks: 2

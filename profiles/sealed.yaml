@@ -66,6 +66,8 @@ spec:
     signing: required
     verifyInbound: required
     encryption: off
+    allowedSenders:
+      - "self"
 
   agent:
     maxConcurrentTasks: 1
