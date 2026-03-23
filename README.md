@@ -7,7 +7,11 @@ The idea is simple: you shouldn't have to choose between giving AI agents real i
 
 
 <p align="center">
-  <img src="docs/klankerdome-480-12-sierra.gif" alt="Klanker Maker - robots working inside a sandboxed dome" width="480" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/klankerdome-dark.gif">
+    <source media="(prefers-color-scheme: light)" srcset="docs/klankerdome-light.gif">
+    <img alt="Klanker Maker - robots working inside a sandboxed dome" src="docs/klankerdome-dark.gif" width="480" />
+  </picture>
   <br />
   <sub>Art by Mike Wigmore (<a href="https://github.com/mikewigmore">@mikewigmore</a>)</sub>
 </p>
