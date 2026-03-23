@@ -237,8 +237,6 @@ func TestIdentity_GenerateEncryptionKey_SSMPathAndSize(t *testing.T) {
 
 func TestIdentity_PublishIdentity_PutItemFields(t *testing.T) {
 	mockDyn := &mockIdentityTableAPI{}
-	pubKey, _ := makeTestKeys(nil) // use makeTestKeys directly for pub key
-	_ = pubKey
 
 	// Generate real keys
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
