@@ -277,7 +277,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 10. SCP Sandbox Containment | 2/2 | Complete    | 2026-03-23 |
 | 11. Sandbox Auto-Destroy & Metadata Wiring | 2/2 | Complete    | 2026-03-23 |
 | 12. ECS Budget Top-Up & S3 Replication | 2/2 | Complete    | 2026-03-23 |
-| 13. GitHub App Token Integration | 3/4 | In Progress|  |
+| 13. GitHub App Token Integration | 4/4 | Complete   | 2026-03-23 |
 
 ### Phase 13: GitHub App Token Integration — scoped repo access for sandboxes
 
@@ -299,7 +299,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 - Token audit: Lambda logs token generation events to CloudWatch with repo scope and sandbox ID
 
 **Depends on:** Phase 6 (SSM/KMS patterns), Phase 10 (SCP must allow github-token-refresher Lambda through)
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 - [ ] 13-01-PLAN.md — pkg/github/ core library: JWT generation, token exchange, permission mapping (TDD) (GH-03, GH-08, GH-13)
