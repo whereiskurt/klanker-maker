@@ -21,6 +21,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 
@@ -50,15 +51,24 @@ type IdentityTableAPI interface {
 	DeleteItem(ctx context.Context, input *dynamodb.DeleteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
 }
 
+// IdentityQueryAPI is the minimal DynamoDB interface for GSI Query operations.
+// Separate from IdentityTableAPI (narrow-interface pattern) — only used by FetchPublicKeyByAlias.
+// Implemented by *dynamodb.Client.
+type IdentityQueryAPI interface {
+	Query(ctx context.Context, input *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error)
+}
+
 // IdentityRecord holds the data returned by FetchPublicKey for a sandbox.
 type IdentityRecord struct {
 	SandboxID              string
 	PublicKeyB64           string
 	EmailAddress           string
-	EncryptionPublicKeyB64 string // empty if no encryption key published
-	Signing                string // email signing policy: "required"|"optional"|"off"|"" (empty for legacy rows)
-	VerifyInbound          string // email verify-inbound policy
-	Encryption             string // email encryption policy
+	EncryptionPublicKeyB64 string   // empty if no encryption key published
+	Signing                string   // email signing policy: "required"|"optional"|"off"|"" (empty for legacy rows)
+	VerifyInbound          string   // email verify-inbound policy
+	Encryption             string   // email encryption policy
+	Alias                  string   // human-friendly dot-notation name (empty if not set)
+	AllowedSenders         []string // allow-list patterns (nil if not configured)
 }
 
 // signingKeyPath returns the SSM parameter path for a sandbox's signing key.
@@ -142,7 +152,9 @@ func GenerateEncryptionKey(ctx context.Context, ssmClient IdentitySSMAPI, sandbo
 // If encPubKey is non-nil, the encryption_public_key attribute is included.
 // signing, verifyInbound, encryption are the email policy values from the sandbox profile;
 // empty string means "not specified" and the attribute is omitted (preserves legacy row compatibility).
-func PublishIdentity(ctx context.Context, client IdentityTableAPI, tableName, sandboxID, emailAddress string, pubKey ed25519.PublicKey, encPubKey *[32]byte, signing, verifyInbound, encryption string) error {
+// alias, if non-empty, stores the human-friendly dot-notation name in the alias-index GSI.
+// allowedSenders, if non-empty, stores the allow-list patterns as a DynamoDB StringSet.
+func PublishIdentity(ctx context.Context, client IdentityTableAPI, tableName, sandboxID, emailAddress string, pubKey ed25519.PublicKey, encPubKey *[32]byte, signing, verifyInbound, encryption, alias string, allowedSenders []string) error {
 	pubKeyB64 := base64.StdEncoding.EncodeToString(pubKey)
 	createdAt := time.Now().UTC().Format(time.RFC3339)
 
@@ -167,6 +179,12 @@ func PublishIdentity(ctx context.Context, client IdentityTableAPI, tableName, sa
 	}
 	if encryption != "" {
 		item["encryption_policy"] = &dynamodbtypes.AttributeValueMemberS{Value: encryption}
+	}
+	if alias != "" {
+		item["alias"] = &dynamodbtypes.AttributeValueMemberS{Value: alias}
+	}
+	if len(allowedSenders) > 0 {
+		item["allowed_senders"] = &dynamodbtypes.AttributeValueMemberSS{Value: allowedSenders}
 	}
 
 	_, err := client.PutItem(ctx, &dynamodb.PutItemInput{
@@ -238,8 +256,131 @@ func FetchPublicKey(ctx context.Context, client IdentityTableAPI, tableName, san
 			record.Encryption = sv.Value
 		}
 	}
+	if v, ok := out.Item["alias"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			record.Alias = sv.Value
+		}
+	}
+	if v, ok := out.Item["allowed_senders"]; ok {
+		if ssv, ok := v.(*dynamodbtypes.AttributeValueMemberSS); ok {
+			record.AllowedSenders = ssv.Value
+		}
+	}
 
 	return record, nil
+}
+
+// ============================================================
+// Alias-Based Lookup
+// ============================================================
+
+// FetchPublicKeyByAlias retrieves a sandbox's identity record by alias using the alias-index GSI.
+//
+// Returns (nil, nil) if no sandbox has that alias — consistent with FetchPublicKey semantics.
+func FetchPublicKeyByAlias(ctx context.Context, client IdentityQueryAPI, tableName, alias string) (*IdentityRecord, error) {
+	out, err := client.Query(ctx, &dynamodb.QueryInput{
+		TableName:              awssdk.String(tableName),
+		IndexName:              awssdk.String("alias-index"),
+		KeyConditionExpression: awssdk.String("alias = :alias"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":alias": &dynamodbtypes.AttributeValueMemberS{Value: alias},
+		},
+		Limit: awssdk.Int32(1),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fetch identity by alias %q: %w", alias, err)
+	}
+	if len(out.Items) == 0 {
+		return nil, nil
+	}
+
+	item := out.Items[0]
+	record := &IdentityRecord{}
+
+	if v, ok := item["sandbox_id"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			record.SandboxID = sv.Value
+		}
+	}
+	if v, ok := item["public_key"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			record.PublicKeyB64 = sv.Value
+		}
+	}
+	if v, ok := item["email_address"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			record.EmailAddress = sv.Value
+		}
+	}
+	if v, ok := item["encryption_public_key"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			record.EncryptionPublicKeyB64 = sv.Value
+		}
+	}
+	if v, ok := item["signing_policy"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			record.Signing = sv.Value
+		}
+	}
+	if v, ok := item["verify_inbound_policy"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			record.VerifyInbound = sv.Value
+		}
+	}
+	if v, ok := item["encryption_policy"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			record.Encryption = sv.Value
+		}
+	}
+	if v, ok := item["alias"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			record.Alias = sv.Value
+		}
+	}
+	if v, ok := item["allowed_senders"]; ok {
+		if ssv, ok := v.(*dynamodbtypes.AttributeValueMemberSS); ok {
+			record.AllowedSenders = ssv.Value
+		}
+	}
+
+	return record, nil
+}
+
+// ============================================================
+// Allow-List Matching
+// ============================================================
+
+// MatchesAllowList evaluates whether a sender is permitted by the allow-list patterns.
+//
+// Patterns (evaluated in order, first match wins):
+//   - "*"   — permit any sender unconditionally
+//   - "self" — permit if senderID == receiverSandboxID (self-mail always permitted)
+//   - exact sandbox ID — permit if senderID == pattern
+//   - wildcard alias — use path.Match(pattern, senderAlias) if senderAlias != ""
+//
+// Returns false if no pattern matched or patterns is empty.
+func MatchesAllowList(patterns []string, senderID, senderAlias, receiverSandboxID string) bool {
+	for _, p := range patterns {
+		switch p {
+		case "*":
+			return true
+		case "self":
+			if senderID == receiverSandboxID {
+				return true
+			}
+		default:
+			if senderID == p {
+				return true
+			}
+			if senderAlias != "" {
+				matched, err := path.Match(p, senderAlias)
+				if err == nil && matched {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // ============================================================

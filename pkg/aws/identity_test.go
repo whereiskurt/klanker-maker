@@ -242,7 +242,7 @@ func TestIdentity_PublishIdentity_PutItemFields(t *testing.T) {
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
 	pubKeyB64 := base64.StdEncoding.EncodeToString(pub)
 
-	err := kmaws.PublishIdentity(context.Background(), mockDyn, "km-identities", "sb-pub01", "sb-pub01@sandboxes.example.com", pub, nil, "", "", "")
+	err := kmaws.PublishIdentity(context.Background(), mockDyn, "km-identities", "sb-pub01", "sb-pub01@sandboxes.example.com", pub, nil, "", "", "", "", nil)
 	if err != nil {
 		t.Fatalf("PublishIdentity returned error: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestIdentity_PublishIdentity_IncludesEncryptionKey(t *testing.T) {
 	_, _ = rand.Read(encPubKey[:])
 	encPubKeyPtr := &encPubKey
 
-	err := kmaws.PublishIdentity(context.Background(), mockDyn, "km-identities", "sb-enc01", "sb-enc01@example.com", pub, encPubKeyPtr, "", "", "")
+	err := kmaws.PublishIdentity(context.Background(), mockDyn, "km-identities", "sb-enc01", "sb-enc01@example.com", pub, encPubKeyPtr, "", "", "", "", nil)
 	if err != nil {
 		t.Fatalf("PublishIdentity returned error: %v", err)
 	}
@@ -831,7 +831,7 @@ func TestIdentity_PublishIdentity_PolicyFieldsStored(t *testing.T) {
 	mockDyn := &mockIdentityTableAPI{}
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
 
-	err := kmaws.PublishIdentity(context.Background(), mockDyn, "km-identities", "sb-policy01", "sb-policy01@example.com", pub, nil, "required", "optional", "off")
+	err := kmaws.PublishIdentity(context.Background(), mockDyn, "km-identities", "sb-policy01", "sb-policy01@example.com", pub, nil, "required", "optional", "off", "", nil)
 	if err != nil {
 		t.Fatalf("PublishIdentity returned error: %v", err)
 	}
@@ -847,7 +847,7 @@ func TestIdentity_PublishIdentity_EmptyPolicyFieldsOmitted(t *testing.T) {
 	mockDyn := &mockIdentityTableAPI{}
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
 
-	err := kmaws.PublishIdentity(context.Background(), mockDyn, "km-identities", "sb-policy02", "sb-policy02@example.com", pub, nil, "", "", "")
+	err := kmaws.PublishIdentity(context.Background(), mockDyn, "km-identities", "sb-policy02", "sb-policy02@example.com", pub, nil, "", "", "", "", nil)
 	if err != nil {
 		t.Fatalf("PublishIdentity returned error: %v", err)
 	}
