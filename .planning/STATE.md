@@ -223,6 +223,7 @@ Recent decisions affecting current work:
 ### Roadmap Evolution
 
 - Phase 10 added: SCP Sandbox Containment — org-level EC2 breakout prevention (SCP as account-level backstop for sandbox IAM containment)
+- Phase 13 added: GitHub App Token Integration — scoped repo access for sandboxes (short-lived installation tokens via GitHub App, SSM storage, Lambda refresh every 45min)
 
 ### Pending Todos
 

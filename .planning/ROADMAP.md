@@ -272,3 +272,28 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 10. SCP Sandbox Containment | 2/2 | Complete    | 2026-03-23 |
 | 11. Sandbox Auto-Destroy & Metadata Wiring | 2/2 | Complete    | 2026-03-23 |
 | 12. ECS Budget Top-Up & S3 Replication | 0/0 | Planned   | — |
+
+### Phase 13: GitHub App Token Integration — scoped repo access for sandboxes
+
+**Goal:** Sandboxes authenticate to GitHub using short-lived, repo-scoped installation tokens from a GitHub App — not SSH keys, PATs, or long-lived credentials. Tokens are generated at sandbox creation, stored in SSM Parameter Store, and auto-refreshed by a Lambda before expiry. The profile's `sourceAccess.github` controls which repos and permissions each token covers.
+
+**Requirements:**
+- `km configure github` stores GitHub App ID, private key (in SSM/KMS), and installation ID
+- At `km create` time, profile `sourceAccess.github.allowedRepos` maps to GitHub App installation token scopes: clone/fetch → `contents:read`, push → `contents:write`
+- Installation token generated via GitHub App API (`POST /app/installations/{id}/access_tokens`) with repository and permission scoping
+- Token stored in SSM Parameter Store at `/sandbox/{sandbox-id}/github-token`, encrypted with per-sandbox KMS key
+- Sandbox boots with `GIT_ASKPASS` credential helper that reads token from SSM — no token in environment variables or user-data
+- Token refresh Lambda (`km-github-token-refresher-{sandbox-id}`) generates new token before 1-hour expiry, writes to SSM
+- EventBridge schedule triggers refresh Lambda every 45 minutes (15-minute safety margin before expiry)
+- Token refresh is non-fatal — sandbox continues with existing token if refresh fails, logs warning
+- `km destroy` cleans up: SSM parameter, EventBridge schedule, Lambda
+- Terraform module `infra/modules/github-token/` encapsulates Lambda + EventBridge + SSM + IAM
+- Compiler emits `github-token` module inputs in service.hcl when profile has `sourceAccess.github`
+- Ref enforcement: credential helper or proxy rejects `git push` to refs not in `sourceAccess.github.allowedRepos[].refs` (defense in depth — GitHub App scoping is primary control)
+- Token audit: Lambda logs token generation events to CloudWatch with repo scope and sandbox ID
+
+**Depends on:** Phase 6 (SSM/KMS patterns), Phase 10 (SCP must allow github-token-refresher Lambda through)
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 13 to break down)
