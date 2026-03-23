@@ -365,3 +365,48 @@ Plans:
 Plans:
 - [ ] 15-01-PLAN.md — km doctor command with parallel platform health checks, colored output, JSON/quiet modes
 - [ ] 15-02-PLAN.md — km configure github --setup manifest flow for one-click GitHub App creation
+
+### Phase 16: Documentation refresh — operator guide, user manual, and docs for Phases 6-15 features
+
+**Goal:** Bring all documentation up to date with features built in Phases 6–15. The operator guide, user manual, and specialized docs were written during early phases and are missing budget enforcement, SCP containment, sidecar build pipeline, GitHub App integration, sandbox identity/signed email, and km doctor.
+
+**Requirements:**
+- **docs/operator-guide.md** updates:
+  - `km bootstrap` command reference (replaces manual S3/DynamoDB/KMS setup steps)
+  - Budget enforcement: DynamoDB `km-budgets` table, budget-enforcer Lambda, EventBridge schedule, `km budget add` top-up flow
+  - SCP sandbox containment: SCP deployment via `km bootstrap`, what the SCP blocks, role carve-outs, management account prerequisites
+  - Sidecar build pipeline: `make sidecars` (cross-compile), `make ecr-push` (Docker + ECR), S3 binary upload for EC2
+  - GitHub App setup: `km configure github --setup` manifest flow, manual alternative, SSM parameter layout
+  - GitHub token refresh Lambda: per-sandbox Lambda + EventBridge schedule, IAM, cleanup
+  - DynamoDB `km-identities` table for sandbox identity (provisioned alongside `km-budgets`)
+  - `km doctor` command: what it checks, `--json`/`--quiet` flags, CI usage
+- **docs/user-manual.md** updates:
+  - `km doctor` usage and output interpretation
+  - `km configure github` (both manual and `--setup` flow)
+  - `km budget add` / `km status` budget breakdown
+  - Profile `spec.email` section (signing, verifyInbound, encryption policies)
+  - Profile `sourceAccess.github` with GitHub App token explanation
+- **docs/budget-guide.md** updates:
+  - Budget-enforcer Lambda architecture (per-sandbox Lambda, DynamoDB Streams trigger vs EventBridge)
+  - Compute budget: spot rate lookup, suspend vs destroy, EC2 StopInstances vs ECS task stop
+  - AI budget: Bedrock proxy metering, dual-layer enforcement, per-model breakdown
+  - `km budget add` top-up flow: proxy unblock + IAM restore + compute restart
+- **docs/security-model.md** updates:
+  - SCP layer: what each deny statement blocks, carve-out roles, region lock
+  - GitHub App tokens: short-lived, repo-scoped, no SSH keys or PATs
+  - Sandbox identity: Ed25519 signing, email verification, optional encryption
+- **docs/multi-agent-email.md** updates:
+  - Signed email: X-KM-Signature / X-KM-Sender-ID headers, verification flow
+  - Optional encryption: X25519 key exchange, NaCl box, DynamoDB public key discovery
+  - Profile `spec.email` policy controls per sandbox
+- **docs/sidecar-reference.md** updates:
+  - Build pipeline: Makefile targets, Dockerfiles, ECR image URIs
+  - S3 binary delivery for EC2 sidecars
+- README.md roadmap table: update phase statuses to reflect completion through Phase 15
+- All docs reviewed for stale references to old paths (e.g., `infra/live/sandboxes/_template/` → `infra/templates/sandbox/`)
+
+**Depends on:** Phase 15 (all features must be implemented before documenting)
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 16 to break down)
