@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 13-01-PLAN.md
-last_updated: "2026-03-23T03:07:56.418Z"
+stopped_at: Completed 13-03-PLAN.md
+last_updated: "2026-03-23T03:16:21.141Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 15
   completed_phases: 12
   total_plans: 53
-  completed_plans: 48
+  completed_plans: 49
   percent: 0
 ---
 
@@ -97,6 +97,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 12-ecs-budget-topup-s3-replication P01 | 216s | 1 tasks | 3 files |
 | Phase 13-github-app-token-integration-scoped-repo-access-for-sandboxes P02 | 6min | 2 tasks | 5 files |
 | Phase 13 P01 | 499s | 2 tasks | 5 files |
+| Phase 13-github-app-token-integration-scoped-repo-access-for-sandboxes P03 | 18min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -233,6 +234,9 @@ Recent decisions affecting current work:
 - [Phase 13-01]: GitHubAPIBaseURL package-level var enables httptest injection without function signature changes
 - [Phase 13-01]: PKCS#1 tried first in key parsing, PKCS#8 as fallback — matches GitHub App key export behavior
 - [Phase 13-01]: MockSSMClient exported from pkg/github so external test packages can reuse without duplication
+- [Phase 13-03]: GIT_ASKPASS reads /sandbox/${SANDBOX_ID}/github-token at git time — token never in environment variables
+- [Phase 13-03]: github_token_inputs emitted for both EC2 and ECS substrates so Lambda/EventBridge infra deploys for ECS sandboxes even though in-sandbox GIT_ASKPASS is deferred
+- [Phase 13-03]: permissionsToHCL placed in service_hcl.go — both EC2 and ECS generators use it alongside existing template functions
 
 ### Roadmap Evolution
 
@@ -255,6 +259,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T03:07:49.709Z
-Stopped at: Completed 13-01-PLAN.md
+Last session: 2026-03-23T03:16:21.138Z
+Stopped at: Completed 13-03-PLAN.md
 Resume file: None
