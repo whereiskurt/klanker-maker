@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 12-01-PLAN.md
-last_updated: "2026-03-23T02:39:15.858Z"
+stopped_at: Completed 13-02-PLAN.md
+last_updated: "2026-03-23T03:01:52.231Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 14
   completed_phases: 12
   total_plans: 53
-  completed_plans: 46
+  completed_plans: 47
   percent: 0
 ---
 
@@ -95,6 +95,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 11-sandbox-auto-destroy-metadata-wiring P02 | 406s | 2 tasks | 12 files |
 | Phase 12-ecs-budget-topup-s3-replication P02 | 61s | 1 tasks | 1 files |
 | Phase 12-ecs-budget-topup-s3-replication P01 | 216s | 1 tasks | 3 files |
+| Phase 13-github-app-token-integration-scoped-repo-access-for-sandboxes P02 | 6min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -225,6 +226,9 @@ Recent decisions affecting current work:
 - [Phase 12-02]: Replica region read from KM_REPLICA_REGION env var (default us-west-2); no dependency block since source bucket is pre-existing
 - [Phase 12-01]: reprovisionECSSandbox uses existing sandboxID — never generates new; source-level verification pattern for non-DI-injectable functions
 - [Phase 12-01]: ArtifactsBucket and AWSProfile added to Config struct (KM_ARTIFACTS_BUCKET, KM_AWS_PROFILE env vars) for ECS budget top-up path
+- [Phase 13-02]: github-token-refresher added to trusted_arns_ssm only (not base/instance/iam) — it only needs SSM GetParameter/PutParameter, not EC2/IAM/instance mutation
+- [Phase 13-02]: KMS key policy: three-principal model (root admin + Lambda encrypt/decrypt + sandbox role decrypt only)
+- [Phase 13-02]: EventBridge Scheduler payload carries kms_key_arn, allowed_repos, permissions — Lambda has all data per invocation without extra SSM reads
 
 ### Roadmap Evolution
 
@@ -246,6 +250,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T02:36:13.015Z
-Stopped at: Completed 12-01-PLAN.md
+Last session: 2026-03-23T03:01:52.228Z
+Stopped at: Completed 13-02-PLAN.md
 Resume file: None
