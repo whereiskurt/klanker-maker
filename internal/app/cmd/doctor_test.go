@@ -13,9 +13,13 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
+	lambdasvc "github.com/aws/aws-sdk-go-v2/service/lambda"
+	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
 	orgtypes "github.com/aws/aws-sdk-go-v2/service/organizations/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	sesv2svc "github.com/aws/aws-sdk-go-v2/service/sesv2"
+	sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -722,6 +726,133 @@ var _ EC2DescribeAPI = (*mockEC2Client)(nil)
 // Compile-time: ensure testConfig implements DoctorConfigProvider
 var _ DoctorConfigProvider = (*testConfig)(nil)
 var _ DoctorConfigProvider = (*testDoctorConfig)(nil)
+
+// =============================================================================
+// Tests: checkLambdaFunction (TestDoctorLambda)
+// =============================================================================
+
+// mockLambdaClient satisfies LambdaGetFunctionAPI.
+type mockLambdaClient struct {
+	output *lambdasvc.GetFunctionOutput
+	err    error
+}
+
+func (m *mockLambdaClient) GetFunction(ctx context.Context, params *lambdasvc.GetFunctionInput, optFns ...func(*lambdasvc.Options)) (*lambdasvc.GetFunctionOutput, error) {
+	return m.output, m.err
+}
+
+func TestDoctorLambda_OK(t *testing.T) {
+	client := &mockLambdaClient{
+		output: &lambdasvc.GetFunctionOutput{},
+	}
+	result := checkLambdaFunction(context.Background(), client, "km-ttl-handler")
+	if result.Status != CheckOK {
+		t.Errorf("expected CheckOK when GetFunction succeeds, got %s: %s", result.Status, result.Message)
+	}
+	if !containsString(result.Message, "deployed") {
+		t.Errorf("expected message to contain 'deployed', got: %s", result.Message)
+	}
+}
+
+func TestDoctorLambda_NotFound(t *testing.T) {
+	client := &mockLambdaClient{
+		err: &lambdatypes.ResourceNotFoundException{Message: aws.String("Function not found")},
+	}
+	result := checkLambdaFunction(context.Background(), client, "km-ttl-handler")
+	if result.Status != CheckWarn {
+		t.Errorf("expected CheckWarn on ResourceNotFoundException, got %s", result.Status)
+	}
+	if result.Remediation == "" {
+		t.Error("expected remediation mentioning 'km init'")
+	}
+}
+
+func TestDoctorLambda_NilClient(t *testing.T) {
+	result := checkLambdaFunction(context.Background(), nil, "km-ttl-handler")
+	if result.Status != CheckSkipped {
+		t.Errorf("expected CheckSkipped for nil client, got %s", result.Status)
+	}
+}
+
+// =============================================================================
+// Tests: checkSESIdentity
+// =============================================================================
+
+// mockSESClient satisfies SESGetEmailIdentityAPI.
+type mockSESClient struct {
+	output *sesv2svc.GetEmailIdentityOutput
+	err    error
+}
+
+func (m *mockSESClient) GetEmailIdentity(ctx context.Context, params *sesv2svc.GetEmailIdentityInput, optFns ...func(*sesv2svc.Options)) (*sesv2svc.GetEmailIdentityOutput, error) {
+	return m.output, m.err
+}
+
+func TestCheckSESIdentity_OK(t *testing.T) {
+	client := &mockSESClient{
+		output: &sesv2svc.GetEmailIdentityOutput{
+			VerificationStatus: sesv2types.VerificationStatusSuccess,
+		},
+	}
+	result := checkSESIdentity(context.Background(), client, "example.com")
+	if result.Status != CheckOK {
+		t.Errorf("expected CheckOK when verified, got %s: %s", result.Status, result.Message)
+	}
+}
+
+func TestCheckSESIdentity_NotFound(t *testing.T) {
+	client := &mockSESClient{
+		err: &sesv2types.NotFoundException{Message: aws.String("Identity not found")},
+	}
+	result := checkSESIdentity(context.Background(), client, "example.com")
+	if result.Status != CheckWarn {
+		t.Errorf("expected CheckWarn on NotFoundException, got %s", result.Status)
+	}
+	if result.Remediation == "" {
+		t.Error("expected remediation mentioning 'km init'")
+	}
+}
+
+func TestCheckSESIdentity_NilClient(t *testing.T) {
+	result := checkSESIdentity(context.Background(), nil, "example.com")
+	if result.Status != CheckSkipped {
+		t.Errorf("expected CheckSkipped for nil client, got %s", result.Status)
+	}
+}
+
+// =============================================================================
+// Tests: buildChecks includes Lambda and SES
+// =============================================================================
+
+func TestBuildChecks_IncludesLambdaAndSES(t *testing.T) {
+	cfg := minimalConfig()
+	deps := &DoctorDeps{
+		LambdaClient: &mockLambdaClient{output: &lambdasvc.GetFunctionOutput{}},
+		SESClient:    &mockSESClient{output: &sesv2svc.GetEmailIdentityOutput{VerificationStatus: sesv2types.VerificationStatusSuccess}},
+	}
+	checks := buildChecks(cfg, deps)
+	// Run all checks and look for Lambda and SES names.
+	results := runChecks(context.Background(), checks)
+	var foundLambda, foundSES bool
+	for _, r := range results {
+		if containsString(r.Name, "Lambda") || containsString(r.Name, "TTL") {
+			foundLambda = true
+		}
+		if containsString(r.Name, "SES") {
+			foundSES = true
+		}
+	}
+	if !foundLambda {
+		t.Error("buildChecks should include a Lambda check")
+	}
+	if !foundSES {
+		t.Error("buildChecks should include a SES check")
+	}
+}
+
+// Compile-time checks for new mock types.
+var _ LambdaGetFunctionAPI = (*mockLambdaClient)(nil)
+var _ SESGetEmailIdentityAPI = (*mockSESClient)(nil)
 
 // Suppress unused import warning
 var _ = fmt.Sprintf

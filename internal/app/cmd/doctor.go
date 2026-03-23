@@ -16,8 +16,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
+	"github.com/aws/aws-sdk-go-v2/service/lambda"
+	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sesv2"
+	sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -92,6 +96,16 @@ type EC2DescribeAPI interface {
 	DescribeSubnets(ctx context.Context, params *ec2.DescribeSubnetsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeSubnetsOutput, error)
 }
 
+// LambdaGetFunctionAPI covers Lambda GetFunction for existence check.
+type LambdaGetFunctionAPI interface {
+	GetFunction(ctx context.Context, params *lambda.GetFunctionInput, optFns ...func(*lambda.Options)) (*lambda.GetFunctionOutput, error)
+}
+
+// SESGetEmailIdentityAPI covers SES GetEmailIdentity for domain verification check.
+type SESGetEmailIdentityAPI interface {
+	GetEmailIdentity(ctx context.Context, params *sesv2.GetEmailIdentityInput, optFns ...func(*sesv2.Options)) (*sesv2.GetEmailIdentityOutput, error)
+}
+
 // DoctorConfigProvider abstracts config fields consumed by doctor checks.
 // Both *config.Config (production) and test stubs implement this interface.
 type DoctorConfigProvider interface {
@@ -134,6 +148,10 @@ type DoctorDeps struct {
 	SSMReadClient SSMReadAPI
 	// EC2Clients is a map from region name to EC2 client (one per region checked).
 	EC2Clients map[string]EC2DescribeAPI
+	// Lambda client for TTL handler existence check.
+	LambdaClient LambdaGetFunctionAPI
+	// SES client for domain verification check.
+	SESClient SESGetEmailIdentityAPI
 	// Lister for sandbox summary check.
 	Lister SandboxLister
 }
@@ -439,6 +457,93 @@ func checkSandboxSummary(ctx context.Context, lister SandboxLister) CheckResult 
 	}
 }
 
+// checkLambdaFunction verifies the given Lambda function exists.
+// Returns CheckSkipped when client is nil, CheckWarn when function is not found
+// (ResourceNotFoundException), and CheckOK on success.
+func checkLambdaFunction(ctx context.Context, client LambdaGetFunctionAPI, funcName string) CheckResult {
+	name := fmt.Sprintf("Lambda (%s)", funcName)
+	if client == nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "Lambda client not available",
+		}
+	}
+	_, err := client.GetFunction(ctx, &lambda.GetFunctionInput{
+		FunctionName: awssdk.String(funcName),
+	})
+	if err != nil {
+		var notFound *lambdatypes.ResourceNotFoundException
+		if errors.As(err, &notFound) {
+			return CheckResult{
+				Name:        name,
+				Status:      CheckWarn,
+				Message:     fmt.Sprintf("function %q not found", funcName),
+				Remediation: "Run 'km init' to deploy the TTL handler Lambda",
+			}
+		}
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("could not check Lambda function %q: %v", funcName, err),
+			Remediation: "Check Lambda permissions or run 'km init'",
+		}
+	}
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("function %q deployed", funcName),
+	}
+}
+
+// checkSESIdentity verifies the SES domain identity is verified.
+// The identity checked is "sandboxes.{domain}" derived from cfg.GetDomain().
+// Returns CheckSkipped when client is nil, CheckWarn when not found or not verified.
+func checkSESIdentity(ctx context.Context, client SESGetEmailIdentityAPI, domain string) CheckResult {
+	identity := fmt.Sprintf("sandboxes.%s", domain)
+	name := "SES Domain Identity"
+	if client == nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "SES client not available",
+		}
+	}
+	out, err := client.GetEmailIdentity(ctx, &sesv2.GetEmailIdentityInput{
+		EmailIdentity: awssdk.String(identity),
+	})
+	if err != nil {
+		var notFound *sesv2types.NotFoundException
+		if errors.As(err, &notFound) {
+			return CheckResult{
+				Name:        name,
+				Status:      CheckWarn,
+				Message:     fmt.Sprintf("SES identity %q not configured", identity),
+				Remediation: "Run 'km init' to configure SES domain identity",
+			}
+		}
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("could not check SES identity %q: %v", identity, err),
+			Remediation: "Check SES permissions or run 'km init'",
+		}
+	}
+	if out.VerificationStatus != sesv2types.VerificationStatusSuccess {
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("SES domain %q pending verification (status: %s)", identity, out.VerificationStatus),
+			Remediation: "Add the DNS TXT record provided by AWS SES to complete domain verification",
+		}
+	}
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("domain %q verified", identity),
+	}
+}
+
 // =============================================================================
 // Parallel execution helper
 // =============================================================================
@@ -717,6 +822,19 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		})
 	}
 
+	// Lambda TTL handler check.
+	lambdaClient := deps.LambdaClient
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkLambdaFunction(ctx, lambdaClient, "km-ttl-handler")
+	})
+
+	// SES domain identity check.
+	sesClient := deps.SESClient
+	domain := cfg.GetDomain()
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkSESIdentity(ctx, sesClient, domain)
+	})
+
 	// Sandbox summary check.
 	lister := deps.Lister
 	checks = append(checks, func(ctx context.Context) CheckResult {
@@ -751,6 +869,10 @@ func initRealDeps(ctx context.Context, cfg DoctorConfigProvider) *DoctorDeps {
 
 	// Organizations client (for SCP check) — requires management account creds.
 	deps.OrgsClient = organizations.NewFromConfig(awsCfg)
+
+	// Lambda and SES clients for regional infra checks.
+	deps.LambdaClient = lambda.NewFromConfig(awsCfg)
+	deps.SESClient = sesv2.NewFromConfig(awsCfg)
 
 	// Per-region EC2 clients.
 	deps.EC2Clients = make(map[string]EC2DescribeAPI)
