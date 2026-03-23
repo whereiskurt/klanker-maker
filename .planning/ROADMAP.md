@@ -360,7 +360,8 @@ Plans:
 - `km doctor` reports GitHub App status including installation scope (which org, how many repos accessible)
 
 **Depends on:** Phase 6 (config/bootstrap patterns), Phase 10 (SCP), Phase 13 (GitHub App config), Phase 14 (identity table)
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 15 to break down)
+- [ ] 15-01-PLAN.md — km doctor command with parallel platform health checks, colored output, JSON/quiet modes
+- [ ] 15-02-PLAN.md — km configure github --setup manifest flow for one-click GitHub App creation
