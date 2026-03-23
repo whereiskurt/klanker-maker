@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 18-03-PLAN.md
-last_updated: "2026-03-23T23:45:56.556Z"
+stopped_at: Completed 18-02-PLAN.md
+last_updated: "2026-03-23T23:48:24.835Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 18
   completed_phases: 17
   total_plans: 66
-  completed_plans: 64
+  completed_plans: 65
   percent: 0
 ---
 
@@ -113,6 +113,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 16-documentation-refresh P01 | 12min | 2 tasks | 3 files |
 | Phase 18-loose-ends P01 | 396s | 2 tasks | 5 files |
 | Phase 18-loose-ends P03 | 15min | 1 tasks | 4 files |
+| Phase 18-loose-ends P02 | 700s | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -290,6 +291,8 @@ Recent decisions affecting current work:
 - [Phase 18-loose-ends]: state_bucket uses omitempty in km-config.yaml so operators who skip it get clean YAML
 - [Phase 18-loose-ends]: ErrGitHubNotConfigured sentinel: ParameterNotFound from SSM maps to clean skip message, not stack trace
 - [Phase 18-loose-ends]: uninit.go active-sandbox guard: refuses teardown when running sandboxes exist unless --force
+- [Phase 18-loose-ends]: km uninit: non-fatal destroy errors warn-and-continue (partial teardown better than stopping)
+- [Phase 18-loose-ends]: SSMGetPutAPI interface extracted in create.go to enable unit testing of generateAndStoreGitHubToken
 
 ### Roadmap Evolution
 
@@ -315,6 +318,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T23:45:56.552Z
-Stopped at: Completed 18-03-PLAN.md
+Last session: 2026-03-23T23:48:24.832Z
+Stopped at: Completed 18-02-PLAN.md
 Resume file: None
