@@ -16,6 +16,14 @@ import (
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
 )
 
+// KMSEnsureAPI covers the KMS operations needed to create a key and alias.
+// Allows test injection without real AWS calls.
+type KMSEnsureAPI interface {
+	DescribeKey(ctx context.Context, params *kms.DescribeKeyInput, optFns ...func(*kms.Options)) (*kms.DescribeKeyOutput, error)
+	CreateKey(ctx context.Context, params *kms.CreateKeyInput, optFns ...func(*kms.Options)) (*kms.CreateKeyOutput, error)
+	CreateAlias(ctx context.Context, params *kms.CreateAliasInput, optFns ...func(*kms.Options)) (*kms.CreateAliasOutput, error)
+}
+
 // TerragruntApplyFunc is the function signature for applying a Terragrunt unit.
 // It is exported so external test packages can inject a fake without executing terragrunt.
 type TerragruntApplyFunc func(ctx context.Context, dir string) error
@@ -402,25 +410,31 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 }
 
 // ensureKMSPlatformKey creates the km-platform KMS key and alias if they don't exist.
-func ensureKMSPlatformKey(ctx context.Context, cfg *config.Config, w io.Writer) error {
-	region := cfg.PrimaryRegion
-	if region == "" {
-		region = "us-east-1"
+// Pass a non-nil kmsClient to override the default real AWS client (used in tests).
+func ensureKMSPlatformKey(ctx context.Context, cfg *config.Config, w io.Writer, kmsClient ...KMSEnsureAPI) error {
+	var client KMSEnsureAPI
+	if len(kmsClient) > 0 && kmsClient[0] != nil {
+		client = kmsClient[0]
+	} else {
+		region := cfg.PrimaryRegion
+		if region == "" {
+			region = "us-east-1"
+		}
+
+		awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
+			awsconfig.WithRegion(region),
+			awsconfig.WithSharedConfigProfile("klanker-terraform"),
+		)
+		if err != nil {
+			return fmt.Errorf("load AWS config: %w", err)
+		}
+		client = kms.NewFromConfig(awsCfg)
 	}
 
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithRegion(region),
-		awsconfig.WithSharedConfigProfile("klanker-terraform"),
-	)
-	if err != nil {
-		return fmt.Errorf("load AWS config: %w", err)
-	}
-
-	client := kms.NewFromConfig(awsCfg)
 	aliasName := "alias/km-platform"
 
 	// Check if alias already exists.
-	_, err = client.DescribeKey(ctx, &kms.DescribeKeyInput{
+	_, err := client.DescribeKey(ctx, &kms.DescribeKeyInput{
 		KeyId: aws.String(aliasName),
 	})
 	if err == nil {
