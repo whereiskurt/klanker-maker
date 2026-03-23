@@ -15,11 +15,12 @@ import (
 
 // platformConfig is the structure written to km-config.yaml.
 type platformConfig struct {
-	Domain   string          `yaml:"domain"`
-	Accounts accountsConfig  `yaml:"accounts"`
-	SSO      ssoConfig       `yaml:"sso"`
-	Region   string          `yaml:"region"`
-	BudgetTableName string   `yaml:"budget_table_name,omitempty"`
+	Domain          string         `yaml:"domain"`
+	Accounts        accountsConfig `yaml:"accounts"`
+	SSO             ssoConfig      `yaml:"sso"`
+	Region          string         `yaml:"region"`
+	BudgetTableName string         `yaml:"budget_table_name,omitempty"`
+	StateBucket     string         `yaml:"state_bucket,omitempty"`
 }
 
 type accountsConfig struct {
@@ -41,15 +42,16 @@ func NewConfigureCmd(cfg *config.Config) *cobra.Command {
 // newConfigureCmdWithIO creates the configure command with injected I/O for testability.
 func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cobra.Command {
 	var (
-		nonInteractive   bool
-		outputDir        string
-		domain           string
-		managementAcct   string
-		terraformAcct    string
-		applicationAcct  string
-		ssoStartURL      string
-		ssoRegion        string
-		region           string
+		nonInteractive  bool
+		outputDir       string
+		domain          string
+		managementAcct  string
+		terraformAcct   string
+		applicationAcct string
+		ssoStartURL     string
+		ssoRegion       string
+		region          string
+		stateBucket     string
 	)
 
 	cmd := &cobra.Command{
@@ -59,7 +61,7 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runConfigure(in, out, outputDir, nonInteractive, domain,
 				managementAcct, terraformAcct, applicationAcct,
-				ssoStartURL, ssoRegion, region)
+				ssoStartURL, ssoRegion, region, stateBucket)
 		},
 	}
 
@@ -81,6 +83,8 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		"AWS region for SSO instance")
 	cmd.Flags().StringVar(&region, "region", "",
 		"Default AWS region for infrastructure")
+	cmd.Flags().StringVar(&stateBucket, "state-bucket", "",
+		"S3 bucket name for sandbox metadata (used by km list/status)")
 
 	_ = cfg // reserved for future use (e.g. pre-filling from existing config)
 
@@ -90,7 +94,7 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 // runConfigure implements the configure wizard logic.
 func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive bool,
 	domain, managementAcct, terraformAcct, applicationAcct,
-	ssoStartURL, ssoRegion, region string) error {
+	ssoStartURL, ssoRegion, region, stateBucket string) error {
 
 	if nonInteractive {
 		// Validate required flags
@@ -152,6 +156,10 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		if err != nil {
 			return err
 		}
+		stateBucket, err = prompt(out, scanner, "S3 state bucket for sandbox metadata (used by km list/status)", stateBucket)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Detect topology
@@ -180,6 +188,7 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		},
 		Region:          region,
 		BudgetTableName: "km-budgets",
+		StateBucket:     stateBucket,
 	}
 
 	// Determine output path

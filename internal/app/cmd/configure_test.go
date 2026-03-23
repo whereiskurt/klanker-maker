@@ -157,6 +157,63 @@ func TestConfigureThreeAccountTopology(t *testing.T) {
 	}
 }
 
+// TestConfigureStateBucketFlag verifies that --state-bucket is written to km-config.yaml.
+func TestConfigureStateBucketFlag(t *testing.T) {
+	km := buildKM(t)
+	dir := t.TempDir()
+
+	out, err := runKMArgs(km, "",
+		"configure",
+		"--non-interactive",
+		"--output-dir", dir,
+		"--domain", "test.example.com",
+		"--management-account", "111111111111",
+		"--terraform-account", "222222222222",
+		"--application-account", "333333333333",
+		"--sso-start-url", "https://sso.example.com/start",
+		"--sso-region", "us-east-1",
+		"--region", "us-east-1",
+		"--state-bucket", "my-sandbox-state-bucket",
+	)
+	if err != nil {
+		t.Fatalf("km configure --state-bucket: %v\noutput: %s", err, out)
+	}
+
+	cfg := kmConfigYAML(t, dir)
+	if cfg["state_bucket"] != "my-sandbox-state-bucket" {
+		t.Errorf("state_bucket: got %v, want my-sandbox-state-bucket", cfg["state_bucket"])
+	}
+}
+
+// TestConfigureStateBucketOmittedWhenEmpty verifies that state_bucket is absent
+// from km-config.yaml when --state-bucket is not provided (omitempty behavior).
+func TestConfigureStateBucketOmittedWhenEmpty(t *testing.T) {
+	km := buildKM(t)
+	dir := t.TempDir()
+
+	out, err := runKMArgs(km, "",
+		"configure",
+		"--non-interactive",
+		"--output-dir", dir,
+		"--domain", "test.example.com",
+		"--management-account", "111111111111",
+		"--terraform-account", "222222222222",
+		"--application-account", "333333333333",
+		"--sso-start-url", "https://sso.example.com/start",
+		"--sso-region", "us-east-1",
+		"--region", "us-east-1",
+		// No --state-bucket flag
+	)
+	if err != nil {
+		t.Fatalf("km configure without --state-bucket: %v\noutput: %s", err, out)
+	}
+
+	cfg := kmConfigYAML(t, dir)
+	if _, present := cfg["state_bucket"]; present {
+		t.Errorf("state_bucket should be absent when not provided; got: %v", cfg["state_bucket"])
+	}
+}
+
 // TestBootstrapDryRun verifies that km bootstrap --dry-run validates config and
 // prints what would be provisioned without making any AWS calls.
 func TestBootstrapDryRun(t *testing.T) {
