@@ -1,0 +1,40 @@
+Tears down all shared regional infrastructure for a region in reverse dependency order.
+
+This is the reverse of 'km init'. Run this when decommissioning a region. Before
+proceeding, uninit checks for active sandboxes in the region — if any are found,
+it refuses to continue unless --force is passed.
+
+Modules are destroyed in reverse dependency order:
+  1. TTL handler Lambda   (depends on network and artifacts)
+  2. S3 artifact replication
+  3. SES email infrastructure
+  4. DynamoDB identity table
+  5. DynamoDB budget table
+  6. Network (VPC, subnets, security groups) — last
+
+Safe to run with missing modules — skips directories that don't exist.
+Non-fatal on individual module errors — warns and continues to the next module.
+
+Usage:
+  km uninit [flags]
+
+Examples:
+  # Uninitialize the default region (us-east-1)
+  km uninit
+
+  # Uninitialize a specific region
+  km uninit --region ca-central-1
+
+  # Force teardown even when active sandboxes exist
+  km uninit --region us-east-1 --force
+
+Flags:
+  --aws-profile string   AWS CLI profile to use (default: klanker-application)
+  --region string        AWS region to uninitialize (default: us-east-1)
+  --force                Proceed even if active sandboxes exist in the region
+
+Prerequisites:
+  - AWS credentials configured (profile: klanker-application)
+  - km-config.yaml present (run 'km configure' first)
+  - Terraform and Terragrunt installed
+  - All sandboxes in the region must be destroyed first (or use --force)

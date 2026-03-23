@@ -1,0 +1,159 @@
+package cmd
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/spf13/cobra"
+	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klankrmkr/pkg/compiler"
+	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
+)
+
+// UninitRunner is a narrow interface for the Destroy operation, allowing test injection.
+type UninitRunner interface {
+	Destroy(ctx context.Context, dir string) error
+}
+
+// NewUninitCmd creates the "km uninit" subcommand.
+// Usage: km uninit [--region <region>] [--aws-profile <name>] [--force]
+//
+// Command flow:
+//  1. Validate AWS credentials
+//  2. Check for active sandboxes in the region (requires StateBucket; error if not set unless --force)
+//  3. If active sandboxes exist and --force is not set: return error
+//  4. Destroy all regional modules in reverse dependency order
+func NewUninitCmd(cfg *config.Config) *cobra.Command {
+	var awsProfile string
+	var region string
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:   "uninit",
+		Short: "Tear down all shared regional infrastructure for a region",
+		Long:  helpText("uninit"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if awsProfile == "" {
+				awsProfile = "klanker-application"
+			}
+			return runUninit(cfg, awsProfile, region, force)
+		},
+	}
+
+	cmd.Flags().StringVar(&awsProfile, "aws-profile", "klanker-application",
+		"AWS CLI profile to use for teardown")
+	cmd.Flags().StringVar(&region, "region", "us-east-1",
+		"AWS region to uninitialize (e.g. us-east-1, ca-central-1)")
+	cmd.Flags().BoolVar(&force, "force", false,
+		"Destroy even if active sandboxes exist in the region")
+
+	return cmd
+}
+
+// runUninit is the top-level uninit logic (uses real AWS clients).
+func runUninit(cfg *config.Config, awsProfile, region string, force bool) error {
+	ctx := context.Background()
+
+	// Validate AWS credentials
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, awsProfile)
+	if err != nil {
+		return fmt.Errorf("failed to load AWS config (profile=%s): %w", awsProfile, err)
+	}
+	if err := awspkg.ValidateCredentials(ctx, awsCfg); err != nil {
+		return fmt.Errorf("AWS credential validation failed: %w", err)
+	}
+
+	repoRoot := findRepoRoot()
+	runner := terragrunt.NewRunner(awsProfile, repoRoot)
+
+	var lister SandboxLister
+	if cfg.StateBucket != "" {
+		s3Client := s3.NewFromConfig(awsCfg)
+		lister = &awsSandboxLister{
+			s3Client: s3Client,
+			bucket:   cfg.StateBucket,
+		}
+	}
+
+	return RunUninitWithDeps(cfg, runner, lister, region, force)
+}
+
+// RunUninitWithDeps is the testable core of uninit with dependency injection.
+// It accepts a UninitRunner and SandboxLister to allow unit testing without AWS.
+//
+// Exported for use in uninit_test.go.
+func RunUninitWithDeps(cfg *config.Config, runner UninitRunner, lister SandboxLister, region string, force bool) error {
+	ctx := context.Background()
+
+	// Step 1: Verify we can check for active sandboxes.
+	// If StateBucket is not configured, we can't verify — require --force.
+	if cfg.StateBucket == "" && !force {
+		return fmt.Errorf(
+			"cannot verify active sandboxes — state_bucket not configured; use --force to proceed without the check",
+		)
+	}
+
+	// Step 2: Check for active sandboxes in the target region.
+	if lister != nil && !force {
+		records, err := lister.ListSandboxes(ctx, false)
+		if err != nil {
+			return fmt.Errorf("failed to list sandboxes (use --force to skip this check): %w", err)
+		}
+
+		activeCount := 0
+		for _, r := range records {
+			if r.Region == region && r.Status == "running" {
+				activeCount++
+			}
+		}
+
+		if activeCount > 0 {
+			return fmt.Errorf(
+				"%d active sandbox(es) found in region %s — destroy them first or use --force to proceed anyway",
+				activeCount, region,
+			)
+		}
+	}
+
+	// Step 3: Build module list in reverse dependency order.
+	repoRoot := findRepoRoot()
+	regionLabel := compiler.RegionLabel(region)
+	regionDir := filepath.Join(repoRoot, "infra", "live", regionLabel)
+
+	// Reverse dependency order: TTL handler first (depends on network), network last.
+	type moduleEntry struct {
+		dir  string
+		name string
+	}
+	modules := []moduleEntry{
+		{dir: filepath.Join(regionDir, "ttl-handler"), name: "TTL handler Lambda"},
+		{dir: filepath.Join(regionDir, "s3-replication"), name: "S3 artifact replication"},
+		{dir: filepath.Join(regionDir, "ses"), name: "SES email infrastructure"},
+		{dir: filepath.Join(regionDir, "dynamodb-identities"), name: "DynamoDB identity table"},
+		{dir: filepath.Join(regionDir, "dynamodb-budget"), name: "DynamoDB budget table"},
+		{dir: filepath.Join(regionDir, "network"), name: "network (VPC/subnets/SGs)"},
+	}
+
+	// Step 4: Destroy each module. Skip missing directories; continue on error.
+	destroyed := 0
+	for _, mod := range modules {
+		if _, err := os.Stat(mod.dir); os.IsNotExist(err) {
+			fmt.Printf("  Skipping %s (directory not found)\n", mod.name)
+			continue
+		}
+
+		fmt.Printf("  Destroying %s...\n", mod.name)
+		if err := runner.Destroy(ctx, mod.dir); err != nil {
+			fmt.Printf("  Warning: %s destroy failed (continuing): %v\n", mod.name, err)
+			continue
+		}
+		destroyed++
+	}
+
+	fmt.Printf("\nUninit complete for %s (%s): %d module(s) destroyed\n", region, regionLabel, destroyed)
+	return nil
+}

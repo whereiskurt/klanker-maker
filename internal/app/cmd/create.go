@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
@@ -26,6 +28,18 @@ import (
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
 )
+
+// ErrGitHubNotConfigured is returned by generateAndStoreGitHubToken when the
+// GitHub App SSM parameters are not found. Callers convert this to a clean
+// "skipped (not configured)" log message rather than showing a stack trace.
+var ErrGitHubNotConfigured = errors.New("GitHub App not configured in SSM — run 'km configure github' first")
+
+// SSMGetPutAPI is a narrow interface covering the SSM operations used by
+// generateAndStoreGitHubToken. *ssm.Client satisfies this interface.
+type SSMGetPutAPI interface {
+	GetParameter(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error)
+	PutParameter(ctx context.Context, params *ssm.PutParameterInput, optFns ...func(*ssm.Options)) (*ssm.PutParameterOutput, error)
+}
 
 // NewCreateCmd creates the "km create" subcommand.
 // Usage: km create <profile.yaml> [--on-demand] [--aws-profile <name>]
@@ -379,8 +393,12 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		}
 		gh := resolvedProfile.Spec.SourceAccess.GitHub
 		if tokenErr := generateAndStoreGitHubToken(ctx, ssmClient, sandboxID, kmsKeyARN, gh.AllowedRepos, gh.Permissions); tokenErr != nil {
-			log.Warn().Err(tokenErr).Str("sandbox_id", sandboxID).
-				Msg("Step 13a: GitHub App token generation failed (non-fatal — sandbox is provisioned)")
+			if errors.Is(tokenErr, ErrGitHubNotConfigured) {
+				fmt.Printf("Step 13a: GitHub token skipped (not configured)\n")
+			} else {
+				log.Warn().Err(tokenErr).Str("sandbox_id", sandboxID).
+					Msg("Step 13a: GitHub App token generation failed (non-fatal — sandbox is provisioned)")
+			}
 		} else {
 			fmt.Printf("Step 13a: GitHub App installation token stored in SSM\n")
 		}
@@ -495,8 +513,9 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 // installation token, and writes it to SSM at /sandbox/{sandboxID}/github-token.
 //
 // Called from runCreate when profile.Spec.SourceAccess.GitHub is non-nil.
-// Returns an error on any failure — the caller treats this as non-fatal.
-func generateAndStoreGitHubToken(ctx context.Context, ssmClient *ssm.Client, sandboxID, kmsKeyARN string, allowedRepos, permissions []string) error {
+// Returns ErrGitHubNotConfigured when any SSM parameter is missing (ParameterNotFound).
+// Returns a wrapped error for all other failures — the caller treats this as non-fatal.
+func generateAndStoreGitHubToken(ctx context.Context, ssmClient SSMGetPutAPI, sandboxID, kmsKeyARN string, allowedRepos, permissions []string) error {
 	withDecryption := true
 
 	appClientIDOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
@@ -504,7 +523,11 @@ func generateAndStoreGitHubToken(ctx context.Context, ssmClient *ssm.Client, san
 		WithDecryption: &withDecryption,
 	})
 	if err != nil {
-		return fmt.Errorf("read app-client-id from SSM (run km configure github first): %w", err)
+		var notFound *ssmtypes.ParameterNotFound
+		if errors.As(err, &notFound) {
+			return ErrGitHubNotConfigured
+		}
+		return fmt.Errorf("read app-client-id from SSM: %w", err)
 	}
 
 	privateKeyOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
@@ -512,6 +535,10 @@ func generateAndStoreGitHubToken(ctx context.Context, ssmClient *ssm.Client, san
 		WithDecryption: &withDecryption,
 	})
 	if err != nil {
+		var notFound *ssmtypes.ParameterNotFound
+		if errors.As(err, &notFound) {
+			return ErrGitHubNotConfigured
+		}
 		return fmt.Errorf("read private-key from SSM: %w", err)
 	}
 
@@ -520,6 +547,10 @@ func generateAndStoreGitHubToken(ctx context.Context, ssmClient *ssm.Client, san
 		WithDecryption: &withDecryption,
 	})
 	if err != nil {
+		var notFound *ssmtypes.ParameterNotFound
+		if errors.As(err, &notFound) {
+			return ErrGitHubNotConfigured
+		}
 		return fmt.Errorf("read installation-id from SSM: %w", err)
 	}
 
