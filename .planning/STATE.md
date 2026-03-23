@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 13-02-PLAN.md
-last_updated: "2026-03-23T03:01:52.231Z"
+stopped_at: Completed 13-01-PLAN.md
+last_updated: "2026-03-23T03:07:56.418Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
-  total_phases: 14
+  total_phases: 15
   completed_phases: 12
   total_plans: 53
-  completed_plans: 47
+  completed_plans: 48
   percent: 0
 ---
 
@@ -96,6 +96,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 12-ecs-budget-topup-s3-replication P02 | 61s | 1 tasks | 1 files |
 | Phase 12-ecs-budget-topup-s3-replication P01 | 216s | 1 tasks | 3 files |
 | Phase 13-github-app-token-integration-scoped-repo-access-for-sandboxes P02 | 6min | 2 tasks | 5 files |
+| Phase 13 P01 | 499s | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -229,6 +230,9 @@ Recent decisions affecting current work:
 - [Phase 13-02]: github-token-refresher added to trusted_arns_ssm only (not base/instance/iam) — it only needs SSM GetParameter/PutParameter, not EC2/IAM/instance mutation
 - [Phase 13-02]: KMS key policy: three-principal model (root admin + Lambda encrypt/decrypt + sandbox role decrypt only)
 - [Phase 13-02]: EventBridge Scheduler payload carries kms_key_arn, allowed_repos, permissions — Lambda has all data per invocation without extra SSM reads
+- [Phase 13-01]: GitHubAPIBaseURL package-level var enables httptest injection without function signature changes
+- [Phase 13-01]: PKCS#1 tried first in key parsing, PKCS#8 as fallback — matches GitHub App key export behavior
+- [Phase 13-01]: MockSSMClient exported from pkg/github so external test packages can reuse without duplication
 
 ### Roadmap Evolution
 
@@ -251,6 +255,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T03:01:52.228Z
-Stopped at: Completed 13-02-PLAN.md
+Last session: 2026-03-23T03:07:49.709Z
+Stopped at: Completed 13-01-PLAN.md
 Resume file: None
