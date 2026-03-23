@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -341,5 +342,14 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 			encryption = "unknown"
 		}
 		fmt.Fprintf(out, "  Encryption:      %s\n", encryption)
+
+		if identity.Alias != "" {
+			fmt.Fprintf(out, "  Alias:            %s\n", identity.Alias)
+		}
+		if len(identity.AllowedSenders) > 0 {
+			fmt.Fprintf(out, "  Allowed Senders:  %s\n", strings.Join(identity.AllowedSenders, ", "))
+		} else {
+			fmt.Fprintf(out, "  Allowed Senders:  not configured\n")
+		}
 	}
 }
