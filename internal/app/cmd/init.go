@@ -84,7 +84,7 @@ func runInit(cfg *config.Config, awsProfile, region string) error {
 	}
 
 	// Copy network terragrunt template
-	templateSrc := filepath.Join(repoRoot, "infra", "templates", "network.terragrunt.hcl")
+	templateSrc := filepath.Join(repoRoot, "infra", "templates", "network", "terragrunt.hcl")
 	networkTgDst := filepath.Join(networkDir, "terragrunt.hcl")
 	if _, err := os.Stat(networkTgDst); os.IsNotExist(err) {
 		srcData, readErr := os.ReadFile(templateSrc)

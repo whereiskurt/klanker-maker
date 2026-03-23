@@ -9,9 +9,9 @@ import (
 
 // CreateSandboxDir creates a new per-sandbox directory under
 // <repoRoot>/infra/live/<regionLabel>/sandboxes/<sandboxID>/ and copies the
-// infra/templates/sandbox.terragrunt.hcl into it. Returns the absolute path.
+// infra/templates/sandbox/terragrunt.hcl into it. Returns the absolute path.
 func CreateSandboxDir(repoRoot, regionLabel, sandboxID string) (string, error) {
-	templateDir := filepath.Join(repoRoot, "infra", "templates")
+	templateDir := filepath.Join(repoRoot, "infra", "templates", "sandbox")
 	sandboxDir := filepath.Join(repoRoot, "infra", "live", regionLabel, "sandboxes", sandboxID)
 
 	if err := os.MkdirAll(sandboxDir, 0o755); err != nil {
@@ -19,7 +19,7 @@ func CreateSandboxDir(repoRoot, regionLabel, sandboxID string) (string, error) {
 	}
 
 	// Copy terragrunt.hcl from the template into the new sandbox directory.
-	src := filepath.Join(templateDir, "sandbox.terragrunt.hcl")
+	src := filepath.Join(templateDir, "terragrunt.hcl")
 	dst := filepath.Join(sandboxDir, "terragrunt.hcl")
 	if err := copyFile(src, dst); err != nil {
 		return "", fmt.Errorf("copy template terragrunt.hcl: %w", err)
