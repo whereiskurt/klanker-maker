@@ -1,9 +1,8 @@
-Provisions the shared VPC and networking that all sandboxes in a region use.
+Provisions all shared regional infrastructure that sandboxes in a region use.
 
 Run this once per region before your first 'km create' targeting that region.
-Safe to re-run — idempotent via Terraform. The shared infrastructure includes
-a VPC, public subnets across availability zones, and a sandbox management
-security group.
+Safe to re-run — idempotent via Terraform. Missing modules are skipped with a
+warning. Modules requiring unconfigured env vars are skipped gracefully.
 
 Usage:
   km init [flags]
@@ -18,16 +17,25 @@ Examples:
   # Use a non-default AWS profile
   km init --region us-east-1 --aws-profile klanker-application
 
-What Gets Created:
-  - VPC with DNS support enabled
-  - Public subnets across 2+ availability zones
-  - Internet gateway and route tables
-  - Sandbox management security group (egress-only by default)
+Modules Deployed (in dependency order):
+  1. network             — VPC, public subnets, internet gateway, security groups
+  2. dynamodb-budget     — DynamoDB table for per-sandbox budget tracking
+  3. dynamodb-identities — DynamoDB table for sandbox identity/key management
+  4. ses                 — SES email infrastructure (requires KM_ROUTE53_ZONE_ID)
+  5. s3-replication      — S3 artifact replication bucket (requires KM_ARTIFACTS_BUCKET)
+  6. ttl-handler         — Lambda for TTL-based auto-destroy (requires KM_ARTIFACTS_BUCKET)
+
+Environment Variables (optional):
+  KM_ROUTE53_ZONE_ID   — Route53 hosted zone ID for SES DNS validation
+  KM_ARTIFACTS_BUCKET  — S3 bucket name for Lambda artifacts
+
+  Modules whose required env var is unset are skipped with a warning.
+  Other modules still deploy normally.
 
 Prerequisites:
   - AWS credentials configured (profile: klanker-application)
   - km-config.yaml present (run 'km configure' first)
   - Terraform and Terragrunt installed
 
-The outputs (VPC ID, subnet IDs, security group ID) are stored in
+Network outputs (VPC ID, subnet IDs, security group ID) are stored in
 Terraform state and automatically referenced by 'km create'.

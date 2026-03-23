@@ -14,6 +14,13 @@ import (
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
 )
 
+// InitRunner is the interface for applying Terragrunt modules.
+// It is implemented by *terragrunt.Runner and by test mocks.
+type InitRunner interface {
+	Apply(ctx context.Context, dir string) error
+	Output(ctx context.Context, dir string) (map[string]interface{}, error)
+}
+
 // NetworkOutputs holds the Terraform outputs from the shared network module.
 type NetworkOutputs struct {
 	VPCID             string   `json:"vpc_id"`
@@ -22,13 +29,57 @@ type NetworkOutputs struct {
 	SandboxMgmtSGID   string   `json:"sandbox_mgmt_sg_id"`
 }
 
+// regionalModule describes a single regional infrastructure module.
+type regionalModule struct {
+	name    string
+	dir     string
+	envReqs []string // environment variables required to apply this module
+}
+
+// regionalModules returns the ordered slice of regional infrastructure modules
+// for the given region directory. Modules are returned in dependency order.
+func regionalModules(regionDir string) []regionalModule {
+	return []regionalModule{
+		{
+			name:    "network",
+			dir:     filepath.Join(regionDir, "network"),
+			envReqs: nil,
+		},
+		{
+			name:    "dynamodb-budget",
+			dir:     filepath.Join(regionDir, "dynamodb-budget"),
+			envReqs: nil,
+		},
+		{
+			name:    "dynamodb-identities",
+			dir:     filepath.Join(regionDir, "dynamodb-identities"),
+			envReqs: nil,
+		},
+		{
+			name:    "ses",
+			dir:     filepath.Join(regionDir, "ses"),
+			envReqs: []string{"KM_ROUTE53_ZONE_ID"},
+		},
+		{
+			name:    "s3-replication",
+			dir:     filepath.Join(regionDir, "s3-replication"),
+			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
+		},
+		{
+			name:    "ttl-handler",
+			dir:     filepath.Join(regionDir, "ttl-handler"),
+			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
+		},
+	}
+}
+
 func NewInitCmd(cfg *config.Config) *cobra.Command {
 	var awsProfile string
 	var region string
 
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Initialize shared infrastructure (VPC, subnets, security groups) for a region",
+		Short: "Initialize all regional infrastructure (network, DynamoDB, SES, S3 replication, TTL handler)",
 		Long:  helpText("init"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if awsProfile == "" {
@@ -48,7 +99,6 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 
 func runInit(cfg *config.Config, awsProfile, region string) error {
 	ctx := context.Background()
-	regionLabel := compiler.RegionLabel(region)
 
 	// Validate AWS credentials
 	awsCfg, err := awspkg.LoadAWSConfig(ctx, awsProfile)
@@ -60,15 +110,21 @@ func runInit(cfg *config.Config, awsProfile, region string) error {
 	}
 
 	repoRoot := findRepoRoot()
+	runner := terragrunt.NewRunner(awsProfile, repoRoot)
+	return RunInitWithRunner(runner, repoRoot, region)
+}
 
-	// Create region directory structure: infra/live/<region>/network/ and infra/live/<region>/sandboxes/
+// RunInitWithRunner implements the full init flow using an InitRunner interface.
+// This function is the testable core — runInit wraps it with real runner construction.
+// Exported for use by tests in cmd_test package.
+func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
+	ctx := context.Background()
+	regionLabel := compiler.RegionLabel(region)
+
+	// Create region directory structure: infra/live/<regionLabel>/sandboxes/
 	regionDir := filepath.Join(repoRoot, "infra", "live", regionLabel)
-	networkDir := filepath.Join(regionDir, "network")
 	sandboxesDir := filepath.Join(regionDir, "sandboxes")
 
-	if err := os.MkdirAll(networkDir, 0o755); err != nil {
-		return fmt.Errorf("creating network directory: %w", err)
-	}
 	if err := os.MkdirAll(sandboxesDir, 0o755); err != nil {
 		return fmt.Errorf("creating sandboxes directory: %w", err)
 	}
@@ -83,57 +139,69 @@ func runInit(cfg *config.Config, awsProfile, region string) error {
 		return fmt.Errorf("writing region.hcl: %w", err)
 	}
 
-	// Copy network terragrunt template
-	templateSrc := filepath.Join(repoRoot, "infra", "templates", "network", "terragrunt.hcl")
-	networkTgDst := filepath.Join(networkDir, "terragrunt.hcl")
-	if _, err := os.Stat(networkTgDst); os.IsNotExist(err) {
-		srcData, readErr := os.ReadFile(templateSrc)
-		if readErr != nil {
-			return fmt.Errorf("reading network template: %w", readErr)
+	modules := regionalModules(regionDir)
+
+	fmt.Printf("Initializing regional infrastructure for %s (%s)...\n", region, regionLabel)
+
+	for _, mod := range modules {
+		// Check if directory exists
+		if _, err := os.Stat(mod.dir); os.IsNotExist(err) {
+			fmt.Printf("  [skip] %s — directory not found (run 'km init' after creating module)\n", mod.name)
+			continue
 		}
-		if writeErr := os.WriteFile(networkTgDst, srcData, 0o644); writeErr != nil {
-			return fmt.Errorf("writing network terragrunt.hcl: %w", writeErr)
+
+		// Check required env vars
+		skipped := false
+		for _, envVar := range mod.envReqs {
+			if os.Getenv(envVar) == "" {
+				fmt.Printf("  [skip] %s — %s not set\n", mod.name, envVar)
+				skipped = true
+				break
+			}
+		}
+		if skipped {
+			continue
+		}
+
+		fmt.Printf("  Applying %s...\n", mod.name)
+		if err := runner.Apply(ctx, mod.dir); err != nil {
+			return fmt.Errorf("applying %s: %w", mod.name, err)
+		}
+
+		// After network module: capture and save outputs.json
+		if mod.name == "network" {
+			outputMap, err := runner.Output(ctx, mod.dir)
+			if err != nil {
+				return fmt.Errorf("reading network outputs: %w", err)
+			}
+
+			outputJSON, err := json.MarshalIndent(outputMap, "", "  ")
+			if err != nil {
+				return fmt.Errorf("serializing outputs: %w", err)
+			}
+
+			outputsFile := filepath.Join(mod.dir, "outputs.json")
+			if err := os.WriteFile(outputsFile, outputJSON, 0o644); err != nil {
+				return fmt.Errorf("writing outputs.json: %w", err)
+			}
+
+			// Display network summary
+			fmt.Printf("\n  Network outputs for %s:\n", region)
+			if v, ok := outputMap["vpc_id"]; ok {
+				fmt.Printf("    VPC:     %v\n", extractValue(v))
+			}
+			if v, ok := outputMap["public_subnets"]; ok {
+				fmt.Printf("    Subnets: %v\n", extractValue(v))
+			}
+			if v, ok := outputMap["availability_zones"]; ok {
+				fmt.Printf("    AZs:     %v\n", extractValue(v))
+			}
+			fmt.Println()
 		}
 	}
 
-	fmt.Printf("Initializing shared network for %s (%s)...\n", region, regionLabel)
-
-	// Run terragrunt apply
-	runner := terragrunt.NewRunner(awsProfile, repoRoot)
-	if err := runner.Apply(ctx, networkDir); err != nil {
-		return fmt.Errorf("network provisioning failed: %w", err)
-	}
-
-	// Capture outputs
-	outputMap, err := runner.Output(ctx, networkDir)
-	if err != nil {
-		return fmt.Errorf("reading network outputs: %w", err)
-	}
-
-	// Serialize and save outputs
-	outputJSON, err := json.MarshalIndent(outputMap, "", "  ")
-	if err != nil {
-		return fmt.Errorf("serializing outputs: %w", err)
-	}
-
-	outputsFile := filepath.Join(networkDir, "outputs.json")
-	if err := os.WriteFile(outputsFile, outputJSON, 0o644); err != nil {
-		return fmt.Errorf("writing outputs.json: %w", err)
-	}
-
-	// Display summary
-	fmt.Printf("\nShared network initialized for %s:\n", region)
-	if v, ok := outputMap["vpc_id"]; ok {
-		fmt.Printf("  VPC:     %v\n", extractValue(v))
-	}
-	if v, ok := outputMap["public_subnets"]; ok {
-		fmt.Printf("  Subnets: %v\n", extractValue(v))
-	}
-	if v, ok := outputMap["availability_zones"]; ok {
-		fmt.Printf("  AZs:     %v\n", extractValue(v))
-	}
-
-	fmt.Printf("\nReady for: km create --region %s <profile.yaml>\n", region)
+	fmt.Printf("\nRegional infrastructure initialized for %s.\n", region)
+	fmt.Printf("Ready for: km create --region %s <profile.yaml>\n", region)
 	return nil
 }
 
