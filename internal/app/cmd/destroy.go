@@ -10,6 +10,7 @@ import (
 	"regexp"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -271,6 +272,23 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool) er
 	// Step 10: Clean up SES email identity (idempotent — swallows NotFoundException).
 	if err := awspkg.CleanupSandboxEmail(ctx, sesClient, sandboxID, emailDomain); err != nil {
 		log.Warn().Err(err).Msg("failed to cleanup sandbox email (non-fatal)")
+	}
+
+	// Step 11: Clean up sandbox identity (SSM signing key + DynamoDB identity row).
+	// Non-fatal: idempotent — swallows ParameterNotFound for SSM and DeleteItem is a no-op for missing rows.
+	{
+		identitySSMClient := ssm.NewFromConfig(awsCfg)
+		identityDynClient := dynamodbpkg.NewFromConfig(awsCfg)
+		identityTableName := cfg.IdentityTableName
+		if identityTableName == "" {
+			identityTableName = "km-identities"
+		}
+		if identErr := awspkg.CleanupSandboxIdentity(ctx, identitySSMClient, identityDynClient, identityTableName, sandboxID); identErr != nil {
+			log.Warn().Err(identErr).Str("sandbox_id", sandboxID).
+				Msg("failed to cleanup sandbox identity (non-fatal)")
+		} else {
+			log.Info().Str("sandbox_id", sandboxID).Msg("sandbox identity cleaned up")
+		}
 	}
 
 	fmt.Printf("Sandbox %s destroyed successfully.\n", sandboxID)

@@ -119,6 +119,61 @@ func TestCreateCmd_InvalidProfile(t *testing.T) {
 	}
 }
 
+// TestRunCreate_IdentityProvisioning verifies that create.go contains the identity
+// provisioning wiring (Step 15). Source-level verification confirms call sites exist
+// and follow the non-fatal pattern established for budget and GitHub token.
+func TestRunCreate_IdentityProvisioning(t *testing.T) {
+	src, err := os.ReadFile("create.go")
+	if err != nil {
+		t.Fatalf("read create.go: %v", err)
+	}
+	s := string(src)
+
+	checks := []struct {
+		name    string
+		pattern string
+	}{
+		{"Step 15 comment", "Step 15"},
+		{"email section guard", "Spec.Email"},
+		{"GenerateSandboxIdentity call", "GenerateSandboxIdentity"},
+		{"PublishIdentity call", "PublishIdentity"},
+		{"non-fatal pattern", "failed to provision sandbox identity (non-fatal)"},
+		{"encryption check", "GenerateEncryptionKey"},
+		{"kmsKeyAlias construction", "alias/km-platform"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(s, c.pattern) {
+			t.Errorf("create.go missing %s (expected %q)", c.name, c.pattern)
+		}
+	}
+}
+
+// TestRunDestroy_IdentityCleanup verifies that destroy.go contains the identity
+// cleanup wiring (Step 11). Source-level verification confirms the cleanup call
+// follows the non-fatal/idempotent pattern from SES cleanup (Step 10).
+func TestRunDestroy_IdentityCleanup(t *testing.T) {
+	src, err := os.ReadFile("destroy.go")
+	if err != nil {
+		t.Fatalf("read destroy.go: %v", err)
+	}
+	s := string(src)
+
+	checks := []struct {
+		name    string
+		pattern string
+	}{
+		{"Step 11 comment", "Step 11"},
+		{"CleanupSandboxIdentity call", "CleanupSandboxIdentity"},
+		{"non-fatal pattern", "failed to cleanup sandbox identity (non-fatal)"},
+		{"identity table name", "IdentityTableName"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(s, c.pattern) {
+			t.Errorf("destroy.go missing %s (expected %q)", c.name, c.pattern)
+		}
+	}
+}
+
 // TestCreateCmd_Workflow verifies the create command workflow sequence using a
 // real valid profile but mocked environment. Because apply calls terragrunt
 // (not present in CI), we only verify up to the point of the apply attempt.
