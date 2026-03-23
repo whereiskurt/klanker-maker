@@ -227,10 +227,30 @@ Plans:
 - [ ] 10-01-PLAN.md — SCP Terraform module + Terragrunt management account deployment unit (SCP-01 through SCP-08, SCP-10)
 - [ ] 10-02-PLAN.md — Wire SCP deployment into km bootstrap command (SCP-09, SCP-11, SCP-12)
 
+### Phase 11: Sandbox Auto-Destroy & Metadata Wiring
+**Goal**: TTL expiry and idle timeout actually destroy sandbox resources instead of just exiting sidecars; km list and km status read metadata from the correct bucket
+**Depends on**: Phase 10
+**Requirements**: PROV-03, PROV-04, PROV-05, PROV-06
+**Gap Closure:** Closes gaps from v1.0 milestone audit
+**Success Criteria** (what must be TRUE):
+  1. TTL handler Lambda calls terragrunt destroy (or equivalent) after uploading artifacts — sandbox EC2/ECS resources are fully reclaimed on TTL expiry
+  2. IdleDetector.OnIdle triggers sandbox teardown via ExecuteTeardown() — idle EC2 instances are stopped/destroyed per teardown policy, not left running
+  3. km list returns accurate sandbox data by reading from the same bucket/source that km create writes to — no hardcoded bucket constant diverges from runtime config
+  4. km status shows correct metadata for a sandbox by reading from the same source as km list
+
+### Phase 12: ECS Budget Top-Up & S3 Replication Deployment
+**Goal**: ECS sandboxes suspended by budget enforcement can be resumed via km budget add; S3 artifact replication has a deployable Terragrunt config
+**Depends on**: Phase 11
+**Requirements**: BUDG-08, OBSV-06
+**Gap Closure:** Closes gaps from v1.0 milestone audit
+**Success Criteria** (what must be TRUE):
+  1. km budget add for an ECS sandbox re-provisions the Fargate task from the stored S3 profile — the task starts with the same container definitions and the budget enforcer resumes monitoring
+  2. infra/live/use1/s3-replication/terragrunt.hcl exists and deploys the S3 replication module to a secondary region
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -242,5 +262,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Budget Enforcement & Platform Configuration | 9/9 | Complete   | 2026-03-22 |
 | 7. Unwired Code Paths | 2/2 | Complete   | 2026-03-22 |
 | 8. Sidecar Build & Deployment Pipeline | 2/2 | Complete   | 2026-03-22 |
-| 9. Live Infrastructure & Operator Docs | 3/4 | Gap Closure | 2026-03-22 |
+| 9. Live Infrastructure & Operator Docs | 4/4 | Complete   | 2026-03-23 |
 | 10. SCP Sandbox Containment | 2/2 | Complete    | 2026-03-23 |
+| 11. Sandbox Auto-Destroy & Metadata Wiring | 0/0 | Planned   | — |
+| 12. ECS Budget Top-Up & S3 Replication | 0/0 | Planned   | — |

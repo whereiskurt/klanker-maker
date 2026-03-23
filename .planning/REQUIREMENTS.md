@@ -19,10 +19,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **PROV-01**: Operator can run `km create <profile>` to compile profile into Terragrunt inputs and provision EC2 + VPC + IAM
 - [x] **PROV-02**: Operator can run `km destroy <sandbox-id>` to cleanly tear down all sandbox resources
-- [x] **PROV-03**: Operator can run `km list` to see all running sandboxes with status
-- [x] **PROV-04**: Operator can run `km status <sandbox-id>` to see detailed sandbox state
-- [x] **PROV-05**: Sandbox auto-destroys after TTL expires
-- [x] **PROV-06**: Sandbox auto-destroys after idle timeout with no activity
+- [ ] **PROV-03**: Operator can run `km list` to see all running sandboxes with status
+- [ ] **PROV-04**: Operator can run `km status <sandbox-id>` to see detailed sandbox state
+- [ ] **PROV-05**: Sandbox auto-destroys after TTL expires
+- [ ] **PROV-06**: Sandbox auto-destroys after idle timeout with no activity
 - [x] **PROV-07**: Sandbox teardown policy is configurable (destroy/stop/retain)
 - [x] **PROV-08**: Every sandbox resource is tagged with `km:sandbox-id` for tracking and cost attribution
 - [x] **PROV-09**: Operator can specify substrate (`ec2` or `ecs`) in the profile's `runtime.substrate` field and `km create` provisions the corresponding infrastructure
@@ -49,7 +49,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **OBSV-03**: Log destination is configurable (CloudWatch/S3/stdout)
 - [x] **OBSV-04**: Filesystem policy enforces writable and read-only paths
 - [x] **OBSV-05**: Artifacts upload to S3 on sandbox exit with configurable size limits
-- [x] **OBSV-06**: S3 artifact storage supports multi-region replication
+- [ ] **OBSV-06**: S3 artifact storage supports multi-region replication
 - [x] **OBSV-07**: Secret patterns are redacted from audit logs before storage
 - [x] **OBSV-08**: Tracing sidecar collects OpenTelemetry traces and spans from sandbox workloads and exports to a configurable OTel collector endpoint
 - [x] **OBSV-09**: Each sandbox session is logged as an MLflow run with sandbox metadata (profile, sandbox-id, duration, exit status) as run parameters
@@ -98,7 +98,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **BUDG-05**: Model pricing sourced from AWS Price List API (cached, refreshed daily) — supports all Anthropic models available on Bedrock
 - [x] **BUDG-06**: At 80% budget threshold (configurable via `spec.budget.warningThreshold`), operator receives warning email via SES using existing `SendLifecycleNotification` pattern
 - [x] **BUDG-07**: Dual-layer enforcement — at 100% AI budget, http-proxy returns 403 for Bedrock calls (immediate, real-time); the same EventBridge-triggered Lambda that checks compute spend also reads DynamoDB AI spend records and revokes the instance profile's Bedrock IAM permissions as a backstop (catches SDK/CLI calls that bypass the proxy); at 100% compute budget, Lambda suspends the sandbox: EC2 instances are stopped (`StopInstances` — preserves EBS, no compute charges, resumable on top-up); ECS Fargate tasks trigger artifact upload then stop (tasks are ephemeral — top-up re-provisions from stored profile in S3)
-- [x] **BUDG-08**: Operator can top up a sandbox budget via `km budget add <sandbox-id> --compute <amount> --ai <amount>` which updates DynamoDB limits and resumes enforcement: for AI, restores Bedrock IAM and proxy unblocks; for compute, EC2 instances are started (`StartInstances` — resumes from stopped state), ECS Fargate tasks are re-provisioned from the stored profile in S3
+- [ ] **BUDG-08**: Operator can top up a sandbox budget via `km budget add <sandbox-id> --compute <amount> --ai <amount>` which updates DynamoDB limits and resumes enforcement: for AI, restores Bedrock IAM and proxy unblocks; for compute, EC2 instances are started (`StartInstances` — resumes from stopped state), ECS Fargate tasks are re-provisioned from the stored profile in S3
 - [x] **BUDG-09**: `km status <sandbox-id>` shows current spend vs budget for both compute and AI pools, including per-model AI breakdown
 
 ## v2 Requirements
@@ -174,10 +174,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | NETW-06 | Phase 2 | Complete |
 | NETW-07 | Phase 2 | Complete |
 | NETW-08 | Phase 2 | Complete |
-| PROV-03 | Phase 3 | Complete |
-| PROV-04 | Phase 3 | Complete |
-| PROV-05 | Phase 3 | Complete |
-| PROV-06 | Phase 3 | Complete |
+| PROV-03 | Phase 11 | Pending |
+| PROV-04 | Phase 11 | Pending |
+| PROV-05 | Phase 11 | Pending |
+| PROV-06 | Phase 11 | Pending |
 | PROV-07 | Phase 3 | Complete |
 | NETW-02 | Phase 3 | Complete |
 | NETW-03 | Phase 3 | Complete |
@@ -186,7 +186,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OBSV-03 | Phase 3 | Complete |
 | OBSV-04 | Phase 4 | Complete |
 | OBSV-05 | Phase 4 | Complete |
-| OBSV-06 | Phase 4 | Complete |
+| OBSV-06 | Phase 12 | Pending |
 | OBSV-07 | Phase 4 | Complete |
 | OBSV-08 | Phase 3 | Complete |
 | OBSV-09 | Phase 3 | Complete |
@@ -213,7 +213,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BUDG-05 | Phase 6 | Complete |
 | BUDG-06 | Phase 6 | Complete |
 | BUDG-07 | Phase 6 | Complete |
-| BUDG-08 | Phase 6 | Complete |
+| BUDG-08 | Phase 12 | Pending |
 | BUDG-09 | Phase 6 | Complete |
 | PROV-06 | Phase 7 | Complete |
 | OBSV-07 | Phase 7 | Complete |
