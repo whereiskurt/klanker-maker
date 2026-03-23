@@ -56,6 +56,9 @@ type IdentityRecord struct {
 	PublicKeyB64           string
 	EmailAddress           string
 	EncryptionPublicKeyB64 string // empty if no encryption key published
+	Signing                string // email signing policy: "required"|"optional"|"off"|"" (empty for legacy rows)
+	VerifyInbound          string // email verify-inbound policy
+	Encryption             string // email encryption policy
 }
 
 // signingKeyPath returns the SSM parameter path for a sandbox's signing key.
@@ -137,7 +140,9 @@ func GenerateEncryptionKey(ctx context.Context, ssmClient IdentitySSMAPI, sandbo
 //
 // Uses ConditionExpression: attribute_not_exists(sandbox_id) for idempotency.
 // If encPubKey is non-nil, the encryption_public_key attribute is included.
-func PublishIdentity(ctx context.Context, client IdentityTableAPI, tableName, sandboxID, emailAddress string, pubKey ed25519.PublicKey, encPubKey *[32]byte) error {
+// signing, verifyInbound, encryption are the email policy values from the sandbox profile;
+// empty string means "not specified" and the attribute is omitted (preserves legacy row compatibility).
+func PublishIdentity(ctx context.Context, client IdentityTableAPI, tableName, sandboxID, emailAddress string, pubKey ed25519.PublicKey, encPubKey *[32]byte, signing, verifyInbound, encryption string) error {
 	pubKeyB64 := base64.StdEncoding.EncodeToString(pubKey)
 	createdAt := time.Now().UTC().Format(time.RFC3339)
 
@@ -152,6 +157,16 @@ func PublishIdentity(ctx context.Context, client IdentityTableAPI, tableName, sa
 		item["encryption_public_key"] = &dynamodbtypes.AttributeValueMemberS{
 			Value: base64.StdEncoding.EncodeToString(encPubKey[:]),
 		}
+	}
+
+	if signing != "" {
+		item["signing_policy"] = &dynamodbtypes.AttributeValueMemberS{Value: signing}
+	}
+	if verifyInbound != "" {
+		item["verify_inbound_policy"] = &dynamodbtypes.AttributeValueMemberS{Value: verifyInbound}
+	}
+	if encryption != "" {
+		item["encryption_policy"] = &dynamodbtypes.AttributeValueMemberS{Value: encryption}
 	}
 
 	_, err := client.PutItem(ctx, &dynamodb.PutItemInput{
@@ -206,6 +221,21 @@ func FetchPublicKey(ctx context.Context, client IdentityTableAPI, tableName, san
 	if v, ok := out.Item["encryption_public_key"]; ok {
 		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
 			record.EncryptionPublicKeyB64 = sv.Value
+		}
+	}
+	if v, ok := out.Item["signing_policy"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			record.Signing = sv.Value
+		}
+	}
+	if v, ok := out.Item["verify_inbound_policy"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			record.VerifyInbound = sv.Value
+		}
+	}
+	if v, ok := out.Item["encryption_policy"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			record.Encryption = sv.Value
 		}
 	}
 

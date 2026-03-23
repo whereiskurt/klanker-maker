@@ -242,7 +242,7 @@ func TestIdentity_PublishIdentity_PutItemFields(t *testing.T) {
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
 	pubKeyB64 := base64.StdEncoding.EncodeToString(pub)
 
-	err := kmaws.PublishIdentity(context.Background(), mockDyn, "km-identities", "sb-pub01", "sb-pub01@sandboxes.example.com", pub, nil)
+	err := kmaws.PublishIdentity(context.Background(), mockDyn, "km-identities", "sb-pub01", "sb-pub01@sandboxes.example.com", pub, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("PublishIdentity returned error: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestIdentity_PublishIdentity_IncludesEncryptionKey(t *testing.T) {
 	_, _ = rand.Read(encPubKey[:])
 	encPubKeyPtr := &encPubKey
 
-	err := kmaws.PublishIdentity(context.Background(), mockDyn, "km-identities", "sb-enc01", "sb-enc01@example.com", pub, encPubKeyPtr)
+	err := kmaws.PublishIdentity(context.Background(), mockDyn, "km-identities", "sb-enc01", "sb-enc01@example.com", pub, encPubKeyPtr, "", "", "")
 	if err != nil {
 		t.Fatalf("PublishIdentity returned error: %v", err)
 	}
@@ -798,6 +798,125 @@ func TestIdentity_EncryptDecrypt_CorrectRoundTrip(t *testing.T) {
 
 	if string(decrypted) != string(plaintext) {
 		t.Errorf("round-trip decryption mismatch: got %q; want %q", decrypted, plaintext)
+	}
+}
+
+// ============================================================
+// Policy fields: PublishIdentity stores + FetchPublicKey reads
+// ============================================================
+
+// makeIdentityGetItemOutputWithPolicies builds a DynamoDB GetItemOutput with identity
+// and policy fields for testing policy round-trips.
+func makeIdentityGetItemOutputWithPolicies(sandboxID, pubKeyB64, email, signing, verifyInbound, encryption string) *dynamodb.GetItemOutput {
+	item := map[string]dynamodbtypes.AttributeValue{
+		"sandbox_id":    &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+		"public_key":    &dynamodbtypes.AttributeValueMemberS{Value: pubKeyB64},
+		"email_address": &dynamodbtypes.AttributeValueMemberS{Value: email},
+	}
+	if signing != "" {
+		item["signing_policy"] = &dynamodbtypes.AttributeValueMemberS{Value: signing}
+	}
+	if verifyInbound != "" {
+		item["verify_inbound_policy"] = &dynamodbtypes.AttributeValueMemberS{Value: verifyInbound}
+	}
+	if encryption != "" {
+		item["encryption_policy"] = &dynamodbtypes.AttributeValueMemberS{Value: encryption}
+	}
+	return &dynamodb.GetItemOutput{Item: item}
+}
+
+// TestIdentity_PublishIdentity_PolicyFieldsStored verifies that policy attribute values
+// are present in the DynamoDB PutItem call when non-empty.
+func TestIdentity_PublishIdentity_PolicyFieldsStored(t *testing.T) {
+	mockDyn := &mockIdentityTableAPI{}
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+
+	err := kmaws.PublishIdentity(context.Background(), mockDyn, "km-identities", "sb-policy01", "sb-policy01@example.com", pub, nil, "required", "optional", "off")
+	if err != nil {
+		t.Fatalf("PublishIdentity returned error: %v", err)
+	}
+	item := mockDyn.putItemInput.Item
+	checkStringAttr(t, item, "signing_policy", "required")
+	checkStringAttr(t, item, "verify_inbound_policy", "optional")
+	checkStringAttr(t, item, "encryption_policy", "off")
+}
+
+// TestIdentity_PublishIdentity_EmptyPolicyFieldsOmitted verifies that empty policy
+// values are NOT added to DynamoDB (preserves legacy row compatibility).
+func TestIdentity_PublishIdentity_EmptyPolicyFieldsOmitted(t *testing.T) {
+	mockDyn := &mockIdentityTableAPI{}
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+
+	err := kmaws.PublishIdentity(context.Background(), mockDyn, "km-identities", "sb-policy02", "sb-policy02@example.com", pub, nil, "", "", "")
+	if err != nil {
+		t.Fatalf("PublishIdentity returned error: %v", err)
+	}
+	item := mockDyn.putItemInput.Item
+	if _, ok := item["signing_policy"]; ok {
+		t.Error("signing_policy should not be present when signing is empty")
+	}
+	if _, ok := item["verify_inbound_policy"]; ok {
+		t.Error("verify_inbound_policy should not be present when verifyInbound is empty")
+	}
+	if _, ok := item["encryption_policy"]; ok {
+		t.Error("encryption_policy should not be present when encryption is empty")
+	}
+}
+
+// TestIdentity_FetchPublicKey_PolicyFieldsReadBack verifies that policy fields stored
+// in DynamoDB are correctly read back into the IdentityRecord.
+func TestIdentity_FetchPublicKey_PolicyFieldsReadBack(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	pubKeyB64 := base64.StdEncoding.EncodeToString(pub)
+
+	mockDyn := &mockIdentityTableAPI{
+		getItemOutput: makeIdentityGetItemOutputWithPolicies("sb-policy03", pubKeyB64, "sb-policy03@example.com", "required", "optional", "off"),
+	}
+
+	record, err := kmaws.FetchPublicKey(context.Background(), mockDyn, "km-identities", "sb-policy03")
+	if err != nil {
+		t.Fatalf("FetchPublicKey returned error: %v", err)
+	}
+	if record == nil {
+		t.Fatal("expected non-nil IdentityRecord")
+	}
+	if record.Signing != "required" {
+		t.Errorf("Signing = %q; want %q", record.Signing, "required")
+	}
+	if record.VerifyInbound != "optional" {
+		t.Errorf("VerifyInbound = %q; want %q", record.VerifyInbound, "optional")
+	}
+	if record.Encryption != "off" {
+		t.Errorf("Encryption = %q; want %q", record.Encryption, "off")
+	}
+}
+
+// TestIdentity_FetchPublicKey_LegacyRowEmptyPolicies verifies that legacy DynamoDB rows
+// (without policy attributes) return empty strings — not an error.
+func TestIdentity_FetchPublicKey_LegacyRowEmptyPolicies(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	pubKeyB64 := base64.StdEncoding.EncodeToString(pub)
+
+	// No policy fields in the item (simulates a legacy row)
+	mockDyn := &mockIdentityTableAPI{
+		getItemOutput: makeIdentityGetItemOutput("sb-legacy01", pubKeyB64, "sb-legacy01@example.com", ""),
+	}
+
+	record, err := kmaws.FetchPublicKey(context.Background(), mockDyn, "km-identities", "sb-legacy01")
+	if err != nil {
+		t.Fatalf("FetchPublicKey returned error for legacy row: %v", err)
+	}
+	if record == nil {
+		t.Fatal("expected non-nil IdentityRecord for legacy row")
+	}
+	if record.Signing != "" {
+		t.Errorf("legacy row Signing should be empty, got %q", record.Signing)
+	}
+	if record.VerifyInbound != "" {
+		t.Errorf("legacy row VerifyInbound should be empty, got %q", record.VerifyInbound)
+	}
+	if record.Encryption != "" {
+		t.Errorf("legacy row Encryption should be empty, got %q", record.Encryption)
 	}
 }
 

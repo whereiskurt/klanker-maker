@@ -473,7 +473,10 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 			}
 			identityEmailAddr := fmt.Sprintf("%s@%s", sandboxID, emailDomain)
 			dynamoIdentClient := dynamodbpkg.NewFromConfig(awsCfg)
-			if pubErr := awspkg.PublishIdentity(ctx, dynamoIdentClient, identityTableName, sandboxID, identityEmailAddr, pubKey, encPubKey); pubErr != nil {
+			signing := resolvedProfile.Spec.Email.Signing
+			verifyInbound := resolvedProfile.Spec.Email.VerifyInbound
+			encryption := resolvedProfile.Spec.Email.Encryption
+			if pubErr := awspkg.PublishIdentity(ctx, dynamoIdentClient, identityTableName, sandboxID, identityEmailAddr, pubKey, encPubKey, signing, verifyInbound, encryption); pubErr != nil {
 				log.Warn().Err(pubErr).Str("sandbox_id", sandboxID).
 					Msg("failed to publish identity to DynamoDB (non-fatal)")
 			} else {
