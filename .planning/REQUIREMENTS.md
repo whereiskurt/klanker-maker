@@ -21,8 +21,8 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **PROV-02**: Operator can run `km destroy <sandbox-id>` to cleanly tear down all sandbox resources
 - [x] **PROV-03**: Operator can run `km list` to see all running sandboxes with status
 - [x] **PROV-04**: Operator can run `km status <sandbox-id>` to see detailed sandbox state
-- [ ] **PROV-05**: Sandbox auto-destroys after TTL expires
-- [ ] **PROV-06**: Sandbox auto-destroys after idle timeout with no activity
+- [x] **PROV-05**: Sandbox auto-destroys after TTL expires
+- [x] **PROV-06**: Sandbox auto-destroys after idle timeout with no activity
 - [x] **PROV-07**: Sandbox teardown policy is configurable (destroy/stop/retain)
 - [x] **PROV-08**: Every sandbox resource is tagged with `km:sandbox-id` for tracking and cost attribution
 - [x] **PROV-09**: Operator can specify substrate (`ec2` or `ecs`) in the profile's `runtime.substrate` field and `km create` provisions the corresponding infrastructure
@@ -176,8 +176,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | NETW-08 | Phase 2 | Complete |
 | PROV-03 | Phase 11 | Complete |
 | PROV-04 | Phase 11 | Complete |
-| PROV-05 | Phase 11 | Pending |
-| PROV-06 | Phase 11 | Pending |
+| PROV-05 | Phase 11 | Complete |
+| PROV-06 | Phase 11 | Complete |
 | PROV-07 | Phase 3 | Complete |
 | NETW-02 | Phase 3 | Complete |
 | NETW-03 | Phase 3 | Complete |
