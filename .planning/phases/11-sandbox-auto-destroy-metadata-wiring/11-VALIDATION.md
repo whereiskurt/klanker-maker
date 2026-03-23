@@ -19,7 +19,7 @@ created: 2026-03-23
 |----------|-------|
 | **Framework** | go test |
 | **Config file** | none — existing infrastructure |
-| **Quick run command** | `go test ./internal/app/cmd/... ./cmd/ttl-handler/... ./sidecars/audit-log/... -count=1` |
+| **Quick run command** | `go test ./internal/app/cmd/... ./cmd/ttl-handler/... ./sidecars/audit-log/... ./pkg/aws/... -count=1` |
 | **Full suite command** | `go test ./... -count=1` |
 | **Estimated runtime** | ~10 seconds |
 
@@ -38,9 +38,9 @@ created: 2026-03-23
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 11-01-01 | 01 | 1 | PROV-05 | unit | `go test ./cmd/ttl-handler/... -run TestTeardown -count=1` | ❌ W0 | ⬜ pending |
-| 11-02-01 | 02 | 1 | PROV-06 | unit | `go test ./sidecars/audit-log/... -run TestIdle -count=1` | ❌ W0 | ⬜ pending |
-| 11-03-01 | 03 | 2 | PROV-03,PROV-04 | unit | `go test ./internal/app/cmd/... -run TestList -count=1` | ✅ | ⬜ pending |
+| 11-01-01 | 01 | 1 | PROV-03,PROV-04 | unit | `go test ./internal/app/cmd/... -run TestListCmd\|TestStatusCmd -count=1` | partial | ⬜ pending |
+| 11-02-01 | 02 | 1 | PROV-05 | unit | `go test ./cmd/ttl-handler/... -run TestHandleTTLEvent\|TestDestroySandboxResources -count=1` | ❌ W0 | ⬜ pending |
+| 11-02-02 | 02 | 1 | PROV-06 | unit | `go test ./pkg/aws/... -run TestPublishSandboxIdleEvent -count=1` | ❌ W0 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -48,8 +48,9 @@ created: 2026-03-23
 
 ## Wave 0 Requirements
 
-- [ ] TTL handler teardown test stubs
-- [ ] Idle detector EventBridge test stubs
+- [ ] TTL handler teardown test stubs (TeardownFunc called, nil guard, error return)
+- [ ] DestroySandboxResources test stubs (tag discovery, EC2 terminate)
+- [ ] Idle detector EventBridge test stubs (PublishSandboxIdleEvent)
 
 *Existing test infrastructure covers list/status tests.*
 
@@ -61,6 +62,7 @@ created: 2026-03-23
 |----------|-------------|------------|-------------------|
 | TTL Lambda destroys real AWS resources | PROV-05 | Requires live AWS environment | Deploy TTL handler, create sandbox with short TTL, verify resources destroyed after expiry |
 | Idle timeout destroys real sandbox | PROV-06 | Requires running EC2 instance | Create sandbox, wait for idle timeout, verify instance stopped/terminated |
+| EventBridge rule routes SandboxIdle to Lambda | PROV-06 | Requires deployed infra | Publish test SandboxIdle event, verify Lambda invoked in CloudWatch logs |
 
 ---
 
