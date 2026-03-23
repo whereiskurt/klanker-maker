@@ -31,6 +31,11 @@ type BudgetFetcher interface {
 	FetchBudget(ctx context.Context, sandboxID string) (*kmaws.BudgetSummary, error)
 }
 
+// IdentityFetcher abstracts fetching identity data for a sandbox.
+type IdentityFetcher interface {
+	FetchIdentity(ctx context.Context, sandboxID string) (*kmaws.IdentityRecord, error)
+}
+
 // NewStatusCmd creates the "km status" subcommand.
 // Usage: km status <sandbox-id>
 //
@@ -49,6 +54,12 @@ func NewStatusCmdWithFetcher(cfg *config.Config, fetcher SandboxFetcher) *cobra.
 // NewStatusCmdWithFetchers builds the status command with optional custom fetchers for
 // both sandbox metadata and budget data. Pass nil for real AWS-backed clients.
 func NewStatusCmdWithFetchers(cfg *config.Config, fetcher SandboxFetcher, budgetFetcher BudgetFetcher) *cobra.Command {
+	return NewStatusCmdWithAllFetchers(cfg, fetcher, budgetFetcher, nil)
+}
+
+// NewStatusCmdWithAllFetchers builds the status command with optional custom fetchers for
+// sandbox metadata, budget, and identity data. Pass nil for real AWS-backed clients.
+func NewStatusCmdWithAllFetchers(cfg *config.Config, fetcher SandboxFetcher, budgetFetcher BudgetFetcher, identityFetcher IdentityFetcher) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "status <sandbox-id>",
 		Short:        "Show detailed state for a sandbox",
@@ -56,7 +67,7 @@ func NewStatusCmdWithFetchers(cfg *config.Config, fetcher SandboxFetcher, budget
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStatus(cmd, cfg, fetcher, budgetFetcher, args[0])
+			return runStatus(cmd, cfg, fetcher, budgetFetcher, identityFetcher, args[0])
 		},
 	}
 	return cmd
@@ -68,7 +79,7 @@ type SandboxFetcher interface {
 }
 
 // runStatus is the command RunE logic for km status.
-func runStatus(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, budgetFetcher BudgetFetcher, sandboxID string) error {
+func runStatus(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, budgetFetcher BudgetFetcher, identityFetcher IdentityFetcher, sandboxID string) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -96,6 +107,18 @@ func runStatus(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, b
 				tableName: tableName,
 			}
 		}
+
+		// Also initialize real identity fetcher if not injected
+		if identityFetcher == nil {
+			tableName := cfg.IdentityTableName
+			if tableName == "" {
+				tableName = "km-identities"
+			}
+			identityFetcher = &realIdentityFetcher{
+				client:    dynamodb.NewFromConfig(awsCfg),
+				tableName: tableName,
+			}
+		}
 	}
 
 	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
@@ -113,8 +136,15 @@ func runStatus(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, b
 		// Ignore error: sandbox may have no budget defined. Budget section simply omitted.
 	}
 
+	// Fetch identity data (graceful degradation — may be nil if sandbox has no identity)
+	var identity *kmaws.IdentityRecord
+	if identityFetcher != nil {
+		identity, _ = identityFetcher.FetchIdentity(ctx, sandboxID)
+		// Ignore error: sandbox may have no identity published. Identity section simply omitted.
+	}
+
 	isTTY := isTerminal(cmd.OutOrStdout())
-	printSandboxStatus(cmd, rec, budget, isTTY)
+	printSandboxStatus(cmd, rec, budget, identity, isTTY)
 	return nil
 }
 
@@ -175,6 +205,17 @@ func (f *realBudgetFetcher) FetchBudget(ctx context.Context, sandboxID string) (
 	return kmaws.GetBudget(ctx, f.client, f.tableName, sandboxID)
 }
 
+// realIdentityFetcher is the real AWS-backed IdentityFetcher.
+type realIdentityFetcher struct {
+	client    kmaws.IdentityTableAPI
+	tableName string
+}
+
+// FetchIdentity reads identity data from DynamoDB for a sandbox.
+func (f *realIdentityFetcher) FetchIdentity(ctx context.Context, sandboxID string) (*kmaws.IdentityRecord, error) {
+	return kmaws.FetchPublicKey(ctx, f.client, f.tableName, sandboxID)
+}
+
 // isTerminal returns true if the writer is a real TTY (supports ANSI codes).
 func isTerminal(w io.Writer) bool {
 	if f, ok := w.(*os.File); ok {
@@ -206,8 +247,8 @@ func colorPercent(percent float64, isTTY bool) string {
 	return fmt.Sprintf("%s%.1f%%%s", colorCode, percent, ansiReset)
 }
 
-// printSandboxStatus prints detailed sandbox information including optional budget section.
-func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *kmaws.BudgetSummary, isTTY bool) {
+// printSandboxStatus prints detailed sandbox information including optional budget and identity sections.
+func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *kmaws.BudgetSummary, identity *kmaws.IdentityRecord, isTTY bool) {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "Sandbox ID:  %s\n", rec.SandboxID)
 	fmt.Fprintf(out, "Profile:     %s\n", rec.Profile)
@@ -270,5 +311,17 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 			warnPct = 0.80
 		}
 		fmt.Fprintf(out, "  Warning threshold: %.0f%%\n", warnPct*100)
+	}
+
+	// Identity section — only printed when identity record is available and has a public key
+	if identity != nil && identity.PublicKeyB64 != "" {
+		fmt.Fprintf(out, "Identity:\n")
+
+		// Truncate public key to first 16 chars for display
+		displayKey := identity.PublicKeyB64
+		if len(displayKey) > 16 {
+			displayKey = displayKey[:16] + "..."
+		}
+		fmt.Fprintf(out, "  Public Key:      %s\n", displayKey)
 	}
 }

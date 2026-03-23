@@ -36,6 +36,17 @@ func (f *fakeBudgetFetcher) FetchBudget(_ context.Context, _ string) (*kmaws.Bud
 	return f.summary, f.err
 }
 
+// ---- Fake identity fetcher ----
+
+type fakeIdentityFetcher struct {
+	record *kmaws.IdentityRecord
+	err    error
+}
+
+func (f *fakeIdentityFetcher) FetchIdentity(_ context.Context, _ string) (*kmaws.IdentityRecord, error) {
+	return f.record, f.err
+}
+
 // ---- Helpers ----
 
 func runStatusCmd(t *testing.T, fetcher cmd.SandboxFetcher, args ...string) (string, error) {
@@ -60,6 +71,23 @@ func runStatusCmdWithBudget(t *testing.T, fetcher cmd.SandboxFetcher, budgetFetc
 	cfg := &config.Config{BudgetTableName: "km-budgets"}
 	root := &cobra.Command{Use: "km"}
 	statusCmd := cmd.NewStatusCmdWithFetchers(cfg, fetcher, budgetFetcher)
+	root.AddCommand(statusCmd)
+
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+
+	root.SetArgs(append([]string{"status"}, args...))
+
+	err := root.Execute()
+	return buf.String(), err
+}
+
+func runStatusCmdWithAllFetchers(t *testing.T, fetcher cmd.SandboxFetcher, budgetFetcher cmd.BudgetFetcher, identityFetcher cmd.IdentityFetcher, args ...string) (string, error) {
+	t.Helper()
+	cfg := &config.Config{BudgetTableName: "km-budgets", IdentityTableName: "km-identities"}
+	root := &cobra.Command{Use: "km"}
+	statusCmd := cmd.NewStatusCmdWithAllFetchers(cfg, fetcher, budgetFetcher, identityFetcher)
 	root.AddCommand(statusCmd)
 
 	buf := &bytes.Buffer{}
@@ -328,5 +356,118 @@ func TestStatusCmd_BudgetGracefulDegradation(t *testing.T) {
 	// Budget section omitted on error
 	if strings.Contains(out, "Budget:") {
 		t.Errorf("expected no 'Budget:' section on budget fetch error, got:\n%s", out)
+	}
+}
+
+// TestStatus_IdentitySection verifies that km status shows the Identity section
+// with a truncated public key and policy fields when an identity record exists.
+func TestStatus_IdentitySection(t *testing.T) {
+	createdAt := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+
+	sandboxFetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID: "sb-ident1",
+			Profile:   "secure-dev",
+			Substrate: "ec2",
+			Region:    "us-east-1",
+			Status:    "running",
+			CreatedAt: createdAt,
+		},
+	}
+
+	// A 44-char base64 public key (32 bytes Ed25519)
+	pubKeyB64 := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	identityFetcher := &fakeIdentityFetcher{
+		record: &kmaws.IdentityRecord{
+			SandboxID:    "sb-ident1",
+			PublicKeyB64: pubKeyB64,
+			EmailAddress: "sb-ident1@sandboxes.klankermaker.ai",
+		},
+	}
+
+	out, err := runStatusCmdWithAllFetchers(t, sandboxFetcher, nil, identityFetcher, "sb-ident1")
+	if err != nil {
+		t.Fatalf("status command returned error: %v\noutput: %s", err, out)
+	}
+
+	// Must show Identity header
+	if !strings.Contains(out, "Identity:") {
+		t.Errorf("expected 'Identity:' section in output, got:\n%s", out)
+	}
+
+	// Must show truncated public key (first 16 chars)
+	if !strings.Contains(out, pubKeyB64[:16]) {
+		t.Errorf("expected truncated public key %q in output, got:\n%s", pubKeyB64[:16], out)
+	}
+
+	// Must show Public Key label
+	if !strings.Contains(out, "Public Key:") {
+		t.Errorf("expected 'Public Key:' label in Identity section, got:\n%s", out)
+	}
+}
+
+// TestStatus_IdentityFetchError verifies that km status gracefully degrades when
+// the identity fetch fails — no crash, rest of status output is still shown.
+func TestStatus_IdentityFetchError(t *testing.T) {
+	createdAt := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+
+	sandboxFetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID: "sb-iderr",
+			Profile:   "test",
+			Substrate: "ec2",
+			Region:    "us-east-1",
+			Status:    "running",
+			CreatedAt: createdAt,
+		},
+	}
+
+	identityFetcher := &fakeIdentityFetcher{
+		err: fmt.Errorf("DynamoDB identity table unavailable"),
+	}
+
+	out, err := runStatusCmdWithAllFetchers(t, sandboxFetcher, nil, identityFetcher, "sb-iderr")
+	if err != nil {
+		t.Fatalf("status command should succeed even with identity fetch error: %v\noutput: %s", err, out)
+	}
+
+	// Must still show sandbox ID
+	if !strings.Contains(out, "sb-iderr") {
+		t.Errorf("expected sandbox ID in output even on identity fetch error, got:\n%s", out)
+	}
+
+	// Identity section must NOT be shown on error
+	if strings.Contains(out, "Identity:") {
+		t.Errorf("expected no 'Identity:' section on fetch error, got:\n%s", out)
+	}
+}
+
+// TestStatus_NoIdentity verifies that km status does not show an Identity section
+// when the fetcher returns nil (sandbox has no published identity).
+func TestStatus_NoIdentity(t *testing.T) {
+	createdAt := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+
+	sandboxFetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID: "sb-noid",
+			Profile:   "no-email",
+			Substrate: "ec2",
+			Region:    "us-east-1",
+			Status:    "running",
+			CreatedAt: createdAt,
+		},
+	}
+
+	// nil record => no published identity
+	identityFetcher := &fakeIdentityFetcher{record: nil}
+
+	out, err := runStatusCmdWithAllFetchers(t, sandboxFetcher, nil, identityFetcher, "sb-noid")
+	if err != nil {
+		t.Fatalf("status command returned error: %v\noutput: %s", err, out)
+	}
+
+	// Identity section must NOT be shown when no record
+	if strings.Contains(out, "Identity:") {
+		t.Errorf("expected no 'Identity:' section when no identity record, got:\n%s", out)
 	}
 }
