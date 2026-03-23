@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 15-01-PLAN.md
-last_updated: "2026-03-23T04:54:42.650Z"
+stopped_at: Completed 17-01-PLAN.md
+last_updated: "2026-03-23T05:12:32.124Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 17
   completed_phases: 15
-  total_plans: 60
-  completed_plans: 56
+  total_plans: 62
+  completed_plans: 57
   percent: 0
 ---
 
@@ -105,6 +105,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust P04 | 4min | 2 tasks | 5 files |
 | Phase 15 P02 | 506s | 2 tasks | 2 files |
 | Phase 15-km-doctor-platform-health-check-and-bootstrap-verification P01 | 9min | 2 tasks | 4 files |
+| Phase 17-sandbox-email-mailbox-access-control-aliases-allow-lists-self-mail-s3-reader P01 | 220s | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -262,6 +263,7 @@ Recent decisions affecting current work:
 - [Phase 15-01]: Nil AWS client in any DoctorDeps field produces CheckSkipped — non-fatal, never panics
 - [Phase 15-01]: checkGitHubConfig returns CheckWarn (not ERROR) on ParameterNotFound — GitHub integration is optional
 - [Phase 15-01]: runChecks sorts results by Name for stable output regardless of goroutine completion order
+- [Phase 17-01]: [Phase 17-01]: EmailSpec.Alias is omitempty string; AllowedSenders is omitempty []string; alias JSON schema pattern enforces lowercase dot-notation; alias not added to built-in profiles; v1.0.0 DynamoDB module left unchanged
 
 ### Roadmap Evolution
 
@@ -286,6 +288,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T04:49:06.193Z
-Stopped at: Completed 15-01-PLAN.md
+Last session: 2026-03-23T05:12:32.121Z
+Stopped at: Completed 17-01-PLAN.md
 Resume file: None
