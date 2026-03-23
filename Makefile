@@ -69,10 +69,13 @@ build-lambdas:
 	cd build && zip -j ttl-handler.zip bootstrap && rm bootstrap
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/bootstrap ./cmd/budget-enforcer/
 	cd build && zip -j budget-enforcer.zip bootstrap && rm bootstrap
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/bootstrap ./cmd/github-token-refresher/
+	cd build && zip -j github-token-refresher.zip bootstrap && rm bootstrap
 	@echo ""
 	@echo "Lambda deployment packages built:"
 	@echo "  build/ttl-handler.zip"
 	@echo "  build/budget-enforcer.zip"
+	@echo "  build/github-token-refresher.zip"
 
 ## ecr-push: build and push Docker images for all 4 sidecars to ECR
 ecr-push: ecr-login ecr-repos

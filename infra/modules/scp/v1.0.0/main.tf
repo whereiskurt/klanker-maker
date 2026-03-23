@@ -25,8 +25,10 @@ locals {
 
   # SSM pivot carve-out: only SSM instance roles and operator SSO — NOT the full trusted_arns_base.
   # This is intentionally more restrictive: only roles that legitimately use SSM for instance access.
+  # km-github-token-refresher-* added here (not base/instance/iam) — it only needs SSM GetParameter/PutParameter.
   trusted_arns_ssm = [
     "arn:aws:iam::${var.application_account_id}:role/km-ec2spot-ssm-*",
+    "arn:aws:iam::${var.application_account_id}:role/km-github-token-refresher-*",
     "arn:aws:iam::*:role/AWSReservedSSO_*_*",
   ]
 }
