@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 14-02-PLAN.md
-last_updated: "2026-03-23T03:50:19.545Z"
+stopped_at: Completed 14-03-PLAN.md
+last_updated: "2026-03-23T04:02:12.531Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 15
-  completed_phases: 13
+  completed_phases: 14
   total_plans: 55
-  completed_plans: 52
+  completed_plans: 53
   percent: 0
 ---
 
@@ -101,6 +101,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 13-github-app-token-integration-scoped-repo-access-for-sandboxes P04 | 396s | 2 tasks | 7 files |
 | Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust P01 | 31540187 | 2 tasks | 14 files |
 | Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust P02 | 5min | 2 tasks | 4 files |
+| Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust P03 | 365 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -247,6 +248,8 @@ Recent decisions affecting current work:
 - [Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust]: SignEmailBody signs body only (not headers) — simpler to verify, headers can change in transit through SES
 - [Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust]: SendSignedEmail uses Content.Raw (not Content.Simple) — SES Simple strips custom X-KM-* headers; Raw MIME preserves them
 - [Phase 14-sandbox-identity-signed-email-ed25519-key-pairs-for-inter-sandbox-trust]: box.SealAnonymous / box.OpenAnonymous for NaCl encryption — sender identity in X-KM-Sender-ID header, not ciphertext
+- [Phase 14]: KMS alias for identity keys uses KM_PLATFORM_KMS_KEY_ARN env var with alias/km-platform fallback — same as GitHub token Step 13a; cfg.Label/cfg.Region do not exist on Config
+- [Phase 14]: NewStatusCmdWithFetchers delegates to NewStatusCmdWithAllFetchers(nil) — backward-compatible extension for identity DI; IdentityFetcher is 4th parameter
 
 ### Roadmap Evolution
 
@@ -269,6 +272,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T03:50:19.542Z
-Stopped at: Completed 14-02-PLAN.md
+Last session: 2026-03-23T04:02:12.528Z
+Stopped at: Completed 14-03-PLAN.md
 Resume file: None
