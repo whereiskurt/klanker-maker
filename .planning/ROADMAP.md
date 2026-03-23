@@ -428,9 +428,12 @@ Plans:
 - Mailbox reader handles both signed/encrypted and plaintext messages gracefully
 - `km status` displays alias (if set) and allow-list summary alongside existing identity fields
 - Built-in profile defaults: hardened/sealed get restrictive allow-lists (`self` only), open-dev/restricted-dev get `"*"` (any sandbox)
+- GitHub App permission refinement: tighten manifest from `contents: write` to `contents: read` + `pull_requests: write` — sandboxes should create PRs and feature branches, not push directly to protected branches. Branch protection rules enforce review requirements regardless, but least-privilege permissions are the first layer. Update `BuildManifestJSON()` in `configure_github.go` and the `spec.sourceAccess.github.permissions` schema to reflect the narrower scope
 
-**Depends on:** Phase 4 (SES email/S3 storage), Phase 14 (identity/signing infrastructure)
+**Depends on:** Phase 4 (SES email/S3 storage), Phase 14 (identity/signing infrastructure), Phase 13 (GitHub App — permission refinement)
 **Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 17 to break down)
+- [ ] 17-01-PLAN.md — EmailSpec type + JSON schema extension (alias, allowedSenders) + DynamoDB identities v1.1.0 GSI + built-in profile defaults
+- [ ] 17-02-PLAN.md — Identity extension (FetchPublicKeyByAlias, MatchesAllowList, PublishIdentity) + mailbox reader library (mailbox.go)
+- [ ] 17-03-PLAN.md — CLI wiring (create.go PublishIdentity call + km status alias/allowedSenders display)
