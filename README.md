@@ -444,8 +444,8 @@ km destroy sb-a1b2c3d4
 | 13 | GitHub App Token Integration | **Complete** |
 | 14 | Sandbox Identity & Signed Email | **Complete** |
 | 15 | km doctor — Platform Health Check | **Complete** |
-| 16 | Documentation Refresh (Phases 6-15) | In Progress |
-| 17 | Sandbox Email Mailbox & Access Control | Planned |
+| 16 | Documentation Refresh (Phases 6-15) | **Complete** |
+| 17 | Sandbox Email Mailbox & Access Control | **Complete** |
 
 See [.planning/ROADMAP.md](.planning/ROADMAP.md) for detailed phase breakdowns and success criteria.
 
