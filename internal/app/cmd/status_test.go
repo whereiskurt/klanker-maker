@@ -512,6 +512,107 @@ func TestStatus_IdentityFetchError(t *testing.T) {
 	}
 }
 
+// TestStatus_EmailAlias verifies that km status shows the Alias line when
+// IdentityRecord.Alias is non-empty, and shows a comma-joined Allowed Senders list.
+func TestStatus_EmailAlias(t *testing.T) {
+	createdAt := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+
+	sandboxFetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID: "sb-alias1",
+			Profile:   "alias-dev",
+			Substrate: "ec2",
+			Region:    "us-east-1",
+			Status:    "running",
+			CreatedAt: createdAt,
+		},
+	}
+
+	pubKeyB64 := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	identityFetcher := &fakeIdentityFetcher{
+		record: &kmaws.IdentityRecord{
+			SandboxID:      "sb-alias1",
+			PublicKeyB64:   pubKeyB64,
+			EmailAddress:   "sb-alias1@sandboxes.klankermaker.ai",
+			Signing:        "required",
+			VerifyInbound:  "optional",
+			Encryption:     "off",
+			Alias:          "research.team-a",
+			AllowedSenders: []string{"self", "build.*"},
+		},
+	}
+
+	out, err := runStatusCmdWithAllFetchers(t, sandboxFetcher, nil, identityFetcher, "sb-alias1")
+	if err != nil {
+		t.Fatalf("status command returned error: %v\noutput: %s", err, out)
+	}
+
+	// Must show Alias line with value
+	if !strings.Contains(out, "Alias:") {
+		t.Errorf("expected 'Alias:' line in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "research.team-a") {
+		t.Errorf("expected alias value 'research.team-a' in output, got:\n%s", out)
+	}
+
+	// Must show Allowed Senders as comma-joined
+	if !strings.Contains(out, "Allowed Senders:") {
+		t.Errorf("expected 'Allowed Senders:' line in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "self, build.*") {
+		t.Errorf("expected allowed senders 'self, build.*' in output, got:\n%s", out)
+	}
+}
+
+// TestStatus_EmailAlias_Empty verifies that km status omits the Alias line when
+// IdentityRecord.Alias is empty, and shows "not configured" for Allowed Senders.
+func TestStatus_EmailAlias_Empty(t *testing.T) {
+	createdAt := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+
+	sandboxFetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID: "sb-noalias",
+			Profile:   "basic-dev",
+			Substrate: "ec2",
+			Region:    "us-east-1",
+			Status:    "running",
+			CreatedAt: createdAt,
+		},
+	}
+
+	pubKeyB64 := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	identityFetcher := &fakeIdentityFetcher{
+		record: &kmaws.IdentityRecord{
+			SandboxID:      "sb-noalias",
+			PublicKeyB64:   pubKeyB64,
+			EmailAddress:   "sb-noalias@sandboxes.klankermaker.ai",
+			Signing:        "required",
+			VerifyInbound:  "optional",
+			Encryption:     "off",
+			Alias:          "",
+			AllowedSenders: nil,
+		},
+	}
+
+	out, err := runStatusCmdWithAllFetchers(t, sandboxFetcher, nil, identityFetcher, "sb-noalias")
+	if err != nil {
+		t.Fatalf("status command returned error: %v\noutput: %s", err, out)
+	}
+
+	// Alias line must NOT appear when alias is empty
+	if strings.Contains(out, "Alias:") {
+		t.Errorf("expected no 'Alias:' line when alias is empty, got:\n%s", out)
+	}
+
+	// Allowed Senders must show "not configured" when slice is nil/empty
+	if !strings.Contains(out, "Allowed Senders:") {
+		t.Errorf("expected 'Allowed Senders:' line in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "not configured") {
+		t.Errorf("expected 'not configured' for empty allowedSenders, got:\n%s", out)
+	}
+}
+
 // TestStatus_NoIdentity verifies that km status does not show an Identity section
 // when the fetcher returns nil (sandbox has no published identity).
 func TestStatus_NoIdentity(t *testing.T) {
