@@ -641,24 +641,40 @@ func (b *bufWriter) Write(p []byte) (int, error) {
 func (b *bufWriter) String() string { return string(b.data) }
 
 func minimalConfig() *testDoctorConfig {
-	return &testDoctorConfig{}
+	// Fully populated so checkConfig returns OK.
+	return &testDoctorConfig{
+		domain:   "example.com",
+		mgmtAcct: "111111111111",
+		tfAcct:   "222222222222",
+		appAcct:  "333333333333",
+		ssoURL:   "https://sso.example.com/start",
+		region:   "us-east-1",
+	}
 }
 
 func minimalConfigWithProfile() *testDoctorConfig {
-	return &testDoctorConfig{awsProfile: "test-profile"}
+	cfg := minimalConfig()
+	cfg.awsProfile = "test-profile"
+	return cfg
 }
 
 // testDoctorConfig implements the DoctorConfigProvider interface.
 type testDoctorConfig struct {
+	domain     string
+	mgmtAcct   string
+	tfAcct     string
+	appAcct    string
+	ssoURL     string
+	region     string
 	awsProfile string
 }
 
-func (c *testDoctorConfig) GetDomain() string              { return "" }
-func (c *testDoctorConfig) GetManagementAccountID() string  { return "" }
-func (c *testDoctorConfig) GetTerraformAccountID() string   { return "" }
-func (c *testDoctorConfig) GetApplicationAccountID() string { return "" }
-func (c *testDoctorConfig) GetSSOStartURL() string          { return "" }
-func (c *testDoctorConfig) GetPrimaryRegion() string        { return "" }
+func (c *testDoctorConfig) GetDomain() string              { return c.domain }
+func (c *testDoctorConfig) GetManagementAccountID() string  { return c.mgmtAcct }
+func (c *testDoctorConfig) GetTerraformAccountID() string   { return c.tfAcct }
+func (c *testDoctorConfig) GetApplicationAccountID() string { return c.appAcct }
+func (c *testDoctorConfig) GetSSOStartURL() string          { return c.ssoURL }
+func (c *testDoctorConfig) GetPrimaryRegion() string        { return c.region }
 func (c *testDoctorConfig) GetStateBucket() string          { return "" }
 func (c *testDoctorConfig) GetBudgetTableName() string      { return "" }
 func (c *testDoctorConfig) GetIdentityTableName() string    { return "" }

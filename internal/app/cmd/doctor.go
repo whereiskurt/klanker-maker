@@ -205,9 +205,9 @@ func checkCredential(ctx context.Context, client STSCallerAPI, profile string) C
 }
 
 // checkStateBucket verifies the S3 state bucket exists via HeadBucket.
-// Empty bucket name returns CheckSkipped; error returns CheckError.
+// Empty bucket name or nil client returns CheckSkipped; error returns CheckError.
 func checkStateBucket(ctx context.Context, client S3HeadBucketAPI, bucketName string) CheckResult {
-	if bucketName == "" {
+	if bucketName == "" || client == nil {
 		return CheckResult{
 			Name:    "State Bucket",
 			Status:  CheckSkipped,
@@ -235,6 +235,13 @@ func checkStateBucket(ctx context.Context, client S3HeadBucketAPI, bucketName st
 // checkDynamoTable verifies a DynamoDB table exists via DescribeTable.
 // Returns CheckError on missing or inaccessible table — callers may demote to CheckWarn.
 func checkDynamoTable(ctx context.Context, client DynamoDescribeAPI, tableName, checkName string) CheckResult {
+	if client == nil {
+		return CheckResult{
+			Name:    checkName,
+			Status:  CheckSkipped,
+			Message: "DynamoDB client not available",
+		}
+	}
 	_, err := client.DescribeTable(ctx, &dynamodb.DescribeTableInput{
 		TableName: awssdk.String(tableName),
 	})
@@ -257,6 +264,13 @@ func checkDynamoTable(ctx context.Context, client DynamoDescribeAPI, tableName, 
 // Uses alias/ prefix when calling DescribeKey.
 func checkKMSKey(ctx context.Context, client KMSDescribeAPI, alias string) CheckResult {
 	name := fmt.Sprintf("KMS Key (%s)", alias)
+	if client == nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "KMS client not available",
+		}
+	}
 	keyID := "alias/" + alias
 	_, err := client.DescribeKey(ctx, &kms.DescribeKeyInput{
 		KeyId: awssdk.String(keyID),

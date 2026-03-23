@@ -1,0 +1,78 @@
+Check platform health and bootstrap verification.
+
+Runs all platform health checks in parallel and prints a structured report
+showing pass, warn, fail, and skip results. Exits with code 1 if any check
+reports an ERROR, enabling CI gating patterns like:
+
+  km doctor && km create profile.yaml
+
+Usage:
+  km doctor [flags]
+
+Examples:
+  # Run all health checks (default human-readable output)
+  km doctor
+
+  # Output results as JSON for programmatic consumption
+  km doctor --json
+
+  # Show only failures and warnings (suppress OK results)
+  km doctor --quiet
+
+  # Use in CI pipelines — exit 0 on all-pass, exit 1 on any error
+  km doctor && echo "Platform healthy" || echo "Platform has issues"
+
+Flags:
+  --json    Output results as a JSON array of CheckResult objects
+  --quiet   Suppress OK results; show only warnings and errors
+
+Check Categories:
+
+  Config
+    Verifies km-config.yaml is loaded and all required fields are present:
+    domain, account IDs (management, terraform, application), SSO start URL,
+    and primary region.
+
+  Credentials
+    Calls STS GetCallerIdentity for the configured AWS profile to verify
+    authentication is active. Skipped when no profile is configured.
+
+  State Bucket
+    Verifies the S3 state bucket (KM_STATE_BUCKET) exists and is accessible.
+
+  DynamoDB Tables
+    - Budget table (km-budgets): ERROR if missing — required for cost tracking
+    - Identity table (km-identities): WARN if missing — optional feature
+
+  KMS Key
+    Checks that the km-platform KMS key alias exists for state bucket encryption.
+
+  SCP (Sandbox Containment)
+    Verifies the km-sandbox-containment SCP is attached to the application
+    account in AWS Organizations. Skipped if management account ID is not set.
+
+  GitHub App Config
+    Reads /km/config/github/app-client-id and /km/config/github/installation-id
+    from SSM Parameter Store. Returns WARN (not ERROR) if missing — GitHub App
+    integration is optional.
+
+  VPC (per region)
+    Checks for km-managed VPCs (tagged km:managed=true) in the primary region
+    and any replica region (KM_REPLICA_REGION env var).
+
+  Active Sandboxes
+    Lists running sandboxes and reports count by status. Informational only.
+
+Exit Codes:
+  0   All checks passed (OK or WARN or SKIPPED)
+  1   One or more checks reported ERROR
+
+Output Symbols:
+  ✓   OK      — check passed
+  ⚠   WARN    — check found a potential issue (non-blocking)
+  ✗   ERROR   — check failed; platform may not function correctly
+  -   SKIPPED — check skipped (missing config or credentials)
+
+Remediation:
+  Each error and warning includes an actionable remediation step. Run
+  'km doctor' to see what needs to be fixed before running 'km create'.
