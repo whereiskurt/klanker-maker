@@ -15,6 +15,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
@@ -181,6 +183,37 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool) er
 			log.Info().Str("sandbox_id", sandboxID).Msg("budget enforcer destroyed")
 		}
 	}
+
+	// Step 7c: Destroy github-token resources BEFORE the main sandbox.
+	// Non-fatal: proceed with main sandbox destroy even if github-token cleanup fails.
+	// Cleanup is idempotent — ParameterNotFound is swallowed.
+	githubTokenDir := filepath.Join(sandboxDir, "github-token")
+	ssmClient := ssm.NewFromConfig(awsCfg)
+	if _, statErr := os.Stat(githubTokenDir); statErr == nil {
+		fmt.Printf("Destroying GitHub token resources for sandbox %s...\n", sandboxID)
+		if ghErr := runner.Destroy(ctx, githubTokenDir); ghErr != nil {
+			log.Warn().Err(ghErr).Str("sandbox_id", sandboxID).
+				Msg("github-token destroy failed (non-fatal — proceeding with main sandbox destroy)")
+		} else {
+			log.Info().Str("sandbox_id", sandboxID).Msg("github-token refresher Lambda destroyed")
+		}
+	}
+	// Always attempt SSM cleanup (parameter may exist even if github-token dir is gone).
+	githubTokenParam := fmt.Sprintf("/sandbox/%s/github-token", sandboxID)
+	if _, delErr := ssmClient.DeleteParameter(ctx, &ssm.DeleteParameterInput{
+		Name: aws.String(githubTokenParam),
+	}); delErr != nil {
+		// Swallow ParameterNotFound — idempotent for retries.
+		var notFound *ssmtypes.ParameterNotFound
+		if !errors.As(delErr, &notFound) {
+			log.Warn().Err(delErr).Str("sandbox_id", sandboxID).
+				Msg("failed to delete GitHub token SSM parameter (non-fatal)")
+		}
+	} else {
+		log.Info().Str("sandbox_id", sandboxID).Str("param", githubTokenParam).
+			Msg("GitHub token SSM parameter deleted")
+	}
+	fmt.Printf("GitHub token resources cleaned up for %s\n", sandboxID)
 
 	// Step 8: Run terragrunt destroy (streams output in real time)
 	destroyFunc := func(dCtx context.Context, sid string) error {

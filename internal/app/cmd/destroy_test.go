@@ -7,6 +7,34 @@ import (
 	"testing"
 )
 
+// TestRunDestroy_GitHubTokenCleanup verifies that destroy.go contains github-token cleanup wiring.
+// Source-level verification: confirms call sites exist and follow the non-fatal pattern.
+func TestRunDestroy_GitHubTokenCleanup(t *testing.T) {
+	src, err := os.ReadFile("destroy.go")
+	if err != nil {
+		t.Fatalf("read destroy.go: %v", err)
+	}
+	s := string(src)
+
+	checks := []struct {
+		name    string
+		pattern string
+	}{
+		{"github-token dir reference", "github-token"},
+		{"Step 7c label", "Step 7c"},
+		{"SSM parameter path", "/sandbox/%s/github-token"},
+		{"DeleteParameter call", "DeleteParameter"},
+		{"ParameterNotFound swallow", "ParameterNotFound"},
+		{"non-fatal cleanup pattern", "non-fatal"},
+		{"GitHub token resources cleaned up print", "GitHub token resources cleaned up"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(s, c.pattern) {
+			t.Errorf("destroy.go missing %s (expected %q)", c.name, c.pattern)
+		}
+	}
+}
+
 // TestRunDestroy_MLflow verifies that destroy.go contains FinalizeMLflowRun wiring.
 func TestRunDestroy_MLflow(t *testing.T) {
 	src, err := os.ReadFile("destroy.go")

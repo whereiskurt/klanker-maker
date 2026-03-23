@@ -16,11 +16,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/compiler"
+	githubpkg "github.com/whereiskurt/klankrmkr/pkg/github"
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
 )
@@ -366,6 +368,50 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		}
 	}
 
+	// Step 13a: Generate GitHub App installation token and write to SSM.
+	// Guarded by sourceAccess.github — only runs for GitHub-enabled profiles.
+	// Non-fatal: sandbox is provisioned even if GitHub token generation fails.
+	if resolvedProfile.Spec.SourceAccess.GitHub != nil {
+		ssmClient := ssm.NewFromConfig(awsCfg)
+		kmsKeyARN := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
+		if kmsKeyARN == "" {
+			kmsKeyARN = "alias/km-platform" // fallback — real key resolved by SSM
+		}
+		gh := resolvedProfile.Spec.SourceAccess.GitHub
+		if tokenErr := generateAndStoreGitHubToken(ctx, ssmClient, sandboxID, kmsKeyARN, gh.AllowedRepos, gh.Permissions); tokenErr != nil {
+			log.Warn().Err(tokenErr).Str("sandbox_id", sandboxID).
+				Msg("Step 13a: GitHub App token generation failed (non-fatal — sandbox is provisioned)")
+		} else {
+			fmt.Printf("Step 13a: GitHub App installation token stored in SSM\n")
+		}
+	}
+
+	// Step 13b: Deploy github-token/ Terragrunt directory.
+	// Non-fatal: consistent with budget-enforcer pattern from Phase 06-06.
+	// Sandbox is provisioned even if github-token Lambda deploy fails.
+	if artifacts.GitHubTokenHCL != "" {
+		githubTokenDir := filepath.Join(sandboxDir, "github-token")
+		if mkErr := os.MkdirAll(githubTokenDir, 0o755); mkErr != nil {
+			log.Warn().Err(mkErr).Str("sandbox_id", sandboxID).
+				Msg("Step 13b: failed to create github-token directory (non-fatal)")
+		} else {
+			hclPath := filepath.Join(githubTokenDir, "terragrunt.hcl")
+			if writeErr := os.WriteFile(hclPath, []byte(artifacts.GitHubTokenHCL), 0o644); writeErr != nil {
+				log.Warn().Err(writeErr).Str("sandbox_id", sandboxID).
+					Msg("Step 13b: failed to write github-token/terragrunt.hcl (non-fatal)")
+			} else {
+				fmt.Printf("Step 13b: Deploying GitHub token refresher Lambda for %s...\n", sandboxID)
+				if ghErr := runner.Apply(ctx, githubTokenDir); ghErr != nil {
+					log.Warn().Err(ghErr).Str("sandbox_id", sandboxID).
+						Msg("Step 13b: github-token apply failed (non-fatal — sandbox is provisioned)")
+				} else {
+					log.Info().Str("sandbox_id", sandboxID).Msg("github-token refresher Lambda deployed")
+					fmt.Printf("Step 13b: GitHub token refresher Lambda deployed for %s\n", sandboxID)
+				}
+			}
+		}
+	}
+
 	// Step 13: Provision SES email identity for the sandbox.
 	// Non-fatal: sandbox is still usable without email.
 	// Derive email domain from config; default to "klankermaker.ai" when not set.
@@ -390,6 +436,60 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		if err := awspkg.SendLifecycleNotification(ctx, sesClient, operatorEmail, sandboxID, "created", emailDomain); err != nil {
 			log.Warn().Err(err).Msg("failed to send created lifecycle notification (non-fatal)")
 		}
+	}
+
+	return nil
+}
+
+// generateAndStoreGitHubToken reads GitHub App credentials from SSM, generates an
+// installation token, and writes it to SSM at /sandbox/{sandboxID}/github-token.
+//
+// Called from runCreate when profile.Spec.SourceAccess.GitHub is non-nil.
+// Returns an error on any failure — the caller treats this as non-fatal.
+func generateAndStoreGitHubToken(ctx context.Context, ssmClient *ssm.Client, sandboxID, kmsKeyARN string, allowedRepos, permissions []string) error {
+	withDecryption := true
+
+	appClientIDOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           aws.String("/km/config/github/app-client-id"),
+		WithDecryption: &withDecryption,
+	})
+	if err != nil {
+		return fmt.Errorf("read app-client-id from SSM (run km configure github first): %w", err)
+	}
+
+	privateKeyOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           aws.String("/km/config/github/private-key"),
+		WithDecryption: &withDecryption,
+	})
+	if err != nil {
+		return fmt.Errorf("read private-key from SSM: %w", err)
+	}
+
+	installIDOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           aws.String("/km/config/github/installation-id"),
+		WithDecryption: &withDecryption,
+	})
+	if err != nil {
+		return fmt.Errorf("read installation-id from SSM: %w", err)
+	}
+
+	appClientID := *appClientIDOut.Parameter.Value
+	privateKeyPEM := []byte(*privateKeyOut.Parameter.Value)
+	installationID := *installIDOut.Parameter.Value
+
+	jwtToken, err := githubpkg.GenerateGitHubAppJWT(appClientID, privateKeyPEM)
+	if err != nil {
+		return fmt.Errorf("generate GitHub App JWT: %w", err)
+	}
+
+	perms := githubpkg.CompilePermissions(permissions)
+	token, err := githubpkg.ExchangeForInstallationToken(ctx, jwtToken, installationID, allowedRepos, perms)
+	if err != nil {
+		return fmt.Errorf("exchange JWT for installation token: %w", err)
+	}
+
+	if err := githubpkg.WriteTokenToSSM(ctx, ssmClient, sandboxID, token, kmsKeyARN, false); err != nil {
+		return fmt.Errorf("write token to SSM: %w", err)
 	}
 
 	return nil

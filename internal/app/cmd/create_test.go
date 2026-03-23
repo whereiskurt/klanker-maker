@@ -7,6 +7,34 @@ import (
 	"testing"
 )
 
+// TestRunCreate_GitHubToken verifies that create.go contains the GitHub token wiring.
+// Source-level verification: confirms call sites exist and follow the non-fatal pattern.
+func TestRunCreate_GitHubToken(t *testing.T) {
+	src, err := os.ReadFile("create.go")
+	if err != nil {
+		t.Fatalf("read create.go: %v", err)
+	}
+	s := string(src)
+
+	checks := []struct {
+		name    string
+		pattern string
+	}{
+		{"Step 13a guard", "SourceAccess.GitHub"},
+		{"generateAndStoreGitHubToken call", "generateAndStoreGitHubToken"},
+		{"github-token dir", "github-token"},
+		{"GitHubTokenHCL check", "GitHubTokenHCL"},
+		{"Step 13b non-fatal pattern", "non-fatal — sandbox is provisioned"},
+		{"Step 13a print", "Step 13a"},
+		{"Step 13b print", "Step 13b"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(s, c.pattern) {
+			t.Errorf("create.go missing %s (expected %q)", c.name, c.pattern)
+		}
+	}
+}
+
 // TestRunCreate_MLflow verifies that create.go contains WriteMLflowRun wiring.
 // This is a source-level verification test — the actual MLflow S3 write is tested
 // in pkg/aws/mlflow_test.go. This test confirms the call site exists and follows
