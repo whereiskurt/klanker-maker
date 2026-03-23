@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
@@ -14,6 +15,9 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klankrmkr/pkg/compiler"
+	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
 )
 
 // EC2StartAPI is the minimal EC2 interface required for sandbox auto-resume.
@@ -93,7 +97,7 @@ func newBudgetAddCmd(cfg *config.Config, budgetClient kmaws.BudgetAPI, ec2Client
 //  1. Read current budget limits from DynamoDB
 //  2. Calculate new limits (additive top-up)
 //  3. Write new limits to DynamoDB
-//  4. Auto-resume suspended sandbox (EC2 start, IAM restore)
+//  4. Auto-resume suspended sandbox (EC2 start or ECS re-provision, IAM restore)
 //  5. Print summary
 func runBudgetAdd(cmd *cobra.Command, cfg *config.Config, budgetClient kmaws.BudgetAPI, ec2Client EC2StartAPI, iamClient IAMAttachAPI, metaFetcher SandboxMetaFetcher, sandboxID string, computeTopUp, aiTopUp float64) error {
 	ctx := cmd.Context()
@@ -102,8 +106,11 @@ func runBudgetAdd(cmd *cobra.Command, cfg *config.Config, budgetClient kmaws.Bud
 	}
 
 	// Initialize real clients if not injected (production path)
+	awsProfile := cfg.AWSProfile
+	if awsProfile == "" {
+		awsProfile = "klanker-terraform"
+	}
 	if budgetClient == nil {
-		awsProfile := "klanker-terraform"
 		awsCfg, err := kmaws.LoadAWSConfig(ctx, awsProfile)
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
@@ -157,6 +164,21 @@ func runBudgetAdd(cmd *cobra.Command, cfg *config.Config, budgetClient kmaws.Bud
 					fmt.Fprintf(cmd.OutOrStdout(), "Warning: could not resume EC2 sandbox: %v\n", startErr)
 				} else if started {
 					resumed = true
+				}
+			}
+
+			if substrate == "ecs" {
+				// ECS Fargate tasks are ephemeral — they cannot be "started" like EC2.
+				// Re-provision from the stored profile YAML in S3 using the same sandbox ID.
+				artifactBucket := cfg.ArtifactsBucket
+				if artifactBucket == "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "Warning: artifact bucket not configured — cannot re-provision ECS sandbox\n")
+				} else {
+					if err := reprovisionECSSandbox(ctx, cfg, sandboxID, artifactBucket, awsProfile); err != nil {
+						fmt.Fprintf(cmd.OutOrStdout(), "Warning: could not re-provision ECS sandbox: %v\n", err)
+					} else {
+						resumed = true
+					}
 				}
 			}
 		}
@@ -265,4 +287,88 @@ type realMetaFetcher struct {
 func (r *realMetaFetcher) FetchSandboxMeta(ctx context.Context, sandboxID string) (*kmaws.SandboxMetadata, error) {
 	s3Client := s3.NewFromConfig(r.awsCfg)
 	return kmaws.ReadSandboxMetadata(ctx, s3Client, r.bucket, sandboxID)
+}
+
+// reprovisionECSSandbox downloads the stored profile from S3 and runs terragrunt apply
+// to restart the Fargate task with the same sandbox ID and container definitions.
+//
+// ECS Fargate tasks are ephemeral — budget enforcement stops the task (StopTask).
+// The ECS service desired_count is set to 0 by the budget enforcer to prevent auto-relaunch.
+// Re-provisioning calls terragrunt apply which reconciles desired_count back to 1.
+//
+// Critical: the existing sandboxID is reused (never a new one) so Terraform state maps
+// correctly to the existing ECS cluster and task definition.
+func reprovisionECSSandbox(ctx context.Context, cfg *config.Config, sandboxID, artifactBucket, awsProfile string) error {
+	// Step 1: Load AWS config
+	awsCfg, err := kmaws.LoadAWSConfig(ctx, awsProfile)
+	if err != nil {
+		return fmt.Errorf("load AWS config: %w", err)
+	}
+
+	// Step 2: Download stored profile YAML from S3
+	s3Client := s3.NewFromConfig(awsCfg)
+	resp, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: awssdk.String(artifactBucket),
+		Key:    awssdk.String("artifacts/" + sandboxID + "/.km-profile.yaml"),
+	})
+	if err != nil {
+		return fmt.Errorf("download profile for sandbox %s: %w", sandboxID, err)
+	}
+	defer resp.Body.Close()
+	profileYAML, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read profile YAML: %w", err)
+	}
+
+	// Step 3: Parse and resolve profile
+	parsed, err := profile.Parse(profileYAML)
+	if err != nil {
+		return fmt.Errorf("parse stored profile: %w", err)
+	}
+	resolvedProfile := parsed
+	if parsed.Extends != "" {
+		searchPaths := cfg.ProfileSearchPaths
+		resolvedProfile, err = profile.Resolve(parsed.Extends, searchPaths)
+		if err != nil {
+			return fmt.Errorf("resolve profile extends: %w", err)
+		}
+	}
+
+	// Step 4: Load network config (reuse init.go helper)
+	repoRoot := findRepoRoot()
+	region := resolvedProfile.Spec.Runtime.Region
+	regionLabel := compiler.RegionLabel(region)
+	networkOutputs, err := LoadNetworkOutputs(repoRoot, regionLabel)
+	if err != nil {
+		return fmt.Errorf("load network config: %w", err)
+	}
+	domain := cfg.Domain
+	if domain == "" {
+		domain = "klankermaker.ai"
+	}
+	network := &compiler.NetworkConfig{
+		VPCID:             networkOutputs.VPCID,
+		PublicSubnets:     networkOutputs.PublicSubnets,
+		AvailabilityZones: networkOutputs.AvailabilityZones,
+		RegionLabel:       regionLabel,
+		EmailDomain:       "sandboxes." + domain,
+	}
+
+	// Step 5: Compile with existing sandboxID — never generate a new one.
+	// Reusing the existing ID ensures Terraform state maps to the existing ECS cluster.
+	artifacts, err := compiler.Compile(resolvedProfile, sandboxID, false, network)
+	if err != nil {
+		return fmt.Errorf("compile profile for re-provisioning: %w", err)
+	}
+
+	// Step 6: Write artifacts and run terragrunt apply
+	sandboxDir, err := terragrunt.CreateSandboxDir(repoRoot, regionLabel, sandboxID)
+	if err != nil {
+		return fmt.Errorf("create sandbox dir: %w", err)
+	}
+	if err := terragrunt.PopulateSandboxDir(sandboxDir, artifacts.ServiceHCL, artifacts.UserData); err != nil {
+		return fmt.Errorf("populate sandbox dir: %w", err)
+	}
+	runner := terragrunt.NewRunner(awsProfile, repoRoot)
+	return runner.Apply(ctx, sandboxDir)
 }
