@@ -3,6 +3,9 @@ package cmd_test
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -18,6 +21,21 @@ import (
 	"github.com/whereiskurt/klankrmkr/internal/app/cmd"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 )
+
+// realTestPEM generates a real 2048-bit RSA private key PEM for tests that require
+// JWT generation (e.g. TestRunSetup_FullFlow which exercises fetchInstallations).
+func realTestPEM(t *testing.T) string {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate RSA key: %v", err)
+	}
+	block := &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	}
+	return string(pem.EncodeToMemory(block))
+}
 
 // mockSSMWrite is a minimal test double for SSMWriteAPI.
 // Records all PutParameter calls for assertion.
@@ -369,7 +387,7 @@ func TestReceiveManifestCode_DirectHit(t *testing.T) {
 	errCh := make(chan error, 1)
 
 	go func() {
-		code, port, err := cmd.ReceiveManifestCodeWithPortCb(t.Context(), 5, func(p int) {
+		code, _, err := cmd.ReceiveManifestCodeWithPortCb(t.Context(), 5, func(p int) {
 			portCh <- p
 		})
 		if err != nil {
@@ -472,6 +490,9 @@ func TestExchangeManifestCode_APIError(t *testing.T) {
 }
 
 func TestRunSetup_FullFlow(t *testing.T) {
+	// Use a real RSA key so that GenerateGitHubAppJWT (used by fetchInstallations) succeeds.
+	realPEM := realTestPEM(t)
+
 	// Mock GitHub API: manifest exchange + installations
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -481,7 +502,7 @@ func TestRunSetup_FullFlow(t *testing.T) {
 			resp := map[string]interface{}{
 				"id":        int64(99001),
 				"client_id": "Iv1.fullflow",
-				"pem":       validTestPEM,
+				"pem":       realPEM,
 			}
 			_ = json.NewEncoder(w).Encode(resp)
 		case r.URL.Path == "/app/installations":
