@@ -28,6 +28,9 @@ build/
 /http-proxy
 /audit-log
 /tracing
+/ttl-handler
 /configui
 /budget-enforcer
+/github-token-refresher
+
 /excalidraw.log
