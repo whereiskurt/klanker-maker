@@ -75,6 +75,16 @@
               "type": "string",
               "enum": ["required", "optional", "off"],
               "description": "Whether email content must be encrypted"
+            },
+            "alias": {
+              "type": "string",
+              "description": "Human-friendly dot-notation name (e.g. 'research.team-a') registered in km-identities",
+              "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*$"
+            },
+            "allowedSenders": {
+              "type": "array",
+              "description": "Patterns controlling which sandboxes may send to this sandbox: 'self', sandbox IDs, alias wildcards (build.*), or '*'",
+              "items": { "type": "string" }
             }
           }
         },

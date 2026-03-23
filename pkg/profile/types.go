@@ -59,6 +59,13 @@ type EmailSpec struct {
 	// Encryption controls whether email content must be encrypted.
 	// Values: "required" | "optional" | "off"
 	Encryption string `yaml:"encryption"`
+	// Alias is a human-friendly dot-notation name (e.g. "research.team-a") registered
+	// in km-identities. Optional — per-sandbox, not per-profile-template.
+	Alias string `yaml:"alias,omitempty"`
+	// AllowedSenders controls which sandboxes may send email to this sandbox.
+	// Accepted values: "self" (own sandbox only), a sandbox ID, an alias wildcard
+	// (e.g. "build.*"), or "*" (any sandbox).
+	AllowedSenders []string `yaml:"allowedSenders,omitempty"`
 }
 
 // BudgetSpec defines optional spend limits for compute and AI workloads in a sandbox.
