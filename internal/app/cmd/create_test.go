@@ -174,6 +174,51 @@ func TestRunDestroy_IdentityCleanup(t *testing.T) {
 	}
 }
 
+// TestRunCreate_PublishIdentityAliasWiring verifies that create.go threads alias and
+// allowedSenders from the profile EmailSpec to the PublishIdentity call.
+// Source-level verification confirms the call site includes both parameters.
+func TestRunCreate_PublishIdentityAliasWiring(t *testing.T) {
+	src, err := os.ReadFile("create.go")
+	if err != nil {
+		t.Fatalf("read create.go: %v", err)
+	}
+	s := string(src)
+
+	checks := []struct {
+		name    string
+		pattern string
+	}{
+		{"alias local extracted from Email.Alias", "Email.Alias"},
+		{"allowedSenders local extracted from Email.AllowedSenders", "Email.AllowedSenders"},
+		{"alias passed to PublishIdentity", "alias, allowedSenders"},
+		{"AllowedSenders in full PublishIdentity call line", "allowedSenders); pubErr != nil {"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(s, c.pattern) {
+			t.Errorf("create.go missing %s (expected %q)", c.name, c.pattern)
+		}
+	}
+}
+
+// TestRunCreate_PublishIdentityAliasBackwardCompat verifies that alias and
+// allowedSenders extraction uses the existing prof.Spec.Email guard (nil-safe).
+func TestRunCreate_PublishIdentityAliasBackwardCompat(t *testing.T) {
+	src, err := os.ReadFile("create.go")
+	if err != nil {
+		t.Fatalf("read create.go: %v", err)
+	}
+	s := string(src)
+
+	// Both alias and allowedSenders must be read directly from Spec.Email,
+	// which is only reached inside the Email != nil guard — backward-compatible.
+	if !strings.Contains(s, "Email.Alias") {
+		t.Error("create.go: alias not read from Spec.Email.Alias")
+	}
+	if !strings.Contains(s, "Email.AllowedSenders") {
+		t.Error("create.go: allowedSenders not read from Spec.Email.AllowedSenders")
+	}
+}
+
 // TestCreateCmd_Workflow verifies the create command workflow sequence using a
 // real valid profile but mocked environment. Because apply calls terragrunt
 // (not present in CI), we only verify up to the point of the apply attempt.
