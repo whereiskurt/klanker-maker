@@ -1,0 +1,4 @@
+paths-ignore:
+  - "**/*_test.go"
+  - "**/testdata/**"
+  - ".planning/**"
