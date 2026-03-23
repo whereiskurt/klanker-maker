@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -259,5 +260,128 @@ func TestBudgetAdd_RequiresSandboxID(t *testing.T) {
 	_, err := runBudgetCmd(t, budgetClient, ec2Client, iamClient, metaFetcher, "add")
 	if err == nil {
 		t.Fatal("expected error when sandbox-id is missing, got nil")
+	}
+}
+
+// TestBudgetAdd_ECSSubstrate verifies that when substrate=ecs, the budget add enters the
+// ECS re-provisioning branch. Since reprovisionECSSandbox calls real AWS (compiler, terragrunt, S3),
+// this test verifies the observable behaviour at the unit-test level: the budget update succeeds
+// and the output contains an ECS-related message ("re-provision" or "artifact bucket").
+// reprovisionECSSandbox is non-fatal on error, so budget update completes regardless.
+func TestBudgetAdd_ECSSubstrate(t *testing.T) {
+	budgetClient := newFakeBudgetClient(5.00, 10.00, 0.80)
+	ec2Client := &fakeEC2StartAPI{instanceState: ec2types.InstanceStateNameRunning}
+	iamClient := &fakeIAMAttachAPI{attachedPolicies: []string{"arn:aws:iam::aws:policy/AmazonBedrockFullAccess"}}
+	metaFetcher := &fakeSandboxMetaFetcher{
+		meta: &kmaws.SandboxMetadata{
+			SandboxID: "sb-ecs-001",
+			Substrate: "ecs",
+		},
+	}
+
+	// Set artifact bucket so the ECS branch is entered (not the missing-bucket branch)
+	t.Setenv("KM_ARTIFACTS_BUCKET", "km-sandbox-artifacts-test")
+
+	cfg := &config.Config{
+		BudgetTableName: "km-budgets",
+		ArtifactsBucket: "km-sandbox-artifacts-test",
+	}
+	root := &cobra.Command{Use: "km"}
+	budgetCmd := cmd.NewBudgetCmdWithDeps(cfg, budgetClient, ec2Client, iamClient, metaFetcher)
+	root.AddCommand(budgetCmd)
+
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"budget", "add", "sb-ecs-001", "--compute", "2.00"})
+
+	err := root.Execute()
+	out := buf.String()
+
+	if err != nil {
+		t.Fatalf("budget add for ECS returned unexpected error: %v\noutput: %s", err, out)
+	}
+
+	// Budget update must succeed
+	if !strings.Contains(out, "Budget updated") {
+		t.Errorf("expected 'Budget updated' in output, got:\n%s", out)
+	}
+
+	// The ECS branch must emit a message related to re-provisioning (warning on failure is expected
+	// since no real AWS is available in unit tests)
+	if !strings.Contains(out, "re-provision") && !strings.Contains(out, "artifact bucket") && !strings.Contains(out, "resumed") {
+		t.Errorf("expected ECS re-provisioning message in output, got:\n%s", out)
+	}
+}
+
+// TestBudgetAdd_ECSMissingArtifactBucket verifies that when substrate=ecs and ArtifactsBucket is
+// empty, the output contains an actionable warning and the budget update still succeeds.
+func TestBudgetAdd_ECSMissingArtifactBucket(t *testing.T) {
+	budgetClient := newFakeBudgetClient(5.00, 10.00, 0.80)
+	ec2Client := &fakeEC2StartAPI{instanceState: ec2types.InstanceStateNameRunning}
+	iamClient := &fakeIAMAttachAPI{attachedPolicies: []string{"arn:aws:iam::aws:policy/AmazonBedrockFullAccess"}}
+	metaFetcher := &fakeSandboxMetaFetcher{
+		meta: &kmaws.SandboxMetadata{
+			SandboxID: "sb-ecs-002",
+			Substrate: "ecs",
+		},
+	}
+
+	// Ensure KM_ARTIFACTS_BUCKET is not set so cfg.ArtifactsBucket is the sole source
+	t.Setenv("KM_ARTIFACTS_BUCKET", "")
+
+	cfg := &config.Config{
+		BudgetTableName: "km-budgets",
+		ArtifactsBucket: "", // empty — triggers the warning path
+	}
+	root := &cobra.Command{Use: "km"}
+	budgetCmd := cmd.NewBudgetCmdWithDeps(cfg, budgetClient, ec2Client, iamClient, metaFetcher)
+	root.AddCommand(budgetCmd)
+
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"budget", "add", "sb-ecs-002", "--compute", "2.00"})
+
+	err := root.Execute()
+	out := buf.String()
+
+	if err != nil {
+		t.Fatalf("budget add with empty artifact bucket returned unexpected error: %v\noutput: %s", err, out)
+	}
+
+	// Must emit actionable warning about missing artifact bucket
+	if !strings.Contains(out, "artifact bucket not configured") {
+		t.Errorf("expected 'artifact bucket not configured' warning in output, got:\n%s", out)
+	}
+
+	// Budget update must still succeed
+	if !strings.Contains(out, "Budget updated") {
+		t.Errorf("expected 'Budget updated' in output after artifact bucket warning, got:\n%s", out)
+	}
+}
+
+// TestBudgetAdd_ECSSourceLevelVerification verifies that budget.go contains the required
+// ECS re-provisioning function and branch (following Phase 07-02 source-level verification pattern).
+func TestBudgetAdd_ECSSourceLevelVerification(t *testing.T) {
+	src, err := os.ReadFile("budget.go")
+	if err != nil {
+		t.Fatalf("could not read budget.go: %v", err)
+	}
+	content := string(src)
+
+	checks := []struct {
+		pattern string
+		desc    string
+	}{
+		{`reprovisionECSSandbox`, "reprovisionECSSandbox function must exist"},
+		{`substrate == "ecs"`, `ECS branch condition must exist`},
+		{`compiler.Compile`, "compiler.Compile call must exist in ECS re-provisioning"},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(content, c.pattern) {
+			t.Errorf("budget.go missing %s: pattern %q not found", c.desc, c.pattern)
+		}
 	}
 }

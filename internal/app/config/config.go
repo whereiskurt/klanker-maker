@@ -74,6 +74,16 @@ type Config struct {
 	// BudgetTableName is the DynamoDB table name for sandbox budget tracking.
 	// Maps to km-config.yaml key budget_table_name. Defaults to "km-budgets".
 	BudgetTableName string
+
+	// ArtifactsBucket is the S3 bucket used for storing sandbox artifacts and profiles.
+	// Set via KM_ARTIFACTS_BUCKET environment variable or artifacts_bucket in km-config.yaml.
+	// Required for ECS sandbox re-provisioning via km budget add.
+	ArtifactsBucket string
+
+	// AWSProfile is the AWS CLI profile name used for infrastructure operations.
+	// Set via KM_AWS_PROFILE environment variable or aws_profile in km-config.yaml.
+	// Defaults to "klanker-terraform" when empty.
+	AWSProfile string
 }
 
 // isSetByEnv returns true if the given viper key has been overridden by an environment
@@ -103,6 +113,8 @@ func Load() (*Config, error) {
 
 	// Defaults for new platform fields
 	v.SetDefault("budget_table_name", "km-budgets")
+	v.SetDefault("artifacts_bucket", "")
+	v.SetDefault("aws_profile", "")
 
 	// Primary config file: ~/.km/config.yaml
 	v.SetConfigName("config")
@@ -142,6 +154,8 @@ func Load() (*Config, error) {
 			"sso.region",
 			"region",
 			"budget_table_name",
+			"artifacts_bucket",
+			"aws_profile",
 		} {
 			if v2.IsSet(key) && !isSetByEnv(v, key) {
 				v.Set(key, v2.Get(key))
@@ -167,6 +181,8 @@ func Load() (*Config, error) {
 		SSORegion:            v.GetString("sso.region"),
 		PrimaryRegion:        v.GetString("region"),
 		BudgetTableName:      v.GetString("budget_table_name"),
+		ArtifactsBucket:      v.GetString("artifacts_bucket"),
+		AWSProfile:           v.GetString("aws_profile"),
 	}
 
 	return cfg, nil
