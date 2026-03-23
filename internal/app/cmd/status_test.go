@@ -379,9 +379,12 @@ func TestStatus_IdentitySection(t *testing.T) {
 	pubKeyB64 := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 	identityFetcher := &fakeIdentityFetcher{
 		record: &kmaws.IdentityRecord{
-			SandboxID:    "sb-ident1",
-			PublicKeyB64: pubKeyB64,
-			EmailAddress: "sb-ident1@sandboxes.klankermaker.ai",
+			SandboxID:     "sb-ident1",
+			PublicKeyB64:  pubKeyB64,
+			EmailAddress:  "sb-ident1@sandboxes.klankermaker.ai",
+			Signing:       "required",
+			VerifyInbound: "optional",
+			Encryption:    "off",
 		},
 	}
 
@@ -403,6 +406,73 @@ func TestStatus_IdentitySection(t *testing.T) {
 	// Must show Public Key label
 	if !strings.Contains(out, "Public Key:") {
 		t.Errorf("expected 'Public Key:' label in Identity section, got:\n%s", out)
+	}
+
+	// Must show Signing policy label and value
+	if !strings.Contains(out, "Signing:") {
+		t.Errorf("expected 'Signing:' in Identity section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "required") {
+		t.Errorf("expected signing value 'required' in Identity section, got:\n%s", out)
+	}
+
+	// Must show Verify Inbound policy label and value
+	if !strings.Contains(out, "Verify Inbound:") {
+		t.Errorf("expected 'Verify Inbound:' in Identity section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "optional") {
+		t.Errorf("expected verifyInbound value 'optional' in Identity section, got:\n%s", out)
+	}
+
+	// Must show Encryption policy label and value
+	if !strings.Contains(out, "Encryption:") {
+		t.Errorf("expected 'Encryption:' in Identity section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "off") {
+		t.Errorf("expected encryption value 'off' in Identity section, got:\n%s", out)
+	}
+}
+
+// TestStatus_IdentitySection_LegacyRow verifies that km status shows "unknown" for each
+// policy field when the identity record has no policy values (legacy DynamoDB rows).
+func TestStatus_IdentitySection_LegacyRow(t *testing.T) {
+	createdAt := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+
+	sandboxFetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID: "sb-legacy01",
+			Profile:   "legacy",
+			Substrate: "ec2",
+			Region:    "us-east-1",
+			Status:    "running",
+			CreatedAt: createdAt,
+		},
+	}
+
+	pubKeyB64 := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	// Legacy row: Signing, VerifyInbound, Encryption are all empty strings
+	identityFetcher := &fakeIdentityFetcher{
+		record: &kmaws.IdentityRecord{
+			SandboxID:    "sb-legacy01",
+			PublicKeyB64: pubKeyB64,
+			EmailAddress: "sb-legacy01@sandboxes.klankermaker.ai",
+		},
+	}
+
+	out, err := runStatusCmdWithAllFetchers(t, sandboxFetcher, nil, identityFetcher, "sb-legacy01")
+	if err != nil {
+		t.Fatalf("status command returned error: %v\noutput: %s", err, out)
+	}
+
+	// Must show Identity section
+	if !strings.Contains(out, "Identity:") {
+		t.Errorf("expected 'Identity:' section in output, got:\n%s", out)
+	}
+
+	// Must show "unknown" three times (once for each missing policy field)
+	unknownCount := strings.Count(out, "unknown")
+	if unknownCount < 3 {
+		t.Errorf("expected at least 3 occurrences of 'unknown' for legacy row policy fields, got %d in:\n%s", unknownCount, out)
 	}
 }
 

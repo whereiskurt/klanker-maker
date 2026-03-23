@@ -323,5 +323,23 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 			displayKey = displayKey[:16] + "..."
 		}
 		fmt.Fprintf(out, "  Public Key:      %s\n", displayKey)
+
+		signing := identity.Signing
+		if signing == "" {
+			signing = "unknown"
+		}
+		fmt.Fprintf(out, "  Signing:         %s\n", signing)
+
+		verifyInbound := identity.VerifyInbound
+		if verifyInbound == "" {
+			verifyInbound = "unknown"
+		}
+		fmt.Fprintf(out, "  Verify Inbound:  %s\n", verifyInbound)
+
+		encryption := identity.Encryption
+		if encryption == "" {
+			encryption = "unknown"
+		}
+		fmt.Fprintf(out, "  Encryption:      %s\n", encryption)
 	}
 }
