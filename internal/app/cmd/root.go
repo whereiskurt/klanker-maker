@@ -40,7 +40,12 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	root.AddCommand(NewListCmd(cfg))
 	root.AddCommand(NewStatusCmd(cfg))
 	root.AddCommand(NewLogsCmd(cfg))
-	root.AddCommand(NewConfigureCmd(cfg))
+
+	// "km configure" with "km configure github" as a subcommand.
+	configureCmd := NewConfigureCmd(cfg)
+	configureCmd.AddCommand(NewConfigureGitHubCmd(cfg))
+	root.AddCommand(configureCmd)
+
 	root.AddCommand(NewBootstrapCmd(cfg))
 	root.AddCommand(NewBudgetCmd(cfg))
 	root.AddCommand(NewShellCmd(cfg))
