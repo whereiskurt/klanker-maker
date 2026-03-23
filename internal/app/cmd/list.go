@@ -14,10 +14,6 @@ import (
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 )
 
-// defaultStateBucket is the S3 bucket used for sandbox state storage.
-// TODO: move to config when multi-bucket support is needed.
-const defaultStateBucket = "tf-km-state"
-
 // NewListCmd creates the "km list" subcommand.
 // Usage: km list [--json] [--tags]
 //
@@ -30,7 +26,7 @@ func NewListCmd(cfg *config.Config) *cobra.Command {
 // NewListCmdWithLister builds the list command with an optional custom lister.
 // If lister is nil, the real AWS-backed lister is used. This overload is used
 // in tests to inject fake lister implementations.
-func NewListCmdWithLister(_ *config.Config, lister SandboxLister) *cobra.Command {
+func NewListCmdWithLister(cfg *config.Config, lister SandboxLister) *cobra.Command {
 	var jsonOutput bool
 	var useTagScan bool
 
@@ -40,7 +36,7 @@ func NewListCmdWithLister(_ *config.Config, lister SandboxLister) *cobra.Command
 		Long:         helpText("list"),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runList(cmd, lister, jsonOutput, useTagScan)
+			return runList(cmd, cfg, lister, jsonOutput, useTagScan)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output as JSON array")
@@ -54,19 +50,22 @@ type SandboxLister interface {
 }
 
 // runList is the command RunE logic, accepting an explicit lister for testability.
-func runList(cmd *cobra.Command, lister SandboxLister, jsonOutput, useTagScan bool) error {
+func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonOutput, useTagScan bool) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
 	if lister == nil {
+		if cfg.StateBucket == "" {
+			return fmt.Errorf("state bucket not configured: set KM_STATE_BUCKET or state_bucket in km-config.yaml")
+		}
 		awsProfile := "klanker-terraform"
 		awsCfg, err := kmaws.LoadAWSConfig(ctx, awsProfile)
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
 		}
-		lister = newRealLister(awsCfg, defaultStateBucket)
+		lister = newRealLister(awsCfg, cfg.StateBucket)
 	}
 
 	records, err := lister.ListSandboxes(ctx, useTagScan)

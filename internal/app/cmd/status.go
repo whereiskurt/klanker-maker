@@ -75,12 +75,15 @@ func runStatus(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, b
 	}
 
 	if fetcher == nil {
+		if cfg.StateBucket == "" {
+			return fmt.Errorf("state bucket not configured: set KM_STATE_BUCKET or state_bucket in km-config.yaml")
+		}
 		awsProfile := "klanker-terraform"
 		awsCfg, err := kmaws.LoadAWSConfig(ctx, awsProfile)
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
 		}
-		fetcher = newRealFetcher(awsCfg, defaultStateBucket)
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket)
 
 		// Also initialize real budget fetcher if not injected
 		if budgetFetcher == nil {

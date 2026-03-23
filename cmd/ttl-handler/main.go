@@ -7,9 +7,10 @@
 //  3. Uploads sandbox artifacts to S3 (the primary gap closure for OBSV-04/OBSV-05).
 //  4. Sends a "ttl-expired" lifecycle notification to the operator (if configured).
 //  5. Deletes the TTL schedule (self-cleanup).
+//  6. Destroys sandbox resources via AWS SDK (PROV-05/PROV-06).
 //
-// The actual infrastructure teardown (terragrunt destroy) is delegated to a
-// separate cleanup job — the Lambda purpose is artifact preservation and notification.
+// The teardown uses AWS SDK calls (not terragrunt subprocess) because the Lambda
+// runtime (provided.al2023) does NOT include the terragrunt binary.
 package main
 
 import (
@@ -20,6 +21,8 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambda"
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
@@ -28,9 +31,12 @@ import (
 	profilepkg "github.com/whereiskurt/klankrmkr/pkg/profile"
 )
 
-// TTLEvent is the EventBridge scheduler payload delivered to this Lambda.
+// TTLEvent is the EventBridge scheduler or EventBridge Events payload delivered to this Lambda.
 type TTLEvent struct {
 	SandboxID string `json:"sandbox_id"`
+	// EventType distinguishes TTL schedule events ("ttl", default) from idle events ("idle").
+	// Empty defaults to "ttl" for backward compatibility.
+	EventType string `json:"event_type,omitempty"`
 }
 
 // S3GetAPI is the narrow S3 interface needed to download the sandbox profile.
@@ -58,6 +64,10 @@ type TTLHandler struct {
 	Bucket        string
 	OperatorEmail string
 	Domain        string
+	// TeardownFunc destroys the sandbox resources after TTL expiry or idle detection.
+	// If nil, teardown is skipped (backward compatible with existing tests).
+	// The closure captures AWS clients created in main() and calls DestroySandboxResources.
+	TeardownFunc func(ctx context.Context, sandboxID string) error
 }
 
 // HandleTTLEvent is the Lambda handler method. It is called by lambda.Start in main().
@@ -113,6 +123,16 @@ func (h *TTLHandler) HandleTTLEvent(ctx context.Context, event TTLEvent) error {
 		}
 	}
 
+	// Step 6: Destroy sandbox resources (PROV-05/PROV-06).
+	// Uses AWS SDK calls — no terragrunt subprocess in the Lambda runtime.
+	if h.TeardownFunc != nil {
+		if err := h.TeardownFunc(ctx, sandboxID); err != nil {
+			log.Error().Err(err).Str("sandbox_id", sandboxID).Msg("sandbox teardown failed")
+			return fmt.Errorf("teardown sandbox %s: %w", sandboxID, err)
+		}
+		log.Info().Str("sandbox_id", sandboxID).Msg("sandbox resources destroyed")
+	}
+
 	log.Info().Str("sandbox_id", sandboxID).Msg("TTL handler completed")
 	return nil
 }
@@ -155,6 +175,12 @@ func main() {
 	// Real S3 client that satisfies both GetObject and PutObject.
 	s3Client := s3.NewFromConfig(awsCfg)
 
+	// AWS SDK clients for sandbox resource teardown (PROV-05/PROV-06).
+	// Lambda execution role needs tag:GetResources, ec2:TerminateInstances,
+	// ec2:DescribeInstances — these are added in the Terraform module.
+	tagClient := resourcegroupstaggingapi.NewFromConfig(awsCfg)
+	ec2Client := ec2.NewFromConfig(awsCfg)
+
 	h := &TTLHandler{
 		S3Client:      s3Client,
 		SESClient:     sesv2.NewFromConfig(awsCfg),
@@ -162,6 +188,10 @@ func main() {
 		Bucket:        bucket,
 		OperatorEmail: os.Getenv("KM_OPERATOR_EMAIL"),
 		Domain:        domain,
+		// TeardownFunc calls DestroySandboxResources via AWS SDK (no terragrunt subprocess).
+		TeardownFunc: func(ctx context.Context, sandboxID string) error {
+			return awspkg.DestroySandboxResources(ctx, tagClient, ec2Client, sandboxID)
+		},
 	}
 
 	lambda.Start(h.HandleTTLEvent)

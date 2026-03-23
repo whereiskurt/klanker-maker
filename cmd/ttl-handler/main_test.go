@@ -227,6 +227,83 @@ func TestHandleTTLEvent_DeletesSchedule(t *testing.T) {
 
 // Test 6: handler proceeds and completes even when profile download fails (missing profile).
 // Artifact upload is skipped (best-effort) and the handler still deletes the schedule.
+
+// TestHandleTTLEvent_CallsTeardownFunc: When TeardownFunc is set, HandleTTLEvent calls it
+// with the correct sandboxID after schedule deletion.
+func TestHandleTTLEvent_CallsTeardownFunc(t *testing.T) {
+	mockS3 := &mockS3GetPutAPI{
+		getBody: profileNoArtifacts,
+	}
+	var calledWithID string
+	h := &TTLHandler{
+		S3Client:      mockS3,
+		SESClient:     &mockSESAPI{},
+		Scheduler:     &mockSchedulerAPI{},
+		Bucket:        "test-bucket",
+		OperatorEmail: "",
+		Domain:        "sandboxes.klankermaker.ai",
+		TeardownFunc: func(ctx context.Context, sandboxID string) error {
+			calledWithID = sandboxID
+			return nil
+		},
+	}
+	err := h.HandleTTLEvent(context.Background(), TTLEvent{SandboxID: "sb-aabbccdd"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calledWithID != "sb-aabbccdd" {
+		t.Errorf("expected TeardownFunc to be called with 'sb-aabbccdd', got: %q", calledWithID)
+	}
+}
+
+// TestHandleTTLEvent_NoTeardownWhenNil: When TeardownFunc is nil, HandleTTLEvent
+// completes without error (backward compatible).
+func TestHandleTTLEvent_NoTeardownWhenNil(t *testing.T) {
+	mockS3 := &mockS3GetPutAPI{
+		getBody: profileNoArtifacts,
+	}
+	h := &TTLHandler{
+		S3Client:      mockS3,
+		SESClient:     &mockSESAPI{},
+		Scheduler:     &mockSchedulerAPI{},
+		Bucket:        "test-bucket",
+		OperatorEmail: "",
+		Domain:        "sandboxes.klankermaker.ai",
+		TeardownFunc:  nil, // explicitly nil — backward compat
+	}
+	err := h.HandleTTLEvent(context.Background(), TTLEvent{SandboxID: "sb-aabbccdd"})
+	if err != nil {
+		t.Fatalf("expected no error when TeardownFunc is nil, got: %v", err)
+	}
+}
+
+// TestHandleTTLEvent_TeardownFailureReturnsError: When TeardownFunc returns an error,
+// HandleTTLEvent returns that error.
+func TestHandleTTLEvent_TeardownFailureReturnsError(t *testing.T) {
+	mockS3 := &mockS3GetPutAPI{
+		getBody: profileNoArtifacts,
+	}
+	teardownErr := errors.New("AWS ec2 terminate failed")
+	h := &TTLHandler{
+		S3Client:      mockS3,
+		SESClient:     &mockSESAPI{},
+		Scheduler:     &mockSchedulerAPI{},
+		Bucket:        "test-bucket",
+		OperatorEmail: "",
+		Domain:        "sandboxes.klankermaker.ai",
+		TeardownFunc: func(ctx context.Context, sandboxID string) error {
+			return teardownErr
+		},
+	}
+	err := h.HandleTTLEvent(context.Background(), TTLEvent{SandboxID: "sb-aabbccdd"})
+	if err == nil {
+		t.Fatal("expected error when TeardownFunc fails")
+	}
+	if !errors.Is(err, teardownErr) {
+		t.Errorf("expected wrapped teardownErr, got: %v", err)
+	}
+}
+
 func TestHandleTTLEvent_ProfileDownloadFailureIsNonFatal(t *testing.T) {
 	mockS3 := &mockS3GetPutAPI{
 		getErr: errors.New("NoSuchKey"),

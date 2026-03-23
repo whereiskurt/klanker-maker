@@ -111,7 +111,11 @@ func runBudgetAdd(cmd *cobra.Command, cfg *config.Config, budgetClient kmaws.Bud
 		budgetClient = dynamodb.NewFromConfig(awsCfg)
 		ec2Client = ec2.NewFromConfig(awsCfg)
 		iamClient = iam.NewFromConfig(awsCfg)
-		metaFetcher = &realMetaFetcher{awsCfg: awsCfg, bucket: defaultStateBucket}
+		stateBucket := cfg.StateBucket
+		if stateBucket == "" {
+			return fmt.Errorf("state bucket not configured: set KM_STATE_BUCKET or state_bucket in km-config.yaml")
+		}
+		metaFetcher = &realMetaFetcher{awsCfg: awsCfg, bucket: stateBucket}
 	}
 
 	tableName := cfg.BudgetTableName
