@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 09-04-PLAN.md
-last_updated: "2026-03-23T00:57:37.831Z"
+stopped_at: Completed 10-01-PLAN.md
+last_updated: "2026-03-23T01:07:46.378Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 10
-  completed_phases: 9
+  completed_phases: 10
   total_plans: 42
-  completed_plans: 40
+  completed_plans: 42
   percent: 0
 ---
 
@@ -89,6 +89,8 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 09-live-infrastructure-operator-docs P02 | 128s | 2 tasks | 5 files |
 | Phase 09 P03 | 94s | 1 tasks | 1 files |
 | Phase 09-live-infrastructure-operator-docs P04 | 3min | 1 tasks | 2 files |
+| Phase 10-scp-sandbox-containment-org-level-ec2-breakout-prevention P01 | 139s | 2 tasks | 4 files |
+| Phase 10 P02 | 143s | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -203,6 +205,13 @@ Recent decisions affecting current work:
 - [Phase 09]: OPERATOR-GUIDE.md documents km configure as the SSO/config entry point (INFR-02) — satisfies requirement through documentation, not code
 - [Phase 09]: Deployment ordering in operator guide: network first, then dynamodb-budget/ses/ttl-handler in any order, all before km create
 - [Phase 09-04]: lambda_zip_path uses build/budget-enforcer.zip matching Makefile build-lambdas output — dist/ path never existed and caused terragrunt apply to fail at Terraform validation
+- [Phase 10-01]: ArnNotLike on aws:PrincipalARN used in SCP statements — NotPrincipal is not supported in SCPs
+- [Phase 10-01]: km-ecs-task-* intentionally NOT carved out from any SCP deny — it IS the sandbox workload and must be fully contained
+- [Phase 10-01]: Statement-specific carve-out locals (trusted_arns_instance, trusted_arns_iam, trusted_arns_ssm) for per-statement precision — budget-enforcer only bypasses IAM escalation, spot-handler only bypasses instance mutation
+- [Phase 10-01]: DenyOrganizationsDiscovery has no condition — applies to ALL roles; management account exempt by AWS design
+- [Phase 10-01]: Region lock uses not_actions (NotAction) with global service exemptions; no trusted role carve-out — applies to operators too
+- [Phase 10]: Exported TerragruntApplyFunc type and ApplyTerragruntFunc var — external test package cmd_test requires exported symbols for DI; mirrors ShellExecFunc pattern from Phase 06-09
+- [Phase 10]: runBootstrap accepts cfg directly when fields are populated — avoids requiring km-config.yaml on disk during unit tests while keeping production path unchanged
 
 ### Roadmap Evolution
 
@@ -222,6 +231,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T23:27:58.530Z
-Stopped at: Completed 09-04-PLAN.md
+Last session: 2026-03-23T01:07:35.413Z
+Stopped at: Completed 10-01-PLAN.md
 Resume file: None

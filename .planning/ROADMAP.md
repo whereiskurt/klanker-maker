@@ -221,7 +221,7 @@ Plans:
 - SCP-12: Carve-outs for km-provisioner-*, km-lifecycle-*, km-ttl-handler, km-ecs-spot-handler, km-budget-enforcer-* verified against existing role naming conventions
 
 **Depends on:** Phase 6 (budget-enforcer role naming must be stable)
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 10-01-PLAN.md — SCP Terraform module + Terragrunt management account deployment unit (SCP-01 through SCP-08, SCP-10)
@@ -243,4 +243,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 7. Unwired Code Paths | 2/2 | Complete   | 2026-03-22 |
 | 8. Sidecar Build & Deployment Pipeline | 2/2 | Complete   | 2026-03-22 |
 | 9. Live Infrastructure & Operator Docs | 3/4 | Gap Closure | 2026-03-22 |
-| 10. SCP Sandbox Containment | 0/2 | Planned    |  |
+| 10. SCP Sandbox Containment | 2/2 | Complete   | 2026-03-23 |
