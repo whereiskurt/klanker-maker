@@ -940,3 +940,212 @@ func checkStringAttr(t *testing.T, item map[string]dynamodbtypes.AttributeValue,
 		t.Errorf("attribute %q = %q; want %q", key, strAttr.Value, want)
 	}
 }
+
+// ============================================================
+// Mock: IdentityQueryAPI (for FetchPublicKeyByAlias)
+// ============================================================
+
+type mockIdentityQueryAPI struct {
+	queryCalled bool
+	queryInput  *dynamodb.QueryInput
+	queryOutput *dynamodb.QueryOutput
+	queryErr    error
+}
+
+func (m *mockIdentityQueryAPI) Query(ctx context.Context, input *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+	m.queryCalled = true
+	m.queryInput = input
+	if m.queryErr != nil {
+		return nil, m.queryErr
+	}
+	if m.queryOutput != nil {
+		return m.queryOutput, nil
+	}
+	return &dynamodb.QueryOutput{Items: nil, Count: 0}, nil
+}
+
+// makeAliasQueryOutput builds a DynamoDB QueryOutput simulating alias-index GSI result.
+func makeAliasQueryOutput(sandboxID, pubKeyB64, email, alias string, allowedSenders []string) *dynamodb.QueryOutput {
+	item := map[string]dynamodbtypes.AttributeValue{
+		"sandbox_id":    &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+		"public_key":    &dynamodbtypes.AttributeValueMemberS{Value: pubKeyB64},
+		"email_address": &dynamodbtypes.AttributeValueMemberS{Value: email},
+		"alias":         &dynamodbtypes.AttributeValueMemberS{Value: alias},
+	}
+	if len(allowedSenders) > 0 {
+		item["allowed_senders"] = &dynamodbtypes.AttributeValueMemberSS{Value: allowedSenders}
+	}
+	return &dynamodb.QueryOutput{
+		Items: []map[string]dynamodbtypes.AttributeValue{item},
+		Count: 1,
+	}
+}
+
+// ============================================================
+// FetchPublicKeyByAlias tests
+// ============================================================
+
+func TestFetchPublicKeyByAlias_KnownAlias(t *testing.T) {
+	pubKeyB64, _ := makeTestKeys(t)
+	mockQuery := &mockIdentityQueryAPI{
+		queryOutput: makeAliasQueryOutput("sb-alias01", pubKeyB64, "sb-alias01@example.com", "research.team-a", []string{"self"}),
+	}
+
+	record, err := kmaws.FetchPublicKeyByAlias(context.Background(), mockQuery, "km-identities", "research.team-a")
+	if err != nil {
+		t.Fatalf("FetchPublicKeyByAlias returned error: %v", err)
+	}
+	if record == nil {
+		t.Fatal("expected non-nil IdentityRecord for known alias")
+	}
+	if record.SandboxID != "sb-alias01" {
+		t.Errorf("SandboxID = %q; want %q", record.SandboxID, "sb-alias01")
+	}
+	if record.Alias != "research.team-a" {
+		t.Errorf("Alias = %q; want %q", record.Alias, "research.team-a")
+	}
+	if record.PublicKeyB64 != pubKeyB64 {
+		t.Errorf("PublicKeyB64 mismatch")
+	}
+}
+
+func TestFetchPublicKeyByAlias_UnknownAlias(t *testing.T) {
+	mockQuery := &mockIdentityQueryAPI{
+		queryOutput: &dynamodb.QueryOutput{Items: nil, Count: 0},
+	}
+
+	record, err := kmaws.FetchPublicKeyByAlias(context.Background(), mockQuery, "km-identities", "unknown.alias")
+	if err != nil {
+		t.Fatalf("FetchPublicKeyByAlias returned error for unknown alias: %v", err)
+	}
+	if record != nil {
+		t.Errorf("expected nil IdentityRecord for unknown alias, got: %+v", record)
+	}
+}
+
+func TestFetchPublicKeyByAlias_QueriesAliasIndex(t *testing.T) {
+	mockQuery := &mockIdentityQueryAPI{
+		queryOutput: &dynamodb.QueryOutput{Items: nil, Count: 0},
+	}
+
+	_, _ = kmaws.FetchPublicKeyByAlias(context.Background(), mockQuery, "km-identities", "build.frontend")
+	if !mockQuery.queryCalled {
+		t.Fatal("expected Query to be called")
+	}
+	if mockQuery.queryInput == nil {
+		t.Fatal("Query input is nil")
+	}
+	if mockQuery.queryInput.IndexName == nil || *mockQuery.queryInput.IndexName != "alias-index" {
+		t.Errorf("IndexName = %v; want %q", mockQuery.queryInput.IndexName, "alias-index")
+	}
+}
+
+// ============================================================
+// MatchesAllowList tests
+// ============================================================
+
+func TestMatchesAllowList_Wildcard(t *testing.T) {
+	if !kmaws.MatchesAllowList([]string{"*"}, "sb-any", "", "sb-recv") {
+		t.Error("expected * to match any sender")
+	}
+}
+
+func TestMatchesAllowList_Self_Match(t *testing.T) {
+	if !kmaws.MatchesAllowList([]string{"self"}, "sb-recv", "", "sb-recv") {
+		t.Error("expected self to match when senderID == receiverSandboxID")
+	}
+}
+
+func TestMatchesAllowList_Self_NoMatch(t *testing.T) {
+	if kmaws.MatchesAllowList([]string{"self"}, "sb-other", "", "sb-recv") {
+		t.Error("expected self to reject when senderID != receiverSandboxID")
+	}
+}
+
+func TestMatchesAllowList_ExactID(t *testing.T) {
+	if !kmaws.MatchesAllowList([]string{"sb-partner"}, "sb-partner", "", "sb-recv") {
+		t.Error("expected exact sandbox ID match to permit sender")
+	}
+}
+
+func TestMatchesAllowList_WildcardAlias_Match(t *testing.T) {
+	if !kmaws.MatchesAllowList([]string{"build.*"}, "sb-x", "build.frontend", "sb-recv") {
+		t.Error("expected build.* to match build.frontend alias")
+	}
+}
+
+func TestMatchesAllowList_WildcardAlias_NoMatch(t *testing.T) {
+	if kmaws.MatchesAllowList([]string{"build.*"}, "sb-x", "deploy.backend", "sb-recv") {
+		t.Error("expected build.* to reject deploy.backend alias")
+	}
+}
+
+func TestMatchesAllowList_Empty_RejectsAll(t *testing.T) {
+	if kmaws.MatchesAllowList([]string{}, "sb-x", "some.alias", "sb-recv") {
+		t.Error("expected empty patterns to reject all senders")
+	}
+}
+
+// ============================================================
+// PublishIdentity alias/allowedSenders tests
+// ============================================================
+
+func TestPublishIdentity_WithAlias_StoresAliasAttribute(t *testing.T) {
+	pubKeyB64, _ := makeTestKeys(t)
+	pubKeyBytes, _ := base64.StdEncoding.DecodeString(pubKeyB64)
+	pubKey := ed25519.PublicKey(pubKeyBytes)
+
+	mockDyn := &mockIdentityTableAPI{}
+	err := kmaws.PublishIdentity(context.Background(), mockDyn, "km-identities", "sb-a01",
+		"sb-a01@example.com", pubKey, nil, "", "", "", "research.team-a", nil)
+	if err != nil {
+		t.Fatalf("PublishIdentity returned error: %v", err)
+	}
+	if !mockDyn.putItemCalled {
+		t.Fatal("expected PutItem to be called")
+	}
+	checkStringAttr(t, mockDyn.putItemInput.Item, "alias", "research.team-a")
+}
+
+func TestPublishIdentity_WithAllowedSenders_StoresSSAttribute(t *testing.T) {
+	pubKeyB64, _ := makeTestKeys(t)
+	pubKeyBytes, _ := base64.StdEncoding.DecodeString(pubKeyB64)
+	pubKey := ed25519.PublicKey(pubKeyBytes)
+
+	mockDyn := &mockIdentityTableAPI{}
+	err := kmaws.PublishIdentity(context.Background(), mockDyn, "km-identities", "sb-a02",
+		"sb-a02@example.com", pubKey, nil, "", "", "", "", []string{"self", "build.*"})
+	if err != nil {
+		t.Fatalf("PublishIdentity returned error: %v", err)
+	}
+	attr, ok := mockDyn.putItemInput.Item["allowed_senders"]
+	if !ok {
+		t.Fatal("expected allowed_senders attribute in DynamoDB item")
+	}
+	ssAttr, ok := attr.(*dynamodbtypes.AttributeValueMemberSS)
+	if !ok {
+		t.Fatal("expected allowed_senders to be a StringSet (SS) attribute")
+	}
+	if len(ssAttr.Value) != 2 {
+		t.Errorf("expected 2 allowed_senders, got %d", len(ssAttr.Value))
+	}
+}
+
+func TestPublishIdentity_NoAliasNoAllowedSenders_OmitsBothAttributes(t *testing.T) {
+	pubKeyB64, _ := makeTestKeys(t)
+	pubKeyBytes, _ := base64.StdEncoding.DecodeString(pubKeyB64)
+	pubKey := ed25519.PublicKey(pubKeyBytes)
+
+	mockDyn := &mockIdentityTableAPI{}
+	err := kmaws.PublishIdentity(context.Background(), mockDyn, "km-identities", "sb-legacy",
+		"sb-legacy@example.com", pubKey, nil, "", "", "", "", nil)
+	if err != nil {
+		t.Fatalf("PublishIdentity returned error: %v", err)
+	}
+	if _, ok := mockDyn.putItemInput.Item["alias"]; ok {
+		t.Error("expected alias attribute to be omitted when alias is empty string")
+	}
+	if _, ok := mockDyn.putItemInput.Item["allowed_senders"]; ok {
+		t.Error("expected allowed_senders attribute to be omitted when nil")
+	}
+}
