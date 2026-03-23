@@ -110,6 +110,11 @@ spec:
         - /tmp
         - /home
 
+  email:
+    signing: optional
+    verifyInbound: optional
+    encryption: off
+
   agent:
     maxConcurrentTasks: 4
     taskTimeout: "30m"

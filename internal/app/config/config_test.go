@@ -126,6 +126,54 @@ domain: test.example.com
 	}
 }
 
+// TestLoadIdentityTableDefault verifies that IdentityTableName defaults to "km-identities" when not set.
+func TestLoadIdentityTableDefault(t *testing.T) {
+	dir := t.TempDir()
+	// Write a km-config.yaml without identity_table_name
+	writeKMConfig(t, dir, `
+domain: test.example.com
+`)
+
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.IdentityTableName != "km-identities" {
+		t.Errorf("IdentityTableName: expected default %q, got %q", "km-identities", cfg.IdentityTableName)
+	}
+}
+
+// TestLoadIdentityTableFromConfig verifies that IdentityTableName loads from km-config.yaml.
+func TestLoadIdentityTableFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: test.example.com
+identity_table_name: my-custom-identities
+`)
+
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.IdentityTableName != "my-custom-identities" {
+		t.Errorf("IdentityTableName: expected %q, got %q", "my-custom-identities", cfg.IdentityTableName)
+	}
+}
+
 // TestLoadEnvOverride verifies that KM_DOMAIN env var overrides km-config.yaml.
 func TestLoadEnvOverride(t *testing.T) {
 	dir := t.TempDir()

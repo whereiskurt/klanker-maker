@@ -62,6 +62,11 @@ spec:
   policy:
     allowShellEscape: false
 
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: off
+
   agent:
     maxConcurrentTasks: 1
     taskTimeout: "15m"

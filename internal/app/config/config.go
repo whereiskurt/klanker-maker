@@ -75,6 +75,10 @@ type Config struct {
 	// Maps to km-config.yaml key budget_table_name. Defaults to "km-budgets".
 	BudgetTableName string
 
+	// IdentityTableName is the DynamoDB table name for sandbox identity tracking.
+	// Maps to km-config.yaml key identity_table_name. Defaults to "km-identities".
+	IdentityTableName string
+
 	// ArtifactsBucket is the S3 bucket used for storing sandbox artifacts and profiles.
 	// Set via KM_ARTIFACTS_BUCKET environment variable or artifacts_bucket in km-config.yaml.
 	// Required for ECS sandbox re-provisioning via km budget add.
@@ -113,6 +117,7 @@ func Load() (*Config, error) {
 
 	// Defaults for new platform fields
 	v.SetDefault("budget_table_name", "km-budgets")
+	v.SetDefault("identity_table_name", "km-identities")
 	v.SetDefault("artifacts_bucket", "")
 	v.SetDefault("aws_profile", "")
 
@@ -154,6 +159,7 @@ func Load() (*Config, error) {
 			"sso.region",
 			"region",
 			"budget_table_name",
+			"identity_table_name",
 			"artifacts_bucket",
 			"aws_profile",
 		} {
@@ -181,6 +187,7 @@ func Load() (*Config, error) {
 		SSORegion:            v.GetString("sso.region"),
 		PrimaryRegion:        v.GetString("region"),
 		BudgetTableName:      v.GetString("budget_table_name"),
+		IdentityTableName:    v.GetString("identity_table_name"),
 		ArtifactsBucket:      v.GetString("artifacts_bucket"),
 		AWSProfile:           v.GetString("aws_profile"),
 	}

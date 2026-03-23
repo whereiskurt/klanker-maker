@@ -56,6 +56,28 @@
       ],
       "additionalProperties": false,
       "properties": {
+        "email": {
+          "type": "object",
+          "description": "Optional email signing, inbound verification, and encryption policy",
+          "additionalProperties": false,
+          "properties": {
+            "signing": {
+              "type": "string",
+              "enum": ["required", "optional", "off"],
+              "description": "Whether outbound emails must be signed (DKIM/Ed25519)"
+            },
+            "verifyInbound": {
+              "type": "string",
+              "enum": ["required", "optional", "off"],
+              "description": "Whether inbound email signatures must be verified"
+            },
+            "encryption": {
+              "type": "string",
+              "enum": ["required", "optional", "off"],
+              "description": "Whether email content must be encrypted"
+            }
+          }
+        },
         "budget": {
           "type": "object",
           "description": "Optional spend limits for compute and AI workloads",

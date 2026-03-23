@@ -69,6 +69,11 @@ spec:
     allowedCommands:
       - git
 
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: off
+
   agent:
     maxConcurrentTasks: 2
     taskTimeout: "30m"

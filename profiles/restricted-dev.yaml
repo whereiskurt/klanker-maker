@@ -98,6 +98,11 @@ spec:
         - /workspace
         - /tmp
 
+  email:
+    signing: optional
+    verifyInbound: optional
+    encryption: off
+
   agent:
     maxConcurrentTasks: 2
     taskTimeout: "20m"

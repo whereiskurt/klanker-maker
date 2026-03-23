@@ -42,6 +42,23 @@ type Spec struct {
 	// Budget defines optional spend limits for compute and AI usage.
 	// When nil, budget enforcement is disabled.
 	Budget *BudgetSpec `yaml:"budget,omitempty"`
+	// Email defines optional email signing and encryption policy.
+	// When nil, email policy enforcement is disabled.
+	Email *EmailSpec `yaml:"email,omitempty"`
+}
+
+// EmailSpec defines email signing, inbound verification, and encryption policies.
+// Each field accepts "required", "optional", or "off".
+type EmailSpec struct {
+	// Signing controls whether outbound emails must be signed (e.g. DKIM/Ed25519).
+	// Values: "required" | "optional" | "off"
+	Signing string `yaml:"signing"`
+	// VerifyInbound controls whether inbound email signatures must be verified.
+	// Values: "required" | "optional" | "off"
+	VerifyInbound string `yaml:"verifyInbound"`
+	// Encryption controls whether email content must be encrypted.
+	// Values: "required" | "optional" | "off"
+	Encryption string `yaml:"encryption"`
 }
 
 // BudgetSpec defines optional spend limits for compute and AI workloads in a sandbox.
