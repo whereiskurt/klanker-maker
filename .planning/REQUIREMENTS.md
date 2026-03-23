@@ -49,7 +49,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **OBSV-03**: Log destination is configurable (CloudWatch/S3/stdout)
 - [x] **OBSV-04**: Filesystem policy enforces writable and read-only paths
 - [x] **OBSV-05**: Artifacts upload to S3 on sandbox exit with configurable size limits
-- [ ] **OBSV-06**: S3 artifact storage supports multi-region replication
+- [x] **OBSV-06**: S3 artifact storage supports multi-region replication
 - [x] **OBSV-07**: Secret patterns are redacted from audit logs before storage
 - [x] **OBSV-08**: Tracing sidecar collects OpenTelemetry traces and spans from sandbox workloads and exports to a configurable OTel collector endpoint
 - [x] **OBSV-09**: Each sandbox session is logged as an MLflow run with sandbox metadata (profile, sandbox-id, duration, exit status) as run parameters
@@ -186,7 +186,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OBSV-03 | Phase 3 | Complete |
 | OBSV-04 | Phase 4 | Complete |
 | OBSV-05 | Phase 4 | Complete |
-| OBSV-06 | Phase 12 | Pending |
+| OBSV-06 | Phase 12 | Complete |
 | OBSV-07 | Phase 4 | Complete |
 | OBSV-08 | Phase 3 | Complete |
 | OBSV-09 | Phase 3 | Complete |

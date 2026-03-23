@@ -252,7 +252,7 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. km budget add for an ECS sandbox re-provisions the Fargate task from the stored S3 profile — the task starts with the same container definitions and the budget enforcer resumes monitoring
   2. infra/live/use1/s3-replication/terragrunt.hcl exists and deploys the S3 replication module to a secondary region
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 12-01-PLAN.md — ECS re-provisioning branch in km budget add (BUDG-08)
@@ -276,7 +276,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 9. Live Infrastructure & Operator Docs | 4/4 | Complete   | 2026-03-23 |
 | 10. SCP Sandbox Containment | 2/2 | Complete    | 2026-03-23 |
 | 11. Sandbox Auto-Destroy & Metadata Wiring | 2/2 | Complete    | 2026-03-23 |
-| 12. ECS Budget Top-Up & S3 Replication | 0/2 | Planned   | — |
+| 12. ECS Budget Top-Up & S3 Replication | 1/2 | In Progress|  |
 
 ### Phase 13: GitHub App Token Integration — scoped repo access for sandboxes
 
