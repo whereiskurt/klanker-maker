@@ -237,7 +237,7 @@ Plans:
   2. IdleDetector.OnIdle triggers sandbox teardown via ExecuteTeardown() — idle EC2 instances are stopped/destroyed per teardown policy, not left running
   3. km list returns accurate sandbox data by reading from the same bucket/source that km create writes to — no hardcoded bucket constant diverges from runtime config
   4. km status shows correct metadata for a sandbox by reading from the same source as km list
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 11-01-PLAN.md — Fix km list/status to use cfg.StateBucket instead of hardcoded constant (PROV-03, PROV-04)
@@ -270,5 +270,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8. Sidecar Build & Deployment Pipeline | 2/2 | Complete   | 2026-03-22 |
 | 9. Live Infrastructure & Operator Docs | 4/4 | Complete   | 2026-03-23 |
 | 10. SCP Sandbox Containment | 2/2 | Complete    | 2026-03-23 |
-| 11. Sandbox Auto-Destroy & Metadata Wiring | 0/2 | Planning   | — |
+| 11. Sandbox Auto-Destroy & Metadata Wiring | 1/2 | In Progress|  |
 | 12. ECS Budget Top-Up & S3 Replication | 0/0 | Planned   | — |

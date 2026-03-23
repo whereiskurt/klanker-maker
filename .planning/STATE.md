@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 10-02-PLAN.md
-last_updated: "2026-03-23T01:12:48.424Z"
+stopped_at: Completed 11-01-PLAN.md
+last_updated: "2026-03-23T02:03:17.418Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
-  total_phases: 10
+  total_phases: 12
   completed_phases: 10
-  total_plans: 42
-  completed_plans: 42
+  total_plans: 44
+  completed_plans: 43
   percent: 0
 ---
 
@@ -91,6 +91,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 09-live-infrastructure-operator-docs P04 | 3min | 1 tasks | 2 files |
 | Phase 10-scp-sandbox-containment-org-level-ec2-breakout-prevention P01 | 139s | 2 tasks | 4 files |
 | Phase 10 P02 | 143s | 1 tasks | 2 files |
+| Phase 11-sandbox-auto-destroy-metadata-wiring P01 | 185s | 1 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -212,6 +213,8 @@ Recent decisions affecting current work:
 - [Phase 10-01]: Region lock uses not_actions (NotAction) with global service exemptions; no trusted role carve-out — applies to operators too
 - [Phase 10]: Exported TerragruntApplyFunc type and ApplyTerragruntFunc var — external test package cmd_test requires exported symbols for DI; mirrors ShellExecFunc pattern from Phase 06-09
 - [Phase 10]: runBootstrap accepts cfg directly when fields are populated — avoids requiring km-config.yaml on disk during unit tests while keeping production path unchanged
+- [Phase 11-sandbox-auto-destroy-metadata-wiring]: Deleted defaultStateBucket constant; cfg.StateBucket is sole source of truth for state bucket in all command paths
+- [Phase 11-sandbox-auto-destroy-metadata-wiring]: Empty-bucket guard before AWS config load — fast cheap check returning actionable error pointing to KM_STATE_BUCKET env var
 
 ### Roadmap Evolution
 
@@ -231,6 +234,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T01:07:48.672Z
-Stopped at: Completed 10-02-PLAN.md
+Last session: 2026-03-23T02:03:13.122Z
+Stopped at: Completed 11-01-PLAN.md
 Resume file: None
