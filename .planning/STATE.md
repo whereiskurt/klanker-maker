@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 18-02-PLAN.md
-last_updated: "2026-03-23T23:48:24.835Z"
+stopped_at: Completed 18-04-PLAN.md
+last_updated: "2026-03-23T23:59:45.387Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 18
-  completed_phases: 17
+  completed_phases: 18
   total_plans: 66
-  completed_plans: 65
+  completed_plans: 66
   percent: 0
 ---
 
@@ -114,6 +114,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 18-loose-ends P01 | 396s | 2 tasks | 5 files |
 | Phase 18-loose-ends P03 | 15min | 1 tasks | 4 files |
 | Phase 18-loose-ends P02 | 700s | 2 tasks | 5 files |
+| Phase 18-loose-ends P04 | 8min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -293,6 +294,9 @@ Recent decisions affecting current work:
 - [Phase 18-loose-ends]: uninit.go active-sandbox guard: refuses teardown when running sandboxes exist unless --force
 - [Phase 18-loose-ends]: km uninit: non-fatal destroy errors warn-and-continue (partial teardown better than stopping)
 - [Phase 18-loose-ends]: SSMGetPutAPI interface extracted in create.go to enable unit testing of generateAndStoreGitHubToken
+- [Phase 18-loose-ends]: Lambda/SES doctor checks use CheckWarn (not CheckError) for missing regional infra — consistent with optional components
+- [Phase 18-loose-ends]: ensureKMSPlatformKey uses variadic KMSEnsureAPI for DI without breaking existing callers
+- [Phase 18-loose-ends]: site.hcl is canonical locals file (not stale); root.hcl reads it — both coexist by design
 
 ### Roadmap Evolution
 
@@ -318,6 +322,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-23T23:48:24.832Z
-Stopped at: Completed 18-02-PLAN.md
+Last session: 2026-03-23T23:59:45.384Z
+Stopped at: Completed 18-04-PLAN.md
 Resume file: None
