@@ -31,12 +31,22 @@ func NewUninitCmd(cfg *config.Config) *cobra.Command {
 	var awsProfile string
 	var region string
 	var force bool
+	var yes bool
 
 	cmd := &cobra.Command{
 		Use:   "uninit",
 		Short: "Tear down all shared regional infrastructure for a region",
 		Long:  helpText("uninit"),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !yes {
+				fmt.Printf("Destroy ALL shared infrastructure in %s? This cannot be undone. [y/N] ", region)
+				var answer string
+				fmt.Scanln(&answer)
+				if answer != "y" && answer != "Y" && answer != "yes" {
+					fmt.Println("Aborted.")
+					return nil
+				}
+			}
 			if awsProfile == "" {
 				awsProfile = "klanker-application"
 			}
@@ -50,6 +60,8 @@ func NewUninitCmd(cfg *config.Config) *cobra.Command {
 		"AWS region to uninitialize (e.g. us-east-1, ca-central-1)")
 	cmd.Flags().BoolVar(&force, "force", false,
 		"Destroy even if active sandboxes exist in the region")
+	cmd.Flags().BoolVar(&yes, "yes", false,
+		"Skip confirmation prompt")
 
 	return cmd
 }
@@ -65,6 +77,26 @@ func runUninit(cfg *config.Config, awsProfile, region string, force bool) error 
 	}
 	if err := awspkg.ValidateCredentials(ctx, awsCfg); err != nil {
 		return fmt.Errorf("AWS credential validation failed: %w", err)
+	}
+
+	// Export config values as env vars for Terragrunt's site.hcl get_env() calls.
+	if cfg.ArtifactsBucket != "" && os.Getenv("KM_ARTIFACTS_BUCKET") == "" {
+		os.Setenv("KM_ARTIFACTS_BUCKET", cfg.ArtifactsBucket)
+	}
+	if cfg.ManagementAccountID != "" && os.Getenv("KM_ACCOUNTS_MANAGEMENT") == "" {
+		os.Setenv("KM_ACCOUNTS_MANAGEMENT", cfg.ManagementAccountID)
+	}
+	if cfg.ApplicationAccountID != "" && os.Getenv("KM_ACCOUNTS_APPLICATION") == "" {
+		os.Setenv("KM_ACCOUNTS_APPLICATION", cfg.ApplicationAccountID)
+	}
+	if cfg.Domain != "" && os.Getenv("KM_DOMAIN") == "" {
+		os.Setenv("KM_DOMAIN", cfg.Domain)
+	}
+	if cfg.PrimaryRegion != "" && os.Getenv("KM_REGION") == "" {
+		os.Setenv("KM_REGION", cfg.PrimaryRegion)
+	}
+	if cfg.Route53ZoneID != "" && os.Getenv("KM_ROUTE53_ZONE_ID") == "" {
+		os.Setenv("KM_ROUTE53_ZONE_ID", cfg.Route53ZoneID)
 	}
 
 	repoRoot := findRepoRoot()
