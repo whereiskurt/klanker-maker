@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -34,6 +33,12 @@ var githubManifestBaseURL = "https://api.github.com"
 // Defined here for DI in configure_github and configure_github_test.
 type SSMWriteAPI interface {
 	PutParameter(ctx context.Context, params *ssm.PutParameterInput, optFns ...func(*ssm.Options)) (*ssm.PutParameterOutput, error)
+}
+
+// SSMReadWriteAPI combines read and write for the discover flow.
+type SSMReadWriteAPI interface {
+	SSMWriteAPI
+	GetParameter(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error)
 }
 
 // NewConfigureGitHubCmd creates the "km configure github" subcommand using real SSM.
@@ -62,6 +67,7 @@ func newConfigureGitHubCmdCore(cfg *config.Config, ssmClientPtr *SSMWriteAPI, in
 		installationID string
 		force          bool
 		setup          bool
+		discover       bool
 	)
 
 	cmd := &cobra.Command{
@@ -112,6 +118,15 @@ Flags:
 				return runConfigureGitHubSetupInteractive(ctx, *ssmClientPtr, writer, cfg, force)
 			}
 
+			if discover {
+				// --discover: read credentials from SSM, fetch installations, store ID
+				rwClient, ok := (*ssmClientPtr).(SSMReadWriteAPI)
+				if !ok {
+					return fmt.Errorf("SSM client does not support GetParameter (needed for --discover)")
+				}
+				return runDiscoverInstallation(ctx, rwClient, writer, force)
+			}
+
 			return runConfigureGitHub(ctx, *ssmClientPtr, writer, reader,
 				nonInteractive, appClientID, privateKeyFile, installationID, force, cfg)
 		},
@@ -129,6 +144,8 @@ Flags:
 		"Overwrite existing SSM parameters (default: refuse if already set)")
 	cmd.Flags().BoolVar(&setup, "setup", false,
 		"One-click GitHub App creation via manifest flow (opens browser, stores credentials automatically)")
+	cmd.Flags().BoolVar(&discover, "discover", false,
+		"Auto-discover installation ID from existing App credentials in SSM")
 
 	_ = cfg // reserved for future use (e.g. KMS key from config)
 
@@ -213,6 +230,58 @@ func runConfigureGitHub(ctx context.Context, ssmClient SSMWriteAPI, out io.Write
 	fmt.Fprintf(out, "Written: /km/config/github/installation-id\n")
 
 	fmt.Fprintf(out, "GitHub App credentials stored. Run 'km create' with a profile that has sourceAccess.github to use them.\n")
+	return nil
+}
+
+// runDiscoverInstallation reads the App credentials from SSM, fetches installations
+// from the GitHub API, and stores the installation ID in SSM.
+func runDiscoverInstallation(ctx context.Context, client SSMReadWriteAPI, out io.Writer, force bool) error {
+	// Read app-client-id (used as the App ID / JWT issuer for the installations API).
+	clientIDOut, err := client.GetParameter(ctx, &ssm.GetParameterInput{
+		Name: aws.String("/km/config/github/app-client-id"),
+	})
+	if err != nil {
+		return fmt.Errorf("reading app-client-id from SSM: %w\nRun 'km configure github --setup' first", err)
+	}
+	appClientID := aws.ToString(clientIDOut.Parameter.Value)
+
+	// Read private key (needed to sign the JWT for the GitHub API).
+	privKeyOut, err := client.GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           aws.String("/km/config/github/private-key"),
+		WithDecryption: aws.Bool(true),
+	})
+	if err != nil {
+		return fmt.Errorf("reading private-key from SSM: %w", err)
+	}
+	pemKey := aws.ToString(privKeyOut.Parameter.Value)
+
+	fmt.Fprintf(out, "Fetching installations for App %s...\n", appClientID)
+
+	installations, err := fetchInstallations(ctx, githubManifestBaseURL, appClientID, pemKey)
+	if err != nil {
+		return fmt.Errorf("fetching installations: %w\nMake sure the App is installed on your account/org first", err)
+	}
+
+	if len(installations) == 0 {
+		return fmt.Errorf("no installations found\nInstall the App on your account/org first, then re-run --discover")
+	}
+
+	// Show all installations and use the first one.
+	for i, inst := range installations {
+		marker := " "
+		if i == 0 {
+			marker = ">"
+		}
+		fmt.Fprintf(out, "  %s [%d] %s\n", marker, inst.ID, inst.Account)
+	}
+
+	installID := strconv.FormatInt(installations[0].ID, 10)
+	if err := putSSMParam(ctx, client, "/km/config/github/installation-id",
+		installID, ssmtypes.ParameterTypeString, "", force); err != nil {
+		return fmt.Errorf("writing installation-id to SSM: %w", err)
+	}
+	fmt.Fprintf(out, "Written: /km/config/github/installation-id (%s)\n", installID)
+	fmt.Fprintf(out, "GitHub App configuration complete.\n")
 	return nil
 }
 
@@ -314,6 +383,13 @@ func ReceiveManifestCode(ctx context.Context, timeoutSeconds int) (string, int, 
 // ReceiveManifestCodeWithPortCb is the testable variant of ReceiveManifestCode.
 // portCb is called with the bound port immediately after the listener is ready,
 // allowing tests to send a request before the timeout fires.
+//
+// The server serves two routes:
+//   - GET /start — renders an HTML page that auto-POSTs the manifest JSON to GitHub's
+//     App creation endpoint. GitHub's manifest flow requires a form POST, not a GET
+//     with a query parameter.
+//   - GET /github-app-setup — receives the redirect callback from GitHub with the
+//     authorization code after App creation.
 func ReceiveManifestCodeWithPortCb(ctx context.Context, timeoutSeconds int, portCb func(int)) (string, int, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -323,7 +399,27 @@ func ReceiveManifestCodeWithPortCb(ctx context.Context, timeoutSeconds int, port
 
 	codeCh := make(chan string, 1)
 
+	// Build the manifest JSON with the redirect URL pointing back to this server.
+	redirectURL := fmt.Sprintf("http://127.0.0.1:%d/github-app-setup", port)
+	manifestJSON := BuildManifestJSON(redirectURL)
+
 	mux := http.NewServeMux()
+
+	// /start serves an auto-submitting HTML form that POSTs the manifest to GitHub.
+	mux.HandleFunc("/start", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
+<html><head><title>Klanker Maker — GitHub App Setup</title></head>
+<body>
+<p>Redirecting to GitHub to create the App...</p>
+<form id="manifest-form" action="https://github.com/settings/apps/new" method="post">
+  <input type="hidden" name="manifest" value='%s'>
+</form>
+<script>document.getElementById('manifest-form').submit();</script>
+</body></html>`, manifestJSON)
+	})
+
+	// /github-app-setup receives the callback from GitHub with the code.
 	mux.HandleFunc("/github-app-setup", func(w http.ResponseWriter, r *http.Request) {
 		code := r.URL.Query().Get("code")
 		if code == "" {
@@ -406,9 +502,10 @@ func ExchangeManifestCode(ctx context.Context, baseURL, code string) (*manifestC
 
 // fetchInstallations calls /app/installations with a GitHub App JWT and returns
 // the list of installations. baseURL is injectable for tests.
-func fetchInstallations(ctx context.Context, baseURL string, appID int64, pemKey string) ([]installationInfo, error) {
-	// Generate JWT using the App ID as the client ID (GitHub manifest flow uses numeric App ID as issuer).
-	jwt, err := ghpkg.GenerateGitHubAppJWT(strconv.FormatInt(appID, 10), []byte(pemKey))
+// appIDOrClientID can be the numeric App ID (as string) or the client ID string —
+// GitHub accepts both as the JWT issuer.
+func fetchInstallations(ctx context.Context, baseURL string, appIDOrClientID string, pemKey string) ([]installationInfo, error) {
+	jwt, err := ghpkg.GenerateGitHubAppJWT(appIDOrClientID, []byte(pemKey))
 	if err != nil {
 		return nil, fmt.Errorf("fetch installations: generate JWT: %w", err)
 	}
@@ -487,15 +584,13 @@ func runConfigureGitHubSetupInteractive(ctx context.Context, ssmClient SSMWriteA
 		return ctx.Err()
 	}
 
-	redirectURL := fmt.Sprintf("http://127.0.0.1:%d/github-app-setup", port)
-	manifestJSON := BuildManifestJSON(redirectURL)
-	setupURL := fmt.Sprintf("https://github.com/settings/apps/new?manifest=%s", url.QueryEscape(manifestJSON))
+	startURL := fmt.Sprintf("http://127.0.0.1:%d/start", port)
 
 	fmt.Fprintf(out, "Opening GitHub App creation page in your browser...\n")
-	fmt.Fprintf(out, "If the browser does not open, copy this URL:\n\n  %s\n\n", setupURL)
+	fmt.Fprintf(out, "If the browser does not open, copy this URL:\n\n  %s\n\n", startURL)
 	fmt.Fprintf(out, "Waiting for callback on http://127.0.0.1:%d/github-app-setup ...\n", port)
 
-	if err := openBrowser(setupURL); err != nil {
+	if err := openBrowser(startURL); err != nil {
 		// Non-fatal — operator can use the printed URL.
 		fmt.Fprintf(out, "(Browser open failed: %v — please copy the URL above)\n", err)
 	}
@@ -545,7 +640,7 @@ func RunConfigureGitHubSetup(ctx context.Context, ssmClient SSMWriteAPI, out io.
 	fmt.Fprintf(out, "Written: /km/config/github/private-key (SecureString)\n")
 
 	// Try to fetch installations to get the installation ID.
-	installations, err := fetchInstallations(ctx, baseURL, appCreds.ID, appCreds.PEM)
+	installations, err := fetchInstallations(ctx, baseURL, strconv.FormatInt(appCreds.ID, 10), appCreds.PEM)
 	if err != nil {
 		// Non-fatal — print guidance for operator to install manually.
 		fmt.Fprintf(out, "Note: could not fetch installations: %v\n", err)
