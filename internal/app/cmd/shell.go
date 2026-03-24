@@ -97,10 +97,10 @@ func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 	}
 }
 
-// execSSMSession builds and runs: aws ssm start-session --target <instanceID> --region <region>
+// execSSMSession builds and runs: aws ssm start-session --target <instanceID> --region <region> --profile <profile>
 func execSSMSession(ctx context.Context, instanceID, region string, execFn ShellExecFunc) error {
 	c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
-		"--target", instanceID, "--region", region)
+		"--target", instanceID, "--region", region, "--profile", "klanker-terraform")
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
@@ -113,7 +113,7 @@ func execSSMSession(ctx context.Context, instanceID, region string, execFn Shell
 func execECSCommand(ctx context.Context, clusterARN, taskARN, region string, execFn ShellExecFunc) error {
 	c := exec.CommandContext(ctx, "aws", "ecs", "execute-command",
 		"--cluster", clusterARN, "--task", taskARN,
-		"--interactive", "--command", "/bin/bash", "--region", region)
+		"--interactive", "--command", "/bin/bash", "--region", region, "--profile", "klanker-terraform")
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
