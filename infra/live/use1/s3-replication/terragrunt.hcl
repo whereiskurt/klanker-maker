@@ -8,7 +8,9 @@ locals {
   region_full   = local.region_config.locals.region_full
 }
 
-# Provider with replica alias for cross-region replication.
+# Default provider only — the s3-replication module defines its own
+# provider "aws" { alias = "replica" } in main.tf, so we must not
+# generate a duplicate here.
 # Standalone (no root include) to avoid duplicate generate "provider" blocks.
 generate "provider" {
   path      = "provider.tf"
@@ -28,18 +30,6 @@ generate "provider" {
 
     provider "aws" {
       region = "${local.region_full}"
-
-      default_tags {
-        tags = {
-          ManagedBy = "Terragrunt"
-          km_label  = "${local.site_vars.locals.site.label}"
-        }
-      }
-    }
-
-    provider "aws" {
-      alias  = "replica"
-      region = "${get_env("KM_REPLICA_REGION", "us-west-2")}"
 
       default_tags {
         tags = {
