@@ -15,6 +15,7 @@ import (
 	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/pricing"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -327,10 +328,25 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		}
 	}
 
-	// Step 12: Create EventBridge TTL schedule if TTL is configured and Lambda ARN is set.
+	// Step 12: Create EventBridge TTL schedule if TTL is configured.
+	// Auto-discover Lambda ARN if not explicitly set.
 	// Non-fatal: sandbox is provisioned; operator can re-schedule manually if this fails.
-	if ttlExpiry != nil && cfg.TTLLambdaARN != "" {
-		schedInput := compiler.BuildTTLScheduleInput(sandboxID, *ttlExpiry, cfg.TTLLambdaARN, cfg.SchedulerRoleARN)
+	ttlLambdaARN := cfg.TTLLambdaARN
+	if ttlLambdaARN == "" && ttlExpiry != nil {
+		// Auto-discover from the well-known Lambda function name.
+		lambdaClient := lambda.NewFromConfig(awsCfg)
+		fnOut, fnErr := lambdaClient.GetFunction(ctx, &lambda.GetFunctionInput{
+			FunctionName: aws.String("km-ttl-handler"),
+		})
+		if fnErr == nil {
+			ttlLambdaARN = aws.ToString(fnOut.Configuration.FunctionArn)
+			log.Debug().Str("arn", ttlLambdaARN).Msg("auto-discovered TTL handler Lambda ARN")
+		} else {
+			log.Warn().Err(fnErr).Msg("TTL handler Lambda not found — TTL schedule will not be created")
+		}
+	}
+	if ttlExpiry != nil && ttlLambdaARN != "" {
+		schedInput := compiler.BuildTTLScheduleInput(sandboxID, *ttlExpiry, ttlLambdaARN, cfg.SchedulerRoleARN)
 		schedulerClient := scheduler.NewFromConfig(awsCfg)
 		if err := awspkg.CreateTTLSchedule(ctx, schedulerClient, schedInput); err != nil {
 			log.Error().Err(err).Str("sandbox_id", sandboxID).
