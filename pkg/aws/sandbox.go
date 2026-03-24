@@ -99,6 +99,11 @@ func ListAllSandboxesByS3(ctx context.Context, client S3ListAPI, bucket string) 
 		}
 
 		rec := readMetadataRecord(ctx, client, bucket, sandboxID)
+		// Skip sandboxes with no metadata.json — they've been destroyed
+		// but have orphaned state files (e.g. github-token/terraform.tfstate).
+		if rec.Status == "unknown" && rec.Profile == "unknown" {
+			continue
+		}
 		records = append(records, rec)
 	}
 
