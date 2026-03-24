@@ -315,8 +315,10 @@ func ensureSandboxHostedZone(ctx context.Context, cfg *config.Config) (string, e
 	fmt.Printf("  Setting up DNS zone for %s...\n", sandboxDomain)
 
 	// 1. Create Route53 client for application account (where the zone will live)
+	// Route53 is a global service but the SDK requires a region to resolve endpoints.
 	appCfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithSharedConfigProfile("klanker-terraform"),
+		awsconfig.WithRegion("us-east-1"),
 	)
 	if err != nil {
 		return "", fmt.Errorf("load app AWS config: %w", err)
@@ -359,6 +361,7 @@ func ensureSandboxHostedZone(ctx context.Context, cfg *config.Config) (string, e
 	// 5. Create Route53 client for management account (where the parent zone lives)
 	mgmtCfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithSharedConfigProfile("klanker-management"),
+		awsconfig.WithRegion("us-east-1"),
 	)
 	if err != nil {
 		return zoneID, fmt.Errorf("zone created but could not load management AWS config for NS delegation: %w", err)
