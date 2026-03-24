@@ -15,6 +15,7 @@ import (
 	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/pricing"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	iampkg "github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
@@ -345,8 +346,22 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 			log.Warn().Err(fnErr).Msg("TTL handler Lambda not found — TTL schedule will not be created")
 		}
 	}
-	if ttlExpiry != nil && ttlLambdaARN != "" {
-		schedInput := compiler.BuildTTLScheduleInput(sandboxID, *ttlExpiry, ttlLambdaARN, cfg.SchedulerRoleARN)
+	// Auto-discover scheduler role ARN if not explicitly set.
+	schedulerRoleARN := cfg.SchedulerRoleARN
+	if schedulerRoleARN == "" && ttlExpiry != nil {
+		iamClient := iampkg.NewFromConfig(awsCfg)
+		roleOut, roleErr := iamClient.GetRole(ctx, &iampkg.GetRoleInput{
+			RoleName: aws.String("km-ttl-scheduler"),
+		})
+		if roleErr == nil {
+			schedulerRoleARN = aws.ToString(roleOut.Role.Arn)
+			log.Debug().Str("arn", schedulerRoleARN).Msg("auto-discovered TTL scheduler role ARN")
+		} else {
+			log.Warn().Err(roleErr).Msg("TTL scheduler role not found — run 'km init' to create it")
+		}
+	}
+	if ttlExpiry != nil && ttlLambdaARN != "" && schedulerRoleARN != "" {
+		schedInput := compiler.BuildTTLScheduleInput(sandboxID, *ttlExpiry, ttlLambdaARN, schedulerRoleARN)
 		schedulerClient := scheduler.NewFromConfig(awsCfg)
 		if err := awspkg.CreateTTLSchedule(ctx, schedulerClient, schedInput); err != nil {
 			log.Error().Err(err).Str("sandbox_id", sandboxID).

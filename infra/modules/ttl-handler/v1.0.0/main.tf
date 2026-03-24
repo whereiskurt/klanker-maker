@@ -146,6 +146,48 @@ resource "aws_cloudwatch_log_group" "ttl_handler" {
 }
 
 # ============================================================
+# EventBridge Scheduler execution role: assumed by Scheduler to invoke Lambda
+# ============================================================
+
+resource "aws_iam_role" "scheduler_invoke" {
+  name = "km-ttl-scheduler"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "scheduler.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      },
+    ]
+  })
+
+  tags = {
+    "km:component" = "ttl-handler"
+    "km:managed"   = "true"
+  }
+}
+
+resource "aws_iam_role_policy" "scheduler_invoke_lambda" {
+  name = "km-ttl-scheduler-invoke"
+  role = aws_iam_role.scheduler_invoke.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "lambda:InvokeFunction"
+        Resource = aws_lambda_function.ttl_handler.arn
+      },
+    ]
+  })
+}
+
+# ============================================================
 # EventBridge Scheduler permission: allow scheduler to invoke Lambda
 # ============================================================
 
