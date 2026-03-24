@@ -98,7 +98,7 @@ resource "aws_iam_role_policy" "github_token_refresher" {
         Effect = "Allow"
         Action = ["ssm:GetParameter", "ssm:GetParameters"]
         Resource = [
-          "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/km/config/github/*"
+          "arn:aws:ssm:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:parameter/km/config/github/*"
         ]
       },
       {
@@ -106,7 +106,7 @@ resource "aws_iam_role_policy" "github_token_refresher" {
         Effect = "Allow"
         Action = ["ssm:PutParameter"]
         Resource = [
-          "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_param}"
+          "arn:aws:ssm:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_param}"
         ]
       },
       {
