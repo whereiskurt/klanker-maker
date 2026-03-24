@@ -572,6 +572,25 @@ func runChecks(ctx context.Context, checks []func(context.Context) CheckResult) 
 	return results
 }
 
+// isCredentialError returns true if the error message indicates an SSO/credential
+// failure (expired token, invalid grant, etc.) rather than a permissions issue.
+func isCredentialError(msg string) bool {
+	lower := strings.ToLower(msg)
+	return strings.Contains(lower, "refresh cached sso token") ||
+		strings.Contains(lower, "invalidgrantexception") ||
+		strings.Contains(lower, "sso token") ||
+		strings.Contains(lower, "no credentials") ||
+		strings.Contains(lower, "expired sso") ||
+		strings.Contains(lower, "refresh cached credentials")
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // =============================================================================
 // Output formatting
 // =============================================================================
@@ -667,6 +686,37 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 	// Initialize real AWS clients when deps is nil or partially nil.
 	if deps == nil {
 		deps = initRealDeps(ctx, cfg)
+	}
+
+	// Run credential check first — if SSO is expired, skip all AWS checks
+	// rather than repeating the same credential error for every check.
+	profile := cfg.GetAWSProfile()
+	if profile == "" {
+		profile = "klanker-terraform"
+	}
+	credResult := checkCredential(ctx, deps.STSClient, profile)
+	if credResult.Status == CheckError && isCredentialError(credResult.Message) {
+		configResult := checkConfig(cfg)
+		results := []CheckResult{configResult, {
+			Name:        credResult.Name,
+			Status:      CheckError,
+			Message:     fmt.Sprintf("SSO session expired for profile %q", profile),
+			Remediation: fmt.Sprintf("Run 'aws sso login --profile %s' then re-run 'km doctor'", profile),
+		}}
+		out := cmd.OutOrStdout()
+		if jsonOutput {
+			return json.NewEncoder(out).Encode(results)
+		}
+		isTTY := isTerminal(out)
+		for _, r := range results {
+			fmt.Fprintln(out, formatCheckLine(r, isTTY))
+		}
+		summaryLine := fmt.Sprintf("\n%d checks passed, 0 warnings, 1 error (remaining checks skipped — no credentials)", boolToInt(configResult.Status == CheckOK))
+		if isTTY {
+			summaryLine = ansiRed + summaryLine + ansiReset
+		}
+		fmt.Fprintln(out, summaryLine)
+		return fmt.Errorf("platform health check failed: SSO credentials expired")
 	}
 
 	// Build the check list.
