@@ -56,6 +56,8 @@ github.com/aws/aws-sdk-go-v2/service/pricing v1.40.14 h1:Z3GB0K5jp4NA7h8jF+47NpM
 github.com/aws/aws-sdk-go-v2/service/pricing v1.40.14/go.mod h1:kIKQg3oQXFIQhLS0VHI1oCdml2mApKG9cSgfVPrYuY4=
 github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi v1.31.9 h1:7Xn/lOgm5VG1OiE+KCWMQb/EPITD6VF0Py3+NzT0vSA=
 github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi v1.31.9/go.mod h1:TEp5JJ+bq6Lrh2sL3EZA3Lt5tySu8FScO/AYt9Nso5Y=
+github.com/aws/aws-sdk-go-v2/service/route53 v1.62.4 h1:64aYPyHg3RjLvnMMSYQSg7aP+r1WRCPIS9SP9KfHjWg=
+github.com/aws/aws-sdk-go-v2/service/route53 v1.62.4/go.mod h1:bPSPzWTn9LSX6e0KPp4LlPoaspouZdKAlIdSMdhBBrs=
 github.com/aws/aws-sdk-go-v2/service/s3 v1.97.1 h1:csi9NLpFZXb9fxY7rS1xVzgPRGMt7MSNWeQ6eo247kE=
 github.com/aws/aws-sdk-go-v2/service/s3 v1.97.1/go.mod h1:qXVal5H0ChqXP63t6jze5LmFalc7+ZE7wOdLtZ0LCP0=
 github.com/aws/aws-sdk-go-v2/service/scheduler v1.17.21 h1:PXsWg8Shok6JwNQ2ImU9kQbsj4PkE3FH/7v86XxJftQ=

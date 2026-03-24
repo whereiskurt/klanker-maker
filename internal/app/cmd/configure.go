@@ -22,6 +22,7 @@ type platformConfig struct {
 	BudgetTableName string         `yaml:"budget_table_name,omitempty"`
 	StateBucket     string         `yaml:"state_bucket,omitempty"`
 	ArtifactsBucket string         `yaml:"artifacts_bucket,omitempty"`
+	Route53ZoneID   string         `yaml:"route53_zone_id,omitempty"`
 }
 
 type accountsConfig struct {

@@ -6,12 +6,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/route53"
+	route53types "github.com/aws/aws-sdk-go-v2/service/route53/types"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/compiler"
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
+	"gopkg.in/yaml.v3"
 )
 
 // InitRunner is the interface for applying Terragrunt modules.
@@ -125,6 +132,24 @@ func runInit(cfg *config.Config, awsProfile, region string) error {
 	}
 	if cfg.PrimaryRegion != "" && os.Getenv("KM_REGION") == "" {
 		os.Setenv("KM_REGION", cfg.PrimaryRegion)
+	}
+
+	// Auto-create sandboxes.{domain} hosted zone and NS delegation if not already set.
+	if os.Getenv("KM_ROUTE53_ZONE_ID") == "" && cfg.Route53ZoneID == "" && cfg.Domain != "" {
+		zoneID, err := ensureSandboxHostedZone(ctx, cfg)
+		if err != nil {
+			fmt.Printf("  [warn] DNS zone setup failed: %v\n", err)
+			fmt.Printf("  SES will be skipped. Set KM_ROUTE53_ZONE_ID manually to enable.\n")
+		} else {
+			os.Setenv("KM_ROUTE53_ZONE_ID", zoneID)
+			cfg.Route53ZoneID = zoneID
+			// Persist to km-config.yaml so future runs don't repeat this
+			if persistErr := persistRoute53ZoneID(zoneID); persistErr != nil {
+				fmt.Printf("  [warn] Could not save route53_zone_id to km-config.yaml: %v\n", persistErr)
+			}
+		}
+	} else if cfg.Route53ZoneID != "" && os.Getenv("KM_ROUTE53_ZONE_ID") == "" {
+		os.Setenv("KM_ROUTE53_ZONE_ID", cfg.Route53ZoneID)
 	}
 
 	repoRoot := findRepoRoot()
@@ -279,4 +304,144 @@ func extractTFOutput(raw map[string]json.RawMessage, key string, target interfac
 		return fmt.Errorf("parsing output %q value: %w", key, err)
 	}
 	return nil
+}
+
+// ensureSandboxHostedZone creates the sandboxes.{domain} hosted zone in the application
+// account and sets up NS delegation from the parent zone in the management account.
+// Returns the zone ID of the sandboxes zone.
+func ensureSandboxHostedZone(ctx context.Context, cfg *config.Config) (string, error) {
+	sandboxDomain := "sandboxes." + cfg.Domain
+
+	fmt.Printf("  Setting up DNS zone for %s...\n", sandboxDomain)
+
+	// 1. Create Route53 client for application account (where the zone will live)
+	appCfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithSharedConfigProfile("klanker-terraform"),
+	)
+	if err != nil {
+		return "", fmt.Errorf("load app AWS config: %w", err)
+	}
+	appR53 := route53.NewFromConfig(appCfg)
+
+	// 2. Check if sandboxes.{domain} zone already exists in application account
+	zoneID, err := findHostedZone(ctx, appR53, sandboxDomain)
+	if err != nil {
+		return "", fmt.Errorf("checking for existing zone: %w", err)
+	}
+	if zoneID != "" {
+		fmt.Printf("  DNS zone %s already exists: %s\n", sandboxDomain, zoneID)
+		return zoneID, nil
+	}
+
+	// 3. Create the hosted zone
+	callerRef := fmt.Sprintf("km-init-%d", time.Now().Unix())
+	createOut, err := appR53.CreateHostedZone(ctx, &route53.CreateHostedZoneInput{
+		Name:            aws.String(sandboxDomain),
+		CallerReference: aws.String(callerRef),
+		HostedZoneConfig: &route53types.HostedZoneConfig{
+			Comment: aws.String("Sandbox email zone — created by km init"),
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("create hosted zone %s: %w", sandboxDomain, err)
+	}
+
+	zoneID = strings.TrimPrefix(aws.ToString(createOut.HostedZone.Id), "/hostedzone/")
+	fmt.Printf("  Created DNS zone %s: %s\n", sandboxDomain, zoneID)
+
+	// 4. Get the NS records for the new zone
+	nsRecords := make([]string, 0, len(createOut.DelegationSet.NameServers))
+	for _, ns := range createOut.DelegationSet.NameServers {
+		nsRecords = append(nsRecords, ns)
+	}
+	fmt.Printf("  NS records: %s\n", strings.Join(nsRecords, ", "))
+
+	// 5. Create Route53 client for management account (where the parent zone lives)
+	mgmtCfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithSharedConfigProfile("klanker-management"),
+	)
+	if err != nil {
+		return zoneID, fmt.Errorf("zone created but could not load management AWS config for NS delegation: %w", err)
+	}
+	mgmtR53 := route53.NewFromConfig(mgmtCfg)
+
+	// 6. Find the parent zone (cfg.Domain) in management account
+	parentZoneID, err := findHostedZone(ctx, mgmtR53, cfg.Domain)
+	if err != nil || parentZoneID == "" {
+		return zoneID, fmt.Errorf("zone created but parent zone %s not found in management account — add NS delegation manually", cfg.Domain)
+	}
+
+	// 7. Create NS delegation record in parent zone
+	nsRRs := make([]route53types.ResourceRecord, 0, len(nsRecords))
+	for _, ns := range nsRecords {
+		nsRRs = append(nsRRs, route53types.ResourceRecord{Value: aws.String(ns)})
+	}
+	_, err = mgmtR53.ChangeResourceRecordSets(ctx, &route53.ChangeResourceRecordSetsInput{
+		HostedZoneId: aws.String(parentZoneID),
+		ChangeBatch: &route53types.ChangeBatch{
+			Comment: aws.String("NS delegation for sandbox email zone — created by km init"),
+			Changes: []route53types.Change{
+				{
+					Action: route53types.ChangeActionUpsert,
+					ResourceRecordSet: &route53types.ResourceRecordSet{
+						Name:            aws.String(sandboxDomain),
+						Type:            route53types.RRTypeNs,
+						TTL:             aws.Int64(300),
+						ResourceRecords: nsRRs,
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return zoneID, fmt.Errorf("zone created but NS delegation failed: %w", err)
+	}
+
+	fmt.Printf("  NS delegation added to %s zone in management account\n", cfg.Domain)
+	return zoneID, nil
+}
+
+// findHostedZone looks for a hosted zone by name. Returns zone ID or "" if not found.
+func findHostedZone(ctx context.Context, client *route53.Client, domain string) (string, error) {
+	// Ensure trailing dot for Route53 API
+	if !strings.HasSuffix(domain, ".") {
+		domain += "."
+	}
+	out, err := client.ListHostedZonesByName(ctx, &route53.ListHostedZonesByNameInput{
+		DNSName:  aws.String(domain),
+		MaxItems: aws.Int32(1),
+	})
+	if err != nil {
+		return "", err
+	}
+	for _, zone := range out.HostedZones {
+		if aws.ToString(zone.Name) == domain {
+			return strings.TrimPrefix(aws.ToString(zone.Id), "/hostedzone/"), nil
+		}
+	}
+	return "", nil
+}
+
+// persistRoute53ZoneID writes the zone ID back to km-config.yaml.
+func persistRoute53ZoneID(zoneID string) error {
+	configPath := filepath.Join(findRepoRoot(), "km-config.yaml")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return err
+	}
+
+	// Parse, add field, re-serialize
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	raw["route53_zone_id"] = zoneID
+
+	newData, err := yaml.Marshal(raw)
+	if err != nil {
+		return err
+	}
+
+	header := "# km-config.yaml — generated by km configure\n# Add this file to .gitignore\n\n"
+	return os.WriteFile(configPath, append([]byte(header), newData...), 0600)
 }

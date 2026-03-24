@@ -88,6 +88,11 @@ type Config struct {
 	// Set via KM_AWS_PROFILE environment variable or aws_profile in km-config.yaml.
 	// Defaults to "klanker-terraform" when empty.
 	AWSProfile string
+
+	// Route53ZoneID is the hosted zone ID for the sandboxes subdomain.
+	// Set via KM_ROUTE53_ZONE_ID environment variable or route53_zone_id in km-config.yaml.
+	// Auto-created by km init if not set.
+	Route53ZoneID string
 }
 
 // isSetByEnv returns true if the given viper key has been overridden by an environment
@@ -163,6 +168,7 @@ func Load() (*Config, error) {
 			"artifacts_bucket",
 			"aws_profile",
 			"state_bucket",
+			"route53_zone_id",
 		} {
 			if v2.IsSet(key) && !isSetByEnv(v, key) {
 				v.Set(key, v2.Get(key))
@@ -191,6 +197,7 @@ func Load() (*Config, error) {
 		IdentityTableName:    v.GetString("identity_table_name"),
 		ArtifactsBucket:      v.GetString("artifacts_bucket"),
 		AWSProfile:           v.GetString("aws_profile"),
+		Route53ZoneID:        v.GetString("route53_zone_id"),
 	}
 
 	return cfg, nil
