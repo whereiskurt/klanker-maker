@@ -253,12 +253,6 @@ resource "aws_scheduler_schedule" "github_token_refresh" {
       maximum_retry_attempts = 0
     }
   }
-
-  tags = {
-    "km:component"  = "github-token-refresher"
-    "km:sandbox_id" = var.sandbox_id
-    "km:managed"    = "true"
-  }
 }
 
 # Lambda permission: allow EventBridge Scheduler to invoke the function

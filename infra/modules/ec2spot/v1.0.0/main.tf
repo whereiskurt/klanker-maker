@@ -157,7 +157,7 @@ data "aws_ec2_spot_price" "price" {
 resource "aws_security_group" "ec2spot" {
   count = local.total_ec2spot_count > 0 ? 1 : 0
 
-  name        = "km-ec2spot-${var.km_label}-${var.region_label}"
+  name        = "km-ec2spot-${var.sandbox_id}-${var.region_label}"
   description = "Security group for km sandbox EC2 spot hosts (SSM-only access)"
   vpc_id      = local.effective_vpc_id
 
