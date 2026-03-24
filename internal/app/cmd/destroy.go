@@ -291,6 +291,20 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool) er
 		}
 	}
 
+	// Step 12: Delete sandbox metadata.json from S3 so km list no longer shows it.
+	stateBucket := cfg.StateBucket
+	if stateBucket == "" {
+		stateBucket = os.Getenv("KM_STATE_BUCKET")
+	}
+	if stateBucket != "" {
+		if delErr := awspkg.DeleteSandboxMetadata(ctx, s3Client, stateBucket, sandboxID); delErr != nil {
+			log.Warn().Err(delErr).Str("sandbox_id", sandboxID).
+				Msg("failed to delete sandbox metadata from S3 (non-fatal)")
+		} else {
+			log.Info().Str("sandbox_id", sandboxID).Msg("sandbox metadata deleted from S3")
+		}
+	}
+
 	fmt.Printf("Sandbox %s destroyed successfully.\n", sandboxID)
 
 	return nil

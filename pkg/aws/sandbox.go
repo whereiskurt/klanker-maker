@@ -243,3 +243,22 @@ func ReadSandboxMetadata(ctx context.Context, client S3ListAPI, bucket, sandboxI
 
 	return &meta, nil
 }
+
+// S3DeleteAPI is the narrow interface for deleting S3 objects.
+type S3DeleteAPI interface {
+	DeleteObject(ctx context.Context, input *s3.DeleteObjectInput, opts ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+}
+
+// DeleteSandboxMetadata removes the metadata.json for a sandbox from S3.
+// Idempotent — does not error if the object does not exist.
+func DeleteSandboxMetadata(ctx context.Context, client S3DeleteAPI, bucket, sandboxID string) error {
+	key := metadataKey(sandboxID)
+	_, err := client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: awssdk.String(bucket),
+		Key:    awssdk.String(key),
+	})
+	if err != nil {
+		return fmt.Errorf("delete metadata for sandbox %s: %w", sandboxID, err)
+	}
+	return nil
+}
