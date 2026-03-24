@@ -110,6 +110,10 @@ resource "aws_s3_bucket_replication_configuration" "source" {
       prefix = "artifacts/"
     }
 
+    delete_marker_replication {
+      status = "Enabled"
+    }
+
     destination {
       bucket        = aws_s3_bucket.replica.arn
       storage_class = "STANDARD"
