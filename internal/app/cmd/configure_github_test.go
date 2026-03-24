@@ -348,13 +348,16 @@ func TestManifestJSON_Structure(t *testing.T) {
 		t.Errorf("public: got %v, want false", m["public"])
 	}
 
-	// default_permissions.contents = "write"
+	// default_permissions: contents = "read", pull_requests = "write"
 	dp, ok := m["default_permissions"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("default_permissions missing or wrong type")
 	}
-	if dp["contents"] != "write" {
-		t.Errorf("default_permissions.contents: got %v, want write", dp["contents"])
+	if dp["contents"] != "read" {
+		t.Errorf("default_permissions.contents: got %v, want read", dp["contents"])
+	}
+	if dp["pull_requests"] != "write" {
+		t.Errorf("default_permissions.pull_requests: got %v, want write", dp["pull_requests"])
 	}
 
 	// hook_attributes.active = false

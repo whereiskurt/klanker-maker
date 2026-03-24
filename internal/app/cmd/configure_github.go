@@ -276,7 +276,8 @@ func BuildManifestJSON(redirectURL string) string {
 		"url":    "https://github.com/whereiskurt/klankrmkr",
 		"public": false,
 		"default_permissions": map[string]interface{}{
-			"contents": "write",
+			"contents":      "read",
+			"pull_requests": "write",
 		},
 		"hook_attributes": map[string]interface{}{
 			"url":    "https://example.com",
