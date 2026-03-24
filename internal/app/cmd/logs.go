@@ -21,13 +21,21 @@ func NewLogsCmd(cfg *config.Config) *cobra.Command {
 	var stream string
 
 	cmd := &cobra.Command{
-		Use:          "logs <sandbox-id>",
+		Use:          "logs <sandbox-id | #number>",
 		Short:        "Tail audit logs for a sandbox",
 		Long:         helpText("logs"),
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runLogs(cmd, cfg, args[0], stream, follow)
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			sandboxID, err := ResolveSandboxID(ctx, cfg, args[0])
+			if err != nil {
+				return err
+			}
+			return runLogs(cmd, cfg, sandboxID, stream, follow)
 		},
 	}
 

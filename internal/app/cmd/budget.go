@@ -76,13 +76,21 @@ func newBudgetAddCmd(cfg *config.Config, budgetClient kmaws.BudgetAPI, ec2Client
 	var aiTopUp float64
 
 	add := &cobra.Command{
-		Use:          "add <sandbox-id>",
+		Use:          "add <sandbox-id | #number>",
 		Short:        "Add budget (top-up) to a sandbox and auto-resume if suspended",
 		Long:         helpText("budget_add"),
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runBudgetAdd(cmd, cfg, budgetClient, ec2Client, iamClient, metaFetcher, args[0], computeTopUp, aiTopUp)
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			sandboxID, err := ResolveSandboxID(ctx, cfg, args[0])
+			if err != nil {
+				return err
+			}
+			return runBudgetAdd(cmd, cfg, budgetClient, ec2Client, iamClient, metaFetcher, sandboxID, computeTopUp, aiTopUp)
 		},
 	}
 

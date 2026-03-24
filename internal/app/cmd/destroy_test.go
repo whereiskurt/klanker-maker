@@ -95,7 +95,7 @@ func TestDestroyCmd_InvalidSandboxID(t *testing.T) {
 	for _, id := range invalidIDs {
 		id := id
 		t.Run(id, func(t *testing.T) {
-			cmd := exec.Command(km, "destroy", id)
+			cmd := exec.Command(km, "destroy", "--yes", id)
 			out, err := cmd.CombinedOutput()
 			if err == nil {
 				t.Fatalf("km destroy %q: expected non-zero exit, got exit 0\noutput: %s", id, out)
@@ -120,7 +120,7 @@ func TestDestroyCmd_ValidIDFormatAccepted(t *testing.T) {
 	// A correctly formatted sandbox ID that won't exist in AWS
 	validID := "sb-a1b2c3d4"
 
-	cmd := exec.Command(km, "destroy", "--aws-profile", "nonexistent-profile-xyz", validID)
+	cmd := exec.Command(km, "destroy", "--yes", "--aws-profile", "nonexistent-profile-xyz", validID)
 	out, err := cmd.CombinedOutput()
 
 	// We expect a non-zero exit (AWS config or credential failure) but NOT an
@@ -148,7 +148,7 @@ func TestDestroyCmd_FlagRegistration(t *testing.T) {
 	if !strings.Contains(outStr, "--aws-profile") {
 		t.Errorf("expected --aws-profile flag in destroy --help, got:\n%s", outStr)
 	}
-	if !strings.Contains(outStr, "--force") {
-		t.Errorf("expected --force flag in destroy --help, got:\n%s", outStr)
+	if !strings.Contains(outStr, "--yes") {
+		t.Errorf("expected --yes flag in destroy --help, got:\n%s", outStr)
 	}
 }

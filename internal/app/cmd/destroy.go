@@ -43,25 +43,42 @@ var sandboxIDPattern = regexp.MustCompile(`^sb-[a-f0-9]{8}$`)
 //  6. On success: clean up local sandbox directory
 func NewDestroyCmd(cfg *config.Config) *cobra.Command {
 	var awsProfile string
-	var force bool
+	var yes bool
 
 	cmd := &cobra.Command{
-		Use:   "destroy <sandbox-id>",
+		Use:   "destroy <sandbox-id | #number>",
 		Short: "Destroy a provisioned sandbox",
 		Long:  helpText("destroy"),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			sandboxID, err := ResolveSandboxID(ctx, cfg, args[0])
+			if err != nil {
+				return err
+			}
+			if !yes {
+				fmt.Printf("Destroy sandbox %s? This cannot be undone. [y/N] ", sandboxID)
+				var answer string
+				fmt.Scanln(&answer)
+				if answer != "y" && answer != "Y" && answer != "yes" {
+					fmt.Println("Aborted.")
+					return nil
+				}
+			}
 			if awsProfile == "" {
 				awsProfile = "klanker-terraform"
 			}
-			return runDestroy(cfg, args[0], awsProfile, force)
+			return runDestroy(cfg, sandboxID, awsProfile, yes)
 		},
 	}
 
 	cmd.Flags().StringVar(&awsProfile, "aws-profile", "klanker-terraform",
 		"AWS CLI profile to use")
-	cmd.Flags().BoolVar(&force, "force", false,
-		"Skip confirmation prompt (for future use; currently always proceeds)")
+	cmd.Flags().BoolVar(&yes, "yes", false,
+		"Skip confirmation prompt")
 
 	return cmd
 }

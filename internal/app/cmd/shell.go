@@ -31,13 +31,21 @@ func NewShellCmd(cfg *config.Config) *cobra.Command {
 // exec function. Pass nil for real AWS-backed clients. Used in tests for DI.
 func NewShellCmdWithFetcher(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "shell <sandbox-id>",
+		Use:          "shell <sandbox-id | #number>",
 		Short:        "Open an interactive shell into a running sandbox",
 		Long:         helpText("shell"),
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runShell(cmd, cfg, fetcher, execFn, args[0])
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			sandboxID, err := ResolveSandboxID(ctx, cfg, args[0])
+			if err != nil {
+				return err
+			}
+			return runShell(cmd, cfg, fetcher, execFn, sandboxID)
 		},
 	}
 	return cmd

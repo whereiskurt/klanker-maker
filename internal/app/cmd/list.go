@@ -110,16 +110,17 @@ func (l *awsSandboxLister) ListSandboxes(ctx context.Context, useTagScan bool) (
 }
 
 // printSandboxTable writes a human-readable tab-aligned table to cmd.OutOrStdout.
+// Each row is numbered 1-N so users can reference sandboxes by number in other commands.
 func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord) error {
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SANDBOX ID\tPROFILE\tSUBSTRATE\tREGION\tSTATUS\tTTL")
-	for _, r := range records {
+	fmt.Fprintln(w, "#\tSANDBOX ID\tPROFILE\tSUBSTRATE\tREGION\tSTATUS\tTTL")
+	for i, r := range records {
 		ttl := r.TTLRemaining
 		if ttl == "" {
 			ttl = "-"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			r.SandboxID, r.Profile, r.Substrate, r.Region, r.Status, ttl)
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			i+1, r.SandboxID, r.Profile, r.Substrate, r.Region, r.Status, ttl)
 	}
 	return w.Flush()
 }

@@ -62,13 +62,21 @@ func NewStatusCmdWithFetchers(cfg *config.Config, fetcher SandboxFetcher, budget
 // sandbox metadata, budget, and identity data. Pass nil for real AWS-backed clients.
 func NewStatusCmdWithAllFetchers(cfg *config.Config, fetcher SandboxFetcher, budgetFetcher BudgetFetcher, identityFetcher IdentityFetcher) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "status <sandbox-id>",
+		Use:          "status <sandbox-id | #number>",
 		Short:        "Show detailed state for a sandbox",
 		Long:         helpText("status"),
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStatus(cmd, cfg, fetcher, budgetFetcher, identityFetcher, args[0])
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			sandboxID, err := ResolveSandboxID(ctx, cfg, args[0])
+			if err != nil {
+				return err
+			}
+			return runStatus(cmd, cfg, fetcher, budgetFetcher, identityFetcher, sandboxID)
 		},
 	}
 	return cmd
