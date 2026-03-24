@@ -160,6 +160,16 @@ func runInit(cfg *config.Config, awsProfile, region string) error {
 		fmt.Printf("  TTL handler and budget enforcer may be skipped. Run 'make build-lambdas' manually.\n")
 	}
 
+	// Build and upload sidecar binaries to S3 if not already present.
+	if cfg.ArtifactsBucket != "" {
+		if err := buildAndUploadSidecars(repoRoot, cfg.ArtifactsBucket); err != nil {
+			fmt.Printf("  [warn] Sidecar build/upload failed: %v\n", err)
+			fmt.Printf("  Sidecars (DNS proxy, HTTP proxy, audit log) won't be available on sandbox instances.\n")
+		}
+	} else {
+		fmt.Printf("  [skip] sidecar upload — artifacts_bucket not configured\n")
+	}
+
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
 	return RunInitWithRunner(runner, repoRoot, region)
 }
@@ -366,6 +376,93 @@ func buildLambdaZips(repoRoot string) error {
 		os.Remove(bootstrapPath)
 
 		fmt.Printf("  Built %s.zip\n", lb.name)
+	}
+
+	return nil
+}
+
+// sidecarBuild describes a sidecar binary to cross-compile and upload to S3.
+type sidecarBuild struct {
+	name   string // binary name (also S3 key suffix)
+	srcDir string // Go source directory relative to repo root
+}
+
+// buildAndUploadSidecars cross-compiles sidecar binaries for linux/amd64 and uploads
+// them to s3://<bucket>/sidecars/. Also uploads the tracing config.yaml.
+// Skips upload if the S3 object already exists.
+func buildAndUploadSidecars(repoRoot, bucket string) error {
+	buildDir := filepath.Join(repoRoot, "build")
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		return fmt.Errorf("create build dir: %w", err)
+	}
+
+	sidecars := []sidecarBuild{
+		{name: "dns-proxy", srcDir: "sidecars/dns-proxy"},
+		{name: "http-proxy", srcDir: "sidecars/http-proxy"},
+		{name: "audit-log", srcDir: "sidecars/audit-log/cmd"},
+	}
+
+	for _, sc := range sidecars {
+		s3Key := "sidecars/" + sc.name
+
+		// Check if already in S3
+		checkCmd := exec.Command("aws", "s3", "ls",
+			fmt.Sprintf("s3://%s/%s", bucket, s3Key),
+			"--profile", "klanker-terraform")
+		if out, _ := checkCmd.CombinedOutput(); len(out) > 0 && !strings.Contains(string(out), "error") {
+			fmt.Printf("  Sidecar %s already in S3, skipping\n", sc.name)
+			continue
+		}
+
+		srcPath := filepath.Join(repoRoot, sc.srcDir)
+		if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+			fmt.Printf("  [skip] %s — source not found at %s\n", sc.name, sc.srcDir)
+			continue
+		}
+
+		fmt.Printf("  Building sidecar %s (linux/amd64)...\n", sc.name)
+
+		// Cross-compile for linux/amd64 (EC2 and Fargate x86)
+		binaryPath := filepath.Join(buildDir, sc.name)
+		buildCmd := exec.Command("go", "build", "-o", binaryPath, "./"+sc.srcDir+"/")
+		buildCmd.Dir = repoRoot
+		buildCmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
+		if out, err := buildCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("compile sidecar %s: %s: %w", sc.name, string(out), err)
+		}
+
+		// Upload to S3
+		fmt.Printf("  Uploading %s to s3://%s/%s...\n", sc.name, bucket, s3Key)
+		uploadCmd := exec.Command("aws", "s3", "cp", binaryPath,
+			fmt.Sprintf("s3://%s/%s", bucket, s3Key),
+			"--profile", "klanker-terraform")
+		if out, err := uploadCmd.CombinedOutput(); err != nil {
+			os.Remove(binaryPath)
+			return fmt.Errorf("upload sidecar %s: %s: %w", sc.name, string(out), err)
+		}
+		os.Remove(binaryPath)
+
+		fmt.Printf("  Uploaded %s\n", sc.name)
+	}
+
+	// Upload tracing config.yaml if not already present
+	tracingConfig := filepath.Join(repoRoot, "sidecars", "tracing", "config.yaml")
+	if _, err := os.Stat(tracingConfig); err == nil {
+		s3Key := "sidecars/tracing/config.yaml"
+		checkCmd := exec.Command("aws", "s3", "ls",
+			fmt.Sprintf("s3://%s/%s", bucket, s3Key),
+			"--profile", "klanker-terraform")
+		if out, _ := checkCmd.CombinedOutput(); len(out) > 0 && !strings.Contains(string(out), "error") {
+			fmt.Printf("  Tracing config already in S3, skipping\n")
+		} else {
+			fmt.Printf("  Uploading tracing config.yaml...\n")
+			uploadCmd := exec.Command("aws", "s3", "cp", tracingConfig,
+				fmt.Sprintf("s3://%s/%s", bucket, s3Key),
+				"--profile", "klanker-terraform")
+			if out, err := uploadCmd.CombinedOutput(); err != nil {
+				fmt.Printf("  [warn] tracing config upload failed: %s: %v\n", string(out), err)
+			}
+		}
 	}
 
 	return nil

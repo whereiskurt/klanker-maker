@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
 )
@@ -184,6 +185,10 @@ After=network.target
 User=km-sidecar
 Environment=SANDBOX_ID={{ .SandboxID }}
 Environment=CW_LOG_GROUP=/km/sandboxes/{{ .SandboxID }}/
+Environment=AUDIT_LOG_DEST=cloudwatch
+{{- if gt .IdleTimeoutMinutes 0 }}
+Environment=IDLE_TIMEOUT_MINUTES={{ .IdleTimeoutMinutes }}
+{{- end }}
 ExecStart=/opt/km/bin/km-audit-log
 Restart=always
 RestartSec=2
@@ -304,6 +309,19 @@ echo "[km-bootstrap] Budget enforcement environment configured"
 echo "[km-bootstrap] SANDBOX_READY sandbox_id={{ .SandboxID }}"
 `
 
+// parseIdleTimeoutMinutes converts a duration string like "2h" or "30m" to minutes.
+// Returns 0 if the string is empty or unparseable.
+func parseIdleTimeoutMinutes(s string) int {
+	if s == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0
+	}
+	return int(d.Minutes())
+}
+
 // userDataParams holds the template parameters for user-data generation.
 type userDataParams struct {
 	SandboxID          string
@@ -327,6 +345,8 @@ type userDataParams struct {
 	// Budget enforcement fields (BUDG-03, BUDG-07)
 	BudgetEnabled bool   // true when profile.spec.budget is set
 	BudgetTable   string // DynamoDB table name from KM_BUDGET_TABLE env var
+	// Idle timeout (minutes) — passed to audit-log sidecar for SandboxIdle event detection
+	IdleTimeoutMinutes int
 }
 
 // generateUserData produces the EC2 bootstrap user-data.sh content for the given profile.
@@ -367,6 +387,8 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		// Budget enforcement fields — enable when profile.spec.budget is set.
 		BudgetEnabled: p.Spec.Budget != nil,
 		BudgetTable:   budgetTable,
+		// Idle timeout — converted from duration string to minutes for the sidecar.
+		IdleTimeoutMinutes: parseIdleTimeoutMinutes(p.Spec.Lifecycle.IdleTimeout),
 	}
 
 	// Populate filesystem policy fields (nil-safe)
