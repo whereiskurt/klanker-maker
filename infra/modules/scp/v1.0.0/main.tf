@@ -160,7 +160,8 @@ data "aws_iam_policy_document" "sandbox_containment" {
 
   # 5. Region lock — deny all actions outside allowed regions, except global services.
   #    Uses not_actions (NotAction) pattern so global services work regardless of region.
-  #    NO trusted role carve-out — region lock applies to ALL roles including operators.
+  #    Trusted roles (operators, provisioner, lifecycle) are exempt so they can create
+  #    cross-region resources like S3 replication buckets.
   statement {
     sid    = "DenyOutsideRegion"
     effect = "Deny"
@@ -194,6 +195,13 @@ data "aws_iam_policy_document" "sandbox_containment" {
       test     = "StringNotEquals"
       variable = "aws:RequestedRegion"
       values   = var.allowed_regions
+    }
+
+    # Trusted roles can operate cross-region (e.g. S3 replication to us-west-2).
+    condition {
+      test     = "ArnNotLike"
+      variable = "aws:PrincipalArn"
+      values   = var.trusted_role_arns
     }
   }
 }
