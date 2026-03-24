@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -152,7 +153,13 @@ func runInit(cfg *config.Config, awsProfile, region string) error {
 		os.Setenv("KM_ROUTE53_ZONE_ID", cfg.Route53ZoneID)
 	}
 
+	// Build Lambda zips if they don't exist (same as `make build-lambdas`).
 	repoRoot := findRepoRoot()
+	if err := buildLambdaZips(repoRoot); err != nil {
+		fmt.Printf("  [warn] Lambda build failed: %v\n", err)
+		fmt.Printf("  TTL handler and budget enforcer may be skipped. Run 'make build-lambdas' manually.\n")
+	}
+
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
 	return RunInitWithRunner(runner, repoRoot, region)
 }
@@ -303,6 +310,64 @@ func extractTFOutput(raw map[string]json.RawMessage, key string, target interfac
 	if err := json.Unmarshal(wrapper.Value, target); err != nil {
 		return fmt.Errorf("parsing output %q value: %w", key, err)
 	}
+	return nil
+}
+
+// lambdaBuild describes a Lambda to cross-compile and zip.
+type lambdaBuild struct {
+	name   string // zip filename without extension
+	srcDir string // Go source directory relative to repo root
+}
+
+// buildLambdaZips cross-compiles Lambda binaries for linux/arm64 and packages them as zips.
+// Skips any Lambda whose zip already exists. Equivalent to `make build-lambdas`.
+func buildLambdaZips(repoRoot string) error {
+	buildDir := filepath.Join(repoRoot, "build")
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		return fmt.Errorf("create build dir: %w", err)
+	}
+
+	lambdas := []lambdaBuild{
+		{name: "ttl-handler", srcDir: "cmd/ttl-handler"},
+		{name: "budget-enforcer", srcDir: "cmd/budget-enforcer"},
+		{name: "github-token-refresher", srcDir: "cmd/github-token-refresher"},
+	}
+
+	for _, lb := range lambdas {
+		zipPath := filepath.Join(buildDir, lb.name+".zip")
+		if _, err := os.Stat(zipPath); err == nil {
+			fmt.Printf("  Lambda %s.zip already exists, skipping build\n", lb.name)
+			continue
+		}
+
+		srcPath := filepath.Join(repoRoot, lb.srcDir)
+		if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+			fmt.Printf("  [skip] %s — source not found at %s\n", lb.name, lb.srcDir)
+			continue
+		}
+
+		fmt.Printf("  Building %s Lambda (linux/arm64)...\n", lb.name)
+
+		// Cross-compile
+		bootstrapPath := filepath.Join(buildDir, "bootstrap")
+		buildCmd := exec.Command("go", "build", "-o", bootstrapPath, "./"+lb.srcDir+"/")
+		buildCmd.Dir = repoRoot
+		buildCmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=arm64", "CGO_ENABLED=0")
+		if out, err := buildCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("compile %s: %s: %w", lb.name, string(out), err)
+		}
+
+		// Zip
+		zipCmd := exec.Command("zip", "-j", zipPath, bootstrapPath)
+		if out, err := zipCmd.CombinedOutput(); err != nil {
+			os.Remove(bootstrapPath)
+			return fmt.Errorf("zip %s: %s: %w", lb.name, string(out), err)
+		}
+		os.Remove(bootstrapPath)
+
+		fmt.Printf("  Built %s.zip\n", lb.name)
+	}
+
 	return nil
 }
 
