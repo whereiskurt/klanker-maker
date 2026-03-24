@@ -112,9 +112,17 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool) er
 		if createErr != nil {
 			return fmt.Errorf("failed to recreate sandbox directory for destroy: %w", createErr)
 		}
-		// Write minimal service.hcl with sandbox_id + region for state key resolution
-		minimalHCL := fmt.Sprintf("# Minimal service.hcl for state resolution during destroy\n"+
-			"locals {\n  sandbox_id = %q\n  region_label = %q\n  region_full = \"\"\n}\n", sandboxID, regionLabel)
+		// Write minimal service.hcl with all fields needed by terragrunt.hcl for destroy.
+		// substrate_module and module_inputs are required by the sandbox terragrunt.hcl template.
+		minimalHCL := fmt.Sprintf(`# Minimal service.hcl for state resolution during destroy
+locals {
+  sandbox_id       = %q
+  region_label     = %q
+  region_full      = ""
+  substrate_module = "ec2spot"
+  module_inputs    = {}
+}
+`, sandboxID, regionLabel)
 		if populateErr := terragrunt.PopulateSandboxDir(sandboxDir, minimalHCL, ""); populateErr != nil {
 			_ = terragrunt.CleanupSandboxDir(sandboxDir)
 			return fmt.Errorf("failed to populate sandbox directory for destroy: %w", populateErr)
