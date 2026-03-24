@@ -61,8 +61,9 @@ inputs = merge(
   local.gh_inputs,
   {
     # Platform-level inputs resolved at apply time.
-    lambda_zip_path  = "${local.repo_root}/build/github-token-refresher.zip"
-    installation_id  = "" # populated at apply time from SSM or operator config
+    lambda_zip_path      = "${local.repo_root}/build/github-token-refresher.zip"
+    installation_id      = "" # populated at apply time from SSM or operator config
+    sandbox_iam_role_arn = "arn:aws:iam::${local.site_vars.locals.accounts.application}:role/km-ec2spot-ssm-${local.gh_inputs.sandbox_id}-${local.site_vars.locals.region.label}"
   }
 )
 `
