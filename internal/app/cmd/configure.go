@@ -57,7 +57,8 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 	)
 
 	cmd := &cobra.Command{
-		Use:   "configure",
+		Use:     "configure",
+		Aliases: []string{"conf"},
 		Short: "Interactive wizard to set up km-config.yaml",
 		Long:  helpText("configure"),
 		RunE: func(cmd *cobra.Command, args []string) error {

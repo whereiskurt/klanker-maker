@@ -47,6 +47,17 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	configureCmd.AddCommand(NewConfigureGitHubCmd(cfg))
 	root.AddCommand(configureCmd)
 
+	// "km github" as a shortcut for "km configure github --setup"
+	root.AddCommand(&cobra.Command{
+		Use:   "github",
+		Short: "Shortcut for 'km configure github --setup'",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			setupCmd := NewConfigureGitHubCmd(cfg)
+			setupCmd.SetArgs(append([]string{"--setup"}, args...))
+			return setupCmd.Execute()
+		},
+	})
+
 	root.AddCommand(NewBootstrapCmd(cfg))
 	root.AddCommand(NewBudgetCmd(cfg))
 	root.AddCommand(NewShellCmd(cfg))
