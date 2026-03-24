@@ -11,6 +11,8 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
@@ -374,6 +376,16 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 		fmt.Fprintf(w, "    Alias:           alias/km-platform\n")
 		fmt.Fprintln(w)
 
+		if loadedCfg.ArtifactsBucket != "" {
+			fmt.Fprintf(w, "  S3 bucket:         %s\n", loadedCfg.ArtifactsBucket)
+			fmt.Fprintf(w, "    Purpose:         Lambda zips, sidecar binaries, sandbox artifacts\n")
+			fmt.Fprintf(w, "    Versioning:      enabled\n")
+		} else {
+			fmt.Fprintf(w, "  S3 artifacts:      [SKIPPED — no artifacts_bucket configured]\n")
+			fmt.Fprintf(w, "    Run 'km configure' and set artifacts_bucket to enable.\n")
+		}
+		fmt.Fprintln(w)
+
 		fmt.Fprintln(w, "Run 'km bootstrap --dry-run=false' to provision.")
 		return nil
 	}
@@ -404,6 +416,14 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 	fmt.Fprintln(w)
 	if err := ensureKMSPlatformKey(ctx, loadedCfg, w); err != nil {
 		return fmt.Errorf("kms bootstrap: %w", err)
+	}
+
+	// Create S3 artifacts bucket if configured.
+	if loadedCfg.ArtifactsBucket != "" {
+		fmt.Fprintln(w)
+		if err := ensureArtifactsBucket(ctx, loadedCfg, w); err != nil {
+			return fmt.Errorf("artifacts bucket bootstrap: %w", err)
+		}
 	}
 
 	return nil
@@ -466,5 +486,62 @@ func ensureKMSPlatformKey(ctx context.Context, cfg *config.Config, w io.Writer, 
 	}
 
 	fmt.Fprintf(w, "KMS key created: %s → %s\n", aliasName, aws.ToString(createOut.KeyMetadata.KeyId))
+	return nil
+}
+
+// ensureArtifactsBucket creates the S3 artifacts bucket with versioning if it doesn't exist.
+func ensureArtifactsBucket(ctx context.Context, cfg *config.Config, w io.Writer) error {
+	region := cfg.PrimaryRegion
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithRegion(region),
+		awsconfig.WithSharedConfigProfile("klanker-terraform"),
+	)
+	if err != nil {
+		return fmt.Errorf("load AWS config: %w", err)
+	}
+	client := s3.NewFromConfig(awsCfg)
+
+	bucketName := cfg.ArtifactsBucket
+
+	// Check if bucket already exists.
+	_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: aws.String(bucketName),
+	})
+	if err == nil {
+		fmt.Fprintf(w, "S3 bucket %s already exists.\n", bucketName)
+		return nil
+	}
+
+	// Create the bucket.
+	fmt.Fprintf(w, "Creating S3 bucket %s...\n", bucketName)
+	createInput := &s3.CreateBucketInput{
+		Bucket: aws.String(bucketName),
+	}
+	// us-east-1 must not specify LocationConstraint
+	if region != "us-east-1" {
+		createInput.CreateBucketConfiguration = &s3types.CreateBucketConfiguration{
+			LocationConstraint: s3types.BucketLocationConstraint(region),
+		}
+	}
+	if _, err := client.CreateBucket(ctx, createInput); err != nil {
+		return fmt.Errorf("create S3 bucket: %w", err)
+	}
+
+	// Enable versioning.
+	_, err = client.PutBucketVersioning(ctx, &s3.PutBucketVersioningInput{
+		Bucket: aws.String(bucketName),
+		VersioningConfiguration: &s3types.VersioningConfiguration{
+			Status: s3types.BucketVersioningStatusEnabled,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("enable bucket versioning: %w", err)
+	}
+
+	fmt.Fprintf(w, "S3 bucket %s created with versioning enabled.\n", bucketName)
 	return nil
 }

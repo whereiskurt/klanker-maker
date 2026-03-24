@@ -21,6 +21,7 @@ type platformConfig struct {
 	Region          string         `yaml:"region"`
 	BudgetTableName string         `yaml:"budget_table_name,omitempty"`
 	StateBucket     string         `yaml:"state_bucket,omitempty"`
+	ArtifactsBucket string         `yaml:"artifacts_bucket,omitempty"`
 }
 
 type accountsConfig struct {
@@ -52,6 +53,7 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		ssoRegion       string
 		region          string
 		stateBucket     string
+		artifactsBucket string
 	)
 
 	cmd := &cobra.Command{
@@ -61,7 +63,7 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runConfigure(in, out, outputDir, nonInteractive, domain,
 				managementAcct, terraformAcct, applicationAcct,
-				ssoStartURL, ssoRegion, region, stateBucket)
+				ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket)
 		},
 	}
 
@@ -85,6 +87,8 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		"Default AWS region for infrastructure")
 	cmd.Flags().StringVar(&stateBucket, "state-bucket", "",
 		"S3 bucket name for sandbox metadata (used by km list/status)")
+	cmd.Flags().StringVar(&artifactsBucket, "artifacts-bucket", "",
+		"S3 bucket for Lambda zips, sidecar binaries, and sandbox artifacts")
 
 	_ = cfg // reserved for future use (e.g. pre-filling from existing config)
 
@@ -94,7 +98,7 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 // runConfigure implements the configure wizard logic.
 func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive bool,
 	domain, managementAcct, terraformAcct, applicationAcct,
-	ssoStartURL, ssoRegion, region, stateBucket string) error {
+	ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket string) error {
 
 	if nonInteractive {
 		// Validate required flags
@@ -160,6 +164,10 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		if err != nil {
 			return err
 		}
+		artifactsBucket, err = prompt(out, scanner, "S3 artifacts bucket for Lambda zips, sidecars, sandbox artifacts", artifactsBucket)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Detect topology
@@ -189,6 +197,7 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		Region:          region,
 		BudgetTableName: "km-budgets",
 		StateBucket:     stateBucket,
+		ArtifactsBucket: artifactsBucket,
 	}
 
 	// Determine output path

@@ -109,6 +109,24 @@ func runInit(cfg *config.Config, awsProfile, region string) error {
 		return fmt.Errorf("AWS credential validation failed: %w", err)
 	}
 
+	// Export config values as env vars for Terragrunt's site.hcl get_env() calls
+	// and for the envReqs checks in regionalModules.
+	if cfg.ArtifactsBucket != "" && os.Getenv("KM_ARTIFACTS_BUCKET") == "" {
+		os.Setenv("KM_ARTIFACTS_BUCKET", cfg.ArtifactsBucket)
+	}
+	if cfg.ManagementAccountID != "" && os.Getenv("KM_ACCOUNTS_MANAGEMENT") == "" {
+		os.Setenv("KM_ACCOUNTS_MANAGEMENT", cfg.ManagementAccountID)
+	}
+	if cfg.ApplicationAccountID != "" && os.Getenv("KM_ACCOUNTS_APPLICATION") == "" {
+		os.Setenv("KM_ACCOUNTS_APPLICATION", cfg.ApplicationAccountID)
+	}
+	if cfg.Domain != "" && os.Getenv("KM_DOMAIN") == "" {
+		os.Setenv("KM_DOMAIN", cfg.Domain)
+	}
+	if cfg.PrimaryRegion != "" && os.Getenv("KM_REGION") == "" {
+		os.Setenv("KM_REGION", cfg.PrimaryRegion)
+	}
+
 	repoRoot := findRepoRoot()
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
 	return RunInitWithRunner(runner, repoRoot, region)
