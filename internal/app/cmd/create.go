@@ -147,6 +147,26 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		return fmt.Errorf("AWS credential validation failed — check that profile %q is configured: %w", awsProfile, err)
 	}
 
+	// Step 5b: Export config values as env vars for Terragrunt's site.hcl get_env() calls.
+	if cfg.ApplicationAccountID != "" && os.Getenv("KM_ACCOUNTS_APPLICATION") == "" {
+		os.Setenv("KM_ACCOUNTS_APPLICATION", cfg.ApplicationAccountID)
+	}
+	if cfg.ManagementAccountID != "" && os.Getenv("KM_ACCOUNTS_MANAGEMENT") == "" {
+		os.Setenv("KM_ACCOUNTS_MANAGEMENT", cfg.ManagementAccountID)
+	}
+	if cfg.Domain != "" && os.Getenv("KM_DOMAIN") == "" {
+		os.Setenv("KM_DOMAIN", cfg.Domain)
+	}
+	if cfg.PrimaryRegion != "" && os.Getenv("KM_REGION") == "" {
+		os.Setenv("KM_REGION", cfg.PrimaryRegion)
+	}
+	if cfg.ArtifactsBucket != "" && os.Getenv("KM_ARTIFACTS_BUCKET") == "" {
+		os.Setenv("KM_ARTIFACTS_BUCKET", cfg.ArtifactsBucket)
+	}
+	if cfg.Route53ZoneID != "" && os.Getenv("KM_ROUTE53_ZONE_ID") == "" {
+		os.Setenv("KM_ROUTE53_ZONE_ID", cfg.Route53ZoneID)
+	}
+
 	// Step 6: Load shared network config for the profile's region
 	repoRoot := findRepoRoot()
 	region := resolvedProfile.Spec.Runtime.Region
