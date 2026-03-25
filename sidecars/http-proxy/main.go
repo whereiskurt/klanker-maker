@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,10 +10,10 @@ import (
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/sidecars/http-proxy/httpproxy"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klankrmkr/sidecars/http-proxy/httpproxy"
 )
 
 func main() {
@@ -54,7 +55,6 @@ func main() {
 		}
 
 		// Write remaining AI budget to /run/km/budget_remaining on each cache refresh.
-		// TODO: custom CA support — read KM_PROXY_CA_CERT (base64 PEM) and set proxy.CertStore.
 		onBudgetUpdate := func(remaining float64) {
 			path := "/run/km/budget_remaining"
 			if err := os.MkdirAll("/run/km", 0o755); err == nil {
@@ -69,6 +69,17 @@ func main() {
 			Str("sandbox_id", sandboxID).
 			Str("table", tableName).
 			Msg("")
+	}
+
+	// Custom CA for MITM: read base64-encoded PEM (cert+key) from env var.
+	// The sandbox trusts this CA via update-ca-certificates at boot time.
+	if caCertB64 := os.Getenv("KM_PROXY_CA_CERT"); caCertB64 != "" {
+		caPEM, err := base64.StdEncoding.DecodeString(caCertB64)
+		if err != nil {
+			log.Error().Err(err).Msg("KM_PROXY_CA_CERT is not valid base64; using default CA")
+		} else {
+			proxyOpts = append([]httpproxy.ProxyOption{httpproxy.WithCustomCA(caPEM)}, proxyOpts...)
+		}
 	}
 
 	proxy := httpproxy.NewProxy(allowedHosts, sandboxID, proxyOpts...)

@@ -282,15 +282,44 @@ echo "[km-bootstrap] Setting up budget enforcement environment..."
 
 # Install goproxy CA cert for MITM proxy so budget-tracked traffic
 # (HTTP/HTTPS via km-http-proxy) can be inspected for AI spend tracking.
-# The CA cert is stored in S3 at sidecars/km-proxy-ca.crt.
+# The CA cert (public) is stored in S3 at sidecars/km-proxy-ca.crt.
+# The CA key (private) is stored in S3 at sidecars/km-proxy-ca.key.
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-proxy-ca.crt" \
   /usr/local/share/ca-certificates/km-proxy-ca.crt 2>&1 || \
   echo "[km-bootstrap] WARNING: could not fetch proxy CA cert; AI spend tracking may be incomplete"
+aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-proxy-ca.key" \
+  /etc/km/proxy-ca.key 2>&1 || \
+  echo "[km-bootstrap] WARNING: could not fetch proxy CA key; MITM will use default CA"
+chmod 600 /etc/km/proxy-ca.key 2>/dev/null
 
 if [ -f /usr/local/share/ca-certificates/km-proxy-ca.crt ]; then
   update-ca-certificates
-  echo "[km-bootstrap] Proxy CA cert installed"
+  echo "[km-bootstrap] Proxy CA cert installed in system trust store"
 fi
+
+# Build base64 PEM (cert+key) for the proxy's KM_PROXY_CA_CERT env var.
+# The proxy uses this to sign MITM leaf certificates that the sandbox trusts.
+KM_PROXY_CA_PEM=""
+if [ -f /usr/local/share/ca-certificates/km-proxy-ca.crt ] && [ -f /etc/km/proxy-ca.key ]; then
+  KM_PROXY_CA_PEM=$(cat /usr/local/share/ca-certificates/km-proxy-ca.crt /etc/km/proxy-ca.key | base64 -w0)
+  echo "[km-bootstrap] Proxy CA cert+key prepared for MITM"
+fi
+
+# Add budget + CA environment to km-http-proxy via systemd drop-in.
+# The base unit (section 4) has SANDBOX_ID, ALLOWED_HOSTS, PROXY_PORT.
+# This drop-in adds budget enforcement and custom CA config.
+mkdir -p /etc/systemd/system/km-http-proxy.service.d
+cat > /etc/systemd/system/km-http-proxy.service.d/budget.conf << DROPIN
+[Service]
+Environment=KM_BUDGET_ENABLED=true
+Environment=KM_BUDGET_TABLE={{ .BudgetTable }}
+Environment=KM_PROXY_CA_CERT=${KM_PROXY_CA_PEM}
+DROPIN
+
+# Reload and restart proxy to pick up budget + CA config.
+systemctl daemon-reload
+systemctl restart km-http-proxy
+echo "[km-bootstrap] km-http-proxy restarted with budget enforcement + custom CA"
 
 # Export budget environment variables for in-sandbox processes
 export KM_BUDGET_ENABLED=true

@@ -8,8 +8,8 @@ metadata:
 
 spec:
   lifecycle:
-    ttl: "1h"
-    idleTimeout: "30m"
+    ttl: "60m"
+    idleTimeout: "3m"
     teardownPolicy: destroy
 
   runtime:
@@ -25,11 +25,25 @@ spec:
   sourceAccess:
     mode: allowlist
 
+  budget:
+    compute:
+      maxSpendUSD: 5.00
+    ai:
+      maxSpendUSD: 10.00
+    warningThreshold: 0.80
+
   network:
     egress:
-      allowedDNSSuffixes: []
-      allowedHosts: []
-      allowedMethods: []
+      allowedDNSSuffixes:
+        - anthropic.com
+        - npmjs.org
+      allowedHosts:
+        - api.anthropic.com
+        - registry.npmjs.org
+        - statsig.anthropic.com
+      allowedMethods:
+        - POST
+        - GET
 
   identity:
     roleSessionDuration: "1h"

@@ -608,6 +608,12 @@ func TestCompileEC2BudgetCAInjection(t *testing.T) {
 	if !strings.Contains(ud, "km-proxy-ca.crt") {
 		t.Errorf("UserData should contain CA cert injection for budget-enabled profile\nGot:\n%s", ud)
 	}
+	if !strings.Contains(ud, "km-proxy-ca.key") {
+		t.Errorf("UserData should download CA private key for MITM signing\nGot:\n%s", ud)
+	}
+	if !strings.Contains(ud, "KM_PROXY_CA_CERT") {
+		t.Errorf("UserData should pass KM_PROXY_CA_CERT to km-http-proxy via systemd drop-in\nGot:\n%s", ud)
+	}
 	if !strings.Contains(ud, "KM_BUDGET_ENABLED") {
 		t.Errorf("UserData should contain KM_BUDGET_ENABLED for budget-enabled profile\nGot:\n%s", ud)
 	}

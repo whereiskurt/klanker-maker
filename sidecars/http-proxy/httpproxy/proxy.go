@@ -11,6 +11,8 @@ package httpproxy
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"io"
 	"net"
 	"net/http"
@@ -68,6 +70,32 @@ func WithBudgetEnforcement(client aws.BudgetAPI, tableName string, modelRates ma
 			cache:          NewBudgetCache(),
 			onBudgetUpdate: onBudgetUpdate,
 		}
+	}
+}
+
+// WithCustomCA sets a custom CA certificate for MITM TLS interception.
+// The certPEM must contain both the certificate and private key in PEM format.
+// This replaces goproxy's built-in test CA so that MITM leaf certificates
+// are signed by the platform's own CA (which the sandbox trusts via
+// update-ca-certificates at boot).
+func WithCustomCA(certPEM []byte) ProxyOption {
+	return func(_ *goproxy.ProxyHttpServer, _ *proxyConfig) {
+		cert, err := tls.X509KeyPair(certPEM, certPEM)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to parse custom CA cert+key; falling back to goproxy default CA")
+			return
+		}
+		cert.Leaf, err = x509.ParseCertificate(cert.Certificate[0])
+		if err != nil {
+			log.Error().Err(err).Msg("failed to parse custom CA leaf; falling back to goproxy default CA")
+			return
+		}
+		goproxy.GoproxyCa = cert
+		goproxy.OkConnect = &goproxy.ConnectAction{Action: goproxy.ConnectAccept, TLSConfig: goproxy.TLSConfigFromCA(&cert)}
+		goproxy.MitmConnect = &goproxy.ConnectAction{Action: goproxy.ConnectMitm, TLSConfig: goproxy.TLSConfigFromCA(&cert)}
+		goproxy.HTTPMitmConnect = &goproxy.ConnectAction{Action: goproxy.ConnectMitm, TLSConfig: goproxy.TLSConfigFromCA(&cert)}
+		goproxy.RejectConnect = &goproxy.ConnectAction{Action: goproxy.ConnectReject, TLSConfig: goproxy.TLSConfigFromCA(&cert)}
+		log.Info().Str("subject", cert.Leaf.Subject.CommonName).Msg("custom CA loaded for MITM")
 	}
 }
 

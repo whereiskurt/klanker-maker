@@ -2,14 +2,22 @@ package httpproxy_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/elazarl/goproxy"
 	"github.com/whereiskurt/klankrmkr/sidecars/http-proxy/httpproxy"
@@ -188,5 +196,73 @@ func TestIsHostAllowed(t *testing.T) {
 				t.Errorf("IsHostAllowed(%q, %v) = %v, want %v", tc.host, tc.allowed, got, tc.want)
 			}
 		})
+	}
+}
+
+// generateTestCA creates a self-signed CA cert+key PEM for testing WithCustomCA.
+func generateTestCA(t *testing.T) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "km-test-ca"},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(1 * time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf []byte
+	buf = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	buf = append(buf, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})...)
+	return buf
+}
+
+func TestWithCustomCA_SetsGoproxyCa(t *testing.T) {
+	// Save original CA to restore after test.
+	origCA := goproxy.GoproxyCa
+	defer func() { goproxy.GoproxyCa = origCA }()
+
+	caPEM := generateTestCA(t)
+	// Apply the option — it should replace goproxy.GoproxyCa.
+	proxy := httpproxy.NewProxy(nil, "test-sandbox", httpproxy.WithCustomCA(caPEM))
+	if proxy == nil {
+		t.Fatal("NewProxy returned nil")
+	}
+	if goproxy.GoproxyCa.Leaf == nil {
+		t.Fatal("GoproxyCa.Leaf is nil after WithCustomCA")
+	}
+	if goproxy.GoproxyCa.Leaf.Subject.CommonName != "km-test-ca" {
+		t.Errorf("expected CA CN 'km-test-ca', got %q", goproxy.GoproxyCa.Leaf.Subject.CommonName)
+	}
+}
+
+func TestWithCustomCA_InvalidPEM_FallsBack(t *testing.T) {
+	origCA := goproxy.GoproxyCa
+	origCN := ""
+	if origCA.Leaf != nil {
+		origCN = origCA.Leaf.Subject.CommonName
+	}
+	defer func() { goproxy.GoproxyCa = origCA }()
+
+	// Pass garbage PEM — should log error and not crash.
+	proxy := httpproxy.NewProxy(nil, "test-sandbox", httpproxy.WithCustomCA([]byte("not-valid-pem")))
+	if proxy == nil {
+		t.Fatal("NewProxy returned nil with invalid PEM")
+	}
+	// CA should still be the original (fallback).
+	if goproxy.GoproxyCa.Leaf != nil && goproxy.GoproxyCa.Leaf.Subject.CommonName != origCN {
+		t.Errorf("CA should have fallen back to original, got CN %q", goproxy.GoproxyCa.Leaf.Subject.CommonName)
 	}
 }
