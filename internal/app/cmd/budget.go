@@ -223,7 +223,7 @@ func resumeEC2Sandbox(ctx context.Context, ec2Client EC2StartAPI, sandboxID stri
 	out, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		Filters: []ec2types.Filter{
 			{
-				Name:   awssdk.String("tag:sandbox-id"),
+				Name:   awssdk.String("tag:km:sandbox-id"),
 				Values: []string{sandboxID},
 			},
 		},
