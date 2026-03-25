@@ -27,6 +27,10 @@ import (
 // bedrockHostRegex matches bedrock-runtime endpoints in any AWS region.
 var bedrockHostRegex = regexp.MustCompile(`^bedrock-runtime\..+\.amazonaws\.com`)
 
+// anthropicHostRegex matches the Anthropic direct API endpoint.
+// Claude Code uses api.anthropic.com by default (not Bedrock).
+var anthropicHostRegex = regexp.MustCompile(`^api\.anthropic\.com`)
+
 // BudgetUpdater is called after each Bedrock response to write the remaining
 // AI budget to a sidecar-local file (e.g. /run/km/budget_remaining).
 // Set to nil to skip the file update.
@@ -237,6 +241,142 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 					if cachedEntry != nil {
 						// Update the cache's AISpent with the authoritative value from DynamoDB.
 						// Re-set the entry so the TTL clock resets on the authoritative value.
+						cachedEntry.AISpent = updatedSpend
+						be.cache.Set(sandboxID, cachedEntry)
+					}
+
+					if be.onBudgetUpdate != nil {
+						limit := float64(0)
+						if cachedEntry != nil {
+							limit = cachedEntry.AILimit
+						}
+						remaining := limit - updatedSpend
+						be.onBudgetUpdate(remaining)
+					}
+				}()
+
+				return resp
+			},
+		)
+
+		// -----------------------------------------------------------------
+		// Anthropic direct API (api.anthropic.com) MITM handlers.
+		// Must be registered INSIDE this if-block and BEFORE the general
+		// CONNECT handler — goproxy uses first-match for CONNECT.
+		// -----------------------------------------------------------------
+
+		// Pre-flight OnRequest check: reject Anthropic requests when the sandbox
+		// AI budget is already exhausted (cached check — no DynamoDB read).
+		proxy.OnRequest(goproxy.ReqHostMatches(anthropicHostRegex)).DoFunc(
+			func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+				entry := be.cache.Get(sandboxID)
+				if entry != nil && entry.AILimit > 0 && entry.AISpent >= entry.AILimit {
+					log.Info().
+						Str("sandbox_id", sandboxID).
+						Str("event_type", "ai_budget_exhausted_preflight").
+						Str("host", req.Host).
+						Float64("spent", entry.AISpent).
+						Float64("limit", entry.AILimit).
+						Msg("")
+					return req, AnthropicBlockedResponse(req, sandboxID, "", entry.AISpent, entry.AILimit)
+				}
+				return req, nil
+			},
+		)
+
+		// MITM handler: AlwaysMitm for api.anthropic.com.
+		proxy.OnRequest(goproxy.ReqHostMatches(anthropicHostRegex)).HandleConnect(goproxy.AlwaysMitm)
+
+		// OnResponse: intercept Anthropic /v1/messages responses, extract tokens, price, increment.
+		// Model ID is extracted from the response body (not the URL path — Anthropic does not
+		// encode the model in the URL). staticAnthropicRates is used directly; it is separate
+		// from be.modelRates which carries Bedrock-only rates.
+		proxy.OnResponse(goproxy.ReqHostMatches(anthropicHostRegex)).DoFunc(
+			func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
+				if resp == nil || ctx.Req == nil {
+					return resp
+				}
+				req := ctx.Req
+
+				// Read the full response body (capped at 10 MB).
+				bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxResponseBodySize)))
+				_ = resp.Body.Close()
+				// Replace body immediately so the client always gets the response data.
+				resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
+				if err != nil {
+					log.Warn().
+						Str("sandbox_id", sandboxID).
+						Str("event_type", "anthropic_body_read_error").
+						Err(err).
+						Msg("")
+					return resp
+				}
+
+				// Check cached budget again post-body-read (covers races between
+				// preflight and response interception).
+				entry := be.cache.Get(sandboxID)
+				if entry != nil && entry.AILimit > 0 && entry.AISpent >= entry.AILimit {
+					log.Info().
+						Str("sandbox_id", sandboxID).
+						Str("event_type", "ai_budget_exhausted_response").
+						Str("host", req.Host).
+						Float64("spent", entry.AISpent).
+						Float64("limit", entry.AILimit).
+						Msg("")
+					return AnthropicBlockedResponse(req, sandboxID, "", entry.AISpent, entry.AILimit)
+				}
+
+				// Extract model ID and tokens from the response body.
+				modelID, inputTokens, outputTokens, parseErr := ExtractAnthropicTokens(bytes.NewReader(bodyBytes))
+				if parseErr != nil || (inputTokens == 0 && outputTokens == 0) {
+					// No tokens to record — pass through unchanged.
+					return resp
+				}
+
+				// Look up model rate in the Anthropic static rate table.
+				// Falls back to zero cost if the model ID is not yet in the table.
+				var costUSD float64
+				if rate, ok := staticAnthropicRates[modelID]; ok {
+					costUSD = CalculateCost(inputTokens, outputTokens, rate.InputPricePer1KTokens, rate.OutputPricePer1KTokens)
+				}
+
+				log.Info().
+					Str("sandbox_id", sandboxID).
+					Str("event_type", "anthropic_tokens_metered").
+					Str("model", modelID).
+					Int("input_tokens", inputTokens).
+					Int("output_tokens", outputTokens).
+					Float64("cost_usd", costUSD).
+					Msg("")
+
+				// Optimistically update local cache before DynamoDB round-trip.
+				be.cache.UpdateLocalSpend(sandboxID, costUSD)
+
+				// Fire-and-forget DynamoDB increment — don't block the response path.
+				go func() {
+					updatedSpend, incrementErr := aws.IncrementAISpend(
+						context.Background(),
+						be.client,
+						be.tableName,
+						sandboxID,
+						modelID,
+						inputTokens,
+						outputTokens,
+						costUSD,
+					)
+					if incrementErr != nil {
+						log.Error().
+							Str("sandbox_id", sandboxID).
+							Str("event_type", "anthropic_spend_increment_error").
+							Err(incrementErr).
+							Msg("")
+						return
+					}
+
+					// Refresh cache with authoritative DynamoDB value.
+					cachedEntry := be.cache.Get(sandboxID)
+					if cachedEntry != nil {
 						cachedEntry.AISpent = updatedSpend
 						be.cache.Set(sandboxID, cachedEntry)
 					}
