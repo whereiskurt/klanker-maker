@@ -104,7 +104,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Operator Experience
 
-- [ ] **OPER-01**: All terragrunt-calling CLI commands (`km create`, `km destroy`, `km init`, `km uninit`) suppress raw terragrunt/terraform output by default — show step-level summaries instead; `--verbose` flag restores full output streaming; errors and warnings always shown regardless of mode
+- [x] **OPER-01**: All terragrunt-calling CLI commands (`km create`, `km destroy`, `km init`, `km uninit`) suppress raw terragrunt/terraform output by default — show step-level summaries instead; `--verbose` flag restores full output streaming; errors and warnings always shown regardless of mode
 
 ## v2 Requirements
 
@@ -220,7 +220,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BUDG-07 | Phase 19 | Complete |
 | BUDG-08 | Phase 19 | Complete |
 | BUDG-10 | Phase 20 | Complete |
-| OPER-01 | Phase 20 | Pending |
+| OPER-01 | Phase 20 | Complete |
 | BUDG-09 | Phase 6 | Complete |
 | PROV-06 | Phase 7 | Complete |
 | OBSV-07 | Phase 7 | Complete |

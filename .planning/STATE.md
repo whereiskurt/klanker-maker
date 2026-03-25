@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 20-01-PLAN.md
-last_updated: "2026-03-25T03:17:48.996Z"
+stopped_at: Completed 20-02-PLAN.md
+last_updated: "2026-03-25T03:18:20.202Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 20
-  completed_phases: 19
+  completed_phases: 20
   total_plans: 70
-  completed_plans: 69
+  completed_plans: 70
   percent: 0
 ---
 
@@ -118,6 +118,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 19-budget-enforcement-wiring-ec2-hard-stop-iam-revocation-resume-tag-fix P02 | 54 | 1 tasks | 2 files |
 | Phase 19-budget-enforcement-wiring-ec2-hard-stop-iam-revocation-resume-tag-fix P01 | 71 | 2 tasks | 3 files |
 | Phase 20-anthropic-api-metering-claude-code-ai-spend-tracking P01 | 4 | 2 tasks | 3 files |
+| Phase 20-anthropic-api-metering-claude-code-ai-spend-tracking P02 | 302 | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -305,6 +306,9 @@ Recent decisions affecting current work:
 - [Phase 19-01]: Use mock_outputs_allowed_on_destroy = true in dependency block to prevent destroy failures when sandbox module is already gone
 - [Phase 20-anthropic-api-metering-claude-code-ai-spend-tracking]: Extract Anthropic model ID from response body (not URL): SSE message_start.message.model or non-streaming top-level model field
 - [Phase 20-anthropic-api-metering-claude-code-ai-spend-tracking]: Use staticAnthropicRates in handler closure directly, not via WithBudgetEnforcement, to avoid changing the Bedrock API
+- [Phase 20-02]: quiet mode (Verbose=false) is default — operators see step summaries not raw HCL plan output
+- [Phase 20-02]: errors always printed in quiet mode — captured stderr shown on non-zero exit
+- [Phase 20-02]: runner.Verbose = verbose pattern established for all commands that call terragrunt
 
 ### Roadmap Evolution
 
@@ -330,6 +334,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-25T03:17:48.994Z
-Stopped at: Completed 20-01-PLAN.md
+Last session: 2026-03-25T03:18:20.199Z
+Stopped at: Completed 20-02-PLAN.md
 Resume file: None
