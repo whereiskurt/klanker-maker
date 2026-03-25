@@ -100,6 +100,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **BUDG-07**: Dual-layer enforcement — at 100% AI budget, http-proxy returns 403 for Bedrock calls (immediate, real-time); the same EventBridge-triggered Lambda that checks compute spend also reads DynamoDB AI spend records and revokes the instance profile's Bedrock IAM permissions as a backstop (catches SDK/CLI calls that bypass the proxy); at 100% compute budget, Lambda suspends the sandbox: EC2 instances are stopped (`StopInstances` — preserves EBS, no compute charges, resumable on top-up); ECS Fargate tasks trigger artifact upload then stop (tasks are ephemeral — top-up re-provisions from stored profile in S3)
 - [ ] **BUDG-08**: Operator can top up a sandbox budget via `km budget add <sandbox-id> --compute <amount> --ai <amount>` which updates DynamoDB limits and resumes enforcement: for AI, restores Bedrock IAM and proxy unblocks; for compute, EC2 instances are started (`StartInstances` — resumes from stopped state), ECS Fargate tasks are re-provisioned from the stored profile in S3
 - [x] **BUDG-09**: `km status <sandbox-id>` shows current spend vs budget for both compute and AI pools, including per-model AI breakdown
+- [ ] **BUDG-10**: AI/token spend tracked for Anthropic API (Claude Code) calls via `api.anthropic.com`; http-proxy sidecar intercepts `POST /v1/messages` responses (both non-streaming and SSE streaming), extracts `usage.input_tokens`/`usage.output_tokens`, prices against Anthropic's published model rates, and increments DynamoDB budget record using the same `IncrementAISpend` path as Bedrock metering
 
 ## v2 Requirements
 
@@ -214,6 +215,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BUDG-06 | Phase 6 | Complete |
 | BUDG-07 | Phase 19 | Pending |
 | BUDG-08 | Phase 19 | Pending |
+| BUDG-10 | Phase 20 | Pending |
 | BUDG-09 | Phase 6 | Complete |
 | PROV-06 | Phase 7 | Complete |
 | OBSV-07 | Phase 7 | Complete |

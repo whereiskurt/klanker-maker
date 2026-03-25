@@ -261,7 +261,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16 → 17 → 18 → 19
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16 → 17 → 18 → 19 → 20
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -283,7 +283,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 16. Documentation Refresh | 3/3 | Complete    | 2026-03-23 |
 | 17. Sandbox Email Mailbox & Access Control | 3/3 | Complete    | 2026-03-23 |
 | 18. Loose Ends | 4/4 | Complete    | 2026-03-24 |
-| 19. Budget Enforcement Wiring | 0/0 | Planned    | — |
+| 19. Budget Enforcement Wiring | 0/2 | Planned    | — |
+| 20. Anthropic API Metering | 0/0 | Planned    | — |
 
 ### Phase 13: GitHub App Token Integration — scoped repo access for sandboxes
 
@@ -490,3 +491,23 @@ Plans:
 Plans:
 - [ ] 19-01-PLAN.md — Wire budget-enforcer dependency block to ec2spot module (BUDG-07)
 - [ ] 19-02-PLAN.md — Fix EC2 resume tag filter key mismatch (BUDG-08)
+
+### Phase 20: Anthropic API Metering — Claude Code AI spend tracking via http-proxy
+
+**Goal:** Extend the http-proxy sidecar's AI spend metering to intercept Anthropic API calls (`api.anthropic.com/v1/messages`) in addition to Bedrock. Sandboxes running Claude Code get the same per-token budget tracking, threshold warnings, and hard enforcement (proxy 403) as Bedrock workloads — using the existing `IncrementAISpend` → DynamoDB path.
+
+**Requirements:** BUDG-10
+**Success Criteria** (what must be TRUE):
+  1. http-proxy sidecar detects outbound requests to `api.anthropic.com/v1/messages` and intercepts the response
+  2. For non-streaming responses, proxy extracts `usage.input_tokens` and `usage.output_tokens` from the JSON body and increments DynamoDB AI spend via `IncrementAISpend`
+  3. For SSE streaming responses, proxy reads the final `message_stop` event, extracts cumulative usage from the final message, and increments DynamoDB AI spend
+  4. Model rates for Anthropic API models (claude-sonnet-4-20250514, claude-opus-4-20250514, claude-haiku-4-5-20251001, etc.) are sourced from a rate table (static or configurable) and applied to token counts
+  5. `km status` AI breakdown shows Anthropic API spend alongside Bedrock spend (same per-model format)
+  6. At 100% AI budget, proxy returns 403 for Anthropic API calls (same enforcement as Bedrock)
+  7. Unit tests verify Anthropic response parsing for both streaming and non-streaming formats
+
+**Depends on:** Phase 19 (budget enforcement wiring must work first)
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 20 to break down)
