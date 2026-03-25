@@ -361,6 +361,30 @@ func TestBudgetAdd_ECSMissingArtifactBucket(t *testing.T) {
 	}
 }
 
+// TestResumeEC2Sandbox_UsesCorrectTagKey verifies that resumeEC2Sandbox uses the correct
+// tag key "tag:km:sandbox-id" (not "tag:sandbox-id") to filter EC2 instances.
+// This is a source-level verification test following the Phase 07-02 pattern.
+func TestResumeEC2Sandbox_UsesCorrectTagKey(t *testing.T) {
+	src, err := os.ReadFile("budget.go")
+	if err != nil {
+		t.Fatalf("could not read budget.go: %v", err)
+	}
+	content := string(src)
+
+	// Must contain the correct namespaced tag key
+	if !strings.Contains(content, `tag:km:sandbox-id`) {
+		t.Errorf("budget.go must use tag key %q in DescribeInstances filter, but it was not found", "tag:km:sandbox-id")
+	}
+
+	// Must NOT contain the broken tag key as a standalone string literal
+	// (note: "tag:km:sandbox-id" contains "tag:sandbox-id" as a substring, so we
+	// check for the exact broken Go string literal form)
+	brokenPattern := `awssdk.String("tag:sandbox-id")`
+	if strings.Contains(content, brokenPattern) {
+		t.Errorf("budget.go contains broken tag key pattern %q — fix to use %q", brokenPattern, `awssdk.String("tag:km:sandbox-id")`)
+	}
+}
+
 // TestBudgetAdd_ECSSourceLevelVerification verifies that budget.go contains the required
 // ECS re-provisioning function and branch (following Phase 07-02 source-level verification pattern).
 func TestBudgetAdd_ECSSourceLevelVerification(t *testing.T) {
