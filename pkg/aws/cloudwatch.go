@@ -25,6 +25,7 @@ type CWLogsAPI interface {
 	GetLogEvents(ctx context.Context, params *cloudwatchlogs.GetLogEventsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.GetLogEventsOutput, error)
 	PutRetentionPolicy(ctx context.Context, params *cloudwatchlogs.PutRetentionPolicyInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.PutRetentionPolicyOutput, error)
 	DeleteLogGroup(ctx context.Context, params *cloudwatchlogs.DeleteLogGroupInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DeleteLogGroupOutput, error)
+	CreateExportTask(ctx context.Context, params *cloudwatchlogs.CreateExportTaskInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.CreateExportTaskOutput, error)
 }
 
 // LogEvent is a single timestamped log message for CloudWatch Logs.
@@ -74,6 +75,33 @@ func DeleteSandboxLogGroup(ctx context.Context, client CWLogsAPI, sandboxID stri
 			return nil
 		}
 		return fmt.Errorf("delete log group %q: %w", logGroup, err)
+	}
+	return nil
+}
+
+// ExportSandboxLogs initiates a CloudWatch Logs export task to S3 for the given sandbox.
+// The export covers the last 7 days (matching the log group retention policy) up to now.
+// Returns nil if the log group does not exist (ResourceNotFoundException) — no logs to export.
+// The export is async (CreateExportTask is fire-and-forget); log group deletion proceeds immediately.
+func ExportSandboxLogs(ctx context.Context, client CWLogsAPI, sandboxID, destBucket string) error {
+	logGroup := "/km/sandboxes/" + sandboxID + "/"
+	now := time.Now().UTC()
+	from := now.Add(-7 * 24 * time.Hour)
+
+	_, err := client.CreateExportTask(ctx, &cloudwatchlogs.CreateExportTaskInput{
+		LogGroupName:      aws.String(logGroup),
+		Destination:       aws.String(destBucket),
+		DestinationPrefix: aws.String("logs/" + sandboxID),
+		From:              aws.Int64(from.UnixMilli()),
+		To:                aws.Int64(now.UnixMilli()),
+	})
+	if err != nil {
+		var notFound *types.ResourceNotFoundException
+		if errors.As(err, &notFound) {
+			// Log group does not exist — nothing to export.
+			return nil
+		}
+		return fmt.Errorf("export sandbox logs for %q to s3://%s: %w", sandboxID, destBucket, err)
 	}
 	return nil
 }

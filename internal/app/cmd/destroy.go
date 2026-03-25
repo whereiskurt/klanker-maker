@@ -362,8 +362,18 @@ locals {
 		}
 	}
 
-	// Step 13: Delete CloudWatch log group for this sandbox.
+	// Step 13: Export CloudWatch logs to S3 then delete the log group.
+	// Export is fire-and-forget (async in AWS) and non-fatal — deletion proceeds regardless.
 	cwClient := cloudwatchlogs.NewFromConfig(awsCfg)
+	if artifactBucket != "" {
+		if exportErr := awspkg.ExportSandboxLogs(ctx, cwClient, sandboxID, artifactBucket); exportErr != nil {
+			log.Warn().Err(exportErr).Str("sandbox_id", sandboxID).
+				Msg("failed to export sandbox logs to S3 (non-fatal)")
+		} else {
+			log.Info().Str("sandbox_id", sandboxID).Str("bucket", artifactBucket).
+				Msg("sandbox logs export task initiated")
+		}
+	}
 	if cwErr := awspkg.DeleteSandboxLogGroup(ctx, cwClient, sandboxID); cwErr != nil {
 		log.Warn().Err(cwErr).Str("sandbox_id", sandboxID).
 			Msg("failed to delete sandbox log group (non-fatal)")

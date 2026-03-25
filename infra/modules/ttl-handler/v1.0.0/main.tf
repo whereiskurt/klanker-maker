@@ -24,7 +24,7 @@ resource "aws_iam_role" "ttl_handler" {
   }
 }
 
-# Policy: CloudWatch Logs for Lambda execution logs
+# Policy: CloudWatch Logs for Lambda execution logs and sandbox log export
 resource "aws_iam_role_policy" "cloudwatch_logs" {
   name = "km-ttl-handler-cw-logs"
   role = aws_iam_role.ttl_handler.id
@@ -39,6 +39,8 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
           "logs:CreateLogStream",
           "logs:PutLogEvents",
           "logs:DeleteLogGroup",
+          "logs:CreateExportTask",
+          "logs:DescribeExportTasks",
         ]
         Resource = "arn:aws:logs:*:*:*"
       }
@@ -414,5 +416,35 @@ resource "aws_iam_role_policy" "ec2_teardown" {
       ]
       Resource = "*"
     }]
+  })
+}
+
+# ============================================================
+# S3 bucket policy: allow CloudWatch Logs service to write exported logs
+# Required by the CreateExportTask API — AWS writes exported log data
+# directly from CloudWatch Logs to S3 using the logs.amazonaws.com principal.
+# ============================================================
+
+resource "aws_s3_bucket_policy" "artifacts_logs_export" {
+  bucket = var.artifact_bucket_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowCloudWatchLogsExport"
+        Effect = "Allow"
+        Principal = {
+          Service = "logs.amazonaws.com"
+        }
+        Action   = "s3:PutObject"
+        Resource = "${var.artifact_bucket_arn}/logs/*"
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      }
+    ]
   })
 }
