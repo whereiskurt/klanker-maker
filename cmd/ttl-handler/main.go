@@ -214,10 +214,19 @@ provider "aws" {
 }
 
 module "sandbox" {
-  source = "./module"
+  source       = "./module"
+  km_label     = "km"
+  region_label = %q
+  region_full  = %q
+  sandbox_id   = %q
+  vpc_id       = "destroy-placeholder"
+  public_subnets     = []
+  availability_zones = []
+  ec2spots           = []
 }
 `, h.StateBucket, stateKey, region,
-		statePrefix+"-locks-"+regionLabel, region)
+		statePrefix+"-locks-"+regionLabel, region,
+		regionLabel, region, sandboxID)
 
 	if err := os.WriteFile(filepath.Join(workDir, "main.tf"), []byte(mainTF), 0o644); err != nil {
 		return fmt.Errorf("write main.tf: %w", err)
