@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -242,8 +243,22 @@ locals {
 	fmt.Printf("GitHub token resources cleaned up for %s\n", sandboxID)
 
 	// Step 8: Run terragrunt destroy (streams output in real time)
+	// If destroy fails, check if it was a state lock error and offer to retry.
 	destroyFunc := func(dCtx context.Context, sid string) error {
-		return runner.Destroy(dCtx, sandboxDir)
+		// Capture stderr to detect lock errors while still streaming to terminal.
+		var stderrBuf strings.Builder
+		err := runner.DestroyWithStderr(dCtx, sandboxDir, &stderrBuf)
+		if err != nil && strings.Contains(stderrBuf.String(), "Error acquiring the state lock") {
+			fmt.Printf("\nState lock detected. This is usually a stale lock from a failed Lambda or previous operation.\n")
+			fmt.Printf("Clear lock and retry destroy? [y/N] ")
+			var answer string
+			fmt.Scanln(&answer)
+			if answer == "y" || answer == "Y" || answer == "yes" {
+				fmt.Printf("Retrying destroy with -lock=false...\n")
+				return runner.DestroyForceUnlock(dCtx, sandboxDir)
+			}
+		}
+		return err
 	}
 	uploadFunc := func(uCtx context.Context, sid string) error {
 		if sandboxProfile == nil || sandboxProfile.Spec.Artifacts == nil || len(sandboxProfile.Spec.Artifacts.Paths) == 0 {

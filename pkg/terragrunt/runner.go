@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // Runner wraps the Terragrunt binary and executes commands in sandbox directories.
@@ -72,6 +74,24 @@ func (r *Runner) BuildDestroyCommand(ctx context.Context, sandboxDir string) *ex
 // without running it. Used directly by Output() and exposed for testing.
 func (r *Runner) BuildOutputCommand(ctx context.Context, sandboxDir string) *exec.Cmd {
 	return r.buildCommand(ctx, sandboxDir, "output", "-json")
+}
+
+// DestroyWithStderr runs destroy, streaming stdout to terminal and capturing stderr
+// to both terminal and the provided buffer (for lock error detection).
+func (r *Runner) DestroyWithStderr(ctx context.Context, sandboxDir string, stderrBuf *strings.Builder) error {
+	cmd := r.BuildDestroyCommand(ctx, sandboxDir)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = io.MultiWriter(os.Stderr, stderrBuf)
+	return cmd.Run()
+}
+
+// DestroyForceUnlock runs `terragrunt destroy -auto-approve` with `-lock=false`
+// to bypass a stale state lock. Used after the operator confirms lock clearing.
+func (r *Runner) DestroyForceUnlock(ctx context.Context, sandboxDir string) error {
+	cmd := r.buildCommand(ctx, sandboxDir, "destroy", "-auto-approve", "-lock=false")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 // buildCommand is the internal factory that constructs a Terragrunt command
