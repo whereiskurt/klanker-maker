@@ -284,7 +284,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 17. Sandbox Email Mailbox & Access Control | 3/3 | Complete    | 2026-03-23 |
 | 18. Loose Ends | 4/4 | Complete    | 2026-03-24 |
 | 19. Budget Enforcement Wiring | 2/2 | Complete    | 2026-03-25 |
-| 20. Anthropic API Metering | 2/2 | Complete   | 2026-03-25 |
+| 20. Anthropic API Metering | 2/2 | Complete    | 2026-03-25 |
 
 ### Phase 13: GitHub App Token Integration — scoped repo access for sandboxes
 
