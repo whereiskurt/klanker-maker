@@ -21,11 +21,16 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/aws/aws-lambda-go/lambda"
+	"errors"
+
+	lambdaruntime "github.com/aws/aws-lambda-go/lambda"
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
+	iampkg "github.com/aws/aws-sdk-go-v2/service/iam"
+	lambdapkg "github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
+	schedulertypes "github.com/aws/aws-sdk-go-v2/service/scheduler/types"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/rs/zerolog/log"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
@@ -76,7 +81,7 @@ type TTLHandler struct {
 	TeardownFunc func(ctx context.Context, sandboxID string) error
 }
 
-// HandleTTLEvent is the Lambda handler method. It is called by lambda.Start in main().
+// HandleTTLEvent is the Lambda handler method. It is called by lambdaruntime.Start in main().
 func (h *TTLHandler) HandleTTLEvent(ctx context.Context, event TTLEvent) error {
 	// Step 1: Validate sandbox ID.
 	if event.SandboxID == "" {
@@ -273,11 +278,21 @@ module "sandbox" {
 		return fmt.Errorf("terraform destroy: %s: %w", string(out), err)
 	}
 
+	// Clean up budget-enforcer resources (Lambda, schedule, IAM role) via SDK.
+	// Simpler than running a second terraform destroy for the sub-module.
+	cleanupBudgetEnforcer(ctx, h, sandboxID)
+
 	// Clean up S3 metadata so km list no longer shows this sandbox
 	if h.StateBucket != "" {
 		if delErr := awspkg.DeleteSandboxMetadata(ctx, h.S3Client, h.StateBucket, sandboxID); delErr != nil {
 			log.Warn().Err(delErr).Str("sandbox_id", sandboxID).Msg("failed to delete metadata (non-fatal)")
 		}
+		// Also clean up budget-enforcer state file
+		budgetStateKey := fmt.Sprintf("tf-km/sandboxes/%s/budget-enforcer/terraform.tfstate", sandboxID)
+		h.S3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket: awssdk.String(h.StateBucket),
+			Key:    awssdk.String(budgetStateKey),
+		})
 	}
 
 	// Clean up CloudWatch log group
@@ -307,6 +322,87 @@ func terraformDestroyStateOnly(ctx context.Context, workDir string) error {
 	}
 	log.Info().Str("output", string(out)).Msg("terraform destroy (state-only) output")
 	return nil
+}
+
+// cleanupBudgetEnforcer removes budget-enforcer resources for a sandbox via SDK calls.
+// All errors are non-fatal (logged as warnings) since the sandbox is already destroyed.
+func cleanupBudgetEnforcer(ctx context.Context, h *TTLHandler, sandboxID string) {
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, "")
+	if err != nil {
+		log.Warn().Err(err).Msg("could not load AWS config for budget cleanup")
+		return
+	}
+
+	// Delete budget-enforcer Lambda
+	lambdaClient := lambdapkg.NewFromConfig(awsCfg)
+	fnName := "km-budget-enforcer-" + sandboxID
+	if _, delErr := lambdaClient.DeleteFunction(ctx, &lambdapkg.DeleteFunctionInput{
+		FunctionName: awssdk.String(fnName),
+	}); delErr != nil {
+		log.Debug().Str("function", fnName).Msg("budget-enforcer Lambda not found or already deleted")
+	} else {
+		log.Info().Str("function", fnName).Msg("budget-enforcer Lambda deleted")
+	}
+
+	// Delete budget-enforcer EventBridge schedule
+	schedulerClient := scheduler.NewFromConfig(awsCfg)
+	schedName := "km-budget-" + sandboxID
+	if _, delErr := schedulerClient.DeleteSchedule(ctx, &scheduler.DeleteScheduleInput{
+		Name: awssdk.String(schedName),
+	}); delErr != nil {
+		var notFound *schedulertypes.ResourceNotFoundException
+		if !errors.As(delErr, &notFound) {
+			log.Debug().Str("schedule", schedName).Msg("budget schedule not found or already deleted")
+		}
+	} else {
+		log.Info().Str("schedule", schedName).Msg("budget-enforcer schedule deleted")
+	}
+
+	// Delete budget-enforcer IAM roles
+	iamClient := iampkg.NewFromConfig(awsCfg)
+	for _, roleName := range []string{
+		"km-budget-enforcer-" + sandboxID,
+		"km-budget-scheduler-" + sandboxID,
+	} {
+		// Detach managed policies
+		attachedOut, _ := iamClient.ListAttachedRolePolicies(ctx, &iampkg.ListAttachedRolePoliciesInput{
+			RoleName: awssdk.String(roleName),
+		})
+		if attachedOut != nil {
+			for _, p := range attachedOut.AttachedPolicies {
+				iamClient.DetachRolePolicy(ctx, &iampkg.DetachRolePolicyInput{
+					RoleName:  awssdk.String(roleName),
+					PolicyArn: p.PolicyArn,
+				})
+			}
+		}
+		// Delete inline policies
+		policiesOut, _ := iamClient.ListRolePolicies(ctx, &iampkg.ListRolePoliciesInput{
+			RoleName: awssdk.String(roleName),
+		})
+		if policiesOut != nil {
+			for _, pName := range policiesOut.PolicyNames {
+				iamClient.DeleteRolePolicy(ctx, &iampkg.DeleteRolePolicyInput{
+					RoleName:   awssdk.String(roleName),
+					PolicyName: awssdk.String(pName),
+				})
+			}
+		}
+		// Delete the role
+		if _, delErr := iamClient.DeleteRole(ctx, &iampkg.DeleteRoleInput{
+			RoleName: awssdk.String(roleName),
+		}); delErr == nil {
+			log.Info().Str("role", roleName).Msg("budget-enforcer IAM role deleted")
+		}
+	}
+
+	// Delete budget-enforcer log group
+	if h.CWClient != nil {
+		logGroup := "/aws/lambda/km-budget-enforcer-" + sandboxID
+		h.CWClient.DeleteLogGroup(ctx, &cloudwatchlogs.DeleteLogGroupInput{
+			LogGroupName: awssdk.String(logGroup),
+		})
+	}
 }
 
 // main constructs a TTLHandler with real AWS clients and registers it with the Lambda runtime.
@@ -360,5 +456,5 @@ func main() {
 		log.Warn().Msg("terraform binary not found — teardown will be skipped")
 	}
 
-	lambda.Start(h.HandleTTLEvent)
+	lambdaruntime.Start(h.HandleTTLEvent)
 }

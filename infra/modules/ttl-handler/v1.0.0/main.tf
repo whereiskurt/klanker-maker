@@ -38,6 +38,7 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents",
+          "logs:DeleteLogGroup",
         ]
         Resource = "arn:aws:logs:*:*:*"
       }
@@ -176,11 +177,49 @@ resource "aws_iam_role_policy" "terraform_destroy" {
           "iam:RemoveRoleFromInstanceProfile",
           "iam:DeleteInstanceProfile",
           "iam:GetInstanceProfile",
+          "iam:PassRole",
+          "iam:CreateRole",
+          "iam:PutRolePolicy",
+          "iam:AttachRolePolicy",
+          "iam:TagRole",
         ]
         Resource = [
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/km-ec2spot-*",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/km-budget-enforcer-*",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/km-budget-scheduler-*",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/km-ec2spot-*",
         ]
+      },
+      {
+        Sid    = "LambdaCleanup"
+        Effect = "Allow"
+        Action = [
+          "lambda:DeleteFunction",
+          "lambda:GetFunction",
+          "lambda:RemovePermission",
+          "lambda:GetPolicy",
+        ]
+        Resource = "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:km-budget-enforcer-*"
+      },
+      {
+        Sid    = "SchedulerCleanup"
+        Effect = "Allow"
+        Action = [
+          "scheduler:DeleteSchedule",
+          "scheduler:GetSchedule",
+        ]
+        Resource = "arn:aws:scheduler:*:*:schedule/default/km-budget-*"
+      },
+      {
+        Sid    = "KMSCleanup"
+        Effect = "Allow"
+        Action = [
+          "kms:DescribeKey",
+          "kms:ScheduleKeyDeletion",
+          "kms:DeleteAlias",
+          "kms:ListAliases",
+        ]
+        Resource = "*"
       },
     ]
   })
