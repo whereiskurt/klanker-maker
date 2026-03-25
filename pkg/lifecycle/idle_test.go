@@ -30,6 +30,14 @@ func (m *mockCWLogsClient) PutLogEvents(ctx context.Context, params *cloudwatchl
 	return &cloudwatchlogs.PutLogEventsOutput{}, nil
 }
 
+func (m *mockCWLogsClient) PutRetentionPolicy(ctx context.Context, params *cloudwatchlogs.PutRetentionPolicyInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.PutRetentionPolicyOutput, error) {
+	return &cloudwatchlogs.PutRetentionPolicyOutput{}, nil
+}
+
+func (m *mockCWLogsClient) DeleteLogGroup(ctx context.Context, params *cloudwatchlogs.DeleteLogGroupInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DeleteLogGroupOutput, error) {
+	return &cloudwatchlogs.DeleteLogGroupOutput{}, nil
+}
+
 func (m *mockCWLogsClient) GetLogEvents(ctx context.Context, params *cloudwatchlogs.GetLogEventsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.GetLogEventsOutput, error) {
 	if m.getErr != nil {
 		return nil, m.getErr

@@ -51,6 +51,9 @@ type IdleDetector struct {
 
 	// nowFn allows tests to inject a controlled clock. Defaults to time.Now.
 	nowFn func() time.Time
+
+	// startTime tracks when the detector started running (set on first isIdle call).
+	startTime time.Time
 }
 
 // SetNowFn injects a custom clock function for testing. Not safe for concurrent use.
@@ -100,12 +103,20 @@ func (d *IdleDetector) Run(ctx context.Context) error {
 }
 
 // isIdle checks whether the sandbox has been idle longer than IdleTimeout.
-// Returns true if no log events exist or if the most recent event is older than IdleTimeout.
+// Returns true only if the most recent event is older than IdleTimeout.
+// Returns false when no events exist yet — the sandbox just started and hasn't
+// had time to generate activity. The startTime field tracks when the detector
+// began running so we can distinguish "just started" from "truly idle".
 func (d *IdleDetector) isIdle(ctx context.Context, now func() time.Time) bool {
 	events, err := kmaws.GetLogEvents(ctx, d.CWClient, d.LogGroup, d.LogStream, 1)
 	if err != nil || len(events) == 0 {
-		// No events or error fetching — treat as idle (conservative approach).
-		return true
+		// No events yet — only consider idle if we've been running longer than IdleTimeout.
+		// This prevents killing sandboxes that just started and haven't generated events.
+		if d.startTime.IsZero() {
+			d.startTime = now()
+			return false
+		}
+		return now().Sub(d.startTime) > d.IdleTimeout
 	}
 
 	// Events are returned in ascending order; the last one is the most recent.
