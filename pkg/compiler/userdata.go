@@ -177,6 +177,12 @@ RestartSec=2
 WantedBy=multi-user.target
 UNIT
 
+# Create named pipe for audit-log sidecar input.
+# Shell commands are written here by PROMPT_COMMAND; sidecar reads from it.
+mkdir -p /run/km
+mkfifo /run/km/audit-pipe
+chown km-sidecar:km-sidecar /run/km/audit-pipe
+
 cat > /etc/systemd/system/km-audit-log.service << 'UNIT'
 [Unit]
 Description=Klankrmkr audit log sidecar
@@ -189,17 +195,32 @@ Environment=AUDIT_LOG_DEST=cloudwatch
 {{- if gt .IdleTimeoutMinutes 0 }}
 Environment=IDLE_TIMEOUT_MINUTES={{ .IdleTimeoutMinutes }}
 {{- end }}
-ExecStart=/opt/km/bin/km-audit-log
+ExecStart=/bin/bash -c 'exec /opt/km/bin/km-audit-log < /run/km/audit-pipe'
 Restart=always
 RestartSec=2
 [Install]
 WantedBy=multi-user.target
 UNIT
 
+# Shell audit hook: writes JSON audit events to the named pipe on every command.
+# Installed as /etc/profile.d/ so it applies to all login shells (SSM sessions).
+cat > /etc/profile.d/km-audit.sh << 'HOOK'
+_km_audit() {
+  local cmd
+  cmd=$(history 1 | sed 's/^ *[0-9]* *//')
+  printf '{"timestamp":%d,"sandbox_id":"%s","event_type":"command","source":"shell","detail":{"command":"%s","user":"%s"}}\n' \
+    "$(date +%s%3N)" "{{ .SandboxID }}" "$(echo "$cmd" | sed 's/"/\\"/g' | head -c 500)" "$(whoami)" \
+    > /run/km/audit-pipe 2>/dev/null
+}
+PROMPT_COMMAND="_km_audit;${PROMPT_COMMAND}"
+HOOK
+chmod 644 /etc/profile.d/km-audit.sh
+
 systemctl daemon-reload
 systemctl enable km-dns-proxy km-http-proxy km-audit-log
 systemctl start km-dns-proxy km-http-proxy km-audit-log
 echo "[km-bootstrap] Sidecars started"
+echo "[km-bootstrap] Shell audit hook installed at /etc/profile.d/km-audit.sh"
 
 # ============================================================
 # 6. iptables DNAT: redirect DNS and HTTP traffic to sidecars
