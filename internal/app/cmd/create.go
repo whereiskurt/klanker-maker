@@ -3,9 +3,12 @@ package cmd
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,17 +17,16 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/pricing"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	iampkg "github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
+	"github.com/aws/aws-sdk-go-v2/service/pricing"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"io"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
@@ -479,6 +481,41 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 				} else {
 					log.Info().Str("sandbox_id", sandboxID).Msg("budget enforcer Lambda deployed")
 				}
+			}
+		}
+	}
+
+	// Step 12d: Generate and store safe phrase for email override authorization.
+	// The safe phrase is a 32-char random hex string stored in SSM at /sandbox/{id}/safe-phrase.
+	// It is shown once to the operator here — never stored in profile YAML.
+	// Non-fatal: sandbox is provisioned even if safe phrase generation fails.
+	{
+		buf := make([]byte, 16)
+		if _, randErr := cryptorand.Read(buf); randErr != nil {
+			log.Warn().Err(randErr).Str("sandbox_id", sandboxID).
+				Msg("Step 12d: failed to generate safe phrase random bytes (non-fatal)")
+		} else {
+			phrase := hex.EncodeToString(buf)
+			phrasePath := "/sandbox/" + sandboxID + "/safe-phrase"
+			phraseSMSClient := ssm.NewFromConfig(awsCfg)
+			kmsKeyARNForPhrase := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
+			if kmsKeyARNForPhrase == "" {
+				kmsKeyARNForPhrase = "alias/km-platform"
+			}
+			_, phraseErr := phraseSMSClient.PutParameter(ctx, &ssm.PutParameterInput{
+				Name:      aws.String(phrasePath),
+				Value:     aws.String(phrase),
+				Type:      ssmtypes.ParameterTypeSecureString,
+				KeyId:     aws.String(kmsKeyARNForPhrase),
+				Overwrite: aws.Bool(true),
+			})
+			if phraseErr != nil {
+				log.Warn().Err(phraseErr).Str("sandbox_id", sandboxID).
+					Msg("Step 12d: failed to store safe phrase in SSM (non-fatal)")
+			} else {
+				fmt.Printf("Safe phrase (save this): %s\n", phrase)
+				log.Info().Str("sandbox_id", sandboxID).
+					Msg("Step 12d: safe phrase stored in SSM")
 			}
 		}
 	}

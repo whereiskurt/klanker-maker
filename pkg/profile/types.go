@@ -45,6 +45,18 @@ type Spec struct {
 	// Email defines optional email signing and encryption policy.
 	// When nil, email policy enforcement is disabled.
 	Email *EmailSpec `yaml:"email,omitempty"`
+	// OTP defines optional one-time password secrets injected at boot.
+	// When nil, no OTP secrets are injected.
+	OTP *OTPSpec `yaml:"otp,omitempty"`
+}
+
+// OTPSpec defines one-time password secrets that are fetched from SSM at boot
+// and deleted after first read, providing ephemeral bootstrap credentials.
+type OTPSpec struct {
+	// Secrets lists SSM parameter paths that are read once at boot and deleted.
+	// After the sandbox reads each secret, the SSM parameter is deleted so the
+	// credentials cannot be retrieved again.
+	Secrets []string `yaml:"secrets,omitempty"`
 }
 
 // EmailSpec defines email signing, inbound verification, and encryption policies.

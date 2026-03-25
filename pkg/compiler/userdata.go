@@ -3,12 +3,21 @@ package compiler
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/template"
 	"time"
 
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
 )
+
+// otpEnvName derives the env var name for an OTP secret from its SSM path.
+// The last path segment is uppercased, with hyphens replaced by underscores,
+// and prefixed with "KM_OTP_". E.g. /sandbox/sb-123/otp/github-token -> KM_OTP_GITHUB_TOKEN
+func otpEnvName(path string) string {
+	seg := filepath.Base(path)
+	return "KM_OTP_" + strings.ToUpper(strings.ReplaceAll(seg, "-", "_"))
+}
 
 // userDataTemplate generates the EC2 bootstrap script.
 // It performs: SSM agent install, IMDSv2 verification, secret injection,
@@ -91,7 +100,23 @@ echo "[km-bootstrap] No secrets to inject"
 {{- end }}
 
 # ============================================================
-# 3.5. Email address: expose sandbox email as env var
+# 3.5 OTP secrets: read once from SSM and delete (one-time bootstrap credentials)
+# ============================================================
+{{- if .OTPSecrets }}
+echo "[km-bootstrap] Injecting OTP secrets (delete-after-read)..."
+{{- range .OTPSecrets }}
+OTP_VAL=$(aws ssm get-parameter --name "{{ .Path }}" --with-decryption --query Parameter.Value --output text 2>/dev/null)
+if [ -n "$OTP_VAL" ]; then
+  export {{ .EnvName }}="$OTP_VAL"
+  echo "[km-bootstrap] OTP secret injected: {{ .Path }} -> {{ .EnvName }}"
+  aws ssm delete-parameter --name "{{ .Path }}" 2>/dev/null || true
+  echo "[km-bootstrap] OTP secret deleted from SSM: {{ .Path }}"
+fi
+{{- end }}
+{{- end }}
+
+# ============================================================
+# 3.7. Email address: expose sandbox email as env var
 # ============================================================
 {{- if .SandboxEmail }}
 export KM_EMAIL_ADDRESS="{{ .SandboxEmail }}"
@@ -412,6 +437,15 @@ type userDataParams struct {
 	BudgetTable   string // DynamoDB table name from KM_BUDGET_TABLE env var
 	// Idle timeout (minutes) — passed to audit-log sidecar for SandboxIdle event detection
 	IdleTimeoutMinutes int
+	// OTPSecrets holds path + env name pairs for one-time-password secret injection.
+	// Each entry is fetched from SSM and deleted after first read.
+	OTPSecrets []otpSecret
+}
+
+// otpSecret holds an SSM path and derived env var name for an OTP secret.
+type otpSecret struct {
+	Path    string // SSM parameter path (e.g. /sandbox/sb-123/otp/github-token)
+	EnvName string // derived env var name (e.g. KM_OTP_GITHUB_TOKEN)
 }
 
 // generateUserData produces the EC2 bootstrap user-data.sh content for the given profile.
@@ -466,6 +500,16 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 	if p.Spec.Artifacts != nil {
 		params.ArtifactPaths = p.Spec.Artifacts.Paths
 		params.ArtifactMaxSizeMB = p.Spec.Artifacts.MaxSizeMB
+	}
+
+	// Populate OTP secrets (nil-safe)
+	if p.Spec.OTP != nil {
+		for _, path := range p.Spec.OTP.Secrets {
+			params.OTPSecrets = append(params.OTPSecrets, otpSecret{
+				Path:    path,
+				EnvName: otpEnvName(path),
+			})
+		}
 	}
 
 	var buf bytes.Buffer

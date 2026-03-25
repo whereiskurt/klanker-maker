@@ -167,3 +167,86 @@ func TestArtifactUploadScriptAbsent(t *testing.T) {
 		t.Error("expected NO km-upload-artifacts script when no artifacts and no spot")
 	}
 }
+
+// ============================================================
+// OTP secret injection tests
+// ============================================================
+
+// TestOTPSecretsInjected verifies OTP secrets from profile generate get-parameter + delete-parameter snippets.
+func TestOTPSecretsInjected(t *testing.T) {
+	p := baseProfile()
+	p.Spec.OTP = &profile.OTPSpec{
+		Secrets: []string{"/sandbox/sb-123/otp/github-token"},
+	}
+	out, err := generateUserData(p, "sb-123", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	// Should include get-parameter for the OTP path
+	if !strings.Contains(out, "get-parameter") {
+		t.Error("expected 'get-parameter' in OTP section")
+	}
+	if !strings.Contains(out, "/sandbox/sb-123/otp/github-token") {
+		t.Error("expected OTP path in user-data")
+	}
+	// Should include delete-parameter for delete-after-read
+	if !strings.Contains(out, "delete-parameter") {
+		t.Error("expected 'delete-parameter' in OTP section for delete-after-read")
+	}
+}
+
+// TestOTPEnvVarName verifies that the env var name is derived correctly from the path segment.
+// /sandbox/sb-123/otp/github-token -> KM_OTP_GITHUB_TOKEN
+func TestOTPEnvVarName(t *testing.T) {
+	p := baseProfile()
+	p.Spec.OTP = &profile.OTPSpec{
+		Secrets: []string{"/sandbox/sb-123/otp/github-token"},
+	}
+	out, err := generateUserData(p, "sb-123", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "KM_OTP_GITHUB_TOKEN") {
+		t.Error("expected env var KM_OTP_GITHUB_TOKEN derived from path segment 'github-token'")
+	}
+}
+
+// TestOTPAbsentWhenNotConfigured verifies no OTP section when profile.OTP is nil.
+func TestOTPAbsentWhenNotConfigured(t *testing.T) {
+	p := baseProfile()
+	// No OTP section
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if strings.Contains(out, "KM_OTP_") {
+		t.Error("expected no KM_OTP_ env vars when OTP section is nil")
+	}
+}
+
+// TestOTPMultipleSecrets verifies multiple OTP secrets are all rendered.
+func TestOTPMultipleSecrets(t *testing.T) {
+	p := baseProfile()
+	p.Spec.OTP = &profile.OTPSpec{
+		Secrets: []string{
+			"/sandbox/sb-456/otp/api-key",
+			"/sandbox/sb-456/otp/db-password",
+		},
+	}
+	out, err := generateUserData(p, "sb-456", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "KM_OTP_API_KEY") {
+		t.Error("expected KM_OTP_API_KEY for /sandbox/sb-456/otp/api-key")
+	}
+	if !strings.Contains(out, "KM_OTP_DB_PASSWORD") {
+		t.Error("expected KM_OTP_DB_PASSWORD for /sandbox/sb-456/otp/db-password")
+	}
+	if !strings.Contains(out, "/sandbox/sb-456/otp/api-key") {
+		t.Error("expected api-key path in user-data")
+	}
+	if !strings.Contains(out, "/sandbox/sb-456/otp/db-password") {
+		t.Error("expected db-password path in user-data")
+	}
+}

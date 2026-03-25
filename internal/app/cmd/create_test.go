@@ -219,6 +219,34 @@ func TestRunCreate_PublishIdentityAliasBackwardCompat(t *testing.T) {
 	}
 }
 
+// TestCreateSafePhraseStorage verifies that create.go contains safe phrase generation
+// and SSM storage wiring (Step 12d). Source-level verification confirms the call site
+// follows the non-fatal pattern.
+func TestCreateSafePhraseStorage(t *testing.T) {
+	src, err := os.ReadFile("create.go")
+	if err != nil {
+		t.Fatalf("read create.go: %v", err)
+	}
+	s := string(src)
+
+	checks := []struct {
+		name    string
+		pattern string
+	}{
+		{"Step 12d comment", "Step 12d"},
+		{"safe-phrase SSM path", "safe-phrase"},
+		{"crypto/rand usage", "crypto/rand"},
+		{"hex encoding", "hex.EncodeToString"},
+		{"safe phrase stdout print", "Safe phrase (save this)"},
+		{"non-fatal pattern", "non-fatal"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(s, c.pattern) {
+			t.Errorf("create.go missing %s (expected %q)", c.name, c.pattern)
+		}
+	}
+}
+
 // TestCreateCmd_Workflow verifies the create command workflow sequence using a
 // real valid profile but mocked environment. Because apply calls terragrunt
 // (not present in CI), we only verify up to the point of the apply attempt.
