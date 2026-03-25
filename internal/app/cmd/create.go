@@ -239,9 +239,11 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	}
 
 	// Step 10: Run terragrunt apply (streams output in real time when --verbose; quiet by default)
+	fmt.Printf("  Provisioning infrastructure...")
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
 	runner.Verbose = verbose
 	if err := runner.Apply(ctx, sandboxDir); err != nil {
+		fmt.Println() // newline after progress indicator
 		// Do NOT run destroy — resources may be partially created and require
 		// manual cleanup. Only remove the local sandbox directory.
 		fmt.Fprintf(os.Stderr, "ERROR: terragrunt apply failed: %v\n", err)
@@ -250,6 +252,8 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		}
 		return fmt.Errorf("provisioning failed for sandbox %s", sandboxID)
 	}
+
+	fmt.Println(" done")
 
 	// Step 11: Write sandbox metadata to S3 so km list/status can read it without tag API calls.
 	// Non-fatal: sandbox is provisioned even if metadata write fails.
@@ -333,6 +337,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		}
 	}
 
+	fmt.Printf("  Setting up TTL, budget, email, identity...")
 	// Step 12: Create EventBridge TTL schedule if TTL is configured.
 	// Auto-discover Lambda ARN if not explicitly set.
 	// Non-fatal: sandbox is provisioned; operator can re-schedule manually if this fails.
@@ -502,6 +507,10 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		fmt.Fprintf(os.Stdout, "Email: %s\n", emailAddr)
 	}
 
+	fmt.Println(" done")
+	if ttlExpiry != nil {
+		fmt.Printf("  TTL: %s (expires %s)\n", resolvedProfile.Spec.Lifecycle.TTL, ttlExpiry.Format("15:04:05"))
+	}
 	fmt.Printf("Sandbox %s created successfully.\n", sandboxID)
 
 	// Step 14: Send lifecycle notification if operator email is configured.
