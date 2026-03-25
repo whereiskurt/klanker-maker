@@ -102,6 +102,10 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **BUDG-09**: `km status <sandbox-id>` shows current spend vs budget for both compute and AI pools, including per-model AI breakdown
 - [ ] **BUDG-10**: AI/token spend tracked for Anthropic API (Claude Code) calls via `api.anthropic.com`; http-proxy sidecar intercepts `POST /v1/messages` responses (both non-streaming and SSE streaming), extracts `usage.input_tokens`/`usage.output_tokens`, prices against Anthropic's published model rates, and increments DynamoDB budget record using the same `IncrementAISpend` path as Bedrock metering
 
+### Operator Experience
+
+- [ ] **OPER-01**: All terragrunt-calling CLI commands (`km create`, `km destroy`, `km init`, `km uninit`) suppress raw terragrunt/terraform output by default — show step-level summaries instead; `--verbose` flag restores full output streaming; errors and warnings always shown regardless of mode
+
 ## v2 Requirements
 
 Deferred to future release. Tracked but not in current roadmap.
@@ -216,6 +220,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | BUDG-07 | Phase 19 | Complete |
 | BUDG-08 | Phase 19 | Complete |
 | BUDG-10 | Phase 20 | Pending |
+| OPER-01 | Phase 20 | Pending |
 | BUDG-09 | Phase 6 | Complete |
 | PROV-06 | Phase 7 | Complete |
 | OBSV-07 | Phase 7 | Complete |

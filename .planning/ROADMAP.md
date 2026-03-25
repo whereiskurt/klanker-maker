@@ -492,11 +492,11 @@ Plans:
 - [ ] 19-01-PLAN.md — Wire budget-enforcer dependency block to ec2spot module (BUDG-07)
 - [ ] 19-02-PLAN.md — Fix EC2 resume tag filter key mismatch (BUDG-08)
 
-### Phase 20: Anthropic API Metering — Claude Code AI spend tracking via http-proxy
+### Phase 20: Anthropic API Metering + Terragrunt Output Suppression
 
-**Goal:** Extend the http-proxy sidecar's AI spend metering to intercept Anthropic API calls (`api.anthropic.com/v1/messages`) in addition to Bedrock. Sandboxes running Claude Code get the same per-token budget tracking, threshold warnings, and hard enforcement (proxy 403) as Bedrock workloads — using the existing `IncrementAISpend` → DynamoDB path.
+**Goal:** Two improvements: (1) Extend the http-proxy sidecar's AI spend metering to intercept Anthropic API calls (`api.anthropic.com/v1/messages`) in addition to Bedrock — sandboxes running Claude Code get the same per-token budget tracking, threshold warnings, and hard enforcement (proxy 403) as Bedrock workloads. (2) Suppress terragrunt/terraform output by default across all CLI commands — show only step summaries unless `--verbose` is passed.
 
-**Requirements:** BUDG-10
+**Requirements:** BUDG-10, OPER-01
 **Success Criteria** (what must be TRUE):
   1. http-proxy sidecar detects outbound requests to `api.anthropic.com/v1/messages` and intercepts the response
   2. For non-streaming responses, proxy extracts `usage.input_tokens` and `usage.output_tokens` from the JSON body and increments DynamoDB AI spend via `IncrementAISpend`
@@ -505,6 +505,9 @@ Plans:
   5. `km status` AI breakdown shows Anthropic API spend alongside Bedrock spend (same per-model format)
   6. At 100% AI budget, proxy returns 403 for Anthropic API calls (same enforcement as Bedrock)
   7. Unit tests verify Anthropic response parsing for both streaming and non-streaming formats
+  8. `km create`, `km destroy`, `km init`, and `km uninit` suppress terragrunt/terraform output by default — show step-level summaries (e.g., "Applying network... done", "Destroying ttl-handler... done") instead of raw HCL output
+  9. `--verbose` flag on all terragrunt-calling commands restores full terragrunt output streaming to stdout/stderr
+  10. Errors and warnings from terragrunt are always shown regardless of verbose mode
 
 **Depends on:** Phase 19 (budget enforcement wiring must work first)
 **Plans:** 0 plans
