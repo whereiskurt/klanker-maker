@@ -329,7 +329,7 @@ func checkSCP(ctx context.Context, client OrgsListPoliciesAPI, accountID string)
 			return CheckResult{
 				Name:    "SCP (Sandbox Containment)",
 				Status:  CheckWarn,
-				Message: "cannot verify SCP from application account (requires management account credentials)",
+				Message: "cannot verify SCP (Organizations API requires km-org-admin role in management account)",
 			}
 		}
 		return CheckResult{
@@ -837,11 +837,11 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkKMSKey(ctx, kmsClient, "km-platform")
 	})
 
-	// SCP check — uses management account ID.
+	// SCP check — the SCP is attached to the application account, queried via Organizations API.
 	orgsClient := deps.OrgsClient
-	mgmtAccount := cfg.GetManagementAccountID()
+	appAccount := cfg.GetApplicationAccountID()
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkSCP(ctx, orgsClient, mgmtAccount)
+		return checkSCP(ctx, orgsClient, appAccount)
 	})
 
 	// GitHub config check.
@@ -926,8 +926,17 @@ func initRealDeps(ctx context.Context, cfg DoctorConfigProvider) *DoctorDeps {
 	deps.KMSClient = kms.NewFromConfig(awsCfg)
 	deps.SSMReadClient = ssm.NewFromConfig(awsCfg)
 
-	// Organizations client (for SCP check) — requires management account creds.
-	deps.OrgsClient = organizations.NewFromConfig(awsCfg)
+	// Organizations client (for SCP check) — try management account profile first,
+	// fall back to current profile (will likely fail with AccessDenied, demoted to warning).
+	mgmtCfg, mgmtErr := config.LoadDefaultConfig(ctx,
+		config.WithSharedConfigProfile("klanker-management"),
+		config.WithRegion("us-east-1"),
+	)
+	if mgmtErr == nil {
+		deps.OrgsClient = organizations.NewFromConfig(mgmtCfg)
+	} else {
+		deps.OrgsClient = organizations.NewFromConfig(awsCfg)
+	}
 
 	// Lambda and SES clients for regional infra checks.
 	deps.LambdaClient = lambda.NewFromConfig(awsCfg)
