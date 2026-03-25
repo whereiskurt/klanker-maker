@@ -26,11 +26,8 @@ func TestGenerateBudgetEnforcerHCL_EC2(t *testing.T) {
 		"find_in_parent_folders",         // standard Terragrunt include pattern
 		"remote_state",                   // S3 backend declaration
 		"sandboxes/sb-ec2test1/budget-enforcer/terraform.tfstate", // per-sandbox state key
-		`dependency "sandbox"`,           // dependency block present
-		"mock_outputs",                   // graceful degradation on first apply
-		"instance_id",                    // EC2 instance ID wired from dependency
-		"role_arn",                       // IAM role ARN wired from dependency
-		"dependency.sandbox.outputs",     // reference to dependency outputs
+		"role_arn",                       // IAM role ARN constructed from sandbox_id + region
+		"km-ec2spot-ssm",                // role name pattern in constructed ARN
 	}
 	for _, want := range checks {
 		if !strings.Contains(hcl, want) {
@@ -56,8 +53,7 @@ func TestGenerateBudgetEnforcerHCL_ECS(t *testing.T) {
 		"budget_enforcer_inputs",
 		"build/budget-enforcer.zip",      // path matches Makefile build-lambdas output
 		"sandboxes/sb-ecstest2/budget-enforcer/terraform.tfstate",
-		`dependency "sandbox"`,           // dependency block present
-		"mock_outputs",                   // graceful degradation on first apply
+		"role_arn",                       // IAM role ARN constructed
 	}
 	for _, want := range checks {
 		if !strings.Contains(hcl, want) {

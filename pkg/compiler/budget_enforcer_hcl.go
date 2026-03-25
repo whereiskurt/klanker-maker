@@ -38,17 +38,6 @@ include "root" {
   path = find_in_parent_folders("root.hcl")
 }
 
-dependency "sandbox" {
-  config_path = "${get_terragrunt_dir()}/.."
-
-  mock_outputs = {
-    ec2spot_instances         = {}
-    iam_instance_profile_name = ""
-    iam_role_arn              = ""
-  }
-  mock_outputs_allowed_on_destroy = true
-}
-
 # Override remote_state key to isolate this sandbox's budget-enforcer state.
 remote_state {
   backend = "s3"
@@ -83,9 +72,8 @@ inputs = merge(
     email_domain       = "sandboxes.${local.site_vars.locals.site.domain}"
     operator_email     = get_env("KM_OPERATOR_EMAIL", "")
 
-    # Wired from ec2spot module outputs via dependency block
-    instance_id = try(values(dependency.sandbox.outputs.ec2spot_instances)[0].instance_id, "")
-    role_arn    = dependency.sandbox.outputs.iam_role_arn
+    # IAM role ARN constructed from sandbox_id + region (matches ec2spot module naming)
+    role_arn    = "arn:aws:iam::${local.site_vars.locals.accounts.application}:role/km-ec2spot-ssm-${local.be_inputs.sandbox_id}-${local.site_vars.locals.region.label}"
   }
 )
 `
