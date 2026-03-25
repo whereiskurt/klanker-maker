@@ -262,9 +262,9 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	}
 
 	// Determine artifact bucket for S3 operations.
-	artifactBucket := os.Getenv("KM_ARTIFACTS_BUCKET")
+	artifactBucket := cfg.ArtifactsBucket
 	if artifactBucket == "" {
-		artifactBucket = "km-sandbox-artifacts-ea554771"
+		artifactBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
 	}
 
 	s3Client := s3.NewFromConfig(awsCfg)

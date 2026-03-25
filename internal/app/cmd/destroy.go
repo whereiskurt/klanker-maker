@@ -182,9 +182,9 @@ locals {
 	// Step 7: Attempt to load sandbox profile from S3 for artifact upload.
 	// Profile is stored during km create at artifacts/{sandbox-id}/.km-profile.yaml.
 	// If unavailable (missing or S3 unreachable), artifact upload is skipped with a warning.
-	artifactBucket := os.Getenv("KM_ARTIFACTS_BUCKET")
+	artifactBucket := cfg.ArtifactsBucket
 	if artifactBucket == "" {
-		artifactBucket = "km-sandbox-artifacts-ea554771"
+		artifactBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
 	}
 	s3Client := s3.NewFromConfig(awsCfg)
 	var sandboxProfile *profilepkg.SandboxProfile

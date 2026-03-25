@@ -566,11 +566,8 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 	if network != nil && network.EmailDomain != "" {
 		emailDomain = network.EmailDomain
 	}
-	const defaultArtifactBucket = "km-sandbox-artifacts-ea554771"
 	artifactBucket := os.Getenv("KM_ARTIFACTS_BUCKET")
-	if artifactBucket == "" {
-		artifactBucket = defaultArtifactBucket
-	}
+	// No hardcoded fallback — artifacts_bucket should be set via km-config.yaml or env var.
 
 	hasBudget, computeLimit, aiLimit, warningThreshold := budgetHCLFields(p)
 

@@ -297,7 +297,7 @@ func main() {
 
 	bucket := os.Getenv("KM_ARTIFACTS_BUCKET")
 	if bucket == "" {
-		bucket = "km-sandbox-artifacts-ea554771"
+		bucket = "km-artifacts" // fallback; should be set via Lambda env var
 	}
 	domain := os.Getenv("KM_EMAIL_DOMAIN")
 	if domain == "" {
