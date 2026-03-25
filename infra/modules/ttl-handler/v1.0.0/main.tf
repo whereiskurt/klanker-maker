@@ -160,6 +160,9 @@ resource "aws_iam_role_policy" "terraform_destroy" {
           "ec2:DescribeNetworkInterfaces",
           "ec2:DescribeVolumes",
           "ec2:DescribeInstanceTypes",
+          "ec2:DescribeInstanceAttribute",
+          "ec2:ModifyInstanceAttribute",
+          "ec2:DescribeInstanceCreditSpecifications",
         ]
         Resource = "*"
       },
