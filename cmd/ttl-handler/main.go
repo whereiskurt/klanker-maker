@@ -160,8 +160,9 @@ func downloadProfileFromS3(ctx context.Context, client S3GetAPI, bucket, sandbox
 // terraformDestroy runs `terraform destroy -auto-approve` against the sandbox's
 // S3-backed state. The terraform binary is bundled alongside bootstrap in the Lambda zip.
 func terraformDestroy(ctx context.Context, h *TTLHandler, sandboxID string) error {
-	// Lambda writable directory
+	// Lambda writable directory — clean up any leftovers from previous failed runs
 	workDir := filepath.Join("/tmp", "tf-"+sandboxID)
+	os.RemoveAll(workDir)
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return fmt.Errorf("create work dir: %w", err)
 	}
