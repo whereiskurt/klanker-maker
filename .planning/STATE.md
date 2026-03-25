@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 21-01-PLAN.md
-last_updated: "2026-03-25T21:13:25.579Z"
+stopped_at: Completed 21-03-PLAN.md
+last_updated: "2026-03-25T21:19:40.280Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 21
   completed_phases: 20
   total_plans: 74
-  completed_plans: 72
+  completed_plans: 73
   percent: 0
 ---
 
@@ -121,6 +121,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 20-anthropic-api-metering-claude-code-ai-spend-tracking P02 | 302 | 2 tasks | 7 files |
 | Phase 21 P02 | 452s | 2 tasks | 7 files |
 | Phase 21-bug-fixes-and-mini-features-budget-precision-polish-small-enhancements P01 | 706s | 2 tasks | 10 files |
+| Phase 21-bug-fixes-and-mini-features-budget-precision-polish-small-enhancements P03 | 249s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -317,6 +318,8 @@ Recent decisions affecting current work:
 - [Phase 21-bug-fixes-and-mini-features-budget-precision-polish-small-enhancements]: Budget display uses 4 decimal places (%.4f) to show sub-penny AI charges correctly
 - [Phase 21-bug-fixes-and-mini-features-budget-precision-polish-small-enhancements]: ExportSandboxLogs is fire-and-forget (non-fatal): deletion proceeds immediately after async CreateExportTask
 - [Phase 21-bug-fixes-and-mini-features-budget-precision-polish-small-enhancements]: S3 bucket policy for logs.amazonaws.com restricts by aws:SourceAccount for security
+- [Phase 21-bug-fixes-and-mini-features-budget-precision-polish-small-enhancements]: SendApprovalRequest uses sandboxEmailAddress helper (domain already contains subdomain)
+- [Phase 21-bug-fixes-and-mini-features-budget-precision-polish-small-enhancements]: PollForApproval skips unreadable messages; no signature verification for external operator replies
 
 ### Roadmap Evolution
 
@@ -343,6 +346,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-25T21:13:25.576Z
-Stopped at: Completed 21-01-PLAN.md
+Last session: 2026-03-25T21:19:40.277Z
+Stopped at: Completed 21-03-PLAN.md
 Resume file: None
