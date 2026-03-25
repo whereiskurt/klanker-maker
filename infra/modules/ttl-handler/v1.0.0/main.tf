@@ -195,9 +195,10 @@ resource "aws_lambda_function" "ttl_handler" {
   role          = aws_iam_role.ttl_handler.arn
 
   # Go Lambda: custom runtime on Amazon Linux 2023, arm64 for Graviton cost efficiency
-  runtime  = "provided.al2023"
-  handler  = "bootstrap"
-  filename = var.lambda_zip_path
+  runtime          = "provided.al2023"
+  handler          = "bootstrap"
+  filename         = var.lambda_zip_path
+  source_code_hash = filebase64sha256(var.lambda_zip_path)
 
   # 15-minute timeout: terraform init + destroy can take several minutes
   timeout     = 900
