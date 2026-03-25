@@ -18,11 +18,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
@@ -44,10 +44,11 @@ type S3GetAPI interface {
 	GetObject(ctx context.Context, input *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 }
 
-// S3GetPutAPI combines read and write S3 operations needed by the handler.
+// S3GetPutAPI combines read, write, and delete S3 operations needed by the handler.
 type S3GetPutAPI interface {
 	S3GetAPI
 	awspkg.S3PutAPI
+	awspkg.S3DeleteAPI
 }
 
 // SESV2API re-exports the narrow SES interface from pkg/aws for use in this package.
@@ -62,11 +63,14 @@ type TTLHandler struct {
 	SESClient     SESV2API
 	Scheduler     SchedulerAPI
 	Bucket        string
+	StateBucket   string // S3 bucket holding terraform state
+	StatePrefix   string // state key prefix (e.g. "tf-km")
+	Region        string // AWS region (e.g. "us-east-1")
+	RegionLabel   string // short region label (e.g. "use1")
 	OperatorEmail string
 	Domain        string
 	// TeardownFunc destroys the sandbox resources after TTL expiry or idle detection.
 	// If nil, teardown is skipped (backward compatible with existing tests).
-	// The closure captures AWS clients created in main() and calls DestroySandboxResources.
 	TeardownFunc func(ctx context.Context, sandboxID string) error
 }
 
@@ -153,6 +157,134 @@ func downloadProfileFromS3(ctx context.Context, client S3GetAPI, bucket, sandbox
 	return io.ReadAll(resp.Body)
 }
 
+// terraformDestroy runs `terraform destroy -auto-approve` against the sandbox's
+// S3-backed state. The terraform binary is bundled alongside bootstrap in the Lambda zip.
+func terraformDestroy(ctx context.Context, h *TTLHandler, sandboxID string) error {
+	// Lambda writable directory
+	workDir := filepath.Join("/tmp", "tf-"+sandboxID)
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		return fmt.Errorf("create work dir: %w", err)
+	}
+	defer os.RemoveAll(workDir)
+
+	region := h.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+	regionLabel := h.RegionLabel
+	if regionLabel == "" {
+		regionLabel = "use1"
+	}
+	statePrefix := h.StatePrefix
+	if statePrefix == "" {
+		statePrefix = "tf-km"
+	}
+
+	// Determine the terraform module source from the state file.
+	// For now, assume ec2spot — the most common substrate.
+	// TODO: Read substrate from metadata.json to handle ECS sandboxes.
+	moduleSource := "ec2spot"
+
+	// State key: tf-km/use1/sandboxes/<sandbox-id>/terraform.tfstate
+	stateKey := fmt.Sprintf("%s/%s/sandboxes/%s/terraform.tfstate", statePrefix, regionLabel, sandboxID)
+
+	// Write a minimal main.tf that references the same module and backend.
+	// terraform destroy only needs the module source and state — it reads
+	// resource addresses from state and destroys them.
+	mainTF := fmt.Sprintf(`
+terraform {
+  required_version = ">= 1.6.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+  }
+  backend "s3" {
+    bucket         = %q
+    key            = %q
+    region         = %q
+    encrypt        = true
+    dynamodb_table = %q
+  }
+}
+
+provider "aws" {
+  region = %q
+}
+
+module "sandbox" {
+  source = "./module"
+}
+`, h.StateBucket, stateKey, region,
+		statePrefix+"-locks-"+regionLabel, region)
+
+	if err := os.WriteFile(filepath.Join(workDir, "main.tf"), []byte(mainTF), 0o644); err != nil {
+		return fmt.Errorf("write main.tf: %w", err)
+	}
+
+	// Download the module source from the Lambda's bundled modules directory.
+	// The Lambda zip includes infra/modules/ alongside the bootstrap binary.
+	// In Lambda, the binary runs from /var/task/ — modules are at /var/task/infra/modules/
+	bundledModule := filepath.Join("/var/task", "infra", "modules", moduleSource, "v1.0.0")
+	if _, err := os.Stat(bundledModule); os.IsNotExist(err) {
+		// Fallback: module not bundled, try direct state-only destroy
+		log.Warn().Str("module", bundledModule).Msg("module not bundled in Lambda; attempting state-only destroy")
+		return terraformDestroyStateOnly(ctx, workDir)
+	}
+
+	// Symlink the module so terraform can read it
+	if err := os.Symlink(bundledModule, filepath.Join(workDir, "module")); err != nil {
+		return fmt.Errorf("symlink module: %w", err)
+	}
+
+	// terraform init
+	log.Info().Str("sandbox_id", sandboxID).Msg("running terraform init")
+	initCmd := exec.CommandContext(ctx, "/var/task/terraform", "init", "-no-color", "-input=false")
+	initCmd.Dir = workDir
+	if out, err := initCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("terraform init: %s: %w", string(out), err)
+	}
+
+	// terraform destroy
+	log.Info().Str("sandbox_id", sandboxID).Msg("running terraform destroy")
+	destroyCmd := exec.CommandContext(ctx, "/var/task/terraform", "destroy", "-auto-approve", "-no-color", "-input=false")
+	destroyCmd.Dir = workDir
+	out, err := destroyCmd.CombinedOutput()
+	log.Info().Str("sandbox_id", sandboxID).Str("output", string(out)).Msg("terraform destroy output")
+	if err != nil {
+		return fmt.Errorf("terraform destroy: %s: %w", string(out), err)
+	}
+
+	// Clean up S3 metadata so km list no longer shows this sandbox
+	if h.StateBucket != "" {
+		if delErr := awspkg.DeleteSandboxMetadata(ctx, h.S3Client, h.StateBucket, sandboxID); delErr != nil {
+			log.Warn().Err(delErr).Str("sandbox_id", sandboxID).Msg("failed to delete metadata (non-fatal)")
+		}
+	}
+
+	return nil
+}
+
+// terraformDestroyStateOnly runs terraform destroy without module source — relies on
+// state containing enough info for terraform to identify and destroy resources.
+func terraformDestroyStateOnly(ctx context.Context, workDir string) error {
+	initCmd := exec.CommandContext(ctx, "/var/task/terraform", "init", "-no-color", "-input=false")
+	initCmd.Dir = workDir
+	if out, err := initCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("terraform init (state-only): %s: %w", string(out), err)
+	}
+
+	destroyCmd := exec.CommandContext(ctx, "/var/task/terraform", "destroy", "-auto-approve", "-no-color", "-input=false")
+	destroyCmd.Dir = workDir
+	out, err := destroyCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("terraform destroy (state-only): %s: %w", string(out), err)
+	}
+	log.Info().Str("output", string(out)).Msg("terraform destroy (state-only) output")
+	return nil
+}
+
 // main constructs a TTLHandler with real AWS clients and registers it with the Lambda runtime.
 func main() {
 	ctx := context.Background()
@@ -172,26 +304,35 @@ func main() {
 		domain = "sandboxes.klankermaker.ai"
 	}
 
-	// Real S3 client that satisfies both GetObject and PutObject.
-	s3Client := s3.NewFromConfig(awsCfg)
+	region := os.Getenv("AWS_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
 
-	// AWS SDK clients for sandbox resource teardown (PROV-05/PROV-06).
-	// Lambda execution role needs tag:GetResources, ec2:TerminateInstances,
-	// ec2:DescribeInstances — these are added in the Terraform module.
-	tagClient := resourcegroupstaggingapi.NewFromConfig(awsCfg)
-	ec2Client := ec2.NewFromConfig(awsCfg)
+	s3Client := s3.NewFromConfig(awsCfg)
 
 	h := &TTLHandler{
 		S3Client:      s3Client,
 		SESClient:     sesv2.NewFromConfig(awsCfg),
 		Scheduler:     scheduler.NewFromConfig(awsCfg),
 		Bucket:        bucket,
+		StateBucket:   os.Getenv("KM_STATE_BUCKET"),
+		StatePrefix:   os.Getenv("KM_STATE_PREFIX"),
+		Region:        region,
+		RegionLabel:   os.Getenv("KM_REGION_LABEL"),
 		OperatorEmail: os.Getenv("KM_OPERATOR_EMAIL"),
 		Domain:        domain,
-		// TeardownFunc calls DestroySandboxResources via AWS SDK (no terragrunt subprocess).
-		TeardownFunc: func(ctx context.Context, sandboxID string) error {
-			return awspkg.DestroySandboxResources(ctx, tagClient, ec2Client, sandboxID)
-		},
+		TeardownFunc: nil, // set below
+	}
+
+	// Use terraform-based teardown if terraform binary is bundled.
+	if _, err := os.Stat("/var/task/terraform"); err == nil {
+		h.TeardownFunc = func(ctx context.Context, sandboxID string) error {
+			return terraformDestroy(ctx, h, sandboxID)
+		}
+		log.Info().Msg("terraform binary found — using terraform destroy for teardown")
+	} else {
+		log.Warn().Msg("terraform binary not found — teardown will be skipped")
 	}
 
 	lambda.Start(h.HandleTTLEvent)

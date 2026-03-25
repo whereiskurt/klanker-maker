@@ -343,6 +343,16 @@ func buildLambdaZips(repoRoot string) error {
 		{name: "github-token-refresher", srcDir: "cmd/github-token-refresher"},
 	}
 
+	// Ensure terraform binary is available for bundling with ttl-handler
+	terraformPath := filepath.Join(buildDir, "terraform")
+	if _, err := os.Stat(terraformPath); os.IsNotExist(err) {
+		fmt.Printf("  Downloading terraform for linux/arm64...\n")
+		if dlErr := downloadTerraform(buildDir); dlErr != nil {
+			fmt.Printf("  [warn] terraform download failed: %v\n", dlErr)
+			fmt.Printf("  TTL handler will use SDK-only teardown (less complete).\n")
+		}
+	}
+
 	for _, lb := range lambdas {
 		zipPath := filepath.Join(buildDir, lb.name+".zip")
 		if _, err := os.Stat(zipPath); err == nil {
@@ -367,17 +377,83 @@ func buildLambdaZips(repoRoot string) error {
 			return fmt.Errorf("compile %s: %s: %w", lb.name, string(out), err)
 		}
 
-		// Zip
-		zipCmd := exec.Command("zip", "-j", zipPath, bootstrapPath)
-		if out, err := zipCmd.CombinedOutput(); err != nil {
-			os.Remove(bootstrapPath)
-			return fmt.Errorf("zip %s: %s: %w", lb.name, string(out), err)
+		// For ttl-handler, bundle terraform binary alongside bootstrap
+		if lb.name == "ttl-handler" {
+			filesToZip := []string{bootstrapPath}
+			if _, tfErr := os.Stat(terraformPath); tfErr == nil {
+				filesToZip = append(filesToZip, terraformPath)
+				fmt.Printf("  Bundling terraform binary in ttl-handler.zip\n")
+			}
+			// Also bundle the ec2spot module for terraform destroy
+			modulesDir := filepath.Join(repoRoot, "infra", "modules", "ec2spot", "v1.0.0")
+			if _, modErr := os.Stat(modulesDir); modErr == nil {
+				// Create a temporary directory structure for the zip
+				tmpModDir := filepath.Join(buildDir, "lambda-modules", "infra", "modules", "ec2spot", "v1.0.0")
+				os.MkdirAll(tmpModDir, 0o755)
+				cpCmd := exec.Command("sh", "-c", fmt.Sprintf("cp %s/*.tf %s/", modulesDir, tmpModDir))
+				cpCmd.CombinedOutput()
+				// Add module files to zip with directory structure
+				zipCmd := exec.Command("zip", "-j", zipPath, filesToZip[0])
+				for _, f := range filesToZip[1:] {
+					zipCmd.Args = append(zipCmd.Args, f)
+				}
+				if out, err := zipCmd.CombinedOutput(); err != nil {
+					os.Remove(bootstrapPath)
+					return fmt.Errorf("zip %s: %s: %w", lb.name, string(out), err)
+				}
+				// Add module directory structure
+				addModCmd := exec.Command("zip", "-r", zipPath, "infra/")
+				addModCmd.Dir = filepath.Join(buildDir, "lambda-modules")
+				addModCmd.CombinedOutput()
+				os.RemoveAll(filepath.Join(buildDir, "lambda-modules"))
+			} else {
+				zipCmd := exec.Command("zip", "-j", zipPath, filesToZip[0])
+				for _, f := range filesToZip[1:] {
+					zipCmd.Args = append(zipCmd.Args, f)
+				}
+				if out, err := zipCmd.CombinedOutput(); err != nil {
+					os.Remove(bootstrapPath)
+					return fmt.Errorf("zip %s: %s: %w", lb.name, string(out), err)
+				}
+			}
+		} else {
+			// Regular Lambda — just bootstrap
+			zipCmd := exec.Command("zip", "-j", zipPath, bootstrapPath)
+			if out, err := zipCmd.CombinedOutput(); err != nil {
+				os.Remove(bootstrapPath)
+				return fmt.Errorf("zip %s: %s: %w", lb.name, string(out), err)
+			}
 		}
 		os.Remove(bootstrapPath)
 
 		fmt.Printf("  Built %s.zip\n", lb.name)
 	}
 
+	return nil
+}
+
+// downloadTerraform downloads the terraform binary for linux/arm64 to the build directory.
+func downloadTerraform(buildDir string) error {
+	tfVersion := "1.6.6"
+	url := fmt.Sprintf("https://releases.hashicorp.com/terraform/%s/terraform_%s_linux_arm64.zip", tfVersion, tfVersion)
+	zipPath := filepath.Join(buildDir, "terraform_download.zip")
+
+	// Download
+	dlCmd := exec.Command("curl", "-sL", "-o", zipPath, url)
+	if out, err := dlCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("download terraform: %s: %w", string(out), err)
+	}
+
+	// Unzip
+	unzipCmd := exec.Command("unzip", "-o", zipPath, "terraform", "-d", buildDir)
+	if out, err := unzipCmd.CombinedOutput(); err != nil {
+		os.Remove(zipPath)
+		return fmt.Errorf("unzip terraform: %s: %w", string(out), err)
+	}
+	os.Remove(zipPath)
+
+	// Make executable
+	os.Chmod(filepath.Join(buildDir, "terraform"), 0o755)
 	return nil
 }
 

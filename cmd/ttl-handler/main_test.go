@@ -38,6 +38,10 @@ func (m *mockS3GetPutAPI) PutObject(ctx context.Context, input *s3.PutObjectInpu
 	return &s3.PutObjectOutput{}, m.putErr
 }
 
+func (m *mockS3GetPutAPI) DeleteObject(ctx context.Context, input *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+	return &s3.DeleteObjectOutput{}, nil
+}
+
 // mockSESAPI satisfies SESV2API.
 type mockSESAPI struct {
 	sendCalled bool

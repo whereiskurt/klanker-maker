@@ -21,6 +21,24 @@ variable "operator_email" {
 }
 
 variable "lambda_zip_path" {
-  description = "Path to the compiled Go Lambda bootstrap zip file"
+  description = "Path to the compiled Go Lambda bootstrap zip file (may include bundled terraform binary)"
   type        = string
+}
+
+variable "state_bucket" {
+  description = "S3 bucket holding Terraform state (for terraform-based teardown)"
+  type        = string
+  default     = ""
+}
+
+variable "state_prefix" {
+  description = "Terraform state key prefix (e.g. 'tf-km')"
+  type        = string
+  default     = "tf-km"
+}
+
+variable "region_label" {
+  description = "Short region label (e.g. 'use1') used in state key construction"
+  type        = string
+  default     = "use1"
 }

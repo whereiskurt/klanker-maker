@@ -101,6 +101,88 @@ resource "aws_iam_role_policy" "scheduler_delete" {
   })
 }
 
+# Policy: Terraform destroy permissions — allows the Lambda to run terraform destroy
+# on sandbox state. Scoped to km-* resources where possible.
+resource "aws_iam_role_policy" "terraform_destroy" {
+  name = "km-ttl-handler-terraform-destroy"
+  role = aws_iam_role.ttl_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "TerraformStateAccess"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket",
+        ]
+        Resource = [
+          "arn:aws:s3:::${var.state_bucket}",
+          "arn:aws:s3:::${var.state_bucket}/*",
+        ]
+      },
+      {
+        Sid    = "TerraformLockTable"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:DeleteItem",
+        ]
+        Resource = "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.state_prefix}-locks-*"
+      },
+      {
+        Sid    = "EC2SandboxDestroy"
+        Effect = "Allow"
+        Action = [
+          "ec2:TerminateInstances",
+          "ec2:DescribeInstances",
+          "ec2:CancelSpotInstanceRequests",
+          "ec2:DescribeSpotInstanceRequests",
+          "ec2:DeleteSecurityGroup",
+          "ec2:RevokeSecurityGroupEgress",
+          "ec2:RevokeSecurityGroupIngress",
+          "ec2:DescribeSecurityGroups",
+          "ec2:DescribeSecurityGroupRules",
+          "ec2:DeleteTags",
+          "ec2:DescribeTags",
+          "ec2:DescribeVpcs",
+          "ec2:DescribeSubnets",
+          "ec2:DescribeAvailabilityZones",
+          "ec2:DescribeImages",
+          "ec2:DescribeSpotPriceHistory",
+          "ec2:DescribeNetworkInterfaces",
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "IAMSandboxDestroy"
+        Effect = "Allow"
+        Action = [
+          "iam:DeleteRole",
+          "iam:DeleteRolePolicy",
+          "iam:DetachRolePolicy",
+          "iam:GetRole",
+          "iam:GetRolePolicy",
+          "iam:ListRolePolicies",
+          "iam:ListAttachedRolePolicies",
+          "iam:ListInstanceProfilesForRole",
+          "iam:RemoveRoleFromInstanceProfile",
+          "iam:DeleteInstanceProfile",
+          "iam:GetInstanceProfile",
+        ]
+        Resource = [
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/km-ec2spot-*",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/km-ec2spot-*",
+        ]
+      },
+    ]
+  })
+}
+
 # ============================================================
 # Lambda function: TTL handler (Go, provided.al2023, arm64)
 # ============================================================
@@ -115,9 +197,9 @@ resource "aws_lambda_function" "ttl_handler" {
   handler  = "bootstrap"
   filename = var.lambda_zip_path
 
-  # Generous timeout: artifact upload may take time for large sandboxes
-  timeout     = 300
-  memory_size = 256
+  # 15-minute timeout: terraform init + destroy can take several minutes
+  timeout     = 900
+  memory_size = 512
   architectures = ["arm64"]
 
   environment {
@@ -125,6 +207,9 @@ resource "aws_lambda_function" "ttl_handler" {
       KM_ARTIFACTS_BUCKET = var.artifact_bucket_name
       KM_EMAIL_DOMAIN     = var.email_domain
       KM_OPERATOR_EMAIL   = var.operator_email
+      KM_STATE_BUCKET     = var.state_bucket
+      KM_STATE_PREFIX     = var.state_prefix
+      KM_REGION_LABEL     = var.region_label
     }
   }
 

@@ -39,4 +39,7 @@ inputs = {
   email_domain         = "sandboxes.${local.site_vars.locals.site.domain}"
   operator_email       = get_env("KM_OPERATOR_EMAIL", "")
   lambda_zip_path      = "${local.repo_root}/build/ttl-handler.zip"
+  state_bucket         = local.site_vars.locals.backend.bucket
+  state_prefix         = local.site_vars.locals.site.tf_state_prefix
+  region_label         = local.region_label
 }
