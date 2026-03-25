@@ -2,8 +2,15 @@ package cmd
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -180,7 +187,19 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		fmt.Printf("  [skip] artifacts_bucket not configured\n")
 	}
 
-	// Step 3: Apply regional infrastructure
+	// Step 3: Ensure proxy CA cert+key in S3
+	fmt.Println()
+	fmt.Println("Ensuring proxy CA certificate...")
+	if cfg.ArtifactsBucket != "" {
+		if err := ensureProxyCACert(repoRoot, cfg.ArtifactsBucket); err != nil {
+			fmt.Printf("  [warn] Proxy CA setup failed: %v\n", err)
+			fmt.Printf("  MITM budget enforcement will use goproxy's default CA.\n")
+		}
+	} else {
+		fmt.Printf("  [skip] artifacts_bucket not configured\n")
+	}
+
+	// Step 4: Apply regional infrastructure
 	fmt.Println()
 	fmt.Println("Applying infrastructure...")
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
@@ -541,6 +560,89 @@ func buildAndUploadSidecars(repoRoot, bucket string) error {
 		}
 	}
 
+	return nil
+}
+
+// ensureProxyCACert generates a CA cert+key for the MITM proxy (if not already
+// in S3) and uploads both to s3://<bucket>/sidecars/km-proxy-ca.{crt,key}.
+// The cert is installed in sandboxes' system trust store at boot; the key is
+// passed to the proxy via KM_PROXY_CA_CERT so it can sign leaf certificates.
+func ensureProxyCACert(repoRoot, bucket string) error {
+	// Check if cert already exists in S3
+	checkCmd := exec.Command("aws", "s3", "ls",
+		fmt.Sprintf("s3://%s/sidecars/km-proxy-ca.crt", bucket),
+		"--profile", "klanker-terraform")
+	if out, err := checkCmd.CombinedOutput(); err == nil && len(out) > 0 {
+		fmt.Printf("  Proxy CA cert already exists in S3\n")
+		return nil
+	}
+
+	fmt.Printf("  Generating proxy CA cert+key...\n")
+
+	// Generate ECDSA P-256 private key
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return fmt.Errorf("generate CA key: %w", err)
+	}
+
+	// Create self-signed CA certificate (valid 5 years)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "km-platform-ca"},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(5 * 365 * 24 * time.Hour),
+		IsCA:         true,
+		KeyUsage:     x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return fmt.Errorf("create CA cert: %w", err)
+	}
+
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return fmt.Errorf("marshal CA key: %w", err)
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+
+	// Write to temp files for S3 upload
+	buildDir := filepath.Join(repoRoot, "build")
+	os.MkdirAll(buildDir, 0o755)
+
+	certPath := filepath.Join(buildDir, "km-proxy-ca.crt")
+	keyPath := filepath.Join(buildDir, "km-proxy-ca.key")
+	if err := os.WriteFile(certPath, certPEM, 0o644); err != nil {
+		return fmt.Errorf("write CA cert: %w", err)
+	}
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+		return fmt.Errorf("write CA key: %w", err)
+	}
+	defer os.Remove(certPath)
+	defer os.Remove(keyPath)
+
+	// Upload cert
+	fmt.Printf("  Uploading proxy CA cert to s3://%s/sidecars/km-proxy-ca.crt...\n", bucket)
+	uploadCert := exec.Command("aws", "s3", "cp", certPath,
+		fmt.Sprintf("s3://%s/sidecars/km-proxy-ca.crt", bucket),
+		"--profile", "klanker-terraform")
+	if out, err := uploadCert.CombinedOutput(); err != nil {
+		return fmt.Errorf("upload CA cert: %s: %w", string(out), err)
+	}
+
+	// Upload key
+	fmt.Printf("  Uploading proxy CA key to s3://%s/sidecars/km-proxy-ca.key...\n", bucket)
+	uploadKey := exec.Command("aws", "s3", "cp", keyPath,
+		fmt.Sprintf("s3://%s/sidecars/km-proxy-ca.key", bucket),
+		"--profile", "klanker-terraform")
+	if out, err := uploadKey.CombinedOutput(); err != nil {
+		return fmt.Errorf("upload CA key: %s: %w", string(out), err)
+	}
+
+	fmt.Printf("  Proxy CA cert+key generated and uploaded\n")
 	return nil
 }
 
