@@ -249,11 +249,15 @@ locals {
 		var stderrBuf strings.Builder
 		err := runner.DestroyWithStderr(dCtx, sandboxDir, &stderrBuf)
 		if err != nil && strings.Contains(stderrBuf.String(), "Error acquiring the state lock") {
-			fmt.Printf("\nState lock detected. This is usually a stale lock from a failed Lambda or previous operation.\n")
-			fmt.Printf("Clear lock and retry destroy? [y/N] ")
-			var answer string
-			fmt.Scanln(&answer)
-			if answer == "y" || answer == "Y" || answer == "yes" {
+			shouldClear := force
+			if !shouldClear {
+				fmt.Printf("\nState lock detected. This is usually a stale lock from a failed Lambda or previous operation.\n")
+				fmt.Printf("Clear lock and retry destroy? [y/N] ")
+				var answer string
+				fmt.Scanln(&answer)
+				shouldClear = answer == "y" || answer == "Y" || answer == "yes"
+			}
+			if shouldClear {
 				fmt.Printf("Retrying destroy with -lock=false...\n")
 				return runner.DestroyForceUnlock(dCtx, sandboxDir)
 			}
