@@ -35,3 +35,8 @@ output "iam_instance_profile_name" {
   description = "IAM instance profile name for EC2 instances"
   value       = try(aws_iam_instance_profile.ec2spot[0].name, "")
 }
+
+output "iam_role_arn" {
+  description = "IAM role ARN for EC2 spot instances (consumed by budget-enforcer dependency block)"
+  value       = try(aws_iam_role.ec2spot_ssm[0].arn, "")
+}
