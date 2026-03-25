@@ -117,15 +117,30 @@ func main() {
 		os.Exit(0)
 	}()
 
-	if err := auditlog.Process(ctx, os.Stdin, dest); err != nil {
-		log.Error().Err(err).Msg("audit-log: process error")
+	// Process stdin in a goroutine so the idle detector can keep running
+	// even when stdin is closed (no pipe) or EOF.
+	stdinDone := make(chan struct{})
+	go func() {
+		defer close(stdinDone)
+		if err := auditlog.Process(ctx, os.Stdin, dest); err != nil {
+			log.Error().Err(err).Msg("audit-log: process error")
+		}
+	}()
+
+	// If idle timeout is configured, block on context (idle detector keeps running).
+	// Otherwise, block on stdin EOF.
+	if idleTimeoutStr != "" {
+		log.Info().Msg("audit-log: idle detection active — staying alive after stdin EOF")
+		<-ctx.Done()
+	} else {
+		<-stdinDone
 	}
 
 	if err := dest.Flush(ctx); err != nil {
 		log.Error().Err(err).Msg("audit-log: final flush failed")
 	}
 
-	log.Info().Msg("audit-log: stdin closed, exiting")
+	log.Info().Msg("audit-log: exiting")
 }
 
 func envOr(key, fallback string) string {
