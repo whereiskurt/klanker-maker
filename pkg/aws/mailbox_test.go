@@ -200,7 +200,7 @@ func TestParseSignedMessage_ParsesHeaders(t *testing.T) {
 	rawMIME := buildTestMIME("sender@example.com", "recv@example.com", "Test subject",
 		"sb-sender01", body, sigB64, false)
 
-	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv01", pubKeyB64, []string{"*"})
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv01", pubKeyB64, []string{"*"}, "")
 	if err != nil {
 		t.Fatalf("ParseSignedMessage returned error: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestParseSignedMessage_SignatureOK_ValidSig(t *testing.T) {
 
 	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-sender02", body, sigB64, false)
 
-	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv02", pubKeyB64, []string{"*"})
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv02", pubKeyB64, []string{"*"}, "")
 	if err != nil {
 		t.Fatalf("ParseSignedMessage returned error: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestParseSignedMessage_SignatureOK_InvalidSig(t *testing.T) {
 
 	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-sender03", body, invalidSig, false)
 
-	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv03", pubKeyB64, []string{"*"})
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv03", pubKeyB64, []string{"*"}, "")
 	if err != nil {
 		t.Fatalf("ParseSignedMessage should not return error for invalid sig; got: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestParseSignedMessage_Plaintext_NoSignatureHeader(t *testing.T) {
 	pubKeyB64, _, _, _ := makeMailboxTestKeys(t)
 	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-sender04", "plain body", "", false)
 
-	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv04", pubKeyB64, []string{"*"})
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv04", pubKeyB64, []string{"*"}, "")
 	if err != nil {
 		t.Fatalf("ParseSignedMessage returned error for plaintext: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestParseSignedMessage_SenderNotOnAllowList_ReturnsError(t *testing.T) {
 	sigB64 := signBody(t, priv, body)
 	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-stranger", body, sigB64, false)
 
-	_, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv05", pubKeyB64, []string{"self"})
+	_, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv05", pubKeyB64, []string{"self"}, "")
 	if err == nil {
 		t.Fatal("expected error for sender not on allow-list, got nil")
 	}
@@ -289,7 +289,7 @@ func TestParseSignedMessage_SelfMail_AlwaysPermitted(t *testing.T) {
 	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-self01", body, sigB64, false)
 
 	// allowedSenders is empty — self-mail should bypass
-	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-self01", pubKeyB64, []string{})
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-self01", pubKeyB64, []string{}, "")
 	if err != nil {
 		t.Fatalf("ParseSignedMessage should permit self-mail; got error: %v", err)
 	}
@@ -304,11 +304,120 @@ func TestParseSignedMessage_EncryptedBody(t *testing.T) {
 	sigB64 := signBody(t, priv, body)
 	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-enc01", body, sigB64, true)
 
-	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv-enc", pubKeyB64, []string{"*"})
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv-enc", pubKeyB64, []string{"*"}, "")
 	if err != nil {
 		t.Fatalf("ParseSignedMessage returned error for encrypted body: %v", err)
 	}
 	if !msg.Encrypted {
 		t.Error("expected Encrypted=true when X-KM-Encrypted: true is present")
+	}
+}
+
+// ============================================================
+// Safe phrase tests
+// ============================================================
+
+func TestSafePhraseExtraction(t *testing.T) {
+	pubKeyB64, _, _, priv := makeMailboxTestKeys(t)
+	body := "Hello!\nKM-AUTH: secret123\nMore text here."
+	sigB64 := signBody(t, priv, body)
+	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-sp01", body, sigB64, false)
+
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv-sp", pubKeyB64, []string{"*"}, "")
+	if err != nil {
+		t.Fatalf("ParseSignedMessage returned error: %v", err)
+	}
+	if msg.SafePhrase != "secret123" {
+		t.Errorf("SafePhrase = %q; want %q", msg.SafePhrase, "secret123")
+	}
+}
+
+func TestSafePhraseMatch(t *testing.T) {
+	pubKeyB64, _, _, priv := makeMailboxTestKeys(t)
+	body := "KM-AUTH: correctphrase"
+	sigB64 := signBody(t, priv, body)
+	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-sp02", body, sigB64, false)
+
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv-sp2", pubKeyB64, []string{"*"}, "correctphrase")
+	if err != nil {
+		t.Fatalf("ParseSignedMessage returned error: %v", err)
+	}
+	if !msg.SafePhraseOK {
+		t.Error("expected SafePhraseOK=true when extracted phrase matches expected")
+	}
+	if msg.SafePhrase != "correctphrase" {
+		t.Errorf("SafePhrase = %q; want %q", msg.SafePhrase, "correctphrase")
+	}
+}
+
+func TestSafePhraseMismatch(t *testing.T) {
+	pubKeyB64, _, _, priv := makeMailboxTestKeys(t)
+	body := "KM-AUTH: wrongphrase"
+	sigB64 := signBody(t, priv, body)
+	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-sp03", body, sigB64, false)
+
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv-sp3", pubKeyB64, []string{"*"}, "expectedphrase")
+	if err != nil {
+		t.Fatalf("ParseSignedMessage returned error: %v", err)
+	}
+	if msg.SafePhraseOK {
+		t.Error("expected SafePhraseOK=false when extracted phrase does not match expected")
+	}
+}
+
+func TestSafePhraseAbsent(t *testing.T) {
+	pubKeyB64, _, _, priv := makeMailboxTestKeys(t)
+	body := "No auth phrase in this body."
+	sigB64 := signBody(t, priv, body)
+	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-sp04", body, sigB64, false)
+
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv-sp4", pubKeyB64, []string{"*"}, "someexpected")
+	if err != nil {
+		t.Fatalf("ParseSignedMessage returned error: %v", err)
+	}
+	if msg.SafePhrase != "" {
+		t.Errorf("SafePhrase = %q; want empty string when KM-AUTH absent", msg.SafePhrase)
+	}
+	if msg.SafePhraseOK {
+		t.Error("expected SafePhraseOK=false when KM-AUTH absent")
+	}
+}
+
+func TestSafePhraseEmptyExpected(t *testing.T) {
+	pubKeyB64, _, _, priv := makeMailboxTestKeys(t)
+	body := "KM-AUTH: somephrase"
+	sigB64 := signBody(t, priv, body)
+	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-sp05", body, sigB64, false)
+
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv-sp5", pubKeyB64, []string{"*"}, "")
+	if err != nil {
+		t.Fatalf("ParseSignedMessage returned error: %v", err)
+	}
+	// Even though KM-AUTH is present, SafePhraseOK should be false when expectedSafePhrase is ""
+	if msg.SafePhraseOK {
+		t.Error("expected SafePhraseOK=false when expectedSafePhrase is empty string")
+	}
+	// But SafePhrase itself should still be extracted
+	if msg.SafePhrase != "somephrase" {
+		t.Errorf("SafePhrase = %q; want %q (extraction still happens)", msg.SafePhrase, "somephrase")
+	}
+}
+
+func TestSafePhraseAtStartOfLine(t *testing.T) {
+	pubKeyB64, _, _, priv := makeMailboxTestKeys(t)
+	// Test KM-AUTH at start of line (after newline)
+	body := "Preamble text\nKM-AUTH: linestart\nTrailing text"
+	sigB64 := signBody(t, priv, body)
+	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-sp06", body, sigB64, false)
+
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-recv-sp6", pubKeyB64, []string{"*"}, "linestart")
+	if err != nil {
+		t.Fatalf("ParseSignedMessage returned error: %v", err)
+	}
+	if msg.SafePhrase != "linestart" {
+		t.Errorf("SafePhrase = %q; want %q for KM-AUTH after newline", msg.SafePhrase, "linestart")
+	}
+	if !msg.SafePhraseOK {
+		t.Error("expected SafePhraseOK=true for matching phrase at start of line")
 	}
 }

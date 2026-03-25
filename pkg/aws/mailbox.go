@@ -17,10 +17,15 @@ import (
 	"fmt"
 	"io"
 	"net/mail"
+	"regexp"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
+
+// kmAuthPattern matches "KM-AUTH: <phrase>" anywhere in an email body.
+// The (?m) flag makes ^ match at line boundaries.
+var kmAuthPattern = regexp.MustCompile(`(?m)KM-AUTH:\s*(\S+)`)
 
 // ErrSenderNotAllowed is returned by ParseSignedMessage when the message sender
 // is not on the receiver's allow-list and is not self-mail.
@@ -35,16 +40,18 @@ type MailboxS3API interface {
 
 // MailboxMessage holds the parsed content of a sandbox email message.
 type MailboxMessage struct {
-	MessageID   string // extracted from S3 key (last path segment)
-	S3Key       string // full S3 object key
-	From        string
-	To          string
-	Subject     string
-	Body        string // body string (ciphertext if Encrypted=true; caller must call DecryptFromSender separately)
-	SenderID    string // X-KM-Sender-ID header value
-	SignatureOK bool   // true if Ed25519 signature verified successfully
-	Encrypted   bool   // true if X-KM-Encrypted: true was present
-	Plaintext   bool   // true if no X-KM-Signature header (unsigned message)
+	MessageID    string // extracted from S3 key (last path segment)
+	S3Key        string // full S3 object key
+	From         string
+	To           string
+	Subject      string
+	Body         string // body string (ciphertext if Encrypted=true; caller must call DecryptFromSender separately)
+	SenderID     string // X-KM-Sender-ID header value
+	SignatureOK  bool   // true if Ed25519 signature verified successfully
+	Encrypted    bool   // true if X-KM-Encrypted: true was present
+	Plaintext    bool   // true if no X-KM-Signature header (unsigned message)
+	SafePhrase   string // extracted from body if "KM-AUTH: <phrase>" pattern found
+	SafePhraseOK bool   // true if SafePhrase matches expected value passed to ParseSignedMessage
 }
 
 // ListMailboxMessages lists all S3 object keys under the mail/ prefix for a sandbox.
@@ -115,9 +122,14 @@ func ReadMessage(ctx context.Context, client MailboxS3API, bucket, s3Key string)
 //   - Otherwise: MatchesAllowList(allowedSenders, senderID, "", receiverSandboxID).
 //     Returns ErrSenderNotAllowed if not matched.
 //
+// Safe phrase:
+//   - If body contains "KM-AUTH: <phrase>", SafePhrase is set to the extracted value.
+//   - If expectedSafePhrase is non-empty and matches SafePhrase, SafePhraseOK is set to true.
+//   - If expectedSafePhrase is empty, SafePhraseOK is always false (skip safe phrase checking).
+//
 // Note: Actual NaCl decryption is not performed here. When Encrypted=true, Body contains
 // the raw ciphertext and the caller must call DecryptFromSender separately.
-func ParseSignedMessage(rawMIME []byte, receiverSandboxID, pubKeyB64 string, allowedSenders []string) (*MailboxMessage, error) {
+func ParseSignedMessage(rawMIME []byte, receiverSandboxID, pubKeyB64 string, allowedSenders []string, expectedSafePhrase string) (*MailboxMessage, error) {
 	msg, err := mail.ReadMessage(bytes.NewReader(rawMIME))
 	if err != nil {
 		return nil, fmt.Errorf("parse MIME message: %w", err)
@@ -166,16 +178,28 @@ func ParseSignedMessage(rawMIME []byte, receiverSandboxID, pubKeyB64 string, all
 	// Encrypted flag
 	encrypted := encryptedHeader == "true"
 
+	// Safe phrase extraction: look for "KM-AUTH: <phrase>" in body
+	safePhrase := ""
+	safePhraseOK := false
+	if matches := kmAuthPattern.FindStringSubmatch(body); len(matches) == 2 {
+		safePhrase = matches[1]
+	}
+	if expectedSafePhrase != "" && safePhrase == expectedSafePhrase {
+		safePhraseOK = true
+	}
+
 	result := &MailboxMessage{
-		S3Key:       "",  // not set here — caller can set from ListMailboxMessages result
-		From:        from,
-		To:          to,
-		Subject:     subject,
-		Body:        body,
-		SenderID:    senderID,
-		SignatureOK: signatureOK,
-		Encrypted:   encrypted,
-		Plaintext:   plaintext,
+		S3Key:        "",  // not set here — caller can set from ListMailboxMessages result
+		From:         from,
+		To:           to,
+		Subject:      subject,
+		Body:         body,
+		SenderID:     senderID,
+		SignatureOK:  signatureOK,
+		Encrypted:    encrypted,
+		Plaintext:    plaintext,
+		SafePhrase:   safePhrase,
+		SafePhraseOK: safePhraseOK,
 	}
 
 	return result, nil
