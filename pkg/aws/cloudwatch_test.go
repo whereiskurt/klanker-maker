@@ -18,12 +18,15 @@ import (
 // Implements kmaws.CWLogsAPI for unit testing without real AWS calls.
 
 type mockCWLogsAPI struct {
-	createGroupErr  error
-	createStreamErr error
-	putEventsInput  *cloudwatchlogs.PutLogEventsInput
-	putEventsErr    error
-	getEventsOutput *cloudwatchlogs.GetLogEventsOutput
-	getEventsErr    error
+	createGroupErr   error
+	createStreamErr  error
+	putEventsInput   *cloudwatchlogs.PutLogEventsInput
+	putEventsErr     error
+	getEventsOutput  *cloudwatchlogs.GetLogEventsOutput
+	getEventsErr     error
+	exportTaskInput  *cloudwatchlogs.CreateExportTaskInput
+	exportTaskOutput *cloudwatchlogs.CreateExportTaskOutput
+	exportTaskErr    error
 }
 
 func (m *mockCWLogsAPI) CreateLogGroup(
@@ -73,6 +76,18 @@ func (m *mockCWLogsAPI) DeleteLogGroup(
 	_ ...func(*cloudwatchlogs.Options),
 ) (*cloudwatchlogs.DeleteLogGroupOutput, error) {
 	return &cloudwatchlogs.DeleteLogGroupOutput{}, nil
+}
+
+func (m *mockCWLogsAPI) CreateExportTask(
+	_ context.Context,
+	input *cloudwatchlogs.CreateExportTaskInput,
+	_ ...func(*cloudwatchlogs.Options),
+) (*cloudwatchlogs.CreateExportTaskOutput, error) {
+	m.exportTaskInput = input
+	if m.exportTaskOutput != nil {
+		return m.exportTaskOutput, m.exportTaskErr
+	}
+	return &cloudwatchlogs.CreateExportTaskOutput{}, m.exportTaskErr
 }
 
 // ---- Tests ----
@@ -178,6 +193,76 @@ func TestTailLogs_NoFollow(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "hello") {
 		t.Errorf("TailLogs output does not contain expected message: %q", buf.String())
+	}
+}
+
+// ---- ExportSandboxLogs tests ----
+
+// TestExportSandboxLogs_Success verifies that ExportSandboxLogs calls CreateExportTask
+// with the correct log group, destination bucket, prefix, and time range.
+func TestExportSandboxLogs_Success(t *testing.T) {
+	mock := &mockCWLogsAPI{}
+	err := kmaws.ExportSandboxLogs(context.Background(), mock, "sb-aabbccdd", "km-artifacts-bucket")
+	if err != nil {
+		t.Fatalf("ExportSandboxLogs returned error: %v", err)
+	}
+	if mock.exportTaskInput == nil {
+		t.Fatal("expected CreateExportTask to be called, but exportTaskInput is nil")
+	}
+
+	// Verify log group name follows convention
+	wantLogGroup := "/km/sandboxes/sb-aabbccdd/"
+	if got := *mock.exportTaskInput.LogGroupName; got != wantLogGroup {
+		t.Errorf("LogGroupName = %q, want %q", got, wantLogGroup)
+	}
+
+	// Verify destination bucket
+	wantBucket := "km-artifacts-bucket"
+	if got := *mock.exportTaskInput.Destination; got != wantBucket {
+		t.Errorf("Destination = %q, want %q", got, wantBucket)
+	}
+
+	// Verify destination prefix
+	wantPrefix := "logs/sb-aabbccdd"
+	if got := *mock.exportTaskInput.DestinationPrefix; got != wantPrefix {
+		t.Errorf("DestinationPrefix = %q, want %q", got, wantPrefix)
+	}
+
+	// Verify time range is set (non-zero)
+	if mock.exportTaskInput.From == nil || *mock.exportTaskInput.From == 0 {
+		t.Error("expected From time to be set to a past timestamp")
+	}
+	if mock.exportTaskInput.To == nil || *mock.exportTaskInput.To == 0 {
+		t.Error("expected To time to be set to current time")
+	}
+}
+
+// TestExportSandboxLogs_ResourceNotFound verifies that ExportSandboxLogs returns nil
+// when the log group does not exist (ResourceNotFoundException). No logs = nothing to export.
+func TestExportSandboxLogs_ResourceNotFound(t *testing.T) {
+	mock := &mockCWLogsAPI{
+		exportTaskErr: &types.ResourceNotFoundException{
+			Message: aws.String("log group does not exist"),
+		},
+	}
+	err := kmaws.ExportSandboxLogs(context.Background(), mock, "sb-notexist", "km-artifacts-bucket")
+	if err != nil {
+		t.Errorf("ExportSandboxLogs should return nil for ResourceNotFoundException, got: %v", err)
+	}
+}
+
+// TestExportSandboxLogs_OtherError verifies that ExportSandboxLogs returns a wrapped error
+// for non-ResourceNotFoundException failures.
+func TestExportSandboxLogs_OtherError(t *testing.T) {
+	mock := &mockCWLogsAPI{
+		exportTaskErr: errors.New("access denied"),
+	}
+	err := kmaws.ExportSandboxLogs(context.Background(), mock, "sb-aabbccdd", "km-artifacts-bucket")
+	if err == nil {
+		t.Fatal("expected error for non-ResourceNotFoundException failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "export") {
+		t.Errorf("expected error to mention 'export', got: %v", err)
 	}
 }
 
