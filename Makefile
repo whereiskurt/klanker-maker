@@ -20,7 +20,7 @@ KM_ARTIFACTS_BUCKET ?=
 
 SIDECARS := dns-proxy http-proxy audit-log
 
-.PHONY: sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas
+.PHONY: sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas clean
 
 ## sidecars: cross-compile Go sidecars and upload binaries + tracing config to S3
 sidecars:
@@ -62,8 +62,13 @@ ecr-repos:
 	  aws ecr create-repository --region $(REGION) --repository-name $$name; \
 	done
 
+## clean: remove all build artifacts
+clean:
+	rm -f build/*.zip build/dns-proxy build/http-proxy build/audit-log build/bootstrap
+	@echo "Build artifacts cleaned."
+
 ## build-lambdas: cross-compile Go Lambda binaries for arm64 and package as deployment zips
-build-lambdas:
+build-lambdas: clean
 	@mkdir -p build
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/bootstrap ./cmd/ttl-handler/
 	cd build && zip -j ttl-handler.zip bootstrap && rm bootstrap

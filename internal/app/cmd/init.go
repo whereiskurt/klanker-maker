@@ -355,10 +355,8 @@ func buildLambdaZips(repoRoot string) error {
 
 	for _, lb := range lambdas {
 		zipPath := filepath.Join(buildDir, lb.name+".zip")
-		if _, err := os.Stat(zipPath); err == nil {
-			fmt.Printf("  Lambda %s.zip already exists, skipping build\n", lb.name)
-			continue
-		}
+		// Always rebuild — ensures code changes are picked up.
+		os.Remove(zipPath)
 
 		srcPath := filepath.Join(repoRoot, lb.srcDir)
 		if _, err := os.Stat(srcPath); os.IsNotExist(err) {
@@ -481,15 +479,7 @@ func buildAndUploadSidecars(repoRoot, bucket string) error {
 	for _, sc := range sidecars {
 		s3Key := "sidecars/" + sc.name
 
-		// Check if already in S3
-		checkCmd := exec.Command("aws", "s3", "ls",
-			fmt.Sprintf("s3://%s/%s", bucket, s3Key),
-			"--profile", "klanker-terraform")
-		if out, _ := checkCmd.CombinedOutput(); len(out) > 0 && !strings.Contains(string(out), "error") {
-			fmt.Printf("  Sidecar %s already in S3, skipping\n", sc.name)
-			continue
-		}
-
+		// Always rebuild and re-upload to ensure latest code.
 		srcPath := filepath.Join(repoRoot, sc.srcDir)
 		if _, err := os.Stat(srcPath); os.IsNotExist(err) {
 			fmt.Printf("  [skip] %s — source not found at %s\n", sc.name, sc.srcDir)
@@ -521,23 +511,16 @@ func buildAndUploadSidecars(repoRoot, bucket string) error {
 		fmt.Printf("  Uploaded %s\n", sc.name)
 	}
 
-	// Upload tracing config.yaml if not already present
+	// Always upload tracing config.yaml
 	tracingConfig := filepath.Join(repoRoot, "sidecars", "tracing", "config.yaml")
 	if _, err := os.Stat(tracingConfig); err == nil {
 		s3Key := "sidecars/tracing/config.yaml"
-		checkCmd := exec.Command("aws", "s3", "ls",
+		fmt.Printf("  Uploading tracing config.yaml...\n")
+		uploadCmd := exec.Command("aws", "s3", "cp", tracingConfig,
 			fmt.Sprintf("s3://%s/%s", bucket, s3Key),
 			"--profile", "klanker-terraform")
-		if out, _ := checkCmd.CombinedOutput(); len(out) > 0 && !strings.Contains(string(out), "error") {
-			fmt.Printf("  Tracing config already in S3, skipping\n")
-		} else {
-			fmt.Printf("  Uploading tracing config.yaml...\n")
-			uploadCmd := exec.Command("aws", "s3", "cp", tracingConfig,
-				fmt.Sprintf("s3://%s/%s", bucket, s3Key),
-				"--profile", "klanker-terraform")
-			if out, err := uploadCmd.CombinedOutput(); err != nil {
-				fmt.Printf("  [warn] tracing config upload failed: %s: %v\n", string(out), err)
-			}
+		if out, err := uploadCmd.CombinedOutput(); err != nil {
+			fmt.Printf("  [warn] tracing config upload failed: %s: %v\n", string(out), err)
 		}
 	}
 
