@@ -84,6 +84,7 @@ func regionalModules(regionDir string) []regionalModule {
 func NewInitCmd(cfg *config.Config) *cobra.Command {
 	var awsProfile string
 	var region string
+	var verbose bool
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -93,7 +94,7 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 			if awsProfile == "" {
 				awsProfile = "klanker-application"
 			}
-			return runInit(cfg, awsProfile, region)
+			return runInit(cfg, awsProfile, region, verbose)
 		},
 	}
 
@@ -101,11 +102,13 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 		"AWS CLI profile to use for provisioning")
 	cmd.Flags().StringVar(&region, "region", "us-east-1",
 		"AWS region to initialize (e.g. us-east-1, ca-central-1)")
+	cmd.Flags().BoolVar(&verbose, "verbose", false,
+		"Show full terragrunt/terraform output")
 
 	return cmd
 }
 
-func runInit(cfg *config.Config, awsProfile, region string) error {
+func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error {
 	ctx := context.Background()
 
 	// Validate AWS credentials
@@ -171,6 +174,7 @@ func runInit(cfg *config.Config, awsProfile, region string) error {
 	}
 
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
+	runner.Verbose = verbose
 	return RunInitWithRunner(runner, repoRoot, region)
 }
 
@@ -223,10 +227,12 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 			continue
 		}
 
-		fmt.Printf("  Applying %s...\n", mod.name)
+		fmt.Printf("  Applying %s...", mod.name)
 		if err := runner.Apply(ctx, mod.dir); err != nil {
+			fmt.Println() // newline after the "Applying X..." prefix on failure
 			return fmt.Errorf("applying %s: %w", mod.name, err)
 		}
+		fmt.Println(" done")
 
 		// After network module: capture and save outputs.json
 		if mod.name == "network" {

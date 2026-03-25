@@ -64,6 +64,7 @@ type SSMGetPutAPI interface {
 func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	var onDemand bool
 	var awsProfile string
+	var verbose bool
 
 	cmd := &cobra.Command{
 		Use:   "create <profile.yaml>",
@@ -74,7 +75,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 			if awsProfile == "" {
 				awsProfile = "klanker-terraform"
 			}
-			return runCreate(cfg, args[0], onDemand, awsProfile)
+			return runCreate(cfg, args[0], onDemand, awsProfile, verbose)
 		},
 	}
 
@@ -82,12 +83,14 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 		"Override spot: true in the profile — use on-demand instances instead")
 	cmd.Flags().StringVar(&awsProfile, "aws-profile", "klanker-terraform",
 		"AWS CLI profile to use")
+	cmd.Flags().BoolVar(&verbose, "verbose", false,
+		"Show full terragrunt/terraform output")
 
 	return cmd
 }
 
 // runCreate executes the full create workflow.
-func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile string) error {
+func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile string, verbose bool) error {
 	ctx := context.Background()
 
 	// Step 1: Read profile file
@@ -235,8 +238,9 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		return fmt.Errorf("failed to populate sandbox directory: %w", err)
 	}
 
-	// Step 10: Run terragrunt apply (streams output in real time)
+	// Step 10: Run terragrunt apply (streams output in real time when --verbose; quiet by default)
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
+	runner.Verbose = verbose
 	if err := runner.Apply(ctx, sandboxDir); err != nil {
 		// Do NOT run destroy — resources may be partially created and require
 		// manual cleanup. Only remove the local sandbox directory.

@@ -45,6 +45,7 @@ var sandboxIDPattern = regexp.MustCompile(`^sb-[a-f0-9]{8}$`)
 func NewDestroyCmd(cfg *config.Config) *cobra.Command {
 	var awsProfile string
 	var yes bool
+	var verbose bool
 
 	cmd := &cobra.Command{
 		Use:   "destroy <sandbox-id | #number>",
@@ -72,7 +73,7 @@ func NewDestroyCmd(cfg *config.Config) *cobra.Command {
 			if awsProfile == "" {
 				awsProfile = "klanker-terraform"
 			}
-			return runDestroy(cfg, sandboxID, awsProfile, yes)
+			return runDestroy(cfg, sandboxID, awsProfile, yes, verbose)
 		},
 	}
 
@@ -80,12 +81,14 @@ func NewDestroyCmd(cfg *config.Config) *cobra.Command {
 		"AWS CLI profile to use")
 	cmd.Flags().BoolVar(&yes, "yes", false,
 		"Skip confirmation prompt")
+	cmd.Flags().BoolVar(&verbose, "verbose", false,
+		"Show full terragrunt/terraform output")
 
 	return cmd
 }
 
 // runDestroy executes the full destroy workflow.
-func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool) error {
+func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool, verbose bool) error {
 	ctx := context.Background()
 
 	// Step 1: Validate sandbox ID format
@@ -152,6 +155,7 @@ locals {
 	// Critical: aws_spot_instance_request destroy cancels the spot REQUEST but leaves
 	// the actual EC2 instance running. Explicit termination is required (Pitfall 1).
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
+	runner.Verbose = verbose
 	outputs, outputErr := runner.Output(ctx, sandboxDir)
 	if outputErr == nil {
 		// Try to get spot instance ID — if present, this is an EC2 spot sandbox

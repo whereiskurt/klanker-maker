@@ -32,6 +32,7 @@ func NewUninitCmd(cfg *config.Config) *cobra.Command {
 	var region string
 	var force bool
 	var yes bool
+	var verbose bool
 
 	cmd := &cobra.Command{
 		Use:   "uninit",
@@ -50,7 +51,7 @@ func NewUninitCmd(cfg *config.Config) *cobra.Command {
 			if awsProfile == "" {
 				awsProfile = "klanker-application"
 			}
-			return runUninit(cfg, awsProfile, region, force)
+			return runUninit(cfg, awsProfile, region, force, verbose)
 		},
 	}
 
@@ -62,12 +63,14 @@ func NewUninitCmd(cfg *config.Config) *cobra.Command {
 		"Destroy even if active sandboxes exist in the region")
 	cmd.Flags().BoolVar(&yes, "yes", false,
 		"Skip confirmation prompt")
+	cmd.Flags().BoolVar(&verbose, "verbose", false,
+		"Show full terragrunt/terraform output")
 
 	return cmd
 }
 
 // runUninit is the top-level uninit logic (uses real AWS clients).
-func runUninit(cfg *config.Config, awsProfile, region string, force bool) error {
+func runUninit(cfg *config.Config, awsProfile, region string, force bool, verbose bool) error {
 	ctx := context.Background()
 
 	// Validate AWS credentials
@@ -101,6 +104,7 @@ func runUninit(cfg *config.Config, awsProfile, region string, force bool) error 
 
 	repoRoot := findRepoRoot()
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
+	runner.Verbose = verbose
 
 	var lister SandboxLister
 	if cfg.StateBucket != "" {
@@ -178,11 +182,12 @@ func RunUninitWithDeps(cfg *config.Config, runner UninitRunner, lister SandboxLi
 			continue
 		}
 
-		fmt.Printf("  Destroying %s...\n", mod.name)
+		fmt.Printf("  Destroying %s...", mod.name)
 		if err := runner.Destroy(ctx, mod.dir); err != nil {
-			fmt.Printf("  Warning: %s destroy failed (continuing): %v\n", mod.name, err)
+			fmt.Printf("\n  Warning: %s destroy failed (continuing): %v\n", mod.name, err)
 			continue
 		}
+		fmt.Println(" done")
 		destroyed++
 	}
 
