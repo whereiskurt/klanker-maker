@@ -485,7 +485,8 @@ Plans:
   6. Unit tests verify the tag key used in `resumeEC2Sandbox` matches `km:sandbox-id`
 
 **Depends on:** Phase 6 (budget-enforcer), Phase 2 (ec2spot module)
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 19 to break down)
+- [ ] 19-01-PLAN.md — Wire budget-enforcer dependency block to ec2spot module (BUDG-07)
+- [ ] 19-02-PLAN.md — Fix EC2 resume tag filter key mismatch (BUDG-08)
