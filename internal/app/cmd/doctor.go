@@ -323,6 +323,15 @@ func checkSCP(ctx context.Context, client OrgsListPoliciesAPI, accountID string)
 		Filter:   "SERVICE_CONTROL_POLICY",
 	})
 	if err != nil {
+		// Organizations API requires management account credentials.
+		// Demote to warning when called from the application account.
+		if strings.Contains(err.Error(), "AccessDenied") || strings.Contains(err.Error(), "don't have permissions") {
+			return CheckResult{
+				Name:    "SCP (Sandbox Containment)",
+				Status:  CheckWarn,
+				Message: "cannot verify SCP from application account (requires management account credentials)",
+			}
+		}
 		return CheckResult{
 			Name:        "SCP (Sandbox Containment)",
 			Status:      CheckError,
@@ -391,8 +400,8 @@ func checkRegionVPC(ctx context.Context, ec2Client EC2DescribeAPI, region string
 	out, err := ec2Client.DescribeVpcs(ctx, &ec2.DescribeVpcsInput{
 		Filters: []ec2types.Filter{
 			{
-				Name:   awssdk.String("tag:km:managed"),
-				Values: []string{"true"},
+				Name:   awssdk.String("tag:km:purpose"),
+				Values: []string{"shared-sandbox-vpc"},
 			},
 		},
 	})
