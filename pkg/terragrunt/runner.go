@@ -3,6 +3,8 @@
 package terragrunt
 
 import (
+	"bytes"
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,11 +15,13 @@ import (
 )
 
 // Runner wraps the Terragrunt binary and executes commands in sandbox directories.
-// Apply and Destroy stream output in real time to os.Stdout/os.Stderr.
+// Apply and Destroy stream output in real time to os.Stdout/os.Stderr when Verbose
+// is true, or capture output quietly (showing only errors/warnings) when Verbose is false.
 // The AWS_PROFILE env var is injected for every command.
 type Runner struct {
 	AWSProfile string // e.g. "klanker-terraform"
 	RepoRoot   string // absolute path to repo root (anchored by CLAUDE.md)
+	Verbose    bool   // when false (default), suppress raw output; when true, stream to terminal
 }
 
 // NewRunner returns a Runner configured with the given AWS profile and repo root.
@@ -25,22 +29,22 @@ func NewRunner(awsProfile, repoRoot string) *Runner {
 	return &Runner{AWSProfile: awsProfile, RepoRoot: repoRoot}
 }
 
-// Apply runs `terragrunt apply -auto-approve` inside sandboxDir, streaming
-// stdout and stderr in real time to the caller's terminal.
+// Apply runs `terragrunt apply -auto-approve` inside sandboxDir.
+// When Verbose is true, stdout and stderr are streamed in real time to the terminal.
+// When Verbose is false (default), output is captured; on failure the captured stderr
+// is printed so errors are always visible. Warnings are always printed.
 func (r *Runner) Apply(ctx context.Context, sandboxDir string) error {
 	cmd := r.BuildApplyCommand(ctx, sandboxDir)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return r.runCommand(cmd)
 }
 
-// Destroy runs `terragrunt destroy -auto-approve` inside sandboxDir, streaming
-// stdout and stderr in real time to the caller's terminal.
+// Destroy runs `terragrunt destroy -auto-approve` inside sandboxDir.
+// When Verbose is true, stdout and stderr are streamed in real time to the terminal.
+// When Verbose is false (default), output is captured; on failure the captured stderr
+// is printed so errors are always visible. Warnings are always printed.
 func (r *Runner) Destroy(ctx context.Context, sandboxDir string) error {
 	cmd := r.BuildDestroyCommand(ctx, sandboxDir)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return r.runCommand(cmd)
 }
 
 // Output runs `terragrunt output -json` inside sandboxDir, captures the output,
@@ -76,22 +80,77 @@ func (r *Runner) BuildOutputCommand(ctx context.Context, sandboxDir string) *exe
 	return r.buildCommand(ctx, sandboxDir, "output", "-json")
 }
 
-// DestroyWithStderr runs destroy, streaming stdout to terminal and capturing stderr
-// to both terminal and the provided buffer (for lock error detection).
+// DestroyWithStderr runs destroy, capturing stderr to the provided buffer (for lock error detection).
+// When Verbose is true: stdout streams to terminal, stderr streams to both terminal and stderrBuf.
+// When Verbose is false: stdout is captured (discarded on success), stderr goes to both
+// stderrBuf and is printed on failure so errors are always visible.
 func (r *Runner) DestroyWithStderr(ctx context.Context, sandboxDir string, stderrBuf *strings.Builder) error {
 	cmd := r.BuildDestroyCommand(ctx, sandboxDir)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = io.MultiWriter(os.Stderr, stderrBuf)
-	return cmd.Run()
+	if r.Verbose {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = io.MultiWriter(os.Stderr, stderrBuf)
+		return cmd.Run()
+	}
+	// Quiet mode: capture stdout, send stderr to buffer only
+	var stdoutBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = stderrBuf
+	err := cmd.Run()
+	if err != nil {
+		// Always print stderr on failure so errors are visible
+		printWarningsAndErrors(stderrBuf.String())
+	}
+	return err
 }
 
 // DestroyForceUnlock runs `terragrunt destroy -auto-approve` with `-lock=false`
 // to bypass a stale state lock. Used after the operator confirms lock clearing.
 func (r *Runner) DestroyForceUnlock(ctx context.Context, sandboxDir string) error {
 	cmd := r.buildCommand(ctx, sandboxDir, "destroy", "-auto-approve", "-lock=false")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return r.runCommand(cmd)
+}
+
+// runCommand executes the command in verbose or quiet mode based on r.Verbose.
+// In verbose mode: streams stdout and stderr directly to the terminal.
+// In quiet mode: captures stdout and stderr; on failure prints captured stderr;
+// warnings from stderr are always printed regardless of success.
+func (r *Runner) runCommand(cmd *exec.Cmd) error {
+	if r.Verbose {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	}
+	// Quiet mode: capture output
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+	err := cmd.Run()
+	if err != nil {
+		// Always print captured stderr on failure so errors are visible
+		if stderrContent := stderrBuf.String(); stderrContent != "" {
+			fmt.Fprint(os.Stderr, stderrContent)
+		}
+		return err
+	}
+	// On success: print any warnings from stderr
+	if stderrContent := stderrBuf.String(); stderrContent != "" {
+		printWarningsAndErrors(stderrContent)
+	}
+	return nil
+}
+
+// printWarningsAndErrors scans each line of output and prints lines that
+// contain warning or error indicators to os.Stderr.
+func printWarningsAndErrors(output string) {
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		line := scanner.Text()
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "warning") || strings.Contains(lower, "warn") ||
+			strings.Contains(lower, "error") {
+			fmt.Fprintln(os.Stderr, line)
+		}
+	}
 }
 
 // buildCommand is the internal factory that constructs a Terragrunt command
