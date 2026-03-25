@@ -238,10 +238,12 @@ module "sandbox" {
 		return fmt.Errorf("symlink module: %w", err)
 	}
 
-	// terraform init
+	// terraform init — use /tmp for all data to stay within ephemeral storage
 	log.Info().Str("sandbox_id", sandboxID).Msg("running terraform init")
+	tfEnv := append(os.Environ(), "TF_DATA_DIR="+filepath.Join(workDir, ".terraform"))
 	initCmd := exec.CommandContext(ctx, "/var/task/terraform", "init", "-no-color", "-input=false")
 	initCmd.Dir = workDir
+	initCmd.Env = tfEnv
 	if out, err := initCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("terraform init: %s: %w", string(out), err)
 	}
@@ -250,6 +252,7 @@ module "sandbox" {
 	log.Info().Str("sandbox_id", sandboxID).Msg("running terraform destroy")
 	destroyCmd := exec.CommandContext(ctx, "/var/task/terraform", "destroy", "-auto-approve", "-no-color", "-input=false")
 	destroyCmd.Dir = workDir
+	destroyCmd.Env = tfEnv
 	out, err := destroyCmd.CombinedOutput()
 	log.Info().Str("sandbox_id", sandboxID).Str("output", string(out)).Msg("terraform destroy output")
 	if err != nil {

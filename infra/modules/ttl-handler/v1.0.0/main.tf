@@ -205,6 +205,11 @@ resource "aws_lambda_function" "ttl_handler" {
   memory_size = 512
   architectures = ["arm64"]
 
+  # 2GB ephemeral storage: terraform init downloads the AWS provider (~500MB)
+  ephemeral_storage {
+    size = 2048
+  }
+
   environment {
     variables = {
       KM_ARTIFACTS_BUCKET = var.artifact_bucket_name
