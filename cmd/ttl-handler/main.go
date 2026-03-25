@@ -23,6 +23,7 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambda"
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
@@ -67,6 +68,7 @@ type TTLHandler struct {
 	StatePrefix   string // state key prefix (e.g. "tf-km")
 	Region        string // AWS region (e.g. "us-east-1")
 	RegionLabel   string // short region label (e.g. "use1")
+	CWClient      awspkg.CWLogsAPI
 	OperatorEmail string
 	Domain        string
 	// TeardownFunc destroys the sandbox resources after TTL expiry or idle detection.
@@ -278,6 +280,13 @@ module "sandbox" {
 		}
 	}
 
+	// Clean up CloudWatch log group
+	if h.CWClient != nil {
+		if cwErr := awspkg.DeleteSandboxLogGroup(ctx, h.CWClient, sandboxID); cwErr != nil {
+			log.Warn().Err(cwErr).Str("sandbox_id", sandboxID).Msg("failed to delete log group (non-fatal)")
+		}
+	}
+
 	return nil
 }
 
@@ -330,6 +339,7 @@ func main() {
 		S3Client:      s3Client,
 		SESClient:     sesv2.NewFromConfig(awsCfg),
 		Scheduler:     scheduler.NewFromConfig(awsCfg),
+		CWClient:      cloudwatchlogs.NewFromConfig(awsCfg),
 		Bucket:        bucket,
 		StateBucket:   os.Getenv("KM_STATE_BUCKET"),
 		StatePrefix:   os.Getenv("KM_STATE_PREFIX"),

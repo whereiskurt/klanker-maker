@@ -23,6 +23,8 @@ type CWLogsAPI interface {
 	CreateLogStream(ctx context.Context, params *cloudwatchlogs.CreateLogStreamInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.CreateLogStreamOutput, error)
 	PutLogEvents(ctx context.Context, params *cloudwatchlogs.PutLogEventsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.PutLogEventsOutput, error)
 	GetLogEvents(ctx context.Context, params *cloudwatchlogs.GetLogEventsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.GetLogEventsOutput, error)
+	PutRetentionPolicy(ctx context.Context, params *cloudwatchlogs.PutRetentionPolicyInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.PutRetentionPolicyOutput, error)
+	DeleteLogGroup(ctx context.Context, params *cloudwatchlogs.DeleteLogGroupInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.DeleteLogGroupOutput, error)
 }
 
 // LogEvent is a single timestamped log message for CloudWatch Logs.
@@ -42,6 +44,12 @@ func EnsureLogGroup(ctx context.Context, client CWLogsAPI, logGroup, logStream s
 		return fmt.Errorf("create log group %q: %w", logGroup, err)
 	}
 
+	// Set 7-day retention on sandbox log groups — they're ephemeral.
+	_, _ = client.PutRetentionPolicy(ctx, &cloudwatchlogs.PutRetentionPolicyInput{
+		LogGroupName:    aws.String(logGroup),
+		RetentionInDays: aws.Int32(7),
+	})
+
 	_, err = client.CreateLogStream(ctx, &cloudwatchlogs.CreateLogStreamInput{
 		LogGroupName:  aws.String(logGroup),
 		LogStreamName: aws.String(logStream),
@@ -50,6 +58,23 @@ func EnsureLogGroup(ctx context.Context, client CWLogsAPI, logGroup, logStream s
 		return fmt.Errorf("create log stream %q/%q: %w", logGroup, logStream, err)
 	}
 
+	return nil
+}
+
+// DeleteSandboxLogGroup deletes the CloudWatch log group for a sandbox.
+// Idempotent — ignores ResourceNotFoundException.
+func DeleteSandboxLogGroup(ctx context.Context, client CWLogsAPI, sandboxID string) error {
+	logGroup := "/km/sandboxes/" + sandboxID + "/"
+	_, err := client.DeleteLogGroup(ctx, &cloudwatchlogs.DeleteLogGroupInput{
+		LogGroupName: aws.String(logGroup),
+	})
+	if err != nil {
+		var notFound *types.ResourceNotFoundException
+		if errors.As(err, &notFound) {
+			return nil
+		}
+		return fmt.Errorf("delete log group %q: %w", logGroup, err)
+	}
 	return nil
 }
 

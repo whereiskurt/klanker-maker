@@ -59,6 +59,22 @@ func (m *mockCWLogsAPI) GetLogEvents(
 	return m.getEventsOutput, m.getEventsErr
 }
 
+func (m *mockCWLogsAPI) PutRetentionPolicy(
+	_ context.Context,
+	_ *cloudwatchlogs.PutRetentionPolicyInput,
+	_ ...func(*cloudwatchlogs.Options),
+) (*cloudwatchlogs.PutRetentionPolicyOutput, error) {
+	return &cloudwatchlogs.PutRetentionPolicyOutput{}, nil
+}
+
+func (m *mockCWLogsAPI) DeleteLogGroup(
+	_ context.Context,
+	_ *cloudwatchlogs.DeleteLogGroupInput,
+	_ ...func(*cloudwatchlogs.Options),
+) (*cloudwatchlogs.DeleteLogGroupOutput, error) {
+	return &cloudwatchlogs.DeleteLogGroupOutput{}, nil
+}
+
 // ---- Tests ----
 
 func TestEnsureLogGroup_Created(t *testing.T) {

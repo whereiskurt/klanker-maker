@@ -12,6 +12,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -351,6 +352,15 @@ locals {
 		} else {
 			log.Info().Str("sandbox_id", sandboxID).Msg("sandbox metadata deleted from S3")
 		}
+	}
+
+	// Step 13: Delete CloudWatch log group for this sandbox.
+	cwClient := cloudwatchlogs.NewFromConfig(awsCfg)
+	if cwErr := awspkg.DeleteSandboxLogGroup(ctx, cwClient, sandboxID); cwErr != nil {
+		log.Warn().Err(cwErr).Str("sandbox_id", sandboxID).
+			Msg("failed to delete sandbox log group (non-fatal)")
+	} else {
+		log.Info().Str("sandbox_id", sandboxID).Msg("sandbox log group deleted")
 	}
 
 	fmt.Printf("Sandbox %s destroyed successfully.\n", sandboxID)
