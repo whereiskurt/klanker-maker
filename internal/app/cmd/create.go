@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -251,11 +252,23 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	fmt.Printf("  Provisioning infrastructure...")
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
 	runner.Verbose = verbose
-	if err := runner.Apply(ctx, sandboxDir); err != nil {
+	var applyStderr strings.Builder
+	applyErr := runner.ApplyWithStderr(ctx, sandboxDir, &applyStderr)
+	if applyErr != nil {
 		fmt.Println() // newline after progress indicator
-		// Do NOT run destroy — resources may be partially created and require
-		// manual cleanup. Only remove the local sandbox directory.
-		fmt.Fprintf(os.Stderr, "ERROR: terragrunt apply failed: %v\n", err)
+
+		// Check for spot capacity error and give a helpful message
+		if strings.Contains(applyStderr.String(), "capacity-not-available") ||
+			strings.Contains(applyStderr.String(), "InsufficientInstanceCapacity") {
+			fmt.Fprintf(os.Stderr, "\nSpot capacity unavailable in the requested AZ.\n")
+			fmt.Fprintf(os.Stderr, "Options:\n")
+			fmt.Fprintf(os.Stderr, "  1. Retry — capacity fluctuates, may work in a few minutes\n")
+			fmt.Fprintf(os.Stderr, "  2. Use on-demand: km create --on-demand %s\n", profilePath)
+			fmt.Fprintf(os.Stderr, "  3. Try a smaller instance (t3.small, t3.micro)\n\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "ERROR: provisioning failed: %v\n", applyErr)
+		}
+
 		if cleanErr := terragrunt.CleanupSandboxDir(sandboxDir); cleanErr != nil {
 			log.Warn().Err(cleanErr).Msg("failed to clean up sandbox directory after apply failure")
 		}

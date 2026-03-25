@@ -80,6 +80,26 @@ func (r *Runner) BuildOutputCommand(ctx context.Context, sandboxDir string) *exe
 	return r.buildCommand(ctx, sandboxDir, "output", "-json")
 }
 
+// ApplyWithStderr runs apply, capturing stderr to the provided buffer (for error detection).
+// When Verbose is true: stdout streams to terminal, stderr streams to both terminal and stderrBuf.
+// When Verbose is false: stdout is captured, stderr goes to stderrBuf and is printed on failure.
+func (r *Runner) ApplyWithStderr(ctx context.Context, sandboxDir string, stderrBuf *strings.Builder) error {
+	cmd := r.BuildApplyCommand(ctx, sandboxDir)
+	if r.Verbose {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = io.MultiWriter(os.Stderr, stderrBuf)
+		return cmd.Run()
+	}
+	var stdoutBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = stderrBuf
+	err := cmd.Run()
+	if err != nil {
+		printWarningsAndErrors(stderrBuf.String())
+	}
+	return err
+}
+
 // DestroyWithStderr runs destroy, capturing stderr to the provided buffer (for lock error detection).
 // When Verbose is true: stdout streams to terminal, stderr streams to both terminal and stderrBuf.
 // When Verbose is false: stdout is captured (discarded on success), stderr goes to both
