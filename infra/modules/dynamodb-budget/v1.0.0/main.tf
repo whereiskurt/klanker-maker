@@ -12,8 +12,16 @@
 resource "aws_dynamodb_table" "budget" {
   name         = var.table_name
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "PK"
-  range_key    = "SK"
+
+  key_schema {
+    attribute_name = "PK"
+    key_type       = "HASH"
+  }
+
+  key_schema {
+    attribute_name = "SK"
+    key_type       = "RANGE"
+  }
 
   # DynamoDB Streams: NEW_AND_OLD_IMAGES enables Lambda triggers for budget
   # enforcement checks (budget alert Lambda reads both old and new spend values).

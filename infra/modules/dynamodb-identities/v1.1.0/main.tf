@@ -17,12 +17,16 @@
 resource "aws_dynamodb_table" "identities" {
   name         = var.table_name
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "sandbox_id"
 
   # No sort key — each sandbox has a single identity row keyed by sandbox_id.
 
   # No DynamoDB Streams — no Lambda trigger needed for identity rows.
   # Identity events are read on-demand by sandboxes performing key lookup.
+
+  key_schema {
+    attribute_name = "sandbox_id"
+    key_type       = "HASH"
+  }
 
   attribute {
     name = "sandbox_id"
