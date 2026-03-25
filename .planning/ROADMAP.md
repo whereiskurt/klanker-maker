@@ -500,7 +500,7 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. http-proxy sidecar detects outbound requests to `api.anthropic.com/v1/messages` and intercepts the response
   2. For non-streaming responses, proxy extracts `usage.input_tokens` and `usage.output_tokens` from the JSON body and increments DynamoDB AI spend via `IncrementAISpend`
-  3. For SSE streaming responses, proxy reads the final `message_stop` event, extracts cumulative usage from the final message, and increments DynamoDB AI spend
+  3. For SSE streaming responses, proxy reads cumulative `output_tokens` from the `message_delta` event and increments DynamoDB AI spend
   4. Model rates for Anthropic API models (claude-sonnet-4-20250514, claude-opus-4-20250514, claude-haiku-4-5-20251001, etc.) are sourced from a rate table (static or configurable) and applied to token counts
   5. `km status` AI breakdown shows Anthropic API spend alongside Bedrock spend (same per-model format)
   6. At 100% AI budget, proxy returns 403 for Anthropic API calls (same enforcement as Bedrock)
