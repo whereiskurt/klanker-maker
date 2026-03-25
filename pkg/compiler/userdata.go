@@ -202,7 +202,9 @@ RestartSec=2
 WantedBy=multi-user.target
 UNIT
 
-# Shell audit hook: writes JSON audit events to the named pipe on every command.
+# Shell audit hook: writes JSON audit events to the named pipe on every command,
+# plus a background heartbeat every 60s so long-running commands (top, vim, etc.)
+# don't trigger the idle detector.
 # Installed as /etc/profile.d/ so it applies to all login shells (SSM sessions).
 cat > /etc/profile.d/km-audit.sh << 'HOOK'
 _km_audit() {
@@ -213,6 +215,19 @@ _km_audit() {
     > /run/km/audit-pipe 2>/dev/null
 }
 PROMPT_COMMAND="_km_audit;${PROMPT_COMMAND}"
+
+# Background heartbeat: keeps the sandbox alive while a session is open,
+# even during long-running commands. Killed automatically when the shell exits.
+_km_heartbeat() {
+  while true; do
+    sleep 60
+    printf '{"timestamp":%d,"sandbox_id":"%s","event_type":"heartbeat","source":"shell","detail":{}}\n' \
+      "$(date +%s%3N)" "{{ .SandboxID }}" > /run/km/audit-pipe 2>/dev/null
+  done
+}
+_km_heartbeat &
+_KM_HEARTBEAT_PID=$!
+trap 'kill $_KM_HEARTBEAT_PID 2>/dev/null' EXIT
 HOOK
 chmod 644 /etc/profile.d/km-audit.sh
 
