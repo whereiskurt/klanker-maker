@@ -403,6 +403,178 @@ func TestSafePhraseEmptyExpected(t *testing.T) {
 	}
 }
 
+// ============================================================
+// PollForApproval tests
+// ============================================================
+
+// buildReplyMIME constructs a minimal raw MIME reply email for PollForApproval testing.
+func buildReplyMIME(from, to, subject, body string) []byte {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("From: %s\r\n", from))
+	sb.WriteString(fmt.Sprintf("To: %s\r\n", to))
+	sb.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
+	sb.WriteString("MIME-Version: 1.0\r\n")
+	sb.WriteString("Content-Type: text/plain; charset=\"UTF-8\"\r\n")
+	sb.WriteString("\r\n")
+	sb.WriteString(body)
+	return []byte(sb.String())
+}
+
+// mockPollS3 returns a mock that serves a list page followed by per-key GetObject responses.
+type mockPollS3 struct {
+	keys     []string // S3 keys to return in list
+	messages map[string][]byte // key -> raw MIME bytes
+}
+
+func (m *mockPollS3) ListObjectsV2(ctx context.Context, input *s3.ListObjectsV2Input, opts ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	var objs []s3types.Object
+	for _, k := range m.keys {
+		k := k
+		objs = append(objs, s3types.Object{Key: &k})
+	}
+	return &s3.ListObjectsV2Output{
+		Contents:    objs,
+		IsTruncated: aws.Bool(false),
+	}, nil
+}
+
+func (m *mockPollS3) GetObject(ctx context.Context, input *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	key := ""
+	if input.Key != nil {
+		key = *input.Key
+	}
+	data, ok := m.messages[key]
+	if !ok {
+		return nil, &s3types.NoSuchKey{}
+	}
+	return &s3.GetObjectOutput{
+		Body: io.NopCloser(bytes.NewReader(data)),
+	}, nil
+}
+
+func TestPollForApproval_Approved(t *testing.T) {
+	replyKey := "mail/reply-001.eml"
+	replyMIME := buildReplyMIME(
+		"operator@company.com",
+		"sb-test01@sandboxes.example.com",
+		"Re: [KM-APPROVAL-REQUEST] sb-test01 deploy-prod",
+		"APPROVED\n\nLooks good to me.",
+	)
+	mock := &mockPollS3{
+		keys:     []string{replyKey},
+		messages: map[string][]byte{replyKey: replyMIME},
+	}
+
+	result, err := kmaws.PollForApproval(context.Background(), mock, "km-artifacts", "sb-test01", "example.com", "deploy-prod")
+	if err != nil {
+		t.Fatalf("PollForApproval returned error: %v", err)
+	}
+	if !result.Found {
+		t.Error("expected Found=true when reply matches action")
+	}
+	if !result.Approved {
+		t.Error("expected Approved=true when body contains APPROVED")
+	}
+	if result.Denied {
+		t.Error("expected Denied=false when body contains APPROVED")
+	}
+}
+
+func TestPollForApproval_Denied(t *testing.T) {
+	replyKey := "mail/reply-002.eml"
+	replyMIME := buildReplyMIME(
+		"operator@company.com",
+		"sb-test02@sandboxes.example.com",
+		"Re: [KM-APPROVAL-REQUEST] sb-test02 delete-db",
+		"DENIED\n\nThis action is not authorized.",
+	)
+	mock := &mockPollS3{
+		keys:     []string{replyKey},
+		messages: map[string][]byte{replyKey: replyMIME},
+	}
+
+	result, err := kmaws.PollForApproval(context.Background(), mock, "km-artifacts", "sb-test02", "example.com", "delete-db")
+	if err != nil {
+		t.Fatalf("PollForApproval returned error: %v", err)
+	}
+	if !result.Found {
+		t.Error("expected Found=true when reply matches action")
+	}
+	if result.Approved {
+		t.Error("expected Approved=false when body contains DENIED")
+	}
+	if !result.Denied {
+		t.Error("expected Denied=true when body contains DENIED")
+	}
+}
+
+func TestPollForApproval_NotFound(t *testing.T) {
+	// Mailbox is empty — no reply
+	mock := &mockPollS3{
+		keys:     []string{},
+		messages: map[string][]byte{},
+	}
+
+	result, err := kmaws.PollForApproval(context.Background(), mock, "km-artifacts", "sb-test03", "example.com", "some-action")
+	if err != nil {
+		t.Fatalf("PollForApproval returned error for empty mailbox: %v", err)
+	}
+	if result.Found {
+		t.Error("expected Found=false when no reply in mailbox")
+	}
+	if result.Approved {
+		t.Error("expected Approved=false when no reply found")
+	}
+}
+
+func TestPollForApproval_CaseInsensitive(t *testing.T) {
+	replyKey := "mail/reply-004.eml"
+	replyMIME := buildReplyMIME(
+		"operator@company.com",
+		"sb-test04@sandboxes.example.com",
+		"Re: [KM-APPROVAL-REQUEST] sb-test04 scale-up",
+		"approved\n\nyes please",
+	)
+	mock := &mockPollS3{
+		keys:     []string{replyKey},
+		messages: map[string][]byte{replyKey: replyMIME},
+	}
+
+	result, err := kmaws.PollForApproval(context.Background(), mock, "km-artifacts", "sb-test04", "example.com", "scale-up")
+	if err != nil {
+		t.Fatalf("PollForApproval returned error: %v", err)
+	}
+	if !result.Found {
+		t.Error("expected Found=true for case-insensitive match")
+	}
+	if !result.Approved {
+		t.Error("expected Approved=true for lowercase 'approved'")
+	}
+}
+
+func TestPollForApproval_SubjectMustContainAction(t *testing.T) {
+	// Reply with mismatched action — should NOT be found
+	replyKey := "mail/reply-005.eml"
+	replyMIME := buildReplyMIME(
+		"operator@company.com",
+		"sb-test05@sandboxes.example.com",
+		"Re: [KM-APPROVAL-REQUEST] sb-test05 other-action",
+		"APPROVED",
+	)
+	mock := &mockPollS3{
+		keys:     []string{replyKey},
+		messages: map[string][]byte{replyKey: replyMIME},
+	}
+
+	result, err := kmaws.PollForApproval(context.Background(), mock, "km-artifacts", "sb-test05", "example.com", "deploy-prod")
+	if err != nil {
+		t.Fatalf("PollForApproval returned error: %v", err)
+	}
+	if result.Found {
+		t.Error("expected Found=false when reply subject does not contain the requested action")
+	}
+}
+
 func TestSafePhraseAtStartOfLine(t *testing.T) {
 	pubKeyB64, _, _, priv := makeMailboxTestKeys(t)
 	// Test KM-AUTH at start of line (after newline)

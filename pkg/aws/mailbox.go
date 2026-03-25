@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/mail"
 	"regexp"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -203,4 +204,71 @@ func ParseSignedMessage(rawMIME []byte, receiverSandboxID, pubKeyB64 string, all
 	}
 
 	return result, nil
+}
+
+// ApprovalResult holds the outcome of polling the sandbox mailbox for an operator approval reply.
+type ApprovalResult struct {
+	Found    bool   // true if a reply matching the action was found in the mailbox
+	Approved bool   // true if the reply body contains APPROVED (case-insensitive)
+	Denied   bool   // true if the reply body contains DENIED (case-insensitive)
+	Reply    string // the reply body text
+}
+
+// PollForApproval scans the sandbox mailbox for an operator reply to an approval request.
+//
+// It calls ListMailboxMessages to enumerate all messages, then reads each one and
+// looks for a reply whose subject contains both "Re:" and the action string
+// (case-insensitive). When a matching reply is found, the body is scanned for
+// "APPROVED" or "DENIED" (case-insensitive).
+//
+// Returns &ApprovalResult{Found: false} if no matching reply is in the mailbox.
+// This function does not perform signature verification — operator replies are
+// external plaintext emails, not signed sandbox messages.
+func PollForApproval(ctx context.Context, client MailboxS3API, bucket, sandboxID, emailDomain, action string) (*ApprovalResult, error) {
+	keys, err := ListMailboxMessages(ctx, client, bucket, sandboxID, emailDomain)
+	if err != nil {
+		return nil, fmt.Errorf("poll for approval (sandbox=%s, action=%s): %w", sandboxID, action, err)
+	}
+
+	actionUpper := strings.ToUpper(action)
+
+	for _, key := range keys {
+		rawMIME, err := ReadMessage(ctx, client, bucket, key)
+		if err != nil {
+			// Skip unreadable messages rather than aborting the poll
+			continue
+		}
+
+		msg, err := mail.ReadMessage(bytes.NewReader(rawMIME))
+		if err != nil {
+			continue
+		}
+
+		subject := msg.Header.Get("Subject")
+		subjectUpper := strings.ToUpper(subject)
+
+		// Match reply: subject must contain "RE:" and the action string
+		if !strings.Contains(subjectUpper, "RE:") || !strings.Contains(subjectUpper, actionUpper) {
+			continue
+		}
+
+		// Found a matching reply — parse body for APPROVED/DENIED
+		bodyBytes, err := io.ReadAll(msg.Body)
+		if err != nil {
+			continue
+		}
+		bodyUpper := strings.ToUpper(string(bodyBytes))
+
+		approved := strings.Contains(bodyUpper, "APPROVED")
+		denied := strings.Contains(bodyUpper, "DENIED")
+
+		return &ApprovalResult{
+			Found:    true,
+			Approved: approved,
+			Denied:   denied,
+			Reply:    string(bodyBytes),
+		}, nil
+	}
+
+	return &ApprovalResult{Found: false}, nil
 }
