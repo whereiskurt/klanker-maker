@@ -7,6 +7,8 @@ import (
 	"text/tabwriter"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/spf13/cobra"
@@ -78,6 +80,18 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonO
 		return nil
 	}
 
+	// Check live instance status for EC2 sandboxes to detect spot reclamation / termination.
+	awsProfile := "klanker-terraform"
+	awsCfg, ec2Err := kmaws.LoadAWSConfig(ctx, awsProfile)
+	if ec2Err == nil {
+		ec2Client := ec2.NewFromConfig(awsCfg)
+		for i := range records {
+			if records[i].Substrate == "ec2" && records[i].Status == "running" {
+				records[i].Status = checkEC2InstanceStatus(ctx, ec2Client, records[i].SandboxID)
+			}
+		}
+	}
+
 	if jsonOutput {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(records)
 	}
@@ -123,4 +137,38 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord) error 
 			i+1, r.SandboxID, r.Profile, r.Substrate, r.Region, r.Status, ttl)
 	}
 	return w.Flush()
+}
+
+// checkEC2InstanceStatus looks up the EC2 instance for a sandbox by tag and returns
+// the live status: "running", "stopped", "terminated" (shown as "killed"), etc.
+func checkEC2InstanceStatus(ctx context.Context, client *ec2.Client, sandboxID string) string {
+	out, err := client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		Filters: []ec2types.Filter{
+			{
+				Name:   awssdk.String("tag:km:sandbox-id"),
+				Values: []string{sandboxID},
+			},
+		},
+	})
+	if err != nil || len(out.Reservations) == 0 {
+		return "killed" // can't find instance — likely terminated and gone
+	}
+
+	for _, res := range out.Reservations {
+		for _, inst := range res.Instances {
+			switch inst.State.Name {
+			case ec2types.InstanceStateNameRunning:
+				return "running"
+			case ec2types.InstanceStateNameStopped:
+				return "stopped"
+			case ec2types.InstanceStateNameTerminated, ec2types.InstanceStateNameShuttingDown:
+				return "killed"
+			case ec2types.InstanceStateNamePending:
+				return "starting"
+			default:
+				return string(inst.State.Name)
+			}
+		}
+	}
+	return "killed"
 }
