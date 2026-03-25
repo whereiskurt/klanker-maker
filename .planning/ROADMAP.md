@@ -283,7 +283,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 16. Documentation Refresh | 3/3 | Complete    | 2026-03-23 |
 | 17. Sandbox Email Mailbox & Access Control | 3/3 | Complete    | 2026-03-23 |
 | 18. Loose Ends | 4/4 | Complete    | 2026-03-24 |
-| 19. Budget Enforcement Wiring | 0/2 | Planned    | — |
+| 19. Budget Enforcement Wiring | 2/2 | Complete   | 2026-03-25 |
 | 20. Anthropic API Metering | 0/0 | Planned    | — |
 
 ### Phase 13: GitHub App Token Integration — scoped repo access for sandboxes
@@ -486,7 +486,7 @@ Plans:
   6. Unit tests verify the tag key used in `resumeEC2Sandbox` matches `km:sandbox-id`
 
 **Depends on:** Phase 6 (budget-enforcer), Phase 2 (ec2spot module)
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 19-01-PLAN.md — Wire budget-enforcer dependency block to ec2spot module (BUDG-07)
