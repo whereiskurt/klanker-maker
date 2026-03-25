@@ -1,0 +1,124 @@
+package cmd
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	iampkg "github.com/aws/aws-sdk-go-v2/service/iam"
+	"github.com/aws/aws-sdk-go-v2/service/lambda"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/scheduler"
+	"github.com/spf13/cobra"
+	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klankrmkr/pkg/compiler"
+)
+
+// NewExtendCmd creates the "km extend" subcommand.
+// Usage: km extend <sandbox-id | #number> <duration>
+func NewExtendCmd(cfg *config.Config) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:          "extend <sandbox-id | #number> <duration>",
+		Short:        "Extend a sandbox's TTL by the given duration",
+		Long:         "Adds time to a running sandbox's TTL. Duration format: 1h, 30m, 2h30m, etc.",
+		Args:         cobra.ExactArgs(2),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			sandboxID, err := ResolveSandboxID(ctx, cfg, args[0])
+			if err != nil {
+				return err
+			}
+			duration, err := time.ParseDuration(args[1])
+			if err != nil {
+				return fmt.Errorf("invalid duration %q: %w (examples: 1h, 30m, 2h30m)", args[1], err)
+			}
+			return runExtend(ctx, cfg, sandboxID, duration)
+		},
+	}
+	return cmd
+}
+
+func runExtend(ctx context.Context, cfg *config.Config, sandboxID string, addDuration time.Duration) error {
+	if cfg.StateBucket == "" {
+		return fmt.Errorf("state bucket not configured")
+	}
+
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
+	if err != nil {
+		return fmt.Errorf("load AWS config: %w", err)
+	}
+
+	s3Client := s3.NewFromConfig(awsCfg)
+	schedulerClient := scheduler.NewFromConfig(awsCfg)
+
+	// Step 1: Read current metadata
+	meta, err := awspkg.ReadSandboxMetadata(ctx, s3Client, cfg.StateBucket, sandboxID)
+	if err != nil {
+		return fmt.Errorf("read sandbox metadata: %w", err)
+	}
+
+	// Step 2: Calculate new TTL expiry
+	var newExpiry time.Time
+	if meta.TTLExpiry != nil && meta.TTLExpiry.After(time.Now()) {
+		// TTL hasn't expired yet — extend from current expiry
+		newExpiry = meta.TTLExpiry.Add(addDuration)
+	} else {
+		// TTL already expired or not set — extend from now
+		newExpiry = time.Now().Add(addDuration)
+	}
+
+	// Step 3: Delete old schedule and create new one
+	if delErr := awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID); delErr != nil {
+		fmt.Printf("  [warn] could not delete old TTL schedule: %v\n", delErr)
+	}
+
+	// Auto-discover TTL Lambda ARN
+	lambdaClient := lambda.NewFromConfig(awsCfg)
+	fnOut, fnErr := lambdaClient.GetFunction(ctx, &lambda.GetFunctionInput{
+		FunctionName: aws.String("km-ttl-handler"),
+	})
+	if fnErr != nil {
+		return fmt.Errorf("TTL handler Lambda not found — cannot create schedule: %w", fnErr)
+	}
+	ttlLambdaARN := aws.ToString(fnOut.Configuration.FunctionArn)
+
+	// Auto-discover scheduler role ARN
+	iamClient := iampkg.NewFromConfig(awsCfg)
+	roleOut, roleErr := iamClient.GetRole(ctx, &iampkg.GetRoleInput{
+		RoleName: aws.String("km-ttl-scheduler"),
+	})
+	if roleErr != nil {
+		return fmt.Errorf("TTL scheduler role not found — run 'km init': %w", roleErr)
+	}
+	schedulerRoleARN := aws.ToString(roleOut.Role.Arn)
+
+	schedInput := compiler.BuildTTLScheduleInput(sandboxID, newExpiry, ttlLambdaARN, schedulerRoleARN)
+	if err := awspkg.CreateTTLSchedule(ctx, schedulerClient, schedInput); err != nil {
+		return fmt.Errorf("create TTL schedule: %w", err)
+	}
+
+	// Step 4: Update metadata.json with new expiry
+	meta.TTLExpiry = &newExpiry
+	metaJSON, _ := json.Marshal(meta)
+	_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(cfg.StateBucket),
+		Key:         aws.String("tf-km/sandboxes/" + sandboxID + "/metadata.json"),
+		Body:        bytes.NewReader(metaJSON),
+		ContentType: aws.String("application/json"),
+	})
+	if putErr != nil {
+		fmt.Printf("  [warn] could not update metadata: %v\n", putErr)
+	}
+
+	remaining := time.Until(newExpiry).Round(time.Second)
+	fmt.Printf("TTL extended for %s: new expiry in %s (%s)\n", sandboxID, remaining, newExpiry.Format(time.RFC3339))
+	return nil
+}

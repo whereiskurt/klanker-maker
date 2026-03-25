@@ -58,6 +58,7 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 		},
 	})
 
+	root.AddCommand(NewExtendCmd(cfg))
 	root.AddCommand(NewBootstrapCmd(cfg))
 	root.AddCommand(NewBudgetCmd(cfg))
 	root.AddCommand(NewShellCmd(cfg))
