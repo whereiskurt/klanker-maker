@@ -510,7 +510,8 @@ Plans:
   10. Errors and warnings from terragrunt are always shown regardless of verbose mode
 
 **Depends on:** Phase 19 (budget enforcement wiring must work first)
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 20 to break down)
+- [ ] 20-01-PLAN.md — Anthropic API token extraction and budget enforcement (BUDG-10)
+- [ ] 20-02-PLAN.md — Terragrunt output suppression with --verbose flag (OPER-01)
