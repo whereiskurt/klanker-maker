@@ -261,7 +261,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16 → 17 → 18 → 19
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -278,6 +278,12 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 11. Sandbox Auto-Destroy & Metadata Wiring | 2/2 | Complete    | 2026-03-23 |
 | 12. ECS Budget Top-Up & S3 Replication | 2/2 | Complete    | 2026-03-23 |
 | 13. GitHub App Token Integration | 4/4 | Complete    | 2026-03-23 |
+| 14. Sandbox Identity & Signed Email | 4/4 | Complete    | 2026-03-23 |
+| 15. km doctor & Bootstrap Verification | 2/2 | Complete    | 2026-03-23 |
+| 16. Documentation Refresh | 3/3 | Complete    | 2026-03-23 |
+| 17. Sandbox Email Mailbox & Access Control | 3/3 | Complete    | 2026-03-23 |
+| 18. Loose Ends | 4/4 | Complete    | 2026-03-24 |
+| 19. Budget Enforcement Wiring | 0/0 | Planned    | — |
 
 ### Phase 13: GitHub App Token Integration — scoped repo access for sandboxes
 
@@ -463,3 +469,23 @@ Plans:
 - [ ] 18-02-PLAN.md — New km uninit command with active-sandbox guard
 - [ ] 18-03-PLAN.md — GitHub token graceful skip on ParameterNotFound
 - [ ] 18-04-PLAN.md — km doctor regional checks + bootstrap/root.hcl verification
+
+### Phase 19: Budget Enforcement Wiring — EC2 hard stop, IAM revocation, resume tag fix
+
+**Goal:** Fix two cross-phase wiring gaps that cause budget hard enforcement to silently fail at runtime: (1) budget-enforcer Lambda receives empty `instance_id`/`role_arn` because its Terragrunt config has no dependency on the ec2spot module, and (2) `km budget add` EC2 resume uses the wrong tag key (`tag:sandbox-id` instead of `tag:km:sandbox-id`).
+
+**Requirements:** BUDG-07, BUDG-08
+**Gap Closure:** Closes gaps from v1.0 milestone audit (2026-03-24)
+**Success Criteria** (what must be TRUE):
+  1. Budget-enforcer Lambda EventBridge payload contains the actual EC2 instance ID and IAM role ARN from the provisioned sandbox — not empty strings
+  2. At 100% compute budget, the Lambda successfully calls `StopInstances` on the sandbox EC2 instance
+  3. At 100% AI budget, the Lambda successfully revokes Bedrock permissions from the sandbox IAM role
+  4. `km budget add` for a stopped EC2 sandbox finds the instance via `tag:km:sandbox-id` filter and starts it
+  5. Unit tests verify the compiler emits a Terragrunt dependency block from budget-enforcer to the parent sandbox
+  6. Unit tests verify the tag key used in `resumeEC2Sandbox` matches `km:sandbox-id`
+
+**Depends on:** Phase 6 (budget-enforcer), Phase 2 (ec2spot module)
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 19 to break down)
