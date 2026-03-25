@@ -258,9 +258,11 @@ module "sandbox" {
 		return fmt.Errorf("terraform init: %s: %w", string(out), err)
 	}
 
-	// terraform destroy
+	// terraform destroy with -lock=false: the Lambda is the authoritative teardown
+	// path for expired sandboxes. EventBridge may retry and invoke multiple concurrent
+	// Lambdas — without -lock=false they deadlock on the state lock.
 	log.Info().Str("sandbox_id", sandboxID).Msg("running terraform destroy")
-	destroyCmd := exec.CommandContext(ctx, "/var/task/terraform", "destroy", "-auto-approve", "-no-color", "-input=false")
+	destroyCmd := exec.CommandContext(ctx, "/var/task/terraform", "destroy", "-auto-approve", "-no-color", "-input=false", "-lock=false")
 	destroyCmd.Dir = workDir
 	destroyCmd.Env = tfEnv
 	out, err := destroyCmd.CombinedOutput()
