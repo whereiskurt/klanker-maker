@@ -249,13 +249,32 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	}
 
 	// Step 10: Run terragrunt apply (streams output in real time when --verbose; quiet by default)
-	fmt.Printf("  Provisioning infrastructure...")
+	fmt.Printf("  Provisioning infrastructure")
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
 	runner.Verbose = verbose
+
+	// Spinner: print dots while apply runs in background
+	spinDone := make(chan struct{})
+	if !verbose {
+		go func() {
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-spinDone:
+					return
+				case <-ticker.C:
+					fmt.Print(".")
+				}
+			}
+		}()
+	}
+
 	var applyStderr strings.Builder
 	applyErr := runner.ApplyWithStderr(ctx, sandboxDir, &applyStderr)
+	close(spinDone)
 	if applyErr != nil {
-		fmt.Println() // newline after progress indicator
+		fmt.Println() // newline after dots
 
 		// Check for spot capacity error and give a helpful message
 		if strings.Contains(applyStderr.String(), "capacity-not-available") ||
