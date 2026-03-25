@@ -583,6 +583,26 @@ func runChecks(ctx context.Context, checks []func(context.Context) CheckResult) 
 
 // isCredentialError returns true if the error message indicates an SSO/credential
 // failure (expired token, invalid grant, etc.) rather than a permissions issue.
+// staticCredentials implements aws.CredentialsProvider for assumed role credentials.
+type staticCredentials struct {
+	accessKeyID     string
+	secretAccessKey string
+	sessionToken    string
+}
+
+func newStaticCredentials(accessKeyID, secretAccessKey, sessionToken string) *staticCredentials {
+	return &staticCredentials{accessKeyID, secretAccessKey, sessionToken}
+}
+
+func (s *staticCredentials) Retrieve(ctx context.Context) (awssdk.Credentials, error) {
+	return awssdk.Credentials{
+		AccessKeyID:     s.accessKeyID,
+		SecretAccessKey:  s.secretAccessKey,
+		SessionToken:    s.sessionToken,
+		Source:          "km-doctor-assume-role",
+	}, nil
+}
+
 func isCredentialError(msg string) bool {
 	lower := strings.ToLower(msg)
 	return strings.Contains(lower, "refresh cached sso token") ||
@@ -926,14 +946,32 @@ func initRealDeps(ctx context.Context, cfg DoctorConfigProvider) *DoctorDeps {
 	deps.KMSClient = kms.NewFromConfig(awsCfg)
 	deps.SSMReadClient = ssm.NewFromConfig(awsCfg)
 
-	// Organizations client (for SCP check) — try management account profile first,
-	// fall back to current profile (will likely fail with AccessDenied, demoted to warning).
-	mgmtCfg, mgmtErr := config.LoadDefaultConfig(ctx,
-		config.WithSharedConfigProfile("klanker-management"),
-		config.WithRegion("us-east-1"),
-	)
-	if mgmtErr == nil {
-		deps.OrgsClient = organizations.NewFromConfig(mgmtCfg)
+	// Organizations client (for SCP check) — assume km-org-admin role in
+	// management account, which has Organizations permissions.
+	mgmtAccountID := cfg.GetManagementAccountID()
+	if mgmtAccountID != "" {
+		roleARN := fmt.Sprintf("arn:aws:iam::%s:role/km-org-admin", mgmtAccountID)
+		stsClient := sts.NewFromConfig(awsCfg)
+		assumeOut, assumeErr := stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
+			RoleArn:         awssdk.String(roleARN),
+			RoleSessionName: awssdk.String("km-doctor"),
+		})
+		if assumeErr == nil {
+			orgsCfg, _ := config.LoadDefaultConfig(ctx,
+				config.WithRegion("us-east-1"),
+				config.WithCredentialsProvider(
+					newStaticCredentials(
+						awssdk.ToString(assumeOut.Credentials.AccessKeyId),
+						awssdk.ToString(assumeOut.Credentials.SecretAccessKey),
+						awssdk.ToString(assumeOut.Credentials.SessionToken),
+					),
+				),
+			)
+			deps.OrgsClient = organizations.NewFromConfig(orgsCfg)
+		} else {
+			// AssumeRole failed — fall back to current profile (demoted to warning in checkSCP)
+			deps.OrgsClient = organizations.NewFromConfig(awsCfg)
+		}
 	} else {
 		deps.OrgsClient = organizations.NewFromConfig(awsCfg)
 	}
