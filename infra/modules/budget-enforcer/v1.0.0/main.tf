@@ -297,12 +297,6 @@ resource "aws_scheduler_schedule" "budget_check" {
       maximum_retry_attempts = 0
     }
   }
-
-  tags = {
-    "km:component"  = "budget-enforcer"
-    "km:sandbox_id" = var.sandbox_id
-    "km:managed"    = "true"
-  }
 }
 
 # Lambda permission: allow EventBridge Scheduler to invoke the function
