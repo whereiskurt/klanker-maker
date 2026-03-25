@@ -36,26 +36,47 @@ func TestBuildBudgetDisplayData_WithBudget(t *testing.T) {
 	if !d.HasBudget {
 		t.Fatal("expected HasBudget=true when limits are set")
 	}
-	if d.ComputeSpent != "$1.50" {
-		t.Errorf("ComputeSpent: got %q, want %q", d.ComputeSpent, "$1.50")
+	if d.ComputeSpent != "$1.5000" {
+		t.Errorf("ComputeSpent: got %q, want %q", d.ComputeSpent, "$1.5000")
 	}
-	if d.ComputeLimit != "$5.00" {
-		t.Errorf("ComputeLimit: got %q, want %q", d.ComputeLimit, "$5.00")
+	if d.ComputeLimit != "$5.0000" {
+		t.Errorf("ComputeLimit: got %q, want %q", d.ComputeLimit, "$5.0000")
 	}
 	if d.ComputePct != 30 {
 		t.Errorf("ComputePct: got %d, want 30", d.ComputePct)
 	}
-	if d.AISpent != "$0.25" {
-		t.Errorf("AISpent: got %q, want %q", d.AISpent, "$0.25")
+	if d.AISpent != "$0.2500" {
+		t.Errorf("AISpent: got %q, want %q", d.AISpent, "$0.2500")
 	}
-	if d.AILimit != "$10.00" {
-		t.Errorf("AILimit: got %q, want %q", d.AILimit, "$10.00")
+	if d.AILimit != "$10.0000" {
+		t.Errorf("AILimit: got %q, want %q", d.AILimit, "$10.0000")
 	}
 	if d.AIPct != 2 {
 		t.Errorf("AIPct: got %d, want 2", d.AIPct)
 	}
 	if d.CSSClass != "budget-ok" {
 		t.Errorf("CSSClass: got %q, want %q", d.CSSClass, "budget-ok")
+	}
+}
+
+// TestFormatUSD_FourDecimal verifies that formatUSD uses 4 decimal places.
+// Sub-penny amounts like $0.0012 must display as "$0.0012" not "$0.00".
+func TestFormatUSD_FourDecimal(t *testing.T) {
+	tests := []struct {
+		input float64
+		want  string
+	}{
+		{0.0, "$0.0000"},
+		{0.001, "$0.0010"},
+		{0.0012, "$0.0012"},
+		{1.50, "$1.5000"},
+		{99.9999, "$99.9999"},
+	}
+	for _, tc := range tests {
+		got := formatUSD(tc.input)
+		if got != tc.want {
+			t.Errorf("formatUSD(%v) = %q, want %q", tc.input, got, tc.want)
+		}
 	}
 }
 
