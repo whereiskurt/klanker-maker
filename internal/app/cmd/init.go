@@ -156,23 +156,33 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		os.Setenv("KM_ROUTE53_ZONE_ID", cfg.Route53ZoneID)
 	}
 
-	// Build Lambda zips if they don't exist (same as `make build-lambdas`).
 	repoRoot := findRepoRoot()
+
+	fmt.Println()
+	fmt.Printf("km init — %s (%s)\n", region, compiler.RegionLabel(region))
+	fmt.Println(strings.Repeat("─", 50))
+
+	// Step 1: Build Lambda zips
+	fmt.Println()
+	fmt.Println("Building Lambdas...")
 	if err := buildLambdaZips(repoRoot); err != nil {
 		fmt.Printf("  [warn] Lambda build failed: %v\n", err)
-		fmt.Printf("  TTL handler and budget enforcer may be skipped. Run 'make build-lambdas' manually.\n")
 	}
 
-	// Build and upload sidecar binaries to S3 if not already present.
+	// Step 2: Build and upload sidecars
+	fmt.Println()
+	fmt.Println("Building and uploading sidecars...")
 	if cfg.ArtifactsBucket != "" {
 		if err := buildAndUploadSidecars(repoRoot, cfg.ArtifactsBucket); err != nil {
 			fmt.Printf("  [warn] Sidecar build/upload failed: %v\n", err)
-			fmt.Printf("  Sidecars (DNS proxy, HTTP proxy, audit log) won't be available on sandbox instances.\n")
 		}
 	} else {
-		fmt.Printf("  [skip] sidecar upload — artifacts_bucket not configured\n")
+		fmt.Printf("  [skip] artifacts_bucket not configured\n")
 	}
 
+	// Step 3: Apply regional infrastructure
+	fmt.Println()
+	fmt.Println("Applying infrastructure...")
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
 	runner.Verbose = verbose
 	return RunInitWithRunner(runner, repoRoot, region)
@@ -205,7 +215,7 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 
 	modules := regionalModules(regionDir)
 
-	fmt.Printf("Initializing regional infrastructure for %s (%s)...\n", region, regionLabel)
+	// Module header already printed by runInit
 
 	for _, mod := range modules {
 		// Check if directory exists
@@ -266,8 +276,9 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 		}
 	}
 
-	fmt.Printf("\nRegional infrastructure initialized for %s.\n", region)
-	fmt.Printf("Ready for: km create --region %s <profile.yaml>\n", region)
+	fmt.Println()
+	fmt.Println(strings.Repeat("─", 50))
+	fmt.Printf("Init complete for %s. Ready for: km create <profile.yaml>\n", region)
 	return nil
 }
 
