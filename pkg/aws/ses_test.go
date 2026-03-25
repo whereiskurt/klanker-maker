@@ -173,3 +173,97 @@ func TestSES_CleanupSandboxEmail_IdempotentOnNotFound(t *testing.T) {
 // strPtr is a local helper for string pointers in tests.
 // (stringPtr is defined in scheduler_test.go; this avoids redeclaration)
 func strPtr(s string) *string { return &s }
+
+// ============================================================
+// SendApprovalRequest tests
+// ============================================================
+
+func TestSendApprovalRequest_FromAddressIsSandboxMailbox(t *testing.T) {
+	mock := &mockSESV2API{}
+	err := kmaws.SendApprovalRequest(context.Background(), mock,
+		"sb-abc123", "sandboxes.klankermaker.ai", "operator@company.com",
+		"deploy-prod", "Deploy production stack v2.3.1")
+	if err != nil {
+		t.Fatalf("SendApprovalRequest returned unexpected error: %v", err)
+	}
+	if !mock.sendEmailCalled {
+		t.Fatal("expected SendEmail to be called")
+	}
+	// From must be sandbox's own mailbox so operator reply routes back to sandbox
+	wantFrom := "sb-abc123@sandboxes.klankermaker.ai"
+	if mock.sendEmailInput.FromEmailAddress == nil || *mock.sendEmailInput.FromEmailAddress != wantFrom {
+		t.Errorf("FromEmailAddress = %v; want %q", mock.sendEmailInput.FromEmailAddress, wantFrom)
+	}
+}
+
+func TestSendApprovalRequest_ToAddressIsOperator(t *testing.T) {
+	mock := &mockSESV2API{}
+	err := kmaws.SendApprovalRequest(context.Background(), mock,
+		"sb-abc123", "sandboxes.klankermaker.ai", "operator@company.com",
+		"deploy-prod", "Deploy production stack v2.3.1")
+	if err != nil {
+		t.Fatalf("SendApprovalRequest returned unexpected error: %v", err)
+	}
+	if len(mock.sendEmailInput.Destination.ToAddresses) != 1 {
+		t.Fatalf("expected 1 ToAddress, got %d", len(mock.sendEmailInput.Destination.ToAddresses))
+	}
+	if mock.sendEmailInput.Destination.ToAddresses[0] != "operator@company.com" {
+		t.Errorf("ToAddresses[0] = %q; want %q", mock.sendEmailInput.Destination.ToAddresses[0], "operator@company.com")
+	}
+}
+
+func TestSendApprovalRequest_SubjectContainsSandboxIDAndAction(t *testing.T) {
+	mock := &mockSESV2API{}
+	err := kmaws.SendApprovalRequest(context.Background(), mock,
+		"sb-abc123", "sandboxes.klankermaker.ai", "operator@company.com",
+		"deploy-prod", "Deploy production stack v2.3.1")
+	if err != nil {
+		t.Fatalf("SendApprovalRequest returned unexpected error: %v", err)
+	}
+	subject := *mock.sendEmailInput.Content.Simple.Subject.Data
+	wantSubject := "[KM-APPROVAL-REQUEST] sb-abc123 deploy-prod"
+	if subject != wantSubject {
+		t.Errorf("Subject = %q; want %q", subject, wantSubject)
+	}
+}
+
+func TestSendApprovalRequest_BodyContainsActionAndInstructions(t *testing.T) {
+	mock := &mockSESV2API{}
+	err := kmaws.SendApprovalRequest(context.Background(), mock,
+		"sb-abc123", "sandboxes.klankermaker.ai", "operator@company.com",
+		"deploy-prod", "Deploy production stack v2.3.1")
+	if err != nil {
+		t.Fatalf("SendApprovalRequest returned unexpected error: %v", err)
+	}
+	body := *mock.sendEmailInput.Content.Simple.Body.Text.Data
+	if !strings.Contains(body, "sb-abc123") {
+		t.Errorf("body does not contain sandbox ID 'sb-abc123': %q", body)
+	}
+	if !strings.Contains(body, "deploy-prod") {
+		t.Errorf("body does not contain action 'deploy-prod': %q", body)
+	}
+	if !strings.Contains(body, "Deploy production stack v2.3.1") {
+		t.Errorf("body does not contain description: %q", body)
+	}
+	if !strings.Contains(body, "APPROVED") {
+		t.Errorf("body does not contain 'APPROVED' instruction: %q", body)
+	}
+	if !strings.Contains(body, "DENIED") {
+		t.Errorf("body does not contain 'DENIED' instruction: %q", body)
+	}
+}
+
+func TestSendApprovalRequest_Error(t *testing.T) {
+	sdkErr := errors.New("sdk error: MessageRejected")
+	mock := &mockSESV2API{sendEmailErr: sdkErr}
+
+	err := kmaws.SendApprovalRequest(context.Background(), mock,
+		"sb-abc123", "sandboxes.klankermaker.ai", "operator@company.com",
+		"deploy-prod", "Deploy production stack")
+	if err == nil {
+		t.Fatal("expected error from SendApprovalRequest when SendEmail fails")
+	}
+	if !strings.Contains(err.Error(), "MessageRejected") {
+		t.Errorf("expected error to contain 'MessageRejected', got: %v", err)
+	}
+}

@@ -76,6 +76,43 @@ func SendLifecycleNotification(ctx context.Context, client SESV2API, operatorEma
 	return nil
 }
 
+// SendApprovalRequest sends a structured approval request email to the operator.
+//
+// The From address is set to {sandboxID}@sandboxes.{domain} so that when the
+// operator replies, the reply routes back to the sandbox's own SES mailbox via
+// the existing SES receipt rule.
+//
+// Subject format: "[KM-APPROVAL-REQUEST] {sandboxID} {action}"
+// Body: structured text with action details and APPROVED/DENIED reply instructions.
+func SendApprovalRequest(ctx context.Context, client SESV2API, sandboxID, domain, operatorEmail, action, description string) error {
+	from := sandboxEmailAddress(sandboxID, domain)
+	subject := fmt.Sprintf("[KM-APPROVAL-REQUEST] %s %s", sandboxID, action)
+	body := fmt.Sprintf("Sandbox %s requests approval for action: %s\n\n%s\n\nReply with APPROVED to authorize or DENIED to reject.\n", sandboxID, action, description)
+
+	_, err := client.SendEmail(ctx, &sesv2.SendEmailInput{
+		FromEmailAddress: awssdk.String(from),
+		Destination: &sesv2types.Destination{
+			ToAddresses: []string{operatorEmail},
+		},
+		Content: &sesv2types.EmailContent{
+			Simple: &sesv2types.Message{
+				Subject: &sesv2types.Content{
+					Data: awssdk.String(subject),
+				},
+				Body: &sesv2types.Body{
+					Text: &sesv2types.Content{
+						Data: awssdk.String(body),
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("send approval request for sandbox %s (action: %s): %w", sandboxID, action, err)
+	}
+	return nil
+}
+
 // CleanupSandboxEmail deletes the SES email identity for {sandboxID}@{domain}.
 //
 // This is called during km destroy. The function is idempotent: if the identity
