@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 20-02-PLAN.md
-last_updated: "2026-03-25T03:22:04.137Z"
+stopped_at: Completed 21-02-PLAN.md
+last_updated: "2026-03-25T21:09:06.062Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
-  total_phases: 20
+  total_phases: 21
   completed_phases: 20
-  total_plans: 70
-  completed_plans: 70
+  total_plans: 74
+  completed_plans: 71
   percent: 0
 ---
 
@@ -119,6 +119,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 19-budget-enforcement-wiring-ec2-hard-stop-iam-revocation-resume-tag-fix P01 | 71 | 2 tasks | 3 files |
 | Phase 20-anthropic-api-metering-claude-code-ai-spend-tracking P01 | 4 | 2 tasks | 3 files |
 | Phase 20-anthropic-api-metering-claude-code-ai-spend-tracking P02 | 302 | 2 tasks | 7 files |
+| Phase 21 P02 | 452s | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -309,6 +310,9 @@ Recent decisions affecting current work:
 - [Phase 20-02]: quiet mode (Verbose=false) is default — operators see step summaries not raw HCL plan output
 - [Phase 20-02]: errors always printed in quiet mode — captured stderr shown on non-zero exit
 - [Phase 20-02]: runner.Verbose = verbose pattern established for all commands that call terragrunt
+- [Phase 21]: SafePhraseOK=false when expectedSafePhrase='' (skip check) even when KM-AUTH pattern is present
+- [Phase 21]: Safe phrase generated at create time, shown once to stdout, stored in SSM only - never in profile YAML
+- [Phase 21]: OTP env var name derived from last SSM path segment with KM_OTP_ prefix and uppercase (e.g. github-token -> KM_OTP_GITHUB_TOKEN)
 
 ### Roadmap Evolution
 
@@ -335,6 +339,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-25T03:18:20.199Z
-Stopped at: Completed 20-02-PLAN.md
+Last session: 2026-03-25T21:09:06.059Z
+Stopped at: Completed 21-02-PLAN.md
 Resume file: None
