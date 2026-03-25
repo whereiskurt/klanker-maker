@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
@@ -91,6 +92,13 @@ func NewDestroyCmd(cfg *config.Config) *cobra.Command {
 // runDestroy executes the full destroy workflow.
 func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool, verbose bool) error {
 	ctx := context.Background()
+
+	// Suppress structured JSON log output when not verbose.
+	if !verbose {
+		origLogger := log.Logger
+		log.Logger = zerolog.New(io.Discard)
+		defer func() { log.Logger = origLogger }()
+	}
 
 	// Step 1: Validate sandbox ID format
 	if !sandboxIDPattern.MatchString(sandboxID) {

@@ -21,7 +21,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"io"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
@@ -92,6 +94,13 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 // runCreate executes the full create workflow.
 func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile string, verbose bool) error {
 	ctx := context.Background()
+
+	// Suppress structured JSON log output when not verbose — user sees fmt.Printf step summaries instead.
+	if !verbose {
+		origLogger := log.Logger
+		log.Logger = zerolog.New(io.Discard)
+		defer func() { log.Logger = origLogger }()
+	}
 
 	// Step 1: Read profile file
 	raw, err := os.ReadFile(profilePath)
