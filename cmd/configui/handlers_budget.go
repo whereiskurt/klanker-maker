@@ -62,9 +62,10 @@ func worstCSSClass(a, b string) string {
 	return a
 }
 
-// formatUSD formats a float64 dollar amount as "$N.NN".
+// formatUSD formats a float64 dollar amount as "$N.NNNN" (4 decimal places).
+// Sub-penny AI charges (e.g. $0.0012) display correctly instead of rounding to "$0.00".
 func formatUSD(amount float64) string {
-	return fmt.Sprintf("$%.2f", amount)
+	return fmt.Sprintf("$%.4f", amount)
 }
 
 // calcPct computes the integer percentage of spent/limit.

@@ -453,7 +453,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 				Float64("ai_limit", aiLimit).
 				Float64("warning_threshold", warningThreshold).
 				Msg("Budget limits set")
-			fmt.Printf("Budget limits set: compute $%.2f, AI $%.2f, warning at %.0f%%\n",
+			fmt.Printf("Budget limits set: compute $%.4f, AI $%.4f, warning at %.0f%%\n",
 				computeLimit, aiLimit, warningThreshold*100)
 		}
 	}

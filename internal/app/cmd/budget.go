@@ -205,7 +205,7 @@ func runBudgetAdd(cmd *cobra.Command, cfg *config.Config, budgetClient kmaws.Bud
 
 	// Step 6: Print summary
 	out := cmd.OutOrStdout()
-	fmt.Fprintf(out, "Budget updated: compute $%.2f/$%.2f, AI $%.2f/$%.2f\n",
+	fmt.Fprintf(out, "Budget updated: compute $%.4f/$%.4f, AI $%.4f/$%.4f\n",
 		current.ComputeSpent, newComputeLimit,
 		current.AISpent, newAILimit,
 	)

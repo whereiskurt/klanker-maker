@@ -284,7 +284,7 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 			if budget.ComputeLimit > 0 {
 				pct = (budget.ComputeSpent / budget.ComputeLimit) * 100
 			}
-			fmt.Fprintf(out, "  Compute: $%.2f / $%.2f (%s)\n",
+			fmt.Fprintf(out, "  Compute: $%.4f / $%.4f (%s)\n",
 				budget.ComputeSpent, budget.ComputeLimit, colorPercent(pct, isTTY))
 		}
 
@@ -293,7 +293,7 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 			if budget.AILimit > 0 {
 				pct = (budget.AISpent / budget.AILimit) * 100
 			}
-			fmt.Fprintf(out, "  AI:      $%.2f / $%.2f (%s)\n",
+			fmt.Fprintf(out, "  AI:      $%.4f / $%.4f (%s)\n",
 				budget.AISpent, budget.AILimit, colorPercent(pct, isTTY))
 
 			// Per-model breakdown (sorted for deterministic output)
@@ -305,7 +305,7 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 				sort.Strings(models)
 				for _, modelID := range models {
 					ms := budget.AIByModel[modelID]
-					fmt.Fprintf(out, "    %-30s $%.2f (%dK in / %dK out)\n",
+					fmt.Fprintf(out, "    %-30s $%.4f (%dK in / %dK out)\n",
 						modelID+":",
 						ms.SpentUSD,
 						ms.InputTokens/1000,
