@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 19-01-PLAN.md
-last_updated: "2026-03-25T02:42:43.093Z"
+stopped_at: Completed 20-01-PLAN.md
+last_updated: "2026-03-25T03:17:48.996Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 20
   completed_phases: 19
-  total_plans: 68
-  completed_plans: 68
+  total_plans: 70
+  completed_plans: 69
   percent: 0
 ---
 
@@ -117,6 +117,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 18-loose-ends P04 | 8min | 2 tasks | 6 files |
 | Phase 19-budget-enforcement-wiring-ec2-hard-stop-iam-revocation-resume-tag-fix P02 | 54 | 1 tasks | 2 files |
 | Phase 19-budget-enforcement-wiring-ec2-hard-stop-iam-revocation-resume-tag-fix P01 | 71 | 2 tasks | 3 files |
+| Phase 20-anthropic-api-metering-claude-code-ai-spend-tracking P01 | 4 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -302,6 +303,8 @@ Recent decisions affecting current work:
 - [Phase 19-budget-enforcement-wiring-ec2-hard-stop-iam-revocation-resume-tag-fix]: Used source-level tag key test (os.ReadFile + strings.Contains) instead of mock extension because fakeEC2StartAPI ignores filter args; negative check targets exact broken Go string literal to avoid false negatives from substring match
 - [Phase 19-01]: Use try(values(dependency.sandbox.outputs.ec2spot_instances)[0].instance_id, '') for EC2 instance_id to handle ECS sandboxes and mock_outputs
 - [Phase 19-01]: Use mock_outputs_allowed_on_destroy = true in dependency block to prevent destroy failures when sandbox module is already gone
+- [Phase 20-anthropic-api-metering-claude-code-ai-spend-tracking]: Extract Anthropic model ID from response body (not URL): SSE message_start.message.model or non-streaming top-level model field
+- [Phase 20-anthropic-api-metering-claude-code-ai-spend-tracking]: Use staticAnthropicRates in handler closure directly, not via WithBudgetEnforcement, to avoid changing the Bedrock API
 
 ### Roadmap Evolution
 
@@ -327,6 +330,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-25T02:38:18.370Z
-Stopped at: Completed 19-01-PLAN.md
+Last session: 2026-03-25T03:17:48.994Z
+Stopped at: Completed 20-01-PLAN.md
 Resume file: None

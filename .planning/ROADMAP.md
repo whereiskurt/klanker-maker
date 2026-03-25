@@ -284,7 +284,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 17. Sandbox Email Mailbox & Access Control | 3/3 | Complete    | 2026-03-23 |
 | 18. Loose Ends | 4/4 | Complete    | 2026-03-24 |
 | 19. Budget Enforcement Wiring | 2/2 | Complete    | 2026-03-25 |
-| 20. Anthropic API Metering | 0/0 | Planned    | — |
+| 20. Anthropic API Metering | 1/2 | In Progress|  |
 
 ### Phase 13: GitHub App Token Integration — scoped repo access for sandboxes
 
@@ -510,7 +510,7 @@ Plans:
   10. Errors and warnings from terragrunt are always shown regardless of verbose mode
 
 **Depends on:** Phase 19 (budget enforcement wiring must work first)
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 20-01-PLAN.md — Anthropic API token extraction and budget enforcement (BUDG-10)
