@@ -515,3 +515,28 @@ Plans:
 Plans:
 - [ ] 20-01-PLAN.md — Anthropic API token extraction and budget enforcement (BUDG-10)
 - [ ] 20-02-PLAN.md — Terragrunt output suppression with --verbose flag (OPER-01)
+
+### Phase 21: Bug fixes and mini-features — budget precision, polish, small enhancements
+
+**Goal:** Polish, harden, and validate the platform with bug fixes, small features, and E2E verification
+
+**Scope:**
+1. Budget display precision — 4 decimal places to show sub-penny spend changes
+2. CloudWatch log export on teardown — archive sandbox logs to S3 as a standard artifact during idle/TTL-triggered destroy
+3. E2E sidecar verification — confirm all 4 sidecars work: DNS proxy, HTTP proxy, audit log, OTel tracing
+4. GitHub repo cloning/locking validation — verify GitHub App token integration and repo access
+5. Inter-sandbox email send/receive test — two klankers email each other
+6. Email allow-list enforcement test — only `whereiskurt@gmail.com` can email a klanker
+7. Safe phrase email override — embed a secret phrase in email to authorize/override klanker actions
+8. Klanker action approval via email — klanker emails `whereiskurt+klankerqq@gmail.com` to request allow/deny on actions
+9. One-time password sync — bootstrap credential/secret sync into sandboxes
+
+**Requirements**: Polish/hardening phase (no specific requirement IDs)
+**Depends on:** Phase 20
+**Plans:** 4 plans
+
+Plans:
+- [ ] 21-01-PLAN.md — Budget display precision (%.4f) + CloudWatch log export on teardown
+- [ ] 21-02-PLAN.md — Safe phrase email override + OTP secret sync
+- [ ] 21-03-PLAN.md — Action approval via email (send request + poll for reply)
+- [ ] 21-04-PLAN.md — E2E verification checklist + operator review checkpoint
