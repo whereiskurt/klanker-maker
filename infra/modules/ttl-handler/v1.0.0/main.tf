@@ -157,6 +157,7 @@ resource "aws_iam_role_policy" "terraform_destroy" {
           "ec2:DescribeImages",
           "ec2:DescribeSpotPriceHistory",
           "ec2:DescribeNetworkInterfaces",
+          "ec2:DescribeVolumes",
         ]
         Resource = "*"
       },
@@ -202,7 +203,7 @@ resource "aws_lambda_function" "ttl_handler" {
 
   # 15-minute timeout: terraform init + destroy can take several minutes
   timeout     = 900
-  memory_size = 512
+  memory_size = 1024
   architectures = ["arm64"]
 
   # 2GB ephemeral storage: terraform init downloads the AWS provider (~500MB)
