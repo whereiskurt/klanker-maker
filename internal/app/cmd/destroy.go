@@ -14,6 +14,7 @@ import (
 	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
@@ -48,6 +49,7 @@ func NewDestroyCmd(cfg *config.Config) *cobra.Command {
 	var awsProfile string
 	var yes bool
 	var verbose bool
+	var remote bool
 
 	cmd := &cobra.Command{
 		Use:   "destroy <sandbox-id | #number>",
@@ -72,6 +74,9 @@ func NewDestroyCmd(cfg *config.Config) *cobra.Command {
 					return nil
 				}
 			}
+			if remote {
+				return runRemoteDestroy(ctx, cfg, sandboxID)
+			}
 			if awsProfile == "" {
 				awsProfile = "klanker-terraform"
 			}
@@ -85,11 +90,31 @@ func NewDestroyCmd(cfg *config.Config) *cobra.Command {
 		"Skip confirmation prompt")
 	cmd.Flags().BoolVar(&verbose, "verbose", false,
 		"Show full terragrunt/terraform output")
+	cmd.Flags().BoolVar(&remote, "remote", false,
+		"Trigger destroy via Lambda (EventBridge) instead of local terragrunt")
 
 	return cmd
 }
 
 // runDestroy executes the full destroy workflow.
+// runRemoteDestroy publishes a SandboxIdle event to EventBridge, triggering the
+// TTL Lambda to destroy the sandbox remotely. No local terragrunt needed.
+func runRemoteDestroy(ctx context.Context, cfg *config.Config, sandboxID string) error {
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
+	if err != nil {
+		return fmt.Errorf("load AWS config: %w", err)
+	}
+
+	ebClient := eventbridge.NewFromConfig(awsCfg)
+	fmt.Printf("Sending remote destroy signal for %s...\n", sandboxID)
+	if err := awspkg.PublishSandboxIdleEvent(ctx, ebClient, sandboxID); err != nil {
+		return fmt.Errorf("publish destroy event: %w", err)
+	}
+	fmt.Printf("Destroy event published. The TTL Lambda will destroy %s in the background.\n", sandboxID)
+	fmt.Printf("Monitor with: aws logs tail /aws/lambda/km-ttl-handler --follow --profile klanker-terraform --region us-east-1\n")
+	return nil
+}
+
 func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool, verbose bool) error {
 	ctx := context.Background()
 
