@@ -278,7 +278,7 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 		if rec.IdleTimeout != "" {
 			idleLabel = fmt.Sprintf("Last Active (idle: %s)", rec.IdleTimeout)
 		}
-		idleSince := getLastActivity(context.Background(), rec.SandboxID)
+		idleSince := getLastActivity(context.Background(), rec.SandboxID, rec.IdleTimeout, isTTY)
 		if idleSince != "" {
 			fmt.Fprintf(out, "%s: %s\n", idleLabel, idleSince)
 		}
@@ -379,8 +379,9 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 }
 
 // getLastActivity checks CloudWatch for the most recent audit event and returns
-// a human-readable string like "2m ago" or "no activity yet".
-func getLastActivity(ctx context.Context, sandboxID string) string {
+// a human-readable string like "2m ago" or "no activity yet", with color based
+// on proximity to idle timeout.
+func getLastActivity(ctx context.Context, sandboxID, idleTimeout string, isTTY bool) string {
 	awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
 	if err != nil {
 		return ""
@@ -396,5 +397,25 @@ func getLastActivity(ctx context.Context, sandboxID string) string {
 	lastEvent := events[len(events)-1]
 	lastTime := time.UnixMilli(lastEvent.Timestamp)
 	ago := time.Since(lastTime).Round(time.Second)
-	return fmt.Sprintf("%s ago (%s)", ago, lastTime.Local().Format("3:04:05 PM"))
+	agoStr := fmt.Sprintf("%s ago (%s)", ago, lastTime.Local().Format("3:04:05 PM"))
+
+	if !isTTY {
+		return agoStr
+	}
+
+	// Color based on idle timeout proximity
+	idleDur, parseErr := time.ParseDuration(idleTimeout)
+	if parseErr != nil || idleDur == 0 {
+		return agoStr // no idle timeout configured, no color
+	}
+
+	remaining := idleDur - ago
+	switch {
+	case remaining < 5*time.Minute:
+		return ansiRed + agoStr + ansiReset
+	case remaining < 15*time.Minute:
+		return ansiYellow + agoStr + ansiReset
+	default:
+		return ansiGreen + agoStr + ansiReset
+	}
 }
