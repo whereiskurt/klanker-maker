@@ -33,6 +33,9 @@ func BuildTTLScheduleInput(sandboxID string, ttlExpiry time.Time, lambdaARN stri
 			Arn:     aws.String(lambdaARN),
 			RoleArn: aws.String(schedulerRoleARN),
 			Input:   aws.String(`{"sandbox_id":"` + sandboxID + `"}`),
+			RetryPolicy: &types.RetryPolicy{
+				MaximumRetryAttempts: aws.Int32(0),
+			},
 		},
 		FlexibleTimeWindow: &types.FlexibleTimeWindow{
 			Mode: types.FlexibleTimeWindowModeOff,
