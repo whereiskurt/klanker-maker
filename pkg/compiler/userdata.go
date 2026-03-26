@@ -345,6 +345,11 @@ fi
 # are redirected to the HTTP proxy and fail, breaking SSM and credential refresh.
 iptables -t nat -I OUTPUT -d 169.254.169.254 -j RETURN
 
+# Exempt root user from DNAT — SSM agent, systemd, and AWS CLI run as root.
+# Without this, SSM agent connections to ssm.amazonaws.com:443 get redirected
+# to the HTTP proxy and blocked (not in the allowlist), breaking SSM sessions.
+iptables -t nat -A OUTPUT -m owner --uid-owner 0 -j RETURN
+
 # DNS: redirect UDP/TCP port 53 to local DNS proxy on :5353
 # ! --uid-owner km-sidecar exempts the proxy's own upstream queries (prevents redirect loop)
 iptables -t nat -A OUTPUT -p udp --dport 53 -m owner ! --uid-owner km-sidecar -j REDIRECT --to-ports 5353
