@@ -96,6 +96,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 
 // runCreate executes the full create workflow.
 func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile string, verbose bool) error {
+	createStart := time.Now()
 	ctx := context.Background()
 
 	// Suppress structured JSON log output when not verbose — user sees fmt.Printf step summaries instead.
@@ -597,7 +598,8 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 
 	fmt.Println()
 	fmt.Println(strings.Repeat("─", 50))
-	fmt.Printf("Sandbox %s created successfully.\n", sandboxID)
+	elapsed := time.Since(createStart).Round(time.Second)
+	fmt.Printf("Sandbox %s created successfully. (%s)\n", sandboxID, elapsed)
 	if ttlExpiry != nil {
 		fmt.Printf("  TTL: %s (expires %s)\n", resolvedProfile.Spec.Lifecycle.TTL, ttlExpiry.Format("15:04:05"))
 	}
