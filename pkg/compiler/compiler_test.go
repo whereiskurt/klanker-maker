@@ -859,3 +859,112 @@ func TestUserDataEmptyAllowedRepos_NoGITASKPASS(t *testing.T) {
 		t.Errorf("UserData should NOT contain GIT_ASKPASS when allowedRepos is empty\nGot:\n%s", artifacts.UserData)
 	}
 }
+
+// ============================================================
+// Phase 25 Plan 02: AllowedRefs enforcement via pre-push hook
+// ============================================================
+
+// TestUserDataAllowedRefsEnvVar verifies that a profile with allowedRefs
+// produces user-data containing KM_ALLOWED_REFS with colon-separated patterns.
+func TestUserDataAllowedRefsEnvVar(t *testing.T) {
+	p := loadTestProfile(t, "ec2-with-allowed-refs.yaml")
+	id := "sb-refsenv1"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile(EC2 with allowed refs) error = %v", err)
+	}
+
+	ud := artifacts.UserData
+
+	// KM_ALLOWED_REFS must be set with colon-separated patterns
+	if !strings.Contains(ud, `KM_ALLOWED_REFS="main:feature/*"`) {
+		t.Errorf("UserData should contain KM_ALLOWED_REFS=\"main:feature/*\" for profile with allowedRefs\nGot:\n%s", ud)
+	}
+}
+
+// TestUserDataEmptyAllowedRefs_NoEnvVar verifies that a profile with an empty
+// allowedRefs slice does NOT emit KM_ALLOWED_REFS in user-data.
+func TestUserDataEmptyAllowedRefs_NoEnvVar(t *testing.T) {
+	p := loadTestProfile(t, "ec2-with-secrets.yaml") // has allowedRefs: ["main"] but we'll use it as-is
+	id := "sb-refsempt"
+
+	// Override to remove allowedRefs
+	p.Spec.SourceAccess.GitHub.AllowedRefs = []string{}
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile(EC2 empty allowedRefs) error = %v", err)
+	}
+
+	if strings.Contains(artifacts.UserData, "KM_ALLOWED_REFS") {
+		t.Errorf("UserData should NOT contain KM_ALLOWED_REFS when allowedRefs is empty\nGot:\n%s", artifacts.UserData)
+	}
+}
+
+// TestUserDataPrePushHookPresent verifies that a profile with allowedRefs
+// produces user-data containing the pre-push hook script and core.hooksPath config.
+func TestUserDataPrePushHookPresent(t *testing.T) {
+	p := loadTestProfile(t, "ec2-with-allowed-refs.yaml")
+	id := "sb-hookpres"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile(EC2 with allowed refs) error = %v", err)
+	}
+
+	ud := artifacts.UserData
+
+	if !strings.Contains(ud, "/opt/km/hooks/pre-push") {
+		t.Errorf("UserData should contain /opt/km/hooks/pre-push hook script path\nGot:\n%s", ud)
+	}
+	if !strings.Contains(ud, "core.hooksPath") {
+		t.Errorf("UserData should contain git config core.hooksPath setting\nGot:\n%s", ud)
+	}
+}
+
+// TestUserDataPrePushHookAbsent verifies that a profile without allowedRefs
+// does NOT produce a pre-push hook or core.hooksPath config in user-data.
+func TestUserDataPrePushHookAbsent(t *testing.T) {
+	p := loadTestProfile(t, "ec2-with-secrets.yaml") // allowedRefs: ["main"] — override to remove
+	id := "sb-hookabs1"
+
+	// Override to remove allowedRefs
+	p.Spec.SourceAccess.GitHub.AllowedRefs = []string{}
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile(EC2 no allowedRefs) error = %v", err)
+	}
+
+	ud := artifacts.UserData
+
+	// pre-push hook and core.hooksPath must NOT appear
+	if strings.Contains(ud, "core.hooksPath") {
+		t.Errorf("UserData should NOT contain core.hooksPath when allowedRefs is empty\nGot:\n%s", ud)
+	}
+}
+
+// TestUserDataNilAllowedRefs_NoHook verifies that a profile with a github config
+// block but nil allowedRefs field does NOT produce a pre-push hook.
+func TestUserDataNilAllowedRefs_NoHook(t *testing.T) {
+	p := loadTestProfile(t, "ec2-with-secrets.yaml")
+	id := "sb-nilrefs1"
+
+	// Set allowedRefs to nil explicitly
+	p.Spec.SourceAccess.GitHub.AllowedRefs = nil
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile(EC2 nil allowedRefs) error = %v", err)
+	}
+
+	ud := artifacts.UserData
+
+	if strings.Contains(ud, "core.hooksPath") {
+		t.Errorf("UserData should NOT contain core.hooksPath when allowedRefs is nil\nGot:\n%s", ud)
+	}
+	if strings.Contains(ud, "KM_ALLOWED_REFS") {
+		t.Errorf("UserData should NOT contain KM_ALLOWED_REFS when allowedRefs is nil\nGot:\n%s", ud)
+	}
+}

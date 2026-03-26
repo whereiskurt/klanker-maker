@@ -151,6 +151,36 @@ export GIT_ASKPASS=/opt/km/bin/km-git-askpass
 echo "[km-bootstrap] GIT_ASKPASS credential helper installed"
 {{- end }}
 
+{{- if .HasAllowedRefs }}
+# ============================================================
+# 4b. Git ref enforcement: pre-push hook blocks pushes to unlisted refs
+# ============================================================
+echo "[km-bootstrap] Installing ref enforcement hooks..."
+export KM_ALLOWED_REFS="{{ .AllowedRefs }}"
+mkdir -p /opt/km/hooks
+cat > /opt/km/hooks/pre-push << 'PREPUSH'
+#!/bin/bash
+ALLOWED_REFS="${KM_ALLOWED_REFS:-}"
+if [ -z "$ALLOWED_REFS" ]; then exit 0; fi
+while read local_ref local_sha remote_ref remote_sha; do
+  branch="${remote_ref#refs/heads/}"
+  allowed=false
+  IFS=: read -ra PATTERNS <<< "$ALLOWED_REFS"
+  for pattern in "${PATTERNS[@]}"; do
+    if [[ "$branch" == $pattern ]]; then allowed=true; break; fi
+  done
+  if [ "$allowed" = false ]; then
+    echo "[km] Push to '$branch' denied -- not in allowedRefs: $ALLOWED_REFS" >&2
+    exit 1
+  fi
+done
+exit 0
+PREPUSH
+chmod +x /opt/km/hooks/pre-push
+git config --system core.hooksPath /opt/km/hooks
+echo "[km-bootstrap] Ref enforcement hooks installed (allowedRefs: {{ .AllowedRefs }})"
+{{- end }}
+
 # ============================================================
 # 5. Sidecar binaries: install DNS proxy, HTTP proxy, audit log
 # ============================================================
@@ -516,6 +546,8 @@ type userDataParams struct {
 	SandboxID          string
 	SecretPaths        []string
 	HasGitHub          bool
+	HasAllowedRefs     bool   // true when allowedRefs is non-empty
+	AllowedRefs        string // colon-separated list for KM_ALLOWED_REFS env var
 	AllowedDNSSuffixes string // comma-separated, from profile.Network.Egress.AllowedDNSSuffixes
 	AllowedHTTPHosts   string // comma-separated, from profile.Network.Egress.AllowedHosts
 	KMArtifactsBucket  string // from config env var KM_ARTIFACTS_BUCKET
@@ -547,6 +579,16 @@ type otpSecret struct {
 	EnvName string // derived env var name (e.g. KM_OTP_GITHUB_TOKEN)
 }
 
+// joinAllowedRefs returns the AllowedRefs slice as a colon-separated string
+// suitable for the KM_ALLOWED_REFS environment variable.
+// Returns empty string when GitHub config is nil or AllowedRefs is empty.
+func joinAllowedRefs(p *profile.SandboxProfile) string {
+	if p.Spec.SourceAccess.GitHub == nil || len(p.Spec.SourceAccess.GitHub.AllowedRefs) == 0 {
+		return ""
+	}
+	return strings.Join(p.Spec.SourceAccess.GitHub.AllowedRefs, ":")
+}
+
 // generateUserData produces the EC2 bootstrap user-data.sh content for the given profile.
 // It is only called for ec2 substrate sandboxes.
 // artifactsBucket is from the KM_ARTIFACTS_BUCKET env var; may be empty string.
@@ -573,6 +615,8 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		SandboxID:          sandboxID,
 		SecretPaths:        secretPaths,
 		HasGitHub:          p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRepos) > 0,
+		HasAllowedRefs:     p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRefs) > 0,
+		AllowedRefs:        joinAllowedRefs(p),
 		AllowedDNSSuffixes: strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
 		AllowedHTTPHosts:   strings.Join(p.Spec.Network.Egress.AllowedHosts, ","),
 		KMArtifactsBucket:  artifactsBucket,
