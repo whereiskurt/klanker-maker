@@ -335,6 +335,11 @@ echo "[km-bootstrap] Mail poller started — inbox at /var/mail/km/new/"
 # ============================================================
 echo "[km-bootstrap] Configuring iptables DNAT..."
 
+# Amazon Linux 2023 uses nftables — install iptables compatibility layer
+if ! command -v iptables &>/dev/null; then
+  yum install -y iptables-nft 2>/dev/null || yum install -y iptables 2>/dev/null || true
+fi
+
 # IMDS exemption MUST be inserted first (-I inserts at top of chain).
 # Without this, IMDSv2 PUT token requests (port 80 to 169.254.169.254)
 # are redirected to the HTTP proxy and fail, breaking SSM and credential refresh.
