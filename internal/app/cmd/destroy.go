@@ -97,21 +97,26 @@ func NewDestroyCmd(cfg *config.Config) *cobra.Command {
 }
 
 // runDestroy executes the full destroy workflow.
-// runRemoteDestroy publishes a SandboxIdle event to EventBridge, triggering the
-// TTL Lambda to destroy the sandbox remotely. No local terragrunt needed.
+// runRemoteDestroy publishes a destroy event to EventBridge, triggering the
+// TTL Lambda to destroy the sandbox remotely.
 func runRemoteDestroy(ctx context.Context, cfg *config.Config, sandboxID string) error {
+	return publishRemoteCommand(ctx, sandboxID, "destroy")
+}
+
+// publishRemoteCommand publishes a sandbox command event to EventBridge.
+func publishRemoteCommand(ctx context.Context, sandboxID, eventType string, extra ...string) error {
 	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
 	if err != nil {
 		return fmt.Errorf("load AWS config: %w", err)
 	}
 
 	ebClient := eventbridge.NewFromConfig(awsCfg)
-	fmt.Printf("Sending remote destroy signal for %s...\n", sandboxID)
-	if err := awspkg.PublishSandboxIdleEvent(ctx, ebClient, sandboxID); err != nil {
-		return fmt.Errorf("publish destroy event: %w", err)
+	fmt.Printf("Sending remote %s for %s...\n", eventType, sandboxID)
+	if err := awspkg.PublishSandboxCommand(ctx, ebClient, sandboxID, eventType, extra...); err != nil {
+		return fmt.Errorf("publish %s event: %w", eventType, err)
 	}
-	fmt.Printf("Destroy event published. The TTL Lambda will destroy %s in the background.\n", sandboxID)
-	fmt.Printf("Monitor with: aws logs tail /aws/lambda/km-ttl-handler --follow --profile klanker-terraform --region us-east-1\n")
+	fmt.Printf("Event published. The Lambda will %s %s in the background.\n", eventType, sandboxID)
+	fmt.Printf("Monitor: aws logs tail /aws/lambda/km-ttl-handler --follow --profile klanker-terraform --region us-east-1\n")
 	return nil
 }
 

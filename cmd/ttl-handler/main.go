@@ -14,18 +14,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-
-	"errors"
+	"time"
 
 	lambdaruntime "github.com/aws/aws-lambda-go/lambda"
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
+	ec2pkg "github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	iampkg "github.com/aws/aws-sdk-go-v2/service/iam"
 	lambdapkg "github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -34,15 +38,21 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/rs/zerolog/log"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klankrmkr/pkg/compiler"
 	profilepkg "github.com/whereiskurt/klankrmkr/pkg/profile"
 )
 
 // TTLEvent is the EventBridge scheduler or EventBridge Events payload delivered to this Lambda.
 type TTLEvent struct {
 	SandboxID string `json:"sandbox_id"`
-	// EventType distinguishes TTL schedule events ("ttl", default) from idle events ("idle").
+	// EventType distinguishes actions:
+	//   "ttl" (default), "idle", "destroy" — trigger full terraform destroy
+	//   "stop"    — stop EC2 instance without destroying infrastructure
+	//   "extend"  — extend TTL by Duration
 	// Empty defaults to "ttl" for backward compatibility.
 	EventType string `json:"event_type,omitempty"`
+	// Duration is used by "extend" events (e.g. "2h", "30m").
+	Duration string `json:"duration,omitempty"`
 }
 
 // S3GetAPI is the narrow S3 interface needed to download the sandbox profile.
@@ -83,10 +93,132 @@ type TTLHandler struct {
 
 // HandleTTLEvent is the Lambda handler method. It is called by lambdaruntime.Start in main().
 func (h *TTLHandler) HandleTTLEvent(ctx context.Context, event TTLEvent) error {
-	// Step 1: Validate sandbox ID.
 	if event.SandboxID == "" {
 		return fmt.Errorf("ttl-handler: sandbox_id is required in event payload")
 	}
+
+	// Route by event type
+	switch event.EventType {
+	case "stop":
+		return h.handleStop(ctx, event)
+	case "extend":
+		return h.handleExtend(ctx, event)
+	default:
+		// "ttl", "idle", "destroy", "" — all trigger full destroy
+		return h.handleDestroy(ctx, event)
+	}
+}
+
+// handleStop stops the EC2 instance without destroying infrastructure.
+func (h *TTLHandler) handleStop(ctx context.Context, event TTLEvent) error {
+	log.Info().Str("sandbox_id", event.SandboxID).Msg("stop event received")
+
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, "")
+	if err != nil {
+		return fmt.Errorf("load AWS config: %w", err)
+	}
+	ec2Client := ec2pkg.NewFromConfig(awsCfg)
+
+	// Find instance by tag
+	descOut, err := ec2Client.DescribeInstances(ctx, &ec2pkg.DescribeInstancesInput{
+		Filters: []ec2types.Filter{
+			{Name: awssdk.String("tag:km:sandbox-id"), Values: []string{event.SandboxID}},
+			{Name: awssdk.String("instance-state-name"), Values: []string{"running"}},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("describe instances: %w", err)
+	}
+
+	for _, res := range descOut.Reservations {
+		for _, inst := range res.Instances {
+			instanceID := awssdk.ToString(inst.InstanceId)
+			log.Info().Str("instance_id", instanceID).Msg("stopping instance")
+			_, err := ec2Client.StopInstances(ctx, &ec2pkg.StopInstancesInput{
+				InstanceIds: []string{instanceID},
+			})
+			if err != nil {
+				return fmt.Errorf("stop instance %s: %w", instanceID, err)
+			}
+		}
+	}
+
+	log.Info().Str("sandbox_id", event.SandboxID).Msg("sandbox stopped")
+	return nil
+}
+
+// handleExtend updates the TTL schedule and metadata with a new expiry.
+func (h *TTLHandler) handleExtend(ctx context.Context, event TTLEvent) error {
+	log.Info().Str("sandbox_id", event.SandboxID).Str("duration", event.Duration).Msg("extend event received")
+
+	addDuration, err := time.ParseDuration(event.Duration)
+	if err != nil {
+		return fmt.Errorf("invalid duration %q: %w", event.Duration, err)
+	}
+
+	// Read current metadata (need S3ListAPI-compatible client)
+	awsCfgForMeta, _ := awspkg.LoadAWSConfig(ctx, "")
+	metaS3Client := s3.NewFromConfig(awsCfgForMeta)
+	meta, err := awspkg.ReadSandboxMetadata(ctx, metaS3Client, h.StateBucket, event.SandboxID)
+	if err != nil {
+		return fmt.Errorf("read metadata: %w", err)
+	}
+
+	// Calculate new expiry
+	var newExpiry time.Time
+	if meta.TTLExpiry != nil && meta.TTLExpiry.After(time.Now()) {
+		newExpiry = meta.TTLExpiry.Add(addDuration)
+	} else {
+		newExpiry = time.Now().Add(addDuration)
+	}
+
+	// Delete old schedule, create new one
+	schedulerClient := scheduler.NewFromConfig(func() awssdk.Config {
+		cfg, _ := awspkg.LoadAWSConfig(ctx, "")
+		return cfg
+	}())
+	awspkg.DeleteTTLSchedule(ctx, schedulerClient, event.SandboxID)
+
+	// Discover Lambda ARN and scheduler role for the new schedule
+	awsCfg, _ := awspkg.LoadAWSConfig(ctx, "")
+	lambdaClient := lambdapkg.NewFromConfig(awsCfg)
+	fnOut, fnErr := lambdaClient.GetFunction(ctx, &lambdapkg.GetFunctionInput{
+		FunctionName: awssdk.String("km-ttl-handler"),
+	})
+	if fnErr != nil {
+		return fmt.Errorf("discover Lambda ARN: %w", fnErr)
+	}
+	iamClient := iampkg.NewFromConfig(awsCfg)
+	roleOut, roleErr := iamClient.GetRole(ctx, &iampkg.GetRoleInput{
+		RoleName: awssdk.String("km-ttl-scheduler"),
+	})
+	if roleErr != nil {
+		return fmt.Errorf("discover scheduler role: %w", roleErr)
+	}
+
+	schedInput := compiler.BuildTTLScheduleInput(event.SandboxID, newExpiry,
+		awssdk.ToString(fnOut.Configuration.FunctionArn),
+		awssdk.ToString(roleOut.Role.Arn))
+	if err := awspkg.CreateTTLSchedule(ctx, schedulerClient, schedInput); err != nil {
+		return fmt.Errorf("create schedule: %w", err)
+	}
+
+	// Update metadata
+	meta.TTLExpiry = &newExpiry
+	metaJSON, _ := json.Marshal(meta)
+	h.S3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      awssdk.String(h.StateBucket),
+		Key:         awssdk.String("tf-km/sandboxes/" + event.SandboxID + "/metadata.json"),
+		Body:        bytes.NewReader(metaJSON),
+		ContentType: awssdk.String("application/json"),
+	})
+
+	log.Info().Str("sandbox_id", event.SandboxID).Time("new_expiry", newExpiry).Msg("TTL extended")
+	return nil
+}
+
+// handleDestroy is the original destroy path.
+func (h *TTLHandler) handleDestroy(ctx context.Context, event TTLEvent) error {
 	sandboxID := event.SandboxID
 
 	log.Info().Str("sandbox_id", sandboxID).Msg("TTL expiry event received")

@@ -21,6 +21,8 @@ import (
 // NewExtendCmd creates the "km extend" subcommand.
 // Usage: km extend <sandbox-id | #number> <duration>
 func NewExtendCmd(cfg *config.Config) *cobra.Command {
+	var remote bool
+
 	cmd := &cobra.Command{
 		Use:          "extend <sandbox-id | #number> <duration>",
 		Short:        "Extend a sandbox's TTL by the given duration",
@@ -36,6 +38,9 @@ func NewExtendCmd(cfg *config.Config) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if remote {
+				return publishRemoteCommand(ctx, sandboxID, "extend", "duration", args[1])
+			}
 			duration, err := time.ParseDuration(args[1])
 			if err != nil {
 				return fmt.Errorf("invalid duration %q: %w (examples: 1h, 30m, 2h30m)", args[1], err)
@@ -43,6 +48,9 @@ func NewExtendCmd(cfg *config.Config) *cobra.Command {
 			return runExtend(ctx, cfg, sandboxID, duration)
 		},
 	}
+
+	cmd.Flags().BoolVar(&remote, "remote", false, "Dispatch extend to Lambda via EventBridge")
+
 	return cmd
 }
 
