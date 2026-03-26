@@ -10,6 +10,9 @@ import (
 	"strings"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -268,6 +271,15 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 	if rec.TTLExpiry != nil {
 		fmt.Fprintf(out, "TTL Expiry:  %s\n", rec.TTLExpiry.Local().Format("2006-01-02 3:04:05 PM MST"))
 	}
+
+	// Show idle status by checking last CloudWatch audit event
+	if rec.Status == "running" {
+		idleSince := getLastActivity(context.Background(), rec.SandboxID)
+		if idleSince != "" {
+			fmt.Fprintf(out, "Last Active: %s\n", idleSince)
+		}
+	}
+
 	if len(rec.Resources) > 0 {
 		fmt.Fprintf(out, "Resources (%d):\n", len(rec.Resources))
 		for _, arn := range rec.Resources {
@@ -360,4 +372,25 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 			fmt.Fprintf(out, "  Allowed Senders:  not configured\n")
 		}
 	}
+}
+
+// getLastActivity checks CloudWatch for the most recent audit event and returns
+// a human-readable string like "2m ago" or "no activity yet".
+func getLastActivity(ctx context.Context, sandboxID string) string {
+	awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+	if err != nil {
+		return ""
+	}
+	cwClient := cloudwatchlogs.NewFromConfig(awsCfg)
+	logGroup := "/km/sandboxes/" + sandboxID + "/"
+
+	events, err := kmaws.GetLogEvents(ctx, cwClient, logGroup, "audit", 1)
+	if err != nil || len(events) == 0 {
+		return "no activity yet"
+	}
+
+	lastEvent := events[len(events)-1]
+	lastTime := time.UnixMilli(lastEvent.Timestamp)
+	ago := time.Since(lastTime).Round(time.Second)
+	return fmt.Sprintf("%s ago (%s)", ago, lastTime.Local().Format("3:04:05 PM"))
 }
