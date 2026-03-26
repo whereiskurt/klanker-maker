@@ -275,17 +275,29 @@ if [ -z "$BUCKET" ]; then
   exit 0
 fi
 
-echo "[km-mail-poller] Polling s3://$BUCKET/mail/ every ${POLL_INTERVAL}s -> $MAIL_DIR/new/"
+MY_ADDR=$(echo "${SANDBOX_ID}@" | tr '[:upper:]' '[:lower:]')
+echo "[km-mail-poller] Polling s3://$BUCKET/mail/ for $MY_ADDR every ${POLL_INTERVAL}s -> $MAIL_DIR/new/"
 
 while true; do
-  # List all mail objects and download any we haven't seen
+  # List all mail objects, download, and keep only messages addressed to this sandbox
   aws s3 ls "s3://$BUCKET/mail/" 2>/dev/null | awk '{print $NF}' | while read -r key; do
     if [ -z "$key" ]; then continue; fi
     local_file="$MAIL_DIR/new/$key"
-    if [ ! -f "$local_file" ] && [ ! -f "$MAIL_DIR/processed/$key" ]; then
-      aws s3 cp "s3://$BUCKET/mail/$key" "$local_file" 2>/dev/null
-      if [ $? -eq 0 ]; then
-        echo "[km-mail-poller] New mail: $key"
+    if [ ! -f "$local_file" ] && [ ! -f "$MAIL_DIR/processed/$key" ] && [ ! -f "$MAIL_DIR/skipped/$key" ]; then
+      tmp_file=$(mktemp)
+      if aws s3 cp "s3://$BUCKET/mail/$key" "$tmp_file" 2>/dev/null; then
+        # Check if the To header contains this sandbox's address
+        if head -c 8192 "$tmp_file" | tr '[:upper:]' '[:lower:]' | grep -q "$MY_ADDR"; then
+          mv "$tmp_file" "$local_file"
+          echo "[km-mail-poller] New mail: $key"
+        else
+          rm -f "$tmp_file"
+          # Mark as skipped so we don't re-download on every poll
+          mkdir -p "$MAIL_DIR/skipped"
+          touch "$MAIL_DIR/skipped/$key"
+        fi
+      else
+        rm -f "$tmp_file"
       fi
     fi
   done
