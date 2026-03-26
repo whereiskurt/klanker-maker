@@ -215,6 +215,7 @@ UNIT
 mkdir -p /run/km
 mkfifo /run/km/audit-pipe
 chown km-sidecar:km-sidecar /run/km/audit-pipe
+chmod 666 /run/km/audit-pipe
 
 cat > /etc/systemd/system/km-audit-log.service << 'UNIT'
 [Unit]
