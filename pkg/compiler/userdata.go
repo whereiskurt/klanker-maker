@@ -268,7 +268,7 @@ cat > /opt/km/bin/km-mail-poller << 'MAILPOLL'
 BUCKET="${KM_ARTIFACTS_BUCKET}"
 SANDBOX_ID="${SANDBOX_ID}"
 MAIL_DIR="/var/mail/km"
-POLL_INTERVAL="${KM_MAIL_POLL_INTERVAL:-30}"
+POLL_INTERVAL="${KM_MAIL_POLL_INTERVAL:-60}"
 
 if [ -z "$BUCKET" ]; then
   echo "[km-mail-poller] KM_ARTIFACTS_BUCKET not set, exiting"
