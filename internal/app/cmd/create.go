@@ -513,7 +513,12 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 				log.Warn().Err(phraseErr).Str("sandbox_id", sandboxID).
 					Msg("Step 12d: failed to store safe phrase in SSM (non-fatal)")
 			} else {
-				fmt.Printf("Safe phrase (save this): %s\n", phrase)
+				safeDomain := "sandboxes." + cfg.Domain
+			if cfg.Domain == "" {
+				safeDomain = "sandboxes.klankermaker.ai"
+			}
+			fmt.Printf("Safe phrase (save this): %s\n", phrase)
+			fmt.Printf("Sandbox email: %s@%s\n", sandboxID, safeDomain)
 				log.Info().Str("sandbox_id", sandboxID).
 					Msg("Step 12d: safe phrase stored in SSM")
 			}
