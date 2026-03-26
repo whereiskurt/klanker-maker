@@ -593,13 +593,15 @@ Plans:
 
 ### Phase 25: GitHub Source Access Restrictions — deep testing of repo allowlists, clone/push enforcement, and deny-by-default for unlisted repos
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Comprehensive test coverage for GitHub source access enforcement (deny-by-default, permission edge cases, wildcard patterns) plus implement ref enforcement via git pre-push hooks and document ECS credential delivery gap
+**Requirements**: [GH25-01, GH25-02, GH25-03, GH25-04, GH25-05]
 **Depends on:** Phase 24
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 25 to break down)
+- [ ] 25-01-PLAN.md — Deny-by-default tests for empty allowedRepos, permission edge cases, wildcard validation
+- [ ] 25-02-PLAN.md — Ref enforcement via pre-push hooks, security documentation update
+
 
 ### Phase 26: Live Operations Hardening — bootstrap, init, create, destroy, TTL auto-destroy, idle detection, sidecar fixes, proxy enforcement, CLI polish
 
