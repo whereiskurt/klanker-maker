@@ -538,10 +538,12 @@ km uninit --region us-east-1
 | 19 | Budget Enforcement Wiring — EC2 hard stop, IAM revocation | **Complete** |
 | 20 | Anthropic API Metering & Terragrunt Output Suppression | **Complete** |
 | 21 | Bug fixes and mini-features — budget precision, polish | **Complete** |
-| 22 | Remote Sandbox Creation — `km create --remote` via Lambda + email-to-create | Planned |
-| 23 | Credential Rotation — `km roll creds` for platform and sandbox secrets | Planned |
-| 24 | Documentation Refresh (Phases 18-23) | Planned |
+| 22 | Remote Sandbox Dispatch — `km create/destroy/stop/extend --remote` via Lambda | Planned |
+| 23 | Email-Driven Operations — operator inbox, email-to-create, safe phrase auth, EventBridge | Planned |
+| 24 | Credential Rotation — `km roll creds` for platform and sandbox secrets | Planned |
 | 25 | GitHub Source Access Restrictions — repo allowlists, deny-by-default | Planned |
+| 26 | Live Operations Hardening — bootstrap, init, TTL, idle, sidecars, CLI polish | **Complete** |
+| 27 | Documentation Refresh (Phases 22-26) | Planned |
 
 See [.planning/ROADMAP.md](.planning/ROADMAP.md) for detailed phase breakdowns and success criteria.
 

@@ -350,10 +350,12 @@ None yet.
 ## Accumulated Context
 
 ### Roadmap Evolution
-- Phase 22 added: Remote Sandbox Creation — km create --remote via Lambda + email-to-create
-- Phase 23 added: Credential Rotation — km roll creds for platform and sandbox secrets
-- Phase 24 added: Documentation Refresh (Phases 18-23)
-- Phase 25 added: GitHub Source Access Restrictions — deep testing of repo allowlists, clone/push enforcement, and deny-by-default for unlisted repos
+- Phase 22 added: Remote Sandbox Dispatch — km create/destroy/stop/extend --remote via Lambda
+- Phase 23 added: Email-Driven Operations — operator inbox, email-to-create, safe phrase auth, EventBridge
+- Phase 24 added: Credential Rotation — km roll creds for platform and sandbox secrets
+- Phase 25 added: GitHub Source Access Restrictions — deep testing of repo allowlists, deny-by-default
+- Phase 26 added + completed: Live Operations Hardening — ~60 commits across 2-day session
+- Phase 27 added: Documentation Refresh (Phases 22-26)
 
 ## Session Continuity
 
