@@ -274,9 +274,13 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 
 	// Show idle status by checking last CloudWatch audit event
 	if rec.Status == "running" {
+		idleLabel := "Last Active"
+		if rec.IdleTimeout != "" {
+			idleLabel = fmt.Sprintf("Last Active (idle: %s)", rec.IdleTimeout)
+		}
 		idleSince := getLastActivity(context.Background(), rec.SandboxID)
 		if idleSince != "" {
-			fmt.Fprintf(out, "Last Active: %s\n", idleSince)
+			fmt.Fprintf(out, "%s: %s\n", idleLabel, idleSince)
 		}
 	}
 

@@ -15,4 +15,5 @@ type SandboxMetadata struct {
 	Region      string     `json:"region"`
 	CreatedAt   time.Time  `json:"created_at"`
 	TTLExpiry   *time.Time `json:"ttl_expiry,omitempty"`
+	IdleTimeout string     `json:"idle_timeout,omitempty"` // e.g. "15m", from profile lifecycle.idleTimeout
 }

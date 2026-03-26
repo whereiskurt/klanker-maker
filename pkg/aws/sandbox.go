@@ -27,6 +27,7 @@ type SandboxRecord struct {
 	CreatedAt    time.Time  `json:"created_at"`
 	TTLExpiry    *time.Time `json:"ttl_expiry,omitempty"`
 	TTLRemaining string     `json:"ttl_remaining,omitempty"` // "1h23m" or "expired"
+	IdleTimeout  string     `json:"idle_timeout,omitempty"`  // e.g. "15m", from profile
 	Resources    []string   `json:"resources,omitempty"`     // ARNs, populated in status output only
 }
 
@@ -160,6 +161,7 @@ func readMetadataRecord(ctx context.Context, client S3ListAPI, bucket, sandboxID
 		CreatedAt:    meta.CreatedAt,
 		TTLExpiry:    meta.TTLExpiry,
 		TTLRemaining: computeTTLRemaining(meta.TTLExpiry),
+		IdleTimeout:  meta.IdleTimeout,
 	}
 }
 
