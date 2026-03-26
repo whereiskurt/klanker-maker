@@ -347,13 +347,13 @@ iptables -t nat -I OUTPUT -d 169.254.169.254 -j RETURN
 
 # DNS: redirect UDP/TCP port 53 to local DNS proxy on :5353
 # ! --uid-owner km-sidecar exempts the proxy's own upstream queries (prevents redirect loop)
-iptables -t nat -A OUTPUT -p udp --dport 53 ! -m owner --uid-owner km-sidecar -j REDIRECT --to-ports 5353
-iptables -t nat -A OUTPUT -p tcp --dport 53 ! -m owner --uid-owner km-sidecar -j REDIRECT --to-ports 5353
+iptables -t nat -A OUTPUT -p udp --dport 53 -m owner ! --uid-owner km-sidecar -j REDIRECT --to-ports 5353
+iptables -t nat -A OUTPUT -p tcp --dport 53 -m owner ! --uid-owner km-sidecar -j REDIRECT --to-ports 5353
 
 # HTTP/HTTPS: redirect to HTTP proxy on :3128
 # km-sidecar user is exempt to prevent the proxy from redirecting its own upstream connections
-iptables -t nat -A OUTPUT -p tcp --dport 80  ! -m owner --uid-owner km-sidecar -j REDIRECT --to-ports 3128
-iptables -t nat -A OUTPUT -p tcp --dport 443 ! -m owner --uid-owner km-sidecar -j REDIRECT --to-ports 3128
+iptables -t nat -A OUTPUT -p tcp --dport 80  -m owner ! --uid-owner km-sidecar -j REDIRECT --to-ports 3128
+iptables -t nat -A OUTPUT -p tcp --dport 443 -m owner ! --uid-owner km-sidecar -j REDIRECT --to-ports 3128
 
 echo "[km-bootstrap] iptables DNAT configured"
 
