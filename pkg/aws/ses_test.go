@@ -49,37 +49,19 @@ func (m *mockSESV2API) SendEmail(ctx context.Context, input *sesv2.SendEmailInpu
 // ProvisionSandboxEmail tests
 // ============================================================
 
-func TestSES_ProvisionSandboxEmail_Success(t *testing.T) {
+func TestSES_ProvisionSandboxEmail_ReturnsAddress(t *testing.T) {
 	mock := &mockSESV2API{}
 	addr, err := kmaws.ProvisionSandboxEmail(context.Background(), mock, "sb-abc123", "sandboxes.klankermaker.ai")
 	if err != nil {
 		t.Fatalf("ProvisionSandboxEmail returned unexpected error: %v", err)
 	}
-	if !mock.createIdentityCalled {
-		t.Fatal("expected CreateEmailIdentity to be called")
-	}
-	if mock.createIdentityInput == nil || mock.createIdentityInput.EmailIdentity == nil {
-		t.Fatal("CreateEmailIdentity called with nil input or nil EmailIdentity")
-	}
 	wantAddr := "sb-abc123@sandboxes.klankermaker.ai"
-	if *mock.createIdentityInput.EmailIdentity != wantAddr {
-		t.Errorf("EmailIdentity = %q; want %q", *mock.createIdentityInput.EmailIdentity, wantAddr)
-	}
 	if addr != wantAddr {
 		t.Errorf("returned address = %q; want %q", addr, wantAddr)
 	}
-}
-
-func TestSES_ProvisionSandboxEmail_Error(t *testing.T) {
-	sdkErr := errors.New("sdk error: LimitExceeded")
-	mock := &mockSESV2API{createIdentityErr: sdkErr}
-
-	_, err := kmaws.ProvisionSandboxEmail(context.Background(), mock, "sb-abc123", "sandboxes.klankermaker.ai")
-	if err == nil {
-		t.Fatal("expected error from ProvisionSandboxEmail when CreateEmailIdentity fails")
-	}
-	if !strings.Contains(err.Error(), "LimitExceeded") {
-		t.Errorf("expected error to contain 'LimitExceeded', got: %v", err)
+	// Should NOT call CreateEmailIdentity — domain identity covers all addresses.
+	if mock.createIdentityCalled {
+		t.Error("ProvisionSandboxEmail should not call CreateEmailIdentity; domain identity is sufficient")
 	}
 }
 

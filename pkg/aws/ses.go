@@ -27,19 +27,12 @@ func sandboxEmailAddress(sandboxID, domain string) string {
 	return fmt.Sprintf("%s@%s", sandboxID, domain)
 }
 
-// ProvisionSandboxEmail creates an SES email identity for {sandboxID}@{domain}
-// and returns the full email address.
+// ProvisionSandboxEmail returns the full email address for {sandboxID}@{domain}.
 //
-// This is called during km create to register the sandbox's email address with SES.
+// The verified domain identity (sandboxes.{domain}) covers all addresses at that
+// domain for sending — no per-address CreateEmailIdentity call is needed.
 func ProvisionSandboxEmail(ctx context.Context, client SESV2API, sandboxID, domain string) (string, error) {
-	addr := sandboxEmailAddress(sandboxID, domain)
-	_, err := client.CreateEmailIdentity(ctx, &sesv2.CreateEmailIdentityInput{
-		EmailIdentity: awssdk.String(addr),
-	})
-	if err != nil {
-		return "", fmt.Errorf("provision sandbox email %s: %w", addr, err)
-	}
-	return addr, nil
+	return sandboxEmailAddress(sandboxID, domain), nil
 }
 
 // SendLifecycleNotification sends an operator notification email for a sandbox lifecycle event.
