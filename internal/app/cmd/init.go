@@ -145,22 +145,20 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		os.Setenv("KM_REGION", cfg.PrimaryRegion)
 	}
 
-	// Auto-create sandboxes.{domain} hosted zone and NS delegation if not already set.
-	if os.Getenv("KM_ROUTE53_ZONE_ID") == "" && cfg.Route53ZoneID == "" && cfg.Domain != "" {
+	// Always ensure sandboxes.{domain} hosted zone AND NS delegation exist.
+	// Even if the zone ID is known, delegation in the management account may be missing.
+	if cfg.Domain != "" {
 		zoneID, err := ensureSandboxHostedZone(ctx, cfg)
 		if err != nil {
 			fmt.Printf("  [warn] DNS zone setup failed: %v\n", err)
 			fmt.Printf("  SES will be skipped. Set KM_ROUTE53_ZONE_ID manually to enable.\n")
-		} else {
+		} else if os.Getenv("KM_ROUTE53_ZONE_ID") == "" {
 			os.Setenv("KM_ROUTE53_ZONE_ID", zoneID)
-			cfg.Route53ZoneID = zoneID
 			// Persist to km-config.yaml so future runs don't repeat this
 			if persistErr := persistRoute53ZoneID(zoneID); persistErr != nil {
 				fmt.Printf("  [warn] Could not save route53_zone_id to km-config.yaml: %v\n", persistErr)
 			}
 		}
-	} else if cfg.Route53ZoneID != "" && os.Getenv("KM_ROUTE53_ZONE_ID") == "" {
-		os.Setenv("KM_ROUTE53_ZONE_ID", cfg.Route53ZoneID)
 	}
 
 	repoRoot := findRepoRoot()
@@ -670,32 +668,44 @@ func ensureSandboxHostedZone(ctx context.Context, cfg *config.Config) (string, e
 	if err != nil {
 		return "", fmt.Errorf("checking for existing zone: %w", err)
 	}
+
+	var nsRecords []string
+
 	if zoneID != "" {
 		fmt.Printf("  DNS zone %s already exists: %s\n", sandboxDomain, zoneID)
-		return zoneID, nil
+
+		// Fetch NS records from existing zone so we can verify delegation below.
+		nsOut, nsErr := appR53.GetHostedZone(ctx, &route53.GetHostedZoneInput{
+			Id: aws.String(zoneID),
+		})
+		if nsErr != nil {
+			return zoneID, fmt.Errorf("zone exists but could not fetch NS records: %w", nsErr)
+		}
+		for _, ns := range nsOut.DelegationSet.NameServers {
+			nsRecords = append(nsRecords, ns)
+		}
+	} else {
+		// 3. Create the hosted zone
+		callerRef := fmt.Sprintf("km-init-%d", time.Now().Unix())
+		createOut, createErr := appR53.CreateHostedZone(ctx, &route53.CreateHostedZoneInput{
+			Name:            aws.String(sandboxDomain),
+			CallerReference: aws.String(callerRef),
+			HostedZoneConfig: &route53types.HostedZoneConfig{
+				Comment: aws.String("Sandbox email zone — created by km init"),
+			},
+		})
+		if createErr != nil {
+			return "", fmt.Errorf("create hosted zone %s: %w", sandboxDomain, createErr)
+		}
+
+		zoneID = strings.TrimPrefix(aws.ToString(createOut.HostedZone.Id), "/hostedzone/")
+		fmt.Printf("  Created DNS zone %s: %s\n", sandboxDomain, zoneID)
+
+		for _, ns := range createOut.DelegationSet.NameServers {
+			nsRecords = append(nsRecords, ns)
+		}
 	}
 
-	// 3. Create the hosted zone
-	callerRef := fmt.Sprintf("km-init-%d", time.Now().Unix())
-	createOut, err := appR53.CreateHostedZone(ctx, &route53.CreateHostedZoneInput{
-		Name:            aws.String(sandboxDomain),
-		CallerReference: aws.String(callerRef),
-		HostedZoneConfig: &route53types.HostedZoneConfig{
-			Comment: aws.String("Sandbox email zone — created by km init"),
-		},
-	})
-	if err != nil {
-		return "", fmt.Errorf("create hosted zone %s: %w", sandboxDomain, err)
-	}
-
-	zoneID = strings.TrimPrefix(aws.ToString(createOut.HostedZone.Id), "/hostedzone/")
-	fmt.Printf("  Created DNS zone %s: %s\n", sandboxDomain, zoneID)
-
-	// 4. Get the NS records for the new zone
-	nsRecords := make([]string, 0, len(createOut.DelegationSet.NameServers))
-	for _, ns := range createOut.DelegationSet.NameServers {
-		nsRecords = append(nsRecords, ns)
-	}
 	fmt.Printf("  NS records: %s\n", strings.Join(nsRecords, ", "))
 
 	// 5. Create Route53 client for management account (where the parent zone lives)
@@ -714,7 +724,22 @@ func ensureSandboxHostedZone(ctx context.Context, cfg *config.Config) (string, e
 		return zoneID, fmt.Errorf("zone created but parent zone %s not found in management account — add NS delegation manually", cfg.Domain)
 	}
 
-	// 7. Create NS delegation record in parent zone
+	// 7. Check if NS delegation already exists in parent zone
+	existingNS, err := mgmtR53.ListResourceRecordSets(ctx, &route53.ListResourceRecordSetsInput{
+		HostedZoneId:    aws.String(parentZoneID),
+		StartRecordName: aws.String(sandboxDomain),
+		StartRecordType: route53types.RRTypeNs,
+		MaxItems:        aws.Int32(1),
+	})
+	if err == nil && len(existingNS.ResourceRecordSets) > 0 {
+		rrs := existingNS.ResourceRecordSets[0]
+		if strings.TrimSuffix(aws.ToString(rrs.Name), ".") == sandboxDomain && rrs.Type == route53types.RRTypeNs {
+			fmt.Printf("  NS delegation for %s already exists in management account\n", sandboxDomain)
+			return zoneID, nil
+		}
+	}
+
+	// 8. Create NS delegation record in parent zone
 	nsRRs := make([]route53types.ResourceRecord, 0, len(nsRecords))
 	for _, ns := range nsRecords {
 		nsRRs = append(nsRRs, route53types.ResourceRecord{Value: aws.String(ns)})
@@ -737,10 +762,10 @@ func ensureSandboxHostedZone(ctx context.Context, cfg *config.Config) (string, e
 		},
 	})
 	if err != nil {
-		return zoneID, fmt.Errorf("zone created but NS delegation failed: %w", err)
+		return zoneID, fmt.Errorf("zone exists but NS delegation failed: %w", err)
 	}
 
-	fmt.Printf("  NS delegation added to %s zone in management account\n", cfg.Domain)
+	fmt.Printf("  NS delegation added to %s zone in management account\n", sandboxDomain)
 	return zoneID, nil
 }
 
