@@ -712,6 +712,18 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 		ctx = context.Background()
 	}
 
+	// Header
+	out := cmd.OutOrStdout()
+	if !jsonOutput {
+		domain := cfg.GetDomain()
+		if domain == "" {
+			domain = "not configured"
+		}
+		fmt.Fprintf(out, "\nkm doctor — %s\n", domain)
+		fmt.Fprintln(out, strings.Repeat("─", 50))
+		fmt.Fprintln(out)
+	}
+
 	// Initialize real AWS clients when deps is nil or partially nil.
 	if deps == nil {
 		deps = initRealDeps(ctx, cfg)
@@ -732,7 +744,6 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 			Message:     fmt.Sprintf("SSO session expired for profile %q", profile),
 			Remediation: fmt.Sprintf("Run 'aws sso login --profile %s' then re-run 'km doctor'", profile),
 		}}
-		out := cmd.OutOrStdout()
 		if jsonOutput {
 			return json.NewEncoder(out).Encode(results)
 		}
@@ -768,7 +779,6 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 	}
 
 	// Output results.
-	out := cmd.OutOrStdout()
 	if jsonOutput {
 		toEncode := results
 		if quietMode {
@@ -785,8 +795,10 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 		fmt.Fprintln(out, formatCheckLine(r, isTTY))
 	}
 
-	// Summary line.
-	summaryLine := fmt.Sprintf("\n%d checks passed, %d warnings, %d errors", passCount, warnCount, errorCount)
+	// Footer and summary.
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, strings.Repeat("─", 50))
+	summaryLine := fmt.Sprintf("%d checks passed, %d warnings, %d errors", passCount, warnCount, errorCount)
 	if isTTY {
 		if errorCount > 0 {
 			summaryLine = ansiRed + summaryLine + ansiReset
