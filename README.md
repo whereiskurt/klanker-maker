@@ -107,20 +107,30 @@ The `km` CLI selects the right profile per command:
 
 | Command | AWS Profile | Account |
 |---------|-------------|---------|
-| `km configure` | — | No AWS access needed; writes `km-config.yaml` |
+| `km configure` (`km conf`) | — | No AWS access needed; writes `km-config.yaml` |
 | `km configure github` | — | Configures GitHub App token integration (manual SSM setup) |
 | `km configure github --setup` | `klanker-terraform` | One-click GitHub App creation via manifest flow + auto SSM storage |
+| `km configure github --discover` | `klanker-terraform` | Auto-discover installation ID from existing App credentials in SSM |
+| `km github` | `klanker-terraform` | Shortcut for `km configure github --setup` |
 | `km bootstrap` | `klanker-terraform` | Terraform - deploys SCP containment policy via management account |
 | `km bootstrap --show-prereqs` | — | Prints the IAM role and trust policy to create in management account |
-| `km init` | `klanker-application` | Application - provisions shared VPC/network |
+| `km init` | `klanker-application` | Application - builds Lambdas/sidecars, provisions shared VPC/network |
+| `km uninit` | `klanker-application` | Application - tears down all shared regional infrastructure |
 | `km create` | `klanker-terraform` | Terraform - assumes role into Application to provision |
 | `km destroy` | `klanker-terraform` | Terraform - assumes role into Application to teardown |
-| `km list` | `klanker-terraform` | Terraform - reads state from S3 |
-| `km status` | `klanker-terraform` | Terraform - reads state + discovers resources |
-| `km logs` | `klanker-terraform` | Terraform - reads CloudWatch Logs |
-| `km budget` | `klanker-terraform` | Terraform - reads/updates DynamoDB budget table |
-| `km shell` | `klanker-application` | Application - SSM session into sandbox instance |
-| `km doctor` | `klanker-terraform` | Terraform - validates platform health across all accounts |
+| `km destroy --remote` | `klanker-terraform` | Dispatches destroy to Lambda via EventBridge |
+| `km stop` | `klanker-terraform` | Stop a sandbox's EC2 instance (preserves infrastructure) |
+| `km stop --remote` | `klanker-terraform` | Dispatches stop to Lambda via EventBridge |
+| `km extend` | `klanker-terraform` | Extend a sandbox's TTL by a given duration |
+| `km extend --remote` | `klanker-terraform` | Dispatches extend to Lambda via EventBridge |
+| `km list` | `klanker-terraform` | Reads state from S3 + live EC2 status check |
+| `km status` | `klanker-terraform` | Reads state + budget + identity + idle countdown |
+| `km logs` | `klanker-terraform` | Tails CloudWatch audit logs for a sandbox |
+| `km shell` | `klanker-terraform` | SSM session as restricted `sandbox` user (no sudo) |
+| `km shell --root` | `klanker-terraform` | SSM session as root (operator access) |
+| `km shell --ports` | `klanker-terraform` | SSM port forwarding (Docker-style syntax) |
+| `km budget add` | `klanker-terraform` | Add compute or AI budget to a sandbox |
+| `km doctor` | `klanker-terraform` | Validates platform health across all accounts (12 checks) |
 
 ### Platform Configuration
 
@@ -199,17 +209,21 @@ Editable source: [`docs/sandbox-architecture.excalidraw`](docs/sandbox-architect
   <img src="docs/frame3-lifecycle-pipeline.svg" alt="Sandbox Lifecycle & Pipeline - configure through destroy, automatic exit triggers" />
 </p>
 
-1. **Configure** with `km configure` - set your domain, account IDs, SSO URL, region (once)
-2. **Bootstrap** with `km bootstrap` - deploys SCP containment policy to management account (once)
-3. **Initialize** with `km init --region us-east-1` - provisions shared VPC and network (once per region)
-4. **Check** with `km doctor` - validates platform health, credentials, and infrastructure
+1. **Configure** with `km configure` (alias: `km conf`) - set your domain, account IDs, SSO URL, region (once)
+2. **Bootstrap** with `km bootstrap` - deploys SCP, KMS key, artifacts bucket (once)
+3. **Initialize** with `km init --region us-east-1` - builds Lambdas/sidecars, provisions VPC, DynamoDB, SES, TTL handler (once per region)
+4. **Check** with `km doctor` - validates all 12 platform health checks, assumes cross-account role for SCP verification
 5. **Define** a SandboxProfile in YAML - budget, lifecycle, network policy, identity, sidecars
 6. **Validate** with `km validate <profile.yaml>`
-7. **Create** with `km create <profile>` - compiles to Terragrunt inputs, provisions infrastructure
-8. **Monitor** with `km list` / `km status` / `km logs` or the ConfigUI web dashboard
-9. **Connect** with `km shell <sandbox-id>` - SSM session into the sandbox (no SSH keys)
-10. **Top-up** with `km budget add <sandbox-id>` - add compute or AI budget
-11. **Destroy** with `km destroy <sandbox-id>` - clean teardown of all resources
+7. **Create** with `km create <profile>` - compiles to Terragrunt inputs, provisions infrastructure, shows elapsed time
+8. **Monitor** with `km list` (numbered, live EC2 status) / `km status` (budget, identity, idle countdown with color) / `km logs`
+9. **Connect** with `km shell 1` (restricted user) or `km shell 1 --root` (operator access)
+10. **Port forward** with `km shell 1 --ports 8080:80,3000` (Docker-style syntax)
+11. **Extend** with `km extend 1 2h` - add time before TTL expires
+12. **Stop** with `km stop 1` - stop instance, preserve infrastructure for restart
+13. **Top-up** with `km budget add 1 --compute 5.00` - add compute or AI budget
+14. **Destroy** with `km destroy 1` (local) or `km destroy 1 --remote` (Lambda-dispatched)
+15. **Teardown** with `km uninit --region us-east-1` - reverse of init, destroys all regional infrastructure
 
 ## SandboxProfile
 
@@ -398,7 +412,7 @@ km CLI / ConfigUI
 ├── cmd/km/                  CLI entry point
 ├── cmd/configui/            Web dashboard (Go + embedded HTML)
 ├── cmd/ttl-handler/         Lambda: TTL expiry + artifact upload
-├── internal/app/cmd/        Cobra commands (configure, bootstrap, init, validate, create, destroy, list, status, logs, budget, shell, doctor)
+├── internal/app/cmd/        Cobra commands (configure, bootstrap, init, uninit, validate, create, destroy, stop, extend, list, status, logs, budget, shell, doctor)
 ├── internal/app/config/     Configuration (config.yaml, env vars, CLI flags)
 ├── pkg/
 │   ├── profile/             SandboxProfile schema, validation, inheritance
@@ -437,38 +451,53 @@ km CLI / ConfigUI
 go install github.com/whereiskurt/klankrmkr/cmd/km@latest
 
 # Configure your platform (once)
-km configure
+km configure    # or: km conf
 
 # See what's needed in the management account before bootstrap
 km bootstrap --show-prereqs
 
-# Bootstrap SCP containment policy (once — requires km-org-admin role in management account)
+# Bootstrap SCP + KMS + artifacts bucket (once)
 km bootstrap --dry-run=false
 
-# Initialize the region (once per region)
+# Initialize the region — builds Lambdas, sidecars, deploys infra (once per region)
 km init --region us-east-1
 
-# Check platform health
+# Check platform health (12 checks)
 km doctor
 
-# Validate a profile
-km validate profiles/restricted-dev.yaml
-
-# Create a sandbox
+# Create a sandbox (shows progress dots + elapsed time)
 km create profiles/restricted-dev.yaml
+km create --on-demand profiles/sealed.yaml  # skip spot, use on-demand
 
-# Check status
+# List sandboxes (numbered, live EC2 status)
 km list
-km status sb-a1b2c3d4
 
-# Connect (via SSM - no SSH, no keys)
-km shell sb-a1b2c3d4
+# Status with budget, identity, idle countdown
+km status 1
 
-# View logs
-km logs sb-a1b2c3d4
+# Connect as restricted user (no sudo)
+km shell 1
+km shell 1 --root    # operator access
 
-# Destroy
-km destroy sb-a1b2c3d4
+# Port forward (Docker-style)
+km shell 1 --ports 8080           # localhost:8080 → remote:8080
+km shell 1 --ports 8080:80,3000   # multiple ports
+
+# Extend TTL
+km extend 1 2h
+
+# Stop without destroying
+km stop 1
+
+# View audit logs
+km logs 1
+
+# Destroy (local or remote)
+km destroy 1                    # local terragrunt destroy
+km destroy 1 --remote --yes     # Lambda-dispatched, no prompt
+
+# Teardown region infrastructure
+km uninit --region us-east-1
 ```
 
 ## Documentation
