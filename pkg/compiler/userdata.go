@@ -235,8 +235,8 @@ cat > /etc/profile.d/km-audit.sh << 'HOOK'
 _km_audit() {
   local cmd
   cmd=$(history 1 | sed 's/^ *[0-9]* *//')
-  printf '{"timestamp":%d,"sandbox_id":"%s","event_type":"command","source":"shell","detail":{"command":"%s","user":"%s"}}\n' \
-    "$(date +%s%3N)" "{{ .SandboxID }}" "$(echo "$cmd" | sed 's/"/\\"/g' | head -c 500)" "$(whoami)" \
+  printf '{"timestamp":"%s","sandbox_id":"%s","event_type":"command","source":"shell","detail":{"command":"%s","user":"%s"}}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "{{ .SandboxID }}" "$(echo "$cmd" | sed 's/"/\\"/g' | head -c 500)" "$(whoami)" \
     > /run/km/audit-pipe 2>/dev/null
 }
 PROMPT_COMMAND="_km_audit;${PROMPT_COMMAND}"
@@ -246,8 +246,8 @@ PROMPT_COMMAND="_km_audit;${PROMPT_COMMAND}"
 _km_heartbeat() {
   while true; do
     sleep 60
-    printf '{"timestamp":%d,"sandbox_id":"%s","event_type":"heartbeat","source":"shell","detail":{}}\n' \
-      "$(date +%s%3N)" "{{ .SandboxID }}" > /run/km/audit-pipe 2>/dev/null
+    printf '{"timestamp":"%s","sandbox_id":"%s","event_type":"heartbeat","source":"shell","detail":{}}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "{{ .SandboxID }}" > /run/km/audit-pipe 2>/dev/null
   done
 }
 _km_heartbeat &
