@@ -71,11 +71,6 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: nil,
 		},
 		{
-			name:    "ses",
-			dir:     filepath.Join(regionDir, "ses"),
-			envReqs: []string{"KM_ROUTE53_ZONE_ID"},
-		},
-		{
 			name:    "s3-replication",
 			dir:     filepath.Join(regionDir, "s3-replication"),
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
@@ -84,6 +79,14 @@ func regionalModules(regionDir string) []regionalModule {
 			name:    "ttl-handler",
 			dir:     filepath.Join(regionDir, "ttl-handler"),
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
+		},
+		{
+			// SES must apply LAST because it owns the consolidated S3 bucket policy.
+			// The TTL handler may destroy its old bucket policy on apply — if SES ran
+			// before TTL handler, the bucket policy would be wiped.
+			name:    "ses",
+			dir:     filepath.Join(regionDir, "ses"),
+			envReqs: []string{"KM_ROUTE53_ZONE_ID"},
 		},
 	}
 }
@@ -145,27 +148,32 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		os.Setenv("KM_REGION", cfg.PrimaryRegion)
 	}
 
-	// Always ensure sandboxes.{domain} hosted zone AND NS delegation exist.
-	// Even if the zone ID is known, delegation in the management account may be missing.
-	if cfg.Domain != "" {
-		zoneID, err := ensureSandboxHostedZone(ctx, cfg)
-		if err != nil {
-			fmt.Printf("  [warn] DNS zone setup failed: %v\n", err)
-			fmt.Printf("  SES will be skipped. Set KM_ROUTE53_ZONE_ID manually to enable.\n")
-		} else if os.Getenv("KM_ROUTE53_ZONE_ID") == "" {
-			os.Setenv("KM_ROUTE53_ZONE_ID", zoneID)
-			// Persist to km-config.yaml so future runs don't repeat this
-			if persistErr := persistRoute53ZoneID(zoneID); persistErr != nil {
-				fmt.Printf("  [warn] Could not save route53_zone_id to km-config.yaml: %v\n", persistErr)
-			}
-		}
-	}
-
 	repoRoot := findRepoRoot()
 
 	fmt.Println()
 	fmt.Printf("km init — %s (%s)\n", region, compiler.RegionLabel(region))
 	fmt.Println(strings.Repeat("─", 50))
+
+	// Always ensure sandboxes.{domain} hosted zone AND NS delegation exist.
+	// Even if the zone ID is known, delegation in the management account may be missing.
+	if cfg.Domain != "" {
+		fmt.Println()
+		fmt.Printf("Ensuring DNS zone and NS delegation for sandboxes.%s...\n", cfg.Domain)
+		zoneID, err := ensureSandboxHostedZone(ctx, cfg)
+		if err != nil {
+			fmt.Printf("  [warn] DNS zone setup failed: %v\n", err)
+			fmt.Printf("  SES will be skipped. Set KM_ROUTE53_ZONE_ID manually to enable.\n")
+		} else {
+			fmt.Printf("  DNS zone ready: %s\n", zoneID)
+			if os.Getenv("KM_ROUTE53_ZONE_ID") == "" {
+				os.Setenv("KM_ROUTE53_ZONE_ID", zoneID)
+				// Persist to km-config.yaml so future runs don't repeat this
+				if persistErr := persistRoute53ZoneID(zoneID); persistErr != nil {
+					fmt.Printf("  [warn] Could not save route53_zone_id to km-config.yaml: %v\n", persistErr)
+				}
+			}
+		}
+	}
 
 	// Step 1: Build Lambda zips
 	fmt.Println()
@@ -709,20 +717,26 @@ func ensureSandboxHostedZone(ctx context.Context, cfg *config.Config) (string, e
 	fmt.Printf("  NS records: %s\n", strings.Join(nsRecords, ", "))
 
 	// 5. Create Route53 client for management account (where the parent zone lives)
+	fmt.Println("  Checking NS delegation in management account (profile: klanker-management)...")
 	mgmtCfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithSharedConfigProfile("klanker-management"),
 		awsconfig.WithRegion("us-east-1"),
 	)
 	if err != nil {
-		return zoneID, fmt.Errorf("zone created but could not load management AWS config for NS delegation: %w", err)
+		return zoneID, fmt.Errorf("could not load management AWS config (profile: klanker-management) for NS delegation: %w", err)
 	}
 	mgmtR53 := route53.NewFromConfig(mgmtCfg)
 
 	// 6. Find the parent zone (cfg.Domain) in management account
+	fmt.Printf("  Looking for parent zone %s in management account...\n", cfg.Domain)
 	parentZoneID, err := findHostedZone(ctx, mgmtR53, cfg.Domain)
-	if err != nil || parentZoneID == "" {
-		return zoneID, fmt.Errorf("zone created but parent zone %s not found in management account — add NS delegation manually", cfg.Domain)
+	if err != nil {
+		return zoneID, fmt.Errorf("error searching for parent zone %s in management account: %w", cfg.Domain, err)
 	}
+	if parentZoneID == "" {
+		return zoneID, fmt.Errorf("parent zone %s not found in management account — add NS delegation manually", cfg.Domain)
+	}
+	fmt.Printf("  Found parent zone: %s\n", parentZoneID)
 
 	// 7. Check if NS delegation already exists in parent zone
 	existingNS, err := mgmtR53.ListResourceRecordSets(ctx, &route53.ListResourceRecordSetsInput{

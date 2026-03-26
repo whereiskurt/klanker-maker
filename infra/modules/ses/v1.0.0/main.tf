@@ -87,10 +87,14 @@ resource "aws_ses_receipt_rule" "sandbox_inbound" {
 }
 
 # ============================================================
-# S3 Bucket Policy — allow SES to write inbound email
+# S3 Bucket Policy — allow SES inbound email + CloudWatch log export
 # ============================================================
+# IMPORTANT: Only ONE aws_s3_bucket_policy can exist per bucket across all
+# modules. This policy is the single source of truth for the artifacts bucket.
+# Add new service principals here rather than in other modules.
 
-data "aws_iam_policy_document" "ses_inbound" {
+data "aws_iam_policy_document" "artifacts_bucket" {
+  # SES inbound email → mail/ prefix
   statement {
     sid    = "AllowSESPutObject"
     effect = "Allow"
@@ -105,7 +109,27 @@ data "aws_iam_policy_document" "ses_inbound" {
 
     condition {
       test     = "StringEquals"
-      variable = "aws:Referer"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
+
+  # CloudWatch Logs export → logs/ prefix (used by CreateExportTask on destroy/TTL)
+  statement {
+    sid    = "AllowCloudWatchLogsExport"
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["logs.amazonaws.com"]
+    }
+
+    actions   = ["s3:PutObject"]
+    resources = ["${var.artifact_bucket_arn}/logs/*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
       values   = [data.aws_caller_identity.current.account_id]
     }
   }
@@ -113,5 +137,5 @@ data "aws_iam_policy_document" "ses_inbound" {
 
 resource "aws_s3_bucket_policy" "ses_inbound" {
   bucket = var.artifact_bucket_name
-  policy = data.aws_iam_policy_document.ses_inbound.json
+  policy = data.aws_iam_policy_document.artifacts_bucket.json
 }

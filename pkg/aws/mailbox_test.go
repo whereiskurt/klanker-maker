@@ -33,7 +33,8 @@ type mockMailboxS3API struct {
 
 	getCalled bool
 	getInput  *s3.GetObjectInput
-	getBody   []byte
+	getBody   []byte            // default body for GetObject
+	getBodies map[string][]byte // per-key bodies (key → body); takes precedence over getBody
 	getErr    error
 }
 
@@ -57,8 +58,14 @@ func (m *mockMailboxS3API) GetObject(ctx context.Context, input *s3.GetObjectInp
 	if m.getErr != nil {
 		return nil, m.getErr
 	}
+	body := m.getBody
+	if m.getBodies != nil && input.Key != nil {
+		if b, ok := m.getBodies[*input.Key]; ok {
+			body = b
+		}
+	}
 	return &s3.GetObjectOutput{
-		Body: io.NopCloser(bytes.NewReader(m.getBody)),
+		Body: io.NopCloser(bytes.NewReader(body)),
 	}, nil
 }
 
@@ -113,16 +120,22 @@ func signBody(t *testing.T, priv ed25519.PrivateKey, body string) string {
 // ListMailboxMessages tests
 // ============================================================
 
-func TestListMailboxMessages_ReturnsAllKeys(t *testing.T) {
+func TestListMailboxMessages_FiltersToRecipient(t *testing.T) {
 	mockS3 := &mockMailboxS3API{
 		listPages: []*s3.ListObjectsV2Output{
 			{
 				Contents: []s3types.Object{
 					{Key: aws.String("mail/msg-001.eml")},
 					{Key: aws.String("mail/msg-002.eml")},
+					{Key: aws.String("mail/msg-003.eml")},
 				},
 				IsTruncated: aws.Bool(false),
 			},
+		},
+		getBodies: map[string][]byte{
+			"mail/msg-001.eml": []byte("To: sb-recv01@example.com\r\nFrom: a@example.com\r\n\r\nHello"),
+			"mail/msg-002.eml": []byte("To: sb-other@example.com\r\nFrom: a@example.com\r\n\r\nNot mine"),
+			"mail/msg-003.eml": []byte("To: sb-recv01@example.com\r\nFrom: b@example.com\r\n\r\nAlso mine"),
 		},
 	}
 
@@ -131,9 +144,9 @@ func TestListMailboxMessages_ReturnsAllKeys(t *testing.T) {
 		t.Fatalf("ListMailboxMessages returned error: %v", err)
 	}
 	if len(keys) != 2 {
-		t.Errorf("expected 2 keys, got %d: %v", len(keys), keys)
+		t.Errorf("expected 2 keys for sb-recv01, got %d: %v", len(keys), keys)
 	}
-	if keys[0] != "mail/msg-001.eml" {
+	if len(keys) > 0 && keys[0] != "mail/msg-001.eml" {
 		t.Errorf("keys[0] = %q; want %q", keys[0], "mail/msg-001.eml")
 	}
 }
@@ -465,7 +478,7 @@ func TestPollForApproval_Approved(t *testing.T) {
 		messages: map[string][]byte{replyKey: replyMIME},
 	}
 
-	result, err := kmaws.PollForApproval(context.Background(), mock, "km-artifacts", "sb-test01", "example.com", "deploy-prod")
+	result, err := kmaws.PollForApproval(context.Background(), mock, "km-artifacts", "sb-test01", "sandboxes.example.com", "deploy-prod")
 	if err != nil {
 		t.Fatalf("PollForApproval returned error: %v", err)
 	}
@@ -493,7 +506,7 @@ func TestPollForApproval_Denied(t *testing.T) {
 		messages: map[string][]byte{replyKey: replyMIME},
 	}
 
-	result, err := kmaws.PollForApproval(context.Background(), mock, "km-artifacts", "sb-test02", "example.com", "delete-db")
+	result, err := kmaws.PollForApproval(context.Background(), mock, "km-artifacts", "sb-test02", "sandboxes.example.com", "delete-db")
 	if err != nil {
 		t.Fatalf("PollForApproval returned error: %v", err)
 	}
@@ -515,7 +528,7 @@ func TestPollForApproval_NotFound(t *testing.T) {
 		messages: map[string][]byte{},
 	}
 
-	result, err := kmaws.PollForApproval(context.Background(), mock, "km-artifacts", "sb-test03", "example.com", "some-action")
+	result, err := kmaws.PollForApproval(context.Background(), mock, "km-artifacts", "sb-test03", "sandboxes.example.com", "some-action")
 	if err != nil {
 		t.Fatalf("PollForApproval returned error for empty mailbox: %v", err)
 	}
@@ -540,7 +553,7 @@ func TestPollForApproval_CaseInsensitive(t *testing.T) {
 		messages: map[string][]byte{replyKey: replyMIME},
 	}
 
-	result, err := kmaws.PollForApproval(context.Background(), mock, "km-artifacts", "sb-test04", "example.com", "scale-up")
+	result, err := kmaws.PollForApproval(context.Background(), mock, "km-artifacts", "sb-test04", "sandboxes.example.com", "scale-up")
 	if err != nil {
 		t.Fatalf("PollForApproval returned error: %v", err)
 	}
@@ -566,7 +579,7 @@ func TestPollForApproval_SubjectMustContainAction(t *testing.T) {
 		messages: map[string][]byte{replyKey: replyMIME},
 	}
 
-	result, err := kmaws.PollForApproval(context.Background(), mock, "km-artifacts", "sb-test05", "example.com", "deploy-prod")
+	result, err := kmaws.PollForApproval(context.Background(), mock, "km-artifacts", "sb-test05", "sandboxes.example.com", "deploy-prod")
 	if err != nil {
 		t.Fatalf("PollForApproval returned error: %v", err)
 	}

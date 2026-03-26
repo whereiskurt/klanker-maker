@@ -3,7 +3,7 @@
 //
 // Key design:
 //   - MailboxS3API: narrow interface (ListObjectsV2 + GetObject)
-//   - ListMailboxMessages: returns all S3 keys under mail/ prefix without filtering
+//   - ListMailboxMessages: returns S3 keys under mail/ filtered to this sandbox's address
 //   - ReadMessage: fetches raw MIME bytes from S3
 //   - ParseSignedMessage: parses MIME headers, verifies Ed25519 signature, enforces allow-list
 //   - Self-mail (senderID == receiverSandboxID) always permitted regardless of allowedSenders
@@ -55,13 +55,16 @@ type MailboxMessage struct {
 	SafePhraseOK bool   // true if SafePhrase matches expected value passed to ParseSignedMessage
 }
 
-// ListMailboxMessages lists all S3 object keys under the mail/ prefix for a sandbox.
+// ListMailboxMessages lists S3 object keys under the mail/ prefix and filters
+// to only return messages addressed to this sandbox.
 //
-// Returns all keys without filtering by recipient. Caller is responsible for
-// per-message allow-list filtering via ParseSignedMessage.
+// SES stores all inbound email under mail/ with opaque keys. This function
+// reads each object's MIME headers to check if the To address matches
+// {sandboxID}@{emailDomain}. Only matching keys are returned.
 // Handles pagination for buckets with more than 1000 objects.
 func ListMailboxMessages(ctx context.Context, client MailboxS3API, bucket, sandboxID, emailDomain string) ([]string, error) {
 	prefix := "mail/"
+	myAddr := strings.ToLower(sandboxID + "@" + emailDomain)
 	var keys []string
 	var continuationToken *string
 
@@ -76,7 +79,24 @@ func ListMailboxMessages(ctx context.Context, client MailboxS3API, bucket, sandb
 		}
 
 		for _, obj := range out.Contents {
-			if obj.Key != nil {
+			if obj.Key == nil {
+				continue
+			}
+			// Read the message and check the To header
+			getOut, getErr := client.GetObject(ctx, &s3.GetObjectInput{
+				Bucket: aws.String(bucket),
+				Key:    obj.Key,
+			})
+			if getErr != nil {
+				continue // skip unreadable messages
+			}
+			// Read just enough for headers (first 8KB should cover MIME headers)
+			headerBuf := make([]byte, 8192)
+			n, _ := getOut.Body.Read(headerBuf)
+			getOut.Body.Close()
+			headerStr := strings.ToLower(string(headerBuf[:n]))
+
+			if strings.Contains(headerStr, myAddr) {
 				keys = append(keys, *obj.Key)
 			}
 		}
