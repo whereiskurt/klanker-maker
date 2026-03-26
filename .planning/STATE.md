@@ -347,6 +347,14 @@ None yet.
 - [Phase 3]: HTTPS proxy mode (SNI-only vs. full MITM) is a security trade-off that needs an explicit decision before Phase 3 implementation
 - [Phase 4]: Filesystem policy enforcement mechanism (seccomp, Linux mount namespaces, OverlayFS) not decided — research recommends `/gsd:research-phase` before Phase 4 planning
 
+## Accumulated Context
+
+### Roadmap Evolution
+- Phase 22 added: Remote Sandbox Creation — km create --remote via Lambda + email-to-create
+- Phase 23 added: Credential Rotation — km roll creds for platform and sandbox secrets
+- Phase 24 added: Documentation Refresh (Phases 18-23)
+- Phase 25 added: GitHub Source Access Restrictions — deep testing of repo allowlists, clone/push enforcement, and deny-by-default for unlisted repos
+
 ## Session Continuity
 
 Last session: 2026-03-25T21:54:50.185Z

@@ -590,3 +590,13 @@ Plans:
 5. Profile reference — new fields (if any added in Phases 22-23)
 
 **Depends on:** Phase 23
+
+### Phase 25: GitHub Source Access Restrictions — deep testing of repo allowlists, clone/push enforcement, and deny-by-default for unlisted repos
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 24
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 25 to break down)

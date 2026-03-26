@@ -541,6 +541,7 @@ km uninit --region us-east-1
 | 22 | Remote Sandbox Creation — `km create --remote` via Lambda + email-to-create | Planned |
 | 23 | Credential Rotation — `km roll creds` for platform and sandbox secrets | Planned |
 | 24 | Documentation Refresh (Phases 18-23) | Planned |
+| 25 | GitHub Source Access Restrictions — repo allowlists, deny-by-default | Planned |
 
 See [.planning/ROADMAP.md](.planning/ROADMAP.md) for detailed phase breakdowns and success criteria.
 
