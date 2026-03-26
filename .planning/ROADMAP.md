@@ -555,6 +555,17 @@ Plans:
 
 **Requirements**: REMOTE-01 through REMOTE-06
 **Depends on:** Phase 21, Phase 17 (email infrastructure), Phase 14 (identity/signing)
+**Success Criteria** (what must be TRUE):
+  1. Operator runs `km create --remote <profile>` and the profile is compiled locally, artifacts are uploaded to S3, a SandboxCreate EventBridge event is published, and the create-handler Lambda picks it up and runs `km create` inside a container image — the sandbox is provisioned without terraform/terragrunt installed locally
+  2. Operator emails a YAML profile to `create@sandboxes.{domain}` with `KM-AUTH: <phrase>` in the body; the email-create Lambda parses the MIME attachment, validates the safe phrase against SSM, and triggers sandbox creation via EventBridge — wrong or missing phrases result in a rejection email
+  3. The create-handler Lambda runs as a container image (ECR, arm64) bundling km binary + terraform + terragrunt + infra/modules; EventBridge rule routes SandboxCreate events to it with 0 retry attempts
+  4. On success or failure, the operator receives an email notification with sandbox ID and connection details (success) or error details (failure)
+**Plans:** 3 plans
+
+Plans:
+- [ ] 22-01-PLAN.md — EventBridge SDK package + km create --remote flag + create-handler Lambda (REMOTE-01, REMOTE-02, REMOTE-05, REMOTE-06)
+- [ ] 22-02-PLAN.md — Email-create-handler Lambda + KMAuthPattern export + MIME parsing (REMOTE-03, REMOTE-04)
+- [ ] 22-03-PLAN.md — Terraform module + Dockerfile + SES receipt rule + Makefile + live config (REMOTE-01, REMOTE-03, REMOTE-05)
 
 ### Phase 23: Credential Rotation — `km roll creds` for platform and sandbox secrets
 
