@@ -116,9 +116,10 @@ func compileEC2(p *profile.SandboxProfile, sandboxID string, onDemand bool, netw
 		}
 	}
 
-	// Generate github-token HCL when sourceAccess.github is configured.
+	// Generate github-token HCL when sourceAccess.github is configured with at least one repo.
+	// Empty allowedRepos is treated as deny-by-default (same as nil github config).
 	var gitHubTokenHCL string
-	if p.Spec.SourceAccess.GitHub != nil {
+	if p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRepos) > 0 {
 		gitHubTokenHCL, err = generateGitHubTokenHCL(sandboxID, p)
 		if err != nil {
 			return nil, fmt.Errorf("generate github-token HCL: %w", err)
@@ -163,9 +164,10 @@ func compileECS(p *profile.SandboxProfile, sandboxID string, onDemand bool, netw
 		}
 	}
 
-	// Generate github-token HCL when sourceAccess.github is configured.
+	// Generate github-token HCL when sourceAccess.github is configured with at least one repo.
+	// Empty allowedRepos is treated as deny-by-default (same as nil github config).
 	var gitHubTokenHCL string
-	if p.Spec.SourceAccess.GitHub != nil {
+	if p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRepos) > 0 {
 		var ghErr error
 		gitHubTokenHCL, ghErr = generateGitHubTokenHCL(sandboxID, p)
 		if ghErr != nil {

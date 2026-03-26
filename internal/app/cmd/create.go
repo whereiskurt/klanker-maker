@@ -533,9 +533,10 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	}
 
 	// Step 13a: Generate GitHub App installation token and write to SSM.
-	// Guarded by sourceAccess.github — only runs for GitHub-enabled profiles.
+	// Guarded by sourceAccess.github with non-empty allowedRepos — deny-by-default
+	// ensures empty repos is treated the same as no github config.
 	// Non-fatal: sandbox is provisioned even if GitHub token generation fails.
-	if resolvedProfile.Spec.SourceAccess.GitHub != nil {
+	if resolvedProfile.Spec.SourceAccess.GitHub != nil && len(resolvedProfile.Spec.SourceAccess.GitHub.AllowedRepos) > 0 {
 		ssmClient := ssm.NewFromConfig(awsCfg)
 		kmsKeyARN := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
 		if kmsKeyARN == "" {

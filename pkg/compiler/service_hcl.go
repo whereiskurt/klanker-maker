@@ -514,8 +514,9 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		WarningThreshold: warningThreshold,
 	}
 
-	// Populate GitHub token fields when sourceAccess.github is configured.
-	if p.Spec.SourceAccess.GitHub != nil {
+	// Populate GitHub token fields when sourceAccess.github is configured with at least one repo.
+	// Empty allowedRepos is treated as deny-by-default (same as nil github config).
+	if p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRepos) > 0 {
 		params.HasGitHub = true
 		params.GitHubSSMPath = fmt.Sprintf("/sandbox/%s/github-token", sandboxID)
 		params.GitHubAllowedRepos = p.Spec.SourceAccess.GitHub.AllowedRepos
@@ -644,8 +645,9 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		params.EffectiveWritablePaths = writablePaths
 	}
 
-	// Populate GitHub token fields when sourceAccess.github is configured.
-	if p.Spec.SourceAccess.GitHub != nil {
+	// Populate GitHub token fields when sourceAccess.github is configured with at least one repo.
+	// Empty allowedRepos is treated as deny-by-default (same as nil github config).
+	if p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRepos) > 0 {
 		params.HasGitHub = true
 		params.GitHubSSMPath = fmt.Sprintf("/sandbox/%s/github-token", sandboxID)
 		params.GitHubAllowedRepos = p.Spec.SourceAccess.GitHub.AllowedRepos

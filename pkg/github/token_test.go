@@ -229,6 +229,57 @@ func TestCompilePermissions_CloneFetch(t *testing.T) {
 	}
 }
 
+// TestCompilePermissions_EmptySlice verifies that an empty permissions slice
+// returns an empty map (no permissions granted).
+func TestCompilePermissions_EmptySlice(t *testing.T) {
+	perms := github.CompilePermissions([]string{})
+	if len(perms) != 0 {
+		t.Errorf("expected empty map for empty permissions slice, got %v", perms)
+	}
+}
+
+// TestCompilePermissions_UnknownPermission verifies that unknown permission
+// strings (e.g. "write", "admin", "delete") are silently ignored and produce
+// an empty map. Only "clone", "fetch", and "push" are valid profile permissions.
+func TestCompilePermissions_UnknownPermission(t *testing.T) {
+	unknownPerms := []string{"write", "admin", "delete", "read"}
+	for _, unknown := range unknownPerms {
+		perms := github.CompilePermissions([]string{unknown})
+		if len(perms) != 0 {
+			t.Errorf("expected empty map for unknown permission %q, got %v", unknown, perms)
+		}
+	}
+}
+
+// TestExchangeForInstallationToken_WildcardRepoName verifies behavior when a
+// wildcard-like repo name "*" is passed (after org-prefix stripping). GitHub
+// returns a 422 Unprocessable Entity for invalid repo names. The error must be
+// propagated so the caller knows the token was not issued.
+func TestExchangeForInstallationToken_WildcardRepoName(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate GitHub rejecting a wildcard repo name with 422.
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		fmt.Fprint(w, `{"message":"Repository not found or invalid name: *"}`)
+	}))
+	defer server.Close()
+
+	github.GitHubAPIBaseURL = server.URL
+
+	_, err := github.ExchangeForInstallationToken(
+		context.Background(),
+		"mock-jwt",
+		"12345678",
+		[]string{"*"},
+		map[string]string{"contents": "read"},
+	)
+	if err == nil {
+		t.Fatal("expected error for wildcard repo name, got nil")
+	}
+	if !strings.Contains(err.Error(), "422") {
+		t.Errorf("expected error to contain 422, got: %v", err)
+	}
+}
+
 // ============================================================
 // ExchangeForInstallationToken tests (httptest stub)
 // ============================================================

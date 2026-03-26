@@ -123,12 +123,12 @@ export KM_EMAIL_ADDRESS="{{ .SandboxEmail }}"
 echo "[km-bootstrap] KM_EMAIL_ADDRESS={{ .SandboxEmail }}"
 {{- end }}
 
+{{- if .HasGitHub }}
 # ============================================================
 # 4. GitHub credential helper: GIT_ASKPASS (if GitHub access is configured)
 # EC2 only — token fetched from per-sandbox SSM at git-operation time.
 # ECS credential helper delivery is deferred to a future phase.
 # ============================================================
-{{- if .HasGitHub }}
 echo "[km-bootstrap] Installing GIT_ASKPASS credential helper..."
 SANDBOX_ID="{{ .SandboxID }}"
 export SANDBOX_ID
@@ -572,7 +572,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 	params := userDataParams{
 		SandboxID:          sandboxID,
 		SecretPaths:        secretPaths,
-		HasGitHub:          p.Spec.SourceAccess.GitHub != nil,
+		HasGitHub:          p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRepos) > 0,
 		AllowedDNSSuffixes: strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
 		AllowedHTTPHosts:   strings.Join(p.Spec.Network.Egress.AllowedHosts, ","),
 		KMArtifactsBucket:  artifactsBucket,

@@ -794,3 +794,68 @@ func TestGitHubTokenHCLECS(t *testing.T) {
 		t.Errorf("ECS GitHubTokenHCL should reference github-token module\nGot:\n%s", artifacts.GitHubTokenHCL)
 	}
 }
+
+// ============================================================
+// Phase 25: Deny-by-default tests for empty allowedRepos
+// ============================================================
+
+// TestCompileEC2EmptyAllowedRepos_DenyByDefault verifies that a profile with a
+// non-nil github block but allowedRepos: [] produces NO github_token_inputs in
+// service.hcl and NO GitHubTokenHCL artifact. Empty repos must be treated
+// identically to a nil github config (deny-by-default contract).
+func TestCompileEC2EmptyAllowedRepos_DenyByDefault(t *testing.T) {
+	p := loadTestProfile(t, "ec2-empty-repos.yaml")
+	id := "sb-ec2norepo"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile(EC2 empty repos) error = %v", err)
+	}
+
+	if strings.Contains(artifacts.ServiceHCL, "github_token_inputs") {
+		t.Errorf("EC2 ServiceHCL should NOT contain github_token_inputs when allowedRepos is empty\nGot:\n%s", artifacts.ServiceHCL)
+	}
+	if artifacts.GitHubTokenHCL != "" {
+		t.Errorf("EC2 GitHubTokenHCL should be empty when allowedRepos is empty\nGot:\n%s", artifacts.GitHubTokenHCL)
+	}
+}
+
+// TestCompileECSEmptyAllowedRepos_DenyByDefault verifies that a profile with a
+// non-nil github block but allowedRepos: [] produces NO github_token_inputs in
+// the ECS service.hcl and NO GitHubTokenHCL artifact.
+func TestCompileECSEmptyAllowedRepos_DenyByDefault(t *testing.T) {
+	p := loadTestProfile(t, "ecs-empty-repos.yaml")
+	id := "sb-ecsnorepo"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile(ECS empty repos) error = %v", err)
+	}
+
+	if strings.Contains(artifacts.ServiceHCL, "github_token_inputs") {
+		t.Errorf("ECS ServiceHCL should NOT contain github_token_inputs when allowedRepos is empty\nGot:\n%s", artifacts.ServiceHCL)
+	}
+	if artifacts.GitHubTokenHCL != "" {
+		t.Errorf("ECS GitHubTokenHCL should be empty when allowedRepos is empty\nGot:\n%s", artifacts.GitHubTokenHCL)
+	}
+}
+
+// TestUserDataEmptyAllowedRepos_NoGITASKPASS verifies that a profile with a
+// non-nil github block but allowedRepos: [] does NOT emit any km-git-askpass
+// or GIT_ASKPASS section in the EC2 user-data script.
+func TestUserDataEmptyAllowedRepos_NoGITASKPASS(t *testing.T) {
+	p := loadTestProfile(t, "ec2-empty-repos.yaml")
+	id := "sb-udnoask"
+
+	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	if err != nil {
+		t.Fatalf("Compile(EC2 empty repos) error = %v", err)
+	}
+
+	if strings.Contains(artifacts.UserData, "km-git-askpass") {
+		t.Errorf("UserData should NOT contain km-git-askpass when allowedRepos is empty\nGot:\n%s", artifacts.UserData)
+	}
+	if strings.Contains(artifacts.UserData, "GIT_ASKPASS") {
+		t.Errorf("UserData should NOT contain GIT_ASKPASS when allowedRepos is empty\nGot:\n%s", artifacts.UserData)
+	}
+}
