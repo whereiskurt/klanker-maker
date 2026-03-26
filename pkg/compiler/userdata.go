@@ -168,6 +168,14 @@ chmod +x /opt/km/bin/km-*
 # Create dedicated sidecar user (exempt from iptables DNAT — prevents redirect loops)
 useradd -r -s /usr/sbin/nologin km-sidecar || true
 
+# Create restricted sandbox user for agent workloads (no sudo, no root).
+# This is the default user for km shell sessions.
+useradd -m -s /bin/bash -d /home/sandbox sandbox 2>/dev/null || true
+mkdir -p /workspace
+chown sandbox:sandbox /workspace
+# Ensure sandbox user gets proxy env vars and audit hook
+ln -sf /etc/profile.d/km-audit.sh /etc/profile.d/km-proxy.sh 2>/dev/null || true
+
 # Write systemd unit files (run all sidecar services as km-sidecar user)
 cat > /etc/systemd/system/km-dns-proxy.service << 'UNIT'
 [Unit]

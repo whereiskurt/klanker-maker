@@ -30,6 +30,8 @@ func NewShellCmd(cfg *config.Config) *cobra.Command {
 // NewShellCmdWithFetcher builds the shell command with an optional custom fetcher and
 // exec function. Pass nil for real AWS-backed clients. Used in tests for DI.
 func NewShellCmdWithFetcher(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc) *cobra.Command {
+	var asRoot bool
+
 	cmd := &cobra.Command{
 		Use:          "shell <sandbox-id | #number>",
 		Short:        "Open an interactive shell into a running sandbox",
@@ -45,14 +47,18 @@ func NewShellCmdWithFetcher(cfg *config.Config, fetcher SandboxFetcher, execFn S
 			if err != nil {
 				return err
 			}
-			return runShell(cmd, cfg, fetcher, execFn, sandboxID)
+			return runShell(cmd, cfg, fetcher, execFn, sandboxID, asRoot)
 		},
 	}
+
+	cmd.Flags().BoolVar(&asRoot, "root", false, "Connect as root instead of the restricted sandbox user")
+
 	return cmd
 }
 
 // runShell is the command RunE logic for km shell.
-func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, sandboxID string) error {
+func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, sandboxID string, asRoot ...bool) error {
+	root := len(asRoot) > 0 && asRoot[0]
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -89,7 +95,7 @@ func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 		if err != nil {
 			return fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
 		}
-		return execSSMSession(ctx, instanceID, rec.Region, execFn)
+		return execSSMSession(ctx, instanceID, rec.Region, root, execFn)
 	case "ecs":
 		clusterARN, err := findResourceARN(rec.Resources, ":cluster/")
 		if err != nil {
@@ -105,10 +111,24 @@ func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 	}
 }
 
-// execSSMSession builds and runs: aws ssm start-session --target <instanceID> --region <region> --profile <profile>
-func execSSMSession(ctx context.Context, instanceID, region string, execFn ShellExecFunc) error {
+// execSSMSession builds and runs an SSM session.
+// When root is false, it runs: sudo -u sandbox -i (restricted non-root user).
+// When root is true, it starts a standard root SSM session.
+func execSSMSession(ctx context.Context, instanceID, region string, root bool, execFn ShellExecFunc) error {
+	if root {
+		c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
+			"--target", instanceID, "--region", region, "--profile", "klanker-terraform")
+		c.Stdin = os.Stdin
+		c.Stdout = os.Stdout
+		c.Stderr = os.Stderr
+		return execFn(c)
+	}
+
+	// Non-root: use SSM document to start session as 'sandbox' user
 	c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
-		"--target", instanceID, "--region", region, "--profile", "klanker-terraform")
+		"--target", instanceID, "--region", region, "--profile", "klanker-terraform",
+		"--document-name", "AWS-StartInteractiveCommand",
+		"--parameters", `{"command":["sudo -u sandbox -i"]}`)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
