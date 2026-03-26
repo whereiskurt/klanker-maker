@@ -153,7 +153,10 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	sandboxID := compiler.GenerateSandboxID()
 	substrate := resolvedProfile.Spec.Runtime.Substrate
 	spot := resolvedProfile.Spec.Runtime.Spot && !onDemand
-	fmt.Printf("Creating sandbox %s (substrate: %s, spot: %v)...\n", sandboxID, substrate, spot)
+	fmt.Println()
+	fmt.Printf("km create — %s\n", sandboxID)
+	fmt.Println(strings.Repeat("─", 50))
+	fmt.Printf("\n  Substrate: %s, Spot: %v\n", substrate, spot)
 
 	// Step 5: Load and validate AWS credentials (fail before any provisioning)
 	awsCfg, err := awspkg.LoadAWSConfig(ctx, awsProfile)
@@ -251,7 +254,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	}
 
 	// Step 10: Run terragrunt apply (streams output in real time when --verbose; quiet by default)
-	fmt.Printf("  Provisioning infrastructure")
+	fmt.Printf("\nProvisioning infrastructure...")
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
 	runner.Verbose = verbose
 
@@ -297,6 +300,8 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	}
 
 	fmt.Println(" done")
+
+	fmt.Printf("\nConfiguring sandbox...\n")
 
 	// Step 11: Write sandbox metadata to S3 so km list/status can read it without tag API calls.
 	// Non-fatal: sandbox is provisioned even if metadata write fails.
@@ -380,7 +385,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		}
 	}
 
-	fmt.Printf("  Setting up TTL, budget, email, identity...")
+	fmt.Printf("  Setting up TTL, budget, email, identity...\n")
 	// Step 12: Create EventBridge TTL schedule if TTL is configured.
 	// Auto-discover Lambda ARN if not explicitly set.
 	// Non-fatal: sandbox is provisioned; operator can re-schedule manually if this fails.
@@ -455,7 +460,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 				Float64("ai_limit", aiLimit).
 				Float64("warning_threshold", warningThreshold).
 				Msg("Budget limits set")
-			fmt.Printf("Budget limits set: compute $%.4f, AI $%.4f, warning at %.0f%%\n",
+			fmt.Printf("  Budget: compute $%.4f, AI $%.4f, warning at %.0f%%\n",
 				computeLimit, aiLimit, warningThreshold*100)
 		}
 	}
@@ -474,7 +479,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 				log.Warn().Err(writeErr).Str("sandbox_id", sandboxID).
 					Msg("failed to write budget-enforcer/terragrunt.hcl (non-fatal)")
 			} else {
-				fmt.Printf("Step 12c: Deploying budget enforcer Lambda for %s...\n", sandboxID)
+				fmt.Printf("  Deploying budget enforcer Lambda...\n")
 				if beErr := runner.Apply(ctx, budgetEnforcerDir); beErr != nil {
 					log.Warn().Err(beErr).Str("sandbox_id", sandboxID).
 						Msg("budget-enforcer apply failed (non-fatal — sandbox is provisioned)")
@@ -517,8 +522,8 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 			if cfg.Domain == "" {
 				safeDomain = "sandboxes.klankermaker.ai"
 			}
-			fmt.Printf("Safe phrase (save this): %s\n", phrase)
-			fmt.Printf("Sandbox email: %s@%s\n", sandboxID, safeDomain)
+			fmt.Printf("  Safe phrase: %s\n", phrase)
+			fmt.Printf("  Email:       %s@%s\n", sandboxID, safeDomain)
 				log.Info().Str("sandbox_id", sandboxID).
 					Msg("Step 12d: safe phrase stored in SSM")
 			}
@@ -537,13 +542,13 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		gh := resolvedProfile.Spec.SourceAccess.GitHub
 		if tokenErr := generateAndStoreGitHubToken(ctx, ssmClient, sandboxID, kmsKeyARN, gh.AllowedRepos, gh.Permissions); tokenErr != nil {
 			if errors.Is(tokenErr, ErrGitHubNotConfigured) {
-				fmt.Printf("Step 13a: GitHub token skipped (not configured)\n")
+				fmt.Printf("  GitHub token: skipped (not configured)\n")
 			} else {
 				log.Warn().Err(tokenErr).Str("sandbox_id", sandboxID).
 					Msg("Step 13a: GitHub App token generation failed (non-fatal — sandbox is provisioned)")
 			}
 		} else {
-			fmt.Printf("Step 13a: GitHub App installation token stored in SSM\n")
+			fmt.Printf("  GitHub token: stored in SSM\n")
 		}
 	}
 
@@ -561,13 +566,13 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 				log.Warn().Err(writeErr).Str("sandbox_id", sandboxID).
 					Msg("Step 13b: failed to write github-token/terragrunt.hcl (non-fatal)")
 			} else {
-				fmt.Printf("Step 13b: Deploying GitHub token refresher Lambda for %s...\n", sandboxID)
+				fmt.Printf("  Deploying GitHub token refresher Lambda...\n")
 				if ghErr := runner.Apply(ctx, githubTokenDir); ghErr != nil {
 					log.Warn().Err(ghErr).Str("sandbox_id", sandboxID).
 						Msg("Step 13b: github-token apply failed (non-fatal — sandbox is provisioned)")
 				} else {
 					log.Info().Str("sandbox_id", sandboxID).Msg("github-token refresher Lambda deployed")
-					fmt.Printf("Step 13b: GitHub token refresher Lambda deployed for %s\n", sandboxID)
+					fmt.Printf("  GitHub token refresher Lambda deployed\n")
 				}
 			}
 		}
@@ -587,14 +592,15 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		log.Warn().Err(emailErr).Msg("failed to provision sandbox email (non-fatal)")
 	} else {
 		log.Info().Str("email", emailAddr).Msg("sandbox email provisioned")
-		fmt.Fprintf(os.Stdout, "Email: %s\n", emailAddr)
+		log.Debug().Str("email", emailAddr).Msg("sandbox email address derived")
 	}
 
-	fmt.Println(" done")
+	fmt.Println()
+	fmt.Println(strings.Repeat("─", 50))
+	fmt.Printf("Sandbox %s created successfully.\n", sandboxID)
 	if ttlExpiry != nil {
 		fmt.Printf("  TTL: %s (expires %s)\n", resolvedProfile.Spec.Lifecycle.TTL, ttlExpiry.Format("15:04:05"))
 	}
-	fmt.Printf("Sandbox %s created successfully.\n", sandboxID)
 
 	// Step 14: Send lifecycle notification if operator email is configured.
 	if operatorEmail := os.Getenv("KM_OPERATOR_EMAIL"); operatorEmail != "" {
@@ -648,7 +654,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 					Msg("failed to publish identity to DynamoDB (non-fatal)")
 			} else {
 				log.Info().Str("sandbox_id", sandboxID).Msg("sandbox identity provisioned and published")
-				fmt.Printf("Step 15: Sandbox identity provisioned for %s\n", sandboxID)
+				fmt.Printf("  Identity: Ed25519 key pair provisioned\n")
 			}
 		}
 	}

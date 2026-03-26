@@ -237,7 +237,7 @@ func TestCreateSafePhraseStorage(t *testing.T) {
 		{"safe-phrase SSM path", "safe-phrase"},
 		{"crypto/rand usage", "crypto/rand"},
 		{"hex encoding", "hex.EncodeToString"},
-		{"safe phrase stdout print", "Safe phrase (save this)"},
+		{"safe phrase stdout print", "Safe phrase:"},
 		{"non-fatal pattern", "non-fatal"},
 	}
 	for _, c := range checks {
