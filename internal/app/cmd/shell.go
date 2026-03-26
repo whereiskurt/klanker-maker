@@ -31,11 +31,18 @@ func NewShellCmd(cfg *config.Config) *cobra.Command {
 // exec function. Pass nil for real AWS-backed clients. Used in tests for DI.
 func NewShellCmdWithFetcher(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc) *cobra.Command {
 	var asRoot bool
+	var ports []string
 
 	cmd := &cobra.Command{
-		Use:          "shell <sandbox-id | #number>",
-		Short:        "Open an interactive shell into a running sandbox",
-		Long:         helpText("shell"),
+		Use:   "shell <sandbox-id | #number>",
+		Short: "Open an interactive shell into a running sandbox",
+		Long: `Open an interactive SSM session into a running sandbox.
+
+Port forwarding:
+  --ports 8080         forward localhost:8080 → remote:8080
+  --ports 8080:80      forward localhost:8080 → remote:80
+  --ports 8080,3000    forward multiple ports
+  --ports 8080:80,3000 mix of mapped and same-port forwards`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -47,11 +54,15 @@ func NewShellCmdWithFetcher(cfg *config.Config, fetcher SandboxFetcher, execFn S
 			if err != nil {
 				return err
 			}
+			if len(ports) > 0 {
+				return runPortForward(cmd, cfg, fetcher, execFn, sandboxID, ports)
+			}
 			return runShell(cmd, cfg, fetcher, execFn, sandboxID, asRoot)
 		},
 	}
 
 	cmd.Flags().BoolVar(&asRoot, "root", false, "Connect as root instead of the restricted sandbox user")
+	cmd.Flags().StringSliceVar(&ports, "ports", nil, "Port forwards: 8080, 8080:80, or comma-separated list")
 
 	return cmd
 }
@@ -146,6 +157,119 @@ func execECSCommand(ctx context.Context, clusterARN, taskARN, region string, exe
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	return execFn(c)
+}
+
+// runPortForward starts SSM port forwarding sessions for each requested port.
+// Ports are specified as "local" (same port both sides) or "local:remote".
+func runPortForward(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, sandboxID string, ports []string) error {
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if fetcher == nil {
+		if cfg.StateBucket == "" {
+			return fmt.Errorf("state bucket not configured")
+		}
+		awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+		if err != nil {
+			return fmt.Errorf("load AWS config: %w", err)
+		}
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket)
+	}
+	if execFn == nil {
+		execFn = defaultShellExec
+	}
+
+	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
+	if err != nil {
+		return fmt.Errorf("fetch sandbox: %w", err)
+	}
+
+	instanceID, err := extractResourceID(rec.Resources, ":instance/")
+	if err != nil {
+		return fmt.Errorf("find EC2 instance: %w", err)
+	}
+
+	// Parse port specs and launch SSM port forwarding sessions
+	// For multiple ports, launch all but the last in background, last in foreground.
+	parsed := parsePortSpecs(ports)
+	if len(parsed) == 0 {
+		return fmt.Errorf("no valid port specifications provided")
+	}
+
+	fmt.Printf("Port forwarding for %s (%s):\n", sandboxID, instanceID)
+	for _, p := range parsed {
+		fmt.Printf("  localhost:%s → remote:%s\n", p.local, p.remote)
+	}
+	fmt.Println()
+
+	// Launch all but the last as background processes
+	var bgProcs []*exec.Cmd
+	for i := 0; i < len(parsed)-1; i++ {
+		p := parsed[i]
+		c := buildPortForwardCmd(ctx, instanceID, rec.Region, p.local, p.remote)
+		c.Stdout = os.Stdout
+		c.Stderr = os.Stderr
+		if err := c.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "  [warn] failed to start port forward %s:%s: %v\n", p.local, p.remote, err)
+			continue
+		}
+		bgProcs = append(bgProcs, c)
+	}
+
+	// Last port forward runs in foreground (blocks until Ctrl+C)
+	last := parsed[len(parsed)-1]
+	c := buildPortForwardCmd(ctx, instanceID, rec.Region, last.local, last.remote)
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	fgErr := execFn(c)
+
+	// Clean up background processes
+	for _, bg := range bgProcs {
+		if bg.Process != nil {
+			bg.Process.Kill()
+		}
+	}
+
+	return fgErr
+}
+
+type portSpec struct {
+	local  string
+	remote string
+}
+
+// parsePortSpecs parses port specifications like "8080", "8080:80", or comma-separated.
+func parsePortSpecs(specs []string) []portSpec {
+	var result []portSpec
+	for _, spec := range specs {
+		// StringSliceVar already splits on comma, but handle nested commas too
+		for _, s := range strings.Split(spec, ",") {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			parts := strings.SplitN(s, ":", 2)
+			if len(parts) == 1 {
+				result = append(result, portSpec{local: parts[0], remote: parts[0]})
+			} else {
+				result = append(result, portSpec{local: parts[0], remote: parts[1]})
+			}
+		}
+	}
+	return result
+}
+
+// buildPortForwardCmd constructs the AWS SSM port forwarding command.
+func buildPortForwardCmd(ctx context.Context, instanceID, region, localPort, remotePort string) *exec.Cmd {
+	return exec.CommandContext(ctx, "aws", "ssm", "start-session",
+		"--target", instanceID,
+		"--region", region,
+		"--profile", "klanker-terraform",
+		"--document-name", "AWS-StartPortForwardingSession",
+		"--parameters", fmt.Sprintf(`{"portNumber":["%s"],"localPortNumber":["%s"]}`, remotePort, localPort))
 }
 
 // extractResourceID finds an ARN containing pattern and extracts the resource ID
