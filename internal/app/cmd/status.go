@@ -272,9 +272,13 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 		fmt.Fprintf(out, "TTL Expiry:  %s\n", rec.TTLExpiry.Local().Format("2006-01-02 3:04:05 PM MST"))
 	}
 
-	// Show idle countdown if idle timeout is configured
-	if rec.Status == "running" && rec.IdleTimeout != "" {
-		idleStr := getIdleCountdown(context.Background(), rec.SandboxID, rec.IdleTimeout, isTTY)
+	// Show idle countdown — try metadata first, fall back to profile default
+	if rec.Status == "running" {
+		idleTimeout := rec.IdleTimeout
+		if idleTimeout == "" {
+			idleTimeout = "15m" // default if not in metadata (old sandboxes)
+		}
+		idleStr := getIdleCountdown(context.Background(), rec.SandboxID, idleTimeout, isTTY)
 		if idleStr != "" {
 			fmt.Fprintf(out, "Idle Kill:   %s\n", idleStr)
 		}
