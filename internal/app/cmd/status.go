@@ -264,9 +264,9 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 	fmt.Fprintf(out, "Substrate:   %s\n", rec.Substrate)
 	fmt.Fprintf(out, "Region:      %s\n", rec.Region)
 	fmt.Fprintf(out, "Status:      %s\n", rec.Status)
-	fmt.Fprintf(out, "Created At:  %s\n", rec.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"))
+	fmt.Fprintf(out, "Created At:  %s\n", rec.CreatedAt.Local().Format("2006-01-02 3:04:05 PM MST"))
 	if rec.TTLExpiry != nil {
-		fmt.Fprintf(out, "TTL Expiry:  %s\n", rec.TTLExpiry.UTC().Format("2006-01-02T15:04:05Z"))
+		fmt.Fprintf(out, "TTL Expiry:  %s\n", rec.TTLExpiry.Local().Format("2006-01-02 3:04:05 PM MST"))
 	}
 	if len(rec.Resources) > 0 {
 		fmt.Fprintf(out, "Resources (%d):\n", len(rec.Resources))

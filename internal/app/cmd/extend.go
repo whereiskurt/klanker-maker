@@ -119,6 +119,6 @@ func runExtend(ctx context.Context, cfg *config.Config, sandboxID string, addDur
 	}
 
 	remaining := time.Until(newExpiry).Round(time.Second)
-	fmt.Printf("TTL extended for %s: new expiry in %s (%s)\n", sandboxID, remaining, newExpiry.Format(time.RFC3339))
+	fmt.Printf("TTL extended for %s: new expiry in %s (%s)\n", sandboxID, remaining, newExpiry.Local().Format("3:04:05 PM MST"))
 	return nil
 }

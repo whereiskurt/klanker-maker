@@ -601,7 +601,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	elapsed := time.Since(createStart).Round(time.Second)
 	fmt.Printf("Sandbox %s created successfully. (%s)\n", sandboxID, elapsed)
 	if ttlExpiry != nil {
-		fmt.Printf("  TTL: %s (expires %s)\n", resolvedProfile.Spec.Lifecycle.TTL, ttlExpiry.Format("15:04:05"))
+		fmt.Printf("  TTL: %s (expires %s)\n", resolvedProfile.Spec.Lifecycle.TTL, ttlExpiry.Local().Format("3:04:05 PM MST"))
 	}
 
 	// Step 14: Send lifecycle notification if operator email is configured.
