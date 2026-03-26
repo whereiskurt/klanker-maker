@@ -257,10 +257,66 @@ HOOK
 chmod 644 /etc/profile.d/km-audit.sh
 
 systemctl daemon-reload
-systemctl enable km-dns-proxy km-http-proxy km-audit-log
-systemctl start km-dns-proxy km-http-proxy km-audit-log
+{{- if .SandboxEmail }}
+# Mail poller: syncs inbound email from S3 to /var/mail/km/ every 30 seconds.
+# Agents can watch /var/mail/km/new/ for incoming messages.
+mkdir -p /var/mail/km/new /var/mail/km/processed
+
+cat > /opt/km/bin/km-mail-poller << 'MAILPOLL'
+#!/bin/bash
+# km-mail-poller: sync inbound email from S3 to local filesystem
+BUCKET="${KM_ARTIFACTS_BUCKET}"
+SANDBOX_ID="${SANDBOX_ID}"
+MAIL_DIR="/var/mail/km"
+POLL_INTERVAL="${KM_MAIL_POLL_INTERVAL:-30}"
+
+if [ -z "$BUCKET" ]; then
+  echo "[km-mail-poller] KM_ARTIFACTS_BUCKET not set, exiting"
+  exit 0
+fi
+
+echo "[km-mail-poller] Polling s3://$BUCKET/mail/ every ${POLL_INTERVAL}s -> $MAIL_DIR/new/"
+
+while true; do
+  # List all mail objects and download any we haven't seen
+  aws s3 ls "s3://$BUCKET/mail/" 2>/dev/null | awk '{print $NF}' | while read -r key; do
+    if [ -z "$key" ]; then continue; fi
+    local_file="$MAIL_DIR/new/$key"
+    if [ ! -f "$local_file" ] && [ ! -f "$MAIL_DIR/processed/$key" ]; then
+      aws s3 cp "s3://$BUCKET/mail/$key" "$local_file" 2>/dev/null
+      if [ $? -eq 0 ]; then
+        echo "[km-mail-poller] New mail: $key"
+      fi
+    fi
+  done
+  sleep "$POLL_INTERVAL"
+done
+MAILPOLL
+chmod +x /opt/km/bin/km-mail-poller
+
+cat > /etc/systemd/system/km-mail-poller.service << 'UNIT'
+[Unit]
+Description=Klankrmkr mail poller — syncs inbound email from S3
+After=network.target
+[Service]
+User=root
+Environment=SANDBOX_ID={{ .SandboxID }}
+Environment=KM_ARTIFACTS_BUCKET={{ .KMArtifactsBucket }}
+ExecStart=/opt/km/bin/km-mail-poller
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+UNIT
+{{- end }}
+
+systemctl enable km-dns-proxy km-http-proxy km-audit-log{{ if .SandboxEmail }} km-mail-poller{{ end }}
+systemctl start km-dns-proxy km-http-proxy km-audit-log{{ if .SandboxEmail }} km-mail-poller{{ end }}
 echo "[km-bootstrap] Sidecars started"
 echo "[km-bootstrap] Shell audit hook installed at /etc/profile.d/km-audit.sh"
+{{- if .SandboxEmail }}
+echo "[km-bootstrap] Mail poller started — inbox at /var/mail/km/new/"
+{{- end }}
 
 # ============================================================
 # 6. iptables DNAT: redirect DNS and HTTP traffic to sidecars
