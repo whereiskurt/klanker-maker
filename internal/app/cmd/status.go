@@ -272,15 +272,11 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 		fmt.Fprintf(out, "TTL Expiry:  %s\n", rec.TTLExpiry.Local().Format("2006-01-02 3:04:05 PM MST"))
 	}
 
-	// Show idle status by checking last CloudWatch audit event
-	if rec.Status == "running" {
-		idleLabel := "Last Active"
-		if rec.IdleTimeout != "" {
-			idleLabel = fmt.Sprintf("Last Active (idle: %s)", rec.IdleTimeout)
-		}
-		idleSince := getLastActivity(context.Background(), rec.SandboxID, rec.IdleTimeout, isTTY)
-		if idleSince != "" {
-			fmt.Fprintf(out, "%s: %s\n", idleLabel, idleSince)
+	// Show idle countdown if idle timeout is configured
+	if rec.Status == "running" && rec.IdleTimeout != "" {
+		idleStr := getIdleCountdown(context.Background(), rec.SandboxID, rec.IdleTimeout, isTTY)
+		if idleStr != "" {
+			fmt.Fprintf(out, "Idle Kill:   %s\n", idleStr)
 		}
 	}
 
@@ -378,10 +374,14 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 	}
 }
 
-// getLastActivity checks CloudWatch for the most recent audit event and returns
-// a human-readable string like "2m ago" or "no activity yet", with color based
-// on proximity to idle timeout.
-func getLastActivity(ctx context.Context, sandboxID, idleTimeout string, isTTY bool) string {
+// getIdleCountdown checks CloudWatch for the most recent audit event and returns
+// a countdown string like "12m remaining" colored by urgency.
+func getIdleCountdown(ctx context.Context, sandboxID, idleTimeout string, isTTY bool) string {
+	idleDur, parseErr := time.ParseDuration(idleTimeout)
+	if parseErr != nil || idleDur == 0 {
+		return ""
+	}
+
 	awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
 	if err != nil {
 		return ""
@@ -390,32 +390,36 @@ func getLastActivity(ctx context.Context, sandboxID, idleTimeout string, isTTY b
 	logGroup := "/km/sandboxes/" + sandboxID + "/"
 
 	events, err := kmaws.GetLogEvents(ctx, cwClient, logGroup, "audit", 1)
+
+	var remaining time.Duration
 	if err != nil || len(events) == 0 {
-		return "no activity yet"
+		// No events — countdown from idle timeout (detector waits full duration before first kill)
+		remaining = idleDur
+	} else {
+		lastTime := time.UnixMilli(events[len(events)-1].Timestamp)
+		remaining = idleDur - time.Since(lastTime)
 	}
 
-	lastEvent := events[len(events)-1]
-	lastTime := time.UnixMilli(lastEvent.Timestamp)
-	ago := time.Since(lastTime).Round(time.Second)
-	agoStr := fmt.Sprintf("%s ago (%s)", ago, lastTime.Local().Format("3:04:05 PM"))
+	if remaining < 0 {
+		remaining = 0
+	}
+	remaining = remaining.Round(time.Second)
+
+	label := fmt.Sprintf("%s remaining", remaining)
+	if remaining == 0 {
+		label = "imminent"
+	}
 
 	if !isTTY {
-		return agoStr
+		return label
 	}
 
-	// Color based on idle timeout proximity
-	idleDur, parseErr := time.ParseDuration(idleTimeout)
-	if parseErr != nil || idleDur == 0 {
-		return agoStr // no idle timeout configured, no color
-	}
-
-	remaining := idleDur - ago
 	switch {
 	case remaining < 5*time.Minute:
-		return ansiRed + agoStr + ansiReset
+		return ansiRed + label + ansiReset
 	case remaining < 15*time.Minute:
-		return ansiYellow + agoStr + ansiReset
+		return ansiYellow + label + ansiReset
 	default:
-		return ansiGreen + agoStr + ansiReset
+		return ansiGreen + label + ansiReset
 	}
 }
