@@ -540,3 +540,53 @@ Plans:
 - [ ] 21-02-PLAN.md — Safe phrase email override + OTP secret sync
 - [ ] 21-03-PLAN.md — Action approval via email (send request + poll for reply)
 - [ ] 21-04-PLAN.md — E2E verification checklist + operator review checkpoint
+
+### Phase 22: Remote Sandbox Creation — `km create --remote` via Lambda + email-to-create
+
+**Goal:** Enable sandbox creation without local terraform/terragrunt, via Lambda dispatch and email triggers
+
+**Scope:**
+1. **Create Lambda** — new Lambda with `km` binary + terragrunt + terraform + modules bundled (container image for size)
+2. **`km create --remote`** — compile profile locally, upload artifacts to S3, publish EventBridge event, Lambda runs `terragrunt apply`
+3. **Email-to-create** — SES receipt rule for `create@sandboxes.{domain}`, parses YAML attachment, verifies safe phrase, triggers create Lambda
+4. **Safe phrase auth** — `KM-AUTH: <phrase>` in email body must match operator-configured safe phrase in SSM to authorize creation
+5. **EventBridge integration** — new rule routes `SandboxCreate` events to the create Lambda
+6. **Status notification** — Lambda emails operator with sandbox ID and connection details on success, error details on failure
+
+**Requirements**: REMOTE-01 through REMOTE-06
+**Depends on:** Phase 21, Phase 17 (email infrastructure), Phase 14 (identity/signing)
+
+### Phase 23: Credential Rotation — `km roll creds` for platform and sandbox secrets
+
+**Goal:** One-command credential rotation for all platform and per-sandbox secrets
+
+**Scope:**
+1. **`km roll creds`** — rotates all platform credentials:
+   - GitHub App private key (regenerate + update SSM)
+   - KMS key rotation trigger (alias swap)
+   - Proxy CA cert+key (regenerate, upload to S3, restart proxies on running sandboxes)
+   - Ed25519 signing keys for all running sandboxes (new key pair, update DynamoDB, update SSM)
+2. **`km roll creds --sandbox <id>`** — rotate secrets for a single sandbox:
+   - Ed25519 signing key pair
+   - GitHub token (force refresh)
+   - SSM parameters re-encrypted with current KMS key
+3. **`km roll creds --platform`** — rotate only platform-level secrets (GitHub App, proxy CA, KMS)
+4. **Audit trail** — each rotation logged to CloudWatch with before/after key fingerprints
+5. **Zero-downtime rotation** — running sandboxes pick up new secrets on next poll cycle (no restart needed for tokens; proxy CA requires sidecar restart via SSM SendCommand)
+6. **`km doctor --check-rotation`** — warn if any credential hasn't been rotated in >90 days
+
+**Requirements**: CRED-01 through CRED-06
+**Depends on:** Phase 13 (GitHub App), Phase 14 (identity keys), Phase 6 (SSM/KMS)
+
+### Phase 24: Documentation Refresh (Phases 18-23)
+
+**Goal:** Update operator guide, user manual, README, and inline docs to cover all features through Phase 23
+
+**Scope:**
+1. README roadmap table — update statuses
+2. Operator guide — remote create, email triggers, credential rotation procedures
+3. User manual — `km stop`, `km extend --remote`, `km destroy --remote`, `km roll creds`
+4. Security model — credential rotation lifecycle, email auth flow
+5. Profile reference — new fields (if any added in Phases 22-23)
+
+**Depends on:** Phase 23

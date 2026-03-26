@@ -505,6 +505,13 @@ km destroy sb-a1b2c3d4
 | 15 | km doctor — Platform Health Check | **Complete** |
 | 16 | Documentation Refresh (Phases 6-15) | **Complete** |
 | 17 | Sandbox Email Mailbox & Access Control | **Complete** |
+| 18 | Loose Ends — km init, uninit, bootstrap KMS, github-token | **Complete** |
+| 19 | Budget Enforcement Wiring — EC2 hard stop, IAM revocation | **Complete** |
+| 20 | Anthropic API Metering & Terragrunt Output Suppression | **Complete** |
+| 21 | Bug fixes and mini-features — budget precision, polish | **Complete** |
+| 22 | Remote Sandbox Creation — `km create --remote` via Lambda + email-to-create | Planned |
+| 23 | Credential Rotation — `km roll creds` for platform and sandbox secrets | Planned |
+| 24 | Documentation Refresh (Phases 18-23) | Planned |
 
 See [.planning/ROADMAP.md](.planning/ROADMAP.md) for detailed phase breakdowns and success criteria.
 
