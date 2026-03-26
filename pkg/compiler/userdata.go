@@ -362,6 +362,18 @@ iptables -t nat -A OUTPUT -p tcp --dport 443 -m owner ! --uid-owner km-sidecar -
 
 echo "[km-bootstrap] iptables DNAT configured"
 
+# Set proxy env vars for applications that respect them (curl, wget, pip, npm, etc.)
+# This covers HTTPS traffic which iptables DNAT can't transparently proxy without MITM.
+cat >> /etc/profile.d/km-audit.sh << 'PROXYENV'
+export http_proxy=http://127.0.0.1:3128
+export https_proxy=http://127.0.0.1:3128
+export HTTP_PROXY=http://127.0.0.1:3128
+export HTTPS_PROXY=http://127.0.0.1:3128
+export no_proxy=169.254.169.254,localhost,127.0.0.1
+export NO_PROXY=169.254.169.254,localhost,127.0.0.1
+PROXYENV
+echo "[km-bootstrap] Proxy env vars configured for shell sessions"
+
 # ============================================================
 # 6.5. Spot interruption handler (background)
 # ============================================================
