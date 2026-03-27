@@ -24,9 +24,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-// kmAuthPattern matches "KM-AUTH: <phrase>" anywhere in an email body.
+// KMAuthPattern matches "KM-AUTH: <phrase>" anywhere in an email body.
 // The (?m) flag makes ^ match at line boundaries.
-var kmAuthPattern = regexp.MustCompile(`(?m)KM-AUTH:\s*(\S+)`)
+var KMAuthPattern = regexp.MustCompile(`(?m)KM-AUTH:\s*(\S+)`)
 
 // ErrSenderNotAllowed is returned by ParseSignedMessage when the message sender
 // is not on the receiver's allow-list and is not self-mail.
@@ -202,7 +202,7 @@ func ParseSignedMessage(rawMIME []byte, receiverSandboxID, pubKeyB64 string, all
 	// Safe phrase extraction: look for "KM-AUTH: <phrase>" in body
 	safePhrase := ""
 	safePhraseOK := false
-	if matches := kmAuthPattern.FindStringSubmatch(body); len(matches) == 2 {
+	if matches := KMAuthPattern.FindStringSubmatch(body); len(matches) == 2 {
 		safePhrase = matches[1]
 	}
 	if expectedSafePhrase != "" && safePhrase == expectedSafePhrase {
