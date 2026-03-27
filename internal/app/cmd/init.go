@@ -704,15 +704,14 @@ func uploadCreateHandlerToolchain(repoRoot, bucket string) error {
 	s3Upload(terragruntPath, bucket, "toolchain/terragrunt")
 	fmt.Printf("  Uploaded toolchain/terragrunt\n")
 
-	// 4. Create infra.tar.gz (source files only — .tf, .hcl, .json — no .terraform caches)
+	// 4. Create infra.tar.gz (source + outputs.json + config anchors — no .terraform caches)
 	tarPath := filepath.Join(buildDir, "infra.tar.gz")
 	fmt.Printf("  Creating infra.tar.gz...\n")
 	tarCmd := exec.Command("tar", "czf", tarPath,
 		"--exclude", ".terraform",
 		"--exclude", ".terragrunt-cache",
 		"--exclude", "*.tfstate*",
-		"--exclude", "outputs.json",
-		"infra/modules", "infra/live")
+		"CLAUDE.md", "km-config.yaml", "infra/modules", "infra/live")
 	tarCmd.Dir = repoRoot
 	if out, err := tarCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("create infra tarball: %s: %w", string(out), err)
