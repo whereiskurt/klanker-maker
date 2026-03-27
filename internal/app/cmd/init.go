@@ -21,6 +21,8 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/route53"
 	route53types "github.com/aws/aws-sdk-go-v2/service/route53/types"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
@@ -208,12 +210,51 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		fmt.Printf("  [skip] artifacts_bucket not configured\n")
 	}
 
+	// Write safe phrase to SSM if configured (idempotent — overwrites to stay in sync with config).
+	if cfg.SafePhrase != "" {
+		ssmClient := ssm.NewFromConfig(awsCfg)
+		safePhraseKey := "/km/config/remote-create/safe-phrase"
+		_, putErr := ssmClient.PutParameter(ctx, &ssm.PutParameterInput{
+			Name:      aws.String(safePhraseKey),
+			Value:     aws.String(cfg.SafePhrase),
+			Type:      ssmtypes.ParameterTypeSecureString,
+			Overwrite: aws.Bool(true),
+		})
+		if putErr != nil {
+			fmt.Printf("  ⚠ Failed to write safe phrase to SSM: %v\n", putErr)
+		} else {
+			fmt.Printf("  Safe phrase written to SSM: %s\n", safePhraseKey)
+		}
+	}
+
 	// Step 4: Apply regional infrastructure
 	fmt.Println()
 	fmt.Println("Applying infrastructure...")
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
 	runner.Verbose = verbose
-	return RunInitWithRunner(runner, repoRoot, region)
+	if err := RunInitWithRunner(runner, repoRoot, region); err != nil {
+		return err
+	}
+
+	// Display email-to-create details if operator email and safe phrase are configured.
+	if cfg.OperatorEmail != "" || cfg.SafePhrase != "" {
+		domain := cfg.Domain
+		if domain == "" {
+			domain = "klankermaker.ai"
+		}
+		fmt.Println()
+		fmt.Println("Email-to-create:")
+		fmt.Printf("  Send to:     create@sandboxes.%s\n", domain)
+		if cfg.OperatorEmail != "" {
+			fmt.Printf("  Operator:    %s\n", cfg.OperatorEmail)
+		}
+		if cfg.SafePhrase != "" {
+			fmt.Printf("  KM-AUTH:     %s\n", cfg.SafePhrase)
+		}
+		fmt.Printf("  SSM key:     /km/config/remote-create/safe-phrase\n")
+	}
+
+	return nil
 }
 
 // RunInitWithRunner implements the full init flow using an InitRunner interface.

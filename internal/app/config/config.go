@@ -98,6 +98,12 @@ type Config struct {
 	// (TTL expiry, idle timeout, budget exhaustion, spot interruption, errors).
 	// Set via operator_email in km-config.yaml or KM_OPERATOR_EMAIL environment variable.
 	OperatorEmail string
+
+	// SafePhrase is the shared secret for email-to-create authentication.
+	// Included in emails as "KM-AUTH: <phrase>" to authorize sandbox creation.
+	// Set via safe_phrase in km-config.yaml or KM_SAFE_PHRASE environment variable.
+	// Written to SSM at /km/config/remote-create/safe-phrase during km init.
+	SafePhrase string
 }
 
 // isSetByEnv returns true if the given viper key has been overridden by an environment
@@ -175,6 +181,7 @@ func Load() (*Config, error) {
 			"state_bucket",
 			"route53_zone_id",
 			"operator_email",
+			"safe_phrase",
 		} {
 			if v2.IsSet(key) && !isSetByEnv(v, key) {
 				v.Set(key, v2.Get(key))
@@ -205,6 +212,7 @@ func Load() (*Config, error) {
 		AWSProfile:           v.GetString("aws_profile"),
 		Route53ZoneID:        v.GetString("route53_zone_id"),
 		OperatorEmail:        v.GetString("operator_email"),
+		SafePhrase:           v.GetString("safe_phrase"),
 	}
 
 	return cfg, nil

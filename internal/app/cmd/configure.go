@@ -24,6 +24,7 @@ type platformConfig struct {
 	ArtifactsBucket string         `yaml:"artifacts_bucket,omitempty"`
 	Route53ZoneID   string         `yaml:"route53_zone_id,omitempty"`
 	OperatorEmail   string         `yaml:"operator_email,omitempty"`
+	SafePhrase      string         `yaml:"safe_phrase,omitempty"`
 }
 
 type accountsConfig struct {
@@ -57,6 +58,7 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		stateBucket     string
 		artifactsBucket string
 		operatorEmail   string
+		safePhrase      string
 	)
 
 	cmd := &cobra.Command{
@@ -67,7 +69,7 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runConfigure(in, out, outputDir, nonInteractive, domain,
 				managementAcct, terraformAcct, applicationAcct,
-				ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket, operatorEmail)
+				ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket, operatorEmail, safePhrase)
 		},
 	}
 
@@ -95,6 +97,8 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		"S3 bucket for Lambda zips, sidecar binaries, and sandbox artifacts")
 	cmd.Flags().StringVar(&operatorEmail, "operator-email", "",
 		"Email address for sandbox lifecycle notifications (TTL, idle, budget, errors)")
+	cmd.Flags().StringVar(&safePhrase, "safe-phrase", "",
+		"Shared secret for email-to-create auth (KM-AUTH header in emails to create@sandboxes.{domain})")
 
 	_ = cfg // reserved for future use (e.g. pre-filling from existing config)
 
@@ -104,7 +108,7 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 // runConfigure implements the configure wizard logic.
 func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive bool,
 	domain, managementAcct, terraformAcct, applicationAcct,
-	ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket, operatorEmail string) error {
+	ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket, operatorEmail, safePhrase string) error {
 
 	if nonInteractive {
 		// Validate required flags
@@ -178,6 +182,10 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		if err != nil {
 			return err
 		}
+		safePhrase, err = prompt(out, scanner, "Safe phrase for email-to-create auth (KM-AUTH secret)", safePhrase)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Detect topology
@@ -209,6 +217,7 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		StateBucket:     stateBucket,
 		ArtifactsBucket: artifactsBucket,
 		OperatorEmail:   operatorEmail,
+		SafePhrase:      safePhrase,
 	}
 
 	// Determine output path
