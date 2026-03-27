@@ -6,10 +6,6 @@ locals {
   region_config = read_terragrunt_config("${get_terragrunt_dir()}/../region.hcl")
   region_label  = local.region_config.locals.region_label
   region_full   = local.region_config.locals.region_full
-
-  # ECR registry derived from account ID and region
-  account_id    = get_aws_account_id()
-  ecr_registry  = "${local.account_id}.dkr.ecr.${local.region_full}.amazonaws.com"
 }
 
 include "root" {
@@ -38,7 +34,7 @@ terraform {
 }
 
 inputs = {
-  ecr_image_uri        = "${local.ecr_registry}/km-create-handler:${get_env("VERSION", "latest")}"
+  lambda_zip_path      = "${local.repo_root}/build/create-handler.zip"
   artifact_bucket_name = get_env("KM_ARTIFACTS_BUCKET", "")
   artifact_bucket_arn  = "arn:aws:s3:::${get_env("KM_ARTIFACTS_BUCKET", "")}"
   email_domain         = "sandboxes.${local.site_vars.locals.site.domain}"

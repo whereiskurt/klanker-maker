@@ -89,6 +89,11 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
 		},
 		{
+			name:    "create-handler",
+			dir:     filepath.Join(regionDir, "create-handler"),
+			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
+		},
+		{
 			// SES must apply LAST because it owns the consolidated S3 bucket policy.
 			// The email-handler must apply before SES so its ARN is available for
 			// the operator-inbound receipt rule.
@@ -197,6 +202,17 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 	if cfg.ArtifactsBucket != "" {
 		if err := buildAndUploadSidecars(repoRoot, cfg.ArtifactsBucket); err != nil {
 			fmt.Printf("  [warn] Sidecar build/upload failed: %v\n", err)
+		}
+	} else {
+		fmt.Printf("  [skip] artifacts_bucket not configured\n")
+	}
+
+	// Step 2b: Upload create-handler toolchain (km + terraform + terragrunt + infra/) to S3
+	fmt.Println()
+	fmt.Println("Uploading create-handler toolchain...")
+	if cfg.ArtifactsBucket != "" {
+		if err := uploadCreateHandlerToolchain(repoRoot, cfg.ArtifactsBucket); err != nil {
+			fmt.Printf("  [warn] Toolchain upload failed: %v\n", err)
 		}
 	} else {
 		fmt.Printf("  [skip] artifacts_bucket not configured\n")
@@ -444,6 +460,7 @@ func buildLambdaZips(repoRoot string) error {
 		{name: "budget-enforcer", srcDir: "cmd/budget-enforcer"},
 		{name: "github-token-refresher", srcDir: "cmd/github-token-refresher"},
 		{name: "email-create-handler", srcDir: "cmd/email-create-handler"},
+		{name: "create-handler", srcDir: "cmd/create-handler"},
 	}
 
 	// Ensure terraform binary is available for bundling with ttl-handler
@@ -631,6 +648,90 @@ func buildAndUploadSidecars(repoRoot, bucket string) error {
 		}
 	}
 
+	return nil
+}
+
+// uploadCreateHandlerToolchain builds km (linux/arm64), downloads terragrunt,
+// creates infra.tar.gz (source files only), and uploads everything to
+// s3://<bucket>/toolchain/. The create-handler Lambda downloads these at cold start.
+func uploadCreateHandlerToolchain(repoRoot, bucket string) error {
+	buildDir := filepath.Join(repoRoot, "build")
+	if err := os.MkdirAll(buildDir, 0o755); err != nil {
+		return fmt.Errorf("create build dir: %w", err)
+	}
+
+	// 1. Build km binary for linux/arm64 (stripped)
+	kmPath := filepath.Join(buildDir, "km-toolchain")
+	fmt.Printf("  Building km (linux/arm64, stripped)...\n")
+	ldflags := fmt.Sprintf("-s -w -X github.com/whereiskurt/klankrmkr/pkg/version.Number=%s -X github.com/whereiskurt/klankrmkr/pkg/version.GitCommit=%s",
+		version.Number, version.GitCommit)
+	buildCmd := exec.Command("go", "build", "-ldflags", ldflags, "-o", kmPath, "./cmd/km/")
+	buildCmd.Dir = repoRoot
+	buildCmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=arm64", "CGO_ENABLED=0")
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("compile km: %s: %w", string(out), err)
+	}
+	defer os.Remove(kmPath)
+
+	// Upload km
+	s3Upload(kmPath, bucket, "toolchain/km")
+	fmt.Printf("  Uploaded toolchain/km\n")
+
+	// 2. Ensure terraform binary exists (already downloaded by buildLambdaZips)
+	terraformPath := filepath.Join(buildDir, "terraform")
+	if _, err := os.Stat(terraformPath); os.IsNotExist(err) {
+		fmt.Printf("  Downloading terraform for linux/arm64...\n")
+		if dlErr := downloadTerraform(buildDir); dlErr != nil {
+			return fmt.Errorf("download terraform: %w", dlErr)
+		}
+	}
+	s3Upload(terraformPath, bucket, "toolchain/terraform")
+	fmt.Printf("  Uploaded toolchain/terraform\n")
+
+	// 3. Download terragrunt arm64 if not present
+	terragruntPath := filepath.Join(buildDir, "terragrunt")
+	if _, err := os.Stat(terragruntPath); os.IsNotExist(err) {
+		tgVersion := "0.67.16"
+		fmt.Printf("  Downloading terragrunt v%s for linux/arm64...\n", tgVersion)
+		dlCmd := exec.Command("curl", "-fsSL",
+			fmt.Sprintf("https://github.com/gruntwork-io/terragrunt/releases/download/v%s/terragrunt_linux_arm64", tgVersion),
+			"-o", terragruntPath)
+		if out, err := dlCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("download terragrunt: %s: %w", string(out), err)
+		}
+		os.Chmod(terragruntPath, 0o755)
+	}
+	s3Upload(terragruntPath, bucket, "toolchain/terragrunt")
+	fmt.Printf("  Uploaded toolchain/terragrunt\n")
+
+	// 4. Create infra.tar.gz (source files only — .tf, .hcl, .json — no .terraform caches)
+	tarPath := filepath.Join(buildDir, "infra.tar.gz")
+	fmt.Printf("  Creating infra.tar.gz...\n")
+	tarCmd := exec.Command("tar", "czf", tarPath,
+		"--exclude", ".terraform",
+		"--exclude", ".terragrunt-cache",
+		"--exclude", "*.tfstate*",
+		"--exclude", "outputs.json",
+		"infra/modules", "infra/live")
+	tarCmd.Dir = repoRoot
+	if out, err := tarCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("create infra tarball: %s: %w", string(out), err)
+	}
+	defer os.Remove(tarPath)
+	s3Upload(tarPath, bucket, "toolchain/infra.tar.gz")
+	fmt.Printf("  Uploaded toolchain/infra.tar.gz\n")
+
+	return nil
+}
+
+// s3Upload uploads a local file to S3 using the AWS CLI.
+func s3Upload(localPath, bucket, s3Key string) error {
+	uploadCmd := exec.Command("aws", "s3", "cp", localPath,
+		fmt.Sprintf("s3://%s/%s", bucket, s3Key),
+		"--profile", "klanker-terraform")
+	if out, err := uploadCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("upload %s: %s: %w", s3Key, string(out), err)
+	}
 	return nil
 }
 

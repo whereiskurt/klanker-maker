@@ -152,12 +152,17 @@ func readMetadataRecord(ctx context.Context, client S3ListAPI, bucket, sandboxID
 		}
 	}
 
+	status := meta.Status
+	if status == "" {
+		status = "running" // backward compat: old metadata without status field
+	}
+
 	return SandboxRecord{
 		SandboxID:    meta.SandboxID,
 		Profile:      meta.ProfileName,
 		Substrate:    meta.Substrate,
 		Region:       meta.Region,
-		Status:       "running",
+		Status:       status,
 		CreatedAt:    meta.CreatedAt,
 		TTLExpiry:    meta.TTLExpiry,
 		TTLRemaining: computeTTLRemaining(meta.TTLExpiry),

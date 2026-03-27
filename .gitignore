@@ -32,6 +32,8 @@ build/
 /configui
 /budget-enforcer
 /github-token-refresher
+/email-create-handler
+/create-handler
 
 /excalidraw.log
 

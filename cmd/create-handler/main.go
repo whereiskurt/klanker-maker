@@ -2,22 +2,28 @@
 //
 // When an EventBridge SandboxCreate event arrives (from km create --remote),
 // this handler:
-//  1. Downloads the sandbox profile from S3 at {artifact_prefix}/.km-profile.yaml
-//  2. Writes the profile to /tmp/{sandbox-id}.yaml
-//  3. Runs km create as a subprocess (km binary bundled at /var/task/km)
-//  4. On subprocess failure, sends a "create-failed" lifecycle notification via SES
-//  5. On success, returns nil — km create already sent the "created" notification
+//  1. Downloads km, terraform, terragrunt binaries from S3 (cold start)
+//  2. Extracts the infra/ tarball from S3 (cold start)
+//  3. Downloads the sandbox profile from S3 at {artifact_prefix}/.km-profile.yaml
+//  4. Writes the profile to /tmp/{sandbox-id}.yaml
+//  5. Runs km create as a subprocess
+//  6. On subprocess failure, sends a "create-failed" lifecycle notification via SES
+//  7. On success, returns nil — km create already sent the "created" notification
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sync"
 
 	lambdaruntime "github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/rs/zerolog/log"
@@ -54,11 +60,15 @@ type CreateHandler struct {
 	S3Client     S3GetAPI
 	SESClient    SESV2API
 	Domain       string
-	KMBinaryPath string
+	ToolchainDir string // directory containing km, terraform, terragrunt binaries + infra/
 	// RunCommand is called to execute the km create subprocess.
 	// When nil, defaults to execRunCommand (os/exec-based).
 	RunCommand RunCommandFunc
 }
+
+// coldStartOnce ensures toolchain download happens only once per Lambda container.
+var coldStartOnce sync.Once
+var coldStartErr error
 
 // Handle is the Lambda handler method. It is called by lambdaruntime.Start in main().
 func (h *CreateHandler) Handle(ctx context.Context, event CreateEvent) error {
@@ -67,6 +77,16 @@ func (h *CreateHandler) Handle(ctx context.Context, event CreateEvent) error {
 	}
 
 	log.Info().Str("sandbox_id", event.SandboxID).Str("bucket", event.ArtifactBucket).Msg("create event received")
+
+	// Cold start: download toolchain from S3 (skip when RunCommand is injected — test mode)
+	if h.RunCommand == nil {
+		coldStartOnce.Do(func() {
+			coldStartErr = h.downloadToolchain(ctx, event.ArtifactBucket)
+		})
+		if coldStartErr != nil {
+			return fmt.Errorf("toolchain download failed: %w", coldStartErr)
+		}
+	}
 
 	// Step 1: Download profile from S3
 	profileKey := event.ArtifactPrefix + "/.km-profile.yaml"
@@ -91,19 +111,19 @@ func (h *CreateHandler) Handle(ctx context.Context, event CreateEvent) error {
 	defer os.Remove(profilePath)
 
 	// Step 3: Build km create subprocess arguments
-	kmBinary := h.KMBinaryPath
-	if kmBinary == "" {
-		kmBinary = "/var/task/km"
-	}
+	kmBinary := filepath.Join(h.ToolchainDir, "km")
 	args := []string{"create", profilePath, "--aws-profile", ""}
 	if event.OnDemand {
 		args = append(args, "--on-demand")
 	}
 
 	// Pass context env vars to the subprocess
+	// Set PATH so km can find terraform and terragrunt
 	env := append(os.Environ(),
 		"KM_ARTIFACTS_BUCKET="+event.ArtifactBucket,
 		"KM_REMOTE_CREATE=true",
+		"PATH="+h.ToolchainDir+":/usr/local/bin:/usr/bin:/bin",
+		"KM_REPO_ROOT="+h.ToolchainDir,
 	)
 	if event.OperatorEmail != "" {
 		env = append(env, "KM_OPERATOR_EMAIL="+event.OperatorEmail)
@@ -132,14 +152,98 @@ func (h *CreateHandler) Handle(ctx context.Context, event CreateEvent) error {
 
 	log.Info().Str("sandbox_id", event.SandboxID).Str("output", string(out)).
 		Msg("km create subprocess succeeded")
-	// Step 5: Return nil — km create already sent the "created" lifecycle notification
+	return nil
+}
+
+// downloadToolchain downloads km, terraform, terragrunt, and infra/ from S3 to the toolchain dir.
+func (h *CreateHandler) downloadToolchain(ctx context.Context, bucket string) error {
+	log.Info().Str("dir", h.ToolchainDir).Msg("downloading toolchain from S3 (cold start)")
+
+	if err := os.MkdirAll(h.ToolchainDir, 0o755); err != nil {
+		return fmt.Errorf("create toolchain dir: %w", err)
+	}
+
+	// Download binaries
+	binaries := []struct {
+		s3Key    string
+		localName string
+	}{
+		{s3Key: "toolchain/km", localName: "km"},
+		{s3Key: "toolchain/terraform", localName: "terraform"},
+		{s3Key: "toolchain/terragrunt", localName: "terragrunt"},
+	}
+
+	for _, b := range binaries {
+		localPath := filepath.Join(h.ToolchainDir, b.localName)
+		if err := downloadS3File(ctx, h.S3Client, bucket, b.s3Key, localPath); err != nil {
+			return fmt.Errorf("download %s: %w", b.s3Key, err)
+		}
+		if err := os.Chmod(localPath, 0o755); err != nil {
+			return fmt.Errorf("chmod %s: %w", localPath, err)
+		}
+		log.Info().Str("binary", b.localName).Msg("downloaded")
+	}
+
+	// Download and extract infra tarball
+	infraTarKey := "toolchain/infra.tar.gz"
+	tarPath := filepath.Join(h.ToolchainDir, "infra.tar.gz")
+	if err := downloadS3File(ctx, h.S3Client, bucket, infraTarKey, tarPath); err != nil {
+		return fmt.Errorf("download infra tarball: %w", err)
+	}
+	if err := extractTarGz(tarPath, h.ToolchainDir); err != nil {
+		return fmt.Errorf("extract infra tarball: %w", err)
+	}
+	os.Remove(tarPath)
+	log.Info().Msg("infra/ extracted")
+
+	return nil
+}
+
+// downloadS3File downloads an S3 object to a local file.
+func downloadS3File(ctx context.Context, client S3GetAPI, bucket, key, localPath string) error {
+	resp, err := client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return fmt.Errorf("get s3://%s/%s: %w", bucket, key, err)
+	}
+	defer resp.Body.Close()
+
+	f, err := os.Create(localPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(f, resp.Body)
+	return err
+}
+
+// extractTarGz extracts a .tar.gz file to the given directory.
+func extractTarGz(tarPath, destDir string) error {
+	f, err := os.Open(tarPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gr.Close()
+
+	cmd := exec.Command("tar", "xf", "-", "-C", destDir)
+	cmd.Stdin = gr
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tar extract: %s: %w", string(out), err)
+	}
 	return nil
 }
 
 // execRunCommand runs an external binary using os/exec.
 func execRunCommand(cmd string, args []string, env []string) ([]byte, error) {
-	// Import os/exec only in production code path — tests inject RunCommand directly.
-	// This avoids importing os/exec in the test binary where it's not needed.
 	return runOSExec(cmd, args, env)
 }
 
@@ -163,16 +267,16 @@ func main() {
 		domain = "sandboxes.klankermaker.ai"
 	}
 
-	kmBinaryPath := os.Getenv("KM_BINARY_PATH")
-	if kmBinaryPath == "" {
-		kmBinaryPath = "/var/task/km"
+	toolchainDir := os.Getenv("KM_TOOLCHAIN_DIR")
+	if toolchainDir == "" {
+		toolchainDir = "/tmp/toolchain"
 	}
 
 	h := &CreateHandler{
 		S3Client:     s3.NewFromConfig(awsCfg),
 		SESClient:    sesv2.NewFromConfig(awsCfg),
 		Domain:       domain,
-		KMBinaryPath: kmBinaryPath,
+		ToolchainDir: toolchainDir,
 	}
 
 	lambdaruntime.Start(h.Handle)

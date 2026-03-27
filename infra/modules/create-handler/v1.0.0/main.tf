@@ -404,18 +404,20 @@ resource "aws_lambda_function" "create_handler" {
   description   = "Provisions a new sandbox by running km create as a subprocess when a SandboxCreate EventBridge event is received"
   role          = aws_iam_role.create_handler.arn
 
-  # Container image Lambda: bundles km, terraform, terragrunt, and infra/modules
-  package_type  = "Image"
-  image_uri     = var.ecr_image_uri
+  # Zip Lambda from local file — handler downloads km/terraform/terragrunt from S3 at cold start
+  filename         = var.lambda_zip_path
+  source_code_hash = filebase64sha256(var.lambda_zip_path)
+  handler          = "bootstrap"
+  runtime          = "provided.al2023"
   architectures = ["arm64"]
 
-  # 15-minute timeout: terraform init + apply can take several minutes
+  # 15-minute timeout: cold start toolchain download + terraform init + apply
   timeout     = 900
   memory_size = 1536
 
-  # 2GB ephemeral storage: terraform init downloads the AWS provider (~500MB)
+  # 10GB ephemeral storage: toolchain binaries (~250MB) + terraform provider download (~500MB)
   ephemeral_storage {
-    size = 2048
+    size = 10240
   }
 
   environment {
@@ -426,6 +428,7 @@ resource "aws_lambda_function" "create_handler" {
       KM_STATE_BUCKET     = var.state_bucket
       KM_STATE_PREFIX     = var.state_prefix
       KM_REGION_LABEL     = var.region_label
+      KM_TOOLCHAIN_DIR    = "/tmp/toolchain"
     }
   }
 

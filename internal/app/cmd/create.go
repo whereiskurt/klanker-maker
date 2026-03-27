@@ -940,6 +940,34 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, awsP
 		}
 	}
 
+	// Step 8b: Write "starting" metadata so km list shows the sandbox immediately.
+	stateBucket := cfg.StateBucket
+	if stateBucket != "" {
+		meta := awspkg.SandboxMetadata{
+			SandboxID:   sandboxID,
+			ProfileName: resolvedProfile.Metadata.Name,
+			Substrate:   string(resolvedProfile.Spec.Runtime.Substrate),
+			Region:      resolvedProfile.Spec.Runtime.Region,
+			Status:      "starting",
+			CreatedAt:   time.Now().UTC(),
+			IdleTimeout: resolvedProfile.Spec.Lifecycle.IdleTimeout,
+			MaxLifetime: resolvedProfile.Spec.Lifecycle.MaxLifetime,
+			CreatedBy:   "remote",
+		}
+		metaJSON, _ := json.Marshal(meta)
+		_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:      aws.String(stateBucket),
+			Key:         aws.String("tf-km/sandboxes/" + sandboxID + "/metadata.json"),
+			Body:        bytes.NewReader(metaJSON),
+			ContentType: aws.String("application/json"),
+		})
+		if putErr != nil {
+			fmt.Fprintf(os.Stderr, "  [warn] failed to write provisioning metadata: %v\n", putErr)
+		} else {
+			fmt.Printf("  ✓ Metadata stored (status: provisioning)\n")
+		}
+	}
+
 	// Step 9: Publish SandboxCreate event to EventBridge
 	ebClient := eventbridge.NewFromConfig(awsCfg)
 	detail := awspkg.SandboxCreateDetail{

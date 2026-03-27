@@ -145,21 +145,35 @@ func NewRollCmdWithDeps(cfg interface{}, deps *RollDeps) *cobra.Command {
 		githubKeyFile  string
 		forceRestart   bool
 		jsonOutput     bool
+		dryRun         bool
 	)
 
 	creds := &cobra.Command{
-		Use:   "creds",
+		Use:   "creds [sandbox-id | #number]",
 		Short: "Rotate all credentials (platform + sandboxes)",
 		Long: `Rotate platform and sandbox credentials.
 
-Without flags: rotates proxy CA, KMS key, and all running sandbox identities.
-With --sandbox: rotates only the specified sandbox's credentials.
-With --platform: rotates only platform credentials (proxy CA, KMS, optional GitHub App key).`,
+Without arguments: rotates proxy CA, KMS key, and all running sandbox identities.
+With a sandbox ID or #number: rotates only that sandbox's credentials.
+With --platform: rotates only platform credentials (proxy CA, KMS, optional GitHub App key).
+
+Dry-run is ON by default — use --dry-run=false to actually execute rotations.`,
+		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			if ctx == nil {
 				ctx = context.Background()
+			}
+
+			// Resolve positional sandbox argument (takes precedence over --sandbox flag)
+			if len(args) == 1 {
+				// Accept sandbox ID or #number
+				resolved, err := ResolveSandboxID(ctx, cfgTyped(cfg), args[0])
+				if err != nil {
+					return fmt.Errorf("resolve sandbox %q: %w", args[0], err)
+				}
+				sandboxID = resolved
 			}
 
 			// Initialize real AWS clients when deps is nil.
@@ -171,15 +185,16 @@ With --platform: rotates only platform credentials (proxy CA, KMS, optional GitH
 				deps = realDeps
 			}
 
-			return runRollCreds(cmd, deps, sandboxID, platformOnly, githubKeyFile, forceRestart, jsonOutput)
+			return runRollCreds(cmd, deps, sandboxID, platformOnly, githubKeyFile, forceRestart, jsonOutput, dryRun)
 		},
 	}
 
-	creds.Flags().StringVar(&sandboxID, "sandbox", "", "Rotate credentials for a single sandbox ID (CRED-02)")
-	creds.Flags().BoolVar(&platformOnly, "platform", false, "Rotate platform credentials only (CRED-03)")
+	creds.Flags().StringVar(&sandboxID, "sandbox", "", "Rotate credentials for a single sandbox ID")
+	creds.Flags().BoolVar(&platformOnly, "platform", false, "Rotate platform credentials only")
 	creds.Flags().StringVar(&githubKeyFile, "github-private-key-file", "", "Path to new GitHub App PEM private key file")
-	creds.Flags().BoolVar(&forceRestart, "force-restart", false, "Force ECS task restart after proxy CA rotation (CRED-05)")
+	creds.Flags().BoolVar(&forceRestart, "force-restart", false, "Force ECS task restart after proxy CA rotation")
 	creds.Flags().BoolVar(&jsonOutput, "json", false, "Output results as JSON")
+	creds.Flags().BoolVar(&dryRun, "dry-run", true, "Show what would be rotated without making changes (default: true, use --dry-run=false to execute)")
 
 	roll.AddCommand(creds)
 	return roll
@@ -188,6 +203,15 @@ With --platform: rotates only platform credentials (proxy CA, KMS, optional GitH
 // ============================================================
 // Main orchestration
 // ============================================================
+
+// cfgTyped extracts *appcfg.Config from the interface{} cfg parameter.
+// Returns nil if cfg is not *appcfg.Config (e.g., in tests).
+func cfgTyped(cfg interface{}) *appcfg.Config {
+	if c, ok := cfg.(*appcfg.Config); ok {
+		return c
+	}
+	return nil
+}
 
 // runRollCreds is the core execution logic for km roll creds.
 func runRollCreds(
@@ -198,6 +222,7 @@ func runRollCreds(
 	githubKeyFile string,
 	forceRestart bool,
 	jsonOutput bool,
+	dryRun bool,
 ) error {
 	ctx := cmd.Context()
 	if ctx == nil {
@@ -221,11 +246,17 @@ func runRollCreds(
 	succeeded := 0
 
 	// -----------------------------------------------------------------
-	// SANDBOX MODE: --sandbox <id>
+	// SANDBOX MODE: --sandbox <id> or positional argument
 	// -----------------------------------------------------------------
 	if sandboxID != "" && !platformOnly {
 		if !jsonOutput {
 			fprintBanner(out, "km roll creds", fmt.Sprintf("sandbox mode: %s", sandboxID))
+		}
+
+		if dryRun {
+			fmt.Fprintf(out, "  [dry-run] Would rotate Ed25519 identity for sandbox %s\n", sandboxID)
+			fmt.Fprintf(out, "  [dry-run] Would re-encrypt SSM parameters under /sandbox/%s/\n", sandboxID)
+			return nil
 		}
 
 		if err := rotateSandbox(ctx, out, jsonOutput, deps, sandboxID, kmsKeyID, tableName); err != nil {
@@ -243,6 +274,16 @@ func runRollCreds(
 	if platformOnly {
 		if !jsonOutput {
 			fprintBanner(out, "km roll creds", "platform mode")
+		}
+
+		if dryRun {
+			fmt.Fprintf(out, "  [dry-run] Would rotate proxy CA cert in S3\n")
+			fmt.Fprintf(out, "  [dry-run] Would rotate KMS key on-demand: %s\n", kmsKeyID)
+			if githubKeyFile != "" {
+				fmt.Fprintf(out, "  [dry-run] Would rotate GitHub App key from %s\n", githubKeyFile)
+			}
+			fmt.Fprintf(out, "  [dry-run] Would restart proxies on running sandboxes\n")
+			return nil
 		}
 
 		if err := rotatePlatform(ctx, out, jsonOutput, deps, kmsKeyID, githubKeyFile, stateBucket); err != nil {
@@ -264,6 +305,27 @@ func runRollCreds(
 	// -----------------------------------------------------------------
 	if !jsonOutput {
 		fprintBanner(out, "km roll creds", "all mode")
+	}
+
+	if dryRun {
+		fmt.Fprintf(out, "  [dry-run] Would rotate proxy CA cert in S3\n")
+		fmt.Fprintf(out, "  [dry-run] Would rotate KMS key on-demand: %s\n", kmsKeyID)
+		if githubKeyFile != "" {
+			fmt.Fprintf(out, "  [dry-run] Would rotate GitHub App key from %s\n", githubKeyFile)
+		}
+
+		// Still enumerate sandboxes for the dry-run report
+		sandboxes, err := deps.Lister.ListSandboxes(ctx, false)
+		if err != nil {
+			return fmt.Errorf("list sandboxes: %w", err)
+		}
+		running := filterRunning(sandboxes)
+		fmt.Fprintf(out, "  [dry-run] Would rotate credentials for %d running sandbox(es):\n", len(running))
+		for _, sb := range running {
+			fmt.Fprintf(out, "    - %s (Ed25519 identity + SSM re-encrypt)\n", sb.SandboxID)
+		}
+		fmt.Fprintf(out, "  [dry-run] Would restart proxies on %d sandbox(es)\n", len(running))
+		return nil
 	}
 
 	// Step 1: Rotate platform

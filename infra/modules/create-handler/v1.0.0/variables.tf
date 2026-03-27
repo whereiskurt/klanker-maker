@@ -1,5 +1,5 @@
-variable "ecr_image_uri" {
-  description = "ECR image URI for the create-handler container (e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com/km-create-handler:latest)"
+variable "lambda_zip_path" {
+  description = "Path to the create-handler Lambda zip file"
   type        = string
 }
 

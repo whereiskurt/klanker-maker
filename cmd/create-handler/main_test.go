@@ -119,7 +119,7 @@ func TestCreateHandler_HappyPath(t *testing.T) {
 		S3Client:      mockS3,
 		SESClient:     mockSES,
 		Domain:        "sandboxes.example.com",
-		KMBinaryPath:  "/bin/true", // always succeeds
+		ToolchainDir:  "/tmp", // test toolchain dir
 		RunCommand: func(cmd string, args []string, env []string) ([]byte, error) {
 			commandRan = true
 			return []byte("sandbox created"), nil
@@ -156,7 +156,7 @@ func TestCreateHandler_FailurePath(t *testing.T) {
 		S3Client:     mockS3,
 		SESClient:    mockSES,
 		Domain:       "sandboxes.example.com",
-		KMBinaryPath: "/bin/false",
+		ToolchainDir: "/bin/false",
 		RunCommand: func(cmd string, args []string, env []string) ([]byte, error) {
 			return []byte("exit status 1"), errExecFailed
 		},
@@ -190,7 +190,7 @@ func TestCreateHandler_OnDemandFlag(t *testing.T) {
 		S3Client:     mockS3,
 		SESClient:    &mockSESAPI{},
 		Domain:       "sandboxes.example.com",
-		KMBinaryPath: "/bin/true",
+		ToolchainDir: "/bin/true",
 		RunCommand: func(cmd string, args []string, env []string) ([]byte, error) {
 			capturedArgs = args
 			return []byte("ok"), nil

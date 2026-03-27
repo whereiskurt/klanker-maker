@@ -156,7 +156,7 @@ func colorizeListStatus(status string) string {
 	switch status {
 	case "failed":
 		return ansiRed + status + ansiReset
-	case "partial", "killed":
+	case "partial", "killed", "starting":
 		return ansiYellow + status + ansiReset
 	case "running":
 		return ansiGreen + status + ansiReset
@@ -170,7 +170,7 @@ func colorizeRaw(status, display string) string {
 	switch status {
 	case "failed":
 		return ansiRed + display + ansiReset
-	case "partial", "killed":
+	case "partial", "killed", "starting":
 		return ansiYellow + display + ansiReset
 	case "running":
 		return ansiGreen + display + ansiReset

@@ -262,7 +262,7 @@ func TestRollCreds_AllMode(t *testing.T) {
 	}
 
 	rollCmd := cmd.NewRollCmdWithDeps(nil, deps)
-	rollCmd.SetArgs([]string{"creds"})
+	rollCmd.SetArgs([]string{"creds", "--dry-run=false"})
 	var buf bytes.Buffer
 	rollCmd.SetOut(&buf)
 
@@ -315,7 +315,7 @@ func TestRollCreds_SandboxMode(t *testing.T) {
 	}
 
 	rollCmd := cmd.NewRollCmdWithDeps(nil, deps)
-	rollCmd.SetArgs([]string{"creds", "--sandbox", "sb-12345678"})
+	rollCmd.SetArgs([]string{"creds", "--sandbox", "sb-12345678", "--dry-run=false"})
 	var buf bytes.Buffer
 	rollCmd.SetOut(&buf)
 
@@ -371,7 +371,7 @@ func TestRollCreds_PlatformMode(t *testing.T) {
 	}
 
 	rollCmd := cmd.NewRollCmdWithDeps(nil, deps)
-	rollCmd.SetArgs([]string{"creds", "--platform"})
+	rollCmd.SetArgs([]string{"creds", "--platform", "--dry-run=false"})
 	var buf bytes.Buffer
 	rollCmd.SetOut(&buf)
 
@@ -417,7 +417,7 @@ func TestRollCreds_PlatformMode_SkipsGitHubKeyWhenNotProvided(t *testing.T) {
 	}
 
 	rollCmd := cmd.NewRollCmdWithDeps(nil, deps)
-	rollCmd.SetArgs([]string{"creds", "--platform"})
+	rollCmd.SetArgs([]string{"creds", "--platform", "--dry-run=false"})
 	var buf bytes.Buffer
 	rollCmd.SetOut(&buf)
 
@@ -458,7 +458,7 @@ func TestRollCreds_PerSandboxFailureIsNonFatal(t *testing.T) {
 	}
 
 	rollCmd := cmd.NewRollCmdWithDeps(nil, deps)
-	rollCmd.SetArgs([]string{"creds"})
+	rollCmd.SetArgs([]string{"creds", "--dry-run=false"})
 	var buf bytes.Buffer
 	rollCmd.SetOut(&buf)
 
@@ -538,7 +538,7 @@ func TestRollCreds_EC2ProxyRestart(t *testing.T) {
 	}
 
 	rollCmd := cmd.NewRollCmdWithDeps(nil, deps)
-	rollCmd.SetArgs([]string{"creds"})
+	rollCmd.SetArgs([]string{"creds", "--dry-run=false"})
 	var buf bytes.Buffer
 	rollCmd.SetOut(&buf)
 
@@ -577,7 +577,7 @@ func TestRollCreds_ECSProxyRestart_ForceRestart(t *testing.T) {
 	}
 
 	rollCmd := cmd.NewRollCmdWithDeps(nil, deps)
-	rollCmd.SetArgs([]string{"creds", "--force-restart"})
+	rollCmd.SetArgs([]string{"creds", "--force-restart", "--dry-run=false"})
 	var buf bytes.Buffer
 	rollCmd.SetOut(&buf)
 
@@ -614,7 +614,7 @@ func TestRollCreds_AuditEventsWritten(t *testing.T) {
 	}
 
 	rollCmd := cmd.NewRollCmdWithDeps(nil, deps)
-	rollCmd.SetArgs([]string{"creds"})
+	rollCmd.SetArgs([]string{"creds", "--dry-run=false"})
 	var buf bytes.Buffer
 	rollCmd.SetOut(&buf)
 
