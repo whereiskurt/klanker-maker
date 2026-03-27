@@ -58,14 +58,21 @@ spec:
       allowedDNSSuffixes:
         - ".amazonaws.com"
         - ".anthropic.com"
+        - ".claude.ai"
+        - ".claude.com"
         - ".github.com"
         - ".githubusercontent.com"
         - ".npmjs.org"
         - ".nodejs.org"
         - ".google.com"
+        - ".sentry.io"
       allowedHosts:
         - "api.anthropic.com"
         - "statsig.anthropic.com"
+        - "platform.claude.com"
+        - "api.claude.ai"
+        - "claude.ai"
+        - "sentry.io"
         - "api.github.com"
         - "github.com"
         - "registry.npmjs.org"
@@ -81,9 +88,9 @@ spec:
 
   budget:
     compute:
-      maxSpendUSD: 10.00
+      maxSpendUSD: 2.00
     ai:
-      maxSpendUSD: 25.00
+      maxSpendUSD: 5.00
     warningThreshold: 0.80
 
   artifacts:
