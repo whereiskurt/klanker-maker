@@ -71,7 +71,7 @@ func TestRunInitWithRunnerAllModules(t *testing.T) {
 	regionLabel := "use1"
 
 	// Create all 6 module directories
-	moduleNames := []string{"network", "dynamodb-budget", "dynamodb-identities", "ses", "s3-replication", "ttl-handler"}
+	moduleNames := []string{"network", "dynamodb-budget", "dynamodb-identities", "s3-replication", "ttl-handler", "ses"}
 	regionDir := filepath.Join(repoRoot, "infra", "live", regionLabel)
 	for _, mod := range moduleNames {
 		modDir := filepath.Join(regionDir, mod)

@@ -766,8 +766,7 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 		if domain == "" {
 			domain = "not configured"
 		}
-		fmt.Fprintf(out, "\nkm doctor — %s\n", domain)
-		fmt.Fprintln(out, strings.Repeat("─", 50))
+		fprintBanner(out, "km doctor", domain)
 		fmt.Fprintln(out)
 	}
 
@@ -960,9 +959,6 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	} else {
 		// No EC2 clients — add a skipped placeholder for primary region.
 		primaryRegion := cfg.GetPrimaryRegion()
-		if primaryRegion == "" {
-			primaryRegion = "us-east-1"
-		}
 		checks = append(checks, func(ctx context.Context) CheckResult {
 			return CheckResult{
 				Name:    fmt.Sprintf("VPC (%s)", primaryRegion),
@@ -1028,8 +1024,9 @@ func initRealDeps(ctx context.Context, cfg DoctorConfigProvider) *DoctorDeps {
 			RoleSessionName: awssdk.String("km-doctor"),
 		})
 		if assumeErr == nil {
+			orgsRegion := cfg.GetPrimaryRegion()
 			orgsCfg, _ := config.LoadDefaultConfig(ctx,
-				config.WithRegion("us-east-1"),
+				config.WithRegion(orgsRegion),
 				config.WithCredentialsProvider(
 					newStaticCredentials(
 						awssdk.ToString(assumeOut.Credentials.AccessKeyId),
@@ -1054,9 +1051,6 @@ func initRealDeps(ctx context.Context, cfg DoctorConfigProvider) *DoctorDeps {
 	// Per-region EC2 clients.
 	deps.EC2Clients = make(map[string]EC2DescribeAPI)
 	primaryRegion := cfg.GetPrimaryRegion()
-	if primaryRegion == "" {
-		primaryRegion = "us-east-1"
-	}
 	ec2Cfg := awsCfg.Copy()
 	ec2Cfg.Region = primaryRegion
 	deps.EC2Clients[primaryRegion] = ec2.NewFromConfig(ec2Cfg)
