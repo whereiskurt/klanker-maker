@@ -1061,6 +1061,12 @@ func generateAndStoreGitHubToken(ctx context.Context, ssmClient SSMGetPutAPI, sa
 // or the current working directory looking for a CLAUDE.md anchor file.
 // Falls back to the current working directory if not found.
 func findRepoRoot() string {
+	// Environment override for Lambda/container contexts where runtime.Caller
+	// and CWD don't point to the repo root.
+	if envRoot := os.Getenv("KM_REPO_ROOT"); envRoot != "" {
+		return envRoot
+	}
+
 	// Try runtime caller path first (works in tests)
 	_, thisFile, _, ok := runtime.Caller(0)
 	if ok {
