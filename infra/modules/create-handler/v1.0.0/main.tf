@@ -476,7 +476,8 @@ resource "aws_cloudwatch_event_target" "create_to_lambda" {
   # CRITICAL: 0 retries — sandbox creation is NOT idempotent. A retry after partial
   # completion would attempt to re-provision an already-partially-created sandbox.
   retry_policy {
-    maximum_retry_attempts = 0
+    maximum_retry_attempts       = 0
+    maximum_event_age_in_seconds = 60
   }
 }
 
