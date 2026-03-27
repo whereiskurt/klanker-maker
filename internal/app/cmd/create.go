@@ -309,8 +309,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	}
 
 	fmt.Println(" done")
-
-	fmt.Printf("\nConfiguring sandbox...\n")
+	fmt.Printf("  ✓ Infrastructure provisioned\n")
 
 	// Step 11: Write sandbox metadata to S3 so km list/status can read it without tag API calls.
 	// Non-fatal: sandbox is provisioned even if metadata write fails.
@@ -372,6 +371,8 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		if putErr != nil {
 			log.Warn().Err(putErr).Str("sandbox_id", sandboxID).
 				Msg("failed to write sandbox metadata (non-fatal)")
+		} else {
+			fmt.Printf("  ✓ Metadata stored in S3\n")
 		}
 	} else {
 		log.Debug().Msg("KM_STATE_BUCKET not set — skipping sandbox metadata write")
@@ -395,7 +396,6 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		}
 	}
 
-	fmt.Printf("  Setting up TTL, budget, email, identity...\n")
 	// Step 12: Create EventBridge TTL schedule if TTL is configured.
 	// Auto-discover Lambda ARN if not explicitly set.
 	// Non-fatal: sandbox is provisioned; operator can re-schedule manually if this fails.
@@ -434,6 +434,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 			log.Error().Err(err).Str("sandbox_id", sandboxID).
 				Msg("failed to create TTL schedule (non-fatal — sandbox is provisioned)")
 		} else {
+			fmt.Printf("  ✓ TTL schedule created (expires %s)\n", ttlExpiry.Local().Format("3:04 PM MST"))
 			log.Info().Str("sandbox_id", sandboxID).Time("ttl_expiry", *ttlExpiry).
 				Msg("TTL schedule created")
 		}
@@ -470,7 +471,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 				Float64("ai_limit", aiLimit).
 				Float64("warning_threshold", warningThreshold).
 				Msg("Budget limits set")
-			fmt.Printf("  Budget: compute $%.4f, AI $%.4f, warning at %.0f%%\n",
+			fmt.Printf("  ✓ Budget: compute $%.2f, AI $%.2f, warning at %.0f%%\n",
 				computeLimit, aiLimit, warningThreshold*100)
 		}
 	}
@@ -489,11 +490,11 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 				log.Warn().Err(writeErr).Str("sandbox_id", sandboxID).
 					Msg("failed to write budget-enforcer/terragrunt.hcl (non-fatal)")
 			} else {
-				fmt.Printf("  Deploying budget enforcer Lambda...\n")
 				if beErr := runner.Apply(ctx, budgetEnforcerDir); beErr != nil {
 					log.Warn().Err(beErr).Str("sandbox_id", sandboxID).
 						Msg("budget-enforcer apply failed (non-fatal — sandbox is provisioned)")
 				} else {
+					fmt.Printf("  ✓ Budget enforcer Lambda deployed\n")
 					log.Info().Str("sandbox_id", sandboxID).Msg("budget enforcer Lambda deployed")
 				}
 			}
@@ -532,8 +533,8 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 			if cfg.Domain == "" {
 				safeDomain = "sandboxes.klankermaker.ai"
 			}
-			fmt.Printf("  Safe phrase: %s\n", phrase)
-			fmt.Printf("  Email:       %s@%s\n", sandboxID, safeDomain)
+			fmt.Printf("  ✓ Safe phrase: %s\n", phrase)
+			fmt.Printf("    Email: %s@%s\n", sandboxID, safeDomain)
 				log.Info().Str("sandbox_id", sandboxID).
 					Msg("Step 12d: safe phrase stored in SSM")
 			}
@@ -553,13 +554,13 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		gh := resolvedProfile.Spec.SourceAccess.GitHub
 		if tokenErr := generateAndStoreGitHubToken(ctx, ssmClient, sandboxID, kmsKeyARN, gh.AllowedRepos, gh.Permissions); tokenErr != nil {
 			if errors.Is(tokenErr, ErrGitHubNotConfigured) {
-				fmt.Printf("  GitHub token: skipped (not configured)\n")
+				fmt.Printf("  ⊘ GitHub token: skipped (not configured)\n")
 			} else {
 				log.Warn().Err(tokenErr).Str("sandbox_id", sandboxID).
 					Msg("Step 13a: GitHub App token generation failed (non-fatal — sandbox is provisioned)")
 			}
 		} else {
-			fmt.Printf("  GitHub token: stored in SSM\n")
+			fmt.Printf("  ✓ GitHub token stored in SSM\n")
 		}
 	}
 
@@ -577,13 +578,12 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 				log.Warn().Err(writeErr).Str("sandbox_id", sandboxID).
 					Msg("Step 13b: failed to write github-token/terragrunt.hcl (non-fatal)")
 			} else {
-				fmt.Printf("  Deploying GitHub token refresher Lambda...\n")
 				if ghErr := runner.Apply(ctx, githubTokenDir); ghErr != nil {
 					log.Warn().Err(ghErr).Str("sandbox_id", sandboxID).
 						Msg("Step 13b: github-token apply failed (non-fatal — sandbox is provisioned)")
 				} else {
+					fmt.Printf("  ✓ GitHub token refresher Lambda deployed\n")
 					log.Info().Str("sandbox_id", sandboxID).Msg("github-token refresher Lambda deployed")
-					fmt.Printf("  GitHub token refresher Lambda deployed\n")
 				}
 			}
 		}
@@ -602,8 +602,8 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	if emailErr != nil {
 		log.Warn().Err(emailErr).Msg("failed to provision sandbox email (non-fatal)")
 	} else {
+		fmt.Printf("  ✓ Email: %s\n", emailAddr)
 		log.Info().Str("email", emailAddr).Msg("sandbox email provisioned")
-		log.Debug().Str("email", emailAddr).Msg("sandbox email address derived")
 	}
 
 	fmt.Println()
@@ -670,7 +670,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 					Msg("failed to publish identity to DynamoDB (non-fatal)")
 			} else {
 				log.Info().Str("sandbox_id", sandboxID).Msg("sandbox identity provisioned and published")
-				fmt.Printf("  Identity: Ed25519 key pair provisioned\n")
+				fmt.Printf("  ✓ Identity: Ed25519 key pair provisioned\n")
 			}
 		}
 	}
