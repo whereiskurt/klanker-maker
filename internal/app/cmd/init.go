@@ -84,9 +84,14 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
 		},
 		{
+			name:    "email-handler",
+			dir:     filepath.Join(regionDir, "email-handler"),
+			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
+		},
+		{
 			// SES must apply LAST because it owns the consolidated S3 bucket policy.
-			// The TTL handler may destroy its old bucket policy on apply — if SES ran
-			// before TTL handler, the bucket policy would be wiped.
+			// The email-handler must apply before SES so its ARN is available for
+			// the operator-inbound receipt rule.
 			name:    "ses",
 			dir:     filepath.Join(regionDir, "ses"),
 			envReqs: []string{"KM_ROUTE53_ZONE_ID"},
@@ -341,6 +346,18 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 				fmt.Printf("    AZs:     %v\n", extractValue(v))
 			}
 			fmt.Println()
+		}
+
+		// After email-handler module: capture Lambda ARN for SES module
+		if mod.name == "email-handler" {
+			outputMap, outErr := runner.Output(ctx, mod.dir)
+			if outErr == nil {
+				if arnVal, ok := outputMap["lambda_function_arn"]; ok {
+					arn := fmt.Sprintf("%v", extractValue(arnVal))
+					os.Setenv("KM_EMAIL_HANDLER_ARN", arn)
+					fmt.Printf("  Email handler ARN: %s\n", arn)
+				}
+			}
 		}
 	}
 
