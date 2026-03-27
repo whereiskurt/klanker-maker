@@ -112,16 +112,26 @@ func compileEC2(p *profile.SandboxProfile, sandboxID string, onDemand bool, netw
 		fullUserData = userData
 		userData = fmt.Sprintf(`#!/bin/bash
 set -e
-# Bootstrap stub — full user-data is in S3 (script was %d bytes, over 12KB limit)
+# Bootstrap stub — full user-data is in S3 (script was %%d bytes, over 12KB limit)
+echo "[km-bootstrap-stub] Waiting for IAM credentials..."
 IMDS_TOKEN=$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
 REGION=$(curl -sf -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" "http://169.254.169.254/latest/meta-data/placement/region")
 export AWS_DEFAULT_REGION="$REGION"
-echo "[km-bootstrap] Downloading full bootstrap script from S3..."
+# Wait for instance profile credentials to become available (can take 10-30s)
+for i in $(seq 1 30); do
+  if aws sts get-caller-identity >/dev/null 2>&1; then
+    echo "[km-bootstrap-stub] IAM credentials ready"
+    break
+  fi
+  echo "[km-bootstrap-stub] Waiting for IAM credentials... ($i/30)"
+  sleep 2
+done
+echo "[km-bootstrap-stub] Downloading full bootstrap script from S3..."
 aws s3 cp "s3://%s/artifacts/%s/km-userdata.sh" /tmp/km-userdata.sh
 chmod +x /tmp/km-userdata.sh
-echo "[km-bootstrap] Running full bootstrap script..."
+echo "[km-bootstrap-stub] Running full bootstrap script..."
 exec /tmp/km-userdata.sh
-`, len(userData), artifactsBucket, sandboxID)
+`, artifactsBucket, sandboxID)
 	}
 
 	// Base64-encode user-data for safe embedding in HCL
