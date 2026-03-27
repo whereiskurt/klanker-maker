@@ -23,6 +23,7 @@ type platformConfig struct {
 	StateBucket     string         `yaml:"state_bucket,omitempty"`
 	ArtifactsBucket string         `yaml:"artifacts_bucket,omitempty"`
 	Route53ZoneID   string         `yaml:"route53_zone_id,omitempty"`
+	OperatorEmail   string         `yaml:"operator_email,omitempty"`
 }
 
 type accountsConfig struct {
@@ -55,6 +56,7 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		region          string
 		stateBucket     string
 		artifactsBucket string
+		operatorEmail   string
 	)
 
 	cmd := &cobra.Command{
@@ -65,7 +67,7 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runConfigure(in, out, outputDir, nonInteractive, domain,
 				managementAcct, terraformAcct, applicationAcct,
-				ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket)
+				ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket, operatorEmail)
 		},
 	}
 
@@ -91,6 +93,8 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		"S3 bucket name for sandbox metadata (used by km list/status)")
 	cmd.Flags().StringVar(&artifactsBucket, "artifacts-bucket", "",
 		"S3 bucket for Lambda zips, sidecar binaries, and sandbox artifacts")
+	cmd.Flags().StringVar(&operatorEmail, "operator-email", "",
+		"Email address for sandbox lifecycle notifications (TTL, idle, budget, errors)")
 
 	_ = cfg // reserved for future use (e.g. pre-filling from existing config)
 
@@ -100,7 +104,7 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 // runConfigure implements the configure wizard logic.
 func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive bool,
 	domain, managementAcct, terraformAcct, applicationAcct,
-	ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket string) error {
+	ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket, operatorEmail string) error {
 
 	if nonInteractive {
 		// Validate required flags
@@ -170,6 +174,10 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		if err != nil {
 			return err
 		}
+		operatorEmail, err = prompt(out, scanner, "Operator email for sandbox notifications (TTL, idle, budget)", operatorEmail)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Detect topology
@@ -200,6 +208,7 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		BudgetTableName: "km-budgets",
 		StateBucket:     stateBucket,
 		ArtifactsBucket: artifactsBucket,
+		OperatorEmail:   operatorEmail,
 	}
 
 	// Determine output path

@@ -194,6 +194,9 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	if cfg.Route53ZoneID != "" && os.Getenv("KM_ROUTE53_ZONE_ID") == "" {
 		os.Setenv("KM_ROUTE53_ZONE_ID", cfg.Route53ZoneID)
 	}
+	if cfg.OperatorEmail != "" && os.Getenv("KM_OPERATOR_EMAIL") == "" {
+		os.Setenv("KM_OPERATOR_EMAIL", cfg.OperatorEmail)
+	}
 
 	// Step 6: Load shared network config for the profile's region
 	repoRoot := findRepoRoot()
@@ -614,7 +617,11 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	}
 
 	// Step 14: Send lifecycle notification if operator email is configured.
-	if operatorEmail := os.Getenv("KM_OPERATOR_EMAIL"); operatorEmail != "" {
+	operatorEmail := cfg.OperatorEmail
+	if operatorEmail == "" {
+		operatorEmail = os.Getenv("KM_OPERATOR_EMAIL")
+	}
+	if operatorEmail != "" {
 		if err := awspkg.SendLifecycleNotification(ctx, sesClient, operatorEmail, sandboxID, "created", emailDomain); err != nil {
 			log.Warn().Err(err).Msg("failed to send created lifecycle notification (non-fatal)")
 		}
@@ -780,7 +787,10 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, awsP
 	}
 
 	// Determine operator email
-	operatorEmail := os.Getenv("KM_OPERATOR_EMAIL")
+	remoteOperatorEmail := cfg.OperatorEmail
+	if remoteOperatorEmail == "" {
+		remoteOperatorEmail = os.Getenv("KM_OPERATOR_EMAIL")
+	}
 
 	// Step 8: Upload compiled artifacts to S3 under remote-create/{sandbox-id}/
 	artifactPrefix := "remote-create/" + sandboxID
@@ -830,7 +840,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, awsP
 		SandboxID:      sandboxID,
 		ArtifactBucket: artifactBucket,
 		ArtifactPrefix: artifactPrefix,
-		OperatorEmail:  operatorEmail,
+		OperatorEmail:  remoteOperatorEmail,
 		OnDemand:       onDemand,
 	}
 	if ebErr := awspkg.PutSandboxCreateEvent(ctx, ebClient, detail); ebErr != nil {

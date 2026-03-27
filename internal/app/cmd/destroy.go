@@ -328,7 +328,10 @@ locals {
 		Destroy:         destroyFunc,
 		UploadArtifacts: uploadFunc,
 		OnNotify: func(nCtx context.Context, sid string, event string) error {
-			operatorEmail := os.Getenv("KM_OPERATOR_EMAIL")
+			operatorEmail := cfg.OperatorEmail
+			if operatorEmail == "" {
+				operatorEmail = os.Getenv("KM_OPERATOR_EMAIL")
+			}
 			if operatorEmail == "" {
 				return nil
 			}

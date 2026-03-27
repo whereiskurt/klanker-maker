@@ -147,6 +147,9 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 	if cfg.PrimaryRegion != "" && os.Getenv("KM_REGION") == "" {
 		os.Setenv("KM_REGION", cfg.PrimaryRegion)
 	}
+	if cfg.OperatorEmail != "" && os.Getenv("KM_OPERATOR_EMAIL") == "" {
+		os.Setenv("KM_OPERATOR_EMAIL", cfg.OperatorEmail)
+	}
 
 	repoRoot := findRepoRoot()
 
