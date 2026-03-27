@@ -65,7 +65,7 @@ func runStop(ctx context.Context, sandboxID string) error {
 	for _, res := range descOut.Reservations {
 		for _, inst := range res.Instances {
 			instanceID := aws.ToString(inst.InstanceId)
-			fmt.Printf("Stopping instance %s...\n", instanceID)
+			fmt.Printf("Stopping instance "+ansiYellow+"%s"+ansiReset+"...\n", instanceID)
 			if _, err := ec2Client.StopInstances(ctx, &ec2.StopInstancesInput{
 				InstanceIds: []string{instanceID},
 			}); err != nil {
@@ -79,6 +79,6 @@ func runStop(ctx context.Context, sandboxID string) error {
 		return fmt.Errorf("no running instances found for sandbox %s", sandboxID)
 	}
 
-	fmt.Printf("Sandbox %s stopped. Use 'km budget add %s --compute <amount>' to restart.\n", sandboxID, sandboxID)
+	fmt.Printf(ansiGreen+"Sandbox %s stopped."+ansiReset+" Use 'km budget add %s --compute <amount>' to restart.\n", sandboxID, sandboxID)
 	return nil
 }

@@ -85,7 +85,7 @@ func runExtend(ctx context.Context, cfg *config.Config, sandboxID string, addDur
 
 	// Step 3: Delete old schedule and create new one
 	if delErr := awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID); delErr != nil {
-		fmt.Printf("  [warn] could not delete old TTL schedule: %v\n", delErr)
+		fmt.Printf(ansiYellow+"  [warn] could not delete old TTL schedule: %v"+ansiReset+"\n", delErr)
 	}
 
 	// Auto-discover TTL Lambda ARN
@@ -123,10 +123,11 @@ func runExtend(ctx context.Context, cfg *config.Config, sandboxID string, addDur
 		ContentType: aws.String("application/json"),
 	})
 	if putErr != nil {
-		fmt.Printf("  [warn] could not update metadata: %v\n", putErr)
+		fmt.Printf(ansiYellow+"  [warn] could not update metadata: %v"+ansiReset+"\n", putErr)
 	}
 
 	remaining := time.Until(newExpiry).Round(time.Second)
-	fmt.Printf("TTL extended for %s: new expiry in %s (%s)\n", sandboxID, remaining, newExpiry.Local().Format("3:04:05 PM MST"))
+	fmt.Printf(ansiGreen+"TTL extended for %s"+ansiReset+": new expiry in %s (%s)\n",
+		sandboxID, remaining, newExpiry.Local().Format("3:04:05 PM MST"))
 	return nil
 }
