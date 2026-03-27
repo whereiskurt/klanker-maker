@@ -688,10 +688,10 @@ func uploadCreateHandlerToolchain(repoRoot, bucket string) error {
 	s3Upload(terraformPath, bucket, "toolchain/terraform")
 	fmt.Printf("  Uploaded toolchain/terraform\n")
 
-	// 3. Download terragrunt arm64 if not present
+	// 3. Download terragrunt arm64 (always re-download to match local version)
 	terragruntPath := filepath.Join(buildDir, "terragrunt")
-	if _, err := os.Stat(terragruntPath); os.IsNotExist(err) {
-		tgVersion := "0.67.16"
+	{
+		tgVersion := "0.99.1"
 		fmt.Printf("  Downloading terragrunt v%s for linux/arm64...\n", tgVersion)
 		dlCmd := exec.Command("curl", "-fsSL",
 			fmt.Sprintf("https://github.com/gruntwork-io/terragrunt/releases/download/v%s/terragrunt_linux_arm64", tgVersion),
