@@ -216,6 +216,8 @@ resource "aws_iam_role_policy" "iam_sandbox" {
           "iam:DeleteInstanceProfile",
           "iam:GetInstanceProfile",
           "iam:ListInstanceProfilesForRole",
+          "iam:TagInstanceProfile",
+          "iam:UntagInstanceProfile",
         ]
         Resource = [
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/km-*",
