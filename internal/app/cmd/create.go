@@ -281,6 +281,28 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 			return fmt.Errorf("failed to create sandbox directory: %w", dirErr)
 		}
 
+		// Step 8.5: Upload full user-data to S3 if it exceeded the 16KB limit.
+		// The bootstrap stub in artifacts.UserData downloads this at boot.
+		if artifacts.FullUserData != "" {
+			artifactBucketForUD := cfg.ArtifactsBucket
+			if artifactBucketForUD == "" {
+				artifactBucketForUD = os.Getenv("KM_ARTIFACTS_BUCKET")
+			}
+			if artifactBucketForUD != "" {
+				s3ClientUD := s3.NewFromConfig(awsCfg)
+				udKey := fmt.Sprintf("artifacts/%s/km-userdata.sh", sandboxID)
+				if _, putErr := s3ClientUD.PutObject(ctx, &s3.PutObjectInput{
+					Bucket:      aws.String(artifactBucketForUD),
+					Key:         aws.String(udKey),
+					Body:        bytes.NewReader([]byte(artifacts.FullUserData)),
+					ContentType: aws.String("application/x-shellscript"),
+				}); putErr != nil {
+					return fmt.Errorf("upload full user-data to S3: %w", putErr)
+				}
+				fmt.Printf("  ✓ Bootstrap script uploaded to S3 (%d bytes)\n", len(artifacts.FullUserData))
+			}
+		}
+
 		// Step 9: Populate sandbox directory with compiled artifacts
 		if err := terragrunt.PopulateSandboxDir(sandboxDir, artifacts.ServiceHCL, artifacts.UserData); err != nil {
 			_ = terragrunt.CleanupSandboxDir(sandboxDir)

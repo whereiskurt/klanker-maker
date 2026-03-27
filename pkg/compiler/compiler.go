@@ -19,7 +19,14 @@ type CompiledArtifacts struct {
 	ServiceHCL string
 
 	// UserData is the content for user-data.sh (EC2 only; empty for ECS).
+	// When the script exceeds 12KB, this contains a bootstrap stub and
+	// FullUserData holds the complete script for S3 upload.
 	UserData string
+
+	// FullUserData holds the complete user-data script when it exceeds
+	// the 16KB EC2 limit. Empty when UserData fits within the limit.
+	// km create uploads this to S3 as artifacts/{sandbox-id}/km-userdata.sh.
+	FullUserData string
 
 	// SGEgressRules holds the compiled SG egress rules as Go structs for programmatic access.
 	// The same rules are serialized into ServiceHCL.module_inputs.sg_egress_rules.
@@ -98,6 +105,25 @@ func compileEC2(p *profile.SandboxProfile, sandboxID string, onDemand bool, netw
 		return nil, fmt.Errorf("generate user-data.sh: %w", err)
 	}
 
+	// If user-data exceeds 12KB (leaving room for base64 overhead under 16KB limit),
+	// replace it with a bootstrap stub that downloads the full script from S3.
+	var fullUserData string
+	if len(userData) > 12000 && artifactsBucket != "" {
+		fullUserData = userData
+		userData = fmt.Sprintf(`#!/bin/bash
+set -e
+# Bootstrap stub — full user-data is in S3 (script was %d bytes, over 12KB limit)
+IMDS_TOKEN=$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+REGION=$(curl -sf -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" "http://169.254.169.254/latest/meta-data/placement/region")
+export AWS_DEFAULT_REGION="$REGION"
+echo "[km-bootstrap] Downloading full bootstrap script from S3..."
+aws s3 cp "s3://%s/artifacts/%s/km-userdata.sh" /tmp/km-userdata.sh
+chmod +x /tmp/km-userdata.sh
+echo "[km-bootstrap] Running full bootstrap script..."
+exec /tmp/km-userdata.sh
+`, len(userData), artifactsBucket, sandboxID)
+	}
+
 	// Base64-encode user-data for safe embedding in HCL
 	userDataB64 := base64.StdEncoding.EncodeToString([]byte(userData))
 
@@ -130,6 +156,7 @@ func compileEC2(p *profile.SandboxProfile, sandboxID string, onDemand bool, netw
 		SandboxID:         sandboxID,
 		ServiceHCL:        svcHCL,
 		UserData:          userData,
+		FullUserData:      fullUserData,
 		SGEgressRules:     sgRules,
 		IAMPolicy:         iamPolicy,
 		SecretPaths:       secretPaths,
