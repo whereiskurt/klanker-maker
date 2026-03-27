@@ -14,6 +14,7 @@ package main
 import (
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +23,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/aws/aws-lambda-go/events"
 	lambdaruntime "github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -70,8 +72,14 @@ type CreateHandler struct {
 var coldStartOnce sync.Once
 var coldStartErr error
 
-// Handle is the Lambda handler method. It is called by lambdaruntime.Start in main().
-func (h *CreateHandler) Handle(ctx context.Context, event CreateEvent) error {
+// Handle is the Lambda handler method. EventBridge Rules deliver the full envelope;
+// the CreateEvent payload is inside the Detail field as a JSON string.
+func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEvent) error {
+	var event CreateEvent
+	if err := json.Unmarshal(ebEvent.Detail, &event); err != nil {
+		return fmt.Errorf("create-handler: unmarshal detail: %w (raw: %s)", err, string(ebEvent.Detail))
+	}
+
 	if event.SandboxID == "" {
 		return fmt.Errorf("create-handler: sandbox_id is required in event payload")
 	}

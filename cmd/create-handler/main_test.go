@@ -7,9 +7,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 )
+
+// wrapEvent wraps a CreateEvent in a CloudWatchEvent envelope for testing.
+func wrapEvent(ce CreateEvent) events.CloudWatchEvent {
+	detail, _ := json.Marshal(ce)
+	return events.CloudWatchEvent{
+		Source:     "km.sandbox",
+		DetailType: "SandboxCreate",
+		Detail:     json.RawMessage(detail),
+	}
+}
 
 // --------------------------------------------------------------------------
 // Mocks
@@ -133,7 +144,7 @@ func TestCreateHandler_HappyPath(t *testing.T) {
 		OperatorEmail:  "user@example.com",
 	}
 
-	err := h.Handle(context.Background(), event)
+	err := h.Handle(context.Background(), wrapEvent(event))
 	if err != nil {
 		t.Fatalf("Handle returned unexpected error: %v", err)
 	}
@@ -169,7 +180,7 @@ func TestCreateHandler_FailurePath(t *testing.T) {
 		OperatorEmail:  "user@example.com",
 	}
 
-	err := h.Handle(context.Background(), event)
+	err := h.Handle(context.Background(), wrapEvent(event))
 	if err == nil {
 		t.Fatal("expected error from Handle when subprocess fails")
 	}
@@ -204,7 +215,7 @@ func TestCreateHandler_OnDemandFlag(t *testing.T) {
 		OnDemand:       true,
 	}
 
-	if err := h.Handle(context.Background(), event); err != nil {
+	if err := h.Handle(context.Background(), wrapEvent(event)); err != nil {
 		t.Fatalf("Handle returned unexpected error: %v", err)
 	}
 
