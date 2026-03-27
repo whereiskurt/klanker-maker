@@ -9,13 +9,13 @@ metadata:
 spec:
   lifecycle:
     ttl: "60m"
-    idleTimeout: "3m"
+    idleTimeout: "15m"
     teardownPolicy: destroy
 
   runtime:
     substrate: ec2
     spot: true
-    instanceType: t3.micro
+    instanceType: t3.medium
     region: us-east-1
 
   execution:

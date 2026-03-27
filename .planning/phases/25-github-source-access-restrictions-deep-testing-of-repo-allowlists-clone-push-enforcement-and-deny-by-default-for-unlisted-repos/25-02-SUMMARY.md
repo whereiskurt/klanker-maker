@@ -78,7 +78,7 @@ Each task was committed atomically:
 1. **Task 1: Implement ref enforcement in user-data and add tests** - `0516b52` (feat)
 2. **Task 2: Update security documentation and run full suite** - `816bff7` (docs)
 
-**Plan metadata:** `<final-commit-hash>` (docs: complete plan)
+**Plan metadata:** `a84b688` (docs: complete plan)
 
 ## Files Created/Modified
 - `pkg/compiler/testdata/ec2-with-allowed-refs.yaml` - Test profile with allowedRefs: [main, feature/*]

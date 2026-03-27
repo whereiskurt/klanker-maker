@@ -191,13 +191,14 @@ func (f *awsSandboxFetcher) FetchSandbox(ctx context.Context, sandboxID string) 
 	}
 
 	rec := &kmaws.SandboxRecord{
-		SandboxID: meta.SandboxID,
-		Profile:   meta.ProfileName,
-		Substrate: meta.Substrate,
-		Region:    meta.Region,
-		Status:    "running",
-		CreatedAt: meta.CreatedAt,
-		TTLExpiry: meta.TTLExpiry,
+		SandboxID:   meta.SandboxID,
+		Profile:     meta.ProfileName,
+		Substrate:   meta.Substrate,
+		Region:      meta.Region,
+		Status:      "running",
+		CreatedAt:   meta.CreatedAt,
+		TTLExpiry:   meta.TTLExpiry,
+		IdleTimeout: meta.IdleTimeout,
 	}
 	if loc != nil {
 		rec.Resources = loc.ResourceARNs
@@ -278,7 +279,7 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 		if idleTimeout == "" {
 			idleTimeout = "15m" // default if not in metadata (old sandboxes)
 		}
-		idleStr := getIdleCountdown(context.Background(), rec.SandboxID, idleTimeout, isTTY)
+		idleStr := getIdleCountdown(context.Background(), rec.SandboxID, idleTimeout, rec.CreatedAt, isTTY)
 		if idleStr != "" {
 			fmt.Fprintf(out, "Idle Kill:   %s\n", idleStr)
 		}
@@ -380,7 +381,9 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 
 // getIdleCountdown checks CloudWatch for the most recent audit event and returns
 // a countdown string like "12m remaining" colored by urgency.
-func getIdleCountdown(ctx context.Context, sandboxID, idleTimeout string, isTTY bool) string {
+// createdAt is used as the fallback "last activity" when no CW events are found
+// (e.g. new sandbox, missing log stream, or permission error).
+func getIdleCountdown(ctx context.Context, sandboxID, idleTimeout string, createdAt time.Time, isTTY bool) string {
 	idleDur, parseErr := time.ParseDuration(idleTimeout)
 	if parseErr != nil || idleDur == 0 {
 		return ""
@@ -395,14 +398,16 @@ func getIdleCountdown(ctx context.Context, sandboxID, idleTimeout string, isTTY 
 
 	events, err := kmaws.GetLogEvents(ctx, cwClient, logGroup, "audit", 1)
 
-	var remaining time.Duration
+	// Determine the most recent activity timestamp.
+	// If CW events are available, use the latest event; otherwise fall back to
+	// sandbox creation time so the countdown reflects actual elapsed idle time.
+	var lastActivity time.Time
 	if err != nil || len(events) == 0 {
-		// No events — countdown from idle timeout (detector waits full duration before first kill)
-		remaining = idleDur
+		lastActivity = createdAt
 	} else {
-		lastTime := time.UnixMilli(events[len(events)-1].Timestamp)
-		remaining = idleDur - time.Since(lastTime)
+		lastActivity = time.UnixMilli(events[len(events)-1].Timestamp)
 	}
+	remaining := idleDur - time.Since(lastActivity)
 
 	if remaining < 0 {
 		remaining = 0
