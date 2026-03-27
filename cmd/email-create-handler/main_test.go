@@ -317,7 +317,8 @@ func TestHandleEmailCreate_CorrectKMAuth_ValidYAML(t *testing.T) {
 
 // Test: handleEmailCreate validates parsed YAML via profile.Parse before dispatching.
 func TestHandleEmailCreate_InvalidYAML(t *testing.T) {
-	plainBody := fmt.Sprintf("KM-AUTH: %s\n:::invalid yaml:::", testSafePhrase)
+	// Use YAML that goccy/go-yaml actually rejects (duplicate mapping key)
+	plainBody := fmt.Sprintf("KM-AUTH: %s\nkey: : bad", testSafePhrase)
 	rawEmail := buildPlainEmail("operator@corp.com", plainBody)
 
 	eb := &mockEB{}
