@@ -97,7 +97,7 @@ func buildMIMEEmail(from, body, yamlAttachment string) []byte {
 	boundary := "testboundary"
 
 	fmt.Fprintf(&buf, "From: %s\r\n", from)
-	fmt.Fprintf(&buf, "To: create@sandboxes.example.com\r\n")
+	fmt.Fprintf(&buf, "To: operator@sandboxes.example.com\r\n")
 	fmt.Fprintf(&buf, "Subject: Create Sandbox\r\n")
 	fmt.Fprintf(&buf, "MIME-Version: 1.0\r\n")
 	fmt.Fprintf(&buf, "Content-Type: multipart/mixed; boundary=%q\r\n", boundary)
@@ -127,7 +127,7 @@ func buildMIMEEmail(from, body, yamlAttachment string) []byte {
 func buildPlainEmail(from, body string) []byte {
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "From: %s\r\n", from)
-	fmt.Fprintf(&buf, "To: create@sandboxes.example.com\r\n")
+	fmt.Fprintf(&buf, "To: operator@sandboxes.example.com\r\n")
 	fmt.Fprintf(&buf, "Subject: Create Sandbox\r\n")
 	fmt.Fprintf(&buf, "MIME-Version: 1.0\r\n")
 	fmt.Fprintf(&buf, "Content-Type: text/plain; charset=utf-8\r\n")

@@ -98,7 +98,7 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 	cmd.Flags().StringVar(&operatorEmail, "operator-email", "",
 		"Email address for sandbox lifecycle notifications (TTL, idle, budget, errors)")
 	cmd.Flags().StringVar(&safePhrase, "safe-phrase", "",
-		"Shared secret for email-to-create auth (KM-AUTH header in emails to create@sandboxes.{domain})")
+		"Shared secret for email-to-create auth (KM-AUTH header in emails to operator@sandboxes.{domain})")
 
 	_ = cfg // reserved for future use (e.g. pre-filling from existing config)
 

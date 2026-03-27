@@ -206,7 +206,7 @@ func (h *EmailCreateHandler) Handle(ctx context.Context, event S3EventRecord) er
 	}
 
 	// Step 13: Send acknowledgment email
-	from := fmt.Sprintf("create@sandboxes.%s", h.Domain)
+	from := fmt.Sprintf("operator@sandboxes.%s", h.Domain)
 	if _, err := h.SESClient.SendEmail(ctx, &sesv2.SendEmailInput{
 		FromEmailAddress: awssdk.String(from),
 		Destination: &sesv2types.Destination{
@@ -237,7 +237,7 @@ func (h *EmailCreateHandler) Handle(ctx context.Context, event S3EventRecord) er
 // sendRejection sends a rejection email to the operator and returns nil
 // (a rejected email is not an infrastructure error).
 func (h *EmailCreateHandler) sendRejection(ctx context.Context, senderEmail, reason string) error {
-	from := fmt.Sprintf("create@sandboxes.%s", h.Domain)
+	from := fmt.Sprintf("operator@sandboxes.%s", h.Domain)
 	if _, err := h.SESClient.SendEmail(ctx, &sesv2.SendEmailInput{
 		FromEmailAddress: awssdk.String(from),
 		Destination: &sesv2types.Destination{

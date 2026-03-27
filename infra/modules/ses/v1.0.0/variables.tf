@@ -20,6 +20,6 @@ variable "artifact_bucket_arn" {
 
 variable "email_create_handler_arn" {
   type        = string
-  description = "ARN of the email-create-handler Lambda. When non-empty, the create-inbound receipt rule and S3 notification are created to route create@ emails to the mail/create/ prefix."
+  description = "ARN of the email-create-handler Lambda. When non-empty, the operator-inbound receipt rule and S3 notification are created to route operator@ emails to the mail/create/ prefix."
   default     = ""
 }

@@ -244,7 +244,7 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		}
 		fmt.Println()
 		fmt.Println("Email-to-create:")
-		fmt.Printf("  Send to:     create@sandboxes.%s\n", domain)
+		fmt.Printf("  Send to:     operator@sandboxes.%s\n", domain)
 		if cfg.OperatorEmail != "" {
 			fmt.Printf("  Operator:    %s\n", cfg.OperatorEmail)
 		}
