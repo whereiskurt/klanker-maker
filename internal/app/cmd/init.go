@@ -156,9 +156,7 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 
 	repoRoot := findRepoRoot()
 
-	fmt.Println()
-	fmt.Printf("km init — %s (%s)\n", region, compiler.RegionLabel(region))
-	fmt.Println(strings.Repeat("─", 50))
+	printBanner("km init", fmt.Sprintf("%s (%s)", region, compiler.RegionLabel(region)))
 
 	// Always ensure sandboxes.{domain} hosted zone AND NS delegation exist.
 	// Even if the zone ID is known, delegation in the management account may be missing.

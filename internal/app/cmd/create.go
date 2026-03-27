@@ -161,9 +161,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	sandboxID := compiler.GenerateSandboxID()
 	substrate := resolvedProfile.Spec.Runtime.Substrate
 	spot := resolvedProfile.Spec.Runtime.Spot && !onDemand
-	fmt.Println()
-	fmt.Printf("km create — %s\n", sandboxID)
-	fmt.Println(strings.Repeat("─", 50))
+	printBanner("km create", sandboxID)
 	fmt.Printf("\n  Substrate: %s, Spot: %v\n", substrate, spot)
 
 	// Step 5: Load and validate AWS credentials (fail before any provisioning)
@@ -738,9 +736,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, awsP
 
 	// Step 4: Generate sandbox ID
 	sandboxID := compiler.GenerateSandboxID()
-	fmt.Println()
-	fmt.Printf("km create --remote — %s\n", sandboxID)
-	fmt.Println(strings.Repeat("─", 50))
+	printBanner("km create --remote", sandboxID)
 
 	// Step 5: Load AWS credentials
 	awsCfg, err := awspkg.LoadAWSConfig(ctx, awsProfile)

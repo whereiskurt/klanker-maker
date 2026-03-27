@@ -225,8 +225,7 @@ func runRollCreds(
 	// -----------------------------------------------------------------
 	if sandboxID != "" && !platformOnly {
 		if !jsonOutput {
-			fmt.Fprintf(out, "\nkm roll creds — sandbox mode: %s\n", sandboxID)
-			fmt.Fprintln(out, strings.Repeat("─", 50))
+			fprintBanner(out, "km roll creds", fmt.Sprintf("sandbox mode: %s", sandboxID))
 		}
 
 		if err := rotateSandbox(ctx, out, jsonOutput, deps, sandboxID, kmsKeyID, tableName); err != nil {
@@ -243,8 +242,7 @@ func runRollCreds(
 	// -----------------------------------------------------------------
 	if platformOnly {
 		if !jsonOutput {
-			fmt.Fprintf(out, "\nkm roll creds — platform mode\n")
-			fmt.Fprintln(out, strings.Repeat("─", 50))
+			fprintBanner(out, "km roll creds", "platform mode")
 		}
 
 		if err := rotatePlatform(ctx, out, jsonOutput, deps, kmsKeyID, githubKeyFile, stateBucket); err != nil {
@@ -265,8 +263,7 @@ func runRollCreds(
 	// ALL MODE: no flags — platform + all running sandboxes
 	// -----------------------------------------------------------------
 	if !jsonOutput {
-		fmt.Fprintf(out, "\nkm roll creds — all mode\n")
-		fmt.Fprintln(out, strings.Repeat("─", 50))
+		fprintBanner(out, "km roll creds", "all mode")
 	}
 
 	// Step 1: Rotate platform

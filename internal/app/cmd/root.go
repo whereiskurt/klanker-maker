@@ -3,7 +3,9 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -115,4 +117,17 @@ func configureLogging(level string) error {
 	}
 	zerolog.SetGlobalLevel(parsed)
 	return nil
+}
+
+// printBanner prints a command header with version info.
+// Format: "km <cmd> — <context>  [v0.0.6 (abc1234)]"
+func printBanner(cmd, context string) {
+	fmt.Printf("\n%s — %s  [%s]\n", cmd, context, version.String())
+	fmt.Println(strings.Repeat("─", 50))
+}
+
+// fprintBanner prints a command header to a writer with version info.
+func fprintBanner(w io.Writer, cmd, context string) {
+	fmt.Fprintf(w, "\n%s — %s  [%s]\n", cmd, context, version.String())
+	fmt.Fprintln(w, strings.Repeat("─", 50))
 }
