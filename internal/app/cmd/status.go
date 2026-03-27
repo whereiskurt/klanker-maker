@@ -155,6 +155,7 @@ func runStatus(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, b
 		// Ignore error: sandbox may have no identity published. Identity section simply omitted.
 	}
 
+	fprintBanner(cmd.OutOrStdout(), "km status", sandboxID)
 	isTTY := isTerminal(cmd.OutOrStdout())
 	printSandboxStatus(cmd, rec, budget, identity, isTTY)
 	return nil

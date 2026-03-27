@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -119,15 +120,16 @@ func configureLogging(level string) error {
 	return nil
 }
 
-// printBanner prints a command header with version info.
-// Format: "km <cmd> — <context>  [v0.0.6 (abc1234)]"
+// printBanner prints a command header with version and timestamp.
 func printBanner(cmd, context string) {
-	fmt.Printf("\n%s — %s  [%s]\n", cmd, context, version.String())
-	fmt.Println(strings.Repeat("─", 50))
+	now := time.Now().Local().Format("2006-01-02 3:04:05 PM MST")
+	fmt.Printf("\n%s — %s  [%s] %s\n", cmd, context, version.String(), now)
+	fmt.Println(strings.Repeat("─", 60))
 }
 
-// fprintBanner prints a command header to a writer with version info.
+// fprintBanner prints a command header to a writer with version and timestamp.
 func fprintBanner(w io.Writer, cmd, context string) {
-	fmt.Fprintf(w, "\n%s — %s  [%s]\n", cmd, context, version.String())
-	fmt.Fprintln(w, strings.Repeat("─", 50))
+	now := time.Now().Local().Format("2006-01-02 3:04:05 PM MST")
+	fmt.Fprintf(w, "\n%s — %s  [%s] %s\n", cmd, context, version.String(), now)
+	fmt.Fprintln(w, strings.Repeat("─", 60))
 }
