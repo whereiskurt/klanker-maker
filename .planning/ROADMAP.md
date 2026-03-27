@@ -622,10 +622,13 @@ Plans:
 
 ### Phase 26: Live Operations Hardening — bootstrap, init, create, destroy, TTL auto-destroy, idle detection, sidecar fixes, proxy enforcement, CLI polish
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Harden the platform after extensive live testing (~60 commits). Fix remaining test failures, backfill critical-path test coverage, polish CLI UX (aliases, completion, help text, color), test --remote flag, audit multi-region code, and implement max lifetime cap.
+**Requirements**: [HARD-01, HARD-02, HARD-03, HARD-04, HARD-05, HARD-06]
 **Depends on:** Phase 25
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 26 to break down)
+- [x] 26-01-SUMMARY.md — Ad-hoc live operations work (bootstrap, init, create, destroy, TTL, idle, sidecars, CLI polish)
+- [ ] 26-02-PLAN.md — Fix test failures, multi-region audit, max lifetime cap
+- [ ] 26-03-PLAN.md — CLI UX: aliases, completion, help text, color styling
+- [ ] 26-04-PLAN.md — Remote flag testing, failed status in km list, test backfill
