@@ -71,7 +71,7 @@ func newRsyncSaveCmd(cfg *config.Config) *cobra.Command {
 
 			paths := cfg.RsyncPaths
 			if len(paths) == 0 {
-				paths = []string{".claude", ".bashrc", ".bash_profile", ".gitconfig"}
+				paths = []string{".claude", ".claude.json", ".bashrc", ".bash_profile", ".gitconfig"}
 			}
 
 			bucket := cfg.ArtifactsBucket
