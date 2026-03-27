@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"text/tabwriter"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -128,18 +127,23 @@ func (l *awsSandboxLister) ListSandboxes(ctx context.Context, useTagScan bool) (
 // Each row is numbered 1-N so users can reference sandboxes by number in other commands.
 // Status is color-coded: red for "failed", yellow for "partial"/"killed", green for "running".
 func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord) error {
-	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "#\tSANDBOX ID\tPROFILE\tSUBSTRATE\tREGION\tSTATUS\tTTL")
+	out := cmd.OutOrStdout()
+	// Use fixed-width printf instead of tabwriter to avoid ANSI color codes
+	// breaking column alignment (tabwriter counts bytes, not visible chars).
+	fmt.Fprintf(out, "%-3s %-14s %-12s %-10s %-12s %-10s %s\n",
+		"#", "SANDBOX ID", "PROFILE", "SUBSTRATE", "REGION", "STATUS", "TTL")
 	for i, r := range records {
 		ttl := r.TTLRemaining
 		if ttl == "" {
 			ttl = "-"
 		}
-		status := colorizeListStatus(r.Status)
-		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			i+1, r.SandboxID, r.Profile, r.Substrate, r.Region, status, ttl)
+		// Pad status to fixed width BEFORE adding color codes
+		paddedStatus := fmt.Sprintf("%-10s", r.Status)
+		colorStatus := colorizeRaw(r.Status, paddedStatus)
+		fmt.Fprintf(out, "%-3d %-14s %-12s %-10s %-12s %s %s\n",
+			i+1, r.SandboxID, r.Profile, r.Substrate, r.Region, colorStatus, ttl)
 	}
-	return w.Flush()
+	return nil
 }
 
 // colorizeListStatus returns the status string wrapped in ANSI color codes for display.
@@ -158,6 +162,20 @@ func colorizeListStatus(status string) string {
 		return ansiGreen + status + ansiReset
 	default:
 		return status
+	}
+}
+
+// colorizeRaw wraps a pre-padded display string with ANSI color based on the raw status value.
+func colorizeRaw(status, display string) string {
+	switch status {
+	case "failed":
+		return ansiRed + display + ansiReset
+	case "partial", "killed":
+		return ansiYellow + display + ansiReset
+	case "running":
+		return ansiGreen + display + ansiReset
+	default:
+		return display
 	}
 }
 
