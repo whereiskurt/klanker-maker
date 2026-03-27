@@ -487,7 +487,13 @@ aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-proxy-ca.key" \
 chmod 600 /etc/km/proxy-ca.key 2>/dev/null
 
 if [ -f /usr/local/share/ca-certificates/km-proxy-ca.crt ]; then
-  update-ca-certificates
+  # Amazon Linux 2023 uses update-ca-trust; Debian/Ubuntu uses update-ca-certificates
+  if command -v update-ca-trust &>/dev/null; then
+    cp /usr/local/share/ca-certificates/km-proxy-ca.crt /etc/pki/ca-trust/source/anchors/
+    update-ca-trust
+  elif command -v update-ca-certificates &>/dev/null; then
+    update-ca-certificates
+  fi
   echo "[km-bootstrap] Proxy CA cert installed in system trust store"
 fi
 
