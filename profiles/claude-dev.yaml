@@ -69,6 +69,7 @@ spec:
       allowedHosts:
         - "api.anthropic.com"
         - "statsig.anthropic.com"
+        - "mcp-proxy.anthropic.com"
         - "platform.claude.com"
         - "api.claude.ai"
         - "claude.ai"
