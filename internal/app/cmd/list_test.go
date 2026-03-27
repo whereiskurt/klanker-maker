@@ -198,3 +198,140 @@ func TestListCmd_RealBucketFromConfig(t *testing.T) {
 		t.Errorf("should not get 'state bucket not configured' when StateBucket is set; got: %v", err)
 	}
 }
+
+// TestListCmd_FailedSandboxDisplaysRedStatus verifies that a sandbox with status "failed"
+// is included in the output with a visually distinct indicator (red ANSI color).
+func TestListCmd_FailedSandboxDisplaysRedStatus(t *testing.T) {
+	lister := &fakeLister{
+		records: []kmaws.SandboxRecord{
+			{
+				SandboxID: "sb-fail001",
+				Profile:   "open-dev",
+				Substrate: "ec2",
+				Region:    "us-east-1",
+				Status:    "failed",
+			},
+		},
+	}
+
+	out, err := runListCmd(t, lister)
+	if err != nil {
+		t.Fatalf("list command returned error: %v", err)
+	}
+
+	// Sandbox must appear in output
+	if !strings.Contains(out, "sb-fail001") {
+		t.Errorf("output missing failed sandbox 'sb-fail001':\n%s", out)
+	}
+
+	// Status "failed" must appear
+	if !strings.Contains(out, "failed") {
+		t.Errorf("output missing 'failed' status text:\n%s", out)
+	}
+
+	// Must have ANSI red color code for failed status
+	if !strings.Contains(out, "\033[31m") && !strings.Contains(out, "\x1b[31m") {
+		t.Errorf("output missing ANSI red color code for failed status:\n%q", out)
+	}
+}
+
+// TestListCmd_PartialSandboxDisplaysYellowStatus verifies that a sandbox with status "partial"
+// is included in the output with a yellow ANSI color.
+func TestListCmd_PartialSandboxDisplaysYellowStatus(t *testing.T) {
+	lister := &fakeLister{
+		records: []kmaws.SandboxRecord{
+			{
+				SandboxID: "sb-part001",
+				Profile:   "open-dev",
+				Substrate: "ec2",
+				Region:    "us-east-1",
+				Status:    "partial",
+			},
+		},
+	}
+
+	out, err := runListCmd(t, lister)
+	if err != nil {
+		t.Fatalf("list command returned error: %v", err)
+	}
+
+	// Sandbox must appear in output
+	if !strings.Contains(out, "sb-part001") {
+		t.Errorf("output missing partial sandbox 'sb-part001':\n%s", out)
+	}
+
+	// Status "partial" must appear
+	if !strings.Contains(out, "partial") {
+		t.Errorf("output missing 'partial' status text:\n%s", out)
+	}
+
+	// Must have ANSI yellow color code for partial status
+	if !strings.Contains(out, "\033[33m") && !strings.Contains(out, "\x1b[33m") {
+		t.Errorf("output missing ANSI yellow color code for partial status:\n%q", out)
+	}
+}
+
+// TestListCmd_FailedSandboxIsNumbered verifies that failed sandboxes are still assigned
+// a #number so operators can reference them for km destroy cleanup.
+func TestListCmd_FailedSandboxIsNumbered(t *testing.T) {
+	lister := &fakeLister{
+		records: []kmaws.SandboxRecord{
+			{
+				SandboxID: "sb-ok0001",
+				Profile:   "open-dev",
+				Substrate: "ec2",
+				Region:    "us-east-1",
+				Status:    "running",
+			},
+			{
+				SandboxID: "sb-fail002",
+				Profile:   "open-dev",
+				Substrate: "ec2",
+				Region:    "us-east-1",
+				Status:    "failed",
+			},
+		},
+	}
+
+	out, err := runListCmd(t, lister)
+	if err != nil {
+		t.Fatalf("list command returned error: %v", err)
+	}
+
+	// Both sandboxes must appear
+	if !strings.Contains(out, "sb-ok0001") {
+		t.Errorf("output missing running sandbox 'sb-ok0001':\n%s", out)
+	}
+	if !strings.Contains(out, "sb-fail002") {
+		t.Errorf("output missing failed sandbox 'sb-fail002':\n%s", out)
+	}
+
+	// Row 2 must exist (number "2" in output)
+	if !strings.Contains(out, "2") {
+		t.Errorf("output missing row number 2 for failed sandbox:\n%s", out)
+	}
+}
+
+// TestListCmd_RunningAndStoppedNoRegression verifies existing statuses still display correctly.
+// Uses "ecs" substrate to avoid the EC2 live status check that replaces "running" with "killed".
+func TestListCmd_RunningAndStoppedNoRegression(t *testing.T) {
+	lister := &fakeLister{
+		records: []kmaws.SandboxRecord{
+			// ECS substrate skips the EC2 live status check, so "running" is preserved.
+			{SandboxID: "sb-run001", Status: "running", Profile: "p", Substrate: "ecs", Region: "us-east-1"},
+			{SandboxID: "sb-stp001", Status: "stopped", Profile: "p", Substrate: "ec2", Region: "us-east-1"},
+		},
+	}
+
+	out, err := runListCmd(t, lister)
+	if err != nil {
+		t.Fatalf("list command returned error: %v", err)
+	}
+
+	if !strings.Contains(out, "running") {
+		t.Errorf("output missing 'running' status:\n%s", out)
+	}
+	if !strings.Contains(out, "stopped") {
+		t.Errorf("output missing 'stopped' status:\n%s", out)
+	}
+}
