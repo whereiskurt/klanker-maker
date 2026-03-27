@@ -14,6 +14,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/spf13/cobra"
@@ -191,18 +192,32 @@ func (f *awsSandboxFetcher) FetchSandbox(ctx context.Context, sandboxID string) 
 		return nil, fmt.Errorf("fetch resources for sandbox %s: %w", sandboxID, err)
 	}
 
+	status := meta.Status
+	if status == "" {
+		status = "running" // backward compat: old metadata without status field
+	}
+
 	rec := &kmaws.SandboxRecord{
 		SandboxID:   meta.SandboxID,
 		Profile:     meta.ProfileName,
 		Substrate:   meta.Substrate,
 		Region:      meta.Region,
-		Status:      "running",
+		Status:      status,
 		CreatedAt:   meta.CreatedAt,
 		TTLExpiry:   meta.TTLExpiry,
 		IdleTimeout: meta.IdleTimeout,
 	}
 	if loc != nil {
 		rec.Resources = loc.ResourceARNs
+	}
+
+	// Live EC2 instance check: detect killed/stopped/terminated
+	if rec.Substrate == "ec2" && rec.Status == "running" {
+		awsCfg, cfgErr := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+		if cfgErr == nil {
+			ec2Client := ec2.NewFromConfig(awsCfg)
+			rec.Status = checkEC2InstanceStatus(ctx, ec2Client, sandboxID)
+		}
 	}
 
 	return rec, nil
@@ -268,7 +283,11 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 	fmt.Fprintf(out, "Profile:     %s\n", rec.Profile)
 	fmt.Fprintf(out, "Substrate:   %s\n", rec.Substrate)
 	fmt.Fprintf(out, "Region:      %s\n", rec.Region)
-	fmt.Fprintf(out, "Status:      %s\n", rec.Status)
+	statusDisplay := rec.Status
+	if isTTY {
+		statusDisplay = colorizeListStatus(rec.Status)
+	}
+	fmt.Fprintf(out, "Status:      %s\n", statusDisplay)
 	fmt.Fprintf(out, "Created At:  %s\n", rec.CreatedAt.Local().Format("2006-01-02 3:04:05 PM MST"))
 	if rec.TTLExpiry != nil {
 		fmt.Fprintf(out, "TTL Expiry:  %s\n", rec.TTLExpiry.Local().Format("2006-01-02 3:04:05 PM MST"))
