@@ -126,6 +126,7 @@ func (l *awsSandboxLister) ListSandboxes(ctx context.Context, useTagScan bool) (
 
 // printSandboxTable writes a human-readable tab-aligned table to cmd.OutOrStdout.
 // Each row is numbered 1-N so users can reference sandboxes by number in other commands.
+// Status is color-coded: red for "failed", yellow for "partial"/"killed", green for "running".
 func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord) error {
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "#\tSANDBOX ID\tPROFILE\tSUBSTRATE\tREGION\tSTATUS\tTTL")
@@ -134,10 +135,30 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord) error 
 		if ttl == "" {
 			ttl = "-"
 		}
+		status := colorizeListStatus(r.Status)
 		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			i+1, r.SandboxID, r.Profile, r.Substrate, r.Region, r.Status, ttl)
+			i+1, r.SandboxID, r.Profile, r.Substrate, r.Region, status, ttl)
 	}
 	return w.Flush()
+}
+
+// colorizeListStatus returns the status string wrapped in ANSI color codes for display.
+// "failed"  → red
+// "partial" → yellow
+// "killed"  → yellow (unexpected termination, needs attention)
+// "running" → green
+// others    → no color
+func colorizeListStatus(status string) string {
+	switch status {
+	case "failed":
+		return ansiRed + status + ansiReset
+	case "partial", "killed":
+		return ansiYellow + status + ansiReset
+	case "running":
+		return ansiGreen + status + ansiReset
+	default:
+		return status
+	}
 }
 
 // checkEC2InstanceStatus looks up the EC2 instance for a sandbox by tag and returns
