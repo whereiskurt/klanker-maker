@@ -26,7 +26,7 @@ func NewExtendCmd(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "extend <sandbox-id | #number> <duration>",
 		Short:        "Extend a sandbox's TTL by the given duration",
-		Long:         "Adds time to a running sandbox's TTL. Duration format: 1h, 30m, 2h30m, etc.",
+		Long:         helpText("extend"),
 		Args:         cobra.ExactArgs(2),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -39,7 +39,7 @@ func NewExtendCmd(cfg *config.Config) *cobra.Command {
 				return err
 			}
 			if remote {
-				return publishRemoteCommand(ctx, sandboxID, "extend", "duration", args[1])
+				return publishRemoteCommand(ctx, cfg, sandboxID, "extend", "duration", args[1])
 			}
 			duration, err := time.ParseDuration(args[1])
 			if err != nil {

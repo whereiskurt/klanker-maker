@@ -1,0 +1,12 @@
+Extend a running sandbox's TTL.
+
+Usage:
+  km extend <sandbox-id | #number> <duration>
+
+Examples:
+  km extend #1 2h          Extend sandbox #1 by 2 hours
+  km extend sb-abc123 30m  Extend by 30 minutes
+  km extend #1 2h --remote Dispatch extend via Lambda
+
+Flags:
+  --remote  Dispatch to Lambda via EventBridge (no local AWS creds needed)

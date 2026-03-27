@@ -34,6 +34,7 @@ func NewListCmdWithLister(cfg *config.Config, lister SandboxLister) *cobra.Comma
 
 	cmd := &cobra.Command{
 		Use:          "list",
+		Aliases:      []string{"ls"},
 		Short:        "List all running sandboxes",
 		Long:         helpText("list"),
 		SilenceUsage: true,

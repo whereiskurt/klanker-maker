@@ -34,8 +34,9 @@ func NewShellCmdWithFetcher(cfg *config.Config, fetcher SandboxFetcher, execFn S
 	var ports []string
 
 	cmd := &cobra.Command{
-		Use:   "shell <sandbox-id | #number>",
-		Short: "Open an interactive shell into a running sandbox",
+		Use:     "shell <sandbox-id | #number>",
+		Aliases: []string{"sh"},
+		Short:   "Open an interactive shell into a running sandbox",
 		Long: `Open an interactive SSM session into a running sandbox.
 
 Port forwarding:

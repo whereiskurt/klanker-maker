@@ -1,0 +1,13 @@
+Stop a running sandbox's EC2 instance without destroying infrastructure.
+The sandbox can be resumed later or will be destroyed when TTL expires.
+
+Usage:
+  km stop <sandbox-id | #number>
+
+Examples:
+  km stop #1               Stop sandbox #1
+  km stop sb-abc123        Stop by full ID
+  km stop #1 --remote      Dispatch stop via Lambda
+
+Flags:
+  --remote  Dispatch to Lambda via EventBridge (no local AWS creds needed)

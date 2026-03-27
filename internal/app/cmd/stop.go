@@ -19,6 +19,7 @@ func NewStopCmd(cfg *config.Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "stop <sandbox-id | #number>",
 		Short:        "Stop a sandbox's EC2 instance (preserves infrastructure for restart)",
+		Long:         helpText("stop"),
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -31,7 +32,7 @@ func NewStopCmd(cfg *config.Config) *cobra.Command {
 				return err
 			}
 			if remote {
-				return publishRemoteCommand(ctx, sandboxID, "stop")
+				return publishRemoteCommand(ctx, cfg, sandboxID, "stop")
 			}
 			return runStop(ctx, sandboxID)
 		},

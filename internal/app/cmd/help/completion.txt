@@ -1,0 +1,11 @@
+Generate a shell completion script for km.
+
+Usage:
+  km completion [bash|zsh]
+
+Examples:
+  # Bash — add to ~/.bashrc or source directly:
+  source <(km completion bash)
+
+  # Zsh — write to your fpath:
+  km completion zsh > "${fpath[1]}/_km"

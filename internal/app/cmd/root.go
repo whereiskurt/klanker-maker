@@ -2,6 +2,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/rs/zerolog"
@@ -66,6 +67,25 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	root.AddCommand(NewShellCmd(cfg))
 	root.AddCommand(NewDoctorCmd(cfg))
 	root.AddCommand(NewRollCmd(cfg))
+
+	// Shell completion subcommand
+	root.AddCommand(&cobra.Command{
+		Use:          "completion [bash|zsh]",
+		Short:        "Generate shell completion script",
+		Long:         helpText("completion"),
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			switch args[0] {
+			case "bash":
+				return root.GenBashCompletion(os.Stdout)
+			case "zsh":
+				return root.GenZshCompletion(os.Stdout)
+			default:
+				return fmt.Errorf("unsupported shell %q: use bash or zsh", args[0])
+			}
+		},
+	})
 
 	return root
 }
