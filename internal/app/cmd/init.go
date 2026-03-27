@@ -711,7 +711,7 @@ func uploadCreateHandlerToolchain(repoRoot, bucket string) error {
 		"--exclude", ".terraform",
 		"--exclude", ".terragrunt-cache",
 		"--exclude", "*.tfstate*",
-		"CLAUDE.md", "km-config.yaml", "infra/modules", "infra/live")
+		"CLAUDE.md", "km-config.yaml", "infra/modules", "infra/live", "infra/templates")
 	tarCmd.Dir = repoRoot
 	if out, err := tarCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("create infra tarball: %s: %w", string(out), err)
