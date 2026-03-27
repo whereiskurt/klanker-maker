@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 26-02-PLAN.md
-last_updated: "2026-03-27T04:53:11.211Z"
+stopped_at: Completed 26-04-PLAN.md
+last_updated: "2026-03-27T05:08:20.315Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 26
   completed_phases: 25
   total_plans: 85
-  completed_plans: 85
+  completed_plans: 86
   percent: 0
 ---
 
@@ -133,6 +133,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 23-credential-rotation P02 | 412s | 2 tasks | 3 files |
 | Phase 26 P03 | 4 | 2 tasks | 8 files |
 | Phase 26-live-operations-hardening P02 | 18min | 2 tasks | 7 files |
+| Phase 26 P04 | 10 | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -356,6 +357,8 @@ Recent decisions affecting current work:
 - [Phase 26]: Did not add km ext/km log aliases — they don't save significant typing
 - [Phase 26-live-operations-hardening]: Store MaxLifetime in SandboxMetadata (not reload profile) to keep extend path simple
 - [Phase 26-live-operations-hardening]: Export CheckMaxLifetime() for unit testing without AWS mock infrastructure
+- [Phase 26]: RemoteCommandPublisher interface extracted from publishRemoteCommand; WithPublisher constructors follow SandboxFetcher pattern
+- [Phase 26]: colorizeListStatus applied at print time to keep SandboxRecord data pure
 
 ### Roadmap Evolution
 
@@ -392,6 +395,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-27T04:53:11.208Z
-Stopped at: Completed 26-02-PLAN.md
+Last session: 2026-03-27T05:08:20.312Z
+Stopped at: Completed 26-04-PLAN.md
 Resume file: None
