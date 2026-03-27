@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 23-03-PLAN.md
-last_updated: "2026-03-27T02:32:16.226Z"
+stopped_at: Completed 23-01-PLAN.md
+last_updated: "2026-03-27T02:35:17.298Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 26
   completed_phases: 23
   total_plans: 82
-  completed_plans: 81
+  completed_plans: 82
   percent: 0
 ---
 
@@ -129,6 +129,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 22-remote-sandbox-creation P01 | 10min | 2 tasks | 7 files |
 | Phase 22-remote-sandbox-creation P03 | 208s | 2 tasks | 8 files |
 | Phase 23-credential-rotation P03 | 8min | 1 tasks | 2 files |
+| Phase 23-credential-rotation P01 | 266s | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -343,6 +344,8 @@ Recent decisions affecting current work:
 - [Phase 22-remote-sandbox-creation]: Conditional SES create-inbound rule: email_create_handler_arn defaults empty so SES module deploys safely without email-create-handler
 - [Phase 23-credential-rotation]: Skip missing SSM params gracefully (CheckOK) — existence validated by checkGitHubConfig
 - [Phase 23-credential-rotation]: GetParameter without WithDecryption — only LastModifiedDate metadata needed, not secret value
+- [Phase 23-credential-rotation]: RotationSSMAPI embeds IdentitySSMAPI to allow direct GenerateSandboxIdentity call in RotateSandboxIdentity
+- [Phase 23-credential-rotation]: UpdateIdentityPublicKey reads existing record before PutItem to preserve alias, allowedSenders, email_address, policy fields
 
 ### Roadmap Evolution
 
@@ -379,6 +382,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-27T02:32:16.222Z
-Stopped at: Completed 23-03-PLAN.md
+Last session: 2026-03-27T02:35:17.295Z
+Stopped at: Completed 23-01-PLAN.md
 Resume file: None
