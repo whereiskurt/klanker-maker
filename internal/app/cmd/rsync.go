@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -303,27 +302,68 @@ func newRsyncViewCmd(cfg *config.Config) *cobra.Command {
 				totalSize += hdr.Size
 			}
 
-			sort.Slice(entries, func(i, j int) bool {
-				return entries[i].path < entries[j].path
-			})
-
-			printBanner("km rsync view", fmt.Sprintf("%s (%d files, %s)",
+			printBanner("km rsync view", fmt.Sprintf("%s (%d entries, %s)",
 				name, len(entries), formatSize(totalSize)))
 
-			// Build tree output
+			// Build tree from flat paths
+			root := &treeNode{name: name, children: make(map[string]*treeNode)}
 			for _, e := range entries {
-				depth := strings.Count(e.path, string(filepath.Separator))
-				indent := strings.Repeat("│   ", depth)
-				base := filepath.Base(e.path)
-
-				if e.isDir {
-					fmt.Printf("  %s├── %s/\n", indent, base)
-				} else {
-					fmt.Printf("  %s├── %s (%s)\n", indent, base, formatSize(e.size))
+				p := strings.TrimSuffix(e.path, "/")
+				parts := strings.Split(p, "/")
+				node := root
+				for _, part := range parts {
+					if part == "" {
+						continue
+					}
+					if node.children[part] == nil {
+						node.children[part] = &treeNode{name: part, children: make(map[string]*treeNode)}
+					}
+					node = node.children[part]
 				}
+				node.isDir = e.isDir
+				node.size = e.size
 			}
+
+			printTree(root, "", true)
 			return nil
 		},
+	}
+}
+
+// treeNode represents a file or directory in the snapshot tree.
+type treeNode struct {
+	name     string
+	size     int64
+	isDir    bool
+	children map[string]*treeNode
+}
+
+// printTree renders a tree node and its children in `tree` command format.
+func printTree(node *treeNode, prefix string, isRoot bool) {
+	// Collect and sort children
+	names := make([]string, 0, len(node.children))
+	for name := range node.children {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for i, name := range names {
+		child := node.children[name]
+		isLast := i == len(names)-1
+
+		connector := "├── "
+		childPrefix := "│   "
+		if isLast {
+			connector = "└── "
+			childPrefix = "    "
+		}
+
+		if child.isDir || len(child.children) > 0 {
+			fmt.Printf("  %s%s%s/\n", prefix, connector, name)
+			printTree(child, prefix+childPrefix, false)
+		} else {
+			fmt.Printf("  %s%s%s (%s)\n", prefix, connector, name, formatSize(child.size))
+		}
 	}
 }
 
