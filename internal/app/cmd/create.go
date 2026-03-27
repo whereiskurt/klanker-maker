@@ -244,72 +244,112 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		network.SpotRateUSD = spotRate
 	}
 
-	// Step 7: Compile profile into Terragrunt artifacts
-	artifacts, err := compiler.Compile(resolvedProfile, sandboxID, onDemand, network)
-	if err != nil {
-		return fmt.Errorf("failed to compile profile: %w", err)
+	// Step 7-10: Compile, create sandbox dir, populate, and apply.
+	// For spot instances, retry across available AZs on capacity failure.
+	maxAttempts := len(network.AvailabilityZones)
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	if onDemand {
+		maxAttempts = 1 // on-demand doesn't need AZ rotation
 	}
 
-	// Step 8: Create sandbox directory
-	sandboxDir, err := terragrunt.CreateSandboxDir(repoRoot, regionLabel, sandboxID)
-	if err != nil {
-		return fmt.Errorf("failed to create sandbox directory: %w", err)
-	}
-
-	// Step 9: Populate sandbox directory with compiled artifacts
-	if err := terragrunt.PopulateSandboxDir(sandboxDir, artifacts.ServiceHCL, artifacts.UserData); err != nil {
-		_ = terragrunt.CleanupSandboxDir(sandboxDir)
-		return fmt.Errorf("failed to populate sandbox directory: %w", err)
-	}
-
-	// Step 10: Run terragrunt apply (streams output in real time when --verbose; quiet by default)
-	fmt.Printf("\nProvisioning infrastructure...")
+	var sandboxDir string
+	var artifacts *compiler.CompiledArtifacts
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
 	runner.Verbose = verbose
 
-	// Spinner: print dots while apply runs in background
-	spinDone := make(chan struct{})
-	if !verbose {
-		go func() {
-			ticker := time.NewTicker(2 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-spinDone:
-					return
-				case <-ticker.C:
-					fmt.Print(".")
-				}
-			}
-		}()
-	}
-
-	var applyStderr strings.Builder
-	applyErr := runner.ApplyWithStderr(ctx, sandboxDir, &applyStderr)
-	close(spinDone)
-	if applyErr != nil {
-		fmt.Println() // newline after dots
-
-		// Check for spot capacity error and give a helpful message
-		if strings.Contains(applyStderr.String(), "capacity-not-available") ||
-			strings.Contains(applyStderr.String(), "InsufficientInstanceCapacity") {
-			fmt.Fprintf(os.Stderr, "\nSpot capacity unavailable in the requested AZ.\n")
-			fmt.Fprintf(os.Stderr, "Options:\n")
-			fmt.Fprintf(os.Stderr, "  1. Retry — capacity fluctuates, may work in a few minutes\n")
-			fmt.Fprintf(os.Stderr, "  2. Use on-demand: km create --on-demand %s\n", profilePath)
-			fmt.Fprintf(os.Stderr, "  3. Try a smaller instance (t3.small, t3.micro)\n\n")
-		} else {
-			fmt.Fprintf(os.Stderr, "ERROR: provisioning failed: %v\n", applyErr)
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			// Rotate subnets and AZs so index 0 points to the next AZ
+			network.PublicSubnets = append(network.PublicSubnets[1:], network.PublicSubnets[0])
+			network.AvailabilityZones = append(network.AvailabilityZones[1:], network.AvailabilityZones[0])
+			fmt.Fprintf(os.Stderr, "  Retrying in %s (%s)...\n", network.AvailabilityZones[0], network.PublicSubnets[0])
 		}
 
+		// Step 7: Compile profile into Terragrunt artifacts
+		var compileErr error
+		artifacts, compileErr = compiler.Compile(resolvedProfile, sandboxID, onDemand, network)
+		if compileErr != nil {
+			return fmt.Errorf("failed to compile profile: %w", compileErr)
+		}
+
+		// Step 8: Create sandbox directory
+		var dirErr error
+		sandboxDir, dirErr = terragrunt.CreateSandboxDir(repoRoot, regionLabel, sandboxID)
+		if dirErr != nil {
+			return fmt.Errorf("failed to create sandbox directory: %w", dirErr)
+		}
+
+		// Step 9: Populate sandbox directory with compiled artifacts
+		if err := terragrunt.PopulateSandboxDir(sandboxDir, artifacts.ServiceHCL, artifacts.UserData); err != nil {
+			_ = terragrunt.CleanupSandboxDir(sandboxDir)
+			return fmt.Errorf("failed to populate sandbox directory: %w", err)
+		}
+
+		// Step 10: Run terragrunt apply
+		if attempt == 0 {
+			fmt.Printf("\nProvisioning infrastructure...")
+		}
+
+		// Spinner: print dots while apply runs in background
+		spinDone := make(chan struct{})
+		if !verbose {
+			go func() {
+				ticker := time.NewTicker(2 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-spinDone:
+						return
+					case <-ticker.C:
+						fmt.Print(".")
+					}
+				}
+			}()
+		}
+
+		var applyStderr strings.Builder
+		applyErr := runner.ApplyWithStderr(ctx, sandboxDir, &applyStderr)
+		close(spinDone)
+
+		if applyErr == nil {
+			// Success
+			fmt.Println(" done")
+			fmt.Printf("  ✓ Infrastructure provisioned")
+			if attempt > 0 {
+				fmt.Printf(" (AZ: %s, attempt %d/%d)", network.AvailabilityZones[0], attempt+1, maxAttempts)
+			}
+			fmt.Println()
+			break
+		}
+
+		// Apply failed — check if it's a spot capacity error we can retry
+		stderrStr := applyStderr.String()
+		isSpotCapacity := strings.Contains(stderrStr, "capacity-not-available") ||
+			strings.Contains(stderrStr, "InsufficientInstanceCapacity")
+
+		// Clean up the failed sandbox dir before retry or exit
 		if cleanErr := terragrunt.CleanupSandboxDir(sandboxDir); cleanErr != nil {
 			log.Warn().Err(cleanErr).Msg("failed to clean up sandbox directory after apply failure")
 		}
+
+		if isSpotCapacity && attempt < maxAttempts-1 {
+			// Spot capacity failure with more AZs to try
+			fmt.Fprintf(os.Stderr, "\n  ✗ Spot capacity unavailable in %s\n", network.AvailabilityZones[0])
+			continue
+		}
+
+		// Final failure — no more retries
+		fmt.Println() // newline after dots
+		if isSpotCapacity {
+			fmt.Fprintf(os.Stderr, "\n  ✗ Spot capacity unavailable in all %d AZs.\n", maxAttempts)
+			fmt.Fprintf(os.Stderr, "  Use on-demand: km create --on-demand %s\n\n", profilePath)
+		} else {
+			fmt.Fprintf(os.Stderr, "ERROR: provisioning failed: %v\n", applyErr)
+		}
 		return fmt.Errorf("provisioning failed for sandbox %s", sandboxID)
 	}
-
-	fmt.Println(" done")
-	fmt.Printf("  ✓ Infrastructure provisioned\n")
 
 	// Step 11: Write sandbox metadata to S3 so km list/status can read it without tag API calls.
 	// Non-fatal: sandbox is provisioned even if metadata write fails.
@@ -361,6 +401,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 			TTLExpiry:   ttlExpiry,
 			IdleTimeout: resolvedProfile.Spec.Lifecycle.IdleTimeout,
 			MaxLifetime: resolvedProfile.Spec.Lifecycle.MaxLifetime,
+			CreatedBy:   "cli",
 		}
 		metaJSON, _ := json.Marshal(meta)
 		_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{

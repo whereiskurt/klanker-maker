@@ -24,6 +24,7 @@ type SandboxCreateDetail struct {
 	ArtifactPrefix string `json:"artifact_prefix"`
 	OperatorEmail  string `json:"operator_email,omitempty"`
 	OnDemand       bool   `json:"on_demand"`
+	CreatedBy      string `json:"created_by,omitempty"` // "cli", "email", "api", "remote"
 }
 
 // PutSandboxCreateEvent publishes a SandboxCreate event to EventBridge.

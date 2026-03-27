@@ -9,7 +9,7 @@ metadata:
 spec:
   lifecycle:
     ttl: "60m"
-    idleTimeout: "15m"
+    idleTimeout: "5m"
     teardownPolicy: destroy
 
   runtime:
