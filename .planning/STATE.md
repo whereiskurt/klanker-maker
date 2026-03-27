@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 22-02-PLAN.md
-last_updated: "2026-03-27T01:23:47.011Z"
+stopped_at: Completed 22-01-PLAN.md
+last_updated: "2026-03-27T01:28:51.369Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 26
   completed_phases: 22
   total_plans: 79
-  completed_plans: 78
+  completed_plans: 79
   percent: 0
 ---
 
@@ -126,6 +126,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 25-github-source-access-restrictions-deep-testing-of-repo-allowlists-clone-push-enforcement-and-deny-by-default-for-unlisted-repos P01 | 4min | 2 tasks | 8 files |
 | Phase 25-github-source-access-restrictions P02 | 238s | 2 tasks | 4 files |
 | Phase 22-remote-sandbox-creation P02 | 232s | 2 tasks | 3 files |
+| Phase 22-remote-sandbox-creation P01 | 10min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -332,6 +333,9 @@ Recent decisions affecting current work:
 - [Phase 25-02]: KM_ALLOWED_REFS uses colon separator; git config --system core.hooksPath applies system-wide
 - [Phase 22-remote-sandbox-creation]: Local SESEmailAPI interface (send-only) preferred over pkg/aws.SESV2API for email-create-handler to avoid mock complexity and follow narrow interface principle
 - [Phase 22-remote-sandbox-creation]: putSandboxCreateEvent defined locally in handler; will consolidate with pkg/aws/eventbridge.go when Plan 01 merges
+- [Phase 22-remote-sandbox-creation]: EventBridgeAPI already defined in idle_event.go — reused shared interface rather than redefining
+- [Phase 22-remote-sandbox-creation]: create-handler RunCommandFunc injection: subprocess testing without os/exec in test binary
+- [Phase 22-remote-sandbox-creation]: create-handler does NOT send 'created' notification — km create subprocess handles it at Step 14
 
 ### Roadmap Evolution
 
@@ -368,6 +372,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-27T01:23:47.008Z
-Stopped at: Completed 22-02-PLAN.md
+Last session: 2026-03-27T01:28:51.366Z
+Stopped at: Completed 22-01-PLAN.md
 Resume file: None
