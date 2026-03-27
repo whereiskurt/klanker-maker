@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -390,6 +391,52 @@ func checkGitHubConfig(ctx context.Context, client SSMReadAPI) CheckResult {
 		Name:    "GitHub App Config",
 		Status:  CheckOK,
 		Message: "app-client-id and installation-id are configured",
+	}
+}
+
+// checkCredentialRotationAge warns when any platform credential in SSM Parameter Store
+// has not been updated within the specified threshold. It uses LastModifiedDate as the
+// rotation timestamp source. Missing parameters are skipped gracefully — their existence
+// is validated by checkGitHubConfig.
+func checkCredentialRotationAge(ctx context.Context, ssmClient SSMReadAPI, thresholdDays int) CheckResult {
+	params := []string{
+		"/km/config/github/private-key",
+		"/km/config/github/app-client-id",
+	}
+	threshold := time.Duration(thresholdDays) * 24 * time.Hour
+	now := time.Now()
+
+	var stale []string
+	for _, name := range params {
+		out, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+			Name: awssdk.String(name),
+		})
+		if err != nil {
+			// Missing or unreadable — handled by checkGitHubConfig; skip gracefully.
+			continue
+		}
+		if out.Parameter == nil || out.Parameter.LastModifiedDate == nil {
+			continue
+		}
+		age := now.Sub(*out.Parameter.LastModifiedDate)
+		if age > threshold {
+			days := int(age.Hours() / 24)
+			stale = append(stale, fmt.Sprintf("%s (%dd)", name, days))
+		}
+	}
+
+	if len(stale) > 0 {
+		return CheckResult{
+			Name:        "Credential Rotation",
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("stale credentials: %s", strings.Join(stale, ", ")),
+			Remediation: "Run 'km roll creds --platform' to rotate platform credentials",
+		}
+	}
+	return CheckResult{
+		Name:    "Credential Rotation",
+		Status:  CheckOK,
+		Message: "all platform credentials rotated within 90 days",
 	}
 }
 
@@ -887,6 +934,18 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 			}
 		}
 		return checkGitHubConfig(ctx, ssmClient)
+	})
+
+	// Credential rotation age check.
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		if ssmClient == nil {
+			return CheckResult{
+				Name:    "Credential Rotation",
+				Status:  CheckSkipped,
+				Message: "SSM client not available",
+			}
+		}
+		return checkCredentialRotationAge(ctx, ssmClient, 90)
 	})
 
 	// Per-region VPC checks.
