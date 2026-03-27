@@ -4,7 +4,7 @@ milestone: v1.0
 milestone_name: milestone
 status: planning
 stopped_at: Completed 26-05-PLAN.md
-last_updated: "2026-03-27T05:55:31.860Z"
+last_updated: "2026-03-27T06:00:44.406Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 26

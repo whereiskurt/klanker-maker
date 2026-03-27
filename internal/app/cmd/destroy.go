@@ -14,7 +14,6 @@ import (
 	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
@@ -105,34 +104,6 @@ func NewDestroyCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) 
 		"Trigger destroy via Lambda (EventBridge) instead of local terragrunt")
 
 	return cmd
-}
-
-// runDestroy executes the full destroy workflow.
-// runRemoteDestroy publishes a destroy event to EventBridge, triggering the
-// TTL Lambda to destroy the sandbox remotely.
-func runRemoteDestroy(ctx context.Context, cfg *config.Config, sandboxID string) error {
-	return publishRemoteCommand(ctx, cfg, sandboxID, "destroy")
-}
-
-// publishRemoteCommand publishes a sandbox command event to EventBridge.
-func publishRemoteCommand(ctx context.Context, cfg *config.Config, sandboxID, eventType string, extra ...string) error {
-	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
-	if err != nil {
-		return fmt.Errorf("load AWS config: %w", err)
-	}
-
-	ebClient := eventbridge.NewFromConfig(awsCfg)
-	fmt.Printf("Sending remote %s for %s...\n", eventType, sandboxID)
-	if err := awspkg.PublishSandboxCommand(ctx, ebClient, sandboxID, eventType, extra...); err != nil {
-		return fmt.Errorf("publish %s event: %w", eventType, err)
-	}
-	fmt.Printf("Event published. The Lambda will %s %s in the background.\n", eventType, sandboxID)
-	region := cfg.PrimaryRegion
-	if region == "" {
-		region = "us-east-1"
-	}
-	fmt.Printf("Monitor: aws logs tail /aws/lambda/km-ttl-handler --follow --profile klanker-terraform --region %s\n", region)
-	return nil
 }
 
 func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool, verbose bool) error {
