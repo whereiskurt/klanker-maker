@@ -1,11 +1,14 @@
 package cmd_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/cmd"
+	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 )
 
@@ -92,5 +95,69 @@ func TestExtendMaxLifetime_ExpiredSandboxRespectsCap(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "max lifetime") {
 		t.Errorf("error message missing 'max lifetime'; got: %s", err.Error())
+	}
+}
+
+// ---- Remote path tests ----
+
+// runExtendRemote invokes km extend --remote via injected publisher.
+func runExtendRemote(t *testing.T, pub cmd.RemoteCommandPublisher, sandboxID, duration string) error {
+	t.Helper()
+	cfg := &config.Config{}
+	root := &cobra.Command{Use: "km"}
+	extendCmd := cmd.NewExtendCmdWithPublisher(cfg, pub)
+	root.AddCommand(extendCmd)
+	root.SetArgs([]string{"extend", "--remote", sandboxID, duration})
+	return root.Execute()
+}
+
+// TestExtendCmd_RemotePublishesCorrectEvent verifies km extend --remote dispatches
+// an EventBridge event with eventType "extend" and duration in extra params.
+func TestExtendCmd_RemotePublishesCorrectEvent(t *testing.T) {
+	pub := &fakePublisher{}
+	err := runExtendRemote(t, pub, "sb-aabbccdd", "2h")
+	if err != nil {
+		t.Fatalf("extend --remote returned error: %v", err)
+	}
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publisher call, got %d", len(pub.calls))
+	}
+	call := pub.calls[0]
+	if call.sandboxID != "sb-aabbccdd" {
+		t.Errorf("sandboxID = %q, want %q", call.sandboxID, "sb-aabbccdd")
+	}
+	if call.eventType != "extend" {
+		t.Errorf("eventType = %q, want %q", call.eventType, "extend")
+	}
+	// extra params should contain "duration" key and "2h" value
+	foundDuration := false
+	for i := 0; i+1 < len(call.extra); i += 2 {
+		if call.extra[i] == "duration" && call.extra[i+1] == "2h" {
+			foundDuration = true
+		}
+	}
+	if !foundDuration {
+		t.Errorf("expected duration=2h in extra params, got: %v", call.extra)
+	}
+}
+
+// TestExtendCmd_RemotePublishFailure verifies EventBridge publish failure propagates.
+func TestExtendCmd_RemotePublishFailure(t *testing.T) {
+	pub := &fakePublisher{err: errors.New("eventbridge unavailable")}
+	err := runExtendRemote(t, pub, "sb-aabbccdd", "1h")
+	if err == nil {
+		t.Fatal("expected error when publisher fails, got nil")
+	}
+}
+
+// TestExtendCmd_RemoteInvalidSandboxID verifies invalid sandbox ID is rejected before publish.
+func TestExtendCmd_RemoteInvalidSandboxID(t *testing.T) {
+	pub := &fakePublisher{}
+	err := runExtendRemote(t, pub, "not-valid-id", "1h")
+	if err == nil {
+		t.Fatal("expected error for invalid sandbox ID, got nil")
+	}
+	if len(pub.calls) != 0 {
+		t.Errorf("expected 0 publisher calls for invalid ID, got %d", len(pub.calls))
 	}
 }

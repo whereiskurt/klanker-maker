@@ -1,10 +1,15 @@
 package cmd_test
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
+	"github.com/whereiskurt/klankrmkr/internal/app/cmd"
+	"github.com/whereiskurt/klankrmkr/internal/app/config"
 )
 
 // TestRunDestroy_GitHubTokenCleanup verifies that destroy.go contains github-token cleanup wiring.
@@ -152,3 +157,66 @@ func TestDestroyCmd_FlagRegistration(t *testing.T) {
 		t.Errorf("expected --yes flag in destroy --help, got:\n%s", outStr)
 	}
 }
+
+// ---- Remote path tests ----
+
+// runDestroyRemote is a helper that invokes km destroy --remote via injected publisher.
+func runDestroyRemote(t *testing.T, pub cmd.RemoteCommandPublisher, sandboxID string) error {
+	t.Helper()
+	cfg := &config.Config{}
+	root := &cobra.Command{Use: "km"}
+	destroyCmd := cmd.NewDestroyCmdWithPublisher(cfg, pub)
+	root.AddCommand(destroyCmd)
+	// --yes skips interactive confirmation prompt
+	root.SetArgs([]string{"destroy", "--yes", "--remote", sandboxID})
+	return root.Execute()
+}
+
+// TestDestroyCmd_RemotePublishesCorrectEvent verifies km destroy --remote dispatches
+// an EventBridge event with eventType "destroy" and the correct sandbox ID.
+func TestDestroyCmd_RemotePublishesCorrectEvent(t *testing.T) {
+	pub := &fakePublisher{}
+	err := runDestroyRemote(t, pub, "sb-aabbccdd")
+	if err != nil {
+		t.Fatalf("destroy --remote returned error: %v", err)
+	}
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publisher call, got %d", len(pub.calls))
+	}
+	call := pub.calls[0]
+	if call.sandboxID != "sb-aabbccdd" {
+		t.Errorf("sandboxID = %q, want %q", call.sandboxID, "sb-aabbccdd")
+	}
+	if call.eventType != "destroy" {
+		t.Errorf("eventType = %q, want %q", call.eventType, "destroy")
+	}
+}
+
+// TestDestroyCmd_RemotePublishFailure verifies that EventBridge publish failure
+// propagates a clear error to the caller.
+func TestDestroyCmd_RemotePublishFailure(t *testing.T) {
+	pub := &fakePublisher{err: errors.New("eventbridge unavailable")}
+	err := runDestroyRemote(t, pub, "sb-aabbccdd")
+	if err == nil {
+		t.Fatal("expected error when publisher fails, got nil")
+	}
+}
+
+// TestDestroyCmd_RemoteInvalidSandboxID verifies that an invalid sandbox ID
+// returns an error before calling the publisher.
+func TestDestroyCmd_RemoteInvalidSandboxID(t *testing.T) {
+	pub := &fakePublisher{}
+	// Use a non-matching ID that passes ResolveSandboxID string check but fails regex.
+	// Note: destroy validates format in runDestroy, but --remote path goes through
+	// ResolveSandboxID first. We use an obviously wrong ID here.
+	err := runDestroyRemote(t, pub, "not-valid-id")
+	if err == nil {
+		t.Fatal("expected error for invalid sandbox ID, got nil")
+	}
+	if len(pub.calls) != 0 {
+		t.Errorf("expected 0 publisher calls for invalid ID, got %d", len(pub.calls))
+	}
+}
+
+// Compile-time check: fakePublisher implements RemoteCommandPublisher.
+var _ cmd.RemoteCommandPublisher = (*fakePublisher)(nil)
