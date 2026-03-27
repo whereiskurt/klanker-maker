@@ -64,6 +64,7 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	root.AddCommand(NewBudgetCmd(cfg))
 	root.AddCommand(NewShellCmd(cfg))
 	root.AddCommand(NewDoctorCmd(cfg))
+	root.AddCommand(NewRollCmd(cfg))
 
 	return root
 }
