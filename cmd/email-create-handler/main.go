@@ -20,7 +20,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
@@ -33,7 +32,6 @@ import (
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
-	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
@@ -89,39 +87,6 @@ type SESEmailAPI interface {
 	SendEmail(ctx context.Context, input *sesv2.SendEmailInput, optFns ...func(*sesv2.Options)) (*sesv2.SendEmailOutput, error)
 }
 
-// SandboxCreateDetail holds the EventBridge detail payload for a SandboxCreate event.
-type SandboxCreateDetail struct {
-	SandboxID      string `json:"sandbox_id"`
-	ArtifactBucket string `json:"artifact_bucket"`
-	ArtifactPrefix string `json:"artifact_prefix"`
-	OperatorEmail  string `json:"operator_email"`
-	OnDemand       bool   `json:"on_demand"`
-}
-
-// putSandboxCreateEvent publishes a SandboxCreate event to EventBridge.
-// Note: This will be consolidated with pkg/aws/eventbridge.go in Plan 03.
-func putSandboxCreateEvent(ctx context.Context, client awspkg.EventBridgeAPI, detail SandboxCreateDetail) error {
-	detailBytes, err := json.Marshal(detail)
-	if err != nil {
-		return fmt.Errorf("marshal SandboxCreate detail: %w", err)
-	}
-
-	input := &eventbridge.PutEventsInput{
-		Entries: []ebtypes.PutEventsRequestEntry{
-			{
-				Source:       awssdk.String("km.sandbox"),
-				DetailType:   awssdk.String("SandboxCreate"),
-				Detail:       awssdk.String(string(detailBytes)),
-				EventBusName: awssdk.String("default"),
-			},
-		},
-	}
-
-	if _, err := client.PutEvents(ctx, input); err != nil {
-		return fmt.Errorf("publish SandboxCreate event for sandbox %s: %w", detail.SandboxID, err)
-	}
-	return nil
-}
 
 // ---- handler ----
 
@@ -230,7 +195,7 @@ func (h *EmailCreateHandler) Handle(ctx context.Context, event S3EventRecord) er
 	}
 
 	// Step 12: Publish SandboxCreate EventBridge event
-	if err := putSandboxCreateEvent(ctx, h.EventBridgeClient, SandboxCreateDetail{
+	if err := awspkg.PutSandboxCreateEvent(ctx, h.EventBridgeClient, awspkg.SandboxCreateDetail{
 		SandboxID:      sandboxID,
 		ArtifactBucket: h.ArtifactBucket,
 		ArtifactPrefix: artifactPrefix,

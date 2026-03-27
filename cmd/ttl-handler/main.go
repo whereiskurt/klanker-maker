@@ -234,9 +234,14 @@ func (h *TTLHandler) handleDestroy(ctx context.Context, event TTLEvent) error {
 	}
 
 	// Step 3: Upload artifacts if the profile specifies artifact paths.
+	var artifactsUploaded, artifactsSkipped int
+	var artifactPaths []string
 	if sandboxProfile != nil && sandboxProfile.Spec.Artifacts != nil && len(sandboxProfile.Spec.Artifacts.Paths) > 0 {
 		arts := sandboxProfile.Spec.Artifacts
+		artifactPaths = arts.Paths
 		uploaded, skipped, uploadErr := awspkg.UploadArtifacts(ctx, h.S3Client, h.Bucket, sandboxID, arts.Paths, arts.MaxSizeMB)
+		artifactsUploaded = uploaded
+		artifactsSkipped = len(skipped)
 		if uploadErr != nil {
 			log.Warn().Err(uploadErr).Str("sandbox_id", sandboxID).
 				Msg("artifact upload error (best-effort); continuing")
@@ -250,11 +255,27 @@ func (h *TTLHandler) handleDestroy(ctx context.Context, event TTLEvent) error {
 		log.Debug().Str("sandbox_id", sandboxID).Msg("no artifact paths configured; skipping upload")
 	}
 
-	// Step 4: Send "ttl-expired" lifecycle notification (if operator email is configured).
+	// Step 4: Send detailed lifecycle notification (if operator email is configured).
 	if h.OperatorEmail != "" && h.SESClient != nil {
-		if notifyErr := awspkg.SendLifecycleNotification(ctx, h.SESClient, h.OperatorEmail, sandboxID, "ttl-expired", h.Domain); notifyErr != nil {
+		detail := awspkg.NotificationDetail{
+			SandboxID:         sandboxID,
+			Event:             eventLabel(event),
+			ArtifactsUploaded: artifactsUploaded,
+			ArtifactsSkipped:  artifactsSkipped,
+			ArtifactPaths:     artifactPaths,
+		}
+		// Read sandbox metadata for status-like fields (best-effort).
+		if meta := readMetadataBestEffort(ctx, h.S3Client, h.StateBucket, sandboxID); meta != nil {
+			detail.ProfileName = meta.ProfileName
+			detail.Substrate = meta.Substrate
+			detail.Region = meta.Region
+			detail.CreatedAt = meta.CreatedAt
+			detail.TTLExpiry = meta.TTLExpiry
+			detail.IdleTimeout = meta.IdleTimeout
+		}
+		if notifyErr := awspkg.SendDetailedNotification(ctx, h.SESClient, h.OperatorEmail, h.Domain, detail); notifyErr != nil {
 			log.Warn().Err(notifyErr).Str("sandbox_id", sandboxID).
-				Msg("failed to send ttl-expired notification (non-fatal)")
+				Msg("failed to send lifecycle notification (non-fatal)")
 		}
 	}
 
@@ -278,6 +299,45 @@ func (h *TTLHandler) handleDestroy(ctx context.Context, event TTLEvent) error {
 
 	log.Info().Str("sandbox_id", sandboxID).Msg("TTL handler completed")
 	return nil
+}
+
+// eventLabel returns a human-friendly label for the TTL event type.
+func eventLabel(event TTLEvent) string {
+	switch event.EventType {
+	case "idle":
+		return "idle-timeout"
+	case "destroy":
+		return "destroyed"
+	case "stop":
+		return "stopped"
+	case "":
+		return "ttl-expired"
+	default:
+		return event.EventType
+	}
+}
+
+// readMetadataBestEffort reads sandbox metadata from S3 using GetObject directly.
+// Returns nil on any error — callers should treat metadata as optional enrichment.
+func readMetadataBestEffort(ctx context.Context, client S3GetPutAPI, bucket, sandboxID string) *awspkg.SandboxMetadata {
+	key := "tf-km/sandboxes/" + sandboxID + "/metadata.json"
+	resp, err := client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: awssdk.String(bucket),
+		Key:    awssdk.String(key),
+	})
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+	var meta awspkg.SandboxMetadata
+	if json.Unmarshal(data, &meta) != nil {
+		return nil
+	}
+	return &meta
 }
 
 // downloadProfileFromS3 retrieves the sandbox profile YAML stored at

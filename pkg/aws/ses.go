@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
@@ -65,6 +67,96 @@ func SendLifecycleNotification(ctx context.Context, client SESV2API, operatorEma
 	})
 	if err != nil {
 		return fmt.Errorf("send lifecycle notification for sandbox %s (event: %s): %w", sandboxID, event, err)
+	}
+	return nil
+}
+
+// NotificationDetail holds rich context for a detailed lifecycle notification email.
+type NotificationDetail struct {
+	SandboxID   string
+	Event       string // e.g. "ttl-expired", "idle-timeout", "destroyed"
+	ProfileName string
+	Substrate   string
+	Region      string
+	CreatedAt   time.Time
+	TTLExpiry   *time.Time
+	IdleTimeout string
+
+	// Artifact capture results
+	ArtifactsUploaded int
+	ArtifactsSkipped  int
+	ArtifactPaths     []string // configured paths from profile
+}
+
+// SendDetailedNotification sends a rich operator notification with sandbox status
+// details and artifact capture results — similar to `km status` output.
+func SendDetailedNotification(ctx context.Context, client SESV2API, operatorEmail, domain string, detail NotificationDetail) error {
+	from := fmt.Sprintf("notifications@%s", domain)
+	subject := fmt.Sprintf("km sandbox %s: %s", detail.Event, detail.SandboxID)
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Sandbox Lifecycle Event: %s\n", detail.Event))
+	b.WriteString(fmt.Sprintf("Time: %s\n", time.Now().UTC().Format("2006-01-02 3:04:05 PM UTC")))
+	b.WriteString("\n")
+	b.WriteString("─── Sandbox Details ───────────────────────────\n")
+	b.WriteString(fmt.Sprintf("  Sandbox ID:  %s\n", detail.SandboxID))
+	if detail.ProfileName != "" {
+		b.WriteString(fmt.Sprintf("  Profile:     %s\n", detail.ProfileName))
+	}
+	if detail.Substrate != "" {
+		b.WriteString(fmt.Sprintf("  Substrate:   %s\n", detail.Substrate))
+	}
+	if detail.Region != "" {
+		b.WriteString(fmt.Sprintf("  Region:      %s\n", detail.Region))
+	}
+	if !detail.CreatedAt.IsZero() {
+		b.WriteString(fmt.Sprintf("  Created At:  %s\n", detail.CreatedAt.Format("2006-01-02 3:04:05 PM UTC")))
+	}
+	if detail.TTLExpiry != nil {
+		b.WriteString(fmt.Sprintf("  TTL Expiry:  %s\n", detail.TTLExpiry.Format("2006-01-02 3:04:05 PM UTC")))
+	}
+	if detail.IdleTimeout != "" {
+		b.WriteString(fmt.Sprintf("  Idle Timeout: %s\n", detail.IdleTimeout))
+	}
+	if !detail.CreatedAt.IsZero() {
+		b.WriteString(fmt.Sprintf("  Lifetime:    %s\n", time.Since(detail.CreatedAt).Round(time.Minute)))
+	}
+
+	b.WriteString("\n")
+	b.WriteString("─── Artifact Capture ─────────────────────────\n")
+	if len(detail.ArtifactPaths) == 0 {
+		b.WriteString("  No artifact paths configured.\n")
+	} else {
+		b.WriteString(fmt.Sprintf("  Configured paths: %s\n", strings.Join(detail.ArtifactPaths, ", ")))
+		b.WriteString(fmt.Sprintf("  Uploaded: %d file(s)\n", detail.ArtifactsUploaded))
+		if detail.ArtifactsSkipped > 0 {
+			b.WriteString(fmt.Sprintf("  Skipped:  %d file(s) (oversized or inaccessible)\n", detail.ArtifactsSkipped))
+		}
+	}
+
+	b.WriteString("\n")
+	b.WriteString(fmt.Sprintf("Domain: %s\n", domain))
+
+	_, err := client.SendEmail(ctx, &sesv2.SendEmailInput{
+		FromEmailAddress: awssdk.String(from),
+		Destination: &sesv2types.Destination{
+			ToAddresses: []string{operatorEmail},
+		},
+		Content: &sesv2types.EmailContent{
+			Simple: &sesv2types.Message{
+				Subject: &sesv2types.Content{
+					Data: awssdk.String(subject),
+				},
+				Body: &sesv2types.Body{
+					Text: &sesv2types.Content{
+						Data: awssdk.String(b.String()),
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("send detailed notification for sandbox %s (event: %s): %w", detail.SandboxID, detail.Event, err)
 	}
 	return nil
 }
