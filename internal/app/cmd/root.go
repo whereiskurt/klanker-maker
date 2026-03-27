@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	"github.com/whereiskurt/klankrmkr/pkg/version"
 )
 
 // NewRootCmd creates the root "km" command with global flags and subcommands attached.
@@ -77,7 +78,7 @@ func Execute() {
 		log.Error().Err(err).Msg("failed to load configuration")
 		os.Exit(1)
 	}
-	cfg.Version = "0.1.0-dev"
+	cfg.Version = version.String()
 
 	root := NewRootCmd(cfg)
 	if err := root.Execute(); err != nil {

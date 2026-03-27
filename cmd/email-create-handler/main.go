@@ -45,6 +45,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klankrmkr/pkg/version"
 )
 
 // ---- S3 event record types ----
@@ -317,6 +318,7 @@ func (h *OperatorEmailHandler) sendHelp(ctx context.Context, senderEmail string)
 // sendReply sends a formatted reply email.
 func (h *OperatorEmailHandler) sendReply(ctx context.Context, to, subject, body string) error {
 	from := fmt.Sprintf("operator@sandboxes.%s", h.Domain)
+	fullBody := body + "\n— " + version.Header() + "\n"
 	if _, err := h.SESClient.SendEmail(ctx, &sesv2.SendEmailInput{
 		FromEmailAddress: awssdk.String(from),
 		Destination: &sesv2types.Destination{
@@ -329,7 +331,7 @@ func (h *OperatorEmailHandler) sendReply(ctx context.Context, to, subject, body 
 				},
 				Body: &sesv2types.Body{
 					Text: &sesv2types.Content{
-						Data: awssdk.String(body),
+						Data: awssdk.String(fullBody),
 					},
 				},
 			},

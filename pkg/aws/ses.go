@@ -13,6 +13,7 @@ import (
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
+	"github.com/whereiskurt/klankrmkr/pkg/version"
 )
 
 // SESV2API is the minimal SES v2 interface required by ProvisionSandboxEmail,
@@ -45,7 +46,7 @@ func ProvisionSandboxEmail(ctx context.Context, client SESV2API, sandboxID, doma
 func SendLifecycleNotification(ctx context.Context, client SESV2API, operatorEmail, sandboxID, event, domain string) error {
 	from := fmt.Sprintf("notifications@%s", domain)
 	subject := fmt.Sprintf("km sandbox %s: %s", event, sandboxID)
-	body := fmt.Sprintf("Sandbox lifecycle event: %s\nSandbox ID: %s\nDomain: %s\n", event, sandboxID, domain)
+	body := fmt.Sprintf("Sandbox lifecycle event: %s\nSandbox ID: %s\nDomain: %s\n\n— %s\n", event, sandboxID, domain, version.Header())
 
 	_, err := client.SendEmail(ctx, &sesv2.SendEmailInput{
 		FromEmailAddress: awssdk.String(from),
@@ -136,6 +137,7 @@ func SendDetailedNotification(ctx context.Context, client SESV2API, operatorEmai
 
 	b.WriteString("\n")
 	b.WriteString(fmt.Sprintf("Domain: %s\n", domain))
+	b.WriteString(fmt.Sprintf("\n— %s\n", version.Header()))
 
 	_, err := client.SendEmail(ctx, &sesv2.SendEmailInput{
 		FromEmailAddress: awssdk.String(from),
@@ -172,7 +174,7 @@ func SendDetailedNotification(ctx context.Context, client SESV2API, operatorEmai
 func SendApprovalRequest(ctx context.Context, client SESV2API, sandboxID, domain, operatorEmail, action, description string) error {
 	from := sandboxEmailAddress(sandboxID, domain)
 	subject := fmt.Sprintf("[KM-APPROVAL-REQUEST] %s %s", sandboxID, action)
-	body := fmt.Sprintf("Sandbox %s requests approval for action: %s\n\n%s\n\nReply with APPROVED to authorize or DENIED to reject.\n", sandboxID, action, description)
+	body := fmt.Sprintf("Sandbox %s requests approval for action: %s\n\n%s\n\nReply with APPROVED to authorize or DENIED to reject.\n\n— %s\n", sandboxID, action, description, version.Header())
 
 	_, err := client.SendEmail(ctx, &sesv2.SendEmailInput{
 		FromEmailAddress: awssdk.String(from),

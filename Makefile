@@ -10,6 +10,12 @@ GOOS        := linux
 GOARCH      := amd64
 CGO_ENABLED := 0
 
+# Semantic version — read without bumping; bump happens in the bump-version target
+KM_VERSION  := $(shell cat VERSION 2>/dev/null | tr -d '[:space:]')
+GIT_COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+LDFLAGS      = -X github.com/whereiskurt/klankrmkr/pkg/version.Number=v$(KM_VERSION) \
+               -X github.com/whereiskurt/klankrmkr/pkg/version.GitCommit=$(GIT_COMMIT)
+
 VERSION     ?= latest
 REGION      ?= $(shell aws configure get region)
 ACCOUNT_ID   = $(shell aws sts get-caller-identity --query Account --output text)
@@ -20,7 +26,20 @@ KM_ARTIFACTS_BUCKET ?=
 
 SIDECARS := dns-proxy http-proxy audit-log
 
-.PHONY: sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas build-create-handler build-email-create-handler push-create-handler clean
+.PHONY: build build-km bump-version sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas build-create-handler build-email-create-handler push-create-handler clean
+
+## bump-version: increment the patch version in VERSION file
+bump-version:
+	@./scripts/bump-version.sh VERSION > /dev/null
+
+## build: bump version then build the km CLI binary
+build: bump-version
+	$(eval KM_VERSION := $(shell cat VERSION | tr -d '[:space:]'))
+	go build -ldflags '-X github.com/whereiskurt/klankrmkr/pkg/version.Number=v$(KM_VERSION) -X github.com/whereiskurt/klankrmkr/pkg/version.GitCommit=$(GIT_COMMIT)' -o km ./cmd/km/
+	@echo "Built: km v$(KM_VERSION) ($(GIT_COMMIT))"
+
+## build-km: alias for build
+build-km: build
 
 ## sidecars: cross-compile Go sidecars and upload binaries + tracing config to S3
 sidecars:
@@ -29,9 +48,9 @@ sidecars:
 	  exit 1; \
 	fi
 	@mkdir -p build
-	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -o build/dns-proxy ./sidecars/dns-proxy/
-	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -o build/http-proxy ./sidecars/http-proxy/
-	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -o build/audit-log ./sidecars/audit-log/cmd/
+	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -ldflags '$(LDFLAGS)' -o build/dns-proxy ./sidecars/dns-proxy/
+	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -ldflags '$(LDFLAGS)' -o build/http-proxy ./sidecars/http-proxy/
+	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -ldflags '$(LDFLAGS)' -o build/audit-log ./sidecars/audit-log/cmd/
 	aws s3 cp build/dns-proxy  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/dns-proxy
 	aws s3 cp build/http-proxy s3://$(KM_ARTIFACTS_BUCKET)/sidecars/http-proxy
 	aws s3 cp build/audit-log  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/audit-log
@@ -46,9 +65,9 @@ sidecars:
 ## build-sidecars: cross-compile Go sidecars locally (no S3 upload)
 build-sidecars:
 	@mkdir -p build
-	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -o build/dns-proxy ./sidecars/dns-proxy/
-	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -o build/http-proxy ./sidecars/http-proxy/
-	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -o build/audit-log ./sidecars/audit-log/cmd/
+	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -ldflags '$(LDFLAGS)' -o build/dns-proxy ./sidecars/dns-proxy/
+	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -ldflags '$(LDFLAGS)' -o build/http-proxy ./sidecars/http-proxy/
+	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -ldflags '$(LDFLAGS)' -o build/audit-log ./sidecars/audit-log/cmd/
 
 ## ecr-login: authenticate Docker daemon to ECR
 ecr-login:
@@ -68,15 +87,15 @@ clean:
 	@echo "Build artifacts cleaned."
 
 ## build-lambdas: cross-compile Go Lambda binaries for arm64 and package as deployment zips
-build-lambdas: clean
+build-lambdas: clean bump-version
 	@mkdir -p build
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/bootstrap ./cmd/ttl-handler/
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o build/bootstrap ./cmd/ttl-handler/
 	cd build && zip -j ttl-handler.zip bootstrap && rm bootstrap
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/bootstrap ./cmd/budget-enforcer/
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o build/bootstrap ./cmd/budget-enforcer/
 	cd build && zip -j budget-enforcer.zip bootstrap && rm bootstrap
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/bootstrap ./cmd/github-token-refresher/
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o build/bootstrap ./cmd/github-token-refresher/
 	cd build && zip -j github-token-refresher.zip bootstrap && rm bootstrap
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/bootstrap-email-create ./cmd/email-create-handler/
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o build/bootstrap-email-create ./cmd/email-create-handler/
 	cd build && cp bootstrap-email-create bootstrap && zip -j email-create-handler.zip bootstrap && rm bootstrap
 	@echo ""
 	@echo "Lambda deployment packages built:"
@@ -89,8 +108,8 @@ build-lambdas: clean
 ## Run this before `make push-create-handler`
 build-create-handler:
 	@mkdir -p build
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/km-create-handler ./cmd/create-handler/
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/km ./cmd/km/
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o build/km-create-handler ./cmd/create-handler/
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o build/km ./cmd/km/
 	@echo ""
 	@echo "Create-handler binaries built:"
 	@echo "  build/km-create-handler  (Lambda entry point)"
@@ -99,7 +118,7 @@ build-create-handler:
 ## build-email-create-handler: compile and zip the email-create-handler Lambda binary
 build-email-create-handler:
 	@mkdir -p build
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/bootstrap-email-create ./cmd/email-create-handler/
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o build/bootstrap-email-create ./cmd/email-create-handler/
 	cd build && cp bootstrap-email-create bootstrap && zip -j email-create-handler.zip bootstrap && rm bootstrap
 	@echo ""
 	@echo "Email-create-handler package built:"
