@@ -6,6 +6,7 @@ locals {
   region_config = read_terragrunt_config("${get_terragrunt_dir()}/../region.hcl")
   region_label  = local.region_config.locals.region_label
   region_full   = local.region_config.locals.region_full
+  account_id    = get_aws_account_id()
 }
 
 include "root" {
