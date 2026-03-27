@@ -16,10 +16,13 @@ const awsRegion = "us-east-1"
 // LoadAWSConfig loads AWS configuration using a named shared config profile.
 // Region is hardcoded to us-east-1 (the single-region deployment model).
 func LoadAWSConfig(ctx context.Context, profile string) (aws.Config, error) {
-	cfg, err := config.LoadDefaultConfig(ctx,
-		config.WithSharedConfigProfile(profile),
+	opts := []func(*config.LoadOptions) error{
 		config.WithRegion(awsRegion),
-	)
+	}
+	if profile != "" {
+		opts = append(opts, config.WithSharedConfigProfile(profile))
+	}
+	cfg, err := config.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return aws.Config{}, fmt.Errorf("load AWS config (profile=%s): %w", profile, err)
 	}
