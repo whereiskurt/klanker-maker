@@ -522,31 +522,18 @@ chmod 755 /run/km
 echo "[km-bootstrap] Budget enforcement environment configured"
 {{- end }}
 
-{{- if .InitScripts }}
+{{- if or .InitCommands .InitScripts }}
 # ============================================================
-# 7.5a. Profile init scripts (from execution.initScripts)
+# 7.5. Profile init (commands + scripts downloaded from S3)
 # ============================================================
-echo "[km-bootstrap] Downloading and running init scripts..."
-KM_ARTIFACTS_BUCKET_SCRIPTS="{{ .KMArtifactsBucket }}"
-{{- range .InitScripts }}
-echo "[km-init-script] Downloading {{ . }}..."
-aws s3 cp "s3://${KM_ARTIFACTS_BUCKET_SCRIPTS}/artifacts/{{ $.SandboxID }}/init-scripts/{{ . }}" "/tmp/km-init-{{ . }}"
-chmod +x "/tmp/km-init-{{ . }}"
-echo "[km-init-script] Running {{ . }}..."
-"/tmp/km-init-{{ . }}"
-{{- end }}
-echo "[km-bootstrap] Init scripts complete"
-{{- end }}
-{{- if .InitCommands }}
-# ============================================================
-# 7.5b. Profile init commands (from execution.initCommands)
-# ============================================================
-echo "[km-bootstrap] Running init commands..."
-{{- range .InitCommands }}
-echo "[km-init] {{ . }}"
-{{ . }}
-{{- end }}
-echo "[km-bootstrap] Init commands complete"
+echo "[km-bootstrap] Downloading init payload from S3..."
+KM_INIT_BUCKET="{{ .KMArtifactsBucket }}"
+aws s3 cp "s3://${KM_INIT_BUCKET}/artifacts/{{ .SandboxID }}/km-init.sh" /tmp/km-init.sh 2>/dev/null && {
+  chmod +x /tmp/km-init.sh
+  echo "[km-bootstrap] Running init script..."
+  /tmp/km-init.sh
+  echo "[km-bootstrap] Init complete"
+} || echo "[km-bootstrap] No init script found in S3 (skipped)"
 {{- end }}
 
 # ============================================================

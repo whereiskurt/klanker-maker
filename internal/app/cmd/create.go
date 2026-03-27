@@ -438,13 +438,24 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		}
 	}
 
-	// Step 11c: Upload init scripts to S3 if profile specifies any.
-	if len(resolvedProfile.Spec.Execution.InitScripts) > 0 {
+	// Step 11c: Build and upload combined init script to S3.
+	// This keeps user-data small (under 16KB) by offloading init to S3.
+	if len(resolvedProfile.Spec.Execution.InitCommands) > 0 || len(resolvedProfile.Spec.Execution.InitScripts) > 0 {
+		var initScript strings.Builder
+		initScript.WriteString("#!/bin/bash\nset -e\n")
+		initScript.WriteString("echo '[km-init] Starting profile init...'\n")
+
+		// Inline commands
+		for _, cmd := range resolvedProfile.Spec.Execution.InitCommands {
+			initScript.WriteString(fmt.Sprintf("echo '[km-init] %s'\n", cmd))
+			initScript.WriteString(cmd + "\n")
+		}
+
+		// Embedded init scripts (file contents inlined)
 		profileDir := filepath.Dir(profilePath)
 		for _, scriptFile := range resolvedProfile.Spec.Execution.InitScripts {
 			scriptPath := filepath.Join(profileDir, scriptFile)
 			if _, statErr := os.Stat(scriptPath); os.IsNotExist(statErr) {
-				// Try repo root
 				scriptPath = filepath.Join(repoRoot, scriptFile)
 			}
 			scriptData, readErr := os.ReadFile(scriptPath)
@@ -453,18 +464,23 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 					Msg("failed to read init script (non-fatal)")
 				continue
 			}
-			s3Key := fmt.Sprintf("artifacts/%s/init-scripts/%s", sandboxID, filepath.Base(scriptFile))
-			if _, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
-				Bucket:      aws.String(artifactBucket),
-				Key:         aws.String(s3Key),
-				Body:        bytes.NewReader(scriptData),
-				ContentType: aws.String("application/x-shellscript"),
-			}); putErr != nil {
-				log.Warn().Err(putErr).Str("script", scriptFile).
-					Msg("failed to upload init script to S3 (non-fatal)")
-			} else {
-				fmt.Printf("  ✓ Init script uploaded: %s\n", scriptFile)
-			}
+			initScript.WriteString(fmt.Sprintf("\necho '[km-init] Running %s'\n", filepath.Base(scriptFile)))
+			initScript.Write(scriptData)
+			initScript.WriteString("\n")
+		}
+
+		initScript.WriteString("echo '[km-init] Profile init complete'\n")
+
+		s3Key := fmt.Sprintf("artifacts/%s/km-init.sh", sandboxID)
+		if _, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:      aws.String(artifactBucket),
+			Key:         aws.String(s3Key),
+			Body:        bytes.NewReader([]byte(initScript.String())),
+			ContentType: aws.String("application/x-shellscript"),
+		}); putErr != nil {
+			log.Warn().Err(putErr).Msg("failed to upload init script to S3 (non-fatal)")
+		} else {
+			fmt.Printf("  ✓ Init script uploaded to S3 (%d bytes)\n", initScript.Len())
 		}
 	}
 
