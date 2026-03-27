@@ -284,12 +284,41 @@ sourceAccess:
 **GitHub access controls:**
 
 - `allowedRepos`: glob patterns specifying which repositories can be cloned or fetched. `github.com/*` allows any repo on GitHub; `github.com/whereiskurt/*` restricts to a specific organization.
-- `allowedRefs`: branch/tag patterns the agent can check out. Supports wildcards (`feature/*`, `fix/*`).
+- `allowedRefs`: branch/tag patterns restricting which refs the agent can push to. Supports bash glob wildcards (`feature/*`, `fix/*`). See "AllowedRefs Enforcement" below for implementation details.
 - `permissions`: `read` (clone/fetch only), `write` (push allowed). The `hardened` profile allows only `git` in its command allowlist and has no GitHub configuration at all -- zero repository access.
 
-**No default access:** If `sourceAccess.github` is nil (as in the `hardened` and `sealed` profiles), no GitHub token is injected and the agent has no repository access. The GitHub App token is stored in SSM Parameter Store at `/km/github/app-token` and is only fetched when the profile explicitly configures GitHub access.
+**Deny-by-default contract:** Both a nil `sourceAccess.github` AND an explicitly empty `allowedRepos: []` result in zero GitHub token infrastructure being provisioned. The compiler gates all token infrastructure (GitHub token Lambda/EventBridge, per-sandbox SSM parameter, `github_token_inputs` HCL block, and the `GIT_ASKPASS` credential helper in EC2 user-data) behind the condition `GitHub != nil && len(AllowedRepos) > 0`. No token means no access -- this is the primary access control layer.
 
-**Enforcement:** The execution environment enforces these constraints. The GitHub token (if injected) is scoped to the allowed repositories. Ref restrictions are enforced at the Git operation level within the sandbox.
+**No default access:** If `sourceAccess.github` is nil (as in the `hardened` and `sealed` profiles), no GitHub token is injected and the agent has no repository access. The GitHub App installation token is stored in SSM Parameter Store at a per-sandbox path (`/sandbox/{sandbox_id}/github-token`) and is fetched lazily at git-operation time via the `GIT_ASKPASS` credential helper, not injected at boot time.
+
+### AllowedRefs Enforcement
+
+`allowedRefs` is enforced on EC2 sandboxes via a git `pre-push` hook installed during the EC2 user-data bootstrap (section 4b of the boot sequence). The compiler:
+
+1. Sets `export KM_ALLOWED_REFS="main:feature/*"` (colon-separated pattern list)
+2. Writes the hook script to `/opt/km/hooks/pre-push`
+3. Runs `git config --system core.hooksPath /opt/km/hooks` so all git operations on the instance use the hook directory
+
+The hook reads `KM_ALLOWED_REFS` and applies bash glob matching (`[[ "$branch" == $pattern ]]`) against the target ref of each push. Wildcards like `feature/*` match any branch beginning with `feature/`. A denied push receives an error message:
+
+```
+[km] Push to 'unauthorized-branch' denied -- not in allowedRefs: main:feature/*
+```
+
+**AllowedRefs limitations:**
+
+- **EC2 only.** ECS sandboxes do not receive user-data bootstrap and therefore do not get the pre-push hook. `allowedRefs` has no enforcement effect in ECS sandboxes in this release.
+- **Bypassable with `--no-verify`.** The hook can be bypassed by running `git push --no-verify` if the sandbox policy allows unrestricted shell access. AllowedRefs is defense-in-depth, not the primary control.
+- **Push enforcement only.** The hook runs on `git push` only. It does not prevent checking out or working with local branches that do not match the allowlist.
+- **Primary enforcement layer remains token scoping.** The GitHub App installation token is scoped by repository (`allowedRepos`). Ref restrictions are a secondary control.
+
+### ECS GitHub Credential Gap (v1 Limitation)
+
+ECS sandboxes deploy the GitHub token infrastructure (Lambda function and EventBridge scheduled rule for token refresh, SSM parameter for token storage) but do NOT inject a credential helper into the running container. The `GIT_ASKPASS` mechanism used by EC2 (which reads from SSM at git-operation time) has no equivalent in ECS.
+
+Concretely: `git clone https://github.com/...` inside an ECS sandbox task will fail with "Authentication failed" unless the operator manually injects the token via a container environment variable or init container. The `github_token_inputs` HCL block is emitted in the ECS `service.hcl` for the Lambda/EventBridge infrastructure, but the ECS task definition itself has no `GIT_ASKPASS` or `GITHUB_TOKEN` equivalent.
+
+This is a known v1 limitation. Resolving it requires either injecting the token into ECS container environment at task-launch time (via ECS secrets from SSM) or running a credential helper as a sidecar container.
 
 ---
 
