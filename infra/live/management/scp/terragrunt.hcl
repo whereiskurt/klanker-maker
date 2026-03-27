@@ -80,6 +80,8 @@ inputs = {
     "arn:aws:iam::${local.accounts.application}:role/km-ecs-spot-handler",
     # TTL handler — tears down sandboxes on expiry
     "arn:aws:iam::${local.accounts.application}:role/km-ttl-handler",
+    # Create handler — provisions sandboxes remotely via EventBridge
+    "arn:aws:iam::${local.accounts.application}:role/km-create-handler",
   ]
 }
 
