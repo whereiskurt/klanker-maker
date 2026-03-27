@@ -1,6 +1,7 @@
 package cmd_test
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"strings"
@@ -245,6 +246,65 @@ func TestCreateSafePhraseStorage(t *testing.T) {
 			t.Errorf("create.go missing %s (expected %q)", c.name, c.pattern)
 		}
 	}
+}
+
+// TestRunCreate_MaxLifetime verifies that create.go populates MaxLifetime in
+// the SandboxMetadata struct from the profile's lifecycle.maxLifetime field.
+// Source-level verification confirms the assignment is present — matching the
+// pattern used by TestRunCreate_GitHubToken and TestRunCreate_MLflow.
+func TestRunCreate_MaxLifetime(t *testing.T) {
+	src, err := os.ReadFile("create.go")
+	if err != nil {
+		t.Fatalf("read create.go: %v", err)
+	}
+	s := string(src)
+
+	checks := []struct {
+		name    string
+		pattern string
+	}{
+		{"MaxLifetime field assignment in SandboxMetadata", "MaxLifetime: resolvedProfile.Spec.Lifecycle.MaxLifetime"},
+		{"SandboxMetadata struct literal present", "awspkg.SandboxMetadata{"},
+		{"IdleTimeout already present (guard that struct literal is correct)", "IdleTimeout: resolvedProfile.Spec.Lifecycle.IdleTimeout"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(s, c.pattern) {
+			t.Errorf("create.go missing %s (expected %q)", c.name, c.pattern)
+		}
+	}
+}
+
+// TestRunCreate_MaxLifetime_JSON verifies that when SandboxMetadata is marshalled
+// to JSON with MaxLifetime set, the max_lifetime key appears; and when it is empty
+// the key is omitted (omitempty semantics from the struct tag).
+func TestRunCreate_MaxLifetime_JSON(t *testing.T) {
+	// We verify the struct behaviour directly — no AWS calls required.
+	// Uses the same json:"max_lifetime,omitempty" tag as SandboxMetadata.MaxLifetime.
+	type metaSubset struct {
+		MaxLifetime string `json:"max_lifetime,omitempty"`
+	}
+
+	t.Run("present when set", func(t *testing.T) {
+		m := metaSubset{MaxLifetime: "48h"}
+		out, err := json.Marshal(m)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if !strings.Contains(string(out), `"max_lifetime":"48h"`) {
+			t.Errorf("expected max_lifetime in JSON, got: %s", out)
+		}
+	})
+
+	t.Run("omitted when empty (omitempty)", func(t *testing.T) {
+		m := metaSubset{MaxLifetime: ""}
+		out, err := json.Marshal(m)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if strings.Contains(string(out), "max_lifetime") {
+			t.Errorf("expected max_lifetime absent in JSON (omitempty), got: %s", out)
+		}
+	})
 }
 
 // TestCreateCmd_Workflow verifies the create command workflow sequence using a

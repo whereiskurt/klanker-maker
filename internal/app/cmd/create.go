@@ -360,6 +360,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 			CreatedAt:   now,
 			TTLExpiry:   ttlExpiry,
 			IdleTimeout: resolvedProfile.Spec.Lifecycle.IdleTimeout,
+			MaxLifetime: resolvedProfile.Spec.Lifecycle.MaxLifetime,
 		}
 		metaJSON, _ := json.Marshal(meta)
 		_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
