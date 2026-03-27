@@ -118,6 +118,10 @@ type LifecycleSpec struct {
 	IdleTimeout string `yaml:"idleTimeout"`
 	// TeardownPolicy defines what happens when the sandbox expires: destroy, stop, or retain.
 	TeardownPolicy string `yaml:"teardownPolicy"`
+	// MaxLifetime is the absolute maximum duration from sandbox creation time (e.g. "72h").
+	// When set, km extend will refuse to extend the sandbox TTL beyond CreatedAt + MaxLifetime.
+	// Empty string means no cap (backward compatible).
+	MaxLifetime string `yaml:"maxLifetime" json:"maxLifetime"`
 }
 
 // RuntimeSpec controls the compute substrate and instance configuration.

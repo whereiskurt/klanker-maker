@@ -16,4 +16,5 @@ type SandboxMetadata struct {
 	CreatedAt   time.Time  `json:"created_at"`
 	TTLExpiry   *time.Time `json:"ttl_expiry,omitempty"`
 	IdleTimeout string     `json:"idle_timeout,omitempty"` // e.g. "15m", from profile lifecycle.idleTimeout
+	MaxLifetime string     `json:"max_lifetime,omitempty"` // e.g. "72h", from profile lifecycle.maxLifetime; empty = no cap
 }
