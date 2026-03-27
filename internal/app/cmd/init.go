@@ -28,6 +28,7 @@ import (
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/compiler"
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
+	"github.com/whereiskurt/klankrmkr/pkg/version"
 	"gopkg.in/yaml.v3"
 )
 
@@ -452,9 +453,11 @@ func buildLambdaZips(repoRoot string) error {
 
 		fmt.Printf("  Building %s Lambda (linux/arm64)...\n", lb.name)
 
-		// Cross-compile
+		// Cross-compile with version ldflags
 		bootstrapPath := filepath.Join(buildDir, "bootstrap")
-		buildCmd := exec.Command("go", "build", "-o", bootstrapPath, "./"+lb.srcDir+"/")
+		ldflags := fmt.Sprintf("-X github.com/whereiskurt/klankrmkr/pkg/version.Number=%s -X github.com/whereiskurt/klankrmkr/pkg/version.GitCommit=%s",
+			version.Number, version.GitCommit)
+		buildCmd := exec.Command("go", "build", "-ldflags", ldflags, "-o", bootstrapPath, "./"+lb.srcDir+"/")
 		buildCmd.Dir = repoRoot
 		buildCmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=arm64", "CGO_ENABLED=0")
 		if out, err := buildCmd.CombinedOutput(); err != nil {
@@ -574,9 +577,11 @@ func buildAndUploadSidecars(repoRoot, bucket string) error {
 
 		fmt.Printf("  Building sidecar %s (linux/amd64)...\n", sc.name)
 
-		// Cross-compile for linux/amd64 (EC2 and Fargate x86)
+		// Cross-compile for linux/amd64 (EC2 and Fargate x86) with version ldflags
 		binaryPath := filepath.Join(buildDir, sc.name)
-		buildCmd := exec.Command("go", "build", "-o", binaryPath, "./"+sc.srcDir+"/")
+		scLdflags := fmt.Sprintf("-X github.com/whereiskurt/klankrmkr/pkg/version.Number=%s -X github.com/whereiskurt/klankrmkr/pkg/version.GitCommit=%s",
+			version.Number, version.GitCommit)
+		buildCmd := exec.Command("go", "build", "-ldflags", scLdflags, "-o", binaryPath, "./"+sc.srcDir+"/")
 		buildCmd.Dir = repoRoot
 		buildCmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
 		if out, err := buildCmd.CombinedOutput(); err != nil {
