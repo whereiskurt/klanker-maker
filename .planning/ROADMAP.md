@@ -607,7 +607,7 @@ Plans:
 **Goal:** Comprehensive test coverage for GitHub source access enforcement (deny-by-default, permission edge cases, wildcard patterns) plus implement ref enforcement via git pre-push hooks and document ECS credential delivery gap
 **Requirements**: [GH25-01, GH25-02, GH25-03, GH25-04, GH25-05]
 **Depends on:** Phase 24
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 25-01-PLAN.md — Deny-by-default tests for empty allowedRepos, permission edge cases, wildcard validation

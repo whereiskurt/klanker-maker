@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 25-01-PLAN.md
-last_updated: "2026-03-26T23:51:51.444Z"
+stopped_at: Completed 25-02-PLAN.md
+last_updated: "2026-03-27T00:02:19.896Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 26
-  completed_phases: 21
+  completed_phases: 22
   total_plans: 79
-  completed_plans: 76
+  completed_plans: 77
   percent: 0
 ---
 
@@ -124,6 +124,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 21-bug-fixes-and-mini-features-budget-precision-polish-small-enhancements P03 | 249s | 2 tasks | 4 files |
 | Phase 21-bug-fixes-and-mini-features-budget-precision-polish-small-enhancements P04 | 10min | 2 tasks | 1 files |
 | Phase 25-github-source-access-restrictions-deep-testing-of-repo-allowlists-clone-push-enforcement-and-deny-by-default-for-unlisted-repos P01 | 4min | 2 tasks | 8 files |
+| Phase 25-github-source-access-restrictions P02 | 238s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -326,6 +327,8 @@ Recent decisions affecting current work:
 - [Phase 21-bug-fixes-and-mini-features-budget-precision-polish-small-enhancements]: Operator approved Phase 21 by reviewing checklist content rather than executing against live AWS
 - [Phase 25-01]: Empty allowedRepos is denied by default: guard both != nil AND len(AllowedRepos) > 0 across compiler.go, service_hcl.go, userdata.go, create.go
 - [Phase 25-01]: service_hcl.go HasGitHub gate controls github_token_inputs in service.hcl independently from compiler.go
+- [Phase 25-02]: AllowedRefs enforcement is EC2-only via pre-push hook; ECS gap is documented as v1 limitation
+- [Phase 25-02]: KM_ALLOWED_REFS uses colon separator; git config --system core.hooksPath applies system-wide
 
 ### Roadmap Evolution
 
@@ -362,6 +365,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-26T23:51:51.441Z
-Stopped at: Completed 25-01-PLAN.md
+Last session: 2026-03-27T00:02:19.893Z
+Stopped at: Completed 25-02-PLAN.md
 Resume file: None
