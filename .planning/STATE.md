@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 26-03-PLAN.md
-last_updated: "2026-03-27T04:48:36.107Z"
+stopped_at: Completed 26-02-PLAN.md
+last_updated: "2026-03-27T04:53:11.211Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 26
-  completed_phases: 24
+  completed_phases: 25
   total_plans: 85
-  completed_plans: 84
+  completed_plans: 85
   percent: 0
 ---
 
@@ -132,6 +132,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 23-credential-rotation P01 | 266s | 1 tasks | 2 files |
 | Phase 23-credential-rotation P02 | 412s | 2 tasks | 3 files |
 | Phase 26 P03 | 4 | 2 tasks | 8 files |
+| Phase 26-live-operations-hardening P02 | 18min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -353,6 +354,8 @@ Recent decisions affecting current work:
 - [Phase 23-credential-rotation]: rollSSMAdapter wraps *ssm.Client as compile-time RollSSMAPI satisfier
 - [Phase 26]: Used helpText() for extend/stop Long fields rather than hardcoded strings for consistency
 - [Phase 26]: Did not add km ext/km log aliases — they don't save significant typing
+- [Phase 26-live-operations-hardening]: Store MaxLifetime in SandboxMetadata (not reload profile) to keep extend path simple
+- [Phase 26-live-operations-hardening]: Export CheckMaxLifetime() for unit testing without AWS mock infrastructure
 
 ### Roadmap Evolution
 
@@ -389,6 +392,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-27T04:48:36.103Z
-Stopped at: Completed 26-03-PLAN.md
+Last session: 2026-03-27T04:53:11.208Z
+Stopped at: Completed 26-02-PLAN.md
 Resume file: None
