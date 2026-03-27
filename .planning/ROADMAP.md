@@ -560,7 +560,7 @@ Plans:
   2. Operator emails a YAML profile to `create@sandboxes.{domain}` with `KM-AUTH: <phrase>` in the body; the email-create Lambda parses the MIME attachment, validates the safe phrase against SSM, and triggers sandbox creation via EventBridge — wrong or missing phrases result in a rejection email
   3. The create-handler Lambda runs as a container image (ECR, arm64) bundling km binary + terraform + terragrunt + infra/modules; EventBridge rule routes SandboxCreate events to it with 0 retry attempts
   4. On success or failure, the operator receives an email notification with sandbox ID and connection details (success) or error details (failure)
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
 - [ ] 22-01-PLAN.md — EventBridge SDK package + km create --remote flag + create-handler Lambda (REMOTE-01, REMOTE-02, REMOTE-05, REMOTE-06)
