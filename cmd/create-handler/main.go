@@ -12,6 +12,7 @@
 package main
 
 import (
+	"archive/tar"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -19,8 +20,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -227,7 +228,7 @@ func downloadS3File(ctx context.Context, client S3GetAPI, bucket, key, localPath
 	return err
 }
 
-// extractTarGz extracts a .tar.gz file to the given directory.
+// extractTarGz extracts a .tar.gz file to the given directory using pure Go.
 func extractTarGz(tarPath, destDir string) error {
 	f, err := os.Open(tarPath)
 	if err != nil {
@@ -241,11 +242,45 @@ func extractTarGz(tarPath, destDir string) error {
 	}
 	defer gr.Close()
 
-	cmd := exec.Command("tar", "xf", "-", "-C", destDir)
-	cmd.Stdin = gr
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("tar extract: %s: %w", string(out), err)
+	tr := tar.NewReader(gr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("tar read: %w", err)
+		}
+
+		target := filepath.Join(destDir, hdr.Name)
+
+		// Prevent path traversal
+		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(destDir)+string(os.PathSeparator)) {
+			return fmt.Errorf("tar entry %q escapes destination", hdr.Name)
+		}
+
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			out, err := os.Create(target)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(out, tr); err != nil {
+				out.Close()
+				return err
+			}
+			out.Close()
+			if err := os.Chmod(target, os.FileMode(hdr.Mode)); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
