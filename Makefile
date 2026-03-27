@@ -20,7 +20,7 @@ KM_ARTIFACTS_BUCKET ?=
 
 SIDECARS := dns-proxy http-proxy audit-log
 
-.PHONY: sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas clean
+.PHONY: sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas build-create-handler build-email-create-handler push-create-handler clean
 
 ## sidecars: cross-compile Go sidecars and upload binaries + tracing config to S3
 sidecars:
@@ -55,9 +55,9 @@ ecr-login:
 	aws ecr get-login-password --region $(REGION) | \
 	  docker login --username AWS --password-stdin $(ECR_REGISTRY)
 
-## ecr-repos: ensure all sidecar ECR repositories exist
+## ecr-repos: ensure all sidecar and Lambda container ECR repositories exist
 ecr-repos:
-	@for name in km-dns-proxy km-http-proxy km-audit-log km-tracing; do \
+	@for name in km-dns-proxy km-http-proxy km-audit-log km-tracing km-create-handler; do \
 	  aws ecr describe-repositories --region $(REGION) --repository-names $$name 2>/dev/null || \
 	  aws ecr create-repository --region $(REGION) --repository-name $$name; \
 	done
@@ -76,11 +76,42 @@ build-lambdas: clean
 	cd build && zip -j budget-enforcer.zip bootstrap && rm bootstrap
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/bootstrap ./cmd/github-token-refresher/
 	cd build && zip -j github-token-refresher.zip bootstrap && rm bootstrap
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/bootstrap-email-create ./cmd/email-create-handler/
+	cd build && cp bootstrap-email-create bootstrap && zip -j email-create-handler.zip bootstrap && rm bootstrap
 	@echo ""
 	@echo "Lambda deployment packages built:"
 	@echo "  build/ttl-handler.zip"
 	@echo "  build/budget-enforcer.zip"
 	@echo "  build/github-token-refresher.zip"
+	@echo "  build/email-create-handler.zip"
+
+## build-create-handler: compile Go binaries needed for the create-handler container image
+## Run this before `make push-create-handler`
+build-create-handler:
+	@mkdir -p build
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/km-create-handler ./cmd/create-handler/
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/km ./cmd/km/
+	@echo ""
+	@echo "Create-handler binaries built:"
+	@echo "  build/km-create-handler  (Lambda entry point)"
+	@echo "  build/km                 (subprocess binary bundled in container)"
+
+## build-email-create-handler: compile and zip the email-create-handler Lambda binary
+build-email-create-handler:
+	@mkdir -p build
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/bootstrap-email-create ./cmd/email-create-handler/
+	cd build && cp bootstrap-email-create bootstrap && zip -j email-create-handler.zip bootstrap && rm bootstrap
+	@echo ""
+	@echo "Email-create-handler package built:"
+	@echo "  build/email-create-handler.zip"
+
+## push-create-handler: build and push the create-handler container image to ECR
+## Requires: make build-create-handler first, and ECR authentication (make ecr-login)
+push-create-handler: ecr-login
+	docker buildx build --platform linux/arm64 \
+	  --file cmd/create-handler/Dockerfile \
+	  --tag $(ECR_REGISTRY)/km-create-handler:$(VERSION) \
+	  --push .
 
 ## ecr-push: build and push Docker images for all 4 sidecars to ECR
 ecr-push: ecr-login ecr-repos

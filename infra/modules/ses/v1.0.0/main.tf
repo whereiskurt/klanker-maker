@@ -67,9 +67,62 @@ resource "aws_ses_active_receipt_rule_set" "km_sandbox" {
   rule_set_name = aws_ses_receipt_rule_set.km_sandbox.rule_set_name
 }
 
+# Create-inbound receipt rule: route emails to create@{domain} to a separate
+# S3 prefix (mail/create/) which triggers the email-create-handler Lambda.
+# This rule has position 1 (higher priority) so it matches before sandbox-inbound.
+# Conditional on email_create_handler_arn being set — safe to deploy without it.
+resource "aws_ses_receipt_rule" "create_inbound" {
+  count = var.email_create_handler_arn != "" ? 1 : 0
+
+  name          = "km-create-inbound"
+  rule_set_name = aws_ses_receipt_rule_set.km_sandbox.rule_set_name
+  recipients    = ["create@${var.domain}"]
+  enabled       = true
+  scan_enabled  = false
+
+  s3_action {
+    bucket_name       = var.artifact_bucket_name
+    object_key_prefix = "mail/create/"
+    position          = 1
+  }
+
+  depends_on = [aws_s3_bucket_policy.ses_inbound, aws_ses_active_receipt_rule_set.km_sandbox]
+}
+
+# Lambda permission: allow S3 to invoke the email-create-handler Lambda
+# when a new object is written to the mail/create/ prefix.
+resource "aws_lambda_permission" "s3_email_create" {
+  count = var.email_create_handler_arn != "" ? 1 : 0
+
+  statement_id  = "AllowS3InvokeEmailCreate"
+  action        = "lambda:InvokeFunction"
+  function_name = var.email_create_handler_arn
+  principal     = "s3.amazonaws.com"
+  source_arn    = var.artifact_bucket_arn
+}
+
+# S3 event notification: trigger email-create-handler Lambda on mail/create/ prefix writes.
+# Note: Only one aws_s3_bucket_notification can exist per bucket. If another module
+# also manages S3 notifications on this bucket, consolidate here.
+resource "aws_s3_bucket_notification" "email_create" {
+  count = var.email_create_handler_arn != "" ? 1 : 0
+
+  bucket = var.artifact_bucket_name
+
+  lambda_function {
+    lambda_function_arn = var.email_create_handler_arn
+    events              = ["s3:ObjectCreated:*"]
+    filter_prefix       = "mail/create/"
+  }
+
+  depends_on = [aws_lambda_permission.s3_email_create]
+}
+
 # Inbound receipt rule: store all sandbox email to S3 under mail/ prefix.
 # Recipients filter uses the domain wildcard. The sandbox-id is embedded in
 # the To address; agents parse headers to identify which sandbox owns the message.
+# Position 2 — lower priority than create-inbound (position 1) so create@ is
+# handled first by the create-inbound rule when email_create_handler_arn is set.
 resource "aws_ses_receipt_rule" "sandbox_inbound" {
   name          = "sandbox-inbound"
   rule_set_name = aws_ses_receipt_rule_set.km_sandbox.rule_set_name
@@ -82,6 +135,8 @@ resource "aws_ses_receipt_rule" "sandbox_inbound" {
     object_key_prefix = "mail/"
     position          = 1
   }
+
+  after = var.email_create_handler_arn != "" ? aws_ses_receipt_rule.create_inbound[0].name : null
 
   depends_on = [aws_s3_bucket_policy.ses_inbound, aws_ses_active_receipt_rule_set.km_sandbox]
 }
