@@ -239,7 +239,9 @@ func newRsyncLoadCmd(cfg *config.Config) *cobra.Command {
 
 // newRsyncViewCmd creates "km rsync view <name>".
 func newRsyncViewCmd(cfg *config.Config) *cobra.Command {
-	return &cobra.Command{
+	var maxDepth int
+
+	cmd := &cobra.Command{
 		Use:          "view <name>",
 		Short:        "Show contents of a saved snapshot in tree format",
 		Args:         cobra.ExactArgs(1),
@@ -324,10 +326,13 @@ func newRsyncViewCmd(cfg *config.Config) *cobra.Command {
 				node.size = e.size
 			}
 
-			printTree(root, "", true)
+			printTree(root, "", 0, maxDepth)
 			return nil
 		},
 	}
+
+	cmd.Flags().IntVar(&maxDepth, "depth", 0, "Limit tree depth (0 = unlimited)")
+	return cmd
 }
 
 // treeNode represents a file or directory in the snapshot tree.
@@ -339,8 +344,8 @@ type treeNode struct {
 }
 
 // printTree renders a tree node and its children in `tree` command format.
-func printTree(node *treeNode, prefix string, isRoot bool) {
-	// Collect and sort children
+// maxDepth of 0 means unlimited; otherwise stops descending at that depth.
+func printTree(node *treeNode, prefix string, depth, maxDepth int) {
 	names := make([]string, 0, len(node.children))
 	for name := range node.children {
 		names = append(names, name)
@@ -360,7 +365,9 @@ func printTree(node *treeNode, prefix string, isRoot bool) {
 
 		if child.isDir || len(child.children) > 0 {
 			fmt.Printf("  %s%s%s/\n", prefix, connector, name)
-			printTree(child, prefix+childPrefix, false)
+			if maxDepth == 0 || depth+1 < maxDepth {
+				printTree(child, prefix+childPrefix, depth+1, maxDepth)
+			}
 		} else {
 			fmt.Printf("  %s%s%s (%s)\n", prefix, connector, name, formatSize(child.size))
 		}
