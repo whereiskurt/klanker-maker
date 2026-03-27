@@ -33,6 +33,7 @@ Paths are relative to the shell user's home directory.`,
 	cmd.AddCommand(newRsyncListCmd(cfg))
 	cmd.AddCommand(newRsyncLoadCmd(cfg))
 	cmd.AddCommand(newRsyncViewCmd(cfg))
+	cmd.AddCommand(newRsyncDeleteCmd(cfg))
 
 	return cmd
 }
@@ -165,6 +166,68 @@ func newRsyncListCmd(cfg *config.Config) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// newRsyncDeleteCmd creates "km rsync delete <name>".
+func newRsyncDeleteCmd(cfg *config.Config) *cobra.Command {
+	var yes bool
+
+	cmd := &cobra.Command{
+		Use:          "delete <name>",
+		Short:        "Delete a saved snapshot",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+			name := args[0]
+			bucket := cfg.ArtifactsBucket
+			if bucket == "" {
+				return fmt.Errorf("artifacts_bucket not configured")
+			}
+
+			s3Key := fmt.Sprintf("rsync/%s.tar.gz", name)
+
+			awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
+			if err != nil {
+				return fmt.Errorf("load AWS config: %w", err)
+			}
+			s3Client := s3.NewFromConfig(awsCfg)
+
+			// Check if snapshot exists
+			_, err = s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+				Bucket: awssdk.String(bucket),
+				Key:    awssdk.String(s3Key),
+			})
+			if err != nil {
+				return fmt.Errorf("snapshot %q not found", name)
+			}
+
+			// Confirm unless --yes
+			if !yes {
+				fmt.Printf("Delete snapshot %q? [y/N] ", name)
+				var answer string
+				fmt.Scanln(&answer)
+				if answer != "y" && answer != "Y" && answer != "yes" {
+					fmt.Println("Aborted.")
+					return nil
+				}
+			}
+
+			_, err = s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+				Bucket: awssdk.String(bucket),
+				Key:    awssdk.String(s3Key),
+			})
+			if err != nil {
+				return fmt.Errorf("delete snapshot: %w", err)
+			}
+
+			fmt.Printf("  Deleted snapshot %q\n", name)
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&yes, "yes", false, "Skip confirmation prompt")
+	return cmd
 }
 
 // newRsyncLoadCmd creates "km rsync load <sandbox> <name>".
