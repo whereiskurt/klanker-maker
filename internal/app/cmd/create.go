@@ -17,6 +17,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	iampkg "github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/pricing"
@@ -70,6 +71,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	var onDemand bool
 	var awsProfile string
 	var verbose bool
+	var remote bool
 
 	cmd := &cobra.Command{
 		Use:   "create <profile.yaml>",
@@ -79,6 +81,9 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if awsProfile == "" {
 				awsProfile = "klanker-terraform"
+			}
+			if remote {
+				return runCreateRemote(cfg, args[0], onDemand, awsProfile)
 			}
 			return runCreate(cfg, args[0], onDemand, awsProfile, verbose)
 		},
@@ -90,6 +95,8 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 		"AWS CLI profile to use")
 	cmd.Flags().BoolVar(&verbose, "verbose", false,
 		"Show full terragrunt/terraform output")
+	cmd.Flags().BoolVar(&remote, "remote", false,
+		"Dispatch sandbox creation to a Lambda (remote create) — uploads artifacts to S3 and publishes EventBridge event")
 
 	return cmd
 }
@@ -662,6 +669,179 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 			}
 		}
 	}
+
+	return nil
+}
+
+// runCreateRemote compiles the profile locally, uploads artifacts to S3, and publishes
+// a SandboxCreate event to EventBridge so the create-handler Lambda can run terragrunt
+// in a compute environment that bundles the required binaries.
+//
+// This is the --remote dispatch path for km create. It performs Steps 1-7 of runCreate
+// (parse, validate, generate ID, compile) but does NOT create a sandbox directory or
+// run terragrunt locally. Instead it:
+//  1. Uploads compiled artifacts to S3 under remote-create/{sandbox-id}/
+//  2. Publishes a SandboxCreate EventBridge event with the artifact location
+//
+// The create-handler Lambda downloads the artifacts, runs km create as a subprocess,
+// and sends notifications on success/failure.
+func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, awsProfile string) error {
+	ctx := context.Background()
+
+	// Step 1: Read profile file
+	raw, err := os.ReadFile(profilePath)
+	if err != nil {
+		return fmt.Errorf("cannot read profile %s: %w", profilePath, err)
+	}
+
+	// Step 2: Parse profile
+	parsed, err := profile.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("failed to parse profile %s: %w", profilePath, err)
+	}
+
+	// Step 3: Resolve inheritance + validate
+	var resolvedProfile *profile.SandboxProfile
+	if parsed.Extends != "" {
+		fileDir := filepath.Dir(profilePath)
+		searchPaths := append([]string{fileDir}, cfg.ProfileSearchPaths...)
+		resolvedProfile, err = profile.Resolve(parsed.Extends, searchPaths)
+		if err != nil {
+			return fmt.Errorf("failed to resolve extends %q: %w", parsed.Extends, err)
+		}
+		schemaErrs := profile.ValidateSchema(raw)
+		semanticErrs := profile.ValidateSemantic(resolvedProfile)
+		allErrs := append(schemaErrs, semanticErrs...)
+		if len(allErrs) > 0 {
+			for _, e := range allErrs {
+				fmt.Fprintf(os.Stderr, "ERROR: %s: %s\n", profilePath, e.Error())
+			}
+			return fmt.Errorf("profile %s failed validation", profilePath)
+		}
+	} else {
+		errs := profile.Validate(raw)
+		if len(errs) > 0 {
+			for _, e := range errs {
+				fmt.Fprintf(os.Stderr, "ERROR: %s: %s\n", profilePath, e.Error())
+			}
+			return fmt.Errorf("profile %s failed validation", profilePath)
+		}
+		resolvedProfile = parsed
+	}
+
+	// Step 4: Generate sandbox ID
+	sandboxID := compiler.GenerateSandboxID()
+	fmt.Println()
+	fmt.Printf("km create --remote — %s\n", sandboxID)
+	fmt.Println(strings.Repeat("─", 50))
+
+	// Step 5: Load AWS credentials
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, awsProfile)
+	if err != nil {
+		return fmt.Errorf("failed to load AWS config (profile=%s): %w", awsProfile, err)
+	}
+	if err := awspkg.ValidateCredentials(ctx, awsCfg); err != nil {
+		return fmt.Errorf("AWS credential validation failed — check that profile %q is configured: %w", awsProfile, err)
+	}
+
+	// Step 6: Load network config for compilation
+	repoRoot := findRepoRoot()
+	region := resolvedProfile.Spec.Runtime.Region
+	regionLabel := compiler.RegionLabel(region)
+	networkOutputs, err := LoadNetworkOutputs(repoRoot, regionLabel)
+	if err != nil {
+		return fmt.Errorf("failed to load network config for %s: %w\nRun 'km init --region %s' first", region, err, region)
+	}
+	networkDomain := cfg.Domain
+	if networkDomain == "" {
+		networkDomain = "klankermaker.ai"
+	}
+	network := &compiler.NetworkConfig{
+		VPCID:             networkOutputs.VPCID,
+		PublicSubnets:     networkOutputs.PublicSubnets,
+		AvailabilityZones: networkOutputs.AvailabilityZones,
+		RegionLabel:       regionLabel,
+		EmailDomain:       "sandboxes." + networkDomain,
+	}
+
+	// Step 7: Compile profile into artifacts
+	artifacts, err := compiler.Compile(resolvedProfile, sandboxID, onDemand, network)
+	if err != nil {
+		return fmt.Errorf("failed to compile profile: %w", err)
+	}
+
+	// Determine artifact bucket
+	artifactBucket := cfg.ArtifactsBucket
+	if artifactBucket == "" {
+		artifactBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
+	}
+	if artifactBucket == "" {
+		return fmt.Errorf("artifact bucket not configured — set KM_ARTIFACTS_BUCKET or configure via km configure")
+	}
+
+	// Determine operator email
+	operatorEmail := os.Getenv("KM_OPERATOR_EMAIL")
+
+	// Step 8: Upload compiled artifacts to S3 under remote-create/{sandbox-id}/
+	artifactPrefix := "remote-create/" + sandboxID
+	s3Client := s3.NewFromConfig(awsCfg)
+
+	type artifact struct {
+		key     string
+		content string
+		mime    string
+	}
+	toUpload := []artifact{
+		{key: artifactPrefix + "/service.hcl", content: artifacts.ServiceHCL, mime: "text/plain"},
+		{key: artifactPrefix + "/user-data.sh", content: artifacts.UserData, mime: "text/plain"},
+		{key: artifactPrefix + "/.km-profile.yaml", content: string(raw), mime: "application/x-yaml"},
+	}
+	if artifacts.BudgetEnforcerHCL != "" {
+		toUpload = append(toUpload, artifact{
+			key:     artifactPrefix + "/budget-enforcer.hcl",
+			content: artifacts.BudgetEnforcerHCL,
+			mime:    "text/plain",
+		})
+	}
+	if artifacts.GitHubTokenHCL != "" {
+		toUpload = append(toUpload, artifact{
+			key:     artifactPrefix + "/github-token.hcl",
+			content: artifacts.GitHubTokenHCL,
+			mime:    "text/plain",
+		})
+	}
+
+	fmt.Printf("  Uploading artifacts to s3://%s/%s/\n", artifactBucket, artifactPrefix)
+	for _, a := range toUpload {
+		_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:      aws.String(artifactBucket),
+			Key:         aws.String(a.key),
+			Body:        strings.NewReader(a.content),
+			ContentType: aws.String(a.mime),
+		})
+		if putErr != nil {
+			return fmt.Errorf("upload artifact %s: %w", a.key, putErr)
+		}
+	}
+
+	// Step 9: Publish SandboxCreate event to EventBridge
+	ebClient := eventbridge.NewFromConfig(awsCfg)
+	detail := awspkg.SandboxCreateDetail{
+		SandboxID:      sandboxID,
+		ArtifactBucket: artifactBucket,
+		ArtifactPrefix: artifactPrefix,
+		OperatorEmail:  operatorEmail,
+		OnDemand:       onDemand,
+	}
+	if ebErr := awspkg.PutSandboxCreateEvent(ctx, ebClient, detail); ebErr != nil {
+		return fmt.Errorf("publish SandboxCreate event: %w", ebErr)
+	}
+
+	fmt.Println()
+	fmt.Println(strings.Repeat("─", 50))
+	fmt.Printf("Remote create dispatched: %s\n", sandboxID)
+	fmt.Printf("  Artifacts: s3://%s/%s/\n", artifactBucket, artifactPrefix)
+	fmt.Printf("  The create-handler Lambda will provision the sandbox and send a notification.\n")
 
 	return nil
 }
