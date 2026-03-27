@@ -438,6 +438,36 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		}
 	}
 
+	// Step 11c: Upload init scripts to S3 if profile specifies any.
+	if len(resolvedProfile.Spec.Execution.InitScripts) > 0 {
+		profileDir := filepath.Dir(profilePath)
+		for _, scriptFile := range resolvedProfile.Spec.Execution.InitScripts {
+			scriptPath := filepath.Join(profileDir, scriptFile)
+			if _, statErr := os.Stat(scriptPath); os.IsNotExist(statErr) {
+				// Try repo root
+				scriptPath = filepath.Join(repoRoot, scriptFile)
+			}
+			scriptData, readErr := os.ReadFile(scriptPath)
+			if readErr != nil {
+				log.Warn().Err(readErr).Str("script", scriptFile).
+					Msg("failed to read init script (non-fatal)")
+				continue
+			}
+			s3Key := fmt.Sprintf("artifacts/%s/init-scripts/%s", sandboxID, filepath.Base(scriptFile))
+			if _, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
+				Bucket:      aws.String(artifactBucket),
+				Key:         aws.String(s3Key),
+				Body:        bytes.NewReader(scriptData),
+				ContentType: aws.String("application/x-shellscript"),
+			}); putErr != nil {
+				log.Warn().Err(putErr).Str("script", scriptFile).
+					Msg("failed to upload init script to S3 (non-fatal)")
+			} else {
+				fmt.Printf("  ✓ Init script uploaded: %s\n", scriptFile)
+			}
+		}
+	}
+
 	// Step 12: Create EventBridge TTL schedule if TTL is configured.
 	// Auto-discover Lambda ARN if not explicitly set.
 	// Non-fatal: sandbox is provisioned; operator can re-schedule manually if this fails.

@@ -209,6 +209,16 @@
                 "type": "string"
               },
               "description": "Additional environment variables to inject"
+            },
+            "initCommands": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Shell commands to run after sandbox starts, before user session"
+            },
+            "initScripts": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Local script file paths to upload to S3 and run on startup"
             }
           }
         },

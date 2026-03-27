@@ -522,6 +522,33 @@ chmod 755 /run/km
 echo "[km-bootstrap] Budget enforcement environment configured"
 {{- end }}
 
+{{- if .InitScripts }}
+# ============================================================
+# 7.5a. Profile init scripts (from execution.initScripts)
+# ============================================================
+echo "[km-bootstrap] Downloading and running init scripts..."
+KM_ARTIFACTS_BUCKET_SCRIPTS="{{ .KMArtifactsBucket }}"
+{{- range .InitScripts }}
+echo "[km-init-script] Downloading {{ . }}..."
+aws s3 cp "s3://${KM_ARTIFACTS_BUCKET_SCRIPTS}/artifacts/{{ $.SandboxID }}/init-scripts/{{ . }}" "/tmp/km-init-{{ . }}"
+chmod +x "/tmp/km-init-{{ . }}"
+echo "[km-init-script] Running {{ . }}..."
+"/tmp/km-init-{{ . }}"
+{{- end }}
+echo "[km-bootstrap] Init scripts complete"
+{{- end }}
+{{- if .InitCommands }}
+# ============================================================
+# 7.5b. Profile init commands (from execution.initCommands)
+# ============================================================
+echo "[km-bootstrap] Running init commands..."
+{{- range .InitCommands }}
+echo "[km-init] {{ . }}"
+{{ . }}
+{{- end }}
+echo "[km-bootstrap] Init commands complete"
+{{- end }}
+
 # ============================================================
 # 8. Sandbox ready signal
 # ============================================================
@@ -571,6 +598,10 @@ type userDataParams struct {
 	// OTPSecrets holds path + env name pairs for one-time-password secret injection.
 	// Each entry is fetched from SSM and deleted after first read.
 	OTPSecrets []otpSecret
+	// InitCommands is a list of shell commands to run after sidecar startup.
+	InitCommands []string
+	// InitScripts is a list of S3 keys for init scripts to download and execute.
+	InitScripts []string
 }
 
 // otpSecret holds an SSM path and derived env var name for an OTP secret.
@@ -654,6 +685,10 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 			})
 		}
 	}
+
+	// Populate init commands and scripts
+	params.InitCommands = p.Spec.Execution.InitCommands
+	params.InitScripts = p.Spec.Execution.InitScripts
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, params); err != nil {

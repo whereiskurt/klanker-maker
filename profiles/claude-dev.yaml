@@ -1,0 +1,156 @@
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: claude-dev
+  labels:
+    tier: development
+    tool: claude-code
+    builtin: "true"
+
+spec:
+  lifecycle:
+    ttl: "4h"
+    idleTimeout: "30m"
+    teardownPolicy: destroy
+
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.large
+    region: us-east-1
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    env:
+      SANDBOX_MODE: claude-dev
+      # Anthropic API via Bedrock
+      AWS_BEDROCK_REGION: us-east-1
+      ANTHROPIC_MODEL: anthropic.claude-sonnet-4-20250514-v1:0
+      # Claude Code settings
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+    initCommands:
+      # System packages
+      - "yum install -y git nodejs npm python3 python3-pip tar gzip unzip jq"
+      # Claude Code
+      - "npm install -g @anthropic-ai/claude-code"
+      # Workspace setup
+      - "mkdir -p /workspace && chown sandbox:sandbox /workspace"
+      - "su - sandbox -c 'cd /workspace && git config --global user.name \"Claude Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "whereiskurt/meshtk"
+        - "whereiskurt/defcon.run.34"
+      allowedRefs:
+        - "main"
+        - "develop"
+        - "feature/*"
+        - "fix/*"
+      permissions:
+        - read
+        - write
+
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+        - ".anthropic.com"
+        - ".github.com"
+        - ".githubusercontent.com"
+        - ".npmjs.org"
+        - ".nodejs.org"
+        - ".google.com"
+      allowedHosts:
+        - "api.anthropic.com"
+        - "statsig.anthropic.com"
+        - "api.github.com"
+        - "github.com"
+        - "registry.npmjs.org"
+        - "nodejs.org"
+        - "google.com"
+        - "www.google.com"
+      allowedMethods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+
+  budget:
+    compute:
+      maxSpendUSD: 10.00
+    ai:
+      maxSpendUSD: 25.00
+    warningThreshold: 0.80
+
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 100
+
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/network
+
+  policy:
+    allowShellEscape: false
+    allowedCommands:
+      - git
+      - node
+      - npm
+      - npx
+      - python3
+      - pip
+      - bash
+      - sh
+      - claude
+      - curl
+    filesystemPolicy:
+      readOnlyPaths: []
+      writablePaths:
+        - /workspace
+        - /tmp
+        - /home
+
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: off
+    allowedSenders:
+      - "self"
+
+  agent:
+    maxConcurrentTasks: 2
+    taskTimeout: "60m"
+    allowedTools:
+      - bash
+      - read_file
+      - write_file
+      - list_files

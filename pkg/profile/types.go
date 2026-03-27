@@ -144,6 +144,15 @@ type ExecutionSpec struct {
 	WorkingDir string `yaml:"workingDir"`
 	// Env is a map of additional environment variables to inject.
 	Env map[string]string `yaml:"env,omitempty"`
+	// InitCommands is a list of shell commands to run after the sandbox starts.
+	// Runs sequentially as root before the user session begins.
+	// Example: ["apt-get update", "npm install -g @anthropic/claude-code"]
+	InitCommands []string `yaml:"initCommands,omitempty"`
+	// InitScripts is a list of local script file paths to upload and run on startup.
+	// Paths are relative to the profile file or repo root.
+	// Scripts are uploaded to S3 alongside the profile and executed in order.
+	// Example: ["scripts/setup-claude.sh", "scripts/install-tools.sh"]
+	InitScripts []string `yaml:"initScripts,omitempty"`
 }
 
 // SourceAccessSpec controls access to source code repositories.
