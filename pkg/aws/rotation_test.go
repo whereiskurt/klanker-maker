@@ -71,6 +71,10 @@ func (m *mockRotationSSMAPI) GetParameter(ctx context.Context, input *ssm.GetPar
 	}, nil
 }
 
+func (m *mockRotationSSMAPI) DeleteParameter(ctx context.Context, input *ssm.DeleteParameterInput, optFns ...func(*ssm.Options)) (*ssm.DeleteParameterOutput, error) {
+	return &ssm.DeleteParameterOutput{}, nil
+}
+
 func (m *mockRotationSSMAPI) GetParametersByPath(ctx context.Context, input *ssm.GetParametersByPathInput, optFns ...func(*ssm.Options)) (*ssm.GetParametersByPathOutput, error) {
 	m.getParametersByPathCalled = true
 	m.getParametersByPathInput = input
