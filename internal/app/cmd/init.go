@@ -181,14 +181,14 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 
 	// Step 1: Build Lambda zips
 	fmt.Println()
-	fmt.Println("Building Lambdas...")
+	fmt.Printf("Building Lambdas [%s]...\n", version.String())
 	if err := buildLambdaZips(repoRoot); err != nil {
 		fmt.Printf("  [warn] Lambda build failed: %v\n", err)
 	}
 
 	// Step 2: Build and upload sidecars
 	fmt.Println()
-	fmt.Println("Building and uploading sidecars...")
+	fmt.Printf("Building and uploading sidecars [%s]...\n", version.String())
 	if cfg.ArtifactsBucket != "" {
 		if err := buildAndUploadSidecars(repoRoot, cfg.ArtifactsBucket); err != nil {
 			fmt.Printf("  [warn] Sidecar build/upload failed: %v\n", err)
