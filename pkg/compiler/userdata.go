@@ -177,6 +177,10 @@ done
 exit 0
 PREPUSH
 chmod +x /opt/km/hooks/pre-push
+# Install git if not present (needed for hooks and source access)
+if ! command -v git &>/dev/null; then
+  yum install -y git 2>&1 | tail -1
+fi
 git config --system core.hooksPath /opt/km/hooks
 echo "[km-bootstrap] Ref enforcement hooks installed (allowedRefs: {{ .AllowedRefs }})"
 {{- end }}
