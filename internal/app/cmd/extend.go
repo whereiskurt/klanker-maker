@@ -83,6 +83,11 @@ func runExtend(ctx context.Context, cfg *config.Config, sandboxID string, addDur
 		newExpiry = time.Now().Add(addDuration)
 	}
 
+	// Step 2b: Enforce MaxLifetime cap if set
+	if err := CheckMaxLifetime(meta, newExpiry); err != nil {
+		return err
+	}
+
 	// Step 3: Delete old schedule and create new one
 	if delErr := awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID); delErr != nil {
 		fmt.Printf(ansiYellow+"  [warn] could not delete old TTL schedule: %v"+ansiReset+"\n", delErr)
@@ -129,5 +134,32 @@ func runExtend(ctx context.Context, cfg *config.Config, sandboxID string, addDur
 	remaining := time.Until(newExpiry).Round(time.Second)
 	fmt.Printf(ansiGreen+"TTL extended for %s"+ansiReset+": new expiry in %s (%s)\n",
 		sandboxID, remaining, newExpiry.Local().Format("3:04:05 PM MST"))
+	return nil
+}
+
+// CheckMaxLifetime enforces the MaxLifetime cap from sandbox metadata.
+// If meta.MaxLifetime is empty, no cap is enforced (backward compatible).
+// If the proposed newExpiry exceeds CreatedAt + MaxLifetime, an error is returned
+// with a clear message including the cap duration and max expiry time.
+//
+// This function is exported so it can be unit tested without AWS dependencies.
+func CheckMaxLifetime(meta *awspkg.SandboxMetadata, newExpiry time.Time) error {
+	if meta.MaxLifetime == "" {
+		return nil
+	}
+	maxLifetimeDuration, err := time.ParseDuration(meta.MaxLifetime)
+	if err != nil {
+		// Malformed MaxLifetime — skip enforcement rather than blocking the user.
+		return fmt.Errorf("invalid maxLifetime %q in sandbox metadata: %w", meta.MaxLifetime, err)
+	}
+	maxExpiry := meta.CreatedAt.Add(maxLifetimeDuration)
+	if newExpiry.After(maxExpiry) {
+		return fmt.Errorf(
+			"extend would exceed max lifetime (%s); sandbox was created at %s, max expiry is %s",
+			meta.MaxLifetime,
+			meta.CreatedAt.UTC().Format("2006-01-02 15:04:05 UTC"),
+			maxExpiry.UTC().Format("2006-01-02 15:04:05 UTC"),
+		)
+	}
 	return nil
 }

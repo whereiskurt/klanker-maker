@@ -1,6 +1,7 @@
 package cmd_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -27,7 +28,8 @@ func TestExtendMaxLifetime_WithinCap(t *testing.T) {
 	}
 }
 
-// TestExtendMaxLifetime_ExceedsCap verifies that extending beyond MaxLifetime returns error.
+// TestExtendMaxLifetime_ExceedsCap verifies that extending beyond MaxLifetime returns error
+// with a clear message including the cap duration and sandbox creation time.
 func TestExtendMaxLifetime_ExceedsCap(t *testing.T) {
 	createdAt := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
 	// MaxLifetime = 48h; max expiry = 2026-03-22 12:00 UTC
@@ -44,10 +46,10 @@ func TestExtendMaxLifetime_ExceedsCap(t *testing.T) {
 		t.Fatal("expected error for newExpiry exceeding max lifetime cap, got nil")
 	}
 
-	// Error must mention the cap duration
+	// Error must mention the cap duration, creation time, and max expiry date
 	errMsg := err.Error()
 	for _, want := range []string{"max lifetime", "48h", "2026-03-22"} {
-		if !containsStr(errMsg, want) {
+		if !strings.Contains(errMsg, want) {
 			t.Errorf("error message missing %q; got: %s", want, errMsg)
 		}
 	}
@@ -88,21 +90,7 @@ func TestExtendMaxLifetime_ExpiredSandboxRespectsCap(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error: sandbox max lifetime (24h from creation 100h ago) is already exceeded")
 	}
-	if !containsStr(err.Error(), "max lifetime") {
+	if !strings.Contains(err.Error(), "max lifetime") {
 		t.Errorf("error message missing 'max lifetime'; got: %s", err.Error())
 	}
-}
-
-// containsStr is a helper to avoid importing strings in the test.
-func containsStr(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && stringContains(s, substr))
-}
-
-func stringContains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
