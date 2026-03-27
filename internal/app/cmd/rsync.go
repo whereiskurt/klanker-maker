@@ -1,8 +1,13 @@
 package cmd
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -28,6 +33,7 @@ Paths are relative to the shell user's home directory.`,
 	cmd.AddCommand(newRsyncSaveCmd(cfg))
 	cmd.AddCommand(newRsyncListCmd(cfg))
 	cmd.AddCommand(newRsyncLoadCmd(cfg))
+	cmd.AddCommand(newRsyncViewCmd(cfg))
 
 	return cmd
 }
@@ -229,6 +235,107 @@ func newRsyncLoadCmd(cfg *config.Config) *cobra.Command {
 			fmt.Printf("  Restoring...")
 			return pollSSMCommand(ctx, ssmClient, commandID, instanceID, "RSYNC_OK", name)
 		},
+	}
+}
+
+// newRsyncViewCmd creates "km rsync view <name>".
+func newRsyncViewCmd(cfg *config.Config) *cobra.Command {
+	return &cobra.Command{
+		Use:          "view <name>",
+		Short:        "Show contents of a saved snapshot in tree format",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+			name := args[0]
+
+			bucket := cfg.ArtifactsBucket
+			if bucket == "" {
+				return fmt.Errorf("artifacts_bucket not configured")
+			}
+
+			awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
+			if err != nil {
+				return fmt.Errorf("load AWS config: %w", err)
+			}
+
+			s3Client := s3.NewFromConfig(awsCfg)
+			s3Key := fmt.Sprintf("rsync/%s.tar.gz", name)
+
+			out, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+				Bucket: awssdk.String(bucket),
+				Key:    awssdk.String(s3Key),
+			})
+			if err != nil {
+				return fmt.Errorf("snapshot %q not found: %w", name, err)
+			}
+			defer out.Body.Close()
+
+			gz, err := gzip.NewReader(out.Body)
+			if err != nil {
+				return fmt.Errorf("decompress: %w", err)
+			}
+			defer gz.Close()
+
+			// Collect all entries
+			type entry struct {
+				path  string
+				size  int64
+				isDir bool
+			}
+			var entries []entry
+			var totalSize int64
+
+			tr := tar.NewReader(gz)
+			for {
+				hdr, err := tr.Next()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					return fmt.Errorf("read tar: %w", err)
+				}
+				entries = append(entries, entry{
+					path:  hdr.Name,
+					size:  hdr.Size,
+					isDir: hdr.Typeflag == tar.TypeDir,
+				})
+				totalSize += hdr.Size
+			}
+
+			sort.Slice(entries, func(i, j int) bool {
+				return entries[i].path < entries[j].path
+			})
+
+			printBanner("km rsync view", fmt.Sprintf("%s (%d files, %s)",
+				name, len(entries), formatSize(totalSize)))
+
+			// Build tree output
+			for _, e := range entries {
+				depth := strings.Count(e.path, string(filepath.Separator))
+				indent := strings.Repeat("│   ", depth)
+				base := filepath.Base(e.path)
+
+				if e.isDir {
+					fmt.Printf("  %s├── %s/\n", indent, base)
+				} else {
+					fmt.Printf("  %s├── %s (%s)\n", indent, base, formatSize(e.size))
+				}
+			}
+			return nil
+		},
+	}
+}
+
+// formatSize returns a human-readable size string.
+func formatSize(bytes int64) string {
+	switch {
+	case bytes >= 1024*1024:
+		return fmt.Sprintf("%.1fMB", float64(bytes)/(1024*1024))
+	case bytes >= 1024:
+		return fmt.Sprintf("%.1fKB", float64(bytes)/1024)
+	default:
+		return fmt.Sprintf("%dB", bytes)
 	}
 }
 
