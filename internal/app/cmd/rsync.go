@@ -331,7 +331,15 @@ func newRsyncViewCmd(cfg *config.Config) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().IntVar(&maxDepth, "depth", 0, "Limit tree depth (0 = unlimited)")
+	var full bool
+	cmd.Flags().IntVar(&maxDepth, "depth", 1, "Limit tree depth (default 1)")
+	cmd.Flags().BoolVar(&full, "full", false, "Show full tree (no depth limit)")
+	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
+		if full {
+			maxDepth = 0
+		}
+		return nil
+	}
 	return cmd
 }
 
@@ -364,14 +372,27 @@ func printTree(node *treeNode, prefix string, depth, maxDepth int) {
 		}
 
 		if child.isDir || len(child.children) > 0 {
-			fmt.Printf("  %s%s%s/\n", prefix, connector, name)
-			if maxDepth == 0 || depth+1 < maxDepth {
+			childCount := countDescendants(child)
+			if maxDepth > 0 && depth+1 >= maxDepth {
+				// At depth limit — show summary
+				fmt.Printf("  %s%s%s/ (%d items)\n", prefix, connector, name, childCount)
+			} else {
+				fmt.Printf("  %s%s%s/\n", prefix, connector, name)
 				printTree(child, prefix+childPrefix, depth+1, maxDepth)
 			}
 		} else {
 			fmt.Printf("  %s%s%s (%s)\n", prefix, connector, name, formatSize(child.size))
 		}
 	}
+}
+
+// countDescendants returns the total number of files and dirs under a node.
+func countDescendants(node *treeNode) int {
+	count := len(node.children)
+	for _, child := range node.children {
+		count += countDescendants(child)
+	}
+	return count
 }
 
 // formatSize returns a human-readable size string.
