@@ -625,7 +625,7 @@ Plans:
 **Goal:** Harden the platform after extensive live testing (~60 commits). Fix remaining test failures, backfill critical-path test coverage, polish CLI UX (aliases, completion, help text, color), test --remote flag, audit multi-region code, and implement max lifetime cap.
 **Requirements**: [HARD-01, HARD-02, HARD-03, HARD-04, HARD-05, HARD-06]
 **Depends on:** Phase 25
-**Plans:** 5 plans (4 complete, 1 gap closure)
+**Plans:** 5/4 plans complete
 
 Plans:
 - [x] 26-01-SUMMARY.md — Ad-hoc live operations work (bootstrap, init, create, destroy, TTL, idle, sidecars, CLI polish)
