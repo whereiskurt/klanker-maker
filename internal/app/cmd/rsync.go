@@ -75,14 +75,14 @@ func newRsyncSaveCmd(cfg *config.Config) *cobra.Command {
 			}
 			s3Key := fmt.Sprintf("rsync/%s.tar.gz", name)
 
-			// Use $HOME of the shell user (from /etc/passwd) — not hardcoded to /home/sandbox
+			// Find the sandbox user's home and tar the configured paths
 			var quotedPaths []string
 			for _, p := range paths {
 				quotedPaths = append(quotedPaths, fmt.Sprintf("'%s'", p))
 			}
 			shellCmd := fmt.Sprintf(
-				`SHELL_USER=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1; exit}' /etc/passwd) && `+
-					`SHELL_HOME=$(eval echo "~$SHELL_USER") && `+
+				`SHELL_HOME=$(getent passwd sandbox | cut -d: -f6) && `+
+					`[ -n "$SHELL_HOME" ] || SHELL_HOME=/home/sandbox && `+
 					`cd "$SHELL_HOME" && PATHS="" && `+
 					`for p in %s; do [ -e "$p" ] && PATHS="$PATHS $p"; done && `+
 					`if [ -n "$PATHS" ]; then `+
@@ -201,11 +201,11 @@ func newRsyncLoadCmd(cfg *config.Config) *cobra.Command {
 			s3Key := fmt.Sprintf("rsync/%s.tar.gz", name)
 
 			shellCmd := fmt.Sprintf(
-				`SHELL_USER=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1; exit}' /etc/passwd) && `+
-					`SHELL_HOME=$(eval echo "~$SHELL_USER") && `+
+				`SHELL_HOME=$(getent passwd sandbox | cut -d: -f6) && `+
+					`[ -n "$SHELL_HOME" ] || SHELL_HOME=/home/sandbox && `+
 					`aws s3 cp "s3://%s/%s" /tmp/km-rsync.tar.gz && `+
 					`cd "$SHELL_HOME" && tar xzf /tmp/km-rsync.tar.gz && `+
-					`chown -R "$SHELL_USER:$SHELL_USER" "$SHELL_HOME" && `+
+					`chown -R sandbox:sandbox "$SHELL_HOME" && `+
 					`echo "RSYNC_OK: restored"`,
 				bucket, s3Key,
 			)
