@@ -219,6 +219,10 @@
               "type": "array",
               "items": { "type": "string" },
               "description": "Local script file paths to upload to S3 and run on startup"
+            },
+            "rsync": {
+              "type": "string",
+              "description": "Name of a saved home directory snapshot to restore on boot (created via km rsync save)"
             }
           }
         },

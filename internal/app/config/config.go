@@ -104,6 +104,10 @@ type Config struct {
 	// Set via safe_phrase in km-config.yaml or KM_SAFE_PHRASE environment variable.
 	// Written to SSM at /km/config/remote-create/safe-phrase during km init.
 	SafePhrase string
+
+	// RsyncPaths is the list of relative paths (from sandbox user $HOME) to
+	// include in rsync snapshots. Default: [".claude", ".bashrc", ".gitconfig"]
+	RsyncPaths []string
 }
 
 // isSetByEnv returns true if the given viper key has been overridden by an environment
@@ -136,6 +140,7 @@ func Load() (*Config, error) {
 	v.SetDefault("identity_table_name", "km-identities")
 	v.SetDefault("artifacts_bucket", "")
 	v.SetDefault("aws_profile", "")
+	v.SetDefault("rsync_paths", []string{".claude", ".bashrc", ".bash_profile", ".gitconfig"})
 
 	// Primary config file: ~/.km/config.yaml
 	v.SetConfigName("config")
@@ -182,6 +187,7 @@ func Load() (*Config, error) {
 			"route53_zone_id",
 			"operator_email",
 			"safe_phrase",
+			"rsync_paths",
 		} {
 			if v2.IsSet(key) && !isSetByEnv(v, key) {
 				v.Set(key, v2.Get(key))
@@ -213,6 +219,7 @@ func Load() (*Config, error) {
 		Route53ZoneID:        v.GetString("route53_zone_id"),
 		OperatorEmail:        v.GetString("operator_email"),
 		SafePhrase:           v.GetString("safe_phrase"),
+		RsyncPaths:           v.GetStringSlice("rsync_paths"),
 	}
 
 	return cfg, nil

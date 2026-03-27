@@ -153,6 +153,9 @@ type ExecutionSpec struct {
 	// Scripts are uploaded to S3 alongside the profile and executed in order.
 	// Example: ["scripts/setup-claude.sh", "scripts/install-tools.sh"]
 	InitScripts []string `yaml:"initScripts,omitempty"`
+	// Rsync is the name of a saved home directory snapshot to restore on boot.
+	// Created via `km rsync save <sandbox> <name>`. Restored from S3 before initCommands.
+	Rsync string `yaml:"rsync,omitempty"`
 }
 
 // SourceAccessSpec controls access to source code repositories.

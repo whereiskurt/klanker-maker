@@ -532,6 +532,19 @@ chmod 755 /run/km
 echo "[km-bootstrap] Budget enforcement environment configured"
 {{- end }}
 
+{{- if .Rsync }}
+# ============================================================
+# 7.4. Rsync restore (from S3)
+# ============================================================
+echo "[km-bootstrap] Restoring rsync snapshot: {{ .Rsync }}"
+SHELL_USER=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1; exit}' /etc/passwd)
+SHELL_HOME=$(eval echo "~$SHELL_USER")
+aws s3 cp "s3://{{ .KMArtifactsBucket }}/rsync/{{ .Rsync }}.tar.gz" /tmp/km-rsync.tar.gz 2>/dev/null && {
+  cd "$SHELL_HOME" && tar xzf /tmp/km-rsync.tar.gz
+  chown -R "$SHELL_USER:$SHELL_USER" "$SHELL_HOME"
+  echo "[km-bootstrap] Rsync snapshot {{ .Rsync }} restored into $SHELL_HOME"
+} || echo "[km-bootstrap] WARNING: rsync snapshot {{ .Rsync }} not found in S3 (skipped)"
+{{- end }}
 {{- if or .InitCommands .InitScripts }}
 # ============================================================
 # 7.5. Profile init (commands + scripts downloaded from S3)
@@ -595,6 +608,8 @@ type userDataParams struct {
 	// OTPSecrets holds path + env name pairs for one-time-password secret injection.
 	// Each entry is fetched from SSM and deleted after first read.
 	OTPSecrets []otpSecret
+	// Rsync is the name of a saved home snapshot to restore on boot.
+	Rsync string
 	// InitCommands is a list of shell commands to run after sidecar startup.
 	InitCommands []string
 	// InitScripts is a list of S3 keys for init scripts to download and execute.
@@ -683,7 +698,8 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		}
 	}
 
-	// Populate init commands and scripts
+	// Populate rsync and init commands
+	params.Rsync = p.Spec.Execution.Rsync
 	params.InitCommands = p.Spec.Execution.InitCommands
 	params.InitScripts = p.Spec.Execution.InitScripts
 
