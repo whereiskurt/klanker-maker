@@ -79,7 +79,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 		Long:  helpText("create"),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if awsProfile == "" {
+			if awsProfile == "" && os.Getenv("KM_REMOTE_CREATE") == "" {
 				awsProfile = "klanker-terraform"
 			}
 			if remote {
