@@ -275,11 +275,18 @@ UNIT
 # don't trigger the idle detector.
 # Installed as /etc/profile.d/ so it applies to all login shells (SSM sessions).
 cat > /etc/profile.d/km-audit.sh << 'HOOK'
+# Guard: only install once per shell (profile.d can be sourced multiple times)
+[ -n "$_KM_AUDIT_INSTALLED" ] && return 0
+_KM_AUDIT_INSTALLED=1
+
 _km_audit() {
   local cmd
-  cmd=$(history 1 | sed 's/^ *[0-9]* *//')
+  cmd=$(HISTTIMEFORMAT= history 1 | sed 's/^ *[0-9]* *//')
+  [ -z "$cmd" ] && return 0
+  # Escape backslashes first, then double-quotes, then newlines for valid JSON
+  cmd=$(printf '%s' "$cmd" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/ /g' | head -c 500)
   printf '{"timestamp":"%s","sandbox_id":"%s","event_type":"command","source":"shell","detail":{"command":"%s","user":"%s"}}\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "{{ .SandboxID }}" "$(echo "$cmd" | sed 's/"/\\"/g' | head -c 500)" "$(whoami)" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "{{ .SandboxID }}" "$cmd" "$(whoami)" \
     > /run/km/audit-pipe 2>/dev/null
 }
 PROMPT_COMMAND="_km_audit;${PROMPT_COMMAND}"
