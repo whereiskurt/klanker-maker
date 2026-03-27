@@ -443,6 +443,7 @@ func buildLambdaZips(repoRoot string) error {
 		{name: "ttl-handler", srcDir: "cmd/ttl-handler"},
 		{name: "budget-enforcer", srcDir: "cmd/budget-enforcer"},
 		{name: "github-token-refresher", srcDir: "cmd/github-token-refresher"},
+		{name: "email-create-handler", srcDir: "cmd/email-create-handler"},
 	}
 
 	// Ensure terraform binary is available for bundling with ttl-handler
