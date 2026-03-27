@@ -14,6 +14,13 @@ import (
 
 // NewStopCmd creates the "km stop" subcommand.
 func NewStopCmd(cfg *config.Config) *cobra.Command {
+	return NewStopCmdWithPublisher(cfg, nil)
+}
+
+// NewStopCmdWithPublisher builds the stop command with an optional injected
+// RemoteCommandPublisher. Pass nil to use the real AWS-backed publisher.
+// Used in tests to inject a mock publisher for --remote path testing.
+func NewStopCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) *cobra.Command {
 	var remote bool
 
 	cmd := &cobra.Command{
@@ -32,7 +39,11 @@ func NewStopCmd(cfg *config.Config) *cobra.Command {
 				return err
 			}
 			if remote {
-				return publishRemoteCommand(ctx, cfg, sandboxID, "stop")
+				publisher := pub
+				if publisher == nil {
+					publisher = newRealRemotePublisher(cfg)
+				}
+				return publisher.PublishSandboxCommand(ctx, sandboxID, "stop")
 			}
 			return runStop(ctx, sandboxID)
 		},

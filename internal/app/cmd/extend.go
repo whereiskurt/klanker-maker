@@ -21,6 +21,13 @@ import (
 // NewExtendCmd creates the "km extend" subcommand.
 // Usage: km extend <sandbox-id | #number> <duration>
 func NewExtendCmd(cfg *config.Config) *cobra.Command {
+	return NewExtendCmdWithPublisher(cfg, nil)
+}
+
+// NewExtendCmdWithPublisher builds the extend command with an optional injected
+// RemoteCommandPublisher. Pass nil to use the real AWS-backed publisher.
+// Used in tests to inject a mock publisher for --remote path testing.
+func NewExtendCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) *cobra.Command {
 	var remote bool
 
 	cmd := &cobra.Command{
@@ -39,7 +46,11 @@ func NewExtendCmd(cfg *config.Config) *cobra.Command {
 				return err
 			}
 			if remote {
-				return publishRemoteCommand(ctx, cfg, sandboxID, "extend", "duration", args[1])
+				publisher := pub
+				if publisher == nil {
+					publisher = newRealRemotePublisher(cfg)
+				}
+				return publisher.PublishSandboxCommand(ctx, sandboxID, "extend", "duration", args[1])
 			}
 			duration, err := time.ParseDuration(args[1])
 			if err != nil {

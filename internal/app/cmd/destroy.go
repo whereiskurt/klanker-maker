@@ -46,6 +46,13 @@ var sandboxIDPattern = regexp.MustCompile(`^sb-[a-f0-9]{8}$`)
 //  5. Run terragrunt destroy (streams output in real time)
 //  6. On success: clean up local sandbox directory
 func NewDestroyCmd(cfg *config.Config) *cobra.Command {
+	return NewDestroyCmdWithPublisher(cfg, nil)
+}
+
+// NewDestroyCmdWithPublisher builds the destroy command with an optional injected
+// RemoteCommandPublisher. Pass nil to use the real AWS-backed publisher.
+// Used in tests to inject a mock publisher for --remote path testing.
+func NewDestroyCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) *cobra.Command {
 	var awsProfile string
 	var yes bool
 	var verbose bool
@@ -75,7 +82,11 @@ func NewDestroyCmd(cfg *config.Config) *cobra.Command {
 				}
 			}
 			if remote {
-				return runRemoteDestroy(ctx, cfg, sandboxID)
+				publisher := pub
+				if publisher == nil {
+					publisher = newRealRemotePublisher(cfg)
+				}
+				return publisher.PublishSandboxCommand(ctx, sandboxID, "destroy")
 			}
 			if awsProfile == "" {
 				awsProfile = "klanker-terraform"
