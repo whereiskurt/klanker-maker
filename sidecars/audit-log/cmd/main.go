@@ -118,6 +118,23 @@ func main() {
 		os.Exit(0)
 	}()
 
+	// Periodic flush: send buffered events to CloudWatch every 30 seconds
+	// so events appear promptly even with low-volume activity.
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if flushErr := dest.Flush(ctx); flushErr != nil {
+					log.Error().Err(flushErr).Msg("audit-log: periodic flush failed")
+				}
+			}
+		}
+	}()
+
 	// Open audit pipe (FIFO) if KM_AUDIT_PIPE is set; otherwise read from stdin.
 	// Opening the FIFO read-write (O_RDWR) prevents blocking — the same fd acts as
 	// both reader and writer, so the open succeeds immediately without waiting for
