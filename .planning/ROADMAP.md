@@ -648,11 +648,12 @@ Plans:
 - OTEL-07: Collector HTTP endpoint (4318) added to sandbox network allowlist so Claude Code OTLP HTTP exports reach the local collector without being blocked by the HTTP proxy
 
 **Depends on:** Phase 26
-**Plans:** 2 plans
+**Plans:** 3 plans
 
 Plans:
 - [ ] 27-01-PLAN.md — Profile schema + collector config (claudeTelemetry types, logs/metrics pipelines)
 - [ ] 27-02-PLAN.md — Compiler env var injection (EC2 user-data + ECS container env)
+- [ ] 27-03-PLAN.md — EC2 km-tracing systemd unit (otelcol-contrib binary download + service start)
 
 ### Phase 28: GitHub repo-level MITM filtering in HTTP proxy
 
