@@ -69,6 +69,20 @@ echo "[km-bootstrap] Read-only bind mounts applied"
 {{- end }}
 
 # ============================================================
+# 2.8. Profile environment variables: write to /etc/profile.d/
+# ============================================================
+{{- if .ProfileEnv }}
+echo "[km-bootstrap] Writing profile environment variables..."
+cat > /etc/profile.d/km-profile-env.sh << 'PROFILE_ENV'
+{{- range $key, $value := .ProfileEnv }}
+export {{ $key }}="{{ $value }}"
+{{- end }}
+PROFILE_ENV
+chmod 644 /etc/profile.d/km-profile-env.sh
+echo "[km-bootstrap] Profile env vars written ({{ len .ProfileEnv }} vars)"
+{{- end }}
+
+# ============================================================
 # 3. Secret injection: fetch allowed SSM paths and export as env vars
 # ============================================================
 {{- if .SecretPaths }}
@@ -621,6 +635,9 @@ type userDataParams struct {
 	InitCommands []string
 	// InitScripts is a list of S3 keys for init scripts to download and execute.
 	InitScripts []string
+	// ProfileEnv holds key=value pairs from profile spec.execution.env to export
+	// via /etc/profile.d/ so they're available in all login shells (SSM sessions).
+	ProfileEnv map[string]string
 }
 
 // otpSecret holds an SSM path and derived env var name for an OTP secret.
@@ -705,10 +722,11 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		}
 	}
 
-	// Populate rsync and init commands
+	// Populate rsync, init commands, and profile env vars
 	params.Rsync = p.Spec.Execution.Rsync
 	params.InitCommands = p.Spec.Execution.InitCommands
 	params.InitScripts = p.Spec.Execution.InitScripts
+	params.ProfileEnv = p.Spec.Execution.Env
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, params); err != nil {
