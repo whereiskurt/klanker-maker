@@ -39,7 +39,12 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
           "logs:CreateLogStream",
           "logs:PutLogEvents",
         ]
-        Resource = "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/km-create-handler:*"
+        Resource = [
+          "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/km-create-handler:*",
+          "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/km/sandboxes/*",
+          "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/km-budget-enforcer-*",
+          "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/km-github-token-refresher-*",
+        ]
       }
     ]
   })
