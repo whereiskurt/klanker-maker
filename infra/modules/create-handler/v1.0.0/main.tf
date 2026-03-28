@@ -38,6 +38,8 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents",
+          "logs:TagResource",
+          "logs:PutRetentionPolicy",
         ]
         Resource = [
           "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/km-create-handler:*",
@@ -358,12 +360,13 @@ resource "aws_iam_role_policy" "lambda_budget" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "LambdaBudgetEnforcer"
+        Sid    = "LambdaPerSandbox"
         Effect = "Allow"
         Action = [
           "lambda:CreateFunction",
           "lambda:DeleteFunction",
           "lambda:GetFunction",
+          "lambda:ListVersionsByFunction",
           "lambda:UpdateFunctionCode",
           "lambda:UpdateFunctionConfiguration",
           "lambda:InvokeFunction",
@@ -373,7 +376,10 @@ resource "aws_iam_role_policy" "lambda_budget" {
           "lambda:TagResource",
           "lambda:UntagResource",
         ]
-        Resource = "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:km-budget-enforcer-*"
+        Resource = [
+          "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:km-budget-enforcer-*",
+          "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:km-github-token-refresher-*",
+        ]
       }
     ]
   })
