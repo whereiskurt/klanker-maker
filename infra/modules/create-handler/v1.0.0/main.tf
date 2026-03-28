@@ -38,6 +38,7 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents",
+          "logs:DescribeLogGroups",
           "logs:TagResource",
           "logs:PutRetentionPolicy",
         ]
@@ -366,6 +367,7 @@ resource "aws_iam_role_policy" "lambda_budget" {
           "lambda:CreateFunction",
           "lambda:DeleteFunction",
           "lambda:GetFunction",
+          "lambda:GetFunctionCodeSigningConfig",
           "lambda:ListVersionsByFunction",
           "lambda:UpdateFunctionCode",
           "lambda:UpdateFunctionConfiguration",
