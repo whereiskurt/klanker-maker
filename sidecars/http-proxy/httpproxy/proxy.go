@@ -185,11 +185,25 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 		// MITM handler: AlwaysMitm for bedrock-runtime hosts.
 		// This MUST be registered before the general CONNECT handler so goproxy
 		// first-match semantics route Bedrock CONNECT through MITM.
-		proxy.OnRequest(goproxy.ReqHostMatches(bedrockHostRegex)).HandleConnect(goproxy.AlwaysMitm)
+		proxy.OnRequest(goproxy.ReqHostMatches(bedrockHostRegex)).HandleConnectFunc(
+			func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+				log.Info().
+					Str("event_type", "bedrock_mitm_connect").
+					Str("sandbox_id", sandboxID).
+					Str("host", host).
+					Msg("")
+				return goproxy.MitmConnect, host
+			})
 
 		// OnResponse: intercept Bedrock InvokeModel responses, extract tokens, price, increment.
 		proxy.OnResponse(goproxy.ReqHostMatches(bedrockHostRegex)).DoFunc(
 			func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
+				log.Info().
+					Str("event_type", "bedrock_response_intercepted").
+					Str("sandbox_id", sandboxID).
+					Int("status", func() int { if resp != nil { return resp.StatusCode }; return 0 }()).
+					Str("host", func() string { if ctx.Req != nil { return ctx.Req.Host }; return "" }()).
+					Msg("")
 				if resp == nil || ctx.Req == nil {
 					return resp
 				}
