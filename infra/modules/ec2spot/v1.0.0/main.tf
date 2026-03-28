@@ -1,3 +1,6 @@
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
 ## Per-sandbox VPC (created when vpc_id is empty)
 data "aws_availability_zones" "available" {
   count = var.vpc_id == "" ? 1 : 0
@@ -296,6 +299,40 @@ resource "aws_iam_role_policy" "ec2spot_bedrock" {
             "aws:CalledViaLast" = "bedrock.amazonaws.com"
           }
         }
+      }
+    ]
+  })
+}
+
+# Policy: KMS decrypt + SSM read for GitHub token (GIT_ASKPASS credential helper)
+# The github-token module creates a per-sandbox KMS key and SSM parameter.
+# The sandbox role needs kms:Decrypt to read the SSM SecureString token.
+resource "aws_iam_role_policy" "ec2spot_github_token" {
+  count = local.total_ec2spot_count > 0 ? 1 : 0
+  name  = "km-${var.sandbox_id}-github-token"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "KMSDecryptGitHubToken"
+        Effect = "Allow"
+        Action = ["kms:Decrypt"]
+        Resource = ["arn:aws:kms:*:${data.aws_caller_identity.current.account_id}:key/*"]
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "ssm.${data.aws_region.current.name}.amazonaws.com"
+          }
+        }
+      },
+      {
+        Sid    = "SSMReadGitHubToken"
+        Effect = "Allow"
+        Action = ["ssm:GetParameter"]
+        Resource = [
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/sandbox/${var.sandbox_id}/*",
+        ]
       }
     ]
   })
