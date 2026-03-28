@@ -648,7 +648,8 @@ Plans:
 - OTEL-07: Collector HTTP endpoint (4318) added to sandbox network allowlist so Claude Code OTLP HTTP exports reach the local collector without being blocked by the HTTP proxy
 
 **Depends on:** Phase 26
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 27 to break down)
+- [ ] 27-01-PLAN.md — Profile schema + collector config (claudeTelemetry types, logs/metrics pipelines)
+- [ ] 27-02-PLAN.md — Compiler env var injection (EC2 user-data + ECS container env)
