@@ -33,11 +33,8 @@ spec:
       CLAUDE_CODE_USE_BEDROCK: "1"
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
     initCommands:
-      # System packages
       - "yum install -y git nodejs npm python3 python3-pip tar gzip unzip jq"
-      # Claude Code
       - "npm install -g @anthropic-ai/claude-code"
-      # Workspace setup
       - "mkdir -p /workspace && chown sandbox:sandbox /workspace"
       - "su - sandbox -c 'cd /workspace && git config --global user.name \"Claude Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
 
@@ -136,6 +133,10 @@ spec:
     networkLog:
       destination: cloudwatch
       logGroup: /klankrmkr/network
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
 
   policy:
     allowShellEscape: false

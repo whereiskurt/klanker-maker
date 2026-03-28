@@ -91,6 +91,10 @@ spec:
     networkLog:
       destination: cloudwatch
       logGroup: /klankrmkr/network
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
 
   policy:
     allowShellEscape: false

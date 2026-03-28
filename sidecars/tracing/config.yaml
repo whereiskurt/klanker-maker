@@ -19,11 +19,25 @@ processors:
     send_batch_size: 1024
 
 exporters:
-  awss3:
+  awss3/traces:
     s3_uploader:
       region: ${AWS_REGION}
       s3_bucket: ${OTEL_S3_BUCKET}
       s3_prefix: "traces/${SANDBOX_ID}"
+    marshaler: otlp_json
+    timeout: 30s
+  awss3/logs:
+    s3_uploader:
+      region: ${AWS_REGION}
+      s3_bucket: ${OTEL_S3_BUCKET}
+      s3_prefix: "logs/${SANDBOX_ID}"
+    marshaler: otlp_json
+    timeout: 30s
+  awss3/metrics:
+    s3_uploader:
+      region: ${AWS_REGION}
+      s3_bucket: ${OTEL_S3_BUCKET}
+      s3_prefix: "metrics/${SANDBOX_ID}"
     marshaler: otlp_json
     timeout: 30s
 
@@ -32,4 +46,12 @@ service:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [awss3]
+      exporters: [awss3/traces]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [awss3/logs]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [awss3/metrics]
