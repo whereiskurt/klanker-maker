@@ -15,7 +15,10 @@ resource "aws_kms_key" "github_token" {
   enable_key_rotation     = true
   deletion_window_in_days = 7
 
-  # Key policy: root admin + Lambda role encrypt + sandbox IAM role decrypt
+  # Key policy: root admin grants full access. Individual roles (Lambda, sandbox)
+  # get their KMS permissions via IAM policies attached to their roles, not via
+  # key policy principals. This avoids KMS InvalidArnException when roles don't
+  # exist yet at key creation time (e.g. remote create via Lambda).
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -26,24 +29,6 @@ resource "aws_kms_key" "github_token" {
           AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
         }
         Action   = "kms:*"
-        Resource = "*"
-      },
-      {
-        Sid    = "AllowLambdaEncrypt"
-        Effect = "Allow"
-        Principal = {
-          AWS = aws_iam_role.github_token_refresher.arn
-        }
-        Action   = ["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey"]
-        Resource = "*"
-      },
-      {
-        Sid    = "AllowSandboxDecrypt"
-        Effect = "Allow"
-        Principal = {
-          AWS = var.sandbox_iam_role_arn
-        }
-        Action   = ["kms:Decrypt"]
         Resource = "*"
       },
     ]
