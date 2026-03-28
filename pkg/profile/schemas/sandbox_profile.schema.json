@@ -335,7 +335,25 @@
           "additionalProperties": false,
           "properties": {
             "commandLog": { "$ref": "#/$defs/LogDestination" },
-            "networkLog": { "$ref": "#/$defs/LogDestination" }
+            "networkLog": { "$ref": "#/$defs/LogDestination" },
+            "claudeTelemetry": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Enable Claude Code OpenTelemetry export (default: true)"
+                },
+                "logPrompts": {
+                  "type": "boolean",
+                  "description": "Include actual prompt text in telemetry (default: false)"
+                },
+                "logToolDetails": {
+                  "type": "boolean",
+                  "description": "Include tool parameters (bash commands, file paths) in telemetry (default: false)"
+                }
+              }
+            }
           }
         },
         "policy": {

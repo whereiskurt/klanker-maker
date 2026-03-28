@@ -214,10 +214,26 @@ type SidecarConfig struct {
 	Image   string `yaml:"image"`
 }
 
+// ClaudeTelemetrySpec controls Claude Code OpenTelemetry export settings.
+type ClaudeTelemetrySpec struct {
+	Enabled        *bool `yaml:"enabled,omitempty"`        // default true — master switch for Claude Code OTEL
+	LogPrompts     bool  `yaml:"logPrompts,omitempty"`     // default false — OTEL_LOG_USER_PROMPTS
+	LogToolDetails bool  `yaml:"logToolDetails,omitempty"` // default false — OTEL_LOG_TOOL_DETAILS
+}
+
+// IsEnabled returns true if telemetry is enabled (default: true when nil).
+func (c *ClaudeTelemetrySpec) IsEnabled() bool {
+	if c == nil || c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
 // ObservabilitySpec controls logging and observability destinations.
 type ObservabilitySpec struct {
-	CommandLog LogDestination `yaml:"commandLog"`
-	NetworkLog LogDestination `yaml:"networkLog"`
+	CommandLog      LogDestination       `yaml:"commandLog"`
+	NetworkLog      LogDestination       `yaml:"networkLog"`
+	ClaudeTelemetry *ClaudeTelemetrySpec `yaml:"claudeTelemetry,omitempty"`
 }
 
 // LogDestination defines where logs should be sent.
