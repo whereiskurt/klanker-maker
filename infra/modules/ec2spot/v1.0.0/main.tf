@@ -259,6 +259,48 @@ resource "aws_iam_role_policy" "ec2spot_eventbridge" {
   })
 }
 
+# Policy: Bedrock model invocation for Claude Code AI calls
+resource "aws_iam_role_policy" "ec2spot_bedrock" {
+  count = local.total_ec2spot_count > 0 ? 1 : 0
+  name  = "km-${var.sandbox_id}-bedrock"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowModelAndInferenceProfileAccess"
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream",
+          "bedrock:ListInferenceProfiles",
+          "bedrock:ListFoundationModels",
+        ]
+        Resource = [
+          "arn:aws:bedrock:*:*:inference-profile/*",
+          "arn:aws:bedrock:*:*:application-inference-profile/*",
+          "arn:aws:bedrock:*:*:foundation-model/*",
+        ]
+      },
+      {
+        Sid    = "AllowMarketplaceSubscription"
+        Effect = "Allow"
+        Action = [
+          "aws-marketplace:ViewSubscriptions",
+          "aws-marketplace:Subscribe",
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "aws:CalledViaLast" = "bedrock.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
+}
+
 resource "aws_iam_instance_profile" "ec2spot" {
   count = local.total_ec2spot_count > 0 ? 1 : 0
 
