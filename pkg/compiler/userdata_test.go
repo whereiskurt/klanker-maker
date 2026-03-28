@@ -393,6 +393,64 @@ func TestOTPAbsentWhenNotConfigured(t *testing.T) {
 	}
 }
 
+// ============================================================
+// km-tracing OTel Collector sidecar tests (OTEL-01, OTEL-03, OTEL-04)
+// ============================================================
+
+// TestUserDataOtelColContribDownload verifies that rendered user-data contains the
+// aws s3 cp command to download the otelcol-contrib binary from the artifacts bucket.
+func TestUserDataOtelColContribDownload(t *testing.T) {
+	p := baseProfile()
+	out, err := generateUserData(p, "sb-tracing-1", nil, "test-artifacts-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	want := `aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/otelcol-contrib" /opt/km/bin/otelcol-contrib`
+	if !strings.Contains(out, want) {
+		t.Errorf("expected otelcol-contrib download line in user-data:\n  want: %q", want)
+	}
+}
+
+// TestUserDataOtelColContribDownloadOrder verifies the otelcol-contrib download appears after
+// the existing sidecar binary downloads and before the systemd unit creation section.
+func TestUserDataOtelColContribDownloadOrder(t *testing.T) {
+	p := baseProfile()
+	out, err := generateUserData(p, "sb-tracing-2", nil, "test-artifacts-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	downloadIdx := strings.Index(out, "sidecars/otelcol-contrib")
+	auditLogDownloadIdx := strings.Index(out, "sidecars/audit-log")
+	unitCreationIdx := strings.Index(out, "km-dns-proxy.service")
+	if downloadIdx == -1 {
+		t.Fatal("otelcol-contrib download not found in user-data")
+	}
+	if auditLogDownloadIdx == -1 {
+		t.Fatal("audit-log download not found in user-data")
+	}
+	if unitCreationIdx == -1 {
+		t.Fatal("km-dns-proxy.service unit creation not found in user-data")
+	}
+	if downloadIdx < auditLogDownloadIdx {
+		t.Error("expected otelcol-contrib download to appear AFTER existing sidecar downloads")
+	}
+	if downloadIdx > unitCreationIdx {
+		t.Error("expected otelcol-contrib download to appear BEFORE systemd unit creation section")
+	}
+}
+
+// TestUserDataOtelColContribChmod verifies that otelcol-contrib is made executable.
+func TestUserDataOtelColContribChmod(t *testing.T) {
+	p := baseProfile()
+	out, err := generateUserData(p, "sb-tracing-3", nil, "test-artifacts-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "chmod +x /opt/km/bin/otelcol-contrib") {
+		t.Error("expected 'chmod +x /opt/km/bin/otelcol-contrib' in user-data")
+	}
+}
+
 // TestOTPMultipleSecrets verifies multiple OTP secrets are all rendered.
 func TestOTPMultipleSecrets(t *testing.T) {
 	p := baseProfile()
