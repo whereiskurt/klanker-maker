@@ -212,9 +212,12 @@ func runAgent(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 	}
 
 	// Run agent as sandbox user via SSM interactive command.
-	// Use bash -l to load /etc/profile.d/ (env vars, PATH with npm globals).
-	// Fall back to root if sandbox user doesn't exist.
-	ssmCmd := fmt.Sprintf("if id sandbox &>/dev/null; then sudo -u sandbox bash -lc '%s'; else bash -lc '%s'; fi", claudeCmd, claudeCmd)
+	// source profile.d manually to load env vars (Bedrock config, proxy, etc.)
+	// then exec the agent. Fall back to root if sandbox user doesn't exist.
+	ssmCmd := fmt.Sprintf(
+		"if id sandbox &>/dev/null; then sudo -u sandbox -i sh -c 'for f in /etc/profile.d/km-*.sh; do . $f 2>/dev/null; done; exec %s'; "+
+			"else for f in /etc/profile.d/km-*.sh; do . $f 2>/dev/null; done; exec %s; fi",
+		claudeCmd, claudeCmd)
 	c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
 		"--target", instanceID, "--region", rec.Region, "--profile", "klanker-terraform",
 		"--document-name", "AWS-StartInteractiveCommand",
