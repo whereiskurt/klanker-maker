@@ -451,6 +451,150 @@ func TestUserDataOtelColContribChmod(t *testing.T) {
 	}
 }
 
+// ============================================================
+// km-tracing systemd unit tests (OTEL-01, OTEL-03, OTEL-04)
+// ============================================================
+
+// TestUserDataKMTracingServiceUnit verifies that rendered user-data writes a km-tracing.service systemd unit.
+func TestUserDataKMTracingServiceUnit(t *testing.T) {
+	p := baseProfile()
+	out, err := generateUserData(p, "sb-tracing-10", nil, "test-artifacts-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "/etc/systemd/system/km-tracing.service") {
+		t.Error("expected km-tracing.service unit file written to /etc/systemd/system/km-tracing.service")
+	}
+}
+
+// TestUserDataKMTracingServiceRunsAsKMSidecar verifies km-tracing.service runs as km-sidecar user.
+func TestUserDataKMTracingServiceRunsAsKMSidecar(t *testing.T) {
+	p := baseProfile()
+	out, err := generateUserData(p, "sb-tracing-11", nil, "test-artifacts-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	// Find the km-tracing unit block and assert User=km-sidecar
+	unitStart := strings.Index(out, "km-tracing.service")
+	if unitStart == -1 {
+		t.Fatal("km-tracing.service not found in user-data")
+	}
+	unitSection := out[unitStart:]
+	// Find the end of the unit block (next UNIT heredoc terminator)
+	unitEnd := strings.Index(unitSection, "\nUNIT")
+	if unitEnd == -1 {
+		t.Fatal("could not find UNIT terminator for km-tracing.service")
+	}
+	unitContent := unitSection[:unitEnd]
+	if !strings.Contains(unitContent, "User=km-sidecar") {
+		t.Error("expected km-tracing.service to run as User=km-sidecar")
+	}
+}
+
+// TestUserDataKMTracingServiceEnvVars verifies km-tracing.service passes SANDBOX_ID, OTEL_S3_BUCKET, AWS_REGION.
+func TestUserDataKMTracingServiceEnvVars(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Runtime.Region = "us-west-2"
+	out, err := generateUserData(p, "sb-tracing-12", nil, "test-artifacts-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	unitStart := strings.Index(out, "km-tracing.service")
+	if unitStart == -1 {
+		t.Fatal("km-tracing.service not found in user-data")
+	}
+	unitSection := out[unitStart:]
+	unitEnd := strings.Index(unitSection, "\nUNIT")
+	if unitEnd == -1 {
+		t.Fatal("could not find UNIT terminator for km-tracing.service")
+	}
+	unitContent := unitSection[:unitEnd]
+	for _, want := range []string{
+		"Environment=SANDBOX_ID=sb-tracing-12",
+		"Environment=OTEL_S3_BUCKET=test-artifacts-bucket",
+		"Environment=AWS_REGION=us-west-2",
+	} {
+		if !strings.Contains(unitContent, want) {
+			t.Errorf("expected %q in km-tracing.service unit", want)
+		}
+	}
+}
+
+// TestUserDataKMTracingServiceExecStart verifies km-tracing.service ExecStart runs otelcol-contrib with tracing config.
+func TestUserDataKMTracingServiceExecStart(t *testing.T) {
+	p := baseProfile()
+	out, err := generateUserData(p, "sb-tracing-13", nil, "test-artifacts-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	unitStart := strings.Index(out, "km-tracing.service")
+	if unitStart == -1 {
+		t.Fatal("km-tracing.service not found in user-data")
+	}
+	unitSection := out[unitStart:]
+	unitEnd := strings.Index(unitSection, "\nUNIT")
+	if unitEnd == -1 {
+		t.Fatal("could not find UNIT terminator for km-tracing.service")
+	}
+	unitContent := unitSection[:unitEnd]
+	want := "ExecStart=/opt/km/bin/otelcol-contrib --config /etc/km/tracing/config.yaml"
+	if !strings.Contains(unitContent, want) {
+		t.Errorf("expected %q in km-tracing.service ExecStart", want)
+	}
+}
+
+// TestUserDataKMTracingServicectlEnable verifies systemctl enable line includes km-tracing.
+func TestUserDataKMTracingServicectlEnable(t *testing.T) {
+	p := baseProfile()
+	out, err := generateUserData(p, "sb-tracing-14", nil, "test-artifacts-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	lines := strings.Split(out, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "systemctl enable ") {
+			if !strings.Contains(line, "km-tracing") {
+				t.Errorf("systemctl enable line does not include km-tracing: %q", line)
+			}
+			return
+		}
+	}
+	t.Error("systemctl enable line not found in user-data")
+}
+
+// TestUserDataKMTracingServicectlStart verifies systemctl start line includes km-tracing.
+func TestUserDataKMTracingServicectlStart(t *testing.T) {
+	p := baseProfile()
+	out, err := generateUserData(p, "sb-tracing-15", nil, "test-artifacts-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	lines := strings.Split(out, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "systemctl start ") {
+			if !strings.Contains(line, "km-tracing") {
+				t.Errorf("systemctl start line does not include km-tracing: %q", line)
+			}
+			return
+		}
+	}
+	t.Error("systemctl start line not found in user-data")
+}
+
+// TestUserDataKMTracingOTELS3BucketResolvesToArtifactsBucket verifies OTEL_S3_BUCKET in the
+// km-tracing.service unit resolves to the KMArtifactsBucket value (not a separate bucket).
+func TestUserDataKMTracingOTELS3BucketResolvesToArtifactsBucket(t *testing.T) {
+	p := baseProfile()
+	out, err := generateUserData(p, "sb-tracing-16", nil, "test-artifacts-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	// The OTEL_S3_BUCKET must equal the test-artifacts-bucket value
+	if !strings.Contains(out, "Environment=OTEL_S3_BUCKET=test-artifacts-bucket") {
+		t.Error("expected 'Environment=OTEL_S3_BUCKET=test-artifacts-bucket' in km-tracing.service — OTEL_S3_BUCKET must resolve to KMArtifactsBucket")
+	}
+}
+
 // TestOTPMultipleSecrets verifies multiple OTP secrets are all rendered.
 func TestOTPMultipleSecrets(t *testing.T) {
 	p := baseProfile()
