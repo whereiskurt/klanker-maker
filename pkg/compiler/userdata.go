@@ -325,6 +325,22 @@ RestartSec=2
 WantedBy=multi-user.target
 UNIT
 
+cat > /etc/systemd/system/km-tracing.service << 'UNIT'
+[Unit]
+Description=Klankrmkr OTel Collector sidecar
+After=network.target
+[Service]
+User=km-sidecar
+Environment=SANDBOX_ID={{ .SandboxID }}
+Environment=OTEL_S3_BUCKET={{ .KMArtifactsBucket }}
+Environment=AWS_REGION={{ .AWSRegion }}
+ExecStart=/opt/km/bin/otelcol-contrib --config /etc/km/tracing/config.yaml
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 # Shell audit hook: writes JSON audit events to the named pipe on every command,
 # plus a background heartbeat every 60s so long-running commands (top, vim, etc.)
 # don't trigger the idle detector.
@@ -427,8 +443,8 @@ WantedBy=multi-user.target
 UNIT
 {{- end }}
 
-systemctl enable km-dns-proxy km-http-proxy km-audit-log{{ if .SandboxEmail }} km-mail-poller{{ end }}
-systemctl start km-dns-proxy km-http-proxy km-audit-log{{ if .SandboxEmail }} km-mail-poller{{ end }}
+systemctl enable km-dns-proxy km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}
+systemctl start km-dns-proxy km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}
 echo "[km-bootstrap] Sidecars started"
 echo "[km-bootstrap] Shell audit hook installed at /etc/profile.d/km-audit.sh"
 {{- if .SandboxEmail }}

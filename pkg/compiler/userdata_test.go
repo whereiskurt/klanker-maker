@@ -544,6 +544,7 @@ func TestUserDataKMTracingServiceExecStart(t *testing.T) {
 }
 
 // TestUserDataKMTracingServicectlEnable verifies systemctl enable line includes km-tracing.
+// The sidecar enable line is the one that also includes km-dns-proxy (not the SSM agent line).
 func TestUserDataKMTracingServicectlEnable(t *testing.T) {
 	p := baseProfile()
 	out, err := generateUserData(p, "sb-tracing-14", nil, "test-artifacts-bucket", false)
@@ -552,17 +553,19 @@ func TestUserDataKMTracingServicectlEnable(t *testing.T) {
 	}
 	lines := strings.Split(out, "\n")
 	for _, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "systemctl enable ") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "systemctl enable ") && strings.Contains(line, "km-dns-proxy") {
 			if !strings.Contains(line, "km-tracing") {
-				t.Errorf("systemctl enable line does not include km-tracing: %q", line)
+				t.Errorf("sidecar systemctl enable line does not include km-tracing: %q", line)
 			}
 			return
 		}
 	}
-	t.Error("systemctl enable line not found in user-data")
+	t.Error("sidecar systemctl enable line (containing km-dns-proxy) not found in user-data")
 }
 
 // TestUserDataKMTracingServicectlStart verifies systemctl start line includes km-tracing.
+// The sidecar start line is the one that also includes km-dns-proxy (not the SSM agent line).
 func TestUserDataKMTracingServicectlStart(t *testing.T) {
 	p := baseProfile()
 	out, err := generateUserData(p, "sb-tracing-15", nil, "test-artifacts-bucket", false)
@@ -571,14 +574,15 @@ func TestUserDataKMTracingServicectlStart(t *testing.T) {
 	}
 	lines := strings.Split(out, "\n")
 	for _, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "systemctl start ") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "systemctl start ") && strings.Contains(line, "km-dns-proxy") {
 			if !strings.Contains(line, "km-tracing") {
-				t.Errorf("systemctl start line does not include km-tracing: %q", line)
+				t.Errorf("sidecar systemctl start line does not include km-tracing: %q", line)
 			}
 			return
 		}
 	}
-	t.Error("systemctl start line not found in user-data")
+	t.Error("sidecar systemctl start line (containing km-dns-proxy) not found in user-data")
 }
 
 // TestUserDataKMTracingOTELS3BucketResolvesToArtifactsBucket verifies OTEL_S3_BUCKET in the
