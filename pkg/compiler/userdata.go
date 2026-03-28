@@ -292,7 +292,7 @@ Environment=AUDIT_LOG_DEST=cloudwatch
 {{- if gt .IdleTimeoutMinutes 0 }}
 Environment=IDLE_TIMEOUT_MINUTES={{ .IdleTimeoutMinutes }}
 {{- end }}
-ExecStart=/bin/bash -c 'sleep infinity > /run/km/audit-pipe & /opt/km/bin/km-audit-log < /run/km/audit-pipe'
+ExecStart=/bin/bash -c 'sleep infinity > /run/km/audit-pipe & sleep 1; /opt/km/bin/km-audit-log < /run/km/audit-pipe'
 Restart=always
 RestartSec=2
 [Install]
