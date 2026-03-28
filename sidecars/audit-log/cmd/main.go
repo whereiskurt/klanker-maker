@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strconv"
@@ -117,12 +118,27 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// Process stdin in a goroutine so the idle detector can keep running
-	// even when stdin is closed (no pipe) or EOF.
+	// Open audit pipe (FIFO) if KM_AUDIT_PIPE is set; otherwise read from stdin.
+	// Opening the FIFO read-write (O_RDWR) prevents blocking — the same fd acts as
+	// both reader and writer, so the open succeeds immediately without waiting for
+	// an external writer. External writers open the FIFO normally for writing.
+	var inputReader io.Reader = os.Stdin
+	if pipePath := envOr("KM_AUDIT_PIPE", ""); pipePath != "" {
+		f, openErr := os.OpenFile(pipePath, os.O_RDWR, 0)
+		if openErr != nil {
+			log.Error().Err(openErr).Str("pipe", pipePath).Msg("audit-log: failed to open audit pipe")
+		} else {
+			inputReader = f
+			log.Info().Str("pipe", pipePath).Msg("audit-log: reading from audit pipe")
+		}
+	}
+
+	// Process input in a goroutine so the idle detector can keep running
+	// even when input is closed or EOF.
 	stdinDone := make(chan struct{})
 	go func() {
 		defer close(stdinDone)
-		if err := auditlog.Process(ctx, os.Stdin, dest); err != nil {
+		if err := auditlog.Process(ctx, inputReader, dest); err != nil {
 			log.Error().Err(err).Msg("audit-log: process error")
 		}
 	}()
