@@ -34,22 +34,16 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
     Statement = [
       {
         Effect = "Allow"
-        Action = [
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents",
-          "logs:TagResource",
-          "logs:PutRetentionPolicy",
-        ]
+        Action = ["logs:*"]
         Resource = [
-          "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/km-create-handler:*",
+          "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/km-*",
+          "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/km-*:*",
           "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/km/sandboxes/*",
-          "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/km-budget-enforcer-*",
-          "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/km-github-token-refresher-*",
+          "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/km/sandboxes/*:*",
         ]
       },
       {
-        # DescribeLogGroups requires wildcard resource (cannot be scoped to specific groups)
+        # DescribeLogGroups requires wildcard resource
         Effect   = "Allow"
         Action   = ["logs:DescribeLogGroups"]
         Resource = "*"
@@ -368,24 +362,9 @@ resource "aws_iam_role_policy" "lambda_budget" {
       {
         Sid    = "LambdaPerSandbox"
         Effect = "Allow"
-        Action = [
-          "lambda:CreateFunction",
-          "lambda:DeleteFunction",
-          "lambda:GetFunction",
-          "lambda:GetFunctionCodeSigningConfig",
-          "lambda:ListVersionsByFunction",
-          "lambda:UpdateFunctionCode",
-          "lambda:UpdateFunctionConfiguration",
-          "lambda:InvokeFunction",
-          "lambda:AddPermission",
-          "lambda:RemovePermission",
-          "lambda:GetPolicy",
-          "lambda:TagResource",
-          "lambda:UntagResource",
-        ]
+        Action = ["lambda:*"]
         Resource = [
-          "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:km-budget-enforcer-*",
-          "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:km-github-token-refresher-*",
+          "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:km-*",
         ]
       }
     ]
