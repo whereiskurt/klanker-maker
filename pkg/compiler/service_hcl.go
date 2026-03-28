@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"text/template"
+	"time"
 
 	pkggithub "github.com/whereiskurt/klankrmkr/pkg/github"
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
@@ -70,7 +71,7 @@ const ec2ServiceHCLTemplate = `locals {
     substrate      = "ec2"
     spot_rate      = {{ .SpotRateUSD }}
     instance_type  = "{{ .InstanceType }}"
-    created_at     = "" # populated at apply time via Terragrunt input
+    created_at     = "{{ .CreatedAt }}"
     role_arn       = "" # populated at apply time: IAM role ARN from ec2spot module output
     instance_id    = "" # populated at apply time: EC2 instance ID from ec2spot module output
 {{- if .ComputeLimit }}
@@ -329,6 +330,7 @@ type ec2HCLParams struct {
 	SpotRateUSD      float64 // pre-calculated hourly rate (0.0 when no budget)
 	ComputeLimit     float64 // compute max spend USD (0 = not set)
 	AILimit          float64 // AI max spend USD (0 = not set)
+	CreatedAt        string  // RFC3339 timestamp for compute cost calculation
 	WarningThreshold float64 // warning fraction (default 0.8)
 	// GitHub token inputs (GH-02, GH-04, GH-05)
 	HasGitHub          bool     // true when sourceAccess.github is set
@@ -379,6 +381,7 @@ type ecsHCLParams struct {
 	SpotRateUSD      float64 // pre-calculated hourly rate (0.0 when no budget)
 	ComputeLimit     float64 // compute max spend USD (0 = not set)
 	AILimit          float64 // AI max spend USD (0 = not set)
+	CreatedAt        string  // RFC3339 timestamp for compute cost calculation
 	WarningThreshold float64 // warning fraction (default 0.8)
 	// GitHub token inputs (GH-02, GH-04, GH-05)
 	HasGitHub          bool     // true when sourceAccess.github is set
@@ -514,6 +517,7 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		ComputeLimit:     computeLimit,
 		AILimit:          aiLimit,
 		WarningThreshold: warningThreshold,
+		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
 
 	// Populate GitHub token fields when sourceAccess.github is configured with at least one repo.
@@ -625,6 +629,7 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		ComputeLimit:     computeLimit,
 		AILimit:          aiLimit,
 		WarningThreshold: warningThreshold,
+		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
 
 	// Populate filesystem enforcement fields (nil-safe).
