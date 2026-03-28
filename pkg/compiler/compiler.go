@@ -98,8 +98,11 @@ func compileEC2(p *profile.SandboxProfile, sandboxID string, onDemand bool, netw
 	secretPaths := compileSecrets(p)
 
 	// Generate user-data.sh first — it gets embedded into service.hcl.
-	// KM_ARTIFACTS_BUCKET is read from the environment; may be empty in tests.
-	artifactsBucket := os.Getenv("KM_ARTIFACTS_BUCKET")
+	// ArtifactsBucket from NetworkConfig; falls back to env for backward compat.
+	artifactsBucket := network.ArtifactsBucket
+	if artifactsBucket == "" {
+		artifactsBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
+	}
 	userData, err := generateUserData(p, sandboxID, secretPaths, artifactsBucket, useSpot, network.EmailDomain)
 	if err != nil {
 		return nil, fmt.Errorf("generate user-data.sh: %w", err)

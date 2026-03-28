@@ -459,6 +459,8 @@ type NetworkConfig struct {
 	// When empty, defaults to "sandboxes.klankermaker.ai". Derived from Config.Domain
 	// as "sandboxes."+domain so forks use their own domain without code changes.
 	EmailDomain string
+	// ArtifactsBucket is the S3 bucket for sidecars, bootstrap scripts, etc.
+	ArtifactsBucket string
 	// SpotRateUSD is the resolved spot instance hourly rate in USD.
 	// Populated by create.go from the AWS Pricing API (or static fallback table)
 	// before calling Compile(). Zero when no budget or rate lookup is skipped.

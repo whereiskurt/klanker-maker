@@ -217,12 +217,17 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	if networkDomain == "" {
 		networkDomain = "klankermaker.ai"
 	}
+	artifactsBucket := cfg.ArtifactsBucket
+	if artifactsBucket == "" {
+		artifactsBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
+	}
 	network := &compiler.NetworkConfig{
 		VPCID:             networkOutputs.VPCID,
 		PublicSubnets:     networkOutputs.PublicSubnets,
 		AvailabilityZones: networkOutputs.AvailabilityZones,
 		RegionLabel:       regionLabel,
 		EmailDomain:       "sandboxes." + networkDomain,
+		ArtifactsBucket:   artifactsBucket,
 	}
 
 	// Step 6b: Resolve spot rate for budget enforcement (BUDG-03).
@@ -876,12 +881,17 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, awsP
 	if networkDomain == "" {
 		networkDomain = "klankermaker.ai"
 	}
+	remoteArtifactsBucket := cfg.ArtifactsBucket
+	if remoteArtifactsBucket == "" {
+		remoteArtifactsBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
+	}
 	network := &compiler.NetworkConfig{
 		VPCID:             networkOutputs.VPCID,
 		PublicSubnets:     networkOutputs.PublicSubnets,
 		AvailabilityZones: networkOutputs.AvailabilityZones,
 		RegionLabel:       regionLabel,
 		EmailDomain:       "sandboxes." + networkDomain,
+		ArtifactsBucket:   remoteArtifactsBucket,
 	}
 
 	// Step 7: Compile profile into artifacts
