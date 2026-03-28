@@ -649,7 +649,7 @@ Plans:
 - OTEL-07: Collector HTTP endpoint (4318) added to sandbox network allowlist so Claude Code OTLP HTTP exports reach the local collector without being blocked by the HTTP proxy
 
 **Depends on:** Phase 26
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [ ] 27-01-PLAN.md — Profile schema + collector config (claudeTelemetry types, logs/metrics pipelines)
@@ -707,4 +707,4 @@ Key files:
 - pkg/aws/budget.go — DynamoDB budget read/write
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 27 to break down)
+- [x] TBD (run /gsd:plan-phase 27 to break down) (completed 2026-03-28)

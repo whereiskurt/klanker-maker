@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 27-02-PLAN.md
-last_updated: "2026-03-28T22:18:28.374Z"
+stopped_at: Completed 27-03-PLAN.md
+last_updated: "2026-03-28T22:22:57.837Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 29
-  completed_phases: 25
+  completed_phases: 26
   total_plans: 93
-  completed_plans: 89
+  completed_plans: 90
   percent: 0
 ---
 
@@ -137,6 +137,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 26 P05 | 3min | 1 tasks | 2 files |
 | Phase 27-claude-code-otel-integration-sandbox-observability-via-built-in-telemetry P01 | 130s | 2 tasks | 12 files |
 | Phase 27-claude-code-otel-integration-sandbox-observability-via-built-in-telemetry P02 | 202s | 2 tasks | 4 files |
+| Phase 27-claude-code-otel-integration-sandbox-observability-via-built-in-telemetry P03 | 148s | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -366,6 +367,7 @@ Recent decisions affecting current work:
 - [Phase 27-claude-code-otel-integration]: *bool for ClaudeTelemetrySpec.Enabled: nil=default true, explicit false to disable; named OTel exporters (awss3/traces, awss3/logs, awss3/metrics) for separate S3 prefixes per signal type
 - [Phase 27-claude-code-otel-integration-sandbox-observability-via-built-in-telemetry]: EC2 OTEL section uses >> append to km-profile-env.sh so it works regardless of whether ProfileEnv section ran
 - [Phase 27-claude-code-otel-integration-sandbox-observability-via-built-in-telemetry]: OTEL-07 EC2 confirmed by test asserting no DNAT REDIRECT rules target ports 4317/4318; ECS confirmed via NO_PROXY includes localhost
+- [Phase 27-03]: otelcol-contrib needs explicit chmod +x (km-* glob does not match it); OTEL_S3_BUCKET maps to KMArtifactsBucket (telemetry lives alongside other sandbox artifacts)
 
 ### Roadmap Evolution
 
@@ -404,6 +406,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-28T22:18:28.371Z
-Stopped at: Completed 27-02-PLAN.md
+Last session: 2026-03-28T22:22:57.833Z
+Stopped at: Completed 27-03-PLAN.md
 Resume file: None
