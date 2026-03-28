@@ -249,7 +249,9 @@ aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/dns-proxy" /opt/km/bin/km-dns-pr
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/http-proxy" /opt/km/bin/km-http-proxy
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/audit-log" /opt/km/bin/km-audit-log
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/tracing/config.yaml" /etc/km/tracing/config.yaml
+aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/otelcol-contrib" /opt/km/bin/otelcol-contrib
 chmod +x /opt/km/bin/km-*
+chmod +x /opt/km/bin/otelcol-contrib
 
 # Create dedicated sidecar user (exempt from iptables DNAT — prevents redirect loops)
 useradd -r -s /usr/sbin/nologin km-sidecar || true
