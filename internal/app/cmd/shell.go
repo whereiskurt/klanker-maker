@@ -211,8 +211,10 @@ func runAgent(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 		return fmt.Errorf("find EC2 instance: %w", err)
 	}
 
-	// Run claude as sandbox user via SSM interactive command
-	ssmCmd := fmt.Sprintf("sudo -u sandbox -i bash -lc '%s'", claudeCmd)
+	// Run agent as sandbox user via SSM interactive command.
+	// Use bash -l to load /etc/profile.d/ (env vars, PATH with npm globals).
+	// Fall back to root if sandbox user doesn't exist.
+	ssmCmd := fmt.Sprintf("if id sandbox &>/dev/null; then sudo -u sandbox bash -lc '%s'; else bash -lc '%s'; fi", claudeCmd, claudeCmd)
 	c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
 		"--target", instanceID, "--region", rec.Region, "--profile", "klanker-terraform",
 		"--document-name", "AWS-StartInteractiveCommand",
