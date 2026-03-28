@@ -63,12 +63,19 @@ spec:
         - ".github.com"
         - ".githubusercontent.com"
         - ".npmjs.org"
+        - ".npmjs.com"
         - ".nodejs.org"
+        - ".npmmirror.com"
         - ".google.com"
         - ".sentry.io"
+        - ".cloudfront.net"
       allowedHosts:
         - "api.anthropic.com"
         - "statsig.anthropic.com"
+        - "statsig.com"
+        - "api.statsig.com"
+        - "featuregates.org"
+        - "api.featuregates.org"
         - "mcp-proxy.anthropic.com"
         - "platform.claude.com"
         - "api.claude.ai"
@@ -97,7 +104,7 @@ spec:
   artifacts:
     paths:
       - /workspace
-    maxSizeMB: 100
+    maxSizeMB: 1000
 
   identity:
     roleSessionDuration: "1h"
