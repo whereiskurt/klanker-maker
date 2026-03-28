@@ -69,6 +69,19 @@ echo "[km-bootstrap] Read-only bind mounts applied"
 {{- end }}
 
 # ============================================================
+# 2.7. Sandbox identity: set hostname and export identity env vars
+# ============================================================
+SANDBOX_FQDN="{{ .SandboxID }}.{{ .EmailDomain }}"
+hostnamectl set-hostname "${SANDBOX_FQDN}" 2>/dev/null || hostname "${SANDBOX_FQDN}"
+cat > /etc/profile.d/km-identity.sh << EOF
+export KM_SANDBOX_ID="{{ .SandboxID }}"
+export KM_SANDBOX_HOSTNAME="${SANDBOX_FQDN}"
+export KM_SANDBOX_DOMAIN="{{ .EmailDomain }}"
+EOF
+chmod 644 /etc/profile.d/km-identity.sh
+echo "[km-bootstrap] Hostname set to ${SANDBOX_FQDN}"
+
+# ============================================================
 # 2.8. Profile environment variables: write to /etc/profile.d/
 # ============================================================
 {{- if .ProfileEnv }}
@@ -618,6 +631,7 @@ type userDataParams struct {
 	ArtifactMaxSizeMB int
 	// Email fields (MAIL-02 through MAIL-05)
 	SandboxEmail         string // {sandbox-id}@{emailDomain} (config-derived)
+	EmailDomain          string // e.g. "sandboxes.klankermaker.ai"
 	NotificationsEmail   string // notifications@{emailDomain} — from address for spot notifications
 	OperatorEmail        string // from KM_OPERATOR_EMAIL env var — for spot notification
 	AWSRegion            string // from IMDS region — for spot notification ses send-email CLI call
@@ -690,6 +704,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		UseSpot:            useSpot,
 		// Email fields — every sandbox gets an email identity.
 		SandboxEmail:       sandboxID + "@" + emailDomain,
+		EmailDomain:        emailDomain,
 		NotificationsEmail: "notifications@" + emailDomain,
 		OperatorEmail:      os.Getenv("KM_OPERATOR_EMAIL"),
 		AWSRegion:          p.Spec.Runtime.Region,
