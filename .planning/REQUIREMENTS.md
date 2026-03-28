@@ -127,6 +127,14 @@ Deferred to future release. Tracked but not in current roadmap.
 - **PLAT-03**: Sandbox REST API server (persistent control plane)
 - **PLAT-04**: Multi-cloud support (GCP, Azure)
 
+### Sandbox Identity Customization
+
+- **PREFIX-01**: Profile schema supports optional `metadata.prefix` field with validation (`^[a-z][a-z0-9]{0,11}$`)
+- **PREFIX-02**: `GenerateSandboxID()` accepts a prefix parameter — generates `{prefix}-{8 hex}` IDs
+- **PREFIX-03**: All sandbox ID validation/matching patterns accept any valid prefix, not just `sb-`
+- **PREFIX-04**: Compiler, CLI, and Lambda code use sandbox ID as-is — no component hardcodes the `sb-` prefix
+- **PREFIX-05**: Backwards compatible — profiles without `metadata.prefix` default to `sb`
+
 ### Advanced Policy
 
 - **PLCY-01**: OPA / policy engine integration for enterprise compliance
