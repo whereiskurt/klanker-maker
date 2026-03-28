@@ -211,17 +211,16 @@ func runAgent(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 		return fmt.Errorf("find EC2 instance: %w", err)
 	}
 
-	// Run agent as sandbox user via SSM interactive command.
-	// source profile.d manually to load env vars (Bedrock config, proxy, etc.)
-	// then exec the agent. Fall back to root if sandbox user doesn't exist.
-	ssmCmd := fmt.Sprintf(
-		"if id sandbox &>/dev/null; then sudo -u sandbox -i sh -c 'for f in /etc/profile.d/km-*.sh; do . $f 2>/dev/null; done; exec %s'; "+
-			"else for f in /etc/profile.d/km-*.sh; do . $f 2>/dev/null; done; exec %s; fi",
-		claudeCmd, claudeCmd)
+	// Open an interactive login shell as sandbox user that auto-execs the agent.
+	// sudo -u sandbox -i gives a login shell with PTY (required for Claude's TUI).
+	// We pass the agent command via an env var and use .bashrc-style exec trick:
+	// bash --rcfile <(script) gives us both PTY and auto-exec.
 	c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
 		"--target", instanceID, "--region", rec.Region, "--profile", "klanker-terraform",
 		"--document-name", "AWS-StartInteractiveCommand",
-		"--parameters", fmt.Sprintf(`{"command":["%s"]}`, ssmCmd))
+		"--parameters", fmt.Sprintf(
+			`{"command":["sudo -u sandbox -i bash -c 'source /etc/profile.d/km-profile-env.sh 2>/dev/null; source /etc/profile.d/km-identity.sh 2>/dev/null; cd /workspace; exec %s'"]}`,
+			claudeCmd))
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
