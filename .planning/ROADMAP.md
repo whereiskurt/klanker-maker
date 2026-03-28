@@ -682,3 +682,27 @@ Plans:
 Plans:
 - [ ] 29-01-PLAN.md — Schema prefix field + parameterized GenerateSandboxID
 - [ ] 29-02-PLAN.md — Generalize validation patterns + fix email handler + update profiles
+
+### Phase 27: AI Spend Metering — Extract Token Counts from MITM'd Bedrock Streaming Responses
+
+**Goal:** Complete the AI budget tracking pipeline by extracting token counts and costs from MITM-intercepted Bedrock InvokeModelWithResponseStream responses.
+**Requirements**: TBD
+**Depends on:** Phase 26
+**Plans:** 0 plans
+
+Context:
+- MITM proxy successfully intercepts Bedrock HTTPS CONNECT tunnels (verified)
+- Bedrock returns 200 responses through the proxy (verified) 
+- The response handler fires but token extraction from streaming (SSE/chunked) responses needs implementation
+- Bedrock streaming responses deliver token counts in the final SSE chunk or response headers (x-amzn-bedrock-input-token-count, x-amzn-bedrock-output-token-count)
+- The proxy's DynamoDB write path is wired (EC2 instance role has km-budgets access)
+- Compute budget tracking works end-to-end (verified)
+
+Key files:
+- sidecars/http-proxy/httpproxy/proxy.go — Bedrock OnResponse handler (line ~191)
+- sidecars/http-proxy/httpproxy/bedrock.go — Bedrock token extraction logic
+- sidecars/http-proxy/httpproxy/anthropic.go — Anthropic direct API token extraction (reference)
+- pkg/aws/budget.go — DynamoDB budget read/write
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 27 to break down)
