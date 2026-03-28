@@ -38,7 +38,6 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents",
-          "logs:DescribeLogGroups",
           "logs:TagResource",
           "logs:PutRetentionPolicy",
         ]
@@ -48,6 +47,12 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
           "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/km-budget-enforcer-*",
           "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/km-github-token-refresher-*",
         ]
+      },
+      {
+        # DescribeLogGroups requires wildcard resource (cannot be scoped to specific groups)
+        Effect   = "Allow"
+        Action   = ["logs:DescribeLogGroups"]
+        Resource = "*"
       }
     ]
   })
