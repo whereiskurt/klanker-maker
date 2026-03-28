@@ -381,13 +381,7 @@ resource "aws_iam_role_policy" "kms" {
     Statement = [
       {
         Effect = "Allow"
-        Action = [
-          "kms:GenerateDataKey",
-          "kms:Decrypt",
-          "kms:DescribeKey",
-          "kms:CreateAlias",
-          "kms:CreateKey",
-        ]
+        Action = ["kms:*"]
         Resource = "*"
       }
     ]
