@@ -304,6 +304,34 @@ resource "aws_iam_role_policy" "ec2spot_bedrock" {
   })
 }
 
+# Policy: DynamoDB write for http-proxy AI spend metering (MITM budget tracking)
+# The km-http-proxy sidecar intercepts Bedrock responses via MITM, extracts token
+# counts, and writes AI spend to the km-budgets DynamoDB table.
+resource "aws_iam_role_policy" "ec2spot_budget_dynamo" {
+  count = local.total_ec2spot_count > 0 ? 1 : 0
+  name  = "km-${var.sandbox_id}-budget-dynamo"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "DynamoDBBudgetWrite"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:Query",
+        ]
+        Resource = [
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/km-budgets",
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/km-budgets/index/*",
+        ]
+      }
+    ]
+  })
+}
+
 # Policy: KMS decrypt + SSM read for GitHub token (GIT_ASKPASS credential helper)
 # The github-token module creates a per-sandbox KMS key and SSM parameter.
 # The sandbox role needs kms:Decrypt to read the SSM SecureString token.
