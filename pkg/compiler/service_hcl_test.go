@@ -277,6 +277,125 @@ func TestECSServiceHCLImageVersion(t *testing.T) {
 	}
 }
 
+// ============================================================
+// Claude Code OTEL telemetry env var injection tests for ECS (OTEL-01, OTEL-06, OTEL-07)
+// ============================================================
+
+// TestECSOTELVarsEnabledDefault verifies that when claudeTelemetry is nil (default),
+// all 5 base OTEL env vars appear in the ECS main container environment block.
+func TestECSOTELVarsEnabledDefault(t *testing.T) {
+	p := baseECSProfile()
+	// claudeTelemetry is nil — should default to enabled
+	out, err := generateECSServiceHCL(p, "sb-ecs-otel-1", false, nil, baseECSNetwork())
+	if err != nil {
+		t.Fatalf("generateECSServiceHCL failed: %v", err)
+	}
+	for _, want := range []string{
+		`"CLAUDE_CODE_ENABLE_TELEMETRY"`,
+		`"OTEL_METRICS_EXPORTER"`,
+		`"OTEL_LOGS_EXPORTER"`,
+		`"OTEL_EXPORTER_OTLP_PROTOCOL"`,
+		`"OTEL_EXPORTER_OTLP_ENDPOINT"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in ECS container environment when claudeTelemetry is nil (default enabled)", want)
+		}
+	}
+	if !strings.Contains(out, `"1"`) {
+		t.Error("expected CLAUDE_CODE_ENABLE_TELEMETRY value \"1\" in ECS container environment")
+	}
+	if !strings.Contains(out, "http://localhost:4317") {
+		t.Error("expected OTLP endpoint http://localhost:4317 in ECS container environment")
+	}
+}
+
+// TestECSOTELLogPromptsEnabled verifies OTEL_LOG_USER_PROMPTS=1 appears in ECS container env when logPrompts=true.
+func TestECSOTELLogPromptsEnabled(t *testing.T) {
+	p := baseECSProfile()
+	enabled := true
+	p.Spec.Observability = profile.ObservabilitySpec{
+		ClaudeTelemetry: &profile.ClaudeTelemetrySpec{
+			Enabled:    &enabled,
+			LogPrompts: true,
+		},
+	}
+	out, err := generateECSServiceHCL(p, "sb-ecs-otel-2", false, nil, baseECSNetwork())
+	if err != nil {
+		t.Fatalf("generateECSServiceHCL failed: %v", err)
+	}
+	if !strings.Contains(out, `"OTEL_LOG_USER_PROMPTS"`) {
+		t.Error("expected OTEL_LOG_USER_PROMPTS in ECS container environment when logPrompts=true")
+	}
+}
+
+// TestECSOTELDisabledExplicit verifies NO Claude OTEL env vars appear when enabled=false.
+func TestECSOTELDisabledExplicit(t *testing.T) {
+	p := baseECSProfile()
+	disabled := false
+	p.Spec.Observability = profile.ObservabilitySpec{
+		ClaudeTelemetry: &profile.ClaudeTelemetrySpec{
+			Enabled: &disabled,
+		},
+	}
+	out, err := generateECSServiceHCL(p, "sb-ecs-otel-3", false, nil, baseECSNetwork())
+	if err != nil {
+		t.Fatalf("generateECSServiceHCL failed: %v", err)
+	}
+	for _, absent := range []string{
+		"CLAUDE_CODE_ENABLE_TELEMETRY",
+		"OTEL_METRICS_EXPORTER",
+		"OTEL_LOGS_EXPORTER",
+		"OTEL_EXPORTER_OTLP_PROTOCOL",
+		"OTEL_EXPORTER_OTLP_ENDPOINT",
+		"OTEL_LOG_USER_PROMPTS",
+		"OTEL_LOG_TOOL_DETAILS",
+		"OTEL_RESOURCE_ATTRIBUTES",
+	} {
+		if strings.Contains(out, absent) {
+			t.Errorf("expected %q to be absent in ECS container env when claudeTelemetry.enabled=false", absent)
+		}
+	}
+}
+
+// TestECSOTELResourceAttributes verifies OTEL_RESOURCE_ATTRIBUTES contains sandbox metadata with substrate=ecs.
+func TestECSOTELResourceAttributes(t *testing.T) {
+	p := baseECSProfile()
+	// claudeTelemetry nil = default enabled
+	out, err := generateECSServiceHCL(p, "sb-ecs-otel-4", false, nil, baseECSNetwork())
+	if err != nil {
+		t.Fatalf("generateECSServiceHCL failed: %v", err)
+	}
+	if !strings.Contains(out, "OTEL_RESOURCE_ATTRIBUTES") {
+		t.Error("expected OTEL_RESOURCE_ATTRIBUTES in ECS container environment")
+	}
+	if !strings.Contains(out, "sandbox_id=sb-ecs-otel-4") {
+		t.Error("expected sandbox_id=sb-ecs-otel-4 in OTEL_RESOURCE_ATTRIBUTES")
+	}
+	if !strings.Contains(out, "profile_name=test-ecs-profile") {
+		t.Error("expected profile_name=test-ecs-profile in OTEL_RESOURCE_ATTRIBUTES")
+	}
+	if !strings.Contains(out, "substrate=ecs") {
+		t.Error("expected substrate=ecs in OTEL_RESOURCE_ATTRIBUTES")
+	}
+}
+
+// TestECSNOProxyIncludesLocalhost verifies NO_PROXY already includes localhost for OTEL-07.
+// OTEL-07: Claude Code OTLP exports to localhost:4317/4318 bypass the HTTP proxy via
+// NO_PROXY (includes localhost,127.0.0.1). No code change needed — existing config satisfies it.
+func TestECSNOProxyIncludesLocalhost(t *testing.T) {
+	p := baseECSProfile()
+	out, err := generateECSServiceHCL(p, "sb-ecs-otel-5", false, nil, baseECSNetwork())
+	if err != nil {
+		t.Fatalf("generateECSServiceHCL failed: %v", err)
+	}
+	if !strings.Contains(out, "NO_PROXY") {
+		t.Error("expected NO_PROXY in ECS container environment")
+	}
+	if !strings.Contains(out, "localhost") {
+		t.Error("expected 'localhost' in NO_PROXY value (OTEL-07: OTLP traffic bypasses HTTP proxy)")
+	}
+}
+
 // TestSpotRateECSNonZero verifies that a NetworkConfig with non-zero SpotRateUSD
 // produces spot_rate != 0.0 in the ECS service.hcl output (BUDG-03).
 func TestSpotRateECSNonZero(t *testing.T) {
