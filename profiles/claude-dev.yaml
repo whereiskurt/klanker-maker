@@ -30,6 +30,7 @@ spec:
       ANTHROPIC_DEFAULT_OPUS_MODEL: us.anthropic.claude-opus-4-6-v1
       ANTHROPIC_DEFAULT_HAIKU_MODEL: us.anthropic.claude-haiku-4-5-20251001-v1:0
       # Claude Code settings
+      CLAUDE_CODE_USE_BEDROCK: "1"
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
     initCommands:
       # System packages
