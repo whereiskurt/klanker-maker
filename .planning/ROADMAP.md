@@ -595,18 +595,19 @@ Plans:
 - [ ] 23-02-PLAN.md — km roll creds Cobra command with --sandbox, --platform, --force-restart flags (CRED-01, CRED-02, CRED-03, CRED-05)
 - [ ] 23-03-PLAN.md — km doctor credential rotation age check (CRED-06)
 
-### Phase 24: Documentation Refresh (Phases 18-23)
+### Phase 24: Documentation Refresh (Phases 18-29)
 
-**Goal:** Update operator guide, user manual, README, and inline docs to cover all features through Phase 23
+**Goal:** Update operator guide, user manual, README, and inline docs to cover all features through Phase 29
 
 **Scope:**
 1. README roadmap table — update statuses
-2. Operator guide — remote create, email triggers, credential rotation procedures
-3. User manual — `km stop`, `km extend --remote`, `km destroy --remote`, `km roll creds`
-4. Security model — credential rotation lifecycle, email auth flow
-5. Profile reference — new fields (if any added in Phases 22-23)
+2. Operator guide — remote create, email triggers, credential rotation procedures, OTEL observability, MITM proxy filtering
+3. User manual — `km stop`, `km extend --remote`, `km destroy --remote`, `km roll creds`, configurable sandbox ID prefix
+4. Security model — credential rotation lifecycle, email auth flow, GitHub repo-level MITM enforcement
+5. Profile reference — new fields from Phases 22-29 (telemetry, MITM filtering, metadata.prefix)
+6. Observability guide — Claude Code OTEL integration, telemetry pipeline, S3 storage
 
-**Depends on:** Phase 23
+**Depends on:** Phase 29
 
 ### Phase 25: GitHub Source Access Restrictions — deep testing of repo allowlists, clone/push enforcement, and deny-by-default for unlisted repos
 
@@ -648,7 +649,7 @@ Plans:
 - OTEL-07: Collector HTTP endpoint (4318) added to sandbox network allowlist so Claude Code OTLP HTTP exports reach the local collector without being blocked by the HTTP proxy
 
 **Depends on:** Phase 26
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 - [ ] 27-01-PLAN.md — Profile schema + collector config (claudeTelemetry types, logs/metrics pipelines)
