@@ -184,6 +184,7 @@ data "aws_iam_policy_document" "sandbox_containment" {
       "globalaccelerator:*",
       "networkmanager:*",
       "pricing:*",
+      "bedrock:*",
       "s3:GetAccountPublicAccessBlock",
       "s3:ListAllMyBuckets",
       "s3:PutAccountPublicAccessBlock",
