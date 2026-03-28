@@ -181,25 +181,28 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	}
 
 	// Step 5b: Export config values as env vars for Terragrunt's site.hcl get_env() calls.
-	if cfg.ApplicationAccountID != "" && os.Getenv("KM_ACCOUNTS_APPLICATION") == "" {
+	// Export config values as env vars for Terragrunt's site.hcl get_env() calls.
+	// Always set from config — config file values take precedence over pre-existing env.
+	// This is critical for Lambda remote-create where the subprocess inherits minimal env.
+	if cfg.ApplicationAccountID != "" {
 		os.Setenv("KM_ACCOUNTS_APPLICATION", cfg.ApplicationAccountID)
 	}
-	if cfg.ManagementAccountID != "" && os.Getenv("KM_ACCOUNTS_MANAGEMENT") == "" {
+	if cfg.ManagementAccountID != "" {
 		os.Setenv("KM_ACCOUNTS_MANAGEMENT", cfg.ManagementAccountID)
 	}
-	if cfg.Domain != "" && os.Getenv("KM_DOMAIN") == "" {
+	if cfg.Domain != "" {
 		os.Setenv("KM_DOMAIN", cfg.Domain)
 	}
-	if cfg.PrimaryRegion != "" && os.Getenv("KM_REGION") == "" {
+	if cfg.PrimaryRegion != "" {
 		os.Setenv("KM_REGION", cfg.PrimaryRegion)
 	}
-	if cfg.ArtifactsBucket != "" && os.Getenv("KM_ARTIFACTS_BUCKET") == "" {
+	if cfg.ArtifactsBucket != "" {
 		os.Setenv("KM_ARTIFACTS_BUCKET", cfg.ArtifactsBucket)
 	}
-	if cfg.Route53ZoneID != "" && os.Getenv("KM_ROUTE53_ZONE_ID") == "" {
+	if cfg.Route53ZoneID != "" {
 		os.Setenv("KM_ROUTE53_ZONE_ID", cfg.Route53ZoneID)
 	}
-	if cfg.OperatorEmail != "" && os.Getenv("KM_OPERATOR_EMAIL") == "" {
+	if cfg.OperatorEmail != "" {
 		os.Setenv("KM_OPERATOR_EMAIL", cfg.OperatorEmail)
 	}
 

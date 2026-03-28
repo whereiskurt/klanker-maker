@@ -162,13 +162,17 @@ func Load() (*Config, error) {
 	v.SetEnvPrefix("KM")
 	v.AutomaticEnv()
 
-	// Secondary config file: km-config.yaml in current directory (repo root).
+	// Secondary config file: km-config.yaml in current directory or repo root.
 	// Values in km-config.yaml are merged on top of ~/.km/config.yaml but environment
 	// variables (set via AutomaticEnv above) retain highest precedence.
 	v2 := viper.New()
 	v2.SetConfigName("km-config")
 	v2.SetConfigType("yaml")
 	v2.AddConfigPath(".")
+	// Also search KM_REPO_ROOT (used in Lambda where CWD != repo root)
+	if repoRoot := os.Getenv("KM_REPO_ROOT"); repoRoot != "" {
+		v2.AddConfigPath(repoRoot)
+	}
 	if err := v2.ReadInConfig(); err == nil {
 		// Merge platform keys from v2 into v only when not already overridden by env.
 		for _, key := range []string{
