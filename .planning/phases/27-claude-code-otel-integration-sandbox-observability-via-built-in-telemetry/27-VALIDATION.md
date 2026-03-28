@@ -2,8 +2,8 @@
 phase: 27
 slug: claude-code-otel-integration-sandbox-observability-via-built-in-telemetry
 status: draft
-nyquist_compliant: false
-wave_0_complete: false
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-03-28
 ---
 
@@ -36,17 +36,21 @@ created: 2026-03-28
 
 ## Per-Task Verification Map
 
-| Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
-|---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 27-01-01 | 01 | 1 | OTEL-05 | unit | `go test ./pkg/profile/... -run TestClaudeTelemetrySchema` | ❌ W0 | ⬜ pending |
-| 27-01-01 | 01 | 1 | OTEL-05 | unit | `go test ./pkg/profile/... -run TestClaudeTelemetrySchemaRejectsUnknown` | ❌ W0 | ⬜ pending |
-| 27-01-02 | 01 | 1 | OTEL-02 | unit | `python3 -c "import yaml; yaml.safe_load(open('sidecars/tracing/config.yaml'))"` | ✅ | ⬜ pending |
-| 27-01-02 | 01 | 1 | OTEL-05 | integration | `go test ./pkg/profile/... -run TestBuiltinProfiles` | ✅ | ⬜ pending |
-| 27-02-01 | 02 | 2 | OTEL-01 | unit | `go test ./pkg/compiler/... -run TestClaudeTelemetryEC2` | ❌ W0 | ⬜ pending |
-| 27-02-01 | 02 | 2 | OTEL-01 | unit | `go test ./pkg/compiler/... -run TestClaudeTelemetryEC2Absent` | ❌ W0 | ⬜ pending |
-| 27-02-01 | 02 | 2 | OTEL-06 | unit | `go test ./pkg/compiler/... -run TestOTELResourceAttributes` | ❌ W0 | ⬜ pending |
-| 27-02-02 | 02 | 2 | OTEL-01 | unit | `go test ./pkg/compiler/... -run TestClaudeTelemetryECS` | ❌ W0 | ⬜ pending |
-| 27-02-02 | 02 | 2 | OTEL-07 | unit | `go test ./pkg/compiler/... -run TestECSNoProxyIncludesLocalhost` | ❌ W0 | ⬜ pending |
+| Task ID | Plan | Wave | Requirement | Test Type | Automated Command | Inline TDD | Status |
+|---------|------|------|-------------|-----------|-------------------|------------|--------|
+| 27-01-01 | 01 | 1 | OTEL-05 | unit | `go test ./pkg/profile/... -run TestClaudeTelemetrySchema` | yes, in `pkg/profile/*_test.go` | ⬜ pending |
+| 27-01-01 | 01 | 1 | OTEL-05 | unit | `go test ./pkg/profile/... -run TestClaudeTelemetrySchemaRejectsUnknown` | yes, in `pkg/profile/*_test.go` | ⬜ pending |
+| 27-01-02 | 01 | 1 | OTEL-02 | unit | `python3 -c "import yaml; yaml.safe_load(open('sidecars/tracing/config.yaml'))"` | n/a (config file) | ⬜ pending |
+| 27-01-02 | 01 | 1 | OTEL-05 | integration | `go test ./pkg/profile/... -run TestBuiltinProfiles` | yes, existing test | ⬜ pending |
+| 27-02-01 | 02 | 2 | OTEL-01 | unit | `go test ./pkg/compiler/... -run TestClaudeTelemetryEC2` | yes, in `pkg/compiler/userdata_test.go` | ⬜ pending |
+| 27-02-01 | 02 | 2 | OTEL-01 | unit | `go test ./pkg/compiler/... -run TestClaudeTelemetryEC2Absent` | yes, in `pkg/compiler/userdata_test.go` | ⬜ pending |
+| 27-02-01 | 02 | 2 | OTEL-06 | unit | `go test ./pkg/compiler/... -run TestOTELResourceAttributes` | yes, in `pkg/compiler/userdata_test.go` | ⬜ pending |
+| 27-02-01 | 02 | 2 | OTEL-07 | unit | `go test ./pkg/compiler/... -run TestEC2IptablesNoOTELPorts` | yes, in `pkg/compiler/userdata_test.go` | ⬜ pending |
+| 27-02-02 | 02 | 2 | OTEL-01 | unit | `go test ./pkg/compiler/... -run TestClaudeTelemetryECS` | yes, in `pkg/compiler/service_hcl_test.go` | ⬜ pending |
+| 27-02-02 | 02 | 2 | OTEL-07 | unit | `go test ./pkg/compiler/... -run TestECSNoProxyIncludesLocalhost` | yes, in `pkg/compiler/service_hcl_test.go` | ⬜ pending |
+| 27-03-01 | 03 | 3 | OTEL-01 | unit | `go test ./pkg/compiler/... -run TestOtelcolBinaryDownload` | yes, in `pkg/compiler/userdata_test.go` | ⬜ pending |
+| 27-03-02 | 03 | 3 | OTEL-03 | unit | `go test ./pkg/compiler/... -run TestKmTracingSystemdUnit` | yes, in `pkg/compiler/userdata_test.go` | ⬜ pending |
+| 27-03-02 | 03 | 3 | OTEL-04 | unit | `go test ./pkg/compiler/... -run TestKmTracingOtelS3Bucket` | yes, in `pkg/compiler/userdata_test.go` | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -54,10 +58,13 @@ created: 2026-03-28
 
 ## Wave 0 Requirements
 
-- [ ] `pkg/profile/claude_telemetry_test.go` — stubs for OTEL-05 schema accept/reject
-- [ ] `pkg/compiler/claude_otel_test.go` — stubs for OTEL-01 (EC2 + ECS), OTEL-06 resource attributes, OTEL-07 NO_PROXY
+All plans use inline TDD (`tdd="true"` on tasks). Tests are written inside the same test files that the tasks modify — no separate Wave 0 stub files needed.
 
-*Existing `builtins_test.go` will catch built-in profile breakage automatically once the schema and YAML are updated.*
+- `pkg/profile/*_test.go` — schema accept/reject tests created inline by Plan 01 Task 1
+- `pkg/compiler/userdata_test.go` — EC2 OTEL env var, iptables, binary download, and systemd unit tests created inline by Plans 02-03
+- `pkg/compiler/service_hcl_test.go` — ECS OTEL env var and NO_PROXY tests created inline by Plan 02 Task 2
+
+Existing `builtins_test.go` will catch built-in profile breakage automatically once the schema and YAML are updated.
 
 ---
 
@@ -72,11 +79,12 @@ created: 2026-03-28
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 15s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify commands
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covered by inline TDD (no separate stub files needed)
+- [x] No watch-mode flags
+- [x] Feedback latency < 15s
+- [x] `nyquist_compliant: true` set in frontmatter
+- [x] `wave_0_complete: true` set in frontmatter
 
 **Approval:** pending
