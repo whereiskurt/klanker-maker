@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 26-05-PLAN.md
-last_updated: "2026-03-27T06:00:44.406Z"
+stopped_at: Completed 27-01-PLAN.md
+last_updated: "2026-03-28T22:12:46.190Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
-  total_phases: 26
+  total_phases: 29
   completed_phases: 25
-  total_plans: 86
-  completed_plans: 87
+  total_plans: 93
+  completed_plans: 88
   percent: 0
 ---
 
@@ -135,6 +135,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 26-live-operations-hardening P02 | 18min | 2 tasks | 7 files |
 | Phase 26 P04 | 10 | 2 tasks | 9 files |
 | Phase 26 P05 | 3min | 1 tasks | 2 files |
+| Phase 27-claude-code-otel-integration-sandbox-observability-via-built-in-telemetry P01 | 130s | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -361,6 +362,7 @@ Recent decisions affecting current work:
 - [Phase 26]: RemoteCommandPublisher interface extracted from publishRemoteCommand; WithPublisher constructors follow SandboxFetcher pattern
 - [Phase 26]: colorizeListStatus applied at print time to keep SandboxRecord data pure
 - [Phase 26]: Source-level test pattern used for MaxLifetime verification in create_test.go (consistent with existing pattern, avoids heavy create workflow mocking)
+- [Phase 27-claude-code-otel-integration]: *bool for ClaudeTelemetrySpec.Enabled: nil=default true, explicit false to disable; named OTel exporters (awss3/traces, awss3/logs, awss3/metrics) for separate S3 prefixes per signal type
 
 ### Roadmap Evolution
 
@@ -395,9 +397,10 @@ None yet.
 - Phase 26 added + completed: Live Operations Hardening — ~60 commits across 2-day session
 - Phase 27 added: Documentation Refresh (Phases 22-26)
 - Phase 27 added: Claude Code OTEL Integration — inject built-in Claude Code telemetry env vars into sandboxes, extend OTel Collector sidecar with logs+metrics pipelines, full agent observability to S3
+- Phase 28 added: GitHub repo-level MITM filtering in HTTP proxy — MITM GitHub hosts to inspect URL paths and enforce allowedRepos at the network layer, mirroring Bedrock/Anthropic pattern
 
 ## Session Continuity
 
-Last session: 2026-03-27T05:55:31.857Z
-Stopped at: Completed 26-05-PLAN.md
+Last session: 2026-03-28T22:12:46.187Z
+Stopped at: Completed 27-01-PLAN.md
 Resume file: None
