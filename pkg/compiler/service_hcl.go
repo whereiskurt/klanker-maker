@@ -150,6 +150,22 @@ const ecsServiceHCLTemplate = `locals {
 {{- if .HasEmail }}
           { name = "KM_EMAIL_ADDRESS", value = "{{ .SandboxEmail }}" },
 {{- end }}
+{{- if .ClaudeTelemetryEnabled }}
+          # OTEL-07: Claude Code OTLP exports to localhost:4317/4318 bypass the
+          # HTTP proxy via NO_PROXY (includes localhost,127.0.0.1).
+          { name = "CLAUDE_CODE_ENABLE_TELEMETRY",  value = "1" },
+          { name = "OTEL_METRICS_EXPORTER",         value = "otlp" },
+          { name = "OTEL_LOGS_EXPORTER",            value = "otlp" },
+          { name = "OTEL_EXPORTER_OTLP_PROTOCOL",   value = "grpc" },
+          { name = "OTEL_EXPORTER_OTLP_ENDPOINT",   value = "http://localhost:4317" },
+{{- if .ClaudeTelemetryLogPrompts }}
+          { name = "OTEL_LOG_USER_PROMPTS",         value = "1" },
+{{- end }}
+{{- if .ClaudeTelemetryLogToolDetails }}
+          { name = "OTEL_LOG_TOOL_DETAILS",         value = "1" },
+{{- end }}
+          { name = "OTEL_RESOURCE_ATTRIBUTES",      value = "{{ .OTELResourceAttributes }}" },
+{{- end }}
         ]
 {{- if .EffectiveWritablePaths }}
         mountPoints = [
@@ -388,6 +404,11 @@ type ecsHCLParams struct {
 	GitHubSSMPath      string   // /sandbox/{sandbox-id}/github-token
 	GitHubAllowedRepos []string // from profile.sourceAccess.github.allowedRepos
 	GitHubPermissions  string   // HCL map literal e.g. { contents = "read" }
+	// Claude Code OTEL telemetry (OTEL-01, OTEL-06)
+	ClaudeTelemetryEnabled        bool   // true when claudeTelemetry.enabled is true (or nil=default)
+	ClaudeTelemetryLogPrompts     bool   // controls OTEL_LOG_USER_PROMPTS
+	ClaudeTelemetryLogToolDetails bool   // controls OTEL_LOG_TOOL_DETAILS
+	OTELResourceAttributes        string // pre-formatted: "sandbox_id=X,profile_name=Y,substrate=ecs"
 }
 
 // ============================================================
@@ -661,6 +682,16 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		compiledPerms := pkggithub.CompilePermissions(p.Spec.SourceAccess.GitHub.Permissions)
 		params.GitHubPermissions = permissionsToHCL(compiledPerms)
 	}
+
+	// Populate Claude Code OTEL telemetry fields (OTEL-01, OTEL-06).
+	// IsEnabled() returns true when ClaudeTelemetry is nil (default on).
+	ct := p.Spec.Observability.ClaudeTelemetry
+	params.ClaudeTelemetryEnabled = ct.IsEnabled()
+	if ct != nil {
+		params.ClaudeTelemetryLogPrompts = ct.LogPrompts
+		params.ClaudeTelemetryLogToolDetails = ct.LogToolDetails
+	}
+	params.OTELResourceAttributes = fmt.Sprintf("sandbox_id=%s,profile_name=%s,substrate=ecs", sandboxID, p.Metadata.Name)
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, params); err != nil {
