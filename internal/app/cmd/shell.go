@@ -27,6 +27,45 @@ func NewShellCmd(cfg *config.Config) *cobra.Command {
 	return NewShellCmdWithFetcher(cfg, nil, nil)
 }
 
+// NewAgentCmd creates the "km agent" command that launches Claude Code inside a sandbox.
+func NewAgentCmd(cfg *config.Config) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:          "agent <sandbox-id | #number> [prompt...]",
+		Short:        "Launch Claude Code inside a sandbox",
+		Long: `Launch Claude Code (claude) inside a running sandbox via SSM.
+
+Connects as the sandbox user and runs claude with any additional arguments.
+If a prompt is provided after the sandbox ID, it's passed to claude via --prompt.
+
+Examples:
+  km agent 1                        # interactive claude session
+  km agent 1 -p "fix the tests"    # pass a prompt
+  km agent #2                       # by number`,
+		Args:         cobra.MinimumNArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			sandboxID, err := ResolveSandboxID(ctx, cfg, args[0])
+			if err != nil {
+				return err
+			}
+
+			// Build the claude command with any remaining args
+			claudeCmd := "claude"
+			if len(args) > 1 {
+				// Pass remaining args directly to claude
+				claudeCmd = "claude " + strings.Join(args[1:], " ")
+			}
+
+			return runAgent(cmd, cfg, nil, nil, sandboxID, claudeCmd)
+		},
+	}
+	return cmd
+}
+
 // NewShellCmdWithFetcher builds the shell command with an optional custom fetcher and
 // exec function. Pass nil for real AWS-backed clients. Used in tests for DI.
 func NewShellCmdWithFetcher(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc) *cobra.Command {
@@ -121,6 +160,52 @@ func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 	default:
 		return fmt.Errorf("unsupported substrate %q for km shell", rec.Substrate)
 	}
+}
+
+// runAgent launches claude inside a sandbox via SSM.
+func runAgent(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, sandboxID, claudeCmd string) error {
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if fetcher == nil {
+		if cfg.StateBucket == "" {
+			return fmt.Errorf("state bucket not configured")
+		}
+		awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+		if err != nil {
+			return fmt.Errorf("load AWS config: %w", err)
+		}
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket)
+	}
+	if execFn == nil {
+		execFn = defaultShellExec
+	}
+
+	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
+	if err != nil {
+		return fmt.Errorf("fetch sandbox: %w", err)
+	}
+	if rec.Status == "stopped" {
+		return fmt.Errorf("sandbox %s is stopped", sandboxID)
+	}
+
+	instanceID, err := extractResourceID(rec.Resources, ":instance/")
+	if err != nil {
+		return fmt.Errorf("find EC2 instance: %w", err)
+	}
+
+	// Run claude as sandbox user via SSM interactive command
+	ssmCmd := fmt.Sprintf("sudo -u sandbox -i bash -lc '%s'", claudeCmd)
+	c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
+		"--target", instanceID, "--region", rec.Region, "--profile", "klanker-terraform",
+		"--document-name", "AWS-StartInteractiveCommand",
+		"--parameters", fmt.Sprintf(`{"command":["%s"]}`, ssmCmd))
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	return execFn(c)
 }
 
 // execSSMSession builds and runs an SSM session.

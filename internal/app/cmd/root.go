@@ -68,6 +68,7 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	root.AddCommand(NewBootstrapCmd(cfg))
 	root.AddCommand(NewBudgetCmd(cfg))
 	root.AddCommand(NewShellCmd(cfg))
+	root.AddCommand(NewAgentCmd(cfg))
 	root.AddCommand(NewDoctorCmd(cfg))
 	root.AddCommand(NewRollCmd(cfg))
 	root.AddCommand(NewRsyncCmd(cfg))
