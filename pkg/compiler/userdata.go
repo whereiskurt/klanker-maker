@@ -77,6 +77,8 @@ cat > /etc/profile.d/km-identity.sh << EOF
 export KM_SANDBOX_ID="{{ .SandboxID }}"
 export KM_SANDBOX_HOSTNAME="${SANDBOX_FQDN}"
 export KM_SANDBOX_DOMAIN="{{ .EmailDomain }}"
+export KM_SANDBOX_EMAIL="{{ .SandboxEmail }}"
+export KM_SANDBOX_FROM_EMAIL="{{ .SandboxEmail }}"
 EOF
 chmod 644 /etc/profile.d/km-identity.sh
 echo "[km-bootstrap] Hostname set to ${SANDBOX_FQDN}"
