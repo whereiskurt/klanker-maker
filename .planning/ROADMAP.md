@@ -633,3 +633,22 @@ Plans:
 - [ ] 26-03-PLAN.md — CLI UX: aliases, completion, help text, color styling
 - [ ] 26-04-PLAN.md — Remote flag testing, failed status in km list, test backfill
 - [ ] 26-05-PLAN.md — Gap closure: populate MaxLifetime in metadata at create time
+
+### Phase 27: Claude Code OTEL Integration — sandbox observability via built-in telemetry
+
+**Goal:** Claude Code running inside sandboxes exports full OpenTelemetry telemetry (prompts, tool calls, API requests, token usage, cost metrics) through the existing OTel Collector sidecar to S3 — giving operators complete visibility into agent behavior, spend, and performance per sandbox session
+
+**Requirements**: OTEL-01, OTEL-02, OTEL-03, OTEL-04, OTEL-05, OTEL-06, OTEL-07
+- OTEL-01: Claude Code OTEL env vars (CLAUDE_CODE_ENABLE_TELEMETRY, OTEL_METRICS_EXPORTER, OTEL_LOGS_EXPORTER, OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_LOG_USER_PROMPTS, OTEL_LOG_TOOL_DETAILS) injected into sandbox via user-data (EC2) and container environment (ECS)
+- OTEL-02: OTel Collector sidecar config extended with `logs` and `metrics` pipelines (currently only has `traces`) — all three signal types exported to S3 at `s3://<bucket>/{signal}/{sandbox-id}/`
+- OTEL-03: Claude Code prompt events (`claude_code.user_prompt`), tool result events (`claude_code.tool_result`), API request events (`claude_code.api_request`), and API error events (`claude_code.api_error`) flow through the collector to S3 in OTLP JSON format
+- OTEL-04: Claude Code metrics (`claude_code.token.usage`, `claude_code.cost.usage`, `claude_code.session.count`, `claude_code.lines_of_code.count`, `claude_code.active_time.total`) flow through the collector to S3
+- OTEL-05: Profile schema supports operator control over telemetry: `spec.observability.claudeTelemetry` with fields for enabling/disabling prompt logging and tool detail logging per profile
+- OTEL-06: OTEL_RESOURCE_ATTRIBUTES includes sandbox_id, profile_name, and substrate for per-sandbox filtering in downstream analysis
+- OTEL-07: Collector HTTP endpoint (4318) added to sandbox network allowlist so Claude Code OTLP HTTP exports reach the local collector without being blocked by the HTTP proxy
+
+**Depends on:** Phase 26
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 27 to break down)

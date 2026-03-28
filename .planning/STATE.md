@@ -394,6 +394,7 @@ None yet.
 - Phase 25 added: GitHub Source Access Restrictions — deep testing of repo allowlists, deny-by-default
 - Phase 26 added + completed: Live Operations Hardening — ~60 commits across 2-day session
 - Phase 27 added: Documentation Refresh (Phases 22-26)
+- Phase 27 added: Claude Code OTEL Integration — inject built-in Claude Code telemetry env vars into sandboxes, extend OTel Collector sidecar with logs+metrics pipelines, full agent observability to S3
 
 ## Session Continuity
 
