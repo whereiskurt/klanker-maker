@@ -653,3 +653,14 @@ Plans:
 Plans:
 - [ ] 27-01-PLAN.md — Profile schema + collector config (claudeTelemetry types, logs/metrics pipelines)
 - [ ] 27-02-PLAN.md — Compiler env var injection (EC2 user-data + ECS container env)
+
+### Phase 28: GitHub repo-level MITM filtering in HTTP proxy
+
+**Goal:** Enforce sourceAccess.github.allowedRepos at the network layer via MITM path inspection in the HTTP proxy sidecar — close the gap where github.com in allowedHosts permits access to any public repo
+**Requirements**: NETW-08
+**Depends on:** Phase 27
+**Plans:** 2 plans
+
+Plans:
+- [ ] 28-01-PLAN.md — GitHub MITM proxy core (TDD: ExtractRepoFromPath, IsRepoAllowed, handler registration)
+- [ ] 28-02-PLAN.md — Compiler wiring (EC2 userdata + ECS service.hcl + main.go env var)
