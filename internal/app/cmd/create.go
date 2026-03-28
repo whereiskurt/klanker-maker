@@ -72,6 +72,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	var awsProfile string
 	var verbose bool
 	var remote bool
+	var sandboxIDOverride string
 
 	cmd := &cobra.Command{
 		Use:   "create <profile.yaml>",
@@ -85,7 +86,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 			if remote {
 				return runCreateRemote(cfg, args[0], onDemand, awsProfile)
 			}
-			return runCreate(cfg, args[0], onDemand, awsProfile, verbose)
+			return runCreate(cfg, args[0], onDemand, awsProfile, verbose, sandboxIDOverride)
 		},
 	}
 
@@ -97,12 +98,15 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 		"Show full terragrunt/terraform output")
 	cmd.Flags().BoolVar(&remote, "remote", false,
 		"Dispatch sandbox creation to a Lambda (remote create) — uploads artifacts to S3 and publishes EventBridge event")
+	cmd.Flags().StringVar(&sandboxIDOverride, "sandbox-id", "",
+		"Use a specific sandbox ID instead of generating one (used by create-handler Lambda)")
+	cmd.Flags().MarkHidden("sandbox-id")
 
 	return cmd
 }
 
 // runCreate executes the full create workflow.
-func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile string, verbose bool) error {
+func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile string, verbose bool, sandboxIDOverride string) error {
 	createStart := time.Now()
 	ctx := context.Background()
 
@@ -157,8 +161,11 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		resolvedProfile = parsed
 	}
 
-	// Step 4: Generate sandbox ID
-	sandboxID := compiler.GenerateSandboxID()
+	// Step 4: Generate sandbox ID (or use override from create-handler Lambda)
+	sandboxID := sandboxIDOverride
+	if sandboxID == "" {
+		sandboxID = compiler.GenerateSandboxID()
+	}
 	substrate := resolvedProfile.Spec.Runtime.Substrate
 	spot := resolvedProfile.Spec.Runtime.Spot && !onDemand
 	printBanner("km create", sandboxID)

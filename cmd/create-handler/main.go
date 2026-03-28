@@ -121,7 +121,7 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 
 	// Step 3: Build km create subprocess arguments
 	kmBinary := filepath.Join(h.ToolchainDir, "km")
-	args := []string{"create", profilePath, "--aws-profile", ""}
+	args := []string{"create", profilePath, "--aws-profile", "", "--sandbox-id", event.SandboxID}
 	if event.OnDemand {
 		args = append(args, "--on-demand")
 	}
