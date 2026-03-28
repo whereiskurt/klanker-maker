@@ -668,7 +668,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		HasAllowedRefs:     p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRefs) > 0,
 		AllowedRefs:        joinAllowedRefs(p),
 		AllowedDNSSuffixes: strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
-		AllowedHTTPHosts:   strings.Join(p.Spec.Network.Egress.AllowedHosts, ","),
+		AllowedHTTPHosts:   strings.Join(append(p.Spec.Network.Egress.AllowedHosts, p.Spec.Network.Egress.AllowedDNSSuffixes...), ","),
 		KMArtifactsBucket:  artifactsBucket,
 		UseSpot:            useSpot,
 		// Email fields — every sandbox gets an email identity.

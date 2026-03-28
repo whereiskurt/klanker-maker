@@ -606,7 +606,7 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		PublicSubnets:         network.PublicSubnets,
 		SGEgressRules:         sgRules,
 		AllowedDNSSuffixes:    strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
-		AllowedHTTPHosts:      strings.Join(p.Spec.Network.Egress.AllowedHosts, ","),
+		AllowedHTTPHosts:      strings.Join(append(p.Spec.Network.Egress.AllowedHosts, p.Spec.Network.Egress.AllowedDNSSuffixes...), ","),
 		ArtifactsBucket:       artifactBucket,
 		// Sidecar ECR image URIs computed from KM_ACCOUNTS_APPLICATION + region + KM_SIDECAR_VERSION.
 		DNSProxyImage:  sidecarImage("dns-proxy"),

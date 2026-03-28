@@ -102,6 +102,8 @@ func WithCustomCA(certPEM []byte) ProxyOption {
 // IsHostAllowed reports whether host is in the allowed list.
 // The port is stripped from "host:port" before comparison.
 // Matching is case-insensitive. An empty allowed list denies everything.
+// Entries starting with "." are treated as suffix matches (e.g. ".amazonaws.com"
+// matches "bedrock-runtime.us-east-1.amazonaws.com").
 func IsHostAllowed(host string, allowed []string) bool {
 	h, _, err := net.SplitHostPort(host)
 	if err != nil {
@@ -110,7 +112,13 @@ func IsHostAllowed(host string, allowed []string) bool {
 	}
 	h = strings.ToLower(h)
 	for _, a := range allowed {
-		if strings.ToLower(a) == h {
+		a = strings.ToLower(a)
+		if strings.HasPrefix(a, ".") {
+			// Suffix match: ".amazonaws.com" matches "x.y.amazonaws.com"
+			if strings.HasSuffix(h, a) {
+				return true
+			}
+		} else if a == h {
 			return true
 		}
 	}
