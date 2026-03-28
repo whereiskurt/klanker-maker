@@ -27,20 +27,23 @@ func NewShellCmd(cfg *config.Config) *cobra.Command {
 	return NewShellCmdWithFetcher(cfg, nil, nil)
 }
 
-// NewAgentCmd creates the "km agent" command that launches Claude Code inside a sandbox.
+// NewAgentCmd creates the "km agent" command that launches an AI agent inside a sandbox.
 func NewAgentCmd(cfg *config.Config) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:          "agent <sandbox-id | #number> [prompt...]",
-		Short:        "Launch Claude Code inside a sandbox",
-		Long: `Launch Claude Code (claude) inside a running sandbox via SSM.
+	var useClaude bool
+	var useCodex bool
 
-Connects as the sandbox user and runs claude with any additional arguments.
-If a prompt is provided after the sandbox ID, it's passed to claude via --prompt.
+	cmd := &cobra.Command{
+		Use:          "agent <sandbox-id | #number> [-- extra-args...]",
+		Short:        "Launch an AI coding agent inside a sandbox",
+		Long: `Launch an AI coding agent inside a running sandbox via SSM.
+
+Connects as the sandbox user and runs the selected agent binary.
+Extra arguments after -- are passed through to the agent.
 
 Examples:
-  km agent 1                        # interactive claude session
-  km agent 1 -p "fix the tests"    # pass a prompt
-  km agent #2                       # by number`,
+  km agent 1 --claude                    # interactive claude session
+  km agent 1 --claude -- -p "fix tests"  # pass args to claude
+  km agent #2 --codex                    # launch codex (future)`,
 		Args:         cobra.MinimumNArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -53,16 +56,28 @@ Examples:
 				return err
 			}
 
-			// Build the claude command with any remaining args
-			claudeCmd := "claude"
-			if len(args) > 1 {
-				// Pass remaining args directly to claude
-				claudeCmd = "claude " + strings.Join(args[1:], " ")
+			var agentCmd string
+			switch {
+			case useClaude:
+				agentCmd = "claude"
+			case useCodex:
+				agentCmd = "codex"
+			default:
+				return fmt.Errorf("specify an agent: --claude or --codex")
 			}
 
-			return runAgent(cmd, cfg, nil, nil, sandboxID, claudeCmd)
+			// Pass any extra args after the sandbox ID
+			if len(args) > 1 {
+				agentCmd += " " + strings.Join(args[1:], " ")
+			}
+
+			return runAgent(cmd, cfg, nil, nil, sandboxID, agentCmd)
 		},
 	}
+
+	cmd.Flags().BoolVar(&useClaude, "claude", false, "Launch Claude Code")
+	cmd.Flags().BoolVar(&useCodex, "codex", false, "Launch OpenAI Codex (future)")
+
 	return cmd
 }
 
