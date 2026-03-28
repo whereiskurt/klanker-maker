@@ -664,3 +664,21 @@ Plans:
 Plans:
 - [ ] 28-01-PLAN.md — GitHub MITM proxy core (TDD: ExtractRepoFromPath, IsRepoAllowed, handler registration)
 - [ ] 28-02-PLAN.md — Compiler wiring (EC2 userdata + ECS service.hcl + main.go env var)
+
+### Phase 29: Configurable Sandbox ID Prefix — profile-driven prefix replaces hardcoded 'sb'
+
+**Goal:** Sandbox ID prefix is configurable per profile via `metadata.prefix` — operators define meaningful prefixes (e.g., `claude`, `build`, `research`) that replace the hardcoded `sb-` prefix in sandbox IDs, AWS tags, S3 paths, SSM parameters, IAM roles, email addresses, and CloudWatch log groups. Profiles without `metadata.prefix` default to `sb` for backwards compatibility.
+**Requirements**: PREFIX-01, PREFIX-02, PREFIX-03, PREFIX-04, PREFIX-05
+**Depends on:** Phase 28
+**Success Criteria** (what must be TRUE):
+  1. Profile schema supports optional `metadata.prefix` field — `km validate` accepts profiles with and without it; prefix must match `^[a-z][a-z0-9]{0,11}$` (lowercase, starts with letter, max 12 chars)
+  2. `GenerateSandboxID()` accepts a prefix parameter — a profile with `metadata.prefix: claude` generates IDs like `claude-a1b2c3d4` instead of `sb-a1b2c3d4`
+  3. All sandbox ID validation patterns (`destroy.go`, `sandbox_ref.go`, `email-create-handler`) accept any valid prefix, not just `sb-`
+  4. Compiler output (S3 paths, SSM parameters, IAM role names, CloudWatch log groups, email addresses) uses the sandbox ID as-is with the profile-specified prefix — no component assumes the `sb-` prefix
+  5. Built-in profiles (`profiles/*.yaml`) are updated: `claude-dev.yaml` gets `prefix: claude`, others get appropriate prefixes or omit the field to default to `sb`
+  6. Existing sandboxes created with `sb-` prefix continue to work — `km list`, `km status`, `km destroy` operate on the full sandbox ID regardless of prefix
+**Plans:** 2 plans
+
+Plans:
+- [ ] 29-01-PLAN.md — Schema prefix field + parameterized GenerateSandboxID
+- [ ] 29-02-PLAN.md — Generalize validation patterns + fix email handler + update profiles
