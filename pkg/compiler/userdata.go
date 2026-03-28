@@ -98,6 +98,29 @@ echo "[km-bootstrap] Profile env vars written ({{ len .ProfileEnv }} vars)"
 {{- end }}
 
 # ============================================================
+# 2.9. Claude Code OpenTelemetry environment
+# ============================================================
+{{- if .ClaudeTelemetryEnabled }}
+cat >> /etc/profile.d/km-profile-env.sh << 'CLAUDE_OTEL'
+export CLAUDE_CODE_ENABLE_TELEMETRY=1
+export OTEL_METRICS_EXPORTER=otlp
+export OTEL_LOGS_EXPORTER=otlp
+export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+{{- if .ClaudeTelemetryLogPrompts }}
+export OTEL_LOG_USER_PROMPTS=1
+{{- end }}
+{{- if .ClaudeTelemetryLogToolDetails }}
+export OTEL_LOG_TOOL_DETAILS=1
+{{- end }}
+CLAUDE_OTEL
+cat >> /etc/profile.d/km-profile-env.sh << EOF
+export OTEL_RESOURCE_ATTRIBUTES="sandbox_id={{ .SandboxID }},profile_name={{ .ProfileName }},substrate={{ .Substrate }}"
+EOF
+echo "[km-bootstrap] Claude Code OTEL telemetry configured"
+{{- end }}
+
+# ============================================================
 # 3. Secret injection: fetch allowed SSM paths and export as env vars
 # ============================================================
 {{- if .SecretPaths }}
@@ -655,6 +678,12 @@ type userDataParams struct {
 	// ProfileEnv holds key=value pairs from profile spec.execution.env to export
 	// via /etc/profile.d/ so they're available in all login shells (SSM sessions).
 	ProfileEnv map[string]string
+	// Claude Code OTEL telemetry (OTEL-01, OTEL-06)
+	ClaudeTelemetryEnabled       bool
+	ClaudeTelemetryLogPrompts    bool
+	ClaudeTelemetryLogToolDetails bool
+	ProfileName                  string
+	Substrate                    string
 }
 
 // otpSecret holds an SSM path and derived env var name for an OTP secret.
@@ -745,6 +774,17 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 	params.InitCommands = p.Spec.Execution.InitCommands
 	params.InitScripts = p.Spec.Execution.InitScripts
 	params.ProfileEnv = p.Spec.Execution.Env
+
+	// Populate Claude Code OTEL telemetry fields (OTEL-01, OTEL-06).
+	// IsEnabled() returns true when ClaudeTelemetry is nil (default on).
+	ct := p.Spec.Observability.ClaudeTelemetry
+	params.ClaudeTelemetryEnabled = ct.IsEnabled()
+	if ct != nil {
+		params.ClaudeTelemetryLogPrompts = ct.LogPrompts
+		params.ClaudeTelemetryLogToolDetails = ct.LogToolDetails
+	}
+	params.ProfileName = p.Metadata.Name
+	params.Substrate = p.Spec.Runtime.Substrate
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, params); err != nil {
