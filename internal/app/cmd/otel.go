@@ -112,7 +112,11 @@ func runOtel(ctx context.Context, cfg *config.Config, sandboxID string, w io.Wri
 			continue
 		}
 		if count == 0 {
-			fmt.Fprintf(w, "  %-10s (none)\n", signal+":")
+			hint := ""
+			if signal == "traces" {
+				hint = " — Claude Code emits logs + metrics only"
+			}
+			fmt.Fprintf(w, "  %-10s (none%s)\n", signal+":", hint)
 		} else {
 			fmt.Fprintf(w, "  %-10s %d files, %s total, latest: %s\n",
 				signal+":", count, humanSize(totalSize), latest)
