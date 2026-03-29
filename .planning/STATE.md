@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: "Completed 32-03: Gap closure -- TestRsyncSaveCmd and live verification"
-last_updated: "2026-03-29T18:26:59.097Z"
+stopped_at: "Completed 34-01: agent-orchestrator, goose, and codex sandbox profiles"
+last_updated: "2026-03-29T21:14:57.525Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
-  total_phases: 33
-  completed_phases: 30
-  total_plans: 99
-  completed_plans: 100
+  total_phases: 34
+  completed_phases: 31
+  total_plans: 103
+  completed_plans: 101
   percent: 0
 ---
 
@@ -148,6 +148,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 32-profile-scoped-rsync-paths-with-external-file-lists-and-shell-wildcards P01 | 87s | 1 tasks | 4 files |
 | Phase 32 P02 | 289s | 2 tasks | 2 files |
 | Phase 32 P03 | 618s | 2 tasks | 2 files |
+| Phase 34-agent-profiles-agent-orchestrator-goose-and-codex-sandbox-profiles P01 | 14min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -395,6 +396,8 @@ Recent decisions affecting current work:
 - [Phase 32]: Unquoted paths in tar command for bash wildcard expansion after regex validation
 - [Phase 32]: Best-effort S3 profile fetch in rsync save gracefully degrades to global fallback
 - [Phase 32]: Extracted buildTarShellCmd as package-level helper for testability; paths space-joined for unquoted wildcard expansion
+- [Phase 34-agent-profiles-agent-orchestrator-goose-and-codex-sandbox-profiles]: Rust agent binaries need explicit CA cert env var (SSL_CERT_FILE/CODEX_CA_CERTIFICATE) pointing to /usr/local/share/ca-certificates/km-proxy-ca.crt for MITM proxy
+- [Phase 34-agent-profiles-agent-orchestrator-goose-and-codex-sandbox-profiles]: Lambda toolchain km binary must be updated alongside schema changes — cross-compile linux/arm64 and upload to s3://km-artifacts-12345/toolchain/km
 
 ### Roadmap Evolution
 
@@ -446,6 +449,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-29T18:24:07.393Z
-Stopped at: Completed 32-03: Gap closure -- TestRsyncSaveCmd and live verification
+Last session: 2026-03-29T21:14:57.521Z
+Stopped at: Completed 34-01: agent-orchestrator, goose, and codex sandbox profiles
 Resume file: None
