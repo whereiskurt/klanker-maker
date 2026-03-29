@@ -742,10 +742,11 @@ Plans:
 
 ### Phase 32: Profile-scoped rsync paths with external file lists and shell wildcards
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Move rsync path configuration from global km-config.yaml into per-profile YAML with external file list references and shell wildcard support
+**Requirements**: [RSYNC-01, RSYNC-02, RSYNC-03, RSYNC-04, RSYNC-05, RSYNC-06]
 **Depends on:** Phase 31
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 32 to break down)
+- [ ] 32-01-PLAN.md — Add rsyncPaths and rsyncFileList fields to profile schema and types
+- [ ] 32-02-PLAN.md — Wire profile-scoped paths into km rsync save with wildcard support
