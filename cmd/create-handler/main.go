@@ -44,6 +44,7 @@ type CreateEvent struct {
 	ArtifactPrefix string `json:"artifact_prefix"`
 	OperatorEmail  string `json:"operator_email,omitempty"`
 	OnDemand       bool   `json:"on_demand"`
+	Alias          string `json:"alias,omitempty"`
 }
 
 // S3GetAPI is the narrow S3 interface needed to download files.
@@ -124,6 +125,9 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 	args := []string{"create", profilePath, "--aws-profile", "", "--sandbox-id", event.SandboxID}
 	if event.OnDemand {
 		args = append(args, "--on-demand")
+	}
+	if event.Alias != "" {
+		args = append(args, "--alias", event.Alias)
 	}
 
 	// Pass context env vars to the subprocess

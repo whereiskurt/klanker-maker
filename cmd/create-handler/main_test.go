@@ -230,3 +230,78 @@ func TestCreateHandler_OnDemandFlag(t *testing.T) {
 		t.Errorf("expected --on-demand in args when event.OnDemand=true, got: %v", capturedArgs)
 	}
 }
+
+// TestCreateHandler_AliasForwarded verifies --alias is passed to the subprocess
+// when the event includes an alias override.
+func TestCreateHandler_AliasForwarded(t *testing.T) {
+	mockS3 := &mockS3GetAPI{getBody: minimalProfile}
+
+	var capturedArgs []string
+	h := &CreateHandler{
+		S3Client:     mockS3,
+		SESClient:    &mockSESAPI{},
+		Domain:       "sandboxes.example.com",
+		ToolchainDir: "/bin/true",
+		RunCommand: func(cmd string, args []string, env []string) ([]byte, error) {
+			capturedArgs = args
+			return []byte("ok"), nil
+		},
+	}
+
+	event := CreateEvent{
+		SandboxID:      "sb-aliasforward",
+		ArtifactBucket: "km-artifacts",
+		ArtifactPrefix: "remote-create/sb-aliasforward",
+		Alias:          "cc1",
+	}
+
+	if err := h.Handle(context.Background(), wrapEvent(event)); err != nil {
+		t.Fatalf("Handle returned unexpected error: %v", err)
+	}
+
+	hasAlias := false
+	for i, arg := range capturedArgs {
+		if arg == "--alias" && i+1 < len(capturedArgs) && capturedArgs[i+1] == "cc1" {
+			hasAlias = true
+			break
+		}
+	}
+	if !hasAlias {
+		t.Errorf("expected --alias cc1 in args, got: %v", capturedArgs)
+	}
+}
+
+// TestCreateHandler_NoAliasWhenEmpty verifies --alias is NOT passed when event
+// has no alias set.
+func TestCreateHandler_NoAliasWhenEmpty(t *testing.T) {
+	mockS3 := &mockS3GetAPI{getBody: minimalProfile}
+
+	var capturedArgs []string
+	h := &CreateHandler{
+		S3Client:     mockS3,
+		SESClient:    &mockSESAPI{},
+		Domain:       "sandboxes.example.com",
+		ToolchainDir: "/bin/true",
+		RunCommand: func(cmd string, args []string, env []string) ([]byte, error) {
+			capturedArgs = args
+			return []byte("ok"), nil
+		},
+	}
+
+	event := CreateEvent{
+		SandboxID:      "sb-noalias",
+		ArtifactBucket: "km-artifacts",
+		ArtifactPrefix: "remote-create/sb-noalias",
+	}
+
+	if err := h.Handle(context.Background(), wrapEvent(event)); err != nil {
+		t.Fatalf("Handle returned unexpected error: %v", err)
+	}
+
+	for _, arg := range capturedArgs {
+		if arg == "--alias" {
+			t.Errorf("expected no --alias in args when event.Alias is empty, got: %v", capturedArgs)
+			break
+		}
+	}
+}

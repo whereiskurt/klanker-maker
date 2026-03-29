@@ -25,6 +25,7 @@ type SandboxCreateDetail struct {
 	OperatorEmail  string `json:"operator_email,omitempty"`
 	OnDemand       bool   `json:"on_demand"`
 	CreatedBy      string `json:"created_by,omitempty"` // "cli", "email", "api", "remote"
+	Alias          string `json:"alias,omitempty"`       // --alias override, forwarded to create subprocess
 }
 
 // PutSandboxCreateEvent publishes a SandboxCreate event to EventBridge.

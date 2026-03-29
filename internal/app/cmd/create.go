@@ -185,6 +185,27 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		return fmt.Errorf("AWS credential validation failed — check that profile %q is configured: %w", awsProfile, err)
 	}
 
+	// Step 5c: Enforce sandbox limit before any provisioning.
+	if cfg.StateBucket != "" {
+		s3Client := s3.NewFromConfig(awsCfg)
+		activeCount, limitErr := checkSandboxLimit(ctx, s3Client, cfg.StateBucket, cfg.MaxSandboxes)
+		if limitErr != nil {
+			// Best-effort operator notification — don't block on SES failure.
+			if cfg.OperatorEmail != "" {
+				sesClient := sesv2.NewFromConfig(awsCfg)
+				notifDomain := cfg.Domain
+				if notifDomain == "" {
+					notifDomain = "klankermaker.ai"
+				}
+				if notifErr := awspkg.SendLimitNotification(ctx, sesClient, cfg.OperatorEmail, sandboxID, notifDomain, activeCount, cfg.MaxSandboxes); notifErr != nil {
+					log.Warn().Err(notifErr).Msg("failed to send sandbox limit notification (non-fatal)")
+				}
+			}
+			fmt.Fprintf(os.Stderr, "\nERROR: %s\n", limitErr)
+			return limitErr
+		}
+	}
+
 	// Step 5b: Export config values as env vars for Terragrunt's site.hcl get_env() calls.
 	// Export config values as env vars for Terragrunt's site.hcl get_env() calls.
 	// Always set from config — config file values take precedence over pre-existing env.
@@ -900,6 +921,26 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, awsP
 		return fmt.Errorf("AWS credential validation failed — check that profile %q is configured: %w", awsProfile, err)
 	}
 
+	// Step 5c: Enforce sandbox limit before dispatching remote create.
+	if cfg.StateBucket != "" {
+		s3Client := s3.NewFromConfig(awsCfg)
+		activeCount, limitErr := checkSandboxLimit(ctx, s3Client, cfg.StateBucket, cfg.MaxSandboxes)
+		if limitErr != nil {
+			if cfg.OperatorEmail != "" {
+				sesClient := sesv2.NewFromConfig(awsCfg)
+				notifDomain := cfg.Domain
+				if notifDomain == "" {
+					notifDomain = "klankermaker.ai"
+				}
+				if notifErr := awspkg.SendLimitNotification(ctx, sesClient, cfg.OperatorEmail, sandboxID, notifDomain, activeCount, cfg.MaxSandboxes); notifErr != nil {
+					log.Warn().Err(notifErr).Msg("failed to send sandbox limit notification (non-fatal)")
+				}
+			}
+			fmt.Fprintf(os.Stderr, "\nERROR: %s\n", limitErr)
+			return limitErr
+		}
+	}
+
 	// Step 6: Load network config for compilation
 	repoRoot := findRepoRoot()
 	region := resolvedProfile.Spec.Runtime.Region
@@ -1040,6 +1081,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, awsP
 		ArtifactPrefix: artifactPrefix,
 		OperatorEmail:  remoteOperatorEmail,
 		OnDemand:       onDemand,
+		Alias:          sandboxAlias,
 	}
 	if ebErr := awspkg.PutSandboxCreateEvent(ctx, ebClient, detail); ebErr != nil {
 		return fmt.Errorf("publish SandboxCreate event: %w", ebErr)
@@ -1166,4 +1208,30 @@ func findRepoRoot() string {
 		dir = parent
 	}
 	return cwd
+}
+
+// checkSandboxLimit checks if the active sandbox count has reached the configured limit.
+// Returns (activeCount, error). Error is non-nil when limit is reached.
+// If maxSandboxes is 0, the check is skipped (unlimited).
+// Active sandboxes are those whose Status != "destroyed".
+func checkSandboxLimit(ctx context.Context, s3Client awspkg.S3ListAPI, bucket string, maxSandboxes int) (int, error) {
+	if maxSandboxes <= 0 {
+		return 0, nil
+	}
+	records, err := awspkg.ListAllSandboxesByS3(ctx, s3Client, bucket)
+	if err != nil {
+		// Non-fatal: if we can't list, allow creation (don't block on list failure)
+		log.Warn().Err(err).Msg("checkSandboxLimit: failed to list sandboxes — skipping limit check")
+		return 0, nil
+	}
+	activeCount := 0
+	for _, r := range records {
+		if r.Status != "destroyed" {
+			activeCount++
+		}
+	}
+	if activeCount >= maxSandboxes {
+		return activeCount, fmt.Errorf("sandbox limit reached (%d/%d) — increase max_sandboxes in km-config.yaml or destroy unused sandboxes", activeCount, maxSandboxes)
+	}
+	return activeCount, nil
 }
