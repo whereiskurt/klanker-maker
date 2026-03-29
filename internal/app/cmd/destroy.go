@@ -31,8 +31,8 @@ import (
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
 )
 
-// sandboxIDPattern matches valid sandbox IDs: sb-[a-f0-9]{8}
-var sandboxIDPattern = regexp.MustCompile(`^sb-[a-f0-9]{8}$`)
+// sandboxIDPattern matches valid sandbox IDs: {prefix}-{8hex}
+var sandboxIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]{0,11}-[a-f0-9]{8}$`)
 
 // NewDestroyCmd creates the "km destroy" subcommand.
 // Usage: km destroy <sandbox-id> [--aws-profile <name>] [--force]
@@ -118,7 +118,7 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool, ve
 
 	// Step 1: Validate sandbox ID format
 	if !sandboxIDPattern.MatchString(sandboxID) {
-		return fmt.Errorf("invalid sandbox ID %q: must match format sb-[a-f0-9]{8}", sandboxID)
+		return fmt.Errorf("invalid sandbox ID %q: must match format {prefix}-[a-f0-9]{8}", sandboxID)
 	}
 
 	// Step 2: Load AWS config and validate credentials

@@ -83,18 +83,63 @@ func TestDestroyCmd_RequiresSandboxIDArg(t *testing.T) {
 	}
 }
 
+// TestSandboxIDPattern verifies the sandboxIDPattern regex accepts and rejects correct inputs.
+// Uses source-level inspection since the pattern is package-private.
+func TestSandboxIDPattern(t *testing.T) {
+	src, err := os.ReadFile("destroy.go")
+	if err != nil {
+		t.Fatalf("read destroy.go: %v", err)
+	}
+	s := string(src)
+
+	// Pattern should be generalized (not sb-specific)
+	if !strings.Contains(s, `[a-z][a-z0-9]{0,11}-[a-f0-9]{8}`) {
+		t.Errorf("destroy.go sandboxIDPattern does not contain generalized pattern [a-z][a-z0-9]{0,11}-[a-f0-9]{8}")
+	}
+}
+
+// TestDestroyCmd_GeneralizedPatternAcceptsCustomPrefix verifies that sandbox IDs
+// with custom prefixes (not sb-) are accepted by the generalized pattern.
+func TestDestroyCmd_GeneralizedPatternAcceptsCustomPrefix(t *testing.T) {
+	km := buildKM(t)
+
+	validCustomIDs := []string{
+		"claude-abc12345",
+		"build-abc12345",
+		"a-abc12345",
+	}
+
+	for _, id := range validCustomIDs {
+		id := id
+		t.Run(id, func(t *testing.T) {
+			cmd := exec.Command(km, "destroy", "--yes", "--aws-profile", "nonexistent-profile-xyz", id)
+			out, err := cmd.CombinedOutput()
+
+			// Should fail on AWS credential check, NOT on sandbox ID format validation
+			if err == nil {
+				t.Fatalf("km destroy %q with fake profile: expected non-zero exit (AWS error)\noutput: %s", id, out)
+			}
+			outStr := string(out)
+			if strings.Contains(strings.ToLower(outStr), "invalid sandbox id") {
+				t.Errorf("km destroy custom prefix ID %q incorrectly rejected as invalid format: %s", id, outStr)
+			}
+		})
+	}
+}
+
 // TestDestroyCmd_InvalidSandboxID verifies that sandbox IDs not matching
-// sb-[a-f0-9]{8} are rejected before any AWS calls are made.
+// the generalized pattern are rejected before any AWS calls are made.
 func TestDestroyCmd_InvalidSandboxID(t *testing.T) {
 	km := buildKM(t)
 
 	invalidIDs := []string{
-		"sandbox-123",      // wrong prefix
 		"sb-ABCD1234",      // uppercase hex not allowed
 		"sb-12345678x",     // extra character
 		"sb-1234567",       // too short
 		"sb-123456789",     // too long
 		"not-a-sandbox-id", // completely wrong
+		"ABC-abc12345",     // uppercase prefix not allowed
+		"abc12345",         // no prefix/dash
 	}
 
 	for _, id := range invalidIDs {

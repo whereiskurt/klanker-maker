@@ -3,28 +3,31 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
-	"strings"
 
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 )
 
+// sandboxIDLike matches any valid sandbox ID: {prefix}-{8hex}
+var sandboxIDLike = regexp.MustCompile(`^[a-z][a-z0-9]{0,11}-[a-f0-9]{8}$`)
+
 // ResolveSandboxID resolves a sandbox reference to a sandbox ID.
 // The ref can be:
-//   - A sandbox ID like "sb-a1b2c3d4" (returned as-is)
+//   - A sandbox ID like "sb-a1b2c3d4" or "claude-a1b2c3d4" (returned as-is)
 //   - A number "1"-"N" referring to the Nth sandbox from km list
 func ResolveSandboxID(ctx context.Context, cfg *config.Config, ref string) (string, error) {
-	// If it starts with "sb-", treat it as a sandbox ID (further validation
-	// happens in the individual commands like runDestroy).
-	if strings.HasPrefix(ref, "sb-") {
+	// If it matches the sandbox ID pattern, treat it as a sandbox ID (further
+	// validation happens in the individual commands like runDestroy).
+	if sandboxIDLike.MatchString(ref) {
 		return ref, nil
 	}
 
 	// Try parsing as a number.
 	num, err := strconv.Atoi(ref)
 	if err != nil || num < 1 {
-		return "", fmt.Errorf("invalid sandbox reference %q: must be a sandbox ID (sb-xxxxxxxx) or a number from 'km list'", ref)
+		return "", fmt.Errorf("invalid sandbox reference %q: must be a sandbox ID ({prefix}-xxxxxxxx) or a number from 'km list'", ref)
 	}
 
 	// Fetch the sandbox list to resolve the number.
