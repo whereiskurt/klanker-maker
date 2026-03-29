@@ -21,6 +21,7 @@ type SandboxProfile struct {
 type Metadata struct {
 	Name   string            `yaml:"name"`
 	Labels map[string]string `yaml:"labels,omitempty"`
+	Prefix string            `yaml:"prefix,omitempty"`
 }
 
 // Spec contains all required sections of a SandboxProfile.
