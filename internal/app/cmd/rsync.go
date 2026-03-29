@@ -6,6 +6,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -13,10 +16,93 @@ import (
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	goyaml "github.com/goccy/go-yaml"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klankrmkr/pkg/profile"
 )
+
+// rsyncPathRegex accepts safe relative paths with common shell glob characters.
+// It explicitly excludes: spaces, $, backtick, ;, |, &, >, <
+var rsyncPathRegex = regexp.MustCompile(`^[a-zA-Z0-9_./*?\[\]-]+$`)
+
+// validateRsyncPath returns an error if path contains shell-injecting characters
+// or spaces that could break the tar command.
+func validateRsyncPath(p string) error {
+	if !rsyncPathRegex.MatchString(p) {
+		return fmt.Errorf("rsync path %q contains unsafe characters (spaces, $, `;`, `|`, `&`, `>`, `<` are not allowed)", p)
+	}
+	return nil
+}
+
+// rsyncFileListYAML is the structure of an external rsync file list YAML.
+type rsyncFileListYAML struct {
+	Paths []string `yaml:"paths"`
+}
+
+// loadFileList reads and parses an external YAML file containing a `paths:` array.
+func loadFileList(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read rsync file list %q: %w", path, err)
+	}
+	var fl rsyncFileListYAML
+	if err := goyaml.Unmarshal(data, &fl); err != nil {
+		return nil, fmt.Errorf("parse rsync file list %q: %w", path, err)
+	}
+	return fl.Paths, nil
+}
+
+// resolveRsyncPaths determines the final list of paths to rsync for a sandbox.
+//
+// Priority:
+//  1. If profile has RsyncPaths or RsyncFileList: merge both (de-duplicated), validate each.
+//  2. Otherwise: return globalFallback as-is.
+//
+// profileDir is used to resolve relative RsyncFileList paths.
+func resolveRsyncPaths(prof *profile.SandboxProfile, profileDir string, globalFallback []string) ([]string, error) {
+	if prof == nil || (len(prof.Spec.Execution.RsyncPaths) == 0 && prof.Spec.Execution.RsyncFileList == "") {
+		return globalFallback, nil
+	}
+
+	seen := map[string]bool{}
+	var paths []string
+
+	// Add profile rsyncPaths first
+	for _, p := range prof.Spec.Execution.RsyncPaths {
+		if err := validateRsyncPath(p); err != nil {
+			return nil, err
+		}
+		if !seen[p] {
+			seen[p] = true
+			paths = append(paths, p)
+		}
+	}
+
+	// Merge from external file list if specified
+	if prof.Spec.Execution.RsyncFileList != "" {
+		listPath := prof.Spec.Execution.RsyncFileList
+		if !filepath.IsAbs(listPath) {
+			listPath = filepath.Join(profileDir, listPath)
+		}
+		filePaths, err := loadFileList(listPath)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range filePaths {
+			if err := validateRsyncPath(p); err != nil {
+				return nil, err
+			}
+			if !seen[p] {
+				seen[p] = true
+				paths = append(paths, p)
+			}
+		}
+	}
+
+	return paths, nil
+}
 
 // NewRsyncCmd creates the "km rsync" command group.
 func NewRsyncCmd(cfg *config.Config) *cobra.Command {
