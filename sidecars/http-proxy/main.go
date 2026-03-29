@@ -71,6 +71,24 @@ func main() {
 			Msg("")
 	}
 
+	// GitHub repo filter: parse KM_GITHUB_ALLOWED_REPOS CSV and enable repo-level filtering.
+	githubReposRaw := os.Getenv("KM_GITHUB_ALLOWED_REPOS")
+	var githubAllowedRepos []string
+	for _, r := range strings.Split(githubReposRaw, ",") {
+		r = strings.TrimSpace(r)
+		if r != "" {
+			githubAllowedRepos = append(githubAllowedRepos, r)
+		}
+	}
+	if len(githubAllowedRepos) > 0 {
+		proxyOpts = append(proxyOpts, httpproxy.WithGitHubRepoFilter(githubAllowedRepos))
+		log.Info().
+			Str("event_type", "github_repo_filter_enabled").
+			Str("sandbox_id", sandboxID).
+			Strs("allowed_repos", githubAllowedRepos).
+			Msg("")
+	}
+
 	// Custom CA for MITM: read base64-encoded PEM (cert+key) from env var.
 	// The sandbox trusts this CA via update-ca-certificates at boot time.
 	if caCertB64 := os.Getenv("KM_PROXY_CA_CERT"); caCertB64 != "" {

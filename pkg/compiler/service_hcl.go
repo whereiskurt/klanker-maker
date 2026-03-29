@@ -202,9 +202,10 @@ const ecsServiceHCLTemplate = `locals {
         essential          = false
         command            = []
         environment = [
-          { name = "SANDBOX_ID",    value = "{{ .SandboxID }}" },
-          { name = "ALLOWED_HOSTS", value = "{{ .AllowedHTTPHosts }}" },
-          { name = "PROXY_PORT",    value = "3128" },
+          { name = "SANDBOX_ID",               value = "{{ .SandboxID }}" },
+          { name = "ALLOWED_HOSTS",             value = "{{ .AllowedHTTPHosts }}" },
+          { name = "KM_GITHUB_ALLOWED_REPOS",   value = "{{ .GitHubAllowedReposCSV }}" },
+          { name = "PROXY_PORT",                value = "3128" },
         ]
         port_mappings     = []
         log_stream_prefix = "http-proxy"
@@ -376,9 +377,10 @@ type ecsHCLParams struct {
 	PublicSubnets         []string
 	SGEgressRules         []SGRule
 	// Sidecar configuration fields (populated from profile network spec and env vars)
-	AllowedDNSSuffixes string // comma-separated allowed DNS suffixes
-	AllowedHTTPHosts   string // comma-separated allowed HTTP hosts
-	ArtifactsBucket    string // S3 bucket for sidecar OTel traces (KM_ARTIFACTS_BUCKET)
+	AllowedDNSSuffixes   string // comma-separated allowed DNS suffixes
+	AllowedHTTPHosts     string // comma-separated allowed HTTP hosts
+	GitHubAllowedReposCSV string // comma-separated GitHub repos for KM_GITHUB_ALLOWED_REPOS proxy env var
+	ArtifactsBucket      string // S3 bucket for sidecar OTel traces (KM_ARTIFACTS_BUCKET)
 	// Sidecar image URIs (computed from KM_ACCOUNTS_APPLICATION + region + KM_SIDECAR_VERSION)
 	// PLACEHOLDER_ECR/ prefix used when KM_ACCOUNTS_APPLICATION is unset.
 	DNSProxyImage  string // ECR URI for km-dns-proxy sidecar
@@ -466,6 +468,16 @@ var templateFuncs = template.FuncMap{
 		name = strings.ReplaceAll(name, "/", "-")
 		return "vol-" + name
 	},
+}
+
+// joinGitHubAllowedReposCSV returns the AllowedRepos slice as a comma-separated string
+// suitable for the KM_GITHUB_ALLOWED_REPOS proxy environment variable.
+// Returns empty string when GitHub config is nil or AllowedRepos is empty.
+func joinGitHubAllowedReposCSV(p *profile.SandboxProfile) string {
+	if p.Spec.SourceAccess.GitHub == nil || len(p.Spec.SourceAccess.GitHub.AllowedRepos) == 0 {
+		return ""
+	}
+	return strings.Join(p.Spec.SourceAccess.GitHub.AllowedRepos, ",")
 }
 
 // ============================================================
@@ -634,6 +646,7 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		SGEgressRules:         sgRules,
 		AllowedDNSSuffixes:    strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
 		AllowedHTTPHosts:      strings.Join(append(p.Spec.Network.Egress.AllowedHosts, p.Spec.Network.Egress.AllowedDNSSuffixes...), ","),
+		GitHubAllowedReposCSV: joinGitHubAllowedReposCSV(p),
 		ArtifactsBucket:       artifactBucket,
 		// Sidecar ECR image URIs computed from KM_ACCOUNTS_APPLICATION + region + KM_SIDECAR_VERSION.
 		DNSProxyImage:  sidecarImage("dns-proxy"),

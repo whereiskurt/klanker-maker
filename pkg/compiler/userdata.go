@@ -291,6 +291,7 @@ User=km-sidecar
 Environment=SANDBOX_ID={{ .SandboxID }}
 Environment=AWS_REGION={{ .AWSRegion }}
 Environment=ALLOWED_HOSTS={{ .AllowedHTTPHosts }}
+Environment=KM_GITHUB_ALLOWED_REPOS={{ .GitHubAllowedRepos }}
 Environment=PROXY_PORT=3128
 ExecStart=/opt/km/bin/km-http-proxy
 Restart=always
@@ -665,8 +666,9 @@ type userDataParams struct {
 	HasAllowedRefs     bool   // true when allowedRefs is non-empty
 	AllowedRefs        string // colon-separated list for KM_ALLOWED_REFS env var
 	AllowedDNSSuffixes string // comma-separated, from profile.Network.Egress.AllowedDNSSuffixes
-	AllowedHTTPHosts   string // comma-separated, from profile.Network.Egress.AllowedHosts
-	KMArtifactsBucket  string // from config env var KM_ARTIFACTS_BUCKET
+	AllowedHTTPHosts     string // comma-separated, from profile.Network.Egress.AllowedHosts
+	GitHubAllowedRepos   string // comma-separated GitHub repos from profile.sourceAccess.github.allowedRepos
+	KMArtifactsBucket    string // from config env var KM_ARTIFACTS_BUCKET
 	// Filesystem enforcement (section 2.5)
 	ReadOnlyPaths []string
 	WritablePaths []string
@@ -721,6 +723,16 @@ func joinAllowedRefs(p *profile.SandboxProfile) string {
 	return strings.Join(p.Spec.SourceAccess.GitHub.AllowedRefs, ":")
 }
 
+// joinGitHubAllowedRepos returns the AllowedRepos slice as a comma-separated string
+// suitable for the KM_GITHUB_ALLOWED_REPOS environment variable.
+// Returns empty string when GitHub config is nil or AllowedRepos is empty.
+func joinGitHubAllowedRepos(p *profile.SandboxProfile) string {
+	if p.Spec.SourceAccess.GitHub == nil || len(p.Spec.SourceAccess.GitHub.AllowedRepos) == 0 {
+		return ""
+	}
+	return strings.Join(p.Spec.SourceAccess.GitHub.AllowedRepos, ",")
+}
+
 // generateUserData produces the EC2 bootstrap user-data.sh content for the given profile.
 // It is only called for ec2 substrate sandboxes.
 // artifactsBucket is from the KM_ARTIFACTS_BUCKET env var; may be empty string.
@@ -749,9 +761,10 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		HasGitHub:          p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRepos) > 0,
 		HasAllowedRefs:     p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRefs) > 0,
 		AllowedRefs:        joinAllowedRefs(p),
-		AllowedDNSSuffixes: strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
-		AllowedHTTPHosts:   strings.Join(append(p.Spec.Network.Egress.AllowedHosts, p.Spec.Network.Egress.AllowedDNSSuffixes...), ","),
-		KMArtifactsBucket:  artifactsBucket,
+		AllowedDNSSuffixes:  strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
+		AllowedHTTPHosts:    strings.Join(append(p.Spec.Network.Egress.AllowedHosts, p.Spec.Network.Egress.AllowedDNSSuffixes...), ","),
+		GitHubAllowedRepos:  joinGitHubAllowedRepos(p),
+		KMArtifactsBucket:   artifactsBucket,
 		UseSpot:            useSpot,
 		// Email fields — every sandbox gets an email identity.
 		SandboxEmail:       sandboxID + "@" + emailDomain,
