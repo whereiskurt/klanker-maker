@@ -137,6 +137,7 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 		"KM_REMOTE_CREATE=true",
 		"PATH="+h.ToolchainDir+":/usr/local/bin:/usr/bin:/bin",
 		"KM_REPO_ROOT="+h.ToolchainDir,
+		"KM_CONFIG_PATH="+filepath.Join(h.ToolchainDir, "km-config.yaml"),
 	)
 	if event.OperatorEmail != "" {
 		env = append(env, "KM_OPERATOR_EMAIL="+event.OperatorEmail)
@@ -208,6 +209,15 @@ func (h *CreateHandler) downloadToolchain(ctx context.Context, bucket string) er
 	}
 	os.Remove(tarPath)
 	log.Info().Msg("infra/ extracted")
+
+	// Download km-config.yaml for subprocess config
+	kmConfigKey := "toolchain/km-config.yaml"
+	kmConfigPath := filepath.Join(h.ToolchainDir, "km-config.yaml")
+	if err := downloadS3File(ctx, h.S3Client, bucket, kmConfigKey, kmConfigPath); err != nil {
+		log.Warn().Err(err).Msg("km-config.yaml not found in toolchain (non-fatal, subprocess will use defaults)")
+	} else {
+		log.Info().Msg("downloaded km-config.yaml")
+	}
 
 	return nil
 }
