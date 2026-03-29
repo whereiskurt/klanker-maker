@@ -131,12 +131,12 @@ The `km` CLI selects the right AWS profile per command. Commands are grouped by 
 
 | Command | AWS Profile | What it does |
 |---------|-------------|--------------|
+| `km logs <sandbox>` | `klanker-terraform` | Tail CloudWatch audit logs |
 | `km otel <sandbox>` | `klanker-terraform` | AI spend summary by provider + OTEL S3 data |
 | `km otel --prompts` | `klanker-terraform` | User prompts with timestamps |
 | `km otel --timeline` | `klanker-terraform` | Conversation turns with per-turn cost |
 | `km otel --events` | `klanker-terraform` | Full event stream (API calls, tool calls) |
 | `km otel --tools` | `klanker-terraform` | Tool call history with parameters and duration |
-| `km logs <sandbox>` | `klanker-terraform` | Tail CloudWatch audit logs |
 
 **Budget and lifecycle management**
 
