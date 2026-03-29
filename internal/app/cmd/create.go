@@ -85,7 +85,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 				awsProfile = "klanker-terraform"
 			}
 			if remote {
-				return runCreateRemote(cfg, args[0], onDemand, awsProfile)
+				return runCreateRemote(cfg, args[0], onDemand, awsProfile, aliasOverride)
 			}
 			return runCreate(cfg, args[0], onDemand, awsProfile, verbose, sandboxIDOverride, aliasOverride)
 		},
@@ -843,7 +843,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 //
 // The create-handler Lambda downloads the artifacts, runs km create as a subprocess,
 // and sends notifications on success/failure.
-func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, awsProfile string) error {
+func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, awsProfile string, aliasOverride string) error {
 	ctx := context.Background()
 
 	// Step 1: Read profile file
@@ -988,6 +988,21 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, awsP
 		}
 	}
 
+	// Determine alias: --alias flag takes priority, then profile metadata.alias template.
+	sandboxAlias := aliasOverride
+	if sandboxAlias == "" && resolvedProfile.Metadata.Alias != "" && cfg.StateBucket != "" {
+		existing, listErr := awspkg.ListAllSandboxesByS3(ctx, s3Client, cfg.StateBucket)
+		if listErr == nil {
+			existingAliases := make([]string, 0, len(existing))
+			for _, r := range existing {
+				if r.Alias != "" {
+					existingAliases = append(existingAliases, r.Alias)
+				}
+			}
+			sandboxAlias = awspkg.NextAliasFromTemplate(resolvedProfile.Metadata.Alias, existingAliases)
+		}
+	}
+
 	// Step 8b: Write "starting" metadata so km list shows the sandbox immediately.
 	stateBucket := cfg.StateBucket
 	if stateBucket != "" {
@@ -1001,6 +1016,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, awsP
 			IdleTimeout: resolvedProfile.Spec.Lifecycle.IdleTimeout,
 			MaxLifetime: resolvedProfile.Spec.Lifecycle.MaxLifetime,
 			CreatedBy:   "remote",
+			Alias:       sandboxAlias,
 		}
 		metaJSON, _ := json.Marshal(meta)
 		_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
