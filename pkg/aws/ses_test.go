@@ -235,6 +235,72 @@ func TestSendApprovalRequest_BodyContainsActionAndInstructions(t *testing.T) {
 	}
 }
 
+// ============================================================
+// SendLimitNotification tests
+// ============================================================
+
+func TestSendLimitNotification_SubjectContainsSandboxIDAndEvent(t *testing.T) {
+	mock := &mockSESV2API{}
+	err := kmaws.SendLimitNotification(context.Background(), mock, "operator@company.com", "sb-abc123", "klankermaker.ai", 10, 10)
+	if err != nil {
+		t.Fatalf("SendLimitNotification returned unexpected error: %v", err)
+	}
+	if !mock.sendEmailCalled {
+		t.Fatal("expected SendEmail to be called")
+	}
+	subject := *mock.sendEmailInput.Content.Simple.Subject.Data
+	if !strings.Contains(subject, "sb-abc123") {
+		t.Errorf("subject %q does not contain sandbox ID 'sb-abc123'", subject)
+	}
+	if !strings.Contains(subject, "limit-reached") {
+		t.Errorf("subject %q does not contain 'limit-reached'", subject)
+	}
+}
+
+func TestSendLimitNotification_FromAddressIsNotificationsAt(t *testing.T) {
+	mock := &mockSESV2API{}
+	err := kmaws.SendLimitNotification(context.Background(), mock, "operator@company.com", "sb-abc123", "klankermaker.ai", 10, 10)
+	if err != nil {
+		t.Fatalf("SendLimitNotification returned unexpected error: %v", err)
+	}
+	wantFrom := "notifications@klankermaker.ai"
+	if mock.sendEmailInput.FromEmailAddress == nil || *mock.sendEmailInput.FromEmailAddress != wantFrom {
+		t.Errorf("FromEmailAddress = %v; want %q", mock.sendEmailInput.FromEmailAddress, wantFrom)
+	}
+}
+
+func TestSendLimitNotification_BodyContainsCountAndMax(t *testing.T) {
+	mock := &mockSESV2API{}
+	err := kmaws.SendLimitNotification(context.Background(), mock, "operator@company.com", "sb-abc123", "klankermaker.ai", 10, 10)
+	if err != nil {
+		t.Fatalf("SendLimitNotification returned unexpected error: %v", err)
+	}
+	body := *mock.sendEmailInput.Content.Simple.Body.Text.Data
+	if !strings.Contains(body, "sb-abc123") {
+		t.Errorf("body does not contain sandbox ID 'sb-abc123': %q", body)
+	}
+	if !strings.Contains(body, "10/10") {
+		t.Errorf("body does not contain count '10/10': %q", body)
+	}
+	if !strings.Contains(body, "max_sandboxes") {
+		t.Errorf("body does not contain 'max_sandboxes': %q", body)
+	}
+}
+
+func TestSendLimitNotification_ToAddressIsOperator(t *testing.T) {
+	mock := &mockSESV2API{}
+	err := kmaws.SendLimitNotification(context.Background(), mock, "operator@company.com", "sb-abc123", "klankermaker.ai", 5, 10)
+	if err != nil {
+		t.Fatalf("SendLimitNotification returned unexpected error: %v", err)
+	}
+	if len(mock.sendEmailInput.Destination.ToAddresses) != 1 {
+		t.Fatalf("expected 1 ToAddress, got %d", len(mock.sendEmailInput.Destination.ToAddresses))
+	}
+	if mock.sendEmailInput.Destination.ToAddresses[0] != "operator@company.com" {
+		t.Errorf("ToAddresses[0] = %q; want operator@company.com", mock.sendEmailInput.Destination.ToAddresses[0])
+	}
+}
+
 func TestSendApprovalRequest_Error(t *testing.T) {
 	sdkErr := errors.New("sdk error: MessageRejected")
 	mock := &mockSESV2API{sendEmailErr: sdkErr}

@@ -108,6 +108,11 @@ type Config struct {
 	// RsyncPaths is the list of relative paths (from sandbox user $HOME) to
 	// include in rsync snapshots. Default: [".claude", ".bashrc", ".gitconfig"]
 	RsyncPaths []string
+
+	// MaxSandboxes is the maximum number of concurrently active sandboxes allowed.
+	// Set via max_sandboxes in km-config.yaml or KM_MAX_SANDBOXES environment variable.
+	// A value of 0 means unlimited (no enforcement). Defaults to 10.
+	MaxSandboxes int
 }
 
 // isSetByEnv returns true if the given viper key has been overridden by an environment
@@ -136,6 +141,7 @@ func Load() (*Config, error) {
 	v.SetDefault("scheduler_role_arn", "")
 
 	// Defaults for new platform fields
+	v.SetDefault("max_sandboxes", 10)
 	v.SetDefault("budget_table_name", "km-budgets")
 	v.SetDefault("identity_table_name", "km-identities")
 	v.SetDefault("artifacts_bucket", "")
@@ -192,6 +198,7 @@ func Load() (*Config, error) {
 			"operator_email",
 			"safe_phrase",
 			"rsync_paths",
+			"max_sandboxes",
 		} {
 			if v2.IsSet(key) && !isSetByEnv(v, key) {
 				v.Set(key, v2.Get(key))
@@ -224,6 +231,7 @@ func Load() (*Config, error) {
 		OperatorEmail:        v.GetString("operator_email"),
 		SafePhrase:           v.GetString("safe_phrase"),
 		RsyncPaths:           v.GetStringSlice("rsync_paths"),
+		MaxSandboxes:         v.GetInt("max_sandboxes"),
 	}
 
 	return cfg, nil

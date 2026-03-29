@@ -25,6 +25,7 @@ type platformConfig struct {
 	Route53ZoneID   string         `yaml:"route53_zone_id,omitempty"`
 	OperatorEmail   string         `yaml:"operator_email,omitempty"`
 	SafePhrase      string         `yaml:"safe_phrase,omitempty"`
+	MaxSandboxes    int            `yaml:"max_sandboxes,omitempty"`
 }
 
 type accountsConfig struct {
@@ -59,6 +60,7 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		artifactsBucket string
 		operatorEmail   string
 		safePhrase      string
+		maxSandboxes    int
 	)
 
 	cmd := &cobra.Command{
@@ -69,7 +71,7 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runConfigure(in, out, outputDir, nonInteractive, domain,
 				managementAcct, terraformAcct, applicationAcct,
-				ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket, operatorEmail, safePhrase)
+				ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket, operatorEmail, safePhrase, maxSandboxes)
 		},
 	}
 
@@ -99,6 +101,8 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		"Email address for sandbox lifecycle notifications (TTL, idle, budget, errors)")
 	cmd.Flags().StringVar(&safePhrase, "safe-phrase", "",
 		"Shared secret for email-to-create auth (KM-AUTH header in emails to operator@sandboxes.{domain})")
+	cmd.Flags().IntVar(&maxSandboxes, "max-sandboxes", 0,
+		"Maximum concurrent sandboxes allowed (0 = use default 10; set in km-config.yaml as max_sandboxes)")
 
 	_ = cfg // reserved for future use (e.g. pre-filling from existing config)
 
@@ -108,7 +112,8 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 // runConfigure implements the configure wizard logic.
 func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive bool,
 	domain, managementAcct, terraformAcct, applicationAcct,
-	ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket, operatorEmail, safePhrase string) error {
+	ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket, operatorEmail, safePhrase string,
+	maxSandboxes int) error {
 
 	if nonInteractive {
 		// Validate required flags
@@ -186,6 +191,22 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		if err != nil {
 			return err
 		}
+
+		maxStr := "10"
+		if maxSandboxes > 0 {
+			maxStr = fmt.Sprintf("%d", maxSandboxes)
+		}
+		maxInput, err := prompt(out, scanner, "Maximum concurrent sandboxes (0=unlimited)", maxStr)
+		if err != nil {
+			return err
+		}
+		if maxInput != "" && maxInput != "10" {
+			// Parse to int; ignore parse errors (field is optional)
+			var parsed int
+			if _, scanErr := fmt.Sscanf(maxInput, "%d", &parsed); scanErr == nil {
+				maxSandboxes = parsed
+			}
+		}
 	}
 
 	// Detect topology
@@ -218,6 +239,7 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		ArtifactsBucket: artifactsBucket,
 		OperatorEmail:   operatorEmail,
 		SafePhrase:      safePhrase,
+		MaxSandboxes:    maxSandboxes,
 	}
 
 	// Determine output path

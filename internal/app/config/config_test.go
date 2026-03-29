@@ -174,6 +174,79 @@ identity_table_name: my-custom-identities
 	}
 }
 
+// TestMaxSandboxesDefault verifies that MaxSandboxes defaults to 10 when not set.
+func TestMaxSandboxesDefault(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: test.example.com
+`)
+
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.MaxSandboxes != 10 {
+		t.Errorf("MaxSandboxes: expected default 10, got %d", cfg.MaxSandboxes)
+	}
+}
+
+// TestMaxSandboxesFromConfig verifies that max_sandboxes: 5 in km-config.yaml returns 5.
+func TestMaxSandboxesFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: test.example.com
+max_sandboxes: 5
+`)
+
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.MaxSandboxes != 5 {
+		t.Errorf("MaxSandboxes: expected 5 from config, got %d", cfg.MaxSandboxes)
+	}
+}
+
+// TestMaxSandboxesEnvOverride verifies that KM_MAX_SANDBOXES=3 overrides config value.
+func TestMaxSandboxesEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: test.example.com
+max_sandboxes: 5
+`)
+
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	t.Setenv("KM_MAX_SANDBOXES", "3")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.MaxSandboxes != 3 {
+		t.Errorf("MaxSandboxes: expected env override 3, got %d", cfg.MaxSandboxes)
+	}
+}
+
 // TestLoadEnvOverride verifies that KM_DOMAIN env var overrides km-config.yaml.
 func TestLoadEnvOverride(t *testing.T) {
 	dir := t.TempDir()

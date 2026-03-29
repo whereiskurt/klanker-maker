@@ -200,6 +200,44 @@ func SendApprovalRequest(ctx context.Context, client SESV2API, sandboxID, domain
 	return nil
 }
 
+// SendLimitNotification sends an operator notification when sandbox creation is
+// rejected because the active sandbox count has reached the configured maximum.
+//
+// From address: notifications@{domain}
+// Subject: "km sandbox limit-reached: {sandboxID}"
+// Body: includes attempted sandbox ID, current/max counts, and remediation hint.
+func SendLimitNotification(ctx context.Context, client SESV2API, operatorEmail, sandboxID, domain string, currentCount, maxCount int) error {
+	from := fmt.Sprintf("notifications@%s", domain)
+	subject := fmt.Sprintf("km sandbox limit-reached: %s", sandboxID)
+	body := fmt.Sprintf(
+		"Sandbox creation rejected: limit reached.\nAttempted sandbox: %s\nActive sandboxes: %d/%d\nTo increase, set max_sandboxes in km-config.yaml.\n\n— %s\n",
+		sandboxID, currentCount, maxCount, version.Header(),
+	)
+
+	_, err := client.SendEmail(ctx, &sesv2.SendEmailInput{
+		FromEmailAddress: awssdk.String(from),
+		Destination: &sesv2types.Destination{
+			ToAddresses: []string{operatorEmail},
+		},
+		Content: &sesv2types.EmailContent{
+			Simple: &sesv2types.Message{
+				Subject: &sesv2types.Content{
+					Data: awssdk.String(subject),
+				},
+				Body: &sesv2types.Body{
+					Text: &sesv2types.Content{
+						Data: awssdk.String(body),
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("send limit notification for sandbox %s (%d/%d): %w", sandboxID, currentCount, maxCount, err)
+	}
+	return nil
+}
+
 // CleanupSandboxEmail deletes the SES email identity for {sandboxID}@{domain}.
 //
 // This is called during km destroy. The function is idempotent: if the identity

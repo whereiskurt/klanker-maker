@@ -214,6 +214,63 @@ func TestConfigureStateBucketOmittedWhenEmpty(t *testing.T) {
 	}
 }
 
+// TestConfigureMaxSandboxesFlag verifies that --max-sandboxes=5 writes max_sandboxes: 5 to km-config.yaml.
+func TestConfigureMaxSandboxesFlag(t *testing.T) {
+	km := buildKM(t)
+	dir := t.TempDir()
+
+	out, err := runKMArgs(km, "",
+		"configure",
+		"--non-interactive",
+		"--output-dir", dir,
+		"--domain", "test.example.com",
+		"--management-account", "111111111111",
+		"--terraform-account", "222222222222",
+		"--application-account", "333333333333",
+		"--sso-start-url", "https://sso.example.com/start",
+		"--sso-region", "us-east-1",
+		"--region", "us-east-1",
+		"--max-sandboxes", "5",
+	)
+	if err != nil {
+		t.Fatalf("km configure --max-sandboxes: %v\noutput: %s", err, out)
+	}
+
+	cfg := kmConfigYAML(t, dir)
+	if cfg["max_sandboxes"] != 5 {
+		t.Errorf("max_sandboxes: got %v, want 5", cfg["max_sandboxes"])
+	}
+}
+
+// TestConfigureMaxSandboxesOmittedWhenZero verifies that max_sandboxes is absent
+// from km-config.yaml when --max-sandboxes is not provided (omitempty + zero value).
+func TestConfigureMaxSandboxesOmittedWhenZero(t *testing.T) {
+	km := buildKM(t)
+	dir := t.TempDir()
+
+	out, err := runKMArgs(km, "",
+		"configure",
+		"--non-interactive",
+		"--output-dir", dir,
+		"--domain", "test.example.com",
+		"--management-account", "111111111111",
+		"--terraform-account", "222222222222",
+		"--application-account", "333333333333",
+		"--sso-start-url", "https://sso.example.com/start",
+		"--sso-region", "us-east-1",
+		"--region", "us-east-1",
+		// No --max-sandboxes flag
+	)
+	if err != nil {
+		t.Fatalf("km configure without --max-sandboxes: %v\noutput: %s", err, out)
+	}
+
+	cfg := kmConfigYAML(t, dir)
+	if _, present := cfg["max_sandboxes"]; present {
+		t.Errorf("max_sandboxes should be absent when not provided; got: %v", cfg["max_sandboxes"])
+	}
+}
+
 // TestBootstrapDryRun verifies that km bootstrap --dry-run validates config and
 // prints what would be provisioned without making any AWS calls.
 func TestBootstrapDryRun(t *testing.T) {
