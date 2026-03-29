@@ -5,7 +5,7 @@ milestone_name: milestone
 status: planning
 stopped_at: Completed 29-03-PLAN.md
 last_updated: "2026-03-29T03:00:35.877Z"
-last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
+last_activity: 2026-03-29 — Completed quick task 1: max_sandboxes config limit with operator email
 progress:
   total_phases: 29
   completed_phases: 28
@@ -405,6 +405,12 @@ None yet.
 - [Phase 3]: iptables DNAT interaction with IMDSv2 hop limit not fully resolved on EC2 — research recommends `/gsd:research-phase` before Phase 3 planning
 - [Phase 3]: HTTPS proxy mode (SNI-only vs. full MITM) is a security trade-off that needs an explicit decision before Phase 3 implementation
 - [Phase 4]: Filesystem policy enforcement mechanism (seccomp, Linux mount namespaces, OverlayFS) not decided — research recommends `/gsd:research-phase` before Phase 4 planning
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 1 | max_sandboxes config limit with operator email | 2026-03-29 | a185a79 | [1-max-sandboxes-config-limit-with-operator](./quick/1-max-sandboxes-config-limit-with-operator/) |
 
 ## Accumulated Context
 
