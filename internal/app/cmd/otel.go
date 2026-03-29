@@ -186,11 +186,16 @@ func runOtelPrompts(ctx context.Context, s3Client *s3.Client, bucket, sandboxID 
 		return nil
 	}
 
-	for i, e := range prompts {
-		ts := formatEventTime(e.Timestamp)
+	n := 0
+	for _, e := range prompts {
 		prompt := e.Attrs["prompt"]
+		if isSyntheticPrompt(prompt) {
+			continue
+		}
+		n++
+		ts := formatEventTime(e.Timestamp)
 		sessionID := shortID(e.Attrs["session.id"])
-		fmt.Fprintf(w, "  %d. [%s] session:%s\n", i+1, ts, sessionID)
+		fmt.Fprintf(w, "  %d. [%s] session:%s\n", n, ts, sessionID)
 		fmt.Fprintf(w, "     %s\n\n", prompt)
 	}
 	return nil
@@ -217,6 +222,10 @@ func runOtelEvents(ctx context.Context, s3Client *s3.Client, bucket, sandboxID s
 		switch e.EventName {
 		case "user_prompt":
 			prompt := e.Attrs["prompt"]
+			if isSyntheticPrompt(prompt) {
+				fmt.Fprintf(w, "  [%s]    (internal: task-notification)\n", ts)
+				continue
+			}
 			if len(prompt) > 120 {
 				prompt = prompt[:120] + "..."
 			}
@@ -274,11 +283,15 @@ func runOtelTimeline(ctx context.Context, s3Client *s3.Client, bucket, sandboxID
 
 	for _, e := range events {
 		if e.EventName == "user_prompt" {
+			prompt := e.Attrs["prompt"]
+			if isSyntheticPrompt(prompt) {
+				continue // skip internal messages — don't start a new turn
+			}
 			if current != nil {
 				turns = append(turns, *current)
 			}
 			current = &turn{
-				prompt:    e.Attrs["prompt"],
+				prompt:    prompt,
 				timestamp: formatEventTime(e.Timestamp),
 				sessionID: shortID(e.Attrs["session.id"]),
 			}
@@ -475,6 +488,14 @@ func filterEvents(events []logEvent, eventName string) []logEvent {
 		}
 	}
 	return filtered
+}
+
+// isSyntheticPrompt returns true if the prompt is a Claude Code internal
+// message (task notifications, system reminders) rather than actual user input.
+func isSyntheticPrompt(prompt string) bool {
+	return strings.HasPrefix(strings.TrimSpace(prompt), "<task-notification>") ||
+		strings.HasPrefix(strings.TrimSpace(prompt), "<system-reminder>") ||
+		strings.HasPrefix(strings.TrimSpace(prompt), "<local-command-")
 }
 
 func formatEventTime(ts string) string {
