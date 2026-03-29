@@ -417,6 +417,7 @@ None yet.
 - Phase 27 added: Documentation Refresh (Phases 22-26)
 - Phase 27 added: Claude Code OTEL Integration — inject built-in Claude Code telemetry env vars into sandboxes, extend OTel Collector sidecar with logs+metrics pipelines, full agent observability to S3
 - Phase 28 added: GitHub repo-level MITM filtering in HTTP proxy — MITM GitHub hosts to inspect URL paths and enforce allowedRepos at the network layer, mirroring Bedrock/Anthropic pattern
+- Phase 30 added: Sandbox Lifecycle Commands — km pause (EC2 hibernate), km lock/km unlock (safety lock preventing destroy/stop/budget changes)
 
 ## Session Continuity
 
