@@ -4,7 +4,7 @@ milestone: v1.0
 milestone_name: milestone
 status: planning
 stopped_at: "Completed 34-01: agent-orchestrator, goose, and codex sandbox profiles"
-last_updated: "2026-03-29T21:14:57.525Z"
+last_updated: "2026-03-29T21:18:37.012Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 34
