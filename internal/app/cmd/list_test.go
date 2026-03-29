@@ -70,12 +70,12 @@ func TestListCmd_TableOutput(t *testing.T) {
 		},
 	}
 
-	out, err := runListCmd(t, lister)
+	out, err := runListCmd(t, lister, "--wide")
 	if err != nil {
 		t.Fatalf("list command returned error: %v", err)
 	}
 
-	// Header must contain all column names
+	// Wide header must contain all column names
 	if !strings.Contains(out, "SANDBOX ID") {
 		t.Errorf("output missing 'SANDBOX ID' header column:\n%s", out)
 	}
@@ -333,5 +333,59 @@ func TestListCmd_RunningAndStoppedNoRegression(t *testing.T) {
 	}
 	if !strings.Contains(out, "stopped") {
 		t.Errorf("output missing 'stopped' status:\n%s", out)
+	}
+}
+
+func TestListCmd_NarrowHidesColumns(t *testing.T) {
+	lister := &fakeLister{
+		records: []kmaws.SandboxRecord{
+			{SandboxID: "sb-aaa111", Profile: "default", Substrate: "ec2", Region: "us-east-1", Status: "running"},
+		},
+	}
+
+	out, err := runListCmd(t, lister)
+	if err != nil {
+		t.Fatalf("list command returned error: %v", err)
+	}
+
+	// Narrow mode should NOT show profile/substrate/region columns
+	if strings.Contains(out, "PROFILE") {
+		t.Errorf("narrow output should not contain PROFILE header:\n%s", out)
+	}
+	if strings.Contains(out, "SUBSTRATE") {
+		t.Errorf("narrow output should not contain SUBSTRATE header:\n%s", out)
+	}
+	if strings.Contains(out, "REGION") {
+		t.Errorf("narrow output should not contain REGION header:\n%s", out)
+	}
+	// But should still have essential columns
+	if !strings.Contains(out, "SANDBOX ID") {
+		t.Errorf("narrow output missing SANDBOX ID:\n%s", out)
+	}
+	if !strings.Contains(out, "STATUS") {
+		t.Errorf("narrow output missing STATUS:\n%s", out)
+	}
+}
+
+func TestListCmd_LockedSandboxShowsLockIcon(t *testing.T) {
+	lister := &fakeLister{
+		records: []kmaws.SandboxRecord{
+			{SandboxID: "sb-locked1", Profile: "default", Substrate: "ec2", Region: "us-east-1", Status: "running", Locked: true},
+			{SandboxID: "sb-unlkd1", Profile: "default", Substrate: "ec2", Region: "us-east-1", Status: "running", Locked: false},
+		},
+	}
+
+	out, err := runListCmd(t, lister)
+	if err != nil {
+		t.Fatalf("list command returned error: %v", err)
+	}
+
+	// Locked sandbox should have lock icon
+	if !strings.Contains(out, "🔒") {
+		t.Errorf("locked sandbox should show lock icon:\n%s", out)
+	}
+	// Bold white ANSI code should be present for locked row
+	if !strings.Contains(out, "\033[1;37m") {
+		t.Errorf("locked sandbox should use bold white ANSI:\n%s", out)
 	}
 }

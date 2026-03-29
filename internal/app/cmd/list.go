@@ -30,6 +30,7 @@ func NewListCmd(cfg *config.Config) *cobra.Command {
 func NewListCmdWithLister(cfg *config.Config, lister SandboxLister) *cobra.Command {
 	var jsonOutput bool
 	var useTagScan bool
+	var wide bool
 
 	cmd := &cobra.Command{
 		Use:          "list",
@@ -38,11 +39,12 @@ func NewListCmdWithLister(cfg *config.Config, lister SandboxLister) *cobra.Comma
 		Long:         helpText("list"),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runList(cmd, cfg, lister, jsonOutput, useTagScan)
+			return runList(cmd, cfg, lister, jsonOutput, useTagScan, wide)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output as JSON array")
 	cmd.Flags().BoolVar(&useTagScan, "tags", false, "Use AWS tag scan instead of S3 state scan")
+	cmd.Flags().BoolVar(&wide, "wide", false, "Show all columns (profile, substrate, region)")
 	return cmd
 }
 
@@ -52,7 +54,7 @@ type SandboxLister interface {
 }
 
 // runList is the command RunE logic, accepting an explicit lister for testability.
-func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonOutput, useTagScan bool) error {
+func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonOutput, useTagScan, wide bool) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -96,7 +98,7 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonO
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(records)
 	}
 
-	return printSandboxTable(cmd, records)
+	return printSandboxTable(cmd, records, wide)
 }
 
 // awsSandboxLister is the real AWS-backed SandboxLister implementation.
@@ -126,12 +128,19 @@ func (l *awsSandboxLister) ListSandboxes(ctx context.Context, useTagScan bool) (
 // printSandboxTable writes a human-readable tab-aligned table to cmd.OutOrStdout.
 // Each row is numbered 1-N so users can reference sandboxes by number in other commands.
 // Status is color-coded: red for "failed", yellow for "partial"/"killed", green for "running".
-func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord) error {
+// Locked sandboxes are shown in bold white with a lock icon.
+// When wide=false, profile/substrate/region columns are hidden for a narrower display.
+func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide bool) error {
 	out := cmd.OutOrStdout()
 	// Use fixed-width printf instead of tabwriter to avoid ANSI color codes
 	// breaking column alignment (tabwriter counts bytes, not visible chars).
-	fmt.Fprintf(out, "%-3s %-14s %-10s %-12s %-10s %-12s %-10s %s\n",
-		"#", "SANDBOX ID", "ALIAS", "PROFILE", "SUBSTRATE", "REGION", "STATUS", "TTL")
+	if wide {
+		fmt.Fprintf(out, "%-3s %-14s %-10s %-12s %-10s %-12s %-10s %s\n",
+			"#", "SANDBOX ID", "ALIAS", "PROFILE", "SUBSTRATE", "REGION", "STATUS", "TTL")
+	} else {
+		fmt.Fprintf(out, "%-3s %-14s %-10s %-10s %s\n",
+			"#", "SANDBOX ID", "ALIAS", "STATUS", "TTL")
+	}
 	for i, r := range records {
 		ttl := r.TTLRemaining
 		if ttl == "" {
@@ -143,9 +152,18 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord) error 
 		}
 		// Pad status to fixed width BEFORE adding color codes
 		paddedStatus := fmt.Sprintf("%-10s", r.Status)
-		colorStatus := colorizeRaw(r.Status, paddedStatus)
-		fmt.Fprintf(out, "%-3d %-14s %-10s %-12s %-10s %-12s %s %s\n",
-			i+1, r.SandboxID, alias, r.Profile, r.Substrate, r.Region, colorStatus, ttl)
+		colorStatus := colorizeRaw(r.Status, r.Locked, paddedStatus)
+		lock := ""
+		if r.Locked {
+			lock = " 🔒"
+		}
+		if wide {
+			fmt.Fprintf(out, "%-3d %-14s %-10s %-12s %-10s %-12s %s %s%s\n",
+				i+1, r.SandboxID, alias, r.Profile, r.Substrate, r.Region, colorStatus, ttl, lock)
+		} else {
+			fmt.Fprintf(out, "%-3d %-14s %-10s %s %s%s\n",
+				i+1, r.SandboxID, alias, colorStatus, ttl, lock)
+		}
 	}
 	return nil
 }
@@ -170,7 +188,11 @@ func colorizeListStatus(status string) string {
 }
 
 // colorizeRaw wraps a pre-padded display string with ANSI color based on the raw status value.
-func colorizeRaw(status, display string) string {
+// Locked sandboxes are shown in bold white regardless of status.
+func colorizeRaw(status string, locked bool, display string) string {
+	if locked {
+		return ansiBoldWhite + display + ansiReset
+	}
 	switch status {
 	case "failed":
 		return ansiRed + display + ansiReset

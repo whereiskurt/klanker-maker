@@ -25,10 +25,11 @@ import (
 // ANSI color codes for terminal output.
 // Disabled when output is not a TTY.
 const (
-	ansiGreen  = "\033[32m"
-	ansiYellow = "\033[33m"
-	ansiRed    = "\033[31m"
-	ansiReset  = "\033[0m"
+	ansiGreen     = "\033[32m"
+	ansiYellow    = "\033[33m"
+	ansiRed       = "\033[31m"
+	ansiBoldWhite = "\033[1;37m"
+	ansiReset     = "\033[0m"
 )
 
 // BudgetFetcher abstracts fetching budget data for a sandbox.

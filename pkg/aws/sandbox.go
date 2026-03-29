@@ -31,6 +31,7 @@ type SandboxRecord struct {
 	TTLRemaining string     `json:"ttl_remaining,omitempty"` // "1h23m" or "expired"
 	IdleTimeout  string     `json:"idle_timeout,omitempty"`  // e.g. "15m", from profile
 	Alias        string     `json:"alias,omitempty"`         // human-friendly alias (e.g. "orc", "wrkr-1")
+	Locked       bool       `json:"locked,omitempty"`        // true if sandbox is locked against destroy/stop/pause
 	Resources    []string   `json:"resources,omitempty"`     // ARNs, populated in status output only
 }
 
@@ -171,6 +172,7 @@ func readMetadataRecord(ctx context.Context, client S3ListAPI, bucket, sandboxID
 		TTLRemaining: computeTTLRemaining(meta.TTLExpiry),
 		IdleTimeout:  meta.IdleTimeout,
 		Alias:        meta.Alias,
+		Locked:       meta.Locked,
 	}
 }
 
