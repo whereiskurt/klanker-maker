@@ -368,11 +368,18 @@ locals {
 	}
 
 	// Step 12: Delete sandbox metadata.json from S3 so km list no longer shows it.
+	// Read metadata first so we can report alias freed (if any) before deletion.
 	stateBucket := cfg.StateBucket
 	if stateBucket == "" {
 		stateBucket = os.Getenv("KM_STATE_BUCKET")
 	}
 	if stateBucket != "" {
+		// Read existing metadata to check for alias — non-fatal if read fails.
+		if existingMeta, readErr := awspkg.ReadSandboxMetadata(ctx, s3Client, stateBucket, sandboxID); readErr == nil {
+			if existingMeta.Alias != "" {
+				fmt.Printf("Alias freed: %s\n", existingMeta.Alias)
+			}
+		}
 		if delErr := awspkg.DeleteSandboxMetadata(ctx, s3Client, stateBucket, sandboxID); delErr != nil {
 			log.Warn().Err(delErr).Str("sandbox_id", sandboxID).
 				Msg("failed to delete sandbox metadata from S3 (non-fatal)")

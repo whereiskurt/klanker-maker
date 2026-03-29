@@ -73,6 +73,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	var verbose bool
 	var remote bool
 	var sandboxIDOverride string
+	var aliasOverride string
 
 	cmd := &cobra.Command{
 		Use:   "create <profile.yaml>",
@@ -86,7 +87,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 			if remote {
 				return runCreateRemote(cfg, args[0], onDemand, awsProfile)
 			}
-			return runCreate(cfg, args[0], onDemand, awsProfile, verbose, sandboxIDOverride)
+			return runCreate(cfg, args[0], onDemand, awsProfile, verbose, sandboxIDOverride, aliasOverride)
 		},
 	}
 
@@ -101,12 +102,14 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	cmd.Flags().StringVar(&sandboxIDOverride, "sandbox-id", "",
 		"Use a specific sandbox ID instead of generating one (used by create-handler Lambda)")
 	cmd.Flags().MarkHidden("sandbox-id")
+	cmd.Flags().StringVar(&aliasOverride, "alias", "",
+		"Human-friendly alias for the sandbox (e.g. orc, wrkr). Overrides profile metadata.alias template.")
 
 	return cmd
 }
 
 // runCreate executes the full create workflow.
-func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile string, verbose bool, sandboxIDOverride string) error {
+func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile string, verbose bool, sandboxIDOverride string, aliasOverride string) error {
 	createStart := time.Now()
 	ctx := context.Background()
 
@@ -430,6 +433,24 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		log.Info().Str("sandbox_id", sandboxID).Msg("MLflow run record written")
 	}
 
+	// Determine alias: --alias flag takes priority, then profile metadata.alias template.
+	sandboxAlias := aliasOverride
+	if sandboxAlias == "" && resolvedProfile.Metadata.Alias != "" && cfg.StateBucket != "" {
+		// Auto-generate alias from profile template by scanning existing sandboxes.
+		existing, listErr := awspkg.ListAllSandboxesByS3(ctx, s3Client, cfg.StateBucket)
+		if listErr == nil {
+			existingAliases := make([]string, 0, len(existing))
+			for _, r := range existing {
+				if r.Alias != "" {
+					existingAliases = append(existingAliases, r.Alias)
+				}
+			}
+			sandboxAlias = awspkg.NextAliasFromTemplate(resolvedProfile.Metadata.Alias, existingAliases)
+		} else {
+			log.Warn().Err(listErr).Msg("failed to list sandboxes for alias template — skipping auto alias")
+		}
+	}
+
 	if cfg.StateBucket != "" {
 		meta := awspkg.SandboxMetadata{
 			SandboxID:   sandboxID,
@@ -441,6 +462,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 			IdleTimeout: resolvedProfile.Spec.Lifecycle.IdleTimeout,
 			MaxLifetime: resolvedProfile.Spec.Lifecycle.MaxLifetime,
 			CreatedBy:   "cli",
+			Alias:       sandboxAlias,
 		}
 		metaJSON, _ := json.Marshal(meta)
 		_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
@@ -453,7 +475,11 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 			log.Warn().Err(putErr).Str("sandbox_id", sandboxID).
 				Msg("failed to write sandbox metadata (non-fatal)")
 		} else {
-			fmt.Printf("  ✓ Metadata stored in S3\n")
+			if sandboxAlias != "" {
+				fmt.Printf("  ✓ Metadata stored in S3 (alias: %s)\n", sandboxAlias)
+			} else {
+				fmt.Printf("  ✓ Metadata stored in S3\n")
+			}
 		}
 	} else {
 		log.Debug().Msg("KM_STATE_BUCKET not set — skipping sandbox metadata write")

@@ -130,18 +130,22 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord) error 
 	out := cmd.OutOrStdout()
 	// Use fixed-width printf instead of tabwriter to avoid ANSI color codes
 	// breaking column alignment (tabwriter counts bytes, not visible chars).
-	fmt.Fprintf(out, "%-3s %-14s %-12s %-10s %-12s %-10s %s\n",
-		"#", "SANDBOX ID", "PROFILE", "SUBSTRATE", "REGION", "STATUS", "TTL")
+	fmt.Fprintf(out, "%-3s %-14s %-10s %-12s %-10s %-12s %-10s %s\n",
+		"#", "SANDBOX ID", "ALIAS", "PROFILE", "SUBSTRATE", "REGION", "STATUS", "TTL")
 	for i, r := range records {
 		ttl := r.TTLRemaining
 		if ttl == "" {
 			ttl = "-"
 		}
+		alias := r.Alias
+		if alias == "" {
+			alias = "-"
+		}
 		// Pad status to fixed width BEFORE adding color codes
 		paddedStatus := fmt.Sprintf("%-10s", r.Status)
 		colorStatus := colorizeRaw(r.Status, paddedStatus)
-		fmt.Fprintf(out, "%-3d %-14s %-12s %-10s %-12s %s %s\n",
-			i+1, r.SandboxID, r.Profile, r.Substrate, r.Region, colorStatus, ttl)
+		fmt.Fprintf(out, "%-3d %-14s %-10s %-12s %-10s %-12s %s %s\n",
+			i+1, r.SandboxID, alias, r.Profile, r.Substrate, r.Region, colorStatus, ttl)
 	}
 	return nil
 }
