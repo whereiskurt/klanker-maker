@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed quick-3 fix-budget-enforcer-instance-id
-last_updated: "2026-03-29T13:22:39.569Z"
+stopped_at: "Completed 32-01: Profile rsyncPaths and rsyncFileList schema fields"
+last_updated: "2026-03-29T15:28:09.861Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 32
   completed_phases: 29
-  total_plans: 96
-  completed_plans: 97
+  total_plans: 98
+  completed_plans: 98
   percent: 0
 ---
 
@@ -145,6 +145,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 29-configurable-sandbox-id-prefix P03 | 25min | 2 tasks | 10 files |
 | Phase 30-sandbox-lifecycle-commands-km-pause-km-lock-km-unlock P01 | 8min | 1 tasks | 5 files |
 | Phase 30-sandbox-lifecycle-commands-km-pause-km-lock-km-unlock P02 | 372s | 3 tasks | 13 files |
+| Phase 32-profile-scoped-rsync-paths-with-external-file-lists-and-shell-wildcards P01 | 87s | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -388,6 +389,7 @@ Recent decisions affecting current work:
 - [Phase 30-sandbox-lifecycle-commands-km-pause-km-lock-km-unlock]: SandboxMetadata gains Locked/LockedAt as omitempty fields for backward JSON compat
 - [Phase 30-sandbox-lifecycle-commands-km-pause-km-lock-km-unlock]: CheckSandboxLock fail-open: returns nil if StateBucket empty, AWS config fails, or metadata missing
 - [Phase 30-sandbox-lifecycle-commands-km-pause-km-lock-km-unlock]: runStop signature changed to accept cfg for lock guard consistency with pause/extend
+- [Phase 32]: RsyncPaths and RsyncFileList added as omitempty fields to ExecutionSpec; JSON schema uses items:string constraint for type safety
 
 ### Roadmap Evolution
 
@@ -437,6 +439,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-29T13:22:39.560Z
-Stopped at: Completed quick-3 fix-budget-enforcer-instance-id
+Last session: 2026-03-29T15:28:09.858Z
+Stopped at: Completed 32-01: Profile rsyncPaths and rsyncFileList schema fields
 Resume file: None

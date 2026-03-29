@@ -747,7 +747,7 @@ Plans:
 **Goal:** Move rsync path configuration from global km-config.yaml into per-profile YAML with external file list references and shell wildcard support
 **Requirements**: [RSYNC-01, RSYNC-02, RSYNC-03, RSYNC-04, RSYNC-05, RSYNC-06]
 **Depends on:** Phase 31
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 32-01-PLAN.md — Add rsyncPaths and rsyncFileList fields to profile schema and types
