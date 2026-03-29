@@ -38,11 +38,11 @@ created: 2026-03-29
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 34-01-01 | 01 | 1 | PROF-AO-01 | unit | `km validate profiles/agent-orchestrator.yaml` | ❌ W0 | ⬜ pending |
-| 34-01-02 | 01 | 1 | PROF-GS-01 | unit | `km validate profiles/goose.yaml` | ❌ W0 | ⬜ pending |
-| 34-01-03 | 01 | 1 | PROF-CX-01 | unit | `km validate profiles/codex.yaml` | ❌ W0 | ⬜ pending |
+| 34-01-01 | 01 | 1 | PROF-34-01 | unit | `km validate profiles/agent-orchestrator.yaml` | No (W0) | pending |
+| 34-01-02 | 01 | 1 | PROF-34-02 | unit | `km validate profiles/goose.yaml` | No (W0) | pending |
+| 34-01-03 | 01 | 1 | PROF-34-03 | unit | `km validate profiles/codex.yaml` | No (W0) | pending |
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+*Status: pending / green / red / flaky*
 
 ---
 
@@ -59,9 +59,9 @@ created: 2026-03-29
 
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
-| agent-orchestrator profile provisions correctly | PROF-AO-01 | Requires live AWS infra | `km create profiles/agent-orchestrator.yaml` and verify ao CLI works |
-| goose profile provisions correctly | PROF-GS-01 | Requires live AWS infra | `km create profiles/goose.yaml` and verify goose CLI works |
-| codex profile provisions correctly | PROF-CX-01 | Requires live AWS infra | `km create profiles/codex.yaml` and verify codex CLI works |
+| agent-orchestrator profile provisions correctly | PROF-34-01 | Requires live AWS infra | `km create profiles/agent-orchestrator.yaml` and verify ao CLI works |
+| goose profile provisions correctly | PROF-34-02 | Requires live AWS infra | `km create profiles/goose.yaml` and verify goose CLI works |
+| codex profile provisions correctly | PROF-34-03 | Requires live AWS infra | `km create profiles/codex.yaml` and verify codex CLI works |
 
 ---
 
