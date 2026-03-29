@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -264,5 +265,193 @@ func TestWithCustomCA_InvalidPEM_FallsBack(t *testing.T) {
 	// CA should still be the original (fallback).
 	if goproxy.GoproxyCa.Leaf != nil && goproxy.GoproxyCa.Leaf.Subject.CommonName != origCN {
 		t.Errorf("CA should have fallen back to original, got CN %q", goproxy.GoproxyCa.Leaf.Subject.CommonName)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GitHub MITM filter integration tests
+// ---------------------------------------------------------------------------
+
+// makeGitHubTarget starts a plain-HTTP test server that simulates GitHub
+// responses. It returns the server and a URL template where {path} is a
+// placeholder for callers to substitute.
+func makeGitHubTarget(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	s := httptest.NewServer(handler)
+	t.Cleanup(s.Close)
+	return s
+}
+
+// makeGitHubProxyClient returns a plain HTTP client routed through the proxy
+// but with the Host header overridden so the proxy sees it as a GitHub host.
+// Since we can't do real TLS in unit tests, we use plain HTTP and rely on
+// the OnRequest (plain-HTTP) handler being registered alongside the CONNECT
+// handler. The important invariant is that the proxy enforces the repo filter.
+func makeGitHubProxyClient(t *testing.T, proxyAddr string) *http.Client {
+	t.Helper()
+	proxyURL, _ := url.Parse("http://" + proxyAddr)
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+		},
+	}
+}
+
+// TestHTTPProxy_GitHubAllowedRepo verifies that a request to an allowed repo
+// passes through (proxy returns the upstream response), even when github.com
+// is NOT in the allowedHosts list. The presence of WithGitHubRepoFilter
+// implicitly allows GitHub hosts.
+func TestHTTPProxy_GitHubAllowedRepo(t *testing.T) {
+	target := makeGitHubTarget(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	targetURL, _ := url.Parse(target.URL)
+	targetHost := targetURL.Host // 127.0.0.1:PORT
+
+	// allowedHosts deliberately does NOT include github.com.
+	proxy := httpproxy.NewProxy(
+		[]string{targetHost},
+		"sandbox-gh-test",
+		httpproxy.WithGitHubRepoFilter([]string{"owner/repo"}),
+	)
+	_, proxyAddr := startProxyServer(t, proxy)
+	client := makeGitHubProxyClient(t, proxyAddr)
+
+	// Build a request that looks like it's going to github.com/owner/repo but
+	// actually hits our local target. We set the Host header to "github.com" so
+	// the proxy's OnRequest handler sees the GitHub host.
+	req, err := http.NewRequest(http.MethodGet, target.URL+"/owner/repo", nil)
+	if err != nil {
+		t.Fatalf("failed to build request: %v", err)
+	}
+	req.Host = "github.com"
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 for allowed repo, got %d", resp.StatusCode)
+	}
+}
+
+// TestHTTPProxy_GitHubBlockedRepo verifies that a request to a repo NOT in the
+// allowedRepos list returns 403 with a JSON body containing "repo_not_allowed".
+func TestHTTPProxy_GitHubBlockedRepo(t *testing.T) {
+	target := makeGitHubTarget(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("should not reach"))
+	}))
+	targetURL, _ := url.Parse(target.URL)
+	targetHost := targetURL.Host
+
+	proxy := httpproxy.NewProxy(
+		[]string{targetHost},
+		"sandbox-gh-test",
+		httpproxy.WithGitHubRepoFilter([]string{"owner/allowed"}),
+	)
+	_, proxyAddr := startProxyServer(t, proxy)
+	client := makeGitHubProxyClient(t, proxyAddr)
+
+	req, err := http.NewRequest(http.MethodGet, target.URL+"/owner/blocked", nil)
+	if err != nil {
+		t.Fatalf("failed to build request: %v", err)
+	}
+	req.Host = "github.com"
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected 403 for blocked repo, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	var m map[string]interface{}
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatalf("expected JSON body, got: %s", body)
+	}
+	if m["error"] != "repo_not_allowed" {
+		t.Errorf("expected error=repo_not_allowed, got %v", m["error"])
+	}
+}
+
+// TestHTTPProxy_GitHubNonRepoPassthrough verifies that non-repo GitHub URLs
+// (e.g. /rate_limit, /login) pass through without being blocked.
+func TestHTTPProxy_GitHubNonRepoPassthrough(t *testing.T) {
+	target := makeGitHubTarget(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("rate limit response"))
+	}))
+	targetURL, _ := url.Parse(target.URL)
+	targetHost := targetURL.Host
+
+	proxy := httpproxy.NewProxy(
+		[]string{targetHost},
+		"sandbox-gh-test",
+		httpproxy.WithGitHubRepoFilter([]string{"owner/repo"}),
+	)
+	_, proxyAddr := startProxyServer(t, proxy)
+	client := makeGitHubProxyClient(t, proxyAddr)
+
+	// /rate_limit is a non-repo URL on api.github.com — should pass through.
+	req, err := http.NewRequest(http.MethodGet, target.URL+"/rate_limit", nil)
+	if err != nil {
+		t.Fatalf("failed to build request: %v", err)
+	}
+	req.Host = "api.github.com"
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 for non-repo URL, got %d", resp.StatusCode)
+	}
+}
+
+// TestHTTPProxy_GitHubNoFilter verifies that when WithGitHubRepoFilter is not
+// configured, GitHub hosts are subject to normal host-level filtering only
+// (i.e., NOT implicitly allowed). This preserves backward compatibility.
+func TestHTTPProxy_GitHubNoFilter(t *testing.T) {
+	target := makeGitHubTarget(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	targetURL, _ := url.Parse(target.URL)
+	targetHost := targetURL.Host
+
+	// No WithGitHubRepoFilter — github.com is NOT in allowed list either.
+	proxy := httpproxy.NewProxy(
+		[]string{targetHost},
+		"sandbox-gh-test",
+	)
+	_, proxyAddr := startProxyServer(t, proxy)
+	client := makeGitHubProxyClient(t, proxyAddr)
+
+	// The proxy intercepts requests to `github.com` paths. Without
+	// WithGitHubRepoFilter, req.Host="github.com" is not in allowedHosts,
+	// so the plain-HTTP handler should block it with 403.
+	req, err := http.NewRequest(http.MethodGet, target.URL+"/owner/repo", nil)
+	if err != nil {
+		t.Fatalf("failed to build request: %v", err)
+	}
+	req.Host = "github.com"
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected 403 when GitHub not in allowedHosts and no filter configured, got %d", resp.StatusCode)
 	}
 }
