@@ -720,8 +720,18 @@ Plans:
 **Goal:** Working km pause, km lock, and km unlock commands with lock enforcement guards
 **Requirements**: [PAUSE-01, PAUSE-02, PAUSE-03, LOCK-01, LOCK-02, LOCK-03, UNLOCK-01, UNLOCK-02]
 **Depends on:** Phase 29
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 30-01-PLAN.md — km pause command + SandboxMetadata lock fields
 - [ ] 30-02-PLAN.md — km lock/unlock commands + lock guards + root.go wiring
+
+### Phase 31: Observable learning-mode sandbox — permissive MITM proxy that records all DNS, HTTP, GitHub, and Claude traffic to generate a minimal allowlist profile from observed behavior
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 30
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 31 to break down)

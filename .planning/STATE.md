@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 29-03-PLAN.md
-last_updated: "2026-03-29T03:00:35.877Z"
-last_activity: 2026-03-29 — Completed quick task 1: max_sandboxes config limit with operator email
+stopped_at: Completed 30-01-PLAN.md
+last_updated: "2026-03-29T04:38:14.697Z"
+last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
-  total_phases: 29
+  total_phases: 31
   completed_phases: 28
-  total_plans: 94
-  completed_plans: 95
+  total_plans: 96
+  completed_plans: 96
   percent: 0
 ---
 
@@ -143,6 +143,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 29-configurable-sandbox-id-prefix P01 | 5min | 2 tasks | 6 files |
 | Phase 29-configurable-sandbox-id-prefix P02 | 325s | 2 tasks | 6 files |
 | Phase 29-configurable-sandbox-id-prefix P03 | 25min | 2 tasks | 10 files |
+| Phase 30-sandbox-lifecycle-commands-km-pause-km-lock-km-unlock P01 | 8min | 1 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -382,6 +383,8 @@ Recent decisions affecting current work:
 - [Phase 29-configurable-sandbox-id-prefix]: Email handler captures full prefix-hex ID in group 1 (no post-extraction sb- repair) — simpler and correct for custom prefixes
 - [Phase 29-configurable-sandbox-id-prefix]: Alias resolution uses S3 scan O(n); TODO DynamoDB GSI on km-identities for O(1)
 - [Phase 29-configurable-sandbox-id-prefix]: NextAliasFromTemplate uses max+1 (not gap-filling) to prevent alias reuse of destroyed sandboxes
+- [Phase 30-sandbox-lifecycle-commands-km-pause-km-lock-km-unlock]: Hibernate=true passed to StopInstances; EC2 falls back to normal stop if not configured for hibernation
+- [Phase 30-sandbox-lifecycle-commands-km-pause-km-lock-km-unlock]: SandboxMetadata gains Locked/LockedAt as omitempty fields for backward JSON compat
 
 ### Roadmap Evolution
 
@@ -425,9 +428,10 @@ None yet.
 - Phase 27 added: Claude Code OTEL Integration — inject built-in Claude Code telemetry env vars into sandboxes, extend OTel Collector sidecar with logs+metrics pipelines, full agent observability to S3
 - Phase 28 added: GitHub repo-level MITM filtering in HTTP proxy — MITM GitHub hosts to inspect URL paths and enforce allowedRepos at the network layer, mirroring Bedrock/Anthropic pattern
 - Phase 30 added: Sandbox Lifecycle Commands — km pause (EC2 hibernate), km lock/km unlock (safety lock preventing destroy/stop/budget changes)
+- Phase 31 added: Observable learning-mode sandbox — permissive MITM proxy records all DNS/HTTP/GitHub/Claude traffic, generates minimal allowlist profile from observed behavior
 
 ## Session Continuity
 
-Last session: 2026-03-29T03:00:35.874Z
-Stopped at: Completed 29-03-PLAN.md
+Last session: 2026-03-29T04:38:14.693Z
+Stopped at: Completed 30-01-PLAN.md
 Resume file: None
