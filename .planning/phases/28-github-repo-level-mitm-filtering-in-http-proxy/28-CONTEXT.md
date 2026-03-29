@@ -48,6 +48,12 @@ This phase adds **repo-level path inspection via MITM** for GitHub hosts, so the
 - Return 403 with a clear message identifying the blocked `owner/repo` (similar to budget enforcement blocked responses)
 - Log blocked repo access for audit trail
 
+### Implicit Host Allowlisting
+- When `sourceAccess.github.allowedRepos` is non-empty, the proxy **implicitly allows GitHub hosts** (github.com, api.github.com, *.githubusercontent.com) and routes them through MITM for repo-level filtering
+- Profile authors do NOT need to add GitHub hosts to `network.egress.allowedHosts` or `allowedDNSSuffixes` — the presence of `allowedRepos` is sufficient
+- If `allowedRepos` is empty/nil, GitHub hosts are NOT implicitly allowed (current behavior preserved — they'd need to be in the host allowlist)
+- The MITM filter becomes the sole gatekeeper for GitHub traffic when sourceAccess is configured
+
 ### Configuration
 - The proxy receives `allowedRepos` list via environment variable (similar to how `ALLOWED_HOSTS` is passed today)
 - Compiled from `spec.sourceAccess.github.allowedRepos` in the profile
