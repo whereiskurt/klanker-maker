@@ -1,0 +1,152 @@
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: codex
+  labels:
+    tier: development
+    tool: codex
+    builtin: "true"
+  prefix: codex
+  alias: codex
+
+spec:
+  lifecycle:
+    ttl: "4h"
+    idleTimeout: "30m"
+    teardownPolicy: destroy
+
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    env:
+      SANDBOX_MODE: codex
+      # Rust binary needs explicit CA cert path for MITM proxy TLS interception
+      CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
+      # OPENAI_API_KEY must be injected post-provision or via OTP SSM mechanism.
+      # Do NOT hardcode a real key here — leave empty and inject at runtime.
+      OPENAI_API_KEY: ""
+    rsyncPaths:
+      - ".gitconfig"
+      - ".codex"
+    initCommands:
+      - "yum install -y git jq"
+      - "curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.117.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz"
+      - "tar -xzf /tmp/codex.tar.gz -C /tmp && install -m 755 /tmp/codex /usr/local/bin/codex"
+      - "mkdir -p /home/sandbox/.codex"
+      - "printf '[model]\\nsandbox_mode = \"workspace-write\"\\n' > /home/sandbox/.codex/config.toml"
+      - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace /home/sandbox/.codex"
+      - "su - sandbox -c 'cd /workspace && git config --global user.name \"Codex Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "whereiskurt/meshtk"
+        - "whereiskurt/defcon.run.34"
+      allowedRefs:
+        - "main"
+        - "develop"
+        - "feature/*"
+        - "fix/*"
+      permissions:
+        - read
+        - write
+
+  network:
+    egress:
+      # GitHub hosts are implicitly allowed via sourceAccess.github.allowedRepos
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+        - ".openai.com"
+        - ".github.com"
+        - ".githubusercontent.com"
+      allowedHosts:
+        - "api.openai.com"
+        - "github.com"
+      allowedMethods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+
+  budget:
+    compute:
+      maxSpendUSD: 2.00
+    ai:
+      maxSpendUSD: 5.00
+    warningThreshold: 0.80
+
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 1000
+
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/network
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+
+  policy:
+    allowShellEscape: false
+    allowedCommands:
+      - git
+      - codex
+      - bash
+      - sh
+      - jq
+    filesystemPolicy:
+      readOnlyPaths: []
+      writablePaths:
+        - /workspace
+        - /tmp
+        - /home
+
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: off
+    allowedSenders:
+      - "self"
+
+  agent:
+    maxConcurrentTasks: 1
+    taskTimeout: "60m"
+    allowedTools:
+      - bash
+      - read_file
+      - write_file
+      - list_files

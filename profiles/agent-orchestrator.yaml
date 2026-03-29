@@ -1,0 +1,157 @@
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: agent-orchestrator
+  labels:
+    tier: development
+    tool: agent-orchestrator
+    builtin: "true"
+  prefix: ao
+  alias: ao
+
+spec:
+  lifecycle:
+    ttl: "8h"
+    idleTimeout: "1h"
+    teardownPolicy: destroy
+
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.large
+    region: us-east-1
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    env:
+      SANDBOX_MODE: agent-orchestrator
+      # GITHUB_TOKEN is required for gh auth login — inject from SSM at provision time
+      # Never hardcode a real token here
+      GITHUB_TOKEN: ""
+    rsyncPaths:
+      - ".gitconfig"
+      - ".agent-orchestrator"
+    initCommands:
+      - "yum install -y git nodejs npm tmux jq"
+      - "yum install -y 'dnf-command(config-manager)' && dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo && dnf install -y gh"
+      - "npm install -g @composio/ao"
+      - "echo \"$GITHUB_TOKEN\" | gh auth login --with-token"
+      - "mkdir -p /workspace ~/.agent-orchestrator ~/.worktrees && chown -R sandbox:sandbox /workspace ~/.agent-orchestrator ~/.worktrees"
+      - "su - sandbox -c 'cd /workspace && git config --global user.name \"Agent Orchestrator Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "whereiskurt/meshtk"
+        - "whereiskurt/defcon.run.34"
+      allowedRefs:
+        - "main"
+        - "develop"
+        - "feature/*"
+        - "fix/*"
+      permissions:
+        - read
+        - write
+
+  network:
+    egress:
+      # GitHub hosts are implicitly allowed via sourceAccess.github.allowedRepos
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+        - ".npmjs.org"
+        - ".npmjs.com"
+        - ".nodejs.org"
+        - ".github.com"
+        - ".githubusercontent.com"
+      allowedHosts:
+        - "registry.npmjs.org"
+        - "api.github.com"
+        - "github.com"
+      allowedMethods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+
+  budget:
+    compute:
+      maxSpendUSD: 4.00
+    ai:
+      maxSpendUSD: 10.00
+    warningThreshold: 0.80
+
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 1000
+
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/network
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+
+  policy:
+    allowShellEscape: false
+    allowedCommands:
+      - git
+      - node
+      - npm
+      - npx
+      - ao
+      - tmux
+      - gh
+      - bash
+      - sh
+      - jq
+    filesystemPolicy:
+      readOnlyPaths: []
+      writablePaths:
+        - /workspace
+        - /tmp
+        - /home
+
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: off
+    allowedSenders:
+      - "self"
+
+  agent:
+    maxConcurrentTasks: 4
+    taskTimeout: "120m"
+    allowedTools:
+      - bash
+      - read_file
+      - write_file
+      - list_files

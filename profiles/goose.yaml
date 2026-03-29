@@ -1,0 +1,155 @@
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: goose
+  labels:
+    tier: development
+    tool: goose
+    builtin: "true"
+  prefix: goose
+  alias: goose
+
+spec:
+  lifecycle:
+    ttl: "4h"
+    idleTimeout: "30m"
+    teardownPolicy: destroy
+
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    env:
+      SANDBOX_MODE: goose
+      GOOSE_PROVIDER: amazon_bedrock
+      # Use bare model ID without us. prefix — goose's amazon_bedrock provider may not support
+      # cross-region inference profile IDs. Verify against goose provider docs before changing.
+      GOOSE_MODEL: anthropic.claude-sonnet-4-5
+      AWS_DEFAULT_REGION: us-east-1
+      GOOSE_MODE: auto
+      # Rust binary needs explicit CA cert path for MITM proxy TLS interception
+      SSL_CERT_FILE: /usr/local/share/ca-certificates/km-proxy-ca.crt
+    rsyncPaths:
+      - ".gitconfig"
+      - ".config/goose"
+    initCommands:
+      - "yum install -y git bzip2 jq"
+      - "curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash"
+      - "echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> /home/sandbox/.bashrc"
+      - "mkdir -p /home/sandbox/.config/goose"
+      - "printf 'provider: amazon_bedrock\\nmodel: anthropic.claude-sonnet-4-5\\n' > /home/sandbox/.config/goose/config.yaml"
+      - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace /home/sandbox/.config /home/sandbox/.local"
+      - "su - sandbox -c 'cd /workspace && git config --global user.name \"Goose Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "whereiskurt/meshtk"
+        - "whereiskurt/defcon.run.34"
+      allowedRefs:
+        - "main"
+        - "develop"
+        - "feature/*"
+        - "fix/*"
+      permissions:
+        - read
+        - write
+
+  network:
+    egress:
+      # GitHub hosts are implicitly allowed via sourceAccess.github.allowedRepos
+      # Bedrock access is via .amazonaws.com suffix — no external AI API needed
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+        - ".github.com"
+        - ".githubusercontent.com"
+      allowedHosts:
+        - "github.com"
+      allowedMethods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+
+  budget:
+    compute:
+      maxSpendUSD: 2.00
+    ai:
+      maxSpendUSD: 5.00
+    warningThreshold: 0.80
+
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 1000
+
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/network
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+
+  policy:
+    allowShellEscape: false
+    allowedCommands:
+      - git
+      - goose
+      - bash
+      - sh
+      - jq
+      - curl
+    filesystemPolicy:
+      readOnlyPaths: []
+      writablePaths:
+        - /workspace
+        - /tmp
+        - /home
+
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: off
+    allowedSenders:
+      - "self"
+
+  agent:
+    maxConcurrentTasks: 1
+    taskTimeout: "60m"
+    allowedTools:
+      - bash
+      - read_file
+      - write_file
+      - list_files
