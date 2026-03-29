@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"strings"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
@@ -89,10 +91,18 @@ func runPause(ctx context.Context, cfg *config.Config, sandboxID string) error {
 		for _, inst := range res.Instances {
 			instanceID := aws.ToString(inst.InstanceId)
 			fmt.Printf("Pausing instance "+ansiYellow+"%s"+ansiReset+"...\n", instanceID)
-			if _, err := ec2Client.StopInstances(ctx, &ec2.StopInstancesInput{
+			_, err := ec2Client.StopInstances(ctx, &ec2.StopInstancesInput{
 				InstanceIds: []string{instanceID},
 				Hibernate:   aws.Bool(true),
-			}); err != nil {
+			})
+			if err != nil && strings.Contains(err.Error(), "UnsupportedHibernationConfiguration") {
+				// Instance wasn't launched with hibernation — fall back to normal stop
+				fmt.Printf(ansiYellow+"  [info] hibernate not available, stopping normally"+ansiReset+"\n")
+				_, err = ec2Client.StopInstances(ctx, &ec2.StopInstancesInput{
+					InstanceIds: []string{instanceID},
+				})
+			}
+			if err != nil {
 				return fmt.Errorf("pause instance %s: %w", instanceID, err)
 			}
 			paused++
