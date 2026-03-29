@@ -158,6 +158,13 @@ type ExecutionSpec struct {
 	// Rsync is the name of a saved home directory snapshot to restore on boot.
 	// Created via `km rsync save <sandbox> <name>`. Restored from S3 before initCommands.
 	Rsync string `yaml:"rsync,omitempty"`
+	// RsyncPaths is a list of paths relative to the sandbox user's $HOME to include
+	// in rsync snapshots. Shell wildcards are supported (e.g. projects/*/config).
+	// When empty, the rsync command uses its default behaviour.
+	RsyncPaths []string `yaml:"rsyncPaths,omitempty"`
+	// RsyncFileList is the path to a local YAML file containing additional rsync paths.
+	// Resolved from the operator's cwd at `km rsync save` time.
+	RsyncFileList string `yaml:"rsyncFileList,omitempty"`
 }
 
 // SourceAccessSpec controls access to source code repositories.

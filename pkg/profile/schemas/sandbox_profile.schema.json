@@ -233,6 +233,15 @@
             "rsync": {
               "type": "string",
               "description": "Name of a saved home directory snapshot to restore on boot (created via km rsync save)"
+            },
+            "rsyncPaths": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Paths relative to sandbox user $HOME to include in rsync snapshots. Shell wildcards supported (e.g. projects/*/config)."
+            },
+            "rsyncFileList": {
+              "type": "string",
+              "description": "Path to a local YAML file containing additional rsync paths (resolved from operator cwd at km rsync save time)."
             }
           }
         },
