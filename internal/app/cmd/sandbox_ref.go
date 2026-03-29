@@ -11,8 +11,10 @@ import (
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 )
 
-// sandboxIDLike matches any valid sandbox ID: {prefix}-{8hex}
-var sandboxIDLike = regexp.MustCompile(`^[a-z][a-z0-9]{0,11}-[a-f0-9]{8}$`)
+// sandboxIDLike matches strings that look like sandbox IDs: {prefix}-{suffix}.
+// This is intentionally lenient because it's used for routing, not validation.
+// Strict validation (exactly 8 hex) is in destroy.go and compiler.IsValidSandboxID.
+var sandboxIDLike = regexp.MustCompile(`^[a-z][a-z0-9]*-[a-z0-9][-a-z0-9]*$`)
 
 // ResolveSandboxID resolves a sandbox reference to a sandbox ID.
 // The ref can be:

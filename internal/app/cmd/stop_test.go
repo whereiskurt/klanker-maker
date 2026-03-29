@@ -80,7 +80,7 @@ func TestStopCmd_RemotePublishFailure(t *testing.T) {
 // an error before calling the publisher.
 func TestStopCmd_RemoteInvalidSandboxID(t *testing.T) {
 	pub := &fakePublisher{}
-	err := runStopRemote(t, pub, "not-valid-id")
+	err := runStopRemote(t, pub, "NOT-VALID")
 	if err == nil {
 		t.Fatal("expected error for invalid sandbox ID, got nil")
 	}

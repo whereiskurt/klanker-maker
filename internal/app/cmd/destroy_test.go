@@ -254,7 +254,7 @@ func TestDestroyCmd_RemoteInvalidSandboxID(t *testing.T) {
 	// Use a non-matching ID that passes ResolveSandboxID string check but fails regex.
 	// Note: destroy validates format in runDestroy, but --remote path goes through
 	// ResolveSandboxID first. We use an obviously wrong ID here.
-	err := runDestroyRemote(t, pub, "not-valid-id")
+	err := runDestroyRemote(t, pub, "NOT-VALID")
 	if err == nil {
 		t.Fatal("expected error for invalid sandbox ID, got nil")
 	}

@@ -153,7 +153,7 @@ func TestExtendCmd_RemotePublishFailure(t *testing.T) {
 // TestExtendCmd_RemoteInvalidSandboxID verifies invalid sandbox ID is rejected before publish.
 func TestExtendCmd_RemoteInvalidSandboxID(t *testing.T) {
 	pub := &fakePublisher{}
-	err := runExtendRemote(t, pub, "not-valid-id", "1h")
+	err := runExtendRemote(t, pub, "NOT-VALID", "1h")
 	if err == nil {
 		t.Fatal("expected error for invalid sandbox ID, got nil")
 	}

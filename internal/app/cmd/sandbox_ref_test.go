@@ -28,7 +28,7 @@ func TestResolveSandboxID_CustomPrefix(t *testing.T) {
 		// Numeric string — falls through to list lookup (requires AWS, expect error)
 		{"3", "", true},
 		// Invalid format — not an ID, not a number — expect error
-		{"not-valid-id", "", true},
+		{"NOT-VALID", "", true},
 	}
 
 	for _, tt := range tests {
