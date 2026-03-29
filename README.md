@@ -231,26 +231,45 @@ Editable source: [`docs/sandbox-architecture.excalidraw`](docs/sandbox-architect
 
 ## SandboxProfile
 
-Profiles use a Kubernetes-style schema at `klankermaker.ai/v1alpha1`. Here's what a realistic agent sandbox looks like:
+Profiles use a Kubernetes-style schema at `klankermaker.ai/v1alpha1`. Here's the `claude-dev` profile - a working example that provisions a Claude Code sandbox with Bedrock access, budget enforcement, OTEL telemetry, and GitHub repo allowlisting:
 
 ```yaml
 apiVersion: klankermaker.ai/v1alpha1
 kind: SandboxProfile
 metadata:
-  name: restricted-dev
-  description: Budget-capped development sandbox with network filtering
-extends: open-dev
+  name: claude-dev
+  labels:
+    tier: development
+    tool: claude-code
+    builtin: "true"
 
 spec:
   lifecycle:
-    ttl: 8h
-    idleTimeout: 2h
+    ttl: "4h"
+    idleTimeout: "30m"
     teardownPolicy: destroy
 
   runtime:
     substrate: ec2
-    instanceType: t3.medium
     spot: true
+    instanceType: t3.large
+    region: us-east-1
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    env:
+      SANDBOX_MODE: claude-dev
+      ANTHROPIC_BASE_URL: "https://bedrock-runtime.us-east-1.amazonaws.com"
+      ANTHROPIC_DEFAULT_SONNET_MODEL: us.anthropic.claude-sonnet-4-6
+      ANTHROPIC_DEFAULT_OPUS_MODEL: us.anthropic.claude-opus-4-6-v1
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: us.anthropic.claude-haiku-4-5-20251001-v1:0
+      CLAUDE_CODE_USE_BEDROCK: "1"
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+    initCommands:
+      - "yum install -y git nodejs npm python3 python3-pip tar gzip unzip jq"
+      - "npm install -g @anthropic-ai/claude-code"
+      - "mkdir -p /workspace && chown sandbox:sandbox /workspace"
 
   budget:
     compute:
@@ -262,50 +281,100 @@ spec:
   network:
     egress:
       allowedDNSSuffixes:
-        - "*.github.com"
-        - "*.amazonaws.com"
+        - ".amazonaws.com"
+        - ".anthropic.com"
+        - ".claude.ai"
+        - ".github.com"
+        - ".githubusercontent.com"
+        - ".npmjs.org"
+        - ".nodejs.org"
+        - ".sentry.io"
       allowedHosts:
-        - host: "api.openai.com"
-          methods: [GET, POST]
-        - host: "api.anthropic.com"
-          methods: [GET, POST]
-
-  identity:
-    sessionDuration: 1h
-    regionLock: [us-east-1]
+        - "api.anthropic.com"
+        - "api.github.com"
+        - "github.com"
+        - "registry.npmjs.org"
+        - "nodejs.org"
+      allowedMethods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
 
   sourceAccess:
+    mode: allowlist
     github:
       allowedRepos:
-        - org: "mycompany"
-          repo: "*"
-          refs: ["main", "develop"]
-          permissions: [clone, fetch, push]
+        - "myorg/my-repo"
+        - "myorg/another-repo"
+      allowedRefs:
+        - "main"
+        - "develop"
+        - "feature/*"
+      permissions:
+        - read
+        - write
 
-  secrets:
-    allowedRefs:
-      - "arn:aws:ssm:us-east-1::parameter/sandbox/api-key"
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
 
   sidecars:
-    dnsProxy: { enabled: true }
-    httpProxy: { enabled: true }
-    auditLog: { enabled: true }
-    tracing: { enabled: true }
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/network
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 1000
 
   email:
     signing: required
     verifyInbound: required
-    encryption: optional
+    encryption: off
 
-  artifacts:
-    paths: ["/workspace/output/**"]
-    maxSizeMB: 100
-    replicationRegion: us-west-2
-
-  observability:
-    logDestination: cloudwatch
-    commandLog: true
-    networkLog: true
+  policy:
+    allowShellEscape: false
+    allowedCommands:
+      - git
+      - node
+      - npm
+      - npx
+      - python3
+      - pip
+      - bash
+      - claude
+      - curl
+    filesystemPolicy:
+      writablePaths:
+        - /workspace
+        - /tmp
+        - /home
 ```
 
 ### Built-in Profiles
