@@ -1,0 +1,32 @@
+Show platform configuration and operational details.
+
+Displays the full platform identity: domain, AWS account topology,
+SSO configuration, infrastructure resources, operator contact, and
+email-to-create details. All values come from km-config.yaml.
+
+Usage:
+  km info
+
+Output Sections:
+
+  Platform:
+    Domain, sandbox subdomain, primary region, km version.
+
+  AWS Accounts:
+    Management, Terraform, and Application account IDs.
+
+  AWS SSO:
+    SSO portal URL and SSO region.
+
+  Infrastructure:
+    Artifacts S3 bucket, Route53 zone ID, DynamoDB table names.
+
+  Operator:
+    Operator email and inbound inbox address.
+
+  Email-to-Create:
+    Address to send sandbox creation requests, safe phrase for
+    authentication, and the SSM parameter path where it's stored.
+
+No AWS credentials are required - all data comes from the local
+km-config.yaml file.

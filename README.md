@@ -116,6 +116,7 @@ The `km` CLI selects the right AWS profile per command. Commands are grouped by 
 | `km bootstrap` | `klanker-terraform` | Deploy SCP containment policy + KMS key + artifacts bucket |
 | `km init` | `klanker-application` | Build Lambdas/sidecars, provision shared VPC/network |
 | `km doctor` | `klanker-terraform` | Validate platform health across all accounts (12 checks) |
+| `km info` | - | Show platform config, accounts, operator email, email-to-create details |
 
 **Sandbox lifecycle**
 

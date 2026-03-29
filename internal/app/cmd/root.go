@@ -73,6 +73,7 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	root.AddCommand(NewRollCmd(cfg))
 	root.AddCommand(NewRsyncCmd(cfg))
 	root.AddCommand(NewOtelCmd(cfg))
+	root.AddCommand(NewInfoCmd(cfg))
 
 	// Shell completion subcommand
 	root.AddCommand(&cobra.Command{

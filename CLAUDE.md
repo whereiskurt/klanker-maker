@@ -12,6 +12,7 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 - `km create <profile.yaml>` — provision a sandbox
 - `km destroy <sandbox-id>` — teardown a sandbox
 - `km otel <sandbox-id>` — OTEL telemetry + AI spend summary (--prompts, --events, --tools, --timeline)
+- `km info` — platform configuration, accounts, operator email, email-to-create
 
 ## Architecture
 
