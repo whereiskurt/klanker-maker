@@ -144,11 +144,11 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 	idWidth += 2 // padding
 
 	if wide {
-		fmt.Fprintf(out, "%-3s %-*s  %-10s %-12s %-10s %-12s %-10s %s\n",
-			"#", idWidth, "SANDBOX ID", "ALIAS", "PROFILE", "SUBSTRATE", "REGION", "STATUS", "TTL")
+		fmt.Fprintf(out, "%-3s %-10s  %-*s %-12s %-10s %-12s %-10s %s\n",
+			"#", "ALIAS", idWidth, "SANDBOX ID", "PROFILE", "SUBSTRATE", "REGION", "STATUS", "TTL")
 	} else {
-		fmt.Fprintf(out, "%-3s %-*s  %-10s %-10s %s\n",
-			"#", idWidth, "SANDBOX ID", "ALIAS", "STATUS", "TTL")
+		fmt.Fprintf(out, "%-3s %-10s  %-*s %-10s %s\n",
+			"#", "ALIAS", idWidth, "SANDBOX ID", "STATUS", "TTL")
 	}
 	for i, r := range records {
 		ttl := r.TTLRemaining
@@ -175,12 +175,12 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 		num := bw(fmt.Sprintf("%-3d", i+1))
 		if wide {
 			fmt.Fprintf(out, "%s %s  %s %s %s %s %s %s%s\n",
-				num, bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)), bw(fmt.Sprintf("%-10s", alias)),
+				num, bw(fmt.Sprintf("%-10s", alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
 				bw(fmt.Sprintf("%-12s", r.Profile)), bw(fmt.Sprintf("%-10s", r.Substrate)),
 				bw(fmt.Sprintf("%-12s", r.Region)), colorStatus, bw(ttl), lock)
 		} else {
 			fmt.Fprintf(out, "%s %s  %s %s %s%s\n",
-				num, bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)), bw(fmt.Sprintf("%-10s", alias)),
+				num, bw(fmt.Sprintf("%-10s", alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
 				colorStatus, bw(ttl), lock)
 		}
 	}
