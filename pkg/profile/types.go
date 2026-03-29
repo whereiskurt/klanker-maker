@@ -22,6 +22,7 @@ type Metadata struct {
 	Name   string            `yaml:"name"`
 	Labels map[string]string `yaml:"labels,omitempty"`
 	Prefix string            `yaml:"prefix,omitempty"`
+	Alias  string            `yaml:"alias,omitempty"` // optional alias template (e.g. "wrkr") → auto-generates wrkr-1, wrkr-2, etc.
 }
 
 // Spec contains all required sections of a SandboxProfile.

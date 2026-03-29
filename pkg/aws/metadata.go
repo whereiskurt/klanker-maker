@@ -19,4 +19,5 @@ type SandboxMetadata struct {
 	IdleTimeout string     `json:"idle_timeout,omitempty"` // e.g. "15m", from profile lifecycle.idleTimeout
 	MaxLifetime string     `json:"max_lifetime,omitempty"` // e.g. "72h", from profile lifecycle.maxLifetime; empty = no cap
 	CreatedBy   string     `json:"created_by,omitempty"`   // creation method: "cli", "email", "api", "remote"
+	Alias       string     `json:"alias,omitempty"`        // human-friendly alias (e.g. "orc", "wrkr-1")
 }

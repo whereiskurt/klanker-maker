@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +30,7 @@ type SandboxRecord struct {
 	TTLExpiry    *time.Time `json:"ttl_expiry,omitempty"`
 	TTLRemaining string     `json:"ttl_remaining,omitempty"` // "1h23m" or "expired"
 	IdleTimeout  string     `json:"idle_timeout,omitempty"`  // e.g. "15m", from profile
+	Alias        string     `json:"alias,omitempty"`         // human-friendly alias (e.g. "orc", "wrkr-1")
 	Resources    []string   `json:"resources,omitempty"`     // ARNs, populated in status output only
 }
 
@@ -167,6 +170,7 @@ func readMetadataRecord(ctx context.Context, client S3ListAPI, bucket, sandboxID
 		TTLExpiry:    meta.TTLExpiry,
 		TTLRemaining: computeTTLRemaining(meta.TTLExpiry),
 		IdleTimeout:  meta.IdleTimeout,
+		Alias:        meta.Alias,
 	}
 }
 
@@ -259,6 +263,60 @@ func ReadSandboxMetadata(ctx context.Context, client S3ListAPI, bucket, sandboxI
 // S3DeleteAPI is the narrow interface for deleting S3 objects.
 type S3DeleteAPI interface {
 	DeleteObject(ctx context.Context, input *s3.DeleteObjectInput, opts ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+}
+
+// ResolveSandboxAlias scans S3 metadata to find a sandbox with the given alias.
+// Returns the sandbox ID or an error if not found or if multiple sandboxes share the alias.
+// TODO: For O(1) lookup, add alias to DynamoDB km-identities table with a GSI.
+func ResolveSandboxAlias(ctx context.Context, client S3ListAPI, bucket, alias string) (string, error) {
+	records, err := ListAllSandboxesByS3(ctx, client, bucket)
+	if err != nil {
+		return "", fmt.Errorf("resolve alias %q: %w", alias, err)
+	}
+
+	var matches []string
+	for _, r := range records {
+		if r.Alias == alias {
+			matches = append(matches, r.SandboxID)
+		}
+	}
+
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("alias %q not found: no active sandbox with that alias", alias)
+	case 1:
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("alias %q is ambiguous: matched %d sandboxes (%s)", alias, len(matches), strings.Join(matches, ", "))
+	}
+}
+
+// aliasTemplatePattern matches "<template>-<number>" for suffix extraction.
+var aliasTemplatePattern = regexp.MustCompile(`^(.+)-(\d+)$`)
+
+// NextAliasFromTemplate generates the next alias from a template by scanning
+// active sandbox aliases. Template "wrkr" + existing ["wrkr-1","wrkr-3"] → "wrkr-4".
+// When no existing aliases match the template, returns "<template>-1".
+func NextAliasFromTemplate(template string, existingAliases []string) string {
+	max := 0
+	prefix := template + "-"
+	for _, a := range existingAliases {
+		if !strings.HasPrefix(a, prefix) {
+			continue
+		}
+		m := aliasTemplatePattern.FindStringSubmatch(a)
+		if m == nil || m[1] != template {
+			continue
+		}
+		n, err := strconv.Atoi(m[2])
+		if err != nil {
+			continue
+		}
+		if n > max {
+			max = n
+		}
+	}
+	return fmt.Sprintf("%s-%d", template, max+1)
 }
 
 // DeleteSandboxMetadata removes the metadata.json for a sandbox from S3.
