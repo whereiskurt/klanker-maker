@@ -125,6 +125,24 @@ Paths are relative to the shell user's home directory.`,
 	return cmd
 }
 
+// buildTarShellCmd constructs the SSM shell command for rsync save.
+// Paths are joined unquoted so bash expands wildcards like projects/*/config.
+// All paths must have been validated by validateRsyncPath before calling this function.
+func buildTarShellCmd(paths []string, bucket, s3Key string) string {
+	return fmt.Sprintf(
+		`SHELL_HOME=$(getent passwd sandbox | cut -d: -f6) && `+
+			`[ -n "$SHELL_HOME" ] || SHELL_HOME=/home/sandbox && `+
+			`cd "$SHELL_HOME" && PATHS="" && `+
+			`for p in %s; do [ -e "$p" ] && PATHS="$PATHS $p"; done && `+
+			`if [ -n "$PATHS" ]; then `+
+			`tar czf /tmp/km-rsync.tar.gz $PATHS && `+
+			`aws s3 cp /tmp/km-rsync.tar.gz "s3://%s/%s" && `+
+			`echo "RSYNC_OK: $(du -sh /tmp/km-rsync.tar.gz | cut -f1)"; `+
+			`else echo "RSYNC_EMPTY: no matching paths found"; fi`,
+		strings.Join(paths, " "), bucket, s3Key,
+	)
+}
+
 // newRsyncSaveCmd creates "km rsync save <sandbox> <name>".
 func newRsyncSaveCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
@@ -189,18 +207,7 @@ func newRsyncSaveCmd(cfg *config.Config) *cobra.Command {
 			s3Key := fmt.Sprintf("rsync/%s.tar.gz", name)
 
 			// Paths are validated by resolveRsyncPaths — pass unquoted for bash wildcard expansion
-			shellCmd := fmt.Sprintf(
-				`SHELL_HOME=$(getent passwd sandbox | cut -d: -f6) && `+
-					`[ -n "$SHELL_HOME" ] || SHELL_HOME=/home/sandbox && `+
-					`cd "$SHELL_HOME" && PATHS="" && `+
-					`for p in %s; do [ -e "$p" ] && PATHS="$PATHS $p"; done && `+
-					`if [ -n "$PATHS" ]; then `+
-					`tar czf /tmp/km-rsync.tar.gz $PATHS && `+
-					`aws s3 cp /tmp/km-rsync.tar.gz "s3://%s/%s" && `+
-					`echo "RSYNC_OK: $(du -sh /tmp/km-rsync.tar.gz | cut -f1)"; `+
-					`else echo "RSYNC_EMPTY: no matching paths found"; fi`,
-				strings.Join(paths, " "), bucket, s3Key,
-			)
+			shellCmd := buildTarShellCmd(paths, bucket, s3Key)
 
 			ssmClient := ssm.NewFromConfig(awsCfg)
 			fmt.Printf("  Paths: %s\n", strings.Join(paths, ", "))
