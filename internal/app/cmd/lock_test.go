@@ -72,3 +72,14 @@ func TestLockCmd_RequiresStateBucket(t *testing.T) {
 		t.Errorf("error should mention 'state bucket', got: %v", err)
 	}
 }
+
+// TestCheckSandboxLock_FailOpenEmptyBucket verifies that CheckSandboxLock returns nil
+// (fail-open) when StateBucket is not configured — avoids blocking commands without metadata.
+func TestCheckSandboxLock_FailOpenEmptyBucket(t *testing.T) {
+	ctx := t.Context()
+	cfg := &config.Config{StateBucket: ""}
+	err := cmd.CheckSandboxLock(ctx, cfg, "sb-aabbccdd")
+	if err != nil {
+		t.Errorf("CheckSandboxLock with empty StateBucket should return nil (fail-open), got: %v", err)
+	}
+}

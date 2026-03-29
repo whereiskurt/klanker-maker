@@ -62,6 +62,10 @@ func runPause(ctx context.Context, cfg *config.Config, sandboxID string) error {
 		return fmt.Errorf("state bucket not configured")
 	}
 
+	if err := CheckSandboxLock(ctx, cfg, sandboxID); err != nil {
+		return err
+	}
+
 	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
 	if err != nil {
 		return fmt.Errorf("load AWS config: %w", err)

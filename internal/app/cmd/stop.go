@@ -45,7 +45,7 @@ func NewStopCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) *co
 				}
 				return publisher.PublishSandboxCommand(ctx, sandboxID, "stop")
 			}
-			return runStop(ctx, sandboxID)
+			return runStop(ctx, cfg, sandboxID)
 		},
 	}
 
@@ -54,7 +54,11 @@ func NewStopCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) *co
 	return cmd
 }
 
-func runStop(ctx context.Context, sandboxID string) error {
+func runStop(ctx context.Context, cfg *config.Config, sandboxID string) error {
+	if err := CheckSandboxLock(ctx, cfg, sandboxID); err != nil {
+		return err
+	}
+
 	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
 	if err != nil {
 		return fmt.Errorf("load AWS config: %w", err)

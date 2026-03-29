@@ -130,6 +130,12 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool, ve
 		return fmt.Errorf("AWS credential validation failed — check that profile %q is configured: %w", awsProfile, err)
 	}
 
+	// Step 2b: Check lock guard — block destroy if sandbox is locked.
+	// Uses cfg.StateBucket; fail-open if bucket not configured or metadata missing.
+	if err := CheckSandboxLock(ctx, cfg, sandboxID); err != nil {
+		return err
+	}
+
 	// Step 3: Discover sandbox via tag-based lookup
 	tagClient := resourcegroupstaggingapi.NewFromConfig(awsCfg)
 	location, err := awspkg.FindSandboxByID(ctx, tagClient, sandboxID)
