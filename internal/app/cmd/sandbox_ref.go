@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 )
@@ -16,6 +17,7 @@ var sandboxIDLike = regexp.MustCompile(`^[a-z][a-z0-9]{0,11}-[a-f0-9]{8}$`)
 // ResolveSandboxID resolves a sandbox reference to a sandbox ID.
 // The ref can be:
 //   - A sandbox ID like "sb-a1b2c3d4" or "claude-a1b2c3d4" (returned as-is)
+//   - A sandbox alias like "orc" or "wrkr-1" (resolved via S3 metadata scan)
 //   - A number "1"-"N" referring to the Nth sandbox from km list
 func ResolveSandboxID(ctx context.Context, cfg *config.Config, ref string) (string, error) {
 	// If it matches the sandbox ID pattern, treat it as a sandbox ID (further
@@ -24,10 +26,22 @@ func ResolveSandboxID(ctx context.Context, cfg *config.Config, ref string) (stri
 		return ref, nil
 	}
 
+	// Try alias resolution via S3 metadata scan when state bucket is configured.
+	if cfg.StateBucket != "" {
+		awsCfg, awsErr := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+		if awsErr == nil {
+			s3Client := s3.NewFromConfig(awsCfg)
+			if resolved, aliasErr := kmaws.ResolveSandboxAlias(ctx, s3Client, cfg.StateBucket, ref); aliasErr == nil {
+				fmt.Printf("Resolved alias %q → %s\n", ref, resolved)
+				return resolved, nil
+			}
+		}
+	}
+
 	// Try parsing as a number.
 	num, err := strconv.Atoi(ref)
 	if err != nil || num < 1 {
-		return "", fmt.Errorf("invalid sandbox reference %q: must be a sandbox ID ({prefix}-xxxxxxxx) or a number from 'km list'", ref)
+		return "", fmt.Errorf("invalid sandbox reference %q: must be a sandbox ID ({prefix}-xxxxxxxx), an alias, or a number from 'km list'", ref)
 	}
 
 	// Fetch the sandbox list to resolve the number.
