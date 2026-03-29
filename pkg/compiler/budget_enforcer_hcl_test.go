@@ -26,13 +26,28 @@ func TestGenerateBudgetEnforcerHCL_EC2(t *testing.T) {
 		"find_in_parent_folders",         // standard Terragrunt include pattern
 		"remote_state",                   // S3 backend declaration
 		"sandboxes/sb-ec2test1/budget-enforcer/terraform.tfstate", // per-sandbox state key
-		"role_arn",                       // IAM role ARN constructed from sandbox_id + region
-		"km-ec2spot-ssm",                // role name pattern in constructed ARN
+		"role_arn",                       // IAM role ARN wired from dependency outputs
+		// Dependency block checks
+		`dependency "sandbox"`,           // dependency block must be present
+		`config_path = "${get_terragrunt_dir()}/.."`, // points to parent sandbox module
+		"mock_outputs",                   // mock_outputs for dependency
+		"ec2spot_instances",              // mock output key for instance map
+		"iam_instance_profile_name",      // mock output key for instance profile
+		"iam_role_arn",                   // mock output key for role ARN
+		"mock_outputs_allowed_on_destroy = true", // required for destroy operations
+		// Output-based wiring checks
+		`try(values(dependency.sandbox.outputs.ec2spot_instances)[0].instance_id, "")`, // instance_id wired from output
+		"dependency.sandbox.outputs.iam_role_arn",  // role_arn wired from output
 	}
 	for _, want := range checks {
 		if !strings.Contains(hcl, want) {
 			t.Errorf("GenerateBudgetEnforcerHCL() missing %q\nGot:\n%s", want, hcl)
 		}
+	}
+
+	// Must NOT contain the old static ARN construction pattern
+	if strings.Contains(hcl, "km-ec2spot-ssm-") {
+		t.Errorf("GenerateBudgetEnforcerHCL() must not contain old static ARN pattern 'km-ec2spot-ssm-'\nGot:\n%s", hcl)
 	}
 }
 
@@ -53,12 +68,21 @@ func TestGenerateBudgetEnforcerHCL_ECS(t *testing.T) {
 		"budget_enforcer_inputs",
 		"build/budget-enforcer.zip",      // path matches Makefile build-lambdas output
 		"sandboxes/sb-ecstest2/budget-enforcer/terraform.tfstate",
-		"role_arn",                       // IAM role ARN constructed
+		"role_arn",                       // IAM role ARN wired from dependency outputs
+		// Dependency block checks (same template used for both EC2 and ECS)
+		`dependency "sandbox"`,
+		"mock_outputs_allowed_on_destroy = true",
+		"dependency.sandbox.outputs.iam_role_arn",
 	}
 	for _, want := range checks {
 		if !strings.Contains(hcl, want) {
 			t.Errorf("GenerateBudgetEnforcerHCL(ECS) missing %q\nGot:\n%s", want, hcl)
 		}
+	}
+
+	// Must NOT contain the old static ARN construction pattern
+	if strings.Contains(hcl, "km-ec2spot-ssm-") {
+		t.Errorf("GenerateBudgetEnforcerHCL(ECS) must not contain old static ARN pattern 'km-ec2spot-ssm-'\nGot:\n%s", hcl)
 	}
 }
 
