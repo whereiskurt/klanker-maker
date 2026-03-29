@@ -661,7 +661,7 @@ Plans:
 **Goal:** Enforce sourceAccess.github.allowedRepos at the network layer via MITM path inspection in the HTTP proxy sidecar — close the gap where github.com in allowedHosts permits access to any public repo
 **Requirements**: NETW-08
 **Depends on:** Phase 27
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 28-01-PLAN.md — GitHub MITM proxy core (TDD: ExtractRepoFromPath, IsRepoAllowed, handler registration)
