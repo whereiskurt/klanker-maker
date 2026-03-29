@@ -765,3 +765,13 @@ Plans:
 - [ ] 33-01-PLAN.md — Profile types, JSON schema, and semantic validation tests for storage/AMI fields (TDD)
 - [ ] 33-02-PLAN.md — Compiler HCL + Terraform module for AMI resolution, root volume sizing, hibernation
 - [ ] 33-03-PLAN.md — Additional EBS volume: Terraform resources, compiler HCL, userdata auto-mount
+
+### Phase 34: Agent Profiles: agent-orchestrator, goose, and codex sandbox profiles
+
+**Goal:** Three new SandboxProfile YAML files (agent-orchestrator, goose, codex) are added to profiles/ and pass km validate, giving operators ready-to-use sandbox environments for the broader AI coding agent ecosystem
+**Requirements**: PROF-34-01, PROF-34-02, PROF-34-03, PROF-34-04
+**Depends on:** Phase 33
+**Plans:** 1 plan
+
+Plans:
+- [ ] 34-01-PLAN.md — Create agent-orchestrator, goose, and codex profile YAML files and validate
