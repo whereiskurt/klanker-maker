@@ -423,15 +423,22 @@ GitHub repository access controls.
 | Default    | --                             |
 | Validation | Array of strings               |
 
-List of allowed GitHub repository patterns. Supports wildcards.
+List of allowed GitHub repository patterns. Supports wildcards and org-level
+access. The `github.com/` prefix is optional — `my-org/my-repo` and
+`github.com/my-org/my-repo` are equivalent.
+
+When this list is non-empty, the HTTP proxy **implicitly allows** GitHub hosts
+(`github.com`, `api.github.com`, `*.githubusercontent.com`) and enforces
+repo-level access via MITM interception. You do **not** need to add GitHub
+hosts to `network.egress.allowedHosts` or `allowedDNSSuffixes`.
 
 ```yaml
 spec:
   sourceAccess:
     github:
       allowedRepos:
-        - "github.com/my-org/*"
-        - "github.com/other-org/specific-repo"
+        - "my-org/*"               # all repos in the org
+        - "other-org/specific-repo" # single repo
 ```
 
 ### `spec.sourceAccess.github.allowedRefs`

@@ -289,7 +289,16 @@ sourceAccess:
 
 **Deny-by-default contract:** Both a nil `sourceAccess.github` AND an explicitly empty `allowedRepos: []` result in zero GitHub token infrastructure being provisioned. The compiler gates all token infrastructure (GitHub token Lambda/EventBridge, per-sandbox SSM parameter, `github_token_inputs` HCL block, and the `GIT_ASKPASS` credential helper in EC2 user-data) behind the condition `GitHub != nil && len(AllowedRepos) > 0`. No token means no access -- this is the primary access control layer.
 
-**No default access:** If `sourceAccess.github` is nil (as in the `hardened` and `sealed` profiles), no GitHub token is injected and the agent has no repository access. The GitHub App installation token is stored in SSM Parameter Store at a per-sandbox path (`/sandbox/{sandbox_id}/github-token`) and is fetched lazily at git-operation time via the `GIT_ASKPASS` credential helper, not injected at boot time.
+**Network-level enforcement (Phase 28):** In addition to token scoping, the HTTP proxy enforces repo-level access at the network layer via MITM interception. When `sourceAccess.github.allowedRepos` is configured, the proxy:
+1. Implicitly allows GitHub hosts (github.com, api.github.com, raw.githubusercontent.com, codeload.githubusercontent.com) — profiles do **not** need these in `network.egress.allowedHosts`.
+2. Intercepts HTTPS connections to GitHub hosts via MITM (using the platform CA already trusted by the sandbox).
+3. Extracts `owner/repo` from the URL path and checks it against the `allowedRepos` list.
+4. Blocks requests to repos not in the allowlist with a 403 JSON response.
+5. Passes through non-repo GitHub URLs (e.g. `/rate_limit`, `/login`) unconditionally.
+
+This provides defense-in-depth: even if a sandbox has valid credentials for a repo, the proxy blocks network access unless that repo is in the allowlist. It also prevents access to public repos outside the allowlist, which token scoping alone cannot prevent.
+
+**No default access:** If `sourceAccess.github` is nil (as in the `hardened` and `sealed` profiles), no GitHub token is injected, no GitHub MITM filter is enabled, and GitHub hosts are not implicitly allowed. The agent has no repository access. The GitHub App installation token is stored in SSM Parameter Store at a per-sandbox path (`/sandbox/{sandbox_id}/github-token`) and is fetched lazily at git-operation time via the `GIT_ASKPASS` credential helper, not injected at boot time.
 
 ### AllowedRefs Enforcement
 

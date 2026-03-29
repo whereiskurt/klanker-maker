@@ -104,7 +104,8 @@ container. The main container's `/etc/resolv.conf` points to `127.0.0.1`.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `ALLOWED_HOSTS` | Yes | *(empty -- denies all)* | Comma-separated hostnames, e.g. `api.github.com,bedrock-runtime.us-east-1.amazonaws.com` |
+| `ALLOWED_HOSTS` | Yes | *(empty -- denies all)* | Comma-separated hostnames, e.g. `api.anthropic.com,bedrock-runtime.us-east-1.amazonaws.com` |
+| `KM_GITHUB_ALLOWED_REPOS` | No | *(empty)* | Comma-separated `owner/repo` patterns for GitHub repo-level filtering (e.g. `myorg/myrepo,myorg/*`) |
 | `PROXY_PORT` | No | `3128` | Listen port |
 | `SANDBOX_ID` | No | `unknown` | Sandbox identifier attached to every log line |
 
@@ -121,9 +122,36 @@ The proxy handles two request types:
   Denied hosts receive a `403 Forbidden` response with body
   `Blocked by km sandbox policy`.
 
-**Bedrock interception** (Phase 6): The proxy will intercept
-`InvokeModel` responses from Bedrock, extract input/output token counts from
-the response body, and increment counters in DynamoDB for quota enforcement.
+**Bedrock interception** (Phase 6): The proxy intercepts
+`InvokeModel` responses from Bedrock, extracts input/output token counts from
+the response body, and increments counters in DynamoDB for quota enforcement.
+
+**GitHub repo-level filtering** (Phase 28): When `KM_GITHUB_ALLOWED_REPOS` is
+set, the proxy uses MITM to intercept HTTPS connections to GitHub hosts
+(`github.com`, `api.github.com`, `raw.githubusercontent.com`,
+`codeload.githubusercontent.com`), extracts `owner/repo` from the URL path,
+and checks it against the allowlist. Requests to repos not in the list receive
+a 403 JSON response:
+
+```json
+{"error":"repo_not_allowed","repo":"torvalds/linux","reason":"repo is not in the sandbox allowedRepos list"}
+```
+
+**Implicit host allowing:** When `KM_GITHUB_ALLOWED_REPOS` is non-empty,
+GitHub hosts are implicitly allowed through the proxy regardless of
+`ALLOWED_HOSTS`. This means profiles do **not** need `github.com`,
+`api.github.com`, `.github.com`, or `.githubusercontent.com` in their
+`network.egress` configuration -- the presence of `sourceAccess.github.allowedRepos`
+is sufficient. Non-repo GitHub URLs (e.g. `api.github.com/rate_limit`,
+`github.com/login`) pass through unconditionally.
+
+When `KM_GITHUB_ALLOWED_REPOS` is empty, no GitHub MITM handlers are
+registered and GitHub hosts are subject to the normal `ALLOWED_HOSTS` check.
+
+**Allowlist format:**
+- `owner/repo` -- exact match (case-insensitive)
+- `owner/*` -- org wildcard, matches all repos under that owner
+- `github.com/owner/repo` -- the `github.com/` prefix is stripped before comparison
 
 ### Log Format
 
@@ -140,7 +168,8 @@ JSON to stdout via `zerolog`. Blocked requests emit:
 ```
 
 Startup emits `event_type: "http_proxy_start"` with `addr`, `allowed_hosts`,
-and `sandbox_id`.
+and `sandbox_id`. GitHub filtering emits `event_type: "github_repo_allowed"`
+or `"github_repo_blocked"` with `repo` and `sandbox_id` fields.
 
 ### Health Check
 

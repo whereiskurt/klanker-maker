@@ -37,15 +37,14 @@ spec:
 
   network:
     egress:
+      # GitHub hosts are implicitly allowed when sourceAccess.github.allowedRepos
+      # is configured — the proxy enforces repo-level filtering via MITM.
       allowedDNSSuffixes:
         - ".amazonaws.com"
-        - ".github.com"
-        - ".githubusercontent.com"
         - ".npmjs.org"
         - ".pypi.org"
         - ".golang.org"
       allowedHosts:
-        - "api.github.com"
         - "registry.npmjs.org"
         - "pypi.org"
         - "pkg.go.dev"

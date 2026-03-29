@@ -55,13 +55,15 @@ spec:
 
   network:
     egress:
+      # GitHub hosts (github.com, api.github.com, *.githubusercontent.com) are
+      # implicitly allowed by the HTTP proxy when sourceAccess.github.allowedRepos
+      # is configured — no need to list them here. The proxy enforces repo-level
+      # filtering via MITM, blocking access to repos not in the allowlist.
       allowedDNSSuffixes:
         - ".amazonaws.com"
         - ".anthropic.com"
         - ".claude.ai"
         - ".claude.com"
-        - ".github.com"
-        - ".githubusercontent.com"
         - ".npmjs.org"
         - ".npmjs.com"
         - ".nodejs.org"
@@ -81,8 +83,6 @@ spec:
         - "api.claude.ai"
         - "claude.ai"
         - "sentry.io"
-        - "api.github.com"
-        - "github.com"
         - "registry.npmjs.org"
         - "nodejs.org"
         - "google.com"
