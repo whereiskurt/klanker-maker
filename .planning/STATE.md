@@ -418,6 +418,7 @@ None yet.
 |---|-------------|------|--------|-----------|
 | 1 | max_sandboxes config limit with operator email | 2026-03-29 | a185a79 | [1-max-sandboxes-config-limit-with-operator](./quick/1-max-sandboxes-config-limit-with-operator/) |
 | 2 | upload km-config.yaml to S3 toolchain for create-handler Lambda | 2026-03-29 | c6adc96 | [2-upload-km-config-to-s3-toolchain-for-cre](./quick/2-upload-km-config-to-s3-toolchain-for-cre/) |
+| 3 | Fix budget-enforcer-instance-id | 2026-03-29 | 9d884e1 | [3-fix-budget-enforcer-instance-id](./quick/3-fix-budget-enforcer-instance-id/) |
 
 ## Accumulated Context
 
