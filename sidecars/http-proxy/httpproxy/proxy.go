@@ -51,7 +51,8 @@ type ProxyOption func(*goproxy.ProxyHttpServer, *proxyConfig)
 
 // proxyConfig accumulates optional proxy configuration across ProxyOption calls.
 type proxyConfig struct {
-	budget *budgetEnforcementOptions
+	budget      *budgetEnforcementOptions
+	githubRepos []string
 }
 
 // WithBudgetEnforcement enables Bedrock MITM interception and DynamoDB spend
@@ -411,6 +412,59 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 	}
 
 	// -------------------------------------------------------------------------
+	// GitHub repo-level MITM handlers (registered BEFORE general CONNECT handler).
+	// When githubRepos is non-empty:
+	//   a) CONNECT to GitHub hosts is intercepted via MitmConnect so the proxy
+	//      can inspect request URLs after TLS termination. This also implicitly
+	//      allows GitHub hosts through the proxy regardless of the allowedHosts
+	//      list — the MITM handler fires before the general CONNECT handler.
+	//   b) OnRequest for GitHub hosts runs ExtractRepoFromPath + IsRepoAllowed
+	//      and blocks unlisted repos with a 403 JSON response.
+	// When githubRepos is nil/empty, no handlers are registered and GitHub hosts
+	// fall through to the general CONNECT handler (normal host-level filtering).
+	// -------------------------------------------------------------------------
+	if len(cfg.githubRepos) > 0 {
+		allowedRepos := cfg.githubRepos
+
+		// (a) MITM CONNECT: intercept GitHub HTTPS tunnels.
+		proxy.OnRequest(goproxy.ReqHostMatches(githubHostsRegex)).HandleConnectFunc(
+			func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+				log.Info().
+					Str("event_type", "github_mitm_connect").
+					Str("sandbox_id", sandboxID).
+					Str("host", host).
+					Msg("")
+				return goproxy.MitmConnect, host
+			},
+		)
+
+		// (b) OnRequest: enforce repo allowlist after MITM decrypts the request.
+		proxy.OnRequest(goproxy.ReqHostMatches(githubHostsRegex)).DoFunc(
+			func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+				repo := ExtractRepoFromPath(req.Host, req.URL.Path)
+				if repo == "" {
+					// Non-repo URL (login, rate_limit, etc.) — pass through.
+					return req, nil
+				}
+				if IsRepoAllowed(repo, allowedRepos) {
+					log.Info().
+						Str("event_type", "github_repo_allowed").
+						Str("sandbox_id", sandboxID).
+						Str("repo", repo).
+						Msg("")
+					return req, nil
+				}
+				log.Info().
+					Str("event_type", "github_repo_blocked").
+					Str("sandbox_id", sandboxID).
+					Str("repo", repo).
+					Msg("")
+				return req, GitHubBlockedResponse(req, sandboxID, repo)
+			},
+		)
+	}
+
+	// -------------------------------------------------------------------------
 	// General CONNECT (HTTPS) handler — OkConnect for allowed non-Bedrock hosts.
 	// -------------------------------------------------------------------------
 	proxy.OnRequest().HandleConnectFunc(func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
@@ -435,7 +489,13 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 	})
 
 	// Plain HTTP handler.
+	// When githubRepos is configured, GitHub hosts are implicitly allowed and
+	// already filtered by the GitHub OnRequest handler above — skip them here.
 	proxy.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+		if len(cfg.githubRepos) > 0 && githubHostsRegex.MatchString(req.Host) {
+			// GitHub hosts are handled by the GitHub-specific OnRequest handler.
+			return req, nil
+		}
 		if !IsHostAllowed(req.Host, allowed) {
 			log.Info().
 				Str("sandbox_id", sandboxID).

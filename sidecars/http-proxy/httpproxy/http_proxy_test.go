@@ -297,6 +297,54 @@ func makeGitHubProxyClient(t *testing.T, proxyAddr string) *http.Client {
 	}
 }
 
+// githubPlainHTTPClient returns an http.Client that routes requests through the
+// proxy using plain HTTP. The client does NOT follow CONNECT tunnels — it sends
+// plain-HTTP proxy requests. This lets us test the OnRequest DoFunc handlers
+// without needing real TLS or a valid certificate chain.
+func githubPlainHTTPClient(t *testing.T, proxyAddr string) *http.Client {
+	t.Helper()
+	proxyURL, _ := url.Parse("http://" + proxyAddr)
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+			// Disable TLS so we only exercise the plain-HTTP code path.
+			TLSClientConfig: nil,
+		},
+	}
+}
+
+// startGitHubFilterProxy starts a proxy with WithGitHubRepoFilter and injects
+// a custom Dialer that redirects all connections to GitHub hosts to targetAddr
+// (our local test server). This lets integration tests exercise the full
+// OnRequest filter path using plain HTTP without needing real TLS or DNS.
+func startGitHubFilterProxy(
+	t *testing.T,
+	targetAddr string,
+	allowedRepos []string,
+) (*httptest.Server, string) {
+	t.Helper()
+
+	proxy := httpproxy.NewProxy(
+		nil, // no allowedHosts — GitHub is implicitly allowed via WithGitHubRepoFilter
+		"sandbox-gh-test",
+		httpproxy.WithGitHubRepoFilter(allowedRepos),
+	)
+
+	// Override the proxy's outbound transport to dial our local target instead
+	// of real GitHub hosts. This intercepts connections at the TCP layer.
+	proxy.Tr = &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			// Redirect all github.com / githubusercontent connections to local target.
+			return (&net.Dialer{}).DialContext(ctx, network, targetAddr)
+		},
+	}
+
+	s := httptest.NewServer(proxy)
+	t.Cleanup(s.Close)
+	u, _ := url.Parse(s.URL)
+	return s, u.Host
+}
+
 // TestHTTPProxy_GitHubAllowedRepo verifies that a request to an allowed repo
 // passes through (proxy returns the upstream response), even when github.com
 // is NOT in the allowedHosts list. The presence of WithGitHubRepoFilter
@@ -307,27 +355,13 @@ func TestHTTPProxy_GitHubAllowedRepo(t *testing.T) {
 		_, _ = w.Write([]byte("ok"))
 	}))
 	targetURL, _ := url.Parse(target.URL)
-	targetHost := targetURL.Host // 127.0.0.1:PORT
+	targetHost := targetURL.Host
 
-	// allowedHosts deliberately does NOT include github.com.
-	proxy := httpproxy.NewProxy(
-		[]string{targetHost},
-		"sandbox-gh-test",
-		httpproxy.WithGitHubRepoFilter([]string{"owner/repo"}),
-	)
-	_, proxyAddr := startProxyServer(t, proxy)
-	client := makeGitHubProxyClient(t, proxyAddr)
+	_, proxyAddr := startGitHubFilterProxy(t, targetHost, []string{"owner/repo"})
+	client := proxyClient(t, proxyAddr)
 
-	// Build a request that looks like it's going to github.com/owner/repo but
-	// actually hits our local target. We set the Host header to "github.com" so
-	// the proxy's OnRequest handler sees the GitHub host.
-	req, err := http.NewRequest(http.MethodGet, target.URL+"/owner/repo", nil)
-	if err != nil {
-		t.Fatalf("failed to build request: %v", err)
-	}
-	req.Host = "github.com"
-
-	resp, err := client.Do(req)
+	// Request to github.com/owner/repo — proxy redirects TCP to local target.
+	resp, err := client.Get("http://github.com/owner/repo")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -348,21 +382,10 @@ func TestHTTPProxy_GitHubBlockedRepo(t *testing.T) {
 	targetURL, _ := url.Parse(target.URL)
 	targetHost := targetURL.Host
 
-	proxy := httpproxy.NewProxy(
-		[]string{targetHost},
-		"sandbox-gh-test",
-		httpproxy.WithGitHubRepoFilter([]string{"owner/allowed"}),
-	)
-	_, proxyAddr := startProxyServer(t, proxy)
-	client := makeGitHubProxyClient(t, proxyAddr)
+	_, proxyAddr := startGitHubFilterProxy(t, targetHost, []string{"owner/allowed"})
+	client := proxyClient(t, proxyAddr)
 
-	req, err := http.NewRequest(http.MethodGet, target.URL+"/owner/blocked", nil)
-	if err != nil {
-		t.Fatalf("failed to build request: %v", err)
-	}
-	req.Host = "github.com"
-
-	resp, err := client.Do(req)
+	resp, err := client.Get("http://github.com/owner/blocked")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -392,22 +415,11 @@ func TestHTTPProxy_GitHubNonRepoPassthrough(t *testing.T) {
 	targetURL, _ := url.Parse(target.URL)
 	targetHost := targetURL.Host
 
-	proxy := httpproxy.NewProxy(
-		[]string{targetHost},
-		"sandbox-gh-test",
-		httpproxy.WithGitHubRepoFilter([]string{"owner/repo"}),
-	)
-	_, proxyAddr := startProxyServer(t, proxy)
-	client := makeGitHubProxyClient(t, proxyAddr)
+	_, proxyAddr := startGitHubFilterProxy(t, targetHost, []string{"owner/repo"})
+	client := proxyClient(t, proxyAddr)
 
 	// /rate_limit is a non-repo URL on api.github.com — should pass through.
-	req, err := http.NewRequest(http.MethodGet, target.URL+"/rate_limit", nil)
-	if err != nil {
-		t.Fatalf("failed to build request: %v", err)
-	}
-	req.Host = "api.github.com"
-
-	resp, err := client.Do(req)
+	resp, err := client.Get("http://api.github.com/rate_limit")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -430,22 +442,15 @@ func TestHTTPProxy_GitHubNoFilter(t *testing.T) {
 
 	// No WithGitHubRepoFilter — github.com is NOT in allowed list either.
 	proxy := httpproxy.NewProxy(
-		[]string{targetHost},
+		[]string{targetHost}, // only local target is allowed, not github.com
 		"sandbox-gh-test",
 	)
 	_, proxyAddr := startProxyServer(t, proxy)
-	client := makeGitHubProxyClient(t, proxyAddr)
+	client := proxyClient(t, proxyAddr)
 
-	// The proxy intercepts requests to `github.com` paths. Without
-	// WithGitHubRepoFilter, req.Host="github.com" is not in allowedHosts,
+	// Without WithGitHubRepoFilter, github.com is not in allowedHosts,
 	// so the plain-HTTP handler should block it with 403.
-	req, err := http.NewRequest(http.MethodGet, target.URL+"/owner/repo", nil)
-	if err != nil {
-		t.Fatalf("failed to build request: %v", err)
-	}
-	req.Host = "github.com"
-
-	resp, err := client.Do(req)
+	resp, err := client.Get("http://github.com/owner/repo")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
