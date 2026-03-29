@@ -1,9 +1,9 @@
 # Klanker Maker (km)
-**Hard spending limits for AI agents on AWS — outside the runtime, at cloud scale.**
+**Hard spending limits for AI agents on AWS - outside the runtime, at cloud scale.**
 
-AWS makes it surprisingly difficult to set hard budget limits. CloudWatch billing alarms are delayed by hours. AWS Budgets can send notifications but can't stop a running workload. There's no native way to say "this IAM role can spend $5 on Bedrock and then stop." For human operators that's annoying. For autonomous AI agents that make their own API calls, loop on failures, and spawn sub-agents — it's a real problem.
+AWS makes it surprisingly difficult to set hard budget limits. CloudWatch billing alarms are delayed by hours. AWS Budgets can send notifications but can't stop a running workload. There's no native way to say "this workload can spend $5 on Bedrock, Anthropic, or OpenAI and then stop." For human operators that's annoying. For autonomous AI agents that make their own API calls, loop on failures, and spawn sub-agents - it's a real problem.
 
-Klanker Maker is an open-source platform that puts enforceable spending limits between your AI agents and your AWS bill. It turns declarative YAML profiles into budget-capped, policy-locked AWS sandboxes — each with its own Security Group boundary, IAM role, network allowlists, and a dollar ceiling that actually stops the workload when the money runs out. The enforcement lives in the infrastructure (proxy layer + IAM revocation), not in the agent runtime, so no agent can spend past its budget regardless of how it's built or what SDK it uses.
+Klanker Maker is an open-source platform that puts enforceable spending limits between your AI agents and your AWS bill. It turns declarative YAML profiles into budget-capped, policy-locked AWS sandboxes - each with its own Security Group boundary, IAM role, network allowlists, and a dollar ceiling that actually stops the workload when the money runs out. The enforcement lives in the infrastructure (proxy layer + IAM revocation), not in the agent runtime, so no agent can spend past its budget regardless of how it's built or what SDK it uses.
 
 Define what an agent is allowed to do. Set how much it can spend on compute and AI tokens. Walk away.
 
@@ -109,13 +109,13 @@ The `km` CLI selects the right profile per command:
 
 | Command | AWS Profile | Account |
 |---------|-------------|---------|
-| `km configure` (`km conf`) | — | No AWS access needed; writes `km-config.yaml` |
-| `km configure github` | — | Configures GitHub App token integration (manual SSM setup) |
+| `km configure` (`km conf`) | - | No AWS access needed; writes `km-config.yaml` |
+| `km configure github` | - | Configures GitHub App token integration (manual SSM setup) |
 | `km configure github --setup` | `klanker-terraform` | One-click GitHub App creation via manifest flow + auto SSM storage |
 | `km configure github --discover` | `klanker-terraform` | Auto-discover installation ID from existing App credentials in SSM |
 | `km github` | `klanker-terraform` | Shortcut for `km configure github --setup` |
 | `km bootstrap` | `klanker-terraform` | Terraform - deploys SCP containment policy via management account |
-| `km bootstrap --show-prereqs` | — | Prints the IAM role and trust policy to create in management account |
+| `km bootstrap --show-prereqs` | - | Prints the IAM role and trust policy to create in management account |
 | `km init` | `klanker-application` | Application - builds Lambdas/sidecars, provisions shared VPC/network |
 | `km uninit` | `klanker-application` | Application - tears down all shared regional infrastructure |
 | `km create` | `klanker-terraform` | Terraform - assumes role into Application to provision |
@@ -167,7 +167,7 @@ Sandboxes are accessed exclusively through **AWS SSM Session Manager**:
 
 ### SCP Sandbox Containment
 
-Even if a sandbox IAM role is misconfigured — or an agent finds a way to escalate within the application account — the **Service Control Policy (SCP)** acts as an org-level backstop that cannot be bypassed from within the account. SCPs are enforced by AWS Organizations at the API layer, before IAM policy evaluation.
+Even if a sandbox IAM role is misconfigured - or an agent finds a way to escalate within the application account - the **Service Control Policy (SCP)** acts as an org-level backstop that cannot be bypassed from within the account. SCPs are enforced by AWS Organizations at the API layer, before IAM policy evaluation.
 
 The `km-sandbox-containment` SCP is deployed to the management account and attached to the application account. It contains 6 deny statements:
 
@@ -177,10 +177,10 @@ The `km-sandbox-containment` SCP is deployed to the management account and attac
 | **DenyInstanceMutation** | `RunInstances`, `ModifyInstanceAttribute`, `ModifyInstanceMetadataOptions` | Prevents launching rogue EC2 instances or disabling IMDSv2 (which would enable SSRF credential theft via the metadata service) |
 | **DenyIAMEscalation** | `CreateRole`, `AttachRolePolicy`, `DetachRolePolicy`, `PassRole`, `AssumeRole` | Blocks the classic IAM privilege escalation chain: create a new admin role → attach `AdministratorAccess` → assume it |
 | **DenySSMPivot** | `SendCommand`, `StartSession` | Prevents a compromised sandbox from using SSM to pivot laterally into other sandbox instances |
-| **DenyOrgDiscovery** | `organizations:List*`, `organizations:Describe*` | Prevents enumeration of the org structure, other accounts, and OUs — information useful for targeting lateral movement |
+| **DenyOrgDiscovery** | `organizations:List*`, `organizations:Describe*` | Prevents enumeration of the org structure, other accounts, and OUs - information useful for targeting lateral movement |
 | **DenyOutsideRegion** | All regional actions outside allowed regions | Region-locks the entire account to prevent resource creation in regions where there's no monitoring or VPC infrastructure |
 
-Each statement uses `ArnNotLike` conditions to carve out trusted operator roles (SSO, provisioner, lifecycle handlers). The carve-outs are minimal — for example, the budget enforcer Lambda only gets an IAM carve-out (it needs `AttachRolePolicy`/`DetachRolePolicy` to revoke Bedrock access), not a network or instance carve-out.
+Each statement uses `ArnNotLike` conditions to carve out trusted operator roles (SSO, provisioner, lifecycle handlers). The carve-outs are minimal - for example, the budget enforcer Lambda only gets an IAM carve-out (it needs `AttachRolePolicy`/`DetachRolePolicy` to revoke Bedrock access), not a network or instance carve-out.
 
 The SCP is deployed via `km bootstrap --dry-run=false`. Run `km bootstrap --show-prereqs` to see the exact IAM role and trust policy that must be created in the management account first.
 
@@ -188,7 +188,7 @@ The SCP is deployed via `km bootstrap --dry-run=false`. Run `km bootstrap --show
 
 | Layer | Control | Enforcement |
 |-------|---------|-------------|
-| **Organization** | SCP sandbox containment | Org-level deny on SG/network/IAM/instance/SSM/region — cannot be bypassed from within the account |
+| **Organization** | SCP sandbox containment | Org-level deny on SG/network/IAM/instance/SSM/region - cannot be bypassed from within the account |
 | **Account** | Three-account isolation | Sandbox blast radius limited to Application account; state and DNS unreachable |
 | **Network** | VPC Security Groups | Primary boundary - blocks all egress except proxy paths |
 | **DNS** | DNS proxy sidecar | Allowlisted suffixes only; non-matching → NXDOMAIN |
@@ -325,7 +325,7 @@ Klanker Maker is workload-agnostic - any agent that runs on Linux works inside a
 
 | Agent | What It Does | Which Controls Matter |
 |-------|-------------|----------------------|
-| [Goose](https://github.com/block/goose) | Installs deps, edits files, runs tests, orchestrates workflows | **Budget cap** - prevents runaway Bedrock/API costs when Goose loops |
+| [Goose](https://github.com/block/goose) | Installs deps, edits files, runs tests, orchestrates workflows | **Budget cap** - prevents runaway AI API costs when Goose loops |
 | [Aider](https://github.com/Aider-AI/aider) | AI pair programming with auto git commits | **Source access** - controls which repos it can push to |
 | [agent-orchestrator](https://github.com/ComposioHQ/agent-orchestrator) | Spawns parallel coding agents, handles CI fixes autonomously | **Budget + TTL** - caps fleet cost; each spawned worker inherits the sandbox ceiling |
 | [deepagents](https://github.com/langchain-ai/deepagents) | Planning + filesystem + sub-agent spawning via LangGraph | **Network allowlist** - limits where sub-agents can reach |
@@ -340,13 +340,13 @@ Klanker Maker is workload-agnostic - any agent that runs on Linux works inside a
 
 Sandboxes communicate through **digitally signed email** (SES + Ed25519). Each sandbox gets a unique address derived from its ID (e.g., `sb-a1b2c3d4@sandboxes.klankermaker.ai`) and an Ed25519 key pair at creation time.
 
-- **Signing** — outbound emails are signed with the sender's Ed25519 private key (stored in SSM, KMS-encrypted). The signature and sender ID are attached as `X-KM-Signature` and `X-KM-Sender-ID` headers.
-- **Verification** — the receiver fetches the sender's public key from the `km-identities` DynamoDB table and verifies the signature. When `verifyInbound: required`, unsigned or invalid emails are rejected.
-- **Encryption** — optional X25519 key exchange (NaCl box). When `encryption: required`, the sender encrypts the body with the recipient's public key. When `encryption: optional`, it encrypts if the recipient has a published key, plaintext otherwise.
+- **Signing** - outbound emails are signed with the sender's Ed25519 private key (stored in SSM, KMS-encrypted). The signature and sender ID are attached as `X-KM-Signature` and `X-KM-Sender-ID` headers.
+- **Verification** - the receiver fetches the sender's public key from the `km-identities` DynamoDB table and verifies the signature. When `verifyInbound: required`, unsigned or invalid emails are rejected.
+- **Encryption** - optional X25519 key exchange (NaCl box). When `encryption: required`, the sender encrypts the body with the recipient's public key. When `encryption: optional`, it encrypts if the recipient has a published key, plaintext otherwise.
 
 Profile controls (`spec.email.signing`, `spec.email.verifyInbound`, `spec.email.encryption`) govern policy per sandbox. Hardened and sealed profiles default to `signing: required`; open-dev defaults to `signing: optional`.
 
-This enables multi-agent pipelines where each worker is physically isolated but logically connected — with cryptographic proof of sender identity and optional confidentiality.
+This enables multi-agent pipelines where each worker is physically isolated but logically connected - with cryptographic proof of sender identity and optional confidentiality.
 
 ## Substrates
 
@@ -374,9 +374,9 @@ Tracked as spot rate x elapsed minutes, sourced from the AWS Price List API at s
 - **EC2**: `StopInstances` preserves the EBS volume. No compute charges accrue while stopped.
 - **ECS Fargate**: Artifacts are uploaded, then the task is stopped. Re-provision from the stored S3 profile on top-up.
 
-### AI Budget (Bedrock + Anthropic Direct)
+### AI Budget (Bedrock, Anthropic, OpenAI)
 
-The HTTP proxy sidecar intercepts every AI API response — both **Bedrock** (`invoke-with-response-stream`) and **Anthropic direct** (`api.anthropic.com`, for Claude Code Max/API key users). A tee-reader streams data through to the client without blocking, captures the full response, then extracts token counts asynchronously:
+The HTTP proxy sidecar intercepts every AI API response - **Bedrock** (`invoke-with-response-stream`), **Anthropic direct** (`api.anthropic.com`, for Claude Code Max/API key users), and **OpenAI-compatible** endpoints. A tee-reader streams data through to the client without blocking, captures the full response, then extracts token counts asynchronously:
 
 - **Bedrock streaming**: base64-decodes `{"bytes":"<b64>"}` event-stream wrappers to find `message_start`/`message_delta` payloads
 - **Anthropic SSE**: parses `data:` lines for the same event types
@@ -387,7 +387,7 @@ Tokens are priced against static model rates and atomically incremented in the D
 **Dual-layer enforcement** at 100%:
 
 1. **Proxy layer** (immediate) - HTTP proxy returns 403 for subsequent AI calls
-2. **IAM layer** (backstop) - a Lambda revokes the sandbox IAM role's Bedrock permissions, catching SDK/CLI calls that bypass the proxy
+2. **IAM layer** (backstop) - a Lambda revokes the sandbox IAM role's Bedrock permissions, catching calls that bypass the proxy
 
 `km status` shows per-model AI spend grouped by provider:
 
@@ -454,7 +454,7 @@ km CLI / ConfigUI
 │   └── lifecycle/           TTL scheduling, idle detection, teardown
 ├── sidecars/
 │   ├── dns-proxy/           DNS allowlist filter (UDP/TCP:53)
-│   ├── http-proxy/          HTTP allowlist filter (TCP:3128) + AI token metering (Bedrock + Anthropic)
+│   ├── http-proxy/          HTTP allowlist filter (TCP:3128) + AI token metering (Bedrock, Anthropic, OpenAI)
 │   ├── audit-log/           Command + network log router with secret redaction
 │   └── tracing/             OTel Collector sidecar (logs, metrics → S3)
 ├── profiles/                Built-in YAML profiles (open-dev → sealed)
@@ -491,7 +491,7 @@ km bootstrap --show-prereqs
 # Bootstrap SCP + KMS + artifacts bucket (once)
 km bootstrap --dry-run=false
 
-# Initialize the region — builds Lambdas, sidecars, deploys infra (once per region)
+# Initialize the region - builds Lambdas, sidecars, deploys infra (once per region)
 km init --region us-east-1
 
 # Check platform health (12 checks)
@@ -569,19 +569,19 @@ km uninit --region us-east-1
 | 12 | ECS Budget Top-Up & S3 Replication | **Complete** |
 | 13 | GitHub App Token Integration | **Complete** |
 | 14 | Sandbox Identity & Signed Email | **Complete** |
-| 15 | km doctor — Platform Health Check | **Complete** |
+| 15 | km doctor - Platform Health Check | **Complete** |
 | 16 | Documentation Refresh (Phases 6-15) | **Complete** |
 | 17 | Sandbox Email Mailbox & Access Control | **Complete** |
-| 18 | Loose Ends — km init, uninit, bootstrap KMS, github-token | **Complete** |
-| 19 | Budget Enforcement Wiring — EC2 hard stop, IAM revocation | **Complete** |
+| 18 | Loose Ends - km init, uninit, bootstrap KMS, github-token | **Complete** |
+| 19 | Budget Enforcement Wiring - EC2 hard stop, IAM revocation | **Complete** |
 | 20 | Anthropic API Metering & Terragrunt Output Suppression | **Complete** |
-| 21 | Bug fixes and mini-features — budget precision, polish | **Complete** |
-| 22 | Remote Sandbox Dispatch — `km create/destroy/stop/extend --remote` via Lambda | Planned |
-| 23 | Email-Driven Operations — operator inbox, email-to-create, safe phrase auth, EventBridge | Planned |
-| 24 | Credential Rotation — `km roll creds` for platform and sandbox secrets | Planned |
-| 25 | GitHub Source Access Restrictions — repo allowlists, deny-by-default | Planned |
-| 26 | Live Operations Hardening — bootstrap, init, TTL, idle, sidecars, CLI polish | **Complete** |
-| 27 | Claude Code OTEL Integration — sandbox observability via built-in telemetry | **Complete** |
+| 21 | Bug fixes and mini-features - budget precision, polish | **Complete** |
+| 22 | Remote Sandbox Dispatch - `km create/destroy/stop/extend --remote` via Lambda | Planned |
+| 23 | Email-Driven Operations - operator inbox, email-to-create, safe phrase auth, EventBridge | Planned |
+| 24 | Credential Rotation - `km roll creds` for platform and sandbox secrets | Planned |
+| 25 | GitHub Source Access Restrictions - repo allowlists, deny-by-default | Planned |
+| 26 | Live Operations Hardening - bootstrap, init, TTL, idle, sidecars, CLI polish | **Complete** |
+| 27 | Claude Code OTEL Integration - sandbox observability via built-in telemetry | **Complete** |
 
 See [.planning/ROADMAP.md](.planning/ROADMAP.md) for detailed phase breakdowns and success criteria.
 
