@@ -442,6 +442,7 @@ None yet.
 - Phase 32 added: Profile-scoped rsync paths — move rsync path lists from global config into per-profile YAML with external file list references (e.g. `rsyncFileDetails: "cc-files.yaml"`) and shell wildcard support; remove global rsync_paths
 - Phase 31 added: Observable learning-mode sandbox — permissive MITM proxy records all DNS/HTTP/GitHub/Claude traffic, generates minimal allowlist profile from observed behavior
 - Phase 33 added: EC2 Storage & AMI Selection — profile-driven root volume sizing, optional additional EBS with auto-mount, hibernation for on-demand, loose AMI spec resolved per-region
+- Phase 34 added: Agent Profiles — agent-orchestrator, goose, and codex sandbox profiles
 
 ## Session Continuity
 
