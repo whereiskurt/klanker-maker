@@ -370,8 +370,8 @@ func TestListCmd_NarrowHidesColumns(t *testing.T) {
 func TestListCmd_LockedSandboxShowsLockIcon(t *testing.T) {
 	lister := &fakeLister{
 		records: []kmaws.SandboxRecord{
-			{SandboxID: "sb-locked1", Profile: "default", Substrate: "ec2", Region: "us-east-1", Status: "running", Locked: true},
-			{SandboxID: "sb-unlkd1", Profile: "default", Substrate: "ec2", Region: "us-east-1", Status: "running", Locked: false},
+			{SandboxID: "sb-locked1", Profile: "default", Substrate: "ecs", Region: "us-east-1", Status: "running", Locked: true},
+			{SandboxID: "sb-unlkd1", Profile: "default", Substrate: "ecs", Region: "us-east-1", Status: "running", Locked: false},
 		},
 	}
 
@@ -380,12 +380,16 @@ func TestListCmd_LockedSandboxShowsLockIcon(t *testing.T) {
 		t.Fatalf("list command returned error: %v", err)
 	}
 
-	// Locked sandbox should have lock icon
+	// Locked sandbox should have lock icon on alias
 	if !strings.Contains(out, "🔒") {
 		t.Errorf("locked sandbox should show lock icon:\n%s", out)
 	}
-	// Bold white ANSI code should be present for locked row
+	// Bold white ANSI code should be present for locked alias
 	if !strings.Contains(out, "\033[1;37m") {
-		t.Errorf("locked sandbox should use bold white ANSI:\n%s", out)
+		t.Errorf("locked sandbox alias should use bold white ANSI:\n%s", out)
+	}
+	// Status should still be green (running), not overridden by lock
+	if !strings.Contains(out, "\033[32m") {
+		t.Errorf("locked sandbox status should still be green:\n%s", out)
 	}
 }

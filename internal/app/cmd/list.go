@@ -161,17 +161,29 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 		}
 		// Pad status to fixed width BEFORE adding color codes
 		paddedStatus := fmt.Sprintf("%-10s", r.Status)
-		colorStatus := colorizeRaw(r.Status, r.Locked, paddedStatus)
-		lock := ""
+		colorStatus := colorizeRaw(r.Status, false, paddedStatus)
+		// Bold white alias + lock icon when locked
+		displayAlias := alias
 		if r.Locked {
-			lock = " 🔒"
+			paddedAlias := fmt.Sprintf("%-10s", alias+" 🔒")
+			displayAlias = ansiBoldWhite + paddedAlias + ansiReset
 		}
 		if wide {
-			fmt.Fprintf(out, "%-3d %-*s  %-10s %-12s %-10s %-12s %s %s%s\n",
-				i+1, idWidth, r.SandboxID, alias, r.Profile, r.Substrate, r.Region, colorStatus, ttl, lock)
+			if r.Locked {
+				fmt.Fprintf(out, "%-3d %-*s  %s %-12s %-10s %-12s %s %s\n",
+					i+1, idWidth, r.SandboxID, displayAlias, r.Profile, r.Substrate, r.Region, colorStatus, ttl)
+			} else {
+				fmt.Fprintf(out, "%-3d %-*s  %-10s %-12s %-10s %-12s %s %s\n",
+					i+1, idWidth, r.SandboxID, displayAlias, r.Profile, r.Substrate, r.Region, colorStatus, ttl)
+			}
 		} else {
-			fmt.Fprintf(out, "%-3d %-*s  %-10s %s %s%s\n",
-				i+1, idWidth, r.SandboxID, alias, colorStatus, ttl, lock)
+			if r.Locked {
+				fmt.Fprintf(out, "%-3d %-*s  %s %s %s\n",
+					i+1, idWidth, r.SandboxID, displayAlias, colorStatus, ttl)
+			} else {
+				fmt.Fprintf(out, "%-3d %-*s  %-10s %s %s\n",
+					i+1, idWidth, r.SandboxID, displayAlias, colorStatus, ttl)
+			}
 		}
 	}
 	return nil
@@ -197,11 +209,7 @@ func colorizeListStatus(status string) string {
 }
 
 // colorizeRaw wraps a pre-padded display string with ANSI color based on the raw status value.
-// Locked sandboxes are shown in bold white regardless of status.
-func colorizeRaw(status string, locked bool, display string) string {
-	if locked {
-		return ansiBoldWhite + display + ansiReset
-	}
+func colorizeRaw(status string, _ bool, display string) string {
 	switch status {
 	case "failed":
 		return ansiRed + display + ansiReset
