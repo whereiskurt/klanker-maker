@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 29-01-PLAN.md
-last_updated: "2026-03-29T02:46:06.242Z"
+stopped_at: Completed 29-02-PLAN.md
+last_updated: "2026-03-29T02:54:08.175Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 29
   completed_phases: 27
   total_plans: 94
-  completed_plans: 93
+  completed_plans: 94
   percent: 0
 ---
 
@@ -141,6 +141,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 28-github-repo-level-mitm-filtering-in-http-proxy P01 | 524s | 1 tasks | 4 files |
 | Phase 28-github-repo-level-mitm-filtering-in-http-proxy P02 | 420s | 1 tasks | 5 files |
 | Phase 29-configurable-sandbox-id-prefix P01 | 5min | 2 tasks | 6 files |
+| Phase 29-configurable-sandbox-id-prefix P02 | 325s | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -376,6 +377,8 @@ Recent decisions affecting current work:
 - [Phase 28-02]: Two distinct fields in ecsHCLParams: GitHubAllowedRepos []string for Lambda HCL block vs GitHubAllowedReposCSV string for proxy container env var
 - [Phase 29-configurable-sandbox-id-prefix]: GenerateSandboxID signature changed from () to (prefix string) — empty defaults to 'sb' for backwards compatibility
 - [Phase 29-configurable-sandbox-id-prefix]: IsValidSandboxID validates ^[a-z][a-z0-9]{0,11}-[a-f0-9]{8}$ — generalized sandbox ID validation helper
+- [Phase 29-configurable-sandbox-id-prefix]: Inline regex in cmd package avoids compiler import coupling; sandboxIDPattern and sandboxIDLike both use ^[a-z][a-z0-9]{0,11}-[a-f0-9]{8}$
+- [Phase 29-configurable-sandbox-id-prefix]: Email handler captures full prefix-hex ID in group 1 (no post-extraction sb- repair) — simpler and correct for custom prefixes
 
 ### Roadmap Evolution
 
@@ -414,6 +417,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-29T02:46:06.239Z
-Stopped at: Completed 29-01-PLAN.md
+Last session: 2026-03-29T02:54:08.171Z
+Stopped at: Completed 29-02-PLAN.md
 Resume file: None

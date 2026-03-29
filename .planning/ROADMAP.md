@@ -684,7 +684,7 @@ Plans:
   9. `--alias` flag on `km create` overrides the profile-level template
   10. Alias is freed when sandbox is destroyed — a new sandbox can reuse a previously destroyed alias
   11. `km list` output shows alias column alongside sandbox ID
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 - [ ] 29-01-PLAN.md — Schema prefix field + parameterized GenerateSandboxID
