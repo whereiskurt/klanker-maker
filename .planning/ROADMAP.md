@@ -756,10 +756,12 @@ Plans:
 
 ### Phase 33: EC2 storage customization and AMI selection - profile-driven root volume sizing, optional additional EBS volumes with auto-mount, hibernation support for on-demand instances, and loose AMI specification resolved per-region
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Profiles can specify root volume sizing, optional additional EBS volumes with auto-mount, hibernation for on-demand instances, and loose AMI slugs resolved per-region -- extending the EC2 provisioning pipeline from schema through compiler to Terraform
+**Requirements**: P33-01, P33-02, P33-03, P33-04, P33-05, P33-06, P33-07, P33-08
 **Depends on:** Phase 32
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 33 to break down)
+- [ ] 33-01-PLAN.md — Profile types, JSON schema, and semantic validation tests for storage/AMI fields (TDD)
+- [ ] 33-02-PLAN.md — Compiler HCL + Terraform module for AMI resolution, root volume sizing, hibernation
+- [ ] 33-03-PLAN.md — Additional EBS volume: Terraform resources, compiler HCL, userdata auto-mount
