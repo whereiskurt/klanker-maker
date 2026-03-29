@@ -13,7 +13,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"io"
 	"net"
 	"net/http"
 	"regexp"
@@ -196,6 +195,10 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 			})
 
 		// OnResponse: intercept Bedrock InvokeModel responses, extract tokens, price, increment.
+		// Uses a tee-reader approach: the response body streams through to the client
+		// immediately while being captured in a buffer. When the stream ends (EOF),
+		// token extraction and DynamoDB metering fire asynchronously.
+		// This avoids blocking streaming responses (invoke-with-response-stream).
 		proxy.OnResponse(goproxy.ReqHostMatches(bedrockHostRegex)).DoFunc(
 			func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
 				log.Info().
@@ -209,23 +212,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 				}
 				req := ctx.Req
 
-				// Read the full response body (capped at 10MB).
-				bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxResponseBodySize)))
-				_ = resp.Body.Close()
-				// Replace body immediately so client always gets the response data.
-				resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-
-				if err != nil {
-					log.Warn().
-						Str("sandbox_id", sandboxID).
-						Str("event_type", "bedrock_body_read_error").
-						Err(err).
-						Msg("")
-					return resp
-				}
-
-				// Check cached budget again post-body-read (covers races between preflight
-				// and response interception, e.g. concurrent requests draining budget).
+				// Pre-flight budget check (cached — no DynamoDB read).
 				entry := be.cache.Get(sandboxID)
 				if entry != nil && entry.AILimit > 0 && entry.AISpent >= entry.AILimit {
 					modelID := ExtractModelID(req.URL.Path)
@@ -236,37 +223,38 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 						Float64("spent", entry.AISpent).
 						Float64("limit", entry.AILimit).
 						Msg("")
+					// Drain and close the upstream body before replacing it.
+					_ = resp.Body.Close()
 					return BedrockBlockedResponse(req, sandboxID, modelID, entry.AISpent, entry.AILimit)
 				}
 
-				// Extract tokens from the response body.
-				inputTokens, outputTokens, parseErr := ExtractBedrockTokens(bytes.NewReader(bodyBytes))
-				if parseErr != nil || (inputTokens == 0 && outputTokens == 0) {
-					// No tokens to record — pass through unchanged.
-					return resp
-				}
-
-				// Look up model rate (fall back to zero cost if model unknown).
+				// Wrap the response body in a metering reader that captures data as it
+				// streams through to the client. When the stream ends (EOF or close),
+				// the onComplete callback fires asynchronously to extract tokens and
+				// increment DynamoDB spend.
 				modelID := ExtractModelID(req.URL.Path)
-				var costUSD float64
-				if rate, ok := be.modelRates[modelID]; ok {
-					costUSD = CalculateCost(inputTokens, outputTokens, rate.InputPricePer1KTokens, rate.OutputPricePer1KTokens)
-				}
+				resp.Body = newMeteringReader(resp.Body, func(captured []byte) {
+					inputTokens, outputTokens, parseErr := ExtractBedrockTokens(bytes.NewReader(captured))
+					if parseErr != nil || (inputTokens == 0 && outputTokens == 0) {
+						return
+					}
 
-				log.Info().
-					Str("sandbox_id", sandboxID).
-					Str("event_type", "bedrock_tokens_metered").
-					Str("model", modelID).
-					Int("input_tokens", inputTokens).
-					Int("output_tokens", outputTokens).
-					Float64("cost_usd", costUSD).
-					Msg("")
+					var costUSD float64
+					if rate, ok := be.modelRates[modelID]; ok {
+						costUSD = CalculateCost(inputTokens, outputTokens, rate.InputPricePer1KTokens, rate.OutputPricePer1KTokens)
+					}
 
-				// Optimistically update local cache before DynamoDB round-trip.
-				be.cache.UpdateLocalSpend(sandboxID, costUSD)
+					log.Info().
+						Str("sandbox_id", sandboxID).
+						Str("event_type", "bedrock_tokens_metered").
+						Str("model", modelID).
+						Int("input_tokens", inputTokens).
+						Int("output_tokens", outputTokens).
+						Float64("cost_usd", costUSD).
+						Msg("")
 
-				// Fire-and-forget DynamoDB increment — don't block the response path.
-				go func() {
+					be.cache.UpdateLocalSpend(sandboxID, costUSD)
+
 					updatedSpend, incrementErr := aws.IncrementAISpend(
 						context.Background(),
 						be.client,
@@ -286,11 +274,8 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 						return
 					}
 
-					// Refresh cache with authoritative DynamoDB value.
 					cachedEntry := be.cache.Get(sandboxID)
 					if cachedEntry != nil {
-						// Update the cache's AISpent with the authoritative value from DynamoDB.
-						// Re-set the entry so the TTL clock resets on the authoritative value.
 						cachedEntry.AISpent = updatedSpend
 						be.cache.Set(sandboxID, cachedEntry)
 					}
@@ -303,7 +288,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 						remaining := limit - updatedSpend
 						be.onBudgetUpdate(remaining)
 					}
-				}()
+				})
 
 				return resp
 			},
@@ -338,9 +323,8 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 		proxy.OnRequest(goproxy.ReqHostMatches(anthropicHostRegex)).HandleConnect(goproxy.AlwaysMitm)
 
 		// OnResponse: intercept Anthropic /v1/messages responses, extract tokens, price, increment.
-		// Model ID is extracted from the response body (not the URL path — Anthropic does not
-		// encode the model in the URL). staticAnthropicRates is used directly; it is separate
-		// from be.modelRates which carries Bedrock-only rates.
+		// Uses tee-reader approach (same as Bedrock) to handle streaming SSE responses
+		// without blocking. Works for Claude Code Max (direct API) and future providers.
 		proxy.OnResponse(goproxy.ReqHostMatches(anthropicHostRegex)).DoFunc(
 			func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
 				if resp == nil || ctx.Req == nil {
@@ -348,23 +332,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 				}
 				req := ctx.Req
 
-				// Read the full response body (capped at 10 MB).
-				bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxResponseBodySize)))
-				_ = resp.Body.Close()
-				// Replace body immediately so the client always gets the response data.
-				resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-
-				if err != nil {
-					log.Warn().
-						Str("sandbox_id", sandboxID).
-						Str("event_type", "anthropic_body_read_error").
-						Err(err).
-						Msg("")
-					return resp
-				}
-
-				// Check cached budget again post-body-read (covers races between
-				// preflight and response interception).
+				// Pre-flight budget check (cached).
 				entry := be.cache.Get(sandboxID)
 				if entry != nil && entry.AILimit > 0 && entry.AISpent >= entry.AILimit {
 					log.Info().
@@ -374,37 +342,34 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 						Float64("spent", entry.AISpent).
 						Float64("limit", entry.AILimit).
 						Msg("")
+					_ = resp.Body.Close()
 					return AnthropicBlockedResponse(req, sandboxID, "", entry.AISpent, entry.AILimit)
 				}
 
-				// Extract model ID and tokens from the response body.
-				modelID, inputTokens, outputTokens, parseErr := ExtractAnthropicTokens(bytes.NewReader(bodyBytes))
-				if parseErr != nil || (inputTokens == 0 && outputTokens == 0) {
-					// No tokens to record — pass through unchanged.
-					return resp
-				}
+				// Wrap body in metering reader — streams through to client,
+				// fires token extraction + DynamoDB metering on EOF.
+				resp.Body = newMeteringReader(resp.Body, func(captured []byte) {
+					modelID, inputTokens, outputTokens, parseErr := ExtractAnthropicTokens(bytes.NewReader(captured))
+					if parseErr != nil || (inputTokens == 0 && outputTokens == 0) {
+						return
+					}
 
-				// Look up model rate in the Anthropic static rate table.
-				// Falls back to zero cost if the model ID is not yet in the table.
-				var costUSD float64
-				if rate, ok := staticAnthropicRates[modelID]; ok {
-					costUSD = CalculateCost(inputTokens, outputTokens, rate.InputPricePer1KTokens, rate.OutputPricePer1KTokens)
-				}
+					var costUSD float64
+					if rate, ok := staticAnthropicRates[modelID]; ok {
+						costUSD = CalculateCost(inputTokens, outputTokens, rate.InputPricePer1KTokens, rate.OutputPricePer1KTokens)
+					}
 
-				log.Info().
-					Str("sandbox_id", sandboxID).
-					Str("event_type", "anthropic_tokens_metered").
-					Str("model", modelID).
-					Int("input_tokens", inputTokens).
-					Int("output_tokens", outputTokens).
-					Float64("cost_usd", costUSD).
-					Msg("")
+					log.Info().
+						Str("sandbox_id", sandboxID).
+						Str("event_type", "anthropic_tokens_metered").
+						Str("model", modelID).
+						Int("input_tokens", inputTokens).
+						Int("output_tokens", outputTokens).
+						Float64("cost_usd", costUSD).
+						Msg("")
 
-				// Optimistically update local cache before DynamoDB round-trip.
-				be.cache.UpdateLocalSpend(sandboxID, costUSD)
+					be.cache.UpdateLocalSpend(sandboxID, costUSD)
 
-				// Fire-and-forget DynamoDB increment — don't block the response path.
-				go func() {
 					updatedSpend, incrementErr := aws.IncrementAISpend(
 						context.Background(),
 						be.client,
@@ -424,7 +389,6 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 						return
 					}
 
-					// Refresh cache with authoritative DynamoDB value.
 					cachedEntry := be.cache.Get(sandboxID)
 					if cachedEntry != nil {
 						cachedEntry.AISpent = updatedSpend
@@ -439,7 +403,7 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 						remaining := limit - updatedSpend
 						be.onBudgetUpdate(remaining)
 					}
-				}()
+				})
 
 				return resp
 			},

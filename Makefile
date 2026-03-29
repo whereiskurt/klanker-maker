@@ -26,7 +26,10 @@ KM_ARTIFACTS_BUCKET ?=
 
 SIDECARS := dns-proxy http-proxy audit-log
 
-.PHONY: build build-km bump-version sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas build-create-handler build-email-create-handler push-create-handler clean
+OTELCOL_VERSION ?= 0.120.0
+OTELCOL_URL     := https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$(OTELCOL_VERSION)/otelcol-contrib_$(OTELCOL_VERSION)_$(GOOS)_$(GOARCH).tar.gz
+
+.PHONY: build build-km bump-version sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas build-create-handler build-email-create-handler push-create-handler clean fetch-otelcol
 
 ## bump-version: increment the patch version in VERSION file
 bump-version:
@@ -41,8 +44,19 @@ build: bump-version
 ## build-km: alias for build
 build-km: build
 
-## sidecars: cross-compile Go sidecars and upload binaries + tracing config to S3
-sidecars:
+## fetch-otelcol: download otelcol-contrib binary for EC2 tracing sidecar
+fetch-otelcol:
+	@mkdir -p build
+	@if [ ! -f build/otelcol-contrib ]; then \
+	  echo "Downloading otelcol-contrib v$(OTELCOL_VERSION)..."; \
+	  curl -sL "$(OTELCOL_URL)" | tar xz -C build otelcol-contrib; \
+	  chmod +x build/otelcol-contrib; \
+	else \
+	  echo "build/otelcol-contrib already exists (skip download)"; \
+	fi
+
+## sidecars: cross-compile Go sidecars + fetch otelcol-contrib + upload all to S3
+sidecars: fetch-otelcol
 	@if [ -z "$(KM_ARTIFACTS_BUCKET)" ]; then \
 	  echo "ERROR: KM_ARTIFACTS_BUCKET is not set. Export it before running make sidecars."; \
 	  exit 1; \
@@ -54,12 +68,14 @@ sidecars:
 	aws s3 cp build/dns-proxy  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/dns-proxy
 	aws s3 cp build/http-proxy s3://$(KM_ARTIFACTS_BUCKET)/sidecars/http-proxy
 	aws s3 cp build/audit-log  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/audit-log
+	aws s3 cp build/otelcol-contrib s3://$(KM_ARTIFACTS_BUCKET)/sidecars/otelcol-contrib
 	aws s3 cp sidecars/tracing/config.yaml s3://$(KM_ARTIFACTS_BUCKET)/sidecars/tracing/config.yaml
 	@echo ""
 	@echo "Sidecar artifacts uploaded to s3://$(KM_ARTIFACTS_BUCKET)/sidecars/"
 	@echo "  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/dns-proxy"
 	@echo "  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/http-proxy"
 	@echo "  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/audit-log"
+	@echo "  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/otelcol-contrib"
 	@echo "  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/tracing/config.yaml"
 
 ## build-sidecars: cross-compile Go sidecars locally (no S3 upload)
@@ -83,7 +99,7 @@ ecr-repos:
 
 ## clean: remove all build artifacts
 clean:
-	rm -f build/*.zip build/dns-proxy build/http-proxy build/audit-log build/bootstrap
+	rm -f build/*.zip build/dns-proxy build/http-proxy build/audit-log build/otelcol-contrib build/bootstrap
 	@echo "Build artifacts cleaned."
 
 ## build-lambdas: cross-compile Go Lambda binaries for arm64 and package as deployment zips

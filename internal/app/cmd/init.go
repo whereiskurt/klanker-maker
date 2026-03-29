@@ -648,6 +648,54 @@ func buildAndUploadSidecars(repoRoot, bucket string) error {
 		}
 	}
 
+	// Fetch and upload otelcol-contrib binary for EC2 km-tracing sidecar.
+	// This is a third-party binary (not built from this repo).
+	if err := fetchAndUploadOtelcolContrib(buildDir, bucket); err != nil {
+		fmt.Printf("  [warn] otelcol-contrib upload failed: %v\n", err)
+	}
+
+	return nil
+}
+
+const otelcolContribVersion = "0.120.0"
+
+// fetchAndUploadOtelcolContrib downloads the otelcol-contrib binary from the
+// official GitHub releases and uploads it to s3://<bucket>/sidecars/otelcol-contrib.
+// Skips the download if build/otelcol-contrib already exists.
+func fetchAndUploadOtelcolContrib(buildDir, bucket string) error {
+	binaryPath := filepath.Join(buildDir, "otelcol-contrib")
+
+	// Skip download if already present
+	if _, err := os.Stat(binaryPath); err == nil {
+		fmt.Printf("  otelcol-contrib already in build/ (skip download)\n")
+	} else {
+		url := fmt.Sprintf(
+			"https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v%s/otelcol-contrib_%s_linux_amd64.tar.gz",
+			otelcolContribVersion, otelcolContribVersion,
+		)
+		fmt.Printf("  Downloading otelcol-contrib v%s...\n", otelcolContribVersion)
+
+		// Download and extract in one pipeline: curl | tar
+		dlCmd := exec.Command("bash", "-c",
+			fmt.Sprintf("curl -sL %q | tar xz -C %q otelcol-contrib", url, buildDir))
+		if out, err := dlCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("download otelcol-contrib: %s: %w", string(out), err)
+		}
+		if err := os.Chmod(binaryPath, 0o755); err != nil {
+			return fmt.Errorf("chmod otelcol-contrib: %w", err)
+		}
+	}
+
+	// Upload to S3
+	s3Key := "sidecars/otelcol-contrib"
+	fmt.Printf("  Uploading otelcol-contrib to s3://%s/%s...\n", bucket, s3Key)
+	uploadCmd := exec.Command("aws", "s3", "cp", binaryPath,
+		fmt.Sprintf("s3://%s/%s", bucket, s3Key),
+		"--profile", "klanker-terraform")
+	if out, err := uploadCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("upload otelcol-contrib: %s: %w", string(out), err)
+	}
+	fmt.Printf("  Uploaded otelcol-contrib\n")
 	return nil
 }
 

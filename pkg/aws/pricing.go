@@ -36,11 +36,13 @@ type BedrockModelRate struct {
 // is unavailable. Rates are in USD per 1,000 tokens.
 // Source: https://aws.amazon.com/bedrock/pricing/ (as of 2025)
 var staticBedrockRates = map[string]BedrockModelRate{
+	// Claude 3 Haiku (deprecated 2026-04-19)
 	"anthropic.claude-3-haiku-20240307-v1:0": {
 		ModelID:                "anthropic.claude-3-haiku-20240307-v1:0",
 		InputPricePer1KTokens:  0.00025,
 		OutputPricePer1KTokens: 0.00125,
 	},
+	// Claude 4.5
 	"anthropic.claude-sonnet-4-5": {
 		ModelID:                "anthropic.claude-sonnet-4-5",
 		InputPricePer1KTokens:  0.003,
@@ -50,6 +52,23 @@ var staticBedrockRates = map[string]BedrockModelRate{
 		ModelID:                "anthropic.claude-opus-4-5",
 		InputPricePer1KTokens:  0.015,
 		OutputPricePer1KTokens: 0.075,
+	},
+	// Claude 4.6
+	"anthropic.claude-sonnet-4-6": {
+		ModelID:                "anthropic.claude-sonnet-4-6",
+		InputPricePer1KTokens:  0.003,
+		OutputPricePer1KTokens: 0.015,
+	},
+	"anthropic.claude-opus-4-6-v1": {
+		ModelID:                "anthropic.claude-opus-4-6-v1",
+		InputPricePer1KTokens:  0.005,
+		OutputPricePer1KTokens: 0.025,
+	},
+	// Claude 4.5 Haiku
+	"anthropic.claude-haiku-4-5-20251001-v1:0": {
+		ModelID:                "anthropic.claude-haiku-4-5-20251001-v1:0",
+		InputPricePer1KTokens:  0.001,
+		OutputPricePer1KTokens: 0.005,
 	},
 }
 

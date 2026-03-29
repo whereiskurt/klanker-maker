@@ -1,6 +1,7 @@
 package httpproxy_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -53,6 +54,88 @@ func TestExtractBedrockTokens_NonStreaming(t *testing.T) {
 	}
 	if outputTokens != 5 {
 		t.Errorf("outputTokens = %d, want 5", outputTokens)
+	}
+}
+
+// TestExtractBedrockTokens_BinaryEventStream verifies extraction from AWS event-stream
+// binary-framed responses (Bedrock invoke-with-response-stream) where JSON is
+// directly embedded in binary frames.
+func TestExtractBedrockTokens_BinaryEventStream(t *testing.T) {
+	messageStart := `{"type":"message_start","message":{"id":"msg_01","model":"us.anthropic.claude-sonnet-4-6","usage":{"input_tokens":42,"output_tokens":1}}}`
+	messageDelta := `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":18}}`
+
+	// Build fake binary stream with embedded JSON
+	var buf []byte
+	buf = append(buf, 0x00, 0x00, 0x01, 0x2a, 0x00, 0x00, 0x00, 0x8b)
+	buf = append(buf, []byte(messageStart)...)
+	buf = append(buf, 0xab, 0xcd, 0xef, 0x12)
+	buf = append(buf, 0x00, 0x00, 0x00, 0x9a, 0x00, 0x00, 0x00, 0x65)
+	buf = append(buf, []byte(messageDelta)...)
+	buf = append(buf, 0x55, 0x66, 0x77, 0x88)
+
+	inputTokens, outputTokens, err := httpproxy.ExtractBedrockTokens(strings.NewReader(string(buf)))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if inputTokens != 42 {
+		t.Errorf("inputTokens = %d, want 42", inputTokens)
+	}
+	if outputTokens != 18 {
+		t.Errorf("outputTokens = %d, want 18", outputTokens)
+	}
+}
+
+// TestExtractBedrockTokens_Base64EventStream verifies extraction from Bedrock's
+// actual event-stream format where Anthropic events are base64-encoded inside
+// {"bytes":"<base64>"} wrapper objects.
+func TestExtractBedrockTokens_Base64EventStream(t *testing.T) {
+	// These are the actual Anthropic events, base64-encoded as Bedrock sends them.
+	messageStartJSON := `{"type":"message_start","message":{"model":"claude-sonnet-4-6","id":"msg_bdrk_01","type":"message","role":"assistant","content":[],"usage":{"input_tokens":354,"output_tokens":1}}}`
+	messageDeltaJSON := `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":86}}`
+
+	messageStartB64 := base64.StdEncoding.EncodeToString([]byte(messageStartJSON))
+	messageDeltaB64 := base64.StdEncoding.EncodeToString([]byte(messageDeltaJSON))
+
+	// Build stream of {"bytes":"..."} wrapper objects with binary padding between them
+	var buf []byte
+	buf = append(buf, 0x00, 0x00, 0x01, 0x2a) // binary frame header
+	buf = append(buf, []byte(`{"bytes":"`+messageStartB64+`"}`)...)
+	buf = append(buf, 0xab, 0xcd, 0xef, 0x12) // CRC
+	// Some content deltas in between...
+	contentDeltaJSON := `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}`
+	contentDeltaB64 := base64.StdEncoding.EncodeToString([]byte(contentDeltaJSON))
+	buf = append(buf, 0x00, 0x00, 0x00, 0x7f)
+	buf = append(buf, []byte(`{"bytes":"`+contentDeltaB64+`"}`)...)
+	buf = append(buf, 0x11, 0x22, 0x33, 0x44)
+	// message_delta at the end
+	buf = append(buf, 0x00, 0x00, 0x00, 0x9a)
+	buf = append(buf, []byte(`{"bytes":"`+messageDeltaB64+`"}`)...)
+	buf = append(buf, 0x55, 0x66, 0x77, 0x88)
+
+	inputTokens, outputTokens, err := httpproxy.ExtractBedrockTokens(strings.NewReader(string(buf)))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if inputTokens != 354 {
+		t.Errorf("inputTokens = %d, want 354", inputTokens)
+	}
+	if outputTokens != 86 {
+		t.Errorf("outputTokens = %d, want 86", outputTokens)
+	}
+}
+
+// TestExtractBedrockTokens_BinaryEventStream_NoTokens verifies that binary data
+// without recognizable JSON payloads returns (0, 0, nil).
+func TestExtractBedrockTokens_BinaryEventStream_NoTokens(t *testing.T) {
+	// Pure binary noise — no embedded JSON.
+	buf := []byte{0x00, 0x01, 0x02, 0x03, 0xff, 0xfe, 0xfd, 0xfc, 0x10, 0x20, 0x30}
+
+	inputTokens, outputTokens, err := httpproxy.ExtractBedrockTokens(strings.NewReader(string(buf)))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if inputTokens != 0 || outputTokens != 0 {
+		t.Errorf("expected (0, 0), got (%d, %d)", inputTokens, outputTokens)
 	}
 }
 
@@ -228,6 +311,9 @@ func TestExtractModelID(t *testing.T) {
 		{"/model/anthropic.claude-sonnet-4-5/invoke", "anthropic.claude-sonnet-4-5"},
 		{"/model/anthropic.claude-3-haiku-20240307-v1:0/invoke-with-response-stream", "anthropic.claude-3-haiku-20240307-v1:0"},
 		{"/model/anthropic.claude-opus-4-5/invoke", "anthropic.claude-opus-4-5"},
+		{"/model/us.anthropic.claude-sonnet-4-6/invoke-with-response-stream", "anthropic.claude-sonnet-4-6"},
+		{"/model/eu.anthropic.claude-opus-4-6-v1/invoke", "anthropic.claude-opus-4-6-v1"},
+		{"/model/ap.anthropic.claude-haiku-4-5-20251001-v1:0/invoke-with-response-stream", "anthropic.claude-haiku-4-5-20251001-v1:0"},
 		{"/v1/model/meta.llama3/invoke", "meta.llama3"},
 		{"/unknown/path", ""},
 	}

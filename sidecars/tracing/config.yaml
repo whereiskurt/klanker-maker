@@ -20,26 +20,23 @@ processors:
 
 exporters:
   awss3/traces:
-    s3_uploader:
+    s3uploader:
       region: ${AWS_REGION}
       s3_bucket: ${OTEL_S3_BUCKET}
       s3_prefix: "traces/${SANDBOX_ID}"
     marshaler: otlp_json
-    timeout: 30s
   awss3/logs:
-    s3_uploader:
+    s3uploader:
       region: ${AWS_REGION}
       s3_bucket: ${OTEL_S3_BUCKET}
       s3_prefix: "logs/${SANDBOX_ID}"
     marshaler: otlp_json
-    timeout: 30s
   awss3/metrics:
-    s3_uploader:
+    s3uploader:
       region: ${AWS_REGION}
       s3_bucket: ${OTEL_S3_BUCKET}
       s3_prefix: "metrics/${SANDBOX_ID}"
     marshaler: otlp_json
-    timeout: 30s
 
 service:
   pipelines:

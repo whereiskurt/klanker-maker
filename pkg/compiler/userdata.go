@@ -289,6 +289,7 @@ After=network.target
 [Service]
 User=km-sidecar
 Environment=SANDBOX_ID={{ .SandboxID }}
+Environment=AWS_REGION={{ .AWSRegion }}
 Environment=ALLOWED_HOSTS={{ .AllowedHTTPHosts }}
 Environment=PROXY_PORT=3128
 ExecStart=/opt/km/bin/km-http-proxy
