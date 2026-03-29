@@ -105,35 +105,53 @@ aws sso login --profile klanker-terraform      # State, provisioning
 aws sso login --profile klanker-application    # VPC/network init
 ```
 
-The `km` CLI selects the right profile per command:
+The `km` CLI selects the right AWS profile per command. Commands are grouped by workflow stage:
 
-| Command | AWS Profile | Account |
-|---------|-------------|---------|
-| `km configure` (`km conf`) | - | No AWS access needed; writes `km-config.yaml` |
-| `km configure github` | - | Configures GitHub App token integration (manual SSM setup) |
-| `km configure github --setup` | `klanker-terraform` | One-click GitHub App creation via manifest flow + auto SSM storage |
-| `km configure github --discover` | `klanker-terraform` | Auto-discover installation ID from existing App credentials in SSM |
-| `km github` | `klanker-terraform` | Shortcut for `km configure github --setup` |
-| `km bootstrap` | `klanker-terraform` | Terraform - deploys SCP containment policy via management account |
-| `km bootstrap --show-prereqs` | - | Prints the IAM role and trust policy to create in management account |
-| `km init` | `klanker-application` | Application - builds Lambdas/sidecars, provisions shared VPC/network |
-| `km uninit` | `klanker-application` | Application - tears down all shared regional infrastructure |
-| `km create` | `klanker-terraform` | Terraform - assumes role into Application to provision |
-| `km destroy` | `klanker-terraform` | Terraform - assumes role into Application to teardown |
-| `km destroy --remote` | `klanker-terraform` | Dispatches destroy to Lambda via EventBridge |
-| `km stop` | `klanker-terraform` | Stop a sandbox's EC2 instance (preserves infrastructure) |
-| `km stop --remote` | `klanker-terraform` | Dispatches stop to Lambda via EventBridge |
-| `km extend` | `klanker-terraform` | Extend a sandbox's TTL by a given duration |
-| `km extend --remote` | `klanker-terraform` | Dispatches extend to Lambda via EventBridge |
-| `km list` | `klanker-terraform` | Reads state from S3 + live EC2 status check |
-| `km status` | `klanker-terraform` | Reads state + budget + identity + idle countdown |
-| `km logs` | `klanker-terraform` | Tails CloudWatch audit logs for a sandbox |
-| `km shell` | `klanker-terraform` | SSM session as restricted `sandbox` user (no sudo) |
-| `km shell --root` | `klanker-terraform` | SSM session as root (operator access) |
-| `km shell --ports` | `klanker-terraform` | SSM port forwarding (Docker-style syntax) |
-| `km budget add` | `klanker-terraform` | Add compute or AI budget to a sandbox |
-| `km otel` | `klanker-terraform` | OTEL telemetry + AI spend summary (--prompts, --events, --tools, --timeline) |
-| `km doctor` | `klanker-terraform` | Validates platform health across all accounts (12 checks) |
+**Setup (once)**
+
+| Command | AWS Profile | What it does |
+|---------|-------------|--------------|
+| `km configure` | - | Set domain, account IDs, SSO URL, region |
+| `km configure github` | `klanker-terraform` | Configure GitHub App token integration |
+| `km bootstrap` | `klanker-terraform` | Deploy SCP containment policy + KMS key + artifacts bucket |
+| `km init` | `klanker-application` | Build Lambdas/sidecars, provision shared VPC/network |
+| `km doctor` | `klanker-terraform` | Validate platform health across all accounts (12 checks) |
+
+**Sandbox lifecycle**
+
+| Command | AWS Profile | What it does |
+|---------|-------------|--------------|
+| `km validate <profile>` | - | Check a profile YAML against the schema |
+| `km create <profile>` | `klanker-terraform` | Provision a sandbox from a profile |
+| `km list` | `klanker-terraform` | List sandboxes with live status |
+| `km status <sandbox>` | `klanker-terraform` | Budget, identity, idle countdown, resources |
+| `km shell <sandbox>` | `klanker-terraform` | SSM session (`--root` for operator, `--ports` for forwarding) |
+
+**Observability**
+
+| Command | AWS Profile | What it does |
+|---------|-------------|--------------|
+| `km otel <sandbox>` | `klanker-terraform` | AI spend summary by provider + OTEL S3 data |
+| `km otel --prompts` | `klanker-terraform` | User prompts with timestamps |
+| `km otel --timeline` | `klanker-terraform` | Conversation turns with per-turn cost |
+| `km otel --events` | `klanker-terraform` | Full event stream (API calls, tool calls) |
+| `km otel --tools` | `klanker-terraform` | Tool call history with parameters and duration |
+| `km logs <sandbox>` | `klanker-terraform` | Tail CloudWatch audit logs |
+
+**Budget and lifecycle management**
+
+| Command | AWS Profile | What it does |
+|---------|-------------|--------------|
+| `km budget add <sandbox>` | `klanker-terraform` | Top up compute or AI budget |
+| `km extend <sandbox> <dur>` | `klanker-terraform` | Add time before TTL expires |
+| `km stop <sandbox>` | `klanker-terraform` | Stop instance, preserve infrastructure |
+| `km destroy <sandbox>` | `klanker-terraform` | Teardown sandbox (`--remote` for Lambda-dispatched) |
+
+**Teardown (reverse of setup)**
+
+| Command | AWS Profile | What it does |
+|---------|-------------|--------------|
+| `km uninit` | `klanker-application` | Destroy all shared regional infrastructure |
 
 ### Platform Configuration
 
