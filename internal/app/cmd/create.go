@@ -164,7 +164,9 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	// Step 4: Generate sandbox ID (or use override from create-handler Lambda)
 	sandboxID := sandboxIDOverride
 	if sandboxID == "" {
-		sandboxID = compiler.GenerateSandboxID()
+		sandboxID = compiler.GenerateSandboxID(resolvedProfile.Metadata.Prefix)
+	} else if !compiler.IsValidSandboxID(sandboxID) {
+		return fmt.Errorf("invalid sandbox ID override %q: must match pattern [a-z][a-z0-9]{0,11}-[a-f0-9]{8}", sandboxID)
 	}
 	substrate := resolvedProfile.Spec.Runtime.Substrate
 	spot := resolvedProfile.Spec.Runtime.Spot && !onDemand
@@ -860,7 +862,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, awsP
 	}
 
 	// Step 4: Generate sandbox ID
-	sandboxID := compiler.GenerateSandboxID()
+	sandboxID := compiler.GenerateSandboxID(resolvedProfile.Metadata.Prefix)
 	printBanner("km create --remote", sandboxID)
 
 	// Step 5: Load AWS credentials
