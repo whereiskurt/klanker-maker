@@ -714,3 +714,14 @@ Key files:
 
 Plans:
 - [x] TBD (run /gsd:plan-phase 27 to break down) (completed 2026-03-28)
+
+### Phase 30: sandbox lifecycle commands - km pause km lock km unlock
+
+**Goal:** Working km pause, km lock, and km unlock commands with lock enforcement guards
+**Requirements**: [PAUSE-01, PAUSE-02, PAUSE-03, LOCK-01, LOCK-02, LOCK-03, UNLOCK-01, UNLOCK-02]
+**Depends on:** Phase 29
+**Plans:** 2 plans
+
+Plans:
+- [ ] 30-01-PLAN.md — km pause command + SandboxMetadata lock fields
+- [ ] 30-02-PLAN.md — km lock/unlock commands + lock guards + root.go wiring
