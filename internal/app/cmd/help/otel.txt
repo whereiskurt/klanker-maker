@@ -6,29 +6,62 @@ telemetry export (S3).
 
 Usage:
   km otel <sandbox-id>
+  km otel <sandbox-id> --prompts
+  km otel <sandbox-id> --events
+  km otel <sandbox-id> --tools
+  km otel <sandbox-id> --timeline
 
 Examples:
-  # Show telemetry for a sandbox
+  # Summary: budget by provider, S3 file counts, latest metrics
   km otel sb-a1b2c3d4
 
   # Use numeric shorthand from km list
   km otel 1
 
-Output Sections:
+  # List all user prompts with timestamps
+  km otel 1 --prompts
 
-  Budget Enforcer (HTTP proxy → DynamoDB):
-    Per-model AI spend tracked by the MITM proxy during streaming
-    responses. Models are grouped by provider:
-    - Bedrock: model IDs starting with "anthropic." (e.g. anthropic.claude-sonnet-4-6)
-    - Anthropic Direct (Max/API): bare model IDs (e.g. claude-opus-4-6)
+  # Full event stream (prompts, API calls, tool calls)
+  km otel 1 --events
 
-  OTEL Telemetry (OTel Collector → S3):
-    File counts and sizes for each signal type (logs, metrics, traces)
-    exported by the OTel Collector sidecar to S3.
+  # Tool call history with parameters, duration, success/failure
+  km otel 1 --tools
 
-  OTEL Metrics Snapshot:
-    Latest Claude Code self-reported metrics from S3, including
-    token usage, cost, session count, and active time.
+  # Conversation timeline with per-turn cost rollup
+  km otel 1 --timeline
 
-The budget-enforcer data is real-time (updated per-request).
-The OTEL data has a ~10s batch delay from the collector.
+Views:
+
+  Default (no flags):
+    Budget Enforcer — per-model AI spend grouped by provider
+    (Bedrock vs Anthropic Direct/Max), S3 telemetry file counts
+    and sizes, latest Claude Code self-reported metrics snapshot.
+
+  --prompts:
+    All user prompts with timestamps and session IDs.
+    Internal messages (task-notifications, system-reminders) are
+    filtered out automatically.
+
+  --events:
+    Chronological event stream showing prompts, API requests
+    (model, tokens, cost, duration, cache stats), tool decisions,
+    and tool results.
+
+  --tools:
+    Tool call history grouped by session. Shows tool name, duration,
+    result size, and key parameters (file paths for Read/Write/Edit,
+    commands for Bash, patterns for Grep/Glob, descriptions for Agent).
+    Failed calls marked with a cross symbol.
+
+  --timeline:
+    Conversation turns grouped by user prompt. Each turn shows all
+    API calls with model, tokens, cost, cache read/creation, and
+    duration. Tool usage count and per-turn cost subtotal. Ends with
+    grand total across all turns.
+
+Data Sources:
+
+  Budget data comes from DynamoDB (real-time, updated per-request).
+  OTEL data comes from S3 (batched by the OTel Collector, ~10s delay).
+  The budget-enforcer tracks spend via HTTP proxy MITM interception.
+  The OTEL data is Claude Code's own telemetry export.

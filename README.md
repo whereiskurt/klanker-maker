@@ -130,6 +130,7 @@ The `km` CLI selects the right profile per command:
 | `km shell --root` | `klanker-terraform` | SSM session as root (operator access) |
 | `km shell --ports` | `klanker-terraform` | SSM port forwarding (Docker-style syntax) |
 | `km budget add` | `klanker-terraform` | Add compute or AI budget to a sandbox |
+| `km otel` | `klanker-terraform` | OTEL telemetry + AI spend summary (--prompts, --events, --tools, --timeline) |
 | `km doctor` | `klanker-terraform` | Validates platform health across all accounts (12 checks) |
 
 ### Platform Configuration
@@ -197,6 +198,7 @@ The SCP is deployed via `km bootstrap --dry-run=false`. Run `km bootstrap --show
 | **Source** | GitHub App scoped tokens | Per-repo, per-ref, per-permission; short-lived installation tokens refreshed via Lambda |
 | **Filesystem** | Path-level enforcement | Writable vs read-only directories at OS level |
 | **Audit** | Command + network logging | Secret-redacted; delivered to CloudWatch/S3 |
+| **Telemetry** | OTEL observability | Claude Code prompts, tool calls, API requests, cost metrics → OTel Collector → S3 |
 | **Budget** | Compute + AI spend tracking | DynamoDB real-time metering; proxy 403 + IAM revocation at ceiling |
 
 ### Architecture Diagrams
@@ -216,7 +218,7 @@ Editable source: [`docs/sandbox-architecture.excalidraw`](docs/sandbox-architect
 5. **Define** a SandboxProfile in YAML - budget, lifecycle, network policy, identity, sidecars
 6. **Validate** with `km validate <profile.yaml>`
 7. **Create** with `km create <profile>` - compiles to Terragrunt inputs, provisions infrastructure, shows elapsed time
-8. **Monitor** with `km list` (numbered, live EC2 status) / `km status` (budget, identity, idle countdown with color) / `km logs`
+8. **Monitor** with `km list` (numbered, live EC2 status) / `km status` (budget, identity, idle countdown with color) / `km logs` / `km otel` (telemetry + spend)
 9. **Connect** with `km shell 1` (restricted user) or `km shell 1 --root` (operator access)
 10. **Port forward** with `km shell 1 --ports 8080:80,3000` (Docker-style syntax)
 11. **Extend** with `km extend 1 2h` - add time before TTL expires
@@ -370,16 +372,22 @@ Tracked as spot rate x elapsed minutes, sourced from the AWS Price List API at s
 - **EC2**: `StopInstances` preserves the EBS volume. No compute charges accrue while stopped.
 - **ECS Fargate**: Artifacts are uploaded, then the task is stopped. Re-provision from the stored S3 profile on top-up.
 
-### AI Budget (Bedrock)
+### AI Budget (Bedrock + Anthropic Direct)
 
-The HTTP proxy sidecar intercepts every Bedrock `InvokeModel` response, extracts `input_tokens` and `output_tokens`, prices them against cached model rates (Haiku, Sonnet, Opus), and atomically increments the DynamoDB spend counter.
+The HTTP proxy sidecar intercepts every AI API response — both **Bedrock** (`invoke-with-response-stream`) and **Anthropic direct** (`api.anthropic.com`, for Claude Code Max/API key users). A tee-reader streams data through to the client without blocking, captures the full response, then extracts token counts asynchronously:
+
+- **Bedrock streaming**: base64-decodes `{"bytes":"<b64>"}` event-stream wrappers to find `message_start`/`message_delta` payloads
+- **Anthropic SSE**: parses `data:` lines for the same event types
+- **Non-streaming**: reads `usage` from the JSON response body
+
+Tokens are priced against static model rates and atomically incremented in the DynamoDB spend counter.
 
 **Dual-layer enforcement** at 100%:
 
-1. **Proxy layer** (immediate) - HTTP proxy returns 403 for subsequent Bedrock calls
+1. **Proxy layer** (immediate) - HTTP proxy returns 403 for subsequent AI calls
 2. **IAM layer** (backstop) - a Lambda revokes the sandbox IAM role's Bedrock permissions, catching SDK/CLI calls that bypass the proxy
 
-`km status` shows per-model AI spend breakdown:
+`km status` shows per-model AI spend grouped by provider:
 
 ```
 $ km status sb-a1b2c3d4
@@ -387,8 +395,30 @@ $ km status sb-a1b2c3d4
   budget:
     compute:  $0.12 / $2.00  (6%)
     ai:       $1.40 / $5.00  (28%)
-      haiku:    $0.20  (142K in / 58K out)
-      sonnet:   $1.20  (89K in / 34K out)
+      anthropic.claude-sonnet-4-6:  $0.85  (89K in / 34K out)   # Bedrock
+      claude-opus-4-6:              $0.55  (12K in / 8K out)     # Max/API
+```
+
+### OTEL Telemetry
+
+Claude Code running inside sandboxes exports OpenTelemetry telemetry (prompts, tool calls, API requests, token usage, cost metrics) through an OTel Collector sidecar to S3. Profile-controlled via `spec.observability.claudeTelemetry`:
+
+```yaml
+observability:
+  claudeTelemetry:
+    enabled: true        # master switch
+    logPrompts: true     # include actual prompt text
+    logToolDetails: true # include tool parameters (bash commands, file paths)
+```
+
+`km otel` provides five views into this data:
+
+```
+$ km otel sb-a1b2c3d4              # summary: budget + S3 + metrics
+$ km otel sb-a1b2c3d4 --prompts    # user prompts with timestamps
+$ km otel sb-a1b2c3d4 --events     # full event stream
+$ km otel sb-a1b2c3d4 --tools      # tool calls with params + duration
+$ km otel sb-a1b2c3d4 --timeline   # conversation turns with per-turn cost
 ```
 
 ### Warnings and Top-Up
@@ -412,7 +442,7 @@ km CLI / ConfigUI
 ├── cmd/km/                  CLI entry point
 ├── cmd/configui/            Web dashboard (Go + embedded HTML)
 ├── cmd/ttl-handler/         Lambda: TTL expiry + artifact upload
-├── internal/app/cmd/        Cobra commands (configure, bootstrap, init, uninit, validate, create, destroy, stop, extend, list, status, logs, budget, shell, doctor)
+├── internal/app/cmd/        Cobra commands (configure, bootstrap, init, uninit, validate, create, destroy, stop, extend, list, status, logs, budget, shell, doctor, otel)
 ├── internal/app/config/     Configuration (config.yaml, env vars, CLI flags)
 ├── pkg/
 │   ├── profile/             SandboxProfile schema, validation, inheritance
@@ -422,9 +452,9 @@ km CLI / ConfigUI
 │   └── lifecycle/           TTL scheduling, idle detection, teardown
 ├── sidecars/
 │   ├── dns-proxy/           DNS allowlist filter (UDP/TCP:53)
-│   ├── http-proxy/          HTTP allowlist filter (TCP:3128) + Bedrock token metering
+│   ├── http-proxy/          HTTP allowlist filter (TCP:3128) + AI token metering (Bedrock + Anthropic)
 │   ├── audit-log/           Command + network log router with secret redaction
-│   └── tracing/             OTel trace collection + MLflow experiment logging
+│   └── tracing/             OTel Collector sidecar (logs, metrics → S3)
 ├── profiles/                Built-in YAML profiles (open-dev → sealed)
 └── infra/
     ├── modules/             Terraform modules
@@ -492,6 +522,12 @@ km stop 1
 # View audit logs
 km logs 1
 
+# OTEL telemetry + AI spend
+km otel 1                  # summary
+km otel 1 --timeline       # conversation turns with cost
+km otel 1 --prompts        # user prompts
+km otel 1 --tools          # tool call history
+
 # Destroy (local or remote)
 km destroy 1                    # local terragrunt destroy
 km destroy 1 --remote --yes     # Lambda-dispatched, no prompt
@@ -543,7 +579,7 @@ km uninit --region us-east-1
 | 24 | Credential Rotation — `km roll creds` for platform and sandbox secrets | Planned |
 | 25 | GitHub Source Access Restrictions — repo allowlists, deny-by-default | Planned |
 | 26 | Live Operations Hardening — bootstrap, init, TTL, idle, sidecars, CLI polish | **Complete** |
-| 27 | Documentation Refresh (Phases 22-26) | Planned |
+| 27 | Claude Code OTEL Integration — sandbox observability via built-in telemetry | **Complete** |
 
 See [.planning/ROADMAP.md](.planning/ROADMAP.md) for detailed phase breakdowns and success criteria.
 

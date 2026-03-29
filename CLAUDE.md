@@ -11,6 +11,7 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 - `km validate <profile.yaml>` — validate a SandboxProfile
 - `km create <profile.yaml>` — provision a sandbox
 - `km destroy <sandbox-id>` — teardown a sandbox
+- `km otel <sandbox-id>` — OTEL telemetry + AI spend summary (--prompts, --events, --tools, --timeline)
 
 ## Architecture
 
