@@ -38,26 +38,71 @@ func loadTestProfile(t *testing.T, filename string) *profile.SandboxProfile {
 // ============================================================
 
 func TestGenerateSandboxID(t *testing.T) {
-	pattern := regexp.MustCompile(`^sb-[a-f0-9]{8}$`)
+	t.Run("empty prefix defaults to sb-", func(t *testing.T) {
+		pattern := regexp.MustCompile(`^sb-[a-f0-9]{8}$`)
+		id1 := compiler.GenerateSandboxID("")
+		if !pattern.MatchString(id1) {
+			t.Errorf("GenerateSandboxID(\"\") = %q; want sb-[a-f0-9]{8}", id1)
+		}
+		id2 := compiler.GenerateSandboxID("")
+		if !pattern.MatchString(id2) {
+			t.Errorf("GenerateSandboxID(\"\") = %q; want sb-[a-f0-9]{8}", id2)
+		}
+		if id1 == id2 {
+			t.Errorf("GenerateSandboxID(\"\") returned the same ID twice: %q", id1)
+		}
+	})
 
-	id1 := compiler.GenerateSandboxID()
-	if !pattern.MatchString(id1) {
-		t.Errorf("GenerateSandboxID() = %q; want sb-[a-f0-9]{8}", id1)
+	t.Run("claude prefix", func(t *testing.T) {
+		pattern := regexp.MustCompile(`^claude-[a-f0-9]{8}$`)
+		id := compiler.GenerateSandboxID("claude")
+		if !pattern.MatchString(id) {
+			t.Errorf("GenerateSandboxID(\"claude\") = %q; want claude-[a-f0-9]{8}", id)
+		}
+	})
+
+	t.Run("build prefix", func(t *testing.T) {
+		pattern := regexp.MustCompile(`^build-[a-f0-9]{8}$`)
+		id := compiler.GenerateSandboxID("build")
+		if !pattern.MatchString(id) {
+			t.Errorf("GenerateSandboxID(\"build\") = %q; want build-[a-f0-9]{8}", id)
+		}
+	})
+
+	t.Run("single char prefix", func(t *testing.T) {
+		pattern := regexp.MustCompile(`^a-[a-f0-9]{8}$`)
+		id := compiler.GenerateSandboxID("a")
+		if !pattern.MatchString(id) {
+			t.Errorf("GenerateSandboxID(\"a\") = %q; want a-[a-f0-9]{8}", id)
+		}
+	})
+}
+
+func TestIsValidSandboxID(t *testing.T) {
+	tests := []struct {
+		id      string
+		want    bool
+	}{
+		{"sb-abc12345", true},
+		{"claude-abc12345", true},
+		{"abc12345", false},
+		{"", false},
+		{"SB-abc12345", false},
+		{"sb-ABC12345", false},
+		{"sb-abc1234", false},  // only 7 hex chars
+		{"sb-abc123456", false}, // 9 hex chars
 	}
-
-	id2 := compiler.GenerateSandboxID()
-	if !pattern.MatchString(id2) {
-		t.Errorf("GenerateSandboxID() = %q; want sb-[a-f0-9]{8}", id2)
-	}
-
-	if id1 == id2 {
-		t.Errorf("GenerateSandboxID() returned the same ID twice: %q", id1)
+	for _, tc := range tests {
+		got := compiler.IsValidSandboxID(tc.id)
+		if got != tc.want {
+			t.Errorf("IsValidSandboxID(%q) = %v; want %v", tc.id, got, tc.want)
+		}
 	}
 }
 
 func TestCompileEC2(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
-	id := compiler.GenerateSandboxID()
+	id := compiler.GenerateSandboxID("")
 
 	artifacts, err := compiler.Compile(p, id, false, testNetwork())
 	if err != nil {
