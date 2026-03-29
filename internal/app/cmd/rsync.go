@@ -111,7 +111,8 @@ func NewRsyncCmd(cfg *config.Config) *cobra.Command {
 		Short: "Save and restore sandbox user home snapshots",
 		Long: `Snapshot and restore files from the sandbox shell user's $HOME.
 
-Paths are configured in km-config.yaml under rsync_paths (default: .claude, .bashrc, .gitconfig).
+Paths are resolved from the sandbox profile's spec.execution.rsyncPaths field.
+Falls back to km-config.yaml rsync_paths if the profile has no rsyncPaths.
 Paths are relative to the shell user's home directory.`,
 	}
 
@@ -156,9 +157,29 @@ func newRsyncSaveCmd(cfg *config.Config) *cobra.Command {
 				return fmt.Errorf("find instance: %w", err)
 			}
 
-			paths := cfg.RsyncPaths
-			if len(paths) == 0 {
-				paths = []string{".claude", ".claude.json", ".bashrc", ".bash_profile", ".gitconfig"}
+			// Best-effort: fetch stored profile for rsyncPaths resolution
+			var storedProfile *profile.SandboxProfile
+			profileKey := fmt.Sprintf("artifacts/%s/.km-profile.yaml", sandboxID)
+			s3Client := s3.NewFromConfig(awsCfg)
+			profObj, profErr := s3Client.GetObject(ctx, &s3.GetObjectInput{
+				Bucket: awssdk.String(cfg.ArtifactsBucket),
+				Key:    awssdk.String(profileKey),
+			})
+			if profErr == nil {
+				defer profObj.Body.Close()
+				profData, readErr := io.ReadAll(profObj.Body)
+				if readErr == nil {
+					storedProfile, _ = profile.Parse(profData)
+				}
+			}
+
+			globalFallback := cfg.RsyncPaths
+			if len(globalFallback) == 0 {
+				globalFallback = []string{".claude", ".claude.json", ".bashrc", ".bash_profile", ".gitconfig"}
+			}
+			paths, err := resolveRsyncPaths(storedProfile, ".", globalFallback)
+			if err != nil {
+				return fmt.Errorf("resolve rsync paths: %w", err)
 			}
 
 			bucket := cfg.ArtifactsBucket
@@ -167,11 +188,7 @@ func newRsyncSaveCmd(cfg *config.Config) *cobra.Command {
 			}
 			s3Key := fmt.Sprintf("rsync/%s.tar.gz", name)
 
-			// Find the sandbox user's home and tar the configured paths
-			var quotedPaths []string
-			for _, p := range paths {
-				quotedPaths = append(quotedPaths, fmt.Sprintf("'%s'", p))
-			}
+			// Paths are validated by resolveRsyncPaths — pass unquoted for bash wildcard expansion
 			shellCmd := fmt.Sprintf(
 				`SHELL_HOME=$(getent passwd sandbox | cut -d: -f6) && `+
 					`[ -n "$SHELL_HOME" ] || SHELL_HOME=/home/sandbox && `+
@@ -182,7 +199,7 @@ func newRsyncSaveCmd(cfg *config.Config) *cobra.Command {
 					`aws s3 cp /tmp/km-rsync.tar.gz "s3://%s/%s" && `+
 					`echo "RSYNC_OK: $(du -sh /tmp/km-rsync.tar.gz | cut -f1)"; `+
 					`else echo "RSYNC_EMPTY: no matching paths found"; fi`,
-				strings.Join(quotedPaths, " "), bucket, s3Key,
+				strings.Join(paths, " "), bucket, s3Key,
 			)
 
 			ssmClient := ssm.NewFromConfig(awsCfg)
