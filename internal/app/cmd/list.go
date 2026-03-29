@@ -134,12 +134,21 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 	out := cmd.OutOrStdout()
 	// Use fixed-width printf instead of tabwriter to avoid ANSI color codes
 	// breaking column alignment (tabwriter counts bytes, not visible chars).
+	// Compute max sandbox ID width for dynamic column sizing
+	idWidth := len("SANDBOX ID")
+	for _, r := range records {
+		if len(r.SandboxID) > idWidth {
+			idWidth = len(r.SandboxID)
+		}
+	}
+	idWidth += 2 // padding
+
 	if wide {
-		fmt.Fprintf(out, "%-3s %-14s %-10s %-12s %-10s %-12s %-10s %s\n",
-			"#", "SANDBOX ID", "ALIAS", "PROFILE", "SUBSTRATE", "REGION", "STATUS", "TTL")
+		fmt.Fprintf(out, "%-3s %-*s  %-10s %-12s %-10s %-12s %-10s %s\n",
+			"#", idWidth, "SANDBOX ID", "ALIAS", "PROFILE", "SUBSTRATE", "REGION", "STATUS", "TTL")
 	} else {
-		fmt.Fprintf(out, "%-3s %-14s %-10s %-10s %s\n",
-			"#", "SANDBOX ID", "ALIAS", "STATUS", "TTL")
+		fmt.Fprintf(out, "%-3s %-*s  %-10s %-10s %s\n",
+			"#", idWidth, "SANDBOX ID", "ALIAS", "STATUS", "TTL")
 	}
 	for i, r := range records {
 		ttl := r.TTLRemaining
@@ -158,11 +167,11 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 			lock = " 🔒"
 		}
 		if wide {
-			fmt.Fprintf(out, "%-3d %-14s %-10s %-12s %-10s %-12s %s %s%s\n",
-				i+1, r.SandboxID, alias, r.Profile, r.Substrate, r.Region, colorStatus, ttl, lock)
+			fmt.Fprintf(out, "%-3d %-*s  %-10s %-12s %-10s %-12s %s %s%s\n",
+				i+1, idWidth, r.SandboxID, alias, r.Profile, r.Substrate, r.Region, colorStatus, ttl, lock)
 		} else {
-			fmt.Fprintf(out, "%-3d %-14s %-10s %s %s%s\n",
-				i+1, r.SandboxID, alias, colorStatus, ttl, lock)
+			fmt.Fprintf(out, "%-3d %-*s  %-10s %s %s%s\n",
+				i+1, idWidth, r.SandboxID, alias, colorStatus, ttl, lock)
 		}
 	}
 	return nil
