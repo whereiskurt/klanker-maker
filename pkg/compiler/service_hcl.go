@@ -72,8 +72,6 @@ const ec2ServiceHCLTemplate = `locals {
     spot_rate      = {{ .SpotRateUSD }}
     instance_type  = "{{ .InstanceType }}"
     created_at     = "{{ .CreatedAt }}"
-    role_arn       = "" # populated at apply time: IAM role ARN from ec2spot module output
-    instance_id    = "" # populated at apply time: EC2 instance ID from ec2spot module output
 {{- if .ComputeLimit }}
     compute_limit_usd = {{ .ComputeLimit }}
 {{- end }}
