@@ -364,6 +364,179 @@ spec:
 `)
 }
 
+// minimalExecutionProfile returns a full valid profile YAML with the given execution YAML block.
+func minimalExecutionProfile(executionYAML string) []byte {
+	return []byte(`apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: rsync-schema-test
+spec:
+  lifecycle:
+    ttl: "24h"
+    idleTimeout: "1h"
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+` + executionYAML + `
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+      allowedHosts: []
+      allowedMethods:
+        - GET
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/network
+  policy:
+    allowShellEscape: false
+  agent:
+    maxConcurrentTasks: 4
+    taskTimeout: "30m"
+`)
+}
+
+// TestRsyncSchemaValidation verifies that the JSON schema correctly accepts and
+// rejects rsyncPaths and rsyncFileList configurations.
+func TestRsyncSchemaValidation(t *testing.T) {
+	t.Run("rsyncPaths array of strings is valid", func(t *testing.T) {
+		data := minimalExecutionProfile(`    shell: /bin/bash
+    workingDir: /workspace
+    rsyncPaths:
+      - ".claude"
+      - "projects/*/config"`)
+		errs := profile.ValidateSchema(data)
+		if len(errs) != 0 {
+			t.Errorf("expected no errors for valid rsyncPaths, got: %v", errs)
+		}
+	})
+
+	t.Run("rsyncFileList string is valid", func(t *testing.T) {
+		data := minimalExecutionProfile(`    shell: /bin/bash
+    workingDir: /workspace
+    rsyncFileList: "cc-files.yaml"`)
+		errs := profile.ValidateSchema(data)
+		if len(errs) != 0 {
+			t.Errorf("expected no errors for valid rsyncFileList, got: %v", errs)
+		}
+	})
+
+	t.Run("both rsyncPaths and rsyncFileList together is valid", func(t *testing.T) {
+		data := minimalExecutionProfile(`    shell: /bin/bash
+    workingDir: /workspace
+    rsyncPaths:
+      - ".claude"
+    rsyncFileList: "extra-paths.yaml"`)
+		errs := profile.ValidateSchema(data)
+		if len(errs) != 0 {
+			t.Errorf("expected no errors for rsyncPaths+rsyncFileList, got: %v", errs)
+		}
+	})
+
+	t.Run("omitting rsyncPaths and rsyncFileList is valid (backward compat)", func(t *testing.T) {
+		data := minimalExecutionProfile(`    shell: /bin/bash
+    workingDir: /workspace`)
+		errs := profile.ValidateSchema(data)
+		if len(errs) != 0 {
+			t.Errorf("expected no errors for profile without rsync fields, got: %v", errs)
+		}
+	})
+
+	t.Run("rsyncPaths with non-string item (integer) is rejected", func(t *testing.T) {
+		// Use JSON-style inline array to embed a non-string
+		data := []byte(`apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: rsync-bad-items
+spec:
+  lifecycle:
+    ttl: "24h"
+    idleTimeout: "1h"
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    rsyncPaths: [42, ".claude"]
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+      allowedHosts: []
+      allowedMethods:
+        - GET
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/network
+  policy:
+    allowShellEscape: false
+  agent:
+    maxConcurrentTasks: 4
+    taskTimeout: "30m"
+`)
+		errs := profile.ValidateSchema(data)
+		if len(errs) == 0 {
+			t.Error("expected schema error for rsyncPaths with integer item, got none")
+		}
+	})
+}
+
 func TestValidateSchema_MetadataAlias(t *testing.T) {
 	tests := []struct {
 		name        string

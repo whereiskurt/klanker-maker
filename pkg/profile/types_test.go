@@ -375,6 +375,268 @@ spec:
 	}
 }
 
+// TestRsyncPathsParsing verifies that rsyncPaths and rsyncFileList parse correctly
+// from YAML into ExecutionSpec fields.
+func TestRsyncPathsParsing(t *testing.T) {
+	baseYAML := `apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: rsync-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+      allowedMethods: ["GET"]
+  identity:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: false
+      image: "km-otel:latest"
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+  policy:
+    allowShellEscape: false
+  agent:
+    maxConcurrentTasks: 2
+    taskTimeout: 30m`
+
+	t.Run("rsyncPaths parses into slice", func(t *testing.T) {
+		yamlData := baseYAML + `
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    rsyncPaths:
+      - ".claude"
+      - "projects/*/config"
+`
+		// Re-parse using a full YAML that replaces the execution block
+		fullYAML := `apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: rsync-paths-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    rsyncPaths:
+      - ".claude"
+      - "projects/*/config"
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+      allowedMethods: ["GET"]
+  identity:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: false
+      image: "km-otel:latest"
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+  policy:
+    allowShellEscape: false
+  agent:
+    maxConcurrentTasks: 2
+    taskTimeout: 30m
+`
+		_ = yamlData
+		p, err := profile.Parse([]byte(fullYAML))
+		if err != nil {
+			t.Fatalf("expected profile with rsyncPaths to parse without error, got: %v", err)
+		}
+		paths := p.Spec.Execution.RsyncPaths
+		if len(paths) != 2 {
+			t.Fatalf("expected RsyncPaths to have 2 entries, got %d: %v", len(paths), paths)
+		}
+		if paths[0] != ".claude" {
+			t.Errorf("expected RsyncPaths[0]='.claude', got %q", paths[0])
+		}
+		if paths[1] != "projects/*/config" {
+			t.Errorf("expected RsyncPaths[1]='projects/*/config', got %q", paths[1])
+		}
+	})
+
+	t.Run("rsyncFileList parses into string", func(t *testing.T) {
+		fullYAML := `apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: rsync-filelist-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    rsyncFileList: "cc-files.yaml"
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+      allowedMethods: ["GET"]
+  identity:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: false
+      image: "km-otel:latest"
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+  policy:
+    allowShellEscape: false
+  agent:
+    maxConcurrentTasks: 2
+    taskTimeout: 30m
+`
+		p, err := profile.Parse([]byte(fullYAML))
+		if err != nil {
+			t.Fatalf("expected profile with rsyncFileList to parse without error, got: %v", err)
+		}
+		if p.Spec.Execution.RsyncFileList != "cc-files.yaml" {
+			t.Errorf("expected RsyncFileList='cc-files.yaml', got %q", p.Spec.Execution.RsyncFileList)
+		}
+	})
+
+	t.Run("no rsyncPaths or rsyncFileList is backward compatible", func(t *testing.T) {
+		fullYAML := `apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: rsync-compat-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+      allowedMethods: ["GET"]
+  identity:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: false
+      image: "km-otel:latest"
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+  policy:
+    allowShellEscape: false
+  agent:
+    maxConcurrentTasks: 2
+    taskTimeout: 30m
+`
+		p, err := profile.Parse([]byte(fullYAML))
+		if err != nil {
+			t.Fatalf("expected profile without rsync fields to parse cleanly, got: %v", err)
+		}
+		if p.Spec.Execution.RsyncPaths != nil {
+			t.Errorf("expected RsyncPaths to be nil when omitted, got %v", p.Spec.Execution.RsyncPaths)
+		}
+		if p.Spec.Execution.RsyncFileList != "" {
+			t.Errorf("expected RsyncFileList to be empty string when omitted, got %q", p.Spec.Execution.RsyncFileList)
+		}
+	})
+}
+
 // TestBudgetSpecOptional verifies that a profile without spec.budget is still valid.
 func TestBudgetSpecOptional(t *testing.T) {
 	data, err := os.ReadFile("../../testdata/profiles/valid-minimal.yaml")
