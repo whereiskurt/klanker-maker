@@ -733,6 +733,10 @@ Plans:
 **Depends on:** Phase 30
 **Plans:** 0 plans
 
+**Also includes (from TODOs):**
+- Audit-log sidecar silently drops non-JSON lines — persist raw output for forensic completeness
+- Transparent HTTPS proxying doesn't work — only explicit proxy via env vars; DNAT sends raw TLS bytes
+
 Plans:
 - [ ] TBD (run /gsd:plan-phase 31 to break down)
 
