@@ -4,7 +4,7 @@ milestone: v1.0
 milestone_name: milestone
 status: planning
 stopped_at: "Completed 32-03: Gap closure -- TestRsyncSaveCmd and live verification"
-last_updated: "2026-03-29T18:24:07.397Z"
+last_updated: "2026-03-29T18:26:59.097Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 33
