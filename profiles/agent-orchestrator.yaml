@@ -34,7 +34,8 @@ spec:
       - ".agent-orchestrator"
     initCommands:
       - "yum install -y git nodejs npm tmux jq"
-      - "yum install -y 'dnf-command(config-manager)' && dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo && dnf install -y gh"
+      - "yum install -y dnf-plugins-core"
+      - "dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo && dnf install -y gh"
       - "npm install -g @composio/ao"
       - "echo \"$GITHUB_TOKEN\" | gh auth login --with-token"
       - "mkdir -p /workspace ~/.agent-orchestrator ~/.worktrees && chown -R sandbox:sandbox /workspace ~/.agent-orchestrator ~/.worktrees"

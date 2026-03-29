@@ -39,8 +39,9 @@ spec:
       - ".config/goose"
     initCommands:
       - "yum install -y git bzip2 jq"
-      - "curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash"
-      - "echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> /home/sandbox/.bashrc"
+      - "HOME=/root curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | HOME=/root CONFIGURE=false bash"
+      - "cp -r /root/.local/bin/goose /usr/local/bin/goose || true"
+      - "mkdir -p /home/sandbox/.local/bin && cp /usr/local/bin/goose /home/sandbox/.local/bin/goose || true"
       - "mkdir -p /home/sandbox/.config/goose"
       - "printf 'provider: amazon_bedrock\\nmodel: anthropic.claude-sonnet-4-5\\n' > /home/sandbox/.config/goose/config.yaml"
       - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace /home/sandbox/.config /home/sandbox/.local"
