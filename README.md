@@ -1,9 +1,11 @@
 # Klanker Maker (km)
-**Define a sandbox policy. Set a budget. Let your klankers run.**
+**Hard spending limits for AI agents on AWS — outside the runtime, at cloud scale.**
 
-Klanker Maker is an open-source platform that turns declarative YAML profiles into budget-capped, policy-locked AWS sandboxes. Every sandbox gets its own Security Group boundary, IAM role, network allowlists, and a dollar ceiling - when the budget runs out, the sandbox stops. No surprises on your AWS bill.
+AWS makes it surprisingly difficult to set hard budget limits. CloudWatch billing alarms are delayed by hours. AWS Budgets can send notifications but can't stop a running workload. There's no native way to say "this IAM role can spend $5 on Bedrock and then stop." For human operators that's annoying. For autonomous AI agents that make their own API calls, loop on failures, and spawn sub-agents — it's a real problem.
 
-The idea is simple: you shouldn't have to choose between giving AI agents real infrastructure access and keeping your AWS account safe. Define what an agent is allowed to do, how much it can spend, and walk away.
+Klanker Maker is an open-source platform that puts enforceable spending limits between your AI agents and your AWS bill. It turns declarative YAML profiles into budget-capped, policy-locked AWS sandboxes — each with its own Security Group boundary, IAM role, network allowlists, and a dollar ceiling that actually stops the workload when the money runs out. The enforcement lives in the infrastructure (proxy layer + IAM revocation), not in the agent runtime, so no agent can spend past its budget regardless of how it's built or what SDK it uses.
+
+Define what an agent is allowed to do. Set how much it can spend on compute and AI tokens. Walk away.
 
 
 <p align="center">
