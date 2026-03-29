@@ -21,6 +21,7 @@ func NewOtelCmd(cfg *config.Config) *cobra.Command {
 	var showPrompts bool
 	var showEvents bool
 	var showTimeline bool
+	var showTools bool
 
 	cmd := &cobra.Command{
 		Use:   "otel <sandbox-id>",
@@ -37,6 +38,7 @@ func NewOtelCmd(cfg *config.Config) *cobra.Command {
 				prompts:  showPrompts,
 				events:   showEvents,
 				timeline: showTimeline,
+				tools:    showTools,
 			}
 			return runOtel(ctx, cfg, sandboxID, opts, cmd.OutOrStdout())
 		},
@@ -44,6 +46,7 @@ func NewOtelCmd(cfg *config.Config) *cobra.Command {
 	cmd.Flags().BoolVar(&showPrompts, "prompts", false, "Show user prompts from OTEL logs")
 	cmd.Flags().BoolVar(&showEvents, "events", false, "Show all OTEL log events (prompts, tool calls, API requests)")
 	cmd.Flags().BoolVar(&showTimeline, "timeline", false, "Show conversation timeline with prompts, responses, and cost")
+	cmd.Flags().BoolVar(&showTools, "tools", false, "Show tool calls with parameters and results")
 	return cmd
 }
 
@@ -51,6 +54,7 @@ type otelOpts struct {
 	prompts  bool
 	events   bool
 	timeline bool
+	tools    bool
 }
 
 func runOtel(ctx context.Context, cfg *config.Config, sandboxID string, opts otelOpts, w io.Writer) error {
@@ -76,6 +80,9 @@ func runOtel(ctx context.Context, cfg *config.Config, sandboxID string, opts ote
 	}
 	if opts.timeline {
 		return runOtelTimeline(ctx, s3Client, bucket, sandboxID, w)
+	}
+	if opts.tools {
+		return runOtelTools(ctx, s3Client, bucket, sandboxID, w)
 	}
 
 	// Default: summary view.
@@ -249,6 +256,120 @@ func runOtelEvents(ctx context.Context, s3Client *s3.Client, bucket, sandboxID s
 	}
 	fmt.Fprintf(w, "\n  Total: %d events\n\n", len(events))
 	return nil
+}
+
+// ─── Tools view (--tools) ──────────────────────────────────────────────────
+
+func runOtelTools(ctx context.Context, s3Client *s3.Client, bucket, sandboxID string, w io.Writer) error {
+	fmt.Fprintf(w, "\nkm otel --tools — %s\n", sandboxID)
+	fmt.Fprintf(w, "────────────────────────────────────────────────────────────\n\n")
+
+	events, err := fetchAllLogEvents(ctx, s3Client, bucket, sandboxID)
+	if err != nil {
+		return fmt.Errorf("fetch logs: %w", err)
+	}
+
+	// Pair tool_decision + tool_result by sequence proximity.
+	// tool_result has the richest data (tool_name, tool_input, duration, success).
+	toolResults := filterEvents(events, "tool_result")
+	if len(toolResults) == 0 {
+		fmt.Fprintf(w, "  (no tool calls found)\n\n")
+		return nil
+	}
+
+	// Group by session for context.
+	var currentSession string
+	for i, e := range toolResults {
+		sessionID := shortID(e.Attrs["session.id"])
+		if sessionID != currentSession {
+			if i > 0 {
+				fmt.Fprintf(w, "\n")
+			}
+			currentSession = sessionID
+			fmt.Fprintf(w, "── session:%s ──\n", sessionID)
+		}
+
+		ts := formatEventTime(e.Timestamp)
+		toolName := e.Attrs["tool_name"]
+		duration := e.Attrs["duration_ms"]
+		success := e.Attrs["success"]
+		resultSize := e.Attrs["tool_result_size_bytes"]
+		toolInput := e.Attrs["tool_input"]
+
+		// Parse tool_input JSON to show key parameters.
+		inputSummary := summarizeToolInput(toolName, toolInput)
+
+		statusIcon := "✓"
+		if success != "true" {
+			statusIcon = "✗"
+		}
+
+		fmt.Fprintf(w, "  [%s] %s %-8s %sms  %s bytes  %s\n",
+			ts, statusIcon, toolName, duration, resultSize, inputSummary)
+	}
+
+	fmt.Fprintf(w, "\n  Total: %d tool calls\n\n", len(toolResults))
+	return nil
+}
+
+// summarizeToolInput extracts the most relevant parameter from tool input JSON.
+func summarizeToolInput(toolName, inputJSON string) string {
+	if inputJSON == "" {
+		return ""
+	}
+	var input map[string]interface{}
+	if json.Unmarshal([]byte(inputJSON), &input) != nil {
+		return ""
+	}
+
+	switch toolName {
+	case "Read":
+		if p, ok := input["file_path"].(string); ok {
+			return p
+		}
+	case "Write":
+		if p, ok := input["file_path"].(string); ok {
+			return p
+		}
+	case "Edit":
+		if p, ok := input["file_path"].(string); ok {
+			return p
+		}
+	case "Bash":
+		if cmd, ok := input["command"].(string); ok {
+			if len(cmd) > 80 {
+				cmd = cmd[:80] + "..."
+			}
+			return cmd
+		}
+	case "Glob":
+		if p, ok := input["pattern"].(string); ok {
+			return p
+		}
+	case "Grep":
+		if p, ok := input["pattern"].(string); ok {
+			path := ""
+			if pp, ok := input["path"].(string); ok {
+				path = " in " + pp
+			}
+			return p + path
+		}
+	case "Agent":
+		if d, ok := input["description"].(string); ok {
+			return d
+		}
+	}
+
+	// Fallback: show first string value, truncated.
+	for _, v := range input {
+		if s, ok := v.(string); ok && len(s) > 0 {
+			if len(s) > 60 {
+				s = s[:60] + "..."
+			}
+			return s
+		}
+	}
+	return ""
 }
 
 // ─── Timeline view (--timeline) ────────────────────────────────────────────
