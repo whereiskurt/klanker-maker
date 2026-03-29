@@ -162,28 +162,26 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 		// Pad status to fixed width BEFORE adding color codes
 		paddedStatus := fmt.Sprintf("%-10s", r.Status)
 		colorStatus := colorizeRaw(r.Status, false, paddedStatus)
-		// Bold white alias + lock icon when locked
-		displayAlias := alias
+		lock := ""
 		if r.Locked {
-			paddedAlias := fmt.Sprintf("%-10s", alias+" 🔒")
-			displayAlias = ansiBoldWhite + paddedAlias + ansiReset
+			lock = " 🔒"
 		}
+		bw := func(s string) string {
+			if r.Locked {
+				return ansiBoldWhite + s + ansiReset
+			}
+			return s
+		}
+		num := bw(fmt.Sprintf("%-3d", i+1))
 		if wide {
-			if r.Locked {
-				fmt.Fprintf(out, "%-3d %-*s  %s %-12s %-10s %-12s %s %s\n",
-					i+1, idWidth, r.SandboxID, displayAlias, r.Profile, r.Substrate, r.Region, colorStatus, ttl)
-			} else {
-				fmt.Fprintf(out, "%-3d %-*s  %-10s %-12s %-10s %-12s %s %s\n",
-					i+1, idWidth, r.SandboxID, displayAlias, r.Profile, r.Substrate, r.Region, colorStatus, ttl)
-			}
+			fmt.Fprintf(out, "%s %s  %s %s %s %s %s %s%s\n",
+				num, bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)), bw(fmt.Sprintf("%-10s", alias)),
+				bw(fmt.Sprintf("%-12s", r.Profile)), bw(fmt.Sprintf("%-10s", r.Substrate)),
+				bw(fmt.Sprintf("%-12s", r.Region)), colorStatus, bw(ttl), lock)
 		} else {
-			if r.Locked {
-				fmt.Fprintf(out, "%-3d %-*s  %s %s %s\n",
-					i+1, idWidth, r.SandboxID, displayAlias, colorStatus, ttl)
-			} else {
-				fmt.Fprintf(out, "%-3d %-*s  %-10s %s %s\n",
-					i+1, idWidth, r.SandboxID, displayAlias, colorStatus, ttl)
-			}
+			fmt.Fprintf(out, "%s %s  %s %s %s%s\n",
+				num, bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)), bw(fmt.Sprintf("%-10s", alias)),
+				colorStatus, bw(ttl), lock)
 		}
 	}
 	return nil
