@@ -20,4 +20,6 @@ type SandboxMetadata struct {
 	MaxLifetime string     `json:"max_lifetime,omitempty"` // e.g. "72h", from profile lifecycle.maxLifetime; empty = no cap
 	CreatedBy   string     `json:"created_by,omitempty"`   // creation method: "cli", "email", "api", "remote"
 	Alias       string     `json:"alias,omitempty"`        // human-friendly alias (e.g. "orc", "wrkr-1")
+	Locked      bool       `json:"locked,omitempty"`       // true when sandbox is locked by km lock
+	LockedAt    *time.Time `json:"locked_at,omitempty"`    // when the sandbox was locked
 }

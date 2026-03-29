@@ -1,0 +1,15 @@
+Pause a running sandbox's EC2 instance (hibernate, preserving RAM state).
+If the instance was not launched with hibernation enabled, falls back to a normal stop.
+The sandbox can be resumed later. Note: km pause does NOT affect TTL — if TTL
+is near expiry, also run 'km extend'.
+
+Usage:
+  km pause <sandbox-id | #number>
+
+Examples:
+  km pause #1               Pause sandbox #1
+  km pause sb-abc123        Pause by full ID
+  km pause #1 --remote      Dispatch pause via Lambda
+
+Flags:
+  --remote  Dispatch to Lambda via EventBridge (no local AWS creds needed)
