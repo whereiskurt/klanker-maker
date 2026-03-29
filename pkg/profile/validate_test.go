@@ -231,3 +231,116 @@ func TestValidateSchemaRejectsInvalidSubstrate(t *testing.T) {
 		t.Errorf("expected error referencing substrate enum, errors were: %v", errs)
 	}
 }
+
+// minimalProfileWithPrefix returns a full valid profile YAML with the given prefix injected.
+// If prefix is empty string, it is omitted from the YAML.
+func minimalProfileWithPrefix(prefix string) []byte {
+	prefixLine := ""
+	if prefix != "" {
+		prefixLine = "\n  prefix: " + prefix
+	}
+	return []byte(`apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: test-prefix` + prefixLine + `
+spec:
+  lifecycle:
+    ttl: "24h"
+    idleTimeout: "1h"
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+      allowedHosts: []
+      allowedMethods:
+        - GET
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/network
+  policy:
+    allowShellEscape: false
+  agent:
+    maxConcurrentTasks: 4
+    taskTimeout: "30m"
+`)
+}
+
+func TestValidateSchema_MetadataPrefix(t *testing.T) {
+	tests := []struct {
+		name        string
+		prefix      string
+		wantValid   bool
+		wantErrHint string
+	}{
+		{"valid claude", "claude", true, ""},
+		{"valid build", "build", true, ""},
+		{"valid single char", "a", true, ""},
+		{"valid max length 12", "abcdefghijkl", true, ""},
+		{"valid no prefix omitted", "", true, ""},
+		{"invalid starts with digit", "0bad", false, "prefix"},
+		{"invalid too long 14 chars", "toolongprefix0", false, "prefix"},
+		{"invalid uppercase", "Bad", false, "prefix"},
+		{"invalid has dash", "has-dash", false, "prefix"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			data := minimalProfileWithPrefix(tc.prefix)
+			errs := profile.ValidateSchema(data)
+			if tc.wantValid {
+				if len(errs) != 0 {
+					t.Errorf("expected valid, got %d errors: %v", len(errs), errs)
+				}
+			} else {
+				if len(errs) == 0 {
+					t.Errorf("expected validation error for prefix %q, got none", tc.prefix)
+					return
+				}
+				found := false
+				for _, e := range errs {
+					msg := e.Error()
+					if strings.Contains(msg, "prefix") || strings.Contains(msg, "pattern") || strings.Contains(msg, "metadata") {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected error mentioning prefix or pattern, got: %v", errs)
+				}
+			}
+		})
+	}
+}
