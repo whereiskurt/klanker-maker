@@ -134,6 +134,10 @@ Deferred to future release. Tracked but not in current roadmap.
 - **PREFIX-03**: All sandbox ID validation/matching patterns accept any valid prefix, not just `sb-`
 - **PREFIX-04**: Compiler, CLI, and Lambda code use sandbox ID as-is — no component hardcodes the `sb-` prefix
 - **PREFIX-05**: Backwards compatible — profiles without `metadata.prefix` default to `sb`
+- **ALIAS-01**: `km create --alias <name>` stores alias in S3 metadata.json; all commands resolve alias to sandbox ID via S3 scan
+- **ALIAS-02**: Profile-level `metadata.alias` template auto-generates `{alias}-1`, `{alias}-2` etc. by scanning active sandboxes
+- **ALIAS-03**: `--alias` flag overrides profile-level template; alias freed on destroy for reuse
+- **ALIAS-04**: `km list` displays alias column; `ResolveSandboxRef` resolves aliases (future: DynamoDB index for O(1) lookup)
 
 ### Advanced Policy
 

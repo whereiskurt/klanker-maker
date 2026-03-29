@@ -44,6 +44,8 @@ created: 2026-03-28
 | 29-02-02 | 02 | 2 | PREFIX-03 | unit | `go test ./cmd/email-create-handler/ -run TestExtractSandboxID` | yes | pending |
 | 29-02-03 | 02 | 2 | PREFIX-04 | unit | `go test ./pkg/compiler/ -run TestCompile` | yes | pending |
 | 29-02-04 | 02 | 2 | PREFIX-05 | unit | `go test ./pkg/profile/ -run TestBuiltin` | yes | pending |
+| 29-03-01 | 03 | 2 | ALIAS-01, ALIAS-02 | unit | `go test ./pkg/aws/... -run TestAlias\|TestResolveAlias\|TestNextAlias` | W0 | pending |
+| 29-03-02 | 03 | 2 | ALIAS-03, ALIAS-04 | unit | `go test ./internal/app/cmd/... -run TestCreate\|TestResolve\|TestList` | yes | pending |
 
 *Status: pending / green / red / flaky*
 
@@ -53,6 +55,7 @@ created: 2026-03-28
 
 - **29-01-01:** New test cases added to existing `pkg/profile/validate_test.go` (file exists, cases are new)
 - **29-02-01:** `internal/app/cmd/sandbox_ref_test.go` does NOT exist and must be created as part of Plan 02 Task 1 execution
+- **29-03-01:** New test cases for `ResolveSandboxAlias` and `NextAliasFromTemplate` added to `pkg/aws/sandbox_test.go`
 
 *If none: "Existing infrastructure covers all phase requirements."*
 
