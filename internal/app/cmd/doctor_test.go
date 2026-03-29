@@ -50,6 +50,10 @@ func (m *mockS3HeadBucketClient) HeadBucket(ctx context.Context, params *s3.Head
 	return &s3.HeadBucketOutput{}, m.err
 }
 
+func (m *mockS3HeadBucketClient) HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+	return &s3.HeadObjectOutput{}, m.err
+}
+
 // --- Mock DynamoDB ---
 
 type mockDynamoClient struct {
@@ -514,6 +518,7 @@ func (c *testConfig) GetStateBucket() string          { return "" }
 func (c *testConfig) GetBudgetTableName() string      { return "" }
 func (c *testConfig) GetIdentityTableName() string    { return "" }
 func (c *testConfig) GetAWSProfile() string           { return "" }
+func (c *testConfig) GetArtifactsBucket() string      { return "" }
 
 // =============================================================================
 // Tests: DoctorCmd (Task 2)
@@ -685,6 +690,7 @@ func (c *testDoctorConfig) GetStateBucket() string          { return "" }
 func (c *testDoctorConfig) GetBudgetTableName() string      { return "" }
 func (c *testDoctorConfig) GetIdentityTableName() string    { return "" }
 func (c *testDoctorConfig) GetAWSProfile() string           { return c.awsProfile }
+func (c *testDoctorConfig) GetArtifactsBucket() string      { return "" }
 
 func allOKDeps() *DoctorDeps {
 	return &DoctorDeps{

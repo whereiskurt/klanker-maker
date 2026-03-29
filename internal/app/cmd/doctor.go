@@ -66,9 +66,10 @@ type STSCallerAPI interface {
 	GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
 }
 
-// S3HeadBucketAPI covers S3 HeadBucket.
+// S3HeadBucketAPI covers S3 HeadBucket and HeadObject.
 type S3HeadBucketAPI interface {
 	HeadBucket(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
+	HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
 }
 
 // DynamoDescribeAPI covers DynamoDB DescribeTable.
@@ -120,6 +121,7 @@ type DoctorConfigProvider interface {
 	GetBudgetTableName() string
 	GetIdentityTableName() string
 	GetAWSProfile() string
+	GetArtifactsBucket() string
 }
 
 // appConfigAdapter wraps *config.Config to satisfy DoctorConfigProvider.
@@ -137,6 +139,7 @@ func (a *appConfigAdapter) GetStateBucket() string          { return a.cfg.State
 func (a *appConfigAdapter) GetBudgetTableName() string      { return a.cfg.BudgetTableName }
 func (a *appConfigAdapter) GetIdentityTableName() string    { return a.cfg.IdentityTableName }
 func (a *appConfigAdapter) GetAWSProfile() string           { return a.cfg.AWSProfile }
+func (a *appConfigAdapter) GetArtifactsBucket() string      { return a.cfg.ArtifactsBucket }
 
 // DoctorDeps holds all injected AWS clients for doctor checks.
 // Nil fields cause their corresponding checks to be skipped.
@@ -600,6 +603,92 @@ func checkSESIdentity(ctx context.Context, client SESGetEmailIdentityAPI, domain
 	}
 }
 
+// checkSidecarArtifacts verifies that required sidecar binaries and configs exist in the
+// artifacts S3 bucket. Returns CheckWarn if any are missing - sandboxes will fail to boot.
+func checkSidecarArtifacts(ctx context.Context, client S3HeadBucketAPI, bucket string) CheckResult {
+	name := "Sidecar Artifacts"
+	if client == nil || bucket == "" {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "artifacts bucket not configured",
+		}
+	}
+
+	required := []string{
+		"sidecars/dns-proxy",
+		"sidecars/http-proxy",
+		"sidecars/audit-log",
+		"sidecars/otelcol-contrib",
+		"sidecars/tracing/config.yaml",
+		"sidecars/km-proxy-ca.crt",
+	}
+
+	var missing []string
+	for _, key := range required {
+		_, err := client.HeadObject(ctx, &s3.HeadObjectInput{
+			Bucket: awssdk.String(bucket),
+			Key:    awssdk.String(key),
+		})
+		if err != nil {
+			missing = append(missing, key)
+		}
+	}
+
+	if len(missing) > 0 {
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("%d of %d missing: %s", len(missing), len(required), strings.Join(missing, ", ")),
+			Remediation: "Run 'km init' to build and upload sidecars, or 'make sidecars' for manual upload",
+		}
+	}
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("all %d sidecar artifacts present in s3://%s/sidecars/", len(required), bucket),
+	}
+}
+
+// checkSafePhrase verifies the email-to-create safe phrase exists in SSM Parameter Store.
+// Returns CheckWarn if missing - email-to-create won't work without it.
+func checkSafePhrase(ctx context.Context, client SSMReadAPI) CheckResult {
+	name := "Safe Phrase (Email-to-Create)"
+	if client == nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "SSM client not available",
+		}
+	}
+
+	param := "/km/config/remote-create/safe-phrase"
+	_, err := client.GetParameter(ctx, &ssm.GetParameterInput{
+		Name: awssdk.String(param),
+	})
+	if err != nil {
+		var notFound *ssmtypes.ParameterNotFound
+		if errors.As(err, &notFound) {
+			return CheckResult{
+				Name:        name,
+				Status:      CheckWarn,
+				Message:     "safe phrase not configured in SSM",
+				Remediation: "Add 'safe_phrase' to km-config.yaml and run 'km init' to write it to SSM",
+			}
+		}
+		return CheckResult{
+			Name:    name,
+			Status:  CheckWarn,
+			Message: fmt.Sprintf("could not read %s: %v", param, err),
+		}
+	}
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: "safe phrase configured in SSM",
+	}
+}
+
 // =============================================================================
 // Parallel execution helper
 // =============================================================================
@@ -985,6 +1074,17 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	lister := deps.Lister
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		return checkSandboxSummary(ctx, lister)
+	})
+
+	// Sidecar artifacts check.
+	artifactsBucket := cfg.GetArtifactsBucket()
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkSidecarArtifacts(ctx, s3Client, artifactsBucket)
+	})
+
+	// Safe phrase check.
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkSafePhrase(ctx, ssmClient)
 	})
 
 	return checks
