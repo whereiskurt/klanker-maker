@@ -595,19 +595,21 @@ Plans:
 - [ ] 23-02-PLAN.md — km roll creds Cobra command with --sandbox, --platform, --force-restart flags (CRED-01, CRED-02, CRED-03, CRED-05)
 - [ ] 23-03-PLAN.md — km doctor credential rotation age check (CRED-06)
 
-### Phase 24: Documentation Refresh (Phases 18-29)
+### Phase 24: Documentation Refresh (Phases 18-32)
 
-**Goal:** Update operator guide, user manual, README, and inline docs to cover all features through Phase 29
+**Goal:** Update operator guide, user manual, README, and inline docs to cover all features through Phase 32
 
 **Scope:**
 1. README roadmap table — update statuses
 2. Operator guide — remote create, email triggers, credential rotation procedures, OTEL observability, MITM proxy filtering
-3. User manual — `km stop`, `km extend --remote`, `km destroy --remote`, `km roll creds`, configurable sandbox ID prefix
-4. Security model — credential rotation lifecycle, email auth flow, GitHub repo-level MITM enforcement
-5. Profile reference — new fields from Phases 22-29 (telemetry, MITM filtering, metadata.prefix)
-6. Observability guide — Claude Code OTEL integration, telemetry pipeline, S3 storage
+3. User manual — `km stop`, `km extend --remote`, `km destroy --remote`, `km roll creds`, configurable sandbox ID prefix, `km pause`, `km lock`, `km unlock`, `km list --wide`
+4. Security model — credential rotation lifecycle, email auth flow, GitHub repo-level MITM enforcement, sandbox lock safety mechanism
+5. Profile reference — new fields from Phases 22-32 (telemetry, MITM filtering, metadata.prefix, rsyncPaths, rsyncFileDetails)
+6. Observability guide — Claude Code OTEL integration, telemetry pipeline, S3 storage, learning-mode proxy traffic recording
+7. Lifecycle guide — `km pause` (EC2 hibernate), `km lock`/`km unlock` (safety lock), lock guards on destroy/stop/pause
+8. Rsync guide — profile-scoped rsync paths, external file lists, shell wildcard support
 
-**Depends on:** Phase 29
+**Depends on:** Phase 32
 
 ### Phase 25: GitHub Source Access Restrictions — deep testing of repo allowlists, clone/push enforcement, and deny-by-default for unlisted repos
 
