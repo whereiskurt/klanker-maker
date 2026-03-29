@@ -174,10 +174,15 @@ func Load() (*Config, error) {
 	v2 := viper.New()
 	v2.SetConfigName("km-config")
 	v2.SetConfigType("yaml")
-	v2.AddConfigPath(".")
-	// Also search KM_REPO_ROOT (used in Lambda where CWD != repo root)
-	if repoRoot := os.Getenv("KM_REPO_ROOT"); repoRoot != "" {
-		v2.AddConfigPath(repoRoot)
+	// Explicit config path override (used by Lambda cold start)
+	if configPath := os.Getenv("KM_CONFIG_PATH"); configPath != "" {
+		v2.SetConfigFile(configPath)
+	} else {
+		v2.AddConfigPath(".")
+		// Also search KM_REPO_ROOT (used in Lambda where CWD != repo root)
+		if repoRoot := os.Getenv("KM_REPO_ROOT"); repoRoot != "" {
+			v2.AddConfigPath(repoRoot)
+		}
 	}
 	if err := v2.ReadInConfig(); err == nil {
 		// Merge platform keys from v2 into v only when not already overridden by env.

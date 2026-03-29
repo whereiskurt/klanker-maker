@@ -771,6 +771,15 @@ func uploadCreateHandlerToolchain(repoRoot, bucket string) error {
 	s3Upload(tarPath, bucket, "toolchain/infra.tar.gz")
 	fmt.Printf("  Uploaded toolchain/infra.tar.gz\n")
 
+	// 5. Upload km-config.yaml for Lambda cold start
+	kmConfigPath := filepath.Join(repoRoot, "km-config.yaml")
+	if _, err := os.Stat(kmConfigPath); err == nil {
+		s3Upload(kmConfigPath, bucket, "toolchain/km-config.yaml")
+		fmt.Printf("  Uploaded toolchain/km-config.yaml\n")
+	} else {
+		fmt.Printf("  Warning: km-config.yaml not found at %s, skipping toolchain config upload\n", kmConfigPath)
+	}
+
 	return nil
 }
 
