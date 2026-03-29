@@ -66,6 +66,7 @@ spec:
         - ".anthropic.com"
         - ".claude.ai"
         - ".claude.com"
+        - ".googleapis.com"
         - ".npmjs.org"
         - ".npmjs.com"
         - ".nodejs.org"
