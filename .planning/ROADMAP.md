@@ -720,7 +720,7 @@ Plans:
 **Goal:** Working km pause, km lock, and km unlock commands with lock enforcement guards
 **Requirements**: [PAUSE-01, PAUSE-02, PAUSE-03, LOCK-01, LOCK-02, LOCK-03, UNLOCK-01, UNLOCK-02]
 **Depends on:** Phase 29
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 30-01-PLAN.md — km pause command + SandboxMetadata lock fields

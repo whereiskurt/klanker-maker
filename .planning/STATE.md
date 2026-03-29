@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 30-01-PLAN.md
-last_updated: "2026-03-29T04:38:14.697Z"
+stopped_at: Completed 30-02-PLAN.md
+last_updated: "2026-03-29T04:46:33.244Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 31
-  completed_phases: 28
+  completed_phases: 29
   total_plans: 96
-  completed_plans: 96
+  completed_plans: 97
   percent: 0
 ---
 
@@ -144,6 +144,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 29-configurable-sandbox-id-prefix P02 | 325s | 2 tasks | 6 files |
 | Phase 29-configurable-sandbox-id-prefix P03 | 25min | 2 tasks | 10 files |
 | Phase 30-sandbox-lifecycle-commands-km-pause-km-lock-km-unlock P01 | 8min | 1 tasks | 5 files |
+| Phase 30-sandbox-lifecycle-commands-km-pause-km-lock-km-unlock P02 | 372s | 3 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -385,6 +386,8 @@ Recent decisions affecting current work:
 - [Phase 29-configurable-sandbox-id-prefix]: NextAliasFromTemplate uses max+1 (not gap-filling) to prevent alias reuse of destroyed sandboxes
 - [Phase 30-sandbox-lifecycle-commands-km-pause-km-lock-km-unlock]: Hibernate=true passed to StopInstances; EC2 falls back to normal stop if not configured for hibernation
 - [Phase 30-sandbox-lifecycle-commands-km-pause-km-lock-km-unlock]: SandboxMetadata gains Locked/LockedAt as omitempty fields for backward JSON compat
+- [Phase 30-sandbox-lifecycle-commands-km-pause-km-lock-km-unlock]: CheckSandboxLock fail-open: returns nil if StateBucket empty, AWS config fails, or metadata missing
+- [Phase 30-sandbox-lifecycle-commands-km-pause-km-lock-km-unlock]: runStop signature changed to accept cfg for lock guard consistency with pause/extend
 
 ### Roadmap Evolution
 
@@ -432,6 +435,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-29T04:38:14.693Z
-Stopped at: Completed 30-01-PLAN.md
+Last session: 2026-03-29T04:46:33.241Z
+Stopped at: Completed 30-02-PLAN.md
 Resume file: None
