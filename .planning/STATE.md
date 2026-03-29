@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: "Checkpoint at 32-03 Task 2: awaiting human verification of wildcard expansion and fallback on live sandboxes"
-last_updated: "2026-03-29T18:15:46.169Z"
+stopped_at: "Completed 32-03: Gap closure -- TestRsyncSaveCmd and live verification"
+last_updated: "2026-03-29T18:24:07.397Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
-  total_phases: 32
-  completed_phases: 29
+  total_phases: 33
+  completed_phases: 30
   total_plans: 99
-  completed_plans: 99
+  completed_plans: 100
   percent: 0
 ---
 
@@ -147,6 +147,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 30-sandbox-lifecycle-commands-km-pause-km-lock-km-unlock P02 | 372s | 3 tasks | 13 files |
 | Phase 32-profile-scoped-rsync-paths-with-external-file-lists-and-shell-wildcards P01 | 87s | 1 tasks | 4 files |
 | Phase 32 P02 | 289s | 2 tasks | 2 files |
+| Phase 32 P03 | 618s | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -393,6 +394,7 @@ Recent decisions affecting current work:
 - [Phase 32]: RsyncPaths and RsyncFileList added as omitempty fields to ExecutionSpec; JSON schema uses items:string constraint for type safety
 - [Phase 32]: Unquoted paths in tar command for bash wildcard expansion after regex validation
 - [Phase 32]: Best-effort S3 profile fetch in rsync save gracefully degrades to global fallback
+- [Phase 32]: Extracted buildTarShellCmd as package-level helper for testability; paths space-joined for unquoted wildcard expansion
 
 ### Roadmap Evolution
 
@@ -443,6 +445,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-29T18:15:46.161Z
-Stopped at: Checkpoint at 32-03 Task 2: awaiting human verification of wildcard expansion and fallback on live sandboxes
+Last session: 2026-03-29T18:24:07.393Z
+Stopped at: Completed 32-03: Gap closure -- TestRsyncSaveCmd and live verification
 Resume file: None
