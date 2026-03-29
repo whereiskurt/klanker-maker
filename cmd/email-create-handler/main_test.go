@@ -429,23 +429,41 @@ func TestHandleUnrecognizedSubject_SendsHelp(t *testing.T) {
 	}
 }
 
-// Test: extractSandboxID finds IDs in various formats.
+// Test: extractSandboxID finds IDs in various formats and returns the full prefix-hex ID.
 func TestExtractSandboxID(t *testing.T) {
 	tests := []struct {
 		input string
 		want  string
 	}{
-		{"status sb-abc12345", "abc12345"},
-		{"status sb-ABC12345", "ABC12345"},
-		{"Status SB-deadbeef01", "deadbeef01"},
-		{"status 1234abcd", "1234abcd"},
-		{"status no-id-here", ""},
+		// Standard sb- prefix — must return full id including prefix
+		{"status sb-abc12345", "sb-abc12345"},
+		// Custom prefix — must return full id with custom prefix
+		{"status claude-abc12345", "claude-abc12345"},
+		{"status build-abc12345", "build-abc12345"},
+		// Single-char prefix
+		{"status a-abc12345", "a-abc12345"},
+		// No sandbox ID in subject
+		{"some text without an id", ""},
 		{"status", ""},
+		{"status no-id-here", ""},
 	}
 	for _, tt := range tests {
 		got := extractSandboxID(tt.input)
 		if got != tt.want {
 			t.Errorf("extractSandboxID(%q) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+// Test: no sb- prefix repair — extractSandboxID should return "claude-abc12345" not "sb-abc12345".
+func TestExtractSandboxID_NoPrefixRepair(t *testing.T) {
+	// If the old prefix-repair logic (sb- prepend) were still present,
+	// this would return "sb-abc12345" for "claude-abc12345" input.
+	got := extractSandboxID("status claude-abc12345")
+	if got == "sb-"+got[3:] || got == "sb-abc12345" {
+		t.Errorf("extractSandboxID applied invalid sb- prefix repair: got %q", got)
+	}
+	if got != "claude-abc12345" {
+		t.Errorf("extractSandboxID(%q) = %q, want %q", "status claude-abc12345", got, "claude-abc12345")
 	}
 }

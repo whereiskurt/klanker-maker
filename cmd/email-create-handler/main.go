@@ -108,8 +108,8 @@ type OperatorEmailHandler struct {
 	SafePhraseSSMKey  string
 }
 
-// sandboxIDPattern matches sandbox IDs like "sb-abc123de" or just hex strings.
-var sandboxIDPattern = regexp.MustCompile(`(?i)\b(?:sb-)?([0-9a-f]{8,16})\b`)
+// sandboxIDPattern matches sandbox IDs: {prefix}-{8hex} (e.g. sb-abc123de, claude-abc123de).
+var sandboxIDPattern = regexp.MustCompile(`(?i)\b([a-z][a-z0-9]{0,11}-[0-9a-f]{8})\b`)
 
 // Handle processes a single S3 event record containing an SES-delivered email.
 func (h *OperatorEmailHandler) Handle(ctx context.Context, event S3EventRecord) error {
@@ -239,13 +239,9 @@ func (h *OperatorEmailHandler) handleStatus(ctx context.Context, senderEmail, su
 	sandboxID := extractSandboxID(subject)
 	if sandboxID == "" {
 		return h.sendReply(ctx, senderEmail, "Status failed",
-			"No sandbox ID found in subject. Use: Subject: status sb-<id>\n")
+			"No sandbox ID found in subject. Use: Subject: status <sandbox-id>\n")
 	}
 
-	// Ensure sb- prefix
-	if !strings.HasPrefix(sandboxID, "sb-") {
-		sandboxID = "sb-" + sandboxID
-	}
 
 	// Read metadata from S3
 	bucket := h.StateBucket
@@ -310,7 +306,7 @@ func (h *OperatorEmailHandler) handleStatus(ctx context.Context, senderEmail, su
 func (h *OperatorEmailHandler) sendHelp(ctx context.Context, senderEmail string) error {
 	body := "Unrecognized command. Available commands (use as email Subject):\n\n" +
 		"  create    — Attach a YAML profile to create a new sandbox\n" +
-		"  status <sandbox-id>  — Get sandbox status (e.g. \"status sb-abc123de\")\n\n" +
+		"  status <sandbox-id>  — Get sandbox status (e.g. \"status sb-abc123de\" or \"status claude-abc123de\")\n\n" +
 		"All commands require KM-AUTH: <phrase> in the email body.\n"
 	return h.sendReply(ctx, senderEmail, "Operator Help", body)
 }
