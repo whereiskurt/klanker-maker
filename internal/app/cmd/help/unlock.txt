@@ -1,0 +1,14 @@
+Unlock a sandbox, allowing destroy, stop, and pause operations.
+Requires confirmation unless --yes is passed.
+
+Usage:
+  km unlock <sandbox-id | #number>
+
+Examples:
+  km unlock #1               Unlock sandbox #1
+  km unlock sb-abc123 --yes  Unlock without confirmation
+  km unlock #1 --remote      Dispatch unlock via Lambda
+
+Flags:
+  --yes     Skip confirmation prompt
+  --remote  Dispatch to Lambda via EventBridge (no local AWS creds needed)

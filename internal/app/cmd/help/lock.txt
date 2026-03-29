@@ -1,0 +1,14 @@
+Lock a sandbox to prevent accidental destruction or stoppage.
+While locked, km destroy, km stop, and km pause are blocked.
+Use 'km unlock' to restore normal operations.
+
+Usage:
+  km lock <sandbox-id | #number>
+
+Examples:
+  km lock #1               Lock sandbox #1
+  km lock sb-abc123        Lock by full ID
+  km lock #1 --remote      Dispatch lock via Lambda
+
+Flags:
+  --remote  Dispatch to Lambda via EventBridge (no local AWS creds needed)
