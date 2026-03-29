@@ -11,6 +11,9 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 - `km validate <profile.yaml>` — validate a SandboxProfile
 - `km create <profile.yaml>` — provision a sandbox
 - `km destroy <sandbox-id>` — teardown a sandbox
+- `km pause <sandbox-id>` — hibernate/pause an EC2 instance (preserves infra)
+- `km lock <sandbox-id>` — safety lock preventing destroy/stop/pause
+- `km unlock <sandbox-id>` — remove safety lock (requires confirmation)
 - `km otel <sandbox-id>` — OTEL telemetry + AI spend summary (--prompts, --events, --tools, --timeline)
 - `km info` — platform configuration, accounts, operator email, email-to-create
 

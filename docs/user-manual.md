@@ -10,6 +10,9 @@
   - [km validate](#km-validate)
   - [km create](#km-create)
   - [km destroy](#km-destroy)
+  - [km pause](#km-pause)
+  - [km lock](#km-lock)
+  - [km unlock](#km-unlock)
   - [km list](#km-list)
   - [km status](#km-status)
   - [km logs](#km-logs)
@@ -344,6 +347,118 @@ Destroying infrastructure...
 Cleaning up...
 
 Sandbox sb-7f3a9e12 destroyed.
+```
+
+---
+
+### km pause
+
+Pause (hibernate) a sandbox's EC2 instance, preserving RAM state and infrastructure.
+
+```
+km pause <sandbox-id | #number> [--remote]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--remote` | `false` | Dispatch to Lambda via EventBridge (no local AWS creds needed) |
+
+**What it does:**
+
+1. Validates sandbox ID
+2. Checks lock guard — blocked if sandbox is locked (`km lock` was applied)
+3. Calls `StopInstances` with `Hibernate: true` — EC2 will hibernate the instance if hibernation is enabled; falls back to a normal stop if not configured for hibernation
+4. Updates metadata status to `"paused"` in S3
+
+**Notes:**
+- Requires `cfg.StateBucket` to update metadata (unlike `km stop`)
+- Hibernation preserves the RAM state to EBS; the instance resumes exactly where it left off on restart
+- If the instance was not enabled for hibernation at launch, EC2 silently falls back to a normal stop
+
+**Example:**
+
+```bash
+km pause #1
+km pause sb-7f3a9e12
+km pause sb-7f3a9e12 --remote
+```
+
+---
+
+### km lock
+
+Lock a sandbox to prevent accidental destruction, stopping, or pausing.
+
+```
+km lock <sandbox-id | #number> [--remote]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--remote` | `false` | Dispatch to Lambda via EventBridge (no local AWS creds needed) |
+
+**What it does:**
+
+1. Validates sandbox ID
+2. Reads metadata from S3; if already locked, prints a notice and exits cleanly
+3. Sets `meta.Locked = true` and `meta.LockedAt` to the current time
+4. Writes updated metadata back to S3
+
+**Blocked operations while locked:**
+- `km destroy` — returns "is locked" error before any resource teardown
+- `km stop` — returns "is locked" error before EC2 API calls
+- `km pause` — returns "is locked" error before EC2 API calls
+
+**Example:**
+
+```bash
+km lock #1
+km lock sb-7f3a9e12
+```
+
+**Output:**
+
+```
+Sandbox sb-7f3a9e12 locked.
+```
+
+To remove the lock, use `km unlock`.
+
+---
+
+### km unlock
+
+Unlock a sandbox to re-enable destroy, stop, and pause operations.
+
+```
+km unlock <sandbox-id | #number> [--yes] [--remote]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--yes` | `false` | Skip confirmation prompt |
+| `--remote` | `false` | Dispatch to Lambda via EventBridge (no local AWS creds needed) |
+
+**What it does:**
+
+1. Validates sandbox ID
+2. Reads metadata from S3; if not locked, prints a notice and exits cleanly
+3. Without `--yes`: prompts `Unlock sandbox <id>? This will allow destroy/stop/pause. [y/N]`
+4. Sets `meta.Locked = false` and clears `meta.LockedAt`
+5. Writes updated metadata back to S3
+
+**Example:**
+
+```bash
+km unlock #1
+km unlock sb-7f3a9e12 --yes   # skip confirmation
+```
+
+**Output:**
+
+```
+Unlock sandbox sb-7f3a9e12? This will allow destroy/stop/pause. [y/N] y
+Sandbox sb-7f3a9e12 unlocked.
 ```
 
 ---

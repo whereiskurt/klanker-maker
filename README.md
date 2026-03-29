@@ -145,7 +145,10 @@ The `km` CLI selects the right AWS profile per command. Commands are grouped by 
 |---------|-------------|--------------|
 | `km budget add <sandbox>` | `klanker-terraform` | Top up compute or AI budget |
 | `km extend <sandbox> <dur>` | `klanker-terraform` | Add time before TTL expires |
+| `km pause <sandbox>` | `klanker-terraform` | Pause (hibernate) instance, preserve infrastructure |
 | `km stop <sandbox>` | `klanker-terraform` | Stop instance, preserve infrastructure |
+| `km lock <sandbox>` | `klanker-terraform` | Lock sandbox to prevent accidental destroy/stop/pause |
+| `km unlock <sandbox>` | `klanker-terraform` | Unlock sandbox, re-enable lifecycle commands |
 | `km destroy <sandbox>` | `klanker-terraform` | Teardown sandbox (`--remote` for Lambda-dispatched) |
 
 **Teardown (reverse of setup)**
