@@ -753,3 +753,13 @@ Plans:
 - [ ] 32-01-PLAN.md — Add rsyncPaths and rsyncFileList fields to profile schema and types
 - [ ] 32-02-PLAN.md — Wire profile-scoped paths into km rsync save with wildcard support
 - [ ] 32-03-PLAN.md — Gap closure: TestRsyncSaveCmd test + live sandbox verification
+
+### Phase 33: EC2 storage customization and AMI selection - profile-driven root volume sizing, optional additional EBS volumes with auto-mount, hibernation support for on-demand instances, and loose AMI specification resolved per-region
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 32
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 33 to break down)

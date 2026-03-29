@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: "Completed 32-02: Profile-scoped rsync paths wired into km rsync save"
-last_updated: "2026-03-29T15:35:14.744Z"
+stopped_at: "Checkpoint at 32-03 Task 2: awaiting human verification of wildcard expansion and fallback on live sandboxes"
+last_updated: "2026-03-29T18:15:46.169Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 32
-  completed_phases: 30
-  total_plans: 98
+  completed_phases: 29
+  total_plans: 99
   completed_plans: 99
   percent: 0
 ---
@@ -439,9 +439,10 @@ None yet.
 - Phase 30 added: Sandbox Lifecycle Commands — km pause (EC2 hibernate), km lock/km unlock (safety lock preventing destroy/stop/budget changes)
 - Phase 32 added: Profile-scoped rsync paths — move rsync path lists from global config into per-profile YAML with external file list references (e.g. `rsyncFileDetails: "cc-files.yaml"`) and shell wildcard support; remove global rsync_paths
 - Phase 31 added: Observable learning-mode sandbox — permissive MITM proxy records all DNS/HTTP/GitHub/Claude traffic, generates minimal allowlist profile from observed behavior
+- Phase 33 added: EC2 Storage & AMI Selection — profile-driven root volume sizing, optional additional EBS with auto-mount, hibernation for on-demand, loose AMI spec resolved per-region
 
 ## Session Continuity
 
-Last session: 2026-03-29T15:35:14.741Z
-Stopped at: Completed 32-02: Profile-scoped rsync paths wired into km rsync save
+Last session: 2026-03-29T18:15:46.161Z
+Stopped at: Checkpoint at 32-03 Task 2: awaiting human verification of wildcard expansion and fallback on live sandboxes
 Resume file: None
