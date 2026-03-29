@@ -421,3 +421,58 @@ func TestSpotRateECSNonZero(t *testing.T) {
 		t.Errorf("expected spot_rate = 0.0312 in ECS service.hcl, got:\n%s", out)
 	}
 }
+
+// ============================================================
+// GitHub repo filter env var injection tests (NETW-08)
+// ============================================================
+
+// TestECSServiceHCLGitHubAllowedRepos verifies that a profile with GitHub repos produces
+// a KM_GITHUB_ALLOWED_REPOS entry in the km-http-proxy container environment block.
+func TestECSServiceHCLGitHubAllowedRepos(t *testing.T) {
+	p := baseECSProfile()
+	p.Spec.SourceAccess = profile.SourceAccessSpec{
+		GitHub: &profile.GitHubAccess{
+			AllowedRepos: []string{"myorg/myrepo", "other/repo"},
+		},
+	}
+	out, err := generateECSServiceHCL(p, "test-sb", false, nil, baseECSNetwork())
+	if err != nil {
+		t.Fatalf("generateECSServiceHCL failed: %v", err)
+	}
+	if !strings.Contains(out, "KM_GITHUB_ALLOWED_REPOS") {
+		t.Fatal("expected KM_GITHUB_ALLOWED_REPOS in ECS service.hcl km-http-proxy environment")
+	}
+	if !strings.Contains(out, "myorg/myrepo,other/repo") {
+		t.Errorf("expected CSV value myorg/myrepo,other/repo in ECS service.hcl, got snippet:\n%s",
+			extractECSLines(out, "KM_GITHUB_ALLOWED_REPOS"))
+	}
+}
+
+// TestECSServiceHCLGitHubAllowedReposEmpty verifies that a profile without GitHub config
+// produces an empty KM_GITHUB_ALLOWED_REPOS value (backward compatible).
+func TestECSServiceHCLGitHubAllowedReposEmpty(t *testing.T) {
+	p := baseECSProfile()
+	// No GitHub config.
+	out, err := generateECSServiceHCL(p, "test-sb", false, nil, baseECSNetwork())
+	if err != nil {
+		t.Fatalf("generateECSServiceHCL failed: %v", err)
+	}
+	// The env var should be present but empty, or absent — must NOT contain a non-empty repo value.
+	if strings.Contains(out, "KM_GITHUB_ALLOWED_REPOS") && strings.Contains(out, "myorg") {
+		t.Error("expected no non-empty KM_GITHUB_ALLOWED_REPOS when GitHub config is absent")
+	}
+}
+
+// extractECSLines returns lines from s that contain substr (for error context).
+func extractECSLines(s, substr string) string {
+	var matched []string
+	for _, line := range strings.Split(s, "\n") {
+		if strings.Contains(line, substr) {
+			matched = append(matched, line)
+		}
+	}
+	if len(matched) == 0 {
+		return "(not found)"
+	}
+	return strings.Join(matched, "\n")
+}

@@ -625,3 +625,55 @@ func TestOTPMultipleSecrets(t *testing.T) {
 		t.Error("expected db-password path in user-data")
 	}
 }
+
+// ============================================================
+// GitHub repo filter env var injection tests (NETW-08)
+// ============================================================
+
+// TestUserDataGitHubAllowedRepos verifies that a profile with sourceAccess.github.allowedRepos
+// produces a systemd unit Environment line with KM_GITHUB_ALLOWED_REPOS set to the CSV list.
+func TestUserDataGitHubAllowedRepos(t *testing.T) {
+	p := baseProfile()
+	p.Spec.SourceAccess = profile.SourceAccessSpec{
+		GitHub: &profile.GitHubAccess{
+			AllowedRepos: []string{"myorg/myrepo", "other/repo"},
+		},
+	}
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "KM_GITHUB_ALLOWED_REPOS=myorg/myrepo,other/repo") {
+		t.Errorf("expected KM_GITHUB_ALLOWED_REPOS=myorg/myrepo,other/repo in user-data, got snippet:\n%s",
+			extractLines(out, "KM_GITHUB_ALLOWED_REPOS"))
+	}
+}
+
+// TestUserDataGitHubAllowedReposEmpty verifies that a profile with no sourceAccess.github
+// produces an empty KM_GITHUB_ALLOWED_REPOS (or omits it cleanly).
+func TestUserDataGitHubAllowedReposEmpty(t *testing.T) {
+	p := baseProfile()
+	// No GitHub config — KM_GITHUB_ALLOWED_REPOS should be empty or absent.
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	// Either the env var is absent or empty — it must NOT contain a non-empty value.
+	if strings.Contains(out, "KM_GITHUB_ALLOWED_REPOS=myorg") {
+		t.Error("expected no non-empty KM_GITHUB_ALLOWED_REPOS when GitHub config is absent")
+	}
+}
+
+// extractLines returns lines from s that contain substr (for error context in tests).
+func extractLines(s, substr string) string {
+	var matched []string
+	for _, line := range strings.Split(s, "\n") {
+		if strings.Contains(line, substr) {
+			matched = append(matched, line)
+		}
+	}
+	if len(matched) == 0 {
+		return "(not found)"
+	}
+	return strings.Join(matched, "\n")
+}
