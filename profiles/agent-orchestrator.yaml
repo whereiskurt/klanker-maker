@@ -46,7 +46,8 @@ spec:
       - ".claude.json"
       - ".codex"
     initCommands:
-      - "yum install -y git nodejs npm tmux jq tar gzip unzip"
+      - "yum install -y git tmux jq tar gzip unzip"
+      - "curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - && yum install -y nodejs"
       - "yum install -y dnf-plugins-core"
       - "dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo && dnf install -y gh"
       - "npm install -g @composio/ao @anthropic-ai/claude-code"
@@ -56,6 +57,7 @@ spec:
       - "echo \"$GITHUB_TOKEN\" | gh auth login --with-token"
       - "mkdir -p /workspace ~/.agent-orchestrator ~/.worktrees && chown -R sandbox:sandbox /workspace ~/.agent-orchestrator ~/.worktrees /home/sandbox/.codex"
       - "su - sandbox -c 'cd /workspace && git config --global user.name \"Agent Orchestrator Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
+      - "ao doctor --fix || true"
 
   sourceAccess:
     mode: allowlist
