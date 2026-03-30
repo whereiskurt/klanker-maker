@@ -26,25 +26,42 @@ spec:
     workingDir: /workspace
     env:
       SANDBOX_MODE: goose
+      # Goose config
       GOOSE_PROVIDER: amazon_bedrock
       # Use bare model ID without us. prefix — goose's amazon_bedrock provider may not support
       # cross-region inference profile IDs. Verify against goose provider docs before changing.
       GOOSE_MODEL: anthropic.claude-sonnet-4-5
       AWS_DEFAULT_REGION: us-east-1
       GOOSE_MODE: auto
-      # Rust binary needs explicit CA cert path for MITM proxy TLS interception
+      # Rust binaries (goose, codex) need explicit CA cert path for MITM proxy TLS
       SSL_CERT_FILE: /usr/local/share/ca-certificates/km-proxy-ca.crt
+      CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
+      # Claude Code via Bedrock
+      ANTHROPIC_BASE_URL: "https://bedrock-runtime.us-east-1.amazonaws.com"
+      ANTHROPIC_DEFAULT_SONNET_MODEL: us.anthropic.claude-sonnet-4-6
+      ANTHROPIC_DEFAULT_OPUS_MODEL: us.anthropic.claude-opus-4-6-v1
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: us.anthropic.claude-haiku-4-5-20251001-v1:0
+      CLAUDE_CODE_USE_BEDROCK: "1"
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+      # Codex — OPENAI_API_KEY must be injected via SSM at runtime
+      OPENAI_API_KEY: ""
     rsyncPaths:
       - ".gitconfig"
       - ".config/goose"
+      - ".claude"
+      - ".claude.json"
+      - ".codex"
     initCommands:
-      - "yum install -y git bzip2 jq"
+      - "yum install -y git nodejs npm bzip2 jq tar gzip unzip"
       - "HOME=/root curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | HOME=/root CONFIGURE=false bash"
       - "cp -r /root/.local/bin/goose /usr/local/bin/goose || true"
       - "mkdir -p /home/sandbox/.local/bin && cp /usr/local/bin/goose /home/sandbox/.local/bin/goose || true"
-      - "mkdir -p /home/sandbox/.config/goose"
+      - "npm install -g @anthropic-ai/claude-code"
+      - "curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.117.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz"
+      - "tar -xzf /tmp/codex.tar.gz -C /tmp && install -m 755 /tmp/codex-x86_64-unknown-linux-musl /usr/local/bin/codex"
+      - "mkdir -p /home/sandbox/.config/goose /home/sandbox/.codex"
       - "printf 'provider: amazon_bedrock\\nmodel: anthropic.claude-sonnet-4-5\\n' > /home/sandbox/.config/goose/config.yaml"
-      - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace /home/sandbox/.config /home/sandbox/.local"
+      - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace /home/sandbox/.config /home/sandbox/.local /home/sandbox/.codex"
       - "su - sandbox -c 'cd /workspace && git config --global user.name \"Goose Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
 
   sourceAccess:
@@ -68,10 +85,25 @@ spec:
       # Bedrock access is via .amazonaws.com suffix — no external AI API needed
       allowedDNSSuffixes:
         - ".amazonaws.com"
+        - ".anthropic.com"
+        - ".claude.ai"
+        - ".claude.com"
         - ".github.com"
         - ".githubusercontent.com"
+        - ".npmjs.org"
+        - ".npmjs.com"
+        - ".nodejs.org"
+        - ".openai.com"
       allowedHosts:
         - "github.com"
+        - "api.anthropic.com"
+        - "statsig.anthropic.com"
+        - "statsig.com"
+        - "api.statsig.com"
+        - "featuregates.org"
+        - "api.featuregates.org"
+        - "registry.npmjs.org"
+        - "api.openai.com"
       allowedMethods:
         - GET
         - POST
@@ -128,6 +160,11 @@ spec:
     allowedCommands:
       - git
       - goose
+      - claude
+      - codex
+      - node
+      - npm
+      - npx
       - bash
       - sh
       - jq

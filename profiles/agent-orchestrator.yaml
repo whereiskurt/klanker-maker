@@ -29,16 +29,32 @@ spec:
       # GITHUB_TOKEN is required for gh auth login — inject from SSM at provision time
       # Never hardcode a real token here
       GITHUB_TOKEN: ""
+      # Claude Code via Bedrock
+      ANTHROPIC_BASE_URL: "https://bedrock-runtime.us-east-1.amazonaws.com"
+      ANTHROPIC_DEFAULT_SONNET_MODEL: us.anthropic.claude-sonnet-4-6
+      ANTHROPIC_DEFAULT_OPUS_MODEL: us.anthropic.claude-opus-4-6-v1
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: us.anthropic.claude-haiku-4-5-20251001-v1:0
+      CLAUDE_CODE_USE_BEDROCK: "1"
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+      # Codex — OPENAI_API_KEY must be injected via SSM at runtime
+      OPENAI_API_KEY: ""
+      CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
     rsyncPaths:
       - ".gitconfig"
       - ".agent-orchestrator"
+      - ".claude"
+      - ".claude.json"
+      - ".codex"
     initCommands:
-      - "yum install -y git nodejs npm tmux jq"
+      - "yum install -y git nodejs npm tmux jq tar gzip unzip"
       - "yum install -y dnf-plugins-core"
       - "dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo && dnf install -y gh"
-      - "npm install -g @composio/ao"
+      - "npm install -g @composio/ao @anthropic-ai/claude-code"
+      - "curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.117.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz"
+      - "tar -xzf /tmp/codex.tar.gz -C /tmp && install -m 755 /tmp/codex-x86_64-unknown-linux-musl /usr/local/bin/codex"
+      - "mkdir -p /home/sandbox/.codex"
       - "echo \"$GITHUB_TOKEN\" | gh auth login --with-token"
-      - "mkdir -p /workspace ~/.agent-orchestrator ~/.worktrees && chown -R sandbox:sandbox /workspace ~/.agent-orchestrator ~/.worktrees"
+      - "mkdir -p /workspace ~/.agent-orchestrator ~/.worktrees && chown -R sandbox:sandbox /workspace ~/.agent-orchestrator ~/.worktrees /home/sandbox/.codex"
       - "su - sandbox -c 'cd /workspace && git config --global user.name \"Agent Orchestrator Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
 
   sourceAccess:
@@ -61,15 +77,26 @@ spec:
       # GitHub hosts are implicitly allowed via sourceAccess.github.allowedRepos
       allowedDNSSuffixes:
         - ".amazonaws.com"
+        - ".anthropic.com"
+        - ".claude.ai"
+        - ".claude.com"
         - ".npmjs.org"
         - ".npmjs.com"
         - ".nodejs.org"
         - ".github.com"
         - ".githubusercontent.com"
+        - ".openai.com"
       allowedHosts:
         - "registry.npmjs.org"
         - "api.github.com"
         - "github.com"
+        - "api.anthropic.com"
+        - "statsig.anthropic.com"
+        - "statsig.com"
+        - "api.statsig.com"
+        - "featuregates.org"
+        - "api.featuregates.org"
+        - "api.openai.com"
       allowedMethods:
         - GET
         - POST
@@ -129,11 +156,14 @@ spec:
       - npm
       - npx
       - ao
+      - claude
+      - codex
       - tmux
       - gh
       - bash
       - sh
       - jq
+      - curl
     filesystemPolicy:
       readOnlyPaths: []
       writablePaths:
