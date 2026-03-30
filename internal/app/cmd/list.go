@@ -191,13 +191,14 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 // "failed"  → red
 // "partial" → yellow
 // "killed"  → yellow (unexpected termination, needs attention)
+// "reaped"  → yellow (spot instance reclaimed by AWS)
 // "running" → green
 // others    → no color
 func colorizeListStatus(status string) string {
 	switch status {
 	case "failed":
 		return ansiRed + status + ansiReset
-	case "partial", "killed", "starting":
+	case "partial", "killed", "reaped", "starting":
 		return ansiYellow + status + ansiReset
 	case "running":
 		return ansiGreen + status + ansiReset
@@ -211,7 +212,7 @@ func colorizeRaw(status string, _ bool, display string) string {
 	switch status {
 	case "failed":
 		return ansiRed + display + ansiReset
-	case "partial", "killed", "starting":
+	case "partial", "killed", "reaped", "starting":
 		return ansiYellow + display + ansiReset
 	case "running":
 		return ansiGreen + display + ansiReset
@@ -243,6 +244,10 @@ func checkEC2InstanceStatus(ctx context.Context, client *ec2.Client, sandboxID s
 			case ec2types.InstanceStateNameStopped:
 				return "stopped"
 			case ec2types.InstanceStateNameTerminated, ec2types.InstanceStateNameShuttingDown:
+				if inst.StateReason != nil && inst.StateReason.Code != nil &&
+					*inst.StateReason.Code == "Server.SpotInstanceTermination" {
+					return "reaped"
+				}
 				return "killed"
 			case ec2types.InstanceStateNamePending:
 				return "starting"

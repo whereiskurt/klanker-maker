@@ -13,7 +13,7 @@ type SandboxMetadata struct {
 	ProfileName string     `json:"profile_name"`
 	Substrate   string     `json:"substrate"`
 	Region      string     `json:"region"`
-	Status      string     `json:"status,omitempty"`        // "starting", "running", "failed"; empty = "running" (backward compat)
+	Status      string     `json:"status,omitempty"`        // "starting", "running", "failed", "killed", "reaped" (spot reclaim); empty = "running" (backward compat)
 	CreatedAt   time.Time  `json:"created_at"`
 	TTLExpiry   *time.Time `json:"ttl_expiry,omitempty"`
 	IdleTimeout string     `json:"idle_timeout,omitempty"` // e.g. "15m", from profile lifecycle.idleTimeout
