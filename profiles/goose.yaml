@@ -52,7 +52,7 @@ spec:
       - ".claude.json"
       - ".codex"
     initCommands:
-      - "yum install -y git nodejs npm bzip2 jq tar gzip unzip"
+      - "yum install -y git nodejs npm python3 python3-pip bzip2 jq tar gzip unzip"
       - "HOME=/root curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | HOME=/root CONFIGURE=false bash"
       - "cp -r /root/.local/bin/goose /usr/local/bin/goose || true"
       - "mkdir -p /home/sandbox/.local/bin && cp /usr/local/bin/goose /home/sandbox/.local/bin/goose || true"
@@ -82,28 +82,62 @@ spec:
   network:
     egress:
       # GitHub hosts are implicitly allowed via sourceAccess.github.allowedRepos
-      # Bedrock access is via .amazonaws.com suffix — no external AI API needed
       allowedDNSSuffixes:
         - ".amazonaws.com"
+        # Anthropic / Claude Code
         - ".anthropic.com"
         - ".claude.ai"
         - ".claude.com"
+        - ".sentry.io"
+        - ".cloudfront.net"
+        # GitHub
         - ".github.com"
         - ".githubusercontent.com"
+        # npm / Node.js (for claude-code, extensions via npx)
         - ".npmjs.org"
         - ".npmjs.com"
         - ".nodejs.org"
+        - ".npmmirror.com"
+        # OpenAI (codex)
         - ".openai.com"
+        # Python (goose extensions via uvx)
+        - ".pypi.org"
+        - ".pythonhosted.org"
+        # Goose extensions / MCP
+        - ".pulsemcp.com"
+        # Google (goose telemetry, search)
+        - ".google.com"
+        - ".google-analytics.com"
+        - ".googletagmanager.com"
       allowedHosts:
         - "github.com"
+        # Anthropic / Claude Code
         - "api.anthropic.com"
         - "statsig.anthropic.com"
         - "statsig.com"
         - "api.statsig.com"
         - "featuregates.org"
         - "api.featuregates.org"
+        - "mcp-proxy.anthropic.com"
+        - "platform.claude.com"
+        - "api.claude.ai"
+        - "claude.ai"
+        - "sentry.io"
+        # npm
         - "registry.npmjs.org"
+        - "nodejs.org"
+        # OpenAI (codex)
         - "api.openai.com"
+        # Python (goose extensions)
+        - "pypi.org"
+        - "files.pythonhosted.org"
+        # Goose MCP extension directory
+        - "pulsemcp.com"
+        # Google
+        - "google.com"
+        - "www.google.com"
+        - "www.google-analytics.com"
+        - "www.googletagmanager.com"
       allowedMethods:
         - GET
         - POST
@@ -165,6 +199,9 @@ spec:
       - node
       - npm
       - npx
+      - python3
+      - pip
+      - uvx
       - bash
       - sh
       - jq
