@@ -144,6 +144,40 @@ metadata:
     builtin: "true"
 ```
 
+### `metadata.prefix`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `metadata.prefix`              |
+| Type       | string                         |
+| Required   | No                             |
+| Default    | `"sb"` (generates `sb-{8hex}`) |
+| Validation | `minLength: 1`                 |
+
+Custom prefix for the sandbox ID. Replaces the default `sb-` prefix.
+
+```yaml
+metadata:
+  prefix: goose    # generates goose-{8hex}
+```
+
+### `metadata.alias`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `metadata.alias`               |
+| Type       | string                         |
+| Required   | No                             |
+| Default    | -- (no alias)                  |
+| Validation | String                         |
+
+Optional alias template for sandbox display names. Used in `km list` for friendlier identification.
+
+```yaml
+metadata:
+  alias: wrkr    # shows as wrkr-1, wrkr-2 in km list
+```
+
 ---
 
 ## `spec.lifecycle`
@@ -212,6 +246,24 @@ What happens when the sandbox expires or idles out:
 spec:
   lifecycle:
     teardownPolicy: destroy
+```
+
+### `spec.lifecycle.maxLifetime`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.lifecycle.maxLifetime`   |
+| Type       | duration string                |
+| Required   | No                             |
+| Default    | -- (no cap)                    |
+| Validation | Pattern `^[0-9]+(s\|m\|h\|d)$`; must be >= `ttl` if set |
+
+Absolute maximum lifetime from sandbox creation. `km extend` will not extend beyond this cap. If unset, there is no limit on extensions.
+
+```yaml
+spec:
+  lifecycle:
+    maxLifetime: "72h"
 ```
 
 ---
@@ -367,6 +419,103 @@ spec:
     env:
       SANDBOX_MODE: open-dev
       MY_VAR: my-value
+```
+
+### `spec.execution.initCommands`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.execution.initCommands`  |
+| Type       | list of strings                |
+| Required   | No                             |
+| Default    | -- (empty)                     |
+| Validation | Array of strings               |
+
+Shell commands executed at sandbox boot time (as root). Run in order before the sandbox user session starts.
+
+```yaml
+spec:
+  execution:
+    initCommands:
+      - "yum install -y git nodejs npm python3"
+      - "npm install -g @anthropic-ai/claude-code"
+      - "mkdir -p /workspace && chown sandbox:sandbox /workspace"
+```
+
+### `spec.execution.initScripts`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.execution.initScripts`   |
+| Type       | list of strings                |
+| Required   | No                             |
+| Default    | -- (empty)                     |
+| Validation | Array of strings (local file paths) |
+
+Local script files to upload to the sandbox and execute at boot time.
+
+```yaml
+spec:
+  execution:
+    initScripts:
+      - "./scripts/setup-agent.sh"
+```
+
+### `spec.execution.rsync`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.execution.rsync`         |
+| Type       | string                         |
+| Required   | No                             |
+| Default    | -- (no snapshot restore)       |
+| Validation | String                         |
+
+Name of a previously saved home directory snapshot to restore at sandbox boot. Created via `km rsync save`.
+
+```yaml
+spec:
+  execution:
+    rsync: checkpoint-1
+```
+
+### `spec.execution.rsyncPaths`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.execution.rsyncPaths`    |
+| Type       | list of strings                |
+| Required   | No                             |
+| Default    | -- (empty, meaning save entire home directory) |
+| Validation | Array of relative paths        |
+
+Relative paths (from the sandbox user's home) to include in rsync snapshots. When set, only these paths are saved/restored instead of the full home directory.
+
+```yaml
+spec:
+  execution:
+    rsyncPaths:
+      - ".claude"
+      - ".bashrc"
+      - ".gitconfig"
+```
+
+### `spec.execution.rsyncFileList`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.execution.rsyncFileList` |
+| Type       | string                         |
+| Required   | No                             |
+| Default    | -- (no external file list)     |
+| Validation | String (path to YAML file)     |
+
+Path to a YAML file containing additional rsync paths. Merged with `rsyncPaths` at save time. Supports wildcards.
+
+```yaml
+spec:
+  execution:
+    rsyncFileList: "./rsync-paths.yaml"
 ```
 
 ---
@@ -782,6 +931,61 @@ spec:
       logGroup: /klankrmkr/network
 ```
 
+### `spec.observability.claudeTelemetry`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.observability.claudeTelemetry` |
+| Type       | object                         |
+| Required   | No                             |
+| Default    | -- (nil, telemetry disabled)   |
+
+Controls Claude Code OpenTelemetry data collection within the sandbox.
+
+### `spec.observability.claudeTelemetry.enabled`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.observability.claudeTelemetry.enabled` |
+| Type       | bool                           |
+| Required   | Yes (when `claudeTelemetry` is present) |
+| Validation | Boolean                        |
+
+Master switch for Claude Code OTEL telemetry.
+
+### `spec.observability.claudeTelemetry.logPrompts`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.observability.claudeTelemetry.logPrompts` |
+| Type       | bool                           |
+| Required   | No                             |
+| Default    | `false`                        |
+| Validation | Boolean                        |
+
+Include actual user prompt text in OTEL data. Maps to `OTEL_LOG_USER_PROMPTS` environment variable.
+
+### `spec.observability.claudeTelemetry.logToolDetails`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.observability.claudeTelemetry.logToolDetails` |
+| Type       | bool                           |
+| Required   | No                             |
+| Default    | `false`                        |
+| Validation | Boolean                        |
+
+Include tool call parameters (bash commands, file paths) in OTEL data. Maps to `OTEL_LOG_TOOL_DETAILS` environment variable.
+
+```yaml
+spec:
+  observability:
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+```
+
 ---
 
 ## `spec.policy`
@@ -1020,6 +1224,179 @@ Optional secondary AWS region to replicate artifacts to via S3 cross-region repl
 spec:
   artifacts:
     replicationRegion: us-west-2
+```
+
+---
+
+## `spec.email`
+
+Controls inter-sandbox email policy. Each sandbox gets a unique email address derived from its ID (e.g., `sb-a1b2c3d4@sandboxes.klankermaker.ai`).
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.email`                   |
+| Type       | object                         |
+| Required   | No                             |
+
+### `spec.email.signing`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.email.signing`           |
+| Type       | string (enum)                  |
+| Required   | No                             |
+| Default    | `"optional"`                   |
+| Validation | One of: `required`, `optional`, `off` |
+
+Ed25519 signing policy for outbound email.
+
+### `spec.email.verifyInbound`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.email.verifyInbound`     |
+| Type       | string (enum)                  |
+| Required   | No                             |
+| Default    | `"optional"`                   |
+| Validation | One of: `required`, `optional`, `off` |
+
+Signature verification policy for inbound email. When `required`, unsigned or invalid emails are rejected.
+
+### `spec.email.encryption`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.email.encryption`        |
+| Type       | string (enum)                  |
+| Required   | No                             |
+| Default    | `"off"`                        |
+| Validation | One of: `required`, `optional`, `off` |
+
+NaCl box encryption policy for email body content.
+
+### `spec.email.alias`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.email.alias`             |
+| Type       | string                         |
+| Required   | No                             |
+| Default    | -- (none)                      |
+| Validation | String (dot-notation)          |
+
+Dot-notation email alias for the sandbox (e.g., `research.team-a`).
+
+### `spec.email.allowedSenders`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.email.allowedSenders`    |
+| Type       | list of strings                |
+| Required   | No                             |
+| Default    | -- (empty)                     |
+| Validation | Array of strings; special values: `"self"`, `"*"`, sandbox IDs, wildcards |
+
+Allowlist of sandbox IDs or patterns permitted to send email to this sandbox.
+
+```yaml
+spec:
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: off
+    alias: research.team-a
+    allowedSenders:
+      - "self"
+      - "sb-*"
+```
+
+---
+
+## `spec.budget`
+
+Controls per-sandbox spend limits for compute and AI API usage.
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.budget`                  |
+| Type       | object                         |
+| Required   | No                             |
+
+### `spec.budget.compute.maxSpendUSD`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.budget.compute.maxSpendUSD` |
+| Type       | float                          |
+| Required   | No                             |
+| Default    | `0` (no limit)                 |
+| Validation | `minimum: 0`                   |
+
+Maximum compute spend in USD. Tracks spot rate x elapsed minutes. At exhaustion, the instance is suspended (not destroyed).
+
+### `spec.budget.ai.maxSpendUSD`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.budget.ai.maxSpendUSD`   |
+| Type       | float                          |
+| Required   | No                             |
+| Default    | `0` (no limit)                 |
+| Validation | `minimum: 0`                   |
+
+Maximum AI API spend in USD. Tracks Bedrock/Anthropic/OpenAI token usage via the HTTP proxy. At exhaustion, proxy returns 403 and IAM Bedrock policy is revoked.
+
+### `spec.budget.warningThreshold`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.budget.warningThreshold` |
+| Type       | float                          |
+| Required   | No                             |
+| Default    | `0.80`                         |
+| Validation | `minimum: 0`, `maximum: 1`    |
+
+Fraction of budget at which a warning email is sent to the operator.
+
+```yaml
+spec:
+  budget:
+    compute:
+      maxSpendUSD: 2.00
+    ai:
+      maxSpendUSD: 5.00
+    warningThreshold: 0.80
+```
+
+---
+
+## `spec.otp`
+
+One-time password/secret injection.
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.otp`                     |
+| Type       | object                         |
+| Required   | No                             |
+
+### `spec.otp.secrets`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.otp.secrets`             |
+| Type       | list of strings                |
+| Required   | No                             |
+| Default    | -- (empty)                     |
+| Validation | Array of SSM parameter paths   |
+
+SSM Parameter Store paths read once at sandbox boot and then deleted. Provides one-time secret injection that leaves no persistent credential in SSM.
+
+```yaml
+spec:
+  otp:
+    secrets:
+      - "/km/sandbox/one-time-api-key"
 ```
 
 ---
@@ -1348,23 +1725,207 @@ spec:
     taskTimeout: "15m"
 ```
 
+### `claude-dev`
+
+Claude Code agent with Bedrock access, OTEL telemetry, and GitHub repo allowlisting.
+
+```yaml
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: claude-dev
+  prefix: claude
+  labels:
+    tier: development
+    tool: claude-code
+    builtin: "true"
+spec:
+  lifecycle:
+    ttl: "4h"
+    idleTimeout: "30m"
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.large
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    env:
+      CLAUDE_CODE_USE_BEDROCK: "1"
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+    initCommands:
+      - "yum install -y git nodejs npm python3 python3-pip tar gzip unzip jq"
+      - "npm install -g @anthropic-ai/claude-code"
+      - "mkdir -p /workspace && chown sandbox:sandbox /workspace"
+    rsyncPaths:
+      - ".claude"
+  budget:
+    compute:
+      maxSpendUSD: 2.00
+    ai:
+      maxSpendUSD: 5.00
+    warningThreshold: 0.80
+  observability:
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+  agent:
+    maxConcurrentTasks: 2
+    taskTimeout: "60m"
+    allowedTools: [bash, read_file, write_file, list_files]
+```
+
+### `goose`
+
+Goose AI agent (Block) with Bedrock access, MCP extensions, and OTEL telemetry.
+
+```yaml
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: goose
+  prefix: goose
+  labels:
+    tier: development
+    tool: goose
+    builtin: "true"
+spec:
+  lifecycle:
+    ttl: "4h"
+    idleTimeout: "30m"
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    env:
+      GOOSE_PROVIDER: aws_bedrock
+      GOOSE_MODEL: anthropic.claude-opus-4-6-v1
+    initCommands:
+      - "yum install -y git nodejs npm python3 python3-pip tar gzip unzip jq"
+      - "curl -fsSL https://github.com/block/goose/releases/latest/download/download_cli.sh | CONFIGURE=false bash"
+      - "npm install -g @anthropic-ai/claude-code"
+  budget:
+    compute:
+      maxSpendUSD: 2.00
+    ai:
+      maxSpendUSD: 5.00
+  agent:
+    maxConcurrentTasks: 1
+    taskTimeout: "60m"
+    allowedTools: [bash, read_file, write_file, list_files]
+```
+
+### `codex`
+
+OpenAI Codex agent sandbox.
+
+```yaml
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: codex
+  prefix: codex
+  labels:
+    tier: development
+    tool: codex
+    builtin: "true"
+spec:
+  lifecycle:
+    ttl: "4h"
+    idleTimeout: "30m"
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    initCommands:
+      - "yum install -y git tar gzip unzip jq"
+      - "curl -fsSL https://github.com/openai/codex/releases/latest/download/install.sh | bash"
+  budget:
+    compute:
+      maxSpendUSD: 2.00
+    ai:
+      maxSpendUSD: 5.00
+  agent:
+    maxConcurrentTasks: 1
+    taskTimeout: "60m"
+    allowedTools: [bash, read_file, write_file, list_files]
+```
+
+### `agent-orchestrator`
+
+Multi-agent orchestration sandbox with Claude Code, Codex, and Composio's agent-orchestrator.
+
+```yaml
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: agent-orchestrator
+  prefix: ao
+  labels:
+    tier: development
+    tool: agent-orchestrator
+    builtin: "true"
+spec:
+  lifecycle:
+    ttl: "8h"
+    idleTimeout: "1h"
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.large
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    initCommands:
+      - "yum install -y git tar gzip unzip jq tmux"
+      - "curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && yum install -y nodejs"
+      - "npm install -g @anthropic-ai/claude-code composio-core"
+  budget:
+    compute:
+      maxSpendUSD: 4.00
+    ai:
+      maxSpendUSD: 10.00
+  agent:
+    maxConcurrentTasks: 4
+    taskTimeout: "120m"
+    allowedTools: [bash, read_file, write_file, list_files]
+```
+
 ---
 
 ## Built-in Profile Comparison
 
-| Field | open-dev | restricted-dev | hardened | sealed |
-|-------|----------|----------------|----------|--------|
-| `lifecycle.ttl` | 24h | 8h | 4h | 1h |
-| `lifecycle.idleTimeout` | 4h | 2h | 1h | 30m |
-| `runtime.instanceType` | t3.medium | t3.medium | t3.small | t3.micro |
-| `sourceAccess.github` | all repos, read+write | single org, read | none | none |
-| `network.egress` (DNS suffixes) | 8 suffixes | 6 suffixes | 1 suffix | none |
-| `network.egress` (methods) | GET/POST/PUT/PATCH/DELETE | GET/POST | GET/POST | none |
-| `policy.allowedCommands` | 8 commands | 6 commands | git only | none |
-| `policy.filesystemPolicy` | writable: /workspace, /tmp, /home | readOnly: /etc; writable: /workspace, /tmp | none | none |
-| `agent.maxConcurrentTasks` | 4 | 2 | 2 | 1 |
-| `agent.taskTimeout` | 30m | 20m | 30m | 15m |
-| `agent.allowedTools` | bash, read_file, write_file, list_files | bash, read_file, write_file | read_file | none |
+| Field | open-dev | restricted-dev | hardened | sealed | claude-dev | goose | codex | agent-orchestrator |
+|-------|----------|----------------|----------|--------|------------|-------|-------|--------------------|
+| `lifecycle.ttl` | 24h | 8h | 4h | 1h | 4h | 4h | 4h | 8h |
+| `lifecycle.idleTimeout` | 4h | 2h | 1h | 30m | 30m | 30m | 30m | 1h |
+| `runtime.instanceType` | t3.medium | t3.medium | t3.small | t3.micro | t3.large | t3.medium | t3.medium | t3.large |
+| `metadata.prefix` | sb | sb | sb | sb | claude | goose | codex | ao |
+| `sourceAccess.github` | all repos, read+write | single org, read | none | none | -- | -- | -- | -- |
+| `network.egress` (DNS suffixes) | 8 suffixes | 6 suffixes | 1 suffix | none | -- | -- | -- | -- |
+| `network.egress` (methods) | GET/POST/PUT/PATCH/DELETE | GET/POST | GET/POST | none | -- | -- | -- | -- |
+| `policy.allowedCommands` | 8 commands | 6 commands | git only | none | -- | -- | -- | -- |
+| `policy.filesystemPolicy` | writable: /workspace, /tmp, /home | readOnly: /etc; writable: /workspace, /tmp | none | none | -- | -- | -- | -- |
+| `budget.compute.maxSpendUSD` | -- | -- | -- | -- | $2.00 | $2.00 | $2.00 | $4.00 |
+| `budget.ai.maxSpendUSD` | -- | -- | -- | -- | $5.00 | $5.00 | $5.00 | $10.00 |
+| `agent.maxConcurrentTasks` | 4 | 2 | 2 | 1 | 2 | 1 | 1 | 4 |
+| `agent.taskTimeout` | 30m | 20m | 30m | 15m | 60m | 60m | 60m | 120m |
+| `agent.allowedTools` | bash, read_file, write_file, list_files | bash, read_file, write_file | read_file | none | bash, read_file, write_file, list_files | bash, read_file, write_file, list_files | bash, read_file, write_file, list_files | bash, read_file, write_file, list_files |
 
 ---
 

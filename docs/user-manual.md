@@ -19,6 +19,18 @@
   - [km doctor](#km-doctor)
   - [km configure github](#km-configure-github)
   - [km budget add](#km-budget-add)
+  - [km shell](#km-shell)
+  - [km agent](#km-agent)
+  - [km stop](#km-stop)
+  - [km extend](#km-extend)
+  - [km otel](#km-otel)
+  - [km info](#km-info)
+  - [km rsync](#km-rsync)
+  - [km configure](#km-configure)
+  - [km uninit](#km-uninit)
+  - [km bootstrap](#km-bootstrap)
+  - [km roll creds](#km-roll-creds)
+  - [km completion](#km-completion)
 - [Walkthrough: Claude Code in a Sandbox](#walkthrough-claude-code-in-a-sandbox)
 - [Walkthrough: Goose with Budget Cap](#walkthrough-goose-with-budget-cap)
 - [Walkthrough: Security Agent in a Sealed Sandbox](#walkthrough-security-agent-in-a-sealed-sandbox)
@@ -237,13 +249,17 @@ km validate my-broken-profile.yaml
 Provision a sandbox from a profile.
 
 ```
-km create <profile.yaml> [--on-demand] [--aws-profile <profile>]
+km create <profile.yaml> [--on-demand] [--aws-profile <profile>] [--verbose] [--remote] [--sandbox-id-override <id>] [--alias-override <alias>]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--on-demand` | `false` | Override `spot: true` in profile; use on-demand instances |
 | `--aws-profile` | `klanker-terraform` | AWS CLI profile for provisioning |
+| `--verbose` | `false` | Show full terragrunt/terraform output |
+| `--remote` | `false` | Dispatch to Lambda via EventBridge |
+| `--sandbox-id-override` | `""` | Override the generated sandbox ID |
+| `--alias-override` | `""` | Override the alias template |
 
 **What it does:**
 
@@ -309,13 +325,15 @@ Connect: aws ssm start-session --target <instance-id>
 Tear down a sandbox and clean up all resources.
 
 ```
-km destroy <sandbox-id> [--aws-profile <profile>] [--force]
+km destroy <sandbox-id> [--aws-profile <profile>] [--yes] [--verbose] [--remote]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--aws-profile` | `klanker-terraform` | AWS CLI profile |
-| `--force` | `false` | Skip confirmation prompt (reserved for future use) |
+| `--yes` | `false` | Skip confirmation prompt |
+| `--verbose` | `false` | Show full terragrunt/terraform output |
+| `--remote` | `false` | Dispatch to Lambda via EventBridge |
 
 **What it does:**
 
@@ -475,6 +493,7 @@ km list [--json] [--tags]
 |------|---------|-------------|
 | `--json` | `false` | Output as JSON array |
 | `--tags` | `false` | Use AWS tag scan instead of S3 state scan (slower, more reliable) |
+| `--wide` | `false` | Show all columns (profile, substrate, region) |
 
 **Example:**
 
@@ -760,6 +779,297 @@ Budget:
 When compute spend reaches 80% of the limit, a warning email is sent (if `KM_OPERATOR_EMAIL` is set). At 100%, the EC2 instance is stopped or the ECS task is stopped. The sandbox is not destroyed — use `km budget add` to resume.
 
 When AI spend (tracked by the http-proxy MITM) reaches 100%, the Bedrock IAM policy is detached from the sandbox role, causing API calls to return 403. `km budget add` re-attaches it.
+
+---
+
+### km shell
+
+Open an interactive shell into a running sandbox via SSM.
+
+```
+km shell <sandbox-id | #number> [--root] [--ports <ports>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--root` | `false` | Connect as root instead of restricted sandbox user |
+| `--ports` | `""` | Port forwards (e.g. `8080`, `8080:80`, or comma-separated `8080:80,3000`) |
+
+**What it does:**
+
+1. Resolves sandbox ID (supports `#number` shorthand from `km list`)
+2. Discovers the EC2 instance or ECS task
+3. Opens an SSM session to the sandbox
+4. If `--ports` specified, establishes port forwarding (Docker-style `local:remote` syntax)
+
+**Example:**
+
+```bash
+km shell #1                        # restricted user shell
+km shell #1 --root                 # operator access (root)
+km shell #1 --ports 8080           # forward localhost:8080 → remote:8080
+km shell #1 --ports 8080:80,3000   # multiple forwards
+```
+
+---
+
+### km agent
+
+Launch an AI coding agent inside a running sandbox.
+
+```
+km agent <sandbox-id | #number> [--claude] [--codex] [-- extra-args...]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--claude` | `false` | Launch Claude Code |
+| `--codex` | `false` | Launch OpenAI Codex |
+
+**What it does:**
+
+1. Resolves sandbox ID
+2. Opens an SSM session to the sandbox
+3. Launches the selected agent binary with optional extra arguments passed after `--`
+
+**Example:**
+
+```bash
+km agent #1 --claude                          # interactive Claude Code session
+km agent #1 --claude -- -p "fix failing tests"  # headless with a prompt
+km agent #2 --codex                            # launch OpenAI Codex
+```
+
+---
+
+### km stop
+
+Stop a sandbox's EC2 instance, preserving infrastructure for later restart.
+
+```
+km stop <sandbox-id | #number> [--remote]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--remote` | `false` | Dispatch to Lambda via EventBridge |
+
+**What it does:**
+
+1. Validates sandbox ID
+2. Checks lock guard — blocked if sandbox is locked
+3. Calls `StopInstances` on the EC2 instance
+4. Instance can be restarted via `km budget add` (which auto-resumes stopped instances)
+
+**Example:**
+
+```bash
+km stop #1
+km stop sb-7f3a9e12 --remote
+```
+
+---
+
+### km extend
+
+Extend a sandbox's TTL before it expires.
+
+```
+km extend <sandbox-id | #number> <duration> [--remote]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--remote` | `false` | Dispatch to Lambda via EventBridge |
+
+Duration format: `1h`, `30m`, `2h30m`, etc.
+
+**What it does:**
+
+1. Reads sandbox metadata from S3
+2. Adds the specified duration to the current TTL expiry
+3. Enforces `maxLifetime` cap — if extending would exceed the profile's `maxLifetime`, the extension is capped
+4. Updates the EventBridge TTL schedule
+
+**Example:**
+
+```bash
+km extend #1 2h             # add 2 hours
+km extend sb-7f3a9e12 30m   # add 30 minutes
+```
+
+---
+
+### km otel
+
+Show OpenTelemetry telemetry and AI spend summary for a sandbox.
+
+```
+km otel <sandbox-id | #number> [--prompts] [--events] [--timeline] [--tools]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--prompts` | `false` | Show Claude Code user prompts with timestamps |
+| `--events` | `false` | Show full OpenTelemetry event stream |
+| `--timeline` | `false` | Show conversation turns with per-turn cost |
+| `--tools` | `false` | Show tool call history with parameters and duration |
+
+**What it does:**
+
+1. Reads OTEL data from S3 (exported by the tracing sidecar)
+2. With no flags: shows budget summary + S3 data location + metrics overview
+3. With flags: shows the requested view of telemetry data
+
+**Example:**
+
+```bash
+km otel #1                  # summary
+km otel #1 --prompts        # user prompts
+km otel #1 --timeline       # conversation turns with cost
+km otel #1 --tools          # tool calls with params + duration
+km otel #1 --events         # full event stream
+```
+
+---
+
+### km info
+
+Show platform configuration and operational details.
+
+```
+km info
+```
+
+**What it does:**
+
+Displays the current platform configuration including domain, account IDs, region, operator email, and the email-to-create address.
+
+---
+
+### km rsync
+
+Save and restore sandbox user home directory snapshots.
+
+```
+km rsync save <sandbox-id> <name> [--profile-dir <dir>]
+km rsync load <sandbox-id> <name>
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--profile-dir` | `""` | Directory containing sandbox profile (for rsyncPaths resolution) |
+
+**What it does:**
+
+- **save**: Creates a tarball of the sandbox user's home directory (or specific paths defined by `rsyncPaths` / `rsyncFileList` in the profile) and uploads it to S3
+- **load**: Lists or restores a previously saved snapshot
+
+Paths can be scoped via `spec.execution.rsyncPaths` in the profile, or via an external YAML file referenced by `spec.execution.rsyncFileList`.
+
+**Example:**
+
+```bash
+km rsync save #1 checkpoint-1     # save home snapshot
+km rsync load #1 checkpoint-1     # restore snapshot
+```
+
+---
+
+### km configure
+
+Interactive wizard to set up `km-config.yaml`.
+
+```
+km configure [--non-interactive] [--domain <domain>] [--management-account <id>] [--terraform-account <id>] [--application-account <id>] [--sso-start-url <url>] [--sso-region <region>] [--region <region>] [--state-bucket <name>] [--artifacts-bucket <name>] [--operator-email <email>] [--safe-phrase <phrase>] [--max-sandboxes <count>]
+```
+
+**What it does:**
+
+Walks through platform configuration interactively (or accepts flags for non-interactive/CI use). Writes `km-config.yaml` to the repo root.
+
+**Example:**
+
+```bash
+km configure                     # interactive wizard
+km configure --non-interactive \
+  --domain mysandboxes.example.com \
+  --management-account 111111111111 \
+  --terraform-account 222222222222 \
+  --application-account 333333333333
+```
+
+---
+
+### km uninit
+
+Tear down all shared regional infrastructure (reverse of `km init`).
+
+```
+km uninit [--region <region>] [--aws-profile <profile>] [--force] [--yes] [--verbose]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--region` | `us-east-1` | AWS region to tear down |
+| `--aws-profile` | `klanker-application` | AWS CLI profile |
+| `--force` | `false` | Destroy even if active sandboxes exist |
+| `--yes` | `false` | Skip confirmation prompt |
+| `--verbose` | `false` | Show full terragrunt/terraform output |
+
+---
+
+### km bootstrap
+
+Deploy SCP containment policy, KMS key, and artifacts bucket.
+
+```
+km bootstrap [--dry-run] [--show-prereqs]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dry-run` | `true` | Print what would be created without making changes |
+| `--show-prereqs` | `false` | Print the IAM role and trust policy needed in the management account |
+
+---
+
+### km roll creds
+
+Rotate platform and sandbox credentials.
+
+```
+km roll creds [--sandbox <id>] [--platform]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--sandbox` | `""` | Rotate a single sandbox's credentials |
+| `--platform` | `false` | Rotate proxy CA, KMS, optional GitHub App key |
+
+**What it does:**
+
+With no flags, rotates all platform credentials and all running sandbox identities. With `--sandbox`, targets a single sandbox. With `--platform`, rotates platform-level secrets (proxy CA certificate, KMS key, optionally GitHub App private key).
+
+---
+
+### km completion
+
+Generate shell completion scripts.
+
+```
+km completion [bash|zsh]
+```
+
+**Example:**
+
+```bash
+# Bash
+source <(km completion bash)
+
+# Zsh
+km completion zsh > "${fpath[1]}/_km"
+```
 
 ---
 

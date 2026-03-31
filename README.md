@@ -127,6 +127,7 @@ The `km` CLI selects the right AWS profile per command. Commands are grouped by 
 | `km list` | `klanker-terraform` | List sandboxes with live status |
 | `km status <sandbox>` | `klanker-terraform` | Budget, identity, idle countdown, resources |
 | `km shell <sandbox>` | `klanker-terraform` | SSM session (`--root` for operator, `--ports` for forwarding) |
+| `km agent <sandbox>` | `klanker-terraform` | Launch AI agent in sandbox (`--claude`, `--codex`) |
 
 **Observability**
 
@@ -149,6 +150,7 @@ The `km` CLI selects the right AWS profile per command. Commands are grouped by 
 | `km stop <sandbox>` | `klanker-terraform` | Stop instance, preserve infrastructure |
 | `km lock <sandbox>` | `klanker-terraform` | Lock sandbox to prevent accidental destroy/stop/pause |
 | `km unlock <sandbox>` | `klanker-terraform` | Unlock sandbox, re-enable lifecycle commands |
+| `km rsync save/load <sandbox>` | `klanker-terraform` | Save/restore sandbox home directory snapshots |
 | `km destroy <sandbox>` | `klanker-terraform` | Teardown sandbox (`--remote` for Lambda-dispatched) |
 
 **Teardown (reverse of setup)**
@@ -407,6 +409,10 @@ spec:
 | `restricted-dev` | 8h | Narrow allowlist, GET/POST only | Operator-set | Agent coding tasks with audit trail |
 | `hardened` | 4h | AWS services only | Operator-set | Production-adjacent testing |
 | `sealed` | 1h | No egress | Operator-set | Offline analysis, air-gapped execution |
+| `claude-dev` | 4h | Anthropic, GitHub, npm, Sentry | $2 compute / $5 AI | Claude Code agent with Bedrock, OTEL telemetry |
+| `goose` | 4h | Anthropic, GitHub, npm, PyPI, Goose extensions | $2 compute / $5 AI | Goose agent (Block) with Bedrock, MCP extensions |
+| `codex` | 4h | OpenAI, GitHub | $2 compute / $5 AI | OpenAI Codex agent |
+| `agent-orchestrator` | 8h | Anthropic, GitHub, npm, Composio | $4 compute / $10 AI | Multi-agent orchestration (Claude + Codex + AO) |
 
 Profiles support **inheritance** via `extends` - start from a base and override what you need.
 
@@ -606,6 +612,10 @@ km shell 1 --root    # operator access
 km shell 1 --ports 8080           # localhost:8080 → remote:8080
 km shell 1 --ports 8080:80,3000   # multiple ports
 
+# Launch an AI agent inside a sandbox
+km agent 1 --claude                  # interactive Claude Code
+km agent 1 --claude -- -p "fix tests"  # headless with prompt
+
 # Extend TTL
 km extend 1 2h
 
@@ -667,12 +677,23 @@ km uninit --region us-east-1
 | 19 | Budget Enforcement Wiring - EC2 hard stop, IAM revocation | **Complete** |
 | 20 | Anthropic API Metering & Terragrunt Output Suppression | **Complete** |
 | 21 | Bug fixes and mini-features - budget precision, polish | **Complete** |
-| 22 | Remote Sandbox Dispatch - `km create/destroy/stop/extend --remote` via Lambda | Planned |
-| 23 | Email-Driven Operations - operator inbox, email-to-create, safe phrase auth, EventBridge | Planned |
-| 24 | Credential Rotation - `km roll creds` for platform and sandbox secrets | Planned |
-| 25 | GitHub Source Access Restrictions - repo allowlists, deny-by-default | Planned |
+| 22 | Remote Sandbox Dispatch - `km create/destroy/stop/extend --remote` via Lambda | **Complete** |
+| 23 | Email-Driven Operations - operator inbox, email-to-create, safe phrase auth, EventBridge | **Complete** |
+| 24 | Documentation Refresh - docs for Phases 22-32 | **Complete** |
+| 25 | GitHub Source Access Restrictions - repo allowlists, deny-by-default | **Complete** |
 | 26 | Live Operations Hardening - bootstrap, init, TTL, idle, sidecars, CLI polish | **Complete** |
 | 27 | Claude Code OTEL Integration - sandbox observability via built-in telemetry | **Complete** |
+| 28 | OTEL Observability Hardening - timeline view, events, tools flags | **Complete** |
+| 29 | EC2 Hibernation & MaxLifetime Enforcement | **Complete** |
+| 30 | Sandbox Pause, Lock, Unlock & km list Enhancements | **Complete** |
+| 31 | Transparent HTTPS & Audit Log Improvements | **Complete** |
+| 32 | Profile-Scoped Rsync Paths & External File Lists | **Complete** |
+| 33 | EC2 Storage Customization & AMI Selection | Planned |
+| 34 | Agent Profiles - Agent Orchestrator, Goose, and Codex | **Complete** |
+| 35 | MITM CA Trust for Python, Node, and Non-System SSL Libraries | **Complete** |
+| 36 | km-sandbox Base Container Image | Planned |
+| 37 | Docker Compose Local Substrate | Planned |
+| 38 | EKS / Kubernetes Substrate | Planned |
 
 See [.planning/ROADMAP.md](.planning/ROADMAP.md) for detailed phase breakdowns and success criteria.
 
