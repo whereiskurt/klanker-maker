@@ -802,7 +802,13 @@ Plans:
 
 **Goal:** `km create --substrate docker` provisions a local sandbox using Docker Compose with the same 5-container topology (main + 4 sidecars), connected to the existing AWS platform — SSM for secrets, SES for email, DynamoDB for budget tracking, S3 for artifacts/OTEL. Same enforcement as EC2, faster iteration (~5s up vs ~60s), runs on the operator's laptop
 **Depends on:** Phase 36
-**Plans:** 0/0
+**Plans:** 3 plans
+**Requirements:** none (v2 feature, no formal requirement IDs)
+
+Plans:
+- [ ] 37-01-PLAN.md -- Schema validation + compiler: add docker substrate, compileDocker(), docker-compose.yml template
+- [ ] 37-02-PLAN.md -- CLI create + destroy: runCreateDocker() with IAM SDK + docker compose up, runDestroyDocker()
+- [ ] 37-03-PLAN.md -- CLI shell + stop + pause + roll: docker exec, docker compose stop/pause, roll skip
 
 ### Phase 38: EKS / Kubernetes substrate
 
