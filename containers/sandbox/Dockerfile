@@ -33,6 +33,13 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tm
     && rm -rf /tmp/aws /tmp/awscliv2.zip
 
 # ============================================================
+# 2b. Node.js 20 (for claude-code and other JS tools)
+# ============================================================
+RUN curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - \
+    && dnf install -y nodejs \
+    && dnf clean all
+
+# ============================================================
 # 3. gosu 1.17 (for privilege drop to sandbox user)
 # ============================================================
 RUN curl -fsSL "https://github.com/tianon/gosu/releases/download/1.17/gosu-amd64" \

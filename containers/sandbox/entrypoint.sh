@@ -306,7 +306,10 @@ run_init_commands() {
         [ -z "$cmd" ] && continue
         i=$((i + 1))
         log "initCommand[${i}]: ${cmd}"
-        bash -c "${cmd}" || log_warn "initCommand[${i}] failed: ${cmd}"
+        # Bypass proxy during init — proxy sidecar may not be ready yet,
+        # and init commands often need to reach package repos (npm, dnf, pip).
+        env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
+            bash -c "${cmd}" || log_warn "initCommand[${i}] failed: ${cmd}"
     done <<< "${cmds}"
     log "Init commands complete (ran ${i})"
 }
@@ -449,4 +452,12 @@ chmod 644 /etc/profile.d/km-shutdown.sh
 chmod 644 /etc/profile.d/km-env.sh 2>/dev/null || true
 
 log "Dropping to sandbox user..."
-exec gosu sandbox "${@:-/bin/bash}"
+# In detached mode (no TTY), keep the container alive so km shell can exec into it.
+# With a TTY (km shell / docker exec -it), bash runs interactively as normal.
+if [ -t 0 ]; then
+    exec gosu sandbox "${@:-/bin/bash}"
+else
+    # No TTY — container is running detached (docker compose up -d).
+    # Replace shell commands with sleep so the container stays alive.
+    exec gosu sandbox sleep infinity
+fi

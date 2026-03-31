@@ -114,6 +114,8 @@ services:
     container_name: km-{{ .SandboxID }}-dns-proxy
     environment:
       ALLOWED_SUFFIXES: "{{ .AllowedDNSSuffixes }}"
+      UPSTREAM_DNS: "8.8.8.8"
+      SANDBOX_ID: "{{ .SandboxID }}"
       KM_SANDBOX_ID: "{{ .SandboxID }}"
     networks:
       km-net:
@@ -127,6 +129,7 @@ services:
       ALLOWED_HOSTS: "{{ .AllowedHosts }}"
       AWS_SHARED_CREDENTIALS_FILE: "/creds/sidecar"
       AWS_PROFILE: "sidecar"
+      SANDBOX_ID: "{{ .SandboxID }}"
       KM_SANDBOX_ID: "{{ .SandboxID }}"
       KM_REGION: "{{ .Region }}"
       KM_PROXY_CA_CERT_S3: "{{ .ProxyCACertS3 }}"
@@ -146,6 +149,7 @@ services:
     container_name: km-{{ .SandboxID }}-audit-log
     environment:
       AUDIT_LOG_DEST: "s3"
+      SANDBOX_ID: "{{ .SandboxID }}"
       KM_SANDBOX_ID: "{{ .SandboxID }}"
       KM_ARTIFACTS_BUCKET: "{{ .ArtifactsBucket }}"
       AWS_SHARED_CREDENTIALS_FILE: "/creds/sidecar"
@@ -160,8 +164,11 @@ services:
     image: {{ .TracingImage }}
     container_name: km-{{ .SandboxID }}-tracing
     environment:
+      SANDBOX_ID: "{{ .SandboxID }}"
       KM_SANDBOX_ID: "{{ .SandboxID }}"
       KM_REGION: "{{ .Region }}"
+      AWS_REGION: "{{ .Region }}"
+      OTEL_S3_BUCKET: "{{ .ArtifactsBucket }}"
       AWS_SHARED_CREDENTIALS_FILE: "/creds/sidecar"
       AWS_PROFILE: "sidecar"
     volumes:
@@ -272,8 +279,8 @@ func generateDockerCompose(p *profile.SandboxProfile, sandboxID string, network 
 		AuditLogImage:      sidecarImg("audit-log"),
 		TracingImage:        sidecarImg("tracing"),
 		Region:             p.Spec.Runtime.Region,
-		AllowedDNSSuffixes: strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, " "),
-		AllowedHosts:       strings.Join(p.Spec.Network.Egress.AllowedHosts, " "),
+		AllowedDNSSuffixes: strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
+		AllowedHosts:       strings.Join(p.Spec.Network.Egress.AllowedHosts, ","),
 		AllowedRepos:       allowedRepos,
 		AllowedRefs:        allowedRefs,
 		SecretPaths:        strings.Join(secretPaths, ","),
