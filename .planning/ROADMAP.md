@@ -802,7 +802,7 @@ Plans:
 
 **Goal:** `km create --substrate docker` provisions a local sandbox using Docker Compose with the same 5-container topology (main + 4 sidecars), connected to the existing AWS platform — SSM for secrets, SES for email, DynamoDB for budget tracking, S3 for artifacts/OTEL. Same enforcement as EC2, faster iteration (~5s up vs ~60s), runs on the operator's laptop
 **Depends on:** Phase 36
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 **Requirements:** none (v2 feature, no formal requirement IDs)
 
 Plans:

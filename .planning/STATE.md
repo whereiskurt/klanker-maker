@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 36-km-sandbox-base-container-image/36-04-PLAN.md
-last_updated: "2026-03-31T02:01:17.260Z"
+stopped_at: Completed 37-docker-compose-local-substrate/37-01-PLAN.md
+last_updated: "2026-03-31T12:13:21.930Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 38
   completed_phases: 33
-  total_plans: 108
-  completed_plans: 106
+  total_plans: 111
+  completed_plans: 107
   percent: 0
 ---
 
@@ -153,6 +153,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 36-km-sandbox-base-container-image P01 | 296 | 2 tasks | 2 files |
 | Phase 36-km-sandbox-base-container-image P03 | 15 | 2 tasks | 2 files |
 | Phase 36-km-sandbox-base-container-image P04 | 3min | 2 tasks | 2 files |
+| Phase 37-docker-compose-local-substrate P01 | 6min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -409,6 +410,9 @@ Recent decisions affecting current work:
 - [Phase 36-km-sandbox-base-container-image]: containers/sandbox/ used as docker build context (not repo root); buildAndPushSandboxImage uses *config.Config with correct field names ApplicationAccountID/PrimaryRegion
 - [Phase 36-km-sandbox-base-container-image]: Used docker stop --timeout instead of docker kill --signal SIGTERM for SIGTERM test — SIGTERM via kill does not propagate reliably through QEMU (amd64 on arm64 host)
 - [Phase 36-km-sandbox-base-container-image]: Smoke test asserts 'skipping' not 'WARNING' — entrypoint uses log() not log_warn() for graceful env-var-not-set skips
+- [Phase 37-01]: Named volumes (not tmpfs) for cred-vol — macOS Docker Desktop does not support tmpfs named volumes
+- [Phase 37-01]: Placeholder credentials in compose template; real AWS credentials injected by plan 02 create command
+- [Phase 37-01]: Both schema files (root + pkg/profile/schemas/ embedded) must be kept in sync
 
 ### Roadmap Evolution
 
@@ -460,6 +464,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-31T01:57:20.495Z
-Stopped at: Completed 36-km-sandbox-base-container-image/36-04-PLAN.md
+Last session: 2026-03-31T12:13:21.926Z
+Stopped at: Completed 37-docker-compose-local-substrate/37-01-PLAN.md
 Resume file: None
