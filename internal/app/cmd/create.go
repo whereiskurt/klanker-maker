@@ -77,6 +77,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	var remote bool
 	var sandboxIDOverride string
 	var aliasOverride string
+	var substrateOverride string
 
 	cmd := &cobra.Command{
 		Use:   "create <profile.yaml>",
@@ -90,7 +91,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 			if remote {
 				return runCreateRemote(cfg, args[0], onDemand, awsProfile, aliasOverride)
 			}
-			return runCreate(cfg, args[0], onDemand, awsProfile, verbose, sandboxIDOverride, aliasOverride)
+			return runCreate(cfg, args[0], onDemand, awsProfile, verbose, sandboxIDOverride, aliasOverride, substrateOverride)
 		},
 	}
 
@@ -107,12 +108,14 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	cmd.Flags().MarkHidden("sandbox-id")
 	cmd.Flags().StringVar(&aliasOverride, "alias", "",
 		"Human-friendly alias for the sandbox (e.g. orc, wrkr). Overrides profile metadata.alias template.")
+	cmd.Flags().StringVar(&substrateOverride, "substrate", "",
+		"Override profile substrate (ec2, ecs, docker)")
 
 	return cmd
 }
 
 // runCreate executes the full create workflow.
-func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile string, verbose bool, sandboxIDOverride string, aliasOverride string) error {
+func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile string, verbose bool, sandboxIDOverride string, aliasOverride string, substrateOverride string) error {
 	createStart := time.Now()
 	ctx := context.Background()
 
@@ -175,6 +178,10 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		return fmt.Errorf("invalid sandbox ID override %q: must match pattern [a-z][a-z0-9]{0,11}-[a-f0-9]{8}", sandboxID)
 	}
 	substrate := resolvedProfile.Spec.Runtime.Substrate
+	if substrateOverride != "" {
+		substrate = substrateOverride
+		resolvedProfile.Spec.Runtime.Substrate = substrateOverride
+	}
 	spot := resolvedProfile.Spec.Runtime.Spot && !onDemand
 	printBanner("km create", sandboxID)
 	fmt.Printf("\n  Substrate: %s, Spot: %v\n", substrate, spot)
@@ -958,19 +965,33 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 		log.Warn().Err(sandboxRoleErr).Str("role", sandboxRoleName).Msg("failed to create sandbox IAM role (non-fatal)")
 	} else {
 		fmt.Printf("  ✓ IAM role created: %s\n", sandboxRoleName)
-		// Attach inline policy if IAMPolicy is available.
-		if artifacts.IAMPolicy != nil {
-			inlinePolicyDoc, marshalErr := json.Marshal(artifacts.IAMPolicy)
-			if marshalErr == nil {
-				_, putErr := iamClient.PutRolePolicy(ctx, &iampkg.PutRolePolicyInput{
-					RoleName:       aws.String(sandboxRoleName),
-					PolicyName:     aws.String("km-sandbox-inline"),
-					PolicyDocument: aws.String(string(inlinePolicyDoc)),
-				})
-				if putErr != nil {
-					log.Warn().Err(putErr).Str("role", sandboxRoleName).Msg("failed to attach inline policy to sandbox role (non-fatal)")
-				}
-			}
+		// Attach inline policy scoping the sandbox role to its own resources.
+		sandboxArtifactBucket := cfg.ArtifactsBucket
+		if sandboxArtifactBucket == "" {
+			sandboxArtifactBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
+		}
+		sandboxPolicyDoc := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"],
+      "Resource": "arn:aws:ssm:%s:%s:parameter/km/%s/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject"],
+      "Resource": "arn:aws:s3:::%s/sandboxes/%s/*"
+    }
+  ]
+}`, region, accountID, sandboxID, sandboxArtifactBucket, sandboxID)
+		_, putErr := iamClient.PutRolePolicy(ctx, &iampkg.PutRolePolicyInput{
+			RoleName:       aws.String(sandboxRoleName),
+			PolicyName:     aws.String("km-sandbox-inline"),
+			PolicyDocument: aws.String(sandboxPolicyDoc),
+		})
+		if putErr != nil {
+			log.Warn().Err(putErr).Str("role", sandboxRoleName).Msg("failed to attach inline policy to sandbox role (non-fatal)")
 		}
 	}
 
@@ -1044,42 +1065,50 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 			time.Sleep(2 * time.Second)
 		}
 	}
-	// Additional propagation delay before AssumeRole.
-	if sandboxRoleARN != "" || sidecarRoleARN != "" {
-		time.Sleep(5 * time.Second)
-	}
-
-	// Step D5: AssumeRole for scoped credentials.
+	// Step D5: AssumeRole for scoped credentials (with retry for IAM propagation).
 	sandboxKeyID, sandboxSecret, sandboxToken := "", "", ""
 	sidecarKeyID, sidecarSecret, sidecarToken := "", "", ""
 
+	assumeRoleWithRetry := func(roleARN, sessionName string) (string, string, string, error) {
+		for attempt := 0; attempt < 6; attempt++ {
+			if attempt > 0 {
+				time.Sleep(5 * time.Second)
+			}
+			assumeOut, assumeErr := stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
+				RoleArn:         aws.String(roleARN),
+				RoleSessionName: aws.String(sessionName),
+				DurationSeconds: aws.Int32(3600),
+			})
+			if assumeErr == nil && assumeOut.Credentials != nil {
+				return aws.ToString(assumeOut.Credentials.AccessKeyId),
+					aws.ToString(assumeOut.Credentials.SecretAccessKey),
+					aws.ToString(assumeOut.Credentials.SessionToken),
+					nil
+			}
+			if attempt < 5 {
+				log.Warn().Err(assumeErr).Int("attempt", attempt+1).Str("role", roleARN).Msg("AssumeRole not ready, retrying...")
+			} else {
+				return "", "", "", assumeErr
+			}
+		}
+		return "", "", "", fmt.Errorf("AssumeRole exhausted retries for %s", roleARN)
+	}
+
 	if sandboxRoleARN != "" {
-		assumeOut, assumeErr := stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
-			RoleArn:         aws.String(sandboxRoleARN),
-			RoleSessionName: aws.String("km-docker-" + sandboxID),
-			DurationSeconds: aws.Int32(3600),
-		})
-		if assumeErr != nil {
-			log.Warn().Err(assumeErr).Str("role", sandboxRoleName).Msg("failed to assume sandbox role (non-fatal)")
-		} else if assumeOut.Credentials != nil {
-			sandboxKeyID = aws.ToString(assumeOut.Credentials.AccessKeyId)
-			sandboxSecret = aws.ToString(assumeOut.Credentials.SecretAccessKey)
-			sandboxToken = aws.ToString(assumeOut.Credentials.SessionToken)
+		key, secret, token, err := assumeRoleWithRetry(sandboxRoleARN, "km-docker-"+sandboxID)
+		if err != nil {
+			log.Warn().Err(err).Str("role", sandboxRoleName).Msg("failed to assume sandbox role (non-fatal)")
+		} else {
+			sandboxKeyID, sandboxSecret, sandboxToken = key, secret, token
 		}
 	}
 
 	if sidecarRoleARN != "" {
-		assumeOut, assumeErr := stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
-			RoleArn:         aws.String(sidecarRoleARN),
-			RoleSessionName: aws.String("km-docker-sidecar-" + sandboxID),
-			DurationSeconds: aws.Int32(3600),
-		})
-		if assumeErr != nil {
-			log.Warn().Err(assumeErr).Str("role", sidecarRoleName).Msg("failed to assume sidecar role (non-fatal)")
-		} else if assumeOut.Credentials != nil {
-			sidecarKeyID = aws.ToString(assumeOut.Credentials.AccessKeyId)
-			sidecarSecret = aws.ToString(assumeOut.Credentials.SecretAccessKey)
-			sidecarToken = aws.ToString(assumeOut.Credentials.SessionToken)
+		key, secret, token, err := assumeRoleWithRetry(sidecarRoleARN, "km-docker-sidecar-"+sandboxID)
+		if err != nil {
+			log.Warn().Err(err).Str("role", sidecarRoleName).Msg("failed to assume sidecar role (non-fatal)")
+		} else {
+			sidecarKeyID, sidecarSecret, sidecarToken = key, secret, token
 		}
 	}
 
@@ -1115,11 +1144,19 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 		}
 	}
 
+	// Step D8.5: ECR docker login so compose can pull images.
+	ecrRegistry := fmt.Sprintf("%s.dkr.ecr.%s.amazonaws.com", accountID, region)
+	ecrLoginCmd := exec.CommandContext(ctx, "bash", "-c",
+		fmt.Sprintf("aws ecr get-login-password --region %s --profile klanker-terraform | docker login --username AWS --password-stdin %s", region, ecrRegistry))
+	if out, loginErr := ecrLoginCmd.CombinedOutput(); loginErr != nil {
+		log.Warn().Err(loginErr).Str("output", string(out)).Msg("ECR docker login failed (non-fatal, images may fail to pull)")
+	}
+
 	// Step D9: Run `docker compose up -d`.
 	// Use DockerComposeExecFunc (package-level var) so tests can override.
 	if err := DockerComposeExecFunc(ctx, sandboxID, composeFilePath, verbose); err != nil {
-		// Clean up on failure.
-		_ = os.RemoveAll(sandboxLocalDir)
+		// Keep sandbox dir for debugging — user runs km destroy to clean up.
+		fmt.Printf("  [warn] docker compose up failed — sandbox dir preserved at %s\n", sandboxLocalDir)
 		return fmt.Errorf("docker compose up failed for sandbox %s: %w", sandboxID, err)
 	}
 	fmt.Printf("  ✓ docker compose up -d completed\n")

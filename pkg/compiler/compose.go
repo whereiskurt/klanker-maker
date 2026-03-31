@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"text/template"
 
@@ -47,6 +48,10 @@ func compileDocker(p *profile.SandboxProfile, sandboxID string, network *Network
 type dockerComposeData struct {
 	SandboxID          string
 	MainImage          string
+	DNSProxyImage      string
+	HTTPProxyImage     string
+	AuditLogImage      string
+	TracingImage       string
 	Region             string
 	AllowedDNSSuffixes string // space-separated
 	AllowedHosts       string // space-separated
@@ -105,7 +110,7 @@ services:
     restart: unless-stopped
 
   km-dns-proxy:
-    image: km-dns-proxy:latest
+    image: {{ .DNSProxyImage }}
     container_name: km-{{ .SandboxID }}-dns-proxy
     environment:
       ALLOWED_SUFFIXES: "{{ .AllowedDNSSuffixes }}"
@@ -116,7 +121,7 @@ services:
     restart: unless-stopped
 
   km-http-proxy:
-    image: km-http-proxy:latest
+    image: {{ .HTTPProxyImage }}
     container_name: km-{{ .SandboxID }}-http-proxy
     environment:
       ALLOWED_HOSTS: "{{ .AllowedHosts }}"
@@ -137,7 +142,7 @@ services:
     restart: unless-stopped
 
   km-audit-log:
-    image: km-audit-log:latest
+    image: {{ .AuditLogImage }}
     container_name: km-{{ .SandboxID }}-audit-log
     environment:
       AUDIT_LOG_DEST: "s3"
@@ -152,7 +157,7 @@ services:
     restart: unless-stopped
 
   km-tracing:
-    image: km-tracing:latest
+    image: {{ .TracingImage }}
     container_name: km-{{ .SandboxID }}-tracing
     environment:
       KM_SANDBOX_ID: "{{ .SandboxID }}"
@@ -249,9 +254,22 @@ func generateDockerCompose(p *profile.SandboxProfile, sandboxID string, network 
 		allowedRefs = strings.Join(p.Spec.SourceAccess.GitHub.AllowedRefs, " ")
 	}
 
+	// Build image names — use ECR URIs if KM_ACCOUNTS_APPLICATION is set, otherwise local names.
+	accountID := os.Getenv("KM_ACCOUNTS_APPLICATION")
+	sidecarImg := func(name string) string {
+		if accountID != "" {
+			return fmt.Sprintf("%s.dkr.ecr.%s.amazonaws.com/km-%s:latest", accountID, p.Spec.Runtime.Region, name)
+		}
+		return "km-" + name + ":latest"
+	}
+
 	data := dockerComposeData{
 		SandboxID:          sandboxID,
-		MainImage:          "km-sandbox:latest",
+		MainImage:          sidecarImg("sandbox"),
+		DNSProxyImage:      sidecarImg("dns-proxy"),
+		HTTPProxyImage:     sidecarImg("http-proxy"),
+		AuditLogImage:      sidecarImg("audit-log"),
+		TracingImage:        sidecarImg("tracing"),
 		Region:             p.Spec.Runtime.Region,
 		AllowedDNSSuffixes: strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, " "),
 		AllowedHosts:       strings.Join(p.Spec.Network.Egress.AllowedHosts, " "),
