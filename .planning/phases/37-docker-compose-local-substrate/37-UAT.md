@@ -1,5 +1,5 @@
 ---
-status: complete
+status: diagnosed
 phase: 37-docker-compose-local-substrate
 source: 37-01-SUMMARY.md, 37-02-SUMMARY.md, 37-03-SUMMARY.md
 started: 2026-03-31T12:38:00Z
@@ -40,36 +40,33 @@ result: pass
 
 ### 6. docker compose up starts containers
 expected: `docker compose up -d` successfully starts all 6 containers. `docker ps` shows them running.
-result: skipped
-reason: Sidecar images (km-dns-proxy, km-http-proxy, km-audit-log, km-tracing) don't exist in ECR yet. Only km-create-handler repo exists. Need `make ecr-repos && make ecr-push` for all sidecar images first.
+result: issue
+reported: "First attempt failed — Docker network 172.20.0.0/24 overlapped with existing runmqtt_default (172.20.0.0/16). Fixed by changing subnet to 172.28.0.0/24. Also needed ECR repos created and sidecar images built/pushed. After fixes: all 6 containers created and started in 15s. Platform mismatch warnings (amd64 on arm64 Mac) cause some containers to restart-loop but that's expected for local dev on Apple Silicon."
+severity: major
 
 ### 7. km destroy cleans up docker sandbox
-expected: `./km destroy {sandbox-id} --remote --yes` detects docker substrate via S3 metadata, runs `docker compose down -v`, deletes IAM roles.
-result: skipped
-reason: Can't test without running containers from test 6.
+expected: `./km destroy {sandbox-id} --yes` detects docker substrate via S3 metadata, runs `docker compose down -v`, deletes IAM roles.
+result: pass
 
 ### 8. km shell routes to docker exec
 expected: `./km shell {sandbox-id}` runs `docker exec -it km-{id}-main /bin/bash`.
-result: skipped
-reason: Can't test without running containers from test 6.
+result: pass
 
 ### 9. km stop routes to docker compose stop
 expected: `./km stop {sandbox-id}` detects docker substrate, runs `docker compose stop`.
-result: skipped
-reason: Can't test without running containers from test 6.
+result: pass
 
 ### 10. km pause routes to docker compose pause
 expected: `./km pause {sandbox-id}` detects docker substrate, runs `docker compose pause`.
-result: skipped
-reason: Can't test without running containers from test 6.
+result: pass
 
 ## Summary
 
 total: 10
-passed: 2
-issues: 3
+passed: 6
+issues: 4
 pending: 0
-skipped: 5
+skipped: 0
 
 ## Gaps
 
@@ -110,6 +107,21 @@ skipped: 5
   artifacts:
     - path: "internal/app/cmd/create.go"
       issue: "single AssumeRole attempt after 5s sleep"
+  missing:
+    - "Already fixed during UAT session"
+  debug_session: ""
+
+- truth: "docker compose up starts all 6 containers"
+  status: failed
+  reason: "User reported: Docker network 172.20.0.0/24 overlapped with existing network. Sidecar images missing from ECR. km init didn't build/push sidecars."
+  severity: major
+  test: 6
+  root_cause: "Hardcoded subnet 172.20.0.0/24 conflicts with common Docker networks. Sidecar images not in ECR — only km-sandbox was pushed by km init. buildAndPushSidecarImages() was missing."
+  artifacts:
+    - path: "pkg/compiler/compose.go"
+      issue: "subnet 172.20.0.0/24 conflicts"
+    - path: "internal/app/cmd/init.go"
+      issue: "no sidecar image push"
   missing:
     - "Already fixed during UAT session"
   debug_session: ""
