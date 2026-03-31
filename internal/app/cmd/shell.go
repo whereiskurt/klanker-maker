@@ -172,6 +172,8 @@ func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 			return fmt.Errorf("find ECS task for sandbox %s: %w", sandboxID, err)
 		}
 		return execECSCommand(ctx, clusterARN, taskARN, rec.Region, execFn)
+	case "docker":
+		return execDockerShell(ctx, sandboxID, root, execFn)
 	default:
 		return fmt.Errorf("unsupported substrate %q for km shell", rec.Substrate)
 	}
@@ -375,6 +377,23 @@ func buildPortForwardCmd(ctx context.Context, instanceID, region, localPort, rem
 		"--profile", "klanker-terraform",
 		"--document-name", "AWS-StartPortForwardingSession",
 		"--parameters", fmt.Sprintf(`{"portNumber":["%s"],"localPortNumber":["%s"]}`, remotePort, localPort))
+}
+
+// execDockerShell builds and runs: docker exec -it [(-u root)] km-{sandboxID}-main /bin/bash.
+// The container name is derived from the sandbox ID using the fixed naming convention
+// set in the docker-compose.yml template: container_name: km-{sandboxID}-main.
+func execDockerShell(ctx context.Context, sandboxID string, root bool, execFn ShellExecFunc) error {
+	containerName := fmt.Sprintf("km-%s-main", sandboxID)
+	args := []string{"exec", "-it"}
+	if root {
+		args = append(args, "-u", "root")
+	}
+	args = append(args, containerName, "/bin/bash")
+	c := exec.CommandContext(ctx, "docker", args...)
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	return execFn(c)
 }
 
 // extractResourceID finds an ARN containing pattern and extracts the resource ID
