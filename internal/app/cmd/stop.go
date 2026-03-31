@@ -94,6 +94,6 @@ func runStop(ctx context.Context, cfg *config.Config, sandboxID string) error {
 		return fmt.Errorf("no running instances found for sandbox %s", sandboxID)
 	}
 
-	fmt.Printf(ansiGreen+"Sandbox %s stopped."+ansiReset+" Use 'km budget add %s --compute <amount>' to restart.\n", sandboxID, sandboxID)
+	fmt.Printf(ansiGreen+"Sandbox %s stopped."+ansiReset+" Use 'km resume %s' to restart.\n", sandboxID, sandboxID)
 	return nil
 }

@@ -192,6 +192,8 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 // "partial" → yellow
 // "killed"  → yellow (unexpected termination, needs attention)
 // "reaped"  → yellow (spot instance reclaimed by AWS)
+// "paused"  → magenta (hibernated or stopped, can resume)
+// "stopped" → magenta (stopped, can resume)
 // "running" → green
 // others    → no color
 func colorizeListStatus(status string) string {
@@ -200,6 +202,8 @@ func colorizeListStatus(status string) string {
 		return ansiRed + status + ansiReset
 	case "partial", "killed", "reaped", "starting":
 		return ansiYellow + status + ansiReset
+	case "paused", "stopped":
+		return ansiMagenta + status + ansiReset
 	case "running":
 		return ansiGreen + status + ansiReset
 	default:
@@ -214,6 +218,8 @@ func colorizeRaw(status string, _ bool, display string) string {
 		return ansiRed + display + ansiReset
 	case "partial", "killed", "reaped", "starting":
 		return ansiYellow + display + ansiReset
+	case "paused", "stopped":
+		return ansiMagenta + display + ansiReset
 	case "running":
 		return ansiGreen + display + ansiReset
 	default:

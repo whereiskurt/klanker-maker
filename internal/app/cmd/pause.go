@@ -90,6 +90,14 @@ func runPause(ctx context.Context, cfg *config.Config, sandboxID string) error {
 	for _, res := range descOut.Reservations {
 		for _, inst := range res.Instances {
 			instanceID := aws.ToString(inst.InstanceId)
+
+			// Spot instances cannot be stopped or hibernated — fail fast with clear message
+			if inst.InstanceLifecycle == ec2types.InstanceLifecycleTypeSpot {
+				return fmt.Errorf("cannot pause spot instance %s — spot instances cannot be stopped.\n"+
+					"  Create with --on-demand to enable pause/resume:\n"+
+					"  km create <profile.yaml> --on-demand", instanceID)
+			}
+
 			fmt.Printf("Pausing instance "+ansiYellow+"%s"+ansiReset+"...\n", instanceID)
 			_, err := ec2Client.StopInstances(ctx, &ec2.StopInstancesInput{
 				InstanceIds: []string{instanceID},
@@ -130,6 +138,6 @@ func runPause(ctx context.Context, cfg *config.Config, sandboxID string) error {
 		fmt.Printf(ansiYellow+"  [warn] could not update metadata: %v"+ansiReset+"\n", putErr)
 	}
 
-	fmt.Printf(ansiGreen+"Sandbox %s paused."+ansiReset+"\n", sandboxID)
+	fmt.Printf(ansiGreen+"Sandbox %s paused."+ansiReset+" Use 'km resume %s' to restart.\n", sandboxID, sandboxID)
 	return nil
 }

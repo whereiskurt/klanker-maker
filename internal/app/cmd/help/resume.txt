@@ -1,0 +1,10 @@
+Resume a paused or stopped sandbox, starting its EC2 instance.
+
+If the sandbox was paused with hibernation, the instance resumes from
+its saved RAM state. If it was stopped normally, the instance boots fresh
+but preserves its EBS volumes and configuration.
+
+Examples:
+  km resume claude-abc123       Resume by sandbox ID
+  km resume #1                  Resume by number from km list
+  km resume #2 --remote         Dispatch to Lambda via EventBridge
