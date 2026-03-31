@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 36-km-sandbox-base-container-image/36-01-PLAN.md
-last_updated: "2026-03-31T01:45:25.953Z"
+stopped_at: Completed 36-km-sandbox-base-container-image/36-03-PLAN.md
+last_updated: "2026-03-31T01:50:19.726Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 38
   completed_phases: 32
   total_plans: 108
-  completed_plans: 104
+  completed_plans: 105
   percent: 0
 ---
 
@@ -151,6 +151,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 34-agent-profiles-agent-orchestrator-goose-and-codex-sandbox-profiles P01 | 14min | 2 tasks | 3 files |
 | Phase 36-km-sandbox-base-container-image P02 | 136s | 2 tasks | 2 files |
 | Phase 36-km-sandbox-base-container-image P01 | 296 | 2 tasks | 2 files |
+| Phase 36-km-sandbox-base-container-image P03 | 15 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -404,6 +405,7 @@ Recent decisions affecting current work:
 - [Phase 36-km-sandbox-base-container-image]: KM_INIT_COMMANDS and KM_PROFILE_ENV are base64-encoded JSON to safely embed multi-value config in ECS env vars
 - [Phase 36-km-sandbox-base-container-image]: Used amazonlinux:2023 (not 2023-minimal): 2023-minimal tag not available on Docker Hub
 - [Phase 36-km-sandbox-base-container-image]: km-sandbox entrypoint: critical steps abort on failure (log_fail), optional steps warn and continue (log_warn)
+- [Phase 36-km-sandbox-base-container-image]: containers/sandbox/ used as docker build context (not repo root); buildAndPushSandboxImage uses *config.Config with correct field names ApplicationAccountID/PrimaryRegion
 
 ### Roadmap Evolution
 
@@ -455,6 +457,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-31T01:45:25.949Z
-Stopped at: Completed 36-km-sandbox-base-container-image/36-01-PLAN.md
+Last session: 2026-03-31T01:50:19.723Z
+Stopped at: Completed 36-km-sandbox-base-container-image/36-03-PLAN.md
 Resume file: None
