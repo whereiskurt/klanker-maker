@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-
+	"os"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -71,6 +71,26 @@ func runPause(ctx context.Context, cfg *config.Config, sandboxID string) error {
 	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
 	if err != nil {
 		return fmt.Errorf("load AWS config: %w", err)
+	}
+
+	// Check S3 metadata for docker substrate — route before EC2 API calls.
+	// Docker sandboxes have no AWS-tagged EC2 resources, so EC2 lookup would fail.
+	stateBucket := cfg.StateBucket
+	if stateBucket == "" {
+		stateBucket = os.Getenv("KM_STATE_BUCKET")
+	}
+	if stateBucket != "" {
+		s3ClientEarly := s3.NewFromConfig(awsCfg)
+		if meta, metaErr := awspkg.ReadSandboxMetadata(ctx, s3ClientEarly, stateBucket, sandboxID); metaErr == nil {
+			if meta.Substrate == "docker" {
+				if err := runDockerCompose(ctx, sandboxID, "pause"); err != nil {
+					return err
+				}
+				fmt.Printf(ansiGreen+"Sandbox %s paused."+ansiReset+" Use 'km resume %s' to unpause.\n", sandboxID, sandboxID)
+				return nil
+			}
+		}
+		// If metadata not found or substrate is not docker, proceed with EC2 path.
 	}
 
 	ec2Client := ec2.NewFromConfig(awsCfg)

@@ -559,6 +559,10 @@ func restartProxiesForSandboxes(ctx context.Context, out interface{ Write([]byte
 					fmt.Fprintf(out, "  [info] ECS sandbox %s: new CA will be picked up on next task start (use --force-restart to force)\n", sb.SandboxID)
 				}
 			}
+		case "docker":
+			if !jsonOutput {
+				fmt.Fprintf(out, "  Skipping docker sandbox %s (proxy restart not supported for local containers)\n", sb.SandboxID)
+			}
 		}
 	}
 	return nil
