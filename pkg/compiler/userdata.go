@@ -575,6 +575,26 @@ if [ -f /usr/local/share/ca-certificates/km-proxy-ca.crt ]; then
     update-ca-certificates
   fi
   echo "[km-bootstrap] Proxy CA cert installed in system trust store"
+
+  # Detect the merged CA bundle path (includes the km proxy CA after update-ca-trust).
+  # Many tools (Python certifi, Node.js, Rust) bundle their own CA stores and ignore
+  # the system trust store. These env vars override the bundled stores so MITM works.
+  KM_CA_BUNDLE=""
+  if [ -f /etc/pki/tls/certs/ca-bundle.crt ]; then
+    KM_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt        # RHEL / Amazon Linux
+  elif [ -f /etc/ssl/certs/ca-certificates.crt ]; then
+    KM_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt       # Debian / Ubuntu
+  fi
+
+  if [ -n "$KM_CA_BUNDLE" ]; then
+    cat >> /etc/profile.d/km-audit.sh << CAENV
+export SSL_CERT_FILE=${KM_CA_BUNDLE}
+export REQUESTS_CA_BUNDLE=${KM_CA_BUNDLE}
+export CURL_CA_BUNDLE=${KM_CA_BUNDLE}
+export NODE_EXTRA_CA_CERTS=${KM_CA_BUNDLE}
+CAENV
+    echo "[km-bootstrap] CA trust env vars set for Python/Node/Rust/curl (bundle: ${KM_CA_BUNDLE})"
+  fi
 fi
 
 # Build base64 PEM (cert+key) for the proxy's KM_PROXY_CA_CERT env var.
