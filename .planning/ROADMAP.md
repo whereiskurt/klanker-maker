@@ -818,13 +818,15 @@ Plans:
 
 ### Phase 39: Migrate sandbox metadata from S3 JSON to DynamoDB - km list, km status, km lock, km pause, and all metadata reads/writes switch to DynamoDB table while artifacts remain in S3
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** All sandbox metadata reads/writes (km list, km status, km lock/unlock, km pause/resume, km create/destroy, and Lambda handlers) switch from S3 JSON blobs to a DynamoDB km-sandboxes table with alias-index GSI, atomic lock/unlock via ConditionExpression, DynamoDB TTL for auto-cleanup, and backward-compat S3 fallback when table does not exist — artifacts remain in S3
+**Requirements**: META-DYNAMO-01, META-DYNAMO-02, META-DYNAMO-03, META-DYNAMO-04, META-DYNAMO-05, META-DYNAMO-06, META-DYNAMO-IAM, META-DYNAMO-INFRA, META-DYNAMO-CONFIG, META-DYNAMO-SWITCHOVER-CLI, META-DYNAMO-SWITCHOVER-LAMBDA, META-DYNAMO-BACKWARD-COMPAT
 **Depends on:** Phase 38
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 39 to break down)
+- [ ] 39-01-PLAN.md — DynamoDB CRUD functions + tests (pkg/aws layer)
+- [ ] 39-02-PLAN.md — Terraform module, IAM permissions, km init ordering, config field
+- [ ] 39-03-PLAN.md — Switch all 22 CLI + Lambda call sites from S3 to DynamoDB
 
 ### Phase 40: eBPF TC/cgroup network enforcement layer - kernel-level DNS HTTP TLS-SNI allowlisting as toggleable alternative to iptables DNAT proxy sidecars, fixes root bypass
 
