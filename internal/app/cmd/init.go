@@ -216,6 +216,15 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		fmt.Printf("  km-sandbox image pushed to ECR\n")
 	}
 
+	// Step 2a.1: Build and push sidecar container images to ECR
+	fmt.Println()
+	fmt.Printf("Building and pushing sidecar images [%s]...\n", version.String())
+	if err := buildAndPushSidecarImages(repoRoot, cfg); err != nil {
+		fmt.Printf("  [warn] Sidecar image build/push failed: %v\n", err)
+	} else {
+		fmt.Printf("  All sidecar images pushed to ECR\n")
+	}
+
 	// Step 2b: Upload create-handler toolchain (km + terraform + terragrunt + infra/) to S3
 	fmt.Println()
 	fmt.Println("Uploading create-handler toolchain...")
@@ -762,6 +771,76 @@ func buildAndPushSandboxImage(repoRoot string, cfg *config.Config) error {
 	buildCmd.Dir = repoRoot
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("docker build+push: %s: %w", string(out), err)
+	}
+
+	return nil
+}
+
+// buildAndPushSidecarImages builds and pushes all 4 sidecar Docker images to ECR.
+// Images: km-dns-proxy, km-http-proxy, km-audit-log, km-tracing.
+func buildAndPushSidecarImages(repoRoot string, cfg *config.Config) error {
+	accountID := cfg.ApplicationAccountID
+	region := cfg.PrimaryRegion
+	if accountID == "" || region == "" {
+		return fmt.Errorf("accounts_application and region required for ECR push")
+	}
+	ecrRegistry := fmt.Sprintf("%s.dkr.ecr.%s.amazonaws.com", accountID, region)
+	imageTag := version.Number
+
+	// ECR login (may already be logged in from sandbox image push, but safe to repeat).
+	loginCmd := exec.Command("bash", "-c",
+		fmt.Sprintf("aws ecr get-login-password --region %s --profile klanker-terraform | docker login --username AWS --password-stdin %s", region, ecrRegistry))
+	if out, err := loginCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("ECR login: %s: %w", string(out), err)
+	}
+
+	type sidecar struct {
+		name       string
+		dockerfile string
+		context    string
+	}
+	sidecars := []sidecar{
+		{"km-dns-proxy", "sidecars/dns-proxy/Dockerfile", "."},
+		{"km-http-proxy", "sidecars/http-proxy/Dockerfile", "."},
+		{"km-audit-log", "sidecars/audit-log/Dockerfile", "."},
+		{"km-tracing", "sidecars/tracing/Dockerfile", "sidecars/tracing/"},
+	}
+
+	for _, sc := range sidecars {
+		// Ensure ECR repo exists.
+		ensureCmd := exec.Command("aws", "ecr", "describe-repositories",
+			"--region", region,
+			"--repository-names", sc.name,
+			"--profile", "klanker-terraform")
+		if _, err := ensureCmd.CombinedOutput(); err != nil {
+			fmt.Printf("  Creating %s ECR repository...\n", sc.name)
+			createCmd := exec.Command("aws", "ecr", "create-repository",
+				"--region", region,
+				"--repository-name", sc.name,
+				"--profile", "klanker-terraform")
+			if out, err := createCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("create ECR repo %s: %s: %w", sc.name, string(out), err)
+			}
+		}
+
+		versionTag := fmt.Sprintf("%s/%s:%s", ecrRegistry, sc.name, imageTag)
+		latestTag := fmt.Sprintf("%s/%s:latest", ecrRegistry, sc.name)
+		dockerfilePath := filepath.Join(repoRoot, sc.dockerfile)
+		contextPath := filepath.Join(repoRoot, sc.context)
+
+		fmt.Printf("  Building %s (linux/amd64)...\n", sc.name)
+		buildCmd := exec.Command("docker", "buildx", "build",
+			"--platform", "linux/amd64",
+			"--file", dockerfilePath,
+			"--tag", versionTag,
+			"--tag", latestTag,
+			"--push",
+			contextPath)
+		buildCmd.Dir = repoRoot
+		if out, err := buildCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("docker build+push %s: %s: %w", sc.name, string(out), err)
+		}
+		fmt.Printf("  ✓ %s pushed\n", sc.name)
 	}
 
 	return nil
