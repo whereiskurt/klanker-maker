@@ -72,13 +72,13 @@ func TestDockerComposeDNS(t *testing.T) {
 	yaml := artifacts.DockerComposeYAML
 
 	// km-dns-proxy must have static IP
-	if !strings.Contains(yaml, "172.20.0.10") {
-		t.Error("expected km-dns-proxy static IP 172.20.0.10 in docker-compose YAML")
+	if !strings.Contains(yaml, "172.28.0.10") {
+		t.Error("expected km-dns-proxy static IP 172.28.0.10 in docker-compose YAML")
 	}
 
 	// main must reference the DNS proxy IP
-	if !strings.Contains(yaml, "172.20.0.10") {
-		t.Error("expected main container to reference DNS proxy IP 172.20.0.10")
+	if !strings.Contains(yaml, "172.28.0.10") {
+		t.Error("expected main container to reference DNS proxy IP 172.28.0.10")
 	}
 }
 
@@ -152,7 +152,7 @@ func TestDockerComposeNetwork(t *testing.T) {
 	if !strings.Contains(yaml, "bridge") {
 		t.Error("expected network driver 'bridge' in docker-compose YAML")
 	}
-	if !strings.Contains(yaml, "172.20.0.0/24") {
-		t.Error("expected IPAM subnet 172.20.0.0/24 in docker-compose YAML")
+	if !strings.Contains(yaml, "172.28.0.0/24") {
+		t.Error("expected IPAM subnet 172.28.0.0/24 in docker-compose YAML")
 	}
 }
