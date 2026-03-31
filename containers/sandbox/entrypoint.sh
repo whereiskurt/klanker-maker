@@ -66,15 +66,22 @@ setup_ca_trust() {
         log "CA trust: KM_PROXY_CA_CERT_S3 not set — skipping"
         return 0
     fi
-    log "Installing proxy CA cert from ${cert_s3} ..."
-    # Bypass HTTP proxy for CA cert download — this is a bootstrap step before
-    # the proxy is ready (proxy itself needs the CA cert to start MITM).
-    if env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
+    # Check for locally mounted cert first (docker substrate), then try S3.
+    local local_cert="/etc/km/proxy-ca.crt"
+    local got_cert=false
+    if [ -f "$local_cert" ]; then
+        log "Installing proxy CA cert from local mount..."
+        cp "$local_cert" /etc/pki/ca-trust/source/anchors/km-proxy-ca.crt
+        got_cert=true
+    elif env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
         aws s3 cp "${cert_s3}" /etc/pki/ca-trust/source/anchors/km-proxy-ca.crt 2>/dev/null; then
-        update-ca-trust \
-            || log_fail "update-ca-trust failed"
+        log "Installed proxy CA cert from ${cert_s3}"
+        got_cert=true
+    fi
+    if [ "$got_cert" = "true" ]; then
+        update-ca-trust || log_fail "update-ca-trust failed"
     else
-        log_warn "Failed to download proxy CA cert from ${cert_s3} — HTTPS MITM inspection will not work"
+        log_warn "Failed to get proxy CA cert — HTTPS MITM inspection will not work"
         return 0
     fi
     # Export CA bundle path for tools that bundle their own CA stores

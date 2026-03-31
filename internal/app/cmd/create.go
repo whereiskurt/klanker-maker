@@ -4,11 +4,18 @@ import (
 	"bytes"
 	"context"
 	cryptorand "crypto/rand"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1125,6 +1132,27 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 	_ = sidecarSecret
 	_ = sidecarToken
 
+	// Step D6.5: Generate MITM CA cert for docker substrate.
+	// The http-proxy sidecar reads KM_PROXY_CA_CERT (base64 PEM with cert+key).
+	// The main container installs the cert portion into the OS trust store.
+	caCertPEM, caKeyPEM, caErr := generateSelfSignedCA("km-proxy-ca")
+	if caErr != nil {
+		log.Warn().Err(caErr).Msg("failed to generate proxy CA cert (non-fatal, MITM inspection disabled)")
+		composeYAML = strings.ReplaceAll(composeYAML, "PLACEHOLDER_PROXY_CA_B64", "")
+	} else {
+		// Proxy needs both cert+key concatenated, base64-encoded.
+		combined := append(caCertPEM, caKeyPEM...)
+		caB64 := base64.StdEncoding.EncodeToString(combined)
+		composeYAML = strings.ReplaceAll(composeYAML, "PLACEHOLDER_PROXY_CA_B64", caB64)
+
+		// Write cert to sandbox dir so main container can install it.
+		certPath := filepath.Join(sandboxLocalDir, "km-proxy-ca.crt")
+		if writeErr := os.WriteFile(certPath, caCertPEM, 0o644); writeErr != nil {
+			log.Warn().Err(writeErr).Msg("failed to write CA cert file")
+		}
+		fmt.Printf("  ✓ MITM proxy CA cert generated\n")
+	}
+
 	// Step D7: Write docker-compose.yml to sandbox directory.
 	composeFilePath := filepath.Join(sandboxLocalDir, "docker-compose.yml")
 	if err := os.WriteFile(composeFilePath, []byte(composeYAML), 0o600); err != nil {
@@ -1239,6 +1267,39 @@ var DockerComposeExecFunc = func(ctx context.Context, sandboxID, composeFilePath
 }
 
 // runDockerComposeUp runs `docker compose -f {path} -p km-{sandboxID} up -d`.
+// generateSelfSignedCA creates an ephemeral CA certificate and private key for MITM proxy.
+// Returns PEM-encoded cert and key as separate byte slices.
+func generateSelfSignedCA(cn string) (certPEM []byte, keyPEM []byte, err error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), cryptorand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate CA key: %w", err)
+	}
+
+	serial, _ := cryptorand.Int(cryptorand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	template := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: cn, Organization: []string{"klankermaker"}},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            0,
+	}
+
+	certDER, err := x509.CreateCertificate(cryptorand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create CA cert: %w", err)
+	}
+
+	var certBuf, keyBuf bytes.Buffer
+	pem.Encode(&certBuf, &pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyDER, _ := x509.MarshalECPrivateKey(key)
+	pem.Encode(&keyBuf, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+
+	return certBuf.Bytes(), keyBuf.Bytes(), nil
+}
+
 func runDockerComposeUp(ctx context.Context, sandboxID, composeFilePath string, verbose bool) error {
 	args := []string{"compose", "-f", composeFilePath, "-p", "km-" + sandboxID, "up", "-d"}
 	dockerCmd := exec.CommandContext(ctx, "docker", args...)

@@ -105,6 +105,7 @@ services:
     volumes:
       - km-workspace:/workspace
       - cred-vol:/creds:ro
+      - ./km-proxy-ca.crt:/etc/km/proxy-ca.crt:ro
     networks:
       - km-net
     restart: unless-stopped
@@ -134,6 +135,7 @@ services:
       KM_REGION: "{{ .Region }}"
       KM_PROXY_CA_CERT_S3: "{{ .ProxyCACertS3 }}"
       KM_PROXY_CA_KEY_S3: "{{ .ProxyCAKeyS3 }}"
+      KM_PROXY_CA_CERT: "PLACEHOLDER_PROXY_CA_B64"
 {{- if .BudgetEnabled }}
       KM_BUDGET_ENABLED: "true"
       KM_BUDGET_TABLE: "{{ .BudgetTable }}"
