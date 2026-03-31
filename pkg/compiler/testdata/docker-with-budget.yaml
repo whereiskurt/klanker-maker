@@ -1,0 +1,75 @@
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: docker-budget-test
+  labels:
+    tier: test
+
+spec:
+  lifecycle:
+    ttl: "4h"
+    idleTimeout: "1h"
+    teardownPolicy: destroy
+
+  runtime:
+    substrate: docker
+    spot: false
+    instanceType: t3.medium
+    region: us-east-1
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+
+  sourceAccess:
+    mode: allowlist
+
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+      allowedHosts:
+        - "api.github.com"
+      allowedMethods:
+        - GET
+
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+
+  budget:
+    compute:
+      maxSpendUSD: 10
+    ai:
+      maxSpendUSD: 5
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/network
+
+  policy:
+    allowShellEscape: false
+
+  agent:
+    maxConcurrentTasks: 2
+    taskTimeout: "15m"

@@ -48,6 +48,10 @@ type CompiledArtifacts struct {
 	// (empty if sourceAccess.github is nil). Written to sandbox-dir/github-token/
 	// and applied by km create when GitHub access is configured.
 	GitHubTokenHCL string
+
+	// DockerComposeYAML is the generated docker-compose.yml content.
+	// Only populated when substrate == docker. Empty for EC2/ECS.
+	DockerComposeYAML string
 }
 
 // SGRule is a single SG egress rule emitted by the compiler.
@@ -82,8 +86,10 @@ func Compile(p *profile.SandboxProfile, sandboxID string, onDemand bool, network
 		return compileEC2(p, sandboxID, onDemand, network)
 	case "ecs":
 		return compileECS(p, sandboxID, onDemand, network)
+	case "docker":
+		return compileDocker(p, sandboxID, network)
 	default:
-		return nil, fmt.Errorf("unknown substrate %q: must be \"ec2\" or \"ecs\"", substrate)
+		return nil, fmt.Errorf("unknown substrate %q: must be \"ec2\", \"ecs\", or \"docker\"", substrate)
 	}
 }
 
