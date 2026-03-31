@@ -227,12 +227,12 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 		}
 	}
 
-	// Rule 2: substrate must be ec2 or ecs (belt-and-suspenders — schema also checks this)
+	// Rule 2: substrate must be ec2, ecs, or docker (belt-and-suspenders — schema also checks this)
 	substrate := p.Spec.Runtime.Substrate
-	if substrate != "" && substrate != "ec2" && substrate != "ecs" {
+	if substrate != "" && substrate != "ec2" && substrate != "ecs" && substrate != "docker" {
 		errs = append(errs, ValidationError{
 			Path:    "spec.runtime.substrate",
-			Message: fmt.Sprintf("substrate %q is not supported; must be one of: ec2, ecs", substrate),
+			Message: fmt.Sprintf("substrate %q is not supported; must be one of: ec2, ecs, docker", substrate),
 		})
 	}
 

@@ -179,8 +179,8 @@
           "properties": {
             "substrate": {
               "type": "string",
-              "enum": ["ec2", "ecs"],
-              "description": "Compute backend: ec2 (EC2 instance) or ecs (Fargate task)"
+              "enum": ["ec2", "ecs", "docker"],
+              "description": "Compute backend: ec2 (EC2 instance), ecs (Fargate task), or docker (local)"
             },
             "spot": {
               "type": "boolean",

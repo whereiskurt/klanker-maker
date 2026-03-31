@@ -187,21 +187,21 @@ func TestSemanticInvalidSubstrate(t *testing.T) {
 
 	errs := profile.Validate(data)
 	if len(errs) == 0 {
-		t.Error("expected validation error for substrate 'docker', got none")
+		t.Error("expected validation error for substrate 'kubernetes', got none")
 		return
 	}
 
 	found := false
 	for _, e := range errs {
 		msg := e.Error()
-		if strings.Contains(msg, "substrate") || strings.Contains(msg, "docker") ||
+		if strings.Contains(msg, "substrate") || strings.Contains(msg, "kubernetes") ||
 			strings.Contains(msg, "ec2") || strings.Contains(msg, "ecs") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected error about invalid substrate 'docker', errors were: %v", errs)
+		t.Errorf("expected error about invalid substrate 'kubernetes', errors were: %v", errs)
 	}
 }
 
@@ -213,7 +213,7 @@ func TestValidateSchemaRejectsInvalidSubstrate(t *testing.T) {
 
 	errs := profile.ValidateSchema(data)
 	if len(errs) == 0 {
-		t.Error("expected schema error for substrate 'docker', got none")
+		t.Error("expected schema error for substrate 'kubernetes', got none")
 		return
 	}
 
@@ -222,13 +222,38 @@ func TestValidateSchemaRejectsInvalidSubstrate(t *testing.T) {
 	for _, e := range errs {
 		msg := e.Error()
 		if strings.Contains(msg, "substrate") || strings.Contains(msg, "enum") ||
-			strings.Contains(msg, "docker") {
+			strings.Contains(msg, "kubernetes") {
 			found = true
 			break
 		}
 	}
 	if !found {
 		t.Errorf("expected error referencing substrate enum, errors were: %v", errs)
+	}
+}
+
+func TestValidateDockerSubstrate(t *testing.T) {
+	data, err := os.ReadFile("../../testdata/profiles/valid-docker-substrate.yaml")
+	if err != nil {
+		t.Fatalf("failed to read test fixture: %v", err)
+	}
+
+	// Semantic validation must accept docker substrate
+	semanticErrs := profile.Validate(data)
+	if len(semanticErrs) != 0 {
+		t.Errorf("expected no semantic validation errors for substrate 'docker', got %d errors:", len(semanticErrs))
+		for _, e := range semanticErrs {
+			t.Errorf("  - %s", e.Error())
+		}
+	}
+
+	// Schema validation must accept docker substrate
+	schemaErrs := profile.ValidateSchema(data)
+	if len(schemaErrs) != 0 {
+		t.Errorf("expected no schema validation errors for substrate 'docker', got %d errors:", len(schemaErrs))
+		for _, e := range schemaErrs {
+			t.Errorf("  - %s", e.Error())
+		}
 	}
 }
 

@@ -1,7 +1,7 @@
 apiVersion: klankermaker.ai/v1alpha1
 kind: SandboxProfile
 metadata:
-  name: bad-substrate
+  name: docker-valid
   labels:
     tier: development
 
@@ -12,7 +12,7 @@ spec:
     teardownPolicy: destroy
 
   runtime:
-    substrate: kubernetes
+    substrate: docker
     spot: false
     instanceType: t3.medium
     region: us-east-1
