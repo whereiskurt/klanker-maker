@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Phase 36 context gathered
-last_updated: "2026-03-31T00:39:41.542Z"
+stopped_at: Completed 36-km-sandbox-base-container-image 36-02-PLAN.md
+last_updated: "2026-03-31T01:44:07.706Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 38
   completed_phases: 32
-  total_plans: 104
-  completed_plans: 102
+  total_plans: 108
+  completed_plans: 103
   percent: 0
 ---
 
@@ -149,6 +149,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 32 P02 | 289s | 2 tasks | 2 files |
 | Phase 32 P03 | 618s | 2 tasks | 2 files |
 | Phase 34-agent-profiles-agent-orchestrator-goose-and-codex-sandbox-profiles P01 | 14min | 2 tasks | 3 files |
+| Phase 36-km-sandbox-base-container-image P02 | 136s | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -398,6 +399,8 @@ Recent decisions affecting current work:
 - [Phase 32]: Extracted buildTarShellCmd as package-level helper for testability; paths space-joined for unquoted wildcard expansion
 - [Phase 34-agent-profiles-agent-orchestrator-goose-and-codex-sandbox-profiles]: Rust agent binaries need explicit CA cert env var (SSL_CERT_FILE/CODEX_CA_CERTIFICATE) pointing to /usr/local/share/ca-certificates/km-proxy-ca.crt for MITM proxy
 - [Phase 34-agent-profiles-agent-orchestrator-goose-and-codex-sandbox-profiles]: Lambda toolchain km binary must be updated alongside schema changes — cross-compile linux/arm64 and upload to s3://km-artifacts-12345/toolchain/km
+- [Phase 36-km-sandbox-base-container-image]: mainImage uses sidecarImage('sandbox') closure — same ECR pattern as dns-proxy/http-proxy/audit-log/tracing sidecars
+- [Phase 36-km-sandbox-base-container-image]: KM_INIT_COMMANDS and KM_PROFILE_ENV are base64-encoded JSON to safely embed multi-value config in ECS env vars
 
 ### Roadmap Evolution
 
@@ -449,6 +452,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-31T00:39:41.532Z
-Stopped at: Phase 36 context gathered
-Resume file: .planning/phases/36-km-sandbox-base-container-image/36-CONTEXT.md
+Last session: 2026-03-31T01:44:07.702Z
+Stopped at: Completed 36-km-sandbox-base-container-image 36-02-PLAN.md
+Resume file: None
