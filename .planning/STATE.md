@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: "Completed 34-01: agent-orchestrator, goose, and codex sandbox profiles"
-last_updated: "2026-03-29T21:18:37.012Z"
+stopped_at: Phase 36 context gathered
+last_updated: "2026-03-31T00:39:41.542Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
-  total_phases: 34
-  completed_phases: 31
-  total_plans: 103
-  completed_plans: 101
+  total_phases: 38
+  completed_phases: 32
+  total_plans: 104
+  completed_plans: 102
   percent: 0
 ---
 
@@ -449,6 +449,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-29T21:14:57.521Z
-Stopped at: Completed 34-01: agent-orchestrator, goose, and codex sandbox profiles
-Resume file: None
+Last session: 2026-03-31T00:39:41.532Z
+Stopped at: Phase 36 context gathered
+Resume file: .planning/phases/36-km-sandbox-base-container-image/36-CONTEXT.md
