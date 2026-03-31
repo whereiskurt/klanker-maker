@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	iampkg "github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/pricing"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -26,6 +28,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -232,16 +235,12 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		os.Setenv("KM_OPERATOR_EMAIL", cfg.OperatorEmail)
 	}
 
-	// Step 6: Load shared network config for the profile's region
+	// Step 6: Load shared network config for the profile's region.
+	// For docker substrate, skip LoadNetworkOutputs — there are no Terragrunt network outputs.
+	// Build a minimal NetworkConfig from km-config.yaml fields instead.
 	repoRoot := findRepoRoot()
 	region := resolvedProfile.Spec.Runtime.Region
 	regionLabel := compiler.RegionLabel(region)
-	networkOutputs, err := LoadNetworkOutputs(repoRoot, regionLabel)
-	if err != nil {
-		return fmt.Errorf("failed to load network config for %s: %w\nRun 'km init --region %s' first", region, err, region)
-	}
-	// Derive email domain early so the compiler can use it.
-	// This must be computed before calling compiler.Compile.
 	networkDomain := cfg.Domain
 	if networkDomain == "" {
 		networkDomain = "klankermaker.ai"
@@ -250,13 +249,26 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	if artifactsBucket == "" {
 		artifactsBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
 	}
-	network := &compiler.NetworkConfig{
-		VPCID:             networkOutputs.VPCID,
-		PublicSubnets:     networkOutputs.PublicSubnets,
-		AvailabilityZones: networkOutputs.AvailabilityZones,
-		RegionLabel:       regionLabel,
-		EmailDomain:       "sandboxes." + networkDomain,
-		ArtifactsBucket:   artifactsBucket,
+	var network *compiler.NetworkConfig
+	if substrate == "docker" {
+		// Docker substrate: construct minimal NetworkConfig — no Terragrunt outputs needed.
+		network = &compiler.NetworkConfig{
+			EmailDomain:     "sandboxes." + networkDomain,
+			ArtifactsBucket: artifactsBucket,
+		}
+	} else {
+		networkOutputs, err := LoadNetworkOutputs(repoRoot, regionLabel)
+		if err != nil {
+			return fmt.Errorf("failed to load network config for %s: %w\nRun 'km init --region %s' first", region, err, region)
+		}
+		network = &compiler.NetworkConfig{
+			VPCID:             networkOutputs.VPCID,
+			PublicSubnets:     networkOutputs.PublicSubnets,
+			AvailabilityZones: networkOutputs.AvailabilityZones,
+			RegionLabel:       regionLabel,
+			EmailDomain:       "sandboxes." + networkDomain,
+			ArtifactsBucket:   artifactsBucket,
+		}
 	}
 
 	// Step 6b: Resolve spot rate for budget enforcement (BUDG-03).
@@ -285,7 +297,19 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		network.SpotRateUSD = spotRate
 	}
 
-	// Step 7-10: Compile, create sandbox dir, populate, and apply.
+	// Step 7: Compile profile into Terragrunt/Docker artifacts.
+	// For docker substrate, compile once and dispatch immediately — no AZ retry loop needed.
+	{
+		artifacts, err := compiler.Compile(resolvedProfile, sandboxID, onDemand, network)
+		if err != nil {
+			return fmt.Errorf("failed to compile profile: %w", err)
+		}
+		if substrate == "docker" {
+			return runCreateDocker(ctx, cfg, awsCfg, resolvedProfile, sandboxID, artifacts, verbose)
+		}
+	}
+
+	// Step 7-10: Create sandbox dir, populate, and apply (non-docker path).
 	// For spot instances, retry across available AZs on capacity failure.
 	maxAttempts := len(network.AvailabilityZones)
 	if maxAttempts < 1 {
@@ -850,6 +874,345 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	}
 
 	return nil
+}
+
+// runCreateDocker handles the full docker create workflow.
+// It provisions a local sandbox via Docker Compose without any Terragrunt involvement.
+// Steps: create sandbox dir, create IAM roles via SDK, assume roles for scoped creds,
+// inject credentials into compose YAML, write docker-compose.yml, run docker compose up -d,
+// write S3 metadata, write MLflow run record.
+func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config, resolvedProfile *profile.SandboxProfile, sandboxID string, artifacts *compiler.CompiledArtifacts, verbose bool) error {
+	createStart := time.Now()
+	fmt.Printf("\nProvisioning docker sandbox %s...\n", sandboxID)
+
+	// Step D1: Create sandbox directory ~/.km/sandboxes/{sandboxID}/
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("get home directory: %w", err)
+	}
+	sandboxLocalDir := filepath.Join(homeDir, ".km", "sandboxes", sandboxID)
+	if err := os.MkdirAll(sandboxLocalDir, 0o700); err != nil {
+		return fmt.Errorf("create sandbox local directory %s: %w", sandboxLocalDir, err)
+	}
+	fmt.Printf("  ✓ Sandbox directory created: %s\n", sandboxLocalDir)
+
+	// Step D2: Get current AWS region and account ID for role naming.
+	region := resolvedProfile.Spec.Runtime.Region
+	if region == "" {
+		region = awsCfg.Region
+	}
+	if region == "" {
+		region = "us-east-1"
+	}
+	stsClient := sts.NewFromConfig(awsCfg)
+	callerIDOut, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+	if err != nil {
+		return fmt.Errorf("get caller identity for docker role creation: %w", err)
+	}
+	accountID := aws.ToString(callerIDOut.Account)
+
+	// Step D3: Create IAM roles via SDK (not Terraform).
+	iamClient := iampkg.NewFromConfig(awsCfg)
+	sandboxRoleName := fmt.Sprintf("km-docker-%s-%s", sandboxID, region)
+	sidecarRoleName := fmt.Sprintf("km-sidecar-%s-%s", sandboxID, region)
+
+	// Trust policy allows both ec2.amazonaws.com and the operator account for STS AssumeRole.
+	sandboxTrustPolicy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {"Service": "ec2.amazonaws.com"},
+      "Action": "sts:AssumeRole"
+    },
+    {
+      "Effect": "Allow",
+      "Principal": {"AWS": "arn:aws:iam::%s:root"},
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}`, accountID)
+
+	sidecarTrustPolicy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {"AWS": "arn:aws:iam::%s:root"},
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}`, accountID)
+
+	// Create sandbox role.
+	sandboxRoleOut, sandboxRoleErr := iamClient.CreateRole(ctx, &iampkg.CreateRoleInput{
+		RoleName:                 aws.String(sandboxRoleName),
+		AssumeRolePolicyDocument: aws.String(sandboxTrustPolicy),
+		Description:              aws.String(fmt.Sprintf("km docker sandbox role for %s", sandboxID)),
+		Tags: []iamtypes.Tag{
+			{Key: aws.String("km:sandbox-id"), Value: aws.String(sandboxID)},
+			{Key: aws.String("km:substrate"), Value: aws.String("docker")},
+		},
+	})
+	if sandboxRoleErr != nil {
+		log.Warn().Err(sandboxRoleErr).Str("role", sandboxRoleName).Msg("failed to create sandbox IAM role (non-fatal)")
+	} else {
+		fmt.Printf("  ✓ IAM role created: %s\n", sandboxRoleName)
+		// Attach inline policy if IAMPolicy is available.
+		if artifacts.IAMPolicy != nil {
+			inlinePolicyDoc, marshalErr := json.Marshal(artifacts.IAMPolicy)
+			if marshalErr == nil {
+				_, putErr := iamClient.PutRolePolicy(ctx, &iampkg.PutRolePolicyInput{
+					RoleName:       aws.String(sandboxRoleName),
+					PolicyName:     aws.String("km-sandbox-inline"),
+					PolicyDocument: aws.String(string(inlinePolicyDoc)),
+				})
+				if putErr != nil {
+					log.Warn().Err(putErr).Str("role", sandboxRoleName).Msg("failed to attach inline policy to sandbox role (non-fatal)")
+				}
+			}
+		}
+	}
+
+	// Create sidecar role.
+	sidecarRoleOut, sidecarRoleErr := iamClient.CreateRole(ctx, &iampkg.CreateRoleInput{
+		RoleName:                 aws.String(sidecarRoleName),
+		AssumeRolePolicyDocument: aws.String(sidecarTrustPolicy),
+		Description:              aws.String(fmt.Sprintf("km docker sidecar role for %s", sandboxID)),
+		Tags: []iamtypes.Tag{
+			{Key: aws.String("km:sandbox-id"), Value: aws.String(sandboxID)},
+			{Key: aws.String("km:substrate"), Value: aws.String("docker")},
+		},
+	})
+	if sidecarRoleErr != nil {
+		log.Warn().Err(sidecarRoleErr).Str("role", sidecarRoleName).Msg("failed to create sidecar IAM role (non-fatal)")
+	} else {
+		fmt.Printf("  ✓ IAM role created: %s\n", sidecarRoleName)
+		// Sidecar role inline policy: DynamoDB budget table + S3 audit/OTEL prefix.
+		artifactBucket := cfg.ArtifactsBucket
+		if artifactBucket == "" {
+			artifactBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
+		}
+		sidecarPolicyDoc := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"],
+      "Resource": "arn:aws:dynamodb:%s:%s:table/km-budget-%s"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject"],
+      "Resource": "arn:aws:s3:::%s/audit/%s/*"
+    }
+  ]
+}`, region, accountID, sandboxID, artifactBucket, sandboxID)
+		_, putErr := iamClient.PutRolePolicy(ctx, &iampkg.PutRolePolicyInput{
+			RoleName:       aws.String(sidecarRoleName),
+			PolicyName:     aws.String("km-sidecar-inline"),
+			PolicyDocument: aws.String(sidecarPolicyDoc),
+		})
+		if putErr != nil {
+			log.Warn().Err(putErr).Str("role", sidecarRoleName).Msg("failed to attach inline policy to sidecar role (non-fatal)")
+		}
+	}
+
+	// Step D4: Wait for roles to propagate (IAM eventual consistency — Pitfall 4).
+	// Poll GetRole until available, then wait additional 5s before AssumeRole.
+	sandboxRoleARN := ""
+	sidecarRoleARN := ""
+	if sandboxRoleErr == nil && sandboxRoleOut.Role != nil {
+		sandboxRoleARN = aws.ToString(sandboxRoleOut.Role.Arn)
+		// Poll until role is reachable.
+		for i := 0; i < 10; i++ {
+			_, pollErr := iamClient.GetRole(ctx, &iampkg.GetRoleInput{RoleName: aws.String(sandboxRoleName)})
+			if pollErr == nil {
+				break
+			}
+			time.Sleep(2 * time.Second)
+		}
+	}
+	if sidecarRoleErr == nil && sidecarRoleOut.Role != nil {
+		sidecarRoleARN = aws.ToString(sidecarRoleOut.Role.Arn)
+		// Poll until role is reachable.
+		for i := 0; i < 10; i++ {
+			_, pollErr := iamClient.GetRole(ctx, &iampkg.GetRoleInput{RoleName: aws.String(sidecarRoleName)})
+			if pollErr == nil {
+				break
+			}
+			time.Sleep(2 * time.Second)
+		}
+	}
+	// Additional propagation delay before AssumeRole.
+	if sandboxRoleARN != "" || sidecarRoleARN != "" {
+		time.Sleep(5 * time.Second)
+	}
+
+	// Step D5: AssumeRole for scoped credentials.
+	sandboxKeyID, sandboxSecret, sandboxToken := "", "", ""
+	sidecarKeyID, sidecarSecret, sidecarToken := "", "", ""
+
+	if sandboxRoleARN != "" {
+		assumeOut, assumeErr := stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
+			RoleArn:         aws.String(sandboxRoleARN),
+			RoleSessionName: aws.String("km-docker-" + sandboxID),
+			DurationSeconds: aws.Int32(3600),
+		})
+		if assumeErr != nil {
+			log.Warn().Err(assumeErr).Str("role", sandboxRoleName).Msg("failed to assume sandbox role (non-fatal)")
+		} else if assumeOut.Credentials != nil {
+			sandboxKeyID = aws.ToString(assumeOut.Credentials.AccessKeyId)
+			sandboxSecret = aws.ToString(assumeOut.Credentials.SecretAccessKey)
+			sandboxToken = aws.ToString(assumeOut.Credentials.SessionToken)
+		}
+	}
+
+	if sidecarRoleARN != "" {
+		assumeOut, assumeErr := stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
+			RoleArn:         aws.String(sidecarRoleARN),
+			RoleSessionName: aws.String("km-docker-sidecar-" + sandboxID),
+			DurationSeconds: aws.Int32(3600),
+		})
+		if assumeErr != nil {
+			log.Warn().Err(assumeErr).Str("role", sidecarRoleName).Msg("failed to assume sidecar role (non-fatal)")
+		} else if assumeOut.Credentials != nil {
+			sidecarKeyID = aws.ToString(assumeOut.Credentials.AccessKeyId)
+			sidecarSecret = aws.ToString(assumeOut.Credentials.SecretAccessKey)
+			sidecarToken = aws.ToString(assumeOut.Credentials.SessionToken)
+		}
+	}
+
+	// Step D6: Inject real credentials and role ARNs into compose YAML.
+	// Replace placeholders written by compileDocker() with actual values.
+	composeYAML := artifacts.DockerComposeYAML
+	composeYAML = strings.ReplaceAll(composeYAML, "PLACEHOLDER_SANDBOX_ROLE_ARN", sandboxRoleARN)
+	composeYAML = strings.ReplaceAll(composeYAML, "PLACEHOLDER_SIDECAR_ROLE_ARN", sidecarRoleARN)
+	composeYAML = strings.ReplaceAll(composeYAML, "PLACEHOLDER_OPERATOR_KEY", sandboxKeyID)
+	composeYAML = strings.ReplaceAll(composeYAML, "PLACEHOLDER_OPERATOR_SECRET", sandboxSecret)
+	composeYAML = strings.ReplaceAll(composeYAML, "PLACEHOLDER_OPERATOR_TOKEN", sandboxToken)
+	// Also inject sidecar credentials as a credentials file (written by cred-refresh).
+	_ = sidecarKeyID
+	_ = sidecarSecret
+	_ = sidecarToken
+
+	// Step D7: Write docker-compose.yml to sandbox directory.
+	composeFilePath := filepath.Join(sandboxLocalDir, "docker-compose.yml")
+	if err := os.WriteFile(composeFilePath, []byte(composeYAML), 0o600); err != nil {
+		return fmt.Errorf("write docker-compose.yml: %w", err)
+	}
+	fmt.Printf("  ✓ docker-compose.yml written to %s\n", composeFilePath)
+
+	// Step D8: Write .km-ttl file with TTL expiry timestamp (ISO8601).
+	now := time.Now().UTC()
+	if resolvedProfile.Spec.Lifecycle.TTL != "" {
+		if d, parseErr := time.ParseDuration(resolvedProfile.Spec.Lifecycle.TTL); parseErr == nil {
+			ttlExpiry := now.Add(d)
+			ttlPath := filepath.Join(sandboxLocalDir, ".km-ttl")
+			if writeErr := os.WriteFile(ttlPath, []byte(ttlExpiry.Format(time.RFC3339)), 0o600); writeErr != nil {
+				log.Warn().Err(writeErr).Str("sandbox_id", sandboxID).Msg("failed to write .km-ttl file (non-fatal)")
+			}
+		}
+	}
+
+	// Step D9: Run `docker compose up -d`.
+	// Use DockerComposeExecFunc (package-level var) so tests can override.
+	if err := DockerComposeExecFunc(ctx, sandboxID, composeFilePath, verbose); err != nil {
+		// Clean up on failure.
+		_ = os.RemoveAll(sandboxLocalDir)
+		return fmt.Errorf("docker compose up failed for sandbox %s: %w", sandboxID, err)
+	}
+	fmt.Printf("  ✓ docker compose up -d completed\n")
+
+	// Step D10: Write S3 metadata so km list/status work unchanged.
+	artifactBucket := cfg.ArtifactsBucket
+	if artifactBucket == "" {
+		artifactBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
+	}
+	s3Client := s3.NewFromConfig(awsCfg)
+
+	// Write MLflow run record (non-fatal).
+	mlflowRun := awspkg.MLflowRun{
+		SandboxID:   sandboxID,
+		ProfileName: resolvedProfile.Metadata.Name,
+		Substrate:   string(resolvedProfile.Spec.Runtime.Substrate),
+		Region:      region,
+		TTL:         resolvedProfile.Spec.Lifecycle.TTL,
+		StartTime:   now,
+		Experiment:  "klankrmkr",
+	}
+	if mlflowErr := awspkg.WriteMLflowRun(ctx, s3Client, artifactBucket, mlflowRun); mlflowErr != nil {
+		log.Warn().Err(mlflowErr).Str("sandbox_id", sandboxID).Msg("failed to write MLflow run record (non-fatal)")
+	}
+
+	// Write sandbox metadata.json to S3.
+	if cfg.StateBucket != "" {
+		var ttlExpiry *time.Time
+		if resolvedProfile.Spec.Lifecycle.TTL != "" {
+			if d, parseErr := time.ParseDuration(resolvedProfile.Spec.Lifecycle.TTL); parseErr == nil {
+				t := now.Add(d)
+				ttlExpiry = &t
+			}
+		}
+		meta := awspkg.SandboxMetadata{
+			SandboxID:   sandboxID,
+			ProfileName: resolvedProfile.Metadata.Name,
+			Substrate:   "docker",
+			Region:      region,
+			CreatedAt:   now,
+			TTLExpiry:   ttlExpiry,
+			IdleTimeout: resolvedProfile.Spec.Lifecycle.IdleTimeout,
+			MaxLifetime: resolvedProfile.Spec.Lifecycle.MaxLifetime,
+			CreatedBy:   "cli",
+		}
+		metaJSON, _ := json.Marshal(meta)
+		_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:      aws.String(cfg.StateBucket),
+			Key:         aws.String("tf-km/sandboxes/" + sandboxID + "/metadata.json"),
+			Body:        bytes.NewReader(metaJSON),
+			ContentType: aws.String("application/json"),
+		})
+		if putErr != nil {
+			log.Warn().Err(putErr).Str("sandbox_id", sandboxID).Msg("failed to write sandbox metadata (non-fatal)")
+		} else {
+			fmt.Printf("  ✓ Metadata stored in S3 (substrate=docker)\n")
+		}
+	}
+
+	// Step D11: Print success banner.
+	elapsed := time.Since(createStart).Round(time.Second)
+	fmt.Println()
+	fmt.Println(strings.Repeat("─", 50))
+	fmt.Printf("Sandbox %s created successfully (docker). (%s)\n", sandboxID, elapsed)
+	if resolvedProfile.Spec.Lifecycle.TTL != "" {
+		if d, err := time.ParseDuration(resolvedProfile.Spec.Lifecycle.TTL); err == nil {
+			ttlExpiry := now.Add(d)
+			fmt.Printf("  TTL: %s (expires %s)\n", resolvedProfile.Spec.Lifecycle.TTL, ttlExpiry.Local().Format("3:04:05 PM MST"))
+		}
+	}
+	fmt.Printf("  Hint: km shell %s\n", sandboxID)
+
+	return nil
+}
+
+// DockerComposeExecFunc is the package-level function for running docker compose up -d.
+// Tests can replace this variable to avoid actually running docker.
+var DockerComposeExecFunc = func(ctx context.Context, sandboxID, composeFilePath string, verbose bool) error {
+	return runDockerComposeUp(ctx, sandboxID, composeFilePath, verbose)
+}
+
+// runDockerComposeUp runs `docker compose -f {path} -p km-{sandboxID} up -d`.
+func runDockerComposeUp(ctx context.Context, sandboxID, composeFilePath string, verbose bool) error {
+	args := []string{"compose", "-f", composeFilePath, "-p", "km-" + sandboxID, "up", "-d"}
+	dockerCmd := exec.CommandContext(ctx, "docker", args...)
+	if verbose {
+		dockerCmd.Stdout = os.Stdout
+		dockerCmd.Stderr = os.Stderr
+	} else {
+		dockerCmd.Stdout = io.Discard
+		dockerCmd.Stderr = io.Discard
+	}
+	return dockerCmd.Run()
 }
 
 // runCreateRemote compiles the profile locally, uploads artifacts to S3, and publishes
