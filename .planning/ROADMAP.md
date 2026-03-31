@@ -825,3 +825,23 @@ Plans:
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 39 to break down)
+
+### Phase 40: eBPF TC/cgroup network enforcement layer - kernel-level DNS HTTP TLS-SNI allowlisting as toggleable alternative to iptables DNAT proxy sidecars, fixes root bypass
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 39
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 40 to break down)
+
+### Phase 41: eBPF SSL uprobe observability layer - plaintext TLS capture via OpenSSL hooks, replaces MITM proxy for inspection, GitHub repo filtering moves to uprobes
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 40
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 41 to break down)
