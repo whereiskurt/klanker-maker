@@ -80,6 +80,7 @@ spec:
         - ".sentry.io"
         - ".cloudfront.net"
       allowedHosts:
+        - ".amazonaws.com"
         - "api.anthropic.com"
         - "statsig.anthropic.com"
         - "statsig.com"
