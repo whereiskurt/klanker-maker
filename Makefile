@@ -29,7 +29,7 @@ SIDECARS := dns-proxy http-proxy audit-log
 OTELCOL_VERSION ?= 0.120.0
 OTELCOL_URL     := https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$(OTELCOL_VERSION)/otelcol-contrib_$(OTELCOL_VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build build-km bump-version sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas build-create-handler build-email-create-handler push-create-handler clean fetch-otelcol sandbox-image
+.PHONY: build build-km bump-version sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas build-create-handler build-email-create-handler push-create-handler clean fetch-otelcol sandbox-image smoke-test-sandbox
 
 ## bump-version: increment the patch version in VERSION file
 bump-version:
@@ -86,6 +86,10 @@ sandbox-image:
 	  --tag km-sandbox:latest \
 	  --load \
 	  containers/sandbox/
+
+## smoke-test-sandbox: build and smoke-test the km-sandbox container image
+smoke-test-sandbox: sandbox-image
+	bash scripts/smoke-test-sandbox.sh
 
 ## build-sidecars: cross-compile Go sidecars locally (no S3 upload)
 build-sidecars:
