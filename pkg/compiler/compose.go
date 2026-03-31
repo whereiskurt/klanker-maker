@@ -173,7 +173,8 @@ services:
   km-cred-refresh:
     image: {{ .MainImage }}
     container_name: km-{{ .SandboxID }}-cred-refresh
-    command: ["/opt/km/cred-refresh.sh"]
+    entrypoint: ["/opt/km/cred-refresh.sh"]
+    command: []
     environment:
       KM_SANDBOX_ID: "{{ .SandboxID }}"
       KM_SANDBOX_ROLE_ARN: "PLACEHOLDER_SANDBOX_ROLE_ARN"

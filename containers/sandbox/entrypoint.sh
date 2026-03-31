@@ -67,10 +67,16 @@ setup_ca_trust() {
         return 0
     fi
     log "Installing proxy CA cert from ${cert_s3} ..."
-    aws s3 cp "${cert_s3}" /etc/pki/ca-trust/source/anchors/km-proxy-ca.crt \
-        || log_fail "Failed to download proxy CA cert from ${cert_s3}"
-    update-ca-trust \
-        || log_fail "update-ca-trust failed"
+    # Bypass HTTP proxy for CA cert download — this is a bootstrap step before
+    # the proxy is ready (proxy itself needs the CA cert to start MITM).
+    if env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
+        aws s3 cp "${cert_s3}" /etc/pki/ca-trust/source/anchors/km-proxy-ca.crt 2>/dev/null; then
+        update-ca-trust \
+            || log_fail "update-ca-trust failed"
+    else
+        log_warn "Failed to download proxy CA cert from ${cert_s3} — HTTPS MITM inspection will not work"
+        return 0
+    fi
     # Export CA bundle path for tools that bundle their own CA stores
     local bundle="/etc/pki/tls/certs/ca-bundle.crt"
     export SSL_CERT_FILE="${bundle}"
@@ -392,6 +398,23 @@ UPLOAD
 # ============================================================
 log "=== km-sandbox entrypoint starting ==="
 log "sandbox_id=${KM_SANDBOX_ID:-<unset>}"
+
+# Wait for credential files from cred-refresh sidecar (shared volume).
+# The cred-refresh container writes /creds/sandbox and /creds/sidecar.
+# Without creds, S3/SSM calls will fail.
+creds_file="${AWS_SHARED_CREDENTIALS_FILE:-}"
+if [ -n "$creds_file" ] && [ ! -f "$creds_file" ]; then
+    log "Waiting for credentials file: ${creds_file} ..."
+    for i in $(seq 1 30); do
+        [ -f "$creds_file" ] && break
+        sleep 2
+    done
+    if [ -f "$creds_file" ]; then
+        log "Credentials file available after $((i * 2))s"
+    else
+        log_warn "Credentials file not found after 60s — AWS calls may fail"
+    fi
+fi
 
 # Critical sections — abort on failure
 setup_ca_trust

@@ -58,7 +58,8 @@ RUN useradd -m -d /home/sandbox -s /bin/bash -u 1000 sandbox \
 # 5. Entrypoint
 # ============================================================
 COPY entrypoint.sh /opt/km/entrypoint.sh
-RUN chmod +x /opt/km/entrypoint.sh
+COPY cred-refresh.sh /opt/km/cred-refresh.sh
+RUN chmod +x /opt/km/entrypoint.sh /opt/km/cred-refresh.sh
 
 WORKDIR /workspace
 
