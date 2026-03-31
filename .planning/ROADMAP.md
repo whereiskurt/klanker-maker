@@ -775,3 +775,36 @@ Plans:
 
 Plans:
 - [ ] 34-01-PLAN.md — Create agent-orchestrator, goose, and codex profile YAML files and validate
+
+### Phase 35: MITM CA trust for Python, Node, and non-system SSL libraries
+
+**Goal:** Tools that bundle their own CA stores (Python certifi, Node.js, Rust webpki-roots) trust the km proxy CA so MITM interception works for budget metering and GitHub repo filtering — without `SSLCertVerificationError` or equivalent
+**Depends on:** Phase 34
+**Plans:** 1/1 plans complete
+
+Plans:
+- [ ] 35-01-PLAN.md — Add SSL_CERT_FILE, REQUESTS_CA_BUNDLE, CURL_CA_BUNDLE, NODE_EXTRA_CA_CERTS env vars to user-data template
+
+### Phase 36: km-sandbox base container image
+
+**Goal:** A `km-sandbox` base container image that provides the same sandbox environment as EC2 user-data — proxy CA trust, secret injection, GitHub credentials, initCommands, rsync restore, OTEL telemetry, and mail polling — all driven by environment variables via a container entrypoint script. This is the foundation for both Docker local and EKS substrates.
+**Depends on:** Phase 35
+**Requirements:** PROV-09, PROV-10
+**Plans:** 3 plans
+
+Plans:
+- [ ] 36-01-PLAN.md — Dockerfile + entrypoint.sh (containers/sandbox/)
+- [ ] 36-02-PLAN.md — ECS compiler: replace MAIN_IMAGE_PLACEHOLDER, add KM_* env vars
+- [ ] 36-03-PLAN.md — Build pipeline: Makefile targets + km init sandbox image push
+
+### Phase 37: Docker Compose local substrate (connected mode)
+
+**Goal:** `km create --substrate docker` provisions a local sandbox using Docker Compose with the same 5-container topology (main + 4 sidecars), connected to the existing AWS platform — SSM for secrets, SES for email, DynamoDB for budget tracking, S3 for artifacts/OTEL. Same enforcement as EC2, faster iteration (~5s up vs ~60s), runs on the operator's laptop
+**Depends on:** Phase 36
+**Plans:** 0/0
+
+### Phase 38: EKS / Kubernetes substrate
+
+**Goal:** `km create --substrate eks` provisions a sandbox as a Kubernetes Pod with sidecar containers, NetworkPolicy for egress enforcement, IRSA for IAM, and the same budget/proxy/audit topology — running on an existing EKS cluster
+**Depends on:** Phase 36
+**Plans:** 0/0
