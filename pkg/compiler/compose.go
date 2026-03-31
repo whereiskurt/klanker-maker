@@ -221,8 +221,11 @@ func generateDockerCompose(p *profile.SandboxProfile, sandboxID string, network 
 	}
 	initCmdsB64 := base64.StdEncoding.EncodeToString(initCmdsJSON)
 
+	// Inject Bedrock env vars if useBedrock is set.
+	profileEnv := mergeBedrockEnv(p)
+
 	// Encode profile env as base64 JSON object
-	profileEnvJSON, err := json.Marshal(p.Spec.Execution.Env)
+	profileEnvJSON, err := json.Marshal(profileEnv)
 	if err != nil {
 		return "", fmt.Errorf("marshal profile env: %w", err)
 	}

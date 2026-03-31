@@ -33,6 +33,16 @@
             "type": "string"
           },
           "description": "Arbitrary key-value labels for organization and filtering"
+        },
+        "prefix": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]{0,11}$",
+          "description": "Optional sandbox ID prefix. Defaults to 'sb' when omitted."
+        },
+        "alias": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]{0,15}$",
+          "description": "Optional alias template for sandbox. Auto-generates alias-1, alias-2, etc."
         }
       }
     },
@@ -203,12 +213,39 @@
               "minLength": 1,
               "description": "Initial working directory"
             },
+            "useBedrock": {
+              "type": "boolean",
+              "description": "Route Anthropic API calls through AWS Bedrock instead of api.anthropic.com"
+            },
             "env": {
               "type": "object",
               "additionalProperties": {
                 "type": "string"
               },
               "description": "Additional environment variables to inject"
+            },
+            "initCommands": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Shell commands to run after sandbox starts, before user session"
+            },
+            "initScripts": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Local script file paths to upload to S3 and run on startup"
+            },
+            "rsync": {
+              "type": "string",
+              "description": "Name of a saved home directory snapshot to restore on boot (created via km rsync save)"
+            },
+            "rsyncPaths": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Paths relative to sandbox user $HOME to include in rsync snapshots. Shell wildcards supported (e.g. projects/*/config)."
+            },
+            "rsyncFileList": {
+              "type": "string",
+              "description": "Path to a local YAML file containing additional rsync paths (resolved from operator cwd at km rsync save time)."
             }
           }
         },
@@ -321,7 +358,25 @@
           "additionalProperties": false,
           "properties": {
             "commandLog": { "$ref": "#/$defs/LogDestination" },
-            "networkLog": { "$ref": "#/$defs/LogDestination" }
+            "networkLog": { "$ref": "#/$defs/LogDestination" },
+            "claudeTelemetry": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Enable Claude Code OpenTelemetry export (default: true)"
+                },
+                "logPrompts": {
+                  "type": "boolean",
+                  "description": "Include actual prompt text in telemetry (default: false)"
+                },
+                "logToolDetails": {
+                  "type": "boolean",
+                  "description": "Include tool parameters (bash commands, file paths) in telemetry (default: false)"
+                }
+              }
+            }
           }
         },
         "policy": {

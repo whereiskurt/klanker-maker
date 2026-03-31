@@ -144,6 +144,11 @@ type ExecutionSpec struct {
 	Shell string `yaml:"shell"`
 	// WorkingDir is the initial working directory.
 	WorkingDir string `yaml:"workingDir"`
+	// UseBedrock routes Anthropic API calls through AWS Bedrock instead of api.anthropic.com.
+	// When true, the compiler injects CLAUDE_CODE_USE_BEDROCK=1, ANTHROPIC_BASE_URL (Bedrock endpoint),
+	// and model ID mappings (Sonnet/Opus/Haiku) as environment variables. No ANTHROPIC_API_KEY needed —
+	// authentication uses the sandbox's AWS credentials via SigV4.
+	UseBedrock bool `yaml:"useBedrock,omitempty"`
 	// Env is a map of additional environment variables to inject.
 	Env map[string]string `yaml:"env,omitempty"`
 	// InitCommands is a list of shell commands to run after the sandbox starts.

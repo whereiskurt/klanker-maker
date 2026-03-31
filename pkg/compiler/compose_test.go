@@ -93,9 +93,9 @@ func TestDockerComposeCredIsolation(t *testing.T) {
 
 	yaml := artifacts.DockerComposeYAML
 
-	// km-cred-refresh must have operator credential placeholders
-	if !strings.Contains(yaml, "AWS_ACCESS_KEY_ID") {
-		t.Error("expected km-cred-refresh to have AWS_ACCESS_KEY_ID in docker-compose YAML")
+	// km-cred-refresh must mount host ~/.aws for SSO-based credential refresh
+	if !strings.Contains(yaml, ".aws:") {
+		t.Error("expected km-cred-refresh to mount host ~/.aws directory")
 	}
 
 	// main and sidecars must use shared credentials file, not direct operator keys

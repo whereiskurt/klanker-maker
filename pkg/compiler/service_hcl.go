@@ -758,9 +758,10 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 			params.KMInitCommands = base64.StdEncoding.EncodeToString(initJSON)
 		}
 	}
-	// KM_PROFILE_ENV: base64-encoded JSON map of env vars
-	if len(p.Spec.Execution.Env) > 0 {
-		envJSON, err := json.Marshal(p.Spec.Execution.Env)
+	// KM_PROFILE_ENV: base64-encoded JSON map of env vars (includes Bedrock vars if useBedrock)
+	profileEnv := mergeBedrockEnv(p)
+	if len(profileEnv) > 0 {
+		envJSON, err := json.Marshal(profileEnv)
 		if err == nil {
 			params.KMProfileEnv = base64.StdEncoding.EncodeToString(envJSON)
 		}

@@ -24,30 +24,16 @@ spec:
   execution:
     shell: /bin/bash
     workingDir: /workspace
+    useBedrock: true
     env:
       SANDBOX_MODE: goose
       # Goose config — provider name is "aws_bedrock" (not "amazon_bedrock")
       GOOSE_PROVIDER: aws_bedrock
       GOOSE_MODEL: us.anthropic.claude-opus-4-6-v1
-      AWS_DEFAULT_REGION: us-east-1
       GOOSE_MODE: auto
-      # Disable telemetry prompt on first run (non-interactive)
       GOOSE_TELEMETRY_ENABLED: "false"
-      # NOTE: The sandbox bootstrap sets OTEL_EXPORTER_OTLP_PROTOCOL=grpc for Claude Code.
-      # Goose's Rust OTLP exporter panics on grpc (it uses HTTP client internally).
-      # The goose wrapper script in initCommands overrides this to http/protobuf for goose.
-      # Codex has its own CA cert env var — can point to just the proxy CA
+      # Codex CA cert — points to the proxy CA for MITM trust
       CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
-      # Do NOT set SSL_CERT_FILE to the proxy CA alone — it replaces the entire
-      # trust store, breaking Bedrock TLS (CONNECT tunnel uses Amazon's real cert).
-      # Instead, append proxy CA to system bundle via initCommand below.
-      # Claude Code via Bedrock
-      ANTHROPIC_BASE_URL: "https://bedrock-runtime.us-east-1.amazonaws.com"
-      ANTHROPIC_DEFAULT_SONNET_MODEL: us.anthropic.claude-sonnet-4-6
-      ANTHROPIC_DEFAULT_OPUS_MODEL: us.anthropic.claude-opus-4-6-v1
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: us.anthropic.claude-haiku-4-5-20251001-v1:0
-      CLAUDE_CODE_USE_BEDROCK: "1"
-      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
       # Codex — OPENAI_API_KEY must be injected via SSM at runtime
       OPENAI_API_KEY: ""
     rsyncPaths:

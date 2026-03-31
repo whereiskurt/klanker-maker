@@ -213,6 +213,10 @@
               "minLength": 1,
               "description": "Initial working directory"
             },
+            "useBedrock": {
+              "type": "boolean",
+              "description": "Route Anthropic API calls through AWS Bedrock instead of api.anthropic.com"
+            },
             "env": {
               "type": "object",
               "additionalProperties": {

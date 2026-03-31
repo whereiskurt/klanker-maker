@@ -825,7 +825,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 	params.Rsync = p.Spec.Execution.Rsync
 	params.InitCommands = p.Spec.Execution.InitCommands
 	params.InitScripts = p.Spec.Execution.InitScripts
-	params.ProfileEnv = p.Spec.Execution.Env
+	params.ProfileEnv = mergeBedrockEnv(p)
 
 	// Populate Claude Code OTEL telemetry fields (OTEL-01, OTEL-06).
 	// IsEnabled() returns true when ClaudeTelemetry is nil (default on).
