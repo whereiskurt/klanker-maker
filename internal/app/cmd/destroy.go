@@ -14,6 +14,7 @@ import (
 	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	iampkg "github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
@@ -134,6 +135,22 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool, ve
 	// Uses cfg.StateBucket; fail-open if bucket not configured or metadata missing.
 	if err := CheckSandboxLock(ctx, cfg, sandboxID); err != nil {
 		return err
+	}
+
+	// Step 2c: Check S3 metadata for docker substrate — route before tag-based lookup.
+	// Docker sandboxes have no AWS-tagged EC2/ECS resources, so tag lookup would fail.
+	stateBucket := cfg.StateBucket
+	if stateBucket == "" {
+		stateBucket = os.Getenv("KM_STATE_BUCKET")
+	}
+	if stateBucket != "" {
+		s3ClientEarly := s3.NewFromConfig(awsCfg)
+		if meta, metaErr := awspkg.ReadSandboxMetadata(ctx, s3ClientEarly, stateBucket, sandboxID); metaErr == nil {
+			if meta.Substrate == "docker" {
+				return runDestroyDocker(ctx, cfg, awsCfg, sandboxID, verbose)
+			}
+		}
+		// If metadata not found or substrate is not docker, proceed with normal Terragrunt path.
 	}
 
 	// Step 3: Discover sandbox via tag-based lookup
@@ -375,7 +392,8 @@ locals {
 
 	// Step 12: Delete sandbox metadata.json from S3 so km list no longer shows it.
 	// Read metadata first so we can report alias freed (if any) before deletion.
-	stateBucket := cfg.StateBucket
+	// Note: stateBucket already declared in Step 2c above.
+	stateBucket = cfg.StateBucket
 	if stateBucket == "" {
 		stateBucket = os.Getenv("KM_STATE_BUCKET")
 	}
@@ -415,6 +433,111 @@ locals {
 
 	fmt.Printf("Sandbox %s destroyed successfully.\n", sandboxID)
 
+	return nil
+}
+
+// runDestroyDocker handles the full docker destroy workflow.
+// It tears down a local Docker Compose sandbox without any Terragrunt involvement.
+// Steps: check lock, docker compose down -v, delete IAM roles, delete S3 metadata,
+// delete SSM GitHub token parameter, remove local directory.
+// Each step is independent and logs warnings instead of failing hard (idempotent cleanup).
+func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config, sandboxID string, verbose bool) error {
+	fmt.Printf("Destroying docker sandbox %s...\n", sandboxID)
+
+	region := awsCfg.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	// Step DD1: Run docker compose down -v (stops and removes containers, networks, volumes).
+	composeErr := runDockerCompose(ctx, sandboxID, "down", "-v")
+	if composeErr != nil {
+		// Warn but continue — containers may already be gone.
+		log.Warn().Err(composeErr).Str("sandbox_id", sandboxID).Msg("docker compose down failed (non-fatal)")
+		fmt.Printf("  Warning: docker compose down: %v\n", composeErr)
+	} else {
+		fmt.Printf("  ✓ docker compose down -v completed\n")
+	}
+
+	// Step DD2: Delete IAM roles via SDK.
+	iamClient := iampkg.NewFromConfig(awsCfg)
+	sandboxRoleName := fmt.Sprintf("km-docker-%s-%s", sandboxID, region)
+	sidecarRoleName := fmt.Sprintf("km-sidecar-%s-%s", sandboxID, region)
+
+	for _, roleName := range []string{sandboxRoleName, sidecarRoleName} {
+		// List and delete inline policies first (required before role deletion).
+		listOut, listErr := iamClient.ListRolePolicies(ctx, &iampkg.ListRolePoliciesInput{
+			RoleName: aws.String(roleName),
+		})
+		if listErr == nil {
+			for _, policyName := range listOut.PolicyNames {
+				_, delPolicyErr := iamClient.DeleteRolePolicy(ctx, &iampkg.DeleteRolePolicyInput{
+					RoleName:   aws.String(roleName),
+					PolicyName: aws.String(policyName),
+				})
+				if delPolicyErr != nil {
+					log.Warn().Err(delPolicyErr).Str("role", roleName).Str("policy", policyName).
+						Msg("failed to delete inline policy from role (non-fatal)")
+				}
+			}
+		}
+		// Delete the role (ignore NoSuchEntity).
+		_, delRoleErr := iamClient.DeleteRole(ctx, &iampkg.DeleteRoleInput{
+			RoleName: aws.String(roleName),
+		})
+		if delRoleErr != nil {
+			// Swallow NoSuchEntityException — idempotent cleanup.
+			errMsg := delRoleErr.Error()
+			if strings.Contains(errMsg, "NoSuchEntity") || strings.Contains(errMsg, "not found") {
+				log.Debug().Str("role", roleName).Msg("IAM role already deleted")
+			} else {
+				log.Warn().Err(delRoleErr).Str("role", roleName).Msg("failed to delete IAM role (non-fatal)")
+			}
+		} else {
+			fmt.Printf("  ✓ IAM role deleted: %s\n", roleName)
+		}
+	}
+
+	// Step DD3: Delete SSM GitHub token parameter.
+	ssmClient := ssm.NewFromConfig(awsCfg)
+	githubTokenParam := fmt.Sprintf("/sandbox/%s/github-token", sandboxID)
+	if _, delErr := ssmClient.DeleteParameter(ctx, &ssm.DeleteParameterInput{
+		Name: aws.String(githubTokenParam),
+	}); delErr != nil {
+		var notFound *ssmtypes.ParameterNotFound
+		if !errors.As(delErr, &notFound) && !strings.Contains(delErr.Error(), "ParameterNotFound") {
+			log.Warn().Err(delErr).Str("sandbox_id", sandboxID).
+				Msg("failed to delete GitHub token SSM parameter (non-fatal)")
+		}
+	} else {
+		log.Info().Str("param", githubTokenParam).Msg("GitHub token SSM parameter deleted")
+	}
+
+	// Step DD4: Delete S3 metadata.
+	stateBucket := cfg.StateBucket
+	if stateBucket == "" {
+		stateBucket = os.Getenv("KM_STATE_BUCKET")
+	}
+	if stateBucket != "" {
+		s3Client := s3.NewFromConfig(awsCfg)
+		if delErr := awspkg.DeleteSandboxMetadata(ctx, s3Client, stateBucket, sandboxID); delErr != nil {
+			log.Warn().Err(delErr).Str("sandbox_id", sandboxID).
+				Msg("failed to delete sandbox metadata from S3 (non-fatal)")
+		} else {
+			fmt.Printf("  ✓ S3 metadata deleted\n")
+		}
+	}
+
+	// Step DD5: Remove local sandbox directory.
+	homeDir, _ := os.UserHomeDir()
+	sandboxLocalDir := filepath.Join(homeDir, ".km", "sandboxes", sandboxID)
+	if err := os.RemoveAll(sandboxLocalDir); err != nil {
+		log.Warn().Err(err).Str("dir", sandboxLocalDir).Msg("failed to remove local sandbox directory (non-fatal)")
+	} else {
+		fmt.Printf("  ✓ Local directory removed: %s\n", sandboxLocalDir)
+	}
+
+	fmt.Printf("Sandbox %s destroyed successfully.\n", sandboxID)
 	return nil
 }
 
