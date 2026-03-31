@@ -790,12 +790,13 @@ Plans:
 **Goal:** A `km-sandbox` base container image that provides the same sandbox environment as EC2 user-data — proxy CA trust, secret injection, GitHub credentials, initCommands, rsync restore, OTEL telemetry, and mail polling — all driven by environment variables via a container entrypoint script. This is the foundation for both Docker local and EKS substrates.
 **Depends on:** Phase 35
 **Requirements:** PROV-09, PROV-10
-**Plans:** 3 plans
+**Plans:** 4 plans
 
 Plans:
 - [ ] 36-01-PLAN.md — Dockerfile + entrypoint.sh (containers/sandbox/)
 - [ ] 36-02-PLAN.md — ECS compiler: replace MAIN_IMAGE_PLACEHOLDER, add KM_* env vars
 - [ ] 36-03-PLAN.md — Build pipeline: Makefile targets + km init sandbox image push
+- [ ] 36-04-PLAN.md — Smoke test: build image, run locally, verify entrypoint mechanics
 
 ### Phase 37: Docker Compose local substrate (connected mode)
 
