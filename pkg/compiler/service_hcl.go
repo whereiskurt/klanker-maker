@@ -2,6 +2,8 @@ package compiler
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -147,6 +149,35 @@ const ecsServiceHCLTemplate = `locals {
           { name = "NO_PROXY",      value = "169.254.169.254,169.254.170.2,localhost,127.0.0.1" },
 {{- if .HasEmail }}
           { name = "KM_EMAIL_ADDRESS", value = "{{ .SandboxEmail }}" },
+{{- end }}
+          { name = "KM_SANDBOX_ID",         value = "{{ .KMSandboxID }}" },
+          { name = "KM_ARTIFACTS_BUCKET",   value = "{{ .KMArtifactsBucket }}" },
+{{- if .KMProxyCACertS3 }}
+          { name = "KM_PROXY_CA_CERT_S3",   value = "{{ .KMProxyCACertS3 }}" },
+{{- end }}
+{{- if .KMSecretPaths }}
+          { name = "KM_SECRET_PATHS",       value = "{{ .KMSecretPaths }}" },
+{{- end }}
+{{- if .KMOTPPaths }}
+          { name = "KM_OTP_PATHS",          value = "{{ .KMOTPPaths }}" },
+{{- end }}
+{{- if .KMInitCommands }}
+          { name = "KM_INIT_COMMANDS",      value = "{{ .KMInitCommands }}" },
+{{- end }}
+{{- if .KMRsyncSnapshot }}
+          { name = "KM_RSYNC_SNAPSHOT",     value = "{{ .KMRsyncSnapshot }}" },
+{{- end }}
+{{- if .KMGitHubTokenSSM }}
+          { name = "KM_GITHUB_TOKEN_SSM",   value = "{{ .KMGitHubTokenSSM }}" },
+{{- end }}
+{{- if .KMGitHubAllowedRefs }}
+          { name = "KM_GITHUB_ALLOWED_REFS", value = "{{ .KMGitHubAllowedRefs }}" },
+{{- end }}
+{{- if .KMProfileEnv }}
+          { name = "KM_PROFILE_ENV",        value = "{{ .KMProfileEnv }}" },
+{{- end }}
+{{- if .KMOperatorEmail }}
+          { name = "KM_OPERATOR_EMAIL",     value = "{{ .KMOperatorEmail }}" },
 {{- end }}
 {{- if .ClaudeTelemetryEnabled }}
           # OTEL-07: Claude Code OTLP exports to localhost:4317/4318 bypass the
@@ -409,6 +440,19 @@ type ecsHCLParams struct {
 	ClaudeTelemetryLogPrompts     bool   // controls OTEL_LOG_USER_PROMPTS
 	ClaudeTelemetryLogToolDetails bool   // controls OTEL_LOG_TOOL_DETAILS
 	OTELResourceAttributes        string // pre-formatted: "sandbox_id=X,profile_name=Y,substrate=ecs"
+	// Entrypoint env vars (Phase 36 — km-sandbox container entrypoint configuration)
+	KMSandboxID         string // always set: sandbox identifier
+	KMArtifactsBucket   string // S3 bucket for artifacts/CA/snapshots
+	KMStateBucket       string // S3 bucket for metadata
+	KMProxyCACertS3     string // s3://bucket/sidecars/km-proxy-ca.crt (set when ArtifactsBucket is known)
+	KMSecretPaths       string // comma-separated SSM paths (from identity.allowedSecretPaths)
+	KMOTPPaths          string // comma-separated OTP SSM paths (from otp.secrets)
+	KMInitCommands      string // base64-encoded JSON array of shell commands
+	KMRsyncSnapshot     string // snapshot name to restore
+	KMGitHubTokenSSM    string // SSM path for GitHub token (entrypoint)
+	KMGitHubAllowedRefs string // comma-separated allowed refs (entrypoint)
+	KMProfileEnv        string // base64-encoded JSON env vars
+	KMOperatorEmail     string // operator notification address
 }
 
 // ============================================================
@@ -592,13 +636,6 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 	mainMemory := ecsDefaultMemory - (256 + 256 + 128 + 128)
 	mainMemoryReservation := mainMemory / 2
 
-	// Use profile image if set, otherwise placeholder
-	mainImage := "MAIN_IMAGE_PLACEHOLDER"
-	if p.Spec.Runtime.InstanceType != "" {
-		// For ECS, instanceType holds the Fargate task size (e.g. "512/1024")
-		// We keep the placeholder here; real image set at provision time.
-	}
-
 	// Email domain for Phase 4: use domain from NetworkConfig when set, otherwise default.
 	emailDomain := "sandboxes.klankermaker.ai"
 	if network != nil && network.EmailDomain != "" {
@@ -626,6 +663,11 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 	sidecarImage := func(name string) string {
 		return ecrRegistry + "/km-" + name + ":" + imageTag
 	}
+
+	// mainImage uses the same ECR registry as sidecars — km-sandbox:{version}
+	// This replaces the MAIN_IMAGE_PLACEHOLDER that existed before the sandbox
+	// container image was created in Phase 36.
+	mainImage := sidecarImage("sandbox")
 
 	params := ecsHCLParams{
 		ProfileName:           p.Metadata.Name,
@@ -692,6 +734,45 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		params.GitHubAllowedRepos = p.Spec.SourceAccess.GitHub.AllowedRepos
 		compiledPerms := pkggithub.CompilePermissions(p.Spec.SourceAccess.GitHub.Permissions)
 		params.GitHubPermissions = permissionsToHCL(compiledPerms)
+	}
+
+	// Populate Phase 36 entrypoint env vars (km-sandbox container configuration).
+	// KM_SANDBOX_ID and KM_ARTIFACTS_BUCKET are always set; others are conditional.
+	params.KMSandboxID = sandboxID
+	params.KMArtifactsBucket = artifactBucket
+	if artifactBucket != "" {
+		params.KMProxyCACertS3 = fmt.Sprintf("s3://%s/sidecars/km-proxy-ca.crt", artifactBucket)
+	}
+	// KM_SECRET_PATHS: comma-separated SSM paths from identity.allowedSecretPaths
+	if len(p.Spec.Identity.AllowedSecretPaths) > 0 {
+		params.KMSecretPaths = strings.Join(p.Spec.Identity.AllowedSecretPaths, ",")
+	}
+	// KM_OTP_PATHS: comma-separated OTP SSM paths from otp.secrets
+	if p.Spec.OTP != nil && len(p.Spec.OTP.Secrets) > 0 {
+		params.KMOTPPaths = strings.Join(p.Spec.OTP.Secrets, ",")
+	}
+	// KM_INIT_COMMANDS: base64-encoded JSON array of shell commands
+	if len(p.Spec.Execution.InitCommands) > 0 {
+		initJSON, err := json.Marshal(p.Spec.Execution.InitCommands)
+		if err == nil {
+			params.KMInitCommands = base64.StdEncoding.EncodeToString(initJSON)
+		}
+	}
+	// KM_PROFILE_ENV: base64-encoded JSON map of env vars
+	if len(p.Spec.Execution.Env) > 0 {
+		envJSON, err := json.Marshal(p.Spec.Execution.Env)
+		if err == nil {
+			params.KMProfileEnv = base64.StdEncoding.EncodeToString(envJSON)
+		}
+	}
+	// KM_OPERATOR_EMAIL: from environment variable
+	params.KMOperatorEmail = os.Getenv("KM_OPERATOR_EMAIL")
+	// KM_GITHUB_TOKEN_SSM and KM_GITHUB_ALLOWED_REFS: use the already-populated GitHub fields
+	if params.HasGitHub {
+		params.KMGitHubTokenSSM = params.GitHubSSMPath
+		if p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRefs) > 0 {
+			params.KMGitHubAllowedRefs = strings.Join(p.Spec.SourceAccess.GitHub.AllowedRefs, ",")
+		}
 	}
 
 	// Populate Claude Code OTEL telemetry fields (OTEL-01, OTEL-06).
