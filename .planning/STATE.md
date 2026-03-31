@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 37-docker-compose-local-substrate/37-01-PLAN.md
-last_updated: "2026-03-31T12:13:21.930Z"
+stopped_at: Completed 37-docker-compose-local-substrate/37-02-PLAN.md
+last_updated: "2026-03-31T12:23:05.289Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 38
   completed_phases: 33
   total_plans: 111
-  completed_plans: 107
+  completed_plans: 108
   percent: 0
 ---
 
@@ -154,6 +154,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 36-km-sandbox-base-container-image P03 | 15 | 2 tasks | 2 files |
 | Phase 36-km-sandbox-base-container-image P04 | 3min | 2 tasks | 2 files |
 | Phase 37-docker-compose-local-substrate P01 | 6min | 2 tasks | 11 files |
+| Phase 37-docker-compose-local-substrate P02 | 7min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -413,6 +414,9 @@ Recent decisions affecting current work:
 - [Phase 37-01]: Named volumes (not tmpfs) for cred-vol — macOS Docker Desktop does not support tmpfs named volumes
 - [Phase 37-01]: Placeholder credentials in compose template; real AWS credentials injected by plan 02 create command
 - [Phase 37-01]: Both schema files (root + pkg/profile/schemas/ embedded) must be kept in sync
+- [Phase 37-02]: DockerComposeExecFunc package-level var for test injection — follows RemoteCommandPublisher injection pattern from destroy.go
+- [Phase 37-02]: Destroy substrate detection via S3 metadata read before tag-based lookup — docker sandboxes have no AWS-tagged resources
+- [Phase 37-02]: IAM role propagation: poll GetRole + 5s sleep before AssumeRole (Pitfall 4 from research)
 
 ### Roadmap Evolution
 
@@ -464,6 +468,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-31T12:13:21.926Z
-Stopped at: Completed 37-docker-compose-local-substrate/37-01-PLAN.md
+Last session: 2026-03-31T12:23:05.285Z
+Stopped at: Completed 37-docker-compose-local-substrate/37-02-PLAN.md
 Resume file: None
