@@ -247,6 +247,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 	}
 	if cfg.OperatorEmail != "" {
 		os.Setenv("KM_OPERATOR_EMAIL", cfg.OperatorEmail)
+		os.Setenv("KM_AWS_PROFILE", awsProfile)
 	}
 
 	// Step 6: Load shared network config for the profile's region.
@@ -982,6 +983,11 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
   "Statement": [
     {
       "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
       "Action": ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"],
       "Resource": "arn:aws:ssm:%s:%s:parameter/km/%s/*"
     },
@@ -1072,65 +1078,11 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 			time.Sleep(2 * time.Second)
 		}
 	}
-	// Step D5: AssumeRole for scoped credentials (with retry for IAM propagation).
-	sandboxKeyID, sandboxSecret, sandboxToken := "", "", ""
-	sidecarKeyID, sidecarSecret, sidecarToken := "", "", ""
-
-	assumeRoleWithRetry := func(roleARN, sessionName string) (string, string, string, error) {
-		for attempt := 0; attempt < 6; attempt++ {
-			if attempt > 0 {
-				time.Sleep(5 * time.Second)
-			}
-			assumeOut, assumeErr := stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
-				RoleArn:         aws.String(roleARN),
-				RoleSessionName: aws.String(sessionName),
-				DurationSeconds: aws.Int32(3600),
-			})
-			if assumeErr == nil && assumeOut.Credentials != nil {
-				return aws.ToString(assumeOut.Credentials.AccessKeyId),
-					aws.ToString(assumeOut.Credentials.SecretAccessKey),
-					aws.ToString(assumeOut.Credentials.SessionToken),
-					nil
-			}
-			if attempt < 5 {
-				log.Warn().Err(assumeErr).Int("attempt", attempt+1).Str("role", roleARN).Msg("AssumeRole not ready, retrying...")
-			} else {
-				return "", "", "", assumeErr
-			}
-		}
-		return "", "", "", fmt.Errorf("AssumeRole exhausted retries for %s", roleARN)
-	}
-
-	if sandboxRoleARN != "" {
-		key, secret, token, err := assumeRoleWithRetry(sandboxRoleARN, "km-docker-"+sandboxID)
-		if err != nil {
-			log.Warn().Err(err).Str("role", sandboxRoleName).Msg("failed to assume sandbox role (non-fatal)")
-		} else {
-			sandboxKeyID, sandboxSecret, sandboxToken = key, secret, token
-		}
-	}
-
-	if sidecarRoleARN != "" {
-		key, secret, token, err := assumeRoleWithRetry(sidecarRoleARN, "km-docker-sidecar-"+sandboxID)
-		if err != nil {
-			log.Warn().Err(err).Str("role", sidecarRoleName).Msg("failed to assume sidecar role (non-fatal)")
-		} else {
-			sidecarKeyID, sidecarSecret, sidecarToken = key, secret, token
-		}
-	}
-
-	// Step D6: Inject real credentials and role ARNs into compose YAML.
-	// Replace placeholders written by compileDocker() with actual values.
+	// Step D6: Inject role ARNs into compose YAML.
+	// Credentials are handled by cred-refresh sidecar (mounts host ~/.aws).
 	composeYAML := artifacts.DockerComposeYAML
 	composeYAML = strings.ReplaceAll(composeYAML, "PLACEHOLDER_SANDBOX_ROLE_ARN", sandboxRoleARN)
 	composeYAML = strings.ReplaceAll(composeYAML, "PLACEHOLDER_SIDECAR_ROLE_ARN", sidecarRoleARN)
-	composeYAML = strings.ReplaceAll(composeYAML, "PLACEHOLDER_OPERATOR_KEY", sandboxKeyID)
-	composeYAML = strings.ReplaceAll(composeYAML, "PLACEHOLDER_OPERATOR_SECRET", sandboxSecret)
-	composeYAML = strings.ReplaceAll(composeYAML, "PLACEHOLDER_OPERATOR_TOKEN", sandboxToken)
-	// Also inject sidecar credentials as a credentials file (written by cred-refresh).
-	_ = sidecarKeyID
-	_ = sidecarSecret
-	_ = sidecarToken
 
 	// Step D6.5: Generate MITM CA cert for docker substrate.
 	// The http-proxy sidecar reads KM_PROXY_CA_CERT (base64 PEM with cert+key).

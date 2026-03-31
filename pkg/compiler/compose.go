@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/template"
 
@@ -68,6 +69,8 @@ type dockerComposeData struct {
 	ProxyCACertS3      string
 	ProxyCAKeyS3       string
 	GitHubTokenSSM     string
+	AWSProfile         string // operator's AWS profile name for cred-refresh
+	HostAWSDir         string // path to host's ~/.aws directory
 }
 
 // dockerComposeTemplate generates a docker-compose.yml for the Docker substrate.
@@ -188,12 +191,11 @@ services:
       KM_SANDBOX_ID: "{{ .SandboxID }}"
       KM_SANDBOX_ROLE_ARN: "PLACEHOLDER_SANDBOX_ROLE_ARN"
       KM_SIDECAR_ROLE_ARN: "PLACEHOLDER_SIDECAR_ROLE_ARN"
-      AWS_ACCESS_KEY_ID: "PLACEHOLDER_OPERATOR_KEY"
-      AWS_SECRET_ACCESS_KEY: "PLACEHOLDER_OPERATOR_SECRET"
-      AWS_SESSION_TOKEN: "PLACEHOLDER_OPERATOR_TOKEN"
       AWS_DEFAULT_REGION: "{{ .Region }}"
+      AWS_PROFILE: "{{ .AWSProfile }}"
     volumes:
       - cred-vol:/creds
+      - {{ .HostAWSDir }}:/root/.aws:ro
     networks:
       - km-net
     restart: unless-stopped
@@ -296,6 +298,8 @@ func generateDockerCompose(p *profile.SandboxProfile, sandboxID string, network 
 		ProxyCACertS3:      proxyCACertS3,
 		ProxyCAKeyS3:       proxyCAKeyS3,
 		GitHubTokenSSM:     gitHubTokenSSM,
+		AWSProfile:         os.Getenv("KM_AWS_PROFILE"),
+		HostAWSDir:         filepath.Join(os.Getenv("HOME"), ".aws"),
 	}
 
 	tmpl, err := template.New("docker-compose").Parse(dockerComposeTemplate)
