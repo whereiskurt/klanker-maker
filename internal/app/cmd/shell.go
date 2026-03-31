@@ -387,8 +387,11 @@ func execDockerShell(ctx context.Context, sandboxID string, root bool, execFn Sh
 	args := []string{"exec", "-it"}
 	if root {
 		args = append(args, "-u", "root")
+	} else {
+		args = append(args, "-u", "sandbox")
 	}
-	args = append(args, containerName, "/bin/bash")
+	// Use login shell so /etc/profile.d/ scripts run (env vars, shutdown hooks).
+	args = append(args, containerName, "bash", "--login")
 	c := exec.CommandContext(ctx, "docker", args...)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
