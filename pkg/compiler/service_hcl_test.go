@@ -463,6 +463,137 @@ func TestECSServiceHCLGitHubAllowedReposEmpty(t *testing.T) {
 	}
 }
 
+// ============================================================
+// Phase 36 Plan 02: km-sandbox image URI and KM_* entrypoint env vars
+// ============================================================
+
+// TestECSServiceHCLSandboxImage verifies the main container uses the real km-sandbox ECR URI,
+// NOT the MAIN_IMAGE_PLACEHOLDER that existed before Phase 36.
+func TestECSServiceHCLSandboxImage(t *testing.T) {
+	t.Setenv("KM_ACCOUNTS_APPLICATION", "123456789012")
+	t.Setenv("KM_SIDECAR_VERSION", "v1.0.0")
+
+	p := baseECSProfile()
+	out, err := generateECSServiceHCL(p, "sb-test123", false, nil, baseECSNetwork())
+	if err != nil {
+		t.Fatalf("generateECSServiceHCL failed: %v", err)
+	}
+
+	// Must NOT contain the old placeholder
+	if strings.Contains(out, "MAIN_IMAGE_PLACEHOLDER") {
+		t.Error("expected MAIN_IMAGE_PLACEHOLDER to be replaced with real km-sandbox ECR URI")
+	}
+
+	// Must contain the km-sandbox image name prefix
+	if !strings.Contains(out, "km-sandbox:") {
+		t.Errorf("expected km-sandbox: image reference in main container, got:\n%s", out)
+	}
+
+	// Must contain the full ECR URI pattern
+	expected := "123456789012.dkr.ecr.us-east-1.amazonaws.com/km-sandbox:v1.0.0"
+	if !strings.Contains(out, expected) {
+		t.Errorf("expected full ECR URI %q in main container image, got:\n%s", expected, out)
+	}
+}
+
+// TestECSMainContainerEntrypointEnvVars verifies that the core KM_* env vars are always present
+// in the main container environment block (required by entrypoint.sh in Phase 36).
+func TestECSMainContainerEntrypointEnvVars(t *testing.T) {
+	t.Setenv("KM_ACCOUNTS_APPLICATION", "123456789012")
+	t.Setenv("KM_ARTIFACTS_BUCKET", "km-sandbox-artifacts-ea554771")
+
+	p := baseECSProfile()
+	out, err := generateECSServiceHCL(p, "sb-test456", false, nil, baseECSNetwork())
+	if err != nil {
+		t.Fatalf("generateECSServiceHCL failed: %v", err)
+	}
+
+	for _, want := range []string{
+		"KM_SANDBOX_ID",
+		"KM_ARTIFACTS_BUCKET",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in main container environment block, got:\n%s", want, out)
+		}
+	}
+
+	// KM_PROXY_CA_CERT_S3 should be present when artifacts bucket is set
+	if !strings.Contains(out, "KM_PROXY_CA_CERT_S3") {
+		t.Errorf("expected KM_PROXY_CA_CERT_S3 in main container environment when KM_ARTIFACTS_BUCKET is set")
+	}
+}
+
+// TestECSMainContainerInitCommands verifies that when a profile has initCommands,
+// KM_INIT_COMMANDS is present in the main container environment with a base64-encoded value.
+func TestECSMainContainerInitCommands(t *testing.T) {
+	t.Setenv("KM_ACCOUNTS_APPLICATION", "")
+
+	p := baseECSProfile()
+	p.Spec.Execution = profile.ExecutionSpec{
+		InitCommands: []string{"apt install foo", "pip install bar"},
+	}
+
+	out, err := generateECSServiceHCL(p, "sb-init-test", false, nil, baseECSNetwork())
+	if err != nil {
+		t.Fatalf("generateECSServiceHCL failed: %v", err)
+	}
+
+	if !strings.Contains(out, "KM_INIT_COMMANDS") {
+		t.Error("expected KM_INIT_COMMANDS in main container environment when initCommands are set")
+	}
+
+	// Value must be a non-empty base64 string (not the raw JSON)
+	if strings.Contains(out, `["apt install foo"`) {
+		t.Error("KM_INIT_COMMANDS value should be base64-encoded, not raw JSON")
+	}
+}
+
+// TestECSMainContainerGitHubEnvVars verifies that when profile has GitHub sourceAccess configured,
+// KM_GITHUB_TOKEN_SSM and KM_GITHUB_ALLOWED_REFS are present in the main container environment.
+func TestECSMainContainerGitHubEnvVars(t *testing.T) {
+	t.Setenv("KM_ACCOUNTS_APPLICATION", "")
+
+	p := baseECSProfile()
+	p.Spec.SourceAccess = profile.SourceAccessSpec{
+		GitHub: &profile.GitHubAccess{
+			AllowedRepos: []string{"myorg/myrepo"},
+			AllowedRefs:  []string{"refs/heads/main", "refs/tags/v*"},
+		},
+	}
+
+	out, err := generateECSServiceHCL(p, "sb-gh-test", false, nil, baseECSNetwork())
+	if err != nil {
+		t.Fatalf("generateECSServiceHCL failed: %v", err)
+	}
+
+	if !strings.Contains(out, "KM_GITHUB_TOKEN_SSM") {
+		t.Error("expected KM_GITHUB_TOKEN_SSM in main container environment when GitHub is configured")
+	}
+	if !strings.Contains(out, "KM_GITHUB_ALLOWED_REFS") {
+		t.Error("expected KM_GITHUB_ALLOWED_REFS in main container environment when GitHub AllowedRefs are set")
+	}
+}
+
+// TestECSMainContainerSecretPaths verifies that when profile has AllowedSecretPaths,
+// KM_SECRET_PATHS is present in the main container environment.
+func TestECSMainContainerSecretPaths(t *testing.T) {
+	t.Setenv("KM_ACCOUNTS_APPLICATION", "")
+
+	p := baseECSProfile()
+	p.Spec.Identity = profile.IdentitySpec{
+		AllowedSecretPaths: []string{"/sandbox/sb-secret-test/db-pass", "/sandbox/sb-secret-test/api-key"},
+	}
+
+	out, err := generateECSServiceHCL(p, "sb-secret-test", false, nil, baseECSNetwork())
+	if err != nil {
+		t.Fatalf("generateECSServiceHCL failed: %v", err)
+	}
+
+	if !strings.Contains(out, "KM_SECRET_PATHS") {
+		t.Error("expected KM_SECRET_PATHS in main container environment when AllowedSecretPaths are set")
+	}
+}
+
 // extractECSLines returns lines from s that contain substr (for error context).
 func extractECSLines(s, substr string) string {
 	var matched []string
