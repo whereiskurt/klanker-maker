@@ -15,8 +15,12 @@ Examples:
   km bootstrap --dry-run
 
 Flags:
-  --dry-run   Print what would be created without making any changes
-              (default: true)
+  --dry-run        Print what would be created without making any changes
+                   (default: true)
+  --show-prereqs   Print the IAM role and trust policy needed in the
+                   management account before bootstrap can deploy the SCP
+  --scp            Print the km-sandbox-containment SCP policy JSON and
+                   the km-org-admin role/trust policy with real account IDs
 
 Infrastructure Preview:
   The dry-run output shows what a full bootstrap would provision:
@@ -25,6 +29,22 @@ Infrastructure Preview:
   - DynamoDB table for Terraform state locking
   - DynamoDB table for sandbox budget tracking
   - KMS key for state bucket encryption
+  - SCP sandbox containment policy (management account)
+  - KMS platform key (alias/km-platform)
+  - S3 artifacts bucket
+
+Examples:
+  # Preview what would be created (default, safe)
+  km bootstrap
+
+  # Deploy SCP + KMS key + artifacts bucket
+  km bootstrap --dry-run=false
+
+  # Show the IAM role prereqs for the management account
+  km bootstrap --show-prereqs
+
+  # Dump the full SCP policy and management role (for review or manual apply)
+  km bootstrap --scp
 
 Prerequisites:
   - km-config.yaml must exist (run 'km configure' first)
@@ -33,6 +53,3 @@ Prerequisites:
 Bootstrap validates that km-config.yaml exists and is parseable before
 showing the infrastructure plan. If the config file is missing or
 malformed, the command exits with an error and guidance.
-
-Note: Full provisioning (actually creating the resources) is planned
-for a future release. Currently only dry-run mode is supported.

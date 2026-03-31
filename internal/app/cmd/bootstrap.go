@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -61,12 +62,16 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 
 	var dryRun bool
 	var showPrereqs bool
+	var showSCP bool
 
 	cmd := &cobra.Command{
 		Use:   "bootstrap",
 		Short: "Validate config and show what infrastructure bootstrap would create",
 		Long:  helpText("bootstrap"),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if showSCP {
+				return runShowSCP(cmd.Context(), cfg, w)
+			}
 			if showPrereqs {
 				return runShowPrereqs(cmd.Context(), cfg, w)
 			}
@@ -78,6 +83,8 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 		"Print what would be created without making any changes (default: true)")
 	cmd.Flags().BoolVar(&showPrereqs, "show-prereqs", false,
 		"Print the IAM role and trust policy that must be created in the management account before bootstrap can deploy the SCP")
+	cmd.Flags().BoolVar(&showSCP, "scp", false,
+		"Print the km-sandbox-containment SCP policy JSON and the km-org-admin role/trust policy")
 
 	return cmd
 }
@@ -282,6 +289,254 @@ func runShowPrereqs(ctx context.Context, cfg *config.Config, w io.Writer) error 
 	fmt.Fprintln(w, "- **Used by:** `km bootstrap --dry-run=false` to deploy the km-sandbox-containment SCP")
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "After creating this role, run: km bootstrap --dry-run=false\n")
+
+	return nil
+}
+
+// runShowSCP prints the km-sandbox-containment SCP policy JSON and the km-org-admin
+// role/trust policy, with real account IDs from km-config.yaml substituted in.
+func runShowSCP(ctx context.Context, cfg *config.Config, w io.Writer) error {
+	loadedCfg, err := loadBootstrapConfig(cfg)
+	if err != nil {
+		return err
+	}
+
+	appAccount := loadedCfg.ApplicationAccountID
+	if appAccount == "" {
+		return fmt.Errorf("no application account configured\nRun 'km configure' and set accounts.application first")
+	}
+	mgmtAccount := loadedCfg.ManagementAccountID
+	if mgmtAccount == "" {
+		return fmt.Errorf("no management account configured\nRun 'km configure' and set accounts.management first")
+	}
+
+	region := loadedCfg.PrimaryRegion
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	// Determine caller account for trust policy (same logic as runShowPrereqs).
+	callerAccount := appAccount
+	if callerAccount == "" {
+		callerAccount = loadedCfg.TerraformAccountID
+	}
+
+	// --- Trusted role ARN sets (mirrors infra/modules/scp/v1.0.0/main.tf locals) ---
+	trustedBase := []string{
+		fmt.Sprintf("arn:aws:iam::%s:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*", appAccount),
+		fmt.Sprintf("arn:aws:iam::%s:role/km-provisioner-*", appAccount),
+		fmt.Sprintf("arn:aws:iam::%s:role/km-lifecycle-*", appAccount),
+		fmt.Sprintf("arn:aws:iam::%s:role/km-ecs-spot-handler", appAccount),
+		fmt.Sprintf("arn:aws:iam::%s:role/km-ttl-handler", appAccount),
+		fmt.Sprintf("arn:aws:iam::%s:role/km-create-handler", appAccount),
+	}
+	// trustedInstance is the same as trustedBase here because km-ecs-spot-handler
+	// is already in the base set (added via terragrunt inputs). In the Terraform module
+	// it's concat'd separately, but the result is equivalent.
+	trustedInstance := append([]string{}, trustedBase...)
+	trustedIAM := append(append([]string{}, trustedBase...), fmt.Sprintf("arn:aws:iam::%s:role/km-budget-enforcer-*", appAccount))
+	trustedSSM := []string{
+		fmt.Sprintf("arn:aws:iam::%s:role/km-ec2spot-ssm-*", appAccount),
+		fmt.Sprintf("arn:aws:iam::%s:role/km-github-token-refresher-*", appAccount),
+		"arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
+	}
+
+	// Build SCP policy document (mirrors the Terraform data.aws_iam_policy_document).
+	type condition struct {
+		Test     string   `json:"test"`
+		Variable string   `json:"variable"`
+		Values   []string `json:"values"`
+	}
+	type statement struct {
+		Sid        string      `json:"Sid"`
+		Effect     string      `json:"Effect"`
+		Action     []string    `json:"Action,omitempty"`
+		NotAction  []string    `json:"NotAction,omitempty"`
+		Resource   string      `json:"Resource"`
+		Condition  interface{} `json:"Condition,omitempty"`
+	}
+	type policyDoc struct {
+		Version   string      `json:"Version"`
+		Statement []statement `json:"Statement"`
+	}
+
+	arnNotLike := func(arns []string) interface{} {
+		return map[string]interface{}{
+			"ArnNotLike": map[string]interface{}{
+				"aws:PrincipalARN": arns,
+			},
+		}
+	}
+
+	policy := policyDoc{
+		Version: "2012-10-17",
+		Statement: []statement{
+			{
+				Sid:    "DenyInfraAndStorage",
+				Effect: "Deny",
+				Action: []string{
+					"ec2:CreateSecurityGroup", "ec2:DeleteSecurityGroup",
+					"ec2:AuthorizeSecurityGroup*", "ec2:RevokeSecurityGroup*",
+					"ec2:ModifySecurityGroupRules",
+					"ec2:CreateVpc", "ec2:CreateSubnet", "ec2:CreateRouteTable",
+					"ec2:CreateRoute", "ec2:*InternetGateway", "ec2:CreateNatGateway",
+					"ec2:*VpcPeeringConnection", "ec2:CreateTransitGateway*",
+					"ec2:CreateSnapshot", "ec2:CopySnapshot",
+					"ec2:CreateImage", "ec2:CopyImage", "ec2:ExportImage",
+				},
+				Resource:  "*",
+				Condition: arnNotLike(trustedBase),
+			},
+			{
+				Sid:    "DenyInstanceMutation",
+				Effect: "Deny",
+				Action: []string{
+					"ec2:RunInstances", "ec2:ModifyInstanceAttribute",
+					"ec2:ModifyInstanceMetadataOptions",
+				},
+				Resource:  "*",
+				Condition: arnNotLike(trustedInstance),
+			},
+			{
+				Sid:    "DenyIAMEscalation",
+				Effect: "Deny",
+				Action: []string{
+					"iam:CreateRole", "iam:AttachRolePolicy", "iam:DetachRolePolicy",
+					"iam:PassRole", "iam:AssumeRole",
+				},
+				Resource:  "*",
+				Condition: arnNotLike(trustedIAM),
+			},
+			{
+				Sid:    "DenySSMPivot",
+				Effect: "Deny",
+				Action: []string{"ssm:SendCommand", "ssm:StartSession"},
+				Resource:  "*",
+				Condition: arnNotLike(trustedSSM),
+			},
+			{
+				Sid:       "DenyOrgDiscovery",
+				Effect:    "Deny",
+				Action:    []string{"organizations:List*", "organizations:Describe*"},
+				Resource:  "*",
+			},
+			{
+				Sid:    "DenyOutsideRegion",
+				Effect: "Deny",
+				NotAction: []string{
+					"iam:*", "sts:*", "organizations:*", "support:*", "health:*",
+					"trustedadvisor:*", "cloudfront:*", "waf:*", "shield:*",
+					"route53:*", "route53domains:*", "budgets:*", "ce:*", "cur:*",
+					"globalaccelerator:*", "networkmanager:*", "pricing:*", "bedrock:*",
+					"s3:GetAccountPublicAccessBlock", "s3:ListAllMyBuckets",
+					"s3:PutAccountPublicAccessBlock",
+				},
+				Resource: "*",
+				Condition: map[string]interface{}{
+					"StringNotEquals": map[string]interface{}{
+						"aws:RequestedRegion": []string{region},
+					},
+					"ArnNotLike": map[string]interface{}{
+						"aws:PrincipalArn": trustedBase,
+					},
+				},
+			},
+		},
+	}
+
+	policyJSON, err := json.MarshalIndent(policy, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal SCP policy: %w", err)
+	}
+
+	// --- Print SCP policy ---
+	fmt.Fprintln(w, "# ============================================================")
+	fmt.Fprintln(w, "# km-sandbox-containment SCP Policy")
+	fmt.Fprintln(w, "#")
+	fmt.Fprintf(w, "# Target: Application account %s\n", appAccount)
+	fmt.Fprintf(w, "# Region lock: %s\n", region)
+	fmt.Fprintln(w, "# ============================================================")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, string(policyJSON))
+	fmt.Fprintln(w)
+
+	// --- Print km-org-admin role/trust policy ---
+	roleName := "km-org-admin"
+
+	trustPolicy := map[string]interface{}{
+		"Version": "2012-10-17",
+		"Statement": []map[string]interface{}{
+			{
+				"Effect": "Allow",
+				"Principal": map[string]interface{}{
+					"AWS": fmt.Sprintf("arn:aws:iam::%s:root", callerAccount),
+				},
+				"Action": "sts:AssumeRole",
+				"Condition": map[string]interface{}{
+					"ArnLike": map[string]interface{}{
+						"aws:PrincipalArn": []string{
+							fmt.Sprintf("arn:aws:iam::%s:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*", callerAccount),
+							fmt.Sprintf("arn:aws:iam::%s:role/km-provisioner-*", callerAccount),
+						},
+					},
+				},
+			},
+		},
+	}
+	trustJSON, _ := json.MarshalIndent(trustPolicy, "", "  ")
+
+	rolePolicy := map[string]interface{}{
+		"Version": "2012-10-17",
+		"Statement": []map[string]interface{}{
+			{
+				"Sid":    "SCPMutate",
+				"Effect": "Allow",
+				"Action": []string{
+					"organizations:UpdatePolicy", "organizations:DeletePolicy",
+					"organizations:DescribePolicy", "organizations:ListTargetsForPolicy",
+					"organizations:TagResource", "organizations:UntagResource",
+					"organizations:ListTagsForResource",
+				},
+				"Resource": fmt.Sprintf("arn:aws:organizations::%s:policy/*/service_control_policy/*", mgmtAccount),
+			},
+			{
+				"Sid":    "SCPAttachDetach",
+				"Effect": "Allow",
+				"Action": []string{"organizations:AttachPolicy", "organizations:DetachPolicy"},
+				"Resource": []string{
+					fmt.Sprintf("arn:aws:organizations::%s:policy/*/service_control_policy/*", mgmtAccount),
+					fmt.Sprintf("arn:aws:organizations::%s:account/*/%s", mgmtAccount, appAccount),
+				},
+			},
+			{
+				"Sid":      "SCPCreateListDescribe",
+				"Effect":   "Allow",
+				"Action":   []string{"organizations:CreatePolicy", "organizations:ListPolicies", "organizations:ListPoliciesForTarget", "organizations:DescribeOrganization"},
+				"Resource": "*",
+			},
+		},
+	}
+	rolePolicyJSON, _ := json.MarshalIndent(rolePolicy, "", "  ")
+
+	fmt.Fprintln(w, "# ============================================================")
+	fmt.Fprintf(w, "# km-org-admin Role — Management account %s\n", mgmtAccount)
+	fmt.Fprintln(w, "#")
+	fmt.Fprintf(w, "# Assumed by: Application account %s (SSO + provisioner roles)\n", callerAccount)
+	fmt.Fprintln(w, "# Used by:    km bootstrap --dry-run=false")
+	fmt.Fprintln(w, "# ============================================================")
+	fmt.Fprintln(w)
+
+	fmt.Fprintf(w, "## Trust Policy (AssumeRolePolicyDocument) for role %s\n\n", roleName)
+	fmt.Fprintln(w, string(trustJSON))
+	fmt.Fprintln(w)
+
+	fmt.Fprintf(w, "## Inline Policy (km-org-admin-policy) for role %s\n\n", roleName)
+	fmt.Fprintln(w, string(rolePolicyJSON))
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "# AWS CLI commands to create this role:")
+	fmt.Fprintf(w, "#   aws iam create-role --role-name %s --assume-role-policy-document '<trust-policy-json>'\n", roleName)
+	fmt.Fprintf(w, "#   aws iam put-role-policy --role-name %s --policy-name km-org-admin-policy --policy-document '<inline-policy-json>'\n", roleName)
 
 	return nil
 }
