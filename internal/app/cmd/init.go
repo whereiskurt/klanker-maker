@@ -207,6 +207,15 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		fmt.Printf("  [skip] artifacts_bucket not configured\n")
 	}
 
+	// Step 2a: Build and push km-sandbox container image to ECR
+	fmt.Println()
+	fmt.Printf("Building and pushing km-sandbox image [%s]...\n", version.String())
+	if err := buildAndPushSandboxImage(repoRoot, cfg); err != nil {
+		fmt.Printf("  [warn] Sandbox image build/push failed: %v\n", err)
+	} else {
+		fmt.Printf("  km-sandbox image pushed to ECR\n")
+	}
+
 	// Step 2b: Upload create-handler toolchain (km + terraform + terragrunt + infra/) to S3
 	fmt.Println()
 	fmt.Println("Uploading create-handler toolchain...")
@@ -696,6 +705,65 @@ func fetchAndUploadOtelcolContrib(buildDir, bucket string) error {
 		return fmt.Errorf("upload otelcol-contrib: %s: %w", string(out), err)
 	}
 	fmt.Printf("  Uploaded otelcol-contrib\n")
+	return nil
+}
+
+// buildAndPushSandboxImage builds the km-sandbox container image for linux/amd64
+// and pushes it to ECR with versioned and latest tags. This is the base container
+// image for ECS/Docker/EKS sandbox substrates.
+func buildAndPushSandboxImage(repoRoot string, cfg *config.Config) error {
+	accountID := cfg.ApplicationAccountID
+	region := cfg.PrimaryRegion
+	if accountID == "" || region == "" {
+		return fmt.Errorf("accounts_application and region required for ECR push")
+	}
+	ecrRegistry := fmt.Sprintf("%s.dkr.ecr.%s.amazonaws.com", accountID, region)
+	imageTag := version.Number
+
+	// Ensure ECR repo exists
+	ensureCmd := exec.Command("aws", "ecr", "describe-repositories",
+		"--region", region,
+		"--repository-names", "km-sandbox",
+		"--profile", "klanker-terraform")
+	if out, err := ensureCmd.CombinedOutput(); err != nil {
+		fmt.Printf("  Creating km-sandbox ECR repository...\n")
+		createCmd := exec.Command("aws", "ecr", "create-repository",
+			"--region", region,
+			"--repository-name", "km-sandbox",
+			"--profile", "klanker-terraform")
+		if out, err := createCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("create ECR repo: %s: %w", string(out), err)
+		}
+	} else {
+		_ = out // repo exists
+	}
+
+	// ECR login
+	loginCmd := exec.Command("bash", "-c",
+		fmt.Sprintf("aws ecr get-login-password --region %s --profile klanker-terraform | docker login --username AWS --password-stdin %s", region, ecrRegistry))
+	if out, err := loginCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("ECR login: %s: %w", string(out), err)
+	}
+
+	// Build and push
+	dockerfilePath := filepath.Join(repoRoot, "containers", "sandbox", "Dockerfile")
+	contextPath := filepath.Join(repoRoot, "containers", "sandbox")
+	versionTag := fmt.Sprintf("%s/km-sandbox:%s", ecrRegistry, imageTag)
+	latestTag := fmt.Sprintf("%s/km-sandbox:latest", ecrRegistry)
+
+	fmt.Printf("  Building km-sandbox image (linux/amd64)...\n")
+	buildCmd := exec.Command("docker", "buildx", "build",
+		"--platform", "linux/amd64",
+		"--file", dockerfilePath,
+		"--tag", versionTag,
+		"--tag", latestTag,
+		"--push",
+		contextPath)
+	buildCmd.Dir = repoRoot
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("docker build+push: %s: %w", string(out), err)
+	}
+
 	return nil
 }
 
