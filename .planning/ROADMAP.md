@@ -815,3 +815,13 @@ Plans:
 **Goal:** `km create --substrate eks` provisions a sandbox as a Kubernetes Pod with sidecar containers, NetworkPolicy for egress enforcement, IRSA for IAM, and the same budget/proxy/audit topology — running on an existing EKS cluster
 **Depends on:** Phase 36
 **Plans:** 0/0
+
+### Phase 39: Migrate sandbox metadata from S3 JSON to DynamoDB - km list, km status, km lock, km pause, and all metadata reads/writes switch to DynamoDB table while artifacts remain in S3
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 38
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 39 to break down)

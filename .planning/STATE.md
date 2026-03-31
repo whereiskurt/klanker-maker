@@ -468,6 +468,7 @@ None yet.
 - Phase 31 added: Observable learning-mode sandbox — permissive MITM proxy records all DNS/HTTP/GitHub/Claude traffic, generates minimal allowlist profile from observed behavior
 - Phase 33 added: EC2 Storage & AMI Selection — profile-driven root volume sizing, optional additional EBS with auto-mount, hibernation for on-demand, loose AMI spec resolved per-region
 - Phase 34 added: Agent Profiles — agent-orchestrator, goose, and codex sandbox profiles
+- Phase 39 added: Migrate sandbox metadata from S3 JSON to DynamoDB — km list/status/lock/pause metadata reads/writes move to DynamoDB, artifacts stay in S3
 
 ## Session Continuity
 
