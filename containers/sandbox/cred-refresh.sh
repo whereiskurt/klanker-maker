@@ -80,27 +80,24 @@ aws_session_token = ${s_token}
 region = ${region}
 CRED
     else
-        # Fallback: use operator's profile credentials directly.
-        local op_key op_secret op_token
+        # Fallback: export operator credentials from SSO session.
         local op_creds
-        if op_creds=$(aws sts get-session-token --profile "$profile" --duration-seconds 3600 --output json 2>&1); then
-            op_key=$(echo "$op_creds" | jq -r '.Credentials.AccessKeyId')
-            op_secret=$(echo "$op_creds" | jq -r '.Credentials.SecretAccessKey')
-            op_token=$(echo "$op_creds" | jq -r '.Credentials.SessionToken')
-        else
-            # Last resort: extract from the profile directly.
-            op_key=$(aws configure get aws_access_key_id --profile "$profile" 2>/dev/null || echo "")
-            op_secret=$(aws configure get aws_secret_access_key --profile "$profile" 2>/dev/null || echo "")
-            op_token=$(aws configure get aws_session_token --profile "$profile" 2>/dev/null || echo "")
-        fi
-        cat > "${CREDS_DIR}/sandbox" <<CRED
+        if op_creds=$(aws configure export-credentials --profile "$profile" --format process 2>&1); then
+            local op_key=$(echo "$op_creds" | jq -r '.AccessKeyId')
+            local op_secret=$(echo "$op_creds" | jq -r '.SecretAccessKey')
+            local op_token=$(echo "$op_creds" | jq -r '.SessionToken')
+            cat > "${CREDS_DIR}/sandbox" <<CRED
 [sandbox]
 aws_access_key_id = ${op_key}
 aws_secret_access_key = ${op_secret}
 aws_session_token = ${op_token}
 region = ${region}
 CRED
-        log "Wrote sandbox creds from operator profile (no scoped role)"
+            log "Wrote sandbox creds from operator SSO session (no scoped role)"
+        else
+            log "WARNING: Failed to export operator credentials: $op_creds"
+            printf '[sandbox]\nregion = %s\n' "$region" > "${CREDS_DIR}/sandbox"
+        fi
     fi
 
     # Write sidecar credentials file (same pattern).
@@ -116,9 +113,8 @@ aws_session_token = ${k_token}
 region = ${region}
 CRED
     else
-        # Copy sandbox creds for sidecar too.
-        cp "${CREDS_DIR}/sandbox" "${CREDS_DIR}/sidecar"
-        sed -i 's/\[sandbox\]/[sidecar]/' "${CREDS_DIR}/sidecar"
+        # Copy sandbox creds for sidecar too (same operator credentials).
+        sed 's/\[sandbox\]/[sidecar]/' "${CREDS_DIR}/sandbox" > "${CREDS_DIR}/sidecar"
         log "Wrote sidecar creds from sandbox fallback"
     fi
 
