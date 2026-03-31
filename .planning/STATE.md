@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 37-docker-compose-local-substrate/37-03-PLAN.md
-last_updated: "2026-03-31T12:34:10.526Z"
+stopped_at: Completed 39-migrate-sandbox-metadata-s3-to-dynamodb/39-02-PLAN.md
+last_updated: "2026-03-31T23:56:18.830Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
-  total_phases: 38
+  total_phases: 41
   completed_phases: 34
-  total_plans: 111
-  completed_plans: 109
+  total_plans: 114
+  completed_plans: 110
   percent: 0
 ---
 
@@ -156,6 +156,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 37-docker-compose-local-substrate P01 | 6min | 2 tasks | 11 files |
 | Phase 37-docker-compose-local-substrate P02 | 7min | 3 tasks | 5 files |
 | Phase 37-docker-compose-local-substrate P03 | 8min | 3 tasks | 6 files |
+| Phase 39-migrate-sandbox-metadata-s3-to-dynamodb P02 | 131s | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -420,6 +421,8 @@ Recent decisions affecting current work:
 - [Phase 37-02]: IAM role propagation: poll GetRole + 5s sleep before AssumeRole (Pitfall 4 from research)
 - [Phase 37-docker-compose-local-substrate]: execDockerShell uses ShellExecFunc injection — consistent with EC2/ECS exec patterns, testable without running docker
 - [Phase 37-docker-compose-local-substrate]: stop/pause detect docker substrate via S3 metadata read before EC2 API calls (same pattern as destroy.go)
+- [Phase 39-02]: No replica_regions in dynamodb-sandboxes v1.0.0 (single-region); can add in v1.1.0
+- [Phase 39-02]: dynamodb-sandboxes placed after dynamodb-identities, before s3-replication in km init ordering
 
 ### Roadmap Evolution
 
@@ -474,6 +477,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-31T12:28:47.180Z
-Stopped at: Completed 37-docker-compose-local-substrate/37-03-PLAN.md
+Last session: 2026-03-31T23:56:18.826Z
+Stopped at: Completed 39-migrate-sandbox-metadata-s3-to-dynamodb/39-02-PLAN.md
 Resume file: None
