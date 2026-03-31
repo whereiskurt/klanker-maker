@@ -29,7 +29,7 @@ SIDECARS := dns-proxy http-proxy audit-log
 OTELCOL_VERSION ?= 0.120.0
 OTELCOL_URL     := https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$(OTELCOL_VERSION)/otelcol-contrib_$(OTELCOL_VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build build-km bump-version sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas build-create-handler build-email-create-handler push-create-handler clean fetch-otelcol
+.PHONY: build build-km bump-version sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas build-create-handler build-email-create-handler push-create-handler clean fetch-otelcol sandbox-image
 
 ## bump-version: increment the patch version in VERSION file
 bump-version:
@@ -78,6 +78,15 @@ sidecars: fetch-otelcol
 	@echo "  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/otelcol-contrib"
 	@echo "  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/tracing/config.yaml"
 
+## sandbox-image: build the km-sandbox base container image locally
+sandbox-image:
+	docker buildx build --platform linux/amd64 \
+	  --file containers/sandbox/Dockerfile \
+	  --tag km-sandbox:$(VERSION) \
+	  --tag km-sandbox:latest \
+	  --load \
+	  containers/sandbox/
+
 ## build-sidecars: cross-compile Go sidecars locally (no S3 upload)
 build-sidecars:
 	@mkdir -p build
@@ -92,7 +101,7 @@ ecr-login:
 
 ## ecr-repos: ensure all sidecar and Lambda container ECR repositories exist
 ecr-repos:
-	@for name in km-dns-proxy km-http-proxy km-audit-log km-tracing km-create-handler; do \
+	@for name in km-dns-proxy km-http-proxy km-audit-log km-tracing km-create-handler km-sandbox; do \
 	  aws ecr describe-repositories --region $(REGION) --repository-names $$name 2>/dev/null || \
 	  aws ecr create-repository --region $(REGION) --repository-name $$name; \
 	done
@@ -166,3 +175,9 @@ ecr-push: ecr-login ecr-repos
 	  --file sidecars/tracing/Dockerfile \
 	  --tag $(ECR_REGISTRY)/km-tracing:$(VERSION) \
 	  --push sidecars/tracing/
+	docker buildx build --platform linux/amd64 \
+	  --file containers/sandbox/Dockerfile \
+	  --tag $(ECR_REGISTRY)/km-sandbox:$(VERSION) \
+	  --tag $(ECR_REGISTRY)/km-sandbox:latest \
+	  --push \
+	  containers/sandbox/
