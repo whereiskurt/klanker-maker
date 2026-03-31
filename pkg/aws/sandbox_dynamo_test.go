@@ -8,7 +8,6 @@ import (
 	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
@@ -481,5 +480,3 @@ func contains(s, sub string) bool {
 		}())
 }
 
-// Suppress unused import warning for attributevalue (used in mustMarshalSandboxItem helper context)
-var _ = attributevalue.MarshalMap
