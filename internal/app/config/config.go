@@ -79,6 +79,10 @@ type Config struct {
 	// Maps to km-config.yaml key identity_table_name. Defaults to "km-identities".
 	IdentityTableName string
 
+	// SandboxTableName is the DynamoDB table name for sandbox metadata.
+	// Maps to km-config.yaml key sandbox_table_name. Defaults to "km-sandboxes".
+	SandboxTableName string
+
 	// ArtifactsBucket is the S3 bucket used for storing sandbox artifacts and profiles.
 	// Set via KM_ARTIFACTS_BUCKET environment variable or artifacts_bucket in km-config.yaml.
 	// Required for ECS sandbox re-provisioning via km budget add.
@@ -144,6 +148,7 @@ func Load() (*Config, error) {
 	v.SetDefault("max_sandboxes", 10)
 	v.SetDefault("budget_table_name", "km-budgets")
 	v.SetDefault("identity_table_name", "km-identities")
+	v.SetDefault("sandbox_table_name", "km-sandboxes")
 	v.SetDefault("artifacts_bucket", "")
 	v.SetDefault("aws_profile", "")
 	v.SetDefault("rsync_paths", []string{".claude", ".bashrc", ".bash_profile", ".gitconfig"})
@@ -196,6 +201,7 @@ func Load() (*Config, error) {
 			"region",
 			"budget_table_name",
 			"identity_table_name",
+			"sandbox_table_name",
 			"artifacts_bucket",
 			"aws_profile",
 			"state_bucket",
@@ -230,6 +236,7 @@ func Load() (*Config, error) {
 		PrimaryRegion:        v.GetString("region"),
 		BudgetTableName:      v.GetString("budget_table_name"),
 		IdentityTableName:    v.GetString("identity_table_name"),
+		SandboxTableName:     v.GetString("sandbox_table_name"),
 		ArtifactsBucket:      v.GetString("artifacts_bucket"),
 		AWSProfile:           v.GetString("aws_profile"),
 		Route53ZoneID:        v.GetString("route53_zone_id"),

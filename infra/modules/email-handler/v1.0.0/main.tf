@@ -150,6 +150,34 @@ resource "aws_iam_role_policy" "kms_decrypt" {
   })
 }
 
+# Policy: DynamoDB km-sandboxes — read/write sandbox metadata
+resource "aws_iam_role_policy" "dynamodb_sandboxes" {
+  name = "km-email-handler-dynamodb-sandboxes"
+  role = aws_iam_role.email_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SandboxMetadataTable"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Scan",
+          "dynamodb:Query",
+        ]
+        Resource = [
+          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/km-sandboxes",
+          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/km-sandboxes/index/alias-index",
+        ]
+      }
+    ]
+  })
+}
+
 # ============================================================
 # Lambda function
 # ============================================================

@@ -112,6 +112,34 @@ resource "aws_iam_role_policy" "dynamodb" {
   })
 }
 
+# Policy: DynamoDB km-sandboxes — read/write sandbox metadata
+resource "aws_iam_role_policy" "dynamodb_sandboxes" {
+  name = "km-create-handler-dynamodb-sandboxes"
+  role = aws_iam_role.create_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SandboxMetadataTable"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Scan",
+          "dynamodb:Query",
+        ]
+        Resource = [
+          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/km-sandboxes",
+          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/km-sandboxes/index/alias-index",
+        ]
+      }
+    ]
+  })
+}
+
 # Policy: Terraform state S3 access (state read/write for km create subprocess)
 resource "aws_iam_role_policy" "terraform_state" {
   name = "km-create-handler-tf-state"
@@ -380,8 +408,8 @@ resource "aws_iam_role_policy" "kms" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect = "Allow"
-        Action = ["kms:*"]
+        Effect   = "Allow"
+        Action   = ["kms:*"]
         Resource = "*"
       }
     ]
@@ -402,7 +430,7 @@ resource "aws_lambda_function" "create_handler" {
   source_code_hash = filebase64sha256(var.lambda_zip_path)
   handler          = "bootstrap"
   runtime          = "provided.al2023"
-  architectures = ["arm64"]
+  architectures    = ["arm64"]
 
   # 15-minute timeout: cold start toolchain download + terraform init + apply
   timeout     = 900

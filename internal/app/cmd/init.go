@@ -74,6 +74,11 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: nil,
 		},
 		{
+			name:    "dynamodb-sandboxes",
+			dir:     filepath.Join(regionDir, "dynamodb-sandboxes"),
+			envReqs: nil,
+		},
+		{
 			name:    "s3-replication",
 			dir:     filepath.Join(regionDir, "s3-replication"),
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},

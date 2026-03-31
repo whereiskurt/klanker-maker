@@ -247,8 +247,8 @@ resource "aws_lambda_function" "ttl_handler" {
   source_code_hash = filebase64sha256(var.lambda_zip_path)
 
   # 15-minute timeout: terraform init + destroy can take several minutes
-  timeout     = 900
-  memory_size = 1536
+  timeout       = 900
+  memory_size   = 1536
   architectures = ["arm64"]
 
   # 2GB ephemeral storage: terraform init downloads the AWS provider (~500MB)
@@ -416,6 +416,34 @@ resource "aws_iam_role_policy" "ec2_teardown" {
       ]
       Resource = "*"
     }]
+  })
+}
+
+# Policy: DynamoDB km-sandboxes — read/write sandbox metadata
+resource "aws_iam_role_policy" "dynamodb_sandboxes" {
+  name = "km-ttl-handler-dynamodb-sandboxes"
+  role = aws_iam_role.ttl_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SandboxMetadataTable"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Scan",
+          "dynamodb:Query",
+        ]
+        Resource = [
+          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/km-sandboxes",
+          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/km-sandboxes/index/alias-index",
+        ]
+      }
+    ]
   })
 }
 
