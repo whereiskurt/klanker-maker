@@ -637,6 +637,177 @@ spec:
 	})
 }
 
+// TestTlsCaptureSpecParsesFromYAML verifies that TlsCaptureSpec round-trips from YAML.
+func TestTlsCaptureSpecParsesFromYAML(t *testing.T) {
+	yamlData := `
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: tls-capture-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+      allowedMethods: ["GET"]
+  identity:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: false
+      image: "km-otel:latest"
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+    tlsCapture:
+      enabled: true
+      libraries:
+        - openssl
+      capturePayloads: false
+  policy:
+    allowShellEscape: false
+  agent:
+    maxConcurrentTasks: 2
+    taskTimeout: 30m
+`
+
+	p, err := profile.Parse([]byte(yamlData))
+	if err != nil {
+		t.Fatalf("expected profile with tlsCapture to parse without error, got: %v", err)
+	}
+
+	if p.Spec.Observability.TlsCapture == nil {
+		t.Fatal("expected spec.observability.tlsCapture to be populated, got nil")
+	}
+
+	tc := p.Spec.Observability.TlsCapture
+	if !tc.Enabled {
+		t.Error("expected tlsCapture.enabled=true")
+	}
+	if len(tc.Libraries) != 1 || tc.Libraries[0] != "openssl" {
+		t.Errorf("expected libraries=[openssl], got %v", tc.Libraries)
+	}
+	if tc.CapturePayloads {
+		t.Error("expected capturePayloads=false")
+	}
+}
+
+// TestTlsCaptureSpecIsEnabled verifies the IsEnabled() method for various states.
+func TestTlsCaptureSpecIsEnabled(t *testing.T) {
+	t.Run("nil spec returns false", func(t *testing.T) {
+		var tc *profile.TlsCaptureSpec
+		if tc.IsEnabled() {
+			t.Error("expected IsEnabled()=false for nil TlsCaptureSpec")
+		}
+	})
+
+	t.Run("disabled spec returns false", func(t *testing.T) {
+		tc := &profile.TlsCaptureSpec{Enabled: false}
+		if tc.IsEnabled() {
+			t.Error("expected IsEnabled()=false for disabled TlsCaptureSpec")
+		}
+	})
+
+	t.Run("enabled spec returns true", func(t *testing.T) {
+		tc := &profile.TlsCaptureSpec{Enabled: true}
+		if !tc.IsEnabled() {
+			t.Error("expected IsEnabled()=true for enabled TlsCaptureSpec")
+		}
+	})
+}
+
+// TestTlsCaptureSpecEffectiveLibraries verifies EffectiveLibraries() behavior.
+func TestTlsCaptureSpecEffectiveLibraries(t *testing.T) {
+	t.Run("nil spec returns nil", func(t *testing.T) {
+		var tc *profile.TlsCaptureSpec
+		libs := tc.EffectiveLibraries()
+		if libs != nil {
+			t.Errorf("expected nil for nil spec, got %v", libs)
+		}
+	})
+
+	t.Run("disabled spec returns nil", func(t *testing.T) {
+		tc := &profile.TlsCaptureSpec{Enabled: false, Libraries: []string{"openssl"}}
+		libs := tc.EffectiveLibraries()
+		if libs != nil {
+			t.Errorf("expected nil for disabled spec, got %v", libs)
+		}
+	})
+
+	t.Run("empty libraries defaults to openssl", func(t *testing.T) {
+		tc := &profile.TlsCaptureSpec{Enabled: true}
+		libs := tc.EffectiveLibraries()
+		if len(libs) != 1 || libs[0] != "openssl" {
+			t.Errorf("expected [openssl] for empty libraries, got %v", libs)
+		}
+	})
+
+	t.Run("specific libraries returned as-is", func(t *testing.T) {
+		tc := &profile.TlsCaptureSpec{Enabled: true, Libraries: []string{"openssl", "gnutls"}}
+		libs := tc.EffectiveLibraries()
+		if len(libs) != 2 || libs[0] != "openssl" || libs[1] != "gnutls" {
+			t.Errorf("expected [openssl gnutls], got %v", libs)
+		}
+	})
+
+	t.Run("all expands to all supported libraries", func(t *testing.T) {
+		tc := &profile.TlsCaptureSpec{Enabled: true, Libraries: []string{"all"}}
+		libs := tc.EffectiveLibraries()
+		expected := []string{"openssl", "gnutls", "nss", "go", "rustls"}
+		if len(libs) != len(expected) {
+			t.Fatalf("expected %d libraries for 'all', got %d: %v", len(expected), len(libs), libs)
+		}
+		for i, e := range expected {
+			if libs[i] != e {
+				t.Errorf("expected libs[%d]=%q, got %q", i, e, libs[i])
+			}
+		}
+	})
+}
+
+// TestTlsCaptureBackwardsCompatible verifies profiles without tlsCapture still parse.
+func TestTlsCaptureBackwardsCompatible(t *testing.T) {
+	data, err := os.ReadFile("../../testdata/profiles/valid-minimal.yaml")
+	if err != nil {
+		t.Fatalf("failed to read test fixture: %v", err)
+	}
+
+	p, err := profile.Parse(data)
+	if err != nil {
+		t.Fatalf("expected profile without tlsCapture to parse without error, got: %v", err)
+	}
+
+	if p.Spec.Observability.TlsCapture != nil {
+		t.Logf("valid-minimal.yaml has tlsCapture set: %+v (acceptable if test fixture was updated)", p.Spec.Observability.TlsCapture)
+	}
+}
+
 // TestBudgetSpecOptional verifies that a profile without spec.budget is still valid.
 func TestBudgetSpecOptional(t *testing.T) {
 	data, err := os.ReadFile("../../testdata/profiles/valid-minimal.yaml")

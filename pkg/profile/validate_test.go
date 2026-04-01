@@ -597,6 +597,139 @@ func TestValidateSchema_MetadataAlias(t *testing.T) {
 	}
 }
 
+// minimalProfileWithTlsCapture returns a full valid profile YAML with the given tlsCapture YAML block.
+func minimalProfileWithTlsCapture(tlsCaptureYAML string) []byte {
+	return []byte(`apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: tls-capture-schema-test
+spec:
+  lifecycle:
+    ttl: "24h"
+    idleTimeout: "1h"
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+      allowedHosts: []
+      allowedMethods:
+        - GET
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/network
+` + tlsCaptureYAML + `
+  policy:
+    allowShellEscape: false
+  agent:
+    maxConcurrentTasks: 4
+    taskTimeout: "30m"
+`)
+}
+
+// TestValidateSchema_TlsCapture verifies JSON Schema correctly validates tlsCapture configurations.
+func TestValidateSchema_TlsCapture(t *testing.T) {
+	t.Run("valid tlsCapture with openssl", func(t *testing.T) {
+		data := minimalProfileWithTlsCapture(`    tlsCapture:
+      enabled: true
+      libraries:
+        - openssl
+      capturePayloads: false`)
+		errs := profile.ValidateSchema(data)
+		if len(errs) != 0 {
+			t.Errorf("expected no errors for valid tlsCapture, got: %v", errs)
+		}
+	})
+
+	t.Run("valid tlsCapture with all library", func(t *testing.T) {
+		data := minimalProfileWithTlsCapture(`    tlsCapture:
+      enabled: true
+      libraries:
+        - all`)
+		errs := profile.ValidateSchema(data)
+		if len(errs) != 0 {
+			t.Errorf("expected no errors for tlsCapture with 'all', got: %v", errs)
+		}
+	})
+
+	t.Run("valid tlsCapture with multiple libraries", func(t *testing.T) {
+		data := minimalProfileWithTlsCapture(`    tlsCapture:
+      enabled: true
+      libraries:
+        - openssl
+        - gnutls
+        - nss
+        - go
+        - rustls`)
+		errs := profile.ValidateSchema(data)
+		if len(errs) != 0 {
+			t.Errorf("expected no errors for tlsCapture with all named libraries, got: %v", errs)
+		}
+	})
+
+	t.Run("invalid tlsCapture with unknown library", func(t *testing.T) {
+		data := minimalProfileWithTlsCapture(`    tlsCapture:
+      enabled: true
+      libraries:
+        - openssl
+        - boringssl`)
+		errs := profile.ValidateSchema(data)
+		if len(errs) == 0 {
+			t.Error("expected schema error for invalid library 'boringssl', got none")
+		}
+	})
+
+	t.Run("tlsCapture without enabled field is rejected", func(t *testing.T) {
+		data := minimalProfileWithTlsCapture(`    tlsCapture:
+      libraries:
+        - openssl`)
+		errs := profile.ValidateSchema(data)
+		if len(errs) == 0 {
+			t.Error("expected schema error for tlsCapture missing required 'enabled', got none")
+		}
+	})
+
+	t.Run("omitting tlsCapture is valid (backward compat)", func(t *testing.T) {
+		data := minimalProfileWithTlsCapture("")
+		errs := profile.ValidateSchema(data)
+		if len(errs) != 0 {
+			t.Errorf("expected no errors for profile without tlsCapture, got: %v", errs)
+		}
+	})
+}
+
 func TestValidateSchema_MetadataPrefix(t *testing.T) {
 	tests := []struct {
 		name        string
