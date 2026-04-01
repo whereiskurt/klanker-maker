@@ -75,7 +75,12 @@ static __always_inline int emit_ssl_event(void *ctx, __u64 buf_ptr,
         evt->remote_port = 0;
     }
 
-    /* Clamp payload length */
+    /* Clamp payload length. The BPF verifier needs proof that the read
+     * size fits within the payload buffer. We clamp with if-then and
+     * apply a bitwise AND mask so the verifier can track the upper bound
+     * statically. Since MAX_PAYLOAD_LEN is 16384 (0x4000), we use
+     * & 0x7FFF (32767) which is larger than MAX_PAYLOAD_LEN but still
+     * provably bounded — the if-check guarantees copy_len <= 16384. */
     copy_len = len;
     if (copy_len > MAX_PAYLOAD_LEN)
         copy_len = MAX_PAYLOAD_LEN;
@@ -83,7 +88,7 @@ static __always_inline int emit_ssl_event(void *ctx, __u64 buf_ptr,
 
     /* Read plaintext from userspace buffer */
     if (copy_len > 0) {
-        long err = bpf_probe_read_user(evt->payload, copy_len, (void *)buf_ptr);
+        long err = bpf_probe_read_user(evt->payload, copy_len & 0x7FFF, (void *)buf_ptr);
         if (err) {
             bpf_ringbuf_discard(evt, 0);
             return 0;
