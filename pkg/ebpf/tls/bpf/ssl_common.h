@@ -9,6 +9,34 @@
 #ifndef __SSL_COMMON_H__
 #define __SSL_COMMON_H__
 
+/* Define pt_regs before bpf includes — required for uprobe PT_REGS macros.
+ * bpf_tracing.h needs the full struct definition, not just a forward decl.
+ * Register names must match what bpf_tracing.h expects (rdi, rsi, rdx, etc).
+ * This matches the x86_64 pt_regs layout from arch/x86/include/uapi/asm/ptrace.h */
+struct pt_regs {
+    unsigned long r15;
+    unsigned long r14;
+    unsigned long r13;
+    unsigned long r12;
+    unsigned long rbp;
+    unsigned long rbx;
+    unsigned long r11;
+    unsigned long r10;
+    unsigned long r9;
+    unsigned long r8;
+    unsigned long rax;
+    unsigned long rcx;
+    unsigned long rdx;
+    unsigned long rsi;
+    unsigned long rdi;
+    unsigned long orig_rax;
+    unsigned long rip;
+    unsigned long cs;
+    unsigned long eflags;
+    unsigned long rsp;
+    unsigned long ss;
+};
+
 #include <linux/bpf.h>
 #include <linux/in.h>
 #include <bpf/bpf_helpers.h>
