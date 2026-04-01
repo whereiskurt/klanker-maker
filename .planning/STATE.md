@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 41-02-PLAN.md
-last_updated: "2026-04-01T21:04:21.758Z"
+stopped_at: Completed 41-05-PLAN.md
+last_updated: "2026-04-01T21:10:59.021Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 41
-  completed_phases: 36
+  completed_phases: 37
   total_plans: 126
-  completed_plans: 123
+  completed_plans: 124
   percent: 0
 ---
 
@@ -169,6 +169,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 41 P03 | 2min | 1 tasks | 4 files |
 | Phase 41-04 P04 | 2min | 1 tasks | 6 files |
 | Phase 41 P02 | 4min | 2 tasks | 6 files |
+| Phase 41 P05 | 3min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -459,6 +460,7 @@ Recent decisions affecting current work:
 - [Phase 41-04]: TlsCaptureSpec follows optional pointer pattern with IsEnabled(); only openssl implemented, others schema-forward-compatible
 - [Phase 41]: Shared BPF maps between openssl and connect objects via MapReplacements
 - [Phase 41]: Optional uprobe attach for SSL_write_ex/SSL_read_ex — gracefully skip on OpenSSL 1.1.x
+- [Phase 41]: TLS probe failures are non-fatal -- warns and continues network enforcement
 
 ### Roadmap Evolution
 
@@ -513,6 +515,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-01T21:04:21.754Z
-Stopped at: Completed 41-02-PLAN.md
+Last session: 2026-04-01T21:10:59.017Z
+Stopped at: Completed 41-05-PLAN.md
 Resume file: None
