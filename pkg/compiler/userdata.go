@@ -452,9 +452,16 @@ WantedBy=multi-user.target
 UNIT
 {{- end }}
 
+{{- if eq .Enforcement "ebpf" }}
+# In pure eBPF mode, skip km-dns-proxy (enforcer runs its own DNS resolver on :5353)
+systemctl enable km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}
+systemctl start km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}
+echo "[km-bootstrap] Sidecars started (DNS via eBPF enforcer, not km-dns-proxy)"
+{{- else }}
 systemctl enable km-dns-proxy km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}
 systemctl start km-dns-proxy km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}
 echo "[km-bootstrap] Sidecars started"
+{{- end }}
 echo "[km-bootstrap] Shell audit hook installed at /etc/profile.d/km-audit.sh"
 {{- if .SandboxEmail }}
 echo "[km-bootstrap] Mail poller started — inbox at /var/mail/km/new/"
