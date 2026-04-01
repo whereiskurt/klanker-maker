@@ -79,6 +79,9 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	root.AddCommand(NewOtelCmd(cfg))
 	root.AddCommand(NewInfoCmd(cfg))
 
+	// Register Linux-only eBPF commands (no-op on other platforms).
+	registerEBPFCmds(root, cfg)
+
 	// Shell completion subcommand
 	root.AddCommand(&cobra.Command{
 		Use:          "completion [bash|zsh]",
