@@ -386,6 +386,30 @@
                   "description": "Include tool parameters (bash commands, file paths) in telemetry (default: false)"
                 }
               }
+            },
+            "tlsCapture": {
+              "type": "object",
+              "description": "TLS/SSL plaintext capture via eBPF uprobes. Attaches to TLS library functions to capture plaintext before encryption / after decryption.",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Enable TLS plaintext capture via uprobes"
+                },
+                "libraries": {
+                  "type": "array",
+                  "description": "TLS libraries to instrument. Currently only openssl is implemented; gnutls, nss, go, rustls are schema-present but deferred.",
+                  "items": {
+                    "type": "string",
+                    "enum": ["openssl", "gnutls", "nss", "go", "rustls", "all"]
+                  }
+                },
+                "capturePayloads": {
+                  "type": "boolean",
+                  "description": "Capture full payload content (default: false). When false, only metadata (sizes, directions) are logged."
+                }
+              },
+              "required": ["enabled"]
             }
           }
         },

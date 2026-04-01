@@ -62,6 +62,11 @@ spec:
       enabled: true
       logPrompts: false
       logToolDetails: false
+    tlsCapture:
+      enabled: true
+      libraries:
+        - openssl
+      capturePayloads: false
 
   policy:
     allowShellEscape: false

@@ -256,6 +256,40 @@ type ObservabilitySpec struct {
 	CommandLog      LogDestination       `yaml:"commandLog"`
 	NetworkLog      LogDestination       `yaml:"networkLog"`
 	ClaudeTelemetry *ClaudeTelemetrySpec `yaml:"claudeTelemetry,omitempty"`
+	TlsCapture      *TlsCaptureSpec     `yaml:"tlsCapture,omitempty"`
+}
+
+// TlsCaptureSpec controls TLS/SSL plaintext capture via eBPF uprobes.
+// When enabled, uprobes attach to TLS library functions (e.g. SSL_read/SSL_write)
+// to capture plaintext before encryption / after decryption.
+type TlsCaptureSpec struct {
+	Enabled         bool     `yaml:"enabled"`
+	Libraries       []string `yaml:"libraries,omitempty"`       // openssl, gnutls, nss, go, rustls, all
+	CapturePayloads bool     `yaml:"capturePayloads,omitempty"` // capture full payload content (default false)
+}
+
+// IsEnabled returns true if TLS capture is configured and enabled.
+func (t *TlsCaptureSpec) IsEnabled() bool {
+	return t != nil && t.Enabled
+}
+
+// EffectiveLibraries returns the list of libraries to instrument.
+// If "all" is in the list, returns all supported library names.
+// If the list is empty (with enabled=true), defaults to openssl only.
+// Currently only "openssl" is implemented; others are accepted by schema but no-op at runtime.
+func (t *TlsCaptureSpec) EffectiveLibraries() []string {
+	if t == nil || !t.Enabled {
+		return nil
+	}
+	if len(t.Libraries) == 0 {
+		return []string{"openssl"} // default to openssl only
+	}
+	for _, l := range t.Libraries {
+		if l == "all" {
+			return []string{"openssl", "gnutls", "nss", "go", "rustls"}
+		}
+	}
+	return t.Libraries
 }
 
 // LogDestination defines where logs should be sent.
