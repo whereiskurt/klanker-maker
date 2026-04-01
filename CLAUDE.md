@@ -65,8 +65,17 @@ See `docs/multi-agent-email.md` for full details on SES setup, IAM policy, and c
 - `internal/app/cmd/` — Cobra commands
 - `pkg/profile/` — Schema, validation, inheritance
 - `pkg/compiler/` — Profile → Terragrunt artifacts
+- `pkg/ebpf/` — eBPF enforcer (cgroup BPF programs, DNS resolver, audit consumer)
 - `pkg/terragrunt/` — Terragrunt runner
-- `pkg/aws/` — AWS SDK helpers
+- `pkg/aws/` — AWS SDK helpers (DynamoDB metadata, S3 artifacts, SES, EC2)
+- `sidecars/` — HTTP proxy (MITM), DNS proxy, audit-log, tracing
 - `infra/modules/` — Terraform modules
 - `infra/live/` — Terragrunt hierarchy
 - `profiles/` — Built-in SandboxProfile YAML files
+
+## Network Enforcement
+
+Two enforcement modes via `spec.network.enforcement`:
+- `proxy` (default) — iptables DNAT → userspace proxy sidecars
+- `ebpf` — cgroup BPF programs (connect4, sendmsg4, sockops, egress) with LPM trie allowlist
+- `both` — eBPF primary + proxy for L7 inspection (Bedrock metering, GitHub filtering)

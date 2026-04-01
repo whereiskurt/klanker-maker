@@ -1596,7 +1596,7 @@ spec:
 | `lifecycle` | Yes | TTL, idle timeout, teardown policy |
 | `runtime` | Yes | Substrate (ec2/ecs), instance type, spot, region |
 | `execution` | No | Shell, working directory, env vars |
-| `network` | Yes | DNS suffixes, hosts, HTTP methods, `httpsOnly` toggle |
+| `network` | Yes | DNS suffixes, hosts, HTTP methods, `httpsOnly` toggle, `enforcement` mode (proxy/ebpf/both) |
 | `sourceAccess` | No | GitHub repos, refs, permissions |
 | `identity` | No | IAM session duration, allowed regions |
 | `secrets` | No | SSM parameter path allowlist |
@@ -1620,6 +1620,35 @@ spec:
 ```
 
 When `httpsOnly: true`, any attempt to connect over plain HTTP (port 80) is blocked. This is useful for hardened profiles where all external communication should be encrypted.
+
+### Profile network.enforcement
+
+`spec.network.enforcement` selects the network enforcement mechanism. Three modes are available:
+
+```yaml
+spec:
+  network:
+    enforcement: "ebpf"   # or "proxy" (default) or "both"
+```
+
+| Mode | iptables DNAT | DNS Proxy Sidecar | eBPF Enforcer | Best for |
+|------|---------------|-------------------|---------------|----------|
+| `proxy` (default) | Yes | Yes | No | Backward compatible, all substrates |
+| `ebpf` | No | No | Yes | Maximum security, EC2 only |
+| `both` | Yes | Yes | Yes | Belt-and-suspenders, EC2 only |
+
+**eBPF mode** attaches four BPF programs to a sandbox-scoped cgroup:
+
+- **cgroup/connect4** — intercepts TCP `connect()`. Checks destination IP against an LPM trie allowlist. Denied connections get EPERM. Allowed connections to proxy-marked IPs are transparently redirected to the L7 MITM proxy (127.0.0.1:3128).
+- **cgroup/sendmsg4** — intercepts UDP `sendmsg()`. Redirects all DNS queries (port 53) to a local resolver that enforces the profile's `allowedDNSSuffixes` and populates the BPF allowlist with resolved IPs.
+- **sockops** — tracks TCP connection state. Maps source ports to socket cookies so the MITM proxy can recover the original destination after BPF rewrites.
+- **cgroup_skb/egress** — packet-level backstop. Drops any packets to non-allowlisted IPs that slip past the connect4 hook.
+
+The BPF programs and maps are pinned to `/sys/fs/bpf/km/{sandboxID}/` and survive enforcer process restarts. Cleanup happens automatically during `km destroy`.
+
+**Key advantage over proxy mode:** eBPF enforcement runs in the kernel and cannot be bypassed by root users. In proxy mode, a root user can bypass iptables DNAT rules (e.g., via `yum install`). In eBPF mode, the cgroup scope applies to all processes regardless of privilege level.
+
+**Note:** eBPF enforcement is currently EC2-only. Docker and ECS substrates fall back to proxy mode. The cgroup-based approach is designed to extend naturally to EKS pods in future substrates.
 
 ---
 

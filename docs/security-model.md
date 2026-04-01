@@ -34,7 +34,7 @@ Klanker Maker's security model is built on four principles:
 
 **Deny by default.** Security groups start with no egress rules. The IAM role has no inline permissions beyond SSM agent requirements. The DNS proxy returns NXDOMAIN for any domain not matching an allowed suffix. The HTTP proxy returns 403 for any host not in the allowed list. The filesystem is read-only except for explicitly declared writable paths. If a profile section is omitted, the default is the most restrictive option.
 
-**Defense in depth.** No single layer is trusted to hold. Network egress is enforced at three independent layers: Security Groups (L3/L4), DNS proxy (application-layer domain filtering), and HTTP proxy (application-layer host filtering). iptables DNAT ensures traffic cannot bypass the proxy sidecars. IMDSv2 prevents SSRF-based credential theft even if application code is compromised. Secret redaction in audit logs prevents credential leakage even if log storage is breached.
+**Defense in depth.** No single layer is trusted to hold. Network egress is enforced at up to four independent layers: Security Groups (L3/L4), eBPF cgroup programs (kernel-level connect/egress filtering), DNS proxy or resolver (application-layer domain filtering), and HTTP proxy (application-layer host filtering). In proxy mode, iptables DNAT ensures traffic cannot bypass the proxy sidecars. In eBPF mode, cgroup-attached BPF programs enforce allowlists in the kernel — even root users cannot bypass them. IMDSv2 prevents SSRF-based credential theft even if application code is compromised. Secret redaction in audit logs prevents credential leakage even if log storage is breached.
 
 **Assume agent compromise.** The platform assumes the AI agent running inside the sandbox will attempt to escape its constraints. The agent has shell access, can execute arbitrary code within its allowed command set, and may try to exfiltrate data, escalate privileges, or pivot to other infrastructure. Every design decision starts from this assumption.
 
@@ -134,6 +134,22 @@ The `ec2spot` security group starts with zero egress rules. The profile compiler
 - **UDP 53** (`0.0.0.0/0`) -- DNS resolution
 
 These are the only ports open at the infrastructure level. An agent cannot open a raw TCP connection on port 80, 8080, or any non-standard port -- the security group drops it before it reaches the network.
+
+### Layer 1b: eBPF Cgroup Enforcement (Kernel-Level Filtering)
+
+When `spec.network.enforcement` is `"ebpf"` or `"both"`, four BPF programs are attached to the sandbox's cgroup (`/sys/fs/cgroup/km.slice/km-{id}.scope`):
+
+- **cgroup/connect4** — intercepts every TCP `connect()` from processes in the cgroup. Performs an LPM trie lookup on the destination IP. If the IP is not in the `allowed_cidrs` map, returns 0 (EPERM — connection refused). If the IP is in the `http_proxy_ips` map (indicating it needs L7 inspection), rewrites the destination to 127.0.0.1:3128 (transparent redirect to the MITM proxy). Emits a structured event to the ring buffer for every deny and redirect.
+
+- **cgroup/sendmsg4** — intercepts every UDP `sendmsg()`. Redirects all DNS queries (port 53) to the local resolver at 127.0.0.1:53, which enforces `allowedDNSSuffixes` and populates the BPF `allowed_cidrs` map with resolved IPs. Non-DNS UDP is passed through.
+
+- **sockops** — tracks TCP connection establishment. Maps local source ports to socket cookies so the MITM proxy can recover the original destination IP/port after BPF rewrites it.
+
+- **cgroup_skb/egress** — packet-level backstop. Parses the IPv4 header of every outbound packet and checks the destination against the `allowed_cidrs` LPM trie. Drops packets to non-allowlisted IPs. This catches traffic that might bypass the connect4 hook (e.g., raw sockets).
+
+**Key security property:** BPF programs attached to a cgroup v2 scope apply to ALL processes in that scope, regardless of user privilege. Root users, setuid binaries, and processes that modify iptables are all subject to the same BPF enforcement. This fixes the root-bypass vulnerability present in proxy-only mode (where root can install packages via `yum` by bypassing DNAT rules).
+
+**Dynamic allowlist:** The `allowed_cidrs` LPM trie starts with pre-seeded entries (VPC CIDR, IMDS, link-local) and grows dynamically as the DNS resolver resolves allowed domains. Entries expire based on DNS TTL — the resolver's TTL cache sweep goroutine removes expired IPs from the BPF map.
 
 ### Layer 2: DNS Proxy Sidecar (Application-Layer Domain Filtering)
 

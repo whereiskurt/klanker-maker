@@ -82,12 +82,25 @@ Every one of these projects needs *somewhere safe to run*. The common pattern is
 That's what Klanker Maker builds. The sandbox is a **compiled policy object** - you declare the constraints and the infrastructure is the compiled artifact:
 
 - **Budget ceiling** - set a dollar cap for compute and AI API spend per sandbox. At 80% you get a warning email. At 100% the sandbox is suspended, not destroyed - top it up and resume.
-- **Network allowlists** - DNS and HTTP proxies enforce which hosts the agent can reach. Everything else is blocked at the proxy layer *and* at the Security Group layer. Two walls, not one.
+- **Network enforcement (two modes)** - choose your enforcement layer per profile:
+  - **Proxy mode** (default) - iptables DNAT redirects traffic to userspace proxy sidecars for MITM inspection. Traditional approach, works everywhere.
+  - **eBPF mode** - Cilium-style cgroup BPF programs enforce DNS/HTTP/TLS-SNI allowlists directly in the kernel. No iptables, no DNAT bypass possible (fixes the root-user escape). Four BPF programs (connect4, sendmsg4, sockops, egress) with an LPM trie for CIDR allowlists, a userspace DNS resolver that populates BPF maps on the fly, and a ring buffer for structured audit events. The same cgroup-based approach scales naturally to EKS pods and other container runtimes.
+  - **Both mode** - eBPF primary enforcement with proxy sidecars retained for L7 inspection (Bedrock token metering, GitHub repo-level filtering). Belt and suspenders.
 - **Scoped identity** - each sandbox gets its own IAM role session, region-locked, time-limited, with only the permissions the profile declares.
 - **Automatic lifecycle** - TTL auto-destroy, idle timeout, artifact upload on exit (including on spot interruption), and email notifications for every lifecycle event.
 - **Spot-first economics** - EC2 Spot and Fargate Spot by default. A `t3.medium` spot instance in `us-east-1` costs ~$0.01/hr. Run 10 agent sandboxes for a full workday for under $1 in compute.
 
 The difference between Klanker Maker and the other sandbox platforms: this is **pure AWS infrastructure** - no orchestration layer to trust, no shared runtime, no container escape surface. Each region has a shared VPC (provisioned once by `km init`), and every sandbox gets its own Security Groups, IAM role, and sidecar enforcement. The isolation is at the network policy and identity layer, backed by real AWS primitives.
+
+```yaml
+# Profile-level enforcement selection
+spec:
+  network:
+    enforcement: "ebpf"   # or "proxy" (default) or "both"
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com", ".github.com", ...]
+      allowedHosts: ["api.anthropic.com", ...]
+```
 
 ## AWS Account Architecture
 
@@ -227,8 +240,9 @@ The SCP is deployed via `km bootstrap --dry-run=false`. Run `km bootstrap --show
 | **Organization** | SCP sandbox containment | Org-level deny on SG/network/IAM/instance/SSM/region - cannot be bypassed from within the account |
 | **Account** | Three-account isolation | Sandbox blast radius limited to Application account; state and DNS unreachable |
 | **Network** | VPC Security Groups | Primary boundary - blocks all egress except proxy paths |
-| **DNS** | DNS proxy sidecar | Allowlisted suffixes only; non-matching → NXDOMAIN |
-| **HTTP** | HTTP proxy sidecar | Allowlisted hosts only; non-matching → 403 Forbidden |
+| **DNS** | DNS proxy sidecar / eBPF resolver | Allowlisted suffixes only; non-matching → NXDOMAIN |
+| **HTTP** | HTTP proxy sidecar / eBPF connect4 | Allowlisted hosts only; non-matching → 403 / EPERM |
+| **eBPF** | Cgroup BPF programs (connect4, sendmsg4, sockops, egress) | Kernel-level enforcement; LPM trie allowlist; ring buffer audit; no root bypass |
 | **Identity** | Scoped IAM sessions | Region-locked, time-limited, minimal permissions |
 | **Email** | Ed25519 signed email | Per-sandbox key pairs; profile-controlled signing, verification, and encryption policies |
 | **Secrets** | SSM Parameter Store + KMS | Allowlisted refs only; per-sandbox encryption key with auto-rotation |
@@ -238,6 +252,39 @@ The SCP is deployed via `km bootstrap --dry-run=false`. Run `km bootstrap --show
 | **Audit** | Command + network logging | Secret-redacted; delivered to CloudWatch/S3 |
 | **Telemetry** | OTEL observability | Claude Code prompts, tool calls, API requests, cost metrics → OTel Collector → S3 |
 | **Budget** | Compute + AI spend tracking | DynamoDB real-time metering; proxy 403 + IAM revocation at ceiling |
+
+### eBPF Network Enforcement
+
+When `spec.network.enforcement` is set to `"ebpf"` or `"both"`, the sandbox uses Cilium-style cgroup BPF programs instead of (or alongside) iptables DNAT. This is the same approach used by Cilium in Kubernetes - attaching BPF programs to a cgroup to intercept all network syscalls from processes in that group.
+
+**Four BPF programs, one cgroup:**
+
+```
+Sandbox Cgroup (/sys/fs/cgroup/km.slice/km-{id}.scope)
+│
+├── cgroup/connect4   — TCP connect() hook
+│   ├── LPM trie lookup: is dest IP in allowed_cidrs?
+│   ├── If denied → return EPERM (connection refused)
+│   ├── If allowed + proxy-marked → rewrite dest to 127.0.0.1:3128
+│   └── Emit structured audit event to ring buffer
+│
+├── cgroup/sendmsg4   — UDP sendmsg() hook
+│   ├── Intercept DNS (port 53)
+│   └── Redirect to local resolver (127.0.0.1:53)
+│
+├── sockops           — TCP state transitions
+│   └── Map source_port → socket_cookie (proxy recovers real dest)
+│
+└── cgroup_skb/egress — Packet-level backstop
+    ├── Parse IPv4 header, check allowed_cidrs
+    └── Drop packets to non-allowlisted IPs (L3 defense-in-depth)
+```
+
+**How the allowlist stays fresh:** A userspace DNS resolver (127.0.0.1:53) checks every DNS query against the profile's `allowedDNSSuffixes`. Allowed queries are forwarded to VPC DNS; resolved IPs are injected into the BPF `allowed_cidrs` LPM trie map with TTL-based expiry. The allowlist is *dynamic* — it grows as the agent resolves new hosts and shrinks as DNS TTLs expire.
+
+**Why cgroups?** The BPF programs are scoped to the sandbox cgroup, not the whole instance. The enforcer process, SSM agent, and sidecars run outside the cgroup and are unaffected. This is the same isolation model that makes this approach portable to EKS pods, Docker cgroups, and other container runtimes in future substrates.
+
+Editable diagram: [`docs/diagrams/ebpf-architecture.excalidraw`](docs/diagrams/ebpf-architecture.excalidraw)
 
 ### Architecture Diagrams
 

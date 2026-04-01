@@ -1450,3 +1450,74 @@ km doctor --quiet && echo "platform healthy" || echo "platform has issues"
 ```
 
 **Nil-client behavior:** Any AWS client that fails to initialize (expired credentials, missing config) causes its checks to return `SKIPPED` — `km doctor` never panics on missing clients.
+
+---
+
+## eBPF Network Enforcement
+
+### Overview
+
+Phase 40 introduced eBPF-based network enforcement as an alternative to the traditional iptables DNAT + proxy sidecar approach. When a profile sets `spec.network.enforcement: "ebpf"` or `"both"`, the sandbox uses cgroup-attached BPF programs to enforce network allowlists at the kernel level.
+
+### How It Works
+
+The `km-ebpf-enforcer` systemd service runs `km ebpf-attach` which:
+
+1. Creates a cgroup at `/sys/fs/cgroup/km.slice/km-{sandboxID}.scope`
+2. Loads 4 BPF programs and attaches them to the cgroup
+3. Pre-seeds the `allowed_cidrs` LPM trie map with VPC CIDRs, IMDS, and pre-resolved hosts
+4. Starts a DNS resolver on 127.0.0.1:53 that enforces `allowedDNSSuffixes` and dynamically populates the BPF map with resolved IPs
+5. Starts a ring buffer consumer for structured audit events
+6. Pins all programs and maps to `/sys/fs/bpf/km/{sandboxID}/`
+
+### BPF Programs
+
+| Program | Hook | Purpose |
+|---------|------|---------|
+| `connect4` | cgroup/connect4 | TCP connect() — allow/deny/redirect to proxy |
+| `sendmsg4` | cgroup/sendmsg4 | UDP — redirect DNS to resolver |
+| `sockops` | sockops | TCP state — map port→cookie for proxy |
+| `egress` | cgroup_skb/egress | Packet-level L3 backstop — drop denied |
+
+### BPF Maps (pinned to bpffs)
+
+| Map | Type | Purpose |
+|-----|------|---------|
+| `allowed_cidrs` | LPM_TRIE | IPv4 CIDR allowlist (populated by DNS resolver) |
+| `http_proxy_ips` | HASH | IPs that need L7 proxy inspection |
+| `sock_to_original_ip/port` | HASH | Real destination before BPF rewrite |
+| `src_port_to_sock` | HASH | Proxy looks up socket by peer port |
+| `socket_pid_map` | HASH | PID for audit logging |
+| `events` | RINGBUF | Deny/redirect events to userspace |
+
+### Enforcement Modes
+
+Set via `spec.network.enforcement` in the profile:
+
+- **`proxy`** (default) — traditional iptables DNAT + proxy sidecars. Backward compatible. Works on all substrates.
+- **`ebpf`** — pure eBPF cgroup enforcement. No iptables. Root bypass fixed. EC2 only.
+- **`both`** — eBPF primary + proxy sidecars for L7 inspection. EC2 only.
+
+### Cleanup
+
+`km destroy` calls `cleanupEBPF(sandboxID)` which:
+1. Checks if BPF programs are pinned at `/sys/fs/bpf/km/{sandboxID}/`
+2. Removes all pinned programs and maps
+3. Removes the sandbox cgroup
+
+On remote destroy (Lambda), bpffs is cleaned up automatically when the EC2 instance terminates (bpffs is an in-memory filesystem).
+
+### Build
+
+eBPF bytecode is compiled via `make generate-ebpf` using a Docker container with clang/bpf2go. The compiled bytecode is embedded in the `km` binary — no runtime clang dependency on the sandbox instance.
+
+### Requirements
+
+- Linux kernel 5.15+ (AL2023 ships 6.1+)
+- Cgroup v2 (AL2023 default)
+- bpffs mounted at `/sys/fs/bpf` (AL2023 default)
+- EC2 substrate only (Docker/ECS fall back to proxy mode)
+
+### Diagram
+
+See [`docs/diagrams/ebpf-architecture.excalidraw`](diagrams/ebpf-architecture.excalidraw) for the full architecture diagram.
