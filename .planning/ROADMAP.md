@@ -895,10 +895,15 @@ Layer 4 (best-effort): TC egress classifier — TLS SNI check
 - EBPF-NET-12: EC2 sandbox with root cannot bypass eBPF enforcement — verified by test: process with `CAP_NET_ADMIN` inside sandbox attempts `iptables -F` (succeeds but irrelevant) and direct connection to blocked IP (fails with EPERM from cgroup/connect4); process cannot call `bpf()` syscall to detach programs (no `CAP_BPF` in host namespace; seccomp blocks `bpf()` in sandbox)
 
 **Depends on:** Phase 39
-**Plans:** 0 plans
+**Plans:** 6 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 40 to break down)
+- [ ] 40-01-PLAN.md — BPF C programs (connect4, sendmsg4, sockops, egress_skb), maps, bpf2go pipeline
+- [ ] 40-02-PLAN.md — Go enforcer with cgroup management, BPF attachment, pin/unpin lifecycle
+- [ ] 40-03-PLAN.md — Userspace DNS resolver daemon with domain allowlist and BPF map population
+- [ ] 40-04-PLAN.md — TC egress classifier for TLS ClientHello SNI inspection (best-effort)
+- [ ] 40-05-PLAN.md — Profile schema enforcement field and compiler user-data integration
+- [ ] 40-06-PLAN.md — Ring buffer audit consumer, km ebpf-attach command, root bypass verification
 
 ### Phase 41: eBPF SSL uprobe observability layer — plaintext TLS capture via library-specific hooks, replaces MITM proxy for budget metering and traffic inspection
 
