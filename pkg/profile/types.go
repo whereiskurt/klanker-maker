@@ -190,6 +190,13 @@ type GitHubAccess struct {
 type NetworkSpec struct {
 	Egress    EgressSpec `yaml:"egress"`
 	HTTPSOnly bool       `yaml:"httpsOnly,omitempty"` // Block plain HTTP; on EC2 security groups enforce this, on Docker the proxy enforces it
+	// Enforcement selects the network enforcement mechanism.
+	// "proxy" (default): iptables DNAT + proxy sidecars (current behavior).
+	// "ebpf": pure eBPF cgroup programs, no iptables.
+	// "both": eBPF primary + proxy sidecars for L7 inspection.
+	// Omitting the field is equivalent to "proxy" (backwards compatible).
+	// eBPF enforcement is scoped to EC2 substrate only in Phase 40.
+	Enforcement string `yaml:"enforcement,omitempty"`
 }
 
 // EgressSpec defines what outbound network traffic is permitted.

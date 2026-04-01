@@ -319,6 +319,12 @@
             "httpsOnly": {
               "type": "boolean",
               "description": "Block plain HTTP traffic; on EC2 security groups enforce this, on Docker the proxy enforces it"
+            },
+            "enforcement": {
+              "type": "string",
+              "enum": ["proxy", "ebpf", "both"],
+              "default": "proxy",
+              "description": "Network enforcement mechanism: proxy (iptables DNAT, default), ebpf (cgroup BPF, EC2-only), or both (eBPF primary + proxy for L7 inspection, EC2-only)"
             }
           }
         },

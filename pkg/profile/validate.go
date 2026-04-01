@@ -239,6 +239,30 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 	// Rule 3: spot is valid on both substrates
 	// EC2: spot instance request; ECS: FARGATE_SPOT capacity provider
 
+	// Rule 4: enforcement must be proxy, ebpf, or both (belt-and-suspenders — schema enum also checks this)
+	enforcement := p.Spec.Network.Enforcement
+	if enforcement != "" && enforcement != "proxy" && enforcement != "ebpf" && enforcement != "both" {
+		errs = append(errs, ValidationError{
+			Path:    "spec.network.enforcement",
+			Message: fmt.Sprintf("enforcement %q is not supported; must be one of: proxy, ebpf, both", enforcement),
+		})
+	}
+
+	// Rule 5: eBPF enforcement is EC2-only in Phase 40 — warn when requested on non-EC2 substrates
+	if enforcement == "ebpf" || enforcement == "both" {
+		if substrate == "ecs" {
+			errs = append(errs, ValidationError{
+				Path:    "spec.network.enforcement",
+				Message: "eBPF enforcement is EC2-only; ECS substrate uses proxy enforcement regardless",
+			})
+		} else if substrate == "docker" {
+			errs = append(errs, ValidationError{
+				Path:    "spec.network.enforcement",
+				Message: "eBPF enforcement is EC2-only in Phase 40; Docker substrate uses proxy enforcement regardless",
+			})
+		}
+	}
+
 	return errs
 }
 
