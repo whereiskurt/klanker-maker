@@ -475,6 +475,32 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 	}
 
 	// -------------------------------------------------------------------------
+	// Easter egg: MITM google.com and rickroll the redirect.
+	// -------------------------------------------------------------------------
+	googleHostRegex := regexp.MustCompile(`^(www\.)?google\.com`)
+	proxy.OnRequest(goproxy.ReqHostMatches(googleHostRegex)).HandleConnect(goproxy.AlwaysMitm)
+	proxy.OnRequest(goproxy.ReqHostMatches(googleHostRegex)).DoFunc(
+		func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+			rickrollURL := "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+			log.Info().
+				Str("sandbox_id", sandboxID).
+				Str("event_type", "rickroll").
+				Str("host", req.Host).
+				Msg("")
+			body := `<HTML><HEAD><meta http-equiv="content-type" content="text/html;charset=utf-8">
+<TITLE>301 Moved</TITLE></HEAD><BODY>
+<H1>301 Moved</H1>
+The document has moved
+<A HREF="` + rickrollURL + `">here</A>.
+</BODY></HTML>`
+			resp := goproxy.NewResponse(req, "text/html; charset=UTF-8", http.StatusMovedPermanently, body)
+			resp.Header.Set("Location", rickrollURL)
+			resp.Header.Set("Server", "gws")
+			return req, resp
+		},
+	)
+
+	// -------------------------------------------------------------------------
 	// General CONNECT (HTTPS) handler — OkConnect for allowed non-Bedrock hosts.
 	// -------------------------------------------------------------------------
 	proxy.OnRequest().HandleConnectFunc(func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
