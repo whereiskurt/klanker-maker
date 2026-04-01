@@ -100,9 +100,6 @@ func TestBindMountBeforeSidecars(t *testing.T) {
 // Claude Code OTEL telemetry env var injection tests (OTEL-01, OTEL-06, OTEL-07)
 // ============================================================
 
-// otelEnabled returns true (pointer).
-func boolPtr(b bool) *bool { return &b }
-
 // TestUserDataOTELVarsEnabledDefault verifies that when claudeTelemetry is nil (default),
 // all 5 base OTEL env vars appear in user-data (OTEL-01: default enabled).
 func TestUserDataOTELVarsEnabledDefault(t *testing.T) {
