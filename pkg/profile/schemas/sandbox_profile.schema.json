@@ -315,6 +315,10 @@
                   "description": "HTTP methods permitted for egress"
                 }
               }
+            },
+            "httpsOnly": {
+              "type": "boolean",
+              "description": "Block plain HTTP traffic; on EC2 security groups enforce this, on Docker the proxy enforces it"
             }
           }
         },

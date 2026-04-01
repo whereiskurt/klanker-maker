@@ -53,6 +53,7 @@ type ProxyOption func(*goproxy.ProxyHttpServer, *proxyConfig)
 type proxyConfig struct {
 	budget      *budgetEnforcementOptions
 	githubRepos []string
+	httpsOnly   bool
 }
 
 // WithBudgetEnforcement enables Bedrock MITM interception and DynamoDB spend
@@ -96,6 +97,15 @@ func WithCustomCA(certPEM []byte) ProxyOption {
 		goproxy.HTTPMitmConnect = &goproxy.ConnectAction{Action: goproxy.ConnectMitm, TLSConfig: goproxy.TLSConfigFromCA(&cert)}
 		goproxy.RejectConnect = &goproxy.ConnectAction{Action: goproxy.ConnectReject, TLSConfig: goproxy.TLSConfigFromCA(&cert)}
 		log.Info().Str("subject", cert.Leaf.Subject.CommonName).Msg("custom CA loaded for MITM")
+	}
+}
+
+// WithHTTPSOnly blocks plain HTTP requests (non-TLS).
+// On EC2, the security group enforces HTTPS-only at the network layer.
+// On Docker, there's no security group — this option provides equivalent enforcement.
+func WithHTTPSOnly() ProxyOption {
+	return func(_ *goproxy.ProxyHttpServer, cfg *proxyConfig) {
+		cfg.httpsOnly = true
 	}
 }
 
@@ -492,6 +502,18 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 	// When githubRepos is configured, GitHub hosts are implicitly allowed and
 	// already filtered by the GitHub OnRequest handler above — skip them here.
 	proxy.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+		// HTTPS-only mode: block plain HTTP requests.
+		// On EC2 the security group blocks port 80 egress; on Docker this is the equivalent.
+		if cfg.httpsOnly && req.URL.Scheme == "http" {
+			log.Info().
+				Str("sandbox_id", sandboxID).
+				Str("event_type", "http_blocked_https_only").
+				Str("host", req.Host).
+				Str("url", req.URL.String()).
+				Msg("")
+			return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusForbidden,
+				"Blocked: HTTPS only — plain HTTP is not allowed by sandbox policy")
+		}
 		if len(cfg.githubRepos) > 0 && githubHostsRegex.MatchString(req.Host) {
 			// GitHub hosts are handled by the GitHub-specific OnRequest handler.
 			return req, nil

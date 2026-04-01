@@ -63,6 +63,7 @@ type dockerComposeData struct {
 	ProfileEnv         string // base64-encoded JSON object
 	BudgetEnabled      bool
 	BudgetTable        string
+	HTTPSOnly          bool
 	ArtifactsBucket    string
 	StateBucket        string
 	EmailDomain        string
@@ -142,6 +143,9 @@ services:
 {{- if .BudgetEnabled }}
       KM_BUDGET_ENABLED: "true"
       KM_BUDGET_TABLE: "{{ .BudgetTable }}"
+{{- end }}
+{{- if .HTTPSOnly }}
+      KM_HTTPS_ONLY: "true"
 {{- end }}
     volumes:
       - cred-vol:/creds:ro
@@ -295,6 +299,7 @@ func generateDockerCompose(p *profile.SandboxProfile, sandboxID string, network 
 		ProfileEnv:         profileEnvB64,
 		BudgetEnabled:      budgetEnabled,
 		BudgetTable:        budgetTable,
+		HTTPSOnly:          p.Spec.Network.HTTPSOnly,
 		ArtifactsBucket:    artifactsBucket,
 		StateBucket:        stateBucket,
 		EmailDomain:        emailDomain,

@@ -100,6 +100,16 @@ func main() {
 		}
 	}
 
+	// HTTPS-only mode: block plain HTTP requests (port 80).
+	// On EC2 the security group enforces this; on Docker we need proxy-level enforcement.
+	if strings.EqualFold(getEnv("KM_HTTPS_ONLY", "false"), "true") {
+		proxyOpts = append(proxyOpts, httpproxy.WithHTTPSOnly())
+		log.Info().
+			Str("event_type", "https_only_enabled").
+			Str("sandbox_id", sandboxID).
+			Msg("")
+	}
+
 	proxy := httpproxy.NewProxy(allowedHosts, sandboxID, proxyOpts...)
 
 	addr := ":" + port

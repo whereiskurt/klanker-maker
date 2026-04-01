@@ -188,7 +188,8 @@ type GitHubAccess struct {
 
 // NetworkSpec controls egress network policy.
 type NetworkSpec struct {
-	Egress EgressSpec `yaml:"egress"`
+	Egress    EgressSpec `yaml:"egress"`
+	HTTPSOnly bool       `yaml:"httpsOnly,omitempty"` // Block plain HTTP; on EC2 security groups enforce this, on Docker the proxy enforces it
 }
 
 // EgressSpec defines what outbound network traffic is permitted.
