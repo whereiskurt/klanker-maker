@@ -10,7 +10,6 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -1456,33 +1455,28 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, awsP
 		}
 	}
 
-	// Step 8b: Write "starting" metadata so km list shows the sandbox immediately.
-	stateBucket := cfg.StateBucket
-	if stateBucket != "" {
-		meta := awspkg.SandboxMetadata{
-			SandboxID:   sandboxID,
-			ProfileName: resolvedProfile.Metadata.Name,
-			Substrate:   string(resolvedProfile.Spec.Runtime.Substrate),
-			Region:      resolvedProfile.Spec.Runtime.Region,
-			Status:      "starting",
-			CreatedAt:   time.Now().UTC(),
-			IdleTimeout: resolvedProfile.Spec.Lifecycle.IdleTimeout,
-			MaxLifetime: resolvedProfile.Spec.Lifecycle.MaxLifetime,
-			CreatedBy:   "remote",
-			Alias:       sandboxAlias,
-		}
-		metaJSON, _ := json.Marshal(meta)
-		_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket:      aws.String(stateBucket),
-			Key:         aws.String("tf-km/sandboxes/" + sandboxID + "/metadata.json"),
-			Body:        bytes.NewReader(metaJSON),
-			ContentType: aws.String("application/json"),
-		})
-		if putErr != nil {
-			fmt.Fprintf(os.Stderr, "  [warn] failed to write provisioning metadata: %v\n", putErr)
-		} else {
-			fmt.Printf("  ✓ Metadata stored (status: provisioning)\n")
-		}
+	// Step 8b: Write "starting" metadata to DynamoDB so km list shows the sandbox immediately.
+	tableName := cfg.SandboxTableName
+	if tableName == "" {
+		tableName = "km-sandboxes"
+	}
+	dynamoClient := dynamodbpkg.NewFromConfig(awsCfg)
+	startingMeta := &awspkg.SandboxMetadata{
+		SandboxID:   sandboxID,
+		ProfileName: resolvedProfile.Metadata.Name,
+		Substrate:   string(resolvedProfile.Spec.Runtime.Substrate),
+		Region:      resolvedProfile.Spec.Runtime.Region,
+		Status:      "starting",
+		CreatedAt:   time.Now().UTC(),
+		IdleTimeout: resolvedProfile.Spec.Lifecycle.IdleTimeout,
+		MaxLifetime: resolvedProfile.Spec.Lifecycle.MaxLifetime,
+		CreatedBy:   "remote",
+		Alias:       sandboxAlias,
+	}
+	if writeErr := awspkg.WriteSandboxMetadataDynamo(ctx, dynamoClient, tableName, startingMeta); writeErr != nil {
+		fmt.Fprintf(os.Stderr, "  [warn] failed to write provisioning metadata: %v\n", writeErr)
+	} else {
+		fmt.Printf("  ✓ Metadata stored (status: starting)\n")
 	}
 
 	// Step 9: Publish SandboxCreate event to EventBridge
