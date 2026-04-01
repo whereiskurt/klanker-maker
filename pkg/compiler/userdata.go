@@ -552,6 +552,10 @@ ExecStart=/usr/local/bin/km ebpf-attach \
   --allowed-dns "{{ .AllowedDNSSuffixes }}" \
   --allowed-hosts "{{ .AllowedHTTPHosts }}" \
   --proxy-hosts "{{ .GitHubAllowedRepos }}" \
+{{- if .TLSEnabled }}
+  --tls \
+  --allowed-repos "{{ .TLSAllowedRepos }}" \
+{{- end }}
   --cgroup /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope
 Restart=always
 RestartSec=2
@@ -847,6 +851,12 @@ type userDataParams struct {
 	// Defaults to "proxy" when the profile field is unset (backwards compatible).
 	// eBPF enforcement is EC2-only in Phase 40.
 	Enforcement string
+	// TLSEnabled enables TLS uprobe observability via --tls flag on km ebpf-attach.
+	// Derived from profile spec.observability.tlsCapture.enabled.
+	TLSEnabled bool
+	// TLSAllowedRepos is the comma-separated list of allowed GitHub repos
+	// passed to --allowed-repos on km ebpf-attach when TLS capture is enabled.
+	TLSAllowedRepos string
 }
 
 // otpSecret holds an SSM path and derived env var name for an OTP secret.
@@ -966,6 +976,12 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		enforcement = "proxy"
 	}
 	params.Enforcement = enforcement
+
+	// TLS uprobe observability — enable when profile has tlsCapture enabled.
+	if p.Spec.Observability.TlsCapture.IsEnabled() {
+		params.TLSEnabled = true
+		params.TLSAllowedRepos = joinGitHubAllowedRepos(p)
+	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, params); err != nil {

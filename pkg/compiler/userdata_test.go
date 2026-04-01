@@ -790,3 +790,82 @@ func TestUserDataEnforcementBoth(t *testing.T) {
 		t.Error("expected no 'Pure eBPF mode' message when enforcement is both")
 	}
 }
+
+// TestUserDataTLSCaptureEnabled verifies --tls flag is emitted when tlsCapture is enabled.
+func TestUserDataTLSCaptureEnabled(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Network.Enforcement = "ebpf"
+	p.Spec.Observability.TlsCapture = &profile.TlsCaptureSpec{
+		Enabled: true,
+	}
+	p.Spec.SourceAccess.GitHub = &profile.GitHubAccess{
+		AllowedRepos: []string{"acme/widgets", "acme/gizmos"},
+	}
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "--tls") {
+		t.Error("expected --tls flag in user-data when tlsCapture is enabled")
+	}
+	if !strings.Contains(out, "--allowed-repos") {
+		t.Error("expected --allowed-repos flag in user-data when tlsCapture is enabled")
+	}
+	if !strings.Contains(out, "acme/widgets,acme/gizmos") {
+		t.Error("expected allowed repos list in user-data")
+	}
+}
+
+// TestUserDataTLSCaptureDisabled verifies --tls flag is NOT emitted without tlsCapture.
+func TestUserDataTLSCaptureDisabled(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Network.Enforcement = "ebpf"
+	// No TlsCapture set — should not emit --tls
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if strings.Contains(out, "--tls") {
+		t.Error("expected NO --tls flag when tlsCapture is not configured")
+	}
+	if strings.Contains(out, "--allowed-repos") {
+		t.Error("expected NO --allowed-repos flag when tlsCapture is not configured")
+	}
+}
+
+// TestUserDataTLSCaptureExplicitlyDisabled verifies --tls flag is NOT emitted
+// when tlsCapture exists but enabled=false.
+func TestUserDataTLSCaptureExplicitlyDisabled(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Network.Enforcement = "ebpf"
+	p.Spec.Observability.TlsCapture = &profile.TlsCaptureSpec{
+		Enabled: false,
+	}
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if strings.Contains(out, "--tls") {
+		t.Error("expected NO --tls flag when tlsCapture.enabled is false")
+	}
+}
+
+// TestUserDataTLSCaptureWithAllowedRepos verifies --allowed-repos value
+// is built from profile's GitHub AllowedRepos.
+func TestUserDataTLSCaptureWithAllowedRepos(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Network.Enforcement = "ebpf"
+	p.Spec.Observability.TlsCapture = &profile.TlsCaptureSpec{
+		Enabled: true,
+	}
+	p.Spec.SourceAccess.GitHub = &profile.GitHubAccess{
+		AllowedRepos: []string{"org/repo1", "org/repo2", "org/repo3"},
+	}
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, `--allowed-repos "org/repo1,org/repo2,org/repo3"`) {
+		t.Error("expected comma-separated allowed repos list matching profile")
+	}
+}
