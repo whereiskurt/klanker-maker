@@ -44,10 +44,7 @@ type TLSEvent struct {
 
 // PayloadBytes returns a slice of the captured plaintext payload.
 func (e *TLSEvent) PayloadBytes() []byte {
-	n := e.PayloadLen
-	if n > MaxPayloadLen {
-		n = MaxPayloadLen
-	}
+	n := min(e.PayloadLen, MaxPayloadLen)
 	return e.Payload[:n]
 }
 
