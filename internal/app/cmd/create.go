@@ -81,6 +81,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	var awsProfile string
 	var verbose bool
 	var remote bool
+	var local bool
 	var sandboxIDOverride string
 	var aliasOverride string
 	var substrateOverride string
@@ -94,7 +95,32 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 			if awsProfile == "" && os.Getenv("KM_REMOTE_CREATE") == "" {
 				awsProfile = "klanker-terraform"
 			}
-			if remote {
+
+			// Auto-detect remote vs local based on substrate.
+			// EC2/ECS default to --remote (no local terraform needed).
+			// Docker defaults to --local (runs on operator's machine).
+			// Explicit --remote or --local flags override the auto-detection.
+			useRemote := remote
+			if !remote && !local {
+				// Neither flag explicitly set — auto-detect from profile substrate
+				sub := substrateOverride
+				if sub == "" {
+					// Quick-parse profile to read substrate without full resolve
+					data, readErr := os.ReadFile(args[0])
+					if readErr == nil {
+						p, parseErr := profile.Parse(data)
+						if parseErr == nil {
+							sub = string(p.Spec.Runtime.Substrate)
+						}
+					}
+				}
+				if sub == "" || sub == "ec2" || sub == "ecs" {
+					useRemote = true // EC2/ECS default to remote
+				}
+				// Docker stays local (useRemote = false)
+			}
+
+			if useRemote {
 				return runCreateRemote(cfg, args[0], onDemand, awsProfile, aliasOverride)
 			}
 			return runCreate(cfg, args[0], onDemand, awsProfile, verbose, sandboxIDOverride, aliasOverride, substrateOverride)
@@ -108,7 +134,9 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	cmd.Flags().BoolVar(&verbose, "verbose", false,
 		"Show full terragrunt/terraform output")
 	cmd.Flags().BoolVar(&remote, "remote", false,
-		"Dispatch sandbox creation to a Lambda (remote create) — uploads artifacts to S3 and publishes EventBridge event")
+		"Force remote create via Lambda (default for EC2/ECS substrates)")
+	cmd.Flags().BoolVar(&local, "local", false,
+		"Force local create with terragrunt (default for Docker substrate)")
 	cmd.Flags().StringVar(&sandboxIDOverride, "sandbox-id", "",
 		"Use a specific sandbox ID instead of generating one (used by create-handler Lambda)")
 	cmd.Flags().MarkHidden("sandbox-id")
