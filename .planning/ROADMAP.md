@@ -971,7 +971,7 @@ Plans:
 **Performance:** <0.5% overhead with metadata-only capture (metering), 5-15% with full payload capture (inspection). Source: [OneUptime eBPF SSL inspection guide](https://oneuptime.com/blog/post/2026-01-07-ebpf-ssl-tls-inspection/view)
 
 **Depends on:** Phase 40 (shares `pkg/ebpf/` scaffold, bpf2go pipeline, ring buffer patterns)
-**Plans:** 3/5 plans executed
+**Plans:** 4/5 plans executed
 
 Plans:
 - [ ] 41-01-PLAN.md — BPF C programs, shared headers, Go types, bpf2go pipeline for TLS uprobe + connection correlation
