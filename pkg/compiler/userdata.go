@@ -522,13 +522,14 @@ chmod 664 /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope/cgroup.procs
 
 echo "[km-bootstrap] Sandbox cgroup created at /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope"
 
-# The km binary includes the eBPF enforcer; invoke it to:
-# 1. Load BPF programs from embedded bytecode
-# 2. Attach to sandbox cgroup
-# 3. Start km-dns-resolver daemon on :5353
-# 4. Populate initial allowlist from profile
-# 5. Pin programs to /sys/fs/bpf/km/{{ .SandboxID }}/
-/usr/local/bin/km ebpf-attach \
+# Create systemd service for eBPF enforcer (loads BPF + runs DNS resolver)
+cat > /etc/systemd/system/km-ebpf-enforcer.service << 'UNIT'
+[Unit]
+Description=Klankrmkr eBPF network enforcer
+After=network.target
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/km ebpf-attach \
   --sandbox-id {{ .SandboxID }} \
   --dns-port 5353 \
   --http-proxy-port 3128 \
@@ -536,13 +537,23 @@ echo "[km-bootstrap] Sandbox cgroup created at /sys/fs/cgroup/km.slice/km-{{ .Sa
   --allowed-dns "{{ .AllowedDNSSuffixes }}" \
   --allowed-hosts "{{ .AllowedHTTPHosts }}" \
   --proxy-hosts "{{ .GitHubAllowedRepos }}" \
-  --cgroup /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope &
+  --cgroup /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope
+Restart=always
+RestartSec=2
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now km-ebpf-enforcer
 
-EBPF_PID=$!
-echo "[km-bootstrap] eBPF enforcer started (PID $EBPF_PID)"
-
-# Wait briefly for BPF programs to attach before starting sandbox user shell
-sleep 2
+# Wait for BPF programs to load and DNS resolver to start
+sleep 3
+if systemctl is-active --quiet km-ebpf-enforcer; then
+  echo "[km-bootstrap] eBPF enforcer running (systemd)"
+else
+  echo "[km-bootstrap] WARNING: eBPF enforcer failed to start"
+  journalctl -u km-ebpf-enforcer --no-pager -n 10
+fi
 
 # Ensure sandbox user's shell runs in the cgroup
 cat > /etc/profile.d/km-cgroup.sh << 'CGROUPEOF'
