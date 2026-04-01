@@ -16,19 +16,30 @@ Define what an agent is allowed to do. Set how much it can spend on compute and 
 
 
 ```
-$ km create restricted-dev.yaml
-  sandbox: sb-a1b2c3d4
-  substrate: ec2 (spot)
-  budget: $2.00 compute / $5.00 AI
-  ttl: 8h
-  egress: 6 hosts allowlisted
-  ready in 47s
+$ km create profiles/claude-dev.yaml
+  ✓ Profile validated
+  ✓ Budget: compute $2.00, AI $5.00, warning at 80%
+  ✓ Budget enforcer Lambda deployed
+  ✓ Metadata stored (alias: claude)
+──────────────────────────────────────────────────
+Sandbox claude-e6c7d024 created successfully. (43s)
+  TTL: 4h (expires 11:42:15 PM EDT)
 
-$ km status sb-a1b2c3d4
-  compute: $0.12 / $2.00  (6%)
-  ai:      $1.40 / $5.00  (28%)
-  uptime:  2h 14m / 8h TTL
-  spot:    running (us-east-1b)
+$ km list
+#   ALIAS       SANDBOX ID        STATUS     TTL
+1   claude      claude-e6c7d024   running    3h42m
+
+$ km status claude-e6c7d024
+Sandbox ID:  claude-e6c7d024
+Profile:     claude-dev
+Substrate:   ec2
+Region:      us-east-1
+Status:      running
+Created At:  2026-03-31 7:42:15 PM EDT
+TTL Expiry:  2026-03-31 11:42:15 PM EDT
+Budget:
+  Compute: $0.0312 / $2.0000 (1.6%)
+  AI:      $1.4200 / $5.0000 (28.4%)
 ```
 
 ## Why This Exists
@@ -490,13 +501,15 @@ Tokens are priced against static model rates and atomically incremented in the D
 `km status` shows per-model AI spend grouped by provider:
 
 ```
-$ km status sb-a1b2c3d4
-  ...
-  budget:
-    compute:  $0.12 / $2.00  (6%)
-    ai:       $1.40 / $5.00  (28%)
-      anthropic.claude-sonnet-4-6:  $0.85  (89K in / 34K out)   # Bedrock
-      claude-opus-4-6:              $0.55  (12K in / 8K out)     # Max/API
+$ km status claude-e6c7d024
+Sandbox ID:  claude-e6c7d024
+Profile:     claude-dev
+...
+Budget:
+  Compute: $0.0312 / $2.0000 (1.6%)
+  AI:      $1.4200 / $5.0000 (28.4%)
+    anthropic.claude-sonnet-4-6:  $0.85  (89K in / 34K out)   # Bedrock
+    claude-opus-4-6:              $0.55  (12K in / 8K out)     # Max/API
 ```
 
 ### OTEL Telemetry
@@ -514,11 +527,11 @@ observability:
 `km otel` provides five views into this data:
 
 ```
-$ km otel sb-a1b2c3d4              # summary: budget + S3 + metrics
-$ km otel sb-a1b2c3d4 --prompts    # user prompts with timestamps
-$ km otel sb-a1b2c3d4 --events     # full event stream
-$ km otel sb-a1b2c3d4 --tools      # tool calls with params + duration
-$ km otel sb-a1b2c3d4 --timeline   # conversation turns with per-turn cost
+$ km otel claude-e6c7d024              # summary: budget + S3 + metrics
+$ km otel claude-e6c7d024 --prompts    # user prompts with timestamps
+$ km otel claude-e6c7d024 --events     # full event stream
+$ km otel claude-e6c7d024 --tools      # tool calls with params + duration
+$ km otel claude-e6c7d024 --timeline   # conversation turns with per-turn cost
 ```
 
 ### Warnings and Top-Up
@@ -526,11 +539,11 @@ $ km otel sb-a1b2c3d4 --timeline   # conversation turns with per-turn cost
 At 80% (configurable via `spec.budget.warningThreshold`) of either pool, the operator receives an email via SES.
 
 ```
-$ km budget add sb-a1b2c3d4 --ai 3.00
-  ai budget: $5.00 → $8.00
-  proxy: unblocked
-  iam: restored
-  status: running
+$ km budget add claude-e6c7d024 --ai 3.00
+  AI budget: $5.00 → $8.00
+  Proxy: unblocked
+  IAM: restored
+  Status: running
 ```
 
 Top-up unblocks the proxy, restores IAM permissions, and restarts suspended compute - all in one command.
