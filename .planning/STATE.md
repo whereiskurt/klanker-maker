@@ -4,7 +4,7 @@ milestone: v1.0
 milestone_name: milestone
 status: planning
 stopped_at: Completed 41-04-PLAN.md
-last_updated: "2026-04-01T21:03:09.180Z"
+last_updated: "2026-04-01T21:03:17.213Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 41
@@ -167,6 +167,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 40-ebpf-network-enforcement P07 | 585s | 2 tasks | 16 files |
 | Phase 41 P01 | 5min | 2 tasks | 12 files |
 | Phase 41 P03 | 2min | 1 tasks | 4 files |
+| Phase 41-04 P04 | 2min | 1 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -454,6 +455,7 @@ Recent decisions affecting current work:
 - [Phase 41]: Defined x86_64 pt_regs struct inline in ssl_common.h for uprobe PT_REGS macro compatibility
 - [Phase 41]: Used stdlib http.ReadRequest for HTTP/1.1 parsing instead of manual line parsing
 - [Phase 41]: EBPF-TLS-10 budget metering scoped as audit-only URL logging -- HTTP/2 DATA frames inaccessible via uprobes
+- [Phase 41-04]: TlsCaptureSpec follows optional pointer pattern with IsEnabled(); only openssl implemented, others schema-forward-compatible
 
 ### Roadmap Evolution
 
