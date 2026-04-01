@@ -562,7 +562,23 @@ else
   journalctl -u km-ebpf-enforcer --no-pager -n 10
 fi
 
-# Ensure sandbox user's shell runs in the cgroup
+# Create wrapper shell that moves process into sandbox cgroup before exec'ing bash.
+# This ensures ALL sandbox user sessions (SSM, su, login) are enforced by eBPF.
+cat > /usr/local/bin/km-sandbox-shell << 'SHELLEOF'
+#!/bin/bash
+# km-sandbox-shell: moves into sandbox cgroup then execs bash
+CGROUP_PROCS="/sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope/cgroup.procs"
+if [ -w "$CGROUP_PROCS" ]; then
+  echo $$ > "$CGROUP_PROCS" 2>/dev/null
+fi
+exec /bin/bash "$@"
+SHELLEOF
+chmod +x /usr/local/bin/km-sandbox-shell
+
+# Set sandbox user's login shell to the wrapper
+usermod -s /usr/local/bin/km-sandbox-shell sandbox
+
+# Also keep profile.d as belt-and-suspenders for interactive sessions
 cat > /etc/profile.d/km-cgroup.sh << 'CGROUPEOF'
 # Move current process into sandbox cgroup for eBPF enforcement
 if [ "$(whoami)" = "sandbox" ]; then
@@ -570,7 +586,7 @@ if [ "$(whoami)" = "sandbox" ]; then
 fi
 CGROUPEOF
 
-echo "[km-bootstrap] eBPF enforcement configured"
+echo "[km-bootstrap] eBPF enforcement configured (sandbox shell → cgroup)"
 {{- end }}
 
 {{- if eq .Enforcement "ebpf" }}
