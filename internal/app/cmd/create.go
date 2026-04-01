@@ -1120,6 +1120,13 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 	}
 	fmt.Printf("  ✓ docker-compose.yml written to %s\n", composeFilePath)
 
+	// Step D7b: Write km-audit-init.sh — creates named pipe and shell audit hook.
+	auditInitPath := filepath.Join(sandboxLocalDir, "km-audit-init.sh")
+	auditInitScript := compiler.GenerateAuditInitScript(sandboxID)
+	if err := os.WriteFile(auditInitPath, []byte(auditInitScript), 0o755); err != nil {
+		return fmt.Errorf("write km-audit-init.sh: %w", err)
+	}
+
 	// Step D8: Write .km-ttl file with TTL expiry timestamp (ISO8601).
 	now := time.Now().UTC()
 	if resolvedProfile.Spec.Lifecycle.TTL != "" {
