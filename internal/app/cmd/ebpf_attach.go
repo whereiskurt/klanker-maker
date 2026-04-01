@@ -19,6 +19,7 @@ import (
 	"github.com/whereiskurt/klankrmkr/pkg/ebpf"
 	"github.com/whereiskurt/klankrmkr/pkg/ebpf/audit"
 	"github.com/whereiskurt/klankrmkr/pkg/ebpf/resolver"
+	ebpftls "github.com/whereiskurt/klankrmkr/pkg/ebpf/tls"
 )
 
 // NewEBPFAttachCmd creates the "km ebpf-attach" subcommand.
@@ -40,6 +41,8 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		allowedHosts string
 		proxyHosts   string
 		cgroupPath   string
+		enableTLS    bool
+		allowedRepos string
 	)
 
 	cmd := &cobra.Command{
@@ -49,7 +52,8 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		Hidden: true, // internal command, not user-facing
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runEbpfAttach(sandboxID, dnsPort, httpPort, firewallMode,
-				allowedDNS, allowedHosts, proxyHosts, cgroupPath)
+				allowedDNS, allowedHosts, proxyHosts, cgroupPath,
+				enableTLS, allowedRepos)
 		},
 	}
 
@@ -68,6 +72,10 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		"Comma-separated hosts whose resolved IPs are redirected to L7 proxy")
 	cmd.Flags().StringVar(&cgroupPath, "cgroup", "",
 		"Override cgroup path (default: auto-detected from sandbox ID)")
+	cmd.Flags().BoolVar(&enableTLS, "tls", false,
+		"Enable TLS uprobe observability (attaches to libssl.so.3)")
+	cmd.Flags().StringVar(&allowedRepos, "allowed-repos", "",
+		"Comma-separated list of allowed GitHub repos (owner/repo)")
 
 	return cmd
 }
@@ -101,6 +109,8 @@ func runEbpfAttach(
 	firewallMode string,
 	allowedDNS, allowedHosts, proxyHosts string,
 	cgroupOverride string,
+	enableTLS bool,
+	allowedRepos string,
 ) error {
 	logger := log.With().Str("sandbox_id", sandboxID).Logger()
 
@@ -259,7 +269,62 @@ func runEbpfAttach(
 	}()
 	logger.Info().Msg("audit consumer started")
 
-	logger.Info().Msg("eBPF enforcement active — waiting for shutdown signal")
+	// TLS uprobe observability — attach to OpenSSL when --tls is enabled.
+	var tlsProbe *ebpftls.OpenSSLProbe
+	var tlsConsumer *ebpftls.Consumer
+	var tlsCancel context.CancelFunc
+
+	if enableTLS {
+		libsslPath, err := ebpftls.FindSystemLibssl()
+		if err != nil {
+			logger.Warn().Err(err).Msg("libssl.so.3 not found, skipping TLS uprobe")
+		} else {
+			tlsProbe, err = ebpftls.AttachOpenSSL(libsslPath)
+			if err != nil {
+				logger.Error().Err(err).Msg("failed to attach OpenSSL uprobes")
+			} else {
+				logger.Info().Str("libssl", libsslPath).Msg("OpenSSL uprobes attached")
+
+				tlsConsumer, err = ebpftls.NewConsumer(tlsProbe.EventsMap(), logger)
+				if err != nil {
+					logger.Error().Err(err).Msg("failed to create TLS consumer")
+					tlsProbe.Close()
+					tlsProbe = nil
+				} else {
+					// Register GitHub audit handler.
+					var repos []string
+					if allowedRepos != "" {
+						for _, r := range strings.Split(allowedRepos, ",") {
+							r = strings.TrimSpace(r)
+							if r != "" {
+								repos = append(repos, r)
+							}
+						}
+					}
+					ghHandler := ebpftls.NewGitHubAuditHandler(repos, logger)
+					tlsConsumer.AddHandler(ghHandler.Handle)
+
+					// Register Bedrock/Anthropic API audit handler.
+					brHandler := ebpftls.NewBedrockAuditHandler(logger)
+					tlsConsumer.AddHandler(brHandler.Handle)
+
+					// Run TLS consumer in background.
+					var tlsCtx context.Context
+					tlsCtx, tlsCancel = context.WithCancel(ctx)
+					tlsErrCh := make(chan error, 1)
+					go func() {
+						if err := tlsConsumer.Run(tlsCtx); err != nil {
+							tlsErrCh <- err
+						}
+					}()
+
+					logger.Info().Int("handlers", 2).Msg("TLS consumer started with handlers")
+				}
+			}
+		}
+	}
+
+	logger.Info().Bool("tls_enabled", enableTLS).Msg("eBPF enforcement active — waiting for shutdown signal")
 
 	// Wait for SIGTERM or SIGINT.
 	sigCh := make(chan os.Signal, 1)
@@ -278,6 +343,21 @@ func runEbpfAttach(
 
 	// Graceful shutdown: cancel context (stops resolver and audit consumer).
 	cancel()
+
+	// Shut down TLS uprobe resources if active.
+	if tlsCancel != nil {
+		tlsCancel()
+	}
+	if tlsConsumer != nil {
+		if err := tlsConsumer.Close(); err != nil {
+			logger.Debug().Err(err).Msg("TLS consumer close")
+		}
+	}
+	if tlsProbe != nil {
+		if err := tlsProbe.Close(); err != nil {
+			logger.Debug().Err(err).Msg("TLS probe close")
+		}
+	}
 
 	// Close audit consumer explicitly to unblock pending Read().
 	if err := consumer.Close(); err != nil {
