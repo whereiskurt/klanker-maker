@@ -94,6 +94,18 @@ static int (*bpf_skb_load_bytes)(const void *skb, __u32 offset,
 /* ── BPF sockops op codes ───────────────────────────────────────────── */
 #define BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB  1
 
+/* ── BTF-typed map attribute macros (required by bpf2go map definitions) ── */
+/* These match the libbpf convention used in bpf.c and sni.c BTF map structs. */
+#ifndef __uint
+#define __uint(name, val) int (*name)[val]
+#endif
+#ifndef __type
+#define __type(name, val) typeof(val) *name
+#endif
+#ifndef __array
+#define __array(name, val) typeof(val) *name[]
+#endif
+
 /* ── BPF map definition macro ──────────────────────────────────────── */
 /* Used to define BTF-typed maps compatible with bpf2go */
 #define BPF_MAP_DEF(name) struct { \

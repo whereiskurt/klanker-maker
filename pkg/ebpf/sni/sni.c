@@ -381,8 +381,9 @@ int sni_filter(struct __sk_buff *skb) {
         if (bpf_skb_load_bytes(skb, sni_off, key, name_len) < 0)
             return TC_ACT_OK;
 
-        /* Lowercase in-place. Bounded loop (max 255 chars) for verifier. */
-#pragma unroll
+        /* Lowercase in-place. Bounded loop (max 255 chars) for verifier.
+         * Note: no #pragma unroll — clang-14 on BPF cannot unroll 255 iterations.
+         * The BPF verifier (kernel 5.3+) handles bounded loops without unrolling. */
         for (int j = 0; j < SNI_MAX_LEN; j++) {
             if (j >= name_len)
                 break;
@@ -404,7 +405,14 @@ int sni_filter(struct __sk_buff *skb) {
             /* dst_ip stored in host byte order for readability in userspace */
             ev->dst_ip    = dst_ip;
             __builtin_memset(ev->hostname, 0, SNI_KEY_LEN);
-            __builtin_memcpy(ev->hostname, key, name_len > SNI_MAX_LEN ? SNI_MAX_LEN : name_len);
+            /* Copy lowercase key into event hostname using a bounded loop.
+             * __builtin_memcpy with variable length is not supported in BPF. */
+            u16 copy_len = name_len > SNI_MAX_LEN ? SNI_MAX_LEN : name_len;
+            for (int k = 0; k < SNI_MAX_LEN; k++) {
+                if (k >= copy_len)
+                    break;
+                ev->hostname[k] = key[k];
+            }
             bpf_get_current_comm(ev->comm, sizeof(ev->comm));
             __builtin_memset(ev->_pad, 0, sizeof(ev->_pad));
             bpf_ringbuf_submit(ev, 0);

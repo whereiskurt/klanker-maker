@@ -9,4 +9,4 @@
 //	go generate ./pkg/ebpf/
 package ebpf
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -tags linux -type event bpf bpf.c -- -I./headers -O2 -g -Wall -Werror
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -tags linux bpf bpf.c -- -I./headers -O2 -g -Wall -Werror

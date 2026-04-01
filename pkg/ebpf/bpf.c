@@ -257,7 +257,7 @@ int sendmsg4(struct bpf_sock_addr *ctx)
  * to determine the real intended destination.
  * ════════════════════════════════════════════════════════════════════ */
 SEC("sockops")
-int sockops(struct bpf_sock_ops *skops)
+int bpf_sockops(struct bpf_sock_ops *skops)
 {
     if (skops->op != BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB)
         return 1;

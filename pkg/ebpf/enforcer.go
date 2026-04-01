@@ -130,7 +130,7 @@ func NewEnforcer(cfg Config) (*Enforcer, error) {
 	sockopsLink, err := link.AttachCgroup(link.CgroupOptions{
 		Path:    cgroupPath,
 		Attach:  ebpf.AttachCGroupSockOps,
-		Program: objs.Sockops,
+		Program: objs.BpfSockops,
 	})
 	if err != nil {
 		sendmsgLink.Close()
