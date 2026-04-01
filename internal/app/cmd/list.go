@@ -3,9 +3,12 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
@@ -61,15 +64,16 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonO
 	}
 
 	if lister == nil {
-		if cfg.StateBucket == "" {
-			return fmt.Errorf("state bucket not configured: set KM_STATE_BUCKET or state_bucket in km-config.yaml")
-		}
 		awsProfile := "klanker-terraform"
 		awsCfg, err := kmaws.LoadAWSConfig(ctx, awsProfile)
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
 		}
-		lister = newRealLister(awsCfg, cfg.StateBucket)
+		tableName := cfg.SandboxTableName
+		if tableName == "" {
+			tableName = "km-sandboxes"
+		}
+		lister = newRealLister(awsCfg, cfg.StateBucket, tableName)
 	}
 
 	records, err := lister.ListSandboxes(ctx, useTagScan)
@@ -103,26 +107,44 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonO
 
 // awsSandboxLister is the real AWS-backed SandboxLister implementation.
 type awsSandboxLister struct {
-	s3Client  kmaws.S3ListAPI
-	tagClient kmaws.TagAPI
-	bucket    string
+	s3Client     kmaws.S3ListAPI
+	tagClient    kmaws.TagAPI
+	dynamoClient kmaws.SandboxMetadataAPI
+	bucket       string
+	tableName    string
 }
 
 // newRealLister creates an awsSandboxLister from an AWS config.
-func newRealLister(awsCfg awssdk.Config, bucket string) *awsSandboxLister {
+func newRealLister(awsCfg awssdk.Config, bucket, tableName string) *awsSandboxLister {
 	return &awsSandboxLister{
-		s3Client:  s3.NewFromConfig(awsCfg),
-		tagClient: resourcegroupstaggingapi.NewFromConfig(awsCfg),
-		bucket:    bucket,
+		s3Client:     s3.NewFromConfig(awsCfg),
+		tagClient:    resourcegroupstaggingapi.NewFromConfig(awsCfg),
+		dynamoClient: dynamodb.NewFromConfig(awsCfg),
+		bucket:       bucket,
+		tableName:    tableName,
 	}
 }
 
 // ListSandboxes implements SandboxLister using real AWS clients.
+// Primary: DynamoDB Scan (O(1) per page, no N GetObject calls).
+// Fallback to S3 on ResourceNotFoundException (table not yet provisioned).
 func (l *awsSandboxLister) ListSandboxes(ctx context.Context, useTagScan bool) ([]kmaws.SandboxRecord, error) {
 	if useTagScan {
 		return kmaws.ListAllSandboxesByTags(ctx, l.tagClient, l.bucket)
 	}
-	return kmaws.ListAllSandboxesByS3(ctx, l.s3Client, l.bucket)
+	records, err := kmaws.ListAllSandboxesByDynamo(ctx, l.dynamoClient, l.tableName)
+	if err != nil {
+		var rnf *dynamodbtypes.ResourceNotFoundException
+		if errors.As(err, &rnf) {
+			// Table doesn't exist — fall back to S3
+			if l.bucket == "" {
+				return nil, fmt.Errorf("state bucket not configured: set KM_STATE_BUCKET or state_bucket in km-config.yaml")
+			}
+			return kmaws.ListAllSandboxesByS3(ctx, l.s3Client, l.bucket)
+		}
+		return nil, err
+	}
+	return records, nil
 }
 
 // printSandboxTable writes a human-readable tab-aligned table to cmd.OutOrStdout.

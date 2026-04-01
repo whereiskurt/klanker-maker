@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
@@ -126,11 +128,11 @@ func runBudgetAdd(cmd *cobra.Command, cfg *config.Config, budgetClient kmaws.Bud
 		budgetClient = dynamodb.NewFromConfig(awsCfg)
 		ec2Client = ec2.NewFromConfig(awsCfg)
 		iamClient = iam.NewFromConfig(awsCfg)
-		stateBucket := cfg.StateBucket
-		if stateBucket == "" {
-			return fmt.Errorf("state bucket not configured: set KM_STATE_BUCKET or state_bucket in km-config.yaml")
+		tableName := cfg.SandboxTableName
+		if tableName == "" {
+			tableName = "km-sandboxes"
 		}
-		metaFetcher = &realMetaFetcher{awsCfg: awsCfg, bucket: stateBucket}
+		metaFetcher = &realMetaFetcher{awsCfg: awsCfg, bucket: cfg.StateBucket, tableName: tableName}
 	}
 
 	tableName := cfg.BudgetTableName
@@ -287,14 +289,26 @@ func restoreBedrockPolicy(ctx context.Context, iamClient IAMAttachAPI, roleName 
 }
 
 // realMetaFetcher is the real AWS-backed SandboxMetaFetcher.
+// Reads from DynamoDB first; falls back to S3 on ResourceNotFoundException.
 type realMetaFetcher struct {
-	awsCfg awssdk.Config
-	bucket string
+	awsCfg    awssdk.Config
+	bucket    string
+	tableName string
 }
 
 func (r *realMetaFetcher) FetchSandboxMeta(ctx context.Context, sandboxID string) (*kmaws.SandboxMetadata, error) {
-	s3Client := s3.NewFromConfig(r.awsCfg)
-	return kmaws.ReadSandboxMetadata(ctx, s3Client, r.bucket, sandboxID)
+	dynamoClient := dynamodb.NewFromConfig(r.awsCfg)
+	meta, err := kmaws.ReadSandboxMetadataDynamo(ctx, dynamoClient, r.tableName, sandboxID)
+	if err != nil {
+		var rnf *dynamodbtypes.ResourceNotFoundException
+		if errors.As(err, &rnf) && r.bucket != "" {
+			// Table doesn't exist — fall back to S3.
+			s3Client := s3.NewFromConfig(r.awsCfg)
+			return kmaws.ReadSandboxMetadata(ctx, s3Client, r.bucket, sandboxID)
+		}
+		return nil, err
+	}
+	return meta, nil
 }
 
 // reprovisionECSSandbox downloads the stored profile from S3 and runs terragrunt apply

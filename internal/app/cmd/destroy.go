@@ -11,8 +11,9 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
+	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	iampkg "github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
@@ -137,18 +138,34 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool, ve
 		return err
 	}
 
-	// Step 2c: Check S3 metadata for docker substrate — route before tag-based lookup.
+	// Step 2c: Check metadata for docker substrate — route before tag-based lookup.
 	// Docker sandboxes have no AWS-tagged EC2/ECS resources, so tag lookup would fail.
-	stateBucket := cfg.StateBucket
-	if stateBucket == "" {
-		stateBucket = os.Getenv("KM_STATE_BUCKET")
-	}
-	if stateBucket != "" {
-		s3ClientEarly := s3.NewFromConfig(awsCfg)
-		if meta, metaErr := awspkg.ReadSandboxMetadata(ctx, s3ClientEarly, stateBucket, sandboxID); metaErr == nil {
-			if meta.Substrate == "docker" {
-				return runDestroyDocker(ctx, cfg, awsCfg, sandboxID, verbose)
+	// Primary: DynamoDB; fallback: S3 on ResourceNotFoundException.
+	{
+		tableName := cfg.SandboxTableName
+		if tableName == "" {
+			tableName = "km-sandboxes"
+		}
+		dynamoClientEarly := dynamodbpkg.NewFromConfig(awsCfg)
+		meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClientEarly, tableName, sandboxID)
+		if metaErr != nil {
+			var rnf *dynamodbtypes.ResourceNotFoundException
+			if errors.As(metaErr, &rnf) {
+				stateBucket := cfg.StateBucket
+				if stateBucket == "" {
+					stateBucket = os.Getenv("KM_STATE_BUCKET")
+				}
+				if stateBucket != "" {
+					s3ClientEarly := s3.NewFromConfig(awsCfg)
+					if m, s3Err := awspkg.ReadSandboxMetadata(ctx, s3ClientEarly, stateBucket, sandboxID); s3Err == nil {
+						meta = m
+						metaErr = nil
+					}
+				}
 			}
+		}
+		if metaErr == nil && meta != nil && meta.Substrate == "docker" {
+			return runDestroyDocker(ctx, cfg, awsCfg, sandboxID, verbose)
 		}
 		// If metadata not found or substrate is not docker, proceed with normal Terragrunt path.
 	}
@@ -390,25 +407,52 @@ locals {
 		}
 	}
 
-	// Step 12: Delete sandbox metadata.json from S3 so km list no longer shows it.
-	// Read metadata first so we can report alias freed (if any) before deletion.
-	// Note: stateBucket already declared in Step 2c above.
-	stateBucket = cfg.StateBucket
-	if stateBucket == "" {
-		stateBucket = os.Getenv("KM_STATE_BUCKET")
-	}
-	if stateBucket != "" {
+	// Step 12: Delete sandbox metadata from DynamoDB (with S3 fallback) so km list no longer shows it.
+	{
+		tableName := cfg.SandboxTableName
+		if tableName == "" {
+			tableName = "km-sandboxes"
+		}
+		dynamoClientDel := dynamodbpkg.NewFromConfig(awsCfg)
 		// Read existing metadata to check for alias — non-fatal if read fails.
-		if existingMeta, readErr := awspkg.ReadSandboxMetadata(ctx, s3Client, stateBucket, sandboxID); readErr == nil {
+		if existingMeta, readErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClientDel, tableName, sandboxID); readErr == nil {
 			if existingMeta.Alias != "" {
 				fmt.Printf("Alias freed: %s\n", existingMeta.Alias)
 			}
-		}
-		if delErr := awspkg.DeleteSandboxMetadata(ctx, s3Client, stateBucket, sandboxID); delErr != nil {
-			log.Warn().Err(delErr).Str("sandbox_id", sandboxID).
-				Msg("failed to delete sandbox metadata from S3 (non-fatal)")
 		} else {
-			log.Info().Str("sandbox_id", sandboxID).Msg("sandbox metadata deleted from S3")
+			// S3 fallback for alias read.
+			stateBucketForAlias := cfg.StateBucket
+			if stateBucketForAlias == "" {
+				stateBucketForAlias = os.Getenv("KM_STATE_BUCKET")
+			}
+			if stateBucketForAlias != "" {
+				if existingMeta, s3ReadErr := awspkg.ReadSandboxMetadata(ctx, s3Client, stateBucketForAlias, sandboxID); s3ReadErr == nil {
+					if existingMeta.Alias != "" {
+						fmt.Printf("Alias freed: %s\n", existingMeta.Alias)
+					}
+				}
+			}
+		}
+		// Delete from DynamoDB first, then S3 (both non-fatal).
+		if delErr := awspkg.DeleteSandboxMetadataDynamo(ctx, dynamoClientDel, tableName, sandboxID); delErr != nil {
+			var rnf *dynamodbtypes.ResourceNotFoundException
+			if !errors.As(delErr, &rnf) {
+				log.Warn().Err(delErr).Str("sandbox_id", sandboxID).
+					Msg("failed to delete sandbox metadata from DynamoDB (non-fatal)")
+			}
+		} else {
+			log.Info().Str("sandbox_id", sandboxID).Msg("sandbox metadata deleted from DynamoDB")
+		}
+		// Also delete from S3 (idempotent — metadata may exist in both during migration).
+		stateBucketForDel := cfg.StateBucket
+		if stateBucketForDel == "" {
+			stateBucketForDel = os.Getenv("KM_STATE_BUCKET")
+		}
+		if stateBucketForDel != "" {
+			if delErr := awspkg.DeleteSandboxMetadata(ctx, s3Client, stateBucketForDel, sandboxID); delErr != nil {
+				log.Debug().Err(delErr).Str("sandbox_id", sandboxID).
+					Msg("S3 metadata delete (non-fatal, may not exist)")
+			}
 		}
 	}
 
@@ -513,18 +557,33 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 		log.Info().Str("param", githubTokenParam).Msg("GitHub token SSM parameter deleted")
 	}
 
-	// Step DD4: Delete S3 metadata.
-	stateBucket := cfg.StateBucket
-	if stateBucket == "" {
-		stateBucket = os.Getenv("KM_STATE_BUCKET")
-	}
-	if stateBucket != "" {
-		s3Client := s3.NewFromConfig(awsCfg)
-		if delErr := awspkg.DeleteSandboxMetadata(ctx, s3Client, stateBucket, sandboxID); delErr != nil {
-			log.Warn().Err(delErr).Str("sandbox_id", sandboxID).
-				Msg("failed to delete sandbox metadata from S3 (non-fatal)")
+	// Step DD4: Delete sandbox metadata from DynamoDB (and S3 fallback).
+	{
+		tableName := cfg.SandboxTableName
+		if tableName == "" {
+			tableName = "km-sandboxes"
+		}
+		dynamoClientDD := dynamodbpkg.NewFromConfig(awsCfg)
+		if delErr := awspkg.DeleteSandboxMetadataDynamo(ctx, dynamoClientDD, tableName, sandboxID); delErr != nil {
+			var rnf *dynamodbtypes.ResourceNotFoundException
+			if !errors.As(delErr, &rnf) {
+				log.Warn().Err(delErr).Str("sandbox_id", sandboxID).
+					Msg("failed to delete sandbox metadata from DynamoDB (non-fatal)")
+			}
 		} else {
-			fmt.Printf("  ✓ S3 metadata deleted\n")
+			fmt.Printf("  ✓ DynamoDB metadata deleted\n")
+		}
+		// Also clean up any S3 metadata (idempotent).
+		stateBucket := cfg.StateBucket
+		if stateBucket == "" {
+			stateBucket = os.Getenv("KM_STATE_BUCKET")
+		}
+		if stateBucket != "" {
+			s3Client := s3.NewFromConfig(awsCfg)
+			if delErr := awspkg.DeleteSandboxMetadata(ctx, s3Client, stateBucket, sandboxID); delErr != nil {
+				log.Warn().Err(delErr).Str("sandbox_id", sandboxID).
+					Msg("failed to delete sandbox metadata from S3 (non-fatal)")
+			}
 		}
 	}
 

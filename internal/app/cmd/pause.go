@@ -1,14 +1,15 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -60,10 +61,6 @@ func NewPauseCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) *c
 }
 
 func runPause(ctx context.Context, cfg *config.Config, sandboxID string) error {
-	if cfg.StateBucket == "" {
-		return fmt.Errorf("state bucket not configured")
-	}
-
 	if err := CheckSandboxLock(ctx, cfg, sandboxID); err != nil {
 		return err
 	}
@@ -73,28 +70,43 @@ func runPause(ctx context.Context, cfg *config.Config, sandboxID string) error {
 		return fmt.Errorf("load AWS config: %w", err)
 	}
 
-	// Check S3 metadata for docker substrate — route before EC2 API calls.
+	// Check metadata for docker substrate — route before EC2 API calls.
 	// Docker sandboxes have no AWS-tagged EC2 resources, so EC2 lookup would fail.
-	stateBucket := cfg.StateBucket
-	if stateBucket == "" {
-		stateBucket = os.Getenv("KM_STATE_BUCKET")
+	tableName := cfg.SandboxTableName
+	if tableName == "" {
+		tableName = "km-sandboxes"
 	}
-	if stateBucket != "" {
-		s3ClientEarly := s3.NewFromConfig(awsCfg)
-		if meta, metaErr := awspkg.ReadSandboxMetadata(ctx, s3ClientEarly, stateBucket, sandboxID); metaErr == nil {
-			if meta.Substrate == "docker" {
-				if err := runDockerCompose(ctx, sandboxID, "pause"); err != nil {
-					return err
+	dynamoClient := dynamodb.NewFromConfig(awsCfg)
+	{
+		meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClient, tableName, sandboxID)
+		if metaErr != nil {
+			// S3 fallback on ResourceNotFoundException.
+			var rnf *dynamodbtypes.ResourceNotFoundException
+			if errors.As(metaErr, &rnf) {
+				stateBucket := cfg.StateBucket
+				if stateBucket == "" {
+					stateBucket = os.Getenv("KM_STATE_BUCKET")
 				}
-				fmt.Printf(ansiGreen+"Sandbox %s paused."+ansiReset+" Use 'km resume %s' to unpause.\n", sandboxID, sandboxID)
-				return nil
+				if stateBucket != "" {
+					s3ClientEarly := s3.NewFromConfig(awsCfg)
+					if m, s3Err := awspkg.ReadSandboxMetadata(ctx, s3ClientEarly, stateBucket, sandboxID); s3Err == nil {
+						meta = m
+						metaErr = nil
+					}
+				}
 			}
+		}
+		if metaErr == nil && meta != nil && meta.Substrate == "docker" {
+			if err := runDockerCompose(ctx, sandboxID, "pause"); err != nil {
+				return err
+			}
+			fmt.Printf(ansiGreen+"Sandbox %s paused."+ansiReset+" Use 'km resume %s' to unpause.\n", sandboxID, sandboxID)
+			return nil
 		}
 		// If metadata not found or substrate is not docker, proceed with EC2 path.
 	}
 
 	ec2Client := ec2.NewFromConfig(awsCfg)
-	s3Client := s3.NewFromConfig(awsCfg)
 
 	descOut, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		Filters: []ec2types.Filter{
@@ -141,21 +153,9 @@ func runPause(ctx context.Context, cfg *config.Config, sandboxID string) error {
 		return fmt.Errorf("no running instances found for sandbox %s", sandboxID)
 	}
 
-	// Update metadata status to "paused"
-	meta, err := awspkg.ReadSandboxMetadata(ctx, s3Client, cfg.StateBucket, sandboxID)
-	if err != nil {
-		return fmt.Errorf("read sandbox metadata: %w", err)
-	}
-	meta.Status = "paused"
-	metaJSON, _ := json.Marshal(meta)
-	_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      aws.String(cfg.StateBucket),
-		Key:         aws.String("tf-km/sandboxes/" + sandboxID + "/metadata.json"),
-		Body:        bytes.NewReader(metaJSON),
-		ContentType: aws.String("application/json"),
-	})
-	if putErr != nil {
-		fmt.Printf(ansiYellow+"  [warn] could not update metadata: %v"+ansiReset+"\n", putErr)
+	// Update metadata status to "paused" via DynamoDB (S3 fallback handled silently on error).
+	if statusErr := awspkg.UpdateSandboxStatusDynamo(ctx, dynamoClient, tableName, sandboxID, "paused"); statusErr != nil {
+		fmt.Printf(ansiYellow+"  [warn] could not update metadata: %v"+ansiReset+"\n", statusErr)
 	}
 
 	fmt.Printf(ansiGreen+"Sandbox %s paused."+ansiReset+" Use 'km resume %s' to restart.\n", sandboxID, sandboxID)

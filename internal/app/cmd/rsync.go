@@ -165,7 +165,7 @@ func newRsyncSaveCmd(cfg *config.Config) *cobra.Command {
 				return fmt.Errorf("load AWS config: %w", err)
 			}
 
-			fetcher := newRealFetcher(awsCfg, cfg.StateBucket)
+			fetcher := newRealFetcher(awsCfg, cfg.StateBucket, func() string { t := cfg.SandboxTableName; if t == "" { t = "km-sandboxes" }; return t }())
 			rec, err := fetcher.FetchSandbox(ctx, sandboxID)
 			if err != nil {
 				return fmt.Errorf("fetch sandbox: %w", err)
@@ -362,7 +362,7 @@ func newRsyncLoadCmd(cfg *config.Config) *cobra.Command {
 				return fmt.Errorf("load AWS config: %w", err)
 			}
 
-			fetcher := newRealFetcher(awsCfg, cfg.StateBucket)
+			fetcher := newRealFetcher(awsCfg, cfg.StateBucket, func() string { t := cfg.SandboxTableName; if t == "" { t = "km-sandboxes" }; return t }())
 			rec, err := fetcher.FetchSandbox(ctx, sandboxID)
 			if err != nil {
 				return fmt.Errorf("fetch sandbox: %w", err)

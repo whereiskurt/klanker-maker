@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
@@ -58,8 +61,38 @@ func NewUnlockCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) *
 }
 
 func runUnlock(ctx context.Context, cfg *config.Config, sandboxID string, yes bool) error {
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
+	if err != nil {
+		return fmt.Errorf("load AWS config: %w", err)
+	}
+
+	dynamoClient := dynamodb.NewFromConfig(awsCfg)
+	tableName := cfg.SandboxTableName
+	if tableName == "" {
+		tableName = "km-sandboxes"
+	}
+
+	// Primary path: try DynamoDB atomic unlock.
+	unlockErr := awspkg.UnlockSandboxDynamo(ctx, dynamoClient, tableName, sandboxID)
+	if unlockErr != nil {
+		// S3 fallback: if DynamoDB table doesn't exist, fall back to S3 read-modify-write.
+		var rnf *dynamodbtypes.ResourceNotFoundException
+		if errors.As(unlockErr, &rnf) {
+			return runUnlockS3Fallback(ctx, cfg, sandboxID, yes)
+		}
+		// "not locked" error from UnlockSandboxDynamo — surface to user.
+		return unlockErr
+	}
+
+	fmt.Printf(ansiGreen+"Sandbox %s unlocked."+ansiReset+"\n", sandboxID)
+	return nil
+}
+
+// runUnlockS3Fallback performs the legacy S3 read-modify-write unlock for environments
+// where the km-sandboxes DynamoDB table has not been provisioned yet.
+func runUnlockS3Fallback(ctx context.Context, cfg *config.Config, sandboxID string, yes bool) error {
 	if cfg.StateBucket == "" {
-		return fmt.Errorf("state bucket not configured — unlock requires S3 metadata")
+		return fmt.Errorf("state bucket not configured — unlock requires S3 metadata (DynamoDB table not found)")
 	}
 
 	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")

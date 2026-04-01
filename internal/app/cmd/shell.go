@@ -139,7 +139,7 @@ func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
 		}
-		fetcher = newRealFetcher(awsCfg, cfg.StateBucket)
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, func() string { t := cfg.SandboxTableName; if t == "" { t = "km-sandboxes" }; return t }())
 	}
 
 	if execFn == nil {
@@ -194,7 +194,7 @@ func runAgent(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
 		}
-		fetcher = newRealFetcher(awsCfg, cfg.StateBucket)
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, func() string { t := cfg.SandboxTableName; if t == "" { t = "km-sandboxes" }; return t }())
 	}
 	if execFn == nil {
 		execFn = defaultShellExec
@@ -282,7 +282,7 @@ func runPortForward(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetch
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
 		}
-		fetcher = newRealFetcher(awsCfg, cfg.StateBucket)
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, func() string { t := cfg.SandboxTableName; if t == "" { t = "km-sandboxes" }; return t }())
 	}
 	if execFn == nil {
 		execFn = defaultShellExec

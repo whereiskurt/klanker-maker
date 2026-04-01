@@ -2,10 +2,13 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -66,22 +69,38 @@ func runStop(ctx context.Context, cfg *config.Config, sandboxID string) error {
 		return fmt.Errorf("load AWS config: %w", err)
 	}
 
-	// Check S3 metadata for docker substrate — route before EC2 API calls.
+	// Check metadata for docker substrate — route before EC2 API calls.
 	// Docker sandboxes have no AWS-tagged EC2 resources, so EC2 lookup would fail.
-	stateBucket := cfg.StateBucket
-	if stateBucket == "" {
-		stateBucket = os.Getenv("KM_STATE_BUCKET")
+	tableName := cfg.SandboxTableName
+	if tableName == "" {
+		tableName = "km-sandboxes"
 	}
-	if stateBucket != "" {
-		s3Client := s3.NewFromConfig(awsCfg)
-		if meta, metaErr := awspkg.ReadSandboxMetadata(ctx, s3Client, stateBucket, sandboxID); metaErr == nil {
-			if meta.Substrate == "docker" {
-				if err := runDockerCompose(ctx, sandboxID, "stop"); err != nil {
-					return err
+	dynamoClient := dynamodb.NewFromConfig(awsCfg)
+	{
+		meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClient, tableName, sandboxID)
+		if metaErr != nil {
+			// S3 fallback on ResourceNotFoundException.
+			var rnf *dynamodbtypes.ResourceNotFoundException
+			if errors.As(metaErr, &rnf) {
+				stateBucket := cfg.StateBucket
+				if stateBucket == "" {
+					stateBucket = os.Getenv("KM_STATE_BUCKET")
 				}
-				fmt.Printf(ansiGreen+"Sandbox %s stopped."+ansiReset+" Use 'km resume %s' to restart.\n", sandboxID, sandboxID)
-				return nil
+				if stateBucket != "" {
+					s3Client := s3.NewFromConfig(awsCfg)
+					if m, s3Err := awspkg.ReadSandboxMetadata(ctx, s3Client, stateBucket, sandboxID); s3Err == nil {
+						meta = m
+						metaErr = nil
+					}
+				}
 			}
+		}
+		if metaErr == nil && meta != nil && meta.Substrate == "docker" {
+			if err := runDockerCompose(ctx, sandboxID, "stop"); err != nil {
+				return err
+			}
+			fmt.Printf(ansiGreen+"Sandbox %s stopped."+ansiReset+" Use 'km resume %s' to restart.\n", sandboxID, sandboxID)
+			return nil
 		}
 		// If metadata not found or substrate is not docker, proceed with EC2 path.
 	}

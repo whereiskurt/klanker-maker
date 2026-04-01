@@ -1185,6 +1185,6 @@ type doctorSandboxLister struct {
 }
 
 func (l *doctorSandboxLister) ListSandboxes(ctx context.Context, useTagScan bool) ([]kmaws.SandboxRecord, error) {
-	inner := newRealLister(l.awsCfg, l.bucket)
+	inner := newRealLister(l.awsCfg, l.bucket, "km-sandboxes")
 	return inner.ListSandboxes(ctx, useTagScan)
 }

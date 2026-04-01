@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	iampkg "github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -66,22 +69,29 @@ func NewExtendCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) *
 }
 
 func runExtend(ctx context.Context, cfg *config.Config, sandboxID string, addDuration time.Duration) error {
-	if cfg.StateBucket == "" {
-		return fmt.Errorf("state bucket not configured")
-	}
-
 	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
 	if err != nil {
 		return fmt.Errorf("load AWS config: %w", err)
 	}
 
-	s3Client := s3.NewFromConfig(awsCfg)
+	tableName := cfg.SandboxTableName
+	if tableName == "" {
+		tableName = "km-sandboxes"
+	}
+	dynamoClient := dynamodb.NewFromConfig(awsCfg)
 	schedulerClient := scheduler.NewFromConfig(awsCfg)
 
-	// Step 1: Read current metadata
-	meta, err := awspkg.ReadSandboxMetadata(ctx, s3Client, cfg.StateBucket, sandboxID)
+	// Step 1: Read current metadata — DynamoDB primary, S3 fallback.
+	meta, err := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClient, tableName, sandboxID)
 	if err != nil {
-		return fmt.Errorf("read sandbox metadata: %w", err)
+		var rnf *dynamodbtypes.ResourceNotFoundException
+		if errors.As(err, &rnf) && cfg.StateBucket != "" {
+			s3Client := s3.NewFromConfig(awsCfg)
+			meta, err = awspkg.ReadSandboxMetadata(ctx, s3Client, cfg.StateBucket, sandboxID)
+		}
+		if err != nil {
+			return fmt.Errorf("read sandbox metadata: %w", err)
+		}
 	}
 
 	// Step 2: Calculate new TTL expiry
@@ -129,17 +139,26 @@ func runExtend(ctx context.Context, cfg *config.Config, sandboxID string, addDur
 		return fmt.Errorf("create TTL schedule: %w", err)
 	}
 
-	// Step 4: Update metadata.json with new expiry
+	// Step 4: Update metadata with new expiry via DynamoDB (S3 fallback on ResourceNotFoundException).
 	meta.TTLExpiry = &newExpiry
-	metaJSON, _ := json.Marshal(meta)
-	_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      aws.String(cfg.StateBucket),
-		Key:         aws.String("tf-km/sandboxes/" + sandboxID + "/metadata.json"),
-		Body:        bytes.NewReader(metaJSON),
-		ContentType: aws.String("application/json"),
-	})
-	if putErr != nil {
-		fmt.Printf(ansiYellow+"  [warn] could not update metadata: %v"+ansiReset+"\n", putErr)
+	if writeErr := awspkg.WriteSandboxMetadataDynamo(ctx, dynamoClient, tableName, meta); writeErr != nil {
+		var rnf *dynamodbtypes.ResourceNotFoundException
+		if errors.As(writeErr, &rnf) && cfg.StateBucket != "" {
+			// Fall back to S3
+			s3Client := s3.NewFromConfig(awsCfg)
+			metaJSON, _ := json.Marshal(meta)
+			_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
+				Bucket:      aws.String(cfg.StateBucket),
+				Key:         aws.String("tf-km/sandboxes/" + sandboxID + "/metadata.json"),
+				Body:        bytes.NewReader(metaJSON),
+				ContentType: aws.String("application/json"),
+			})
+			if putErr != nil {
+				fmt.Printf(ansiYellow+"  [warn] could not update metadata: %v"+ansiReset+"\n", putErr)
+			}
+		} else {
+			fmt.Printf(ansiYellow+"  [warn] could not update metadata: %v"+ansiReset+"\n", writeErr)
+		}
 	}
 
 	remaining := time.Until(newExpiry).Round(time.Second)

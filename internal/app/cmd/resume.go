@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -66,8 +69,13 @@ func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error 
 		return fmt.Errorf("load AWS config: %w", err)
 	}
 
+	tableName := cfg.SandboxTableName
+	if tableName == "" {
+		tableName = "km-sandboxes"
+	}
+	dynamoClient := dynamodb.NewFromConfig(awsCfg)
+
 	ec2Client := ec2.NewFromConfig(awsCfg)
-	s3Client := s3.NewFromConfig(awsCfg)
 
 	descOut, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		Filters: []ec2types.Filter{
@@ -97,21 +105,25 @@ func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error 
 		return fmt.Errorf("no stopped instances found for sandbox %s", sandboxID)
 	}
 
-	// Update metadata status back to "running"
-	meta, err := awspkg.ReadSandboxMetadata(ctx, s3Client, cfg.StateBucket, sandboxID)
-	if err != nil {
-		return fmt.Errorf("read sandbox metadata: %w", err)
-	}
-	meta.Status = "running"
-	metaJSON, _ := json.Marshal(meta)
-	_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      aws.String(cfg.StateBucket),
-		Key:         aws.String("tf-km/sandboxes/" + sandboxID + "/metadata.json"),
-		Body:        bytes.NewReader(metaJSON),
-		ContentType: aws.String("application/json"),
-	})
-	if putErr != nil {
-		fmt.Printf(ansiYellow+"  [warn] could not update metadata: %v"+ansiReset+"\n", putErr)
+	// Update metadata status back to "running" via DynamoDB (with S3 fallback on ResourceNotFoundException).
+	if statusErr := awspkg.UpdateSandboxStatusDynamo(ctx, dynamoClient, tableName, sandboxID, "running"); statusErr != nil {
+		var rnf *dynamodbtypes.ResourceNotFoundException
+		if errors.As(statusErr, &rnf) && cfg.StateBucket != "" {
+			// Table doesn't exist — fall back to S3 read-modify-write.
+			s3Client := s3.NewFromConfig(awsCfg)
+			if meta, readErr := awspkg.ReadSandboxMetadata(ctx, s3Client, cfg.StateBucket, sandboxID); readErr == nil {
+				meta.Status = "running"
+				metaJSON, _ := json.Marshal(meta)
+				_, _ = s3Client.PutObject(ctx, &s3.PutObjectInput{
+					Bucket:      aws.String(cfg.StateBucket),
+					Key:         aws.String("tf-km/sandboxes/" + sandboxID + "/metadata.json"),
+					Body:        bytes.NewReader(metaJSON),
+					ContentType: aws.String("application/json"),
+				})
+			}
+		} else {
+			fmt.Printf(ansiYellow+"  [warn] could not update metadata: %v"+ansiReset+"\n", statusErr)
+		}
 	}
 
 	fmt.Printf(ansiGreen+"Sandbox %s resumed."+ansiReset+"\n", sandboxID)

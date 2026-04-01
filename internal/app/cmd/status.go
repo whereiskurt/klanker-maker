@@ -8,12 +8,13 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -101,15 +102,16 @@ func runStatus(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, b
 	}
 
 	if fetcher == nil {
-		if cfg.StateBucket == "" {
-			return fmt.Errorf("state bucket not configured: set KM_STATE_BUCKET or state_bucket in km-config.yaml")
-		}
 		awsProfile := "klanker-terraform"
 		awsCfg, err := kmaws.LoadAWSConfig(ctx, awsProfile)
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
 		}
-		fetcher = newRealFetcher(awsCfg, cfg.StateBucket)
+		tableName := cfg.SandboxTableName
+		if tableName == "" {
+			tableName = "km-sandboxes"
+		}
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, tableName)
 
 		// Also initialize real budget fetcher if not injected
 		if budgetFetcher == nil {
@@ -166,26 +168,37 @@ func runStatus(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, b
 
 // awsSandboxFetcher is the real AWS-backed SandboxFetcher.
 type awsSandboxFetcher struct {
-	s3Client  kmaws.S3ListAPI
-	tagClient kmaws.TagAPI
-	bucket    string
+	s3Client     kmaws.S3ListAPI
+	tagClient    kmaws.TagAPI
+	dynamoClient kmaws.SandboxMetadataAPI
+	bucket       string
+	tableName    string
 }
 
 // newRealFetcher creates an awsSandboxFetcher from an AWS config.
-func newRealFetcher(awsCfg awssdk.Config, bucket string) *awsSandboxFetcher {
+func newRealFetcher(awsCfg awssdk.Config, bucket, tableName string) *awsSandboxFetcher {
 	return &awsSandboxFetcher{
-		s3Client:  s3.NewFromConfig(awsCfg),
-		tagClient: resourcegroupstaggingapi.NewFromConfig(awsCfg),
-		bucket:    bucket,
+		s3Client:     s3.NewFromConfig(awsCfg),
+		tagClient:    resourcegroupstaggingapi.NewFromConfig(awsCfg),
+		dynamoClient: dynamodb.NewFromConfig(awsCfg),
+		bucket:       bucket,
+		tableName:    tableName,
 	}
 }
 
-// FetchSandbox reads metadata from S3 and resource ARNs from the tagging API.
+// FetchSandbox reads metadata from DynamoDB (with S3 fallback) and resource ARNs from the tagging API.
 func (f *awsSandboxFetcher) FetchSandbox(ctx context.Context, sandboxID string) (*kmaws.SandboxRecord, error) {
-	// Read metadata.json from S3
-	meta, err := kmaws.ReadSandboxMetadata(ctx, f.s3Client, f.bucket, sandboxID)
+	// Read metadata from DynamoDB; fall back to S3 on ResourceNotFoundException.
+	meta, err := kmaws.ReadSandboxMetadataDynamo(ctx, f.dynamoClient, f.tableName, sandboxID)
 	if err != nil {
-		return nil, err
+		var rnf *dynamodbtypes.ResourceNotFoundException
+		if errors.As(err, &rnf) && f.bucket != "" {
+			// Table doesn't exist — fall back to S3
+			meta, err = kmaws.ReadSandboxMetadata(ctx, f.s3Client, f.bucket, sandboxID)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Get resource ARNs via tag API

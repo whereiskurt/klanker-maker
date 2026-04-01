@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
@@ -57,8 +60,38 @@ func NewLockCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) *co
 }
 
 func runLock(ctx context.Context, cfg *config.Config, sandboxID string) error {
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
+	if err != nil {
+		return fmt.Errorf("load AWS config: %w", err)
+	}
+
+	dynamoClient := dynamodb.NewFromConfig(awsCfg)
+	tableName := cfg.SandboxTableName
+	if tableName == "" {
+		tableName = "km-sandboxes"
+	}
+
+	// Primary path: atomic DynamoDB lock via ConditionExpression (no read-modify-write).
+	lockErr := awspkg.LockSandboxDynamo(ctx, dynamoClient, tableName, sandboxID)
+	if lockErr != nil {
+		// S3 fallback: if DynamoDB table doesn't exist, fall back to S3 read-modify-write.
+		var rnf *dynamodbtypes.ResourceNotFoundException
+		if errors.As(lockErr, &rnf) {
+			return runLockS3Fallback(ctx, cfg, sandboxID)
+		}
+		// "already locked" error from LockSandboxDynamo — surface to user.
+		return lockErr
+	}
+
+	fmt.Printf(ansiGreen+"Sandbox %s locked."+ansiReset+"\n", sandboxID)
+	return nil
+}
+
+// runLockS3Fallback performs the legacy S3 read-modify-write lock for environments
+// where the km-sandboxes DynamoDB table has not been provisioned yet.
+func runLockS3Fallback(ctx context.Context, cfg *config.Config, sandboxID string) error {
 	if cfg.StateBucket == "" {
-		return fmt.Errorf("state bucket not configured — lock requires S3 metadata")
+		return fmt.Errorf("state bucket not configured — lock requires S3 metadata (DynamoDB table not found)")
 	}
 
 	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
@@ -67,7 +100,6 @@ func runLock(ctx context.Context, cfg *config.Config, sandboxID string) error {
 	}
 
 	s3Client := s3.NewFromConfig(awsCfg)
-
 	meta, err := awspkg.ReadSandboxMetadata(ctx, s3Client, cfg.StateBucket, sandboxID)
 	if err != nil {
 		return fmt.Errorf("read sandbox metadata: %w", err)
@@ -97,23 +129,41 @@ func runLock(ctx context.Context, cfg *config.Config, sandboxID string) error {
 	return nil
 }
 
-// CheckSandboxLock reads metadata from S3 and returns an error if the sandbox is locked.
-// Fail-open: returns nil if StateBucket is empty, AWS config fails to load, or metadata is missing.
+// CheckSandboxLock reads metadata from DynamoDB (with S3 fallback) and returns an error
+// if the sandbox is locked.
+// Fail-open: returns nil if table/bucket not configured, AWS config fails, or metadata missing.
 // For commands that REQUIRE the lock check (destroy, stop, pause), call this
 // at the top of runXxx before any expensive AWS operations.
 func CheckSandboxLock(ctx context.Context, cfg *config.Config, sandboxID string) error {
-	if cfg.StateBucket == "" {
-		return nil // no metadata store — can't check lock, fail-open
-	}
 	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
 	if err != nil {
 		return nil // fail-open: if we can't load config, don't block the command
 	}
-	s3Client := s3.NewFromConfig(awsCfg)
-	meta, err := awspkg.ReadSandboxMetadata(ctx, s3Client, cfg.StateBucket, sandboxID)
-	if err != nil {
-		return nil // fail-open: missing metadata shouldn't block destroy
+
+	// Try DynamoDB first.
+	tableName := cfg.SandboxTableName
+	if tableName == "" {
+		tableName = "km-sandboxes"
 	}
+	dynamoClient := dynamodb.NewFromConfig(awsCfg)
+	meta, dynErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClient, tableName, sandboxID)
+	if dynErr != nil {
+		// S3 fallback on ResourceNotFoundException (table not yet provisioned).
+		var rnf *dynamodbtypes.ResourceNotFoundException
+		if errors.As(dynErr, &rnf) {
+			if cfg.StateBucket == "" {
+				return nil
+			}
+			s3Client := s3.NewFromConfig(awsCfg)
+			meta, err = awspkg.ReadSandboxMetadata(ctx, s3Client, cfg.StateBucket, sandboxID)
+			if err != nil {
+				return nil // fail-open: missing metadata shouldn't block destroy
+			}
+		} else {
+			return nil // fail-open: if we can't read metadata, don't block the command
+		}
+	}
+
 	if meta.Locked {
 		return fmt.Errorf("sandbox %s is locked — run 'km unlock %s' first", sandboxID, sandboxID)
 	}

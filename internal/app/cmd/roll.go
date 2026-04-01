@@ -756,7 +756,7 @@ func initRealRollDeps(ctx context.Context, cfg interface{}) (*RollDeps, error) {
 		CWClient:     cloudwatchlogs.NewFromConfig(awsCfg),
 		ECSClient:    ecs.NewFromConfig(awsCfg),
 		EC2Client:    ec2.NewFromConfig(awsCfg),
-		Lister:       newRealLister(awsCfg, "km-terraform-state"),
+		Lister:       newRealLister(awsCfg, "km-terraform-state", "km-sandboxes"),
 	}, nil
 }
 
