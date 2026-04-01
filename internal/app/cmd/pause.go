@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -97,6 +98,11 @@ func runPause(ctx context.Context, cfg *config.Config, sandboxID string) error {
 			}
 		}
 		if metaErr == nil && meta != nil && meta.Substrate == "docker" {
+			homeDir, _ := os.UserHomeDir()
+			composeFile := filepath.Join(homeDir, ".km", "sandboxes", sandboxID, "docker-compose.yml")
+			if _, statErr := os.Stat(composeFile); os.IsNotExist(statErr) {
+				return fmt.Errorf("docker sandbox %s is not running on this host", sandboxID)
+			}
 			if err := runDockerCompose(ctx, sandboxID, "pause"); err != nil {
 				return err
 			}

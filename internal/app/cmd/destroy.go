@@ -502,6 +502,16 @@ locals {
 // delete SSM GitHub token parameter, remove local directory.
 // Each step is independent and logs warnings instead of failing hard (idempotent cleanup).
 func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config, sandboxID string, verbose bool) error {
+	// Verify this Docker sandbox is running on the local host.
+	// Docker containers are local — you can see other operators' Docker sandboxes in km list
+	// (shared DynamoDB) but can only destroy ones running on your machine.
+	homeDir, _ := os.UserHomeDir()
+	composeFile := filepath.Join(homeDir, ".km", "sandboxes", sandboxID, "docker-compose.yml")
+	if _, err := os.Stat(composeFile); os.IsNotExist(err) {
+		return fmt.Errorf("docker sandbox %s is not running on this host (no %s found).\n"+
+			"  This sandbox may be running on another machine. Use km list to check.", sandboxID, composeFile)
+	}
+
 	fmt.Printf("Destroying docker sandbox %s...\n", sandboxID)
 
 	region := awsCfg.Region
@@ -604,7 +614,7 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 	}
 
 	// Step DD5: Remove local sandbox directory.
-	homeDir, _ := os.UserHomeDir()
+	homeDir, _ = os.UserHomeDir()
 	sandboxLocalDir := filepath.Join(homeDir, ".km", "sandboxes", sandboxID)
 	if err := os.RemoveAll(sandboxLocalDir); err != nil {
 		log.Warn().Err(err).Str("dir", sandboxLocalDir).Msg("failed to remove local sandbox directory (non-fatal)")
