@@ -61,19 +61,27 @@ spec:
       # filtering via MITM, blocking access to repos not in the allowlist.
       allowedDNSSuffixes:
         - ".amazonaws.com"
+        # Anthropic / Claude Code
         - ".anthropic.com"
         - ".claude.ai"
         - ".claude.com"
-        - ".googleapis.com"
+        # GitHub
+        - ".github.com"
+        - ".githubusercontent.com"
+        # npm / Node.js
         - ".npmjs.org"
         - ".npmjs.com"
         - ".nodejs.org"
         - ".npmmirror.com"
+        # Google / CDN / error reporting
+        - ".googleapis.com"
         - ".google.com"
         - ".sentry.io"
         - ".cloudfront.net"
       allowedHosts:
         - ".amazonaws.com"
+        - "github.com"
+        # Anthropic / Claude Code
         - "api.anthropic.com"
         - "statsig.anthropic.com"
         - "statsig.com"

@@ -63,12 +63,23 @@ spec:
       # GitHub hosts are implicitly allowed via sourceAccess.github.allowedRepos
       allowedDNSSuffixes:
         - ".amazonaws.com"
+        # OpenAI / Codex
         - ".openai.com"
+        - ".chatgpt.com"
+        # GitHub
         - ".github.com"
         - ".githubusercontent.com"
+        # Error reporting / CDN
+        - ".sentry.io"
+        - ".cloudfront.net"
       allowedHosts:
+        # OpenAI / Codex
         - "api.openai.com"
+        - "chatgpt.com"
+        # GitHub
         - "github.com"
+        # Error reporting
+        - "sentry.io"
       allowedMethods:
         - GET
         - POST
