@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 40-ebpf-network-enforcement/40-05-PLAN.md
-last_updated: "2026-04-01T07:13:54.218Z"
+stopped_at: Completed 40-ebpf-network-enforcement/40-06-PLAN.md
+last_updated: "2026-04-01T11:45:06.030Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 41
-  completed_phases: 35
+  completed_phases: 36
   total_plans: 120
-  completed_plans: 117
+  completed_plans: 118
   percent: 0
 ---
 
@@ -163,6 +163,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 40-ebpf-network-enforcement P02 | 224s | 2 tasks | 4 files |
 | Phase 40-ebpf-network-enforcement P04 | 3min | 1 tasks | 6 files |
 | Phase 40-ebpf-network-enforcement P05 | 282s | 2 tasks | 6 files |
+| Phase 40-ebpf-network-enforcement P06 | 16min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -442,6 +443,9 @@ Recent decisions affecting current work:
 - [Phase 40-ebpf-network-enforcement]: Default enforcement is 'proxy' (omitted field) for backwards compatibility — no existing profiles need updating
 - [Phase 40-ebpf-network-enforcement]: eBPF enforcement scoped to EC2 only in Phase 40 — Docker always gets proxy enforcement with explicit zerolog warning
 - [Phase 40-ebpf-network-enforcement]: Semantic validation produces errors for eBPF on non-EC2 substrates to prevent silent misconfiguration
+- [Phase 40-ebpf-network-enforcement]: Extracted audit helpers to helpers.go (no build tag) so audit tests run on macOS CI without Linux kernel
+- [Phase 40-ebpf-network-enforcement]: cleanupEBPF in destroy is no-op on macOS; primary BPF cleanup for remote destroy is EC2 instance termination (bpffs is in-memory)
+- [Phase 40-ebpf-network-enforcement]: registerEBPFCmds indirection pattern for Linux-only cobra commands without build-tagging root.go
 
 ### Roadmap Evolution
 
@@ -496,6 +500,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-01T07:13:54.214Z
-Stopped at: Completed 40-ebpf-network-enforcement/40-05-PLAN.md
+Last session: 2026-04-01T11:45:06.026Z
+Stopped at: Completed 40-ebpf-network-enforcement/40-06-PLAN.md
 Resume file: None
