@@ -971,7 +971,11 @@ Plans:
 **Performance:** <0.5% overhead with metadata-only capture (metering), 5-15% with full payload capture (inspection). Source: [OneUptime eBPF SSL inspection guide](https://oneuptime.com/blog/post/2026-01-07-ebpf-ssl-tls-inspection/view)
 
 **Depends on:** Phase 40 (shares `pkg/ebpf/` scaffold, bpf2go pipeline, ring buffer patterns)
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 41 to break down)
+- [ ] 41-01-PLAN.md — BPF C programs, shared headers, Go types, bpf2go pipeline for TLS uprobe + connection correlation
+- [ ] 41-02-PLAN.md — OpenSSL uprobe attach module, library discovery, ring buffer consumer
+- [ ] 41-03-PLAN.md — HTTP plaintext parser, GitHub repo path extractor, audit handler
+- [ ] 41-04-PLAN.md — Profile schema tlsCapture field + deferred library schema entries
+- [ ] 41-05-PLAN.md — km ebpf-attach --tls integration + compiler user-data wiring
