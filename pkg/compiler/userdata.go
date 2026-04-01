@@ -544,7 +544,11 @@ ExecStart=/usr/local/bin/km ebpf-attach \
   --dns-port 0 \
 {{- end }}
   --http-proxy-port 3128 \
+{{- if eq .Enforcement "ebpf" }}
   --firewall-mode block \
+{{- else }}
+  --firewall-mode log \
+{{- end }}
   --allowed-dns "{{ .AllowedDNSSuffixes }}" \
   --allowed-hosts "{{ .AllowedHTTPHosts }}" \
   --proxy-hosts "{{ .GitHubAllowedRepos }}" \
