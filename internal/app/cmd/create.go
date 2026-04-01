@@ -833,8 +833,16 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		operatorEmail = os.Getenv("KM_OPERATOR_EMAIL")
 	}
 	if operatorEmail != "" {
-		if err := awspkg.SendLifecycleNotification(ctx, sesClient, operatorEmail, sandboxID, "created", emailDomain); err != nil {
-			log.Warn().Err(err).Msg("failed to send created lifecycle notification (non-fatal)")
+		profileName := ""
+		ttl := ""
+		if resolvedProfile.Metadata.Name != "" {
+			profileName = resolvedProfile.Metadata.Name
+		}
+		if resolvedProfile.Spec.Lifecycle.TTL != "" {
+			ttl = resolvedProfile.Spec.Lifecycle.TTL
+		}
+		if err := awspkg.SendCreateNotification(ctx, sesClient, operatorEmail, sandboxID, emailDomain, profileName, ttl); err != nil {
+			log.Warn().Err(err).Msg("failed to send created notification (non-fatal)")
 		}
 	}
 

@@ -238,6 +238,65 @@ func SendLimitNotification(ctx context.Context, client SESV2API, operatorEmail, 
 	return nil
 }
 
+// SendCreateNotification sends a sandbox-created notification to the operator.
+//
+// Unlike generic lifecycle notifications, the create notification:
+//   - Sets Reply-To to the sandbox's own email address so the operator can reply directly to the sandbox
+//   - Includes a reminder about the safe phrase for email-to-create
+//   - Shows sandbox details (profile, TTL, email address)
+func SendCreateNotification(ctx context.Context, client SESV2API, operatorEmail, sandboxID, domain, profileName, ttl string) error {
+	from := fmt.Sprintf("notifications@%s", domain)
+	sandboxAddr := sandboxEmailAddress(sandboxID, domain)
+	subject := fmt.Sprintf("km sandbox created: %s", sandboxID)
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Sandbox Created: %s\n", sandboxID))
+	b.WriteString(fmt.Sprintf("Time: %s\n\n", time.Now().UTC().Format("2006-01-02 3:04:05 PM UTC")))
+	b.WriteString("─── Sandbox Details ───────────────────────────\n")
+	b.WriteString(fmt.Sprintf("  Sandbox ID:  %s\n", sandboxID))
+	if profileName != "" {
+		b.WriteString(fmt.Sprintf("  Profile:     %s\n", profileName))
+	}
+	if ttl != "" {
+		b.WriteString(fmt.Sprintf("  TTL:         %s\n", ttl))
+	}
+	b.WriteString(fmt.Sprintf("  Email:       %s\n", sandboxAddr))
+	b.WriteString("\n")
+	b.WriteString("─── Reply to Sandbox ─────────────────────────\n")
+	b.WriteString("  Reply to this email to send a message directly\n")
+	b.WriteString("  to the sandbox agent's inbox.\n")
+	b.WriteString("\n")
+	b.WriteString("─── Email-to-Create Reminder ─────────────────\n")
+	b.WriteString(fmt.Sprintf("  To create new sandboxes via email, send to:\n"))
+	b.WriteString(fmt.Sprintf("  operator@%s\n", domain))
+	b.WriteString("  Include the safe phrase in the subject line.\n")
+	b.WriteString(fmt.Sprintf("\n— %s\n", version.Header()))
+
+	_, err := client.SendEmail(ctx, &sesv2.SendEmailInput{
+		FromEmailAddress: awssdk.String(from),
+		ReplyToAddresses: []string{sandboxAddr},
+		Destination: &sesv2types.Destination{
+			ToAddresses: []string{operatorEmail},
+		},
+		Content: &sesv2types.EmailContent{
+			Simple: &sesv2types.Message{
+				Subject: &sesv2types.Content{
+					Data: awssdk.String(subject),
+				},
+				Body: &sesv2types.Body{
+					Text: &sesv2types.Content{
+						Data: awssdk.String(b.String()),
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("send create notification for sandbox %s: %w", sandboxID, err)
+	}
+	return nil
+}
+
 // CleanupSandboxEmail deletes the SES email identity for {sandboxID}@{domain}.
 //
 // This is called during km destroy. The function is idempotent: if the identity
