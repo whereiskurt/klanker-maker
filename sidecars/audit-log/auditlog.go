@@ -269,25 +269,87 @@ func (d *RedactingDestination) Flush(ctx context.Context) error {
 	return d.inner.Flush(ctx)
 }
 
-// ---- s3Dest (stub) ----
+// ---- s3Dest ----
 
-// s3Dest is a stub destination that falls back to stdout.
-// Full S3 archive delivery is Phase 4 scope.
+// S3Backend is the minimal interface for uploading objects to S3.
+// Implemented by *s3.Client; allows mock injection in tests.
+type S3Backend interface {
+	PutObject(ctx context.Context, bucket, key string, data []byte) error
+}
+
+// s3Dest buffers audit events in memory and flushes them to S3 as NDJSON files.
+// Each flush produces one S3 object at: audit/{sandboxID}/{timestamp}.ndjson
+// Events are also written to stdout as a local fallback (visible in docker logs).
 type s3Dest struct {
-	fallback Destination
+	backend   S3Backend
+	bucket    string
+	sandboxID string
+	buf       []AuditEvent
+	stdout    Destination // also write to stdout for docker logs visibility
 }
 
-// NewS3Dest creates a stub S3 destination. It logs a warning and routes to w.
-// Full S3 archive is Phase 4 scope; this stub avoids silent data loss.
-func NewS3Dest(w io.Writer) Destination {
-	log.Warn().Msg("audit-log: S3 dest configured — flushing at exit not yet implemented; falling back to stdout")
-	return &s3Dest{fallback: NewStdoutDest(w)}
+// NewS3Dest creates a Destination that buffers events and flushes to S3.
+// Events are also written to stdout for local docker log visibility.
+func NewS3Dest(backend S3Backend, bucket, sandboxID string, w io.Writer) Destination {
+	return &s3Dest{
+		backend:   backend,
+		bucket:    bucket,
+		sandboxID: sandboxID,
+		stdout:    NewStdoutDest(w),
+	}
 }
 
-// Write delegates to the stdout fallback.
+// Write appends the event to the buffer and also writes to stdout.
+// Flushes to S3 when buffer reaches s3FlushThreshold.
 func (d *s3Dest) Write(ctx context.Context, event AuditEvent) error {
-	return d.fallback.Write(ctx, event)
+	// Always echo to stdout for docker logs
+	_ = d.stdout.Write(ctx, event)
+
+	d.buf = append(d.buf, event)
+	if len(d.buf) >= s3FlushThreshold {
+		return d.flush(ctx)
+	}
+	return nil
 }
 
-// Flush is a no-op for the S3 stub.
-func (d *s3Dest) Flush(_ context.Context) error { return nil }
+const s3FlushThreshold = 50
+
+// Flush sends all buffered events to S3 as a single NDJSON object.
+func (d *s3Dest) Flush(ctx context.Context) error {
+	return d.flush(ctx)
+}
+
+func (d *s3Dest) flush(ctx context.Context) error {
+	if len(d.buf) == 0 {
+		return nil
+	}
+
+	// Build NDJSON payload
+	var payload []byte
+	for _, ev := range d.buf {
+		b, err := json.Marshal(ev)
+		if err != nil {
+			log.Warn().Err(err).Msg("audit-log: skipping unmarshalable event on S3 flush")
+			continue
+		}
+		payload = append(payload, b...)
+		payload = append(payload, '\n')
+	}
+	count := len(d.buf)
+	d.buf = d.buf[:0]
+
+	if len(payload) == 0 {
+		return nil
+	}
+
+	// S3 key: audit/{sandboxID}/{timestamp}.ndjson
+	key := fmt.Sprintf("audit/%s/%s.ndjson", d.sandboxID, time.Now().UTC().Format("20060102T150405Z"))
+
+	if err := d.backend.PutObject(ctx, d.bucket, key, payload); err != nil {
+		log.Error().Err(err).Str("key", key).Int("events", count).Msg("audit-log: S3 flush failed")
+		return fmt.Errorf("audit-log S3 flush: %w", err)
+	}
+
+	log.Info().Str("key", key).Int("events", count).Msg("audit-log: flushed to S3")
+	return nil
+}

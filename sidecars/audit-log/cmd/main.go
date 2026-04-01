@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -25,8 +26,10 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
+	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
@@ -209,7 +212,20 @@ func buildDest(ctx context.Context, destName, cwLogGroup string, cwClient kmaws.
 		inner = auditlog.NewCloudWatchDest(backend, cwLogGroup, "audit")
 
 	case "s3":
-		inner = auditlog.NewS3Dest(os.Stdout)
+		bucket := envOr("KM_ARTIFACTS_BUCKET", "")
+		sandboxID := envOr("SANDBOX_ID", "unknown")
+		if bucket == "" {
+			log.Warn().Msg("audit-log: KM_ARTIFACTS_BUCKET not set, S3 dest falling back to stdout")
+			inner = auditlog.NewStdoutDest(os.Stdout)
+		} else {
+			s3Backend, s3Err := newS3Backend(ctx, envOr("AWS_REGION", "us-east-1"))
+			if s3Err != nil {
+				log.Warn().Err(s3Err).Msg("audit-log: failed to create S3 client, falling back to stdout")
+				inner = auditlog.NewStdoutDest(os.Stdout)
+			} else {
+				inner = auditlog.NewS3Dest(s3Backend, bucket, sandboxID, os.Stdout)
+			}
+		}
 
 	default: // "stdout" or anything else
 		inner = auditlog.NewStdoutDest(os.Stdout)
@@ -267,4 +283,29 @@ func (b *realCWBackend) PutLogMessages(ctx context.Context, logGroup, logStream 
 		})
 	}
 	return kmaws.PutLogEvents(ctx, b.client, logGroup, logStream, events)
+}
+
+// ---- S3 Backend ----
+
+// realS3Backend adapts *s3.Client to the auditlog.S3Backend interface.
+type realS3Backend struct {
+	client *s3.Client
+}
+
+func newS3Backend(ctx context.Context, region string) (*realS3Backend, error) {
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+	if err != nil {
+		return nil, fmt.Errorf("load AWS config for S3: %w", err)
+	}
+	return &realS3Backend{client: s3.NewFromConfig(cfg)}, nil
+}
+
+func (b *realS3Backend) PutObject(ctx context.Context, bucket, key string, data []byte) error {
+	_, err := b.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      awssdk.String(bucket),
+		Key:         awssdk.String(key),
+		Body:        bytes.NewReader(data),
+		ContentType: awssdk.String("application/x-ndjson"),
+	})
+	return err
 }
