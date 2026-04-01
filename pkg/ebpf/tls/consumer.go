@@ -80,6 +80,15 @@ func (c *Consumer) Run(ctx context.Context) error {
 		c.eventsTotal.Add(1)
 		c.trackLibraryMetric(event.LibraryType)
 
+		c.logger.Info().
+			Uint32("pid", event.Pid).
+			Str("direction", event.DirectionName()).
+			Str("library", event.LibraryName()).
+			Uint32("payload_len", event.PayloadLen).
+			Str("remote", event.RemoteAddr().String()).
+			Str("event_type", "tls_capture").
+			Msg("TLS event captured")
+
 		c.dispatchEvent(&event)
 	}
 }

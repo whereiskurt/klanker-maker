@@ -159,8 +159,9 @@ func AttachOpenSSL(libsslPath string) (*OpenSSLProbe, error) {
 	}
 
 	// Enable OpenSSL library capture by default.
-	key := uint32(LibOpenSSL)
-	val := uint32(1)
+	// Map types are __u8 key and __u8 value in BPF.
+	key := uint8(LibOpenSSL)
+	val := uint8(1)
 	if err := objs.LibEnabled.Put(key, val); err != nil {
 		log.Warn().Err(err).Msg("failed to set lib_enabled for openssl")
 	}
@@ -184,8 +185,8 @@ func (p *OpenSSLProbe) EventsMap() *ebpf.Map {
 // skip event emission for that library, reducing overhead without
 // detaching probes.
 func (p *OpenSSLProbe) SetLibraryEnabled(libType uint8, enabled bool) error {
-	key := uint32(libType)
-	val := uint32(0)
+	key := libType
+	val := uint8(0)
 	if enabled {
 		val = 1
 	}
