@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 41-01-PLAN.md
-last_updated: "2026-04-01T20:57:56.697Z"
+stopped_at: Completed 41-04-PLAN.md
+last_updated: "2026-04-01T21:03:09.180Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 41
   completed_phases: 36
   total_plans: 126
-  completed_plans: 120
+  completed_plans: 122
   percent: 0
 ---
 
@@ -166,6 +166,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 40-ebpf-network-enforcement P06 | 16min | 3 tasks | 11 files |
 | Phase 40-ebpf-network-enforcement P07 | 585s | 2 tasks | 16 files |
 | Phase 41 P01 | 5min | 2 tasks | 12 files |
+| Phase 41 P03 | 2min | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -451,6 +452,8 @@ Recent decisions affecting current work:
 - [Phase 40-ebpf-network-enforcement]: Renamed BPF sockops() to bpf_sockops() to resolve clang-14 symbol/section name collision on ARM64 Docker
 - [Phase 40-ebpf-network-enforcement]: Removed -type event from bpf2go directive: BpfEvent type unused, clang-14 does not emit event struct in BTF
 - [Phase 41]: Defined x86_64 pt_regs struct inline in ssl_common.h for uprobe PT_REGS macro compatibility
+- [Phase 41]: Used stdlib http.ReadRequest for HTTP/1.1 parsing instead of manual line parsing
+- [Phase 41]: EBPF-TLS-10 budget metering scoped as audit-only URL logging -- HTTP/2 DATA frames inaccessible via uprobes
 
 ### Roadmap Evolution
 
@@ -505,6 +508,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-01T20:57:56.693Z
-Stopped at: Completed 41-01-PLAN.md
+Last session: 2026-04-01T21:03:09.176Z
+Stopped at: Completed 41-04-PLAN.md
 Resume file: None
