@@ -60,8 +60,9 @@ func NewDestroyCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) 
 	var remote bool
 
 	cmd := &cobra.Command{
-		Use:   "destroy <sandbox-id | #number>",
-		Short: "Destroy a provisioned sandbox",
+		Use:     "destroy <sandbox-id | #number>",
+		Aliases: []string{"kill"},
+		Short:   "Destroy a provisioned sandbox",
 		Long:  helpText("destroy"),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
