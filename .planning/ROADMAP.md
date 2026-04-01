@@ -895,7 +895,7 @@ Layer 4 (best-effort): TC egress classifier — TLS SNI check
 - EBPF-NET-12: EC2 sandbox with root cannot bypass eBPF enforcement — verified by test: process with `CAP_NET_ADMIN` inside sandbox attempts `iptables -F` (succeeds but irrelevant) and direct connection to blocked IP (fails with EPERM from cgroup/connect4); process cannot call `bpf()` syscall to detach programs (no `CAP_BPF` in host namespace; seccomp blocks `bpf()` in sandbox)
 
 **Depends on:** Phase 39
-**Plans:** 2/6 plans executed
+**Plans:** 4/6 plans executed
 
 Plans:
 - [ ] 40-01-PLAN.md — BPF C programs (connect4, sendmsg4, sockops, egress_skb), maps, bpf2go pipeline

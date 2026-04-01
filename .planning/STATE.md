@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 40-ebpf-network-enforcement/40-03-PLAN.md
-last_updated: "2026-04-01T07:04:50.662Z"
+stopped_at: Completed 40-ebpf-network-enforcement/40-02-PLAN.md
+last_updated: "2026-04-01T07:05:55.399Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 41
   completed_phases: 35
   total_plans: 120
-  completed_plans: 114
+  completed_plans: 116
   percent: 0
 ---
 
@@ -160,6 +160,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 39-migrate-sandbox-metadata-s3-to-dynamodb P01 | 184 | 1 tasks | 2 files |
 | Phase 40-ebpf-network-enforcement P01 | 4min | 2 tasks | 8 files |
 | Phase 40-ebpf-network-enforcement P03 | 221s | 2 tasks | 3 files |
+| Phase 40-ebpf-network-enforcement P02 | 224s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -432,6 +433,9 @@ Recent decisions affecting current work:
 - [Phase 40-ebpf-network-enforcement]: BPF_F_NO_PREALLOC mandatory on LPM_TRIE; socket cookie as cross-layer correlation key for transparent proxy
 - [Phase 40-ebpf-network-enforcement]: MapUpdater interface in resolver decouples BPF map access for unit testing without kernel
 - [Phase 40-ebpf-network-enforcement]: AAAA queries refused with NOERROR+empty answer (not NXDOMAIN) — IPv4-only BPF enforcement
+- [Phase 40-ebpf-network-enforcement]: Link fields stored in Enforcer struct to prevent GC-triggered cgroup program detachment
+- [Phase 40-ebpf-network-enforcement]: CollectionSpec.Variables injection before LoadAndAssign — volatile consts baked at kernel load time
+- [Phase 40-ebpf-network-enforcement]: RecoverPinned reconstructs Enforcer from bpffs handles only — Config not stored in bpffs
 
 ### Roadmap Evolution
 
@@ -486,6 +490,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-01T07:04:50.658Z
-Stopped at: Completed 40-ebpf-network-enforcement/40-03-PLAN.md
+Last session: 2026-04-01T07:05:55.396Z
+Stopped at: Completed 40-ebpf-network-enforcement/40-02-PLAN.md
 Resume file: None
