@@ -94,6 +94,7 @@ spec:
         - ".npmmirror.com"
         # OpenAI (codex)
         - ".openai.com"
+        - ".chatgpt.com"
         # Python (goose extensions via uvx)
         - ".pypi.org"
         - ".pythonhosted.org"
@@ -122,6 +123,7 @@ spec:
         - "nodejs.org"
         # OpenAI (codex)
         - "api.openai.com"
+        - "chatgpt.com"
         # Python (goose extensions)
         - "pypi.org"
         - "files.pythonhosted.org"
