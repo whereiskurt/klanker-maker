@@ -579,7 +579,7 @@ CGROUP_PROCS="/sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope/cgroup.procs"
 if [ -w "$CGROUP_PROCS" ]; then
   echo $$ > "$CGROUP_PROCS" 2>/dev/null
 fi
-exec /bin/bash "$@"
+exec /bin/bash --login "$@"
 SHELLEOF
 chmod +x /usr/local/bin/km-sandbox-shell
 
