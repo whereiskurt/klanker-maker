@@ -538,7 +538,11 @@ After=network.target
 Type=simple
 ExecStart=/usr/local/bin/km ebpf-attach \
   --sandbox-id {{ .SandboxID }} \
+{{- if eq .Enforcement "ebpf" }}
   --dns-port 53 \
+{{- else }}
+  --dns-port 0 \
+{{- end }}
   --http-proxy-port 3128 \
   --firewall-mode block \
   --allowed-dns "{{ .AllowedDNSSuffixes }}" \
@@ -586,14 +590,16 @@ if [ "$(whoami)" = "sandbox" ]; then
 fi
 CGROUPEOF
 
+{{- if eq .Enforcement "ebpf" }}
 # Override resolv.conf to route ALL DNS through the enforcer's resolver.
-# The resolver handles allowlist checking and populates the BPF trie with
-# resolved IPs. This is more reliable than BPF sendmsg4 DNS interception
-# because glibc's resolver uses connect()+send() which doesn't always trigger
-# the sendmsg hook.
+# In pure eBPF mode, the enforcer runs its own DNS resolver on :53.
+# In "both" mode, the existing DNS proxy sidecar + iptables DNAT handles DNS.
 cp /etc/resolv.conf /etc/resolv.conf.bak
 echo "nameserver 127.0.0.1" > /etc/resolv.conf
 echo "[km-bootstrap] DNS routed through eBPF enforcer resolver on :53"
+{{- else }}
+echo "[km-bootstrap] DNS handled by km-dns-proxy sidecar + iptables DNAT (both mode)"
+{{- end }}
 
 echo "[km-bootstrap] eBPF enforcement configured (sandbox shell → cgroup)"
 {{- end }}

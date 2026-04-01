@@ -181,28 +181,32 @@ func runEbpfAttach(
 		}
 	}
 
-	// Start DNS resolver daemon.
-	listenAddr := fmt.Sprintf("127.0.0.1:%d", dnsPort)
-	resolverCfg := resolver.ResolverConfig{
-		ListenAddr:      listenAddr,
-		UpstreamAddr:    "169.254.169.253:53", // VPC resolver
-		SandboxID:       sandboxID,
-		AllowedSuffixes: dnsSuffixes,
-		MapUpdater:      enforcer,
-		ProxyHosts:      proxyHostList,
-	}
-	res := resolver.NewResolver(resolverCfg)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Start DNS resolver daemon (skip if dnsPort == 0, i.e. "both" mode
+	// where the existing km-dns-proxy sidecar handles DNS).
 	resolverErrCh := make(chan error, 1)
-	go func() {
-		if err := res.Start(ctx); err != nil {
-			resolverErrCh <- err
+	if dnsPort > 0 {
+		listenAddr := fmt.Sprintf("127.0.0.1:%d", dnsPort)
+		resolverCfg := resolver.ResolverConfig{
+			ListenAddr:      listenAddr,
+			UpstreamAddr:    "169.254.169.253:53",
+			SandboxID:       sandboxID,
+			AllowedSuffixes: dnsSuffixes,
+			MapUpdater:      enforcer,
+			ProxyHosts:      proxyHostList,
 		}
-	}()
-	logger.Info().Str("listen", listenAddr).Msg("DNS resolver started")
+		res := resolver.NewResolver(resolverCfg)
+		go func() {
+			if err := res.Start(ctx); err != nil {
+				resolverErrCh <- err
+			}
+		}()
+		logger.Info().Str("listen", listenAddr).Msg("DNS resolver started")
+	} else {
+		logger.Info().Msg("DNS resolver skipped (both mode — km-dns-proxy handles DNS)")
+	}
 
 	// Pre-resolve all allowed hosts and DNS suffixes to seed the BPF allowlist.
 	// Without this, the first connection attempt to any allowed host would fail
