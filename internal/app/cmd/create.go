@@ -319,7 +319,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 			return fmt.Errorf("failed to compile profile: %w", err)
 		}
 		if substrate == "docker" {
-			return runCreateDocker(ctx, cfg, awsCfg, resolvedProfile, sandboxID, artifacts, verbose)
+			return runCreateDocker(ctx, cfg, awsCfg, resolvedProfile, sandboxID, artifacts, verbose, aliasOverride)
 		}
 	}
 
@@ -896,7 +896,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 // Steps: create sandbox dir, create IAM roles via SDK, assume roles for scoped creds,
 // inject credentials into compose YAML, write docker-compose.yml, run docker compose up -d,
 // write S3 metadata, write MLflow run record.
-func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config, resolvedProfile *profile.SandboxProfile, sandboxID string, artifacts *compiler.CompiledArtifacts, verbose bool) error {
+func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config, resolvedProfile *profile.SandboxProfile, sandboxID string, artifacts *compiler.CompiledArtifacts, verbose bool, aliasOverride string) error {
 	createStart := time.Now()
 	fmt.Printf("\nProvisioning docker sandbox %s...\n", sandboxID)
 
@@ -1176,6 +1176,24 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 			dockerTableName = "km-sandboxes"
 		}
 		dockerDynamoClient := dynamodbpkg.NewFromConfig(awsCfg)
+
+		// Determine alias: --alias flag takes priority, then profile metadata.alias template.
+		sandboxAlias := aliasOverride
+		if sandboxAlias == "" && resolvedProfile.Metadata.Alias != "" {
+			existing, listErr := awspkg.ListAllSandboxesByDynamo(ctx, dockerDynamoClient, dockerTableName)
+			if listErr == nil {
+				existingAliases := make([]string, 0, len(existing))
+				for _, r := range existing {
+					if r.Alias != "" {
+						existingAliases = append(existingAliases, r.Alias)
+					}
+				}
+				sandboxAlias = awspkg.NextAliasFromTemplate(resolvedProfile.Metadata.Alias, existingAliases)
+			} else {
+				log.Warn().Err(listErr).Msg("failed to list sandboxes for alias template — skipping auto alias")
+			}
+		}
+
 		meta := awspkg.SandboxMetadata{
 			SandboxID:   sandboxID,
 			ProfileName: resolvedProfile.Metadata.Name,
@@ -1186,11 +1204,16 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 			IdleTimeout: resolvedProfile.Spec.Lifecycle.IdleTimeout,
 			MaxLifetime: resolvedProfile.Spec.Lifecycle.MaxLifetime,
 			CreatedBy:   "cli",
+			Alias:       sandboxAlias,
 		}
 		if writeErr := awspkg.WriteSandboxMetadataDynamo(ctx, dockerDynamoClient, dockerTableName, &meta); writeErr != nil {
 			log.Warn().Err(writeErr).Str("sandbox_id", sandboxID).Msg("failed to write sandbox metadata to DynamoDB (non-fatal)")
 		} else {
-			fmt.Printf("  ✓ Metadata stored (substrate=docker)\n")
+			if sandboxAlias != "" {
+				fmt.Printf("  ✓ Metadata stored (alias: %s)\n", sandboxAlias)
+			} else {
+				fmt.Printf("  ✓ Metadata stored (substrate=docker)\n")
+			}
 		}
 	}
 
