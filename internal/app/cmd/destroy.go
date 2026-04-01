@@ -154,6 +154,12 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool, ve
 		return err
 	}
 
+	// Step 2b2: Best-effort eBPF cleanup — no-op on non-Linux or proxy-mode sandboxes.
+	// On Linux: removes pinned BPF programs and maps from bpffs if IsPinned is true.
+	// For remote destroy (operator laptop): this is a no-op; bpffs is cleaned up
+	// automatically when the EC2 instance is terminated (bpffs is an in-memory filesystem).
+	cleanupEBPF(sandboxID, log.Logger)
+
 	// Step 2c: Check metadata for docker substrate — route before tag-based lookup.
 	// Docker sandboxes have no AWS-tagged EC2/ECS resources, so tag lookup would fail.
 	// Primary: DynamoDB; fallback: S3 on ResourceNotFoundException.
