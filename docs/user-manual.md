@@ -166,10 +166,11 @@ km init [--region <region>] [--aws-profile <profile>]
 **What it does:**
 
 1. Creates the region directory structure under `infra/live/`
-2. Writes `region.hcl` with region label mapping (e.g., `us-east-1` → `use1`)
+2. Writes `region.hcl` with region label mapping (e.g., `us-east-1` -> `use1`)
 3. Copies the network Terragrunt template
 4. Runs `terragrunt apply` to provision VPC, subnets, and security groups
-5. Captures network outputs (VPC ID, subnet IDs, AZs) to `outputs.json`
+5. Creates the `km-sandboxes` DynamoDB table for sandbox metadata (if not already present)
+6. Captures network outputs (VPC ID, subnet IDs, AZs) to `outputs.json`
 
 **Example:**
 
@@ -322,10 +323,11 @@ Connect: aws ssm start-session --target <instance-id>
 
 ### km destroy
 
-Tear down a sandbox and clean up all resources.
+Tear down a sandbox and clean up all resources. `km kill` is an alias for `km destroy`.
 
 ```
 km destroy <sandbox-id> [--aws-profile <profile>] [--yes] [--verbose] [--remote]
+km kill <sandbox-id> [--yes]
 ```
 
 | Flag | Default | Description |
@@ -333,23 +335,29 @@ km destroy <sandbox-id> [--aws-profile <profile>] [--yes] [--verbose] [--remote]
 | `--aws-profile` | `klanker-terraform` | AWS CLI profile |
 | `--yes` | `false` | Skip confirmation prompt |
 | `--verbose` | `false` | Show full terragrunt/terraform output |
-| `--remote` | `false` | Dispatch to Lambda via EventBridge |
+| `--remote` | `true` | Dispatch to Lambda via EventBridge (default); forced off for Docker substrate |
 
 **What it does:**
 
-1. Validates sandbox ID format (`sb-[a-f0-9]{8}`)
-2. Discovers sandbox resources via AWS tag scan (`km:sandbox-id`)
-3. For EC2 spot: explicitly terminates the instance first (critical — `terraform destroy` alone leaves spot instances running)
-4. Cancels EventBridge TTL schedule
-5. Uploads artifacts (if configured in profile)
-6. Runs `terragrunt destroy -auto-approve`
-7. Sends lifecycle notification
-8. Cleans up local sandbox directory and SES email identity
+1. Validates sandbox ID format (`{prefix}-[a-f0-9]{8}`)
+2. Checks lock guard -- blocked if sandbox is locked (`km lock` was applied)
+3. By default, dispatches destroy to Lambda via EventBridge (`--remote=true`)
+4. For Docker substrate: automatically forces local destroy (Lambda cannot reach local containers)
+5. Discovers sandbox resources via AWS tag scan (`km:sandbox-id`)
+6. For EC2 spot: explicitly terminates the instance first (critical -- `terraform destroy` alone leaves spot instances running)
+7. Cancels EventBridge TTL schedule
+8. Uploads artifacts (if configured in profile)
+9. Runs `terragrunt destroy -auto-approve`
+10. Sends lifecycle notification
+11. Cleans up local sandbox directory and SES email identity
 
 **Example:**
 
 ```bash
-km destroy sb-7f3a9e12
+km destroy sb-7f3a9e12              # Lambda-dispatched (default)
+km destroy sb-7f3a9e12 --yes        # skip confirmation
+km kill sb-7f3a9e12 --yes           # alias, same behavior
+km destroy sb-7f3a9e12 --remote=false  # local terragrunt destroy
 ```
 
 **Output:**
@@ -384,14 +392,17 @@ km pause <sandbox-id | #number> [--remote]
 **What it does:**
 
 1. Validates sandbox ID
-2. Checks lock guard — blocked if sandbox is locked (`km lock` was applied)
-3. Calls `StopInstances` with `Hibernate: true` — EC2 will hibernate the instance if hibernation is enabled; falls back to a normal stop if not configured for hibernation
-4. Updates metadata status to `"paused"` in S3
+2. Checks lock guard -- blocked if sandbox is locked (`km lock` was applied)
+3. Reads metadata from DynamoDB (falls back to S3 if table not provisioned) to detect substrate
+4. **Docker substrate**: runs `docker compose pause` on the local sandbox containers (verifies the sandbox is running on this host first)
+5. **EC2 substrate**: calls `StopInstances` with `Hibernate: true` -- falls back to a normal stop if hibernation is not configured
+6. **Spot instances**: cannot be paused -- returns a clear error suggesting `--on-demand`
+7. Updates metadata status to `"paused"` in DynamoDB
 
 **Notes:**
-- Requires `cfg.StateBucket` to update metadata (unlike `km stop`)
 - Hibernation preserves the RAM state to EBS; the instance resumes exactly where it left off on restart
-- If the instance was not enabled for hibernation at launch, EC2 silently falls back to a normal stop
+- If the instance was not enabled for hibernation at launch, the command falls back to a normal stop with an info message
+- Docker sandboxes must be running on the local host (checks for `docker-compose.yml`)
 
 **Example:**
 
@@ -418,9 +429,9 @@ km lock <sandbox-id | #number> [--remote]
 **What it does:**
 
 1. Validates sandbox ID
-2. Reads metadata from S3; if already locked, prints a notice and exits cleanly
-3. Sets `meta.Locked = true` and `meta.LockedAt` to the current time
-4. Writes updated metadata back to S3
+2. Performs an atomic conditional update in DynamoDB (`km-sandboxes` table) -- no read-modify-write race condition
+3. Falls back to S3 read-modify-write if the DynamoDB table does not exist
+4. If already locked, returns a clear "already locked" message
 
 **Blocked operations while locked:**
 - `km destroy` — returns "is locked" error before any resource teardown
@@ -460,10 +471,10 @@ km unlock <sandbox-id | #number> [--yes] [--remote]
 **What it does:**
 
 1. Validates sandbox ID
-2. Reads metadata from S3; if not locked, prints a notice and exits cleanly
-3. Without `--yes`: prompts `Unlock sandbox <id>? This will allow destroy/stop/pause. [y/N]`
-4. Sets `meta.Locked = false` and clears `meta.LockedAt`
-5. Writes updated metadata back to S3
+2. Performs an atomic conditional update in DynamoDB (`km-sandboxes` table) -- no read-modify-write race condition
+3. Falls back to S3 read-modify-write if the DynamoDB table does not exist
+4. Without `--yes`: prompts `Unlock sandbox <id>? This will allow destroy/stop/pause. [y/N]`
+5. If not locked, returns a clear "not locked" message
 
 **Example:**
 
@@ -483,17 +494,27 @@ Sandbox sb-7f3a9e12 unlocked.
 
 ### km list
 
-List all running sandboxes.
+List all running sandboxes. Alias: `km ls`.
 
 ```
-km list [--json] [--tags]
+km list [--json] [--tags] [--wide]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--json` | `false` | Output as JSON array |
-| `--tags` | `false` | Use AWS tag scan instead of S3 state scan (slower, more reliable) |
+| `--tags` | `false` | Use AWS tag scan instead of DynamoDB (slower, more reliable) |
 | `--wide` | `false` | Show all columns (profile, substrate, region) |
+
+**Data source:** Primary lookup uses a single DynamoDB Scan on the `km-sandboxes` table (fast, O(1) per page). Falls back to S3 listing if the DynamoDB table does not exist.
+
+**Display:**
+- Default (narrow) mode shows: `#`, `ALIAS`, `SANDBOX ID`, `STATUS`, `TTL`
+- Wide mode (`--wide`) adds: `PROFILE`, `SUBSTRATE`, `REGION`
+- `ALIAS` column appears first (after `#`), then `SANDBOX ID`
+- Locked sandboxes are shown in bold white text with a lock icon at the end of the row
+- Paused/stopped sandboxes show in magenta
+- Spot-reaped instances show as "reaped" in yellow
 
 **Example:**
 
@@ -501,13 +522,28 @@ km list [--json] [--tags]
 km list
 ```
 
-**Output:**
+**Output (narrow, default):**
 
 ```
-SANDBOX ID    PROFILE          SUBSTRATE  REGION      STATUS   TTL
-sb-7f3a9e12   restricted-dev   ec2        us-east-1   running  5h46m
-sb-a4c8e210   hardened         ecs        us-east-1   running  2h12m
-sb-d9f01b3c   open-dev         ec2        us-west-2   running  18h33m
+#   ALIAS       SANDBOX ID    STATUS     TTL
+1   my-agent    sb-7f3a9e12   running    5h46m
+2   -           sb-a4c8e210   running    2h12m
+3   dev-box     sb-d9f01b3c   paused     18h33m
+4   locked-one  sb-e5b82f01   running    3h10m  🔒
+```
+
+**Output (wide):**
+
+```bash
+km list --wide
+```
+
+```
+#   ALIAS       SANDBOX ID    PROFILE          SUBSTRATE  REGION       STATUS     TTL
+1   my-agent    sb-7f3a9e12   restricted-dev   ec2        us-east-1    running    5h46m
+2   -           sb-a4c8e210   hardened         ecs        us-east-1    running    2h12m
+3   dev-box     sb-d9f01b3c   open-dev         ec2        us-west-2    paused     18h33m
+4   locked-one  sb-e5b82f01   claude-dev       ec2        us-east-1    running    3h10m  🔒
 ```
 
 ```bash
@@ -1560,7 +1596,7 @@ spec:
 | `lifecycle` | Yes | TTL, idle timeout, teardown policy |
 | `runtime` | Yes | Substrate (ec2/ecs), instance type, spot, region |
 | `execution` | No | Shell, working directory, env vars |
-| `network` | Yes | DNS suffixes, hosts, HTTP methods |
+| `network` | Yes | DNS suffixes, hosts, HTTP methods, `httpsOnly` toggle |
 | `sourceAccess` | No | GitHub repos, refs, permissions |
 | `identity` | No | IAM session duration, allowed regions |
 | `secrets` | No | SSM parameter path allowlist |
@@ -1570,11 +1606,26 @@ spec:
 | `agent` | No | Concurrent tasks, timeout, allowed tools |
 | `artifacts` | No | Paths to collect on exit, max size, replication region |
 
+### Profile network.httpsOnly
+
+`spec.network.httpsOnly` blocks plain HTTP traffic, allowing only HTTPS. On EC2, this is enforced at the security group layer. On Docker, the HTTP proxy enforces it.
+
+```yaml
+spec:
+  network:
+    httpsOnly: true
+    egress:
+      allowedDNSSuffixes:
+        - ".github.com"
+```
+
+When `httpsOnly: true`, any attempt to connect over plain HTTP (port 80) is blocked. This is useful for hardened profiles where all external communication should be encrypted.
+
 ---
 
 ### Profile spec.email
 
-`spec.email` controls sandbox email behavior — signed outbound email, verified inbound email, and encrypted messages for inter-sandbox communication.
+`spec.email` controls sandbox email behavior -- signed outbound email, verified inbound email, and encrypted messages for inter-sandbox communication.
 
 ```yaml
 spec:

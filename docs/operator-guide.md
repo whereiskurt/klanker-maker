@@ -48,7 +48,7 @@ This is where sandboxes live. Resources include:
 - ECS spot handler Lambda (Python, EventBridge-triggered)
 - EventBridge Scheduler role for TTL enforcement
 - CloudWatch log groups for sandbox and Lambda logs
-- DynamoDB budget tables (future)
+- DynamoDB tables: `km-budgets` (budget enforcement), `km-identities` (sandbox identity), `km-sandboxes` (sandbox metadata)
 
 ---
 
@@ -1294,6 +1294,61 @@ terragrunt apply
 Ed25519 key pairs are generated at `km create` time using KMS. The private key is stored encrypted in KMS (alias: `km-platform` or from `KM_PLATFORM_KMS_KEY_ARN`). The public key is stored in plaintext in `km-identities` for verification by other sandboxes.
 
 See [Multi-Agent Email](multi-agent-email.md) for the full signed email and NaCl encryption protocol.
+
+---
+
+## 16b. DynamoDB km-sandboxes Table
+
+The `km-sandboxes` table stores sandbox metadata -- the same data that was previously stored as `metadata.json` files in S3. Moving to DynamoDB makes `km list` significantly faster (single Scan vs N+1 S3 GetObject calls) and makes `km lock`/`km unlock` atomic (conditional UpdateItem, no read-modify-write race condition).
+
+### Table Schema
+
+| Attribute | Type | Role |
+|-----------|------|------|
+| `sandbox_id` | String (S) | Hash key |
+| `profile` | String (S) | Profile name used to create the sandbox |
+| `substrate` | String (S) | `ec2`, `ecs`, or `docker` |
+| `region` | String (S) | AWS region |
+| `status` | String (S) | Current status: `running`, `paused`, `stopped`, `killed`, `reaped` |
+| `alias` | String (S) | Human-friendly alias |
+| `locked` | Boolean (BOOL) | Whether the sandbox is locked (prevents destroy/stop/pause) |
+| `locked_at` | String (S) | ISO8601 timestamp of when lock was applied |
+| `created_at` | String (S) | ISO8601 creation timestamp |
+| `ttl_expiry` | String (S) | ISO8601 TTL expiry timestamp |
+| `ttl_remaining` | String (S) | Human-readable TTL remaining |
+
+### Provisioning
+
+The `km-sandboxes` table is created by `km init`:
+
+```bash
+km init --region us-east-1
+```
+
+The table uses `PAY_PER_REQUEST` billing mode. No DynamoDB Streams are needed.
+
+### Backward Compatibility
+
+All commands that read sandbox metadata try DynamoDB first. If the `km-sandboxes` table does not exist (`ResourceNotFoundException`), they fall back to S3 (`metadata.json` files in the state bucket). This means the platform works without the table -- it just uses the slower S3 path.
+
+S3 is still used for:
+- Terraform state files
+- Sandbox artifacts (uploaded on exit)
+- Profile YAML copies
+- Rsync snapshots
+- Inbound email storage
+
+### Lambda Environment
+
+Lambda functions that need to read sandbox metadata (TTL handler, lifecycle handler) use the `SANDBOX_TABLE_NAME` environment variable:
+
+```hcl
+environment {
+  variables = {
+    SANDBOX_TABLE_NAME = "km-sandboxes"
+  }
+}
+```
 
 ---
 

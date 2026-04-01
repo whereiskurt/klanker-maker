@@ -124,7 +124,7 @@ The `km` CLI selects the right AWS profile per command. Commands are grouped by 
 |---------|-------------|--------------|
 | `km validate <profile>` | - | Check a profile YAML against the schema |
 | `km create <profile>` | `klanker-terraform` | Provision a sandbox from a profile |
-| `km list` | `klanker-terraform` | List sandboxes with live status |
+| `km list` | `klanker-terraform` | List sandboxes with live status (DynamoDB scan; `--wide` for all columns) |
 | `km status <sandbox>` | `klanker-terraform` | Budget, identity, idle countdown, resources |
 | `km shell <sandbox>` | `klanker-terraform` | SSM session (`--root` for operator, `--ports` for forwarding) |
 | `km agent <sandbox>` | `klanker-terraform` | Launch AI agent in sandbox (`--claude`, `--codex`) |
@@ -151,7 +151,8 @@ The `km` CLI selects the right AWS profile per command. Commands are grouped by 
 | `km lock <sandbox>` | `klanker-terraform` | Lock sandbox to prevent accidental destroy/stop/pause |
 | `km unlock <sandbox>` | `klanker-terraform` | Unlock sandbox, re-enable lifecycle commands |
 | `km rsync save/load <sandbox>` | `klanker-terraform` | Save/restore sandbox home directory snapshots |
-| `km destroy <sandbox>` | `klanker-terraform` | Teardown sandbox (`--remote` for Lambda-dispatched) |
+| `km destroy <sandbox>` | `klanker-terraform` | Teardown sandbox (`--remote` by default; forced local for Docker substrate) |
+| `km kill <sandbox>` | `klanker-terraform` | Alias for `km destroy` |
 
 **Teardown (reverse of setup)**
 
@@ -239,18 +240,18 @@ Editable source: [`docs/sandbox-architecture.excalidraw`](docs/sandbox-architect
 
 1. **Configure** with `km configure` (alias: `km conf`) - set your domain, account IDs, SSO URL, region (once)
 2. **Bootstrap** with `km bootstrap` - deploys SCP, KMS key, artifacts bucket (once)
-3. **Initialize** with `km init --region us-east-1` - builds Lambdas/sidecars, provisions VPC, DynamoDB, SES, TTL handler (once per region)
+3. **Initialize** with `km init --region us-east-1` - builds Lambdas/sidecars, provisions VPC, DynamoDB (budgets, identities, sandboxes), SES, TTL handler (once per region)
 4. **Check** with `km doctor` - validates all 12 platform health checks, assumes cross-account role for SCP verification
 5. **Define** a SandboxProfile in YAML - budget, lifecycle, network policy, identity, sidecars
 6. **Validate** with `km validate <profile.yaml>`
 7. **Create** with `km create <profile>` - compiles to Terragrunt inputs, provisions infrastructure, shows elapsed time
-8. **Monitor** with `km list` (numbered, live EC2 status) / `km status` (budget, identity, idle countdown with color) / `km logs` / `km otel` (telemetry + spend)
+8. **Monitor** with `km list` (alias-first, lock icons, narrow default, `--wide` for all columns) / `km status` (budget, identity, idle countdown with color) / `km logs` / `km otel` (telemetry + spend)
 9. **Connect** with `km shell 1` (restricted user) or `km shell 1 --root` (operator access)
 10. **Port forward** with `km shell 1 --ports 8080:80,3000` (Docker-style syntax)
 11. **Extend** with `km extend 1 2h` - add time before TTL expires
 12. **Stop** with `km stop 1` - stop instance, preserve infrastructure for restart
 13. **Top-up** with `km budget add 1 --compute 5.00` - add compute or AI budget
-14. **Destroy** with `km destroy 1` (local) or `km destroy 1 --remote` (Lambda-dispatched)
+14. **Destroy** with `km destroy 1` (Lambda-dispatched by default) or `km destroy 1 --remote=false` (local terragrunt)
 15. **Teardown** with `km uninit --region us-east-1` - reverse of init, destroys all regional infrastructure
 
 ## SandboxProfile
@@ -541,7 +542,7 @@ km CLI / ConfigUI
 ├── cmd/km/                  CLI entry point
 ├── cmd/configui/            Web dashboard (Go + embedded HTML)
 ├── cmd/ttl-handler/         Lambda: TTL expiry + artifact upload
-├── internal/app/cmd/        Cobra commands (configure, bootstrap, init, uninit, validate, create, destroy, stop, extend, list, status, logs, budget, shell, doctor, otel)
+├── internal/app/cmd/        Cobra commands (configure, bootstrap, init, uninit, validate, create, destroy/kill, pause, lock, unlock, stop, extend, list, status, logs, budget, shell, doctor, otel)
 ├── internal/app/config/     Configuration (config.yaml, env vars, CLI flags)
 ├── pkg/
 │   ├── profile/             SandboxProfile schema, validation, inheritance
@@ -568,6 +569,7 @@ km CLI / ConfigUI
     │   ├── scp/             SCP sandbox containment (deployed to management account)
     │   ├── dynamodb-budget/ Budget enforcement table
     │   ├── dynamodb-identities/ Sandbox identity public key table
+    │   ├── dynamodb-sandboxes/ Sandbox metadata table (km-sandboxes)
     │   ├── s3-replication/  Cross-region artifact replication
     │   └── ttl-handler/     Lambda: TTL expiry → artifacts + email + self-cleanup
     └── live/                Terragrunt hierarchy (site.hcl, per-sandbox isolation)
@@ -598,8 +600,9 @@ km doctor
 km create profiles/restricted-dev.yaml
 km create --on-demand profiles/sealed.yaml  # skip spot, use on-demand
 
-# List sandboxes (numbered, live EC2 status)
+# List sandboxes (narrow default — alias first, live status)
 km list
+km list --wide    # show profile, substrate, region columns
 
 # Status with budget, identity, idle countdown
 km status 1
@@ -619,6 +622,13 @@ km agent 1 --claude -- -p "fix tests"  # headless with prompt
 # Extend TTL
 km extend 1 2h
 
+# Pause (hibernate) — preserves RAM state
+km pause 1
+
+# Lock to prevent accidental destroy/stop/pause
+km lock 1
+km unlock 1 --yes
+
 # Stop without destroying
 km stop 1
 
@@ -631,9 +641,13 @@ km otel 1 --timeline       # conversation turns with cost
 km otel 1 --prompts        # user prompts
 km otel 1 --tools          # tool call history
 
-# Destroy (local or remote)
-km destroy 1                    # local terragrunt destroy
-km destroy 1 --remote --yes     # Lambda-dispatched, no prompt
+# Destroy (remote by default, or local)
+km destroy 1                    # Lambda-dispatched (default)
+km destroy 1 --yes              # skip confirmation prompt
+km destroy 1 --remote=false     # local terragrunt destroy
+
+# km kill is an alias for km destroy
+km kill 1 --yes
 
 # Teardown region infrastructure
 km uninit --region us-east-1
@@ -691,9 +705,10 @@ km uninit --region us-east-1
 | 33 | EC2 Storage Customization & AMI Selection | Planned |
 | 34 | Agent Profiles - Agent Orchestrator, Goose, and Codex | **Complete** |
 | 35 | MITM CA Trust for Python, Node, and Non-System SSL Libraries | **Complete** |
-| 36 | km-sandbox Base Container Image | Planned |
-| 37 | Docker Compose Local Substrate | Planned |
+| 36 | km-sandbox Base Container Image | **Complete** |
+| 37 | Docker Compose Local Substrate | **Complete** |
 | 38 | EKS / Kubernetes Substrate | Planned |
+| 39 | DynamoDB Metadata Migration (S3 to DynamoDB) | **Complete** |
 
 See [.planning/ROADMAP.md](.planning/ROADMAP.md) for detailed phase breakdowns and success criteria.
 
