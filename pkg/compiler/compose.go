@@ -155,9 +155,21 @@ services:
       - km-net
     restart: unless-stopped
 
+  km-audit-init:
+    image: {{ .MainImage }}
+    container_name: km-{{ .SandboxID }}-audit-init
+    entrypoint: ["/bin/sh", "-c", "mkfifo /run/km/audit-pipe 2>/dev/null; chmod 666 /run/km/audit-pipe; echo audit-pipe created"]
+    volumes:
+      - audit-vol:/run/km
+    networks:
+      - km-net
+
   km-audit-log:
     image: {{ .AuditLogImage }}
     container_name: km-{{ .SandboxID }}-audit-log
+    depends_on:
+      km-audit-init:
+        condition: service_completed_successfully
     environment:
       AUDIT_LOG_DEST: "s3"
       SANDBOX_ID: "{{ .SandboxID }}"
