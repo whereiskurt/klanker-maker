@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 40-ebpf-network-enforcement/40-02-PLAN.md
-last_updated: "2026-04-01T07:05:55.399Z"
+stopped_at: Completed 40-ebpf-network-enforcement/40-04-PLAN.md
+last_updated: "2026-04-01T07:06:16.232Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 41
@@ -161,6 +161,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 40-ebpf-network-enforcement P01 | 4min | 2 tasks | 8 files |
 | Phase 40-ebpf-network-enforcement P03 | 221s | 2 tasks | 3 files |
 | Phase 40-ebpf-network-enforcement P02 | 224s | 2 tasks | 4 files |
+| Phase 40-ebpf-network-enforcement P04 | 3min | 1 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -436,6 +437,7 @@ Recent decisions affecting current work:
 - [Phase 40-ebpf-network-enforcement]: Link fields stored in Enforcer struct to prevent GC-triggered cgroup program detachment
 - [Phase 40-ebpf-network-enforcement]: CollectionSpec.Variables injection before LoadAndAssign — volatile consts baked at kernel load time
 - [Phase 40-ebpf-network-enforcement]: RecoverPinned reconstructs Enforcer from bpffs handles only — Config not stored in bpffs
+- [Phase 40-ebpf-network-enforcement]: SEC(classifier/sni_filter) cls_bpf not TCX: AL2023 kernel 6.1 does not support TCX; best-effort pass-through on all parse failures prevents blocking fragmented ClientHellos
 
 ### Roadmap Evolution
 
@@ -490,6 +492,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-01T07:05:55.396Z
-Stopped at: Completed 40-ebpf-network-enforcement/40-02-PLAN.md
+Last session: 2026-04-01T07:06:16.228Z
+Stopped at: Completed 40-ebpf-network-enforcement/40-04-PLAN.md
 Resume file: None
