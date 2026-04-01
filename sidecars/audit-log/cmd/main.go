@@ -213,18 +213,19 @@ func buildDest(ctx context.Context, destName, cwLogGroup string, cwClient kmaws.
 
 	case "s3":
 		bucket := envOr("KM_ARTIFACTS_BUCKET", "")
-		sandboxID := envOr("SANDBOX_ID", "unknown")
+		sid := envOr("SANDBOX_ID", "unknown")
 		if bucket == "" {
 			log.Warn().Msg("audit-log: KM_ARTIFACTS_BUCKET not set, S3 dest falling back to stdout")
 			inner = auditlog.NewStdoutDest(os.Stdout)
 		} else {
-			s3Backend, s3Err := newS3Backend(ctx, envOr("AWS_REGION", "us-east-1"))
-			if s3Err != nil {
-				log.Warn().Err(s3Err).Msg("audit-log: failed to create S3 client, falling back to stdout")
-				inner = auditlog.NewStdoutDest(os.Stdout)
-			} else {
-				inner = auditlog.NewS3Dest(s3Backend, bucket, sandboxID, os.Stdout)
+			region := envOr("AWS_REGION", "us-east-1")
+			// Use lazy init — cred-refresh container may not have written credentials yet.
+			// The S3 client is created on the first flush (~30s), giving creds time to appear.
+			factory := func() (auditlog.S3Backend, error) {
+				return newS3Backend(ctx, region)
 			}
+			inner = auditlog.NewS3DestLazy(factory, bucket, sid, os.Stdout)
+			log.Info().Str("bucket", bucket).Msg("audit-log: S3 dest configured (lazy init on first flush)")
 		}
 
 	default: // "stdout" or anything else

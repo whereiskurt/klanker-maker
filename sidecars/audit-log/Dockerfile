@@ -8,5 +8,6 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /sidecar ./sidecars/audit-
 
 # Stage 2: Final image
 FROM scratch
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /sidecar /sidecar
 ENTRYPOINT ["/sidecar"]

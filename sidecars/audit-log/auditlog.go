@@ -277,11 +277,18 @@ type S3Backend interface {
 	PutObject(ctx context.Context, bucket, key string, data []byte) error
 }
 
+// S3BackendFactory creates an S3Backend on demand. Used for lazy initialization
+// so the sidecar can start before credentials are available.
+type S3BackendFactory func() (S3Backend, error)
+
 // s3Dest buffers audit events in memory and flushes them to S3 as NDJSON files.
 // Each flush produces one S3 object at: audit/{sandboxID}/{timestamp}.ndjson
 // Events are also written to stdout as a local fallback (visible in docker logs).
+// The S3 client is initialized lazily on first flush to handle credential race conditions
+// (cred-refresh container may not have written credentials when audit-log starts).
 type s3Dest struct {
 	backend   S3Backend
+	factory   S3BackendFactory // lazy init — called on first flush if backend is nil
 	bucket    string
 	sandboxID string
 	buf       []AuditEvent
@@ -290,9 +297,23 @@ type s3Dest struct {
 
 // NewS3Dest creates a Destination that buffers events and flushes to S3.
 // Events are also written to stdout for local docker log visibility.
+// The S3Backend can be nil — if a factory is provided via NewS3DestLazy,
+// it will be initialized on first flush.
 func NewS3Dest(backend S3Backend, bucket, sandboxID string, w io.Writer) Destination {
 	return &s3Dest{
 		backend:   backend,
+		bucket:    bucket,
+		sandboxID: sandboxID,
+		stdout:    NewStdoutDest(w),
+	}
+}
+
+// NewS3DestLazy creates an S3 Destination with lazy backend initialization.
+// The factory is called on the first flush, giving the cred-refresh container
+// time to write credentials before the S3 client is constructed.
+func NewS3DestLazy(factory S3BackendFactory, bucket, sandboxID string, w io.Writer) Destination {
+	return &s3Dest{
+		factory:   factory,
 		bucket:    bucket,
 		sandboxID: sandboxID,
 		stdout:    NewStdoutDest(w),
@@ -319,9 +340,30 @@ func (d *s3Dest) Flush(ctx context.Context) error {
 	return d.flush(ctx)
 }
 
+func (d *s3Dest) ensureBackend() error {
+	if d.backend != nil {
+		return nil
+	}
+	if d.factory == nil {
+		return fmt.Errorf("no S3 backend or factory configured")
+	}
+	backend, err := d.factory()
+	if err != nil {
+		return fmt.Errorf("lazy S3 backend init: %w", err)
+	}
+	d.backend = backend
+	log.Info().Str("bucket", d.bucket).Msg("audit-log: S3 backend initialized (lazy)")
+	return nil
+}
+
 func (d *s3Dest) flush(ctx context.Context) error {
 	if len(d.buf) == 0 {
 		return nil
+	}
+
+	if err := d.ensureBackend(); err != nil {
+		log.Warn().Err(err).Int("buffered", len(d.buf)).Msg("audit-log: S3 not ready, events buffered for next flush")
+		return nil // don't drop events — keep buffer, retry next flush
 	}
 
 	// Build NDJSON payload
