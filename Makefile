@@ -31,11 +31,20 @@ OTELCOL_URL     := https://github.com/open-telemetry/opentelemetry-collector-rel
 
 .PHONY: build build-km bump-version sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas build-create-handler build-email-create-handler push-create-handler clean fetch-otelcol sandbox-image smoke-test-sandbox generate-ebpf
 
-## generate-ebpf: compile BPF C programs via bpf2go (requires clang on Linux)
-## Regenerates pkg/ebpf/bpf_bpfel.go and pkg/ebpf/bpf_bpfel.o
-## The generated files are committed so make build works without clang.
+## generate-ebpf: compile BPF C programs via bpf2go inside Docker (works from macOS)
+## Regenerates pkg/ebpf/bpf_bpfel.go, pkg/ebpf/bpf_bpfel.o,
+##             pkg/ebpf/sni/sni_bpfel.go, pkg/ebpf/sni/sni_bpfel.o
+## The generated files are committed so make build works without clang or Docker.
 generate-ebpf:
-	cd pkg/ebpf && go generate
+	docker build --quiet -f Dockerfile.ebpf-generate -t km-ebpf-generate:latest .
+	docker run --rm -v $(PWD):/src km-ebpf-generate:latest sh -c \
+	  "cd /src/pkg/ebpf && go generate && cd /src/pkg/ebpf/sni && go generate"
+	@echo ""
+	@echo "Generated eBPF loader files:"
+	@echo "  pkg/ebpf/bpf_bpfel.go"
+	@echo "  pkg/ebpf/bpf_bpfel.o"
+	@echo "  pkg/ebpf/sni/sni_bpfel.go"
+	@echo "  pkg/ebpf/sni/sni_bpfel.o"
 
 ## bump-version: increment the patch version in VERSION file
 bump-version:

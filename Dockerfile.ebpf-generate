@@ -1,0 +1,28 @@
+# Dockerfile.ebpf-generate — Build-tool image for generating bpf2go loader files.
+#
+# This image is NOT deployed anywhere. It is used only by `make generate-ebpf`
+# to cross-compile BPF C programs from macOS (or any host without clang/Linux
+# kernel headers).
+#
+# Usage:
+#   make generate-ebpf
+#
+# The generated files (bpf_bpfel.go, bpf_bpfel.o, sni_bpfel.go, sni_bpfel.o)
+# land in the host filesystem via the bind mount and are committed to the repo so
+# that `make build` works without clang or Docker installed.
+#
+# Note: The BPF C programs include vmlinux.h and bpf_helpers.h from
+# pkg/ebpf/headers/ — no kernel-headers package is required.
+
+FROM golang:1.25-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clang \
+    llvm \
+    libbpf-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install bpf2go at the version matching go.mod (github.com/cilium/ebpf v0.21.0)
+RUN go install github.com/cilium/ebpf/cmd/bpf2go@v0.21.0
+
+WORKDIR /src
