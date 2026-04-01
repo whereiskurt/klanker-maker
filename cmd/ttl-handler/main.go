@@ -14,9 +14,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -28,6 +26,7 @@ import (
 	lambdaruntime "github.com/aws/aws-lambda-go/lambda"
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
+	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	ec2pkg "github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	iampkg "github.com/aws/aws-sdk-go-v2/service/iam"
@@ -75,17 +74,19 @@ type SchedulerAPI = awspkg.SchedulerAPI
 
 // TTLHandler holds injected dependencies for testability.
 type TTLHandler struct {
-	S3Client      S3GetPutAPI
-	SESClient     SESV2API
-	Scheduler     SchedulerAPI
-	Bucket        string
-	StateBucket   string // S3 bucket holding terraform state
-	StatePrefix   string // state key prefix (e.g. "tf-km")
-	Region        string // AWS region (e.g. "us-east-1")
-	RegionLabel   string // short region label (e.g. "use1")
-	CWClient      awspkg.CWLogsAPI
-	OperatorEmail string
-	Domain        string
+	S3Client         S3GetPutAPI
+	DynamoClient     awspkg.SandboxMetadataAPI
+	SandboxTableName string
+	SESClient        SESV2API
+	Scheduler        SchedulerAPI
+	Bucket           string
+	StateBucket      string // S3 bucket holding terraform state
+	StatePrefix      string // state key prefix (e.g. "tf-km")
+	Region           string // AWS region (e.g. "us-east-1")
+	RegionLabel      string // short region label (e.g. "use1")
+	CWClient         awspkg.CWLogsAPI
+	OperatorEmail    string
+	Domain           string
 	// TeardownFunc destroys the sandbox resources after TTL expiry or idle detection.
 	// If nil, teardown is skipped (backward compatible with existing tests).
 	TeardownFunc func(ctx context.Context, sandboxID string) error
@@ -156,10 +157,8 @@ func (h *TTLHandler) handleExtend(ctx context.Context, event TTLEvent) error {
 		return fmt.Errorf("invalid duration %q: %w", event.Duration, err)
 	}
 
-	// Read current metadata (need S3ListAPI-compatible client)
-	awsCfgForMeta, _ := awspkg.LoadAWSConfig(ctx, "")
-	metaS3Client := s3.NewFromConfig(awsCfgForMeta)
-	meta, err := awspkg.ReadSandboxMetadata(ctx, metaS3Client, h.StateBucket, event.SandboxID)
+	// Read current metadata from DynamoDB.
+	meta, err := awspkg.ReadSandboxMetadataDynamo(ctx, h.DynamoClient, h.SandboxTableName, event.SandboxID)
 	if err != nil {
 		return fmt.Errorf("read metadata: %w", err)
 	}
@@ -203,15 +202,11 @@ func (h *TTLHandler) handleExtend(ctx context.Context, event TTLEvent) error {
 		return fmt.Errorf("create schedule: %w", err)
 	}
 
-	// Update metadata
+	// Update metadata in DynamoDB.
 	meta.TTLExpiry = &newExpiry
-	metaJSON, _ := json.Marshal(meta)
-	h.S3Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      awssdk.String(h.StateBucket),
-		Key:         awssdk.String("tf-km/sandboxes/" + event.SandboxID + "/metadata.json"),
-		Body:        bytes.NewReader(metaJSON),
-		ContentType: awssdk.String("application/json"),
-	})
+	if writeErr := awspkg.WriteSandboxMetadataDynamo(ctx, h.DynamoClient, h.SandboxTableName, meta); writeErr != nil {
+		log.Warn().Err(writeErr).Str("sandbox_id", event.SandboxID).Msg("failed to update metadata in DynamoDB (non-fatal)")
+	}
 
 	log.Info().Str("sandbox_id", event.SandboxID).Time("new_expiry", newExpiry).Msg("TTL extended")
 	return nil
@@ -265,7 +260,7 @@ func (h *TTLHandler) handleDestroy(ctx context.Context, event TTLEvent) error {
 			ArtifactPaths:     artifactPaths,
 		}
 		// Read sandbox metadata for status-like fields (best-effort).
-		if meta := readMetadataBestEffort(ctx, h.S3Client, h.StateBucket, sandboxID); meta != nil {
+		if meta := readMetadataBestEffort(ctx, h.DynamoClient, h.SandboxTableName, sandboxID); meta != nil {
 			detail.ProfileName = meta.ProfileName
 			detail.Substrate = meta.Substrate
 			detail.Region = meta.Region
@@ -317,27 +312,14 @@ func eventLabel(event TTLEvent) string {
 	}
 }
 
-// readMetadataBestEffort reads sandbox metadata from S3 using GetObject directly.
+// readMetadataBestEffort reads sandbox metadata from DynamoDB by sandbox ID.
 // Returns nil on any error — callers should treat metadata as optional enrichment.
-func readMetadataBestEffort(ctx context.Context, client S3GetPutAPI, bucket, sandboxID string) *awspkg.SandboxMetadata {
-	key := "tf-km/sandboxes/" + sandboxID + "/metadata.json"
-	resp, err := client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: awssdk.String(bucket),
-		Key:    awssdk.String(key),
-	})
+func readMetadataBestEffort(ctx context.Context, client awspkg.SandboxMetadataAPI, tableName, sandboxID string) *awspkg.SandboxMetadata {
+	meta, err := awspkg.ReadSandboxMetadataDynamo(ctx, client, tableName, sandboxID)
 	if err != nil {
 		return nil
 	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil
-	}
-	var meta awspkg.SandboxMetadata
-	if json.Unmarshal(data, &meta) != nil {
-		return nil
-	}
-	return &meta
+	return meta
 }
 
 // downloadProfileFromS3 retrieves the sandbox profile YAML stored at
@@ -474,11 +456,14 @@ module "sandbox" {
 	// Simpler than running a second terraform destroy for the sub-module.
 	cleanupBudgetEnforcer(ctx, h, sandboxID)
 
-	// Clean up S3 metadata so km list no longer shows this sandbox
-	if h.StateBucket != "" {
-		if delErr := awspkg.DeleteSandboxMetadata(ctx, h.S3Client, h.StateBucket, sandboxID); delErr != nil {
-			log.Warn().Err(delErr).Str("sandbox_id", sandboxID).Msg("failed to delete metadata (non-fatal)")
+	// Clean up DynamoDB metadata so km list no longer shows this sandbox.
+	if h.DynamoClient != nil {
+		if delErr := awspkg.DeleteSandboxMetadataDynamo(ctx, h.DynamoClient, h.SandboxTableName, sandboxID); delErr != nil {
+			log.Warn().Err(delErr).Str("sandbox_id", sandboxID).Msg("failed to delete DynamoDB metadata (non-fatal)")
 		}
+	}
+	// Also clean up budget-enforcer state file from S3.
+	if h.StateBucket != "" {
 		// Also clean up budget-enforcer state file
 		budgetStateKey := fmt.Sprintf("tf-km/sandboxes/%s/budget-enforcer/terraform.tfstate", sandboxID)
 		h.S3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
@@ -629,21 +614,29 @@ func main() {
 		region = "us-east-1"
 	}
 
+	sandboxTableName := os.Getenv("SANDBOX_TABLE_NAME")
+	if sandboxTableName == "" {
+		sandboxTableName = "km-sandboxes"
+	}
+
 	s3Client := s3.NewFromConfig(awsCfg)
+	dynamoClient := dynamodbpkg.NewFromConfig(awsCfg)
 
 	h := &TTLHandler{
-		S3Client:      s3Client,
-		SESClient:     sesv2.NewFromConfig(awsCfg),
-		Scheduler:     scheduler.NewFromConfig(awsCfg),
-		CWClient:      cloudwatchlogs.NewFromConfig(awsCfg),
-		Bucket:        bucket,
-		StateBucket:   os.Getenv("KM_STATE_BUCKET"),
-		StatePrefix:   os.Getenv("KM_STATE_PREFIX"),
-		Region:        region,
-		RegionLabel:   os.Getenv("KM_REGION_LABEL"),
-		OperatorEmail: os.Getenv("KM_OPERATOR_EMAIL"),
-		Domain:        domain,
-		TeardownFunc: nil, // set below
+		S3Client:         s3Client,
+		DynamoClient:     dynamoClient,
+		SandboxTableName: sandboxTableName,
+		SESClient:        sesv2.NewFromConfig(awsCfg),
+		Scheduler:        scheduler.NewFromConfig(awsCfg),
+		CWClient:         cloudwatchlogs.NewFromConfig(awsCfg),
+		Bucket:           bucket,
+		StateBucket:      os.Getenv("KM_STATE_BUCKET"),
+		StatePrefix:      os.Getenv("KM_STATE_PREFIX"),
+		Region:           region,
+		RegionLabel:      os.Getenv("KM_REGION_LABEL"),
+		OperatorEmail:    os.Getenv("KM_OPERATOR_EMAIL"),
+		Domain:           domain,
+		TeardownFunc:     nil, // set below
 	}
 
 	// Use terraform-based teardown if terraform binary is bundled.
