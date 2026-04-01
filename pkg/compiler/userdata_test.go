@@ -677,3 +677,116 @@ func extractLines(s, substr string) string {
 	}
 	return strings.Join(matched, "\n")
 }
+
+// ============================================================
+// Network enforcement mode tests (40-05)
+// ============================================================
+
+// TestUserDataEnforcementDefault verifies that omitted enforcement field produces
+// iptables DNAT rules (proxy mode) and no eBPF section.
+func TestUserDataEnforcementDefault(t *testing.T) {
+	p := baseProfile()
+	// Enforcement is unset — should default to proxy
+	out, err := generateUserData(p, "sb-enf-default", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	// Check for actual iptables commands (not just the section comment)
+	if !strings.Contains(out, "iptables -t nat") {
+		t.Error("expected iptables -t nat rules when enforcement is unset (default proxy)")
+	}
+	if strings.Contains(out, "eBPF cgroup enforcement") {
+		t.Error("expected no eBPF section when enforcement is unset (default proxy)")
+	}
+	if strings.Contains(out, "ebpf-attach") {
+		t.Error("expected no km ebpf-attach invocation when enforcement is unset (default proxy)")
+	}
+	if !strings.Contains(out, "export HTTP_PROXY") {
+		t.Error("expected HTTP_PROXY env var set when enforcement is unset (default proxy)")
+	}
+}
+
+// TestUserDataEnforcementProxy verifies that explicit "proxy" enforcement produces
+// iptables rules and no eBPF section.
+func TestUserDataEnforcementProxy(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Network.Enforcement = "proxy"
+	out, err := generateUserData(p, "sb-enf-proxy", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	// Check for actual iptables commands (not just the section comment)
+	if !strings.Contains(out, "iptables -t nat") {
+		t.Error("expected iptables -t nat rules when enforcement is proxy")
+	}
+	if strings.Contains(out, "eBPF cgroup enforcement") {
+		t.Error("expected no eBPF section when enforcement is proxy")
+	}
+	if strings.Contains(out, "ebpf-attach") {
+		t.Error("expected no km ebpf-attach invocation when enforcement is proxy")
+	}
+	if !strings.Contains(out, "export HTTP_PROXY") {
+		t.Error("expected HTTP_PROXY env var when enforcement is proxy")
+	}
+}
+
+// TestUserDataEnforcementEbpf verifies that "ebpf" enforcement produces eBPF section,
+// no iptables rules, no HTTP_PROXY env vars.
+func TestUserDataEnforcementEbpf(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Network.Enforcement = "ebpf"
+	out, err := generateUserData(p, "sb-enf-ebpf", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	// Check for actual iptables commands absence (not just the section comment)
+	if strings.Contains(out, "iptables -t nat") {
+		t.Error("expected no iptables -t nat rules when enforcement is ebpf")
+	}
+	if !strings.Contains(out, "eBPF cgroup enforcement") {
+		t.Error("expected eBPF cgroup enforcement section when enforcement is ebpf")
+	}
+	if !strings.Contains(out, "ebpf-attach") {
+		t.Error("expected km ebpf-attach invocation when enforcement is ebpf")
+	}
+	if !strings.Contains(out, "km.slice") {
+		t.Error("expected cgroup path km.slice when enforcement is ebpf")
+	}
+	if strings.Contains(out, "export HTTP_PROXY") {
+		t.Error("expected no HTTP_PROXY export when enforcement is ebpf (pure eBPF mode)")
+	}
+	if !strings.Contains(out, "Pure eBPF mode") {
+		t.Error("expected 'Pure eBPF mode' message when enforcement is ebpf")
+	}
+}
+
+// TestUserDataEnforcementBoth verifies that "both" enforcement produces both iptables
+// and eBPF sections.
+func TestUserDataEnforcementBoth(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Network.Enforcement = "both"
+	out, err := generateUserData(p, "sb-enf-both", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	// Both iptables and eBPF must be present
+	if !strings.Contains(out, "iptables -t nat") {
+		t.Error("expected iptables -t nat rules when enforcement is both")
+	}
+	if !strings.Contains(out, "eBPF cgroup enforcement") {
+		t.Error("expected eBPF cgroup enforcement section when enforcement is both")
+	}
+	if !strings.Contains(out, "ebpf-attach") {
+		t.Error("expected km ebpf-attach invocation when enforcement is both")
+	}
+	if !strings.Contains(out, "km.slice") {
+		t.Error("expected cgroup path km.slice when enforcement is both")
+	}
+	if !strings.Contains(out, "export HTTP_PROXY") {
+		t.Error("expected HTTP_PROXY env var when enforcement is both (proxy sidecars active)")
+	}
+	// Pure eBPF-only message should NOT appear for "both"
+	if strings.Contains(out, "Pure eBPF mode") {
+		t.Error("expected no 'Pure eBPF mode' message when enforcement is both")
+	}
+}

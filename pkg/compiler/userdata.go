@@ -453,6 +453,7 @@ echo "[km-bootstrap] Shell audit hook installed at /etc/profile.d/km-audit.sh"
 echo "[km-bootstrap] Mail poller started — inbox at /var/mail/km/new/"
 {{- end }}
 
+{{- if or (eq .Enforcement "proxy") (eq .Enforcement "both") }}
 # ============================================================
 # 6. iptables DNAT: redirect DNS and HTTP traffic to sidecars
 # ============================================================
@@ -496,6 +497,60 @@ export no_proxy=169.254.169.254,localhost,127.0.0.1
 export NO_PROXY=169.254.169.254,localhost,127.0.0.1
 PROXYENV
 echo "[km-bootstrap] Proxy env vars configured for shell sessions"
+{{- end }}
+
+{{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
+# ============================================================
+# 6b. eBPF cgroup enforcement: kernel-level DNS/IP allowlisting
+# ============================================================
+echo "[km-bootstrap] Configuring eBPF network enforcement..."
+
+# Create sandbox cgroup for eBPF attachment
+mkdir -p /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope
+
+# Move sandbox user processes to sandbox cgroup
+# (sandbox user shell will be started in this cgroup)
+echo "[km-bootstrap] Sandbox cgroup created at /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope"
+
+# The km binary includes the eBPF enforcer; invoke it to:
+# 1. Load BPF programs from embedded bytecode
+# 2. Attach to sandbox cgroup
+# 3. Start km-dns-resolver daemon on :5353
+# 4. Populate initial allowlist from profile
+# 5. Pin programs to /sys/fs/bpf/km/{{ .SandboxID }}/
+/usr/local/bin/km ebpf-attach \
+  --sandbox-id {{ .SandboxID }} \
+  --dns-port 5353 \
+  --http-proxy-port 3128 \
+  --firewall-mode block \
+  --allowed-dns "{{ .AllowedDNSSuffixes }}" \
+  --allowed-hosts "{{ .AllowedHTTPHosts }}" \
+  --proxy-hosts "{{ .GitHubAllowedRepos }}" \
+  --cgroup /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope &
+
+EBPF_PID=$!
+echo "[km-bootstrap] eBPF enforcer started (PID $EBPF_PID)"
+
+# Wait briefly for BPF programs to attach before starting sandbox user shell
+sleep 2
+
+# Ensure sandbox user's shell runs in the cgroup
+cat > /etc/profile.d/km-cgroup.sh << 'CGROUPEOF'
+# Move current process into sandbox cgroup for eBPF enforcement
+if [ "$(whoami)" = "sandbox" ]; then
+  echo $$ > /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope/cgroup.procs 2>/dev/null || true
+fi
+CGROUPEOF
+
+echo "[km-bootstrap] eBPF enforcement configured"
+{{- end }}
+
+{{- if eq .Enforcement "ebpf" }}
+# With pure eBPF mode, no iptables DNAT and no HTTP_PROXY env vars needed.
+# BPF connect4 handles all traffic redirection at the syscall level.
+# Proxy env vars are NOT set — apps connect directly, BPF enforces.
+echo "[km-bootstrap] Pure eBPF mode — no iptables, no proxy env vars"
+{{- end }}
 
 # ============================================================
 # 6.5. Spot interruption handler (background)
@@ -720,11 +775,15 @@ type userDataParams struct {
 	// via /etc/profile.d/ so they're available in all login shells (SSM sessions).
 	ProfileEnv map[string]string
 	// Claude Code OTEL telemetry (OTEL-01, OTEL-06)
-	ClaudeTelemetryEnabled       bool
-	ClaudeTelemetryLogPrompts    bool
+	ClaudeTelemetryEnabled        bool
+	ClaudeTelemetryLogPrompts     bool
 	ClaudeTelemetryLogToolDetails bool
-	ProfileName                  string
-	Substrate                    string
+	ProfileName                   string
+	Substrate                     string
+	// Enforcement selects the network enforcement mode: "proxy", "ebpf", or "both".
+	// Defaults to "proxy" when the profile field is unset (backwards compatible).
+	// eBPF enforcement is EC2-only in Phase 40.
+	Enforcement string
 }
 
 // otpSecret holds an SSM path and derived env var name for an OTP secret.
@@ -837,6 +896,13 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 	}
 	params.ProfileName = p.Metadata.Name
 	params.Substrate = p.Spec.Runtime.Substrate
+
+	// Populate enforcement mode — default to "proxy" for backwards compatibility.
+	enforcement := p.Spec.Network.Enforcement
+	if enforcement == "" {
+		enforcement = "proxy"
+	}
+	params.Enforcement = enforcement
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, params); err != nil {

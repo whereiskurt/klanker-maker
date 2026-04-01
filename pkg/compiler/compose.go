@@ -10,6 +10,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/rs/zerolog/log"
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
 )
 
@@ -288,6 +289,16 @@ func generateDockerCompose(p *profile.SandboxProfile, sandboxID string, network 
 	if p.Spec.SourceAccess.GitHub != nil {
 		allowedRepos = strings.Join(p.Spec.SourceAccess.GitHub.AllowedRepos, " ")
 		allowedRefs = strings.Join(p.Spec.SourceAccess.GitHub.AllowedRefs, " ")
+	}
+
+	// eBPF enforcement is EC2-only in Phase 40. Docker substrate always uses proxy enforcement.
+	// Log an explicit warning if the profile requested eBPF on a Docker sandbox.
+	profileEnforcement := p.Spec.Network.Enforcement
+	if profileEnforcement == "ebpf" || profileEnforcement == "both" {
+		log.Warn().
+			Str("sandbox_id", sandboxID).
+			Str("profile_enforcement", profileEnforcement).
+			Msg("eBPF enforcement is EC2-only in Phase 40; Docker substrate will use proxy enforcement")
 	}
 
 	// Build image names — use ECR URIs if KM_ACCOUNTS_APPLICATION is set, otherwise local names.
