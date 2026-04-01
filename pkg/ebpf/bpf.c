@@ -18,8 +18,11 @@
  * Build: go generate ./pkg/ebpf/ (requires clang + Linux BPF headers)
  */
 
-#include "headers/vmlinux.h"
-#include "headers/bpf_helpers.h"
+#include <linux/bpf.h>
+#include <linux/in.h>
+#include <linux/ip.h>
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
 #include "headers/common.h"
 
 /* ════════════════════════════════════════════════════════════════════

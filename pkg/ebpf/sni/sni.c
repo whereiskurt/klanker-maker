@@ -20,8 +20,13 @@
  * Requirement: EBPF-NET-10
  */
 
-#include "../headers/vmlinux.h"
-#include "../headers/bpf_helpers.h"
+#include <linux/bpf.h>
+#include <linux/pkt_cls.h>
+#include <linux/if_ether.h>
+#include <linux/ip.h>
+#include <linux/tcp.h>
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
 
 /* ════════════════════════════════════════════════════════════════════
  * Type aliases

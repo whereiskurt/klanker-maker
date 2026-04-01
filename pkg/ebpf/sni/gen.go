@@ -13,4 +13,4 @@
 //	go generate ./pkg/ebpf/sni/
 package sni
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -tags linux sni sni.c -- -I../headers -O2 -g -Wall -Werror
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -tags linux -target amd64 sni sni.c -- -I../headers -O2 -g -Wall -Werror

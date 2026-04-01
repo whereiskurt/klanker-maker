@@ -20,7 +20,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     clang \
     llvm \
     libbpf-dev \
-    && rm -rf /var/lib/apt/lists/*
+    linux-libc-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && ARCH_DIR=$(ls -d /usr/include/*-linux-gnu 2>/dev/null | head -1) \
+    && if [ -n "$ARCH_DIR" ]; then ln -sf "$ARCH_DIR/asm" /usr/include/asm; fi
 
 # Install bpf2go at the version matching go.mod (github.com/cilium/ebpf v0.21.0)
 RUN go install github.com/cilium/ebpf/cmd/bpf2go@v0.21.0
