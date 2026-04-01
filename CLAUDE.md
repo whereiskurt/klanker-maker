@@ -19,6 +19,46 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 - `km otel <sandbox-id>` — OTEL telemetry + AI spend summary (--prompts, --events, --tools, --timeline)
 - `km info` — platform configuration, accounts, operator email, email-to-create
 
+## Email (inside a sandbox)
+
+### Checking inbox
+
+Inbound email is synced from S3 to the local filesystem by `km-mail-poller` (every 60s).
+New messages appear as raw `.eml` files in `/var/mail/km/new/`. After processing, move them
+to `/var/mail/km/processed/` so they are not re-read.
+
+```bash
+# List new messages
+ls /var/mail/km/new/
+
+# Read a message
+cat /var/mail/km/new/<message-id>
+```
+
+### Sending email
+
+Send outbound email via the SES API. The sandbox IAM role restricts `ses:FromAddress`
+to `$KM_EMAIL_ADDRESS`, so always use that as the sender.
+
+```bash
+aws sesv2 send-email \
+  --from-email-address "$KM_EMAIL_ADDRESS" \
+  --destination "ToAddresses=recipient@sandboxes.example.com" \
+  --content "Simple={Subject={Data='subject here'},Body={Text={Data='body here'}}}"
+```
+
+### Key environment variables
+
+| Variable | Description |
+|----------|-------------|
+| `KM_EMAIL_ADDRESS` | This sandbox's email address (`{sandbox-id}@sandboxes.{domain}`) |
+| `KM_SANDBOX_FROM_EMAIL` | Alias for `KM_EMAIL_ADDRESS` (same value) |
+| `KM_SANDBOX_ID` | Sandbox identifier |
+| `KM_SANDBOX_DOMAIN` | Email domain (e.g. `sandboxes.klankermaker.ai`) |
+| `KM_ARTIFACTS_BUCKET` | S3 bucket backing the mail poller |
+
+See `docs/multi-agent-email.md` for full details on SES setup, IAM policy, and cross-sandbox orchestration.
+
 ## Architecture
 
 - `cmd/km/` — CLI entry point
