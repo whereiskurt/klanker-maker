@@ -828,21 +828,144 @@ Plans:
 - [ ] 39-02-PLAN.md — Terraform module, IAM permissions, km init ordering, config field
 - [ ] 39-03-PLAN.md — Switch all 22 CLI + Lambda call sites from S3 to DynamoDB
 
-### Phase 40: eBPF TC/cgroup network enforcement layer - kernel-level DNS HTTP TLS-SNI allowlisting as toggleable alternative to iptables DNAT proxy sidecars, fixes root bypass
+### Phase 40: eBPF cgroup network enforcement layer — kernel-level DNS/IP allowlisting as toggleable alternative to iptables DNAT, fixes root-in-sandbox bypass
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Replace iptables DNAT + userspace proxy with eBPF cgroup programs for L3/L4 network enforcement. Sandboxed processes cannot bypass enforcement even with root — eBPF programs attached to cgroups require `CAP_BPF` in the host namespace to detach, which the sandbox never has. DNS queries are intercepted and resolved by a userspace daemon that populates BPF IP allowlist maps; only traffic requiring L7 inspection (GitHub per-repo filtering) is redirected to the existing MITM proxy. Profile schema gains `spec.network.enforcement` toggle (`ebpf | proxy | both`) so operators can choose per-profile. Programs are pinned to bpffs so enforcement survives CLI process exit.
+
+**Architecture (modeled after [lawrencegripper/ebpf-cgroup-firewall](https://github.com/lawrencegripper/ebpf-cgroup-firewall)):**
+```
+Layer 1: cgroup/connect4 (BPF_PROG_TYPE_CGROUP_SOCK_ADDR, kernel 4.17+)
+  → Intercepts ALL connect() from sandbox cgroup
+  → Blocks disallowed IPs before SYN is sent (return 0 = EPERM)
+  → Can rewrite dest IP/port (DNAT replacement, no iptables)
+  → Redirects GitHub/Bedrock traffic to local MITM proxy for L7 inspection
+
+Layer 2: cgroup/sendmsg4 (BPF_PROG_TYPE_CGROUP_SOCK_ADDR, kernel 4.18+)
+  → Intercepts all UDP sendmsg (DNS queries on port 53)
+  → Redirects DNS to userspace km-dns-resolver daemon
+
+Layer 3: cgroup_skb/egress (BPF_PROG_TYPE_CGROUP_SKB)
+  → Packet-level defense-in-depth IP allowlist
+  → Catches raw socket traffic that bypasses connect() syscall
+  → Catches hardcoded IPs that bypass DNS
+
+Layer 4 (best-effort): TC egress classifier — TLS SNI check
+  → Parses ClientHello SNI from cleartext TLS handshake
+  → Validates hostname matches expected IP in BPF map
+  → Caveat: Chrome ClientHellos >1500 bytes get TCP-segmented, SNI may be in 2nd segment
+  → Defense-in-depth only, not primary enforcement
+```
+
+**Domain allowlist flow (Cilium FQDN model, [CiliumCon 2025 talk](https://tldrecap.tech/posts/2025/ciliumcon-na/cilium-ebpf-dns-parsing-fqdn-policies/)):**
+1. cgroup/sendmsg4 redirects DNS queries to km-dns-resolver daemon
+2. Daemon resolves domain, checks against profile allowlist (wildcard matching in Go: `strings.HasSuffix`)
+3. If allowed, pushes resolved IPs into BPF `LPM_TRIE` map ([Cloudflare LPM deep dive](https://blog.cloudflare.com/a-deep-dive-into-bpf-lpm-trie-performance-and-optimization/))
+4. cgroup/connect4 does O(prefix_len) IP lookup — nanoseconds, no userspace involved
+5. Denied domains get NXDOMAIN; denied IPs get EPERM on connect()
+
+**Implementation stack:**
+- `cilium/ebpf` pure-Go library (no CGO) — [ebpf-go.dev](https://ebpf-go.dev/guides/getting-started/)
+- `bpf2go` compiles BPF C → Go-embeddable bytecode at build time; only clang needed at build, nothing on target EC2
+- CO-RE (Compile Once Run Everywhere) via vmlinux.h — no kernel headers needed on target
+- BPF ring buffer (kernel 5.8+) for verdict/log events to userspace
+- Pin programs + maps to `/sys/fs/bpf/km/{sandbox-id}/` for persistence across CLI exit
+- AL2023 kernel 6.1 has everything needed: BTF, CO-RE, ring buffer, cgroup BPF, LPM trie
+- No TCX on 6.1 (needs 6.6+) — use TC cls_bpf via netlink for Layer 4, or cgroup hooks for Layers 1-3
+
+**Key reference projects:**
+- [lawrencegripper/ebpf-cgroup-firewall](https://github.com/lawrencegripper/ebpf-cgroup-firewall) — Go+cilium/ebpf, DNS-based domain allowlist with cgroup/connect4 + cgroup_skb/egress, exactly the pattern we need
+- [iximiuz — Transparent Egress Proxy with eBPF and Envoy](https://labs.iximiuz.com/tutorials/ebpf-envoy-egress-dc77ccd7) — cgroup/connect4 DNAT redirect to Envoy, Go attachment code
+- [Cloudflare ebpf_connect4](https://github.com/cloudflare/cloudflare-blog/tree/master/2022-02-connectx/ebpf_connect4) — production cgroup/connect4 C code
+- [cilium/ebpf examples](https://github.com/cilium/ebpf/tree/main/examples) — cgroup_skb, tcx, ringbuffer, uretprobe patterns in Go
+- [nikofil — eBPF Firewall with cgroups](https://nfil.dev/coding/security/ebpf-firewall-with-cgroups/) — hash map IP blocklist with cgroup_skb ingress/egress
+- [eBPF Docs — BPF_PROG_TYPE_CGROUP_SOCK_ADDR](https://docs.ebpf.io/linux/program-type/BPF_PROG_TYPE_CGROUP_SOCK_ADDR/) — connect4/sendmsg4 context fields and semantics
+
+**Requirements:** EBPF-NET-01 through EBPF-NET-12
+- EBPF-NET-01: `pkg/ebpf/` package scaffold with bpf2go pipeline — `go generate` compiles BPF C programs, bpf2go generates Go loader code, `make build` embeds compiled bytecode in km binary
+- EBPF-NET-02: BPF cgroup/connect4 program intercepts all `connect()` syscalls from sandbox cgroup; looks up destination IP in `BPF_MAP_TYPE_LPM_TRIE` allowlist; returns 0 (EPERM) for disallowed IPs, returns 1 (allow) for allowed IPs
+- EBPF-NET-03: BPF cgroup/connect4 program rewrites destination IP/port for connections needing L7 inspection (GitHub, Bedrock endpoints) — redirects to `127.0.0.1:{proxy_port}`, stores original dest in `BPF_MAP_TYPE_HASH` keyed by socket cookie (DNAT replacement without iptables)
+- EBPF-NET-04: BPF cgroup/sendmsg4 program intercepts UDP port 53 DNS queries; redirects to km-dns-resolver daemon listening on localhost
+- EBPF-NET-05: Userspace km-dns-resolver daemon receives redirected DNS queries, resolves domains, checks against profile allowlist (supports wildcards `*.github.com` via suffix matching), returns NXDOMAIN for denied domains, and pushes allowed resolved IPs into BPF LPM_TRIE map
+- EBPF-NET-06: BPF cgroup_skb/egress program provides packet-level defense-in-depth — blocks packets to IPs not in the LPM_TRIE allowlist, catches raw socket traffic and hardcoded IPs that bypass the connect() hook
+- EBPF-NET-07: BPF ring buffer (`BPF_MAP_TYPE_RINGBUF`) emits structured events to userspace for every deny action — event includes `{timestamp, pid, src_ip, dst_ip, dst_port, action, layer}` for audit logging
+- EBPF-NET-08: All BPF programs and maps are pinned to `/sys/fs/bpf/km/{sandbox-id}/` — enforcement persists after `km create` exits; `km destroy` unpins and detaches; reattach on km process restart via `link.LoadPinnedLink()` and `ebpf.LoadPinnedMap()`
+- EBPF-NET-09: Profile schema gains `spec.network.enforcement` field — `proxy` (current iptables DNAT behavior), `ebpf` (pure eBPF, no iptables), `both` (eBPF primary + proxy for L7); `km validate` accepts all three values; default is `proxy` for backwards compatibility
+- EBPF-NET-10: TC egress classifier (best-effort, defense-in-depth) parses TLS ClientHello SNI from first TCP segment of port-443 connections; validates hostname against BPF hash map; drops packets with disallowed SNI; passes traffic where SNI is not in first segment (no TCP reassembly)
+- EBPF-NET-11: Compiler (`pkg/compiler/`) emits eBPF enforcement setup in EC2 user-data when profile has `enforcement: ebpf | both` — starts km-dns-resolver daemon, attaches BPF programs to sandbox cgroup, populates initial allowlist from profile; for Docker substrate, attaches to container cgroup
+- EBPF-NET-12: EC2 sandbox with root cannot bypass eBPF enforcement — verified by test: process with `CAP_NET_ADMIN` inside sandbox attempts `iptables -F` (succeeds but irrelevant) and direct connection to blocked IP (fails with EPERM from cgroup/connect4); process cannot call `bpf()` syscall to detach programs (no `CAP_BPF` in host namespace; seccomp blocks `bpf()` in sandbox)
+
 **Depends on:** Phase 39
 **Plans:** 0 plans
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 40 to break down)
 
-### Phase 41: eBPF SSL uprobe observability layer - plaintext TLS capture via OpenSSL hooks, replaces MITM proxy for inspection, GitHub repo filtering moves to uprobes
+### Phase 41: eBPF SSL uprobe observability layer — plaintext TLS capture via library-specific hooks, replaces MITM proxy for budget metering and traffic inspection
 
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Depends on:** Phase 40
+**Goal:** Attach eBPF uprobes to TLS library functions (`SSL_write`/`SSL_read` etc.) to capture plaintext HTTP request/response bodies without MITM proxy TLS termination or injected CA certificates. This enables budget metering (extract Bedrock/Anthropic token counts from response bodies), GitHub repo path inspection, and full traffic observability with <0.5% overhead. Each TLS library (OpenSSL, GnuTLS, NSS, Go crypto/tls, rustls) has different hook points and challenges. Library instrumentation is toggled per-profile via `spec.observability.tlsCapture`. The MITM proxy remains available as a fallback but is no longer required for metering or inspection when uprobes are active.
+
+**Per-library hook points (from [BCC sslsniff](https://github.com/iovisor/bcc/blob/master/tools/sslsniff.py), [ecapture](https://github.com/gojue/ecapture), [Coroot](https://coroot.com/blog/instrumenting-rust-tls-with-ebpf)):**
+
+| Library | Shared/Static | Write (uprobe entry) | Read (uprobe entry + uretprobe) | Used By |
+|---------|--------------|---------------------|--------------------------------|---------|
+| OpenSSL | Shared (`libssl.so`) | `SSL_write`, `SSL_write_ex` | `SSL_read`, `SSL_read_ex` | Python, Node.js, curl, most Linux tools |
+| GnuTLS | Shared (`libgnutls.so`) | `gnutls_record_send` | `gnutls_record_recv` | curl (Debian default), wget |
+| NSS/NSPR | Shared (`libnspr4.so`) | `PR_Write`, `PR_Send` | `PR_Read`, `PR_Recv` | Firefox, some curl builds |
+| BoringSSL | Static (per-binary) | `SSL_write`, `SSL_write_ex` | `SSL_read`, `SSL_read_ex` | Chrome, gRPC, Envoy |
+| Go crypto/tls | Static (per-binary) | `crypto/tls.(*Conn).Write` | `crypto/tls.(*Conn).Read` | Claude Code, Go CLI tools |
+| rustls | Static (per-binary) | `Writer::write` (mangled) | `Reader::read` (mangled) | Rust CLI tools |
+
+**How plaintext capture works ([eCapture architecture](https://fedepaol.github.io/blog/2023/10/13/ebpf-journey-by-examples-hijacking-ssl-with-ebpf-with-ecapture/)):**
+1. Uprobe on `SSL_write` entry: `buf` (arg2) contains plaintext before encryption; `len` (arg3) gives size; read buf via `bpf_probe_read_user()`
+2. Uprobe on `SSL_read` entry: stash buf pointer in `BPF_MAP_TYPE_PERCPU_ARRAY` keyed by `pid_tgid`
+3. Uretprobe on `SSL_read` return: retrieve stashed pointer, read `PT_REGS_RC(ctx)` bytes of decrypted data
+4. Extract fd from SSL struct: `ssl->wbio->num` (version-dependent offset); or use Pixie's offset-free approach — kprobe on `send`/`recv` syscalls on the call stack ([Pixie TLS tracing](https://blog.px.dev/ebpf-tls-tracing-past-present-future/))
+5. Correlate fd → remote IP via `(pid, fd) → connection_info` BPF map populated by kprobe on `connect()`/`accept()`
+6. Send `{timestamp, pid, fd, remote_ip, remote_port, direction, plaintext}` via ring buffer to userspace
+
+**Go crypto/tls challenges ([Speedscale blog](https://speedscale.com/blog/ebpf-go-design-notes-1/), [Pixie blog](https://blog.px.dev/ebpf-function-tracing/)):**
+- uretprobe is broken for Go — dynamic goroutine stack resizing invalidates return address
+- Solution: disassemble function bytecode, find ALL `RET` instruction offsets via `golang.org/x/arch`, attach separate uprobe at each `RET` offset
+- Go ABI changed in 1.17 — stack-based (ABI0) → register-based (ABIInternal); need version-specific parameter extraction macros
+- Symbols present in unstripped Go binaries via `.gopclntab` section
+
+**Rust/rustls challenges ([Coroot blog](https://coroot.com/blog/instrumenting-rust-tls-with-ebpf)):**
+- rustls doesn't own the socket — works on buffers, app moves bytes over network
+- Hook `Writer::write` (plaintext before encryption) and `Reader::read` (decrypted data)
+- Find symbols via ELF metadata pattern matching for mangled Rust v0 names
+- Read path is inverted: `recvfrom` happens first, then `conn.read_tls`, then `conn.process_new_packets`, then `reader.read` — store fd on `recvfrom`, retrieve when `reader.read` fires
+- `Result<usize>` return uses separate registers (`rax` for status, `rdx` for byte count)
+
+**Key reference projects:**
+- [ecapture](https://github.com/gojue/ecapture) — **Primary reference.** Go CLI + cilium/ebpf, captures TLS plaintext via uprobes for OpenSSL/BoringSSL/GnuTLS/NSS/Go. 8 modules. Three output modes (text, keylog, pcapng). Auto-detects OpenSSL version from `.rodata` section. Kernel ≥4.18 (x86_64), ≥5.5 (aarch64).
+- [Pixie openssl-tracer demo](https://github.com/pixie-io/pixie-demos/tree/main/openssl-tracer) — Standalone demo: 4 probes (entry+return for SSL_read and SSL_write), perf buffer events
+- [Pixie TLS tracing: Past, Present, Future](https://blog.px.dev/ebpf-tls-tracing-past-present-future/) — Evolution from hardcoded offsets to offset-free call-stack method; 99.937% success rate
+- [BCC sslsniff.py](https://github.com/iovisor/bcc/blob/master/tools/sslsniff.py) — Canonical multi-library SSL sniff with per-library toggle flags (`-o`/`-g`/`-n`), `--extra-lib` for custom paths
+- [Coroot — Instrumenting Rust TLS with eBPF](https://coroot.com/blog/instrumenting-rust-tls-with-ebpf) — rustls Writer::write/Reader::read hooking, Rust symbol detection, inverted read path
+- [Speedscale — eBPF Go Design Notes](https://speedscale.com/blog/ebpf-go-design-notes-1/) — Go crypto/tls multi-RET uprobe, ABI version handling
+- [Kung Fu Dev — HTTPS Sniffer with Rust Aya](https://www.kungfudev.com/blog/2023/12/07/https-sniffer-with-rust-aya) — eBPF SSL capture implemented in Rust/Aya framework
+- [eunomia tutorial — eBPF SSL/TLS capture](https://eunomia.dev/tutorials/30-sslsniff/) — Step-by-step sslsniff clone with `__ATTACH_UPROBE` macro pattern
+- [cilium/ebpf uretprobe example](https://github.com/cilium/ebpf/blob/main/examples/uretprobe/main.go) — `link.OpenExecutable()` → `.Uprobe()` / `.Uretprobe()` Go API
+
+**Requirements:** EBPF-TLS-01 through EBPF-TLS-14
+- EBPF-TLS-01: `pkg/ebpf/tls/` package with per-library probe modules — each module discovers library path, resolves symbol offsets, attaches uprobes/uretprobes via `link.OpenExecutable()`, and reads plaintext via ring buffer
+- EBPF-TLS-02: OpenSSL module hooks `SSL_write`/`SSL_write_ex` entry + `SSL_read`/`SSL_read_ex` entry+return on `libssl.so.3` (AL2023 default); auto-detects OpenSSL version from `.rodata` for struct offset selection (ecapture pattern); handles OpenSSL 1.1.x and 3.x
+- EBPF-TLS-03: GnuTLS module hooks `gnutls_record_send` entry + `gnutls_record_recv` entry+return on `libgnutls.so`
+- EBPF-TLS-04: NSS module hooks `PR_Write`/`PR_Send` entry + `PR_Read`/`PR_Recv` entry+return on `libnspr4.so`
+- EBPF-TLS-05: Go crypto/tls module hooks `crypto/tls.(*Conn).Write` and `crypto/tls.(*Conn).Read` in target Go binaries — disassembles function to find all `RET` offsets (via `golang.org/x/arch` disassembler), attaches uprobe at each `RET` instead of uretprobe; detects Go ABI version (stack vs register) from binary metadata
+- EBPF-TLS-06: rustls module hooks `Writer::write` entry + `Reader::read` entry+return in Rust binaries — discovers symbols via ELF section scan for `rustc` marker + `rustls` pattern matching on mangled v0 names; handles inverted read path (store fd from `recvfrom` kprobe, retrieve on `Reader::read`)
+- EBPF-TLS-07: Connection correlation — kprobe on `connect()` and `accept()` populates `BPF_MAP_TYPE_HASH` mapping `(pid, fd) → {remote_ip, remote_port, local_port}`; SSL hook extracts fd from library struct (OpenSSL: `ssl->wbio->num`) or from the connection map; ring buffer events include remote endpoint for each captured payload
+- EBPF-TLS-08: Ring buffer events carry structured data: `{timestamp_ns, pid, tid, fd, remote_ip, remote_port, direction (read/write), library_type, payload_len, payload[up to 16384 bytes]}` — 16KB aligned with TLS max fragment length
+- EBPF-TLS-09: Userspace consumer in `pkg/ebpf/tls/` reads ring buffer, reassembles HTTP request/response pairs, and routes to registered handlers — budget metering handler extracts Bedrock/Anthropic token counts using existing `ExtractBedrockTokens()`/`ExtractAnthropicTokens()` functions from `sidecars/http-proxy/`
+- EBPF-TLS-10: Budget metering via uprobes replaces MITM proxy metering when `tlsCapture` is enabled — captured response bodies from Bedrock (`bedrock-runtime.*.amazonaws.com`) and Anthropic (`api.anthropic.com`) calls are parsed for token usage and routed through existing `IncrementAISpend()` DynamoDB path
+- EBPF-TLS-11: Profile schema gains `spec.observability.tlsCapture` field with sub-fields: `enabled` (bool), `libraries` (array of `openssl | gnutls | nss | go | rustls | all`, default `all`), `capturePayloads` (bool, default false — when false, only captures metadata for metering; when true, captures full plaintext for inspection/logging)
+- EBPF-TLS-12: Library discovery at sandbox startup — scans `/proc/<pid>/maps` for loaded shared libraries matching known patterns (`libssl`, `libgnutls`, `libnspr4`); scans `/usr/bin/`, `/usr/local/bin/` for Go and Rust binaries via ELF header inspection; attaches probes to each discovered library/binary; logs which libraries were instrumented
+- EBPF-TLS-13: Per-library toggle — BPF map `(cgroup_id, library_type) → enabled` checked at start of each uprobe handler; userspace can enable/disable specific library capture without detaching probes; `km status` shows which TLS libraries are being captured per sandbox
+- EBPF-TLS-14: GitHub repo path extraction from captured HTTPS plaintext — when a sandbox connects to `github.com`/`api.github.com`, captured HTTP request paths are parsed to extract `owner/repo`; compared against profile `sourceAccess.github.allowedRepos`; violations logged to audit trail (enforcement still handled by GitHub App token scoping, uprobes provide observability and alerting)
+
+**Performance:** <0.5% overhead with metadata-only capture (metering), 5-15% with full payload capture (inspection). Source: [OneUptime eBPF SSL inspection guide](https://oneuptime.com/blog/post/2026-01-07-ebpf-ssl-tls-inspection/view)
+
+**Depends on:** Phase 40 (shares `pkg/ebpf/` scaffold, bpf2go pipeline, ring buffer patterns)
 **Plans:** 0 plans
 
 Plans:

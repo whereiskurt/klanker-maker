@@ -106,6 +106,38 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **OPER-01**: All terragrunt-calling CLI commands (`km create`, `km destroy`, `km init`, `km uninit`) suppress raw terragrunt/terraform output by default — show step-level summaries instead; `--verbose` flag restores full output streaming; errors and warnings always shown regardless of mode
 
+### eBPF Network Enforcement
+
+- **EBPF-NET-01**: `pkg/ebpf/` package scaffold with bpf2go pipeline — `go generate` compiles BPF C programs, bpf2go generates Go loader code, `make build` embeds compiled bytecode in km binary
+- **EBPF-NET-02**: BPF cgroup/connect4 program intercepts all `connect()` syscalls from sandbox cgroup; looks up destination IP in `BPF_MAP_TYPE_LPM_TRIE` allowlist; returns 0 (EPERM) for disallowed IPs, returns 1 (allow) for allowed IPs
+- **EBPF-NET-03**: BPF cgroup/connect4 program rewrites destination IP/port for connections needing L7 inspection (GitHub, Bedrock endpoints) — redirects to `127.0.0.1:{proxy_port}`, stores original dest in hash map keyed by socket cookie (DNAT replacement without iptables)
+- **EBPF-NET-04**: BPF cgroup/sendmsg4 program intercepts UDP port 53 DNS queries; redirects to km-dns-resolver daemon listening on localhost
+- **EBPF-NET-05**: Userspace km-dns-resolver daemon receives redirected DNS queries, resolves domains, checks against profile allowlist (supports wildcards via suffix matching), returns NXDOMAIN for denied domains, pushes allowed resolved IPs into BPF LPM_TRIE map
+- **EBPF-NET-06**: BPF cgroup_skb/egress program provides packet-level defense-in-depth — blocks packets to IPs not in the LPM_TRIE allowlist, catches raw socket traffic and hardcoded IPs that bypass connect()
+- **EBPF-NET-07**: BPF ring buffer emits structured deny events to userspace — `{timestamp, pid, src_ip, dst_ip, dst_port, action, layer}` for audit logging
+- **EBPF-NET-08**: All BPF programs and maps pinned to `/sys/fs/bpf/km/{sandbox-id}/` — enforcement persists after `km create` exits; `km destroy` unpins and detaches; reattach on restart via `LoadPinnedLink()`/`LoadPinnedMap()`
+- **EBPF-NET-09**: Profile schema gains `spec.network.enforcement` field — `proxy` (current iptables DNAT), `ebpf` (pure eBPF), `both` (eBPF primary + proxy for L7); default is `proxy` for backwards compatibility
+- **EBPF-NET-10**: TC egress classifier (best-effort) parses TLS ClientHello SNI from first TCP segment of port-443 connections; validates hostname against BPF hash map; passes traffic where SNI is not in first segment (no TCP reassembly — Chrome large ClientHellos may be segmented)
+- **EBPF-NET-11**: Compiler emits eBPF enforcement setup in EC2 user-data when profile has `enforcement: ebpf | both` — starts km-dns-resolver daemon, attaches BPF programs to sandbox cgroup, populates initial allowlist from profile
+- **EBPF-NET-12**: Root-in-sandbox bypass prevention verified — process with `CAP_NET_ADMIN` inside sandbox can flush iptables (irrelevant) but cannot connect to blocked IP (EPERM from cgroup/connect4); process cannot detach BPF programs (no `CAP_BPF` in host namespace)
+
+### eBPF TLS Uprobe Observability
+
+- **EBPF-TLS-01**: `pkg/ebpf/tls/` package with per-library probe modules — each module discovers library path, resolves symbol offsets, attaches uprobes/uretprobes via `link.OpenExecutable()`, reads plaintext via ring buffer
+- **EBPF-TLS-02**: OpenSSL module hooks `SSL_write`/`SSL_write_ex` entry + `SSL_read`/`SSL_read_ex` entry+return on `libssl.so.3`; auto-detects OpenSSL version from `.rodata` for struct offset selection; handles OpenSSL 1.1.x and 3.x
+- **EBPF-TLS-03**: GnuTLS module hooks `gnutls_record_send` entry + `gnutls_record_recv` entry+return on `libgnutls.so`
+- **EBPF-TLS-04**: NSS module hooks `PR_Write`/`PR_Send` entry + `PR_Read`/`PR_Recv` entry+return on `libnspr4.so`
+- **EBPF-TLS-05**: Go crypto/tls module hooks `crypto/tls.(*Conn).Write` and `(*Conn).Read` in target Go binaries — disassembles function to find all `RET` offsets via `golang.org/x/arch`, attaches uprobe at each RET instead of uretprobe; detects Go ABI version (stack vs register)
+- **EBPF-TLS-06**: rustls module hooks `Writer::write` entry + `Reader::read` entry+return in Rust binaries — discovers symbols via ELF scan for `rustc` marker + `rustls` pattern matching on mangled v0 names; handles inverted read path
+- **EBPF-TLS-07**: Connection correlation via kprobe on `connect()`/`accept()` populates `(pid, fd) → {remote_ip, remote_port}` BPF hash map; SSL hooks extract fd from library struct or connection map; ring buffer events include remote endpoint
+- **EBPF-TLS-08**: Ring buffer events carry `{timestamp_ns, pid, tid, fd, remote_ip, remote_port, direction, library_type, payload_len, payload[≤16384 bytes]}` — 16KB aligned with TLS max fragment length
+- **EBPF-TLS-09**: Userspace consumer reads ring buffer, reassembles HTTP request/response pairs, routes to registered handlers — budget metering handler extracts token counts using existing `ExtractBedrockTokens()`/`ExtractAnthropicTokens()`
+- **EBPF-TLS-10**: Budget metering via uprobes replaces MITM proxy metering when tlsCapture is enabled — Bedrock and Anthropic response bodies parsed for token usage, routed through existing `IncrementAISpend()` DynamoDB path
+- **EBPF-TLS-11**: Profile schema gains `spec.observability.tlsCapture` — `enabled` (bool), `libraries` (array of openssl/gnutls/nss/go/rustls/all), `capturePayloads` (bool, default false for metadata-only metering)
+- **EBPF-TLS-12**: Library discovery at sandbox startup scans `/proc/<pid>/maps` for shared libraries and ELF headers of binaries; attaches probes to each discovered library/binary; logs which libraries instrumented
+- **EBPF-TLS-13**: Per-library toggle via BPF map `(cgroup_id, library_type) → enabled`; userspace can enable/disable specific libraries without detaching probes; `km status` shows capture status
+- **EBPF-TLS-14**: GitHub repo path extraction from captured HTTPS plaintext — HTTP request paths parsed to extract `owner/repo`; compared against profile allowedRepos; violations logged to audit trail
+
 ## v2 Requirements
 
 Deferred to future release. Tracked but not in current roadmap.
@@ -239,10 +271,38 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OBSV-09 | Phase 7 | Complete |
 | CONF-03 | Phase 7 | Complete |
 
+| EBPF-NET-01 | Phase 40 | Planned |
+| EBPF-NET-02 | Phase 40 | Planned |
+| EBPF-NET-03 | Phase 40 | Planned |
+| EBPF-NET-04 | Phase 40 | Planned |
+| EBPF-NET-05 | Phase 40 | Planned |
+| EBPF-NET-06 | Phase 40 | Planned |
+| EBPF-NET-07 | Phase 40 | Planned |
+| EBPF-NET-08 | Phase 40 | Planned |
+| EBPF-NET-09 | Phase 40 | Planned |
+| EBPF-NET-10 | Phase 40 | Planned |
+| EBPF-NET-11 | Phase 40 | Planned |
+| EBPF-NET-12 | Phase 40 | Planned |
+| EBPF-TLS-01 | Phase 41 | Planned |
+| EBPF-TLS-02 | Phase 41 | Planned |
+| EBPF-TLS-03 | Phase 41 | Planned |
+| EBPF-TLS-04 | Phase 41 | Planned |
+| EBPF-TLS-05 | Phase 41 | Planned |
+| EBPF-TLS-06 | Phase 41 | Planned |
+| EBPF-TLS-07 | Phase 41 | Planned |
+| EBPF-TLS-08 | Phase 41 | Planned |
+| EBPF-TLS-09 | Phase 41 | Planned |
+| EBPF-TLS-10 | Phase 41 | Planned |
+| EBPF-TLS-11 | Phase 41 | Planned |
+| EBPF-TLS-12 | Phase 41 | Planned |
+| EBPF-TLS-13 | Phase 41 | Planned |
+| EBPF-TLS-14 | Phase 41 | Planned |
+
 **Coverage:**
 - v1 requirements: 66 total
 - Mapped to phases: 56
 - Unmapped: 0
+- eBPF requirements (Phase 40-41): 26 total
 
 ---
 *Requirements defined: 2026-03-21*
