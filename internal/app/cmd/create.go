@@ -102,22 +102,26 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 			// Explicit --remote or --local flags override the auto-detection.
 			useRemote := remote
 			if !remote && !local {
-				// Neither flag explicitly set — auto-detect from profile substrate
-				sub := substrateOverride
-				if sub == "" {
-					// Quick-parse profile to read substrate without full resolve
-					data, readErr := os.ReadFile(args[0])
-					if readErr == nil {
-						p, parseErr := profile.Parse(data)
-						if parseErr == nil {
-							sub = string(p.Spec.Runtime.Substrate)
+				// If running inside the create-handler Lambda, always use local
+				// (the Lambda IS the remote — going remote again would recurse).
+				if os.Getenv("KM_REMOTE_CREATE") != "" {
+					useRemote = false
+				} else {
+					// Neither flag explicitly set — auto-detect from profile substrate
+					sub := substrateOverride
+					if sub == "" {
+						data, readErr := os.ReadFile(args[0])
+						if readErr == nil {
+							p, parseErr := profile.Parse(data)
+							if parseErr == nil {
+								sub = string(p.Spec.Runtime.Substrate)
+							}
 						}
 					}
+					if sub == "" || sub == "ec2" || sub == "ecs" {
+						useRemote = true // EC2/ECS default to remote
+					}
 				}
-				if sub == "" || sub == "ec2" || sub == "ecs" {
-					useRemote = true // EC2/ECS default to remote
-				}
-				// Docker stays local (useRemote = false)
 			}
 
 			if useRemote {
