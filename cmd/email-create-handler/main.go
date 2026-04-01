@@ -24,7 +24,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
@@ -38,6 +37,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
@@ -99,6 +99,8 @@ type SESEmailAPI interface {
 // OperatorEmailHandler processes SES-delivered emails to operator@sandboxes.{domain}.
 type OperatorEmailHandler struct {
 	S3Client          OperatorS3API
+	DynamoClient      awspkg.SandboxMetadataAPI
+	SandboxTableName  string
 	SSMClient         SSMClientAPI
 	EventBridgeClient awspkg.EventBridgeAPI
 	SESClient         SESEmailAPI
@@ -243,32 +245,11 @@ func (h *OperatorEmailHandler) handleStatus(ctx context.Context, senderEmail, su
 	}
 
 
-	// Read metadata from S3
-	bucket := h.StateBucket
-	if bucket == "" {
-		bucket = h.ArtifactBucket
-	}
-	metaKey := "tf-km/sandboxes/" + sandboxID + "/metadata.json"
-	metaOut, err := h.S3Client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: awssdk.String(bucket),
-		Key:    awssdk.String(metaKey),
-	})
+	// Read metadata from DynamoDB.
+	meta, err := awspkg.ReadSandboxMetadataDynamo(ctx, h.DynamoClient, h.SandboxTableName, sandboxID)
 	if err != nil {
 		return h.sendReply(ctx, senderEmail, fmt.Sprintf("Status: %s", sandboxID),
 			fmt.Sprintf("Sandbox %s not found or metadata unavailable.\n", sandboxID))
-	}
-	defer metaOut.Body.Close()
-
-	metaBytes, err := io.ReadAll(metaOut.Body)
-	if err != nil {
-		return h.sendReply(ctx, senderEmail, fmt.Sprintf("Status: %s", sandboxID),
-			fmt.Sprintf("Could not read metadata for %s.\n", sandboxID))
-	}
-
-	var meta awspkg.SandboxMetadata
-	if err := json.Unmarshal(metaBytes, &meta); err != nil {
-		return h.sendReply(ctx, senderEmail, fmt.Sprintf("Status: %s", sandboxID),
-			fmt.Sprintf("Could not parse metadata for %s.\n", sandboxID))
 	}
 
 	var b strings.Builder
@@ -449,9 +430,15 @@ func main() {
 	if safePhraseKey == "" {
 		safePhraseKey = "/km/config/remote-create/safe-phrase"
 	}
+	sandboxTableName := os.Getenv("SANDBOX_TABLE_NAME")
+	if sandboxTableName == "" {
+		sandboxTableName = "km-sandboxes"
+	}
 
 	h := &OperatorEmailHandler{
 		S3Client:          s3.NewFromConfig(cfg),
+		DynamoClient:      dynamodbpkg.NewFromConfig(cfg),
+		SandboxTableName:  sandboxTableName,
 		SSMClient:         ssm.NewFromConfig(cfg),
 		EventBridgeClient: eventbridge.NewFromConfig(cfg),
 		SESClient:         sesv2.NewFromConfig(cfg),
