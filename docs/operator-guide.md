@@ -1521,3 +1521,49 @@ eBPF bytecode is compiled via `make generate-ebpf` using a Docker container with
 ### Diagram
 
 See [`docs/diagrams/ebpf-architecture.excalidraw`](diagrams/ebpf-architecture.excalidraw) for the full architecture diagram.
+
+## eBPF SSL Uprobe Observability (Phase 41)
+
+### Overview
+
+An `ebpf-observer` sidecar uses eBPF uprobes to capture TLS plaintext without MITM certificates. This runs alongside the enforcement layer (Phase 40) and the MITM proxy, providing an independent audit trail.
+
+### How It Works
+
+The observer attaches uprobes to TLS library functions (`SSL_write`, `SSL_read`) across multiple TLS stacks:
+
+| TLS Library | Binary Path | Uprobe Target | Coverage |
+|-------------|-------------|---------------|----------|
+| OpenSSL 3.x | `/usr/lib64/libssl.so.3` | `SSL_write` / `SSL_read` | curl, wget, Python, Ruby |
+| Go crypto/tls | Per-binary (e.g., `/usr/local/bin/goose`) | `writeRecordLocked` / `Read` | Goose, Go-based agents |
+| BoringSSL | Per-binary (e.g., Bun runtime) | Offset-based `SSL_write` | Claude Code |
+
+### What It Captures
+
+- HTTP/1.1 request method, URL path, Host header, response status
+- HTTP/2 header frames (HPACK-decoded) — method, path, authority, status
+- Process name and PID for each TLS connection
+- TLS library identification
+
+### What It Does NOT Do
+
+- **Active blocking** — uprobes are passive observers, not enforcers. The MITM proxy handles request filtering.
+- **HTTP/2 response body parsing** — Bedrock token metering requires response body access, which is only feasible in the userspace MITM proxy.
+- **Replace the MITM proxy** — the uprobe sidecar complements the proxy, not replaces it.
+
+### Deployment
+
+The observer sidecar is enabled as part of the `ebpf` or `both` enforcement modes. It runs as a systemd service alongside the enforcer:
+
+```
+km-ebpf-observer.service
+  → Attaches uprobes to libssl.so.3 (system-wide)
+  → Scans for Go/Bun binaries in $PATH
+  → Outputs structured JSON to stdout → CloudWatch/S3
+```
+
+### Key Limitations
+
+- **Claude Code (Bun + BoringSSL)** — requires byte-pattern offset discovery per Bun version. Offsets break on updates.
+- **Go binaries** — must be unstripped. Release builds may strip symbols.
+- **uretprobe + Go** — incompatible. Go's dynamic stack resizing crashes with standard uretprobes. Per-RET-offset attachment workaround is used.

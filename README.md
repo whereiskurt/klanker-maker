@@ -250,6 +250,7 @@ The SCP is deployed via `km bootstrap --dry-run=false`. Run `km bootstrap --show
 | **Source** | GitHub App scoped tokens | Per-repo, per-ref, per-permission; short-lived installation tokens refreshed via Lambda |
 | **Filesystem** | Path-level enforcement | Writable vs read-only directories at OS level |
 | **Audit** | Command + network logging | Secret-redacted; delivered to CloudWatch/S3 |
+| **TLS Observability** | eBPF SSL uprobes (OpenSSL, Go, BoringSSL) | Passive plaintext capture without MITM certs; independent audit trail |
 | **Telemetry** | OTEL observability | Claude Code prompts, tool calls, API requests, cost metrics → OTel Collector → S3 |
 | **Budget** | Compute + AI spend tracking | DynamoDB real-time metering; proxy 403 + IAM revocation at ceiling |
 
@@ -285,6 +286,25 @@ Sandbox Cgroup (/sys/fs/cgroup/km.slice/km-{id}.scope)
 **Why cgroups?** The BPF programs are scoped to the sandbox cgroup, not the whole instance. The enforcer process, SSM agent, and sidecars run outside the cgroup and are unaffected. This is the same isolation model that makes this approach portable to EKS pods, Docker cgroups, and other container runtimes in future substrates.
 
 Editable diagram: [`docs/diagrams/ebpf-architecture.excalidraw`](docs/diagrams/ebpf-architecture.excalidraw)
+
+### eBPF SSL Uprobe Observability
+
+Alongside kernel-level enforcement, eBPF uprobes provide **passive TLS plaintext capture** for audit and observability — without MITM certificates. An `ebpf-observer` sidecar hooks into TLS library functions to see plaintext before encryption:
+
+| TLS Library | Used By | Uprobe Target | Approach |
+|-------------|---------|---------------|----------|
+| OpenSSL (libssl.so.3) | curl, wget, Python, Ruby | `SSL_write` / `SSL_read` | Standard dynamic symbol uprobe |
+| Go crypto/tls | Goose (if Go) | `writeRecordLocked` / `Read` | Binary symbol scan, per-RET offsets (no uretprobe) |
+| BoringSSL (Bun) | Claude Code | `SSL_write` | Byte-pattern offset discovery (per-binary) |
+| rustls | Future Rust agents | `rustls_connection_write_tls` | Reverse-correlation pattern |
+
+**What uprobes add that MITM can't:** Visibility into traffic that bypasses the proxy (if any), audit trail independent of proxy logs, plaintext capture without certificate trust issues. The observer logs structured JSON events with HTTP method, URL, host, and response status for every TLS connection.
+
+**What uprobes can't replace:** Active request blocking (uprobes are passive — they can observe but not deny individual requests without killing the process), HTTP/2 response body parsing (Bedrock token metering needs response bodies, which uprobe tooling can only capture for HTTP/1.1 headers), and the MITM proxy's transparent redirect for GitHub repo-level filtering.
+
+**The two eBPF layers work together:**
+- **Phase 40 (enforcement):** cgroup BPF programs decide allow/deny/redirect at the kernel level
+- **Phase 41 (observability):** SSL uprobes capture TLS plaintext for audit logging alongside the MITM proxy
 
 ### Architecture Diagrams
 

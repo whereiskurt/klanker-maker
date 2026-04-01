@@ -399,6 +399,18 @@ Event types: `shell_command`, `dns_query`, `http_request`.
 - Host name and allow/deny decision (HTTP proxy)
 - Sandbox ID for correlation
 
+**eBPF audit events (enforcement mode):** When eBPF enforcement is enabled, the ring buffer consumer emits structured events for every deny and redirect:
+- Source/destination IP and port
+- Process name and PID
+- Action (deny/allow/redirect) and layer (connect4/sendmsg4/egress/sockops)
+- Sandbox ID for correlation
+
+**eBPF TLS observability (uprobe sidecar):** The SSL uprobe observer captures TLS plaintext without MITM certificates. For every TLS connection, it logs:
+- HTTP method, URL path, and Host header (HTTP/1.1 and HTTP/2 headers)
+- Source process name and PID
+- TLS library (OpenSSL, Go crypto/tls, BoringSSL)
+- This provides an independent audit trail alongside proxy logs — useful for compliance and forensic analysis
+
 **Log destinations** are configurable per profile:
 
 | Destination | Use Case |

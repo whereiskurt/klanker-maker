@@ -75,7 +75,9 @@ See `docs/multi-agent-email.md` for full details on SES setup, IAM policy, and c
 
 ## Network Enforcement
 
-Two enforcement modes via `spec.network.enforcement`:
+Three enforcement modes via `spec.network.enforcement`:
 - `proxy` (default) — iptables DNAT → userspace proxy sidecars
 - `ebpf` — cgroup BPF programs (connect4, sendmsg4, sockops, egress) with LPM trie allowlist
 - `both` — eBPF primary + proxy for L7 inspection (Bedrock metering, GitHub filtering)
+
+eBPF SSL uprobes provide passive TLS plaintext capture for audit/observability alongside enforcement.

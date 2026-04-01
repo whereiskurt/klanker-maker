@@ -1650,6 +1650,26 @@ The BPF programs and maps are pinned to `/sys/fs/bpf/km/{sandboxID}/` and surviv
 
 **Note:** eBPF enforcement is currently EC2-only. Docker and ECS substrates fall back to proxy mode. The cgroup-based approach is designed to extend naturally to EKS pods in future substrates.
 
+### eBPF SSL Uprobe Observability
+
+When eBPF enforcement is enabled, an `ebpf-observer` sidecar provides **passive TLS plaintext capture** via eBPF uprobes — without MITM certificates. This complements the MITM proxy with an independent audit trail.
+
+The observer attaches uprobes to TLS library functions across multiple stacks:
+
+| TLS Library | Used By | What's Captured |
+|-------------|---------|-----------------|
+| OpenSSL (libssl.so.3) | curl, wget, Python, Ruby | Full plaintext (HTTP/1.1 requests/responses) |
+| Go crypto/tls | Goose, Go agents | Plaintext (requires unstripped binary) |
+| BoringSSL (Bun) | Claude Code | Plaintext (requires per-binary offset discovery) |
+
+**Use cases:**
+- Compliance audit trail independent of proxy logs
+- Visibility into TLS traffic that might bypass the proxy
+- Forensic analysis of agent network behavior
+- Captures plaintext without requiring sandbox processes to trust a MITM CA certificate
+
+**Limitations:** Uprobes are passive — they observe but cannot block individual requests. Active filtering (GitHub repo blocking, budget 403s) remains in the MITM proxy. HTTP/2 response body parsing (needed for Bedrock token metering) is also proxy-only.
+
 ---
 
 ### Profile spec.email
