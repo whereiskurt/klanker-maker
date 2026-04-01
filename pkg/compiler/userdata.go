@@ -252,6 +252,13 @@ aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/tracing/config.yaml" /etc/km/tra
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/otelcol-contrib" /opt/km/bin/otelcol-contrib
 chmod +x /opt/km/bin/km-*
 chmod +x /opt/km/bin/otelcol-contrib
+{{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
+
+# Download km binary for eBPF enforcer (km ebpf-attach command)
+aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/km" /usr/local/bin/km
+chmod +x /usr/local/bin/km
+echo "[km-bootstrap] km binary installed for eBPF enforcement"
+{{- end }}
 
 # Create dedicated sidecar user (exempt from iptables DNAT — prevents redirect loops)
 useradd -r -s /usr/sbin/nologin km-sidecar || true
@@ -508,8 +515,11 @@ echo "[km-bootstrap] Configuring eBPF network enforcement..."
 # Create sandbox cgroup for eBPF attachment
 mkdir -p /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope
 
-# Move sandbox user processes to sandbox cgroup
-# (sandbox user shell will be started in this cgroup)
+# Allow sandbox user to place processes in this cgroup
+# (needed for SSM sessions and su - sandbox to join the cgroup)
+chown root:sandbox /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope/cgroup.procs
+chmod 664 /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope/cgroup.procs
+
 echo "[km-bootstrap] Sandbox cgroup created at /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope"
 
 # The km binary includes the eBPF enforcer; invoke it to:
