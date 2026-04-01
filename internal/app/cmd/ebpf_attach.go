@@ -191,6 +191,43 @@ func runEbpfAttach(
 	}()
 	logger.Info().Str("listen", listenAddr).Msg("DNS resolver started")
 
+	// Pre-resolve all allowed hosts and DNS suffixes to seed the BPF allowlist.
+	// Without this, the first connection attempt to any allowed host would fail
+	// because connect4 blocks before DNS resolution can populate the trie.
+	var hostsToResolve []string
+	if allowedHosts != "" {
+		for _, h := range strings.Split(allowedHosts, ",") {
+			h = strings.TrimSpace(h)
+			if h == "" {
+				continue
+			}
+			// Strip leading dot from DNS suffix entries (e.g. ".amazonaws.com")
+			h = strings.TrimPrefix(h, ".")
+			hostsToResolve = append(hostsToResolve, h)
+		}
+	}
+
+	seeded := 0
+	for _, host := range hostsToResolve {
+		ips, err := net.LookupHost(host)
+		if err != nil {
+			// Suffix entries like "amazonaws.com" won't resolve directly — that's fine
+			continue
+		}
+		for _, ipStr := range ips {
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				continue
+			}
+			if err := enforcer.AllowIP(ip); err != nil {
+				logger.Warn().Err(err).Str("host", host).Str("ip", ipStr).Msg("failed to seed IP")
+			} else {
+				seeded++
+			}
+		}
+	}
+	logger.Info().Int("seeded_ips", seeded).Int("hosts_resolved", len(hostsToResolve)).Msg("pre-seeded BPF allowlist from allowed hosts")
+
 	// Start ring buffer audit consumer.
 	consumer, err := audit.NewConsumer(enforcer.Events(), sandboxID, logger)
 	if err != nil {
