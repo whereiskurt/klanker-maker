@@ -101,7 +101,6 @@ func merge(parent, child *SandboxProfile) *SandboxProfile {
 	mergeSpecSection(&result.Spec.Identity, &parent.Spec.Identity, &child.Spec.Identity)
 	mergeSpecSection(&result.Spec.Sidecars, &parent.Spec.Sidecars, &child.Spec.Sidecars)
 	mergeSpecSection(&result.Spec.Observability, &parent.Spec.Observability, &child.Spec.Observability)
-	mergeSpecSection(&result.Spec.Policy, &parent.Spec.Policy, &child.Spec.Policy)
 	mergeSpecSection(&result.Spec.Agent, &parent.Spec.Agent, &child.Spec.Agent)
 
 	// Clear extends — resolved profile has no parent

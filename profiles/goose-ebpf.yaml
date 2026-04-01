@@ -62,9 +62,6 @@ spec:
         - "develop"
         - "feature/*"
         - "fix/*"
-      permissions:
-        - read
-        - write
 
   network:
     # Pure eBPF enforcement — BPF connect4 in block mode, BPF DNS resolver,
@@ -105,12 +102,6 @@ spec:
         # Python
         - "pypi.org"
         - "files.pythonhosted.org"
-      allowedMethods:
-        - GET
-        - POST
-        - PUT
-        - PATCH
-        - DELETE
 
   budget:
     compute:
@@ -160,29 +151,6 @@ spec:
       libraries:
         - openssl
       capturePayloads: false
-
-  policy:
-    allowShellEscape: false
-    allowedCommands:
-      - git
-      - goose
-      - claude
-      - node
-      - npm
-      - npx
-      - python3
-      - pip
-      - uvx
-      - bash
-      - sh
-      - jq
-      - curl
-    filesystemPolicy:
-      readOnlyPaths: []
-      writablePaths:
-        - /workspace
-        - /tmp
-        - /home
 
   email:
     signing: required

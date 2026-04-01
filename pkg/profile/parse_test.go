@@ -34,8 +34,7 @@ spec:
       allowedDNSSuffixes:
         - ".amazonaws.com"
       allowedHosts: []
-      allowedMethods:
-        - GET
+
   identity:
     roleSessionDuration: "1h"
     allowedRegions:
@@ -61,8 +60,7 @@ spec:
     networkLog:
       destination: cloudwatch
       logGroup: /klankrmkr/network
-  policy:
-    allowShellEscape: false
+
   agent:
     maxConcurrentTasks: 4
     taskTimeout: "30m"

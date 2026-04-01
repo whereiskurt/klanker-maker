@@ -32,9 +32,6 @@ spec:
       allowedHosts:
         - "sts.us-east-1.amazonaws.com"
         - "ssm.us-east-1.amazonaws.com"
-      allowedMethods:
-        - GET
-        - POST
 
   identity:
     roleSessionDuration: "1h"
@@ -72,11 +69,6 @@ spec:
       libraries:
         - openssl
       capturePayloads: false
-
-  policy:
-    allowShellEscape: false
-    allowedCommands:
-      - git
 
   agent:
     maxConcurrentTasks: 2

@@ -32,8 +32,6 @@ spec:
       allowedRefs:
         - "main"
         - "develop"
-      permissions:
-        - read
 
   network:
     egress:
@@ -49,9 +47,6 @@ spec:
         - "pypi.org"
         - "pkg.go.dev"
         - "sum.golang.org"
-      allowedMethods:
-        - GET
-        - POST
 
   identity:
     roleSessionDuration: "1h"
@@ -84,22 +79,6 @@ spec:
       enabled: true
       logPrompts: false
       logToolDetails: true
-
-  policy:
-    allowShellEscape: false
-    allowedCommands:
-      - git
-      - python3
-      - pip
-      - node
-      - npm
-      - go
-    filesystemPolicy:
-      readOnlyPaths:
-        - /etc
-      writablePaths:
-        - /workspace
-        - /tmp
 
   email:
     signing: optional

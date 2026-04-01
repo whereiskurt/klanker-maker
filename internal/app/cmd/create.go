@@ -797,7 +797,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 			kmsKeyARN = "alias/km-platform" // fallback — real key resolved by SSM
 		}
 		gh := resolvedProfile.Spec.SourceAccess.GitHub
-		if tokenErr := generateAndStoreGitHubToken(ctx, ssmClient, sandboxID, kmsKeyARN, gh.AllowedRepos, gh.Permissions); tokenErr != nil {
+		if tokenErr := generateAndStoreGitHubToken(ctx, ssmClient, sandboxID, kmsKeyARN, gh.AllowedRepos, nil); tokenErr != nil {
 			if errors.Is(tokenErr, ErrGitHubNotConfigured) {
 				fmt.Printf("  ⊘ GitHub token: skipped (not configured)\n")
 			} else {

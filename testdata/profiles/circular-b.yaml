@@ -23,7 +23,6 @@ spec:
     egress:
       allowedDNSSuffixes: []
       allowedHosts: []
-      allowedMethods: []
   identity:
     roleSessionDuration: "1h"
     allowedRegions:
@@ -49,8 +48,6 @@ spec:
     networkLog:
       destination: stdout
       logGroup: ""
-  policy:
-    allowShellEscape: false
   agent:
     maxConcurrentTasks: 1
     taskTimeout: "10m"

@@ -69,9 +69,6 @@ spec:
         - "develop"
         - "feature/*"
         - "fix/*"
-      permissions:
-        - read
-        - write
 
   network:
     egress:
@@ -134,12 +131,6 @@ spec:
         - "www.google.com"
         - "www.google-analytics.com"
         - "www.googletagmanager.com"
-      allowedMethods:
-        - GET
-        - POST
-        - PUT
-        - PATCH
-        - DELETE
 
   budget:
     compute:
@@ -184,30 +175,6 @@ spec:
       enabled: true
       logPrompts: true
       logToolDetails: true
-
-  policy:
-    allowShellEscape: false
-    allowedCommands:
-      - git
-      - goose
-      - claude
-      - codex
-      - node
-      - npm
-      - npx
-      - python3
-      - pip
-      - uvx
-      - bash
-      - sh
-      - jq
-      - curl
-    filesystemPolicy:
-      readOnlyPaths: []
-      writablePaths:
-        - /workspace
-        - /tmp
-        - /home
 
   email:
     signing: required

@@ -32,9 +32,6 @@ spec:
       allowedHosts:
         - "sts.us-east-1.amazonaws.com"
         - "ssm.us-east-1.amazonaws.com"
-      allowedMethods:
-        - GET
-        - POST
 
   identity:
     roleSessionDuration: "1h"
@@ -67,11 +64,6 @@ spec:
       enabled: true
       logPrompts: false
       logToolDetails: false
-
-  policy:
-    allowShellEscape: false
-    allowedCommands:
-      - git
 
   email:
     signing: required

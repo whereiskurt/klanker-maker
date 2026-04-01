@@ -34,9 +34,6 @@ spec:
         - "develop"
         - "feature/*"
         - "fix/*"
-      permissions:
-        - read
-        - write
 
   network:
     egress:
@@ -56,12 +53,6 @@ spec:
         - "pypi.org"
         - "pkg.go.dev"
         - "sum.golang.org"
-      allowedMethods:
-        - GET
-        - POST
-        - PUT
-        - PATCH
-        - DELETE
 
   identity:
     roleSessionDuration: "1h"
@@ -95,24 +86,6 @@ spec:
       enabled: true
       logPrompts: true
       logToolDetails: true
-
-  policy:
-    allowShellEscape: false
-    allowedCommands:
-      - git
-      - python3
-      - pip
-      - node
-      - npm
-      - go
-      - bash
-      - sh
-    filesystemPolicy:
-      readOnlyPaths: []
-      writablePaths:
-        - /workspace
-        - /tmp
-        - /home
 
   agent:
     maxConcurrentTasks: 4

@@ -601,7 +601,7 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		params.HasGitHub = true
 		params.GitHubSSMPath = fmt.Sprintf("/sandbox/%s/github-token", sandboxID)
 		params.GitHubAllowedRepos = p.Spec.SourceAccess.GitHub.AllowedRepos
-		compiledPerms := pkggithub.CompilePermissions(p.Spec.SourceAccess.GitHub.Permissions)
+		compiledPerms := pkggithub.CompilePermissions(nil)
 		params.GitHubPermissions = permissionsToHCL(compiledPerms)
 	}
 
@@ -706,33 +706,13 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
 
-	// Populate filesystem enforcement fields (nil-safe).
-	if p.Spec.Policy.FilesystemPolicy != nil {
-		params.HasFilesystemPolicy = true
-		// Collect the declared writable paths.
-		writablePaths := make([]string, len(p.Spec.Policy.FilesystemPolicy.WritablePaths))
-		copy(writablePaths, p.Spec.Policy.FilesystemPolicy.WritablePaths)
-		// Auto-inject /tmp when readonlyRootFilesystem is enabled and /tmp is not already listed.
-		hasTmp := false
-		for _, wp := range writablePaths {
-			if wp == "/tmp" {
-				hasTmp = true
-				break
-			}
-		}
-		if !hasTmp {
-			writablePaths = append([]string{"/tmp"}, writablePaths...)
-		}
-		params.EffectiveWritablePaths = writablePaths
-	}
-
 	// Populate GitHub token fields when sourceAccess.github is configured with at least one repo.
 	// Empty allowedRepos is treated as deny-by-default (same as nil github config).
 	if p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRepos) > 0 {
 		params.HasGitHub = true
 		params.GitHubSSMPath = fmt.Sprintf("/sandbox/%s/github-token", sandboxID)
 		params.GitHubAllowedRepos = p.Spec.SourceAccess.GitHub.AllowedRepos
-		compiledPerms := pkggithub.CompilePermissions(p.Spec.SourceAccess.GitHub.Permissions)
+		compiledPerms := pkggithub.CompilePermissions(nil)
 		params.GitHubPermissions = permissionsToHCL(compiledPerms)
 	}
 

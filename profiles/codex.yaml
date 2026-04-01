@@ -54,9 +54,6 @@ spec:
         - "develop"
         - "feature/*"
         - "fix/*"
-      permissions:
-        - read
-        - write
 
   network:
     egress:
@@ -80,12 +77,6 @@ spec:
         - "github.com"
         # Error reporting
         - "sentry.io"
-      allowedMethods:
-        - GET
-        - POST
-        - PUT
-        - PATCH
-        - DELETE
 
   budget:
     compute:
@@ -130,21 +121,6 @@ spec:
       enabled: true
       logPrompts: true
       logToolDetails: true
-
-  policy:
-    allowShellEscape: false
-    allowedCommands:
-      - git
-      - codex
-      - bash
-      - sh
-      - jq
-    filesystemPolicy:
-      readOnlyPaths: []
-      writablePaths:
-        - /workspace
-        - /tmp
-        - /home
 
   email:
     signing: required

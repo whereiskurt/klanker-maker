@@ -27,8 +27,6 @@ spec:
       allowedRepos: []
       allowedRefs:
         - "main"
-      permissions:
-        - read
 
   network:
     egress:
@@ -36,8 +34,6 @@ spec:
         - ".amazonaws.com"
       allowedHosts:
         - "api.github.com"
-      allowedMethods:
-        - GET
 
   identity:
     roleSessionDuration: "2h"
@@ -69,9 +65,6 @@ spec:
     networkLog:
       destination: cloudwatch
       logGroup: /klankrmkr/network
-
-  policy:
-    allowShellEscape: false
 
   agent:
     maxConcurrentTasks: 2

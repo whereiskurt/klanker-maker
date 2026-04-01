@@ -31,8 +31,6 @@ spec:
       allowedDNSSuffixes:
         - ".example.com"
       allowedHosts: []
-      allowedMethods:
-        - GET
 
   identity:
     roleSessionDuration: "1h"
@@ -61,9 +59,6 @@ spec:
     networkLog:
       destination: cloudwatch
       logGroup: /klankrmkr/network
-
-  policy:
-    allowShellEscape: false
 
   agent:
     maxConcurrentTasks: 4

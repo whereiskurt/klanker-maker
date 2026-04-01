@@ -41,10 +41,6 @@ spec:
         - api.anthropic.com
         - registry.npmjs.org
         - statsig.anthropic.com
-      allowedMethods:
-        - POST
-        - GET
-
   identity:
     roleSessionDuration: "1h"
     allowedRegions:
@@ -76,9 +72,6 @@ spec:
       enabled: true
       logPrompts: false
       logToolDetails: false
-
-  policy:
-    allowShellEscape: false
 
   email:
     signing: required

@@ -32,7 +32,7 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-      allowedMethods: ["GET"]
+
   identity:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
@@ -55,8 +55,7 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  policy:
-    allowShellEscape: false
+
   agent:
     maxConcurrentTasks: 2
     taskTimeout: 30m
@@ -164,11 +163,6 @@ func TestParsePreservesAllSections(t *testing.T) {
 	if p.Spec.Observability.CommandLog.Destination == "" {
 		t.Error("expected spec.observability.commandLog.destination to be populated")
 	}
-	if p.Spec.Policy.AllowShellEscape == false {
-		// allowShellEscape: false is the default — check the field exists by confirming type
-		// Just ensure we can access it without panic
-		_ = p.Spec.Policy.AllowShellEscape
-	}
 	if p.Spec.Agent.MaxConcurrentTasks == 0 {
 		t.Error("expected spec.agent.maxConcurrentTasks to be populated")
 	}
@@ -236,7 +230,7 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-      allowedMethods: ["GET"]
+
   identity:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
@@ -259,8 +253,7 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  policy:
-    allowShellEscape: false
+
   agent:
     maxConcurrentTasks: 2
     taskTimeout: 30m
@@ -325,7 +318,7 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-      allowedMethods: ["GET"]
+
   identity:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
@@ -348,8 +341,7 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  policy:
-    allowShellEscape: false
+
   agent:
     maxConcurrentTasks: 2
     taskTimeout: 30m
@@ -400,7 +392,7 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-      allowedMethods: ["GET"]
+
   identity:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
@@ -423,8 +415,7 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  policy:
-    allowShellEscape: false
+
   agent:
     maxConcurrentTasks: 2
     taskTimeout: 30m`
@@ -464,7 +455,7 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-      allowedMethods: ["GET"]
+
   identity:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
@@ -487,8 +478,7 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  policy:
-    allowShellEscape: false
+
   agent:
     maxConcurrentTasks: 2
     taskTimeout: 30m
@@ -534,7 +524,7 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-      allowedMethods: ["GET"]
+
   identity:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
@@ -557,8 +547,7 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  policy:
-    allowShellEscape: false
+
   agent:
     maxConcurrentTasks: 2
     taskTimeout: 30m
@@ -595,7 +584,7 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-      allowedMethods: ["GET"]
+
   identity:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
@@ -618,8 +607,7 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  policy:
-    allowShellEscape: false
+
   agent:
     maxConcurrentTasks: 2
     taskTimeout: 30m
@@ -662,7 +650,7 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-      allowedMethods: ["GET"]
+
   identity:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
@@ -690,8 +678,7 @@ spec:
       libraries:
         - openssl
       capturePayloads: false
-  policy:
-    allowShellEscape: false
+
   agent:
     maxConcurrentTasks: 2
     taskTimeout: 30m

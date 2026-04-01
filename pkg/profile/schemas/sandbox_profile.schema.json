@@ -61,7 +61,6 @@
         "identity",
         "sidecars",
         "observability",
-        "policy",
         "agent"
       ],
       "additionalProperties": false,
@@ -273,14 +272,6 @@
                   "type": "array",
                   "items": { "type": "string" },
                   "description": "List of allowed git refs (branches, tags)"
-                },
-                "permissions": {
-                  "type": "array",
-                  "items": {
-                    "type": "string",
-                    "enum": ["read", "write"]
-                  },
-                  "description": "Allowed permission levels"
                 }
               }
             }
@@ -293,7 +284,7 @@
           "properties": {
             "egress": {
               "type": "object",
-              "required": ["allowedDNSSuffixes", "allowedHosts", "allowedMethods"],
+              "required": ["allowedDNSSuffixes", "allowedHosts"],
               "additionalProperties": false,
               "properties": {
                 "allowedDNSSuffixes": {
@@ -305,14 +296,6 @@
                   "type": "array",
                   "items": { "type": "string" },
                   "description": "Explicit hostnames allowed for egress"
-                },
-                "allowedMethods": {
-                  "type": "array",
-                  "items": {
-                    "type": "string",
-                    "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
-                  },
-                  "description": "HTTP methods permitted for egress"
                 }
               }
             },
@@ -410,37 +393,6 @@
                 }
               },
               "required": ["enabled"]
-            }
-          }
-        },
-        "policy": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "allowShellEscape": {
-              "type": "boolean",
-              "description": "Permit shell escape sequences. Set false for hardened profiles."
-            },
-            "allowedCommands": {
-              "type": "array",
-              "items": { "type": "string" },
-              "description": "Allowlist of commands the agent may invoke"
-            },
-            "filesystemPolicy": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "readOnlyPaths": {
-                  "type": "array",
-                  "items": { "type": "string" },
-                  "description": "Paths that are read-only within the sandbox"
-                },
-                "writablePaths": {
-                  "type": "array",
-                  "items": { "type": "string" },
-                  "description": "Paths that are writable within the sandbox"
-                }
-              }
             }
           }
         },

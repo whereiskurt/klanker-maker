@@ -103,8 +103,6 @@ spec:
         - ".amazonaws.com"
       allowedHosts:
         - "api.github.com"
-      allowedMethods:
-        - GET
   identity:
     roleSessionDuration: "1h"
     allowedRegions:
@@ -130,14 +128,6 @@ spec:
     networkLog:
       destination: cloudwatch
       logGroup: /km/network
-  policy:
-    allowShellEscape: false
-    allowedCommands:
-      - bash
-    filesystemPolicy:
-      readOnlyPaths: []
-      writablePaths:
-        - /workspace
   agent:
     maxConcurrentTasks: 4
     taskTimeout: "30m"

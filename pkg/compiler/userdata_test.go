@@ -41,60 +41,6 @@ func TestIMDSTokenTTL(t *testing.T) {
 	}
 }
 
-// TestBindMountReadOnlyPaths verifies bind mounts are generated for readOnlyPaths.
-func TestBindMountReadOnlyPaths(t *testing.T) {
-	p := baseProfile()
-	p.Spec.Policy = profile.PolicySpec{
-		FilesystemPolicy: &profile.FilesystemPolicy{
-			ReadOnlyPaths: []string{"/etc", "/usr"},
-		},
-	}
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
-	if err != nil {
-		t.Fatalf("generateUserData failed: %v", err)
-	}
-	if !strings.Contains(out, "mount --bind") {
-		t.Error("expected bind mount section with 'mount --bind'")
-	}
-	if !strings.Contains(out, `"/etc"`) && !strings.Contains(out, "mount --bind \"/etc\"") {
-		// Check for bind mount of /etc
-		if !strings.Contains(out, "/etc") {
-			t.Error("expected bind mount for /etc")
-		}
-	}
-	if !strings.Contains(out, "/usr") {
-		t.Error("expected bind mount for /usr")
-	}
-	// Verify both steps: initial bind and remount ro
-	if !strings.Contains(out, "remount,bind,ro") {
-		t.Error("expected 'remount,bind,ro' for read-only bind mount")
-	}
-}
-
-// TestBindMountBeforeSidecars verifies bind mounts appear before sidecar startup.
-func TestBindMountBeforeSidecars(t *testing.T) {
-	p := baseProfile()
-	p.Spec.Policy = profile.PolicySpec{
-		FilesystemPolicy: &profile.FilesystemPolicy{
-			ReadOnlyPaths: []string{"/etc"},
-		},
-	}
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
-	if err != nil {
-		t.Fatalf("generateUserData failed: %v", err)
-	}
-	bindMountIdx := strings.Index(out, "mount --bind")
-	sidecarIdx := strings.Index(out, "km-dns-proxy")
-	if bindMountIdx == -1 {
-		t.Fatal("bind mount section not found")
-	}
-	if sidecarIdx == -1 {
-		t.Fatal("sidecar section not found")
-	}
-	if bindMountIdx > sidecarIdx {
-		t.Error("bind mount section must appear BEFORE sidecar startup")
-	}
-}
 
 // ============================================================
 // Claude Code OTEL telemetry env var injection tests (OTEL-01, OTEL-06, OTEL-07)
@@ -262,18 +208,6 @@ func TestUserDataIPTablesNoDNATForOTLP(t *testing.T) {
 	}
 }
 
-// TestNoBindMountWithoutPolicy verifies no bind mount block without filesystemPolicy.
-func TestNoBindMountWithoutPolicy(t *testing.T) {
-	p := baseProfile()
-	// No FilesystemPolicy set
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
-	if err != nil {
-		t.Fatalf("generateUserData failed: %v", err)
-	}
-	if strings.Contains(out, "mount --bind") {
-		t.Error("expected NO bind mount section when filesystemPolicy is nil")
-	}
-}
 
 // TestSpotPollLoopPresent verifies spot poll loop is included when useSpot=true.
 func TestSpotPollLoopPresent(t *testing.T) {

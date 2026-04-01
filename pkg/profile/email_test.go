@@ -32,7 +32,7 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-      allowedMethods: ["GET"]
+
   identity:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
@@ -55,8 +55,7 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  policy:
-    allowShellEscape: false
+
   agent:
     maxConcurrentTasks: 2
     taskTimeout: 30m

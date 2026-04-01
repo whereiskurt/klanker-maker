@@ -32,8 +32,6 @@ spec:
       allowedRefs:
         - "main"
         - "develop"
-      permissions:
-        - read
 
   network:
     egress:
@@ -44,9 +42,6 @@ spec:
       allowedHosts:
         - "api.github.com"
         - "pypi.org"
-      allowedMethods:
-        - GET
-        - POST
 
   identity:
     roleSessionDuration: "1h"
@@ -76,18 +71,6 @@ spec:
     networkLog:
       destination: cloudwatch
       logGroup: /klankrmkr/network
-
-  policy:
-    allowShellEscape: false
-    allowedCommands:
-      - git
-      - python3
-      - pip
-    filesystemPolicy:
-      readOnlyPaths: []
-      writablePaths:
-        - /workspace
-        - /tmp
 
   agent:
     maxConcurrentTasks: 4

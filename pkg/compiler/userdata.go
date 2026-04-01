@@ -931,12 +931,6 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		IdleTimeoutMinutes: parseIdleTimeoutMinutes(p.Spec.Lifecycle.IdleTimeout),
 	}
 
-	// Populate filesystem policy fields (nil-safe)
-	if p.Spec.Policy.FilesystemPolicy != nil {
-		params.ReadOnlyPaths = p.Spec.Policy.FilesystemPolicy.ReadOnlyPaths
-		params.WritablePaths = p.Spec.Policy.FilesystemPolicy.WritablePaths
-	}
-
 	// Populate artifact fields (nil-safe)
 	if p.Spec.Artifacts != nil {
 		params.ArtifactPaths = p.Spec.Artifacts.Paths

@@ -36,7 +36,6 @@ type Spec struct {
 	Identity      IdentitySpec      `yaml:"identity"`
 	Sidecars      SidecarsSpec      `yaml:"sidecars"`
 	Observability ObservabilitySpec `yaml:"observability"`
-	Policy        PolicySpec        `yaml:"policy"`
 	Agent         AgentSpec         `yaml:"agent"`
 	// Artifacts defines optional artifact collection and upload settings.
 	// When nil, artifact collection is disabled.
@@ -183,7 +182,6 @@ type SourceAccessSpec struct {
 type GitHubAccess struct {
 	AllowedRepos []string `yaml:"allowedRepos"`
 	AllowedRefs  []string `yaml:"allowedRefs"`
-	Permissions  []string `yaml:"permissions"`
 }
 
 // NetworkSpec controls egress network policy.
@@ -205,8 +203,6 @@ type EgressSpec struct {
 	AllowedDNSSuffixes []string `yaml:"allowedDNSSuffixes"`
 	// AllowedHosts is the list of explicit hostnames allowed for egress.
 	AllowedHosts []string `yaml:"allowedHosts"`
-	// AllowedMethods is the list of HTTP methods permitted.
-	AllowedMethods []string `yaml:"allowedMethods"`
 }
 
 // IdentitySpec controls AWS IAM identity and session configuration.
@@ -298,22 +294,6 @@ type LogDestination struct {
 	Destination string `yaml:"destination"`
 	// LogGroup is the CloudWatch log group or S3 prefix.
 	LogGroup string `yaml:"logGroup,omitempty"`
-}
-
-// PolicySpec defines security and access policy within the sandbox.
-type PolicySpec struct {
-	// AllowShellEscape permits shell escape sequences. Should be false for hardened profiles.
-	AllowShellEscape bool `yaml:"allowShellEscape"`
-	// AllowedCommands is the allowlist of commands the agent may invoke.
-	AllowedCommands []string `yaml:"allowedCommands,omitempty"`
-	// FilesystemPolicy controls read-only and writable path enforcement.
-	FilesystemPolicy *FilesystemPolicy `yaml:"filesystemPolicy,omitempty"`
-}
-
-// FilesystemPolicy specifies filesystem access constraints.
-type FilesystemPolicy struct {
-	ReadOnlyPaths []string `yaml:"readOnlyPaths"`
-	WritablePaths []string `yaml:"writablePaths"`
 }
 
 // AgentSpec controls behavior of the AI agent workload running in the sandbox.

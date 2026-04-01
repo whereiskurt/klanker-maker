@@ -70,9 +70,6 @@ spec:
         - "develop"
         - "feature/*"
         - "fix/*"
-      permissions:
-        - read
-        - write
 
   network:
     egress:
@@ -99,12 +96,6 @@ spec:
         - "featuregates.org"
         - "api.featuregates.org"
         - "api.openai.com"
-      allowedMethods:
-        - GET
-        - POST
-        - PUT
-        - PATCH
-        - DELETE
 
   budget:
     compute:
@@ -149,29 +140,6 @@ spec:
       enabled: true
       logPrompts: true
       logToolDetails: true
-
-  policy:
-    allowShellEscape: false
-    allowedCommands:
-      - git
-      - node
-      - npm
-      - npx
-      - ao
-      - claude
-      - codex
-      - tmux
-      - gh
-      - bash
-      - sh
-      - jq
-      - curl
-    filesystemPolicy:
-      readOnlyPaths: []
-      writablePaths:
-        - /workspace
-        - /tmp
-        - /home
 
   email:
     signing: required

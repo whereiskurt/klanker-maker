@@ -49,9 +49,6 @@ spec:
         - "develop"
         - "feature/*"
         - "fix/*"
-      permissions:
-        - read
-        - write
 
   network:
     egress:
@@ -97,12 +94,6 @@ spec:
         - "nodejs.org"
         - "google.com"
         - "www.google.com"
-      allowedMethods:
-        - GET
-        - POST
-        - PUT
-        - PATCH
-        - DELETE
 
   budget:
     compute:
@@ -147,26 +138,6 @@ spec:
       enabled: true
       logPrompts: true
       logToolDetails: true
-
-  policy:
-    allowShellEscape: false
-    allowedCommands:
-      - git
-      - node
-      - npm
-      - npx
-      - python3
-      - pip
-      - bash
-      - sh
-      - claude
-      - curl
-    filesystemPolicy:
-      readOnlyPaths: []
-      writablePaths:
-        - /workspace
-        - /tmp
-        - /home
 
   email:
     signing: required
