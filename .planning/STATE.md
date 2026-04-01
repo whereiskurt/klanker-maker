@@ -4,13 +4,13 @@ milestone: v1.0
 milestone_name: milestone
 status: planning
 stopped_at: Completed 39-migrate-sandbox-metadata-s3-to-dynamodb/39-01-PLAN.md
-last_updated: "2026-03-31T23:57:00.034Z"
+last_updated: "2026-04-01T00:36:30.550Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 41
-  completed_phases: 34
+  completed_phases: 35
   total_plans: 114
-  completed_plans: 111
+  completed_plans: 112
   percent: 0
 ---
 

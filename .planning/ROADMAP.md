@@ -821,7 +821,7 @@ Plans:
 **Goal:** All sandbox metadata reads/writes (km list, km status, km lock/unlock, km pause/resume, km create/destroy, and Lambda handlers) switch from S3 JSON blobs to a DynamoDB km-sandboxes table with alias-index GSI, atomic lock/unlock via ConditionExpression, DynamoDB TTL for auto-cleanup, and backward-compat S3 fallback when table does not exist — artifacts remain in S3
 **Requirements**: META-DYNAMO-01, META-DYNAMO-02, META-DYNAMO-03, META-DYNAMO-04, META-DYNAMO-05, META-DYNAMO-06, META-DYNAMO-IAM, META-DYNAMO-INFRA, META-DYNAMO-CONFIG, META-DYNAMO-SWITCHOVER-CLI, META-DYNAMO-SWITCHOVER-LAMBDA, META-DYNAMO-BACKWARD-COMPAT
 **Depends on:** Phase 38
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [ ] 39-01-PLAN.md — DynamoDB CRUD functions + tests (pkg/aws layer)
