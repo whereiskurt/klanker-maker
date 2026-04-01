@@ -141,9 +141,22 @@ func runEbpfAttach(
 		logger.Warn().Err(err).Msg("failed to allow IMDS IP (non-fatal)")
 	}
 
+	// VPC DNS resolver — glibc's stub resolver connects to this for DNS queries.
+	// Without this, DNS resolution itself is blocked by connect4 before sendmsg4
+	// can intercept the query. 169.254.169.253 is the standard AWS VPC DNS.
+	vpcDNS := net.ParseIP("169.254.169.253")
+	if err := enforcer.AllowIP(vpcDNS); err != nil {
+		logger.Warn().Err(err).Msg("failed to allow VPC DNS IP (non-fatal)")
+	}
+
 	// Allow VPC CIDR — 10.0.0.0/8 covers standard AWS VPC ranges.
 	if err := enforcer.AllowCIDR("10.0.0.0/8"); err != nil {
 		logger.Warn().Err(err).Msg("failed to allow VPC CIDR (non-fatal)")
+	}
+
+	// Allow link-local — 169.254.0.0/16 covers IMDS, VPC DNS, and other AWS services.
+	if err := enforcer.AllowCIDR("169.254.0.0/16"); err != nil {
+		logger.Warn().Err(err).Msg("failed to allow link-local CIDR (non-fatal)")
 	}
 
 	// Parse allowed DNS suffixes.
