@@ -68,8 +68,9 @@ spec:
         - write
 
   network:
-    # eBPF enforcement — kernel-level cgroup filtering, no iptables DNAT
-    enforcement: ebpf
+    # eBPF + proxy enforcement — kernel-level cgroup filtering for L3/L4,
+    # MITM proxy for L7 GitHub repo filtering and budget metering
+    enforcement: both
     egress:
       allowedDNSSuffixes:
         - ".amazonaws.com"
