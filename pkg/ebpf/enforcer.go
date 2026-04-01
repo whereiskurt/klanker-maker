@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux && amd64
 
 package ebpf
 
@@ -15,18 +15,6 @@ import (
 
 // Config holds the runtime parameters injected into BPF volatile constants at
 // program load time. All values are written via CollectionSpec.Variables before
-// the BPF programs are loaded into the kernel; changing them afterwards has no
-// effect.
-type Config struct {
-	SandboxID     string
-	DNSProxyPort  uint32 // UDP port for km-dns-resolver (e.g. 5353)
-	HTTPProxyPort uint32 // TCP port for HTTP proxy (e.g. 3128)
-	HTTPSProxyPort uint32 // TCP port for HTTPS/CONNECT proxy (e.g. 3128)
-	ProxyPID      uint32 // PID of the proxy process — exempt from redirection
-	FirewallMode  uint16 // 0=log, 1=allow, 2=block (matches ModeLog/Allow/Block)
-	MITMProxyAddr uint32 // MITM proxy loopback IP in network byte order (127.0.0.1)
-}
-
 // Enforcer manages the full lifecycle of BPF network enforcement for a single
 // sandbox: load programs, attach to cgroup, pin to bpffs, and tear down.
 //

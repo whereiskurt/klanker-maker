@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux && amd64
 
 // Package cmd provides the Cobra command tree for the km CLI.
 package cmd

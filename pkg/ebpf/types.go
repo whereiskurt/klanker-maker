@@ -2,6 +2,18 @@
 
 package ebpf
 
+// Config holds the parameters for creating a new eBPF Enforcer. Values are
+// injected as BPF volatile constants at program load time.
+type Config struct {
+	SandboxID      string
+	DNSProxyPort   uint32 // UDP port for km-dns-resolver (e.g. 53)
+	HTTPProxyPort  uint32 // TCP port for HTTP proxy (e.g. 3128)
+	HTTPSProxyPort uint32 // TCP port for HTTPS/CONNECT proxy (e.g. 3128)
+	ProxyPID       uint32 // PID of the proxy process — exempt from redirection
+	FirewallMode   uint16 // 0=log, 1=allow, 2=block (matches ModeLog/Allow/Block)
+	MITMProxyAddr  uint32 // MITM proxy loopback IP in network byte order (127.0.0.1)
+}
+
 // LpmKey is the Go representation of struct ip4_trie_key for LPM_TRIE lookups.
 //
 // PrefixLen is the number of significant bits (0-32 for IPv4).
