@@ -1,0 +1,23 @@
+# Exclude everything not needed for sidecar/container builds
+.git/
+.planning/
+.claude/
+infra/
+docs/
+profiles/
+containers/sandbox/
+schemas/
+
+# Terraform artifacts
+**/.terraform/
+**/.terragrunt-cache/
+**/terraform.tfstate*
+
+# Build artifacts
+km
+*.zip
+
+# IDE/OS
+.idea/
+.vscode/
+.DS_Store
