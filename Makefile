@@ -29,7 +29,13 @@ SIDECARS := dns-proxy http-proxy audit-log
 OTELCOL_VERSION ?= 0.120.0
 OTELCOL_URL     := https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$(OTELCOL_VERSION)/otelcol-contrib_$(OTELCOL_VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build build-km bump-version sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas build-create-handler build-email-create-handler push-create-handler clean fetch-otelcol sandbox-image smoke-test-sandbox
+.PHONY: build build-km bump-version sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas build-create-handler build-email-create-handler push-create-handler clean fetch-otelcol sandbox-image smoke-test-sandbox generate-ebpf
+
+## generate-ebpf: compile BPF C programs via bpf2go (requires clang on Linux)
+## Regenerates pkg/ebpf/bpf_bpfel.go and pkg/ebpf/bpf_bpfel.o
+## The generated files are committed so make build works without clang.
+generate-ebpf:
+	cd pkg/ebpf && go generate
 
 ## bump-version: increment the patch version in VERSION file
 bump-version:
