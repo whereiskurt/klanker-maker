@@ -264,6 +264,7 @@ resource "aws_lambda_function" "ttl_handler" {
       KM_STATE_BUCKET     = var.state_bucket
       KM_STATE_PREFIX     = var.state_prefix
       KM_REGION_LABEL     = var.region_label
+      SANDBOX_TABLE_NAME  = "km-sandboxes"
     }
   }
 

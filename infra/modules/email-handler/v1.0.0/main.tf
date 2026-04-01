@@ -202,6 +202,7 @@ resource "aws_lambda_function" "email_handler" {
       KM_STATE_BUCKET        = var.state_bucket
       KM_EMAIL_DOMAIN        = var.email_domain
       KM_SAFE_PHRASE_SSM_KEY = var.safe_phrase_ssm_key
+      SANDBOX_TABLE_NAME     = "km-sandboxes"
     }
   }
 
