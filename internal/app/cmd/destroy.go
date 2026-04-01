@@ -83,6 +83,21 @@ func NewDestroyCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) 
 					return nil
 				}
 			}
+			// Docker substrates always destroy locally — remote Lambda can't reach local containers.
+			if remote {
+				awsCfg, awsErr := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
+				if awsErr == nil {
+					tableName := cfg.SandboxTableName
+					if tableName == "" {
+						tableName = "km-sandboxes"
+					}
+					dynClient := dynamodbpkg.NewFromConfig(awsCfg)
+					if meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynClient, tableName, sandboxID); metaErr == nil && meta.Substrate == "docker" {
+						remote = false
+						fmt.Printf("  [info] Docker substrate — destroying locally\n")
+					}
+				}
+			}
 			if remote {
 				publisher := pub
 				if publisher == nil {
@@ -103,8 +118,8 @@ func NewDestroyCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) 
 		"Skip confirmation prompt")
 	cmd.Flags().BoolVar(&verbose, "verbose", false,
 		"Show full terragrunt/terraform output")
-	cmd.Flags().BoolVar(&remote, "remote", false,
-		"Trigger destroy via Lambda (EventBridge) instead of local terragrunt")
+	cmd.Flags().BoolVar(&remote, "remote", true,
+		"Trigger destroy via Lambda (EventBridge) instead of local terragrunt (default: true, forced off for docker substrate)")
 
 	return cmd
 }

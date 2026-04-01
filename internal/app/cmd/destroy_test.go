@@ -112,7 +112,7 @@ func TestDestroyCmd_GeneralizedPatternAcceptsCustomPrefix(t *testing.T) {
 	for _, id := range validCustomIDs {
 		id := id
 		t.Run(id, func(t *testing.T) {
-			cmd := exec.Command(km, "destroy", "--yes", "--aws-profile", "nonexistent-profile-xyz", id)
+			cmd := exec.Command(km, "destroy", "--yes", "--remote=false", "--aws-profile", "nonexistent-profile-xyz", id)
 			out, err := cmd.CombinedOutput()
 
 			// Should fail on AWS credential check, NOT on sandbox ID format validation
@@ -145,7 +145,7 @@ func TestDestroyCmd_InvalidSandboxID(t *testing.T) {
 	for _, id := range invalidIDs {
 		id := id
 		t.Run(id, func(t *testing.T) {
-			cmd := exec.Command(km, "destroy", "--yes", id)
+			cmd := exec.Command(km, "destroy", "--yes", "--remote=false", id)
 			out, err := cmd.CombinedOutput()
 			if err == nil {
 				t.Fatalf("km destroy %q: expected non-zero exit, got exit 0\noutput: %s", id, out)
@@ -170,7 +170,7 @@ func TestDestroyCmd_ValidIDFormatAccepted(t *testing.T) {
 	// A correctly formatted sandbox ID that won't exist in AWS
 	validID := "sb-a1b2c3d4"
 
-	cmd := exec.Command(km, "destroy", "--yes", "--aws-profile", "nonexistent-profile-xyz", validID)
+	cmd := exec.Command(km, "destroy", "--yes", "--remote=false", "--aws-profile", "nonexistent-profile-xyz", validID)
 	out, err := cmd.CombinedOutput()
 
 	// We expect a non-zero exit (AWS config or credential failure) but NOT an
