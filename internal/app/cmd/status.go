@@ -227,7 +227,7 @@ func (f *awsSandboxFetcher) FetchSandbox(ctx context.Context, sandboxID string) 
 	}
 
 	// Live EC2 instance check: detect killed/stopped/terminated
-	if rec.Substrate == "ec2" && rec.Status == "running" {
+	if strings.HasPrefix(rec.Substrate, "ec2") && rec.Status == "running" {
 		awsCfg, cfgErr := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
 		if cfgErr == nil {
 			ec2Client := ec2.NewFromConfig(awsCfg)

@@ -539,7 +539,7 @@ func restartProxiesForSandboxes(ctx context.Context, out interface{ Write([]byte
 
 	for _, sb := range sandboxes {
 		switch strings.ToLower(sb.Substrate) {
-		case "ec2":
+		case "ec2", "ec2spot", "ec2demand":
 			if err := restartEC2Proxy(ctx, out, jsonOutput, deps, sb.SandboxID); err != nil {
 				// Non-fatal — log and continue
 				if !jsonOutput {

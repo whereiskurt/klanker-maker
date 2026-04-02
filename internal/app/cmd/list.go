@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -92,7 +93,7 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonO
 	if ec2Err == nil {
 		ec2Client := ec2.NewFromConfig(awsCfg)
 		for i := range records {
-			if records[i].Substrate == "ec2" && records[i].Status == "running" {
+			if strings.HasPrefix(records[i].Substrate, "ec2") && records[i].Status == "running" {
 				records[i].Status = checkEC2InstanceStatus(ctx, ec2Client, records[i].SandboxID)
 			}
 		}

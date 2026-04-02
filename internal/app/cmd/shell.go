@@ -156,7 +156,7 @@ func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 	}
 
 	switch rec.Substrate {
-	case "ec2":
+	case "ec2", "ec2spot", "ec2demand":
 		instanceID, err := extractResourceID(rec.Resources, ":instance/")
 		if err != nil {
 			return fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)

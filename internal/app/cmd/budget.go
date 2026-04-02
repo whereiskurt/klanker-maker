@@ -166,7 +166,7 @@ func runBudgetAdd(cmd *cobra.Command, cfg *config.Config, budgetClient kmaws.Bud
 		if metaErr == nil && meta != nil {
 			substrate := strings.ToLower(meta.Substrate)
 
-			if substrate == "ec2" && ec2Client != nil {
+			if strings.HasPrefix(substrate, "ec2") && ec2Client != nil {
 				// Check EC2 instance state via describe (filter by sandbox tag)
 				started, startErr := resumeEC2Sandbox(ctx, ec2Client, sandboxID)
 				if startErr != nil {
