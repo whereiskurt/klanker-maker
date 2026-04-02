@@ -7,7 +7,6 @@ metadata:
     tool: codex
     builtin: "true"
   prefix: codex
-  alias: codex
 
 spec:
   lifecycle:

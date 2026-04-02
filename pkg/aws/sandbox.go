@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -291,34 +289,6 @@ func ResolveSandboxAlias(ctx context.Context, client S3ListAPI, bucket, alias st
 	default:
 		return "", fmt.Errorf("alias %q is ambiguous: matched %d sandboxes (%s)", alias, len(matches), strings.Join(matches, ", "))
 	}
-}
-
-// aliasTemplatePattern matches "<template>-<number>" for suffix extraction.
-var aliasTemplatePattern = regexp.MustCompile(`^(.+)-(\d+)$`)
-
-// NextAliasFromTemplate generates the next alias from a template by scanning
-// active sandbox aliases. Template "wrkr" + existing ["wrkr-1","wrkr-3"] → "wrkr-4".
-// When no existing aliases match the template, returns "<template>-1".
-func NextAliasFromTemplate(template string, existingAliases []string) string {
-	max := 0
-	prefix := template + "-"
-	for _, a := range existingAliases {
-		if !strings.HasPrefix(a, prefix) {
-			continue
-		}
-		m := aliasTemplatePattern.FindStringSubmatch(a)
-		if m == nil || m[1] != template {
-			continue
-		}
-		n, err := strconv.Atoi(m[2])
-		if err != nil {
-			continue
-		}
-		if n > max {
-			max = n
-		}
-	}
-	return fmt.Sprintf("%s-%d", template, max+1)
 }
 
 // DeleteSandboxMetadata removes the metadata.json for a sandbox from S3.

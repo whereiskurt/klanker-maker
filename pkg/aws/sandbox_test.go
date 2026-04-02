@@ -168,35 +168,4 @@ func TestResolveSandboxAlias_Duplicate(t *testing.T) {
 	}
 }
 
-// ---- NextAliasFromTemplate tests ----
 
-func TestNextAliasFromTemplate_Empty(t *testing.T) {
-	got := kmaws.NextAliasFromTemplate("wrkr", []string{})
-	if got != "wrkr-1" {
-		t.Errorf("NextAliasFromTemplate(%q, []) = %q, want %q", "wrkr", got, "wrkr-1")
-	}
-}
-
-func TestNextAliasFromTemplate_Gap(t *testing.T) {
-	// Has wrkr-1 and wrkr-3, should return wrkr-4 (max+1)
-	got := kmaws.NextAliasFromTemplate("wrkr", []string{"wrkr-1", "wrkr-3"})
-	if got != "wrkr-4" {
-		t.Errorf("NextAliasFromTemplate = %q, want %q", got, "wrkr-4")
-	}
-}
-
-func TestNextAliasFromTemplate_NoMatch(t *testing.T) {
-	// Existing aliases don't match template, starts at 1
-	got := kmaws.NextAliasFromTemplate("orc", []string{"wrkr-1", "dev-2"})
-	if got != "orc-1" {
-		t.Errorf("NextAliasFromTemplate = %q, want %q", got, "orc-1")
-	}
-}
-
-func TestNextAliasFromTemplate_Sequential(t *testing.T) {
-	// Has wrkr-1, wrkr-2, should return wrkr-3
-	got := kmaws.NextAliasFromTemplate("wrkr", []string{"wrkr-1", "wrkr-2"})
-	if got != "wrkr-3" {
-		t.Errorf("NextAliasFromTemplate = %q, want %q", got, "wrkr-3")
-	}
-}

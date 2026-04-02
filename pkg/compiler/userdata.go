@@ -79,6 +79,10 @@ export KM_SANDBOX_HOSTNAME="${SANDBOX_FQDN}"
 export KM_SANDBOX_DOMAIN="{{ .EmailDomain }}"
 export KM_SANDBOX_EMAIL="{{ .SandboxEmail }}"
 export KM_SANDBOX_FROM_EMAIL="{{ .SandboxEmail }}"
+{{- if .Alias }}
+export KM_SANDBOX_ALIAS="{{ .Alias }}"
+export KM_ALIAS_EMAIL="{{ .AliasEmail }}"
+{{- end }}
 EOF
 chmod 644 /etc/profile.d/km-identity.sh
 echo "[km-bootstrap] Hostname set to ${SANDBOX_FQDN}"
@@ -173,6 +177,11 @@ fi
 {{- if .SandboxEmail }}
 export KM_EMAIL_ADDRESS="{{ .SandboxEmail }}"
 echo "[km-bootstrap] KM_EMAIL_ADDRESS={{ .SandboxEmail }}"
+{{- if .Alias }}
+export KM_SANDBOX_ALIAS="{{ .Alias }}"
+export KM_ALIAS_EMAIL="{{ .AliasEmail }}"
+echo "[km-bootstrap] KM_ALIAS_EMAIL={{ .AliasEmail }}"
+{{- end }}
 {{- end }}
 
 {{- if .HasGitHub }}
@@ -406,7 +415,14 @@ if [ -z "$BUCKET" ]; then
 fi
 
 MY_ADDR=$(echo "${SANDBOX_ID}@" | tr '[:upper:]' '[:lower:]')
-echo "[km-mail-poller] Polling s3://$BUCKET/mail/ for $MY_ADDR every ${POLL_INTERVAL}s -> $MAIL_DIR/new/"
+MY_ALIAS_ADDR="${KM_SANDBOX_ALIAS:+$(echo "${KM_SANDBOX_ALIAS}@" | tr '[:upper:]' '[:lower:]')}"
+MATCH_PATTERN="$MY_ADDR"
+if [ -n "$MY_ALIAS_ADDR" ]; then
+  MATCH_PATTERN="$MY_ADDR|$MY_ALIAS_ADDR"
+  echo "[km-mail-poller] Polling s3://$BUCKET/mail/ for $MY_ADDR or $MY_ALIAS_ADDR every ${POLL_INTERVAL}s -> $MAIL_DIR/new/"
+else
+  echo "[km-mail-poller] Polling s3://$BUCKET/mail/ for $MY_ADDR every ${POLL_INTERVAL}s -> $MAIL_DIR/new/"
+fi
 
 while true; do
   # List all mail objects, download, and keep only messages addressed to this sandbox
@@ -416,8 +432,8 @@ while true; do
     if [ ! -f "$local_file" ] && [ ! -f "$MAIL_DIR/processed/$key" ] && [ ! -f "$MAIL_DIR/skipped/$key" ]; then
       tmp_file=$(mktemp)
       if aws s3 cp "s3://$BUCKET/mail/$key" "$tmp_file" 2>/dev/null; then
-        # Check if the To header contains this sandbox's address
-        if head -c 8192 "$tmp_file" | tr '[:upper:]' '[:lower:]' | grep -q "$MY_ADDR"; then
+        # Check if the To header contains this sandbox's address or alias
+        if head -c 8192 "$tmp_file" | tr '[:upper:]' '[:lower:]' | grep -qE "$MATCH_PATTERN"; then
           mv "$tmp_file" "$local_file"
           echo "[km-mail-poller] New mail: $key"
         else
@@ -821,6 +837,8 @@ type userDataParams struct {
 	// Email fields (MAIL-02 through MAIL-05)
 	SandboxEmail         string // {sandbox-id}@{emailDomain} (config-derived)
 	EmailDomain          string // e.g. "sandboxes.klankermaker.ai"
+	Alias                string // optional human-friendly alias (e.g. "orc-1")
+	AliasEmail           string // {alias}@{emailDomain} — set when Alias is non-empty
 	NotificationsEmail   string // notifications@{emailDomain} — from address for spot notifications
 	OperatorEmail        string // from KM_OPERATOR_EMAIL env var — for spot notification
 	AWSRegion            string // from IMDS region — for spot notification ses send-email CLI call
@@ -898,8 +916,12 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 	}
 
 	emailDomain := "sandboxes.klankermaker.ai"
+	alias := ""
 	if len(emailDomainOverride) > 0 && emailDomainOverride[0] != "" {
 		emailDomain = emailDomainOverride[0]
+	}
+	if len(emailDomainOverride) > 1 && emailDomainOverride[1] != "" {
+		alias = emailDomainOverride[1]
 	}
 
 	budgetTable := os.Getenv("KM_BUDGET_TABLE")
@@ -921,6 +943,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		// Email fields — every sandbox gets an email identity.
 		SandboxEmail:       sandboxID + "@" + emailDomain,
 		EmailDomain:        emailDomain,
+		Alias:              alias,
 		NotificationsEmail: "notifications@" + emailDomain,
 		OperatorEmail:      os.Getenv("KM_OPERATOR_EMAIL"),
 		AWSRegion:          p.Spec.Runtime.Region,
@@ -929,6 +952,11 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		BudgetTable:   budgetTable,
 		// Idle timeout — converted from duration string to minutes for the sidecar.
 		IdleTimeoutMinutes: parseIdleTimeoutMinutes(p.Spec.Lifecycle.IdleTimeout),
+	}
+
+	// Populate alias email when alias is set.
+	if alias != "" {
+		params.AliasEmail = alias + "@" + emailDomain
 	}
 
 	// Populate artifact fields (nil-safe)

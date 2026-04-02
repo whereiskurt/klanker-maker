@@ -7,7 +7,6 @@ metadata:
     tool: claude-code
     builtin: "true"
   prefix: claude
-  alias: claude
 
 spec:
   lifecycle:

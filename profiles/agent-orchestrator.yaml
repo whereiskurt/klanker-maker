@@ -7,7 +7,6 @@ metadata:
     tool: agent-orchestrator
     builtin: "true"
   prefix: ao
-  alias: ao
 
 spec:
   lifecycle:

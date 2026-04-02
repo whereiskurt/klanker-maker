@@ -6,7 +6,6 @@ metadata:
     tier: development
     tool: goose
   prefix: gebpf
-  alias: gebpf
 
 spec:
   lifecycle:

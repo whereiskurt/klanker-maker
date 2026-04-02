@@ -7,7 +7,6 @@ metadata:
     tool: goose
     builtin: "true"
   prefix: goose
-  alias: goose
 
 spec:
   lifecycle:

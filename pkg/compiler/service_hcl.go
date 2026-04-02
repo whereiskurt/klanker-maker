@@ -547,6 +547,9 @@ type NetworkConfig struct {
 	// Populated by create.go from the AWS Pricing API (or static fallback table)
 	// before calling Compile(). Zero when no budget or rate lookup is skipped.
 	SpotRateUSD float64
+	// Alias is the optional human-friendly sandbox alias (e.g. "orc-1").
+	// When set, the sandbox can also receive and send email as {alias}@{emailDomain}.
+	Alias string
 }
 
 // budgetHCLFields extracts the budget-related template fields from a SandboxProfile.

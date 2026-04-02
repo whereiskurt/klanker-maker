@@ -86,6 +86,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	var sandboxIDOverride string
 	var aliasOverride string
 	var substrateOverride string
+	var dockerShortcut bool
 
 	cmd := &cobra.Command{
 		Use:   "create <profile.yaml>",
@@ -95,6 +96,11 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if awsProfile == "" && os.Getenv("KM_REMOTE_CREATE") == "" {
 				awsProfile = "klanker-terraform"
+			}
+
+			// --docker is a shortcut for --substrate=docker
+			if dockerShortcut {
+				substrateOverride = "docker"
 			}
 
 			// Auto-detect remote vs local based on substrate.
@@ -151,6 +157,8 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 		"Override profile substrate (ec2, ecs, docker)")
 	cmd.Flags().BoolVar(&noBedrock, "no-bedrock", false,
 		"Disable Bedrock access — removes IAM permissions and Bedrock env vars")
+	cmd.Flags().BoolVar(&dockerShortcut, "docker", false,
+		"Shortcut for --substrate=docker")
 
 	return cmd
 }
@@ -224,6 +232,16 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		resolvedProfile.Spec.Runtime.Substrate = substrateOverride
 	}
 	spot := resolvedProfile.Spec.Runtime.Spot && !onDemand
+
+	// substrateLabel differentiates ec2spot vs ec2demand for km list display.
+	substrateLabel := string(substrate)
+	if substrate == "ec2" {
+		if spot {
+			substrateLabel = "ec2spot"
+		} else {
+			substrateLabel = "ec2demand"
+		}
+	}
 
 	// --no-bedrock: disable Bedrock access entirely
 	if noBedrock {
@@ -352,6 +370,9 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		}
 		network.SpotRateUSD = spotRate
 	}
+
+	// Pass alias to compiler so userdata can set KM_SANDBOX_ALIAS and alias email delivery.
+	network.Alias = aliasOverride
 
 	// Step 7: Compile profile into Terragrunt/Docker artifacts.
 	// For docker substrate, compile once and dispatch immediately — no AZ retry loop needed.
@@ -521,7 +542,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	mlflowRun := awspkg.MLflowRun{
 		SandboxID:   sandboxID,
 		ProfileName: resolvedProfile.Metadata.Name,
-		Substrate:   string(resolvedProfile.Spec.Runtime.Substrate),
+		Substrate:   substrateLabel,
 		Region:      resolvedProfile.Spec.Runtime.Region,
 		TTL:         resolvedProfile.Spec.Lifecycle.TTL,
 		StartTime:   now,
@@ -534,39 +555,20 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		log.Info().Str("sandbox_id", sandboxID).Msg("MLflow run record written")
 	}
 
-	// Determine alias: --alias flag takes priority, then profile metadata.alias template.
+	// Alias comes from --alias flag only (metadata.alias auto-generation removed).
 	sandboxAlias := aliasOverride
 	sandboxTableName := cfg.SandboxTableName
 	if sandboxTableName == "" {
 		sandboxTableName = "km-sandboxes"
 	}
 	dynamoClientCreate := dynamodbpkg.NewFromConfig(awsCfg)
-	if sandboxAlias == "" && resolvedProfile.Metadata.Alias != "" {
-		// Auto-generate alias from profile template by scanning existing sandboxes via DynamoDB.
-		existing, listErr := awspkg.ListAllSandboxesByDynamo(ctx, dynamoClientCreate, sandboxTableName)
-		if listErr != nil && cfg.StateBucket != "" {
-			// Fall back to S3 if DynamoDB table not yet provisioned.
-			existing, listErr = awspkg.ListAllSandboxesByS3(ctx, s3Client, cfg.StateBucket)
-		}
-		if listErr == nil {
-			existingAliases := make([]string, 0, len(existing))
-			for _, r := range existing {
-				if r.Alias != "" {
-					existingAliases = append(existingAliases, r.Alias)
-				}
-			}
-			sandboxAlias = awspkg.NextAliasFromTemplate(resolvedProfile.Metadata.Alias, existingAliases)
-		} else {
-			log.Warn().Err(listErr).Msg("failed to list sandboxes for alias template — skipping auto alias")
-		}
-	}
 
 	// Write sandbox metadata to DynamoDB. Non-fatal: sandbox is provisioned even if metadata write fails.
 	{
 		meta := awspkg.SandboxMetadata{
 			SandboxID:   sandboxID,
 			ProfileName: resolvedProfile.Metadata.Name,
-			Substrate:   string(resolvedProfile.Spec.Runtime.Substrate),
+			Substrate:   substrateLabel,
 			Region:      resolvedProfile.Spec.Runtime.Region,
 			CreatedAt:   now,
 			TTLExpiry:   ttlExpiry,
@@ -1238,22 +1240,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 		}
 		dockerDynamoClient := dynamodbpkg.NewFromConfig(awsCfg)
 
-		// Determine alias: --alias flag takes priority, then profile metadata.alias template.
 		sandboxAlias := aliasOverride
-		if sandboxAlias == "" && resolvedProfile.Metadata.Alias != "" {
-			existing, listErr := awspkg.ListAllSandboxesByDynamo(ctx, dockerDynamoClient, dockerTableName)
-			if listErr == nil {
-				existingAliases := make([]string, 0, len(existing))
-				for _, r := range existing {
-					if r.Alias != "" {
-						existingAliases = append(existingAliases, r.Alias)
-					}
-				}
-				sandboxAlias = awspkg.NextAliasFromTemplate(resolvedProfile.Metadata.Alias, existingAliases)
-			} else {
-				log.Warn().Err(listErr).Msg("failed to list sandboxes for alias template — skipping auto alias")
-			}
-		}
 
 		meta := awspkg.SandboxMetadata{
 			SandboxID:   sandboxID,
@@ -1530,22 +1517,17 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		}
 	}
 
-	// Determine alias: --alias flag takes priority, then profile metadata.alias template.
 	sandboxAlias := aliasOverride
-	if sandboxAlias == "" && resolvedProfile.Metadata.Alias != "" && cfg.StateBucket != "" {
-		existing, listErr := awspkg.ListAllSandboxesByS3(ctx, s3Client, cfg.StateBucket)
-		if listErr == nil {
-			existingAliases := make([]string, 0, len(existing))
-			for _, r := range existing {
-				if r.Alias != "" {
-					existingAliases = append(existingAliases, r.Alias)
-				}
-			}
-			sandboxAlias = awspkg.NextAliasFromTemplate(resolvedProfile.Metadata.Alias, existingAliases)
-		}
-	}
 
 	// Step 8b: Write "starting" metadata to DynamoDB so km list shows the sandbox immediately.
+	remoteSubstrateLabel := string(resolvedProfile.Spec.Runtime.Substrate)
+	if resolvedProfile.Spec.Runtime.Substrate == "ec2" {
+		if resolvedProfile.Spec.Runtime.Spot && !onDemand {
+			remoteSubstrateLabel = "ec2spot"
+		} else {
+			remoteSubstrateLabel = "ec2demand"
+		}
+	}
 	tableName := cfg.SandboxTableName
 	if tableName == "" {
 		tableName = "km-sandboxes"
@@ -1554,7 +1536,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	startingMeta := &awspkg.SandboxMetadata{
 		SandboxID:   sandboxID,
 		ProfileName: resolvedProfile.Metadata.Name,
-		Substrate:   string(resolvedProfile.Spec.Runtime.Substrate),
+		Substrate:   remoteSubstrateLabel,
 		Region:      resolvedProfile.Spec.Runtime.Region,
 		Status:      "starting",
 		CreatedAt:   time.Now().UTC(),

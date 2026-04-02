@@ -109,7 +109,7 @@ func compileEC2(p *profile.SandboxProfile, sandboxID string, onDemand bool, netw
 	if artifactsBucket == "" {
 		artifactsBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
 	}
-	userData, err := generateUserData(p, sandboxID, secretPaths, artifactsBucket, useSpot, network.EmailDomain)
+	userData, err := generateUserData(p, sandboxID, secretPaths, artifactsBucket, useSpot, network.EmailDomain, network.Alias)
 	if err != nil {
 		return nil, fmt.Errorf("generate user-data.sh: %w", err)
 	}

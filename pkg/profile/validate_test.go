@@ -319,70 +319,6 @@ spec:
 `)
 }
 
-// minimalProfileWithAlias returns a full valid profile YAML with the given alias injected.
-// If alias is empty string, it is omitted from the YAML.
-func minimalProfileWithAlias(alias string) []byte {
-	aliasLine := ""
-	if alias != "" {
-		aliasLine = "\n  alias: " + alias
-	}
-	return []byte(`apiVersion: klankermaker.ai/v1alpha1
-kind: SandboxProfile
-metadata:
-  name: test-alias` + aliasLine + `
-spec:
-  lifecycle:
-    ttl: "24h"
-    idleTimeout: "1h"
-    teardownPolicy: destroy
-  runtime:
-    substrate: ec2
-    spot: true
-    instanceType: t3.medium
-    region: us-east-1
-  execution:
-    shell: /bin/bash
-    workingDir: /workspace
-  sourceAccess:
-    mode: allowlist
-  network:
-    egress:
-      allowedDNSSuffixes:
-        - ".amazonaws.com"
-      allowedHosts: []
-
-  identity:
-    roleSessionDuration: "1h"
-    allowedRegions:
-      - us-east-1
-    sessionPolicy: minimal
-  sidecars:
-    dnsProxy:
-      enabled: true
-      image: km-dns-proxy:latest
-    httpProxy:
-      enabled: true
-      image: km-http-proxy:latest
-    auditLog:
-      enabled: true
-      image: km-audit-log:latest
-    tracing:
-      enabled: true
-      image: km-tracing:latest
-  observability:
-    commandLog:
-      destination: cloudwatch
-      logGroup: /test/commands
-    networkLog:
-      destination: cloudwatch
-      logGroup: /test/network
-
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: "30m"
-`)
-}
-
 // minimalExecutionProfile returns a full valid profile YAML with the given execution YAML block.
 func minimalExecutionProfile(executionYAML string) []byte {
 	return []byte(`apiVersion: klankermaker.ai/v1alpha1
@@ -550,41 +486,6 @@ spec:
 			t.Error("expected schema error for rsyncPaths with integer item, got none")
 		}
 	})
-}
-
-func TestValidateSchema_MetadataAlias(t *testing.T) {
-	tests := []struct {
-		name        string
-		alias       string
-		wantValid   bool
-	}{
-		{"valid orc", "orc", true},
-		{"valid wrkr", "wrkr", true},
-		{"valid single char", "a", true},
-		{"valid max length 16", "abcdefghijklmnop", true},
-		{"valid no alias omitted", "", true},
-		{"invalid starts with digit", "1bad", false},
-		{"invalid too long 17 chars", "abcdefghijklmnopq", false},
-		{"invalid uppercase", "Bad", false},
-		{"invalid has space", "has space", false},
-		{"invalid has dash", "has-dash", false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			data := minimalProfileWithAlias(tc.alias)
-			errs := profile.ValidateSchema(data)
-			if tc.wantValid {
-				if len(errs) != 0 {
-					t.Errorf("expected valid alias %q, got %d errors: %v", tc.alias, len(errs), errs)
-				}
-			} else {
-				if len(errs) == 0 {
-					t.Errorf("expected validation error for alias %q, got none", tc.alias)
-				}
-			}
-		})
-	}
 }
 
 // minimalProfileWithTlsCapture returns a full valid profile YAML with the given tlsCapture YAML block.

@@ -38,11 +38,6 @@
           "type": "string",
           "pattern": "^[a-z][a-z0-9]{0,11}$",
           "description": "Optional sandbox ID prefix. Defaults to 'sb' when omitted."
-        },
-        "alias": {
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9]{0,15}$",
-          "description": "Optional alias template for sandbox. Auto-generates alias-1, alias-2, etc."
         }
       }
     },
