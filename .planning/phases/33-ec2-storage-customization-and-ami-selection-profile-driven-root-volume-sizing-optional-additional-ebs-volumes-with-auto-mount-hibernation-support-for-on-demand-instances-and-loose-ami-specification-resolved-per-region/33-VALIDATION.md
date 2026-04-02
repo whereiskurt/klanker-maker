@@ -69,6 +69,47 @@ created: 2026-03-29
 
 ---
 
+## E2E Validation Loop
+
+Phase 33 changes touch the full provisioning pipeline (profile schema → compiler → Terraform → userdata → runtime). The only way to fully validate is a real `km init` / `km create` / `km shell` / `km kill` cycle. Expect to iterate — Terraform plan/apply issues, userdata bugs, and IAM/EBS interactions often surface only on real instances.
+
+### Loop procedure
+
+```
+# 1. Build and upload toolchain
+make build && km init
+
+# 2. Create a sandbox with the new storage/hibernate/AMI fields
+km create profiles/goose.yaml --on-demand    # on-demand required for hibernate
+
+# 3. Verify via shell
+km shell <sandbox-id>
+  # Inside the sandbox:
+  df -h                          # check root volume size matches profile
+  df -h /data                   # check additional EBS mounted (if configured)
+  lsblk                         # verify device layout
+  cat /var/log/cloud-init-output.log | grep -i 'mount\|volume\|hibernate'
+
+# 4. Test hibernate (on-demand only)
+km pause <sandbox-id>           # should hibernate, not just stop
+km resume <sandbox-id>
+km shell <sandbox-id>           # verify state preserved (processes, files)
+
+# 5. Tear down
+km destroy <sandbox-id> --remote --yes
+```
+
+### Expect multiple iterations
+
+- **Round 1:** Terraform plan errors (missing variables, type mismatches between HCL template and module)
+- **Round 2:** Instance launches but userdata fails (EBS device name mismatch — `xvd` vs `nvme`, mount script errors)
+- **Round 3:** Hibernate fallback triggers (encrypted flag missing, volume too small, launch option not set)
+- **Round 4:** Clean run — all fields work, hibernate succeeds, additional volume mounts
+
+Budget ~4 create/destroy cycles and ~30 minutes total. Each cycle costs ~$0.10 on t3.medium on-demand.
+
+---
+
 ## Validation Sign-Off
 
 - [ ] All tasks have `<automated>` verify or Wave 0 dependencies
