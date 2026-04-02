@@ -264,7 +264,7 @@ resource "aws_iam_role_policy" "ec2spot_eventbridge" {
 
 # Policy: Bedrock model invocation for Claude Code AI calls
 resource "aws_iam_role_policy" "ec2spot_bedrock" {
-  count = local.total_ec2spot_count > 0 ? 1 : 0
+  count = local.total_ec2spot_count > 0 && var.enable_bedrock ? 1 : 0
   name  = "km-${var.sandbox_id}-bedrock"
   role  = aws_iam_role.ec2spot_ssm[0].id
 

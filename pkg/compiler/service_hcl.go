@@ -63,6 +63,8 @@ const ec2ServiceHCLTemplate = `locals {
       max_session_duration = {{ .IAMPolicy.MaxSessionDuration }}
       allowed_regions      = [{{ joinStrings .IAMPolicy.AllowedRegions }}]
     }
+
+    enable_bedrock = {{ .EnableBedrock }}
   }
 {{- if .HasBudget }}
 
@@ -378,6 +380,8 @@ type ec2HCLParams struct {
 	AILimit          float64 // AI max spend USD (0 = not set)
 	CreatedAt        string  // RFC3339 timestamp for compute cost calculation
 	WarningThreshold float64 // warning fraction (default 0.8)
+	// Bedrock access control
+	EnableBedrock bool // true unless --no-bedrock flag is set
 	// GitHub token inputs (GH-02, GH-04, GH-05)
 	HasGitHub          bool     // true when sourceAccess.github is set
 	GitHubSSMPath      string   // /sandbox/{sandbox-id}/github-token
@@ -574,6 +578,7 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 	hasBudget, computeLimit, aiLimit, warningThreshold := budgetHCLFields(p)
 
 	params := ec2HCLParams{
+		EnableBedrock:     p.Spec.Execution.UseBedrock,
 		ProfileName:       p.Metadata.Name,
 		SandboxID:         sandboxID,
 		Region:            p.Spec.Runtime.Region,

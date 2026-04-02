@@ -79,3 +79,9 @@ variable "iam_session_policy" {
   description = "IAM session policy constraints compiled from profile."
   default     = {}
 }
+
+variable "enable_bedrock" {
+  type        = bool
+  description = "Whether to attach Bedrock IAM policy to the sandbox role. Set to false with --no-bedrock."
+  default     = true
+}

@@ -78,6 +78,7 @@ type SSMGetPutAPI interface {
 //     IAM role. No SOPS handling needed in the create command.
 func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	var onDemand bool
+	var noBedrock bool
 	var awsProfile string
 	var verbose bool
 	var remote bool
@@ -125,9 +126,9 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 			}
 
 			if useRemote {
-				return runCreateRemote(cfg, args[0], onDemand, awsProfile, aliasOverride)
+				return runCreateRemote(cfg, args[0], onDemand, noBedrock, awsProfile, aliasOverride)
 			}
-			return runCreate(cfg, args[0], onDemand, awsProfile, verbose, sandboxIDOverride, aliasOverride, substrateOverride)
+			return runCreate(cfg, args[0], onDemand, noBedrock, awsProfile, verbose, sandboxIDOverride, aliasOverride, substrateOverride)
 		},
 	}
 
@@ -148,12 +149,14 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 		"Human-friendly alias for the sandbox (e.g. orc, wrkr). Overrides profile metadata.alias template.")
 	cmd.Flags().StringVar(&substrateOverride, "substrate", "",
 		"Override profile substrate (ec2, ecs, docker)")
+	cmd.Flags().BoolVar(&noBedrock, "no-bedrock", false,
+		"Disable Bedrock access — removes IAM permissions and Bedrock env vars")
 
 	return cmd
 }
 
 // runCreate executes the full create workflow.
-func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile string, verbose bool, sandboxIDOverride string, aliasOverride string, substrateOverride string) error {
+func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, verbose bool, sandboxIDOverride string, aliasOverride string, substrateOverride string) error {
 	createStart := time.Now()
 	ctx := context.Background()
 
@@ -221,6 +224,13 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 		resolvedProfile.Spec.Runtime.Substrate = substrateOverride
 	}
 	spot := resolvedProfile.Spec.Runtime.Spot && !onDemand
+
+	// --no-bedrock: disable Bedrock access entirely
+	if noBedrock {
+		resolvedProfile.Spec.Execution.UseBedrock = false
+		stripBedrockEnvVars(resolvedProfile)
+	}
+
 	printBanner("km create", sandboxID)
 	fmt.Printf("\n  Substrate: %s, Spot: %v\n", substrate, spot)
 
@@ -351,7 +361,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 			return fmt.Errorf("failed to compile profile: %w", err)
 		}
 		if substrate == "docker" {
-			return runCreateDocker(ctx, cfg, awsCfg, resolvedProfile, sandboxID, artifacts, verbose, aliasOverride)
+			return runCreateDocker(ctx, cfg, awsCfg, resolvedProfile, sandboxID, artifacts, verbose, noBedrock, aliasOverride)
 		}
 	}
 
@@ -936,7 +946,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, awsProfile
 // Steps: create sandbox dir, create IAM roles via SDK, assume roles for scoped creds,
 // inject credentials into compose YAML, write docker-compose.yml, run docker compose up -d,
 // write S3 metadata, write MLflow run record.
-func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config, resolvedProfile *profile.SandboxProfile, sandboxID string, artifacts *compiler.CompiledArtifacts, verbose bool, aliasOverride string) error {
+func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config, resolvedProfile *profile.SandboxProfile, sandboxID string, artifacts *compiler.CompiledArtifacts, verbose bool, noBedrock bool, aliasOverride string) error {
 	createStart := time.Now()
 	fmt.Printf("\nProvisioning docker sandbox %s...\n", sandboxID)
 
@@ -1018,26 +1028,30 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 		if sandboxArtifactBucket == "" {
 			sandboxArtifactBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
 		}
-		sandboxPolicyDoc := fmt.Sprintf(`{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
+		var policyStatements []string
+		if !noBedrock {
+			policyStatements = append(policyStatements, `{
       "Effect": "Allow",
       "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
       "Resource": "*"
-    },
-    {
+    }`)
+		}
+		policyStatements = append(policyStatements, fmt.Sprintf(`{
       "Effect": "Allow",
       "Action": ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"],
       "Resource": "arn:aws:ssm:%s:%s:parameter/km/%s/*"
-    },
-    {
+    }`, region, accountID, sandboxID))
+		policyStatements = append(policyStatements, fmt.Sprintf(`{
       "Effect": "Allow",
       "Action": ["s3:PutObject", "s3:GetObject"],
       "Resource": "arn:aws:s3:::%s/sandboxes/%s/*"
-    }
+    }`, sandboxArtifactBucket, sandboxID))
+		sandboxPolicyDoc := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    %s
   ]
-}`, region, accountID, sandboxID, sandboxArtifactBucket, sandboxID)
+}`, strings.Join(policyStatements, ",\n    "))
 		_, putErr := iamClient.PutRolePolicy(ctx, &iampkg.PutRolePolicyInput{
 			RoleName:       aws.String(sandboxRoleName),
 			PolicyName:     aws.String("km-sandbox-inline"),
@@ -1345,7 +1359,7 @@ func runDockerComposeUp(ctx context.Context, sandboxID, composeFilePath string, 
 //
 // The create-handler Lambda downloads the artifacts, runs km create as a subprocess,
 // and sends notifications on success/failure.
-func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, awsProfile string, aliasOverride string) error {
+func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, aliasOverride string) error {
 	ctx := context.Background()
 
 	// Step 1: Read profile file
@@ -1447,6 +1461,12 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, awsP
 		ArtifactsBucket:   remoteArtifactsBucket,
 	}
 
+	// --no-bedrock: disable Bedrock access entirely
+	if noBedrock {
+		resolvedProfile.Spec.Execution.UseBedrock = false
+		stripBedrockEnvVars(resolvedProfile)
+	}
+
 	// Step 7: Compile profile into artifacts
 	artifacts, err := compiler.Compile(resolvedProfile, sandboxID, onDemand, network)
 	if err != nil {
@@ -1480,7 +1500,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, awsP
 	toUpload := []artifact{
 		{key: artifactPrefix + "/service.hcl", content: artifacts.ServiceHCL, mime: "text/plain"},
 		{key: artifactPrefix + "/user-data.sh", content: artifacts.UserData, mime: "text/plain"},
-		{key: artifactPrefix + "/.km-profile.yaml", content: string(raw), mime: "application/x-yaml"},
+		{key: artifactPrefix + "/.km-profile.yaml", content: profileYAMLForUpload(resolvedProfile, raw, noBedrock), mime: "application/x-yaml"},
 	}
 	if artifacts.BudgetEnforcerHCL != "" {
 		toUpload = append(toUpload, artifact{
@@ -1715,4 +1735,55 @@ func checkSandboxLimit(ctx context.Context, s3Client awspkg.S3ListAPI, bucket st
 		return activeCount, fmt.Errorf("sandbox limit reached (%d/%d) — increase max_sandboxes in km-config.yaml or destroy unused sandboxes", activeCount, maxSandboxes)
 	}
 	return activeCount, nil
+}
+
+// profileYAMLForUpload returns the profile YAML to upload for remote create.
+// If the profile was modified (e.g. --no-bedrock), applies targeted text
+// replacements to the original YAML rather than re-marshaling (which would
+// emit zero-value fields that the schema rejects).
+func profileYAMLForUpload(_ *profile.SandboxProfile, raw []byte, noBedrock bool) string {
+	if !noBedrock {
+		return string(raw)
+	}
+	s := string(raw)
+	// Set useBedrock to false
+	s = strings.Replace(s, "useBedrock: true", "useBedrock: false", 1)
+	// Remove Bedrock-specific env vars from the YAML
+	for _, line := range []string{
+		"GOOSE_PROVIDER: aws_bedrock",
+		"CLAUDE_CODE_USE_BEDROCK: \"1\"",
+		"CLAUDE_CODE_USE_BEDROCK: 1",
+	} {
+		s = strings.Replace(s, line, "", 1)
+	}
+	return s
+}
+
+// stripBedrockEnvVars removes Bedrock-related environment variables from
+// the profile's spec.execution.env map. Called when --no-bedrock is set.
+func stripBedrockEnvVars(p *profile.SandboxProfile) {
+	if p.Spec.Execution.Env == nil {
+		return
+	}
+	bedrockKeys := []string{
+		"CLAUDE_CODE_USE_BEDROCK",
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+		"ANTHROPIC_BASE_URL",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+	}
+	for _, k := range bedrockKeys {
+		delete(p.Spec.Execution.Env, k)
+	}
+	// Strip GOOSE_PROVIDER if it's set to aws_bedrock
+	if p.Spec.Execution.Env["GOOSE_PROVIDER"] == "aws_bedrock" {
+		delete(p.Spec.Execution.Env, "GOOSE_PROVIDER")
+	}
+	// Strip GOOSE_MODEL if it references a bedrock model ID
+	if v, ok := p.Spec.Execution.Env["GOOSE_MODEL"]; ok {
+		if strings.Contains(v, "anthropic.claude") {
+			delete(p.Spec.Execution.Env, "GOOSE_MODEL")
+		}
+	}
 }
