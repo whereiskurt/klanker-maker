@@ -407,6 +407,21 @@ if p.Spec.Runtime.AdditionalVolume != nil && p.Spec.Runtime.Substrate == "ecs" {
 ### Tertiary (LOW confidence)
 - NVMe device naming behavior on Nitro instances (xvdf vs nvme1n1) — well-known AWS Nitro characteristic, needs live verification
 
+## Operational Findings (2026-04-02)
+
+Observed in production: `km pause goose-a7a2431c` reported "hibernate not available, stopping normally" and fell back to a plain EC2 stop. Root cause: the EC2 instance was not launched with `--hibernation-options Configured=true`. AWS requires all of the following for hibernate to work:
+
+1. **`hibernation = true` at launch time** — cannot be enabled after launch. This is the Terraform `aws_instance` attribute that Phase 33 must add.
+2. **Encrypted EBS root volume** — root `root_block_device` must have `encrypted = true`. KMS key (default or explicit) required.
+3. **Root volume >= instance RAM** — the root EBS volume must be large enough to hold the full RAM contents (e.g. t3.medium = 4 GiB RAM → root volume must be >= 4 GiB beyond OS usage).
+4. **Supported instance type** — t3.medium is supported; not all instance families support hibernate.
+5. **Instance running < 60 days** — AWS hard limit.
+6. **Spot instances cannot hibernate** — AWS hard constraint. The compiler must reject `hibernation: true` + `spot: true` combinations.
+
+Current `km pause` already handles the fallback gracefully (detects hibernate unavailable, stops normally). Phase 33 needs to wire the Terraform launch config so hibernate is actually available when the profile requests it.
+
+Additionally, the substrate label now stores `ec2spot` or `ec2demand` (not bare `ec2`) in DynamoDB metadata, which is relevant for any Phase 33 logic that checks substrate type.
+
 ## Metadata
 
 **Confidence breakdown:**
