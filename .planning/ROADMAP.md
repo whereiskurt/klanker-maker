@@ -978,10 +978,12 @@ Plans:
 
 ### Phase 42: eBPF gatekeeper mode — connect4 DNAT rewrite for selective L7 proxy
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** eBPF runs in block mode as kernel-level gatekeeper in `both` enforcement mode — connect4 performs DNAT rewrite for L7-required hosts (GitHub, Bedrock) routing them to the proxy, while allowed non-L7 hosts connect directly; iptables DNAT and km-dns-proxy are removed for `both` mode
+**Requirements**: EBPF-NET-03, EBPF-NET-09
 **Depends on:** Phase 41
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 42 to break down)
+- [ ] 42-01-PLAN.md — BPF dual-PID exemption + L7ProxyHosts derivation + enforcer wiring
+- [ ] 42-02-PLAN.md — Userdata template gatekeeper flip for both enforcement mode + unit tests
+- [ ] 42-03-PLAN.md — Build, deploy, and E2E verification of gatekeeper mode
