@@ -33,6 +33,7 @@ spec:
       - ".bash_profile"
       - ".gitconfig"
     initCommands:
+      - "yum install -y git nodejs npm jq tar gzip unzip"
       - "npm install -g @anthropic-ai/claude-code"
       - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace /home/sandbox"
       - "su - sandbox -c 'cd /workspace && git config --global user.name \"Claude Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
