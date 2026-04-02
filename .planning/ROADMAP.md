@@ -975,3 +975,13 @@ Plans:
 - [ ] 41-03-PLAN.md — HTTP plaintext parser, GitHub repo path extractor, audit handler
 - [ ] 41-04-PLAN.md — Profile schema tlsCapture field + deferred library schema entries
 - [ ] 41-05-PLAN.md — km ebpf-attach --tls integration + compiler user-data wiring
+
+### Phase 42: eBPF gatekeeper mode — connect4 DNAT rewrite for selective L7 proxy
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 41
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 42 to break down)

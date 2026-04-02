@@ -512,6 +512,7 @@ None yet.
 - Phase 39 added: Migrate sandbox metadata from S3 JSON to DynamoDB — km list/status/lock/pause metadata reads/writes move to DynamoDB, artifacts stay in S3
 - Phase 40 added: eBPF TC/cgroup enforcement — kernel-level DNS/HTTP/TLS-SNI allowlisting, toggleable `enforcement: ebpf` in profile, fixes root bypass, proxy sidecars kept for MITM inspection
 - Phase 41 added: eBPF SSL uprobe observability — plaintext TLS capture via OpenSSL hooks, toggleable `inspection: uprobe`, replaces MITM proxy for GitHub filtering, Bedrock metering stays userspace
+- Phase 42 added: eBPF gatekeeper mode — connect4 DNAT rewrite for selective L7 proxy
 
 ## Session Continuity
 
