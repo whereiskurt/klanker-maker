@@ -220,7 +220,7 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 // others    → no color
 func colorizeListStatus(status string) string {
 	switch status {
-	case "failed":
+	case "failed", "nocap":
 		return ansiRed + status + ansiReset
 	case "partial", "killed", "reaped", "starting":
 		return ansiYellow + status + ansiReset
@@ -236,7 +236,7 @@ func colorizeListStatus(status string) string {
 // colorizeRaw wraps a pre-padded display string with ANSI color based on the raw status value.
 func colorizeRaw(status string, _ bool, display string) string {
 	switch status {
-	case "failed":
+	case "failed", "nocap":
 		return ansiRed + display + ansiReset
 	case "partial", "killed", "reaped", "starting":
 		return ansiYellow + display + ansiReset

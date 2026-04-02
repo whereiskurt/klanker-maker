@@ -27,6 +27,7 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	lambdaruntime "github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsdynamodb "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/rs/zerolog/log"
@@ -59,10 +60,16 @@ type SESV2API = awspkg.SESV2API
 // Enables dependency injection for testing without real subprocesses.
 type RunCommandFunc func(cmd string, args []string, env []string) ([]byte, error)
 
+// DynamoAPI is the narrow DynamoDB interface for status updates.
+// *dynamodb.Client satisfies this interface.
+type DynamoAPI = awspkg.SandboxMetadataAPI
+
 // CreateHandler holds injected dependencies for testability.
 type CreateHandler struct {
 	S3Client     S3GetAPI
 	SESClient    SESV2API
+	DynamoClient DynamoAPI
+	TableName    string // DynamoDB sandbox metadata table (default: "km-sandboxes")
 	Domain       string
 	ToolchainDir string // directory containing km, terraform, terragrunt binaries + infra/
 	// RunCommand is called to execute the km create subprocess.
@@ -152,6 +159,27 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 	if runErr != nil {
 		log.Error().Err(runErr).Str("sandbox_id", event.SandboxID).
 			Str("output", string(out)).Msg("km create subprocess failed")
+
+		// Determine failure status — "nocap" for capacity errors, "failed" for everything else.
+		failStatus := "failed"
+		outStr := string(out)
+		if strings.Contains(outStr, "InsufficientInstanceCapacity") ||
+			strings.Contains(outStr, "MaxSpotInstanceCountExceeded") ||
+			strings.Contains(outStr, "SpotMaxPriceTooLow") ||
+			strings.Contains(outStr, "no Spot capacity") {
+			failStatus = "nocap"
+		}
+
+		// Update DynamoDB metadata so km list shows the failure instead of stuck "starting"
+		if h.DynamoClient != nil && h.TableName != "" {
+			if statusErr := awspkg.UpdateSandboxStatusDynamo(ctx, h.DynamoClient, h.TableName, event.SandboxID, failStatus); statusErr != nil {
+				log.Warn().Err(statusErr).Str("sandbox_id", event.SandboxID).
+					Str("status", failStatus).Msg("failed to update metadata status (non-fatal)")
+			} else {
+				log.Info().Str("sandbox_id", event.SandboxID).
+					Str("status", failStatus).Msg("updated metadata status")
+			}
+		}
 
 		// Send failure notification if SES client and operator email are configured
 		if h.SESClient != nil && event.OperatorEmail != "" && h.Domain != "" {
@@ -329,9 +357,16 @@ func main() {
 		toolchainDir = "/tmp/toolchain"
 	}
 
+	tableName := os.Getenv("KM_SANDBOX_TABLE")
+	if tableName == "" {
+		tableName = "km-sandboxes"
+	}
+
 	h := &CreateHandler{
 		S3Client:     s3.NewFromConfig(awsCfg),
 		SESClient:    sesv2.NewFromConfig(awsCfg),
+		DynamoClient: awsdynamodb.NewFromConfig(awsCfg),
+		TableName:    tableName,
 		Domain:       domain,
 		ToolchainDir: toolchainDir,
 	}
