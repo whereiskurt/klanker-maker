@@ -728,16 +728,12 @@ Plans:
 - [ ] 30-01-PLAN.md — km pause command + SandboxMetadata lock fields
 - [ ] 30-02-PLAN.md — km lock/unlock commands + lock guards + root.go wiring
 
-### Phase 31: Observable learning-mode sandbox — permissive MITM proxy that records all DNS, HTTP, GitHub, and Claude traffic to generate a minimal allowlist profile from observed behavior
+### Phase 31: Allowlist profile generator — observe sandbox traffic via eBPF TLS uprobes + proxy logs, auto-generate minimal SandboxProfile YAML
 
-**Goal:** [To be planned]
+**Goal:** Run a sandbox in "learning mode" that records all observed DNS, HTTP, and TLS traffic from Phase 41 uprobe events and Phase 40 eBPF audit logs, then generates a minimal `SandboxProfile` YAML with only the DNS suffixes, hosts, and GitHub repos actually used. Leverages the existing TLS uprobe consumer (pkg/ebpf/tls/), eBPF audit ring buffer (pkg/ebpf/audit/), and MITM proxy logs as data sources. Output is a ready-to-use profile YAML that can be reviewed and applied.
 **Requirements**: TBD
-**Depends on:** Phase 30
+**Depends on:** Phase 41 (TLS uprobe observability), Phase 40 (eBPF cgroup enforcement)
 **Plans:** 0 plans
-
-**Also includes (from TODOs):**
-- Audit-log sidecar silently drops non-JSON lines — persist raw output for forensic completeness
-- Transparent HTTPS proxying doesn't work — only explicit proxy via env vars; DNAT sends raw TLS bytes
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 31 to break down)
