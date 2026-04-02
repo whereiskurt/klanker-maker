@@ -26,6 +26,7 @@ spec:
     mode: allowlist
 
   network:
+    enforcement: both
     egress:
       allowedDNSSuffixes:
         - ".amazonaws.com"

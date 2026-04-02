@@ -70,6 +70,7 @@ spec:
         - "fix/*"
 
   network:
+    enforcement: proxy
     egress:
       # GitHub hosts are implicitly allowed via sourceAccess.github.allowedRepos
       allowedDNSSuffixes:

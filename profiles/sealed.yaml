@@ -33,6 +33,7 @@ spec:
     warningThreshold: 0.80
 
   network:
+    enforcement: proxy
     egress:
       allowedDNSSuffixes:
         - anthropic.com
