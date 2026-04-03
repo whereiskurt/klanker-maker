@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 33-03-PLAN.md
-last_updated: "2026-04-03T00:17:19.378Z"
+stopped_at: Completed 43-01-PLAN.md
+last_updated: "2026-04-03T01:55:29.504Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
-  total_phases: 42
+  total_phases: 44
   completed_phases: 38
-  total_plans: 129
-  completed_plans: 127
+  total_plans: 131
+  completed_plans: 128
   percent: 0
 ---
 
@@ -173,6 +173,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 33-ec2-storage-and-ami P01 | 3 | 2 tasks | 5 files |
 | Phase 33-ec2-storage-and-ami P02 | 3min | 1 tasks | 4 files |
 | Phase 33-ec2-storage-and-ami P03 | 4min | 2 tasks | 6 files |
+| Phase 43 P01 | 160s | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -471,6 +472,9 @@ Recent decisions affecting current work:
 - [Phase 33-ec2-storage-and-ami]: Spot instances get root_block_device sizing only, no encryption/hibernation (km pause rejects spot instances)
 - [Phase 33-ec2-storage-and-ami]: Used aws_volume_attachment (not ebs_block_device) for additional EBS volume to decouple from instance lifecycle
 - [Phase 33-ec2-storage-and-ami]: User-data device probe order: /dev/xvdf (AL2023 udev), /dev/sdf, /dev/nvme1n1, /dev/nvme2n1 with root-device guard
+- [Phase 43]: NFS ingress restricted to sandbox_sg_id SG reference (not CIDR) for EFS security group
+- [Phase 43]: efs module placed immediately after network in regionalModules() since its terragrunt.hcl reads network/outputs.json at parse time
+- [Phase 43]: EFSMountPoint defaults to empty string; compiler/userdata (Plan 02) applies /shared when omitted
 
 ### Roadmap Evolution
 
@@ -523,9 +527,10 @@ None yet.
 - Phase 40 added: eBPF TC/cgroup enforcement — kernel-level DNS/HTTP/TLS-SNI allowlisting, toggleable `enforcement: ebpf` in profile, fixes root bypass, proxy sidecars kept for MITM inspection
 - Phase 41 added: eBPF SSL uprobe observability — plaintext TLS capture via OpenSSL hooks, toggleable `inspection: uprobe`, replaces MITM proxy for GitHub filtering, Bedrock metering stays userspace
 - Phase 42 added: eBPF gatekeeper mode — connect4 DNAT rewrite for selective L7 proxy
+- Phase 44 added: km at/schedule — EventBridge Scheduler command for deferred and recurring sandbox operations
 
 ## Session Continuity
 
-Last session: 2026-04-03T00:17:19.374Z
-Stopped at: Completed 33-03-PLAN.md
+Last session: 2026-04-03T01:55:29.500Z
+Stopped at: Completed 43-01-PLAN.md
 Resume file: None

@@ -1001,7 +1001,7 @@ Plans:
 **Goal:** `km init` provisions a Regional EFS filesystem with mount targets in each AZ, and sandboxes with `mountEFS: true` in their profile automatically mount the shared filesystem at a configurable path — enabling cross-sandbox artifact sharing without S3
 **Requirements**: EFS-01, EFS-02, EFS-03, EFS-04, EFS-05, EFS-06
 **Depends on:** Phase 33
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 43-01-PLAN.md — EFS Terraform module, Terragrunt config, profile fields, km init registration
@@ -1025,3 +1025,13 @@ Key design decisions:
 - Security group created during `km init` allowing NFS (port 2049) from sandbox instance SGs
 - `km destroy` does NOT remove EFS — it persists across sandbox lifecycles
 - Cross-AZ transfer cost ($0.01/GB/direction) accepted as trade-off for simplicity
+
+### Phase 44: km at/schedule — EventBridge Scheduler command for deferred and recurring sandbox operations
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 43
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 44 to break down)
