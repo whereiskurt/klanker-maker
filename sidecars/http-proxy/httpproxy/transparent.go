@@ -107,11 +107,13 @@ func (tl *TransparentListener) lookupOriginalDest(peerPort uint16) (net.IP, uint
 		return nil, 0, fmt.Errorf("sock_to_original_ip lookup cookie %d: %w", cookie, err)
 	}
 
-	// sock_to_original_port: u64 → u16
-	var origPort uint16
-	if err := tl.sockToPort.Lookup(&cookie, &origPort); err != nil {
+	// sock_to_original_port: u64 → u16 (network byte order)
+	var origPortRaw uint16
+	if err := tl.sockToPort.Lookup(&cookie, &origPortRaw); err != nil {
 		return nil, 0, fmt.Errorf("sock_to_original_port lookup cookie %d: %w", cookie, err)
 	}
+	// Convert from NBO to host byte order
+	origPort := (origPortRaw >> 8) | (origPortRaw << 8)
 
 	// Convert NBO IP (stored as native uint32 by cilium/ebpf) back to net.IP
 	ipBytes := make([]byte, 4)
