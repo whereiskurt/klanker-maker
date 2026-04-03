@@ -338,10 +338,11 @@ spec:
 |---------|---------|---------------|------------|----------------|
 | `hardened` | `required` | `required` | `off` | `["self"]` |
 | `sealed` | `required` | `required` | `off` | `["self"]` |
-| `open-dev` | `optional` | `optional` | `off` | `["*"]` |
-| `restricted-dev` | `optional` | `optional` | `off` | `["*"]` |
+| `goose` | `required` | `required` | `off` | `["self"]` |
+| `goose-ebpf` | `required` | `required` | `off` | `["self"]` |
+| `goose-ebpf-gatekeeper` | `required` | `required` | `off` | `["self"]` |
 
-Hardened and sealed profiles enforce full signing and restrict inbound to self-mail only (a sandbox can only receive email from itself). Development profiles use optional signing with open inbound access for ease of experimentation.
+All built-in profiles enforce full signing and restrict inbound to self-mail only. Custom profiles can relax these settings for inter-sandbox communication.
 
 ---
 

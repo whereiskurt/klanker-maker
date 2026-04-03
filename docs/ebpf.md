@@ -13,6 +13,7 @@ Deep-dive into the eBPF implementation: cgroup-attached BPF programs for kernel-
   - [cgroup_skb/egress — Packet-Level Backstop](#cgroup_skbegress--packet-level-backstop)
 - [BPF Maps](#bpf-maps)
 - [DNS Resolver](#dns-resolver)
+- [Gatekeeper Mode — connect4 DNAT Rewrite (Phase 42)](#gatekeeper-mode--connect4-dnat-rewrite-phase-42)
 - [Ring Buffer Audit Pipeline](#ring-buffer-audit-pipeline)
 - [Volatile Constants](#volatile-constants)
 - [Cgroup & Process Management](#cgroup--process-management)
@@ -109,7 +110,7 @@ All four programs are compiled from `pkg/ebpf/bpf.c` via `bpf2go` and embedded i
 **Hook point:** Every `connect()` syscall from processes in the cgroup.
 
 **Logic flow:**
-1. **Exempt the enforcer process** — check PID against `const_proxy_pid` (the enforcer's own PID). This prevents the DNS resolver and proxy from being blocked by their own enforcement.
+1. **Exempt the enforcer and proxy processes** — check PID against `const_proxy_pid` (the enforcer's own PID) and `const_proxy_pid2` (the MITM proxy PID in gatekeeper mode). Both PIDs are passed via `--proxy-pid` flags. This prevents the DNS resolver, enforcer, and L7 proxy from being blocked by their own enforcement.
 2. **Exempt IMDS** — allow 169.254.169.254 unconditionally (EC2 instance metadata).
 3. **Exempt localhost** — allow 127.0.0.0/8 unconditionally.
 4. **Record socket → PID mapping** — store in `socket_pid_map` for audit logging.
@@ -207,6 +208,139 @@ The enforcer runs a DNS resolver at 127.0.0.1:53 (configurable) that:
 8. **TTL sweep goroutine** periodically evicts expired entries from the BPF map.
 
 **Dynamic allowlist model:** The `allowed_cidrs` map starts nearly empty (just VPC CIDRs, IMDS, link-local). As the agent resolves domains, IPs are added. As TTLs expire, IPs are removed. The allowlist is always the minimum set of IPs needed for currently-active connections.
+
+---
+
+## Gatekeeper Mode — connect4 DNAT Rewrite + Transparent Proxy (Phase 42)
+
+When `enforcement: "both"`, the eBPF layer acts as a **gatekeeper** that selectively redirects traffic to the L7 MITM proxy via kernel-level DNAT. This is the recommended production configuration — it combines kernel-level IP enforcement with userspace L7 inspection for hosts that need deep filtering (Bedrock token metering, GitHub repo-level allowlisting).
+
+**E2E verified on AL2023 kernel 6.18:** allowed repos clone successfully, blocked repos receive 403 from the transparent proxy, non-allowlisted domains are blocked by BPF with EPERM, non-proxy hosts connect directly without touching the proxy.
+
+### How connect4 DNAT Works
+
+The `connect4` BPF program performs transparent destination NAT at the syscall level, before the TCP handshake begins:
+
+1. **Dual-PID exemption** — check PID against `const_proxy_pid` (eBPF enforcer) and `const_proxy_pid2` (HTTP proxy sidecar). Both are passed via `--proxy-pid` flags. Exempted processes bypass all enforcement to prevent redirect loops.
+2. **IMDS + localhost exemption** — always allow 169.254.169.254 and 127.0.0.0/8.
+3. **IP allowlist check** — destination IP is looked up in the `allowed_cidrs` LPM trie. If denied, emit DENY event and return `EPERM` (block mode) or allow with log (log mode).
+4. **L7 proxy check** — for allowed IPs, check the `http_proxy_ips` hash map. If the IP is **not** proxy-marked, the connection goes direct (no DNAT).
+5. **DNAT rewrite** — if the IP is proxy-marked:
+   - Stash the original destination IP and port in `sock_to_original_ip` / `sock_to_original_port` (keyed by socket cookie)
+   - Rewrite `ctx->user_ip4` to `const_mitm_proxy_address` (127.0.0.1 in network byte order)
+   - Select proxy port based on original port: 443 → `const_https_proxy_port`, others → `const_http_proxy_port`
+   - Emit a `REDIRECT` event to the ring buffer
+
+The application never sees the rewrite — `curl https://api.github.com` thinks it's connecting to GitHub, but the kernel silently routes the `connect()` syscall to 127.0.0.1:3128.
+
+### Transparent Proxy — BPF Map Lookup Chain
+
+The key innovation in Phase 42 is the **transparent proxy** (`sidecars/http-proxy/httpproxy/transparent.go`). Because BPF rewrites the destination at the syscall level, the HTTP proxy receives raw TLS (not HTTP CONNECT). The proxy recovers the original destination via a three-step BPF map lookup:
+
+```
+                        ┌──────────────────────────────────────┐
+                        │  Sandbox process: curl github.com    │
+                        └──────────┬───────────────────────────┘
+                                   │ connect(140.82.112.4:443)
+                                   ▼
+                        ┌──────────────────────────────────────┐
+                        │  BPF connect4 hook                    │
+                        │  1. allowed_cidrs[140.82.112.4] ✓     │
+                        │  2. http_proxy_ips[140.82.112.4] ✓    │
+                        │  3. Stash: cookie→140.82.112.4:443    │
+                        │  4. Rewrite → 127.0.0.1:3128          │
+                        └──────────┬───────────────────────────┘
+                                   │ connect(127.0.0.1:3128)
+                                   ▼
+                        ┌──────────────────────────────────────┐
+                        │  BPF sockops hook                     │
+                        │  ACTIVE_ESTABLISHED: src_port→cookie  │
+                        └──────────┬───────────────────────────┘
+                                   │
+                                   ▼
+                        ┌──────────────────────────────────────┐
+                        │  HTTP Proxy (TransparentListener)     │
+                        │  1. Accept conn from sandbox process  │
+                        │  2. Peek first byte: 0x16 (TLS) →    │
+                        │     transparent mode                  │
+                        │  3. peer_port = conn.RemoteAddr().Port│
+                        │  4. cookie = src_port_to_sock[port]   │
+                        │  5. orig_ip = sock_to_original_ip[ck] │
+                        │  6. orig_port = sock_to_original_port │
+                        │     → 140.82.112.4:443 (recovered!)  │
+                        │  7. TLS-terminate with platform CA    │
+                        │  8. Apply GitHub repo filter          │
+                        │  9. Forward to real destination       │
+                        └──────────────────────────────────────┘
+```
+
+**Protocol detection:** The proxy peeks at the first byte. `0x16` (TLS ClientHello) triggers transparent mode with BPF map lookup. Non-TLS traffic (regular HTTP) is passed to goproxy's standard CONNECT handler.
+
+**Lazy map loading:** BPF maps are loaded from pinned bpffs paths (`/sys/fs/bpf/km/{sandboxID}/`) on first transparent connection, not at startup. This avoids startup ordering issues between the enforcer (which pins the maps) and the proxy.
+
+**Byte order handling:** A critical operational lesson from Phase 42 — BPF stores IPs and ports in network byte order. The proxy must use `binary.NativeEndian.PutUint32` and manual byte-swap for ports (`(raw >> 8) | (raw << 8)`) to correctly recover the original destination. Multiple E2E bug fixes addressed NBO/HBO mismatches.
+
+### Proxy IP Map Population
+
+The `http_proxy_ips` map is populated by the DNS resolver at two points:
+
+1. **At startup** — the enforcer calls `MarkForProxy()` for pre-seeded proxy host IPs (resolved via `net.LookupHost()` on each `--proxy-hosts` domain).
+2. **On DNS resolution** — when a domain matches the `ProxyHosts` list (configured from profile fields that need L7 inspection: `sourceAccess.github.allowedRepos`, Bedrock endpoint, Anthropic API), the resolver calls `enforcer.MarkForProxy(ip)` to insert the resolved IP into the hash map.
+
+L7-required hosts are derived automatically from the profile:
+- `github.com`, `api.github.com`, `*.githubusercontent.com` — from `sourceAccess.github`
+- `bedrock-runtime.*.amazonaws.com` — from `useBedrock: true`
+- `api.anthropic.com` — from `allowedHosts` containing Anthropic endpoints
+
+### Bootstrap Ordering (both mode)
+
+The `both` mode bootstrap in userdata has a specific ordering to ensure BPF maps are pinned before the proxy starts:
+
+1. **eBPF enforcer starts** (`km-ebpf-enforcer.service`) — loads BPF, creates cgroup, pins maps to bpffs, starts DNS resolver
+2. **chmod BPF pin directory** — `ExecStartPost` sets `/sys/fs/bpf/km/{id}/` readable by `km-sidecar` user
+3. **HTTP proxy restarts** — `ExecStartPost` restarts `km-http-proxy.service` so it can find the pinned maps
+4. **Proxy loads maps lazily** — on first transparent TLS connection, `TransparentListener.loadMaps()` opens pinned maps from bpffs
+
+### Gatekeeper vs Pure eBPF
+
+| Behavior | Pure eBPF (`enforcement: "ebpf"`) | Gatekeeper (`enforcement: "both"`) |
+|----------|-----------------------------------|------------------------------------|
+| Firewall mode | `--firewall-mode block` (strict deny) | `--firewall-mode block` (strict deny) |
+| DNS handling | eBPF enforcer's built-in resolver on `:53` | eBPF enforcer's built-in resolver on `:53` |
+| Proxy sidecars | Skipped (no km-dns-proxy, no km-http-proxy) | Active (HTTP proxy with transparent mode, audit, tracing) |
+| L7 filtering | None (IP-level only) | GitHub repo filtering, Bedrock token metering, Anthropic API metering |
+| Non-L7 traffic | Direct (kernel-only path) | Direct (connect4 skips DNAT for non-proxy IPs) |
+| Proxy env vars | Not set | Set (`HTTP_PROXY`, `HTTPS_PROXY`, etc.) |
+| iptables DNAT | None | DNS only (`:53` → `:5353`); HTTP/HTTPS handled by BPF connect4 |
+| PID exemption | Single PID (enforcer) | Dual PID (enforcer + HTTP proxy sidecar) |
+
+### E2E Verification Results
+
+Verified on `goose-ebpf-gatekeeper` profile (EC2, AL2023 kernel 6.18, `enforcement: both`):
+
+| Scenario | Expected | Result |
+|----------|----------|--------|
+| `git clone` allowed repo | Clone succeeds | **PASS** — transparent proxy forwards to GitHub |
+| `git clone` blocked repo | 403 from proxy | **PASS** — proxy intercepts, returns GitHub 403 response |
+| `curl evil.com` | EPERM (connection refused) | **PASS** — BPF connect4 blocks at kernel level |
+| `pip install requests` (non-L7 host) | Direct connection, no proxy | **PASS** — connect4 skips DNAT, traffic flows direct |
+| Bedrock API call | Token metered | **PASS** — transparent proxy captures response, meters tokens |
+| `iptables -F -t nat` then retry | Still enforced | **PASS** — BPF enforcement independent of iptables |
+
+### Built-in Profiles
+
+- **`goose-ebpf-gatekeeper`** — gatekeeper mode with eBPF + proxy enforcement, GitHub repo filtering, and Bedrock token metering.
+- **`goose-ebpf`** — pure eBPF enforcement, no proxy. Maximum security, lowest overhead.
+
+### Operational Lessons from Phase 42
+
+1. **Byte order is the #1 source of bugs.** BPF stores IPs in network byte order (NBO) as `__u32`. cilium/ebpf's `Map.Lookup/Put` use `binary.NativeEndian` for marshaling. The proxy must convert NBO ports via manual byte-swap, not `binary.BigEndian`.
+
+2. **Bootstrap ordering matters.** The enforcer must pin BPF maps before the proxy starts. Solution: `ExecStartPost` in the enforcer's systemd unit runs `chmod` on the bpffs directory, then restarts the proxy.
+
+3. **Transparent TLS requires platform CA trust.** The proxy generates leaf certificates signed by the platform CA (same CA used in proxy mode). Sandbox processes must trust the CA via the system cert bundle.
+
+4. **Dual-PID exemption is essential.** Without exempting the proxy's PID, the proxy's own outbound connections to real destinations would be intercepted by connect4, creating an infinite redirect loop.
 
 ---
 
@@ -342,29 +476,42 @@ Pinning means the BPF programs continue enforcing even if the `km ebpf-attach` p
 
 ## SSL Uprobe Observability (Phase 41)
 
-An `ebpf-observer` sidecar attaches uprobes to TLS library functions for passive plaintext capture.
+An `ebpf-observer` sidecar attaches uprobes to TLS library functions for passive plaintext capture. **E2E verified on AL2023 kernel 6.18** with 8 probes attaching successfully to OpenSSL 3.2.2.
 
 ### TLS Library Coverage
 
-| Library | Binary | Uprobe Target | Attach Method | Limitations |
-|---------|--------|---------------|---------------|-------------|
-| OpenSSL 3.x | `/usr/lib64/libssl.so.3` | `SSL_write` / `SSL_read` | Standard dynamic symbol | None — most reliable |
-| Go crypto/tls | Per-binary (e.g., goose) | `writeRecordLocked` / `Read` | Symbol scan + per-RET offsets | Binary must be unstripped; uretprobe crashes Go |
-| BoringSSL | Per-binary (e.g., Bun/Claude Code) | `SSL_write` | Byte-pattern offset discovery | Offsets break per Bun version |
-| rustls | Per-binary (future) | `rustls_connection_write_tls` | Reverse-correlation | Experimental |
+| Library | Binary | Uprobe Target | Attach Method | Status | Limitations |
+|---------|--------|---------------|---------------|--------|-------------|
+| OpenSSL 3.x | `/usr/lib64/libssl.so.3` | `SSL_write`, `SSL_read`, `SSL_write_ex`, `SSL_read_ex` | Standard dynamic symbol | **E2E verified** | None — most reliable |
+| Go crypto/tls | Per-binary (e.g., goose) | `writeRecordLocked` / `Read` | Symbol scan + per-RET offsets | Schema-ready | Binary must be unstripped; uretprobe crashes Go |
+| BoringSSL | Per-binary (e.g., Bun/Claude Code) | `SSL_write` | Byte-pattern offset discovery | Schema-ready | Offsets break per Bun version |
+| rustls | Per-binary (future) | `rustls_connection_write_tls` | Reverse-correlation | Schema-ready | Experimental |
+
+**Probe count (OpenSSL):** 8 probes attach — `SSL_write` entry, `SSL_read` entry+return, `SSL_write_ex` entry, `SSL_read_ex` entry+return, plus `__sys_connect` and `accept4` kprobes for connection correlation.
 
 ### What Uprobes See
 
 - Function entry: plaintext buffer, buffer length, SSL context pointer
-- HTTP/1.1: full request/response in plaintext
-- HTTP/2: header frames (HPACK-decoded) — method, path, authority, status
-- HTTP/2 response bodies: **NOT captured** (Pixie limitation — headers only)
+- HTTP/1.1: full request/response in plaintext (verified: git-smart-HTTP via `git clone`)
+- HTTP/2: HPACK-compressed binary frames — **not parseable** by the HTTP/1.1 parser (GitHub API uses HTTP/2)
+- Connection metadata: PID, TID, FD, remote IP/port (via `conn_map` from `__sys_connect` kprobe)
 
 ### What Uprobes Cannot Do
 
 - **Block requests** — uprobes fire at function entry but cannot prevent `SSL_write` from completing. The only enforcement action is `bpf_send_signal(SIGKILL)` which kills the entire process.
-- **Meter token usage** — Bedrock streaming responses are chunked HTTP/2 data frames; uprobe tooling can only capture headers. Token counting stays in the MITM proxy.
+- **Meter token usage** — Bedrock streaming responses are chunked HTTP/2 data frames; uprobe tooling can only capture HTTP/1.1 headers. Token counting stays in the MITM proxy.
 - **Replace the proxy** — the proxy provides active enforcement (GitHub repo filtering, budget 403s). Uprobes provide parallel observability.
+- **Parse HTTP/2** — the GitHub API uses HTTP/2 over TLS. Captured plaintext contains HPACK-compressed binary, not `GET /repos/... HTTP/1.1`. Git-smart-HTTP (clone/push) uses HTTP/1.1 and IS captured correctly.
+
+### Operational Lessons from Phase 41
+
+1. **BPF verifier on AL2023 kernel 6.18 is strict about `bpf_probe_read_user` length.** The verifier rejects calls where the length parameter might be negative (signed taint). The fix is a bitwise AND at the assignment point: `copy_len = len & 0x3FFF` — this statically bounds the value. If-clamping (`if (len > MAX) len = MAX`) is NOT sufficient because it doesn't remove the signed taint.
+
+2. **cilium/ebpf map type marshaling is strict.** If BPF declares `__type(key, __u8)`, Go must use `uint8` not `uint32`. Mismatches fail silently with a logged warning.
+
+3. **Uprobes are global, not cgroup-scoped.** They fire for ALL processes system-wide (SSM agent, yum, etc.), creating noise. Filter by PID/cgroup in the userspace consumer.
+
+4. **Library discovery uses /proc/pid/maps.** The scanner finds `/usr/lib64/libssl.so.3` matching `ldd` output. On AL2023, `/lib64` is a symlink to `/usr/lib64`.
 
 ### Go crypto/tls — The uretprobe Problem
 
@@ -401,13 +548,18 @@ Claude Code ships as a Bun binary with BoringSSL statically linked. The symbols 
    → Rewrite: dest = 127.0.0.1:3128
    → Emit: event(action=REDIRECT, layer=CONNECT4)
    ↓
-4. MITM proxy: accept connection on :3128
+4. Transparent proxy (TransparentListener): accept connection on :3128
+   → Peek first byte: 0x16 (TLS ClientHello) → transparent mode
    → Read peer source port (50123)
-   → Lookup src_port_to_sock[50123] → cookie
-   → Lookup sock_to_original_ip[cookie] → 140.82.112.35:443
-   → Connect to real dest, MITM the TLS session
+   → BPF map lookup chain:
+     src_port_to_sock[50123] → cookie (12345)
+     sock_to_original_ip[12345] → 140.82.112.35 (NBO → net.IP)
+     sock_to_original_port[12345] → 443 (NBO → host byte order)
+   → Recovered original dest: 140.82.112.35:443
+   → TLS-terminate with platform CA (generate leaf cert for SNI host)
+   → Read decrypted HTTP/1.1 request
    → Inspect: is /repos/org/repo in allowedRepos? ✓
-   → Forward request and response
+   → Connect to real 140.82.112.35:443, forward request and response
    ↓
 5. SSL uprobe (if Phase 41): observe SSL_write plaintext
    → Log: GET /repos/org/repo, Host: api.github.com
@@ -481,13 +633,16 @@ make generate-ebpf
 ```
 
 This runs:
-1. `docker build -f Dockerfile.ebpf-generate` — creates a build container with clang, libbpf, and bpf2go
-2. `bpf2go` compiles `pkg/ebpf/bpf.c` → generates `bpf_x86_bpfel.go` (embedded bytecode) + `bpf_x86_bpfel.o` (debug)
-3. The bytecode is linked into the `km` binary — no runtime clang dependency on sandbox instances
+1. `docker build -f Dockerfile.ebpf-generate` — creates a build container with clang, libbpf, and system headers
+2. `bpf2go -target amd64` compiles `pkg/ebpf/bpf.c` → generates `bpf_x86_bpfel.go` (179-line loader + embedded bytecode) and `bpf_x86_bpfel.o` (19,072 bytes)
+3. For SSL uprobes: generates `opensslbpf_x86_bpfel.go` (16KB) and `connectbpf_x86_bpfel.go` (5KB)
+4. Generated files are committed to git — the bytecode is linked into the `km` binary at compile time, no runtime clang dependency on sandbox instances
 
 **Go build tags:**
 - `//go:build linux` — enforcer.go (real implementation)
 - `//go:build !linux` — enforcer_stub.go (no-op stubs for macOS dev)
+
+**E2E verification pipeline:** `make generate-ebpf` → `make build` → `make sidecars` (uploads km binary to S3) → `km create --remote` → SSM into instance → test enforcement → `km destroy`. Each cycle takes ~3-5 minutes. Phase 40 required 14 E2E iterations; Phase 41 required 3; Phase 42 required 8+ with byte-order bug fixes.
 
 ---
 

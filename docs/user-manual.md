@@ -22,10 +22,12 @@
   - [km shell](#km-shell)
   - [km agent](#km-agent)
   - [km stop](#km-stop)
+  - [km resume](#km-resume)
   - [km extend](#km-extend)
   - [km otel](#km-otel)
   - [km info](#km-info)
   - [km rsync](#km-rsync)
+  - [km at / km schedule](#km-at--km-schedule)
   - [km configure](#km-configure)
   - [km uninit](#km-uninit)
   - [km bootstrap](#km-bootstrap)
@@ -227,13 +229,13 @@ km validate <profile.yaml> [profile2.yaml ...]
 
 ```bash
 # Validate a single profile
-km validate profiles/restricted-dev.yaml
-# restricted-dev.yaml: valid
+km validate profiles/goose.yaml
+# goose.yaml: valid
 
 # Validate multiple profiles
 km validate profiles/*.yaml
-# open-dev.yaml: valid
-# restricted-dev.yaml: valid
+# goose.yaml: valid
+# goose-ebpf.yaml: valid
 # hardened.yaml: valid
 # sealed.yaml: valid
 
@@ -250,17 +252,19 @@ km validate my-broken-profile.yaml
 Provision a sandbox from a profile.
 
 ```
-km create <profile.yaml> [--on-demand] [--aws-profile <profile>] [--verbose] [--remote] [--sandbox-id-override <id>] [--alias-override <alias>]
+km create <profile.yaml> [--on-demand] [--no-bedrock] [--docker] [--alias <alias>] [--aws-profile <profile>] [--verbose] [--remote] [--sandbox-id-override <id>]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--on-demand` | `false` | Override `spot: true` in profile; use on-demand instances |
+| `--no-bedrock` | `false` | Disable Bedrock access -- removes IAM permissions and all Bedrock/Claude env vars |
+| `--docker` | `false` | Shortcut for `--substrate=docker` (use Docker Compose local substrate) |
+| `--alias` | `""` | Human-friendly alias for the sandbox (e.g. `orc`, `wrkr`). Overrides profile `metadata.alias` template |
 | `--aws-profile` | `klanker-terraform` | AWS CLI profile for provisioning |
 | `--verbose` | `false` | Show full terragrunt/terraform output |
 | `--remote` | `false` | Dispatch to Lambda via EventBridge |
 | `--sandbox-id-override` | `""` | Override the generated sandbox ID |
-| `--alias-override` | `""` | Override the alias template |
 
 **What it does:**
 
@@ -280,10 +284,19 @@ km create <profile.yaml> [--on-demand] [--aws-profile <profile>] [--verbose] [--
 
 ```bash
 # Create a sandbox from a built-in profile
-km create profiles/restricted-dev.yaml
+km create profiles/goose.yaml
 
 # Create with on-demand instances (no spot)
-km create profiles/open-dev.yaml --on-demand
+km create profiles/sealed.yaml --on-demand
+
+# Disable Bedrock — use direct Anthropic API keys instead
+km create profiles/goose.yaml --no-bedrock
+
+# Use Docker Compose local substrate
+km create profiles/goose.yaml --docker
+
+# Override the sandbox alias
+km create profiles/goose.yaml --alias mybot
 
 # Create with a different AWS profile
 km create my-profile.yaml --aws-profile my-custom-profile
@@ -540,10 +553,10 @@ km list --wide
 
 ```
 #   ALIAS       SANDBOX ID    PROFILE          SUBSTRATE  REGION       STATUS     TTL
-1   my-agent    sb-7f3a9e12   restricted-dev   ec2        us-east-1    running    5h46m
+1   my-agent    sb-7f3a9e12   goose            ec2        us-east-1    running    5h46m
 2   -           sb-a4c8e210   hardened         ecs        us-east-1    running    2h12m
-3   dev-box     sb-d9f01b3c   open-dev         ec2        us-west-2    paused     18h33m
-4   locked-one  sb-e5b82f01   claude-dev       ec2        us-east-1    running    3h10m  🔒
+3   dev-box     sb-d9f01b3c   goose-ebpf       ec2        us-west-2    paused     18h33m
+4   locked-one  sb-e5b82f01   codex            ec2        us-east-1    running    3h10m  🔒
 ```
 
 ```bash
@@ -554,7 +567,7 @@ km list --json
 [
   {
     "sandbox_id": "sb-7f3a9e12",
-    "profile": "restricted-dev",
+    "profile": "goose",
     "substrate": "ec2",
     "region": "us-east-1",
     "status": "running",
@@ -585,7 +598,7 @@ km status sb-7f3a9e12
 
 ```
 Sandbox ID:  sb-7f3a9e12
-Profile:     restricted-dev
+Profile:     goose
 Substrate:   ec2
 Region:      us-east-1
 Status:      running
@@ -895,13 +908,40 @@ km stop <sandbox-id | #number> [--remote]
 1. Validates sandbox ID
 2. Checks lock guard — blocked if sandbox is locked
 3. Calls `StopInstances` on the EC2 instance
-4. Instance can be restarted via `km budget add` (which auto-resumes stopped instances)
+4. Instance can be restarted via `km resume` or `km budget add` (which auto-resumes stopped instances)
 
 **Example:**
 
 ```bash
 km stop #1
 km stop sb-7f3a9e12 --remote
+```
+
+---
+
+### km resume
+
+Resume a paused or stopped sandbox.
+
+```
+km resume <sandbox-id | #number> [--remote]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--remote` | `false` | Dispatch resume to Lambda via EventBridge |
+
+**What it does:**
+
+1. Validates sandbox ID
+2. Starts the stopped/paused EC2 instance via `StartInstances`
+3. Updates DynamoDB metadata status back to `"running"`
+
+**Example:**
+
+```bash
+km resume #1
+km resume sb-7f3a9e12 --remote
 ```
 
 ---
@@ -1008,6 +1048,61 @@ Paths can be scoped via `spec.execution.rsyncPaths` in the profile, or via an ex
 ```bash
 km rsync save #1 checkpoint-1     # save home snapshot
 km rsync load #1 checkpoint-1     # restore snapshot
+```
+
+---
+
+### km at / km schedule
+
+Schedule a deferred or recurring sandbox operation using AWS EventBridge Scheduler. `km schedule` is an alias for `km at`.
+
+```
+km at '<time-expr>' <command> [args...]
+km at list
+km at cancel <schedule-name> [--group <name>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--cron` | `""` | Raw EventBridge `cron()` expression (bypasses natural language parsing) |
+| `--name` | `""` | Override auto-generated schedule name |
+| `--group` | `km-at` | EventBridge Scheduler group name |
+
+**Supported commands:** `create`, `destroy`, `kill`, `stop`, `pause`, `resume`, `extend`
+
+Each command is dispatched to the appropriate Lambda (create-handler for `create`, TTL handler for lifecycle commands) via EventBridge Scheduler.
+
+**What it does:**
+
+1. Parses the time expression (natural language like `'10pm tomorrow'` or `--cron 'cron(0 22 * * ? *)'`)
+2. Creates an EventBridge Scheduler schedule targeting the appropriate Lambda
+3. Stores schedule metadata in DynamoDB for `km at list`
+
+**Subcommands:**
+
+- **`km at list`** -- Lists all scheduled operations (name, command, target, schedule, status, created date)
+- **`km at cancel <name>`** -- Cancels a scheduled operation (deletes from EventBridge Scheduler and DynamoDB)
+
+**Example:**
+
+```bash
+# One-shot: create a sandbox tomorrow at 10pm
+km at '10pm tomorrow' create profiles/goose.yaml
+
+# Recurring: kill a sandbox every Thursday at 3pm
+km at 'every thursday at 3pm' kill sb-abc123
+
+# Raw cron expression
+km at --cron 'cron(0 15 ? * 5 *)' kill sb-abc123
+
+# List all scheduled operations
+km at list
+
+# Cancel a schedule
+km at cancel my-schedule-name
+
+# km schedule is an alias
+km schedule '10pm tomorrow' create profiles/goose.yaml
 ```
 
 ---
@@ -1123,7 +1218,7 @@ kind: SandboxProfile
 metadata:
   name: claude-code-sandbox
   description: Sandboxed Claude Code agent with repo access and API egress
-extends: restricted-dev
+extends: hardened
 
 spec:
   lifecycle:
@@ -1340,7 +1435,7 @@ kind: SandboxProfile
 metadata:
   name: goose-budgeted
   description: Goose agent with $2 compute + $5 AI budget cap
-extends: open-dev
+extends: hardened
 
 spec:
   lifecycle:
@@ -1553,7 +1648,7 @@ Every command the agent runs, every DNS query, every HTTP request is logged with
 Use `extends` to start from a base profile and override specific sections:
 
 ```yaml
-extends: open-dev
+extends: hardened
 
 spec:
   lifecycle:
@@ -1571,14 +1666,17 @@ spec:
 ```
 sealed (most restrictive)
   └── hardened
-        └── restricted-dev
-              └── open-dev (most permissive)
+        └── goose (Goose + Claude Code + Codex, Bedrock)
+              ├── goose-ebpf (pure eBPF enforcement)
+              └── goose-ebpf-gatekeeper (eBPF + proxy L7 inspection)
+codex (OpenAI Codex agent)
+agent-orchestrator (multi-agent orchestration)
 ```
 
 Start from the most restrictive profile that works and open up what you need:
 
 ```yaml
-# Start hardened, add just what Claude Code needs
+# Start hardened, add just what your agent needs
 extends: hardened
 
 spec:
@@ -1634,41 +1732,43 @@ spec:
 | Mode | iptables DNAT | DNS Proxy Sidecar | eBPF Enforcer | Best for |
 |------|---------------|-------------------|---------------|----------|
 | `proxy` (default) | Yes | Yes | No | Backward compatible, all substrates |
-| `ebpf` | No | No | Yes | Maximum security, EC2 only |
-| `both` | Yes | Yes | Yes | Belt-and-suspenders, EC2 only |
+| `ebpf` | No | No | Yes (block mode) | Maximum kernel-level security, EC2 only |
+| `both` (gatekeeper) | DNS only | No | Yes (block mode) + transparent proxy | Kernel enforcement + L7 inspection, EC2 only |
 
-**eBPF mode** attaches four BPF programs to a sandbox-scoped cgroup:
+**eBPF mode** attaches four BPF programs to a sandbox-scoped cgroup. E2E verified on AL2023 kernel 6.18 across 14+ iterations:
 
-- **cgroup/connect4** — intercepts TCP `connect()`. Checks destination IP against an LPM trie allowlist. Denied connections get EPERM. Allowed connections to proxy-marked IPs are transparently redirected to the L7 MITM proxy (127.0.0.1:3128).
+- **cgroup/connect4** — intercepts TCP `connect()`. Dual-PID exemption for enforcer and proxy sidecar. Checks destination IP against an LPM trie allowlist. Denied connections get EPERM. Allowed connections to proxy-marked IPs are transparently redirected to the L7 MITM proxy (127.0.0.1:3128) via syscall-level DNAT rewrite.
 - **cgroup/sendmsg4** — intercepts UDP `sendmsg()`. Redirects all DNS queries (port 53) to a local resolver that enforces the profile's `allowedDNSSuffixes` and populates the BPF allowlist with resolved IPs.
-- **sockops** — tracks TCP connection state. Maps source ports to socket cookies so the MITM proxy can recover the original destination after BPF rewrites.
+- **sockops** — tracks TCP connection state. Maps source ports to socket cookies so the transparent proxy can recover the original destination after BPF rewrites.
 - **cgroup_skb/egress** — packet-level backstop. Drops any packets to non-allowlisted IPs that slip past the connect4 hook.
 
 The BPF programs and maps are pinned to `/sys/fs/bpf/km/{sandboxID}/` and survive enforcer process restarts. Cleanup happens automatically during `km destroy`.
 
 **Key advantage over proxy mode:** eBPF enforcement runs in the kernel and cannot be bypassed by root users. In proxy mode, a root user can bypass iptables DNAT rules (e.g., via `yum install`). In eBPF mode, the cgroup scope applies to all processes regardless of privilege level.
 
+**Both (gatekeeper) mode:** The eBPF `connect4` hook runs in block mode as the primary enforcer. For hosts that need L7 inspection (GitHub repo filtering, Bedrock token metering), connect4 performs a syscall-level DNAT rewrite to the local transparent proxy. The proxy detects raw TLS connections (first byte `0x16`), recovers the original destination via a BPF map lookup chain (`src_port_to_sock` → `sock_to_original_ip` → `sock_to_original_port`), then applies L7 policy. Non-L7 traffic flows direct — never touches the proxy. E2E verified: allowed repos clone, blocked repos get 403, evil.com gets EPERM at the kernel level.
+
 **Note:** eBPF enforcement is currently EC2-only. Docker and ECS substrates fall back to proxy mode. The cgroup-based approach is designed to extend naturally to EKS pods in future substrates.
+
+For Docker-specific details (local container architecture, credential isolation, troubleshooting), see [Docker Substrate](docker.md).
 
 ### eBPF SSL Uprobe Observability
 
-When eBPF enforcement is enabled, an `ebpf-observer` sidecar provides **passive TLS plaintext capture** via eBPF uprobes — without MITM certificates. This complements the MITM proxy with an independent audit trail.
+When eBPF enforcement is enabled, uprobes provide **passive TLS plaintext capture** for audit and observability — without MITM certificates. E2E verified on AL2023 with 8 probes attaching to OpenSSL 3.2.2 (`SSL_write`, `SSL_read`, `SSL_write_ex`, `SSL_read_ex`, plus `__sys_connect` and `accept4` kprobes for connection correlation).
 
-The observer attaches uprobes to TLS library functions across multiple stacks:
-
-| TLS Library | Used By | What's Captured |
-|-------------|---------|-----------------|
-| OpenSSL (libssl.so.3) | curl, wget, Python, Ruby | Full plaintext (HTTP/1.1 requests/responses) |
-| Go crypto/tls | Goose, Go agents | Plaintext (requires unstripped binary) |
-| BoringSSL (Bun) | Claude Code | Plaintext (requires per-binary offset discovery) |
+| TLS Library | Used By | What's Captured | Status |
+|-------------|---------|-----------------|--------|
+| OpenSSL (libssl.so.3) | curl, wget, Python, Ruby | Full plaintext (HTTP/1.1 requests/responses) | **E2E verified** |
+| Go crypto/tls | Goose, Go agents | Plaintext (requires unstripped binary) | Schema-ready |
+| BoringSSL (Bun) | Claude Code | Plaintext (requires per-binary offset discovery) | Schema-ready |
 
 **Use cases:**
 - Compliance audit trail independent of proxy logs
 - Visibility into TLS traffic that might bypass the proxy
-- Forensic analysis of agent network behavior
+- Git-smart-HTTP capture (clone/push uses HTTP/1.1 — parsed correctly)
 - Captures plaintext without requiring sandbox processes to trust a MITM CA certificate
 
-**Limitations:** Uprobes are passive — they observe but cannot block individual requests. Active filtering (GitHub repo blocking, budget 403s) remains in the MITM proxy. HTTP/2 response body parsing (needed for Bedrock token metering) is also proxy-only.
+**Limitations:** Uprobes are passive — they observe but cannot block individual requests. Active filtering (GitHub repo blocking, budget 403s) remains in the transparent proxy. HTTP/2 body parsing (GitHub API and Bedrock use HTTP/2 — uprobe captures HPACK binary, not parseable plaintext) and token metering are proxy-only. Uprobes are global (system-wide, not cgroup-scoped) — userspace consumer filters by PID.
 
 ---
 

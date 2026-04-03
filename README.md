@@ -16,22 +16,22 @@ Define what an agent is allowed to do. Set how much it can spend on compute and 
 
 
 ```
-$ km create profiles/claude-dev.yaml
+$ km create profiles/goose.yaml
   ✓ Profile validated
   ✓ Budget: compute $2.00, AI $5.00, warning at 80%
   ✓ Budget enforcer Lambda deployed
-  ✓ Metadata stored (alias: claude)
+  ✓ Metadata stored (alias: goose)
 ──────────────────────────────────────────────────
-Sandbox claude-e6c7d024 created successfully. (43s)
+Sandbox goose-e6c7d024 created successfully. (43s)
   TTL: 4h (expires 11:42:15 PM EDT)
 
 $ km list
 #   ALIAS       SANDBOX ID        STATUS     TTL
-1   claude      claude-e6c7d024   running    3h42m
+1   goose       goose-e6c7d024    running    3h42m
 
-$ km status claude-e6c7d024
-Sandbox ID:  claude-e6c7d024
-Profile:     claude-dev
+$ km status goose-e6c7d024
+Sandbox ID:  goose-e6c7d024
+Profile:     goose
 Substrate:   ec2
 Region:      us-east-1
 Status:      running
@@ -82,10 +82,10 @@ Every one of these projects needs *somewhere safe to run*. The common pattern is
 That's what Klanker Maker builds. The sandbox is a **compiled policy object** - you declare the constraints and the infrastructure is the compiled artifact:
 
 - **Budget ceiling** - set a dollar cap for compute and AI API spend per sandbox. At 80% you get a warning email. At 100% the sandbox is suspended, not destroyed - top it up and resume.
-- **Network enforcement (two modes)** - choose your enforcement layer per profile:
+- **Network enforcement (three modes)** - choose your enforcement layer per profile:
   - **Proxy mode** (default) - iptables DNAT redirects traffic to userspace proxy sidecars for MITM inspection. Traditional approach, works everywhere.
-  - **eBPF mode** - Cilium-style cgroup BPF programs enforce DNS/HTTP/TLS-SNI allowlists directly in the kernel. No iptables, no DNAT bypass possible (fixes the root-user escape). Four BPF programs (connect4, sendmsg4, sockops, egress) with an LPM trie for CIDR allowlists, a userspace DNS resolver that populates BPF maps on the fly, and a ring buffer for structured audit events. The same cgroup-based approach scales naturally to EKS pods and other container runtimes.
-  - **Both mode** - eBPF primary enforcement with proxy sidecars retained for L7 inspection (Bedrock token metering, GitHub repo-level filtering). Belt and suspenders.
+  - **eBPF mode** - Cilium-style cgroup BPF programs enforce DNS/HTTP/TLS-SNI allowlists directly in the kernel. No iptables, no DNAT bypass possible (fixes the root-user escape). Four BPF programs (connect4, sendmsg4, sockops, egress) with an LPM trie for CIDR allowlists, a userspace DNS resolver that populates BPF maps on the fly, and a ring buffer for structured audit events. E2E verified on AL2023 kernel 6.18 across 14 iterations.
+  - **Both mode (gatekeeper)** - eBPF `connect4` as the primary enforcer in block mode, with selective DNAT rewrite to a **transparent proxy** for L7-required hosts. The proxy recovers original destinations via pinned BPF maps (`src_port_to_sock` → `sock_to_original_ip`). Non-L7 traffic flows direct — never touches the proxy. E2E verified: allowed repos clone, blocked repos get 403, evil.com gets EPERM, non-proxy hosts go direct.
 - **Scoped identity** - each sandbox gets its own IAM role session, region-locked, time-limited, with only the permissions the profile declares.
 - **Automatic lifecycle** - TTL auto-destroy, idle timeout, artifact upload on exit (including on spot interruption), and email notifications for every lifecycle event.
 - **Spot-first economics** - EC2 Spot and Fargate Spot by default. A `t3.medium` spot instance in `us-east-1` costs ~$0.01/hr. Run 10 agent sandboxes for a full workday for under $1 in compute.
@@ -135,7 +135,7 @@ The `km` CLI selects the right AWS profile per command. Commands are grouped by 
 
 | Command | AWS Profile | What it does |
 |---------|-------------|--------------|
-| `km configure` | - | Set domain, account IDs, SSO URL, region |
+| `km configure` | - | Set domain, account IDs, SSO URL, region, `--max-sandboxes` |
 | `km configure github` | `klanker-terraform` | Configure GitHub App token integration |
 | `km bootstrap` | `klanker-terraform` | Deploy SCP containment policy + KMS key + artifacts bucket |
 | `km init` | `klanker-application` | Build Lambdas/sidecars, provision shared VPC/network |
@@ -147,7 +147,7 @@ The `km` CLI selects the right AWS profile per command. Commands are grouped by 
 | Command | AWS Profile | What it does |
 |---------|-------------|--------------|
 | `km validate <profile>` | - | Check a profile YAML against the schema |
-| `km create <profile>` | `klanker-terraform` | Provision a sandbox from a profile |
+| `km create <profile>` | `klanker-terraform` | Provision a sandbox from a profile (`--no-bedrock`, `--docker`, `--alias`) |
 | `km list` | `klanker-terraform` | List sandboxes with live status (DynamoDB scan; `--wide` for all columns) |
 | `km status <sandbox>` | `klanker-terraform` | Budget, identity, idle countdown, resources |
 | `km shell <sandbox>` | `klanker-terraform` | SSM session (`--root` for operator, `--ports` for forwarding) |
@@ -175,8 +175,12 @@ The `km` CLI selects the right AWS profile per command. Commands are grouped by 
 | `km lock <sandbox>` | `klanker-terraform` | Lock sandbox to prevent accidental destroy/stop/pause |
 | `km unlock <sandbox>` | `klanker-terraform` | Unlock sandbox, re-enable lifecycle commands |
 | `km rsync save/load <sandbox>` | `klanker-terraform` | Save/restore sandbox home directory snapshots |
+| `km resume <sandbox>` | `klanker-terraform` | Resume a paused or stopped sandbox |
 | `km destroy <sandbox>` | `klanker-terraform` | Teardown sandbox (`--remote` by default; forced local for Docker substrate) |
 | `km kill <sandbox>` | `klanker-terraform` | Alias for `km destroy` |
+| `km at '<time>' <cmd>` | `klanker-terraform` | Schedule a deferred/recurring sandbox operation via EventBridge Scheduler |
+| `km at list` | `klanker-terraform` | List scheduled operations |
+| `km at cancel <name>` | `klanker-terraform` | Cancel a scheduled operation |
 
 **Teardown (reverse of setup)**
 
@@ -256,7 +260,7 @@ The SCP is deployed via `km bootstrap --dry-run=false`. Run `km bootstrap --show
 
 ### eBPF Network Enforcement
 
-When `spec.network.enforcement` is set to `"ebpf"` or `"both"`, the sandbox uses Cilium-style cgroup BPF programs instead of (or alongside) iptables DNAT. This is the same approach used by Cilium in Kubernetes - attaching BPF programs to a cgroup to intercept all network syscalls from processes in that group.
+When `spec.network.enforcement` is set to `"ebpf"` or `"both"`, the sandbox uses Cilium-style cgroup BPF programs instead of (or alongside) iptables DNAT. This is the same approach used by Cilium in Kubernetes - attaching BPF programs to a cgroup to intercept all network syscalls from processes in that group. E2E verified across 14+ iterations on AL2023 kernel 6.18.
 
 **Four BPF programs, one cgroup:**
 
@@ -264,9 +268,10 @@ When `spec.network.enforcement` is set to `"ebpf"` or `"both"`, the sandbox uses
 Sandbox Cgroup (/sys/fs/cgroup/km.slice/km-{id}.scope)
 │
 ├── cgroup/connect4   — TCP connect() hook
+│   ├── Dual-PID exemption (enforcer + proxy sidecar)
 │   ├── LPM trie lookup: is dest IP in allowed_cidrs?
 │   ├── If denied → return EPERM (connection refused)
-│   ├── If allowed + proxy-marked → rewrite dest to 127.0.0.1:3128
+│   ├── If allowed + proxy-marked → stash original dest, rewrite to 127.0.0.1:3128
 │   └── Emit structured audit event to ring buffer
 │
 ├── cgroup/sendmsg4   — UDP sendmsg() hook
@@ -274,33 +279,35 @@ Sandbox Cgroup (/sys/fs/cgroup/km.slice/km-{id}.scope)
 │   └── Redirect to local resolver (127.0.0.1:53)
 │
 ├── sockops           — TCP state transitions
-│   └── Map source_port → socket_cookie (proxy recovers real dest)
+│   └── Map source_port → socket_cookie (transparent proxy recovers real dest)
 │
 └── cgroup_skb/egress — Packet-level backstop
     ├── Parse IPv4 header, check allowed_cidrs
     └── Drop packets to non-allowlisted IPs (L3 defense-in-depth)
 ```
 
-**How the allowlist stays fresh:** A userspace DNS resolver (127.0.0.1:53) checks every DNS query against the profile's `allowedDNSSuffixes`. Allowed queries are forwarded to VPC DNS; resolved IPs are injected into the BPF `allowed_cidrs` LPM trie map with TTL-based expiry. The allowlist is *dynamic* — it grows as the agent resolves new hosts and shrinks as DNS TTLs expire.
+**How the allowlist stays fresh:** A userspace DNS resolver (127.0.0.1:53) checks every DNS query against the profile's `allowedDNSSuffixes`. Allowed queries are forwarded to VPC DNS; resolved IPs are injected into the BPF `allowed_cidrs` LPM trie map with TTL-based expiry. For L7-required hosts (GitHub, Bedrock), IPs are also inserted into `http_proxy_ips` for selective proxy redirect. The allowlist is *dynamic* — it grows as the agent resolves new hosts and shrinks as DNS TTLs expire.
 
 **Why cgroups?** The BPF programs are scoped to the sandbox cgroup, not the whole instance. The enforcer process, SSM agent, and sidecars run outside the cgroup and are unaffected. This is the same isolation model that makes this approach portable to EKS pods, Docker cgroups, and other container runtimes in future substrates.
+
+**Transparent proxy (both mode):** When connect4 rewrites a connection's destination to the local proxy, the sandbox app sends raw TLS (not HTTP CONNECT). A `TransparentListener` in the HTTP proxy peeks the first byte (`0x16` = TLS ClientHello), then recovers the original destination via a three-step BPF map lookup chain: `src_port_to_sock[peer_port]` → `sock_to_original_ip[cookie]` → `sock_to_original_port[cookie]`. This enables L7 inspection (GitHub repo filtering, Bedrock token metering) without `HTTP_PROXY` environment variable cooperation from the client.
 
 Editable diagram: [`docs/diagrams/ebpf-architecture.excalidraw`](docs/diagrams/ebpf-architecture.excalidraw)
 
 ### eBPF SSL Uprobe Observability
 
-Alongside kernel-level enforcement, eBPF uprobes provide **passive TLS plaintext capture** for audit and observability — without MITM certificates. An `ebpf-observer` sidecar hooks into TLS library functions to see plaintext before encryption:
+Alongside kernel-level enforcement, eBPF uprobes provide **passive TLS plaintext capture** for audit and observability — without MITM certificates. E2E verified on AL2023 with 8 probes attaching to OpenSSL 3.2.2:
 
-| TLS Library | Used By | Uprobe Target | Approach |
-|-------------|---------|---------------|----------|
-| OpenSSL (libssl.so.3) | curl, wget, Python, Ruby | `SSL_write` / `SSL_read` | Standard dynamic symbol uprobe |
-| Go crypto/tls | Goose (if Go) | `writeRecordLocked` / `Read` | Binary symbol scan, per-RET offsets (no uretprobe) |
-| BoringSSL (Bun) | Claude Code | `SSL_write` | Byte-pattern offset discovery (per-binary) |
-| rustls | Future Rust agents | `rustls_connection_write_tls` | Reverse-correlation pattern |
+| TLS Library | Used By | Uprobe Target | Status |
+|-------------|---------|---------------|--------|
+| OpenSSL (libssl.so.3) | curl, wget, Python, Ruby | `SSL_write` / `SSL_read` / `SSL_write_ex` / `SSL_read_ex` | **E2E verified** (8 probes) |
+| Go crypto/tls | Goose (if Go) | `writeRecordLocked` / `Read` | Schema-ready (per-RET offsets, no uretprobe) |
+| BoringSSL (Bun) | Claude Code | `SSL_write` | Schema-ready (byte-pattern offset discovery) |
+| rustls | Future Rust agents | `rustls_connection_write_tls` | Schema-ready |
 
-**What uprobes add that MITM can't:** Visibility into traffic that bypasses the proxy (if any), audit trail independent of proxy logs, plaintext capture without certificate trust issues. The observer logs structured JSON events with HTTP method, URL, host, and response status for every TLS connection.
+**What uprobes add that MITM can't:** Visibility into traffic that bypasses the proxy (if any), audit trail independent of proxy logs, plaintext capture without certificate trust issues. The observer logs structured JSON events with HTTP method, URL, host, and response status for every TLS connection. Git-smart-HTTP (clone/push) uses HTTP/1.1 and is captured correctly.
 
-**What uprobes can't replace:** Active request blocking (uprobes are passive — they can observe but not deny individual requests without killing the process), HTTP/2 response body parsing (Bedrock token metering needs response bodies, which uprobe tooling can only capture for HTTP/1.1 headers), and the MITM proxy's transparent redirect for GitHub repo-level filtering.
+**What uprobes can't replace:** Active request blocking (uprobes are passive — they observe but cannot deny), HTTP/2 body parsing (GitHub API and Bedrock use HTTP/2 — uprobe captures HPACK-compressed binary, not parseable HTTP/1.1), and the transparent proxy's active enforcement (repo filtering, budget 403s).
 
 **The two eBPF layers work together:**
 - **Phase 40 (enforcement):** cgroup BPF programs decide allow/deny/redirect at the kernel level
@@ -334,17 +341,18 @@ Editable source: [`docs/sandbox-architecture.excalidraw`](docs/sandbox-architect
 
 ## SandboxProfile
 
-Profiles use a Kubernetes-style schema at `klankermaker.ai/v1alpha1`. Here's the `claude-dev` profile - a working example that provisions a Claude Code sandbox with Bedrock access, budget enforcement, OTEL telemetry, and GitHub repo allowlisting:
+Profiles use a Kubernetes-style schema at `klankermaker.ai/v1alpha1`. Here's the `goose` profile - a working example that provisions a Goose agent sandbox with Bedrock access, budget enforcement, OTEL telemetry, hibernation support, EFS shared storage, and GitHub repo allowlisting:
 
 ```yaml
 apiVersion: klankermaker.ai/v1alpha1
 kind: SandboxProfile
 metadata:
-  name: claude-dev
+  name: goose
   labels:
     tier: development
-    tool: claude-code
+    tool: goose
     builtin: "true"
+  prefix: goose
 
 spec:
   lifecycle:
@@ -355,24 +363,29 @@ spec:
   runtime:
     substrate: ec2
     spot: true
-    instanceType: t3.large
+    instanceType: t3.medium
     region: us-east-1
+    hibernation: true              # preserve RAM state on pause (on-demand only)
+    mountEFS: true                 # mount regional EFS shared filesystem
+    efsMountPoint: /shared         # EFS mount path (default: /shared)
+    additionalVolume:              # extra EBS volume for data
+      size: 20                     # GB
+      mountPoint: /data
 
   execution:
     shell: /bin/bash
     workingDir: /workspace
+    useBedrock: true               # route Anthropic API via AWS Bedrock (SigV4 auth)
     env:
-      SANDBOX_MODE: claude-dev
-      ANTHROPIC_BASE_URL: "https://bedrock-runtime.us-east-1.amazonaws.com"
-      ANTHROPIC_DEFAULT_SONNET_MODEL: us.anthropic.claude-sonnet-4-6
-      ANTHROPIC_DEFAULT_OPUS_MODEL: us.anthropic.claude-opus-4-6-v1
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: us.anthropic.claude-haiku-4-5-20251001-v1:0
-      CLAUDE_CODE_USE_BEDROCK: "1"
-      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+      SANDBOX_MODE: goose
+      GOOSE_PROVIDER: aws_bedrock
+      GOOSE_MODEL: us.anthropic.claude-opus-4-6-v1
+      GOOSE_MODE: auto
     initCommands:
-      - "yum install -y git nodejs npm python3 python3-pip tar gzip unzip jq"
+      - "yum install -y git nodejs npm python3 python3-pip bzip2 jq tar gzip unzip"
+      - "HOME=/root curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | HOME=/root CONFIGURE=false bash"
       - "npm install -g @anthropic-ai/claude-code"
-      - "mkdir -p /workspace && chown sandbox:sandbox /workspace"
+      - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace"
 
   budget:
     compute:
@@ -382,6 +395,7 @@ spec:
     warningThreshold: 0.80
 
   network:
+    enforcement: proxy             # "proxy" (default), "ebpf", or "both"
     egress:
       allowedDNSSuffixes:
         - ".amazonaws.com"
@@ -391,19 +405,15 @@ spec:
         - ".githubusercontent.com"
         - ".npmjs.org"
         - ".nodejs.org"
+        - ".pypi.org"
+        - ".pythonhosted.org"
         - ".sentry.io"
       allowedHosts:
+        - "github.com"
         - "api.anthropic.com"
         - "api.github.com"
-        - "github.com"
         - "registry.npmjs.org"
-        - "nodejs.org"
-      allowedMethods:
-        - GET
-        - POST
-        - PUT
-        - PATCH
-        - DELETE
+        - "pypi.org"
 
   sourceAccess:
     mode: allowlist
@@ -415,9 +425,6 @@ spec:
         - "main"
         - "develop"
         - "feature/*"
-      permissions:
-        - read
-        - write
 
   identity:
     roleSessionDuration: "1h"
@@ -450,6 +457,9 @@ spec:
       enabled: true
       logPrompts: true
       logToolDetails: true
+    tlsCapture:                    # eBPF SSL uprobe plaintext capture (Phase 41)
+      enabled: true
+      libraries: [openssl]
 
   artifacts:
     paths:
@@ -460,36 +470,17 @@ spec:
     signing: required
     verifyInbound: required
     encryption: off
-
-  policy:
-    allowShellEscape: false
-    allowedCommands:
-      - git
-      - node
-      - npm
-      - npx
-      - python3
-      - pip
-      - bash
-      - claude
-      - curl
-    filesystemPolicy:
-      writablePaths:
-        - /workspace
-        - /tmp
-        - /home
 ```
 
 ### Built-in Profiles
 
 | Profile | TTL | Network | Budget | Use Case |
 |---------|-----|---------|--------|----------|
-| `open-dev` | 24h | Broad allowlist (npm, PyPI, Docker Hub, GitHub) | Operator-set | General development, prototyping |
-| `restricted-dev` | 8h | Narrow allowlist, GET/POST only | Operator-set | Agent coding tasks with audit trail |
 | `hardened` | 4h | AWS services only | Operator-set | Production-adjacent testing |
 | `sealed` | 1h | No egress | Operator-set | Offline analysis, air-gapped execution |
-| `claude-dev` | 4h | Anthropic, GitHub, npm, Sentry | $2 compute / $5 AI | Claude Code agent with Bedrock, OTEL telemetry |
 | `goose` | 4h | Anthropic, GitHub, npm, PyPI, Goose extensions | $2 compute / $5 AI | Goose agent (Block) with Bedrock, MCP extensions |
+| `goose-ebpf` | 1h | eBPF enforcement, Anthropic, GitHub | $0.50 compute / $1 AI | Goose with pure eBPF kernel-level enforcement |
+| `goose-ebpf-gatekeeper` | 1h | eBPF + proxy (both), Anthropic, GitHub | $0.50 compute / $1 AI | Goose with eBPF gatekeeper + L7 proxy inspection |
 | `codex` | 4h | OpenAI, GitHub | $2 compute / $5 AI | OpenAI Codex agent |
 | `agent-orchestrator` | 8h | Anthropic, GitHub, npm, Composio | $4 compute / $10 AI | Multi-agent orchestration (Claude + Codex + AO) |
 
@@ -520,7 +511,7 @@ Sandboxes communicate through **digitally signed email** (SES + Ed25519). Each s
 - **Verification** - the receiver fetches the sender's public key from the `km-identities` DynamoDB table and verifies the signature. When `verifyInbound: required`, unsigned or invalid emails are rejected.
 - **Encryption** - optional X25519 key exchange (NaCl box). When `encryption: required`, the sender encrypts the body with the recipient's public key. When `encryption: optional`, it encrypts if the recipient has a published key, plaintext otherwise.
 
-Profile controls (`spec.email.signing`, `spec.email.verifyInbound`, `spec.email.encryption`) govern policy per sandbox. Hardened and sealed profiles default to `signing: required`; open-dev defaults to `signing: optional`.
+Profile controls (`spec.email.signing`, `spec.email.verifyInbound`, `spec.email.encryption`) govern policy per sandbox. Hardened and sealed profiles default to `signing: required`; goose defaults to `signing: required`.
 
 This enables multi-agent pipelines where each worker is physically isolated but logically connected - with cryptographic proof of sender identity and optional confidentiality.
 
@@ -568,9 +559,9 @@ Tokens are priced against static model rates and atomically incremented in the D
 `km status` shows per-model AI spend grouped by provider:
 
 ```
-$ km status claude-e6c7d024
-Sandbox ID:  claude-e6c7d024
-Profile:     claude-dev
+$ km status goose-e6c7d024
+Sandbox ID:  goose-e6c7d024
+Profile:     goose
 ...
 Budget:
   Compute: $0.0312 / $2.0000 (1.6%)
@@ -622,12 +613,13 @@ km CLI / ConfigUI
 ├── cmd/km/                  CLI entry point
 ├── cmd/configui/            Web dashboard (Go + embedded HTML)
 ├── cmd/ttl-handler/         Lambda: TTL expiry + artifact upload
-├── internal/app/cmd/        Cobra commands (configure, bootstrap, init, uninit, validate, create, destroy/kill, pause, lock, unlock, stop, extend, list, status, logs, budget, shell, doctor, otel)
+├── internal/app/cmd/        Cobra commands (configure, bootstrap, init, uninit, validate, create, destroy/kill, pause, resume, lock, unlock, stop, extend, at/schedule, list, status, logs, budget, shell, agent, doctor, otel, info, rsync)
 ├── internal/app/config/     Configuration (config.yaml, env vars, CLI flags)
 ├── pkg/
 │   ├── profile/             SandboxProfile schema, validation, inheritance
 │   ├── compiler/            Profile → Terragrunt artifacts (EC2 + ECS paths)
-│   ├── aws/                 SDK helpers (S3, SES, CloudWatch, EC2 metadata, DynamoDB, identity/signing)
+│   ├── ebpf/                eBPF enforcer (cgroup BPF programs, DNS resolver, audit consumer, SSL uprobes)
+│   ├── aws/                 SDK helpers (S3, SES, CloudWatch, EC2 metadata, DynamoDB, EventBridge Scheduler, identity/signing)
 │   ├── terragrunt/          Runner + per-sandbox state isolation
 │   └── lifecycle/           TTL scheduling, idle detection, teardown
 ├── sidecars/
@@ -635,7 +627,7 @@ km CLI / ConfigUI
 │   ├── http-proxy/          HTTP allowlist filter (TCP:3128) + AI token metering (Bedrock, Anthropic, OpenAI)
 │   ├── audit-log/           Command + network log router with secret redaction
 │   └── tracing/             OTel Collector sidecar (logs, metrics → S3)
-├── profiles/                Built-in YAML profiles (open-dev → sealed)
+├── profiles/                Built-in YAML profiles (sealed, hardened, goose, goose-ebpf, goose-ebpf-gatekeeper, codex, agent-orchestrator)
 └── infra/
     ├── modules/             Terraform modules
     │   ├── network/         VPC, subnets, security groups
@@ -644,6 +636,7 @@ km CLI / ConfigUI
     │   ├── ecs-task/        Task definitions with sidecar containers
     │   ├── ecs-service/     Service deployment + service discovery
     │   ├── ecs-spot-handler/  Lambda: Fargate Spot interruption → artifact upload
+    │   ├── efs/             Regional EFS shared filesystem for cross-sandbox data
     │   ├── secrets/         SSM Parameter Store + KMS encryption
     │   ├── ses/             SES domain, DKIM, inbound email → S3
     │   ├── scp/             SCP sandbox containment (deployed to management account)
@@ -677,8 +670,11 @@ km init --region us-east-1
 km doctor
 
 # Create a sandbox (shows progress dots + elapsed time)
-km create profiles/restricted-dev.yaml
+km create profiles/goose.yaml
 km create --on-demand profiles/sealed.yaml  # skip spot, use on-demand
+km create profiles/goose.yaml --no-bedrock  # disable Bedrock, use direct API keys
+km create profiles/goose.yaml --docker      # shortcut for --substrate=docker
+km create profiles/goose.yaml --alias mybot # override the sandbox alias
 
 # List sandboxes (narrow default — alias first, live status)
 km list
@@ -705,6 +701,9 @@ km extend 1 2h
 # Pause (hibernate) — preserves RAM state
 km pause 1
 
+# Resume a paused or stopped sandbox
+km resume 1
+
 # Lock to prevent accidental destroy/stop/pause
 km lock 1
 km unlock 1 --yes
@@ -729,6 +728,13 @@ km destroy 1 --remote=false     # local terragrunt destroy
 # km kill is an alias for km destroy
 km kill 1 --yes
 
+# Schedule a deferred or recurring operation
+km at '10pm tomorrow' create profiles/goose.yaml     # one-shot
+km at 'every thursday at 3pm' kill 1                  # recurring
+km at list                                            # list scheduled ops
+km at cancel my-schedule-name                         # cancel one
+# km schedule is an alias for km at
+
 # Teardown region infrastructure
 km uninit --region us-east-1
 ```
@@ -742,6 +748,7 @@ km uninit --region us-east-1
 | [Profile Reference](docs/profile-reference.md) | Complete YAML schema with every field, type, default, and validation rule |
 | [Security Model](docs/security-model.md) | Deep dive on each security layer, from VPC to IMDSv2 to secret redaction |
 | [Budget Guide](docs/budget-guide.md) | DynamoDB schema, proxy metering, enforcement flow, threshold configuration |
+| [Docker Substrate](docs/docker.md) | Running sandboxes locally via Docker Compose (`km create --docker`) |
 | [Sidecar Reference](docs/sidecar-reference.md) | Each sidecar's config, env vars, log formats, EC2 vs ECS deployment |
 | [Multi-Agent Email](docs/multi-agent-email.md) | SES setup, sandbox addressing, cross-sandbox orchestration patterns |
 | [ConfigUI Guide](docs/configui-guide.md) | Web dashboard setup, profile editor, secrets management |
@@ -782,13 +789,18 @@ km uninit --region us-east-1
 | 30 | Sandbox Pause, Lock, Unlock & km list Enhancements | **Complete** |
 | 31 | Transparent HTTPS & Audit Log Improvements | **Complete** |
 | 32 | Profile-Scoped Rsync Paths & External File Lists | **Complete** |
-| 33 | EC2 Storage Customization & AMI Selection | Planned |
+| 33 | EC2 Storage Customization, Hibernation & AMI Selection | **Complete** |
 | 34 | Agent Profiles - Agent Orchestrator, Goose, and Codex | **Complete** |
 | 35 | MITM CA Trust for Python, Node, and Non-System SSL Libraries | **Complete** |
 | 36 | km-sandbox Base Container Image | **Complete** |
 | 37 | Docker Compose Local Substrate | **Complete** |
 | 38 | EKS / Kubernetes Substrate | Planned |
 | 39 | DynamoDB Metadata Migration (S3 to DynamoDB) | **Complete** |
+| 40 | eBPF Cgroup Network Enforcement (connect4, sendmsg4, sockops, egress) | **Complete** |
+| 41 | eBPF SSL Uprobe TLS Observability (OpenSSL, Go, BoringSSL) | **Complete** |
+| 42 | eBPF Gatekeeper Mode — connect4 DNAT Rewrite for L7 Proxy | **Complete** |
+| 43 | Regional EFS Shared Filesystem | **Complete** |
+| 44 | `km at` / `km schedule` — Deferred & Recurring Operations | **Complete** |
 
 See [.planning/ROADMAP.md](.planning/ROADMAP.md) for detailed phase breakdowns and success criteria.
 

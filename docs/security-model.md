@@ -370,7 +370,7 @@ mount -o remount,bind,ro "/etc"
 
 This creates a bind mount of the path onto itself, then remounts it as read-only. The agent can read `/etc/passwd` but cannot modify `/etc/resolv.conf` or plant a crontab.
 
-**Writable paths** are explicitly declared. In the `open-dev` profile: `/workspace`, `/tmp`, `/home`. In `restricted-dev`: `/workspace` and `/tmp` only. The `hardened` and `sealed` profiles omit `filesystemPolicy` entirely, meaning no explicit writable paths are declared beyond the defaults.
+**Writable paths** are explicitly declared per profile. The `goose` profile declares `/workspace`, `/tmp`, `/home`. The `hardened` and `sealed` profiles omit `filesystemPolicy` entirely, meaning no explicit writable paths are declared beyond the defaults.
 
 **Boot order matters:** Read-only mounts are applied in section 2.5 of the bootstrap, before sidecars start in section 5. This prevents a race condition where a sidecar or the agent could modify protected paths before enforcement takes effect.
 
@@ -440,7 +440,7 @@ Budget limits serve a dual security purpose: they prevent resource exhaustion at
 1. **Proxy 403:** The HTTP proxy blocks requests to non-allowed hosts immediately. No external API call can be made to a host not in the allowlist. This is the fast path -- the request never leaves the sandbox.
 2. **IAM revocation:** If budget alerts fire, the sandbox's IAM role can be revoked at the account level, cutting off all AWS API access regardless of what the agent is doing inside the instance.
 
-**Lifecycle as budget enforcement:** The `lifecycle.ttl` field (e.g., `"24h"` for `open-dev`, `"1h"` for `sealed`) ensures sandboxes are automatically destroyed after their maximum lifetime. The `idleTimeout` catches abandoned sandboxes. The `teardownPolicy: destroy` ensures resources are fully cleaned up, not just stopped.
+**Lifecycle as budget enforcement:** The `lifecycle.ttl` field (e.g., `"4h"` for `goose`, `"1h"` for `sealed`) ensures sandboxes are automatically destroyed after their maximum lifetime. The `idleTimeout` catches abandoned sandboxes. The `teardownPolicy: destroy` ensures resources are fully cleaned up, not just stopped.
 
 ---
 
@@ -784,7 +784,8 @@ The four built-in profiles demonstrate the security model at different trust lev
 |---------|-------------|------------|------------|----------|------------|-----|
 | `sealed` | None | None | None | None | Default | 1h |
 | `hardened` | `.amazonaws.com` only | `sts`, `ssm` only | None | `git` only | Default | 4h |
-| `restricted-dev` | AWS + GitHub + package registries | 5 hosts | Read-only, one org | 6 commands | `/etc` read-only | 8h |
-| `open-dev` | AWS + GitHub + npm + PyPI + Go + Docker | 6 hosts | Read/write, all repos | 8 commands | `/workspace`, `/tmp`, `/home` writable | 24h |
+| `goose` | AWS + Anthropic + GitHub + npm + PyPI | ~15 hosts | Read/write, allowlisted repos | Multi-agent (Goose, Claude, Codex) | `/workspace`, `/tmp`, `/home` writable | 4h |
+| `goose-ebpf` | Same as goose (eBPF enforced) | Same | Same | Same | Same | 1h |
+| `goose-ebpf-gatekeeper` | Same as goose (eBPF + proxy) | Same | Same | Same | Same | 1h |
 
 The `sealed` profile produces a sandbox with zero network egress, zero repository access, zero allowed commands, and a 1-hour TTL. It is the most restrictive possible configuration and serves as a baseline for verifying that the deny-by-default model works correctly.
