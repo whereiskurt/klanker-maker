@@ -11,6 +11,23 @@ locals {
   # Use provided or auto-discovered AZs
   effective_azs     = length(var.availability_zones) > 0 ? var.availability_zones : (var.vpc_id == "" ? slice(data.aws_availability_zones.available[0].names, 0, 2) : [])
   create_vpc        = var.vpc_id == ""
+
+  # AMI slug resolution (Phase 33): map of slug → { name_pattern, owner }
+  ami_filters = {
+    "amazon-linux-2023" = {
+      name_pattern = "al2023-ami-2023.*-x86_64"
+      owner        = "amazon"
+    }
+    "ubuntu-24.04" = {
+      name_pattern = "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"
+      owner        = "099720109477" # Canonical's AWS account ID
+    }
+    "ubuntu-22.04" = {
+      name_pattern = "ubuntu/images/hvm-ssd-gp3/ubuntu-jammy-22.04-amd64-server-*"
+      owner        = "099720109477" # Canonical's AWS account ID
+    }
+  }
+  resolved_ami_slug = var.ami_slug != "" ? var.ami_slug : "amazon-linux-2023"
 }
 
 resource "aws_vpc" "sandbox" {
@@ -119,16 +136,16 @@ locals {
   }
 }
 
-# Get latest Amazon Linux 2023 ARM64 AMI
+# Get latest AMI for the selected slug (Phase 33: resolved via ami_filters locals map)
 data "aws_ami" "base_ami" {
   count = local.total_ec2spot_count > 0 ? 1 : 0
 
   most_recent = true
-  owners      = ["amazon"]
+  owners      = [local.ami_filters[local.resolved_ami_slug].owner]
 
   filter {
     name   = "name"
-    values = ["al2023-ami-2023.*-x86_64"]
+    values = [local.ami_filters[local.resolved_ami_slug].name_pattern]
   }
 
   filter {
@@ -413,6 +430,17 @@ resource "aws_spot_instance_request" "ec2spot" {
   associate_public_ip_address = true
   wait_for_fulfillment        = true
 
+  # Root volume sizing for spot instances (no encryption, no hibernation — spot instances
+  # are explicitly rejected in km pause; see pause.go lines 133-137)
+  dynamic "root_block_device" {
+    for_each = var.root_volume_size_gb > 0 ? [1] : []
+    content {
+      volume_size           = var.root_volume_size_gb
+      volume_type           = "gp3"
+      delete_on_termination = true
+    }
+  }
+
   tags = {
     Name            = each.value.instance_name
     "km:sandbox-id" = each.value.sandbox_id
@@ -474,6 +502,9 @@ resource "aws_instance" "ec2_ondemand" {
   vpc_security_group_ids = [aws_security_group.ec2spot[0].id]
   iam_instance_profile   = aws_iam_instance_profile.ec2spot[0].name
 
+  # Hibernation must be set at launch time; requires encrypted root volume (set below).
+  hibernation = var.hibernation_enabled
+
   metadata_options {
     http_tokens                 = "required"
     http_put_response_hop_limit = 1
@@ -481,6 +512,18 @@ resource "aws_instance" "ec2_ondemand" {
   }
 
   associate_public_ip_address = true
+
+  # Root volume: emits when size override requested OR hibernation requires encrypted root.
+  # encrypted = var.hibernation_enabled ensures AWS allows hibernation at launch.
+  dynamic "root_block_device" {
+    for_each = var.root_volume_size_gb > 0 || var.hibernation_enabled ? [1] : []
+    content {
+      volume_size           = var.root_volume_size_gb > 0 ? var.root_volume_size_gb : null
+      volume_type           = "gp3"
+      encrypted             = var.hibernation_enabled
+      delete_on_termination = true
+    }
+  }
 
   tags = {
     Name            = each.value.instance_name

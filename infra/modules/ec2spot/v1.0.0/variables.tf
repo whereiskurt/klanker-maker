@@ -85,3 +85,21 @@ variable "enable_bedrock" {
   description = "Whether to attach Bedrock IAM policy to the sandbox role. Set to false with --no-bedrock."
   default     = true
 }
+
+variable "root_volume_size_gb" {
+  type        = number
+  description = "Root EBS volume size in GB. 0 uses AMI default."
+  default     = 0
+}
+
+variable "hibernation_enabled" {
+  type        = bool
+  description = "Enable EC2 hibernation (on-demand only, requires encrypted root volume)"
+  default     = false
+}
+
+variable "ami_slug" {
+  type        = string
+  description = "AMI slug for lookup: amazon-linux-2023, ubuntu-24.04, ubuntu-22.04"
+  default     = "amazon-linux-2023"
+}

@@ -65,6 +65,11 @@ const ec2ServiceHCLTemplate = `locals {
     }
 
     enable_bedrock = {{ .EnableBedrock }}
+
+    # EC2 storage and AMI (Phase 33)
+    root_volume_size_gb    = {{ .RootVolumeSizeGB }}
+    hibernation_enabled    = {{ .HibernationEnabled }}
+    ami_slug               = "{{ .AMISlug }}"
   }
 {{- if .HasBudget }}
 
@@ -387,6 +392,10 @@ type ec2HCLParams struct {
 	GitHubSSMPath      string   // /sandbox/{sandbox-id}/github-token
 	GitHubAllowedRepos []string // from profile.sourceAccess.github.allowedRepos
 	GitHubPermissions  string   // HCL map literal e.g. { contents = "read" }
+	// EC2 storage and AMI fields (Phase 33)
+	RootVolumeSizeGB   int    // root EBS volume size in GB; 0 means use AMI default
+	HibernationEnabled bool   // enable EC2 hibernation (on-demand only)
+	AMISlug            string // AMI slug for lookup: amazon-linux-2023, ubuntu-24.04, ubuntu-22.04
 }
 
 // ============================================================
@@ -621,6 +630,15 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		AILimit:          aiLimit,
 		WarningThreshold: warningThreshold,
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
+		// EC2 storage and AMI fields (Phase 33)
+		RootVolumeSizeGB:   p.Spec.Runtime.RootVolumeSize,
+		HibernationEnabled: p.Spec.Runtime.Hibernation,
+		AMISlug: func() string {
+			if p.Spec.Runtime.AMI != "" {
+				return p.Spec.Runtime.AMI
+			}
+			return "amazon-linux-2023"
+		}(),
 	}
 
 	// Populate GitHub token fields when sourceAccess.github is configured with at least one repo.
