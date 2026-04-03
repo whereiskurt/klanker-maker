@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 42-01-PLAN.md
-last_updated: "2026-04-03T04:06:41.061Z"
+stopped_at: Completed 42-02-PLAN.md
+last_updated: "2026-04-03T04:17:21.072Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 44
   completed_phases: 39
   total_plans: 135
-  completed_plans: 130
+  completed_plans: 131
   percent: 0
 ---
 
@@ -176,6 +176,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 43 P01 | 160s | 2 tasks | 8 files |
 | Phase 43 P02 | 7min | 2 tasks | 7 files |
 | Phase 42-ebpf-gatekeeper-mode-connect4-dnat-rewrite-for-selective-l7-proxy P01 | 8min | 2 tasks | 10 files |
+| Phase 42-ebpf-gatekeeper-mode-connect4-dnat-rewrite-for-selective-l7-proxy P02 | 395s | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -481,6 +482,8 @@ Recent decisions affecting current work:
 - [Phase 43]: LoadEFSOutputs returns empty string (not error) when efs/outputs.json missing — EFS is optional infra unlike required network
 - [Phase 42-01]: PID-file approach for HTTP proxy exemption (not UID-based): simpler, acceptable for Phase 42; stale-PID on proxy restart documented
 - [Phase 42-01]: buildL7ProxyHosts derives domain suffixes from profile fields (GitHub/Bedrock), not GitHub repo names which was the prior incorrect behavior
+- [Phase 42]: both-mode uses eBPF gatekeeper: block firewall, connect4 replaces iptables DNAT, resolv.conf overridden to 127.0.0.1
+- [Phase 42]: both-mode keeps HTTP_PROXY/HTTPS_PROXY as belt-and-suspenders alongside connect4 for L7 inspection
 
 ### Roadmap Evolution
 
@@ -537,6 +540,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-03T04:06:41.056Z
-Stopped at: Completed 42-01-PLAN.md
+Last session: 2026-04-03T04:17:21.068Z
+Stopped at: Completed 42-02-PLAN.md
 Resume file: None
