@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 45-02-PLAN.md
-last_updated: "2026-04-03T20:47:29.777Z"
+stopped_at: Completed 45-03-PLAN.md
+last_updated: "2026-04-03T20:50:16.146Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 45
   completed_phases: 41
   total_plans: 139
-  completed_plans: 138
+  completed_plans: 139
   percent: 0
 ---
 
@@ -181,6 +181,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 44 P04 | 5min | 1 tasks | 3 files |
 | Phase 45-km-email-send-recv-scripts-and-cli P1 | 5 | 6 tasks | 4 files |
 | Phase 45-km-email-send-recv-scripts-and-cli P02 | 8min | 5 tasks | 2 files |
+| Phase 45-km-email-send-recv-scripts-and-cli P03 | 5min | 5 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -495,6 +496,8 @@ Recent decisions affecting current work:
 - [Phase 45-km-email-send-recv-scripts-and-cli]: ParseSignedMessage decodes base64 CTE attachment parts — callers receive raw bytes
 - [Phase 45-km-email-send-recv-scripts-and-cli]: PKCS8 DER prefix hard-coded as hex constant — Ed25519 OID fixed, avoids asn1 tooling at runtime
 - [Phase 45-km-email-send-recv-scripts-and-cli]: parseUserDataTemplate() added to userdata.go to enable direct template tests for empty-SandboxEmail case
+- [Phase 45-km-email-send-recv-scripts-and-cli]: Ed25519 SubjectPublicKeyInfo DER prefix 302a300506032b6570032100 + 32-byte raw key for km-recv verification
+- [Phase 45-km-email-send-recv-scripts-and-cli]: km-recv signature verification is best-effort: sets SIG_STATUS but never blocks message display
 
 ### Roadmap Evolution
 
@@ -552,6 +555,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-03T20:47:29.773Z
-Stopped at: Completed 45-02-PLAN.md
+Last session: 2026-04-03T20:50:16.142Z
+Stopped at: Completed 45-03-PLAN.md
 Resume file: None

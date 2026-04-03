@@ -1048,7 +1048,7 @@ Plans:
 - Shared MIME contract: X-KM-Sender-ID, X-KM-Signature (body-only), X-KM-Encrypted headers; multipart/mixed for attachments
 - No encryption in bash scripts (Go CLI only); no km binary in sandbox
 **Depends on:** Phase 14 (identity/signing library), Phase 17 (mailbox/allow-lists)
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 
 #### Wave 1 — Foundation
 - [ ] 45-01-PLAN.md — Multipart MIME support in pkg/aws (extend buildRawMIME + ParseSignedMessage for attachments)
