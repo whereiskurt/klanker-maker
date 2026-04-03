@@ -261,6 +261,64 @@ func TestRegionalModulesIncludesEFS(t *testing.T) {
 	}
 }
 
+// TestLoadEFSOutputs_Success verifies LoadEFSOutputs reads filesystem_id from efs/outputs.json.
+func TestLoadEFSOutputs_Success(t *testing.T) {
+	repoRoot := t.TempDir()
+	regionLabel := "use1"
+
+	// Create efs/outputs.json with Terraform output format
+	efsDir := filepath.Join(repoRoot, "infra", "live", regionLabel, "efs")
+	if err := os.MkdirAll(efsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	outputsContent := `{"filesystem_id":{"value":"fs-abc123","type":"string"}}`
+	if err := os.WriteFile(filepath.Join(efsDir, "outputs.json"), []byte(outputsContent), 0o644); err != nil {
+		t.Fatalf("write outputs.json: %v", err)
+	}
+
+	fsID, err := cmd.LoadEFSOutputs(repoRoot, regionLabel)
+	if err != nil {
+		t.Fatalf("LoadEFSOutputs returned unexpected error: %v", err)
+	}
+	if fsID != "fs-abc123" {
+		t.Errorf("expected filesystem_id %q, got %q", "fs-abc123", fsID)
+	}
+}
+
+// TestLoadEFSOutputs_NotExist verifies LoadEFSOutputs returns ("", nil) when efs/outputs.json does not exist.
+func TestLoadEFSOutputs_NotExist(t *testing.T) {
+	repoRoot := t.TempDir()
+	regionLabel := "use1"
+	// No efs/outputs.json created — EFS not yet initialized
+
+	fsID, err := cmd.LoadEFSOutputs(repoRoot, regionLabel)
+	if err != nil {
+		t.Fatalf("LoadEFSOutputs returned unexpected error for missing file: %v", err)
+	}
+	if fsID != "" {
+		t.Errorf("expected empty filesystem_id when file missing, got %q", fsID)
+	}
+}
+
+// TestLoadEFSOutputs_MalformedJSON verifies LoadEFSOutputs returns an error for invalid JSON.
+func TestLoadEFSOutputs_MalformedJSON(t *testing.T) {
+	repoRoot := t.TempDir()
+	regionLabel := "use1"
+
+	efsDir := filepath.Join(repoRoot, "infra", "live", regionLabel, "efs")
+	if err := os.MkdirAll(efsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(efsDir, "outputs.json"), []byte(`{not valid json`), 0o644); err != nil {
+		t.Fatalf("write outputs.json: %v", err)
+	}
+
+	_, err := cmd.LoadEFSOutputs(repoRoot, regionLabel)
+	if err == nil {
+		t.Fatal("expected error for malformed JSON, got nil")
+	}
+}
+
 // TestRunInitIdempotent verifies that calling runInitWithRunner twice succeeds.
 func TestRunInitIdempotent(t *testing.T) {
 	repoRoot := t.TempDir()
