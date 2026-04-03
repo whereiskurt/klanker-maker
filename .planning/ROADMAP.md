@@ -987,3 +987,19 @@ Plans:
 - [ ] 42-01-PLAN.md — BPF dual-PID exemption + L7ProxyHosts derivation + enforcer wiring
 - [ ] 42-02-PLAN.md — Userdata template gatekeeper flip for both enforcement mode + unit tests
 - [ ] 42-03-PLAN.md — Build, deploy, and E2E verification of gatekeeper mode
+
+### Phase 43: Regional EFS shared filesystem — cross-sandbox persistent storage via km init provisioning and profile-driven mount
+
+**Goal:** `km init` provisions a Regional EFS filesystem with mount targets in each AZ, and sandboxes with `mountEFS: true` in their profile automatically mount the shared filesystem at a configurable path — enabling cross-sandbox artifact sharing without S3
+**Requirements**: EFS-01, EFS-02, EFS-03, EFS-04, EFS-05, EFS-06
+**Depends on:** Phase 33
+**Plans:** 0 plans
+
+Key design decisions:
+- `km init` creates the EFS filesystem (Regional, General Purpose, Elastic throughput, encrypted) and one mount target per AZ in the VPC
+- EFS filesystem ID stored in km-config.yaml (or SSM) so `km create` can reference it
+- Profile fields: `spec.runtime.mountEFS` (bool) and `spec.runtime.efsMountPoint` (string, default "/shared")
+- Userdata installs `amazon-efs-utils`, mounts EFS with TLS + `_netdev,nofail` options
+- Security group created during `km init` allowing NFS (port 2049) from sandbox instance SGs
+- `km destroy` does NOT remove EFS — it persists across sandbox lifecycles
+- Cross-AZ transfer cost ($0.01/GB/direction) accepted as trade-off for simplicity
