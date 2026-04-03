@@ -716,6 +716,394 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 UNIT
+
+# km-recv: read and display signed emails from /var/mail/km/new/
+# Usage: km-recv [--json] [--watch] [--no-move]
+cat > /opt/km/bin/km-recv << 'KMRECV'
+#!/bin/bash
+# km-recv: read, verify, and display emails from the local inbox.
+# Pure bash + AWS CLI + openssl — no km binary dependency.
+#
+# Usage: km-recv [--json] [--watch] [--no-move]
+#   --json     machine-readable JSON output (one object per message, newline-delimited)
+#   --watch    poll loop (check every 5 seconds for new messages)
+#   --no-move  do not move messages to /var/mail/km/processed/ after reading
+
+set -euo pipefail
+
+# ----------------------------------------------------------------
+# Argument parsing
+# ----------------------------------------------------------------
+JSON_OUTPUT=false
+WATCH_MODE=false
+NO_MOVE=false
+
+for arg in "$@"; do
+  case "$arg" in
+    --json)    JSON_OUTPUT=true ;;
+    --watch)   WATCH_MODE=true ;;
+    --no-move) NO_MOVE=true ;;
+    --help|-h)
+      echo "Usage: km-recv [--json] [--watch] [--no-move]"
+      echo "  --json     machine-readable JSON (newline-delimited, one object per message)"
+      echo "  --watch    poll every 5 seconds for new messages"
+      echo "  --no-move  do not move messages to processed/ after reading"
+      exit 0
+      ;;
+    *)
+      echo "[km-recv] Unknown option: $arg" >&2
+      exit 1
+      ;;
+  esac
+done
+
+MAIL_DIR="/var/mail/km"
+SANDBOX_ID="${KM_SANDBOX_ID:-}"
+IDENTITIES_TABLE="${KM_IDENTITIES_TABLE:-km-identities}"
+
+# ----------------------------------------------------------------
+# ed25519_pubkey_to_pem: convert a base64-encoded 32-byte Ed25519
+# public key to a PEM-encoded SubjectPublicKeyInfo temporary file.
+#
+# SubjectPublicKeyInfo DER layout for Ed25519:
+#   302a300506032b6570032100 (12-byte fixed OID prefix)
+#   + 32 bytes of raw public key
+#
+# Returns the path to the temp PEM file via stdout.
+# Caller is responsible for deleting the temp file.
+# ----------------------------------------------------------------
+ed25519_pubkey_to_pem() {
+  local b64_key="$1"
+  local tmp_der
+  local tmp_pem
+
+  tmp_der=$(mktemp /tmp/km-recv-XXXXXX.der)
+  tmp_pem=$(mktemp /tmp/km-recv-XXXXXX.pem)
+
+  # Build DER: fixed SubjectPublicKeyInfo prefix for Ed25519 + 32-byte key
+  local der_hex="302a300506032b6570032100"
+  local key_hex
+  key_hex=$(printf '%s' "$b64_key" | base64 -d | xxd -p | tr -d '\n')
+
+  # Write full DER to binary file
+  printf '%s%s' "$der_hex$key_hex" | xxd -r -p > "$tmp_der"
+
+  # Wrap in PEM
+  {
+    echo "-----BEGIN PUBLIC KEY-----"
+    base64 "$tmp_der" | fold -w 64
+    echo "-----END PUBLIC KEY-----"
+  } > "$tmp_pem"
+
+  rm -f "$tmp_der"
+  echo "$tmp_pem"
+}
+
+# ----------------------------------------------------------------
+# parse_headers: extract all commonly used headers from raw email.
+# Sets global variables: HDR_FROM HDR_TO HDR_SUBJECT HDR_SENDER_ID
+# HDR_SIGNATURE HDR_ENCRYPTED HDR_CONTENT_TYPE
+# ----------------------------------------------------------------
+parse_headers() {
+  local raw="$1"
+
+  HDR_FROM=$(echo "$raw"         | grep -i "^From:"              | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')
+  HDR_TO=$(echo "$raw"           | grep -i "^To:"                | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')
+  HDR_SUBJECT=$(echo "$raw"      | grep -i "^Subject:"           | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')
+  HDR_SENDER_ID=$(echo "$raw"    | grep -i "^X-KM-Sender-ID:"    | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')
+  HDR_SIGNATURE=$(echo "$raw"    | grep -i "^X-KM-Signature:"    | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')
+  HDR_ENCRYPTED=$(echo "$raw"    | grep -i "^X-KM-Encrypted:"    | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r' | tr '[:upper:]' '[:lower:]')
+  HDR_CONTENT_TYPE=$(echo "$raw" | grep -i "^Content-Type:"      | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')
+}
+
+# ----------------------------------------------------------------
+# extract_body: return the plain-text body of a MIME message.
+# For single-part messages: everything after the first blank line.
+# For multipart/: returns the first text/plain part's content.
+# ----------------------------------------------------------------
+extract_body() {
+  local raw="$1"
+
+  # Check for multipart boundary
+  local boundary
+  boundary=$(echo "$HDR_CONTENT_TYPE" | grep -oi 'boundary="[^"]*"' | sed 's/boundary="//;s/"$//')
+  if [ -z "$boundary" ]; then
+    boundary=$(echo "$HDR_CONTENT_TYPE" | grep -oi "boundary=[^;[:space:]]*" | sed 's/boundary=//')
+  fi
+
+  if [ -n "$boundary" ]; then
+    # Multipart: find first text/plain part
+    local in_text_plain=false
+    local past_part_headers=false
+    local body_lines=""
+
+    while IFS= read -r line; do
+      line_clean=$(echo "$line" | tr -d '\r')
+      if [[ "$line_clean" == "--${boundary}"* ]]; then
+        if $in_text_plain && [ -n "$body_lines" ]; then
+          break
+        fi
+        in_text_plain=false
+        past_part_headers=false
+        body_lines=""
+        continue
+      fi
+      if ! $in_text_plain; then
+        if echo "$line_clean" | grep -qi "^Content-Type:.*text/plain"; then
+          in_text_plain=true
+          past_part_headers=false
+          continue
+        fi
+        continue
+      fi
+      if ! $past_part_headers; then
+        if [ -z "$line_clean" ]; then
+          past_part_headers=true
+        fi
+        continue
+      fi
+      body_lines="${body_lines}${line_clean}
+"
+    done <<< "$raw"
+
+    if [ -n "$body_lines" ]; then
+      echo "$body_lines"
+      return
+    fi
+  fi
+
+  # Single-part or fallback: skip headers (up to first blank line), return rest
+  echo "$raw" | awk 'found{print} /^[[:space:]]*$/{found=1}' | head -100
+}
+
+# ----------------------------------------------------------------
+# list_attachments: print filenames of MIME attachments (one per line).
+# ----------------------------------------------------------------
+list_attachments() {
+  local raw="$1"
+  echo "$raw" | grep -i "^Content-Disposition:.*attachment" | \
+    grep -oi 'filename="[^"]*"' | sed 's/filename="//;s/"$//'
+}
+
+# ----------------------------------------------------------------
+# save_attachment: decode a base64 MIME attachment part to a file.
+# Usage: save_attachment "$raw_email" "filename.txt" "/output/dir/"
+# ----------------------------------------------------------------
+save_attachment() {
+  local raw="$1"
+  local filename="$2"
+  local outdir="${3:-.}"
+
+  local in_target=false
+  local in_body=false
+  local body_b64=""
+
+  while IFS= read -r line; do
+    line_clean=$(echo "$line" | tr -d '\r')
+
+    if echo "$line_clean" | grep -qi "filename=\"${filename}\""; then
+      in_target=true
+      in_body=false
+      continue
+    fi
+
+    if $in_target; then
+      if [ -z "$line_clean" ] && ! $in_body; then
+        in_body=true
+        continue
+      fi
+      if $in_body; then
+        if [[ "$line_clean" == "--"* ]]; then
+          break
+        fi
+        body_b64="${body_b64}${line_clean}"
+      fi
+    fi
+  done <<< "$raw"
+
+  if [ -z "$body_b64" ]; then
+    echo "[km-recv] Attachment '$filename' not found or empty" >&2
+    return 1
+  fi
+
+  mkdir -p "$outdir"
+  printf '%s' "$body_b64" | base64 -d > "${outdir}/${filename}"
+  echo "[km-recv] Saved attachment: ${outdir}/${filename}"
+}
+
+# ----------------------------------------------------------------
+# verify_signature: best-effort Ed25519 signature verification.
+# Looks up sender public key from DynamoDB km-identities table.
+# Sets global: SIG_STATUS ("verified"|"failed"|"no-key"|"unsigned"|"error")
+# ----------------------------------------------------------------
+verify_signature() {
+  local sender_id="$1"
+  local signature_b64="$2"
+  local body="$3"
+
+  if [ -z "$sender_id" ] || [ -z "$signature_b64" ]; then
+    SIG_STATUS="unsigned"
+    return
+  fi
+
+  # Look up public key from DynamoDB
+  local pubkey_b64
+  pubkey_b64=$(aws dynamodb get-item \
+    --table-name "$IDENTITIES_TABLE" \
+    --key "{\"sandbox_id\":{\"S\":\"${sender_id}\"}}" \
+    --query 'Item.public_key.S' \
+    --output text 2>/dev/null || echo "")
+
+  if [ -z "$pubkey_b64" ] || [ "$pubkey_b64" = "None" ]; then
+    SIG_STATUS="no-key"
+    return
+  fi
+
+  # Convert base64 pubkey (32 bytes) to Ed25519 PEM
+  local pem_file
+  pem_file=$(ed25519_pubkey_to_pem "$pubkey_b64" 2>/dev/null || echo "")
+
+  if [ -z "$pem_file" ] || [ ! -f "$pem_file" ]; then
+    SIG_STATUS="error"
+    return
+  fi
+
+  # Write signature and body to temp files for openssl
+  local sig_file body_file
+  sig_file=$(mktemp /tmp/km-recv-XXXXXX.sig)
+  body_file=$(mktemp /tmp/km-recv-XXXXXX.body)
+  printf '%s' "$signature_b64" | base64 -d > "$sig_file" 2>/dev/null || true
+  printf '%s' "$body" > "$body_file"
+
+  # Verify with openssl pkeyutl (Ed25519 requires -rawin)
+  if openssl pkeyutl -verify \
+      -pubin -inkey "$pem_file" \
+      -sigfile "$sig_file" \
+      -in "$body_file" \
+      -rawin \
+      2>/dev/null; then
+    SIG_STATUS="verified"
+  else
+    SIG_STATUS="failed"
+  fi
+
+  rm -f "$pem_file" "$sig_file" "$body_file"
+}
+
+# ----------------------------------------------------------------
+# json_escape: escape a string for safe embedding in JSON.
+# ----------------------------------------------------------------
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g;s/"/\\"/g;s/\t/\\t/g' | tr -d '\000-\037'
+}
+
+# ----------------------------------------------------------------
+# process_messages: scan /var/mail/km/new/ and process each message
+# ----------------------------------------------------------------
+process_messages() {
+  local index=0
+  local found_any=false
+
+  shopt -s nullglob
+  for msg_file in "$MAIL_DIR/new/"*; do
+    [ -f "$msg_file" ] || continue
+
+    found_any=true
+    index=$((index + 1))
+
+    # Read raw email content (cap at 1MB to avoid runaway)
+    local raw
+    raw=$(head -c 1048576 "$msg_file")
+
+    # Parse headers into global HDR_* variables
+    parse_headers "$raw"
+
+    # Extract body
+    local body body_preview
+    body=$(extract_body "$raw")
+    body_preview=$(echo "$body" | head -1 | cut -c1-80)
+
+    # List attachments
+    local attachments attachment_list
+    attachments=$(list_attachments "$raw")
+    attachment_list=$(echo "$attachments" | tr '\n' ',' | sed 's/,$//')
+
+    # Determine encrypted status
+    local is_encrypted=false
+    if [ "$HDR_ENCRYPTED" = "yes" ] || [ "$HDR_ENCRYPTED" = "true" ] || [ "$HDR_ENCRYPTED" = "1" ]; then
+      is_encrypted=true
+    fi
+
+    # Signature verification (best-effort — network may not be available during bootstrap)
+    SIG_STATUS="unsigned"
+    verify_signature "$HDR_SENDER_ID" "$HDR_SIGNATURE" "$body" || true
+
+    if $JSON_OUTPUT; then
+      local json_from json_to json_subject json_sender_id json_body json_sig
+      json_from=$(json_escape "$HDR_FROM")
+      json_to=$(json_escape "$HDR_TO")
+      json_subject=$(json_escape "$HDR_SUBJECT")
+      json_sender_id=$(json_escape "$HDR_SENDER_ID")
+      json_body=$(json_escape "$body")
+      json_sig=$(json_escape "$SIG_STATUS")
+      local json_enc="false"
+      $is_encrypted && json_enc="true"
+      local attach_json="[]"
+      if [ -n "$attachment_list" ]; then
+        attach_json='["'"$(echo "$attachment_list" | sed 's/,/","/g')"'"]'
+      fi
+      printf '{"index":%d,"from":"%s","sender_id":"%s","to":"%s","subject":"%s","signature":"%s","encrypted":%s,"body":"%s","attachments":%s}\n' \
+        "$index" "$json_from" "$json_sender_id" "$json_to" "$json_subject" \
+        "$json_sig" "$json_enc" "$json_body" "$attach_json"
+    else
+      # Human-readable output
+      local sig_display enc_display from_display
+      case "$SIG_STATUS" in
+        verified) sig_display="✓ verified" ;;
+        failed)   sig_display="✗ failed"   ;;
+        no-key)   sig_display="? no-key"   ;;
+        unsigned) sig_display="— unsigned" ;;
+        *)        sig_display="? $SIG_STATUS" ;;
+      esac
+      enc_display="no"
+      $is_encrypted && enc_display="yes"
+      from_display="${HDR_SENDER_ID:-${HDR_FROM}}"
+      printf '[%d] From: %-20s  Subject: %-20s  Sig: %-12s  Enc: %s\n' \
+        "$index" "$from_display" "${HDR_SUBJECT:-<no subject>}" \
+        "$sig_display" "$enc_display"
+      if $is_encrypted; then
+        printf '    Body: [encrypted - cannot decrypt in bash]\n\n'
+      else
+        printf '    Body: %s\n\n' "$body_preview"
+      fi
+    fi
+
+    # Move to processed (unless --no-move)
+    if ! $NO_MOVE; then
+      mv "$msg_file" "$MAIL_DIR/processed/$(basename "$msg_file")"
+    fi
+  done
+
+  if ! $found_any && ! $JSON_OUTPUT; then
+    echo "[km-recv] No new messages in $MAIL_DIR/new/"
+  fi
+}
+
+# ----------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------
+if $WATCH_MODE; then
+  echo "[km-recv] Watching $MAIL_DIR/new/ — press Ctrl-C to stop"
+  while true; do
+    process_messages
+    sleep 5
+  done
+else
+  process_messages
+fi
+KMRECV
+chmod +x /opt/km/bin/km-recv
+echo "[km-bootstrap] km-recv installed at /opt/km/bin/km-recv"
 {{- end }}
 
 {{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}

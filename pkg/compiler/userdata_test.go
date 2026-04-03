@@ -1329,3 +1329,94 @@ func TestKmSendContainsPKCS8Prefix(t *testing.T) {
 		t.Error("expected PKCS8 DER prefix '302e020100300506032b657004220420' in km-send script")
 	}
 }
+
+// ============================================================
+// km-recv deployment tests (45-03)
+// ============================================================
+
+// TestKmRecvPresentWhenEmailSet verifies km-recv script is deployed when SandboxEmail is set.
+func TestKmRecvPresentWhenEmailSet(t *testing.T) {
+	p := emailProfile()
+	out, err := generateUserData(p, "sb-recv-1", nil, "my-bucket", false, nil, "sandboxes.example.com")
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "/opt/km/bin/km-recv") {
+		t.Error("expected /opt/km/bin/km-recv in userdata when SandboxEmail is set")
+	}
+}
+
+// TestKmRecvAbsentWhenNoEmail verifies km-recv is NOT deployed when SandboxEmail is empty.
+func TestKmRecvAbsentWhenNoEmail(t *testing.T) {
+	tmpl, err := parseUserDataTemplate()
+	if err != nil {
+		t.Fatalf("parseUserDataTemplate failed: %v", err)
+	}
+	params := userDataParams{
+		SandboxID:         "sb-noemail-recv",
+		SandboxEmail:      "", // explicitly empty — km-recv should not appear
+		KMArtifactsBucket: "my-bucket",
+	}
+	var buf strings.Builder
+	if err := tmpl.Execute(&buf, params); err != nil {
+		t.Fatalf("template.Execute failed: %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "/opt/km/bin/km-recv") {
+		t.Error("expected /opt/km/bin/km-recv to be absent in userdata when SandboxEmail is empty")
+	}
+}
+
+// TestKmRecvContainsDynamoDBLookup verifies km-recv looks up sender public key from DynamoDB.
+func TestKmRecvContainsDynamoDBLookup(t *testing.T) {
+	p := emailProfile()
+	out, err := generateUserData(p, "sb-recv-2", nil, "my-bucket", false, nil, "sandboxes.example.com")
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "dynamodb get-item") {
+		t.Error("expected 'dynamodb get-item' in km-recv script for public key lookup")
+	}
+	if !strings.Contains(out, "km-identities") {
+		t.Error("expected 'km-identities' table name in km-recv script")
+	}
+}
+
+// TestKmRecvContainsOpensslVerify verifies km-recv uses openssl pkeyutl -verify for signature verification.
+func TestKmRecvContainsOpensslVerify(t *testing.T) {
+	p := emailProfile()
+	out, err := generateUserData(p, "sb-recv-3", nil, "my-bucket", false, nil, "sandboxes.example.com")
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "openssl pkeyutl -verify") {
+		t.Error("expected 'openssl pkeyutl -verify' in km-recv script")
+	}
+}
+
+// TestKmRecvContainsMailDir verifies km-recv reads from the correct mail directory.
+func TestKmRecvContainsMailDir(t *testing.T) {
+	p := emailProfile()
+	out, err := generateUserData(p, "sb-recv-4", nil, "my-bucket", false, nil, "sandboxes.example.com")
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "/var/mail/km/new") {
+		t.Error("expected '/var/mail/km/new' mail directory in km-recv script")
+	}
+	if !strings.Contains(out, "/var/mail/km/processed") {
+		t.Error("expected '/var/mail/km/processed' in km-recv script")
+	}
+}
+
+// TestKmRecvContainsSPKIDERPrefix verifies the Ed25519 SubjectPublicKeyInfo DER prefix constant is present.
+func TestKmRecvContainsSPKIDERPrefix(t *testing.T) {
+	p := emailProfile()
+	out, err := generateUserData(p, "sb-recv-5", nil, "my-bucket", false, nil, "sandboxes.example.com")
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "302a300506032b6570032100") {
+		t.Error("expected SubjectPublicKeyInfo DER prefix '302a300506032b6570032100' in km-recv script")
+	}
+}
