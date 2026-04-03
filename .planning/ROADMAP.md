@@ -1060,3 +1060,20 @@ Plans:
 
 Plans:
 - [x] TBD (run /gsd:plan-phase 45 to break down) (completed 2026-04-03)
+
+### Phase 46: AI email-to-command — Haiku interprets free-form operator emails into km commands
+
+**Goal:** Replace the rigid keyword-matching email-create-handler with a conversational AI-powered flow. Operator sends free-form email to operator@sandboxes.{domain} describing what they want. Lambda calls Haiku to interpret the intent, resolve it to a km command with profile selection and overrides, and replies with a structured confirmation template. Operator replies "yes" to execute, or describes changes for another round. Safe phrase auth is preserved.
+**Requirements**:
+- Extend email-create-handler Lambda to call Bedrock Haiku for intent extraction from free-form email body
+- Haiku receives context: available profiles (names + descriptions), available commands (create, destroy, status, extend, pause, resume), current sandboxes
+- Haiku extracts: command, profile, overrides (TTL, repos, instance type, etc.), confidence level
+- Lambda replies with structured confirmation template showing resolved command + parameters
+- Operator replies "yes" → Lambda triggers command via EventBridge (existing remote-create pattern)
+- Operator replies with changes → another Haiku round → updated confirmation
+- Preserve KM-AUTH safe phrase validation (existing)
+- Low-confidence extractions trigger clarifying questions instead of confirmation
+- Conversation state tracked per thread (Message-ID / In-Reply-To chain in S3)
+- Existing keyword-based handlers (create with YAML attachment, status) continue to work as fast-path
+**Depends on:** Phase 22 (remote create via EventBridge), Phase 45 (email infrastructure)
+**Plans:** 0 plans (run /gsd:plan-phase 46 to break down)

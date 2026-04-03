@@ -556,6 +556,7 @@ None yet.
 - Phase 42 added: eBPF gatekeeper mode — connect4 DNAT rewrite for selective L7 proxy
 - Phase 44 added: km at/schedule — EventBridge Scheduler command for deferred and recurring sandbox operations
 - Phase 45 added: km-send/km-recv sandbox scripts & km email send/read CLI — close Phase 14 gap, pure bash in-sandbox scripts + operator Go CLI for signed email with attachments
+- Phase 46 added: AI email-to-command — Haiku interprets free-form operator emails, replies with confirmation template, operator replies "yes" to execute
 
 ## Session Continuity
 
