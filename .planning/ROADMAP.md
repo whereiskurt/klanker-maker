@@ -731,16 +731,14 @@ Plans:
 ### Phase 31: Allowlist profile generator — observe sandbox traffic via eBPF TLS uprobes + proxy logs, auto-generate minimal SandboxProfile YAML
 
 **Goal:** Run a sandbox in "learning mode" that records all observed DNS, HTTP, and TLS traffic from Phase 41 uprobe events and Phase 40 eBPF audit logs, then generates a minimal `SandboxProfile` YAML with only the DNS suffixes, hosts, and GitHub repos actually used. Leverages the existing TLS uprobe consumer (pkg/ebpf/tls/), eBPF audit ring buffer (pkg/ebpf/audit/), and MITM proxy logs as data sources. Output is a ready-to-use profile YAML that can be reviewed and applied.
-**Requirements**: TBD
+**Requirements**: [AGEN-01, AGEN-02, AGEN-03, AGEN-04]
 **Depends on:** Phase 41 (TLS uprobe observability), Phase 40 (eBPF cgroup enforcement)
 **Plans:** 2 plans
 
 Plans:
-- [ ] 43-01-PLAN.md — EFS Terraform module, Terragrunt config, profile fields, km init registration
-- [ ] 43-02-PLAN.md — LoadEFSOutputs, NetworkConfig wiring, userdata EFS mount block, destroy no-op verification
+- [ ] 31-01-PLAN.md — Core pkg/allowlistgen: Recorder, DNS suffix normalization, SandboxProfile generator (TDD)
+- [ ] 31-02-PLAN.md — km observe CLI, DNS resolver DomainObserver hook, ebpf-attach --observe wiring
 
-Plans:
-- [ ] TBD (run /gsd:plan-phase 31 to break down)
 
 ### Phase 32: Profile-scoped rsync paths with external file lists and shell wildcards
 
