@@ -450,6 +450,7 @@ func TestIdentity_SendSignedEmail_RawMIMEHeaders(t *testing.T) {
 		"sb-recipient01",          // recipientSandboxID
 		"km-identities",           // tableName
 		"off",                     // encryptionPolicy
+		nil,                       // attachments
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail returned error: %v", err)
@@ -487,7 +488,7 @@ func TestIdentity_SendSignedEmail_BodyMatchesSigningInput(t *testing.T) {
 		sesMock, ssmMock, dynMock,
 		"sb-sender02@example.com", "recip@example.com",
 		"Subject", body,
-		"sb-sender02", "sb-recip02", "km-identities", "off",
+		"sb-sender02", "sb-recip02", "km-identities", "off", nil,
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail error: %v", err)
@@ -524,7 +525,7 @@ func TestIdentity_SendSignedEmail_EncryptionRequired_NoRecipientKey_ReturnsError
 		sesMock, ssmMock, dynMock,
 		"sb-sender03@example.com", "recip@example.com",
 		"Subject", "Body",
-		"sb-sender03", "sb-recip03", "km-identities", "required",
+		"sb-sender03", "sb-recip03", "km-identities", "required", nil,
 	)
 	if err == nil {
 		t.Error("expected error when encryption=required and recipient has no public key")
@@ -555,7 +556,7 @@ func TestIdentity_SendSignedEmail_EncryptionRequired_WithRecipientKey_Encrypted(
 		sesMock, ssmMock, dynMock,
 		"sb-sender04@example.com", "sb-recip04@example.com",
 		"Subject", "Confidential body",
-		"sb-sender04", "sb-recip04", "km-identities", "required",
+		"sb-sender04", "sb-recip04", "km-identities", "required", nil,
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail (required, with key) returned error: %v", err)
@@ -576,7 +577,7 @@ func TestIdentity_SendSignedEmail_EncryptionOptional_NoRecipientKey_SendsPlainte
 		sesMock, ssmMock, dynMock,
 		"sb-sender05@example.com", "recip@example.com",
 		"Subject", "Plain body",
-		"sb-sender05", "sb-recip05", "km-identities", "optional",
+		"sb-sender05", "sb-recip05", "km-identities", "optional", nil,
 	)
 	if err != nil {
 		t.Errorf("SendSignedEmail (optional, no key) should succeed; got: %v", err)
@@ -607,7 +608,7 @@ func TestIdentity_SendSignedEmail_EncryptionOptional_WithRecipientKey_Encrypted(
 		sesMock, ssmMock, dynMock,
 		"sb-sender06@example.com", "sb-recip06@example.com",
 		"Subject", "Secret",
-		"sb-sender06", "sb-recip06", "km-identities", "optional",
+		"sb-sender06", "sb-recip06", "km-identities", "optional", nil,
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail (optional, with key) returned error: %v", err)
@@ -627,7 +628,7 @@ func TestIdentity_SendSignedEmail_EncryptionOff_SkipsFetch(t *testing.T) {
 		sesMock, ssmMock, dynMock,
 		"sb-sender07@example.com", "recip@example.com",
 		"Subject", "Body",
-		"sb-sender07", "sb-recip07", "km-identities", "off",
+		"sb-sender07", "sb-recip07", "km-identities", "off", nil,
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail (off) returned error: %v", err)

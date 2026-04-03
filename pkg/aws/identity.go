@@ -19,6 +19,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path"
@@ -69,6 +70,14 @@ type IdentityRecord struct {
 	Encryption             string   // email encryption policy
 	Alias                  string   // human-friendly dot-notation name (empty if not set)
 	AllowedSenders         []string // allow-list patterns (nil if not configured)
+}
+
+// Attachment represents a file attachment to be included in a multipart MIME email.
+// Filename is used as the Content-Disposition filename parameter.
+// Data is the raw (unencoded) attachment bytes; buildRawMIME will base64-encode them.
+type Attachment struct {
+	Filename string
+	Data     []byte
 }
 
 // signingKeyPath returns the SSM parameter path for a sandbox's signing key.
@@ -463,8 +472,9 @@ func DecryptFromSender(privKey *[32]byte, pubKey *[32]byte, ciphertext []byte) (
 //     - "required": fetches recipient's identity; encrypts if key exists; errors if no key
 //     - "optional": fetches recipient's identity; encrypts if key exists; sends plaintext if no key
 //     - "off" or "": skips all encryption, no DynamoDB fetch
-//  3. Signs the (possibly encrypted) body with Ed25519
-//  4. Constructs raw MIME bytes with X-KM-Signature, X-KM-Sender-ID, optionally X-KM-Encrypted
+//  3. Signs the (possibly encrypted) body with Ed25519 — signature covers body only, not attachments
+//  4. Constructs raw MIME bytes with X-KM-Signature, X-KM-Sender-ID, optionally X-KM-Encrypted.
+//     When attachments is non-empty, the message is multipart/mixed.
 //  5. Sends via SES Content.Raw (not Content.Simple — Simple does not support custom headers)
 //
 // Parameters:
@@ -476,6 +486,7 @@ func DecryptFromSender(privKey *[32]byte, pubKey *[32]byte, ciphertext []byte) (
 //   - recipientSandboxID: recipient's sandbox ID for DynamoDB identity lookup
 //   - tableName: DynamoDB identities table name
 //   - encryptionPolicy: "required" | "optional" | "off" | ""
+//   - attachments: optional file attachments; nil or empty for single-part message
 func SendSignedEmail(
 	ctx context.Context,
 	sesClient SESV2API,
@@ -483,6 +494,7 @@ func SendSignedEmail(
 	identityClient IdentityTableAPI,
 	from, to, subject, body string,
 	sandboxID, recipientSandboxID, tableName, encryptionPolicy string,
+	attachments []Attachment,
 ) error {
 	// Step 1: Read signing key from SSM
 	keyPath := signingKeyPath(sandboxID)
@@ -543,7 +555,7 @@ func SendSignedEmail(
 	}
 
 	// Step 4: Construct raw MIME message
-	mime := buildRawMIME(from, to, subject, bodyToSign, sandboxID, sigB64, encrypted)
+	mime := buildRawMIME(from, to, subject, bodyToSign, sandboxID, sigB64, encrypted, attachments)
 
 	// Step 5: Send via SES Content.Raw
 	_, err = sesClient.SendEmail(ctx, &sesv2.SendEmailInput{
@@ -567,8 +579,17 @@ func SendSignedEmail(
 //
 // Custom headers X-KM-Signature and X-KM-Sender-ID are only supported via
 // Content.Raw — SES Simple message type strips unknown headers.
-func buildRawMIME(from, to, subject, body, senderID, sigB64 string, encrypted bool) string {
+//
+// When attachments is nil or empty, a single-part text/plain message is produced
+// (backward-compatible behavior). When attachments is non-empty, the message is
+// multipart/mixed with the text body as part 1 and each attachment as a subsequent
+// application/octet-stream part with base64 Content-Transfer-Encoding.
+//
+// The signature (X-KM-Signature) always covers only the text body, not attachments.
+func buildRawMIME(from, to, subject, body, senderID, sigB64 string, encrypted bool, attachments []Attachment) string {
 	var sb strings.Builder
+
+	// Top-level headers present in both single-part and multipart messages.
 	sb.WriteString(fmt.Sprintf("From: %s\r\n", from))
 	sb.WriteString(fmt.Sprintf("To: %s\r\n", to))
 	sb.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
@@ -578,10 +599,53 @@ func buildRawMIME(from, to, subject, body, senderID, sigB64 string, encrypted bo
 		sb.WriteString("X-KM-Encrypted: true\r\n")
 	}
 	sb.WriteString("MIME-Version: 1.0\r\n")
+
+	if len(attachments) == 0 {
+		// Single-part text/plain — original behavior.
+		sb.WriteString("Content-Type: text/plain; charset=\"UTF-8\"\r\n")
+		sb.WriteString("\r\n")
+		sb.WriteString(body)
+		return sb.String()
+	}
+
+	// Multipart/mixed — generate a random boundary.
+	boundary := generateMIMEBoundary()
+
+	sb.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=\"%s\"\r\n", boundary))
+	sb.WriteString("\r\n")
+
+	// Part 1: text/plain body (signed content).
+	sb.WriteString(fmt.Sprintf("--%s\r\n", boundary))
 	sb.WriteString("Content-Type: text/plain; charset=\"UTF-8\"\r\n")
 	sb.WriteString("\r\n")
 	sb.WriteString(body)
+	sb.WriteString("\r\n")
+
+	// Remaining parts: one per attachment.
+	for _, att := range attachments {
+		sb.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+		sb.WriteString("Content-Type: application/octet-stream\r\n")
+		sb.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\r\n", att.Filename))
+		sb.WriteString("Content-Transfer-Encoding: base64\r\n")
+		sb.WriteString("\r\n")
+		sb.WriteString(base64.StdEncoding.EncodeToString(att.Data))
+		sb.WriteString("\r\n")
+	}
+
+	// Closing boundary.
+	sb.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
+
 	return sb.String()
+}
+
+// generateMIMEBoundary produces a random 32-hex-char boundary string using crypto/rand.
+// Panics only if crypto/rand is unavailable (OS-level failure).
+func generateMIMEBoundary() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		panic(fmt.Sprintf("generateMIMEBoundary: crypto/rand unavailable: %v", err))
+	}
+	return hex.EncodeToString(buf)
 }
 
 // ============================================================
