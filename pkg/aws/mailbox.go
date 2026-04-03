@@ -16,6 +16,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/mail"
 	"regexp"
 	"strings"
@@ -41,18 +43,19 @@ type MailboxS3API interface {
 
 // MailboxMessage holds the parsed content of a sandbox email message.
 type MailboxMessage struct {
-	MessageID    string // extracted from S3 key (last path segment)
-	S3Key        string // full S3 object key
+	MessageID    string       // extracted from S3 key (last path segment)
+	S3Key        string       // full S3 object key
 	From         string
 	To           string
 	Subject      string
-	Body         string // body string (ciphertext if Encrypted=true; caller must call DecryptFromSender separately)
-	SenderID     string // X-KM-Sender-ID header value
-	SignatureOK  bool   // true if Ed25519 signature verified successfully
-	Encrypted    bool   // true if X-KM-Encrypted: true was present
-	Plaintext    bool   // true if no X-KM-Signature header (unsigned message)
-	SafePhrase   string // extracted from body if "KM-AUTH: <phrase>" pattern found
-	SafePhraseOK bool   // true if SafePhrase matches expected value passed to ParseSignedMessage
+	Body         string       // body string (ciphertext if Encrypted=true; caller must call DecryptFromSender separately)
+	SenderID     string       // X-KM-Sender-ID header value
+	SignatureOK  bool         // true if Ed25519 signature verified successfully
+	Encrypted    bool         // true if X-KM-Encrypted: true was present
+	Plaintext    bool         // true if no X-KM-Signature header (unsigned message)
+	SafePhrase   string       // extracted from body if "KM-AUTH: <phrase>" pattern found
+	SafePhraseOK bool         // true if SafePhrase matches expected value passed to ParseSignedMessage
+	Attachments  []Attachment // attachments extracted from multipart/mixed messages; nil for single-part
 }
 
 // ListMailboxMessages lists S3 object keys under the mail/ prefix and filters
@@ -166,12 +169,60 @@ func ParseSignedMessage(rawMIME []byte, receiverSandboxID, pubKeyB64 string, all
 	sigB64 := msg.Header.Get("X-KM-Signature")
 	encryptedHeader := msg.Header.Get("X-KM-Encrypted")
 
-	// Read body
-	bodyBytes, err := io.ReadAll(msg.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read message body: %w", err)
+	// Read body — handle multipart/mixed if present.
+	// For signature verification, body = the text/plain part only.
+	var body string
+	var attachments []Attachment
+
+	contentType := msg.Header.Get("Content-Type")
+	mediaType, params, ctErr := mime.ParseMediaType(contentType)
+	if ctErr == nil && strings.HasPrefix(mediaType, "multipart/") {
+		// Multipart message — iterate parts.
+		mr := multipart.NewReader(msg.Body, params["boundary"])
+		firstTextPart := true
+		for {
+			part, partErr := mr.NextPart()
+			if partErr == io.EOF {
+				break
+			}
+			if partErr != nil {
+				return nil, fmt.Errorf("read multipart: %w", partErr)
+			}
+			partData, readErr := io.ReadAll(part)
+			part.Close()
+			if readErr != nil {
+				return nil, fmt.Errorf("read multipart part: %w", readErr)
+			}
+
+			partCT := part.Header.Get("Content-Type")
+			partMedia, _, _ := mime.ParseMediaType(partCT)
+			disposition := part.Header.Get("Content-Disposition")
+			dispType, dispParams, _ := mime.ParseMediaType(disposition)
+
+			isAttachment := strings.EqualFold(dispType, "attachment")
+			isTextPlain := strings.HasPrefix(partMedia, "text/plain")
+
+			if isAttachment {
+				filename := dispParams["filename"]
+				attachments = append(attachments, Attachment{
+					Filename: filename,
+					Data:     partData,
+				})
+			} else if isTextPlain && firstTextPart {
+				// First text/plain part is the signed body.
+				body = string(partData)
+				firstTextPart = false
+			}
+			// Unrecognized non-attachment parts are silently skipped.
+		}
+	} else {
+		// Single-part — original behavior.
+		bodyBytes, readErr := io.ReadAll(msg.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("read message body: %w", readErr)
+		}
+		body = string(bodyBytes)
 	}
-	body := string(bodyBytes)
 
 	// Allow-list enforcement (before signature verification)
 	isSelfMail := senderID != "" && senderID == receiverSandboxID
@@ -221,6 +272,7 @@ func ParseSignedMessage(rawMIME []byte, receiverSandboxID, pubKeyB64 string, all
 		Plaintext:    plaintext,
 		SafePhrase:   safePhrase,
 		SafePhraseOK: safePhraseOK,
+		Attachments:  attachments,
 	}
 
 	return result, nil
