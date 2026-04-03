@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 33-02-PLAN.md
-last_updated: "2026-04-03T00:09:44.087Z"
+stopped_at: Completed 33-03-PLAN.md
+last_updated: "2026-04-03T00:17:19.378Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 42
-  completed_phases: 37
+  completed_phases: 38
   total_plans: 129
-  completed_plans: 126
+  completed_plans: 127
   percent: 0
 ---
 
@@ -172,6 +172,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 41 P05 | 3min | 2 tasks | 3 files |
 | Phase 33-ec2-storage-and-ami P01 | 3 | 2 tasks | 5 files |
 | Phase 33-ec2-storage-and-ami P02 | 3min | 1 tasks | 4 files |
+| Phase 33-ec2-storage-and-ami P03 | 4min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -468,6 +469,8 @@ Recent decisions affecting current work:
 - [Phase 33-ec2-storage-and-ami]: AMI defaults to amazon-linux-2023 in compiler when profile ami field empty
 - [Phase 33-ec2-storage-and-ami]: AMI resolution via locals ami_filters map (not multiple data blocks) to avoid Terraform plan-time errors
 - [Phase 33-ec2-storage-and-ami]: Spot instances get root_block_device sizing only, no encryption/hibernation (km pause rejects spot instances)
+- [Phase 33-ec2-storage-and-ami]: Used aws_volume_attachment (not ebs_block_device) for additional EBS volume to decouple from instance lifecycle
+- [Phase 33-ec2-storage-and-ami]: User-data device probe order: /dev/xvdf (AL2023 udev), /dev/sdf, /dev/nvme1n1, /dev/nvme2n1 with root-device guard
 
 ### Roadmap Evolution
 
@@ -523,6 +526,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-03T00:09:44.083Z
-Stopped at: Completed 33-02-PLAN.md
+Last session: 2026-04-03T00:17:19.374Z
+Stopped at: Completed 33-03-PLAN.md
 Resume file: None
