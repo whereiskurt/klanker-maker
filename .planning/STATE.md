@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 43-02-PLAN.md
-last_updated: "2026-04-03T02:07:43.848Z"
+stopped_at: Completed 42-01-PLAN.md
+last_updated: "2026-04-03T04:06:41.061Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 44
   completed_phases: 39
-  total_plans: 131
-  completed_plans: 129
+  total_plans: 135
+  completed_plans: 130
   percent: 0
 ---
 
@@ -175,6 +175,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 33-ec2-storage-and-ami P03 | 4min | 2 tasks | 6 files |
 | Phase 43 P01 | 160s | 2 tasks | 8 files |
 | Phase 43 P02 | 7min | 2 tasks | 7 files |
+| Phase 42-ebpf-gatekeeper-mode-connect4-dnat-rewrite-for-selective-l7-proxy P01 | 8min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -478,6 +479,8 @@ Recent decisions affecting current work:
 - [Phase 43]: EFSMountPoint defaults to empty string; compiler/userdata (Plan 02) applies /shared when omitted
 - [Phase 43]: generateUserData signature: network *NetworkConfig parameter added before variadic emailDomainOverride, nil-safe for all existing callers
 - [Phase 43]: LoadEFSOutputs returns empty string (not error) when efs/outputs.json missing — EFS is optional infra unlike required network
+- [Phase 42-01]: PID-file approach for HTTP proxy exemption (not UID-based): simpler, acceptable for Phase 42; stale-PID on proxy restart documented
+- [Phase 42-01]: buildL7ProxyHosts derives domain suffixes from profile fields (GitHub/Bedrock), not GitHub repo names which was the prior incorrect behavior
 
 ### Roadmap Evolution
 
@@ -534,6 +537,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-03T02:07:43.844Z
-Stopped at: Completed 43-02-PLAN.md
+Last session: 2026-04-03T04:06:41.056Z
+Stopped at: Completed 42-01-PLAN.md
 Resume file: None

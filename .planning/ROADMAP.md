@@ -985,7 +985,7 @@ Plans:
 **Goal:** eBPF runs in block mode as kernel-level gatekeeper in `both` enforcement mode — connect4 performs DNAT rewrite for L7-required hosts (GitHub, Bedrock) routing them to the proxy, while allowed non-L7 hosts connect directly; iptables DNAT and km-dns-proxy are removed for `both` mode
 **Requirements**: EBPF-NET-03, EBPF-NET-09
 **Depends on:** Phase 41
-**Plans:** 4 plans
+**Plans:** 1/3 plans executed
 
 Plans:
 - [ ] 42-01-PLAN.md — BPF dual-PID exemption + L7ProxyHosts derivation + enforcer wiring
