@@ -67,6 +67,49 @@ mount -o remount,bind,ro "{{ . }}"
 {{- end }}
 echo "[km-bootstrap] Read-only bind mounts applied"
 {{- end }}
+{{- if .AdditionalVolumeMountPoint }}
+
+# ============================================================
+# 2.6. Additional EBS volume: format and mount (Phase 33)
+# ============================================================
+echo "[km-bootstrap] Waiting for additional EBS volume to attach..."
+DEVICE=""
+for i in $(seq 1 30); do
+  # AL2023: udev creates /dev/xvdf symlink automatically from /dev/sdf attachment
+  # Ubuntu/other: fall through to direct NVMe probe
+  for dev in /dev/xvdf /dev/sdf /dev/nvme1n1 /dev/nvme2n1; do
+    if [ -b "$dev" ]; then
+      # Verify it's not the root device
+      ROOT_DEV=$(lsblk -no PKNAME $(df / | tail -1 | awk '{print $1}') 2>/dev/null || echo "")
+      DEV_BASE=$(basename "$dev")
+      if [ "$DEV_BASE" != "$ROOT_DEV" ] && ! df / 2>/dev/null | grep -q "$dev"; then
+        DEVICE="$dev"
+        break 2
+      fi
+    fi
+  done
+  sleep 2
+done
+
+if [ -n "$DEVICE" ]; then
+  # Format only if no filesystem exists (idempotent)
+  if ! blkid "$DEVICE" &>/dev/null; then
+    echo "[km-bootstrap] Formatting $DEVICE as ext4..."
+    mkfs.ext4 -F "$DEVICE"
+  fi
+  mkdir -p "{{ .AdditionalVolumeMountPoint }}"
+  # Mount and add to fstab for persistence across reboots
+  DEVICE_UUID=$(blkid -s UUID -o value "$DEVICE")
+  if [ -n "$DEVICE_UUID" ] && ! grep -q "$DEVICE_UUID" /etc/fstab 2>/dev/null; then
+    echo "UUID=${DEVICE_UUID} {{ .AdditionalVolumeMountPoint }} ext4 defaults,nofail 0 2" >> /etc/fstab
+  fi
+  mount -a
+  chown sandbox:sandbox "{{ .AdditionalVolumeMountPoint }}" 2>/dev/null || true
+  echo "[km-bootstrap] Additional volume mounted at {{ .AdditionalVolumeMountPoint }}"
+else
+  echo "[km-bootstrap] WARNING: additional EBS volume device not found after 60s"
+fi
+{{- end }}
 
 # ============================================================
 # 2.7. Sandbox identity: set hostname and export identity env vars
@@ -875,6 +918,9 @@ type userDataParams struct {
 	// TLSAllowedRepos is the comma-separated list of allowed GitHub repos
 	// passed to --allowed-repos on km ebpf-attach when TLS capture is enabled.
 	TLSAllowedRepos string
+	// Additional EBS volume mount point (Phase 33)
+	// Empty string means no additional volume.
+	AdditionalVolumeMountPoint string
 }
 
 // otpSecret holds an SSM path and derived env var name for an OTP secret.
@@ -1003,6 +1049,11 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 	if p.Spec.Observability.TlsCapture.IsEnabled() {
 		params.TLSEnabled = true
 		params.TLSAllowedRepos = joinGitHubAllowedRepos(p)
+	}
+
+	// Additional EBS volume mount point (Phase 33)
+	if p.Spec.Runtime.AdditionalVolume != nil {
+		params.AdditionalVolumeMountPoint = p.Spec.Runtime.AdditionalVolume.MountPoint
 	}
 
 	var buf bytes.Buffer

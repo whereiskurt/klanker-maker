@@ -800,3 +800,90 @@ func TestUserDataTLSCaptureWithAllowedRepos(t *testing.T) {
 		t.Error("expected comma-separated allowed repos list matching profile")
 	}
 }
+
+// ============================================================
+// Phase 33 Plan 03: User-data additional EBS volume auto-mount tests (TDD)
+// ============================================================
+
+// TestUserDataAdditionalVolumeWaitMessage verifies that when additionalVolume is set,
+// user-data contains the wait message for EBS attachment.
+func TestUserDataAdditionalVolumeWaitMessage(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Runtime.AdditionalVolume = &profile.AdditionalVolumeSpec{
+		Size:       100,
+		MountPoint: "/data",
+		Encrypted:  false,
+	}
+
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	want := "[km-bootstrap] Waiting for additional EBS volume"
+	if !strings.Contains(out, want) {
+		t.Errorf("expected %q in user-data when additionalVolume is set\ngot (first 3000 chars):\n%s", want, out[:min(3000, len(out))])
+	}
+}
+
+// TestUserDataAdditionalVolumeMkfsAndFstab verifies that user-data contains mkfs.ext4 and /etc/fstab
+// when additionalVolume is set.
+func TestUserDataAdditionalVolumeMkfsAndFstab(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Runtime.AdditionalVolume = &profile.AdditionalVolumeSpec{
+		Size:       100,
+		MountPoint: "/data",
+	}
+
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "mkfs.ext4") {
+		t.Error("expected mkfs.ext4 in user-data when additionalVolume is set")
+	}
+	if !strings.Contains(out, "/etc/fstab") {
+		t.Error("expected /etc/fstab in user-data when additionalVolume is set")
+	}
+}
+
+// TestUserDataAdditionalVolumeMkdir verifies that user-data contains mkdir -p "/data"
+// when additionalVolume mountPoint is "/data".
+func TestUserDataAdditionalVolumeMkdir(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Runtime.AdditionalVolume = &profile.AdditionalVolumeSpec{
+		Size:       100,
+		MountPoint: "/data",
+	}
+
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	want := `mkdir -p "/data"`
+	if !strings.Contains(out, want) {
+		t.Errorf("expected %q in user-data when additionalVolume.mountPoint is /data", want)
+	}
+}
+
+// TestUserDataAdditionalVolumeAbsent verifies that user-data does NOT contain "additional EBS volume"
+// when no additionalVolume is configured.
+func TestUserDataAdditionalVolumeAbsent(t *testing.T) {
+	p := baseProfile()
+	// AdditionalVolume is nil — no additional volume
+
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if strings.Contains(out, "additional EBS volume") {
+		t.Error("expected NO additional EBS volume section in user-data when additionalVolume is nil")
+	}
+}
+
+// min returns the smaller of two ints. Used for capping debug output length.
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
