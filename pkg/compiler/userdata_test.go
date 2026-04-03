@@ -1,6 +1,9 @@
 package compiler
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -886,4 +889,126 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// ============================================================
+// EFS shared filesystem mount tests (Phase 43, EFS-02, EFS-04)
+// ============================================================
+
+// TestUserDataEFSMount verifies that userdata contains EFS mount block when
+// profile has MountEFS:true and network has EFSFilesystemID set.
+func TestUserDataEFSMount(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Runtime.MountEFS = true
+
+	net := &NetworkConfig{
+		VPCID:           "vpc-test",
+		EFSFilesystemID: "fs-test123",
+	}
+
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, net)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	for _, want := range []string{
+		"amazon-efs-utils",
+		"fs-test123",
+		"/shared",
+		"_netdev,nofail,tls",
+		"mountpoint -q",
+		"mount -a",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in user-data when mountEFS:true and EFSFilesystemID set", want)
+		}
+	}
+}
+
+// TestUserDataNoEFSMount verifies that userdata does NOT contain EFS mount block
+// when profile has MountEFS:false (or omitted).
+func TestUserDataNoEFSMount(t *testing.T) {
+	p := baseProfile()
+	// MountEFS is false (default)
+
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	for _, absent := range []string{
+		"amazon-efs-utils",
+		"fs-",
+		"efs _netdev",
+	} {
+		if strings.Contains(out, absent) {
+			t.Errorf("expected %q to be ABSENT in user-data when mountEFS is false", absent)
+		}
+	}
+}
+
+// TestUserDataEFSCustomMountPoint verifies that when efsMountPoint is set, that path is used
+// instead of the default "/shared".
+func TestUserDataEFSCustomMountPoint(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Runtime.MountEFS = true
+	p.Spec.Runtime.EFSMountPoint = "/data"
+
+	net := &NetworkConfig{
+		VPCID:           "vpc-test",
+		EFSFilesystemID: "fs-custom123",
+	}
+
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, net)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	if !strings.Contains(out, "/data") {
+		t.Error("expected custom mount point /data in user-data when efsMountPoint is /data")
+	}
+	if strings.Contains(out, `"/shared"`) {
+		t.Error("expected default mount point /shared to be ABSENT when efsMountPoint is /data")
+	}
+}
+
+// TestUserDataEFSMountWithNoNetwork verifies that when network is nil (e.g. legacy callers),
+// the EFS block is omitted even if profile has MountEFS:true.
+func TestUserDataEFSMountWithNoNetwork(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Runtime.MountEFS = true
+
+	// Pass nil network — no EFSFilesystemID available
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	if strings.Contains(out, "amazon-efs-utils") {
+		t.Error("expected EFS block to be ABSENT when network is nil (no EFSFilesystemID)")
+	}
+}
+
+// TestDestroyNoEFSReference verifies that destroy.go has no EFS-related references.
+// EFS-06: km destroy must not teardown EFS resources.
+func TestDestroyNoEFSReference(t *testing.T) {
+	// Locate destroy.go relative to this test file's directory.
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Skip("runtime.Caller unavailable")
+	}
+	destroyPath := filepath.Join(filepath.Dir(thisFile), "..", "..", "internal", "app", "cmd", "destroy.go")
+	data, err := os.ReadFile(destroyPath)
+	if err != nil {
+		t.Skipf("destroy.go not found at %s: %v", destroyPath, err)
+	}
+	content := string(data)
+	for _, forbidden := range []string{
+		"LoadEFSOutputs",
+		"EFSFilesystemID",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Errorf("destroy.go must not contain %q (EFS-06: destroy has no EFS awareness)", forbidden)
+		}
+	}
 }
