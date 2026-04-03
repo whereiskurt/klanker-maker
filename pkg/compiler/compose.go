@@ -57,7 +57,8 @@ type dockerComposeData struct {
 	Region             string
 	AllowedDNSSuffixes string // space-separated
 	AllowedHosts       string // space-separated
-	AllowedRepos       string // space-separated
+	AllowedRepos          string // space-separated
+	GitHubAllowedReposCSV string // comma-separated for KM_GITHUB_ALLOWED_REPOS
 	AllowedRefs        string // space-separated
 	SecretPaths        string // comma-separated
 	InitCommands       string // base64-encoded JSON array
@@ -149,6 +150,9 @@ services:
 {{- end }}
 {{- if .HTTPSOnly }}
       KM_HTTPS_ONLY: "true"
+{{- end }}
+{{- if .GitHubAllowedReposCSV }}
+      KM_GITHUB_ALLOWED_REPOS: "{{ .GitHubAllowedReposCSV }}"
 {{- end }}
     volumes:
       - cred-vol:/creds:ro
@@ -319,8 +323,9 @@ func generateDockerCompose(p *profile.SandboxProfile, sandboxID string, network 
 		TracingImage:        sidecarImg("tracing"),
 		Region:             p.Spec.Runtime.Region,
 		AllowedDNSSuffixes: strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
-		AllowedHosts:       strings.Join(p.Spec.Network.Egress.AllowedHosts, ","),
-		AllowedRepos:       allowedRepos,
+		AllowedHosts:       strings.Join(append(p.Spec.Network.Egress.AllowedHosts, p.Spec.Network.Egress.AllowedDNSSuffixes...), ","),
+		AllowedRepos:          allowedRepos,
+		GitHubAllowedReposCSV: strings.ReplaceAll(allowedRepos, " ", ","),
 		AllowedRefs:        allowedRefs,
 		SecretPaths:        strings.Join(secretPaths, ","),
 		InitCommands:       initCmdsB64,
