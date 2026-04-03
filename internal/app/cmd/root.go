@@ -79,6 +79,14 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	root.AddCommand(NewOtelCmd(cfg))
 	root.AddCommand(NewInfoCmd(cfg))
 
+	// "km at" — schedule deferred and recurring sandbox operations.
+	// "km schedule" is registered as an alias so both work identically.
+	atCmd := NewAtCmd(cfg)
+	atCmd.Aliases = []string{"schedule"}
+	atCmd.AddCommand(NewAtListCmd(cfg))
+	atCmd.AddCommand(NewAtCancelCmd(cfg))
+	root.AddCommand(atCmd)
+
 	// Register Linux-only eBPF commands (no-op on other platforms).
 	registerEBPFCmds(root, cfg)
 
