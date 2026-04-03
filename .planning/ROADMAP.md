@@ -1027,7 +1027,7 @@ Key design decisions:
 **Goal:** Operators can schedule any remote-capable sandbox command (create, destroy, stop, pause, resume, extend) for deferred or recurring execution via EventBridge Scheduler, using natural language time expressions or raw cron. Includes schedule listing and cancellation.
 **Requirements**: [SCHED-PARSE, SCHED-STATE, SCHED-INFRA, SCHED-CMD, SCHED-LIST, SCHED-CANCEL, SCHED-GUARDRAIL]
 **Depends on:** Phase 43
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 
 Plans:
 - [ ] 44-01-PLAN.md — TDD: Natural language time parser (pkg/at/)
