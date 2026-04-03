@@ -75,30 +75,69 @@ spec:
         - "fix/*"
 
   network:
+    # Phase 42: eBPF gatekeeper mode — connect4 in block mode as primary enforcer,
+    # with selective DNAT rewrite to proxy for L7-required hosts (GitHub repo
+    # filtering, Bedrock token metering). Non-L7 traffic goes direct.
+    enforcement: both
     egress:
-      # GitHub hosts are implicitly allowed via sourceAccess.github.allowedRepos
       allowedDNSSuffixes:
         - ".amazonaws.com"
+        # Anthropic / Claude Code
         - ".anthropic.com"
         - ".claude.ai"
         - ".claude.com"
+        - ".sentry.io"
+        - ".cloudfront.net"
+        # GitHub (needed for git clone + API)
+        - ".github.com"
+        - ".githubusercontent.com"
+        # npm / Node.js (for claude-code install)
         - ".npmjs.org"
         - ".npmjs.com"
         - ".nodejs.org"
-        - ".github.com"
-        - ".githubusercontent.com"
+        - ".npmmirror.com"
+        # OpenAI (codex)
         - ".openai.com"
+        - ".chatgpt.com"
+        # Python (goose extensions via uvx)
+        - ".pypi.org"
+        - ".pythonhosted.org"
+        # Goose extensions / MCP
+        - ".pulsemcp.com"
+        # Google (goose telemetry, search)
+        - ".google.com"
+        - ".google-analytics.com"
+        - ".googletagmanager.com"
       allowedHosts:
-        - "registry.npmjs.org"
-        - "api.github.com"
         - "github.com"
+        # Anthropic / Claude Code
         - "api.anthropic.com"
         - "statsig.anthropic.com"
         - "statsig.com"
         - "api.statsig.com"
         - "featuregates.org"
         - "api.featuregates.org"
+        - "mcp-proxy.anthropic.com"
+        - "platform.claude.com"
+        - "api.claude.ai"
+        - "claude.ai"
+        - "sentry.io"
+        # npm
+        - "registry.npmjs.org"
+        - "nodejs.org"
+        # OpenAI (codex)
         - "api.openai.com"
+        - "chatgpt.com"
+        # Python (goose extensions)
+        - "pypi.org"
+        - "files.pythonhosted.org"
+        # Goose MCP extension directory
+        - "pulsemcp.com"
+        # Google
+        - "google.com"
+        - "www.google.com"
+        - "www.google-analytics.com"
+        - "www.googletagmanager.com"
 
   budget:
     compute:
