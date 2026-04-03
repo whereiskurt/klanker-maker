@@ -97,13 +97,16 @@ func parseFirewallMode(mode string) (uint16, error) {
 	}
 }
 
-// ipToUint32 converts an IPv4 address to a uint32 in network byte order.
+// ipToUint32 converts an IPv4 address to a uint32 matching how the kernel
+// stores network-byte-order IP bytes as a native __u32. On x86 (LE),
+// 127.0.0.1 in NBO bytes {0x7f,0x00,0x00,0x01} becomes __u32 = 0x0100007f.
+// This is needed because BPF ctx->user_ip4 uses this representation.
 func ipToUint32(ip net.IP) uint32 {
 	ip4 := ip.To4()
 	if ip4 == nil {
 		return 0
 	}
-	return binary.BigEndian.Uint32(ip4)
+	return binary.NativeEndian.Uint32(ip4)
 }
 
 func runEbpfAttach(
