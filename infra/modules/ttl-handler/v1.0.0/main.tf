@@ -161,6 +161,8 @@ resource "aws_iam_role_policy" "terraform_destroy" {
           "ec2:DescribeSpotPriceHistory",
           "ec2:DescribeNetworkInterfaces",
           "ec2:DescribeVolumes",
+          "ec2:DeleteVolume",
+          "ec2:DetachVolume",
           "ec2:DescribeInstanceTypes",
           "ec2:DescribeInstanceAttribute",
           "ec2:ModifyInstanceAttribute",

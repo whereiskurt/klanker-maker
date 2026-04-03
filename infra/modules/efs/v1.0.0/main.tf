@@ -1,3 +1,7 @@
+data "aws_vpc" "selected" {
+  id = var.vpc_id
+}
+
 resource "aws_efs_file_system" "shared" {
   creation_token   = "km-shared-${var.region_label}"
   performance_mode = "generalPurpose"
@@ -18,11 +22,11 @@ resource "aws_security_group" "efs" {
   vpc_id      = var.vpc_id
 
   ingress {
-    from_port       = 2049
-    to_port         = 2049
-    protocol        = "tcp"
-    security_groups = [var.sandbox_sg_id]
-    description     = "NFS from sandbox instances"
+    from_port   = 2049
+    to_port     = 2049
+    protocol    = "tcp"
+    cidr_blocks = [data.aws_vpc.selected.cidr_block]
+    description = "NFS from any instance in the VPC"
   }
 
   egress {

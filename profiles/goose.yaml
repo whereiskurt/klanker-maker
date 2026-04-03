@@ -20,6 +20,8 @@ spec:
     instanceType: t3.medium
     region: us-east-1
     hibernation: true
+    mountEFS: true
+    efsMountPoint: /shared
     additionalVolume:
       size: 20
       mountPoint: /data

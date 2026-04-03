@@ -225,6 +225,15 @@
               "type": "string",
               "enum": ["amazon-linux-2023", "ubuntu-24.04", "ubuntu-22.04", ""],
               "description": "AMI slug resolved per-region. Empty or omitted defaults to amazon-linux-2023."
+            },
+            "mountEFS": {
+              "type": "boolean",
+              "description": "Mount the regional EFS shared filesystem (EC2 only, provisioned by km init)"
+            },
+            "efsMountPoint": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Filesystem path to mount EFS at (default /shared)"
             }
           }
         },

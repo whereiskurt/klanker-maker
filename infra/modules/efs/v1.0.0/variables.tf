@@ -8,11 +8,6 @@ variable "subnet_ids" {
   type        = list(string)
 }
 
-variable "sandbox_sg_id" {
-  description = "Security group ID attached to sandbox instances. NFS ingress (port 2049) is restricted to this SG."
-  type        = string
-}
-
 variable "km_label" {
   description = "Short platform label (e.g. 'klankrmkr') used for resource naming."
   type        = string

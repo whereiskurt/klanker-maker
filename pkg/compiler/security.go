@@ -12,7 +12,7 @@ import (
 // and DNS (UDP 53) for name resolution. Phase 3 will tighten these when proxy
 // sidecars handle per-host filtering.
 func compileSGRules(p *profile.SandboxProfile) []SGRule {
-	return []SGRule{
+	rules := []SGRule{
 		{
 			FromPort:    443,
 			ToPort:      443,
@@ -28,6 +28,17 @@ func compileSGRules(p *profile.SandboxProfile) []SGRule {
 			Description: "DNS egress for name resolution",
 		},
 	}
+	// EFS mount requires NFS egress (port 2049) to reach mount targets in the VPC.
+	if p.Spec.Runtime.MountEFS {
+		rules = append(rules, SGRule{
+			FromPort:    2049,
+			ToPort:      2049,
+			Protocol:    "tcp",
+			CIDRBlocks:  []string{"0.0.0.0/0"},
+			Description: "NFS egress for EFS shared filesystem",
+		})
+	}
+	return rules
 }
 
 // compileIAMPolicy parses the profile's identity spec and returns an IAMSessionPolicy.

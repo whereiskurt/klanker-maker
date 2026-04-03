@@ -41,5 +41,4 @@ inputs = {
   region_label  = local.region_label
   vpc_id        = local.network_outputs.vpc_id.value
   subnet_ids    = local.network_outputs.public_subnets.value
-  sandbox_sg_id = local.network_outputs.sandbox_mgmt_sg_id.value
 }
