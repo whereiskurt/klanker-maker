@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -120,8 +121,29 @@ func main() {
 		Str("sandbox_id", sandboxID).
 		Msg("")
 
-	if err := http.ListenAndServe(addr, proxy); err != nil {
-		log.Fatal().Err(err).Msg("http proxy server error")
+	// Check if BPF maps exist for transparent proxy mode (gatekeeper/both enforcement).
+	if httpproxy.CheckBPFMapsExist(sandboxID) {
+		log.Info().
+			Str("event_type", "transparent_proxy_enabled").
+			Str("sandbox_id", sandboxID).
+			Msg("BPF maps detected — enabling transparent proxy for redirected connections")
+
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			log.Fatal().Err(err).Msg("listen error")
+		}
+		tl := httpproxy.NewTransparentListener(ln, proxy, sandboxID)
+		if len(githubAllowedRepos) > 0 {
+			tl.SetGitHubRepos(githubAllowedRepos)
+		}
+		if err := tl.Serve(); err != nil {
+			log.Fatal().Err(err).Msg("transparent proxy server error")
+		}
+	} else {
+		// Standard explicit proxy mode (no BPF maps — proxy-only enforcement)
+		if err := http.ListenAndServe(addr, proxy); err != nil {
+			log.Fatal().Err(err).Msg("http proxy server error")
+		}
 	}
 }
 
