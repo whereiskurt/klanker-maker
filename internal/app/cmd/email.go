@@ -25,35 +25,35 @@ import (
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 )
 
-// emailSendDeps holds injectable dependencies for the email send command.
-type emailSendDeps struct {
-	ses      kmaws.SESV2API
-	ssmParam emailSSMAPI
-	identity kmaws.IdentityTableAPI
-}
-
-// emailReadDeps holds injectable dependencies for the email read command.
-type emailReadDeps struct {
-	s3Client emailS3API
-	ssmParam emailSSMAPI
-	identity kmaws.IdentityTableAPI
-}
-
-// emailSSMAPI is the SSM interface needed by the email commands.
+// EmailSSMAPI is the SSM interface needed by the email commands.
 // Matches kmaws.IdentitySSMAPI to satisfy SendSignedEmail (which needs PutParameter,
 // GetParameter, DeleteParameter). Only GetParameter is actually called at runtime
 // for send (signing key) and read (encryption key), but the full interface is
 // required by SendSignedEmail's signature.
 // Implemented by *ssm.Client.
-type emailSSMAPI interface {
+type EmailSSMAPI interface {
 	kmaws.IdentitySSMAPI
 }
 
-// emailS3API is the narrow S3 interface needed by the email read command.
+// EmailS3API is the narrow S3 interface needed by the email read command.
 // Implemented by *s3.Client.
-type emailS3API interface {
+type EmailS3API interface {
 	ListObjectsV2(ctx context.Context, input *s3.ListObjectsV2Input, opts ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 	GetObject(ctx context.Context, input *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+}
+
+// EmailSendDeps holds injectable dependencies for the email send command.
+type EmailSendDeps struct {
+	SES      kmaws.SESV2API
+	SSMParam EmailSSMAPI
+	Identity kmaws.IdentityTableAPI
+}
+
+// EmailReadDeps holds injectable dependencies for the email read command.
+type EmailReadDeps struct {
+	S3Client EmailS3API
+	SSMParam EmailSSMAPI
+	Identity kmaws.IdentityTableAPI
 }
 
 // NewEmailCmd creates the "km email" parent command.
@@ -62,12 +62,12 @@ func NewEmailCmd(cfg *config.Config) *cobra.Command {
 }
 
 // NewEmailCmdWithDeps creates a testable "km email" command with injected dependencies.
-func NewEmailCmdWithDeps(cfg *config.Config, sendDeps *emailSendDeps, readDeps *emailReadDeps) *cobra.Command {
+func NewEmailCmdWithDeps(cfg *config.Config, sendDeps *EmailSendDeps, readDeps *EmailReadDeps) *cobra.Command {
 	return newEmailCmdInternal(cfg, sendDeps, readDeps)
 }
 
 // newEmailCmdInternal builds the email command tree.
-func newEmailCmdInternal(cfg *config.Config, sendDeps *emailSendDeps, readDeps *emailReadDeps) *cobra.Command {
+func newEmailCmdInternal(cfg *config.Config, sendDeps *EmailSendDeps, readDeps *EmailReadDeps) *cobra.Command {
 	email := &cobra.Command{
 		Use:          "email",
 		Short:        "Send and read signed sandbox email",
@@ -93,7 +93,7 @@ func emailDomain(cfg *config.Config) string {
 // ============================================================
 
 // newEmailSendCmd creates the "km email send" subcommand.
-func newEmailSendCmd(cfg *config.Config, deps *emailSendDeps) *cobra.Command {
+func newEmailSendCmd(cfg *config.Config, deps *EmailSendDeps) *cobra.Command {
 	var fromFlag string
 	var toFlag string
 	var subjectFlag string
@@ -129,7 +129,7 @@ func newEmailSendCmd(cfg *config.Config, deps *emailSendDeps) *cobra.Command {
 }
 
 // runEmailSend executes the km email send logic.
-func runEmailSend(ctx context.Context, cfg *config.Config, deps *emailSendDeps, from, to, subject, bodyPath, attachCSV string, out io.Writer) error {
+func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, from, to, subject, bodyPath, attachCSV string, out io.Writer) error {
 	// Validate sandbox ID format for sender and recipient.
 	if !sandboxIDLike.MatchString(from) {
 		return fmt.Errorf("invalid sender sandbox ID %q: must match {prefix}-{id} format", from)
@@ -176,13 +176,13 @@ func runEmailSend(ctx context.Context, cfg *config.Config, deps *emailSendDeps, 
 
 	// Build real clients if not injected.
 	var sesClient kmaws.SESV2API
-	var ssmClient emailSSMAPI
+	var ssmClient EmailSSMAPI
 	var identityClient kmaws.IdentityTableAPI
 
 	if deps != nil {
-		sesClient = deps.ses
-		ssmClient = deps.ssmParam
-		identityClient = deps.identity
+		sesClient = deps.SES
+		ssmClient = deps.SSMParam
+		identityClient = deps.Identity
 	} else {
 		awsCfg, awsErr := kmaws.LoadAWSConfig(ctx, cfg.AWSProfile)
 		if awsErr != nil {
@@ -240,7 +240,7 @@ func readBodyArg(bodyPath string, stdin io.Reader) (string, error) {
 // ============================================================
 
 // newEmailReadCmd creates the "km email read" subcommand.
-func newEmailReadCmd(cfg *config.Config, deps *emailReadDeps) *cobra.Command {
+func newEmailReadCmd(cfg *config.Config, deps *EmailReadDeps) *cobra.Command {
 	var jsonFlag bool
 	var rawFlag bool
 	var messageIDFlag string
@@ -290,7 +290,7 @@ type mailboxMessageJSON struct {
 }
 
 // runEmailRead executes the km email read logic.
-func runEmailRead(ctx context.Context, cfg *config.Config, deps *emailReadDeps, sandboxID string, jsonOut, rawOut bool, messageIDFilter string, out io.Writer) error {
+func runEmailRead(ctx context.Context, cfg *config.Config, deps *EmailReadDeps, sandboxID string, jsonOut, rawOut bool, messageIDFilter string, out io.Writer) error {
 	// Validate sandbox ID format.
 	if !sandboxIDLike.MatchString(sandboxID) {
 		return fmt.Errorf("invalid sandbox ID %q: must match {prefix}-{id} format", sandboxID)
@@ -308,14 +308,14 @@ func runEmailRead(ctx context.Context, cfg *config.Config, deps *emailReadDeps, 
 	}
 
 	// Build real clients if not injected.
-	var s3Client emailS3API
-	var ssmClient emailSSMAPI
+	var s3Client EmailS3API
+	var ssmClient EmailSSMAPI
 	var identityClient kmaws.IdentityTableAPI
 
 	if deps != nil {
-		s3Client = deps.s3Client
-		ssmClient = deps.ssmParam
-		identityClient = deps.identity
+		s3Client = deps.S3Client
+		ssmClient = deps.SSMParam
+		identityClient = deps.Identity
 	} else {
 		awsCfg, awsErr := kmaws.LoadAWSConfig(ctx, cfg.AWSProfile)
 		if awsErr != nil {
@@ -391,8 +391,8 @@ func runEmailRead(ctx context.Context, cfg *config.Config, deps *emailReadDeps, 
 		parsedMsg.S3Key = key
 		parsedMsg.MessageID = messageIDFromKey(key)
 
-		// Auto-decrypt if encrypted.
-		if parsedMsg.Encrypted && !parsedMsg.Plaintext && ssmClient != nil {
+		// Auto-decrypt if the body is encrypted (regardless of signing status).
+		if parsedMsg.Encrypted && ssmClient != nil {
 			decrypted, decErr := autoDecrypt(ctx, ssmClient, identityClient, tableName, sandboxID, parsedMsg.Body)
 			if decErr == nil {
 				parsedMsg.Body = decrypted
@@ -411,7 +411,7 @@ func runEmailRead(ctx context.Context, cfg *config.Config, deps *emailReadDeps, 
 }
 
 // autoDecrypt fetches the recipient's private key from SSM and decrypts the ciphertext.
-func autoDecrypt(ctx context.Context, ssmClient emailSSMAPI, identityClient kmaws.IdentityTableAPI, tableName, sandboxID, ciphertextB64 string) (string, error) {
+func autoDecrypt(ctx context.Context, ssmClient EmailSSMAPI, identityClient kmaws.IdentityTableAPI, tableName, sandboxID, ciphertextB64 string) (string, error) {
 	// Fetch private key from SSM.
 	keyPath := fmt.Sprintf("/sandbox/%s/encryption-key", sandboxID)
 	ssmOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
