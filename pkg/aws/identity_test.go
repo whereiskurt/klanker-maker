@@ -1070,6 +1070,75 @@ func TestMultipart_SignatureCoversBodyOnly(t *testing.T) {
 }
 
 // ============================================================
+// Task 6: Round-trip test — buildRawMIME → ParseSignedMessage
+// ============================================================
+
+// TestMultipart_RoundTrip builds a multipart/mixed MIME message via SendSignedEmail
+// (which calls buildRawMIME internally) with a body + 2 attachments, then parses it
+// with ParseSignedMessage and verifies body, both attachments, and signature.
+func TestMultipart_RoundTrip(t *testing.T) {
+	sesMock := &mockIdentitySESAPI{}
+	ssmMock, _, _ := makeSendSignedEmailMocks(t, "sb-rt01")
+
+	// Use a real Ed25519 key pair for end-to-end signature verification.
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	privKeyB64 := base64.StdEncoding.EncodeToString([]byte(priv))
+	pubKeyB64 := base64.StdEncoding.EncodeToString(pub)
+	ssmMock.getParameterValue = privKeyB64
+
+	body := "Round-trip body content."
+	att1 := kmaws.Attachment{Filename: "a.txt", Data: []byte("attachment one")}
+	att2 := kmaws.Attachment{Filename: "b.bin", Data: []byte{0x01, 0x02, 0x03, 0xFF}}
+
+	dynMock := &mockIdentityTableAPI{}
+	err := kmaws.SendSignedEmail(
+		context.Background(),
+		sesMock, ssmMock, dynMock,
+		"from@example.com", "to@example.com", "Round-trip subject", body,
+		"sb-rt01", "sb-rt-recv01", "km-identities", "off",
+		[]kmaws.Attachment{att1, att2},
+	)
+	if err != nil {
+		t.Fatalf("SendSignedEmail (round-trip) returned error: %v", err)
+	}
+
+	rawMIME := sesMock.sendEmailInput.Content.Raw.Data
+
+	// Parse the produced MIME.
+	msg, parseErr := kmaws.ParseSignedMessage(rawMIME, "sb-rt-recv01-x", pubKeyB64, []string{"*"}, "")
+	if parseErr != nil {
+		t.Fatalf("ParseSignedMessage (round-trip) returned error: %v", parseErr)
+	}
+
+	// Body must match.
+	if msg.Body != body {
+		t.Errorf("round-trip body = %q; want %q", msg.Body, body)
+	}
+
+	// Signature must verify.
+	if !msg.SignatureOK {
+		t.Error("expected SignatureOK=true in round-trip")
+	}
+
+	// Both attachments must be present.
+	if len(msg.Attachments) != 2 {
+		t.Fatalf("expected 2 attachments in round-trip; got %d", len(msg.Attachments))
+	}
+	if msg.Attachments[0].Filename != att1.Filename {
+		t.Errorf("Attachment[0].Filename = %q; want %q", msg.Attachments[0].Filename, att1.Filename)
+	}
+	if string(msg.Attachments[0].Data) != string(att1.Data) {
+		t.Errorf("Attachment[0].Data = %q; want %q", msg.Attachments[0].Data, att1.Data)
+	}
+	if msg.Attachments[1].Filename != att2.Filename {
+		t.Errorf("Attachment[1].Filename = %q; want %q", msg.Attachments[1].Filename, att2.Filename)
+	}
+	if string(msg.Attachments[1].Data) != string(att2.Data) {
+		t.Errorf("Attachment[1].Data = %v; want %v", msg.Attachments[1].Data, att2.Data)
+	}
+}
+
+// ============================================================
 // Helpers
 // ============================================================
 
