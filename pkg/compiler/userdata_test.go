@@ -32,7 +32,7 @@ func baseProfile() *profile.SandboxProfile {
 // TestIMDSTokenTTL verifies the IMDS token TTL is 21600 (not 60).
 func TestIMDSTokenTTL(t *testing.T) {
 	p := baseProfile()
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestIMDSTokenTTL(t *testing.T) {
 func TestUserDataOTELVarsEnabledDefault(t *testing.T) {
 	p := baseProfile()
 	// claudeTelemetry is nil — should default to enabled
-	out, err := generateUserData(p, "sb-otel-1", nil, "my-bucket", false)
+	out, err := generateUserData(p, "sb-otel-1", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestUserDataOTELLogPromptsEnabled(t *testing.T) {
 			LogPrompts: true,
 		},
 	}
-	out, err := generateUserData(p, "sb-otel-2", nil, "my-bucket", false)
+	out, err := generateUserData(p, "sb-otel-2", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestUserDataOTELLogPromptsAbsent(t *testing.T) {
 			LogPrompts: false,
 		},
 	}
-	out, err := generateUserData(p, "sb-otel-3", nil, "my-bucket", false)
+	out, err := generateUserData(p, "sb-otel-3", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestUserDataOTELLogToolDetailsEnabled(t *testing.T) {
 			LogToolDetails: true,
 		},
 	}
-	out, err := generateUserData(p, "sb-otel-4", nil, "my-bucket", false)
+	out, err := generateUserData(p, "sb-otel-4", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestUserDataOTELDisabledExplicit(t *testing.T) {
 			Enabled: &disabled,
 		},
 	}
-	out, err := generateUserData(p, "sb-otel-5", nil, "my-bucket", false)
+	out, err := generateUserData(p, "sb-otel-5", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestUserDataOTELDisabledExplicit(t *testing.T) {
 func TestUserDataOTELResourceAttributes(t *testing.T) {
 	p := baseProfile()
 	// claudeTelemetry nil = default enabled
-	out, err := generateUserData(p, "sb-otel-6", nil, "my-bucket", false)
+	out, err := generateUserData(p, "sb-otel-6", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestUserDataOTELResourceAttributes(t *testing.T) {
 // in any DNAT rule, so localhost OTLP traffic passes through directly.
 func TestUserDataIPTablesNoDNATForOTLP(t *testing.T) {
 	p := baseProfile()
-	out, err := generateUserData(p, "sb-otel-7", nil, "my-bucket", false)
+	out, err := generateUserData(p, "sb-otel-7", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestUserDataIPTablesNoDNATForOTLP(t *testing.T) {
 // TestSpotPollLoopPresent verifies spot poll loop is included when useSpot=true.
 func TestSpotPollLoopPresent(t *testing.T) {
 	p := baseProfile()
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", true)
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", true, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestSpotPollLoopPresent(t *testing.T) {
 // TestSpotPollLoopAbsent verifies spot poll loop is NOT included when useSpot=false.
 func TestSpotPollLoopAbsent(t *testing.T) {
 	p := baseProfile()
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestArtifactUploadScriptPresent(t *testing.T) {
 		Paths:     []string{"/workspace/output", "/tmp/results"},
 		MaxSizeMB: 100,
 	}
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", true)
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", true, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestArtifactUploadScriptPresent(t *testing.T) {
 func TestArtifactUploadScriptAbsent(t *testing.T) {
 	p := baseProfile()
 	// No Artifacts, no spot
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestOTPSecretsInjected(t *testing.T) {
 	p.Spec.OTP = &profile.OTPSpec{
 		Secrets: []string{"/sandbox/sb-123/otp/github-token"},
 	}
-	out, err := generateUserData(p, "sb-123", nil, "my-bucket", false)
+	out, err := generateUserData(p, "sb-123", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestOTPEnvVarName(t *testing.T) {
 	p.Spec.OTP = &profile.OTPSpec{
 		Secrets: []string{"/sandbox/sb-123/otp/github-token"},
 	}
-	out, err := generateUserData(p, "sb-123", nil, "my-bucket", false)
+	out, err := generateUserData(p, "sb-123", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestOTPEnvVarName(t *testing.T) {
 func TestOTPAbsentWhenNotConfigured(t *testing.T) {
 	p := baseProfile()
 	// No OTP section
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestOTPAbsentWhenNotConfigured(t *testing.T) {
 // aws s3 cp command to download the otelcol-contrib binary from the artifacts bucket.
 func TestUserDataOtelColContribDownload(t *testing.T) {
 	p := baseProfile()
-	out, err := generateUserData(p, "sb-tracing-1", nil, "test-artifacts-bucket", false)
+	out, err := generateUserData(p, "sb-tracing-1", nil, "test-artifacts-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -349,7 +349,7 @@ func TestUserDataOtelColContribDownload(t *testing.T) {
 // the existing sidecar binary downloads and before the systemd unit creation section.
 func TestUserDataOtelColContribDownloadOrder(t *testing.T) {
 	p := baseProfile()
-	out, err := generateUserData(p, "sb-tracing-2", nil, "test-artifacts-bucket", false)
+	out, err := generateUserData(p, "sb-tracing-2", nil, "test-artifacts-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestUserDataOtelColContribDownloadOrder(t *testing.T) {
 // TestUserDataOtelColContribChmod verifies that otelcol-contrib is made executable.
 func TestUserDataOtelColContribChmod(t *testing.T) {
 	p := baseProfile()
-	out, err := generateUserData(p, "sb-tracing-3", nil, "test-artifacts-bucket", false)
+	out, err := generateUserData(p, "sb-tracing-3", nil, "test-artifacts-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -392,7 +392,7 @@ func TestUserDataOtelColContribChmod(t *testing.T) {
 // TestUserDataKMTracingServiceUnit verifies that rendered user-data writes a km-tracing.service systemd unit.
 func TestUserDataKMTracingServiceUnit(t *testing.T) {
 	p := baseProfile()
-	out, err := generateUserData(p, "sb-tracing-10", nil, "test-artifacts-bucket", false)
+	out, err := generateUserData(p, "sb-tracing-10", nil, "test-artifacts-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -404,7 +404,7 @@ func TestUserDataKMTracingServiceUnit(t *testing.T) {
 // TestUserDataKMTracingServiceRunsAsKMSidecar verifies km-tracing.service runs as km-sidecar user.
 func TestUserDataKMTracingServiceRunsAsKMSidecar(t *testing.T) {
 	p := baseProfile()
-	out, err := generateUserData(p, "sb-tracing-11", nil, "test-artifacts-bucket", false)
+	out, err := generateUserData(p, "sb-tracing-11", nil, "test-artifacts-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -429,7 +429,7 @@ func TestUserDataKMTracingServiceRunsAsKMSidecar(t *testing.T) {
 func TestUserDataKMTracingServiceEnvVars(t *testing.T) {
 	p := baseProfile()
 	p.Spec.Runtime.Region = "us-west-2"
-	out, err := generateUserData(p, "sb-tracing-12", nil, "test-artifacts-bucket", false)
+	out, err := generateUserData(p, "sb-tracing-12", nil, "test-artifacts-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -457,7 +457,7 @@ func TestUserDataKMTracingServiceEnvVars(t *testing.T) {
 // TestUserDataKMTracingServiceExecStart verifies km-tracing.service ExecStart runs otelcol-contrib with tracing config.
 func TestUserDataKMTracingServiceExecStart(t *testing.T) {
 	p := baseProfile()
-	out, err := generateUserData(p, "sb-tracing-13", nil, "test-artifacts-bucket", false)
+	out, err := generateUserData(p, "sb-tracing-13", nil, "test-artifacts-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -481,7 +481,7 @@ func TestUserDataKMTracingServiceExecStart(t *testing.T) {
 // The sidecar enable line is the one that also includes km-dns-proxy (not the SSM agent line).
 func TestUserDataKMTracingServicectlEnable(t *testing.T) {
 	p := baseProfile()
-	out, err := generateUserData(p, "sb-tracing-14", nil, "test-artifacts-bucket", false)
+	out, err := generateUserData(p, "sb-tracing-14", nil, "test-artifacts-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -502,7 +502,7 @@ func TestUserDataKMTracingServicectlEnable(t *testing.T) {
 // The sidecar start line is the one that also includes km-dns-proxy (not the SSM agent line).
 func TestUserDataKMTracingServicectlStart(t *testing.T) {
 	p := baseProfile()
-	out, err := generateUserData(p, "sb-tracing-15", nil, "test-artifacts-bucket", false)
+	out, err := generateUserData(p, "sb-tracing-15", nil, "test-artifacts-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -523,7 +523,7 @@ func TestUserDataKMTracingServicectlStart(t *testing.T) {
 // km-tracing.service unit resolves to the KMArtifactsBucket value (not a separate bucket).
 func TestUserDataKMTracingOTELS3BucketResolvesToArtifactsBucket(t *testing.T) {
 	p := baseProfile()
-	out, err := generateUserData(p, "sb-tracing-16", nil, "test-artifacts-bucket", false)
+	out, err := generateUserData(p, "sb-tracing-16", nil, "test-artifacts-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -542,7 +542,7 @@ func TestOTPMultipleSecrets(t *testing.T) {
 			"/sandbox/sb-456/otp/db-password",
 		},
 	}
-	out, err := generateUserData(p, "sb-456", nil, "my-bucket", false)
+	out, err := generateUserData(p, "sb-456", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -573,7 +573,7 @@ func TestUserDataGitHubAllowedRepos(t *testing.T) {
 			AllowedRepos: []string{"myorg/myrepo", "other/repo"},
 		},
 	}
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -588,7 +588,7 @@ func TestUserDataGitHubAllowedRepos(t *testing.T) {
 func TestUserDataGitHubAllowedReposEmpty(t *testing.T) {
 	p := baseProfile()
 	// No GitHub config — KM_GITHUB_ALLOWED_REPOS should be empty or absent.
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -621,7 +621,7 @@ func extractLines(s, substr string) string {
 func TestUserDataEnforcementDefault(t *testing.T) {
 	p := baseProfile()
 	// Enforcement is unset — should default to proxy
-	out, err := generateUserData(p, "sb-enf-default", nil, "my-bucket", false)
+	out, err := generateUserData(p, "sb-enf-default", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -645,7 +645,7 @@ func TestUserDataEnforcementDefault(t *testing.T) {
 func TestUserDataEnforcementProxy(t *testing.T) {
 	p := baseProfile()
 	p.Spec.Network.Enforcement = "proxy"
-	out, err := generateUserData(p, "sb-enf-proxy", nil, "my-bucket", false)
+	out, err := generateUserData(p, "sb-enf-proxy", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -669,7 +669,7 @@ func TestUserDataEnforcementProxy(t *testing.T) {
 func TestUserDataEnforcementEbpf(t *testing.T) {
 	p := baseProfile()
 	p.Spec.Network.Enforcement = "ebpf"
-	out, err := generateUserData(p, "sb-enf-ebpf", nil, "my-bucket", false)
+	out, err := generateUserData(p, "sb-enf-ebpf", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -699,7 +699,7 @@ func TestUserDataEnforcementEbpf(t *testing.T) {
 func TestUserDataEnforcementBoth(t *testing.T) {
 	p := baseProfile()
 	p.Spec.Network.Enforcement = "both"
-	out, err := generateUserData(p, "sb-enf-both", nil, "my-bucket", false)
+	out, err := generateUserData(p, "sb-enf-both", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -735,7 +735,7 @@ func TestUserDataTLSCaptureEnabled(t *testing.T) {
 	p.Spec.SourceAccess.GitHub = &profile.GitHubAccess{
 		AllowedRepos: []string{"acme/widgets", "acme/gizmos"},
 	}
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -755,7 +755,7 @@ func TestUserDataTLSCaptureDisabled(t *testing.T) {
 	p := baseProfile()
 	p.Spec.Network.Enforcement = "ebpf"
 	// No TlsCapture set — should not emit --tls
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -775,7 +775,7 @@ func TestUserDataTLSCaptureExplicitlyDisabled(t *testing.T) {
 	p.Spec.Observability.TlsCapture = &profile.TlsCaptureSpec{
 		Enabled: false,
 	}
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -795,7 +795,7 @@ func TestUserDataTLSCaptureWithAllowedRepos(t *testing.T) {
 	p.Spec.SourceAccess.GitHub = &profile.GitHubAccess{
 		AllowedRepos: []string{"org/repo1", "org/repo2", "org/repo3"},
 	}
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -818,7 +818,7 @@ func TestUserDataAdditionalVolumeWaitMessage(t *testing.T) {
 		Encrypted:  false,
 	}
 
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -837,7 +837,7 @@ func TestUserDataAdditionalVolumeMkfsAndFstab(t *testing.T) {
 		MountPoint: "/data",
 	}
 
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -858,7 +858,7 @@ func TestUserDataAdditionalVolumeMkdir(t *testing.T) {
 		MountPoint: "/data",
 	}
 
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -874,7 +874,7 @@ func TestUserDataAdditionalVolumeAbsent(t *testing.T) {
 	p := baseProfile()
 	// AdditionalVolume is nil — no additional volume
 
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -931,7 +931,7 @@ func TestUserDataNoEFSMount(t *testing.T) {
 	p := baseProfile()
 	// MountEFS is false (default)
 
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
@@ -979,7 +979,7 @@ func TestUserDataEFSMountWithNoNetwork(t *testing.T) {
 	p.Spec.Runtime.MountEFS = true
 
 	// Pass nil network — no EFSFilesystemID available
-	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false)
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}

@@ -75,7 +75,7 @@ func TestEC2UserDataKMEmailAddress(t *testing.T) {
 			},
 		},
 	}
-	out, err := generateUserData(p, "sb-test1234", nil, "km-sandbox-artifacts-ea554771", false)
+	out, err := generateUserData(p, "sb-test1234", nil, "km-sandbox-artifacts-ea554771", false, nil)
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}

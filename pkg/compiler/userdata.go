@@ -110,9 +110,29 @@ else
   echo "[km-bootstrap] WARNING: additional EBS volume device not found after 60s"
 fi
 {{- end }}
+{{- if .EFSFilesystemID }}
 
 # ============================================================
-# 2.7. Sandbox identity: set hostname and export identity env vars
+# 2.7. EFS shared filesystem: install utils and mount (Phase 43)
+# ============================================================
+echo "[km-bootstrap] Mounting EFS shared filesystem {{ .EFSFilesystemID }}..."
+yum install -y amazon-efs-utils 2>&1 | tee -a /var/log/km-bootstrap.log
+mkdir -p "{{ .EFSMountPoint }}"
+# Add fstab entry with _netdev,nofail,tls so boot continues if EFS is unavailable
+if ! grep -q "{{ .EFSFilesystemID }}" /etc/fstab 2>/dev/null; then
+  echo "{{ .EFSFilesystemID }}:/ {{ .EFSMountPoint }} efs _netdev,nofail,tls 0 0" >> /etc/fstab
+fi
+mount -a -t efs 2>&1 | tee -a /var/log/km-bootstrap.log || true
+if mountpoint -q "{{ .EFSMountPoint }}" 2>/dev/null; then
+  chown sandbox:sandbox "{{ .EFSMountPoint }}" 2>/dev/null || true
+  echo "[km-bootstrap] EFS mounted at {{ .EFSMountPoint }}"
+else
+  echo "[km-bootstrap] WARNING: EFS mount failed — {{ .EFSFilesystemID }} may be unavailable"
+fi
+{{- end }}
+
+# ============================================================
+# 2.8. Sandbox identity: set hostname and export identity env vars
 # ============================================================
 SANDBOX_FQDN="{{ .SandboxID }}.{{ .EmailDomain }}"
 hostnamectl set-hostname "${SANDBOX_FQDN}" 2>/dev/null || hostname "${SANDBOX_FQDN}"
@@ -921,6 +941,11 @@ type userDataParams struct {
 	// Additional EBS volume mount point (Phase 33)
 	// Empty string means no additional volume.
 	AdditionalVolumeMountPoint string
+	// EFS shared filesystem mount (Phase 43)
+	// EFSFilesystemID is non-empty when the profile has mountEFS:true AND EFS is initialized.
+	EFSFilesystemID string
+	// EFSMountPoint is the filesystem path where EFS is mounted. Default "/shared".
+	EFSMountPoint string
 }
 
 // otpSecret holds an SSM path and derived env var name for an OTP secret.
@@ -953,9 +978,9 @@ func joinGitHubAllowedRepos(p *profile.SandboxProfile) string {
 // It is only called for ec2 substrate sandboxes.
 // artifactsBucket is from the KM_ARTIFACTS_BUCKET env var; may be empty string.
 // useSpot indicates whether the EC2 instance uses spot pricing (enables spot poll loop).
-// emailDomain is the sandboxes subdomain (e.g. "sandboxes.klankermaker.ai"); defaults to
-// "sandboxes.klankermaker.ai" when not provided (variadic for backward compatibility).
-func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths []string, artifactsBucket string, useSpot bool, emailDomainOverride ...string) (string, error) {
+// network carries EFSFilesystemID from efs/outputs.json when EFS is initialized; may be nil.
+// emailDomainOverride is variadic for backward compatibility: [0]=emailDomain, [1]=alias.
+func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths []string, artifactsBucket string, useSpot bool, network *NetworkConfig, emailDomainOverride ...string) (string, error) {
 	tmpl, err := template.New("userdata").Parse(userDataTemplate)
 	if err != nil {
 		return "", err
@@ -1054,6 +1079,16 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 	// Additional EBS volume mount point (Phase 33)
 	if p.Spec.Runtime.AdditionalVolume != nil {
 		params.AdditionalVolumeMountPoint = p.Spec.Runtime.AdditionalVolume.MountPoint
+	}
+
+	// EFS shared filesystem mount (Phase 43)
+	// Only set when profile requests it AND the network config has a filesystem ID.
+	if p.Spec.Runtime.MountEFS && network != nil && network.EFSFilesystemID != "" {
+		params.EFSFilesystemID = network.EFSFilesystemID
+		params.EFSMountPoint = p.Spec.Runtime.EFSMountPoint
+		if params.EFSMountPoint == "" {
+			params.EFSMountPoint = "/shared"
+		}
 	}
 
 	var buf bytes.Buffer
