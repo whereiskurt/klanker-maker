@@ -47,6 +47,8 @@ type EmailSendDeps struct {
 	SES      kmaws.SESV2API
 	SSMParam EmailSSMAPI
 	Identity kmaws.IdentityTableAPI
+	// ResolveID overrides sandbox ID resolution (for testing). If nil, uses ResolveSandboxID.
+	ResolveID func(ctx context.Context, ref string) (string, error)
 }
 
 // EmailReadDeps holds injectable dependencies for the email read command.
@@ -54,6 +56,8 @@ type EmailReadDeps struct {
 	S3Client EmailS3API
 	SSMParam EmailSSMAPI
 	Identity kmaws.IdentityTableAPI
+	// ResolveID overrides sandbox ID resolution (for testing). If nil, uses ResolveSandboxID.
+	ResolveID func(ctx context.Context, ref string) (string, error)
 }
 
 // NewEmailCmd creates the "km email" parent command.
@@ -130,13 +134,23 @@ func newEmailSendCmd(cfg *config.Config, deps *EmailSendDeps) *cobra.Command {
 
 // runEmailSend executes the km email send logic.
 func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, from, to, subject, bodyPath, attachCSV string, out io.Writer) error {
-	// Validate sandbox ID format for sender and recipient.
-	if !sandboxIDLike.MatchString(from) {
-		return fmt.Errorf("invalid sender sandbox ID %q: must match {prefix}-{id} format", from)
+	// Resolve --from and --to: supports sandbox IDs, aliases, or numbers from km list.
+	resolveID := func(ctx context.Context, ref string) (string, error) {
+		if deps != nil && deps.ResolveID != nil {
+			return deps.ResolveID(ctx, ref)
+		}
+		return ResolveSandboxID(ctx, cfg, ref)
 	}
-	if !sandboxIDLike.MatchString(to) {
-		return fmt.Errorf("invalid recipient sandbox ID %q: must match {prefix}-{id} format", to)
+	resolvedFrom, err := resolveID(ctx, from)
+	if err != nil {
+		return fmt.Errorf("resolve sender %q: %w", from, err)
 	}
+	resolvedTo, err := resolveID(ctx, to)
+	if err != nil {
+		return fmt.Errorf("resolve recipient %q: %w", to, err)
+	}
+	from = resolvedFrom
+	to = resolvedTo
 
 	// Read body.
 	body, err := readBodyArg(bodyPath, os.Stdin)
@@ -243,12 +257,13 @@ func readBodyArg(bodyPath string, stdin io.Reader) (string, error) {
 func newEmailReadCmd(cfg *config.Config, deps *EmailReadDeps) *cobra.Command {
 	var jsonFlag bool
 	var rawFlag bool
+	var markReadFlag bool
 	var messageIDFlag string
 
 	read := &cobra.Command{
 		Use:          "read <sandbox-id>",
 		Short:        "Read messages from a sandbox mailbox",
-		Long:         "List and display messages from a sandbox mailbox. Auto-decrypts encrypted messages when keys are available.",
+		Long:         "List and display messages from a sandbox mailbox. Auto-decrypts encrypted messages when keys are available.\nMessages stay in new/ unless --mark-read is passed.",
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -256,12 +271,13 @@ func newEmailReadCmd(cfg *config.Config, deps *EmailReadDeps) *cobra.Command {
 			if ctx == nil {
 				ctx = context.Background()
 			}
-			return runEmailRead(ctx, cfg, deps, args[0], jsonFlag, rawFlag, messageIDFlag, cmd.OutOrStdout())
+			return runEmailRead(ctx, cfg, deps, args[0], jsonFlag, rawFlag, markReadFlag, messageIDFlag, cmd.OutOrStdout())
 		},
 	}
 
 	read.Flags().BoolVar(&jsonFlag, "json", false, "Output as JSON array")
 	read.Flags().BoolVar(&rawFlag, "raw", false, "Dump raw MIME bytes to stdout")
+	read.Flags().BoolVar(&markReadFlag, "mark-read", false, "Move processed messages from new/ to processed/")
 	read.Flags().StringVar(&messageIDFlag, "message-id", "", "Specific message ID to read (used with --raw; defaults to latest)")
 
 	return read
@@ -290,10 +306,21 @@ type mailboxMessageJSON struct {
 }
 
 // runEmailRead executes the km email read logic.
-func runEmailRead(ctx context.Context, cfg *config.Config, deps *EmailReadDeps, sandboxID string, jsonOut, rawOut bool, messageIDFilter string, out io.Writer) error {
-	// Validate sandbox ID format.
-	if !sandboxIDLike.MatchString(sandboxID) {
-		return fmt.Errorf("invalid sandbox ID %q: must match {prefix}-{id} format", sandboxID)
+func runEmailRead(ctx context.Context, cfg *config.Config, deps *EmailReadDeps, sandboxRef string, jsonOut, rawOut, markRead bool, messageIDFilter string, out io.Writer) error {
+	// Resolve sandbox reference: supports IDs, aliases, or numbers from km list.
+	var sandboxID string
+	if deps != nil && deps.ResolveID != nil {
+		resolved, err := deps.ResolveID(ctx, sandboxRef)
+		if err != nil {
+			return fmt.Errorf("resolve sandbox %q: %w", sandboxRef, err)
+		}
+		sandboxID = resolved
+	} else {
+		resolved, err := ResolveSandboxID(ctx, cfg, sandboxRef)
+		if err != nil {
+			return fmt.Errorf("resolve sandbox %q: %w", sandboxRef, err)
+		}
+		sandboxID = resolved
 	}
 
 	// Get artifacts bucket and email domain.

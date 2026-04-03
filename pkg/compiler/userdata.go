@@ -718,16 +718,16 @@ WantedBy=multi-user.target
 UNIT
 
 # km-recv: read and display signed emails from /var/mail/km/new/
-# Usage: km-recv [--json] [--watch] [--no-move]
+# Usage: km-recv [--json] [--watch] [--mark-read]
 cat > /opt/km/bin/km-recv << 'KMRECV'
 #!/bin/bash
 # km-recv: read, verify, and display emails from the local inbox.
 # Pure bash + AWS CLI + openssl — no km binary dependency.
 #
-# Usage: km-recv [--json] [--watch] [--no-move]
-#   --json     machine-readable JSON output (one object per message, newline-delimited)
-#   --watch    poll loop (check every 5 seconds for new messages)
-#   --no-move  do not move messages to /var/mail/km/processed/ after reading
+# Usage: km-recv [--json] [--watch] [--mark-read]
+#   --json       machine-readable JSON output (one object per message, newline-delimited)
+#   --watch      poll loop (check every 5 seconds for new messages)
+#   --mark-read  move messages to /var/mail/km/processed/ after reading (default: leave in new/)
 
 set -euo pipefail
 
@@ -736,18 +736,18 @@ set -euo pipefail
 # ----------------------------------------------------------------
 JSON_OUTPUT=false
 WATCH_MODE=false
-NO_MOVE=false
+MARK_READ=false
 
 for arg in "$@"; do
   case "$arg" in
-    --json)    JSON_OUTPUT=true ;;
-    --watch)   WATCH_MODE=true ;;
-    --no-move) NO_MOVE=true ;;
+    --json)      JSON_OUTPUT=true ;;
+    --watch)     WATCH_MODE=true ;;
+    --mark-read) MARK_READ=true ;;
     --help|-h)
-      echo "Usage: km-recv [--json] [--watch] [--no-move]"
-      echo "  --json     machine-readable JSON (newline-delimited, one object per message)"
-      echo "  --watch    poll every 5 seconds for new messages"
-      echo "  --no-move  do not move messages to processed/ after reading"
+      echo "Usage: km-recv [--json] [--watch] [--mark-read]"
+      echo "  --json       machine-readable JSON (newline-delimited, one object per message)"
+      echo "  --watch      poll every 5 seconds for new messages"
+      echo "  --mark-read  move messages to processed/ after reading"
       exit 0
       ;;
     *)
@@ -1078,8 +1078,8 @@ process_messages() {
       fi
     fi
 
-    # Move to processed (unless --no-move)
-    if ! $NO_MOVE; then
+    # Move to processed (only when --mark-read)
+    if $MARK_READ; then
       mv "$msg_file" "$MAIL_DIR/processed/$(basename "$msg_file")"
     fi
   done
