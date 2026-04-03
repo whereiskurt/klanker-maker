@@ -572,7 +572,27 @@ func budgetHCLFields(p *profile.SandboxProfile) (hasBudget bool, computeLimit, a
 	return hasBudget, computeLimit, aiLimit, threshold
 }
 
+// validateEC2StorageFields checks cross-field constraints for EC2 storage and hibernation config.
+// It returns an error if incompatible combinations are specified.
+func validateEC2StorageFields(p *profile.SandboxProfile) error {
+	substrate := p.Spec.Runtime.Substrate
+	if p.Spec.Runtime.Hibernation && p.Spec.Runtime.Spot {
+		return fmt.Errorf("hibernation requires on-demand instance (spec.runtime.spot must be false)")
+	}
+	if p.Spec.Runtime.Hibernation && !strings.HasPrefix(substrate, "ec2") {
+		return fmt.Errorf("hibernation is not supported for %s substrate", substrate)
+	}
+	if p.Spec.Runtime.AdditionalVolume != nil && !strings.HasPrefix(substrate, "ec2") {
+		return fmt.Errorf("additionalVolume is not supported for %s substrate", substrate)
+	}
+	return nil
+}
+
 func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot bool, sgRules []SGRule, iamPolicy *IAMSessionPolicy, userData string, network *NetworkConfig) (string, error) {
+	if err := validateEC2StorageFields(p); err != nil {
+		return "", err
+	}
+
 	tmpl, err := template.New("ec2-service-hcl").Funcs(templateFuncs).Parse(ec2ServiceHCLTemplate)
 	if err != nil {
 		return "", fmt.Errorf("parse ec2 service.hcl template: %w", err)
