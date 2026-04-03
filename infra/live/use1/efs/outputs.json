@@ -1,0 +1,12 @@
+{
+  "filesystem_id": {
+    "sensitive": false,
+    "type": "string",
+    "value": "fs-0bd1911c39bff2d4d"
+  },
+  "security_group_id": {
+    "sensitive": false,
+    "type": "string",
+    "value": "sg-02d2969a20a296248"
+  }
+}
