@@ -698,7 +698,11 @@ Plans:
 **Goal:** Complete the AI budget tracking pipeline by extracting token counts and costs from MITM-intercepted Bedrock InvokeModelWithResponseStream responses.
 **Requirements**: TBD
 **Depends on:** Phase 26
-**Plans:** 0 plans
+**Plans:** 2 plans
+
+Plans:
+- [ ] 43-01-PLAN.md — EFS Terraform module, Terragrunt config, profile fields, km init registration
+- [ ] 43-02-PLAN.md — LoadEFSOutputs, NetworkConfig wiring, userdata EFS mount block, destroy no-op verification
 
 Context:
 - MITM proxy successfully intercepts Bedrock HTTPS CONNECT tunnels (verified)
@@ -733,7 +737,11 @@ Plans:
 **Goal:** Run a sandbox in "learning mode" that records all observed DNS, HTTP, and TLS traffic from Phase 41 uprobe events and Phase 40 eBPF audit logs, then generates a minimal `SandboxProfile` YAML with only the DNS suffixes, hosts, and GitHub repos actually used. Leverages the existing TLS uprobe consumer (pkg/ebpf/tls/), eBPF audit ring buffer (pkg/ebpf/audit/), and MITM proxy logs as data sources. Output is a ready-to-use profile YAML that can be reviewed and applied.
 **Requirements**: TBD
 **Depends on:** Phase 41 (TLS uprobe observability), Phase 40 (eBPF cgroup enforcement)
-**Plans:** 0 plans
+**Plans:** 2 plans
+
+Plans:
+- [ ] 43-01-PLAN.md — EFS Terraform module, Terragrunt config, profile fields, km init registration
+- [ ] 43-02-PLAN.md — LoadEFSOutputs, NetworkConfig wiring, userdata EFS mount block, destroy no-op verification
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 31 to break down)
@@ -993,7 +1001,11 @@ Plans:
 **Goal:** `km init` provisions a Regional EFS filesystem with mount targets in each AZ, and sandboxes with `mountEFS: true` in their profile automatically mount the shared filesystem at a configurable path — enabling cross-sandbox artifact sharing without S3
 **Requirements**: EFS-01, EFS-02, EFS-03, EFS-04, EFS-05, EFS-06
 **Depends on:** Phase 33
-**Plans:** 0 plans
+**Plans:** 2 plans
+
+Plans:
+- [ ] 43-01-PLAN.md — EFS Terraform module, Terragrunt config, profile fields, km init registration
+- [ ] 43-02-PLAN.md — LoadEFSOutputs, NetworkConfig wiring, userdata EFS mount block, destroy no-op verification
 
 Key design decisions:
 - `km init` creates the EFS filesystem (Regional, General Purpose, Elastic throughput, encrypted) and one mount target per AZ in the VPC
