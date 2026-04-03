@@ -1012,3 +1012,63 @@ func TestDestroyNoEFSReference(t *testing.T) {
 		}
 	}
 }
+
+// ============================================================
+// L7ProxyHosts derivation tests (42-01)
+// ============================================================
+
+// TestL7ProxyHostsWithGitHub verifies that a profile with sourceAccess.github
+// returns the four canonical GitHub domain suffixes for L7 proxy interception.
+func TestL7ProxyHostsWithGitHub(t *testing.T) {
+	p := baseProfile()
+	p.Spec.SourceAccess = profile.SourceAccessSpec{
+		GitHub: &profile.GitHubAccess{
+			AllowedRepos: []string{"myorg/myrepo"},
+		},
+	}
+	got := buildL7ProxyHosts(p)
+	want := "github.com,api.github.com,raw.githubusercontent.com,codeload.githubusercontent.com"
+	if got != want {
+		t.Errorf("buildL7ProxyHosts with GitHub: got %q, want %q", got, want)
+	}
+}
+
+// TestL7ProxyHostsWithBedrock verifies that a profile with useBedrock: true AND
+// GitHub sourceAccess returns all six domain suffixes (GitHub + Bedrock).
+func TestL7ProxyHostsWithBedrock(t *testing.T) {
+	p := baseProfile()
+	p.Spec.SourceAccess = profile.SourceAccessSpec{
+		GitHub: &profile.GitHubAccess{
+			AllowedRepos: []string{"myorg/myrepo"},
+		},
+	}
+	p.Spec.Execution.UseBedrock = true
+	got := buildL7ProxyHosts(p)
+	want := "github.com,api.github.com,raw.githubusercontent.com,codeload.githubusercontent.com,.amazonaws.com,api.anthropic.com"
+	if got != want {
+		t.Errorf("buildL7ProxyHosts with GitHub+Bedrock: got %q, want %q", got, want)
+	}
+}
+
+// TestL7ProxyHostsEmpty verifies that a profile with no GitHub sourceAccess and
+// no Bedrock returns an empty string (no L7 proxy hosts needed).
+func TestL7ProxyHostsEmpty(t *testing.T) {
+	p := baseProfile()
+	// No GitHub, no Bedrock
+	got := buildL7ProxyHosts(p)
+	if got != "" {
+		t.Errorf("buildL7ProxyHosts with no GitHub/Bedrock: got %q, want empty string", got)
+	}
+}
+
+// TestL7ProxyHostsBedrockOnly verifies that a profile with useBedrock: true but
+// no GitHub sourceAccess returns only the two Bedrock domain suffixes.
+func TestL7ProxyHostsBedrockOnly(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Execution.UseBedrock = true
+	got := buildL7ProxyHosts(p)
+	want := ".amazonaws.com,api.anthropic.com"
+	if got != want {
+		t.Errorf("buildL7ProxyHosts with Bedrock only: got %q, want %q", got, want)
+	}
+}

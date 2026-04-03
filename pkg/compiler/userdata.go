@@ -630,7 +630,7 @@ ExecStart=/usr/local/bin/km ebpf-attach \
 {{- end }}
   --allowed-dns "{{ .AllowedDNSSuffixes }}" \
   --allowed-hosts "{{ .AllowedHTTPHosts }}" \
-  --proxy-hosts "{{ .GitHubAllowedRepos }}" \
+  --proxy-hosts "{{ .L7ProxyHosts }}" \
 {{- if .TLSEnabled }}
   --tls \
   --allowed-repos "{{ .TLSAllowedRepos }}" \
@@ -946,6 +946,10 @@ type userDataParams struct {
 	EFSFilesystemID string
 	// EFSMountPoint is the filesystem path where EFS is mounted. Default "/shared".
 	EFSMountPoint string
+	// L7ProxyHosts is a comma-separated list of domain suffixes requiring L7 proxy inspection
+	// via connect4 DNAT rewrite. Derived from profile sourceAccess.github and useBedrock fields.
+	// Passed to km ebpf-attach --proxy-hosts in "ebpf" and "both" enforcement modes.
+	L7ProxyHosts string
 }
 
 // otpSecret holds an SSM path and derived env var name for an OTP secret.
@@ -972,6 +976,28 @@ func joinGitHubAllowedRepos(p *profile.SandboxProfile) string {
 		return ""
 	}
 	return strings.Join(p.Spec.SourceAccess.GitHub.AllowedRepos, ",")
+}
+
+// buildL7ProxyHosts returns a comma-separated list of domain suffixes that require
+// L7 proxy interception (connect4 DNAT rewrite) based on the profile configuration.
+// Only domains that the profile actually accesses are included:
+//   - GitHub domains when profile has sourceAccess.github configured
+//   - Bedrock/Anthropic domains when profile has useBedrock: true
+//
+// The returned string is passed to km ebpf-attach --proxy-hosts in "ebpf" and
+// "both" enforcement modes so the resolver marks resolved IPs for proxy redirect.
+func buildL7ProxyHosts(p *profile.SandboxProfile) string {
+	var hosts []string
+	if p.Spec.SourceAccess.GitHub != nil {
+		hosts = append(hosts, "github.com", "api.github.com", "raw.githubusercontent.com", "codeload.githubusercontent.com")
+	}
+	if p.Spec.Execution.UseBedrock {
+		// .amazonaws.com covers Bedrock endpoints (bedrock-runtime.us-east-1.amazonaws.com etc.)
+		// This is broader than strictly necessary, but non-Bedrock traffic passes through
+		// the proxy transparently without MITM inspection.
+		hosts = append(hosts, ".amazonaws.com", "api.anthropic.com")
+	}
+	return strings.Join(hosts, ",")
 }
 
 // generateUserData produces the EC2 bootstrap user-data.sh content for the given profile.
@@ -1075,6 +1101,10 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		params.TLSEnabled = true
 		params.TLSAllowedRepos = joinGitHubAllowedRepos(p)
 	}
+
+	// L7 proxy hosts — domain suffixes that require connect4 DNAT redirect to the L7 proxy.
+	// Derived from profile fields (GitHub + Bedrock) rather than repo names.
+	params.L7ProxyHosts = buildL7ProxyHosts(p)
 
 	// Additional EBS volume mount point (Phase 33)
 	if p.Spec.Runtime.AdditionalVolume != nil {
