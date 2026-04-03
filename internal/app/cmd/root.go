@@ -78,6 +78,7 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	root.AddCommand(NewRsyncCmd(cfg))
 	root.AddCommand(NewOtelCmd(cfg))
 	root.AddCommand(NewInfoCmd(cfg))
+	root.AddCommand(NewEmailCmd(cfg))
 
 	// "km at" — schedule deferred and recurring sandbox operations.
 	// "km schedule" is registered as an alias so both work identically.
