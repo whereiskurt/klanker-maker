@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 44-04-PLAN.md
-last_updated: "2026-04-03T07:11:47.139Z"
+stopped_at: Completed 45-01-PLAN.md
+last_updated: "2026-04-03T20:41:57.539Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
-  total_phases: 44
-  completed_phases: 40
-  total_plans: 135
-  completed_plans: 133
+  total_phases: 45
+  completed_phases: 41
+  total_plans: 139
+  completed_plans: 137
   percent: 0
 ---
 
@@ -179,6 +179,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 44 P02 | 3min | 2 tasks | 5 files |
 | Phase 44 P03 | 318s | 2 tasks | 3 files |
 | Phase 44 P04 | 5min | 1 tasks | 3 files |
+| Phase 45-km-email-send-recv-scripts-and-cli P1 | 5 | 6 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -489,6 +490,8 @@ Recent decisions affecting current work:
 - [Phase 44]: Use Cobra Aliases field for km schedule alias — inherits all flags and subcommands automatically without duplication
 - [Phase 44]: cmd.ErrOrStderr() for SCHED-GUARDRAIL warning — os.Stderr bypasses Cobra capture in tests
 - [Phase 44]: E2E test uses //go:build e2e + KM_E2E=1 double-gate; e2eState struct pointer shares sandboxID across sequential subtests
+- [Phase 45-km-email-send-recv-scripts-and-cli]: Ed25519 signature covers text body only, not attachments — separates auth from file payload
+- [Phase 45-km-email-send-recv-scripts-and-cli]: ParseSignedMessage decodes base64 CTE attachment parts — callers receive raw bytes
 
 ### Roadmap Evolution
 
@@ -542,9 +545,10 @@ None yet.
 - Phase 41 added: eBPF SSL uprobe observability — plaintext TLS capture via OpenSSL hooks, toggleable `inspection: uprobe`, replaces MITM proxy for GitHub filtering, Bedrock metering stays userspace
 - Phase 42 added: eBPF gatekeeper mode — connect4 DNAT rewrite for selective L7 proxy
 - Phase 44 added: km at/schedule — EventBridge Scheduler command for deferred and recurring sandbox operations
+- Phase 45 added: km-send/km-recv sandbox scripts & km email send/read CLI — close Phase 14 gap, pure bash in-sandbox scripts + operator Go CLI for signed email with attachments
 
 ## Session Continuity
 
-Last session: 2026-04-03T07:11:47.135Z
-Stopped at: Completed 44-04-PLAN.md
+Last session: 2026-04-03T20:41:57.535Z
+Stopped at: Completed 45-01-PLAN.md
 Resume file: None

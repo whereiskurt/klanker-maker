@@ -1034,3 +1034,31 @@ Plans:
 - [ ] 44-02-PLAN.md — SchedulerAPI extension + DynamoDB schedule CRUD + config
 - [ ] 44-03-PLAN.md — km at CLI command with list/cancel subcommands and schedule alias
 - [ ] 44-04-PLAN.md — E2E integration test for km at scheduling lifecycle
+
+### Phase 45: km-send/km-recv sandbox scripts & km email send/read CLI
+
+**Goal:** Close the gap between Phase 14's crypto library and in-sandbox usability. Deploy `km-send` and `km-recv` bash scripts into sandboxes (pure bash + AWS CLI + openssl, no km binary) that produce/consume signed MIME emails with attachments. Add operator-side `km email send` and `km email read` Go CLI commands for orchestrating inter-sandbox communication with authoritative Ed25519 verification and auto-decryption.
+**Requirements**:
+- In-sandbox `km-send` script: reads Ed25519 privkey from SSM, signs body with openssl, builds raw multipart/mixed MIME with X-KM-Signature/X-KM-Sender-ID headers, supports --body file/stdin and --attach file1,file2,..., sends via aws sesv2 send-email Content.Raw
+- In-sandbox `km-recv` script: reads /var/mail/km/new/*, parses MIME headers, best-effort signature verification via DynamoDB lookup + openssl, --json for agent consumption, --watch for polling, moves processed to /var/mail/km/processed/
+- `km email send --from <sandbox-id> --to <sandbox-id> --subject <subject> --body <file> [--attach f1,f2,...]`: operator-side Go command using pkg/aws/identity.go SendSignedEmail (extended for multipart MIME + attachments)
+- `km email read <sandbox-id> [--json] [--raw]`: operator-side Go command, authoritative Ed25519 verification, auto-decrypt when X-KM-Encrypted present, extract attachments from multipart MIME
+- Extend buildRawMIME and ParseSignedMessage for multipart/mixed with attachments
+- Deploy km-send and km-recv via userdata.go alongside km-mail-poller
+- Shared MIME contract: X-KM-Sender-ID, X-KM-Signature (body-only), X-KM-Encrypted headers; multipart/mixed for attachments
+- No encryption in bash scripts (Go CLI only); no km binary in sandbox
+**Depends on:** Phase 14 (identity/signing library), Phase 17 (mailbox/allow-lists)
+**Plans:** 1/4 plans executed
+
+#### Wave 1 — Foundation
+- [ ] 45-01-PLAN.md — Multipart MIME support in pkg/aws (extend buildRawMIME + ParseSignedMessage for attachments)
+
+#### Wave 2 — In-sandbox scripts (parallel)
+- [ ] 45-02-PLAN.md — km-send bash script (Ed25519 signing via openssl, multipart MIME, SES send)
+- [ ] 45-03-PLAN.md — km-recv bash script (mailbox reader, best-effort verification, --json/--watch)
+
+#### Wave 3 — Operator CLI
+- [ ] 45-04-PLAN.md — km email send/read Go CLI commands (authoritative verification, auto-decrypt, attachments)
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 45 to break down)
