@@ -588,6 +588,161 @@ func TestPollForApproval_SubjectMustContainAction(t *testing.T) {
 	}
 }
 
+// ============================================================
+// Task 5: Tests for multipart ParseSignedMessage
+// ============================================================
+
+// buildMultipartTestMIME constructs a raw multipart/mixed MIME message for tests.
+// The first text/plain part is body (the signed content).
+// attachments is a list of (filename, data) tuples added as application/octet-stream parts.
+func buildMultipartTestMIME(from, to, subject, senderID, body, sigB64 string, encrypted bool, attachments []struct{ name string; data []byte }) []byte {
+	boundary := "testboundary12345678"
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("From: %s\r\n", from))
+	sb.WriteString(fmt.Sprintf("To: %s\r\n", to))
+	sb.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
+	if senderID != "" {
+		sb.WriteString(fmt.Sprintf("X-KM-Sender-ID: %s\r\n", senderID))
+	}
+	if sigB64 != "" {
+		sb.WriteString(fmt.Sprintf("X-KM-Signature: %s\r\n", sigB64))
+	}
+	if encrypted {
+		sb.WriteString("X-KM-Encrypted: true\r\n")
+	}
+	sb.WriteString("MIME-Version: 1.0\r\n")
+	sb.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=\"%s\"\r\n", boundary))
+	sb.WriteString("\r\n")
+
+	// Text part (body).
+	sb.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+	sb.WriteString("Content-Type: text/plain; charset=\"UTF-8\"\r\n")
+	sb.WriteString("\r\n")
+	sb.WriteString(body)
+	sb.WriteString("\r\n")
+
+	// Attachment parts.
+	for _, att := range attachments {
+		sb.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+		sb.WriteString("Content-Type: application/octet-stream\r\n")
+		sb.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\r\n", att.name))
+		sb.WriteString("Content-Transfer-Encoding: base64\r\n")
+		sb.WriteString("\r\n")
+		sb.WriteString(base64.StdEncoding.EncodeToString(att.data))
+		sb.WriteString("\r\n")
+	}
+	sb.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
+	return []byte(sb.String())
+}
+
+func TestParseSignedMessage_Multipart_ExtractsBodyAndAttachments(t *testing.T) {
+	pubKeyB64, _, _, priv := makeMailboxTestKeys(t)
+	body := "Multipart body text."
+	sigB64 := signBody(t, priv, body)
+
+	rawMIME := buildMultipartTestMIME(
+		"sender@example.com", "recv@example.com", "Multipart subject",
+		"sb-mp-sender01", body, sigB64, false,
+		[]struct{ name string; data []byte }{
+			{name: "file.txt", data: []byte("file content")},
+		},
+	)
+
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-mp-recv01", pubKeyB64, []string{"*"}, "")
+	if err != nil {
+		t.Fatalf("ParseSignedMessage multipart returned error: %v", err)
+	}
+	if msg.Body != body {
+		t.Errorf("Body = %q; want %q", msg.Body, body)
+	}
+	if len(msg.Attachments) != 1 {
+		t.Fatalf("expected 1 attachment; got %d", len(msg.Attachments))
+	}
+	if msg.Attachments[0].Filename != "file.txt" {
+		t.Errorf("Attachment[0].Filename = %q; want %q", msg.Attachments[0].Filename, "file.txt")
+	}
+	if string(msg.Attachments[0].Data) != "file content" {
+		t.Errorf("Attachment[0].Data = %q; want %q", msg.Attachments[0].Data, "file content")
+	}
+}
+
+func TestParseSignedMessage_Multipart_SignatureVerification(t *testing.T) {
+	pubKeyB64, _, _, priv := makeMailboxTestKeys(t)
+	body := "Signed multipart body."
+	sigB64 := signBody(t, priv, body)
+
+	rawMIME := buildMultipartTestMIME(
+		"s@ex.com", "r@ex.com", "Subj", "sb-mpsig01", body, sigB64, false,
+		[]struct{ name string; data []byte }{
+			{name: "data.bin", data: []byte("attachment bytes")},
+		},
+	)
+
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-mp-recv02", pubKeyB64, []string{"*"}, "")
+	if err != nil {
+		t.Fatalf("ParseSignedMessage multipart+sig returned error: %v", err)
+	}
+	if !msg.SignatureOK {
+		t.Error("expected SignatureOK=true for valid multipart signature (body-only)")
+	}
+	if len(msg.Attachments) != 1 {
+		t.Fatalf("expected 1 attachment; got %d", len(msg.Attachments))
+	}
+}
+
+func TestParseSignedMessage_SinglePartBackwardCompat_Multipart(t *testing.T) {
+	// Existing single-part messages should still parse without Attachments field set.
+	pubKeyB64, _, _, priv := makeMailboxTestKeys(t)
+	body := "Plain single-part body."
+	sigB64 := signBody(t, priv, body)
+	rawMIME := buildTestMIME("s@ex.com", "r@ex.com", "Subj", "sb-mpback01", body, sigB64, false)
+
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-mp-bkrecv01", pubKeyB64, []string{"*"}, "")
+	if err != nil {
+		t.Fatalf("ParseSignedMessage single-part returned error: %v", err)
+	}
+	if msg.Body != body {
+		t.Errorf("Body = %q; want %q", msg.Body, body)
+	}
+	if len(msg.Attachments) != 0 {
+		t.Errorf("expected 0 attachments for single-part message; got %d", len(msg.Attachments))
+	}
+}
+
+func TestParseSignedMessage_Multipart_EncryptedBodyWithAttachment(t *testing.T) {
+	// Encrypted body is ciphertext in the text/plain part; attachments are still extracted.
+	pubKeyB64, _, _, priv := makeMailboxTestKeys(t)
+	ciphertext := base64.StdEncoding.EncodeToString([]byte("simulated-ciphertext"))
+	sigB64 := signBody(t, priv, ciphertext) // signature over ciphertext
+
+	rawMIME := buildMultipartTestMIME(
+		"s@ex.com", "r@ex.com", "Subj", "sb-mpenc01", ciphertext, sigB64, true,
+		[]struct{ name string; data []byte }{
+			{name: "metadata.json", data: []byte(`{"key":"value"}`)},
+		},
+	)
+
+	msg, err := kmaws.ParseSignedMessage(rawMIME, "sb-mpenc-recv01", pubKeyB64, []string{"*"}, "")
+	if err != nil {
+		t.Fatalf("ParseSignedMessage multipart+encrypted returned error: %v", err)
+	}
+	if !msg.Encrypted {
+		t.Error("expected Encrypted=true when X-KM-Encrypted: true present")
+	}
+	if !msg.SignatureOK {
+		t.Error("expected SignatureOK=true; ciphertext is the signed content")
+	}
+	if msg.Body != ciphertext {
+		t.Errorf("Body = %q; want %q", msg.Body, ciphertext)
+	}
+	if len(msg.Attachments) != 1 {
+		t.Fatalf("expected 1 attachment; got %d", len(msg.Attachments))
+	}
+	if msg.Attachments[0].Filename != "metadata.json" {
+		t.Errorf("Attachment[0].Filename = %q; want %q", msg.Attachments[0].Filename, "metadata.json")
+	}
+}
+
 func TestSafePhraseAtStartOfLine(t *testing.T) {
 	pubKeyB64, _, _, priv := makeMailboxTestKeys(t)
 	// Test KM-AUTH at start of line (after newline)

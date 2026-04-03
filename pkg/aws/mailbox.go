@@ -13,6 +13,7 @@ package aws
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -204,9 +205,26 @@ func ParseSignedMessage(rawMIME []byte, receiverSandboxID, pubKeyB64 string, all
 
 			if isAttachment {
 				filename := dispParams["filename"]
+				// Decode Content-Transfer-Encoding: base64 if present.
+				cte := strings.ToLower(strings.TrimSpace(part.Header.Get("Content-Transfer-Encoding")))
+				attData := partData
+				if cte == "base64" {
+					// Strip any whitespace/CRLF that may be present in the base64 data.
+					cleaned := strings.Map(func(r rune) rune {
+						if r == '\r' || r == '\n' || r == ' ' || r == '\t' {
+							return -1
+						}
+						return r
+					}, string(partData))
+					decoded, decErr := base64.StdEncoding.DecodeString(cleaned)
+					if decErr == nil {
+						attData = decoded
+					}
+					// If decode fails, keep raw bytes (graceful degradation).
+				}
 				attachments = append(attachments, Attachment{
 					Filename: filename,
-					Data:     partData,
+					Data:     attData,
 				})
 			} else if isTextPlain && firstTextPart {
 				// First text/plain part is the signed body.
