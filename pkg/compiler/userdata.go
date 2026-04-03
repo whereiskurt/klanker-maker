@@ -383,6 +383,7 @@ UNIT
 # Create named pipe for audit-log sidecar input.
 # Shell commands are written here by PROMPT_COMMAND; sidecar reads from it.
 mkdir -p /run/km
+chown km-sidecar:km-sidecar /run/km
 mkfifo /run/km/audit-pipe
 chown km-sidecar:km-sidecar /run/km/audit-pipe
 chmod 666 /run/km/audit-pipe
