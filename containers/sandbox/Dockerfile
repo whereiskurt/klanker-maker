@@ -7,11 +7,13 @@ RUN dnf install -y --allowerasing \
       shadow-utils \
       tar \
       gzip \
+      bzip2 \
       unzip \
       jq \
       git \
       ca-certificates \
       python3 \
+      python3-pip \
       procps-ng \
       findutils \
       which \
