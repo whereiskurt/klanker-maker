@@ -74,6 +74,8 @@ type dockerComposeData struct {
 	GitHubTokenSSM     string
 	AWSProfile         string // operator's AWS profile name for cred-refresh
 	HostAWSDir         string // path to host's ~/.aws directory
+	MountEFS           bool   // whether to mount a persistent shared volume
+	EFSMountPoint      string // mount path inside container (e.g. /shared)
 }
 
 // dockerComposeTemplate generates a docker-compose.yml for the Docker substrate.
@@ -114,6 +116,9 @@ services:
       - audit-vol:/run/km
       - ./km-proxy-ca.crt:/etc/km/proxy-ca.crt:ro
       - ./km-audit-init.sh:/opt/km/km-audit-init.sh:ro
+{{- if .MountEFS }}
+      - km-shared:{{ .EFSMountPoint }}
+{{- end }}
     networks:
       - km-net
     restart: unless-stopped
@@ -236,6 +241,9 @@ volumes:
   km-workspace:
   cred-vol:
   audit-vol:
+{{- if .MountEFS }}
+  km-shared:
+{{- end }}
 `
 
 // generateDockerCompose renders the docker-compose.yml template with profile data.
@@ -341,6 +349,8 @@ func generateDockerCompose(p *profile.SandboxProfile, sandboxID string, network 
 		GitHubTokenSSM:     gitHubTokenSSM,
 		AWSProfile:         os.Getenv("KM_AWS_PROFILE"),
 		HostAWSDir:         filepath.Join(os.Getenv("HOME"), ".aws"),
+		MountEFS:           p.Spec.Runtime.MountEFS,
+		EFSMountPoint:      p.Spec.Runtime.EFSMountPoint,
 	}
 
 	tmpl, err := template.New("docker-compose").Parse(dockerComposeTemplate)
