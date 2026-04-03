@@ -8,14 +8,21 @@ package httpproxy
 
 import (
 	"bufio"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/elazarl/goproxy"
@@ -128,6 +135,11 @@ func (tl *TransparentListener) Serve() error {
 
 func (tl *TransparentListener) handleConn(conn net.Conn) {
 	defer conn.Close()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().Interface("panic", r).Msg("transparent: recovered from panic")
+		}
+	}()
 
 	// Peek at first byte to determine protocol
 	br := bufio.NewReader(conn)
@@ -178,12 +190,16 @@ func (tl *TransparentListener) handleTransparent(conn net.Conn) {
 		Msg("")
 
 	// TLS-terminate the client connection using goproxy's CA.
-	// Use the original IP as the SNI host for cert generation.
-	tlsConfigFunc := goproxy.TLSConfigFromCA(&goproxy.GoproxyCa)
-	tlsCfg, err := tlsConfigFunc(origIP.String(), nil)
-	if err != nil {
-		log.Error().Err(err).Str("dest", origHost).Msg("transparent: TLS config generation failed")
-		return
+	// Generate a leaf cert for the destination host signed by the platform CA.
+	// We use tls.Config with GetCertificate to lazily generate based on SNI.
+	tlsCfg := &tls.Config{
+		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			host := hello.ServerName
+			if host == "" {
+				host = origIP.String()
+			}
+			return signHost(goproxy.GoproxyCa, host)
+		},
 	}
 	clientTLS := tls.Server(conn, tlsCfg)
 	if err := clientTLS.Handshake(); err != nil {
@@ -340,4 +356,43 @@ func CheckBPFMapsExist(sandboxID string) bool {
 	mapDir := fmt.Sprintf("/sys/fs/bpf/km/%s/", sandboxID)
 	_, err := os.Stat(mapDir + "src_port_to_sock")
 	return err == nil
+}
+
+// signHost generates a leaf TLS certificate for host, signed by the CA.
+func signHost(ca tls.Certificate, host string) (*tls.Certificate, error) {
+	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: host},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		tmpl.IPAddresses = []net.IP{ip}
+	} else {
+		tmpl.DNSNames = []string{host}
+	}
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+
+	parent, err := x509.ParseCertificate(ca.Certificate[0])
+	if err != nil {
+		return nil, err
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, parent, &key.PublicKey, ca.PrivateKey)
+	if err != nil {
+		return nil, err
+	}
+
+	cert := &tls.Certificate{
+		Certificate: [][]byte{certDER, ca.Certificate[0]},
+		PrivateKey:  key,
+	}
+	return cert, nil
 }
