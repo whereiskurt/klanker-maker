@@ -1233,3 +1233,99 @@ func TestEbpfModeUnchanged(t *testing.T) {
 		t.Error("expected 'enable km-dns-proxy' to be absent in ebpf-mode userdata")
 	}
 }
+
+// ============================================================
+// km-send deployment tests (45-02)
+// ============================================================
+
+// emailProfile returns a profile with SandboxEmail set (via emailDomainOverride).
+func emailProfile() *profile.SandboxProfile {
+	p := baseProfile()
+	return p
+}
+
+// TestKmSendPresentWhenEmailSet verifies km-send script is deployed when SandboxEmail is set.
+func TestKmSendPresentWhenEmailSet(t *testing.T) {
+	p := emailProfile()
+	out, err := generateUserData(p, "sb-email-1", nil, "my-bucket", false, nil, "sandboxes.example.com")
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "/opt/km/bin/km-send") {
+		t.Error("expected /opt/km/bin/km-send in userdata when SandboxEmail is set")
+	}
+}
+
+// TestKmSendAbsentWhenNoEmail verifies km-send is NOT deployed when SandboxEmail is empty.
+// This tests the template directly with an empty SandboxEmail (bypassing generateUserData which always sets it).
+func TestKmSendAbsentWhenNoEmail(t *testing.T) {
+	tmpl, err := parseUserDataTemplate()
+	if err != nil {
+		t.Fatalf("parseUserDataTemplate failed: %v", err)
+	}
+	// Use params with empty SandboxEmail to exercise the {{- if .SandboxEmail }} branch
+	params := userDataParams{
+		SandboxID:         "sb-noemail-1",
+		SandboxEmail:      "", // explicitly empty — km-send should not appear
+		KMArtifactsBucket: "my-bucket",
+	}
+	var buf strings.Builder
+	if err := tmpl.Execute(&buf, params); err != nil {
+		t.Fatalf("template.Execute failed: %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "/opt/km/bin/km-send") {
+		t.Error("expected /opt/km/bin/km-send to be absent in userdata when SandboxEmail is empty")
+	}
+}
+
+// TestKmSendContainsSSMFetch verifies km-send fetches the signing key from SSM.
+func TestKmSendContainsSSMFetch(t *testing.T) {
+	p := emailProfile()
+	out, err := generateUserData(p, "sb-email-2", nil, "my-bucket", false, nil, "sandboxes.example.com")
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "ssm get-parameter") {
+		t.Error("expected 'ssm get-parameter' in km-send script")
+	}
+	if !strings.Contains(out, "signing-key") {
+		t.Error("expected 'signing-key' SSM path in km-send script")
+	}
+}
+
+// TestKmSendContainsOpensslSign verifies km-send signs with openssl pkeyutl.
+func TestKmSendContainsOpensslSign(t *testing.T) {
+	p := emailProfile()
+	out, err := generateUserData(p, "sb-email-3", nil, "my-bucket", false, nil, "sandboxes.example.com")
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "openssl pkeyutl -sign") {
+		t.Error("expected 'openssl pkeyutl -sign' in km-send script")
+	}
+}
+
+// TestKmSendContainsSESv2Send verifies km-send sends via sesv2.
+func TestKmSendContainsSESv2Send(t *testing.T) {
+	p := emailProfile()
+	out, err := generateUserData(p, "sb-email-4", nil, "my-bucket", false, nil, "sandboxes.example.com")
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "sesv2 send-email") {
+		t.Error("expected 'sesv2 send-email' in km-send script")
+	}
+}
+
+// TestKmSendContainsPKCS8Prefix verifies the Ed25519 PKCS8 DER prefix constant is present.
+func TestKmSendContainsPKCS8Prefix(t *testing.T) {
+	p := emailProfile()
+	out, err := generateUserData(p, "sb-email-5", nil, "my-bucket", false, nil, "sandboxes.example.com")
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "302e020100300506032b657004220420") {
+		t.Error("expected PKCS8 DER prefix '302e020100300506032b657004220420' in km-send script")
+	}
+}

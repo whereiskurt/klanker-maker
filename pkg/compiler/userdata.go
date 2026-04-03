@@ -517,6 +517,191 @@ done
 MAILPOLL
 chmod +x /opt/km/bin/km-mail-poller
 
+# km-send: send Ed25519-signed email with optional attachments via SES
+cat > /opt/km/bin/km-send << 'KMSEND'
+#!/bin/bash
+# km-send — send a signed email from inside a sandbox
+# Usage: km-send --to <addr> --subject <subject> [--body <file>] [--attach file1,file2,...] [message on stdin]
+set -euo pipefail
+
+TO=""
+SUBJECT=""
+BODY_FILE=""
+ATTACH_CSV=""
+
+usage() {
+  echo "Usage: km-send --to <addr> --subject <subject> [--body <file>] [--attach file1,file2,...]" >&2
+  exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --to)       TO="$2";       shift 2 ;;
+    --subject)  SUBJECT="$2";  shift 2 ;;
+    --body)     BODY_FILE="$2"; shift 2 ;;
+    --attach)   ATTACH_CSV="$2"; shift 2 ;;
+    --)         shift; break ;;
+    -*)         echo "[km-send] Unknown option: $1" >&2; usage ;;
+    *)          break ;;
+  esac
+done
+
+# Validate required args
+[[ -z "$TO" ]]      && { echo "[km-send] ERROR: --to is required" >&2; usage; }
+[[ -z "$SUBJECT" ]] && { echo "[km-send] ERROR: --subject is required" >&2; usage; }
+
+# Validate required env vars
+[[ -z "${KM_SANDBOX_ID:-}" ]]    && { echo "[km-send] ERROR: KM_SANDBOX_ID is not set" >&2; exit 1; }
+[[ -z "${KM_EMAIL_ADDRESS:-}" ]] && { echo "[km-send] ERROR: KM_EMAIL_ADDRESS is not set" >&2; exit 1; }
+
+FROM="$KM_EMAIL_ADDRESS"
+SENDER_ID="$KM_SANDBOX_ID"
+TMPDIR_KM=$(mktemp -d /tmp/km-send-XXXXXX)
+trap 'rm -rf "$TMPDIR_KM"' EXIT
+
+# Read body from file or stdin
+BODY_TMP="$TMPDIR_KM/body.txt"
+if [[ -n "$BODY_FILE" ]]; then
+  cp "$BODY_FILE" "$BODY_TMP"
+else
+  cat > "$BODY_TMP"
+fi
+
+# ------------------------------------------------------------------
+# ed25519_privkey_to_pem: convert base64-encoded 64-byte Ed25519 key
+# (seed || public) from SSM to a PKCS8 PEM file openssl can use.
+# The 32-byte seed is wrapped in the fixed DER structure:
+#   SEQUENCE { INTEGER 0, SEQUENCE { OID 1.3.101.112 }, OCTET STRING { OCTET STRING seed } }
+# which is the 16-byte prefix 302e020100300506032b657004220420 followed by the 32-byte seed.
+# ------------------------------------------------------------------
+ed25519_privkey_to_pem() {
+  local b64="$1"
+  local pem_file="$TMPDIR_KM/signing.pem"
+
+  # Decode the 64-byte key and extract the 32-byte seed (first 32 bytes)
+  local raw_hex
+  raw_hex=$(printf '%s' "$b64" | base64 -d | od -An -tx1 | tr -d ' \n')
+  local seed_hex="${raw_hex:0:64}"   # first 32 bytes = 64 hex chars
+
+  # Build PKCS8 DER: fixed 16-byte header + 32-byte seed
+  local pkcs8_hex="302e020100300506032b657004220420${seed_hex}"
+
+  # Convert hex to binary, base64-encode, wrap in PEM
+  printf '%s' "$pkcs8_hex" | xxd -r -p | base64 | fold -w 64 | {
+    printf '-----BEGIN PRIVATE KEY-----\n'
+    cat
+    printf '-----END PRIVATE KEY-----\n'
+  } > "$pem_file"
+
+  echo "$pem_file"
+}
+
+# ------------------------------------------------------------------
+# build_mime: assemble a MIME message (single-part or multipart/mixed)
+# Returns path to the temp MIME file.
+# ------------------------------------------------------------------
+build_mime() {
+  local from="$1" to="$2" subject="$3" sender_id="$4" signature="$5"
+  local body_file="$6"
+  shift 6
+  local attach_files=("$@")
+
+  local mime_file="$TMPDIR_KM/message.mime"
+  local date_str
+  date_str=$(date -R)
+
+  if [[ ${#attach_files[@]} -eq 0 ]]; then
+    # Single-part text/plain
+    {
+      printf 'From: %s\r\n' "$from"
+      printf 'To: %s\r\n' "$to"
+      printf 'Subject: %s\r\n' "$subject"
+      printf 'Date: %s\r\n' "$date_str"
+      printf 'X-KM-Sender-ID: %s\r\n' "$sender_id"
+      printf 'X-KM-Signature: %s\r\n' "$signature"
+      printf 'MIME-Version: 1.0\r\n'
+      printf 'Content-Type: text/plain; charset=UTF-8\r\n'
+      printf 'Content-Transfer-Encoding: 8bit\r\n'
+      printf '\r\n'
+      cat "$body_file"
+    } > "$mime_file"
+  else
+    # Multipart/mixed
+    local boundary="=_km_$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+    {
+      printf 'From: %s\r\n' "$from"
+      printf 'To: %s\r\n' "$to"
+      printf 'Subject: %s\r\n' "$subject"
+      printf 'Date: %s\r\n' "$date_str"
+      printf 'X-KM-Sender-ID: %s\r\n' "$sender_id"
+      printf 'X-KM-Signature: %s\r\n' "$signature"
+      printf 'MIME-Version: 1.0\r\n'
+      printf 'Content-Type: multipart/mixed; boundary="%s"\r\n' "$boundary"
+      printf '\r\n'
+      printf '--%s\r\n' "$boundary"
+      printf 'Content-Type: text/plain; charset=UTF-8\r\n'
+      printf 'Content-Transfer-Encoding: 8bit\r\n'
+      printf '\r\n'
+      cat "$body_file"
+      printf '\r\n'
+      for attach in "${attach_files[@]}"; do
+        local fname
+        fname=$(basename "$attach")
+        printf '\r\n--%s\r\n' "$boundary"
+        printf 'Content-Type: application/octet-stream; name="%s"\r\n' "$fname"
+        printf 'Content-Transfer-Encoding: base64\r\n'
+        printf 'Content-Disposition: attachment; filename="%s"\r\n' "$fname"
+        printf '\r\n'
+        base64 -w 76 "$attach"
+        printf '\r\n'
+      done
+      printf '--%s--\r\n' "$boundary"
+    } > "$mime_file"
+  fi
+
+  echo "$mime_file"
+}
+
+# ------------------------------------------------------------------
+# Fetch Ed25519 private key from SSM and build PEM
+# ------------------------------------------------------------------
+PRIVKEY_B64=$(aws ssm get-parameter \
+  --name "/sandbox/$KM_SANDBOX_ID/signing-key" \
+  --with-decryption \
+  --query 'Parameter.Value' \
+  --output text)
+
+PEM_FILE=$(ed25519_privkey_to_pem "$PRIVKEY_B64")
+
+# ------------------------------------------------------------------
+# Sign the message body
+# ------------------------------------------------------------------
+SIGNATURE=$(openssl pkeyutl -sign -inkey "$PEM_FILE" -rawin < "$BODY_TMP" | base64 -w0)
+
+# ------------------------------------------------------------------
+# Build MIME message
+# ------------------------------------------------------------------
+declare -a ATTACH_FILES=()
+if [[ -n "$ATTACH_CSV" ]]; then
+  IFS=',' read -ra ATTACH_FILES <<< "$ATTACH_CSV"
+fi
+
+MIME_FILE=$(build_mime "$FROM" "$TO" "$SUBJECT" "$SENDER_ID" "$SIGNATURE" "$BODY_TMP" "${ATTACH_FILES[@]+"${ATTACH_FILES[@]}"}")
+
+# ------------------------------------------------------------------
+# Send via SES raw email
+# ------------------------------------------------------------------
+MIME_B64=$(base64 -w0 < "$MIME_FILE")
+aws sesv2 send-email \
+  --from-email-address "$FROM" \
+  --destination "ToAddresses=$TO" \
+  --content "Raw={Data=$MIME_B64}"
+
+echo "[km-send] Sent signed email to $TO (sig: ${SIGNATURE:0:12}...)"
+KMSEND
+chmod +x /opt/km/bin/km-send
+echo "[km-bootstrap] km-send installed at /opt/km/bin/km-send"
+
 cat > /etc/systemd/system/km-mail-poller.service << 'UNIT'
 [Unit]
 Description=Klankrmkr mail poller — syncs inbound email from S3
@@ -546,6 +731,7 @@ echo "[km-bootstrap] Sidecars started"
 echo "[km-bootstrap] Shell audit hook installed at /etc/profile.d/km-audit.sh"
 {{- if .SandboxEmail }}
 echo "[km-bootstrap] Mail poller started — inbox at /var/mail/km/new/"
+echo "[km-bootstrap] km-send ready — send signed email with: km-send --to <addr> --subject <subject>"
 {{- end }}
 
 {{- if eq .Enforcement "proxy" }}
@@ -986,6 +1172,12 @@ type userDataParams struct {
 	// via connect4 DNAT rewrite. Derived from profile sourceAccess.github and useBedrock fields.
 	// Passed to km ebpf-attach --proxy-hosts in "ebpf" and "both" enforcement modes.
 	L7ProxyHosts string
+}
+
+// parseUserDataTemplate parses the userDataTemplate and returns the compiled template.
+// Exported for use in tests that need direct template access.
+func parseUserDataTemplate() (*template.Template, error) {
+	return template.New("userdata").Parse(userDataTemplate)
 }
 
 // otpSecret holds an SSM path and derived env var name for an OTP secret.
