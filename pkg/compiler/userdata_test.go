@@ -694,8 +694,9 @@ func TestUserDataEnforcementEbpf(t *testing.T) {
 	}
 }
 
-// TestUserDataEnforcementBoth verifies that "both" enforcement produces both iptables
-// and eBPF sections.
+// TestUserDataEnforcementBoth verifies that "both" enforcement (gatekeeper mode) produces
+// eBPF enforcement with block mode, no iptables DNAT, and proxy env vars as belt-and-suspenders.
+// Updated in Phase 42: "both" mode now uses eBPF as primary enforcer (connect4 replaces iptables).
 func TestUserDataEnforcementBoth(t *testing.T) {
 	p := baseProfile()
 	p.Spec.Network.Enforcement = "both"
@@ -703,9 +704,9 @@ func TestUserDataEnforcementBoth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
-	// Both iptables and eBPF must be present
-	if !strings.Contains(out, "iptables -t nat") {
-		t.Error("expected iptables -t nat rules when enforcement is both")
+	// Gatekeeper mode: eBPF is primary enforcer (block mode)
+	if strings.Contains(out, "iptables -t nat") {
+		t.Error("expected NO iptables -t nat rules in gatekeeper both mode (connect4 replaces iptables)")
 	}
 	if !strings.Contains(out, "eBPF cgroup enforcement") {
 		t.Error("expected eBPF cgroup enforcement section when enforcement is both")
@@ -717,7 +718,7 @@ func TestUserDataEnforcementBoth(t *testing.T) {
 		t.Error("expected cgroup path km.slice when enforcement is both")
 	}
 	if !strings.Contains(out, "export HTTP_PROXY") {
-		t.Error("expected HTTP_PROXY env var when enforcement is both (proxy sidecars active)")
+		t.Error("expected HTTP_PROXY env var when enforcement is both (proxy env vars as belt-and-suspenders)")
 	}
 	// Pure eBPF-only message should NOT appear for "both"
 	if strings.Contains(out, "Pure eBPF mode") {

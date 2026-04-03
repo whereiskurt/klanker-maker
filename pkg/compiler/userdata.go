@@ -373,6 +373,7 @@ Environment=ALLOWED_HOSTS={{ .AllowedHTTPHosts }}
 Environment=KM_GITHUB_ALLOWED_REPOS={{ .GitHubAllowedRepos }}
 Environment=PROXY_PORT=3128
 ExecStart=/opt/km/bin/km-http-proxy
+ExecStartPost=/bin/bash -c 'echo $MAINPID > /run/km/http-proxy.pid'
 Restart=always
 RestartSec=2
 [Install]
@@ -531,8 +532,8 @@ WantedBy=multi-user.target
 UNIT
 {{- end }}
 
-{{- if eq .Enforcement "ebpf" }}
-# In pure eBPF mode, skip km-dns-proxy (enforcer runs its own DNS resolver on :5353)
+{{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
+# In eBPF/gatekeeper mode, skip km-dns-proxy (enforcer runs its own DNS resolver)
 systemctl enable km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}
 systemctl start km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}
 echo "[km-bootstrap] Sidecars started (DNS via eBPF enforcer, not km-dns-proxy)"
@@ -546,7 +547,7 @@ echo "[km-bootstrap] Shell audit hook installed at /etc/profile.d/km-audit.sh"
 echo "[km-bootstrap] Mail poller started — inbox at /var/mail/km/new/"
 {{- end }}
 
-{{- if or (eq .Enforcement "proxy") (eq .Enforcement "both") }}
+{{- if eq .Enforcement "proxy" }}
 # ============================================================
 # 6. iptables DNAT: redirect DNS and HTTP traffic to sidecars
 # ============================================================
@@ -592,6 +593,20 @@ PROXYENV
 echo "[km-bootstrap] Proxy env vars configured for shell sessions"
 {{- end }}
 
+{{- if eq .Enforcement "both" }}
+# Set proxy env vars as belt-and-suspenders (gatekeeper mode: connect4 is primary, proxy is L7 fallback).
+# Apps that respect HTTP_PROXY will route traffic through the proxy for Bedrock/GitHub inspection.
+cat >> /etc/profile.d/km-audit.sh << 'PROXYENV'
+export http_proxy=http://127.0.0.1:3128
+export https_proxy=http://127.0.0.1:3128
+export HTTP_PROXY=http://127.0.0.1:3128
+export HTTPS_PROXY=http://127.0.0.1:3128
+export no_proxy=169.254.169.254,localhost,127.0.0.1
+export NO_PROXY=169.254.169.254,localhost,127.0.0.1
+PROXYENV
+echo "[km-bootstrap] Proxy env vars configured (gatekeeper mode belt-and-suspenders)"
+{{- end }}
+
 {{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
 # ============================================================
 # 6b. eBPF cgroup enforcement: kernel-level DNS/IP allowlisting
@@ -617,13 +632,13 @@ After=network.target
 Type=simple
 ExecStart=/usr/local/bin/km ebpf-attach \
   --sandbox-id {{ .SandboxID }} \
-{{- if eq .Enforcement "ebpf" }}
+{{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
   --dns-port 53 \
 {{- else }}
   --dns-port 0 \
 {{- end }}
   --http-proxy-port 3128 \
-{{- if eq .Enforcement "ebpf" }}
+{{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
   --firewall-mode block \
 {{- else }}
   --firewall-mode log \
@@ -631,6 +646,9 @@ ExecStart=/usr/local/bin/km ebpf-attach \
   --allowed-dns "{{ .AllowedDNSSuffixes }}" \
   --allowed-hosts "{{ .AllowedHTTPHosts }}" \
   --proxy-hosts "{{ .L7ProxyHosts }}" \
+{{- if eq .Enforcement "both" }}
+  --proxy-pid "$(cat /run/km/http-proxy.pid 2>/dev/null || echo 0)" \
+{{- end }}
 {{- if .TLSEnabled }}
   --tls \
   --allowed-repos "{{ .TLSAllowedRepos }}" \
@@ -677,15 +695,14 @@ if [ "$(whoami)" = "sandbox" ]; then
 fi
 CGROUPEOF
 
-{{- if eq .Enforcement "ebpf" }}
+{{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
 # Override resolv.conf to route ALL DNS through the enforcer's resolver.
-# In pure eBPF mode, the enforcer runs its own DNS resolver on :53.
-# In "both" mode, the existing DNS proxy sidecar + iptables DNAT handles DNS.
+# The enforcer runs its own DNS resolver on :53 (both eBPF and gatekeeper modes).
 cp /etc/resolv.conf /etc/resolv.conf.bak
 echo "nameserver 127.0.0.1" > /etc/resolv.conf
 echo "[km-bootstrap] DNS routed through eBPF enforcer resolver on :53"
 {{- else }}
-echo "[km-bootstrap] DNS handled by km-dns-proxy sidecar + iptables DNAT (both mode)"
+echo "[km-bootstrap] DNS handled by km-dns-proxy sidecar + iptables DNAT (proxy mode)"
 {{- end }}
 
 echo "[km-bootstrap] eBPF enforcement configured (sandbox shell → cgroup)"
