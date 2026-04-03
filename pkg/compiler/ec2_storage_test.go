@@ -32,6 +32,14 @@ func minimalEC2StorageNetwork() *NetworkConfig {
 	}
 }
 
+// minimalIAMPolicy returns a minimal IAMSessionPolicy for tests.
+func minimalIAMPolicy() *IAMSessionPolicy {
+	return &IAMSessionPolicy{
+		MaxSessionDuration: 3600,
+		AllowedRegions:     []string{"us-east-1"},
+	}
+}
+
 // TestHibernationSpotConflict verifies that hibernation=true + spot=true returns a clear error.
 func TestHibernationSpotConflict(t *testing.T) {
 	p := minimalEC2StorageProfile()
@@ -89,12 +97,7 @@ func TestHibernationOnDemandValid(t *testing.T) {
 	p.Spec.Runtime.Hibernation = true
 	p.Spec.Runtime.Spot = false
 
-	iamPolicy := &IAMSessionPolicy{
-		MaxSessionDuration: 3600,
-		AllowedRegions:     []string{"us-east-1"},
-	}
-
-	_, err := generateEC2ServiceHCL(p, "test-sb", false, nil, iamPolicy, "", minimalEC2StorageNetwork())
+	_, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
 	if err != nil {
 		t.Errorf("expected no error for hibernation=true + spot=false (on-demand), got: %v", err)
 	}
@@ -109,13 +112,87 @@ func TestAdditionalVolumeEC2Valid(t *testing.T) {
 		Encrypted:  true,
 	}
 
-	iamPolicy := &IAMSessionPolicy{
-		MaxSessionDuration: 3600,
-		AllowedRegions:     []string{"us-east-1"},
-	}
-
-	_, err := generateEC2ServiceHCL(p, "test-sb", false, nil, iamPolicy, "", minimalEC2StorageNetwork())
+	_, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
 	if err != nil {
 		t.Errorf("expected no error for additionalVolume on EC2 substrate, got: %v", err)
+	}
+}
+
+// ============================================================
+// Phase 33 Plan 02: HCL template output tests (TDD RED)
+// ============================================================
+
+// TestRootVolumeSizeInHCL verifies that rootVolumeSize=50 generates HCL with root_volume_size_gb = 50.
+func TestRootVolumeSizeInHCL(t *testing.T) {
+	p := minimalEC2StorageProfile()
+	p.Spec.Runtime.RootVolumeSize = 50
+
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "root_volume_size_gb    = 50"
+	if !strings.Contains(hcl, want) {
+		t.Errorf("HCL output missing %q\ngot:\n%s", want, hcl)
+	}
+}
+
+// TestRootVolumeSizeZeroInHCL verifies that rootVolumeSize=0 generates HCL with root_volume_size_gb = 0.
+func TestRootVolumeSizeZeroInHCL(t *testing.T) {
+	p := minimalEC2StorageProfile()
+	// RootVolumeSize defaults to 0
+
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "root_volume_size_gb    = 0"
+	if !strings.Contains(hcl, want) {
+		t.Errorf("HCL output missing %q\ngot:\n%s", want, hcl)
+	}
+}
+
+// TestHibernationEnabledInHCL verifies that hibernation=true generates HCL with hibernation_enabled = true.
+func TestHibernationEnabledInHCL(t *testing.T) {
+	p := minimalEC2StorageProfile()
+	p.Spec.Runtime.Hibernation = true
+
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "hibernation_enabled    = true"
+	if !strings.Contains(hcl, want) {
+		t.Errorf("HCL output missing %q\ngot:\n%s", want, hcl)
+	}
+}
+
+// TestAMISlugExplicitInHCL verifies that ami="ubuntu-24.04" generates HCL with ami_slug = "ubuntu-24.04".
+func TestAMISlugExplicitInHCL(t *testing.T) {
+	p := minimalEC2StorageProfile()
+	p.Spec.Runtime.AMI = "ubuntu-24.04"
+
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := `ami_slug               = "ubuntu-24.04"`
+	if !strings.Contains(hcl, want) {
+		t.Errorf("HCL output missing %q\ngot:\n%s", want, hcl)
+	}
+}
+
+// TestAMISlugDefaultInHCL verifies that empty ami field generates HCL with ami_slug = "amazon-linux-2023".
+func TestAMISlugDefaultInHCL(t *testing.T) {
+	p := minimalEC2StorageProfile()
+	// AMI field is empty — should default to amazon-linux-2023
+
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := `ami_slug               = "amazon-linux-2023"`
+	if !strings.Contains(hcl, want) {
+		t.Errorf("HCL output missing %q\ngot:\n%s", want, hcl)
 	}
 }
