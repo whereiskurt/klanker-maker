@@ -117,6 +117,15 @@ type Config struct {
 	// Set via max_sandboxes in km-config.yaml or KM_MAX_SANDBOXES environment variable.
 	// A value of 0 means unlimited (no enforcement). Defaults to 10.
 	MaxSandboxes int
+
+	// SchedulesTableName is the DynamoDB table name for km-at schedule metadata.
+	// Maps to km-config.yaml key schedules_table_name. Defaults to "km-schedules".
+	SchedulesTableName string
+
+	// CreateHandlerLambdaARN is the Lambda function ARN invoked by km-at create schedules
+	// to provision sandboxes on a deferred or recurring basis.
+	// Set via create_handler_lambda_arn in km-config.yaml or KM_CREATE_HANDLER_LAMBDA_ARN.
+	CreateHandlerLambdaARN string
 }
 
 // isSetByEnv returns true if the given viper key has been overridden by an environment
@@ -152,6 +161,8 @@ func Load() (*Config, error) {
 	v.SetDefault("artifacts_bucket", "")
 	v.SetDefault("aws_profile", "")
 	v.SetDefault("rsync_paths", []string{".claude", ".bashrc", ".bash_profile", ".gitconfig"})
+	v.SetDefault("schedules_table_name", "km-schedules")
+	v.SetDefault("create_handler_lambda_arn", "")
 
 	// Primary config file: ~/.km/config.yaml
 	v.SetConfigName("config")
@@ -210,6 +221,8 @@ func Load() (*Config, error) {
 			"safe_phrase",
 			"rsync_paths",
 			"max_sandboxes",
+			"schedules_table_name",
+			"create_handler_lambda_arn",
 		} {
 			if v2.IsSet(key) && !isSetByEnv(v, key) {
 				v.Set(key, v2.Get(key))
@@ -242,8 +255,10 @@ func Load() (*Config, error) {
 		Route53ZoneID:        v.GetString("route53_zone_id"),
 		OperatorEmail:        v.GetString("operator_email"),
 		SafePhrase:           v.GetString("safe_phrase"),
-		RsyncPaths:           v.GetStringSlice("rsync_paths"),
-		MaxSandboxes:         v.GetInt("max_sandboxes"),
+		RsyncPaths:             v.GetStringSlice("rsync_paths"),
+		MaxSandboxes:           v.GetInt("max_sandboxes"),
+		SchedulesTableName:     v.GetString("schedules_table_name"),
+		CreateHandlerLambdaARN: v.GetString("create_handler_lambda_arn"),
 	}
 
 	return cfg, nil

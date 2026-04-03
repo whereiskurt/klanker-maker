@@ -166,11 +166,22 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 	}
 	idWidth += 2 // padding
 
+	// truncCol truncates a string to maxLen, adding ".." suffix if truncated.
+	truncCol := func(s string, maxLen int) string {
+		if len(s) <= maxLen {
+			return s
+		}
+		if maxLen <= 2 {
+			return s[:maxLen]
+		}
+		return s[:maxLen-2] + ".."
+	}
+
 	if wide {
-		fmt.Fprintf(out, "%-3s %-10s  %-*s %-12s %-10s %-12s %-10s %s\n",
+		fmt.Fprintf(out, "%-3s %-8s  %-*s %-16s %-10s %-12s %-10s %s\n",
 			"#", "ALIAS", idWidth, "SANDBOX ID", "PROFILE", "SUBSTRATE", "REGION", "STATUS", "TTL")
 	} else {
-		fmt.Fprintf(out, "%-3s %-10s  %-*s %-10s %s\n",
+		fmt.Fprintf(out, "%-3s %-8s  %-*s %-10s %s\n",
 			"#", "ALIAS", idWidth, "SANDBOX ID", "STATUS", "TTL")
 	}
 	for i, r := range records {
@@ -178,10 +189,11 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 		if ttl == "" {
 			ttl = "-"
 		}
-		alias := r.Alias
+		alias := truncCol(r.Alias, 8)
 		if alias == "" {
 			alias = "-"
 		}
+		profile := truncCol(r.Profile, 16)
 		// Pad status to fixed width BEFORE adding color codes
 		paddedStatus := fmt.Sprintf("%-10s", r.Status)
 		colorStatus := colorizeRaw(r.Status, false, paddedStatus)
@@ -198,12 +210,12 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 		num := bw(fmt.Sprintf("%-3d", i+1))
 		if wide {
 			fmt.Fprintf(out, "%s %s  %s %s %s %s %s %s%s\n",
-				num, bw(fmt.Sprintf("%-10s", alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
-				bw(fmt.Sprintf("%-12s", r.Profile)), bw(fmt.Sprintf("%-10s", r.Substrate)),
+				num, bw(fmt.Sprintf("%-8s", alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
+				bw(fmt.Sprintf("%-16s", profile)), bw(fmt.Sprintf("%-10s", r.Substrate)),
 				bw(fmt.Sprintf("%-12s", r.Region)), colorStatus, bw(ttl), lock)
 		} else {
 			fmt.Fprintf(out, "%s %s  %s %s %s%s\n",
-				num, bw(fmt.Sprintf("%-10s", alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
+				num, bw(fmt.Sprintf("%-8s", alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
 				colorStatus, bw(ttl), lock)
 		}
 	}

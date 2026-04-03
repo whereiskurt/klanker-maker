@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 42-02-PLAN.md
-last_updated: "2026-04-03T04:17:21.072Z"
+stopped_at: Completed 44-04-PLAN.md
+last_updated: "2026-04-03T07:11:47.139Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 44
-  completed_phases: 39
+  completed_phases: 40
   total_plans: 135
-  completed_plans: 131
+  completed_plans: 133
   percent: 0
 ---
 
@@ -175,8 +175,10 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 33-ec2-storage-and-ami P03 | 4min | 2 tasks | 6 files |
 | Phase 43 P01 | 160s | 2 tasks | 8 files |
 | Phase 43 P02 | 7min | 2 tasks | 7 files |
-| Phase 42-ebpf-gatekeeper-mode-connect4-dnat-rewrite-for-selective-l7-proxy P01 | 8min | 2 tasks | 10 files |
-| Phase 42-ebpf-gatekeeper-mode-connect4-dnat-rewrite-for-selective-l7-proxy P02 | 395s | 2 tasks | 2 files |
+| Phase 44-km-at-schedule-eventbridge-scheduler-command-for-deferred-and-recurring-sandbox-operations P01 | 139s | 1 tasks | 4 files |
+| Phase 44 P02 | 3min | 2 tasks | 5 files |
+| Phase 44 P03 | 318s | 2 tasks | 3 files |
+| Phase 44 P04 | 5min | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -480,10 +482,13 @@ Recent decisions affecting current work:
 - [Phase 43]: EFSMountPoint defaults to empty string; compiler/userdata (Plan 02) applies /shared when omitted
 - [Phase 43]: generateUserData signature: network *NetworkConfig parameter added before variadic emailDomainOverride, nil-safe for all existing callers
 - [Phase 43]: LoadEFSOutputs returns empty string (not error) when efs/outputs.json missing — EFS is optional infra unlike required network
-- [Phase 42-01]: PID-file approach for HTTP proxy exemption (not UID-based): simpler, acceptable for Phase 42; stale-PID on proxy restart documented
-- [Phase 42-01]: buildL7ProxyHosts derives domain suffixes from profile fields (GitHub/Bedrock), not GitHub repo names which was the prior incorrect behavior
-- [Phase 42]: both-mode uses eBPF gatekeeper: block firewall, connect4 replaces iptables DNAT, resolv.conf overridden to 127.0.0.1
-- [Phase 42]: both-mode keeps HTTP_PROXY/HTTPS_PROXY as belt-and-suspenders alongside connect4 for L7 inspection
+- [Phase 44-km-at-schedule]: Use olebedev/when for one-time NL parsing; custom regex for recurring to avoid misclassification
+- [Phase 44-km-at-schedule]: EventBridge cron DOW: 1=SUN through 7=SAT (not unix 0-based); enforced in ebDOW map
+- [Phase 44]: SchedulerAPI extended with ListSchedules/GetSchedule; CreateAtSchedule/DeleteAtSchedule helpers added with idempotent delete
+- [Phase 44]: ScheduleRecord DynamoDB CRUD uses manual attribute marshalling; sandbox_id omitted when empty for create commands; SchedulesTableName defaults to km-schedules
+- [Phase 44]: Use Cobra Aliases field for km schedule alias — inherits all flags and subcommands automatically without duplication
+- [Phase 44]: cmd.ErrOrStderr() for SCHED-GUARDRAIL warning — os.Stderr bypasses Cobra capture in tests
+- [Phase 44]: E2E test uses //go:build e2e + KM_E2E=1 double-gate; e2eState struct pointer shares sandboxID across sequential subtests
 
 ### Roadmap Evolution
 
@@ -540,6 +545,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-03T04:17:21.068Z
-Stopped at: Completed 42-02-PLAN.md
+Last session: 2026-04-03T07:11:47.135Z
+Stopped at: Completed 44-04-PLAN.md
 Resume file: None

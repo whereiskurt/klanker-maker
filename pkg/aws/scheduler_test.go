@@ -36,6 +36,14 @@ func (m *mockSchedulerAPI) DeleteSchedule(ctx context.Context, input *scheduler.
 	return &scheduler.DeleteScheduleOutput{}, m.deleteErr
 }
 
+func (m *mockSchedulerAPI) ListSchedules(ctx context.Context, input *scheduler.ListSchedulesInput, optFns ...func(*scheduler.Options)) (*scheduler.ListSchedulesOutput, error) {
+	return &scheduler.ListSchedulesOutput{}, nil
+}
+
+func (m *mockSchedulerAPI) GetSchedule(ctx context.Context, input *scheduler.GetScheduleInput, optFns ...func(*scheduler.Options)) (*scheduler.GetScheduleOutput, error) {
+	return &scheduler.GetScheduleOutput{}, nil
+}
+
 func TestCreateTTLSchedule_Success(t *testing.T) {
 	ttlTime := time.Now().Add(2 * time.Hour)
 	input := compiler.BuildTTLScheduleInput("sb-123", ttlTime, "arn:aws:lambda:us-east-1:123456789012:function:km-ttl", "arn:aws:iam::123456789012:role/km-scheduler-role")
@@ -140,3 +148,46 @@ func TestDeleteTTLSchedule_OtherError(t *testing.T) {
 }
 
 func stringPtr(s string) *string { return &s }
+
+func TestCreateAtSchedule_Success(t *testing.T) {
+	input := &scheduler.CreateScheduleInput{
+		Name:               stringPtr("km-at-sb-123-kill"),
+		ScheduleExpression: stringPtr("at(2026-04-10T12:00:00)"),
+	}
+	mock := &mockSchedulerAPI{}
+	err := kmaws.CreateAtSchedule(context.Background(), mock, input)
+	if err != nil {
+		t.Fatalf("CreateAtSchedule returned unexpected error: %v", err)
+	}
+	if !mock.createCalled {
+		t.Fatal("expected CreateSchedule to be called on the mock")
+	}
+}
+
+func TestDeleteAtSchedule_Success(t *testing.T) {
+	mock := &mockSchedulerAPI{}
+	err := kmaws.DeleteAtSchedule(context.Background(), mock, "km-at-sb-123-kill", "km-at")
+	if err != nil {
+		t.Fatalf("DeleteAtSchedule returned unexpected error: %v", err)
+	}
+	if !mock.deleteCalled {
+		t.Fatal("expected DeleteSchedule to be called on the mock")
+	}
+	if mock.deleteInput == nil || mock.deleteInput.Name == nil {
+		t.Fatal("DeleteSchedule called with nil input or nil Name")
+	}
+	if *mock.deleteInput.Name != "km-at-sb-123-kill" {
+		t.Errorf("DeleteAtSchedule Name = %q; want %q", *mock.deleteInput.Name, "km-at-sb-123-kill")
+	}
+}
+
+func TestDeleteAtSchedule_NotFound(t *testing.T) {
+	notFoundErr := &types.ResourceNotFoundException{
+		Message: stringPtr("Schedule not found"),
+	}
+	mock := &mockSchedulerAPI{deleteErr: notFoundErr}
+	err := kmaws.DeleteAtSchedule(context.Background(), mock, "km-at-sb-notfound-kill", "km-at")
+	if err != nil {
+		t.Fatalf("DeleteAtSchedule should return nil for ResourceNotFoundException, got: %v", err)
+	}
+}
