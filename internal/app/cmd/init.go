@@ -54,6 +54,24 @@ type regionalModule struct {
 	envReqs []string // environment variables required to apply this module
 }
 
+// RegionalModule is the exported view of a regional infrastructure module.
+// Used by tests to inspect module order without importing internal fields.
+type RegionalModule struct {
+	Name string
+	Dir  string
+}
+
+// RegionalModules returns the ordered list of regional infrastructure modules
+// as exported RegionalModule values. Exported for testing only.
+func RegionalModules(regionDir string) []RegionalModule {
+	internal := regionalModules(regionDir)
+	out := make([]RegionalModule, len(internal))
+	for i, m := range internal {
+		out[i] = RegionalModule{Name: m.name, Dir: m.dir}
+	}
+	return out
+}
+
 // regionalModules returns the ordered slice of regional infrastructure modules
 // for the given region directory. Modules are returned in dependency order.
 func regionalModules(regionDir string) []regionalModule {
@@ -61,6 +79,13 @@ func regionalModules(regionDir string) []regionalModule {
 		{
 			name:    "network",
 			dir:     filepath.Join(regionDir, "network"),
+			envReqs: nil,
+		},
+		{
+			// efs depends on network: its terragrunt.hcl reads network/outputs.json.
+			// Must come after network so outputs.json is present before EFS apply.
+			name:    "efs",
+			dir:     filepath.Join(regionDir, "efs"),
 			envReqs: nil,
 		},
 		{
@@ -385,6 +410,25 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 				fmt.Printf("    AZs:     %v\n", extractValue(v))
 			}
 			fmt.Println()
+		}
+
+		// After efs module: capture outputs.json for compiler use
+		if mod.name == "efs" {
+			outputMap, err := runner.Output(ctx, mod.dir)
+			if err != nil {
+				return fmt.Errorf("reading efs outputs: %w", err)
+			}
+			outputJSON, err := json.MarshalIndent(outputMap, "", "  ")
+			if err != nil {
+				return fmt.Errorf("serializing efs outputs: %w", err)
+			}
+			outputsFile := filepath.Join(mod.dir, "outputs.json")
+			if err := os.WriteFile(outputsFile, outputJSON, 0o644); err != nil {
+				return fmt.Errorf("writing efs outputs.json: %w", err)
+			}
+			if v, ok := outputMap["filesystem_id"]; ok {
+				fmt.Printf("  EFS filesystem: %v\n", extractValue(v))
+			}
 		}
 
 		// After email-handler module: capture Lambda ARN for SES module

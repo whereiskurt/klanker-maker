@@ -152,6 +152,12 @@ type RuntimeSpec struct {
 	Hibernation bool `yaml:"hibernation,omitempty" json:"hibernation,omitempty"`
 	// AMI is an AMI slug to resolve per-region (e.g. "ubuntu-24.04"). Empty defaults to amazon-linux-2023.
 	AMI string `yaml:"ami,omitempty" json:"ami,omitempty"`
+	// MountEFS controls whether this sandbox mounts the regional EFS shared filesystem (EC2 only).
+	// When true, the EFS filesystem ID is read from infra/live/<region>/efs/outputs.json and
+	// passed into userdata to mount at EFSMountPoint.
+	MountEFS bool `yaml:"mountEFS,omitempty" json:"mountEFS,omitempty"`
+	// EFSMountPoint is the filesystem path where EFS is mounted. Defaults to "/shared" when omitted.
+	EFSMountPoint string `yaml:"efsMountPoint,omitempty" json:"efsMountPoint,omitempty"`
 }
 
 // ExecutionSpec controls the shell environment within the sandbox.

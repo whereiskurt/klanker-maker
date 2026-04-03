@@ -234,6 +234,33 @@ func TestRunInitStopsOnApplyError(t *testing.T) {
 	}
 }
 
+// TestRegionalModulesIncludesEFS verifies that regionalModules returns an "efs" entry
+// that appears after "network" in the slice.
+func TestRegionalModulesIncludesEFS(t *testing.T) {
+	mods := cmd.RegionalModules(t.TempDir())
+
+	efsIdx := -1
+	networkIdx := -1
+	for i, m := range mods {
+		if m.Name == "efs" {
+			efsIdx = i
+		}
+		if m.Name == "network" {
+			networkIdx = i
+		}
+	}
+
+	if efsIdx == -1 {
+		t.Fatal("expected 'efs' entry in regionalModules(), not found")
+	}
+	if networkIdx == -1 {
+		t.Fatal("expected 'network' entry in regionalModules(), not found")
+	}
+	if efsIdx <= networkIdx {
+		t.Errorf("'efs' (index %d) must come after 'network' (index %d) in regionalModules()", efsIdx, networkIdx)
+	}
+}
+
 // TestRunInitIdempotent verifies that calling runInitWithRunner twice succeeds.
 func TestRunInitIdempotent(t *testing.T) {
 	repoRoot := t.TempDir()
