@@ -191,8 +191,14 @@ func NewEnforcer(cfg Config) (*Enforcer, error) {
 		p := pinPath + name
 		if err := m.Pin(p); err != nil && !errors.Is(err, os.ErrExist) {
 			log.Warn().Err(err).Str("map", name).Msg("failed to pin map (non-fatal)")
+		} else {
+			// Make readable by km-sidecar (proxy runs as this user)
+			_ = os.Chmod(p, 0o644)
 		}
 	}
+	// Make pin directories traversable by km-sidecar (proxy user)
+	_ = os.Chmod("/sys/fs/bpf/km", 0o755)
+	_ = os.Chmod(pinPath, 0o755)
 
 	return &Enforcer{
 		config:      cfg,
