@@ -404,12 +404,28 @@ func MatchesAllowList(patterns []string, senderID, senderAlias, receiverSandboxI
 // Email Signing
 // ============================================================
 
+// canonicalizeBody normalizes an email body string before signing or verifying.
+//
+// SES appends a trailing "\r\n" to message bodies in transit, which would otherwise
+// cause signature verification to fail when the receiver computes the signature over
+// the mutated bytes. Canonicalization strips trailing whitespace and normalizes all
+// line endings to "\n" so both sides always sign/verify the same byte sequence.
+func canonicalizeBody(body string) string {
+	// Normalize CRLF → LF first, then trim trailing whitespace.
+	body = strings.ReplaceAll(body, "\r\n", "\n")
+	body = strings.ReplaceAll(body, "\r", "\n")
+	body = strings.TrimRight(body, "\n")
+	return body
+}
+
 // SignEmailBody signs the email body bytes with the provided Ed25519 private key.
 //
 // privKeyB64 is the base64-encoded 64-byte Ed25519 private key (seed + public).
 // Returns the base64-encoded signature over the body bytes.
 // Signs body only, not headers (per design decision from research).
+// The body is canonicalized before signing to match VerifyEmailSignature behavior.
 func SignEmailBody(privKeyB64, body string) (string, error) {
+	body = canonicalizeBody(body)
 	privBytes, err := base64.StdEncoding.DecodeString(privKeyB64)
 	if err != nil {
 		return "", fmt.Errorf("decode private key: %w", err)
@@ -425,7 +441,9 @@ func SignEmailBody(privKeyB64, body string) (string, error) {
 // VerifyEmailSignature verifies an Ed25519 signature over a body string.
 //
 // Returns nil if the signature is valid, error otherwise.
+// The body is canonicalized before verifying to tolerate SES trailing CRLF mutation.
 func VerifyEmailSignature(pubKeyB64, body, sigB64 string) error {
+	body = canonicalizeBody(body)
 	pubBytes, err := base64.StdEncoding.DecodeString(pubKeyB64)
 	if err != nil {
 		return fmt.Errorf("decode public key: %w", err)

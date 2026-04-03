@@ -412,6 +412,43 @@ func TestIdentity_VerifyEmailSignature_WrongPublicKey(t *testing.T) {
 	}
 }
 
+func TestIdentity_VerifyEmailSignature_SESTrailingCRLF(t *testing.T) {
+	// Simulates the SES mutation scenario: body is signed without trailing CRLF,
+	// but the received body has "\r\n" appended by SES in transit.
+	pubB64, privB64 := makeTestKeys(t)
+
+	body := "Hello bob, this is a signed email from alice."
+	sigB64, err := kmaws.SignEmailBody(privB64, body)
+	if err != nil {
+		t.Fatalf("SignEmailBody returned error: %v", err)
+	}
+
+	// Simulate SES appending trailing CRLF to the received body.
+	receivedBody := body + "\r\n"
+	err = kmaws.VerifyEmailSignature(pubB64, receivedBody, sigB64)
+	if err != nil {
+		t.Errorf("VerifyEmailSignature failed with SES trailing CRLF: %v", err)
+	}
+}
+
+func TestIdentity_VerifyEmailSignature_MixedLineEndings(t *testing.T) {
+	// Verifying a body whose line endings differ from the signed body should succeed
+	// because canonicalization normalizes all variants to \n before comparing.
+	pubB64, privB64 := makeTestKeys(t)
+
+	bodyLF := "line one\nline two\nline three"
+	sigB64, err := kmaws.SignEmailBody(privB64, bodyLF)
+	if err != nil {
+		t.Fatalf("SignEmailBody returned error: %v", err)
+	}
+
+	bodyCRLF := "line one\r\nline two\r\nline three"
+	err = kmaws.VerifyEmailSignature(pubB64, bodyCRLF, sigB64)
+	if err != nil {
+		t.Errorf("VerifyEmailSignature failed with CRLF line endings: %v", err)
+	}
+}
+
 // ============================================================
 // SendSignedEmail tests
 // ============================================================
