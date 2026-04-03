@@ -755,7 +755,7 @@ Plans:
 **Goal:** Profiles can specify root volume sizing, optional additional EBS volumes with auto-mount, hibernation for on-demand instances, and loose AMI slugs resolved per-region -- extending the EC2 provisioning pipeline from schema through compiler to Terraform
 **Requirements**: P33-01, P33-02, P33-03, P33-04, P33-05, P33-06, P33-07, P33-08
 **Depends on:** Phase 32
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 - [ ] 33-01-PLAN.md — Profile types, JSON schema, and semantic validation tests for storage/AMI fields (TDD)
