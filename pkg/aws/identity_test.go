@@ -961,7 +961,7 @@ func TestMultipart_OneAttachment(t *testing.T) {
 		context.Background(),
 		sesMock, ssmMock, dynMock,
 		"from@example.com", "to@example.com", "Subject", "Body text",
-		"sb-mp-att01", "sb-recip-att01", "km-identities", "off", attachments,
+		"sb-mp-att01", "sb-recip-att01", "km-identities", "off", &kmaws.EmailOptions{Attachments: attachments},
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail with 1 attachment returned error: %v", err)
@@ -995,7 +995,7 @@ func TestMultipart_TwoAttachments(t *testing.T) {
 		context.Background(),
 		sesMock, ssmMock, dynMock,
 		"from@example.com", "to@example.com", "Subject", "Body",
-		"sb-mp-att02", "sb-recip-att02", "km-identities", "off", attachments,
+		"sb-mp-att02", "sb-recip-att02", "km-identities", "off", &kmaws.EmailOptions{Attachments: attachments},
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail with 2 attachments returned error: %v", err)
@@ -1038,7 +1038,7 @@ func TestMultipart_SignatureCoversBodyOnly(t *testing.T) {
 		context.Background(),
 		sesMock, ssmMock, dynMock,
 		"from@example.com", "to@example.com", "Subject", body,
-		"sb-mp-sig01", "sb-recip-sig01", "km-identities", "off", attachments,
+		"sb-mp-sig01", "sb-recip-sig01", "km-identities", "off", &kmaws.EmailOptions{Attachments: attachments},
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail (multipart, signature test) returned error: %v", err)
@@ -1096,7 +1096,7 @@ func TestMultipart_RoundTrip(t *testing.T) {
 		sesMock, ssmMock, dynMock,
 		"from@example.com", "to@example.com", "Round-trip subject", body,
 		"sb-rt01", "sb-rt-recv01", "km-identities", "off",
-		[]kmaws.Attachment{att1, att2},
+		&kmaws.EmailOptions{Attachments: []kmaws.Attachment{att1, att2}},
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail (round-trip) returned error: %v", err)

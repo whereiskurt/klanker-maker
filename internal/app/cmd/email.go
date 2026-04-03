@@ -103,18 +103,21 @@ func newEmailSendCmd(cfg *config.Config, deps *EmailSendDeps) *cobra.Command {
 	var subjectFlag string
 	var bodyFlag string
 	var attachFlag string
+	var ccFlag string
+	var useBCC bool
+	var replyToFlag string
 
 	send := &cobra.Command{
 		Use:          "send",
 		Short:        "Send a signed email from one sandbox to another",
-		Long:         "Send a signed (and optionally encrypted) email from a sender sandbox to a recipient sandbox.\nBody can be a file path or - for stdin. Attachments are comma-separated file paths.",
+		Long:         "Send a signed (and optionally encrypted) email from a sender sandbox to a recipient sandbox.\nBody can be a file path or - for stdin. Attachments are comma-separated file paths.\n\n--cc adds visible CC recipients. --use-bcc silently BCCs the operator email.\n--reply-to sets the Reply-To header.",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			if ctx == nil {
 				ctx = context.Background()
 			}
-			return runEmailSend(ctx, cfg, deps, fromFlag, toFlag, subjectFlag, bodyFlag, attachFlag, cmd.OutOrStdout())
+			return runEmailSend(ctx, cfg, deps, fromFlag, toFlag, subjectFlag, bodyFlag, attachFlag, ccFlag, useBCC, replyToFlag, cmd.OutOrStdout())
 		},
 	}
 
@@ -123,6 +126,9 @@ func newEmailSendCmd(cfg *config.Config, deps *EmailSendDeps) *cobra.Command {
 	send.Flags().StringVar(&subjectFlag, "subject", "", "Email subject line (required)")
 	send.Flags().StringVar(&bodyFlag, "body", "", "Path to body file, or - for stdin (required)")
 	send.Flags().StringVar(&attachFlag, "attach", "", "Comma-separated list of attachment file paths")
+	send.Flags().StringVar(&ccFlag, "cc", "", "Comma-separated CC recipients (visible to all)")
+	send.Flags().BoolVar(&useBCC, "use-bcc", false, "BCC the operator email address on this message")
+	send.Flags().StringVar(&replyToFlag, "reply-to", "", "Set Reply-To header")
 
 	_ = send.MarkFlagRequired("from")
 	_ = send.MarkFlagRequired("to")
@@ -133,7 +139,7 @@ func newEmailSendCmd(cfg *config.Config, deps *EmailSendDeps) *cobra.Command {
 }
 
 // runEmailSend executes the km email send logic.
-func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, from, to, subject, bodyPath, attachCSV string, out io.Writer) error {
+func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, from, to, subject, bodyPath, attachCSV, ccCSV string, useBCC bool, replyTo string, out io.Writer) error {
 	// Resolve --from and --to: supports sandbox IDs, aliases, or numbers from km list.
 	resolveID := func(ctx context.Context, ref string) (string, error) {
 		if deps != nil && deps.ResolveID != nil {
@@ -215,6 +221,27 @@ func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, 
 	}
 	// If fetch fails or no record, proceed with empty policy (no encryption).
 
+	// Build email options: CC, BCC, Reply-To, attachments.
+	emailOpts := &kmaws.EmailOptions{
+		Attachments: attachments,
+		ReplyTo:     replyTo,
+	}
+	if ccCSV != "" {
+		for _, addr := range strings.Split(ccCSV, ",") {
+			addr = strings.TrimSpace(addr)
+			if addr != "" {
+				emailOpts.CC = append(emailOpts.CC, addr)
+			}
+		}
+	}
+	if useBCC {
+		operatorEmail := cfg.OperatorEmail
+		if operatorEmail == "" {
+			return fmt.Errorf("--use-bcc requires operator email: set operator_email in km-config.yaml or KM_OPERATOR_EMAIL env var")
+		}
+		emailOpts.BCC = append(emailOpts.BCC, operatorEmail)
+	}
+
 	// Send the email.
 	if err := kmaws.SendSignedEmail(
 		ctx,
@@ -223,7 +250,7 @@ func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, 
 		identityClient,
 		fromEmail, toEmail, subject, body,
 		from, to, tableName, encryptionPolicy,
-		attachments,
+		emailOpts,
 	); err != nil {
 		return fmt.Errorf("send email: %w", err)
 	}

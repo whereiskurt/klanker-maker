@@ -142,6 +142,9 @@ export KM_SANDBOX_HOSTNAME="${SANDBOX_FQDN}"
 export KM_SANDBOX_DOMAIN="{{ .EmailDomain }}"
 export KM_SANDBOX_EMAIL="{{ .SandboxEmail }}"
 export KM_SANDBOX_FROM_EMAIL="{{ .SandboxEmail }}"
+{{- if .OperatorEmail }}
+export KM_OPERATOR_EMAIL="{{ .OperatorEmail }}"
+{{- end }}
 {{- if .Alias }}
 export KM_SANDBOX_ALIAS="{{ .Alias }}"
 export KM_ALIAS_EMAIL="{{ .AliasEmail }}"
@@ -521,28 +524,36 @@ chmod +x /opt/km/bin/km-mail-poller
 cat > /opt/km/bin/km-send << 'KMSEND'
 #!/bin/bash
 # km-send — send a signed email from inside a sandbox
-# Usage: km-send --to <addr> --subject <subject> [--body <file>] [--attach file1,file2,...] [message on stdin]
+# Usage: km-send --to <addr> --subject <subject> [--body <file>] [--attach file1,file2,...]
+#                [--cc addr1,addr2,...] [--use-bcc] [--reply-to <addr>] [message on stdin]
 set -euo pipefail
 
 TO=""
 SUBJECT=""
 BODY_FILE=""
 ATTACH_CSV=""
+CC_CSV=""
+USE_BCC=false
+REPLY_TO=""
 
 usage() {
   echo "Usage: km-send --to <addr> --subject <subject> [--body <file>] [--attach file1,file2,...]" >&2
+  echo "       [--cc addr1,addr2,...] [--use-bcc] [--reply-to <addr>]" >&2
   exit 1
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --to)       TO="$2";       shift 2 ;;
-    --subject)  SUBJECT="$2";  shift 2 ;;
-    --body)     BODY_FILE="$2"; shift 2 ;;
-    --attach)   ATTACH_CSV="$2"; shift 2 ;;
-    --)         shift; break ;;
-    -*)         echo "[km-send] Unknown option: $1" >&2; usage ;;
-    *)          break ;;
+    --to)        TO="$2";        shift 2 ;;
+    --subject)   SUBJECT="$2";   shift 2 ;;
+    --body)      BODY_FILE="$2"; shift 2 ;;
+    --attach)    ATTACH_CSV="$2"; shift 2 ;;
+    --cc)        CC_CSV="$2";    shift 2 ;;
+    --use-bcc)   USE_BCC=true;   shift ;;
+    --reply-to)  REPLY_TO="$2";  shift 2 ;;
+    --)          shift; break ;;
+    -*)          echo "[km-send] Unknown option: $1" >&2; usage ;;
+    *)           break ;;
   esac
 done
 
@@ -598,6 +609,7 @@ ed25519_privkey_to_pem() {
 
 # ------------------------------------------------------------------
 # build_mime: assemble a MIME message (single-part or multipart/mixed)
+# Uses globals: CC_CSV, REPLY_TO
 # Returns path to the temp MIME file.
 # ------------------------------------------------------------------
 build_mime() {
@@ -610,16 +622,23 @@ build_mime() {
   local date_str
   date_str=$(date -R)
 
+  # Helper: emit common headers (From, To, Cc, Reply-To, Subject, Date, X-KM-*)
+  emit_headers() {
+    printf 'From: %s\r\n' "$from"
+    printf 'To: %s\r\n' "$to"
+    [[ -n "$CC_CSV" ]] && printf 'Cc: %s\r\n' "$CC_CSV"
+    [[ -n "$REPLY_TO" ]] && printf 'Reply-To: %s\r\n' "$REPLY_TO"
+    printf 'Subject: %s\r\n' "$subject"
+    printf 'Date: %s\r\n' "$date_str"
+    printf 'X-KM-Sender-ID: %s\r\n' "$sender_id"
+    printf 'X-KM-Signature: %s\r\n' "$signature"
+    printf 'MIME-Version: 1.0\r\n'
+  }
+
   if [[ ${#attach_files[@]} -eq 0 ]]; then
     # Single-part text/plain
     {
-      printf 'From: %s\r\n' "$from"
-      printf 'To: %s\r\n' "$to"
-      printf 'Subject: %s\r\n' "$subject"
-      printf 'Date: %s\r\n' "$date_str"
-      printf 'X-KM-Sender-ID: %s\r\n' "$sender_id"
-      printf 'X-KM-Signature: %s\r\n' "$signature"
-      printf 'MIME-Version: 1.0\r\n'
+      emit_headers
       printf 'Content-Type: text/plain; charset=UTF-8\r\n'
       printf 'Content-Transfer-Encoding: 8bit\r\n'
       printf '\r\n'
@@ -629,13 +648,7 @@ build_mime() {
     # Multipart/mixed
     local boundary="=_km_$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
     {
-      printf 'From: %s\r\n' "$from"
-      printf 'To: %s\r\n' "$to"
-      printf 'Subject: %s\r\n' "$subject"
-      printf 'Date: %s\r\n' "$date_str"
-      printf 'X-KM-Sender-ID: %s\r\n' "$sender_id"
-      printf 'X-KM-Signature: %s\r\n' "$signature"
-      printf 'MIME-Version: 1.0\r\n'
+      emit_headers
       printf 'Content-Type: multipart/mixed; boundary="%s"\r\n' "$boundary"
       printf '\r\n'
       printf '--%s\r\n' "$boundary"
@@ -692,9 +705,22 @@ MIME_FILE=$(build_mime "$FROM" "$TO" "$SUBJECT" "$SENDER_ID" "$SIGNATURE" "$BODY
 # Send via SES raw email
 # ------------------------------------------------------------------
 MIME_B64=$(base64 -w0 < "$MIME_FILE")
+
+# Build SES destination: To + optional CC + optional BCC (operator email)
+SES_DEST="ToAddresses=$TO"
+[[ -n "$CC_CSV" ]] && SES_DEST="${SES_DEST},CcAddresses=$CC_CSV"
+if $USE_BCC; then
+  BCC_ADDR="${KM_OPERATOR_EMAIL:-}"
+  if [[ -n "$BCC_ADDR" ]]; then
+    SES_DEST="${SES_DEST},BccAddresses=$BCC_ADDR"
+  else
+    echo "[km-send] WARN: --use-bcc but KM_OPERATOR_EMAIL not set, skipping BCC" >&2
+  fi
+fi
+
 aws sesv2 send-email \
   --from-email-address "$FROM" \
-  --destination "ToAddresses=$TO" \
+  --destination "$SES_DEST" \
   --content "Raw={Data=$MIME_B64}"
 
 echo "[km-send] Sent signed email to $TO (sig: ${SIGNATURE:0:12}...)"

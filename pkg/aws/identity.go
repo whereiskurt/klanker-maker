@@ -72,6 +72,14 @@ type IdentityRecord struct {
 	AllowedSenders         []string // allow-list patterns (nil if not configured)
 }
 
+// EmailOptions holds optional parameters for SendSignedEmail to avoid parameter bloat.
+type EmailOptions struct {
+	Attachments []Attachment // file attachments (nil or empty for single-part)
+	CC          []string     // visible CC recipients (included in MIME Cc: header and SES CcAddresses)
+	BCC         []string     // blind CC recipients (SES BccAddresses only, not in MIME headers)
+	ReplyTo     string       // Reply-To header value (if non-empty, added to MIME headers)
+}
+
 // Attachment represents a file attachment to be included in a multipart MIME email.
 // Filename is used as the Content-Disposition filename parameter.
 // Data is the raw (unencoded) attachment bytes; buildRawMIME will base64-encode them.
@@ -474,7 +482,10 @@ func DecryptFromSender(privKey *[32]byte, pubKey *[32]byte, ciphertext []byte) (
 //     - "off" or "": skips all encryption, no DynamoDB fetch
 //  3. Signs the (possibly encrypted) body with Ed25519 — signature covers body only, not attachments
 //  4. Constructs raw MIME bytes with X-KM-Signature, X-KM-Sender-ID, optionally X-KM-Encrypted.
-//     When attachments is non-empty, the message is multipart/mixed.
+//     When opts.Attachments is non-empty, the message is multipart/mixed.
+//     When opts.CC is non-empty, Cc: header is added and SES CcAddresses are set.
+//     When opts.BCC is non-empty, SES BccAddresses are set (no MIME header).
+//     When opts.ReplyTo is non-empty, Reply-To: header is added.
 //  5. Sends via SES Content.Raw (not Content.Simple — Simple does not support custom headers)
 //
 // Parameters:
@@ -486,7 +497,7 @@ func DecryptFromSender(privKey *[32]byte, pubKey *[32]byte, ciphertext []byte) (
 //   - recipientSandboxID: recipient's sandbox ID for DynamoDB identity lookup
 //   - tableName: DynamoDB identities table name
 //   - encryptionPolicy: "required" | "optional" | "off" | ""
-//   - attachments: optional file attachments; nil or empty for single-part message
+//   - opts: optional CC, BCC, Reply-To, and attachments (nil for defaults)
 func SendSignedEmail(
 	ctx context.Context,
 	sesClient SESV2API,
@@ -494,8 +505,11 @@ func SendSignedEmail(
 	identityClient IdentityTableAPI,
 	from, to, subject, body string,
 	sandboxID, recipientSandboxID, tableName, encryptionPolicy string,
-	attachments []Attachment,
+	opts *EmailOptions,
 ) error {
+	if opts == nil {
+		opts = &EmailOptions{}
+	}
 	// Step 1: Read signing key from SSM
 	keyPath := signingKeyPath(sandboxID)
 	ssmOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
@@ -555,14 +569,22 @@ func SendSignedEmail(
 	}
 
 	// Step 4: Construct raw MIME message
-	mime := buildRawMIME(from, to, subject, bodyToSign, sandboxID, sigB64, encrypted, attachments)
+	mime := buildRawMIME(from, to, subject, bodyToSign, sandboxID, sigB64, encrypted, opts)
 
 	// Step 5: Send via SES Content.Raw
+	dest := &sesv2types.Destination{
+		ToAddresses: []string{to},
+	}
+	if len(opts.CC) > 0 {
+		dest.CcAddresses = opts.CC
+	}
+	if len(opts.BCC) > 0 {
+		dest.BccAddresses = opts.BCC
+	}
+
 	_, err = sesClient.SendEmail(ctx, &sesv2.SendEmailInput{
 		FromEmailAddress: awssdk.String(from),
-		Destination: &sesv2types.Destination{
-			ToAddresses: []string{to},
-		},
+		Destination:      dest,
 		Content: &sesv2types.EmailContent{
 			Raw: &sesv2types.RawMessage{
 				Data: []byte(mime),
@@ -580,18 +602,31 @@ func SendSignedEmail(
 // Custom headers X-KM-Signature and X-KM-Sender-ID are only supported via
 // Content.Raw — SES Simple message type strips unknown headers.
 //
-// When attachments is nil or empty, a single-part text/plain message is produced
+// When opts.Attachments is nil or empty, a single-part text/plain message is produced
 // (backward-compatible behavior). When attachments is non-empty, the message is
 // multipart/mixed with the text body as part 1 and each attachment as a subsequent
 // application/octet-stream part with base64 Content-Transfer-Encoding.
 //
+// CC addresses appear in the Cc: MIME header (visible to all recipients).
+// BCC is handled at the SES Destination level only — not in MIME headers.
+// Reply-To is added as a Reply-To: MIME header when non-empty.
+//
 // The signature (X-KM-Signature) always covers only the text body, not attachments.
-func buildRawMIME(from, to, subject, body, senderID, sigB64 string, encrypted bool, attachments []Attachment) string {
+func buildRawMIME(from, to, subject, body, senderID, sigB64 string, encrypted bool, opts *EmailOptions) string {
+	if opts == nil {
+		opts = &EmailOptions{}
+	}
 	var sb strings.Builder
 
 	// Top-level headers present in both single-part and multipart messages.
 	sb.WriteString(fmt.Sprintf("From: %s\r\n", from))
 	sb.WriteString(fmt.Sprintf("To: %s\r\n", to))
+	if len(opts.CC) > 0 {
+		sb.WriteString(fmt.Sprintf("Cc: %s\r\n", strings.Join(opts.CC, ", ")))
+	}
+	if opts.ReplyTo != "" {
+		sb.WriteString(fmt.Sprintf("Reply-To: %s\r\n", opts.ReplyTo))
+	}
 	sb.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
 	sb.WriteString(fmt.Sprintf("X-KM-Sender-ID: %s\r\n", senderID))
 	sb.WriteString(fmt.Sprintf("X-KM-Signature: %s\r\n", sigB64))
@@ -600,7 +635,7 @@ func buildRawMIME(from, to, subject, body, senderID, sigB64 string, encrypted bo
 	}
 	sb.WriteString("MIME-Version: 1.0\r\n")
 
-	if len(attachments) == 0 {
+	if len(opts.Attachments) == 0 {
 		// Single-part text/plain — original behavior.
 		sb.WriteString("Content-Type: text/plain; charset=\"UTF-8\"\r\n")
 		sb.WriteString("\r\n")
@@ -622,7 +657,7 @@ func buildRawMIME(from, to, subject, body, senderID, sigB64 string, encrypted bo
 	sb.WriteString("\r\n")
 
 	// Remaining parts: one per attachment.
-	for _, att := range attachments {
+	for _, att := range opts.Attachments {
 		sb.WriteString(fmt.Sprintf("--%s\r\n", boundary))
 		sb.WriteString("Content-Type: application/octet-stream\r\n")
 		sb.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\r\n", att.Filename))
