@@ -1280,6 +1280,63 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 		}
 	}
 
+	// Step D10.5: Provision sandbox identity (Ed25519 signing key + DynamoDB public key).
+	// Non-fatal: sandbox is provisioned even if identity setup fails.
+	// Only runs when profile has an email section (email policy configured).
+	if resolvedProfile.Spec.Email != nil {
+		identitySSMClient := ssm.NewFromConfig(awsCfg)
+		kmsKeyAlias := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
+		if kmsKeyAlias == "" {
+			kmsKeyAlias = "alias/km-platform"
+		}
+
+		pubKey, identErr := awspkg.GenerateSandboxIdentity(ctx, identitySSMClient, sandboxID, kmsKeyAlias)
+		if identErr != nil {
+			log.Warn().Err(identErr).Str("sandbox_id", sandboxID).
+				Msg("failed to provision sandbox identity (non-fatal)")
+		} else {
+			// Conditionally generate X25519 encryption key if profile requires/allows encryption.
+			var encPubKey *[32]byte
+			enc := resolvedProfile.Spec.Email.Encryption
+			if enc == "optional" || enc == "required" {
+				encPubKey, identErr = awspkg.GenerateEncryptionKey(ctx, identitySSMClient, sandboxID, kmsKeyAlias)
+				if identErr != nil {
+					log.Warn().Err(identErr).Str("sandbox_id", sandboxID).
+						Msg("failed to generate encryption key (non-fatal — signing key still published)")
+				}
+			}
+
+			// Publish identity to DynamoDB.
+			// Derive email domain the same way as Step 13 in the main create path.
+			dockerBaseDomain := cfg.Domain
+			if dockerBaseDomain == "" {
+				dockerBaseDomain = os.Getenv("KM_EMAIL_DOMAIN")
+			}
+			if dockerBaseDomain == "" {
+				dockerBaseDomain = "klankermaker.ai"
+			}
+			emailDomain := "sandboxes." + dockerBaseDomain
+			identityTableName := cfg.IdentityTableName
+			if identityTableName == "" {
+				identityTableName = "km-identities"
+			}
+			identityEmailAddr := fmt.Sprintf("%s@%s", sandboxID, emailDomain)
+			dynamoIdentClient := dynamodbpkg.NewFromConfig(awsCfg)
+			signing := resolvedProfile.Spec.Email.Signing
+			verifyInbound := resolvedProfile.Spec.Email.VerifyInbound
+			encryption := resolvedProfile.Spec.Email.Encryption
+			alias := resolvedProfile.Spec.Email.Alias
+			allowedSenders := resolvedProfile.Spec.Email.AllowedSenders
+			if pubErr := awspkg.PublishIdentity(ctx, dynamoIdentClient, identityTableName, sandboxID, identityEmailAddr, pubKey, encPubKey, signing, verifyInbound, encryption, alias, allowedSenders); pubErr != nil {
+				log.Warn().Err(pubErr).Str("sandbox_id", sandboxID).
+					Msg("failed to publish identity to DynamoDB (non-fatal)")
+			} else {
+				log.Info().Str("sandbox_id", sandboxID).Msg("sandbox identity provisioned and published")
+				fmt.Printf("  ✓ Identity: Ed25519 key pair provisioned\n")
+			}
+		}
+	}
+
 	// Step D11: Print success banner.
 	elapsed := time.Since(createStart).Round(time.Second)
 	fmt.Println()

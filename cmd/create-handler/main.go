@@ -30,8 +30,10 @@ import (
 	awsdynamodb "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/rs/zerolog/log"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klankrmkr/pkg/profile"
 )
 
 // errExecFailed is a sentinel error used by RunCommand in tests to simulate subprocess failure.
@@ -66,12 +68,15 @@ type DynamoAPI = awspkg.SandboxMetadataAPI
 
 // CreateHandler holds injected dependencies for testability.
 type CreateHandler struct {
-	S3Client     S3GetAPI
-	SESClient    SESV2API
-	DynamoClient DynamoAPI
-	TableName    string // DynamoDB sandbox metadata table (default: "km-sandboxes")
-	Domain       string
-	ToolchainDir string // directory containing km, terraform, terragrunt binaries + infra/
+	S3Client          S3GetAPI
+	SESClient         SESV2API
+	DynamoClient      DynamoAPI
+	SSMClient         awspkg.IdentitySSMAPI  // for identity key generation
+	IdentityClient    awspkg.IdentityTableAPI // for publishing identity to DynamoDB
+	TableName         string                  // DynamoDB sandbox metadata table (default: "km-sandboxes")
+	IdentityTableName string                  // DynamoDB identity table (default: "km-identities")
+	Domain            string
+	ToolchainDir      string // directory containing km, terraform, terragrunt binaries + infra/
 	// RunCommand is called to execute the km create subprocess.
 	// When nil, defaults to execRunCommand (os/exec-based).
 	RunCommand RunCommandFunc
@@ -194,6 +199,73 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 
 	log.Info().Str("sandbox_id", event.SandboxID).Str("output", string(out)).
 		Msg("km create subprocess succeeded")
+
+	// Step 5: Provision sandbox identity (Ed25519 signing key + DynamoDB public key).
+	// Non-fatal: sandbox is already provisioned — identity failure does not break the sandbox.
+	// Only runs when SSM and identity DynamoDB clients are wired up and the profile has an email section.
+	// Note: km create subprocess (Step 4) already runs this via Step 15 in runCreate. This step
+	// provides belt-and-suspenders coverage for cases where the subprocess identity step fails
+	// (e.g., SSM permissions not yet propagated at subprocess time).
+	if h.SSMClient != nil && h.IdentityClient != nil {
+		parsedProfile, profileErr := profile.Parse(profileBytes)
+		if profileErr != nil {
+			log.Warn().Err(profileErr).Str("sandbox_id", event.SandboxID).
+				Msg("failed to parse profile for identity generation (non-fatal)")
+		} else if parsedProfile.Spec.Email != nil {
+			kmsKeyAlias := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
+			if kmsKeyAlias == "" {
+				kmsKeyAlias = "alias/km-platform"
+			}
+
+			pubKey, identErr := awspkg.GenerateSandboxIdentity(ctx, h.SSMClient, event.SandboxID, kmsKeyAlias)
+			if identErr != nil {
+				log.Warn().Err(identErr).Str("sandbox_id", event.SandboxID).
+					Msg("failed to provision sandbox identity (non-fatal)")
+			} else {
+				// Conditionally generate X25519 encryption key if profile requires/allows encryption.
+				var encPubKey *[32]byte
+				enc := parsedProfile.Spec.Email.Encryption
+				if enc == "optional" || enc == "required" {
+					encPubKey, identErr = awspkg.GenerateEncryptionKey(ctx, h.SSMClient, event.SandboxID, kmsKeyAlias)
+					if identErr != nil {
+						log.Warn().Err(identErr).Str("sandbox_id", event.SandboxID).
+							Msg("failed to generate encryption key (non-fatal — signing key still published)")
+					}
+				}
+
+				// Derive email domain from environment (same logic as km create Step 13).
+				emailDomain := os.Getenv("KM_EMAIL_DOMAIN")
+				if emailDomain == "" {
+					emailDomain = h.Domain
+				}
+				if emailDomain == "" {
+					emailDomain = "sandboxes.klankermaker.ai"
+				}
+				// Ensure domain has "sandboxes." prefix when a bare domain is provided.
+				if !strings.HasPrefix(emailDomain, "sandboxes.") {
+					emailDomain = "sandboxes." + emailDomain
+				}
+
+				identityTableName := h.IdentityTableName
+				if identityTableName == "" {
+					identityTableName = "km-identities"
+				}
+				identityEmailAddr := fmt.Sprintf("%s@%s", event.SandboxID, emailDomain)
+				signing := parsedProfile.Spec.Email.Signing
+				verifyInbound := parsedProfile.Spec.Email.VerifyInbound
+				encryption := parsedProfile.Spec.Email.Encryption
+				alias := parsedProfile.Spec.Email.Alias
+				allowedSenders := parsedProfile.Spec.Email.AllowedSenders
+				if pubErr := awspkg.PublishIdentity(ctx, h.IdentityClient, identityTableName, event.SandboxID, identityEmailAddr, pubKey, encPubKey, signing, verifyInbound, encryption, alias, allowedSenders); pubErr != nil {
+					log.Warn().Err(pubErr).Str("sandbox_id", event.SandboxID).
+						Msg("failed to publish identity to DynamoDB (non-fatal)")
+				} else {
+					log.Info().Str("sandbox_id", event.SandboxID).Msg("sandbox identity provisioned and published")
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -362,13 +434,22 @@ func main() {
 		tableName = "km-sandboxes"
 	}
 
+	identityTableName := os.Getenv("KM_IDENTITY_TABLE")
+	if identityTableName == "" {
+		identityTableName = "km-identities"
+	}
+
+	dynClient := awsdynamodb.NewFromConfig(awsCfg)
 	h := &CreateHandler{
-		S3Client:     s3.NewFromConfig(awsCfg),
-		SESClient:    sesv2.NewFromConfig(awsCfg),
-		DynamoClient: awsdynamodb.NewFromConfig(awsCfg),
-		TableName:    tableName,
-		Domain:       domain,
-		ToolchainDir: toolchainDir,
+		S3Client:          s3.NewFromConfig(awsCfg),
+		SESClient:         sesv2.NewFromConfig(awsCfg),
+		DynamoClient:      dynClient,
+		SSMClient:         ssm.NewFromConfig(awsCfg),
+		IdentityClient:    dynClient,
+		TableName:         tableName,
+		IdentityTableName: identityTableName,
+		Domain:            domain,
+		ToolchainDir:      toolchainDir,
 	}
 
 	lambdaruntime.Start(h.Handle)
