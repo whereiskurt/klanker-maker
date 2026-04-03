@@ -43,6 +43,7 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		cgroupPath   string
 		enableTLS    bool
 		allowedRepos string
+		httpProxyPID uint32
 	)
 
 	cmd := &cobra.Command{
@@ -53,7 +54,7 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runEbpfAttach(sandboxID, dnsPort, httpPort, firewallMode,
 				allowedDNS, allowedHosts, proxyHosts, cgroupPath,
-				enableTLS, allowedRepos)
+				enableTLS, allowedRepos, httpProxyPID)
 		},
 	}
 
@@ -76,6 +77,8 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		"Enable TLS uprobe observability (attaches to libssl.so.3)")
 	cmd.Flags().StringVar(&allowedRepos, "allowed-repos", "",
 		"Comma-separated list of allowed GitHub repos (owner/repo)")
+	cmd.Flags().Uint32Var(&httpProxyPID, "proxy-pid", 0,
+		"PID of the HTTP proxy process to exempt from BPF interception (gatekeeper mode); 0 = disabled")
 
 	return cmd
 }
@@ -94,13 +97,16 @@ func parseFirewallMode(mode string) (uint16, error) {
 	}
 }
 
-// ipToUint32 converts an IPv4 address to a uint32 in network byte order.
+// ipToUint32 converts an IPv4 address to a uint32 matching how the kernel
+// stores network-byte-order IP bytes as a native __u32. On x86 (LE),
+// 127.0.0.1 in NBO bytes {0x7f,0x00,0x00,0x01} becomes __u32 = 0x0100007f.
+// This is needed because BPF ctx->user_ip4 uses this representation.
 func ipToUint32(ip net.IP) uint32 {
 	ip4 := ip.To4()
 	if ip4 == nil {
 		return 0
 	}
-	return binary.BigEndian.Uint32(ip4)
+	return binary.NativeEndian.Uint32(ip4)
 }
 
 func runEbpfAttach(
@@ -111,6 +117,7 @@ func runEbpfAttach(
 	cgroupOverride string,
 	enableTLS bool,
 	allowedRepos string,
+	httpProxyPID uint32,
 ) error {
 	logger := log.With().Str("sandbox_id", sandboxID).Logger()
 
@@ -128,8 +135,16 @@ func runEbpfAttach(
 		HTTPProxyPort:  httpPort,
 		HTTPSProxyPort: httpPort,
 		ProxyPID:       uint32(os.Getpid()),
+		HTTPProxyPID:   httpProxyPID,
 		FirewallMode:   fwMode,
 		MITMProxyAddr:  mitmAddr,
+	}
+
+	// In block mode, the HTTP proxy must be exempt or its outbound connections
+	// to allowed hosts get redirected back to itself (infinite redirect loop).
+	// Warn if --proxy-pid is not set in block mode.
+	if httpProxyPID == 0 && fwMode == ebpf.ModeBlock {
+		logger.Warn().Msg("no --proxy-pid set in block mode; HTTP proxy may experience redirect loops")
 	}
 
 	logger.Info().
@@ -234,12 +249,28 @@ func runEbpfAttach(
 		}
 	}
 
+	// Build proxy host set for seeding — IPs of these hosts also get MarkForProxy.
+	proxyHostSet := make(map[string]bool, len(proxyHostList))
+	for _, ph := range proxyHostList {
+		proxyHostSet[strings.ToLower(strings.TrimPrefix(ph, "."))] = true
+	}
+
 	seeded := 0
+	proxyMarked := 0
 	for _, host := range hostsToResolve {
 		ips, err := net.LookupHost(host)
 		if err != nil {
 			// Suffix entries like "amazonaws.com" won't resolve directly — that's fine
 			continue
+		}
+		// Check if host matches any proxy host (exact or suffix).
+		needsProxy := false
+		hostLower := strings.ToLower(host)
+		for ph := range proxyHostSet {
+			if hostLower == ph || strings.HasSuffix(hostLower, "."+ph) {
+				needsProxy = true
+				break
+			}
 		}
 		for _, ipStr := range ips {
 			ip := net.ParseIP(ipStr)
@@ -251,9 +282,16 @@ func runEbpfAttach(
 			} else {
 				seeded++
 			}
+			if needsProxy {
+				if err := enforcer.MarkForProxy(ip); err != nil {
+					logger.Warn().Err(err).Str("host", host).Str("ip", ipStr).Msg("failed to mark IP for proxy")
+				} else {
+					proxyMarked++
+				}
+			}
 		}
 	}
-	logger.Info().Int("seeded_ips", seeded).Int("hosts_resolved", len(hostsToResolve)).Msg("pre-seeded BPF allowlist from allowed hosts")
+	logger.Info().Int("seeded_ips", seeded).Int("proxy_marked", proxyMarked).Int("hosts_resolved", len(hostsToResolve)).Msg("pre-seeded BPF allowlist from allowed hosts")
 
 	// Start ring buffer audit consumer.
 	consumer, err := audit.NewConsumer(enforcer.Events(), sandboxID, logger)

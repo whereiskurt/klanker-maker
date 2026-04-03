@@ -694,8 +694,9 @@ func TestUserDataEnforcementEbpf(t *testing.T) {
 	}
 }
 
-// TestUserDataEnforcementBoth verifies that "both" enforcement produces both iptables
-// and eBPF sections.
+// TestUserDataEnforcementBoth verifies that "both" enforcement (gatekeeper mode) produces
+// eBPF enforcement with block mode, no iptables DNAT, and proxy env vars as belt-and-suspenders.
+// Updated in Phase 42: "both" mode now uses eBPF as primary enforcer (connect4 replaces iptables).
 func TestUserDataEnforcementBoth(t *testing.T) {
 	p := baseProfile()
 	p.Spec.Network.Enforcement = "both"
@@ -703,9 +704,9 @@ func TestUserDataEnforcementBoth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
-	// Both iptables and eBPF must be present
-	if !strings.Contains(out, "iptables -t nat") {
-		t.Error("expected iptables -t nat rules when enforcement is both")
+	// Gatekeeper mode: eBPF is primary enforcer (block mode)
+	if strings.Contains(out, "iptables -t nat") {
+		t.Error("expected NO iptables -t nat rules in gatekeeper both mode (connect4 replaces iptables)")
 	}
 	if !strings.Contains(out, "eBPF cgroup enforcement") {
 		t.Error("expected eBPF cgroup enforcement section when enforcement is both")
@@ -717,7 +718,7 @@ func TestUserDataEnforcementBoth(t *testing.T) {
 		t.Error("expected cgroup path km.slice when enforcement is both")
 	}
 	if !strings.Contains(out, "export HTTP_PROXY") {
-		t.Error("expected HTTP_PROXY env var when enforcement is both (proxy sidecars active)")
+		t.Error("expected HTTP_PROXY env var when enforcement is both (proxy env vars as belt-and-suspenders)")
 	}
 	// Pure eBPF-only message should NOT appear for "both"
 	if strings.Contains(out, "Pure eBPF mode") {
@@ -1010,5 +1011,225 @@ func TestDestroyNoEFSReference(t *testing.T) {
 		if strings.Contains(content, forbidden) {
 			t.Errorf("destroy.go must not contain %q (EFS-06: destroy has no EFS awareness)", forbidden)
 		}
+	}
+}
+
+// ============================================================
+// L7ProxyHosts derivation tests (42-01)
+// ============================================================
+
+// TestL7ProxyHostsWithGitHub verifies that a profile with sourceAccess.github
+// returns the four canonical GitHub domain suffixes for L7 proxy interception.
+func TestL7ProxyHostsWithGitHub(t *testing.T) {
+	p := baseProfile()
+	p.Spec.SourceAccess = profile.SourceAccessSpec{
+		GitHub: &profile.GitHubAccess{
+			AllowedRepos: []string{"myorg/myrepo"},
+		},
+	}
+	got := buildL7ProxyHosts(p)
+	want := "github.com,api.github.com,raw.githubusercontent.com,codeload.githubusercontent.com"
+	if got != want {
+		t.Errorf("buildL7ProxyHosts with GitHub: got %q, want %q", got, want)
+	}
+}
+
+// TestL7ProxyHostsWithBedrock verifies that a profile with useBedrock: true AND
+// GitHub sourceAccess returns all six domain suffixes (GitHub + Bedrock).
+func TestL7ProxyHostsWithBedrock(t *testing.T) {
+	p := baseProfile()
+	p.Spec.SourceAccess = profile.SourceAccessSpec{
+		GitHub: &profile.GitHubAccess{
+			AllowedRepos: []string{"myorg/myrepo"},
+		},
+	}
+	p.Spec.Execution.UseBedrock = true
+	got := buildL7ProxyHosts(p)
+	want := "github.com,api.github.com,raw.githubusercontent.com,codeload.githubusercontent.com,.amazonaws.com,api.anthropic.com"
+	if got != want {
+		t.Errorf("buildL7ProxyHosts with GitHub+Bedrock: got %q, want %q", got, want)
+	}
+}
+
+// TestL7ProxyHostsEmpty verifies that a profile with no GitHub sourceAccess and
+// no Bedrock returns an empty string (no L7 proxy hosts needed).
+func TestL7ProxyHostsEmpty(t *testing.T) {
+	p := baseProfile()
+	// No GitHub, no Bedrock
+	got := buildL7ProxyHosts(p)
+	if got != "" {
+		t.Errorf("buildL7ProxyHosts with no GitHub/Bedrock: got %q, want empty string", got)
+	}
+}
+
+// TestL7ProxyHostsBedrockOnly verifies that a profile with useBedrock: true but
+// no GitHub sourceAccess returns only the two Bedrock domain suffixes.
+func TestL7ProxyHostsBedrockOnly(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Execution.UseBedrock = true
+	got := buildL7ProxyHosts(p)
+	want := ".amazonaws.com,api.anthropic.com"
+	if got != want {
+		t.Errorf("buildL7ProxyHosts with Bedrock only: got %q, want %q", got, want)
+	}
+}
+
+// ============================================================
+// Phase 42 — eBPF gatekeeper mode: both-mode userdata tests
+// ============================================================
+
+// bothProfile returns a profile with Enforcement="both" and GitHub source access configured.
+func bothProfile() *profile.SandboxProfile {
+	p := baseProfile()
+	p.Spec.Network.Enforcement = "both"
+	p.Spec.SourceAccess = profile.SourceAccessSpec{
+		GitHub: &profile.GitHubAccess{
+			AllowedRepos: []string{"myorg/myrepo"},
+		},
+	}
+	return p
+}
+
+// TestBothModeGatekeeperFirewallBlock verifies both-mode uses --firewall-mode block (not log).
+func TestBothModeGatekeeperFirewallBlock(t *testing.T) {
+	out, err := generateUserData(bothProfile(), "sb-both-1", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "--firewall-mode block") {
+		t.Error("expected '--firewall-mode block' in both-mode userdata")
+	}
+	if strings.Contains(out, "--firewall-mode log") {
+		t.Error("expected '--firewall-mode log' to be absent in both-mode userdata")
+	}
+}
+
+// TestBothModeGatekeeperDNSPort53 verifies both-mode uses --dns-port 53 (not 0).
+func TestBothModeGatekeeperDNSPort53(t *testing.T) {
+	out, err := generateUserData(bothProfile(), "sb-both-2", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "--dns-port 53") {
+		t.Error("expected '--dns-port 53' in both-mode userdata")
+	}
+	if strings.Contains(out, "--dns-port 0") {
+		t.Error("expected '--dns-port 0' to be absent in both-mode userdata")
+	}
+}
+
+// TestBothModeGatekeeperNoDNSProxy verifies both-mode does NOT enable/start km-dns-proxy.
+func TestBothModeGatekeeperNoDNSProxy(t *testing.T) {
+	out, err := generateUserData(bothProfile(), "sb-both-3", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if strings.Contains(out, "enable km-dns-proxy") {
+		t.Error("expected 'enable km-dns-proxy' to be absent in both-mode userdata")
+	}
+	if strings.Contains(out, "start km-dns-proxy") {
+		t.Error("expected 'start km-dns-proxy' to be absent in both-mode userdata")
+	}
+}
+
+// TestBothModeGatekeeperNoIptables verifies both-mode does NOT emit iptables DNAT rules.
+func TestBothModeGatekeeperNoIptables(t *testing.T) {
+	out, err := generateUserData(bothProfile(), "sb-both-4", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if strings.Contains(out, "iptables -t nat") {
+		t.Error("expected 'iptables -t nat' to be absent in both-mode userdata (connect4 replaces iptables)")
+	}
+}
+
+// TestBothModeGatekeeperResolvConf verifies both-mode overrides resolv.conf to 127.0.0.1.
+func TestBothModeGatekeeperResolvConf(t *testing.T) {
+	out, err := generateUserData(bothProfile(), "sb-both-5", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "nameserver 127.0.0.1") {
+		t.Error("expected 'nameserver 127.0.0.1' resolv.conf override in both-mode userdata")
+	}
+}
+
+// TestBothModeGatekeeperProxyHosts verifies both-mode passes domain suffixes (not repo names) via --proxy-hosts.
+func TestBothModeGatekeeperProxyHosts(t *testing.T) {
+	out, err := generateUserData(bothProfile(), "sb-both-6", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "github.com") {
+		t.Error("expected 'github.com' domain suffix in both-mode --proxy-hosts")
+	}
+	if strings.Contains(out, "--proxy-hosts \"myorg/myrepo\"") {
+		t.Error("expected --proxy-hosts to NOT contain repo names in both-mode userdata")
+	}
+}
+
+// TestBothModeGatekeeperProxyPID verifies both-mode passes --proxy-pid and references http-proxy.pid.
+func TestBothModeGatekeeperProxyPID(t *testing.T) {
+	out, err := generateUserData(bothProfile(), "sb-both-7", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "--proxy-pid") {
+		t.Error("expected '--proxy-pid' in both-mode userdata enforcer ExecStart")
+	}
+	if !strings.Contains(out, "http-proxy.pid") {
+		t.Error("expected 'http-proxy.pid' PID file reference in both-mode userdata")
+	}
+}
+
+// TestBothModeGatekeeperKeepsProxyEnvVars verifies both-mode still sets HTTP_PROXY/HTTPS_PROXY env vars.
+func TestBothModeGatekeeperKeepsProxyEnvVars(t *testing.T) {
+	out, err := generateUserData(bothProfile(), "sb-both-8", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "HTTPS_PROXY") && !strings.Contains(out, "https_proxy") {
+		t.Error("expected HTTPS_PROXY or https_proxy env var in both-mode userdata (belt-and-suspenders)")
+	}
+}
+
+// TestProxyModeUnchanged verifies proxy mode still uses iptables, km-dns-proxy, and firewall-mode log.
+func TestProxyModeUnchanged(t *testing.T) {
+	p := baseProfile()
+	// Default enforcement is proxy (empty string defaults to proxy in generateUserData)
+	out, err := generateUserData(p, "sb-proxy-1", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "iptables -t nat") {
+		t.Error("expected 'iptables -t nat' in proxy-mode userdata")
+	}
+	if !strings.Contains(out, "km-dns-proxy") {
+		t.Error("expected 'km-dns-proxy' in proxy-mode userdata")
+	}
+	if strings.Contains(out, "--firewall-mode block") {
+		t.Error("expected '--firewall-mode block' to be absent in proxy-mode userdata")
+	}
+}
+
+// TestEbpfModeUnchanged verifies ebpf mode still uses block firewall, dns-port 53, no iptables, no km-dns-proxy.
+func TestEbpfModeUnchanged(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Network.Enforcement = "ebpf"
+	out, err := generateUserData(p, "sb-ebpf-1", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "--firewall-mode block") {
+		t.Error("expected '--firewall-mode block' in ebpf-mode userdata")
+	}
+	if !strings.Contains(out, "--dns-port 53") {
+		t.Error("expected '--dns-port 53' in ebpf-mode userdata")
+	}
+	if strings.Contains(out, "iptables -t nat") {
+		t.Error("expected 'iptables -t nat' to be absent in ebpf-mode userdata")
+	}
+	if strings.Contains(out, "enable km-dns-proxy") {
+		t.Error("expected 'enable km-dns-proxy' to be absent in ebpf-mode userdata")
 	}
 }

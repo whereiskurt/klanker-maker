@@ -10,6 +10,7 @@ type Config struct {
 	HTTPProxyPort  uint32 // TCP port for HTTP proxy (e.g. 3128)
 	HTTPSProxyPort uint32 // TCP port for HTTPS/CONNECT proxy (e.g. 3128)
 	ProxyPID       uint32 // PID of the proxy process — exempt from redirection
+	HTTPProxyPID   uint32 // HTTPProxyPID exempts the HTTP proxy from BPF interception (gatekeeper mode)
 	FirewallMode   uint16 // 0=log, 1=allow, 2=block (matches ModeLog/Allow/Block)
 	MITMProxyAddr  uint32 // MITM proxy loopback IP in network byte order (127.0.0.1)
 }

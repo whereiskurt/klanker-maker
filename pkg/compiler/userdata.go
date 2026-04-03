@@ -373,6 +373,7 @@ Environment=ALLOWED_HOSTS={{ .AllowedHTTPHosts }}
 Environment=KM_GITHUB_ALLOWED_REPOS={{ .GitHubAllowedRepos }}
 Environment=PROXY_PORT=3128
 ExecStart=/opt/km/bin/km-http-proxy
+ExecStartPost=/bin/bash -c 'echo $MAINPID > /run/km/http-proxy.pid'
 Restart=always
 RestartSec=2
 [Install]
@@ -382,6 +383,7 @@ UNIT
 # Create named pipe for audit-log sidecar input.
 # Shell commands are written here by PROMPT_COMMAND; sidecar reads from it.
 mkdir -p /run/km
+chown km-sidecar:km-sidecar /run/km
 mkfifo /run/km/audit-pipe
 chown km-sidecar:km-sidecar /run/km/audit-pipe
 chmod 666 /run/km/audit-pipe
@@ -531,8 +533,8 @@ WantedBy=multi-user.target
 UNIT
 {{- end }}
 
-{{- if eq .Enforcement "ebpf" }}
-# In pure eBPF mode, skip km-dns-proxy (enforcer runs its own DNS resolver on :5353)
+{{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
+# In eBPF/gatekeeper mode, skip km-dns-proxy (enforcer runs its own DNS resolver)
 systemctl enable km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}
 systemctl start km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}
 echo "[km-bootstrap] Sidecars started (DNS via eBPF enforcer, not km-dns-proxy)"
@@ -546,7 +548,7 @@ echo "[km-bootstrap] Shell audit hook installed at /etc/profile.d/km-audit.sh"
 echo "[km-bootstrap] Mail poller started — inbox at /var/mail/km/new/"
 {{- end }}
 
-{{- if or (eq .Enforcement "proxy") (eq .Enforcement "both") }}
+{{- if eq .Enforcement "proxy" }}
 # ============================================================
 # 6. iptables DNAT: redirect DNS and HTTP traffic to sidecars
 # ============================================================
@@ -592,6 +594,20 @@ PROXYENV
 echo "[km-bootstrap] Proxy env vars configured for shell sessions"
 {{- end }}
 
+{{- if eq .Enforcement "both" }}
+# Set proxy env vars as belt-and-suspenders (gatekeeper mode: connect4 is primary, proxy is L7 fallback).
+# Apps that respect HTTP_PROXY will route traffic through the proxy for Bedrock/GitHub inspection.
+cat >> /etc/profile.d/km-audit.sh << 'PROXYENV'
+export http_proxy=http://127.0.0.1:3128
+export https_proxy=http://127.0.0.1:3128
+export HTTP_PROXY=http://127.0.0.1:3128
+export HTTPS_PROXY=http://127.0.0.1:3128
+export no_proxy=169.254.169.254,localhost,127.0.0.1
+export NO_PROXY=169.254.169.254,localhost,127.0.0.1
+PROXYENV
+echo "[km-bootstrap] Proxy env vars configured (gatekeeper mode belt-and-suspenders)"
+{{- end }}
+
 {{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
 # ============================================================
 # 6b. eBPF cgroup enforcement: kernel-level DNS/IP allowlisting
@@ -615,22 +631,29 @@ Description=Klankrmkr eBPF network enforcer
 After=network.target
 [Service]
 Type=simple
+{{- if eq .Enforcement "both" }}
+ExecStartPre=/bin/bash -c 'echo KM_HTTP_PROXY_PID=$(cat /run/km/http-proxy.pid 2>/dev/null || echo 0) > /run/km/enforcer.env'
+EnvironmentFile=-/run/km/enforcer.env
+{{- end }}
 ExecStart=/usr/local/bin/km ebpf-attach \
   --sandbox-id {{ .SandboxID }} \
-{{- if eq .Enforcement "ebpf" }}
+{{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
   --dns-port 53 \
 {{- else }}
   --dns-port 0 \
 {{- end }}
   --http-proxy-port 3128 \
-{{- if eq .Enforcement "ebpf" }}
+{{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
   --firewall-mode block \
 {{- else }}
   --firewall-mode log \
 {{- end }}
   --allowed-dns "{{ .AllowedDNSSuffixes }}" \
   --allowed-hosts "{{ .AllowedHTTPHosts }}" \
-  --proxy-hosts "{{ .GitHubAllowedRepos }}" \
+  --proxy-hosts "{{ .L7ProxyHosts }}" \
+{{- if eq .Enforcement "both" }}
+  --proxy-pid ${KM_HTTP_PROXY_PID} \
+{{- end }}
 {{- if .TLSEnabled }}
   --tls \
   --allowed-repos "{{ .TLSAllowedRepos }}" \
@@ -677,15 +700,14 @@ if [ "$(whoami)" = "sandbox" ]; then
 fi
 CGROUPEOF
 
-{{- if eq .Enforcement "ebpf" }}
+{{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
 # Override resolv.conf to route ALL DNS through the enforcer's resolver.
-# In pure eBPF mode, the enforcer runs its own DNS resolver on :53.
-# In "both" mode, the existing DNS proxy sidecar + iptables DNAT handles DNS.
+# The enforcer runs its own DNS resolver on :53 (both eBPF and gatekeeper modes).
 cp /etc/resolv.conf /etc/resolv.conf.bak
 echo "nameserver 127.0.0.1" > /etc/resolv.conf
 echo "[km-bootstrap] DNS routed through eBPF enforcer resolver on :53"
 {{- else }}
-echo "[km-bootstrap] DNS handled by km-dns-proxy sidecar + iptables DNAT (both mode)"
+echo "[km-bootstrap] DNS handled by km-dns-proxy sidecar + iptables DNAT (proxy mode)"
 {{- end }}
 
 echo "[km-bootstrap] eBPF enforcement configured (sandbox shell → cgroup)"
@@ -946,6 +968,10 @@ type userDataParams struct {
 	EFSFilesystemID string
 	// EFSMountPoint is the filesystem path where EFS is mounted. Default "/shared".
 	EFSMountPoint string
+	// L7ProxyHosts is a comma-separated list of domain suffixes requiring L7 proxy inspection
+	// via connect4 DNAT rewrite. Derived from profile sourceAccess.github and useBedrock fields.
+	// Passed to km ebpf-attach --proxy-hosts in "ebpf" and "both" enforcement modes.
+	L7ProxyHosts string
 }
 
 // otpSecret holds an SSM path and derived env var name for an OTP secret.
@@ -972,6 +998,28 @@ func joinGitHubAllowedRepos(p *profile.SandboxProfile) string {
 		return ""
 	}
 	return strings.Join(p.Spec.SourceAccess.GitHub.AllowedRepos, ",")
+}
+
+// buildL7ProxyHosts returns a comma-separated list of domain suffixes that require
+// L7 proxy interception (connect4 DNAT rewrite) based on the profile configuration.
+// Only domains that the profile actually accesses are included:
+//   - GitHub domains when profile has sourceAccess.github configured
+//   - Bedrock/Anthropic domains when profile has useBedrock: true
+//
+// The returned string is passed to km ebpf-attach --proxy-hosts in "ebpf" and
+// "both" enforcement modes so the resolver marks resolved IPs for proxy redirect.
+func buildL7ProxyHosts(p *profile.SandboxProfile) string {
+	var hosts []string
+	if p.Spec.SourceAccess.GitHub != nil {
+		hosts = append(hosts, "github.com", "api.github.com", "raw.githubusercontent.com", "codeload.githubusercontent.com")
+	}
+	if p.Spec.Execution.UseBedrock {
+		// .amazonaws.com covers Bedrock endpoints (bedrock-runtime.us-east-1.amazonaws.com etc.)
+		// This is broader than strictly necessary, but non-Bedrock traffic passes through
+		// the proxy transparently without MITM inspection.
+		hosts = append(hosts, ".amazonaws.com", "api.anthropic.com")
+	}
+	return strings.Join(hosts, ",")
 }
 
 // generateUserData produces the EC2 bootstrap user-data.sh content for the given profile.
@@ -1075,6 +1123,10 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		params.TLSEnabled = true
 		params.TLSAllowedRepos = joinGitHubAllowedRepos(p)
 	}
+
+	// L7 proxy hosts — domain suffixes that require connect4 DNAT redirect to the L7 proxy.
+	// Derived from profile fields (GitHub + Bedrock) rather than repo names.
+	params.L7ProxyHosts = buildL7ProxyHosts(p)
 
 	// Additional EBS volume mount point (Phase 33)
 	if p.Spec.Runtime.AdditionalVolume != nil {

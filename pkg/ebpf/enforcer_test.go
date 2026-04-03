@@ -212,3 +212,48 @@ func TestLayerConstants(t *testing.T) {
 		t.Errorf("LayerSockops should be 4, got %d", LayerSockops)
 	}
 }
+
+// TestConfigHTTPProxyPIDField verifies that Config accepts an HTTPProxyPID field
+// alongside the existing ProxyPID field. This supports dual-PID exemption in
+// gatekeeper mode: ProxyPID exempts the enforcer process, HTTPProxyPID exempts
+// the HTTP proxy process from BPF connect4/sendmsg4 interception.
+func TestConfigHTTPProxyPIDField(t *testing.T) {
+	cfg := Config{
+		SandboxID:    "test-sandbox",
+		ProxyPID:     12345,
+		HTTPProxyPID: 67890, // HTTP proxy process — exempt from BPF redirection
+	}
+	if cfg.ProxyPID != 12345 {
+		t.Errorf("ProxyPID: got %d, want 12345", cfg.ProxyPID)
+	}
+	if cfg.HTTPProxyPID != 67890 {
+		t.Errorf("HTTPProxyPID: got %d, want 67890", cfg.HTTPProxyPID)
+	}
+}
+
+// TestConfigHTTPProxyPIDZeroMeansDisabled verifies that HTTPProxyPID == 0 is
+// a valid "disabled" state (no HTTP proxy exemption), matching the BPF-side
+// check: `if (const_http_proxy_pid != 0 && pid == const_http_proxy_pid)`.
+func TestConfigHTTPProxyPIDZeroMeansDisabled(t *testing.T) {
+	cfg := Config{SandboxID: "no-proxy-sandbox"}
+	if cfg.HTTPProxyPID != 0 {
+		t.Errorf("default HTTPProxyPID should be 0 (disabled), got %d", cfg.HTTPProxyPID)
+	}
+}
+
+// TestConfigHTTPProxyPIDIndependentFromProxyPID verifies that the two PID fields
+// are independent — each can be set without affecting the other.
+func TestConfigHTTPProxyPIDIndependentFromProxyPID(t *testing.T) {
+	cfg := Config{
+		SandboxID:    "dual-pid-sandbox",
+		ProxyPID:     100,
+		HTTPProxyPID: 200,
+		FirewallMode: ModeBlock,
+	}
+	if cfg.ProxyPID == cfg.HTTPProxyPID {
+		t.Errorf("ProxyPID and HTTPProxyPID should be independent; both are %d", cfg.ProxyPID)
+	}
+	if cfg.FirewallMode != ModeBlock {
+		t.Errorf("FirewallMode: got %d, want ModeBlock (%d)", cfg.FirewallMode, ModeBlock)
+	}
+}
