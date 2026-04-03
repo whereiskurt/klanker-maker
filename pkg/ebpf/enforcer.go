@@ -4,6 +4,7 @@ package ebpf
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
+	"github.com/rs/zerolog/log"
 )
 
 // Config holds the runtime parameters injected into BPF volatile constants at
@@ -175,6 +177,21 @@ func NewEnforcer(cfg Config) (*Enforcer, error) {
 		connectLink.Close()
 		objs.Close()
 		return nil, fmt.Errorf("pin egress_link: %w", err)
+	}
+
+	// Step 7: Pin maps that the transparent proxy needs to read.
+	// The proxy (separate process) loads these pins to look up original
+	// destinations for BPF-redirected connections.
+	mapsToPin := map[string]*ebpf.Map{
+		"src_port_to_sock":      objs.SrcPortToSock,
+		"sock_to_original_ip":   objs.SockToOriginalIp,
+		"sock_to_original_port": objs.SockToOriginalPort,
+	}
+	for name, m := range mapsToPin {
+		p := pinPath + name
+		if err := m.Pin(p); err != nil && !errors.Is(err, os.ErrExist) {
+			log.Warn().Err(err).Str("map", name).Msg("failed to pin map (non-fatal)")
+		}
 	}
 
 	return &Enforcer{
