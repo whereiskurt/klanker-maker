@@ -671,6 +671,12 @@ systemctl enable --now km-ebpf-enforcer
 sleep 3
 if systemctl is-active --quiet km-ebpf-enforcer; then
   echo "[km-bootstrap] eBPF enforcer running (systemd)"
+{{- if eq .Enforcement "both" }}
+  # Restart http-proxy so it detects the BPF maps and enables transparent mode.
+  # The proxy started before the enforcer (no maps yet); now maps are pinned.
+  systemctl restart km-http-proxy
+  echo "[km-bootstrap] km-http-proxy restarted for transparent proxy mode"
+{{- end }}
 else
   echo "[km-bootstrap] WARNING: eBPF enforcer failed to start"
   journalctl -u km-ebpf-enforcer --no-pager -n 10
