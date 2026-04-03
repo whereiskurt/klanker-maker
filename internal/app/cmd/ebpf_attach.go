@@ -246,12 +246,28 @@ func runEbpfAttach(
 		}
 	}
 
+	// Build proxy host set for seeding — IPs of these hosts also get MarkForProxy.
+	proxyHostSet := make(map[string]bool, len(proxyHostList))
+	for _, ph := range proxyHostList {
+		proxyHostSet[strings.ToLower(strings.TrimPrefix(ph, "."))] = true
+	}
+
 	seeded := 0
+	proxyMarked := 0
 	for _, host := range hostsToResolve {
 		ips, err := net.LookupHost(host)
 		if err != nil {
 			// Suffix entries like "amazonaws.com" won't resolve directly — that's fine
 			continue
+		}
+		// Check if host matches any proxy host (exact or suffix).
+		needsProxy := false
+		hostLower := strings.ToLower(host)
+		for ph := range proxyHostSet {
+			if hostLower == ph || strings.HasSuffix(hostLower, "."+ph) {
+				needsProxy = true
+				break
+			}
 		}
 		for _, ipStr := range ips {
 			ip := net.ParseIP(ipStr)
@@ -263,9 +279,16 @@ func runEbpfAttach(
 			} else {
 				seeded++
 			}
+			if needsProxy {
+				if err := enforcer.MarkForProxy(ip); err != nil {
+					logger.Warn().Err(err).Str("host", host).Str("ip", ipStr).Msg("failed to mark IP for proxy")
+				} else {
+					proxyMarked++
+				}
+			}
 		}
 	}
-	logger.Info().Int("seeded_ips", seeded).Int("hosts_resolved", len(hostsToResolve)).Msg("pre-seeded BPF allowlist from allowed hosts")
+	logger.Info().Int("seeded_ips", seeded).Int("proxy_marked", proxyMarked).Int("hosts_resolved", len(hostsToResolve)).Msg("pre-seeded BPF allowlist from allowed hosts")
 
 	// Start ring buffer audit consumer.
 	consumer, err := audit.NewConsumer(enforcer.Events(), sandboxID, logger)
