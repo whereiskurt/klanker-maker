@@ -737,7 +737,7 @@ Plans:
 
 Plans:
 - [ ] 31-01-PLAN.md — Core pkg/allowlistgen: Recorder, DNS suffix normalization, SandboxProfile generator (TDD)
-- [ ] 31-02-PLAN.md — km observe CLI, DNS resolver DomainObserver hook, ebpf-attach --observe wiring
+- [ ] 31-02-PLAN.md — km shell --learn flag, DNS resolver DomainObserver hook, ebpf-attach --observe with S3 learn session upload
 
 
 ### Phase 32: Profile-scoped rsync paths with external file lists and shell wildcards
