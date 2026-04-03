@@ -985,7 +985,7 @@ Plans:
 **Goal:** eBPF runs in block mode as kernel-level gatekeeper in `both` enforcement mode — connect4 performs DNAT rewrite for L7-required hosts (GitHub, Bedrock) routing them to the proxy, while allowed non-L7 hosts connect directly; iptables DNAT and km-dns-proxy are removed for `both` mode
 **Requirements**: EBPF-NET-03, EBPF-NET-09
 **Depends on:** Phase 41
-**Plans:** 3 plans
+**Plans:** 4 plans
 
 Plans:
 - [ ] 42-01-PLAN.md — BPF dual-PID exemption + L7ProxyHosts derivation + enforcer wiring
@@ -1027,9 +1027,10 @@ Key design decisions:
 **Goal:** Operators can schedule any remote-capable sandbox command (create, destroy, stop, pause, resume, extend) for deferred or recurring execution via EventBridge Scheduler, using natural language time expressions or raw cron. Includes schedule listing and cancellation.
 **Requirements**: [SCHED-PARSE, SCHED-STATE, SCHED-INFRA, SCHED-CMD, SCHED-LIST, SCHED-CANCEL, SCHED-GUARDRAIL]
 **Depends on:** Phase 43
-**Plans:** 3 plans
+**Plans:** 4 plans
 
 Plans:
 - [ ] 44-01-PLAN.md — TDD: Natural language time parser (pkg/at/)
 - [ ] 44-02-PLAN.md — SchedulerAPI extension + DynamoDB schedule CRUD + config
 - [ ] 44-03-PLAN.md — km at CLI command with list/cancel subcommands and schedule alias
+- [ ] 44-04-PLAN.md — E2E integration test for km at scheduling lifecycle
