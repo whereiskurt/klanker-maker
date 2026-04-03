@@ -70,6 +70,10 @@ const ec2ServiceHCLTemplate = `locals {
     root_volume_size_gb    = {{ .RootVolumeSizeGB }}
     hibernation_enabled    = {{ .HibernationEnabled }}
     ami_slug               = "{{ .AMISlug }}"
+
+    # Additional EBS volume (Phase 33)
+    additional_volume_size_gb    = {{ .AdditionalVolumeSizeGB }}
+    additional_volume_encrypted  = {{ .AdditionalVolumeEncrypted }}
   }
 {{- if .HasBudget }}
 
@@ -396,6 +400,10 @@ type ec2HCLParams struct {
 	RootVolumeSizeGB   int    // root EBS volume size in GB; 0 means use AMI default
 	HibernationEnabled bool   // enable EC2 hibernation (on-demand only)
 	AMISlug            string // AMI slug for lookup: amazon-linux-2023, ubuntu-24.04, ubuntu-22.04
+	// Additional EBS volume fields (Phase 33)
+	AdditionalVolumeSizeGB    int    // additional data volume size in GB; 0 means no additional volume
+	AdditionalVolumeEncrypted bool   // encrypt the additional EBS volume
+	AdditionalVolumeMountPoint string // mount point for the additional volume (e.g. "/data")
 }
 
 // ============================================================
@@ -638,6 +646,25 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 				return p.Spec.Runtime.AMI
 			}
 			return "amazon-linux-2023"
+		}(),
+		// Additional EBS volume fields (Phase 33)
+		AdditionalVolumeSizeGB: func() int {
+			if p.Spec.Runtime.AdditionalVolume != nil {
+				return p.Spec.Runtime.AdditionalVolume.Size
+			}
+			return 0
+		}(),
+		AdditionalVolumeEncrypted: func() bool {
+			if p.Spec.Runtime.AdditionalVolume != nil {
+				return p.Spec.Runtime.AdditionalVolume.Encrypted
+			}
+			return false
+		}(),
+		AdditionalVolumeMountPoint: func() string {
+			if p.Spec.Runtime.AdditionalVolume != nil {
+				return p.Spec.Runtime.AdditionalVolume.MountPoint
+			}
+			return ""
 		}(),
 	}
 

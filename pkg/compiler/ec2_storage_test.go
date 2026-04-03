@@ -196,3 +196,47 @@ func TestAMISlugDefaultInHCL(t *testing.T) {
 		t.Errorf("HCL output missing %q\ngot:\n%s", want, hcl)
 	}
 }
+
+// ============================================================
+// Phase 33 Plan 03: Additional EBS volume HCL tests (TDD)
+// ============================================================
+
+// TestAdditionalVolumeInHCL verifies that additionalVolume={size:100, mountPoint:"/data", encrypted:true}
+// generates HCL containing additional_volume_size_gb = 100 and additional_volume_encrypted = true.
+func TestAdditionalVolumeInHCL(t *testing.T) {
+	p := minimalEC2StorageProfile()
+	p.Spec.Runtime.AdditionalVolume = &profile.AdditionalVolumeSpec{
+		Size:       100,
+		MountPoint: "/data",
+		Encrypted:  true,
+	}
+
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantSize := "additional_volume_size_gb    = 100"
+	if !strings.Contains(hcl, wantSize) {
+		t.Errorf("HCL output missing %q\ngot:\n%s", wantSize, hcl)
+	}
+	wantEncrypted := "additional_volume_encrypted  = true"
+	if !strings.Contains(hcl, wantEncrypted) {
+		t.Errorf("HCL output missing %q\ngot:\n%s", wantEncrypted, hcl)
+	}
+}
+
+// TestAdditionalVolumeAbsentInHCL verifies that no additionalVolume generates
+// HCL containing additional_volume_size_gb = 0.
+func TestAdditionalVolumeAbsentInHCL(t *testing.T) {
+	p := minimalEC2StorageProfile()
+	// AdditionalVolume is nil — no additional volume
+
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "additional_volume_size_gb    = 0"
+	if !strings.Contains(hcl, want) {
+		t.Errorf("HCL output missing %q\ngot:\n%s", want, hcl)
+	}
+}

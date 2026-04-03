@@ -103,3 +103,15 @@ variable "ami_slug" {
   description = "AMI slug for lookup: amazon-linux-2023, ubuntu-24.04, ubuntu-22.04"
   default     = "amazon-linux-2023"
 }
+
+variable "additional_volume_size_gb" {
+  type        = number
+  description = "Additional EBS data volume size in GB. 0 means no additional volume."
+  default     = 0
+}
+
+variable "additional_volume_encrypted" {
+  type        = bool
+  description = "Encrypt the additional EBS volume"
+  default     = false
+}

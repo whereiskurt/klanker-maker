@@ -532,3 +532,28 @@ resource "aws_instance" "ec2_ondemand" {
     "Region"        = var.region_label
   }
 }
+
+# ============================================================
+# Additional EBS volume (Phase 33)
+# ============================================================
+
+resource "aws_ebs_volume" "additional" {
+  count             = var.additional_volume_size_gb > 0 ? 1 : 0
+  availability_zone = local.effective_azs[0]
+  size              = var.additional_volume_size_gb
+  encrypted         = var.additional_volume_encrypted
+  type              = "gp3"
+
+  tags = {
+    "km:sandbox-id" = var.sandbox_id
+    Name            = "km-sandbox-${var.sandbox_id}-data"
+  }
+}
+
+resource "aws_volume_attachment" "additional" {
+  count       = var.additional_volume_size_gb > 0 ? 1 : 0
+  device_name = "/dev/sdf"
+  volume_id   = aws_ebs_volume.additional[0].id
+  instance_id = length(local.ec2spot_map) > 0 ? aws_spot_instance_request.ec2spot[keys(local.ec2spot_map)[0]].spot_instance_id : aws_instance.ec2_ondemand[keys(local.ec2_ondemand_map)[0]].id
+  force_detach = true
+}
