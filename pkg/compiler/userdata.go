@@ -631,6 +631,10 @@ Description=Klankrmkr eBPF network enforcer
 After=network.target
 [Service]
 Type=simple
+{{- if eq .Enforcement "both" }}
+ExecStartPre=/bin/bash -c 'echo KM_HTTP_PROXY_PID=$(cat /run/km/http-proxy.pid 2>/dev/null || echo 0) > /run/km/enforcer.env'
+EnvironmentFile=-/run/km/enforcer.env
+{{- end }}
 ExecStart=/usr/local/bin/km ebpf-attach \
   --sandbox-id {{ .SandboxID }} \
 {{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
@@ -648,7 +652,7 @@ ExecStart=/usr/local/bin/km ebpf-attach \
   --allowed-hosts "{{ .AllowedHTTPHosts }}" \
   --proxy-hosts "{{ .L7ProxyHosts }}" \
 {{- if eq .Enforcement "both" }}
-  --proxy-pid "$(cat /run/km/http-proxy.pid 2>/dev/null || echo 0)" \
+  --proxy-pid ${KM_HTTP_PROXY_PID} \
 {{- end }}
 {{- if .TLSEnabled }}
   --tls \
