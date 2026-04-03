@@ -19,6 +19,10 @@ spec:
     spot: true
     instanceType: t3.medium
     region: us-east-1
+    hibernation: true
+    additionalVolume:
+      size: 20
+      mountPoint: /data
 
   execution:
     shell: /bin/bash

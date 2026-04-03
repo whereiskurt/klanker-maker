@@ -590,11 +590,11 @@ func budgetHCLFields(p *profile.SandboxProfile) (hasBudget bool, computeLimit, a
 }
 
 // validateEC2StorageFields checks cross-field constraints for EC2 storage and hibernation config.
-// It returns an error if incompatible combinations are specified.
-func validateEC2StorageFields(p *profile.SandboxProfile) error {
+// useSpot accounts for --on-demand override (profile may say spot=true but --on-demand makes it false).
+func validateEC2StorageFields(p *profile.SandboxProfile, useSpot bool) error {
 	substrate := p.Spec.Runtime.Substrate
-	if p.Spec.Runtime.Hibernation && p.Spec.Runtime.Spot {
-		return fmt.Errorf("hibernation requires on-demand instance (spec.runtime.spot must be false)")
+	if p.Spec.Runtime.Hibernation && useSpot {
+		return fmt.Errorf("hibernation requires on-demand instance (use --on-demand or set spec.runtime.spot to false)")
 	}
 	if p.Spec.Runtime.Hibernation && !strings.HasPrefix(substrate, "ec2") {
 		return fmt.Errorf("hibernation is not supported for %s substrate", substrate)
@@ -606,7 +606,7 @@ func validateEC2StorageFields(p *profile.SandboxProfile) error {
 }
 
 func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot bool, sgRules []SGRule, iamPolicy *IAMSessionPolicy, userData string, network *NetworkConfig) (string, error) {
-	if err := validateEC2StorageFields(p); err != nil {
+	if err := validateEC2StorageFields(p, useSpot); err != nil {
 		return "", err
 	}
 
