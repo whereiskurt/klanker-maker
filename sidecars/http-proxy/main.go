@@ -122,7 +122,7 @@ func main() {
 		Msg("")
 
 	// Check if BPF maps exist for transparent proxy mode (gatekeeper/both enforcement).
-	if httpproxy.CheckBPFMapsExist(sandboxID) {
+	if strings.EqualFold(getEnv("KM_TRANSPARENT_PROXY", "false"), "true") {
 		log.Info().
 			Str("event_type", "transparent_proxy_enabled").
 			Str("sandbox_id", sandboxID).

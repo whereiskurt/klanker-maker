@@ -671,6 +671,20 @@ systemctl enable --now km-ebpf-enforcer
 sleep 3
 if systemctl is-active --quiet km-ebpf-enforcer; then
   echo "[km-bootstrap] eBPF enforcer running (systemd)"
+{{- if eq .Enforcement "both" }}
+  # Restart http-proxy in transparent mode. The proxy needs to read BPF maps
+  # (pinned by the enforcer) to look up original destinations for DNAT'd connections.
+  # Set KM_TRANSPARENT_PROXY=true and override User=root (bpffs requires root).
+  mkdir -p /etc/systemd/system/km-http-proxy.service.d
+  cat > /etc/systemd/system/km-http-proxy.service.d/transparent.conf << 'DROPIN'
+[Service]
+Environment=KM_TRANSPARENT_PROXY=true
+User=root
+DROPIN
+  systemctl daemon-reload
+  systemctl restart km-http-proxy
+  echo "[km-bootstrap] km-http-proxy restarted in transparent proxy mode"
+{{- end }}
 else
   echo "[km-bootstrap] WARNING: eBPF enforcer failed to start"
   journalctl -u km-ebpf-enforcer --no-pager -n 10
