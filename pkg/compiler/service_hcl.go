@@ -567,6 +567,9 @@ type NetworkConfig struct {
 	// Alias is the optional human-friendly sandbox alias (e.g. "orc-1").
 	// When set, the sandbox can also receive and send email as {alias}@{emailDomain}.
 	Alias string
+	// EFSFilesystemID is the regional EFS filesystem ID for shared mounts (Phase 43).
+	// Empty when EFS is not initialized. Populated from efs/outputs.json by create.go.
+	EFSFilesystemID string
 }
 
 // budgetHCLFields extracts the budget-related template fields from a SandboxProfile.

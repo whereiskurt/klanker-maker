@@ -345,6 +345,21 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		}
 	}
 
+	// Step 6a-efs: Load EFS outputs for shared filesystem mount (Phase 43).
+	// Only applies to non-docker substrates; docker does not support EFS mounts.
+	if substrate != "docker" {
+		efsID, err := LoadEFSOutputs(repoRoot, regionLabel)
+		if err != nil {
+			return fmt.Errorf("failed to load EFS outputs for %s: %w", regionLabel, err)
+		}
+		network.EFSFilesystemID = efsID
+
+		// Validate: profile requests EFS mount but EFS not initialized.
+		if resolvedProfile.Spec.Runtime.MountEFS && efsID == "" {
+			return fmt.Errorf("profile requests mountEFS but EFS is not initialized for region %s — run 'km init --region %s' first", regionLabel, region)
+		}
+	}
+
 	// Step 6b: Resolve spot rate for budget enforcement (BUDG-03).
 	// When budget.compute is set, we need a non-zero spot rate so the Lambda enforcer
 	// can calculate compute spend as spot_rate * elapsed_minutes / 60. Without this,

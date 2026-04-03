@@ -491,6 +491,28 @@ func LoadNetworkOutputs(repoRoot, regionLabel string) (*NetworkOutputs, error) {
 	return outputs, nil
 }
 
+// LoadEFSOutputs reads the EFS filesystem ID from efs/outputs.json for the given region.
+// Returns ("", nil) when the file doesn't exist (EFS not yet initialized via km init).
+func LoadEFSOutputs(repoRoot, regionLabel string) (string, error) {
+	outputsFile := filepath.Join(repoRoot, "infra", "live", regionLabel, "efs", "outputs.json")
+	data, err := os.ReadFile(outputsFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("reading efs outputs: %w", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return "", fmt.Errorf("parsing efs outputs: %w", err)
+	}
+	var fsID string
+	if err := extractTFOutput(raw, "filesystem_id", &fsID); err != nil {
+		return "", err
+	}
+	return fsID, nil
+}
+
 func extractTFOutput(raw map[string]json.RawMessage, key string, target interface{}) error {
 	data, ok := raw[key]
 	if !ok {
