@@ -922,6 +922,154 @@ func TestIdentity_FetchPublicKey_LegacyRowEmptyPolicies(t *testing.T) {
 }
 
 // ============================================================
+// Task 4: Tests for multipart buildRawMIME (via SendSignedEmail)
+// ============================================================
+
+// TestMultipart_SinglePartBackwardCompat verifies that SendSignedEmail with nil attachments
+// still produces a single-part text/plain MIME message (backward compatibility).
+func TestMultipart_SinglePartBackwardCompat(t *testing.T) {
+	sesMock := &mockIdentitySESAPI{}
+	ssmMock, dynMock, _ := makeSendSignedEmailMocks(t, "sb-mp-back01")
+
+	err := kmaws.SendSignedEmail(
+		context.Background(),
+		sesMock, ssmMock, dynMock,
+		"from@example.com", "to@example.com", "Subject", "Body text",
+		"sb-mp-back01", "sb-recip-back01", "km-identities", "off", nil,
+	)
+	if err != nil {
+		t.Fatalf("SendSignedEmail (no attachments) returned error: %v", err)
+	}
+	rawData := string(sesMock.sendEmailInput.Content.Raw.Data)
+	if !strings.Contains(rawData, "Content-Type: text/plain") {
+		t.Errorf("single-part message should have Content-Type: text/plain; got:\n%s", rawData)
+	}
+	if strings.Contains(rawData, "multipart") {
+		t.Errorf("single-part message should not contain 'multipart'; got:\n%s", rawData)
+	}
+}
+
+// TestMultipart_OneAttachment verifies multipart/mixed structure with a single attachment.
+func TestMultipart_OneAttachment(t *testing.T) {
+	sesMock := &mockIdentitySESAPI{}
+	ssmMock, dynMock, _ := makeSendSignedEmailMocks(t, "sb-mp-att01")
+
+	attachments := []kmaws.Attachment{
+		{Filename: "report.txt", Data: []byte("attachment content here")},
+	}
+	err := kmaws.SendSignedEmail(
+		context.Background(),
+		sesMock, ssmMock, dynMock,
+		"from@example.com", "to@example.com", "Subject", "Body text",
+		"sb-mp-att01", "sb-recip-att01", "km-identities", "off", attachments,
+	)
+	if err != nil {
+		t.Fatalf("SendSignedEmail with 1 attachment returned error: %v", err)
+	}
+	rawData := string(sesMock.sendEmailInput.Content.Raw.Data)
+	if !strings.Contains(rawData, "multipart/mixed") {
+		t.Errorf("expected multipart/mixed Content-Type; got:\n%s", rawData)
+	}
+	if !strings.Contains(rawData, `filename="report.txt"`) {
+		t.Errorf("expected filename=\"report.txt\" in Content-Disposition; got:\n%s", rawData)
+	}
+	if !strings.Contains(rawData, "Content-Transfer-Encoding: base64") {
+		t.Errorf("expected Content-Transfer-Encoding: base64; got:\n%s", rawData)
+	}
+	if !strings.Contains(rawData, "Content-Disposition: attachment") {
+		t.Errorf("expected Content-Disposition: attachment; got:\n%s", rawData)
+	}
+}
+
+// TestMultipart_TwoAttachments verifies multipart/mixed with two attachments: boundary
+// is present and both Content-Disposition: attachment; filename=... headers appear.
+func TestMultipart_TwoAttachments(t *testing.T) {
+	sesMock := &mockIdentitySESAPI{}
+	ssmMock, dynMock, _ := makeSendSignedEmailMocks(t, "sb-mp-att02")
+
+	attachments := []kmaws.Attachment{
+		{Filename: "file1.bin", Data: []byte("first attachment")},
+		{Filename: "file2.txt", Data: []byte("second attachment")},
+	}
+	err := kmaws.SendSignedEmail(
+		context.Background(),
+		sesMock, ssmMock, dynMock,
+		"from@example.com", "to@example.com", "Subject", "Body",
+		"sb-mp-att02", "sb-recip-att02", "km-identities", "off", attachments,
+	)
+	if err != nil {
+		t.Fatalf("SendSignedEmail with 2 attachments returned error: %v", err)
+	}
+	rawData := string(sesMock.sendEmailInput.Content.Raw.Data)
+
+	// Both filenames should appear.
+	if !strings.Contains(rawData, `filename="file1.bin"`) {
+		t.Errorf("expected filename=\"file1.bin\"; got:\n%s", rawData)
+	}
+	if !strings.Contains(rawData, `filename="file2.txt"`) {
+		t.Errorf("expected filename=\"file2.txt\"; got:\n%s", rawData)
+	}
+	// Boundary marker should appear at least 3 times (2 part boundaries + closing --)
+	boundaryCount := strings.Count(rawData, "--")
+	if boundaryCount < 3 {
+		t.Errorf("expected at least 3 boundary lines (--boundary x2, --boundary-- x1); got %d '--' occurrences", boundaryCount)
+	}
+}
+
+// TestMultipart_SignatureCoversBodyOnly verifies that the X-KM-Signature header
+// covers only the text body, not the attachment data.
+func TestMultipart_SignatureCoversBodyOnly(t *testing.T) {
+	sesMock := &mockIdentitySESAPI{}
+	ssmMock, _, _ := makeSendSignedEmailMocks(t, "sb-mp-sig01")
+
+	// Use a real key pair so we can verify the signature.
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	privKeyB64 := base64.StdEncoding.EncodeToString([]byte(priv))
+	pubKeyB64 := base64.StdEncoding.EncodeToString(pub)
+	ssmMock.getParameterValue = privKeyB64
+
+	body := "The signed body text."
+	attachments := []kmaws.Attachment{
+		{Filename: "data.bin", Data: []byte("ATTACHMENT DATA that must NOT affect signature")},
+	}
+
+	dynMock := &mockIdentityTableAPI{}
+	err := kmaws.SendSignedEmail(
+		context.Background(),
+		sesMock, ssmMock, dynMock,
+		"from@example.com", "to@example.com", "Subject", body,
+		"sb-mp-sig01", "sb-recip-sig01", "km-identities", "off", attachments,
+	)
+	if err != nil {
+		t.Fatalf("SendSignedEmail (multipart, signature test) returned error: %v", err)
+	}
+
+	rawData := string(sesMock.sendEmailInput.Content.Raw.Data)
+
+	// Extract X-KM-Signature.
+	var sigB64 string
+	for _, line := range strings.Split(rawData, "\r\n") {
+		if strings.HasPrefix(line, "X-KM-Signature: ") {
+			sigB64 = strings.TrimPrefix(line, "X-KM-Signature: ")
+			break
+		}
+	}
+	if sigB64 == "" {
+		t.Fatal("could not extract X-KM-Signature from multipart MIME")
+	}
+
+	// Signature must verify against body only (not body + attachment data).
+	if err := kmaws.VerifyEmailSignature(pubKeyB64, body, sigB64); err != nil {
+		t.Errorf("signature verification against body-only failed: %v", err)
+	}
+	// Signature must NOT verify against body+attachment concatenation.
+	combined := body + string(attachments[0].Data)
+	if err := kmaws.VerifyEmailSignature(pubKeyB64, combined, sigB64); err == nil {
+		t.Error("signature should NOT verify against body+attachment concatenation")
+	}
+}
+
+// ============================================================
 // Helpers
 // ============================================================
 
