@@ -235,7 +235,11 @@ func (e *Enforcer) MarkForProxy(ip net.IP) error {
 	if v4 == nil {
 		return fmt.Errorf("MarkForProxy: %v is not an IPv4 address", ip)
 	}
-	ipU32 := binary.BigEndian.Uint32(v4)
+	// The BPF map key must match the in-memory representation of ctx->user_ip4,
+	// which stores network-byte-order IP bytes as a native __u32. On x86 (LE),
+	// bytes {0x8c,0x52,0x72,0x03} (140.82.114.3 in NBO) become __u32 = 0x0372528c.
+	// Use NativeEndian so the Go uint32 matches the kernel's interpretation.
+	ipU32 := binary.NativeEndian.Uint32(v4)
 	value := uint32(1)
 	if err := e.objs.HttpProxyIps.Put(&ipU32, &value); err != nil {
 		return fmt.Errorf("put ip %v into http_proxy_ips: %w", ip, err)
