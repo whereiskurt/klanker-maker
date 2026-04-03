@@ -189,6 +189,42 @@
               "type": "string",
               "minLength": 1,
               "description": "AWS region to provision in"
+            },
+            "rootVolumeSize": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Root EBS volume size in GB. 0 or omitted uses AMI default."
+            },
+            "additionalVolume": {
+              "type": "object",
+              "description": "Optional extra EBS volume to attach and auto-mount (EC2 only)",
+              "additionalProperties": false,
+              "required": ["size", "mountPoint"],
+              "properties": {
+                "size": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "Volume size in GB"
+                },
+                "mountPoint": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Filesystem path to mount the volume at (e.g. /data)"
+                },
+                "encrypted": {
+                  "type": "boolean",
+                  "description": "Whether the EBS volume should be encrypted at rest"
+                }
+              }
+            },
+            "hibernation": {
+              "type": "boolean",
+              "description": "Enable EC2 hibernation (on-demand only; incompatible with spot=true)"
+            },
+            "ami": {
+              "type": "string",
+              "enum": ["amazon-linux-2023", "ubuntu-24.04", "ubuntu-22.04", ""],
+              "description": "AMI slug resolved per-region. Empty or omitted defaults to amazon-linux-2023."
             }
           }
         },

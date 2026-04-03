@@ -124,6 +124,16 @@ type LifecycleSpec struct {
 	MaxLifetime string `yaml:"maxLifetime" json:"maxLifetime"`
 }
 
+// AdditionalVolumeSpec defines an extra EBS volume to attach and auto-mount.
+type AdditionalVolumeSpec struct {
+	// Size is the volume size in GB (must be >= 1).
+	Size int `yaml:"size" json:"size"`
+	// MountPoint is the filesystem path to mount the volume at (e.g. /data).
+	MountPoint string `yaml:"mountPoint" json:"mountPoint"`
+	// Encrypted indicates whether the EBS volume should be encrypted at rest.
+	Encrypted bool `yaml:"encrypted,omitempty" json:"encrypted,omitempty"`
+}
+
 // RuntimeSpec controls the compute substrate and instance configuration.
 type RuntimeSpec struct {
 	// Substrate is the compute backend: ec2 or ecs.
@@ -134,6 +144,14 @@ type RuntimeSpec struct {
 	InstanceType string `yaml:"instanceType"`
 	// Region is the AWS region to provision in.
 	Region string `yaml:"region"`
+	// RootVolumeSize is the root EBS volume size in GB. 0 or omitted uses the AMI default.
+	RootVolumeSize int `yaml:"rootVolumeSize,omitempty" json:"rootVolumeSize,omitempty"`
+	// AdditionalVolume defines an optional extra EBS volume to attach and auto-mount (EC2 only).
+	AdditionalVolume *AdditionalVolumeSpec `yaml:"additionalVolume,omitempty" json:"additionalVolume,omitempty"`
+	// Hibernation enables EC2 hibernation (on-demand instances only; incompatible with spot).
+	Hibernation bool `yaml:"hibernation,omitempty" json:"hibernation,omitempty"`
+	// AMI is an AMI slug to resolve per-region (e.g. "ubuntu-24.04"). Empty defaults to amazon-linux-2023.
+	AMI string `yaml:"ami,omitempty" json:"ami,omitempty"`
 }
 
 // ExecutionSpec controls the shell environment within the sandbox.
