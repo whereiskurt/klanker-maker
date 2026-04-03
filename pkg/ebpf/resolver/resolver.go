@@ -265,6 +265,7 @@ func (r *Resolver) handleQuery(w dns.ResponseWriter, req *dns.Msg) {
 				}
 
 				// If domain is in ProxyHosts, also mark for L7 proxy.
+				// If domain is in ProxyHosts, also mark for L7 proxy.
 				if r.isProxyHost(domain) {
 					if err := r.cfg.MapUpdater.MarkForProxy(ip); err != nil {
 						log.Error().

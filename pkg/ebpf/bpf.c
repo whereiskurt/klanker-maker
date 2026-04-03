@@ -154,8 +154,8 @@ int connect4(struct bpf_sock_addr *ctx)
         return 1;
 
     __u32 dst_ip   = ctx->user_ip4; /* network byte order */
-    /* user_port is in network byte order, high 16 bits contain the port */
-    __u16 dst_port = bpf_ntohs((__u16)(ctx->user_port >> 16));
+    /* user_port is in host byte order (modern kernels 5.x+) */
+    __u16 dst_port = (__u16)ctx->user_port;
 
     /* 2a. Exempt IMDS (169.254.169.254 = 0xfea9fea9 in network byte order) */
     if (dst_ip == bpf_htonl(0xa9fea9fe)) /* 169.254.169.254 */
@@ -204,7 +204,7 @@ int connect4(struct bpf_sock_addr *ctx)
         else
             proxy_port = (__u16)const_http_proxy_port;
 
-        ctx->user_port = bpf_htons(proxy_port) << 16;
+        ctx->user_port = bpf_htons(proxy_port); /* host → NBO */
 
         emit_event(0, dst_ip, dst_port, ACTION_REDIRECT, LAYER_CONNECT4);
     }
@@ -235,7 +235,7 @@ int sendmsg4(struct bpf_sock_addr *ctx)
         return 1;
 
     /* 2. Only intercept DNS (port 53) */
-    __u16 dst_port = bpf_ntohs((__u16)(ctx->user_port >> 16));
+    __u16 dst_port = bpf_ntohs((__u16)ctx->user_port); /* NBO lower 16 bits → host */
     if (dst_port != 53)
         return 1;
 
@@ -247,8 +247,8 @@ int sendmsg4(struct bpf_sock_addr *ctx)
     bpf_map_update_elem(&sock_to_original_port, &cookie, &dst_port, 0);
 
     /* Rewrite to 127.0.0.1 and configured DNS proxy port */
-    ctx->user_ip4  = bpf_htonl(0x7f000001); /* 127.0.0.1 */
-    ctx->user_port = bpf_htons((__u16)const_dns_proxy_port) << 16;
+    ctx->user_ip4  = const_mitm_proxy_address; /* 127.0.0.1 in NBO */
+    ctx->user_port = bpf_htons((__u16)const_dns_proxy_port); /* host → NBO */
 
     emit_event(0, dst_ip, dst_port, ACTION_REDIRECT, LAYER_SENDMSG4);
     return 1;
