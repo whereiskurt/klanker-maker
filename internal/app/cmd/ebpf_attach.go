@@ -43,6 +43,7 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		cgroupPath   string
 		enableTLS    bool
 		allowedRepos string
+		httpProxyPID uint32
 	)
 
 	cmd := &cobra.Command{
@@ -53,7 +54,7 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runEbpfAttach(sandboxID, dnsPort, httpPort, firewallMode,
 				allowedDNS, allowedHosts, proxyHosts, cgroupPath,
-				enableTLS, allowedRepos)
+				enableTLS, allowedRepos, httpProxyPID)
 		},
 	}
 
@@ -76,6 +77,8 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		"Enable TLS uprobe observability (attaches to libssl.so.3)")
 	cmd.Flags().StringVar(&allowedRepos, "allowed-repos", "",
 		"Comma-separated list of allowed GitHub repos (owner/repo)")
+	cmd.Flags().Uint32Var(&httpProxyPID, "proxy-pid", 0,
+		"PID of the HTTP proxy process to exempt from BPF interception (gatekeeper mode); 0 = disabled")
 
 	return cmd
 }
@@ -111,6 +114,7 @@ func runEbpfAttach(
 	cgroupOverride string,
 	enableTLS bool,
 	allowedRepos string,
+	httpProxyPID uint32,
 ) error {
 	logger := log.With().Str("sandbox_id", sandboxID).Logger()
 
@@ -128,8 +132,16 @@ func runEbpfAttach(
 		HTTPProxyPort:  httpPort,
 		HTTPSProxyPort: httpPort,
 		ProxyPID:       uint32(os.Getpid()),
+		HTTPProxyPID:   httpProxyPID,
 		FirewallMode:   fwMode,
 		MITMProxyAddr:  mitmAddr,
+	}
+
+	// In block mode, the HTTP proxy must be exempt or its outbound connections
+	// to allowed hosts get redirected back to itself (infinite redirect loop).
+	// Warn if --proxy-pid is not set in block mode.
+	if httpProxyPID == 0 && fwMode == ebpf.ModeBlock {
+		logger.Warn().Msg("no --proxy-pid set in block mode; HTTP proxy may experience redirect loops")
 	}
 
 	logger.Info().

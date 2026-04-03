@@ -73,6 +73,9 @@ func NewEnforcer(cfg Config) (*Enforcer, error) {
 	if err := spec.Variables["const_proxy_pid"].Set(cfg.ProxyPID); err != nil {
 		return nil, fmt.Errorf("set const_proxy_pid: %w", err)
 	}
+	if err := spec.Variables["const_http_proxy_pid"].Set(cfg.HTTPProxyPID); err != nil {
+		return nil, fmt.Errorf("set const_http_proxy_pid: %w", err)
+	}
 	if err := spec.Variables["const_http_proxy_port"].Set(cfg.HTTPProxyPort); err != nil {
 		return nil, fmt.Errorf("set const_http_proxy_port: %w", err)
 	}

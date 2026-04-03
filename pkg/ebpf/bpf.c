@@ -145,8 +145,12 @@ int connect4(struct bpf_sock_addr *ctx)
 {
     __u32 pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
 
-    /* 1. Exempt proxy process */
+    /* 1. Exempt proxy process (enforcer) and HTTP proxy process (gatekeeper mode).
+     * Without this exemption, the HTTP proxy's outbound connections to github.com
+     * would be redirected back to itself causing an infinite redirect loop. */
     if (const_proxy_pid != 0 && pid == const_proxy_pid)
+        return 1;
+    if (const_http_proxy_pid != 0 && pid == const_http_proxy_pid)
         return 1;
 
     __u32 dst_ip   = ctx->user_ip4; /* network byte order */
@@ -224,8 +228,10 @@ int sendmsg4(struct bpf_sock_addr *ctx)
 {
     __u32 pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
 
-    /* 1. Exempt proxy process */
+    /* 1. Exempt proxy process (enforcer) and HTTP proxy process (gatekeeper mode). */
     if (const_proxy_pid != 0 && pid == const_proxy_pid)
+        return 1;
+    if (const_http_proxy_pid != 0 && pid == const_http_proxy_pid)
         return 1;
 
     /* 2. Only intercept DNS (port 53) */

@@ -46,6 +46,7 @@ struct ip4_trie_key {
 /* ── Volatile constants — set at load time by the Go loader ────────── */
 volatile const __u32 const_dns_proxy_port = 5353;
 volatile const __u32 const_proxy_pid = 0;
+volatile const __u32 const_http_proxy_pid = 0; /* HTTP proxy PID — exempt from BPF interception (gatekeeper mode) */
 volatile const __u32 const_http_proxy_port = 3128;
 volatile const __u32 const_https_proxy_port = 3129;
 volatile const __u16 const_firewall_mode = MODE_LOG;

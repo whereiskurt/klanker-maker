@@ -86,6 +86,7 @@ type bpfMapSpecs struct {
 type bpfVariableSpecs struct {
 	ConstDnsProxyPort     *ebpf.VariableSpec `ebpf:"const_dns_proxy_port"`
 	ConstFirewallMode     *ebpf.VariableSpec `ebpf:"const_firewall_mode"`
+	ConstHttpProxyPid     *ebpf.VariableSpec `ebpf:"const_http_proxy_pid"`
 	ConstHttpProxyPort    *ebpf.VariableSpec `ebpf:"const_http_proxy_port"`
 	ConstHttpsProxyPort   *ebpf.VariableSpec `ebpf:"const_https_proxy_port"`
 	ConstMitmProxyAddress *ebpf.VariableSpec `ebpf:"const_mitm_proxy_address"`
@@ -139,6 +140,7 @@ func (m *bpfMaps) Close() error {
 type bpfVariables struct {
 	ConstDnsProxyPort     *ebpf.Variable `ebpf:"const_dns_proxy_port"`
 	ConstFirewallMode     *ebpf.Variable `ebpf:"const_firewall_mode"`
+	ConstHttpProxyPid     *ebpf.Variable `ebpf:"const_http_proxy_pid"`
 	ConstHttpProxyPort    *ebpf.Variable `ebpf:"const_http_proxy_port"`
 	ConstHttpsProxyPort   *ebpf.Variable `ebpf:"const_https_proxy_port"`
 	ConstMitmProxyAddress *ebpf.Variable `ebpf:"const_mitm_proxy_address"`
