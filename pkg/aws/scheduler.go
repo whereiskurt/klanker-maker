@@ -11,12 +11,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/scheduler/types"
 )
 
-// SchedulerAPI is the minimal EventBridge Scheduler interface required by
-// CreateTTLSchedule and DeleteTTLSchedule.
-// Implemented by *scheduler.Client.
+// SchedulerAPI is the EventBridge Scheduler interface required by schedule
+// helpers. Implemented by *scheduler.Client.
 type SchedulerAPI interface {
 	CreateSchedule(ctx context.Context, input *scheduler.CreateScheduleInput, optFns ...func(*scheduler.Options)) (*scheduler.CreateScheduleOutput, error)
 	DeleteSchedule(ctx context.Context, input *scheduler.DeleteScheduleInput, optFns ...func(*scheduler.Options)) (*scheduler.DeleteScheduleOutput, error)
+	ListSchedules(ctx context.Context, input *scheduler.ListSchedulesInput, optFns ...func(*scheduler.Options)) (*scheduler.ListSchedulesOutput, error)
+	GetSchedule(ctx context.Context, input *scheduler.GetScheduleInput, optFns ...func(*scheduler.Options)) (*scheduler.GetScheduleOutput, error)
 }
 
 // CreateTTLSchedule creates an EventBridge Scheduler one-time at() rule that fires at
@@ -46,6 +47,35 @@ func DeleteTTLSchedule(ctx context.Context, client SchedulerAPI, sandboxID strin
 		var notFound *types.ResourceNotFoundException
 		if errors.As(err, &notFound) {
 			// Schedule does not exist — idempotent, treat as success.
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// CreateAtSchedule creates an EventBridge Scheduler one-time at() rule for a
+// deferred km at action (e.g. kill, stop). Unlike CreateTTLSchedule, the input
+// is always required — km at always provides a fully-built CreateScheduleInput.
+func CreateAtSchedule(ctx context.Context, client SchedulerAPI, input *scheduler.CreateScheduleInput) error {
+	_, err := client.CreateSchedule(ctx, input)
+	return err
+}
+
+// DeleteAtSchedule deletes an EventBridge km-at schedule by name and group.
+// The schedule is identified by scheduleName within groupName.
+//
+// This function is idempotent: ResourceNotFoundException is treated as success
+// so that km at cancel can safely be called even when the schedule has already
+// fired or was never created.
+func DeleteAtSchedule(ctx context.Context, client SchedulerAPI, scheduleName, groupName string) error {
+	_, err := client.DeleteSchedule(ctx, &scheduler.DeleteScheduleInput{
+		Name:      schedulerNamePtr(scheduleName),
+		GroupName: schedulerNamePtr(groupName),
+	})
+	if err != nil {
+		var notFound *types.ResourceNotFoundException
+		if errors.As(err, &notFound) {
 			return nil
 		}
 		return err
