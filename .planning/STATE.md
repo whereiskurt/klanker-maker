@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 43-01-PLAN.md
-last_updated: "2026-04-03T01:55:29.504Z"
+stopped_at: Completed 43-02-PLAN.md
+last_updated: "2026-04-03T02:07:43.848Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 44
-  completed_phases: 38
+  completed_phases: 39
   total_plans: 131
-  completed_plans: 128
+  completed_plans: 129
   percent: 0
 ---
 
@@ -174,6 +174,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 33-ec2-storage-and-ami P02 | 3min | 1 tasks | 4 files |
 | Phase 33-ec2-storage-and-ami P03 | 4min | 2 tasks | 6 files |
 | Phase 43 P01 | 160s | 2 tasks | 8 files |
+| Phase 43 P02 | 7min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -475,6 +476,8 @@ Recent decisions affecting current work:
 - [Phase 43]: NFS ingress restricted to sandbox_sg_id SG reference (not CIDR) for EFS security group
 - [Phase 43]: efs module placed immediately after network in regionalModules() since its terragrunt.hcl reads network/outputs.json at parse time
 - [Phase 43]: EFSMountPoint defaults to empty string; compiler/userdata (Plan 02) applies /shared when omitted
+- [Phase 43]: generateUserData signature: network *NetworkConfig parameter added before variadic emailDomainOverride, nil-safe for all existing callers
+- [Phase 43]: LoadEFSOutputs returns empty string (not error) when efs/outputs.json missing — EFS is optional infra unlike required network
 
 ### Roadmap Evolution
 
@@ -531,6 +534,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-03T01:55:29.500Z
-Stopped at: Completed 43-01-PLAN.md
+Last session: 2026-04-03T02:07:43.844Z
+Stopped at: Completed 43-02-PLAN.md
 Resume file: None

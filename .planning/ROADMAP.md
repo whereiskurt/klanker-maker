@@ -1001,7 +1001,7 @@ Plans:
 **Goal:** `km init` provisions a Regional EFS filesystem with mount targets in each AZ, and sandboxes with `mountEFS: true` in their profile automatically mount the shared filesystem at a configurable path — enabling cross-sandbox artifact sharing without S3
 **Requirements**: EFS-01, EFS-02, EFS-03, EFS-04, EFS-05, EFS-06
 **Depends on:** Phase 33
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 43-01-PLAN.md — EFS Terraform module, Terragrunt config, profile fields, km init registration
