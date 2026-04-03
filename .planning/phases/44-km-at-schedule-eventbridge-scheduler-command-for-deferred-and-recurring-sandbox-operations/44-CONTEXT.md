@@ -50,10 +50,17 @@ Add a `km at` command (alias: `km schedule`) that lets operators schedule any re
 - Sync state: DynamoDB is source of truth for listing; EventBridge Scheduler is source of truth for execution
 
 ### Max Sandbox Guardrail
-- Max active sandbox count set during `km init`, adjustable via re-init
-- Stored in platform config (DynamoDB or km-config.yaml)
+- Max active sandbox count configured as `max_sandboxes` in `km-config.yaml`
+- Read and validated during `km init` — must be present in the config file
+- Adjustable by re-running `km init` or editing `km-config.yaml` directly
 - Recurring create schedules check max before provisioning; skip with warning if at limit
 - This protects against runaway recurring creates
+
+### E2E Validation
+- 10-minute E2E test that exercises `km at` with real remote commands (create, kill, pause, resume, extend, stop)
+- Covers the full lifecycle: schedule one-time creates, schedule destroys, schedule lifecycle commands, verify schedules fire via EventBridge
+- Uses real AWS infrastructure (not mocked) — validates the full dispatch path through Lambda handlers
+- Test should demonstrate meaningful coverage of all remote-capable command types within the 10-minute window
 
 ### Infrastructure
 - Reuse existing EventBridge Scheduler patterns from TTL handler (`pkg/aws/scheduler.go`)
