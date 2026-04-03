@@ -1015,3 +1015,13 @@ Key design decisions:
 - Security group created during `km init` allowing NFS (port 2049) from sandbox instance SGs
 - `km destroy` does NOT remove EFS — it persists across sandbox lifecycles
 - Cross-AZ transfer cost ($0.01/GB/direction) accepted as trade-off for simplicity
+- After E2E validation, wire `mountEFS: true` + `efsMountPoint: /shared` into goose, goose-ebpf, and goose-ebpf-gatekeeper profiles
+
+Key design decisions:
+- `km init` creates the EFS filesystem (Regional, General Purpose, Elastic throughput, encrypted) and one mount target per AZ in the VPC
+- EFS filesystem ID stored in km-config.yaml (or SSM) so `km create` can reference it
+- Profile fields: `spec.runtime.mountEFS` (bool) and `spec.runtime.efsMountPoint` (string, default "/shared")
+- Userdata installs `amazon-efs-utils`, mounts EFS with TLS + `_netdev,nofail` options
+- Security group created during `km init` allowing NFS (port 2049) from sandbox instance SGs
+- `km destroy` does NOT remove EFS — it persists across sandbox lifecycles
+- Cross-AZ transfer cost ($0.01/GB/direction) accepted as trade-off for simplicity
