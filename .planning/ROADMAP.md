@@ -242,8 +242,6 @@ Plans:
 Plans:
 - [ ] 11-01-PLAN.md — Fix km list/status to use cfg.StateBucket instead of hardcoded constant (PROV-03, PROV-04)
 - [ ] 11-02-PLAN.md — Wire TTL Lambda teardown + idle EventBridge publish + IAM permissions (PROV-05, PROV-06)
-
-
 ### Phase 12: ECS Budget Top-Up & S3 Replication Deployment
 **Goal**: ECS sandboxes suspended by budget enforcement can be resumed via km budget add; S3 artifact replication has a deployable Terragrunt config
 **Depends on**: Phase 11
@@ -621,8 +619,6 @@ Plans:
 Plans:
 - [ ] 25-01-PLAN.md — Deny-by-default tests for empty allowedRepos, permission edge cases, wildcard validation
 - [ ] 25-02-PLAN.md — Ref enforcement via pre-push hooks, security documentation update
-
-
 ### Phase 26: Live Operations Hardening — bootstrap, init, create, destroy, TTL auto-destroy, idle detection, sidecar fixes, proxy enforcement, CLI polish
 
 **Goal:** Harden the platform after extensive live testing (~60 commits). Fix remaining test failures, backfill critical-path test coverage, polish CLI UX (aliases, completion, help text, color), test --remote flag, audit multi-region code, and implement max lifetime cap.
@@ -1028,10 +1024,12 @@ Key design decisions:
 
 ### Phase 44: km at/schedule — EventBridge Scheduler command for deferred and recurring sandbox operations
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Operators can schedule any remote-capable sandbox command (create, destroy, stop, pause, resume, extend) for deferred or recurring execution via EventBridge Scheduler, using natural language time expressions or raw cron. Includes schedule listing and cancellation.
+**Requirements**: [SCHED-PARSE, SCHED-STATE, SCHED-INFRA, SCHED-CMD, SCHED-LIST, SCHED-CANCEL, SCHED-GUARDRAIL]
 **Depends on:** Phase 43
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 44 to break down)
+- [ ] 44-01-PLAN.md — TDD: Natural language time parser (pkg/at/)
+- [ ] 44-02-PLAN.md — SchedulerAPI extension + DynamoDB schedule CRUD + config
+- [ ] 44-03-PLAN.md — km at CLI command with list/cancel subcommands and schedule alias
