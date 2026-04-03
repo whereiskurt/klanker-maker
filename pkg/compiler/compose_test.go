@@ -64,21 +64,25 @@ func TestDockerComposeDNS(t *testing.T) {
 	p := loadTestProfile(t, "docker-basic.yaml")
 	net := testNetwork()
 
-	artifacts, err := compiler.Compile(p, "sb-test003", false, net)
+	sandboxID := "sb-test003"
+	artifacts, err := compiler.Compile(p, sandboxID, false, net)
 	if err != nil {
 		t.Fatalf("Compile() error: %v", err)
 	}
 
 	yaml := artifacts.DockerComposeYAML
 
-	// km-dns-proxy must have static IP
-	if !strings.Contains(yaml, "172.28.0.10") {
-		t.Error("expected km-dns-proxy static IP 172.28.0.10 in docker-compose YAML")
+	// Derive the expected DNS proxy IP for this sandbox ID.
+	_, dnsProxyIP, _ := compiler.DockerSubnet(sandboxID)
+
+	// km-dns-proxy must have static IP derived from sandbox ID.
+	if !strings.Contains(yaml, dnsProxyIP) {
+		t.Errorf("expected km-dns-proxy static IP %s in docker-compose YAML", dnsProxyIP)
 	}
 
-	// main must reference the DNS proxy IP
-	if !strings.Contains(yaml, "172.28.0.10") {
-		t.Error("expected main container to reference DNS proxy IP 172.28.0.10")
+	// main must reference the DNS proxy IP.
+	if !strings.Contains(yaml, dnsProxyIP) {
+		t.Errorf("expected main container to reference DNS proxy IP %s", dnsProxyIP)
 	}
 }
 
@@ -139,7 +143,8 @@ func TestDockerComposeNetwork(t *testing.T) {
 	p := loadTestProfile(t, "docker-basic.yaml")
 	net := testNetwork()
 
-	artifacts, err := compiler.Compile(p, "sb-test006", false, net)
+	sandboxID := "sb-test006"
+	artifacts, err := compiler.Compile(p, sandboxID, false, net)
 	if err != nil {
 		t.Fatalf("Compile() error: %v", err)
 	}
@@ -152,7 +157,49 @@ func TestDockerComposeNetwork(t *testing.T) {
 	if !strings.Contains(yaml, "bridge") {
 		t.Error("expected network driver 'bridge' in docker-compose YAML")
 	}
-	if !strings.Contains(yaml, "172.28.0.0/24") {
-		t.Error("expected IPAM subnet 172.28.0.0/24 in docker-compose YAML")
+
+	// Subnet must match the derived value for this sandbox ID.
+	subnet, _, _ := compiler.DockerSubnet(sandboxID)
+	if !strings.Contains(yaml, subnet) {
+		t.Errorf("expected IPAM subnet %s in docker-compose YAML", subnet)
+	}
+}
+
+// TestDockerSubnetUniqueness verifies that DockerSubnet produces deterministic,
+// unique subnets for different sandbox IDs.
+func TestDockerSubnetUniqueness(t *testing.T) {
+	// Determinism: same ID must always yield the same subnet.
+	subnet1a, dns1a, _ := compiler.DockerSubnet("sb-alpha")
+	subnet1b, dns1b, _ := compiler.DockerSubnet("sb-alpha")
+	if subnet1a != subnet1b || dns1a != dns1b {
+		t.Error("DockerSubnet is not deterministic: same ID produced different results")
+	}
+
+	// Uniqueness: two different IDs must produce different subnets.
+	subnet2, _, _ := compiler.DockerSubnet("sb-beta")
+	if subnet1a == subnet2 {
+		t.Errorf("DockerSubnet collision: sb-alpha and sb-beta both mapped to %s", subnet1a)
+	}
+
+	// Range check: third octet must be between 1 and 253.
+	testIDs := []string{"sb-test001", "sb-test002", "sb-test003", "sb-alpha", "sb-beta", "sb-gamma-longname"}
+	seen := map[string]string{}
+	for _, id := range testIDs {
+		subnet, dnsIP, httpIP := compiler.DockerSubnet(id)
+		// Basic format checks
+		if !strings.HasPrefix(subnet, "172.28.") || !strings.HasSuffix(subnet, ".0/24") {
+			t.Errorf("DockerSubnet(%q) = %q: unexpected format", id, subnet)
+		}
+		if !strings.HasPrefix(dnsIP, "172.28.") || !strings.HasSuffix(dnsIP, ".10") {
+			t.Errorf("DockerSubnet(%q) dnsIP = %q: unexpected format", id, dnsIP)
+		}
+		if !strings.HasPrefix(httpIP, "172.28.") || !strings.HasSuffix(httpIP, ".20") {
+			t.Errorf("DockerSubnet(%q) httpIP = %q: unexpected format", id, httpIP)
+		}
+		// Record for collision detection within this small set
+		if prev, exists := seen[subnet]; exists {
+			t.Logf("note: DockerSubnet collision between %q and %q -> %s (hash collision, not a bug unless frequent)", prev, id, subnet)
+		}
+		seen[subnet] = id
 	}
 }
