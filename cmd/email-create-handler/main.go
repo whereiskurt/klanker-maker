@@ -221,16 +221,23 @@ func (h *OperatorEmailHandler) Handle(ctx context.Context, event S3EventRecord) 
 
 	// Check for an existing conversation thread first.
 	threadID := extractThreadID(msg)
+	fmt.Fprintf(os.Stderr, "[operator-email] thread=%q sender=%s subject=%q\n", threadID, senderEmail, subject)
 	if threadID != "" {
 		conv, loadErr := loadConversation(ctx, h.S3Client, h.ArtifactBucket, threadID)
-		if loadErr == nil && conv != nil && conv.State == "awaiting_confirmation" {
-			return h.handleConversationReply(ctx, senderEmail, bodyText, conv)
+		if loadErr != nil {
+			fmt.Fprintf(os.Stderr, "[operator-email] conversation load error: %v\n", loadErr)
 		}
-		// loadErr is expected (NoSuchKey) for new threads; ignore it and continue dispatch.
+		if loadErr == nil && conv != nil {
+			fmt.Fprintf(os.Stderr, "[operator-email] conversation found: state=%s threadID=%s\n", conv.State, conv.ThreadID)
+			if conv.State == "awaiting_confirmation" {
+				return h.handleConversationReply(ctx, senderEmail, bodyText, conv)
+			}
+		}
 	}
 
 	// YAML attachment + "create" subject → fast-path (no Haiku).
-	if strings.Contains(subjectLower, "create") {
+	// Only trigger if there's actually a YAML attachment AND the subject is not a reply.
+	if strings.Contains(subjectLower, "create") && len(yamlBytes) > 0 && !strings.HasPrefix(subjectLower, "re:") {
 		return h.handleCreate(ctx, senderEmail, yamlBytes)
 	}
 
