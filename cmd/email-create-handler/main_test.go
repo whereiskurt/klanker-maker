@@ -878,17 +878,25 @@ func TestHandleStatus_ReturnsMetadata(t *testing.T) {
 	body := fmt.Sprintf("KM-AUTH: %s\n", testSafePhrase)
 	rawEmail := buildPlainEmailWithSubject("operator@corp.com", "status sb-abc12345", body)
 
-	metaJSON := `{"sandbox_id":"sb-abc12345","profile_name":"open-dev","substrate":"ec2","region":"us-east-1","created_at":"2026-03-25T10:00:00Z","ttl_expiry":"2026-03-27T10:00:00Z","idle_timeout":"15m"}`
-
 	eb := &mockEB{}
 	ses := &mockSES{}
 	s3data := map[string][]byte{
-		"mail/msg010":                                rawEmail,
-		"tf-km/sandboxes/sb-abc12345/metadata.json": []byte(metaJSON),
+		"mail/msg010": rawEmail,
 	}
-	h := newTestHandler(s3data, testSafePhrase, eb, ses)
-	// Status reads from StateBucket
-	h.S3Client = &mockS3{objects: s3data}
+	h := newTestHandlerWithAI(&mockS3{objects: s3data}, testSafePhrase, eb, ses, nil)
+	// Seed DynamoDB with sandbox metadata record
+	h.DynamoClient = &mockDynamo{
+		items: map[string]map[string]dynamodbtypes.AttributeValue{
+			"sb-abc12345": {
+				"sandbox_id":   &dynamodbtypes.AttributeValueMemberS{Value: "sb-abc12345"},
+				"profile_name": &dynamodbtypes.AttributeValueMemberS{Value: "open-dev"},
+				"substrate":    &dynamodbtypes.AttributeValueMemberS{Value: "ec2"},
+				"region":       &dynamodbtypes.AttributeValueMemberS{Value: "us-east-1"},
+				"created_at":   &dynamodbtypes.AttributeValueMemberS{Value: "2026-03-25T10:00:00Z"},
+				"ttl_expiry":   &dynamodbtypes.AttributeValueMemberS{Value: "2026-03-27T10:00:00Z"},
+			},
+		},
+	}
 
 	event := buildEventRecord("test-bucket", "mail/msg010")
 	if err := h.Handle(context.Background(), event); err != nil {
@@ -922,7 +930,7 @@ func TestHandleStatus_NotFound(t *testing.T) {
 	eb := &mockEB{}
 	ses := &mockSES{}
 	s3data := map[string][]byte{"mail/msg011": rawEmail}
-	h := newTestHandler(s3data, testSafePhrase, eb, ses)
+	h := newTestHandlerWithAI(&mockS3{objects: s3data}, testSafePhrase, eb, ses, nil)
 
 	event := buildEventRecord("test-bucket", "mail/msg011")
 	if err := h.Handle(context.Background(), event); err != nil {
