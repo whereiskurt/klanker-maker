@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -199,6 +200,29 @@ func newAtCmdInternal(cfg *config.Config, schedClient awspkg.SchedulerAPI, dynam
 				return fmt.Errorf("build target input: %w", err)
 			}
 
+			// For "create" commands: upload profile YAML to S3 so the Lambda can find it at fire-time.
+			// If the profile file doesn't exist locally, include the path in the detail and
+			// let the Lambda resolve it from its toolchain (which has profiles/ baked in).
+			if cmdArg == "create" && cfg.ArtifactsBucket != "" {
+				profilePath, _, _, _ := parseCreateArgs(extraArgs)
+				if profilePath != "" {
+					if profileData, readErr := os.ReadFile(profilePath); readErr == nil {
+						s3Key := "scheduled/" + profilePath
+						awsCfg2, _ := awspkg.LoadAWSConfig(ctx, resolveAWSProfile(cfg))
+						s3Client := s3.NewFromConfig(awsCfg2)
+						if _, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
+							Bucket: aws.String(cfg.ArtifactsBucket),
+							Key:    aws.String(s3Key),
+							Body:   strings.NewReader(string(profileData)),
+						}); putErr != nil {
+							fmt.Fprintf(cmd.ErrOrStderr(), "  [warn] profile upload failed: %v (Lambda will use builtin)\n", putErr)
+						} else {
+							fmt.Fprintf(cmd.OutOrStdout(), "  Profile uploaded to s3://%s/%s\n", cfg.ArtifactsBucket, s3Key)
+						}
+					}
+				}
+			}
+
 			// Determine ActionAfterCompletion
 			actionAfterCompletion := schedulertypes.ActionAfterCompletionDelete
 			if spec.IsRecurring {
@@ -257,18 +281,55 @@ func newAtCmdInternal(cfg *config.Config, schedClient awspkg.SchedulerAPI, dynam
 	return cmd
 }
 
+// parseCreateArgs extracts create-specific flags from the extra args after the command name.
+// Returns profile path, alias, onDemand flag, and an error for unsupported flags.
+func parseCreateArgs(extraArgs []string) (profilePath, alias string, onDemand bool, err error) {
+	for i := 0; i < len(extraArgs); i++ {
+		switch extraArgs[i] {
+		case "--alias":
+			if i+1 >= len(extraArgs) {
+				return "", "", false, fmt.Errorf("--alias requires a value")
+			}
+			alias = extraArgs[i+1]
+			i++ // skip value
+		case "--on-demand":
+			onDemand = true
+		case "--docker":
+			return "", "", false, fmt.Errorf("--docker is not supported for scheduled creates (requires local execution)")
+		default:
+			if strings.HasPrefix(extraArgs[i], "--") {
+				return "", "", false, fmt.Errorf("unknown flag: %s", extraArgs[i])
+			}
+			if profilePath == "" {
+				profilePath = extraArgs[i]
+			}
+		}
+	}
+	return profilePath, alias, onDemand, nil
+}
+
 // buildTargetInput builds the JSON payload sent to the Lambda as Target.Input.
-// For "create": sends SandboxCreate detail (empty sandbox_id — Lambda generates one).
+// For "create": sends SandboxCreate detail with profile, alias, on_demand parsed from extraArgs.
 // For lifecycle commands: sends SandboxIdle event JSON.
 func buildTargetInput(cmdArg string, cmdInfo schedulableCommand, sandboxID, artifactsBucket string, extraArgs []string) (string, error) {
 	if cmdInfo.targetARNField == "create" {
+		profilePath, alias, onDemand, parseErr := parseCreateArgs(extraArgs)
+		if parseErr != nil {
+			return "", parseErr
+		}
 		// SandboxCreate event shape: Lambda generates fresh sandbox ID at fire-time.
 		detail := map[string]interface{}{
 			"sandbox_id":      "",
 			"artifact_bucket": artifactsBucket,
 			"artifact_prefix": "scheduled/",
-			"on_demand":       false,
+			"on_demand":       onDemand,
 			"created_by":      "schedule",
+		}
+		if profilePath != "" {
+			detail["profile_path"] = profilePath
+		}
+		if alias != "" {
+			detail["alias"] = alias
 		}
 		b, err := json.Marshal(detail)
 		if err != nil {
@@ -278,6 +339,7 @@ func buildTargetInput(cmdArg string, cmdInfo schedulableCommand, sandboxID, arti
 	}
 
 	// Lifecycle commands: SandboxIdle event shape.
+	// First extra arg is sandbox ID (or alias to resolve).
 	detail := map[string]interface{}{
 		"sandbox_id": sandboxID,
 		"event_type": cmdInfo.eventType,
