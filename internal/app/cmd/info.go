@@ -1,13 +1,19 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 
+	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
+	costexplorertypes "github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
+	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/version"
+	"time"
 )
 
 // NewInfoCmd creates the "km info" subcommand.
@@ -19,13 +25,17 @@ func NewInfoCmd(cfg *config.Config) *cobra.Command {
 		Short: "Show platform configuration and operational details",
 		Long:  helpText("info"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInfo(cfg, cmd.OutOrStdout())
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			return runInfo(ctx, cfg, cmd.OutOrStdout())
 		},
 	}
 	return cmd
 }
 
-func runInfo(cfg *config.Config, w io.Writer) error {
+func runInfo(ctx context.Context, cfg *config.Config, w io.Writer) error {
 	domain := cfg.Domain
 	if domain == "" {
 		domain = "(not configured)"
@@ -88,6 +98,46 @@ func runInfo(cfg *config.Config, w io.Writer) error {
 			fmt.Fprintf(w, "  Safe phrase:      %s\n", cfg.SafePhrase)
 		} else {
 			fmt.Fprintf(w, "  Safe phrase:      (not configured)\n")
+		}
+		fmt.Fprintf(w, "\n")
+	}
+
+	// AWS usage — SES quota and account MTD spend (best-effort, non-fatal)
+	awsCfg, awsErr := kmaws.LoadAWSConfig(ctx, cfg.AWSProfile)
+	if awsErr == nil {
+		fmt.Fprintf(w, "AWS Usage\n")
+
+		// SES send quota
+		sesClient := sesv2.NewFromConfig(awsCfg)
+		if acct, err := sesClient.GetAccount(ctx, &sesv2.GetAccountInput{}); err == nil {
+			if sq := acct.SendQuota; sq != nil {
+				fmt.Fprintf(w, "  SES daily quota:  %.0f emails\n", sq.Max24HourSend)
+				fmt.Fprintf(w, "  SES sent (24h):   %.0f emails\n", sq.SentLast24Hours)
+				remaining := sq.Max24HourSend - sq.SentLast24Hours
+				fmt.Fprintf(w, "  SES remaining:    %.0f emails\n", remaining)
+			}
+		} else {
+			fmt.Fprintf(w, "  SES quota:        (unavailable)\n")
+		}
+
+		// Account MTD spend via Cost Explorer
+		ceClient := costexplorer.NewFromConfig(awsCfg)
+		now := time.Now().UTC()
+		startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+		ceOut, ceErr := ceClient.GetCostAndUsage(ctx, &costexplorer.GetCostAndUsageInput{
+			TimePeriod: &costexplorertypes.DateInterval{
+				Start: strPtr(startOfMonth.Format("2006-01-02")),
+				End:   strPtr(now.Format("2006-01-02")),
+			},
+			Granularity: costexplorertypes.GranularityMonthly,
+			Metrics:     []string{"UnblendedCost"},
+		})
+		if ceErr == nil && len(ceOut.ResultsByTime) > 0 {
+			if cost, ok := ceOut.ResultsByTime[0].Total["UnblendedCost"]; ok && cost.Amount != nil {
+				fmt.Fprintf(w, "  Account MTD:      $%s %s\n", *cost.Amount, valOrDefault(*cost.Unit, "USD"))
+			}
+		} else {
+			fmt.Fprintf(w, "  Account MTD:      (unavailable)\n")
 		}
 		fmt.Fprintf(w, "\n")
 	}

@@ -689,6 +689,7 @@ func TestHandleEmail_MissingKMAuth_AIPath(t *testing.T) {
 	eb := &mockEB{}
 	ses := &mockSES{}
 	h := newTestHandlerWithAI(s3mock, testSafePhrase, eb, ses, bedrock)
+	h.VerboseErrors = true // test expects rejection reply
 
 	event := buildEventRecord("test-bucket", "mail/ai010")
 	if err := h.Handle(context.Background(), event); err != nil {
@@ -786,6 +787,7 @@ func TestHandleEmailCreate_MissingKMAuth(t *testing.T) {
 	ses := &mockSES{}
 	s3data := map[string][]byte{"mail/msg003": rawEmail}
 	h := newTestHandler(s3data, testSafePhrase, eb, ses)
+	h.VerboseErrors = true // test expects rejection reply
 
 	event := buildEventRecord("test-bucket", "mail/msg003")
 	if err := h.Handle(context.Background(), event); err != nil {
@@ -809,6 +811,7 @@ func TestHandleEmailCreate_WrongKMAuth(t *testing.T) {
 	ses := &mockSES{}
 	s3data := map[string][]byte{"mail/msg004": rawEmail}
 	h := newTestHandler(s3data, testSafePhrase, eb, ses)
+	h.VerboseErrors = true // test expects rejection reply
 
 	event := buildEventRecord("test-bucket", "mail/msg004")
 	if err := h.Handle(context.Background(), event); err != nil {

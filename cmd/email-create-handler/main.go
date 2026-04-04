@@ -120,6 +120,9 @@ type OperatorEmailHandler struct {
 	// BedrockClient enables AI interpretation path. If nil, falls back to keyword dispatch.
 	BedrockClient  BedrockRuntimeAPI
 	BedrockModelID string
+	// VerboseErrors when true sends rejection replies for missing/invalid KM-AUTH.
+	// Default false: silently drop unauthenticated emails to prevent SES quota abuse.
+	VerboseErrors bool
 
 	// replyCC holds CC addresses extracted from the current inbound email.
 	// Set at the start of Handle(), used by sendReply to preserve CC on responses.
@@ -182,13 +185,20 @@ func (h *OperatorEmailHandler) Handle(ctx context.Context, event S3EventRecord) 
 		return fmt.Errorf("extract body and YAML: %w", err)
 	}
 
-	// Step 5: Extract and validate KM-AUTH phrase
+	// Step 5: Extract and validate KM-AUTH phrase.
+	// When VerboseErrors is false (default), silently drop unauthenticated emails
+	// without replying. This prevents attackers from discovering the operator address
+	// and flooding it to generate reply traffic that consumes SES quota.
 	phrase := extractKMAuth(bodyText)
 	if phrase == "" {
 		phrase = extractKMAuth(string(rawEmail))
 	}
 	if phrase == "" {
-		return h.sendReply(ctx, senderEmail, "Command rejected", "Missing KM-AUTH phrase. Include KM-AUTH: <your-phrase> in the email body.\n")
+		if h.VerboseErrors {
+			return h.sendReply(ctx, senderEmail, "Command rejected", "Missing KM-AUTH phrase. Include KM-AUTH: <your-phrase> in the email body.\n")
+		}
+		fmt.Fprintf(os.Stderr, "[operator-email] silently dropping email from %s (subject: %s): missing KM-AUTH phrase\n", senderEmail, subject)
+		return nil
 	}
 
 	paramOut, err := h.SSMClient.GetParameter(ctx, &ssm.GetParameterInput{
@@ -199,7 +209,11 @@ func (h *OperatorEmailHandler) Handle(ctx context.Context, event S3EventRecord) 
 		return fmt.Errorf("fetch safe phrase from SSM (%s): %w", h.SafePhraseSSMKey, err)
 	}
 	if subtle.ConstantTimeCompare([]byte(phrase), []byte(awssdk.ToString(paramOut.Parameter.Value))) != 1 {
-		return h.sendReply(ctx, senderEmail, "Command rejected", "Invalid KM-AUTH phrase.\n")
+		if h.VerboseErrors {
+			return h.sendReply(ctx, senderEmail, "Command rejected", "Invalid KM-AUTH phrase.\n")
+		}
+		fmt.Fprintf(os.Stderr, "[operator-email] silently dropping email from %s (subject: %s): invalid KM-AUTH phrase\n", senderEmail, subject)
+		return nil
 	}
 
 	// Step 6: Dispatch
@@ -832,6 +846,7 @@ func main() {
 		SafePhraseSSMKey:  safePhraseKey,
 		BedrockClient:     bedrockClient,
 		BedrockModelID:    bedrockModelID,
+		VerboseErrors:     os.Getenv("KM_VERBOSE_EMAIL_ERRORS") == "true",
 	}
 
 	lambda.Start(h.Handle)
