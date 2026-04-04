@@ -224,12 +224,17 @@ func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, 
 	}
 
 	// Fetch sender's identity to get encryption policy.
+	// Skip encryption when recipient is a raw email address (not a sandbox) —
+	// non-sandbox recipients (operator, external) won't have encryption keys.
 	encryptionPolicy := ""
-	senderRecord, fetchErr := kmaws.FetchPublicKey(ctx, identityClient, tableName, from)
-	if fetchErr == nil && senderRecord != nil {
-		encryptionPolicy = senderRecord.Encryption
+	recipientIsSandbox := !strings.Contains(to, "@")
+	if recipientIsSandbox {
+		senderRecord, fetchErr := kmaws.FetchPublicKey(ctx, identityClient, tableName, from)
+		if fetchErr == nil && senderRecord != nil {
+			encryptionPolicy = senderRecord.Encryption
+		}
 	}
-	// If fetch fails or no record, proceed with empty policy (no encryption).
+	// If recipient is not a sandbox or fetch fails, proceed with empty policy (no encryption).
 
 	// Build email options: CC, BCC, Reply-To, attachments.
 	emailOpts := &kmaws.EmailOptions{
@@ -252,6 +257,13 @@ func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, 
 		emailOpts.BCC = append(emailOpts.BCC, operatorEmail)
 	}
 
+	// Derive recipientSandboxID for identity lookup.
+	// When to is a raw email, extract the local part as the "sandbox ID" for the X-KM headers.
+	recipientID := to
+	if strings.Contains(to, "@") {
+		recipientID = strings.SplitN(to, "@", 2)[0]
+	}
+
 	// Send the email.
 	if err := kmaws.SendSignedEmail(
 		ctx,
@@ -259,7 +271,7 @@ func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, 
 		ssmClient,
 		identityClient,
 		fromEmail, toEmail, subject, body,
-		from, to, tableName, encryptionPolicy,
+		from, recipientID, tableName, encryptionPolicy,
 		emailOpts,
 	); err != nil {
 		return fmt.Errorf("send email: %w", err)
