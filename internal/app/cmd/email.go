@@ -427,18 +427,12 @@ func runEmailRead(ctx context.Context, cfg *config.Config, deps *EmailReadDeps, 
 			}
 		}
 
-		// Fetch receiver's allow-list for ParseSignedMessage.
-		var allowedSenders []string
-		if identityClient != nil {
-			receiverRecord, fetchErr := kmaws.FetchPublicKey(ctx, identityClient, tableName, sandboxID)
-			if fetchErr == nil && receiverRecord != nil {
-				allowedSenders = receiverRecord.AllowedSenders
-			}
-		}
-
-		parsedMsg, parseErr := kmaws.ParseSignedMessage(rawMIME, sandboxID, pubKeyB64, allowedSenders, "")
+		// Operator-side read: pass ["*"] to bypass allow-list filtering.
+		// The operator should see all messages in the mailbox regardless of
+		// the sandbox's allowedSenders policy (that's enforced in-sandbox by km-recv).
+		parsedMsg, parseErr := kmaws.ParseSignedMessage(rawMIME, sandboxID, pubKeyB64, []string{"*"}, "")
 		if parseErr != nil {
-			continue // skip messages that fail parsing (e.g., ErrSenderNotAllowed)
+			continue // skip messages that fail parsing
 		}
 
 		// Set the S3 key and message ID on the parsed message.
