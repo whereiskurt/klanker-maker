@@ -92,8 +92,10 @@ Replace the dispatch logic with a conversational AI flow using Bedrock Haiku:
 
 ## Key Design Decisions
 
+- **Two command types:** Info commands (list, status) reply immediately — no confirmation needed. Action commands (create, destroy, extend, pause, resume) require confirmation before execution.
+- **Sandbox-to-operator:** Sandboxes can email the operator (via `km-send --to operator@sandboxes.{domain}`) to request info or actions. Same Haiku interpretation applies.
 - **Fast-path preserved:** YAML attachment + "create" subject still works as before — no Haiku call needed
 - **Safe phrase required for all paths** — AI interpretation doesn't bypass auth
 - **Haiku not Claude** — keeps cost per email interaction trivial (~$0.001/request)
-- **Confirmation required** — Haiku never directly triggers actions; always goes through confirmation loop
+- **Confirmation required for actions** — Haiku never directly triggers destructive actions; info commands reply immediately
 - **Low confidence → clarifying question** — if Haiku scores < 0.7, reply asking for clarification instead of guessing
