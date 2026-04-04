@@ -155,7 +155,7 @@ func runInfo(ctx context.Context, cfg *config.Config, w io.Writer) error {
 			}},
 		})
 		if grpErr == nil && len(grpOut.ResultsByTime) > 0 {
-			var aiTotal, ec2Total float64
+			var aiTotal, ec2Total, lambdaTotal float64
 			for _, g := range grpOut.ResultsByTime[0].Groups {
 				svcName := ""
 				if len(g.Keys) > 0 {
@@ -172,9 +172,13 @@ func runInfo(ctx context.Context, cfg *config.Config, w io.Writer) error {
 				if svcName == "Amazon Elastic Compute Cloud - Compute" || svcName == "EC2 - Other" {
 					ec2Total += amt
 				}
+				if svcName == "AWS Lambda" {
+					lambdaTotal += amt
+				}
 			}
 			fmt.Fprintf(w, "  AI MTD:           $%.2f\n", aiTotal)
 			fmt.Fprintf(w, "  EC2 MTD:          $%.2f\n", ec2Total)
+			fmt.Fprintf(w, "  Lambda MTD:       $%.2f\n", lambdaTotal)
 		}
 
 		fmt.Fprintf(w, "\n")

@@ -12,7 +12,7 @@ spec:
   lifecycle:
     ttl: "4h"
     idleTimeout: "30m"
-    teardownPolicy: destroy
+    teardownPolicy: pause
 
   runtime:
     substrate: ec2

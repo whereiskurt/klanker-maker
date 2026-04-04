@@ -1,7 +1,7 @@
 apiVersion: klankermaker.ai/v1alpha1
 kind: SandboxProfile
 metadata:
-  name: goose-ebpf-gatekeeper
+  name: goose
   labels:
     tier: development
     tool: goose
@@ -11,7 +11,7 @@ spec:
   lifecycle:
     ttl: "1h"
     idleTimeout: "15m"
-    teardownPolicy: destroy
+    teardownPolicy: pause
 
   runtime:
     substrate: ec2

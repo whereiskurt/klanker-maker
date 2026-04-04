@@ -1,7 +1,7 @@
 apiVersion: klankermaker.ai/v1alpha1
 kind: SandboxProfile
 metadata:
-  name: agent-orchestrator
+  name: ao
   labels:
     tier: development
     tool: agent-orchestrator
@@ -12,7 +12,7 @@ spec:
   lifecycle:
     ttl: "8h"
     idleTimeout: "1h"
-    teardownPolicy: destroy
+    teardownPolicy: pause
 
   runtime:
     substrate: ec2
