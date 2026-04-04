@@ -655,23 +655,35 @@ func (h *OperatorEmailHandler) executeConfirmedCommand(ctx context.Context, send
 			}
 		}
 
-		// If schedule_time is set, dispatch via EventBridge Scheduler instead of immediate create.
+		// If schedule_time is set, reply with the CLI command instead of executing.
+		// Scheduling requires the km CLI (EventBridge Scheduler + time parsing) which
+		// the Lambda doesn't have. The operator runs it locally.
 		if schedTime, ok := cmd.Overrides["schedule_time"]; ok && fmt.Sprintf("%v", schedTime) != "" {
 			alias := ""
 			if a, ok := cmd.Overrides["alias"]; ok {
 				alias = fmt.Sprintf("%v", a)
 			}
-			execErr = awspkg.PutSandboxCreateEvent(ctx, h.EventBridgeClient, awspkg.SandboxCreateDetail{
-				SandboxID:      sandboxID,
-				ArtifactBucket: h.ArtifactBucket,
-				ArtifactPrefix: artifactPrefix,
-				OperatorEmail:  senderEmail,
-				OnDemand:       onDemand,
-				ScheduleTime:   fmt.Sprintf("%v", schedTime),
-				Alias:          alias,
-			})
-			execDetail = fmt.Sprintf("Sandbox ID: %s\nProfile: %s\nScheduled: %v\nOn-demand: %v\n", sandboxID, cmd.Profile, schedTime, onDemand)
-		} else {
+
+			var cmdLine strings.Builder
+			cmdLine.WriteString(fmt.Sprintf("km at '%v' create profiles/%s.yaml", schedTime, cmd.Profile))
+			if onDemand {
+				cmdLine.WriteString(" --on-demand")
+			}
+			if alias != "" {
+				cmdLine.WriteString(fmt.Sprintf(" --alias %s", alias))
+			}
+
+			conv.State = "confirmed"
+			conv.Messages = append(conv.Messages, ConversationMsg{Role: "system", Content: "schedule-command", At: time.Now().UTC()})
+			_ = saveConversation(ctx, h.S3Client, h.ArtifactBucket, conv)
+
+			return h.sendReply(ctx, senderEmail,
+				fmt.Sprintf("Schedule command ready: km create %s", cmd.Profile),
+				fmt.Sprintf("This is a scheduled create — run this on your CLI:\n\n  %s\n\nProfile: %s\nSchedule: %v\nOn-demand: %v\nAlias: %s\n",
+					cmdLine.String(), cmd.Profile, schedTime, onDemand, alias))
+		}
+		// Immediate create: dispatch via EventBridge.
+		{
 			execErr = awspkg.PutSandboxCreateEvent(ctx, h.EventBridgeClient, awspkg.SandboxCreateDetail{
 				SandboxID:      sandboxID,
 				ArtifactBucket: h.ArtifactBucket,
