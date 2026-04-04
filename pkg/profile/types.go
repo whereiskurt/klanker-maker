@@ -121,7 +121,7 @@ type LifecycleSpec struct {
 	// MaxLifetime is the absolute maximum duration from sandbox creation time (e.g. "72h").
 	// When set, km extend will refuse to extend the sandbox TTL beyond CreatedAt + MaxLifetime.
 	// Empty string means no cap (backward compatible).
-	MaxLifetime string `yaml:"maxLifetime" json:"maxLifetime"`
+	MaxLifetime string `yaml:"maxLifetime,omitempty" json:"maxLifetime,omitempty"`
 }
 
 // AdditionalVolumeSpec defines an extra EBS volume to attach and auto-mount.
