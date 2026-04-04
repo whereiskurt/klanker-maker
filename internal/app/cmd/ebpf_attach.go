@@ -4,18 +4,25 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
+	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	"github.com/whereiskurt/klankrmkr/pkg/allowlistgen"
+	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/ebpf"
 	"github.com/whereiskurt/klankrmkr/pkg/ebpf/audit"
 	"github.com/whereiskurt/klankrmkr/pkg/ebpf/resolver"
@@ -33,17 +40,19 @@ import (
 //  6. Graceful shutdown: close consumer, stop resolver, close enforcer
 func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 	var (
-		sandboxID    string
-		dnsPort      uint32
-		httpPort     uint32
-		firewallMode string
-		allowedDNS   string
-		allowedHosts string
-		proxyHosts   string
-		cgroupPath   string
-		enableTLS    bool
-		allowedRepos string
-		httpProxyPID uint32
+		sandboxID     string
+		dnsPort       uint32
+		httpPort      uint32
+		firewallMode  string
+		allowedDNS    string
+		allowedHosts  string
+		proxyHosts    string
+		cgroupPath    string
+		enableTLS     bool
+		allowedRepos  string
+		httpProxyPID  uint32
+		observe       bool
+		observeOutput string
 	)
 
 	cmd := &cobra.Command{
@@ -54,7 +63,7 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runEbpfAttach(sandboxID, dnsPort, httpPort, firewallMode,
 				allowedDNS, allowedHosts, proxyHosts, cgroupPath,
-				enableTLS, allowedRepos, httpProxyPID)
+				enableTLS, allowedRepos, httpProxyPID, observe, observeOutput)
 		},
 	}
 
@@ -79,6 +88,10 @@ func NewEBPFAttachCmd(cfg *config.Config) *cobra.Command {
 		"Comma-separated list of allowed GitHub repos (owner/repo)")
 	cmd.Flags().Uint32Var(&httpProxyPID, "proxy-pid", 0,
 		"PID of the HTTP proxy process to exempt from BPF interception (gatekeeper mode); 0 = disabled")
+	cmd.Flags().BoolVar(&observe, "observe", false,
+		"Enable learning mode: record observed DNS/TLS traffic and write profile JSON on shutdown")
+	cmd.Flags().StringVar(&observeOutput, "observe-output", "/tmp/km-observed.json",
+		"Local path to write observed JSON on shutdown (used with --observe)")
 
 	return cmd
 }
@@ -109,6 +122,15 @@ func ipToUint32(ip net.IP) uint32 {
 	return binary.NativeEndian.Uint32(ip4)
 }
 
+// observedState is the JSON serialisation format for a completed learn session.
+// It is written locally by ebpf-attach --observe and uploaded to S3, then
+// consumed by km shell --learn on the operator's host to generate a profile.
+type observedState struct {
+	DNS   []string `json:"dns"`
+	Hosts []string `json:"hosts"`
+	Repos []string `json:"repos"`
+}
+
 func runEbpfAttach(
 	sandboxID string,
 	dnsPort, httpPort uint32,
@@ -118,12 +140,21 @@ func runEbpfAttach(
 	enableTLS bool,
 	allowedRepos string,
 	httpProxyPID uint32,
+	observe bool,
+	observeOutput string,
 ) error {
 	logger := log.With().Str("sandbox_id", sandboxID).Logger()
 
 	fwMode, err := parseFirewallMode(firewallMode)
 	if err != nil {
 		return err
+	}
+
+	// Learning mode: create a Recorder to accumulate all observed traffic.
+	var recorder *allowlistgen.Recorder
+	if observe {
+		recorder = allowlistgen.NewRecorder()
+		logger.Info().Str("output", observeOutput).Msg("observe mode: learning mode enabled")
 	}
 
 	// 127.0.0.1 in network byte order.
@@ -221,6 +252,12 @@ func runEbpfAttach(
 			AllowedSuffixes: dnsSuffixes,
 			MapUpdater:      enforcer,
 			ProxyHosts:      proxyHostList,
+		}
+		// Wire the recorder as a DNS observer when in learning mode.
+		if recorder != nil {
+			resolverCfg.DomainObserver = func(domain string, _ bool) {
+				recorder.RecordDNSQuery(domain)
+			}
 		}
 		res := resolver.NewResolver(resolverCfg)
 		go func() {
@@ -346,6 +383,11 @@ func runEbpfAttach(
 					brHandler := ebpftls.NewBedrockAuditHandler(logger)
 					tlsConsumer.AddHandler(brHandler.Handle)
 
+					// Register allowlistgen recorder as TLS handler when in learning mode.
+					if recorder != nil {
+						tlsConsumer.AddHandler(recorder.HandleTLSEvent)
+					}
+
 					// Run TLS consumer in background.
 					var tlsCtx context.Context
 					tlsCtx, tlsCancel = context.WithCancel(ctx)
@@ -400,6 +442,64 @@ func runEbpfAttach(
 	// Close audit consumer explicitly to unblock pending Read().
 	if err := consumer.Close(); err != nil {
 		logger.Debug().Err(err).Msg("audit consumer close")
+	}
+
+	// Observe mode: serialize the recorder state, write local JSON, upload to S3.
+	if recorder != nil {
+		state := observedState{
+			DNS:   recorder.DNSDomains(),
+			Hosts: recorder.Hosts(),
+			Repos: recorder.Repos(),
+		}
+		data, marshalErr := json.MarshalIndent(state, "", "  ")
+		if marshalErr != nil {
+			logger.Error().Err(marshalErr).Msg("observe mode: failed to marshal observed state")
+		} else {
+			// Atomic write: write to .tmp then rename.
+			tmpPath := observeOutput + ".tmp"
+			if writeErr := os.WriteFile(tmpPath, data, 0o644); writeErr != nil {
+				logger.Error().Err(writeErr).Str("path", tmpPath).Msg("observe mode: failed to write tmp file")
+			} else if renameErr := os.Rename(tmpPath, observeOutput); renameErr != nil {
+				logger.Error().Err(renameErr).Msg("observe mode: failed to rename tmp to output")
+			}
+
+			// Upload to S3 at learn/{sandboxID}/{timestamp}.json.
+			s3Key := "skipped"
+			bucket := os.Getenv("KM_ARTIFACTS_BUCKET")
+			if bucket != "" {
+				timestamp := time.Now().UTC().Format("20060102T150405Z")
+				s3Key = fmt.Sprintf("learn/%s/%s.json", sandboxID, timestamp)
+				uploadCtx := context.Background()
+				awsCfg, cfgErr := kmaws.LoadAWSConfig(uploadCtx, "")
+				if cfgErr != nil {
+					logger.Warn().Err(cfgErr).Msg("observe mode: failed to load AWS config for S3 upload")
+					s3Key = "skipped"
+				} else {
+					s3Client := s3.NewFromConfig(awsCfg)
+					_, putErr := s3Client.PutObject(uploadCtx, &s3.PutObjectInput{
+						Bucket:      awssdk.String(bucket),
+						Key:         awssdk.String(s3Key),
+						Body:        bytes.NewReader(data),
+						ContentType: awssdk.String("application/json"),
+					})
+					if putErr != nil {
+						logger.Warn().Err(putErr).Str("key", s3Key).Msg("observe mode: S3 upload failed (non-fatal)")
+						s3Key = "skipped"
+					}
+				}
+			} else {
+				logger.Warn().Msg("observe mode: KM_ARTIFACTS_BUCKET not set, skipping S3 upload")
+			}
+
+			logger.Info().
+				Int("dns_domains", len(state.DNS)).
+				Int("hosts", len(state.Hosts)).
+				Int("repos", len(state.Repos)).
+				Str("path", observeOutput).
+				Str("s3_key", s3Key).
+				Msgf("observe mode: wrote %d DNS domains, %d hosts, %d repos to %s (S3: %s)",
+					len(state.DNS), len(state.Hosts), len(state.Repos), observeOutput, s3Key)
+		}
 	}
 
 	// Enforcer.Close() is deferred — it closes BPF objects.

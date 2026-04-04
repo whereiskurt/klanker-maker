@@ -53,6 +53,11 @@ type ResolverConfig struct {
 	// SweepInterval controls how often expired resolved entries are purged.
 	// Defaults to 30 seconds if zero.
 	SweepInterval time.Duration
+
+	// DomainObserver, if non-nil, is called for every DNS query with the domain
+	// (trailing dot stripped) and whether it was allowed. Used by the allowlist
+	// generator's learning mode.
+	DomainObserver func(domain string, allowed bool)
 }
 
 // Resolver is the DNS resolver daemon.
@@ -214,6 +219,10 @@ func (r *Resolver) handleQuery(w dns.ResponseWriter, req *dns.Msg) {
 		Uint16("qtype", q.Qtype).
 		Bool("allowed", allowed).
 		Msg("")
+
+	if r.cfg.DomainObserver != nil {
+		r.cfg.DomainObserver(strings.TrimSuffix(domain, "."), allowed)
+	}
 
 	if !allowed {
 		m := new(dns.Msg)
