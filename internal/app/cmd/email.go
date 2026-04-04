@@ -148,7 +148,7 @@ func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, 
 	if from == "" {
 		from = "operator"
 	}
-	if !strings.Contains(from, "@") {
+	if from != "operator" && !strings.Contains(from, "@") {
 		resolvedFrom, err := resolveID(ctx, from)
 		if err != nil {
 			return fmt.Errorf("resolve sender %q: %w", from, err)
