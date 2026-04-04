@@ -38,4 +38,6 @@ inputs = {
   state_bucket         = local.site_vars.locals.backend.bucket
   email_domain         = "sandboxes.${local.site_vars.locals.site.domain}"
   lambda_zip_path      = "${local.repo_root}/build/email-create-handler.zip"
+  scheduler_role_arn   = get_env("KM_SCHEDULER_ROLE_ARN", "")
+  create_handler_arn   = get_env("KM_CREATE_HANDLER_ARN", "")
 }

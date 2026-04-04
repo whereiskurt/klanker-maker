@@ -130,6 +130,32 @@ resource "aws_iam_role_policy" "eventbridge_publish" {
   })
 }
 
+# Policy: EventBridge Scheduler — create/manage schedules for deferred operations
+resource "aws_iam_role_policy" "scheduler" {
+  name = "km-email-handler-scheduler"
+  role = aws_iam_role.email_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "scheduler:CreateSchedule",
+          "scheduler:DeleteSchedule",
+          "scheduler:GetSchedule",
+        ]
+        Resource = "arn:aws:scheduler:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:schedule/km-at/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["iam:PassRole"]
+        Resource = var.scheduler_role_arn
+      }
+    ]
+  })
+}
+
 # Policy: KMS — decrypt SSM SecureString parameters and Lambda env vars
 resource "aws_iam_role_policy" "kms_decrypt" {
   name = "km-email-handler-kms"
@@ -223,6 +249,8 @@ resource "aws_lambda_function" "email_handler" {
       KM_SAFE_PHRASE_SSM_KEY = var.safe_phrase_ssm_key
       SANDBOX_TABLE_NAME     = "km-sandboxes"
       BEDROCK_MODEL_ID       = var.bedrock_model_id
+      KM_SCHEDULER_ROLE_ARN  = var.scheduler_role_arn
+      KM_CREATE_HANDLER_ARN  = var.create_handler_arn
     }
   }
 

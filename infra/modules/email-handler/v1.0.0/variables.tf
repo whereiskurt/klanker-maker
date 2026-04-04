@@ -36,3 +36,15 @@ variable "bedrock_model_id" {
   type        = string
   default     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 }
+
+variable "scheduler_role_arn" {
+  description = "IAM role ARN that EventBridge Scheduler assumes to invoke Lambda targets"
+  type        = string
+  default     = ""
+}
+
+variable "create_handler_arn" {
+  description = "ARN of the km-create-handler Lambda (target for scheduled creates)"
+  type        = string
+  default     = ""
+}

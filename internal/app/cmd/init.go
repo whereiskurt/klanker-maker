@@ -122,13 +122,15 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
 		},
 		{
-			name:    "email-handler",
-			dir:     filepath.Join(regionDir, "email-handler"),
+			// create-handler must apply before email-handler so its ARN is
+			// available for the email-handler's KM_CREATE_HANDLER_ARN env var.
+			name:    "create-handler",
+			dir:     filepath.Join(regionDir, "create-handler"),
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
 		},
 		{
-			name:    "create-handler",
-			dir:     filepath.Join(regionDir, "create-handler"),
+			name:    "email-handler",
+			dir:     filepath.Join(regionDir, "email-handler"),
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
 		},
 		{
@@ -200,6 +202,9 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 	}
 	if cfg.OperatorEmail != "" && os.Getenv("KM_OPERATOR_EMAIL") == "" {
 		os.Setenv("KM_OPERATOR_EMAIL", cfg.OperatorEmail)
+	}
+	if cfg.SchedulerRoleARN != "" && os.Getenv("KM_SCHEDULER_ROLE_ARN") == "" {
+		os.Setenv("KM_SCHEDULER_ROLE_ARN", cfg.SchedulerRoleARN)
 	}
 
 	repoRoot := findRepoRoot()
@@ -493,6 +498,18 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 					arn := fmt.Sprintf("%v", extractValue(arnVal))
 					os.Setenv("KM_EMAIL_HANDLER_ARN", arn)
 					fmt.Printf("  Email handler ARN: %s\n", arn)
+				}
+			}
+		}
+
+		// After create-handler module: capture Lambda ARN for email-handler scheduling
+		if mod.name == "create-handler" {
+			outputMap, outErr := runner.Output(ctx, mod.dir)
+			if outErr == nil {
+				if arnVal, ok := outputMap["lambda_function_arn"]; ok {
+					arn := fmt.Sprintf("%v", extractValue(arnVal))
+					os.Setenv("KM_CREATE_HANDLER_ARN", arn)
+					fmt.Printf("  Create handler ARN: %s\n", arn)
 				}
 			}
 		}
