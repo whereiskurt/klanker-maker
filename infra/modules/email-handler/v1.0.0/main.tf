@@ -59,8 +59,10 @@ resource "aws_iam_role_policy" "s3_access" {
         Action = [
           "s3:GetObject",
           "s3:PutObject",
+          "s3:ListBucket",
         ]
         Resource = [
+          "${var.artifact_bucket_arn}",
           "${var.artifact_bucket_arn}/*",
         ]
       },

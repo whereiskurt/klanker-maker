@@ -10,7 +10,7 @@ import (
 //go:embed builtins
 var builtinFS embed.FS
 
-var builtinNames = []string{"open-dev", "restricted-dev", "hardened", "sealed"}
+var builtinNames = []string{"open-dev", "restricted-dev", "hardened", "sealed", "goose", "ao", "codex"}
 
 // ListBuiltins returns the names of all built-in profiles.
 func ListBuiltins() []string {
