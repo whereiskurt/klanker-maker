@@ -120,6 +120,11 @@ type OperatorEmailHandler struct {
 	// BedrockClient enables AI interpretation path. If nil, falls back to keyword dispatch.
 	BedrockClient  BedrockRuntimeAPI
 	BedrockModelID string
+
+	// replyCC holds CC addresses extracted from the current inbound email.
+	// Set at the start of Handle(), used by sendReply to preserve CC on responses.
+	// Per-request field — safe because Lambda processes one event at a time.
+	replyCC []string
 }
 
 // sandboxIDPattern matches sandbox IDs: {prefix}-{8hex} (e.g. sb-abc123de, claude-abc123de).
@@ -155,10 +160,21 @@ func (h *OperatorEmailHandler) Handle(ctx context.Context, event S3EventRecord) 
 		return fmt.Errorf("parse MIME message: %w", err)
 	}
 
-	// Step 3: Extract sender and subject
+	// Step 3: Extract sender, subject, and CC
 	senderFrom := msg.Header.Get("From")
 	senderEmail := extractEmail(senderFrom)
 	subject := msg.Header.Get("Subject")
+
+	// Preserve CC addresses from the inbound message so replies include them.
+	h.replyCC = nil
+	if ccHeader := msg.Header.Get("Cc"); ccHeader != "" {
+		for _, addr := range strings.Split(ccHeader, ",") {
+			addr = strings.TrimSpace(addr)
+			if addr != "" && addr != senderEmail {
+				h.replyCC = append(h.replyCC, extractEmail(addr))
+			}
+		}
+	}
 
 	// Step 4: Extract body text and YAML profile
 	bodyText, yamlBytes, err := extractBodyAndYAML(msg)
@@ -654,11 +670,15 @@ func (h *OperatorEmailHandler) handleRevision(ctx context.Context, senderEmail, 
 func (h *OperatorEmailHandler) sendReply(ctx context.Context, to, subject, body string) error {
 	from := fmt.Sprintf("operator@sandboxes.%s", h.Domain)
 	fullBody := body + "\n— " + version.Header() + "\n"
+	dest := &sesv2types.Destination{
+		ToAddresses: []string{to},
+	}
+	if len(h.replyCC) > 0 {
+		dest.CcAddresses = h.replyCC
+	}
 	if _, err := h.SESClient.SendEmail(ctx, &sesv2.SendEmailInput{
 		FromEmailAddress: awssdk.String(from),
-		Destination: &sesv2types.Destination{
-			ToAddresses: []string{to},
-		},
+		Destination:      dest,
 		Content: &sesv2types.EmailContent{
 			Simple: &sesv2types.Message{
 				Subject: &sesv2types.Content{

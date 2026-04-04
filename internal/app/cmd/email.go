@@ -121,16 +121,15 @@ func newEmailSendCmd(cfg *config.Config, deps *EmailSendDeps) *cobra.Command {
 		},
 	}
 
-	send.Flags().StringVar(&fromFlag, "from", "", "Sender sandbox ID (required)")
+	send.Flags().StringVar(&fromFlag, "from", "", "Sender sandbox ID or email (default: operator)")
 	send.Flags().StringVar(&toFlag, "to", "", "Recipient sandbox ID or email (default: operator inbox)")
 	send.Flags().StringVar(&subjectFlag, "subject", "", "Email subject line (required)")
-	send.Flags().StringVar(&bodyFlag, "body", "", "Path to body file, or - for stdin (required)")
+	send.Flags().StringVar(&bodyFlag, "body", "", "Body text, file path, or - for stdin (required)")
 	send.Flags().StringVar(&attachFlag, "attach", "", "Comma-separated list of attachment file paths")
 	send.Flags().StringVar(&ccFlag, "cc", "", "Comma-separated CC recipients (visible to all)")
 	send.Flags().BoolVar(&useBCC, "use-bcc", false, "BCC the operator email address on this message")
 	send.Flags().StringVar(&replyToFlag, "reply-to", "", "Set Reply-To header")
 
-	_ = send.MarkFlagRequired("from")
 	_ = send.MarkFlagRequired("subject")
 	_ = send.MarkFlagRequired("body")
 
@@ -139,18 +138,23 @@ func newEmailSendCmd(cfg *config.Config, deps *EmailSendDeps) *cobra.Command {
 
 // runEmailSend executes the km email send logic.
 func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, from, to, subject, bodyPath, attachCSV, ccCSV string, useBCC bool, replyTo string, out io.Writer) error {
-	// Resolve --from: supports sandbox IDs, aliases, or numbers from km list.
+	// Resolve --from: default to operator when omitted.
 	resolveID := func(ctx context.Context, ref string) (string, error) {
 		if deps != nil && deps.ResolveID != nil {
 			return deps.ResolveID(ctx, ref)
 		}
 		return ResolveSandboxID(ctx, cfg, ref)
 	}
-	resolvedFrom, err := resolveID(ctx, from)
-	if err != nil {
-		return fmt.Errorf("resolve sender %q: %w", from, err)
+	if from == "" {
+		from = "operator"
 	}
-	from = resolvedFrom
+	if !strings.Contains(from, "@") {
+		resolvedFrom, err := resolveID(ctx, from)
+		if err != nil {
+			return fmt.Errorf("resolve sender %q: %w", from, err)
+		}
+		from = resolvedFrom
+	}
 
 	// Resolve --to: default to operator inbox when omitted.
 	// If --to contains "@" it's a raw email address (used directly).
