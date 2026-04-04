@@ -325,6 +325,46 @@ func TestAtCmd_RecurringCreateUnlimited(t *testing.T) {
 	}
 }
 
+// TestAtCmd_CreateWithAlias verifies --alias and --on-demand are included in the target input.
+func TestAtCmd_CreateWithAlias(t *testing.T) {
+	cfg := testAtConfig()
+	sched := &mockSchedulerAPI{}
+	dynamo := &mockDynamoAtAPI{}
+
+	_, _, err := runAtCmd(t, cfg, sched, dynamo, 0, nil, []string{"in 1 hour", "create", "dev.yaml", "--alias", "g1", "--on-demand"})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if sched.createScheduleInput == nil || sched.createScheduleInput.Target == nil {
+		t.Fatal("CreateSchedule not called")
+	}
+	input := *sched.createScheduleInput.Target.Input
+	if !strings.Contains(input, `"alias":"g1"`) {
+		t.Errorf("target input should contain alias, got: %s", input)
+	}
+	if !strings.Contains(input, `"on_demand":true`) {
+		t.Errorf("target input should contain on_demand:true, got: %s", input)
+	}
+	if !strings.Contains(input, `"profile_path":"dev.yaml"`) {
+		t.Errorf("target input should contain profile_path, got: %s", input)
+	}
+}
+
+// TestAtCmd_CreateDockerRejected verifies --docker is rejected for scheduled creates.
+func TestAtCmd_CreateDockerRejected(t *testing.T) {
+	cfg := testAtConfig()
+	sched := &mockSchedulerAPI{}
+	dynamo := &mockDynamoAtAPI{}
+
+	_, _, err := runAtCmd(t, cfg, sched, dynamo, 0, nil, []string{"in 1 hour", "create", "dev.yaml", "--docker"})
+	if err == nil {
+		t.Fatal("expected error for --docker, got nil")
+	}
+	if !strings.Contains(err.Error(), "docker") {
+		t.Errorf("error should mention docker, got: %v", err)
+	}
+}
+
 // TestAtList_Empty verifies "km at list" prints "No scheduled operations." when no records.
 func TestAtList_Empty(t *testing.T) {
 	cfg := testAtConfig()

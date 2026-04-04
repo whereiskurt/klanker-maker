@@ -278,6 +278,11 @@ func newAtCmdInternal(cfg *config.Config, schedClient awspkg.SchedulerAPI, dynam
 	cmd.Flags().StringVar(&nameFlag, "name", "", "Override auto-generated schedule name")
 	cmd.Flags().StringVar(&groupFlag, "group", "km-at", "EventBridge Scheduler group name")
 
+	// Stop parsing flags after the first positional arg so that
+	// command-specific flags (--alias, --on-demand, --docker) are passed through
+	// as positional args rather than being consumed by Cobra.
+	cmd.Flags().SetInterspersed(false)
+
 	return cmd
 }
 
