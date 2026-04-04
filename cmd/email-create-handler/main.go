@@ -534,10 +534,17 @@ func replyIntent(bodyText string) string {
 			continue
 		}
 		// First non-empty non-auth line determines intent.
-		if strings.HasPrefix(lower, "yes") {
+		// Accept common affirmatives: yes, yep, yup, yeah, y, sure, ok, approve, confirm, looks good, lgtm
+		firstWord := strings.Fields(lower)[0]
+		switch {
+		case strings.HasPrefix(firstWord, "yes"), firstWord == "y", firstWord == "yep",
+			firstWord == "yup", firstWord == "yeah", firstWord == "sure",
+			firstWord == "ok", firstWord == "okay", firstWord == "approve",
+			firstWord == "approved", firstWord == "confirm", firstWord == "confirmed",
+			firstWord == "lgtm", strings.HasPrefix(lower, "looks good"):
 			return "yes"
-		}
-		if strings.HasPrefix(lower, "cancel") {
+		case strings.HasPrefix(firstWord, "cancel"), firstWord == "no",
+			firstWord == "nope", firstWord == "abort", firstWord == "stop":
 			return "cancel"
 		}
 		// Any other content = revision.
