@@ -129,7 +129,7 @@ spec:
   email:
     signing: required
     verifyInbound: required
-    encryption: off
+    encryption: required
     allowedSenders:
       - "self"
 
