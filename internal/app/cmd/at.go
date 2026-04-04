@@ -166,10 +166,15 @@ func newAtCmdInternal(cfg *config.Config, schedClient awspkg.SchedulerAPI, dynam
 				}
 			}
 
-			// Extract sandbox ID (first extra arg for lifecycle commands)
+			// Extract and resolve sandbox ID (first extra arg for lifecycle commands).
+			// Supports aliases, numbers from km list, and raw sandbox IDs.
 			sandboxID := ""
 			if cmdInfo.targetARNField == "ttl" && len(extraArgs) > 0 {
-				sandboxID = extraArgs[0]
+				resolved, resolveErr := ResolveSandboxID(ctx, cfg, extraArgs[0])
+				if resolveErr != nil {
+					return fmt.Errorf("resolve sandbox %q: %w", extraArgs[0], resolveErr)
+				}
+				sandboxID = resolved
 			}
 
 			// SCHED-GUARDRAIL: Recurring create schedules check sandbox count at CLI time.
