@@ -583,6 +583,12 @@ func (h *OperatorEmailHandler) executeConfirmedCommand(ctx context.Context, send
 			if ttl, ok := cmd.Overrides["ttl"]; ok {
 				p.Spec.Lifecycle.TTL = fmt.Sprintf("%v", ttl)
 			}
+			if alias, ok := cmd.Overrides["alias"]; ok {
+				if p.Spec.Email == nil {
+					p.Spec.Email = &profile.EmailSpec{}
+				}
+				p.Spec.Email.Alias = fmt.Sprintf("%v", alias)
+			}
 			profileYAML, err = yaml.Marshal(p)
 			if err != nil {
 				return fmt.Errorf("serialize profile: %w", err)
@@ -607,14 +613,41 @@ func (h *OperatorEmailHandler) executeConfirmedCommand(ctx context.Context, send
 			return fmt.Errorf("upload profile to S3: %w", err)
 		}
 
-		execErr = awspkg.PutSandboxCreateEvent(ctx, h.EventBridgeClient, awspkg.SandboxCreateDetail{
-			SandboxID:      sandboxID,
-			ArtifactBucket: h.ArtifactBucket,
-			ArtifactPrefix: artifactPrefix,
-			OperatorEmail:  senderEmail,
-			OnDemand:       false,
-		})
-		execDetail = fmt.Sprintf("Sandbox ID: %s\nProfile: %s\n", sandboxID, cmd.Profile)
+		onDemand := false
+		if v, ok := cmd.Overrides["on_demand"]; ok {
+			if b, ok := v.(bool); ok {
+				onDemand = b
+			} else if fmt.Sprintf("%v", v) == "true" {
+				onDemand = true
+			}
+		}
+
+		// If schedule_time is set, dispatch via EventBridge Scheduler instead of immediate create.
+		if schedTime, ok := cmd.Overrides["schedule_time"]; ok && fmt.Sprintf("%v", schedTime) != "" {
+			alias := ""
+			if a, ok := cmd.Overrides["alias"]; ok {
+				alias = fmt.Sprintf("%v", a)
+			}
+			execErr = awspkg.PutSandboxCreateEvent(ctx, h.EventBridgeClient, awspkg.SandboxCreateDetail{
+				SandboxID:      sandboxID,
+				ArtifactBucket: h.ArtifactBucket,
+				ArtifactPrefix: artifactPrefix,
+				OperatorEmail:  senderEmail,
+				OnDemand:       onDemand,
+				ScheduleTime:   fmt.Sprintf("%v", schedTime),
+				Alias:          alias,
+			})
+			execDetail = fmt.Sprintf("Sandbox ID: %s\nProfile: %s\nScheduled: %v\nOn-demand: %v\n", sandboxID, cmd.Profile, schedTime, onDemand)
+		} else {
+			execErr = awspkg.PutSandboxCreateEvent(ctx, h.EventBridgeClient, awspkg.SandboxCreateDetail{
+				SandboxID:      sandboxID,
+				ArtifactBucket: h.ArtifactBucket,
+				ArtifactPrefix: artifactPrefix,
+				OperatorEmail:  senderEmail,
+				OnDemand:       onDemand,
+			})
+			execDetail = fmt.Sprintf("Sandbox ID: %s\nProfile: %s\nOn-demand: %v\n", sandboxID, cmd.Profile, onDemand)
+		}
 
 	case "destroy", "extend", "pause", "resume":
 		// For non-create actions, dispatch a generic command event via EventBridge.

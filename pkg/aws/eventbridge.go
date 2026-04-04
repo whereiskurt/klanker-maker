@@ -24,8 +24,9 @@ type SandboxCreateDetail struct {
 	ArtifactPrefix string `json:"artifact_prefix"`
 	OperatorEmail  string `json:"operator_email,omitempty"`
 	OnDemand       bool   `json:"on_demand"`
-	CreatedBy      string `json:"created_by,omitempty"` // "cli", "email", "api", "remote"
-	Alias          string `json:"alias,omitempty"`       // --alias override, forwarded to create subprocess
+	CreatedBy      string `json:"created_by,omitempty"`  // "cli", "email", "api", "remote"
+	Alias          string `json:"alias,omitempty"`        // --alias override, forwarded to create subprocess
+	ScheduleTime   string `json:"schedule_time,omitempty"` // natural language time for deferred create via km at
 }
 
 // PutSandboxCreateEvent publishes a SandboxCreate event to EventBridge.
