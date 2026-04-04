@@ -270,7 +270,10 @@ func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, 
 	return nil
 }
 
-// readBodyArg reads the email body from a file path, or from stdin if path is "-".
+// readBodyArg reads the email body from a file path, stdin, or an inline string.
+//   - "-" reads from stdin
+//   - A path to an existing file reads the file
+//   - Anything else is treated as the body text directly
 func readBodyArg(bodyPath string, stdin io.Reader) (string, error) {
 	if bodyPath == "-" {
 		data, err := io.ReadAll(stdin)
@@ -279,8 +282,12 @@ func readBodyArg(bodyPath string, stdin io.Reader) (string, error) {
 		}
 		return string(data), nil
 	}
+	// Try as file first; if it doesn't exist, treat as inline body text.
 	data, err := os.ReadFile(bodyPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return bodyPath, nil
+		}
 		return "", fmt.Errorf("read file %q: %w", bodyPath, err)
 	}
 	return string(data), nil
