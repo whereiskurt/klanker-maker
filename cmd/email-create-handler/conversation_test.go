@@ -192,7 +192,7 @@ func TestLoadConversation_Success(t *testing.T) {
 
 	mock := &mockS3WithBody{
 		objects: map[string][]byte{
-			"mail/conversations/test-thread@example.com.json": data,
+			"mail/conversations/test-thread.json": data,
 		},
 	}
 
@@ -236,7 +236,7 @@ func TestSaveConversation_WritesToCorrectKey(t *testing.T) {
 		t.Fatalf("saveConversation error: %v", err)
 	}
 
-	expectedKey := "mail/conversations/save-thread@example.com.json"
+	expectedKey := "mail/conversations/save-thread.json"
 	if len(mock.putKeys) != 1 || mock.putKeys[0] != expectedKey {
 		t.Errorf("putKeys = %v, want [%q]", mock.putKeys, expectedKey)
 	}

@@ -35,6 +35,11 @@ type ConversationMsg struct {
 
 // conversationKey returns the S3 key for a conversation state object.
 func conversationKey(threadID string) string {
+	// Normalize: strip @domain from Message-IDs for consistent S3 keys.
+	// SES returns bare IDs ("abc123") but MIME headers include "@email.amazonses.com".
+	if idx := strings.Index(threadID, "@"); idx != -1 {
+		threadID = threadID[:idx]
+	}
 	return fmt.Sprintf("mail/conversations/%s.json", threadID)
 }
 
