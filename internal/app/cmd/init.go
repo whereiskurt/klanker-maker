@@ -21,6 +21,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/route53"
 	route53types "github.com/aws/aws-sdk-go-v2/service/route53/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -311,6 +312,40 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 			fmt.Printf("  ⚠ Failed to write safe phrase to SSM: %v\n", putErr)
 		} else {
 			fmt.Printf("  Safe phrase written to SSM: %s\n", safePhraseKey)
+		}
+	}
+
+	// Step 3b: Provision operator identity (Ed25519 signing key + DynamoDB public key).
+	// The operator inbox needs an identity so km email send --from operator sends signed emails.
+	// Uses sandbox_id="operator" as the identity key. Idempotent — PutParameter overwrites, PublishIdentity skips if exists.
+	{
+		fmt.Println()
+		fmt.Println("Ensuring operator email identity...")
+		ssmClient := ssm.NewFromConfig(awsCfg)
+		kmsKeyAlias := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
+		if kmsKeyAlias == "" {
+			kmsKeyAlias = "alias/km-platform"
+		}
+		operatorID := "operator"
+		pubKey, identErr := awspkg.GenerateSandboxIdentity(ctx, ssmClient, operatorID, kmsKeyAlias)
+		if identErr != nil {
+			fmt.Printf("  ⚠ Operator identity key generation failed: %v\n", identErr)
+		} else {
+			domain := cfg.Domain
+			if domain == "" {
+				domain = "klankermaker.ai"
+			}
+			identityTableName := cfg.IdentityTableName
+			if identityTableName == "" {
+				identityTableName = "km-identities"
+			}
+			operatorEmail := fmt.Sprintf("operator@sandboxes.%s", domain)
+			dynamoClient := dynamodb.NewFromConfig(awsCfg)
+			if pubErr := awspkg.PublishIdentity(ctx, dynamoClient, identityTableName, operatorID, operatorEmail, pubKey, nil, "required", "required", "off", "operator", []string{"*"}); pubErr != nil {
+				fmt.Printf("  ⚠ Operator identity publish failed: %v\n", pubErr)
+			} else {
+				fmt.Printf("  ✓ Operator identity: Ed25519 key at /sandbox/operator/signing-key\n")
+			}
 		}
 	}
 
