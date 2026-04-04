@@ -99,8 +99,22 @@ func callHaiku(ctx context.Context, client BedrockRuntimeAPI, modelID, systemPro
 // parseHaikuResponse parses the text content from Haiku's response into an InterpretedCommand.
 // It handles type coercions (confidence as string, null overrides) for robustness.
 func parseHaikuResponse(text string) (*InterpretedCommand, error) {
-	if strings.TrimSpace(text) == "" {
+	text = strings.TrimSpace(text)
+	if text == "" {
 		return nil, fmt.Errorf("haiku returned empty response text")
+	}
+
+	// Strip markdown code fences — Haiku often wraps JSON in ```json ... ```
+	if strings.HasPrefix(text, "```") {
+		// Remove opening fence (```json or ```)
+		if idx := strings.Index(text, "\n"); idx != -1 {
+			text = text[idx+1:]
+		}
+		// Remove closing fence
+		if idx := strings.LastIndex(text, "```"); idx != -1 {
+			text = text[:idx]
+		}
+		text = strings.TrimSpace(text)
 	}
 
 	// Use a raw map with json.Number to handle lenient numeric types.
