@@ -668,7 +668,7 @@ func (h *OperatorEmailHandler) handleRevision(ctx context.Context, senderEmail, 
 
 // sendReply sends a formatted reply email.
 func (h *OperatorEmailHandler) sendReply(ctx context.Context, to, subject, body string) error {
-	from := fmt.Sprintf("operator@sandboxes.%s", h.Domain)
+	from := fmt.Sprintf("\"operator\" <operator@sandboxes.%s>", h.Domain)
 	fullBody := body + "\n— " + version.Header() + "\n"
 	dest := &sesv2types.Destination{
 		ToAddresses: []string{to},

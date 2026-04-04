@@ -196,13 +196,6 @@ func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, 
 
 	// Resolve email addresses.
 	domain := emailDomain(cfg)
-	fromEmail := fmt.Sprintf("%s@%s", from, domain)
-	toEmail := to
-	if !strings.Contains(to, "@") {
-		toEmail = fmt.Sprintf("%s@%s", to, domain)
-	}
-
-	// Resolve encryption policy: fetch sender identity to determine policy.
 	tableName := cfg.IdentityTableName
 	if tableName == "" {
 		tableName = "km-identities"
@@ -227,6 +220,22 @@ func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, 
 		identityClient = dynamodb.NewFromConfig(awsCfg)
 	}
 
+	// Build display-name addresses: "alias" <id@domain> when alias is available.
+	fromAddr := fmt.Sprintf("%s@%s", from, domain)
+	if senderRec, err := kmaws.FetchPublicKey(ctx, identityClient, tableName, from); err == nil && senderRec != nil && senderRec.Alias != "" {
+		fromAddr = fmt.Sprintf("%q <%s@%s>", senderRec.Alias, from, domain)
+	}
+	toEmail := to
+	recipientID := to
+	if strings.Contains(to, "@") {
+		recipientID = strings.SplitN(to, "@", 2)[0]
+	} else {
+		toEmail = fmt.Sprintf("%s@%s", to, domain)
+		if recipRec, err := kmaws.FetchPublicKey(ctx, identityClient, tableName, to); err == nil && recipRec != nil && recipRec.Alias != "" {
+			toEmail = fmt.Sprintf("%q <%s@%s>", recipRec.Alias, to, domain)
+		}
+	}
+
 	// Fetch sender's identity to get encryption policy.
 	// Skip encryption when recipient is a raw email address (not a sandbox) —
 	// non-sandbox recipients (operator, external) won't have encryption keys.
@@ -238,7 +247,14 @@ func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, 
 			encryptionPolicy = senderRecord.Encryption
 		}
 	}
-	// If recipient is not a sandbox or fetch fails, proceed with empty policy (no encryption).
+
+	// Auto-include KM-AUTH when sending to the operator inbox.
+	// The body is Ed25519 signed, so a third party can't forge a signed body
+	// containing the phrase without the sender's private key.
+	operatorInbox := "operator@" + domain
+	if (toEmail == operatorInbox || strings.Contains(toEmail, operatorInbox)) && cfg.SafePhrase != "" {
+		body = body + "\n\nKM-AUTH: " + cfg.SafePhrase
+	}
 
 	// Build email options: CC, BCC, Reply-To, attachments.
 	emailOpts := &kmaws.EmailOptions{
@@ -261,20 +277,13 @@ func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, 
 		emailOpts.BCC = append(emailOpts.BCC, operatorEmail)
 	}
 
-	// Derive recipientSandboxID for identity lookup.
-	// When to is a raw email, extract the local part as the "sandbox ID" for the X-KM headers.
-	recipientID := to
-	if strings.Contains(to, "@") {
-		recipientID = strings.SplitN(to, "@", 2)[0]
-	}
-
 	// Send the email.
 	if err := kmaws.SendSignedEmail(
 		ctx,
 		sesClient,
 		ssmClient,
 		identityClient,
-		fromEmail, toEmail, subject, body,
+		fromAddr, toEmail, subject, body,
 		from, recipientID, tableName, encryptionPolicy,
 		emailOpts,
 	); err != nil {

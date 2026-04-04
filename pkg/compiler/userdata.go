@@ -570,7 +570,12 @@ fi
 [[ -z "${KM_SANDBOX_ID:-}" ]]    && { echo "[km-send] ERROR: KM_SANDBOX_ID is not set" >&2; exit 1; }
 [[ -z "${KM_EMAIL_ADDRESS:-}" ]] && { echo "[km-send] ERROR: KM_EMAIL_ADDRESS is not set" >&2; exit 1; }
 
-FROM="$KM_EMAIL_ADDRESS"
+# Build display-name From address: "alias" <email> when alias is set
+if [[ -n "${KM_SANDBOX_ALIAS:-}" ]]; then
+  FROM="\"${KM_SANDBOX_ALIAS}\" <${KM_EMAIL_ADDRESS}>"
+else
+  FROM="$KM_EMAIL_ADDRESS"
+fi
 SENDER_ID="$KM_SANDBOX_ID"
 TMPDIR_KM=$(mktemp -d /tmp/km-send-XXXXXX)
 trap 'rm -rf "$TMPDIR_KM"' EXIT
@@ -581,6 +586,24 @@ if [[ -n "$BODY_FILE" ]]; then
   cp "$BODY_FILE" "$BODY_TMP"
 else
   cat > "$BODY_TMP"
+fi
+
+# Auto-include KM-AUTH when sending to the operator inbox.
+# The body is Ed25519 signed, so a third party can't forge a signed body
+# containing the phrase without the sender's private key.
+OPERATOR_INBOX="operator@${KM_SANDBOX_DOMAIN:-sandboxes.klankermaker.ai}"
+if [[ "$TO" == "$OPERATOR_INBOX" ]] || [[ "$TO" == *"$OPERATOR_INBOX"* ]]; then
+  KM_SAFE_PHRASE="${KM_SAFE_PHRASE:-}"
+  if [[ -z "$KM_SAFE_PHRASE" ]]; then
+    # Try fetching from SSM
+    KM_SAFE_PHRASE=$(aws ssm get-parameter --name "/km/config/remote-create/safe-phrase" --with-decryption --query 'Parameter.Value' --output text 2>/dev/null || true)
+  fi
+  if [[ -n "$KM_SAFE_PHRASE" ]]; then
+    printf '\n\nKM-AUTH: %s' "$KM_SAFE_PHRASE" >> "$BODY_TMP"
+    echo "[km-send] KM-AUTH phrase appended (signed with body)"
+  else
+    echo "[km-send] WARN: sending to operator but no KM-AUTH phrase available" >&2
+  fi
 fi
 
 # ------------------------------------------------------------------
