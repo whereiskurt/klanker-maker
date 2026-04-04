@@ -1,14 +1,22 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
+	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	"github.com/whereiskurt/klankrmkr/pkg/allowlistgen"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 )
 
@@ -86,6 +94,8 @@ Examples:
 func NewShellCmdWithFetcher(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc) *cobra.Command {
 	var asRoot bool
 	var ports []string
+	var learn bool
+	var learnOutput string
 
 	cmd := &cobra.Command{
 		Use:     "shell <sandbox-id | #number>",
@@ -112,12 +122,21 @@ Port forwarding:
 			if len(ports) > 0 {
 				return runPortForward(cmd, cfg, fetcher, execFn, sandboxID, ports)
 			}
-			return runShell(cmd, cfg, fetcher, execFn, sandboxID, asRoot)
+			// Run the shell (blocks until user exits).
+			_ = runShell(cmd, cfg, fetcher, execFn, sandboxID, asRoot)
+
+			// --learn post-exit: generate profile from observed traffic.
+			if learn {
+				return runLearnPostExit(ctx, cfg, fetcher, sandboxID, learnOutput)
+			}
+			return nil
 		},
 	}
 
 	cmd.Flags().BoolVar(&asRoot, "root", false, "Connect as root instead of the restricted sandbox user")
 	cmd.Flags().StringSliceVar(&ports, "ports", nil, "Port forwards: 8080, 8080:80, or comma-separated list")
+	cmd.Flags().BoolVar(&learn, "learn", false, "Run in learning mode: observe traffic and generate profile on exit")
+	cmd.Flags().StringVar(&learnOutput, "learn-output", "observed-profile.yaml", "Path to write the generated SandboxProfile YAML (default: observed-profile.yaml in CWD)")
 
 	return cmd
 }
@@ -418,4 +437,223 @@ func findResourceARN(resources []string, pattern string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no resource matching %q found in %v", pattern, resources)
+}
+
+// learnObservedState is the JSON format shared between ebpf-attach --observe
+// (EC2) and collectDockerObservations (Docker). Both produce this structure
+// which is then consumed by GenerateProfileFromJSON to generate a SandboxProfile.
+type learnObservedState struct {
+	DNS   []string `json:"dns"`
+	Hosts []string `json:"hosts"`
+	Repos []string `json:"repos"`
+}
+
+// GenerateProfileFromJSON parses an observed-state JSON blob and returns
+// a SandboxProfile YAML. It is exported so tests can call it directly without
+// AWS credentials or Docker.
+//
+// base is an optional profile name for the Extends field (pass "" to omit).
+func GenerateProfileFromJSON(data []byte, base string) ([]byte, error) {
+	var state learnObservedState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("parse observed state: %w", err)
+	}
+	rec := allowlistgen.NewRecorder()
+	for _, d := range state.DNS {
+		rec.RecordDNSQuery(d)
+	}
+	for _, h := range state.Hosts {
+		rec.RecordHost(h)
+	}
+	for _, r := range state.Repos {
+		rec.RecordRepo(r)
+	}
+	return rec.GenerateYAML(base)
+}
+
+// CollectDockerObservations reads zerolog JSON from DNS and HTTP proxy log
+// readers (e.g. from docker logs), feeds them into an allowlistgen.Recorder,
+// and returns the observed state as JSON. Either reader may be nil.
+// Exported for testing without requiring a running Docker daemon.
+func CollectDockerObservations(sandboxID string, dnsLogs, httpLogs io.Reader) ([]byte, error) {
+	rec := allowlistgen.NewRecorder()
+	if err := allowlistgen.ParseProxyLogs(dnsLogs, httpLogs, rec); err != nil {
+		return nil, fmt.Errorf("parse proxy logs for sandbox %s: %w", sandboxID, err)
+	}
+	state := learnObservedState{
+		DNS:   rec.DNSDomains(),
+		Hosts: rec.Hosts(),
+		Repos: rec.Repos(),
+	}
+	return json.MarshalIndent(state, "", "  ")
+}
+
+// runLearnPostExit is called after the shell exits when --learn is active.
+// It fetches observed traffic data, generates a SandboxProfile YAML, writes it
+// to learnOutput, and uploads the raw observed JSON to S3 for future aggregation.
+func runLearnPostExit(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, sandboxID, learnOutput string) error {
+	if fetcher == nil {
+		if cfg.StateBucket == "" {
+			return fmt.Errorf("state bucket not configured")
+		}
+		awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+		if err != nil {
+			return fmt.Errorf("load AWS config: %w", err)
+		}
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, func() string {
+			t := cfg.SandboxTableName
+			if t == "" {
+				t = "km-sandboxes"
+			}
+			return t
+		}())
+	}
+
+	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
+	if err != nil {
+		return fmt.Errorf("fetch sandbox for learn: %w", err)
+	}
+
+	var observedJSON []byte
+
+	switch rec.Substrate {
+	case "ec2", "ec2spot", "ec2demand":
+		observedJSON, err = fetchEC2ObservedJSON(ctx, cfg, sandboxID)
+		if err != nil {
+			return err
+		}
+
+	case "docker":
+		dnsContainer := fmt.Sprintf("km-%s-km-dns-proxy", sandboxID)
+		httpContainer := fmt.Sprintf("km-%s-km-http-proxy", sandboxID)
+
+		dnsBuf := &bytes.Buffer{}
+		httpBuf := &bytes.Buffer{}
+
+		if dnsOut, dnsErr := exec.CommandContext(ctx, "docker", "logs", dnsContainer).Output(); dnsErr == nil {
+			dnsBuf = bytes.NewBuffer(dnsOut)
+		} else {
+			log.Warn().Err(dnsErr).Str("container", dnsContainer).Msg("learn: failed to get DNS proxy logs (non-fatal)")
+		}
+		if httpOut, httpErr := exec.CommandContext(ctx, "docker", "logs", httpContainer).Output(); httpErr == nil {
+			httpBuf = bytes.NewBuffer(httpOut)
+		} else {
+			log.Warn().Err(httpErr).Str("container", httpContainer).Msg("learn: failed to get HTTP proxy logs (non-fatal)")
+		}
+
+		observedJSON, err = CollectDockerObservations(sandboxID, dnsBuf, httpBuf)
+		if err != nil {
+			return fmt.Errorf("collect docker observations: %w", err)
+		}
+
+		// Upload observed JSON to S3 for future aggregation.
+		uploadLearnSession(ctx, cfg, sandboxID, observedJSON)
+
+	case "ecs":
+		fmt.Fprintln(os.Stderr, "Learning mode is not yet supported on ECS substrate. Use EC2 or Docker.")
+		return nil
+
+	default:
+		return fmt.Errorf("unsupported substrate %q for --learn", rec.Substrate)
+	}
+
+	yamlBytes, err := GenerateProfileFromJSON(observedJSON, "")
+	if err != nil {
+		return fmt.Errorf("generate profile: %w", err)
+	}
+
+	if err := os.WriteFile(learnOutput, yamlBytes, 0o644); err != nil {
+		return fmt.Errorf("write profile to %s: %w", learnOutput, err)
+	}
+
+	fmt.Fprintf(os.Stderr, "\nGenerated SandboxProfile: %s\nReview and apply with: km validate %s\n", learnOutput, learnOutput)
+	return nil
+}
+
+// fetchEC2ObservedJSON fetches the observed JSON from S3 (primary) or SSM RunCommand
+// (fallback) after the sandbox session exits.
+func fetchEC2ObservedJSON(ctx context.Context, cfg *config.Config, sandboxID string) ([]byte, error) {
+	bucket := cfg.ArtifactsBucket
+	if bucket == "" {
+		bucket = os.Getenv("KM_ARTIFACTS_BUCKET")
+	}
+	if bucket == "" {
+		return nil, fmt.Errorf("no artifacts bucket configured (set KM_ARTIFACTS_BUCKET or artifacts_bucket in km-config.yaml)")
+	}
+
+	awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+	if err != nil {
+		return nil, fmt.Errorf("load AWS config: %w", err)
+	}
+	s3Client := s3.NewFromConfig(awsCfg)
+
+	prefix := fmt.Sprintf("learn/%s/", sandboxID)
+	listOut, err := s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket: awssdk.String(bucket),
+		Prefix: awssdk.String(prefix),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list S3 learn sessions (prefix %s): %w", prefix, err)
+	}
+
+	if len(listOut.Contents) == 0 {
+		return nil, fmt.Errorf("no observation data found. Ensure the sandbox was created with learning mode enabled (--observe flag on ebpf-attach)")
+	}
+
+	// Find the most recent key (latest timestamp lexicographically).
+	latestKey := ""
+	for _, obj := range listOut.Contents {
+		if obj.Key != nil && (latestKey == "" || *obj.Key > latestKey) {
+			latestKey = *obj.Key
+		}
+	}
+
+	getOut, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: awssdk.String(bucket),
+		Key:    awssdk.String(latestKey),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("download observed JSON from S3 key %s: %w", latestKey, err)
+	}
+	defer getOut.Body.Close()
+
+	data, err := io.ReadAll(getOut.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read observed JSON from S3: %w", err)
+	}
+	return data, nil
+}
+
+// uploadLearnSession uploads the observed JSON to S3 at learn/{sandboxID}/{timestamp}.json.
+// Failures are logged as warnings but do not abort the profile generation.
+func uploadLearnSession(ctx context.Context, cfg *config.Config, sandboxID string, data []byte) {
+	bucket := cfg.ArtifactsBucket
+	if bucket == "" {
+		bucket = os.Getenv("KM_ARTIFACTS_BUCKET")
+	}
+	if bucket == "" {
+		log.Warn().Msg("learn: KM_ARTIFACTS_BUCKET not set, skipping S3 upload of Docker observations")
+		return
+	}
+
+	awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+	if err != nil {
+		log.Warn().Err(err).Msg("learn: failed to load AWS config for S3 upload")
+		return
+	}
+	s3Client := s3.NewFromConfig(awsCfg)
+
+	timestamp := time.Now().UTC().Format("20060102T150405Z")
+	key := fmt.Sprintf("learn/%s/%s.json", sandboxID, timestamp)
+	_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      awssdk.String(bucket),
+		Key:         awssdk.String(key),
+		Body:        bytes.NewReader(data),
+		ContentType: awssdk.String("application/json"),
+	})
+	if putErr != nil {
+		log.Warn().Err(putErr).Str("key", key).Msg("learn: S3 upload of Docker observations failed (non-fatal)")
+		return
+	}
+	log.Info().Str("key", key).Msg("learn: uploaded Docker observations to S3")
 }
