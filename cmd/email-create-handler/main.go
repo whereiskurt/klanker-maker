@@ -219,20 +219,30 @@ func (h *OperatorEmailHandler) Handle(ctx context.Context, event S3EventRecord) 
 	// Step 6: Dispatch
 	subjectLower := strings.ToLower(subject)
 
-	// Check for an existing conversation thread first.
-	threadID := extractThreadID(msg)
-	fmt.Fprintf(os.Stderr, "[operator-email] thread=%q sender=%s subject=%q\n", threadID, senderEmail, subject)
-	if threadID != "" {
-		conv, loadErr := loadConversation(ctx, h.S3Client, h.ArtifactBucket, threadID)
+	// Check for an existing conversation thread.
+	// Try multiple thread IDs: the reply's In-Reply-To may point to the confirmation
+	// email (not the original), so we try all candidate IDs from the MIME headers.
+	candidateIDs := extractAllThreadIDs(msg)
+	fmt.Fprintf(os.Stderr, "[operator-email] candidates=%v sender=%s subject=%q\n", candidateIDs, senderEmail, subject)
+	var threadID string
+	for _, cid := range candidateIDs {
+		conv, loadErr := loadConversation(ctx, h.S3Client, h.ArtifactBucket, cid)
 		if loadErr != nil {
-			fmt.Fprintf(os.Stderr, "[operator-email] conversation load error: %v\n", loadErr)
+			fmt.Fprintf(os.Stderr, "[operator-email] conversation load %q: %v\n", cid, loadErr)
+			continue
 		}
-		if loadErr == nil && conv != nil {
-			fmt.Fprintf(os.Stderr, "[operator-email] conversation found: state=%s threadID=%s\n", conv.State, conv.ThreadID)
+		if conv != nil {
+			fmt.Fprintf(os.Stderr, "[operator-email] conversation found: state=%s threadID=%s via=%s\n", conv.State, conv.ThreadID, cid)
 			if conv.State == "awaiting_confirmation" {
 				return h.handleConversationReply(ctx, senderEmail, bodyText, conv)
 			}
 		}
+	}
+	// Use primary thread ID for new conversations.
+	if len(candidateIDs) > 0 {
+		threadID = candidateIDs[0]
+	} else {
+		threadID = extractThreadID(msg)
 	}
 
 	// YAML attachment + "create" subject → fast-path (no Haiku).
@@ -497,13 +507,29 @@ func (h *OperatorEmailHandler) sendActionConfirmation(ctx context.Context, sende
 		},
 	}
 	if err := saveConversation(ctx, h.S3Client, h.ArtifactBucket, conv); err != nil {
-		// Log but don't fail — reply is more important than state persistence.
-		_ = err
+		fmt.Fprintf(os.Stderr, "[operator-email] save conversation error (primary %s): %v\n", threadID, err)
 	}
 
-	return h.sendReply(ctx, senderEmail,
+	// Send confirmation reply and capture the SES Message-ID.
+	confirmMsgID, sendErr := h.sendReplyGetID(ctx, senderEmail,
 		fmt.Sprintf("Confirm: km %s", cmd.Command),
 		sb.String())
+	if sendErr != nil {
+		return sendErr
+	}
+
+	// Save conversation under the confirmation's Message-ID too.
+	// Gmail's reply will have In-Reply-To pointing to this ID, not the original.
+	if confirmMsgID != "" {
+		convCopy := *conv
+		convCopy.ThreadID = confirmMsgID
+		if err := saveConversation(ctx, h.S3Client, h.ArtifactBucket, &convCopy); err != nil {
+			fmt.Fprintf(os.Stderr, "[operator-email] save conversation error (confirm %s): %v\n", confirmMsgID, err)
+		}
+		fmt.Fprintf(os.Stderr, "[operator-email] conversation saved under both %s and %s\n", threadID, confirmMsgID)
+	}
+
+	return nil
 }
 
 // handleConversationReply processes a reply to an existing conversation in "awaiting_confirmation".
@@ -730,6 +756,12 @@ func (h *OperatorEmailHandler) handleRevision(ctx context.Context, senderEmail, 
 
 // sendReply sends a formatted reply email.
 func (h *OperatorEmailHandler) sendReply(ctx context.Context, to, subject, body string) error {
+	_, err := h.sendReplyGetID(ctx, to, subject, body)
+	return err
+}
+
+// sendReplyGetID sends a reply and returns the SES Message-ID (for conversation threading).
+func (h *OperatorEmailHandler) sendReplyGetID(ctx context.Context, to, subject, body string) (string, error) {
 	from := fmt.Sprintf("\"operator\" <operator@%s>", h.Domain)
 	fullBody := body + "\n— " + version.Header() + "\n"
 	dest := &sesv2types.Destination{
@@ -738,7 +770,7 @@ func (h *OperatorEmailHandler) sendReply(ctx context.Context, to, subject, body 
 	if len(h.replyCC) > 0 {
 		dest.CcAddresses = h.replyCC
 	}
-	if _, err := h.SESClient.SendEmail(ctx, &sesv2.SendEmailInput{
+	out, err := h.SESClient.SendEmail(ctx, &sesv2.SendEmailInput{
 		FromEmailAddress: awssdk.String(from),
 		Destination:      dest,
 		Content: &sesv2types.EmailContent{
@@ -753,10 +785,15 @@ func (h *OperatorEmailHandler) sendReply(ctx context.Context, to, subject, body 
 				},
 			},
 		},
-	}); err != nil {
-		return fmt.Errorf("send reply to %s: %w", to, err)
+	})
+	if err != nil {
+		return "", fmt.Errorf("send reply to %s: %w", to, err)
 	}
-	return nil
+	msgID := ""
+	if out != nil && out.MessageId != nil {
+		msgID = *out.MessageId
+	}
+	return msgID, nil
 }
 
 // extractSandboxID finds a sandbox ID in the subject string.

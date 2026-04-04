@@ -67,6 +67,31 @@ func extractThreadID(msg *mail.Message) string {
 	return clean(msg.Header.Get("Message-ID"))
 }
 
+// extractAllThreadIDs returns all candidate thread IDs from MIME headers.
+// Used to find a conversation that may be keyed on any of these IDs.
+// Returns: [In-Reply-To, ...References entries, Message-ID] (deduplicated, non-empty).
+func extractAllThreadIDs(msg *mail.Message) []string {
+	clean := func(s string) string {
+		return strings.Trim(s, "<> \t\r\n")
+	}
+	seen := make(map[string]bool)
+	var ids []string
+	add := func(id string) {
+		id = clean(id)
+		if id != "" && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+
+	add(msg.Header.Get("In-Reply-To"))
+	for _, ref := range strings.Fields(msg.Header.Get("References")) {
+		add(ref)
+	}
+	add(msg.Header.Get("Message-ID"))
+	return ids
+}
+
 // loadConversation fetches and deserializes a ConversationState from S3.
 // Returns the state if found, or an error (including NoSuchKey) if not found.
 // Callers should check for "NoSuchKey" in the error message to distinguish
