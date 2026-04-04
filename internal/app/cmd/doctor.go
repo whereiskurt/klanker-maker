@@ -16,7 +16,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
+	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
@@ -80,6 +82,27 @@ type DynamoDescribeAPI interface {
 // KMSDescribeAPI covers KMS DescribeKey.
 type KMSDescribeAPI interface {
 	DescribeKey(ctx context.Context, params *kms.DescribeKeyInput, optFns ...func(*kms.Options)) (*kms.DescribeKeyOutput, error)
+}
+
+// KMSCleanupAPI covers KMS operations for stale key detection and cleanup.
+type KMSCleanupAPI interface {
+	ListAliases(ctx context.Context, params *kms.ListAliasesInput, optFns ...func(*kms.Options)) (*kms.ListAliasesOutput, error)
+	DescribeKey(ctx context.Context, params *kms.DescribeKeyInput, optFns ...func(*kms.Options)) (*kms.DescribeKeyOutput, error)
+	ScheduleKeyDeletion(ctx context.Context, params *kms.ScheduleKeyDeletionInput, optFns ...func(*kms.Options)) (*kms.ScheduleKeyDeletionOutput, error)
+	DeleteAlias(ctx context.Context, params *kms.DeleteAliasInput, optFns ...func(*kms.Options)) (*kms.DeleteAliasOutput, error)
+}
+
+// IAMCleanupAPI covers IAM operations for stale role detection and cleanup.
+type IAMCleanupAPI interface {
+	ListRoles(ctx context.Context, params *iam.ListRolesInput, optFns ...func(*iam.Options)) (*iam.ListRolesOutput, error)
+	ListRolePolicies(ctx context.Context, params *iam.ListRolePoliciesInput, optFns ...func(*iam.Options)) (*iam.ListRolePoliciesOutput, error)
+	DeleteRolePolicy(ctx context.Context, params *iam.DeleteRolePolicyInput, optFns ...func(*iam.Options)) (*iam.DeleteRolePolicyOutput, error)
+	DeleteRole(ctx context.Context, params *iam.DeleteRoleInput, optFns ...func(*iam.Options)) (*iam.DeleteRoleOutput, error)
+	ListAttachedRolePolicies(ctx context.Context, params *iam.ListAttachedRolePoliciesInput, optFns ...func(*iam.Options)) (*iam.ListAttachedRolePoliciesOutput, error)
+	DetachRolePolicy(ctx context.Context, params *iam.DetachRolePolicyInput, optFns ...func(*iam.Options)) (*iam.DetachRolePolicyOutput, error)
+	ListInstanceProfilesForRole(ctx context.Context, params *iam.ListInstanceProfilesForRoleInput, optFns ...func(*iam.Options)) (*iam.ListInstanceProfilesForRoleOutput, error)
+	RemoveRoleFromInstanceProfile(ctx context.Context, params *iam.RemoveRoleFromInstanceProfileInput, optFns ...func(*iam.Options)) (*iam.RemoveRoleFromInstanceProfileOutput, error)
+	DeleteInstanceProfile(ctx context.Context, params *iam.DeleteInstanceProfileInput, optFns ...func(*iam.Options)) (*iam.DeleteInstanceProfileOutput, error)
 }
 
 // OrgsListPoliciesAPI covers Organizations ListPoliciesForTarget.
@@ -158,6 +181,9 @@ type DoctorDeps struct {
 	SESClient SESGetEmailIdentityAPI
 	// Lister for sandbox summary check.
 	Lister SandboxLister
+	// KMS and IAM clients for stale resource cleanup checks.
+	KMSCleanupClient KMSCleanupAPI
+	IAMCleanupClient IAMCleanupAPI
 }
 
 // =============================================================================
@@ -689,6 +715,260 @@ func checkSafePhrase(ctx context.Context, client SSMReadAPI) CheckResult {
 	}
 }
 
+// checkStaleKMSKeys finds KMS keys with km- aliases that don't belong to any active sandbox.
+// Keys with aliases matching km-platform or other non-sandbox patterns are skipped.
+// Stale keys are scheduled for deletion (7-day minimum waiting period enforced by AWS).
+func checkStaleKMSKeys(ctx context.Context, kmsClient KMSCleanupAPI, lister SandboxLister) CheckResult {
+	name := "Stale KMS Keys"
+	if kmsClient == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "KMS client not available"}
+	}
+
+	// Collect all km- aliases.
+	var aliases []kmstypes.AliasListEntry
+	var marker *string
+	for {
+		out, err := kmsClient.ListAliases(ctx, &kms.ListAliasesInput{Marker: marker})
+		if err != nil {
+			return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not list KMS aliases: %v", err)}
+		}
+		for _, a := range out.Aliases {
+			if strings.HasPrefix(awssdk.ToString(a.AliasName), "alias/km-") {
+				aliases = append(aliases, a)
+			}
+		}
+		if !out.Truncated {
+			break
+		}
+		marker = out.NextMarker
+	}
+
+	// Build set of active sandbox IDs.
+	activeSandboxes := make(map[string]bool)
+	if lister != nil {
+		records, err := lister.ListSandboxes(ctx, false)
+		if err == nil {
+			for _, r := range records {
+				activeSandboxes[r.SandboxID] = true
+			}
+		}
+	}
+
+	// Platform aliases to never touch.
+	platformAliases := map[string]bool{
+		"alias/km-platform": true,
+	}
+
+	// Identify stale aliases: extract sandbox ID from alias name pattern.
+	// Patterns: km-github-token-{name}-{hash}, km-docker-{name}-{hash}-{region}, etc.
+	var staleAliases []kmstypes.AliasListEntry
+	for _, a := range aliases {
+		aliasName := awssdk.ToString(a.AliasName)
+		if platformAliases[aliasName] {
+			continue
+		}
+		// Check if any active sandbox ID appears in the alias name.
+		isActive := false
+		for sbID := range activeSandboxes {
+			if strings.Contains(aliasName, sbID) {
+				isActive = true
+				break
+			}
+		}
+		if !isActive {
+			staleAliases = append(staleAliases, a)
+		}
+	}
+
+	if len(staleAliases) == 0 {
+		return CheckResult{Name: name, Status: CheckOK, Message: fmt.Sprintf("%d km- aliases, all active", len(aliases))}
+	}
+
+	// Schedule stale keys for deletion.
+	var deleted, skipped int
+	for _, a := range staleAliases {
+		keyID := awssdk.ToString(a.TargetKeyId)
+		aliasName := awssdk.ToString(a.AliasName)
+
+		// Skip keys already pending deletion.
+		desc, err := kmsClient.DescribeKey(ctx, &kms.DescribeKeyInput{KeyId: awssdk.String(keyID)})
+		if err != nil {
+			skipped++
+			continue
+		}
+		if desc.KeyMetadata.KeyState == kmstypes.KeyStatePendingDeletion {
+			// Already scheduled — just remove the alias.
+			kmsClient.DeleteAlias(ctx, &kms.DeleteAliasInput{AliasName: awssdk.String(aliasName)})
+			deleted++
+			continue
+		}
+
+		// Schedule key deletion (7-day minimum).
+		_, err = kmsClient.ScheduleKeyDeletion(ctx, &kms.ScheduleKeyDeletionInput{
+			KeyId:               awssdk.String(keyID),
+			PendingWindowInDays: awssdk.Int32(7),
+		})
+		if err != nil {
+			skipped++
+			continue
+		}
+		// Remove alias so it doesn't show up next time.
+		kmsClient.DeleteAlias(ctx, &kms.DeleteAliasInput{AliasName: awssdk.String(aliasName)})
+		deleted++
+	}
+
+	return CheckResult{
+		Name:    name,
+		Status:  CheckWarn,
+		Message: fmt.Sprintf("found %d stale keys (%d scheduled for deletion, %d skipped) — $1/mo per key", len(staleAliases), deleted, skipped),
+	}
+}
+
+// checkStaleIAMRoles finds IAM roles with km- prefixes that don't belong to any active sandbox.
+// Platform roles (km-create-handler, km-ttl-*, km-org-admin) are skipped.
+func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister SandboxLister) CheckResult {
+	name := "Stale IAM Roles"
+	if iamClient == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "IAM client not available"}
+	}
+
+	// Collect all km- roles.
+	type roleEntry struct {
+		name string
+	}
+	var roles []roleEntry
+	var marker *string
+	for {
+		out, err := iamClient.ListRoles(ctx, &iam.ListRolesInput{Marker: marker})
+		if err != nil {
+			return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not list IAM roles: %v", err)}
+		}
+		for _, r := range out.Roles {
+			rn := awssdk.ToString(r.RoleName)
+			if strings.HasPrefix(rn, "km-") {
+				roles = append(roles, roleEntry{name: rn})
+			}
+		}
+		if !out.IsTruncated {
+			break
+		}
+		marker = out.Marker
+	}
+
+	// Build set of active sandbox IDs.
+	activeSandboxes := make(map[string]bool)
+	if lister != nil {
+		records, err := lister.ListSandboxes(ctx, false)
+		if err == nil {
+			for _, r := range records {
+				activeSandboxes[r.SandboxID] = true
+			}
+		}
+	}
+
+	// Platform roles to never touch.
+	platformPrefixes := []string{
+		"km-create-handler", "km-ttl-", "km-org-admin", "km-email-create-handler",
+	}
+
+	var staleRoles []string
+	for _, r := range roles {
+		// Skip platform infrastructure roles.
+		isPlatform := false
+		for _, prefix := range platformPrefixes {
+			if strings.HasPrefix(r.name, prefix) {
+				isPlatform = true
+				break
+			}
+		}
+		if isPlatform {
+			continue
+		}
+
+		// Check if any active sandbox ID appears in the role name.
+		isActive := false
+		for sbID := range activeSandboxes {
+			if strings.Contains(r.name, sbID) {
+				isActive = true
+				break
+			}
+		}
+		if !isActive {
+			staleRoles = append(staleRoles, r.name)
+		}
+	}
+
+	if len(staleRoles) == 0 {
+		return CheckResult{Name: name, Status: CheckOK, Message: fmt.Sprintf("%d km- roles, all active or platform", len(roles))}
+	}
+
+	// Delete stale roles: remove inline policies, detach managed policies,
+	// remove from instance profiles, then delete the role.
+	var deleted, skipped int
+	for _, roleName := range staleRoles {
+		// Remove inline policies.
+		listOut, err := iamClient.ListRolePolicies(ctx, &iam.ListRolePoliciesInput{
+			RoleName: awssdk.String(roleName),
+		})
+		if err != nil {
+			skipped++
+			continue
+		}
+		for _, policyName := range listOut.PolicyNames {
+			iamClient.DeleteRolePolicy(ctx, &iam.DeleteRolePolicyInput{
+				RoleName:   awssdk.String(roleName),
+				PolicyName: awssdk.String(policyName),
+			})
+		}
+
+		// Detach managed policies.
+		attachedOut, _ := iamClient.ListAttachedRolePolicies(ctx, &iam.ListAttachedRolePoliciesInput{
+			RoleName: awssdk.String(roleName),
+		})
+		if attachedOut != nil {
+			for _, p := range attachedOut.AttachedPolicies {
+				iamClient.DetachRolePolicy(ctx, &iam.DetachRolePolicyInput{
+					RoleName:  awssdk.String(roleName),
+					PolicyArn: p.PolicyArn,
+				})
+			}
+		}
+
+		// Remove from instance profiles and delete them.
+		ipOut, _ := iamClient.ListInstanceProfilesForRole(ctx, &iam.ListInstanceProfilesForRoleInput{
+			RoleName: awssdk.String(roleName),
+		})
+		if ipOut != nil {
+			for _, ip := range ipOut.InstanceProfiles {
+				ipName := awssdk.ToString(ip.InstanceProfileName)
+				iamClient.RemoveRoleFromInstanceProfile(ctx, &iam.RemoveRoleFromInstanceProfileInput{
+					RoleName:            awssdk.String(roleName),
+					InstanceProfileName: awssdk.String(ipName),
+				})
+				iamClient.DeleteInstanceProfile(ctx, &iam.DeleteInstanceProfileInput{
+					InstanceProfileName: awssdk.String(ipName),
+				})
+			}
+		}
+
+		// Delete the role.
+		_, err = iamClient.DeleteRole(ctx, &iam.DeleteRoleInput{
+			RoleName: awssdk.String(roleName),
+		})
+		if err != nil {
+			skipped++
+		} else {
+			deleted++
+		}
+	}
+
+	return CheckResult{
+		Name:    name,
+		Status:  CheckWarn,
+		Message: fmt.Sprintf("found %d stale roles (%d deleted, %d skipped)", len(staleRoles), deleted, skipped),
+	}
+}
+
 // =============================================================================
 // Parallel execution helper
 // =============================================================================
@@ -1087,6 +1367,19 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkSafePhrase(ctx, ssmClient)
 	})
 
+	// Stale KMS keys check.
+	kmsCleanup := deps.KMSCleanupClient
+	listerForCleanup := deps.Lister
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkStaleKMSKeys(ctx, kmsCleanup, listerForCleanup)
+	})
+
+	// Stale IAM roles check.
+	iamCleanup := deps.IAMCleanupClient
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkStaleIAMRoles(ctx, iamCleanup, listerForCleanup)
+	})
+
 	return checks
 }
 
@@ -1147,6 +1440,8 @@ func initRealDeps(ctx context.Context, cfg DoctorConfigProvider) *DoctorDeps {
 	// Lambda and SES clients for regional infra checks.
 	deps.LambdaClient = lambda.NewFromConfig(awsCfg)
 	deps.SESClient = sesv2.NewFromConfig(awsCfg)
+	deps.KMSCleanupClient = kms.NewFromConfig(awsCfg)
+	deps.IAMCleanupClient = iam.NewFromConfig(awsCfg)
 
 	// Per-region EC2 clients.
 	deps.EC2Clients = make(map[string]EC2DescribeAPI)

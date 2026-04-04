@@ -16,6 +16,8 @@ import (
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	iampkg "github.com/aws/aws-sdk-go-v2/service/iam"
+	kmspkg "github.com/aws/aws-sdk-go-v2/service/kms"
+	lambdapkg "github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
@@ -311,10 +313,15 @@ locals {
 		fmt.Printf("Destroying GitHub token resources for sandbox %s...\n", sandboxID)
 		if ghErr := runner.Destroy(ctx, githubTokenDir); ghErr != nil {
 			log.Warn().Err(ghErr).Str("sandbox_id", sandboxID).
-				Msg("github-token destroy failed (non-fatal — proceeding with main sandbox destroy)")
+				Msg("github-token terragrunt destroy failed — falling back to SDK cleanup")
+			cleanupGitHubTokenResources(ctx, awsCfg, sandboxID)
 		} else {
 			log.Info().Str("sandbox_id", sandboxID).Msg("github-token refresher Lambda destroyed")
 		}
+	} else {
+		// No local Terragrunt dir — clean up via SDK (remote destroy, TTL handler, etc).
+		fmt.Printf("Cleaning up GitHub token resources for sandbox %s (SDK fallback)...\n", sandboxID)
+		cleanupGitHubTokenResources(ctx, awsCfg, sandboxID)
 	}
 	// Always attempt SSM cleanup (parameter may exist even if github-token dir is gone).
 	githubTokenParam := fmt.Sprintf("/sandbox/%s/github-token", sandboxID)
@@ -589,6 +596,11 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 		log.Info().Str("param", githubTokenParam).Msg("GitHub token SSM parameter deleted")
 	}
 
+	// Step DD3b: Clean up github-token resources (KMS key, Lambda, EventBridge schedule,
+	// IAM roles, CloudWatch log group). These are created by the github-token Terraform
+	// module but the Docker destroy path doesn't run Terragrunt, so SDK cleanup is needed.
+	cleanupGitHubTokenResources(ctx, awsCfg, sandboxID)
+
 	// Step DD4: Delete sandbox metadata from DynamoDB (and S3 fallback).
 	{
 		tableName := cfg.SandboxTableName
@@ -630,6 +642,102 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 
 	fmt.Printf("Sandbox %s destroyed successfully.\n", sandboxID)
 	return nil
+}
+
+// cleanupGitHubTokenResources removes all resources created by the github-token
+// Terraform module using SDK calls. This is the fallback for when Terragrunt
+// destroy isn't available (Docker sandboxes, remote destroy, TTL handler).
+// Each step is idempotent and non-fatal.
+func cleanupGitHubTokenResources(ctx context.Context, awsCfg aws.Config, sandboxID string) {
+	iamClient := iampkg.NewFromConfig(awsCfg)
+	kmsClient := kmspkg.NewFromConfig(awsCfg)
+	lambdaClient := lambdapkg.NewFromConfig(awsCfg)
+	cwClient := cloudwatchlogs.NewFromConfig(awsCfg)
+	schedClient := scheduler.NewFromConfig(awsCfg)
+
+	// 1. Delete EventBridge schedule.
+	scheduleName := "km-github-token-" + sandboxID
+	if _, err := schedClient.DeleteSchedule(ctx, &scheduler.DeleteScheduleInput{
+		Name: aws.String(scheduleName),
+	}); err != nil {
+		if !strings.Contains(err.Error(), "ResourceNotFoundException") && !strings.Contains(err.Error(), "not found") {
+			log.Warn().Err(err).Str("schedule", scheduleName).Msg("failed to delete github-token schedule (non-fatal)")
+		}
+	} else {
+		fmt.Printf("  ✓ EventBridge schedule deleted: %s\n", scheduleName)
+	}
+
+	// 2. Delete Lambda function.
+	lambdaName := "km-github-token-refresher-" + sandboxID
+	if _, err := lambdaClient.DeleteFunction(ctx, &lambdapkg.DeleteFunctionInput{
+		FunctionName: aws.String(lambdaName),
+	}); err != nil {
+		if !strings.Contains(err.Error(), "ResourceNotFoundException") && !strings.Contains(err.Error(), "not found") {
+			log.Warn().Err(err).Str("function", lambdaName).Msg("failed to delete github-token Lambda (non-fatal)")
+		}
+	} else {
+		fmt.Printf("  ✓ Lambda deleted: %s\n", lambdaName)
+	}
+
+	// 3. Delete CloudWatch log group.
+	logGroupName := "/aws/lambda/km-github-token-refresher-" + sandboxID
+	if _, err := cwClient.DeleteLogGroup(ctx, &cloudwatchlogs.DeleteLogGroupInput{
+		LogGroupName: aws.String(logGroupName),
+	}); err != nil {
+		if !strings.Contains(err.Error(), "ResourceNotFoundException") && !strings.Contains(err.Error(), "not found") {
+			log.Warn().Err(err).Str("log_group", logGroupName).Msg("failed to delete github-token log group (non-fatal)")
+		}
+	}
+
+	// 4. Delete IAM roles (refresher + scheduler).
+	for _, roleName := range []string{
+		"km-github-token-refresher-" + sandboxID,
+		"km-github-token-scheduler-" + sandboxID,
+	} {
+		// Delete inline policies.
+		listOut, _ := iamClient.ListRolePolicies(ctx, &iampkg.ListRolePoliciesInput{
+			RoleName: aws.String(roleName),
+		})
+		if listOut != nil {
+			for _, policyName := range listOut.PolicyNames {
+				iamClient.DeleteRolePolicy(ctx, &iampkg.DeleteRolePolicyInput{
+					RoleName:   aws.String(roleName),
+					PolicyName: aws.String(policyName),
+				})
+			}
+		}
+		if _, err := iamClient.DeleteRole(ctx, &iampkg.DeleteRoleInput{
+			RoleName: aws.String(roleName),
+		}); err != nil {
+			if !strings.Contains(err.Error(), "NoSuchEntity") && !strings.Contains(err.Error(), "not found") {
+				log.Warn().Err(err).Str("role", roleName).Msg("failed to delete github-token IAM role (non-fatal)")
+			}
+		} else {
+			fmt.Printf("  ✓ IAM role deleted: %s\n", roleName)
+		}
+	}
+
+	// 5. Schedule KMS key deletion and remove alias.
+	kmsAlias := "alias/km-github-token-" + sandboxID
+	descOut, err := kmsClient.DescribeKey(ctx, &kmspkg.DescribeKeyInput{
+		KeyId: aws.String(kmsAlias),
+	})
+	if err == nil && descOut.KeyMetadata != nil {
+		keyID := aws.ToString(descOut.KeyMetadata.KeyId)
+		if _, schedErr := kmsClient.ScheduleKeyDeletion(ctx, &kmspkg.ScheduleKeyDeletionInput{
+			KeyId:               aws.String(keyID),
+			PendingWindowInDays: aws.Int32(7),
+		}); schedErr != nil {
+			if !strings.Contains(schedErr.Error(), "pending deletion") {
+				log.Warn().Err(schedErr).Str("key", kmsAlias).Msg("failed to schedule KMS key deletion (non-fatal)")
+			}
+		} else {
+			fmt.Printf("  ✓ KMS key scheduled for deletion: %s\n", kmsAlias)
+		}
+		kmsClient.DeleteAlias(ctx, &kmspkg.DeleteAliasInput{
+			AliasName: aws.String(kmsAlias),
+		})
+	}
 }
 
 // downloadProfileFromS3 retrieves the sandbox profile YAML stored at

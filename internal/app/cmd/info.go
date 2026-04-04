@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
 	costexplorertypes "github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
@@ -13,7 +16,6 @@ import (
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/version"
-	"time"
 )
 
 // NewInfoCmd creates the "km info" subcommand.
@@ -107,38 +109,74 @@ func runInfo(ctx context.Context, cfg *config.Config, w io.Writer) error {
 	if awsErr == nil {
 		fmt.Fprintf(w, "AWS Usage\n")
 
-		// SES send quota
+		// SES send quota — single line summary
 		sesClient := sesv2.NewFromConfig(awsCfg)
 		if acct, err := sesClient.GetAccount(ctx, &sesv2.GetAccountInput{}); err == nil {
-			if sq := acct.SendQuota; sq != nil {
-				fmt.Fprintf(w, "  SES daily quota:  %.0f emails\n", sq.Max24HourSend)
-				fmt.Fprintf(w, "  SES sent (24h):   %.0f emails\n", sq.SentLast24Hours)
+			if sq := acct.SendQuota; sq != nil && sq.Max24HourSend > 0 {
 				remaining := sq.Max24HourSend - sq.SentLast24Hours
-				fmt.Fprintf(w, "  SES remaining:    %.0f emails\n", remaining)
+				pctUsed := (sq.SentLast24Hours / sq.Max24HourSend) * 100
+				fmt.Fprintf(w, "  SES (24h):        %.0f remaining (%.1f%% used)\n", remaining, pctUsed)
 			}
 		} else {
-			fmt.Fprintf(w, "  SES quota:        (unavailable)\n")
+			fmt.Fprintf(w, "  SES (24h):        (unavailable)\n")
 		}
 
 		// Account MTD spend via Cost Explorer
 		ceClient := costexplorer.NewFromConfig(awsCfg)
 		now := time.Now().UTC()
 		startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+		timePeriod := &costexplorertypes.DateInterval{
+			Start: strPtr(startOfMonth.Format("2006-01-02")),
+			End:   strPtr(now.Format("2006-01-02")),
+		}
+
+		// Total account spend
 		ceOut, ceErr := ceClient.GetCostAndUsage(ctx, &costexplorer.GetCostAndUsageInput{
-			TimePeriod: &costexplorertypes.DateInterval{
-				Start: strPtr(startOfMonth.Format("2006-01-02")),
-				End:   strPtr(now.Format("2006-01-02")),
-			},
+			TimePeriod:  timePeriod,
 			Granularity: costexplorertypes.GranularityMonthly,
 			Metrics:     []string{"UnblendedCost"},
 		})
 		if ceErr == nil && len(ceOut.ResultsByTime) > 0 {
 			if cost, ok := ceOut.ResultsByTime[0].Total["UnblendedCost"]; ok && cost.Amount != nil {
-				fmt.Fprintf(w, "  Account MTD:      $%s %s\n", *cost.Amount, valOrDefault(*cost.Unit, "USD"))
+				fmt.Fprintf(w, "  Account MTD:      $%s\n", formatCost(*cost.Amount))
 			}
 		} else {
 			fmt.Fprintf(w, "  Account MTD:      (unavailable)\n")
 		}
+
+		// Per-service spend — group by SERVICE to sum AI models and EC2 together
+		grpOut, grpErr := ceClient.GetCostAndUsage(ctx, &costexplorer.GetCostAndUsageInput{
+			TimePeriod:  timePeriod,
+			Granularity: costexplorertypes.GranularityMonthly,
+			Metrics:     []string{"UnblendedCost"},
+			GroupBy: []costexplorertypes.GroupDefinition{{
+				Type: costexplorertypes.GroupDefinitionTypeDimension,
+				Key:  strPtr("SERVICE"),
+			}},
+		})
+		if grpErr == nil && len(grpOut.ResultsByTime) > 0 {
+			var aiTotal, ec2Total float64
+			for _, g := range grpOut.ResultsByTime[0].Groups {
+				svcName := ""
+				if len(g.Keys) > 0 {
+					svcName = g.Keys[0]
+				}
+				cost, ok := g.Metrics["UnblendedCost"]
+				if !ok || cost.Amount == nil {
+					continue
+				}
+				amt, _ := strconv.ParseFloat(*cost.Amount, 64)
+				if strings.Contains(svcName, "Bedrock Edition") {
+					aiTotal += amt
+				}
+				if svcName == "Amazon Elastic Compute Cloud - Compute" || svcName == "EC2 - Other" {
+					ec2Total += amt
+				}
+			}
+			fmt.Fprintf(w, "  AI MTD:           $%.2f\n", aiTotal)
+			fmt.Fprintf(w, "  EC2 MTD:          $%.2f\n", ec2Total)
+		}
+
 		fmt.Fprintf(w, "\n")
 	}
 
@@ -159,6 +197,15 @@ func valOrDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// formatCost parses a Cost Explorer amount string and returns it with two decimal places.
+func formatCost(amount string) string {
+	f, err := strconv.ParseFloat(amount, 64)
+	if err != nil {
+		return amount
+	}
+	return fmt.Sprintf("%.2f", f)
 }
 
 func valOrDefault(s, def string) string {

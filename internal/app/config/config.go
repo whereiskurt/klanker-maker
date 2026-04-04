@@ -159,7 +159,7 @@ func Load() (*Config, error) {
 	v.SetDefault("identity_table_name", "km-identities")
 	v.SetDefault("sandbox_table_name", "km-sandboxes")
 	v.SetDefault("artifacts_bucket", "")
-	v.SetDefault("aws_profile", "")
+	v.SetDefault("aws_profile", "klanker-terraform")
 	v.SetDefault("rsync_paths", []string{".claude", ".bashrc", ".bash_profile", ".gitconfig"})
 	v.SetDefault("schedules_table_name", "km-schedules")
 	v.SetDefault("create_handler_lambda_arn", "")
