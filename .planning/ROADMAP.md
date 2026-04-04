@@ -1076,7 +1076,7 @@ Plans:
 - Conversation state tracked per thread (Message-ID / In-Reply-To chain in S3)
 - Existing keyword-based handlers (create with YAML attachment, status) continue to work as fast-path
 **Depends on:** Phase 22 (remote create via EventBridge), Phase 45 (email infrastructure)
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 Plans:
 - [ ] 46-01-PLAN.md — Haiku AI invocation layer + conversation state management
 - [ ] 46-02-PLAN.md — Wire AI dispatch into handler + Terraform Bedrock IAM/timeout

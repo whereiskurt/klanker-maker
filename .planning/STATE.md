@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 46-01-PLAN.md
-last_updated: "2026-04-04T02:31:46.086Z"
+stopped_at: Completed 46-02-PLAN.md
+last_updated: "2026-04-04T02:44:24.183Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 46
-  completed_phases: 43
+  completed_phases: 44
   total_plans: 143
-  completed_plans: 143
+  completed_plans: 144
   percent: 0
 ---
 
@@ -186,6 +186,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 31-allowlist-profile-generator P01 | 611s | 2 tasks | 9 files |
 | Phase 31-allowlist-profile-generator P02 | 436s | 2 tasks | 6 files |
 | Phase 46-ai-email-to-command P01 | 3min | 2 tasks | 6 files |
+| Phase 46-ai-email-to-command P02 | 9min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -512,6 +513,9 @@ Recent decisions affecting current work:
 - [Phase 46-ai-email-to-command]: BedrockRuntimeAPI interface kept handler-local in cmd/email-create-handler (not pkg/aws) — narrow Lambda scope
 - [Phase 46-ai-email-to-command]: InterpretedCommand.Type defaults to 'action' if absent from Haiku JSON for backward compatibility
 - [Phase 46-ai-email-to-command]: Lenient confidence parsing: json.Number first, then string fallback to handle LLM type coercion
+- [Phase 46-02]: replyIntent() line scanner: skips KM-AUTH prefix lines to find yes/cancel/revision intent in conversation replies
+- [Phase 46-02]: mockDynamo in test file: newTestHandlerWithAI sets DynamoClient to avoid nil panic in status and list paths
+- [Phase 46-02]: Non-create commands use awspkg.PublishSandboxCommand(sandboxID, eventType) matching existing idle_event.go signature
 
 ### Roadmap Evolution
 
@@ -570,6 +574,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-04T02:31:46.082Z
-Stopped at: Completed 46-01-PLAN.md
+Last session: 2026-04-04T02:44:24.179Z
+Stopped at: Completed 46-02-PLAN.md
 Resume file: None
