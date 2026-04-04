@@ -37,9 +37,7 @@ func runInfo(cfg *config.Config, w io.Writer) error {
 	// Platform
 	fmt.Fprintf(w, "Platform\n")
 	fmt.Fprintf(w, "  Domain:           %s\n", domain)
-	fmt.Fprintf(w, "  Sandbox domain:   sandboxes.%s\n", cfg.Domain)
 	fmt.Fprintf(w, "  Region:           %s\n", valOrDash(cfg.PrimaryRegion))
-	fmt.Fprintf(w, "  Version:          %s\n", version.String())
 	fmt.Fprintf(w, "\n")
 
 	// Accounts
@@ -74,12 +72,10 @@ func runInfo(cfg *config.Config, w io.Writer) error {
 	fmt.Fprintf(w, "Email\n")
 	fmt.Fprintf(w, "  Operator:         %s\n", valOrDash(cfg.OperatorEmail))
 	if cfg.Domain != "" {
-		fmt.Fprintf(w, "  Operator inbox:   operator@sandboxes.%s\n", cfg.Domain)
 		fmt.Fprintf(w, "  Sandbox domain:   @sandboxes.%s\n", cfg.Domain)
 	}
 	fmt.Fprintf(w, "  Signing:          Ed25519 (keys in SSM, pubkeys in identities table)\n")
-	fmt.Fprintf(w, "  In-sandbox:       km-send / km-recv (bash + AWS CLI + openssl)\n")
-	fmt.Fprintf(w, "  Operator CLI:     km email send / km email read\n")
+	fmt.Fprintf(w, "  In-sandbox:       km-send / km-recv\n")
 	fmt.Fprintf(w, "\n")
 
 	// Email-to-create
@@ -88,13 +84,11 @@ func runInfo(cfg *config.Config, w io.Writer) error {
 		if cfg.Domain != "" {
 			fmt.Fprintf(w, "  Send to:          operator@sandboxes.%s\n", cfg.Domain)
 		}
-		fmt.Fprintf(w, "  Operator:         %s\n", valOrDash(cfg.OperatorEmail))
 		if cfg.SafePhrase != "" {
 			fmt.Fprintf(w, "  Safe phrase:      %s\n", cfg.SafePhrase)
 		} else {
 			fmt.Fprintf(w, "  Safe phrase:      (not configured)\n")
 		}
-		fmt.Fprintf(w, "  SSM key:          /km/config/remote-create/safe-phrase\n")
 		fmt.Fprintf(w, "\n")
 	}
 
