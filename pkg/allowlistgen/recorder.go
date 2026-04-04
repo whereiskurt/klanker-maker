@@ -1,0 +1,104 @@
+// Package allowlistgen accumulates observed network traffic and generates
+// a minimal SandboxProfile YAML allowlist from the observations.
+package allowlistgen
+
+import (
+	"net"
+	"sort"
+	"strings"
+	"sync"
+)
+
+// Recorder accumulates DNS domains, HTTP hosts, and GitHub repos observed
+// during sandbox execution. All methods are safe for concurrent use.
+type Recorder struct {
+	mu           sync.Mutex
+	dnsObserved  map[string]struct{}
+	hostObserved map[string]struct{}
+	repoObserved map[string]struct{}
+}
+
+// NewRecorder returns an initialised, empty Recorder.
+func NewRecorder() *Recorder {
+	return &Recorder{
+		dnsObserved:  make(map[string]struct{}),
+		hostObserved: make(map[string]struct{}),
+		repoObserved: make(map[string]struct{}),
+	}
+}
+
+// RecordDNSQuery records a DNS query domain. The trailing dot (FQDN) is
+// stripped and the domain is lowercased before storage.
+func (r *Recorder) RecordDNSQuery(domain string) {
+	d := strings.ToLower(strings.TrimSuffix(domain, "."))
+	if d == "" {
+		return
+	}
+	r.mu.Lock()
+	r.dnsObserved[d] = struct{}{}
+	r.mu.Unlock()
+}
+
+// RecordHost records an HTTP host (with optional port). The port is stripped
+// and the host is lowercased before storage.
+func (r *Recorder) RecordHost(hostPort string) {
+	host, _, err := net.SplitHostPort(hostPort)
+	if err != nil {
+		// No port — use raw value.
+		host = hostPort
+	}
+	h := strings.ToLower(host)
+	if h == "" {
+		return
+	}
+	r.mu.Lock()
+	r.hostObserved[h] = struct{}{}
+	r.mu.Unlock()
+}
+
+// RecordRepo records a GitHub owner/repo pair (lowercased).
+func (r *Recorder) RecordRepo(ownerRepo string) {
+	key := strings.ToLower(ownerRepo)
+	if key == "" {
+		return
+	}
+	r.mu.Lock()
+	r.repoObserved[key] = struct{}{}
+	r.mu.Unlock()
+}
+
+// DNSDomains returns a sorted, deduplicated slice of all observed DNS domains.
+func (r *Recorder) DNSDomains() []string {
+	r.mu.Lock()
+	out := make([]string, 0, len(r.dnsObserved))
+	for d := range r.dnsObserved {
+		out = append(out, d)
+	}
+	r.mu.Unlock()
+	sort.Strings(out)
+	return out
+}
+
+// Hosts returns a sorted, deduplicated slice of all observed HTTP hosts.
+func (r *Recorder) Hosts() []string {
+	r.mu.Lock()
+	out := make([]string, 0, len(r.hostObserved))
+	for h := range r.hostObserved {
+		out = append(out, h)
+	}
+	r.mu.Unlock()
+	sort.Strings(out)
+	return out
+}
+
+// Repos returns a sorted, deduplicated slice of all observed GitHub repos.
+func (r *Recorder) Repos() []string {
+	r.mu.Lock()
+	out := make([]string, 0, len(r.repoObserved))
+	for repo := range r.repoObserved {
+		out = append(out, repo)
+	}
+	r.mu.Unlock()
+	sort.Strings(out)
+	return out
+}
