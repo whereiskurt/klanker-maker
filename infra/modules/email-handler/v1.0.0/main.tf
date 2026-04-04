@@ -132,6 +132,8 @@ resource "aws_iam_role_policy" "eventbridge_publish" {
 
 # Policy: EventBridge Scheduler — create/manage schedules for deferred operations
 resource "aws_iam_role_policy" "scheduler" {
+  count = var.scheduler_role_arn != "" ? 1 : 0
+
   name = "km-email-handler-scheduler"
   role = aws_iam_role.email_handler.id
 
