@@ -733,7 +733,7 @@ Plans:
 **Goal:** Run a sandbox in "learning mode" that records all observed DNS, HTTP, and TLS traffic from Phase 41 uprobe events and Phase 40 eBPF audit logs, then generates a minimal `SandboxProfile` YAML with only the DNS suffixes, hosts, and GitHub repos actually used. Leverages the existing TLS uprobe consumer (pkg/ebpf/tls/), eBPF audit ring buffer (pkg/ebpf/audit/), and MITM proxy logs as data sources. Output is a ready-to-use profile YAML that can be reviewed and applied.
 **Requirements**: [AGEN-01, AGEN-02, AGEN-03, AGEN-04]
 **Depends on:** Phase 41 (TLS uprobe observability), Phase 40 (eBPF cgroup enforcement)
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 31-01-PLAN.md — Core pkg/allowlistgen: Recorder, DNS suffix normalization, SandboxProfile generator (TDD)
