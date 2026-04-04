@@ -586,17 +586,23 @@ func SendSignedEmail(
 		return fmt.Errorf("sign email body: %w", err)
 	}
 
-	// Step 4: Construct raw MIME message
+	// Step 4: Construct raw MIME message for the primary recipient (encrypted if applicable)
 	mime := buildRawMIME(from, to, subject, bodyToSign, sandboxID, sigB64, encrypted, opts)
 
 	// Step 5: Send via SES Content.Raw
+	// When the body is encrypted and BCC recipients exist, send them a separate
+	// plaintext copy so the operator can read agent-to-agent communications.
+	// The primary To+CC recipients get the encrypted version.
+	hasBCCWithEncryption := encrypted && len(opts.BCC) > 0
+
 	dest := &sesv2types.Destination{
 		ToAddresses: []string{to},
 	}
 	if len(opts.CC) > 0 {
 		dest.CcAddresses = opts.CC
 	}
-	if len(opts.BCC) > 0 {
+	if !hasBCCWithEncryption && len(opts.BCC) > 0 {
+		// Not encrypted — BCC recipients can read the same copy
 		dest.BccAddresses = opts.BCC
 	}
 
@@ -612,6 +618,41 @@ func SendSignedEmail(
 	if err != nil {
 		return fmt.Errorf("send signed email from %s to %s: %w", from, to, err)
 	}
+
+	// Step 6: Send plaintext copy to BCC recipients when body was encrypted.
+	// Each BCC recipient gets a separate signed (but unencrypted) MIME message
+	// so the operator can read the content for oversight.
+	if hasBCCWithEncryption {
+		// Sign the original plaintext body for the BCC copy
+		bccSigB64, signErr := SignEmailBody(privKeyB64, body)
+		if signErr != nil {
+			return fmt.Errorf("sign BCC plaintext copy: %w", signErr)
+		}
+		bccOpts := &EmailOptions{
+			Attachments: opts.Attachments,
+			ReplyTo:     opts.ReplyTo,
+			// No CC or BCC on the BCC copy itself
+		}
+		bccMIME := buildRawMIME(from, to, subject, body, sandboxID, bccSigB64, false, bccOpts)
+
+		for _, bccAddr := range opts.BCC {
+			_, bccErr := sesClient.SendEmail(ctx, &sesv2.SendEmailInput{
+				FromEmailAddress: awssdk.String(from),
+				Destination: &sesv2types.Destination{
+					ToAddresses: []string{bccAddr},
+				},
+				Content: &sesv2types.EmailContent{
+					Raw: &sesv2types.RawMessage{
+						Data: []byte(bccMIME),
+					},
+				},
+			})
+			if bccErr != nil {
+				return fmt.Errorf("send BCC plaintext copy to %s: %w", bccAddr, bccErr)
+			}
+		}
+	}
+
 	return nil
 }
 

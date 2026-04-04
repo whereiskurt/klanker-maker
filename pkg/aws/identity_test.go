@@ -116,6 +116,7 @@ func (m *mockIdentityTableAPI) DeleteItem(ctx context.Context, input *dynamodb.D
 type mockIdentitySESAPI struct {
 	sendEmailCalled bool
 	sendEmailInput  *sesv2.SendEmailInput
+	sendEmailInputs []*sesv2.SendEmailInput // all calls, for multi-send tests
 	sendEmailErr    error
 }
 
@@ -130,6 +131,7 @@ func (m *mockIdentitySESAPI) DeleteEmailIdentity(ctx context.Context, input *ses
 func (m *mockIdentitySESAPI) SendEmail(ctx context.Context, input *sesv2.SendEmailInput, optFns ...func(*sesv2.Options)) (*sesv2.SendEmailOutput, error) {
 	m.sendEmailCalled = true
 	m.sendEmailInput = input
+	m.sendEmailInputs = append(m.sendEmailInputs, input)
 	return &sesv2.SendEmailOutput{MessageId: aws.String("test-msg-id")}, m.sendEmailErr
 }
 
@@ -673,6 +675,100 @@ func TestIdentity_SendSignedEmail_EncryptionOff_SkipsFetch(t *testing.T) {
 	// FetchPublicKey should NOT be called when encryption=off
 	if dynMock.getItemCalled {
 		t.Error("FetchPublicKey (DynamoDB GetItem) should not be called when encryption=off")
+	}
+}
+
+func TestIdentity_SendSignedEmail_EncryptedBCC_SendsPlaintextToOperator(t *testing.T) {
+	sesMock := &mockIdentitySESAPI{}
+	ssmMock, _, _ := makeSendSignedEmailMocks(t, "sb-sender-bcc")
+
+	// Generate encryption key for recipient
+	var recipEncPub [32]byte
+	_, _ = rand.Read(recipEncPub[:])
+	encKeyB64 := base64.StdEncoding.EncodeToString(recipEncPub[:])
+
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	pubKeyB64 := base64.StdEncoding.EncodeToString(pub)
+
+	dynMock := &mockIdentityTableAPI{
+		getItemOutput: makeIdentityGetItemOutput("sb-recip-bcc", pubKeyB64, "sb-recip-bcc@example.com", encKeyB64),
+	}
+
+	opts := &kmaws.EmailOptions{
+		BCC: []string{"operator@example.com"},
+	}
+
+	err := kmaws.SendSignedEmail(
+		context.Background(),
+		sesMock, ssmMock, dynMock,
+		"sb-sender-bcc@example.com", "sb-recip-bcc@example.com",
+		"Secret subject", "Top secret body",
+		"sb-sender-bcc", "sb-recip-bcc", "km-identities", "required", opts,
+	)
+	if err != nil {
+		t.Fatalf("SendSignedEmail (encrypted+BCC) returned error: %v", err)
+	}
+
+	// Should have sent 2 emails: one encrypted to recipient, one plaintext to BCC
+	if len(sesMock.sendEmailInputs) != 2 {
+		t.Fatalf("expected 2 SES SendEmail calls; got %d", len(sesMock.sendEmailInputs))
+	}
+
+	// First call: encrypted to recipient, no BCC
+	primaryMIME := string(sesMock.sendEmailInputs[0].Content.Raw.Data)
+	if !strings.Contains(primaryMIME, "X-KM-Encrypted: true") {
+		t.Error("primary email should be encrypted")
+	}
+	if strings.Contains(primaryMIME, "Top secret body") {
+		t.Error("primary email should NOT contain plaintext body")
+	}
+	if len(sesMock.sendEmailInputs[0].Destination.BccAddresses) > 0 {
+		t.Error("primary email should NOT have BCC addresses")
+	}
+
+	// Second call: plaintext to BCC operator
+	bccMIME := string(sesMock.sendEmailInputs[1].Content.Raw.Data)
+	if strings.Contains(bccMIME, "X-KM-Encrypted: true") {
+		t.Error("BCC copy should NOT be encrypted")
+	}
+	if !strings.Contains(bccMIME, "Top secret body") {
+		t.Error("BCC copy should contain plaintext body")
+	}
+	if sesMock.sendEmailInputs[1].Destination.ToAddresses[0] != "operator@example.com" {
+		t.Errorf("BCC copy should be addressed to operator; got %v", sesMock.sendEmailInputs[1].Destination.ToAddresses)
+	}
+	// BCC copy should still be signed
+	if !strings.Contains(bccMIME, "X-KM-Signature:") {
+		t.Error("BCC copy should still be signed")
+	}
+}
+
+func TestIdentity_SendSignedEmail_UnencryptedBCC_SingleSend(t *testing.T) {
+	// When encryption is off, BCC should be included in the single SES send (no split)
+	sesMock := &mockIdentitySESAPI{}
+	ssmMock, dynMock, _ := makeSendSignedEmailMocks(t, "sb-sender-bcc2")
+
+	opts := &kmaws.EmailOptions{
+		BCC: []string{"operator@example.com"},
+	}
+
+	err := kmaws.SendSignedEmail(
+		context.Background(),
+		sesMock, ssmMock, dynMock,
+		"sb-sender-bcc2@example.com", "recip@example.com",
+		"Subject", "Plain body",
+		"sb-sender-bcc2", "sb-recip-bcc2", "km-identities", "off", opts,
+	)
+	if err != nil {
+		t.Fatalf("SendSignedEmail (unencrypted+BCC) returned error: %v", err)
+	}
+
+	// Should have sent only 1 email with BCC included
+	if len(sesMock.sendEmailInputs) != 1 {
+		t.Fatalf("expected 1 SES SendEmail call; got %d", len(sesMock.sendEmailInputs))
+	}
+	if len(sesMock.sendEmailInputs[0].Destination.BccAddresses) != 1 {
+		t.Error("unencrypted email should include BCC in destination")
 	}
 }
 
