@@ -128,7 +128,7 @@ resource "aws_iam_role_policy" "eventbridge_publish" {
   })
 }
 
-# Policy: KMS — decrypt SSM SecureString parameters
+# Policy: KMS — decrypt SSM SecureString parameters and Lambda env vars
 resource "aws_iam_role_policy" "kms_decrypt" {
   name = "km-email-handler-kms"
   role = aws_iam_role.email_handler.id
@@ -137,12 +137,24 @@ resource "aws_iam_role_policy" "kms_decrypt" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid      = "KMSviaSSM"
         Effect   = "Allow"
         Action   = ["kms:Decrypt"]
         Resource = "*"
         Condition = {
           StringEquals = {
             "kms:ViaService" = "ssm.${data.aws_region.current.name}.amazonaws.com"
+          }
+        }
+      },
+      {
+        Sid      = "KMSLambdaEnvDecrypt"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = "arn:aws:kms:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:key/*"
+        Condition = {
+          StringEquals = {
+            "kms:ViaService" = "lambda.${data.aws_region.current.name}.amazonaws.com"
           }
         }
       }
