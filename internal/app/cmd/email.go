@@ -122,7 +122,7 @@ func newEmailSendCmd(cfg *config.Config, deps *EmailSendDeps) *cobra.Command {
 	}
 
 	send.Flags().StringVar(&fromFlag, "from", "", "Sender sandbox ID (required)")
-	send.Flags().StringVar(&toFlag, "to", "", "Recipient sandbox ID (required)")
+	send.Flags().StringVar(&toFlag, "to", "", "Recipient sandbox ID or email (default: operator inbox)")
 	send.Flags().StringVar(&subjectFlag, "subject", "", "Email subject line (required)")
 	send.Flags().StringVar(&bodyFlag, "body", "", "Path to body file, or - for stdin (required)")
 	send.Flags().StringVar(&attachFlag, "attach", "", "Comma-separated list of attachment file paths")
@@ -131,7 +131,6 @@ func newEmailSendCmd(cfg *config.Config, deps *EmailSendDeps) *cobra.Command {
 	send.Flags().StringVar(&replyToFlag, "reply-to", "", "Set Reply-To header")
 
 	_ = send.MarkFlagRequired("from")
-	_ = send.MarkFlagRequired("to")
 	_ = send.MarkFlagRequired("subject")
 	_ = send.MarkFlagRequired("body")
 
@@ -140,7 +139,7 @@ func newEmailSendCmd(cfg *config.Config, deps *EmailSendDeps) *cobra.Command {
 
 // runEmailSend executes the km email send logic.
 func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, from, to, subject, bodyPath, attachCSV, ccCSV string, useBCC bool, replyTo string, out io.Writer) error {
-	// Resolve --from and --to: supports sandbox IDs, aliases, or numbers from km list.
+	// Resolve --from: supports sandbox IDs, aliases, or numbers from km list.
 	resolveID := func(ctx context.Context, ref string) (string, error) {
 		if deps != nil && deps.ResolveID != nil {
 			return deps.ResolveID(ctx, ref)
@@ -151,12 +150,20 @@ func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, 
 	if err != nil {
 		return fmt.Errorf("resolve sender %q: %w", from, err)
 	}
-	resolvedTo, err := resolveID(ctx, to)
-	if err != nil {
-		return fmt.Errorf("resolve recipient %q: %w", to, err)
-	}
 	from = resolvedFrom
-	to = resolvedTo
+
+	// Resolve --to: default to operator inbox when omitted.
+	// If --to contains "@" it's a raw email address (used directly).
+	// Otherwise resolve as sandbox ID/alias/number.
+	if to == "" {
+		to = "operator@" + emailDomain(cfg)
+	} else if !strings.Contains(to, "@") {
+		resolvedTo, err := resolveID(ctx, to)
+		if err != nil {
+			return fmt.Errorf("resolve recipient %q: %w", to, err)
+		}
+		to = resolvedTo
+	}
 
 	// Read body.
 	body, err := readBodyArg(bodyPath, os.Stdin)
@@ -186,7 +193,10 @@ func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, 
 	// Resolve email addresses.
 	domain := emailDomain(cfg)
 	fromEmail := fmt.Sprintf("%s@%s", from, domain)
-	toEmail := fmt.Sprintf("%s@%s", to, domain)
+	toEmail := to
+	if !strings.Contains(to, "@") {
+		toEmail = fmt.Sprintf("%s@%s", to, domain)
+	}
 
 	// Resolve encryption policy: fetch sender identity to determine policy.
 	tableName := cfg.IdentityTableName

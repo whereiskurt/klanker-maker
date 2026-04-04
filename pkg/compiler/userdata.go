@@ -557,8 +557,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Default --to to operator inbox when omitted
+if [[ -z "$TO" ]]; then
+  TO="operator@${KM_SANDBOX_DOMAIN:-sandboxes.klankermaker.ai}"
+  echo "[km-send] No --to specified, defaulting to operator: $TO"
+fi
+
 # Validate required args
-[[ -z "$TO" ]]      && { echo "[km-send] ERROR: --to is required" >&2; usage; }
 [[ -z "$SUBJECT" ]] && { echo "[km-send] ERROR: --subject is required" >&2; usage; }
 
 # Validate required env vars
