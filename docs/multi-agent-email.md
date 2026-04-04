@@ -7,15 +7,18 @@
 3. [SES Setup](#ses-setup)
 4. [Inbound Email Flow](#inbound-email-flow)
 5. [Outbound Email Flow](#outbound-email-flow)
-6. [Signed Email (Phase 14)](#signed-email-phase-14)
-7. [Optional Encryption (Phase 14)](#optional-encryption-phase-14)
-8. [Profile spec.email Controls (Phase 14)](#profile-specemail-controls-phase-14)
-9. [Lifecycle Notifications](#lifecycle-notifications)
-10. [Cross-Sandbox Orchestration](#cross-sandbox-orchestration)
-11. [Structured Email Format](#structured-email-format)
-12. [Example: Multi-Agent Pipeline](#example-multi-agent-pipeline)
-13. [Security Considerations](#security-considerations)
-14. [S3 Replication](#s3-replication)
+6. [CLI Email Tools](#cli-email-tools)
+7. [In-Sandbox Email Tools](#in-sandbox-email-tools)
+8. [Operator Email Features](#operator-email-features)
+9. [Signed Email (Phase 14)](#signed-email-phase-14)
+10. [Optional Encryption (Phase 14)](#optional-encryption-phase-14)
+11. [Profile spec.email Controls (Phase 14)](#profile-specemail-controls-phase-14)
+12. [Lifecycle Notifications](#lifecycle-notifications)
+13. [Cross-Sandbox Orchestration](#cross-sandbox-orchestration)
+14. [Structured Email Format](#structured-email-format)
+15. [Example: Multi-Agent Pipeline](#example-multi-agent-pipeline)
+16. [Security Considerations](#security-considerations)
+17. [S3 Replication](#s3-replication)
 
 ## Overview
 
@@ -158,6 +161,189 @@ The IAM policy enforcing sender identity looks like this in the ECS service temp
 ```
 
 This prevents any sandbox from impersonating another sandbox's email address.
+
+## CLI Email Tools
+
+The `km` CLI provides two commands for operators to send and read email on behalf of sandboxes, without needing to shell into them.
+
+### km email send
+
+Send a signed email between sandboxes or to/from the operator inbox.
+
+```bash
+km email send --subject <subject> --body <body> [--from <ref>] [--to <ref>] \
+  [--attach <files>] [--cc <addrs>] [--use-bcc] [--reply-to <addr>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--subject` | (required) | Email subject line |
+| `--body` | (required) | Body text, file path, or `-` for stdin |
+| `--from` | `operator` | Sender: sandbox ID, alias, list number, or raw email |
+| `--to` | `operator@sandboxes.{domain}` | Recipient: sandbox ID, alias, list number, or raw email |
+| `--attach` | | Comma-separated file paths to attach |
+| `--cc` | | Comma-separated CC recipients |
+| `--use-bcc` | `false` | BCC the operator email address |
+| `--reply-to` | | Set Reply-To header |
+
+The command auto-signs with the sender's Ed25519 key, auto-encrypts when the sender's profile requires it, and auto-appends the KM-AUTH safe phrase when sending to the operator inbox. Display-name formatting is applied automatically when the sender has an alias (e.g. `"alice" <gebpfgk-xxx@sandboxes.domain>`).
+
+```bash
+# Operator to operator (both defaults)
+km email send --subject "test" --body "hello"
+
+# Sandbox sends to operator
+km email send --from alice --subject "help" --body report.txt
+
+# Between sandboxes with attachments and CC
+km email send --from alice --to bob --subject "done" --body - --attach out.tar.gz --cc carol
+```
+
+### km email read
+
+Read messages from a sandbox mailbox with signature verification and auto-decryption.
+
+```bash
+km email read <sandbox-ref> [--json] [--raw] [--mark-read] [--message-id <id>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--json` | `false` | Newline-delimited JSON output |
+| `--raw` | `false` | Dump raw MIME bytes to stdout |
+| `--mark-read` | `false` | Move messages from `new/` to `processed/` |
+| `--message-id` | | Specific message ID (defaults to latest with `--raw`) |
+
+Output is a summary table: `#`, `FROM`, `SUBJECT`, `SIG` (verified/failed/no-key/unsigned), `ENC` (yes/no), `BODY PREVIEW`. Messages stay in `new/` unless `--mark-read` is passed.
+
+```bash
+km email read alice                 # human-readable table
+km email read #1 --json             # JSON for scripting
+km email read bob --mark-read       # read and mark processed
+km email read alice --raw           # raw MIME of latest
+```
+
+---
+
+## In-Sandbox Email Tools
+
+Two bash utilities are installed at `/opt/km/bin/` inside every sandbox, providing Ed25519-signed email without requiring the agent to use the SES API directly.
+
+### km-send
+
+Send a signed email from within the sandbox.
+
+```bash
+km-send --subject <subject> [--to <addr>] [--body <file-or-stdin>] \
+  [--attach <files>] [--cc <addrs>] [--use-bcc] [--reply-to <addr>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--subject` | (required) | Email subject |
+| `--to` | `operator@sandboxes.{domain}` | Recipient email address |
+| `--body` | stdin | File path or `-` for stdin |
+| `--attach` | | Comma-separated file paths |
+| `--cc` | | Comma-separated CC addresses |
+| `--use-bcc` | `false` | BCC operator (reads `KM_OPERATOR_EMAIL`) |
+| `--reply-to` | | Reply-To header |
+
+**Behavior:**
+
+- Fetches the sandbox Ed25519 private key from SSM (`/sandbox/{id}/signing-key`)
+- Signs the body with `openssl pkeyutl` (Ed25519 raw signing)
+- Auto-appends the KM-AUTH safe phrase when sending to the operator inbox
+- Uses display-name format (`"alias" <email>`) when `KM_SANDBOX_ALIAS` is set
+- Builds multipart MIME with base64-encoded attachments
+- Sends via `aws sesv2 send-email` with raw MIME content
+
+```bash
+# Send to operator (default)
+km-send --subject "task complete" <<< "All tests passing"
+
+# Send to another sandbox with attachment
+km-send --to sb-x9y8z7w6@sandboxes.klankermaker.ai \
+  --subject "results" --body results.json --attach output.tar.gz
+
+# CC and BCC
+km-send --subject "update" --body report.txt --cc carol@sandboxes.klankermaker.ai --use-bcc
+```
+
+### km-recv
+
+Read and verify inbound email from the sandbox local mailbox.
+
+```bash
+km-recv [--json] [--watch] [--mark-read]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--json` | `false` | Newline-delimited JSON output |
+| `--watch` | `false` | Poll loop — check every 5 seconds for new messages |
+| `--mark-read` | `false` | Move messages to `/var/mail/km/processed/` after reading |
+
+**Behavior:**
+
+- Scans `/var/mail/km/new/` for MIME messages (synced from S3 by `km-mail-poller` every 60s)
+- Parses MIME headers: `From`, `To`, `Subject`, `X-KM-Sender-ID`, `X-KM-Signature`, `X-KM-Encrypted`
+- Verifies Ed25519 signatures by looking up the sender's public key from DynamoDB (`km-identities`)
+- Displays: `#`, `From`, `Subject`, Signature status (`✓`/`✗`/`?`/`—`), Encrypted (yes/no), Body preview
+- JSON output includes: `index`, `from`, `sender_id`, `to`, `subject`, `signature`, `encrypted`, `body`, `attachments`
+
+Messages stay in `new/` unless `--mark-read` is passed.
+
+```bash
+# List new messages
+km-recv
+
+# JSON output for agent parsing
+km-recv --json
+
+# Watch for incoming messages
+km-recv --watch
+
+# Process and move messages
+km-recv --mark-read
+```
+
+### Environment Variables (In-Sandbox)
+
+| Variable | Description |
+|----------|-------------|
+| `KM_EMAIL_ADDRESS` | This sandbox's email address (`{sandbox-id}@sandboxes.{domain}`) |
+| `KM_SANDBOX_FROM_EMAIL` | Alias for `KM_EMAIL_ADDRESS` |
+| `KM_SANDBOX_ID` | Sandbox identifier |
+| `KM_SANDBOX_ALIAS` | Display name for From header (if alias is set) |
+| `KM_SANDBOX_DOMAIN` | Email domain (e.g. `sandboxes.klankermaker.ai`) |
+| `KM_OPERATOR_EMAIL` | Operator inbox address (for `--use-bcc`) |
+| `KM_SAFE_PHRASE` | KM-AUTH phrase (auto-appended when sending to operator) |
+| `KM_ARTIFACTS_BUCKET` | S3 bucket backing the mail poller |
+| `KM_IDENTITIES_TABLE` | DynamoDB table for key lookup (default: `km-identities`) |
+
+---
+
+## Operator Email Features
+
+The operator email handler (Lambda) includes several security and usability features for processing inbound email:
+
+### Silent Drop for Unauthenticated Email
+
+By default, emails to the operator inbox that lack a valid KM-AUTH safe phrase are silently dropped (logged to stderr, no SES reply sent). This prevents SES quota exhaustion from spam or unauthorized senders. To enable verbose rejection replies for debugging, set `KM_VERBOSE_EMAIL_ERRORS=true` on the Lambda.
+
+### Operator Identity
+
+`km init` provisions an Ed25519 identity for `sandbox_id="operator"`, storing the signing key in SSM at `/sandbox/operator/signing-key` and publishing the public key to DynamoDB. This enables `km email send --from operator` to send cryptographically signed emails.
+
+### CC Preservation
+
+The operator Lambda preserves CC addresses from inbound email and includes them on all replies.
+
+### Display-Name Formatting
+
+Outbound operator emails use RFC 5322 display-name format: `"operator" <operator@sandboxes.{domain}>`. Sandbox emails with aliases use `"alias" <sandbox-id@sandboxes.{domain}>`.
+
+---
 
 ## Signed Email (Phase 14)
 

@@ -139,8 +139,8 @@ The `km` CLI selects the right AWS profile per command. Commands are grouped by 
 | `km configure github` | `klanker-terraform` | Configure GitHub App token integration |
 | `km bootstrap` | `klanker-terraform` | Deploy SCP containment policy + KMS key + artifacts bucket |
 | `km init` | `klanker-application` | Build Lambdas/sidecars, provision shared VPC/network |
-| `km doctor` | `klanker-terraform` | Validate platform health across all accounts (12 checks) |
-| `km info` | - | Show platform config, accounts, operator email, email-to-create details |
+| `km doctor` | `klanker-terraform` | Validate platform health across all accounts (17 checks) |
+| `km info` | - | Show platform config, accounts, SES quota, AWS spend, DynamoDB tables |
 
 **Sandbox lifecycle**
 
@@ -178,9 +178,16 @@ The `km` CLI selects the right AWS profile per command. Commands are grouped by 
 | `km resume <sandbox>` | `klanker-terraform` | Resume a paused or stopped sandbox |
 | `km destroy <sandbox>` | `klanker-terraform` | Teardown sandbox (`--remote` by default; forced local for Docker substrate) |
 | `km kill <sandbox>` | `klanker-terraform` | Alias for `km destroy` |
-| `km at '<time>' <cmd>` | `klanker-terraform` | Schedule a deferred/recurring sandbox operation via EventBridge Scheduler |
+| `km at '<time>' <cmd>` | `klanker-terraform` | Schedule a deferred/recurring operation (`create`, `destroy`, `pause`, `resume`, `budget-add`, etc.) |
 | `km at list` | `klanker-terraform` | List scheduled operations |
 | `km at cancel <name>` | `klanker-terraform` | Cancel a scheduled operation |
+
+**Email (operator-side)**
+
+| Command | AWS Profile | What it does |
+|---------|-------------|--------------|
+| `km email send` | `klanker-terraform` | Send signed email between sandboxes or to/from operator (`--cc`, `--use-bcc`, `--reply-to`) |
+| `km email read <sandbox>` | `klanker-terraform` | Read a sandbox mailbox with signature verification and auto-decryption (`--json`, `--mark-read`) |
 
 **Teardown (reverse of setup)**
 

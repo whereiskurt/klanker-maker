@@ -16,38 +16,48 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 - `km lock <sandbox-id>` — safety lock preventing destroy/stop/pause (atomic DynamoDB)
 - `km unlock <sandbox-id>` — remove safety lock (requires confirmation or --yes)
 - `km list` — list sandboxes (narrow default, --wide for all columns)
-- `km at '<time>' <cmd>` — schedule deferred/recurring operations (`km schedule` is an alias)
+- `km at '<time>' <cmd>` — schedule deferred/recurring operations; supports `create`, `destroy`, `kill`, `stop`, `pause`, `resume`, `extend`, `budget-add` (`km schedule` is an alias)
 - `km at list` / `km at cancel <name>` — manage scheduled operations
+- `km email send` — send signed email between sandboxes or to/from operator (`--from`, `--to`, `--cc`, `--use-bcc`, `--reply-to`)
+- `km email read <sandbox>` — read sandbox mailbox with signature verification and auto-decryption (`--json`, `--mark-read`)
 - `km otel <sandbox-id>` — OTEL telemetry + AI spend summary (--prompts, --events, --tools, --timeline)
-- `km info` — platform configuration, accounts, operator email, email-to-create
+- `km info` — platform config, accounts, SES quota, AWS spend, DynamoDB tables
+- `km doctor` — validate platform health (17 checks: config, credentials, SES, Lambda, VPC, stale resources, etc.)
 
 ## Email (inside a sandbox)
 
-### Checking inbox
-
-Inbound email is synced from S3 to the local filesystem by `km-mail-poller` (every 60s).
-New messages appear as raw `.eml` files in `/var/mail/km/new/`. After processing, move them
-to `/var/mail/km/processed/` so they are not re-read.
-
-```bash
-# List new messages
-ls /var/mail/km/new/
-
-# Read a message
-cat /var/mail/km/new/<message-id>
-```
+Two bash utilities are installed at `/opt/km/bin/` for Ed25519-signed email:
 
 ### Sending email
 
-Send outbound email via the SES API. The sandbox IAM role restricts `ses:FromAddress`
-to `$KM_EMAIL_ADDRESS`, so always use that as the sender.
+```bash
+# Send to operator (default recipient)
+km-send --subject "task complete" <<< "All tests passing"
+
+# Send to another sandbox with attachment
+km-send --to sb-x9y8z7w6@sandboxes.klankermaker.ai \
+  --subject "results" --body results.json --attach output.tar.gz
+```
+
+Flags: `--subject` (required), `--to` (default: operator), `--body` (file, `-` for stdin, or omit for stdin), `--attach`, `--cc`, `--use-bcc`, `--reply-to`
+
+### Reading email
 
 ```bash
-aws sesv2 send-email \
-  --from-email-address "$KM_EMAIL_ADDRESS" \
-  --destination "ToAddresses=recipient@sandboxes.example.com" \
-  --content "Simple={Subject={Data='subject here'},Body={Text={Data='body here'}}}"
+# List new messages with signature verification
+km-recv
+
+# JSON output for agent parsing
+km-recv --json
+
+# Watch for new messages (poll every 5s)
+km-recv --watch
+
+# Mark messages as processed after reading
+km-recv --mark-read
 ```
+
+Inbound email is synced from S3 by `km-mail-poller` (every 60s) to `/var/mail/km/new/`.
 
 ### Key environment variables
 
@@ -56,10 +66,12 @@ aws sesv2 send-email \
 | `KM_EMAIL_ADDRESS` | This sandbox's email address (`{sandbox-id}@sandboxes.{domain}`) |
 | `KM_SANDBOX_FROM_EMAIL` | Alias for `KM_EMAIL_ADDRESS` (same value) |
 | `KM_SANDBOX_ID` | Sandbox identifier |
+| `KM_SANDBOX_ALIAS` | Display name for From header (if alias is set) |
 | `KM_SANDBOX_DOMAIN` | Email domain (e.g. `sandboxes.klankermaker.ai`) |
+| `KM_OPERATOR_EMAIL` | Operator inbox address |
 | `KM_ARTIFACTS_BUCKET` | S3 bucket backing the mail poller |
 
-See `docs/multi-agent-email.md` for full details on SES setup, IAM policy, and cross-sandbox orchestration.
+See `docs/multi-agent-email.md` for full details on SES setup, IAM policy, signing protocol, and cross-sandbox orchestration.
 
 ## Architecture
 

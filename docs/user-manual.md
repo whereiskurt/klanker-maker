@@ -420,7 +420,7 @@ km pause <sandbox-id | #number> [--remote]
 **Example:**
 
 ```bash
-km pause #1
+km pause 1
 km pause sb-7f3a9e12
 km pause sb-7f3a9e12 --remote
 ```
@@ -454,7 +454,7 @@ km lock <sandbox-id | #number> [--remote]
 **Example:**
 
 ```bash
-km lock #1
+km lock 1
 km lock sb-7f3a9e12
 ```
 
@@ -492,7 +492,7 @@ km unlock <sandbox-id | #number> [--yes] [--remote]
 **Example:**
 
 ```bash
-km unlock #1
+km unlock 1
 km unlock sb-7f3a9e12 --yes   # skip confirmation
 ```
 
@@ -670,15 +670,22 @@ km doctor [--json] [--quiet]
 | Check | Description |
 |-------|-------------|
 | Config | Required config fields: domain, account IDs, SSO start URL, primary region |
-| Credentials | AWS credentials via STS `GetCallerIdentity` |
+| Credentials | AWS credentials via STS `GetCallerIdentity`; auto-skips all AWS checks if expired |
 | State Bucket | S3 state bucket exists and is accessible |
 | Budget Table | DynamoDB `km-budgets` table exists |
 | Identity Table | DynamoDB `km-identities` table exists (WARN if absent, not ERROR) |
 | KMS Key | KMS alias `km-platform` exists |
 | SCP | `km-sandbox-containment` SCP attached to the application account |
 | GitHub App Config | SSM parameters for GitHub App exist (WARN if missing — GitHub integration is optional) |
-| VPC | km-managed VPC exists in the primary region |
-| Active Sandboxes | Lists running sandboxes and reports count |
+| Credential Rotation | Checks rotation age against 90-day threshold from SSM |
+| VPC | km-managed VPC and subnets exist in the primary region |
+| Lambda TTL Handler | Verifies `km-ttl-handler` Lambda function exists |
+| SES Domain Identity | Checks SES domain is verified |
+| Sandbox Summary | Counts total sandboxes and reports running/stopped/paused breakdown |
+| Sidecar Artifacts | Checks S3 artifacts bucket for sidecar binaries |
+| Safe Phrase | Verifies KM-AUTH safe phrase configured in SSM |
+| Stale KMS Keys | Detects unused KMS keys from destroyed sandboxes |
+| Stale IAM Roles | Detects unused IAM roles from destroyed sandboxes |
 
 All checks run in parallel. Results are sorted alphabetically and include a remediation hint for failures.
 
@@ -702,7 +709,7 @@ km doctor
 ✓ State Bucket                        bucket "tf-km-state-use1" is accessible
 ✓ VPC (us-east-1)                     found 1 km-managed VPC(s) in us-east-1
 
-9 checks passed, 1 warnings, 0 errors
+16 checks passed, 1 warnings, 0 errors
 ```
 
 **JSON output:**
@@ -854,10 +861,10 @@ km shell <sandbox-id | #number> [--root] [--ports <ports>]
 **Example:**
 
 ```bash
-km shell #1                        # restricted user shell
-km shell #1 --root                 # operator access (root)
-km shell #1 --ports 8080           # forward localhost:8080 → remote:8080
-km shell #1 --ports 8080:80,3000   # multiple forwards
+km shell 1                        # restricted user shell
+km shell 1 --root                 # operator access (root)
+km shell 1 --ports 8080           # forward localhost:8080 → remote:8080
+km shell 1 --ports 8080:80,3000   # multiple forwards
 ```
 
 ---
@@ -884,9 +891,9 @@ km agent <sandbox-id | #number> [--claude] [--codex] [-- extra-args...]
 **Example:**
 
 ```bash
-km agent #1 --claude                          # interactive Claude Code session
-km agent #1 --claude -- -p "fix failing tests"  # headless with a prompt
-km agent #2 --codex                            # launch OpenAI Codex
+km agent 1 --claude                          # interactive Claude Code session
+km agent 1 --claude -- -p "fix failing tests"  # headless with a prompt
+km agent 2 --codex                            # launch OpenAI Codex
 ```
 
 ---
@@ -913,7 +920,7 @@ km stop <sandbox-id | #number> [--remote]
 **Example:**
 
 ```bash
-km stop #1
+km stop 1
 km stop sb-7f3a9e12 --remote
 ```
 
@@ -940,7 +947,7 @@ km resume <sandbox-id | #number> [--remote]
 **Example:**
 
 ```bash
-km resume #1
+km resume 1
 km resume sb-7f3a9e12 --remote
 ```
 
@@ -970,7 +977,7 @@ Duration format: `1h`, `30m`, `2h30m`, etc.
 **Example:**
 
 ```bash
-km extend #1 2h             # add 2 hours
+km extend 1 2h             # add 2 hours
 km extend sb-7f3a9e12 30m   # add 30 minutes
 ```
 
@@ -1000,11 +1007,103 @@ km otel <sandbox-id | #number> [--prompts] [--events] [--timeline] [--tools]
 **Example:**
 
 ```bash
-km otel #1                  # summary
-km otel #1 --prompts        # user prompts
-km otel #1 --timeline       # conversation turns with cost
-km otel #1 --tools          # tool calls with params + duration
-km otel #1 --events         # full event stream
+km otel 1                  # summary
+km otel 1 --prompts        # user prompts
+km otel 1 --timeline       # conversation turns with cost
+km otel 1 --tools          # tool calls with params + duration
+km otel 1 --events         # full event stream
+```
+
+---
+
+### km email send
+
+Send a signed email between sandboxes or to/from the operator inbox.
+
+```
+km email send --subject <subject> --body <body> [--from <ref>] [--to <ref>] [--attach <files>] [--cc <addrs>] [--use-bcc] [--reply-to <addr>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--subject` | (required) | Email subject line |
+| `--body` | (required) | Body text, file path, or `-` for stdin |
+| `--from` | `operator` | Sender: sandbox ID, alias, list number, or raw email address |
+| `--to` | `operator@sandboxes.{domain}` | Recipient: sandbox ID, alias, list number, or raw email address |
+| `--attach` | `""` | Comma-separated file paths to attach |
+| `--cc` | `""` | Comma-separated CC recipients (visible in MIME headers) |
+| `--use-bcc` | `false` | BCC the operator email address |
+| `--reply-to` | `""` | Set Reply-To header |
+
+**What it does:**
+
+1. Resolves `--from` and `--to` references (alias, list number, sandbox ID, or raw email address)
+2. Reads body from inline text, a file path, or stdin (`-`)
+3. Fetches the sender's Ed25519 private key from SSM and signs the body
+4. Encrypts the body if the sender's profile has `encryption: required` or `optional` and the recipient has a published public key
+5. Sends via SES with raw MIME (preserving `X-KM-*` custom headers)
+6. When sending to the operator inbox, automatically appends the KM-AUTH safe phrase to the body before signing
+
+**Example:**
+
+```bash
+# Operator sends to operator inbox (both default)
+km email send --subject "test" --body "hello"
+
+# Sandbox alice sends to operator
+km email send --from alice --subject "help" --body report.txt
+
+# Send between sandboxes
+km email send --from alice --to bob --subject "task done" --body "results attached" --attach output.tar.gz
+
+# Send from stdin
+echo "pipeline complete" | km email send --from 1 --to 2 --subject "done" --body -
+
+# CC and BCC
+km email send --from alice --to bob --subject "update" --body msg.txt --cc carol --use-bcc
+```
+
+---
+
+### km email read
+
+Read messages from a sandbox mailbox with signature verification and auto-decryption.
+
+```
+km email read <sandbox-ref> [--json] [--raw] [--mark-read] [--message-id <id>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--json` | `false` | Output as newline-delimited JSON (one object per message) |
+| `--raw` | `false` | Dump raw MIME bytes to stdout |
+| `--mark-read` | `false` | Move processed messages from `new/` to `processed/` |
+| `--message-id` | `""` | Fetch a specific message (used with `--raw`; defaults to latest) |
+
+**What it does:**
+
+1. Resolves the sandbox reference (alias, list number, or sandbox ID)
+2. Lists messages in the sandbox mailbox (S3-backed `new/` directory)
+3. For each message: verifies the Ed25519 signature by fetching the sender's public key from DynamoDB
+4. Auto-decrypts encrypted messages when the sandbox's encryption keys are available in SSM
+5. Displays a summary table with columns: `#`, `FROM`, `SUBJECT`, `SIG` (verification status), `ENC` (encrypted), `BODY PREVIEW`
+
+Messages remain in `new/` unless `--mark-read` is passed.
+
+**Example:**
+
+```bash
+# Read alice's mailbox
+km email read alice
+
+# JSON output for scripting
+km email read 1 --json
+
+# Read and mark messages as processed
+km email read bob --mark-read
+
+# Dump raw MIME of latest message
+km email read alice --raw
 ```
 
 ---
@@ -1019,7 +1118,39 @@ km info
 
 **What it does:**
 
-Displays the current platform configuration including domain, account IDs, region, operator email, and the email-to-create address.
+Displays the current platform configuration organized into sections:
+
+| Section | Fields |
+|---------|--------|
+| **Platform** | Domain, Region |
+| **AWS Accounts** | Management, Terraform, Application account IDs |
+| **AWS SSO** | Start URL, Region |
+| **Storage** | State bucket, Artifacts bucket, Route53 zone |
+| **DynamoDB Tables** | Sandboxes (`km-sandboxes`), Budgets (`km-budgets`), Identities (`km-identities`), Schedules (`km-schedules`) |
+| **Email** | Operator email, Sandbox domain, Signing method (Ed25519), In-sandbox tools (`km-send`/`km-recv`) |
+| **Email-to-Create** | Send-to address, Safe phrase (if configured) |
+| **AWS Usage** | SES daily quota and remaining capacity, Account MTD spend, Bedrock MTD, EC2 MTD |
+| **Config file** | Location of `km-config.yaml` |
+
+The **AWS Usage** section fetches live data from SES (via `GetAccount`) and Cost Explorer (via `GetCostAndUsage`). Fields fall back to "(unavailable)" if the API is inaccessible — this is non-fatal.
+
+**Example:**
+
+```bash
+km info
+```
+
+```
+Platform
+  Domain:   klankermaker.ai
+  Region:   us-east-1
+
+AWS Usage
+  SES (24h):    487 / 50000 remaining (0.97% used)
+  Account MTD:  $142.37
+  AI MTD:       $89.12
+  EC2 MTD:      $31.45
+```
 
 ---
 
@@ -1046,8 +1177,8 @@ Paths can be scoped via `spec.execution.rsyncPaths` in the profile, or via an ex
 **Example:**
 
 ```bash
-km rsync save #1 checkpoint-1     # save home snapshot
-km rsync load #1 checkpoint-1     # restore snapshot
+km rsync save 1 checkpoint-1     # save home snapshot
+km rsync load 1 checkpoint-1     # restore snapshot
 ```
 
 ---
@@ -1068,7 +1199,7 @@ km at cancel <schedule-name> [--group <name>]
 | `--name` | `""` | Override auto-generated schedule name |
 | `--group` | `km-at` | EventBridge Scheduler group name |
 
-**Supported commands:** `create`, `destroy`, `kill`, `stop`, `pause`, `resume`, `extend`
+**Supported commands:** `create`, `destroy`, `kill`, `stop`, `pause`, `resume`, `extend`, `budget-add`
 
 Each command is dispatched to the appropriate Lambda (create-handler for `create`, TTL handler for lifecycle commands) via EventBridge Scheduler.
 
@@ -1077,6 +1208,12 @@ Each command is dispatched to the appropriate Lambda (create-handler for `create
 1. Parses the time expression (natural language like `'10pm tomorrow'` or `--cron 'cron(0 22 * * ? *)'`)
 2. Creates an EventBridge Scheduler schedule targeting the appropriate Lambda
 3. Stores schedule metadata in DynamoDB for `km at list`
+
+**Alias resolution:** Lifecycle commands (`destroy`, `kill`, `stop`, `pause`, `resume`, `extend`, `budget-add`) resolve sandbox references the same way as interactive commands — by alias, list number (`1`), or raw sandbox ID.
+
+**Create flags:** `km at create` supports `--alias` and `--on-demand` flags. The `--docker` flag is rejected (Docker sandboxes require local execution). When a profile YAML is available locally, it is auto-uploaded to S3 under the `scheduled/` prefix.
+
+**Budget-add flags:** `km at budget-add` accepts `--compute <USD>` and `--ai <USD>` to specify the amounts to add.
 
 **Subcommands:**
 
@@ -1089,8 +1226,14 @@ Each command is dispatched to the appropriate Lambda (create-handler for `create
 # One-shot: create a sandbox tomorrow at 10pm
 km at '10pm tomorrow' create profiles/goose.yaml
 
-# Recurring: kill a sandbox every Thursday at 3pm
-km at 'every thursday at 3pm' kill sb-abc123
+# Create with alias and on-demand
+km at 'in 1 hour' create profiles/goose.yaml --alias g1 --on-demand
+
+# Recurring: kill a sandbox every Thursday at 3pm (alias resolution)
+km at 'every thursday at 3pm' kill alice
+
+# Schedule a budget top-up
+km at 'every monday at 9am' budget-add alice --compute 5.00 --ai 2.00
 
 # Raw cron expression
 km at --cron 'cron(0 15 ? * 5 *)' kill sb-abc123
@@ -1779,33 +1922,33 @@ When eBPF enforcement is enabled, uprobes provide **passive TLS plaintext captur
 ```yaml
 spec:
   email:
-    # Enable Ed25519 signing of all outbound emails
-    signing: true
+    # Ed25519 signing of all outbound emails (required | optional | off)
+    signing: required
 
-    # Verify Ed25519 signatures on inbound emails (discard unsigned)
-    verifyInbound: true
+    # Verify Ed25519 signatures on inbound emails (required | optional | off)
+    verifyInbound: required
 
-    # Enable NaCl encryption for outbound emails to known sandbox recipients
-    encryption: false
+    # NaCl encryption for outbound emails (required | optional | off)
+    encryption: optional
 
     # Human-friendly alias (e.g. "agent-1" → agent-1@sandboxes.klankermaker.ai)
     alias: "agent-1"
 
     # Only accept email from these sender addresses
     allowedSenders:
+      - "self"
       - "sb-a1b2c3d4@sandboxes.klankermaker.ai"
-      - "ops@klankermaker.ai"
 ```
 
 **Fields:**
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `signing` | boolean | `false` | Signs outbound email body with the sandbox Ed25519 private key. Adds `X-KM-Signature` and `X-KM-Sender-ID` headers |
-| `verifyInbound` | boolean | `false` | Verifies `X-KM-Signature` on inbound email. Messages with invalid or missing signatures are discarded |
-| `encryption` | boolean | `false` | Encrypts outbound email bodies using NaCl `box.SealAnonymous` for recipients whose public key is in the `km-identities` table |
-| `alias` | string | `""` | Human-friendly alias. Must be lowercase dot-notation (e.g. `my-agent`). Resolved to `{alias}@sandboxes.klankermaker.ai`. Stored in the `km-identities` GSI for lookup |
-| `allowedSenders` | list | `[]` | When non-empty, only emails from listed addresses are delivered. Acts as an allowlist on the SES receipt rule |
+| Field | Type | Values | Description |
+|-------|------|--------|-------------|
+| `signing` | string | `required` \| `optional` \| `off` | Controls Ed25519 signing of outbound email. Adds `X-KM-Signature` and `X-KM-Sender-ID` headers |
+| `verifyInbound` | string | `required` \| `optional` \| `off` | Controls signature verification on inbound email. `required` rejects unsigned/invalid messages |
+| `encryption` | string | `required` \| `optional` \| `off` | Controls NaCl `box.SealAnonymous` encryption for outbound email |
+| `alias` | string | | Human-friendly alias. Must be lowercase dot-notation (e.g. `my-agent`). Resolved to `{alias}@sandboxes.klankermaker.ai`. Stored in the `km-identities` GSI for lookup |
+| `allowedSenders` | list | `["self"]`, `["*"]`, `["sb-abc"]`, `["build.*"]` | Allow-list of which sandboxes may send to this sandbox. Empty means unrestricted |
 
 **How signing works:** The sandbox Ed25519 private key is stored encrypted in KMS. When sending email, the signing sidecar calls KMS to decrypt the key, signs the message body, and adds `X-KM-Signature: {base64}` and `X-KM-Sender-ID: {sandbox-id}` to the headers. The recipient retrieves the sender's public key from `km-identities` by `sandbox_id` (or alias) to verify.
 
