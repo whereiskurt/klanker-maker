@@ -1,0 +1,25 @@
+# km-config.yaml — platform configuration for Klanker Maker
+# Copy to km-config.yaml and fill in your values. Run: km configure
+# This file should be in .gitignore (contains account-specific values).
+
+accounts:
+    application: "123456789012"    # AWS account ID for sandbox resources
+    management: "123456789012"     # AWS account ID for org management (can be same)
+    terraform: "123456789012"      # AWS account ID for Terraform state (can be same)
+
+artifacts_bucket: km-artifacts-XXXX          # S3 bucket for sandbox artifacts, profiles, mail
+budget_table_name: km-budgets                # DynamoDB table for budget tracking
+domain: example.com                          # Base domain (sandboxes live at sandboxes.example.com)
+identity_table_name: km-identities           # DynamoDB table for Ed25519 identity keys
+max_sandboxes: 10                            # Max concurrent sandboxes (0 = unlimited)
+operator_email: operator@example.com         # External email for notifications and BCC
+region: us-east-1                            # Primary AWS region
+route53_zone_id: ZXXXXXXXXXXXXXXXXX          # Route53 hosted zone ID for sandboxes.{domain}
+safe_phrase: your-secret-phrase              # KM-AUTH phrase for email authentication
+scheduler_role_arn: "arn:aws:iam::123456789012:role/km-ttl-scheduler"  # IAM role for EventBridge Scheduler
+
+sso:
+    region: us-east-1
+    start_url: https://your-org.awsapps.com/start
+
+state_bucket: tf-state-bucket               # S3 bucket for Terraform state
