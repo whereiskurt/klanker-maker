@@ -55,20 +55,31 @@ func runInfo(cfg *config.Config, w io.Writer) error {
 	fmt.Fprintf(w, "  Region:           %s\n", valOrDash(cfg.SSORegion))
 	fmt.Fprintf(w, "\n")
 
-	// Infrastructure
-	fmt.Fprintf(w, "Infrastructure\n")
+	// Infrastructure — storage
+	fmt.Fprintf(w, "Storage\n")
+	fmt.Fprintf(w, "  State bucket:     %s\n", valOrDash(cfg.StateBucket))
 	fmt.Fprintf(w, "  Artifacts bucket: %s\n", valOrDash(cfg.ArtifactsBucket))
 	fmt.Fprintf(w, "  Route53 zone:     %s\n", valOrDash(cfg.Route53ZoneID))
-	fmt.Fprintf(w, "  Budget table:     %s\n", valOrDefault(cfg.BudgetTableName, "km-budgets"))
-	fmt.Fprintf(w, "  Identity table:   %s\n", valOrDefault(cfg.IdentityTableName, "km-identities"))
 	fmt.Fprintf(w, "\n")
 
-	// Operator
-	fmt.Fprintf(w, "Operator\n")
-	fmt.Fprintf(w, "  Email:            %s\n", valOrDash(cfg.OperatorEmail))
+	// Infrastructure — DynamoDB tables
+	fmt.Fprintf(w, "DynamoDB Tables\n")
+	fmt.Fprintf(w, "  Sandboxes:        %s\n", valOrDefault(cfg.SandboxTableName, "km-sandboxes"))
+	fmt.Fprintf(w, "  Budgets:          %s\n", valOrDefault(cfg.BudgetTableName, "km-budgets"))
+	fmt.Fprintf(w, "  Identities:       %s\n", valOrDefault(cfg.IdentityTableName, "km-identities"))
+	fmt.Fprintf(w, "  Schedules:        %s\n", valOrDefault(cfg.SchedulesTableName, "km-schedules"))
+	fmt.Fprintf(w, "\n")
+
+	// Email — operator + sandbox email system
+	fmt.Fprintf(w, "Email\n")
+	fmt.Fprintf(w, "  Operator:         %s\n", valOrDash(cfg.OperatorEmail))
 	if cfg.Domain != "" {
-		fmt.Fprintf(w, "  Inbox:            operator@sandboxes.%s\n", cfg.Domain)
+		fmt.Fprintf(w, "  Operator inbox:   operator@sandboxes.%s\n", cfg.Domain)
+		fmt.Fprintf(w, "  Sandbox domain:   @sandboxes.%s\n", cfg.Domain)
 	}
+	fmt.Fprintf(w, "  Signing:          Ed25519 (keys in SSM, pubkeys in identities table)\n")
+	fmt.Fprintf(w, "  In-sandbox:       km-send / km-recv (bash + AWS CLI + openssl)\n")
+	fmt.Fprintf(w, "  Operator CLI:     km email send / km email read\n")
 	fmt.Fprintf(w, "\n")
 
 	// Email-to-create
