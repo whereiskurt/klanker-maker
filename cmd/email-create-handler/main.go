@@ -1,10 +1,11 @@
 // Package main — operator email handler Lambda
 // Processes SES-delivered emails to operator@sandboxes.{domain}, dispatches
-// commands based on the email Subject line:
+// commands based on the email Subject line or AI interpretation:
 //
-//   - Subject contains "create" → create sandbox from YAML attachment
-//   - Subject contains "status" + sandbox ID → reply with sandbox status
-//   - Unrecognized → reply with help text
+//   - YAML attachment + "create" subject → fast-path create sandbox
+//   - "status" subject + sandbox ID → reply with sandbox status
+//   - Free-form email + BedrockClient set → AI interpretation via Haiku
+//   - Unrecognized (no Bedrock) → reply with help text
 //
 // All commands require KM-AUTH safe phrase validation.
 //
@@ -14,7 +15,12 @@
 //  3. Lambda fetches raw MIME email from S3
 //  4. Parses MIME to extract sender, subject, body text, and attachments
 //  5. Validates KM-AUTH safe phrase against SSM parameter
-//  6. Dispatches to the appropriate command handler based on subject
+//  6. Dispatches to the appropriate command handler:
+//     a. Existing conversation thread → handleConversationReply
+//     b. YAML attachment + "create" subject → handleCreate fast-path
+//     c. "status" subject → handleStatus
+//     d. BedrockClient set → handleAIInterpretation
+//     e. Else → sendHelp
 //  7. Sends reply email with results
 package main
 
@@ -24,6 +30,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
@@ -38,6 +45,7 @@ import (
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
@@ -46,6 +54,7 @@ import (
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
 	"github.com/whereiskurt/klankrmkr/pkg/version"
+	"gopkg.in/yaml.v3"
 )
 
 // ---- S3 event record types ----
@@ -108,6 +117,9 @@ type OperatorEmailHandler struct {
 	StateBucket       string
 	Domain            string
 	SafePhraseSSMKey  string
+	// BedrockClient enables AI interpretation path. If nil, falls back to keyword dispatch.
+	BedrockClient  BedrockRuntimeAPI
+	BedrockModelID string
 }
 
 // sandboxIDPattern matches sandbox IDs: {prefix}-{8hex} (e.g. sb-abc123de, claude-abc123de).
@@ -174,16 +186,36 @@ func (h *OperatorEmailHandler) Handle(ctx context.Context, event S3EventRecord) 
 		return h.sendReply(ctx, senderEmail, "Command rejected", "Invalid KM-AUTH phrase.\n")
 	}
 
-	// Step 6: Dispatch based on subject
+	// Step 6: Dispatch
 	subjectLower := strings.ToLower(subject)
-	switch {
-	case strings.Contains(subjectLower, "create"):
-		return h.handleCreate(ctx, senderEmail, yamlBytes)
-	case strings.Contains(subjectLower, "status"):
-		return h.handleStatus(ctx, senderEmail, subject)
-	default:
-		return h.sendHelp(ctx, senderEmail)
+
+	// Check for an existing conversation thread first.
+	threadID := extractThreadID(msg)
+	if threadID != "" {
+		conv, loadErr := loadConversation(ctx, h.S3Client, h.ArtifactBucket, threadID)
+		if loadErr == nil && conv != nil && conv.State == "awaiting_confirmation" {
+			return h.handleConversationReply(ctx, senderEmail, bodyText, conv)
+		}
+		// loadErr is expected (NoSuchKey) for new threads; ignore it and continue dispatch.
 	}
+
+	// YAML attachment + "create" subject → fast-path (no Haiku).
+	if strings.Contains(subjectLower, "create") {
+		return h.handleCreate(ctx, senderEmail, yamlBytes)
+	}
+
+	// "status" subject → fast-path (no Haiku).
+	if strings.Contains(subjectLower, "status") {
+		return h.handleStatus(ctx, senderEmail, subject)
+	}
+
+	// Free-form email with BedrockClient → AI interpretation path.
+	if h.BedrockClient != nil {
+		return h.handleAIInterpretation(ctx, senderEmail, bodyText, threadID)
+	}
+
+	// No Bedrock configured → help text.
+	return h.sendHelp(ctx, senderEmail)
 }
 
 // handleCreate processes a sandbox creation request.
@@ -288,8 +320,334 @@ func (h *OperatorEmailHandler) sendHelp(ctx context.Context, senderEmail string)
 	body := "Unrecognized command. Available commands (use as email Subject):\n\n" +
 		"  create    — Attach a YAML profile to create a new sandbox\n" +
 		"  status <sandbox-id>  — Get sandbox status (e.g. \"status sb-abc123de\" or \"status claude-abc123de\")\n\n" +
+		"Or send a free-form description and I'll interpret it.\n\n" +
 		"All commands require KM-AUTH: <phrase> in the email body.\n"
 	return h.sendReply(ctx, senderEmail, "Operator Help", body)
+}
+
+// handleAIInterpretation calls Haiku to interpret a free-form email and either:
+//   - sends a clarifying question (confidence < 0.7)
+//   - executes info commands immediately (list, status)
+//   - sends a confirmation template for action commands
+func (h *OperatorEmailHandler) handleAIInterpretation(ctx context.Context, senderEmail, bodyText, threadID string) error {
+	profiles := profile.ListBuiltins()
+
+	// List running sandboxes for context. If DynamoClient is nil, skip gracefully.
+	var sandboxIDs []string
+	if h.DynamoClient != nil {
+		records, err := awspkg.ListAllSandboxesByDynamo(ctx, h.DynamoClient, h.SandboxTableName)
+		if err == nil {
+			for _, r := range records {
+				sandboxIDs = append(sandboxIDs, r.SandboxID)
+			}
+		}
+	}
+
+	systemPrompt := buildSystemPrompt(profiles, sandboxIDs)
+	cmd, err := callHaiku(ctx, h.BedrockClient, h.BedrockModelID, systemPrompt, bodyText)
+	if err != nil {
+		return h.sendReply(ctx, senderEmail, "AI interpretation error",
+			fmt.Sprintf("Failed to interpret your request: %v\nPlease try rephrasing or use a specific subject line.\n", err))
+	}
+
+	if cmd.Confidence < 0.7 {
+		// Save conversation state as "new" and ask for clarification.
+		conv := &ConversationState{
+			ThreadID: threadID,
+			Sender:   senderEmail,
+			Started:  time.Now().UTC(),
+			State:    "new",
+			Messages: []ConversationMsg{
+				{Role: "operator", Content: bodyText, At: time.Now().UTC()},
+			},
+		}
+		_ = saveConversation(ctx, h.S3Client, h.ArtifactBucket, conv)
+		return h.sendReply(ctx, senderEmail, "Could you clarify?",
+			fmt.Sprintf("I wasn't sure what you wanted (confidence: %.0f%%).\n\n"+
+				"Could you be more specific? For example:\n"+
+				"  - \"Create an open-dev sandbox with 2h TTL\"\n"+
+				"  - \"Destroy sandbox sb-abc12345\"\n"+
+				"  - \"List running sandboxes\"\n\n"+
+				"Haiku's reasoning: %s\n", cmd.Confidence*100, cmd.Reasoning))
+	}
+
+	// Info commands: execute immediately, no confirmation.
+	if cmd.Type == "info" {
+		return h.handleInfoCommand(ctx, senderEmail, cmd)
+	}
+
+	// Action commands: send confirmation template, save conversation state.
+	return h.sendActionConfirmation(ctx, senderEmail, bodyText, threadID, cmd)
+}
+
+// handleInfoCommand executes info commands (list, status) and replies immediately.
+func (h *OperatorEmailHandler) handleInfoCommand(ctx context.Context, senderEmail string, cmd *InterpretedCommand) error {
+	switch cmd.Command {
+	case "list":
+		var sb strings.Builder
+		sb.WriteString("─── Running Sandboxes ────────────────────────\n")
+		if h.DynamoClient != nil {
+			records, err := awspkg.ListAllSandboxesByDynamo(ctx, h.DynamoClient, h.SandboxTableName)
+			if err != nil {
+				sb.WriteString(fmt.Sprintf("  (error listing sandboxes: %v)\n", err))
+			} else if len(records) == 0 {
+				sb.WriteString("  No sandboxes currently running.\n")
+			} else {
+				fmt.Fprintf(&sb, "  %-20s %-12s %-14s %s\n", "Sandbox ID", "Profile", "Status", "TTL Remaining")
+				fmt.Fprintf(&sb, "  %-20s %-12s %-14s %s\n", strings.Repeat("-", 20), strings.Repeat("-", 12), strings.Repeat("-", 14), strings.Repeat("-", 12))
+				for _, r := range records {
+					ttl := r.TTLRemaining
+					if ttl == "" {
+						ttl = "—"
+					}
+					fmt.Fprintf(&sb, "  %-20s %-12s %-14s %s\n", r.SandboxID, r.Profile, r.Status, ttl)
+				}
+			}
+		} else {
+			sb.WriteString("  (DynamoDB not configured)\n")
+		}
+		return h.sendReply(ctx, senderEmail, "Sandbox List", sb.String())
+
+	case "status":
+		// Resolve sandbox ID from profile field or overrides.
+		sandboxID := cmd.Profile
+		if sandboxID == "" {
+			if v, ok := cmd.Overrides["sandbox_id"]; ok {
+				sandboxID = fmt.Sprintf("%v", v)
+			}
+		}
+		if sandboxID == "" {
+			return h.sendReply(ctx, senderEmail, "Status failed",
+				"Could not determine which sandbox to check. Please specify a sandbox ID.\n")
+		}
+		return h.handleStatus(ctx, senderEmail, "status "+sandboxID)
+
+	default:
+		return h.sendReply(ctx, senderEmail, "Info command",
+			fmt.Sprintf("Executed info command: %s\nReasoning: %s\n", cmd.Command, cmd.Reasoning))
+	}
+}
+
+// sendActionConfirmation builds and sends the confirmation template for an action command,
+// then saves the conversation state as "awaiting_confirmation".
+func (h *OperatorEmailHandler) sendActionConfirmation(ctx context.Context, senderEmail, originalBody, threadID string, cmd *InterpretedCommand) error {
+	var sb strings.Builder
+	sb.WriteString("I'll run:\n")
+	sb.WriteString(fmt.Sprintf("  km %s", cmd.Command))
+	if cmd.Profile != "" {
+		sb.WriteString(fmt.Sprintf(" profiles/%s", cmd.Profile))
+	}
+	sb.WriteString("\n")
+	if len(cmd.Overrides) > 0 {
+		sb.WriteString("\nWith overrides:\n")
+		for k, v := range cmd.Overrides {
+			sb.WriteString(fmt.Sprintf("  %s: %v\n", k, v))
+		}
+	}
+	sb.WriteString(fmt.Sprintf("\nConfidence: %.0f%%\n", cmd.Confidence*100))
+	sb.WriteString(fmt.Sprintf("Reasoning: %s\n", cmd.Reasoning))
+	sb.WriteString("\nReply YES to proceed, CANCEL to abort, or describe changes.\n")
+
+	conv := &ConversationState{
+		ThreadID:    threadID,
+		Sender:      senderEmail,
+		Started:     time.Now().UTC(),
+		State:       "awaiting_confirmation",
+		ResolvedCmd: cmd,
+		Messages: []ConversationMsg{
+			{Role: "operator", Content: originalBody, At: time.Now().UTC()},
+		},
+	}
+	if err := saveConversation(ctx, h.S3Client, h.ArtifactBucket, conv); err != nil {
+		// Log but don't fail — reply is more important than state persistence.
+		_ = err
+	}
+
+	return h.sendReply(ctx, senderEmail,
+		fmt.Sprintf("Confirm: km %s", cmd.Command),
+		sb.String())
+}
+
+// handleConversationReply processes a reply to an existing conversation in "awaiting_confirmation".
+func (h *OperatorEmailHandler) handleConversationReply(ctx context.Context, senderEmail, bodyText string, conv *ConversationState) error {
+	// Check each non-empty line for yes/cancel — KM-AUTH and other lines may precede the reply word.
+	intent := replyIntent(bodyText)
+
+	switch intent {
+	case "yes":
+		return h.executeConfirmedCommand(ctx, senderEmail, conv)
+
+	case "cancel":
+		conv.State = "cancelled"
+		conv.Messages = append(conv.Messages, ConversationMsg{Role: "operator", Content: bodyText, At: time.Now().UTC()})
+		_ = saveConversation(ctx, h.S3Client, h.ArtifactBucket, conv)
+		return h.sendReply(ctx, senderEmail, "Cancelled",
+			fmt.Sprintf("Command cancelled. No action was taken.\n\nOriginal command: km %s\n", conv.ResolvedCmd.Command))
+
+	default:
+		// Revision: call Haiku with original context + new user message.
+		return h.handleRevision(ctx, senderEmail, bodyText, conv)
+	}
+}
+
+// replyIntent scans the body lines (skipping KM-AUTH and blank lines) to determine intent.
+// Returns "yes", "cancel", or "" (revision).
+func replyIntent(bodyText string) string {
+	for _, line := range strings.Split(bodyText, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		lower := strings.ToLower(line)
+		// Skip KM-AUTH lines — they are not the reply intent.
+		if strings.HasPrefix(lower, "km-auth:") {
+			continue
+		}
+		// First non-empty non-auth line determines intent.
+		if strings.HasPrefix(lower, "yes") {
+			return "yes"
+		}
+		if strings.HasPrefix(lower, "cancel") {
+			return "cancel"
+		}
+		// Any other content = revision.
+		return ""
+	}
+	return ""
+}
+
+// executeConfirmedCommand dispatches the appropriate EventBridge event for a confirmed command.
+func (h *OperatorEmailHandler) executeConfirmedCommand(ctx context.Context, senderEmail string, conv *ConversationState) error {
+	cmd := conv.ResolvedCmd
+	if cmd == nil {
+		return h.sendReply(ctx, senderEmail, "Execution error", "No resolved command found in conversation state.\n")
+	}
+
+	var execErr error
+	var execDetail string
+
+	switch cmd.Command {
+	case "create":
+		// Load builtin profile, serialize to YAML, upload to S3, dispatch EventBridge.
+		sandboxID, err := generateSandboxID()
+		if err != nil {
+			return fmt.Errorf("generate sandbox ID: %w", err)
+		}
+
+		var profileYAML []byte
+		if profile.IsBuiltin(cmd.Profile) {
+			p, err := profile.LoadBuiltin(cmd.Profile)
+			if err != nil {
+				return h.sendReply(ctx, senderEmail, "Execution error",
+					fmt.Sprintf("Could not load profile %q: %v\n", cmd.Profile, err))
+			}
+			// Apply known overrides.
+			if ttl, ok := cmd.Overrides["ttl"]; ok {
+				p.Spec.Lifecycle.TTL = fmt.Sprintf("%v", ttl)
+			}
+			profileYAML, err = yaml.Marshal(p)
+			if err != nil {
+				return fmt.Errorf("serialize profile: %w", err)
+			}
+		} else if cmd.Profile != "" {
+			return h.sendReply(ctx, senderEmail, "Execution error",
+				fmt.Sprintf("Profile %q is not a known built-in profile. Available profiles: %s\n",
+					cmd.Profile, strings.Join(profile.ListBuiltins(), ", ")))
+		} else {
+			return h.sendReply(ctx, senderEmail, "Execution error",
+				"No profile specified. Please include a profile name (e.g. open-dev, restricted-dev).\n")
+		}
+
+		artifactPrefix := fmt.Sprintf("remote-create/%s", sandboxID)
+		profileKey := fmt.Sprintf("%s/.km-profile.yaml", artifactPrefix)
+		if _, err := h.S3Client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:      awssdk.String(h.ArtifactBucket),
+			Key:         awssdk.String(profileKey),
+			Body:        bytes.NewReader(profileYAML),
+			ContentType: awssdk.String("text/yaml"),
+		}); err != nil {
+			return fmt.Errorf("upload profile to S3: %w", err)
+		}
+
+		execErr = awspkg.PutSandboxCreateEvent(ctx, h.EventBridgeClient, awspkg.SandboxCreateDetail{
+			SandboxID:      sandboxID,
+			ArtifactBucket: h.ArtifactBucket,
+			ArtifactPrefix: artifactPrefix,
+			OperatorEmail:  senderEmail,
+			OnDemand:       false,
+		})
+		execDetail = fmt.Sprintf("Sandbox ID: %s\nProfile: %s\n", sandboxID, cmd.Profile)
+
+	case "destroy", "extend", "pause", "resume":
+		// For non-create actions, dispatch a generic command event via EventBridge.
+		// The sandbox ID may be in cmd.Profile or cmd.Overrides["sandbox_id"].
+		sandboxID := cmd.Profile
+		if sandboxID == "" {
+			if v, ok := cmd.Overrides["sandbox_id"]; ok {
+				sandboxID = fmt.Sprintf("%v", v)
+			}
+		}
+		if sandboxID == "" {
+			return h.sendReply(ctx, senderEmail, "Execution error",
+				fmt.Sprintf("No sandbox ID found for %s command.\n", cmd.Command))
+		}
+
+		execErr = awspkg.PublishSandboxCommand(ctx, h.EventBridgeClient, sandboxID, cmd.Command)
+		execDetail = fmt.Sprintf("Sandbox ID: %s\nCommand: %s\n", sandboxID, cmd.Command)
+
+	default:
+		return h.sendReply(ctx, senderEmail, "Execution error",
+			fmt.Sprintf("Unknown command: %s\n", cmd.Command))
+	}
+
+	if execErr != nil {
+		return fmt.Errorf("dispatch %s event: %w", cmd.Command, execErr)
+	}
+
+	conv.State = "confirmed"
+	conv.Messages = append(conv.Messages, ConversationMsg{Role: "system", Content: "confirmed", At: time.Now().UTC()})
+	_ = saveConversation(ctx, h.S3Client, h.ArtifactBucket, conv)
+
+	return h.sendReply(ctx, senderEmail,
+		fmt.Sprintf("Executing: km %s", cmd.Command),
+		fmt.Sprintf("Command accepted and dispatched.\n\n%s\nYou will receive a notification when the operation completes.\n", execDetail))
+}
+
+// handleRevision calls Haiku with the original command context plus the revision request,
+// then sends an updated confirmation template.
+func (h *OperatorEmailHandler) handleRevision(ctx context.Context, senderEmail, bodyText string, conv *ConversationState) error {
+	if conv.ResolvedCmd == nil {
+		return h.sendReply(ctx, senderEmail, "Revision error", "No previous command to revise.\n")
+	}
+
+	origJSON, _ := json.Marshal(conv.ResolvedCmd)
+	revisionMessage := fmt.Sprintf(
+		"Original request was interpreted as: %s\n\nThe operator now says: %s\n\nPlease revise the command accordingly.",
+		string(origJSON), bodyText,
+	)
+
+	profiles := profile.ListBuiltins()
+	var sandboxIDs []string
+	if h.DynamoClient != nil {
+		records, _ := awspkg.ListAllSandboxesByDynamo(ctx, h.DynamoClient, h.SandboxTableName)
+		for _, r := range records {
+			sandboxIDs = append(sandboxIDs, r.SandboxID)
+		}
+	}
+
+	cmd, err := callHaiku(ctx, h.BedrockClient, h.BedrockModelID, buildSystemPrompt(profiles, sandboxIDs), revisionMessage)
+	if err != nil {
+		return h.sendReply(ctx, senderEmail, "Revision error",
+			fmt.Sprintf("Could not process revision: %v\n", err))
+	}
+
+	conv.ResolvedCmd = cmd
+	conv.State = "awaiting_confirmation"
+	conv.Messages = append(conv.Messages, ConversationMsg{Role: "operator", Content: bodyText, At: time.Now().UTC()})
+	_ = saveConversation(ctx, h.S3Client, h.ArtifactBucket, conv)
+
+	// Send updated confirmation.
+	return h.sendActionConfirmation(ctx, senderEmail, bodyText, conv.ThreadID, cmd)
 }
 
 // sendReply sends a formatted reply email.
@@ -435,6 +793,12 @@ func main() {
 		sandboxTableName = "km-sandboxes"
 	}
 
+	bedrockModelID := os.Getenv("BEDROCK_MODEL_ID")
+	var bedrockClient BedrockRuntimeAPI
+	if bedrockModelID != "" {
+		bedrockClient = bedrockruntime.NewFromConfig(cfg)
+	}
+
 	h := &OperatorEmailHandler{
 		S3Client:          s3.NewFromConfig(cfg),
 		DynamoClient:      dynamodbpkg.NewFromConfig(cfg),
@@ -446,6 +810,8 @@ func main() {
 		StateBucket:       stateBucket,
 		Domain:            domain,
 		SafePhraseSSMKey:  safePhraseKey,
+		BedrockClient:     bedrockClient,
+		BedrockModelID:    bedrockModelID,
 	}
 
 	lambda.Start(h.Handle)
