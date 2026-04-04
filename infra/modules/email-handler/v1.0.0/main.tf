@@ -150,6 +150,23 @@ resource "aws_iam_role_policy" "kms_decrypt" {
   })
 }
 
+# Policy: Bedrock — invoke Haiku model for AI email interpretation
+resource "aws_iam_role_policy" "bedrock_invoke" {
+  name = "km-email-handler-bedrock"
+  role = aws_iam_role.email_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["bedrock:InvokeModel"]
+        Resource = "arn:aws:bedrock:${data.aws_region.current.name}::foundation-model/${var.bedrock_model_id}"
+      }
+    ]
+  })
+}
+
 # Policy: DynamoDB km-sandboxes — read/write sandbox metadata
 resource "aws_iam_role_policy" "dynamodb_sandboxes" {
   name = "km-email-handler-dynamodb-sandboxes"
@@ -192,7 +209,7 @@ resource "aws_lambda_function" "email_handler" {
   filename         = var.lambda_zip_path
   source_code_hash = filebase64sha256(var.lambda_zip_path)
 
-  timeout       = 60
+  timeout       = 120
   memory_size   = 256
   architectures = ["arm64"]
 
@@ -203,6 +220,7 @@ resource "aws_lambda_function" "email_handler" {
       KM_EMAIL_DOMAIN        = var.email_domain
       KM_SAFE_PHRASE_SSM_KEY = var.safe_phrase_ssm_key
       SANDBOX_TABLE_NAME     = "km-sandboxes"
+      BEDROCK_MODEL_ID       = var.bedrock_model_id
     }
   }
 

@@ -30,3 +30,9 @@ variable "safe_phrase_ssm_key" {
   type        = string
   default     = "/km/config/remote-create/safe-phrase"
 }
+
+variable "bedrock_model_id" {
+  description = "Bedrock model ID for AI email interpretation (e.g. us.anthropic.claude-haiku-4-5-20251001-v1:0)"
+  type        = string
+  default     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+}
