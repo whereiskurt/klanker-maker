@@ -27,6 +27,7 @@ import (
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	ec2pkg "github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	iampkg "github.com/aws/aws-sdk-go-v2/service/iam"
@@ -47,11 +48,17 @@ type TTLEvent struct {
 	// EventType distinguishes actions:
 	//   "ttl" (default), "idle", "destroy" — trigger full terraform destroy
 	//   "stop"    — stop EC2 instance without destroying infrastructure
+	//   "resume"  — resume a stopped/paused EC2 instance
 	//   "extend"  — extend TTL by Duration
+	//   "budget-add" — add budget to a sandbox (compute and/or AI)
 	// Empty defaults to "ttl" for backward compatibility.
 	EventType string `json:"event_type,omitempty"`
 	// Duration is used by "extend" events (e.g. "2h", "30m").
 	Duration string `json:"duration,omitempty"`
+	// BudgetCompute is the USD amount to add to compute budget (budget-add events).
+	BudgetCompute float64 `json:"budget_compute,omitempty"`
+	// BudgetAI is the USD amount to add to AI budget (budget-add events).
+	BudgetAI float64 `json:"budget_ai,omitempty"`
 }
 
 // S3GetAPI is the narrow S3 interface needed to download the sandbox profile.
@@ -102,8 +109,12 @@ func (h *TTLHandler) HandleTTLEvent(ctx context.Context, event TTLEvent) error {
 	switch event.EventType {
 	case "stop":
 		return h.handleStop(ctx, event)
+	case "resume":
+		return h.handleResume(ctx, event)
 	case "extend":
 		return h.handleExtend(ctx, event)
+	case "budget-add":
+		return h.handleBudgetAdd(ctx, event)
 	default:
 		// "ttl", "idle", "destroy", "" — all trigger full destroy
 		return h.handleDestroy(ctx, event)
@@ -145,6 +156,86 @@ func (h *TTLHandler) handleStop(ctx context.Context, event TTLEvent) error {
 	}
 
 	log.Info().Str("sandbox_id", event.SandboxID).Msg("sandbox stopped")
+	return nil
+}
+
+// handleResume starts a stopped EC2 instance.
+func (h *TTLHandler) handleResume(ctx context.Context, event TTLEvent) error {
+	log.Info().Str("sandbox_id", event.SandboxID).Msg("resume event received")
+
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, "")
+	if err != nil {
+		return fmt.Errorf("load AWS config: %w", err)
+	}
+	ec2Client := ec2pkg.NewFromConfig(awsCfg)
+
+	descOut, err := ec2Client.DescribeInstances(ctx, &ec2pkg.DescribeInstancesInput{
+		Filters: []ec2types.Filter{
+			{Name: awssdk.String("tag:km:sandbox-id"), Values: []string{event.SandboxID}},
+			{Name: awssdk.String("instance-state-name"), Values: []string{"stopped"}},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("describe instances: %w", err)
+	}
+
+	for _, res := range descOut.Reservations {
+		for _, inst := range res.Instances {
+			instanceID := awssdk.ToString(inst.InstanceId)
+			log.Info().Str("instance_id", instanceID).Msg("starting instance")
+			_, err := ec2Client.StartInstances(ctx, &ec2pkg.StartInstancesInput{
+				InstanceIds: []string{instanceID},
+			})
+			if err != nil {
+				return fmt.Errorf("start instance %s: %w", instanceID, err)
+			}
+		}
+	}
+
+	log.Info().Str("sandbox_id", event.SandboxID).Msg("sandbox resumed")
+	return nil
+}
+
+// handleBudgetAdd increases budget limits for a sandbox via DynamoDB update.
+func (h *TTLHandler) handleBudgetAdd(ctx context.Context, event TTLEvent) error {
+	log.Info().Str("sandbox_id", event.SandboxID).
+		Float64("compute", event.BudgetCompute).Float64("ai", event.BudgetAI).
+		Msg("budget-add event received")
+
+	if event.BudgetCompute == 0 && event.BudgetAI == 0 {
+		return fmt.Errorf("budget-add: at least one of budget_compute or budget_ai must be > 0")
+	}
+
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, "")
+	if err != nil {
+		return fmt.Errorf("load AWS config: %w", err)
+	}
+	dynamoClient := dynamodbpkg.NewFromConfig(awsCfg)
+	budgetTableName := os.Getenv("KM_BUDGET_TABLE")
+	if budgetTableName == "" {
+		budgetTableName = "km-budgets"
+	}
+
+	// Atomic increment of budget limits via UpdateItem ADD expression
+	update := &dynamodbpkg.UpdateItemInput{
+		TableName: awssdk.String(budgetTableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: event.SandboxID},
+			"sk":         &dynamodbtypes.AttributeValueMemberS{Value: "budget"},
+		},
+		UpdateExpression: awssdk.String("ADD compute_limit :c, ai_limit :a"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":c": &dynamodbtypes.AttributeValueMemberN{Value: fmt.Sprintf("%.2f", event.BudgetCompute)},
+			":a": &dynamodbtypes.AttributeValueMemberN{Value: fmt.Sprintf("%.2f", event.BudgetAI)},
+		},
+	}
+	if _, err := dynamoClient.UpdateItem(ctx, update); err != nil {
+		return fmt.Errorf("update budget for %s: %w", event.SandboxID, err)
+	}
+
+	log.Info().Str("sandbox_id", event.SandboxID).
+		Float64("compute_added", event.BudgetCompute).Float64("ai_added", event.BudgetAI).
+		Msg("budget increased")
 	return nil
 }
 

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -35,13 +36,14 @@ type schedulableCommand struct {
 
 // schedulableCommands maps km command names to their scheduler routing metadata.
 var schedulableCommands = map[string]schedulableCommand{
-	"create":  {targetARNField: "create"},
-	"destroy": {targetARNField: "ttl", eventType: "destroy"},
-	"kill":    {targetARNField: "ttl", eventType: "destroy"},
-	"stop":    {targetARNField: "ttl", eventType: "stop"},
-	"pause":   {targetARNField: "ttl", eventType: "stop"},
-	"resume":  {targetARNField: "ttl", eventType: "resume"},
-	"extend":  {targetARNField: "ttl", eventType: "extend"},
+	"create":     {targetARNField: "create"},
+	"destroy":    {targetARNField: "ttl", eventType: "destroy"},
+	"kill":       {targetARNField: "ttl", eventType: "destroy"},
+	"stop":       {targetARNField: "ttl", eventType: "stop"},
+	"pause":      {targetARNField: "ttl", eventType: "stop"},
+	"resume":     {targetARNField: "ttl", eventType: "resume"},
+	"extend":     {targetARNField: "ttl", eventType: "extend"},
+	"budget-add": {targetARNField: "ttl", eventType: "budget-add"},
 }
 
 // atDeps holds injectable dependencies for the at command family (for testing).
@@ -357,6 +359,23 @@ func buildTargetInput(cmdArg string, cmdInfo schedulableCommand, sandboxID, arti
 	// For "extend", include duration from extraArgs (second extra arg if present)
 	if cmdArg == "extend" && len(extraArgs) >= 2 {
 		detail["duration"] = extraArgs[1]
+	}
+	// For "budget-add", parse --compute and --ai from extraArgs
+	if cmdArg == "budget-add" {
+		for i := 1; i < len(extraArgs); i++ {
+			switch extraArgs[i] {
+			case "--compute":
+				if i+1 < len(extraArgs) {
+					detail["budget_compute"], _ = strconv.ParseFloat(extraArgs[i+1], 64)
+					i++
+				}
+			case "--ai":
+				if i+1 < len(extraArgs) {
+					detail["budget_ai"], _ = strconv.ParseFloat(extraArgs[i+1], 64)
+					i++
+				}
+			}
+		}
 	}
 	b, err := json.Marshal(detail)
 	if err != nil {
