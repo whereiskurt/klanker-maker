@@ -477,6 +477,7 @@ func (h *OperatorEmailHandler) sendActionConfirmation(ctx context.Context, sende
 	sb.WriteString(fmt.Sprintf("\nConfidence: %.0f%%\n", cmd.Confidence*100))
 	sb.WriteString(fmt.Sprintf("Reasoning: %s\n", cmd.Reasoning))
 	sb.WriteString("\nReply YES to proceed, CANCEL to abort, or describe changes.\n")
+	sb.WriteString("(Include your KM-AUTH phrase in the reply body.)\n")
 
 	conv := &ConversationState{
 		ThreadID:    threadID,
