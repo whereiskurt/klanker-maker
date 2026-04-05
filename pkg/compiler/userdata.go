@@ -338,9 +338,16 @@ echo "[km-bootstrap] km binary installed for eBPF enforcement"
 # Create dedicated sidecar user (exempt from iptables DNAT — prevents redirect loops)
 useradd -r -s /usr/sbin/nologin km-sidecar || true
 
-# Create restricted sandbox user for agent workloads (no sudo, no root).
-# This is the default user for km shell sessions.
+# Create sandbox user for agent workloads.
+# When privileged=true, the user gets wheel group + passwordless sudo.
+{{- if .Privileged }}
+useradd -m -s /bin/bash -d /home/sandbox -G wheel sandbox 2>/dev/null || true
+echo "sandbox ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/sandbox
+chmod 0440 /etc/sudoers.d/sandbox
+{{- else }}
+# Restricted: no sudo, no root.
 useradd -m -s /bin/bash -d /home/sandbox sandbox 2>/dev/null || true
+{{- end }}
 mkdir -p /workspace
 chown sandbox:sandbox /workspace
 # Ensure sandbox user gets proxy env vars and audit hook
