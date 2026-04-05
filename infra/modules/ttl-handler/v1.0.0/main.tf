@@ -353,6 +353,9 @@ resource "aws_cloudwatch_event_rule" "sandbox_idle" {
   event_pattern = jsonencode({
     source      = ["km.sandbox"]
     detail-type = ["SandboxIdle"]
+    detail = {
+      event_type = ["idle"]
+    }
   })
 
   tags = {

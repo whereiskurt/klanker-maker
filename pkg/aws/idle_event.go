@@ -2,6 +2,7 @@ package aws
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
@@ -28,14 +29,27 @@ type EventBridgeAPI interface {
 //   - detail:      {"sandbox_id":"<id>","event_type":"idle"}
 //   - bus:         "default"
 // PublishSandboxCommand publishes a command event to EventBridge for the TTL Lambda.
-// eventType can be: "destroy", "stop", "extend", "idle"
-// Extra fields (like duration for extend) are passed as key-value pairs.
+// eventType can be: "destroy", "stop", "extend", "schedule-create", etc.
+// Extra fields are passed as key-value string pairs. Values that look like
+// booleans ("true"/"false") or numbers are preserved as native JSON types.
 func PublishSandboxCommand(ctx context.Context, client EventBridgeAPI, sandboxID, eventType string, extra ...string) error {
-	detail := fmt.Sprintf(`{"sandbox_id":%q,"event_type":%q`, sandboxID, eventType)
-	for i := 0; i+1 < len(extra); i += 2 {
-		detail += fmt.Sprintf(",%q:%q", extra[i], extra[i+1])
+	m := map[string]interface{}{
+		"sandbox_id": sandboxID,
+		"event_type": eventType,
 	}
-	detail += "}"
+	for i := 0; i+1 < len(extra); i += 2 {
+		val := extra[i+1]
+		switch val {
+		case "true":
+			m[extra[i]] = true
+		case "false":
+			m[extra[i]] = false
+		default:
+			m[extra[i]] = val
+		}
+	}
+	detailBytes, _ := json.Marshal(m)
+	detail := string(detailBytes)
 
 	input := &eventbridge.PutEventsInput{
 		Entries: []ebtypes.PutEventsRequestEntry{
