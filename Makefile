@@ -17,7 +17,7 @@ LDFLAGS      = -X github.com/whereiskurt/klankrmkr/pkg/version.Number=v$(KM_VERS
                -X github.com/whereiskurt/klankrmkr/pkg/version.GitCommit=$(GIT_COMMIT)
 
 VERSION     ?= latest
-REGION      ?= $(shell aws configure get region)
+REGION      ?= $(shell aws configure get region 2>/dev/null || grep '^region:' km-config.yaml 2>/dev/null | awk '{print $$2}')
 ACCOUNT_ID   = $(shell aws sts get-caller-identity --query Account --output text)
 ECR_REGISTRY = $(ACCOUNT_ID).dkr.ecr.$(REGION).amazonaws.com
 

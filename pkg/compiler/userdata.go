@@ -1457,8 +1457,9 @@ export SSL_CERT_FILE=${KM_CA_BUNDLE}
 export REQUESTS_CA_BUNDLE=${KM_CA_BUNDLE}
 export CURL_CA_BUNDLE=${KM_CA_BUNDLE}
 export NODE_EXTRA_CA_CERTS=${KM_CA_BUNDLE}
+export AWS_CA_BUNDLE=${KM_CA_BUNDLE}
 CAENV
-    echo "[km-bootstrap] CA trust env vars set for Python/Node/Rust/curl (bundle: ${KM_CA_BUNDLE})"
+    echo "[km-bootstrap] CA trust env vars set for Python/Node/Rust/curl/AWS SDK (bundle: ${KM_CA_BUNDLE})"
   fi
 fi
 

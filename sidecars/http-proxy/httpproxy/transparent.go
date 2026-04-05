@@ -136,7 +136,6 @@ func (tl *TransparentListener) Serve() error {
 }
 
 func (tl *TransparentListener) handleConn(conn net.Conn) {
-	defer conn.Close()
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().Interface("panic", r).Msg("transparent: recovered from panic")
@@ -147,22 +146,22 @@ func (tl *TransparentListener) handleConn(conn net.Conn) {
 	br := bufio.NewReader(conn)
 	first, err := br.Peek(1)
 	if err != nil {
+		conn.Close()
 		return
 	}
 
 	peekedConn := &peekedConn{Conn: conn, reader: br}
 
 	if first[0] == 0x16 {
-		// TLS ClientHello — this is a BPF-redirected transparent connection
+		// TLS ClientHello — this is a BPF-redirected transparent connection.
+		// handleTransparent owns the connection lifecycle (TLS Close cascades).
+		defer conn.Close()
 		tl.handleTransparent(peekedConn)
 	} else {
-		// HTTP request (CONNECT or plain) — pass to goproxy
-		tl.proxy.ServeHTTP(
-			&hijackResponseWriter{conn: peekedConn},
-			nil, // goproxy reads from the connection directly
-		)
-		// Actually, goproxy needs http.Server to handle this properly.
-		// Let's use the simpler approach: serve via http.Server on the peeked conn.
+		// HTTP request (CONNECT or plain) — pass to goproxy via http.Server.
+		// Do NOT defer conn.Close() here: goproxy hijacks the connection for
+		// CONNECT tunnels (MITM) and closes it when the tunnel completes.
+		// Closing prematurely kills the MITM TLS handshake mid-flight.
 		srv := &http.Server{Handler: tl.proxy}
 		srvConn := &singleConnListener{conn: peekedConn}
 		srv.Serve(srvConn)
@@ -344,14 +343,6 @@ func (l *singleConnListener) Accept() (net.Conn, error) {
 func (l *singleConnListener) Close() error   { return nil }
 func (l *singleConnListener) Addr() net.Addr { return l.conn.LocalAddr() }
 
-// hijackResponseWriter is unused but kept for potential future use.
-type hijackResponseWriter struct {
-	conn net.Conn
-}
-
-func (w *hijackResponseWriter) Header() http.Header        { return http.Header{} }
-func (w *hijackResponseWriter) Write(b []byte) (int, error) { return w.conn.Write(b) }
-func (w *hijackResponseWriter) WriteHeader(int)             {}
 
 // CheckBPFMapsExist returns true if the BPF maps are pinned and accessible.
 func CheckBPFMapsExist(sandboxID string) bool {
