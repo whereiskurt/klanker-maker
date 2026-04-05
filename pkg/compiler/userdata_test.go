@@ -1420,3 +1420,52 @@ func TestKmRecvContainsSPKIDERPrefix(t *testing.T) {
 		t.Error("expected SubjectPublicKeyInfo DER prefix '302a300506032b6570032100' in km-recv script")
 	}
 }
+
+// ============================================================
+// Privileged execution mode tests (Phase 47)
+// ============================================================
+
+// TestUserdataPrivilegedEnabled verifies that when Privileged=true, the generated
+// userdata adds the sandbox user to the wheel group and writes a passwordless sudoers entry.
+func TestUserdataPrivilegedEnabled(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Execution.Privileged = true
+
+	out, err := generateUserData(p, "sb-priv-1", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	for _, want := range []string{
+		"-G wheel sandbox",
+		"NOPASSWD:ALL",
+		"/etc/sudoers.d/sandbox",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in userdata when Privileged=true", want)
+		}
+	}
+}
+
+// TestUserdataPrivilegedDisabled verifies that when Privileged=false (default), the generated
+// userdata does NOT add the sandbox user to wheel group or write any sudoers entry.
+func TestUserdataPrivilegedDisabled(t *testing.T) {
+	p := baseProfile()
+	// Privileged defaults to false — no explicit set needed, but we set it for clarity.
+	p.Spec.Execution.Privileged = false
+
+	out, err := generateUserData(p, "sb-nopriv-1", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	for _, notWant := range []string{
+		"-G wheel",
+		"NOPASSWD",
+		"sudoers.d",
+	} {
+		if strings.Contains(out, notWant) {
+			t.Errorf("did not expect %q in userdata when Privileged=false", notWant)
+		}
+	}
+}
