@@ -339,7 +339,10 @@ resource "aws_iam_role_policy" "scheduler_invoke_lambda" {
       {
         Effect   = "Allow"
         Action   = "lambda:InvokeFunction"
-        Resource = aws_lambda_function.ttl_handler.arn
+        Resource = compact([
+          aws_lambda_function.ttl_handler.arn,
+          var.create_handler_arn,
+        ])
       },
     ]
   })

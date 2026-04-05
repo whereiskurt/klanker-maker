@@ -38,7 +38,7 @@ var ebDOW = map[string]int{
 }
 
 // recurringKeywords triggers the custom recurring parser path.
-var recurringKeywords = []string{"every", "each", "weekly", "daily", "monthly"}
+var recurringKeywords = []string{"every", "each", "weekly", "daily", "monthly", "everyday"}
 
 // ratePattern matches "every N hours" or "every N minutes".
 var ratePattern = regexp.MustCompile(`(?i)every\s+(\d+)\s+(hours?|minutes?)`)
@@ -47,7 +47,7 @@ var ratePattern = regexp.MustCompile(`(?i)every\s+(\d+)\s+(hours?|minutes?)`)
 var dayAtPattern = regexp.MustCompile(`(?i)(?:every|each)\s+(\w+)\s+at\s+(\S+)`)
 
 // dailyPattern matches "every day at <time>" or "daily at <time>".
-var dailyPattern = regexp.MustCompile(`(?i)(?:every\s+day|daily)\s+at\s+(\S+)`)
+var dailyPattern = regexp.MustCompile(`(?i)(?:every\s*day|daily)\s+at\s+(\S+)`)
 
 // noonAliases maps simple time aliases.
 var noonAliases = map[string]string{
@@ -151,6 +151,16 @@ func parseRecurring(expr string) (ScheduleSpec, error) {
 	return ScheduleSpec{}, fmt.Errorf("cannot parse recurring expression %q", expr)
 }
 
+// compactTimeRe matches compact time formats like "845AM", "915pm", "1030AM"
+// (3-4 digits immediately followed by AM/PM with no colon separator).
+var compactTimeRe = regexp.MustCompile(`(?i)\b(\d{1,2})(\d{2})\s*(am|pm)\b`)
+
+// normalizeCompactTimes rewrites compact times like "845AM" → "8:45AM"
+// so the olebedev/when library can parse them.
+func normalizeCompactTimes(expr string) string {
+	return compactTimeRe.ReplaceAllString(expr, "${1}:${2}${3}")
+}
+
 // Parse converts a human-readable time expression into an EventBridge Scheduler ScheduleSpec.
 //
 // One-time expressions ("10pm tomorrow", "in 30 minutes") return an at() expression.
@@ -164,6 +174,10 @@ func Parse(expr string, now time.Time) (ScheduleSpec, error) {
 	if isRecurring(expr) {
 		return parseRecurring(expr)
 	}
+
+	// Normalize compact time formats (e.g. "845AM" → "8:45AM") before
+	// passing to the when library which requires colon-separated times.
+	expr = normalizeCompactTimes(expr)
 
 	// One-time: use olebedev/when for natural language parsing
 	w := when.New(nil)

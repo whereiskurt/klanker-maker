@@ -24,6 +24,8 @@ import (
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	atpkg "github.com/whereiskurt/klankrmkr/pkg/at"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klankrmkr/pkg/compiler"
+	"github.com/whereiskurt/klankrmkr/pkg/profile"
 )
 
 // schedulableCommand defines routing metadata for each schedulable km command.
@@ -207,14 +209,21 @@ func newAtCmdInternal(cfg *config.Config, schedClient awspkg.SchedulerAPI, dynam
 				return fmt.Errorf("build target input: %w", err)
 			}
 
-			// For "create" commands: upload profile YAML to S3 so the Lambda can find it at fire-time.
-			// If the profile file doesn't exist locally, include the path in the detail and
-			// let the Lambda resolve it from its toolchain (which has profiles/ baked in).
+			// For "create" commands: generate sandbox ID and upload profile YAML to S3
+			// under remote-create/{sandbox-id}/.km-profile.yaml — the same layout that
+			// km create --remote uses, which the create-handler Lambda expects.
 			if cmdArg == "create" && cfg.ArtifactsBucket != "" {
 				profilePath, _, _, _ := parseCreateArgs(extraArgs)
 				if profilePath != "" {
 					if profileData, readErr := os.ReadFile(profilePath); readErr == nil {
-						s3Key := "scheduled/" + profilePath
+						p, loadErr := profile.Parse(profileData)
+						if loadErr != nil {
+							return fmt.Errorf("parse profile for sandbox ID: %w", loadErr)
+						}
+						schedSandboxID := compiler.GenerateSandboxID(p.Metadata.Prefix)
+						s3Prefix := "remote-create/" + schedSandboxID
+						s3Key := s3Prefix + "/.km-profile.yaml"
+
 						awsCfg2, _ := awspkg.LoadAWSConfig(ctx, resolveAWSProfile(cfg))
 						s3Client := s3.NewFromConfig(awsCfg2)
 						if _, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
@@ -226,6 +235,9 @@ func newAtCmdInternal(cfg *config.Config, schedClient awspkg.SchedulerAPI, dynam
 						} else {
 							fmt.Fprintf(cmd.OutOrStdout(), "  Profile uploaded to s3://%s/%s\n", cfg.ArtifactsBucket, s3Key)
 						}
+
+						// Patch the target input with the generated sandbox ID and prefix
+						targetInput = patchScheduleInput(targetInput, schedSandboxID, s3Prefix)
 					}
 				}
 			}
@@ -242,7 +254,7 @@ func newAtCmdInternal(cfg *config.Config, schedClient awspkg.SchedulerAPI, dynam
 				Name:                       aws.String(scheduleName),
 				GroupName:                  aws.String(groupName),
 				ScheduleExpression:         aws.String(spec.Expression),
-				ScheduleExpressionTimezone: aws.String("UTC"),
+				ScheduleExpressionTimezone: aws.String(scheduleTimezone(spec)),
 				Target: &schedulertypes.Target{
 					Arn:     aws.String(targetARN),
 					RoleArn: aws.String(cfg.SchedulerRoleARN),
@@ -343,7 +355,19 @@ func buildTargetInput(cmdArg string, cmdInfo schedulableCommand, sandboxID, arti
 		if alias != "" {
 			detail["alias"] = alias
 		}
-		b, err := json.Marshal(detail)
+		detailJSON, err := json.Marshal(detail)
+		if err != nil {
+			return "", err
+		}
+		// Wrap in CloudWatchEvent envelope — the create-handler Lambda expects
+		// events.CloudWatchEvent with the payload in the Detail field.
+		// EventBridge Scheduler sends Target.Input directly (no auto-wrapping).
+		envelope := map[string]interface{}{
+			"source":      "km.schedule",
+			"detail-type": "SandboxCreate",
+			"detail":      json.RawMessage(detailJSON),
+		}
+		b, err := json.Marshal(envelope)
 		if err != nil {
 			return "", err
 		}
@@ -384,14 +408,65 @@ func buildTargetInput(cmdArg string, cmdInfo schedulableCommand, sandboxID, arti
 	return string(b), nil
 }
 
+// scheduleTimezone returns the IANA timezone for EventBridge Scheduler.
+// One-time at() expressions are already in UTC, so use "UTC".
+// Recurring cron/rate expressions use local timezone so "daily at noon" means local noon.
+func scheduleTimezone(spec atpkg.ScheduleSpec) string {
+	if spec.IsRecurring {
+		return time.Now().Location().String()
+	}
+	return "UTC"
+}
+
+// patchScheduleInput updates the sandbox_id and artifact_prefix inside the
+// CloudWatchEvent envelope's detail field. Called after sandbox ID generation
+// to inject the ID into the pre-built target input JSON.
+func patchScheduleInput(input, sandboxID, artifactPrefix string) string {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(input), &envelope); err != nil {
+		return input
+	}
+	var detail map[string]interface{}
+	if err := json.Unmarshal(envelope["detail"], &detail); err != nil {
+		return input
+	}
+	detail["sandbox_id"] = sandboxID
+	detail["artifact_prefix"] = artifactPrefix
+	detailJSON, _ := json.Marshal(detail)
+	envelope["detail"] = detailJSON
+	b, _ := json.Marshal(envelope)
+	return string(b)
+}
+
 // NewAtListCmd creates the "km at list" subcommand.
 func NewAtListCmd(cfg *config.Config) *cobra.Command {
 	return NewAtListCmdWithDeps(cfg, nil)
 }
 
+// localizeScheduleExpr converts an EventBridge at() expression from UTC to the
+// given location, returning a human-friendly string. Non-at() expressions (cron,
+// rate) are returned unchanged.
+func localizeScheduleExpr(expr string, loc *time.Location) string {
+	// at(2026-04-05T13:00:00) → parse the UTC time
+	if !strings.HasPrefix(expr, "at(") || !strings.HasSuffix(expr, ")") {
+		return expr
+	}
+	inner := expr[3 : len(expr)-1] // "2026-04-05T13:00:00"
+	t, err := time.Parse("2006-01-02T15:04:05", inner)
+	if err != nil {
+		return expr
+	}
+	utc := t.UTC()
+	local := utc.In(loc)
+	zone, _ := local.Zone()
+	return fmt.Sprintf("%s %s", local.Format("2006-01-02 3:04PM"), zone)
+}
+
 // NewAtListCmdWithDeps creates a testable "km at list" subcommand with injected DynamoDB.
 func NewAtListCmdWithDeps(cfg *config.Config, dynamo awspkg.SandboxMetadataAPI) *cobra.Command {
-	return &cobra.Command{
+	var utcFlag bool
+
+	cmd := &cobra.Command{
 		Use:          "list",
 		Short:        "List all scheduled sandbox operations",
 		SilenceUsage: true,
@@ -421,20 +496,53 @@ func NewAtListCmdWithDeps(cfg *config.Config, dynamo awspkg.SandboxMetadataAPI) 
 				return nil
 			}
 
+			loc := time.Now().Location()
+			now := time.Now().UTC()
+
+			// Reconcile: for one-time at() schedules whose time has passed,
+			// clean up the DynamoDB record (EventBridge auto-deletes them).
+			var live []awspkg.ScheduleRecord
+			for _, r := range records {
+				if r.Status == "active" && strings.HasPrefix(r.CronExpr, "at(") {
+					inner := r.CronExpr[3 : len(r.CronExpr)-1]
+					if t, err := time.Parse("2006-01-02T15:04:05", inner); err == nil && t.Before(now) {
+						// Schedule time has passed — clean up stale record
+						_ = awspkg.DeleteScheduleRecord(ctx, dynamoClient, cfg.SchedulesTableName, r.ScheduleName)
+						continue
+					}
+				}
+				live = append(live, r)
+			}
+
+			if len(live) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "No scheduled operations.")
+				return nil
+			}
+
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(w, "NAME\tCOMMAND\tTARGET\tSCHEDULE\tSTATUS\tCREATED")
-			for _, r := range records {
+			for _, r := range live {
 				target := r.SandboxID
 				if target == "" {
-					target = "(new)"
+					target = "new"
 				}
-				created := r.CreatedAt.UTC().Format("2006-01-02 15:04")
+				schedule := strings.TrimSuffix(strings.TrimPrefix(r.CronExpr, "at("), ")")
+				var created string
+				if utcFlag {
+					created = r.CreatedAt.UTC().Format("2006-01-02 15:04") + " UTC"
+				} else {
+					schedule = localizeScheduleExpr(r.CronExpr, loc)
+					created = r.CreatedAt.In(loc).Format("2006-01-02 3:04PM")
+				}
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-					r.ScheduleName, r.Command, target, r.CronExpr, r.Status, created)
+					r.ScheduleName, r.Command, target, schedule, r.Status, created)
 			}
 			return w.Flush()
 		},
 	}
+
+	cmd.Flags().BoolVar(&utcFlag, "utc", false, "Display times in UTC instead of local timezone")
+	return cmd
 }
 
 // NewAtCancelCmd creates the "km at cancel <name>" subcommand.
