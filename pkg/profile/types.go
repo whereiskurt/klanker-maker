@@ -192,6 +192,11 @@ type ExecutionSpec struct {
 	// RsyncFileList is the path to a local YAML file containing additional rsync paths.
 	// Resolved from the operator's cwd at `km rsync save` time.
 	RsyncFileList string `yaml:"rsyncFileList,omitempty"`
+	// Privileged grants the sandbox user wheel group membership and
+	// passwordless sudo access. When false (default), the sandbox user
+	// has no sudo capability. Operators who want to remove sudo entirely
+	// from the instance can use a custom AMI without sudo installed.
+	Privileged bool `yaml:"privileged,omitempty"`
 }
 
 // SourceAccessSpec controls access to source code repositories.
