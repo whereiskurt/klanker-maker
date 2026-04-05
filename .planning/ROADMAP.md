@@ -1080,3 +1080,18 @@ Plans:
 Plans:
 - [ ] 46-01-PLAN.md — Haiku AI invocation layer + conversation state management
 - [ ] 46-02-PLAN.md — Wire AI dispatch into handler + Terraform Bedrock IAM/timeout
+
+### Phase 47: Privileged execution mode & learn profile — spec.execution.privileged + profiles/learn.yaml
+
+**Goal:** Operators can create a wide-open sandbox for traffic observation using `km create profiles/learn.yaml`, run their workload with full sudo/root access, then `km shell --learn` to generate a minimal SandboxProfile from observed network traffic. The `privileged` field is general-purpose and available to any profile.
+**Requirements**:
+- Add `Privileged bool` field to `ExecutionSpec` in `pkg/profile/types.go` (`yaml:"privileged,omitempty"`)
+- Add `Privileged bool` to `userDataParams` in `pkg/compiler/userdata.go`
+- Wire `Privileged` from profile into userdata params in `generateUserData()`
+- Update userdata template: when Privileged is true, add sandbox user to wheel group and write passwordless sudoers entry
+- Create `profiles/learn.yaml` — permissive profile with wide-open DNS suffixes covering common TLDs, `enforcement: both` for eBPF observe + L7 capture, `privileged: true`, higher budget limits, short TTL safety net
+- Add tests for privileged userdata generation (wheel group + sudoers entry present/absent)
+**Depends on:** Phase 31 (allowlist profile generator / --learn), Phase 42 (eBPF gatekeeper mode)
+**Plans:** 1/1 plans complete
+Plans:
+- [ ] 47-01-PLAN.md — Privileged execution field + learn profile + tests
