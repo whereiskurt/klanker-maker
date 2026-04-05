@@ -94,6 +94,10 @@ spec:
       maxSpendUSD: 0.00
     warningThreshold: 0.80
 
+  agent:
+    maxConcurrentTasks: 1
+    taskTimeout: "30m"
+
   artifacts:
     paths:
       - /workspace

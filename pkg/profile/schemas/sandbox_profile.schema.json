@@ -285,6 +285,10 @@
             "rsyncFileList": {
               "type": "string",
               "description": "Path to a local YAML file containing additional rsync paths (resolved from operator cwd at km rsync save time)."
+            },
+            "privileged": {
+              "type": "boolean",
+              "description": "Grants the sandbox user wheel group membership and passwordless sudo access. When false (default), the sandbox user has no sudo capability."
             }
           }
         },
