@@ -223,6 +223,8 @@ func Load() (*Config, error) {
 			"max_sandboxes",
 			"schedules_table_name",
 			"create_handler_lambda_arn",
+			"ttl_lambda_arn",
+			"scheduler_role_arn",
 		} {
 			if v2.IsSet(key) && !isSetByEnv(v, key) {
 				v.Set(key, v2.Get(key))

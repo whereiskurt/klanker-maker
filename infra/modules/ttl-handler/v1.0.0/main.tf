@@ -101,6 +101,20 @@ resource "aws_iam_role_policy" "scheduler_delete" {
         Effect   = "Allow"
         Action   = ["scheduler:DeleteSchedule"]
         Resource = "arn:aws:scheduler:*:*:schedule/default/km-ttl-*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "scheduler:CreateSchedule",
+          "scheduler:DeleteSchedule",
+          "scheduler:GetSchedule",
+        ]
+        Resource = "arn:aws:scheduler:*:*:schedule/km-at/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["iam:PassRole"]
+        Resource = var.scheduler_role_arn != "" ? var.scheduler_role_arn : "*"
       }
     ]
   })
