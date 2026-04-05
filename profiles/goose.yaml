@@ -65,6 +65,7 @@ spec:
       allowedRepos:
         - "whereiskurt/meshtk"
         - "whereiskurt/defcon.run.34"
+        - "whereiskurt/klanker-maker"
       allowedRefs:
         - "main"
         - "develop"
