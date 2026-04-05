@@ -22,13 +22,9 @@ var sandboxIDLike = regexp.MustCompile(`^[a-z][a-z0-9]*-[a-z0-9][-a-z0-9]*$`)
 //   - A sandbox alias like "orc" or "wrkr-1" (resolved via DynamoDB GSI, S3 fallback)
 //   - A number "1"-"N" referring to the Nth sandbox from km list
 func ResolveSandboxID(ctx context.Context, cfg *config.Config, ref string) (string, error) {
-	// If it matches the sandbox ID pattern, treat it as a sandbox ID (further
-	// validation happens in the individual commands like runDestroy).
-	if sandboxIDLike.MatchString(ref) {
-		return ref, nil
-	}
-
-	// Try alias resolution via DynamoDB GSI (O(1)), falling back to S3 on ResourceNotFoundException.
+	// Try alias resolution first via DynamoDB GSI — aliases can contain hyphens
+	// (e.g. "test-destroy") which overlap with the sandbox ID pattern, so alias
+	// lookup must take priority over pattern matching.
 	awsCfg, awsErr := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
 	if awsErr == nil {
 		tableName := cfg.SandboxTableName
@@ -40,6 +36,12 @@ func ResolveSandboxID(ctx context.Context, cfg *config.Config, ref string) (stri
 			fmt.Printf("Resolved alias %q → %s\n", ref, resolved)
 			return resolved, nil
 		}
+	}
+
+	// If it matches the sandbox ID pattern, treat it as a sandbox ID (further
+	// validation happens in the individual commands like runDestroy).
+	if sandboxIDLike.MatchString(ref) {
+		return ref, nil
 	}
 
 	// Try parsing as a number.
