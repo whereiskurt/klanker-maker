@@ -388,6 +388,47 @@ resource "aws_lambda_permission" "eventbridge_events" {
 }
 
 # ============================================================
+# EventBridge rule: route SandboxCommand events to TTL Lambda (full detail passthrough)
+# Used by email Lambda relay for schedule-create, destroy, extend, etc.
+# ============================================================
+
+resource "aws_cloudwatch_event_rule" "sandbox_command" {
+  name        = "km-sandbox-command"
+  description = "Routes SandboxCommand events to TTL Lambda — full detail passthrough for schedule-create relay"
+
+  event_pattern = jsonencode({
+    source      = ["km.sandbox"]
+    detail-type = ["SandboxIdle"]
+    detail = {
+      event_type = [{ "anything-but" : "idle" }]
+    }
+  })
+
+  tags = {
+    "km:component" = "ttl-handler"
+    "km:managed"   = "true"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "command_to_ttl" {
+  rule      = aws_cloudwatch_event_rule.sandbox_command.name
+  target_id = "km-ttl-handler-command"
+  arn       = aws_lambda_function.ttl_handler.arn
+
+  # Pass full detail through — no input transformer.
+  # The TTL handler unmarshals the full TTLEvent struct from $.detail.
+  input_path = "$.detail"
+}
+
+resource "aws_lambda_permission" "eventbridge_command" {
+  statement_id  = "AllowEventBridgeCommandInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.ttl_handler.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.sandbox_command.arn
+}
+
+# ============================================================
 # IAM policies: sandbox resource teardown (PROV-05/PROV-06)
 # ============================================================
 
