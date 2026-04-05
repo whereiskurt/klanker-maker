@@ -1,0 +1,100 @@
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: learn
+  labels:
+    tier: development
+    tool: traffic-observation
+    builtin: "true"
+  prefix: learn
+
+spec:
+  lifecycle:
+    ttl: "2h"
+    idleTimeout: "30m"
+    teardownPolicy: destroy
+
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    privileged: true
+    initCommands:
+      - "yum install -y git jq tar gzip unzip curl wget"
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos: []
+      allowedRefs:
+        - "*"
+
+  network:
+    enforcement: both
+    egress:
+      allowedDNSSuffixes:
+        # Wide-open for traffic observation — covers common TLDs.
+        # eBPF runs in observe mode, logging all traffic for km shell --learn.
+        - ".com"
+        - ".org"
+        - ".net"
+        - ".io"
+        - ".dev"
+        - ".ai"
+        - ".co"
+        - ".app"
+        - ".cloud"
+        - ".sh"
+        - ".me"
+        - ".info"
+        - ".edu"
+        - ".gov"
+        - ".amazonaws.com"
+      allowedHosts: []
+
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/network
+    tlsCapture:
+      enabled: true
+
+  budget:
+    compute:
+      maxSpendUSD: 2.00
+    ai:
+      maxSpendUSD: 0.00
+    warningThreshold: 0.80
+
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 500
