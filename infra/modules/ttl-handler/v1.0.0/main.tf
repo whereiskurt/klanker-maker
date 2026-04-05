@@ -265,8 +265,10 @@ resource "aws_lambda_function" "ttl_handler" {
       KM_OPERATOR_EMAIL   = var.operator_email
       KM_STATE_BUCKET     = var.state_bucket
       KM_STATE_PREFIX     = var.state_prefix
-      KM_REGION_LABEL     = var.region_label
-      SANDBOX_TABLE_NAME  = "km-sandboxes"
+      KM_REGION_LABEL       = var.region_label
+      SANDBOX_TABLE_NAME    = "km-sandboxes"
+      KM_CREATE_HANDLER_ARN = var.create_handler_arn
+      KM_SCHEDULER_ROLE_ARN = var.scheduler_role_arn
     }
   }
 

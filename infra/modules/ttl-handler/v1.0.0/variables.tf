@@ -42,3 +42,15 @@ variable "region_label" {
   type        = string
   default     = "use1"
 }
+
+variable "create_handler_arn" {
+  description = "ARN of the km-create-handler Lambda (target for scheduled creates)"
+  type        = string
+  default     = ""
+}
+
+variable "scheduler_role_arn" {
+  description = "IAM role ARN that EventBridge Scheduler assumes to invoke Lambda targets"
+  type        = string
+  default     = ""
+}

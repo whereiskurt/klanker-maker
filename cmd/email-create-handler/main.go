@@ -48,12 +48,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	schedulerpkg "github.com/aws/aws-sdk-go-v2/service/scheduler"
-	schedulertypes "github.com/aws/aws-sdk-go-v2/service/scheduler/types"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
-	atpkg "github.com/whereiskurt/klankrmkr/pkg/at"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
 	"github.com/whereiskurt/klankrmkr/pkg/version"
@@ -121,12 +118,8 @@ type OperatorEmailHandler struct {
 	Domain            string
 	SafePhraseSSMKey  string
 	// BedrockClient enables AI interpretation path. If nil, falls back to keyword dispatch.
-	BedrockClient    BedrockRuntimeAPI
-	BedrockModelID   string
-	// SchedulerClient enables deferred creates via EventBridge Scheduler. If nil, scheduled creates fail gracefully.
-	SchedulerClient  awspkg.SchedulerAPI
-	SchedulerRoleARN string
-	CreateHandlerARN string
+	BedrockClient  BedrockRuntimeAPI
+	BedrockModelID string
 	// VerboseErrors when true sends rejection replies for missing/invalid KM-AUTH.
 	// Default false: silently drop unauthenticated emails to prevent SES quota abuse.
 	VerboseErrors bool
@@ -662,75 +655,28 @@ func (h *OperatorEmailHandler) executeConfirmedCommand(ctx context.Context, send
 			}
 		}
 
-		// If schedule_time is set, create an EventBridge Scheduler schedule.
+		// If schedule_time is set, relay to TTL handler via EventBridge.
+		// The TTL handler has scheduler:CreateSchedule + iam:PassRole permissions (no SCP block).
 		if schedTime, ok := cmd.Overrides["schedule_time"]; ok && fmt.Sprintf("%v", schedTime) != "" {
-			if h.SchedulerClient == nil || h.CreateHandlerARN == "" || h.SchedulerRoleARN == "" {
-				return h.sendReply(ctx, senderEmail, "Execution error",
-					"Scheduling not configured — SchedulerClient, CreateHandlerARN, or SchedulerRoleARN missing.\n")
-			}
-
 			alias := ""
 			if a, ok := cmd.Overrides["alias"]; ok {
 				alias = fmt.Sprintf("%v", a)
 			}
 
-			// Parse the natural language time expression.
-			spec, parseErr := atpkg.Parse(fmt.Sprintf("%v", schedTime), time.Now())
-			if parseErr != nil {
-				return h.sendReply(ctx, senderEmail, "Schedule error",
-					fmt.Sprintf("Could not parse schedule time %q: %v\n", schedTime, parseErr))
-			}
-
-			// Build the create event detail JSON for the scheduled invocation.
-			detail := awspkg.SandboxCreateDetail{
-				SandboxID:      sandboxID,
-				ArtifactBucket: h.ArtifactBucket,
-				ArtifactPrefix: artifactPrefix,
-				OperatorEmail:  senderEmail,
-				OnDemand:       onDemand,
-				Alias:          alias,
-				CreatedBy:      "email-schedule",
-			}
-			detailBytes, _ := json.Marshal(detail)
-
-			scheduleName := atpkg.GenerateScheduleName("create", sandboxID, fmt.Sprintf("%v", schedTime))
-			schedInput := &schedulerpkg.CreateScheduleInput{
-				Name:                       awssdk.String(scheduleName),
-				GroupName:                  awssdk.String("km-at"),
-				ScheduleExpression:         awssdk.String(spec.Expression),
-				ScheduleExpressionTimezone: awssdk.String("UTC"),
-				Target: &schedulertypes.Target{
-					Arn:     awssdk.String(h.CreateHandlerARN),
-					RoleArn: awssdk.String(h.SchedulerRoleARN),
-					Input:   awssdk.String(string(detailBytes)),
-				},
-				ActionAfterCompletion: schedulertypes.ActionAfterCompletionDelete,
-				FlexibleTimeWindow: &schedulertypes.FlexibleTimeWindow{
-					Mode: schedulertypes.FlexibleTimeWindowModeOff,
-				},
-			}
-
-			execErr = awspkg.CreateAtSchedule(ctx, h.SchedulerClient, schedInput)
-			if execErr == nil {
-				// Store schedule record in DynamoDB so km at list shows it.
-				schedTableName := os.Getenv("KM_SCHEDULES_TABLE")
-				if schedTableName == "" {
-					schedTableName = "km-schedules"
-				}
-				rec := awspkg.ScheduleRecord{
-					ScheduleName: scheduleName,
-					Command:      "create",
-					SandboxID:    sandboxID,
-					TimeExpr:     fmt.Sprintf("%v", schedTime),
-					CronExpr:     spec.Expression,
-					IsRecurring:  spec.IsRecurring,
-					Status:       "active",
-					CreatedAt:    time.Now(),
-				}
-				_ = awspkg.PutSchedule(ctx, h.DynamoClient, schedTableName, rec)
-			}
-			execDetail = fmt.Sprintf("Sandbox ID: %s\nProfile: %s\nScheduled: %s (%s)\nOn-demand: %v\nAlias: %s\nSchedule name: %s\n",
-				sandboxID, cmd.Profile, schedTime, spec.Expression, onDemand, alias, scheduleName)
+			// Publish a SandboxIdle event with event_type "schedule-create".
+			// The km-sandbox-idle EventBridge rule routes this to the TTL handler,
+			// which has scheduler:CreateSchedule + iam:PassRole (no SCP block).
+			execErr = awspkg.PublishSandboxCommand(ctx, h.EventBridgeClient, sandboxID, "schedule-create",
+				"schedule_time", fmt.Sprintf("%v", schedTime),
+				"artifact_bucket", h.ArtifactBucket,
+				"artifact_prefix", artifactPrefix,
+				"operator_email_event", senderEmail,
+				"on_demand", fmt.Sprintf("%v", onDemand),
+				"alias", alias,
+				"profile_name", cmd.Profile,
+			)
+			execDetail = fmt.Sprintf("Sandbox ID: %s\nProfile: %s\nScheduled: %v\nOn-demand: %v\nAlias: %s\n",
+				sandboxID, cmd.Profile, schedTime, onDemand, alias)
 		} else {
 		// Immediate create: dispatch via EventBridge.
 			execErr = awspkg.PutSandboxCreateEvent(ctx, h.EventBridgeClient, awspkg.SandboxCreateDetail{
@@ -990,12 +936,9 @@ func main() {
 		StateBucket:       stateBucket,
 		Domain:            domain,
 		SafePhraseSSMKey:  safePhraseKey,
-		BedrockClient:    bedrockClient,
-		BedrockModelID:   bedrockModelID,
-		VerboseErrors:    os.Getenv("KM_VERBOSE_EMAIL_ERRORS") == "true",
-		SchedulerClient:  schedulerpkg.NewFromConfig(cfg),
-		SchedulerRoleARN: os.Getenv("KM_SCHEDULER_ROLE_ARN"),
-		CreateHandlerARN: os.Getenv("KM_CREATE_HANDLER_ARN"),
+		BedrockClient:  bedrockClient,
+		BedrockModelID: bedrockModelID,
+		VerboseErrors:  os.Getenv("KM_VERBOSE_EMAIL_ERRORS") == "true",
 	}
 
 	lambda.Start(h.Handle)

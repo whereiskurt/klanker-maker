@@ -117,15 +117,15 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
 		},
 		{
-			name:    "ttl-handler",
-			dir:     filepath.Join(regionDir, "ttl-handler"),
+			// create-handler must apply before ttl-handler and email-handler
+			// so its ARN is available via KM_CREATE_HANDLER_ARN.
+			name:    "create-handler",
+			dir:     filepath.Join(regionDir, "create-handler"),
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
 		},
 		{
-			// create-handler must apply before email-handler so its ARN is
-			// available for the email-handler's KM_CREATE_HANDLER_ARN env var.
-			name:    "create-handler",
-			dir:     filepath.Join(regionDir, "create-handler"),
+			name:    "ttl-handler",
+			dir:     filepath.Join(regionDir, "ttl-handler"),
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
 		},
 		{

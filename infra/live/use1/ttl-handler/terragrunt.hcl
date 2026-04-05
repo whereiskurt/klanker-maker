@@ -42,4 +42,6 @@ inputs = {
   state_bucket         = local.site_vars.locals.backend.bucket
   state_prefix         = local.site_vars.locals.site.tf_state_prefix
   region_label         = local.region_label
+  create_handler_arn   = get_env("KM_CREATE_HANDLER_ARN", "")
+  scheduler_role_arn   = get_env("KM_SCHEDULER_ROLE_ARN", "")
 }

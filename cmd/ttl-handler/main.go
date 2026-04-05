@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -37,6 +38,7 @@ import (
 	schedulertypes "github.com/aws/aws-sdk-go-v2/service/scheduler/types"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/rs/zerolog/log"
+	atpkg "github.com/whereiskurt/klankrmkr/pkg/at"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/compiler"
 	profilepkg "github.com/whereiskurt/klankrmkr/pkg/profile"
@@ -59,6 +61,14 @@ type TTLEvent struct {
 	BudgetCompute float64 `json:"budget_compute,omitempty"`
 	// BudgetAI is the USD amount to add to AI budget (budget-add events).
 	BudgetAI float64 `json:"budget_ai,omitempty"`
+	// Schedule fields for "schedule-create" events (relay from email Lambda).
+	ScheduleTime   string `json:"schedule_time,omitempty"`    // natural language time expression
+	ArtifactBucket string `json:"artifact_bucket,omitempty"`
+	ArtifactPrefix string `json:"artifact_prefix,omitempty"`
+	OperatorEmail  string `json:"operator_email_event,omitempty"` // from email conversation
+	OnDemand       bool   `json:"on_demand,omitempty"`
+	Alias          string `json:"alias,omitempty"`
+	ProfileName    string `json:"profile_name,omitempty"`
 }
 
 // S3GetAPI is the narrow S3 interface needed to download the sandbox profile.
@@ -115,6 +125,8 @@ func (h *TTLHandler) HandleTTLEvent(ctx context.Context, event TTLEvent) error {
 		return h.handleExtend(ctx, event)
 	case "budget-add":
 		return h.handleBudgetAdd(ctx, event)
+	case "schedule-create":
+		return h.handleScheduleCreate(ctx, event)
 	default:
 		// "ttl", "idle", "destroy", "" — all trigger full destroy
 		return h.handleDestroy(ctx, event)
@@ -236,6 +248,89 @@ func (h *TTLHandler) handleBudgetAdd(ctx context.Context, event TTLEvent) error 
 	log.Info().Str("sandbox_id", event.SandboxID).
 		Float64("compute_added", event.BudgetCompute).Float64("ai_added", event.BudgetAI).
 		Msg("budget increased")
+	return nil
+}
+
+// handleScheduleCreate creates an EventBridge Scheduler schedule for a deferred sandbox create.
+// This is a relay from the email Lambda which can't call scheduler:CreateSchedule directly (SCP).
+func (h *TTLHandler) handleScheduleCreate(ctx context.Context, event TTLEvent) error {
+	log.Info().Str("sandbox_id", event.SandboxID).Str("schedule_time", event.ScheduleTime).
+		Msg("schedule-create event received")
+
+	if event.ScheduleTime == "" {
+		return fmt.Errorf("schedule-create: schedule_time is required")
+	}
+
+	// Parse the natural language time expression.
+	spec, err := atpkg.Parse(event.ScheduleTime, time.Now())
+	if err != nil {
+		return fmt.Errorf("parse schedule time %q: %w", event.ScheduleTime, err)
+	}
+
+	// Build the create event detail JSON that the create-handler Lambda expects.
+	createDetail := map[string]interface{}{
+		"sandbox_id":      event.SandboxID,
+		"artifact_bucket": event.ArtifactBucket,
+		"artifact_prefix": event.ArtifactPrefix,
+		"operator_email":  event.OperatorEmail,
+		"on_demand":       event.OnDemand,
+		"alias":           event.Alias,
+		"created_by":      "email-schedule",
+	}
+	detailBytes, _ := json.Marshal(createDetail)
+
+	// Resolve create-handler Lambda ARN from env.
+	createHandlerARN := os.Getenv("KM_CREATE_HANDLER_ARN")
+	if createHandlerARN == "" {
+		return fmt.Errorf("schedule-create: KM_CREATE_HANDLER_ARN not set")
+	}
+
+	schedulerRoleARN := os.Getenv("KM_SCHEDULER_ROLE_ARN")
+	if schedulerRoleARN == "" {
+		return fmt.Errorf("schedule-create: KM_SCHEDULER_ROLE_ARN not set")
+	}
+
+	scheduleName := atpkg.GenerateScheduleName("create", event.SandboxID, event.ScheduleTime)
+
+	schedInput := &scheduler.CreateScheduleInput{
+		Name:                       awssdk.String(scheduleName),
+		GroupName:                  awssdk.String("km-at"),
+		ScheduleExpression:         awssdk.String(spec.Expression),
+		ScheduleExpressionTimezone: awssdk.String("UTC"),
+		Target: &schedulertypes.Target{
+			Arn:     awssdk.String(createHandlerARN),
+			RoleArn: awssdk.String(schedulerRoleARN),
+			Input:   awssdk.String(string(detailBytes)),
+		},
+		ActionAfterCompletion: schedulertypes.ActionAfterCompletionDelete,
+		FlexibleTimeWindow: &schedulertypes.FlexibleTimeWindow{
+			Mode: schedulertypes.FlexibleTimeWindowModeOff,
+		},
+	}
+
+	if err := awspkg.CreateAtSchedule(ctx, h.Scheduler, schedInput); err != nil {
+		return fmt.Errorf("create schedule: %w", err)
+	}
+
+	// Save record to km-schedules so km at list shows it.
+	schedTableName := os.Getenv("KM_SCHEDULES_TABLE")
+	if schedTableName == "" {
+		schedTableName = "km-schedules"
+	}
+	rec := awspkg.ScheduleRecord{
+		ScheduleName: scheduleName,
+		Command:      "create",
+		SandboxID:    event.SandboxID,
+		TimeExpr:     event.ScheduleTime,
+		CronExpr:     spec.Expression,
+		IsRecurring:  spec.IsRecurring,
+		Status:       "active",
+		CreatedAt:    time.Now(),
+	}
+	_ = awspkg.PutSchedule(ctx, h.DynamoClient, schedTableName, rec)
+
+	log.Info().Str("sandbox_id", event.SandboxID).Str("schedule", scheduleName).
+		Str("expression", spec.Expression).Msg("schedule created")
 	return nil
 }
 
