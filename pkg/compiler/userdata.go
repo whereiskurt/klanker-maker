@@ -1615,6 +1615,9 @@ type userDataParams struct {
 	// via connect4 DNAT rewrite. Derived from profile sourceAccess.github and useBedrock fields.
 	// Passed to km ebpf-attach --proxy-hosts in "ebpf" and "both" enforcement modes.
 	L7ProxyHosts string
+	// Privileged grants sandbox user wheel group + passwordless sudo.
+	// Derived from profile spec.execution.privileged.
+	Privileged bool
 }
 
 // parseUserDataTemplate parses the userDataTemplate and returns the compiled template.
@@ -1791,6 +1794,9 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 			params.EFSMountPoint = "/shared"
 		}
 	}
+
+	// Privileged execution mode (Phase 47)
+	params.Privileged = p.Spec.Execution.Privileged
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, params); err != nil {
