@@ -102,6 +102,46 @@ func TestGenerateProfileFromObservedJSON_Empty(t *testing.T) {
 	}
 }
 
+// TestGenerateProfileFromObservedJSON_Annotated verifies that the annotate flag
+// produces comments with domain-to-suffix mappings.
+func TestGenerateProfileFromObservedJSON_Annotated(t *testing.T) {
+	input := []byte(`{"dns":["api.github.com","codeload.github.com","pypi.org"],"hosts":["registry.npmjs.org"],"repos":[]}`)
+
+	yamlBytes, err := cmd.GenerateProfileFromJSON(input, "", true)
+	if err != nil {
+		t.Fatalf("GenerateProfileFromJSON annotated returned error: %v", err)
+	}
+
+	yaml := string(yamlBytes)
+	if !strings.Contains(yaml, "--learn-annotate") {
+		t.Error("expected --learn-annotate annotation header in output")
+	}
+	if !strings.Contains(yaml, "Observed:") {
+		t.Error("expected 'Observed:' summary line")
+	}
+	if !strings.Contains(yaml, "api.github.com") {
+		t.Error("expected api.github.com in domain mapping")
+	}
+	// Must still be valid YAML.
+	if !strings.Contains(yaml, "apiVersion") {
+		t.Error("expected apiVersion in annotated output")
+	}
+}
+
+// TestLearnAnnotateFlagExists verifies --learn-annotate flag is registered.
+func TestLearnAnnotateFlagExists(t *testing.T) {
+	cfg := &config.Config{}
+	shellCmd := cmd.NewShellCmdWithFetcher(cfg, nil, nil)
+
+	flag := shellCmd.Flags().Lookup("learn-annotate")
+	if flag == nil {
+		t.Fatal("expected --learn-annotate flag to be registered on km shell, but it was not found")
+	}
+	if flag.Value.Type() != "bool" {
+		t.Errorf("expected --learn-annotate to be a bool flag, got type %q", flag.Value.Type())
+	}
+}
+
 // TestCollectDockerObservations verifies that collectDockerObservations parses
 // DNS and HTTP proxy log output and returns valid observed JSON.
 func TestCollectDockerObservations(t *testing.T) {

@@ -96,6 +96,7 @@ func NewShellCmdWithFetcher(cfg *config.Config, fetcher SandboxFetcher, execFn S
 	var ports []string
 	var learn bool
 	var learnOutput string
+	var learnAnnotate bool
 
 	cmd := &cobra.Command{
 		Use:     "shell <sandbox-id | #number>",
@@ -127,7 +128,7 @@ Port forwarding:
 
 			// --learn post-exit: generate profile from observed traffic.
 			if learn {
-				return runLearnPostExit(ctx, cfg, fetcher, sandboxID, learnOutput)
+				return runLearnPostExit(ctx, cfg, fetcher, sandboxID, learnOutput, learnAnnotate)
 			}
 			return nil
 		},
@@ -137,6 +138,7 @@ Port forwarding:
 	cmd.Flags().StringSliceVar(&ports, "ports", nil, "Port forwards: 8080, 8080:80, or comma-separated list")
 	cmd.Flags().BoolVar(&learn, "learn", false, "Run in learning mode: observe traffic and generate profile on exit")
 	cmd.Flags().StringVar(&learnOutput, "learn-output", "observed-profile.yaml", "Path to write the generated SandboxProfile YAML (default: observed-profile.yaml in CWD)")
+	cmd.Flags().BoolVar(&learnAnnotate, "learn-annotate", false, "Annotate generated profile with domain-to-suffix mapping and hit counts")
 
 	return cmd
 }
@@ -453,7 +455,9 @@ type learnObservedState struct {
 // AWS credentials or Docker.
 //
 // base is an optional profile name for the Extends field (pass "" to omit).
-func GenerateProfileFromJSON(data []byte, base string) ([]byte, error) {
+// When annotate is true, the output includes comments showing which observed
+// domains mapped to each DNS suffix and their hit counts.
+func GenerateProfileFromJSON(data []byte, base string, annotate ...bool) ([]byte, error) {
 	var state learnObservedState
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("parse observed state: %w", err)
@@ -467,6 +471,9 @@ func GenerateProfileFromJSON(data []byte, base string) ([]byte, error) {
 	}
 	for _, r := range state.Repos {
 		rec.RecordRepo(r)
+	}
+	if len(annotate) > 0 && annotate[0] {
+		return rec.GenerateAnnotatedYAML(base)
 	}
 	return rec.GenerateYAML(base)
 }
@@ -491,7 +498,7 @@ func CollectDockerObservations(sandboxID string, dnsLogs, httpLogs io.Reader) ([
 // runLearnPostExit is called after the shell exits when --learn is active.
 // It fetches observed traffic data, generates a SandboxProfile YAML, writes it
 // to learnOutput, and uploads the raw observed JSON to S3 for future aggregation.
-func runLearnPostExit(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, sandboxID, learnOutput string) error {
+func runLearnPostExit(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, sandboxID, learnOutput string, annotate bool) error {
 	if fetcher == nil {
 		if cfg.StateBucket == "" {
 			return fmt.Errorf("state bucket not configured")
@@ -524,8 +531,8 @@ func runLearnPostExit(ctx context.Context, cfg *config.Config, fetcher SandboxFe
 		}
 
 	case "docker":
-		dnsContainer := fmt.Sprintf("km-%s-km-dns-proxy", sandboxID)
-		httpContainer := fmt.Sprintf("km-%s-km-http-proxy", sandboxID)
+		dnsContainer := fmt.Sprintf("km-%s-dns-proxy", sandboxID)
+		httpContainer := fmt.Sprintf("km-%s-http-proxy", sandboxID)
 
 		dnsBuf := &bytes.Buffer{}
 		httpBuf := &bytes.Buffer{}
@@ -557,7 +564,7 @@ func runLearnPostExit(ctx context.Context, cfg *config.Config, fetcher SandboxFe
 		return fmt.Errorf("unsupported substrate %q for --learn", rec.Substrate)
 	}
 
-	yamlBytes, err := GenerateProfileFromJSON(observedJSON, "")
+	yamlBytes, err := GenerateProfileFromJSON(observedJSON, "", annotate)
 	if err != nil {
 		return fmt.Errorf("generate profile: %w", err)
 	}

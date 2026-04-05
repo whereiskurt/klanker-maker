@@ -196,6 +196,43 @@ func TestGenerateYAMLHeader(t *testing.T) {
 	}
 }
 
+func TestGenerateAnnotatedYAML(t *testing.T) {
+	r := buildRecorder(
+		[]string{"api.github.com", "codeload.github.com", "pypi.org", "files.pythonhosted.org"},
+		[]string{"api.github.com:443", "registry.npmjs.org:443"},
+		[]string{"octocat/hello-world"},
+	)
+	data, err := r.GenerateAnnotatedYAML("")
+	if err != nil {
+		t.Fatalf("GenerateAnnotatedYAML returned error: %v", err)
+	}
+	s := string(data)
+
+	// Must contain annotation header.
+	if !strings.Contains(s, "--learn-annotate") {
+		t.Error("expected --learn-annotate annotation header")
+	}
+
+	// Must contain domain count summary.
+	if !strings.Contains(s, "Observed:") {
+		t.Error("expected 'Observed:' summary line")
+	}
+
+	// Must contain suffix with domain mapping.
+	if !strings.Contains(s, ".github.com") {
+		t.Error("expected .github.com suffix in annotations")
+	}
+	if !strings.Contains(s, "api.github.com") {
+		t.Error("expected api.github.com in domain mapping")
+	}
+
+	// Must still be valid YAML after stripping comments.
+	var p profile.SandboxProfile
+	if err := unmarshalYAML(data, &p); err != nil {
+		t.Fatalf("annotated YAML could not be unmarshalled: %v", err)
+	}
+}
+
 // unmarshalYAML is a test helper to parse YAML into any struct.
 func unmarshalYAML(data []byte, v interface{}) error {
 	return goyaml.Unmarshal(data, v)
