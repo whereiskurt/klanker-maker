@@ -169,9 +169,29 @@ data "aws_iam_policy_document" "artifacts_bucket" {
     }
   }
 
-  # CloudWatch Logs export → logs/ prefix (used by CreateExportTask on destroy/TTL)
+  # CloudWatch Logs export → logs/ prefix (used by CreateExportTask on destroy/TTL).
+  # GetBucketAcl is required by CreateExportTask to verify permissions before writing.
   statement {
     sid    = "AllowCloudWatchLogsExport"
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["logs.amazonaws.com"]
+    }
+
+    actions   = ["s3:GetBucketAcl"]
+    resources = [var.artifact_bucket_arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
+
+  statement {
+    sid    = "AllowCloudWatchLogsPutObject"
     effect = "Allow"
 
     principals {
