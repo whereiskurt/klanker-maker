@@ -8,6 +8,8 @@ package httpproxy
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -27,6 +29,7 @@ import (
 	"github.com/cilium/ebpf"
 	"github.com/elazarl/goproxy"
 	"github.com/rs/zerolog/log"
+	"github.com/whereiskurt/klankrmkr/pkg/aws"
 )
 
 // TransparentListener wraps a net.Listener and detects BPF-redirected
@@ -41,6 +44,9 @@ type TransparentListener struct {
 	// GitHub repo filter (set via SetGitHubRepos)
 	githubRepos []string
 
+	// Budget enforcement for AI traffic metering (set via SetBudgetEnforcement)
+	budget *budgetEnforcementOptions
+
 	portToSock *ebpf.Map // src_port_to_sock
 	sockToIP   *ebpf.Map // sock_to_original_ip
 	sockToPort *ebpf.Map // sock_to_original_port
@@ -52,6 +58,19 @@ type TransparentListener struct {
 // SetGitHubRepos configures repo-level filtering for transparent connections.
 func (tl *TransparentListener) SetGitHubRepos(repos []string) {
 	tl.githubRepos = repos
+}
+
+// SetBudgetEnforcement enables AI token metering on transparent connections.
+// Bedrock and Anthropic responses are captured and metered using the same
+// extraction logic as the goproxy path.
+func (tl *TransparentListener) SetBudgetEnforcement(client aws.BudgetAPI, tableName string, modelRates map[string]aws.BedrockModelRate, onBudgetUpdate BudgetUpdater) {
+	tl.budget = &budgetEnforcementOptions{
+		client:         client,
+		tableName:      tableName,
+		modelRates:     modelRates,
+		cache:          NewBudgetCache(),
+		onBudgetUpdate: onBudgetUpdate,
+	}
 }
 
 // NewTransparentListener creates a listener that handles both explicit proxy
@@ -233,22 +252,26 @@ func (tl *TransparentListener) handleTransparent(conn net.Conn) {
 	}
 	defer destTLS.Close()
 
-	// Now we have decrypted streams on both sides. Read HTTP requests from the
-	// client, pass them through the proxy's request handlers, and forward to dest.
-	// For simplicity, we'll do bidirectional copy (no L7 inspection in this first pass).
-	// The GitHub repo filter and budget enforcement need the proxy pipeline.
-	// TODO: pipe through goproxy handlers for full L7 inspection.
-
-	// For now: bidirectional MITM relay with L7 request interception
+	// Decrypted streams on both sides — relay with L7 inspection for
+	// GitHub repo filtering and AI budget metering.
 	tl.relayWithInspection(clientTLS, destTLS, origHost)
 }
 
 // relayWithInspection reads HTTP requests from the client TLS stream,
 // checks them against the proxy's repo filter / budget rules, and forwards
-// allowed requests to the destination.
+// allowed requests to the destination. Bedrock and Anthropic responses are
+// captured for token metering when budget enforcement is enabled.
 func (tl *TransparentListener) relayWithInspection(client, dest net.Conn, origHost string) {
 	clientReader := bufio.NewReader(client)
 	destReader := bufio.NewReader(dest)
+
+	// Determine host type once per connection for metering decisions.
+	host, _, _ := net.SplitHostPort(origHost)
+	if host == "" {
+		host = origHost
+	}
+	isBedrock := bedrockHostRegex.MatchString(host)
+	isAnthropic := anthropicHostRegex.MatchString(host)
 
 	for {
 		req, err := http.ReadRequest(clientReader)
@@ -292,6 +315,31 @@ func (tl *TransparentListener) relayWithInspection(client, dest net.Conn, origHo
 			}
 		}
 
+		// Budget pre-flight: reject if AI budget is exhausted.
+		if tl.budget != nil && (isBedrock || isAnthropic) {
+			entry := tl.budget.cache.Get(tl.sandboxID)
+			if entry != nil && entry.AILimit > 0 && entry.AISpent >= entry.AILimit {
+				log.Info().
+					Str("sandbox_id", tl.sandboxID).
+					Str("event_type", "ai_budget_exhausted_preflight").
+					Str("host", req.Host).
+					Str("mode", "transparent").
+					Float64("spent", entry.AISpent).
+					Float64("limit", entry.AILimit).
+					Msg("")
+				var blocked *http.Response
+				if isBedrock {
+					modelID := ExtractModelID(req.URL.Path)
+					blocked = BedrockBlockedResponse(req, tl.sandboxID, modelID, entry.AISpent, entry.AILimit)
+				} else {
+					blocked = AnthropicBlockedResponse(req, tl.sandboxID, "", entry.AISpent, entry.AILimit)
+				}
+				_ = blocked.Write(client)
+				blocked.Body.Close()
+				return
+			}
+		}
+
 		// Forward the request to the real destination
 		req.RequestURI = "" // required for client.Do style
 		if err := req.Write(dest); err != nil {
@@ -306,12 +354,118 @@ func (tl *TransparentListener) relayWithInspection(client, dest net.Conn, origHo
 			return
 		}
 
+		// Meter AI traffic: capture response body for token extraction.
+		if tl.budget != nil && isBedrock {
+			tl.meterBedrockResponse(resp, req)
+		} else if tl.budget != nil && isAnthropic {
+			tl.meterAnthropicResponse(resp, req)
+		}
+
 		// Write the response back to the client
 		if err := resp.Write(client); err != nil {
 			resp.Body.Close()
 			return
 		}
 		resp.Body.Close()
+	}
+}
+
+// meterBedrockResponse wraps a Bedrock response body with a metering reader
+// that extracts tokens and writes spend to DynamoDB on EOF.
+func (tl *TransparentListener) meterBedrockResponse(resp *http.Response, req *http.Request) {
+	be := tl.budget
+	modelID := ExtractModelID(req.URL.Path)
+	resp.Body = newMeteringReader(resp.Body, func(captured []byte) {
+		inputTokens, outputTokens, parseErr := ExtractBedrockTokens(bytes.NewReader(captured))
+		if parseErr != nil || (inputTokens == 0 && outputTokens == 0) {
+			return
+		}
+
+		var costUSD float64
+		if rate, ok := be.modelRates[modelID]; ok {
+			costUSD = CalculateCost(inputTokens, outputTokens, rate.InputPricePer1KTokens, rate.OutputPricePer1KTokens)
+		}
+
+		log.Info().
+			Str("sandbox_id", tl.sandboxID).
+			Str("event_type", "bedrock_tokens_metered").
+			Str("model", modelID).
+			Str("mode", "transparent").
+			Int("input_tokens", inputTokens).
+			Int("output_tokens", outputTokens).
+			Float64("cost_usd", costUSD).
+			Msg("")
+
+		tl.updateBudgetSpend(be, modelID, inputTokens, outputTokens, costUSD)
+	})
+}
+
+// meterAnthropicResponse wraps an Anthropic response body with a metering reader
+// that extracts tokens and writes spend to DynamoDB on EOF.
+func (tl *TransparentListener) meterAnthropicResponse(resp *http.Response, req *http.Request) {
+	be := tl.budget
+	resp.Body = newMeteringReader(resp.Body, func(captured []byte) {
+		modelID, inputTokens, outputTokens, parseErr := ExtractAnthropicTokens(bytes.NewReader(captured))
+		if parseErr != nil || (inputTokens == 0 && outputTokens == 0) {
+			return
+		}
+
+		var costUSD float64
+		if rate, ok := staticAnthropicRates[modelID]; ok {
+			costUSD = CalculateCost(inputTokens, outputTokens, rate.InputPricePer1KTokens, rate.OutputPricePer1KTokens)
+		}
+
+		log.Info().
+			Str("sandbox_id", tl.sandboxID).
+			Str("event_type", "anthropic_tokens_metered").
+			Str("model", modelID).
+			Str("mode", "transparent").
+			Int("input_tokens", inputTokens).
+			Int("output_tokens", outputTokens).
+			Float64("cost_usd", costUSD).
+			Msg("")
+
+		tl.updateBudgetSpend(be, modelID, inputTokens, outputTokens, costUSD)
+	})
+}
+
+// updateBudgetSpend writes metered AI spend to DynamoDB and updates the local cache.
+func (tl *TransparentListener) updateBudgetSpend(be *budgetEnforcementOptions, modelID string, inputTokens, outputTokens int, costUSD float64) {
+	be.cache.UpdateLocalSpend(tl.sandboxID, costUSD)
+
+	updatedSpend, err := aws.IncrementAISpend(
+		context.Background(),
+		be.client,
+		be.tableName,
+		tl.sandboxID,
+		modelID,
+		inputTokens,
+		outputTokens,
+		costUSD,
+	)
+	if err != nil {
+		log.Error().
+			Str("sandbox_id", tl.sandboxID).
+			Str("event_type", "ai_spend_increment_error").
+			Str("mode", "transparent").
+			Err(err).
+			Msg("")
+		return
+	}
+
+	cachedEntry := be.cache.Get(tl.sandboxID)
+	if cachedEntry != nil {
+		cachedEntry.AISpent = updatedSpend
+		be.cache.Set(tl.sandboxID, cachedEntry)
+	}
+
+	if be.onBudgetUpdate != nil {
+		limit := float64(0)
+		if cachedEntry != nil {
+			limit = cachedEntry.AILimit
+		}
+		remaining := limit - updatedSpend
+		be.onBudgetUpdate(remaining)
 	}
 }
 

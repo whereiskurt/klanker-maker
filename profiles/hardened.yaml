@@ -34,9 +34,7 @@ spec:
     egress:
       allowedDNSSuffixes:
         - ".amazonaws.com"
-      allowedHosts:
-        - "sts.us-east-1.amazonaws.com"
-        - "ssm.us-east-1.amazonaws.com"
+      allowedHosts: []
 
   identity:
     roleSessionDuration: "1h"
@@ -65,6 +63,7 @@ spec:
     networkLog:
       destination: cloudwatch
       logGroup: /klankrmkr/network
+    learnMode: false
     claudeTelemetry:
       enabled: true
       logPrompts: false

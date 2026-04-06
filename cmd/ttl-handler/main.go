@@ -128,7 +128,18 @@ func (h *TTLHandler) HandleTTLEvent(ctx context.Context, event TTLEvent) error {
 	case "schedule-create":
 		return h.handleScheduleCreate(ctx, event)
 	default:
-		// "ttl", "idle", "destroy", "" — all trigger full destroy
+		// "ttl", "idle", "destroy", "" — check teardownPolicy before destroying.
+		// If the profile says "stop", stop the instance instead of destroying it.
+		if event.EventType != "destroy" {
+			if policy := h.lookupTeardownPolicy(ctx, event.SandboxID); policy == "stop" {
+				log.Info().
+					Str("sandbox_id", event.SandboxID).
+					Str("event_type", event.EventType).
+					Str("teardown_policy", "stop").
+					Msg("teardownPolicy is 'stop' — stopping instead of destroying")
+				return h.handleStop(ctx, event)
+			}
+		}
 		return h.handleDestroy(ctx, event)
 	}
 }
@@ -480,6 +491,27 @@ func (h *TTLHandler) handleDestroy(ctx context.Context, event TTLEvent) error {
 
 	log.Info().Str("sandbox_id", sandboxID).Msg("TTL handler completed")
 	return nil
+}
+
+// lookupTeardownPolicy downloads the sandbox profile from S3 and returns the
+// teardownPolicy value ("destroy" or "stop"). Returns "destroy" on any error
+// or if the profile doesn't specify a policy — fail-safe to full cleanup.
+func (h *TTLHandler) lookupTeardownPolicy(ctx context.Context, sandboxID string) string {
+	profileBytes, err := downloadProfileFromS3(ctx, h.S3Client, h.Bucket, sandboxID)
+	if err != nil {
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).
+			Msg("could not load profile for teardownPolicy check; defaulting to destroy")
+		return "destroy"
+	}
+	profile, parseErr := profilepkg.Parse(profileBytes)
+	if parseErr != nil || profile == nil {
+		return "destroy"
+	}
+	policy := profile.Spec.Lifecycle.TeardownPolicy
+	if policy == "" {
+		return "destroy"
+	}
+	return policy
 }
 
 // eventLabel returns a human-friendly label for the TTL event type.

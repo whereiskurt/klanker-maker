@@ -36,39 +36,46 @@ func main() {
 	// Build proxy options.
 	var proxyOpts []httpproxy.ProxyOption
 
-	// Budget enforcement is opt-in via KM_BUDGET_ENABLED=true.
-	if strings.EqualFold(getEnv("KM_BUDGET_ENABLED", "false"), "true") {
-		tableName := getEnv("KM_BUDGET_TABLE", "km-budgets")
+	// Budget enforcement state — hoisted so both goproxy and transparent listener
+	// can share the same DynamoDB client, model rates, and budget update callback.
+	budgetEnabled := strings.EqualFold(getEnv("KM_BUDGET_ENABLED", "false"), "true")
+	var budgetDynClient *dynamodb.Client
+	var budgetTableName string
+	var budgetModelRates map[string]aws.BedrockModelRate
+	var budgetOnUpdate httpproxy.BudgetUpdater
+
+	if budgetEnabled {
+		budgetTableName = getEnv("KM_BUDGET_TABLE", "km-budgets")
 
 		cfg, err := awsconfig.LoadDefaultConfig(context.Background())
 		if err != nil {
 			log.Fatal().Err(err).Msg("failed to load AWS config for budget enforcement")
 		}
 
-		dynClient := dynamodb.NewFromConfig(cfg)
+		budgetDynClient = dynamodb.NewFromConfig(cfg)
 
 		// Load Bedrock model rates from the static fallback (nil pricing client).
 		// TODO: wire a real pricing.Client (us-east-1) for live rate lookups.
-		modelRates, err := aws.GetBedrockModelRates(context.Background(), nil)
+		budgetModelRates, err = aws.GetBedrockModelRates(context.Background(), nil)
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to load Bedrock model rates; budget cost calculations may be inaccurate")
-			modelRates = make(map[string]aws.BedrockModelRate)
+			budgetModelRates = make(map[string]aws.BedrockModelRate)
 		}
 
 		// Write remaining AI budget to /run/km/budget_remaining on each cache refresh.
-		onBudgetUpdate := func(remaining float64) {
+		budgetOnUpdate = func(remaining float64) {
 			path := "/run/km/budget_remaining"
 			if err := os.MkdirAll("/run/km", 0o755); err == nil {
 				_ = os.WriteFile(path, []byte(fmt.Sprintf("%.6f", remaining)), 0o644)
 			}
 		}
 
-		proxyOpts = append(proxyOpts, httpproxy.WithBudgetEnforcement(dynClient, tableName, modelRates, onBudgetUpdate))
+		proxyOpts = append(proxyOpts, httpproxy.WithBudgetEnforcement(budgetDynClient, budgetTableName, budgetModelRates, budgetOnUpdate))
 
 		log.Info().
 			Str("event_type", "budget_enforcement_enabled").
 			Str("sandbox_id", sandboxID).
-			Str("table", tableName).
+			Str("table", budgetTableName).
 			Msg("")
 	}
 
@@ -135,6 +142,9 @@ func main() {
 		tl := httpproxy.NewTransparentListener(ln, proxy, sandboxID)
 		if len(githubAllowedRepos) > 0 {
 			tl.SetGitHubRepos(githubAllowedRepos)
+		}
+		if budgetEnabled {
+			tl.SetBudgetEnforcement(budgetDynClient, budgetTableName, budgetModelRates, budgetOnUpdate)
 		}
 		if err := tl.Serve(); err != nil {
 			log.Fatal().Err(err).Msg("transparent proxy server error")

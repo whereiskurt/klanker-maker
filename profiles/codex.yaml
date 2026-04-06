@@ -73,14 +73,7 @@ spec:
         # Error reporting / CDN
         - ".sentry.io"
         - ".cloudfront.net"
-      allowedHosts:
-        # OpenAI / Codex
-        - "api.openai.com"
-        - "chatgpt.com"
-        # GitHub
-        - "github.com"
-        # Error reporting
-        - "sentry.io"
+      allowedHosts: []
 
   budget:
     compute:
@@ -121,6 +114,7 @@ spec:
     networkLog:
       destination: cloudwatch
       logGroup: /klankrmkr/network
+    learnMode: false
     claudeTelemetry:
       enabled: true
       logPrompts: true

@@ -40,12 +40,11 @@ spec:
     enforcement: proxy
     egress:
       allowedDNSSuffixes:
-        - anthropic.com
-        - npmjs.org
+        - ".anthropic.com"
+        - ".npmjs.org"
       allowedHosts:
-        - api.anthropic.com
-        - registry.npmjs.org
-        - statsig.anthropic.com
+        # statsig.com apex not covered by any suffix
+        - "statsig.com"
   identity:
     roleSessionDuration: "1h"
     allowedRegions:
@@ -73,6 +72,7 @@ spec:
     networkLog:
       destination: cloudwatch
       logGroup: /klankrmkr/network
+    learnMode: false
     claudeTelemetry:
       enabled: true
       logPrompts: false

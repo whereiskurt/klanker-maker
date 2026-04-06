@@ -107,35 +107,11 @@ spec:
         - ".google-analytics.com"
         - ".googletagmanager.com"
       allowedHosts:
-        - "github.com"
-        # Anthropic / Claude Code
-        - "api.anthropic.com"
-        - "statsig.anthropic.com"
+        # Hosts not covered by allowedDNSSuffixes above
         - "statsig.com"
         - "api.statsig.com"
         - "featuregates.org"
         - "api.featuregates.org"
-        - "mcp-proxy.anthropic.com"
-        - "platform.claude.com"
-        - "api.claude.ai"
-        - "claude.ai"
-        - "sentry.io"
-        # npm
-        - "registry.npmjs.org"
-        - "nodejs.org"
-        # OpenAI (codex)
-        - "api.openai.com"
-        - "chatgpt.com"
-        # Python (goose extensions)
-        - "pypi.org"
-        - "files.pythonhosted.org"
-        # Goose MCP extension directory
-        - "pulsemcp.com"
-        # Google
-        - "google.com"
-        - "www.google.com"
-        - "www.google-analytics.com"
-        - "www.googletagmanager.com"
 
   budget:
     compute:
@@ -180,6 +156,7 @@ spec:
       enabled: true
       logPrompts: true
       logToolDetails: true
+    learnMode: false
     tlsCapture:
       enabled: true
       libraries:

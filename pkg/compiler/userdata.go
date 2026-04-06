@@ -163,6 +163,17 @@ cat > /etc/profile.d/km-profile-env.sh << 'PROFILE_ENV'
 export {{ $key }}="{{ $value }}"
 {{- end }}
 PROFILE_ENV
+
+cat >> /etc/profile.d/km-profile-env.sh << 'NOCLAUDE'
+noclaude() {
+  unset CLAUDE_CODE_USE_BEDROCK
+  unset ANTHROPIC_BASE_URL
+  unset ANTHROPIC_DEFAULT_SONNET_MODEL
+  unset ANTHROPIC_DEFAULT_HAIKU_MODEL
+  unset ANTHROPIC_DEFAULT_OPUS_MODEL
+  echo "Bedrock vars unset — Claude Code will use direct API"
+}
+NOCLAUDE
 chmod 644 /etc/profile.d/km-profile-env.sh
 echo "[km-bootstrap] Profile env vars written ({{ len .ProfileEnv }} vars)"
 {{- end }}
