@@ -840,6 +840,31 @@ func buildAndUploadSidecars(repoRoot, bucket string) error {
 		{name: "audit-log", srcDir: "sidecars/audit-log/cmd"},
 	}
 
+	// Build and upload km binary for EC2 instances (linux/amd64).
+	// Instances download this at boot from s3://<bucket>/sidecars/km.
+	{
+		fmt.Printf("  Building km (linux/amd64)...\n")
+		kmPath := filepath.Join(buildDir, "km-linux")
+		kmLdflags := fmt.Sprintf("-X github.com/whereiskurt/klankrmkr/pkg/version.Number=%s -X github.com/whereiskurt/klankrmkr/pkg/version.GitCommit=%s",
+			version.Number, version.GitCommit)
+		buildCmd := exec.Command("go", "build", "-ldflags", kmLdflags, "-o", kmPath, "./cmd/km/")
+		buildCmd.Dir = repoRoot
+		buildCmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0")
+		if out, err := buildCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("compile km: %s: %w", string(out), err)
+		}
+		fmt.Printf("  Uploading km to s3://%s/sidecars/km...\n", bucket)
+		uploadCmd := exec.Command("aws", "s3", "cp", kmPath,
+			fmt.Sprintf("s3://%s/sidecars/km", bucket),
+			"--profile", "klanker-terraform")
+		if out, err := uploadCmd.CombinedOutput(); err != nil {
+			os.Remove(kmPath)
+			return fmt.Errorf("upload km: %s: %w", string(out), err)
+		}
+		os.Remove(kmPath)
+		fmt.Printf("  Uploaded sidecars/km\n")
+	}
+
 	for _, sc := range sidecars {
 		s3Key := "sidecars/" + sc.name
 
