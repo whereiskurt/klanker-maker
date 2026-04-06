@@ -1095,3 +1095,13 @@ Plans:
 **Plans:** 1/1 plans complete
 Plans:
 - [ ] 47-01-PLAN.md — Privileged execution field + learn profile + tests
+
+### Phase 48: Profile override flags for km create — targeted budget flags and generic --set
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 46
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 48 to break down)

@@ -76,7 +76,19 @@ func newAtCmdInternal(cfg *config.Config, schedClient awspkg.SchedulerAPI, dynam
 	cmd := &cobra.Command{
 		Use:          "at '<time-expr>' <command> [args...]",
 		Short:        "Schedule a sandbox operation for a future time",
-		Long:         "Schedule a deferred or recurring sandbox operation using EventBridge Scheduler.\nExamples:\n  km at '10pm tomorrow' create dev.yaml\n  km at 'every thursday at 3pm' kill sb-abc123\n  km at --cron 'cron(0 15 ? * 5 *)' kill sb-abc123",
+		Long: `Schedule a deferred or recurring sandbox operation using EventBridge Scheduler.
+
+Supported commands: create, destroy, kill, stop, pause, resume, extend, budget-add
+Lifecycle commands resolve aliases and list numbers (e.g. 'alice' or '1').
+
+Examples:
+  km at '10pm tomorrow' create profiles/goose.yaml
+  km at 'in 1 hour' create profiles/goose.yaml --alias g1 --on-demand
+  km at 'every thursday at 3pm' kill alice
+  km at 'tomorrow at 6am' resume 1
+  km at 'in 2 hours' extend alice 4h
+  km at 'every monday at 9am' budget-add alice --compute 5.00 --ai 2.00
+  km at --cron 'cron(0 15 ? * 5 *)' destroy sb-abc123`,
 		SilenceUsage: true,
 		Args:         cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {

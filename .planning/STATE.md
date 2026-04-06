@@ -572,6 +572,7 @@ None yet.
 - Phase 44 added: km at/schedule — EventBridge Scheduler command for deferred and recurring sandbox operations
 - Phase 45 added: km-send/km-recv sandbox scripts & km email send/read CLI — close Phase 14 gap, pure bash in-sandbox scripts + operator Go CLI for signed email with attachments
 - Phase 46 added: AI email-to-command — Haiku interprets free-form operator emails, replies with confirmation template, operator replies "yes" to execute
+- Phase 48 added: Profile override flags for km create — targeted budget flags and generic --set (renumbered from 47; Phase 47 taken by privileged execution mode)
 
 ## Session Continuity
 
