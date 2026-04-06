@@ -154,34 +154,38 @@ scheduler_role_arn: arn:aws:iam::222222222222:role/km-scheduler-role
 
 ### km init
 
-Initialize shared regional infrastructure (VPC, subnets, security groups). **Run once per region** before creating sandboxes.
+Initialize shared regional infrastructure (VPC, subnets, security groups). **Run once per region** before creating sandboxes. Use `--sidecars` or `--lambdas` for fast partial deploys.
 
 ```
-km init [--region <region>] [--aws-profile <profile>]
+km init [--region <region>] [--aws-profile <profile>] [--sidecars] [--lambdas] [--verbose]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--region` | `us-east-1` | AWS region to initialize |
 | `--aws-profile` | `klanker-application` | AWS CLI profile for provisioning |
+| `--sidecars` | `false` | Only rebuild and upload sidecars + km binary + toolchain (skip Terraform) |
+| `--lambdas` | `false` | Only rebuild and deploy Lambda functions (skip Terraform) |
+| `--verbose` | `false` | Show full terragrunt/terraform output |
 
-**What it does:**
+**Full init** (~9 min): DNS zone, Lambda build, sidecar build+upload, ECR push, toolchain upload, proxy CA, Terraform apply.
 
-1. Creates the region directory structure under `infra/live/`
-2. Writes `region.hcl` with region label mapping (e.g., `us-east-1` -> `use1`)
-3. Copies the network Terragrunt template
-4. Runs `terragrunt apply` to provision VPC, subnets, and security groups
-5. Creates the `km-sandboxes` DynamoDB table for sandbox metadata (if not already present)
-6. Captures network outputs (VPC ID, subnet IDs, AZs) to `outputs.json`
+**Partial init** (~1-2 min): `--sidecars` and `--lambdas` can be combined or used alone to skip the Terraform apply when you only need to update binaries.
 
 **Example:**
 
 ```bash
-# Initialize us-east-1
+# Full init for us-east-1
 km init --region us-east-1
 
-# Initialize a second region
-km init --region us-west-2
+# Fast: just rebuild and deploy km + sidecars to S3
+km init --sidecars
+
+# Fast: just rebuild and deploy Lambdas
+km init --lambdas
+
+# Both: rebuild everything except Terraform
+km init --sidecars --lambdas
 ```
 
 **Output:**
@@ -843,13 +847,15 @@ When AI spend (tracked by the http-proxy MITM) reaches 100%, the Bedrock IAM pol
 Open an interactive shell into a running sandbox via SSM.
 
 ```
-km shell <sandbox-id | #number> [--root] [--ports <ports>]
+km shell <sandbox-id | #number> [--root] [--ports <ports>] [--learn] [--learn-output <path>]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--root` | `false` | Connect as root instead of restricted sandbox user |
 | `--ports` | `""` | Port forwards (e.g. `8080`, `8080:80`, or comma-separated `8080:80,3000`) |
+| `--learn` | `false` | After shell exit, generate a SandboxProfile YAML from observed DNS/TLS traffic |
+| `--learn-output` | `observed-profile.yaml` | Path to write the generated profile |
 
 **What it does:**
 
@@ -857,6 +863,11 @@ km shell <sandbox-id | #number> [--root] [--ports <ports>]
 2. Discovers the EC2 instance or ECS task
 3. Opens an SSM session to the sandbox
 4. If `--ports` specified, establishes port forwarding (Docker-style `local:remote` syntax)
+5. If `--learn` specified, after the shell exits:
+   - Sends SIGUSR1 to the eBPF enforcer to flush observed traffic to S3
+   - Downloads the observation data from S3
+   - Generates an annotated SandboxProfile YAML with DNS suffix summary
+   - Writes to `--learn-output` path
 
 **Example:**
 
@@ -865,7 +876,12 @@ km shell 1                        # restricted user shell
 km shell 1 --root                 # operator access (root)
 km shell 1 --ports 8080           # forward localhost:8080 → remote:8080
 km shell 1 --ports 8080:80,3000   # multiple forwards
+
+# Learn mode: generate a profile from observed traffic
+km shell --learn sb-abc123        # do stuff, exit → observed-profile.yaml
 ```
+
+**Learn mode requirements:** The sandbox must have `spec.observability.learnMode: true` in its profile (e.g. `profiles/learn.yaml`). This enables the `--observe` flag on the eBPF enforcer so it records DNS queries and TLS connections. Without `learnMode`, there is no observation data to collect.
 
 ---
 

@@ -9,7 +9,7 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 ## CLI
 
 - `km validate <profile.yaml>` — validate a SandboxProfile
-- `km create <profile.yaml>` — provision a sandbox (`--no-bedrock`, `--docker`, `--alias`)
+- `km create <profile.yaml>` — provision a sandbox (`--no-bedrock`, `--docker`, `--alias`, `--on-demand`)
 - `km destroy <sandbox-id>` — teardown a sandbox (--remote by default; `km kill` is an alias)
 - `km pause <sandbox-id>` — hibernate/pause an EC2 or Docker instance (preserves infra)
 - `km resume <sandbox-id>` — resume a paused or stopped sandbox
@@ -21,6 +21,8 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 - `km email send` — send signed email between sandboxes or to/from operator (`--from`, `--to`, `--cc`, `--use-bcc`, `--reply-to`)
 - `km email read <sandbox>` — read sandbox mailbox with signature verification and auto-decryption (`--json`, `--mark-read`)
 - `km otel <sandbox-id>` — OTEL telemetry + AI spend summary (--prompts, --events, --tools, --timeline)
+- `km init` — initialize regional infrastructure (`--sidecars` for fast binary deploy, `--lambdas` for Lambda-only deploy)
+- `km shell <sandbox-id>` — SSM shell (`--root`, `--ports`, `--learn` to generate profile from observed traffic)
 - `km info` — platform config, accounts, SES quota, AWS spend, DynamoDB tables
 - `km doctor` — validate platform health (17 checks: config, credentials, SES, Lambda, VPC, stale resources, etc.)
 
@@ -95,3 +97,19 @@ Three enforcement modes via `spec.network.enforcement`:
 - `both` — eBPF primary + proxy for L7 inspection (Bedrock metering, GitHub filtering)
 
 eBPF SSL uprobes provide passive TLS plaintext capture for audit/observability alongside enforcement.
+
+## Learn Mode
+
+Generate a minimal SandboxProfile from observed traffic:
+
+```bash
+km create profiles/learn.yaml          # wide-open sandbox with learnMode + privileged
+km shell --learn <sandbox-id>          # observe traffic, generate profile on exit
+cat observed-profile.yaml              # annotated profile with DNS suffix summary
+km validate observed-profile.yaml      # validate before use
+```
+
+- `profiles/learn.yaml` — permissive profile with broad TLD suffixes, `enforcement: both`, `privileged: true`, `learnMode: true`
+- `spec.execution.privileged` — grants sandbox user wheel/sudo access (any profile)
+- `spec.observability.learnMode` — enables eBPF traffic recording (`--observe` on enforcer)
+- `--learn` triggers SIGUSR1 flush on the enforcer to snapshot observations to S3

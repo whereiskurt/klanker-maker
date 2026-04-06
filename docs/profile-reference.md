@@ -655,6 +655,25 @@ spec:
     rsyncFileList: "./rsync-paths.yaml"
 ```
 
+### `spec.execution.privileged`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.execution.privileged`    |
+| Type       | boolean                        |
+| Required   | No                             |
+| Default    | `false`                        |
+
+Grants the sandbox user wheel group membership and passwordless sudo access. When `false` (default), the sandbox user has no root capability. Operators who want to fully remove sudo from the instance can use a custom AMI without sudo installed.
+
+```yaml
+spec:
+  execution:
+    privileged: true
+```
+
+**Effect:** On EC2, the sandbox user is created with `-G wheel` and a `/etc/sudoers.d/sandbox` entry granting `NOPASSWD:ALL`. On Docker, the container already runs as root.
+
 ---
 
 ## `spec.sourceAccess`
@@ -1166,6 +1185,32 @@ spec:
       libraries: [openssl]
 ```
 
+### `spec.observability.learnMode`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.observability.learnMode` |
+| Type       | boolean                        |
+| Required   | No                             |
+| Default    | `false`                        |
+
+Enables traffic observation recording on the eBPF enforcer. When `true`, the enforcer starts with `--observe`, recording all DNS queries and TLS connections in memory. The recorded traffic is flushed to S3 on SIGUSR1 (triggered by `km shell --learn`) or on shutdown, enabling `km shell --learn` to generate a minimal SandboxProfile from observed traffic.
+
+```yaml
+spec:
+  observability:
+    learnMode: true
+```
+
+**Typical workflow:**
+
+```bash
+km create profiles/learn.yaml         # learnMode: true, privileged: true, wide-open DNS
+km shell --learn <sandbox-id>         # run workload, exit
+cat observed-profile.yaml             # review annotated profile
+km validate observed-profile.yaml     # validate before use
+```
+
 ---
 
 ## `spec.policy`
@@ -1648,7 +1693,7 @@ Beyond JSON Schema structural validation, the following semantic rules are enfor
 
 ## Built-in Profiles
 
-Seven built-in profiles ship with Klanker Maker, ranging from maximum containment (`sealed`) to full-featured agent profiles with eBPF enforcement.
+Eight built-in profiles ship with Klanker Maker, ranging from maximum containment (`sealed`) to full-featured agent profiles with eBPF enforcement, plus a permissive `learn` profile for traffic observation.
 
 ### `hardened`
 
@@ -1957,25 +2002,101 @@ spec:
     allowedTools: [bash, read_file, write_file, list_files]
 ```
 
+### `learn`
+
+Permissive profile designed for traffic observation. Wide-open DNS suffixes covering common TLDs, `enforcement: both` for eBPF + proxy capture, `privileged: true` for sudo access, and `learnMode: true` to record traffic. Use with `km shell --learn` to generate a minimal SandboxProfile from observed traffic.
+
+```yaml
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: learn
+  prefix: learn
+  labels:
+    tier: development
+    tool: traffic-observation
+    builtin: "true"
+spec:
+  lifecycle:
+    ttl: "2h"
+    idleTimeout: "30m"
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    privileged: true
+  network:
+    enforcement: both
+    egress:
+      allowedDNSSuffixes:
+        - ".com"
+        - ".org"
+        - ".net"
+        - ".io"
+        - ".dev"
+        - ".ai"
+        - ".co"
+        - ".app"
+        - ".cloud"
+        - ".sh"
+        - ".me"
+        - ".info"
+        - ".edu"
+        - ".gov"
+        - ".amazonaws.com"
+      allowedHosts: []
+  observability:
+    commandLog: { destination: cloudwatch, logGroup: "/klankrmkr/sandboxes" }
+    networkLog: { destination: cloudwatch, logGroup: "/klankrmkr/network" }
+    tlsCapture:
+      enabled: true
+    learnMode: true
+  budget:
+    compute:
+      maxSpendUSD: 2.00
+    ai:
+      maxSpendUSD: 0.00
+  agent:
+    maxConcurrentTasks: 1
+    taskTimeout: "30m"
+```
+
+**Workflow:**
+
+```bash
+km create profiles/learn.yaml         # spin up permissive sandbox
+km shell --learn <sandbox-id>         # install packages, clone repos, curl APIs
+# ... exit shell ...
+cat observed-profile.yaml             # annotated profile with DNS suffix summary
+km validate observed-profile.yaml     # validate, then use for production sandboxes
+```
+
 ---
 
 ## Built-in Profile Comparison
 
-| Field | hardened | sealed | goose | goose-ebpf | goose-ebpf-gatekeeper | codex | agent-orchestrator |
-|-------|----------|--------|-------|------------|----------------------|-------|--------------------|
-| `lifecycle.ttl` | 4h | 1h | 4h | 1h | 1h | 4h | 8h |
-| `lifecycle.idleTimeout` | 1h | 30m | 30m | 30m | 30m | 30m | 1h |
-| `runtime.instanceType` | t3.small | t3.micro | t3.medium | t3.medium | t3.medium | t3.medium | t3.large |
-| `runtime.spot` | true | true | true | false | false | true | true |
-| `runtime.hibernation` | -- | -- | true | -- | -- | -- | -- |
-| `runtime.mountEFS` | -- | -- | true | -- | -- | -- | -- |
-| `network.enforcement` | proxy | proxy | proxy | ebpf | both | proxy | proxy |
-| `execution.useBedrock` | -- | -- | true | true | true | -- | -- |
-| `metadata.prefix` | sb | sb | goose | gebpf | gebpfgk | codex | ao |
-| `budget.compute.maxSpendUSD` | -- | -- | $2.00 | $0.50 | $0.50 | $2.00 | $4.00 |
-| `budget.ai.maxSpendUSD` | -- | -- | $5.00 | $1.00 | $1.00 | $5.00 | $10.00 |
-| `agent.maxConcurrentTasks` | 2 | 1 | 1 | 1 | 1 | 1 | 4 |
-| `agent.taskTimeout` | 30m | 15m | 60m | 60m | 60m | 60m | 120m |
+| Field | hardened | sealed | goose | goose-ebpf | goose-ebpf-gatekeeper | codex | ao | learn |
+|-------|----------|--------|-------|------------|----------------------|-------|----|-------|
+| `lifecycle.ttl` | 4h | 1h | 4h | 1h | 1h | 4h | 8h | 2h |
+| `lifecycle.idleTimeout` | 1h | 30m | 30m | 30m | 30m | 30m | 1h | 30m |
+| `runtime.instanceType` | t3.small | t3.micro | t3.medium | t3.medium | t3.medium | t3.medium | t3.large | t3.medium |
+| `runtime.spot` | true | true | true | false | false | true | true | true |
+| `runtime.hibernation` | -- | -- | true | -- | -- | -- | -- | -- |
+| `runtime.mountEFS` | -- | -- | true | -- | -- | -- | -- | -- |
+| `network.enforcement` | proxy | proxy | proxy | ebpf | both | proxy | proxy | both |
+| `execution.privileged` | -- | -- | -- | -- | -- | -- | -- | true |
+| `execution.useBedrock` | -- | -- | true | true | true | -- | -- | -- |
+| `observability.learnMode` | -- | -- | -- | -- | -- | -- | -- | true |
+| `metadata.prefix` | sb | sb | goose | gebpf | gebpfgk | codex | ao | learn |
+| `budget.compute.maxSpendUSD` | -- | -- | $2.00 | $0.50 | $0.50 | $2.00 | $4.00 | $2.00 |
+| `budget.ai.maxSpendUSD` | -- | -- | $5.00 | $1.00 | $1.00 | $5.00 | $10.00 | $0.00 |
+| `agent.maxConcurrentTasks` | 2 | 1 | 1 | 1 | 1 | 1 | 4 | 1 |
+| `agent.taskTimeout` | 30m | 15m | 60m | 60m | 60m | 60m | 120m | 30m |
 
 ---
 
