@@ -1266,6 +1266,7 @@ Description=Klankrmkr eBPF network enforcer
 After=network.target
 [Service]
 Type=simple
+Environment=KM_ARTIFACTS_BUCKET={{ .KMArtifactsBucket }}
 {{- if eq .Enforcement "both" }}
 ExecStartPre=/bin/bash -c 'echo KM_HTTP_PROXY_PID=$(cat /run/km/http-proxy.pid 2>/dev/null || echo 0) > /run/km/enforcer.env'
 EnvironmentFile=-/run/km/enforcer.env
