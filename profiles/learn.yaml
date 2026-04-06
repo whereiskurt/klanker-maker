@@ -86,6 +86,7 @@ spec:
       logGroup: /klankrmkr/network
     tlsCapture:
       enabled: true
+    learnMode: true
 
   budget:
     compute:

@@ -281,6 +281,10 @@ type ObservabilitySpec struct {
 	NetworkLog      LogDestination       `yaml:"networkLog"`
 	ClaudeTelemetry *ClaudeTelemetrySpec `yaml:"claudeTelemetry,omitempty"`
 	TlsCapture      *TlsCaptureSpec     `yaml:"tlsCapture,omitempty"`
+	// LearnMode enables traffic observation recording on the eBPF enforcer.
+	// When true, the enforcer records all DNS queries and TLS connections
+	// so km shell --learn can generate a SandboxProfile from observed traffic.
+	LearnMode bool `yaml:"learnMode,omitempty"`
 }
 
 // TlsCaptureSpec controls TLS/SSL plaintext capture via eBPF uprobes.

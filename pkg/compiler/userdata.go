@@ -1293,7 +1293,9 @@ ExecStart=/usr/local/bin/km ebpf-attach \
   --tls \
   --allowed-repos "{{ .TLSAllowedRepos }}" \
 {{- end }}
+{{- if .LearnMode }}
   --observe \
+{{- end }}
   --cgroup /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope
 Restart=always
 RestartSec=2
@@ -1626,6 +1628,9 @@ type userDataParams struct {
 	// Privileged grants sandbox user wheel group + passwordless sudo.
 	// Derived from profile spec.execution.privileged.
 	Privileged bool
+	// LearnMode enables --observe on km ebpf-attach for traffic recording.
+	// Derived from profile spec.observability.learnMode.
+	LearnMode bool
 }
 
 // parseUserDataTemplate parses the userDataTemplate and returns the compiled template.
@@ -1805,6 +1810,9 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 
 	// Privileged execution mode (Phase 47)
 	params.Privileged = p.Spec.Execution.Privileged
+
+	// Learn mode: enable --observe on eBPF enforcer for traffic recording.
+	params.LearnMode = p.Spec.Observability.LearnMode
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, params); err != nil {

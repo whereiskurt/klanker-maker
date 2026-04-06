@@ -437,6 +437,10 @@
                 }
               },
               "required": ["enabled"]
+            },
+            "learnMode": {
+              "type": "boolean",
+              "description": "Enable traffic observation recording on the eBPF enforcer. When true, km shell --learn can generate a SandboxProfile from observed DNS/TLS traffic."
             }
           }
         },
