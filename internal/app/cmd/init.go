@@ -148,6 +148,8 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 	var awsProfile string
 	var region string
 	var verbose bool
+	var sidecarsOnly bool
+	var lambdasOnly bool
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -156,6 +158,9 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if awsProfile == "" {
 				awsProfile = "klanker-application"
+			}
+			if sidecarsOnly || lambdasOnly {
+				return runInitPartial(cfg, awsProfile, region, verbose, sidecarsOnly, lambdasOnly)
 			}
 			return runInit(cfg, awsProfile, region, verbose)
 		},
@@ -167,6 +172,10 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 		"AWS region to initialize (e.g. us-east-1, ca-central-1)")
 	cmd.Flags().BoolVar(&verbose, "verbose", false,
 		"Show full terragrunt/terraform output")
+	cmd.Flags().BoolVar(&sidecarsOnly, "sidecars", false,
+		"Only rebuild and upload sidecars + km binary + toolchain (skip Terraform)")
+	cmd.Flags().BoolVar(&lambdasOnly, "lambdas", false,
+		"Only rebuild and deploy Lambda functions (skip Terraform)")
 
 	return cmd
 }
@@ -381,6 +390,79 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		fmt.Printf("  SSM key:     /km/config/remote-create/safe-phrase\n")
 	}
 
+	return nil
+}
+
+// runInitPartial runs a subset of init steps for fast iteration.
+// --sidecars: rebuild km + sidecars, upload to S3, upload toolchain, force Lambda cold start.
+// --lambdas: rebuild and deploy Lambda zips.
+// Both can be combined.
+func runInitPartial(cfg *config.Config, awsProfile, region string, verbose, sidecars, lambdas bool) error {
+	ctx := context.Background()
+
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, awsProfile)
+	if err != nil {
+		return fmt.Errorf("failed to load AWS config (profile=%s): %w", awsProfile, err)
+	}
+	if err := awspkg.ValidateCredentials(ctx, awsCfg); err != nil {
+		return fmt.Errorf("AWS credential validation failed: %w", err)
+	}
+
+	if cfg.ArtifactsBucket != "" && os.Getenv("KM_ARTIFACTS_BUCKET") == "" {
+		os.Setenv("KM_ARTIFACTS_BUCKET", cfg.ArtifactsBucket)
+	}
+
+	repoRoot := findRepoRoot()
+
+	if lambdas {
+		printBanner("km init --lambdas", region)
+		fmt.Println()
+		fmt.Printf("Building Lambdas [%s]...\n", version.String())
+		if err := buildLambdaZips(repoRoot); err != nil {
+			return fmt.Errorf("lambda build failed: %w", err)
+		}
+
+		// Force cold start so new code takes effect.
+		fmt.Println()
+		fmt.Println("Forcing create-handler Lambda cold start...")
+		if err := forceLambdaColdStart(ctx, awsCfg); err != nil {
+			fmt.Printf("  [warn] Lambda cold start trigger failed: %v\n", err)
+		} else {
+			fmt.Printf("  ✓ Lambda environment updated\n")
+		}
+	}
+
+	if sidecars {
+		printBanner("km init --sidecars", region)
+
+		if cfg.ArtifactsBucket == "" {
+			return fmt.Errorf("artifacts_bucket not configured in km-config.yaml")
+		}
+
+		fmt.Println()
+		fmt.Printf("Building and uploading sidecars [%s]...\n", version.String())
+		if err := buildAndUploadSidecars(repoRoot, cfg.ArtifactsBucket); err != nil {
+			return fmt.Errorf("sidecar build/upload failed: %w", err)
+		}
+
+		fmt.Println()
+		fmt.Println("Uploading create-handler toolchain...")
+		if err := uploadCreateHandlerToolchain(repoRoot, cfg.ArtifactsBucket); err != nil {
+			return fmt.Errorf("toolchain upload failed: %w", err)
+		}
+
+		// Force cold start so Lambda picks up new km binary.
+		fmt.Println()
+		fmt.Println("Forcing create-handler Lambda cold start...")
+		if err := forceLambdaColdStart(ctx, awsCfg); err != nil {
+			fmt.Printf("  [warn] Lambda cold start trigger failed: %v\n", err)
+		} else {
+			fmt.Printf("  ✓ Lambda environment updated\n")
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("Done.")
 	return nil
 }
 
