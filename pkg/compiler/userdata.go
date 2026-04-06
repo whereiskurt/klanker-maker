@@ -1293,6 +1293,7 @@ ExecStart=/usr/local/bin/km ebpf-attach \
   --tls \
   --allowed-repos "{{ .TLSAllowedRepos }}" \
 {{- end }}
+  --observe \
   --cgroup /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope
 Restart=always
 RestartSec=2
