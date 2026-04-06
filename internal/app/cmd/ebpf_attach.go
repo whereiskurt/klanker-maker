@@ -18,6 +18,7 @@ import (
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
@@ -406,17 +407,29 @@ func runEbpfAttach(
 
 	logger.Info().Bool("tls_enabled", enableTLS).Msg("eBPF enforcement active — waiting for shutdown signal")
 
-	// Wait for SIGTERM or SIGINT.
+	// Wait for SIGTERM/SIGINT (shutdown) or SIGUSR1 (snapshot flush).
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGUSR1)
 
-	select {
-	case sig := <-sigCh:
-		logger.Info().Str("signal", sig.String()).Msg("received shutdown signal")
-	case err := <-resolverErrCh:
-		logger.Error().Err(err).Msg("DNS resolver error")
-	case err := <-auditErrCh:
-		logger.Error().Err(err).Msg("audit consumer error")
+	for {
+		select {
+		case sig := <-sigCh:
+			if sig == syscall.SIGUSR1 {
+				// Snapshot flush: write current observations without shutting down.
+				if recorder != nil {
+					flushObservedState(recorder, sandboxID, observeOutput, logger)
+				} else {
+					logger.Warn().Msg("SIGUSR1 received but observe mode not enabled")
+				}
+				continue
+			}
+			logger.Info().Str("signal", sig.String()).Msg("received shutdown signal")
+		case err := <-resolverErrCh:
+			logger.Error().Err(err).Msg("DNS resolver error")
+		case err := <-auditErrCh:
+			logger.Error().Err(err).Msg("audit consumer error")
+		}
+		break
 	}
 
 	logger.Info().Msg("shutting down eBPF enforcement")
@@ -444,66 +457,76 @@ func runEbpfAttach(
 		logger.Debug().Err(err).Msg("audit consumer close")
 	}
 
-	// Observe mode: serialize the recorder state, write local JSON, upload to S3.
+	// Observe mode: final flush on shutdown.
 	if recorder != nil {
-		state := observedState{
-			DNS:   recorder.DNSDomains(),
-			Hosts: recorder.Hosts(),
-			Repos: recorder.Repos(),
-		}
-		data, marshalErr := json.MarshalIndent(state, "", "  ")
-		if marshalErr != nil {
-			logger.Error().Err(marshalErr).Msg("observe mode: failed to marshal observed state")
-		} else {
-			// Atomic write: write to .tmp then rename.
-			tmpPath := observeOutput + ".tmp"
-			if writeErr := os.WriteFile(tmpPath, data, 0o644); writeErr != nil {
-				logger.Error().Err(writeErr).Str("path", tmpPath).Msg("observe mode: failed to write tmp file")
-			} else if renameErr := os.Rename(tmpPath, observeOutput); renameErr != nil {
-				logger.Error().Err(renameErr).Msg("observe mode: failed to rename tmp to output")
-			}
-
-			// Upload to S3 at learn/{sandboxID}/{timestamp}.json.
-			s3Key := "skipped"
-			bucket := os.Getenv("KM_ARTIFACTS_BUCKET")
-			if bucket != "" {
-				timestamp := time.Now().UTC().Format("20060102T150405Z")
-				s3Key = fmt.Sprintf("learn/%s/%s.json", sandboxID, timestamp)
-				uploadCtx := context.Background()
-				awsCfg, cfgErr := kmaws.LoadAWSConfig(uploadCtx, "")
-				if cfgErr != nil {
-					logger.Warn().Err(cfgErr).Msg("observe mode: failed to load AWS config for S3 upload")
-					s3Key = "skipped"
-				} else {
-					s3Client := s3.NewFromConfig(awsCfg)
-					_, putErr := s3Client.PutObject(uploadCtx, &s3.PutObjectInput{
-						Bucket:      awssdk.String(bucket),
-						Key:         awssdk.String(s3Key),
-						Body:        bytes.NewReader(data),
-						ContentType: awssdk.String("application/json"),
-					})
-					if putErr != nil {
-						logger.Warn().Err(putErr).Str("key", s3Key).Msg("observe mode: S3 upload failed (non-fatal)")
-						s3Key = "skipped"
-					}
-				}
-			} else {
-				logger.Warn().Msg("observe mode: KM_ARTIFACTS_BUCKET not set, skipping S3 upload")
-			}
-
-			logger.Info().
-				Int("dns_domains", len(state.DNS)).
-				Int("hosts", len(state.Hosts)).
-				Int("repos", len(state.Repos)).
-				Str("path", observeOutput).
-				Str("s3_key", s3Key).
-				Msgf("observe mode: wrote %d DNS domains, %d hosts, %d repos to %s (S3: %s)",
-					len(state.DNS), len(state.Hosts), len(state.Repos), observeOutput, s3Key)
-		}
+		flushObservedState(recorder, sandboxID, observeOutput, logger)
 	}
 
 	// Enforcer.Close() is deferred — it closes BPF objects.
 	// Pinned programs remain on bpffs until km destroy calls ebpf.Cleanup().
 	logger.Info().Msg("eBPF enforcement shutdown complete")
 	return nil
+}
+
+// flushObservedState writes the recorder's current state to a local JSON file
+// and uploads it to S3. Called on SIGUSR1 (snapshot) and on shutdown.
+func flushObservedState(recorder *allowlistgen.Recorder, sandboxID, outputPath string, logger zerolog.Logger) {
+	state := observedState{
+		DNS:   recorder.DNSDomains(),
+		Hosts: recorder.Hosts(),
+		Repos: recorder.Repos(),
+	}
+	data, marshalErr := json.MarshalIndent(state, "", "  ")
+	if marshalErr != nil {
+		logger.Error().Err(marshalErr).Msg("observe: failed to marshal state")
+		return
+	}
+
+	// Atomic write: write to .tmp then rename.
+	tmpPath := outputPath + ".tmp"
+	if writeErr := os.WriteFile(tmpPath, data, 0o644); writeErr != nil {
+		logger.Error().Err(writeErr).Str("path", tmpPath).Msg("observe: failed to write tmp file")
+		return
+	}
+	if renameErr := os.Rename(tmpPath, outputPath); renameErr != nil {
+		logger.Error().Err(renameErr).Msg("observe: failed to rename tmp to output")
+		return
+	}
+
+	// Upload to S3 at learn/{sandboxID}/{timestamp}.json.
+	s3Key := "skipped"
+	bucket := os.Getenv("KM_ARTIFACTS_BUCKET")
+	if bucket != "" {
+		timestamp := time.Now().UTC().Format("20060102T150405Z")
+		s3Key = fmt.Sprintf("learn/%s/%s.json", sandboxID, timestamp)
+		uploadCtx := context.Background()
+		awsCfg, cfgErr := kmaws.LoadAWSConfig(uploadCtx, "")
+		if cfgErr != nil {
+			logger.Warn().Err(cfgErr).Msg("observe: failed to load AWS config for S3 upload")
+			s3Key = "skipped"
+		} else {
+			s3Client := s3.NewFromConfig(awsCfg)
+			_, putErr := s3Client.PutObject(uploadCtx, &s3.PutObjectInput{
+				Bucket:      awssdk.String(bucket),
+				Key:         awssdk.String(s3Key),
+				Body:        bytes.NewReader(data),
+				ContentType: awssdk.String("application/json"),
+			})
+			if putErr != nil {
+				logger.Warn().Err(putErr).Str("key", s3Key).Msg("observe: S3 upload failed (non-fatal)")
+				s3Key = "skipped"
+			}
+		}
+	} else {
+		logger.Warn().Msg("observe: KM_ARTIFACTS_BUCKET not set, skipping S3 upload")
+	}
+
+	logger.Info().
+		Int("dns_domains", len(state.DNS)).
+		Int("hosts", len(state.Hosts)).
+		Int("repos", len(state.Repos)).
+		Str("path", outputPath).
+		Str("s3_key", s3Key).
+		Msgf("observe: flushed %d DNS, %d hosts, %d repos (S3: %s)",
+			len(state.DNS), len(state.Hosts), len(state.Repos), s3Key)
 }

@@ -13,6 +13,7 @@ import (
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
@@ -518,6 +519,11 @@ func runLearnPostExit(ctx context.Context, cfg *config.Config, fetcher SandboxFe
 
 	switch rec.Substrate {
 	case "ec2", "ec2spot", "ec2demand":
+		// Trigger SIGUSR1 on the eBPF enforcer to flush observations to disk + S3.
+		fmt.Fprintln(os.Stderr, "Flushing eBPF observations...")
+		if flushErr := flushEC2Observations(ctx, cfg, sandboxID); flushErr != nil {
+			log.Warn().Err(flushErr).Msg("learn: flush via SIGUSR1 failed (will try S3 anyway)")
+		}
 		observedJSON, err = fetchEC2ObservedJSON(ctx, cfg, sandboxID)
 		if err != nil {
 			return err
@@ -567,6 +573,54 @@ func runLearnPostExit(ctx context.Context, cfg *config.Config, fetcher SandboxFe
 	}
 
 	fmt.Fprintf(os.Stderr, "\nGenerated SandboxProfile: %s\nReview and apply with: km validate %s\n", learnOutput, learnOutput)
+	return nil
+}
+
+// flushEC2Observations sends SIGUSR1 to the eBPF enforcer on the instance,
+// triggering it to write observed state to disk and upload to S3.
+// We wait briefly for the S3 upload to complete.
+func flushEC2Observations(ctx context.Context, cfg *config.Config, sandboxID string) error {
+	awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+	if err != nil {
+		return fmt.Errorf("load AWS config: %w", err)
+	}
+
+	// Look up instance ID from DynamoDB record.
+	tableName := cfg.SandboxTableName
+	if tableName == "" {
+		tableName = "km-sandboxes"
+	}
+	fetcher := newRealFetcher(awsCfg, cfg.StateBucket, tableName)
+	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
+	if err != nil {
+		return fmt.Errorf("fetch sandbox: %w", err)
+	}
+	instanceID, err := extractResourceID(rec.Resources, ":instance/")
+	if err != nil {
+		return fmt.Errorf("find instance: %w", err)
+	}
+
+	ssmClient := ssm.NewFromConfig(awsCfg)
+	cmdOut, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
+		InstanceIds:  []string{instanceID},
+		DocumentName: awssdk.String("AWS-RunShellScript"),
+		Parameters: map[string][]string{
+			"commands": {"pkill -USR1 -f 'km ebpf-attach' && sleep 3"},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("send SIGUSR1 via SSM: %w", err)
+	}
+
+	// Wait for the command to complete.
+	waiter := ssm.NewCommandExecutedWaiter(ssmClient)
+	if waitErr := waiter.Wait(ctx, &ssm.GetCommandInvocationInput{
+		CommandId:  cmdOut.Command.CommandId,
+		InstanceId: awssdk.String(instanceID),
+	}, 30*time.Second); waitErr != nil {
+		return fmt.Errorf("wait for flush command: %w", waitErr)
+	}
+
 	return nil
 }
 
