@@ -264,13 +264,21 @@ locals {
 		log.Debug().Err(outputErr).Msg("could not get terragrunt output before destroy — skipping spot termination")
 	}
 
-	// Step 6: Cancel the EventBridge TTL schedule so it does not fire after resources are gone.
+	// Step 6: Cancel EventBridge schedules (TTL, budget) so they don't fire after resources are gone.
 	// Idempotent — DeleteTTLSchedule ignores ResourceNotFoundException.
-	// Done before terragrunt destroy so the schedule is cancelled even if destroy partially fails.
+	// Done before terragrunt destroy so schedules are cancelled even if destroy partially fails.
 	schedulerClient := scheduler.NewFromConfig(awsCfg)
 	if err := awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID); err != nil {
-		// Log warning but do not fail destroy — the schedule will fire but find no resources.
 		log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("failed to delete TTL schedule (non-fatal)")
+	}
+	// Clean up budget schedule (km-budget-{sandbox-id}).
+	budgetScheduleName := "km-budget-" + sandboxID
+	if _, err := schedulerClient.DeleteSchedule(ctx, &scheduler.DeleteScheduleInput{
+		Name: aws.String(budgetScheduleName),
+	}); err != nil {
+		if !strings.Contains(err.Error(), "ResourceNotFoundException") && !strings.Contains(err.Error(), "not found") {
+			log.Warn().Err(err).Str("schedule", budgetScheduleName).Msg("failed to delete budget schedule (non-fatal)")
+		}
 	}
 
 	// Step 7: Attempt to load sandbox profile from S3 for artifact upload.

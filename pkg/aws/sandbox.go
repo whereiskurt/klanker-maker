@@ -30,6 +30,7 @@ type SandboxRecord struct {
 	IdleTimeout  string     `json:"idle_timeout,omitempty"`  // e.g. "15m", from profile
 	Alias        string     `json:"alias,omitempty"`         // human-friendly alias (e.g. "orc", "wrkr-1")
 	Locked       bool       `json:"locked,omitempty"`        // true if sandbox is locked against destroy/stop/pause
+	Hibernation  bool       `json:"hibernation,omitempty"`   // true if EC2 instance has hibernation configured
 	Resources    []string   `json:"resources,omitempty"`     // ARNs, populated in status output only
 }
 

@@ -93,8 +93,11 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonO
 	if ec2Err == nil {
 		ec2Client := ec2.NewFromConfig(awsCfg)
 		for i := range records {
-			if strings.HasPrefix(records[i].Substrate, "ec2") && records[i].Status == "running" {
-				records[i].Status = checkEC2InstanceStatus(ctx, ec2Client, records[i].SandboxID)
+			if strings.HasPrefix(records[i].Substrate, "ec2") {
+				if records[i].Status == "running" {
+					records[i].Status = checkEC2InstanceStatus(ctx, ec2Client, records[i].SandboxID)
+				}
+				records[i].Hibernation = checkEC2Hibernation(ctx, ec2Client, records[i].SandboxID)
 			}
 		}
 	}
@@ -195,7 +198,11 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 		}
 		profile := truncCol(r.Profile, 16)
 		// Pad status to fixed width BEFORE adding color codes
-		paddedStatus := fmt.Sprintf("%-10s", r.Status)
+		statusLabel := r.Status
+		if wide && r.Hibernation {
+			statusLabel += "(h)"
+		}
+		paddedStatus := fmt.Sprintf("%-10s", statusLabel)
 		colorStatus := colorizeRaw(r.Status, false, paddedStatus)
 		lock := ""
 		if r.Locked {
@@ -260,6 +267,30 @@ func colorizeRaw(status string, _ bool, display string) string {
 	default:
 		return display
 	}
+}
+
+// checkEC2Hibernation looks up the EC2 instance for a sandbox by tag and returns
+// whether hibernation is configured on the instance.
+func checkEC2Hibernation(ctx context.Context, client *ec2.Client, sandboxID string) bool {
+	out, err := client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		Filters: []ec2types.Filter{
+			{
+				Name:   awssdk.String("tag:km:sandbox-id"),
+				Values: []string{sandboxID},
+			},
+		},
+	})
+	if err != nil || len(out.Reservations) == 0 {
+		return false
+	}
+	for _, res := range out.Reservations {
+		for _, inst := range res.Instances {
+			if inst.HibernationOptions != nil && inst.HibernationOptions.Configured != nil {
+				return *inst.HibernationOptions.Configured
+			}
+		}
+	}
+	return false
 }
 
 // checkEC2InstanceStatus looks up the EC2 instance for a sandbox by tag and returns

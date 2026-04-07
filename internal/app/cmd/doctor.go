@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
+	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -184,6 +185,10 @@ type DoctorDeps struct {
 	// KMS and IAM clients for stale resource cleanup checks.
 	KMSCleanupClient KMSCleanupAPI
 	IAMCleanupClient IAMCleanupAPI
+	// Scheduler client for stale EventBridge schedule cleanup.
+	SchedulerClient kmaws.SchedulerAPI
+	// DryRun controls whether stale resource cleanup checks delete resources.
+	DryRun bool
 }
 
 // =============================================================================
@@ -718,7 +723,7 @@ func checkSafePhrase(ctx context.Context, client SSMReadAPI) CheckResult {
 // checkStaleKMSKeys finds KMS keys with km- aliases that don't belong to any active sandbox.
 // Keys with aliases matching km-platform or other non-sandbox patterns are skipped.
 // Stale keys are scheduled for deletion (7-day minimum waiting period enforced by AWS).
-func checkStaleKMSKeys(ctx context.Context, kmsClient KMSCleanupAPI, lister SandboxLister) CheckResult {
+func checkStaleKMSKeys(ctx context.Context, kmsClient KMSCleanupAPI, lister SandboxLister, dryRun bool) CheckResult {
 	name := "Stale KMS Keys"
 	if kmsClient == nil {
 		return CheckResult{Name: name, Status: CheckSkipped, Message: "KMS client not available"}
@@ -784,6 +789,14 @@ func checkStaleKMSKeys(ctx context.Context, kmsClient KMSCleanupAPI, lister Sand
 		return CheckResult{Name: name, Status: CheckOK, Message: fmt.Sprintf("%d km- aliases, all active", len(aliases))}
 	}
 
+	if dryRun {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckWarn,
+			Message: fmt.Sprintf("found %d stale keys (dry-run, use --dry-run=false to schedule deletion)", len(staleAliases)),
+		}
+	}
+
 	// Schedule stale keys for deletion.
 	var deleted, skipped int
 	for _, a := range staleAliases {
@@ -826,7 +839,7 @@ func checkStaleKMSKeys(ctx context.Context, kmsClient KMSCleanupAPI, lister Sand
 
 // checkStaleIAMRoles finds IAM roles with km- prefixes that don't belong to any active sandbox.
 // Platform roles (km-create-handler, km-ttl-*, km-org-admin) are skipped.
-func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister SandboxLister) CheckResult {
+func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister SandboxLister, dryRun bool) CheckResult {
 	name := "Stale IAM Roles"
 	if iamClient == nil {
 		return CheckResult{Name: name, Status: CheckSkipped, Message: "IAM client not available"}
@@ -902,6 +915,14 @@ func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister San
 		return CheckResult{Name: name, Status: CheckOK, Message: fmt.Sprintf("%d km- roles, all active or platform", len(roles))}
 	}
 
+	if dryRun {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckWarn,
+			Message: fmt.Sprintf("found %d stale roles (dry-run, use --dry-run=false to delete)", len(staleRoles)),
+		}
+	}
+
 	// Delete stale roles: remove inline policies, detach managed policies,
 	// remove from instance profiles, then delete the role.
 	var deleted, skipped int
@@ -966,6 +987,100 @@ func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister San
 		Name:    name,
 		Status:  CheckWarn,
 		Message: fmt.Sprintf("found %d stale roles (%d deleted, %d skipped)", len(staleRoles), deleted, skipped),
+	}
+}
+
+// checkStaleSchedules finds EventBridge Scheduler schedules (km-ttl-*, km-budget-*,
+// km-github-token-*) that don't belong to any active sandbox and deletes them.
+// Stale schedules are harmless but clutter the scheduler and may invoke Lambdas
+// against non-existent sandboxes.
+func checkStaleSchedules(ctx context.Context, schedulerClient kmaws.SchedulerAPI, lister SandboxLister, dryRun bool) CheckResult {
+	name := "Stale Schedules"
+	if schedulerClient == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "Scheduler client not available"}
+	}
+
+	// Collect all km- schedules.
+	var schedules []string
+	var nextToken *string
+	for {
+		out, err := schedulerClient.ListSchedules(ctx, &scheduler.ListSchedulesInput{
+			NextToken: nextToken,
+		})
+		if err != nil {
+			return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not list schedules: %v", err)}
+		}
+		for _, s := range out.Schedules {
+			n := awssdk.ToString(s.Name)
+			if strings.HasPrefix(n, "km-") {
+				schedules = append(schedules, n)
+			}
+		}
+		if out.NextToken == nil {
+			break
+		}
+		nextToken = out.NextToken
+	}
+
+	// Build set of active sandbox IDs.
+	activeSandboxes := make(map[string]bool)
+	if lister != nil {
+		records, err := lister.ListSandboxes(ctx, false)
+		if err == nil {
+			for _, r := range records {
+				activeSandboxes[r.SandboxID] = true
+			}
+		}
+	}
+
+	// Identify stale schedules: any km- schedule whose name doesn't contain
+	// an active sandbox ID. Skip km-at-* schedules (user-created deferred ops).
+	var staleNames []string
+	for _, sn := range schedules {
+		if strings.HasPrefix(sn, "km-at-") {
+			continue
+		}
+		isActive := false
+		for sbID := range activeSandboxes {
+			if strings.Contains(sn, sbID) {
+				isActive = true
+				break
+			}
+		}
+		if !isActive {
+			staleNames = append(staleNames, sn)
+		}
+	}
+
+	if len(staleNames) == 0 {
+		return CheckResult{Name: name, Status: CheckOK, Message: fmt.Sprintf("%d km- schedules, all active", len(schedules))}
+	}
+
+	if dryRun {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckWarn,
+			Message: fmt.Sprintf("found %d stale schedules (dry-run, use --dry-run=false to delete)", len(staleNames)),
+		}
+	}
+
+	// Delete stale schedules.
+	var deleted, failed int
+	for _, sn := range staleNames {
+		_, err := schedulerClient.DeleteSchedule(ctx, &scheduler.DeleteScheduleInput{
+			Name: awssdk.String(sn),
+		})
+		if err != nil {
+			failed++
+		} else {
+			deleted++
+		}
+	}
+
+	return CheckResult{
+		Name:    name,
+		Status:  CheckWarn,
+		Message: fmt.Sprintf("found %d stale schedules (%d deleted, %d failed)", len(staleNames), deleted, failed),
 	}
 }
 
@@ -1097,6 +1212,7 @@ func NewDoctorCmd(cfg *appcfg.Config) *cobra.Command {
 func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 	var jsonOutput bool
 	var quietMode bool
+	var dryRun bool
 
 	cmd := &cobra.Command{
 		Use:          "doctor",
@@ -1113,16 +1229,18 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 			default:
 				return fmt.Errorf("unsupported config type %T", cfg)
 			}
-			return runDoctor(cmd, provider, deps, jsonOutput, quietMode)
+			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output results as JSON array")
 	cmd.Flags().BoolVar(&quietMode, "quiet", false, "Suppress OK results; show only warnings and errors")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", true,
+		"Show stale resources without deleting (use --dry-run=false to clean up)")
 	return cmd
 }
 
 // runDoctor is the core execution logic for km doctor.
-func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode bool) error {
+func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun bool) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -1143,6 +1261,7 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 	if deps == nil {
 		deps = initRealDeps(ctx, cfg)
 	}
+	deps.DryRun = dryRun
 
 	// Run credential check first — if SSO is expired, skip all AWS checks
 	// rather than repeating the same credential error for every check.
@@ -1370,14 +1489,21 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	// Stale KMS keys check.
 	kmsCleanup := deps.KMSCleanupClient
 	listerForCleanup := deps.Lister
+	dryRun := deps.DryRun
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkStaleKMSKeys(ctx, kmsCleanup, listerForCleanup)
+		return checkStaleKMSKeys(ctx, kmsCleanup, listerForCleanup, dryRun)
 	})
 
 	// Stale IAM roles check.
 	iamCleanup := deps.IAMCleanupClient
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkStaleIAMRoles(ctx, iamCleanup, listerForCleanup)
+		return checkStaleIAMRoles(ctx, iamCleanup, listerForCleanup, dryRun)
+	})
+
+	// Stale EventBridge schedules check.
+	schedulerClient := deps.SchedulerClient
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkStaleSchedules(ctx, schedulerClient, listerForCleanup, dryRun)
 	})
 
 	return checks
@@ -1442,6 +1568,7 @@ func initRealDeps(ctx context.Context, cfg DoctorConfigProvider) *DoctorDeps {
 	deps.SESClient = sesv2.NewFromConfig(awsCfg)
 	deps.KMSCleanupClient = kms.NewFromConfig(awsCfg)
 	deps.IAMCleanupClient = iam.NewFromConfig(awsCfg)
+	deps.SchedulerClient = scheduler.NewFromConfig(awsCfg)
 
 	// Per-region EC2 clients.
 	deps.EC2Clients = make(map[string]EC2DescribeAPI)
