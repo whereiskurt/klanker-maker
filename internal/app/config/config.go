@@ -263,5 +263,37 @@ func Load() (*Config, error) {
 		CreateHandlerLambdaARN: v.GetString("create_handler_lambda_arn"),
 	}
 
+	// If the AWS profile was set by default (not explicitly configured), verify it
+	// exists in ~/.aws/config or ~/.aws/credentials. On EC2 instances there are no
+	// named profiles — clear the field so the SDK falls through to the default
+	// credential chain (instance profile / IMDS).
+	if cfg.AWSProfile != "" && !v.IsSet("aws_profile") {
+		if !awsProfileExists(cfg.AWSProfile) {
+			cfg.AWSProfile = ""
+		}
+	}
+
 	return cfg, nil
+}
+
+// awsProfileExists checks whether a named AWS profile is defined in
+// ~/.aws/config or ~/.aws/credentials.
+func awsProfileExists(profile string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	for _, name := range []string{"config", "credentials"} {
+		data, err := os.ReadFile(filepath.Join(home, ".aws", name))
+		if err != nil {
+			continue
+		}
+		content := string(data)
+		// AWS config uses [profile <name>], credentials uses [<name>]
+		if strings.Contains(content, "[profile "+profile+"]") ||
+			strings.Contains(content, "["+profile+"]") {
+			return true
+		}
+	}
+	return false
 }

@@ -1099,9 +1099,22 @@ Plans:
 ### Phase 48: Profile override flags for km create — targeted budget flags and generic --set
 
 **Goal:** [To be planned]
-**Requirements**: TBD
+**Requirements**:
+- `--ttl <duration>` flag on `km create` to override `spec.lifecycle.ttl` from the command line (e.g. `km create profile.yaml --ttl 3h`)
+- `--idle <duration>` flag on `km create` to override idle timeout before auto-hibernate/stop/destroy kicks in (e.g. `km create profile.yaml --idle 30m`)
+- TBD (additional budget/override flags)
 **Depends on:** Phase 46
 **Plans:** 0 plans
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 48 to break down)
+
+### Phase 49: Prebaked AMI support — custom images with preinstalled toolchains for fast sandbox boot
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 48
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 49 to break down)

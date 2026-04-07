@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	lambdaruntime "github.com/aws/aws-lambda-go/lambda"
@@ -148,6 +149,8 @@ func (h *TTLHandler) HandleTTLEvent(ctx context.Context, event TTLEvent) error {
 func (h *TTLHandler) handleStop(ctx context.Context, event TTLEvent) error {
 	log.Info().Str("sandbox_id", event.SandboxID).Msg("stop event received")
 
+	hibernate := h.lookupHibernation(ctx, event.SandboxID)
+
 	awsCfg, err := awspkg.LoadAWSConfig(ctx, "")
 	if err != nil {
 		return fmt.Errorf("load AWS config: %w", err)
@@ -168,12 +171,36 @@ func (h *TTLHandler) handleStop(ctx context.Context, event TTLEvent) error {
 	for _, res := range descOut.Reservations {
 		for _, inst := range res.Instances {
 			instanceID := awssdk.ToString(inst.InstanceId)
-			log.Info().Str("instance_id", instanceID).Msg("stopping instance")
-			_, err := ec2Client.StopInstances(ctx, &ec2pkg.StopInstancesInput{
-				InstanceIds: []string{instanceID},
-			})
-			if err != nil {
-				return fmt.Errorf("stop instance %s: %w", instanceID, err)
+
+			// Spot instances cannot be stopped or hibernated
+			if inst.InstanceLifecycle == ec2types.InstanceLifecycleTypeSpot {
+				log.Warn().Str("instance_id", instanceID).Msg("skipping spot instance — cannot stop")
+				continue
+			}
+
+			if hibernate {
+				log.Info().Str("instance_id", instanceID).Msg("hibernating instance")
+				_, err := ec2Client.StopInstances(ctx, &ec2pkg.StopInstancesInput{
+					InstanceIds: []string{instanceID},
+					Hibernate:   awssdk.Bool(true),
+				})
+				if err != nil && strings.Contains(err.Error(), "UnsupportedHibernationConfiguration") {
+					log.Warn().Str("instance_id", instanceID).Msg("hibernate not available, falling back to stop")
+					_, err = ec2Client.StopInstances(ctx, &ec2pkg.StopInstancesInput{
+						InstanceIds: []string{instanceID},
+					})
+				}
+				if err != nil {
+					return fmt.Errorf("hibernate instance %s: %w", instanceID, err)
+				}
+			} else {
+				log.Info().Str("instance_id", instanceID).Msg("stopping instance")
+				_, err := ec2Client.StopInstances(ctx, &ec2pkg.StopInstancesInput{
+					InstanceIds: []string{instanceID},
+				})
+				if err != nil {
+					return fmt.Errorf("stop instance %s: %w", instanceID, err)
+				}
 			}
 		}
 	}
@@ -491,6 +518,22 @@ func (h *TTLHandler) handleDestroy(ctx context.Context, event TTLEvent) error {
 
 	log.Info().Str("sandbox_id", sandboxID).Msg("TTL handler completed")
 	return nil
+}
+
+// lookupHibernation downloads the sandbox profile from S3 and returns whether
+// hibernation is enabled. Returns false on any error — fail-safe to normal stop.
+func (h *TTLHandler) lookupHibernation(ctx context.Context, sandboxID string) bool {
+	profileBytes, err := downloadProfileFromS3(ctx, h.S3Client, h.Bucket, sandboxID)
+	if err != nil {
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).
+			Msg("could not load profile for hibernation check; defaulting to false")
+		return false
+	}
+	profile, parseErr := profilepkg.Parse(profileBytes)
+	if parseErr != nil || profile == nil {
+		return false
+	}
+	return profile.Spec.Runtime.Hibernation
 }
 
 // lookupTeardownPolicy downloads the sandbox profile from S3 and returns the

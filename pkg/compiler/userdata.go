@@ -168,8 +168,8 @@ export {{ $key }}="{{ $value }}"
 {{- end }}
 PROFILE_ENV
 
-cat >> /etc/profile.d/km-profile-env.sh << 'NOCLAUDE'
-noclaude() {
+cat >> /etc/profile.d/km-profile-env.sh << 'NOBEDROCK'
+nobedrock() {
   unset CLAUDE_CODE_USE_BEDROCK
   unset ANTHROPIC_BASE_URL
   unset ANTHROPIC_DEFAULT_SONNET_MODEL
@@ -177,7 +177,7 @@ noclaude() {
   unset ANTHROPIC_DEFAULT_OPUS_MODEL
   echo "Bedrock vars unset — Claude Code will use direct API"
 }
-NOCLAUDE
+NOBEDROCK
 chmod 644 /etc/profile.d/km-profile-env.sh
 echo "[km-bootstrap] Profile env vars written ({{ len .ProfileEnv }} vars)"
 {{- end }}
@@ -649,9 +649,9 @@ ed25519_privkey_to_pem() {
 
   # Convert hex to binary, base64-encode, wrap in PEM
   printf '%s' "$pkcs8_hex" | xxd -r -p | base64 | fold -w 64 | {
-    printf '-----BEGIN PRIVATE KEY-----\n'
+    printf '%s\n' '-----BEGIN PRIVATE KEY-----'
     cat
-    printf '-----END PRIVATE KEY-----\n'
+    printf '%s\n' '-----END PRIVATE KEY-----'
   } > "$pem_file"
 
   echo "$pem_file"

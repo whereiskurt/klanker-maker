@@ -150,6 +150,7 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 	var verbose bool
 	var sidecarsOnly bool
 	var lambdasOnly bool
+	var dryRun bool
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -161,6 +162,9 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 			}
 			if sidecarsOnly || lambdasOnly {
 				return runInitPartial(cfg, awsProfile, region, verbose, sidecarsOnly, lambdasOnly)
+			}
+			if dryRun {
+				return runInitDryRun(cfg, region)
 			}
 			return runInit(cfg, awsProfile, region, verbose)
 		},
@@ -176,8 +180,82 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 		"Only rebuild and upload sidecars + km binary + toolchain (skip Terraform)")
 	cmd.Flags().BoolVar(&lambdasOnly, "lambdas", false,
 		"Only rebuild and deploy Lambda functions (skip Terraform)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", true,
+		"Show what would be initialized without making changes (use --dry-run=false to execute)")
 
 	return cmd
+}
+
+// runInitDryRun prints what km init would do without making any changes.
+func runInitDryRun(cfg *config.Config, region string) error {
+	repoRoot := findRepoRoot()
+	regionDir := filepath.Join(repoRoot, "infra", "live", region)
+
+	printBanner("km init --dry-run", fmt.Sprintf("%s (%s)", region, compiler.RegionLabel(region)))
+
+	fmt.Println()
+	fmt.Println("The following steps would be performed:")
+	fmt.Println()
+
+	// DNS
+	if cfg.Domain != "" {
+		fmt.Printf("  1. DNS: ensure hosted zone and NS delegation for sandboxes.%s\n", cfg.Domain)
+	} else {
+		fmt.Printf("  1. DNS: [skip] no domain configured\n")
+	}
+
+	// Builds
+	fmt.Printf("  2. Build Lambda zips\n")
+	if cfg.ArtifactsBucket != "" {
+		fmt.Printf("  3. Build and upload sidecars to s3://%s\n", cfg.ArtifactsBucket)
+		fmt.Printf("  4. Build and push km-sandbox container image to ECR\n")
+		fmt.Printf("  5. Build and push sidecar container images to ECR\n")
+		fmt.Printf("  6. Upload create-handler toolchain to s3://%s\n", cfg.ArtifactsBucket)
+		fmt.Printf("  7. Force create-handler Lambda cold start\n")
+		fmt.Printf("  8. Ensure proxy CA certificate in s3://%s\n", cfg.ArtifactsBucket)
+	} else {
+		fmt.Printf("  3. [skip] artifacts_bucket not configured — sidecar/toolchain uploads skipped\n")
+	}
+
+	// SSM + identity
+	if cfg.SafePhrase != "" {
+		fmt.Printf("  9. Write safe phrase to SSM /km/config/remote-create/safe-phrase\n")
+	}
+	fmt.Printf(" 10. Ensure operator email identity (Ed25519 signing key)\n")
+
+	// Terraform modules
+	// Build a map of env vars that runInit would set from config before applying.
+	configEnv := map[string]bool{
+		"KM_ARTIFACTS_BUCKET": cfg.ArtifactsBucket != "",
+		"KM_ROUTE53_ZONE_ID":  cfg.Route53ZoneID != "",
+		"KM_DOMAIN":           cfg.Domain != "",
+		"KM_REGION":           cfg.PrimaryRegion != "",
+		"KM_OPERATOR_EMAIL":   cfg.OperatorEmail != "",
+		"KM_SCHEDULER_ROLE_ARN": cfg.SchedulerRoleARN != "",
+		"KM_ACCOUNTS_MANAGEMENT":  cfg.ManagementAccountID != "",
+		"KM_ACCOUNTS_APPLICATION": cfg.ApplicationAccountID != "",
+	}
+
+	fmt.Printf(" 11. Apply regional infrastructure modules (in order):\n")
+	modules := regionalModules(regionDir)
+	for i, m := range modules {
+		skip := ""
+		for _, env := range m.envReqs {
+			if os.Getenv(env) == "" && !configEnv[env] {
+				skip = fmt.Sprintf(" [skip: %s not set]", env)
+				break
+			}
+		}
+		relDir := m.dir
+		if rel, err := filepath.Rel(repoRoot, m.dir); err == nil {
+			relDir = rel
+		}
+		fmt.Printf("     %2d. %-25s %s%s\n", i+1, m.name, relDir, skip)
+	}
+
+	fmt.Println()
+	fmt.Println("Run 'km init --dry-run=false' to execute.")
+	return nil
 }
 
 func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error {

@@ -69,15 +69,18 @@ func NewStatusCmdWithFetchers(cfg *config.Config, fetcher SandboxFetcher, budget
 // sandbox metadata, budget, and identity data. Pass nil for real AWS-backed clients.
 func NewStatusCmdWithAllFetchers(cfg *config.Config, fetcher SandboxFetcher, budgetFetcher BudgetFetcher, identityFetcher IdentityFetcher) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "status <sandbox-id | #number>",
+		Use:          "status [sandbox-id | #number]",
 		Short:        "Show detailed state for a sandbox",
 		Long:         helpText("status"),
-		Args:         cobra.ExactArgs(1),
+		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			if ctx == nil {
 				ctx = context.Background()
+			}
+			if len(args) == 0 {
+				return runStatusAll(cmd, cfg, fetcher, budgetFetcher, identityFetcher)
 			}
 			sandboxID, err := ResolveSandboxID(ctx, cfg, args[0])
 			if err != nil {
@@ -92,6 +95,33 @@ func NewStatusCmdWithAllFetchers(cfg *config.Config, fetcher SandboxFetcher, bud
 // SandboxFetcher abstracts fetching a single sandbox's full status.
 type SandboxFetcher interface {
 	FetchSandbox(ctx context.Context, sandboxID string) (*kmaws.SandboxRecord, error)
+}
+
+// runStatusAll lists all sandboxes and runs status on each one.
+func runStatusAll(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, budgetFetcher BudgetFetcher, identityFetcher IdentityFetcher) error {
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	records, err := listSandboxes(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("list sandboxes: %w", err)
+	}
+	if len(records) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "No sandboxes found")
+		return nil
+	}
+
+	for i, rec := range records {
+		if i > 0 {
+			fmt.Fprintln(cmd.OutOrStdout())
+		}
+		if err := runStatus(cmd, cfg, fetcher, budgetFetcher, identityFetcher, rec.SandboxID); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "  error fetching status for %s: %v\n", rec.SandboxID, err)
+		}
+	}
+	return nil
 }
 
 // runStatus is the command RunE logic for km status.

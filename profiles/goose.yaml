@@ -9,8 +9,8 @@ metadata:
 
 spec:
   lifecycle:
-    ttl: "1h"
-    idleTimeout: "15m"
+    ttl: "4h"
+    idleTimeout: "1h"
     teardownPolicy: stop
 
   runtime:
@@ -29,6 +29,7 @@ spec:
     shell: /bin/bash
     workingDir: /workspace
     useBedrock: true
+    privileged: false
     env:
       SANDBOX_MODE: goose-ebpf-gatekeeper
       GOOSE_PROVIDER: aws_bedrock
@@ -44,7 +45,7 @@ spec:
       - ".claude.json"
       - ".codex"
     initCommands:
-      - "yum install -y git nodejs npm python3 python3-pip bzip2 jq tar gzip unzip"
+      - "yum install -y git nodejs npm python3 python3-pip bzip2 jq tar gzip unzip tmux"
       - "HOME=/root curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | HOME=/root CONFIGURE=false bash"
       - "cp -r /root/.local/bin/goose /usr/local/bin/goose-bin || true"
       - "echo export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf > /etc/profile.d/km-zz-goose-otel.sh"
