@@ -26,18 +26,11 @@ func TestGenerateBudgetEnforcerHCL_EC2(t *testing.T) {
 		"find_in_parent_folders",         // standard Terragrunt include pattern
 		"remote_state",                   // S3 backend declaration
 		"sandboxes/sb-ec2test1/budget-enforcer/terraform.tfstate", // per-sandbox state key
-		"role_arn",                       // IAM role ARN wired from dependency outputs
-		// Dependency block checks
-		`dependency "sandbox"`,           // dependency block must be present
-		`config_path = "${get_terragrunt_dir()}/.."`, // points to parent sandbox module
-		"mock_outputs",                   // mock_outputs for dependency
-		"ec2spot_instances",              // mock output key for instance map
-		"iam_instance_profile_name",      // mock output key for instance profile
-		"iam_role_arn",                   // mock output key for role ARN
-		"mock_outputs_allowed_on_destroy = true", // required for destroy operations
-		// Output-based wiring checks
-		`try(values(dependency.sandbox.outputs.ec2spot_instances)[0].instance_id, "")`, // instance_id wired from output
-		"dependency.sandbox.outputs.iam_role_arn",  // role_arn wired from output
+		"role_arn",                       // IAM role ARN from service.hcl
+		"instance_id",                    // EC2 instance ID from service.hcl
+		// Values resolved from parent sandbox outputs via service.hcl locals
+		"budget_enforcer_instance_id",    // instance_id read from service.hcl
+		"budget_enforcer_role_arn",       // role_arn read from service.hcl
 	}
 	for _, want := range checks {
 		if !strings.Contains(hcl, want) {
@@ -45,9 +38,12 @@ func TestGenerateBudgetEnforcerHCL_EC2(t *testing.T) {
 		}
 	}
 
-	// Must NOT contain the old static ARN construction pattern
-	if strings.Contains(hcl, "km-ec2spot-ssm-") {
-		t.Errorf("GenerateBudgetEnforcerHCL() must not contain old static ARN pattern 'km-ec2spot-ssm-'\nGot:\n%s", hcl)
+	// Must NOT contain dependency blocks (removed for terragrunt v0.99.x compat)
+	if strings.Contains(hcl, `dependency "sandbox"`) {
+		t.Errorf("GenerateBudgetEnforcerHCL() must not contain dependency block\nGot:\n%s", hcl)
+	}
+	if strings.Contains(hcl, "mock_outputs_allowed_on_destroy") {
+		t.Errorf("GenerateBudgetEnforcerHCL() must not contain mock_outputs_allowed_on_destroy\nGot:\n%s", hcl)
 	}
 }
 
@@ -60,19 +56,14 @@ func TestGenerateBudgetEnforcerHCL_ECS(t *testing.T) {
 		t.Fatalf("GenerateBudgetEnforcerHCL(ECS) error = %v", err)
 	}
 
-	// Same template is used regardless of substrate.
-	// Substrate is read from service.hcl's budget_enforcer_inputs at apply time.
 	checks := []string{
 		"budget-enforcer/v1.0.0",
 		"sb-ecstest2",
 		"budget_enforcer_inputs",
-		"build/budget-enforcer.zip",      // path matches Makefile build-lambdas output
+		"build/budget-enforcer.zip",
 		"sandboxes/sb-ecstest2/budget-enforcer/terraform.tfstate",
-		"role_arn",                       // IAM role ARN wired from dependency outputs
-		// Dependency block checks (same template used for both EC2 and ECS)
-		`dependency "sandbox"`,
-		"mock_outputs_allowed_on_destroy = true",
-		"dependency.sandbox.outputs.iam_role_arn",
+		"budget_enforcer_role_arn",
+		"budget_enforcer_instance_id",
 	}
 	for _, want := range checks {
 		if !strings.Contains(hcl, want) {
@@ -80,9 +71,9 @@ func TestGenerateBudgetEnforcerHCL_ECS(t *testing.T) {
 		}
 	}
 
-	// Must NOT contain the old static ARN construction pattern
-	if strings.Contains(hcl, "km-ec2spot-ssm-") {
-		t.Errorf("GenerateBudgetEnforcerHCL(ECS) must not contain old static ARN pattern 'km-ec2spot-ssm-'\nGot:\n%s", hcl)
+	// Must NOT contain dependency blocks
+	if strings.Contains(hcl, `dependency "sandbox"`) {
+		t.Errorf("GenerateBudgetEnforcerHCL(ECS) must not contain dependency block\nGot:\n%s", hcl)
 	}
 }
 

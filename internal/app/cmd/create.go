@@ -757,6 +757,30 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			log.Warn().Err(mkErr).Str("sandbox_id", sandboxID).
 				Msg("failed to create budget-enforcer directory (non-fatal)")
 		} else {
+			// Read instance_id and role_arn from the parent sandbox's terraform outputs.
+			// These are needed by the budget-enforcer Lambda to stop instances and revoke IAM.
+			outputs, outErr := runner.Output(ctx, sandboxDir)
+			if outErr != nil {
+				log.Warn().Err(outErr).Str("sandbox_id", sandboxID).
+					Msg("failed to read sandbox outputs for budget-enforcer (non-fatal)")
+			} else {
+				// Terraform output -json wraps values as {"name": {"value": ...}}.
+				// Extract instance_id from ec2spot_instances map and role_arn string.
+				instanceID := extractOutputInstanceID(outputs)
+				roleARN := extractOutputString(outputs, "iam_role_arn")
+
+				// Append to service.hcl so budget_enforcer_inputs has instance_id and role_arn
+				svcHCLPath := filepath.Join(sandboxDir, "service.hcl")
+				appendContent := fmt.Sprintf("\n  # Appended after sandbox apply (instance_id/role_arn from terraform outputs)\n  budget_enforcer_instance_id = \"%s\"\n  budget_enforcer_role_arn    = \"%s\"\n", instanceID, roleARN)
+				if f, openErr := os.OpenFile(svcHCLPath, os.O_APPEND|os.O_WRONLY, 0o644); openErr == nil {
+					_, _ = f.WriteString(appendContent)
+					f.Close()
+				}
+
+				log.Info().Str("instance_id", instanceID).Str("role_arn", roleARN).
+					Msg("resolved sandbox outputs for budget-enforcer")
+			}
+
 			hclPath := filepath.Join(budgetEnforcerDir, "terragrunt.hcl")
 			if writeErr := os.WriteFile(hclPath, []byte(artifacts.BudgetEnforcerHCL), 0o644); writeErr != nil {
 				log.Warn().Err(writeErr).Str("sandbox_id", sandboxID).
@@ -1846,4 +1870,48 @@ func stripBedrockEnvVars(p *profile.SandboxProfile) {
 			delete(p.Spec.Execution.Env, "GOOSE_MODEL")
 		}
 	}
+}
+
+// extractOutputString reads a string value from terraform output -json format.
+// Terraform wraps outputs as {"name": {"value": "...", "type": "string"}}.
+func extractOutputString(outputs map[string]interface{}, key string) string {
+	raw, ok := outputs[key]
+	if !ok {
+		return ""
+	}
+	if s, ok := raw.(string); ok {
+		return s
+	}
+	if m, ok := raw.(map[string]interface{}); ok {
+		if v, ok := m["value"].(string); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+// extractOutputInstanceID extracts the first EC2 instance ID from the
+// ec2spot_instances terraform output map.
+func extractOutputInstanceID(outputs map[string]interface{}) string {
+	raw, ok := outputs["ec2spot_instances"]
+	if !ok {
+		return ""
+	}
+	if m, ok := raw.(map[string]interface{}); ok {
+		if v, ok := m["value"]; ok {
+			raw = v
+		}
+	}
+	instMap, ok := raw.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	for _, v := range instMap {
+		if inst, ok := v.(map[string]interface{}); ok {
+			if id, ok := inst["instance_id"].(string); ok {
+				return id
+			}
+		}
+	}
+	return ""
 }
