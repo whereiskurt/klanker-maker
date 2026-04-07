@@ -769,12 +769,13 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 				instanceID := extractOutputInstanceID(outputs)
 				roleARN := extractOutputString(outputs, "iam_role_arn")
 
-				// Append to service.hcl so budget_enforcer_inputs has instance_id and role_arn
-				svcHCLPath := filepath.Join(sandboxDir, "service.hcl")
-				appendContent := fmt.Sprintf("\n  # Appended after sandbox apply (instance_id/role_arn from terraform outputs)\n  budget_enforcer_instance_id = \"%s\"\n  budget_enforcer_role_arn    = \"%s\"\n", instanceID, roleARN)
-				if f, openErr := os.OpenFile(svcHCLPath, os.O_APPEND|os.O_WRONLY, 0o644); openErr == nil {
-					_, _ = f.WriteString(appendContent)
-					f.Close()
+				// Write a separate HCL file with instance_id and role_arn for the budget-enforcer.
+				// service.hcl is a locals{} block that can't have values appended after the
+				// closing brace, so we write a sibling file that the budget-enforcer reads.
+				outputsHCL := fmt.Sprintf("locals {\n  budget_enforcer_instance_id = \"%s\"\n  budget_enforcer_role_arn    = \"%s\"\n}\n", instanceID, roleARN)
+				outputsPath := filepath.Join(sandboxDir, "sandbox-outputs.hcl")
+				if writeErr := os.WriteFile(outputsPath, []byte(outputsHCL), 0o644); writeErr != nil {
+					log.Warn().Err(writeErr).Msg("failed to write sandbox-outputs.hcl (non-fatal)")
 				}
 
 				log.Info().Str("instance_id", instanceID).Str("role_arn", roleARN).

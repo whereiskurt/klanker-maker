@@ -29,8 +29,9 @@ func TestGenerateBudgetEnforcerHCL_EC2(t *testing.T) {
 		"role_arn",                       // IAM role ARN from service.hcl
 		"instance_id",                    // EC2 instance ID from service.hcl
 		// Values resolved from parent sandbox outputs via service.hcl locals
-		"budget_enforcer_instance_id",    // instance_id read from service.hcl
-		"budget_enforcer_role_arn",       // role_arn read from service.hcl
+		"budget_enforcer_instance_id",    // instance_id read from sandbox-outputs.hcl
+		"budget_enforcer_role_arn",       // role_arn read from sandbox-outputs.hcl
+		"sandbox-outputs.hcl",           // separate HCL file for post-apply outputs
 	}
 	for _, want := range checks {
 		if !strings.Contains(hcl, want) {

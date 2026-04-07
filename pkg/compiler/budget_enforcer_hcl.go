@@ -34,6 +34,10 @@ const budgetEnforcerHCLTemplate = `locals {
   # Contains: sandbox_id, substrate, spot_rate, instance_type, created_at, etc.
   be_inputs = local.svc_config.locals.budget_enforcer_inputs
 
+  # Instance ID and role ARN resolved from terraform outputs after the main sandbox apply.
+  # Written to sandbox-outputs.hcl by create.go Step 12c.
+  sandbox_outputs = read_terragrunt_config("${get_terragrunt_dir()}/../sandbox-outputs.hcl")
+
   # Budget table ARN constructed from site variables (avoids hardcoding account IDs).
   budget_table_arn = "arn:aws:dynamodb:${local.site_vars.locals.region.full}:${local.site_vars.locals.accounts.application}:table/${local.site_vars.locals.site.label}-budgets"
 }
@@ -78,8 +82,8 @@ inputs = merge(
 
     # Resolved from parent sandbox terraform outputs and appended to service.hcl
     # after the main sandbox apply (create.go Step 12c).
-    instance_id = local.svc_config.locals.budget_enforcer_instance_id
-    role_arn    = local.svc_config.locals.budget_enforcer_role_arn
+    instance_id = local.sandbox_outputs.locals.budget_enforcer_instance_id
+    role_arn    = local.sandbox_outputs.locals.budget_enforcer_role_arn
   }
 )
 `
