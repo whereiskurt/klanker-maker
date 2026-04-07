@@ -134,6 +134,7 @@ resource "aws_iam_role_policy" "dynamodb_sandboxes" {
         Resource = [
           "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/km-sandboxes",
           "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/km-sandboxes/index/alias-index",
+          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/km-identities",
         ]
       }
     ]
@@ -361,7 +362,10 @@ resource "aws_iam_role_policy" "ssm" {
           "ssm:PutParameter",
           "ssm:DeleteParameter",
         ]
-        Resource = "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/km/*"
+        Resource = [
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/km/*",
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/sandbox/*",
+        ]
       }
     ]
   })

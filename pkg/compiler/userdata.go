@@ -125,6 +125,10 @@ fi
 mount -a -t efs 2>&1 | tee -a /var/log/km-bootstrap.log || true
 if mountpoint -q "{{ .EFSMountPoint }}" 2>/dev/null; then
   chown sandbox:sandbox "{{ .EFSMountPoint }}" 2>/dev/null || true
+  chmod 1777 "{{ .EFSMountPoint }}" 2>/dev/null || true
+  # Ensure sandbox user can create subdirectories on shared filesystem
+  mkdir -p "{{ .EFSMountPoint }}/sandbox" 2>/dev/null || true
+  chown sandbox:sandbox "{{ .EFSMountPoint }}/sandbox" 2>/dev/null || true
   echo "[km-bootstrap] EFS mounted at {{ .EFSMountPoint }}"
 else
   echo "[km-bootstrap] WARNING: EFS mount failed — {{ .EFSFilesystemID }} may be unavailable"
