@@ -424,6 +424,9 @@ Environment=CW_LOG_GROUP=/km/sandboxes/{{ .SandboxID }}/
 Environment=AUDIT_LOG_DEST=cloudwatch
 {{- if gt .IdleTimeoutMinutes 0 }}
 Environment=IDLE_TIMEOUT_MINUTES={{ .IdleTimeoutMinutes }}
+{{- if .IdleAction }}
+Environment=IDLE_ACTION={{ .IdleAction }}
+{{- end }}
 {{- end }}
 Environment=KM_AUDIT_PIPE=/run/km/audit-pipe
 ExecStart=/opt/km/bin/km-audit-log
@@ -1570,6 +1573,15 @@ func parseIdleTimeoutMinutes(s string) int {
 	return int(d.Minutes())
 }
 
+// idleActionFromProfile returns "hibernate" when TTL is empty (--ttl 0 sentinel) and
+// an idle timeout is configured. Empty string means default one-shot destroy behavior.
+func idleActionFromProfile(p *profile.SandboxProfile) string {
+	if p.Spec.Lifecycle.TTL == "" && p.Spec.Lifecycle.IdleTimeout != "" {
+		return "hibernate"
+	}
+	return ""
+}
+
 // userDataParams holds the template parameters for user-data generation.
 type userDataParams struct {
 	SandboxID          string
@@ -1601,6 +1613,9 @@ type userDataParams struct {
 	BudgetTable   string // DynamoDB table name from KM_BUDGET_TABLE env var
 	// Idle timeout (minutes) — passed to audit-log sidecar for SandboxIdle event detection
 	IdleTimeoutMinutes int
+	// IdleAction: "hibernate" when TTL=0 (sandbox hibernates on idle and re-arms),
+	// empty/"destroy" for default one-shot behavior.
+	IdleAction string
 	// OTPSecrets holds path + env name pairs for one-time-password secret injection.
 	// Each entry is fetched from SSM and deleted after first read.
 	OTPSecrets []otpSecret
@@ -1752,6 +1767,9 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		BudgetTable:   budgetTable,
 		// Idle timeout — converted from duration string to minutes for the sidecar.
 		IdleTimeoutMinutes: parseIdleTimeoutMinutes(p.Spec.Lifecycle.IdleTimeout),
+		// IdleAction is "hibernate" when TTL=0 (empty string sentinel) and idle timeout is set.
+		// This tells the audit-log sidecar to hibernate on idle instead of destroying.
+		IdleAction: idleActionFromProfile(p),
 	}
 
 	// Populate alias email when alias is set.
