@@ -1098,16 +1098,17 @@ Plans:
 
 ### Phase 48: Profile override flags for km create — targeted budget flags and generic --set
 
-**Goal:** [To be planned]
+**Goal:** Add --ttl and --idle flags to km create for command-line lifecycle overrides. --ttl 0 disables auto-destroy and enables an indefinite hibernate-on-idle loop.
 **Requirements**:
 - `--ttl <duration>` flag on `km create` to override `spec.lifecycle.ttl` from the command line (e.g. `km create profile.yaml --ttl 3h`)
 - `--idle <duration>` flag on `km create` to override idle timeout before auto-hibernate/stop/destroy kicks in (e.g. `km create profile.yaml --idle 30m`)
 - TBD (additional budget/override flags)
 **Depends on:** Phase 46
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 48 to break down)
+- [ ] 48-01-PLAN.md — CLI flags, profile mutation, TTL=0 schedule guard, S3 upload fix
+- [ ] 48-02-PLAN.md — Compiler IdleAction param + sidecar hibernate loop
 
 ### Phase 49: Prebaked AMI support — custom images with preinstalled toolchains for fast sandbox boot
 
