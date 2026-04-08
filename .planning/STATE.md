@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 48-01-PLAN.md
-last_updated: "2026-04-08T01:20:14.407Z"
+stopped_at: Completed 48-02-PLAN.md
+last_updated: "2026-04-08T01:33:20.018Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 49
-  completed_phases: 45
+  completed_phases: 46
   total_plans: 146
-  completed_plans: 146
+  completed_plans: 147
   percent: 0
 ---
 
@@ -189,6 +189,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 46-ai-email-to-command P02 | 9min | 2 tasks | 4 files |
 | Phase 47-privileged-execution-and-learn-profile P01 | 3min | 6 tasks | 5 files |
 | Phase 48-profile-override-flags-for-km-create-targeted-budget-flags-and-generic-set P01 | 454 | 1 tasks | 3 files |
+| Phase 48-profile-override-flags-for-km-create-targeted-budget-flags-and-generic-set P02 | 10min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -520,6 +521,8 @@ Recent decisions affecting current work:
 - [Phase 46-02]: Non-create commands use awspkg.PublishSandboxCommand(sandboxID, eventType) matching existing idle_event.go signature
 - [Phase 48-profile-override-flags-for-km-create-targeted-budget-flags-and-generic-set]: TTL=0 uses empty string sentinel to disable EventBridge schedule, aligning with existing TTL != '' guard in runCreate
 - [Phase 48-profile-override-flags-for-km-create-targeted-budget-flags-and-generic-set]: applyLifecycleOverrides extracted as helper shared between runCreate and runCreateRemote
+- [Phase 48]: IdleAction derived in compiler via idleActionFromProfile() — not in create.go — since compiler already receives TTL='' sentinel from Plan 01 overrides
+- [Phase 48]: buildIdleCallback extracted as package-level func for unit testability; AfterFunc(2min) delay for hibernate/resume cycle before re-arm
 
 ### Roadmap Evolution
 
@@ -580,6 +583,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-08T01:20:14.403Z
-Stopped at: Completed 48-01-PLAN.md
+Last session: 2026-04-08T01:33:20.014Z
+Stopped at: Completed 48-02-PLAN.md
 Resume file: None

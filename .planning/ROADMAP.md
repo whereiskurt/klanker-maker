@@ -1104,7 +1104,7 @@ Plans:
 - `--idle <duration>` flag on `km create` to override idle timeout before auto-hibernate/stop/destroy kicks in (e.g. `km create profile.yaml --idle 30m`)
 - TBD (additional budget/override flags)
 **Depends on:** Phase 46
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 48-01-PLAN.md — CLI flags, profile mutation, TTL=0 schedule guard, S3 upload fix
