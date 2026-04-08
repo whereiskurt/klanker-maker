@@ -35,6 +35,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/goccy/go-yaml"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -87,6 +88,8 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	var aliasOverride string
 	var substrateOverride string
 	var dockerShortcut bool
+	var ttlOverride string
+	var idleOverride string
 
 	cmd := &cobra.Command{
 		Use:   "create <profile.yaml>",
@@ -132,9 +135,9 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 			}
 
 			if useRemote {
-				return runCreateRemote(cfg, args[0], onDemand, noBedrock, awsProfile, aliasOverride)
+				return runCreateRemote(cfg, args[0], onDemand, noBedrock, awsProfile, aliasOverride, ttlOverride, idleOverride)
 			}
-			return runCreate(cfg, args[0], onDemand, noBedrock, awsProfile, verbose, sandboxIDOverride, aliasOverride, substrateOverride)
+			return runCreate(cfg, args[0], onDemand, noBedrock, awsProfile, verbose, sandboxIDOverride, aliasOverride, substrateOverride, ttlOverride, idleOverride)
 		},
 	}
 
@@ -159,12 +162,16 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 		"Disable Bedrock access — removes IAM permissions and Bedrock env vars")
 	cmd.Flags().BoolVar(&dockerShortcut, "docker", false,
 		"Shortcut for --substrate=docker")
+	cmd.Flags().StringVar(&ttlOverride, "ttl", "",
+		"Override spec.lifecycle.ttl (e.g. 3h, 30m). Use 0 to disable auto-destroy.")
+	cmd.Flags().StringVar(&idleOverride, "idle", "",
+		"Override spec.lifecycle.idleTimeout (e.g. 30m, 2h).")
 
 	return cmd
 }
 
 // runCreate executes the full create workflow.
-func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, verbose bool, sandboxIDOverride string, aliasOverride string, substrateOverride string) error {
+func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, verbose bool, sandboxIDOverride string, aliasOverride string, substrateOverride string, ttlOverride string, idleOverride string) error {
 	createStart := time.Now()
 	ctx := context.Background()
 
@@ -241,6 +248,11 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		} else {
 			substrateLabel = "ec2demand"
 		}
+	}
+
+	// Apply --ttl and --idle overrides (after profile resolution, before compilation).
+	if err := applyLifecycleOverrides(resolvedProfile, ttlOverride, idleOverride); err != nil {
+		return err
 	}
 
 	// --no-bedrock: disable Bedrock access entirely
@@ -605,13 +617,28 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	}
 
 	// Step 11b: Store profile YAML in S3 so km destroy can load it for artifact upload.
+	// When --ttl or --idle overrides were applied, upload the mutated profile so the
+	// ttl-handler Lambda and destroy command see the overridden values.
 	// Non-fatal: artifact upload in destroy will be skipped with a warning if unavailable.
-	profileYAML, _ := os.ReadFile(profilePath)
-	if len(profileYAML) > 0 {
+	var profileYAMLBytes []byte
+	if ttlOverride != "" || idleOverride != "" {
+		// Serialize the mutated resolvedProfile so overrides are reflected in S3.
+		mutatedYAML, marshalErr := yaml.Marshal(resolvedProfile)
+		if marshalErr != nil {
+			log.Warn().Err(marshalErr).Str("sandbox_id", sandboxID).
+				Msg("failed to marshal mutated profile for S3 upload — falling back to raw file")
+			profileYAMLBytes, _ = os.ReadFile(profilePath)
+		} else {
+			profileYAMLBytes = mutatedYAML
+		}
+	} else {
+		profileYAMLBytes, _ = os.ReadFile(profilePath)
+	}
+	if len(profileYAMLBytes) > 0 {
 		_, profilePutErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
 			Bucket:      aws.String(artifactBucket),
 			Key:         aws.String("artifacts/" + sandboxID + "/.km-profile.yaml"),
-			Body:        bytes.NewReader(profileYAML),
+			Body:        bytes.NewReader(profileYAMLBytes),
 			ContentType: aws.String("application/x-yaml"),
 		})
 		if profilePutErr != nil {
@@ -1449,7 +1476,7 @@ func runDockerComposeUp(ctx context.Context, sandboxID, composeFilePath string, 
 //
 // The create-handler Lambda downloads the artifacts, runs km create as a subprocess,
 // and sends notifications on success/failure.
-func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, aliasOverride string) error {
+func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, aliasOverride string, ttlOverride string, idleOverride string) error {
 	ctx := context.Background()
 
 	// Step 1: Read profile file
@@ -1551,6 +1578,11 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		ArtifactsBucket:   remoteArtifactsBucket,
 	}
 
+	// Apply --ttl and --idle overrides (after profile resolution, before compilation).
+	if err := applyLifecycleOverrides(resolvedProfile, ttlOverride, idleOverride); err != nil {
+		return err
+	}
+
 	// --no-bedrock: disable Bedrock access entirely
 	if noBedrock {
 		resolvedProfile.Spec.Execution.UseBedrock = false
@@ -1587,10 +1619,24 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		content string
 		mime    string
 	}
+	// When --ttl or --idle overrides were applied, serialize the mutated profile
+	// so the create-handler Lambda sees the overridden lifecycle values.
+	var remoteProfileYAML string
+	if ttlOverride != "" || idleOverride != "" {
+		mutatedYAML, marshalErr := yaml.Marshal(resolvedProfile)
+		if marshalErr != nil {
+			log.Warn().Err(marshalErr).Msg("failed to marshal mutated profile for remote upload — using raw")
+			remoteProfileYAML = profileYAMLForUpload(resolvedProfile, raw, noBedrock)
+		} else {
+			remoteProfileYAML = string(mutatedYAML)
+		}
+	} else {
+		remoteProfileYAML = profileYAMLForUpload(resolvedProfile, raw, noBedrock)
+	}
 	toUpload := []artifact{
 		{key: artifactPrefix + "/service.hcl", content: artifacts.ServiceHCL, mime: "text/plain"},
 		{key: artifactPrefix + "/user-data.sh", content: artifacts.UserData, mime: "text/plain"},
-		{key: artifactPrefix + "/.km-profile.yaml", content: profileYAMLForUpload(resolvedProfile, raw, noBedrock), mime: "application/x-yaml"},
+		{key: artifactPrefix + "/.km-profile.yaml", content: remoteProfileYAML, mime: "application/x-yaml"},
 	}
 	if artifacts.BudgetEnforcerHCL != "" {
 		toUpload = append(toUpload, artifact{
@@ -1871,6 +1917,48 @@ func stripBedrockEnvVars(p *profile.SandboxProfile) {
 			delete(p.Spec.Execution.Env, "GOOSE_MODEL")
 		}
 	}
+}
+
+// applyLifecycleOverrides applies --ttl and --idle CLI overrides to the resolved profile.
+// It validates the override values and re-runs semantic validation after mutation.
+//
+// TTL semantics:
+//   - "" (empty): no override, profile value unchanged
+//   - "0" or "0s": disable auto-destroy — sets TTL to "" so no EventBridge schedule is created
+//   - any other value: parsed as a duration and written to Spec.Lifecycle.TTL
+//
+// When TTL is set to "" (--ttl 0), the TTL >= idle check in ValidateSemantic is skipped
+// automatically because the rule only fires when TTL != "".
+func applyLifecycleOverrides(p *profile.SandboxProfile, ttlOverride, idleOverride string) error {
+	if ttlOverride != "" {
+		if ttlOverride == "0" || ttlOverride == "0s" {
+			// TTL=0 means "no auto-destroy" — empty string sentinel disables EventBridge schedule.
+			p.Spec.Lifecycle.TTL = ""
+			fmt.Println("  --ttl 0: auto-destroy disabled (hibernate on idle instead)")
+		} else {
+			if _, err := time.ParseDuration(ttlOverride); err != nil {
+				return fmt.Errorf("invalid --ttl value %q: %w", ttlOverride, err)
+			}
+			p.Spec.Lifecycle.TTL = ttlOverride
+		}
+	}
+	if idleOverride != "" {
+		if _, err := time.ParseDuration(idleOverride); err != nil {
+			return fmt.Errorf("invalid --idle value %q: %w", idleOverride, err)
+		}
+		p.Spec.Lifecycle.IdleTimeout = idleOverride
+	}
+	// Re-validate semantic constraints after override to catch conflicts
+	// (e.g. --idle 48h with profile ttl=24h).
+	if ttlOverride != "" || idleOverride != "" {
+		if semanticErrs := profile.ValidateSemantic(p); len(semanticErrs) > 0 {
+			for _, e := range semanticErrs {
+				fmt.Fprintf(os.Stderr, "ERROR: flag override conflict: %s\n", e.Error())
+			}
+			return fmt.Errorf("flag overrides conflict with profile values — check --ttl and --idle compatibility")
+		}
+	}
+	return nil
 }
 
 // extractOutputString reads a string value from terraform output -json format.
