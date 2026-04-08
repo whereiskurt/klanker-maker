@@ -8,6 +8,7 @@
 //	CW_LOG_GROUP          — CloudWatch log group (default: "/km/sandboxes/<SANDBOX_ID>/")
 //	AWS_REGION            — AWS region for CloudWatch (default: "us-east-1")
 //	IDLE_TIMEOUT_MINUTES  — if set and dest is cloudwatch, starts idle detection goroutine
+//	IDLE_ACTION           — "hibernate": stop+re-arm on idle (TTL=0 loop); default: destroy+exit
 //
 // On EC2: piped from shell audit hook (PROMPT_COMMAND in /etc/profile.d/km-audit.sh)
 // and receives events from dns-proxy and http-proxy via systemd journal pipe.
@@ -90,21 +91,27 @@ func main() {
 			log.Warn().Str("IDLE_TIMEOUT_MINUTES", idleTimeoutStr).Err(parseErr).
 				Msg("audit-log: invalid IDLE_TIMEOUT_MINUTES, idle detection disabled")
 		} else {
-			detector := newIdleDetector(sandboxID, idleMinutes, cwClient, cwLogGroup, "audit", func(id string) {
-				log.Warn().Str("sandbox_id", id).Msg("audit-log: sandbox idle timeout reached, publishing idle event")
-				if ebClient != nil {
-					if err := kmaws.PublishSandboxIdleEvent(ctx, ebClient, id); err != nil {
-						log.Error().Err(err).Str("sandbox_id", id).Msg("audit-log: failed to publish idle event")
+			idleAction := os.Getenv("IDLE_ACTION")
+
+			// startIdleDetector creates a new detector goroutine. For the hibernate loop,
+			// it is called again via AfterFunc after each hibernate cycle.
+			var startIdleDetector func()
+			startIdleDetector = func() {
+				onIdle := buildIdleCallback(ctx, ebClient, sandboxID, idleAction, cancel, func() {
+					// Re-arm after a 2-minute delay to allow the instance to hibernate and resume.
+					// The delay prevents immediately re-triggering on stale pre-hibernate events.
+					time.AfterFunc(2*time.Minute, startIdleDetector)
+				})
+				detector := newIdleDetector(sandboxID, idleMinutes, cwClient, cwLogGroup, "audit", onIdle)
+				go func() {
+					if runErr := detector.Run(ctx); runErr != nil && runErr != context.Canceled {
+						log.Error().Err(runErr).Msg("audit-log: idle detector error")
 					}
-				}
-				cancel()
-			})
-			go func() {
-				if runErr := detector.Run(ctx); runErr != nil && runErr != context.Canceled {
-					log.Error().Err(runErr).Msg("audit-log: idle detector error")
-				}
-			}()
-			log.Info().Int("idle_timeout_minutes", idleMinutes).Msg("audit-log: idle detector started")
+				}()
+				log.Info().Int("idle_timeout_minutes", idleMinutes).Str("idle_action", idleAction).
+					Msg("audit-log: idle detector started")
+			}
+			startIdleDetector()
 		}
 	}
 
@@ -237,6 +244,46 @@ func buildDest(ctx context.Context, destName, cwLogGroup string, cwClient kmaws.
 	// reaching CloudWatch, S3, or stdout. Pass nil literals; regex patterns cover
 	// the standard secret formats. OBSV-07 requirement.
 	return auditlog.NewRedactingDestination(inner, nil), nil
+}
+
+// buildIdleCallback returns the OnIdle function for the idle detector.
+//
+// idleAction controls behavior on idle detection:
+//   - "hibernate": publish a "stop" command via PublishSandboxCommand, do NOT call cancel,
+//     and call rearmFn so the detector is re-created after the hibernate/resume cycle.
+//   - "" or "destroy" (default): publish a SandboxIdle event via PublishSandboxIdleEvent
+//     and call cancel() to shut down the sidecar.
+//
+// rearmFn is only called in the hibernate path; the caller uses it to schedule a new detector.
+// cancel is only called in the default/destroy path.
+func buildIdleCallback(ctx context.Context, ebClient kmaws.EventBridgeAPI, sandboxID, idleAction string, cancel context.CancelFunc, rearmFn func()) func(string) {
+	return func(id string) {
+		if idleAction == "hibernate" {
+			log.Warn().Str("sandbox_id", id).
+				Msg("audit-log: sandbox idle, sending hibernate command (TTL=0 loop)")
+			if ebClient != nil {
+				if err := kmaws.PublishSandboxCommand(ctx, ebClient, id, "stop"); err != nil {
+					log.Error().Err(err).Str("sandbox_id", id).
+						Msg("audit-log: failed to publish stop command for hibernate")
+				}
+			}
+			// Schedule re-arm so the detector fires again after the next resume.
+			if rearmFn != nil {
+				rearmFn()
+			}
+		} else {
+			// Default: one-shot destroy path.
+			log.Warn().Str("sandbox_id", id).
+				Msg("audit-log: sandbox idle timeout reached, publishing idle event")
+			if ebClient != nil {
+				if err := kmaws.PublishSandboxIdleEvent(ctx, ebClient, id); err != nil {
+					log.Error().Err(err).Str("sandbox_id", id).
+						Msg("audit-log: failed to publish idle event")
+				}
+			}
+			cancel()
+		}
+	}
 }
 
 // newIdleDetector constructs a lifecycle.IdleDetector for the given sandbox.
