@@ -29,6 +29,7 @@ type SandboxRecord struct {
 	TTLRemaining string     `json:"ttl_remaining,omitempty"` // "1h23m" or "expired"
 	IdleTimeout  string     `json:"idle_timeout,omitempty"`  // e.g. "15m", from profile
 	Alias        string     `json:"alias,omitempty"`         // human-friendly alias (e.g. "orc", "wrkr-1")
+	IdleRemaining string     `json:"idle_remaining,omitempty"` // "23m10s remaining" or "imminent"
 	Locked       bool       `json:"locked,omitempty"`        // true if sandbox is locked against destroy/stop/pause
 	Hibernation  bool       `json:"hibernation,omitempty"`   // true if EC2 instance has hibernation configured
 	Resources    []string   `json:"resources,omitempty"`     // ARNs, populated in status output only

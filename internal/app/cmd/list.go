@@ -102,6 +102,18 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonO
 		}
 	}
 
+	// Compute idle remaining for running sandboxes (wide mode or JSON)
+	if wide || jsonOutput {
+		for i := range records {
+			if records[i].Status == "running" && records[i].IdleTimeout != "" {
+				remaining := computeIdleRemaining(ctx, records[i].SandboxID, records[i].IdleTimeout, records[i].CreatedAt, nil)
+				if remaining >= 0 {
+					records[i].IdleRemaining = formatIdleLabel(remaining, false)
+				}
+			}
+		}
+	}
+
 	if jsonOutput {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(records)
 	}
@@ -181,8 +193,8 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 	}
 
 	if wide {
-		fmt.Fprintf(out, "%-3s %-8s  %-*s %-16s %-10s %-12s %-10s %s\n",
-			"#", "ALIAS", idWidth, "SANDBOX ID", "PROFILE", "SUBSTRATE", "REGION", "STATUS", "TTL")
+		fmt.Fprintf(out, "%-3s %-8s  %-*s %-16s %-10s %-12s %-10s %-6s %s\n",
+			"#", "ALIAS", idWidth, "SANDBOX ID", "PROFILE", "SUBSTRATE", "REGION", "STATUS", "TTL", "IDLE")
 	} else {
 		fmt.Fprintf(out, "%-3s %-8s  %-*s %-10s %s\n",
 			"#", "ALIAS", idWidth, "SANDBOX ID", "STATUS", "TTL")
@@ -216,10 +228,16 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 		}
 		num := bw(fmt.Sprintf("%-3d", i+1))
 		if wide {
-			fmt.Fprintf(out, "%s %s  %s %s %s %s %s %s%s\n",
+			idle := r.IdleRemaining
+			if idle == "" {
+				idle = "-"
+			}
+			// Strip " remaining" suffix for compact display
+			idle = strings.TrimSuffix(idle, " remaining")
+			fmt.Fprintf(out, "%s %s  %s %s %s %s %s %-6s %s%s\n",
 				num, bw(fmt.Sprintf("%-8s", alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
 				bw(fmt.Sprintf("%-16s", profile)), bw(fmt.Sprintf("%-10s", r.Substrate)),
-				bw(fmt.Sprintf("%-12s", r.Region)), colorStatus, bw(ttl), lock)
+				bw(fmt.Sprintf("%-12s", r.Region)), colorStatus, bw(ttl), bw(idle), lock)
 		} else {
 			fmt.Fprintf(out, "%s %s  %s %s %s%s\n",
 				num, bw(fmt.Sprintf("%-8s", alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),

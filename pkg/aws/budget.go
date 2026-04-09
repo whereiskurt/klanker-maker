@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -37,6 +38,7 @@ type BudgetSummary struct {
 	AILimit          float64
 	WarningThreshold float64
 	AIByModel        map[string]ModelSpend // keyed by model ID
+	LastAIActivity   *time.Time            // most recent AI spend update across all models
 }
 
 // ModelSpend holds per-model AI token and cost spend.
@@ -77,12 +79,13 @@ func IncrementAISpend(ctx context.Context, client BudgetAPI, tableName, sandboxI
 			"PK": &dynamodbtypes.AttributeValueMemberS{Value: pk},
 			"SK": &dynamodbtypes.AttributeValueMemberS{Value: sk},
 		},
-		UpdateExpression:    awssdk.String("ADD spentUSD :cost, inputTokens :inputTokens, outputTokens :outputTokens"),
+		UpdateExpression:    awssdk.String("ADD spentUSD :cost, inputTokens :inputTokens, outputTokens :outputTokens SET last_updated = :now"),
 		ReturnValues:        dynamodbtypes.ReturnValueAllNew,
 		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
 			":cost":         costAV,
 			":inputTokens":  inputTokensAV,
 			":outputTokens": outputTokensAV,
+			":now":          &dynamodbtypes.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339)},
 		},
 	})
 	if err != nil {
@@ -214,6 +217,17 @@ func GetBudget(ctx context.Context, client BudgetAPI, tableName, sandboxID strin
 			}
 			summary.AIByModel[modelID] = ms
 			summary.AISpent += ms.SpentUSD
+			// Track the most recent AI activity across all models.
+			if av, ok := item["last_updated"]; ok {
+				var ts string
+				if err := attributevalue.Unmarshal(av, &ts); err == nil {
+					if t, parseErr := time.Parse(time.RFC3339, ts); parseErr == nil {
+						if summary.LastAIActivity == nil || t.After(*summary.LastAIActivity) {
+							summary.LastAIActivity = &t
+						}
+					}
+				}
+			}
 		}
 	}
 

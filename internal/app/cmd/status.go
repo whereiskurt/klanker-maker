@@ -16,8 +16,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
@@ -190,7 +193,13 @@ func runStatus(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, b
 		// Ignore error: sandbox may have no identity published. Identity section simply omitted.
 	}
 
-	fprintBanner(cmd.OutOrStdout(), "km status", sandboxID)
+	bannerID := sandboxID
+	if identity != nil && identity.Alias != "" {
+		bannerID = fmt.Sprintf("%s (%s)", sandboxID, identity.Alias)
+	} else if rec.Alias != "" {
+		bannerID = fmt.Sprintf("%s (%s)", sandboxID, rec.Alias)
+	}
+	fprintBanner(cmd.OutOrStdout(), "km status", bannerID)
 	isTTY := isTerminal(cmd.OutOrStdout())
 	printSandboxStatus(cmd, rec, budget, identity, isTTY)
 	return nil
@@ -325,6 +334,11 @@ func colorPercent(percent float64, isTTY bool) string {
 func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *kmaws.BudgetSummary, identity *kmaws.IdentityRecord, isTTY bool) {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "Sandbox ID:  %s\n", rec.SandboxID)
+	if rec.Alias != "" {
+		fmt.Fprintf(out, "Alias:       %s\n", rec.Alias)
+	} else if identity != nil && identity.Alias != "" {
+		fmt.Fprintf(out, "Alias:       %s\n", identity.Alias)
+	}
 	fmt.Fprintf(out, "Profile:     %s\n", rec.Profile)
 	fmt.Fprintf(out, "Substrate:   %s\n", rec.Substrate)
 	fmt.Fprintf(out, "Region:      %s\n", rec.Region)
@@ -344,7 +358,7 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 		if idleTimeout == "" {
 			idleTimeout = "15m" // default if not in metadata (old sandboxes)
 		}
-		idleStr := getIdleCountdown(context.Background(), rec.SandboxID, idleTimeout, rec.CreatedAt, isTTY)
+		idleStr := getIdleCountdown(context.Background(), rec.SandboxID, idleTimeout, rec.CreatedAt, isTTY, budget)
 		if idleStr != "" {
 			fmt.Fprintf(out, "Idle Kill:   %s\n", idleStr)
 		}
@@ -444,41 +458,66 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 	}
 }
 
-// getIdleCountdown checks CloudWatch for the most recent audit event and returns
-// a countdown string like "12m remaining" colored by urgency.
-// createdAt is used as the fallback "last activity" when no CW events are found
-// (e.g. new sandbox, missing log stream, or permission error).
-func getIdleCountdown(ctx context.Context, sandboxID, idleTimeout string, createdAt time.Time, isTTY bool) string {
+// getIdleCountdown checks CloudWatch audit events and budget AI activity to find
+// the most recent sandbox activity, then returns a countdown string like "12m remaining"
+// colored by urgency. createdAt is the fallback when no activity signals are found.
+func getIdleCountdown(ctx context.Context, sandboxID, idleTimeout string, createdAt time.Time, isTTY bool, budget *kmaws.BudgetSummary) string {
+	remaining := computeIdleRemaining(ctx, sandboxID, idleTimeout, createdAt, budget)
+	if remaining < 0 {
+		return ""
+	}
+	return formatIdleLabel(remaining, isTTY)
+}
+
+// computeIdleRemaining returns the idle time remaining for a sandbox.
+// Returns -1 if idle timeout is not configured or cannot be determined.
+// Uses multiple activity signals: CloudWatch audit events, budget AI spend,
+// active SSM sessions, and sandbox creation time as fallback.
+func computeIdleRemaining(ctx context.Context, sandboxID, idleTimeout string, createdAt time.Time, budget *kmaws.BudgetSummary) time.Duration {
 	idleDur, parseErr := time.ParseDuration(idleTimeout)
 	if parseErr != nil || idleDur == 0 {
-		return ""
+		return -1
 	}
 
 	awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
 	if err != nil {
-		return ""
+		return -1
 	}
+
+	// Determine the most recent activity timestamp from multiple signals.
+	lastActivity := createdAt
+
+	// Signal 1: CloudWatch audit events (shell commands, heartbeats)
 	cwClient := cloudwatchlogs.NewFromConfig(awsCfg)
 	logGroup := "/km/sandboxes/" + sandboxID + "/"
-
-	events, err := kmaws.GetLogEvents(ctx, cwClient, logGroup, "audit", 1)
-
-	// Determine the most recent activity timestamp.
-	// If CW events are available, use the latest event; otherwise fall back to
-	// sandbox creation time so the countdown reflects actual elapsed idle time.
-	var lastActivity time.Time
-	if err != nil || len(events) == 0 {
-		lastActivity = createdAt
-	} else {
-		lastActivity = time.UnixMilli(events[len(events)-1].Timestamp)
+	events, err := kmaws.GetLogEvents(ctx, cwClient, logGroup, "audit", 10)
+	if err == nil && len(events) > 0 {
+		// Events are returned from the tail; last element is most recent.
+		latest := time.UnixMilli(events[len(events)-1].Timestamp)
+		if latest.After(lastActivity) {
+			lastActivity = latest
+		}
 	}
-	remaining := idleDur - time.Since(lastActivity)
 
+	// Signal 2: Budget AI spend updates (Bedrock/API usage)
+	if budget != nil && budget.LastAIActivity != nil && budget.LastAIActivity.After(lastActivity) {
+		lastActivity = *budget.LastAIActivity
+	}
+
+	// Signal 3: Active SSM sessions — if any session is connected, sandbox is in use.
+	if hasActiveSSMSession(ctx, awsCfg, sandboxID) {
+		lastActivity = time.Now()
+	}
+
+	remaining := idleDur - time.Since(lastActivity)
 	if remaining < 0 {
 		remaining = 0
 	}
-	remaining = remaining.Round(time.Second)
+	return remaining.Round(time.Second)
+}
 
+// formatIdleLabel returns a human-readable idle countdown, optionally color-coded.
+func formatIdleLabel(remaining time.Duration, isTTY bool) string {
 	label := fmt.Sprintf("%s remaining", remaining)
 	if remaining == 0 {
 		label = "imminent"
@@ -496,4 +535,57 @@ func getIdleCountdown(ctx context.Context, sandboxID, idleTimeout string, create
 	default:
 		return ansiGreen + label + ansiReset
 	}
+}
+
+// hasActiveSSMSession checks if there are any active SSM sessions targeting
+// the EC2 instance for the given sandbox. This catches activity from km shell
+// and ssm send-command that may not generate CloudWatch audit events.
+func hasActiveSSMSession(ctx context.Context, awsCfg awssdk.Config, sandboxID string) bool {
+	ssmClient := ssm.NewFromConfig(awsCfg)
+
+	// Look up the instance ID by sandbox tag
+	ec2Client := ec2.NewFromConfig(awsCfg)
+	descOut, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		Filters: []ec2types.Filter{
+			{
+				Name:   awssdk.String("tag:km:sandbox-id"),
+				Values: []string{sandboxID},
+			},
+			{
+				Name:   awssdk.String("instance-state-name"),
+				Values: []string{"running"},
+			},
+		},
+	})
+	if err != nil || len(descOut.Reservations) == 0 {
+		return false
+	}
+
+	var instanceID string
+	for _, res := range descOut.Reservations {
+		for _, inst := range res.Instances {
+			if inst.InstanceId != nil {
+				instanceID = *inst.InstanceId
+				break
+			}
+		}
+	}
+	if instanceID == "" {
+		return false
+	}
+
+	// Check for active SSM sessions on this instance
+	sessOut, err := ssmClient.DescribeSessions(ctx, &ssm.DescribeSessionsInput{
+		State: ssmtypes.SessionStateActive,
+		Filters: []ssmtypes.SessionFilter{
+			{
+				Key:   ssmtypes.SessionFilterKeyTargetId,
+				Value: awssdk.String(instanceID),
+			},
+		},
+	})
+	if err != nil {
+		return false
+	}
+	return len(sessOut.Sessions) > 0
 }

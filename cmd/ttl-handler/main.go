@@ -33,6 +33,7 @@ import (
 	ec2pkg "github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	iampkg "github.com/aws/aws-sdk-go-v2/service/iam"
+	kmspkg "github.com/aws/aws-sdk-go-v2/service/kms"
 	lambdapkg "github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
@@ -507,13 +508,19 @@ func (h *TTLHandler) handleDestroy(ctx context.Context, event TTLEvent) error {
 	}
 
 	// Step 6: Destroy sandbox resources (PROV-05/PROV-06).
-	// Uses AWS SDK calls — no terragrunt subprocess in the Lambda runtime.
 	if h.TeardownFunc != nil {
 		if err := h.TeardownFunc(ctx, sandboxID); err != nil {
 			log.Error().Err(err).Str("sandbox_id", sandboxID).Msg("sandbox teardown failed")
 			return fmt.Errorf("teardown sandbox %s: %w", sandboxID, err)
 		}
 		log.Info().Str("sandbox_id", sandboxID).Msg("sandbox resources destroyed")
+	} else {
+		// Fallback: no terraform binary — terminate EC2 and clean up via SDK.
+		log.Warn().Str("sandbox_id", sandboxID).Msg("no terraform — using SDK-only teardown")
+		if err := sdkOnlyTeardown(ctx, h, sandboxID); err != nil {
+			log.Error().Err(err).Str("sandbox_id", sandboxID).Msg("SDK-only teardown failed")
+			return fmt.Errorf("sdk teardown sandbox %s: %w", sandboxID, err)
+		}
 	}
 
 	log.Info().Str("sandbox_id", sandboxID).Msg("TTL handler completed")
@@ -713,9 +720,10 @@ module "sandbox" {
 		return fmt.Errorf("terraform destroy: %s: %w", string(out), err)
 	}
 
-	// Clean up budget-enforcer resources (Lambda, schedule, IAM role) via SDK.
-	// Simpler than running a second terraform destroy for the sub-module.
+	// Clean up sub-module resources (Lambda, schedule, IAM roles) via SDK.
+	// Simpler than running a second terraform destroy for each sub-module.
 	cleanupBudgetEnforcer(ctx, h, sandboxID)
+	cleanupGitHubToken(ctx, h, sandboxID)
 
 	// Clean up DynamoDB metadata so km list no longer shows this sandbox.
 	if h.DynamoClient != nil {
@@ -804,42 +812,13 @@ func cleanupBudgetEnforcer(ctx context.Context, h *TTLHandler, sandboxID string)
 		log.Info().Str("schedule", schedName).Msg("budget-enforcer schedule deleted")
 	}
 
-	// Delete budget-enforcer IAM roles
+	// Delete budget-enforcer IAM roles.
 	iamClient := iampkg.NewFromConfig(awsCfg)
 	for _, roleName := range []string{
 		"km-budget-enforcer-" + sandboxID,
 		"km-budget-scheduler-" + sandboxID,
 	} {
-		// Detach managed policies
-		attachedOut, _ := iamClient.ListAttachedRolePolicies(ctx, &iampkg.ListAttachedRolePoliciesInput{
-			RoleName: awssdk.String(roleName),
-		})
-		if attachedOut != nil {
-			for _, p := range attachedOut.AttachedPolicies {
-				iamClient.DetachRolePolicy(ctx, &iampkg.DetachRolePolicyInput{
-					RoleName:  awssdk.String(roleName),
-					PolicyArn: p.PolicyArn,
-				})
-			}
-		}
-		// Delete inline policies
-		policiesOut, _ := iamClient.ListRolePolicies(ctx, &iampkg.ListRolePoliciesInput{
-			RoleName: awssdk.String(roleName),
-		})
-		if policiesOut != nil {
-			for _, pName := range policiesOut.PolicyNames {
-				iamClient.DeleteRolePolicy(ctx, &iampkg.DeleteRolePolicyInput{
-					RoleName:   awssdk.String(roleName),
-					PolicyName: awssdk.String(pName),
-				})
-			}
-		}
-		// Delete the role
-		if _, delErr := iamClient.DeleteRole(ctx, &iampkg.DeleteRoleInput{
-			RoleName: awssdk.String(roleName),
-		}); delErr == nil {
-			log.Info().Str("role", roleName).Msg("budget-enforcer IAM role deleted")
-		}
+		deleteIAMRole(ctx, iamClient, roleName)
 	}
 
 	// Delete budget-enforcer log group
@@ -849,6 +828,227 @@ func cleanupBudgetEnforcer(ctx context.Context, h *TTLHandler, sandboxID string)
 			LogGroupName: awssdk.String(logGroup),
 		})
 	}
+}
+
+// cleanupGitHubToken removes all resources created by the github-token
+// Terraform module using SDK calls. Mirrors cleanupGitHubTokenResources in destroy.go.
+// Each step is idempotent and non-fatal.
+func cleanupGitHubToken(ctx context.Context, h *TTLHandler, sandboxID string) {
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, "")
+	if err != nil {
+		log.Warn().Err(err).Msg("could not load AWS config for github-token cleanup")
+		return
+	}
+
+	iamClient := iampkg.NewFromConfig(awsCfg)
+	kmsClient := kmspkg.NewFromConfig(awsCfg)
+	lambdaClient := lambdapkg.NewFromConfig(awsCfg)
+	schedClient := scheduler.NewFromConfig(awsCfg)
+
+	// 1. Delete EventBridge schedule.
+	scheduleName := "km-github-token-" + sandboxID
+	if _, delErr := schedClient.DeleteSchedule(ctx, &scheduler.DeleteScheduleInput{
+		Name: awssdk.String(scheduleName),
+	}); delErr != nil {
+		if !strings.Contains(delErr.Error(), "ResourceNotFoundException") && !strings.Contains(delErr.Error(), "not found") {
+			log.Warn().Err(delErr).Str("schedule", scheduleName).Msg("failed to delete github-token schedule (non-fatal)")
+		}
+	} else {
+		log.Info().Str("schedule", scheduleName).Msg("github-token schedule deleted")
+	}
+
+	// 2. Delete Lambda function.
+	lambdaName := "km-github-token-refresher-" + sandboxID
+	if _, delErr := lambdaClient.DeleteFunction(ctx, &lambdapkg.DeleteFunctionInput{
+		FunctionName: awssdk.String(lambdaName),
+	}); delErr != nil {
+		if !strings.Contains(delErr.Error(), "ResourceNotFoundException") && !strings.Contains(delErr.Error(), "not found") {
+			log.Warn().Err(delErr).Str("function", lambdaName).Msg("failed to delete github-token Lambda (non-fatal)")
+		}
+	} else {
+		log.Info().Str("function", lambdaName).Msg("github-token Lambda deleted")
+	}
+
+	// 3. Delete CloudWatch log group.
+	if h.CWClient != nil {
+		logGroup := "/aws/lambda/km-github-token-refresher-" + sandboxID
+		h.CWClient.DeleteLogGroup(ctx, &cloudwatchlogs.DeleteLogGroupInput{
+			LogGroupName: awssdk.String(logGroup),
+		})
+	}
+
+	// 4. Delete IAM roles (refresher + scheduler).
+	for _, roleName := range []string{
+		"km-github-token-refresher-" + sandboxID,
+		"km-github-token-scheduler-" + sandboxID,
+	} {
+		deleteIAMRole(ctx, iamClient, roleName)
+	}
+
+	// 5. Schedule KMS key deletion and remove alias.
+	kmsAlias := "alias/km-github-token-" + sandboxID
+	descOut, descErr := kmsClient.DescribeKey(ctx, &kmspkg.DescribeKeyInput{
+		KeyId: awssdk.String(kmsAlias),
+	})
+	if descErr == nil && descOut.KeyMetadata != nil {
+		keyID := awssdk.ToString(descOut.KeyMetadata.KeyId)
+		if _, schedErr := kmsClient.ScheduleKeyDeletion(ctx, &kmspkg.ScheduleKeyDeletionInput{
+			KeyId:               awssdk.String(keyID),
+			PendingWindowInDays: awssdk.Int32(7),
+		}); schedErr != nil {
+			if !strings.Contains(schedErr.Error(), "pending deletion") {
+				log.Warn().Err(schedErr).Str("key", kmsAlias).Msg("failed to schedule KMS key deletion (non-fatal)")
+			}
+		} else {
+			log.Info().Str("key", kmsAlias).Msg("KMS key scheduled for deletion")
+		}
+		kmsClient.DeleteAlias(ctx, &kmspkg.DeleteAliasInput{
+			AliasName: awssdk.String(kmsAlias),
+		})
+	}
+}
+
+// deleteIAMRole detaches all policies and deletes an IAM role. Non-fatal and idempotent.
+func deleteIAMRole(ctx context.Context, iamClient *iampkg.Client, roleName string) {
+	// Detach managed policies.
+	attachedOut, _ := iamClient.ListAttachedRolePolicies(ctx, &iampkg.ListAttachedRolePoliciesInput{
+		RoleName: awssdk.String(roleName),
+	})
+	if attachedOut != nil {
+		for _, p := range attachedOut.AttachedPolicies {
+			iamClient.DetachRolePolicy(ctx, &iampkg.DetachRolePolicyInput{
+				RoleName:  awssdk.String(roleName),
+				PolicyArn: p.PolicyArn,
+			})
+		}
+	}
+	// Delete inline policies.
+	policiesOut, _ := iamClient.ListRolePolicies(ctx, &iampkg.ListRolePoliciesInput{
+		RoleName: awssdk.String(roleName),
+	})
+	if policiesOut != nil {
+		for _, pName := range policiesOut.PolicyNames {
+			iamClient.DeleteRolePolicy(ctx, &iampkg.DeleteRolePolicyInput{
+				RoleName:   awssdk.String(roleName),
+				PolicyName: awssdk.String(pName),
+			})
+		}
+	}
+	// Remove role from instance profiles.
+	profilesOut, _ := iamClient.ListInstanceProfilesForRole(ctx, &iampkg.ListInstanceProfilesForRoleInput{
+		RoleName: awssdk.String(roleName),
+	})
+	if profilesOut != nil {
+		for _, ip := range profilesOut.InstanceProfiles {
+			iamClient.RemoveRoleFromInstanceProfile(ctx, &iampkg.RemoveRoleFromInstanceProfileInput{
+				RoleName:            awssdk.String(roleName),
+				InstanceProfileName: ip.InstanceProfileName,
+			})
+			// Also delete the instance profile if it's sandbox-specific.
+			if strings.Contains(awssdk.ToString(ip.InstanceProfileName), "km-") {
+				iamClient.DeleteInstanceProfile(ctx, &iampkg.DeleteInstanceProfileInput{
+					InstanceProfileName: ip.InstanceProfileName,
+				})
+			}
+		}
+	}
+	// Delete the role.
+	if _, delErr := iamClient.DeleteRole(ctx, &iampkg.DeleteRoleInput{
+		RoleName: awssdk.String(roleName),
+	}); delErr == nil {
+		log.Info().Str("role", roleName).Msg("IAM role deleted")
+	}
+}
+
+// sdkOnlyTeardown is the fallback destroy path when terraform binary isn't bundled.
+// Terminates EC2 instances, cleans up security groups, instance profiles, IAM roles,
+// EventBridge schedules, KMS keys, and DynamoDB/CW state.
+func sdkOnlyTeardown(ctx context.Context, h *TTLHandler, sandboxID string) error {
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, "")
+	if err != nil {
+		return fmt.Errorf("load AWS config: %w", err)
+	}
+
+	ec2Client := ec2pkg.NewFromConfig(awsCfg)
+	iamClient := iampkg.NewFromConfig(awsCfg)
+
+	// 1. Terminate EC2 instance.
+	descOut, err := ec2Client.DescribeInstances(ctx, &ec2pkg.DescribeInstancesInput{
+		Filters: []ec2types.Filter{
+			{Name: awssdk.String("tag:km:sandbox-id"), Values: []string{sandboxID}},
+		},
+	})
+	if err != nil {
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("could not describe instances")
+	} else {
+		for _, res := range descOut.Reservations {
+			for _, inst := range res.Instances {
+				instanceID := awssdk.ToString(inst.InstanceId)
+				state := inst.State.Name
+				if state == ec2types.InstanceStateNameTerminated || state == ec2types.InstanceStateNameShuttingDown {
+					continue
+				}
+				log.Info().Str("instance_id", instanceID).Msg("terminating EC2 instance")
+				ec2Client.TerminateInstances(ctx, &ec2pkg.TerminateInstancesInput{
+					InstanceIds: []string{instanceID},
+				})
+			}
+		}
+	}
+
+	// 2. Delete security group.
+	sgOut, err := ec2Client.DescribeSecurityGroups(ctx, &ec2pkg.DescribeSecurityGroupsInput{
+		Filters: []ec2types.Filter{
+			{Name: awssdk.String("tag:km:sandbox-id"), Values: []string{sandboxID}},
+		},
+	})
+	if err == nil {
+		for _, sg := range sgOut.SecurityGroups {
+			sgID := awssdk.ToString(sg.GroupId)
+			log.Info().Str("sg_id", sgID).Msg("deleting security group")
+			// SG deletion may fail if instance hasn't fully terminated yet — best effort.
+			if _, delErr := ec2Client.DeleteSecurityGroup(ctx, &ec2pkg.DeleteSecurityGroupInput{
+				GroupId: awssdk.String(sgID),
+			}); delErr != nil {
+				log.Warn().Err(delErr).Str("sg_id", sgID).Msg("failed to delete security group (may need instance termination to complete)")
+			}
+		}
+	}
+
+	// 3. Delete sandbox IAM role + instance profile.
+	ssmRoleName := "km-ec2spot-ssm-" + sandboxID + "-" + h.RegionLabel
+	deleteIAMRole(ctx, iamClient, ssmRoleName)
+
+	// Also clean instance profile directly (may have same name pattern).
+	ipName := "km-ec2spot-profile-" + sandboxID + "-" + h.RegionLabel
+	iamClient.RemoveRoleFromInstanceProfile(ctx, &iampkg.RemoveRoleFromInstanceProfileInput{
+		RoleName:            awssdk.String(ssmRoleName),
+		InstanceProfileName: awssdk.String(ipName),
+	})
+	iamClient.DeleteInstanceProfile(ctx, &iampkg.DeleteInstanceProfileInput{
+		InstanceProfileName: awssdk.String(ipName),
+	})
+
+	// 4. Clean up sub-module resources.
+	cleanupBudgetEnforcer(ctx, h, sandboxID)
+	cleanupGitHubToken(ctx, h, sandboxID)
+
+	// 5. Clean up DynamoDB metadata.
+	if h.DynamoClient != nil {
+		if delErr := awspkg.DeleteSandboxMetadataDynamo(ctx, h.DynamoClient, h.SandboxTableName, sandboxID); delErr != nil {
+			log.Warn().Err(delErr).Str("sandbox_id", sandboxID).Msg("failed to delete DynamoDB metadata (non-fatal)")
+		}
+	}
+
+	// 6. Export and delete CloudWatch logs.
+	if h.CWClient != nil {
+		if h.Bucket != "" {
+			awspkg.ExportSandboxLogs(ctx, h.CWClient, sandboxID, h.Bucket)
+		}
+		awspkg.DeleteSandboxLogGroup(ctx, h.CWClient, sandboxID)
+	}
+
+	return nil
 }
 
 // main constructs a TTLHandler with real AWS clients and registers it with the Lambda runtime.
