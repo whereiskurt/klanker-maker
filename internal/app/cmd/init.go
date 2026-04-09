@@ -691,15 +691,21 @@ func extractValue(v interface{}) interface{} {
 }
 
 // LoadNetworkOutputs reads the shared network outputs for a specific region.
+// If the local outputs.json is missing, it falls back to querying the remote
+// Terraform state via `terragrunt output -json` and caches the result locally.
 func LoadNetworkOutputs(repoRoot, regionLabel string) (*NetworkOutputs, error) {
 	outputsFile := filepath.Join(repoRoot, "infra", "live", regionLabel, "network", "outputs.json")
 
 	data, err := os.ReadFile(outputsFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("network not initialized for region %s — run 'km init --region <region>' first", regionLabel)
+			data, err = fetchAndCacheOutputs(repoRoot, regionLabel, "network")
+			if err != nil {
+				return nil, fmt.Errorf("network not initialized for region %s and remote state query failed: %w", regionLabel, err)
+			}
+		} else {
+			return nil, fmt.Errorf("reading network outputs: %w", err)
 		}
-		return nil, fmt.Errorf("reading network outputs: %w", err)
 	}
 
 	var raw map[string]json.RawMessage
@@ -723,15 +729,20 @@ func LoadNetworkOutputs(repoRoot, regionLabel string) (*NetworkOutputs, error) {
 }
 
 // LoadEFSOutputs reads the EFS filesystem ID from efs/outputs.json for the given region.
-// Returns ("", nil) when the file doesn't exist (EFS not yet initialized via km init).
+// Returns ("", nil) when the file doesn't exist and remote state has no outputs (EFS not initialized).
 func LoadEFSOutputs(repoRoot, regionLabel string) (string, error) {
 	outputsFile := filepath.Join(repoRoot, "infra", "live", regionLabel, "efs", "outputs.json")
 	data, err := os.ReadFile(outputsFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", nil
+			data, err = fetchAndCacheOutputs(repoRoot, regionLabel, "efs")
+			if err != nil {
+				// EFS is optional — if remote state also has nothing, that's fine.
+				return "", nil
+			}
+		} else {
+			return "", fmt.Errorf("reading efs outputs: %w", err)
 		}
-		return "", fmt.Errorf("reading efs outputs: %w", err)
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -742,6 +753,53 @@ func LoadEFSOutputs(repoRoot, regionLabel string) (string, error) {
 		return "", err
 	}
 	return fsID, nil
+}
+
+// fetchAndCacheOutputs runs `terragrunt output -json` against the remote state
+// for the given module (e.g. "network", "efs") and caches the result to outputs.json.
+// This allows commands like `km create` to work without a prior `km init` as long
+// as the infrastructure was already provisioned (state exists in S3).
+func fetchAndCacheOutputs(repoRoot, regionLabel, module string) ([]byte, error) {
+	moduleDir := filepath.Join(repoRoot, "infra", "live", regionLabel, module)
+
+	// Verify the module directory exists (has a terragrunt.hcl).
+	if _, err := os.Stat(filepath.Join(moduleDir, "terragrunt.hcl")); err != nil {
+		return nil, fmt.Errorf("module directory %s not found: %w", moduleDir, err)
+	}
+
+	// Use a runner with default profile to query remote state.
+	awsProfile := os.Getenv("AWS_PROFILE")
+	if awsProfile == "" {
+		awsProfile = "klanker-terraform"
+	}
+	runner := terragrunt.NewRunner(awsProfile, repoRoot)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	outputMap, err := runner.Output(ctx, moduleDir)
+	if err != nil {
+		return nil, fmt.Errorf("terragrunt output for %s/%s: %w", regionLabel, module, err)
+	}
+
+	// No outputs means the module was never applied.
+	if len(outputMap) == 0 {
+		return nil, fmt.Errorf("no outputs in remote state for %s/%s", regionLabel, module)
+	}
+
+	data, err := json.MarshalIndent(outputMap, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("serializing %s outputs: %w", module, err)
+	}
+
+	// Cache locally so subsequent calls don't need terragrunt.
+	outputsFile := filepath.Join(moduleDir, "outputs.json")
+	if writeErr := os.WriteFile(outputsFile, data, 0o644); writeErr != nil {
+		// Non-fatal: we have the data, just can't cache it.
+		fmt.Fprintf(os.Stderr, "warning: could not cache %s outputs: %v\n", module, writeErr)
+	}
+
+	return data, nil
 }
 
 func extractTFOutput(raw map[string]json.RawMessage, key string, target interface{}) error {

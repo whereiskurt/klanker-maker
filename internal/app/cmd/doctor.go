@@ -1344,6 +1344,14 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 	}
 	fmt.Fprintln(out, summaryLine)
 
+	if dryRun && warnCount > 0 {
+		hint := "Tip: re-run with --dry-run=false to clean up stale resources"
+		if isTTY {
+			hint = ansiYellow + hint + ansiReset
+		}
+		fmt.Fprintln(out, hint)
+	}
+
 	if errorCount > 0 {
 		return fmt.Errorf("platform health check failed: %d error(s) found", errorCount)
 	}
