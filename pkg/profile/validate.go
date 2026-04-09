@@ -214,8 +214,8 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 	var errs []ValidationError
 
 	// Rule 1: TTL must not be shorter than idleTimeout.
-	// TTL="" means no auto-destroy (--ttl 0 sentinel); skip TTL >= idle check.
-	if p.Spec.Lifecycle.TTL != "" && p.Spec.Lifecycle.IdleTimeout != "" {
+	// TTL="" or "0" means no auto-destroy (--ttl 0 sentinel); skip TTL >= idle check.
+	if p.Spec.Lifecycle.TTL != "" && p.Spec.Lifecycle.TTL != "0" && p.Spec.Lifecycle.IdleTimeout != "" {
 		ttl, ttlErr := parseDuration(p.Spec.Lifecycle.TTL)
 		idle, idleErr := parseDuration(p.Spec.Lifecycle.IdleTimeout)
 		if ttlErr == nil && idleErr == nil {

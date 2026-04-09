@@ -151,8 +151,8 @@
           "properties": {
             "ttl": {
               "type": "string",
-              "pattern": "^[0-9]+(s|m|h|d)$",
-              "description": "Maximum sandbox lifetime as a duration string (e.g. 24h)"
+              "pattern": "^(0|[0-9]+(s|m|h|d))$",
+              "description": "Maximum sandbox lifetime as a duration string (e.g. 24h). Use '0' to disable auto-destroy."
             },
             "idleTimeout": {
               "type": "string",

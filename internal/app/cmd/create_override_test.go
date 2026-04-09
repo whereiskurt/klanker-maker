@@ -24,7 +24,7 @@ func TestApplyLifecycleOverrides_TTL(t *testing.T) {
 		{"applyLifecycleOverrides function", "applyLifecycleOverrides"},
 		{"ttlOverride flag", `"ttl"`},
 		{"idleOverride flag", `"idle"`},
-		{"TTL=0 sentinel empty string", `Spec.Lifecycle.TTL = ""`},
+		{"TTL=0 sentinel value", `Spec.Lifecycle.TTL = "0"`},
 		{"TTL=0 check for zero string", `ttlOverride == "0"`},
 		{"TTL=0s check", `ttlOverride == "0s"`},
 		{"idleTimeout mutation", "Spec.Lifecycle.IdleTimeout = idleOverride"},
@@ -106,9 +106,10 @@ func TestApplyLifecycleOverrides_Unit(t *testing.T) {
 	}
 	s := string(src)
 
-	// Verify TTL=0 disables schedule (sets TTL to "" — may use p. or resolvedProfile. prefix)
-	if !strings.Contains(s, `Spec.Lifecycle.TTL = ""`) {
-		t.Error("create.go missing TTL=0 → empty string mutation (disables EventBridge schedule)")
+	// Verify TTL=0 disables schedule (sets TTL to "0" — passes schema validation;
+	// isTTLDisabled() guards all schedule/expiry code paths)
+	if !strings.Contains(s, `Spec.Lifecycle.TTL = "0"`) {
+		t.Error("create.go missing TTL=0 → zero-string mutation (disables EventBridge schedule)")
 	}
 
 	// Verify TTL invalid value produces parse error

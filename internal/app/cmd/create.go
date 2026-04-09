@@ -546,7 +546,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// Non-fatal: sandbox is provisioned even if metadata write fails.
 	now := time.Now().UTC()
 	var ttlExpiry *time.Time
-	if resolvedProfile.Spec.Lifecycle.TTL != "" {
+	if !isTTLDisabled(resolvedProfile.Spec.Lifecycle.TTL) {
 		if d, parseErr := time.ParseDuration(resolvedProfile.Spec.Lifecycle.TTL); parseErr == nil {
 			t := now.Add(d)
 			ttlExpiry = &t
@@ -949,7 +949,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		if resolvedProfile.Metadata.Name != "" {
 			profileName = resolvedProfile.Metadata.Name
 		}
-		if resolvedProfile.Spec.Lifecycle.TTL != "" {
+		if !isTTLDisabled(resolvedProfile.Spec.Lifecycle.TTL) {
 			ttl = resolvedProfile.Spec.Lifecycle.TTL
 		}
 		if err := awspkg.SendCreateNotification(ctx, sesClient, operatorEmail, sandboxID, emailDomain, profileName, ttl); err != nil {
@@ -1247,7 +1247,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 
 	// Step D8: Write .km-ttl file with TTL expiry timestamp (ISO8601).
 	now := time.Now().UTC()
-	if resolvedProfile.Spec.Lifecycle.TTL != "" {
+	if !isTTLDisabled(resolvedProfile.Spec.Lifecycle.TTL) {
 		if d, parseErr := time.ParseDuration(resolvedProfile.Spec.Lifecycle.TTL); parseErr == nil {
 			ttlExpiry := now.Add(d)
 			ttlPath := filepath.Join(sandboxLocalDir, ".km-ttl")
@@ -1298,7 +1298,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 	// Write sandbox metadata to DynamoDB (Docker substrate also uses DynamoDB — user explicitly required this).
 	{
 		var ttlExpiry *time.Time
-		if resolvedProfile.Spec.Lifecycle.TTL != "" {
+		if !isTTLDisabled(resolvedProfile.Spec.Lifecycle.TTL) {
 			if d, parseErr := time.ParseDuration(resolvedProfile.Spec.Lifecycle.TTL); parseErr == nil {
 				t := now.Add(d)
 				ttlExpiry = &t
@@ -1400,7 +1400,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 	fmt.Println()
 	fmt.Println(strings.Repeat("─", 50))
 	fmt.Printf("Sandbox %s created successfully (docker). (%s)\n", sandboxID, elapsed)
-	if resolvedProfile.Spec.Lifecycle.TTL != "" {
+	if !isTTLDisabled(resolvedProfile.Spec.Lifecycle.TTL) {
 		if d, err := time.ParseDuration(resolvedProfile.Spec.Lifecycle.TTL); err == nil {
 			ttlExpiry := now.Add(d)
 			fmt.Printf("  TTL: %s (expires %s)\n", resolvedProfile.Spec.Lifecycle.TTL, ttlExpiry.Local().Format("3:04:05 PM MST"))
@@ -1924,16 +1924,18 @@ func stripBedrockEnvVars(p *profile.SandboxProfile) {
 //
 // TTL semantics:
 //   - "" (empty): no override, profile value unchanged
-//   - "0" or "0s": disable auto-destroy — sets TTL to "" so no EventBridge schedule is created
+//   - "0" or "0s": disable auto-destroy — sets TTL to "0" (passes schema validation);
+//     isTTLDisabled() guards all schedule/expiry code paths
 //   - any other value: parsed as a duration and written to Spec.Lifecycle.TTL
 //
-// When TTL is set to "" (--ttl 0), the TTL >= idle check in ValidateSemantic is skipped
-// automatically because the rule only fires when TTL != "".
+// When TTL is "0", the TTL >= idle check in ValidateSemantic is skipped
+// because the rule only fires when TTL is a real duration.
 func applyLifecycleOverrides(p *profile.SandboxProfile, ttlOverride, idleOverride string) error {
 	if ttlOverride != "" {
 		if ttlOverride == "0" || ttlOverride == "0s" {
-			// TTL=0 means "no auto-destroy" — empty string sentinel disables EventBridge schedule.
-			p.Spec.Lifecycle.TTL = ""
+			// TTL=0 means "no auto-destroy" — store "0" (passes schema validation).
+			// All TTL schedule/expiry code checks isTTLDisabled() to skip scheduling.
+			p.Spec.Lifecycle.TTL = "0"
 			fmt.Println("  --ttl 0: auto-destroy disabled (hibernate on idle instead)")
 		} else {
 			if _, err := time.ParseDuration(ttlOverride); err != nil {
@@ -1959,6 +1961,12 @@ func applyLifecycleOverrides(p *profile.SandboxProfile, ttlOverride, idleOverrid
 		}
 	}
 	return nil
+}
+
+// isTTLDisabled returns true when TTL is effectively disabled (empty or "0").
+// TTL "0" is the --ttl 0 sentinel meaning "never auto-destroy".
+func isTTLDisabled(ttl string) bool {
+	return ttl == "" || ttl == "0"
 }
 
 // extractOutputString reads a string value from terraform output -json format.

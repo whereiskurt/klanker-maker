@@ -1576,7 +1576,7 @@ func parseIdleTimeoutMinutes(s string) int {
 // idleActionFromProfile returns "hibernate" when TTL is empty (--ttl 0 sentinel) and
 // an idle timeout is configured. Empty string means default one-shot destroy behavior.
 func idleActionFromProfile(p *profile.SandboxProfile) string {
-	if p.Spec.Lifecycle.TTL == "" && p.Spec.Lifecycle.IdleTimeout != "" {
+	if (p.Spec.Lifecycle.TTL == "" || p.Spec.Lifecycle.TTL == "0") && p.Spec.Lifecycle.IdleTimeout != "" {
 		return "hibernate"
 	}
 	return ""
