@@ -17,13 +17,16 @@ import (
 	"strings"
 	"time"
 
+	"io"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/route53"
 	route53types "github.com/aws/aws-sdk-go-v2/service/route53/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/spf13/cobra"
@@ -755,48 +758,71 @@ func LoadEFSOutputs(repoRoot, regionLabel string) (string, error) {
 	return fsID, nil
 }
 
-// fetchAndCacheOutputs runs `terragrunt output -json` against the remote state
-// for the given module (e.g. "network", "efs") and caches the result to outputs.json.
-// This allows commands like `km create` to work without a prior `km init` as long
-// as the infrastructure was already provisioned (state exists in S3).
+// fetchAndCacheOutputs reads the Terraform state file directly from S3 for the
+// given module (e.g. "network", "efs") and extracts outputs. The result is cached
+// to outputs.json locally. This allows commands like `km create` to work without
+// terragrunt installed and without a prior `km init`, as long as the infrastructure
+// was already provisioned.
+//
+// State bucket: tf-km-state-{regionLabel}
+// State key:    tf-km/{regionLabel}/{module}/terraform.tfstate
 func fetchAndCacheOutputs(repoRoot, regionLabel, module string) ([]byte, error) {
-	moduleDir := filepath.Join(repoRoot, "infra", "live", regionLabel, module)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	// Verify the module directory exists (has a terragrunt.hcl).
-	if _, err := os.Stat(filepath.Join(moduleDir, "terragrunt.hcl")); err != nil {
-		return nil, fmt.Errorf("module directory %s not found: %w", moduleDir, err)
-	}
+	bucket := fmt.Sprintf("tf-km-state-%s", regionLabel)
+	key := fmt.Sprintf("tf-km/%s/%s/terraform.tfstate", regionLabel, module)
 
-	// Use a runner with default profile to query remote state.
 	awsProfile := os.Getenv("AWS_PROFILE")
 	if awsProfile == "" {
 		awsProfile = "klanker-terraform"
 	}
-	runner := terragrunt.NewRunner(awsProfile, repoRoot)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	outputMap, err := runner.Output(ctx, moduleDir)
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithSharedConfigProfile(awsProfile),
+	)
 	if err != nil {
-		return nil, fmt.Errorf("terragrunt output for %s/%s: %w", regionLabel, module, err)
+		return nil, fmt.Errorf("loading AWS config: %w", err)
 	}
 
-	// No outputs means the module was never applied.
-	if len(outputMap) == 0 {
-		return nil, fmt.Errorf("no outputs in remote state for %s/%s", regionLabel, module)
+	s3Client := s3.NewFromConfig(awsCfg)
+	resp, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reading state s3://%s/%s: %w", bucket, key, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading state body: %w", err)
 	}
 
-	data, err := json.MarshalIndent(outputMap, "", "  ")
+	// Parse the tfstate and extract outputs from the root module.
+	var state struct {
+		Outputs map[string]json.RawMessage `json:"outputs"`
+	}
+	if err := json.Unmarshal(body, &state); err != nil {
+		return nil, fmt.Errorf("parsing tfstate: %w", err)
+	}
+	if len(state.Outputs) == 0 {
+		return nil, fmt.Errorf("no outputs in state s3://%s/%s", bucket, key)
+	}
+
+	// Re-serialize outputs in the same format as `terragrunt output -json`.
+	data, err := json.MarshalIndent(state.Outputs, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("serializing %s outputs: %w", module, err)
 	}
 
-	// Cache locally so subsequent calls don't need terragrunt.
+	// Cache locally so subsequent calls use the file directly.
+	moduleDir := filepath.Join(repoRoot, "infra", "live", regionLabel, module)
 	outputsFile := filepath.Join(moduleDir, "outputs.json")
-	if writeErr := os.WriteFile(outputsFile, data, 0o644); writeErr != nil {
-		// Non-fatal: we have the data, just can't cache it.
-		fmt.Fprintf(os.Stderr, "warning: could not cache %s outputs: %v\n", module, writeErr)
+	if writeErr := os.MkdirAll(moduleDir, 0o755); writeErr == nil {
+		if writeErr = os.WriteFile(outputsFile, data, 0o644); writeErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not cache %s outputs: %v\n", module, writeErr)
+		}
 	}
 
 	return data, nil
