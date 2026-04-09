@@ -80,6 +80,14 @@ func (m *mockSchedulerAPI) DeleteSchedule(ctx context.Context, input *scheduler.
 	return &scheduler.DeleteScheduleOutput{}, m.deleteErr
 }
 
+func (m *mockSchedulerAPI) ListSchedules(ctx context.Context, input *scheduler.ListSchedulesInput, optFns ...func(*scheduler.Options)) (*scheduler.ListSchedulesOutput, error) {
+	return &scheduler.ListSchedulesOutput{}, nil
+}
+
+func (m *mockSchedulerAPI) GetSchedule(ctx context.Context, input *scheduler.GetScheduleInput, optFns ...func(*scheduler.Options)) (*scheduler.GetScheduleOutput, error) {
+	return &scheduler.GetScheduleOutput{}, nil
+}
+
 // --------------------------------------------------------------------------
 // A minimal profile YAML to use in tests that require artifact paths.
 // --------------------------------------------------------------------------
