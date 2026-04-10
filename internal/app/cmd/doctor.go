@@ -122,6 +122,11 @@ type EC2DescribeAPI interface {
 	DescribeSubnets(ctx context.Context, params *ec2.DescribeSubnetsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeSubnetsOutput, error)
 }
 
+// EC2InstanceAPI covers EC2 DescribeInstances for orphaned instance detection.
+type EC2InstanceAPI interface {
+	DescribeInstances(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
+}
+
 // LambdaGetFunctionAPI covers Lambda GetFunction for existence check.
 type LambdaGetFunctionAPI interface {
 	GetFunction(ctx context.Context, params *lambda.GetFunctionInput, optFns ...func(*lambda.Options)) (*lambda.GetFunctionOutput, error)
@@ -187,6 +192,8 @@ type DoctorDeps struct {
 	IAMCleanupClient IAMCleanupAPI
 	// Scheduler client for stale EventBridge schedule cleanup.
 	SchedulerClient kmaws.SchedulerAPI
+	// EC2 instance client for orphaned instance detection.
+	EC2InstanceClient EC2InstanceAPI
 	// DryRun controls whether stale resource cleanup checks delete resources.
 	DryRun bool
 }
@@ -1084,6 +1091,111 @@ func checkStaleSchedules(ctx context.Context, schedulerClient kmaws.SchedulerAPI
 	}
 }
 
+// checkOrphanedEC2 finds EC2 instances tagged with km:sandbox-id that have no
+// matching DynamoDB record. These are likely left behind by failed teardowns or
+// idle handlers that didn't complete cleanup. This check is report-only — it
+// never terminates instances. Use `km destroy <sandbox-id>` to clean up manually.
+func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister SandboxLister) CheckResult {
+	name := "Orphaned EC2 Instances"
+	if ec2Client == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "EC2 client not available"}
+	}
+
+	// Find all non-terminated instances with the km:sandbox-id tag.
+	var instances []ec2types.Instance
+	var nextToken *string
+	for {
+		out, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+			Filters: []ec2types.Filter{
+				{Name: awssdk.String("tag:km:sandbox-id"), Values: []string{"*"}},
+				{Name: awssdk.String("instance-state-name"), Values: []string{
+					"running", "stopped", "stopping", "pending",
+				}},
+			},
+			NextToken: nextToken,
+		})
+		if err != nil {
+			return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not describe EC2 instances: %v", err)}
+		}
+		for _, res := range out.Reservations {
+			instances = append(instances, res.Instances...)
+		}
+		if out.NextToken == nil {
+			break
+		}
+		nextToken = out.NextToken
+	}
+
+	if len(instances) == 0 {
+		return CheckResult{Name: name, Status: CheckOK, Message: "no km-tagged EC2 instances found"}
+	}
+
+	// Build set of active sandbox IDs from DynamoDB.
+	activeSandboxes := make(map[string]bool)
+	if lister != nil {
+		records, err := lister.ListSandboxes(ctx, false)
+		if err == nil {
+			for _, r := range records {
+				activeSandboxes[r.SandboxID] = true
+			}
+		}
+	}
+
+	// Find orphaned instances: tagged with km:sandbox-id but no DynamoDB record.
+	type orphan struct {
+		instanceID string
+		sandboxID  string
+		state      string
+		launchTime string
+	}
+	var orphans []orphan
+	for _, inst := range instances {
+		var sandboxID string
+		for _, tag := range inst.Tags {
+			if awssdk.ToString(tag.Key) == "km:sandbox-id" {
+				sandboxID = awssdk.ToString(tag.Value)
+				break
+			}
+		}
+		if sandboxID == "" {
+			continue
+		}
+		if activeSandboxes[sandboxID] {
+			continue
+		}
+		launch := ""
+		if inst.LaunchTime != nil {
+			launch = inst.LaunchTime.Format("2006-01-02 15:04")
+		}
+		orphans = append(orphans, orphan{
+			instanceID: awssdk.ToString(inst.InstanceId),
+			sandboxID:  sandboxID,
+			state:      string(inst.State.Name),
+			launchTime: launch,
+		})
+	}
+
+	if len(orphans) == 0 {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckOK,
+			Message: fmt.Sprintf("%d km-tagged instances, all registered in DynamoDB", len(instances)),
+		}
+	}
+
+	// Build a detail message listing each orphan.
+	details := make([]string, 0, len(orphans))
+	for _, o := range orphans {
+		details = append(details, fmt.Sprintf("%s (%s, %s, launched %s)", o.instanceID, o.sandboxID, o.state, o.launchTime))
+	}
+	return CheckResult{
+		Name:        name,
+		Status:      CheckWarn,
+		Message:     fmt.Sprintf("found %d orphaned EC2 instances (no DynamoDB record): %s", len(orphans), strings.Join(details, "; ")),
+		Remediation: "Run 'km destroy <sandbox-id> --remote --yes' for each orphan, or terminate manually in the AWS console",
+	}
+}
+
 // =============================================================================
 // Parallel execution helper
 // =============================================================================
@@ -1514,6 +1626,12 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkStaleSchedules(ctx, schedulerClient, listerForCleanup, dryRun)
 	})
 
+	// Orphaned EC2 instances check (report-only, never terminates).
+	ec2InstanceClient := deps.EC2InstanceClient
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkOrphanedEC2(ctx, ec2InstanceClient, listerForCleanup)
+	})
+
 	return checks
 }
 
@@ -1577,6 +1695,7 @@ func initRealDeps(ctx context.Context, cfg DoctorConfigProvider) *DoctorDeps {
 	deps.KMSCleanupClient = kms.NewFromConfig(awsCfg)
 	deps.IAMCleanupClient = iam.NewFromConfig(awsCfg)
 	deps.SchedulerClient = scheduler.NewFromConfig(awsCfg)
+	deps.EC2InstanceClient = ec2.NewFromConfig(awsCfg)
 
 	// Per-region EC2 clients.
 	deps.EC2Clients = make(map[string]EC2DescribeAPI)
