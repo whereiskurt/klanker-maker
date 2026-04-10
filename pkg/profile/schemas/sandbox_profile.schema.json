@@ -470,6 +470,17 @@
               "description": "Tool names the agent is permitted to use"
             }
           }
+        },
+        "cli": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Operator-side defaults for km shell / km agent commands. Does not affect sandbox provisioning.",
+          "properties": {
+            "noBedrock": {
+              "type": "boolean",
+              "description": "Default to --no-bedrock for km shell and km agent run (use direct Anthropic API instead of Bedrock)"
+            }
+          }
         }
       }
     }

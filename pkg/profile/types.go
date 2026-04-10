@@ -48,6 +48,9 @@ type Spec struct {
 	// OTP defines optional one-time password secrets injected at boot.
 	// When nil, no OTP secrets are injected.
 	OTP *OTPSpec `yaml:"otp,omitempty"`
+	// CLI defines operator-side defaults for km shell / km agent commands.
+	// These don't affect sandbox provisioning — only CLI behavior when connecting.
+	CLI *CLISpec `yaml:"cli,omitempty"`
 }
 
 // OTPSpec defines one-time password secrets that are fetched from SSM at boot
@@ -346,6 +349,16 @@ type AgentSpec struct {
 	TaskTimeout string `yaml:"taskTimeout"`
 	// AllowedTools is the list of tool names the agent is permitted to use.
 	AllowedTools []string `yaml:"allowedTools,omitempty"`
+}
+
+// CLISpec defines operator-side defaults for km shell / km agent commands.
+// These settings don't affect sandbox provisioning — only CLI behavior when
+// connecting to or running agents in the sandbox.
+type CLISpec struct {
+	// NoBedrock makes --no-bedrock the default for km shell and km agent run.
+	// The sandbox is still provisioned with Bedrock vars; this only affects
+	// the operator's connection. Override with --bedrock on the CLI.
+	NoBedrock bool `yaml:"noBedrock,omitempty"`
 }
 
 // Parse unmarshals a SandboxProfile from raw YAML bytes.

@@ -72,6 +72,12 @@ Port forwarding:
 			if len(ports) > 0 {
 				return runPortForward(cmd, cfg, fetcher, execFn, sandboxID, ports)
 			}
+			// If --no-bedrock not explicitly set, check profile cli.noBedrock default
+			if !cmd.Flags().Changed("no-bedrock") {
+				if cliNB := loadProfileCLINoBedrock(ctx, cfg, sandboxID); cliNB {
+					noBedrock = true
+				}
+			}
 			// Run the shell (blocks until user exits).
 			_ = runShell(cmd, cfg, fetcher, execFn, sandboxID, asRoot, noBedrock)
 

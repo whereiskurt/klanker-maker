@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klankrmkr/pkg/profile"
 )
 
 // SSMSendAPI is the narrow interface for SSM SendCommand + GetCommandInvocation.
@@ -110,6 +111,13 @@ Examples:
 				agentCmd += " " + strings.Join(args[1:], " ")
 			}
 
+			// If --no-bedrock not explicitly set, check profile cli.noBedrock default
+			if !cmd.Flags().Changed("no-bedrock") {
+				if cliNB := loadProfileCLINoBedrock(ctx, cfg, sandboxID); cliNB {
+					noBedrock = true
+				}
+			}
+
 			return runAgent(cmd, cfg, fetcher, execFn, sandboxID, agentCmd, noBedrock)
 		},
 	}
@@ -165,6 +173,13 @@ Examples:
 			sandboxID, err := ResolveSandboxID(ctx, cfg, args[0])
 			if err != nil {
 				return err
+			}
+
+			// If --no-bedrock not explicitly set, check profile cli.noBedrock default
+			if !cmd.Flags().Changed("no-bedrock") {
+				if cliNB := loadProfileCLINoBedrock(ctx, cfg, sandboxID); cliNB {
+					noBedrock = true
+				}
 			}
 
 			return runAgentNonInteractive(ctx, cfg, fetcher, ssmClient, ebClient, sandboxID, prompt, wait, noBedrock, autoStart)
@@ -872,4 +887,35 @@ echo "KM_RUN_ID=$RUN_ID"`, noBedrockLines, artifactsBucket, b64Prompt)
 		"sudo -u sandbox -i /tmp/km-agent-run.sh",
 		"rm -f /tmp/km-agent-run.sh",
 	}
+}
+
+// loadProfileCLINoBedrock fetches the sandbox's profile from S3 and returns
+// the cli.noBedrock setting. Returns false on any error (fail open).
+func loadProfileCLINoBedrock(ctx context.Context, cfg *config.Config, sandboxID string) bool {
+	if cfg.ArtifactsBucket == "" {
+		return false
+	}
+	awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+	if err != nil {
+		return false
+	}
+	s3Client := s3.NewFromConfig(awsCfg)
+	profileKey := fmt.Sprintf("artifacts/%s/.km-profile.yaml", sandboxID)
+	obj, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: awssdk.String(cfg.ArtifactsBucket),
+		Key:    awssdk.String(profileKey),
+	})
+	if err != nil {
+		return false
+	}
+	defer obj.Body.Close()
+	data, err := io.ReadAll(obj.Body)
+	if err != nil {
+		return false
+	}
+	p, err := profile.Parse(data)
+	if err != nil || p == nil {
+		return false
+	}
+	return p.Spec.CLI != nil && p.Spec.CLI.NoBedrock
 }
