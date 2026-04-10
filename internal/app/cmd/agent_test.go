@@ -321,3 +321,233 @@ func TestAgentCmd_BackwardCompat(t *testing.T) {
 }
 
 // min is provided by email_test.go in this package
+
+// ---- Mock SSM for results/list tests ----
+// Supports multiple SendCommand calls with per-command-ID invocation responses.
+
+type mockResultsSSM struct {
+	sendCalls   []ssm.SendCommandInput
+	sendErr     error
+	cmdCounter  int
+	cmdIDs      []string                             // command IDs returned in order
+	invByCmd    map[string]*ssm.GetCommandInvocationOutput // per-command responses
+}
+
+func (m *mockResultsSSM) SendCommand(ctx context.Context, input *ssm.SendCommandInput, optFns ...func(*ssm.Options)) (*ssm.SendCommandOutput, error) {
+	if m.sendErr != nil {
+		return nil, m.sendErr
+	}
+	m.sendCalls = append(m.sendCalls, *input)
+	cmdID := m.cmdIDs[m.cmdCounter]
+	m.cmdCounter++
+	return &ssm.SendCommandOutput{
+		Command: &ssmtypes.Command{
+			CommandId: awssdk.String(cmdID),
+		},
+	}, nil
+}
+
+func (m *mockResultsSSM) GetCommandInvocation(ctx context.Context, input *ssm.GetCommandInvocationInput, optFns ...func(*ssm.Options)) (*ssm.GetCommandInvocationOutput, error) {
+	cmdID := awssdk.ToString(input.CommandId)
+	if out, ok := m.invByCmd[cmdID]; ok {
+		return out, nil
+	}
+	return &ssm.GetCommandInvocationOutput{
+		Status:                ssmtypes.CommandInvocationStatusSuccess,
+		StandardOutputContent: awssdk.String(""),
+	}, nil
+}
+
+var _ cmd.SSMSendAPI = (*mockResultsSSM)(nil)
+
+// ---- Results + List tests ----
+
+// TestAgentResults verifies that `km agent results <sandbox-id>` fetches latest
+// run output via two SSM commands (list latest, cat output).
+func TestAgentResults(t *testing.T) {
+	origPoll := cmd.AgentPollInterval
+	cmd.AgentPollInterval = 1 * time.Millisecond
+	defer func() { cmd.AgentPollInterval = origPoll }()
+
+	fetcher := newRunningEC2Sandbox("sb-results01")
+	mockEB := &mockAgentEB{}
+	mockSSM := &mockResultsSSM{
+		cmdIDs: []string{"cmd-ls-latest", "cmd-cat-output"},
+		invByCmd: map[string]*ssm.GetCommandInvocationOutput{
+			"cmd-ls-latest": {
+				Status:                ssmtypes.CommandInvocationStatusSuccess,
+				StandardOutputContent: awssdk.String("20260410T143000Z"),
+			},
+			"cmd-cat-output": {
+				Status:                ssmtypes.CommandInvocationStatusSuccess,
+				StandardOutputContent: awssdk.String(`{"result":"all tests pass","cost_usd":0.42}`),
+			},
+		},
+	}
+
+	cfg := &config.Config{}
+	root := &cobra.Command{Use: "km"}
+	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB)
+	root.AddCommand(agentCmd)
+
+	// Capture stdout
+	var buf strings.Builder
+	root.SetOut(&buf)
+
+	root.SetArgs([]string{"agent", "results", "sb-results01"})
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Verify two SSM commands were sent (ls + cat)
+	if len(mockSSM.sendCalls) != 2 {
+		t.Fatalf("expected 2 SendCommand calls, got %d", len(mockSSM.sendCalls))
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, `"result"`) {
+		t.Errorf("expected output.json content in stdout, got: %s", output)
+	}
+}
+
+// TestAgentResults_SpecificRun verifies that --run flag skips the ls step
+// and directly cats the specified run's output.
+func TestAgentResults_SpecificRun(t *testing.T) {
+	origPoll := cmd.AgentPollInterval
+	cmd.AgentPollInterval = 1 * time.Millisecond
+	defer func() { cmd.AgentPollInterval = origPoll }()
+
+	fetcher := newRunningEC2Sandbox("sb-results02")
+	mockEB := &mockAgentEB{}
+	mockSSM := &mockResultsSSM{
+		cmdIDs: []string{"cmd-cat-specific"},
+		invByCmd: map[string]*ssm.GetCommandInvocationOutput{
+			"cmd-cat-specific": {
+				Status:                ssmtypes.CommandInvocationStatusSuccess,
+				StandardOutputContent: awssdk.String(`{"result":"specific run"}`),
+			},
+		},
+	}
+
+	cfg := &config.Config{}
+	root := &cobra.Command{Use: "km"}
+	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB)
+	root.AddCommand(agentCmd)
+
+	var buf strings.Builder
+	root.SetOut(&buf)
+
+	root.SetArgs([]string{"agent", "results", "sb-results02", "--run", "20260410T143000Z"})
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Only 1 SendCommand (cat, no ls)
+	if len(mockSSM.sendCalls) != 1 {
+		t.Fatalf("expected 1 SendCommand call with --run, got %d", len(mockSSM.sendCalls))
+	}
+
+	// Verify the command references the specific run ID
+	call := mockSSM.sendCalls[0]
+	cmds := call.Parameters["commands"]
+	if len(cmds) == 0 || !strings.Contains(cmds[0], "20260410T143000Z") {
+		t.Errorf("expected cat command to reference run ID 20260410T143000Z, got: %v", cmds)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, `"result":"specific run"`) {
+		t.Errorf("expected specific run output, got: %s", output)
+	}
+}
+
+// TestAgentResults_NoRuns verifies that when no runs exist, an appropriate message is shown.
+func TestAgentResults_NoRuns(t *testing.T) {
+	origPoll := cmd.AgentPollInterval
+	cmd.AgentPollInterval = 1 * time.Millisecond
+	defer func() { cmd.AgentPollInterval = origPoll }()
+
+	fetcher := newRunningEC2Sandbox("sb-results03")
+	mockEB := &mockAgentEB{}
+	mockSSM := &mockResultsSSM{
+		cmdIDs: []string{"cmd-ls-empty"},
+		invByCmd: map[string]*ssm.GetCommandInvocationOutput{
+			"cmd-ls-empty": {
+				Status:                ssmtypes.CommandInvocationStatusSuccess,
+				StandardOutputContent: awssdk.String(""),
+			},
+		},
+	}
+
+	cfg := &config.Config{}
+	root := &cobra.Command{Use: "km"}
+	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB)
+	root.AddCommand(agentCmd)
+
+	var buf strings.Builder
+	root.SetOut(&buf)
+
+	root.SetArgs([]string{"agent", "results", "sb-results03"})
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "no agent runs found") {
+		t.Errorf("expected 'no agent runs found' message, got: %s", output)
+	}
+}
+
+// TestAgentList verifies that `km agent list <sandbox-id>` enumerates runs
+// with status and output size in a formatted table.
+func TestAgentList(t *testing.T) {
+	origPoll := cmd.AgentPollInterval
+	cmd.AgentPollInterval = 1 * time.Millisecond
+	defer func() { cmd.AgentPollInterval = origPoll }()
+
+	fetcher := newRunningEC2Sandbox("sb-list01")
+	mockEB := &mockAgentEB{}
+	mockSSM := &mockResultsSSM{
+		cmdIDs: []string{"cmd-list-runs"},
+		invByCmd: map[string]*ssm.GetCommandInvocationOutput{
+			"cmd-list-runs": {
+				Status: ssmtypes.CommandInvocationStatusSuccess,
+				StandardOutputContent: awssdk.String(
+					"20260410T150000Z|complete|4096\n20260410T143000Z|running|0\n20260410T120000Z|failed|1024\n",
+				),
+			},
+		},
+	}
+
+	cfg := &config.Config{}
+	root := &cobra.Command{Use: "km"}
+	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB)
+	root.AddCommand(agentCmd)
+
+	var buf strings.Builder
+	root.SetOut(&buf)
+
+	root.SetArgs([]string{"agent", "list", "sb-list01"})
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	output := buf.String()
+
+	// Verify all three runs appear
+	for _, runID := range []string{"20260410T150000Z", "20260410T143000Z", "20260410T120000Z"} {
+		if !strings.Contains(output, runID) {
+			t.Errorf("expected run ID %s in output, got: %s", runID, output)
+		}
+	}
+
+	// Verify statuses appear
+	for _, status := range []string{"complete", "running", "failed"} {
+		if !strings.Contains(output, status) {
+			t.Errorf("expected status %q in output, got: %s", status, output)
+		}
+	}
+}
