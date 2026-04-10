@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 50-01-PLAN.md
-last_updated: "2026-04-10T17:35:43.243Z"
+stopped_at: Completed 50-02-PLAN.md
+last_updated: "2026-04-10T17:41:14.006Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 50
-  completed_phases: 46
+  completed_phases: 47
   total_plans: 148
-  completed_plans: 148
+  completed_plans: 149
   percent: 0
 ---
 
@@ -191,6 +191,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 48-profile-override-flags-for-km-create-targeted-budget-flags-and-generic-set P01 | 454 | 1 tasks | 3 files |
 | Phase 48-profile-override-flags-for-km-create-targeted-budget-flags-and-generic-set P02 | 10min | 2 tasks | 4 files |
 | Phase 50 P01 | 5min | 1 tasks | 3 files |
+| Phase 50 P02 | 3min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -525,6 +526,7 @@ Recent decisions affecting current work:
 - [Phase 48]: IdleAction derived in compiler via idleActionFromProfile() — not in create.go — since compiler already receives TTL='' sentinel from Plan 01 overrides
 - [Phase 48]: buildIdleCallback extracted as package-level func for unit testability; AfterFunc(2min) delay for hibernate/resume cycle before re-arm
 - [Phase 50]: Moved NewAgentCmd from shell.go to agent.go for module separation; base64 prompt encoding for injection prevention
+- [Phase 50]: Accepted SSM 24KB truncation with warning; sendSSMAndWait helper for DRY SSM command+poll
 
 ### Roadmap Evolution
 
@@ -586,6 +588,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-10T17:35:43.238Z
-Stopped at: Completed 50-01-PLAN.md
+Last session: 2026-04-10T17:41:14.002Z
+Stopped at: Completed 50-02-PLAN.md
 Resume file: None
