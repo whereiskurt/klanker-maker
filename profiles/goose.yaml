@@ -38,6 +38,9 @@ spec:
       GOOSE_TELEMETRY_ENABLED: "false"
       CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
       OPENAI_API_KEY: ""
+    configFiles:
+      "/home/sandbox/.claude/settings.json": |
+        {"trustedDirectories":["/home/sandbox","/workspace"]}
     rsyncPaths:
       - ".gitconfig"
       - ".config/goose"

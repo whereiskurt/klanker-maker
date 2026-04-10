@@ -245,6 +245,8 @@ func runAgent(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 // on the sandbox, and either returns immediately (fire-and-forget) or waits for
 // completion with idle-reset heartbeats.
 func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI, ebClient kmaws.EventBridgeAPI, sandboxID, prompt string, wait, noBedrock, autoStart bool) error {
+	printBanner("km agent run", sandboxID)
+
 	// Initialize real clients if not injected
 	if fetcher == nil {
 		if cfg.StateBucket == "" {
@@ -358,15 +360,25 @@ func waitForAgentCompletion(ctx context.Context, ssmClient SSMSendAPI, ebClient 
 
 	fmt.Fprintf(os.Stdout, "Waiting for agent to complete...")
 
-	// Poll every 10 seconds for up to 8 hours
-	maxAttempts := 2880 // 8 hours at 10s intervals
-	for i := 0; i < maxAttempts; i++ {
+	// Poll with fast start: 2s, 3s, 5s, then 10s steady state.
+	// Total timeout ~8 hours.
+	pollDelay := 2 * time.Second
+	maxDuration := 8 * time.Hour
+	deadline := time.Now().Add(maxDuration)
+	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			heartbeatCancel()
 			wg.Wait()
 			return ctx.Err()
-		case <-time.After(AgentPollInterval):
+		case <-time.After(pollDelay):
+		}
+		// Ramp up: 2s → 3s → 5s → 10s
+		if pollDelay < AgentPollInterval {
+			pollDelay = pollDelay * 3 / 2
+			if pollDelay > AgentPollInterval {
+				pollDelay = AgentPollInterval
+			}
 		}
 
 		inv, err := ssmClient.GetCommandInvocation(ctx, &ssm.GetCommandInvocationInput{
@@ -821,13 +833,19 @@ func BuildAgentShellCommands(prompt string, artifactsBucket string, noBedrock ..
 unset ANTHROPIC_BASE_URL
 unset ANTHROPIC_DEFAULT_SONNET_MODEL
 unset ANTHROPIC_DEFAULT_HAIKU_MODEL
-unset ANTHROPIC_DEFAULT_OPUS_MODEL`
+unset ANTHROPIC_DEFAULT_OPUS_MODEL
+# Extract OAuth token from Claude credentials for --bare mode (which skips OAuth)
+if [ -z "$ANTHROPIC_API_KEY" ] && [ -f "$HOME/.claude/.credentials.json" ]; then
+  OAUTH_TOKEN=$(python3 -c "import json; d=json.load(open('$HOME/.claude/.credentials.json')); print(d.get('claudeAiOauth',{}).get('accessToken',''))" 2>/dev/null)
+  if [ -n "$OAUTH_TOKEN" ]; then export ANTHROPIC_API_KEY="$OAUTH_TOKEN"; fi
+fi`
 	}
 
 	// Write a bash script to a temp file, then execute as sandbox user.
 	// SSM RunShellScript treats each array element as a separate line;
 	// using a heredoc-to-file avoids newline-collapsing issues.
 	script := fmt.Sprintf(`#!/bin/bash
+export HOME=/home/sandbox
 source /etc/profile.d/km-profile-env.sh 2>/dev/null
 source /etc/profile.d/km-identity.sh 2>/dev/null
 %s

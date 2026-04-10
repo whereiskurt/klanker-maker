@@ -42,6 +42,7 @@ func NewShellCmd(cfg *config.Config) *cobra.Command {
 // exec function. Pass nil for real AWS-backed clients. Used in tests for DI.
 func NewShellCmdWithFetcher(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc) *cobra.Command {
 	var asRoot bool
+	var noBedrock bool
 	var ports []string
 	var learn bool
 	var learnOutput string
@@ -72,7 +73,7 @@ Port forwarding:
 				return runPortForward(cmd, cfg, fetcher, execFn, sandboxID, ports)
 			}
 			// Run the shell (blocks until user exits).
-			_ = runShell(cmd, cfg, fetcher, execFn, sandboxID, asRoot)
+			_ = runShell(cmd, cfg, fetcher, execFn, sandboxID, asRoot, noBedrock)
 
 			// --learn post-exit: generate profile from observed traffic.
 			if learn {
@@ -83,6 +84,7 @@ Port forwarding:
 	}
 
 	cmd.Flags().BoolVar(&asRoot, "root", false, "Connect as root instead of the restricted sandbox user")
+	cmd.Flags().BoolVar(&noBedrock, "no-bedrock", false, "Unset Bedrock env vars (use direct Anthropic API)")
 	cmd.Flags().StringSliceVar(&ports, "ports", nil, "Port forwards: 8080, 8080:80, or comma-separated list")
 	cmd.Flags().BoolVar(&learn, "learn", false, "Run in learning mode: observe traffic and generate profile on exit")
 	cmd.Flags().StringVar(&learnOutput, "learn-output", "observed-profile.yaml", "Path to write the generated SandboxProfile YAML (default: observed-profile.yaml in CWD)")
@@ -91,8 +93,9 @@ Port forwarding:
 }
 
 // runShell is the command RunE logic for km shell.
-func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, sandboxID string, asRoot ...bool) error {
-	root := len(asRoot) > 0 && asRoot[0]
+func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, sandboxID string, flags ...bool) error {
+	root := len(flags) > 0 && flags[0]
+	noBedrock := len(flags) > 1 && flags[1]
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -129,7 +132,7 @@ func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 		if err != nil {
 			return fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
 		}
-		return execSSMSession(ctx, instanceID, rec.Region, root, execFn)
+		return execSSMSession(ctx, instanceID, rec.Region, root, noBedrock, execFn)
 	case "ecs":
 		clusterARN, err := findResourceARN(rec.Resources, ":cluster/")
 		if err != nil {
@@ -152,7 +155,7 @@ func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 // execSSMSession builds and runs an SSM session.
 // When root is false, it runs: sudo -u sandbox -i (restricted non-root user).
 // When root is true, it starts a standard root SSM session.
-func execSSMSession(ctx context.Context, instanceID, region string, root bool, execFn ShellExecFunc) error {
+func execSSMSession(ctx context.Context, instanceID, region string, root, noBedrock bool, execFn ShellExecFunc) error {
 	if root {
 		c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
 			"--target", instanceID, "--region", region, "--profile", "klanker-terraform")
@@ -163,6 +166,35 @@ func execSSMSession(ctx context.Context, instanceID, region string, root bool, e
 	}
 
 	// Non-root: use SSM document to start session as 'sandbox' user
+	if noBedrock {
+		// Deploy a profile.d script that unsets Bedrock vars (runs last due to zz- prefix).
+		// Uses SSM SendCommand then starts the interactive session. Cleaned up on exit.
+		awsCfg, ssmErr := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+		if ssmErr == nil {
+			ssmClient := ssm.NewFromConfig(awsCfg)
+			_, _ = ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
+				InstanceIds:  []string{instanceID},
+				DocumentName: awssdk.String("AWS-RunShellScript"),
+				Parameters: map[string][]string{
+					"commands": {
+						`echo 'unset CLAUDE_CODE_USE_BEDROCK ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL' > /etc/profile.d/zz-km-no-bedrock.sh`,
+						`chmod 644 /etc/profile.d/zz-km-no-bedrock.sh`,
+					},
+				},
+			})
+			time.Sleep(2 * time.Second)
+
+			// Clean up after session exits
+			defer func() {
+				_, _ = ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
+					InstanceIds:  []string{instanceID},
+					DocumentName: awssdk.String("AWS-RunShellScript"),
+					Parameters:   map[string][]string{"commands": {"rm -f /etc/profile.d/zz-km-no-bedrock.sh"}},
+				})
+			}()
+		}
+	}
+
 	c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
 		"--target", instanceID, "--region", region, "--profile", "klanker-terraform",
 		"--document-name", "AWS-StartInteractiveCommand",

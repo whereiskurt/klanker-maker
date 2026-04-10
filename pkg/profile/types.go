@@ -197,6 +197,16 @@ type ExecutionSpec struct {
 	// has no sudo capability. Operators who want to remove sudo entirely
 	// from the instance can use a custom AMI without sudo installed.
 	Privileged bool `yaml:"privileged,omitempty"`
+	// ConfigFiles is a map of absolute file paths to their contents.
+	// Each entry is written to the sandbox filesystem during bootstrap,
+	// owned by the sandbox user. Use this to pre-seed tool configuration
+	// (e.g. Claude settings.json, Goose config, .gitconfig).
+	//
+	// Example:
+	//   configFiles:
+	//     "/home/sandbox/.claude/settings.json": |
+	//       {"trustedDirectories":["/home/sandbox","/workspace"]}
+	ConfigFiles map[string]string `yaml:"configFiles,omitempty"`
 }
 
 // SourceAccessSpec controls access to source code repositories.

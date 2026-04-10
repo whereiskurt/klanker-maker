@@ -1541,6 +1541,19 @@ aws s3 cp "s3://{{ .KMArtifactsBucket }}/rsync/{{ .Rsync }}.tar.gz" /tmp/km-rsyn
   echo "[km-bootstrap] Rsync snapshot {{ .Rsync }} restored into $SHELL_HOME"
 } || echo "[km-bootstrap] WARNING: rsync snapshot {{ .Rsync }} not found in S3 (skipped)"
 {{- end }}
+{{- if .ConfigFiles }}
+# ============================================================
+# 7.4. Config files (from profile spec.execution.configFiles)
+# ============================================================
+{{- range $path, $content := .ConfigFiles }}
+mkdir -p "$(dirname '{{ $path }}')"
+cat > '{{ $path }}' << 'KM_CONFIG_EOF'
+{{ $content }}
+KM_CONFIG_EOF
+chown sandbox:sandbox '{{ $path }}'
+echo "[km-bootstrap] Config file written: {{ $path }}"
+{{- end }}
+{{- end }}
 {{- if or .InitCommands .InitScripts }}
 # ============================================================
 # 7.5. Profile init (commands + scripts downloaded from S3)
@@ -1626,6 +1639,8 @@ type userDataParams struct {
 	InitCommands []string
 	// InitScripts is a list of S3 keys for init scripts to download and execute.
 	InitScripts []string
+	// ConfigFiles maps absolute paths to file contents to write during bootstrap.
+	ConfigFiles map[string]string
 	// ProfileEnv holds key=value pairs from profile spec.execution.env to export
 	// via /etc/profile.d/ so they're available in all login shells (SSM sessions).
 	ProfileEnv map[string]string
@@ -1798,6 +1813,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 	params.Rsync = p.Spec.Execution.Rsync
 	params.InitCommands = p.Spec.Execution.InitCommands
 	params.InitScripts = p.Spec.Execution.InitScripts
+	params.ConfigFiles = p.Spec.Execution.ConfigFiles
 	params.ProfileEnv = mergeBedrockEnv(p)
 
 	// Populate Claude Code OTEL telemetry fields (OTEL-01, OTEL-06).

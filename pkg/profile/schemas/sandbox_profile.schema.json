@@ -289,6 +289,11 @@
             "privileged": {
               "type": "boolean",
               "description": "Grants the sandbox user wheel group membership and passwordless sudo access. When false (default), the sandbox user has no sudo capability."
+            },
+            "configFiles": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "Map of absolute file paths to contents, written to sandbox during bootstrap. Use to pre-seed tool config (e.g. Claude settings.json)."
             }
           }
         },

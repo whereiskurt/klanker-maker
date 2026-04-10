@@ -143,7 +143,6 @@ func TestAgentNonInteractive_CommandConstruction(t *testing.T) {
 		"claude -p",
 		"--output-format json",
 		"--dangerously-skip-permissions",
-		"--bare",
 	}
 	for _, part := range requiredParts {
 		if !strings.Contains(shellCmd, part) {
