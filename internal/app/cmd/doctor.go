@@ -1165,7 +1165,7 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 		}
 		launch := ""
 		if inst.LaunchTime != nil {
-			launch = inst.LaunchTime.Format("2006-01-02 15:04")
+			launch = inst.LaunchTime.Format("01/02 15:04")
 		}
 		orphans = append(orphans, orphan{
 			instanceID: awssdk.ToString(inst.InstanceId),
