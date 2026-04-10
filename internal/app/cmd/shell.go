@@ -36,59 +36,7 @@ func NewShellCmd(cfg *config.Config) *cobra.Command {
 	return NewShellCmdWithFetcher(cfg, nil, nil)
 }
 
-// NewAgentCmd creates the "km agent" command that launches an AI agent inside a sandbox.
-func NewAgentCmd(cfg *config.Config) *cobra.Command {
-	var useClaude bool
-	var useCodex bool
-
-	cmd := &cobra.Command{
-		Use:          "agent <sandbox-id | #number> [-- extra-args...]",
-		Short:        "Launch an AI coding agent inside a sandbox",
-		Long: `Launch an AI coding agent inside a running sandbox via SSM.
-
-Connects as the sandbox user and runs the selected agent binary.
-Extra arguments after -- are passed through to the agent.
-
-Examples:
-  km agent 1 --claude                    # interactive claude session
-  km agent 1 --claude -- -p "fix tests"  # pass args to claude
-  km agent #2 --codex                    # launch codex (future)`,
-		Args:         cobra.MinimumNArgs(1),
-		SilenceUsage: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-			if ctx == nil {
-				ctx = context.Background()
-			}
-			sandboxID, err := ResolveSandboxID(ctx, cfg, args[0])
-			if err != nil {
-				return err
-			}
-
-			var agentCmd string
-			switch {
-			case useClaude:
-				agentCmd = "claude"
-			case useCodex:
-				agentCmd = "codex"
-			default:
-				return fmt.Errorf("specify an agent: --claude or --codex")
-			}
-
-			// Pass any extra args after the sandbox ID
-			if len(args) > 1 {
-				agentCmd += " " + strings.Join(args[1:], " ")
-			}
-
-			return runAgent(cmd, cfg, nil, nil, sandboxID, agentCmd)
-		},
-	}
-
-	cmd.Flags().BoolVar(&useClaude, "claude", false, "Launch Claude Code")
-	cmd.Flags().BoolVar(&useCodex, "codex", false, "Launch OpenAI Codex (future)")
-
-	return cmd
-}
+// NOTE: NewAgentCmd has been moved to agent.go with support for the "run" subcommand.
 
 // NewShellCmdWithFetcher builds the shell command with an optional custom fetcher and
 // exec function. Pass nil for real AWS-backed clients. Used in tests for DI.
@@ -199,55 +147,7 @@ func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 	}
 }
 
-// runAgent launches claude inside a sandbox via SSM.
-func runAgent(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, sandboxID, claudeCmd string) error {
-	ctx := cmd.Context()
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	if fetcher == nil {
-		if cfg.StateBucket == "" {
-			return fmt.Errorf("state bucket not configured")
-		}
-		awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
-		if err != nil {
-			return fmt.Errorf("load AWS config: %w", err)
-		}
-		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, func() string { t := cfg.SandboxTableName; if t == "" { t = "km-sandboxes" }; return t }())
-	}
-	if execFn == nil {
-		execFn = defaultShellExec
-	}
-
-	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
-	if err != nil {
-		return fmt.Errorf("fetch sandbox: %w", err)
-	}
-	if rec.Status == "stopped" {
-		return fmt.Errorf("sandbox %s is stopped", sandboxID)
-	}
-
-	instanceID, err := extractResourceID(rec.Resources, ":instance/")
-	if err != nil {
-		return fmt.Errorf("find EC2 instance: %w", err)
-	}
-
-	// Open an interactive login shell as sandbox user that auto-execs the agent.
-	// sudo -u sandbox -i gives a login shell with PTY (required for Claude's TUI).
-	// We pass the agent command via an env var and use .bashrc-style exec trick:
-	// bash --rcfile <(script) gives us both PTY and auto-exec.
-	c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
-		"--target", instanceID, "--region", rec.Region, "--profile", "klanker-terraform",
-		"--document-name", "AWS-StartInteractiveCommand",
-		"--parameters", fmt.Sprintf(
-			`{"command":["sudo -u sandbox -i bash -c 'source /etc/profile.d/km-profile-env.sh 2>/dev/null; source /etc/profile.d/km-identity.sh 2>/dev/null; cd /workspace; exec %s'"]}`,
-			claudeCmd))
-	c.Stdin = os.Stdin
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
-	return execFn(c)
-}
+// NOTE: runAgent has been moved to agent.go.
 
 // execSSMSession builds and runs an SSM session.
 // When root is false, it runs: sudo -u sandbox -i (restricted non-root user).
