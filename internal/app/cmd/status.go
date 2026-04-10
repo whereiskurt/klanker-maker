@@ -488,7 +488,37 @@ func computeIdleRemaining(ctx context.Context, sandboxID, idleTimeout string, cr
 	// Determine the most recent activity timestamp from multiple signals.
 	lastActivity := createdAt
 
-	// Signal 1: CloudWatch audit events (shell commands, heartbeats)
+	// Signal 1: EC2 instance launch/resume time — captures when the instance
+	// entered "running" state, including after hibernate resume. This prevents
+	// showing "imminent" immediately after resume when no audit events exist yet.
+	ec2Client := ec2.NewFromConfig(awsCfg)
+	descOut, descErr := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		Filters: []ec2types.Filter{
+			{Name: awssdk.String("tag:km:sandbox-id"), Values: []string{sandboxID}},
+			{Name: awssdk.String("instance-state-name"), Values: []string{"running"}},
+		},
+	})
+	if descErr == nil {
+		for _, res := range descOut.Reservations {
+			for _, inst := range res.Instances {
+				// StateTransitionReason contains the timestamp when the instance
+				// entered running state (e.g. after resume). LaunchTime is the
+				// original launch and doesn't change on hibernate/resume.
+				// Use the later of LaunchTime and the transition reason timestamp.
+				if inst.LaunchTime != nil && inst.LaunchTime.After(lastActivity) {
+					lastActivity = *inst.LaunchTime
+				}
+				// Parse transition reason for resume timestamp (format: "User initiated (YYYY-MM-DD HH:MM:SS GMT)")
+				if reason := awssdk.ToString(inst.StateTransitionReason); reason != "" {
+					if t, parseErr := parseStateTransitionTime(reason); parseErr == nil && t.After(lastActivity) {
+						lastActivity = t
+					}
+				}
+			}
+		}
+	}
+
+	// Signal 2: CloudWatch audit events (shell commands, heartbeats)
 	cwClient := cloudwatchlogs.NewFromConfig(awsCfg)
 	logGroup := "/km/sandboxes/" + sandboxID + "/"
 	events, err := kmaws.GetLogEvents(ctx, cwClient, logGroup, "audit", 10)
@@ -500,12 +530,12 @@ func computeIdleRemaining(ctx context.Context, sandboxID, idleTimeout string, cr
 		}
 	}
 
-	// Signal 2: Budget AI spend updates (Bedrock/API usage)
+	// Signal 3: Budget AI spend updates (Bedrock/API usage)
 	if budget != nil && budget.LastAIActivity != nil && budget.LastAIActivity.After(lastActivity) {
 		lastActivity = *budget.LastAIActivity
 	}
 
-	// Signal 3: Active SSM sessions — if any session is connected, sandbox is in use.
+	// Signal 4: Active SSM sessions — if any session is connected, sandbox is in use.
 	if hasActiveSSMSession(ctx, awsCfg, sandboxID) {
 		lastActivity = time.Now()
 	}
@@ -515,6 +545,17 @@ func computeIdleRemaining(ctx context.Context, sandboxID, idleTimeout string, cr
 		remaining = 0
 	}
 	return remaining.Round(time.Second)
+}
+
+// parseStateTransitionTime extracts the timestamp from an EC2 StateTransitionReason string.
+// Format: "User initiated (2026-04-10 13:45:22 GMT)" — returns the parsed time or error.
+func parseStateTransitionTime(reason string) (time.Time, error) {
+	start := strings.Index(reason, "(")
+	end := strings.Index(reason, ")")
+	if start < 0 || end < 0 || end <= start+1 {
+		return time.Time{}, fmt.Errorf("no timestamp in reason: %s", reason)
+	}
+	return time.Parse("2006-01-02 15:04:05 MST", reason[start+1:end])
 }
 
 // formatIdleLabel returns a human-readable idle countdown, optionally color-coded.
