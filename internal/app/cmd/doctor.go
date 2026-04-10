@@ -1183,15 +1183,16 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 		}
 	}
 
-	// Build a detail message listing each orphan.
-	details := make([]string, 0, len(orphans))
+	// Build a detail message with each orphan on its own indented line.
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "found %d orphaned EC2 instances (no DynamoDB record):", len(orphans))
 	for _, o := range orphans {
-		details = append(details, fmt.Sprintf("%s (%s, %s, launched %s)", o.instanceID, o.sandboxID, o.state, o.launchTime))
+		fmt.Fprintf(&sb, "\n\t%-19s  %-20s  %-8s  launched %s", o.instanceID, o.sandboxID, o.state, o.launchTime)
 	}
 	return CheckResult{
 		Name:        name,
 		Status:      CheckWarn,
-		Message:     fmt.Sprintf("found %d orphaned EC2 instances (no DynamoDB record): %s", len(orphans), strings.Join(details, "; ")),
+		Message:     sb.String(),
 		Remediation: "Run 'km destroy <sandbox-id> --remote --yes' for each orphan, or terminate manually in the AWS console",
 	}
 }
@@ -1267,6 +1268,27 @@ func boolToInt(b bool) int {
 // Output formatting
 // =============================================================================
 
+// boldNumbers wraps sequences of digits in ANSI bold for TTY output.
+// e.g. "found 3 stale keys" → "found \033[1m3\033[0m stale keys"
+func boldNumbers(s string) string {
+	var result strings.Builder
+	i := 0
+	for i < len(s) {
+		if s[i] >= '0' && s[i] <= '9' {
+			result.WriteString(ansiBold)
+			for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+				result.WriteByte(s[i])
+				i++
+			}
+			result.WriteString(ansiReset)
+		} else {
+			result.WriteByte(s[i])
+			i++
+		}
+	}
+	return result.String()
+}
+
 // formatCheckLine returns a human-readable line for a check result.
 // Colors are applied when isTTY is true. Remediation is printed on an indented line.
 func formatCheckLine(r CheckResult, isTTY bool) string {
@@ -1286,9 +1308,14 @@ func formatCheckLine(r CheckResult, isTTY bool) string {
 		colorCode = ""
 	}
 
+	msg := r.Message
+	if isTTY && (r.Status == CheckWarn || r.Status == CheckError) {
+		msg = boldNumbers(msg)
+	}
+
 	var line string
 	if isTTY && colorCode != "" {
-		line = fmt.Sprintf("%s%s%s %-35s %s", colorCode, symbol, ansiReset, r.Name, r.Message)
+		line = fmt.Sprintf("%s%s%s %-35s %s", colorCode, symbol, ansiReset, r.Name, msg)
 	} else {
 		line = fmt.Sprintf("%s %-35s %s", symbol, r.Name, r.Message)
 	}
