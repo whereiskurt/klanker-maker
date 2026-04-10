@@ -1125,7 +1125,7 @@ Plans:
 **Goal:** Extend `km agent` with `--prompt` flag for fire-and-forget non-interactive Claude execution inside sandboxes. SSM send-command runs `claude --json --dangerously-skip-permissions -p "..."`, output lands at `/workspace/.km-agent/runs/<timestamp>/output.json`. Add `km agent results` to fetch run output, `km agent list` to list runs. Background idle-reset keeps sandbox alive while agent is running.
 **Requirements:** [AGENT-01, AGENT-02, AGENT-03, AGENT-04, AGENT-05, AGENT-06, AGENT-07, AGENT-08]
 **Depends on:** None (extends existing km agent from Phase 34)
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 50-01-PLAN.md -- Cobra restructure, --prompt flag, non-interactive fire-and-forget via SSM SendCommand, idle-reset heartbeat
