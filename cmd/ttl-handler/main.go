@@ -240,7 +240,9 @@ func (h *TTLHandler) handleStop(ctx context.Context, event TTLEvent) error {
 	return nil
 }
 
-// handleResume starts a stopped EC2 instance.
+// handleResume starts a stopped EC2 instance, updates DynamoDB status to
+// "running", and recreates the TTL schedule based on the profile's TTL duration
+// (counting from now). This ensures resumed sandboxes don't run indefinitely.
 func (h *TTLHandler) handleResume(ctx context.Context, event TTLEvent) error {
 	log.Info().Str("sandbox_id", event.SandboxID).Msg("resume event received")
 
@@ -260,6 +262,7 @@ func (h *TTLHandler) handleResume(ctx context.Context, event TTLEvent) error {
 		return fmt.Errorf("describe instances: %w", err)
 	}
 
+	var resumedCount int
 	for _, res := range descOut.Reservations {
 		for _, inst := range res.Instances {
 			instanceID := awssdk.ToString(inst.InstanceId)
@@ -270,10 +273,76 @@ func (h *TTLHandler) handleResume(ctx context.Context, event TTLEvent) error {
 			if err != nil {
 				return fmt.Errorf("start instance %s: %w", instanceID, err)
 			}
+			resumedCount++
 		}
 	}
 
-	log.Info().Str("sandbox_id", event.SandboxID).Msg("sandbox resumed")
+	if resumedCount == 0 {
+		log.Warn().Str("sandbox_id", event.SandboxID).Msg("no stopped instances found to resume")
+		return nil
+	}
+
+	// Update DynamoDB status to running.
+	if h.DynamoClient != nil {
+		if statusErr := awspkg.UpdateSandboxStatusDynamo(ctx, h.DynamoClient, h.SandboxTableName, event.SandboxID, "running"); statusErr != nil {
+			log.Warn().Err(statusErr).Str("sandbox_id", event.SandboxID).Msg("failed to update DynamoDB status (non-fatal)")
+		}
+	}
+
+	// Recreate TTL schedule from the profile's TTL duration, counting from now.
+	// This ensures resumed sandboxes don't run indefinitely without a TTL.
+	profileBytes, profileErr := downloadProfileFromS3(ctx, h.S3Client, h.Bucket, event.SandboxID)
+	if profileErr == nil {
+		p, parseErr := profilepkg.Parse(profileBytes)
+		if parseErr == nil && p != nil && p.Spec.Lifecycle.TTL != "" && p.Spec.Lifecycle.TTL != "0" {
+			ttlDuration, durErr := time.ParseDuration(p.Spec.Lifecycle.TTL)
+			if durErr == nil {
+				newExpiry := time.Now().Add(ttlDuration)
+
+				// Discover Lambda ARN and scheduler role.
+				lambdaClient := lambdapkg.NewFromConfig(awsCfg)
+				fnOut, fnErr := lambdaClient.GetFunction(ctx, &lambdapkg.GetFunctionInput{
+					FunctionName: awssdk.String("km-ttl-handler"),
+				})
+				iamClient := iampkg.NewFromConfig(awsCfg)
+				roleOut, roleErr := iamClient.GetRole(ctx, &iampkg.GetRoleInput{
+					RoleName: awssdk.String("km-ttl-scheduler"),
+				})
+
+				if fnErr == nil && roleErr == nil {
+					schedulerClient := scheduler.NewFromConfig(awsCfg)
+					schedInput := compiler.BuildTTLScheduleInput(event.SandboxID, newExpiry,
+						awssdk.ToString(fnOut.Configuration.FunctionArn),
+						awssdk.ToString(roleOut.Role.Arn))
+					if schedErr := awspkg.CreateTTLSchedule(ctx, schedulerClient, schedInput); schedErr != nil {
+						log.Warn().Err(schedErr).Str("sandbox_id", event.SandboxID).Msg("failed to recreate TTL schedule (non-fatal)")
+					} else {
+						log.Info().Str("sandbox_id", event.SandboxID).Time("ttl_expiry", newExpiry).Msg("TTL schedule recreated")
+					}
+
+					// Update TTL expiry in DynamoDB metadata.
+					if h.DynamoClient != nil {
+						meta, readErr := awspkg.ReadSandboxMetadataDynamo(ctx, h.DynamoClient, h.SandboxTableName, event.SandboxID)
+						if readErr == nil {
+							meta.TTLExpiry = &newExpiry
+							awspkg.WriteSandboxMetadataDynamo(ctx, h.DynamoClient, h.SandboxTableName, meta)
+						}
+					}
+				} else {
+					if fnErr != nil {
+						log.Warn().Err(fnErr).Msg("could not discover Lambda ARN for TTL schedule")
+					}
+					if roleErr != nil {
+						log.Warn().Err(roleErr).Msg("could not discover scheduler role for TTL schedule")
+					}
+				}
+			}
+		}
+	} else {
+		log.Warn().Err(profileErr).Str("sandbox_id", event.SandboxID).Msg("could not load profile for TTL schedule recreation")
+	}
+
+	log.Info().Str("sandbox_id", event.SandboxID).Int("instances_resumed", resumedCount).Msg("sandbox resumed")
 	return nil
 }
 
