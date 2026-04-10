@@ -147,6 +147,9 @@ func (h *TTLHandler) HandleTTLEvent(ctx context.Context, event TTLEvent) error {
 }
 
 // handleStop stops the EC2 instance without destroying infrastructure.
+// Updates DynamoDB status to "stopped" or "paused" (hibernated) so km list
+// reflects the actual state. Deletes the TTL schedule since the sandbox is
+// now stopped and shouldn't be destroyed on TTL expiry.
 func (h *TTLHandler) handleStop(ctx context.Context, event TTLEvent) error {
 	log.Info().Str("sandbox_id", event.SandboxID).Msg("stop event received")
 
@@ -169,6 +172,7 @@ func (h *TTLHandler) handleStop(ctx context.Context, event TTLEvent) error {
 		return fmt.Errorf("describe instances: %w", err)
 	}
 
+	var stoppedCount int
 	for _, res := range descOut.Reservations {
 		for _, inst := range res.Instances {
 			instanceID := awssdk.ToString(inst.InstanceId)
@@ -203,10 +207,36 @@ func (h *TTLHandler) handleStop(ctx context.Context, event TTLEvent) error {
 					return fmt.Errorf("stop instance %s: %w", instanceID, err)
 				}
 			}
+			stoppedCount++
 		}
 	}
 
-	log.Info().Str("sandbox_id", event.SandboxID).Msg("sandbox stopped")
+	if stoppedCount == 0 {
+		log.Warn().Str("sandbox_id", event.SandboxID).Msg("no running instances found to stop")
+		return nil
+	}
+
+	// Update DynamoDB status so km list reflects actual state.
+	if h.DynamoClient != nil {
+		status := "stopped"
+		if hibernate {
+			status = "paused"
+		}
+		if statusErr := awspkg.UpdateSandboxStatusDynamo(ctx, h.DynamoClient, h.SandboxTableName, event.SandboxID, status); statusErr != nil {
+			log.Warn().Err(statusErr).Str("sandbox_id", event.SandboxID).Msg("failed to update DynamoDB status (non-fatal)")
+		} else {
+			log.Info().Str("sandbox_id", event.SandboxID).Str("status", status).Msg("DynamoDB status updated")
+		}
+	}
+
+	// Delete TTL schedule — stopped sandbox shouldn't be destroyed on TTL expiry.
+	if h.Scheduler != nil {
+		if schedErr := awspkg.DeleteTTLSchedule(ctx, h.Scheduler, event.SandboxID); schedErr != nil {
+			log.Warn().Err(schedErr).Str("sandbox_id", event.SandboxID).Msg("failed to delete TTL schedule (non-fatal)")
+		}
+	}
+
+	log.Info().Str("sandbox_id", event.SandboxID).Int("instances_stopped", stoppedCount).Msg("sandbox stopped")
 	return nil
 }
 

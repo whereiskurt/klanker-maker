@@ -158,6 +158,8 @@ resource "aws_iam_role_policy" "terraform_destroy" {
         Effect = "Allow"
         Action = [
           "ec2:TerminateInstances",
+          "ec2:StopInstances",
+          "ec2:StartInstances",
           "ec2:DescribeInstances",
           "ec2:CancelSpotInstanceRequests",
           "ec2:DescribeSpotInstanceRequests",
@@ -478,6 +480,8 @@ resource "aws_iam_role_policy" "ec2_teardown" {
       Effect = "Allow"
       Action = [
         "ec2:TerminateInstances",
+        "ec2:StopInstances",
+        "ec2:StartInstances",
         "ec2:DescribeInstances",
       ]
       Resource = "*"
