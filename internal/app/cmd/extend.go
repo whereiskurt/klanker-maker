@@ -32,12 +32,13 @@ func NewExtendCmd(cfg *config.Config) *cobra.Command {
 // Used in tests to inject a mock publisher for --remote path testing.
 func NewExtendCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) *cobra.Command {
 	var remote bool
+	var idleOverride string
 
 	cmd := &cobra.Command{
-		Use:          "extend <sandbox-id | #number> <duration>",
-		Short:        "Extend a sandbox's TTL by the given duration",
+		Use:          "extend <sandbox-id | #number> [duration]",
+		Short:        "Extend a sandbox's TTL or change idle timeout",
 		Long:         helpText("extend"),
-		Args:         cobra.ExactArgs(2),
+		Args:         cobra.RangeArgs(1, 2),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -48,22 +49,52 @@ func NewExtendCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) *
 			if err != nil {
 				return err
 			}
+
+			// Determine TTL duration (positional arg, optional when --idle is used)
+			var ttlDuration time.Duration
+			hasTTL := len(args) >= 2
+			if hasTTL {
+				ttlDuration, err = time.ParseDuration(args[1])
+				if err != nil {
+					return fmt.Errorf("invalid duration %q: %w (examples: 1h, 30m, 2h30m)", args[1], err)
+				}
+			}
+
+			if !hasTTL && idleOverride == "" {
+				return fmt.Errorf("specify a TTL duration or --idle (or both)")
+			}
+
 			if remote {
 				publisher := pub
 				if publisher == nil {
 					publisher = newRealRemotePublisher(cfg)
 				}
-				return publisher.PublishSandboxCommand(ctx, sandboxID, "extend", "duration", args[1])
+				if hasTTL {
+					return publisher.PublishSandboxCommand(ctx, sandboxID, "extend", "duration", args[1])
+				}
+				// Remote idle-only extend not yet supported — fall through to local
 			}
-			duration, err := time.ParseDuration(args[1])
-			if err != nil {
-				return fmt.Errorf("invalid duration %q: %w (examples: 1h, 30m, 2h30m)", args[1], err)
+
+			// Handle --idle: update idle timeout in DynamoDB metadata
+			if idleOverride != "" {
+				if _, parseErr := time.ParseDuration(idleOverride); parseErr != nil {
+					return fmt.Errorf("invalid --idle duration %q: %w", idleOverride, parseErr)
+				}
+				if idleErr := runExtendIdle(ctx, cfg, sandboxID, idleOverride); idleErr != nil {
+					return idleErr
+				}
 			}
-			return runExtend(ctx, cfg, sandboxID, duration)
+
+			// Handle TTL extension
+			if hasTTL {
+				return runExtend(ctx, cfg, sandboxID, ttlDuration)
+			}
+			return nil
 		},
 	}
 
 	cmd.Flags().BoolVar(&remote, "remote", false, "Dispatch extend to Lambda via EventBridge")
+	cmd.Flags().StringVar(&idleOverride, "idle", "", "Set idle timeout (e.g. 5m, 15m, 1h)")
 
 	return cmd
 }
@@ -164,6 +195,34 @@ func runExtend(ctx context.Context, cfg *config.Config, sandboxID string, addDur
 	remaining := time.Until(newExpiry).Round(time.Second)
 	fmt.Printf(ansiGreen+"TTL extended for %s"+ansiReset+": new expiry in %s (%s)\n",
 		sandboxID, remaining, newExpiry.Local().Format("3:04:05 PM MST"))
+	return nil
+}
+
+// runExtendIdle updates the idle timeout in DynamoDB metadata.
+// The audit-log sidecar reads this on each re-arm cycle.
+func runExtendIdle(ctx context.Context, cfg *config.Config, sandboxID, idleTimeout string) error {
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
+	if err != nil {
+		return fmt.Errorf("load AWS config: %w", err)
+	}
+
+	tableName := cfg.SandboxTableName
+	if tableName == "" {
+		tableName = "km-sandboxes"
+	}
+	dynamoClient := dynamodb.NewFromConfig(awsCfg)
+
+	meta, err := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClient, tableName, sandboxID)
+	if err != nil {
+		return fmt.Errorf("read sandbox metadata: %w", err)
+	}
+
+	meta.IdleTimeout = idleTimeout
+	if writeErr := awspkg.WriteSandboxMetadataDynamo(ctx, dynamoClient, tableName, meta); writeErr != nil {
+		return fmt.Errorf("update idle timeout: %w", writeErr)
+	}
+
+	fmt.Printf(ansiGreen+"Idle timeout updated for %s"+ansiReset+": %s\n", sandboxID, idleTimeout)
 	return nil
 }
 

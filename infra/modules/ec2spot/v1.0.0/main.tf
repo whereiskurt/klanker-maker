@@ -344,6 +344,14 @@ resource "aws_iam_role_policy" "ec2spot_budget_dynamo" {
           "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/km-budgets",
           "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/km-budgets/index/*",
         ]
+      },
+      {
+        Sid    = "DynamoDBSandboxRead"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+        ]
+        Resource = "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/km-sandboxes"
       }
     ]
   })

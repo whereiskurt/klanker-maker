@@ -29,6 +29,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/rs/zerolog"
@@ -93,22 +94,45 @@ func main() {
 		} else {
 			idleAction := os.Getenv("IDLE_ACTION")
 
+			// DynamoDB client for reading updated idle timeout on re-arm.
+			sandboxTable := envOr("KM_SANDBOX_TABLE", "km-sandboxes")
+			var dynamoClient kmaws.SandboxMetadataAPI
+			if awsCfg, cfgErr := config.LoadDefaultConfig(ctx, config.WithRegion(envOr("AWS_REGION", "us-east-1"))); cfgErr == nil {
+				dynamoClient = dynamodb.NewFromConfig(awsCfg)
+			}
+
 			// startIdleDetector creates a new detector goroutine. For the hibernate loop,
 			// it is called again via AfterFunc after each hibernate cycle.
+			// On each re-arm, it reads the current idle timeout from DynamoDB so that
+			// `km extend --idle` changes take effect without restarting the sidecar.
 			var startIdleDetector func()
 			startIdleDetector = func() {
+				// Re-read idle timeout from DynamoDB (fall back to env var on error).
+				currentIdleMinutes := idleMinutes
+				if dynamoClient != nil {
+					meta, readErr := kmaws.ReadSandboxMetadataDynamo(ctx, dynamoClient, sandboxTable, sandboxID)
+					if readErr == nil && meta.IdleTimeout != "" {
+						if dur, durErr := time.ParseDuration(meta.IdleTimeout); durErr == nil {
+							currentIdleMinutes = int(dur.Minutes())
+							if currentIdleMinutes < 1 {
+								currentIdleMinutes = 1
+							}
+						}
+					}
+				}
+
 				onIdle := buildIdleCallback(ctx, ebClient, sandboxID, idleAction, cancel, func() {
 					// Re-arm after a 2-minute delay to allow the instance to hibernate and resume.
 					// The delay prevents immediately re-triggering on stale pre-hibernate events.
 					time.AfterFunc(2*time.Minute, startIdleDetector)
 				})
-				detector := newIdleDetector(sandboxID, idleMinutes, cwClient, cwLogGroup, "audit", onIdle)
+				detector := newIdleDetector(sandboxID, currentIdleMinutes, cwClient, cwLogGroup, "audit", onIdle)
 				go func() {
 					if runErr := detector.Run(ctx); runErr != nil && runErr != context.Canceled {
 						log.Error().Err(runErr).Msg("audit-log: idle detector error")
 					}
 				}()
-				log.Info().Int("idle_timeout_minutes", idleMinutes).Str("idle_action", idleAction).
+				log.Info().Int("idle_timeout_minutes", currentIdleMinutes).Str("idle_action", idleAction).
 					Msg("audit-log: idle detector started")
 			}
 			startIdleDetector()

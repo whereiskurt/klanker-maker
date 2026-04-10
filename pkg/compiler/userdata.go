@@ -424,6 +424,7 @@ Environment=CW_LOG_GROUP=/km/sandboxes/{{ .SandboxID }}/
 Environment=AUDIT_LOG_DEST=cloudwatch
 {{- if gt .IdleTimeoutMinutes 0 }}
 Environment=IDLE_TIMEOUT_MINUTES={{ .IdleTimeoutMinutes }}
+Environment=KM_SANDBOX_TABLE=km-sandboxes
 {{- if .IdleAction }}
 Environment=IDLE_ACTION={{ .IdleAction }}
 {{- end }}
