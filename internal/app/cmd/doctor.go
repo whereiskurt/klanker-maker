@@ -1187,7 +1187,7 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "found %d orphaned EC2 instances (no DynamoDB record):", len(orphans))
 	for _, o := range orphans {
-		fmt.Fprintf(&sb, "\n\t%-19s  %-20s  %-8s  launched %s", o.instanceID, o.sandboxID, o.state, o.launchTime)
+		fmt.Fprintf(&sb, "\n\t%-19s  %-20s  %-8s  %s", o.instanceID, o.sandboxID, o.state, o.launchTime)
 	}
 	return CheckResult{
 		Name:        name,
