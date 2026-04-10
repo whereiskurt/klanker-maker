@@ -1500,6 +1500,30 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 		fmt.Fprintln(out, hint)
 	}
 
+	if !dryRun {
+		// Show post-cleanup summary for stale resource checks.
+		cleanupChecks := []string{"Stale KMS Keys", "Stale IAM Roles", "Stale Schedules"}
+		var cleanupLines []string
+		for _, r := range results {
+			for _, name := range cleanupChecks {
+				if r.Name == name && r.Status == CheckWarn && strings.Contains(r.Message, "deleted") {
+					cleanupLines = append(cleanupLines, fmt.Sprintf("  %s: %s", r.Name, r.Message))
+				}
+			}
+		}
+		if len(cleanupLines) > 0 {
+			fmt.Fprintln(out)
+			header := "Cleanup summary:"
+			if isTTY {
+				header = ansiBold + header + ansiReset
+			}
+			fmt.Fprintln(out, header)
+			for _, line := range cleanupLines {
+				fmt.Fprintln(out, line)
+			}
+		}
+	}
+
 	if errorCount > 0 {
 		return fmt.Errorf("platform health check failed: %d error(s) found", errorCount)
 	}
