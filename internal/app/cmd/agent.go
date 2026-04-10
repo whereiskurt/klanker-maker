@@ -13,6 +13,7 @@ import (
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
@@ -60,12 +61,17 @@ Connects as the sandbox user and runs the selected agent binary.
 Extra arguments after -- are passed through to the agent.
 
 Subcommands:
-  run     Fire a prompt non-interactively via SSM SendCommand
+  run       Fire a prompt non-interactively via SSM SendCommand
+  results   Fetch agent run output from sandbox disk
+  list      Enumerate agent runs with status and output size
 
 Examples:
   km agent 1 --claude                    # interactive claude session
   km agent 1 --claude -- -p "fix tests"  # pass args to claude
-  km agent run sb-abc123 --prompt "fix the failing tests"`,
+  km agent run sb-abc123 --prompt "fix the failing tests"
+  km agent results sb-abc123             # fetch latest run output
+  km agent results sb-abc123 --run 20260410T143000Z
+  km agent list sb-abc123                # list all runs`,
 		Args:             cobra.MinimumNArgs(1),
 		TraverseChildren: true,
 		SilenceUsage:     true,
@@ -103,6 +109,12 @@ Examples:
 
 	// Add "run" subcommand for non-interactive execution
 	cmd.AddCommand(newAgentRunCmd(cfg, fetcher, ssmClient, ebClient))
+
+	// Add "results" subcommand for fetching run output
+	cmd.AddCommand(newAgentResultsCmd(cfg, fetcher, ssmClient))
+
+	// Add "list" subcommand for enumerating runs
+	cmd.AddCommand(newAgentListCmd(cfg, fetcher, ssmClient))
 
 	return cmd
 }
@@ -371,6 +383,260 @@ func waitForAgentCompletion(ctx context.Context, ssmClient SSMSendAPI, ebClient 
 	wg.Wait()
 	fmt.Fprintln(os.Stdout)
 	return fmt.Errorf("timed out waiting for agent command to complete")
+}
+
+// newAgentResultsCmd creates the "km agent results" subcommand.
+func newAgentResultsCmd(cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI) *cobra.Command {
+	var runID string
+
+	cmd := &cobra.Command{
+		Use:   "results <sandbox-id | #number>",
+		Short: "Fetch agent run output from sandbox disk",
+		Long: `Fetch Claude agent output from a sandbox via SSM SendCommand.
+
+By default, fetches the latest run's output.json. Use --run to specify
+a particular run ID (timestamp).
+
+Note: SSM truncates output at 24KB. A warning is printed if the output
+appears truncated.
+
+Examples:
+  km agent results sb-abc123
+  km agent results sb-abc123 --run 20260410T143000Z`,
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			sandboxID, err := ResolveSandboxID(ctx, cfg, args[0])
+			if err != nil {
+				return err
+			}
+			return runAgentResults(ctx, cmd, cfg, fetcher, ssmClient, sandboxID, runID)
+		},
+	}
+
+	cmd.Flags().StringVar(&runID, "run", "", "Specific run ID (timestamp, e.g. 20260410T143000Z)")
+
+	return cmd
+}
+
+// newAgentListCmd creates the "km agent list" subcommand.
+func newAgentListCmd(cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "list <sandbox-id | #number>",
+		Short: "List agent runs with status and output size",
+		Long: `Enumerate all agent runs on a sandbox with status and output size.
+
+Runs are listed newest-first.
+
+Examples:
+  km agent list sb-abc123`,
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			sandboxID, err := ResolveSandboxID(ctx, cfg, args[0])
+			if err != nil {
+				return err
+			}
+			return runAgentList(ctx, cmd, cfg, fetcher, ssmClient, sandboxID)
+		},
+	}
+
+	return cmd
+}
+
+// runAgentResults fetches a run's output.json from the sandbox via SSM.
+func runAgentResults(ctx context.Context, cobraCmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI, sandboxID, runID string) error {
+	// Initialize real clients if not injected
+	if fetcher == nil {
+		if cfg.StateBucket == "" {
+			return fmt.Errorf("state bucket not configured")
+		}
+		awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+		if err != nil {
+			return fmt.Errorf("load AWS config: %w", err)
+		}
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, func() string {
+			t := cfg.SandboxTableName
+			if t == "" {
+				t = "km-sandboxes"
+			}
+			return t
+		}())
+		if ssmClient == nil {
+			ssmClient = ssm.NewFromConfig(awsCfg)
+		}
+	}
+
+	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
+	if err != nil {
+		return fmt.Errorf("fetch sandbox: %w", err)
+	}
+	if rec.Status == "stopped" {
+		return fmt.Errorf("sandbox %s is stopped -- start it with 'km resume %s' first", sandboxID, sandboxID)
+	}
+
+	instanceID, err := extractResourceID(rec.Resources, ":instance/")
+	if err != nil {
+		return fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
+	}
+
+	w := cobraCmd.OutOrStdout()
+
+	// If no run ID specified, find the latest run
+	if runID == "" {
+		latestCmd := `sudo -u sandbox bash -c 'ls -1t /workspace/.km-agent/runs/ 2>/dev/null | head -1'`
+		latestOutput, err := sendSSMAndWait(ctx, ssmClient, instanceID, latestCmd)
+		if err != nil {
+			return fmt.Errorf("find latest run: %w", err)
+		}
+		runID = strings.TrimSpace(latestOutput)
+		if runID == "" {
+			fmt.Fprintln(w, "no agent runs found")
+			return nil
+		}
+	}
+
+	// Fetch the output.json for the specified run
+	catCmd := fmt.Sprintf(`sudo -u sandbox cat /workspace/.km-agent/runs/%s/output.json`, runID)
+	output, err := sendSSMAndWait(ctx, ssmClient, instanceID, catCmd)
+	if err != nil {
+		return fmt.Errorf("fetch run output: %w", err)
+	}
+
+	fmt.Fprint(w, output)
+
+	// Warn if output may be truncated (SSM limit is 24KB)
+	if len(output) >= 24000 {
+		fmt.Fprintln(w, "\nWARNING: Output may be truncated (SSM 24KB limit). Use 'km shell' to access full output on disk.")
+	}
+
+	return nil
+}
+
+// runAgentList enumerates all agent runs on a sandbox.
+func runAgentList(ctx context.Context, cobraCmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI, sandboxID string) error {
+	// Initialize real clients if not injected
+	if fetcher == nil {
+		if cfg.StateBucket == "" {
+			return fmt.Errorf("state bucket not configured")
+		}
+		awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+		if err != nil {
+			return fmt.Errorf("load AWS config: %w", err)
+		}
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, func() string {
+			t := cfg.SandboxTableName
+			if t == "" {
+				t = "km-sandboxes"
+			}
+			return t
+		}())
+		if ssmClient == nil {
+			ssmClient = ssm.NewFromConfig(awsCfg)
+		}
+	}
+
+	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
+	if err != nil {
+		return fmt.Errorf("fetch sandbox: %w", err)
+	}
+	if rec.Status == "stopped" {
+		return fmt.Errorf("sandbox %s is stopped -- start it with 'km resume %s' first", sandboxID, sandboxID)
+	}
+
+	instanceID, err := extractResourceID(rec.Resources, ":instance/")
+	if err != nil {
+		return fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
+	}
+
+	listCmd := `sudo -u sandbox bash -c '
+for d in /workspace/.km-agent/runs/*/; do
+  [ -d "$d" ] || continue
+  id=$(basename "$d")
+  status=$(cat "$d/status" 2>/dev/null || echo "unknown")
+  size=$(stat -c%s "$d/output.json" 2>/dev/null || echo "0")
+  echo "$id|$status|$size"
+done
+'`
+	output, err := sendSSMAndWait(ctx, ssmClient, instanceID, listCmd)
+	if err != nil {
+		return fmt.Errorf("list agent runs: %w", err)
+	}
+
+	w := cobraCmd.OutOrStdout()
+
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
+		fmt.Fprintln(w, "no agent runs found")
+		return nil
+	}
+
+	// Print table header
+	fmt.Fprintf(w, "%-22s %-10s %s\n", "RUN_ID", "STATUS", "SIZE")
+	fmt.Fprintf(w, "%-22s %-10s %s\n", strings.Repeat("-", 22), strings.Repeat("-", 10), strings.Repeat("-", 10))
+
+	for _, line := range lines {
+		parts := strings.SplitN(line, "|", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		fmt.Fprintf(w, "%-22s %-10s %s\n", parts[0], parts[1], parts[2])
+	}
+
+	return nil
+}
+
+// sendSSMAndWait sends a shell command via SSM SendCommand and polls
+// GetCommandInvocation until completion, returning stdout content.
+func sendSSMAndWait(ctx context.Context, ssmClient SSMSendAPI, instanceID, shellCmd string) (string, error) {
+	cmdOut, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
+		InstanceIds:  []string{instanceID},
+		DocumentName: awssdk.String("AWS-RunShellScript"),
+		Parameters:   map[string][]string{"commands": {shellCmd}},
+	})
+	if err != nil {
+		return "", fmt.Errorf("send SSM command: %w", err)
+	}
+
+	commandID := awssdk.ToString(cmdOut.Command.CommandId)
+
+	// Poll for completion
+	maxAttempts := 60 // ~10 minutes at AgentPollInterval
+	for i := 0; i < maxAttempts; i++ {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(AgentPollInterval):
+		}
+
+		inv, err := ssmClient.GetCommandInvocation(ctx, &ssm.GetCommandInvocationInput{
+			CommandId:  awssdk.String(commandID),
+			InstanceId: awssdk.String(instanceID),
+		})
+		if err != nil {
+			continue // may not be ready yet
+		}
+
+		switch inv.Status {
+		case ssmtypes.CommandInvocationStatusSuccess:
+			return awssdk.ToString(inv.StandardOutputContent), nil
+		case ssmtypes.CommandInvocationStatusFailed,
+			ssmtypes.CommandInvocationStatusCancelled,
+			ssmtypes.CommandInvocationStatusTimedOut:
+			stderr := awssdk.ToString(inv.StandardErrorContent)
+			return "", fmt.Errorf("command %s: %s", string(inv.Status), stderr)
+		}
+	}
+
+	return "", fmt.Errorf("timed out waiting for SSM command %s", commandID)
 }
 
 // BuildAgentShellCommand builds the shell command string that will be sent via SSM.
