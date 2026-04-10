@@ -1,0 +1,72 @@
+# km-config.yaml — platform configuration for the km CLI
+#
+# Copy this file to km-config.yaml and fill in your values.
+# Add km-config.yaml to .gitignore (it contains account IDs and secrets).
+#
+# Run `km configure` for an interactive setup wizard, or edit this file directly.
+#
+# Minimum required values are marked [REQUIRED]. Everything else has sensible
+# defaults or is auto-discovered by `km init`.
+
+# =============================================================================
+# REQUIRED — you must set these before running km init
+# =============================================================================
+
+# Base domain for the platform. Sandboxes get emails at sandboxes.{domain}.
+domain: example.com                          # [REQUIRED]
+
+# AWS region for infrastructure.
+region: us-east-1                            # [REQUIRED]
+
+# AWS account IDs.
+accounts:
+  management: "111111111111"                 # [REQUIRED] root/org account (SCP deployment)
+  terraform: "222222222222"                  # [REQUIRED] infra account (state, Lambdas)
+  application: "222222222222"                # [REQUIRED] where sandboxes run (can be same as terraform)
+
+# AWS SSO portal for credential refresh.
+sso:
+  start_url: https://your-org.awsapps.com/start  # [REQUIRED]
+  region: us-east-1
+
+# Operator email — receives TTL expiry, idle, budget, and error notifications.
+operator_email: you@example.com              # [REQUIRED]
+
+# Shared secret for email-to-create authentication (KM-AUTH header).
+safe_phrase: change-me-to-something-unique   # [REQUIRED]
+
+# =============================================================================
+# OPTIONAL — defaults work for most setups
+# =============================================================================
+
+# AWS CLI profile name (default: klanker-terraform)
+# aws_profile: klanker-terraform
+
+# Max concurrent sandboxes (0 = unlimited, default: 10)
+# max_sandboxes: 10
+
+# =============================================================================
+# AUTO-POPULATED by km init — uncomment to override
+# =============================================================================
+
+# S3 bucket for Terraform state and sandbox metadata.
+# Default: tf-km-state-{region-label}  (created by km init)
+# state_bucket: tf-km-state-use1
+
+# S3 bucket for Lambda zips, sidecar binaries, and sandbox profiles/artifacts.
+# Default: km-artifacts-{random}  (created by km init)
+# artifacts_bucket: km-artifacts-12345
+
+# DynamoDB table names (created by km init).
+# budget_table_name: km-budgets
+# sandbox_table_name: km-sandboxes
+# identity_table_name: km-identities
+# schedules_table_name: km-schedules
+
+# Route53 hosted zone ID for sandboxes.{domain} (created by km init).
+# route53_zone_id: Z0123456789ABCDEFGHIJ
+
+# Lambda ARNs (deployed by km init).
+# ttl_lambda_arn: arn:aws:lambda:us-east-1:222222222222:function:km-ttl-handler
+# create_handler_lambda_arn: arn:aws:lambda:us-east-1:222222222222:function:km-create-handler
+# scheduler_role_arn: arn:aws:iam::222222222222:role/km-ttl-scheduler
