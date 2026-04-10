@@ -1143,10 +1143,11 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 
 	// Find orphaned instances: tagged with km:sandbox-id but no DynamoDB record.
 	type orphan struct {
-		instanceID string
-		sandboxID  string
-		state      string
-		launchTime string
+		instanceID  string
+		sandboxID   string
+		state       string
+		hibernated  bool
+		launchTime  string
 	}
 	var orphans []orphan
 	for _, inst := range instances {
@@ -1167,10 +1168,12 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 		if inst.LaunchTime != nil {
 			launch = inst.LaunchTime.Format("01/02 15:04")
 		}
+		hib := inst.StateReason != nil && strings.Contains(awssdk.ToString(inst.StateReason.Code), "Hibernate")
 		orphans = append(orphans, orphan{
 			instanceID: awssdk.ToString(inst.InstanceId),
 			sandboxID:  sandboxID,
 			state:      string(inst.State.Name),
+			hibernated: hib,
 			launchTime: launch,
 		})
 	}
@@ -1187,7 +1190,13 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "found %d orphaned EC2 instances (no DynamoDB record):", len(orphans))
 	for _, o := range orphans {
-		fmt.Fprintf(&sb, "\n  %-19s  %-20s  %s", o.instanceID, o.sandboxID, o.launchTime)
+		stateLabel := "run"
+		if o.hibernated {
+			stateLabel = "hib"
+		} else if o.state == "stopped" || o.state == "stopping" {
+			stateLabel = "stop"
+		}
+		fmt.Fprintf(&sb, "\n  %-19s  %-20s  (%s) %s", o.instanceID, o.sandboxID, stateLabel, o.launchTime)
 	}
 	return CheckResult{
 		Name:        name,
