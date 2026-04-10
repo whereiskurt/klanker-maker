@@ -6,16 +6,23 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
+	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klankrmkr/pkg/compiler"
+	"github.com/whereiskurt/klankrmkr/pkg/profile"
 )
 
 // NewResumeCmd creates the "km resume" subcommand.
@@ -123,6 +130,52 @@ func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error 
 			}
 		} else {
 			fmt.Printf(ansiYellow+"  [warn] could not update metadata: %v"+ansiReset+"\n", statusErr)
+		}
+	}
+
+	// Recreate TTL schedule from the profile's TTL duration, counting from now.
+	if cfg.ArtifactsBucket != "" {
+		s3Client := s3.NewFromConfig(awsCfg)
+		profileKey := fmt.Sprintf("artifacts/%s/.km-profile.yaml", sandboxID)
+		obj, getErr := s3Client.GetObject(ctx, &s3.GetObjectInput{
+			Bucket: aws.String(cfg.ArtifactsBucket),
+			Key:    aws.String(profileKey),
+		})
+		if getErr == nil {
+			defer obj.Body.Close()
+			profileData, _ := io.ReadAll(obj.Body)
+			p, parseErr := profile.Parse(profileData)
+			if parseErr == nil && p != nil && p.Spec.Lifecycle.TTL != "" && p.Spec.Lifecycle.TTL != "0" {
+				ttlDuration, durErr := time.ParseDuration(p.Spec.Lifecycle.TTL)
+				if durErr == nil {
+					newExpiry := time.Now().Add(ttlDuration)
+					lambdaClient := lambda.NewFromConfig(awsCfg)
+					fnOut, fnErr := lambdaClient.GetFunction(ctx, &lambda.GetFunctionInput{
+						FunctionName: aws.String("km-ttl-handler"),
+					})
+					iamClient := iam.NewFromConfig(awsCfg)
+					roleOut, roleErr := iamClient.GetRole(ctx, &iam.GetRoleInput{
+						RoleName: aws.String("km-ttl-scheduler"),
+					})
+					if fnErr == nil && roleErr == nil {
+						schedulerClient := scheduler.NewFromConfig(awsCfg)
+						schedInput := compiler.BuildTTLScheduleInput(sandboxID, newExpiry,
+							aws.ToString(fnOut.Configuration.FunctionArn),
+							aws.ToString(roleOut.Role.Arn))
+						if schedErr := awspkg.CreateTTLSchedule(ctx, schedulerClient, schedInput); schedErr == nil {
+							fmt.Printf("  TTL schedule recreated: expires in %s\n", p.Spec.Lifecycle.TTL)
+							// Update TTL expiry in DynamoDB.
+							meta, readErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClient, tableName, sandboxID)
+							if readErr == nil {
+								meta.TTLExpiry = &newExpiry
+								awspkg.WriteSandboxMetadataDynamo(ctx, dynamoClient, tableName, meta)
+							}
+						} else {
+							fmt.Printf(ansiYellow+"  [warn] could not recreate TTL schedule: %v"+ansiReset+"\n", schedErr)
+						}
+					}
+				}
+			}
 		}
 	}
 
