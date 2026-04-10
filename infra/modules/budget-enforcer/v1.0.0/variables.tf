@@ -89,3 +89,15 @@ variable "budget_table_arn" {
   description = "ARN of the DynamoDB budget table for IAM policy scoping"
   type        = string
 }
+
+variable "sandbox_table_name" {
+  description = "Name of the DynamoDB sandbox metadata table (e.g. km-sandboxes)"
+  type        = string
+  default     = "km-sandboxes"
+}
+
+variable "sandbox_table_arn" {
+  description = "ARN of the DynamoDB sandbox metadata table for lock check and status update"
+  type        = string
+  default     = ""
+}

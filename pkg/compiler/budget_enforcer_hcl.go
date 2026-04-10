@@ -40,6 +40,9 @@ const budgetEnforcerHCLTemplate = `locals {
 
   # Budget table ARN constructed from site variables (avoids hardcoding account IDs).
   budget_table_arn = "arn:aws:dynamodb:${local.site_vars.locals.region.full}:${local.site_vars.locals.accounts.application}:table/${local.site_vars.locals.site.label}-budgets"
+
+  # Sandbox metadata table ARN for lock check and status update.
+  sandbox_table_arn = "arn:aws:dynamodb:${local.site_vars.locals.region.full}:${local.site_vars.locals.accounts.application}:table/${local.site_vars.locals.site.label}-sandboxes"
 }
 
 include "root" {
@@ -76,6 +79,8 @@ inputs = merge(
     lambda_zip_path    = "${local.repo_root}/build/budget-enforcer.zip"
     budget_table_name  = "${local.site_vars.locals.site.label}-budgets"
     budget_table_arn   = local.budget_table_arn
+    sandbox_table_name = "${local.site_vars.locals.site.label}-sandboxes"
+    sandbox_table_arn  = local.sandbox_table_arn
     state_bucket       = get_env("KM_ARTIFACTS_BUCKET", "")
     email_domain       = "sandboxes.${local.site_vars.locals.site.domain}"
     operator_email     = get_env("KM_OPERATOR_EMAIL", "")

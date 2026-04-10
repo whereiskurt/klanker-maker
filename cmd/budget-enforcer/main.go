@@ -13,6 +13,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -22,10 +23,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/rs/zerolog/log"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klankrmkr/pkg/profile"
 )
 
 // ============================================================
@@ -80,13 +84,18 @@ const bedrockFullAccessPolicyARN = "arn:aws:iam::aws:policy/AmazonBedrockFullAcc
 
 // BudgetHandler holds injected dependencies for testability.
 type BudgetHandler struct {
-	DynamoDB    awspkg.BudgetAPI
-	EC2Client   EC2StopAPI
-	ECSClient   ECSStopAPI
-	IAMClient   IAMDetachAPI
-	SESClient   awspkg.SESV2API
-	BudgetTable string
-	EmailDomain string
+	DynamoDB       awspkg.BudgetAPI
+	SandboxDynamo  awspkg.SandboxMetadataAPI // for lock check and status update
+	SandboxTable   string                    // DynamoDB table name (default: "km-sandboxes")
+	S3Client       *s3.Client                // for profile download
+	SchedulerClient awspkg.SchedulerAPI      // for TTL schedule cleanup
+	EC2Client      EC2StopAPI
+	ECSClient      ECSStopAPI
+	IAMClient      IAMDetachAPI
+	SESClient      awspkg.SESV2API
+	BudgetTable    string
+	StateBucket    string
+	EmailDomain    string
 
 	// Injectable functions for testing. When nil, the real implementations are used.
 	// getBudgetFn allows tests to inject a pre-configured BudgetSummary without DynamoDB.
@@ -335,7 +344,8 @@ func (h *BudgetHandler) maybeSendWarning(ctx context.Context, sandboxID, operato
 // ============================================================
 
 // enforceBudgetCompute suspends the sandbox when compute budget is exhausted.
-// EC2: calls StopInstances. ECS: calls StopTask (artifact upload is best-effort via TTL handler path).
+// EC2: checks lock, hibernates if on-demand, updates DynamoDB status, deletes TTL schedule.
+// ECS: calls StopTask (artifact upload is best-effort via TTL handler path).
 func (h *BudgetHandler) enforceBudgetCompute(ctx context.Context, event BudgetCheckEvent) {
 	sandboxID := event.SandboxID
 	switch event.Substrate {
@@ -348,15 +358,64 @@ func (h *BudgetHandler) enforceBudgetCompute(ctx context.Context, event BudgetCh
 			log.Warn().Str("sandbox_id", sandboxID).Msg("EC2 enforcement: EC2 client is nil")
 			return
 		}
-		if _, err := h.EC2Client.StopInstances(ctx, &ec2.StopInstancesInput{
+
+		// Check lock — locked sandboxes skip compute enforcement.
+		if h.SandboxDynamo != nil {
+			meta, readErr := awspkg.ReadSandboxMetadataDynamo(ctx, h.SandboxDynamo, h.SandboxTable, sandboxID)
+			if readErr == nil && meta.Locked {
+				log.Info().Str("sandbox_id", sandboxID).Msg("sandbox is locked — skipping compute budget enforcement")
+				return
+			}
+		}
+
+		// Check profile for hibernation support.
+		hibernate := h.lookupHibernation(ctx, sandboxID)
+
+		stopInput := &ec2.StopInstancesInput{
 			InstanceIds: []string{event.InstanceID},
-		}); err != nil {
-			log.Warn().Err(err).Str("sandbox_id", sandboxID).
-				Str("instance_id", event.InstanceID).
-				Msg("StopInstances failed (non-fatal — sandbox may already be stopped)")
-		} else {
+		}
+		if hibernate {
+			stopInput.Hibernate = awssdk.Bool(true)
 			log.Info().Str("sandbox_id", sandboxID).Str("instance_id", event.InstanceID).
-				Msg("EC2 instance stopped due to compute budget exhaustion")
+				Msg("hibernating instance due to compute budget exhaustion")
+		}
+
+		if _, err := h.EC2Client.StopInstances(ctx, stopInput); err != nil {
+			// If hibernate fails, fall back to plain stop.
+			if hibernate {
+				log.Warn().Err(err).Str("instance_id", event.InstanceID).
+					Msg("hibernate failed, falling back to stop")
+				stopInput.Hibernate = nil
+				_, err = h.EC2Client.StopInstances(ctx, stopInput)
+				hibernate = false
+			}
+			if err != nil {
+				log.Warn().Err(err).Str("sandbox_id", sandboxID).
+					Str("instance_id", event.InstanceID).
+					Msg("StopInstances failed (non-fatal — sandbox may already be stopped)")
+				return
+			}
+		}
+		log.Info().Str("sandbox_id", sandboxID).Str("instance_id", event.InstanceID).
+			Bool("hibernated", hibernate).
+			Msg("EC2 instance stopped due to compute budget exhaustion")
+
+		// Update DynamoDB status.
+		if h.SandboxDynamo != nil {
+			status := "stopped"
+			if hibernate {
+				status = "paused"
+			}
+			if statusErr := awspkg.UpdateSandboxStatusDynamo(ctx, h.SandboxDynamo, h.SandboxTable, sandboxID, status); statusErr != nil {
+				log.Warn().Err(statusErr).Str("sandbox_id", sandboxID).Msg("failed to update DynamoDB status (non-fatal)")
+			}
+		}
+
+		// Delete TTL schedule — stopped sandbox shouldn't be destroyed on TTL expiry.
+		if h.SchedulerClient != nil {
+			if schedErr := awspkg.DeleteTTLSchedule(ctx, h.SchedulerClient, sandboxID); schedErr != nil {
+				log.Warn().Err(schedErr).Str("sandbox_id", sandboxID).Msg("failed to delete TTL schedule (non-fatal)")
+			}
 		}
 
 	case "ecs":
@@ -432,6 +491,32 @@ func roleNameFromARN(roleARN string) (string, error) {
 // Lambda entrypoint
 // ============================================================
 
+// lookupHibernation downloads the sandbox profile from S3 and returns whether
+// hibernation is enabled. Returns false on any error — fail-safe to normal stop.
+func (h *BudgetHandler) lookupHibernation(ctx context.Context, sandboxID string) bool {
+	if h.S3Client == nil || h.StateBucket == "" {
+		return false
+	}
+	key := fmt.Sprintf("artifacts/%s/.km-profile.yaml", sandboxID)
+	obj, err := h.S3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: awssdk.String(h.StateBucket),
+		Key:    awssdk.String(key),
+	})
+	if err != nil {
+		return false
+	}
+	defer obj.Body.Close()
+	data, err := io.ReadAll(obj.Body)
+	if err != nil {
+		return false
+	}
+	p, parseErr := profile.Parse(data)
+	if parseErr != nil || p == nil {
+		return false
+	}
+	return p.Spec.Runtime.Hibernation
+}
+
 func main() {
 	ctx := context.Background()
 	awsProfile := os.Getenv("KM_AWS_PROFILE") // empty in Lambda — uses execution role
@@ -450,20 +535,33 @@ func main() {
 		emailDomain = "sandboxes.klankermaker.ai"
 	}
 
+	sandboxTable := os.Getenv("KM_SANDBOX_TABLE")
+	if sandboxTable == "" {
+		sandboxTable = "km-sandboxes"
+	}
+	stateBucket := os.Getenv("KM_STATE_BUCKET")
+
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)
 	ec2Client := ec2.NewFromConfig(awsCfg)
 	ecsClient := ecs.NewFromConfig(awsCfg)
 	iamClient := iam.NewFromConfig(awsCfg)
 	sesClient := sesv2.NewFromConfig(awsCfg)
+	s3Client := s3.NewFromConfig(awsCfg)
+	schedulerClient := scheduler.NewFromConfig(awsCfg)
 
 	h := &BudgetHandler{
-		DynamoDB:    dynamoClient,
-		EC2Client:   ec2Client,
-		ECSClient:   ecsClient,
-		IAMClient:   iamClient,
-		SESClient:   sesClient,
-		BudgetTable: budgetTable,
-		EmailDomain: emailDomain,
+		DynamoDB:        dynamoClient,
+		SandboxDynamo:   dynamoClient,
+		SandboxTable:    sandboxTable,
+		S3Client:        s3Client,
+		SchedulerClient: schedulerClient,
+		EC2Client:       ec2Client,
+		ECSClient:       ecsClient,
+		IAMClient:       iamClient,
+		SESClient:       sesClient,
+		BudgetTable:     budgetTable,
+		StateBucket:     stateBucket,
+		EmailDomain:     emailDomain,
 	}
 
 	lambda.Start(h.HandleBudgetCheck)

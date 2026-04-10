@@ -152,6 +152,45 @@ resource "aws_iam_role_policy" "ses_send" {
   })
 }
 
+# Policy: DynamoDB sandbox metadata (lock check and status update)
+resource "aws_iam_role_policy" "dynamodb_sandbox" {
+  count = var.sandbox_table_arn != "" ? 1 : 0
+  name  = "km-budget-enforcer-dynamo-sandbox-${var.sandbox_id}"
+  role  = aws_iam_role.budget_enforcer.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:PutItem",
+        ]
+        Resource = var.sandbox_table_arn
+      }
+    ]
+  })
+}
+
+# Policy: EventBridge Scheduler (delete TTL schedule on budget enforcement)
+resource "aws_iam_role_policy" "scheduler_cleanup" {
+  name = "km-budget-enforcer-scheduler-${var.sandbox_id}"
+  role = aws_iam_role.budget_enforcer.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["scheduler:DeleteSchedule"]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 # Policy: S3 access for reading stored sandbox profiles (ECS teardown path)
 resource "aws_iam_role_policy" "s3_profiles" {
   name = "km-budget-enforcer-s3-${var.sandbox_id}"
@@ -191,6 +230,7 @@ resource "aws_lambda_function" "budget_enforcer" {
   environment {
     variables = {
       KM_BUDGET_TABLE  = var.budget_table_name
+      KM_SANDBOX_TABLE = var.sandbox_table_name
       KM_EMAIL_DOMAIN  = var.email_domain
       KM_STATE_BUCKET  = var.state_bucket
     }
