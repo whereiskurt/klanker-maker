@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/rs/zerolog/log"
@@ -25,6 +27,13 @@ import (
 type SSMSendAPI interface {
 	SendCommand(ctx context.Context, input *ssm.SendCommandInput, optFns ...func(*ssm.Options)) (*ssm.SendCommandOutput, error)
 	GetCommandInvocation(ctx context.Context, input *ssm.GetCommandInvocationInput, optFns ...func(*ssm.Options)) (*ssm.GetCommandInvocationOutput, error)
+}
+
+// S3GetAPI is the narrow interface for S3 GetObject and ListObjectsV2.
+// Used by agent results/list to fetch run output from S3 (fast path).
+type S3GetAPI interface {
+	GetObject(ctx context.Context, input *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	ListObjectsV2(ctx context.Context, input *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 }
 
 // AgentIdleResetInterval is the interval between idle-reset heartbeat events.
@@ -43,14 +52,15 @@ var AgentPollInterval = 10 * time.Second
 //	km agent <sandbox-id> --claude       -> interactive SSM session (unchanged)
 //	km agent run <sandbox-id> --prompt   -> non-interactive via SSM SendCommand
 func NewAgentCmd(cfg *config.Config) *cobra.Command {
-	return NewAgentCmdWithDeps(cfg, nil, nil, nil, nil)
+	return NewAgentCmdWithDeps(cfg, nil, nil, nil, nil, nil)
 }
 
 // NewAgentCmdWithDeps builds the agent command with optional dependency injection
 // for testing. Pass nil for real AWS-backed clients.
-func NewAgentCmdWithDeps(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, ebClient kmaws.EventBridgeAPI) *cobra.Command {
+func NewAgentCmdWithDeps(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, ebClient kmaws.EventBridgeAPI, s3Client S3GetAPI) *cobra.Command {
 	var useClaude bool
 	var useCodex bool
+	var noBedrock bool
 
 	cmd := &cobra.Command{
 		Use:   "agent <sandbox-id | #number> [-- extra-args...]",
@@ -100,21 +110,22 @@ Examples:
 				agentCmd += " " + strings.Join(args[1:], " ")
 			}
 
-			return runAgent(cmd, cfg, fetcher, execFn, sandboxID, agentCmd)
+			return runAgent(cmd, cfg, fetcher, execFn, sandboxID, agentCmd, noBedrock)
 		},
 	}
 
 	cmd.Flags().BoolVar(&useClaude, "claude", false, "Launch Claude Code")
 	cmd.Flags().BoolVar(&useCodex, "codex", false, "Launch OpenAI Codex (future)")
+	cmd.Flags().BoolVar(&noBedrock, "no-bedrock", false, "Use direct Anthropic API instead of Bedrock")
 
 	// Add "run" subcommand for non-interactive execution
 	cmd.AddCommand(newAgentRunCmd(cfg, fetcher, ssmClient, ebClient))
 
 	// Add "results" subcommand for fetching run output
-	cmd.AddCommand(newAgentResultsCmd(cfg, fetcher, ssmClient))
+	cmd.AddCommand(newAgentResultsCmd(cfg, fetcher, ssmClient, s3Client))
 
 	// Add "list" subcommand for enumerating runs
-	cmd.AddCommand(newAgentListCmd(cfg, fetcher, ssmClient))
+	cmd.AddCommand(newAgentListCmd(cfg, fetcher, ssmClient, s3Client))
 
 	return cmd
 }
@@ -123,6 +134,8 @@ Examples:
 func newAgentRunCmd(cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI, ebClient kmaws.EventBridgeAPI) *cobra.Command {
 	var prompt string
 	var wait bool
+	var noBedrock bool
+	var autoStart bool
 
 	cmd := &cobra.Command{
 		Use:   "run <sandbox-id | #number>",
@@ -135,9 +148,13 @@ to /workspace/.km-agent/runs/<timestamp>/ on the sandbox.
 By default, fires and returns immediately with a run ID. Use --wait to
 block until the agent completes and print output.
 
+Use --auto-start to automatically resume a paused/stopped sandbox before
+running the agent. Useful with 'km at' for scheduled agent runs.
+
 Examples:
   km agent run sb-abc123 --prompt "fix the failing tests"
-  km agent run #1 --prompt "refactor auth module" --wait`,
+  km agent run #1 --prompt "refactor auth module" --wait
+  km agent run g1 --prompt "run tests" --auto-start --wait`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -150,12 +167,14 @@ Examples:
 				return err
 			}
 
-			return runAgentNonInteractive(ctx, cfg, fetcher, ssmClient, ebClient, sandboxID, prompt, wait)
+			return runAgentNonInteractive(ctx, cfg, fetcher, ssmClient, ebClient, sandboxID, prompt, wait, noBedrock, autoStart)
 		},
 	}
 
 	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt text to send to Claude (required)")
 	cmd.Flags().BoolVar(&wait, "wait", false, "Block until agent completes and print output")
+	cmd.Flags().BoolVar(&noBedrock, "no-bedrock", false, "Use direct Anthropic API instead of Bedrock")
+	cmd.Flags().BoolVar(&autoStart, "auto-start", false, "Automatically resume sandbox if paused/stopped")
 	_ = cmd.MarkFlagRequired("prompt")
 
 	return cmd
@@ -163,7 +182,7 @@ Examples:
 
 // runAgent launches an interactive AI agent inside a sandbox via SSM start-session.
 // This is the backward-compatible path for `km agent <sandbox-id> --claude`.
-func runAgent(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, sandboxID, claudeCmd string) error {
+func runAgent(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, sandboxID, claudeCmd string, noBedrock bool) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -202,13 +221,19 @@ func runAgent(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 		return fmt.Errorf("find EC2 instance: %w", err)
 	}
 
+	// Optionally prepend nobedrock() call to unset Bedrock env vars
+	noBedrockPrefix := ""
+	if noBedrock {
+		noBedrockPrefix = "nobedrock; "
+	}
+
 	// Open an interactive login shell as sandbox user that auto-execs the agent.
 	c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
 		"--target", instanceID, "--region", rec.Region, "--profile", "klanker-terraform",
 		"--document-name", "AWS-StartInteractiveCommand",
 		"--parameters", fmt.Sprintf(
-			`{"command":["sudo -u sandbox -i bash -c 'source /etc/profile.d/km-profile-env.sh 2>/dev/null; source /etc/profile.d/km-identity.sh 2>/dev/null; cd /workspace; exec %s'"]}`,
-			claudeCmd))
+			`{"command":["sudo -u sandbox -i bash -c 'source /etc/profile.d/km-profile-env.sh 2>/dev/null; source /etc/profile.d/km-identity.sh 2>/dev/null; cd /workspace; %sexec %s'"]}`,
+			noBedrockPrefix, claudeCmd))
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
@@ -219,7 +244,7 @@ func runAgent(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 // It base64-encodes the prompt to prevent shell injection, creates a run directory
 // on the sandbox, and either returns immediately (fire-and-forget) or waits for
 // completion with idle-reset heartbeats.
-func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI, ebClient kmaws.EventBridgeAPI, sandboxID, prompt string, wait bool) error {
+func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI, ebClient kmaws.EventBridgeAPI, sandboxID, prompt string, wait, noBedrock, autoStart bool) error {
 	// Initialize real clients if not injected
 	if fetcher == nil {
 		if cfg.StateBucket == "" {
@@ -249,35 +274,31 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 	if err != nil {
 		return fmt.Errorf("fetch sandbox: %w", err)
 	}
-	if rec.Status == "stopped" {
-		return fmt.Errorf("sandbox %s is stopped -- start it with 'km resume %s' first", sandboxID, sandboxID)
+	if rec.Status == "stopped" || rec.Status == "paused" || rec.Status == "hibernated" {
+		if !autoStart {
+			return fmt.Errorf("sandbox %s is %s -- use --auto-start to resume automatically, or 'km resume %s' first", sandboxID, rec.Status, sandboxID)
+		}
+		fmt.Fprintf(os.Stdout, "Sandbox %s is %s, resuming...\n", sandboxID, rec.Status)
+		if err := runResume(ctx, cfg, sandboxID); err != nil {
+			return fmt.Errorf("auto-start sandbox %s: %w", sandboxID, err)
+		}
+		// Wait for SSM agent to register after resume
+		fmt.Fprintf(os.Stdout, "Waiting for sandbox to be ready...\n")
+		time.Sleep(30 * time.Second)
+		// Re-fetch to get updated instance state
+		rec, err = fetcher.FetchSandbox(ctx, sandboxID)
+		if err != nil {
+			return fmt.Errorf("fetch sandbox after resume: %w", err)
+		}
 	}
 
-	// Extract instance ID from resources
 	instanceID, err := extractResourceID(rec.Resources, ":instance/")
 	if err != nil {
 		return fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
 	}
 
-	// Base64-encode the prompt to prevent shell injection (AGENT-03)
-	b64Prompt := base64.StdEncoding.EncodeToString([]byte(prompt))
-
-	// Build the shell command that runs on the sandbox (AGENT-02)
-	shellCmd := fmt.Sprintf(`sudo -u sandbox -i bash -c '
-source /etc/profile.d/km-profile-env.sh 2>/dev/null
-source /etc/profile.d/km-identity.sh 2>/dev/null
-cd /workspace
-RUN_ID=$(date -u +%%Y%%m%%dT%%H%%M%%SZ)
-RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
-mkdir -p "$RUN_DIR"
-echo "running" > "$RUN_DIR/status"
-PROMPT=$(echo "%s" | base64 -d)
-claude -p "$PROMPT" --output-format json --dangerously-skip-permissions --bare \
-  > "$RUN_DIR/output.json" 2>"$RUN_DIR/stderr.log"
-EC=$?
-if [ $EC -eq 0 ]; then echo "complete" > "$RUN_DIR/status"; else echo "failed" > "$RUN_DIR/status"; echo "$EC" > "$RUN_DIR/exit_code"; fi
-echo "KM_RUN_ID=$RUN_ID"
-'`, b64Prompt)
+	// Build the shell commands using shared helper (AGENT-02, AGENT-03)
+	cmds := BuildAgentShellCommands(prompt, cfg.ArtifactsBucket, noBedrock)
 
 	// Send command via SSM (AGENT-01)
 	cmdOut, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
@@ -285,7 +306,7 @@ echo "KM_RUN_ID=$RUN_ID"
 		DocumentName:     awssdk.String("AWS-RunShellScript"),
 		TimeoutSeconds:   awssdk.Int32(28800), // 8 hours
 		Parameters: map[string][]string{
-			"commands":         {shellCmd},
+			"commands":         cmds,
 			"executionTimeout": {"28800"},
 		},
 	})
@@ -364,7 +385,26 @@ func waitForAgentCompletion(ctx context.Context, ssmClient SSMSendAPI, ebClient 
 			wg.Wait()
 			fmt.Fprintln(os.Stdout, " done")
 			output := awssdk.ToString(inv.StandardOutputContent)
-			fmt.Fprintln(os.Stdout, output)
+			// Parse run ID from stdout (format: KM_RUN_ID=<timestamp>)
+			runID := ""
+			for _, line := range strings.Split(output, "\n") {
+				if strings.HasPrefix(line, "KM_RUN_ID=") {
+					runID = strings.TrimPrefix(line, "KM_RUN_ID=")
+					break
+				}
+			}
+			if runID != "" {
+				fmt.Fprintf(os.Stdout, "KM_RUN_ID=%s\n", runID)
+				// Fetch and print the output.json content
+				catCmd := fmt.Sprintf(`sudo -u sandbox cat /workspace/.km-agent/runs/%s/output.json`, runID)
+				resultOutput, err := sendSSMAndWait(ctx, ssmClient, instanceID, catCmd)
+				if err != nil {
+					return fmt.Errorf("fetch run output after completion: %w", err)
+				}
+				fmt.Fprintln(os.Stdout, resultOutput)
+			} else {
+				fmt.Fprintln(os.Stdout, output)
+			}
 			return nil
 
 		case "Failed", "Cancelled", "TimedOut":
@@ -386,12 +426,13 @@ func waitForAgentCompletion(ctx context.Context, ssmClient SSMSendAPI, ebClient 
 }
 
 // newAgentResultsCmd creates the "km agent results" subcommand.
-func newAgentResultsCmd(cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI) *cobra.Command {
+func newAgentResultsCmd(cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI, s3Client S3GetAPI) *cobra.Command {
 	var runID string
 
 	cmd := &cobra.Command{
-		Use:   "results <sandbox-id | #number>",
-		Short: "Fetch agent run output from sandbox disk",
+		Use:     "results <sandbox-id | #number>",
+		Aliases: []string{"result"},
+		Short:   "Fetch agent run output from sandbox disk",
 		Long: `Fetch Claude agent output from a sandbox via SSM SendCommand.
 
 By default, fetches the latest run's output.json. Use --run to specify
@@ -414,7 +455,7 @@ Examples:
 			if err != nil {
 				return err
 			}
-			return runAgentResults(ctx, cmd, cfg, fetcher, ssmClient, sandboxID, runID)
+			return runAgentResults(ctx, cmd, cfg, fetcher, ssmClient, s3Client, sandboxID, runID)
 		},
 	}
 
@@ -424,7 +465,7 @@ Examples:
 }
 
 // newAgentListCmd creates the "km agent list" subcommand.
-func newAgentListCmd(cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI) *cobra.Command {
+func newAgentListCmd(cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI, s3Client S3GetAPI) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list <sandbox-id | #number>",
 		Short: "List agent runs with status and output size",
@@ -445,7 +486,7 @@ Examples:
 			if err != nil {
 				return err
 			}
-			return runAgentList(ctx, cmd, cfg, fetcher, ssmClient, sandboxID)
+			return runAgentList(ctx, cmd, cfg, fetcher, ssmClient, s3Client, sandboxID)
 		},
 	}
 
@@ -453,7 +494,7 @@ Examples:
 }
 
 // runAgentResults fetches a run's output.json from the sandbox via SSM.
-func runAgentResults(ctx context.Context, cobraCmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI, sandboxID, runID string) error {
+func runAgentResults(ctx context.Context, cobraCmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI, s3Client S3GetAPI, sandboxID, runID string) error {
 	// Initialize real clients if not injected
 	if fetcher == nil {
 		if cfg.StateBucket == "" {
@@ -473,12 +514,30 @@ func runAgentResults(ctx context.Context, cobraCmd *cobra.Command, cfg *config.C
 		if ssmClient == nil {
 			ssmClient = ssm.NewFromConfig(awsCfg)
 		}
+		if s3Client == nil {
+			s3Client = s3.NewFromConfig(awsCfg)
+		}
 	}
 
 	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
 	if err != nil {
 		return fmt.Errorf("fetch sandbox: %w", err)
 	}
+
+	w := cobraCmd.OutOrStdout()
+	bucket := cfg.ArtifactsBucket
+
+	// Try S3 fast path first (no SSM round-trip needed)
+	if bucket != "" && s3Client != nil {
+		output, err := fetchResultFromS3(ctx, s3Client, bucket, sandboxID, runID, w)
+		if err == nil {
+			return nil
+		}
+		// S3 miss — fall through to SSM
+		_ = output
+	}
+
+	// SSM fallback — need running sandbox
 	if rec.Status == "stopped" {
 		return fmt.Errorf("sandbox %s is stopped -- start it with 'km resume %s' first", sandboxID, sandboxID)
 	}
@@ -487,8 +546,6 @@ func runAgentResults(ctx context.Context, cobraCmd *cobra.Command, cfg *config.C
 	if err != nil {
 		return fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
 	}
-
-	w := cobraCmd.OutOrStdout()
 
 	// If no run ID specified, find the latest run
 	if runID == "" {
@@ -521,8 +578,110 @@ func runAgentResults(ctx context.Context, cobraCmd *cobra.Command, cfg *config.C
 	return nil
 }
 
+// fetchResultFromS3 tries to fetch agent run output from S3.
+// If runID is empty, it lists runs and picks the latest.
+// Returns the output string or an error if the S3 path doesn't exist.
+func fetchResultFromS3(ctx context.Context, s3Client S3GetAPI, bucket, sandboxID, runID string, w io.Writer) (string, error) {
+	prefix := fmt.Sprintf("agent-runs/%s/", sandboxID)
+
+	if runID == "" {
+		// List runs to find latest
+		listOut, err := s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:    awssdk.String(bucket),
+			Prefix:    awssdk.String(prefix),
+			Delimiter: awssdk.String("/"),
+		})
+		if err != nil {
+			return "", err
+		}
+		if len(listOut.CommonPrefixes) == 0 {
+			// No S3 data — fall through to SSM (agent may still be running)
+			return "", fmt.Errorf("no S3 runs")
+		}
+		// CommonPrefixes are lexicographic — last is latest (timestamps sort naturally)
+		latest := awssdk.ToString(listOut.CommonPrefixes[len(listOut.CommonPrefixes)-1].Prefix)
+		// Extract run ID from prefix: "agent-runs/<sandbox>/<runID>/"
+		parts := strings.Split(strings.TrimSuffix(latest, "/"), "/")
+		runID = parts[len(parts)-1]
+	}
+
+	key := fmt.Sprintf("agent-runs/%s/%s/output.json", sandboxID, runID)
+	getOut, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: awssdk.String(bucket),
+		Key:    awssdk.String(key),
+	})
+	if err != nil {
+		return "", err
+	}
+	defer getOut.Body.Close()
+
+	body, err := io.ReadAll(getOut.Body)
+	if err != nil {
+		return "", err
+	}
+
+	fmt.Fprint(w, string(body))
+	return string(body), nil
+}
+
+// listAgentRunsFromS3 lists agent runs from S3 (fast path, no SSM needed).
+func listAgentRunsFromS3(ctx context.Context, s3Client S3GetAPI, bucket, sandboxID string, w io.Writer) error {
+	prefix := fmt.Sprintf("agent-runs/%s/", sandboxID)
+	listOut, err := s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket:    awssdk.String(bucket),
+		Prefix:    awssdk.String(prefix),
+		Delimiter: awssdk.String("/"),
+	})
+	if err != nil {
+		return err
+	}
+	if len(listOut.CommonPrefixes) == 0 {
+		// No S3 data — fall through to SSM
+		return fmt.Errorf("no S3 runs")
+	}
+
+	// Print table header
+	fmt.Fprintf(w, "%-22s %-10s %s\n", "RUN_ID", "STATUS", "SIZE")
+	fmt.Fprintf(w, "%-22s %-10s %s\n", strings.Repeat("-", 22), strings.Repeat("-", 10), strings.Repeat("-", 10))
+
+	for _, cp := range listOut.CommonPrefixes {
+		runPrefix := awssdk.ToString(cp.Prefix)
+		parts := strings.Split(strings.TrimSuffix(runPrefix, "/"), "/")
+		runID := parts[len(parts)-1]
+
+		// Fetch status file
+		status := "unknown"
+		statusOut, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+			Bucket: awssdk.String(bucket),
+			Key:    awssdk.String(runPrefix + "status"),
+		})
+		if err == nil {
+			body, _ := io.ReadAll(statusOut.Body)
+			statusOut.Body.Close()
+			status = strings.TrimSpace(string(body))
+		}
+
+		// Get output.json size
+		size := "0"
+		outputOut, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+			Bucket: awssdk.String(bucket),
+			Key:    awssdk.String(runPrefix + "output.json"),
+		})
+		if err == nil {
+			if outputOut.ContentLength != nil {
+				size = fmt.Sprintf("%d", *outputOut.ContentLength)
+			}
+			outputOut.Body.Close()
+		}
+
+		fmt.Fprintf(w, "%-22s %-10s %s\n", runID, status, size)
+	}
+
+	return nil
+}
+
 // runAgentList enumerates all agent runs on a sandbox.
-func runAgentList(ctx context.Context, cobraCmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI, sandboxID string) error {
+func runAgentList(ctx context.Context, cobraCmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI, s3Client S3GetAPI, sandboxID string) error {
 	// Initialize real clients if not injected
 	if fetcher == nil {
 		if cfg.StateBucket == "" {
@@ -542,12 +701,27 @@ func runAgentList(ctx context.Context, cobraCmd *cobra.Command, cfg *config.Conf
 		if ssmClient == nil {
 			ssmClient = ssm.NewFromConfig(awsCfg)
 		}
+		if s3Client == nil {
+			s3Client = s3.NewFromConfig(awsCfg)
+		}
 	}
 
 	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
 	if err != nil {
 		return fmt.Errorf("fetch sandbox: %w", err)
 	}
+
+	w := cobraCmd.OutOrStdout()
+	bucket := cfg.ArtifactsBucket
+
+	// Try S3 fast path first
+	if bucket != "" && s3Client != nil {
+		if listAgentRunsFromS3(ctx, s3Client, bucket, sandboxID, w) == nil {
+			return nil
+		}
+		// S3 miss — fall through to SSM
+	}
+
 	if rec.Status == "stopped" {
 		return fmt.Errorf("sandbox %s is stopped -- start it with 'km resume %s' first", sandboxID, sandboxID)
 	}
@@ -557,21 +731,11 @@ func runAgentList(ctx context.Context, cobraCmd *cobra.Command, cfg *config.Conf
 		return fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
 	}
 
-	listCmd := `sudo -u sandbox bash -c '
-for d in /workspace/.km-agent/runs/*/; do
-  [ -d "$d" ] || continue
-  id=$(basename "$d")
-  status=$(cat "$d/status" 2>/dev/null || echo "unknown")
-  size=$(stat -c%s "$d/output.json" 2>/dev/null || echo "0")
-  echo "$id|$status|$size"
-done
-'`
+	listCmd := `sudo -u sandbox bash -c 'for d in /workspace/.km-agent/runs/*/; do [ -d "$d" ] || continue; id=$(basename "$d"); status=$(cat "$d/status" 2>/dev/null || echo "unknown"); size=$(stat -f%z "$d/output.json" 2>/dev/null || stat -c%s "$d/output.json" 2>/dev/null || echo "0"); echo "$id|$status|$size"; done'`
 	output, err := sendSSMAndWait(ctx, ssmClient, instanceID, listCmd)
 	if err != nil {
 		return fmt.Errorf("list agent runs: %w", err)
 	}
-
-	w := cobraCmd.OutOrStdout()
 
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
@@ -596,6 +760,7 @@ done
 
 // sendSSMAndWait sends a shell command via SSM SendCommand and polls
 // GetCommandInvocation until completion, returning stdout content.
+// Uses a fast 2-second poll interval since these are short utility commands.
 func sendSSMAndWait(ctx context.Context, ssmClient SSMSendAPI, instanceID, shellCmd string) (string, error) {
 	cmdOut, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
 		InstanceIds:  []string{instanceID},
@@ -608,13 +773,19 @@ func sendSSMAndWait(ctx context.Context, ssmClient SSMSendAPI, instanceID, shell
 
 	commandID := awssdk.ToString(cmdOut.Command.CommandId)
 
-	// Poll for completion
-	maxAttempts := 60 // ~10 minutes at AgentPollInterval
+	// Poll for completion — fast interval for short utility commands
+	pollInterval := 2 * time.Second
+	maxAttempts := 150 // 5 minutes at 2s
 	for i := 0; i < maxAttempts; i++ {
+		// Brief initial delay to let SSM register the invocation
+		delay := pollInterval
+		if i == 0 {
+			delay = 1 * time.Second
+		}
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
-		case <-time.After(AgentPollInterval):
+		case <-time.After(delay):
 		}
 
 		inv, err := ssmClient.GetCommandInvocation(ctx, &ssm.GetCommandInvocationInput{
@@ -639,13 +810,28 @@ func sendSSMAndWait(ctx context.Context, ssmClient SSMSendAPI, instanceID, shell
 	return "", fmt.Errorf("timed out waiting for SSM command %s", commandID)
 }
 
-// BuildAgentShellCommand builds the shell command string that will be sent via SSM.
-// Exported for testing to verify command construction without needing SSM mocks.
-func BuildAgentShellCommand(prompt string) string {
+// BuildAgentShellCommands returns SSM RunShellScript commands for non-interactive
+// Claude execution. Each element becomes a separate line in the SSM command array.
+// The script is written to a temp file and executed as the sandbox user.
+func BuildAgentShellCommands(prompt string, artifactsBucket string, noBedrock ...bool) []string {
 	b64Prompt := base64.StdEncoding.EncodeToString([]byte(prompt))
-	return fmt.Sprintf(`sudo -u sandbox -i bash -c '
+	noBedrockLines := ""
+	if len(noBedrock) > 0 && noBedrock[0] {
+		noBedrockLines = `unset CLAUDE_CODE_USE_BEDROCK
+unset ANTHROPIC_BASE_URL
+unset ANTHROPIC_DEFAULT_SONNET_MODEL
+unset ANTHROPIC_DEFAULT_HAIKU_MODEL
+unset ANTHROPIC_DEFAULT_OPUS_MODEL`
+	}
+
+	// Write a bash script to a temp file, then execute as sandbox user.
+	// SSM RunShellScript treats each array element as a separate line;
+	// using a heredoc-to-file avoids newline-collapsing issues.
+	script := fmt.Sprintf(`#!/bin/bash
 source /etc/profile.d/km-profile-env.sh 2>/dev/null
 source /etc/profile.d/km-identity.sh 2>/dev/null
+%s
+KM_ARTIFACTS_BUCKET="%s"
 cd /workspace
 RUN_ID=$(date -u +%%Y%%m%%dT%%H%%M%%SZ)
 RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
@@ -656,6 +842,16 @@ claude -p "$PROMPT" --output-format json --dangerously-skip-permissions --bare \
   > "$RUN_DIR/output.json" 2>"$RUN_DIR/stderr.log"
 EC=$?
 if [ $EC -eq 0 ]; then echo "complete" > "$RUN_DIR/status"; else echo "failed" > "$RUN_DIR/status"; echo "$EC" > "$RUN_DIR/exit_code"; fi
-echo "KM_RUN_ID=$RUN_ID"
-'`, b64Prompt)
+if [ -n "$KM_ARTIFACTS_BUCKET" ] && [ -n "$KM_SANDBOX_ID" ]; then
+  aws s3 cp "$RUN_DIR/output.json" "s3://$KM_ARTIFACTS_BUCKET/agent-runs/$KM_SANDBOX_ID/$RUN_ID/output.json" --quiet 2>/dev/null || true
+  aws s3 cp "$RUN_DIR/status" "s3://$KM_ARTIFACTS_BUCKET/agent-runs/$KM_SANDBOX_ID/$RUN_ID/status" --quiet 2>/dev/null || true
+fi
+echo "KM_RUN_ID=$RUN_ID"`, noBedrockLines, artifactsBucket, b64Prompt)
+
+	return []string{
+		fmt.Sprintf("cat > /tmp/km-agent-run.sh << 'KMEOF'\n%s\nKMEOF", script),
+		"chmod +x /tmp/km-agent-run.sh",
+		"sudo -u sandbox -i /tmp/km-agent-run.sh",
+		"rm -f /tmp/km-agent-run.sh",
+	}
 }

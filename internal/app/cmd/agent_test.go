@@ -108,7 +108,7 @@ func TestAgentNonInteractive_SendCommand(t *testing.T) {
 
 	cfg := &config.Config{}
 	root := &cobra.Command{Use: "km"}
-	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB)
+	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB, nil)
 	root.AddCommand(agentCmd)
 
 	root.SetArgs([]string{"agent", "run", "sb-test01", "--prompt", "fix the tests"})
@@ -136,7 +136,7 @@ func TestAgentNonInteractive_SendCommand(t *testing.T) {
 func TestAgentNonInteractive_CommandConstruction(t *testing.T) {
 	prompt := "fix the failing tests"
 
-	shellCmd := cmd.BuildAgentShellCommand(prompt)
+	shellCmd := strings.Join(cmd.BuildAgentShellCommands(prompt, ""), "\n")
 
 	// Verify required Claude flags (AGENT-02)
 	requiredParts := []string{
@@ -166,6 +166,29 @@ func TestAgentNonInteractive_CommandConstruction(t *testing.T) {
 	}
 }
 
+// TestAgentNonInteractive_NoBedrock verifies that --no-bedrock injects unset commands.
+func TestAgentNonInteractive_NoBedrock(t *testing.T) {
+	// Without --no-bedrock: no unset commands
+	shellCmd := strings.Join(cmd.BuildAgentShellCommands("test prompt", ""), "\n")
+	if strings.Contains(shellCmd, "unset CLAUDE_CODE_USE_BEDROCK") {
+		t.Error("without --no-bedrock, should not contain unset commands")
+	}
+
+	// With --no-bedrock: unset commands present
+	shellCmd = strings.Join(cmd.BuildAgentShellCommands("test prompt", "", true), "\n")
+	for _, envVar := range []string{
+		"unset CLAUDE_CODE_USE_BEDROCK",
+		"unset ANTHROPIC_BASE_URL",
+		"unset ANTHROPIC_DEFAULT_SONNET_MODEL",
+		"unset ANTHROPIC_DEFAULT_HAIKU_MODEL",
+		"unset ANTHROPIC_DEFAULT_OPUS_MODEL",
+	} {
+		if !strings.Contains(shellCmd, envVar) {
+			t.Errorf("with --no-bedrock, missing %q", envVar)
+		}
+	}
+}
+
 // TestAgentNonInteractive_PromptEscaping verifies that prompts with dangerous
 // characters are base64-encoded and NOT interpolated directly into the shell.
 func TestAgentNonInteractive_PromptEscaping(t *testing.T) {
@@ -180,7 +203,7 @@ func TestAgentNonInteractive_PromptEscaping(t *testing.T) {
 
 	for _, prompt := range dangerous {
 		t.Run(prompt[:min(len(prompt), 20)], func(t *testing.T) {
-			shellCmd := cmd.BuildAgentShellCommand(prompt)
+			shellCmd := strings.Join(cmd.BuildAgentShellCommands(prompt, ""), "\n")
 
 			// The raw prompt text must NOT appear in the shell command
 			if strings.Contains(shellCmd, prompt) {
@@ -227,7 +250,7 @@ func TestAgentNonInteractive_IdleReset(t *testing.T) {
 
 	cfg := &config.Config{}
 	root := &cobra.Command{Use: "km"}
-	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB)
+	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB, nil)
 	root.AddCommand(agentCmd)
 
 	root.SetArgs([]string{"agent", "run", "sb-heartbeat", "--prompt", "test heartbeat", "--wait"})
@@ -264,7 +287,7 @@ func TestAgentNonInteractive_StoppedSandbox(t *testing.T) {
 
 	cfg := &config.Config{}
 	root := &cobra.Command{Use: "km"}
-	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB)
+	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB, nil)
 	root.AddCommand(agentCmd)
 
 	root.SetArgs([]string{"agent", "run", "sb-stopped", "--prompt", "do something"})
@@ -297,7 +320,7 @@ func TestAgentCmd_BackwardCompat(t *testing.T) {
 
 	cfg := &config.Config{}
 	root := &cobra.Command{Use: "km"}
-	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, execFn, mockSSM, mockEB)
+	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, execFn, mockSSM, mockEB, nil)
 	root.AddCommand(agentCmd)
 
 	root.SetArgs([]string{"agent", "sb-compat", "--claude"})
@@ -387,7 +410,7 @@ func TestAgentResults(t *testing.T) {
 
 	cfg := &config.Config{}
 	root := &cobra.Command{Use: "km"}
-	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB)
+	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB, nil)
 	root.AddCommand(agentCmd)
 
 	// Capture stdout
@@ -432,7 +455,7 @@ func TestAgentResults_SpecificRun(t *testing.T) {
 
 	cfg := &config.Config{}
 	root := &cobra.Command{Use: "km"}
-	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB)
+	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB, nil)
 	root.AddCommand(agentCmd)
 
 	var buf strings.Builder
@@ -482,7 +505,7 @@ func TestAgentResults_NoRuns(t *testing.T) {
 
 	cfg := &config.Config{}
 	root := &cobra.Command{Use: "km"}
-	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB)
+	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB, nil)
 	root.AddCommand(agentCmd)
 
 	var buf strings.Builder
@@ -523,7 +546,7 @@ func TestAgentList(t *testing.T) {
 
 	cfg := &config.Config{}
 	root := &cobra.Command{Use: "km"}
-	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB)
+	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB, nil)
 	root.AddCommand(agentCmd)
 
 	var buf strings.Builder
