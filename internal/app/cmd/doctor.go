@@ -1196,7 +1196,7 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 		} else if o.state == "stopped" || o.state == "stopping" {
 			stateLabel = "stop"
 		}
-		fmt.Fprintf(&sb, "\n  %-19s  %-20s  (%s) %s", o.instanceID, o.sandboxID, stateLabel, o.launchTime)
+		fmt.Fprintf(&sb, "\n  %s (%s) %-20s %s", o.instanceID, stateLabel, o.sandboxID, o.launchTime)
 	}
 	return CheckResult{
 		Name:        name,
