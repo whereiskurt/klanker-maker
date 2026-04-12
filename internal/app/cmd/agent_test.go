@@ -703,6 +703,89 @@ func TestAgentAttach(t *testing.T) {
 	}
 }
 
+// TestAgentInteractive verifies that --interactive writes script via SendCommand
+// then opens SSM start-session with tmux new-session (no -d).
+func TestAgentInteractive(t *testing.T) {
+	fetcher := newRunningEC2Sandbox("sb-interact01")
+	mockSSM := &mockAgentSSM{}
+	mockEB := &mockAgentEB{}
+
+	var capturedArgs []string
+	execFn := func(c *exec.Cmd) error {
+		capturedArgs = c.Args
+		return nil
+	}
+
+	cfg := &config.Config{ArtifactsBucket: "test-bucket"}
+	root := &cobra.Command{Use: "km"}
+	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, execFn, mockSSM, mockEB, nil)
+	root.AddCommand(agentCmd)
+
+	root.SetArgs([]string{"agent", "run", "sb-interact01", "--prompt", "fix tests", "--interactive"})
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Verify SendCommand was called to write the script (first 2 commands only)
+	if len(mockSSM.sendCalls) != 1 {
+		t.Fatalf("expected 1 SendCommand call (script write), got %d", len(mockSSM.sendCalls))
+	}
+	call := mockSSM.sendCalls[0]
+	cmds := call.Parameters["commands"]
+	// Should have 2 commands: write script + chmod
+	if len(cmds) != 2 {
+		t.Fatalf("expected 2 commands in SendCommand (write + chmod), got %d: %v", len(cmds), cmds)
+	}
+	if !strings.Contains(cmds[0], "km-agent-run.sh") {
+		t.Errorf("expected script write command, got: %s", cmds[0])
+	}
+	if !strings.Contains(cmds[1], "chmod") {
+		t.Errorf("expected chmod command, got: %s", cmds[1])
+	}
+
+	// Verify SSM start-session was called (via execFn)
+	fullCmd := strings.Join(capturedArgs, " ")
+	if !strings.Contains(fullCmd, "start-session") {
+		t.Errorf("expected 'start-session' in command, got: %s", fullCmd)
+	}
+
+	// Verify tmux new-session (no -d flag)
+	if !strings.Contains(fullCmd, "tmux new-session -s") {
+		t.Errorf("expected 'tmux new-session -s' in command, got: %s", fullCmd)
+	}
+	if strings.Contains(fullCmd, "tmux new-session -d") {
+		t.Errorf("interactive mode should NOT have -d (detached) flag, got: %s", fullCmd)
+	}
+
+	// Verify the session name contains km-agent-
+	if !strings.Contains(fullCmd, "km-agent-") {
+		t.Errorf("expected 'km-agent-' session name in command, got: %s", fullCmd)
+	}
+}
+
+// TestAgentInteractive_MutuallyExclusiveWithWait verifies --interactive and --wait
+// are mutually exclusive.
+func TestAgentInteractive_MutuallyExclusiveWithWait(t *testing.T) {
+	fetcher := newRunningEC2Sandbox("sb-interact02")
+	mockSSM := &mockAgentSSM{}
+	mockEB := &mockAgentEB{}
+
+	cfg := &config.Config{}
+	root := &cobra.Command{Use: "km"}
+	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, mockEB, nil)
+	root.AddCommand(agentCmd)
+
+	root.SetArgs([]string{"agent", "run", "sb-interact02", "--prompt", "test", "--interactive", "--wait"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error for --interactive + --wait, got nil")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("expected 'mutually exclusive' in error, got: %v", err)
+	}
+}
+
 // TestAgentAttach_StoppedSandbox verifies attach returns error for stopped sandboxes.
 func TestAgentAttach_StoppedSandbox(t *testing.T) {
 	fetcher := &fakeFetcher{
