@@ -357,7 +357,7 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 	}
 
 	// Build the shell commands using shared helper (AGENT-02, AGENT-03)
-	cmds := BuildAgentShellCommands(prompt, cfg.ArtifactsBucket, noBedrock)
+	cmds, _ := BuildAgentShellCommands(prompt, cfg.ArtifactsBucket, noBedrock)
 
 	// Send command via SSM (AGENT-01)
 	cmdOut, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
@@ -882,8 +882,9 @@ func sendSSMAndWait(ctx context.Context, ssmClient SSMSendAPI, instanceID, shell
 // BuildAgentShellCommands returns SSM RunShellScript commands for non-interactive
 // Claude execution. Each element becomes a separate line in the SSM command array.
 // The script is written to a temp file and executed as the sandbox user.
-func BuildAgentShellCommands(prompt string, artifactsBucket string, noBedrock ...bool) []string {
+func BuildAgentShellCommands(prompt string, artifactsBucket string, noBedrock ...bool) ([]string, string) {
 	b64Prompt := base64.StdEncoding.EncodeToString([]byte(prompt))
+	runID := time.Now().UTC().Format("20060102T150405Z")
 	noBedrockLines := ""
 	if len(noBedrock) > 0 && noBedrock[0] {
 		noBedrockLines = `unset CLAUDE_CODE_USE_BEDROCK
@@ -898,9 +899,9 @@ if [ -z "$ANTHROPIC_API_KEY" ] && [ -f "$HOME/.claude/.credentials.json" ]; then
 fi`
 	}
 
-	// Write a bash script to a temp file, then execute as sandbox user.
-	// SSM RunShellScript treats each array element as a separate line;
-	// using a heredoc-to-file avoids newline-collapsing issues.
+	// Write a bash script to a temp file, then execute inside a tmux session.
+	// The tmux session persists after SSM disconnect, allowing live attach.
+	// Completion is signaled via tmux wait-for channel so --wait can block.
 	script := fmt.Sprintf(`#!/bin/bash
 export HOME=/home/sandbox
 source /etc/profile.d/km-profile-env.sh 2>/dev/null
@@ -908,7 +909,7 @@ source /etc/profile.d/km-identity.sh 2>/dev/null
 %s
 KM_ARTIFACTS_BUCKET="%s"
 cd /workspace
-RUN_ID=$(date -u +%%Y%%m%%dT%%H%%M%%SZ)
+RUN_ID="%s"
 RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
 mkdir -p "$RUN_DIR"
 echo "running" > "$RUN_DIR/status"
@@ -921,14 +922,18 @@ if [ -n "$KM_ARTIFACTS_BUCKET" ] && [ -n "$KM_SANDBOX_ID" ]; then
   aws s3 cp "$RUN_DIR/output.json" "s3://$KM_ARTIFACTS_BUCKET/agent-runs/$KM_SANDBOX_ID/$RUN_ID/output.json" --quiet 2>/dev/null || true
   aws s3 cp "$RUN_DIR/status" "s3://$KM_ARTIFACTS_BUCKET/agent-runs/$KM_SANDBOX_ID/$RUN_ID/status" --quiet 2>/dev/null || true
 fi
-echo "KM_RUN_ID=$RUN_ID"`, noBedrockLines, artifactsBucket, b64Prompt)
+tmux wait-for -S km-done-%s`, noBedrockLines, artifactsBucket, runID, b64Prompt, runID)
+
+	sessionName := fmt.Sprintf("km-agent-%s", runID)
 
 	return []string{
 		fmt.Sprintf("cat > /tmp/km-agent-run.sh << 'KMEOF'\n%s\nKMEOF", script),
 		"chmod +x /tmp/km-agent-run.sh",
-		"sudo -u sandbox -i /tmp/km-agent-run.sh",
+		fmt.Sprintf("sudo -u sandbox -i tmux new-session -d -s '%s' '/tmp/km-agent-run.sh; exec bash'", sessionName),
+		fmt.Sprintf("sudo -u sandbox -i tmux wait-for km-done-%s", runID),
+		fmt.Sprintf("echo \"KM_RUN_ID=%s\"", runID),
 		"rm -f /tmp/km-agent-run.sh",
-	}
+	}, runID
 }
 
 // loadProfileCLINoBedrock fetches the sandbox's profile from S3 and returns
