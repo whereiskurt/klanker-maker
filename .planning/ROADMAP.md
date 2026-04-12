@@ -1136,7 +1136,7 @@ Plans:
 **Goal:** Wrap all non-interactive agent execution in persistent tmux sessions on the sandbox. SSM SendCommand creates a named tmux session (`km-agent-<runID>`) that runs Claude, so operators can `km agent attach <sandbox>` to watch live, survive SSM disconnects, and scroll back through output. Add `--interactive` flag that opens an SSM session attached directly to the tmux pane. Add `km agent attach` subcommand for connecting to running/completed agent sessions.
 **Requirements**: [TMUX-01, TMUX-02, TMUX-03, TMUX-04, TMUX-05]
 **Depends on:** Phase 50
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 51-01-PLAN.md -- tmux-wrap BuildAgentShellCommands, deterministic RUN_ID, wait-for channel
