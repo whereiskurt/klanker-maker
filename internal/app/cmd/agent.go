@@ -145,6 +145,7 @@ Examples:
 func newAgentRunCmd(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, ebClient kmaws.EventBridgeAPI) *cobra.Command {
 	var prompt string
 	var wait bool
+	var interactive bool
 	var noBedrock bool
 	var autoStart bool
 
@@ -159,16 +160,24 @@ to /workspace/.km-agent/runs/<timestamp>/ on the sandbox.
 By default, fires and returns immediately with a run ID. Use --wait to
 block until the agent completes and print output.
 
+Use --interactive to create the tmux session and immediately attach to it.
+This lets you watch the agent work in real-time. Detach with Ctrl-B d.
+
 Use --auto-start to automatically resume a paused/stopped sandbox before
 running the agent. Useful with 'km at' for scheduled agent runs.
 
 Examples:
   km agent run sb-abc123 --prompt "fix the failing tests"
   km agent run #1 --prompt "refactor auth module" --wait
+  km agent run #1 --prompt "refactor auth module" --interactive
   km agent run g1 --prompt "run tests" --auto-start --wait`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if interactive && wait {
+				return fmt.Errorf("--interactive and --wait are mutually exclusive")
+			}
+
 			ctx := cmd.Context()
 			if ctx == nil {
 				ctx = context.Background()
@@ -185,12 +194,13 @@ Examples:
 				}
 			}
 
-			return runAgentNonInteractive(ctx, cfg, fetcher, ssmClient, ebClient, sandboxID, prompt, wait, noBedrock, autoStart)
+			return runAgentNonInteractive(ctx, cfg, fetcher, execFn, ssmClient, ebClient, sandboxID, prompt, wait, interactive, noBedrock, autoStart)
 		},
 	}
 
 	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt text to send to Claude (required)")
 	cmd.Flags().BoolVar(&wait, "wait", false, "Block until agent completes and print output")
+	cmd.Flags().BoolVar(&interactive, "interactive", false, "Create tmux session and immediately attach (blocks until detach)")
 	cmd.Flags().BoolVar(&noBedrock, "no-bedrock", false, "Use direct Anthropic API instead of Bedrock")
 	cmd.Flags().BoolVar(&autoStart, "auto-start", false, "Automatically resume sandbox if paused/stopped")
 	_ = cmd.MarkFlagRequired("prompt")
@@ -337,7 +347,7 @@ Examples:
 // It base64-encodes the prompt to prevent shell injection, creates a run directory
 // on the sandbox, and either returns immediately (fire-and-forget) or waits for
 // completion with idle-reset heartbeats.
-func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI, ebClient kmaws.EventBridgeAPI, sandboxID, prompt string, wait, noBedrock, autoStart bool) error {
+func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, ebClient kmaws.EventBridgeAPI, sandboxID, prompt string, wait, interactive, noBedrock, autoStart bool) error {
 	printBanner("km agent run", sandboxID)
 
 	// Initialize real clients if not injected
@@ -435,7 +445,39 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 	}
 
 	// Build the shell commands using shared helper (AGENT-02, AGENT-03)
-	cmds, _ := BuildAgentShellCommands(prompt, cfg.ArtifactsBucket, noBedrock)
+	cmds, runID := BuildAgentShellCommands(prompt, cfg.ArtifactsBucket, noBedrock)
+
+	// --interactive mode: write script to disk, then open SSM session with tmux new-session (attached)
+	if interactive {
+		if execFn == nil {
+			execFn = defaultShellExec
+		}
+
+		// Send only the script-write commands (first 2: cat script + chmod)
+		_, err = ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
+			InstanceIds:  []string{instanceID},
+			DocumentName: awssdk.String("AWS-RunShellScript"),
+			Parameters:   map[string][]string{"commands": cmds[:2]},
+		})
+		if err != nil {
+			return fmt.Errorf("write agent script via SSM: %w", err)
+		}
+
+		// Wait briefly for script to land on disk
+		time.Sleep(2 * time.Second)
+
+		// Build SSM start-session with tmux new-session (attached, no -d)
+		sessionName := fmt.Sprintf("km-agent-%s", runID)
+		tmuxCmd := fmt.Sprintf("sudo -u sandbox -i tmux new-session -s '%s' '/tmp/km-agent-run.sh; exec bash'", sessionName)
+		c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
+			"--target", instanceID, "--region", rec.Region, "--profile", "klanker-terraform",
+			"--document-name", "AWS-StartInteractiveCommand",
+			"--parameters", fmt.Sprintf(`{"command":["%s"]}`, strings.ReplaceAll(tmuxCmd, `"`, `\"`)))
+		c.Stdin = os.Stdin
+		c.Stdout = os.Stdout
+		c.Stderr = os.Stderr
+		return execFn(c)
+	}
 
 	// Send command via SSM (AGENT-01)
 	cmdOut, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
