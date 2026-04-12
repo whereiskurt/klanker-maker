@@ -640,3 +640,96 @@ func TestBuildAgentShellCommands_RunIDDeterministic(t *testing.T) {
 		t.Errorf("RUN_ID %q is not a valid timestamp: %v", runID, err)
 	}
 }
+
+// ---- Attach + Interactive tests ----
+
+// TestAgentAttach verifies that `km agent attach <sandbox>` resolves sandbox
+// to instanceID and builds SSM start-session with tmux attach-session.
+func TestAgentAttach(t *testing.T) {
+	fetcher := newRunningEC2Sandbox("sb-attach01")
+
+	var capturedArgs []string
+	var stdinSet, stdoutSet, stderrSet bool
+	execFn := func(c *exec.Cmd) error {
+		capturedArgs = c.Args
+		stdinSet = c.Stdin != nil
+		stdoutSet = c.Stdout != nil
+		stderrSet = c.Stderr != nil
+		return nil
+	}
+
+	cfg := &config.Config{}
+	root := &cobra.Command{Use: "km"}
+	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, execFn, nil, nil, nil)
+	root.AddCommand(agentCmd)
+
+	root.SetArgs([]string{"agent", "attach", "sb-attach01"})
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	fullCmd := strings.Join(capturedArgs, " ")
+
+	// Verify SSM start-session is used
+	if !strings.Contains(fullCmd, "start-session") {
+		t.Errorf("expected 'start-session' in command, got: %s", fullCmd)
+	}
+
+	// Verify target instance ID
+	if !strings.Contains(fullCmd, "i-0abc123def456") {
+		t.Errorf("expected instance ID i-0abc123def456 in command, got: %s", fullCmd)
+	}
+
+	// Verify tmux attach-session
+	if !strings.Contains(fullCmd, "tmux attach-session") {
+		t.Errorf("expected 'tmux attach-session' in command, got: %s", fullCmd)
+	}
+
+	// Verify km-agent session grep
+	if !strings.Contains(fullCmd, "km-agent") {
+		t.Errorf("expected 'km-agent' session filter in command, got: %s", fullCmd)
+	}
+
+	// Verify stdin/stdout/stderr are wired
+	if !stdinSet {
+		t.Error("expected stdin to be wired")
+	}
+	if !stdoutSet {
+		t.Error("expected stdout to be wired")
+	}
+	if !stderrSet {
+		t.Error("expected stderr to be wired")
+	}
+}
+
+// TestAgentAttach_StoppedSandbox verifies attach returns error for stopped sandboxes.
+func TestAgentAttach_StoppedSandbox(t *testing.T) {
+	fetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID: "sb-stopped-attach",
+			Profile:   "open-dev",
+			Substrate: "ec2",
+			Region:    "us-east-1",
+			Status:    "stopped",
+			CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
+			Resources: []string{
+				"arn:aws:ec2:us-east-1:123456789012:instance/i-0abc123def456",
+			},
+		},
+	}
+
+	cfg := &config.Config{}
+	root := &cobra.Command{Use: "km"}
+	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, nil, nil, nil)
+	root.AddCommand(agentCmd)
+
+	root.SetArgs([]string{"agent", "attach", "sb-stopped-attach"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error for stopped sandbox, got nil")
+	}
+	if !strings.Contains(err.Error(), "stopped") {
+		t.Errorf("expected error to contain 'stopped', got: %v", err)
+	}
+}
