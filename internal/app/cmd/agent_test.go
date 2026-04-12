@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -136,7 +137,8 @@ func TestAgentNonInteractive_SendCommand(t *testing.T) {
 func TestAgentNonInteractive_CommandConstruction(t *testing.T) {
 	prompt := "fix the failing tests"
 
-	shellCmd := strings.Join(cmd.BuildAgentShellCommands(prompt, ""), "\n")
+	cmds, _ := cmd.BuildAgentShellCommands(prompt, "")
+	shellCmd := strings.Join(cmds, "\n")
 
 	// Verify required Claude flags (AGENT-02)
 	requiredParts := []string{
@@ -168,13 +170,15 @@ func TestAgentNonInteractive_CommandConstruction(t *testing.T) {
 // TestAgentNonInteractive_NoBedrock verifies that --no-bedrock injects unset commands.
 func TestAgentNonInteractive_NoBedrock(t *testing.T) {
 	// Without --no-bedrock: no unset commands
-	shellCmd := strings.Join(cmd.BuildAgentShellCommands("test prompt", ""), "\n")
+	cmdsNoBR, _ := cmd.BuildAgentShellCommands("test prompt", "")
+	shellCmd := strings.Join(cmdsNoBR, "\n")
 	if strings.Contains(shellCmd, "unset CLAUDE_CODE_USE_BEDROCK") {
 		t.Error("without --no-bedrock, should not contain unset commands")
 	}
 
 	// With --no-bedrock: unset commands present
-	shellCmd = strings.Join(cmd.BuildAgentShellCommands("test prompt", "", true), "\n")
+	cmdsWithBR, _ := cmd.BuildAgentShellCommands("test prompt", "", true)
+	shellCmd = strings.Join(cmdsWithBR, "\n")
 	for _, envVar := range []string{
 		"unset CLAUDE_CODE_USE_BEDROCK",
 		"unset ANTHROPIC_BASE_URL",
@@ -202,7 +206,8 @@ func TestAgentNonInteractive_PromptEscaping(t *testing.T) {
 
 	for _, prompt := range dangerous {
 		t.Run(prompt[:min(len(prompt), 20)], func(t *testing.T) {
-			shellCmd := strings.Join(cmd.BuildAgentShellCommands(prompt, ""), "\n")
+			cmdsEsc, _ := cmd.BuildAgentShellCommands(prompt, "")
+			shellCmd := strings.Join(cmdsEsc, "\n")
 
 			// The raw prompt text must NOT appear in the shell command
 			if strings.Contains(shellCmd, prompt) {
@@ -571,5 +576,67 @@ func TestAgentList(t *testing.T) {
 		if !strings.Contains(output, status) {
 			t.Errorf("expected status %q in output, got: %s", status, output)
 		}
+	}
+}
+
+// TestBuildAgentShellCommands_TmuxWrapping verifies tmux session wrapping in generated commands.
+func TestBuildAgentShellCommands_TmuxWrapping(t *testing.T) {
+	cmds, runID := cmd.BuildAgentShellCommands("test tmux wrapping", "my-bucket")
+	shellCmd := strings.Join(cmds, "\n")
+
+	// Commands contain tmux new-session with the session name
+	if !strings.Contains(shellCmd, "tmux new-session -d -s 'km-agent-") {
+		t.Error("commands missing tmux new-session -d -s 'km-agent-'")
+	}
+
+	// Commands contain tmux wait-for for blocking
+	if !strings.Contains(shellCmd, "tmux wait-for km-done-") {
+		t.Error("commands missing tmux wait-for km-done- (blocking line)")
+	}
+
+	// Script body still contains claude -p and S3 upload
+	if !strings.Contains(shellCmd, "claude -p") {
+		t.Error("script missing 'claude -p'")
+	}
+	if !strings.Contains(shellCmd, "aws s3 cp") {
+		t.Error("script missing S3 upload (aws s3 cp)")
+	}
+
+	// RUN_ID matches expected timestamp format
+	runIDRe := regexp.MustCompile(`^\d{8}T\d{6}Z$`)
+	if !runIDRe.MatchString(runID) {
+		t.Errorf("RUN_ID %q does not match expected format YYYYMMDDTHHMMSSZ", runID)
+	}
+
+	// Script contains tmux wait-for -S (signal completion)
+	if !strings.Contains(shellCmd, "tmux wait-for -S km-done-") {
+		t.Error("script missing tmux wait-for -S km-done- (completion signal)")
+	}
+
+	// The exec bash pattern keeps tmux session alive after script completes
+	if !strings.Contains(shellCmd, "exec bash") {
+		t.Error("commands missing 'exec bash' pattern for tmux session persistence")
+	}
+
+	// NoBedrock variant still includes the unset lines
+	cmdsNB, _ := cmd.BuildAgentShellCommands("test", "", true)
+	shellNB := strings.Join(cmdsNB, "\n")
+	if !strings.Contains(shellNB, "unset CLAUDE_CODE_USE_BEDROCK") {
+		t.Error("NoBedrock variant missing unset lines inside tmux-wrapped script")
+	}
+}
+
+// TestBuildAgentShellCommands_RunIDDeterministic verifies the returned RUN_ID matches timestamp format.
+func TestBuildAgentShellCommands_RunIDDeterministic(t *testing.T) {
+	_, runID := cmd.BuildAgentShellCommands("test deterministic", "")
+	re := regexp.MustCompile(`^\d{8}T\d{6}Z$`)
+	if !re.MatchString(runID) {
+		t.Errorf("RUN_ID %q does not match pattern YYYYMMDDTHHMMSSZ", runID)
+	}
+
+	// Verify the RUN_ID is a valid time
+	_, err := time.Parse("20060102T150405Z", runID)
+	if err != nil {
+		t.Errorf("RUN_ID %q is not a valid timestamp: %v", runID, err)
 	}
 }
