@@ -126,8 +126,11 @@ Examples:
 	cmd.Flags().BoolVar(&useCodex, "codex", false, "Launch OpenAI Codex (future)")
 	cmd.Flags().BoolVar(&noBedrock, "no-bedrock", false, "Use direct Anthropic API instead of Bedrock")
 
+	// Add "attach" subcommand for connecting to live tmux sessions
+	cmd.AddCommand(newAgentAttachCmd(cfg, fetcher, execFn))
+
 	// Add "run" subcommand for non-interactive execution
-	cmd.AddCommand(newAgentRunCmd(cfg, fetcher, ssmClient, ebClient))
+	cmd.AddCommand(newAgentRunCmd(cfg, fetcher, execFn, ssmClient, ebClient))
 
 	// Add "results" subcommand for fetching run output
 	cmd.AddCommand(newAgentResultsCmd(cfg, fetcher, ssmClient, s3Client))
@@ -139,7 +142,7 @@ Examples:
 }
 
 // newAgentRunCmd creates the "km agent run" subcommand.
-func newAgentRunCmd(cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI, ebClient kmaws.EventBridgeAPI) *cobra.Command {
+func newAgentRunCmd(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, ebClient kmaws.EventBridgeAPI) *cobra.Command {
 	var prompt string
 	var wait bool
 	var noBedrock bool
@@ -253,6 +256,81 @@ func runAgent(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	return execFn(c)
+}
+
+// newAgentAttachCmd creates the "km agent attach" subcommand.
+// It connects to the latest running km-agent-* tmux session via SSM start-session.
+func newAgentAttachCmd(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "attach <sandbox-id | #number>",
+		Short: "Attach to a running agent tmux session",
+		Long: `Attach to the latest running agent tmux session inside a sandbox.
+
+Connects via SSM start-session and attaches to the most recent km-agent-*
+tmux session. Detach with Ctrl-B d to return to your terminal.
+
+Examples:
+  km agent attach sb-abc123
+  km agent attach #1`,
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			sandboxID, err := ResolveSandboxID(ctx, cfg, args[0])
+			if err != nil {
+				return err
+			}
+
+			if fetcher == nil {
+				if cfg.StateBucket == "" {
+					return fmt.Errorf("state bucket not configured")
+				}
+				awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+				if err != nil {
+					return fmt.Errorf("load AWS config: %w", err)
+				}
+				fetcher = newRealFetcher(awsCfg, cfg.StateBucket, func() string {
+					t := cfg.SandboxTableName
+					if t == "" {
+						t = "km-sandboxes"
+					}
+					return t
+				}())
+			}
+			if execFn == nil {
+				execFn = defaultShellExec
+			}
+
+			rec, err := fetcher.FetchSandbox(ctx, sandboxID)
+			if err != nil {
+				return fmt.Errorf("fetch sandbox: %w", err)
+			}
+			if rec.Status == "stopped" {
+				return fmt.Errorf("sandbox %s is stopped -- start it with 'km resume %s' first", sandboxID, sandboxID)
+			}
+
+			instanceID, err := extractResourceID(rec.Resources, ":instance/")
+			if err != nil {
+				return fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
+			}
+
+			// Build SSM start-session with tmux attach to the latest km-agent-* session
+			tmuxCmd := `sudo -u sandbox -i bash -c "tmux attach-session -t $(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep km-agent | tail -1) 2>/dev/null || echo No agent tmux sessions found"`
+			c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
+				"--target", instanceID, "--region", rec.Region, "--profile", "klanker-terraform",
+				"--document-name", "AWS-StartInteractiveCommand",
+				"--parameters", fmt.Sprintf(`{"command":["%s"]}`, strings.ReplaceAll(tmuxCmd, `"`, `\"`)))
+			c.Stdin = os.Stdin
+			c.Stdout = os.Stdout
+			c.Stderr = os.Stderr
+			return execFn(c)
+		},
+	}
+
+	return cmd
 }
 
 // runAgentNonInteractive fires a prompt into a sandbox via SSM SendCommand.
