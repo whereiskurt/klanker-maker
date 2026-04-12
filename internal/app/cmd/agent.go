@@ -291,27 +291,69 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 	if err != nil {
 		return fmt.Errorf("fetch sandbox: %w", err)
 	}
-	if rec.Status == "stopped" || rec.Status == "paused" || rec.Status == "hibernated" {
+	if rec.Status != "running" {
 		if !autoStart {
 			return fmt.Errorf("sandbox %s is %s -- use --auto-start to resume automatically, or 'km resume %s' first", sandboxID, rec.Status, sandboxID)
 		}
-		fmt.Fprintf(os.Stdout, "Sandbox %s is %s, resuming...\n", sandboxID, rec.Status)
-		if err := runResume(ctx, cfg, sandboxID); err != nil {
-			return fmt.Errorf("auto-start sandbox %s: %w", sandboxID, err)
+		fmt.Fprintf(os.Stdout, "Sandbox %s is %s, starting...\n", sandboxID, rec.Status)
+		// Retry resume in a loop — instance may be in a transitional state (stopping→stopped)
+		fmt.Fprintf(os.Stdout, "Waiting for sandbox to be running...")
+		for i := 0; i < 36; i++ { // up to ~3 minutes
+			rec, _ = fetcher.FetchSandbox(ctx, sandboxID)
+			if rec != nil && rec.Status == "running" {
+				fmt.Fprintln(os.Stdout, " running")
+				break
+			}
+			// Try resume every 15 seconds (handles stopping→stopped→starting→running)
+			if i%3 == 0 {
+				_ = runResume(ctx, cfg, sandboxID)
+			}
+			time.Sleep(5 * time.Second)
+			fmt.Fprint(os.Stdout, ".")
 		}
-		// Wait for SSM agent to register after resume
-		fmt.Fprintf(os.Stdout, "Waiting for sandbox to be ready...\n")
-		time.Sleep(30 * time.Second)
-		// Re-fetch to get updated instance state
-		rec, err = fetcher.FetchSandbox(ctx, sandboxID)
-		if err != nil {
-			return fmt.Errorf("fetch sandbox after resume: %w", err)
+		if rec == nil || rec.Status != "running" {
+			status := "unknown"
+			if rec != nil {
+				status = rec.Status
+			}
+			return fmt.Errorf("sandbox %s did not reach running state (current: %s)", sandboxID, status)
 		}
 	}
 
 	instanceID, err := extractResourceID(rec.Resources, ":instance/")
 	if err != nil {
 		return fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
+	}
+
+	// If we just resumed, wait for SSM agent to register by probing with a no-op command
+	if autoStart {
+		fmt.Fprintf(os.Stdout, "Waiting for SSM agent...")
+		ready := false
+		for attempt := 0; attempt < 24; attempt++ { // up to ~2 minutes
+			time.Sleep(5 * time.Second)
+			testOut, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
+				InstanceIds:  []string{instanceID},
+				DocumentName: awssdk.String("AWS-RunShellScript"),
+				Parameters:   map[string][]string{"commands": {"echo ready"}},
+			})
+			if err == nil {
+				// Command accepted — wait briefly for it to complete
+				time.Sleep(3 * time.Second)
+				inv, invErr := ssmClient.GetCommandInvocation(ctx, &ssm.GetCommandInvocationInput{
+					CommandId:  awssdk.String(awssdk.ToString(testOut.Command.CommandId)),
+					InstanceId: awssdk.String(instanceID),
+				})
+				if invErr == nil && string(inv.Status) == "Success" {
+					ready = true
+					fmt.Fprintln(os.Stdout, " ready")
+					break
+				}
+			}
+			fmt.Fprint(os.Stdout, ".")
+		}
+		if !ready {
+			return fmt.Errorf("SSM agent on %s did not become ready after resume", sandboxID)
+		}
 	}
 
 	// Build the shell commands using shared helper (AGENT-02, AGENT-03)
