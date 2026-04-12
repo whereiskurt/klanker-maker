@@ -585,6 +585,8 @@ None yet.
 - Phase 46 added: AI email-to-command — Haiku interprets free-form operator emails, replies with confirmation template, operator replies "yes" to execute
 - Phase 48 added: Profile override flags for km create — targeted budget flags and generic --set (renumbered from 47; Phase 47 taken by privileged execution mode)
 - Phase 49 added: Prebaked AMI support — custom images with preinstalled toolchains for fast sandbox boot
+- Phase 50 added: km agent non-interactive execution — fire prompts via SSM SendCommand, --no-bedrock, --auto-start, S3 fast path, km at agent run
+- Phase 51 added: km agent tmux sessions — persistent tmux sessions for live attach, survive disconnects, --interactive mode, km agent attach
 
 ## Session Continuity
 

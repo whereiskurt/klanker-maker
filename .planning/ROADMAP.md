@@ -1130,3 +1130,13 @@ Plans:
 Plans:
 - [ ] 50-01-PLAN.md -- Cobra restructure, --prompt flag, non-interactive fire-and-forget via SSM SendCommand, idle-reset heartbeat
 - [ ] 50-02-PLAN.md -- km agent results and km agent list subcommands
+
+### Phase 51: km agent tmux sessions — run agents inside persistent tmux sessions for live attach, survive disconnects, and interactive mode
+
+**Goal:** Wrap all non-interactive agent execution in persistent tmux sessions on the sandbox. SSM SendCommand creates a named tmux session (`km-agent-<runID>`) that runs Claude, so operators can `km agent attach <sandbox>` to watch live, survive SSM disconnects, and scroll back through output. Add `--interactive` flag that opens an SSM session attached directly to the tmux pane. Add `km agent attach` subcommand for connecting to running/completed agent sessions.
+**Requirements**: TBD
+**Depends on:** Phase 50
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 51 to break down)
