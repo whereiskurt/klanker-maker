@@ -1541,20 +1541,6 @@ aws s3 cp "s3://{{ .KMArtifactsBucket }}/rsync/{{ .Rsync }}.tar.gz" /tmp/km-rsyn
   echo "[km-bootstrap] Rsync snapshot {{ .Rsync }} restored into $SHELL_HOME"
 } || echo "[km-bootstrap] WARNING: rsync snapshot {{ .Rsync }} not found in S3 (skipped)"
 {{- end }}
-{{- if .ConfigFiles }}
-# ============================================================
-# 7.4. Config files (from profile spec.execution.configFiles)
-# ============================================================
-{{- range $path, $content := .ConfigFiles }}
-CFDIR="$(dirname '{{ $path }}')"
-mkdir -p "$CFDIR"
-cat > '{{ $path }}' << 'KM_CONFIG_EOF'
-{{ $content }}
-KM_CONFIG_EOF
-chown -R sandbox:sandbox "$CFDIR"
-echo "[km-bootstrap] Config file written: {{ $path }}"
-{{- end }}
-{{- end }}
 {{- if or .InitCommands .InitScripts }}
 # ============================================================
 # 7.5. Profile init (commands + scripts downloaded from S3)
@@ -1567,6 +1553,21 @@ aws s3 cp "s3://${KM_INIT_BUCKET}/artifacts/{{ .SandboxID }}/km-init.sh" /tmp/km
   /tmp/km-init.sh
   echo "[km-bootstrap] Init complete"
 } || echo "[km-bootstrap] No init script found in S3 (skipped)"
+{{- end }}
+{{- if .ConfigFiles }}
+# ============================================================
+# 7.6. Config files (from profile spec.execution.configFiles)
+# Runs AFTER initCommands to ensure correct ownership.
+# ============================================================
+{{- range $path, $content := .ConfigFiles }}
+CFDIR="$(dirname '{{ $path }}')"
+mkdir -p "$CFDIR"
+cat > '{{ $path }}' << 'KM_CONFIG_EOF'
+{{ $content }}
+KM_CONFIG_EOF
+chown -R sandbox:sandbox "$CFDIR"
+echo "[km-bootstrap] Config file written: {{ $path }}"
+{{- end }}
 {{- end }}
 
 # ============================================================
