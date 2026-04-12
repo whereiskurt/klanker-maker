@@ -1049,8 +1049,8 @@ tmux wait-for -S km-done-%s`, noBedrockLines, artifactsBucket, runID, b64Prompt,
 	return []string{
 		fmt.Sprintf("cat > /tmp/km-agent-run.sh << 'KMEOF'\n%s\nKMEOF", script),
 		"chmod +x /tmp/km-agent-run.sh",
-		fmt.Sprintf("sudo -u sandbox -i tmux new-session -d -s '%s' '/tmp/km-agent-run.sh; exec bash'", sessionName),
-		fmt.Sprintf("sudo -u sandbox -i tmux wait-for km-done-%s", runID),
+		fmt.Sprintf("sudo -u sandbox bash -c \"tmux new-session -d -s '%s' '/tmp/km-agent-run.sh; exec bash'\"", sessionName),
+		fmt.Sprintf("sudo -u sandbox bash -c \"tmux wait-for km-done-%s\"", runID),
 		fmt.Sprintf("echo \"KM_RUN_ID=%s\"", runID),
 		"rm -f /tmp/km-agent-run.sh",
 	}, runID
