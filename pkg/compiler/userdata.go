@@ -1546,12 +1546,12 @@ aws s3 cp "s3://{{ .KMArtifactsBucket }}/rsync/{{ .Rsync }}.tar.gz" /tmp/km-rsyn
 # 7.4. Config files (from profile spec.execution.configFiles)
 # ============================================================
 {{- range $path, $content := .ConfigFiles }}
-mkdir -p "$(dirname '{{ $path }}')"
-chown -R sandbox:sandbox "$(dirname '{{ $path }}')"
+CFDIR="$(dirname '{{ $path }}')"
+mkdir -p "$CFDIR"
 cat > '{{ $path }}' << 'KM_CONFIG_EOF'
 {{ $content }}
 KM_CONFIG_EOF
-chown sandbox:sandbox '{{ $path }}'
+chown -R sandbox:sandbox "$CFDIR"
 echo "[km-bootstrap] Config file written: {{ $path }}"
 {{- end }}
 {{- end }}

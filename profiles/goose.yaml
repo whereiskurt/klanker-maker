@@ -58,7 +58,7 @@ spec:
       - "npm install -g @anthropic-ai/claude-code"
       - "curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.117.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz"
       - "tar -xzf /tmp/codex.tar.gz -C /tmp && install -m 755 /tmp/codex-x86_64-unknown-linux-musl /usr/local/bin/codex"
-      - "mkdir -p /home/sandbox/.config/goose /home/sandbox/.codex"
+      - "mkdir -p /home/sandbox/.config/goose /home/sandbox/.codex && chown -R sandbox:sandbox /home/sandbox/.codex"
       - "printf 'provider: aws_bedrock\\nmodel: us.anthropic.claude-opus-4-6-v1\\n' > /home/sandbox/.config/goose/config.yaml"
       - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace /home/sandbox/.config /home/sandbox/.local"
       - "su - sandbox -c 'cd /workspace && git config --global user.name \"Goose eBPF Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
