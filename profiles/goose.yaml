@@ -116,6 +116,7 @@ spec:
         - "api.statsig.com"
         - "featuregates.org"
         - "api.featuregates.org"
+        - "storage.googleapis.com"
 
   budget:
     compute:

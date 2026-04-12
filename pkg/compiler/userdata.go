@@ -1547,6 +1547,7 @@ aws s3 cp "s3://{{ .KMArtifactsBucket }}/rsync/{{ .Rsync }}.tar.gz" /tmp/km-rsyn
 # ============================================================
 {{- range $path, $content := .ConfigFiles }}
 mkdir -p "$(dirname '{{ $path }}')"
+chown -R sandbox:sandbox "$(dirname '{{ $path }}')"
 cat > '{{ $path }}' << 'KM_CONFIG_EOF'
 {{ $content }}
 KM_CONFIG_EOF
