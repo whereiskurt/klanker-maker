@@ -1115,7 +1115,10 @@ Plans:
 **Goal:** [To be planned]
 **Requirements**: TBD
 **Depends on:** Phase 48
-**Plans:** 0 plans
+**Plans:** 2 plans
+Plans:
+- [ ] 52-01-PLAN.md — Add cloned_from field to DynamoDB metadata and km list --wide
+- [ ] 52-02-PLAN.md — Implement km clone command with workspace staging
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 49 to break down)
@@ -1147,4 +1150,7 @@ Plans:
 **Goal:** Add `km clone <source> [new-alias]` command that creates a new sandbox from an existing one's profile, copies /workspace and rsyncFileList paths via SSM+rsync through S3 staging, and provisions a fully independent identity (new sandbox ID, email, keys, budget, TTL). Supports `--no-copy` for fresh-from-same-profile, `--count N` for multi-clone with auto-suffixed aliases, and `--alias` flag as alternative to positional alias. Source must be running; live copy (no freeze). Clone metadata includes `cloned_from` field for lineage tracking.
 **Requirements**: [CLONE-01, CLONE-02, CLONE-03, CLONE-04, CLONE-05]
 **Depends on:** Phase 2 (core provisioning)
-**Plans:** 0 plans
+**Plans:** 2 plans
+Plans:
+- [ ] 52-01-PLAN.md — Add cloned_from field to DynamoDB metadata and km list --wide
+- [ ] 52-02-PLAN.md — Implement km clone command with workspace staging
