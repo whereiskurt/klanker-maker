@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
@@ -126,6 +127,14 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonO
 	}
 	localnumber.Reconcile(lnState, liveIDs)
 	_ = localnumber.Save(lnState) // best-effort
+
+	// Sort records by local number (ascending).
+	numbers := lnState.Map
+	sort.Slice(records, func(i, j int) bool {
+		ni := numbers[records[i].SandboxID]
+		nj := numbers[records[j].SandboxID]
+		return ni < nj
+	})
 
 	if jsonOutput {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(records)
