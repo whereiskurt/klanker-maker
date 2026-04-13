@@ -122,6 +122,9 @@ func mustMarshalSandboxItem(t *testing.T, meta kmaws.SandboxMetadata) map[string
 	if meta.TTLExpiry != nil {
 		item["ttl_expiry"] = &dynamodbtypes.AttributeValueMemberN{Value: fmt.Sprintf("%d", meta.TTLExpiry.Unix())}
 	}
+	if meta.ClonedFrom != "" {
+		item["cloned_from"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.ClonedFrom}
+	}
 	return item
 }
 
@@ -463,6 +466,175 @@ func TestUpdateSandboxStatusDynamo_UpdatesStatus(t *testing.T) {
 	}
 	if sv, ok := statusAttr.(*dynamodbtypes.AttributeValueMemberS); !ok || sv.Value != "paused" {
 		t.Errorf(":status = %v, want AttributeValueMemberS{paused}", statusAttr)
+	}
+}
+
+// ---- Tests: ClonedFrom field marshal/unmarshal ----
+
+func TestClonedFrom_MarshalIncludesWhenNonEmpty(t *testing.T) {
+	meta := &kmaws.SandboxMetadata{
+		SandboxID:   "sb-clone",
+		ProfileName: "dev",
+		Substrate:   "ec2",
+		Region:      "us-east-1",
+		CreatedAt:   time.Now().UTC(),
+		ClonedFrom:  "sb-abc12345",
+	}
+
+	mock := &mockSandboxMetadataAPI{
+		putItemOutput: &dynamodb.PutItemOutput{},
+	}
+
+	if err := kmaws.WriteSandboxMetadataDynamo(context.Background(), mock, "km-sandbox-metadata", meta); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	clonedAttr, ok := mock.putItemInput.Item["cloned_from"]
+	if !ok {
+		t.Fatal("cloned_from attribute missing from PutItem input when ClonedFrom is set")
+	}
+	sv, ok := clonedAttr.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok {
+		t.Errorf("cloned_from should be AttributeValueMemberS, got %T", clonedAttr)
+	}
+	if sv.Value != "sb-abc12345" {
+		t.Errorf("cloned_from = %q, want %q", sv.Value, "sb-abc12345")
+	}
+}
+
+func TestClonedFrom_MarshalOmitsWhenEmpty(t *testing.T) {
+	meta := &kmaws.SandboxMetadata{
+		SandboxID:   "sb-noclone",
+		ProfileName: "dev",
+		Substrate:   "ec2",
+		Region:      "us-east-1",
+		CreatedAt:   time.Now().UTC(),
+		ClonedFrom:  "", // empty — must NOT appear in item
+	}
+
+	mock := &mockSandboxMetadataAPI{
+		putItemOutput: &dynamodb.PutItemOutput{},
+	}
+
+	if err := kmaws.WriteSandboxMetadataDynamo(context.Background(), mock, "km-sandbox-metadata", meta); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, present := mock.putItemInput.Item["cloned_from"]; present {
+		t.Error("cloned_from attribute should be omitted when ClonedFrom is empty (GSI pollution prevention)")
+	}
+}
+
+func TestClonedFrom_UnmarshalPopulatesWhenPresent(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	meta := kmaws.SandboxMetadata{
+		SandboxID:   "sb-read-clone",
+		ProfileName: "dev",
+		Substrate:   "ec2",
+		Region:      "us-east-1",
+		Status:      "running",
+		CreatedAt:   now,
+		ClonedFrom:  "sb-source99",
+	}
+
+	item := mustMarshalSandboxItem(t, meta)
+
+	mock := &mockSandboxMetadataAPI{
+		getItemOutput: &dynamodb.GetItemOutput{Item: item},
+	}
+
+	got, err := kmaws.ReadSandboxMetadataDynamo(context.Background(), mock, "km-sandbox-metadata", "sb-read-clone")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ClonedFrom != "sb-source99" {
+		t.Errorf("ClonedFrom = %q, want %q", got.ClonedFrom, "sb-source99")
+	}
+}
+
+func TestClonedFrom_UnmarshalEmptyWhenAbsent(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	meta := kmaws.SandboxMetadata{
+		SandboxID:   "sb-no-clone-field",
+		ProfileName: "dev",
+		Substrate:   "ec2",
+		Region:      "us-east-1",
+		Status:      "running",
+		CreatedAt:   now,
+		// ClonedFrom intentionally absent
+	}
+
+	item := mustMarshalSandboxItem(t, meta)
+
+	mock := &mockSandboxMetadataAPI{
+		getItemOutput: &dynamodb.GetItemOutput{Item: item},
+	}
+
+	got, err := kmaws.ReadSandboxMetadataDynamo(context.Background(), mock, "km-sandbox-metadata", "sb-no-clone-field")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ClonedFrom != "" {
+		t.Errorf("ClonedFrom = %q, want empty string when absent from DynamoDB item", got.ClonedFrom)
+	}
+}
+
+func TestClonedFrom_ToSandboxMetadataPropagates(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	meta := kmaws.SandboxMetadata{
+		SandboxID:   "sb-prop",
+		ProfileName: "dev",
+		Substrate:   "ec2",
+		Region:      "us-east-1",
+		Status:      "running",
+		CreatedAt:   now,
+		ClonedFrom:  "sb-origin",
+	}
+
+	item := mustMarshalSandboxItem(t, meta)
+
+	mock := &mockSandboxMetadataAPI{
+		getItemOutput: &dynamodb.GetItemOutput{Item: item},
+	}
+
+	got, err := kmaws.ReadSandboxMetadataDynamo(context.Background(), mock, "km-sandbox-metadata", "sb-prop")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ClonedFrom != "sb-origin" {
+		t.Errorf("toSandboxMetadata: ClonedFrom = %q, want %q", got.ClonedFrom, "sb-origin")
+	}
+}
+
+func TestClonedFrom_MetadataToRecordPropagates(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	meta := kmaws.SandboxMetadata{
+		SandboxID:   "sb-rec",
+		ProfileName: "dev",
+		Substrate:   "ec2",
+		Region:      "us-east-1",
+		Status:      "running",
+		CreatedAt:   now,
+		ClonedFrom:  "sb-parent",
+	}
+
+	item := mustMarshalSandboxItem(t, meta)
+
+	mock := &mockSandboxMetadataAPI{
+		scanOutputs: []*dynamodb.ScanOutput{
+			{Items: []map[string]dynamodbtypes.AttributeValue{item}},
+		},
+	}
+
+	records, err := kmaws.ListAllSandboxesByDynamo(context.Background(), mock, "km-sandbox-metadata")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	if records[0].ClonedFrom != "sb-parent" {
+		t.Errorf("metadataToRecord: ClonedFrom = %q, want %q", records[0].ClonedFrom, "sb-parent")
 	}
 }
 
