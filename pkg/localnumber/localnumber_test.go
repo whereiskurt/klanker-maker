@@ -20,13 +20,6 @@ func loadFrom(t *testing.T, path string) *localnumber.State {
 	return s
 }
 
-func saveTo(t *testing.T, s *localnumber.State, path string) {
-	t.Helper()
-	if err := localnumber.SaveTo(s, path); err != nil {
-		t.Fatalf("SaveTo(%q): %v", path, err)
-	}
-}
-
 // TestAssign verifies:
 //   - fresh state assigns 1 to first sandbox
 //   - second sandbox gets 2
@@ -214,7 +207,7 @@ func TestLoad(t *testing.T) {
 	}
 
 	// Valid JSON
-	data, _ := json.Marshal(map[string]interface{}{
+	data, _ := json.Marshal(map[string]any{
 		"next": 5,
 		"map":  map[string]int{"sb-abc": 3, "sb-def": 4},
 	})
@@ -233,7 +226,7 @@ func TestLoad(t *testing.T) {
 	}
 
 	// Nil map in JSON → initialized
-	data2, _ := json.Marshal(map[string]interface{}{
+	data2, _ := json.Marshal(map[string]any{
 		"next": 2,
 		"map":  nil,
 	})
@@ -249,7 +242,7 @@ func TestLoad(t *testing.T) {
 	}
 
 	// Next < 1 corrected
-	data3, _ := json.Marshal(map[string]interface{}{
+	data3, _ := json.Marshal(map[string]any{
 		"next": 0,
 		"map":  map[string]int{},
 	})
