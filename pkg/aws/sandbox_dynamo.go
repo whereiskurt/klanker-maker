@@ -53,6 +53,7 @@ type sandboxItemDynamo struct {
 	MaxLifetime  string `dynamodbav:"max_lifetime,omitempty"`
 	CreatedBy    string `dynamodbav:"created_by,omitempty"`
 	Alias        string `dynamodbav:"alias,omitempty"`
+	ClonedFrom   string `dynamodbav:"cloned_from,omitempty"`
 	Locked       bool   `dynamodbav:"locked,omitempty"`
 	LockedAt     string `dynamodbav:"locked_at,omitempty"`
 	// TTLExpiryEpoch is int64 so attributevalue.Marshal gives a Number.
@@ -79,6 +80,7 @@ func (d *sandboxItemDynamo) toSandboxMetadata() (*SandboxMetadata, error) {
 		MaxLifetime: d.MaxLifetime,
 		CreatedBy:   d.CreatedBy,
 		Alias:       d.Alias,
+		ClonedFrom:  d.ClonedFrom,
 		Locked:      d.Locked,
 	}
 
@@ -115,6 +117,7 @@ func metadataToRecord(meta *SandboxMetadata) SandboxRecord {
 		TTLRemaining: computeTTLRemaining(meta.TTLExpiry),
 		IdleTimeout:  meta.IdleTimeout,
 		Alias:        meta.Alias,
+		ClonedFrom:   meta.ClonedFrom,
 		Locked:       meta.Locked,
 	}
 }
@@ -174,6 +177,11 @@ func unmarshalSandboxItem(item map[string]dynamodbtypes.AttributeValue) (*sandbo
 			d.Alias = sv.Value
 		}
 	}
+	if v, ok := item["cloned_from"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			d.ClonedFrom = sv.Value
+		}
+	}
 	if v, ok := item["locked"]; ok {
 		if bv, ok := v.(*dynamodbtypes.AttributeValueMemberBOOL); ok {
 			d.Locked = bv.Value
@@ -225,6 +233,10 @@ func marshalSandboxItem(meta *SandboxMetadata) map[string]dynamodbtypes.Attribut
 	// alias: omit entirely when empty to prevent GSI index from storing empty-string projections
 	if meta.Alias != "" {
 		item["alias"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.Alias}
+	}
+	// cloned_from: omit when empty (no GSI, but keeps items clean — same pattern as alias)
+	if meta.ClonedFrom != "" {
+		item["cloned_from"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.ClonedFrom}
 	}
 	if meta.Locked {
 		item["locked"] = &dynamodbtypes.AttributeValueMemberBOOL{Value: true}
