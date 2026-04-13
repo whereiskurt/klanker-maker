@@ -1154,3 +1154,13 @@ Plans:
 Plans:
 - [ ] 52-01-PLAN.md — Add cloned_from field to DynamoDB metadata and km list --wide
 - [ ] 52-02-PLAN.md — Implement km clone command with workspace staging
+
+### Phase 53: Persistent local sandbox numbering — monotonic counter assigned at create time, stored locally, replaces ephemeral positional numbers in km list
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 52
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 53 to break down)

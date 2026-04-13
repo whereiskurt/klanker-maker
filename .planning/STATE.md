@@ -597,6 +597,7 @@ None yet.
 - Phase 49 added: Prebaked AMI support — custom images with preinstalled toolchains for fast sandbox boot
 - Phase 50 added: km agent non-interactive execution — fire prompts via SSM SendCommand, --no-bedrock, --auto-start, S3 fast path, km at agent run
 - Phase 51 added: km agent tmux sessions — persistent tmux sessions for live attach, survive disconnects, --interactive mode, km agent attach
+- Phase 53 added: Persistent local sandbox numbering — monotonic counter assigned at create time, stored locally, replaces ephemeral positional numbers in km list
 
 ## Session Continuity
 
