@@ -1157,10 +1157,18 @@ Plans:
 
 ### Phase 53: Persistent local sandbox numbering — monotonic counter assigned at create time, stored locally, replaces ephemeral positional numbers in km list
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Replace ephemeral positional numbering in km list with persistent local numbers assigned at create time, stored in ~/.config/km/local-numbers.json
+**Requirements**: LOCAL-01, LOCAL-02, LOCAL-03, LOCAL-04, LOCAL-05, LOCAL-06, LOCAL-07, LOCAL-08
 **Depends on:** Phase 52
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 53 to break down)
+- [ ] 53-01-PLAN.md — Create pkg/localnumber package with TDD (State, Load, Save, Assign, Remove, Resolve, Reconcile)
+- [ ] 53-02-PLAN.md — Wire local numbers into create, list, sandbox_ref, and destroy commands
+
+
+
+
+
+
+
