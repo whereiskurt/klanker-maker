@@ -1160,7 +1160,7 @@ Plans:
 **Goal:** Replace ephemeral positional numbering in km list with persistent local numbers assigned at create time, stored in ~/.config/km/local-numbers.json
 **Requirements**: LOCAL-01, LOCAL-02, LOCAL-03, LOCAL-04, LOCAL-05, LOCAL-06, LOCAL-07, LOCAL-08
 **Depends on:** Phase 52
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 53-01-PLAN.md — Create pkg/localnumber package with TDD (State, Load, Save, Assign, Remove, Resolve, Reconcile)
