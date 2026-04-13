@@ -158,7 +158,7 @@ func runClone(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, s
 			ssmClientReal = ssm.NewFromConfig(awsCfg)
 		}
 
-		stagingCmd := BuildWorkspaceStagingCmd(nil, cfg.ArtifactsBucket, stagingKey)
+		stagingCmd := BuildWorkspaceStagingCmd([]string{"home/sandbox"}, cfg.ArtifactsBucket, stagingKey)
 		if err := sendSSMCommand(ctx, ssmClient, ssmClientReal, instanceID, stagingCmd, "CLONE_STAGE_OK", "workspace stage"); err != nil {
 			return fmt.Errorf("stage workspace from %s: %w", sourceID, err)
 		}
@@ -403,6 +403,7 @@ func downloadWorkspaceToClone(ctx context.Context, cfg *config.Config, cloneID, 
 			`aws s3 cp "s3://%s/%s" /tmp/km-workspace.tar.gz && `+
 			`tar xzf /tmp/km-workspace.tar.gz -C / && `+
 			`chown -R sandbox:sandbox /workspace && `+
+			`chown -R sandbox:sandbox /home/sandbox && `+
 			`rm -f /tmp/km-workspace.tar.gz && `+
 			`echo CLONE_DOWNLOAD_OK`,
 		cfg.ArtifactsBucket, stagingKey,
