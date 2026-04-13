@@ -205,24 +205,54 @@ func runClone(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, s
 			}
 		}
 
-		// Step 9b: Resolve the new clone's sandbox ID for post-provision workspace download
+		// Step 9b: Resolve the new clone's sandbox ID for post-provision workspace download.
+		// For remote creates, the Lambda is provisioning asynchronously — we must wait
+		// for the clone to reach "running" status before sending SSM commands.
+		// The alias may not exist in DynamoDB yet, so we poll for both alias resolution
+		// and running status together.
 		if !noCopy && stagingKey != "" {
-			cloneID, resolveErr := resolveCloneID(ctx, cfg, cloneAlias, ssmClient)
-			if resolveErr != nil {
-				// Non-fatal: workspace download is best-effort
-				fmt.Printf("  Warning: could not resolve clone ID for workspace download: %v\n", resolveErr)
+			if rec.Substrate != "docker" {
+				// Remote create: poll for alias resolution + running status
+				fmt.Printf("  Waiting for clone to be running...")
+				cloneID, waitErr := waitForCloneRunning(ctx, cfg, cloneAlias, ssmClient, 5*time.Minute)
+				if waitErr != nil {
+					fmt.Printf("\n  Warning: clone did not reach running state: %v\n", waitErr)
+					fmt.Printf("  Use 'km rsync save %s <name> && km rsync load %s <name>' to copy workspace manually\n", sourceID, cloneAlias)
+				} else {
+					fmt.Printf(" ready\n")
+					fmt.Printf("  Downloading workspace to %s...", cloneID)
+					if err := downloadWorkspaceToClone(ctx, cfg, cloneID, stagingKey, ssmClient); err != nil {
+						fmt.Printf("\n  Warning: workspace download to %s failed: %v (use 'km shell %s' to check manually)\n", cloneID, err, cloneID)
+					} else {
+						fmt.Print(" done\n")
+					}
+				}
 			} else {
-				fmt.Printf("  Downloading workspace to %s...", cloneID)
-				if err := downloadWorkspaceToClone(ctx, cfg, cloneID, stagingKey, ssmClient); err != nil {
-					fmt.Printf("\n  Warning: workspace download to %s failed: %v (use 'km shell %s' to check manually)\n", cloneID, err, cloneID)
+				// Docker creates are synchronous — instance is ready immediately
+				cloneID, resolveErr := resolveCloneID(ctx, cfg, cloneAlias, ssmClient)
+				if resolveErr != nil {
+					fmt.Printf("  Warning: could not resolve clone ID for workspace download: %v\n", resolveErr)
+				} else {
+					fmt.Printf("  Downloading workspace to %s...", cloneID)
+					if err := downloadWorkspaceToClone(ctx, cfg, cloneID, stagingKey, ssmClient); err != nil {
+						fmt.Printf("\n  Warning: workspace download to %s failed: %v (use 'km shell %s' to check manually)\n", cloneID, err, cloneID)
+					} else {
+						fmt.Print(" done\n")
+					}
 				}
 			}
 		}
 
-		// Step 9c: Update clone's DynamoDB metadata with cloned_from
-		if err := updateClonedFrom(ctx, cfg, cloneAlias, sourceID, ssmClient); err != nil {
-			// Non-fatal: metadata lineage is best-effort
-			fmt.Printf("  Warning: could not update cloned_from metadata: %v\n", err)
+		// Step 9c: Update clone's DynamoDB metadata with cloned_from.
+		// For remote creates, we retry alias resolution since the metadata may
+		// have been written by the Lambda by now (we just waited for running).
+		cloneIDForMeta, metaResolveErr := resolveCloneID(ctx, cfg, cloneAlias, ssmClient)
+		if metaResolveErr == nil {
+			if err := updateClonedFromByID(ctx, cfg, cloneIDForMeta, sourceID, ssmClient); err != nil {
+				fmt.Printf("  Warning: could not update cloned_from metadata: %v\n", err)
+			}
+		} else {
+			fmt.Printf("  Warning: could not resolve clone for cloned_from update: %v\n", metaResolveErr)
 		}
 
 		fmt.Printf("  Clone complete: %s -> %s\n", sourceID, cloneAlias)
@@ -366,8 +396,11 @@ func downloadWorkspaceToClone(ctx context.Context, cfg *config.Config, cloneID, 
 		return fmt.Errorf("find clone instance ID: %w", err)
 	}
 
+	// Wait for the sandbox user to exist (userdata creates it after boot).
+	// The instance may report "running" in DynamoDB before userdata finishes.
 	downloadCmd := fmt.Sprintf(
-		`aws s3 cp "s3://%s/%s" /tmp/km-workspace.tar.gz && `+
+		`for i in $(seq 1 30); do id sandbox >/dev/null 2>&1 && break; sleep 2; done && `+
+			`aws s3 cp "s3://%s/%s" /tmp/km-workspace.tar.gz && `+
 			`tar xzf /tmp/km-workspace.tar.gz -C / && `+
 			`chown -R sandbox:sandbox /workspace && `+
 			`rm -f /tmp/km-workspace.tar.gz && `+
@@ -395,19 +428,14 @@ func resolveCloneID(ctx context.Context, cfg *config.Config, cloneAlias string, 
 	return ResolveSandboxID(ctx, cfg, cloneAlias)
 }
 
-// updateClonedFrom sets the cloned_from field on the clone's DynamoDB metadata.
-func updateClonedFrom(ctx context.Context, cfg *config.Config, cloneAlias, sourceID string, ssmClient SSMSendAPI) error {
+// updateClonedFromByID sets the cloned_from field on a clone's DynamoDB metadata
+// using the sandbox ID directly (no alias resolution needed).
+func updateClonedFromByID(ctx context.Context, cfg *config.Config, cloneID, sourceID string, ssmClient SSMSendAPI) error {
 	if ssmClient != nil {
-		// Test mode — skip real DynamoDB update
 		return nil
 	}
-	if cloneAlias == "" {
+	if cloneID == "" {
 		return nil
-	}
-
-	cloneID, err := ResolveSandboxID(ctx, cfg, cloneAlias)
-	if err != nil {
-		return fmt.Errorf("resolve clone alias %q: %w", cloneAlias, err)
 	}
 
 	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
@@ -434,6 +462,57 @@ func updateClonedFrom(ctx context.Context, cfg *config.Config, cloneAlias, sourc
 		},
 	})
 	return err
+}
+
+// waitForCloneRunning polls for the clone's alias to appear in DynamoDB and for its
+// status to reach "running". Returns the resolved sandbox ID. This handles the async
+// nature of remote create where the Lambda hasn't written metadata yet.
+func waitForCloneRunning(ctx context.Context, cfg *config.Config, cloneAlias string, ssmClient SSMSendAPI, timeout time.Duration) (string, error) {
+	if ssmClient != nil {
+		// Test mode — assume running immediately
+		return "sb-testclone", nil
+	}
+
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
+	if err != nil {
+		return "", fmt.Errorf("load AWS config: %w", err)
+	}
+	tableName := cfg.SandboxTableName
+	if tableName == "" {
+		tableName = "km-sandboxes"
+	}
+	dynamoClient := dynamodb.NewFromConfig(awsCfg)
+
+	deadline := time.Now().Add(timeout)
+	pollInterval := 10 * time.Second
+
+	for {
+		// Try to resolve alias to sandbox ID
+		cloneID, resolveErr := ResolveSandboxID(ctx, cfg, cloneAlias)
+		if resolveErr == nil && cloneID != "" {
+			// Alias resolved — now check status
+			meta, readErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClient, tableName, cloneID)
+			if readErr == nil && meta != nil {
+				status := meta.Status
+				if status == "" {
+					status = "running" // backward compat
+				}
+				if status == "running" {
+					return cloneID, nil
+				}
+				if status == "failed" || status == "killed" || status == "reaped" {
+					return cloneID, fmt.Errorf("sandbox reached terminal status: %s", status)
+				}
+			}
+		}
+
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("timed out after %s waiting for clone to reach running status", timeout)
+		}
+
+		fmt.Print(".")
+		time.Sleep(pollInterval)
+	}
 }
 
 // cleanupStagingKey deletes the staging S3 object (best-effort, logged on failure).
