@@ -609,6 +609,48 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 	// module but the Docker destroy path doesn't run Terragrunt, so SDK cleanup is needed.
 	cleanupGitHubTokenResources(ctx, awsCfg, sandboxID)
 
+	// Step DD3c: Cancel EventBridge schedules (TTL, budget) so they don't fire after resources are gone.
+	schedulerClient := scheduler.NewFromConfig(awsCfg)
+	if err := awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID); err != nil {
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("failed to delete TTL schedule (non-fatal)")
+	}
+	budgetScheduleName := "km-budget-" + sandboxID
+	if _, err := schedulerClient.DeleteSchedule(ctx, &scheduler.DeleteScheduleInput{
+		Name: aws.String(budgetScheduleName),
+	}); err != nil {
+		if !strings.Contains(err.Error(), "ResourceNotFoundException") && !strings.Contains(err.Error(), "not found") {
+			log.Warn().Err(err).Str("schedule", budgetScheduleName).Msg("failed to delete budget schedule (non-fatal)")
+		}
+	}
+
+	// Step DD3d: Clean up budget-enforcer resources (Lambda, IAM roles, log group).
+	cleanupBudgetEnforcerResources(ctx, awsCfg, sandboxID)
+
+	// Step DD3e: Clean up SES email identity.
+	destroyBaseDomain := cfg.Domain
+	if destroyBaseDomain == "" {
+		destroyBaseDomain = "klankermaker.ai"
+	}
+	emailDomain := "sandboxes." + destroyBaseDomain
+	sesClient := sesv2.NewFromConfig(awsCfg)
+	if err := awspkg.CleanupSandboxEmail(ctx, sesClient, sandboxID, emailDomain); err != nil {
+		log.Warn().Err(err).Msg("failed to cleanup sandbox email (non-fatal)")
+	}
+
+	// Step DD3f: Clean up sandbox identity (SSM signing key + DynamoDB identity row).
+	{
+		identitySSMClient := ssm.NewFromConfig(awsCfg)
+		identityDynClient := dynamodbpkg.NewFromConfig(awsCfg)
+		identityTableName := cfg.IdentityTableName
+		if identityTableName == "" {
+			identityTableName = "km-identities"
+		}
+		if identErr := awspkg.CleanupSandboxIdentity(ctx, identitySSMClient, identityDynClient, identityTableName, sandboxID); identErr != nil {
+			log.Warn().Err(identErr).Str("sandbox_id", sandboxID).
+				Msg("failed to cleanup sandbox identity (non-fatal)")
+		}
+	}
+
 	// Step DD4: Delete sandbox metadata from DynamoDB (and S3 fallback).
 	{
 		tableName := cfg.SandboxTableName
@@ -745,6 +787,62 @@ func cleanupGitHubTokenResources(ctx context.Context, awsCfg aws.Config, sandbox
 		kmsClient.DeleteAlias(ctx, &kmspkg.DeleteAliasInput{
 			AliasName: aws.String(kmsAlias),
 		})
+	}
+}
+
+// cleanupBudgetEnforcerResources removes budget-enforcer resources for a sandbox
+// via SDK calls: Lambda function, IAM roles, CloudWatch log group.
+// The EventBridge schedule is handled separately (caller deletes it directly).
+// All errors are non-fatal (logged as warnings) — idempotent cleanup.
+func cleanupBudgetEnforcerResources(ctx context.Context, awsCfg aws.Config, sandboxID string) {
+	// Delete budget-enforcer Lambda.
+	lambdaClient := lambdapkg.NewFromConfig(awsCfg)
+	fnName := "km-budget-enforcer-" + sandboxID
+	if _, err := lambdaClient.DeleteFunction(ctx, &lambdapkg.DeleteFunctionInput{
+		FunctionName: aws.String(fnName),
+	}); err != nil {
+		if !strings.Contains(err.Error(), "ResourceNotFoundException") && !strings.Contains(err.Error(), "not found") {
+			log.Warn().Err(err).Str("function", fnName).Msg("failed to delete budget-enforcer Lambda (non-fatal)")
+		}
+	} else {
+		fmt.Printf("  ✓ Budget-enforcer Lambda deleted: %s\n", fnName)
+	}
+
+	// Delete budget-enforcer IAM roles.
+	iamClient := iampkg.NewFromConfig(awsCfg)
+	for _, roleName := range []string{
+		"km-budget-enforcer-" + sandboxID,
+		"km-budget-scheduler-" + sandboxID,
+	} {
+		listOut, _ := iamClient.ListRolePolicies(ctx, &iampkg.ListRolePoliciesInput{
+			RoleName: aws.String(roleName),
+		})
+		if listOut != nil {
+			for _, policyName := range listOut.PolicyNames {
+				iamClient.DeleteRolePolicy(ctx, &iampkg.DeleteRolePolicyInput{
+					RoleName:   aws.String(roleName),
+					PolicyName: aws.String(policyName),
+				})
+			}
+		}
+		if _, err := iamClient.DeleteRole(ctx, &iampkg.DeleteRoleInput{
+			RoleName: aws.String(roleName),
+		}); err != nil {
+			if !strings.Contains(err.Error(), "NoSuchEntity") && !strings.Contains(err.Error(), "not found") {
+				log.Warn().Err(err).Str("role", roleName).Msg("failed to delete budget-enforcer IAM role (non-fatal)")
+			}
+		}
+	}
+
+	// Delete budget-enforcer CloudWatch log group.
+	cwClient := cloudwatchlogs.NewFromConfig(awsCfg)
+	logGroup := "/aws/lambda/km-budget-enforcer-" + sandboxID
+	if _, err := cwClient.DeleteLogGroup(ctx, &cloudwatchlogs.DeleteLogGroupInput{
+		LogGroupName: aws.String(logGroup),
+	}); err != nil {
+		if !strings.Contains(err.Error(), "ResourceNotFoundException") && !strings.Contains(err.Error(), "not found") {
+			log.Warn().Err(err).Str("log_group", logGroup).Msg("failed to delete budget-enforcer log group (non-fatal)")
+		}
 	}
 }
 

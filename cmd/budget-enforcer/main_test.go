@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
 )
@@ -435,3 +437,193 @@ var _ ECSStopAPI = (*mockECSStopAPI)(nil)
 
 // Ensure BudgetCheckEvent is defined in main package.
 var _ = fmt.Sprintf("%T", BudgetCheckEvent{})
+
+// --------------------------------------------------------------------------
+// Mock: SandboxMetadataAPI (for sandbox existence check)
+// --------------------------------------------------------------------------
+
+type mockSandboxMetadataAPI struct {
+	getItemOutput *dynamodb.GetItemOutput
+	getItemErr    error
+}
+
+func (m *mockSandboxMetadataAPI) GetItem(ctx context.Context, input *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
+	if m.getItemErr != nil {
+		return nil, m.getItemErr
+	}
+	if m.getItemOutput != nil {
+		return m.getItemOutput, nil
+	}
+	// Default: empty item (sandbox not found)
+	return &dynamodb.GetItemOutput{}, nil
+}
+
+func (m *mockSandboxMetadataAPI) PutItem(ctx context.Context, input *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error) {
+	return &dynamodb.PutItemOutput{}, nil
+}
+
+func (m *mockSandboxMetadataAPI) UpdateItem(ctx context.Context, input *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
+	return &dynamodb.UpdateItemOutput{}, nil
+}
+
+func (m *mockSandboxMetadataAPI) DeleteItem(ctx context.Context, input *dynamodb.DeleteItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error) {
+	return &dynamodb.DeleteItemOutput{}, nil
+}
+
+func (m *mockSandboxMetadataAPI) Scan(ctx context.Context, input *dynamodb.ScanInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error) {
+	return &dynamodb.ScanOutput{}, nil
+}
+
+func (m *mockSandboxMetadataAPI) Query(ctx context.Context, input *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+	return &dynamodb.QueryOutput{}, nil
+}
+
+var _ awspkg.SandboxMetadataAPI = (*mockSandboxMetadataAPI)(nil)
+
+// --------------------------------------------------------------------------
+// Mock: SchedulerAPI (for self-delete)
+// --------------------------------------------------------------------------
+
+type mockSchedulerAPI struct {
+	deleteCalled bool
+	deleteName   string
+	deleteErr    error
+}
+
+func (m *mockSchedulerAPI) CreateSchedule(ctx context.Context, input *scheduler.CreateScheduleInput, optFns ...func(*scheduler.Options)) (*scheduler.CreateScheduleOutput, error) {
+	return &scheduler.CreateScheduleOutput{}, nil
+}
+
+func (m *mockSchedulerAPI) DeleteSchedule(ctx context.Context, input *scheduler.DeleteScheduleInput, optFns ...func(*scheduler.Options)) (*scheduler.DeleteScheduleOutput, error) {
+	m.deleteCalled = true
+	if input.Name != nil {
+		m.deleteName = *input.Name
+	}
+	return &scheduler.DeleteScheduleOutput{}, m.deleteErr
+}
+
+func (m *mockSchedulerAPI) ListSchedules(ctx context.Context, input *scheduler.ListSchedulesInput, optFns ...func(*scheduler.Options)) (*scheduler.ListSchedulesOutput, error) {
+	return &scheduler.ListSchedulesOutput{}, nil
+}
+
+func (m *mockSchedulerAPI) GetSchedule(ctx context.Context, input *scheduler.GetScheduleInput, optFns ...func(*scheduler.Options)) (*scheduler.GetScheduleOutput, error) {
+	return &scheduler.GetScheduleOutput{}, nil
+}
+
+var _ awspkg.SchedulerAPI = (*mockSchedulerAPI)(nil)
+
+// --------------------------------------------------------------------------
+// Tests: Self-healing (orphaned schedule cleanup)
+// --------------------------------------------------------------------------
+
+// Test 9: handler self-deletes budget schedule when sandbox no longer exists in DynamoDB.
+func TestBudgetHandler_SelfDeletesWhenSandboxGone(t *testing.T) {
+	db := &mockBudgetDB{}
+	ses := &mockSESAPI{}
+	ec2stop := &mockEC2StopAPI{}
+	sched := &mockSchedulerAPI{}
+	// Empty GetItem response → ReadSandboxMetadataDynamo returns ErrSandboxNotFound
+	sandboxDynamo := &mockSandboxMetadataAPI{}
+
+	h := newBudgetHandlerWithMocks(db, ec2stop, &mockECSStopAPI{}, &mockIAMDetachAPI{}, ses)
+	h.SandboxDynamo = sandboxDynamo
+	h.SandboxTable = "km-sandboxes"
+	h.SchedulerClient = sched
+
+	event := budgetCheckEvent("sb-orphan01", "ec2", 0.10, 60, "arn:aws:iam::123:role/test", "i-gone", "")
+
+	err := h.HandleBudgetCheck(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !sched.deleteCalled {
+		t.Fatal("expected budget schedule to be self-deleted when sandbox is gone")
+	}
+	if sched.deleteName != "km-budget-sb-orphan01" {
+		t.Errorf("expected schedule name km-budget-sb-orphan01, got %s", sched.deleteName)
+	}
+
+	// Should NOT have proceeded to budget check / enforcement
+	if ec2stop.stopCalled {
+		t.Error("should not enforce budget for a non-existent sandbox")
+	}
+	if ses.sendCalled {
+		t.Error("should not send emails for a non-existent sandbox")
+	}
+}
+
+// Test 10: handler proceeds normally when sandbox exists in DynamoDB.
+func TestBudgetHandler_ProceedsWhenSandboxExists(t *testing.T) {
+	db := &mockBudgetDB{}
+	ses := &mockSESAPI{}
+	sched := &mockSchedulerAPI{}
+	// Return a valid sandbox item so ReadSandboxMetadataDynamo succeeds
+	sandboxDynamo := &mockSandboxMetadataAPI{
+		getItemOutput: &dynamodb.GetItemOutput{
+			Item: map[string]dynamodbtypes.AttributeValue{
+				"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: "sb-exists01"},
+				"status":     &dynamodbtypes.AttributeValueMemberS{Value: "running"},
+				"profile":    &dynamodbtypes.AttributeValueMemberS{Value: "default"},
+				"substrate":  &dynamodbtypes.AttributeValueMemberS{Value: "ec2"},
+				"region":     &dynamodbtypes.AttributeValueMemberS{Value: "us-east-1"},
+				"created_at": &dynamodbtypes.AttributeValueMemberS{Value: "2026-04-12T00:00:00Z"},
+			},
+		},
+	}
+
+	h := newBudgetHandlerWithMocks(db, &mockEC2StopAPI{}, &mockECSStopAPI{}, &mockIAMDetachAPI{}, ses)
+	h.SandboxDynamo = sandboxDynamo
+	h.SandboxTable = "km-sandboxes"
+	h.SchedulerClient = sched
+	h.getBudgetFn = func(ctx context.Context, sandboxID string) (*awspkg.BudgetSummary, error) {
+		return &awspkg.BudgetSummary{
+			ComputeSpent: 1.0, ComputeLimit: 10.0,
+			AISpent: 0, AILimit: 5.0, WarningThreshold: 0.8,
+		}, nil
+	}
+
+	event := budgetCheckEvent("sb-exists01", "ec2", 0.10, 30, "arn:aws:iam::123:role/test", "i-abc", "")
+
+	err := h.HandleBudgetCheck(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should NOT self-delete
+	if sched.deleteCalled {
+		t.Error("should not delete budget schedule when sandbox exists")
+	}
+}
+
+// Test 11: handler proceeds (does not self-delete) on transient DynamoDB read error.
+func TestBudgetHandler_ProceedsOnTransientDynamoError(t *testing.T) {
+	db := &mockBudgetDB{}
+	sched := &mockSchedulerAPI{}
+	sandboxDynamo := &mockSandboxMetadataAPI{
+		getItemErr: fmt.Errorf("simulated transient DynamoDB error"),
+	}
+
+	h := newBudgetHandlerWithMocks(db, &mockEC2StopAPI{}, &mockECSStopAPI{}, &mockIAMDetachAPI{}, &mockSESAPI{})
+	h.SandboxDynamo = sandboxDynamo
+	h.SandboxTable = "km-sandboxes"
+	h.SchedulerClient = sched
+	h.getBudgetFn = func(ctx context.Context, sandboxID string) (*awspkg.BudgetSummary, error) {
+		return &awspkg.BudgetSummary{
+			ComputeSpent: 1.0, ComputeLimit: 10.0,
+			AISpent: 0, AILimit: 5.0, WarningThreshold: 0.8,
+		}, nil
+	}
+
+	event := budgetCheckEvent("sb-transient", "ec2", 0.10, 30, "arn:aws:iam::123:role/test", "i-abc", "")
+
+	err := h.HandleBudgetCheck(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Must NOT self-delete on transient error — could incorrectly delete a live schedule
+	if sched.deleteCalled {
+		t.Error("should not delete budget schedule on transient DynamoDB error")
+	}
+}

@@ -904,8 +904,10 @@ func cleanupBudgetEnforcer(ctx context.Context, h *TTLHandler, sandboxID string)
 		Name: awssdk.String(schedName),
 	}); delErr != nil {
 		var notFound *schedulertypes.ResourceNotFoundException
-		if !errors.As(delErr, &notFound) {
+		if errors.As(delErr, &notFound) {
 			log.Debug().Str("schedule", schedName).Msg("budget schedule not found or already deleted")
+		} else {
+			log.Warn().Err(delErr).Str("schedule", schedName).Msg("failed to delete budget schedule (non-fatal)")
 		}
 	} else {
 		log.Info().Str("schedule", schedName).Msg("budget-enforcer schedule deleted")

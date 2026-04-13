@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -114,6 +115,24 @@ func (h *BudgetHandler) HandleBudgetCheck(ctx context.Context, event BudgetCheck
 
 	log.Info().Str("sandbox_id", sandboxID).Str("substrate", event.Substrate).
 		Float64("spot_rate", event.SpotRate).Msg("budget check event received")
+
+	// Step 0: Verify sandbox still exists. If the sandbox was destroyed but the
+	// budget schedule survived cleanup (non-fatal delete failure), self-delete
+	// the schedule to stop orphaned invocations.
+	if h.SandboxDynamo != nil {
+		if _, readErr := awspkg.ReadSandboxMetadataDynamo(ctx, h.SandboxDynamo, h.SandboxTable, sandboxID); readErr != nil {
+			if errors.Is(readErr, awspkg.ErrSandboxNotFound) {
+				log.Warn().Str("sandbox_id", sandboxID).
+					Msg("sandbox no longer exists in DynamoDB — deleting orphaned budget schedule")
+				h.selfDeleteSchedule(ctx, sandboxID)
+				return nil
+			}
+			// Transient DynamoDB error — proceed with budget check rather than
+			// incorrectly self-deleting on a temporary read failure.
+			log.Warn().Err(readErr).Str("sandbox_id", sandboxID).
+				Msg("could not verify sandbox existence (non-fatal — proceeding with budget check)")
+		}
+	}
 
 	// Step 1: Calculate elapsed compute cost.
 	elapsedCost, err := h.calculateComputeCost(event)
@@ -448,6 +467,30 @@ func (h *BudgetHandler) enforceBudgetCompute(ctx context.Context, event BudgetCh
 	default:
 		log.Warn().Str("sandbox_id", sandboxID).Str("substrate", event.Substrate).
 			Msg("unknown substrate — cannot enforce compute budget suspension")
+	}
+}
+
+// ============================================================
+// Self-healing: delete orphaned budget schedule
+// ============================================================
+
+// selfDeleteSchedule removes this Lambda's own EventBridge schedule.
+// Called when the sandbox no longer exists in DynamoDB, meaning the schedule
+// survived sandbox destruction (non-fatal delete failure in destroy/TTL path).
+func (h *BudgetHandler) selfDeleteSchedule(ctx context.Context, sandboxID string) {
+	if h.SchedulerClient == nil {
+		log.Warn().Str("sandbox_id", sandboxID).Msg("scheduler client is nil — cannot self-delete budget schedule")
+		return
+	}
+	schedName := "km-budget-" + sandboxID
+	if _, err := h.SchedulerClient.DeleteSchedule(ctx, &scheduler.DeleteScheduleInput{
+		Name: awssdk.String(schedName),
+	}); err != nil {
+		log.Warn().Err(err).Str("schedule", schedName).
+			Msg("failed to self-delete orphaned budget schedule")
+	} else {
+		log.Info().Str("schedule", schedName).Str("sandbox_id", sandboxID).
+			Msg("orphaned budget schedule self-deleted — sandbox no longer exists")
 	}
 }
 
