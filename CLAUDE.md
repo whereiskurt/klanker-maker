@@ -31,40 +31,47 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 - `km info` — platform config, accounts, SES quota, AWS spend, DynamoDB tables
 - `km doctor` — validate platform health (17 checks: config, credentials, SES, Lambda, VPC, stale resources, etc.)
 
-## Email (inside a sandbox)
+## Email
 
-Two bash utilities are installed at `/opt/km/bin/` for Ed25519-signed email:
+### Operator-side (from your workstation)
 
-### Sending email
+```bash
+# Send email from operator to a sandbox
+km email send --to sb-abc123 --subject "task spec" --body spec.md
+
+# Send between sandboxes
+km email send --from sb-abc123 --to sb-def456 --subject "results" --attach output.tar.gz
+
+# Read a sandbox's mailbox
+km email read sb-abc123              # table format with signature verification
+km email read sb-abc123 --json       # JSON for scripting
+km email read sb-abc123 --mark-read  # mark as processed
+```
+
+### Inside a sandbox (km-send / km-recv)
+
+Two bash utilities at `/opt/km/bin/` handle Ed25519-signed email:
 
 ```bash
 # Send to operator (default recipient)
-km-send --subject "task complete" <<< "All tests passing"
+km-send --subject "task complete" --body results.txt
 
 # Send to another sandbox with attachment
 km-send --to sb-x9y8z7w6@sandboxes.klankermaker.ai \
   --subject "results" --body results.json --attach output.tar.gz
+
+# Read inbox
+km-recv                  # table with signature verification
+km-recv --json           # JSON for agent parsing
+km-recv --watch          # poll every 5s for new messages
+km-recv --mark-read      # mark as processed
 ```
 
-Flags: `--subject` (required), `--to` (default: operator), `--body` (file, `-` for stdin, or omit for stdin), `--attach`, `--cc`, `--use-bcc`, `--reply-to`
+**km-send flags:** `--subject` (required), `--to` (default: operator), `--body` (file path or `-` for stdin), `--attach`, `--cc`, `--use-bcc`, `--reply-to`
 
-### Reading email
+**How it works:** km-send fetches the sandbox's Ed25519 signing key from SSM (`/sandbox/{id}/signing-key`), signs the body, builds a raw MIME message with `X-KM-Sender-ID` and `X-KM-Signature` headers, and sends via SES. Inbound email is synced from S3 by `km-mail-poller` (every 60s) to `/var/mail/km/new/`.
 
-```bash
-# List new messages with signature verification
-km-recv
-
-# JSON output for agent parsing
-km-recv --json
-
-# Watch for new messages (poll every 5s)
-km-recv --watch
-
-# Mark messages as processed after reading
-km-recv --mark-read
-```
-
-Inbound email is synced from S3 by `km-mail-poller` (every 60s) to `/var/mail/km/new/`.
+**For AI agents:** Use `km-send --body <file>` (not stdin) for reliable signing on OpenSSL 3.5+. Agents can read the docs at `docs/multi-agent-email.md` on the sandbox for the full protocol.
 
 ### Key environment variables
 
