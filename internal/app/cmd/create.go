@@ -135,7 +135,8 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 			}
 
 			if useRemote {
-				return runCreateRemote(cfg, args[0], onDemand, noBedrock, awsProfile, aliasOverride, ttlOverride, idleOverride)
+				_, remoteErr := runCreateRemote(cfg, args[0], onDemand, noBedrock, awsProfile, aliasOverride, ttlOverride, idleOverride)
+				return remoteErr
 			}
 			return runCreate(cfg, args[0], onDemand, noBedrock, awsProfile, verbose, sandboxIDOverride, aliasOverride, substrateOverride, ttlOverride, idleOverride)
 		},
@@ -1476,19 +1477,19 @@ func runDockerComposeUp(ctx context.Context, sandboxID, composeFilePath string, 
 //
 // The create-handler Lambda downloads the artifacts, runs km create as a subprocess,
 // and sends notifications on success/failure.
-func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, aliasOverride string, ttlOverride string, idleOverride string) error {
+func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, aliasOverride string, ttlOverride string, idleOverride string) (string, error) {
 	ctx := context.Background()
 
 	// Step 1: Read profile file
 	raw, err := os.ReadFile(profilePath)
 	if err != nil {
-		return fmt.Errorf("cannot read profile %s: %w", profilePath, err)
+		return "", fmt.Errorf("cannot read profile %s: %w", profilePath, err)
 	}
 
 	// Step 2: Parse profile
 	parsed, err := profile.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("failed to parse profile %s: %w", profilePath, err)
+		return "", fmt.Errorf("failed to parse profile %s: %w", profilePath, err)
 	}
 
 	// Step 3: Resolve inheritance + validate
@@ -1498,7 +1499,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		searchPaths := append([]string{fileDir}, cfg.ProfileSearchPaths...)
 		resolvedProfile, err = profile.Resolve(parsed.Extends, searchPaths)
 		if err != nil {
-			return fmt.Errorf("failed to resolve extends %q: %w", parsed.Extends, err)
+			return "", fmt.Errorf("failed to resolve extends %q: %w", parsed.Extends, err)
 		}
 		schemaErrs := profile.ValidateSchema(raw)
 		semanticErrs := profile.ValidateSemantic(resolvedProfile)
@@ -1507,7 +1508,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 			for _, e := range allErrs {
 				fmt.Fprintf(os.Stderr, "ERROR: %s: %s\n", profilePath, e.Error())
 			}
-			return fmt.Errorf("profile %s failed validation", profilePath)
+			return "", fmt.Errorf("profile %s failed validation", profilePath)
 		}
 	} else {
 		errs := profile.Validate(raw)
@@ -1515,7 +1516,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 			for _, e := range errs {
 				fmt.Fprintf(os.Stderr, "ERROR: %s: %s\n", profilePath, e.Error())
 			}
-			return fmt.Errorf("profile %s failed validation", profilePath)
+			return "", fmt.Errorf("profile %s failed validation", profilePath)
 		}
 		resolvedProfile = parsed
 	}
@@ -1527,10 +1528,10 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	// Step 5: Load AWS credentials
 	awsCfg, err := awspkg.LoadAWSConfig(ctx, awsProfile)
 	if err != nil {
-		return fmt.Errorf("failed to load AWS config (profile=%s): %w", awsProfile, err)
+		return "", fmt.Errorf("failed to load AWS config (profile=%s): %w", awsProfile, err)
 	}
 	if err := awspkg.ValidateCredentials(ctx, awsCfg); err != nil {
-		return fmt.Errorf("AWS credential validation failed — check that profile %q is configured: %w", awsProfile, err)
+		return "", fmt.Errorf("AWS credential validation failed — check that profile %q is configured: %w", awsProfile, err)
 	}
 
 	// Step 5c: Enforce sandbox limit before dispatching remote create.
@@ -1549,7 +1550,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 				}
 			}
 			fmt.Fprintf(os.Stderr, "\nERROR: %s\n", limitErr)
-			return limitErr
+			return "", limitErr
 		}
 	}
 
@@ -1559,7 +1560,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	regionLabel := compiler.RegionLabel(region)
 	networkOutputs, err := LoadNetworkOutputs(repoRoot, regionLabel)
 	if err != nil {
-		return fmt.Errorf("failed to load network config for %s: %w\nRun 'km init --region %s' first", region, err, region)
+		return "", fmt.Errorf("failed to load network config for %s: %w\nRun 'km init --region %s' first", region, err, region)
 	}
 	networkDomain := cfg.Domain
 	if networkDomain == "" {
@@ -1580,7 +1581,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 
 	// Apply --ttl and --idle overrides (after profile resolution, before compilation).
 	if err := applyLifecycleOverrides(resolvedProfile, ttlOverride, idleOverride); err != nil {
-		return err
+		return "", err
 	}
 
 	// --no-bedrock: disable Bedrock access entirely
@@ -1592,7 +1593,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	// Step 7: Compile profile into artifacts
 	artifacts, err := compiler.Compile(resolvedProfile, sandboxID, onDemand, network)
 	if err != nil {
-		return fmt.Errorf("failed to compile profile: %w", err)
+		return "", fmt.Errorf("failed to compile profile: %w", err)
 	}
 
 	// Determine artifact bucket
@@ -1601,7 +1602,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		artifactBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
 	}
 	if artifactBucket == "" {
-		return fmt.Errorf("artifact bucket not configured — set KM_ARTIFACTS_BUCKET or configure via km configure")
+		return "", fmt.Errorf("artifact bucket not configured — set KM_ARTIFACTS_BUCKET or configure via km configure")
 	}
 
 	// Determine operator email
@@ -1662,7 +1663,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 			ContentType: aws.String(a.mime),
 		})
 		if putErr != nil {
-			return fmt.Errorf("upload artifact %s: %w", a.key, putErr)
+			return "", fmt.Errorf("upload artifact %s: %w", a.key, putErr)
 		}
 	}
 
@@ -1711,7 +1712,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		Alias:          sandboxAlias,
 	}
 	if ebErr := awspkg.PutSandboxCreateEvent(ctx, ebClient, detail); ebErr != nil {
-		return fmt.Errorf("publish SandboxCreate event: %w", ebErr)
+		return "", fmt.Errorf("publish SandboxCreate event: %w", ebErr)
 	}
 
 	fmt.Println()
@@ -1720,7 +1721,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	fmt.Printf("  Artifacts: s3://%s/%s/\n", artifactBucket, artifactPrefix)
 	fmt.Printf("  The create-handler Lambda will provision the sandbox and send a notification.\n")
 
-	return nil
+	return sandboxID, nil
 }
 
 // generateAndStoreGitHubToken reads GitHub App credentials from SSM, generates an

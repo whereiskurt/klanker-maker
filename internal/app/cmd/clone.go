@@ -163,10 +163,19 @@ func runClone(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, s
 			return fmt.Errorf("stage workspace from %s: %w", sourceID, err)
 		}
 
-		// Defer cleanup of staging object
-		defer func() {
-			cleanupStagingKey(ctx, cfg, sourceID, stagingKey, ssmClient)
-		}()
+		// For Docker substrate, defer cleanup of staging object.
+		// For EC2, userdata cleans up the well-known key after download,
+		// and we clean the source staging key here.
+		if rec.Substrate == "docker" {
+			defer func() {
+				cleanupStagingKey(ctx, cfg, sourceID, stagingKey, ssmClient)
+			}()
+		} else {
+			// Clean up the source staging key after all S3 copies are done (deferred to end of function)
+			defer func() {
+				cleanupStagingKey(ctx, cfg, sourceID, stagingKey, ssmClient)
+			}()
+		}
 	}
 
 	// Step 7: Write profile to temp file
@@ -185,7 +194,19 @@ func runClone(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, s
 	// Step 8: Generate aliases for all clones
 	aliases := GenerateCloneAliases(alias, count)
 
-	// Step 9: Provision each clone
+	// Step 9: Provision each clone.
+	// For EC2 remote creates: fire-and-forget. The workspace staging tarball is
+	// copied to each clone's well-known S3 key (artifacts/{clone-id}/clone-workspace.tar.gz)
+	// and userdata downloads it at boot. No waiting required.
+	// For Docker: synchronous create, then SSM download.
+	var s3ClientForCopy *s3.Client
+	if !noCopy && stagingKey != "" && rec.Substrate != "docker" && ssmClient == nil {
+		awsCfgCopy, copyErr := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
+		if copyErr == nil {
+			s3ClientForCopy = s3.NewFromConfig(awsCfgCopy)
+		}
+	}
+
 	for i, cloneAlias := range aliases {
 		if count > 1 {
 			fmt.Printf("  Provisioning clone %d/%d: %s...\n", i+1, count, cloneAlias)
@@ -193,69 +214,54 @@ func runClone(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, s
 			fmt.Printf("  Provisioning clone from %s...\n", sourceID)
 		}
 
-		// Use remote create for EC2/ECS (matches km create auto-detect behavior).
-		// Docker uses local create.
 		if rec.Substrate == "docker" {
+			// Docker: synchronous local create
 			if err := runCreate(cfg, tmpFile.Name(), false, false, awsProfile, verbose, "", cloneAlias, "", "", ""); err != nil {
 				return fmt.Errorf("provision clone %d (%s): %w", i+1, cloneAlias, err)
 			}
-		} else {
-			if err := runCreateRemote(cfg, tmpFile.Name(), false, false, awsProfile, cloneAlias, "", ""); err != nil {
-				return fmt.Errorf("provision clone %d (%s): %w", i+1, cloneAlias, err)
-			}
-		}
-
-		// Step 9b: Resolve the new clone's sandbox ID for post-provision workspace download.
-		// For remote creates, the Lambda is provisioning asynchronously — we must wait
-		// for the clone to reach "running" status before sending SSM commands.
-		// The alias may not exist in DynamoDB yet, so we poll for both alias resolution
-		// and running status together.
-		if !noCopy && stagingKey != "" {
-			if rec.Substrate != "docker" {
-				// Remote create: poll for alias resolution + running status
-				fmt.Printf("  Waiting for clone to be running...")
-				cloneID, waitErr := waitForCloneRunning(ctx, cfg, cloneAlias, ssmClient, 5*time.Minute)
-				if waitErr != nil {
-					fmt.Printf("\n  Warning: clone did not reach running state: %v\n", waitErr)
-					fmt.Printf("  Use 'km rsync save %s <name> && km rsync load %s <name>' to copy workspace manually\n", sourceID, cloneAlias)
-				} else {
-					fmt.Printf(" ready\n")
-					fmt.Printf("  Downloading workspace to %s...", cloneID)
-					if err := downloadWorkspaceToClone(ctx, cfg, cloneID, stagingKey, ssmClient); err != nil {
-						fmt.Printf("\n  Warning: workspace download to %s failed: %v (use 'km shell %s' to check manually)\n", cloneID, err, cloneID)
-					} else {
-						fmt.Print(" done\n")
-					}
-				}
-			} else {
-				// Docker creates are synchronous — instance is ready immediately
+			// Docker workspace download (synchronous — instance ready immediately)
+			if !noCopy && stagingKey != "" {
 				cloneID, resolveErr := resolveCloneID(ctx, cfg, cloneAlias, ssmClient)
 				if resolveErr != nil {
-					fmt.Printf("  Warning: could not resolve clone ID for workspace download: %v\n", resolveErr)
+					fmt.Printf("  Warning: could not resolve clone for workspace download: %v\n", resolveErr)
 				} else {
 					fmt.Printf("  Downloading workspace to %s...", cloneID)
-					if err := downloadWorkspaceToClone(ctx, cfg, cloneID, stagingKey, ssmClient); err != nil {
-						fmt.Printf("\n  Warning: workspace download to %s failed: %v (use 'km shell %s' to check manually)\n", cloneID, err, cloneID)
+					if dlErr := downloadWorkspaceToClone(ctx, cfg, cloneID, stagingKey, ssmClient); dlErr != nil {
+						fmt.Printf("\n  Warning: workspace download failed: %v\n", dlErr)
 					} else {
 						fmt.Print(" done\n")
 					}
 				}
 			}
-		}
+		} else {
+			// EC2: fire-and-forget remote create
+			cloneID, createErr := runCreateRemote(cfg, tmpFile.Name(), false, false, awsProfile, cloneAlias, "", "")
+			if createErr != nil {
+				return fmt.Errorf("provision clone %d (%s): %w", i+1, cloneAlias, createErr)
+			}
 
-		// Step 9c: Update clone's DynamoDB metadata with cloned_from.
-		// For remote creates, we retry alias resolution since the metadata may
-		// have been written by the Lambda by now (we just waited for running).
-		cloneIDForMeta, metaResolveErr := resolveCloneID(ctx, cfg, cloneAlias, ssmClient)
-		if metaResolveErr == nil {
-			if err := updateClonedFromByID(ctx, cfg, cloneIDForMeta, sourceID, ssmClient); err != nil {
+			// Copy staging tarball to clone's well-known S3 key so userdata downloads it at boot
+			if !noCopy && stagingKey != "" && s3ClientForCopy != nil {
+				cloneWorkspaceKey := fmt.Sprintf("artifacts/%s/clone-workspace.tar.gz", cloneID)
+				_, copyErr := s3ClientForCopy.CopyObject(ctx, &s3.CopyObjectInput{
+					Bucket:     awssdk.String(cfg.ArtifactsBucket),
+					CopySource: awssdk.String(cfg.ArtifactsBucket + "/" + stagingKey),
+					Key:        awssdk.String(cloneWorkspaceKey),
+				})
+				if copyErr != nil {
+					fmt.Printf("  Warning: could not stage workspace for %s: %v\n", cloneID, copyErr)
+				} else {
+					fmt.Printf("  ✓ Workspace staged for %s (will download at boot)\n", cloneID)
+				}
+			}
+
+			// Set cloned_from immediately (metadata already written by runCreateRemote)
+			if err := updateClonedFromByID(ctx, cfg, cloneID, sourceID, ssmClient); err != nil {
 				fmt.Printf("  Warning: could not update cloned_from metadata: %v\n", err)
 			}
-		} else {
-			fmt.Printf("  Warning: could not resolve clone for cloned_from update: %v\n", metaResolveErr)
 		}
 
-		fmt.Printf("  Clone complete: %s -> %s\n", sourceID, cloneAlias)
+		fmt.Printf("  ✓ Clone dispatched: %s\n", cloneAlias)
 	}
 
 	return nil

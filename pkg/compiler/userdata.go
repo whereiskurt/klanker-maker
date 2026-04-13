@@ -1571,6 +1571,25 @@ echo "[km-bootstrap] Config file written: {{ $path }}"
 {{- end }}
 
 # ============================================================
+# 7.7. Clone workspace restore (fire-and-forget clone support)
+# If this sandbox was created by km clone, a workspace tarball
+# will exist at a well-known S3 key. Download and extract it.
+# ============================================================
+KM_CLONE_KEY="artifacts/{{ .SandboxID }}/clone-workspace.tar.gz"
+if aws s3 ls "s3://{{ .KMArtifactsBucket }}/${KM_CLONE_KEY}" 2>/dev/null | grep -q .; then
+  echo "[km-bootstrap] Clone workspace detected, downloading..."
+  aws s3 cp "s3://{{ .KMArtifactsBucket }}/${KM_CLONE_KEY}" /tmp/km-clone-workspace.tar.gz && {
+    tar xzf /tmp/km-clone-workspace.tar.gz -C /
+    chown -R sandbox:sandbox /workspace
+    chown -R sandbox:sandbox /home/sandbox
+    rm -f /tmp/km-clone-workspace.tar.gz
+    # Clean up staging artifact from S3
+    aws s3 rm "s3://{{ .KMArtifactsBucket }}/${KM_CLONE_KEY}" 2>/dev/null || true
+    echo "[km-bootstrap] Clone workspace restored"
+  } || echo "[km-bootstrap] WARNING: clone workspace download failed"
+fi
+
+# ============================================================
 # 8. Sandbox ready signal
 # ============================================================
 echo "[km-bootstrap] SANDBOX_READY sandbox_id={{ .SandboxID }}"
