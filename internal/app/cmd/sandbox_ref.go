@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klankrmkr/pkg/localnumber"
 )
 
 // sandboxIDLike matches strings that look like sandbox IDs: {prefix}-{suffix}.
@@ -50,19 +51,17 @@ func ResolveSandboxID(ctx context.Context, cfg *config.Config, ref string) (stri
 		return "", fmt.Errorf("invalid sandbox reference %q: must be a sandbox ID ({prefix}-xxxxxxxx), an alias, or a number from 'km list'", ref)
 	}
 
-	// Fetch the sandbox list to resolve the number.
-	records, err := listSandboxes(ctx, cfg)
-	if err != nil {
-		return "", fmt.Errorf("could not list sandboxes to resolve #%d: %w", num, err)
+	// Resolve number from local persistent sandbox number file.
+	state, loadErr := localnumber.Load()
+	if loadErr != nil {
+		return "", fmt.Errorf("could not load local sandbox numbers: %w -- use sandbox ID directly", loadErr)
 	}
-
-	if num > len(records) {
-		return "", fmt.Errorf("sandbox #%d does not exist (only %d sandboxes listed)", num, len(records))
+	sandboxID, ok := localnumber.Resolve(state, num)
+	if !ok {
+		return "", fmt.Errorf("sandbox #%d not found in local sandbox numbers (run 'km list' to sync)", num)
 	}
-
-	resolved := records[num-1].SandboxID
-	fmt.Printf("Resolved #%d → %s\n", num, resolved)
-	return resolved, nil
+	fmt.Printf("Resolved #%d → %s\n", num, sandboxID)
+	return sandboxID, nil
 }
 
 // listSandboxes fetches the current sandbox list via DynamoDB (S3 fallback).

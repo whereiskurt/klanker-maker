@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klankrmkr/pkg/localnumber"
 )
 
 // NewListCmd creates the "km list" subcommand.
@@ -114,11 +115,23 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonO
 		}
 	}
 
+	// Reconcile local sandbox numbers with live DynamoDB state.
+	lnState, _ := localnumber.Load()
+	if lnState == nil {
+		lnState = &localnumber.State{Next: 1, Map: map[string]int{}}
+	}
+	liveIDs := make([]string, len(records))
+	for i, r := range records {
+		liveIDs[i] = r.SandboxID
+	}
+	localnumber.Reconcile(lnState, liveIDs)
+	_ = localnumber.Save(lnState) // best-effort
+
 	if jsonOutput {
 		return json.NewEncoder(cmd.OutOrStdout()).Encode(records)
 	}
 
-	return printSandboxTable(cmd, records, wide)
+	return printSandboxTable(cmd, records, wide, lnState.Map)
 }
 
 // awsSandboxLister is the real AWS-backed SandboxLister implementation.
@@ -164,11 +177,12 @@ func (l *awsSandboxLister) ListSandboxes(ctx context.Context, useTagScan bool) (
 }
 
 // printSandboxTable writes a human-readable tab-aligned table to cmd.OutOrStdout.
-// Each row is numbered 1-N so users can reference sandboxes by number in other commands.
+// Each row is numbered using persistent local numbers from the numbers map (falling back
+// to positional i+1 if no local number is available). Pass nil for numbers to use positional.
 // Status is color-coded: red for "failed", yellow for "partial"/"killed", green for "running".
 // Locked sandboxes are shown in bold white with a lock icon.
 // When wide=false, profile/substrate/region columns are hidden for a narrower display.
-func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide bool) error {
+func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide bool, numbers map[string]int) error {
 	out := cmd.OutOrStdout()
 	// Use fixed-width printf instead of tabwriter to avoid ANSI color codes
 	// breaking column alignment (tabwriter counts bytes, not visible chars).
@@ -226,7 +240,14 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 			}
 			return s
 		}
-		num := bw(fmt.Sprintf("%-3d", i+1))
+		localNum := 0
+		if numbers != nil {
+			localNum = numbers[r.SandboxID]
+		}
+		if localNum == 0 {
+			localNum = i + 1 // fallback to positional if no local number
+		}
+		num := bw(fmt.Sprintf("%-3d", localNum))
 		if wide {
 			idle := r.IdleRemaining
 			if idle == "" {
