@@ -10,6 +10,7 @@ import (
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
@@ -30,6 +31,7 @@ func NewCloneCmdWithDeps(cfg *config.Config, fetcher SandboxFetcher, ssmClient S
 	var count int
 	var noCopy bool
 	var verbose bool
+	var awsProfile string
 
 	cmd := &cobra.Command{
 		Use:   "clone <source> [new-alias]",
@@ -72,7 +74,7 @@ Examples:
 				return fmt.Errorf("--alias is required when --count > 1")
 			}
 
-			return runClone(ctx, cfg, fetcher, ssmClient, sourceRef, alias, count, noCopy, verbose)
+			return runClone(ctx, cfg, fetcher, ssmClient, sourceRef, alias, count, noCopy, verbose, awsProfile)
 		},
 	}
 
@@ -80,13 +82,15 @@ Examples:
 	cmd.Flags().IntVar(&count, "count", 1, "Number of clones to create")
 	cmd.Flags().BoolVar(&noCopy, "no-copy", false, "Skip workspace staging; create a fresh sandbox from same profile")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "Show verbose output during provisioning")
+	cmd.Flags().StringVar(&awsProfile, "aws-profile", "klanker-terraform",
+		"AWS profile for provisioning (same as km create --aws-profile)")
 
 	return cmd
 }
 
 // runClone is the main clone orchestration function.
 func runClone(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI,
-	sourceRef, alias string, count int, noCopy bool, verbose bool) error {
+	sourceRef, alias string, count int, noCopy bool, verbose bool, awsProfile string) error {
 
 	// Step 1: Resolve source sandbox reference
 	sourceID, err := ResolveSandboxID(ctx, cfg, sourceRef)
@@ -189,8 +193,16 @@ func runClone(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, s
 			fmt.Printf("  Provisioning clone from %s...\n", sourceID)
 		}
 
-		if err := runCreate(cfg, tmpFile.Name(), false, false, "", verbose, "", cloneAlias, "", "", ""); err != nil {
-			return fmt.Errorf("provision clone %d (%s): %w", i+1, cloneAlias, err)
+		// Use remote create for EC2/ECS (matches km create auto-detect behavior).
+		// Docker uses local create.
+		if rec.Substrate == "docker" {
+			if err := runCreate(cfg, tmpFile.Name(), false, false, awsProfile, verbose, "", cloneAlias, "", "", ""); err != nil {
+				return fmt.Errorf("provision clone %d (%s): %w", i+1, cloneAlias, err)
+			}
+		} else {
+			if err := runCreateRemote(cfg, tmpFile.Name(), false, false, awsProfile, cloneAlias, "", ""); err != nil {
+				return fmt.Errorf("provision clone %d (%s): %w", i+1, cloneAlias, err)
+			}
 		}
 
 		// Step 9b: Resolve the new clone's sandbox ID for post-provision workspace download
@@ -409,13 +421,19 @@ func updateClonedFrom(ctx context.Context, cfg *config.Config, cloneAlias, sourc
 	}
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)
 
-	meta, err := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClient, tableName, cloneID)
-	if err != nil {
-		return fmt.Errorf("read clone metadata: %w", err)
-	}
-
-	meta.ClonedFrom = sourceID
-	return awspkg.WriteSandboxMetadataDynamo(ctx, dynamoClient, tableName, meta)
+	// Use UpdateItem to atomically set cloned_from without overwriting the full record.
+	// This avoids a race with the remote create-handler Lambda which also writes metadata.
+	_, err = dynamoClient.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: &tableName,
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: cloneID},
+		},
+		UpdateExpression: awssdk.String("SET cloned_from = :cf"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":cf": &dynamodbtypes.AttributeValueMemberS{Value: sourceID},
+		},
+	})
+	return err
 }
 
 // cleanupStagingKey deletes the staging S3 object (best-effort, logged on failure).
