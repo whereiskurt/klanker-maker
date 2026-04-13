@@ -193,8 +193,8 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 	}
 
 	if wide {
-		fmt.Fprintf(out, "%-3s %-8s  %-*s %-16s %-10s %-12s %-10s %-6s %s\n",
-			"#", "ALIAS", idWidth, "SANDBOX ID", "PROFILE", "SUBSTRATE", "REGION", "STATUS", "TTL", "IDLE")
+		fmt.Fprintf(out, "%-3s %-8s  %-*s %-16s %-10s %-12s %-10s %-6s %-6s %s\n",
+			"#", "ALIAS", idWidth, "SANDBOX ID", "PROFILE", "SUBSTRATE", "REGION", "STATUS", "TTL", "IDLE", "CLONED FROM")
 	} else {
 		fmt.Fprintf(out, "%-3s %-8s  %-*s %-10s %s\n",
 			"#", "ALIAS", idWidth, "SANDBOX ID", "STATUS", "TTL")
@@ -234,10 +234,15 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 			}
 			// Strip " remaining" suffix for compact display
 			idle = strings.TrimSuffix(idle, " remaining")
-			fmt.Fprintf(out, "%s %s  %s %s %s %s %s %-6s %s%s\n",
+			clonedFrom := r.ClonedFrom
+			if clonedFrom == "" {
+				clonedFrom = "-"
+			}
+			fmt.Fprintf(out, "%s %s  %s %s %s %s %s %-6s %-6s %s%s\n",
 				num, bw(fmt.Sprintf("%-8s", alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
 				bw(fmt.Sprintf("%-16s", profile)), bw(fmt.Sprintf("%-10s", r.Substrate)),
-				bw(fmt.Sprintf("%-12s", r.Region)), colorStatus, bw(ttl), bw(idle), lock)
+				bw(fmt.Sprintf("%-12s", r.Region)), colorStatus, bw(ttl), bw(idle),
+				bw(truncCol(clonedFrom, 14)), lock)
 		} else {
 			fmt.Fprintf(out, "%s %s  %s %s %s%s\n",
 				num, bw(fmt.Sprintf("%-8s", alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
