@@ -493,6 +493,39 @@ spec:
 
 Profiles support **inheritance** via `extends` - start from a base and override what you need.
 
+## Non-Interactive Agent Execution
+
+Run Claude (or any agent) non-interactively inside a sandbox via `km agent run`. Prompts are dispatched via SSM SendCommand, agents run in persistent tmux sessions that survive disconnects, and output is stored on disk + S3 for fast retrieval.
+
+```bash
+# Fire-and-forget — agent runs in tmux, returns immediately
+km agent run sb-abc123 --prompt "fix the failing tests"
+
+# Wait for completion — blocks until done, prints JSON result
+km agent run sb-abc123 --prompt "What model are you?" --wait
+
+# Interactive — attach to tmux, watch Claude work live (Ctrl-B d to detach)
+km agent run sb-abc123 --prompt "refactor auth module" --interactive
+
+# Attach to a running agent's tmux session
+km agent attach sb-abc123
+
+# Fetch results (S3 fast path, ~3s)
+km agent results sb-abc123
+km agent results sb-abc123 | jq '.result'
+
+# List all runs with status
+km agent list sb-abc123
+
+# Schedule a future agent run (resumes sandbox if paused)
+km at '5pm tomorrow' agent run sb-abc123 --prompt "nightly tests" --auto-start
+
+# Use direct Anthropic API instead of Bedrock
+km agent run sb-abc123 --prompt "..." --no-bedrock --wait
+```
+
+**Profile defaults:** Set `spec.cli.noBedrock: true` to default to direct API. Use `spec.execution.configFiles` to pre-seed Claude settings (trusted directories, etc.).
+
 ## Running Agents in Sandboxes
 
 Klanker Maker is workload-agnostic - any agent that runs on Linux works inside a sandbox. Here's how the controls map to real agent workloads:

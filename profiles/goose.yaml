@@ -110,13 +110,12 @@ spec:
         - ".google.com"
         - ".google-analytics.com"
         - ".googletagmanager.com"
+        - ".googleapis.com"
+        - ".featuregates.org"
+        - ".statsig.com"
       allowedHosts:
-        # Hosts not covered by allowedDNSSuffixes above
         - "statsig.com"
-        - "api.statsig.com"
-        - "featuregates.org"
-        - "api.featuregates.org"
-        - "storage.googleapis.com"
+        # Hosts/IPs not covered by allowedDNSSuffixes above
 
   budget:
     compute:

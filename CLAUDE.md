@@ -16,13 +16,18 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 - `km lock <sandbox-id>` — safety lock preventing destroy/stop/pause (atomic DynamoDB)
 - `km unlock <sandbox-id>` — remove safety lock (requires confirmation or --yes)
 - `km list` — list sandboxes (narrow default, --wide for all columns)
-- `km at '<time>' <cmd>` — schedule deferred/recurring operations; supports `create`, `destroy`, `kill`, `stop`, `pause`, `resume`, `extend`, `budget-add` (`km schedule` is an alias)
+- `km agent <sandbox-id> --claude` — interactive Claude session via SSM (`--no-bedrock` for direct API)
+- `km agent run <sandbox-id> --prompt "..."` — fire-and-forget non-interactive Claude in tmux (`--wait`, `--interactive`, `--no-bedrock`, `--auto-start`)
+- `km agent attach <sandbox-id>` — attach to a running agent's tmux session (Ctrl-B d to detach)
+- `km agent results <sandbox-id>` — fetch latest run output (`--run <id>` for specific run)
+- `km agent list <sandbox-id>` — list all agent runs with status and output size
+- `km at '<time>' <cmd>` — schedule deferred/recurring operations; supports `create`, `destroy`, `kill`, `stop`, `pause`, `resume`, `extend`, `budget-add`, `agent run` (`km schedule` is an alias)
 - `km at list` / `km at cancel <name>` — manage scheduled operations
 - `km email send` — send signed email between sandboxes or to/from operator (`--from`, `--to`, `--cc`, `--use-bcc`, `--reply-to`)
 - `km email read <sandbox>` — read sandbox mailbox with signature verification and auto-decryption (`--json`, `--mark-read`)
 - `km otel <sandbox-id>` — OTEL telemetry + AI spend summary (--prompts, --events, --tools, --timeline)
 - `km init` — initialize regional infrastructure (`--sidecars` for fast binary deploy, `--lambdas` for Lambda-only deploy)
-- `km shell <sandbox-id>` — SSM shell (`--root`, `--ports`, `--learn` to generate profile from observed traffic)
+- `km shell <sandbox-id>` — SSM shell (`--root`, `--ports`, `--no-bedrock`, `--learn` to generate profile from observed traffic)
 - `km info` — platform config, accounts, SES quota, AWS spend, DynamoDB tables
 - `km doctor` — validate platform health (17 checks: config, credentials, SES, Lambda, VPC, stale resources, etc.)
 
@@ -113,3 +118,85 @@ km validate observed-profile.yaml      # validate before use
 - `spec.execution.privileged` — grants sandbox user wheel/sudo access (any profile)
 - `spec.observability.learnMode` — enables eBPF traffic recording (`--observe` on enforcer)
 - `--learn` triggers SIGUSR1 flush on the enforcer to snapshot observations to S3
+
+## Agent Execution
+
+Run AI agents non-interactively inside sandboxes. Agents run in persistent tmux sessions that survive SSM disconnects.
+
+### Fire-and-forget
+
+```bash
+km agent run <sandbox> --prompt "fix the failing tests"
+```
+
+Returns immediately. Agent runs in a tmux session on the sandbox. Output lands at `/workspace/.km-agent/runs/<timestamp>/output.json`.
+
+### Wait for completion
+
+```bash
+km agent run <sandbox> --prompt "What model are you?" --wait
+```
+
+Blocks until done, prints JSON result including `result`, `total_cost_usd`, token usage.
+
+### Interactive (live attach)
+
+```bash
+km agent run <sandbox> --prompt "refactor the auth module" --interactive
+```
+
+Creates the tmux session and attaches you to watch Claude work in real-time. Detach with `Ctrl-B d` — the agent keeps running.
+
+### Attach to a running agent
+
+```bash
+km agent attach <sandbox>
+```
+
+Connects to the latest running tmux agent session. Useful after fire-and-forget.
+
+### Fetch results
+
+```bash
+km agent results <sandbox>                          # latest run (S3 fast path)
+km agent results <sandbox> --run 20260410T143000Z   # specific run
+km agent results <sandbox> | jq '.result'           # just the answer
+km agent results <sandbox> | jq '.total_cost_usd'   # cost
+```
+
+### List runs
+
+```bash
+km agent list <sandbox>
+```
+
+### Direct API (skip Bedrock)
+
+```bash
+km agent run <sandbox> --prompt "..." --no-bedrock --wait
+```
+
+Requires `claude login` on the sandbox first (stores OAuth token in `~/.claude/.credentials.json`). Or set `spec.cli.noBedrock: true` in the profile to make it the default.
+
+### Schedule agent runs
+
+```bash
+km at '5pm tomorrow' agent run <sandbox> --prompt "run nightly tests" --auto-start
+```
+
+`--auto-start` resumes the sandbox if paused/hibernated before running the agent.
+
+### Profile configuration
+
+```yaml
+spec:
+  execution:
+    configFiles:
+      "/home/sandbox/.claude/settings.json": |
+        {"trustedDirectories":["/home/sandbox","/workspace"]}
+  cli:
+    noBedrock: true    # default to direct API for km shell / km agent run
+```
+
+- `spec.execution.configFiles` — pre-seed tool config files (written after initCommands, owned by sandbox user)
+- `spec.cli.noBedrock` — operator-side default; doesn't affect sandbox provisioning, only CLI behavior when connecting
