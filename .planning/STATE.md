@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 53-01-PLAN.md
-last_updated: "2026-04-13T21:35:06.328Z"
+stopped_at: Completed 53-02-PLAN.md
+last_updated: "2026-04-13T21:46:50.920Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
   total_phases: 53
-  completed_phases: 49
+  completed_phases: 50
   total_plans: 154
-  completed_plans: 154
+  completed_plans: 155
   percent: 0
 ---
 
@@ -197,6 +197,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 52-clone-sandbox P01 | 4min | 2 tasks | 5 files |
 | Phase 52-clone-sandbox P02 | 174 | 2 tasks | 3 files |
 | Phase 53-persistent-local-sandbox-numbering P01 | 84 | 1 tasks | 2 files |
+| Phase 53 P02 | 515s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -540,6 +541,8 @@ Recent decisions affecting current work:
 - [Phase 52-02]: Use SSMSendAPI/SandboxFetcher WithDeps DI pattern for test isolation; workspace staged once to source-scoped S3 key then downloaded post-provision via SSM to each clone
 - [Phase 53]: Exported LoadFrom/SaveTo as public helpers so tests use t.TempDir() without touching real config dir
 - [Phase 53]: Reconcile resets Next to 1 only when map is empty after pruning
+- [Phase 53]: Assign local number once at sandboxID generation (covers both local EC2 and docker paths)
+- [Phase 53]: Remote create path excluded from local number assignment — remote sandboxes assigned on next km list via Reconcile
 
 ### Roadmap Evolution
 
@@ -604,6 +607,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-13T21:35:06.324Z
-Stopped at: Completed 53-01-PLAN.md
+Last session: 2026-04-13T21:46:50.915Z
+Stopped at: Completed 53-02-PLAN.md
 Resume file: None
