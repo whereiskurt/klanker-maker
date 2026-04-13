@@ -19,6 +19,7 @@ spec:
     spot: true
     instanceType: t3.medium
     region: us-east-1
+    rootVolumeSize: 15
     hibernation: true
     additionalVolume:
       size: 20

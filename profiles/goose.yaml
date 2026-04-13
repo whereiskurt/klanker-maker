@@ -18,6 +18,7 @@ spec:
     spot: false
     instanceType: t3.medium
     region: us-east-1
+    rootVolumeSize: 15
     hibernation: true
     mountEFS: true
     efsMountPoint: /shared
