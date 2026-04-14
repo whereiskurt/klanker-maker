@@ -126,6 +126,11 @@ The proxy handles two request types:
 `InvokeModel` responses from Bedrock, extracts input/output token counts from
 the response body, and increments counters in DynamoDB for quota enforcement.
 
+**Anthropic direct API metering**: The proxy also intercepts and meters
+requests to `api.anthropic.com` (used by Claude Code with `--no-bedrock` /
+direct API mode). The same MITM, token extraction, and DynamoDB spend
+tracking pipeline applies to Anthropic API calls as to Bedrock calls.
+
 **GitHub repo-level filtering** (Phase 28): When `KM_GITHUB_ALLOWED_REPOS` is
 set, the proxy uses MITM to intercept HTTPS connections to GitHub hosts
 (`github.com`, `api.github.com`, `raw.githubusercontent.com`,
@@ -214,7 +219,12 @@ the proxy.
 | `AUDIT_LOG_DEST` | No | `stdout` | Destination: `stdout`, `cloudwatch`, or `s3` |
 | `SANDBOX_ID` | No | `unknown` | Sandbox identifier |
 | `CW_LOG_GROUP` | No | `/km/sandboxes/{SANDBOX_ID}/` | CloudWatch Logs group name |
-| `AWS_REGION` | No | `us-east-1` | AWS region for CloudWatch |
+| `AWS_REGION` | No | `us-east-1` | AWS region for CloudWatch and S3 |
+| `KM_ARTIFACTS_BUCKET` | No | *(empty)* | S3 bucket for audit NDJSON upload (required when `AUDIT_LOG_DEST=s3`) |
+| `KM_AUDIT_PIPE` | No | *(empty)* | Path to a named pipe (FIFO) to read events from instead of stdin |
+| `IDLE_TIMEOUT_MINUTES` | No | *(empty)* | Minutes of inactivity before triggering idle action (requires `cloudwatch` dest) |
+| `IDLE_ACTION` | No | `destroy` | Idle timeout behavior: `hibernate` (stop + re-arm loop) or default (publish idle event + exit) |
+| `KM_SANDBOX_TABLE` | No | `km-sandboxes` | DynamoDB table name for reading updated idle timeout on re-arm |
 
 ### Event Schema
 
@@ -239,7 +249,7 @@ All events conform to the locked JSON schema:
 |---|---|
 | **StdoutDest** | Writes JSON events as newline-delimited lines to stdout |
 | **CloudWatchDest** | Batches events (flush threshold: 25) and sends to CloudWatch Logs via `PutLogEvents`. Creates the log group and stream on startup. |
-| **S3Dest** | Stub -- falls back to stdout with a warning. Full S3 archive delivery is Phase 4 scope. |
+| **S3Dest** | Fully implemented with lazy S3 client initialization (deferred until first flush to handle credential race conditions with cred-refresh container). Buffers events in memory and flushes as NDJSON to `s3://{bucket}/audit/{sandboxID}/{timestamp}.ndjson` when the buffer reaches 50 events or on periodic/shutdown flush. Events are also written to stdout for local docker log visibility. Falls back to buffering (retry on next flush) if the S3 backend is not yet available. |
 
 ### Secret Redaction
 
@@ -322,17 +332,43 @@ processors:
     send_batch_size: 1024
 
 exporters:
-  awss3:
-    s3_uploader:
+  awss3/traces:
+    s3uploader:
       region: ${AWS_REGION}
       s3_bucket: ${OTEL_S3_BUCKET}
       s3_prefix: "traces/${SANDBOX_ID}"
     marshaler: otlp_json
-    timeout: 30s
+  awss3/logs:
+    s3uploader:
+      region: ${AWS_REGION}
+      s3_bucket: ${OTEL_S3_BUCKET}
+      s3_prefix: "logs/${SANDBOX_ID}"
+    marshaler: otlp_json
+  awss3/metrics:
+    s3uploader:
+      region: ${AWS_REGION}
+      s3_bucket: ${OTEL_S3_BUCKET}
+      s3_prefix: "metrics/${SANDBOX_ID}"
+    marshaler: otlp_json
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [awss3/traces]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [awss3/logs]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [awss3/metrics]
 ```
 
-Traces are batched (10s / 1024 spans) and exported as OTLP JSON to
-`s3://<bucket>/traces/<sandbox-id>/`.
+Three pipelines (traces, logs, metrics) are batched (10s / 1024 items) and exported as OTLP JSON to
+`s3://<bucket>/{traces,logs,metrics}/<sandbox-id>/`.
 
 ### Planned Features
 
@@ -451,11 +487,11 @@ make ecr-push
 
 **Image versioning:**
 
-`KM_SIDECAR_VERSION` controls the Docker tag. When unset it defaults to `latest`. The deploy pipeline always sets an explicit tag (e.g., a Git SHA or semantic version). Local development can omit the variable and use `latest`.
+`$(VERSION)` (from the Makefile) controls the Docker tag. When unset it defaults to `latest`. The deploy pipeline always sets an explicit tag (e.g., a Git SHA or semantic version). Local development can omit the variable and use `latest`.
 
 ```bash
 # Deploy pipeline: set explicit version
-KM_SIDECAR_VERSION=v1.2.0 make ecr-push
+VERSION=v1.2.0 make ecr-push
 
 # Local dev: omit for 'latest'
 make ecr-push
@@ -565,21 +601,21 @@ When a sandbox user reports that a request is unexpectedly blocked, use the
 
 ```bash
 # Stream DNS proxy logs for a running sandbox
-km logs --sandbox sb-a1b2c3d4 --stream dns-proxy
+km logs sb-a1b2c3d4 --stream dns-proxy
 
 # Stream HTTP proxy logs
-km logs --sandbox sb-a1b2c3d4 --stream http-proxy
+km logs sb-a1b2c3d4 --stream http-proxy
 
 # Stream all sidecar logs interleaved
-km logs --sandbox sb-a1b2c3d4 --stream all
+km logs sb-a1b2c3d4 --stream all
 ```
 
 ### Common issues
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `NXDOMAIN` for a valid domain | Domain suffix missing from `ALLOWED_SUFFIXES` | Add the suffix to the sandbox profile's `network.dns_allowlist` |
-| `403 Forbidden` from HTTP proxy | Host missing from `ALLOWED_HOSTS` | Add the host to the sandbox profile's `network.http_allowlist` |
+| `NXDOMAIN` for a valid domain | Domain suffix missing from `ALLOWED_SUFFIXES` | Add the suffix to the sandbox profile's `network.egress.allowedDNSSuffixes` |
+| `403 Forbidden` from HTTP proxy | Host missing from `ALLOWED_HOSTS` | Add the host to the sandbox profile's `network.egress.allowedHosts` |
 | Timeouts (no NXDOMAIN or 403) | Upstream DNS unreachable or proxy not running | Check `km logs --stream dns-proxy` for `dns_upstream_error` events; verify sidecar health with `km status sb-a1b2c3d4` |
 | Audit events missing | `AUDIT_LOG_DEST` misconfigured or CloudWatch permissions | Check `km logs --stream audit-log` for initialization errors |
 | Traces not appearing in S3 | `OTEL_S3_BUCKET` not set or IAM missing `s3:PutObject` | Verify env vars and task role permissions |

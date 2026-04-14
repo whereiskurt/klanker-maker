@@ -107,68 +107,81 @@ This creates a short-lived sandbox where the operator gets a warning at 90% spen
 
 ## DynamoDB Schema
 
-Budget records live in the same DynamoDB global table used for sandbox state, following the defcon.run.34 single-table design pattern.
+Budget records live in a dedicated DynamoDB table (`km-budgets`), separate from the sandbox metadata table.
 
 ### Table Configuration
 
 | Property | Value |
 |----------|-------|
-| Table name | `km-sandbox` |
+| Table name | `km-budgets` |
 | Billing mode | PAY_PER_REQUEST |
 | Replication | Global table, replicated to all active regions |
-| Partition key | `pk` (String) |
-| Sort key | `sk` (String) |
-| TTL attribute | `ttl_expire` |
+| Partition key | `PK` (String) |
+| Sort key | `SK` (String) |
+| TTL attribute | `expiresAt` |
 
-### Budget Item
+### Multi-Row Budget Design
 
-For a sandbox `sb-7f3a9e12`, the budget record uses:
+For a sandbox `sb-7f3a9e12`, budget data is stored across multiple sort key rows under a single partition key:
 
-- **pk**: `SANDBOX#sb-7f3a9e12`
-- **sk**: `BUDGET`
+- **PK**: `SANDBOX#sb-7f3a9e12`
+- **SK**: `BUDGET#compute` -- compute spend row
+- **SK**: `BUDGET#ai#{modelID}` -- per-model AI spend rows
+- **SK**: `BUDGET#limits` -- budget limits configuration row
+- **SK**: `BUDGET#meta` -- warning notification state
+
+#### Limits row (`BUDGET#limits`)
 
 ```json
 {
-  "pk": { "S": "SANDBOX#sb-7f3a9e12" },
-  "sk": { "S": "BUDGET" },
-  "compute_limit": { "N": "2.00" },
-  "compute_spend": { "N": "0.47" },
-  "ai_limit": { "N": "5.00" },
-  "ai_spend": { "N": "1.23" },
-  "per_model_spend": {
-    "M": {
-      "anthropic.claude-3-haiku-20240307-v1:0": {
-        "M": {
-          "input_tokens": { "N": "4521600" },
-          "output_tokens": { "N": "389200" },
-          "spend": { "N": "0.23" }
-        }
-      },
-      "anthropic.claude-sonnet-4-20250514-v1:0": {
-        "M": {
-          "input_tokens": { "N": "287400" },
-          "output_tokens": { "N": "53100" },
-          "spend": { "N": "1.00" }
-        }
-      }
-    }
-  },
-  "compute_rate_hr": { "N": "0.0104" },
-  "instance_type": { "S": "t3.medium" },
-  "region": { "S": "us-east-1" },
-  "created_at": { "S": "2026-03-22T14:30:00Z" },
-  "updated_at": { "S": "2026-03-22T15:12:47Z" },
-  "ttl_expire": { "N": "1711468200" }
+  "PK": { "S": "SANDBOX#sb-7f3a9e12" },
+  "SK": { "S": "BUDGET#limits" },
+  "computeLimit": { "N": "2.00" },
+  "aiLimit": { "N": "5.00" },
+  "warningThreshold": { "N": "0.80" }
+}
+```
+
+#### Compute spend row (`BUDGET#compute`)
+
+```json
+{
+  "PK": { "S": "SANDBOX#sb-7f3a9e12" },
+  "SK": { "S": "BUDGET#compute" },
+  "spentUSD": { "N": "0.47" }
+}
+```
+
+#### Per-model AI spend row (`BUDGET#ai#{modelID}`)
+
+```json
+{
+  "PK": { "S": "SANDBOX#sb-7f3a9e12" },
+  "SK": { "S": "BUDGET#ai#anthropic.claude-sonnet-4-20250514-v1:0" },
+  "spentUSD": { "N": "1.00" },
+  "inputTokens": { "N": "287400" },
+  "outputTokens": { "N": "53100" },
+  "last_updated": { "S": "2026-03-22T15:12:47Z" }
+}
+```
+
+#### Warning meta row (`BUDGET#meta`)
+
+```json
+{
+  "PK": { "S": "SANDBOX#sb-7f3a9e12" },
+  "SK": { "S": "BUDGET#meta" },
+  "warningNotified": { "BOOL": true }
 }
 ```
 
 ### Key Design Decisions
 
-**Single-table pattern**: The budget item sits alongside other sandbox items (state, config, session) under the same partition key. This means a single `Query` on `pk = SANDBOX#sb-7f3a9e12` returns everything about the sandbox, including budget.
+**Separate table**: Budget data lives in its own `km-budgets` table, not in the sandbox metadata table. The `GetBudget` function uses a `Query` with `begins_with(SK, "BUDGET#")` to read all budget rows for a sandbox in a single call.
 
-**TTL cleanup**: `ttl_expire` is set to the sandbox TTL plus a 24-hour grace period. After the sandbox is destroyed, DynamoDB automatically removes the budget record. This prevents table bloat without requiring a cleanup Lambda.
+**TTL cleanup**: `expiresAt` is set to the sandbox teardown time plus a 30-day retention window. After the sandbox is destroyed, DynamoDB automatically removes the budget records. This prevents table bloat without requiring a cleanup Lambda.
 
-**Atomic increments**: AI spend updates use `UpdateExpression` with `ADD` to atomically increment `ai_spend` and per-model token counts. No read-modify-write races.
+**Atomic increments**: AI spend updates use `UpdateExpression` with `ADD` to atomically increment `spentUSD` and per-model token counts. No read-modify-write races. Compute spend uses `SET` with a pre-calculated absolute value (see Compute Spend Calculation below).
 
 ## Budget-Enforcer Lambda Architecture
 
@@ -203,29 +216,32 @@ The `spot_rate` is embedded in the payload at sandbox creation time from a stati
 
 ### Lambda IAM Scope
 
-The Lambda role (`km-budget-enforcer-{sandbox-id}`) has six IAM policies:
+The Lambda role (`km-budget-enforcer-{sandbox-id}`) has nine IAM policies:
 
 | Policy | Permissions |
 |--------|-------------|
 | CloudWatch Logs | `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents` |
-| DynamoDB | `GetItem`, `UpdateItem`, `Query` on the budget table (and its indexes) |
-| EC2 control | `StopInstances`, `StartInstances`, `DescribeInstances` — tag-condition: `km:sandbox_id = {sandbox-id}` |
+| DynamoDB (budget) | `GetItem`, `UpdateItem`, `Query` on the budget table (and its indexes) |
+| EC2 control | `StopInstances`, `StartInstances`, `DescribeInstances` -- tag-condition: `km:sandbox_id = {sandbox-id}` |
 | ECS control | `StopTask`, `DescribeTasks` |
 | IAM policy control | `AttachRolePolicy`, `DetachRolePolicy`, `ListAttachedRolePolicies` on the sandbox role ARN |
 | SES | `SendEmail`, `SendRawEmail` for budget notification emails |
+| DynamoDB (sandbox metadata) | `GetItem`, `UpdateItem`, `PutItem` on the sandbox metadata table (lock check, status update) |
+| EventBridge Scheduler | `scheduler:DeleteSchedule` for TTL schedule cleanup on budget enforcement |
+| S3 profiles | `s3:GetObject` on `artifacts/{sandbox-id}/*` for reading stored sandbox profiles (hibernation check, ECS teardown) |
 
 The EC2 condition (`StringEquals: aws:ResourceTag/km:sandbox_id`) ensures the Lambda can only stop/start instances belonging to its specific sandbox.
 
 ### Compute Spend Calculation
 
-The Lambda reads the sandbox's spend record from DynamoDB on every invocation. It calculates absolute cost from the sandbox `created_at` timestamp:
+The Lambda reads `spot_rate` and `created_at` from the EventBridge event payload (not from DynamoDB). It calculates absolute cost from the sandbox creation timestamp:
 
 ```
 elapsed_hours = (now - created_at) / 3600
 absolute_cost = spot_rate * elapsed_hours
 ```
 
-It then writes using `SET compute_spend = :cost` (not `ADD`). This is idempotent: each invocation recalculates from the beginning rather than adding an increment. If the Lambda is retried or runs late, the spend value converges to the correct absolute amount instead of accumulating errors.
+It then writes using `SET spentUSD = :cost` (not `ADD`). This is idempotent: each invocation recalculates from the beginning rather than adding an increment. If the Lambda is retried or runs late, the spend value converges to the correct absolute amount instead of accumulating errors.
 
 ---
 
@@ -235,27 +251,18 @@ Compute spend is tracked as the sandbox's spot rate multiplied by elapsed minute
 
 ### Rate Sourcing
 
-At sandbox creation, `km create` queries the AWS Price List API for the current spot price of the configured instance type and region:
+At sandbox creation, `km create` looks up the hourly rate from a static fallback table (`staticSpotRate()` in `spot_rate.go`). The static table contains approximate us-east-1 spot prices for common instance types. The AWS Price List API (`GetProducts`) can also be queried, but it returns on-demand pricing as an approximation -- actual spot prices would require `DescribeSpotPriceHistory`.
 
-```
-GET https://api.pricing.us-east-1.amazonaws.com/...
-    ServiceCode=AmazonEC2
-    instanceType=t3.medium
-    operatingSystem=Linux
-    regionCode=us-east-1
-    capacityStatus=SpotInstance
-```
-
-The returned rate is stored in the DynamoDB budget record as `compute_rate_hr` (USD per hour). This rate is cached for the lifetime of the sandbox -- spot price fluctuations after creation do not affect the budget calculation.
+The rate is embedded in the EventBridge Scheduler payload as `spot_rate` at sandbox creation time. It is not stored in the DynamoDB budget record and is not re-fetched on each Lambda invocation, so price fluctuations after creation do not affect budget calculations.
 
 ### Periodic Polling
 
 An EventBridge-triggered Lambda runs every 60 seconds for each active sandbox:
 
-1. Reads `compute_rate_hr` and `compute_spend` from DynamoDB.
-2. Calculates spend since last update: `rate_hr / 60 * minutes_elapsed`.
-3. Atomically increments `compute_spend` in DynamoDB.
-4. Checks `compute_spend` against `compute_limit` for warning/enforcement thresholds.
+1. Reads `spot_rate` and `created_at` from the EventBridge event payload (not from DynamoDB).
+2. Calculates absolute cost from creation: `spot_rate * (elapsed_minutes / 60)`.
+3. Writes the compute spend to DynamoDB using `SET spentUSD = :cost` (idempotent, not incremental).
+4. Reads the full `BudgetSummary` from DynamoDB and checks thresholds for warning/enforcement.
 
 ### Rate Differences
 
@@ -266,9 +273,9 @@ Spot rates vary by instance type and region. Examples at time of writing:
 | t3.small | ~$0.0052/hr | ~$0.0052/hr | ~$0.0058/hr |
 | t3.medium | ~$0.0104/hr | ~$0.0104/hr | ~$0.0116/hr |
 | t3.large | ~$0.0208/hr | ~$0.0208/hr | ~$0.0232/hr |
-| m5.large | ~$0.0260/hr | ~$0.0270/hr | ~$0.0290/hr |
+| m5.large | ~$0.0350/hr | ~$0.0270/hr | ~$0.0290/hr |
 
-These rates are looked up dynamically -- the table above is for estimation only.
+These rates come from a static fallback table and are approximate -- the table above is for estimation only.
 
 ## Compute Budget Enforcement Details
 
@@ -276,18 +283,21 @@ When the Lambda's compute spend calculation shows `compute_spend >= compute_limi
 
 ### EC2 Substrate: Suspend-and-Resume
 
-For EC2-based sandboxes, the Lambda calls `ec2:StopInstances` on the sandbox instance (identified by tag `km:sandbox_id`):
+For EC2-based sandboxes, the Lambda performs several checks before stopping the instance:
 
+- **Lock check.** The Lambda reads sandbox metadata from DynamoDB and checks if the sandbox is locked (`km lock`). If locked, compute budget enforcement is skipped entirely -- the sandbox continues running regardless of spend.
+- **Hibernation support.** The Lambda downloads the sandbox profile from S3 and checks `spec.runtime.hibernation`. If hibernation is enabled, it calls `StopInstances` with `Hibernate: true` first, which preserves in-memory state. If hibernation fails (e.g., instance type does not support it), it falls back to a plain stop.
 - **EBS volumes are preserved.** All data written to the EBS root volume and any attached volumes survives the stop. The agent's filesystem state is intact.
 - **Compute charges stop immediately.** Spot instance billing stops when the instance transitions to `stopped` state. The sandbox incurs no further compute cost.
-- **Instance is resumable.** When the operator adds budget, the Lambda (or `km budget add`) calls `ec2:StartInstances`. The instance boots from the same EBS state, resumes processes, and continues from where it stopped. This is a suspend-and-resume model, not a teardown.
+- **DynamoDB status update.** The Lambda updates the sandbox status in DynamoDB to `paused` (if hibernated) or `stopped`.
+- **TTL schedule cleanup.** The Lambda deletes the sandbox TTL schedule to prevent a stopped sandbox from being destroyed on TTL expiry.
+- **Instance is resumable.** When the operator adds budget, `km budget add` calls `ec2:StartInstances`. The instance boots from the same EBS state, resumes processes, and continues from where it stopped. This is a suspend-and-resume model, not a teardown.
 
 ### ECS Substrate: Stop-and-Reprovision
 
-For ECS Fargate sandboxes, tasks are ephemeral — there is no persistent EBS volume. The Lambda:
+For ECS Fargate sandboxes, tasks are ephemeral -- there is no persistent EBS volume. The Lambda:
 
-1. Triggers an artifact upload (workspace tarball saved to S3 under `artifacts/{sandbox-id}/`).
-2. Stops the ECS task via `ecs:StopTask`.
+1. Stops the ECS task via `ecs:StopTask`. (Artifact upload before stop is planned but not yet implemented -- currently handled by the TTL handler path.)
 
 When the operator adds budget, re-provisioning creates a new Fargate task from the sandbox profile stored in S3 at `artifacts/{sandbox-id}/.km-profile.yaml`. The workspace is restored from the artifact tarball. This is a stop-and-reprovision model: each resume starts a fresh task container from the preserved workspace snapshot.
 
@@ -350,23 +360,21 @@ Model rates are sourced from the AWS Price List API and cached locally in the pr
 
 ### DynamoDB Update
 
-After extracting usage, the proxy issues an atomic update:
+After extracting usage, the proxy issues an atomic update against the per-model AI spend row (`BUDGET#ai#{modelID}`):
 
 ```
-UpdateExpression:
-  ADD ai_spend :cost,
-      per_model_spend.#model.input_tokens :in_tok,
-      per_model_spend.#model.output_tokens :out_tok,
-      per_model_spend.#model.spend :cost
-  SET updated_at = :now
+Key:
+  PK = "SANDBOX#sb-7f3a9e12"
+  SK = "BUDGET#ai#anthropic.claude-sonnet-4-20250514-v1:0"
 
-ExpressionAttributeNames:
-  #model = "anthropic.claude-sonnet-4-20250514-v1:0"
+UpdateExpression:
+  ADD spentUSD :cost, inputTokens :inputTokens, outputTokens :outputTokens
+  SET last_updated = :now
 
 ExpressionAttributeValues:
   :cost = 0.0042
-  :in_tok = 1200
-  :out_tok = 340
+  :inputTokens = 1200
+  :outputTokens = 340
   :now = "2026-03-22T15:12:47Z"
 ```
 
@@ -396,21 +404,7 @@ No tokens are consumed. No Bedrock API call is made. The agent sees an immediate
 
 ### Layer 2: Lambda IAM Revocation — Backstop
 
-The same budget-enforcer Lambda that tracks compute spend also checks AI spend on each invocation. When `ai_spend >= ai_limit`, it attaches a deny policy to the sandbox IAM role:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Sid":      "BudgetDenyBedrock",
-    "Effect":   "Deny",
-    "Action":   "bedrock:InvokeModel*",
-    "Resource": "*"
-  }]
-}
-```
-
-The Lambda uses `iam:AttachRolePolicy` (allowed by the IAM policy control permission on the budget-enforcer role, which is carved out in the SCP `DenyIAMEscalation` statement specifically for `km-budget-enforcer-*`).
+The same budget-enforcer Lambda that tracks compute spend also checks AI spend on each invocation. When `ai_spend >= ai_limit`, it detaches the `AmazonBedrockFullAccess` managed policy (`arn:aws:iam::aws:policy/AmazonBedrockFullAccess`) from the sandbox IAM role using `iam:DetachRolePolicy`. Without this policy, any direct Bedrock API calls from the sandbox receive an IAM `AccessDenied` error.
 
 ### Why Two Layers?
 
@@ -436,54 +430,17 @@ When either spend pool crosses the `warningThreshold` (default 80%), the operato
 
 Both check: `current_spend / limit >= warningThreshold`.
 
-A `warning_sent_compute` or `warning_sent_ai` boolean flag on the DynamoDB record prevents duplicate emails.
+A single `warningNotified` boolean flag on the `BUDGET#meta` row in DynamoDB prevents duplicate emails. Once a warning is sent for either pool, no further warnings are sent.
 
 ### Email Content
 
-The warning is sent via SES to `KM_OPERATOR_EMAIL` using the existing `SendLifecycleNotification` pattern:
+The warning is sent via SES to the operator email using the existing `SendLifecycleNotification` helper. The details string is a single line summarizing both pools:
 
 ```
-Subject: [Klanker Maker] Budget Warning — sb-7f3a9e12
-
-Sandbox sb-7f3a9e12 has reached 82% of its AI budget.
-
-  Pool:       AI (Bedrock)
-  Spent:      $4.10 of $5.00
-  Threshold:  80%
-
-  Per-model breakdown:
-    Claude Haiku 3      $0.31  (4.5M input / 389K output tokens)
-    Claude Sonnet 4     $3.79  (287K input / 53K output tokens)
-
-  Sandbox:    sb-7f3a9e12
-  Region:     us-east-1
-  Profile:    dev-with-budget
-  Created:    2026-03-22T14:30:00Z
-
-To add more budget:
-  km budget add sb-7f3a9e12 --ai 5.00
-
-To destroy the sandbox:
-  km destroy sb-7f3a9e12
+budget-warning: compute=83% ai=64%
 ```
 
-A separate email fires for compute warnings:
-
-```
-Subject: [Klanker Maker] Budget Warning — sb-7f3a9e12
-
-Sandbox sb-7f3a9e12 has reached 83% of its compute budget.
-
-  Pool:       Compute (EC2 spot)
-  Spent:      $1.66 of $2.00
-  Rate:       $0.0104/hr (t3.medium spot, us-east-1)
-  Threshold:  80%
-
-  Estimated time remaining: ~3.3 hours
-
-To add more budget:
-  km budget add sb-7f3a9e12 --compute 2.00
-```
+This is a simple lifecycle notification, not a rich template. A single warning email covers both pools.
 
 ## Enforcement Flow
 
@@ -510,21 +467,7 @@ The agent sees a 403 immediately. No Bedrock call is made, so no additional toke
 
 **Layer 2 -- IAM (backstop):**
 
-The EventBridge-triggered Lambda also monitors AI spend. When `ai_spend >= ai_limit`, it revokes Bedrock permissions from the sandbox IAM role by attaching a deny policy:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Sid": "BudgetDenyBedrock",
-    "Effect": "Deny",
-    "Action": "bedrock:InvokeModel*",
-    "Resource": "*"
-  }]
-}
-```
-
-This catches any Bedrock calls made via the AWS SDK or CLI directly, bypassing the proxy. The agent receives an IAM `AccessDenied` error from AWS.
+The EventBridge-triggered Lambda also monitors AI spend. When `ai_spend >= ai_limit`, it detaches the `AmazonBedrockFullAccess` managed policy from the sandbox IAM role using `iam:DetachRolePolicy`. This catches any Bedrock calls made via the AWS SDK or CLI directly, bypassing the proxy. The agent receives an IAM `AccessDenied` error from AWS.
 
 **Why two layers?** The proxy layer gives instant feedback with a clear error message. The IAM layer is a backstop for cases where the agent might call Bedrock through a path that does not traverse the proxy (e.g., using the AWS CLI directly with credentials from the instance metadata).
 
@@ -539,29 +482,17 @@ When `compute_spend >= compute_limit`, the Lambda suspends the sandbox:
 4. The instance can be started again on top-up.
 
 **ECS Fargate substrate:**
-1. Triggers artifact upload (workspace tarball to S3).
-2. Stops the ECS task.
-3. Fargate tasks are ephemeral -- top-up re-provisions from the stored profile.
+1. Stops the ECS task via `ecs:StopTask`. (Artifact upload before stop is planned but not yet implemented.)
+2. Fargate tasks are ephemeral -- top-up re-provisions from the stored profile.
 
 ### Enforcement Email
 
-```
-Subject: [Klanker Maker] Budget Exhausted — sb-7f3a9e12
+Enforcement emails are sent via `SendLifecycleNotification` with a simple details string:
 
-Sandbox sb-7f3a9e12 has exhausted its compute budget and has been suspended.
+- **Compute**: `compute-budget-exhausted: spent=0.4700 limit=0.5000`
+- **AI**: `ai-budget-exhausted: spent=5.0042 limit=5.0000`
 
-  Pool:       Compute (EC2 spot)
-  Spent:      $2.01 of $2.00
-  Action:     EC2 instance stopped (EBS preserved)
-
-  The sandbox is suspended. Data is preserved.
-
-To resume:
-  km budget add sb-7f3a9e12 --compute 2.00
-
-To collect artifacts and destroy:
-  km destroy sb-7f3a9e12
-```
+These are lifecycle notifications, not rich templates.
 
 ### Enforcement Timeline
 
@@ -593,30 +524,24 @@ Add $3.00 to AI budget:
 
 ```bash
 $ km budget add sb-7f3a9e12 --ai 3.00
-Budget updated for sb-7f3a9e12:
-  AI:      $5.00 → $8.00 (+$3.00)
-  Spent:   $5.00 of $8.00 (62.5%)
-  Status:  proxy unblocked, IAM restored
+Budget updated: compute $5.0000/$5.0000, AI $5.0000/$8.0000
 ```
 
-Add $1.00 to compute and $5.00 to AI:
+Add $1.00 to compute and $5.00 to AI (with auto-resume):
 
 ```bash
 $ km budget add sb-7f3a9e12 --compute 1.00 --ai 5.00
-Budget updated for sb-7f3a9e12:
-  Compute: $2.00 → $3.00 (+$1.00)
-  AI:      $5.00 → $10.00 (+$5.00)
-  Compute: EC2 instance starting...
-  Status:  running
+Budget updated: compute $2.0100/$3.0000, AI $5.0000/$10.0000
+Sandbox sb-7f3a9e12 resumed.
 ```
 
 ### What Top-Up Does
 
 The command performs these steps in order:
 
-1. **DynamoDB update**: Atomically increments `compute_limit` and/or `ai_limit`.
+1. **DynamoDB update**: Reads the current limits, calculates the new values (additive top-up), and writes new limits using `SET` with pre-calculated values.
 2. **Proxy unblock (AI)**: The proxy re-reads budget from DynamoDB on each request, so unblocking is automatic once limits are updated.
-3. **IAM restore (AI)**: If the `BudgetDenyBedrock` policy was attached, it is detached from the sandbox role.
+3. **IAM restore (AI)**: If the `AmazonBedrockFullAccess` policy was detached by the enforcer, it is re-attached to the sandbox role.
 4. **EC2 start (compute)**: If the instance was stopped, calls `StartInstances`. The instance resumes from its stopped state with all EBS data intact.
 5. **ECS re-provision (compute)**: If the Fargate task was stopped, re-provisions a new task from the sandbox profile stored in S3. The workspace is restored from the artifact tarball.
 
@@ -634,9 +559,9 @@ Top-up touches each enforcement layer in the correct order to restore the sandbo
 km budget add sb-7f3a9e12 --ai 3.00
 ```
 
-1. **DynamoDB update**: Atomically increments `ai_limit` by $3.00 (`ADD ai_limit :delta`).
+1. **DynamoDB update**: Reads the current `aiLimit`, adds $3.00, and writes the new limit using `SET aiLimit = :newLimit` (pre-calculated, not `ADD`).
 2. **Proxy unblock**: The HTTP proxy reads budget from DynamoDB on every request. Once the limit is updated, the next proxy read sees `ai_spend < ai_limit` and allows Bedrock calls immediately. No proxy restart required.
-3. **IAM restore**: If the `BudgetDenyBedrock` deny policy was attached by the Lambda, `km budget add` calls `iam:DetachRolePolicy` to remove it. The sandbox IAM role can once again invoke Bedrock.
+3. **IAM restore**: If the `AmazonBedrockFullAccess` managed policy was detached by the Lambda, `km budget add` checks with `ListAttachedRolePolicies` and re-attaches it with `iam:AttachRolePolicy`. The sandbox IAM role can once again invoke Bedrock.
 
 ### Compute Top-Up Sequence
 
@@ -644,7 +569,7 @@ km budget add sb-7f3a9e12 --ai 3.00
 km budget add sb-7f3a9e12 --compute 2.00
 ```
 
-1. **DynamoDB update**: Atomically increments `compute_limit` by $2.00.
+1. **DynamoDB update**: Reads the current `computeLimit`, adds $2.00, and writes the new limit using `SET computeLimit = :newLimit` (pre-calculated, not `ADD`).
 2. **EC2 start (if stopped)**: If the substrate is EC2 and the instance is in `stopped` state, `km budget add` calls `ec2:StartInstances`. The instance starts from the preserved EBS state. All data is intact. The agent's processes do not automatically restart — the agent must be re-initiated by the operator or a startup script.
 3. **ECS re-provision (if stopped)**: If the substrate is ECS and the task is stopped, `km budget add` reads the profile from S3 (`artifacts/{sandbox-id}/.km-profile.yaml`) and provisions a new Fargate task. The artifact tarball is restored to `/workspace` on task startup.
 
@@ -665,7 +590,7 @@ Both flags are optional. Each flag independently tops up its pool without affect
 
 ## Per-Model AI Breakdown
 
-The `km status` command shows per-model token usage and cost, sourced from the `per_model_spend` map in the DynamoDB budget record.
+The `km status` command shows per-model token usage and cost, sourced from the `BUDGET#ai#{modelID}` rows in the DynamoDB budget table.
 
 ### Model Pricing Source
 
@@ -673,23 +598,18 @@ Model rates are sourced from the AWS Price List API at sandbox creation time and
 
 ```
 $ km status sb-7f3a9e12
-
-  Per-Model Breakdown:
-  MODEL                          INPUT TOKENS   OUTPUT TOKENS   SPEND
-  claude-3-haiku-20240307        4,521,600      389,200         $0.23
-  claude-sonnet-4-20250514       287,400        53,100          $2.98
-  claude-opus-4-20250514         12,000         3,100           $0.22
-  ─────────────────────────────────────────────────────────────────────
-  Total                          4,820,000      445,400         $3.43
+...
+Budget:
+  AI:      $3.4300 / $5.0000 (68.6%)
+    claude-3-haiku-20240307:       $0.2300 (4521K in / 389K out)
+    claude-sonnet-4-20250514:      $2.9800 (287K in / 53K out)
+    claude-opus-4-20250514:        $0.2200 (12K in / 3K out)
+  Warning threshold: 80%
 ```
 
-Each row shows:
-- **Model ID**: The Bedrock model identifier extracted from the `InvokeModel` request path.
-- **Input Tokens**: Cumulative input tokens since sandbox creation.
-- **Output Tokens**: Cumulative output tokens since sandbox creation.
-- **Spend**: Cumulative USD cost for this model.
+Each row shows the model ID, cumulative USD cost, and cumulative input/output tokens (in thousands) since sandbox creation.
 
-The per-model breakdown is updated atomically by the HTTP proxy on each Bedrock response using `ADD per_model_spend.#model.input_tokens :in_tok`. The `km status` command reads the latest values from DynamoDB.
+The per-model breakdown is updated atomically by the HTTP proxy on each Bedrock response using `ADD spentUSD :cost, inputTokens :in, outputTokens :out` on the `BUDGET#ai#{modelID}` row. The `km status` command reads all budget rows with a single `Query` using `begins_with(SK, "BUDGET#")`.
 
 ---
 
@@ -699,64 +619,47 @@ The per-model breakdown is updated atomically by the HTTP proxy on each Bedrock 
 
 ### Example Output
 
+The actual `km status` output uses a flat key-value format:
+
 ```bash
 $ km status sb-7f3a9e12
-Sandbox: sb-7f3a9e12
-Profile: dev-with-budget
-Region:  us-east-1
-State:   running
-Uptime:  1h 42m
-
-Compute Budget:
-  Spent:     $1.06 of $2.00 (53.0%)
-  Rate:      $0.0104/hr (t3.medium spot)
-  Remaining: ~$0.94 (~90.4 hours at current rate)
-  ████████████░░░░░░░░░░░░ 53%
-
-AI Budget:
-  Spent:     $3.21 of $5.00 (64.2%)
-  Remaining: ~$1.79
-  ████████████████░░░░░░░░ 64%
-
-  Per-Model Breakdown:
-  MODEL                          INPUT TOKENS   OUTPUT TOKENS   SPEND
-  claude-3-haiku-20240307        4,521,600      389,200         $0.23
-  claude-sonnet-4-20250514       287,400        53,100          $2.98
-  ─────────────────────────────────────────────────────────────────────
-  Total                          4,809,000      442,300         $3.21
-
+Sandbox ID:  sb-7f3a9e12
+Profile:     dev-with-budget
+Substrate:   ec2-spot
+Region:      us-east-1
+Status:      running
+Created At:  2026-03-22 2:30:00 PM UTC
+TTL Expiry:  2026-03-23 2:30:00 PM UTC
 Resources (3):
   - arn:aws:ec2:us-east-1:...:instance/i-0abc123def456
   - arn:aws:iam::...:role/km-sb-7f3a9e12
-  - arn:aws:dynamodb:us-east-1:...:table/km-sandbox
+  - arn:aws:dynamodb:us-east-1:...:table/km-budgets
+Budget:
+  Compute: $1.0600 / $2.0000 (53.0%)
+  AI:      $3.2100 / $5.0000 (64.2%)
+    claude-3-haiku-20240307:       $0.2300 (4521K in / 389K out)
+    claude-sonnet-4-20250514:      $2.9800 (287K in / 53K out)
+  Warning threshold: 80%
 ```
+
+Percentages are color-coded in TTY output: green below 80%, yellow from 80-99%, red at 100% or above.
 
 ### Suspended Sandbox
 
-When a sandbox is suspended due to budget exhaustion:
+When a sandbox is stopped due to budget exhaustion, the `Status` field reflects the stopped state:
 
 ```bash
 $ km status sb-7f3a9e12
-Sandbox: sb-7f3a9e12
-Profile: dev-with-budget
-Region:  us-east-1
-State:   suspended (compute budget exhausted)
-Uptime:  192h 18m (stopped)
-
-Compute Budget:
-  Spent:     $2.01 of $2.00 (100.5%)  ** EXHAUSTED **
-  Rate:      $0.0104/hr (t3.medium spot)
-  EC2:       stopped (EBS preserved)
-  ████████████████████████ 100%
-
-AI Budget:
-  Spent:     $3.21 of $5.00 (64.2%)
-  Remaining: ~$1.79
-  ████████████████░░░░░░░░ 64%
-
-  [per-model breakdown omitted for brevity]
-
-To resume: km budget add sb-7f3a9e12 --compute 2.00
+Sandbox ID:  sb-7f3a9e12
+Profile:     dev-with-budget
+Substrate:   ec2-spot
+Region:      us-east-1
+Status:      stopped
+Created At:  2026-03-22 2:30:00 PM UTC
+Budget:
+  Compute: $2.0100 / $2.0000 (100.5%)
+  AI:      $3.2100 / $5.0000 (64.2%)
+  Warning threshold: 80%
 ```
 
 ## Cost Examples
@@ -839,7 +742,7 @@ In this example, the agent used Haiku heavily for routine tasks and only called 
 
 ## Global Table Replication
 
-The `km-sandbox` DynamoDB table is a global table, replicated to every region where sandbox agents run.
+The `km-budgets` DynamoDB table is a global table, replicated to every region where sandbox agents run.
 
 ### Why Global Replication
 
@@ -856,14 +759,14 @@ Without replication, a sandbox in `us-west-2` would need to read from a table in
                     ┌──────────────────┐
                     │   us-east-1      │
                     │   (home region)  │
-                    │   km-sandbox     │◄── km CLI writes here
+                    │   km-budgets     │◄── km CLI writes here
                     └────────┬─────────┘
                              │
               ┌──────────────┼──────────────┐
               │              │              │
     ┌─────────▼──────┐ ┌────▼────────┐ ┌──▼──────────────┐
     │  us-west-2     │ │  eu-west-1  │ │  ap-southeast-1 │
-    │  km-sandbox    │ │  km-sandbox │ │  km-sandbox     │
+    │  km-budgets    │ │  km-budgets │ │  km-budgets     │
     │  (replica)     │ │  (replica)  │ │  (replica)      │
     └────────────────┘ └─────────────┘ └─────────────────┘
          ▲                   ▲                  ▲
@@ -886,38 +789,33 @@ DynamoDB global tables use eventual consistency for cross-region replication, ty
 When a new region is added to `spec.identity.allowedRegions` across profiles, the global table must be extended:
 
 ```hcl
-# infra/modules/dynamodb-global/v1.0.0/main.tf
-resource "aws_dynamodb_table" "km_sandbox" {
-  name         = "km-sandbox"
+# infra/modules/dynamodb-budget/v1.0.0/main.tf
+resource "aws_dynamodb_table" "budget" {
+  name         = "km-budgets"
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "pk"
-  range_key    = "sk"
+  hash_key     = "PK"
+  range_key    = "SK"
 
   attribute {
-    name = "pk"
+    name = "PK"
     type = "S"
   }
 
   attribute {
-    name = "sk"
+    name = "SK"
     type = "S"
   }
 
   ttl {
-    attribute_name = "ttl_expire"
+    attribute_name = "expiresAt"
     enabled        = true
   }
 
-  replica {
-    region_name = "us-west-2"
-  }
-
-  replica {
-    region_name = "eu-west-1"
-  }
-
-  replica {
-    region_name = "ap-southeast-1"
+  dynamic "replica" {
+    for_each = var.replica_regions
+    content {
+      region_name = replica.value
+    }
   }
 }
 ```

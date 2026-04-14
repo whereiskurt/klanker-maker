@@ -31,7 +31,7 @@ km destroy 1 --yes
 | **Runs on** | Your local machine | AWS |
 | **Cost** | Free (local compute) | ~$0.01/hr (spot) |
 | **Network enforcement** | Proxy mode only | Proxy, eBPF, or both |
-| **eBPF enforcement** | Not available | Full cgroup eBPF (kernel 6.18) |
+| **eBPF enforcement** | Not available | Full cgroup eBPF |
 | **SSM sessions** | N/A (uses `docker exec`) | Full SSM audit trail |
 | **Budget metering** | Yes (proxy-based) | Yes (proxy + IAM revocation) |
 | **Port forwarding** | `docker port` / compose ports | `km shell --ports` (SSM) |
@@ -123,14 +123,14 @@ At create time, `km` generates an ephemeral ECDSA P-256 CA certificate (valid 24
 If you don't have ECR access or prefer local images:
 
 ```bash
-# Build all sidecar images locally
-make sidecars-local
+# Build the sandbox base image locally
+make sandbox-image
 
 # Or build individually
-docker build -t km-sandbox:latest -f Dockerfile.sandbox .
-docker build -t km-dns-proxy:latest -f sidecars/dns-proxy/Dockerfile sidecars/dns-proxy/
-docker build -t km-http-proxy:latest -f sidecars/http-proxy/Dockerfile sidecars/http-proxy/
-docker build -t km-audit-log:latest -f sidecars/audit-log/Dockerfile sidecars/audit-log/
+docker buildx build --platform linux/amd64 -t km-sandbox:latest -f containers/sandbox/Dockerfile containers/sandbox/
+docker buildx build --platform linux/amd64 -t km-dns-proxy:latest -f sidecars/dns-proxy/Dockerfile .
+docker buildx build --platform linux/amd64 -t km-http-proxy:latest -f sidecars/http-proxy/Dockerfile .
+docker buildx build --platform linux/amd64 -t km-audit-log:latest -f sidecars/audit-log/Dockerfile .
 ```
 
 If `KM_ACCOUNTS_APPLICATION` is set (your AWS account ID), `km create --docker` pulls images from ECR: `{accountID}.dkr.ecr.{region}.amazonaws.com/km-{name}:latest`. Otherwise it uses local image names.
@@ -168,7 +168,7 @@ km create profiles/goose.yaml --docker --verbose
 6. Runs `docker compose up -d`
 7. Stores metadata in DynamoDB (visible via `km list`)
 
-**Docker creates always run locally** -- the `--remote` flag is ignored for Docker substrate. There is no Lambda dispatch for local containers.
+**Docker creates always run locally** -- the Docker substrate defaults to local execution and does not support Lambda dispatch. The `--remote` flag has no effect for Docker sandboxes.
 
 ---
 
@@ -217,7 +217,7 @@ km destroy 1 --yes
 5. Deletes DynamoDB metadata
 6. Removes local sandbox directory
 
-**Important:** Docker sandboxes can only be destroyed from the machine that created them. If `docker-compose.yml` is not found, `km destroy` returns: *"docker sandbox {id} is not running on this host"*.
+**Important:** Docker sandboxes can only be destroyed from the machine that created them. If `docker-compose.yml` is not found, `km destroy` returns: *"docker sandbox {id} is not running on this host (no {path} found). This sandbox may be running on another machine. Use km list to check."*
 
 ---
 
@@ -344,7 +344,7 @@ aws ecr get-login-password --region us-east-1 --profile klanker-terraform | \
   docker login --username AWS --password-stdin {accountID}.dkr.ecr.us-east-1.amazonaws.com
 ```
 
-If ECR login fails, `km create --docker` continues and tries to use local images. Build them locally with `make sidecars-local`.
+If ECR login fails, `km create --docker` continues and tries to use local images. Build them locally with `make sandbox-image` and the individual sidecar `docker buildx build` commands shown above.
 
 ### Sandbox on a different machine
 
@@ -352,9 +352,9 @@ Docker sandboxes are host-local. If `km list` shows a Docker sandbox but `km des
 
 ```bash
 # Manual cleanup (from any machine with AWS access)
-aws iam delete-role-policy --role-name km-docker-{id}-us-east-1 --policy-name sandbox-policy
+aws iam delete-role-policy --role-name km-docker-{id}-us-east-1 --policy-name km-sandbox-inline
 aws iam delete-role --role-name km-docker-{id}-us-east-1
-aws iam delete-role-policy --role-name km-sidecar-{id}-us-east-1 --policy-name sidecar-policy
+aws iam delete-role-policy --role-name km-sidecar-{id}-us-east-1 --policy-name km-sidecar-inline
 aws iam delete-role --role-name km-sidecar-{id}-us-east-1
 # Then delete metadata from DynamoDB
 ```

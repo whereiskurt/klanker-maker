@@ -18,7 +18,7 @@ Define what an agent is allowed to do. Set how much it can spend on compute and 
 ```
 $ km create profiles/goose.yaml
   ✓ Profile validated
-  ✓ Budget: compute $2.00, AI $5.00, warning at 80%
+  ✓ Budget: compute $0.50, AI $1.00, warning at 80%
   ✓ Budget enforcer Lambda deployed
   ✓ Metadata stored (alias: goose)
 ──────────────────────────────────────────────────
@@ -38,8 +38,8 @@ Status:      running
 Created At:  2026-03-31 7:42:15 PM EDT
 TTL Expiry:  2026-03-31 11:42:15 PM EDT
 Budget:
-  Compute: $0.0312 / $2.0000 (1.6%)
-  AI:      $1.4200 / $5.0000 (28.4%)
+  Compute: $0.0312 / $0.5000 (6.2%)
+  AI:      $0.4200 / $1.0000 (42.0%)
 ```
 
 ## Why This Exists
@@ -139,7 +139,7 @@ The `km` CLI selects the right AWS profile per command. Commands are grouped by 
 | `km configure github` | `klanker-terraform` | Configure GitHub App token integration |
 | `km bootstrap` | `klanker-terraform` | Deploy SCP containment policy + KMS key + artifacts bucket |
 | `km init` | `klanker-application` | Build Lambdas/sidecars, provision shared VPC/network |
-| `km doctor` | `klanker-terraform` | Validate platform health across all accounts (17 checks) |
+| `km doctor` | `klanker-terraform` | Validate platform health across all accounts (20 checks) |
 | `km info` | - | Show platform config, accounts, SES quota, AWS spend, DynamoDB tables |
 
 **Sandbox lifecycle**
@@ -147,10 +147,11 @@ The `km` CLI selects the right AWS profile per command. Commands are grouped by 
 | Command | AWS Profile | What it does |
 |---------|-------------|--------------|
 | `km validate <profile>` | - | Check a profile YAML against the schema |
-| `km create <profile>` | `klanker-terraform` | Provision a sandbox from a profile (`--no-bedrock`, `--docker`, `--alias`) |
-| `km list` | `klanker-terraform` | List sandboxes with live status (DynamoDB scan; `--wide` for all columns) |
+| `km create <profile>` | `klanker-terraform` | Provision a sandbox from a profile (`--no-bedrock`, `--docker`, `--alias`, `--on-demand`, `--ttl`, `--idle`) |
+| `km clone <sandbox>` | `klanker-terraform` | Duplicate a running sandbox (`--alias`, `--count`, `--no-copy`) |
+| `km list` (alias: `ls`) | `klanker-terraform` | List sandboxes with live status (DynamoDB scan; `--wide`, `--json`, `--tags`) |
 | `km status <sandbox>` | `klanker-terraform` | Budget, identity, idle countdown, resources |
-| `km shell <sandbox>` | `klanker-terraform` | SSM session (`--root` for operator, `--ports` for forwarding) |
+| `km shell <sandbox>` (alias: `sh`) | `klanker-terraform` | SSM session (`--root`, `--ports`, `--no-bedrock`, `--learn`) |
 | `km agent <sandbox>` | `klanker-terraform` | Launch AI agent in sandbox (`--claude`, `--codex`) |
 
 **Observability**
@@ -181,6 +182,7 @@ The `km` CLI selects the right AWS profile per command. Commands are grouped by 
 | `km at '<time>' <cmd>` | `klanker-terraform` | Schedule a deferred/recurring operation (`create`, `destroy`, `pause`, `resume`, `budget-add`, etc.) |
 | `km at list` | `klanker-terraform` | List scheduled operations |
 | `km at cancel <name>` | `klanker-terraform` | Cancel a scheduled operation |
+| `km roll` | `klanker-terraform` | Rotate platform and sandbox credentials (`--platform`, `--sandbox`, `--dry-run`) |
 
 **Email (operator-side)**
 
@@ -358,20 +360,20 @@ metadata:
   labels:
     tier: development
     tool: goose
-    builtin: "true"
-  prefix: goose
+  prefix: gebpfgk
 
 spec:
   lifecycle:
     ttl: "4h"
-    idleTimeout: "30m"
-    teardownPolicy: destroy
+    idleTimeout: "1h"
+    teardownPolicy: stop
 
   runtime:
     substrate: ec2
-    spot: true
+    spot: false
     instanceType: t3.medium
     region: us-east-1
+    rootVolumeSize: 15
     hibernation: true              # preserve RAM state on pause (on-demand only)
     mountEFS: true                 # mount regional EFS shared filesystem
     efsMountPoint: /shared         # EFS mount path (default: /shared)
@@ -383,55 +385,79 @@ spec:
     shell: /bin/bash
     workingDir: /workspace
     useBedrock: true               # route Anthropic API via AWS Bedrock (SigV4 auth)
+    privileged: false
     env:
-      SANDBOX_MODE: goose
+      SANDBOX_MODE: goose-ebpf-gatekeeper
       GOOSE_PROVIDER: aws_bedrock
       GOOSE_MODEL: us.anthropic.claude-opus-4-6-v1
       GOOSE_MODE: auto
+      GOOSE_TELEMETRY_ENABLED: "false"
+      CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
+      OPENAI_API_KEY: ""
+    configFiles:
+      "/home/sandbox/.claude/settings.json": |
+        {"trustedDirectories":["/home/sandbox","/workspace"]}
+    rsyncPaths:
+      - ".gitconfig"
+      - ".config/goose"
+      - ".claude"
+      - ".claude.json"
+      - ".codex"
     initCommands:
-      - "yum install -y git nodejs npm python3 python3-pip bzip2 jq tar gzip unzip"
+      - "yum install -y git nodejs npm python3 python3-pip bzip2 jq tar gzip unzip tmux"
       - "HOME=/root curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | HOME=/root CONFIGURE=false bash"
-      - "npm install -g @anthropic-ai/claude-code"
+      - "npm install -g @anthropic-ai/claude-code@2.1.108"
       - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace"
 
   budget:
     compute:
-      maxSpendUSD: 2.00
+      maxSpendUSD: 0.50
     ai:
-      maxSpendUSD: 5.00
+      maxSpendUSD: 1.00
     warningThreshold: 0.80
 
   network:
-    enforcement: proxy             # "proxy" (default), "ebpf", or "both"
+    enforcement: both              # "proxy" (default), "ebpf", or "both"
     egress:
       allowedDNSSuffixes:
         - ".amazonaws.com"
         - ".anthropic.com"
         - ".claude.ai"
+        - ".claude.com"
+        - ".sentry.io"
+        - ".cloudfront.net"
         - ".github.com"
         - ".githubusercontent.com"
         - ".npmjs.org"
+        - ".npmjs.com"
         - ".nodejs.org"
+        - ".npmmirror.com"
+        - ".openai.com"
+        - ".chatgpt.com"
         - ".pypi.org"
         - ".pythonhosted.org"
-        - ".sentry.io"
+        - ".pulsemcp.com"
+        - ".google.com"
+        - ".google-analytics.com"
+        - ".googletagmanager.com"
+        - ".googleapis.com"
+        - ".featuregates.org"
+        - ".statsig.com"
       allowedHosts:
-        - "github.com"
-        - "api.anthropic.com"
-        - "api.github.com"
-        - "registry.npmjs.org"
-        - "pypi.org"
+        - "statsig.com"
 
   sourceAccess:
     mode: allowlist
     github:
       allowedRepos:
-        - "myorg/my-repo"
-        - "myorg/another-repo"
+        - "whereiskurt/meshtk"
+        - "whereiskurt/defcon.run.34"
+        - "whereiskurt/klanker-maker"
       allowedRefs:
         - "main"
         - "develop"
         - "feature/*"
+        - "fix/*"
 
   identity:
     roleSessionDuration: "1h"
@@ -464,32 +490,36 @@ spec:
       enabled: true
       logPrompts: true
       logToolDetails: true
+    learnMode: false
     tlsCapture:                    # eBPF SSL uprobe plaintext capture (Phase 41)
       enabled: true
       libraries: [openssl]
+      capturePayloads: false
 
   artifacts:
     paths:
       - /workspace
-    maxSizeMB: 1000
+    maxSizeMB: 500
 
   email:
     signing: required
     verifyInbound: required
-    encryption: off
+    encryption: required
+
+  cli:
+    noBedrock: true
 ```
 
 ### Built-in Profiles
 
 | Profile | TTL | Network | Budget | Use Case |
 |---------|-----|---------|--------|----------|
-| `hardened` | 4h | AWS services only | Operator-set | Production-adjacent testing |
-| `sealed` | 1h | No egress | Operator-set | Offline analysis, air-gapped execution |
-| `goose` | 4h | Anthropic, GitHub, npm, PyPI, Goose extensions | $2 compute / $5 AI | Goose agent (Block) with Bedrock, MCP extensions |
-| `goose-ebpf` | 1h | eBPF enforcement, Anthropic, GitHub | $0.50 compute / $1 AI | Goose with pure eBPF kernel-level enforcement |
-| `goose-ebpf-gatekeeper` | 1h | eBPF + proxy (both), Anthropic, GitHub | $0.50 compute / $1 AI | Goose with eBPF gatekeeper + L7 proxy inspection |
-| `codex` | 4h | OpenAI, GitHub | $2 compute / $5 AI | OpenAI Codex agent |
-| `agent-orchestrator` | 8h | Anthropic, GitHub, npm, Composio | $4 compute / $10 AI | Multi-agent orchestration (Claude + Codex + AO) |
+| `hardened` | 4h | eBPF+proxy (both), AWS services only | No budget section | Production-adjacent testing |
+| `sealed` | 1h | Proxy, .anthropic.com + .npmjs.org only | $5 compute / $10 AI | Minimal egress, short-lived execution |
+| `goose` | 4h | eBPF+proxy (both), Anthropic, GitHub, npm, PyPI, OpenAI, Goose extensions | $0.50 compute / $1 AI | Goose agent (Block) with Bedrock, MCP extensions |
+| `codex` | 4h | Proxy, OpenAI, GitHub | $2 compute / $5 AI | OpenAI Codex agent |
+| `ao` | 8h | eBPF+proxy (both), Anthropic, GitHub, npm, OpenAI | $4 compute / $10 AI | Multi-agent orchestration (Claude + Codex + AO) |
+| `learn` | 2h | eBPF+proxy (both), wide-open TLD suffixes | $2 compute / $0 AI | Traffic observation for profile generation |
 
 Profiles support **inheritance** via `extends` - start from a base and override what you need.
 
@@ -563,6 +593,7 @@ This enables multi-agent pipelines where each worker is physically isolated but 
 | **EC2 On-Demand** | Same as above, guaranteed capacity | ~$0.04/hr for t3.medium |
 | **ECS Fargate Spot** | Fargate task with sidecar containers, service discovery | ~$0.01/hr for 1 vCPU / 2GB |
 | **ECS Fargate** | Same as above, guaranteed capacity | ~$0.04/hr for 1 vCPU / 2GB |
+| **Docker** (local) | Docker Compose on local machine, sidecar containers, IAM roles via STS | Free (local compute) |
 
 Spot interruption handlers automatically upload artifacts to S3 before instances are reclaimed.
 
@@ -604,8 +635,8 @@ Sandbox ID:  goose-e6c7d024
 Profile:     goose
 ...
 Budget:
-  Compute: $0.0312 / $2.0000 (1.6%)
-  AI:      $1.4200 / $5.0000 (28.4%)
+  Compute: $0.0312 / $0.5000 (6.2%)
+  AI:      $0.4200 / $1.0000 (42.0%)
     anthropic.claude-sonnet-4-6:  $0.85  (89K in / 34K out)   # Bedrock
     claude-opus-4-6:              $0.55  (12K in / 8K out)     # Max/API
 ```
@@ -653,7 +684,11 @@ km CLI / ConfigUI
 ├── cmd/km/                  CLI entry point
 ├── cmd/configui/            Web dashboard (Go + embedded HTML)
 ├── cmd/ttl-handler/         Lambda: TTL expiry + artifact upload
-├── internal/app/cmd/        Cobra commands (configure, bootstrap, init, uninit, validate, create, destroy/kill, pause, resume, lock, unlock, stop, extend, at/schedule, list, status, logs, budget, shell, agent, doctor, otel, info, rsync)
+├── cmd/budget-enforcer/     Lambda: budget ceiling enforcement
+├── cmd/create-handler/      Lambda: remote sandbox creation via EventBridge
+├── cmd/email-create-handler/ Lambda: email-driven sandbox creation
+├── cmd/github-token-refresher/ Lambda: GitHub App installation token refresh
+├── internal/app/cmd/        Cobra commands (configure, bootstrap, init, uninit, validate, create, clone, destroy/kill, pause, resume, lock, unlock, stop, extend, roll, at/schedule, list, status, logs, budget, shell, agent, doctor, otel, info, rsync, email)
 ├── internal/app/config/     Configuration (config.yaml, env vars, CLI flags)
 ├── pkg/
 │   ├── profile/             SandboxProfile schema, validation, inheritance
@@ -661,13 +696,18 @@ km CLI / ConfigUI
 │   ├── ebpf/                eBPF enforcer (cgroup BPF programs, DNS resolver, audit consumer, SSL uprobes)
 │   ├── aws/                 SDK helpers (S3, SES, CloudWatch, EC2 metadata, DynamoDB, EventBridge Scheduler, identity/signing)
 │   ├── terragrunt/          Runner + per-sandbox state isolation
-│   └── lifecycle/           TTL scheduling, idle detection, teardown
+│   ├── lifecycle/           TTL scheduling, idle detection, teardown
+│   ├── allowlistgen/        Allowlist generation from observed traffic
+│   ├── at/                  Deferred/recurring operation scheduling
+│   ├── github/              GitHub App token management
+│   ├── localnumber/         Persistent local sandbox numbering
+│   └── version/             Build version info
 ├── sidecars/
 │   ├── dns-proxy/           DNS allowlist filter (UDP/TCP:53)
 │   ├── http-proxy/          HTTP allowlist filter (TCP:3128) + AI token metering (Bedrock, Anthropic, OpenAI)
 │   ├── audit-log/           Command + network log router with secret redaction
 │   └── tracing/             OTel Collector sidecar (logs, metrics → S3)
-├── profiles/                Built-in YAML profiles (sealed, hardened, goose, goose-ebpf, goose-ebpf-gatekeeper, codex, agent-orchestrator)
+├── profiles/                Built-in YAML profiles (sealed, hardened, goose, codex, ao, learn)
 └── infra/
     ├── modules/             Terraform modules
     │   ├── network/         VPC, subnets, security groups
@@ -683,6 +723,11 @@ km CLI / ConfigUI
     │   ├── dynamodb-budget/ Budget enforcement table
     │   ├── dynamodb-identities/ Sandbox identity public key table
     │   ├── dynamodb-sandboxes/ Sandbox metadata table (km-sandboxes)
+    │   ├── dynamodb-schedules/ Scheduled operations table
+    │   ├── budget-enforcer/ Lambda: budget ceiling enforcement
+    │   ├── create-handler/  Lambda: remote sandbox creation
+    │   ├── email-handler/   Lambda: email-driven operations
+    │   ├── github-token/    Lambda: GitHub App token refresh
     │   ├── s3-replication/  Cross-region artifact replication
     │   └── ttl-handler/     Lambda: TTL expiry → artifacts + email + self-cleanup
     └── live/                Terragrunt hierarchy (site.hcl, per-sandbox isolation)
@@ -706,7 +751,7 @@ km bootstrap --dry-run=false
 # Initialize the region - builds Lambdas, sidecars, deploys infra (once per region)
 km init --region us-east-1
 
-# Check platform health (12 checks)
+# Check platform health (20 checks)
 km doctor
 
 # Create a sandbox (shows progress dots + elapsed time)
@@ -732,8 +777,9 @@ km shell 1 --ports 8080           # localhost:8080 → remote:8080
 km shell 1 --ports 8080:80,3000   # multiple ports
 
 # Launch an AI agent inside a sandbox
-km agent 1 --claude                  # interactive Claude Code
-km agent 1 --claude -- -p "fix tests"  # headless with prompt
+km agent 1 --claude                          # interactive Claude Code
+km agent run 1 --prompt "fix tests"          # headless with prompt
+km agent run 1 --prompt "fix tests" --wait   # wait for completion
 
 # Extend TTL
 km extend 1 2h
@@ -841,6 +887,15 @@ km uninit --region us-east-1
 | 42 | eBPF Gatekeeper Mode — connect4 DNAT Rewrite for L7 Proxy | **Complete** |
 | 43 | Regional EFS Shared Filesystem | **Complete** |
 | 44 | `km at` / `km schedule` — Deferred & Recurring Operations | **Complete** |
+| 45 | km-send/km-recv Sandbox Scripts & km email send/read CLI | **Complete** |
+| 46 | AI Email-to-Command — Haiku Interprets Free-Form Operator Emails | **Complete** |
+| 47 | Privileged Execution Mode & Learn Profile | **Complete** |
+| 48 | Profile Override Flags for km create (--ttl, --idle) | **Complete** |
+| 49 | Prebaked AMI Support | Planned |
+| 50 | km agent Non-Interactive Execution (--prompt, results, list) | **Complete** |
+| 51 | km agent Tmux Sessions (attach, --interactive) | **Complete** |
+| 52 | km clone — Duplicate a Running Sandbox | **Complete** |
+| 53 | Persistent Local Sandbox Numbering | **Complete** |
 
 See [.planning/ROADMAP.md](.planning/ROADMAP.md) for detailed phase breakdowns and success criteria.
 
