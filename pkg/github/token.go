@@ -117,9 +117,15 @@ type tokenResponse struct {
 // Returns the token string on 201 Created, or an error that includes the HTTP
 // status code for non-201 responses.
 func ExchangeForInstallationToken(ctx context.Context, jwtToken, installationID string, repos []string, perms map[string]string) (string, error) {
-	shortNames := make([]string, len(repos))
-	for i, r := range repos {
-		shortNames[i] = repoShortName(r)
+	// Wildcard "*" means all repos — omit the repositories field so GitHub
+	// scopes the token to all repos the installation can access.
+	var shortNames []string
+	for _, r := range repos {
+		if r == "*" {
+			shortNames = nil
+			break
+		}
+		shortNames = append(shortNames, repoShortName(r))
 	}
 
 	reqBody := tokenRequest{

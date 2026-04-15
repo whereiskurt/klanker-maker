@@ -4,44 +4,96 @@ metadata:
   name: learn
   labels:
     tier: development
-    tool: traffic-observation
-    builtin: "true"
-  prefix: learn
+    tool: alltools
+  prefix: leaner
 
 spec:
   lifecycle:
-    ttl: "2h"
-    idleTimeout: "30m"
-    teardownPolicy: destroy
+    ttl: "8h"
+    idleTimeout: "1h"
+    teardownPolicy: stop
 
   runtime:
     substrate: ec2
-    spot: true
+    spot: false
     instanceType: t3.medium
     region: us-east-1
     rootVolumeSize: 15
+    hibernation: true
+    mountEFS: true
+    efsMountPoint: /shared
+    additionalVolume:
+      size: 20
+      mountPoint: /data
 
   execution:
     shell: /bin/bash
     workingDir: /workspace
+    useBedrock: true
     privileged: true
+    env:
+      SANDBOX_MODE: goose-ebpf-gatekeeper
+      GOOSE_PROVIDER: aws_bedrock
+      GOOSE_MODEL: us.anthropic.claude-opus-4-6-v1
+      GOOSE_MODE: auto
+      GOOSE_TELEMETRY_ENABLED: "false"
+      CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
+      OPENAI_API_KEY: ""
+    configFiles:
+      "/home/sandbox/.claude/settings.json": |
+        {"trustedDirectories":["/home/sandbox","/workspace"]}
+    rsyncPaths:
+      - ".gitconfig"
+      - ".config/goose"
+      - ".claude"
+      - ".claude.json"
+      - ".codex"
     initCommands:
-      - "yum install -y git jq tar gzip unzip curl wget"
+      - "yum install -y git nodejs npm python3 python3-pip bzip2 jq tar gzip unzip tmux"
+      - "HOME=/root curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | HOME=/root CONFIGURE=false bash"
+      - "cp -r /root/.local/bin/goose /usr/local/bin/goose-bin || true"
+      - "printf 'export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\\nexport OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318\\n' > /etc/profile.d/km-zz-goose-otel.sh"
+      - "cat /usr/local/share/ca-certificates/km-proxy-ca.crt >> /etc/pki/tls/certs/ca-bundle.crt"
+      - "echo export SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt >> /etc/profile.d/km-zz-goose-otel.sh"
+      - "mkdir -p /home/sandbox/.local/bin && cp /usr/local/bin/goose-bin /usr/local/bin/goose && cp /usr/local/bin/goose /home/sandbox/.local/bin/goose || true"
+      - "npm install -g @anthropic-ai/claude-code@2.1.108"
+      - "curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.117.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz"
+      - "tar -xzf /tmp/codex.tar.gz -C /tmp && install -m 755 /tmp/codex-x86_64-unknown-linux-musl /usr/local/bin/codex"
+      - "mkdir -p /home/sandbox/.config/goose /home/sandbox/.codex && chown -R sandbox:sandbox /home/sandbox/.codex"
+      - "printf 'provider: aws_bedrock\\nmodel: us.anthropic.claude-opus-4-6-v1\\n' > /home/sandbox/.config/goose/config.yaml"
+      - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace /home/sandbox/.config /home/sandbox/.local"
+      - "su - sandbox -c 'cd /workspace && git config --global user.name \"Goose eBPF Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
 
   sourceAccess:
     mode: allowlist
     github:
-      allowedRepos: []
+      allowedRepos:
+        - "*"
       allowedRefs:
         - "*"
 
   network:
+    # Phase 42: eBPF gatekeeper mode — connect4 in block mode as primary enforcer,
+    # with selective DNAT rewrite to proxy for L7-required hosts (GitHub repo
+    # filtering, Bedrock token metering). Non-L7 traffic goes direct.
     enforcement: both
     egress:
       allowedDNSSuffixes:
         - "*"
       allowedHosts:
         - "*"
+
+  budget:
+    compute:
+      maxSpendUSD: 0.50
+    ai:
+      maxSpendUSD: 2.00
+    warningThreshold: 0.80
+
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 500
 
   identity:
     roleSessionDuration: "1h"
@@ -70,22 +122,29 @@ spec:
     networkLog:
       destination: cloudwatch
       logGroup: /klankrmkr/network
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+    learnMode: false
     tlsCapture:
       enabled: true
-    learnMode: true
+      libraries:
+        - openssl
+      capturePayloads: false
 
-  budget:
-    compute:
-      maxSpendUSD: 2.00
-    ai:
-      maxSpendUSD: 0.00
-    warningThreshold: 0.80
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: required
+    allowedSenders:
+      - "self"
 
   agent:
     maxConcurrentTasks: 1
     taskTimeout: "30m"
-
-  artifacts:
-    paths:
-      - /workspace
-    maxSizeMB: 500
+    allowedTools:
+      - bash
+      - read_file
+      - write_file
+      - list_files

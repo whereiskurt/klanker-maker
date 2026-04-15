@@ -85,6 +85,9 @@ func ExtractRepoFromPath(host, urlPath string) string {
 func IsRepoAllowed(repo string, allowed []string) bool {
 	repo = strings.ToLower(repo)
 	for _, a := range allowed {
+		if a == "*" {
+			return true
+		}
 		a = strings.ToLower(a)
 		// Normalise allowlist entries that include the github.com/ prefix.
 		a = strings.TrimPrefix(a, "github.com/")

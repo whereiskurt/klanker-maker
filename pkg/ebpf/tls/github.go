@@ -53,18 +53,26 @@ func ExtractGitHubRepo(host, path string) (owner, repo string) {
 // remains in the MITM proxy.
 type GitHubAuditHandler struct {
 	AllowedRepos map[string]bool
+	AllowAll     bool
 	Logger       zerolog.Logger
 }
 
 // NewGitHubAuditHandler creates a handler that audits GitHub repo access.
 // allowedRepos is a list of "owner/repo" strings (case-insensitive).
+// A single "*" entry means all repos are allowed.
 func NewGitHubAuditHandler(allowedRepos []string, logger zerolog.Logger) *GitHubAuditHandler {
+	allowAll := false
 	allowed := make(map[string]bool, len(allowedRepos))
 	for _, r := range allowedRepos {
+		if r == "*" {
+			allowAll = true
+			continue
+		}
 		allowed[strings.ToLower(r)] = true
 	}
 	return &GitHubAuditHandler{
 		AllowedRepos: allowed,
+		AllowAll:     allowAll,
 		Logger:       logger,
 	}
 }
@@ -90,7 +98,7 @@ func (h *GitHubAuditHandler) Handle(event *TLSEvent) error {
 	}
 
 	repoKey := strings.ToLower(owner + "/" + repo)
-	if h.AllowedRepos[repoKey] {
+	if h.AllowAll || h.AllowedRepos[repoKey] {
 		h.Logger.Debug().
 			Str("owner", owner).
 			Str("repo", repo).

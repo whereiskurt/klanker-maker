@@ -1719,10 +1719,16 @@ type otpSecret struct {
 
 // joinAllowedRefs returns the AllowedRefs slice as a colon-separated string
 // suitable for the KM_ALLOWED_REFS environment variable.
-// Returns empty string when GitHub config is nil or AllowedRefs is empty.
+// Returns empty string when GitHub config is nil, AllowedRefs is empty, or
+// AllowedRefs contains "*" (wildcard means all refs are allowed, no hook needed).
 func joinAllowedRefs(p *profile.SandboxProfile) string {
 	if p.Spec.SourceAccess.GitHub == nil || len(p.Spec.SourceAccess.GitHub.AllowedRefs) == 0 {
 		return ""
+	}
+	for _, r := range p.Spec.SourceAccess.GitHub.AllowedRefs {
+		if r == "*" {
+			return ""
+		}
 	}
 	return strings.Join(p.Spec.SourceAccess.GitHub.AllowedRefs, ":")
 }
@@ -1789,7 +1795,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		SandboxID:          sandboxID,
 		SecretPaths:        secretPaths,
 		HasGitHub:          p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRepos) > 0,
-		HasAllowedRefs:     p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRefs) > 0,
+		HasAllowedRefs:     joinAllowedRefs(p) != "",
 		AllowedRefs:        joinAllowedRefs(p),
 		AllowedDNSSuffixes:  strings.Join(p.Spec.Network.Egress.AllowedDNSSuffixes, ","),
 		AllowedHTTPHosts:    strings.Join(append(p.Spec.Network.Egress.AllowedHosts, p.Spec.Network.Egress.AllowedDNSSuffixes...), ","),
