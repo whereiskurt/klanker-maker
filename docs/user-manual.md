@@ -9,6 +9,7 @@
   - [km init](#km-init)
   - [km validate](#km-validate)
   - [km create](#km-create)
+  - [km clone](#km-clone)
   - [km destroy](#km-destroy)
   - [km pause](#km-pause)
   - [km lock](#km-lock)
@@ -92,7 +93,7 @@ region = us-east-1
 # From source
 git clone https://github.com/whereiskurt/klankrmkr.git
 cd klankrmkr
-go build -o km ./cmd/km/
+make build
 sudo mv km /usr/local/bin/
 
 # Or install directly
@@ -157,8 +158,10 @@ scheduler_role_arn: arn:aws:iam::222222222222:role/km-scheduler-role
 Initialize shared regional infrastructure (VPC, subnets, security groups). **Run once per region** before creating sandboxes. Use `--sidecars` or `--lambdas` for fast partial deploys.
 
 ```
-km init [--region <region>] [--aws-profile <profile>] [--sidecars] [--lambdas] [--verbose]
+km init [--region <region>] [--aws-profile <profile>] [--sidecars] [--lambdas] [--dry-run] [--verbose]
 ```
+
+> **Important:** `--dry-run` defaults to `true`. You must pass `--dry-run=false` to actually execute changes.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -166,6 +169,7 @@ km init [--region <region>] [--aws-profile <profile>] [--sidecars] [--lambdas] [
 | `--aws-profile` | `klanker-application` | AWS CLI profile for provisioning |
 | `--sidecars` | `false` | Only rebuild and upload sidecars + km binary + toolchain (skip Terraform) |
 | `--lambdas` | `false` | Only rebuild and deploy Lambda functions (skip Terraform) |
+| `--dry-run` | `true` | Show what would be initialized without making changes (use `--dry-run=false` to execute) |
 | `--verbose` | `false` | Show full terragrunt/terraform output |
 
 **Full init** (~9 min): DNS zone, Lambda build, sidecar build+upload, ECR push, toolchain upload, proxy CA, Terraform apply.
@@ -175,17 +179,20 @@ km init [--region <region>] [--aws-profile <profile>] [--sidecars] [--lambdas] [
 **Example:**
 
 ```bash
-# Full init for us-east-1
+# Full init for us-east-1 (dry-run by default — shows what would happen)
 km init --region us-east-1
 
+# Actually execute (--dry-run=false required)
+km init --region us-east-1 --dry-run=false
+
 # Fast: just rebuild and deploy km + sidecars to S3
-km init --sidecars
+km init --sidecars --dry-run=false
 
 # Fast: just rebuild and deploy Lambdas
-km init --lambdas
+km init --lambdas --dry-run=false
 
 # Both: rebuild everything except Terraform
-km init --sidecars --lambdas
+km init --sidecars --lambdas --dry-run=false
 ```
 
 **Output:**
@@ -238,9 +245,11 @@ km validate profiles/goose.yaml
 
 # Validate multiple profiles
 km validate profiles/*.yaml
+# ao.yaml: valid
+# codex.yaml: valid
 # goose.yaml: valid
-# goose-ebpf.yaml: valid
 # hardened.yaml: valid
+# learn.yaml: valid
 # sealed.yaml: valid
 
 # Validate a custom profile with errors
@@ -256,7 +265,7 @@ km validate my-broken-profile.yaml
 Provision a sandbox from a profile.
 
 ```
-km create <profile.yaml> [--on-demand] [--no-bedrock] [--docker] [--alias <alias>] [--aws-profile <profile>] [--verbose] [--remote] [--sandbox-id-override <id>]
+km create <profile.yaml> [--on-demand] [--no-bedrock] [--docker] [--alias <alias>] [--substrate <type>] [--ttl <duration>] [--idle <duration>] [--aws-profile <profile>] [--verbose] [--remote] [--local]
 ```
 
 | Flag | Default | Description |
@@ -265,10 +274,13 @@ km create <profile.yaml> [--on-demand] [--no-bedrock] [--docker] [--alias <alias
 | `--no-bedrock` | `false` | Disable Bedrock access -- removes IAM permissions and all Bedrock/Claude env vars |
 | `--docker` | `false` | Shortcut for `--substrate=docker` (use Docker Compose local substrate) |
 | `--alias` | `""` | Human-friendly alias for the sandbox (e.g. `orc`, `wrkr`). Overrides profile `metadata.alias` template |
+| `--substrate` | `""` | Override profile substrate (`ec2`, `ecs`, `docker`) |
+| `--ttl` | `""` | Override `spec.lifecycle.ttl` (e.g. `3h`, `30m`). Use `0` to disable auto-destroy |
+| `--idle` | `""` | Override `spec.lifecycle.idleTimeout` (e.g. `30m`, `2h`) |
 | `--aws-profile` | `klanker-terraform` | AWS CLI profile for provisioning |
 | `--verbose` | `false` | Show full terragrunt/terraform output |
-| `--remote` | `false` | Dispatch to Lambda via EventBridge |
-| `--sandbox-id-override` | `""` | Override the generated sandbox ID |
+| `--remote` | `false` | Dispatch to Lambda via EventBridge (default for EC2/ECS substrates) |
+| `--local` | `false` | Force local create with terragrunt (default for Docker substrate) |
 
 **What it does:**
 
@@ -335,6 +347,45 @@ Connect: aws ssm start-session --target <instance-id>
 | `network not initialized for region us-east-1` | `km init` not run | Run `km init --region us-east-1` first |
 | `spec.runtime.substrate: must be "ec2" or "ecs"` | Invalid profile | Fix the YAML and re-validate |
 | Credential errors | AWS profile not configured or expired | Run `aws sso login --profile klanker-terraform` |
+
+---
+
+### km clone
+
+Duplicate a running sandbox from its stored profile.
+
+```
+km clone <source> [new-alias] [--alias <alias>] [--count <n>] [--no-copy] [--verbose] [--aws-profile <profile>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--alias` | `""` | Alias for the clone (required with `--count > 1`) |
+| `--count` | `1` | Number of clones to create |
+| `--no-copy` | `false` | Skip workspace staging; create a fresh sandbox from same profile |
+| `--verbose` | `false` | Show verbose output during provisioning |
+| `--aws-profile` | `klanker-terraform` | AWS profile for provisioning |
+
+**What it does:**
+
+1. Fetches the source sandbox's stored profile from S3
+2. Validates the source is running
+3. Stages the `/workspace` directory via SSM and S3 (unless `--no-copy`)
+4. Provisions one or more fresh clones from the same profile
+5. For EC2: copies the staged workspace to each clone's S3 key for download at boot
+6. For Docker: synchronous create with workspace download after provisioning
+
+With `--count` and `--alias`, creates multiple clones with auto-suffixed aliases (e.g. `--alias wrkr --count 3` creates `wrkr-1`, `wrkr-2`, `wrkr-3`).
+
+**Example:**
+
+```bash
+km clone sb-abc12345                        # clone, no alias
+km clone sb-abc12345 myalias               # alias from positional arg
+km clone sb-abc12345 --alias worker        # alias from flag
+km clone sb-abc12345 --alias wrkr --count 3 # 3 clones: wrkr-1, wrkr-2, wrkr-3
+km clone sb-abc12345 --no-copy             # fresh sandbox, no workspace copy
+```
 
 ---
 
@@ -559,7 +610,7 @@ km list --wide
 #   ALIAS       SANDBOX ID    PROFILE          SUBSTRATE  REGION       STATUS     TTL
 1   my-agent    sb-7f3a9e12   goose            ec2        us-east-1    running    5h46m
 2   -           sb-a4c8e210   hardened         ecs        us-east-1    running    2h12m
-3   dev-box     sb-d9f01b3c   goose-ebpf       ec2        us-west-2    paused     18h33m
+3   dev-box     sb-d9f01b3c   goose            ec2        us-west-2    paused     18h33m
 4   locked-one  sb-e5b82f01   codex            ec2        us-east-1    running    3h10m  🔒
 ```
 
@@ -661,13 +712,14 @@ km logs sb-7f3a9e12 --stream network
 Check platform health and bootstrap verification.
 
 ```
-km doctor [--json] [--quiet]
+km doctor [--json] [--quiet] [--dry-run]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--json` | `false` | Output results as a JSON array |
 | `--quiet` | `false` | Suppress OK and SKIPPED results; show only WARN and ERROR |
+| `--dry-run` | `true` | Show stale resources without deleting (use `--dry-run=false` to clean up) |
 
 **What it checks:**
 
@@ -735,12 +787,13 @@ km doctor --quiet && echo "healthy" || echo "issues found"
 Configure GitHub App credentials for sandbox source-access tokens. Credentials are stored in SSM Parameter Store and read at `km create` time to provision the per-sandbox token refresh Lambda.
 
 ```
-km configure github [--setup] [--non-interactive] [--app-client-id <id>] [--private-key-file <path>] [--installation-id <id>] [--force]
+km configure github [--setup] [--discover] [--non-interactive] [--app-client-id <id>] [--private-key-file <path>] [--installation-id <id>] [--force]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--setup` | `false` | One-click GitHub App creation via manifest flow (opens browser) |
+| `--discover` | `false` | Auto-discover installation ID from existing App credentials in SSM |
 | `--non-interactive` | `false` | Skip interactive prompts; use flag values directly |
 | `--app-client-id` | `""` | GitHub App client ID (e.g. `Iv1.abc123`) |
 | `--private-key-file` | `""` | Path to the GitHub App private key PEM file |
@@ -847,12 +900,13 @@ When AI spend (tracked by the http-proxy MITM) reaches 100%, the Bedrock IAM pol
 Open an interactive shell into a running sandbox via SSM.
 
 ```
-km shell <sandbox-id | #number> [--root] [--ports <ports>] [--learn] [--learn-output <path>]
+km shell <sandbox-id | #number> [--root] [--no-bedrock] [--ports <ports>] [--learn] [--learn-output <path>]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--root` | `false` | Connect as root instead of restricted sandbox user |
+| `--no-bedrock` | `false` | Unset Bedrock env vars (use direct Anthropic API) |
 | `--ports` | `""` | Port forwards (e.g. `8080`, `8080:80`, or comma-separated `8080:80,3000`) |
 | `--learn` | `false` | After shell exit, generate a SandboxProfile YAML from observed DNS/TLS traffic |
 | `--learn-output` | `observed-profile.yaml` | Path to write the generated profile |
@@ -887,16 +941,17 @@ km shell --learn sb-abc123        # do stuff, exit → observed-profile.yaml
 
 ### km agent
 
-Launch an AI coding agent inside a running sandbox.
+Launch an AI coding agent inside a running sandbox (interactive mode), or use subcommands for non-interactive execution.
 
 ```
-km agent <sandbox-id | #number> [--claude] [--codex] [-- extra-args...]
+km agent <sandbox-id | #number> [--claude] [--codex] [--no-bedrock] [-- extra-args...]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--claude` | `false` | Launch Claude Code |
 | `--codex` | `false` | Launch OpenAI Codex |
+| `--no-bedrock` | `false` | Use direct Anthropic API instead of Bedrock |
 
 **What it does:**
 
@@ -908,8 +963,86 @@ km agent <sandbox-id | #number> [--claude] [--codex] [-- extra-args...]
 
 ```bash
 km agent 1 --claude                          # interactive Claude Code session
-km agent 1 --claude -- -p "fix failing tests"  # headless with a prompt
+km agent 1 --claude -- -p "fix failing tests"  # pass args to claude
 km agent 2 --codex                            # launch OpenAI Codex
+```
+
+#### km agent run
+
+Fire a prompt non-interactively via SSM SendCommand. The agent runs in a persistent tmux session that survives SSM disconnects.
+
+```
+km agent run <sandbox-id | #number> --prompt "<text>" [--wait] [--interactive] [--no-bedrock] [--auto-start]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--prompt` | (required) | Prompt text to send to Claude |
+| `--wait` | `false` | Block until agent completes and print output |
+| `--interactive` | `false` | Create tmux session and immediately attach (blocks until detach with Ctrl-B d) |
+| `--no-bedrock` | `false` | Use direct Anthropic API instead of Bedrock |
+| `--auto-start` | `false` | Automatically resume sandbox if paused/stopped |
+
+`--wait` and `--interactive` are mutually exclusive. Output lands at `/workspace/.km-agent/runs/<timestamp>/output.json`.
+
+**Example:**
+
+```bash
+km agent run sb-abc123 --prompt "fix the failing tests"           # fire-and-forget
+km agent run 1 --prompt "refactor auth module" --wait             # block until done
+km agent run 1 --prompt "refactor auth module" --interactive      # watch live
+km agent run g1 --prompt "run tests" --auto-start --wait          # resume if paused
+km agent run 1 --prompt "What model are you?" --no-bedrock --wait # direct API
+```
+
+#### km agent attach
+
+Connect to a running agent's tmux session. Detach with Ctrl-B d -- the agent keeps running.
+
+```
+km agent attach <sandbox-id | #number>
+```
+
+**Example:**
+
+```bash
+km agent attach 1
+km agent attach sb-abc123
+```
+
+#### km agent results
+
+Fetch agent run output from S3 (fast path) or sandbox disk.
+
+```
+km agent results <sandbox-id | #number> [--run <timestamp>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--run` | `""` | Specific run timestamp (e.g. `20260410T143000Z`). Defaults to latest |
+
+**Example:**
+
+```bash
+km agent results sb-abc123                          # latest run
+km agent results sb-abc123 --run 20260410T143000Z   # specific run
+km agent results sb-abc123 | jq '.result'           # just the answer
+km agent results sb-abc123 | jq '.total_cost_usd'   # cost
+```
+
+#### km agent list
+
+List all agent runs with status and output size.
+
+```
+km agent list <sandbox-id | #number>
+```
+
+**Example:**
+
+```bash
+km agent list sb-abc123
 ```
 
 ---
@@ -974,12 +1107,13 @@ km resume sb-7f3a9e12 --remote
 Extend a sandbox's TTL before it expires.
 
 ```
-km extend <sandbox-id | #number> <duration> [--remote]
+km extend <sandbox-id | #number> <duration> [--remote] [--idle <duration>]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--remote` | `false` | Dispatch to Lambda via EventBridge |
+| `--idle` | `""` | Set idle timeout (e.g. `5m`, `15m`, `1h`) |
 
 Duration format: `1h`, `30m`, `2h30m`, etc.
 
@@ -1215,7 +1349,7 @@ km at cancel <schedule-name> [--group <name>]
 | `--name` | `""` | Override auto-generated schedule name |
 | `--group` | `km-at` | EventBridge Scheduler group name |
 
-**Supported commands:** `create`, `destroy`, `kill`, `stop`, `pause`, `resume`, `extend`, `budget-add`
+**Supported commands:** `create`, `destroy`, `kill`, `stop`, `pause`, `resume`, `extend`, `budget-add`, `agent run`
 
 Each command is dispatched to the appropriate Lambda (create-handler for `create`, TTL handler for lifecycle commands) via EventBridge Scheduler.
 
@@ -1233,7 +1367,7 @@ Each command is dispatched to the appropriate Lambda (create-handler for `create
 
 **Subcommands:**
 
-- **`km at list`** -- Lists all scheduled operations (name, command, target, schedule, status, created date)
+- **`km at list`** -- Lists all scheduled operations (name, command, target, schedule, status, created date). Use `--utc` to display times in UTC instead of local timezone
 - **`km at cancel <name>`** -- Cancels a scheduled operation (deletes from EventBridge Scheduler and DynamoDB)
 
 **Example:**
@@ -1314,13 +1448,14 @@ km uninit [--region <region>] [--aws-profile <profile>] [--force] [--yes] [--ver
 Deploy SCP containment policy, KMS key, and artifacts bucket.
 
 ```
-km bootstrap [--dry-run] [--show-prereqs]
+km bootstrap [--dry-run] [--show-prereqs] [--scp]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--dry-run` | `true` | Print what would be created without making changes |
 | `--show-prereqs` | `false` | Print the IAM role and trust policy needed in the management account |
+| `--scp` | `false` | Print the km-sandbox-containment SCP policy JSON and the km-org-admin role/trust policy |
 
 ---
 
@@ -1329,13 +1464,17 @@ km bootstrap [--dry-run] [--show-prereqs]
 Rotate platform and sandbox credentials.
 
 ```
-km roll creds [--sandbox <id>] [--platform]
+km roll creds [--sandbox <id>] [--platform] [--github-private-key-file <path>] [--force-restart] [--json] [--dry-run]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--sandbox` | `""` | Rotate a single sandbox's credentials |
 | `--platform` | `false` | Rotate proxy CA, KMS, optional GitHub App key |
+| `--github-private-key-file` | `""` | Path to new GitHub App PEM private key file |
+| `--force-restart` | `false` | Force ECS task restart after proxy CA rotation |
+| `--json` | `false` | Output results as JSON |
+| `--dry-run` | `true` | Show what would be rotated without making changes (use `--dry-run=false` to execute) |
 
 **What it does:**
 
@@ -1376,7 +1515,6 @@ apiVersion: klankermaker.ai/v1alpha1
 kind: SandboxProfile
 metadata:
   name: claude-code-sandbox
-  description: Sandboxed Claude Code agent with repo access and API egress
 extends: hardened
 
 spec:
@@ -1408,15 +1546,10 @@ spec:
         - "*.pypi.org"
         - "*.golang.org"
       allowedHosts:
-        - host: "api.anthropic.com"
-          methods: [GET, POST]
-        - host: "api.github.com"
-          methods: [GET, POST, PUT, PATCH]
-        - host: "registry.npmjs.org"
-          methods: [GET]
-        - host: "pypi.org"
-          methods: [GET]
-      allowedMethods: [GET, POST, PUT, PATCH]
+        - "api.anthropic.com"
+        - "api.github.com"
+        - "registry.npmjs.org"
+        - "pypi.org"
 
   sourceAccess:
     mode: allowlist
@@ -1427,14 +1560,11 @@ spec:
         - "main"
         - "develop"
         - "feature/*"
-      permissions: [read, write]
 
   identity:
     roleSessionDuration: 1h
     allowedRegions: [us-east-1]
-
-  secrets:
-    allowedRefs:
+    allowedSecretPaths:
       - "arn:aws:ssm:us-east-1::parameter/sandbox/anthropic-api-key"
       - "arn:aws:ssm:us-east-1::parameter/sandbox/github-token"
 
@@ -1443,21 +1573,6 @@ spec:
     httpProxy: { enabled: true }
     auditLog: { enabled: true }
     tracing: { enabled: true }
-
-  policy:
-    allowShellEscape: true
-    allowedCommands:
-      - git
-      - node
-      - npm
-      - npx
-      - python3
-      - pip
-      - go
-      - bash
-      - sh
-      - curl
-      - claude
 
   artifacts:
     paths:
@@ -1537,7 +1652,6 @@ npm install -g @anthropic-ai/claude-code
 # Run Claude Code — it operates within the sandbox constraints:
 #   - Network: can only reach allowlisted hosts
 #   - Source: can only push to allowlisted repos/branches
-#   - Commands: restricted to allowedCommands list
 #   - Audit: every command and network request is logged
 claude
 
@@ -1593,7 +1707,6 @@ apiVersion: klankermaker.ai/v1alpha1
 kind: SandboxProfile
 metadata:
   name: goose-budgeted
-  description: Goose agent with $2 compute + $5 AI budget cap
 extends: hardened
 
 spec:
@@ -1627,13 +1740,9 @@ spec:
         - "*.docker.io"
         - "*.crates.io"
       allowedHosts:
-        - host: "api.anthropic.com"
-          methods: [GET, POST]
-        - host: "api.github.com"
-          methods: [GET, POST, PUT, PATCH, DELETE]
-        - host: "registry.npmjs.org"
-          methods: [GET]
-      allowedMethods: [GET, POST, PUT, PATCH, DELETE]
+        - "api.anthropic.com"
+        - "api.github.com"
+        - "registry.npmjs.org"
 
   sourceAccess:
     mode: allowlist
@@ -1641,10 +1750,9 @@ spec:
       allowedRepos:
         - "github.com/mycompany/*"
       allowedRefs: ["*"]
-      permissions: [read, write]
 
-  secrets:
-    allowedRefs:
+  identity:
+    allowedSecretPaths:
       - "arn:aws:ssm:us-east-1::parameter/sandbox/anthropic-api-key"
 
   sidecars:
@@ -1653,21 +1761,12 @@ spec:
     auditLog: { enabled: true }
     tracing: { enabled: true }
 
-  policy:
-    allowShellEscape: true
-    allowedCommands:
-      - git
-      - node
-      - npm
-      - npx
-      - python3
-      - pip
-      - go
-      - cargo
-      - bash
-      - sh
-      - curl
-      - goose
+  budget:
+    compute:
+      maxSpendUSD: 2.00
+    ai:
+      maxSpendUSD: 5.00
+    warningThreshold: 0.8
 
   artifacts:
     paths:
@@ -1734,7 +1833,6 @@ apiVersion: klankermaker.ai/v1alpha1
 kind: SandboxProfile
 metadata:
   name: security-agent
-  description: Contained red-team agent with narrow target scope
 extends: hardened
 
 spec:
@@ -1754,24 +1852,13 @@ spec:
       allowedDNSSuffixes:
         - "*.internal.mycompany.com"
       allowedHosts:
-        - host: "target-app.internal.mycompany.com"
-          methods: [GET, POST, PUT, DELETE, OPTIONS, HEAD]
-      allowedMethods: [GET, POST, PUT, DELETE, OPTIONS, HEAD]
+        - "target-app.internal.mycompany.com"
 
   sidecars:
     dnsProxy: { enabled: true }
     httpProxy: { enabled: true }
     auditLog: { enabled: true }
     tracing: { enabled: true }
-
-  policy:
-    allowShellEscape: false
-    allowedCommands:
-      - python3
-      - pip
-      - nmap
-      - curl
-      - nikto
 
   artifacts:
     paths:
@@ -1826,11 +1913,12 @@ spec:
 sealed (most restrictive)
   └── hardened
         └── goose (Goose + Claude Code + Codex, Bedrock)
-              ├── goose-ebpf (pure eBPF enforcement)
-              └── goose-ebpf-gatekeeper (eBPF + proxy L7 inspection)
+ao (agent orchestrator)
 codex (OpenAI Codex agent)
-agent-orchestrator (multi-agent orchestration)
+learn (wide-open traffic observation)
 ```
+
+Built-in profiles on disk: `ao.yaml`, `codex.yaml`, `goose.yaml`, `hardened.yaml`, `learn.yaml`, `sealed.yaml`.
 
 Start from the most restrictive profile that works and open up what you need:
 
@@ -1852,16 +1940,18 @@ spec:
 |---------|----------|----------|
 | `lifecycle` | Yes | TTL, idle timeout, teardown policy |
 | `runtime` | Yes | Substrate (ec2/ecs), instance type, spot, region |
-| `execution` | No | Shell, working directory, env vars |
-| `network` | Yes | DNS suffixes, hosts, HTTP methods, `httpsOnly` toggle, `enforcement` mode (proxy/ebpf/both) |
-| `sourceAccess` | No | GitHub repos, refs, permissions |
-| `identity` | No | IAM session duration, allowed regions |
-| `secrets` | No | SSM parameter path allowlist |
+| `execution` | No | Shell, working directory, env vars, initCommands, configFiles, privileged |
+| `network` | Yes | DNS suffixes, hosts, `httpsOnly` toggle, `enforcement` mode (proxy/ebpf/both) |
+| `sourceAccess` | No | GitHub repos, refs |
+| `identity` | No | IAM session duration, allowed regions, `allowedSecretPaths` (SSM parameter allowlist) |
 | `sidecars` | Yes | DNS proxy, HTTP proxy, audit log, tracing |
-| `policy` | No | Shell escape, allowed commands, filesystem policy |
-| `observability` | No | Command and network log destinations |
+| `observability` | No | Command and network log destinations, learnMode, claudeTelemetry, tlsCapture |
 | `agent` | No | Concurrent tasks, timeout, allowed tools |
 | `artifacts` | No | Paths to collect on exit, max size, replication region |
+| `budget` | No | Compute and AI spend limits, warning threshold |
+| `email` | No | Signing, inbound verification, encryption policy, allowed senders |
+| `otp` | No | One-time password secrets injected at boot (ephemeral SSM parameters) |
+| `cli` | No | Operator-side defaults (e.g. `noBedrock` for km shell / km agent) |
 
 ### Profile network.httpsOnly
 
@@ -1989,9 +2079,6 @@ spec:
       allowedRefs:
         - "main"
         - "feature/*"
-      permissions:
-        - read
-        - write
 ```
 
 **Fields:**
@@ -2001,13 +2088,12 @@ spec:
 | `mode` | `allowlist` | Must be `allowlist` — sandboxes only get access to explicitly listed repos |
 | `github.allowedRepos` | list | Repository patterns the sandbox can access. Supports `*` wildcard within an org |
 | `github.allowedRefs` | list | Branch/tag patterns the sandbox can push to |
-| `github.permissions` | list | `read` (clone), `write` (push), or both |
 
 **How it works:**
 
 When `km create` runs with a profile that has `sourceAccess.github`, it provisions:
 
-1. A per-sandbox Lambda (`km-github-token-refresher-{sandbox-id}`) that generates a GitHub App installation token scoped to `allowedRepos` and `permissions`
+1. A per-sandbox Lambda (`km-github-token-refresher-{sandbox-id}`) that generates a GitHub App installation token scoped to `allowedRepos`
 2. An EventBridge Scheduler schedule that fires the Lambda every 45 minutes
 3. An SSM SecureString parameter at `/sandbox/{sandbox-id}/github-token` (KMS-encrypted) that holds the current token
 

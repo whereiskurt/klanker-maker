@@ -30,13 +30,13 @@ This document describes the security architecture of Klanker Maker, a policy-dri
 
 Klanker Maker's security model is built on four principles:
 
-**Explicit allowlists everywhere.** Every external interaction -- DNS resolution, HTTP egress, repository access, IAM permissions, secret paths, shell commands, filesystem writes -- requires an explicit entry in the SandboxProfile YAML. Nothing is permitted by default. The `sealed` profile demonstrates the extreme case: empty allowlists for DNS suffixes, HTTP hosts, and methods, producing a sandbox with zero network egress.
+**Explicit allowlists everywhere.** Every external interaction -- DNS resolution, HTTP egress, repository access, IAM permissions, secret paths, agent tools -- requires an explicit entry in the SandboxProfile YAML. Nothing is permitted by default. The `sealed` profile demonstrates the extreme case: empty allowlists for DNS suffixes and HTTP hosts, producing a sandbox with zero network egress.
 
-**Deny by default.** Security groups start with no egress rules. The IAM role has no inline permissions beyond SSM agent requirements. The DNS proxy returns NXDOMAIN for any domain not matching an allowed suffix. The HTTP proxy returns 403 for any host not in the allowed list. The filesystem is read-only except for explicitly declared writable paths. If a profile section is omitted, the default is the most restrictive option.
+**Deny by default.** Security groups start with no egress rules. The IAM role has no inline permissions beyond SSM agent requirements and platform-required policies (see Section 7). The DNS proxy returns NXDOMAIN for any domain not matching an allowed suffix. The HTTP proxy returns 403 for any host not in the allowed list. If a profile section is omitted, the default is the most restrictive option.
 
 **Defense in depth.** No single layer is trusted to hold. Network egress is enforced at up to four independent layers: Security Groups (L3/L4), eBPF cgroup programs (kernel-level connect/egress filtering), DNS proxy or resolver (application-layer domain filtering), and HTTP proxy (application-layer host filtering). In proxy mode, iptables DNAT ensures traffic cannot bypass the proxy sidecars. In eBPF mode, cgroup-attached BPF programs enforce allowlists in the kernel — even root users cannot bypass them. IMDSv2 prevents SSRF-based credential theft even if application code is compromised. Secret redaction in audit logs prevents credential leakage even if log storage is breached.
 
-**Assume agent compromise.** The platform assumes the AI agent running inside the sandbox will attempt to escape its constraints. The agent has shell access, can execute arbitrary code within its allowed command set, and may try to exfiltrate data, escalate privileges, or pivot to other infrastructure. Every design decision starts from this assumption.
+**Assume agent compromise.** The platform assumes the AI agent running inside the sandbox will attempt to escape its constraints. The agent has shell access, can execute arbitrary code within its allowed tool set (`agent.allowedTools`), and may try to exfiltrate data, escalate privileges, or pivot to other infrastructure. Every design decision starts from this assumption.
 
 ---
 
@@ -76,17 +76,13 @@ Klanker Maker uses a **shared regional VPC** provisioned once per region by `km 
 
 **Per-Sandbox Security Groups:**
 
-Each sandbox gets its own Security Groups, compiled from its SandboxProfile by the profile compiler. Two security groups enforce L3/L4 network policy:
+Each sandbox gets its own Security Group (`km-ec2spot-{sandbox_id}`), compiled from its SandboxProfile by the profile compiler. The security group enforces L3/L4 network policy:
 
-1. **`sandbox_mgmt`** -- Management plane access.
-   - Zero ingress rules. No SSH. No RDP. No inbound ports of any kind.
-   - Egress rules are compiled from the SandboxProfile by the profile compiler. The baseline emits TCP/443 (HTTPS for SSM agent and API traffic) and UDP/53 (DNS resolution). No default "allow all" egress.
-   - SSM Session Manager is the only path into the instance, gated by IAM policy.
-
-2. **`sandbox_internal`** -- Intra-sandbox sidecar communication.
-   - Single ingress rule: `self = true` (all protocols, all ports, but only from members of the same security group).
-   - This allows the DNS proxy (port 5353), HTTP proxy (port 3128), and audit log sidecar to communicate with the main workload on the same host.
-   - No cross-sandbox communication — each sandbox's `sandbox_internal` group only allows traffic from its own members.
+- **Zero ingress rules.** No SSH. No RDP. No inbound ports of any kind.
+- **Egress rules** are compiled from the SandboxProfile by the profile compiler. The baseline emits TCP/443 (HTTPS for SSM agent and API traffic) and UDP/53 (DNS resolution). No default "allow all" egress.
+- **Self-referencing rule** (`self = true`): all protocols, all ports, but only from members of the same security group. This allows the DNS proxy, HTTP proxy (port 3128/3129), and audit log sidecar to communicate with the main workload on the same host.
+- SSM Session Manager is the only path into the instance, gated by IAM policy.
+- No cross-sandbox communication — each sandbox's security group only allows traffic from its own members.
 
 **Residual risk:** Sandboxes share a VPC, so a compromised instance could theoretically attempt ARP spoofing or subnet-level attacks against other sandbox instances. This is mitigated by: (1) Security Groups blocking all cross-sandbox traffic, (2) the short-lived nature of sandboxes (TTL-enforced), (3) per-sandbox IAM roles with no cross-sandbox permissions, and (4) full audit logging of all network activity. For deployments requiring stronger isolation, the ec2spot module supports an optional per-sandbox VPC mode (pass `vpc_id = ""`) at the cost of VPC quota consumption.
 
@@ -124,7 +120,7 @@ Security Group egress on TCP/443 to `0.0.0.0/0` is required for the SSM agent to
 
 ## 5. Network Enforcement
 
-Network egress is enforced at three independent layers, each operating at a different level of the stack. An agent must bypass all three to exfiltrate data.
+Network egress is enforced at up to four independent layers, each operating at a different level of the stack. An agent must bypass all active layers to exfiltrate data.
 
 ### Layer 1: Security Groups (L3/L4)
 
@@ -139,9 +135,9 @@ These are the only ports open at the infrastructure level. An agent cannot open 
 
 When `spec.network.enforcement` is `"ebpf"` or `"both"`, four BPF programs are attached to the sandbox's cgroup (`/sys/fs/cgroup/km.slice/km-{id}.scope`):
 
-- **cgroup/connect4** — intercepts every TCP `connect()` from processes in the cgroup. Performs an LPM trie lookup on the destination IP. If the IP is not in the `allowed_cidrs` map, returns 0 (EPERM — connection refused). If the IP is in the `http_proxy_ips` map (indicating it needs L7 inspection), rewrites the destination to 127.0.0.1:3128 (transparent redirect to the MITM proxy). Emits a structured event to the ring buffer for every deny and redirect.
+- **cgroup/connect4** — intercepts every TCP `connect()` from processes in the cgroup. Performs an LPM trie lookup on the destination IP. If the IP is not in the `allowed_cidrs` map, returns 0 (EPERM — connection refused). If the IP is in the `http_proxy_ips` map (indicating it needs L7 inspection), rewrites the destination to 127.0.0.1:3129 (transparent redirect to the MITM proxy on `const_https_proxy_port`). Emits a structured event to the ring buffer for every deny and redirect.
 
-- **cgroup/sendmsg4** — intercepts every UDP `sendmsg()`. Redirects all DNS queries (port 53) to the local resolver at 127.0.0.1:53, which enforces `allowedDNSSuffixes` and populates the BPF `allowed_cidrs` map with resolved IPs. Non-DNS UDP is passed through.
+- **cgroup/sendmsg4** — intercepts every UDP `sendmsg()`. Redirects all DNS queries (port 53) to the local resolver at 127.0.0.1:5353 (`const_dns_proxy_port`), which enforces `allowedDNSSuffixes` and populates the BPF `allowed_cidrs` map with resolved IPs. Non-DNS UDP is passed through.
 
 - **sockops** — tracks TCP connection establishment. Maps local source ports to socket cookies so the MITM proxy can recover the original destination IP/port after BPF rewrites it.
 
@@ -155,8 +151,7 @@ When `spec.network.enforcement` is `"ebpf"` or `"both"`, four BPF programs are a
 
 The DNS proxy sidecar (`sidecars/dns-proxy/dnsproxy/proxy.go`) intercepts all DNS queries:
 
-- Listens on port 5353 locally.
-- `iptables -t nat` DNAT rules redirect all UDP/TCP port 53 traffic to 5353 (except traffic from the `km-sidecar` user, preventing redirect loops).
+- Listens on port 53 by default (`DNS_PORT` env var, default `"53"`). In proxy-only mode, iptables DNAT rules redirect all UDP/TCP port 53 traffic to 5353 (except traffic from the `km-sidecar` user, preventing redirect loops). In eBPF mode, the BPF `sendmsg4` program redirects DNS to port 5353 (`const_dns_proxy_port`) instead of iptables.
 - For each query, checks the domain against `allowedDNSSuffixes` from the profile. Matching is case-insensitive, supports exact match and suffix match (e.g., `.amazonaws.com` allows `sts.us-east-1.amazonaws.com`).
 - **Allowed:** forwards to upstream DNS at `169.254.169.253` (the VPC DNS resolver) and returns the response.
 - **Denied:** returns `NXDOMAIN` immediately. The agent sees a non-existent domain.
@@ -166,8 +161,8 @@ The DNS proxy sidecar (`sidecars/dns-proxy/dnsproxy/proxy.go`) intercepts all DN
 
 The HTTP proxy sidecar (`sidecars/http-proxy/httpproxy/proxy.go`) intercepts all HTTP/HTTPS traffic:
 
-- Listens on port 3128 locally.
-- `iptables -t nat` DNAT rules redirect TCP ports 80 and 443 to 3128 (except traffic from `km-sidecar` user).
+- Listens on port 3128 locally (HTTP). In eBPF gatekeeper mode, port 443 traffic is redirected to port 3129 (`const_https_proxy_port`) instead of 3128.
+- In proxy-only mode, `iptables -t nat` DNAT rules redirect TCP ports 80 and 443 to 3128 (except traffic from `km-sidecar` user). In eBPF gatekeeper mode, the BPF `connect4` program handles HTTPS redirect to 3129.
 - For HTTPS (CONNECT tunnels): checks the target host against `allowedHosts` from the profile. Allowed connections get `OkConnect`; blocked connections get `RejectConnect` (client sees connection refused).
 - For plain HTTP: checks `req.Host` against the allowed list. Blocked requests receive an HTTP 403 with body "Blocked by km sandbox policy".
 - W3C `traceparent` headers are injected on allowed CONNECT requests for distributed tracing.
@@ -248,7 +243,16 @@ Each sandbox gets its own IAM role and instance profile. The role is scoped with
 
 This prevents a compromised sandbox from spinning up resources in unmonitored regions (a common crypto-mining technique: launch GPU instances in `ap-southeast-1` from a compromised `us-east-1` role).
 
-**Minimal permissions:** The only managed policy attached is `AmazonSSMManagedInstanceCore`. The sandbox has no permissions to create EC2 instances, modify IAM roles, access S3 buckets outside its artifact bucket, or call any AWS service beyond what SSM, KMS decrypt, and CloudWatch Logs require.
+**Managed policy:** `AmazonSSMManagedInstanceCore` is attached for SSM agent operation. In addition, the ec2spot module attaches several inline policies scoped to platform requirements:
+
+| Inline Policy | Permissions | Purpose |
+|---------------|-------------|---------|
+| `km-{id}-eventbridge` | `events:PutEvents` | Audit-log sidecar publishes SandboxIdle events to EventBridge |
+| `km-{id}-bedrock` | `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream`, `bedrock:ListInferenceProfiles`, `bedrock:ListFoundationModels`, `aws-marketplace:ViewSubscriptions`, `aws-marketplace:Subscribe` | AI model invocation via Bedrock (conditional on `enable_bedrock`) |
+| `km-{id}-budget-dynamo` | `dynamodb:GetItem`, `dynamodb:UpdateItem`, `dynamodb:Query` on `km-budgets` table; `dynamodb:GetItem` on `km-sandboxes` table | HTTP proxy AI spend metering and budget tracking |
+| `km-{id}-github-token` | `kms:Decrypt` (conditioned on `kms:ViaService = ssm`); `ssm:GetParameter` on `/sandbox/{id}/*` | Read GitHub token and other per-sandbox secrets from SSM |
+
+The sandbox has no permissions to create EC2 instances, modify IAM roles, or access S3 buckets outside its artifact bucket.
 
 ---
 
@@ -291,8 +295,6 @@ sourceAccess:
     allowedRefs:
       - "main"
       - "develop"
-    permissions:
-      - read
 ```
 
 **Mode:** Always `allowlist`. There is no `denylist` or `open` mode.
@@ -301,7 +303,7 @@ sourceAccess:
 
 - `allowedRepos`: glob patterns specifying which repositories can be cloned or fetched. `github.com/*` allows any repo on GitHub; `github.com/whereiskurt/*` restricts to a specific organization.
 - `allowedRefs`: branch/tag patterns restricting which refs the agent can push to. Supports bash glob wildcards (`feature/*`, `fix/*`). See "AllowedRefs Enforcement" below for implementation details.
-- `permissions`: `read` (clone/fetch only), `write` (push allowed). The `hardened` profile allows only `git` in its command allowlist and has no GitHub configuration at all -- zero repository access.
+The `hardened` profile has `agent.allowedTools: [read_file]` and no GitHub configuration at all -- zero repository access.
 
 **Deny-by-default contract:** Both a nil `sourceAccess.github` AND an explicitly empty `allowedRepos: []` result in zero GitHub token infrastructure being provisioned. The compiler gates all token infrastructure (GitHub token Lambda/EventBridge, per-sandbox SSM parameter, `github_token_inputs` HCL block, and the `GIT_ASKPASS` credential helper in EC2 user-data) behind the condition `GitHub != nil && len(AllowedRepos) > 0`. No token means no access -- this is the primary access control layer.
 
@@ -349,17 +351,7 @@ This is a known v1 limitation. Resolving it requires either injecting the token 
 
 ## 10. Filesystem Policy
 
-The `filesystemPolicy` section of the SandboxProfile controls what paths are writable and which are protected:
-
-```yaml
-policy:
-  filesystemPolicy:
-    readOnlyPaths:
-      - /etc
-    writablePaths:
-      - /workspace
-      - /tmp
-```
+Filesystem enforcement is implemented in the EC2 user-data bootstrap script, not in the SandboxProfile schema. There is no `filesystemPolicy` field in the profile type definitions.
 
 **Enforcement mechanism:** The user-data bootstrap script applies read-only bind mounts before sidecar startup (section 2.5 of the boot sequence):
 
@@ -370,9 +362,9 @@ mount -o remount,bind,ro "/etc"
 
 This creates a bind mount of the path onto itself, then remounts it as read-only. The agent can read `/etc/passwd` but cannot modify `/etc/resolv.conf` or plant a crontab.
 
-**Writable paths** are explicitly declared per profile. The `goose` profile declares `/workspace`, `/tmp`, `/home`. The `hardened` and `sealed` profiles omit `filesystemPolicy` entirely, meaning no explicit writable paths are declared beyond the defaults.
-
 **Boot order matters:** Read-only mounts are applied in section 2.5 of the bootstrap, before sidecars start in section 5. This prevents a race condition where a sidecar or the agent could modify protected paths before enforcement takes effect.
+
+**Privileged mode:** When `spec.execution.privileged` is true, the sandbox user is granted wheel group membership and passwordless sudo access. This is opt-in and not enabled in the `hardened` or `sealed` profiles.
 
 ---
 
@@ -416,7 +408,7 @@ Event types: `shell_command`, `dns_query`, `http_request`.
 | Destination | Use Case |
 |------------|----------|
 | `cloudwatch` | Real-time monitoring, CloudWatch Insights queries, alerting |
-| `s3` | Long-term archival (stub in current implementation, falls back to stdout) |
+| `s3` | Long-term archival |
 | `stdout` | Development and debugging |
 
 The CloudWatch destination creates a per-sandbox log group (`/km/sandboxes/{sandbox_id}/`) with a dedicated `audit` log stream. Events are buffered (threshold: 25 events) and flushed in batches.
@@ -495,58 +487,48 @@ Service Control Policies (SCPs) are AWS Organizations policies that apply at the
 
 ### Deny Statements
 
-The SCP has eight deny statements. Each uses `ArnNotLike` on `aws:PrincipalARN` to carve out trusted platform roles (note: `NotPrincipal` is not supported in SCPs -- `ArnNotLike` on the condition variable achieves the same effect).
+The SCP has six deny statements across five `statement` blocks (DenySSMPivot and DenyOrgDiscovery are separate statements but the first four concerns are consolidated into three blocks). Most use `ArnNotLike` on `aws:PrincipalARN` to carve out trusted platform roles (note: `NotPrincipal` is not supported in SCPs -- `ArnNotLike` on the condition variable achieves the same effect).
 
-#### 1. DenySGMutation
+#### 1. DenyInfraAndStorage (consolidated)
 
-Denies Security Group mutation (create, delete, authorize/revoke ingress and egress rules, modify rules) for all roles not in `trusted_arns_base`. Prevents a compromised sandbox from widening its own egress rules.
+A single consolidated statement denying Security Group mutation (create, delete, authorize/revoke ingress and egress rules, modify rules), network escape (creation of VPCs, subnets, route tables, internet gateways, NAT gateways, VPC peering connections, Transit Gateway attachments), and storage exfiltration (EBS snapshot creation, snapshot copying, AMI creation, AMI copying, image export) for all roles not in `trusted_arns_base`. This consolidation from three separate statements into one fits within the 5,120-byte SCP limit.
 
-#### 2. DenyNetworkEscape
-
-Denies creation of VPCs, subnets, route tables, internet gateways, NAT gateways, VPC peering connections, and Transit Gateway attachments. Prevents network pivoting to new network contexts outside the controlled VPC.
-
-#### 3. DenyInstanceMutation
+#### 2. DenyInstanceMutation
 
 Denies `ec2:RunInstances`, `ec2:ModifyInstanceAttribute`, and `ec2:ModifyInstanceMetadataOptions`. Trusted roles: `trusted_arns_instance` = base roles + `km-ecs-spot-handler` (which launches Spot instances as part of normal platform operation).
 
 **Important:** `km-ecs-task-*` is intentionally NOT carved out. The ECS task role IS the sandbox workload. If the task role could run new instances, it would escape its compute budget and IAM scope. The SCP enforces this at the organization level regardless of the task role's IAM policy.
 
-#### 4. DenyIAMEscalation
+#### 3. DenyIAMEscalation
 
 Denies `iam:CreateRole`, `iam:AttachRolePolicy`, `iam:DetachRolePolicy`, `iam:PassRole`, and `iam:AssumeRole`. Trusted roles: `trusted_arns_iam` = base roles + `km-budget-enforcer-*`.
 
 The budget-enforcer Lambda carve-out is precise: it needs `AttachRolePolicy`/`DetachRolePolicy` to revoke Bedrock IAM permissions on budget breach, but it does NOT need `CreateRole` or `PassRole`. The SCP allows the enforcer to do exactly what it needs without granting broader IAM escalation.
 
-#### 5. DenyStorageExfiltration
-
-Denies EBS snapshot creation, snapshot copying, AMI creation, AMI copying, and image export. Prevents a sandbox from exfiltrating EBS data by creating a snapshot and sharing it with an attacker-controlled account.
-
-#### 6. DenySSMPivot
+#### 4. DenySSMPivot
 
 Denies `ssm:SendCommand` and `ssm:StartSession`. Trusted roles: `trusted_arns_ssm` = only `km-ec2spot-ssm-*` instance roles, `km-github-token-refresher-*`, and operator SSO roles.
 
 This prevents a compromised sandbox from using SSM to pivot to other instances in the account. The GitHub token refresher is listed here (not in base/instance/iam carve-outs) because it only needs SSM `GetParameter`/`PutParameter`, not instance session access.
 
-#### 7. DenyOrganizationsDiscovery
+#### 5. DenyOrgDiscovery
 
-Denies `organizations:ListAccounts`, `organizations:DescribeOrganization`, `organizations:ListRoots`, `organizations:ListOrganizationalUnitsForParent`, and `organizations:ListChildren`. This statement has **no condition** -- it applies to all roles in the Application account without exception. Application account roles have no legitimate reason to enumerate org structure. The management account is exempt by AWS design.
+Denies `organizations:List*` and `organizations:Describe*` (wildcard actions covering all list and describe operations). This statement has **no condition** -- it applies to all roles in the Application account without exception. Application account roles have no legitimate reason to enumerate org structure. The management account is exempt by AWS design.
 
-#### 8. DenyOutsideAllowedRegions
+#### 6. DenyOutsideAllowedRegions
 
-Denies all actions outside the configured `allowed_regions` using `StringNotEquals` on `aws:RequestedRegion`. Uses `not_actions` (NotAction) so global AWS services (IAM, STS, Organizations, Route53, billing, CloudFront, health, pricing) work regardless of region. **This statement has no trusted role carve-out** -- it applies to all roles including operators. Region lock at the SCP layer enforces the geographic boundary even if a sandbox or operator role has no IAM region condition.
+Denies all actions outside the configured `allowed_regions` using `StringNotEquals` on `aws:RequestedRegion`. Uses `not_actions` (NotAction) so global AWS services (IAM, STS, Organizations, Route53, billing, CloudFront, health, pricing, Bedrock) work regardless of region. Trusted roles (`trusted_role_arns`) are exempt via an `ArnNotLike` condition so operators can perform cross-region operations (e.g., S3 replication to a secondary region).
 
 ### Carve-Out Summary
 
 | Statement | Trusted Roles (carve-out) |
 |-----------|--------------------------|
-| DenySGMutation | `trusted_arns_base` (operator SSO + provisioner roles) |
-| DenyNetworkEscape | `trusted_arns_base` |
+| DenyInfraAndStorage | `trusted_arns_base` (operator SSO + provisioner roles) |
 | DenyInstanceMutation | `trusted_arns_instance` = base + `km-ecs-spot-handler` |
 | DenyIAMEscalation | `trusted_arns_iam` = base + `km-budget-enforcer-*` |
-| DenyStorageExfiltration | `trusted_arns_base` |
 | DenySSMPivot | `trusted_arns_ssm` = `km-ec2spot-ssm-*` + `km-github-token-refresher-*` + SSO roles |
-| DenyOrganizationsDiscovery | None (applies to all) |
-| DenyOutsideAllowedRegions | None (applies to all, uses NotAction for global services) |
+| DenyOrgDiscovery | None (applies to all) |
+| DenyOutsideAllowedRegions | `trusted_role_arns` (operators can operate cross-region) |
 
 ---
 
@@ -570,9 +552,7 @@ GitHub repository access uses short-lived GitHub App installation tokens rather 
 
 ### Token Scope
 
-The installation token is scoped at request time to exactly the repositories listed in the profile's `sourceAccess.github.allowedRepos`. The token has no access to other repositories in the organization. The `permissions` profile field maps to GitHub API permission levels:
-- `read` → `contents: read`
-- `push` → `contents: write`
+The installation token is scoped at request time to exactly the repositories listed in the profile's `sourceAccess.github.allowedRepos`. The token has no access to other repositories in the organization.
 
 ### KMS Encryption
 
@@ -692,13 +672,13 @@ spec:
 **Threat:** An AI agent exploits a vulnerability in the runtime environment, kernel, or sidecar to gain arbitrary code execution outside the sandbox constraints.
 
 **Mitigations (layered):**
-1. The agent is already running as an unprivileged user with a constrained command allowlist.
+1. The agent is already running as an unprivileged user with constrained `agent.allowedTools`.
 2. Filesystem bind mounts prevent modification of system binaries and configuration.
 3. Even with arbitrary code execution, Security Groups block all egress except DNS (UDP 53) and HTTPS (TCP 443).
 4. Even with arbitrary network access on allowed ports, the DNS proxy returns NXDOMAIN for non-allowed domains and the HTTP proxy returns 403 for non-allowed hosts.
 5. Even if the agent bypasses iptables DNAT (requires root), the Security Group still blocks non-443/53 traffic at the VPC level.
-6. Even if the agent compromises the entire EC2 instance, it is in an isolated VPC with no peering to other sandboxes.
-7. Even if the agent escalates to the instance IAM role, it is region-locked and has minimal permissions (SSM, KMS decrypt, CloudWatch Logs only).
+6. Even if the agent compromises the entire EC2 instance, it is isolated by Security Groups within a shared VPC with no cross-sandbox traffic allowed.
+7. Even if the agent escalates to the instance IAM role, it is region-locked and has permissions scoped to SSM, KMS decrypt, EventBridge PutEvents, DynamoDB budget tables, and optionally Bedrock model invocation.
 8. Even if the agent reaches the AWS API, it is in the Application account -- Terraform state, DNS configuration, and billing are in separate accounts.
 
 **Residual risk:** Kernel exploits or hypervisor escapes could theoretically breach the EC2 instance boundary. This is AWS's responsibility under the shared responsibility model.
@@ -708,10 +688,10 @@ spec:
 **Threat:** An agent uses an allowed host (e.g., `api.github.com`) to exfiltrate sensitive data by encoding it in API request bodies, commit messages, or issue comments.
 
 **Mitigations:**
-1. `sourceAccess.permissions` controls whether push access is granted. Read-only profiles prevent write-based exfiltration through Git.
-2. All HTTP requests through the proxy are logged with host, sandbox ID, and event type.
-3. Audit logs capture shell commands, enabling post-incident forensic analysis.
-4. The `allowedMethods` field can restrict to GET-only, preventing POST/PUT-based exfiltration for some hosts.
+1. GitHub App installation tokens are scoped to the repositories in `sourceAccess.github.allowedRepos`. Profiles without GitHub configuration have no token and no repository access.
+2. `allowedRefs` restricts which branches can be pushed to (enforced via pre-push hook on EC2).
+3. All HTTP requests through the proxy are logged with host, sandbox ID, and event type.
+4. Audit logs capture shell commands, enabling post-incident forensic analysis.
 
 **Residual risk:** Any allowed host with write capability is a potential exfiltration channel. Operators must consider this when configuring allowlists. The `hardened` profile mitigates this by allowing only `.amazonaws.com` DNS suffixes and only `sts`/`ssm` hosts.
 
@@ -733,7 +713,7 @@ spec:
 **Mitigations:**
 1. IMDSv2 with `http_tokens = "required"` blocks all GET-only SSRF attempts. The attacker must be able to send a PUT request with a custom header (significantly harder for most SSRF vectors).
 2. `http_put_response_hop_limit = 1` prevents token theft from behind a NAT or container boundary.
-3. Even if credentials are stolen, they are scoped to the minimal sandbox role (SSM + KMS decrypt + CloudWatch Logs) with region lock.
+3. Even if credentials are stolen, they are scoped to the sandbox role (SSM, KMS decrypt, EventBridge PutEvents, DynamoDB budget tables, and optionally Bedrock) with region lock.
 4. Session duration limits the window of credential validity.
 
 **Residual risk:** A full-control SSRF (where the attacker controls method, headers, and body) could still obtain IMDSv2 tokens. The IAM scoping ensures stolen credentials have minimal value.
@@ -756,7 +736,7 @@ spec:
 
 **Mitigations:**
 1. IAM region lock restricts API calls to `allowedRegions` only. A sandbox locked to `us-east-1` cannot call `ec2:RunInstances` in `ap-southeast-1`.
-2. The sandbox IAM role does not have `ec2:RunInstances` permission at all -- only SSM, KMS, and CloudWatch Logs.
+2. The sandbox IAM role does not have `ec2:RunInstances` permission at all -- permissions are scoped to SSM, KMS decrypt, EventBridge, DynamoDB budget tables, and optionally Bedrock.
 3. Lifecycle TTL ensures sandboxes are destroyed after their maximum lifetime, preventing indefinite resource consumption.
 4. CloudTrail logs all API calls, including unauthorized attempts, enabling rapid detection.
 
@@ -768,7 +748,7 @@ spec:
 |--------|--------|------------|
 | Kernel exploit / hypervisor escape | AWS shared responsibility | Account isolation limits blast radius |
 | DNS exfiltration through allowed suffixes | Known limitation | Low bandwidth; logged; anomaly detection recommended |
-| Data exfiltration through allowed HTTP hosts | Known limitation | Audit logging; restrict `permissions` to read-only |
+| Data exfiltration through allowed HTTP hosts | Known limitation | Audit logging; scope `allowedRepos` and `allowedRefs` narrowly |
 | iptables bypass (requires root) | Mitigated by unprivileged user + bind mounts | Security Groups still enforce at VPC level |
 | Sidecar binary tampering | Mitigated by S3 source + boot-time download | Read-only `/opt/km/bin` recommended |
 | Time-of-check/time-of-use on allowlists | Not applicable -- allowlists are compiled at boot | Sidecars load allowlist once at startup |
@@ -780,12 +760,10 @@ spec:
 
 The four built-in profiles demonstrate the security model at different trust levels:
 
-| Profile | DNS Suffixes | HTTP Hosts | Git Access | Commands | Filesystem | TTL |
-|---------|-------------|------------|------------|----------|------------|-----|
-| `sealed` | None | None | None | None | Default | 1h |
-| `hardened` | `.amazonaws.com` only | `sts`, `ssm` only | None | `git` only | Default | 4h |
-| `goose` | AWS + Anthropic + GitHub + npm + PyPI | ~15 hosts | Read/write, allowlisted repos | Multi-agent (Goose, Claude, Codex) | `/workspace`, `/tmp`, `/home` writable | 4h |
-| `goose-ebpf` | Same as goose (eBPF enforced) | Same | Same | Same | Same | 1h |
-| `goose-ebpf-gatekeeper` | Same as goose (eBPF + proxy) | Same | Same | Same | Same | 1h |
+| Profile | DNS Suffixes | HTTP Hosts | Git Access | Agent Tools | Teardown | TTL |
+|---------|-------------|------------|------------|-------------|----------|-----|
+| `sealed` | Empty (zero egress) | Empty | None | None | `destroy` | 1h |
+| `hardened` | `.amazonaws.com` only | `sts.us-east-1.amazonaws.com`, `ssm.us-east-1.amazonaws.com` | None | `read_file` only | `destroy` | 4h |
+| `goose` | AWS + Anthropic + GitHub + npm + PyPI + OpenAI + Google | ~30 hosts | Read/write, allowlisted repos | `bash`, `read_file`, `write_file`, `list_files` | `stop` | 1h |
 
-The `sealed` profile produces a sandbox with zero network egress, zero repository access, zero allowed commands, and a 1-hour TTL. It is the most restrictive possible configuration and serves as a baseline for verifying that the deny-by-default model works correctly.
+The `sealed` profile produces a sandbox with zero network egress, zero repository access, no agent tools, and a 1-hour TTL. It is the most restrictive possible configuration and serves as a baseline for verifying that the deny-by-default model works correctly.

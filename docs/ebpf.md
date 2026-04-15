@@ -110,7 +110,7 @@ All four programs are compiled from `pkg/ebpf/bpf.c` via `bpf2go` and embedded i
 **Hook point:** Every `connect()` syscall from processes in the cgroup.
 
 **Logic flow:**
-1. **Exempt the enforcer and proxy processes** — check PID against `const_proxy_pid` (the enforcer's own PID) and `const_proxy_pid2` (the MITM proxy PID in gatekeeper mode). Both PIDs are passed via `--proxy-pid` flags. This prevents the DNS resolver, enforcer, and L7 proxy from being blocked by their own enforcement.
+1. **Exempt the enforcer and proxy processes** — check PID against `const_proxy_pid` (the enforcer's own PID) and `const_http_proxy_pid` (the MITM proxy PID in gatekeeper mode). Both PIDs are passed via `--proxy-pid` flags. This prevents the DNS resolver, enforcer, and L7 proxy from being blocked by their own enforcement.
 2. **Exempt IMDS** — allow 169.254.169.254 unconditionally (EC2 instance metadata).
 3. **Exempt localhost** — allow 127.0.0.0/8 unconditionally.
 4. **Record socket → PID mapping** — store in `socket_pid_map` for audit logging.
@@ -133,7 +133,7 @@ All four programs are compiled from `pkg/ebpf/bpf.c` via `bpf2go` and embedded i
 **Hook point:** Every `sendmsg()` syscall for UDP from processes in the cgroup.
 
 **Logic flow:**
-1. Exempt the enforcer process (same PID check).
+1. Exempt the enforcer process (`const_proxy_pid`) and HTTP proxy process (`const_http_proxy_pid`) — same dual-PID check as connect4.
 2. Only intercept port 53 (DNS) — non-DNS UDP passes through.
 3. Stash original destination IP/port.
 4. Rewrite destination to 127.0.0.1:`const_dns_proxy_port` (53 or 5353).
@@ -171,13 +171,13 @@ All maps are pinned to `/sys/fs/bpf/km/{sandboxID}/` and survive process restart
 
 | Map | Type | Key | Value | Max Entries | Purpose |
 |-----|------|-----|-------|-------------|---------|
-| `allowed_cidrs` | `LPM_TRIE` | `{prefixlen u32, addr [4]u8}` | `u32` | 16384 | CIDR allowlist. Populated by DNS resolver + pre-seed. |
-| `http_proxy_ips` | `HASH` | `u32` (dest IP) | `u32` | 4096 | IPs needing L7 proxy inspection (GitHub, Bedrock, Anthropic). |
-| `sock_to_original_ip` | `HASH` | `u64` (socket cookie) | `u32` (original IP) | 65536 | Real dest IP before BPF rewrite. |
-| `sock_to_original_port` | `HASH` | `u64` (socket cookie) | `u16` (original port) | 65536 | Real dest port before BPF rewrite. |
-| `src_port_to_sock` | `HASH` | `u16` (local src port) | `u64` (socket cookie) | 65536 | Proxy looks up socket by peer's source port. |
-| `socket_pid_map` | `HASH` | `u64` (socket cookie) | `u32` (PID) | 65536 | PID attribution for audit events. |
-| `events` | `RINGBUF` | — | `struct event` (64 bytes) | 256KB | Deny/redirect events to userspace. |
+| `allowed_cidrs` | `LPM_TRIE` | `{prefixlen u32, addr [4]u8}` | `u32` | 65535 | CIDR allowlist. Populated by DNS resolver + pre-seed. |
+| `http_proxy_ips` | `HASH` | `u32` (dest IP) | `u32` | 262144 | IPs needing L7 proxy inspection (GitHub, Bedrock, Anthropic). |
+| `sock_to_original_ip` | `HASH` | `u64` (socket cookie) | `u32` (original IP) | 262144 | Real dest IP before BPF rewrite. |
+| `sock_to_original_port` | `HASH` | `u64` (socket cookie) | `u16` (original port) | 262144 | Real dest port before BPF rewrite. |
+| `src_port_to_sock` | `HASH` | `u16` (local src port) | `u64` (socket cookie) | 262144 | Proxy looks up socket by peer's source port. |
+| `socket_pid_map` | `HASH` | `u64` (socket cookie) | `u32` (PID) | 10000 | PID attribution for audit events. |
+| `events` | `RINGBUF` | — | `struct event` (64 bytes) | 16MB | Deny/redirect events to userspace. |
 
 ### LPM Trie — How CIDR Lookups Work
 
@@ -221,7 +221,7 @@ When `enforcement: "both"`, the eBPF layer acts as a **gatekeeper** that selecti
 
 The `connect4` BPF program performs transparent destination NAT at the syscall level, before the TCP handshake begins:
 
-1. **Dual-PID exemption** — check PID against `const_proxy_pid` (eBPF enforcer) and `const_proxy_pid2` (HTTP proxy sidecar). Both are passed via `--proxy-pid` flags. Exempted processes bypass all enforcement to prevent redirect loops.
+1. **Dual-PID exemption** — check PID against `const_proxy_pid` (eBPF enforcer) and `const_http_proxy_pid` (HTTP proxy sidecar). Both are passed via `--proxy-pid` flags. Exempted processes bypass all enforcement to prevent redirect loops.
 2. **IMDS + localhost exemption** — always allow 169.254.169.254 and 127.0.0.0/8.
 3. **IP allowlist check** — destination IP is looked up in the `allowed_cidrs` LPM trie. If denied, emit DENY event and return `EPERM` (block mode) or allow with log (log mode).
 4. **L7 proxy check** — for allowed IPs, check the `http_proxy_ips` hash map. If the IP is **not** proxy-marked, the connection goes direct (no DNAT).
@@ -391,9 +391,10 @@ BPF programs use `volatile const` variables that are set at load time per-sandbo
 ```c
 volatile const __u32 const_dns_proxy_port = 5353;      // resolver listen port
 volatile const __u32 const_proxy_pid = 0;               // enforcer PID (exempt from rules)
+volatile const __u32 const_http_proxy_pid = 0;          // HTTP proxy PID (exempt from BPF interception in gatekeeper mode)
 volatile const __u32 const_http_proxy_port = 3128;      // L7 proxy HTTP port
 volatile const __u32 const_https_proxy_port = 3129;     // L7 proxy HTTPS port
-volatile const __u16 const_firewall_mode = MODE_LOG;    // MODE_LOG=1, MODE_BLOCK=2
+volatile const __u16 const_firewall_mode = MODE_LOG;    // MODE_LOG=0, MODE_ALLOW=1, MODE_BLOCK=2
 volatile const __u32 const_mitm_proxy_address = 0x0100007f;  // 127.0.0.1 in network byte order
 ```
 
@@ -634,8 +635,8 @@ make generate-ebpf
 
 This runs:
 1. `docker build -f Dockerfile.ebpf-generate` — creates a build container with clang, libbpf, and system headers
-2. `bpf2go -target amd64` compiles `pkg/ebpf/bpf.c` → generates `bpf_x86_bpfel.go` (179-line loader + embedded bytecode) and `bpf_x86_bpfel.o` (19,072 bytes)
-3. For SSL uprobes: generates `opensslbpf_x86_bpfel.go` (16KB) and `connectbpf_x86_bpfel.go` (5KB)
+2. `bpf2go -target amd64` compiles `pkg/ebpf/bpf.c` → generates `bpf_x86_bpfel.go` (182-line loader + embedded bytecode) and `bpf_x86_bpfel.o` (19,736 bytes)
+3. For SSL uprobes: generates `pkg/ebpf/tls/opensslbpf_x86_bpfel.go` (16KB) and `pkg/ebpf/tls/connectbpf_x86_bpfel.go` (5KB)
 4. Generated files are committed to git — the bytecode is linked into the `km` binary at compile time, no runtime clang dependency on sandbox instances
 
 **Go build tags:**

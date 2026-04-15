@@ -43,6 +43,7 @@ import (
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/compiler"
 	githubpkg "github.com/whereiskurt/klankrmkr/pkg/github"
+	"github.com/whereiskurt/klankrmkr/pkg/localnumber"
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
 )
@@ -234,6 +235,18 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	} else if !compiler.IsValidSandboxID(sandboxID) {
 		return fmt.Errorf("invalid sandbox ID override %q: must match pattern [a-z][a-z0-9]{0,11}-[a-f0-9]{8}", sandboxID)
 	}
+
+	// Assign persistent local number for this sandbox (non-fatal if unavailable).
+	lnState, lnErr := localnumber.Load()
+	if lnErr != nil {
+		log.Warn().Err(lnErr).Msg("could not load local sandbox numbers (non-fatal)")
+		lnState = &localnumber.State{Next: 1, Map: map[string]int{}}
+	}
+	assignedNum := localnumber.Assign(lnState, sandboxID)
+	if saveErr := localnumber.Save(lnState); saveErr != nil {
+		log.Warn().Err(saveErr).Msg("could not save local sandbox numbers (non-fatal)")
+	}
+
 	substrate := resolvedProfile.Spec.Runtime.Substrate
 	if substrateOverride != "" {
 		substrate = substrateOverride
@@ -410,7 +423,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			return fmt.Errorf("failed to compile profile: %w", err)
 		}
 		if substrate == "docker" {
-			return runCreateDocker(ctx, cfg, awsCfg, resolvedProfile, sandboxID, artifacts, verbose, noBedrock, aliasOverride)
+			return runCreateDocker(ctx, cfg, awsCfg, resolvedProfile, sandboxID, artifacts, verbose, noBedrock, aliasOverride, assignedNum)
 		}
 	}
 
@@ -934,7 +947,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	fmt.Println()
 	fmt.Println(strings.Repeat("─", 50))
 	elapsed := time.Since(createStart).Round(time.Second)
-	fmt.Printf("Sandbox %s created successfully. (%s)\n", sandboxID, elapsed)
+	fmt.Printf("Sandbox #%d %s created successfully. (%s)\n", assignedNum, sandboxID, elapsed)
 	if ttlExpiry != nil {
 		fmt.Printf("  TTL: %s (expires %s)\n", resolvedProfile.Spec.Lifecycle.TTL, ttlExpiry.Local().Format("3:04:05 PM MST"))
 	}
@@ -1019,7 +1032,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 // Steps: create sandbox dir, create IAM roles via SDK, assume roles for scoped creds,
 // inject credentials into compose YAML, write docker-compose.yml, run docker compose up -d,
 // write S3 metadata, write MLflow run record.
-func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config, resolvedProfile *profile.SandboxProfile, sandboxID string, artifacts *compiler.CompiledArtifacts, verbose bool, noBedrock bool, aliasOverride string) error {
+func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config, resolvedProfile *profile.SandboxProfile, sandboxID string, artifacts *compiler.CompiledArtifacts, verbose bool, noBedrock bool, aliasOverride string, assignedNum int) error {
 	createStart := time.Now()
 	fmt.Printf("\nProvisioning docker sandbox %s...\n", sandboxID)
 
@@ -1400,7 +1413,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 	elapsed := time.Since(createStart).Round(time.Second)
 	fmt.Println()
 	fmt.Println(strings.Repeat("─", 50))
-	fmt.Printf("Sandbox %s created successfully (docker). (%s)\n", sandboxID, elapsed)
+	fmt.Printf("Sandbox #%d %s created successfully (docker). (%s)\n", assignedNum, sandboxID, elapsed)
 	if !isTTLDisabled(resolvedProfile.Spec.Lifecycle.TTL) {
 		if d, err := time.ParseDuration(resolvedProfile.Spec.Lifecycle.TTL); err == nil {
 			ttlExpiry := now.Add(d)

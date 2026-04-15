@@ -31,6 +31,7 @@ import (
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/compiler"
 	"github.com/whereiskurt/klankrmkr/pkg/lifecycle"
+	"github.com/whereiskurt/klankrmkr/pkg/localnumber"
 	profilepkg "github.com/whereiskurt/klankrmkr/pkg/profile"
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
 )
@@ -512,6 +513,11 @@ locals {
 		log.Info().Str("sandbox_id", sandboxID).Msg("sandbox log group deleted")
 	}
 
+	if lnState, lnErr := localnumber.Load(); lnErr == nil {
+		localnumber.Remove(lnState, sandboxID)
+		_ = localnumber.Save(lnState)
+	}
+
 	fmt.Printf("Sandbox %s destroyed successfully.\n", sandboxID)
 
 	return nil
@@ -688,6 +694,11 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 		log.Warn().Err(err).Str("dir", sandboxLocalDir).Msg("failed to remove local sandbox directory (non-fatal)")
 	} else {
 		fmt.Printf("  ✓ Local directory removed: %s\n", sandboxLocalDir)
+	}
+
+	if lnState, lnErr := localnumber.Load(); lnErr == nil {
+		localnumber.Remove(lnState, sandboxID)
+		_ = localnumber.Save(lnState)
 	}
 
 	fmt.Printf("Sandbox %s destroyed successfully.\n", sandboxID)

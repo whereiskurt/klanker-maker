@@ -25,9 +25,12 @@ spec:
   identity: { ... }
   sidecars: { ... }
   observability: { ... }
-  policy: { ... }
   agent: { ... }
   artifacts: { ... }       # optional
+  budget: { ... }          # optional
+  email: { ... }           # optional
+  otp: { ... }             # optional
+  cli: { ... }             # optional
 ```
 
 ---
@@ -152,30 +155,13 @@ metadata:
 | Type       | string                         |
 | Required   | No                             |
 | Default    | `"sb"` (generates `sb-{8hex}`) |
-| Validation | `minLength: 1`                 |
+| Validation | Pattern `^[a-z][a-z0-9]{0,11}$` (lowercase alphanumeric, 1-12 chars, starts with letter) |
 
 Custom prefix for the sandbox ID. Replaces the default `sb-` prefix.
 
 ```yaml
 metadata:
   prefix: goose    # generates goose-{8hex}
-```
-
-### `metadata.alias`
-
-| Property   | Value                          |
-|------------|--------------------------------|
-| YAML path  | `metadata.alias`               |
-| Type       | string                         |
-| Required   | No                             |
-| Default    | -- (no alias)                  |
-| Validation | String                         |
-
-Optional alias template for sandbox display names. Used in `km list` for friendlier identification.
-
-```yaml
-metadata:
-  alias: wrkr    # shows as wrkr-1, wrkr-2 in km list
 ```
 
 ---
@@ -198,9 +184,9 @@ Controls sandbox lifetime and teardown behavior.
 | Type       | duration string                |
 | Required   | Yes                            |
 | Default    | --                             |
-| Validation | Pattern `^[0-9]+(s\|m\|h\|d)$`; must be >= `idleTimeout` (semantic rule) |
+| Validation | Pattern `^(0\|[0-9]+(s\|m\|h\|d))$`; must be >= `idleTimeout` (semantic rule). Use `"0"` to disable auto-destroy. |
 
-Maximum lifetime of the sandbox. When the TTL expires, the `teardownPolicy` is applied.
+Maximum lifetime of the sandbox. When the TTL expires, the `teardownPolicy` is applied. Set to `"0"` to disable automatic expiration.
 
 ```yaml
 spec:
@@ -286,12 +272,13 @@ Controls the compute substrate and instance configuration.
 | Type       | string (enum)                  |
 | Required   | Yes                            |
 | Default    | --                             |
-| Validation | One of: `ec2`, `ecs`           |
+| Validation | One of: `ec2`, `ecs`, `docker`  |
 
 Compute backend for the sandbox:
 
 - **`ec2`** -- Provisions a dedicated EC2 instance.
 - **`ecs`** -- Provisions an ECS Fargate task.
+- **`docker`** -- Runs a local Docker container.
 
 ```yaml
 spec:
@@ -386,7 +373,8 @@ Attaches and auto-mounts an extra EBS volume. Useful for separating data from th
 | Field | Type | Description |
 |-------|------|-------------|
 | `size` | integer | Volume size in GB (required, >= 1) |
-| `mountPoint` | string | Filesystem path to mount the volume (default: `/data`) |
+| `mountPoint` | string | Filesystem path to mount the volume (required) |
+| `encrypted` | boolean | Whether the EBS volume should be encrypted at rest (optional, default `false`) |
 
 ```yaml
 spec:
@@ -394,6 +382,7 @@ spec:
     additionalVolume:
       size: 20
       mountPoint: /data
+      encrypted: true
 ```
 
 ### `spec.runtime.hibernation`
@@ -420,12 +409,17 @@ spec:
 | Property   | Value                          |
 |------------|--------------------------------|
 | YAML path  | `spec.runtime.ami`             |
-| Type       | string                         |
+| Type       | string (enum)                  |
 | Required   | No                             |
 | Default    | `""` (Amazon Linux 2023)       |
-| Validation | String                         |
+| Validation | One of: `"amazon-linux-2023"`, `"ubuntu-24.04"`, `"ubuntu-22.04"`, `""` |
 
-AMI slug to resolve per-region (e.g. `"ubuntu-24.04"`). When empty, defaults to Amazon Linux 2023.
+AMI slug to resolve per-region. When empty or omitted, defaults to Amazon Linux 2023. Supported values:
+
+- **`"amazon-linux-2023"`** -- Amazon Linux 2023 (default)
+- **`"ubuntu-24.04"`** -- Ubuntu 24.04 LTS
+- **`"ubuntu-22.04"`** -- Ubuntu 22.04 LTS
+- **`""`** -- Empty string, same as `amazon-linux-2023`
 
 ```yaml
 spec:
@@ -674,6 +668,30 @@ spec:
 
 **Effect:** On EC2, the sandbox user is created with `-G wheel` and a `/etc/sudoers.d/sandbox` entry granting `NOPASSWD:ALL`. On Docker, the container already runs as root.
 
+### `spec.execution.configFiles`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.execution.configFiles`   |
+| Type       | map[string]string              |
+| Required   | No                             |
+| Default    | -- (empty)                     |
+| Validation | Keys must be absolute file paths; values are file contents |
+
+Map of absolute file paths to their contents. Each entry is written to the sandbox filesystem during bootstrap, owned by the sandbox user. Use this to pre-seed tool configuration files (e.g. Claude settings.json, Goose config, .gitconfig). Written after `initCommands`.
+
+```yaml
+spec:
+  execution:
+    configFiles:
+      "/home/sandbox/.claude/settings.json": |
+        {"trustedDirectories":["/home/sandbox","/workspace"]}
+      "/home/sandbox/.gitconfig": |
+        [user]
+          name = Sandbox
+          email = sandbox@klankermaker.ai
+```
+
 ---
 
 ## `spec.sourceAccess`
@@ -768,27 +786,6 @@ spec:
         - "feature/*"
 ```
 
-### `spec.sourceAccess.github.permissions`
-
-| Property   | Value                          |
-|------------|--------------------------------|
-| YAML path  | `spec.sourceAccess.github.permissions` |
-| Type       | list of strings (enum)         |
-| Required   | No                             |
-| Default    | -- (empty)                     |
-| Validation | Each item must be `read` or `write` |
-
-Allowed permission levels for GitHub operations.
-
-```yaml
-spec:
-  sourceAccess:
-    github:
-      permissions:
-        - read
-        - write
-```
-
 ---
 
 ## `spec.network`
@@ -851,27 +848,6 @@ spec:
         - "api.github.com"
         - "registry.npmjs.org"
         - "pypi.org"
-```
-
-### `spec.network.egress.allowedMethods`
-
-| Property   | Value                          |
-|------------|--------------------------------|
-| YAML path  | `spec.network.egress.allowedMethods` |
-| Type       | list of strings (enum)         |
-| Required   | Yes                            |
-| Default    | --                             |
-| Validation | Each item must be one of: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`; use `[]` for no methods allowed |
-
-HTTP methods permitted for egress traffic through the HTTP proxy.
-
-```yaml
-spec:
-  network:
-    egress:
-      allowedMethods:
-        - GET
-        - POST
 ```
 
 ---
@@ -1004,7 +980,7 @@ DNS filtering proxy. Enforces `network.egress.allowedDNSSuffixes`.
 
 ### `spec.sidecars.httpProxy`
 
-HTTP filtering proxy. Enforces `network.egress.allowedHosts` and `allowedMethods`.
+HTTP filtering proxy. Enforces `network.egress.allowedHosts`.
 
 ### `spec.sidecars.auditLog`
 
@@ -1094,9 +1070,9 @@ spec:
 | YAML path  | `spec.observability.claudeTelemetry` |
 | Type       | object                         |
 | Required   | No                             |
-| Default    | -- (nil, telemetry disabled)   |
+| Default    | -- (nil, telemetry **enabled** by default -- `IsEnabled()` returns `true` when nil) |
 
-Controls Claude Code OpenTelemetry data collection within the sandbox.
+Controls Claude Code OpenTelemetry data collection within the sandbox. When the entire `claudeTelemetry` object is omitted (nil), telemetry is **enabled** by default.
 
 ### `spec.observability.claudeTelemetry.enabled`
 
@@ -1104,10 +1080,11 @@ Controls Claude Code OpenTelemetry data collection within the sandbox.
 |------------|--------------------------------|
 | YAML path  | `spec.observability.claudeTelemetry.enabled` |
 | Type       | bool                           |
-| Required   | Yes (when `claudeTelemetry` is present) |
+| Required   | No                             |
+| Default    | `true` (telemetry enabled when omitted) |
 | Validation | Boolean                        |
 
-Master switch for Claude Code OTEL telemetry.
+Master switch for Claude Code OTEL telemetry. Defaults to `true` when omitted (`IsEnabled()` returns `true` when `nil`).
 
 ### `spec.observability.claudeTelemetry.logPrompts`
 
@@ -1177,12 +1154,25 @@ Master switch for TLS plaintext capture.
 
 TLS libraries to hook into. Currently only `openssl` is fully implemented; others are accepted by the schema but are no-ops at runtime.
 
+### `spec.observability.tlsCapture.capturePayloads`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.observability.tlsCapture.capturePayloads` |
+| Type       | bool                           |
+| Required   | No                             |
+| Default    | `false`                        |
+| Validation | Boolean                        |
+
+Capture full payload content. When `false` (default), only metadata (sizes, directions) are logged. When `true`, the full plaintext of TLS traffic is captured for audit purposes.
+
 ```yaml
 spec:
   observability:
     tlsCapture:
       enabled: true
       libraries: [openssl]
+      capturePayloads: false
 ```
 
 ### `spec.observability.learnMode`
@@ -1212,106 +1202,6 @@ km validate observed-profile.yaml     # validate before use
 ```
 
 ---
-
-## `spec.policy`
-
-Defines security and access policy within the sandbox.
-
-| Property   | Value                          |
-|------------|--------------------------------|
-| YAML path  | `spec.policy`                  |
-| Type       | object                         |
-| Required   | Yes                            |
-
-### `spec.policy.allowShellEscape`
-
-| Property   | Value                          |
-|------------|--------------------------------|
-| YAML path  | `spec.policy.allowShellEscape` |
-| Type       | bool                           |
-| Required   | No                             |
-| Default    | `false`                        |
-| Validation | Boolean                        |
-
-Whether shell escape sequences are permitted. Should be `false` for hardened and sealed profiles.
-
-```yaml
-spec:
-  policy:
-    allowShellEscape: false
-```
-
-### `spec.policy.allowedCommands`
-
-| Property   | Value                          |
-|------------|--------------------------------|
-| YAML path  | `spec.policy.allowedCommands`  |
-| Type       | list of strings                |
-| Required   | No                             |
-| Default    | -- (empty, meaning no command restrictions) |
-| Validation | Array of strings               |
-
-Allowlist of commands the agent may invoke. When omitted or empty, no command-level restrictions are enforced (network and filesystem policy still apply).
-
-```yaml
-spec:
-  policy:
-    allowedCommands:
-      - git
-      - python3
-      - pip
-      - node
-      - npm
-      - go
-      - bash
-      - sh
-```
-
-### `spec.policy.filesystemPolicy`
-
-| Property   | Value                          |
-|------------|--------------------------------|
-| YAML path  | `spec.policy.filesystemPolicy` |
-| Type       | object                         |
-| Required   | No                             |
-| Default    | -- (nil, no filesystem restrictions) |
-
-Filesystem access constraints within the sandbox.
-
-### `spec.policy.filesystemPolicy.readOnlyPaths`
-
-| Property   | Value                          |
-|------------|--------------------------------|
-| YAML path  | `spec.policy.filesystemPolicy.readOnlyPaths` |
-| Type       | list of strings                |
-| Required   | No                             |
-| Default    | -- (empty)                     |
-| Validation | Array of filesystem paths      |
-
-Paths that are mounted or enforced as read-only within the sandbox.
-
-### `spec.policy.filesystemPolicy.writablePaths`
-
-| Property   | Value                          |
-|------------|--------------------------------|
-| YAML path  | `spec.policy.filesystemPolicy.writablePaths` |
-| Type       | list of strings                |
-| Required   | No                             |
-| Default    | -- (empty)                     |
-| Validation | Array of filesystem paths      |
-
-Paths that are writable within the sandbox. Everything not explicitly writable may be read-only depending on the runtime configuration.
-
-```yaml
-spec:
-  policy:
-    filesystemPolicy:
-      readOnlyPaths:
-        - /etc
-      writablePaths:
-        - /workspace
-        - /tmp
-```
 
 ---
 
@@ -1626,6 +1516,36 @@ spec:
 
 ---
 
+## `spec.cli`
+
+Operator-side defaults for `km shell` / `km agent` commands. These settings do not affect sandbox provisioning -- only CLI behavior when connecting to or running agents in the sandbox.
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.cli`                     |
+| Type       | object                         |
+| Required   | No                             |
+
+### `spec.cli.noBedrock`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.cli.noBedrock`           |
+| Type       | bool                           |
+| Required   | No                             |
+| Default    | `false`                        |
+| Validation | Boolean                        |
+
+Makes `--no-bedrock` the default for `km shell` and `km agent run`. The sandbox is still provisioned with Bedrock environment variables; this only affects the operator's connection. Override on the CLI with `--bedrock`.
+
+```yaml
+spec:
+  cli:
+    noBedrock: true
+```
+
+---
+
 ## Profile Inheritance
 
 A profile can extend a parent profile using the `extends` field. Inheritance is resolved at load time by the `Resolve()` function.
@@ -1670,8 +1590,6 @@ spec:
         - ".github.com"
       allowedHosts:
         - "api.github.com"
-      allowedMethods:
-        - GET
   lifecycle:
     ttl: "8h"
     idleTimeout: "2h"
@@ -1687,13 +1605,164 @@ Beyond JSON Schema structural validation, the following semantic rules are enfor
 | Rule | Path | Description |
 |------|------|-------------|
 | TTL >= idleTimeout | `spec.lifecycle.ttl` | The TTL must not be shorter than the idle timeout. A sandbox cannot idle out after it has already expired. |
-| Valid substrate | `spec.runtime.substrate` | Must be `ec2` or `ecs` (also enforced by schema enum). |
+| Valid substrate | `spec.runtime.substrate` | Must be `ec2`, `ecs`, or `docker` (also enforced by schema enum). |
+| Valid enforcement | `spec.network.enforcement` | Must be `proxy`, `ebpf`, or `both` (also enforced by schema enum). |
+| eBPF is EC2-only | `spec.network.enforcement` | eBPF enforcement (`ebpf` or `both`) is EC2-only. On ECS or Docker substrates, proxy enforcement is used regardless. |
 
 ---
 
 ## Built-in Profiles
 
-Eight built-in profiles ship with Klanker Maker, ranging from maximum containment (`sealed`) to full-featured agent profiles with eBPF enforcement, plus a permissive `learn` profile for traffic observation.
+Seven built-in profiles ship with Klanker Maker: `open-dev`, `restricted-dev`, `hardened`, `sealed`, `goose`, `ao`, and `codex`. These range from permissive development (`open-dev`) to maximum containment (`sealed`), plus tool-specific agent profiles. The `learn` profile (in `profiles/learn.yaml`) is not a built-in but is documented separately below for traffic observation workflows.
+
+### `open-dev`
+
+Permissive development profile. Broad package registry and GitHub access, wide ref patterns, full agent tooling.
+
+```yaml
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: open-dev
+  labels:
+    tier: development
+    builtin: "true"
+spec:
+  lifecycle:
+    ttl: "24h"
+    idleTimeout: "4h"
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    env:
+      SANDBOX_MODE: open-dev
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "github.com/*"
+      allowedRefs:
+        - "main"
+        - "develop"
+        - "feature/*"
+        - "fix/*"
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+        - ".github.com"
+        - ".githubusercontent.com"
+        - ".npmjs.org"
+        - ".pypi.org"
+        - ".golang.org"
+        - ".docker.io"
+        - ".registry.hub.docker.com"
+      allowedHosts:
+        - "api.github.com"
+        - "github.com"
+        - "registry.npmjs.org"
+        - "pypi.org"
+        - "pkg.go.dev"
+        - "sum.golang.org"
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions: [us-east-1, us-west-2]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:  { enabled: true, image: "km-dns-proxy:latest" }
+    httpProxy: { enabled: true, image: "km-http-proxy:latest" }
+    auditLog:  { enabled: true, image: "km-audit-log:latest" }
+    tracing:   { enabled: true, image: "km-tracing:latest" }
+  observability:
+    commandLog: { destination: cloudwatch, logGroup: "/klankrmkr/sandboxes" }
+    networkLog: { destination: cloudwatch, logGroup: "/klankrmkr/network" }
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+  agent:
+    maxConcurrentTasks: 4
+    taskTimeout: "30m"
+    allowedTools: [bash, read_file, write_file, list_files]
+```
+
+### `restricted-dev`
+
+Restricted development profile. Organization-scoped repos, limited refs, reduced agent concurrency.
+
+```yaml
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: restricted-dev
+  labels:
+    tier: development
+    builtin: "true"
+spec:
+  lifecycle:
+    ttl: "8h"
+    idleTimeout: "2h"
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    env:
+      SANDBOX_MODE: restricted-dev
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "github.com/whereiskurt/*"
+      allowedRefs:
+        - "main"
+        - "develop"
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+        - ".github.com"
+        - ".githubusercontent.com"
+        - ".npmjs.org"
+        - ".pypi.org"
+        - ".golang.org"
+      allowedHosts:
+        - "api.github.com"
+        - "registry.npmjs.org"
+        - "pypi.org"
+        - "pkg.go.dev"
+        - "sum.golang.org"
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions: [us-east-1]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:  { enabled: true, image: "km-dns-proxy:latest" }
+    httpProxy: { enabled: true, image: "km-http-proxy:latest" }
+    auditLog:  { enabled: true, image: "km-audit-log:latest" }
+    tracing:   { enabled: true, image: "km-tracing:latest" }
+  observability:
+    commandLog: { destination: cloudwatch, logGroup: "/klankrmkr/sandboxes" }
+    networkLog: { destination: cloudwatch, logGroup: "/klankrmkr/network" }
+    claudeTelemetry:
+      enabled: true
+      logPrompts: false
+      logToolDetails: true
+  agent:
+    maxConcurrentTasks: 2
+    taskTimeout: "20m"
+    allowedTools: [bash, read_file, write_file]
+```
 
 ### `hardened`
 
@@ -1728,7 +1797,6 @@ spec:
       allowedHosts:
         - "sts.us-east-1.amazonaws.com"
         - "ssm.us-east-1.amazonaws.com"
-      allowedMethods: [GET, POST]
   identity:
     roleSessionDuration: "1h"
     allowedRegions: [us-east-1]
@@ -1741,9 +1809,14 @@ spec:
   observability:
     commandLog: { destination: cloudwatch, logGroup: "/klankrmkr/sandboxes" }
     networkLog: { destination: cloudwatch, logGroup: "/klankrmkr/network" }
-  policy:
-    allowShellEscape: false
-    allowedCommands: [git]
+    claudeTelemetry:
+      enabled: true
+      logPrompts: false
+      logToolDetails: false
+    tlsCapture:
+      enabled: true
+      libraries: [openssl]
+      capturePayloads: false
   agent:
     maxConcurrentTasks: 2
     taskTimeout: "30m"
@@ -1781,7 +1854,6 @@ spec:
     egress:
       allowedDNSSuffixes: []
       allowedHosts: []
-      allowedMethods: []
   identity:
     roleSessionDuration: "1h"
     allowedRegions: [us-east-1]
@@ -1794,8 +1866,14 @@ spec:
   observability:
     commandLog: { destination: cloudwatch, logGroup: "/klankrmkr/sandboxes" }
     networkLog: { destination: cloudwatch, logGroup: "/klankrmkr/network" }
-  policy:
-    allowShellEscape: false
+    claudeTelemetry:
+      enabled: true
+      logPrompts: false
+      logToolDetails: false
+    tlsCapture:
+      enabled: true
+      libraries: [openssl]
+      capturePayloads: false
   agent:
     maxConcurrentTasks: 1
     taskTimeout: "15m"
@@ -1803,26 +1881,25 @@ spec:
 
 ### `goose`
 
-Goose AI agent (Block) with Bedrock access, Claude Code, Codex, MCP extensions, OTEL telemetry, EFS shared storage, and hibernation support.
+Goose AI agent (Block) with Bedrock access, Claude Code, Codex, MCP extensions, OTEL telemetry, EFS shared storage, eBPF gatekeeper enforcement, email, and hibernation support.
 
 ```yaml
 apiVersion: klankermaker.ai/v1alpha1
 kind: SandboxProfile
 metadata:
   name: goose
-  prefix: goose
   labels:
     tier: development
     tool: goose
-    builtin: "true"
+  prefix: gebpfgk
 spec:
   lifecycle:
-    ttl: "4h"
-    idleTimeout: "30m"
-    teardownPolicy: destroy
+    ttl: "1h"
+    idleTimeout: "15m"
+    teardownPolicy: stop
   runtime:
     substrate: ec2
-    spot: true
+    spot: false
     instanceType: t3.medium
     region: us-east-1
     hibernation: true
@@ -1836,173 +1913,318 @@ spec:
     workingDir: /workspace
     useBedrock: true
     env:
+      SANDBOX_MODE: goose-ebpf-gatekeeper
       GOOSE_PROVIDER: aws_bedrock
       GOOSE_MODEL: us.anthropic.claude-opus-4-6-v1
+      GOOSE_MODE: auto
+      GOOSE_TELEMETRY_ENABLED: "false"
+      CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
+      OPENAI_API_KEY: ""
+    rsyncPaths:
+      - ".gitconfig"
+      - ".config/goose"
+      - ".claude"
+      - ".claude.json"
+      - ".codex"
     initCommands:
       - "yum install -y git nodejs npm python3 python3-pip bzip2 jq tar gzip unzip"
       - "HOME=/root curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | HOME=/root CONFIGURE=false bash"
       - "npm install -g @anthropic-ai/claude-code"
+      # ... additional setup commands for goose, codex, CA certs
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos: ["whereiskurt/meshtk", "whereiskurt/defcon.run.34"]
+      allowedRefs: ["main", "develop", "feature/*", "fix/*"]
+  network:
+    enforcement: both
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+        - ".anthropic.com"
+        - ".claude.ai"
+        - ".claude.com"
+        - ".sentry.io"
+        - ".cloudfront.net"
+        - ".github.com"
+        - ".githubusercontent.com"
+        - ".npmjs.org"
+        - ".npmjs.com"
+        - ".nodejs.org"
+        - ".npmmirror.com"
+        - ".openai.com"
+        - ".chatgpt.com"
+        - ".pypi.org"
+        - ".pythonhosted.org"
+        - ".pulsemcp.com"
+        - ".google.com"
+        - ".google-analytics.com"
+        - ".googletagmanager.com"
+      allowedHosts:
+        - "github.com"
+        - "api.anthropic.com"
+        - "statsig.anthropic.com"
+        - "statsig.com"
+        - "api.statsig.com"
+        - "featuregates.org"
+        - "api.featuregates.org"
+        - "registry.npmjs.org"
+        - "nodejs.org"
+        - "api.openai.com"
+        - "chatgpt.com"
+        - "pypi.org"
+        - "files.pythonhosted.org"
+        - "pulsemcp.com"
+        - "google.com"
   budget:
-    compute:
-      maxSpendUSD: 2.00
-    ai:
-      maxSpendUSD: 5.00
+    compute: { maxSpendUSD: 0.50 }
+    ai: { maxSpendUSD: 1.00 }
+    warningThreshold: 0.80
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions: [us-east-1]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:  { enabled: true, image: "km-dns-proxy:latest" }
+    httpProxy: { enabled: true, image: "km-http-proxy:latest" }
+    auditLog:  { enabled: true, image: "km-audit-log:latest" }
+    tracing:   { enabled: true, image: "km-tracing:latest" }
+  observability:
+    commandLog: { destination: cloudwatch, logGroup: "/klankrmkr/sandboxes" }
+    networkLog: { destination: cloudwatch, logGroup: "/klankrmkr/network" }
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+    tlsCapture:
+      enabled: true
+      libraries: [openssl]
+      capturePayloads: false
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: required
+    allowedSenders: ["self"]
   agent:
     maxConcurrentTasks: 1
-    taskTimeout: "60m"
+    taskTimeout: "30m"
     allowedTools: [bash, read_file, write_file, list_files]
-```
-
-### `goose-ebpf`
-
-Goose agent with pure eBPF kernel-level enforcement. No proxy sidecars, no iptables DNAT. BPF programs enforce the allowlist directly in the kernel.
-
-```yaml
-apiVersion: klankermaker.ai/v1alpha1
-kind: SandboxProfile
-metadata:
-  name: goose-ebpf
-  prefix: gebpf
-  labels:
-    tier: development
-    tool: goose
-    builtin: "true"
-spec:
-  lifecycle:
-    ttl: "1h"
-    idleTimeout: "30m"
-    teardownPolicy: destroy
-  runtime:
-    substrate: ec2
-    spot: false
-    instanceType: t3.medium
-    region: us-east-1
-  execution:
-    useBedrock: true
-  network:
-    enforcement: ebpf    # pure eBPF — no proxy, no iptables
-  budget:
-    compute: { maxSpendUSD: 0.50 }
-    ai: { maxSpendUSD: 1.00 }
-```
-
-### `goose-ebpf-gatekeeper`
-
-Goose agent with eBPF gatekeeper mode (`both` enforcement). eBPF acts as the primary enforcer with selective connect4 DNAT rewrite to the L7 proxy for hosts requiring deep inspection (GitHub repo filtering, Bedrock token metering).
-
-```yaml
-apiVersion: klankermaker.ai/v1alpha1
-kind: SandboxProfile
-metadata:
-  name: goose-ebpf-gatekeeper
-  prefix: gebpfgk
-  labels:
-    tier: development
-    tool: goose
-    builtin: "true"
-spec:
-  lifecycle:
-    ttl: "1h"
-    idleTimeout: "30m"
-    teardownPolicy: destroy
-  runtime:
-    substrate: ec2
-    spot: false
-    instanceType: t3.medium
-    region: us-east-1
-  execution:
-    useBedrock: true
-  network:
-    enforcement: both    # eBPF gatekeeper + proxy for L7 inspection
-  budget:
-    compute: { maxSpendUSD: 0.50 }
-    ai: { maxSpendUSD: 1.00 }
 ```
 
 ### `codex`
 
-OpenAI Codex agent sandbox.
+OpenAI Codex agent sandbox with proxy enforcement, hibernation, email, and OTEL telemetry.
 
 ```yaml
 apiVersion: klankermaker.ai/v1alpha1
 kind: SandboxProfile
 metadata:
   name: codex
-  prefix: codex
   labels:
     tier: development
     tool: codex
     builtin: "true"
+  prefix: codex
 spec:
   lifecycle:
     ttl: "4h"
     idleTimeout: "30m"
-    teardownPolicy: destroy
+    teardownPolicy: stop
   runtime:
     substrate: ec2
     spot: true
     instanceType: t3.medium
     region: us-east-1
+    hibernation: true
+    additionalVolume:
+      size: 20
+      mountPoint: /data
   execution:
     shell: /bin/bash
     workingDir: /workspace
+    env:
+      SANDBOX_MODE: codex
+      CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
+      OPENAI_API_KEY: ""
+    rsyncPaths: [".gitconfig", ".codex"]
     initCommands:
-      - "yum install -y git tar gzip unzip jq"
-      - "curl -fsSL https://github.com/openai/codex/releases/latest/download/install.sh | bash"
+      - "yum install -y git nodejs npm jq tar gzip unzip"
+      - "curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.117.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz"
+      - "tar -xzf /tmp/codex.tar.gz -C /tmp && install -m 755 /tmp/codex-x86_64-unknown-linux-musl /usr/local/bin/codex"
+      # ... additional setup commands
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos: ["whereiskurt/meshtk", "whereiskurt/defcon.run.34"]
+      allowedRefs: ["main", "develop", "feature/*", "fix/*"]
+  network:
+    enforcement: proxy
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+        - ".openai.com"
+        - ".chatgpt.com"
+        - ".github.com"
+        - ".githubusercontent.com"
+        - ".sentry.io"
+        - ".cloudfront.net"
+      allowedHosts:
+        - "api.openai.com"
+        - "chatgpt.com"
+        - "github.com"
+        - "sentry.io"
   budget:
-    compute:
-      maxSpendUSD: 2.00
-    ai:
-      maxSpendUSD: 5.00
+    compute: { maxSpendUSD: 2.00 }
+    ai: { maxSpendUSD: 5.00 }
+    warningThreshold: 0.80
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions: [us-east-1]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:  { enabled: true, image: "km-dns-proxy:latest" }
+    httpProxy: { enabled: true, image: "km-http-proxy:latest" }
+    auditLog:  { enabled: true, image: "km-audit-log:latest" }
+    tracing:   { enabled: true, image: "km-tracing:latest" }
+  observability:
+    commandLog: { destination: cloudwatch, logGroup: "/klankrmkr/sandboxes" }
+    networkLog: { destination: cloudwatch, logGroup: "/klankrmkr/network" }
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: required
+    allowedSenders: ["self"]
   agent:
     maxConcurrentTasks: 1
     taskTimeout: "60m"
     allowedTools: [bash, read_file, write_file, list_files]
 ```
 
-### `agent-orchestrator`
+### `ao`
 
-Multi-agent orchestration sandbox with Claude Code, Codex, and Composio's agent-orchestrator.
+Multi-agent orchestration sandbox with Claude Code, Codex, Composio's agent-orchestrator, eBPF gatekeeper enforcement, email, and hibernation support.
 
 ```yaml
 apiVersion: klankermaker.ai/v1alpha1
 kind: SandboxProfile
 metadata:
-  name: agent-orchestrator
-  prefix: ao
+  name: ao
   labels:
     tier: development
     tool: agent-orchestrator
     builtin: "true"
+  prefix: ao
 spec:
   lifecycle:
     ttl: "8h"
     idleTimeout: "1h"
-    teardownPolicy: destroy
+    teardownPolicy: stop
   runtime:
     substrate: ec2
     spot: true
     instanceType: t3.large
     region: us-east-1
+    hibernation: true
+    additionalVolume:
+      size: 20
+      mountPoint: /data
   execution:
     shell: /bin/bash
     workingDir: /workspace
+    env:
+      SANDBOX_MODE: agent-orchestrator
+      GITHUB_TOKEN: ""
+      ANTHROPIC_BASE_URL: "https://bedrock-runtime.us-east-1.amazonaws.com"
+      CLAUDE_CODE_USE_BEDROCK: "1"
+      OPENAI_API_KEY: ""
+      CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
+    rsyncPaths: [".gitconfig", ".agent-orchestrator", ".claude", ".claude.json", ".codex"]
     initCommands:
-      - "yum install -y git tar gzip unzip jq tmux"
-      - "curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && yum install -y nodejs"
-      - "npm install -g @anthropic-ai/claude-code composio-core"
+      - "yum install -y git tmux jq tar gzip unzip"
+      - "curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - && yum install -y nodejs"
+      - "npm install -g @composio/ao @anthropic-ai/claude-code"
+      # ... additional setup commands for codex, gh, etc.
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos: ["whereiskurt/meshtk", "whereiskurt/defcon.run.34"]
+      allowedRefs: ["main", "develop", "feature/*", "fix/*"]
+  network:
+    enforcement: both
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+        - ".anthropic.com"
+        - ".claude.ai"
+        - ".claude.com"
+        - ".sentry.io"
+        - ".cloudfront.net"
+        - ".github.com"
+        - ".githubusercontent.com"
+        - ".npmjs.org"
+        - ".npmjs.com"
+        - ".nodejs.org"
+        - ".npmmirror.com"
+        - ".openai.com"
+        - ".chatgpt.com"
+        - ".pypi.org"
+        - ".pythonhosted.org"
+        - ".pulsemcp.com"
+        - ".google.com"
+        - ".google-analytics.com"
+        - ".googletagmanager.com"
+      allowedHosts:
+        - "github.com"
+        - "api.anthropic.com"
+        - "statsig.anthropic.com"
+        - "statsig.com"
+        - "api.statsig.com"
+        - "featuregates.org"
+        - "api.featuregates.org"
+        - "registry.npmjs.org"
+        - "nodejs.org"
+        - "api.openai.com"
+        - "chatgpt.com"
+        - "pypi.org"
+        - "files.pythonhosted.org"
+        - "pulsemcp.com"
+        - "google.com"
   budget:
-    compute:
-      maxSpendUSD: 4.00
-    ai:
-      maxSpendUSD: 10.00
+    compute: { maxSpendUSD: 4.00 }
+    ai: { maxSpendUSD: 10.00 }
+    warningThreshold: 0.80
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions: [us-east-1]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:  { enabled: true, image: "km-dns-proxy:latest" }
+    httpProxy: { enabled: true, image: "km-http-proxy:latest" }
+    auditLog:  { enabled: true, image: "km-audit-log:latest" }
+    tracing:   { enabled: true, image: "km-tracing:latest" }
+  observability:
+    commandLog: { destination: cloudwatch, logGroup: "/klankrmkr/sandboxes" }
+    networkLog: { destination: cloudwatch, logGroup: "/klankrmkr/network" }
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: required
+    allowedSenders: ["self"]
   agent:
     maxConcurrentTasks: 4
     taskTimeout: "120m"
     allowedTools: [bash, read_file, write_file, list_files]
 ```
 
-### `learn`
+### `learn` (not a built-in -- lives in `profiles/learn.yaml`)
 
 Permissive profile designed for traffic observation. Wide-open DNS suffixes covering common TLDs, `enforcement: both` for eBPF + proxy capture, `privileged: true` for sudo access, and `learnMode: true` to record traffic. Use with `km shell --learn` to generate a minimal SandboxProfile from observed traffic.
 
@@ -2080,23 +2302,29 @@ km validate observed-profile.yaml     # validate, then use for production sandbo
 
 ## Built-in Profile Comparison
 
-| Field | hardened | sealed | goose | goose-ebpf | goose-ebpf-gatekeeper | codex | ao | learn |
-|-------|----------|--------|-------|------------|----------------------|-------|----|-------|
-| `lifecycle.ttl` | 4h | 1h | 4h | 1h | 1h | 4h | 8h | 2h |
-| `lifecycle.idleTimeout` | 1h | 30m | 30m | 30m | 30m | 30m | 1h | 30m |
-| `runtime.instanceType` | t3.small | t3.micro | t3.medium | t3.medium | t3.medium | t3.medium | t3.large | t3.medium |
-| `runtime.spot` | true | true | true | false | false | true | true | true |
-| `runtime.hibernation` | -- | -- | true | -- | -- | -- | -- | -- |
-| `runtime.mountEFS` | -- | -- | true | -- | -- | -- | -- | -- |
-| `network.enforcement` | proxy | proxy | proxy | ebpf | both | proxy | proxy | both |
+| Field | open-dev | restricted-dev | hardened | sealed | goose | codex | ao | learn* |
+|-------|----------|----------------|----------|--------|-------|-------|----|--------|
+| `lifecycle.ttl` | 24h | 8h | 4h | 1h | 1h | 4h | 8h | 2h |
+| `lifecycle.idleTimeout` | 4h | 2h | 1h | 30m | 15m | 30m | 1h | 30m |
+| `lifecycle.teardownPolicy` | destroy | destroy | destroy | destroy | stop | stop | stop | destroy |
+| `runtime.instanceType` | t3.medium | t3.medium | t3.small | t3.micro | t3.medium | t3.medium | t3.large | t3.medium |
+| `runtime.spot` | true | true | true | true | false | true | true | true |
+| `runtime.hibernation` | -- | -- | -- | -- | true | true | true | -- |
+| `runtime.mountEFS` | -- | -- | -- | -- | true | -- | -- | -- |
+| `runtime.additionalVolume` | -- | -- | -- | -- | 20 GB | 20 GB | 20 GB | -- |
+| `network.enforcement` | proxy | proxy | proxy | proxy | both | proxy | both | both |
 | `execution.privileged` | -- | -- | -- | -- | -- | -- | -- | true |
-| `execution.useBedrock` | -- | -- | true | true | true | -- | -- | -- |
+| `execution.useBedrock` | -- | -- | -- | -- | true | -- | -- | -- |
 | `observability.learnMode` | -- | -- | -- | -- | -- | -- | -- | true |
-| `metadata.prefix` | sb | sb | goose | gebpf | gebpfgk | codex | ao | learn |
-| `budget.compute.maxSpendUSD` | -- | -- | $2.00 | $0.50 | $0.50 | $2.00 | $4.00 | $2.00 |
-| `budget.ai.maxSpendUSD` | -- | -- | $5.00 | $1.00 | $1.00 | $5.00 | $10.00 | $0.00 |
-| `agent.maxConcurrentTasks` | 2 | 1 | 1 | 1 | 1 | 1 | 4 | 1 |
-| `agent.taskTimeout` | 30m | 15m | 60m | 60m | 60m | 60m | 120m | 30m |
+| `observability.tlsCapture` | -- | -- | true | true | true | -- | -- | true |
+| `metadata.prefix` | sb | sb | sb | sb | gebpfgk | codex | ao | learn |
+| `budget.compute.maxSpendUSD` | -- | -- | -- | -- | $0.50 | $2.00 | $4.00 | $2.00 |
+| `budget.ai.maxSpendUSD` | -- | -- | -- | -- | $1.00 | $5.00 | $10.00 | $0.00 |
+| `email` | -- | -- | -- | -- | required | required | required | -- |
+| `agent.maxConcurrentTasks` | 4 | 2 | 2 | 1 | 1 | 1 | 4 | 1 |
+| `agent.taskTimeout` | 30m | 20m | 30m | 15m | 30m | 60m | 120m | 30m |
+
+*\* `learn` is not a built-in profile; it lives in `profiles/learn.yaml`.*
 
 ---
 
@@ -2126,22 +2354,6 @@ spec:
         - "pkg.go.dev"
         - "sum.golang.org"
         - "my-internal-registry.com"     # added
-      allowedMethods:
-        - GET
-        - POST
-```
-
-### Restricting HTTP methods
-
-To allow only read operations through the proxy:
-
-```yaml
-spec:
-  network:
-    egress:
-      allowedMethods:
-        - GET
-        - HEAD
 ```
 
 ### Pinning to a specific git ref
@@ -2157,8 +2369,6 @@ spec:
         - "github.com/my-org/my-repo"
       allowedRefs:
         - "release/v2.0"
-      permissions:
-        - read
 ```
 
 ### Enabling artifact collection

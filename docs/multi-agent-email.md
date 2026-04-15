@@ -81,14 +81,19 @@ The SES infrastructure is provisioned by the Terraform module at `infra/modules/
 
 The receipt rule matches all addresses at the domain and stores inbound messages to the artifacts bucket under the `mail/` prefix.
 
+### Operator-Inbound Receipt Rule (Optional)
+
+When `email_create_handler_arn` is set, the module creates a higher-priority receipt rule (`km-operator-inbound`, position 1) that matches `operator@{domain}` specifically. This rule stores email to the `mail/create/` S3 prefix instead of the general `mail/` prefix. An S3 event notification on `mail/create/` triggers the email-create-handler Lambda, which processes operator-inbound messages (e.g., to provision sandboxes via email commands). The general `sandbox-inbound` rule (position 2) handles all other addresses and runs after the operator rule.
+
 ### Terraform Variables
 
-The module requires four inputs:
+The module requires four inputs (plus one optional):
 
 - `domain` -- the email subdomain (e.g., `sandboxes.klankermaker.ai`)
 - `route53_zone_id` -- hosted zone ID for DNS record creation
 - `artifact_bucket_name` -- S3 bucket name for inbound email storage
 - `artifact_bucket_arn` -- ARN of the artifact bucket (used in the bucket policy)
+- `email_create_handler_arn` -- (optional, defaults to `""`) ARN of the email-create-handler Lambda; when non-empty, creates the `km-operator-inbound` receipt rule and S3 notification to route `operator@{domain}` emails to `mail/create/` and trigger the Lambda
 
 ## Inbound Email Flow
 
@@ -110,21 +115,21 @@ Receipt rule: sandbox-inbound
 S3 action: s3://{artifact-bucket}/mail/{message-id}
 ```
 
-The SES receipt rule stores the raw email object in S3 under the `mail/` prefix in the artifacts bucket. The S3 bucket policy grants `ses.amazonaws.com` the `s3:PutObject` permission on the `mail/*` path, scoped to the owning AWS account via an `aws:Referer` condition.
+The SES receipt rule stores the raw email object in S3 under the `mail/` prefix in the artifacts bucket. The S3 bucket policy grants `ses.amazonaws.com` the `s3:PutObject` permission on the `mail/*` path, scoped to the owning AWS account via an `aws:SourceAccount` condition.
 
 Agents poll their inbox by listing and reading objects from S3:
 
 ```bash
-# List inbox messages
+# List inbox messages (SES stores objects under mail/ with message-id keys)
 aws s3api list-objects-v2 \
   --bucket "$KM_ARTIFACTS_BUCKET" \
-  --prefix "mail/$SANDBOX_ID/" \
+  --prefix "mail/" \
   --query 'Contents[].Key'
 
 # Read a specific message
 aws s3api get-object \
   --bucket "$KM_ARTIFACTS_BUCKET" \
-  --key "mail/$SANDBOX_ID/inbox/abc123" \
+  --key "mail/<message-id>" \
   /tmp/message.eml
 ```
 
@@ -214,7 +219,7 @@ km email read <sandbox-ref> [--json] [--raw] [--mark-read] [--message-id <id>]
 | `--mark-read` | `false` | Move messages from `new/` to `processed/` |
 | `--message-id` | | Specific message ID (defaults to latest with `--raw`) |
 
-Output is a summary table: `#`, `FROM`, `SUBJECT`, `SIG` (verified/failed/no-key/unsigned), `ENC` (yes/no), `BODY PREVIEW`. Messages stay in `new/` unless `--mark-read` is passed.
+Output is a summary table: `#`, `FROM`, `SUBJECT`, `SIG` (OK/FAIL/plain/?), `ENC` (yes/no), `BODY PREVIEW`. Messages stay in `new/` unless `--mark-read` is passed.
 
 ```bash
 km email read alice                 # human-readable table
@@ -522,13 +527,13 @@ spec:
 
 | Profile | signing | verifyInbound | encryption | allowedSenders |
 |---------|---------|---------------|------------|----------------|
-| `hardened` | `required` | `required` | `off` | `["self"]` |
-| `sealed` | `required` | `required` | `off` | `["self"]` |
-| `goose` | `required` | `required` | `off` | `["self"]` |
-| `goose-ebpf` | `required` | `required` | `off` | `["self"]` |
-| `goose-ebpf-gatekeeper` | `required` | `required` | `off` | `["self"]` |
+| `goose` | `required` | `required` | `required` | `["self"]` |
+| `ao` | `required` | `required` | `required` | `["self"]` |
+| `codex` | `required` | `required` | `required` | `["self"]` |
+| `hardened` | *(no email block)* | *(no email block)* | *(no email block)* | *(no email block)* |
+| `sealed` | *(no email block)* | *(no email block)* | *(no email block)* | *(no email block)* |
 
-All built-in profiles enforce full signing and restrict inbound to self-mail only. Custom profiles can relax these settings for inter-sandbox communication.
+Profiles with `spec.email` defined (`goose`, `ao`, `codex`) enforce full signing, required encryption, and restrict inbound to self-mail only. Profiles without an email block (`hardened`, `sealed`) inherit the `nil` default -- email policy is not enforced and plain email is used (see "How nil Behaves" above). Custom profiles can relax these settings for inter-sandbox communication.
 
 ---
 
@@ -738,17 +743,6 @@ spec:
       enabled: true
       image: km-audit-log:latest
 
-  policy:
-    allowShellEscape: false
-    allowedCommands:
-      - bash
-      - python3
-      - aws
-    filesystemPolicy:
-      writablePaths:
-        - /workspace
-        - /tmp
-
   agent:
     maxConcurrentTasks: 1
     taskTimeout: "30m"
@@ -796,9 +790,6 @@ spec:
       allowedRefs:
         - "main"
         - "feature/*"
-      permissions:
-        - read
-        - write
 
   network:
     egress:
@@ -812,11 +803,6 @@ spec:
         - "github.com"
         - "sum.golang.org"
         - "pkg.go.dev"
-      allowedMethods:
-        - GET
-        - POST
-        - PUT
-        - PATCH
 
   identity:
     roleSessionDuration: "1h"
@@ -839,20 +825,6 @@ spec:
     paths:
       - /workspace/output
     maxSizeMB: 100
-
-  policy:
-    allowShellEscape: false
-    allowedCommands:
-      - git
-      - go
-      - bash
-      - python3
-      - aws
-    filesystemPolicy:
-      writablePaths:
-        - /workspace
-        - /tmp
-        - /home
 
   agent:
     maxConcurrentTasks: 4
@@ -902,8 +874,6 @@ spec:
       allowedRefs:
         - "main"
         - "feature/*"
-      permissions:
-        - read
 
   network:
     egress:
@@ -914,8 +884,6 @@ spec:
       allowedHosts:
         - "api.github.com"
         - "github.com"
-      allowedMethods:
-        - GET
 
   identity:
     roleSessionDuration: "1h"
@@ -933,21 +901,6 @@ spec:
     auditLog:
       enabled: true
       image: km-audit-log:latest
-
-  policy:
-    allowShellEscape: false
-    allowedCommands:
-      - git
-      - go
-      - bash
-      - python3
-      - aws
-    filesystemPolicy:
-      readOnlyPaths:
-        - /etc
-      writablePaths:
-        - /workspace
-        - /tmp
 
   agent:
     maxConcurrentTasks: 2
@@ -1175,7 +1128,7 @@ sb-plan0001              sb-work0002              sb-revw0003
 
 Email is deliberately the only mechanism through which sandboxes can communicate. This is enforced at multiple layers:
 
-- **Network isolation.** Sandboxes run in separate VPCs (or ECS tasks with no shared networking). The DNS proxy and HTTP proxy do not route traffic between sandboxes. There is no inter-sandbox network path.
+- **Network isolation.** Sandboxes share a regional VPC with Security Groups blocking all cross-sandbox traffic. The DNS proxy and HTTP proxy do not route traffic between sandboxes. There is no inter-sandbox network path.
 - **IAM isolation.** Each sandbox has its own IAM role. No cross-account or cross-role trust policies exist between sandboxes. A sandbox cannot assume another sandbox's role.
 - **SES sender validation.** The IAM policy for each sandbox restricts `ses:SendEmail` and `ses:SendRawEmail` to the sandbox's own `From` address using a `ses:FromAddress` condition. A sandbox cannot send email pretending to be another sandbox.
 
