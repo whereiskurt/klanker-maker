@@ -187,6 +187,15 @@ resource "aws_iam_role_policy" "terraform_destroy" {
         Resource = "*"
       },
       {
+        Sid    = "SSMAgentRun"
+        Effect = "Allow"
+        Action = [
+          "ssm:SendCommand",
+          "ssm:GetCommandInvocation",
+        ]
+        Resource = "*"
+      },
+      {
         Sid    = "IAMSandboxDestroy"
         Effect = "Allow"
         Action = [

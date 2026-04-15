@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +37,7 @@ import (
 	kmspkg "github.com/aws/aws-sdk-go-v2/service/kms"
 	lambdapkg "github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	ssmpkg "github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	schedulertypes "github.com/aws/aws-sdk-go-v2/service/scheduler/types"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
@@ -63,6 +65,10 @@ type TTLEvent struct {
 	BudgetCompute float64 `json:"budget_compute,omitempty"`
 	// BudgetAI is the USD amount to add to AI budget (budget-add events).
 	BudgetAI float64 `json:"budget_ai,omitempty"`
+	// Agent-run fields.
+	Prompt    string `json:"prompt,omitempty"`
+	NoBedrock bool   `json:"no_bedrock,omitempty"`
+	AutoStart bool   `json:"auto_start,omitempty"`
 	// Schedule fields for "schedule-create" events (relay from email Lambda).
 	ScheduleTime   string `json:"schedule_time,omitempty"`    // natural language time expression
 	ArtifactBucket string `json:"artifact_bucket,omitempty"`
@@ -106,6 +112,7 @@ type TTLHandler struct {
 	CWClient         awspkg.CWLogsAPI
 	OperatorEmail    string
 	Domain           string
+	SSMClient *ssmpkg.Client
 	// TeardownFunc destroys the sandbox resources after TTL expiry or idle detection.
 	// If nil, teardown is skipped (backward compatible with existing tests).
 	TeardownFunc func(ctx context.Context, sandboxID string) error
@@ -127,6 +134,8 @@ func (h *TTLHandler) HandleTTLEvent(ctx context.Context, event TTLEvent) error {
 		return h.handleExtend(ctx, event)
 	case "budget-add":
 		return h.handleBudgetAdd(ctx, event)
+	case "agent-run":
+		return h.handleAgentRun(ctx, event)
 	case "schedule-create":
 		return h.handleScheduleCreate(ctx, event)
 	default:
@@ -388,6 +397,155 @@ func (h *TTLHandler) handleBudgetAdd(ctx context.Context, event TTLEvent) error 
 	log.Info().Str("sandbox_id", event.SandboxID).
 		Float64("compute_added", event.BudgetCompute).Float64("ai_added", event.BudgetAI).
 		Msg("budget increased")
+	return nil
+}
+
+// handleAgentRun dispatches an agent prompt to a sandbox via SSM SendCommand.
+// Optionally resumes the sandbox first if --auto-start was specified.
+func (h *TTLHandler) handleAgentRun(ctx context.Context, event TTLEvent) error {
+	log.Info().Str("sandbox_id", event.SandboxID).Bool("auto_start", event.AutoStart).
+		Msg("agent-run event received")
+
+	if event.Prompt == "" {
+		return fmt.Errorf("agent-run: prompt is required")
+	}
+
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, "")
+	if err != nil {
+		return fmt.Errorf("load AWS config: %w", err)
+	}
+	ec2Client := ec2pkg.NewFromConfig(awsCfg)
+
+	// Find instance by sandbox tag
+	descOut, err := ec2Client.DescribeInstances(ctx, &ec2pkg.DescribeInstancesInput{
+		Filters: []ec2types.Filter{
+			{Name: awssdk.String("tag:km:sandbox-id"), Values: []string{event.SandboxID}},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("describe instances: %w", err)
+	}
+
+	var instanceID string
+	var instanceState string
+	for _, res := range descOut.Reservations {
+		for _, inst := range res.Instances {
+			state := string(inst.State.Name)
+			if state == "terminated" || state == "shutting-down" {
+				continue
+			}
+			instanceID = awssdk.ToString(inst.InstanceId)
+			instanceState = state
+		}
+	}
+	if instanceID == "" {
+		return fmt.Errorf("no instance found for sandbox %s", event.SandboxID)
+	}
+
+	// If instance is stopped/hibernated and auto-start requested, resume it
+	if instanceState != "running" {
+		if !event.AutoStart {
+			return fmt.Errorf("sandbox %s is %s — use --auto-start to resume automatically", event.SandboxID, instanceState)
+		}
+		log.Info().Str("instance", instanceID).Str("state", instanceState).Msg("resuming instance for agent-run")
+		if _, err := ec2Client.StartInstances(ctx, &ec2pkg.StartInstancesInput{
+			InstanceIds: []string{instanceID},
+		}); err != nil {
+			return fmt.Errorf("start instance %s: %w", instanceID, err)
+		}
+		// Wait for running state
+		for i := 0; i < 36; i++ {
+			time.Sleep(5 * time.Second)
+			desc, err := ec2Client.DescribeInstances(ctx, &ec2pkg.DescribeInstancesInput{
+				InstanceIds: []string{instanceID},
+			})
+			if err == nil {
+				for _, res := range desc.Reservations {
+					for _, inst := range res.Instances {
+						if string(inst.State.Name) == "running" {
+							instanceState = "running"
+						}
+					}
+				}
+			}
+			if instanceState == "running" {
+				break
+			}
+		}
+		if instanceState != "running" {
+			return fmt.Errorf("instance %s did not reach running state", instanceID)
+		}
+		// Update DynamoDB status back to running
+		if h.DynamoClient != nil {
+			_ = awspkg.UpdateSandboxStatusDynamo(ctx, h.DynamoClient, h.SandboxTableName, event.SandboxID, "running")
+		}
+		// Wait for SSM agent to register
+		time.Sleep(15 * time.Second)
+	}
+
+	// Build agent shell commands (same pattern as BuildAgentShellCommands in agent.go)
+	ssmClient := h.SSMClient
+	if ssmClient == nil {
+		ssmClient = ssmpkg.NewFromConfig(awsCfg)
+	}
+
+	b64Prompt := base64.StdEncoding.EncodeToString([]byte(event.Prompt))
+	runID := time.Now().UTC().Format("20060102T150405Z")
+	noBedrockLines := ""
+	if event.NoBedrock {
+		noBedrockLines = `unset CLAUDE_CODE_USE_BEDROCK
+unset ANTHROPIC_BASE_URL
+unset ANTHROPIC_DEFAULT_SONNET_MODEL
+unset ANTHROPIC_DEFAULT_HAIKU_MODEL
+unset ANTHROPIC_DEFAULT_OPUS_MODEL
+if [ -z "$ANTHROPIC_API_KEY" ] && [ -f "$HOME/.claude/.credentials.json" ]; then
+  OAUTH_TOKEN=$(python3 -c "import json; d=json.load(open('$HOME/.claude/.credentials.json')); print(d.get('claudeAiOauth',{}).get('accessToken',''))" 2>/dev/null)
+  if [ -n "$OAUTH_TOKEN" ]; then export ANTHROPIC_API_KEY="$OAUTH_TOKEN"; fi
+fi`
+	}
+
+	bucket := h.Bucket
+	script := fmt.Sprintf(`#!/bin/bash
+export HOME=/home/sandbox
+source /etc/profile.d/km-profile-env.sh 2>/dev/null
+source /etc/profile.d/km-identity.sh 2>/dev/null
+%s
+KM_ARTIFACTS_BUCKET="%s"
+cd /workspace
+RUN_ID="%s"
+RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
+mkdir -p "$RUN_DIR"
+echo "running" > "$RUN_DIR/status"
+PROMPT=$(echo "%s" | base64 -d)
+claude -p "$PROMPT" --output-format json --dangerously-skip-permissions --bare \
+  > "$RUN_DIR/output.json" 2>"$RUN_DIR/stderr.log"
+EC=$?
+if [ $EC -eq 0 ]; then echo "complete" > "$RUN_DIR/status"; else echo "failed" > "$RUN_DIR/status"; echo "$EC" > "$RUN_DIR/exit_code"; fi
+if [ -n "$KM_ARTIFACTS_BUCKET" ] && [ -n "$KM_SANDBOX_ID" ]; then
+  aws s3 cp "$RUN_DIR/output.json" "s3://$KM_ARTIFACTS_BUCKET/agent-runs/$KM_SANDBOX_ID/$RUN_ID/output.json" --quiet 2>/dev/null || true
+  aws s3 cp "$RUN_DIR/status" "s3://$KM_ARTIFACTS_BUCKET/agent-runs/$KM_SANDBOX_ID/$RUN_ID/status" --quiet 2>/dev/null || true
+fi
+tmux wait-for -S km-done-%s`, noBedrockLines, bucket, runID, b64Prompt, runID)
+
+	sessionName := fmt.Sprintf("km-agent-%s", runID)
+	cmds := []string{
+		fmt.Sprintf("cat > /tmp/km-agent-run.sh << 'KMEOF'\n%s\nKMEOF", script),
+		"chmod +x /tmp/km-agent-run.sh",
+		fmt.Sprintf("sudo -u sandbox bash -c \"tmux new-session -d -s '%s' '/tmp/km-agent-run.sh; exec bash'\"", sessionName),
+	}
+
+	_, err = ssmClient.SendCommand(ctx, &ssmpkg.SendCommandInput{
+		InstanceIds:    []string{instanceID},
+		DocumentName:   awssdk.String("AWS-RunShellScript"),
+		TimeoutSeconds: awssdk.Int32(600),
+		Parameters:     map[string][]string{"commands": cmds},
+	})
+	if err != nil {
+		return fmt.Errorf("send agent command via SSM to %s: %w", instanceID, err)
+	}
+
+	log.Info().Str("sandbox_id", event.SandboxID).Str("instance", instanceID).
+		Str("run_id", runID).Msg("agent dispatched via SSM")
 	return nil
 }
 
@@ -1193,6 +1351,7 @@ func main() {
 		SESClient:        sesv2.NewFromConfig(awsCfg),
 		Scheduler:        scheduler.NewFromConfig(awsCfg),
 		CWClient:         cloudwatchlogs.NewFromConfig(awsCfg),
+		SSMClient:        ssmpkg.NewFromConfig(awsCfg),
 		Bucket:           bucket,
 		StateBucket:      os.Getenv("KM_STATE_BUCKET"),
 		StatePrefix:      os.Getenv("KM_STATE_PREFIX"),
