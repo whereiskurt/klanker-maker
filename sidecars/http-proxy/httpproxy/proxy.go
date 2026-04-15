@@ -122,6 +122,9 @@ func IsHostAllowed(host string, allowed []string) bool {
 	}
 	h = strings.ToLower(h)
 	for _, a := range allowed {
+		if a == "*" {
+			return true
+		}
 		a = strings.ToLower(a)
 		if strings.HasPrefix(a, ".") {
 			// Suffix match: ".amazonaws.com" matches "x.y.amazonaws.com"

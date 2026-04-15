@@ -26,6 +26,8 @@ type Allowlist struct {
 	// suffixes stores the normalized allowed suffixes (lowercase, no leading
 	// dot). The IsAllowed logic mirrors sidecars/dns-proxy/dnsproxy.IsAllowed.
 	suffixes []string
+	// allowAll is true when the suffixes list contains "*", meaning all domains are permitted.
+	allowAll bool
 
 	mu       sync.RWMutex
 	resolved map[string]resolvedEntry // domain (without trailing dot) -> entry
@@ -35,8 +37,13 @@ type Allowlist struct {
 // Suffixes are normalized: lowercased, trailing dots stripped, leading dots
 // stripped. Both ".github.com" and "github.com" are equivalent.
 func NewAllowlist(suffixes []string) *Allowlist {
+	allowAll := false
 	normalized := make([]string, 0, len(suffixes))
 	for _, s := range suffixes {
+		if s == "*" {
+			allowAll = true
+			continue
+		}
 		s = strings.ToLower(strings.TrimSuffix(s, "."))
 		s = strings.TrimPrefix(s, ".") // handle ".amazonaws.com" format
 		if s != "" {
@@ -45,6 +52,7 @@ func NewAllowlist(suffixes []string) *Allowlist {
 	}
 	return &Allowlist{
 		suffixes: normalized,
+		allowAll: allowAll,
 		resolved: make(map[string]resolvedEntry),
 	}
 }
@@ -57,6 +65,9 @@ func NewAllowlist(suffixes []string) *Allowlist {
 //
 // This is the same algorithm as sidecars/dns-proxy/dnsproxy.IsAllowed.
 func (a *Allowlist) IsAllowed(name string) bool {
+	if a.allowAll {
+		return true
+	}
 	name = strings.TrimSuffix(name, ".")
 	name = strings.ToLower(name)
 	if name == "" {

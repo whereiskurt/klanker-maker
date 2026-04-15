@@ -20,6 +20,9 @@ func IsAllowed(name string, suffixes []string) bool {
 	name = strings.ToLower(name)
 
 	for _, s := range suffixes {
+		if s == "*" {
+			return true
+		}
 		s = strings.ToLower(strings.TrimSuffix(s, "."))
 		s = strings.TrimPrefix(s, ".") // handle ".amazonaws.com" format from profile
 		if name == s || strings.HasSuffix(name, "."+s) {

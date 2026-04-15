@@ -275,15 +275,29 @@ func runEbpfAttach(
 	// Without this, the first connection attempt to any allowed host would fail
 	// because connect4 blocks before DNS resolution can populate the trie.
 	var hostsToResolve []string
+	allowAllHosts := false
 	if allowedHosts != "" {
 		for _, h := range strings.Split(allowedHosts, ",") {
 			h = strings.TrimSpace(h)
 			if h == "" {
 				continue
 			}
+			if h == "*" {
+				allowAllHosts = true
+				continue
+			}
 			// Strip leading dot from DNS suffix entries (e.g. ".amazonaws.com")
 			h = strings.TrimPrefix(h, ".")
 			hostsToResolve = append(hostsToResolve, h)
+		}
+	}
+
+	// Wildcard: allow all IPs via 0.0.0.0/0 CIDR
+	if allowAllHosts {
+		if err := enforcer.AllowCIDR("0.0.0.0/0"); err != nil {
+			logger.Warn().Err(err).Msg("failed to seed wildcard CIDR 0.0.0.0/0")
+		} else {
+			logger.Info().Msg("wildcard (*) — seeded 0.0.0.0/0 in BPF allowlist")
 		}
 	}
 
