@@ -222,10 +222,12 @@ func (h *TTLHandler) handleStop(ctx context.Context, event TTLEvent) error {
 		if hibernate {
 			status = "paused"
 		}
-		if statusErr := awspkg.UpdateSandboxStatusDynamo(ctx, h.DynamoClient, h.SandboxTableName, event.SandboxID, status); statusErr != nil {
+		// Clear ttl_expiry so DynamoDB's native TTL doesn't auto-delete the record.
+		// The sandbox should remain visible in km list until explicitly destroyed.
+		if statusErr := awspkg.UpdateSandboxStatusAndClearTTL(ctx, h.DynamoClient, h.SandboxTableName, event.SandboxID, status); statusErr != nil {
 			log.Warn().Err(statusErr).Str("sandbox_id", event.SandboxID).Msg("failed to update DynamoDB status (non-fatal)")
 		} else {
-			log.Info().Str("sandbox_id", event.SandboxID).Str("status", status).Msg("DynamoDB status updated")
+			log.Info().Str("sandbox_id", event.SandboxID).Str("status", status).Msg("DynamoDB status updated, ttl_expiry cleared")
 		}
 	}
 

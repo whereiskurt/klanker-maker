@@ -141,6 +141,12 @@ func runStop(ctx context.Context, cfg *config.Config, sandboxID string) error {
 		return fmt.Errorf("no running instances found for sandbox %s", sandboxID)
 	}
 
+	// Update metadata status to "stopped" and clear ttl_expiry so DynamoDB's native TTL
+	// doesn't auto-delete the record while the sandbox is stopped.
+	if statusErr := awspkg.UpdateSandboxStatusAndClearTTL(ctx, dynamoClient, tableName, sandboxID, "stopped"); statusErr != nil {
+		fmt.Printf(ansiYellow+"  [warn] could not update metadata: %v"+ansiReset+"\n", statusErr)
+	}
+
 	fmt.Printf(ansiGreen+"Sandbox %s stopped."+ansiReset+" Use 'km resume %s' to restart.\n", sandboxID, sandboxID)
 	return nil
 }

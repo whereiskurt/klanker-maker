@@ -470,3 +470,26 @@ func UpdateSandboxStatusDynamo(ctx context.Context, client SandboxMetadataAPI, t
 	}
 	return nil
 }
+
+// UpdateSandboxStatusAndClearTTL updates the status field AND removes the ttl_expiry
+// attribute so DynamoDB's native TTL doesn't auto-delete the record. Used when
+// teardownPolicy=stop to preserve the record for later resume or explicit destroy.
+func UpdateSandboxStatusAndClearTTL(ctx context.Context, client SandboxMetadataAPI, tableName, sandboxID, status string) error {
+	_, err := client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: awssdk.String(tableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+		},
+		UpdateExpression: awssdk.String("SET #s = :status REMOVE ttl_expiry"),
+		ExpressionAttributeNames: map[string]string{
+			"#s": "status",
+		},
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":status": &dynamodbtypes.AttributeValueMemberS{Value: status},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("update status and clear TTL for sandbox %s: %w", sandboxID, err)
+	}
+	return nil
+}

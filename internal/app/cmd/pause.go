@@ -159,8 +159,9 @@ func runPause(ctx context.Context, cfg *config.Config, sandboxID string) error {
 		return fmt.Errorf("no running instances found for sandbox %s", sandboxID)
 	}
 
-	// Update metadata status to "paused" via DynamoDB (S3 fallback handled silently on error).
-	if statusErr := awspkg.UpdateSandboxStatusDynamo(ctx, dynamoClient, tableName, sandboxID, "paused"); statusErr != nil {
+	// Update metadata status to "paused" and clear ttl_expiry so DynamoDB's native TTL
+	// doesn't auto-delete the record while the sandbox is paused.
+	if statusErr := awspkg.UpdateSandboxStatusAndClearTTL(ctx, dynamoClient, tableName, sandboxID, "paused"); statusErr != nil {
 		fmt.Printf(ansiYellow+"  [warn] could not update metadata: %v"+ansiReset+"\n", statusErr)
 	}
 
