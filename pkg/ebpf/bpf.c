@@ -104,6 +104,12 @@ struct {
  * HELPER: emit_event
  * Emits a structured event to the ring buffer.
  * Callers set src_ip, dst_ip, dst_port, action, layer before calling.
+ *
+ * bpf_get_current_pid_tgid() and bpf_get_current_comm() require process
+ * context (available in cgroup/connect4, cgroup/sendmsg4, sockops).
+ * cgroup_skb/egress fires in packet/softirq context with no current task,
+ * so those helpers are forbidden by the BPF verifier (kernel 6.12+).
+ * Use emit_event_skb() for packet-level programs instead.
  * ════════════════════════════════════════════════════════════════════ */
 static __always_inline void emit_event(__u32 src_ip, __u32 dst_ip,
                                         __u16 dst_port, __u8 action,
@@ -121,6 +127,28 @@ static __always_inline void emit_event(__u32 src_ip, __u32 dst_ip,
     e->action    = action;
     e->layer     = layer;
     bpf_get_current_comm(e->comm, sizeof(e->comm));
+
+    bpf_ringbuf_submit(e, 0);
+}
+
+/* emit_event_skb: variant for cgroup_skb programs (packet context, no task).
+ * pid and comm are zeroed since there is no process context available. */
+static __always_inline void emit_event_skb(__u32 src_ip, __u32 dst_ip,
+                                            __u16 dst_port, __u8 action,
+                                            __u8 layer)
+{
+    struct event *e = bpf_ringbuf_reserve(&events, sizeof(struct event), 0);
+    if (!e)
+        return;
+
+    e->timestamp = bpf_ktime_get_ns();
+    e->pid       = 0;
+    e->src_ip    = src_ip;
+    e->dst_ip    = dst_ip;
+    e->dst_port  = dst_port;
+    e->action    = action;
+    e->layer     = layer;
+    __builtin_memset(e->comm, 0, sizeof(e->comm));
 
     bpf_ringbuf_submit(e, 0);
 }
@@ -331,7 +359,7 @@ int egress_filter(struct __sk_buff *skb)
             dst_port = bpf_ntohs(port_be);
         }
 
-        emit_event(iph.saddr, dst_ip, dst_port, ACTION_DENY, LAYER_EGRESS_SKB);
+        emit_event_skb(iph.saddr, dst_ip, dst_port, ACTION_DENY, LAYER_EGRESS_SKB);
 
         if (const_firewall_mode == MODE_BLOCK)
             return 0; /* drop packet */
