@@ -15,7 +15,7 @@ locals {
   # AMI slug resolution (Phase 33): map of slug → { name_pattern, owner }
   ami_filters = {
     "amazon-linux-2023" = {
-      name_pattern = "al2023-ami-2023.*-x86_64"
+      name_pattern = "al2023-ami-2023.*-kernel-6.1-x86_64"
       owner        = "amazon"
     }
     "ubuntu-24.04" = {
