@@ -56,7 +56,7 @@ spec:
       - "cat /usr/local/share/ca-certificates/km-proxy-ca.crt >> /etc/pki/tls/certs/ca-bundle.crt"
       - "echo export SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt >> /etc/profile.d/km-zz-goose-otel.sh"
       - "mkdir -p /home/sandbox/.local/bin && cp /usr/local/bin/goose-bin /usr/local/bin/goose && cp /usr/local/bin/goose /home/sandbox/.local/bin/goose || true"
-      - "npm install -g @anthropic-ai/claude-code"
+      - "npm install -g @anthropic-ai/claude-code@2.1.108"
       - "curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.117.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz"
       - "tar -xzf /tmp/codex.tar.gz -C /tmp && install -m 755 /tmp/codex-x86_64-unknown-linux-musl /usr/local/bin/codex"
       - "mkdir -p /home/sandbox/.config/goose /home/sandbox/.codex && chown -R sandbox:sandbox /home/sandbox/.codex"

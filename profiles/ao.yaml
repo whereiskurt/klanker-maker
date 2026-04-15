@@ -54,7 +54,7 @@ spec:
       - "curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - && yum install -y nodejs"
       - "yum install -y dnf-plugins-core"
       - "dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo && dnf install -y gh"
-      - "npm install -g @composio/ao @anthropic-ai/claude-code"
+      - "npm install -g @composio/ao @anthropic-ai/claude-code@2.1.108"
       - "curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.117.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz"
       - "tar -xzf /tmp/codex.tar.gz -C /tmp && install -m 755 /tmp/codex-x86_64-unknown-linux-musl /usr/local/bin/codex"
       - "mkdir -p /home/sandbox/.codex"
