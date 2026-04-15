@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -158,17 +159,25 @@ func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 
 // NOTE: runAgent has been moved to agent.go.
 
+// ssmRetryMaxAttempts is the number of times to retry a transient SSM connection failure.
+const ssmRetryMaxAttempts = 3
+
+// ssmRetryThreshold is the minimum session duration to consider "connected".
+// Sessions that fail faster than this are treated as transient connection errors.
+const ssmRetryThreshold = 10 * time.Second
+
+// ssmRetryDelay is the pause between retry attempts.
+const ssmRetryDelay = 3 * time.Second
+
 // execSSMSession builds and runs an SSM session.
 // When root is false, it runs: sudo -u sandbox -i (restricted non-root user).
 // When root is true, it starts a standard root SSM session.
 func execSSMSession(ctx context.Context, instanceID, region string, root, noBedrock bool, execFn ShellExecFunc) error {
 	if root {
-		c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
-			"--target", instanceID, "--region", region, "--profile", "klanker-terraform")
-		c.Stdin = os.Stdin
-		c.Stdout = os.Stdout
-		c.Stderr = os.Stderr
-		return execFn(c)
+		return execSSMWithRetry(ctx, func() *exec.Cmd {
+			return exec.CommandContext(ctx, "aws", "ssm", "start-session",
+				"--target", instanceID, "--region", region, "--profile", "klanker-terraform")
+		}, execFn)
 	}
 
 	// Non-root: use SSM document to start session as 'sandbox' user
@@ -209,6 +218,47 @@ func execSSMSession(ctx context.Context, instanceID, region string, root, noBedr
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	return execFn(c)
+}
+
+// execSSMWithRetry runs an SSM session command, retrying on transient failures.
+// A failure is considered transient if the session exits (with or without error)
+// in less than ssmRetryThreshold — meaning it never established a real connection.
+//
+// stdout/stderr are passed through directly to preserve TTY capabilities
+// (colors, cursor movement, bracketed paste) needed by interactive programs
+// like Claude Code. The session-manager-plugin exits 0 even on connection
+// failure, but a session that dies in <10s is reliably transient.
+func execSSMWithRetry(ctx context.Context, buildCmd func() *exec.Cmd, execFn ShellExecFunc) error {
+	var lastErr error
+	for attempt := 1; attempt <= ssmRetryMaxAttempts; attempt++ {
+		c := buildCmd()
+		c.Stdin = os.Stdin
+		c.Stdout = os.Stdout
+		c.Stderr = os.Stderr
+
+		start := time.Now()
+		lastErr = execFn(c)
+		elapsed := time.Since(start)
+
+		// If the session lasted long enough, the user was actually connected —
+		// don't retry regardless of how it ended.
+		if elapsed >= ssmRetryThreshold {
+			return lastErr
+		}
+
+		// Session died quickly — treat as transient (DNS failure, websocket
+		// setup error, EOF, etc.). The session-manager-plugin prints its own
+		// error to stderr so the user sees what happened.
+		if attempt < ssmRetryMaxAttempts {
+			fmt.Fprintf(os.Stderr, "\n⚡ SSM session exited after %s — retrying (%d/%d)...\n\n",
+				elapsed.Round(time.Millisecond), attempt, ssmRetryMaxAttempts)
+			time.Sleep(ssmRetryDelay)
+		}
+	}
+	if lastErr != nil {
+		return fmt.Errorf("SSM session failed after %d attempts: %w", ssmRetryMaxAttempts, lastErr)
+	}
+	return fmt.Errorf("SSM session failed after %d attempts", ssmRetryMaxAttempts)
 }
 
 // execECSCommand builds and runs:
