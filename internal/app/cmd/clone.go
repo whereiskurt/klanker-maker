@@ -437,10 +437,7 @@ func resolveCloneID(ctx context.Context, cfg *config.Config, cloneAlias string, 
 
 // updateClonedFromByID sets the cloned_from field on a clone's DynamoDB metadata
 // using the sandbox ID directly (no alias resolution needed).
-func updateClonedFromByID(ctx context.Context, cfg *config.Config, cloneID, sourceID string, ssmClient SSMSendAPI) error {
-	if ssmClient != nil {
-		return nil
-	}
+func updateClonedFromByID(ctx context.Context, cfg *config.Config, cloneID, sourceID string, _ SSMSendAPI) error {
 	if cloneID == "" {
 		return nil
 	}
