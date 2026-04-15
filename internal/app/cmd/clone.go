@@ -10,7 +10,6 @@ import (
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
@@ -216,7 +215,7 @@ func runClone(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, s
 
 		if rec.Substrate == "docker" {
 			// Docker: synchronous local create
-			if err := runCreate(cfg, tmpFile.Name(), false, false, awsProfile, verbose, "", cloneAlias, "", "", ""); err != nil {
+			if err := runCreate(cfg, tmpFile.Name(), false, false, awsProfile, verbose, "", cloneAlias, "", "", "", sourceID); err != nil {
 				return fmt.Errorf("provision clone %d (%s): %w", i+1, cloneAlias, err)
 			}
 			// Docker workspace download (synchronous — instance ready immediately)
@@ -234,8 +233,8 @@ func runClone(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, s
 				}
 			}
 		} else {
-			// EC2: fire-and-forget remote create
-			cloneID, createErr := runCreateRemote(cfg, tmpFile.Name(), false, false, awsProfile, cloneAlias, "", "")
+			// EC2: fire-and-forget remote create (pass sourceID so cloned_from is set in the initial PutItem)
+			cloneID, createErr := runCreateRemote(cfg, tmpFile.Name(), false, false, awsProfile, cloneAlias, "", "", sourceID)
 			if createErr != nil {
 				return fmt.Errorf("provision clone %d (%s): %w", i+1, cloneAlias, createErr)
 			}
@@ -253,11 +252,6 @@ func runClone(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, s
 				} else {
 					fmt.Printf("  ✓ Workspace staged for %s (will download at boot)\n", cloneID)
 				}
-			}
-
-			// Set cloned_from immediately (metadata already written by runCreateRemote)
-			if err := updateClonedFromByID(ctx, cfg, cloneID, sourceID, ssmClient); err != nil {
-				fmt.Printf("  Warning: could not update cloned_from metadata: %v\n", err)
 			}
 		}
 
@@ -433,39 +427,6 @@ func resolveCloneID(ctx context.Context, cfg *config.Config, cloneAlias string, 
 		return "sb-testclone", nil
 	}
 	return ResolveSandboxID(ctx, cfg, cloneAlias)
-}
-
-// updateClonedFromByID sets the cloned_from field on a clone's DynamoDB metadata
-// using the sandbox ID directly (no alias resolution needed).
-func updateClonedFromByID(ctx context.Context, cfg *config.Config, cloneID, sourceID string, _ SSMSendAPI) error {
-	if cloneID == "" {
-		return nil
-	}
-
-	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
-	if err != nil {
-		return fmt.Errorf("load AWS config: %w", err)
-	}
-
-	tableName := cfg.SandboxTableName
-	if tableName == "" {
-		tableName = "km-sandboxes"
-	}
-	dynamoClient := dynamodb.NewFromConfig(awsCfg)
-
-	// Use UpdateItem to atomically set cloned_from without overwriting the full record.
-	// This avoids a race with the remote create-handler Lambda which also writes metadata.
-	_, err = dynamoClient.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: &tableName,
-		Key: map[string]dynamodbtypes.AttributeValue{
-			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: cloneID},
-		},
-		UpdateExpression: awssdk.String("SET cloned_from = :cf"),
-		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
-			":cf": &dynamodbtypes.AttributeValueMemberS{Value: sourceID},
-		},
-	})
-	return err
 }
 
 // waitForCloneRunning polls for the clone's alias to appear in DynamoDB and for its

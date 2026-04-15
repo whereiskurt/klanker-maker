@@ -78,6 +78,7 @@ func runPause(ctx context.Context, cfg *config.Config, sandboxID string) error {
 		tableName = "km-sandboxes"
 	}
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)
+	displayRef := sandboxID
 	{
 		meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClient, tableName, sandboxID)
 		if metaErr != nil {
@@ -97,17 +98,22 @@ func runPause(ctx context.Context, cfg *config.Config, sandboxID string) error {
 				}
 			}
 		}
-		if metaErr == nil && meta != nil && meta.Substrate == "docker" {
-			homeDir, _ := os.UserHomeDir()
-			composeFile := filepath.Join(homeDir, ".km", "sandboxes", sandboxID, "docker-compose.yml")
-			if _, statErr := os.Stat(composeFile); os.IsNotExist(statErr) {
-				return fmt.Errorf("docker sandbox %s is not running on this host", sandboxID)
+		if metaErr == nil && meta != nil {
+			if meta.Alias != "" {
+				displayRef = meta.Alias
 			}
-			if err := runDockerCompose(ctx, sandboxID, "pause"); err != nil {
-				return err
+			if meta.Substrate == "docker" {
+				homeDir, _ := os.UserHomeDir()
+				composeFile := filepath.Join(homeDir, ".km", "sandboxes", sandboxID, "docker-compose.yml")
+				if _, statErr := os.Stat(composeFile); os.IsNotExist(statErr) {
+					return fmt.Errorf("docker sandbox %s is not running on this host", sandboxID)
+				}
+				if err := runDockerCompose(ctx, sandboxID, "pause"); err != nil {
+					return err
+				}
+				fmt.Printf(ansiGreen+"Sandbox %s paused."+ansiReset+" Use 'km resume %s' to unpause.\n", displayRef, displayRef)
+				return nil
 			}
-			fmt.Printf(ansiGreen+"Sandbox %s paused."+ansiReset+" Use 'km resume %s' to unpause.\n", sandboxID, sandboxID)
-			return nil
 		}
 		// If metadata not found or substrate is not docker, proceed with EC2 path.
 	}
@@ -165,6 +171,6 @@ func runPause(ctx context.Context, cfg *config.Config, sandboxID string) error {
 		fmt.Printf(ansiYellow+"  [warn] could not update metadata: %v"+ansiReset+"\n", statusErr)
 	}
 
-	fmt.Printf(ansiGreen+"Sandbox %s paused."+ansiReset+" Use 'km resume %s' to restart.\n", sandboxID, sandboxID)
+	fmt.Printf(ansiGreen+"Sandbox %s paused."+ansiReset+" Use 'km resume %s' to restart.\n", displayRef, displayRef)
 	return nil
 }

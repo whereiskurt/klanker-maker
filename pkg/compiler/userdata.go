@@ -138,7 +138,11 @@ fi
 # ============================================================
 # 2.8. Sandbox identity: set hostname and export identity env vars
 # ============================================================
+{{- if .Alias }}
+SANDBOX_FQDN="{{ .Alias }}.{{ .EmailDomain }}"
+{{- else }}
 SANDBOX_FQDN="{{ .SandboxID }}.{{ .EmailDomain }}"
+{{- end }}
 hostnamectl set-hostname "${SANDBOX_FQDN}" 2>/dev/null || hostname "${SANDBOX_FQDN}"
 cat > /etc/profile.d/km-identity.sh << EOF
 export KM_SANDBOX_ID="{{ .SandboxID }}"

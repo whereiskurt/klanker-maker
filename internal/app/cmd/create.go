@@ -173,7 +173,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 }
 
 // runCreate executes the full create workflow.
-func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, verbose bool, sandboxIDOverride string, aliasOverride string, substrateOverride string, ttlOverride string, idleOverride string) error {
+func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, verbose bool, sandboxIDOverride string, aliasOverride string, substrateOverride string, ttlOverride string, idleOverride string, clonedFromOverride ...string) error {
 	createStart := time.Now()
 	ctx := context.Background()
 
@@ -617,6 +617,15 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			MaxLifetime: resolvedProfile.Spec.Lifecycle.MaxLifetime,
 			CreatedBy:   "cli",
 			Alias:       sandboxAlias,
+		}
+		if len(clonedFromOverride) > 0 && clonedFromOverride[0] != "" {
+			meta.ClonedFrom = clonedFromOverride[0]
+		} else if os.Getenv("KM_REMOTE_CREATE") == "true" {
+			// Remote create subprocess: preserve ClonedFrom from the "starting" record
+			// written by runCreateRemote (otherwise this PutItem overwrites it).
+			if existing, err := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClientCreate, sandboxTableName, sandboxID); err == nil && existing != nil && existing.ClonedFrom != "" {
+				meta.ClonedFrom = existing.ClonedFrom
+			}
 		}
 		if writeErr := awspkg.WriteSandboxMetadataDynamo(ctx, dynamoClientCreate, sandboxTableName, &meta); writeErr != nil {
 			log.Warn().Err(writeErr).Str("sandbox_id", sandboxID).
@@ -1420,7 +1429,11 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 			fmt.Printf("  TTL: %s (expires %s)\n", resolvedProfile.Spec.Lifecycle.TTL, ttlExpiry.Local().Format("3:04:05 PM MST"))
 		}
 	}
-	fmt.Printf("  Hint: km shell %s\n", sandboxID)
+	if aliasOverride != "" {
+		fmt.Printf("  Hint: km shell %s\n", aliasOverride)
+	} else {
+		fmt.Printf("  Hint: km shell %s\n", sandboxID)
+	}
 
 	return nil
 }
@@ -1490,7 +1503,7 @@ func runDockerComposeUp(ctx context.Context, sandboxID, composeFilePath string, 
 //
 // The create-handler Lambda downloads the artifacts, runs km create as a subprocess,
 // and sends notifications on success/failure.
-func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, aliasOverride string, ttlOverride string, idleOverride string) (string, error) {
+func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, aliasOverride string, ttlOverride string, idleOverride string, clonedFromOverride ...string) (string, error) {
 	ctx := context.Background()
 
 	// Step 1: Read profile file
@@ -1707,6 +1720,9 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		MaxLifetime: resolvedProfile.Spec.Lifecycle.MaxLifetime,
 		CreatedBy:   "remote",
 		Alias:       sandboxAlias,
+	}
+	if len(clonedFromOverride) > 0 && clonedFromOverride[0] != "" {
+		startingMeta.ClonedFrom = clonedFromOverride[0]
 	}
 	if writeErr := awspkg.WriteSandboxMetadataDynamo(ctx, dynamoClient, tableName, startingMeta); writeErr != nil {
 		fmt.Fprintf(os.Stderr, "  [warn] failed to write provisioning metadata: %v\n", writeErr)

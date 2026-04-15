@@ -381,7 +381,11 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 	}
 	if rec.Status != "running" {
 		if !autoStart {
-			return fmt.Errorf("sandbox %s is %s -- use --auto-start to resume automatically, or 'km resume %s' first", sandboxID, rec.Status, sandboxID)
+			ref := sandboxID
+			if rec.Alias != "" {
+				ref = rec.Alias
+			}
+			return fmt.Errorf("sandbox %s is %s -- use --auto-start to resume automatically, or 'km resume %s' first", ref, rec.Status, ref)
 		}
 		fmt.Fprintf(os.Stdout, "Sandbox %s is %s, starting...\n", sandboxID, rec.Status)
 		// Retry resume in a loop — instance may be in a transitional state (stopping→stopped)
@@ -494,11 +498,15 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 	}
 
 	commandID := awssdk.ToString(cmdOut.Command.CommandId)
-	fmt.Fprintf(os.Stdout, "Agent dispatched to %s (command: %s)\n", sandboxID, commandID)
+	displayRef := sandboxID
+	if rec.Alias != "" {
+		displayRef = rec.Alias
+	}
+	fmt.Fprintf(os.Stdout, "Agent dispatched to %s (command: %s)\n", displayRef, commandID)
 
 	if !wait {
 		// Fire-and-forget: print command ID and return
-		fmt.Fprintf(os.Stdout, "Use 'km agent results %s' to check output later.\n", sandboxID)
+		fmt.Fprintf(os.Stdout, "Use 'km agent results %s' to check output later.\n", displayRef)
 		return nil
 	}
 
