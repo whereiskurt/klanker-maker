@@ -749,7 +749,7 @@ PEM_FILE=$(ed25519_privkey_to_pem "$PRIVKEY_B64")
 # ------------------------------------------------------------------
 # Sign the message body
 # ------------------------------------------------------------------
-SIGNATURE=$(openssl pkeyutl -sign -inkey "$PEM_FILE" -rawin < "$BODY_TMP" | base64 -w0)
+SIGNATURE=$(openssl pkeyutl -sign -inkey "$PEM_FILE" -rawin -in "$BODY_TMP" | base64 -w0)
 
 # ------------------------------------------------------------------
 # Build MIME message

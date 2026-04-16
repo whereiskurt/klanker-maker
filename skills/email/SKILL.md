@@ -53,6 +53,14 @@ Multiple attachments: `--attach file1.tar.gz,file2.json`
 
 `km-send` automatically signs with the sandbox's Ed25519 key from SSM. You do not need to handle signing manually. If the profile has `signing: required` and signing fails, the send exits non-zero — this is correct, do not retry without investigating.
 
+> **OpenSSL 3.5+ note:** If `km-send` fails with `unable to determine file size for oneshot operation / Public Key operation error`, the sandbox is running an older copy of the script that pipes the body into `openssl pkeyutl -sign -rawin` via stdin. OpenSSL 3.5 (Jan 2026) requires a seekable input. The platform script has been fixed to pass `-in "$BODY_TMP"` explicitly. For a sandbox provisioned before this fix, patch in place:
+>
+> ```bash
+> sudo sed -i 's|-rawin < "\$BODY_TMP"|-rawin -in "\$BODY_TMP"|' /opt/km/bin/km-send
+> ```
+>
+> Report it to the operator so it can be applied upstream.
+
 ### Rules
 
 1. **Always use `--body <file>`**, never pipe to stdin for production messages
