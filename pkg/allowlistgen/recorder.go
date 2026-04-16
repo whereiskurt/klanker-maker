@@ -9,13 +9,14 @@ import (
 	"sync"
 )
 
-// Recorder accumulates DNS domains, HTTP hosts, and GitHub repos observed
-// during sandbox execution. All methods are safe for concurrent use.
+// Recorder accumulates DNS domains, HTTP hosts, GitHub repos, and Git refs
+// observed during sandbox execution. All methods are safe for concurrent use.
 type Recorder struct {
 	mu           sync.Mutex
 	dnsObserved  map[string]struct{}
 	hostObserved map[string]struct{}
 	repoObserved map[string]struct{}
+	refObserved  map[string]struct{}
 }
 
 // NewRecorder returns an initialised, empty Recorder.
@@ -24,6 +25,7 @@ func NewRecorder() *Recorder {
 		dnsObserved:  make(map[string]struct{}),
 		hostObserved: make(map[string]struct{}),
 		repoObserved: make(map[string]struct{}),
+		refObserved:  make(map[string]struct{}),
 	}
 }
 
@@ -65,6 +67,31 @@ func (r *Recorder) RecordRepo(ownerRepo string) {
 	r.mu.Lock()
 	r.repoObserved[key] = struct{}{}
 	r.mu.Unlock()
+}
+
+// RecordRef records a Git ref (branch or tag name). The "refs/heads/" and
+// "refs/tags/" prefixes are stripped, and the ref is stored as-is (case-preserved).
+func (r *Recorder) RecordRef(ref string) {
+	ref = strings.TrimPrefix(ref, "refs/heads/")
+	ref = strings.TrimPrefix(ref, "refs/tags/")
+	if ref == "" {
+		return
+	}
+	r.mu.Lock()
+	r.refObserved[ref] = struct{}{}
+	r.mu.Unlock()
+}
+
+// Refs returns a sorted, deduplicated slice of all observed Git refs.
+func (r *Recorder) Refs() []string {
+	r.mu.Lock()
+	out := make([]string, 0, len(r.refObserved))
+	for ref := range r.refObserved {
+		out = append(out, ref)
+	}
+	r.mu.Unlock()
+	sort.Strings(out)
+	return out
 }
 
 // DNSDomains returns a sorted, deduplicated slice of all observed DNS domains.

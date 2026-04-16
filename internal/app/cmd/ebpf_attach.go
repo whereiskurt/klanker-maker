@@ -130,6 +130,7 @@ type observedState struct {
 	DNS   []string `json:"dns"`
 	Hosts []string `json:"hosts"`
 	Repos []string `json:"repos"`
+	Refs  []string `json:"refs,omitempty"`
 }
 
 func runEbpfAttach(
@@ -489,6 +490,7 @@ func flushObservedState(recorder *allowlistgen.Recorder, sandboxID, outputPath s
 		DNS:   recorder.DNSDomains(),
 		Hosts: recorder.Hosts(),
 		Repos: recorder.Repos(),
+		Refs:  recorder.Refs(),
 	}
 	data, marshalErr := json.MarshalIndent(state, "", "  ")
 	if marshalErr != nil {

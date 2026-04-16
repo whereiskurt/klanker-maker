@@ -435,6 +435,7 @@ type learnObservedState struct {
 	DNS   []string `json:"dns"`
 	Hosts []string `json:"hosts"`
 	Repos []string `json:"repos"`
+	Refs  []string `json:"refs,omitempty"`
 }
 
 // GenerateProfileFromJSON parses an observed-state JSON blob and returns
@@ -457,6 +458,9 @@ func GenerateProfileFromJSON(data []byte, base string) ([]byte, error) {
 	for _, r := range state.Repos {
 		rec.RecordRepo(r)
 	}
+	for _, ref := range state.Refs {
+		rec.RecordRef(ref)
+	}
 	return rec.GenerateAnnotatedYAML(base)
 }
 
@@ -473,6 +477,7 @@ func CollectDockerObservations(sandboxID string, dnsLogs, httpLogs io.Reader) ([
 		DNS:   rec.DNSDomains(),
 		Hosts: rec.Hosts(),
 		Repos: rec.Repos(),
+		Refs:  rec.Refs(),
 	}
 	return json.MarshalIndent(state, "", "  ")
 }
