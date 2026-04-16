@@ -1,5 +1,5 @@
 ---
-name: klanker:email
+name: email
 description: Send, receive, and orchestrate email between sandboxes using km-send and km-recv
 ---
 

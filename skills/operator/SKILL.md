@@ -1,5 +1,5 @@
 ---
-name: klanker:operator
+name: operator
 description: Request platform actions by emailing the operator inbox with natural language commands
 ---
 

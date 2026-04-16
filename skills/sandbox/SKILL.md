@@ -1,5 +1,5 @@
 ---
-name: klanker:sandbox
+name: sandbox
 description: Detect sandbox environment, discover email policy, verify tooling
 ---
 

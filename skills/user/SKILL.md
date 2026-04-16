@@ -1,5 +1,5 @@
 ---
-name: klanker:user
+name: user
 description: Operator CLI guide for the km command — creating sandboxes, running agents, learning traffic, managing lifecycle
 ---
 

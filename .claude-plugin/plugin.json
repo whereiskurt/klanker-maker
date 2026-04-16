@@ -1,0 +1,19 @@
+{
+  "name": "klanker",
+  "description": "Klanker Maker sandbox platform — email orchestration, operator CLI, and sandbox identity",
+  "version": "0.1.0",
+  "author": {
+    "name": "whereiskurt",
+    "url": "https://github.com/whereiskurt"
+  },
+  "homepage": "https://github.com/whereiskurt/klanker-maker",
+  "repository": "https://github.com/whereiskurt/klanker-maker",
+  "license": "MIT",
+  "keywords": [
+    "sandbox",
+    "email",
+    "orchestration",
+    "agent",
+    "infrastructure"
+  ]
+}
