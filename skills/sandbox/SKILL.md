@@ -15,11 +15,13 @@ Check for the presence of KM environment variables:
 
 ```bash
 echo "KM_SANDBOX_ID=$KM_SANDBOX_ID"
+echo "KM_SANDBOX_EMAIL=$KM_SANDBOX_EMAIL"
 echo "KM_EMAIL_ADDRESS=$KM_EMAIL_ADDRESS"
 echo "KM_OPERATOR_EMAIL=$KM_OPERATOR_EMAIL"
 echo "KM_SANDBOX_ALIAS=$KM_SANDBOX_ALIAS"
 echo "KM_SANDBOX_DOMAIN=$KM_SANDBOX_DOMAIN"
 echo "KM_ARTIFACTS_BUCKET=$KM_ARTIFACTS_BUCKET"
+echo "KM_ALIAS_EMAIL=$KM_ALIAS_EMAIL"
 ```
 
 If `KM_SANDBOX_ID` is empty, you are **not in a KM sandbox**. Stop here and inform the user. The `klanker:email` and `klanker:operator` skills require a sandbox environment.
@@ -73,7 +75,7 @@ If the signing key is missing and `signing: required`, outbound email will fail.
 After running the above checks, you should know:
 
 - **Who you are:** `$KM_SANDBOX_ID` (alias: `$KM_SANDBOX_ALIAS`)
-- **Your email:** `$KM_EMAIL_ADDRESS`
+- **Your email:** `$KM_SANDBOX_EMAIL` (also `$KM_EMAIL_ADDRESS`)
 - **Operator email:** `$KM_OPERATOR_EMAIL`
 - **Email policy:** signing/encryption/verification settings
 - **Tooling status:** km-send and km-recv availability

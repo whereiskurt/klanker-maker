@@ -150,6 +150,8 @@ export KM_SANDBOX_HOSTNAME="${SANDBOX_FQDN}"
 export KM_SANDBOX_DOMAIN="{{ .EmailDomain }}"
 export KM_SANDBOX_EMAIL="{{ .SandboxEmail }}"
 export KM_SANDBOX_FROM_EMAIL="{{ .SandboxEmail }}"
+export KM_EMAIL_ADDRESS="{{ .SandboxEmail }}"
+export KM_ARTIFACTS_BUCKET="{{ .KMArtifactsBucket }}"
 {{- if .OperatorEmail }}
 export KM_OPERATOR_EMAIL="{{ .OperatorEmail }}"
 {{- end }}
