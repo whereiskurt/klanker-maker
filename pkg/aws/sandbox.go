@@ -31,9 +31,10 @@ type SandboxRecord struct {
 	Alias         string     `json:"alias,omitempty"`          // human-friendly alias (e.g. "orc", "wrkr-1")
 	ClonedFrom    string     `json:"cloned_from,omitempty"`    // source sandbox ID if this is a clone
 	IdleRemaining string     `json:"idle_remaining,omitempty"` // "23m10s remaining" or "imminent"
-	Locked       bool       `json:"locked,omitempty"`        // true if sandbox is locked against destroy/stop/pause
-	Hibernation  bool       `json:"hibernation,omitempty"`   // true if EC2 instance has hibernation configured
-	Resources    []string   `json:"resources,omitempty"`     // ARNs, populated in status output only
+	Locked         bool       `json:"locked,omitempty"`          // true if sandbox is locked against destroy/stop/pause
+	Hibernation    bool       `json:"hibernation,omitempty"`    // true if EC2 instance has hibernation configured
+	TeardownPolicy string     `json:"teardown_policy,omitempty"` // "destroy", "stop", or "retain"
+	Resources      []string   `json:"resources,omitempty"`      // ARNs, populated in status output only
 }
 
 // S3ListAPI is the narrow interface for S3 operations needed by list functions.
@@ -163,17 +164,18 @@ func readMetadataRecord(ctx context.Context, client S3ListAPI, bucket, sandboxID
 	}
 
 	return SandboxRecord{
-		SandboxID:    meta.SandboxID,
-		Profile:      meta.ProfileName,
-		Substrate:    meta.Substrate,
-		Region:       meta.Region,
-		Status:       status,
-		CreatedAt:    meta.CreatedAt,
-		TTLExpiry:    meta.TTLExpiry,
-		TTLRemaining: computeTTLRemaining(meta.TTLExpiry),
-		IdleTimeout:  meta.IdleTimeout,
-		Alias:        meta.Alias,
-		Locked:       meta.Locked,
+		SandboxID:      meta.SandboxID,
+		Profile:        meta.ProfileName,
+		Substrate:      meta.Substrate,
+		Region:         meta.Region,
+		Status:         status,
+		CreatedAt:      meta.CreatedAt,
+		TTLExpiry:      meta.TTLExpiry,
+		TTLRemaining:   computeTTLRemaining(meta.TTLExpiry),
+		IdleTimeout:    meta.IdleTimeout,
+		Alias:          meta.Alias,
+		Locked:         meta.Locked,
+		TeardownPolicy: meta.TeardownPolicy,
 	}
 }
 

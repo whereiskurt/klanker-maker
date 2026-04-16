@@ -21,6 +21,8 @@ type SandboxMetadata struct {
 	CreatedBy   string     `json:"created_by,omitempty"`   // creation method: "cli", "email", "api", "remote"
 	Alias       string     `json:"alias,omitempty"`        // human-friendly alias (e.g. "orc", "wrkr-1")
 	ClonedFrom  string     `json:"cloned_from,omitempty"`  // source sandbox ID if this is a clone
-	Locked      bool       `json:"locked,omitempty"`       // true when sandbox is locked by km lock
-	LockedAt    *time.Time `json:"locked_at,omitempty"`    // when the sandbox was locked
+	Locked         bool       `json:"locked,omitempty"`          // true when sandbox is locked by km lock
+	LockedAt       *time.Time `json:"locked_at,omitempty"`      // when the sandbox was locked
+	TeardownPolicy string     `json:"teardown_policy,omitempty"` // "destroy", "stop", or "retain" — from profile lifecycle
+	ExpiresAt      *time.Time `json:"expires_at,omitempty"`     // display-only expiry (always set when TTL configured, not used by DynamoDB native TTL)
 }

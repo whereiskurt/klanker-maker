@@ -607,16 +607,17 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// Write sandbox metadata to DynamoDB. Non-fatal: sandbox is provisioned even if metadata write fails.
 	{
 		meta := awspkg.SandboxMetadata{
-			SandboxID:   sandboxID,
-			ProfileName: resolvedProfile.Metadata.Name,
-			Substrate:   substrateLabel,
-			Region:      resolvedProfile.Spec.Runtime.Region,
-			CreatedAt:   now,
-			TTLExpiry:   ttlExpiry,
-			IdleTimeout: resolvedProfile.Spec.Lifecycle.IdleTimeout,
-			MaxLifetime: resolvedProfile.Spec.Lifecycle.MaxLifetime,
-			CreatedBy:   "cli",
-			Alias:       sandboxAlias,
+			SandboxID:      sandboxID,
+			ProfileName:    resolvedProfile.Metadata.Name,
+			Substrate:      substrateLabel,
+			Region:         resolvedProfile.Spec.Runtime.Region,
+			CreatedAt:      now,
+			TTLExpiry:      ttlExpiry,
+			IdleTimeout:    resolvedProfile.Spec.Lifecycle.IdleTimeout,
+			MaxLifetime:    resolvedProfile.Spec.Lifecycle.MaxLifetime,
+			TeardownPolicy: resolvedProfile.Spec.Lifecycle.TeardownPolicy,
+			CreatedBy:      "cli",
+			Alias:          sandboxAlias,
 		}
 		if len(clonedFromOverride) > 0 && clonedFromOverride[0] != "" {
 			meta.ClonedFrom = clonedFromOverride[0]
@@ -1336,16 +1337,17 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 		sandboxAlias := aliasOverride
 
 		meta := awspkg.SandboxMetadata{
-			SandboxID:   sandboxID,
-			ProfileName: resolvedProfile.Metadata.Name,
-			Substrate:   "docker",
-			Region:      region,
-			CreatedAt:   now,
-			TTLExpiry:   ttlExpiry,
-			IdleTimeout: resolvedProfile.Spec.Lifecycle.IdleTimeout,
-			MaxLifetime: resolvedProfile.Spec.Lifecycle.MaxLifetime,
-			CreatedBy:   "cli",
-			Alias:       sandboxAlias,
+			SandboxID:      sandboxID,
+			ProfileName:    resolvedProfile.Metadata.Name,
+			Substrate:      "docker",
+			Region:         region,
+			CreatedAt:      now,
+			TTLExpiry:      ttlExpiry,
+			IdleTimeout:    resolvedProfile.Spec.Lifecycle.IdleTimeout,
+			MaxLifetime:    resolvedProfile.Spec.Lifecycle.MaxLifetime,
+			TeardownPolicy: resolvedProfile.Spec.Lifecycle.TeardownPolicy,
+			CreatedBy:      "cli",
+			Alias:          sandboxAlias,
 		}
 		if writeErr := awspkg.WriteSandboxMetadataDynamo(ctx, dockerDynamoClient, dockerTableName, &meta); writeErr != nil {
 			log.Warn().Err(writeErr).Str("sandbox_id", sandboxID).Msg("failed to write sandbox metadata to DynamoDB (non-fatal)")

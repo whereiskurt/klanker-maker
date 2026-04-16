@@ -806,21 +806,30 @@ func (h *TTLHandler) lookupHibernation(ctx context.Context, sandboxID string) bo
 // teardownPolicy value ("destroy" or "stop"). Returns "destroy" on any error
 // or if the profile doesn't specify a policy — fail-safe to full cleanup.
 func (h *TTLHandler) lookupTeardownPolicy(ctx context.Context, sandboxID string) string {
+	// Primary: read from S3 profile (authoritative source).
 	profileBytes, err := downloadProfileFromS3(ctx, h.S3Client, h.Bucket, sandboxID)
-	if err != nil {
+	if err == nil {
+		profile, parseErr := profilepkg.Parse(profileBytes)
+		if parseErr == nil && profile != nil && profile.Spec.Lifecycle.TeardownPolicy != "" {
+			return profile.Spec.Lifecycle.TeardownPolicy
+		}
+	} else {
 		log.Warn().Err(err).Str("sandbox_id", sandboxID).
-			Msg("could not load profile for teardownPolicy check; defaulting to destroy")
-		return "destroy"
+			Msg("could not load profile from S3 for teardownPolicy check; trying DynamoDB")
 	}
-	profile, parseErr := profilepkg.Parse(profileBytes)
-	if parseErr != nil || profile == nil {
-		return "destroy"
+
+	// Fallback: read teardown_policy from DynamoDB metadata.
+	// This prevents a transient S3 error from destroying a teardownPolicy=stop sandbox.
+	if h.DynamoClient != nil {
+		meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, h.DynamoClient, h.SandboxTableName, sandboxID)
+		if metaErr == nil && meta != nil && meta.TeardownPolicy != "" {
+			log.Info().Str("sandbox_id", sandboxID).Str("teardown_policy", meta.TeardownPolicy).
+				Msg("teardownPolicy resolved from DynamoDB fallback")
+			return meta.TeardownPolicy
+		}
 	}
-	policy := profile.Spec.Lifecycle.TeardownPolicy
-	if policy == "" {
-		return "destroy"
-	}
-	return policy
+
+	return "destroy"
 }
 
 // eventLabel returns a human-friendly label for the TTL event type.

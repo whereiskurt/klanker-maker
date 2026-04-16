@@ -361,7 +361,11 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 		}
 		idleStr := getIdleCountdown(context.Background(), rec.SandboxID, idleTimeout, rec.CreatedAt, isTTY, budget)
 		if idleStr != "" {
-			fmt.Fprintf(out, "Idle Kill:   %s\n", idleStr)
+			idleLabel := "Idle Kill"
+			if rec.TeardownPolicy == "stop" || rec.TeardownPolicy == "retain" {
+				idleLabel = "Idle Stop"
+			}
+			fmt.Fprintf(out, "%s:  %s\n", idleLabel, idleStr)
 		}
 	}
 

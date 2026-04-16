@@ -54,8 +54,10 @@ type sandboxItemDynamo struct {
 	CreatedBy    string `dynamodbav:"created_by,omitempty"`
 	Alias        string `dynamodbav:"alias,omitempty"`
 	ClonedFrom   string `dynamodbav:"cloned_from,omitempty"`
-	Locked       bool   `dynamodbav:"locked,omitempty"`
-	LockedAt     string `dynamodbav:"locked_at,omitempty"`
+	Locked         bool   `dynamodbav:"locked,omitempty"`
+	LockedAt       string `dynamodbav:"locked_at,omitempty"`
+	TeardownPolicy string `dynamodbav:"teardown_policy,omitempty"`
+	ExpiresAt      string `dynamodbav:"expires_at,omitempty"` // RFC3339 display-only expiry, always set when TTL configured
 	// TTLExpiryEpoch is int64 so attributevalue.Marshal gives a Number.
 	// However we override this with a manual AttributeValueMemberN in WriteSandboxMetadataDynamo
 	// to guarantee Number type (research Pitfall: zero int64 marshals as N "0", so we manage TTL manually).
@@ -79,14 +81,26 @@ func (d *sandboxItemDynamo) toSandboxMetadata() (*SandboxMetadata, error) {
 		IdleTimeout: d.IdleTimeout,
 		MaxLifetime: d.MaxLifetime,
 		CreatedBy:   d.CreatedBy,
-		Alias:       d.Alias,
-		ClonedFrom:  d.ClonedFrom,
-		Locked:      d.Locked,
+		Alias:          d.Alias,
+		ClonedFrom:     d.ClonedFrom,
+		Locked:         d.Locked,
+		TeardownPolicy: d.TeardownPolicy,
 	}
 
 	if d.TTLExpiryEpoch != 0 {
 		t := time.Unix(d.TTLExpiryEpoch, 0).UTC()
 		meta.TTLExpiry = &t
+	}
+
+	if d.ExpiresAt != "" {
+		if ea, err := time.Parse(time.RFC3339, d.ExpiresAt); err == nil {
+			meta.ExpiresAt = &ea
+			// Backfill TTLExpiry from ExpiresAt when ttl_expiry was omitted
+			// (teardownPolicy=stop/retain skips the DynamoDB TTL attribute).
+			if meta.TTLExpiry == nil {
+				meta.TTLExpiry = meta.ExpiresAt
+			}
+		}
 	}
 
 	if d.LockedAt != "" {
@@ -107,18 +121,19 @@ func metadataToRecord(meta *SandboxMetadata) SandboxRecord {
 		status = "running" // backward compat: old metadata without status field
 	}
 	return SandboxRecord{
-		SandboxID:    meta.SandboxID,
-		Profile:      meta.ProfileName,
-		Substrate:    meta.Substrate,
-		Region:       meta.Region,
-		Status:       status,
-		CreatedAt:    meta.CreatedAt,
-		TTLExpiry:    meta.TTLExpiry,
-		TTLRemaining: computeTTLRemaining(meta.TTLExpiry),
-		IdleTimeout:  meta.IdleTimeout,
-		Alias:        meta.Alias,
-		ClonedFrom:   meta.ClonedFrom,
-		Locked:       meta.Locked,
+		SandboxID:      meta.SandboxID,
+		Profile:        meta.ProfileName,
+		Substrate:      meta.Substrate,
+		Region:         meta.Region,
+		Status:         status,
+		CreatedAt:      meta.CreatedAt,
+		TTLExpiry:      meta.TTLExpiry,
+		TTLRemaining:   computeTTLRemaining(meta.TTLExpiry),
+		IdleTimeout:    meta.IdleTimeout,
+		Alias:          meta.Alias,
+		ClonedFrom:     meta.ClonedFrom,
+		Locked:         meta.Locked,
+		TeardownPolicy: meta.TeardownPolicy,
 	}
 }
 
@@ -192,6 +207,16 @@ func unmarshalSandboxItem(item map[string]dynamodbtypes.AttributeValue) (*sandbo
 			d.LockedAt = sv.Value
 		}
 	}
+	if v, ok := item["teardown_policy"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			d.TeardownPolicy = sv.Value
+		}
+	}
+	if v, ok := item["expires_at"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			d.ExpiresAt = sv.Value
+		}
+	}
 	// ttl_expiry is stored as Number (epoch seconds)
 	if v, ok := item["ttl_expiry"]; ok {
 		if nv, ok := v.(*dynamodbtypes.AttributeValueMemberN); ok {
@@ -244,8 +269,20 @@ func marshalSandboxItem(meta *SandboxMetadata) map[string]dynamodbtypes.Attribut
 	if meta.LockedAt != nil {
 		item["locked_at"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.LockedAt.UTC().Format(time.RFC3339)}
 	}
-	// ttl_expiry: store as Number (N) type for DynamoDB TTL — must NOT be a String
-	if meta.TTLExpiry != nil {
+	if meta.TeardownPolicy != "" {
+		item["teardown_policy"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.TeardownPolicy}
+	}
+	// expires_at: always store when TTL is configured (display-only, not used by DynamoDB native TTL).
+	if meta.ExpiresAt != nil {
+		item["expires_at"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.ExpiresAt.UTC().Format(time.RFC3339)}
+	} else if meta.TTLExpiry != nil {
+		// Backward compat: derive expires_at from TTLExpiry if not explicitly set.
+		item["expires_at"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.TTLExpiry.UTC().Format(time.RFC3339)}
+	}
+	// ttl_expiry: store as Number (N) type for DynamoDB TTL — must NOT be a String.
+	// Omit when teardownPolicy is "stop" or "retain" so DynamoDB native TTL never
+	// auto-deletes the record — the EventBridge schedule handles lifecycle actions.
+	if meta.TTLExpiry != nil && meta.TeardownPolicy != "stop" && meta.TeardownPolicy != "retain" {
 		item["ttl_expiry"] = &dynamodbtypes.AttributeValueMemberN{
 			Value: strconv.FormatInt(meta.TTLExpiry.Unix(), 10),
 		}
