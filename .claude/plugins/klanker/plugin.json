@@ -1,0 +1,28 @@
+{
+  "name": "klanker",
+  "version": "0.1.0",
+  "description": "Klanker Maker sandbox platform — email orchestration, operator CLI, and sandbox identity",
+  "homepage": "https://github.com/whereiskurt/klanker-maker",
+  "skills": [
+    {
+      "name": "sandbox",
+      "file": "skills/sandbox.md",
+      "description": "Detect sandbox environment, discover email policy, verify tooling. Use when running inside a KM sandbox or checking sandbox identity."
+    },
+    {
+      "name": "email",
+      "file": "skills/email.md",
+      "description": "Send, receive, and orchestrate email between sandboxes. Use when composing messages, polling for replies, delegating tasks, or coordinating multi-sandbox workflows."
+    },
+    {
+      "name": "operator",
+      "file": "skills/operator.md",
+      "description": "Request platform actions by emailing the operator. Use when scheduling operations, requesting reminders, extending TTL, adding budget, or managing sandbox lifecycle via email."
+    },
+    {
+      "name": "user",
+      "file": "skills/user.md",
+      "description": "Operator CLI guide for the km command. Use when creating sandboxes, running agents, learning traffic patterns, managing lifecycle, or configuring the platform."
+    }
+  ]
+}
