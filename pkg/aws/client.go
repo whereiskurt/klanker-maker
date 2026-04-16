@@ -5,6 +5,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -15,7 +16,16 @@ const awsRegion = "us-east-1"
 
 // LoadAWSConfig loads AWS configuration using a named shared config profile.
 // Region is hardcoded to us-east-1 (the single-region deployment model).
+//
+// AWS_DEFAULT_REGION is set as a fallback so credential providers (SSO,
+// AssumeRole) that need a region during config loading work in clean shells
+// without requiring the user to export AWS_REGION beforehand.
 func LoadAWSConfig(ctx context.Context, profile string) (aws.Config, error) {
+	// Ensure credential providers have a region available during config loading.
+	if os.Getenv("AWS_REGION") == "" && os.Getenv("AWS_DEFAULT_REGION") == "" {
+		os.Setenv("AWS_DEFAULT_REGION", awsRegion)
+	}
+
 	opts := []func(*config.LoadOptions) error{
 		config.WithRegion(awsRegion),
 	}
