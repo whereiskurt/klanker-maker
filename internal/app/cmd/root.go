@@ -141,16 +141,14 @@ func configureLogging(level string) error {
 	return nil
 }
 
-// printBanner prints a command header with version and timestamp.
+// printBanner prints a command header to stderr with version and timestamp.
 func printBanner(cmd, context string) {
-	now := time.Now().Local().Format("2006-01-02 3:04:05 PM MST")
-	fmt.Printf("\n%s — %s  [%s] %s\n", cmd, context, version.String(), now)
-	fmt.Println(strings.Repeat("─", 60))
+	fprintBanner(os.Stderr, cmd, context)
 }
 
 // fprintBanner prints a command header to a writer with version and timestamp.
 func fprintBanner(w io.Writer, cmd, context string) {
-	now := time.Now().Local().Format("2006-01-02 3:04:05 PM MST")
-	fmt.Fprintf(w, "\n%s — %s  [%s] %s\n", cmd, context, version.String(), now)
-	fmt.Fprintln(w, strings.Repeat("─", 60))
+	now := time.Now().Local().Format("3:04PM 2006-01-02")
+	fmt.Fprintf(w, "%s — %s [%s] %s\n", cmd, context, version.Number, now)
+	fmt.Fprintln(w, strings.Repeat("─", 46))
 }

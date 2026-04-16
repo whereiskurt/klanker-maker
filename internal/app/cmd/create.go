@@ -276,7 +276,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	}
 
 	printBanner("km create", sandboxID)
-	fmt.Printf("\n  Substrate: %s, Spot: %v\n", substrate, spot)
+	fmt.Fprintf(os.Stderr, "  Substrate: %s, Spot: %v\n", substrate, spot)
 
 	// Step 5: Load and validate AWS credentials (fail before any provisioning)
 	awsCfg, err := awspkg.LoadAWSConfig(ctx, awsProfile)
@@ -482,7 +482,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 				}); putErr != nil {
 					return fmt.Errorf("upload full user-data to S3: %w", putErr)
 				}
-				fmt.Printf("  ✓ Bootstrap script uploaded to S3 (%d bytes)\n", len(artifacts.FullUserData))
+				fmt.Fprintf(os.Stderr, "  ✓ Bootstrap script uploaded to S3 (%d bytes)\n", len(artifacts.FullUserData))
 			}
 		}
 
@@ -521,7 +521,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		if applyErr == nil {
 			// Success
 			fmt.Println(" done")
-			fmt.Printf("  ✓ Infrastructure provisioned")
+			fmt.Fprintf(os.Stderr, "  ✓ Infrastructure provisioned")
 			if attempt > 0 {
 				fmt.Printf(" (AZ: %s, attempt %d/%d)", network.AvailabilityZones[0], attempt+1, maxAttempts)
 			}
@@ -632,9 +632,9 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 				Msg("failed to write sandbox metadata to DynamoDB (non-fatal)")
 		} else {
 			if sandboxAlias != "" {
-				fmt.Printf("  ✓ Metadata stored (alias: %s)\n", sandboxAlias)
+				fmt.Fprintf(os.Stderr, "  ✓ Metadata stored (alias: %s)\n", sandboxAlias)
 			} else {
-				fmt.Printf("  ✓ Metadata stored\n")
+				fmt.Fprintf(os.Stderr, "  ✓ Metadata stored\n")
 			}
 		}
 	}
@@ -714,7 +714,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		}); putErr != nil {
 			log.Warn().Err(putErr).Msg("failed to upload init script to S3 (non-fatal)")
 		} else {
-			fmt.Printf("  ✓ Init script uploaded to S3 (%d bytes)\n", initScript.Len())
+			fmt.Fprintf(os.Stderr, "  ✓ Init script uploaded to S3 (%d bytes)\n", initScript.Len())
 		}
 	}
 
@@ -756,7 +756,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			log.Error().Err(err).Str("sandbox_id", sandboxID).
 				Msg("failed to create TTL schedule (non-fatal — sandbox is provisioned)")
 		} else {
-			fmt.Printf("  ✓ TTL schedule created (expires %s)\n", ttlExpiry.Local().Format("3:04 PM MST"))
+			fmt.Fprintf(os.Stderr, "  ✓ TTL schedule created (expires %s)\n", ttlExpiry.Local().Format("3:04 PM MST"))
 			log.Info().Str("sandbox_id", sandboxID).Time("ttl_expiry", *ttlExpiry).
 				Msg("TTL schedule created")
 		}
@@ -793,7 +793,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 				Float64("ai_limit", aiLimit).
 				Float64("warning_threshold", warningThreshold).
 				Msg("Budget limits set")
-			fmt.Printf("  ✓ Budget: compute $%.2f, AI $%.2f, warning at %.0f%%\n",
+			fmt.Fprintf(os.Stderr, "  ✓ Budget: compute $%.2f, AI $%.2f, warning at %.0f%%\n",
 				computeLimit, aiLimit, warningThreshold*100)
 		}
 	}
@@ -841,7 +841,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 					log.Warn().Err(beErr).Str("sandbox_id", sandboxID).
 						Msg("budget-enforcer apply failed (non-fatal — sandbox is provisioned)")
 				} else {
-					fmt.Printf("  ✓ Budget enforcer Lambda deployed\n")
+					fmt.Fprintf(os.Stderr, "  ✓ Budget enforcer Lambda deployed\n")
 					log.Info().Str("sandbox_id", sandboxID).Msg("budget enforcer Lambda deployed")
 				}
 			}
@@ -880,7 +880,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			if cfg.Domain == "" {
 				safeDomain = "sandboxes.klankermaker.ai"
 			}
-			fmt.Printf("  ✓ Safe phrase: %s\n", phrase)
+			fmt.Fprintf(os.Stderr, "  ✓ Safe phrase: %s\n", phrase)
 			fmt.Printf("    Email: %s@%s\n", sandboxID, safeDomain)
 				log.Info().Str("sandbox_id", sandboxID).
 					Msg("Step 12d: safe phrase stored in SSM")
@@ -907,7 +907,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 					Msg("Step 13a: GitHub App token generation failed (non-fatal — sandbox is provisioned)")
 			}
 		} else {
-			fmt.Printf("  ✓ GitHub token stored in SSM\n")
+			fmt.Fprintf(os.Stderr, "  ✓ GitHub token stored in SSM\n")
 		}
 	}
 
@@ -929,7 +929,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 					log.Warn().Err(ghErr).Str("sandbox_id", sandboxID).
 						Msg("Step 13b: github-token apply failed (non-fatal — sandbox is provisioned)")
 				} else {
-					fmt.Printf("  ✓ GitHub token refresher Lambda deployed\n")
+					fmt.Fprintf(os.Stderr, "  ✓ GitHub token refresher Lambda deployed\n")
 					log.Info().Str("sandbox_id", sandboxID).Msg("github-token refresher Lambda deployed")
 				}
 			}
@@ -949,7 +949,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	if emailErr != nil {
 		log.Warn().Err(emailErr).Msg("failed to provision sandbox email (non-fatal)")
 	} else {
-		fmt.Printf("  ✓ Email: %s\n", emailAddr)
+		fmt.Fprintf(os.Stderr, "  ✓ Email: %s\n", emailAddr)
 		log.Info().Str("email", emailAddr).Msg("sandbox email provisioned")
 	}
 
@@ -1028,7 +1028,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 					Msg("failed to publish identity to DynamoDB (non-fatal)")
 			} else {
 				log.Info().Str("sandbox_id", sandboxID).Msg("sandbox identity provisioned and published")
-				fmt.Printf("  ✓ Identity: Ed25519 key pair provisioned\n")
+				fmt.Fprintf(os.Stderr, "  ✓ Identity: Ed25519 key pair provisioned\n")
 			}
 		}
 	}
@@ -1054,7 +1054,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 	if err := os.MkdirAll(sandboxLocalDir, 0o700); err != nil {
 		return fmt.Errorf("create sandbox local directory %s: %w", sandboxLocalDir, err)
 	}
-	fmt.Printf("  ✓ Sandbox directory created: %s\n", sandboxLocalDir)
+	fmt.Fprintf(os.Stderr, "  ✓ Sandbox directory created: %s\n", sandboxLocalDir)
 
 	// Step D2: Get current AWS region and account ID for role naming.
 	region := resolvedProfile.Spec.Runtime.Region
@@ -1117,7 +1117,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 	if sandboxRoleErr != nil {
 		log.Warn().Err(sandboxRoleErr).Str("role", sandboxRoleName).Msg("failed to create sandbox IAM role (non-fatal)")
 	} else {
-		fmt.Printf("  ✓ IAM role created: %s\n", sandboxRoleName)
+		fmt.Fprintf(os.Stderr, "  ✓ IAM role created: %s\n", sandboxRoleName)
 		// Attach inline policy scoping the sandbox role to its own resources.
 		sandboxArtifactBucket := cfg.ArtifactsBucket
 		if sandboxArtifactBucket == "" {
@@ -1170,7 +1170,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 	if sidecarRoleErr != nil {
 		log.Warn().Err(sidecarRoleErr).Str("role", sidecarRoleName).Msg("failed to create sidecar IAM role (non-fatal)")
 	} else {
-		fmt.Printf("  ✓ IAM role created: %s\n", sidecarRoleName)
+		fmt.Fprintf(os.Stderr, "  ✓ IAM role created: %s\n", sidecarRoleName)
 		// Sidecar role inline policy: DynamoDB budget table + S3 audit/OTEL prefix.
 		artifactBucket := cfg.ArtifactsBucket
 		if artifactBucket == "" {
@@ -1251,7 +1251,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 		if writeErr := os.WriteFile(certPath, caCertPEM, 0o644); writeErr != nil {
 			log.Warn().Err(writeErr).Msg("failed to write CA cert file")
 		}
-		fmt.Printf("  ✓ MITM proxy CA cert generated\n")
+		fmt.Fprintf(os.Stderr, "  ✓ MITM proxy CA cert generated\n")
 	}
 
 	// Step D7: Write docker-compose.yml to sandbox directory.
@@ -1259,7 +1259,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 	if err := os.WriteFile(composeFilePath, []byte(composeYAML), 0o600); err != nil {
 		return fmt.Errorf("write docker-compose.yml: %w", err)
 	}
-	fmt.Printf("  ✓ docker-compose.yml written to %s\n", composeFilePath)
+	fmt.Fprintf(os.Stderr, "  ✓ docker-compose.yml written to %s\n", composeFilePath)
 
 	// Step D7b: Write km-audit-init.sh — creates named pipe and shell audit hook.
 	auditInitPath := filepath.Join(sandboxLocalDir, "km-audit-init.sh")
@@ -1295,7 +1295,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 		fmt.Printf("  [warn] docker compose up failed — sandbox dir preserved at %s\n", sandboxLocalDir)
 		return fmt.Errorf("docker compose up failed for sandbox %s: %w", sandboxID, err)
 	}
-	fmt.Printf("  ✓ docker compose up -d completed\n")
+	fmt.Fprintf(os.Stderr, "  ✓ docker compose up -d completed\n")
 
 	// Step D10: Write S3 metadata so km list/status work unchanged.
 	artifactBucket := cfg.ArtifactsBucket
@@ -1351,9 +1351,9 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 			log.Warn().Err(writeErr).Str("sandbox_id", sandboxID).Msg("failed to write sandbox metadata to DynamoDB (non-fatal)")
 		} else {
 			if sandboxAlias != "" {
-				fmt.Printf("  ✓ Metadata stored (alias: %s)\n", sandboxAlias)
+				fmt.Fprintf(os.Stderr, "  ✓ Metadata stored (alias: %s)\n", sandboxAlias)
 			} else {
-				fmt.Printf("  ✓ Metadata stored (substrate=docker)\n")
+				fmt.Fprintf(os.Stderr, "  ✓ Metadata stored (substrate=docker)\n")
 			}
 		}
 	}
@@ -1413,7 +1413,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 					Msg("failed to publish identity to DynamoDB (non-fatal)")
 			} else {
 				log.Info().Str("sandbox_id", sandboxID).Msg("sandbox identity provisioned and published")
-				fmt.Printf("  ✓ Identity: Ed25519 key pair provisioned\n")
+				fmt.Fprintf(os.Stderr, "  ✓ Identity: Ed25519 key pair provisioned\n")
 			}
 		}
 	}
@@ -1680,7 +1680,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		})
 	}
 
-	fmt.Printf("  Uploading artifacts to s3://%s/%s/\n", artifactBucket, artifactPrefix)
+	fmt.Fprintf(os.Stderr, "  Uploading artifacts to s3://%s/%s/\n", artifactBucket, artifactPrefix)
 	for _, a := range toUpload {
 		_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
 			Bucket:      aws.String(artifactBucket),
@@ -1727,7 +1727,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	if writeErr := awspkg.WriteSandboxMetadataDynamo(ctx, dynamoClient, tableName, startingMeta); writeErr != nil {
 		fmt.Fprintf(os.Stderr, "  [warn] failed to write provisioning metadata: %v\n", writeErr)
 	} else {
-		fmt.Printf("  ✓ Metadata stored (status: starting)\n")
+		fmt.Fprintf(os.Stderr, "  ✓ Metadata stored (status: starting)\n")
 	}
 
 	// Step 9: Publish SandboxCreate event to EventBridge
@@ -1744,11 +1744,11 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		return "", fmt.Errorf("publish SandboxCreate event: %w", ebErr)
 	}
 
-	fmt.Println()
-	fmt.Println(strings.Repeat("─", 50))
-	fmt.Printf("Remote create dispatched: %s\n", sandboxID)
-	fmt.Printf("  Artifacts: s3://%s/%s/\n", artifactBucket, artifactPrefix)
-	fmt.Printf("  The create-handler Lambda will provision the sandbox and send a notification.\n")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, strings.Repeat("─", 46))
+	fmt.Fprintf(os.Stderr, "Remote create dispatched: %s\n", sandboxID)
+	fmt.Fprintf(os.Stderr, "  Artifacts: s3://%s/%s/\n", artifactBucket, artifactPrefix)
+	fmt.Fprintf(os.Stderr, "  Lambda will provision and send notification.\n")
 
 	return sandboxID, nil
 }
