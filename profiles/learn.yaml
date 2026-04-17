@@ -131,7 +131,7 @@ spec:
       enabled: true
       logPrompts: true
       logToolDetails: true
-    learnMode: false
+    learnMode: true
     tlsCapture:
       enabled: true
       libraries:
