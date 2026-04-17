@@ -37,6 +37,7 @@ func NewResumeCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) *
 
 	cmd := &cobra.Command{
 		Use:          "resume <sandbox-id | #number>",
+		Aliases:      []string{"start"},
 		Short:        "Resume a paused or stopped sandbox",
 		Long:         helpText("resume"),
 		Args:         cobra.ExactArgs(1),
@@ -159,6 +160,8 @@ func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error 
 					})
 					if fnErr == nil && roleErr == nil {
 						schedulerClient := scheduler.NewFromConfig(awsCfg)
+						// Delete any existing schedule first (may linger from previous TTL cycle).
+						awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID)
 						schedInput := compiler.BuildTTLScheduleInput(sandboxID, newExpiry,
 							aws.ToString(fnOut.Configuration.FunctionArn),
 							aws.ToString(roleOut.Role.Arn))
@@ -168,6 +171,7 @@ func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error 
 							meta, readErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClient, tableName, sandboxID)
 							if readErr == nil {
 								meta.TTLExpiry = &newExpiry
+								meta.ExpiresAt = &newExpiry
 								awspkg.WriteSandboxMetadataDynamo(ctx, dynamoClient, tableName, meta)
 							}
 						} else {

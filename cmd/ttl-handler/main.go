@@ -162,6 +162,19 @@ func (h *TTLHandler) HandleTTLEvent(ctx context.Context, event TTLEvent) error {
 func (h *TTLHandler) handleStop(ctx context.Context, event TTLEvent) error {
 	log.Info().Str("sandbox_id", event.SandboxID).Msg("stop event received")
 
+	// Guard: if the sandbox has a future TTL expiry in DynamoDB, it was recently
+	// resumed and this event is stale (from a pre-resume schedule). Skip the stop.
+	if h.DynamoClient != nil {
+		meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, h.DynamoClient, h.SandboxTableName, event.SandboxID)
+		if metaErr == nil && meta != nil && meta.ExpiresAt != nil && time.Until(*meta.ExpiresAt) > 5*time.Minute {
+			log.Info().
+				Str("sandbox_id", event.SandboxID).
+				Time("expires_at", *meta.ExpiresAt).
+				Msg("sandbox has future TTL — skipping stale stop event (likely post-resume)")
+			return nil
+		}
+	}
+
 	hibernate := h.lookupHibernation(ctx, event.SandboxID)
 
 	awsCfg, err := awspkg.LoadAWSConfig(ctx, "")
@@ -701,6 +714,19 @@ func (h *TTLHandler) handleDestroy(ctx context.Context, event TTLEvent) error {
 	sandboxID := event.SandboxID
 
 	log.Info().Str("sandbox_id", sandboxID).Msg("TTL expiry event received")
+
+	// Guard: if the sandbox has a future TTL expiry, it was recently resumed and
+	// this event is stale. Skip to avoid destroying a live sandbox.
+	if h.DynamoClient != nil {
+		meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, h.DynamoClient, h.SandboxTableName, sandboxID)
+		if metaErr == nil && meta != nil && meta.ExpiresAt != nil && time.Until(*meta.ExpiresAt) > 5*time.Minute {
+			log.Info().
+				Str("sandbox_id", sandboxID).
+				Time("expires_at", *meta.ExpiresAt).
+				Msg("sandbox has future TTL — skipping stale destroy event (likely post-resume)")
+			return nil
+		}
+	}
 
 	// Step 2: Download sandbox profile from S3 (best-effort — missing profile skips artifact upload).
 	var sandboxProfile *profilepkg.SandboxProfile
