@@ -11,6 +11,7 @@
       "name": "klanker",
       "description": "Sandbox email orchestration, operator communication, and CLI guide",
       "version": "0.1.0",
+      "lastUpdated": "2026-04-16T00:00:00Z",
       "source": "./"
     }
   ]
