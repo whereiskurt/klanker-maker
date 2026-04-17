@@ -44,8 +44,7 @@ spec:
         {"trustedDirectories":["/home/sandbox","/workspace"]}
       "/home/sandbox/.claude/plugins/known_marketplaces.json": |
         {"klanker-maker":{"source":{"source":"github","repo":"whereiskurt/klanker-maker"},"installLocation":"/home/sandbox/.claude/plugins/marketplaces/klanker-maker","lastUpdated":"2026-04-16T00:00:00Z"}}
-      "/home/sandbox/.claude/plugins/installed_plugins.json": |
-        {"version":2,"plugins":{}}
+
     rsyncPaths:
       - ".gitconfig"
       - ".config/goose"
