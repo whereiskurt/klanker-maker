@@ -2,16 +2,13 @@
   "name": "klanker-maker",
   "description": "Klanker Maker sandbox platform — email orchestration, operator CLI, and sandbox identity",
   "owner": {
-    "name": "whereiskurt",
-    "url": "https://github.com/whereiskurt"
+    "name": "whereiskurt"
   },
-  "lastUpdated": "2026-04-16T00:00:00Z",
   "plugins": [
     {
       "name": "klanker",
       "description": "Sandbox email orchestration, operator communication, and CLI guide",
       "version": "0.1.0",
-      "lastUpdated": "2026-04-16T00:00:00Z",
       "source": "./"
     }
   ]

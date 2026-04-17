@@ -67,7 +67,7 @@ spec:
       - "printf 'provider: aws_bedrock\\nmodel: us.anthropic.claude-opus-4-6-v1\\n' > /home/sandbox/.config/goose/config.yaml"
       - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace /home/sandbox/.config /home/sandbox/.local"
       - "su - sandbox -c 'cd /workspace && git config --global user.name \"Goose eBPF Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
-      - "git clone --depth 1 https://github.com/whereiskurt/klanker-maker.git /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 2>/dev/null && chown -R sandbox:sandbox /home/sandbox/.claude/plugins/cache || true"
+      - "git clone --depth 1 https://github.com/whereiskurt/klanker-maker.git /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 2>/dev/null && mkdir -p /home/sandbox/.claude/plugins/marketplaces && ln -sfn /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 /home/sandbox/.claude/plugins/marketplaces/klanker-maker && chown -R sandbox:sandbox /home/sandbox/.claude/plugins || true"
 
   sourceAccess:
     mode: allowlist
