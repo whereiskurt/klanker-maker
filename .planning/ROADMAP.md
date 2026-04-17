@@ -1171,7 +1171,7 @@ Plans:
 **Goal:** Allow a single GitHub App to be installed on multiple GitHub accounts/orgs simultaneously. Currently only one installation ID is stored globally at `/km/config/github/installation-id`; a second user installing the App overwrites the first. Change storage to per-account installation IDs, auto-resolve the correct installation at sandbox create time based on repo owner, and update discover/setup flows to store all installations.
 **Requirements**: GHMI-01, GHMI-02, GHMI-03, GHMI-04, GHMI-05
 **Depends on:** Phase 13 (GitHub App token integration)
-**Plans:** 0/3 plans
+**Plans:** 3/3 plans
 
 Plans:
 - [ ] 54-01-PLAN.md — Migrate SSM storage from single installation-id to per-account `/km/config/github/installations/{account}` keys; update configure_github.go setup/discover/manual flows to store all installations; backward-compat read of legacy key
