@@ -902,6 +902,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// Guarded by sourceAccess.github with non-empty allowedRepos — deny-by-default
 	// ensures empty repos is treated the same as no github config.
 	// Non-fatal: sandbox is provisioned even if GitHub token generation fails.
+	var resolvedInstallationID string
 	if resolvedProfile.Spec.SourceAccess.GitHub != nil && len(resolvedProfile.Spec.SourceAccess.GitHub.AllowedRepos) > 0 {
 		ssmClient := ssm.NewFromConfig(awsCfg)
 		kmsKeyARN := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
@@ -909,7 +910,8 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			kmsKeyARN = "alias/km-platform" // fallback — real key resolved by SSM
 		}
 		gh := resolvedProfile.Spec.SourceAccess.GitHub
-		if tokenErr := generateAndStoreGitHubToken(ctx, ssmClient, sandboxID, kmsKeyARN, gh.AllowedRepos, nil); tokenErr != nil {
+		instID, tokenErr := generateAndStoreGitHubToken(ctx, ssmClient, sandboxID, kmsKeyARN, gh.AllowedRepos, nil)
+		if tokenErr != nil {
 			if errors.Is(tokenErr, ErrGitHubNotConfigured) {
 				fmt.Printf("  ⊘ GitHub token: skipped (not configured)\n")
 			} else {
@@ -917,6 +919,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 					Msg("Step 13a: GitHub App token generation failed (non-fatal — sandbox is provisioned)")
 			}
 		} else {
+			resolvedInstallationID = instID
 			fmt.Fprintf(os.Stderr, "  ✓ GitHub token stored in SSM\n")
 		}
 	}
@@ -924,7 +927,17 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// Step 13b: Deploy github-token/ Terragrunt directory.
 	// Non-fatal: consistent with budget-enforcer pattern from Phase 06-06.
 	// Sandbox is provisioned even if github-token Lambda deploy fails.
+	// Inject the resolved installation ID into the compiled HCL so the
+	// EventBridge Scheduler event carries the correct per-sandbox value.
 	if artifacts.GitHubTokenHCL != "" {
+		if resolvedInstallationID != "" {
+			artifacts.GitHubTokenHCL = strings.Replace(
+				artifacts.GitHubTokenHCL,
+				`installation_id      = ""`,
+				fmt.Sprintf(`installation_id      = "%s"`, resolvedInstallationID),
+				1,
+			)
+		}
 		githubTokenDir := filepath.Join(sandboxDir, "github-token")
 		if mkErr := os.MkdirAll(githubTokenDir, 0o755); mkErr != nil {
 			log.Warn().Err(mkErr).Str("sandbox_id", sandboxID).
@@ -1836,7 +1849,7 @@ func resolveInstallationID(ctx context.Context, ssmClient SSMGetPutAPI, allowedR
 // Called from runCreate when profile.Spec.SourceAccess.GitHub is non-nil.
 // Returns ErrGitHubNotConfigured when any SSM parameter is missing (ParameterNotFound).
 // Returns a wrapped error for all other failures — the caller treats this as non-fatal.
-func generateAndStoreGitHubToken(ctx context.Context, ssmClient SSMGetPutAPI, sandboxID, kmsKeyARN string, allowedRepos, permissions []string) error {
+func generateAndStoreGitHubToken(ctx context.Context, ssmClient SSMGetPutAPI, sandboxID, kmsKeyARN string, allowedRepos, permissions []string) (string, error) {
 	withDecryption := true
 
 	appClientIDOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
@@ -1846,9 +1859,9 @@ func generateAndStoreGitHubToken(ctx context.Context, ssmClient SSMGetPutAPI, sa
 	if err != nil {
 		var notFound *ssmtypes.ParameterNotFound
 		if errors.As(err, &notFound) {
-			return ErrGitHubNotConfigured
+			return "", ErrGitHubNotConfigured
 		}
-		return fmt.Errorf("read app-client-id from SSM: %w", err)
+		return "", fmt.Errorf("read app-client-id from SSM: %w", err)
 	}
 
 	privateKeyOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
@@ -1858,14 +1871,14 @@ func generateAndStoreGitHubToken(ctx context.Context, ssmClient SSMGetPutAPI, sa
 	if err != nil {
 		var notFound *ssmtypes.ParameterNotFound
 		if errors.As(err, &notFound) {
-			return ErrGitHubNotConfigured
+			return "", ErrGitHubNotConfigured
 		}
-		return fmt.Errorf("read private-key from SSM: %w", err)
+		return "", fmt.Errorf("read private-key from SSM: %w", err)
 	}
 
 	installationID, err := resolveInstallationID(ctx, ssmClient, allowedRepos)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	appClientID := *appClientIDOut.Parameter.Value
@@ -1873,20 +1886,20 @@ func generateAndStoreGitHubToken(ctx context.Context, ssmClient SSMGetPutAPI, sa
 
 	jwtToken, err := githubpkg.GenerateGitHubAppJWT(appClientID, privateKeyPEM)
 	if err != nil {
-		return fmt.Errorf("generate GitHub App JWT: %w", err)
+		return "", fmt.Errorf("generate GitHub App JWT: %w", err)
 	}
 
 	perms := githubpkg.CompilePermissions(permissions)
 	token, err := githubpkg.ExchangeForInstallationToken(ctx, jwtToken, installationID, allowedRepos, perms)
 	if err != nil {
-		return fmt.Errorf("exchange JWT for installation token: %w", err)
+		return "", fmt.Errorf("exchange JWT for installation token: %w", err)
 	}
 
 	if err := githubpkg.WriteTokenToSSM(ctx, ssmClient, sandboxID, token, kmsKeyARN, false); err != nil {
-		return fmt.Errorf("write token to SSM: %w", err)
+		return "", fmt.Errorf("write token to SSM: %w", err)
 	}
 
-	return nil
+	return installationID, nil
 }
 
 // findRepoRoot locates the repository root by walking up from the executable

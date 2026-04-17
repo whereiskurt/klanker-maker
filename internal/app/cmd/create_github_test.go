@@ -64,7 +64,7 @@ func TestCreateGitHubSkip_AppClientIDNotFound(t *testing.T) {
 		},
 	}
 
-	err := generateAndStoreGitHubToken(context.Background(), mock, "sb-test", "alias/km-platform", nil, nil)
+	_, err := generateAndStoreGitHubToken(context.Background(), mock, "sb-test", "alias/km-platform", nil, nil)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -84,7 +84,7 @@ func TestCreateGitHubSkip_InstallationIDNotFound(t *testing.T) {
 		},
 	}
 
-	err := generateAndStoreGitHubToken(context.Background(), mock, "sb-test", "alias/km-platform", nil, nil)
+	_, err := generateAndStoreGitHubToken(context.Background(), mock, "sb-test", "alias/km-platform", nil, nil)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -103,7 +103,7 @@ func TestCreateGitHubSkip_AccessDeniedIsNotSkipped(t *testing.T) {
 		},
 	}
 
-	err := generateAndStoreGitHubToken(context.Background(), mock, "sb-test", "alias/km-platform", nil, nil)
+	_, err := generateAndStoreGitHubToken(context.Background(), mock, "sb-test", "alias/km-platform", nil, nil)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -297,6 +297,8 @@ func TestGenerateAndStoreGitHubToken_UsesPerAccountSSMKey(t *testing.T) {
 		{"resolveInstallationID call", "resolveInstallationID("},
 		{"per-account SSM path", "installations/"},
 		{"extractRepoOwner helper", "extractRepoOwner("},
+		{"installation ID injected into HCL", "resolvedInstallationID"},
+		{"HCL string replacement", `installation_id      = ""`},
 	}
 	for _, c := range checks {
 		if !strings.Contains(s, c.pattern) {
