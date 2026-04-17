@@ -18,6 +18,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/whereiskurt/klankrmkr/internal/app/cmd"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 )
@@ -544,6 +545,220 @@ func TestRunSetup_FullFlow(t *testing.T) {
 	}
 	if !names["/km/config/github/installation-id"] {
 		t.Error("expected SSM write for /km/config/github/installation-id")
+	}
+}
+
+// ---- mockSSMReadWrite implements SSMReadWriteAPI for discover tests ----
+
+type mockSSMReadWrite struct {
+	mockSSMWrite
+	params map[string]string // simulated SSM parameter store
+}
+
+func newMockSSMReadWrite(params map[string]string) *mockSSMReadWrite {
+	return &mockSSMReadWrite{params: params}
+}
+
+func (m *mockSSMReadWrite) GetParameter(_ context.Context, input *ssm.GetParameterInput, _ ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
+	name := ""
+	if input.Name != nil {
+		name = *input.Name
+	}
+	v, ok := m.params[name]
+	if !ok {
+		return nil, fmt.Errorf("ParameterNotFound: %s", name)
+	}
+	return &ssm.GetParameterOutput{
+		Parameter: &ssmtypes.Parameter{
+			Name:  input.Name,
+			Value: &v,
+		},
+	}, nil
+}
+
+// ---- Discover flow tests (Task 1 - per-account installation keys) ----
+
+func TestDiscoverInstallation_MultipleInstallations_WritesPerAccountKeys(t *testing.T) {
+	realPEM := realTestPEM(t)
+
+	// Mock GitHub API returning 2 installations
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/app/installations" {
+			w.WriteHeader(http.StatusOK)
+			installations := []map[string]interface{}{
+				{"id": int64(1001), "account": map[string]interface{}{"login": "org-alpha"}},
+				{"id": int64(1002), "account": map[string]interface{}{"login": "org-beta"}},
+			}
+			_ = json.NewEncoder(w).Encode(installations)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	// Override the base URL for fetchInstallations
+	origBase := cmd.GithubManifestBaseURL
+	cmd.GithubManifestBaseURL = srv.URL
+	defer func() { cmd.GithubManifestBaseURL = origBase }()
+
+	mock := newMockSSMReadWrite(map[string]string{
+		"/km/config/github/app-client-id": "Iv1.test",
+		"/km/config/github/private-key":   realPEM,
+	})
+	out := &bytes.Buffer{}
+
+	err := cmd.RunDiscoverInstallation(t.Context(), mock, out, true)
+	if err != nil {
+		t.Fatalf("RunDiscoverInstallation: %v", err)
+	}
+
+	// Should write per-account keys for both installations
+	foundAlpha := findSSMCall(mock.calls, "/km/config/github/installations/org-alpha")
+	if foundAlpha == nil {
+		t.Error("expected SSM write for /km/config/github/installations/org-alpha")
+	} else if *foundAlpha.Value != "1001" {
+		t.Errorf("org-alpha value: got %q, want %q", *foundAlpha.Value, "1001")
+	}
+
+	foundBeta := findSSMCall(mock.calls, "/km/config/github/installations/org-beta")
+	if foundBeta == nil {
+		t.Error("expected SSM write for /km/config/github/installations/org-beta")
+	} else if *foundBeta.Value != "1002" {
+		t.Errorf("org-beta value: got %q, want %q", *foundBeta.Value, "1002")
+	}
+}
+
+func TestDiscoverInstallation_MultipleInstallations_WritesLegacyKey(t *testing.T) {
+	realPEM := realTestPEM(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/app/installations" {
+			w.WriteHeader(http.StatusOK)
+			installations := []map[string]interface{}{
+				{"id": int64(2001), "account": map[string]interface{}{"login": "first-org"}},
+				{"id": int64(2002), "account": map[string]interface{}{"login": "second-org"}},
+			}
+			_ = json.NewEncoder(w).Encode(installations)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	origBase := cmd.GithubManifestBaseURL
+	cmd.GithubManifestBaseURL = srv.URL
+	defer func() { cmd.GithubManifestBaseURL = origBase }()
+
+	mock := newMockSSMReadWrite(map[string]string{
+		"/km/config/github/app-client-id": "Iv1.test",
+		"/km/config/github/private-key":   realPEM,
+	})
+	out := &bytes.Buffer{}
+
+	err := cmd.RunDiscoverInstallation(t.Context(), mock, out, true)
+	if err != nil {
+		t.Fatalf("RunDiscoverInstallation: %v", err)
+	}
+
+	// Legacy key should be written with FIRST installation's ID
+	foundLegacy := findSSMCall(mock.calls, "/km/config/github/installation-id")
+	if foundLegacy == nil {
+		t.Error("expected SSM write for legacy /km/config/github/installation-id")
+	} else if *foundLegacy.Value != "2001" {
+		t.Errorf("legacy installation-id value: got %q, want %q", *foundLegacy.Value, "2001")
+	}
+}
+
+func TestDiscoverInstallation_SingleInstallation_WritesBothKeys(t *testing.T) {
+	realPEM := realTestPEM(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/app/installations" {
+			w.WriteHeader(http.StatusOK)
+			installations := []map[string]interface{}{
+				{"id": int64(3001), "account": map[string]interface{}{"login": "solo-org"}},
+			}
+			_ = json.NewEncoder(w).Encode(installations)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	origBase := cmd.GithubManifestBaseURL
+	cmd.GithubManifestBaseURL = srv.URL
+	defer func() { cmd.GithubManifestBaseURL = origBase }()
+
+	mock := newMockSSMReadWrite(map[string]string{
+		"/km/config/github/app-client-id": "Iv1.test",
+		"/km/config/github/private-key":   realPEM,
+	})
+	out := &bytes.Buffer{}
+
+	err := cmd.RunDiscoverInstallation(t.Context(), mock, out, true)
+	if err != nil {
+		t.Fatalf("RunDiscoverInstallation: %v", err)
+	}
+
+	// Per-account key
+	foundAccount := findSSMCall(mock.calls, "/km/config/github/installations/solo-org")
+	if foundAccount == nil {
+		t.Error("expected SSM write for /km/config/github/installations/solo-org")
+	} else if *foundAccount.Value != "3001" {
+		t.Errorf("solo-org value: got %q, want %q", *foundAccount.Value, "3001")
+	}
+
+	// Legacy key
+	foundLegacy := findSSMCall(mock.calls, "/km/config/github/installation-id")
+	if foundLegacy == nil {
+		t.Error("expected SSM write for legacy /km/config/github/installation-id")
+	} else if *foundLegacy.Value != "3001" {
+		t.Errorf("legacy value: got %q, want %q", *foundLegacy.Value, "3001")
+	}
+}
+
+func TestDiscoverInstallation_OutputListsAllAccounts(t *testing.T) {
+	realPEM := realTestPEM(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/app/installations" {
+			w.WriteHeader(http.StatusOK)
+			installations := []map[string]interface{}{
+				{"id": int64(4001), "account": map[string]interface{}{"login": "org-one"}},
+				{"id": int64(4002), "account": map[string]interface{}{"login": "org-two"}},
+			}
+			_ = json.NewEncoder(w).Encode(installations)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	origBase := cmd.GithubManifestBaseURL
+	cmd.GithubManifestBaseURL = srv.URL
+	defer func() { cmd.GithubManifestBaseURL = origBase }()
+
+	mock := newMockSSMReadWrite(map[string]string{
+		"/km/config/github/app-client-id": "Iv1.test",
+		"/km/config/github/private-key":   realPEM,
+	})
+	out := &bytes.Buffer{}
+
+	err := cmd.RunDiscoverInstallation(t.Context(), mock, out, true)
+	if err != nil {
+		t.Fatalf("RunDiscoverInstallation: %v", err)
+	}
+
+	outStr := out.String()
+	if !strings.Contains(outStr, "installations/org-one") {
+		t.Errorf("expected output to mention installations/org-one, got: %s", outStr)
+	}
+	if !strings.Contains(outStr, "installations/org-two") {
+		t.Errorf("expected output to mention installations/org-two, got: %s", outStr)
 	}
 }
 

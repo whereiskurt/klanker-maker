@@ -24,9 +24,9 @@ import (
 	ghpkg "github.com/whereiskurt/klankrmkr/pkg/github"
 )
 
-// githubManifestBaseURL is the base URL for the GitHub manifest exchange API.
+// GithubManifestBaseURL is the base URL for the GitHub manifest exchange API.
 // Package-level var enables test injection (follows GitHubAPIBaseURL pattern from pkg/github/token.go).
-var githubManifestBaseURL = "https://api.github.com"
+var GithubManifestBaseURL = "https://api.github.com"
 
 // SSMWriteAPI is a narrow interface for writing SSM parameters.
 // The real *ssm.Client satisfies this interface directly.
@@ -124,7 +124,7 @@ Flags:
 				if !ok {
 					return fmt.Errorf("SSM client does not support GetParameter (needed for --discover)")
 				}
-				return runDiscoverInstallation(ctx, rwClient, writer, force)
+				return RunDiscoverInstallation(ctx, rwClient, writer, force)
 			}
 
 			return runConfigureGitHub(ctx, *ssmClientPtr, writer, reader,
@@ -233,9 +233,10 @@ func runConfigureGitHub(ctx context.Context, ssmClient SSMWriteAPI, out io.Write
 	return nil
 }
 
-// runDiscoverInstallation reads the App credentials from SSM, fetches installations
-// from the GitHub API, and stores the installation ID in SSM.
-func runDiscoverInstallation(ctx context.Context, client SSMReadWriteAPI, out io.Writer, force bool) error {
+// RunDiscoverInstallation reads the App credentials from SSM, fetches installations
+// from the GitHub API, and stores the installation ID(s) in SSM.
+// Exported for testability.
+func RunDiscoverInstallation(ctx context.Context, client SSMReadWriteAPI, out io.Writer, force bool) error {
 	// Read app-client-id (used as the App ID / JWT issuer for the installations API).
 	clientIDOut, err := client.GetParameter(ctx, &ssm.GetParameterInput{
 		Name: aws.String("/km/config/github/app-client-id"),
@@ -257,7 +258,7 @@ func runDiscoverInstallation(ctx context.Context, client SSMReadWriteAPI, out io
 
 	fmt.Fprintf(out, "Fetching installations for App %s...\n", appClientID)
 
-	installations, err := fetchInstallations(ctx, githubManifestBaseURL, appClientID, pemKey)
+	installations, err := fetchInstallations(ctx, GithubManifestBaseURL, appClientID, pemKey)
 	if err != nil {
 		return fmt.Errorf("fetching installations: %w\nMake sure the App is installed on your account/org first", err)
 	}
@@ -275,6 +276,18 @@ func runDiscoverInstallation(ctx context.Context, client SSMReadWriteAPI, out io
 		fmt.Fprintf(out, "  %s [%d] %s\n", marker, inst.ID, inst.Account)
 	}
 
+	// Write per-account installation keys for ALL installations.
+	for _, inst := range installations {
+		instID := strconv.FormatInt(inst.ID, 10)
+		paramPath := fmt.Sprintf("/km/config/github/installations/%s", inst.Account)
+		if err := putSSMParam(ctx, client, paramPath,
+			instID, ssmtypes.ParameterTypeString, "", force); err != nil {
+			return fmt.Errorf("writing per-account installation key to SSM: %w", err)
+		}
+		fmt.Fprintf(out, "Written: %s (%s)\n", paramPath, instID)
+	}
+
+	// Write legacy /km/config/github/installation-id with the first installation (backward compat).
 	installID := strconv.FormatInt(installations[0].ID, 10)
 	if err := putSSMParam(ctx, client, "/km/config/github/installation-id",
 		installID, ssmtypes.ParameterTypeString, "", force); err != nil {
@@ -606,7 +619,7 @@ func runConfigureGitHubSetupInteractive(ctx context.Context, ssmClient SSMWriteA
 		return ctx.Err()
 	}
 
-	return RunConfigureGitHubSetup(ctx, ssmClient, out, cfg, force, githubManifestBaseURL, code)
+	return RunConfigureGitHubSetup(ctx, ssmClient, out, cfg, force, GithubManifestBaseURL, code)
 }
 
 // RunConfigureGitHubSetup is the testable core of the manifest setup flow.
