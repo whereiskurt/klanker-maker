@@ -715,9 +715,10 @@ func (h *TTLHandler) handleDestroy(ctx context.Context, event TTLEvent) error {
 
 	log.Info().Str("sandbox_id", sandboxID).Msg("TTL expiry event received")
 
-	// Guard: if the sandbox has a future TTL expiry, it was recently resumed and
-	// this event is stale. Skip to avoid destroying a live sandbox.
-	if h.DynamoClient != nil {
+	// Guard: if this is NOT an explicit destroy (km destroy) and the sandbox has
+	// a future TTL expiry, it was recently resumed and this event is stale.
+	// Explicit destroy (event_type "destroy") always proceeds.
+	if event.EventType != "destroy" && h.DynamoClient != nil {
 		meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, h.DynamoClient, h.SandboxTableName, sandboxID)
 		if metaErr == nil && meta != nil && meta.ExpiresAt != nil && time.Until(*meta.ExpiresAt) > 5*time.Minute {
 			log.Info().
