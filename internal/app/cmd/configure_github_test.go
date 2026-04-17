@@ -343,9 +343,9 @@ func TestManifestJSON_Structure(t *testing.T) {
 		t.Errorf("name: got %v, want klanker-maker-sandbox", m["name"])
 	}
 
-	// public must be false
-	if pub, ok := m["public"].(bool); !ok || pub {
-		t.Errorf("public: got %v, want false", m["public"])
+	// public must be true (allows cross-account installation)
+	if pub, ok := m["public"].(bool); !ok || !pub {
+		t.Errorf("public: got %v, want true", m["public"])
 	}
 
 	// default_permissions: contents = "read", pull_requests = "write"

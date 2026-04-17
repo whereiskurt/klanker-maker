@@ -343,7 +343,7 @@ func BuildManifestJSON(redirectURL string) string {
 	manifest := map[string]interface{}{
 		"name":   "klanker-maker-sandbox",
 		"url":    "https://github.com/whereiskurt/klankrmkr",
-		"public": false,
+		"public": true,
 		"default_permissions": map[string]interface{}{
 			"contents":      "read",
 			"pull_requests": "write",
