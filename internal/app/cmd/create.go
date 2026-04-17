@@ -91,6 +91,8 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	var dockerShortcut bool
 	var ttlOverride string
 	var idleOverride string
+	var computeBudgetOverride float64
+	var aiBudgetOverride float64
 
 	cmd := &cobra.Command{
 		Use:   "create <profile.yaml>",
@@ -136,10 +138,10 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 			}
 
 			if useRemote {
-				_, remoteErr := runCreateRemote(cfg, args[0], onDemand, noBedrock, awsProfile, aliasOverride, ttlOverride, idleOverride)
+				_, remoteErr := runCreateRemote(cfg, args[0], onDemand, noBedrock, awsProfile, aliasOverride, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride)
 				return remoteErr
 			}
-			return runCreate(cfg, args[0], onDemand, noBedrock, awsProfile, verbose, sandboxIDOverride, aliasOverride, substrateOverride, ttlOverride, idleOverride)
+			return runCreate(cfg, args[0], onDemand, noBedrock, awsProfile, verbose, sandboxIDOverride, aliasOverride, substrateOverride, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride)
 		},
 	}
 
@@ -168,12 +170,16 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 		"Override spec.lifecycle.ttl (e.g. 3h, 30m). Use 0 to disable auto-destroy.")
 	cmd.Flags().StringVar(&idleOverride, "idle", "",
 		"Override spec.lifecycle.idleTimeout (e.g. 30m, 2h).")
+	cmd.Flags().Float64Var(&computeBudgetOverride, "compute", 0,
+		"Override spec.budget.compute.maxSpendUSD (e.g. 2.00)")
+	cmd.Flags().Float64Var(&aiBudgetOverride, "ai", 0,
+		"Override spec.budget.ai.maxSpendUSD (e.g. 10.00)")
 
 	return cmd
 }
 
 // runCreate executes the full create workflow.
-func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, verbose bool, sandboxIDOverride string, aliasOverride string, substrateOverride string, ttlOverride string, idleOverride string, clonedFromOverride ...string) error {
+func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, verbose bool, sandboxIDOverride string, aliasOverride string, substrateOverride string, ttlOverride string, idleOverride string, computeBudgetOverride float64, aiBudgetOverride float64, clonedFromOverride ...string) error {
 	createStart := time.Now()
 	ctx := context.Background()
 
@@ -268,6 +274,9 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	if err := applyLifecycleOverrides(resolvedProfile, ttlOverride, idleOverride); err != nil {
 		return err
 	}
+
+	// Apply --compute and --ai budget overrides.
+	applyBudgetOverrides(resolvedProfile, computeBudgetOverride, aiBudgetOverride)
 
 	// --no-bedrock: disable Bedrock access entirely
 	if noBedrock {
@@ -1505,7 +1514,7 @@ func runDockerComposeUp(ctx context.Context, sandboxID, composeFilePath string, 
 //
 // The create-handler Lambda downloads the artifacts, runs km create as a subprocess,
 // and sends notifications on success/failure.
-func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, aliasOverride string, ttlOverride string, idleOverride string, clonedFromOverride ...string) (string, error) {
+func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, aliasOverride string, ttlOverride string, idleOverride string, computeBudgetOverride float64, aiBudgetOverride float64, clonedFromOverride ...string) (string, error) {
 	ctx := context.Background()
 
 	// Step 1: Read profile file
@@ -1611,6 +1620,9 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	if err := applyLifecycleOverrides(resolvedProfile, ttlOverride, idleOverride); err != nil {
 		return "", err
 	}
+
+	// Apply --compute and --ai budget overrides.
+	applyBudgetOverrides(resolvedProfile, computeBudgetOverride, aiBudgetOverride)
 
 	// --no-bedrock: disable Bedrock access entirely
 	if noBedrock {
@@ -1964,6 +1976,7 @@ func stripBedrockEnvVars(p *profile.SandboxProfile) {
 // because the rule only fires when TTL is a real duration.
 func applyLifecycleOverrides(p *profile.SandboxProfile, ttlOverride, idleOverride string) error {
 	if ttlOverride != "" {
+		ttlOverride = normalizeDuration(ttlOverride)
 		if ttlOverride == "0" || ttlOverride == "0s" {
 			// TTL=0 means "no auto-destroy" — store "0" (passes schema validation).
 			// All TTL schedule/expiry code checks isTTLDisabled() to skip scheduling.
@@ -1977,6 +1990,7 @@ func applyLifecycleOverrides(p *profile.SandboxProfile, ttlOverride, idleOverrid
 		}
 	}
 	if idleOverride != "" {
+		idleOverride = normalizeDuration(idleOverride)
 		if _, err := time.ParseDuration(idleOverride); err != nil {
 			return fmt.Errorf("invalid --idle value %q: %w", idleOverride, err)
 		}
@@ -1993,6 +2007,34 @@ func applyLifecycleOverrides(p *profile.SandboxProfile, ttlOverride, idleOverrid
 		}
 	}
 	return nil
+}
+
+// applyBudgetOverrides applies --compute and --ai CLI overrides to the resolved profile.
+// Zero values mean "no override" (keep profile defaults).
+func applyBudgetOverrides(p *profile.SandboxProfile, computeOverride, aiOverride float64) {
+	if computeOverride > 0 {
+		if p.Spec.Budget.Compute == nil {
+			p.Spec.Budget.Compute = &profile.ComputeBudget{}
+		}
+		p.Spec.Budget.Compute.MaxSpendUSD = computeOverride
+	}
+	if aiOverride > 0 {
+		if p.Spec.Budget.AI == nil {
+			p.Spec.Budget.AI = &profile.AIBudget{}
+		}
+		p.Spec.Budget.AI.MaxSpendUSD = aiOverride
+	}
+}
+
+// normalizeDuration converts common duration shorthand to Go-compatible format.
+// e.g. "16hr" → "16h", "30min" → "30m", "2hrs" → "2h"
+func normalizeDuration(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.Replace(s, "hrs", "h", 1)
+	s = strings.Replace(s, "hr", "h", 1)
+	s = strings.Replace(s, "min", "m", 1)
+	s = strings.Replace(s, "sec", "s", 1)
+	return s
 }
 
 // isTTLDisabled returns true when TTL is effectively disabled (empty or "0").
