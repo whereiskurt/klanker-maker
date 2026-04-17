@@ -1166,6 +1166,18 @@ Plans:
 - [ ] 53-01-PLAN.md — Create pkg/localnumber package with TDD (State, Load, Save, Assign, Remove, Resolve, Reconcile)
 - [ ] 53-02-PLAN.md — Wire local numbers into create, list, sandbox_ref, and destroy commands
 
+### Phase 54: Multi-account GitHub App installations — support multiple GitHub users installing the same App
+
+**Goal:** Allow a single GitHub App to be installed on multiple GitHub accounts/orgs simultaneously. Currently only one installation ID is stored globally at `/km/config/github/installation-id`; a second user installing the App overwrites the first. Change storage to per-account installation IDs, auto-resolve the correct installation at sandbox create time based on repo owner, and update discover/setup flows to store all installations.
+**Requirements**: GHMI-01, GHMI-02, GHMI-03, GHMI-04, GHMI-05
+**Depends on:** Phase 13 (GitHub App token integration)
+**Plans:** 0/3 plans
+
+Plans:
+- [ ] 54-01-PLAN.md — Migrate SSM storage from single installation-id to per-account `/km/config/github/installations/{account}` keys; update configure_github.go setup/discover/manual flows to store all installations; backward-compat read of legacy key
+- [ ] 54-02-PLAN.md — Update create.go `generateAndStoreGitHubToken` to resolve installation ID from repo owner; extract owner from `sourceAccess.github.repos` entries; fall back to legacy single ID if per-account not found
+- [ ] 54-03-PLAN.md — Update doctor.go health check, token-refresher Lambda event to carry per-sandbox installation ID, and add tests for multi-installation flows
+
 
 
 

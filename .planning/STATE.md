@@ -7,7 +7,7 @@ stopped_at: Completed 53-02-PLAN.md
 last_updated: "2026-04-13T21:55:03.578Z"
 last_activity: 2026-03-21 — Roadmap revised; ECS added as v1 substrate; PROV-09, PROV-10 added; total v1 requirements now 45
 progress:
-  total_phases: 53
+  total_phases: 54
   completed_phases: 50
   total_plans: 154
   completed_plans: 155
@@ -604,6 +604,7 @@ None yet.
 - Phase 50 added: km agent non-interactive execution — fire prompts via SSM SendCommand, --no-bedrock, --auto-start, S3 fast path, km at agent run
 - Phase 51 added: km agent tmux sessions — persistent tmux sessions for live attach, survive disconnects, --interactive mode, km agent attach
 - Phase 53 added: Persistent local sandbox numbering — monotonic counter assigned at create time, stored locally, replaces ephemeral positional numbers in km list
+- Phase 54 added: Multi-account GitHub App installations — support multiple GitHub users installing the same App, per-account SSM keys, auto-resolve installation from repo owner at create time
 
 ## Session Continuity
 
