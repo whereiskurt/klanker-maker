@@ -45,7 +45,7 @@ spec:
       "/home/sandbox/.claude/plugins/known_marketplaces.json": |
         {"klanker-maker":{"source":{"source":"github","repo":"whereiskurt/klanker-maker"},"installLocation":"/home/sandbox/.claude/plugins/marketplaces/klanker-maker","lastUpdated":"2026-04-16T00:00:00Z"}}
       "/home/sandbox/.claude/plugins/installed_plugins.json": |
-        {"version":2,"plugins":{"klanker@klanker-maker":[{"scope":"user","installPath":"/home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0","version":"0.1.0"}]}}
+        {"version":2,"plugins":{}}
     rsyncPaths:
       - ".gitconfig"
       - ".config/goose"
@@ -67,7 +67,7 @@ spec:
       - "printf 'provider: aws_bedrock\\nmodel: us.anthropic.claude-opus-4-6-v1\\n' > /home/sandbox/.config/goose/config.yaml"
       - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace /home/sandbox/.config /home/sandbox/.local"
       - "su - sandbox -c 'cd /workspace && git config --global user.name \"Goose eBPF Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
-      - "git clone --depth 1 https://github.com/whereiskurt/klanker-maker.git /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 2>/dev/null && mkdir -p /home/sandbox/.claude/plugins/marketplaces && ln -sfn /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 /home/sandbox/.claude/plugins/marketplaces/klanker-maker && chown -R sandbox:sandbox /home/sandbox/.claude/plugins || true"
+      - "git clone --depth 1 https://github.com/whereiskurt/klanker-maker.git /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 2>/dev/null && mkdir -p /home/sandbox/.claude/plugins/marketplaces && ln -sfn /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 /home/sandbox/.claude/plugins/marketplaces/klanker-maker && KM_SHA=$(git -C /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 rev-parse HEAD) && KM_NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z) && printf '{\"version\":2,\"plugins\":{\"klanker@klanker-maker\":[{\"scope\":\"user\",\"installPath\":\"/home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0\",\"version\":\"0.1.0\",\"installedAt\":\"%s\",\"lastUpdated\":\"%s\",\"gitCommitSha\":\"%s\"}]}}' \"$KM_NOW\" \"$KM_NOW\" \"$KM_SHA\" > /home/sandbox/.claude/plugins/installed_plugins.json && chown -R sandbox:sandbox /home/sandbox/.claude/plugins || true"
 
   sourceAccess:
     mode: allowlist
