@@ -149,3 +149,158 @@ func TestCreateGitHubSkip_NonFatalPreserved(t *testing.T) {
 		t.Error("create.go: non-fatal warn log for GitHub token errors not found")
 	}
 }
+
+// --- Tests for extractRepoOwner ---
+
+func TestExtractRepoOwner(t *testing.T) {
+	tests := []struct {
+		repo string
+		want string
+	}{
+		{"userA/my-repo", "userA"},
+		{"orgB/other-repo", "orgB"},
+		{"bare-repo", ""},
+		{"*", ""},
+		{"", ""},
+		{"owner/repo/extra", "owner"},
+	}
+	for _, tc := range tests {
+		got := extractRepoOwner(tc.repo)
+		if got != tc.want {
+			t.Errorf("extractRepoOwner(%q) = %q, want %q", tc.repo, got, tc.want)
+		}
+	}
+}
+
+// --- Tests for resolveInstallationID ---
+
+func TestResolveInstallationID_PerAccountFound(t *testing.T) {
+	mock := &mockSSMGetPut{
+		getResults: map[string]mockSSMResult{
+			"/km/config/github/installations/userA": {value: "12345678"},
+		},
+	}
+	id, err := resolveInstallationID(context.Background(), mock, []string{"userA/repo1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "12345678" {
+		t.Errorf("got %q, want %q", id, "12345678")
+	}
+}
+
+func TestResolveInstallationID_FallbackToLegacy(t *testing.T) {
+	mock := &mockSSMGetPut{
+		getResults: map[string]mockSSMResult{
+			"/km/config/github/installations/userA": {err: paramNotFound("/km/config/github/installations/userA")},
+			"/km/config/github/installation-id":     {value: "99999"},
+		},
+	}
+	id, err := resolveInstallationID(context.Background(), mock, []string{"userA/repo1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "99999" {
+		t.Errorf("got %q, want %q", id, "99999")
+	}
+}
+
+func TestResolveInstallationID_BothMissing(t *testing.T) {
+	mock := &mockSSMGetPut{
+		getResults: map[string]mockSSMResult{
+			"/km/config/github/installations/userA": {err: paramNotFound("/km/config/github/installations/userA")},
+			"/km/config/github/installation-id":     {err: paramNotFound("/km/config/github/installation-id")},
+		},
+	}
+	_, err := resolveInstallationID(context.Background(), mock, []string{"userA/repo1"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrGitHubNotConfigured) {
+		t.Errorf("expected ErrGitHubNotConfigured, got: %v", err)
+	}
+}
+
+func TestResolveInstallationID_BareReposFallbackToLegacy(t *testing.T) {
+	mock := &mockSSMGetPut{
+		getResults: map[string]mockSSMResult{
+			"/km/config/github/installation-id": {value: "legacy-id"},
+		},
+	}
+	id, err := resolveInstallationID(context.Background(), mock, []string{"bare-repo"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "legacy-id" {
+		t.Errorf("got %q, want %q", id, "legacy-id")
+	}
+}
+
+func TestResolveInstallationID_WildcardFallbackToLegacy(t *testing.T) {
+	mock := &mockSSMGetPut{
+		getResults: map[string]mockSSMResult{
+			"/km/config/github/installation-id": {value: "legacy-id"},
+		},
+	}
+	id, err := resolveInstallationID(context.Background(), mock, []string{"*"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "legacy-id" {
+		t.Errorf("got %q, want %q", id, "legacy-id")
+	}
+}
+
+func TestResolveInstallationID_MixedOwnersUsesFirst(t *testing.T) {
+	mock := &mockSSMGetPut{
+		getResults: map[string]mockSSMResult{
+			"/km/config/github/installations/orgA": {value: "11111"},
+		},
+	}
+	id, err := resolveInstallationID(context.Background(), mock, []string{"orgA/repo1", "orgB/repo2"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "11111" {
+		t.Errorf("got %q, want %q", id, "11111")
+	}
+}
+
+func TestResolveInstallationID_NilReposFallbackToLegacy(t *testing.T) {
+	mock := &mockSSMGetPut{
+		getResults: map[string]mockSSMResult{
+			"/km/config/github/installation-id": {value: "legacy-id"},
+		},
+	}
+	id, err := resolveInstallationID(context.Background(), mock, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "legacy-id" {
+		t.Errorf("got %q, want %q", id, "legacy-id")
+	}
+}
+
+// TestGenerateAndStoreGitHubToken_UsesPerAccountSSMKey verifies that
+// generateAndStoreGitHubToken calls resolveInstallationID (source-level check).
+func TestGenerateAndStoreGitHubToken_UsesPerAccountSSMKey(t *testing.T) {
+	src, err := os.ReadFile("create.go")
+	if err != nil {
+		t.Fatalf("read create.go: %v", err)
+	}
+	s := string(src)
+
+	checks := []struct {
+		name    string
+		pattern string
+	}{
+		{"resolveInstallationID call", "resolveInstallationID("},
+		{"per-account SSM path", "installations/"},
+		{"extractRepoOwner helper", "extractRepoOwner("},
+	}
+	for _, c := range checks {
+		if !strings.Contains(s, c.pattern) {
+			t.Errorf("create.go missing %s (expected %q)", c.name, c.pattern)
+		}
+	}
+}
