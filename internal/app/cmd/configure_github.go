@@ -65,6 +65,7 @@ func newConfigureGitHubCmdCore(cfg *config.Config, ssmClientPtr *SSMWriteAPI, in
 		appClientID    string
 		privateKeyFile string
 		installationID string
+		account        string
 		force          bool
 		setup          bool
 		discover       bool
@@ -128,7 +129,7 @@ Flags:
 			}
 
 			return runConfigureGitHub(ctx, *ssmClientPtr, writer, reader,
-				nonInteractive, appClientID, privateKeyFile, installationID, force, cfg)
+				nonInteractive, appClientID, privateKeyFile, installationID, account, force, cfg)
 		},
 	}
 
@@ -140,6 +141,8 @@ Flags:
 		"Path to the GitHub App private key PEM file")
 	cmd.Flags().StringVar(&installationID, "installation-id", "",
 		"GitHub App installation ID for the target org/user")
+	cmd.Flags().StringVar(&account, "account", "",
+		"GitHub account/org login for per-account installation storage (used with --installation-id)")
 	cmd.Flags().BoolVar(&force, "force", false,
 		"Overwrite existing SSM parameters (default: refuse if already set)")
 	cmd.Flags().BoolVar(&setup, "setup", false,
@@ -154,7 +157,7 @@ Flags:
 
 // runConfigureGitHub implements the configure github wizard logic.
 func runConfigureGitHub(ctx context.Context, ssmClient SSMWriteAPI, out io.Writer, in io.Reader,
-	nonInteractive bool, appClientID, privateKeyFile, installationID string, force bool, cfg *config.Config) error {
+	nonInteractive bool, appClientID, privateKeyFile, installationID, account string, force bool, cfg *config.Config) error {
 
 	if nonInteractive {
 		// Validate required flags
@@ -222,7 +225,17 @@ func runConfigureGitHub(ctx context.Context, ssmClient SSMWriteAPI, out io.Write
 	}
 	fmt.Fprintf(out, "Written: /km/config/github/private-key (SecureString)\n")
 
-	// Write /km/config/github/installation-id
+	// Write per-account installation key if --account is provided.
+	if account != "" {
+		paramPath := fmt.Sprintf("/km/config/github/installations/%s", account)
+		if err := putSSMParam(ctx, ssmClient, paramPath,
+			installationID, ssmtypes.ParameterTypeString, "", overwrite); err != nil {
+			return fmt.Errorf("writing per-account installation key to SSM: %w", err)
+		}
+		fmt.Fprintf(out, "Written: %s (%s)\n", paramPath, installationID)
+	}
+
+	// Write /km/config/github/installation-id (legacy, always written for backward compat)
 	if err := putSSMParam(ctx, ssmClient, "/km/config/github/installation-id",
 		installationID, ssmtypes.ParameterTypeString, "", overwrite); err != nil {
 		return fmt.Errorf("writing installation-id to SSM: %w", err)
@@ -661,6 +674,18 @@ func RunConfigureGitHubSetup(ctx context.Context, ssmClient SSMWriteAPI, out io.
 	}
 
 	if len(installations) > 0 {
+		// Write per-account installation keys for ALL installations.
+		for _, inst := range installations {
+			instID := strconv.FormatInt(inst.ID, 10)
+			paramPath := fmt.Sprintf("/km/config/github/installations/%s", inst.Account)
+			if err := putSSMParam(ctx, ssmClient, paramPath,
+				instID, ssmtypes.ParameterTypeString, "", overwrite); err != nil {
+				return fmt.Errorf("manifest setup: write per-account installation key to SSM: %w", err)
+			}
+			fmt.Fprintf(out, "Written: %s (%s)\n", paramPath, instID)
+		}
+
+		// Write legacy /km/config/github/installation-id with first installation (backward compat).
 		installID := strconv.FormatInt(installations[0].ID, 10)
 		if err := putSSMParam(ctx, ssmClient, "/km/config/github/installation-id",
 			installID, ssmtypes.ParameterTypeString, "", overwrite); err != nil {

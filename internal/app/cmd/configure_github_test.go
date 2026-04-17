@@ -819,3 +819,149 @@ func TestRunSetup_NoInstallations(t *testing.T) {
 		t.Errorf("expected install instructions in output, got: %s", outStr)
 	}
 }
+
+// ---- Setup flow per-account tests (Task 2) ----
+
+func TestRunSetup_FullFlow_WritesPerAccountKeys(t *testing.T) {
+	realPEM := realTestPEM(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "/app-manifests/") && strings.Contains(r.URL.Path, "/conversions"):
+			w.WriteHeader(http.StatusCreated)
+			resp := map[string]interface{}{
+				"id":        int64(99001),
+				"client_id": "Iv1.fullflow",
+				"pem":       realPEM,
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case r.URL.Path == "/app/installations":
+			w.WriteHeader(http.StatusOK)
+			installations := []map[string]interface{}{
+				{"id": int64(55001), "account": map[string]interface{}{"login": "setup-org-a"}},
+				{"id": int64(55002), "account": map[string]interface{}{"login": "setup-org-b"}},
+			}
+			_ = json.NewEncoder(w).Encode(installations)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	mock := &mockSSMWrite{}
+	cfg := &config.Config{}
+	out := &bytes.Buffer{}
+
+	err := cmd.RunConfigureGitHubSetup(t.Context(), mock, out, cfg, false, srv.URL, "setupcode-peraccount")
+	if err != nil {
+		t.Fatalf("RunConfigureGitHubSetup: %v", err)
+	}
+
+	// Should write per-account keys for both installations
+	foundA := findSSMCall(mock.calls, "/km/config/github/installations/setup-org-a")
+	if foundA == nil {
+		t.Error("expected SSM write for /km/config/github/installations/setup-org-a")
+	} else if *foundA.Value != "55001" {
+		t.Errorf("setup-org-a value: got %q, want %q", *foundA.Value, "55001")
+	}
+
+	foundB := findSSMCall(mock.calls, "/km/config/github/installations/setup-org-b")
+	if foundB == nil {
+		t.Error("expected SSM write for /km/config/github/installations/setup-org-b")
+	} else if *foundB.Value != "55002" {
+		t.Errorf("setup-org-b value: got %q, want %q", *foundB.Value, "55002")
+	}
+
+	// Legacy key should still be written with first installation
+	foundLegacy := findSSMCall(mock.calls, "/km/config/github/installation-id")
+	if foundLegacy == nil {
+		t.Error("expected SSM write for legacy /km/config/github/installation-id")
+	} else if *foundLegacy.Value != "55001" {
+		t.Errorf("legacy value: got %q, want %q", *foundLegacy.Value, "55001")
+	}
+}
+
+// ---- Manual flow --account flag tests (Task 2) ----
+
+func TestConfigureGitHub_ManualWithAccount_WritesPerAccountKey(t *testing.T) {
+	cfg := &config.Config{}
+	mock := &mockSSMWrite{}
+
+	pemFile := writeTempPEM(t, validTestPEM)
+
+	in := bytes.NewReader(nil)
+	out := &bytes.Buffer{}
+	c := cmd.NewConfigureGitHubCmdWithDeps(cfg, mock, in, out)
+	c.SetArgs([]string{
+		"--non-interactive",
+		"--app-client-id", "Iv1.abc123",
+		"--private-key-file", pemFile,
+		"--installation-id", "77001",
+		"--account", "my-org",
+	})
+
+	if err := c.Execute(); err != nil {
+		t.Fatalf("configure github --account: %v", err)
+	}
+
+	// Should write per-account key
+	foundAccount := findSSMCall(mock.calls, "/km/config/github/installations/my-org")
+	if foundAccount == nil {
+		t.Error("expected SSM write for /km/config/github/installations/my-org")
+	} else if *foundAccount.Value != "77001" {
+		t.Errorf("per-account value: got %q, want %q", *foundAccount.Value, "77001")
+	}
+
+	// Legacy key should also be written
+	foundLegacy := findSSMCall(mock.calls, "/km/config/github/installation-id")
+	if foundLegacy == nil {
+		t.Error("expected SSM write for legacy /km/config/github/installation-id")
+	} else if *foundLegacy.Value != "77001" {
+		t.Errorf("legacy value: got %q, want %q", *foundLegacy.Value, "77001")
+	}
+}
+
+func TestConfigureGitHub_ManualWithoutAccount_LegacyOnly(t *testing.T) {
+	cfg := &config.Config{}
+	mock := &mockSSMWrite{}
+
+	pemFile := writeTempPEM(t, validTestPEM)
+
+	in := bytes.NewReader(nil)
+	out := &bytes.Buffer{}
+	c := cmd.NewConfigureGitHubCmdWithDeps(cfg, mock, in, out)
+	c.SetArgs([]string{
+		"--non-interactive",
+		"--app-client-id", "Iv1.abc123",
+		"--private-key-file", pemFile,
+		"--installation-id", "88001",
+	})
+
+	if err := c.Execute(); err != nil {
+		t.Fatalf("configure github (no --account): %v", err)
+	}
+
+	// Legacy key should be written
+	foundLegacy := findSSMCall(mock.calls, "/km/config/github/installation-id")
+	if foundLegacy == nil {
+		t.Error("expected SSM write for legacy /km/config/github/installation-id")
+	}
+
+	// Should NOT write any per-account key (no --account flag)
+	for _, call := range mock.calls {
+		if call.Name != nil && strings.Contains(*call.Name, "/km/config/github/installations/") {
+			t.Errorf("unexpected per-account SSM write: %s (--account was not provided)", *call.Name)
+		}
+	}
+}
+
+func TestConfigureGitHub_AccountFlagRegistered(t *testing.T) {
+	cfg := &config.Config{}
+	c := cmd.NewConfigureGitHubCmd(cfg)
+
+	f := c.Flags().Lookup("account")
+	if f == nil {
+		t.Fatal("expected --account flag to be registered on 'km configure github'")
+	}
+}
