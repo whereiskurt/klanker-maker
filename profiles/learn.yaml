@@ -78,9 +78,6 @@ spec:
         - "*"
 
   network:
-    # Phase 42: eBPF gatekeeper mode — connect4 in block mode as primary enforcer,
-    # with selective DNAT rewrite to proxy for L7-required hosts (GitHub repo
-    # filtering, Bedrock token metering). Non-L7 traffic goes direct.
     enforcement: both
     egress:
       allowedDNSSuffixes:
@@ -121,6 +118,7 @@ spec:
       image: km-tracing:latest
 
   observability:
+    learnMode: true
     commandLog:
       destination: cloudwatch
       logGroup: /klankrmkr/sandboxes
@@ -131,7 +129,6 @@ spec:
       enabled: true
       logPrompts: true
       logToolDetails: true
-    learnMode: true
     tlsCapture:
       enabled: true
       libraries:
