@@ -403,37 +403,82 @@ func checkSCP(ctx context.Context, client OrgsListPoliciesAPI, accountID string)
 
 // checkGitHubConfig verifies GitHub App config exists in SSM Parameter Store.
 // Missing parameters returns CheckWarn (not ERROR) — GitHub integration is optional.
+//
+// Check order:
+//  1. app-client-id must exist (WARN if missing)
+//  2. Per-account installations at /km/config/github/installations/ (preferred)
+//  3. Fallback to legacy /km/config/github/installation-id
+//  4. WARN only when neither per-account nor legacy installation keys exist
 func checkGitHubConfig(ctx context.Context, client SSMReadAPI) CheckResult {
 	const (
-		appClientIDParam   = "/km/config/github/app-client-id"
-		installationIDParam = "/km/config/github/installation-id"
+		appClientIDParam       = "/km/config/github/app-client-id"
+		installationIDParam    = "/km/config/github/installation-id"
+		installationsPathPrefix = "/km/config/github/installations/"
 	)
-	for _, param := range []string{appClientIDParam, installationIDParam} {
-		_, err := client.GetParameter(ctx, &ssm.GetParameterInput{
-			Name: awssdk.String(param),
-		})
-		if err != nil {
-			var notFound *ssmtypes.ParameterNotFound
-			if errors.As(err, &notFound) {
-				return CheckResult{
-					Name:        "GitHub App Config",
-					Status:      CheckWarn,
-					Message:     fmt.Sprintf("parameter %q not found — GitHub integration not configured", param),
-					Remediation: "Run 'km configure github' to set up GitHub App integration",
-				}
-			}
+
+	// Step 1: Check app-client-id exists.
+	_, err := client.GetParameter(ctx, &ssm.GetParameterInput{
+		Name: awssdk.String(appClientIDParam),
+	})
+	if err != nil {
+		var notFound *ssmtypes.ParameterNotFound
+		if errors.As(err, &notFound) {
 			return CheckResult{
 				Name:        "GitHub App Config",
 				Status:      CheckWarn,
-				Message:     fmt.Sprintf("could not read parameter %q: %v", param, err),
+				Message:     fmt.Sprintf("parameter %q not found — GitHub integration not configured", appClientIDParam),
 				Remediation: "Run 'km configure github' to set up GitHub App integration",
 			}
 		}
+		return CheckResult{
+			Name:        "GitHub App Config",
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("could not read parameter %q: %v", appClientIDParam, err),
+			Remediation: "Run 'km configure github' to set up GitHub App integration",
+		}
 	}
+
+	// Step 2: Check for per-account installation keys.
+	pathOut, err := client.GetParametersByPath(ctx, &ssm.GetParametersByPathInput{
+		Path: awssdk.String(installationsPathPrefix),
+	})
+	if err == nil && len(pathOut.Parameters) > 0 {
+		// Extract account names from parameter paths.
+		var accounts []string
+		for _, p := range pathOut.Parameters {
+			name := awssdk.ToString(p.Name)
+			// Name is e.g. "/km/config/github/installations/userA"
+			parts := strings.Split(name, "/")
+			if len(parts) > 0 {
+				accounts = append(accounts, parts[len(parts)-1])
+			}
+		}
+		sort.Strings(accounts)
+		return CheckResult{
+			Name:    "GitHub App Config",
+			Status:  CheckOK,
+			Message: fmt.Sprintf("app-client-id configured, %d installation(s) found (%s)", len(accounts), strings.Join(accounts, ", ")),
+		}
+	}
+
+	// Step 3: Fallback to legacy installation-id.
+	_, err = client.GetParameter(ctx, &ssm.GetParameterInput{
+		Name: awssdk.String(installationIDParam),
+	})
+	if err == nil {
+		return CheckResult{
+			Name:    "GitHub App Config",
+			Status:  CheckOK,
+			Message: "app-client-id and installation-id configured (legacy)",
+		}
+	}
+
+	// Step 4: Neither per-account nor legacy.
 	return CheckResult{
-		Name:    "GitHub App Config",
-		Status:  CheckOK,
-		Message: "app-client-id and installation-id are configured",
+		Name:        "GitHub App Config",
+		Status:      CheckWarn,
+		Message:     "app-client-id configured but no installation keys found — run 'km configure github' to add installations",
+		Remediation: "Run 'km configure github' to set up GitHub App integration",
 	}
 }
 
