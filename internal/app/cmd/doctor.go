@@ -112,9 +112,10 @@ type OrgsListPoliciesAPI interface {
 	ListPoliciesForTarget(ctx context.Context, params *organizations.ListPoliciesForTargetInput, optFns ...func(*organizations.Options)) (*organizations.ListPoliciesForTargetOutput, error)
 }
 
-// SSMReadAPI covers SSM GetParameter.
+// SSMReadAPI covers SSM GetParameter and GetParametersByPath.
 type SSMReadAPI interface {
 	GetParameter(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error)
+	GetParametersByPath(ctx context.Context, params *ssm.GetParametersByPathInput, optFns ...func(*ssm.Options)) (*ssm.GetParametersByPathOutput, error)
 }
 
 // EC2DescribeAPI covers EC2 DescribeVpcs and DescribeSubnets.

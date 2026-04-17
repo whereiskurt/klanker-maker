@@ -92,6 +92,8 @@ func (m *mockOrgsClient) ListPoliciesForTarget(ctx context.Context, params *orga
 type mockSSMReadClient struct {
 	outputs map[string]*ssm.GetParameterOutput
 	err     error
+	// pathOutputs maps a path prefix to matching parameters (for GetParametersByPath).
+	pathOutputs map[string][]ssmtypes.Parameter
 }
 
 func (m *mockSSMReadClient) GetParameter(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
@@ -104,6 +106,20 @@ func (m *mockSSMReadClient) GetParameter(ctx context.Context, params *ssm.GetPar
 		}
 	}
 	return nil, &ssmtypes.ParameterNotFound{}
+}
+
+func (m *mockSSMReadClient) GetParametersByPath(ctx context.Context, params *ssm.GetParametersByPathInput, optFns ...func(*ssm.Options)) (*ssm.GetParametersByPathOutput, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	path := aws.ToString(params.Path)
+	if m.pathOutputs != nil {
+		if parameters, ok := m.pathOutputs[path]; ok {
+			return &ssm.GetParametersByPathOutput{Parameters: parameters}, nil
+		}
+	}
+	// No parameters found at path — return empty result (not an error).
+	return &ssm.GetParametersByPathOutput{}, nil
 }
 
 // --- Mock EC2 ---
@@ -321,7 +337,97 @@ func TestCheckGitHubConfig_OK(t *testing.T) {
 	}
 }
 
+func TestCheckGitHubConfig_PerAccountOnly(t *testing.T) {
+	// app-client-id exists, per-account installations exist, NO legacy key.
+	client := &mockSSMReadClient{
+		outputs: map[string]*ssm.GetParameterOutput{
+			"/km/config/github/app-client-id": {
+				Parameter: &ssmtypes.Parameter{Value: aws.String("12345")},
+			},
+		},
+		pathOutputs: map[string][]ssmtypes.Parameter{
+			"/km/config/github/installations/": {
+				{Name: aws.String("/km/config/github/installations/userA"), Value: aws.String("111")},
+				{Name: aws.String("/km/config/github/installations/userB"), Value: aws.String("222")},
+			},
+		},
+	}
+	result := checkGitHubConfig(context.Background(), client)
+	if result.Status != CheckOK {
+		t.Errorf("expected CheckOK for per-account installations, got %s: %s", result.Status, result.Message)
+	}
+	if !strings.Contains(result.Message, "2 installation(s)") {
+		t.Errorf("expected installation count in message, got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "userA") || !strings.Contains(result.Message, "userB") {
+		t.Errorf("expected account names in message, got: %s", result.Message)
+	}
+}
+
+func TestCheckGitHubConfig_LegacyOnly(t *testing.T) {
+	// app-client-id exists, legacy installation-id exists, NO per-account keys.
+	client := &mockSSMReadClient{
+		outputs: map[string]*ssm.GetParameterOutput{
+			"/km/config/github/app-client-id": {
+				Parameter: &ssmtypes.Parameter{Value: aws.String("12345")},
+			},
+			"/km/config/github/installation-id": {
+				Parameter: &ssmtypes.Parameter{Value: aws.String("67890")},
+			},
+		},
+	}
+	result := checkGitHubConfig(context.Background(), client)
+	if result.Status != CheckOK {
+		t.Errorf("expected CheckOK for legacy installation-id, got %s: %s", result.Status, result.Message)
+	}
+	if !strings.Contains(result.Message, "legacy") {
+		t.Errorf("expected 'legacy' in message, got: %s", result.Message)
+	}
+}
+
+func TestCheckGitHubConfig_BothPerAccountAndLegacy(t *testing.T) {
+	// Both per-account and legacy exist — should report OK with per-account count.
+	client := &mockSSMReadClient{
+		outputs: map[string]*ssm.GetParameterOutput{
+			"/km/config/github/app-client-id": {
+				Parameter: &ssmtypes.Parameter{Value: aws.String("12345")},
+			},
+			"/km/config/github/installation-id": {
+				Parameter: &ssmtypes.Parameter{Value: aws.String("67890")},
+			},
+		},
+		pathOutputs: map[string][]ssmtypes.Parameter{
+			"/km/config/github/installations/": {
+				{Name: aws.String("/km/config/github/installations/orgA"), Value: aws.String("333")},
+			},
+		},
+	}
+	result := checkGitHubConfig(context.Background(), client)
+	if result.Status != CheckOK {
+		t.Errorf("expected CheckOK when both exist, got %s: %s", result.Status, result.Message)
+	}
+	if !strings.Contains(result.Message, "1 installation(s)") {
+		t.Errorf("expected installation count in message, got: %s", result.Message)
+	}
+}
+
+func TestCheckGitHubConfig_NeitherPerAccountNorLegacy(t *testing.T) {
+	// app-client-id exists, but neither per-account nor legacy installation keys.
+	client := &mockSSMReadClient{
+		outputs: map[string]*ssm.GetParameterOutput{
+			"/km/config/github/app-client-id": {
+				Parameter: &ssmtypes.Parameter{Value: aws.String("12345")},
+			},
+		},
+	}
+	result := checkGitHubConfig(context.Background(), client)
+	if result.Status != CheckWarn {
+		t.Errorf("expected CheckWarn when no installations exist, got %s: %s", result.Status, result.Message)
+	}
+}
+
 func TestCheckGitHubConfig_NotConfigured(t *testing.T) {
+	// app-client-id missing — should WARN.
 	client := &mockSSMReadClient{
 		err: &ssmtypes.ParameterNotFound{},
 	}
