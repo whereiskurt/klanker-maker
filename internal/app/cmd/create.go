@@ -1767,6 +1767,69 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	return sandboxID, nil
 }
 
+// extractRepoOwner returns the owner portion of a "owner/repo" string.
+// Returns empty string for bare repos (no slash), wildcards ("*"), and empty strings.
+func extractRepoOwner(repo string) string {
+	if repo == "" || repo == "*" {
+		return ""
+	}
+	parts := strings.SplitN(repo, "/", 2)
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[0]
+}
+
+// resolveInstallationID determines the GitHub App installation ID to use.
+// It extracts unique owners from allowedRepos (format "owner/repo"), then:
+//  1. For the first non-empty owner found, tries /km/config/github/installations/{owner}
+//  2. If that key exists, returns its value
+//  3. If not found (ParameterNotFound), falls back to legacy /km/config/github/installation-id
+//  4. If no owners extracted (all bare/wildcard), goes directly to legacy key
+//  5. If legacy also not found, returns ErrGitHubNotConfigured
+func resolveInstallationID(ctx context.Context, ssmClient SSMGetPutAPI, allowedRepos []string) (string, error) {
+	withDecryption := true
+
+	// Extract unique owners from allowedRepos.
+	var firstOwner string
+	for _, repo := range allowedRepos {
+		if owner := extractRepoOwner(repo); owner != "" {
+			firstOwner = owner
+			break
+		}
+	}
+
+	// Try per-account key if we have an owner.
+	if firstOwner != "" {
+		perAccountOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+			Name:           aws.String("/km/config/github/installations/" + firstOwner),
+			WithDecryption: &withDecryption,
+		})
+		if err == nil {
+			return *perAccountOut.Parameter.Value, nil
+		}
+		var notFound *ssmtypes.ParameterNotFound
+		if !errors.As(err, &notFound) {
+			return "", fmt.Errorf("read per-account installation ID for %q from SSM: %w", firstOwner, err)
+		}
+		// Per-account key not found — fall through to legacy.
+	}
+
+	// Fall back to legacy single installation-id.
+	legacyOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           aws.String("/km/config/github/installation-id"),
+		WithDecryption: &withDecryption,
+	})
+	if err != nil {
+		var notFound *ssmtypes.ParameterNotFound
+		if errors.As(err, &notFound) {
+			return "", ErrGitHubNotConfigured
+		}
+		return "", fmt.Errorf("read installation-id from SSM: %w", err)
+	}
+	return *legacyOut.Parameter.Value, nil
+}
+
 // generateAndStoreGitHubToken reads GitHub App credentials from SSM, generates an
 // installation token, and writes it to SSM at /sandbox/{sandboxID}/github-token.
 //
@@ -1800,21 +1863,13 @@ func generateAndStoreGitHubToken(ctx context.Context, ssmClient SSMGetPutAPI, sa
 		return fmt.Errorf("read private-key from SSM: %w", err)
 	}
 
-	installIDOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
-		Name:           aws.String("/km/config/github/installation-id"),
-		WithDecryption: &withDecryption,
-	})
+	installationID, err := resolveInstallationID(ctx, ssmClient, allowedRepos)
 	if err != nil {
-		var notFound *ssmtypes.ParameterNotFound
-		if errors.As(err, &notFound) {
-			return ErrGitHubNotConfigured
-		}
-		return fmt.Errorf("read installation-id from SSM: %w", err)
+		return err
 	}
 
 	appClientID := *appClientIDOut.Parameter.Value
 	privateKeyPEM := []byte(*privateKeyOut.Parameter.Value)
-	installationID := *installIDOut.Parameter.Value
 
 	jwtToken, err := githubpkg.GenerateGitHubAppJWT(appClientID, privateKeyPEM)
 	if err != nil {
