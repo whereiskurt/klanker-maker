@@ -9,23 +9,28 @@ import (
 	"sync"
 )
 
-// Recorder accumulates DNS domains, HTTP hosts, GitHub repos, and Git refs
-// observed during sandbox execution. All methods are safe for concurrent use.
+// Recorder accumulates DNS domains, HTTP hosts, GitHub repos, Git refs, and
+// shell commands observed during sandbox execution. All methods are safe for
+// concurrent use.
 type Recorder struct {
-	mu           sync.Mutex
-	dnsObserved  map[string]struct{}
-	hostObserved map[string]struct{}
-	repoObserved map[string]struct{}
-	refObserved  map[string]struct{}
+	mu              sync.Mutex
+	dnsObserved     map[string]struct{}
+	hostObserved    map[string]struct{}
+	repoObserved    map[string]struct{}
+	refObserved     map[string]struct{}
+	commandSeen     map[string]struct{}
+	commandOrdered  []string
 }
 
 // NewRecorder returns an initialised, empty Recorder.
 func NewRecorder() *Recorder {
 	return &Recorder{
-		dnsObserved:  make(map[string]struct{}),
-		hostObserved: make(map[string]struct{}),
-		repoObserved: make(map[string]struct{}),
-		refObserved:  make(map[string]struct{}),
+		dnsObserved:    make(map[string]struct{}),
+		hostObserved:   make(map[string]struct{}),
+		repoObserved:   make(map[string]struct{}),
+		refObserved:    make(map[string]struct{}),
+		commandSeen:    make(map[string]struct{}),
+		commandOrdered: []string{},
 	}
 }
 
@@ -127,5 +132,32 @@ func (r *Recorder) Repos() []string {
 	}
 	r.mu.Unlock()
 	sort.Strings(out)
+	return out
+}
+
+// RecordCommand records a shell command. Empty or whitespace-only commands are
+// ignored. Duplicate commands are deduplicated while preserving first-seen order.
+func (r *Recorder) RecordCommand(cmd string) {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return
+	}
+	r.mu.Lock()
+	if _, exists := r.commandSeen[cmd]; !exists {
+		r.commandSeen[cmd] = struct{}{}
+		r.commandOrdered = append(r.commandOrdered, cmd)
+	}
+	r.mu.Unlock()
+}
+
+// Commands returns a deduplicated slice of all recorded shell commands in
+// first-seen order. Unlike DNS/host/repo accessors, Commands does NOT sort —
+// command order is semantically meaningful. Returns an empty (non-nil) slice
+// when no commands have been recorded.
+func (r *Recorder) Commands() []string {
+	r.mu.Lock()
+	out := make([]string, len(r.commandOrdered))
+	copy(out, r.commandOrdered)
+	r.mu.Unlock()
 	return out
 }
