@@ -692,7 +692,7 @@ Plans:
 ### Phase 27: AI Spend Metering — Extract Token Counts from MITM'd Bedrock Streaming Responses
 
 **Goal:** Complete the AI budget tracking pipeline by extracting token counts and costs from MITM-intercepted Bedrock InvokeModelWithResponseStream responses.
-**Requirements**: TBD
+**Requirements**: LEARN-CMD-01, LEARN-CMD-02, LEARN-CMD-03, LEARN-CMD-04, LEARN-CMD-05, LEARN-CMD-06, LEARN-CMD-07
 **Depends on:** Phase 26
 **Plans:** 2 plans
 
@@ -1113,7 +1113,7 @@ Plans:
 ### Phase 49: Prebaked AMI support — custom images with preinstalled toolchains for fast sandbox boot
 
 **Goal:** [To be planned]
-**Requirements**: TBD
+**Requirements**: LEARN-CMD-01, LEARN-CMD-02, LEARN-CMD-03, LEARN-CMD-04, LEARN-CMD-05, LEARN-CMD-06, LEARN-CMD-07
 **Depends on:** Phase 48
 **Plans:** 2 plans
 Plans:
@@ -1188,9 +1188,10 @@ Plans:
 ### Phase 55: Learn mode command capture — record shell commands typed by root and sandbox user during km shell --learn sessions, include in observed state and generated profile output
 
 **Goal:** Extend learn mode to capture shell commands executed by both root and sandbox users during `km shell --learn` sessions. Commands are included in the observed state JSON alongside DNS/hosts/repos, and appear in the generated profile output as `spec.execution.initCommands` suggestions. Captures via bash PROMPT_COMMAND history logging or eBPF exec tracing, covering both interactive and scripted commands.
-**Requirements**: TBD
+**Requirements**: LEARN-CMD-01, LEARN-CMD-02, LEARN-CMD-03, LEARN-CMD-04, LEARN-CMD-05, LEARN-CMD-06, LEARN-CMD-07
 **Depends on:** Phase 31 (allowlist profile generator / --learn), Phase 47 (privileged execution + learn profile)
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 55 to break down)
+- [ ] 55-01-PLAN.md — Extend allowlistgen Recorder and Generator for command capture
+- [ ] 55-02-PLAN.md — Wire command capture into EC2 and Docker learn mode integration
