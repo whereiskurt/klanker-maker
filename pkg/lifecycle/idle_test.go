@@ -59,9 +59,10 @@ func (m *mockCWLogsClient) GetLogEvents(ctx context.Context, params *cloudwatchl
 }
 
 func TestIdleDetector_FiresAfterIdle(t *testing.T) {
-	// Events are 3 seconds old; idleTimeout is 1 second → should fire.
-	now := time.Now()
-	oldEventTime := now.Add(-3 * time.Second)
+	// Detector starts at T=0, idle timeout is 1s. Events are 3s before T=0.
+	// Clock advances past idle timeout on second call so detector fires.
+	startTime := time.Now()
+	oldEventTime := startTime.Add(-3 * time.Second)
 
 	mock := &mockCWLogsClient{
 		events: []kmaws.LogEvent{
@@ -79,8 +80,15 @@ func TestIdleDetector_FiresAfterIdle(t *testing.T) {
 		LogStream:    "audit",
 		OnIdle:       func(id string) { firedID = id },
 	}
-	// Inject a fixed clock so the elapsed calculation is consistent.
-	d.SetNowFn(func() time.Time { return now })
+	// Clock starts at startTime, then advances past idle timeout.
+	callCount := 0
+	d.SetNowFn(func() time.Time {
+		callCount++
+		if callCount <= 2 {
+			return startTime // first poll: set startTime, check grace
+		}
+		return startTime.Add(2 * time.Second) // past idle timeout
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -171,8 +179,8 @@ func TestTeardownPolicy_Retain(t *testing.T) {
 
 // TestIdleDetector_OnIdleNotifyCalled verifies OnIdleNotify is called when idle fires.
 func TestIdleDetector_OnIdleNotifyCalled(t *testing.T) {
-	now := time.Now()
-	oldEventTime := now.Add(-3 * time.Second)
+	startTime := time.Now()
+	oldEventTime := startTime.Add(-3 * time.Second)
 
 	mock := &mockCWLogsClient{
 		events: []kmaws.LogEvent{
@@ -191,7 +199,14 @@ func TestIdleDetector_OnIdleNotifyCalled(t *testing.T) {
 		OnIdle:       func(id string) {},
 		OnIdleNotify: func(id string) { notifiedID = id },
 	}
-	d.SetNowFn(func() time.Time { return now })
+	callCount := 0
+	d.SetNowFn(func() time.Time {
+		callCount++
+		if callCount <= 2 {
+			return startTime
+		}
+		return startTime.Add(2 * time.Second)
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -205,8 +220,8 @@ func TestIdleDetector_OnIdleNotifyCalled(t *testing.T) {
 
 // TestIdleDetector_OnIdleNotifyNilSafe verifies nil OnIdleNotify does not panic.
 func TestIdleDetector_OnIdleNotifyNilSafe(t *testing.T) {
-	now := time.Now()
-	oldEventTime := now.Add(-3 * time.Second)
+	startTime := time.Now()
+	oldEventTime := startTime.Add(-3 * time.Second)
 
 	mock := &mockCWLogsClient{
 		events: []kmaws.LogEvent{
@@ -224,7 +239,14 @@ func TestIdleDetector_OnIdleNotifyNilSafe(t *testing.T) {
 		OnIdle:       func(id string) {},
 		OnIdleNotify: nil, // explicitly nil — must not panic
 	}
-	d.SetNowFn(func() time.Time { return now })
+	callCount := 0
+	d.SetNowFn(func() time.Time {
+		callCount++
+		if callCount <= 2 {
+			return startTime
+		}
+		return startTime.Add(2 * time.Second)
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()

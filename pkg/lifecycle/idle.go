@@ -107,21 +107,34 @@ func (d *IdleDetector) Run(ctx context.Context) error {
 // Returns false when no events exist yet — the sandbox just started and hasn't
 // had time to generate activity. The startTime field tracks when the detector
 // began running so we can distinguish "just started" from "truly idle".
+//
+// For stale events (e.g. after hibernate/resume), we use the later of the last
+// event time and the detector start time as the activity baseline. This prevents
+// immediate idle detection when old pre-hibernate events are the only ones present.
 func (d *IdleDetector) isIdle(ctx context.Context, now func() time.Time) bool {
+	if d.startTime.IsZero() {
+		d.startTime = now()
+	}
+
 	events, err := kmaws.GetLogEvents(ctx, d.CWClient, d.LogGroup, d.LogStream, 1)
 	if err != nil || len(events) == 0 {
 		// No events yet — only consider idle if we've been running longer than IdleTimeout.
 		// This prevents killing sandboxes that just started and haven't generated events.
-		if d.startTime.IsZero() {
-			d.startTime = now()
-			return false
-		}
 		return now().Sub(d.startTime) > d.IdleTimeout
 	}
 
 	// Events are returned in ascending order; the last one is the most recent.
 	lastEvent := events[len(events)-1]
 	lastEventTime := time.UnixMilli(lastEvent.Timestamp)
-	elapsed := now().Sub(lastEventTime)
+
+	// Use the later of last event time and detector start time as the baseline.
+	// After hibernate/resume, startTime will be recent even though the last event
+	// is hours old — this gives the sandbox a full idle window to generate activity.
+	baseline := lastEventTime
+	if d.startTime.After(baseline) {
+		baseline = d.startTime
+	}
+
+	elapsed := now().Sub(baseline)
 	return elapsed > d.IdleTimeout
 }
