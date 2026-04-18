@@ -613,6 +613,7 @@ None yet.
 - Phase 51 added: km agent tmux sessions — persistent tmux sessions for live attach, survive disconnects, --interactive mode, km agent attach
 - Phase 53 added: Persistent local sandbox numbering — monotonic counter assigned at create time, stored locally, replaces ephemeral positional numbers in km list
 - Phase 54 added: Multi-account GitHub App installations — support multiple GitHub users installing the same App, per-account SSM keys, auto-resolve installation from repo owner at create time
+- Phase 55 added: Learn mode command capture — record shell commands typed by root and sandbox user during km shell --learn sessions, include in observed state and generated profile output
 
 ## Session Continuity
 

@@ -1184,3 +1184,13 @@ Plans:
 
 
 
+
+### Phase 55: Learn mode command capture — record shell commands typed by root and sandbox user during km shell --learn sessions, include in observed state and generated profile output
+
+**Goal:** Extend learn mode to capture shell commands executed by both root and sandbox users during `km shell --learn` sessions. Commands are included in the observed state JSON alongside DNS/hosts/repos, and appear in the generated profile output as `spec.execution.initCommands` suggestions. Captures via bash PROMPT_COMMAND history logging or eBPF exec tracing, covering both interactive and scripted commands.
+**Requirements**: TBD
+**Depends on:** Phase 31 (allowlist profile generator / --learn), Phase 47 (privileged execution + learn profile)
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 55 to break down)
