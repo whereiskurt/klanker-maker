@@ -365,6 +365,41 @@ func TestAtCmd_CreateDockerRejected(t *testing.T) {
 	}
 }
 
+// TestAtCmd_CreateWithOverrides verifies --ttl, --idle, --compute, --ai, --no-bedrock pass through.
+func TestAtCmd_CreateWithOverrides(t *testing.T) {
+	cfg := testAtConfig()
+	sched := &mockSchedulerAPI{}
+	dynamo := &mockDynamoAtAPI{}
+
+	_, _, err := runAtCmd(t, cfg, sched, dynamo, 0, nil, []string{
+		"in 1 hour", "create", "dev.yaml",
+		"--alias", "test1", "--on-demand",
+		"--ttl", "4h", "--idle", "30m",
+		"--compute", "10.00", "--ai", "5.50",
+		"--no-bedrock",
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if sched.createScheduleInput == nil || sched.createScheduleInput.Target == nil {
+		t.Fatal("CreateSchedule not called")
+	}
+	input := *sched.createScheduleInput.Target.Input
+	for _, want := range []string{
+		`"alias":"test1"`,
+		`"on_demand":true`,
+		`"ttl":"4h"`,
+		`"idle":"30m"`,
+		`"compute_budget":10`,
+		`"ai_budget":5.5`,
+		`"no_bedrock":true`,
+	} {
+		if !strings.Contains(input, want) {
+			t.Errorf("target input should contain %s, got: %s", want, input)
+		}
+	}
+}
+
 // TestAtList_Empty verifies "km at list" prints "No scheduled operations." when no records.
 func TestAtList_Empty(t *testing.T) {
 	cfg := testAtConfig()

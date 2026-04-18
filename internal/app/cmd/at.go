@@ -84,7 +84,7 @@ Lifecycle commands resolve aliases and list numbers (e.g. 'alice' or '1').
 
 Examples:
   km at '10pm tomorrow' create profiles/goose.yaml
-  km at 'in 1 hour' create profiles/goose.yaml --alias g1 --on-demand
+  km at 'in 1 hour' create profiles/goose.yaml --alias g1 --on-demand --ttl 4h --compute 10.00 --ai 5.00
   km at 'every thursday at 3pm' kill alice
   km at 'tomorrow at 6am' resume 1
   km at 'in 2 hours' extend alice 4h
@@ -233,7 +233,8 @@ Examples:
 			// under remote-create/{sandbox-id}/.km-profile.yaml — the same layout that
 			// km create --remote uses, which the create-handler Lambda expects.
 			if cmdArg == "create" && cfg.ArtifactsBucket != "" {
-				profilePath, _, _, _ := parseCreateArgs(extraArgs)
+				ca, _ := parseCreateArgs(extraArgs)
+				profilePath := ca.ProfilePath
 				if profilePath != "" {
 					if profileData, readErr := os.ReadFile(profilePath); readErr == nil {
 						p, loadErr := profile.Parse(profileData)
@@ -325,31 +326,77 @@ Examples:
 	return cmd
 }
 
+// createArgs holds the parsed create-specific flags from km at ... create.
+type createArgs struct {
+	ProfilePath    string
+	Alias          string
+	OnDemand       bool
+	TTL            string
+	Idle           string
+	ComputeBudget  float64
+	AIBudget       float64
+	NoBedrock      bool
+}
+
 // parseCreateArgs extracts create-specific flags from the extra args after the command name.
-// Returns profile path, alias, onDemand flag, and an error for unsupported flags.
-func parseCreateArgs(extraArgs []string) (profilePath, alias string, onDemand bool, err error) {
+func parseCreateArgs(extraArgs []string) (createArgs, error) {
+	var ca createArgs
 	for i := 0; i < len(extraArgs); i++ {
 		switch extraArgs[i] {
 		case "--alias":
 			if i+1 >= len(extraArgs) {
-				return "", "", false, fmt.Errorf("--alias requires a value")
+				return ca, fmt.Errorf("--alias requires a value")
 			}
-			alias = extraArgs[i+1]
-			i++ // skip value
+			ca.Alias = extraArgs[i+1]
+			i++
 		case "--on-demand":
-			onDemand = true
+			ca.OnDemand = true
+		case "--no-bedrock":
+			ca.NoBedrock = true
+		case "--ttl":
+			if i+1 >= len(extraArgs) {
+				return ca, fmt.Errorf("--ttl requires a value")
+			}
+			ca.TTL = extraArgs[i+1]
+			i++
+		case "--idle":
+			if i+1 >= len(extraArgs) {
+				return ca, fmt.Errorf("--idle requires a value")
+			}
+			ca.Idle = extraArgs[i+1]
+			i++
+		case "--compute":
+			if i+1 >= len(extraArgs) {
+				return ca, fmt.Errorf("--compute requires a value")
+			}
+			val, parseErr := strconv.ParseFloat(extraArgs[i+1], 64)
+			if parseErr != nil {
+				return ca, fmt.Errorf("--compute: invalid number %q", extraArgs[i+1])
+			}
+			ca.ComputeBudget = val
+			i++
+		case "--ai":
+			if i+1 >= len(extraArgs) {
+				return ca, fmt.Errorf("--ai requires a value")
+			}
+			val, parseErr := strconv.ParseFloat(extraArgs[i+1], 64)
+			if parseErr != nil {
+				return ca, fmt.Errorf("--ai: invalid number %q", extraArgs[i+1])
+			}
+			ca.AIBudget = val
+			i++
 		case "--docker":
-			return "", "", false, fmt.Errorf("--docker is not supported for scheduled creates (requires local execution)")
+			return ca, fmt.Errorf("--docker is not supported for scheduled creates (requires local execution)")
 		default:
 			if strings.HasPrefix(extraArgs[i], "--") {
-				return "", "", false, fmt.Errorf("unknown flag: %s", extraArgs[i])
+				return ca, fmt.Errorf("unknown flag: %s", extraArgs[i])
 			}
-			if profilePath == "" {
-				profilePath = extraArgs[i]
+			if ca.ProfilePath == "" {
+				ca.ProfilePath = extraArgs[i]
 			}
 		}
 	}
-	return profilePath, alias, onDemand, nil
+	return ca, nil
 }
 
 // buildTargetInput builds the JSON payload sent to the Lambda as Target.Input.
@@ -357,7 +404,7 @@ func parseCreateArgs(extraArgs []string) (profilePath, alias string, onDemand bo
 // For lifecycle commands: sends SandboxIdle event JSON.
 func buildTargetInput(cmdArg string, cmdInfo schedulableCommand, sandboxID, artifactsBucket string, extraArgs []string) (string, error) {
 	if cmdInfo.targetARNField == "create" {
-		profilePath, alias, onDemand, parseErr := parseCreateArgs(extraArgs)
+		ca, parseErr := parseCreateArgs(extraArgs)
 		if parseErr != nil {
 			return "", parseErr
 		}
@@ -366,14 +413,29 @@ func buildTargetInput(cmdArg string, cmdInfo schedulableCommand, sandboxID, arti
 			"sandbox_id":      "",
 			"artifact_bucket": artifactsBucket,
 			"artifact_prefix": "scheduled/",
-			"on_demand":       onDemand,
+			"on_demand":       ca.OnDemand,
 			"created_by":      "schedule",
 		}
-		if profilePath != "" {
-			detail["profile_path"] = profilePath
+		if ca.ProfilePath != "" {
+			detail["profile_path"] = ca.ProfilePath
 		}
-		if alias != "" {
-			detail["alias"] = alias
+		if ca.Alias != "" {
+			detail["alias"] = ca.Alias
+		}
+		if ca.TTL != "" {
+			detail["ttl"] = ca.TTL
+		}
+		if ca.Idle != "" {
+			detail["idle"] = ca.Idle
+		}
+		if ca.ComputeBudget > 0 {
+			detail["compute_budget"] = ca.ComputeBudget
+		}
+		if ca.AIBudget > 0 {
+			detail["ai_budget"] = ca.AIBudget
+		}
+		if ca.NoBedrock {
+			detail["no_bedrock"] = true
 		}
 		detailJSON, err := json.Marshal(detail)
 		if err != nil {

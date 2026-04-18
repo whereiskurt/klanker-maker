@@ -42,12 +42,17 @@ var errExecFailed = errors.New("exec: subprocess failed")
 // CreateEvent is the EventBridge detail payload delivered to this Lambda.
 // It matches the SandboxCreateDetail published by km create --remote.
 type CreateEvent struct {
-	SandboxID      string `json:"sandbox_id"`
-	ArtifactBucket string `json:"artifact_bucket"`
-	ArtifactPrefix string `json:"artifact_prefix"`
-	OperatorEmail  string `json:"operator_email,omitempty"`
-	OnDemand       bool   `json:"on_demand"`
-	Alias          string `json:"alias,omitempty"`
+	SandboxID      string  `json:"sandbox_id"`
+	ArtifactBucket string  `json:"artifact_bucket"`
+	ArtifactPrefix string  `json:"artifact_prefix"`
+	OperatorEmail  string  `json:"operator_email,omitempty"`
+	OnDemand       bool    `json:"on_demand"`
+	Alias          string  `json:"alias,omitempty"`
+	TTL            string  `json:"ttl,omitempty"`
+	Idle           string  `json:"idle,omitempty"`
+	ComputeBudget  float64 `json:"compute_budget,omitempty"`
+	AIBudget       float64 `json:"ai_budget,omitempty"`
+	NoBedrock      bool    `json:"no_bedrock,omitempty"`
 }
 
 // S3GetAPI is the narrow S3 interface needed to download files.
@@ -140,6 +145,21 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 	}
 	if event.Alias != "" {
 		args = append(args, "--alias", event.Alias)
+	}
+	if event.TTL != "" {
+		args = append(args, "--ttl", event.TTL)
+	}
+	if event.Idle != "" {
+		args = append(args, "--idle", event.Idle)
+	}
+	if event.ComputeBudget > 0 {
+		args = append(args, "--compute", fmt.Sprintf("%.2f", event.ComputeBudget))
+	}
+	if event.AIBudget > 0 {
+		args = append(args, "--ai", fmt.Sprintf("%.2f", event.AIBudget))
+	}
+	if event.NoBedrock {
+		args = append(args, "--no-bedrock")
 	}
 
 	// Pass context env vars to the subprocess
