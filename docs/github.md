@@ -35,7 +35,7 @@ spec:
   sourceAccess:
     github:
       allowedRepos:
-        - whereiskurt/my-repo
+        - my-user/my-repo
         - my-org/another-repo
       allowedRefs:
         - main
@@ -62,8 +62,8 @@ km create
   |     /km/config/github/private-key
   |
   +-- Resolve installation ID
-  |     Extract owner from allowedRepos (e.g., "whereiskurt" from "whereiskurt/my-repo")
-  |     Look up /km/config/github/installations/whereiskurt
+  |     Extract owner from allowedRepos (e.g., "my-user" from "my-user/my-repo")
+  |     Look up /km/config/github/installations/my-user
   |     Fall back to /km/config/github/installation-id (legacy)
   |
   +-- Generate scoped installation token
@@ -122,21 +122,21 @@ A single GitHub App can be installed on multiple GitHub accounts/orgs. Each inst
 ```
 /km/config/github/app-client-id                         # shared App credentials
 /km/config/github/private-key                            # shared App PEM key
-/km/config/github/installations/whereiskurt              # installation ID for whereiskurt
-/km/config/github/installations/kurt-hundeck-greenhouse  # installation ID for greenhouse
+/km/config/github/installations/my-user                  # installation ID for my-user
+/km/config/github/installations/my-org                   # installation ID for my-org
 /km/config/github/installation-id                        # legacy (first installation, backward compat)
 ```
 
 ### Resolution at Create Time
 
-When `km create` processes a profile with `allowedRepos: ["whereiskurt/my-repo"]`:
+When `km create` processes a profile with `allowedRepos: ["my-user/my-repo"]`:
 
-1. Extracts owner `whereiskurt` from the repo entry
-2. Looks up `/km/config/github/installations/whereiskurt` in SSM
+1. Extracts owner `my-user` from the repo entry
+2. Looks up `/km/config/github/installations/my-user` in SSM
 3. Uses that installation ID to generate a scoped token
 4. If per-account key not found, falls back to legacy `/km/config/github/installation-id`
 
-This means sandboxes accessing `whereiskurt` repos and sandboxes accessing `kurt-hundeck-greenhouse` repos each get tokens from the correct installation automatically.
+This means sandboxes accessing `my-user` repos and sandboxes accessing `my-org` repos each get tokens from the correct installation automatically.
 
 ### Managing Installations
 
