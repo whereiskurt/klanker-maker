@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 54-02-PLAN.md
-last_updated: "2026-04-18T11:55:11.084Z"
+stopped_at: Completed 55-01-PLAN.md (allowlistgen RecordCommand/Commands + Generator InitCommands emission)
+last_updated: "2026-04-18T12:37:46.224Z"
 last_activity: 2026-04-17 — Completed 54-02-PLAN.md (create-time installation ID resolution)
 progress:
-  total_phases: 54
+  total_phases: 55
   completed_phases: 51
-  total_plans: 157
-  completed_plans: 158
+  total_plans: 159
+  completed_plans: 159
   percent: 0
 ---
 
@@ -201,6 +201,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 54 P01 | 289 | 2 tasks | 2 files |
 | Phase 54 P03 | 672s | 2 tasks | 4 files |
 | Phase 54 P02 | 27min | 2 tasks | 2 files |
+| Phase 55 P01 | 8min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -551,6 +552,7 @@ Recent decisions affecting current work:
 - [Phase 54]: Extended SSMReadAPI with GetParametersByPath for multi-installation discovery in doctor check
 - [Phase 54]: Used string replacement to inject installation ID into compiled HCL rather than threading through compiler
 - [Phase 54]: generateAndStoreGitHubToken returns (string, error) to expose resolved installation ID
+- [Phase 55]: Commands() preserves first-seen order (map+slice dual structure) because command sequence is semantically meaningful for initCommands
 
 ### Roadmap Evolution
 
@@ -617,6 +619,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-18T03:18:05.955Z
-Stopped at: Completed 54-02-PLAN.md
+Last session: 2026-04-18T12:37:46.219Z
+Stopped at: Completed 55-01-PLAN.md (allowlistgen RecordCommand/Commands + Generator InitCommands emission)
 Resume file: None
