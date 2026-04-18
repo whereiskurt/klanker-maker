@@ -111,7 +111,7 @@ func TestCollectDockerObservations(t *testing.T) {
 	httpLogs := strings.NewReader(`{"level":"info","event_type":"github_repo_allowed","owner":"octocat","repo":"hello"}
 {"level":"info","event_type":"github_mitm_connect","host":"registry.npmjs.org:443"}`)
 
-	data, err := cmd.CollectDockerObservations("test-sandbox", dnsLogs, httpLogs)
+	data, err := cmd.CollectDockerObservations("test-sandbox", dnsLogs, httpLogs, nil)
 	if err != nil {
 		t.Fatalf("collectDockerObservations returned error: %v", err)
 	}

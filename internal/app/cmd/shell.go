@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -468,20 +469,56 @@ func GenerateProfileFromJSON(data []byte, base string) ([]byte, error) {
 	return rec.GenerateAnnotatedYAML(base)
 }
 
-// CollectDockerObservations reads zerolog JSON from DNS and HTTP proxy log
-// readers (e.g. from docker logs), feeds them into an allowlistgen.Recorder,
-// and returns the observed state as JSON. Either reader may be nil.
-// Exported for testing without requiring a running Docker daemon.
-func CollectDockerObservations(sandboxID string, dnsLogs, httpLogs io.Reader) ([]byte, error) {
+// auditLogLine is the JSON structure for each line in the audit-log container output.
+type auditLogLine struct {
+	EventType string `json:"event_type"`
+	Detail    struct {
+		Command string `json:"command"`
+	} `json:"detail"`
+}
+
+// ParseAuditLogCommands reads JSON-line audit-log container output, extracts
+// lines with event_type=="command", and records each command into rec.
+// Malformed JSON lines and empty commands are silently skipped.
+// Exported so shell_test.go can test it directly without a running container.
+func ParseAuditLogCommands(r io.Reader, rec *allowlistgen.Recorder) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var entry auditLogLine
+		if err := json.Unmarshal(line, &entry); err != nil {
+			continue
+		}
+		if entry.EventType != "command" {
+			continue
+		}
+		if entry.Detail.Command == "" {
+			continue
+		}
+		rec.RecordCommand(entry.Detail.Command)
+	}
+}
+
+// CollectDockerObservations reads zerolog JSON from DNS proxy, HTTP proxy, and
+// audit-log container log readers (e.g. from docker logs), feeds them into an
+// allowlistgen.Recorder, and returns the observed state as JSON.
+// Any reader may be nil. Exported for testing without requiring a running Docker daemon.
+//
+// Container name for audit-log is confirmed against compose.go: km-{{ .SandboxID }}-audit-log.
+func CollectDockerObservations(sandboxID string, dnsLogs, httpLogs, auditLogs io.Reader) ([]byte, error) {
 	rec := allowlistgen.NewRecorder()
 	if err := allowlistgen.ParseProxyLogs(dnsLogs, httpLogs, rec); err != nil {
 		return nil, fmt.Errorf("parse proxy logs for sandbox %s: %w", sandboxID, err)
 	}
+	if auditLogs != nil {
+		ParseAuditLogCommands(auditLogs, rec)
+	}
 	state := learnObservedState{
-		DNS:   rec.DNSDomains(),
-		Hosts: rec.Hosts(),
-		Repos: rec.Repos(),
-		Refs:  rec.Refs(),
+		DNS:      rec.DNSDomains(),
+		Hosts:    rec.Hosts(),
+		Repos:    rec.Repos(),
+		Refs:     rec.Refs(),
+		Commands: rec.Commands(),
 	}
 	return json.MarshalIndent(state, "", "  ")
 }
@@ -529,9 +566,12 @@ func runLearnPostExit(ctx context.Context, cfg *config.Config, fetcher SandboxFe
 	case "docker":
 		dnsContainer := fmt.Sprintf("km-%s-dns-proxy", sandboxID)
 		httpContainer := fmt.Sprintf("km-%s-http-proxy", sandboxID)
+		// Container name matches compose.go template: km-{{ .SandboxID }}-audit-log
+		auditContainer := fmt.Sprintf("km-%s-audit-log", sandboxID)
 
 		dnsBuf := &bytes.Buffer{}
 		httpBuf := &bytes.Buffer{}
+		auditBuf := &bytes.Buffer{}
 
 		if dnsOut, dnsErr := exec.CommandContext(ctx, "docker", "logs", dnsContainer).Output(); dnsErr == nil {
 			dnsBuf = bytes.NewBuffer(dnsOut)
@@ -543,8 +583,13 @@ func runLearnPostExit(ctx context.Context, cfg *config.Config, fetcher SandboxFe
 		} else {
 			log.Warn().Err(httpErr).Str("container", httpContainer).Msg("learn: failed to get HTTP proxy logs (non-fatal)")
 		}
+		if auditOut, auditErr := exec.CommandContext(ctx, "docker", "logs", auditContainer).Output(); auditErr == nil {
+			auditBuf = bytes.NewBuffer(auditOut)
+		} else {
+			log.Warn().Err(auditErr).Str("container", auditContainer).Msg("learn: audit-log container logs unavailable (non-fatal)")
+		}
 
-		observedJSON, err = CollectDockerObservations(sandboxID, dnsBuf, httpBuf)
+		observedJSON, err = CollectDockerObservations(sandboxID, dnsBuf, httpBuf, auditBuf)
 		if err != nil {
 			return fmt.Errorf("collect docker observations: %w", err)
 		}

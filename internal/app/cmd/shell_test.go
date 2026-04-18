@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/cmd"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	"github.com/whereiskurt/klankrmkr/pkg/allowlistgen"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 )
 
@@ -309,5 +310,74 @@ func TestGenerateProfileFromJSONNoCommands(t *testing.T) {
 	}
 	if len(yamlBytes) == 0 {
 		t.Error("expected non-empty YAML output")
+	}
+}
+
+// TestParseAuditLogCommands verifies that ParseAuditLogCommands parses JSON-lines
+// with event_type=="command", records them into the Recorder, and ignores non-command events.
+func TestParseAuditLogCommands(t *testing.T) {
+	input := strings.Join([]string{
+		`{"timestamp":"2026-01-01T00:00:01Z","event_type":"command","detail":{"command":"git clone https://github.com/foo/bar"}}`,
+		`{"timestamp":"2026-01-01T00:00:02Z","event_type":"heartbeat","detail":{}}`,
+		`{"timestamp":"2026-01-01T00:00:03Z","event_type":"command","detail":{"command":"make build"}}`,
+		`{"timestamp":"2026-01-01T00:00:04Z","event_type":"command","detail":{"command":"git clone https://github.com/foo/bar"}}`,
+	}, "\n")
+
+	rec := allowlistgen.NewRecorder()
+	cmd.ParseAuditLogCommands(strings.NewReader(input), rec)
+
+	cmds := rec.Commands()
+	if len(cmds) != 2 {
+		t.Fatalf("expected 2 unique commands, got %d: %v", len(cmds), cmds)
+	}
+	if cmds[0] != "git clone https://github.com/foo/bar" {
+		t.Errorf("expected first command 'git clone https://github.com/foo/bar', got %q", cmds[0])
+	}
+	if cmds[1] != "make build" {
+		t.Errorf("expected second command 'make build', got %q", cmds[1])
+	}
+}
+
+// TestParseAuditLogCommands_MalformedLines verifies that malformed JSON lines are
+// silently skipped and do not cause errors.
+func TestParseAuditLogCommands_MalformedLines(t *testing.T) {
+	input := strings.Join([]string{
+		`not valid json`,
+		`{"timestamp":"2026-01-01T00:00:01Z","event_type":"command","detail":{"command":"echo hello"}}`,
+		`{broken`,
+		`{"event_type":"command","detail":{"command":""}}`,
+	}, "\n")
+
+	rec := allowlistgen.NewRecorder()
+	cmd.ParseAuditLogCommands(strings.NewReader(input), rec)
+
+	cmds := rec.Commands()
+	// Only "echo hello" should be recorded; empty command and malformed lines skip.
+	if len(cmds) != 1 {
+		t.Fatalf("expected 1 command, got %d: %v", len(cmds), cmds)
+	}
+	if cmds[0] != "echo hello" {
+		t.Errorf("expected 'echo hello', got %q", cmds[0])
+	}
+}
+
+// TestCollectDockerObservationsWithAuditLogs verifies that CollectDockerObservations
+// accepts an auditLogs reader and includes parsed commands in the output JSON.
+func TestCollectDockerObservationsWithAuditLogs(t *testing.T) {
+	auditLog := strings.NewReader(strings.Join([]string{
+		`{"event_type":"command","detail":{"command":"npm install"}}`,
+		`{"event_type":"command","detail":{"command":"npm test"}}`,
+	}, "\n"))
+
+	data, err := cmd.CollectDockerObservations("sb-test", nil, nil, auditLog)
+	if err != nil {
+		t.Fatalf("CollectDockerObservations returned error: %v", err)
+	}
+	output := string(data)
+	if !strings.Contains(output, "npm install") {
+		t.Errorf("expected 'npm install' in output, got:\n%s", output)
+	}
+	if !strings.Contains(output, "npm test") {
+		t.Errorf("expected 'npm test' in output, got:\n%s", output)
 	}
 }
