@@ -237,3 +237,89 @@ func TestGenerateAnnotatedYAML(t *testing.T) {
 func unmarshalYAML(data []byte, v interface{}) error {
 	return goyaml.Unmarshal(data, v)
 }
+
+func TestGenerateWithCommands(t *testing.T) {
+	r := allowlistgen.NewRecorder()
+	r.RecordCommand("apt install curl")
+	r.RecordCommand("pip install requests")
+	r.RecordCommand("go build ./...")
+
+	p, err := r.Generate("")
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	want := []string{"apt install curl", "pip install requests", "go build ./..."}
+	got := p.Spec.Execution.InitCommands
+	if len(got) != len(want) {
+		t.Fatalf("InitCommands: expected %v, got %v", want, got)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("InitCommands[%d]: expected %q, got %q", i, w, got[i])
+		}
+	}
+}
+
+func TestGenerateWithoutCommands(t *testing.T) {
+	r := allowlistgen.NewRecorder()
+	p, err := r.Generate("")
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	if len(p.Spec.Execution.InitCommands) != 0 {
+		t.Errorf("expected nil/empty InitCommands when no commands recorded, got %v", p.Spec.Execution.InitCommands)
+	}
+}
+
+func TestGenerateAnnotatedYAMLWithCommands(t *testing.T) {
+	r := allowlistgen.NewRecorder()
+	r.RecordCommand("apt install curl")
+	r.RecordCommand("pip install requests")
+
+	data, err := r.GenerateAnnotatedYAML("")
+	if err != nil {
+		t.Fatalf("GenerateAnnotatedYAML returned error: %v", err)
+	}
+	s := string(data)
+
+	if !strings.Contains(s, "# Commands observed") {
+		t.Errorf("expected '# Commands observed' header in annotated output, got:\n%s", s)
+	}
+	if !strings.Contains(s, "#   apt install curl") {
+		t.Errorf("expected 'apt install curl' listed in command annotations, got:\n%s", s)
+	}
+	if !strings.Contains(s, "#   pip install requests") {
+		t.Errorf("expected 'pip install requests' listed in command annotations, got:\n%s", s)
+	}
+}
+
+func TestGenerateAnnotatedYAMLNoCommandsBlock(t *testing.T) {
+	r := allowlistgen.NewRecorder()
+	data, err := r.GenerateAnnotatedYAML("")
+	if err != nil {
+		t.Fatalf("GenerateAnnotatedYAML returned error: %v", err)
+	}
+	s := string(data)
+
+	if strings.Contains(s, "# Commands observed") {
+		t.Errorf("expected no command block when no commands recorded, got:\n%s", s)
+	}
+}
+
+func TestGenerateAnnotatedYAMLCommandCount(t *testing.T) {
+	r := allowlistgen.NewRecorder()
+	r.RecordCommand("apt install curl")
+	r.RecordCommand("pip install requests")
+
+	data, err := r.GenerateAnnotatedYAML("")
+	if err != nil {
+		t.Fatalf("GenerateAnnotatedYAML returned error: %v", err)
+	}
+	s := string(data)
+
+	// Header should contain command count (2 commands)
+	if !strings.Contains(s, "2 commands") {
+		t.Errorf("expected '2 commands' in header summary, got:\n%s", s)
+	}
+}
