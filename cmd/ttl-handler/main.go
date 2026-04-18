@@ -162,9 +162,10 @@ func (h *TTLHandler) HandleTTLEvent(ctx context.Context, event TTLEvent) error {
 func (h *TTLHandler) handleStop(ctx context.Context, event TTLEvent) error {
 	log.Info().Str("sandbox_id", event.SandboxID).Msg("stop event received")
 
-	// Guard: if the sandbox has a future TTL expiry in DynamoDB, it was recently
-	// resumed and this event is stale (from a pre-resume schedule). Skip the stop.
-	if h.DynamoClient != nil {
+	// Guard: for TTL expiry events (empty event_type), check if the sandbox was
+	// recently resumed (future TTL) and skip the stale event. Idle events are
+	// always legitimate — the sidecar detected real inactivity.
+	if event.EventType == "" && h.DynamoClient != nil {
 		meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, h.DynamoClient, h.SandboxTableName, event.SandboxID)
 		if metaErr == nil && meta != nil && meta.ExpiresAt != nil && time.Until(*meta.ExpiresAt) > 5*time.Minute {
 			log.Info().
@@ -715,10 +716,10 @@ func (h *TTLHandler) handleDestroy(ctx context.Context, event TTLEvent) error {
 
 	log.Info().Str("sandbox_id", sandboxID).Msg("TTL expiry event received")
 
-	// Guard: if this is NOT an explicit destroy (km destroy) and the sandbox has
-	// a future TTL expiry, it was recently resumed and this event is stale.
-	// Explicit destroy (event_type "destroy") always proceeds.
-	if event.EventType != "destroy" && h.DynamoClient != nil {
+	// Guard: for TTL expiry events only (empty event_type), check if the sandbox
+	// was recently resumed (future TTL) and skip the stale event.
+	// Explicit destroy (event_type "destroy") and idle events always proceed.
+	if event.EventType == "" && h.DynamoClient != nil {
 		meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, h.DynamoClient, h.SandboxTableName, sandboxID)
 		if metaErr == nil && meta != nil && meta.ExpiresAt != nil && time.Until(*meta.ExpiresAt) > 5*time.Minute {
 			log.Info().
