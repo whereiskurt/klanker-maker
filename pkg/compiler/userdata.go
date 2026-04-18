@@ -418,6 +418,11 @@ chown km-sidecar:km-sidecar /run/km
 mkfifo /run/km/audit-pipe
 chown km-sidecar:km-sidecar /run/km/audit-pipe
 chmod 666 /run/km/audit-pipe
+{{- if .LearnMode }}
+# Learn mode: create command log file writable by all users (root and sandbox user).
+touch /run/km/learn-commands.log
+chmod 666 /run/km/learn-commands.log
+{{- end }}
 
 cat > /etc/systemd/system/km-audit-log.service << 'UNIT'
 [Unit]
@@ -478,7 +483,18 @@ _km_audit() {
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "{{ .SandboxID }}" "$cmd" "$(whoami)" \
     > /run/km/audit-pipe 2>/dev/null
 }
+{{- if .LearnMode }}
+_km_learn() {
+  local cmd
+  cmd=$(HISTTIMEFORMAT= history 1 | sed 's/^ *[0-9]* *//')
+  [ -z "$cmd" ] && return 0
+  printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(whoami)" "$cmd" \
+    >> /run/km/learn-commands.log 2>/dev/null
+}
+PROMPT_COMMAND="_km_audit;_km_learn;${PROMPT_COMMAND}"
+{{- else }}
 PROMPT_COMMAND="_km_audit;${PROMPT_COMMAND}"
+{{- end }}
 
 # Background heartbeat: keeps the sandbox alive while a session is open,
 # even during long-running commands. Killed automatically when the shell exits.

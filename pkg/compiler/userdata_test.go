@@ -1469,3 +1469,62 @@ func TestUserdataPrivilegedDisabled(t *testing.T) {
 		}
 	}
 }
+
+// TestUserDataLearnCommandsLog verifies that when LearnMode=true, the userdata:
+// - creates /run/km/learn-commands.log with 0666 permissions
+// - installs the _km_learn hook function
+// - includes _km_learn in PROMPT_COMMAND
+func TestUserDataLearnCommandsLog(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Observability.LearnMode = true
+
+	out, err := generateUserData(p, "sb-learn-1", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	for _, want := range []string{
+		"learn-commands.log",
+		"_km_learn",
+		"_km_learn;",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in userdata when LearnMode=true, but it was absent", want)
+		}
+	}
+	// Verify that _km_learn is in PROMPT_COMMAND (not just defined)
+	if !strings.Contains(out, `PROMPT_COMMAND="_km_audit;_km_learn;`) {
+		t.Errorf("expected PROMPT_COMMAND to include _km_learn hook, got output does not contain expected PROMPT_COMMAND line")
+	}
+	// Verify 0666 permissions on the log file
+	if !strings.Contains(out, "chmod 666 /run/km/learn-commands.log") {
+		t.Errorf("expected chmod 666 on learn-commands.log in learn mode userdata")
+	}
+}
+
+// TestUserDataLearnCommandsLogAbsent verifies that when LearnMode=false (default), the userdata:
+// - does NOT create learn-commands.log
+// - does NOT install the _km_learn hook
+// - PROMPT_COMMAND does NOT include _km_learn
+func TestUserDataLearnCommandsLogAbsent(t *testing.T) {
+	p := baseProfile()
+	// LearnMode defaults to false — no explicit set needed.
+
+	out, err := generateUserData(p, "sb-normal-1", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	for _, notWant := range []string{
+		"learn-commands.log",
+		"_km_learn",
+	} {
+		if strings.Contains(out, notWant) {
+			t.Errorf("did not expect %q in userdata when LearnMode=false", notWant)
+		}
+	}
+	// Verify normal PROMPT_COMMAND without _km_learn
+	if !strings.Contains(out, `PROMPT_COMMAND="_km_audit;`) {
+		t.Errorf("expected normal PROMPT_COMMAND with _km_audit in non-learn mode userdata")
+	}
+}
