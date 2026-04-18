@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 55-01-PLAN.md (allowlistgen RecordCommand/Commands + Generator InitCommands emission)
-last_updated: "2026-04-18T12:37:46.224Z"
+stopped_at: Completed 55-02-PLAN.md (EC2/Docker command capture integration)
+last_updated: "2026-04-18T13:00:54.808Z"
 last_activity: 2026-04-17 — Completed 54-02-PLAN.md (create-time installation ID resolution)
 progress:
   total_phases: 55
-  completed_phases: 51
+  completed_phases: 52
   total_plans: 159
-  completed_plans: 159
+  completed_plans: 160
   percent: 0
 ---
 
@@ -202,6 +202,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 54 P03 | 672s | 2 tasks | 4 files |
 | Phase 54 P02 | 27min | 2 tasks | 2 files |
 | Phase 55 P01 | 8min | 2 tasks | 4 files |
+| Phase 55-learn-mode-command-capture P02 | 515643min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -553,6 +554,9 @@ Recent decisions affecting current work:
 - [Phase 54]: Used string replacement to inject installation ID into compiled HCL rather than threading through compiler
 - [Phase 54]: generateAndStoreGitHubToken returns (string, error) to expose resolved installation ID
 - [Phase 55]: Commands() preserves first-seen order (map+slice dual structure) because command sequence is semantically meaningful for initCommands
+- [Phase 55-02]: readLearnCommands feeds log commands into Recorder for dedup rather than appending directly
+- [Phase 55-02]: CollectDockerObservations nil-safe auditLogs parameter preserves backward compatibility
+- [Phase 55-02]: Container name km-{sandboxID}-audit-log confirmed against compose.go template before implementation
 
 ### Roadmap Evolution
 
@@ -619,6 +623,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-18T12:37:46.219Z
-Stopped at: Completed 55-01-PLAN.md (allowlistgen RecordCommand/Commands + Generator InitCommands emission)
+Last session: 2026-04-18T13:00:54.803Z
+Stopped at: Completed 55-02-PLAN.md (EC2/Docker command capture integration)
 Resume file: None
