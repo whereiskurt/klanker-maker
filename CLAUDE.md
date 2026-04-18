@@ -116,9 +116,9 @@ Generate a minimal SandboxProfile from observed traffic:
 
 ```bash
 km create profiles/learn.yaml          # wide-open sandbox with learnMode + privileged
-km shell --learn <sandbox-id>          # observe traffic, generate profile on exit
-cat observed-profile.yaml              # annotated profile with DNS suffix summary
-km validate observed-profile.yaml      # validate before use
+km shell --learn <sandbox-id>          # observe traffic + commands, generate profile on exit
+cat learned.*.yaml                     # annotated profile with DNS suffixes, initCommands
+km validate learned.*.yaml             # validate before use
 ```
 
 - `profiles/learn.yaml` — permissive profile with broad TLD suffixes, `enforcement: both`, `privileged: true`, `learnMode: true`

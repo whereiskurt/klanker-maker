@@ -355,7 +355,7 @@ Connect: aws ssm start-session --target <instance-id>
 Duplicate a running sandbox from its stored profile.
 
 ```
-km clone <source> [new-alias] [--alias <alias>] [--count <n>] [--no-copy] [--verbose] [--aws-profile <profile>]
+km clone <source> [new-alias] [flags]
 ```
 
 | Flag | Default | Description |
@@ -363,6 +363,12 @@ km clone <source> [new-alias] [--alias <alias>] [--count <n>] [--no-copy] [--ver
 | `--alias` | `""` | Alias for the clone (required with `--count > 1`) |
 | `--count` | `1` | Number of clones to create |
 | `--no-copy` | `false` | Skip workspace staging; create a fresh sandbox from same profile |
+| `--on-demand` | `false` | Use on-demand EC2 instance instead of spot |
+| `--no-bedrock` | `false` | Unset Bedrock env vars (use direct Anthropic API) |
+| `--ttl` | `""` | Override TTL duration (e.g. `4h`) |
+| `--idle` | `""` | Override idle timeout (e.g. `30m`) |
+| `--compute` | `0` | Override compute budget in USD |
+| `--ai` | `0` | Override AI budget in USD |
 | `--verbose` | `false` | Show verbose output during provisioning |
 | `--aws-profile` | `klanker-terraform` | AWS profile for provisioning |
 
@@ -909,7 +915,7 @@ km shell <sandbox-id | #number> [--root] [--no-bedrock] [--ports <ports>] [--lea
 | `--no-bedrock` | `false` | Unset Bedrock env vars (use direct Anthropic API) |
 | `--ports` | `""` | Port forwards (e.g. `8080`, `8080:80`, or comma-separated `8080:80,3000`) |
 | `--learn` | `false` | After shell exit, generate a SandboxProfile YAML from observed DNS/TLS traffic |
-| `--learn-output` | `observed-profile.yaml` | Path to write the generated profile |
+| `--learn-output` | `learned.YYYYMMDDHHMMSS.yaml` | Path to write the generated profile (timestamped by default) |
 
 **What it does:**
 
@@ -932,10 +938,10 @@ km shell 1 --ports 8080           # forward localhost:8080 → remote:8080
 km shell 1 --ports 8080:80,3000   # multiple forwards
 
 # Learn mode: generate a profile from observed traffic
-km shell --learn sb-abc123        # do stuff, exit → observed-profile.yaml
+km shell --learn sb-abc123        # do stuff, exit → learned.202604181854.yaml
 ```
 
-**Learn mode requirements:** The sandbox must have `spec.observability.learnMode: true` in its profile (e.g. `profiles/learn.yaml`). This enables the `--observe` flag on the eBPF enforcer so it records DNS queries and TLS connections. Without `learnMode`, there is no observation data to collect.
+**Learn mode** generates a timestamped profile (`learned.YYYYMMDDHHMMSS.yaml`) from observed DNS queries, TLS connections, GitHub repos, and shell commands typed during the session. Commands appear as `initCommands` in the generated profile. The sandbox must have `spec.observability.learnMode: true` (e.g. `profiles/learn.yaml`). Use `--learn-output <path>` to override the default filename.
 
 ---
 
@@ -1361,7 +1367,7 @@ Each command is dispatched to the appropriate Lambda (create-handler for `create
 
 **Alias resolution:** Lifecycle commands (`destroy`, `kill`, `stop`, `pause`, `resume`, `extend`, `budget-add`) resolve sandbox references the same way as interactive commands — by alias, list number (`1`), or raw sandbox ID.
 
-**Create flags:** `km at create` supports `--alias` and `--on-demand` flags. The `--docker` flag is rejected (Docker sandboxes require local execution). When a profile YAML is available locally, it is auto-uploaded to S3 under the `scheduled/` prefix.
+**Create flags:** `km at create` supports `--alias`, `--on-demand`, `--ttl`, `--idle`, `--compute`, `--ai`, and `--no-bedrock` flags (same as `km create`). The `--docker` flag is rejected (Docker sandboxes require local execution). When a profile YAML is available locally, it is auto-uploaded to S3 under the `scheduled/` prefix.
 
 **Budget-add flags:** `km at budget-add` accepts `--compute <USD>` and `--ai <USD>` to specify the amounts to add.
 
@@ -1376,8 +1382,8 @@ Each command is dispatched to the appropriate Lambda (create-handler for `create
 # One-shot: create a sandbox tomorrow at 10pm
 km at '10pm tomorrow' create profiles/goose.yaml
 
-# Create with alias and on-demand
-km at 'in 1 hour' create profiles/goose.yaml --alias g1 --on-demand
+# Create with alias, on-demand, and overrides
+km at 'in 1 hour' create profiles/goose.yaml --alias g1 --on-demand --ttl 4h --compute 10.00 --ai 5.00
 
 # Recurring: kill a sandbox every Thursday at 3pm (alias resolution)
 km at 'every thursday at 3pm' kill alice

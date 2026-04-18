@@ -95,7 +95,7 @@ Port forwarding:
 	cmd.Flags().BoolVar(&noBedrock, "no-bedrock", false, "Unset Bedrock env vars (use direct Anthropic API)")
 	cmd.Flags().StringSliceVar(&ports, "ports", nil, "Port forwards: 8080, 8080:80, or comma-separated list")
 	cmd.Flags().BoolVar(&learn, "learn", false, "Run in learning mode: observe traffic and generate profile on exit")
-	cmd.Flags().StringVar(&learnOutput, "learn-output", "observed-profile.yaml", "Path to write the generated SandboxProfile YAML (default: observed-profile.yaml in CWD)")
+	cmd.Flags().StringVar(&learnOutput, "learn-output", "", "Path to write the generated SandboxProfile YAML (default: learned.YYYYMMDDHHMMSS.yaml)")
 
 	return cmd
 }
@@ -608,6 +608,10 @@ func runLearnPostExit(ctx context.Context, cfg *config.Config, fetcher SandboxFe
 	yamlBytes, err := GenerateProfileFromJSON(observedJSON, "")
 	if err != nil {
 		return fmt.Errorf("generate profile: %w", err)
+	}
+
+	if learnOutput == "" {
+		learnOutput = "learned." + time.Now().Format("200601021504") + ".yaml"
 	}
 
 	if err := os.WriteFile(learnOutput, yamlBytes, 0o644); err != nil {

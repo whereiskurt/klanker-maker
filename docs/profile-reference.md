@@ -1196,9 +1196,9 @@ spec:
 
 ```bash
 km create profiles/learn.yaml         # learnMode: true, privileged: true, wide-open DNS
-km shell --learn <sandbox-id>         # run workload, exit
-cat observed-profile.yaml             # review annotated profile
-km validate observed-profile.yaml     # validate before use
+km shell --learn <sandbox-id>         # run workload, exit → learned.YYYYMMDDHHMMSS.yaml
+cat learned.*.yaml                    # review annotated profile (includes initCommands)
+km validate learned.*.yaml            # validate before use
 ```
 
 ---
@@ -2293,9 +2293,9 @@ spec:
 ```bash
 km create profiles/learn.yaml         # spin up permissive sandbox
 km shell --learn <sandbox-id>         # install packages, clone repos, curl APIs
-# ... exit shell ...
-cat observed-profile.yaml             # annotated profile with DNS suffix summary
-km validate observed-profile.yaml     # validate, then use for production sandboxes
+# ... exit shell → learned.YYYYMMDDHHMMSS.yaml
+cat learned.*.yaml                    # annotated profile with DNS suffixes + initCommands
+km validate learned.*.yaml            # validate, then use for production sandboxes
 ```
 
 ---

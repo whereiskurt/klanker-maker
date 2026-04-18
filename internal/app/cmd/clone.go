@@ -31,6 +31,12 @@ func NewCloneCmdWithDeps(cfg *config.Config, fetcher SandboxFetcher, ssmClient S
 	var noCopy bool
 	var verbose bool
 	var awsProfile string
+	var onDemand bool
+	var noBedrock bool
+	var ttlOverride string
+	var idleOverride string
+	var computeBudgetOverride float64
+	var aiBudgetOverride float64
 
 	cmd := &cobra.Command{
 		Use:   "clone <source> [new-alias]",
@@ -73,7 +79,8 @@ Examples:
 				return fmt.Errorf("--alias is required when --count > 1")
 			}
 
-			return runClone(ctx, cfg, fetcher, ssmClient, sourceRef, alias, count, noCopy, verbose, awsProfile)
+			return runClone(ctx, cfg, fetcher, ssmClient, sourceRef, alias, count, noCopy, verbose, awsProfile,
+				onDemand, noBedrock, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride)
 		},
 	}
 
@@ -83,13 +90,20 @@ Examples:
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "Show verbose output during provisioning")
 	cmd.Flags().StringVar(&awsProfile, "aws-profile", "klanker-terraform",
 		"AWS profile for provisioning (same as km create --aws-profile)")
+	cmd.Flags().BoolVar(&onDemand, "on-demand", false, "Use on-demand EC2 instance instead of spot")
+	cmd.Flags().BoolVar(&noBedrock, "no-bedrock", false, "Unset Bedrock env vars (use direct Anthropic API)")
+	cmd.Flags().StringVar(&ttlOverride, "ttl", "", "Override TTL duration (e.g. 4h)")
+	cmd.Flags().StringVar(&idleOverride, "idle", "", "Override idle timeout (e.g. 30m)")
+	cmd.Flags().Float64Var(&computeBudgetOverride, "compute", 0, "Override compute budget in USD")
+	cmd.Flags().Float64Var(&aiBudgetOverride, "ai", 0, "Override AI budget in USD")
 
 	return cmd
 }
 
 // runClone is the main clone orchestration function.
 func runClone(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI,
-	sourceRef, alias string, count int, noCopy bool, verbose bool, awsProfile string) error {
+	sourceRef, alias string, count int, noCopy bool, verbose bool, awsProfile string,
+	onDemand, noBedrock bool, ttlOverride, idleOverride string, computeBudgetOverride, aiBudgetOverride float64) error {
 
 	// Step 1: Resolve source sandbox reference
 	sourceID, err := ResolveSandboxID(ctx, cfg, sourceRef)
@@ -215,7 +229,7 @@ func runClone(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, s
 
 		if rec.Substrate == "docker" {
 			// Docker: synchronous local create
-			if err := runCreate(cfg, tmpFile.Name(), false, false, awsProfile, verbose, "", cloneAlias, "", "", "", 0, 0, sourceID); err != nil {
+			if err := runCreate(cfg, tmpFile.Name(), onDemand, noBedrock, awsProfile, verbose, "", cloneAlias, "", ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride, sourceID); err != nil {
 				return fmt.Errorf("provision clone %d (%s): %w", i+1, cloneAlias, err)
 			}
 			// Docker workspace download (synchronous — instance ready immediately)
@@ -234,7 +248,7 @@ func runClone(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, s
 			}
 		} else {
 			// EC2: fire-and-forget remote create (pass sourceID so cloned_from is set in the initial PutItem)
-			cloneID, createErr := runCreateRemote(cfg, tmpFile.Name(), false, false, awsProfile, cloneAlias, "", "", 0, 0, sourceID)
+			cloneID, createErr := runCreateRemote(cfg, tmpFile.Name(), onDemand, noBedrock, awsProfile, cloneAlias, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride, sourceID)
 			if createErr != nil {
 				return fmt.Errorf("provision clone %d (%s): %w", i+1, cloneAlias, createErr)
 			}
