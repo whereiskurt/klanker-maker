@@ -432,10 +432,11 @@ func findResourceARN(resources []string, pattern string) (string, error) {
 // (EC2) and collectDockerObservations (Docker). Both produce this structure
 // which is then consumed by GenerateProfileFromJSON to generate a SandboxProfile.
 type learnObservedState struct {
-	DNS   []string `json:"dns"`
-	Hosts []string `json:"hosts"`
-	Repos []string `json:"repos"`
-	Refs  []string `json:"refs,omitempty"`
+	DNS      []string `json:"dns"`
+	Hosts    []string `json:"hosts"`
+	Repos    []string `json:"repos"`
+	Refs     []string `json:"refs,omitempty"`
+	Commands []string `json:"commands,omitempty"`
 }
 
 // GenerateProfileFromJSON parses an observed-state JSON blob and returns
@@ -460,6 +461,9 @@ func GenerateProfileFromJSON(data []byte, base string) ([]byte, error) {
 	}
 	for _, ref := range state.Refs {
 		rec.RecordRef(ref)
+	}
+	for _, cmd := range state.Commands {
+		rec.RecordCommand(cmd)
 	}
 	return rec.GenerateAnnotatedYAML(base)
 }

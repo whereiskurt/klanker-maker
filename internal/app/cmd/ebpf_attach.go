@@ -127,10 +127,45 @@ func ipToUint32(ip net.IP) uint32 {
 // It is written locally by ebpf-attach --observe and uploaded to S3, then
 // consumed by km shell --learn on the operator's host to generate a profile.
 type observedState struct {
-	DNS   []string `json:"dns"`
-	Hosts []string `json:"hosts"`
-	Repos []string `json:"repos"`
-	Refs  []string `json:"refs,omitempty"`
+	DNS      []string `json:"dns"`
+	Hosts    []string `json:"hosts"`
+	Repos    []string `json:"repos"`
+	Refs     []string `json:"refs,omitempty"`
+	Commands []string `json:"commands,omitempty"`
+}
+
+// readLearnCommands reads /run/km/learn-commands.log and returns unique shell
+// commands in first-seen order. The log format is tab-separated:
+// timestamp\tuser\tcommand
+// Lines that are malformed or empty are silently skipped.
+// Returns nil if the file does not exist or cannot be read.
+func readLearnCommands(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var result []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Format: timestamp\tuser\tcommand (at least 3 tab-separated fields)
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		cmd := strings.TrimSpace(parts[2])
+		if cmd == "" {
+			continue
+		}
+		if _, ok := seen[cmd]; !ok {
+			seen[cmd] = struct{}{}
+			result = append(result, cmd)
+		}
+	}
+	return result
 }
 
 func runEbpfAttach(
@@ -486,11 +521,20 @@ func runEbpfAttach(
 // flushObservedState writes the recorder's current state to a local JSON file
 // and uploads it to S3. Called on SIGUSR1 (snapshot) and on shutdown.
 func flushObservedState(recorder *allowlistgen.Recorder, sandboxID, outputPath string, logger zerolog.Logger) {
+	// Collect commands from the recorder (e.g. commands recorded via audit-log sidecar).
+	// Also read learn-commands.log for commands captured by the PROMPT_COMMAND hook,
+	// and feed them into the recorder for deduplication before building the final list.
+	if logCmds := readLearnCommands("/run/km/learn-commands.log"); len(logCmds) > 0 {
+		for _, c := range logCmds {
+			recorder.RecordCommand(c)
+		}
+	}
 	state := observedState{
-		DNS:   recorder.DNSDomains(),
-		Hosts: recorder.Hosts(),
-		Repos: recorder.Repos(),
-		Refs:  recorder.Refs(),
+		DNS:      recorder.DNSDomains(),
+		Hosts:    recorder.Hosts(),
+		Repos:    recorder.Repos(),
+		Refs:     recorder.Refs(),
+		Commands: recorder.Commands(),
 	}
 	data, marshalErr := json.MarshalIndent(state, "", "  ")
 	if marshalErr != nil {

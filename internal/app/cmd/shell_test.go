@@ -244,3 +244,70 @@ type fakeShellFetcher struct {
 func (f *fakeShellFetcher) FetchSandbox(_ context.Context, _ string) (*kmaws.SandboxRecord, error) {
 	return f.record, f.err
 }
+
+// TestLearnObservedStateJSONRoundTrip verifies that learnObservedState round-trips
+// through JSON marshal/unmarshal with the Commands field preserved.
+func TestLearnObservedStateJSONRoundTrip(t *testing.T) {
+	data := []byte(`{
+		"dns": ["github.com"],
+		"hosts": ["api.github.com"],
+		"repos": ["github.com/foo/bar"],
+		"refs": ["abc123"],
+		"commands": ["git clone https://github.com/foo/bar", "make build"]
+	}`)
+
+	// GenerateProfileFromJSON uses learnObservedState internally; we verify
+	// that commands survive the JSON round-trip by checking they appear in the YAML output.
+	yamlBytes, err := cmd.GenerateProfileFromJSON(data, "")
+	if err != nil {
+		t.Fatalf("GenerateProfileFromJSON returned error: %v", err)
+	}
+	yaml := string(yamlBytes)
+	if !strings.Contains(yaml, "git clone https://github.com/foo/bar") {
+		t.Errorf("expected first command in generated YAML, got:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, "make build") {
+		t.Errorf("expected second command in generated YAML, got:\n%s", yaml)
+	}
+}
+
+// TestGenerateProfileFromJSONWithCommands verifies that commands in the JSON blob
+// are fed into the Recorder and appear in initCommands of the generated profile.
+func TestGenerateProfileFromJSONWithCommands(t *testing.T) {
+	data := []byte(`{
+		"dns": ["example.com"],
+		"hosts": [],
+		"repos": [],
+		"commands": ["apt-get install -y jq", "curl https://example.com/setup.sh | bash"]
+	}`)
+
+	yamlBytes, err := cmd.GenerateProfileFromJSON(data, "")
+	if err != nil {
+		t.Fatalf("GenerateProfileFromJSON returned error: %v", err)
+	}
+	yaml := string(yamlBytes)
+	if !strings.Contains(yaml, "apt-get install -y jq") {
+		t.Errorf("expected apt-get command in initCommands section, got:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, "curl https://example.com/setup.sh | bash") {
+		t.Errorf("expected curl command in initCommands section, got:\n%s", yaml)
+	}
+}
+
+// TestGenerateProfileFromJSONNoCommands verifies that a JSON blob without commands
+// generates a valid profile without errors (commands field is optional/omitempty).
+func TestGenerateProfileFromJSONNoCommands(t *testing.T) {
+	data := []byte(`{
+		"dns": ["example.com"],
+		"hosts": [],
+		"repos": []
+	}`)
+
+	yamlBytes, err := cmd.GenerateProfileFromJSON(data, "")
+	if err != nil {
+		t.Fatalf("GenerateProfileFromJSON returned error: %v", err)
+	}
+	if len(yamlBytes) == 0 {
+		t.Error("expected non-empty YAML output")
+	}
+}
