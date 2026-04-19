@@ -137,47 +137,74 @@ func TestAgentNonInteractive_SendCommand(t *testing.T) {
 func TestAgentNonInteractive_CommandConstruction(t *testing.T) {
 	prompt := "fix the failing tests"
 
-	cmds, _ := cmd.BuildAgentShellCommands(prompt, "")
-	shellCmd := strings.Join(cmds, "\n")
+	t.Run("claude", func(t *testing.T) {
+		cmds, _ := cmd.BuildAgentShellCommands(prompt, cmd.AgentRunOptions{AgentType: "claude"})
+		shellCmd := strings.Join(cmds, "\n")
 
-	// Verify required Claude flags (AGENT-02)
-	requiredParts := []string{
-		"claude -p",
-		"--output-format json",
-		"--dangerously-skip-permissions",
-	}
-	for _, part := range requiredParts {
-		if !strings.Contains(shellCmd, part) {
-			t.Errorf("shell command missing %q", part)
+		// Verify required Claude flags (AGENT-02)
+		requiredParts := []string{
+			"claude -p",
+			"--output-format json",
+			"--dangerously-skip-permissions",
 		}
-	}
+		for _, part := range requiredParts {
+			if !strings.Contains(shellCmd, part) {
+				t.Errorf("shell command missing %q", part)
+			}
+		}
 
-	// Verify base64-encoded prompt is present (AGENT-03)
-	b64 := base64.StdEncoding.EncodeToString([]byte(prompt))
-	if !strings.Contains(shellCmd, b64) {
-		t.Errorf("shell command missing base64-encoded prompt %q", b64)
-	}
+		// Verify base64-encoded prompt is present (AGENT-03)
+		b64 := base64.StdEncoding.EncodeToString([]byte(prompt))
+		if !strings.Contains(shellCmd, b64) {
+			t.Errorf("shell command missing base64-encoded prompt %q", b64)
+		}
 
-	// Verify run directory setup
-	if !strings.Contains(shellCmd, "/workspace/.km-agent/runs/") {
-		t.Error("shell command missing run directory path")
-	}
-	if !strings.Contains(shellCmd, "KM_RUN_ID=") {
-		t.Error("shell command missing KM_RUN_ID output")
-	}
+		// Verify run directory setup
+		if !strings.Contains(shellCmd, "/workspace/.km-agent/runs/") {
+			t.Error("shell command missing run directory path")
+		}
+		if !strings.Contains(shellCmd, "KM_RUN_ID=") {
+			t.Error("shell command missing KM_RUN_ID output")
+		}
+	})
+
+	t.Run("codex", func(t *testing.T) {
+		cmds, _ := cmd.BuildAgentShellCommands(prompt, cmd.AgentRunOptions{AgentType: "codex"})
+		shellCmd := strings.Join(cmds, "\n")
+
+		for _, part := range []string{"codex exec", "--json", "--dangerously-bypass-approvals-and-sandbox"} {
+			if !strings.Contains(shellCmd, part) {
+				t.Errorf("codex shell missing %q", part)
+			}
+		}
+		if strings.Contains(shellCmd, "claude -p") {
+			t.Error("codex shell must not contain claude invocation")
+		}
+		b64 := base64.StdEncoding.EncodeToString([]byte(prompt))
+		if !strings.Contains(shellCmd, b64) {
+			t.Error("codex missing b64 prompt")
+		}
+		// Regression guards: tmux scaffold identical
+		if !strings.Contains(shellCmd, "/workspace/.km-agent/runs/") {
+			t.Error("codex missing run dir")
+		}
+		if !strings.Contains(shellCmd, "KM_RUN_ID=") {
+			t.Error("codex missing KM_RUN_ID")
+		}
+	})
 }
 
 // TestAgentNonInteractive_NoBedrock verifies that --no-bedrock injects unset commands.
 func TestAgentNonInteractive_NoBedrock(t *testing.T) {
 	// Without --no-bedrock: no unset commands
-	cmdsNoBR, _ := cmd.BuildAgentShellCommands("test prompt", "")
+	cmdsNoBR, _ := cmd.BuildAgentShellCommands("test prompt", cmd.AgentRunOptions{AgentType: "claude"})
 	shellCmd := strings.Join(cmdsNoBR, "\n")
 	if strings.Contains(shellCmd, "unset CLAUDE_CODE_USE_BEDROCK") {
 		t.Error("without --no-bedrock, should not contain unset commands")
 	}
 
 	// With --no-bedrock: unset commands present
-	cmdsWithBR, _ := cmd.BuildAgentShellCommands("test prompt", "", true)
+	cmdsWithBR, _ := cmd.BuildAgentShellCommands("test prompt", cmd.AgentRunOptions{AgentType: "claude", NoBedrock: true})
 	shellCmd = strings.Join(cmdsWithBR, "\n")
 	for _, envVar := range []string{
 		"unset CLAUDE_CODE_USE_BEDROCK",
@@ -190,6 +217,21 @@ func TestAgentNonInteractive_NoBedrock(t *testing.T) {
 			t.Errorf("with --no-bedrock, missing %q", envVar)
 		}
 	}
+
+	t.Run("codex_ignores_nobedrock", func(t *testing.T) {
+		cmds, _ := cmd.BuildAgentShellCommands("test", cmd.AgentRunOptions{AgentType: "codex", NoBedrock: true})
+		shellCmd := strings.Join(cmds, "\n")
+		for _, forbidden := range []string{
+			"unset CLAUDE_CODE_USE_BEDROCK",
+			"unset ANTHROPIC_BASE_URL",
+			"unset ANTHROPIC_DEFAULT_SONNET_MODEL",
+			".claude/.credentials.json",
+		} {
+			if strings.Contains(shellCmd, forbidden) {
+				t.Errorf("codex script contains claude-specific stanza %q (must never appear)", forbidden)
+			}
+		}
+	})
 }
 
 // TestAgentNonInteractive_PromptEscaping verifies that prompts with dangerous
@@ -206,7 +248,7 @@ func TestAgentNonInteractive_PromptEscaping(t *testing.T) {
 
 	for _, prompt := range dangerous {
 		t.Run(prompt[:min(len(prompt), 20)], func(t *testing.T) {
-			cmdsEsc, _ := cmd.BuildAgentShellCommands(prompt, "")
+			cmdsEsc, _ := cmd.BuildAgentShellCommands(prompt, cmd.AgentRunOptions{AgentType: "claude"})
 			shellCmd := strings.Join(cmdsEsc, "\n")
 
 			// The raw prompt text must NOT appear in the shell command
@@ -581,7 +623,7 @@ func TestAgentList(t *testing.T) {
 
 // TestBuildAgentShellCommands_TmuxWrapping verifies tmux session wrapping in generated commands.
 func TestBuildAgentShellCommands_TmuxWrapping(t *testing.T) {
-	cmds, runID := cmd.BuildAgentShellCommands("test tmux wrapping", "my-bucket")
+	cmds, runID := cmd.BuildAgentShellCommands("test tmux wrapping", cmd.AgentRunOptions{AgentType: "claude", ArtifactsBucket: "my-bucket"})
 	shellCmd := strings.Join(cmds, "\n")
 
 	// Commands contain tmux new-session with the session name
@@ -619,7 +661,7 @@ func TestBuildAgentShellCommands_TmuxWrapping(t *testing.T) {
 	}
 
 	// NoBedrock variant still includes the unset lines
-	cmdsNB, _ := cmd.BuildAgentShellCommands("test", "", true)
+	cmdsNB, _ := cmd.BuildAgentShellCommands("test", cmd.AgentRunOptions{AgentType: "claude", NoBedrock: true})
 	shellNB := strings.Join(cmdsNB, "\n")
 	if !strings.Contains(shellNB, "unset CLAUDE_CODE_USE_BEDROCK") {
 		t.Error("NoBedrock variant missing unset lines inside tmux-wrapped script")
@@ -628,7 +670,7 @@ func TestBuildAgentShellCommands_TmuxWrapping(t *testing.T) {
 
 // TestBuildAgentShellCommands_RunIDDeterministic verifies the returned RUN_ID matches timestamp format.
 func TestBuildAgentShellCommands_RunIDDeterministic(t *testing.T) {
-	_, runID := cmd.BuildAgentShellCommands("test deterministic", "")
+	_, runID := cmd.BuildAgentShellCommands("test deterministic", cmd.AgentRunOptions{AgentType: "claude"})
 	re := regexp.MustCompile(`^\d{8}T\d{6}Z$`)
 	if !re.MatchString(runID) {
 		t.Errorf("RUN_ID %q does not match pattern YYYYMMDDTHHMMSSZ", runID)
@@ -638,6 +680,67 @@ func TestBuildAgentShellCommands_RunIDDeterministic(t *testing.T) {
 	_, err := time.Parse("20060102T150405Z", runID)
 	if err != nil {
 		t.Errorf("RUN_ID %q is not a valid timestamp: %v", runID, err)
+	}
+}
+
+// TestBuildAgentShellCommands_Codex verifies that the codex branch of
+// BuildAgentShellCommands emits the correct CLI invocation and never
+// leaks claude-specific environment stanzas.
+func TestBuildAgentShellCommands_Codex(t *testing.T) {
+	tests := []struct {
+		name        string
+		opts        cmd.AgentRunOptions
+		mustContain []string
+		mustAbsent  []string
+	}{
+		{
+			name: "base codex invocation",
+			opts: cmd.AgentRunOptions{AgentType: "codex"},
+			mustContain: []string{
+				"codex exec",
+				"--json",
+				"--dangerously-bypass-approvals-and-sandbox",
+			},
+			mustAbsent: []string{
+				"claude -p",
+				"unset CLAUDE_CODE_USE_BEDROCK",
+			},
+		},
+		{
+			name: "codex with codexArgs",
+			opts: cmd.AgentRunOptions{AgentType: "codex", CodexArgs: []string{"--model", "o4-mini"}},
+			mustContain: []string{
+				"--dangerously-bypass-approvals-and-sandbox --model o4-mini",
+			},
+			mustAbsent: []string{
+				"claude -p",
+			},
+		},
+		{
+			name: "codex ignores claudeArgs",
+			opts: cmd.AgentRunOptions{AgentType: "codex", ClaudeArgs: []string{"--bogus-claude-flag"}},
+			mustAbsent: []string{
+				"--bogus-claude-flag",
+				"claude -p",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cmds, _ := cmd.BuildAgentShellCommands("test prompt", tc.opts)
+			shellCmd := strings.Join(cmds, "\n")
+			for _, s := range tc.mustContain {
+				if !strings.Contains(shellCmd, s) {
+					t.Errorf("expected %q in codex shell script", s)
+				}
+			}
+			for _, s := range tc.mustAbsent {
+				if strings.Contains(shellCmd, s) {
+					t.Errorf("unexpected %q found in codex shell script", s)
+				}
+			}
+		})
 	}
 }
 
