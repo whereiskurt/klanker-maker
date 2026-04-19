@@ -621,6 +621,7 @@ None yet.
 - Phase 54 added: Multi-account GitHub App installations — support multiple GitHub users installing the same App, per-account SSM keys, auto-resolve installation from repo owner at create time
 - Phase 55 added: Learn mode command capture — record shell commands typed by root and sandbox user during km shell --learn sessions, include in observed state and generated profile output
 - Phase 56 added: Learn mode AMI snapshot — --ami flag on km shell --learn snapshots EC2 instance, writes AMI ID into generated profile, km ami list/delete for lifecycle, km doctor stale AMI detection
+- Phase 57 added: Email enhancement — km-send --no-sign for external recipients, km-recv RFC5322/multipart fixes, safe phrase validation on inbound Lambda, marketplace plugin email docs
 
 ## Session Continuity
 

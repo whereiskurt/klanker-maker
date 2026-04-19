@@ -1205,3 +1205,13 @@ Plans:
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 56 to break down)
+
+### Phase 57: Email enhancement — km-send --no-sign for external recipients, km-recv multipart/RFC5322 fixes, safe phrase validation on inbound, marketplace plugin email docs
+
+**Goal:** Fix km-send and km-recv bash scripts to handle external (non-sandbox) email. km-send gets `--no-sign` flag that skips Ed25519 SSM key fetch and X-KM-* headers, enabling plain email to Gmail/external addresses. km-recv gets RFC 5322 folded header parsing, multipart/alternative body extraction (Gmail HTML emails), and `--from-external` display hint. Inbound external emails must contain the configured safe phrase (from km configure) to be accepted — the SES receipt rule Lambda validates this before delivery to the sandbox mailbox. Update the marketplace plugin/skill docs to document /opt/km/bin/km-send and km-recv paths, external email workflow, and safe phrase requirements.
+**Requirements**: TBD
+**Depends on:** Phase 45 (km-send/km-recv scripts), Phase 46 (AI email-to-command / safe phrase)
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 57 to break down)
