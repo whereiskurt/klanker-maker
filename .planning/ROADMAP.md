@@ -1195,3 +1195,13 @@ Plans:
 Plans:
 - [ ] 55-01-PLAN.md — Extend allowlistgen Recorder and Generator for command capture
 - [ ] 55-02-PLAN.md — Wire command capture into EC2 and Docker learn mode integration
+
+### Phase 56: Learn mode AMI snapshot and lifecycle management
+
+**Goal:** Add `--ami` flag to `km shell --learn` that snapshots the EC2 instance as a custom AMI on exit. The AMI ID is written into the generated profile YAML at `spec.runtime.ami`, so future sandboxes boot from the pre-configured image with all packages/tools pre-installed. AMIs are tagged with sandbox metadata (sandbox-id, profile, alias, date). Add `km ami list` to show custom AMIs with age/size/usage and `km ami delete` for cleanup. Extend `km doctor` with a stale/unused AMI check that flags AMIs older than a configurable threshold or not referenced by any profile. The `initCommands` captured by Phase 55 serve as documentation of what's baked into the AMI and as a fallback for AMI-less regions.
+**Requirements**: TBD
+**Depends on:** Phase 55 (learn mode command capture), Phase 33 (AMI resolution)
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 56 to break down)
