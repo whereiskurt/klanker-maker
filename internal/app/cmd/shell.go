@@ -95,7 +95,7 @@ Port forwarding:
 	cmd.Flags().BoolVar(&noBedrock, "no-bedrock", false, "Unset Bedrock env vars (use direct Anthropic API)")
 	cmd.Flags().StringSliceVar(&ports, "ports", nil, "Port forwards: 8080, 8080:80, or comma-separated list")
 	cmd.Flags().BoolVar(&learn, "learn", false, "Run in learning mode: observe traffic and generate profile on exit")
-	cmd.Flags().StringVar(&learnOutput, "learn-output", "", "Path to write the generated SandboxProfile YAML (default: learned.YYYYMMDDHHMMSS.yaml)")
+	cmd.Flags().StringVar(&learnOutput, "learn-output", "", "Path to write the generated SandboxProfile YAML (default: learned.<sandbox-id>.YYYYMMDDHHMMSS.yaml)")
 
 	return cmd
 }
@@ -440,6 +440,22 @@ type learnObservedState struct {
 	Commands []string `json:"commands,omitempty"`
 }
 
+// DefaultLearnFilename returns the default output path for `km shell --learn`
+// when the user did not pass --learn-output. The name embeds the sandbox ID
+// and a second-precision timestamp so repeated sessions against different
+// sandboxes don't collide:
+//
+//	learned.<sandbox-id>.YYYYMMDDHHMMSS.yaml
+//
+// An empty sandboxID is tolerated and produces "learned.<timestamp>.yaml".
+func DefaultLearnFilename(sandboxID string, now time.Time) string {
+	stamp := now.Format("20060102150405")
+	if sandboxID == "" {
+		return "learned." + stamp + ".yaml"
+	}
+	return "learned." + sandboxID + "." + stamp + ".yaml"
+}
+
 // GenerateProfileFromJSON parses an observed-state JSON blob and returns
 // a SandboxProfile YAML. It is exported so tests can call it directly without
 // AWS credentials or Docker.
@@ -611,7 +627,7 @@ func runLearnPostExit(ctx context.Context, cfg *config.Config, fetcher SandboxFe
 	}
 
 	if learnOutput == "" {
-		learnOutput = "learned." + time.Now().Format("200601021504") + ".yaml"
+		learnOutput = DefaultLearnFilename(sandboxID, time.Now())
 	}
 
 	if err := os.WriteFile(learnOutput, yamlBytes, 0o644); err != nil {

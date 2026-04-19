@@ -361,6 +361,39 @@ func TestParseAuditLogCommands_MalformedLines(t *testing.T) {
 	}
 }
 
+// TestDefaultLearnFilename verifies the default output name for `km shell --learn`
+// embeds the sandbox ID and a second-precision timestamp so multiple sessions
+// against different sandboxes don't collide.
+func TestDefaultLearnFilename(t *testing.T) {
+	ts := time.Date(2026, 4, 19, 14, 15, 23, 0, time.UTC)
+
+	tests := []struct {
+		name      string
+		sandboxID string
+		want      string
+	}{
+		{
+			name:      "typical sandbox id",
+			sandboxID: "leaner-abc12345",
+			want:      "learned.leaner-abc12345.20260419141523.yaml",
+		},
+		{
+			name:      "empty sandbox id falls back to timestamp only",
+			sandboxID: "",
+			want:      "learned.20260419141523.yaml",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := cmd.DefaultLearnFilename(tc.sandboxID, ts)
+			if got != tc.want {
+				t.Errorf("DefaultLearnFilename(%q) = %q, want %q", tc.sandboxID, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestCollectDockerObservationsWithAuditLogs verifies that CollectDockerObservations
 // accepts an auditLogs reader and includes parsed commands in the output JSON.
 func TestCollectDockerObservationsWithAuditLogs(t *testing.T) {
