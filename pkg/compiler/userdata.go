@@ -1560,6 +1560,10 @@ SHELL_HOME=$(eval echo "~$SHELL_USER")
 aws s3 cp "s3://{{ .KMArtifactsBucket }}/rsync/{{ .Rsync }}.tar.gz" /tmp/km-rsync.tar.gz 2>/dev/null && {
   cd "$SHELL_HOME" && tar xzf /tmp/km-rsync.tar.gz
   chown -R "$SHELL_USER:$SHELL_USER" "$SHELL_HOME"
+  # Rewrite absolute paths in Claude plugin manifests to match this sandbox's home
+  for _pf in "$SHELL_HOME/.claude/plugins/installed_plugins.json" "$SHELL_HOME/.claude/plugins/known_marketplaces.json"; do
+    [ -f "$_pf" ] && sed -i -E 's|(/[^"]*)/\.claude/|'"$SHELL_HOME"'/.claude/|g' "$_pf" && echo "[km-bootstrap] Rewrote plugin paths in $_pf"
+  done
   echo "[km-bootstrap] Rsync snapshot {{ .Rsync }} restored into $SHELL_HOME"
 } || echo "[km-bootstrap] WARNING: rsync snapshot {{ .Rsync }} not found in S3 (skipped)"
 {{- end }}
