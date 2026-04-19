@@ -920,6 +920,146 @@ func TestAgentAttach_StoppedSandbox(t *testing.T) {
 	}
 }
 
+// ---- Plan 03: --claude/--codex flag pair, mutex, no-bedrock gate tests ----
+
+// trackingFetcher wraps fakeFetcher and counts FetchSandbox calls.
+// Used to assert that early-exit validations fire BEFORE ResolveSandboxID reaches AWS.
+type trackingFetcher struct {
+	inner fakeFetcher
+	calls int
+}
+
+func (t *trackingFetcher) FetchSandbox(ctx context.Context, id string) (*kmaws.SandboxRecord, error) {
+	t.calls++
+	return t.inner.FetchSandbox(ctx, id)
+}
+
+// TestAgentRun_ClaudeCodexMutex verifies that --claude and --codex together error
+// before any SSM or FetchSandbox call (fires in RunE before ResolveSandboxID).
+func TestAgentRun_ClaudeCodexMutex(t *testing.T) {
+	fetcher := &trackingFetcher{}
+	mockSSM := &mockAgentSSM{}
+	cfg := &config.Config{ArtifactsBucket: "test-bucket"}
+
+	runCmd := cmd.NewAgentRunCmd(cfg, fetcher, nil, mockSSM, nil)
+	runCmd.SetArgs([]string{"sb-test123", "--claude", "--codex", "--prompt", "hi"})
+	err := runCmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "--claude and --codex are mutually exclusive") {
+		t.Errorf("got %q, want contains %q", err.Error(), "--claude and --codex are mutually exclusive")
+	}
+	if len(mockSSM.sendCalls) != 0 {
+		t.Errorf("SendCommand called %d times; must not reach SSM after mutex error", len(mockSSM.sendCalls))
+	}
+	if fetcher.calls != 0 {
+		t.Errorf("FetchSandbox called %d times; mutex check must fire before ResolveSandboxID", fetcher.calls)
+	}
+}
+
+// TestAgentRun_CodexNoBedrockError verifies that --codex + --no-bedrock errors
+// before any SSM or FetchSandbox call (fires in RunE before ResolveSandboxID).
+func TestAgentRun_CodexNoBedrockError(t *testing.T) {
+	fetcher := &trackingFetcher{}
+	mockSSM := &mockAgentSSM{}
+	cfg := &config.Config{ArtifactsBucket: "test-bucket"}
+
+	runCmd := cmd.NewAgentRunCmd(cfg, fetcher, nil, mockSSM, nil)
+	runCmd.SetArgs([]string{"sb-test123", "--codex", "--no-bedrock", "--prompt", "hi"})
+	err := runCmd.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "--no-bedrock is only valid with --claude") {
+		t.Errorf("got %q, want contains %q", err.Error(), "--no-bedrock is only valid with --claude")
+	}
+	if len(mockSSM.sendCalls) != 0 || fetcher.calls != 0 {
+		t.Errorf("no-bedrock gate must fire BEFORE ResolveSandboxID and SSM (SendCommand=%d, FetchSandbox=%d)",
+			len(mockSSM.sendCalls), fetcher.calls)
+	}
+}
+
+// TestAgentRun_CodexFlag verifies that --codex dispatches codex (not claude) via SSM SendCommand.
+func TestAgentRun_CodexFlag(t *testing.T) {
+	fetcher := newRunningEC2Sandbox("sb-codex01")
+	mockSSM := &mockAgentSSM{}
+	cfg := &config.Config{ArtifactsBucket: "test-bucket"}
+
+	runCmd := cmd.NewAgentRunCmd(cfg, fetcher, nil, mockSSM, nil)
+	runCmd.SetArgs([]string{"sb-codex01", "--codex", "--prompt", "list files"})
+	if err := runCmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mockSSM.sendCalls) < 1 {
+		t.Fatal("expected SendCommand call")
+	}
+	call := mockSSM.sendCalls[0]
+	if awssdk.ToString(call.DocumentName) != "AWS-RunShellScript" {
+		t.Errorf("wrong document: %s", awssdk.ToString(call.DocumentName))
+	}
+	script := strings.Join(call.Parameters["commands"], "\n")
+	for _, want := range []string{"codex exec", "--json", "--dangerously-bypass-approvals-and-sandbox"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("script missing %q", want)
+		}
+	}
+	if strings.Contains(script, "claude -p") {
+		t.Error("script contains claude invocation — --codex should not emit claude")
+	}
+}
+
+// TestAgentRun_DefaultClaudeBackwardCompat verifies that no flag (default) uses claude.
+func TestAgentRun_DefaultClaudeBackwardCompat(t *testing.T) {
+	fetcher := newRunningEC2Sandbox("sb-default01")
+	mockSSM := &mockAgentSSM{}
+	cfg := &config.Config{ArtifactsBucket: "test-bucket"}
+
+	runCmd := cmd.NewAgentRunCmd(cfg, fetcher, nil, mockSSM, nil)
+	runCmd.SetArgs([]string{"sb-default01", "--prompt", "no agent flag"}) // NO --claude, NO --codex
+	if err := runCmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mockSSM.sendCalls) < 1 {
+		t.Fatal("expected SendCommand call")
+	}
+	script := strings.Join(mockSSM.sendCalls[0].Parameters["commands"], "\n")
+	for _, want := range []string{"claude -p", "--output-format json", "--dangerously-skip-permissions"} {
+		if !strings.Contains(script, want) {
+			t.Errorf("default-claude script missing %q", want)
+		}
+	}
+	if strings.Contains(script, "codex exec") {
+		t.Error("default-claude script must not contain codex")
+	}
+}
+
+// TestLoadProfileCLICodexArgs verifies that loadProfileCLICodexArgs returns nil
+// when ArtifactsBucket is empty (fail-open) — exercised transitively via the
+// codex-flag tests above which pass ArtifactsBucket="test-bucket" but no real S3.
+// Correctness when the profile has codexArgs is covered by TestBuildAgentShellCommands_Codex.
+func TestLoadProfileCLICodexArgs(t *testing.T) {
+	// When cfg.ArtifactsBucket is empty, loadProfileCLI returns nil → helper returns nil (fail-open).
+	// This is exercised by calling the run cmd with no bucket — should not panic.
+	fetcher := newRunningEC2Sandbox("sb-codexargs01")
+	mockSSM := &mockAgentSSM{}
+	cfg := &config.Config{} // empty ArtifactsBucket → loadProfileCLI returns nil → CodexArgs nil
+
+	runCmd := cmd.NewAgentRunCmd(cfg, fetcher, nil, mockSSM, nil)
+	runCmd.SetArgs([]string{"sb-codexargs01", "--codex", "--prompt", "test args"})
+	if err := runCmd.Execute(); err != nil {
+		t.Fatalf("unexpected error with empty bucket (fail-open): %v", err)
+	}
+	// Codex branch still fires even with no profile args
+	if len(mockSSM.sendCalls) < 1 {
+		t.Fatal("expected SendCommand call")
+	}
+	script := strings.Join(mockSSM.sendCalls[0].Parameters["commands"], "\n")
+	if !strings.Contains(script, "codex exec") {
+		t.Error("codex script missing 'codex exec' even with nil codexArgs")
+	}
+}
+
 // TestBuildAgentCommand verifies that the agent command builder composes
 // the base command, profile-supplied default args, and user-supplied extra
 // args in the correct order, and applies profile args only for claude.
