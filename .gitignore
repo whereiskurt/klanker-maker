@@ -21,6 +21,7 @@ infra/live/network/
 
 # Build output directory (cross-compiled sidecar binaries)
 build/
+bin/
 
 # Compiled binaries
 /km
