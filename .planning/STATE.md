@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: "Checkpoint: 58-03 Task 3 human-verify (Tasks 1-2 complete, awaiting operator smoke test)"
-last_updated: "2026-04-19T19:55:16.240Z"
-last_activity: 2026-04-19 - Completed quick task 4: Add cache token metering to HTTP proxy Anthropic API cost calculation
+last_updated: "2026-04-19T21:04:03.888Z"
+last_activity: 2026-04-19 — Completed 58-03-PLAN.md (--claude/--codex flags, operator smoke test approved against alias102)
 progress:
   total_phases: 58
   completed_phases: 53
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 
 ## Current Position
 
-Phase: 54 of 54 (Multi-Account GitHub App Installations)
-Plan: 2 of 3 in current phase
+Phase: 58 (km agent run codex support)
+Plan: 3 of 3 in current phase (complete)
 Status: executing
-Last activity: 2026-04-17 — Completed 54-02-PLAN.md (create-time installation ID resolution)
+Last activity: 2026-04-19 — Completed 58-03-PLAN.md (--claude/--codex flags, operator smoke test approved against alias102)
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -566,6 +566,8 @@ Recent decisions affecting current work:
 - [Phase 58]: Default agent type is claude when neither --claude nor --codex is set — backward compat preserved
 - [Phase 58]: Mutex and no-bedrock checks fire before ResolveSandboxID — zero AWS calls on validation failure
 - [Phase 58]: km init --sidecars NOT required after phase 58 — codexArgs is client-side CLI field only
+- [Phase 58]: Default agent type for km agent run is claude when neither --claude nor --codex is set (backward compat preserved)
+- [Phase 58]: km init --sidecars NOT required after phase 58 — codexArgs is a client-side CLI field only
 
 ### Roadmap Evolution
 

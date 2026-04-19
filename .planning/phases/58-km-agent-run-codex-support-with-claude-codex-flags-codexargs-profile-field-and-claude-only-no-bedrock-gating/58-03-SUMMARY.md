@@ -19,8 +19,7 @@ provides:
   - NewAgentRunCmd exported test seam
   - Five new tests proving flag wiring, mutex, no-bedrock gate, backward compat, helper
 
-affects:
-  - Manual smoke test step (Task 3 checkpoint:human-verify awaiting operator)
+affects: []
 
 tech-stack:
   added: []
@@ -48,7 +47,7 @@ requirements-completed:
   - CODEX-04
   - CODEX-05
 
-duration: 6min
+duration: 10min
 completed: 2026-04-19
 ---
 
@@ -58,10 +57,10 @@ completed: 2026-04-19
 
 ## Performance
 
-- **Duration:** ~6 min
+- **Duration:** ~10 min
 - **Started:** 2026-04-19T19:48:35Z
-- **Completed:** 2026-04-19T19:54:10Z
-- **Tasks:** 2 of 3 (Task 3 is checkpoint:human-verify awaiting operator)
+- **Completed:** 2026-04-19
+- **Tasks:** 3 of 3 (all complete including operator smoke test)
 - **Files modified:** 2
 
 ## Accomplishments
@@ -81,7 +80,7 @@ Each task was committed atomically:
 
 1. **Task 1: Add failing tests (RED)** - `8ce9552` (test)
 2. **Task 2: Implementation (GREEN)** - `61b7dfe` (feat)
-3. **Task 3: Manual smoke test** - checkpoint:human-verify (awaiting operator)
+3. **Task 3: Manual smoke test** - `ad11d6c` (docs) — checkpoint:human-verify passed by operator on 2026-04-19
 
 _Note: TDD tasks committed separately: test (RED) then implementation (GREEN)_
 
@@ -105,21 +104,36 @@ None - plan executed exactly as written.
 
 Pre-existing failure `TestLoadEFSOutputs_NotExist` in `internal/app/cmd/init_test.go` was present before this plan's changes and is out of scope per deviation rules. All agent-specific and profile tests pass.
 
-## User Setup Required
+## Operator Smoke Test (Task 3 — Passed 2026-04-19)
 
-Task 3 (checkpoint:human-verify) requires operator to run:
-1. `make build` — verify binary builds
-2. `./km validate profiles/learn.yaml && go test ./internal/app/cmd/ ./pkg/profile/`
-3. Negative path: `./km agent run sb-fakebox --claude --codex --prompt test` → expect mutex error
-4. Negative path: `./km agent run sb-fakebox --codex --no-bedrock --prompt test` → expect no-bedrock error
-5. Optional live test with a provisioned sandbox
+Manual smoke test passed by operator against sandbox `leaner-ef517a1b` (alias `alias102`) on 2026-04-19.
+
+**Positive path (live sandbox):**
+```
+./km agent run alias102 --codex --prompt 'whats 3x3?' --wait
+```
+
+JSONL stream returned including:
+```json
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"9"}}
+```
+and a `turn.completed` event with usage data. Results fetch also confirmed working:
+```
+./km agent results alias102
+```
+Returned the same JSONL payload — end-to-end path verified: `--codex` flag → `codex exec --json --dangerously-bypass-approvals-and-sandbox` shell command → JSONL output → results fetch.
+
+**Negative paths (no AWS required):**
+- `./km agent run sb-fakebox --claude --codex --prompt test` → returned `--claude and --codex are mutually exclusive` (non-zero exit) — confirmed
+- `./km agent run sb-fakebox --codex --no-bedrock --prompt test` → returned `--no-bedrock is only valid with --claude` (non-zero exit) — confirmed
 
 ## Next Phase Readiness
 
-- Phase 58 code is complete pending operator smoke-test approval (Task 3)
+- Phase 58 plan 03 fully complete — all three tasks done including operator smoke test
 - `km agent run --codex --prompt "..."` dispatches `codex exec --json --dangerously-bypass-approvals-and-sandbox` via SSM
 - `spec.cli.codexArgs` flows through profile → `loadProfileCLICodexArgs` → `AgentRunOptions.CodexArgs` → codex invocation
-- No blockers for Task 3 operator approval
+- `km init --sidecars` NOT required — CodexArgs is a client-side CLI field only
+- No remaining blockers for phase 58
 
 ## Self-Check: PASSED
 
@@ -127,7 +141,9 @@ Task 3 (checkpoint:human-verify) requires operator to run:
 - `internal/app/cmd/agent_test.go` exists: FOUND
 - Commit `8ce9552` (RED): FOUND in git log
 - Commit `61b7dfe` (GREEN): FOUND in git log
+- Commit `ad11d6c` (docs checkpoint): FOUND in git log
+- Task 3 operator smoke test: PASSED (live sandbox alias102, 2026-04-19)
 
 ---
 *Phase: 58-km-agent-run-codex-support*
-*Completed: 2026-04-19 (Tasks 1-2; Task 3 awaiting operator verification)*
+*Completed: 2026-04-19 (all 3 tasks including operator smoke test)*
