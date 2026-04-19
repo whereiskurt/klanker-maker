@@ -943,3 +943,134 @@ spec:
 		t.Errorf("expected empty claudeArgs, got %v", p.Spec.CLI.ClaudeArgs)
 	}
 }
+
+// TestCLISpec_CodexArgsParsesFromYAML verifies that spec.cli.codexArgs parses
+// into a string slice and can be used to default extra args on km agent run --codex.
+func TestCLISpec_CodexArgsParsesFromYAML(t *testing.T) {
+	yamlData := []byte(`
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: cli-codex-args-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+  identity:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: true
+      image: "km-tracing:latest"
+  cli:
+    noBedrock: true
+    codexArgs:
+      - "--model"
+      - "o4-mini"
+      - "--dangerously-bypass-approvals-and-sandbox"
+`)
+
+	p, err := profile.Parse(yamlData)
+	if err != nil {
+		t.Fatalf("expected profile to parse, got: %v", err)
+	}
+	if p.Spec.CLI == nil {
+		t.Fatal("expected Spec.CLI to be set, got nil")
+	}
+	if !p.Spec.CLI.NoBedrock {
+		t.Error("expected CLI.NoBedrock=true")
+	}
+	want := []string{"--model", "o4-mini", "--dangerously-bypass-approvals-and-sandbox"}
+	if got := p.Spec.CLI.CodexArgs; len(got) != len(want) {
+		t.Fatalf("expected %d codexArgs, got %d: %v", len(want), len(got), got)
+	}
+	for i, w := range want {
+		if p.Spec.CLI.CodexArgs[i] != w {
+			t.Errorf("codexArgs[%d] = %q, want %q", i, p.Spec.CLI.CodexArgs[i], w)
+		}
+	}
+}
+
+// TestCLISpec_CodexArgsOptional verifies that codexArgs is optional and parses
+// as nil/empty when omitted.
+func TestCLISpec_CodexArgsOptional(t *testing.T) {
+	yamlData := []byte(`
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: cli-codex-optional-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+  identity:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: true
+      image: "km-tracing:latest"
+  cli:
+    noBedrock: false
+`)
+
+	p, err := profile.Parse(yamlData)
+	if err != nil {
+		t.Fatalf("expected profile to parse, got: %v", err)
+	}
+	if p.Spec.CLI == nil {
+		t.Fatal("expected Spec.CLI to be set, got nil")
+	}
+	if len(p.Spec.CLI.CodexArgs) != 0 {
+		t.Errorf("expected empty codexArgs, got %v", p.Spec.CLI.CodexArgs)
+	}
+}
