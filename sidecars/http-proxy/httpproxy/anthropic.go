@@ -6,10 +6,6 @@
 // The model ID is extracted from the response body (not the URL path — unlike Bedrock,
 // Anthropic does not encode the model in the URL).
 //
-// Note: cache_creation_input_tokens and cache_read_input_tokens (prompt caching)
-// are NOT metered in this implementation. Only base input_tokens and output_tokens
-// are counted. This is a known conservative undercount when prompt caching is active.
-// Prompt cache metering is tracked as a future improvement.
 package httpproxy
 
 import (
@@ -33,8 +29,10 @@ type anthropicMessageStartPayload struct {
 	Message struct {
 		Model string `json:"model"`
 		Usage struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
+			InputTokens              int `json:"input_tokens"`
+			OutputTokens             int `json:"output_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 		} `json:"usage"`
 	} `json:"message"`
 }
@@ -44,29 +42,32 @@ type anthropicMessageStartPayload struct {
 type anthropicNonStreamingPayload struct {
 	Model string `json:"model"`
 	Usage struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 	} `json:"usage"`
 }
 
 // ExtractAnthropicTokens reads an Anthropic API response body (SSE streaming or
-// plain JSON) and returns the model ID, input token count, and output token count.
-// Returns ("", 0, 0, nil) on empty or unrecognized body.
+// plain JSON) and returns the model ID, input/output token counts, and cache token counts.
+// Returns ("", 0, 0, 0, 0, nil) on empty or unrecognized body.
 // Caps the read at maxResponseBodySize (10 MB) and returns best-effort counts on overflow.
 //
 // For SSE responses:
 //   - model ID comes from message_start.message.model
 //   - input tokens come from message_start.message.usage.input_tokens
 //   - output tokens come from message_delta.usage.output_tokens (cumulative final value)
+//   - cache tokens come from message_start.message.usage.cache_*_input_tokens
 //
 // For non-streaming responses:
 //   - model ID comes from the top-level "model" field
-//   - input/output tokens come from the top-level "usage" object
-func ExtractAnthropicTokens(body io.Reader) (modelID string, inputTokens, outputTokens int, err error) {
+//   - input/output/cache tokens come from the top-level "usage" object
+func ExtractAnthropicTokens(body io.Reader) (modelID string, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int, err error) {
 	lr := io.LimitReader(body, int64(maxResponseBodySize))
 	data, _ := io.ReadAll(lr)
 	if len(data) == 0 {
-		return "", 0, 0, nil
+		return "", 0, 0, 0, 0, nil
 	}
 
 	// Try SSE parsing first (same structure as ExtractBedrockTokens).
@@ -92,6 +93,8 @@ func ExtractAnthropicTokens(body io.Reader) (modelID string, inputTokens, output
 			if jsonErr := json.Unmarshal([]byte(jsonData), &payload); jsonErr == nil {
 				modelID = payload.Message.Model
 				inputTokens = payload.Message.Usage.InputTokens
+				cacheReadTokens = payload.Message.Usage.CacheReadInputTokens
+				cacheWriteTokens = payload.Message.Usage.CacheCreationInputTokens
 				// Note: payload.Message.Usage.OutputTokens is a placeholder (always 1).
 				// Use message_delta for the actual cumulative output token count.
 			}
@@ -107,17 +110,27 @@ func ExtractAnthropicTokens(body io.Reader) (modelID string, inputTokens, output
 	}
 
 	if hasSSEEvents {
-		return modelID, inputTokens, outputTokens, nil
+		return modelID, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, nil
 	}
 
 	// No SSE events — try non-streaming JSON body.
 	var payload anthropicNonStreamingPayload
 	if jsonErr := json.Unmarshal(data, &payload); jsonErr == nil && (payload.Usage.InputTokens > 0 || payload.Usage.OutputTokens > 0) {
-		return payload.Model, payload.Usage.InputTokens, payload.Usage.OutputTokens, nil
+		return payload.Model, payload.Usage.InputTokens, payload.Usage.OutputTokens, payload.Usage.CacheReadInputTokens, payload.Usage.CacheCreationInputTokens, nil
 	}
 
 	// Unparseable but non-empty — return zero counts, no error (best-effort).
-	return "", 0, 0, nil
+	return "", 0, 0, 0, 0, nil
+}
+
+// CalculateAnthropicCost returns USD cost including cache token pricing.
+// Cache read = 0.1x input rate, cache write = 1.25x input rate.
+func CalculateAnthropicCost(inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int, rate aws.BedrockModelRate) float64 {
+	inputCost := float64(inputTokens) * rate.InputPricePer1KTokens / 1000.0
+	outputCost := float64(outputTokens) * rate.OutputPricePer1KTokens / 1000.0
+	cacheReadCost := float64(cacheReadTokens) * (rate.InputPricePer1KTokens * 0.1) / 1000.0
+	cacheWriteCost := float64(cacheWriteTokens) * (rate.InputPricePer1KTokens * 1.25) / 1000.0
+	return inputCost + outputCost + cacheReadCost + cacheWriteCost
 }
 
 // staticAnthropicRates maps Anthropic API model IDs to their per-1K-token USD rates.
