@@ -359,6 +359,11 @@ type CLISpec struct {
 	// The sandbox is still provisioned with Bedrock vars; this only affects
 	// the operator's connection. Override with --bedrock on the CLI.
 	NoBedrock bool `yaml:"noBedrock,omitempty"`
+	// ClaudeArgs are appended to the `claude` command line when launching an
+	// interactive session via `km agent <sb> --claude`. Use to bake in flags
+	// like --dangerously-skip-permissions or --model for a given profile.
+	// Args supplied after `--` on the CLI still take precedence.
+	ClaudeArgs []string `yaml:"claudeArgs,omitempty"`
 }
 
 // Parse unmarshals a SandboxProfile from raw YAML bytes.

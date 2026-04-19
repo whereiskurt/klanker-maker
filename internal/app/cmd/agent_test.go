@@ -816,3 +816,64 @@ func TestAgentAttach_StoppedSandbox(t *testing.T) {
 		t.Errorf("expected error to contain 'stopped', got: %v", err)
 	}
 }
+
+// TestBuildAgentCommand verifies that the agent command builder composes
+// the base command, profile-supplied default args, and user-supplied extra
+// args in the correct order, and applies profile args only for claude.
+func TestBuildAgentCommand(t *testing.T) {
+	tests := []struct {
+		name         string
+		base         string
+		profileArgs  []string
+		userArgs     []string
+		want         string
+	}{
+		{
+			name: "claude with no extras",
+			base: "claude",
+			want: "claude",
+		},
+		{
+			name:        "claude with profile claudeArgs only",
+			base:        "claude",
+			profileArgs: []string{"--dangerously-skip-permissions"},
+			want:        "claude --dangerously-skip-permissions",
+		},
+		{
+			name:        "claude with profile and user args — profile first, user last wins",
+			base:        "claude",
+			profileArgs: []string{"--dangerously-skip-permissions", "--model", "claude-opus-4-7"},
+			userArgs:    []string{"--model", "claude-sonnet-4-6"},
+			want:        "claude --dangerously-skip-permissions --model claude-opus-4-7 --model claude-sonnet-4-6",
+		},
+		{
+			name:     "claude with only user args",
+			base:     "claude",
+			userArgs: []string{"-p", "hello world"},
+			want:     "claude -p hello world",
+		},
+		{
+			name:        "codex ignores claudeArgs from profile",
+			base:        "codex",
+			profileArgs: []string{"--dangerously-skip-permissions"},
+			userArgs:    []string{"--flag"},
+			want:        "codex --flag",
+		},
+		{
+			name:        "empty profile args string is skipped",
+			base:        "claude",
+			profileArgs: []string{""},
+			want:        "claude",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := cmd.BuildAgentCommand(tc.base, tc.profileArgs, tc.userArgs)
+			if got != tc.want {
+				t.Errorf("BuildAgentCommand(%q, %v, %v) = %q, want %q",
+					tc.base, tc.profileArgs, tc.userArgs, got, tc.want)
+			}
+		})
+	}
+}

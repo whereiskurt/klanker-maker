@@ -812,3 +812,134 @@ func TestBudgetSpecOptional(t *testing.T) {
 		t.Logf("valid-minimal.yaml has budget set: %+v (acceptable)", p.Spec.Budget)
 	}
 }
+
+// TestCLISpec_ClaudeArgsParsesFromYAML verifies that spec.cli.claudeArgs parses
+// into a string slice and can be used to default extra args on km agent --claude.
+func TestCLISpec_ClaudeArgsParsesFromYAML(t *testing.T) {
+	yamlData := []byte(`
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: cli-claude-args-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+  identity:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: true
+      image: "km-tracing:latest"
+  cli:
+    noBedrock: true
+    claudeArgs:
+      - "--dangerously-skip-permissions"
+      - "--model"
+      - "claude-opus-4-7"
+`)
+
+	p, err := profile.Parse(yamlData)
+	if err != nil {
+		t.Fatalf("expected profile to parse, got: %v", err)
+	}
+	if p.Spec.CLI == nil {
+		t.Fatal("expected Spec.CLI to be set, got nil")
+	}
+	if !p.Spec.CLI.NoBedrock {
+		t.Error("expected CLI.NoBedrock=true")
+	}
+	want := []string{"--dangerously-skip-permissions", "--model", "claude-opus-4-7"}
+	if got := p.Spec.CLI.ClaudeArgs; len(got) != len(want) {
+		t.Fatalf("expected %d claudeArgs, got %d: %v", len(want), len(got), got)
+	}
+	for i, w := range want {
+		if p.Spec.CLI.ClaudeArgs[i] != w {
+			t.Errorf("claudeArgs[%d] = %q, want %q", i, p.Spec.CLI.ClaudeArgs[i], w)
+		}
+	}
+}
+
+// TestCLISpec_ClaudeArgsOptional verifies that claudeArgs is optional and parses
+// as nil/empty when omitted.
+func TestCLISpec_ClaudeArgsOptional(t *testing.T) {
+	yamlData := []byte(`
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: cli-optional-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+  identity:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: true
+      image: "km-tracing:latest"
+  cli:
+    noBedrock: false
+`)
+
+	p, err := profile.Parse(yamlData)
+	if err != nil {
+		t.Fatalf("expected profile to parse, got: %v", err)
+	}
+	if p.Spec.CLI == nil {
+		t.Fatal("expected Spec.CLI to be set, got nil")
+	}
+	if len(p.Spec.CLI.ClaudeArgs) != 0 {
+		t.Errorf("expected empty claudeArgs, got %v", p.Spec.CLI.ClaudeArgs)
+	}
+}

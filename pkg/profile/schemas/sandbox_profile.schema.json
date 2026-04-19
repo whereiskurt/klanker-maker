@@ -479,6 +479,11 @@
             "noBedrock": {
               "type": "boolean",
               "description": "Default to --no-bedrock for km shell and km agent run (use direct Anthropic API instead of Bedrock)"
+            },
+            "claudeArgs": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Extra args appended to the `claude` command when launching via km agent --claude (e.g. --dangerously-skip-permissions). User-supplied args after -- still take precedence."
             }
           }
         }

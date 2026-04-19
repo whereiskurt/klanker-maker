@@ -96,27 +96,34 @@ Examples:
 				return err
 			}
 
-			var agentCmd string
+			var base string
 			switch {
 			case useClaude:
-				agentCmd = "claude"
+				base = "claude"
 			case useCodex:
-				agentCmd = "codex"
+				base = "codex"
 			default:
 				return fmt.Errorf("specify an agent: --claude or --codex")
 			}
 
-			// Pass any extra args after the sandbox ID
-			if len(args) > 1 {
-				agentCmd += " " + strings.Join(args[1:], " ")
+			// Profile-level CLI defaults: --no-bedrock and --claude args.
+			var profileClaudeArgs []string
+			if useClaude {
+				profileClaudeArgs = loadProfileCLIClaudeArgs(ctx, cfg, sandboxID)
 			}
-
-			// If --no-bedrock not explicitly set, check profile cli.noBedrock default
 			if !cmd.Flags().Changed("no-bedrock") {
 				if cliNB := loadProfileCLINoBedrock(ctx, cfg, sandboxID); cliNB {
 					noBedrock = true
 				}
 			}
+
+			// User-supplied extras come after the sandbox ID arg.
+			var userArgs []string
+			if len(args) > 1 {
+				userArgs = args[1:]
+			}
+
+			agentCmd := BuildAgentCommand(base, profileClaudeArgs, userArgs)
 
 			return runAgent(cmd, cfg, fetcher, execFn, sandboxID, agentCmd, noBedrock)
 		},
@@ -1067,12 +1074,29 @@ tmux wait-for -S km-done-%s`, noBedrockLines, artifactsBucket, runID, b64Prompt,
 // loadProfileCLINoBedrock fetches the sandbox's profile from S3 and returns
 // the cli.noBedrock setting. Returns false on any error (fail open).
 func loadProfileCLINoBedrock(ctx context.Context, cfg *config.Config, sandboxID string) bool {
+	p := loadProfileCLI(ctx, cfg, sandboxID)
+	return p != nil && p.NoBedrock
+}
+
+// loadProfileCLIClaudeArgs fetches the sandbox's profile from S3 and returns
+// the cli.claudeArgs list. Returns nil on any error (fail open).
+func loadProfileCLIClaudeArgs(ctx context.Context, cfg *config.Config, sandboxID string) []string {
+	p := loadProfileCLI(ctx, cfg, sandboxID)
+	if p == nil {
+		return nil
+	}
+	return p.ClaudeArgs
+}
+
+// loadProfileCLI fetches the sandbox's profile from S3 and returns its CLISpec,
+// or nil on any error (fail open).
+func loadProfileCLI(ctx context.Context, cfg *config.Config, sandboxID string) *profile.CLISpec {
 	if cfg.ArtifactsBucket == "" {
-		return false
+		return nil
 	}
 	awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
 	if err != nil {
-		return false
+		return nil
 	}
 	s3Client := s3.NewFromConfig(awsCfg)
 	profileKey := fmt.Sprintf("artifacts/%s/.km-profile.yaml", sandboxID)
@@ -1081,16 +1105,39 @@ func loadProfileCLINoBedrock(ctx context.Context, cfg *config.Config, sandboxID 
 		Key:    awssdk.String(profileKey),
 	})
 	if err != nil {
-		return false
+		return nil
 	}
 	defer obj.Body.Close()
 	data, err := io.ReadAll(obj.Body)
 	if err != nil {
-		return false
+		return nil
 	}
 	p, err := profile.Parse(data)
 	if err != nil || p == nil {
-		return false
+		return nil
 	}
-	return p.Spec.CLI != nil && p.Spec.CLI.NoBedrock
+	return p.Spec.CLI
+}
+
+// BuildAgentCommand composes an agent command line from a base command
+// ("claude" or "codex"), profile-supplied default args (applied only when
+// base == "claude"), and user-supplied extras (which come last so they win
+// when a flag is repeated).
+func BuildAgentCommand(base string, profileClaudeArgs, userArgs []string) string {
+	parts := []string{base}
+	if base == "claude" {
+		for _, a := range profileClaudeArgs {
+			if a == "" {
+				continue
+			}
+			parts = append(parts, a)
+		}
+	}
+	for _, a := range userArgs {
+		if a == "" {
+			continue
+		}
+		parts = append(parts, a)
+	}
+	return strings.Join(parts, " ")
 }
