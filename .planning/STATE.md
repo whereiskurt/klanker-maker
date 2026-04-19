@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 58-02-PLAN.md (BuildAgentShellCommands agent-type branching)
-last_updated: "2026-04-19T19:41:34.932Z"
+stopped_at: "Checkpoint: 58-03 Task 3 human-verify (Tasks 1-2 complete, awaiting operator smoke test)"
+last_updated: "2026-04-19T19:55:16.240Z"
 last_activity: 2026-04-17 — Completed 54-02-PLAN.md (create-time installation ID resolution)
 progress:
   total_phases: 58
-  completed_phases: 52
+  completed_phases: 53
   total_plans: 162
-  completed_plans: 162
+  completed_plans: 163
   percent: 0
 ---
 
@@ -205,6 +205,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 55-learn-mode-command-capture P02 | 515643min | 3 tasks | 6 files |
 | Phase 58 P01 | 2min | 2 tasks | 3 files |
 | Phase 58 P02 | 687 | 2 tasks | 2 files |
+| Phase 58 P03 | 360 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -562,6 +563,9 @@ Recent decisions affecting current work:
 - [Phase 58]: CodexArgs kept parallel to ClaudeArgs (separate []string fields) not unified agentArgs map per CONTEXT.md
 - [Phase 58]: agentType defaults to claude for empty string — all existing callers safe until Plan 03 wires the flag
 - [Phase 58]: noBedrockLines stays empty for codex regardless of NoBedrock field — belt-and-braces guard even with Plan 03 RunE error path
+- [Phase 58]: Default agent type is claude when neither --claude nor --codex is set — backward compat preserved
+- [Phase 58]: Mutex and no-bedrock checks fire before ResolveSandboxID — zero AWS calls on validation failure
+- [Phase 58]: km init --sidecars NOT required after phase 58 — codexArgs is client-side CLI field only
 
 ### Roadmap Evolution
 
@@ -631,6 +635,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-19T19:41:34.927Z
-Stopped at: Completed 58-02-PLAN.md (BuildAgentShellCommands agent-type branching)
+Last session: 2026-04-19T19:55:16.235Z
+Stopped at: Checkpoint: 58-03 Task 3 human-verify (Tasks 1-2 complete, awaiting operator smoke test)
 Resume file: None
