@@ -405,14 +405,14 @@ func (tl *TransparentListener) meterBedrockResponse(resp *http.Response, req *ht
 func (tl *TransparentListener) meterAnthropicResponse(resp *http.Response, req *http.Request) {
 	be := tl.budget
 	resp.Body = newMeteringReader(resp.Body, func(captured []byte) {
-		modelID, inputTokens, outputTokens, parseErr := ExtractAnthropicTokens(bytes.NewReader(captured))
+		modelID, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, parseErr := ExtractAnthropicTokens(bytes.NewReader(captured))
 		if parseErr != nil || (inputTokens == 0 && outputTokens == 0) {
 			return
 		}
 
 		var costUSD float64
 		if rate, ok := staticAnthropicRates[modelID]; ok {
-			costUSD = CalculateCost(inputTokens, outputTokens, rate.InputPricePer1KTokens, rate.OutputPricePer1KTokens)
+			costUSD = CalculateAnthropicCost(inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, rate)
 		}
 
 		log.Info().
@@ -422,6 +422,8 @@ func (tl *TransparentListener) meterAnthropicResponse(resp *http.Response, req *
 			Str("mode", "transparent").
 			Int("input_tokens", inputTokens).
 			Int("output_tokens", outputTokens).
+			Int("cache_read_tokens", cacheReadTokens).
+			Int("cache_write_tokens", cacheWriteTokens).
 			Float64("cost_usd", costUSD).
 			Msg("")
 

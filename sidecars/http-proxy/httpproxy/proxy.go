@@ -363,14 +363,14 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 				// Wrap body in metering reader — streams through to client,
 				// fires token extraction + DynamoDB metering on EOF.
 				resp.Body = newMeteringReader(resp.Body, func(captured []byte) {
-					modelID, inputTokens, outputTokens, parseErr := ExtractAnthropicTokens(bytes.NewReader(captured))
+					modelID, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, parseErr := ExtractAnthropicTokens(bytes.NewReader(captured))
 					if parseErr != nil || (inputTokens == 0 && outputTokens == 0) {
 						return
 					}
 
 					var costUSD float64
 					if rate, ok := staticAnthropicRates[modelID]; ok {
-						costUSD = CalculateCost(inputTokens, outputTokens, rate.InputPricePer1KTokens, rate.OutputPricePer1KTokens)
+						costUSD = CalculateAnthropicCost(inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, rate)
 					}
 
 					log.Info().
@@ -379,6 +379,8 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 						Str("model", modelID).
 						Int("input_tokens", inputTokens).
 						Int("output_tokens", outputTokens).
+						Int("cache_read_tokens", cacheReadTokens).
+						Int("cache_write_tokens", cacheWriteTokens).
 						Float64("cost_usd", costUSD).
 						Msg("")
 
