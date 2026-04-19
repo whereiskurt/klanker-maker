@@ -484,6 +484,11 @@
               "type": "array",
               "items": { "type": "string" },
               "description": "Extra args appended to the `claude` command when launching via km agent --claude (e.g. --dangerously-skip-permissions). User-supplied args after -- still take precedence."
+            },
+            "codexArgs": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Extra args appended to the `codex exec` command when launching via km agent run --codex (e.g. --model o4-mini). User-supplied args still take precedence."
             }
           }
         }

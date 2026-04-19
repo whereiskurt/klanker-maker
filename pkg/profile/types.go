@@ -364,6 +364,11 @@ type CLISpec struct {
 	// like --dangerously-skip-permissions or --model for a given profile.
 	// Args supplied after `--` on the CLI still take precedence.
 	ClaudeArgs []string `yaml:"claudeArgs,omitempty"`
+	// CodexArgs are appended to the `codex exec` command line when launching
+	// a non-interactive run via `km agent run <sb> --codex` (and the interactive
+	// `km agent <sb> --codex` path). Use to bake in flags like --model for a
+	// given profile. Args supplied after `--` on the CLI still take precedence.
+	CodexArgs []string `yaml:"codexArgs,omitempty"`
 }
 
 // Parse unmarshals a SandboxProfile from raw YAML bytes.
