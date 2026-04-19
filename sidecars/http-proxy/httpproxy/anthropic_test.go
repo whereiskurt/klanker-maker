@@ -16,7 +16,7 @@ import (
 // Test 1 — Non-streaming extraction.
 func TestExtractAnthropicTokens_NonStreaming(t *testing.T) {
 	body := strings.NewReader(`{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50}}`)
-	modelID, inputTokens, outputTokens, err := httpproxy.ExtractAnthropicTokens(body)
+	modelID, inputTokens, outputTokens, _, _, err := httpproxy.ExtractAnthropicTokens(body)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestExtractAnthropicTokens_SSEStream(t *testing.T) {
 			"\n",
 	)
 
-	modelID, inputTokens, outputTokens, err := httpproxy.ExtractAnthropicTokens(sseBody)
+	modelID, inputTokens, outputTokens, _, _, err := httpproxy.ExtractAnthropicTokens(sseBody)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestExtractAnthropicTokens_SSEStream(t *testing.T) {
 // Test 3 — Empty body.
 func TestExtractAnthropicTokens_EmptyBody(t *testing.T) {
 	body := strings.NewReader("")
-	modelID, inputTokens, outputTokens, err := httpproxy.ExtractAnthropicTokens(body)
+	modelID, inputTokens, outputTokens, _, _, err := httpproxy.ExtractAnthropicTokens(body)
 	if err != nil {
 		t.Fatalf("unexpected error on empty body: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestExtractAnthropicTokens_ModelIDFromSSE(t *testing.T) {
 			"\n",
 	)
 
-	modelID, _, _, err := httpproxy.ExtractAnthropicTokens(sseBody)
+	modelID, _, _, _, _, err := httpproxy.ExtractAnthropicTokens(sseBody)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -234,4 +234,114 @@ func (s *captureModelIDStub) GetItem(ctx context.Context, input *dynamodb.GetIte
 
 func (s *captureModelIDStub) Query(ctx context.Context, input *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
 	return &dynamodb.QueryOutput{}, nil
+}
+
+// Test 9 — SSE streaming with cache tokens.
+func TestExtractAnthropicTokens_SSEStreamWithCache(t *testing.T) {
+	sseBody := strings.NewReader(
+		"event: message_start\n" +
+			`data: {"type":"message_start","message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":1,"cache_creation_input_tokens":500,"cache_read_input_tokens":2000}}}` + "\n" +
+			"\n" +
+			"event: message_delta\n" +
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":50}}` + "\n" +
+			"\n",
+	)
+
+	modelID, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, err := httpproxy.ExtractAnthropicTokens(sseBody)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if modelID != "claude-sonnet-4-6" {
+		t.Errorf("modelID = %q, want %q", modelID, "claude-sonnet-4-6")
+	}
+	if inputTokens != 100 {
+		t.Errorf("inputTokens = %d, want 100", inputTokens)
+	}
+	if outputTokens != 50 {
+		t.Errorf("outputTokens = %d, want 50", outputTokens)
+	}
+	if cacheReadTokens != 2000 {
+		t.Errorf("cacheReadTokens = %d, want 2000", cacheReadTokens)
+	}
+	if cacheWriteTokens != 500 {
+		t.Errorf("cacheWriteTokens = %d, want 500", cacheWriteTokens)
+	}
+}
+
+// Test 10 — Non-streaming with cache tokens.
+func TestExtractAnthropicTokens_NonStreamingWithCache(t *testing.T) {
+	body := strings.NewReader(`{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":300,"cache_read_input_tokens":1500}}`)
+	modelID, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, err := httpproxy.ExtractAnthropicTokens(body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if modelID != "claude-sonnet-4-6" {
+		t.Errorf("modelID = %q, want %q", modelID, "claude-sonnet-4-6")
+	}
+	if inputTokens != 100 {
+		t.Errorf("inputTokens = %d, want 100", inputTokens)
+	}
+	if outputTokens != 50 {
+		t.Errorf("outputTokens = %d, want 50", outputTokens)
+	}
+	if cacheReadTokens != 1500 {
+		t.Errorf("cacheReadTokens = %d, want 1500", cacheReadTokens)
+	}
+	if cacheWriteTokens != 300 {
+		t.Errorf("cacheWriteTokens = %d, want 300", cacheWriteTokens)
+	}
+}
+
+// Test 11 — No cache tokens returns zero (backward compat).
+func TestExtractAnthropicTokens_NoCacheTokens(t *testing.T) {
+	body := strings.NewReader(`{"model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50}}`)
+	_, _, _, cacheReadTokens, cacheWriteTokens, err := httpproxy.ExtractAnthropicTokens(body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cacheReadTokens != 0 {
+		t.Errorf("cacheReadTokens = %d, want 0", cacheReadTokens)
+	}
+	if cacheWriteTokens != 0 {
+		t.Errorf("cacheWriteTokens = %d, want 0", cacheWriteTokens)
+	}
+}
+
+// Test 12 — CalculateAnthropicCost with cache tokens.
+// 1000 input + 500 output + 2000 cacheRead + 500 cacheWrite on claude-sonnet-4-6 ($0.003/$0.015)
+// = input(1000*0.003/1000=0.003) + output(500*0.015/1000=0.0075)
+// + cacheRead(2000*0.003*0.1/1000=0.0006) + cacheWrite(500*0.003*1.25/1000=0.001875)
+// = 0.012975
+func TestCalculateAnthropicCost_WithCache(t *testing.T) {
+	rates := httpproxy.StaticAnthropicRates()
+	rate := rates["claude-sonnet-4-6"]
+
+	got := httpproxy.CalculateAnthropicCost(1000, 500, 2000, 500, rate)
+	const want = 0.012975
+	const epsilon = 1e-10
+	diff := got - want
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > epsilon {
+		t.Errorf("CalculateAnthropicCost(1000, 500, 2000, 500) = %.10f, want %.10f", got, want)
+	}
+}
+
+// Test 13 — CalculateAnthropicCost with zero cache equals CalculateCost.
+func TestCalculateAnthropicCost_ZeroCache(t *testing.T) {
+	rates := httpproxy.StaticAnthropicRates()
+	rate := rates["claude-sonnet-4-6"]
+
+	withCache := httpproxy.CalculateAnthropicCost(1000, 500, 0, 0, rate)
+	withoutCache := httpproxy.CalculateCost(1000, 500, rate.InputPricePer1KTokens, rate.OutputPricePer1KTokens)
+
+	const epsilon = 1e-10
+	diff := withCache - withoutCache
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > epsilon {
+		t.Errorf("CalculateAnthropicCost with zero cache = %f, CalculateCost = %f; should be equal", withCache, withoutCache)
+	}
 }
