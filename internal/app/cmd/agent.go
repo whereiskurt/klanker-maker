@@ -201,7 +201,7 @@ Examples:
 				}
 			}
 
-			return runAgentNonInteractive(ctx, cfg, fetcher, execFn, ssmClient, ebClient, sandboxID, prompt, wait, interactive, noBedrock, autoStart)
+			return runAgentNonInteractive(ctx, cfg, fetcher, execFn, ssmClient, ebClient, sandboxID, prompt, wait, interactive, noBedrock, autoStart, "claude")
 		},
 	}
 
@@ -354,7 +354,7 @@ Examples:
 // It base64-encodes the prompt to prevent shell injection, creates a run directory
 // on the sandbox, and either returns immediately (fire-and-forget) or waits for
 // completion with idle-reset heartbeats.
-func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, ebClient kmaws.EventBridgeAPI, sandboxID, prompt string, wait, interactive, noBedrock, autoStart bool) error {
+func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, ebClient kmaws.EventBridgeAPI, sandboxID, prompt string, wait, interactive, noBedrock, autoStart bool, agentType string) error {
 	printBanner("km agent run", sandboxID)
 
 	// Initialize real clients if not injected
@@ -456,7 +456,12 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 	}
 
 	// Build the shell commands using shared helper (AGENT-02, AGENT-03)
-	cmds, runID := BuildAgentShellCommands(prompt, cfg.ArtifactsBucket, noBedrock)
+	cmds, runID := BuildAgentShellCommands(prompt, AgentRunOptions{
+		AgentType:       agentType,
+		NoBedrock:       noBedrock,
+		ArtifactsBucket: cfg.ArtifactsBucket,
+		// ClaudeArgs and CodexArgs are nil here — Plan 03 wires these via loadProfileCLI*Args
+	})
 
 	// --interactive mode: write script to disk, then open SSM session with tmux new-session (attached)
 	if interactive {
@@ -1014,15 +1019,58 @@ func sendSSMAndWait(ctx context.Context, ssmClient SSMSendAPI, instanceID, shell
 	return "", fmt.Errorf("timed out waiting for SSM command %s", commandID)
 }
 
+// AgentRunOptions bundles per-run options for BuildAgentShellCommands. It replaces
+// the previous variadic noBedrock ...bool signature. NoBedrock is claude-only
+// (ignored safely for codex). ClaudeArgs/CodexArgs are appended to the respective
+// agent invocation line, only on their matching branch.
+type AgentRunOptions struct {
+	AgentType       string   // "claude" (default) or "codex"
+	NoBedrock       bool     // claude-only; ignored (safe) for codex
+	ClaudeArgs      []string // appended to claude invocation (claude branch only)
+	CodexArgs       []string // appended to codex invocation (codex branch only)
+	ArtifactsBucket string   // S3 bucket for output.json upload
+}
+
 // BuildAgentShellCommands returns SSM RunShellScript commands for non-interactive
-// Claude execution. Each element becomes a separate line in the SSM command array.
+// agent execution. Each element becomes a separate line in the SSM command array.
 // The script is written to a temp file and executed as the sandbox user.
-func BuildAgentShellCommands(prompt string, artifactsBucket string, noBedrock ...bool) ([]string, string) {
+// Branches on opts.AgentType: "codex" emits `codex exec --json --dangerously-bypass-approvals-and-sandbox`;
+// everything else (including "" and "claude") emits the claude -p invocation.
+// The --no-bedrock env-unset + OAuth extraction block is only injected on the claude branch.
+func BuildAgentShellCommands(prompt string, opts AgentRunOptions) ([]string, string) {
 	b64Prompt := base64.StdEncoding.EncodeToString([]byte(prompt))
 	runID := time.Now().UTC().Format("20060102T150405Z")
-	noBedrockLines := ""
-	if len(noBedrock) > 0 && noBedrock[0] {
-		noBedrockLines = `unset CLAUDE_CODE_USE_BEDROCK
+
+	var agentLine string
+	var noBedrockLines string
+
+	switch opts.AgentType {
+	case "codex":
+		// Codex branch: never include Bedrock env-unset stanza
+		parts := []string{"codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox"}
+		for _, a := range opts.CodexArgs {
+			if a == "" {
+				continue
+			}
+			parts = append(parts, a)
+		}
+		parts = append(parts, `"$PROMPT"`)
+		agentLine = strings.Join(parts, " ") + ` \
+  > "$RUN_DIR/output.json" 2>"$RUN_DIR/stderr.log"`
+		// noBedrockLines stays empty — codex never uses Bedrock env vars
+
+	default: // "", "claude", or anything unknown defaults to claude
+		parts := []string{`claude -p "$PROMPT"`, "--output-format json", "--dangerously-skip-permissions", "--bare"}
+		for _, a := range opts.ClaudeArgs {
+			if a == "" {
+				continue
+			}
+			parts = append(parts, a)
+		}
+		agentLine = strings.Join(parts, " ") + ` \
+  > "$RUN_DIR/output.json" 2>"$RUN_DIR/stderr.log"`
+		if opts.NoBedrock {
+			noBedrockLines = `unset CLAUDE_CODE_USE_BEDROCK
 unset ANTHROPIC_BASE_URL
 unset ANTHROPIC_DEFAULT_SONNET_MODEL
 unset ANTHROPIC_DEFAULT_HAIKU_MODEL
@@ -1032,6 +1080,7 @@ if [ -z "$ANTHROPIC_API_KEY" ] && [ -f "$HOME/.claude/.credentials.json" ]; then
   OAUTH_TOKEN=$(python3 -c "import json; d=json.load(open('$HOME/.claude/.credentials.json')); print(d.get('claudeAiOauth',{}).get('accessToken',''))" 2>/dev/null)
   if [ -n "$OAUTH_TOKEN" ]; then export ANTHROPIC_API_KEY="$OAUTH_TOKEN"; fi
 fi`
+		}
 	}
 
 	// Write a bash script to a temp file, then execute inside a tmux session.
@@ -1049,15 +1098,14 @@ RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
 mkdir -p "$RUN_DIR"
 echo "running" > "$RUN_DIR/status"
 PROMPT=$(echo "%s" | base64 -d)
-claude -p "$PROMPT" --output-format json --dangerously-skip-permissions --bare \
-  > "$RUN_DIR/output.json" 2>"$RUN_DIR/stderr.log"
+%s
 EC=$?
 if [ $EC -eq 0 ]; then echo "complete" > "$RUN_DIR/status"; else echo "failed" > "$RUN_DIR/status"; echo "$EC" > "$RUN_DIR/exit_code"; fi
 if [ -n "$KM_ARTIFACTS_BUCKET" ] && [ -n "$KM_SANDBOX_ID" ]; then
   aws s3 cp "$RUN_DIR/output.json" "s3://$KM_ARTIFACTS_BUCKET/agent-runs/$KM_SANDBOX_ID/$RUN_ID/output.json" --quiet 2>/dev/null || true
   aws s3 cp "$RUN_DIR/status" "s3://$KM_ARTIFACTS_BUCKET/agent-runs/$KM_SANDBOX_ID/$RUN_ID/status" --quiet 2>/dev/null || true
 fi
-tmux wait-for -S km-done-%s`, noBedrockLines, artifactsBucket, runID, b64Prompt, runID)
+tmux wait-for -S km-done-%s`, noBedrockLines, opts.ArtifactsBucket, runID, b64Prompt, agentLine, runID)
 
 	sessionName := fmt.Sprintf("km-agent-%s", runID)
 
