@@ -5,7 +5,7 @@ milestone_name: milestone
 status: executing
 stopped_at: "Checkpoint: 58-03 Task 3 human-verify (Tasks 1-2 complete, awaiting operator smoke test)"
 last_updated: "2026-04-19T19:55:16.240Z"
-last_activity: 2026-04-17 — Completed 54-02-PLAN.md (create-time installation ID resolution)
+last_activity: 2026-04-19 - Completed quick task 4: Add cache token metering to HTTP proxy Anthropic API cost calculation
 progress:
   total_phases: 58
   completed_phases: 53
@@ -597,6 +597,7 @@ None yet.
 | 1 | max_sandboxes config limit with operator email | 2026-03-29 | a185a79 | [1-max-sandboxes-config-limit-with-operator](./quick/1-max-sandboxes-config-limit-with-operator/) |
 | 2 | upload km-config.yaml to S3 toolchain for create-handler Lambda | 2026-03-29 | c6adc96 | [2-upload-km-config-to-s3-toolchain-for-cre](./quick/2-upload-km-config-to-s3-toolchain-for-cre/) |
 | 3 | Fix budget-enforcer-instance-id | 2026-03-29 | 9d884e1 | [3-fix-budget-enforcer-instance-id](./quick/3-fix-budget-enforcer-instance-id/) |
+| 4 | Add cache token metering to HTTP proxy Anthropic API cost calculation | 2026-04-19 | b35f9d5 | [4-add-cache-token-metering-to-http-proxy-a](./quick/4-add-cache-token-metering-to-http-proxy-a/) |
 
 ## Accumulated Context
 
