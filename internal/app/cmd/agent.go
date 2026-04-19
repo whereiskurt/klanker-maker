@@ -155,11 +155,13 @@ func newAgentRunCmd(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExec
 	var interactive bool
 	var noBedrock bool
 	var autoStart bool
+	var useClaude bool
+	var useCodex bool
 
 	cmd := &cobra.Command{
 		Use:   "run <sandbox-id | #number>",
 		Short: "Fire a prompt non-interactively via SSM SendCommand",
-		Long: `Fire a Claude prompt into a sandbox via SSM SendCommand.
+		Long: `Fire an agent prompt into a sandbox via SSM SendCommand.
 
 The prompt is base64-encoded to prevent shell injection. Output is written
 to /workspace/.km-agent/runs/<timestamp>/ on the sandbox.
@@ -177,10 +179,19 @@ Examples:
   km agent run sb-abc123 --prompt "fix the failing tests"
   km agent run #1 --prompt "refactor auth module" --wait
   km agent run #1 --prompt "refactor auth module" --interactive
-  km agent run g1 --prompt "run tests" --auto-start --wait`,
+  km agent run g1 --prompt "run tests" --auto-start --wait
+  km agent run sb-abc123 --codex --prompt "list files in /workspace"`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Mutex: --claude and --codex are mutually exclusive (fire before any AWS call).
+			if useClaude && useCodex {
+				return fmt.Errorf("--claude and --codex are mutually exclusive")
+			}
+			// --no-bedrock is claude-only. Check BEFORE ResolveSandboxID.
+			if useCodex && noBedrock {
+				return fmt.Errorf("--no-bedrock is only valid with --claude")
+			}
 			if interactive && wait {
 				return fmt.Errorf("--interactive and --wait are mutually exclusive")
 			}
@@ -194,6 +205,12 @@ Examples:
 				return err
 			}
 
+			// Determine agent type — default to claude for backward compatibility.
+			agentType := "claude"
+			if useCodex {
+				agentType = "codex"
+			}
+
 			// If --no-bedrock not explicitly set, check profile cli.noBedrock default
 			if !cmd.Flags().Changed("no-bedrock") {
 				if cliNB := loadProfileCLINoBedrock(ctx, cfg, sandboxID); cliNB {
@@ -201,18 +218,26 @@ Examples:
 				}
 			}
 
-			return runAgentNonInteractive(ctx, cfg, fetcher, execFn, ssmClient, ebClient, sandboxID, prompt, wait, interactive, noBedrock, autoStart, "claude")
+			return runAgentNonInteractive(ctx, cfg, fetcher, execFn, ssmClient, ebClient, sandboxID, prompt, wait, interactive, noBedrock, autoStart, agentType)
 		},
 	}
 
-	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt text to send to Claude (required)")
+	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt text to send to the agent (required)")
 	cmd.Flags().BoolVar(&wait, "wait", false, "Block until agent completes and print output")
 	cmd.Flags().BoolVar(&interactive, "interactive", false, "Create tmux session and immediately attach (blocks until detach)")
 	cmd.Flags().BoolVar(&noBedrock, "no-bedrock", false, "Use direct Anthropic API instead of Bedrock")
 	cmd.Flags().BoolVar(&autoStart, "auto-start", false, "Automatically resume sandbox if paused/stopped")
+	cmd.Flags().BoolVar(&useClaude, "claude", false, "Run claude (default if neither --claude nor --codex is set)")
+	cmd.Flags().BoolVar(&useCodex, "codex", false, "Run codex exec (mutually exclusive with --claude; incompatible with --no-bedrock)")
 	_ = cmd.MarkFlagRequired("prompt")
 
 	return cmd
+}
+
+// NewAgentRunCmd is an exported test seam that lets tests construct the "run"
+// subcommand with injected dependencies without going through NewAgentCmdWithDeps.
+func NewAgentRunCmd(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, ebClient kmaws.EventBridgeAPI) *cobra.Command {
+	return newAgentRunCmd(cfg, fetcher, execFn, ssmClient, ebClient)
 }
 
 // runAgent launches an interactive AI agent inside a sandbox via SSM start-session.
@@ -455,12 +480,22 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 		}
 	}
 
+	// Load profile args for the selected agent type (avoid unnecessary S3 fetch).
+	var claudeArgs, codexArgs []string
+	switch agentType {
+	case "codex":
+		codexArgs = loadProfileCLICodexArgs(ctx, cfg, sandboxID)
+	default: // "claude" or empty
+		claudeArgs = loadProfileCLIClaudeArgs(ctx, cfg, sandboxID)
+	}
+
 	// Build the shell commands using shared helper (AGENT-02, AGENT-03)
 	cmds, runID := BuildAgentShellCommands(prompt, AgentRunOptions{
 		AgentType:       agentType,
 		NoBedrock:       noBedrock,
+		ClaudeArgs:      claudeArgs,
+		CodexArgs:       codexArgs,
 		ArtifactsBucket: cfg.ArtifactsBucket,
-		// ClaudeArgs and CodexArgs are nil here — Plan 03 wires these via loadProfileCLI*Args
 	})
 
 	// --interactive mode: write script to disk, then open SSM session with tmux new-session (attached)
@@ -1134,6 +1169,16 @@ func loadProfileCLIClaudeArgs(ctx context.Context, cfg *config.Config, sandboxID
 		return nil
 	}
 	return p.ClaudeArgs
+}
+
+// loadProfileCLICodexArgs fetches the sandbox's profile from S3 and returns
+// the cli.codexArgs list. Returns nil on any error (fail open).
+func loadProfileCLICodexArgs(ctx context.Context, cfg *config.Config, sandboxID string) []string {
+	p := loadProfileCLI(ctx, cfg, sandboxID)
+	if p == nil {
+		return nil
+	}
+	return p.CodexArgs
 }
 
 // loadProfileCLI fetches the sandbox's profile from S3 and returns its CLISpec,
