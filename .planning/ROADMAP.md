@@ -1221,7 +1221,7 @@ Plans:
 **Goal:** `km agent run <sb> --prompt "..."` gains `--claude` (default) and `--codex` mutually-exclusive flags. Refactor `BuildAgentShellCommands` to branch on agent type and emit `codex exec --json --dangerously-bypass-approvals-and-sandbox "$PROMPT"` for codex. Anchor the `--no-bedrock` env-unset + OAuth extraction stanza inside the claude-only branch. Add `spec.cli.codexArgs []string` to the profile schema (parallel to `claudeArgs`). Hard-error on `--codex --no-bedrock` before any SSM call. Pass-through output — codex JSONL lands in `output.json` unchanged.
 **Requirements:** CODEX-01, CODEX-02, CODEX-03, CODEX-04, CODEX-05
 **Depends on:** Phase 57
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 - [ ] 58-01-PLAN.md — Add spec.cli.codexArgs to CLISpec + JSON Schema (TDD)

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 58-01-PLAN.md (spec.cli.codexArgs profile schema field)
-last_updated: "2026-04-19T19:28:15.601Z"
+stopped_at: Completed 58-02-PLAN.md (BuildAgentShellCommands agent-type branching)
+last_updated: "2026-04-19T19:41:34.932Z"
 last_activity: 2026-04-17 — Completed 54-02-PLAN.md (create-time installation ID resolution)
 progress:
   total_phases: 58
   completed_phases: 52
   total_plans: 162
-  completed_plans: 161
+  completed_plans: 162
   percent: 0
 ---
 
@@ -204,6 +204,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 55 P01 | 8min | 2 tasks | 4 files |
 | Phase 55-learn-mode-command-capture P02 | 515643min | 3 tasks | 6 files |
 | Phase 58 P01 | 2min | 2 tasks | 3 files |
+| Phase 58 P02 | 687 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -559,6 +560,8 @@ Recent decisions affecting current work:
 - [Phase 55-02]: CollectDockerObservations nil-safe auditLogs parameter preserves backward compatibility
 - [Phase 55-02]: Container name km-{sandboxID}-audit-log confirmed against compose.go template before implementation
 - [Phase 58]: CodexArgs kept parallel to ClaudeArgs (separate []string fields) not unified agentArgs map per CONTEXT.md
+- [Phase 58]: agentType defaults to claude for empty string — all existing callers safe until Plan 03 wires the flag
+- [Phase 58]: noBedrockLines stays empty for codex regardless of NoBedrock field — belt-and-braces guard even with Plan 03 RunE error path
 
 ### Roadmap Evolution
 
@@ -628,6 +631,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-19T19:28:15.596Z
-Stopped at: Completed 58-01-PLAN.md (spec.cli.codexArgs profile schema field)
+Last session: 2026-04-19T19:41:34.927Z
+Stopped at: Completed 58-02-PLAN.md (BuildAgentShellCommands agent-type branching)
 Resume file: None
