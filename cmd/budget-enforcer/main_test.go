@@ -265,8 +265,10 @@ func TestBudgetHandler_ECS_StopsAt100PercentCompute(t *testing.T) {
 	}
 }
 
-// Test 4: handler with AI spend at 100% detaches Bedrock IAM policy as backstop.
-func TestBudgetHandler_DetachesBedrockPolicyAt100PercentAI(t *testing.T) {
+// Test 4: handler with AI spend at 100% detaches Bedrock IAM policy AND stops the
+// instance. AI exhaustion alone used to only detach Bedrock — leaving the sandbox
+// burning spot $ on compute. It must pause the instance too.
+func TestBudgetHandler_AIExhaustion_StopsInstanceAndDetachesBedrock(t *testing.T) {
 	db := &mockBudgetDB{}
 	ec2stop := &mockEC2StopAPI{}
 	ecsStop := &mockECSStopAPI{}
@@ -294,9 +296,36 @@ func TestBudgetHandler_DetachesBedrockPolicyAt100PercentAI(t *testing.T) {
 	if !iamDetach.detachCalled {
 		t.Error("expected DetachRolePolicy to be called at 100% AI budget (Bedrock backstop)")
 	}
-	// Compute NOT at 100%, so StopInstances should not be called
-	if ec2stop.stopCalled {
-		t.Error("StopInstances should NOT be called when only AI budget is exceeded")
+	if !ec2stop.stopCalled {
+		t.Error("expected StopInstances to be called at 100% AI budget (sandbox must be paused, not just Bedrock-detached)")
+	}
+}
+
+// Test 4b: AI exhaustion on ECS substrate stops the task.
+func TestBudgetHandler_AIExhaustion_ECS_StopsTask(t *testing.T) {
+	db := &mockBudgetDB{}
+	ec2stop := &mockEC2StopAPI{}
+	ecsStop := &mockECSStopAPI{}
+	iamDetach := &mockIAMDetachAPI{}
+	ses := &mockSESAPI{}
+
+	h := newBudgetHandlerWithMocks(db, ec2stop, ecsStop, iamDetach, ses)
+	h.getBudgetFn = func(ctx context.Context, sandboxID string) (*awspkg.BudgetSummary, error) {
+		return &awspkg.BudgetSummary{
+			ComputeSpent: 1.0, ComputeLimit: 10.0,
+			AISpent: 5.0, AILimit: 5.0,
+			WarningThreshold: 0.8,
+		}, nil
+	}
+
+	event := budgetCheckEvent("sb-ai-ecs", "ecs", 0.05, 10, "arn:aws:iam::123:role/r", "", "arn:aws:ecs:us-east-1:123:task/c/t")
+
+	if err := h.HandleBudgetCheck(context.Background(), event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !ecsStop.stopCalled {
+		t.Error("expected StopTask to be called at 100% AI budget on ECS substrate")
 	}
 }
 
@@ -319,10 +348,10 @@ func TestBudgetHandler_SendsWarningEmailAt80Percent(t *testing.T) {
 		}, nil
 	}
 	// No previous warning
-	h.isWarningNotifiedFn = func(ctx context.Context, sandboxID string) (bool, error) {
+	h.isMetaFlagFn = func(ctx context.Context, sandboxID, attrName string) (bool, error) {
 		return false, nil
 	}
-	h.setWarningNotifiedFn = func(ctx context.Context, sandboxID string) error {
+	h.setMetaFlagFn = func(ctx context.Context, sandboxID, attrName string) error {
 		return nil
 	}
 
@@ -401,10 +430,13 @@ func TestBudgetHandler_WarningEmailSentOnlyOnce(t *testing.T) {
 	}
 
 	// Simulate warning already notified
-	h.isWarningNotifiedFn = func(ctx context.Context, sandboxID string) (bool, error) {
-		return true, nil // already notified
+	h.isMetaFlagFn = func(ctx context.Context, sandboxID, attrName string) (bool, error) {
+		if attrName == attrWarningNotified {
+			return true, nil // already notified
+		}
+		return false, nil
 	}
-	h.setWarningNotifiedFn = func(ctx context.Context, sandboxID string) error {
+	h.setMetaFlagFn = func(ctx context.Context, sandboxID, attrName string) error {
 		return nil
 	}
 
@@ -625,5 +657,104 @@ func TestBudgetHandler_ProceedsOnTransientDynamoError(t *testing.T) {
 	// Must NOT self-delete on transient error — could incorrectly delete a live schedule
 	if sched.deleteCalled {
 		t.Error("should not delete budget schedule on transient DynamoDB error")
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: one-shot gating on 100% exhaustion emails
+// --------------------------------------------------------------------------
+
+// Test 12: compute-exhausted email is suppressed once the one-shot flag is set.
+// Regression test for minute-interval email spam at 100%+.
+func TestBudgetHandler_ComputeExhaustedEmailOnlyOnce(t *testing.T) {
+	db := &mockBudgetDB{}
+	ses := &mockSESAPI{}
+	h := newBudgetHandlerWithMocks(db, &mockEC2StopAPI{}, &mockECSStopAPI{}, &mockIAMDetachAPI{}, ses)
+	h.getBudgetFn = func(ctx context.Context, sandboxID string) (*awspkg.BudgetSummary, error) {
+		return &awspkg.BudgetSummary{
+			ComputeSpent: 6.0, ComputeLimit: 5.0, // 120%
+			AISpent: 0, AILimit: 5.0,
+			WarningThreshold: 0.8,
+		}, nil
+	}
+	h.isMetaFlagFn = func(ctx context.Context, sandboxID, attrName string) (bool, error) {
+		return attrName == attrComputeExhaustedNotified, nil
+	}
+	h.setMetaFlagFn = func(ctx context.Context, sandboxID, attrName string) error { return nil }
+
+	event := budgetCheckEvent("sb-c100-dup", "ec2", 0.10, 120, "arn:aws:iam::123:role/r", "i-abc", "")
+	if err := h.HandleBudgetCheck(context.Background(), event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ses.sendCalled {
+		t.Errorf("compute-exhausted email must NOT be resent when %s flag is already set", attrComputeExhaustedNotified)
+	}
+}
+
+// Test 13: first-time compute exhaustion sends email AND sets the one-shot flag.
+func TestBudgetHandler_ComputeExhaustedEmailFirstTime(t *testing.T) {
+	db := &mockBudgetDB{}
+	ses := &mockSESAPI{}
+	h := newBudgetHandlerWithMocks(db, &mockEC2StopAPI{}, &mockECSStopAPI{}, &mockIAMDetachAPI{}, ses)
+	h.getBudgetFn = func(ctx context.Context, sandboxID string) (*awspkg.BudgetSummary, error) {
+		return &awspkg.BudgetSummary{
+			ComputeSpent: 6.0, ComputeLimit: 5.0,
+			AISpent: 0, AILimit: 5.0,
+			WarningThreshold: 0.8,
+		}, nil
+	}
+	h.isMetaFlagFn = func(ctx context.Context, sandboxID, attrName string) (bool, error) { return false, nil }
+	var setCalls []string
+	h.setMetaFlagFn = func(ctx context.Context, sandboxID, attrName string) error {
+		setCalls = append(setCalls, attrName)
+		return nil
+	}
+
+	event := budgetCheckEvent("sb-c100-first", "ec2", 0.10, 120, "arn:aws:iam::123:role/r", "i-abc", "")
+	if err := h.HandleBudgetCheck(context.Background(), event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ses.sendCalled {
+		t.Error("expected compute-exhausted email on first-time 100%+ trigger")
+	}
+	found := false
+	for _, attr := range setCalls {
+		if attr == attrComputeExhaustedNotified {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected %s flag to be set after successful email; setCalls=%v", attrComputeExhaustedNotified, setCalls)
+	}
+}
+
+// Test 14: AI-exhausted email is suppressed once the one-shot flag is set.
+// Compute enforcement (StopInstances) still runs — that path is not email-gated.
+func TestBudgetHandler_AIExhaustedEmailOnlyOnce(t *testing.T) {
+	db := &mockBudgetDB{}
+	ses := &mockSESAPI{}
+	ec2stop := &mockEC2StopAPI{}
+	h := newBudgetHandlerWithMocks(db, ec2stop, &mockECSStopAPI{}, &mockIAMDetachAPI{}, ses)
+	h.getBudgetFn = func(ctx context.Context, sandboxID string) (*awspkg.BudgetSummary, error) {
+		return &awspkg.BudgetSummary{
+			ComputeSpent: 1.0, ComputeLimit: 10.0,
+			AISpent: 5.0, AILimit: 5.0, // 100%
+			WarningThreshold: 0.8,
+		}, nil
+	}
+	h.isMetaFlagFn = func(ctx context.Context, sandboxID, attrName string) (bool, error) {
+		return attrName == attrAIExhaustedNotified, nil
+	}
+	h.setMetaFlagFn = func(ctx context.Context, sandboxID, attrName string) error { return nil }
+
+	event := budgetCheckEvent("sb-a100-dup", "ec2", 0.10, 20, "arn:aws:iam::123:role/r", "i-abc", "")
+	if err := h.HandleBudgetCheck(context.Background(), event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ses.sendCalled {
+		t.Errorf("ai-exhausted email must NOT be resent when %s flag is already set", attrAIExhaustedNotified)
+	}
+	if !ec2stop.stopCalled {
+		t.Error("StopInstances must still run even when the AI email is suppressed")
 	}
 }

@@ -6,8 +6,11 @@
 //  2. Writes the compute spend to DynamoDB (SET — idempotent, recalculated each invocation).
 //  3. Reads the full BudgetSummary from DynamoDB.
 //  4. Enforces at 80%: sends a one-shot warning email (guarded by warningNotified attribute).
-//  5. Enforces at 100% compute: EC2 → StopInstances, ECS → StopTask. Sends enforcement email.
-//  6. Enforces at 100% AI (backstop): detaches Bedrock IAM policy from sandbox role. Sends email.
+//  5. Enforces at 100% compute: EC2 → StopInstances, ECS → StopTask. One-shot email
+//     guarded by computeExhaustedNotified.
+//  6. Enforces at 100% AI: pauses the instance (same EC2/ECS path as compute) AND detaches
+//     Bedrock IAM policy as a belt-and-braces backstop for SDK calls that bypass the proxy.
+//     One-shot email guarded by aiExhaustedNotified.
 package main
 
 import (
@@ -79,6 +82,15 @@ type ECSStopAPI interface {
 // Detaching this from the sandbox role is the backstop when AI budget is exhausted.
 const bedrockFullAccessPolicyARN = "arn:aws:iam::aws:policy/AmazonBedrockFullAccess"
 
+// One-shot notification attribute names on BUDGET#meta. Each Lambda invocation
+// checks the flag before sending an email and sets it on successful send, so
+// minute-interval re-invocations don't spam the operator.
+const (
+	attrWarningNotified          = "warningNotified"
+	attrComputeExhaustedNotified = "computeExhaustedNotified"
+	attrAIExhaustedNotified      = "aiExhaustedNotified"
+)
+
 // ============================================================
 // BudgetHandler
 // ============================================================
@@ -101,9 +113,10 @@ type BudgetHandler struct {
 	// Injectable functions for testing. When nil, the real implementations are used.
 	// getBudgetFn allows tests to inject a pre-configured BudgetSummary without DynamoDB.
 	getBudgetFn func(ctx context.Context, sandboxID string) (*awspkg.BudgetSummary, error)
-	// isWarningNotifiedFn and setWarningNotifiedFn allow tests to control the one-shot guard.
-	isWarningNotifiedFn  func(ctx context.Context, sandboxID string) (bool, error)
-	setWarningNotifiedFn func(ctx context.Context, sandboxID string) error
+	// isMetaFlagFn / setMetaFlagFn allow tests to control the one-shot guards for any
+	// BUDGET#meta boolean attribute (warningNotified, computeExhaustedNotified, aiExhaustedNotified).
+	isMetaFlagFn  func(ctx context.Context, sandboxID, attrName string) (bool, error)
+	setMetaFlagFn func(ctx context.Context, sandboxID, attrName string) error
 }
 
 // HandleBudgetCheck is the Lambda handler method.
@@ -177,45 +190,43 @@ func (h *BudgetHandler) HandleBudgetCheck(ctx context.Context, event BudgetCheck
 		h.maybeSendWarning(ctx, sandboxID, event.OperatorEmail, computePct, aiPct)
 	}
 
-	// Step 5b: 100% compute enforcement.
-	if computePct >= 1.0 && budget.ComputeLimit > 0 {
-		log.Warn().Str("sandbox_id", sandboxID).
-			Float64("compute_spent", budget.ComputeSpent).
-			Float64("compute_limit", budget.ComputeLimit).
-			Msg("compute budget exhausted — suspending sandbox")
+	computeExhausted := computePct >= 1.0 && budget.ComputeLimit > 0
+	aiExhausted := aiPct >= 1.0 && budget.AILimit > 0
 
-		h.enforceBudgetCompute(ctx, event)
-
-		// Send enforcement email (best-effort).
-		if event.OperatorEmail != "" && h.SESClient != nil {
-			details := fmt.Sprintf("compute-budget-exhausted: spent=%.4f limit=%.4f", budget.ComputeSpent, budget.ComputeLimit)
-			if notifyErr := awspkg.SendLifecycleNotification(ctx, h.SESClient, event.OperatorEmail, sandboxID, details, h.EmailDomain); notifyErr != nil {
-				log.Warn().Err(notifyErr).Str("sandbox_id", sandboxID).Msg("failed to send compute enforcement notification (non-fatal)")
-			}
+	// Step 5b: Pause the sandbox on either compute OR AI exhaustion. Without this the
+	// instance keeps burning spot $ on compute while Bedrock is detached, which was the
+	// original behavior. StopInstances / StopTask are idempotent, so calling once per
+	// invocation is safe even after the instance is already stopped.
+	if computeExhausted || aiExhausted {
+		reason := "compute"
+		if !computeExhausted {
+			reason = "ai"
 		}
+		log.Warn().Str("sandbox_id", sandboxID).Str("trigger", reason).
+			Float64("compute_spent", budget.ComputeSpent).Float64("compute_limit", budget.ComputeLimit).
+			Float64("ai_spent", budget.AISpent).Float64("ai_limit", budget.AILimit).
+			Msg("budget exhausted — suspending sandbox")
+		h.enforceBudgetCompute(ctx, event)
 	}
 
-	// Step 5c: 100% AI enforcement (Bedrock IAM backstop).
-	if aiPct >= 1.0 && budget.AILimit > 0 {
-		log.Warn().Str("sandbox_id", sandboxID).
-			Float64("ai_spent", budget.AISpent).
-			Float64("ai_limit", budget.AILimit).
-			Msg("AI budget exhausted — detaching Bedrock IAM policy (backstop)")
+	// Step 5c: Compute-exhaustion one-shot email.
+	if computeExhausted {
+		details := fmt.Sprintf("compute-budget-exhausted: spent=%.4f limit=%.4f", budget.ComputeSpent, budget.ComputeLimit)
+		h.maybeSendOneShotEmail(ctx, sandboxID, event.OperatorEmail, attrComputeExhaustedNotified, details)
+	}
 
+	// Step 5d: AI-exhaustion Bedrock IAM backstop + one-shot email. The policy detach
+	// is best-effort belt-and-braces — the proxy-level enforcement is the primary gate;
+	// this catches SDK calls that bypass the proxy.
+	if aiExhausted {
 		if event.RoleARN != "" && h.IAMClient != nil {
 			if detachErr := h.detachBedrockPolicy(ctx, event.RoleARN); detachErr != nil {
 				log.Warn().Err(detachErr).Str("sandbox_id", sandboxID).
 					Msg("failed to detach Bedrock policy (non-fatal — proxy enforcement still active)")
 			}
 		}
-
-		// Send AI enforcement email (best-effort).
-		if event.OperatorEmail != "" && h.SESClient != nil {
-			details := fmt.Sprintf("ai-budget-exhausted: spent=%.4f limit=%.4f", budget.AISpent, budget.AILimit)
-			if notifyErr := awspkg.SendLifecycleNotification(ctx, h.SESClient, event.OperatorEmail, sandboxID, details, h.EmailDomain); notifyErr != nil {
-				log.Warn().Err(notifyErr).Str("sandbox_id", sandboxID).Msg("failed to send AI enforcement notification (non-fatal)")
-			}
-		}
+		details := fmt.Sprintf("ai-budget-exhausted: spent=%.4f limit=%.4f", budget.AISpent, budget.AILimit)
+		h.maybeSendOneShotEmail(ctx, sandboxID, event.OperatorEmail, attrAIExhaustedNotified, details)
 	}
 
 	log.Info().Str("sandbox_id", sandboxID).Msg("budget check complete")
@@ -268,10 +279,11 @@ func (h *BudgetHandler) setComputeSpend(ctx context.Context, sandboxID string, c
 	return nil
 }
 
-// isWarningNotified checks whether the one-shot warning has already been sent.
-func (h *BudgetHandler) isWarningNotified(ctx context.Context, sandboxID string) (bool, error) {
-	if h.isWarningNotifiedFn != nil {
-		return h.isWarningNotifiedFn(ctx, sandboxID)
+// isMetaFlag checks whether a one-shot boolean attribute on BUDGET#meta is true.
+// On any read error returns (false, nil) — safe default: allow the email to be sent.
+func (h *BudgetHandler) isMetaFlag(ctx context.Context, sandboxID, attrName string) (bool, error) {
+	if h.isMetaFlagFn != nil {
+		return h.isMetaFlagFn(ctx, sandboxID, attrName)
 	}
 	pk := fmt.Sprintf("SANDBOX#%s", sandboxID)
 	out, err := h.DynamoDB.GetItem(ctx, &dynamodb.GetItemInput{
@@ -280,15 +292,18 @@ func (h *BudgetHandler) isWarningNotified(ctx context.Context, sandboxID string)
 			"PK": &dynamodbtypes.AttributeValueMemberS{Value: pk},
 			"SK": &dynamodbtypes.AttributeValueMemberS{Value: "BUDGET#meta"},
 		},
-		ProjectionExpression: awssdk.String("warningNotified"),
+		ProjectionExpression: awssdk.String("#a"),
+		ExpressionAttributeNames: map[string]string{
+			"#a": attrName,
+		},
 	})
 	if err != nil {
-		return false, nil // safe default: allow warning to be sent
+		return false, nil
 	}
 	if out.Item == nil {
 		return false, nil
 	}
-	if boolAV, ok := out.Item["warningNotified"]; ok {
+	if boolAV, ok := out.Item[attrName]; ok {
 		if boolMember, ok := boolAV.(*dynamodbtypes.AttributeValueMemberBOOL); ok {
 			return boolMember.Value, nil
 		}
@@ -296,10 +311,10 @@ func (h *BudgetHandler) isWarningNotified(ctx context.Context, sandboxID string)
 	return false, nil
 }
 
-// setWarningNotified marks the one-shot warning as sent in DynamoDB.
-func (h *BudgetHandler) setWarningNotified(ctx context.Context, sandboxID string) error {
-	if h.setWarningNotifiedFn != nil {
-		return h.setWarningNotifiedFn(ctx, sandboxID)
+// setMetaFlag marks a one-shot boolean attribute on BUDGET#meta as true.
+func (h *BudgetHandler) setMetaFlag(ctx context.Context, sandboxID, attrName string) error {
+	if h.setMetaFlagFn != nil {
+		return h.setMetaFlagFn(ctx, sandboxID, attrName)
 	}
 	pk := fmt.Sprintf("SANDBOX#%s", sandboxID)
 	_, err := h.DynamoDB.UpdateItem(ctx, &dynamodb.UpdateItemInput{
@@ -308,7 +323,10 @@ func (h *BudgetHandler) setWarningNotified(ctx context.Context, sandboxID string
 			"PK": &dynamodbtypes.AttributeValueMemberS{Value: pk},
 			"SK": &dynamodbtypes.AttributeValueMemberS{Value: "BUDGET#meta"},
 		},
-		UpdateExpression: awssdk.String("SET warningNotified = :t"),
+		UpdateExpression: awssdk.String("SET #a = :t"),
+		ExpressionAttributeNames: map[string]string{
+			"#a": attrName,
+		},
 		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
 			":t": &dynamodbtypes.AttributeValueMemberBOOL{Value: true},
 		},
@@ -335,26 +353,36 @@ func computePercent(spent, limit float64) float64 {
 
 // maybeSendWarning sends a one-shot warning email when threshold is crossed.
 func (h *BudgetHandler) maybeSendWarning(ctx context.Context, sandboxID, operatorEmail string, computePct, aiPct float64) {
+	details := fmt.Sprintf("budget-warning: compute=%.0f%% ai=%.0f%%",
+		computePct*100, aiPct*100)
+	h.maybeSendOneShotEmail(ctx, sandboxID, operatorEmail, attrWarningNotified, details)
+}
+
+// maybeSendOneShotEmail sends an SES email at most once per sandbox per attrName.
+// The flag on BUDGET#meta gates re-sends across Lambda invocations so minute-interval
+// re-entry does not spam the operator.
+func (h *BudgetHandler) maybeSendOneShotEmail(ctx context.Context, sandboxID, operatorEmail, attrName, details string) {
 	if operatorEmail == "" || h.SESClient == nil {
 		return
 	}
-	notified, err := h.isWarningNotified(ctx, sandboxID)
+	notified, err := h.isMetaFlag(ctx, sandboxID, attrName)
 	if err != nil {
-		log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("could not check warning notification state")
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).Str("attr", attrName).
+			Msg("could not check one-shot notification flag")
 	}
 	if notified {
 		return
 	}
 
-	details := fmt.Sprintf("budget-warning: compute=%.0f%% ai=%.0f%%",
-		computePct*100, aiPct*100)
 	if notifyErr := awspkg.SendLifecycleNotification(ctx, h.SESClient, operatorEmail, sandboxID, details, h.EmailDomain); notifyErr != nil {
-		log.Warn().Err(notifyErr).Str("sandbox_id", sandboxID).Msg("failed to send warning email (non-fatal)")
+		log.Warn().Err(notifyErr).Str("sandbox_id", sandboxID).Str("attr", attrName).
+			Msg("failed to send notification email (non-fatal)")
 		return
 	}
 
-	if err := h.setWarningNotified(ctx, sandboxID); err != nil {
-		log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("failed to set warningNotified flag (non-fatal)")
+	if err := h.setMetaFlag(ctx, sandboxID, attrName); err != nil {
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).Str("attr", attrName).
+			Msg("failed to set one-shot notification flag (non-fatal)")
 	}
 }
 
