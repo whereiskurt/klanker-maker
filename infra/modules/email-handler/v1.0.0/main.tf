@@ -260,6 +260,11 @@ resource "aws_lambda_function" "email_handler" {
     "km:component" = "email-handler"
     "km:managed"   = "true"
   }
+
+  # Replace Lambda if role is replaced — Lambda env-var KMS grants bind to role unique-ID
+  lifecycle {
+    replace_triggered_by = [aws_iam_role.email_handler]
+  }
 }
 
 # CloudWatch Log Group

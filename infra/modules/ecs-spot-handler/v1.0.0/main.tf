@@ -111,6 +111,11 @@ resource "aws_lambda_function" "spot_handler" {
     "km:component" = "ecs-spot-handler"
     "km:managed"   = "true"
   }
+
+  # Replace Lambda if role is replaced — Lambda env-var KMS grants bind to role unique-ID
+  lifecycle {
+    replace_triggered_by = [aws_iam_role.spot_handler]
+  }
 }
 
 # CloudWatch Log Group for Lambda logs

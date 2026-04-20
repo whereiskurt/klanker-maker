@@ -241,6 +241,11 @@ resource "aws_lambda_function" "budget_enforcer" {
     "km:sandbox_id" = var.sandbox_id
     "km:managed"    = "true"
   }
+
+  # Replace Lambda if role is replaced — Lambda env-var KMS grants bind to role unique-ID
+  lifecycle {
+    replace_triggered_by = [aws_iam_role.budget_enforcer]
+  }
 }
 
 # CloudWatch Log Group for Lambda logs (30-day retention)

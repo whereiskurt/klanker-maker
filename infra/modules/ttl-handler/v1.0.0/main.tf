@@ -301,6 +301,11 @@ resource "aws_lambda_function" "ttl_handler" {
     "km:component" = "ttl-handler"
     "km:managed"   = "true"
   }
+
+  # Replace Lambda if role is replaced — Lambda env-var KMS grants bind to role unique-ID
+  lifecycle {
+    replace_triggered_by = [aws_iam_role.ttl_handler]
+  }
 }
 
 # CloudWatch Log Group for Lambda logs

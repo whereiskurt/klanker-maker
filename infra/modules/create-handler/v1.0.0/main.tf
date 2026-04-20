@@ -467,6 +467,11 @@ resource "aws_lambda_function" "create_handler" {
     "km:component" = "create-handler"
     "km:managed"   = "true"
   }
+
+  # Replace Lambda if role is replaced — Lambda env-var KMS grants bind to role unique-ID
+  lifecycle {
+    replace_triggered_by = [aws_iam_role.create_handler]
+  }
 }
 
 # CloudWatch Log Group for Lambda logs

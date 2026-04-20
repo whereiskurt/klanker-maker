@@ -27,9 +27,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -52,6 +50,7 @@ import (
 	sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klankrmkr/pkg/compiler"
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
 	"github.com/whereiskurt/klankrmkr/pkg/version"
 	"gopkg.in/yaml.v3"
@@ -272,15 +271,13 @@ func (h *OperatorEmailHandler) handleCreate(ctx context.Context, senderEmail str
 			"No YAML profile found. Attach a .yaml file or include the profile in the email body.\n")
 	}
 
-	if _, err := profile.Parse(yamlBytes); err != nil {
+	parsedProfile, err := profile.Parse(yamlBytes)
+	if err != nil {
 		return h.sendReply(ctx, senderEmail, "Create failed",
 			fmt.Sprintf("Profile validation failed: %v\n", err))
 	}
 
-	sandboxID, err := generateSandboxID()
-	if err != nil {
-		return fmt.Errorf("generate sandbox ID: %w", err)
-	}
+	sandboxID := compiler.GenerateSandboxID(parsedProfile.Metadata.Prefix)
 
 	artifactPrefix := fmt.Sprintf("remote-create/%s", sandboxID)
 	profileKey := fmt.Sprintf("%s/.km-profile.yaml", artifactPrefix)
@@ -600,11 +597,7 @@ func (h *OperatorEmailHandler) executeConfirmedCommand(ctx context.Context, send
 	switch cmd.Command {
 	case "create":
 		// Load builtin profile, serialize to YAML, upload to S3, dispatch EventBridge.
-		sandboxID, err := generateSandboxID()
-		if err != nil {
-			return fmt.Errorf("generate sandbox ID: %w", err)
-		}
-
+		var sandboxID string
 		var profileYAML []byte
 		if profile.IsBuiltin(cmd.Profile) {
 			p, err := profile.LoadBuiltin(cmd.Profile)
@@ -616,12 +609,10 @@ func (h *OperatorEmailHandler) executeConfirmedCommand(ctx context.Context, send
 			if ttl, ok := cmd.Overrides["ttl"]; ok {
 				p.Spec.Lifecycle.TTL = fmt.Sprintf("%v", ttl)
 			}
-			if alias, ok := cmd.Overrides["alias"]; ok {
-				if p.Spec.Email == nil {
-					p.Spec.Email = &profile.EmailSpec{}
-				}
-				p.Spec.Email.Alias = fmt.Sprintf("%v", alias)
-			}
+			// Note: `alias` override is forwarded to km create --alias via
+			// SandboxCreateDetail.Alias below — it's a display/metadata alias,
+			// not the dot-notation spec.email.alias which requires [a-z]+\.[a-z]+.
+			sandboxID = compiler.GenerateSandboxID(p.Metadata.Prefix)
 			profileYAML, err = yaml.Marshal(p)
 			if err != nil {
 				return fmt.Errorf("serialize profile: %w", err)
@@ -679,14 +670,19 @@ func (h *OperatorEmailHandler) executeConfirmedCommand(ctx context.Context, send
 				sandboxID, cmd.Profile, schedTime, onDemand, alias)
 		} else {
 		// Immediate create: dispatch via EventBridge.
+			aliasOverride := ""
+			if a, ok := cmd.Overrides["alias"]; ok {
+				aliasOverride = fmt.Sprintf("%v", a)
+			}
 			execErr = awspkg.PutSandboxCreateEvent(ctx, h.EventBridgeClient, awspkg.SandboxCreateDetail{
 				SandboxID:      sandboxID,
 				ArtifactBucket: h.ArtifactBucket,
 				ArtifactPrefix: artifactPrefix,
 				OperatorEmail:  senderEmail,
 				OnDemand:       onDemand,
+				Alias:          aliasOverride,
 			})
-			execDetail = fmt.Sprintf("Sandbox ID: %s\nProfile: %s\nOn-demand: %v\n", sandboxID, cmd.Profile, onDemand)
+			execDetail = fmt.Sprintf("Sandbox ID: %s\nProfile: %s\nOn-demand: %v\nAlias: %s\n", sandboxID, cmd.Profile, onDemand, aliasOverride)
 		}
 
 	case "destroy", "extend", "pause", "resume":
@@ -889,14 +885,6 @@ func extractBodyAndYAML(msg *mail.Message) (bodyText string, yamlBytes []byte, e
 	}
 }
 
-// generateSandboxID produces a random 8-byte hex string for use as a sandbox ID.
-func generateSandboxID() (string, error) {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
-}
 
 // ---- Lambda entrypoint ----
 

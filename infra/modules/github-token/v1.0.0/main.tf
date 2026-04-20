@@ -147,6 +147,11 @@ resource "aws_lambda_function" "github_token_refresher" {
     "km:sandbox_id" = var.sandbox_id
     "km:managed"    = "true"
   }
+
+  # Replace Lambda if role is replaced — Lambda env-var KMS grants bind to role unique-ID
+  lifecycle {
+    replace_triggered_by = [aws_iam_role.github_token_refresher]
+  }
 }
 
 # CloudWatch Log Group for Lambda logs (30-day retention)
