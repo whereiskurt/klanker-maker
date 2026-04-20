@@ -16,7 +16,7 @@ spec:
   runtime:
     substrate: ec2
     spot: false
-    instanceType: t3.medium
+    instanceType: t3.large
     region: us-east-1
     rootVolumeSize: 15
     hibernation: true
@@ -69,7 +69,10 @@ spec:
       - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace /home/sandbox/.config /home/sandbox/.local"
       - "su - sandbox -c 'cd /workspace && git config --global user.name \"Learner Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
       - "git clone --depth 1 https://github.com/whereiskurt/klanker-maker.git /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 2>/dev/null && mkdir -p /home/sandbox/.claude/plugins/marketplaces && ln -sfn /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 /home/sandbox/.claude/plugins/marketplaces/klanker-maker && KM_SHA=$(git -C /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 rev-parse HEAD) && KM_NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z) && printf '{\"version\":2,\"plugins\":{\"klanker@klanker-maker\":[{\"scope\":\"user\",\"installPath\":\"/home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0\",\"version\":\"0.1.0\",\"installedAt\":\"%s\",\"lastUpdated\":\"%s\",\"gitCommitSha\":\"%s\"}]}}' \"$KM_NOW\" \"$KM_NOW\" \"$KM_SHA\" > /home/sandbox/.claude/plugins/installed_plugins.json && chown -R sandbox:sandbox /home/sandbox/.claude/plugins || true"
-
+      - "su - sandbox -c 'cd /workspace && curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash'"
+      - "su - sandbox -c 'nvm install 22'"
+      - "su - sandbox -c 'npx -y get-shit-done-cc --claude --codex --global'"
+      
   sourceAccess:
     mode: allowlist
     github:
