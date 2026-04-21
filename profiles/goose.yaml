@@ -179,6 +179,8 @@ spec:
     encryption: required
     allowedSenders:
       - "self"
+      - "whereiskurt@gmail.com"
+      - "kurt.hundeck@*"
 
   agent:
     maxConcurrentTasks: 1

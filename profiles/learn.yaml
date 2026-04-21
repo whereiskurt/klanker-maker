@@ -144,7 +144,7 @@ spec:
     verifyInbound: required
     encryption: required
     allowedSenders:
-      - "self"
+      - "*"
 
   agent:
     maxConcurrentTasks: 1
