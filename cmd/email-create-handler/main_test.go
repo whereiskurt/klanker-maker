@@ -1015,3 +1015,112 @@ func TestExtractSandboxID_NoPrefixRepair(t *testing.T) {
 		t.Errorf("extractSandboxID(%q) = %q, want %q", "status claude-abc12345", got, "claude-abc12345")
 	}
 }
+
+// ---- sender allowlist tests ----
+
+// Test: sender NOT in operator allowlist → silently dropped.
+func TestHandle_SenderNotAllowed(t *testing.T) {
+	kmConfig := `email:
+  allowedSenders:
+    - "admin@co.com"
+`
+	emailBody := fmt.Sprintf("KM-AUTH: %s\nHello\n", testSafePhrase)
+	rawEmail := buildPlainEmailWithSubject("rando@evil.com", "status sb-abc12345", emailBody)
+
+	s3data := map[string][]byte{
+		"mail/msg-notallowed": rawEmail,
+		"toolchain/km-config.yaml": []byte(kmConfig),
+	}
+	eb := &mockEB{}
+	ses := &mockSES{}
+	h := newTestHandler(s3data, testSafePhrase, eb, ses)
+
+	event := buildEventRecord("test-bucket", "mail/msg-notallowed")
+	err := h.Handle(context.Background(), event)
+	if err != nil {
+		t.Fatalf("Handle should return nil for non-allowed sender, got: %v", err)
+	}
+	// Should NOT send any reply (silent drop)
+	if len(ses.sent) != 0 {
+		t.Errorf("expected no SES sends for non-allowed sender, got %d", len(ses.sent))
+	}
+}
+
+// Test: sender matches wildcard in operator allowlist → proceeds.
+func TestHandle_SenderAllowed(t *testing.T) {
+	kmConfig := `email:
+  allowedSenders:
+    - "*@company.com"
+`
+	emailBody := fmt.Sprintf("KM-AUTH: %s\nstatus sb-abc12345\n", testSafePhrase)
+	rawEmail := buildPlainEmailWithSubject("user@company.com", "status sb-abc12345", emailBody)
+
+	s3data := map[string][]byte{
+		"mail/msg-allowed": rawEmail,
+		"toolchain/km-config.yaml": []byte(kmConfig),
+	}
+	eb := &mockEB{}
+	ses := &mockSES{}
+	h := newTestHandler(s3data, testSafePhrase, eb, ses)
+
+	event := buildEventRecord("test-bucket", "mail/msg-allowed")
+	err := h.Handle(context.Background(), event)
+	if err != nil {
+		t.Fatalf("Handle error for allowed sender: %v", err)
+	}
+	// Should proceed past allowlist and reach safe phrase check + dispatch.
+	// With valid safe phrase and "status" subject, should send a status reply.
+	if len(ses.sent) == 0 {
+		t.Errorf("expected SES reply for allowed sender, got none")
+	}
+}
+
+// Test: empty allowlist → all senders proceed (backward compatible).
+func TestHandle_EmptyAllowlist(t *testing.T) {
+	kmConfig := `domain: example.com
+`
+	emailBody := fmt.Sprintf("KM-AUTH: %s\nHello\n", testSafePhrase)
+	rawEmail := buildPlainEmailWithSubject("anyone@anywhere.com", "status sb-abc12345", emailBody)
+
+	s3data := map[string][]byte{
+		"mail/msg-emptyallow": rawEmail,
+		"toolchain/km-config.yaml": []byte(kmConfig),
+	}
+	eb := &mockEB{}
+	ses := &mockSES{}
+	h := newTestHandler(s3data, testSafePhrase, eb, ses)
+
+	event := buildEventRecord("test-bucket", "mail/msg-emptyallow")
+	err := h.Handle(context.Background(), event)
+	if err != nil {
+		t.Fatalf("Handle error with empty allowlist: %v", err)
+	}
+	// Should proceed — no filtering when allowlist is empty
+	if len(ses.sent) == 0 {
+		t.Errorf("expected SES reply with empty allowlist, got none")
+	}
+}
+
+// Test: S3 error fetching km-config.yaml → fail-open (proceed normally).
+func TestHandle_AllowlistS3Error(t *testing.T) {
+	emailBody := fmt.Sprintf("KM-AUTH: %s\nHello\n", testSafePhrase)
+	rawEmail := buildPlainEmailWithSubject("anyone@anywhere.com", "status sb-abc12345", emailBody)
+
+	// No km-config.yaml in S3 → GetObject will return NoSuchKey
+	s3data := map[string][]byte{
+		"mail/msg-s3error": rawEmail,
+	}
+	eb := &mockEB{}
+	ses := &mockSES{}
+	h := newTestHandler(s3data, testSafePhrase, eb, ses)
+
+	event := buildEventRecord("test-bucket", "mail/msg-s3error")
+	err := h.Handle(context.Background(), event)
+	if err != nil {
+		t.Fatalf("Handle error with missing km-config.yaml: %v", err)
+	}
+	// Should proceed — fail-open when km-config.yaml is missing
+	if len(ses.sent) == 0 {
+		t.Errorf("expected SES reply when km-config.yaml missing (fail-open), got none")
+	}
+}
