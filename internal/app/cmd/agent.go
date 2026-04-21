@@ -218,11 +218,20 @@ Examples:
 				}
 			}
 
+			// If --prompt value is a file path, read its contents as the prompt.
+			if info, statErr := os.Stat(prompt); statErr == nil && !info.IsDir() {
+				data, readErr := os.ReadFile(prompt)
+				if readErr != nil {
+					return fmt.Errorf("failed to read prompt file %s: %w", prompt, readErr)
+				}
+				prompt = string(data)
+			}
+
 			return runAgentNonInteractive(ctx, cfg, fetcher, execFn, ssmClient, ebClient, sandboxID, prompt, wait, interactive, noBedrock, autoStart, agentType)
 		},
 	}
 
-	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt text to send to the agent (required)")
+	cmd.Flags().StringVar(&prompt, "prompt", "", "Prompt text or file path to send to the agent (required)")
 	cmd.Flags().BoolVar(&wait, "wait", false, "Block until agent completes and print output")
 	cmd.Flags().BoolVar(&interactive, "interactive", false, "Create tmux session and immediately attach (blocks until detach)")
 	cmd.Flags().BoolVar(&noBedrock, "no-bedrock", false, "Use direct Anthropic API instead of Bedrock")

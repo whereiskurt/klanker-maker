@@ -5,7 +5,7 @@ metadata:
   labels:
     tier: development
     tool: alltools
-  prefix: leaner
+  prefix: learn
 
 spec:
   lifecycle:
