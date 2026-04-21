@@ -1233,11 +1233,11 @@ Plans:
 **Goal:** Add email sender allowlist enforcement at operator inbox (Lambda) and sandbox inbound (km-recv/km-mail-poller) levels
 **Requirements**: [AL-01, AL-02, AL-03, AL-04, AL-05, AL-06, AL-07, AL-08]
 **Depends on:** Phase 58
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans executed
 
 Plans:
-- [ ] 59-01-PLAN.md — Extend MatchesAllowList with email patterns + config struct
-- [ ] 59-02-PLAN.md — Lambda operator allowlist + bash sandbox sender filtering
+- [x] 59-01-PLAN.md — Extend MatchesAllowList with email patterns + config struct
+- [x] 59-02-PLAN.md — Lambda operator allowlist + bash sandbox sender filtering
 
 
 

@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 ## Current Position
 
 Phase: 59 (email sender allowlist)
-Plan: 2 of 2 in current phase
+Plan: 2 of 2 in current phase (complete)
 Status: executing
-Last activity: 2026-04-21 — Completed 59-02-PLAN.md (Lambda sender allowlist + sandbox inbound filtering)
+Last activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -641,9 +641,10 @@ None yet.
 - Phase 59 added: Email sender allowlist — operator inbox allowlist in km-config.yaml enforced by email-create-handler Lambda, extend sandbox allowedSenders to support external email patterns (user@domain, *@domain)
 - Phase 57 added: Email enhancement — km-send --no-sign for external recipients, km-recv RFC5322/multipart fixes, safe phrase validation on inbound Lambda, marketplace plugin email docs
 - Phase 58 added: km agent run codex support — add --claude/--codex flags (mirror interactive), parameterize BuildAgentShellCommands by agent type, codex uses --dangerously-bypass-approvals-and-sandbox and --json, gate --no-bedrock to claude only, add spec.cli.codexArgs alongside claudeArgs, pass-through codex output (no normalization)
+- Phase 59 plan 01: Email patterns in MatchesAllowList use path.Match with case-insensitive lowering; email patterns identified by @ in pattern string; continue after email branch prevents fallthrough to alias matching
 
 ## Session Continuity
 
-Last session: 2026-04-21T12:31:42.022Z
-Stopped at: Completed 59-02-PLAN.md
+Last session: 2026-04-21T12:32:47Z
+Stopped at: Completed 59-01-PLAN.md
 Resume file: None
