@@ -1062,6 +1062,8 @@ func TestHandle_SenderAllowed(t *testing.T) {
 	eb := &mockEB{}
 	ses := &mockSES{}
 	h := newTestHandler(s3data, testSafePhrase, eb, ses)
+	h.DynamoClient = &mockDynamo{}
+	h.SandboxTableName = "km-sandboxes"
 
 	event := buildEventRecord("test-bucket", "mail/msg-allowed")
 	err := h.Handle(context.Background(), event)
@@ -1089,6 +1091,8 @@ func TestHandle_EmptyAllowlist(t *testing.T) {
 	eb := &mockEB{}
 	ses := &mockSES{}
 	h := newTestHandler(s3data, testSafePhrase, eb, ses)
+	h.DynamoClient = &mockDynamo{}
+	h.SandboxTableName = "km-sandboxes"
 
 	event := buildEventRecord("test-bucket", "mail/msg-emptyallow")
 	err := h.Handle(context.Background(), event)
@@ -1113,6 +1117,8 @@ func TestHandle_AllowlistS3Error(t *testing.T) {
 	eb := &mockEB{}
 	ses := &mockSES{}
 	h := newTestHandler(s3data, testSafePhrase, eb, ses)
+	h.DynamoClient = &mockDynamo{}
+	h.SandboxTableName = "km-sandboxes"
 
 	event := buildEventRecord("test-bucket", "mail/msg-s3error")
 	err := h.Handle(context.Background(), event)

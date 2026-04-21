@@ -35,6 +35,7 @@ import (
 	"mime/multipart"
 	"net/mail"
 	"os"
+	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -132,6 +133,38 @@ type OperatorEmailHandler struct {
 // sandboxIDPattern matches sandbox IDs: {prefix}-{8hex} (e.g. sb-abc123de, claude-abc123de).
 var sandboxIDPattern = regexp.MustCompile(`(?i)\b([a-z][a-z0-9]{0,11}-[0-9a-f]{8})\b`)
 
+// kmConfigFile is a minimal struct for parsing email.allowedSenders from km-config.yaml.
+type kmConfigFile struct {
+	Email struct {
+		AllowedSenders []string `yaml:"allowedSenders"`
+	} `yaml:"email"`
+}
+
+// loadOperatorAllowlist reads toolchain/km-config.yaml from S3 and returns the
+// email.allowedSenders list. Returns empty slice on any error (fail-open).
+func (h *OperatorEmailHandler) loadOperatorAllowlist(ctx context.Context) []string {
+	out, err := h.S3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: awssdk.String(h.ArtifactBucket),
+		Key:    awssdk.String("toolchain/km-config.yaml"),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[operator-email] warning: could not load km-config.yaml: %v\n", err)
+		return nil
+	}
+	defer out.Body.Close()
+	data, err := io.ReadAll(out.Body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[operator-email] warning: could not read km-config.yaml body: %v\n", err)
+		return nil
+	}
+	var cfg kmConfigFile
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "[operator-email] warning: could not parse km-config.yaml: %v\n", err)
+		return nil
+	}
+	return cfg.Email.AllowedSenders
+}
+
 // Handle processes a single S3 event record containing an SES-delivered email.
 func (h *OperatorEmailHandler) Handle(ctx context.Context, event S3EventRecord) error {
 	if len(event.Records) == 0 {
@@ -182,6 +215,33 @@ func (h *OperatorEmailHandler) Handle(ctx context.Context, event S3EventRecord) 
 	bodyText, yamlBytes, err := extractBodyAndYAML(msg)
 	if err != nil {
 		return fmt.Errorf("extract body and YAML: %w", err)
+	}
+
+	// Step 4.5: Sender allowlist check — read from km-config.yaml in S3.
+	// When the allowlist is non-empty, only listed senders may proceed.
+	// Empty allowlist or S3 errors → fail-open (all senders allowed).
+	operatorAllowlist := h.loadOperatorAllowlist(ctx)
+	if len(operatorAllowlist) > 0 {
+		senderAllowed := false
+		lowerSender := strings.ToLower(senderEmail)
+		for _, pattern := range operatorAllowlist {
+			lowerPattern := strings.ToLower(pattern)
+			if !strings.Contains(pattern, "*") {
+				if lowerSender == lowerPattern {
+					senderAllowed = true
+					break
+				}
+			} else {
+				if matched, _ := path.Match(lowerPattern, lowerSender); matched {
+					senderAllowed = true
+					break
+				}
+			}
+		}
+		if !senderAllowed {
+			fmt.Fprintf(os.Stderr, "[operator-email] sender %s not in allowlist, dropping\n", senderEmail)
+			return nil
+		}
 	}
 
 	// Step 5: Extract and validate KM-AUTH phrase.
