@@ -243,9 +243,15 @@ func ParseSignedMessage(rawMIME []byte, receiverSandboxID, pubKeyB64 string, all
 	}
 
 	// Allow-list enforcement (before signature verification)
+	// Extract sender email from the From header for email-pattern matching.
+	var senderEmail string
+	if fromAddr, parseErr := mail.ParseAddress(from); parseErr == nil {
+		senderEmail = fromAddr.Address
+	}
+
 	isSelfMail := senderID != "" && senderID == receiverSandboxID
 	if !isSelfMail {
-		if !MatchesAllowList(allowedSenders, senderID, "", receiverSandboxID) {
+		if !MatchesAllowList(allowedSenders, senderID, "", receiverSandboxID, senderEmail) {
 			return nil, ErrSenderNotAllowed
 		}
 	}

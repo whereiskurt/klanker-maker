@@ -373,10 +373,13 @@ func FetchPublicKeyByAlias(ctx context.Context, client IdentityQueryAPI, tableNa
 //   - "*"   — permit any sender unconditionally
 //   - "self" — permit if senderID == receiverSandboxID (self-mail always permitted)
 //   - exact sandbox ID — permit if senderID == pattern
+//   - email pattern (contains "@") — match senderEmail case-insensitively:
+//     exact match ("user@example.com") or domain wildcard ("*@example.com")
+//     or local-part wildcard ("kurt.hundeck@*")
 //   - wildcard alias — use path.Match(pattern, senderAlias) if senderAlias != ""
 //
 // Returns false if no pattern matched or patterns is empty.
-func MatchesAllowList(patterns []string, senderID, senderAlias, receiverSandboxID string) bool {
+func MatchesAllowList(patterns []string, senderID, senderAlias, receiverSandboxID, senderEmail string) bool {
 	for _, p := range patterns {
 		switch p {
 		case "*":

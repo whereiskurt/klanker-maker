@@ -1396,44 +1396,96 @@ func TestFetchPublicKeyByAlias_QueriesAliasIndex(t *testing.T) {
 // ============================================================
 
 func TestMatchesAllowList_Wildcard(t *testing.T) {
-	if !kmaws.MatchesAllowList([]string{"*"}, "sb-any", "", "sb-recv") {
+	if !kmaws.MatchesAllowList([]string{"*"}, "sb-any", "", "sb-recv", "") {
 		t.Error("expected * to match any sender")
 	}
 }
 
 func TestMatchesAllowList_Self_Match(t *testing.T) {
-	if !kmaws.MatchesAllowList([]string{"self"}, "sb-recv", "", "sb-recv") {
+	if !kmaws.MatchesAllowList([]string{"self"}, "sb-recv", "", "sb-recv", "") {
 		t.Error("expected self to match when senderID == receiverSandboxID")
 	}
 }
 
 func TestMatchesAllowList_Self_NoMatch(t *testing.T) {
-	if kmaws.MatchesAllowList([]string{"self"}, "sb-other", "", "sb-recv") {
+	if kmaws.MatchesAllowList([]string{"self"}, "sb-other", "", "sb-recv", "") {
 		t.Error("expected self to reject when senderID != receiverSandboxID")
 	}
 }
 
 func TestMatchesAllowList_ExactID(t *testing.T) {
-	if !kmaws.MatchesAllowList([]string{"sb-partner"}, "sb-partner", "", "sb-recv") {
+	if !kmaws.MatchesAllowList([]string{"sb-partner"}, "sb-partner", "", "sb-recv", "") {
 		t.Error("expected exact sandbox ID match to permit sender")
 	}
 }
 
 func TestMatchesAllowList_WildcardAlias_Match(t *testing.T) {
-	if !kmaws.MatchesAllowList([]string{"build.*"}, "sb-x", "build.frontend", "sb-recv") {
+	if !kmaws.MatchesAllowList([]string{"build.*"}, "sb-x", "build.frontend", "sb-recv", "") {
 		t.Error("expected build.* to match build.frontend alias")
 	}
 }
 
 func TestMatchesAllowList_WildcardAlias_NoMatch(t *testing.T) {
-	if kmaws.MatchesAllowList([]string{"build.*"}, "sb-x", "deploy.backend", "sb-recv") {
+	if kmaws.MatchesAllowList([]string{"build.*"}, "sb-x", "deploy.backend", "sb-recv", "") {
 		t.Error("expected build.* to reject deploy.backend alias")
 	}
 }
 
 func TestMatchesAllowList_Empty_RejectsAll(t *testing.T) {
-	if kmaws.MatchesAllowList([]string{}, "sb-x", "some.alias", "sb-recv") {
+	if kmaws.MatchesAllowList([]string{}, "sb-x", "some.alias", "sb-recv", "") {
 		t.Error("expected empty patterns to reject all senders")
+	}
+}
+
+// ============================================================
+// MatchesAllowList email pattern tests
+// ============================================================
+
+func TestMatchesAllowList_EmailExact(t *testing.T) {
+	if !kmaws.MatchesAllowList([]string{"user@example.com"}, "sb-x", "", "sb-recv", "user@example.com") {
+		t.Error("expected exact email pattern to match sender email")
+	}
+}
+
+func TestMatchesAllowList_EmailExact_NoMatch(t *testing.T) {
+	if kmaws.MatchesAllowList([]string{"user@example.com"}, "sb-x", "", "sb-recv", "other@example.com") {
+		t.Error("expected exact email pattern to reject non-matching sender email")
+	}
+}
+
+func TestMatchesAllowList_EmailDomainWildcard(t *testing.T) {
+	if !kmaws.MatchesAllowList([]string{"*@example.com"}, "sb-x", "", "sb-recv", "anyone@example.com") {
+		t.Error("expected *@example.com to match anyone@example.com")
+	}
+}
+
+func TestMatchesAllowList_EmailDomainWildcard_NoMatch(t *testing.T) {
+	if kmaws.MatchesAllowList([]string{"*@example.com"}, "sb-x", "", "sb-recv", "user@other.com") {
+		t.Error("expected *@example.com to reject user@other.com")
+	}
+}
+
+func TestMatchesAllowList_EmailCaseInsensitive(t *testing.T) {
+	if !kmaws.MatchesAllowList([]string{"User@Example.COM"}, "sb-x", "", "sb-recv", "user@example.com") {
+		t.Error("expected email matching to be case-insensitive")
+	}
+}
+
+func TestMatchesAllowList_EmailPattern_EmptySenderEmail(t *testing.T) {
+	if kmaws.MatchesAllowList([]string{"user@example.com"}, "sb-x", "", "sb-recv", "") {
+		t.Error("expected email pattern to be skipped when senderEmail is empty")
+	}
+}
+
+func TestMatchesAllowList_EmailLocalPartWildcard(t *testing.T) {
+	if !kmaws.MatchesAllowList([]string{"kurt.hundeck@*"}, "sb-x", "", "sb-recv", "kurt.hundeck@gmail.com") {
+		t.Error("expected kurt.hundeck@* to match kurt.hundeck@gmail.com")
+	}
+}
+
+func TestMatchesAllowList_EmailLocalPartWildcard_NoMatch(t *testing.T) {
+	if kmaws.MatchesAllowList([]string{"kurt.hundeck@*"}, "sb-x", "", "sb-recv", "other@gmail.com") {
+		t.Error("expected kurt.hundeck@* to reject other@gmail.com")
 	}
 }
 
