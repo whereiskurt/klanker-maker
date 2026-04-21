@@ -159,6 +159,9 @@ export KM_OPERATOR_EMAIL="{{ .OperatorEmail }}"
 export KM_SANDBOX_ALIAS="{{ .Alias }}"
 export KM_ALIAS_EMAIL="{{ .AliasEmail }}"
 {{- end }}
+{{- if .AllowedSenders }}
+export KM_ALLOWED_SENDERS="{{ .AllowedSenders }}"
+{{- end }}
 EOF
 chmod 644 /etc/profile.d/km-identity.sh
 echo "[km-bootstrap] Hostname set to ${SANDBOX_FQDN}"
@@ -551,6 +554,36 @@ while true; do
         # Check if the To header contains this sandbox's address or alias
         if head -c 8192 "$tmp_file" | tr '[:upper:]' '[:lower:]' | grep -qE "$MATCH_PATTERN"; then
           mv "$tmp_file" "$local_file"
+          # Sender allowlist enforcement
+          if [ -n "${KM_ALLOWED_SENDERS:-}" ]; then
+            sender_from=$(head -c 8192 "$local_file" | grep -i "^From:" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')
+            sender_email=$(echo "$sender_from" | grep -oP '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' | head -1 | tr '[:upper:]' '[:lower:]')
+            sender_id=$(head -c 8192 "$local_file" | grep -i "^X-KM-Sender-ID:" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')
+            sender_allowed=false
+            IFS=: read -ra _PATTERNS <<< "$KM_ALLOWED_SENDERS"
+            for _p in "${_PATTERNS[@]}"; do
+              case "$_p" in
+                "*") sender_allowed=true; break ;;
+                "self") [ "$sender_id" = "$SANDBOX_ID" ] && sender_allowed=true && break ;;
+                *@*)
+                  _lp=$(echo "$_p" | tr '[:upper:]' '[:lower:]')
+                  if [[ "$_lp" == *"*"* ]]; then
+                    _domain="${_lp#*@}"
+                    [[ "$sender_email" == *"@$_domain" ]] && sender_allowed=true && break
+                  else
+                    [ "$sender_email" = "$_lp" ] && sender_allowed=true && break
+                  fi ;;
+                *) [ "$sender_id" = "$_p" ] && sender_allowed=true && break ;;
+              esac
+            done
+            if ! $sender_allowed; then
+              rm -f "$local_file"
+              mkdir -p "$MAIL_DIR/skipped"
+              touch "$MAIL_DIR/skipped/$key"
+              echo "[km-mail-poller] Sender $sender_email not in allowlist, skipping $key"
+              continue
+            fi
+          fi
           echo "[km-mail-poller] New mail: $key"
         else
           rm -f "$tmp_file"
@@ -812,6 +845,7 @@ After=network.target
 User=root
 Environment=SANDBOX_ID={{ .SandboxID }}
 Environment=KM_ARTIFACTS_BUCKET={{ .KMArtifactsBucket }}
+{{ if .AllowedSenders }}Environment=KM_ALLOWED_SENDERS={{ .AllowedSenders }}{{ end }}
 ExecStart=/opt/km/bin/km-mail-poller
 Restart=always
 RestartSec=5
@@ -1119,6 +1153,36 @@ process_messages() {
 
     # Parse headers into global HDR_* variables
     parse_headers "$raw"
+
+    # Sender allowlist enforcement (belt-and-suspenders with km-mail-poller)
+    if [ -n "${KM_ALLOWED_SENDERS:-}" ]; then
+      _sender_check="${HDR_SENDER_ID:-}"
+      _sender_email=$(echo "$HDR_FROM" | grep -oP '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' | head -1 | tr '[:upper:]' '[:lower:]')
+      _allowed=false
+      IFS=: read -ra _PATTERNS <<< "$KM_ALLOWED_SENDERS"
+      for _p in "${_PATTERNS[@]}"; do
+        case "$_p" in
+          "*") _allowed=true; break ;;
+          "self") [ "$_sender_check" = "$SANDBOX_ID" ] && _allowed=true && break ;;
+          *@*)
+            _lp=$(echo "$_p" | tr '[:upper:]' '[:lower:]')
+            if [[ "$_lp" == *"*"* ]]; then
+              _domain="${_lp#*@}"
+              [[ "$_sender_email" == *"@$_domain" ]] && _allowed=true && break
+            else
+              [ "$_sender_email" = "$_lp" ] && _allowed=true && break
+            fi ;;
+          *) [ "$_sender_check" = "$_p" ] && _allowed=true && break ;;
+        esac
+      done
+      if ! $_allowed; then
+        if $MARK_READ; then
+          mkdir -p "$MAIL_DIR/skipped"
+          mv "$msg_file" "$MAIL_DIR/skipped/$(basename "$msg_file")"
+        fi
+        continue
+      fi
+    fi
 
     # Extract body
     local body body_preview
@@ -1666,6 +1730,7 @@ type userDataParams struct {
 	EmailDomain          string // e.g. "sandboxes.klankermaker.ai"
 	Alias                string // optional human-friendly alias (e.g. "orc-1")
 	AliasEmail           string // {alias}@{emailDomain} — set when Alias is non-empty
+	AllowedSenders       string // colon-separated allowedSenders patterns from profile (empty = no filtering)
 	NotificationsEmail   string // notifications@{emailDomain} — from address for spot notifications
 	OperatorEmail        string // from KM_OPERATOR_EMAIL env var — for spot notification
 	AWSRegion            string // from IMDS region — for spot notification ses send-email CLI call
@@ -1755,6 +1820,16 @@ func joinAllowedRefs(p *profile.SandboxProfile) string {
 	return strings.Join(p.Spec.SourceAccess.GitHub.AllowedRefs, ":")
 }
 
+// joinAllowedSenders returns the AllowedSenders slice as a colon-separated string
+// suitable for the KM_ALLOWED_SENDERS environment variable.
+// Returns empty string when Email config is nil or AllowedSenders is empty.
+func joinAllowedSenders(p *profile.SandboxProfile) string {
+	if p.Spec.Email == nil || len(p.Spec.Email.AllowedSenders) == 0 {
+		return ""
+	}
+	return strings.Join(p.Spec.Email.AllowedSenders, ":")
+}
+
 // joinGitHubAllowedRepos returns the AllowedRepos slice as a comma-separated string
 // suitable for the KM_GITHUB_ALLOWED_REPOS environment variable.
 // Returns empty string when GitHub config is nil or AllowedRepos is empty.
@@ -1828,6 +1903,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		SandboxEmail:       sandboxID + "@" + emailDomain,
 		EmailDomain:        emailDomain,
 		Alias:              alias,
+		AllowedSenders:     joinAllowedSenders(p),
 		NotificationsEmail: "notifications@" + emailDomain,
 		OperatorEmail:      os.Getenv("KM_OPERATOR_EMAIL"),
 		AWSRegion:          p.Spec.Runtime.Region,
