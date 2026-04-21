@@ -29,6 +29,7 @@ locals {
   trusted_arns_ssm = [
     "arn:aws:iam::${var.application_account_id}:role/km-ec2spot-ssm-*",
     "arn:aws:iam::${var.application_account_id}:role/km-github-token-refresher-*",
+    "arn:aws:iam::${var.application_account_id}:role/km-ttl-handler",
     "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
   ]
 }

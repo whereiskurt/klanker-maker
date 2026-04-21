@@ -338,6 +338,7 @@ func runShowSCP(ctx context.Context, cfg *config.Config, w io.Writer) error {
 	trustedSSM := []string{
 		fmt.Sprintf("arn:aws:iam::%s:role/km-ec2spot-ssm-*", appAccount),
 		fmt.Sprintf("arn:aws:iam::%s:role/km-github-token-refresher-*", appAccount),
+		fmt.Sprintf("arn:aws:iam::%s:role/km-ttl-handler", appAccount),
 		"arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
 	}
 

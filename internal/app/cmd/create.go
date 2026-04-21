@@ -568,6 +568,17 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// Step 11: Write sandbox metadata to S3 so km list/status can read it without tag API calls.
 	// Non-fatal: sandbox is provisioned even if metadata write fails.
 	now := time.Now().UTC()
+	// For remote creates, use the original creation timestamp (written pre-provisioning in Step 8b)
+	// so TTL counts from when the sandbox was requested, not when provisioning finished.
+	if os.Getenv("KM_REMOTE_CREATE") == "true" {
+		tbl := cfg.SandboxTableName
+		if tbl == "" {
+			tbl = "km-sandboxes"
+		}
+		if existing, readErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamodbpkg.NewFromConfig(awsCfg), tbl, sandboxID); readErr == nil && existing != nil && !existing.CreatedAt.IsZero() {
+			now = existing.CreatedAt
+		}
+	}
 	var ttlExpiry *time.Time
 	if !isTTLDisabled(resolvedProfile.Spec.Lifecycle.TTL) {
 		if d, parseErr := time.ParseDuration(resolvedProfile.Spec.Lifecycle.TTL); parseErr == nil {
