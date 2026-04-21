@@ -1227,3 +1227,21 @@ Plans:
 - [ ] 58-01-PLAN.md — Add spec.cli.codexArgs to CLISpec + JSON Schema (TDD)
 - [ ] 58-02-PLAN.md — Refactor BuildAgentShellCommands to branch on agent type (claude|codex)
 - [ ] 58-03-PLAN.md — Wire --claude/--codex flags, mutex + no-bedrock gating, profile codexArgs loader
+
+### Phase 59: Email sender allowlist for operator inbox and sandbox inbound
+
+**Goal:** Add email sender allowlist enforcement at operator inbox (Lambda) and sandbox inbound (km-recv/km-mail-poller) levels
+**Requirements**: [AL-01, AL-02, AL-03, AL-04, AL-05, AL-06, AL-07, AL-08]
+**Depends on:** Phase 58
+**Plans:** 2 plans
+
+Plans:
+- [ ] 59-01-PLAN.md — Extend MatchesAllowList with email patterns + config struct
+- [ ] 59-02-PLAN.md — Lambda operator allowlist + bash sandbox sender filtering
+
+
+
+
+
+
+
