@@ -13,6 +13,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// emailConfig holds operator-level email settings for km-config.yaml.
+type emailConfig struct {
+	AllowedSenders []string `yaml:"allowedSenders,omitempty"`
+}
+
 // platformConfig is the structure written to km-config.yaml.
 type platformConfig struct {
 	Domain          string         `yaml:"domain"`
@@ -26,6 +31,7 @@ type platformConfig struct {
 	OperatorEmail   string         `yaml:"operator_email,omitempty"`
 	SafePhrase      string         `yaml:"safe_phrase,omitempty"`
 	MaxSandboxes    int            `yaml:"max_sandboxes,omitempty"`
+	Email           emailConfig    `yaml:"email,omitempty"`
 }
 
 type accountsConfig struct {
