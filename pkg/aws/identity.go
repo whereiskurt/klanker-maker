@@ -392,6 +392,25 @@ func MatchesAllowList(patterns []string, senderID, senderAlias, receiverSandboxI
 			if senderID == p {
 				return true
 			}
+			// Email pattern: if the pattern contains "@" and senderEmail is available,
+			// match case-insensitively using exact or wildcard (path.Match) comparison.
+			if strings.Contains(p, "@") && senderEmail != "" {
+				lowerPattern := strings.ToLower(p)
+				lowerEmail := strings.ToLower(senderEmail)
+				if !strings.Contains(lowerPattern, "*") {
+					// Exact email match
+					if lowerEmail == lowerPattern {
+						return true
+					}
+				} else {
+					// Wildcard email match (e.g. *@domain.com or user@*)
+					matched, err := path.Match(lowerPattern, lowerEmail)
+					if err == nil && matched {
+						return true
+					}
+				}
+				continue // email patterns should not fall through to alias matching
+			}
 			if senderAlias != "" {
 				matched, err := path.Match(p, senderAlias)
 				if err == nil && matched {
