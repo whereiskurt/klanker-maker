@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Checkpoint: 58-03 Task 3 human-verify (Tasks 1-2 complete, awaiting operator smoke test)"
-last_updated: "2026-04-19T21:14:08.775Z"
-last_activity: 2026-04-19 - Completed quick task 5: Plugin snapshot save/restore for Claude plugins via rsync to S3
+stopped_at: Completed 59-02-PLAN.md
+last_updated: "2026-04-21T12:31:42.027Z"
+last_activity: 2026-04-21 — Completed 59-02-PLAN.md (Lambda sender allowlist + sandbox inbound filtering)
 progress:
-  total_phases: 58
+  total_phases: 59
   completed_phases: 53
-  total_plans: 162
-  completed_plans: 163
+  total_plans: 164
+  completed_plans: 164
   percent: 0
 ---
 
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 
 ## Current Position
 
-Phase: 58 (km agent run codex support)
-Plan: 3 of 3 in current phase (complete)
+Phase: 59 (email sender allowlist)
+Plan: 2 of 2 in current phase
 Status: executing
-Last activity: 2026-04-19 — Completed 58-03-PLAN.md (--claude/--codex flags, operator smoke test approved against alias102)
+Last activity: 2026-04-21 — Completed 59-02-PLAN.md (Lambda sender allowlist + sandbox inbound filtering)
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -206,6 +206,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 58 P01 | 2min | 2 tasks | 3 files |
 | Phase 58 P02 | 687 | 2 tasks | 2 files |
 | Phase 58 P03 | 360 | 2 tasks | 2 files |
+| Phase 59 P02 | 8min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -568,6 +569,9 @@ Recent decisions affecting current work:
 - [Phase 58]: km init --sidecars NOT required after phase 58 — codexArgs is client-side CLI field only
 - [Phase 58]: Default agent type for km agent run is claude when neither --claude nor --codex is set (backward compat preserved)
 - [Phase 58]: km init --sidecars NOT required after phase 58 — codexArgs is a client-side CLI field only
+- [Phase 59]: Inline pattern matching in Lambda instead of importing pkg/aws MatchesAllowList
+- [Phase 59]: Fail-open when km-config.yaml missing for backward compatibility
+- [Phase 59]: Belt-and-suspenders filtering: km-mail-poller at download + km-recv at display
 
 ### Roadmap Evolution
 
@@ -640,6 +644,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-19T19:55:16.235Z
-Stopped at: Checkpoint: 58-03 Task 3 human-verify (Tasks 1-2 complete, awaiting operator smoke test)
+Last session: 2026-04-21T12:31:42.022Z
+Stopped at: Completed 59-02-PLAN.md
 Resume file: None
