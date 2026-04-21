@@ -9,8 +9,8 @@ metadata:
 
 spec:
   lifecycle:
-    ttl: "1h"
-    idleTimeout: "15m"
+    ttl: "4h"
+    idleTimeout: "1h"
     teardownPolicy: stop
 
   runtime:
@@ -18,6 +18,7 @@ spec:
     spot: false
     instanceType: t3.medium
     region: us-east-1
+    rootVolumeSize: 15
     hibernation: true
     mountEFS: true
     efsMountPoint: /shared
@@ -29,6 +30,7 @@ spec:
     shell: /bin/bash
     workingDir: /workspace
     useBedrock: true
+    privileged: false
     env:
       SANDBOX_MODE: goose-ebpf-gatekeeper
       GOOSE_PROVIDER: aws_bedrock
@@ -37,6 +39,12 @@ spec:
       GOOSE_TELEMETRY_ENABLED: "false"
       CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
       OPENAI_API_KEY: ""
+    configFiles:
+      "/home/sandbox/.claude/settings.json": |
+        {"trustedDirectories":["/home/sandbox","/workspace"]}
+      "/home/sandbox/.claude/plugins/known_marketplaces.json": |
+        {"klanker-maker":{"source":{"source":"github","repo":"whereiskurt/klanker-maker"},"installLocation":"/home/sandbox/.claude/plugins/marketplaces/klanker-maker","lastUpdated":"2026-04-16T00:00:00Z"}}
+
     rsyncPaths:
       - ".gitconfig"
       - ".config/goose"
@@ -44,20 +52,22 @@ spec:
       - ".claude.json"
       - ".codex"
     initCommands:
-      - "yum install -y git nodejs npm python3 python3-pip bzip2 jq tar gzip unzip"
+      - "yum install -y git nodejs npm python3 python3-pip bzip2 jq tar gzip unzip tmux cronie"
+      - "systemctl enable crond; systemctl start crond"
       - "HOME=/root curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | HOME=/root CONFIGURE=false bash"
       - "cp -r /root/.local/bin/goose /usr/local/bin/goose-bin || true"
-      - "echo export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf > /etc/profile.d/km-zz-goose-otel.sh"
+      - "printf 'export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\\nexport OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318\\n' > /etc/profile.d/km-zz-goose-otel.sh"
       - "cat /usr/local/share/ca-certificates/km-proxy-ca.crt >> /etc/pki/tls/certs/ca-bundle.crt"
       - "echo export SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt >> /etc/profile.d/km-zz-goose-otel.sh"
       - "mkdir -p /home/sandbox/.local/bin && cp /usr/local/bin/goose-bin /usr/local/bin/goose && cp /usr/local/bin/goose /home/sandbox/.local/bin/goose || true"
-      - "npm install -g @anthropic-ai/claude-code"
-      - "curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.117.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz"
+      - "npm install -g @anthropic-ai/claude-code@2.1.114"
+      - "curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.121.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz"
       - "tar -xzf /tmp/codex.tar.gz -C /tmp && install -m 755 /tmp/codex-x86_64-unknown-linux-musl /usr/local/bin/codex"
-      - "mkdir -p /home/sandbox/.config/goose /home/sandbox/.codex"
+      - "mkdir -p /home/sandbox/.config/goose /home/sandbox/.codex && chown -R sandbox:sandbox /home/sandbox/.codex"
       - "printf 'provider: aws_bedrock\\nmodel: us.anthropic.claude-opus-4-6-v1\\n' > /home/sandbox/.config/goose/config.yaml"
       - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace /home/sandbox/.config /home/sandbox/.local"
-      - "su - sandbox -c 'cd /workspace && git config --global user.name \"Goose eBPF Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
+      - "su - sandbox -c 'cd /workspace && git config --global user.name \"Goose Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
+      - "git clone --depth 1 https://github.com/whereiskurt/klanker-maker.git /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 2>/dev/null && mkdir -p /home/sandbox/.claude/plugins/marketplaces && ln -sfn /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 /home/sandbox/.claude/plugins/marketplaces/klanker-maker && KM_SHA=$(git -C /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 rev-parse HEAD) && KM_NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z) && printf '{\"version\":2,\"plugins\":{\"klanker@klanker-maker\":[{\"scope\":\"user\",\"installPath\":\"/home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0\",\"version\":\"0.1.0\",\"installedAt\":\"%s\",\"lastUpdated\":\"%s\",\"gitCommitSha\":\"%s\"}]}}' \"$KM_NOW\" \"$KM_NOW\" \"$KM_SHA\" > /home/sandbox/.claude/plugins/installed_plugins.json && chown -R sandbox:sandbox /home/sandbox/.claude/plugins || true"
 
   sourceAccess:
     mode: allowlist
@@ -65,6 +75,7 @@ spec:
       allowedRepos:
         - "whereiskurt/meshtk"
         - "whereiskurt/defcon.run.34"
+        - "whereiskurt/klanker-maker"
       allowedRefs:
         - "main"
         - "develop"
@@ -105,36 +116,12 @@ spec:
         - ".google.com"
         - ".google-analytics.com"
         - ".googletagmanager.com"
+        - ".googleapis.com"
+        - ".featuregates.org"
+        - ".statsig.com"
       allowedHosts:
-        - "github.com"
-        # Anthropic / Claude Code
-        - "api.anthropic.com"
-        - "statsig.anthropic.com"
         - "statsig.com"
-        - "api.statsig.com"
-        - "featuregates.org"
-        - "api.featuregates.org"
-        - "mcp-proxy.anthropic.com"
-        - "platform.claude.com"
-        - "api.claude.ai"
-        - "claude.ai"
-        - "sentry.io"
-        # npm
-        - "registry.npmjs.org"
-        - "nodejs.org"
-        # OpenAI (codex)
-        - "api.openai.com"
-        - "chatgpt.com"
-        # Python (goose extensions)
-        - "pypi.org"
-        - "files.pythonhosted.org"
-        # Goose MCP extension directory
-        - "pulsemcp.com"
-        # Google
-        - "google.com"
-        - "www.google.com"
-        - "www.google-analytics.com"
-        - "www.googletagmanager.com"
+        # Hosts/IPs not covered by allowedDNSSuffixes above
 
   budget:
     compute:
@@ -179,6 +166,7 @@ spec:
       enabled: true
       logPrompts: true
       logToolDetails: true
+    learnMode: false
     tlsCapture:
       enabled: true
       libraries:
@@ -200,3 +188,6 @@ spec:
       - read_file
       - write_file
       - list_files
+
+  cli:
+    noBedrock: true

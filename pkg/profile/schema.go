@@ -16,9 +16,6 @@ var sandboxProfileSchemaJSON []byte
 // defaultSchemaDomain is the fallback domain when no domain is configured.
 const defaultSchemaDomain = "klankermaker.ai"
 
-// schemaID is the default schema $id URI using the default domain.
-const schemaID = "https://" + defaultSchemaDomain + "/schemas/sandbox-profile/v1alpha1"
-
 var (
 	compiledSchema     *jsonschema.Schema
 	compiledSchemaOnce sync.Once

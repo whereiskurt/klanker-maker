@@ -170,7 +170,7 @@ func (h *OperatorEmailHandler) Handle(ctx context.Context, event S3EventRecord) 
 	// Preserve CC addresses from the inbound message so replies include them.
 	h.replyCC = nil
 	if ccHeader := msg.Header.Get("Cc"); ccHeader != "" {
-		for _, addr := range strings.Split(ccHeader, ",") {
+		for addr := range strings.SplitSeq(ccHeader, ",") {
 			addr = strings.TrimSpace(addr)
 			if addr != "" && addr != senderEmail {
 				h.replyCC = append(h.replyCC, extractEmail(addr))
@@ -433,7 +433,7 @@ func (h *OperatorEmailHandler) handleInfoCommand(ctx context.Context, senderEmai
 		if h.DynamoClient != nil {
 			records, err := awspkg.ListAllSandboxesByDynamo(ctx, h.DynamoClient, h.SandboxTableName)
 			if err != nil {
-				sb.WriteString(fmt.Sprintf("  (error listing sandboxes: %v)\n", err))
+				fmt.Fprintf(&sb, "  (error listing sandboxes: %v)\n", err)
 			} else if len(records) == 0 {
 				sb.WriteString("  No sandboxes currently running.\n")
 			} else {
@@ -477,19 +477,19 @@ func (h *OperatorEmailHandler) handleInfoCommand(ctx context.Context, senderEmai
 func (h *OperatorEmailHandler) sendActionConfirmation(ctx context.Context, senderEmail, originalBody, threadID string, cmd *InterpretedCommand) error {
 	var sb strings.Builder
 	sb.WriteString("I'll run:\n")
-	sb.WriteString(fmt.Sprintf("  km %s", cmd.Command))
+	fmt.Fprintf(&sb, "  km %s", cmd.Command)
 	if cmd.Profile != "" {
-		sb.WriteString(fmt.Sprintf(" profiles/%s", cmd.Profile))
+		fmt.Fprintf(&sb, " profiles/%s", cmd.Profile)
 	}
 	sb.WriteString("\n")
 	if len(cmd.Overrides) > 0 {
 		sb.WriteString("\nWith overrides:\n")
 		for k, v := range cmd.Overrides {
-			sb.WriteString(fmt.Sprintf("  %s: %v\n", k, v))
+			fmt.Fprintf(&sb, "  %s: %v\n", k, v)
 		}
 	}
-	sb.WriteString(fmt.Sprintf("\nConfidence: %.0f%%\n", cmd.Confidence*100))
-	sb.WriteString(fmt.Sprintf("Reasoning: %s\n", cmd.Reasoning))
+	fmt.Fprintf(&sb, "\nConfidence: %.0f%%\n", cmd.Confidence*100)
+	fmt.Fprintf(&sb, "Reasoning: %s\n", cmd.Reasoning)
 	sb.WriteString("\nReply YES to proceed, CANCEL to abort, or describe changes.\n")
 	sb.WriteString("(Include your KM-AUTH phrase in the reply body.)\n")
 
@@ -554,7 +554,7 @@ func (h *OperatorEmailHandler) handleConversationReply(ctx context.Context, send
 // replyIntent scans the body lines (skipping KM-AUTH and blank lines) to determine intent.
 // Returns "yes", "cancel", or "" (revision).
 func replyIntent(bodyText string) string {
-	for _, line := range strings.Split(bodyText, "\n") {
+	for line := range strings.SplitSeq(bodyText, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

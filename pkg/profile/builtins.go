@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -19,12 +20,7 @@ func ListBuiltins() []string {
 
 // IsBuiltin checks if a name is a built-in profile.
 func IsBuiltin(name string) bool {
-	for _, n := range builtinNames {
-		if n == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(builtinNames, name)
 }
 
 // LoadBuiltin loads and parses a built-in profile by name.

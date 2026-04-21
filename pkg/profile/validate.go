@@ -66,8 +66,8 @@ func Validate(raw []byte) []ValidationError {
 // Returns a slice of ValidationError describing any schema violations.
 // Field paths use JSON path format (e.g. "spec.runtime.substrate").
 func ValidateSchema(raw []byte) []ValidationError {
-	// Step 1: YAML -> Go interface{} via goccy/go-yaml
-	var doc interface{}
+	// Step 1: YAML -> Go any via goccy/go-yaml
+	var doc any
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
 		return []ValidationError{{
 			Path:    "",
@@ -75,7 +75,7 @@ func ValidateSchema(raw []byte) []ValidationError {
 		}}
 	}
 
-	// Step 2: Go interface{} -> JSON bytes -> any (for jsonschema)
+	// Step 2: Go any -> JSON bytes -> any (for jsonschema)
 	jsonBytes, err := json.Marshal(doc)
 	if err != nil {
 		return []ValidationError{{
@@ -84,7 +84,7 @@ func ValidateSchema(raw []byte) []ValidationError {
 		}}
 	}
 
-	var jsonDoc interface{}
+	var jsonDoc any
 	if err := json.Unmarshal(jsonBytes, &jsonDoc); err != nil {
 		return []ValidationError{{
 			Path:    "",
@@ -251,12 +251,13 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 
 	// Rule 5: eBPF enforcement is EC2-only in Phase 40 — warn when requested on non-EC2 substrates
 	if enforcement == "ebpf" || enforcement == "both" {
-		if substrate == "ecs" {
+		switch substrate {
+		case "ecs":
 			errs = append(errs, ValidationError{
 				Path:    "spec.network.enforcement",
 				Message: "eBPF enforcement is EC2-only; ECS substrate uses proxy enforcement regardless",
 			})
-		} else if substrate == "docker" {
+		case "docker":
 			errs = append(errs, ValidationError{
 				Path:    "spec.network.enforcement",
 				Message: "eBPF enforcement is EC2-only in Phase 40; Docker substrate uses proxy enforcement regardless",
@@ -270,8 +271,7 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 // parseDuration parses a duration string supporting s, m, h, d suffixes.
 // Standard Go time.ParseDuration handles s, m, h. We extend it to support d (days).
 func parseDuration(s string) (time.Duration, error) {
-	if strings.HasSuffix(s, "d") {
-		dayStr := strings.TrimSuffix(s, "d")
+	if dayStr, ok := strings.CutSuffix(s, "d"); ok {
 		days, err := time.ParseDuration(dayStr + "h")
 		if err != nil {
 			return 0, fmt.Errorf("invalid duration %q: %w", s, err)

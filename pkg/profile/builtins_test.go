@@ -6,7 +6,7 @@ import (
 
 func TestBuiltinProfilesExist(t *testing.T) {
 	names := ListBuiltins()
-	expected := []string{"open-dev", "restricted-dev", "hardened", "sealed", "goose", "ao", "codex"}
+	expected := []string{"open-dev", "restricted-dev", "hardened", "sealed", "goose", "ao", "codex", "learn"}
 	if len(names) != len(expected) {
 		t.Fatalf("expected %d built-in profiles, got %d: %v", len(expected), len(names), names)
 	}
