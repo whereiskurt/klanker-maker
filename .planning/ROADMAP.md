@@ -1251,7 +1251,7 @@ Plans:
 **Goal:** Paused/hibernated EC2 sandboxes stop accruing compute budget — `calculateComputeCost` subtracts accumulated `pausedSeconds` (closed intervals) plus any open interval (`now - pausedAt`) from elapsed time before multiplying by spot rate, while preserving the existing SET-based idempotent spend recompute. Every pause/resume transition (km pause/resume, km at scheduled pause/resume, ttl-handler idle-hibernate, budget-enforcer exhaustion, km budget add auto-resume, agent-run auto-start) writes `pausedAt`/`pausedSeconds` on the `BUDGET#compute` DynamoDB row.
 **Requirements**: BUDG-PAUSE-01, BUDG-PAUSE-02, BUDG-PAUSE-03 (phase-scoped; fixes bug in BUDG-03 accounting)
 **Depends on:** Phase 59
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 - [ ] 60-01-PLAN.md — pkg/aws/budget.go foundation: BudgetSummary.PausedSeconds/PausedAt, RecordPauseStart, RecordResumeClose, GetBudget extension, unit tests
