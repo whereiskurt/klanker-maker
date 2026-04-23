@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -262,6 +264,272 @@ func TestGetBudget_PopulatesPausedFields(t *testing.T) {
 			t.Errorf("expected PausedAt=nil for legacy sandbox, got %v", summary.PausedAt)
 		}
 	})
+}
+
+// fakePauseBudgetClient is a test double for pause/resume helpers. It simulates
+// DynamoDB if_not_exists semantics for pausedAt and accumulates pausedSeconds on ADD.
+type fakePauseBudgetClient struct {
+	// in-memory state
+	pausedAt      string // current stored pausedAt ("" = absent)
+	pausedSeconds int64  // accumulated closed-interval seconds
+
+	// call recorders
+	updateItemCalls []*dynamodb.UpdateItemInput
+	getItemCalls    []*dynamodb.GetItemInput
+	updateItemCount int
+
+	// error controls
+	getItemErr    error
+	updateItemErr error
+}
+
+func (f *fakePauseBudgetClient) UpdateItem(_ context.Context, input *dynamodb.UpdateItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
+	if f.updateItemErr != nil {
+		return nil, f.updateItemErr
+	}
+	f.updateItemCalls = append(f.updateItemCalls, input)
+	f.updateItemCount++
+
+	expr := ""
+	if input.UpdateExpression != nil {
+		expr = *input.UpdateExpression
+	}
+
+	if strings.Contains(expr, "if_not_exists(pausedAt") {
+		// SET pausedAt = if_not_exists(pausedAt, :now) — only set if absent
+		if f.pausedAt == "" {
+			if av, ok := input.ExpressionAttributeValues[":now"]; ok {
+				if s, ok2 := av.(*dynamodbtypes.AttributeValueMemberS); ok2 {
+					f.pausedAt = s.Value
+				}
+			}
+		}
+	}
+	if strings.Contains(expr, "ADD pausedSeconds") {
+		if av, ok := input.ExpressionAttributeValues[":interval"]; ok {
+			if n, ok2 := av.(*dynamodbtypes.AttributeValueMemberN); ok2 {
+				var delta int64
+				fmt.Sscanf(n.Value, "%d", &delta)
+				f.pausedSeconds += delta
+			}
+		}
+	}
+	if strings.Contains(expr, "REMOVE pausedAt") {
+		f.pausedAt = ""
+	}
+
+	return &dynamodb.UpdateItemOutput{}, nil
+}
+
+func (f *fakePauseBudgetClient) GetItem(_ context.Context, input *dynamodb.GetItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
+	if f.getItemErr != nil {
+		return nil, f.getItemErr
+	}
+	f.getItemCalls = append(f.getItemCalls, input)
+	item := map[string]dynamodbtypes.AttributeValue{}
+	if f.pausedAt != "" {
+		item["pausedAt"] = &dynamodbtypes.AttributeValueMemberS{Value: f.pausedAt}
+	}
+	return &dynamodb.GetItemOutput{Item: item}, nil
+}
+
+func (f *fakePauseBudgetClient) Query(_ context.Context, _ *dynamodb.QueryInput, _ ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+	return &dynamodb.QueryOutput{}, nil
+}
+
+// TestRecordPauseStart_WritesIfNotExists verifies RecordPauseStart issues an UpdateItem
+// with if_not_exists(pausedAt, :now) and sets :now to an RFC3339 string.
+func TestRecordPauseStart_WritesIfNotExists(t *testing.T) {
+	fake := &fakePauseBudgetClient{}
+	now := time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC)
+
+	err := kmaws.RecordPauseStart(context.Background(), fake, "km-budgets", "sb-x", now)
+	if err != nil {
+		t.Fatalf("RecordPauseStart returned error: %v", err)
+	}
+	if len(fake.updateItemCalls) == 0 {
+		t.Fatal("expected UpdateItem to be called")
+	}
+	call := fake.updateItemCalls[0]
+	expr := ""
+	if call.UpdateExpression != nil {
+		expr = *call.UpdateExpression
+	}
+	if !strings.Contains(expr, "if_not_exists(pausedAt") {
+		t.Errorf("expected if_not_exists(pausedAt in UpdateExpression, got: %q", expr)
+	}
+	nowAV, ok := call.ExpressionAttributeValues[":now"]
+	if !ok {
+		t.Fatal("expected :now in ExpressionAttributeValues")
+	}
+	nowStr, ok2 := nowAV.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok2 {
+		t.Fatal("expected :now to be String type")
+	}
+	if nowStr.Value != "2026-04-21T12:00:00Z" {
+		t.Errorf("expected :now=2026-04-21T12:00:00Z, got %q", nowStr.Value)
+	}
+}
+
+// TestRecordPauseStart_Idempotent verifies that calling RecordPauseStart twice does not
+// overwrite the original pausedAt timestamp (if_not_exists semantics).
+func TestRecordPauseStart_Idempotent(t *testing.T) {
+	fake := &fakePauseBudgetClient{}
+	first := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
+	second := time.Date(2026, 4, 21, 11, 0, 0, 0, time.UTC)
+
+	if err := kmaws.RecordPauseStart(context.Background(), fake, "km-budgets", "sb-x", first); err != nil {
+		t.Fatalf("first RecordPauseStart error: %v", err)
+	}
+	if err := kmaws.RecordPauseStart(context.Background(), fake, "km-budgets", "sb-x", second); err != nil {
+		t.Fatalf("second RecordPauseStart error: %v", err)
+	}
+
+	// The simulator should preserve the first timestamp
+	if fake.pausedAt != "2026-04-21T10:00:00Z" {
+		t.Errorf("expected original pausedAt preserved, got %q", fake.pausedAt)
+	}
+}
+
+// TestRecordResumeClose_NoPausedAtIsNoop verifies that RecordResumeClose returns nil
+// and calls UpdateItem zero times when there is no pausedAt attribute.
+func TestRecordResumeClose_NoPausedAtIsNoop(t *testing.T) {
+	fake := &fakePauseBudgetClient{} // pausedAt = ""
+	now := time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC)
+
+	err := kmaws.RecordResumeClose(context.Background(), fake, "km-budgets", "sb-x", now)
+	if err != nil {
+		t.Fatalf("expected nil, got: %v", err)
+	}
+	if fake.updateItemCount != 0 {
+		t.Errorf("expected 0 UpdateItem calls, got %d", fake.updateItemCount)
+	}
+}
+
+// TestRecordResumeClose_AccumulatesInterval verifies that RecordResumeClose computes
+// (now - pausedAt) and issues UpdateItem with ADD pausedSeconds :interval REMOVE pausedAt.
+func TestRecordResumeClose_AccumulatesInterval(t *testing.T) {
+	fake := &fakePauseBudgetClient{
+		pausedAt: "2026-04-21T11:00:00Z", // 1 hour before now
+	}
+	now := time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC)
+
+	err := kmaws.RecordResumeClose(context.Background(), fake, "km-budgets", "sb-x", now)
+	if err != nil {
+		t.Fatalf("RecordResumeClose returned error: %v", err)
+	}
+	if len(fake.updateItemCalls) == 0 {
+		t.Fatal("expected UpdateItem to be called")
+	}
+	call := fake.updateItemCalls[0]
+	expr := ""
+	if call.UpdateExpression != nil {
+		expr = *call.UpdateExpression
+	}
+	if !strings.Contains(expr, "ADD pausedSeconds") {
+		t.Errorf("expected ADD pausedSeconds in UpdateExpression, got: %q", expr)
+	}
+	if !strings.Contains(expr, "REMOVE pausedAt") {
+		t.Errorf("expected REMOVE pausedAt in UpdateExpression, got: %q", expr)
+	}
+	intervalAV, ok := call.ExpressionAttributeValues[":interval"]
+	if !ok {
+		t.Fatal("expected :interval in ExpressionAttributeValues")
+	}
+	intervalN, ok2 := intervalAV.(*dynamodbtypes.AttributeValueMemberN)
+	if !ok2 {
+		t.Fatal("expected :interval to be Number type")
+	}
+	if intervalN.Value != "3600" {
+		t.Errorf("expected :interval=3600, got %q", intervalN.Value)
+	}
+}
+
+// TestRecordResumeClose_NegativeIntervalClamped verifies that clock skew (pausedAt in future)
+// results in :interval = 0, never negative.
+func TestRecordResumeClose_NegativeIntervalClamped(t *testing.T) {
+	now := time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC)
+	// pausedAt is 10 seconds in the future relative to now
+	fake := &fakePauseBudgetClient{
+		pausedAt: now.Add(10 * time.Second).UTC().Format(time.RFC3339),
+	}
+
+	err := kmaws.RecordResumeClose(context.Background(), fake, "km-budgets", "sb-x", now)
+	if err != nil {
+		t.Fatalf("RecordResumeClose returned error: %v", err)
+	}
+	if len(fake.updateItemCalls) == 0 {
+		t.Fatal("expected UpdateItem to be called")
+	}
+	call := fake.updateItemCalls[0]
+	intervalAV, ok := call.ExpressionAttributeValues[":interval"]
+	if !ok {
+		t.Fatal("expected :interval in ExpressionAttributeValues")
+	}
+	intervalN, ok2 := intervalAV.(*dynamodbtypes.AttributeValueMemberN)
+	if !ok2 {
+		t.Fatal("expected :interval to be Number type")
+	}
+	if intervalN.Value != "0" {
+		t.Errorf("expected :interval=0 for negative clock skew, got %q", intervalN.Value)
+	}
+}
+
+// TestMultiplePauseResumeCycles simulates three pause+resume cycles and verifies
+// final pausedSeconds equals the sum of the three intervals, and pausedAt is absent.
+func TestMultiplePauseResumeCycles(t *testing.T) {
+	fake := &fakePauseBudgetClient{}
+	ctx := context.Background()
+	tableName := "km-budgets"
+	sandboxID := "sb-multi"
+
+	base := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+
+	// Cycle 1: 1h pause (3600s)
+	if err := kmaws.RecordPauseStart(ctx, fake, tableName, sandboxID, base); err != nil {
+		t.Fatal(err)
+	}
+	if err := kmaws.RecordResumeClose(ctx, fake, tableName, sandboxID, base.Add(1*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cycle 2: 2h pause (7200s)
+	if err := kmaws.RecordPauseStart(ctx, fake, tableName, sandboxID, base.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := kmaws.RecordResumeClose(ctx, fake, tableName, sandboxID, base.Add(4*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cycle 3: 30min pause (1800s)
+	if err := kmaws.RecordPauseStart(ctx, fake, tableName, sandboxID, base.Add(5*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := kmaws.RecordResumeClose(ctx, fake, tableName, sandboxID, base.Add(5*time.Hour+30*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	wantSeconds := int64(3600 + 7200 + 1800)
+	if fake.pausedSeconds != wantSeconds {
+		t.Errorf("expected pausedSeconds=%d, got %d", wantSeconds, fake.pausedSeconds)
+	}
+	if fake.pausedAt != "" {
+		t.Errorf("expected pausedAt absent after final resume, got %q", fake.pausedAt)
+	}
+}
+
+// TestRecordResumeClose_GetItemErrorIsNonFatal verifies that GetItem errors are swallowed
+// and RecordResumeClose returns nil (matches warn-and-continue convention).
+func TestRecordResumeClose_GetItemErrorIsNonFatal(t *testing.T) {
+	fake := &fakePauseBudgetClient{
+		getItemErr: fmt.Errorf("DynamoDB connection refused"),
+	}
+	now := time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC)
+
+	err := kmaws.RecordResumeClose(context.Background(), fake, "km-budgets", "sb-x", now)
+	if err != nil {
+		t.Errorf("expected nil (non-fatal), got: %v", err)
+	}
 }
 
 // TestSetBudgetLimits verifies SetBudgetLimits writes a BUDGET#limits item

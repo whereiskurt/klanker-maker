@@ -150,6 +150,85 @@ func IncrementComputeSpend(ctx context.Context, client BudgetAPI, tableName, san
 	return updatedSpend, nil
 }
 
+// RecordPauseStart records the start of an open pause interval on the BUDGET#compute
+// row for a sandbox. Uses if_not_exists so double-pauses preserve the original
+// timestamp (idempotent). Called from every pause path immediately after
+// EC2.StopInstances succeeds. Non-fatal by convention at call sites.
+func RecordPauseStart(ctx context.Context, client BudgetAPI, tableName, sandboxID string, now time.Time) error {
+	pk := sandboxPK(sandboxID)
+	_, err := client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: awssdk.String(tableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"PK": &dynamodbtypes.AttributeValueMemberS{Value: pk},
+			"SK": &dynamodbtypes.AttributeValueMemberS{Value: "BUDGET#compute"},
+		},
+		UpdateExpression: awssdk.String("SET pausedAt = if_not_exists(pausedAt, :now)"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":now": &dynamodbtypes.AttributeValueMemberS{Value: now.UTC().Format(time.RFC3339)},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("record pause start for sandbox %s: %w", sandboxID, err)
+	}
+	return nil
+}
+
+// RecordResumeClose closes the current open pause interval by (1) reading pausedAt,
+// (2) computing (now - pausedAt) and (3) ADDing it to pausedSeconds while REMOVEing
+// pausedAt atomically. Called from every resume path after EC2.StartInstances succeeds.
+//
+// If pausedAt is absent the helper returns nil (legacy sandbox or double-resume — safe no-op).
+// If GetItem fails the helper returns nil (swallow non-fatal transient errors; metering
+// will self-heal on next pause/resume cycle).
+func RecordResumeClose(ctx context.Context, client BudgetAPI, tableName, sandboxID string, now time.Time) error {
+	pk := sandboxPK(sandboxID)
+
+	got, err := client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: awssdk.String(tableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"PK": &dynamodbtypes.AttributeValueMemberS{Value: pk},
+			"SK": &dynamodbtypes.AttributeValueMemberS{Value: "BUDGET#compute"},
+		},
+		ProjectionExpression: awssdk.String("pausedAt"),
+	})
+	if err != nil || got == nil || got.Item == nil {
+		return nil
+	}
+	pausedAtAV, ok := got.Item["pausedAt"]
+	if !ok {
+		return nil
+	}
+	var pausedAtStr string
+	if err := attributevalue.Unmarshal(pausedAtAV, &pausedAtStr); err != nil || pausedAtStr == "" {
+		return nil
+	}
+	pausedAt, err := time.Parse(time.RFC3339, pausedAtStr)
+	if err != nil {
+		return nil
+	}
+
+	intervalSeconds := int64(now.Sub(pausedAt).Seconds())
+	if intervalSeconds < 0 {
+		intervalSeconds = 0
+	}
+
+	_, err = client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: awssdk.String(tableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"PK": &dynamodbtypes.AttributeValueMemberS{Value: pk},
+			"SK": &dynamodbtypes.AttributeValueMemberS{Value: "BUDGET#compute"},
+		},
+		UpdateExpression: awssdk.String("ADD pausedSeconds :interval REMOVE pausedAt"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":interval": &dynamodbtypes.AttributeValueMemberN{Value: fmt.Sprintf("%d", intervalSeconds)},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("record resume close for sandbox %s: %w", sandboxID, err)
+	}
+	return nil
+}
+
 // GetBudget queries all BUDGET# items for a sandbox and returns a structured BudgetSummary.
 // It reads compute spend, per-model AI spend, and limits from separate SK rows.
 func GetBudget(ctx context.Context, client BudgetAPI, tableName, sandboxID string) (*BudgetSummary, error) {
