@@ -37,10 +37,10 @@ import (
 	kmspkg "github.com/aws/aws-sdk-go-v2/service/kms"
 	lambdapkg "github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	ssmpkg "github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	schedulertypes "github.com/aws/aws-sdk-go-v2/service/scheduler/types"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
+	ssmpkg "github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/rs/zerolog/log"
 	atpkg "github.com/whereiskurt/klankrmkr/pkg/at"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
@@ -70,7 +70,7 @@ type TTLEvent struct {
 	NoBedrock bool   `json:"no_bedrock,omitempty"`
 	AutoStart bool   `json:"auto_start,omitempty"`
 	// Schedule fields for "schedule-create" events (relay from email Lambda).
-	ScheduleTime   string `json:"schedule_time,omitempty"`    // natural language time expression
+	ScheduleTime   string `json:"schedule_time,omitempty"` // natural language time expression
 	ArtifactBucket string `json:"artifact_bucket,omitempty"`
 	ArtifactPrefix string `json:"artifact_prefix,omitempty"`
 	OperatorEmail  string `json:"operator_email_event,omitempty"` // from email conversation
@@ -112,7 +112,13 @@ type TTLHandler struct {
 	CWClient         awspkg.CWLogsAPI
 	OperatorEmail    string
 	Domain           string
-	SSMClient *ssmpkg.Client
+	SSMClient        *ssmpkg.Client
+	// BudgetClient is a DynamoDB client for the km-budgets table.
+	// Used by handleStop/handleResume/handleAgentRun to record pause/resume intervals.
+	// If nil, budget hooks are skipped (backward compatible with existing tests).
+	BudgetClient awspkg.BudgetAPI
+	// BudgetTable is the DynamoDB table name for budget tracking (default "km-budgets").
+	BudgetTable string
 	// TeardownFunc destroys the sandbox resources after TTL expiry or idle detection.
 	// If nil, teardown is skipped (backward compatible with existing tests).
 	TeardownFunc func(ctx context.Context, sandboxID string) error
@@ -245,6 +251,13 @@ func (h *TTLHandler) handleStop(ctx context.Context, event TTLEvent) error {
 		if hibernate {
 			status = "paused"
 		}
+		// Record pause start in budget table so paused intervals are excluded from cost.
+		// EC2 substrate only (handleStop is EC2-only by construction). Non-fatal.
+		if status == "paused" && h.BudgetClient != nil && h.BudgetTable != "" {
+			if err := awspkg.RecordPauseStart(ctx, h.BudgetClient, h.BudgetTable, event.SandboxID, time.Now().UTC()); err != nil {
+				log.Warn().Err(err).Str("sandbox_id", event.SandboxID).Msg("failed to record pause start in budget table (non-fatal)")
+			}
+		}
 		// Clear ttl_expiry so DynamoDB's native TTL doesn't auto-delete the record.
 		// The sandbox should remain visible in km list until explicitly destroyed.
 		if statusErr := awspkg.UpdateSandboxStatusAndClearTTL(ctx, h.DynamoClient, h.SandboxTableName, event.SandboxID, status); statusErr != nil {
@@ -305,6 +318,14 @@ func (h *TTLHandler) handleResume(ctx context.Context, event TTLEvent) error {
 	if resumedCount == 0 {
 		log.Warn().Str("sandbox_id", event.SandboxID).Msg("no stopped instances found to resume")
 		return nil
+	}
+
+	// Close the open pause interval in the budget table so paused time stops accruing.
+	// Non-fatal: a DynamoDB error only logs a warning and lifecycle continues.
+	if h.BudgetClient != nil && h.BudgetTable != "" {
+		if err := awspkg.RecordResumeClose(ctx, h.BudgetClient, h.BudgetTable, event.SandboxID, time.Now().UTC()); err != nil {
+			log.Warn().Err(err).Str("sandbox_id", event.SandboxID).Msg("failed to record resume close in budget table (non-fatal)")
+		}
 	}
 
 	// Update DynamoDB status to running.
@@ -488,6 +509,13 @@ func (h *TTLHandler) handleAgentRun(ctx context.Context, event TTLEvent) error {
 		}
 		if instanceState != "running" {
 			return fmt.Errorf("instance %s did not reach running state", instanceID)
+		}
+		// Close the open pause interval in the budget table so paused time stops accruing.
+		// Non-fatal: a DynamoDB error only logs a warning and lifecycle continues.
+		if h.BudgetClient != nil && h.BudgetTable != "" {
+			if err := awspkg.RecordResumeClose(ctx, h.BudgetClient, h.BudgetTable, event.SandboxID, time.Now().UTC()); err != nil {
+				log.Warn().Err(err).Str("sandbox_id", event.SandboxID).Msg("failed to record resume close in budget table (non-fatal)")
+			}
 		}
 		// Update DynamoDB status back to running
 		if h.DynamoClient != nil {
@@ -1378,6 +1406,11 @@ func main() {
 		sandboxTableName = "km-sandboxes"
 	}
 
+	budgetTable := os.Getenv("KM_BUDGET_TABLE")
+	if budgetTable == "" {
+		budgetTable = "km-budgets"
+	}
+
 	s3Client := s3.NewFromConfig(awsCfg)
 	dynamoClient := dynamodbpkg.NewFromConfig(awsCfg)
 
@@ -1396,7 +1429,10 @@ func main() {
 		RegionLabel:      os.Getenv("KM_REGION_LABEL"),
 		OperatorEmail:    os.Getenv("KM_OPERATOR_EMAIL"),
 		Domain:           domain,
-		TeardownFunc:     nil, // set below
+		// BudgetClient reuses the existing DynamoDB client — no second client construction.
+		BudgetClient: dynamoClient,
+		BudgetTable:  budgetTable,
+		TeardownFunc: nil, // set below
 	}
 
 	// Use terraform-based teardown if terraform binary is bundled.
