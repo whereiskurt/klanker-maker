@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 59-01-PLAN.md
-last_updated: "2026-04-21T12:38:55.532Z"
+stopped_at: Completed 60-01-PLAN.md
+last_updated: "2026-04-23T01:29:00.797Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
-  total_phases: 59
+  total_phases: 60
   completed_phases: 54
-  total_plans: 164
-  completed_plans: 165
+  total_plans: 167
+  completed_plans: 166
   percent: 0
 ---
 
@@ -207,6 +207,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 58 P02 | 687 | 2 tasks | 2 files |
 | Phase 58 P03 | 360 | 2 tasks | 2 files |
 | Phase 59 P02 | 8min | 2 tasks | 3 files |
+| Phase 60 P01 | 10min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -572,6 +573,7 @@ Recent decisions affecting current work:
 - [Phase 59]: Inline pattern matching in Lambda instead of importing pkg/aws MatchesAllowList
 - [Phase 59]: Fail-open when km-config.yaml missing for backward compatibility
 - [Phase 59]: Belt-and-suspenders filtering: km-mail-poller at download + km-recv at display
+- [Phase 60]: RecordResumeClose swallows GetItem errors (non-fatal warn-and-continue); interval clamped to 0 for clock skew; single atomic ADD+REMOVE UpdateItem for resume close
 
 ### Roadmap Evolution
 
@@ -646,6 +648,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-21T12:32:47Z
-Stopped at: Completed 59-01-PLAN.md
+Last session: 2026-04-23T01:29:00.789Z
+Stopped at: Completed 60-01-PLAN.md
 Resume file: None
