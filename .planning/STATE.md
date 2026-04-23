@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 60-02-PLAN.md
-last_updated: "2026-04-23T01:44:26.792Z"
+stopped_at: Completed 60-03-PLAN.md
+last_updated: "2026-04-23T01:50:09.104Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
   total_phases: 60
-  completed_phases: 54
+  completed_phases: 55
   total_plans: 167
-  completed_plans: 167
+  completed_plans: 168
   percent: 0
 ---
 
@@ -209,6 +209,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 59 P02 | 8min | 2 tasks | 3 files |
 | Phase 60 P01 | 10min | 2 tasks | 2 files |
 | Phase 60 P02 | 743 | 2 tasks | 5 files |
+| Phase 60 P03 | 20min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -578,6 +579,7 @@ Recent decisions affecting current work:
 - [Phase 60]: Exported RecordPauseForEC2 helper in pause.go so pause hook is unit-testable without DI surgery on runPause
 - [Phase 60]: Extended resumeEC2Sandbox signature with budgetClient+budgetTable (single caller pattern)
 - [Phase 60]: BudgetClient in TTLHandler reuses existing dynamoClient — no second DynamoDB client construction
+- [Phase 60]: calculateComputeCost subtracts pausedSeconds from elapsed with zero clamp; HandleBudgetCheck reads budget first and threads closed+open pause intervals; enforceBudgetCompute records pausedAt after EC2 StopInstances so billing clock stops
 
 ### Roadmap Evolution
 
@@ -652,6 +654,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-23T01:44:26.785Z
-Stopped at: Completed 60-02-PLAN.md
+Last session: 2026-04-23T01:50:09.099Z
+Stopped at: Completed 60-03-PLAN.md
 Resume file: None
