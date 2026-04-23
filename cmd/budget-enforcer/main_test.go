@@ -57,9 +57,9 @@ func (m *mockBudgetDB) Query(ctx context.Context, input *dynamodb.QueryInput, op
 // --------------------------------------------------------------------------
 
 type mockEC2StopAPI struct {
-	stopCalled    bool
-	stopInput     *ec2.StopInstancesInput
-	stopErr       error
+	stopCalled bool
+	stopInput  *ec2.StopInstancesInput
+	stopErr    error
 }
 
 func (m *mockEC2StopAPI) StopInstances(ctx context.Context, input *ec2.StopInstancesInput, optFns ...func(*ec2.Options)) (*ec2.StopInstancesOutput, error) {
@@ -183,7 +183,7 @@ func TestBudgetHandler_WritesComputeSpend(t *testing.T) {
 
 	h := newBudgetHandlerWithMocks(db, ec2stop, ecsStop, iamDetach, ses)
 
-	event := budgetCheckEvent("sb-test001", "ec2", 0.10, 30, "arn:aws:iam::123:role/test", "i-12345", "", )
+	event := budgetCheckEvent("sb-test001", "ec2", 0.10, 30, "arn:aws:iam::123:role/test", "i-12345", "")
 
 	err := h.HandleBudgetCheck(context.Background(), event)
 	if err != nil {
@@ -725,6 +725,224 @@ func TestBudgetHandler_ComputeExhaustedEmailFirstTime(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected %s flag to be set after successful email; setCalls=%v", attrComputeExhaustedNotified, setCalls)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: Paused-interval compute cost accounting (Phase 60-03 Task 1)
+// --------------------------------------------------------------------------
+
+// TestCalculateComputeCost_SubtractsPausedTime: spotRate=1.00, 2h elapsed, 1h paused → cost=1.00.
+func TestCalculateComputeCost_SubtractsPausedTime(t *testing.T) {
+	h := &BudgetHandler{}
+	createdAt := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339)
+	event := BudgetCheckEvent{
+		SandboxID: "sb-pause-sub",
+		SpotRate:  1.00,
+		CreatedAt: createdAt,
+	}
+	// 2h elapsed - 1h paused = 1h billable → 1.00 USD
+	cost, err := h.calculateComputeCost(event, 3600)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cost < 0.99 || cost > 1.01 {
+		t.Errorf("expected cost ~1.00, got %.6f", cost)
+	}
+}
+
+// TestCalculateComputeCost_ZeroPausedSecsUnchanged: zero pausedSeconds = same as pre-Phase-60 behavior.
+func TestCalculateComputeCost_ZeroPausedSecsUnchanged(t *testing.T) {
+	h := &BudgetHandler{}
+	createdAt := time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339)
+	event := BudgetCheckEvent{
+		SandboxID: "sb-zero-pause",
+		SpotRate:  0.10,
+		CreatedAt: createdAt,
+	}
+	// 1h elapsed - 0 paused = 1h billable → 0.10 USD
+	cost, err := h.calculateComputeCost(event, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cost < 0.095 || cost > 0.105 {
+		t.Errorf("expected cost ~0.10, got %.6f", cost)
+	}
+}
+
+// TestCalculateComputeCost_NeverNegative: pausedSeconds > elapsed → cost clamped to 0.
+func TestCalculateComputeCost_NeverNegative(t *testing.T) {
+	h := &BudgetHandler{}
+	// sandbox only alive 10 minutes but we claim 3600s paused (absurd test case)
+	createdAt := time.Now().UTC().Add(-10 * time.Minute).Format(time.RFC3339)
+	event := BudgetCheckEvent{
+		SandboxID: "sb-negative-clamp",
+		SpotRate:  1.00,
+		CreatedAt: createdAt,
+	}
+	cost, err := h.calculateComputeCost(event, 3600)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cost != 0 {
+		t.Errorf("expected cost == 0 when pausedSeconds > elapsed, got %.6f", cost)
+	}
+}
+
+// TestBudgetHandler_PausedSandboxDoesNotAccrueSpend: end-to-end read path via HandleBudgetCheck.
+// PausedAt = now-30m, PausedSeconds=0, created_at=now-1h, spotRate=1.00 → billable=30m, cost≈0.50.
+func TestBudgetHandler_PausedSandboxDoesNotAccrueSpend(t *testing.T) {
+	db := &mockBudgetDB{}
+	ec2stop := &mockEC2StopAPI{}
+	ecsStop := &mockECSStopAPI{}
+	iamDetach := &mockIAMDetachAPI{}
+	ses := &mockSESAPI{}
+
+	h := newBudgetHandlerWithMocks(db, ec2stop, ecsStop, iamDetach, ses)
+
+	pausedAt := time.Now().UTC().Add(-30 * time.Minute)
+	h.getBudgetFn = func(ctx context.Context, sandboxID string) (*awspkg.BudgetSummary, error) {
+		return &awspkg.BudgetSummary{
+			ComputeSpent:     0,
+			ComputeLimit:     10.0,
+			AISpent:          0,
+			AILimit:          5.0,
+			WarningThreshold: 0.8,
+			PausedSeconds:    0,
+			PausedAt:         &pausedAt,
+		}, nil
+	}
+
+	event := BudgetCheckEvent{
+		SandboxID:     "sb-open-pause",
+		SpotRate:      1.00,
+		Substrate:     "ec2",
+		CreatedAt:     time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339),
+		OperatorEmail: "ops@example.com",
+		InstanceID:    "i-abc123",
+	}
+
+	err := h.HandleBudgetCheck(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Find the setComputeSpend UpdateItem call (UpdateExpression = "SET spentUSD = :cost")
+	var spentUSD float64
+	for _, call := range db.updateItemCalls {
+		if call.UpdateExpression != nil && *call.UpdateExpression == "SET spentUSD = :cost" {
+			if costAV, ok := call.ExpressionAttributeValues[":cost"]; ok {
+				if n, ok := costAV.(*dynamodbtypes.AttributeValueMemberN); ok {
+					_, _ = fmt.Sscanf(n.Value, "%f", &spentUSD)
+				}
+			}
+		}
+	}
+	// elapsed=1h, paused=30m → billable=30m → cost=0.50 (±0.02)
+	if spentUSD < 0.48 || spentUSD > 0.52 {
+		t.Errorf("expected cost ~0.50 for 30m billable at $1.00/hr, got %.6f", spentUSD)
+	}
+}
+
+// TestBudgetHandler_MultipleCyclesAccumulated: PausedSeconds=1800 + PausedAt=now-600 → 40m paused.
+// Created 1h ago, spotRate=1.00 → billable=20m → cost≈0.333.
+func TestBudgetHandler_MultipleCyclesAccumulated(t *testing.T) {
+	db := &mockBudgetDB{}
+	ec2stop := &mockEC2StopAPI{}
+	ecsStop := &mockECSStopAPI{}
+	iamDetach := &mockIAMDetachAPI{}
+	ses := &mockSESAPI{}
+
+	h := newBudgetHandlerWithMocks(db, ec2stop, ecsStop, iamDetach, ses)
+
+	pausedAt := time.Now().UTC().Add(-10 * time.Minute)
+	h.getBudgetFn = func(ctx context.Context, sandboxID string) (*awspkg.BudgetSummary, error) {
+		return &awspkg.BudgetSummary{
+			ComputeSpent:     0,
+			ComputeLimit:     10.0,
+			AISpent:          0,
+			AILimit:          5.0,
+			WarningThreshold: 0.8,
+			PausedSeconds:    1800,      // 30 closed minutes
+			PausedAt:         &pausedAt, // +10 open minutes = 40m total
+		}, nil
+	}
+
+	event := BudgetCheckEvent{
+		SandboxID:     "sb-multi-cycle",
+		SpotRate:      1.00,
+		Substrate:     "ec2",
+		CreatedAt:     time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339),
+		OperatorEmail: "ops@example.com",
+		InstanceID:    "i-abc456",
+	}
+
+	err := h.HandleBudgetCheck(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Find the setComputeSpend UpdateItem call
+	var spentUSD float64
+	for _, call := range db.updateItemCalls {
+		if call.UpdateExpression != nil && *call.UpdateExpression == "SET spentUSD = :cost" {
+			if costAV, ok := call.ExpressionAttributeValues[":cost"]; ok {
+				if n, ok := costAV.(*dynamodbtypes.AttributeValueMemberN); ok {
+					_, _ = fmt.Sscanf(n.Value, "%f", &spentUSD)
+				}
+			}
+		}
+	}
+	// elapsed=1h, paused=40m → billable=20m → cost=0.333 (±0.02)
+	if spentUSD < 0.31 || spentUSD > 0.36 {
+		t.Errorf("expected cost ~0.333 for 20m billable at $1.00/hr, got %.6f", spentUSD)
+	}
+}
+
+// TestCalculateComputeCost_OpenIntervalReturnsZeroBillable: tested via HandleBudgetCheck with
+// PausedAt=now-1h and created_at=now-1h → effective pause covers entire lifetime → cost≈0.
+// (This is the open-interval path; the handler computes effective pausedSecs before calling calculateComputeCost.)
+func TestCalculateComputeCost_OpenIntervalReturnsZeroBillable(t *testing.T) {
+	db := &mockBudgetDB{}
+	h := newBudgetHandlerWithMocks(db, &mockEC2StopAPI{}, &mockECSStopAPI{}, &mockIAMDetachAPI{}, &mockSESAPI{})
+
+	pausedAt := time.Now().UTC().Add(-1 * time.Hour)
+	h.getBudgetFn = func(ctx context.Context, sandboxID string) (*awspkg.BudgetSummary, error) {
+		return &awspkg.BudgetSummary{
+			ComputeLimit:     10.0,
+			AILimit:          5.0,
+			WarningThreshold: 0.8,
+			PausedSeconds:    0,
+			PausedAt:         &pausedAt, // paused for entire 1h lifetime
+		}, nil
+	}
+
+	event := BudgetCheckEvent{
+		SandboxID:  "sb-open-full",
+		SpotRate:   1.00,
+		Substrate:  "ec2",
+		CreatedAt:  time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339),
+		InstanceID: "i-abc789",
+	}
+
+	err := h.HandleBudgetCheck(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Cost should be ~0 (paused entire lifetime)
+	var spentUSD float64
+	for _, call := range db.updateItemCalls {
+		if call.UpdateExpression != nil && *call.UpdateExpression == "SET spentUSD = :cost" {
+			if costAV, ok := call.ExpressionAttributeValues[":cost"]; ok {
+				if n, ok := costAV.(*dynamodbtypes.AttributeValueMemberN); ok {
+					_, _ = fmt.Sscanf(n.Value, "%f", &spentUSD)
+				}
+			}
+		}
+	}
+	if spentUSD >= 1e-3 {
+		t.Errorf("expected cost < 0.001 for fully-paused sandbox, got %.6f", spentUSD)
 	}
 }
 

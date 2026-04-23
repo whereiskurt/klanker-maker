@@ -21,6 +21,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/aws/aws-lambda-go/lambda"
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
@@ -30,7 +31,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
-	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/rs/zerolog/log"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
@@ -44,15 +44,15 @@ import (
 // It is set at sandbox creation time with instance metadata for cost calculation.
 type BudgetCheckEvent struct {
 	SandboxID     string  `json:"sandbox_id"`
-	InstanceType  string  `json:"instance_type"`   // for reference/logging
-	SpotRate      float64 `json:"spot_rate"`       // pre-calculated hourly rate (set at creation)
-	Substrate     string  `json:"substrate"`       // "ec2" or "ecs"
-	CreatedAt     string  `json:"created_at"`      // RFC3339 timestamp
-	RoleARN       string  `json:"role_arn"`        // IAM role to revoke Bedrock from
-	InstanceID    string  `json:"instance_id"`     // EC2 instance ID (empty for ECS)
-	TaskARN       string  `json:"task_arn"`        // ECS task ARN (empty for EC2)
-	ClusterARN    string  `json:"cluster_arn"`     // ECS cluster ARN (empty for EC2)
-	OperatorEmail string  `json:"operator_email"`  // for notifications
+	InstanceType  string  `json:"instance_type"`  // for reference/logging
+	SpotRate      float64 `json:"spot_rate"`      // pre-calculated hourly rate (set at creation)
+	Substrate     string  `json:"substrate"`      // "ec2" or "ecs"
+	CreatedAt     string  `json:"created_at"`     // RFC3339 timestamp
+	RoleARN       string  `json:"role_arn"`       // IAM role to revoke Bedrock from
+	InstanceID    string  `json:"instance_id"`    // EC2 instance ID (empty for ECS)
+	TaskARN       string  `json:"task_arn"`       // ECS task ARN (empty for EC2)
+	ClusterARN    string  `json:"cluster_arn"`    // ECS cluster ARN (empty for EC2)
+	OperatorEmail string  `json:"operator_email"` // for notifications
 }
 
 // ============================================================
@@ -97,18 +97,18 @@ const (
 
 // BudgetHandler holds injected dependencies for testability.
 type BudgetHandler struct {
-	DynamoDB       awspkg.BudgetAPI
-	SandboxDynamo  awspkg.SandboxMetadataAPI // for lock check and status update
-	SandboxTable   string                    // DynamoDB table name (default: "km-sandboxes")
-	S3Client       *s3.Client                // for profile download
-	SchedulerClient awspkg.SchedulerAPI      // for TTL schedule cleanup
-	EC2Client      EC2StopAPI
-	ECSClient      ECSStopAPI
-	IAMClient      IAMDetachAPI
-	SESClient      awspkg.SESV2API
-	BudgetTable    string
-	StateBucket    string
-	EmailDomain    string
+	DynamoDB        awspkg.BudgetAPI
+	SandboxDynamo   awspkg.SandboxMetadataAPI // for lock check and status update
+	SandboxTable    string                    // DynamoDB table name (default: "km-sandboxes")
+	S3Client        *s3.Client                // for profile download
+	SchedulerClient awspkg.SchedulerAPI       // for TTL schedule cleanup
+	EC2Client       EC2StopAPI
+	ECSClient       ECSStopAPI
+	IAMClient       IAMDetachAPI
+	SESClient       awspkg.SESV2API
+	BudgetTable     string
+	StateBucket     string
+	EmailDomain     string
 
 	// Injectable functions for testing. When nil, the real implementations are used.
 	// getBudgetFn allows tests to inject a pre-configured BudgetSummary without DynamoDB.
@@ -147,22 +147,13 @@ func (h *BudgetHandler) HandleBudgetCheck(ctx context.Context, event BudgetCheck
 		}
 	}
 
-	// Step 1: Calculate elapsed compute cost.
-	elapsedCost, err := h.calculateComputeCost(event)
-	if err != nil {
-		log.Warn().Err(err).Str("sandbox_id", sandboxID).
-			Msg("could not calculate compute cost; using 0")
-		elapsedCost = 0
-	}
-
-	// Step 2: Write compute spend to DynamoDB using SET (idempotent — recalculated each invocation).
-	if err := h.setComputeSpend(ctx, sandboxID, elapsedCost); err != nil {
-		log.Warn().Err(err).Str("sandbox_id", sandboxID).
-			Float64("cost_usd", elapsedCost).Msg("failed to write compute spend to DynamoDB (non-fatal)")
-	}
-
-	// Step 3: Read full budget state.
-	var budget *awspkg.BudgetSummary
+	// Step 1: Read full budget state first so paused intervals are available
+	// before computing cost. This moves the GetBudget call earlier than the
+	// original code so pausedSeconds can be threaded into calculateComputeCost.
+	var (
+		budget *awspkg.BudgetSummary
+		err    error
+	)
 	if h.getBudgetFn != nil {
 		budget, err = h.getBudgetFn(ctx, sandboxID)
 	} else {
@@ -172,7 +163,35 @@ func (h *BudgetHandler) HandleBudgetCheck(ctx context.Context, event BudgetCheck
 		return fmt.Errorf("budget-enforcer: get budget for sandbox %s: %w", sandboxID, err)
 	}
 
-	// Step 4: Determine enforcement actions based on budget thresholds.
+	// Step 2: Compute effective pausedSeconds = closed intervals + any open interval.
+	// pausedSecs may exceed elapsed on legacy data or clock skew —
+	// calculateComputeCost clamps billableSecs to zero.
+	var pausedSecs int64
+	if budget != nil {
+		pausedSecs = budget.PausedSeconds
+		if budget.PausedAt != nil {
+			openSecs := int64(time.Since(*budget.PausedAt).Seconds())
+			if openSecs > 0 {
+				pausedSecs += openSecs
+			}
+		}
+	}
+
+	// Step 3: Calculate elapsed compute cost, subtracting paused time.
+	elapsedCost, err := h.calculateComputeCost(event, pausedSecs)
+	if err != nil {
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).
+			Msg("could not calculate compute cost; using 0")
+		elapsedCost = 0
+	}
+
+	// Step 4: Write compute spend to DynamoDB using SET (idempotent — recalculated each invocation).
+	if err := h.setComputeSpend(ctx, sandboxID, elapsedCost); err != nil {
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).
+			Float64("cost_usd", elapsedCost).Msg("failed to write compute spend to DynamoDB (non-fatal)")
+	}
+
+	// Step 5: Determine enforcement actions based on budget thresholds.
 	computePct := computePercent(budget.ComputeSpent, budget.ComputeLimit)
 	aiPct := computePercent(budget.AISpent, budget.AILimit)
 
@@ -237,8 +256,11 @@ func (h *BudgetHandler) HandleBudgetCheck(ctx context.Context, event BudgetCheck
 // Cost calculation
 // ============================================================
 
-// calculateComputeCost computes cost = spotRate * (elapsedMinutes / 60).
-func (h *BudgetHandler) calculateComputeCost(event BudgetCheckEvent) (float64, error) {
+// calculateComputeCost computes cost = spotRate * (billable_hours) where
+// billable seconds = max(0, elapsed - pausedSeconds). pausedSeconds is the
+// effective cumulative pause time including any currently-open interval
+// (computed by the caller from BudgetSummary.PausedSeconds + (now - PausedAt)).
+func (h *BudgetHandler) calculateComputeCost(event BudgetCheckEvent, pausedSeconds int64) (float64, error) {
 	if event.CreatedAt == "" {
 		return 0, fmt.Errorf("created_at is empty")
 	}
@@ -246,11 +268,15 @@ func (h *BudgetHandler) calculateComputeCost(event BudgetCheckEvent) (float64, e
 	if err != nil {
 		return 0, fmt.Errorf("parse created_at %q: %w", event.CreatedAt, err)
 	}
-	elapsedMinutes := time.Since(createdAt).Minutes()
-	if elapsedMinutes < 0 {
-		elapsedMinutes = 0
+	elapsedSecs := time.Since(createdAt).Seconds()
+	if elapsedSecs < 0 {
+		elapsedSecs = 0
 	}
-	cost := event.SpotRate * (elapsedMinutes / 60.0)
+	billableSecs := elapsedSecs - float64(pausedSeconds)
+	if billableSecs < 0 {
+		billableSecs = 0
+	}
+	cost := event.SpotRate * (billableSecs / 3600.0)
 	return cost, nil
 }
 
