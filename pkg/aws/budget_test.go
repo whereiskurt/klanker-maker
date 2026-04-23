@@ -207,6 +207,63 @@ func TestGetBudgetReturnsStructuredResult(t *testing.T) {
 	}
 }
 
+// TestGetBudget_PopulatesPausedFields verifies that GetBudget parses pausedSeconds and
+// pausedAt from BUDGET#compute items, and returns zero values for legacy sandboxes that
+// have no paused* attributes.
+func TestGetBudget_PopulatesPausedFields(t *testing.T) {
+	t.Run("with_paused_fields", func(t *testing.T) {
+		computeItem := map[string]dynamodbtypes.AttributeValue{
+			"PK":            &dynamodbtypes.AttributeValueMemberS{Value: "SANDBOX#sb-123"},
+			"SK":            &dynamodbtypes.AttributeValueMemberS{Value: "BUDGET#compute"},
+			"spentUSD":      &dynamodbtypes.AttributeValueMemberN{Value: "0.05"},
+			"pausedSeconds": &dynamodbtypes.AttributeValueMemberN{Value: "3600"},
+			"pausedAt":      &dynamodbtypes.AttributeValueMemberS{Value: "2026-04-21T12:00:00Z"},
+		}
+		fake := &fakeBudgetClient{
+			queryResult: []map[string]dynamodbtypes.AttributeValue{computeItem},
+		}
+		summary, err := kmaws.GetBudget(context.Background(), fake, "km-budgets", "sb-123")
+		if err != nil {
+			t.Fatalf("GetBudget returned error: %v", err)
+		}
+		if summary.ComputeSpent != 0.05 {
+			t.Errorf("expected ComputeSpent=0.05, got %f", summary.ComputeSpent)
+		}
+		if summary.PausedSeconds != 3600 {
+			t.Errorf("expected PausedSeconds=3600, got %d", summary.PausedSeconds)
+		}
+		if summary.PausedAt == nil {
+			t.Fatal("expected PausedAt to be non-nil")
+		}
+		wantTime := "2026-04-21T12:00:00Z"
+		gotTime := summary.PausedAt.UTC().Format("2006-01-02T15:04:05Z")
+		if gotTime != wantTime {
+			t.Errorf("expected PausedAt=%s, got %s", wantTime, gotTime)
+		}
+	})
+
+	t.Run("legacy_no_paused_fields", func(t *testing.T) {
+		computeItem := map[string]dynamodbtypes.AttributeValue{
+			"PK":       &dynamodbtypes.AttributeValueMemberS{Value: "SANDBOX#sb-456"},
+			"SK":       &dynamodbtypes.AttributeValueMemberS{Value: "BUDGET#compute"},
+			"spentUSD": &dynamodbtypes.AttributeValueMemberN{Value: "2.00"},
+		}
+		fake := &fakeBudgetClient{
+			queryResult: []map[string]dynamodbtypes.AttributeValue{computeItem},
+		}
+		summary, err := kmaws.GetBudget(context.Background(), fake, "km-budgets", "sb-456")
+		if err != nil {
+			t.Fatalf("GetBudget returned error: %v", err)
+		}
+		if summary.PausedSeconds != 0 {
+			t.Errorf("expected PausedSeconds=0 for legacy sandbox, got %d", summary.PausedSeconds)
+		}
+		if summary.PausedAt != nil {
+			t.Errorf("expected PausedAt=nil for legacy sandbox, got %v", summary.PausedAt)
+		}
+	})
+}
+
 // TestSetBudgetLimits verifies SetBudgetLimits writes a BUDGET#limits item
 // with compute and AI limits.
 func TestSetBudgetLimits(t *testing.T) {

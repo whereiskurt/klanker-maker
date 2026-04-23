@@ -39,6 +39,12 @@ type BudgetSummary struct {
 	WarningThreshold float64
 	AIByModel        map[string]ModelSpend // keyed by model ID
 	LastAIActivity   *time.Time            // most recent AI spend update across all models
+	// PausedSeconds is cumulative closed-interval pause time in seconds
+	// across all pause/resume cycles recorded on SK=BUDGET#compute.
+	PausedSeconds int64
+	// PausedAt is the RFC3339 timestamp of the current open pause interval,
+	// or nil if the sandbox is not currently paused.
+	PausedAt *time.Time
 }
 
 // ModelSpend holds per-model AI token and cost spend.
@@ -191,6 +197,17 @@ func GetBudget(ctx context.Context, client BudgetAPI, tableName, sandboxID strin
 				_ = attributevalue.Unmarshal(av, &spend)
 			}
 			summary.ComputeSpent = spend
+			if av, ok := item["pausedSeconds"]; ok {
+				_ = attributevalue.Unmarshal(av, &summary.PausedSeconds)
+			}
+			if av, ok := item["pausedAt"]; ok {
+				var s string
+				if err := attributevalue.Unmarshal(av, &s); err == nil && s != "" {
+					if t, perr := time.Parse(time.RFC3339, s); perr == nil {
+						summary.PausedAt = &t
+					}
+				}
+			}
 
 		case sk == "BUDGET#limits":
 			if av, ok := item["computeLimit"]; ok {
