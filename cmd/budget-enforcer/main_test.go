@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -449,6 +451,176 @@ func TestBudgetHandler_WarningEmailSentOnlyOnce(t *testing.T) {
 
 	if ses.sendCalled {
 		t.Error("warning email should NOT be sent again when warningNotified is already true")
+	}
+}
+
+// --------------------------------------------------------------------------
+// Tests: enforceBudgetCompute wires RecordPauseStart (Phase 60-03 Task 2)
+// --------------------------------------------------------------------------
+
+// mockBudgetDBWithPauseCapture wraps mockBudgetDB with conditional error for pausedAt writes.
+type mockBudgetDBWithPauseCapture struct {
+	mockBudgetDB
+	pauseStartErr error // returned when UpdateExpression contains "pausedAt"
+}
+
+func (m *mockBudgetDBWithPauseCapture) UpdateItem(ctx context.Context, input *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
+	m.updateItemCalls = append(m.updateItemCalls, input)
+	if input.UpdateExpression != nil && strings.Contains(*input.UpdateExpression, "pausedAt") && m.pauseStartErr != nil {
+		return nil, m.pauseStartErr
+	}
+	return &dynamodb.UpdateItemOutput{}, m.updateErr
+}
+
+func (m *mockBudgetDBWithPauseCapture) GetItem(ctx context.Context, input *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
+	return &dynamodb.GetItemOutput{}, nil
+}
+
+func (m *mockBudgetDBWithPauseCapture) Query(ctx context.Context, input *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+	m.queryCalls = append(m.queryCalls, input)
+	return &dynamodb.QueryOutput{Items: nil}, nil
+}
+
+// mockSandboxMetadataWithCapture tracks UpdateItem calls (status updates).
+type mockSandboxMetadataWithCapture struct {
+	mockSandboxMetadataAPI
+	updateItemCalls []*dynamodb.UpdateItemInput
+}
+
+func (m *mockSandboxMetadataWithCapture) UpdateItem(ctx context.Context, input *dynamodb.UpdateItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
+	m.updateItemCalls = append(m.updateItemCalls, input)
+	return &dynamodb.UpdateItemOutput{}, nil
+}
+
+func sandboxExistsGetItem(sandboxID string) *dynamodb.GetItemOutput {
+	return &dynamodb.GetItemOutput{
+		Item: map[string]dynamodbtypes.AttributeValue{
+			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+			"status":     &dynamodbtypes.AttributeValueMemberS{Value: "running"},
+			"profile":    &dynamodbtypes.AttributeValueMemberS{Value: "default"},
+			"substrate":  &dynamodbtypes.AttributeValueMemberS{Value: "ec2"},
+			"region":     &dynamodbtypes.AttributeValueMemberS{Value: "us-east-1"},
+			"created_at": &dynamodbtypes.AttributeValueMemberS{Value: "2026-04-21T12:00:00Z"},
+		},
+	}
+}
+
+// TestEnforceBudgetCompute_RecordsPauseStart: RecordPauseStart UpdateItem issued after StopInstances.
+func TestEnforceBudgetCompute_RecordsPauseStart(t *testing.T) {
+	db := &mockBudgetDBWithPauseCapture{}
+	ec2stop := &mockEC2StopAPI{}
+	sandboxDynamo := &mockSandboxMetadataWithCapture{
+		mockSandboxMetadataAPI: mockSandboxMetadataAPI{
+			getItemOutput: sandboxExistsGetItem("sb-pause-rec"),
+		},
+	}
+
+	h := &BudgetHandler{
+		DynamoDB:      db,
+		EC2Client:     ec2stop,
+		ECSClient:     &mockECSStopAPI{},
+		IAMClient:     &mockIAMDetachAPI{},
+		SESClient:     &mockSESAPI{},
+		BudgetTable:   "km-budgets",
+		SandboxDynamo: sandboxDynamo,
+		SandboxTable:  "km-sandboxes",
+		EmailDomain:   "sandboxes.klankermaker.ai",
+	}
+	h.getBudgetFn = func(ctx context.Context, sandboxID string) (*awspkg.BudgetSummary, error) {
+		return &awspkg.BudgetSummary{
+			ComputeSpent: 6.0, ComputeLimit: 5.0, // 120% — triggers enforcement
+			AISpent: 0, AILimit: 5.0,
+			WarningThreshold: 0.8,
+		}, nil
+	}
+	h.isMetaFlagFn = func(ctx context.Context, sandboxID, attrName string) (bool, error) { return true, nil }
+	h.setMetaFlagFn = func(ctx context.Context, sandboxID, attrName string) error { return nil }
+
+	event := BudgetCheckEvent{
+		SandboxID:  "sb-pause-rec",
+		SpotRate:   1.00,
+		Substrate:  "ec2",
+		CreatedAt:  time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339),
+		InstanceID: "i-pause001",
+	}
+
+	err := h.HandleBudgetCheck(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Assert RecordPauseStart UpdateItem was issued on BUDGET#compute with if_not_exists(pausedAt)
+	pauseStartFound := false
+	for _, call := range db.updateItemCalls {
+		if call.UpdateExpression != nil && strings.Contains(*call.UpdateExpression, "pausedAt") {
+			if skAV, ok := call.Key["SK"]; ok {
+				if sk, ok := skAV.(*dynamodbtypes.AttributeValueMemberS); ok && sk.Value == "BUDGET#compute" {
+					pauseStartFound = true
+				}
+			}
+		}
+	}
+	if !pauseStartFound {
+		t.Errorf("expected RecordPauseStart UpdateItem on BUDGET#compute with pausedAt expression; calls=%d", len(db.updateItemCalls))
+		for i, call := range db.updateItemCalls {
+			if call.UpdateExpression != nil {
+				t.Logf("  call[%d] UpdateExpression=%q", i, *call.UpdateExpression)
+			}
+		}
+	}
+}
+
+// TestEnforceBudgetCompute_NonFatalOnDynamoError: RecordPauseStart DynamoDB error is non-fatal;
+// UpdateSandboxStatusDynamo still proceeds.
+func TestEnforceBudgetCompute_NonFatalOnDynamoError(t *testing.T) {
+	db := &mockBudgetDBWithPauseCapture{
+		pauseStartErr: errors.New("dynamodb unavailable"),
+	}
+	ec2stop := &mockEC2StopAPI{}
+	sandboxDynamo := &mockSandboxMetadataWithCapture{
+		mockSandboxMetadataAPI: mockSandboxMetadataAPI{
+			getItemOutput: sandboxExistsGetItem("sb-nonfatal"),
+		},
+	}
+
+	h := &BudgetHandler{
+		DynamoDB:      db,
+		EC2Client:     ec2stop,
+		ECSClient:     &mockECSStopAPI{},
+		IAMClient:     &mockIAMDetachAPI{},
+		SESClient:     &mockSESAPI{},
+		BudgetTable:   "km-budgets",
+		SandboxDynamo: sandboxDynamo,
+		SandboxTable:  "km-sandboxes",
+		EmailDomain:   "sandboxes.klankermaker.ai",
+	}
+	h.getBudgetFn = func(ctx context.Context, sandboxID string) (*awspkg.BudgetSummary, error) {
+		return &awspkg.BudgetSummary{
+			ComputeSpent: 6.0, ComputeLimit: 5.0,
+			AISpent: 0, AILimit: 5.0,
+			WarningThreshold: 0.8,
+		}, nil
+	}
+	h.isMetaFlagFn = func(ctx context.Context, sandboxID, attrName string) (bool, error) { return true, nil }
+	h.setMetaFlagFn = func(ctx context.Context, sandboxID, attrName string) error { return nil }
+
+	event := BudgetCheckEvent{
+		SandboxID:  "sb-nonfatal",
+		SpotRate:   1.00,
+		Substrate:  "ec2",
+		CreatedAt:  time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339),
+		InstanceID: "i-nonfatal",
+	}
+
+	// Should not return error — RecordPauseStart failure is non-fatal
+	err := h.HandleBudgetCheck(context.Background(), event)
+	if err != nil {
+		t.Fatalf("expected no error when RecordPauseStart fails (non-fatal), got: %v", err)
+	}
+
+	// UpdateSandboxStatusDynamo should still have been called (lifecycle progressed)
+	if len(sandboxDynamo.updateItemCalls) == 0 {
+		t.Error("expected UpdateSandboxStatusDynamo to be called even when RecordPauseStart fails")
 	}
 }
 

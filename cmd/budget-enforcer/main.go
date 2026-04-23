@@ -473,6 +473,16 @@ func (h *BudgetHandler) enforceBudgetCompute(ctx context.Context, event BudgetCh
 			Bool("hibernated", hibernate).
 			Msg("EC2 instance stopped due to compute budget exhaustion")
 
+		// Record the pause transition on the budget table so subsequent Lambda ticks
+		// do not keep accumulating elapsed time against an already-exhausted budget.
+		// Non-fatal: if the write fails the metering will self-correct on the next
+		// operator-driven resume.
+		if h.DynamoDB != nil && h.BudgetTable != "" {
+			if err := awspkg.RecordPauseStart(ctx, h.DynamoDB, h.BudgetTable, sandboxID, time.Now().UTC()); err != nil {
+				log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("failed to record pause start in budget table (non-fatal)")
+			}
+		}
+
 		// Update DynamoDB status.
 		if h.SandboxDynamo != nil {
 			status := "stopped"
