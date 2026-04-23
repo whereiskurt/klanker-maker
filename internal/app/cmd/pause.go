@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -14,10 +15,23 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
 )
+
+// RecordPauseForEC2 calls RecordPauseStart with warn-and-continue semantics.
+// Extracted for testability: the full runPause function constructs AWS clients
+// internally and cannot be unit-tested without deep DI surgery.
+// Exported so pause_test.go (package cmd_test) can invoke it with a fake BudgetAPI.
+func RecordPauseForEC2(ctx context.Context, client awspkg.BudgetAPI, table, sandboxID string) error {
+	if err := awspkg.RecordPauseStart(ctx, client, table, sandboxID, time.Now().UTC()); err != nil {
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("failed to record pause start in budget table (non-fatal)")
+		return err
+	}
+	return nil
+}
 
 // NewPauseCmd creates the "km pause" subcommand.
 func NewPauseCmd(cfg *config.Config) *cobra.Command {
@@ -118,6 +132,11 @@ func runPause(ctx context.Context, cfg *config.Config, sandboxID string) error {
 		// If metadata not found or substrate is not docker, proceed with EC2 path.
 	}
 
+	budgetTable := cfg.BudgetTableName
+	if budgetTable == "" {
+		budgetTable = "km-budgets"
+	}
+
 	ec2Client := ec2.NewFromConfig(awsCfg)
 
 	descOut, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
@@ -149,7 +168,7 @@ func runPause(ctx context.Context, cfg *config.Config, sandboxID string) error {
 			})
 			if err != nil && strings.Contains(err.Error(), "UnsupportedHibernationConfiguration") {
 				// Instance wasn't launched with hibernation — fall back to normal stop
-				fmt.Printf(ansiYellow+"  [info] hibernate not available, stopping normally"+ansiReset+"\n")
+				fmt.Printf(ansiYellow + "  [info] hibernate not available, stopping normally" + ansiReset + "\n")
 				_, err = ec2Client.StopInstances(ctx, &ec2.StopInstancesInput{
 					InstanceIds: []string{instanceID},
 				})
@@ -164,6 +183,11 @@ func runPause(ctx context.Context, cfg *config.Config, sandboxID string) error {
 	if paused == 0 {
 		return fmt.Errorf("no running instances found for sandbox %s", sandboxID)
 	}
+
+	// Record the pause start timestamp in the budget table so paused intervals are
+	// excluded from compute cost calculations. Non-fatal: a DynamoDB error only logs
+	// a warning and lifecycle continues.
+	RecordPauseForEC2(ctx, dynamoClient, budgetTable, sandboxID)
 
 	// Update metadata status to "paused" and clear ttl_expiry so DynamoDB's native TTL
 	// doesn't auto-delete the record while the sandbox is paused.

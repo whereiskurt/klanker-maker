@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -14,6 +15,7 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
@@ -168,7 +170,7 @@ func runBudgetAdd(cmd *cobra.Command, cfg *config.Config, budgetClient kmaws.Bud
 
 			if strings.HasPrefix(substrate, "ec2") && ec2Client != nil {
 				// Check EC2 instance state via describe (filter by sandbox tag)
-				started, startErr := resumeEC2Sandbox(ctx, ec2Client, sandboxID)
+				started, startErr := resumeEC2Sandbox(ctx, ec2Client, budgetClient, tableName, sandboxID)
 				if startErr != nil {
 					// Non-fatal: log but continue
 					fmt.Fprintf(cmd.OutOrStdout(), "Warning: could not resume EC2 sandbox: %v\n", startErr)
@@ -220,7 +222,8 @@ func runBudgetAdd(cmd *cobra.Command, cfg *config.Config, budgetClient kmaws.Bud
 
 // resumeEC2Sandbox checks if EC2 instances for this sandbox are stopped and starts them.
 // Returns true if any instance was started, false if all were already running.
-func resumeEC2Sandbox(ctx context.Context, ec2Client EC2StartAPI, sandboxID string) (bool, error) {
+// budgetClient and budgetTable are used to close the open pause interval after start succeeds.
+func resumeEC2Sandbox(ctx context.Context, ec2Client EC2StartAPI, budgetClient kmaws.BudgetAPI, budgetTable, sandboxID string) (bool, error) {
 	// Describe instances by sandbox-id tag
 	out, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		Filters: []ec2types.Filter{
@@ -254,6 +257,14 @@ func resumeEC2Sandbox(ctx context.Context, ec2Client EC2StartAPI, sandboxID stri
 	})
 	if err != nil {
 		return false, fmt.Errorf("start instances %v: %w", stoppedIDs, err)
+	}
+
+	// Close the open pause interval in the budget table so paused time stops accruing.
+	// Non-fatal: a DynamoDB error only logs a warning and lifecycle continues.
+	if budgetClient != nil && budgetTable != "" {
+		if err := kmaws.RecordResumeClose(ctx, budgetClient, budgetTable, sandboxID, time.Now().UTC()); err != nil {
+			log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("failed to record resume close in budget table (non-fatal)")
+		}
 	}
 
 	return true, nil

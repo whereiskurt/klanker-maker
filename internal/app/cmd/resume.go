@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
@@ -81,6 +82,10 @@ func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error 
 	if tableName == "" {
 		tableName = "km-sandboxes"
 	}
+	budgetTable := cfg.BudgetTableName
+	if budgetTable == "" {
+		budgetTable = "km-budgets"
+	}
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)
 
 	ec2Client := ec2.NewFromConfig(awsCfg)
@@ -111,6 +116,12 @@ func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error 
 
 	if resumed == 0 {
 		return fmt.Errorf("no stopped instances found for sandbox %s", sandboxID)
+	}
+
+	// Close the open pause interval in the budget table so paused time stops accruing.
+	// Non-fatal: a DynamoDB error only logs a warning and lifecycle continues.
+	if err := awspkg.RecordResumeClose(ctx, dynamoClient, budgetTable, sandboxID, time.Now().UTC()); err != nil {
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("failed to record resume close in budget table (non-fatal)")
 	}
 
 	// Update metadata status back to "running" via DynamoDB (with S3 fallback on ResourceNotFoundException).

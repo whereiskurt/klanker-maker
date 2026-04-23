@@ -1,6 +1,7 @@
 package cmd_test
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -67,5 +68,27 @@ func TestPauseCmd_RemoteInvalidSandboxID(t *testing.T) {
 	}
 	if len(pub.calls) != 0 {
 		t.Errorf("expected 0 publisher calls for invalid ID, got %d", len(pub.calls))
+	}
+}
+
+// TestPauseRecordsTimestamp verifies that RecordPauseForEC2 issues a DynamoDB UpdateItem
+// with the correct UpdateExpression for the BUDGET#compute pause-start hook.
+// Uses a fake BudgetAPI (fakeBudgetClient from budget_test.go) to avoid real AWS calls.
+func TestPauseRecordsTimestamp(t *testing.T) {
+	fake := newFakeBudgetClient(0, 0, 0)
+	ctx := context.Background()
+	err := cmd.RecordPauseForEC2(ctx, fake, "km-budgets", "sb-test1234")
+	if err != nil {
+		t.Fatalf("RecordPauseForEC2 returned error: %v", err)
+	}
+	if len(fake.updateItemCalls) != 1 {
+		t.Fatalf("expected 1 UpdateItem call, got %d", len(fake.updateItemCalls))
+	}
+	expr := fake.updateItemCalls[0]
+	if !strings.Contains(expr, "pausedAt") {
+		t.Errorf("UpdateExpression should reference pausedAt, got: %q", expr)
+	}
+	if !strings.Contains(expr, "if_not_exists") {
+		t.Errorf("UpdateExpression should use if_not_exists for idempotency, got: %q", expr)
 	}
 }
