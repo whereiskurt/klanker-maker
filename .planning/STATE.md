@@ -651,6 +651,7 @@ None yet.
 - Phase 58 added: km agent run codex support — add --claude/--codex flags (mirror interactive), parameterize BuildAgentShellCommands by agent type, codex uses --dangerously-bypass-approvals-and-sandbox and --json, gate --no-bedrock to claude only, add spec.cli.codexArgs alongside claudeArgs, pass-through codex output (no normalization)
 - Phase 59 plan 01: Email patterns in MatchesAllowList use path.Match with case-insensitive lowering; email patterns identified by @ in pattern string; continue after email branch prevents fallthrough to alias matching
 - Phase 60 added: Budget compute accounting excludes paused/hibernated intervals — track pausedAt/resumedAt transitions, accumulate paused seconds in budget row, subtract from elapsed time in calculateComputeCost so hibernated EC2 stops accruing compute spend
+- Phase 61 added: km shell Ctrl+C fix — switch interactive SSM sessions from AWS-StartInteractiveCommand to a parameterized Standard_Stream document with runAsDefaultUser=sandbox
 
 ## Session Continuity
 
