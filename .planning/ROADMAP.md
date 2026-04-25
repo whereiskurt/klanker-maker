@@ -1257,3 +1257,15 @@ Plans:
 - [ ] 60-01-PLAN.md — pkg/aws/budget.go foundation: BudgetSummary.PausedSeconds/PausedAt, RecordPauseStart, RecordResumeClose, GetBudget extension, unit tests
 - [ ] 60-02-PLAN.md — Wire pause/resume hooks at external call sites (km pause, km resume, km budget add auto-resume, ttl-handler handleStop/handleResume/handleAgentRun)
 - [ ] 60-03-PLAN.md — budget-enforcer cost calculation: calculateComputeCost accepts pausedSeconds, HandleBudgetCheck threads effective pausedSeconds (closed + open interval), enforceBudgetCompute records pausedAt after StopInstances
+
+### Phase 61: km shell Ctrl+C fix: switch interactive SSM sessions from AWS-StartInteractiveCommand to a parameterized Standard_Stream document with runAsDefaultUser=sandbox
+
+**Goal:** Eliminate the Ctrl+C teardown bug in `km shell` (non-root) and all three `km agent` interactive subcommands by replacing `AWS-StartInteractiveCommand` (sessionType `InteractiveCommands`, terminates on Ctrl+C) with a custom `KM-Sandbox-Session` regional document (sessionType `Standard_Stream`, `runAsDefaultUser: sandbox`) that forwards Ctrl+C as a PTY byte (SSH-like). Drop the redundant `sudo -u sandbox -i` wrapper from each callsite. Build `--parameters` JSON via `encoding/json.Marshal`. Surface a fail-fast actionable error when the doc is missing in the target region. Leave the root-shell path unchanged.
+**Requirements**: Functional correctness fix; touches CONF-05 implicitly (no explicit requirement IDs in REQUIREMENTS.md)
+**Depends on:** Phase 60
+**Plans:** 3 plans
+
+Plans:
+- [ ] 61-01-PLAN.md — Create regional `infra/modules/ssm-session-doc/v1.0.0/` Terraform module + Terragrunt live wiring + plug into `regionalModules()` + update init_test.go counts and add TestRegionalModulesIncludesSSMDoc
+- [ ] 61-02-PLAN.md — Switch all four CLI callsites (shell.go non-root, agent.go --claude / attach / run --interactive) to KM-Sandbox-Session via `encoding/json.Marshal`, drop sudo wrappers, add fail-fast on missing doc, update tests + add TestShellCmd_EC2_Root, TestShellCmd_MissingSSMDoc, TestAgentParametersEscaping
+- [ ] 61-03-PLAN.md — Manual UAT (7 scenarios) on a live sandbox: Ctrl+C forwarding for all four affected callsites, root-path regression guard, missing-doc fail-fast verification, signed-off UAT outcome table
