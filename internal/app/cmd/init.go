@@ -115,6 +115,11 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: nil,
 		},
 		{
+			name:    "ssm-session-doc",
+			dir:     filepath.Join(regionDir, "ssm-session-doc"),
+			envReqs: nil,
+		},
+		{
 			name:    "s3-replication",
 			dir:     filepath.Join(regionDir, "s3-replication"),
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},

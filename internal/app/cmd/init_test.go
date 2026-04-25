@@ -65,13 +65,13 @@ region: us-east-1
 	}
 }
 
-// TestRunInitWithRunnerAllModules verifies runInitWithRunner applies all 6 modules in order.
+// TestRunInitWithRunnerAllModules verifies runInitWithRunner applies all 7 modules in order.
 func TestRunInitWithRunnerAllModules(t *testing.T) {
 	repoRoot := t.TempDir()
 	regionLabel := "use1"
 
-	// Create all 6 module directories
-	moduleNames := []string{"network", "dynamodb-budget", "dynamodb-identities", "s3-replication", "ttl-handler", "ses"}
+	// Create all 7 module directories
+	moduleNames := []string{"network", "dynamodb-budget", "dynamodb-identities", "ssm-session-doc", "s3-replication", "ttl-handler", "ses"}
 	regionDir := filepath.Join(repoRoot, "infra", "live", regionLabel)
 	for _, mod := range moduleNames {
 		modDir := filepath.Join(regionDir, mod)
@@ -89,8 +89,8 @@ func TestRunInitWithRunnerAllModules(t *testing.T) {
 		t.Fatalf("runInitWithRunner: %v", err)
 	}
 
-	if len(mock.applied) != 6 {
-		t.Errorf("expected 6 Apply calls, got %d: %v", len(mock.applied), mock.applied)
+	if len(mock.applied) != 7 {
+		t.Errorf("expected 7 Apply calls, got %d: %v", len(mock.applied), mock.applied)
 	}
 
 	// Verify order
@@ -102,6 +102,46 @@ func TestRunInitWithRunnerAllModules(t *testing.T) {
 		if !strings.HasSuffix(mock.applied[i], name) {
 			t.Errorf("module[%d]: expected suffix %q, got %q", i, name, mock.applied[i])
 		}
+	}
+}
+
+// TestRegionalModulesIncludesSSMDoc verifies the ssm-session-doc module is
+// registered in regionalModules() between dynamodb-schedules and s3-replication.
+// The custom KM-Sandbox-Session SSM document is required for `km shell` and
+// `km agent` interactive sessions to forward Ctrl+C correctly.
+func TestRegionalModulesIncludesSSMDoc(t *testing.T) {
+	mods := cmd.RegionalModules(t.TempDir())
+
+	var found bool
+	var foundIdx int
+	for i, m := range mods {
+		if m.Name == "ssm-session-doc" {
+			found = true
+			foundIdx = i
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected regionalModules() to include ssm-session-doc")
+	}
+
+	// Ordering sanity: ssm-session-doc should come after dynamodb-schedules (which
+	// shares the env-req-free no-dependency profile) and before s3-replication
+	// (which requires KM_ARTIFACTS_BUCKET).
+	var dynamoIdx, s3Idx int = -1, -1
+	for i, m := range mods {
+		if m.Name == "dynamodb-schedules" {
+			dynamoIdx = i
+		}
+		if m.Name == "s3-replication" {
+			s3Idx = i
+		}
+	}
+	if dynamoIdx >= 0 && foundIdx <= dynamoIdx {
+		t.Errorf("ssm-session-doc should appear AFTER dynamodb-schedules; got idx %d vs %d", foundIdx, dynamoIdx)
+	}
+	if s3Idx >= 0 && foundIdx >= s3Idx {
+		t.Errorf("ssm-session-doc should appear BEFORE s3-replication; got idx %d vs %d", foundIdx, s3Idx)
 	}
 }
 
@@ -137,7 +177,7 @@ func TestRunInitSkipsSESWithoutZoneID(t *testing.T) {
 	regionLabel := "use1"
 
 	// Create all module directories
-	moduleNames := []string{"network", "dynamodb-budget", "dynamodb-identities", "ses", "s3-replication", "ttl-handler"}
+	moduleNames := []string{"network", "dynamodb-budget", "dynamodb-identities", "ssm-session-doc", "ses", "s3-replication", "ttl-handler"}
 	for _, mod := range moduleNames {
 		dir := filepath.Join(repoRoot, "infra", "live", regionLabel, mod)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -155,9 +195,9 @@ func TestRunInitSkipsSESWithoutZoneID(t *testing.T) {
 		t.Fatalf("runInitWithRunner: %v", err)
 	}
 
-	// ses should be skipped → 5 modules applied
-	if len(mock.applied) != 5 {
-		t.Errorf("expected 5 Apply calls (ses skipped), got %d: %v", len(mock.applied), mock.applied)
+	// ses should be skipped → 6 modules applied
+	if len(mock.applied) != 6 {
+		t.Errorf("expected 6 Apply calls (ses skipped), got %d: %v", len(mock.applied), mock.applied)
 	}
 	for _, applied := range mock.applied {
 		if strings.HasSuffix(applied, "ses") {
