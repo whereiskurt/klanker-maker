@@ -3,6 +3,7 @@ package cmd_test
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -386,6 +387,15 @@ func TestAgentCmd_BackwardCompat(t *testing.T) {
 	}
 	if !strings.Contains(fullCmd, "claude") {
 		t.Errorf("expected 'claude' in command args, got: %s", fullCmd)
+	}
+	if !strings.Contains(fullCmd, "KM-Sandbox-Session") {
+		t.Errorf("expected '--document-name KM-Sandbox-Session', got: %s", fullCmd)
+	}
+	if strings.Contains(fullCmd, "sudo -u sandbox") {
+		t.Errorf("expected NO 'sudo -u sandbox' wrapper, got: %s", fullCmd)
+	}
+	if strings.Contains(fullCmd, "AWS-StartInteractiveCommand") {
+		t.Errorf("expected NO legacy AWS-StartInteractiveCommand, got: %s", fullCmd)
 	}
 }
 
@@ -804,6 +814,15 @@ func TestAgentAttach(t *testing.T) {
 	if !stderrSet {
 		t.Error("expected stderr to be wired")
 	}
+	if !strings.Contains(fullCmd, "KM-Sandbox-Session") {
+		t.Errorf("expected '--document-name KM-Sandbox-Session', got: %s", fullCmd)
+	}
+	if strings.Contains(fullCmd, "sudo -u sandbox") {
+		t.Errorf("expected NO 'sudo -u sandbox' wrapper, got: %s", fullCmd)
+	}
+	if strings.Contains(fullCmd, "AWS-StartInteractiveCommand") {
+		t.Errorf("expected NO legacy AWS-StartInteractiveCommand, got: %s", fullCmd)
+	}
 }
 
 // TestAgentInteractive verifies that --interactive writes script via SendCommand
@@ -864,6 +883,15 @@ func TestAgentInteractive(t *testing.T) {
 	// Verify the session name contains km-agent-
 	if !strings.Contains(fullCmd, "km-agent-") {
 		t.Errorf("expected 'km-agent-' session name in command, got: %s", fullCmd)
+	}
+	if !strings.Contains(fullCmd, "KM-Sandbox-Session") {
+		t.Errorf("expected '--document-name KM-Sandbox-Session', got: %s", fullCmd)
+	}
+	if strings.Contains(fullCmd, "sudo -u sandbox") {
+		t.Errorf("expected NO 'sudo -u sandbox' wrapper, got: %s", fullCmd)
+	}
+	if strings.Contains(fullCmd, "AWS-StartInteractiveCommand") {
+		t.Errorf("expected NO legacy AWS-StartInteractiveCommand, got: %s", fullCmd)
 	}
 }
 
@@ -1118,5 +1146,58 @@ func TestBuildAgentCommand(t *testing.T) {
 					tc.base, tc.profileArgs, tc.userArgs, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestAgentParametersEscaping verifies that the --parameters JSON construction
+// for km agent --claude / attach / run --interactive uses encoding/json.Marshal
+// (round-trips correctly through json.Unmarshal) and does not rely on
+// fmt.Sprintf + strings.ReplaceAll (which corrupts values containing nested
+// quotes, single-quotes, or shell metacharacters).
+func TestAgentParametersEscaping(t *testing.T) {
+	fetcher := newRunningEC2Sandbox("sb-escape01")
+	var capturedArgs []string
+	execFn := func(c *exec.Cmd) error {
+		capturedArgs = c.Args
+		return nil
+	}
+	cfg := &config.Config{}
+	root := &cobra.Command{Use: "km"}
+	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, execFn, nil, nil, nil)
+	root.AddCommand(agentCmd)
+	root.SetArgs([]string{"agent", "attach", "sb-escape01"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Find the --parameters value in capturedArgs
+	var paramsJSON string
+	for i, a := range capturedArgs {
+		if a == "--parameters" && i+1 < len(capturedArgs) {
+			paramsJSON = capturedArgs[i+1]
+			break
+		}
+	}
+	if paramsJSON == "" {
+		t.Fatalf("--parameters not found in args: %v", capturedArgs)
+	}
+
+	var parsed map[string][]string
+	if err := json.Unmarshal([]byte(paramsJSON), &parsed); err != nil {
+		t.Fatalf("--parameters JSON does not parse (likely fmt.Sprintf+ReplaceAll corruption): %v\nvalue: %s", err, paramsJSON)
+	}
+	cmds, ok := parsed["command"]
+	if !ok || len(cmds) != 1 {
+		t.Fatalf("expected parsed['command'] to have exactly 1 entry, got: %v", parsed)
+	}
+	inner := cmds[0]
+	if !strings.Contains(inner, "tmux attach-session") {
+		t.Errorf("expected inner command to contain 'tmux attach-session', got: %s", inner)
+	}
+	if strings.Contains(inner, "sudo -u sandbox") {
+		t.Errorf("expected NO 'sudo -u sandbox' wrapper in inner command, got: %s", inner)
+	}
+	if strings.Contains(inner, `\\"`) || strings.Contains(inner, `\\\"`) {
+		t.Errorf("inner command appears to contain over-escaped backslashes (manual escaping leak), got: %q", inner)
 	}
 }

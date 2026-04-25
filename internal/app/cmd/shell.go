@@ -233,7 +233,15 @@ func execSSMSession(ctx context.Context, instanceID, region string, root, noBedr
 // found / invalid document error (the AWS CLI prints "InvalidDocument",
 // "DocumentNotFound", or "document was not found" to stderr depending on
 // the API path). Comparison is case-insensitive on the lower-cased message.
+// Exported as IsSSMDocumentMissingErr for testing.
 func isSSMDocumentMissingErr(err error) bool {
+	return IsSSMDocumentMissingErr(err)
+}
+
+// IsSSMDocumentMissingErr is the exported form of isSSMDocumentMissingErr,
+// available for testing. Reports whether err looks like an SSM document not
+// found / invalid document error.
+func IsSSMDocumentMissingErr(err error) bool {
 	if err == nil {
 		return false
 	}
