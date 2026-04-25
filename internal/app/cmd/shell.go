@@ -211,14 +211,36 @@ func execSSMSession(ctx context.Context, instanceID, region string, root, noBedr
 		}
 	}
 
+	// KM-Sandbox-Session uses Standard_Stream sessionType so Ctrl+C is forwarded
+	// as a PTY byte (SSH-like) instead of tearing down the session. No
+	// --parameters needed: the doc's `command` parameter defaults to "" which
+	// triggers the `exec bash -l` branch of the shellProfile (interactive shell
+	// as the sandbox user via runAsDefaultUser).
 	c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
 		"--target", instanceID, "--region", region, "--profile", "klanker-terraform",
-		"--document-name", "AWS-StartInteractiveCommand",
-		"--parameters", `{"command":["sudo -u sandbox -i"]}`)
+		"--document-name", "KM-Sandbox-Session")
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
-	return execFn(c)
+	err := execFn(c)
+	if isSSMDocumentMissingErr(err) {
+		return fmt.Errorf("KM-Sandbox-Session not provisioned in region %s; run `km init %s` to update regional infrastructure (was: %w)", region, region, err)
+	}
+	return err
+}
+
+// isSSMDocumentMissingErr reports whether err looks like an SSM document not
+// found / invalid document error (the AWS CLI prints "InvalidDocument",
+// "DocumentNotFound", or "document was not found" to stderr depending on
+// the API path). Comparison is case-insensitive on the lower-cased message.
+func isSSMDocumentMissingErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "invaliddocument") ||
+		strings.Contains(msg, "documentnotfound") ||
+		strings.Contains(msg, "document was not found")
 }
 
 // execSSMWithRetry runs an SSM session command, retrying on transient failures.
