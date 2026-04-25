@@ -5,6 +5,7 @@ status: draft
 nyquist_compliant: false
 wave_0_complete: false
 created: 2026-04-25
+revised: 2026-04-23
 ---
 
 # Phase 61 — Validation Strategy
@@ -51,11 +52,37 @@ created: 2026-04-25
 | `km agent attach` uses `KM-Sandbox-Session`, no `sudo` | unit | `go test ./internal/app/cmd/... -run TestAgentAttach` | `agent_test.go` | ⬜ pending |
 | `km agent run --interactive` uses `KM-Sandbox-Session`, no `sudo` | unit | `go test ./internal/app/cmd/... -run TestAgentInteractive` | `agent_test.go` | ⬜ pending |
 | `--parameters` JSON built via `encoding/json.Marshal` (no manual escape) | unit | `go test ./internal/app/cmd/... -run TestAgentParametersEscaping` | `agent_test.go` (new test) | ⬜ pending |
-| Operator IAM grants `ssm:StartSession` on `KM-Sandbox-Session` doc ARN | unit | `go test ./internal/app/cmd/... -run TestBootstrapPolicyIncludesSSMDoc` | `bootstrap_test.go` (new test) | ⬜ pending |
+| ~~Operator IAM grants `ssm:StartSession` on `KM-Sandbox-Session` doc ARN~~ | ~~unit~~ | **N/A — IAM change confirmed unnecessary** | n/a | ⛔ N/A |
 | Backwards compat: missing doc region fails fast with actionable error | unit | `go test ./internal/app/cmd/... -run TestShellCmd_MissingSSMDoc` | `shell_test.go` (new test) | ⬜ pending |
 | Ctrl+C forwards SIGINT to remote foreground process (does not terminate session) | manual | UAT steps 2-5 in 61-CONTEXT.md | n/a (manual) | ⬜ pending |
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky · ⛔ N/A*
+
+### N/A Rationale: `TestBootstrapPolicyIncludesSSMDoc`
+
+The original validation row called for a unit test asserting that the operator's
+`ssm:StartSession` IAM allow-list policy includes `arn:aws:ssm:<region>:<acct>:document/KM-Sandbox-Session`.
+This row is marked **N/A** for the following auditable reasons (matches `<decisions_revised>` in 61-01-PLAN.md):
+
+1. **No SCP change required.** RESEARCH.md (61-RESEARCH.md, lines 363-391) confirms
+   the SCP `DenySSMPivot` already permits the operator's SSO role via the
+   `trustedSSM` allow-list (`bootstrap.go:338-343` includes
+   `arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*`).
+
+2. **No per-resource ALLOW policy in this Terraform repository.**
+   `grep -r 'ssm:StartSession' infra/modules/` returns only the SCP deny entry —
+   there is no operator role allow-list policy in this repo whose Resource list
+   could be extended with the new document ARN. The operator's SSO permission
+   set uses **AdministratorAccess**, granted outside this repo (in IAM Identity
+   Center / Control Tower).
+
+3. **No meaningful assertion target.** A unit test would have nothing to read or
+   assert — there is no allow-list to inspect. Inventing a placeholder test would
+   add maintenance burden without preventing any regression.
+
+**If a future change introduces a per-resource operator allow-list policy in
+`infra/modules/`,** restore this row, add the ARN to that policy, and write the
+unit test at that time. Track via a follow-up todo, not by retro-editing Phase 61.
 
 ---
 
@@ -64,7 +91,7 @@ created: 2026-04-25
 Test infrastructure already exists (Go stdlib + existing test files). Wave 0 work:
 
 - [ ] `infra/modules/ssm-session-doc/v1.0.0/main.tf`, `variables.tf`, `outputs.tf`, `terragrunt.hcl` template — new module skeleton must exist before CLI changes can reference it consistently
-- [ ] Test stubs in `shell_test.go`, `agent_test.go`, `init_test.go`, `bootstrap_test.go` for the new behaviors above (red tests first, in TDD spirit, before implementation)
+- [ ] Test stubs in `shell_test.go`, `agent_test.go`, `init_test.go` for the new behaviors above (red tests first, in TDD spirit, before implementation). `bootstrap_test.go` is no longer in scope — see N/A rationale above.
 
 If none of those new tests can be written until the planner specifies the helper APIs, Wave 0 is just the Terraform module skeleton.
 
