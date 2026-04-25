@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 61-01-PLAN.md
-last_updated: "2026-04-25T23:06:16.891Z"
+stopped_at: Completed 61-02-PLAN.md
+last_updated: "2026-04-25T23:28:32.929Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
   total_phases: 61
   completed_phases: 55
   total_plans: 170
-  completed_plans: 169
+  completed_plans: 170
   percent: 0
 ---
 
@@ -211,6 +211,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 60 P02 | 743 | 2 tasks | 5 files |
 | Phase 60 P03 | 20min | 2 tasks | 2 files |
 | Phase 61-km-shell-ctrl-c-fix P01 | 156 | 2 tasks | 6 files |
+| Phase 61-km-shell-ctrl-c-fix P02 | 1210 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -583,6 +584,9 @@ Recent decisions affecting current work:
 - [Phase 60]: calculateComputeCost subtracts pausedSeconds from elapsed with zero clamp; HandleBudgetCheck reads budget first and threads closed+open pause intervals; enforceBudgetCompute records pausedAt after EC2 StopInstances so billing clock stops
 - [Phase 61-km-shell-ctrl-c-fix]: CONTEXT.md IAM locked decision overridden: no per-resource ssm:StartSession ALLOW policy exists in infra/modules/ (only SCP deny); operator SSO uses AdministratorAccess from IAM Identity Center outside this repo
 - [Phase 61-km-shell-ctrl-c-fix]: KM-Sandbox-Session uses Standard_Stream sessionType + conditional shellProfile.linux (exec bash -l for empty command, bash -lc for non-empty) to fix Ctrl+C teardown bug in km shell/agent
+- [Phase 61-km-shell-ctrl-c-fix]: IsSSMDocumentMissingErr exported as thin wrapper over private form to allow external test package (cmd_test) access without changing internal visibility pattern
+- [Phase 61-km-shell-ctrl-c-fix]: km shell RunE deliberately discards runShell error (by design); TestShellCmd_MissingSSMDoc validates helper + error format directly rather than through cobra Execute path
+- [Phase 61-km-shell-ctrl-c-fix]: encoding/json.Marshal replaces fmt.Sprintf+strings.ReplaceAll for all SSM start-session --parameters JSON construction in agent.go
 
 ### Roadmap Evolution
 
@@ -658,6 +662,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-25T23:06:16.887Z
-Stopped at: Completed 61-01-PLAN.md
+Last session: 2026-04-25T23:28:32.924Z
+Stopped at: Completed 61-02-PLAN.md
 Resume file: None
