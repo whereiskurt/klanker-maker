@@ -764,6 +764,16 @@ Plans:
 - [ ] 33-02-PLAN.md — Compiler HCL + Terraform module for AMI resolution, root volume sizing, hibernation
 - [ ] 33-03-PLAN.md — Additional EBS volume: Terraform resources, compiler HCL, userdata auto-mount
 
+### Phase 33.1: Raw AMI ID support — extend schema, compiler, and Terraform to accept ami-xxxxxxxx IDs alongside slugs (prereq for Phase 56 snapshot lifecycle) (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 33
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 33.1 to break down)
+
 ### Phase 34: Agent Profiles: agent-orchestrator, goose, and codex sandbox profiles
 
 **Goal:** Three new SandboxProfile YAML files (agent-orchestrator, goose, codex) are added to profiles/ and pass km validate, giving operators ready-to-use sandbox environments for the broader AI coding agent ecosystem
