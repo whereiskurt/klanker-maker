@@ -769,7 +769,7 @@ Plans:
 **Goal:** Raw `ami-xxxxxxxx` IDs flow through profile YAML → JSON schema → Go compiler → HCL template → Terraform module → `aws_instance.ami` argument without regressing the existing slug behavior, unblocking Phase 56 snapshot lifecycle workflows.
 **Requirements**: P33.1-01, P33.1-02, P33.1-03, P33.1-04, P33.1-05, P33.1-06, P33.1-07
 **Depends on:** Phase 33
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 33.1-01-PLAN.md — Open ami JSON schema to oneOf(slug enum, raw-ID pattern); add isRawAMIID() helper and Wave 0 failing tests
