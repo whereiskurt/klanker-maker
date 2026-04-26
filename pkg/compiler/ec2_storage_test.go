@@ -1,6 +1,9 @@
 package compiler
 
 import (
+	"bytes"
+	"log"
+	"os"
 	"strings"
 	"testing"
 
@@ -310,5 +313,35 @@ func TestAMISlugInHCLEmitsEmptyAMIID(t *testing.T) {
 	wantAMIIDEmpty := `ami_id                 = ""`
 	if !strings.Contains(hcl, wantAMIIDEmpty) {
 		t.Errorf("HCL output missing %q\ngot:\n%s", wantAMIIDEmpty, hcl)
+	}
+}
+
+// ============================================================
+// Phase 33.1 Plan 02: Hibernation + raw AMI warning test
+// ============================================================
+
+// TestHibernationRawAMIWarning verifies that hibernation=true + raw AMI ID emits a log warning
+// (not an error) and the HCL still contains the raw ami_id passthrough.
+func TestHibernationRawAMIWarning(t *testing.T) {
+	p := minimalEC2StorageProfile()
+	p.Spec.Runtime.Hibernation = true
+	p.Spec.Runtime.AMI = "ami-0abcdef1234567890"
+
+	// Capture log output
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	// useSpot = false (hibernation requires on-demand)
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	if err != nil {
+		t.Fatalf("expected success (warning only), got error: %v", err)
+	}
+	if !strings.Contains(hcl, `ami_id                 = "ami-0abcdef1234567890"`) {
+		t.Errorf("HCL output missing ami_id passthrough")
+	}
+	logged := buf.String()
+	if !strings.Contains(logged, "hibernation") || !strings.Contains(logged, "encrypted") {
+		t.Errorf("expected hibernation+encryption warning in log, got %q", logged)
 	}
 }

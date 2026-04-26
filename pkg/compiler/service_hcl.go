@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"strings"
@@ -79,10 +80,11 @@ const ec2ServiceHCLTemplate = `locals {
 
     enable_bedrock = {{ .EnableBedrock }}
 
-    # EC2 storage and AMI (Phase 33)
+    # EC2 storage and AMI (Phase 33 / 33.1)
     root_volume_size_gb    = {{ .RootVolumeSizeGB }}
     hibernation_enabled    = {{ .HibernationEnabled }}
     ami_slug               = "{{ .AMISlug }}"
+    ami_id                 = "{{ .AMIID }}"
 
     # Additional EBS volume (Phase 33)
     additional_volume_size_gb    = {{ .AdditionalVolumeSizeGB }}
@@ -409,10 +411,14 @@ type ec2HCLParams struct {
 	GitHubSSMPath      string   // /sandbox/{sandbox-id}/github-token
 	GitHubAllowedRepos []string // from profile.sourceAccess.github.allowedRepos
 	GitHubPermissions  string   // HCL map literal e.g. { contents = "read" }
-	// EC2 storage and AMI fields (Phase 33)
+	// EC2 storage and AMI fields (Phase 33 / 33.1)
+	// AMISlug and AMIID are a discriminated union: exactly one is non-empty at render time.
+	// AMISlug is set when spec.runtime.ami is a named slug (or empty → default slug).
+	// AMIID  is set when spec.runtime.ami is a raw ami-xxxxxxxx ID (Phase 33.1).
 	RootVolumeSizeGB   int    // root EBS volume size in GB; 0 means use AMI default
 	HibernationEnabled bool   // enable EC2 hibernation (on-demand only)
-	AMISlug            string // AMI slug for lookup: amazon-linux-2023, ubuntu-24.04, ubuntu-22.04
+	AMISlug            string // AMI slug for data.aws_ami lookup; empty when raw ID is used
+	AMIID              string // raw EC2 AMI ID (Phase 33.1); empty when slug is used
 	// Additional EBS volume fields (Phase 33)
 	AdditionalVolumeSizeGB    int    // additional data volume size in GB; 0 means no additional volume
 	AdditionalVolumeEncrypted bool   // encrypt the additional EBS volume
@@ -618,6 +624,12 @@ func validateEC2StorageFields(p *profile.SandboxProfile, useSpot bool) error {
 	if p.Spec.Runtime.AdditionalVolume != nil && !strings.HasPrefix(substrate, "ec2") {
 		return fmt.Errorf("additionalVolume is not supported for %s substrate", substrate)
 	}
+	// Phase 33.1: hibernation + raw AMI ID requires the AMI's own root volume to be encrypted.
+	// The slug path encrypts via root_block_device override, but a raw AMI's encryption state
+	// is fixed at AMI creation time. We can't verify without an AWS API call, so we warn.
+	if p.Spec.Runtime.Hibernation && isRawAMIID(p.Spec.Runtime.AMI) {
+		log.Printf("warning: hibernation enabled with raw AMI %q — operator must ensure the AMI's root volume is encrypted; otherwise terraform apply will fail with InvalidParameterCombination", p.Spec.Runtime.AMI)
+	}
 	return nil
 }
 
@@ -654,14 +666,25 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		AILimit:          aiLimit,
 		WarningThreshold: warningThreshold,
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
-		// EC2 storage and AMI fields (Phase 33)
+		// EC2 storage and AMI fields (Phase 33 / 33.1)
 		RootVolumeSizeGB:   p.Spec.Runtime.RootVolumeSize,
 		HibernationEnabled: p.Spec.Runtime.Hibernation,
 		AMISlug: func() string {
-			if p.Spec.Runtime.AMI != "" {
+			// Phase 33.1: empty when raw ID is provided (Terraform branches on this)
+			if p.Spec.Runtime.AMI == "" {
+				return "amazon-linux-2023" // Phase 33 default preserved
+			}
+			if isRawAMIID(p.Spec.Runtime.AMI) {
+				return "" // raw ID path: AMISlug intentionally empty
+			}
+			return p.Spec.Runtime.AMI // named slug
+		}(),
+		AMIID: func() string {
+			// Phase 33.1: only set when ami is a raw ami-xxxxxxxx ID
+			if isRawAMIID(p.Spec.Runtime.AMI) {
 				return p.Spec.Runtime.AMI
 			}
-			return "amazon-linux-2023"
+			return ""
 		}(),
 		// Additional EBS volume fields (Phase 33)
 		AdditionalVolumeSizeGB: func() int {
