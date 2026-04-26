@@ -1,11 +1,11 @@
 apiVersion: klankermaker.ai/v1alpha1
 kind: SandboxProfile
 metadata:
-  name: learn
+  name: dc34
   labels:
     tier: development
     tool: alltools
-  prefix: dc
+  prefix: dc34
 
 spec:
   lifecycle:
@@ -75,6 +75,7 @@ spec:
       - "su - sandbox -c 'npx -y get-shit-done-cc --claude --codex --global'"
       - "su - sandbox -c 'git clone --depth 1 https://github.com/whereiskurt/defcon.run.34 /workspace/defcon.run.34'"
       - "su - sandbox -c 'git clone --depth 1 https://github.com/whereiskurt/meshtk /workspace/meshtk'"
+      - "su - sandbox -c 'git clone --depth 1 https://github.com/whereiskurt/klanker-maker /workspace/klanker-maker'"
       
   sourceAccess:
     mode: allowlist
