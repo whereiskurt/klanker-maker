@@ -1464,6 +1464,9 @@ usermod -s /usr/local/bin/km-sandbox-shell sandbox
 # for both SSM-initiated sessions and direct sandbox-user logins.
 cat > /usr/local/bin/km-session-entry << 'ENTRYEOF'
 #!/bin/bash
+# Land in the user's HOME — SSM agent's runAs preserves the agent's CWD
+# (typically /usr/bin), and bash --login does not auto-chdir to HOME.
+cd "${HOME:-/home/sandbox}" 2>/dev/null || true
 if [ -z "$1" ]; then
   exec /usr/local/bin/km-sandbox-shell
 else
