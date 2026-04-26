@@ -35,13 +35,15 @@ func defaultShellExec(c *exec.Cmd) error {
 }
 
 // runSSMInteractiveSubprocess runs a subprocess that hosts an interactive SSM
-// session and ignores SIGINT/SIGTSTP for the duration so the
-// session-manager-plugin can handle terminal signals — Ctrl+C reaches the
-// remote PTY instead of killing km and orphaning the plugin (which then
-// errors with "read /dev/stdin: input/output error").
+// session and ignores terminal signals (SIGINT, SIGQUIT, SIGTSTP) for the
+// duration so the session-manager-plugin can handle them — Ctrl+C / Ctrl-\
+// reach the remote PTY instead of killing km and orphaning the plugin
+// (which would error with "read /dev/stdin: input/output error" on Ctrl+C
+// or trigger the Go runtime SIGQUIT goroutine dump on Ctrl-\). Mirrors
+// the SSH client signal model.
 func runSSMInteractiveSubprocess(execFn ShellExecFunc, c *exec.Cmd) error {
-	signal.Ignore(os.Interrupt, syscall.SIGTSTP)
-	defer signal.Reset(os.Interrupt, syscall.SIGTSTP)
+	signal.Ignore(os.Interrupt, syscall.SIGQUIT, syscall.SIGTSTP)
+	defer signal.Reset(os.Interrupt, syscall.SIGQUIT, syscall.SIGTSTP)
 	return execFn(c)
 }
 
