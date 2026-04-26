@@ -247,6 +247,98 @@ max_sandboxes: 5
 	}
 }
 
+// TestConfig_DoctorStaleAMIDays_Default verifies that DoctorStaleAMIDays defaults to 30
+// when no km-config.yaml is present and no env var is set.
+func TestConfig_DoctorStaleAMIDays_Default(t *testing.T) {
+	dir := t.TempDir()
+
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.DoctorStaleAMIDays != 30 {
+		t.Errorf("DoctorStaleAMIDays: got %d, want 30 (default)", cfg.DoctorStaleAMIDays)
+	}
+}
+
+// TestConfig_DoctorStaleAMIDays_EnvOverride verifies that KM_DOCTOR_STALE_AMI_DAYS=7
+// overrides the default value.
+func TestConfig_DoctorStaleAMIDays_EnvOverride(t *testing.T) {
+	dir := t.TempDir()
+
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	t.Setenv("KM_DOCTOR_STALE_AMI_DAYS", "7")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.DoctorStaleAMIDays != 7 {
+		t.Errorf("DoctorStaleAMIDays: got %d, want 7 (env override)", cfg.DoctorStaleAMIDays)
+	}
+}
+
+// TestConfig_DoctorStaleAMIDays_FileOverride verifies that doctor_stale_ami_days: 14
+// in km-config.yaml is honored by Load().
+func TestConfig_DoctorStaleAMIDays_FileOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: test.example.com
+doctor_stale_ami_days: 14
+`)
+
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.DoctorStaleAMIDays != 14 {
+		t.Errorf("DoctorStaleAMIDays: got %d, want 14 (file override)", cfg.DoctorStaleAMIDays)
+	}
+}
+
+// TestConfig_DoctorStaleAMIDays_ZeroFallsBackToDefault verifies that a zero value
+// is clamped back to 30 (guards against operator misconfiguration).
+func TestConfig_DoctorStaleAMIDays_ZeroFallsBackToDefault(t *testing.T) {
+	dir := t.TempDir()
+
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	t.Setenv("KM_DOCTOR_STALE_AMI_DAYS", "0")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.DoctorStaleAMIDays != 30 {
+		t.Errorf("DoctorStaleAMIDays: got %d, want 30 (zero clamped to default)", cfg.DoctorStaleAMIDays)
+	}
+}
+
 // TestLoadEnvOverride verifies that KM_DOMAIN env var overrides km-config.yaml.
 func TestLoadEnvOverride(t *testing.T) {
 	dir := t.TempDir()
