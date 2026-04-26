@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -33,6 +34,7 @@ import (
 	"github.com/spf13/cobra"
 	appcfg "github.com/whereiskurt/klankrmkr/internal/app/config"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	profilepkg "github.com/whereiskurt/klankrmkr/pkg/profile"
 )
 
 // CheckStatus is the result classification for a single doctor check.
@@ -153,6 +155,12 @@ type DoctorConfigProvider interface {
 	GetIdentityTableName() string
 	GetAWSProfile() string
 	GetArtifactsBucket() string
+	// GetDoctorStaleAMIDays returns the threshold in days for the stale-AMI check.
+	// Default is 30 (set in Config.DoctorStaleAMIDays by Plan 02).
+	GetDoctorStaleAMIDays() int
+	// GetProfileSearchPaths returns the list of directories searched for profile YAML files.
+	// Used by checkStaleAMIs to skip AMIs that are still referenced by a profile.
+	GetProfileSearchPaths() []string
 }
 
 // appConfigAdapter wraps *config.Config to satisfy DoctorConfigProvider.
@@ -171,6 +179,8 @@ func (a *appConfigAdapter) GetBudgetTableName() string      { return a.cfg.Budge
 func (a *appConfigAdapter) GetIdentityTableName() string    { return a.cfg.IdentityTableName }
 func (a *appConfigAdapter) GetAWSProfile() string           { return a.cfg.AWSProfile }
 func (a *appConfigAdapter) GetArtifactsBucket() string      { return a.cfg.ArtifactsBucket }
+func (a *appConfigAdapter) GetDoctorStaleAMIDays() int      { return a.cfg.DoctorStaleAMIDays }
+func (a *appConfigAdapter) GetProfileSearchPaths() []string { return a.cfg.ProfileSearchPaths }
 
 // DoctorDeps holds all injected AWS clients for doctor checks.
 // Nil fields cause their corresponding checks to be skipped.
@@ -196,8 +206,15 @@ type DoctorDeps struct {
 	SchedulerClient kmaws.SchedulerAPI
 	// EC2 instance client for orphaned instance detection.
 	EC2InstanceClient EC2InstanceAPI
+	// EC2AMIClients is a map from region name to EC2AMIAPI client.
+	// Populated by initRealDeps for the primary region (and all configured regions
+	// when --all-regions is set). Nil causes the stale-AMI check to be skipped.
+	EC2AMIClients map[string]kmaws.EC2AMIAPI
 	// DryRun controls whether stale resource cleanup checks delete resources.
 	DryRun bool
+	// AllRegions controls whether regional checks run against all configured regions
+	// (PrimaryRegion + KM_REPLICA_REGION CSV) or only the primary region.
+	AllRegions bool
 }
 
 // =============================================================================
@@ -1254,6 +1271,174 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 }
 
 // =============================================================================
+// checkStaleAMIs — stale custom AMI detection (Plan 56-06)
+// =============================================================================
+
+// sandboxUsesAMIInDoctor checks whether a sandbox record references the given AMI
+// by resolving sb.Profile to a YAML file in searchPaths and reading spec.runtime.ami.
+//
+// Resolution rule (per CONTEXT.md locked decision):
+//   For each dir in searchPaths (in order):
+//     candidate := filepath.Join(dir, sb.Profile + ".yaml")
+//     if file exists (case-insensitive base-name match) → parse and compare; first match wins.
+//   If no file is found → return false (cannot determine; don't flag false positives).
+//
+// Limitation: this is profile-file-based. A running sandbox whose profile file has been
+// deleted or renamed after creation will NOT be detected as "using" the AMI; that AMI
+// may be falsely flagged stale even though instances are still booting from it.
+// If SandboxRecord gains a persisted AMI field in the future, extend this function to
+// fall back to that field. Operators should be aware of this scope limitation.
+func sandboxUsesAMIInDoctor(sb kmaws.SandboxRecord, searchPaths []string, amiID string) bool {
+	if sb.Profile == "" {
+		return false
+	}
+	for _, dir := range searchPaths {
+		// Expand leading ~
+		expanded := dir
+		if strings.HasPrefix(expanded, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				expanded = home + expanded[1:]
+			}
+		}
+		// Read all entries in the directory for case-insensitive matching.
+		entries, err := os.ReadDir(expanded)
+		if err != nil {
+			continue
+		}
+		wantBase := sb.Profile + ".yaml"
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if !strings.EqualFold(entry.Name(), wantBase) {
+				continue
+			}
+			// Found a match — parse and check the AMI field.
+			fullPath := filepath.Join(expanded, entry.Name())
+			data, readErr := os.ReadFile(fullPath)
+			if readErr != nil {
+				continue
+			}
+			p, parseErr := profilepkg.Parse(data)
+			if parseErr != nil {
+				continue // tolerate parse errors silently
+			}
+			if p.Spec.Runtime.AMI == amiID {
+				return true
+			}
+			// First match wins — stop searching this dir even if AMI doesn't match.
+			break
+		}
+	}
+	return false
+}
+
+// checkStaleAMIs lists km-tagged self-owned AMIs in the given region and flags
+// those that are (a) older than staleDays AND (b) not referenced by any profile
+// in profileSearchPaths AND (c) not backing any running sandbox.
+// Returns CheckOK when no stale AMIs are found, CheckWarn with the list otherwise.
+// No deletion is performed in Phase 56 (flag-only).
+func checkStaleAMIs(ctx context.Context, region string, amiClient kmaws.EC2AMIAPI, lister SandboxLister, profileSearchPaths []string, staleDays int) CheckResult {
+	name := fmt.Sprintf("Stale AMIs (%s)", region)
+
+	if amiClient == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "EC2 AMI client not available"}
+	}
+
+	images, err := kmaws.ListBakedAMIs(ctx, amiClient)
+	if err != nil {
+		return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not list AMIs: %v", err)}
+	}
+
+	if staleDays <= 0 {
+		staleDays = 30
+	}
+	threshold := time.Now().UTC().Add(-time.Duration(staleDays) * 24 * time.Hour)
+
+	// Collect running sandbox records once for all AMIs in this region.
+	var sandboxRecords []kmaws.SandboxRecord
+	if lister != nil {
+		records, lErr := lister.ListSandboxes(ctx, false)
+		if lErr == nil {
+			sandboxRecords = records
+		}
+	}
+
+	type staleEntry struct {
+		amiID   string
+		ageDays int
+		created time.Time
+	}
+	var stale []staleEntry
+
+	for _, img := range images {
+		if img.CreationDate == nil {
+			continue // no creation date — skip silently
+		}
+		// Try multiple time formats used by EC2 API.
+		var created time.Time
+		var parseErr error
+		for _, layout := range []string{"2006-01-02T15:04:05.000Z", time.RFC3339} {
+			created, parseErr = time.Parse(layout, *img.CreationDate)
+			if parseErr == nil {
+				break
+			}
+		}
+		if parseErr != nil {
+			continue // unparsable creation date — skip silently
+		}
+
+		if !created.Before(threshold) {
+			continue // within threshold — not stale by age
+		}
+
+		amiID := awssdk.ToString(img.ImageId)
+
+		// Skip if any profile file references this AMI.
+		refs, _ := FindProfilesReferencingAMI(profileSearchPaths, amiID)
+		if len(refs) > 0 {
+			continue
+		}
+
+		// Skip if any running sandbox's profile maps to this AMI.
+		backedByRunning := false
+		for _, sb := range sandboxRecords {
+			if sandboxUsesAMIInDoctor(sb, profileSearchPaths, amiID) {
+				backedByRunning = true
+				break
+			}
+		}
+		if backedByRunning {
+			continue
+		}
+
+		ageDays := int(time.Since(created).Hours() / 24)
+		stale = append(stale, staleEntry{amiID: amiID, ageDays: ageDays, created: created})
+	}
+
+	if len(stale) == 0 {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckOK,
+			Message: fmt.Sprintf("No stale AMIs in %s (threshold: %dd)", region, staleDays),
+		}
+	}
+
+	// Build a human-readable message listing all stale AMIs.
+	var parts []string
+	for _, s := range stale {
+		parts = append(parts, fmt.Sprintf("%s (%dd, created %s)", s.amiID, s.ageDays, s.created.Format("2006-01-02")))
+	}
+	msg := fmt.Sprintf("%d stale AMI(s) in %s: %s", len(stale), region, strings.Join(parts, ", "))
+	return CheckResult{
+		Name:        name,
+		Status:      CheckWarn,
+		Message:     msg,
+		Remediation: "Run 'km ami delete <ami-id>' after reviewing profile references and running sandboxes",
+	}
+}
+
+// =============================================================================
 // Parallel execution helper
 // =============================================================================
 
@@ -1739,6 +1924,19 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkOrphanedEC2(ctx, ec2InstanceClient, listerForCleanup)
 	})
 
+	// Stale AMI checks — one per region (mirrors EC2Clients fan-out pattern).
+	if deps.EC2AMIClients != nil {
+		staleDays := cfg.GetDoctorStaleAMIDays()
+		searchPaths := cfg.GetProfileSearchPaths()
+		for region, c := range deps.EC2AMIClients {
+			r := region
+			client := c
+			checks = append(checks, func(ctx context.Context) CheckResult {
+				return checkStaleAMIs(ctx, r, client, listerForCleanup, searchPaths, staleDays)
+			})
+		}
+	}
+
 	// Pinned dependency version checks — warn when newer versions are available.
 	checks = append(checks, func(_ context.Context) CheckResult {
 		return checkPinnedVersions()
@@ -1810,20 +2008,63 @@ func initRealDeps(ctx context.Context, cfg DoctorConfigProvider) *DoctorDeps {
 	deps.EC2InstanceClient = ec2.NewFromConfig(awsCfg)
 
 	// Per-region EC2 clients.
-	deps.EC2Clients = make(map[string]EC2DescribeAPI)
 	primaryRegion := cfg.GetPrimaryRegion()
+
+	// Build region list: primary always included; replicas added when allRegions is set.
+	regions := []string{primaryRegion}
+	if deps.AllRegions {
+		if csv := os.Getenv("KM_REPLICA_REGION"); csv != "" {
+			for _, r := range strings.Split(csv, ",") {
+				r = strings.TrimSpace(r)
+				if r != "" && r != primaryRegion {
+					regions = append(regions, r)
+				}
+			}
+		}
+	} else {
+		// Default (single-region) path: still pick up one replica for VPC checks
+		// to preserve pre-existing behaviour, but EC2AMIClients will be primary-only.
+		if replicaRegion := os.Getenv("KM_REPLICA_REGION"); replicaRegion != "" && replicaRegion != primaryRegion {
+			_ = replicaRegion // handled below for VPC only
+		}
+	}
+
+	deps.EC2Clients = make(map[string]EC2DescribeAPI)
+	deps.EC2AMIClients = make(map[string]kmaws.EC2AMIAPI)
+
 	ec2Cfg := awsCfg.Copy()
 	ec2Cfg.Region = primaryRegion
 	deps.EC2Clients[primaryRegion] = ec2.NewFromConfig(ec2Cfg)
+	deps.EC2AMIClients[primaryRegion] = ec2.NewFromConfig(ec2Cfg)
 
-	// Optional replica region.
-	if replicaRegion := os.Getenv("KM_REPLICA_REGION"); replicaRegion != "" && replicaRegion != primaryRegion {
-		replicaCfg, err := config.LoadDefaultConfig(ctx,
-			config.WithSharedConfigProfile(profile),
-			config.WithRegion(replicaRegion),
-		)
-		if err == nil {
-			deps.EC2Clients[replicaRegion] = ec2.NewFromConfig(replicaCfg)
+	// Add replica region for VPC checks (pre-existing single-region behaviour).
+	if !deps.AllRegions {
+		if replicaRegion := os.Getenv("KM_REPLICA_REGION"); replicaRegion != "" && replicaRegion != primaryRegion {
+			replicaCfg, rErr := config.LoadDefaultConfig(ctx,
+				config.WithSharedConfigProfile(profile),
+				config.WithRegion(replicaRegion),
+			)
+			if rErr == nil {
+				deps.EC2Clients[replicaRegion] = ec2.NewFromConfig(replicaCfg)
+				// EC2AMIClients is NOT expanded here — only primary region in default scope.
+			}
+		}
+	}
+
+	// When --all-regions, populate both EC2Clients and EC2AMIClients for all regions.
+	if deps.AllRegions {
+		for _, r := range regions {
+			if r == primaryRegion {
+				continue // already added above
+			}
+			rCfg, rErr := config.LoadDefaultConfig(ctx,
+				config.WithSharedConfigProfile(profile),
+				config.WithRegion(r),
+			)
+			if rErr == nil {
+				deps.EC2Clients[r] = ec2.NewFromConfig(rCfg)
+				deps.EC2AMIClients[r] = ec2.NewFromConfig(rCfg)
+			}
 		}
 	}
 

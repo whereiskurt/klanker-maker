@@ -616,17 +616,19 @@ type testConfig struct {
 // doctorConfigProvider is the interface that checkConfig accepts.
 // Defined in doctor.go.
 
-func (c *testConfig) GetDomain() string              { return c.domain }
-func (c *testConfig) GetManagementAccountID() string  { return c.mgmtAcct }
-func (c *testConfig) GetTerraformAccountID() string   { return c.tfAcct }
-func (c *testConfig) GetApplicationAccountID() string { return c.appAcct }
-func (c *testConfig) GetSSOStartURL() string          { return c.ssoURL }
-func (c *testConfig) GetPrimaryRegion() string        { return c.region }
-func (c *testConfig) GetStateBucket() string          { return "" }
-func (c *testConfig) GetBudgetTableName() string      { return "" }
-func (c *testConfig) GetIdentityTableName() string    { return "" }
-func (c *testConfig) GetAWSProfile() string           { return "" }
-func (c *testConfig) GetArtifactsBucket() string      { return "" }
+func (c *testConfig) GetDomain() string               { return c.domain }
+func (c *testConfig) GetManagementAccountID() string   { return c.mgmtAcct }
+func (c *testConfig) GetTerraformAccountID() string    { return c.tfAcct }
+func (c *testConfig) GetApplicationAccountID() string  { return c.appAcct }
+func (c *testConfig) GetSSOStartURL() string           { return c.ssoURL }
+func (c *testConfig) GetPrimaryRegion() string         { return c.region }
+func (c *testConfig) GetStateBucket() string           { return "" }
+func (c *testConfig) GetBudgetTableName() string       { return "" }
+func (c *testConfig) GetIdentityTableName() string     { return "" }
+func (c *testConfig) GetAWSProfile() string            { return "" }
+func (c *testConfig) GetArtifactsBucket() string       { return "" }
+func (c *testConfig) GetDoctorStaleAMIDays() int       { return 30 }
+func (c *testConfig) GetProfileSearchPaths() []string  { return nil }
 
 // =============================================================================
 // Tests: DoctorCmd (Task 2)
@@ -788,17 +790,19 @@ type testDoctorConfig struct {
 	awsProfile string
 }
 
-func (c *testDoctorConfig) GetDomain() string              { return c.domain }
-func (c *testDoctorConfig) GetManagementAccountID() string  { return c.mgmtAcct }
-func (c *testDoctorConfig) GetTerraformAccountID() string   { return c.tfAcct }
-func (c *testDoctorConfig) GetApplicationAccountID() string { return c.appAcct }
-func (c *testDoctorConfig) GetSSOStartURL() string          { return c.ssoURL }
-func (c *testDoctorConfig) GetPrimaryRegion() string        { return c.region }
-func (c *testDoctorConfig) GetStateBucket() string          { return "" }
-func (c *testDoctorConfig) GetBudgetTableName() string      { return "" }
-func (c *testDoctorConfig) GetIdentityTableName() string    { return "" }
-func (c *testDoctorConfig) GetAWSProfile() string           { return c.awsProfile }
-func (c *testDoctorConfig) GetArtifactsBucket() string      { return "" }
+func (c *testDoctorConfig) GetDomain() string               { return c.domain }
+func (c *testDoctorConfig) GetManagementAccountID() string   { return c.mgmtAcct }
+func (c *testDoctorConfig) GetTerraformAccountID() string    { return c.tfAcct }
+func (c *testDoctorConfig) GetApplicationAccountID() string  { return c.appAcct }
+func (c *testDoctorConfig) GetSSOStartURL() string           { return c.ssoURL }
+func (c *testDoctorConfig) GetPrimaryRegion() string         { return c.region }
+func (c *testDoctorConfig) GetStateBucket() string           { return "" }
+func (c *testDoctorConfig) GetBudgetTableName() string       { return "" }
+func (c *testDoctorConfig) GetIdentityTableName() string     { return "" }
+func (c *testDoctorConfig) GetAWSProfile() string            { return c.awsProfile }
+func (c *testDoctorConfig) GetArtifactsBucket() string       { return "" }
+func (c *testDoctorConfig) GetDoctorStaleAMIDays() int       { return 30 }
+func (c *testDoctorConfig) GetProfileSearchPaths() []string  { return nil }
 
 func allOKDeps() *DoctorDeps {
 	return &DoctorDeps{
