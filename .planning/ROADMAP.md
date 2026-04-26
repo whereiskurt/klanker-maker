@@ -1210,12 +1210,17 @@ Plans:
 ### Phase 56: Learn mode AMI snapshot and lifecycle management
 
 **Goal:** Add `--ami` flag to `km shell --learn` that snapshots the EC2 instance as a custom AMI on exit. The AMI ID is written into the generated profile YAML at `spec.runtime.ami`, so future sandboxes boot from the pre-configured image with all packages/tools pre-installed. AMIs are tagged with sandbox metadata (sandbox-id, profile, alias, date). Add `km ami list` to show custom AMIs with age/size/usage and `km ami delete` for cleanup. Extend `km doctor` with a stale/unused AMI check that flags AMIs older than a configurable threshold or not referenced by any profile. The `initCommands` captured by Phase 55 serve as documentation of what's baked into the AMI and as a fallback for AMI-less regions.
-**Requirements**: TBD
-**Depends on:** Phase 55 (learn mode command capture), Phase 33 (AMI resolution)
-**Plans:** 0 plans
+**Requirements:** [P56-01, P56-02, P56-03, P56-04, P56-05, P56-06, P56-07, P56-08, P56-09, P56-10, P56-11, P56-12]
+**Depends on:** Phase 55 (learn mode command capture), Phase 33 (AMI resolution), Phase 33.1 (raw AMI ID schema)
+**Plans:** 6 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 56 to break down)
+- [ ] 56-01-PLAN.md — AWS SDK helpers (pkg/aws/ec2_ami.go) + mocks/tests for BakeAMI/DeleteAMI/CopyAMI/ListBakedAMIs
+- [ ] 56-02-PLAN.md — Config schema: Doctor.StaleAMIDays + km-config.yaml key (default 30)
+- [ ] 56-03-PLAN.md — SCP/IAM: add ec2:DeregisterImage / ec2:DeleteSnapshot / ec2:CreateTags to bootstrap.go DenyInfraAndStorage exemption
+- [ ] 56-04-PLAN.md — km ami Cobra subcommand tree (list/delete/bake/copy) + profile refcount scanner + BakeFromSandbox helper
+- [ ] 56-05-PLAN.md — km shell --learn --ami integration + Recorder.RecordAMI + generator emits spec.runtime.ami
+- [ ] 56-06-PLAN.md — km doctor checkStaleAMIs + DoctorDeps.EC2AMIClients + --all-regions fan-out
 
 ### Phase 57: Email enhancement — km-send --no-sign for external recipients, km-recv multipart/RFC5322 fixes, safe phrase validation on inbound, marketplace plugin email docs
 

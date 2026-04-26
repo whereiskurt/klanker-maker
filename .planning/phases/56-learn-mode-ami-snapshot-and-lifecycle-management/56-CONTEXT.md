@@ -41,9 +41,11 @@ Add AMI snapshot + lifecycle commands so an operator can bake the state of a lea
 - **Confirmation:** prompt before delete; `--yes` skips.
 
 ### AMI lifecycle policy — `km doctor` stale check
-- **Threshold:** configurable in `km-config.yaml` as `doctor.staleAMIDays`, **default 30 days**.
+- **Threshold:** configurable in `km-config.yaml` as `doctor_stale_ami_days` (flat snake_case key — see note below), **default 30 days**.
 - **"Unused" definition:** strict — AMI must be **(a) not referenced by any local profile in `profiles/`** AND **(b) not actively backing any running sandbox**. Both conditions required to flag as stale.
 - **Action:** doctor flags only (no auto-delete). Operator runs `km ami delete` after review. (Auto-cleanup `--apply` mode can be added later if needed.)
+
+> **Note on key naming (resolved during plan-check 2026-04-26):** Earlier draft of this CONTEXT.md referred to the key as `doctor.staleAMIDays` (nested camelCase). RESEARCH.md Open Question 3 recommended the flat snake_case form `doctor_stale_ami_days` to match existing config conventions in `km-config.yaml` (all existing keys are flat: `max_sandboxes`, `sandbox_table_name`, etc.). Plan 02 implements the flat form. CONTEXT.md updated here to reflect the locked decision: **the canonical key is `doctor_stale_ami_days`**.
 
 ### Multi-region behavior
 - **`km ami list` default scope:** current `KM_REGION` only. `--all-regions` flag walks all configured regions in parallel. Single-region targeted queries via `--region <r>`.
@@ -100,7 +102,7 @@ Add AMI snapshot + lifecycle commands so an operator can bake the state of a lea
 - **Doctor parallel checks:** `runChecks` fan-out at `doctor.go:1261`; each `checkXxx` returns `CheckResult` independently; results filtered/formatted at `formatCheckLine` (`doctor.go:1350`).
 - **Stale resource pattern:** `checkStaleKMSKeys`/`checkStaleIAMRoles`/`checkStaleSchedules`/`checkOrphanedEC2` all follow same shape: lister → AWS query → match against active set → return delta. `checkStaleAMIs` plugs in here.
 - **Region resolution:** `KM_REGION` env var driven by `cfg.PrimaryRegion` (`internal/app/cmd/create.go:333`); same pattern for any region-scoped command.
-- **Schema config:** `km-config.yaml` is an existing operator-side config file; adding `doctor.staleAMIDays` follows existing pattern.
+- **Schema config:** `km-config.yaml` is an existing operator-side config file; adding `doctor_stale_ami_days` (flat snake_case, per RESEARCH.md recommendation matching existing key conventions) follows existing pattern.
 
 ### Integration Points
 - **`internal/app/cmd/shell.go`** — `--ami` flag + post-exit snapshot integration in `runLearnPostExit`.
@@ -129,3 +131,4 @@ Add AMI snapshot + lifecycle commands so an operator can bake the state of a lea
 
 *Phase: 56-learn-mode-ami-snapshot-and-lifecycle-management*
 *Context gathered: 2026-04-26*
+*Updated 2026-04-26 (revision iteration 1): canonical key for stale-AMI threshold corrected to flat `doctor_stale_ami_days` per RESEARCH.md recommendation; matches existing km-config.yaml conventions.*
