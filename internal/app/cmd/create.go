@@ -700,10 +700,9 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		initScript.WriteString("#!/bin/bash\nset -e\n")
 		initScript.WriteString("echo '[km-init] Starting profile init...'\n")
 
-		// Inline commands
+		// Inline commands.
 		for _, cmd := range resolvedProfile.Spec.Execution.InitCommands {
-			initScript.WriteString(fmt.Sprintf("echo '[km-init] %s'\n", cmd))
-			initScript.WriteString(cmd + "\n")
+			initScript.WriteString(formatInitCommandLines(cmd))
 		}
 
 		// Embedded init scripts (file contents inlined)
@@ -2107,6 +2106,19 @@ func applyBudgetOverrides(p *profile.SandboxProfile, computeOverride, aiOverride
 
 // normalizeDuration converts common duration shorthand to Go-compatible format.
 // e.g. "16hr" → "16h", "30min" → "30m", "2hrs" → "2h"
+// formatInitCommandLines returns the two lines that go into /tmp/km-init.sh
+// for a single profile initCommand: a `[km-init] <cmd>` echo and the command
+// itself. Single quotes inside cmd are escaped using the standard `'\''`
+// dance (close quote, literal quote, reopen quote) so the surrounding echo
+// quotes can never close prematurely. Without escaping, a cmd like
+// `su - sandbox -c 'nvm install 22'` makes the echo line shell-parse as
+// "echo string + bare command", running `nvm install 22` as root before
+// the real su line runs — which silently breaks `set -e`-guarded scripts.
+func formatInitCommandLines(cmd string) string {
+	quotedCmd := strings.ReplaceAll(cmd, "'", `'\''`)
+	return fmt.Sprintf("echo '[km-init] %s'\n%s\n", quotedCmd, cmd)
+}
+
 func normalizeDuration(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.Replace(s, "hrs", "h", 1)
