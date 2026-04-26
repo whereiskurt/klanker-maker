@@ -766,13 +766,14 @@ Plans:
 
 ### Phase 33.1: Raw AMI ID support — extend schema, compiler, and Terraform to accept ami-xxxxxxxx IDs alongside slugs (prereq for Phase 56 snapshot lifecycle) (INSERTED)
 
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Goal:** Raw `ami-xxxxxxxx` IDs flow through profile YAML → JSON schema → Go compiler → HCL template → Terraform module → `aws_instance.ami` argument without regressing the existing slug behavior, unblocking Phase 56 snapshot lifecycle workflows.
+**Requirements**: P33.1-01, P33.1-02, P33.1-03, P33.1-04, P33.1-05, P33.1-06, P33.1-07
 **Depends on:** Phase 33
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 33.1 to break down)
+- [ ] 33.1-01-PLAN.md — Open ami JSON schema to oneOf(slug enum, raw-ID pattern); add isRawAMIID() helper and Wave 0 failing tests
+- [ ] 33.1-02-PLAN.md — Wire AMIID through ec2HCLParams + template, add var.ami_id and effective_ami_id to Terraform module, rewire instance resources
 
 ### Phase 34: Agent Profiles: agent-orchestrator, goose, and codex sandbox profiles
 
