@@ -238,6 +238,113 @@ func unmarshalYAML(data []byte, v interface{}) error {
 	return goyaml.Unmarshal(data, v)
 }
 
+// TestRecordAMI_StoresValue verifies that RecordAMI stores the value and AMI() retrieves it.
+func TestRecordAMI_StoresValue(t *testing.T) {
+	r := allowlistgen.NewRecorder()
+	if got := r.AMI(); got != "" {
+		t.Errorf("expected empty AMI by default, got %q", got)
+	}
+	r.RecordAMI("ami-0abc1234")
+	if got := r.AMI(); got != "ami-0abc1234" {
+		t.Errorf("expected ami-0abc1234, got %q", got)
+	}
+}
+
+// TestRecordAMI_TrimsAndIgnoresEmpty verifies trimming and empty-string no-op behaviour.
+func TestRecordAMI_TrimsAndIgnoresEmpty(t *testing.T) {
+	r := allowlistgen.NewRecorder()
+	r.RecordAMI("  ami-0abc1234  ")
+	if got := r.AMI(); got != "ami-0abc1234" {
+		t.Errorf("expected trimmed ami-0abc1234, got %q", got)
+	}
+	// Empty call should not overwrite existing value.
+	r.RecordAMI("")
+	if got := r.AMI(); got != "ami-0abc1234" {
+		t.Errorf("expected previous value preserved after empty RecordAMI, got %q", got)
+	}
+	// Whitespace-only call should also be ignored.
+	r.RecordAMI("   ")
+	if got := r.AMI(); got != "ami-0abc1234" {
+		t.Errorf("expected previous value preserved after whitespace-only RecordAMI, got %q", got)
+	}
+}
+
+// TestGenerate_WithAMI verifies that RecordAMI causes Generate to emit Spec.Runtime.AMI.
+func TestGenerate_WithAMI(t *testing.T) {
+	r := allowlistgen.NewRecorder()
+	r.RecordAMI("ami-0abc123")
+	r.RecordDNSQuery("example.com")
+
+	p, err := r.Generate("")
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	if p.Spec.Runtime.AMI != "ami-0abc123" {
+		t.Errorf("expected Spec.Runtime.AMI=ami-0abc123, got %q", p.Spec.Runtime.AMI)
+	}
+}
+
+// TestGenerate_WithoutAMI_DoesNotSetField verifies that Generate does not set
+// Spec.Runtime.AMI when RecordAMI has not been called (zero value / omitempty).
+func TestGenerate_WithoutAMI_DoesNotSetField(t *testing.T) {
+	r := allowlistgen.NewRecorder()
+	p, err := r.Generate("")
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	if p.Spec.Runtime.AMI != "" {
+		t.Errorf("expected Spec.Runtime.AMI to be empty when not recorded, got %q", p.Spec.Runtime.AMI)
+	}
+}
+
+// TestGenerateAnnotatedYAML_WithAMI_RoundTripsThroughYAML verifies that the AMI
+// value survives marshal/unmarshal through GenerateAnnotatedYAML → profile.Parse.
+func TestGenerateAnnotatedYAML_WithAMI_RoundTripsThroughYAML(t *testing.T) {
+	r := allowlistgen.NewRecorder()
+	r.RecordAMI("ami-0abc123")
+	r.RecordDNSQuery("example.com")
+
+	data, err := r.GenerateAnnotatedYAML("")
+	if err != nil {
+		t.Fatalf("GenerateAnnotatedYAML returned error: %v", err)
+	}
+
+	var p profile.SandboxProfile
+	if err := unmarshalYAML(data, &p); err != nil {
+		t.Fatalf("unmarshal failed: %v\nYAML:\n%s", err, string(data))
+	}
+	if p.Spec.Runtime.AMI != "ami-0abc123" {
+		t.Errorf("expected Spec.Runtime.AMI=ami-0abc123 after round-trip, got %q", p.Spec.Runtime.AMI)
+	}
+}
+
+// TestGenerate_WithAMIAndInitCommands_BothPresent verifies Phase 55 + Phase 56 compatibility:
+// RecordAMI and RecordCommand both called, output has both Spec.Runtime.AMI and
+// Spec.Execution.InitCommands populated.
+func TestGenerate_WithAMIAndInitCommands_BothPresent(t *testing.T) {
+	r := allowlistgen.NewRecorder()
+	r.RecordAMI("ami-0abc123")
+	r.RecordCommand("apt install curl")
+	r.RecordCommand("go build ./...")
+
+	p, err := r.Generate("")
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	if p.Spec.Runtime.AMI != "ami-0abc123" {
+		t.Errorf("expected Spec.Runtime.AMI=ami-0abc123, got %q", p.Spec.Runtime.AMI)
+	}
+	if len(p.Spec.Execution.InitCommands) != 2 {
+		t.Fatalf("expected 2 InitCommands, got %d: %v", len(p.Spec.Execution.InitCommands), p.Spec.Execution.InitCommands)
+	}
+	if p.Spec.Execution.InitCommands[0] != "apt install curl" {
+		t.Errorf("expected InitCommands[0]=apt install curl, got %q", p.Spec.Execution.InitCommands[0])
+	}
+	if p.Spec.Execution.InitCommands[1] != "go build ./..." {
+		t.Errorf("expected InitCommands[1]=go build ./..., got %q", p.Spec.Execution.InitCommands[1])
+	}
+}
+
 func TestGenerateWithCommands(t *testing.T) {
 	r := allowlistgen.NewRecorder()
 	r.RecordCommand("apt install curl")

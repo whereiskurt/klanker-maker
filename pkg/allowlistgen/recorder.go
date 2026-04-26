@@ -13,13 +13,14 @@ import (
 // shell commands observed during sandbox execution. All methods are safe for
 // concurrent use.
 type Recorder struct {
-	mu              sync.Mutex
-	dnsObserved     map[string]struct{}
-	hostObserved    map[string]struct{}
-	repoObserved    map[string]struct{}
-	refObserved     map[string]struct{}
-	commandSeen     map[string]struct{}
-	commandOrdered  []string
+	mu             sync.Mutex
+	dnsObserved    map[string]struct{}
+	hostObserved   map[string]struct{}
+	repoObserved   map[string]struct{}
+	refObserved    map[string]struct{}
+	commandSeen    map[string]struct{}
+	commandOrdered []string
+	amiID          string
 }
 
 // NewRecorder returns an initialised, empty Recorder.
@@ -160,4 +161,25 @@ func (r *Recorder) Commands() []string {
 	copy(out, r.commandOrdered)
 	r.mu.Unlock()
 	return out
+}
+
+// RecordAMI records an AMI ID to embed in the generated SandboxProfile. Empty
+// or whitespace-only values are ignored; the previous value is preserved.
+// Trimmed before storage. Mutex-locked for concurrent safety.
+func (r *Recorder) RecordAMI(amiID string) {
+	amiID = strings.TrimSpace(amiID)
+	if amiID == "" {
+		return
+	}
+	r.mu.Lock()
+	r.amiID = amiID
+	r.mu.Unlock()
+}
+
+// AMI returns the recorded AMI ID, or "" if none was recorded.
+func (r *Recorder) AMI() string {
+	r.mu.Lock()
+	id := r.amiID
+	r.mu.Unlock()
+	return id
 }

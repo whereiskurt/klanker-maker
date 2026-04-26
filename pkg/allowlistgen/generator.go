@@ -119,6 +119,11 @@ func (r *Recorder) Generate(base string) (*profile.SandboxProfile, error) {
 		p.Spec.Execution.InitCommands = cmds
 	}
 
+	// Populate AMI when recorded. Phase 33.1 raw-ID consumer path.
+	if amiID := r.AMI(); amiID != "" {
+		p.Spec.Runtime.AMI = amiID
+	}
+
 	return p, nil
 }
 
