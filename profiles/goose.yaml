@@ -20,6 +20,7 @@ spec:
     region: us-east-1
     rootVolumeSize: 15
     hibernation: true
+    ami: amazon-linux-2023
     mountEFS: true
     efsMountPoint: /shared
     additionalVolume:
