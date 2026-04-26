@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 33.1-01-PLAN.md
-last_updated: "2026-04-26T14:25:07.129Z"
+stopped_at: Completed 33.1-02-PLAN.md
+last_updated: "2026-04-26T14:31:15.711Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
   total_phases: 62
-  completed_phases: 56
+  completed_phases: 57
   total_plans: 172
-  completed_plans: 172
+  completed_plans: 173
   percent: 0
 ---
 
@@ -213,6 +213,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 61-km-shell-ctrl-c-fix P01 | 156 | 2 tasks | 6 files |
 | Phase 61-km-shell-ctrl-c-fix P02 | 1210 | 2 tasks | 4 files |
 | Phase 33.1-raw-ami-id-support P01 | 163s | 2 tasks | 4 files |
+| Phase 33.1 P02 | 420s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -590,6 +591,9 @@ Recent decisions affecting current work:
 - [Phase 61-km-shell-ctrl-c-fix]: encoding/json.Marshal replaces fmt.Sprintf+strings.ReplaceAll for all SSM start-session --parameters JSON construction in agent.go
 - [Phase 33.1-raw-ami-id-support]: Use profile.ValidateSchema (not profile.Parse) in schema rejection tests — Parse only does YAML unmarshal, ValidateSchema runs JSON schema validation
 - [Phase 33.1-raw-ami-id-support]: ami schema: oneOf with inner enum (4 slugs) + pattern (^ami-[0-9a-f]{8,17}$) subschemas; isRawAMIID() is single detection point in compiler
+- [Phase 33.1]: AMISlug and AMIID are discriminated union in ec2HCLParams — exactly one non-empty at render time
+- [Phase 33.1]: use_slug_lookup local gates data.aws_ami count on ami_slug presence; effective_ami_id uses length() guard not try()
+- [Phase 33.1]: Hibernation + raw AMI emits log.Printf warning not hard error — Phase 56 may use pre-encrypted private AMIs
 
 ### Roadmap Evolution
 
@@ -666,6 +670,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-26T14:25:07.124Z
-Stopped at: Completed 33.1-01-PLAN.md
+Last session: 2026-04-26T14:31:15.706Z
+Stopped at: Completed 33.1-02-PLAN.md
 Resume file: None
