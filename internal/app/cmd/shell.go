@@ -186,8 +186,10 @@ const ssmRetryThreshold = 10 * time.Second
 const ssmRetryDelay = 3 * time.Second
 
 // execSSMSession builds and runs an SSM session.
-// When root is false, it runs: sudo -u sandbox -i (restricted non-root user).
-// When root is true, it starts a standard root SSM session.
+// When root is false, it uses the KM-Sandbox-Session document (Standard_Stream
+// + runAsDefaultUser=sandbox), which lands as the restricted sandbox user with
+// a real PTY so Ctrl+C is forwarded as a byte to the remote shell.
+// When root is true, it starts a default SSM session (root via SSM agent).
 func execSSMSession(ctx context.Context, instanceID, region string, root, noBedrock bool, execFn ShellExecFunc) error {
 	if root {
 		return execSSMWithRetry(ctx, func() *exec.Cmd {
