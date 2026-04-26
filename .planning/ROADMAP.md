@@ -1285,3 +1285,19 @@ Plans:
 - [ ] 61-01-PLAN.md — Create regional `infra/modules/ssm-session-doc/v1.0.0/` Terraform module + Terragrunt live wiring + plug into `regionalModules()` + update init_test.go counts and add TestRegionalModulesIncludesSSMDoc
 - [ ] 61-02-PLAN.md — Switch all four CLI callsites (shell.go non-root, agent.go --claude / attach / run --interactive) to KM-Sandbox-Session via `encoding/json.Marshal`, drop sudo wrappers, add fail-fast on missing doc, update tests + add TestShellCmd_EC2_Root, TestShellCmd_MissingSSMDoc, TestAgentParametersEscaping
 - [ ] 61-03-PLAN.md — Manual UAT (7 scenarios) on a live sandbox: Ctrl+C forwarding for all four affected callsites, root-path regression guard, missing-doc fail-fast verification, signed-off UAT outcome table
+
+### Phase 62: Claude Code operator-notify hook for permission and idle events
+
+**Goal:** Claude Code agents running on km sandboxes emit signed emails to the operator (or a profile-specified override address) when they need permission to use a tool (`Notification` hook event) or finish a turn and are waiting for further input (`Stop` hook event). Behavior is controlled by four new `spec.cli` profile fields (`notifyOnPermission`, `notifyOnIdle`, `notifyCooldownSeconds`, `notificationEmailAddress`); `km shell` and `km agent run` gain `--notify-on-permission`/`--notify-on-idle` (and `--no-*`) flags that override per invocation. The hook script is wired into `~/.claude/settings.json` at compile time; profile fields write env-var defaults to `/etc/profile.d/km-notify-env.sh` (codebase convention; spec said `/etc/environment` but research overrode); CLI flags inject overrides into the SSM-launched Claude process. v1 is one-way notification only; v2 closed-loop (operator emails back, agent resumes) is out of scope here but the design (subject prefix `[<sandbox-id>] <event>`, single recipient field) is forward-compatible.
+**Spec:** `docs/superpowers/specs/2026-04-26-operator-notify-hook-design.md`
+**Requirements:** [HOOK-01, HOOK-02, HOOK-03, HOOK-04, HOOK-05]
+**Depends on:** Phase 45 (km-send/km-recv), Phase 50/51 (km agent run + tmux). All upstream deps already complete.
+**Plans:** 5 plans
+
+Plans:
+- [ ] 62-01-PLAN.md — Profile schema additions (`spec.cli.notify*`) + REQUIREMENTS.md HOOK-01..HOOK-05 registration
+- [ ] 62-02-PLAN.md — Compiler: inline km-notify-hook script via heredoc in `userdata.go`, write `/etc/profile.d/km-notify-env.sh` from profile fields, Go-side merge of settings.json hook entries via `encoding/json`
+- [ ] 62-03-PLAN.md — Hook script behavior tests: extract heredoc body, exec via bash with synthetic env + stdin payloads + stub km-send, cover gate / cooldown / Notification / Stop / send-failure invariants
+- [ ] 62-04-PLAN.md — CLI flag wiring: `km shell` (pre-session SendCommand writes `/etc/profile.d/zz-km-notify.sh`) + `km agent run` (extend `AgentRunOptions` with `*bool` notify fields, prepend `notifyEnvLines` to `BuildAgentShellCommands` script)
+- [ ] 62-05-PLAN.md — Manual UAT: provision live sandbox, exercise both event paths, confirm signed emails arrive at operator + override addresses, verify cooldown + CLI override behavior end-to-end
+

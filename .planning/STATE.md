@@ -684,6 +684,7 @@ None yet.
 - Phase 60 added: Budget compute accounting excludes paused/hibernated intervals — track pausedAt/resumedAt transitions, accumulate paused seconds in budget row, subtract from elapsed time in calculateComputeCost so hibernated EC2 stops accruing compute spend
 - Phase 61 added: km shell Ctrl+C fix — switch interactive SSM sessions from AWS-StartInteractiveCommand to a parameterized Standard_Stream document with runAsDefaultUser=sandbox
 - Phase 33.1 inserted after Phase 33: Raw AMI ID support — extend schema, compiler, and Terraform to accept ami-xxxxxxxx IDs alongside slugs (prereq for Phase 56 snapshot lifecycle) (URGENT)
+- Phase 62 added: Claude Code operator-notify hook — emit signed emails to operator (or override address) on Notification (permission) and Stop (idle) hook events; profile-driven (`spec.cli.notifyOnPermission/notifyOnIdle/notifyCooldownSeconds/notificationEmailAddress`) with `--notify-on-permission`/`--notify-on-idle` CLI overrides on `km shell`/`km agent run`. Hook installed at compile time; v1 notification-only with v2 closed-loop forward-compatible. Spec: `docs/superpowers/specs/2026-04-26-operator-notify-hook-design.md`
 
 ## Session Continuity
 
