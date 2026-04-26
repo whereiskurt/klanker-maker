@@ -316,7 +316,7 @@ func runAgent(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
-	err = execFn(c)
+	err = runSSMInteractiveSubprocess(execFn, c)
 	if isSSMDocumentMissingErr(err) {
 		return fmt.Errorf("KM-Sandbox-Session not provisioned in region %s; run `km init %s` to update regional infrastructure (was: %w)", rec.Region, rec.Region, err)
 	}
@@ -396,7 +396,7 @@ Examples:
 			c.Stdin = os.Stdin
 			c.Stdout = os.Stdout
 			c.Stderr = os.Stderr
-			err = execFn(c)
+			err = runSSMInteractiveSubprocess(execFn, c)
 			if isSSMDocumentMissingErr(err) {
 				return fmt.Errorf("KM-Sandbox-Session not provisioned in region %s; run `km init %s` to update regional infrastructure (was: %w)", rec.Region, rec.Region, err)
 			}
@@ -564,7 +564,7 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 		c.Stdin = os.Stdin
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
-		err = execFn(c)
+		err = runSSMInteractiveSubprocess(execFn, c)
 		if isSSMDocumentMissingErr(err) {
 			return fmt.Errorf("KM-Sandbox-Session not provisioned in region %s; run `km init %s` to update regional infrastructure (was: %w)", rec.Region, rec.Region, err)
 		}

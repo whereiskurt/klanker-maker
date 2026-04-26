@@ -9,7 +9,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 
@@ -30,6 +32,17 @@ type ShellExecFunc func(c *exec.Cmd) error
 // defaultShellExec calls cmd.Run() — the real subprocess execution path.
 func defaultShellExec(c *exec.Cmd) error {
 	return c.Run()
+}
+
+// runSSMInteractiveSubprocess runs a subprocess that hosts an interactive SSM
+// session and ignores SIGINT/SIGTSTP for the duration so the
+// session-manager-plugin can handle terminal signals — Ctrl+C reaches the
+// remote PTY instead of killing km and orphaning the plugin (which then
+// errors with "read /dev/stdin: input/output error").
+func runSSMInteractiveSubprocess(execFn ShellExecFunc, c *exec.Cmd) error {
+	signal.Ignore(os.Interrupt, syscall.SIGTSTP)
+	defer signal.Reset(os.Interrupt, syscall.SIGTSTP)
+	return execFn(c)
 }
 
 // NewShellCmd creates the "km shell" subcommand using the real AWS-backed fetcher.
@@ -222,7 +235,7 @@ func execSSMSession(ctx context.Context, instanceID, region string, root, noBedr
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
-	err := execFn(c)
+	err := runSSMInteractiveSubprocess(execFn, c)
 	if isSSMDocumentMissingErr(err) {
 		return fmt.Errorf("KM-Sandbox-Session not provisioned in region %s; run `km init %s` to update regional infrastructure (was: %w)", region, region, err)
 	}
@@ -268,7 +281,7 @@ func execSSMWithRetry(ctx context.Context, buildCmd func() *exec.Cmd, execFn She
 		c.Stderr = os.Stderr
 
 		start := time.Now()
-		lastErr = execFn(c)
+		lastErr = runSSMInteractiveSubprocess(execFn, c)
 		elapsed := time.Since(start)
 
 		// If the session lasted long enough, the user was actually connected —
