@@ -428,6 +428,7 @@ _km_audit() {
 PROMPT_COMMAND="_km_audit;${PROMPT_COMMAND}"
 
 _km_heartbeat() {
+  trap '' INT TERM
   while true; do
     sleep 60
     printf '{"timestamp":"%%s","sandbox_id":"%%s","event_type":"heartbeat","source":"shell","detail":{}}\n' \

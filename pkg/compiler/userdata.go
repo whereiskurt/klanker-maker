@@ -501,7 +501,13 @@ PROMPT_COMMAND="_km_audit;${PROMPT_COMMAND}"
 
 # Background heartbeat: keeps the sandbox alive while a session is open,
 # even during long-running commands. Killed automatically when the shell exits.
+# Ignores SIGINT/SIGTERM so Ctrl+C at the bash prompt doesn't kill it (without
+# this trap, SIGINT to the shell process group reaps the heartbeat and the
+# sandbox can be auto-killed by the idle-kill timer while the user is still
+# working — bash itself ignores SIGINT at the prompt, but this background
+# function does not).
 _km_heartbeat() {
+  trap '' INT TERM
   while true; do
     sleep 60
     printf '{"timestamp":"%s","sandbox_id":"%s","event_type":"heartbeat","source":"shell","detail":{}}\n' \
@@ -1449,6 +1455,22 @@ chmod +x /usr/local/bin/km-sandbox-shell
 
 # Set sandbox user's login shell to the wrapper
 usermod -s /usr/local/bin/km-sandbox-shell sandbox
+
+# SSM session entry script invoked by the KM-Sandbox-Session document's
+# shellProfile.linux with the command parameter as $1.
+# Empty argument → interactive bash login shell (km shell, idle attach)
+# Non-empty argument → run command in login shell, exit when done
+# Delegates to km-sandbox-shell so the same cgroup-placement code path runs
+# for both SSM-initiated sessions and direct sandbox-user logins.
+cat > /usr/local/bin/km-session-entry << 'ENTRYEOF'
+#!/bin/bash
+if [ -z "$1" ]; then
+  exec /usr/local/bin/km-sandbox-shell
+else
+  exec /usr/local/bin/km-sandbox-shell -c "$1"
+fi
+ENTRYEOF
+chmod +x /usr/local/bin/km-session-entry
 
 # Also keep profile.d as belt-and-suspenders for interactive sessions
 cat > /etc/profile.d/km-cgroup.sh << 'CGROUPEOF'

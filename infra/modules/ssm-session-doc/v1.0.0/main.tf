@@ -8,10 +8,17 @@
 # CLI used with AWS-StartInteractiveCommand. The SSM agent performs the user
 # switch before spawning the shell, so no sudo is needed.
 #
-# shellProfile.linux is parameterized — the conditional one-liner runs `exec
-# bash -l` for the empty-command case (km shell non-root) and `bash -lc
-# "{{ command }}"` for non-empty commands (km agent --claude / attach / run
-# --interactive). Both paths source /etc/profile.d/ via login shell semantics.
+# shellProfile.linux delegates to /usr/local/bin/km-session-entry on the
+# sandbox (provisioned by userdata). The wrapper handles the empty-vs-non-empty
+# command branching: empty → interactive bash login shell (km shell), non-empty
+# → bash login -c "<command>" (km agent paths). Keeping the conditional out of
+# the SSM doc avoids two cosmetic/functional issues that the inline form had:
+#   1. SSM agent "types" shellProfile.linux content into the PTY, so a verbose
+#      conditional shows up echoed twice on session start.
+#   2. After the inline conditional's command exits, the SSM agent fell back to
+#      a residual interactive sh prompt instead of closing the session cleanly.
+# Routing through km-session-entry → km-sandbox-shell also keeps the same
+# cgroup-placement code path firing for SSM and direct logins.
 resource "aws_ssm_document" "km_sandbox_session" {
   name            = var.document_name
   document_type   = "Session"
@@ -33,7 +40,7 @@ resource "aws_ssm_document" "km_sandbox_session" {
       runAsDefaultUser   = "sandbox"
       idleSessionTimeout = "20"
       shellProfile = {
-        linux = "[ -z \"{{ command }}\" ] && exec bash -l || bash -lc \"{{ command }}\""
+        linux = "exec /usr/local/bin/km-session-entry \"{{ command }}\""
       }
     }
   })
