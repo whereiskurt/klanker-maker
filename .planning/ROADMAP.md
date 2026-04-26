@@ -1212,7 +1212,7 @@ Plans:
 **Goal:** Add `--ami` flag to `km shell --learn` that snapshots the EC2 instance as a custom AMI on exit. The AMI ID is written into the generated profile YAML at `spec.runtime.ami`, so future sandboxes boot from the pre-configured image with all packages/tools pre-installed. AMIs are tagged with sandbox metadata (sandbox-id, profile, alias, date). Add `km ami list` to show custom AMIs with age/size/usage and `km ami delete` for cleanup. Extend `km doctor` with a stale/unused AMI check that flags AMIs older than a configurable threshold or not referenced by any profile. The `initCommands` captured by Phase 55 serve as documentation of what's baked into the AMI and as a fallback for AMI-less regions.
 **Requirements:** [P56-01, P56-02, P56-03, P56-04, P56-05, P56-06, P56-07, P56-08, P56-09, P56-10, P56-11, P56-12]
 **Depends on:** Phase 55 (learn mode command capture), Phase 33 (AMI resolution), Phase 33.1 (raw AMI ID schema)
-**Plans:** 2/6 plans executed
+**Plans:** 3/6 plans executed
 
 Plans:
 - [ ] 56-01-PLAN.md — AWS SDK helpers (pkg/aws/ec2_ami.go) + mocks/tests for BakeAMI/DeleteAMI/CopyAMI/ListBakedAMIs

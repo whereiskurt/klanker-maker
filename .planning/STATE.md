@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 56-01-PLAN.md
-last_updated: "2026-04-26T17:30:22.535Z"
+stopped_at: Completed 56-03-PLAN.md
+last_updated: "2026-04-26T17:36:10.392Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
   total_phases: 62
   completed_phases: 57
   total_plans: 178
-  completed_plans: 175
+  completed_plans: 176
   percent: 0
 ---
 
@@ -216,6 +216,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 33.1 P02 | 420s | 2 tasks | 4 files |
 | Phase 56-learn-mode-ami-snapshot-and-lifecycle-management P02 | 92s | 2 tasks | 3 files |
 | Phase 56-learn-mode-ami-snapshot-and-lifecycle-management P01 | 2min | 2 tasks | 2 files |
+| Phase 56-learn-mode-ami-snapshot-and-lifecycle-management P03 | 12min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -601,6 +602,7 @@ Recent decisions affecting current work:
 - [Phase 56-01]: EC2AMIAPI includes CreateTags (5 methods) so CopyAMI can re-tag without a separate interface
 - [Phase 56-01]: describeImagesClient adapter struct bridges EC2AMIAPI to ec2.DescribeImagesAPIClient for NewImageAvailableWaiter — no runtime type assertion needed
 - [Phase 56-01]: KMBakeTags omits km:alias tag entirely when alias is empty
+- [Phase 56-03]: Added ec2:DeregisterImage/DeleteSnapshot/CreateTags to SCP DenyInfraAndStorage; read-only Describe* ops excluded from SCP (documented in IAM guidance instead); WriteOperatorIAMGuidance emits text block (not programmatic IAM) since SSO permission sets are out-of-scope for bootstrap.go
 
 ### Roadmap Evolution
 
@@ -677,6 +679,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-26T17:30:22.529Z
-Stopped at: Completed 56-01-PLAN.md
+Last session: 2026-04-26T17:36:10.387Z
+Stopped at: Completed 56-03-PLAN.md
 Resume file: None
