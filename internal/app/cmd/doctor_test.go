@@ -1301,6 +1301,88 @@ func TestCheckStaleAMIs_RegionInName(t *testing.T) {
 // Verify compile-time satisfaction of kmaws.EC2AMIAPI by mockEC2AMIDoctor.
 var _ kmaws.EC2AMIAPI = (*mockEC2AMIDoctor)(nil)
 
+// =============================================================================
+// Tests: --all-regions flag wiring (Task 2 TDD)
+// =============================================================================
+
+func TestDoctorCmd_AllRegionsFlagExists(t *testing.T) {
+	cmd := NewDoctorCmdWithDeps(minimalConfig(), nil)
+	if cmd.Flags().Lookup("all-regions") == nil {
+		t.Error("expected --all-regions flag to exist on km doctor")
+	}
+}
+
+func TestDoctor_DefaultRegionScope_OnlyPrimary(t *testing.T) {
+	// Without --all-regions, EC2AMIClients should have exactly 1 entry (primary region).
+	// We test this by calling NewDoctorCmdWithDeps with nil deps (so initRealDeps runs),
+	// but since we can't easily call initRealDeps without real AWS, we test the deps
+	// construction path via the allRegions field on a pre-built DoctorDeps.
+	//
+	// Instead: test that buildChecks emits exactly 1 stale-AMI check when EC2AMIClients
+	// has 1 entry (the primary region only).
+	cfg := minimalConfig()
+	deps := &DoctorDeps{
+		EC2AMIClients: map[string]kmaws.EC2AMIAPI{
+			"us-east-1": &mockEC2AMIDoctor{images: []ec2types.Image{}},
+		},
+	}
+	checks := buildChecks(cfg, deps)
+	results := runChecks(context.Background(), checks)
+	var staleAMICount int
+	for _, r := range results {
+		if strings.HasPrefix(r.Name, "Stale AMIs (") {
+			staleAMICount++
+		}
+	}
+	if staleAMICount != 1 {
+		t.Errorf("expected exactly 1 Stale AMIs check for single-region scope, got %d", staleAMICount)
+	}
+}
+
+func TestDoctor_AllRegionsFlag_PopulatesMultipleAMIClients(t *testing.T) {
+	// Test that buildChecks emits N stale-AMI checks when EC2AMIClients has N entries.
+	// This mirrors what initRealDeps does when --all-regions is set.
+	cfg := minimalConfig()
+	deps := &DoctorDeps{
+		EC2AMIClients: map[string]kmaws.EC2AMIAPI{
+			"us-east-1":  &mockEC2AMIDoctor{images: []ec2types.Image{}},
+			"us-west-2":  &mockEC2AMIDoctor{images: []ec2types.Image{}},
+			"eu-west-1":  &mockEC2AMIDoctor{images: []ec2types.Image{}},
+		},
+	}
+	checks := buildChecks(cfg, deps)
+	results := runChecks(context.Background(), checks)
+	var staleAMICount int
+	var foundRegions []string
+	for _, r := range results {
+		if strings.HasPrefix(r.Name, "Stale AMIs (") {
+			staleAMICount++
+			// Extract region from "Stale AMIs (us-east-1)".
+			start := strings.Index(r.Name, "(")
+			end := strings.Index(r.Name, ")")
+			if start >= 0 && end > start {
+				foundRegions = append(foundRegions, r.Name[start+1:end])
+			}
+		}
+	}
+	if staleAMICount != 3 {
+		t.Errorf("expected 3 Stale AMIs checks for 3-region scope, got %d", staleAMICount)
+	}
+	// All three regions must appear.
+	for _, want := range []string{"us-east-1", "us-west-2", "eu-west-1"} {
+		found := false
+		for _, r := range foundRegions {
+			if r == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected region %s in Stale AMIs check names, got: %v", want, foundRegions)
+		}
+	}
+}
+
 // Suppress unused import warning
 var _ = fmt.Sprintf
 var _ = strings.Contains
