@@ -104,6 +104,12 @@ variable "ami_slug" {
   default     = "amazon-linux-2023"
 }
 
+variable "ami_id" {
+  type        = string
+  description = "Raw EC2 AMI ID (ami-xxxxxxxx) — Phase 33.1. When non-empty, ami_slug is ignored and no data.aws_ami lookup is performed. Region-scoped: must exist in the target AWS region (operator/Phase 56 owns region alignment)."
+  default     = ""
+}
+
 variable "additional_volume_size_gb" {
   type        = number
   description = "Additional EBS data volume size in GB. 0 means no additional volume."

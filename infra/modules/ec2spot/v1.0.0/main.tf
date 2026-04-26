@@ -9,8 +9,8 @@ data "aws_availability_zones" "available" {
 
 locals {
   # Use provided or auto-discovered AZs
-  effective_azs     = length(var.availability_zones) > 0 ? var.availability_zones : (var.vpc_id == "" ? slice(data.aws_availability_zones.available[0].names, 0, 2) : [])
-  create_vpc        = var.vpc_id == ""
+  effective_azs = length(var.availability_zones) > 0 ? var.availability_zones : (var.vpc_id == "" ? slice(data.aws_availability_zones.available[0].names, 0, 2) : [])
+  create_vpc    = var.vpc_id == ""
 
   # AMI slug resolution (Phase 33): map of slug → { name_pattern, owner }
   ami_filters = {
@@ -102,6 +102,10 @@ locals {
   # Calculate total number of EC2 spot instances in this region
   total_ec2spot_count = length(local.region_ec2spots) > 0 ? sum([for b in local.region_ec2spots : b.count]) : 0
 
+  # Phase 33.1: slug lookup fires only when ami_slug is set (not when raw ami_id is provided).
+  # Gates count = 1 on data.aws_ami.base_ami below.
+  use_slug_lookup = var.ami_slug != "" && local.total_ec2spot_count > 0
+
   # Create a flattened list of EC2 spot instances
   ec2spot_instances = flatten([
     for idx, ec2spot in local.region_ec2spots : [
@@ -137,8 +141,9 @@ locals {
 }
 
 # Get latest AMI for the selected slug (Phase 33: resolved via ami_filters locals map)
+# Phase 33.1: count = 0 when raw ami_id is supplied, skipping the filter lookup.
 data "aws_ami" "base_ami" {
-  count = local.total_ec2spot_count > 0 ? 1 : 0
+  count = local.use_slug_lookup ? 1 : 0 # Phase 33.1: was: local.total_ec2spot_count > 0 ? 1 : 0
 
   most_recent = true
   owners      = [local.ami_filters[local.resolved_ami_slug].owner]
@@ -157,6 +162,19 @@ data "aws_ami" "base_ami" {
     name   = "virtualization-type"
     values = ["hvm"]
   }
+}
+
+locals {
+  # Phase 33.1: effective_ami_id resolves to the correct AMI ID for both branches.
+  # Raw-ID path: var.ami_id passed through directly (data.aws_ami.base_ami count = 0).
+  # Slug path: data.aws_ami lookup result (count = 1).
+  # The length() guard prevents `Invalid index` errors when count = 0 — the empty
+  # tuple cannot be indexed at [0].
+  effective_ami_id = (
+    var.ami_id != ""
+    ? var.ami_id
+    : (length(data.aws_ami.base_ami) > 0 ? data.aws_ami.base_ami[0].image_id : "")
+  )
 }
 
 # Get spot price for spot instances only
@@ -369,9 +387,9 @@ resource "aws_iam_role_policy" "ec2spot_github_token" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "KMSDecryptGitHubToken"
-        Effect = "Allow"
-        Action = ["kms:Decrypt"]
+        Sid      = "KMSDecryptGitHubToken"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
         Resource = ["arn:aws:kms:*:${data.aws_caller_identity.current.account_id}:key/*"]
         Condition = {
           StringEquals = {
@@ -418,11 +436,11 @@ locals {
 resource "aws_spot_instance_request" "ec2spot" {
   for_each = local.ec2spot_map
 
-  ami                    = data.aws_ami.base_ami[0].image_id
+  ami                    = local.effective_ami_id
   instance_type          = each.value.instance_type
   spot_price             = format("%.6f", (data.aws_ec2_spot_price.price[each.key].spot_price * each.value.spot_price_multiplier) + each.value.spot_price_offset)
   user_data_base64       = each.value.user_data_base64 != "" ? each.value.user_data_base64 : base64encode(local.default_user_data)
-  user_data              = null  # use user_data_base64 instead
+  user_data              = null # use user_data_base64 instead
   subnet_id              = each.value.subnet_id
   availability_zone      = each.value.availability_zone
   vpc_security_group_ids = [aws_security_group.ec2spot[0].id]
@@ -502,7 +520,7 @@ resource "aws_ec2_tag" "ec2spot_region" {
 resource "aws_instance" "ec2_ondemand" {
   for_each = local.ec2_ondemand_map
 
-  ami                    = data.aws_ami.base_ami[0].image_id
+  ami                    = local.effective_ami_id
   instance_type          = each.value.instance_type
   user_data_base64       = each.value.user_data_base64 != "" ? each.value.user_data_base64 : base64encode(local.default_user_data)
   subnet_id              = each.value.subnet_id
@@ -559,9 +577,9 @@ resource "aws_ebs_volume" "additional" {
 }
 
 resource "aws_volume_attachment" "additional" {
-  count       = var.additional_volume_size_gb > 0 ? 1 : 0
-  device_name = "/dev/sdf"
-  volume_id   = aws_ebs_volume.additional[0].id
-  instance_id = length(local.ec2spot_map) > 0 ? aws_spot_instance_request.ec2spot[keys(local.ec2spot_map)[0]].spot_instance_id : aws_instance.ec2_ondemand[keys(local.ec2_ondemand_map)[0]].id
+  count        = var.additional_volume_size_gb > 0 ? 1 : 0
+  device_name  = "/dev/sdf"
+  volume_id    = aws_ebs_volume.additional[0].id
+  instance_id  = length(local.ec2spot_map) > 0 ? aws_spot_instance_request.ec2spot[keys(local.ec2spot_map)[0]].spot_instance_id : aws_instance.ec2_ondemand[keys(local.ec2_ondemand_map)[0]].id
   force_detach = true
 }
