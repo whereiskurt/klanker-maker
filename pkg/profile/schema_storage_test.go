@@ -432,6 +432,59 @@ spec:
 `
 }
 
+// TestSchemaAMIRawIDValid verifies that raw EC2 AMI IDs (ami-xxxxxxxx) are accepted by the schema.
+func TestSchemaAMIRawIDValid(t *testing.T) {
+	cases := []struct {
+		name string
+		ami  string
+	}{
+		{"17-char canonical form", "ami-0abcdef1234567890"},
+		{"8-char legacy form", "ami-12345678"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			yaml := minimalRuntimeProfile("    ami: " + tc.ami + "\n")
+			// Verify JSON schema accepts the raw AMI ID.
+			errs := profile.ValidateSchema([]byte(yaml))
+			if len(errs) != 0 {
+				t.Fatalf("expected no schema errors for ami=%q, got: %v", tc.ami, errs)
+			}
+			// Verify Go struct unmarshals the raw ID verbatim.
+			p, err := profile.Parse([]byte(yaml))
+			if err != nil {
+				t.Fatalf("expected no parse error for ami=%q, got: %v", tc.ami, err)
+			}
+			if p.Spec.Runtime.AMI != tc.ami {
+				t.Errorf("expected AMI=%q, got %q", tc.ami, p.Spec.Runtime.AMI)
+			}
+		})
+	}
+}
+
+// TestSchemaAMIRawIDInvalid verifies that malformed AMI IDs and unknown slugs are rejected by JSON schema validation.
+func TestSchemaAMIRawIDInvalid(t *testing.T) {
+	cases := []struct {
+		name string
+		ami  string
+	}{
+		{"uppercase hex chars", "ami-GGGGGGGG"},
+		{"too short (7 hex)", "ami-123"},
+		{"too long (19 hex)", "ami-0abcdef1234567890ab"},
+		{"no hex chars", "ami-"},
+		{"unknown slug", "ubuntu-25.04"},
+		{"uppercase prefix", "AMI-0abc12345"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			yaml := minimalRuntimeProfile("    ami: " + tc.ami + "\n")
+			errs := profile.ValidateSchema([]byte(yaml))
+			if len(errs) == 0 {
+				t.Errorf("expected schema error for ami=%q, got none", tc.ami)
+			}
+		})
+	}
+}
+
 // TestSchemaRootVolumeValidation tests JSON schema validation of rootVolumeSize boundaries.
 func TestSchemaRootVolumeValidation(t *testing.T) {
 	t.Run("rootVolumeSize 50 passes schema", func(t *testing.T) {

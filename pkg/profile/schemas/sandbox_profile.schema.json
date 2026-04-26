@@ -223,8 +223,11 @@
             },
             "ami": {
               "type": "string",
-              "enum": ["amazon-linux-2023", "ubuntu-24.04", "ubuntu-22.04", ""],
-              "description": "AMI slug resolved per-region. Empty or omitted defaults to amazon-linux-2023."
+              "description": "AMI slug resolved per-region (amazon-linux-2023, ubuntu-24.04, ubuntu-22.04), or a raw AMI ID (ami-xxxxxxxx, 8-17 lowercase hex chars) for account-owned images. Raw IDs are region-scoped — must exist in spec.runtime.region. Empty or omitted defaults to amazon-linux-2023.",
+              "oneOf": [
+                { "enum": ["amazon-linux-2023", "ubuntu-24.04", "ubuntu-22.04", ""] },
+                { "pattern": "^ami-[0-9a-f]{8,17}$" }
+              ]
             },
             "mountEFS": {
               "type": "boolean",
