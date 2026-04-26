@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1077,6 +1079,225 @@ func TestCheckCredentialRotationAge_ChecksBothParams(t *testing.T) {
 	}
 }
 
+// =============================================================================
+// Tests: checkStaleAMIs (Task 1 TDD)
+// =============================================================================
+
+// mockEC2AMIDoctor is a local mock for kmaws.EC2AMIAPI used in doctor tests.
+// (Local to keep cross-package test imports clean — mirrors ami_test.go's mockEC2AMI.)
+type mockEC2AMIDoctor struct {
+	images []ec2types.Image
+	err    error
+}
+
+func (m *mockEC2AMIDoctor) CreateImage(ctx context.Context, params *ec2.CreateImageInput, optFns ...func(*ec2.Options)) (*ec2.CreateImageOutput, error) {
+	return &ec2.CreateImageOutput{ImageId: aws.String("ami-created")}, nil
+}
+
+func (m *mockEC2AMIDoctor) DescribeImages(ctx context.Context, params *ec2.DescribeImagesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeImagesOutput, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &ec2.DescribeImagesOutput{Images: m.images}, nil
+}
+
+func (m *mockEC2AMIDoctor) DeregisterImage(ctx context.Context, params *ec2.DeregisterImageInput, optFns ...func(*ec2.Options)) (*ec2.DeregisterImageOutput, error) {
+	return &ec2.DeregisterImageOutput{}, nil
+}
+
+func (m *mockEC2AMIDoctor) CopyImage(ctx context.Context, params *ec2.CopyImageInput, optFns ...func(*ec2.Options)) (*ec2.CopyImageOutput, error) {
+	return &ec2.CopyImageOutput{ImageId: aws.String("ami-copy")}, nil
+}
+
+func (m *mockEC2AMIDoctor) CreateTags(ctx context.Context, params *ec2.CreateTagsInput, optFns ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error) {
+	return &ec2.CreateTagsOutput{}, nil
+}
+
+// makeTestAMI creates an ec2types.Image with the given ID and age in days.
+func makeTestAMI(id string, ageDays float64) ec2types.Image {
+	created := time.Now().UTC().Add(-time.Duration(ageDays*24) * time.Hour)
+	dateStr := created.Format("2006-01-02T15:04:05.000Z")
+	return ec2types.Image{
+		ImageId:      aws.String(id),
+		CreationDate: aws.String(dateStr),
+	}
+}
+
+// doctorStaleAMIConfig is a minimal DoctorConfigProvider used in checkStaleAMIs tests.
+type doctorStaleAMIConfig struct {
+	testDoctorConfig
+	staleDays    int
+	searchPaths  []string
+}
+
+func (c *doctorStaleAMIConfig) GetDoctorStaleAMIDays() int     { return c.staleDays }
+func (c *doctorStaleAMIConfig) GetProfileSearchPaths() []string { return c.searchPaths }
+
+func newDoctorStaleAMICfg(staleDays int, searchPaths []string) *doctorStaleAMIConfig {
+	return &doctorStaleAMIConfig{
+		testDoctorConfig: testDoctorConfig{region: "us-east-1"},
+		staleDays:        staleDays,
+		searchPaths:      searchPaths,
+	}
+}
+
+// Compile-time: ensure new interface methods are implemented.
+var _ DoctorConfigProvider = (*doctorStaleAMIConfig)(nil)
+
+func TestCheckStaleAMIs_NilClient_Skipped(t *testing.T) {
+	result := checkStaleAMIs(context.Background(), "us-east-1", nil, nil, nil, 30)
+	if result.Status != CheckSkipped {
+		t.Errorf("expected CheckSkipped for nil client, got %s: %s", result.Status, result.Message)
+	}
+}
+
+func TestCheckStaleAMIs_NoAMIs_OK(t *testing.T) {
+	client := &mockEC2AMIDoctor{images: []ec2types.Image{}}
+	result := checkStaleAMIs(context.Background(), "us-east-1", client, nil, nil, 30)
+	if result.Status != CheckOK {
+		t.Errorf("expected CheckOK for empty AMI list, got %s: %s", result.Status, result.Message)
+	}
+	if !strings.Contains(result.Message, "No stale AMIs in us-east-1") {
+		t.Errorf("expected 'No stale AMIs in us-east-1' in message, got: %s", result.Message)
+	}
+}
+
+func TestCheckStaleAMIs_AllWithinThreshold_OK(t *testing.T) {
+	client := &mockEC2AMIDoctor{images: []ec2types.Image{
+		makeTestAMI("ami-0fresh111111", 1),
+		makeTestAMI("ami-0fresh222222", 5),
+		makeTestAMI("ami-0fresh333333", 7),
+	}}
+	result := checkStaleAMIs(context.Background(), "us-east-1", client, nil, nil, 30)
+	if result.Status != CheckOK {
+		t.Errorf("expected CheckOK when all AMIs within threshold, got %s: %s", result.Status, result.Message)
+	}
+}
+
+func TestCheckStaleAMIs_StaleFound_Warn(t *testing.T) {
+	client := &mockEC2AMIDoctor{images: []ec2types.Image{
+		makeTestAMI("ami-0recent111111", 1),
+		makeTestAMI("ami-0stale1111111", 45),
+		makeTestAMI("ami-0stale2222222", 90),
+	}}
+	result := checkStaleAMIs(context.Background(), "us-east-1", client, nil, nil, 30)
+	if result.Status != CheckWarn {
+		t.Errorf("expected CheckWarn when stale AMIs found, got %s: %s", result.Status, result.Message)
+	}
+	if !strings.Contains(result.Message, "ami-0stale1111111") {
+		t.Errorf("expected stale AMI ID in message, got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "ami-0stale2222222") {
+		t.Errorf("expected stale AMI ID in message, got: %s", result.Message)
+	}
+	// The fresh AMI must NOT appear in the message.
+	if strings.Contains(result.Message, "ami-0recent111111") {
+		t.Errorf("expected fresh AMI to not appear in stale list, got: %s", result.Message)
+	}
+}
+
+func TestCheckStaleAMIs_ProfileRefSkipped(t *testing.T) {
+	// Write a profile YAML that references the AMI so it is not flagged.
+	dir := t.TempDir()
+	profileYAML := `
+apiVersion: sandbox.klankrmkr.io/v1
+kind: SandboxProfile
+metadata:
+  name: test-prof
+spec:
+  runtime:
+    ami: ami-0referenced111
+`
+	if err := os.WriteFile(filepath.Join(dir, "test-prof.yaml"), []byte(profileYAML), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	client := &mockEC2AMIDoctor{images: []ec2types.Image{
+		makeTestAMI("ami-0referenced111", 60),
+	}}
+	// Pass the temp dir as the search path — FindProfilesReferencingAMI should find the reference.
+	result := checkStaleAMIs(context.Background(), "us-east-1", client, nil, []string{dir}, 30)
+	// Referenced AMI should NOT be in the stale list.
+	if result.Status == CheckWarn && strings.Contains(result.Message, "ami-0referenced111") {
+		t.Errorf("expected profile-referenced AMI to be skipped, got message: %s", result.Message)
+	}
+}
+
+func TestCheckStaleAMIs_RunningSandboxSkipped(t *testing.T) {
+	// Write a profile YAML that maps sandbox's profile name to the AMI.
+	dir := t.TempDir()
+	profileYAML := `
+apiVersion: sandbox.klankrmkr.io/v1
+kind: SandboxProfile
+metadata:
+  name: sb-running-prof
+spec:
+  runtime:
+    ami: ami-0running11111111
+`
+	if err := os.WriteFile(filepath.Join(dir, "sb-running-prof.yaml"), []byte(profileYAML), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	client := &mockEC2AMIDoctor{images: []ec2types.Image{
+		makeTestAMI("ami-0running11111111", 60),
+	}}
+	lister := &mockSandboxLister{
+		records: []kmaws.SandboxRecord{
+			{SandboxID: "sb-abc1234", Profile: "sb-running-prof", Status: "running"},
+		},
+	}
+	result := checkStaleAMIs(context.Background(), "us-east-1", client, lister, []string{dir}, 30)
+	// AMI backing a running sandbox should NOT be flagged.
+	if result.Status == CheckWarn && strings.Contains(result.Message, "ami-0running11111111") {
+		t.Errorf("expected running-sandbox AMI to be skipped, got message: %s", result.Message)
+	}
+}
+
+func TestCheckStaleAMIs_DescribeImagesError_Warn(t *testing.T) {
+	client := &mockEC2AMIDoctor{err: errors.New("describe-images: access denied")}
+	result := checkStaleAMIs(context.Background(), "us-east-1", client, nil, nil, 30)
+	if result.Status != CheckWarn {
+		t.Errorf("expected CheckWarn on DescribeImages error, got %s: %s", result.Status, result.Message)
+	}
+	if !strings.Contains(result.Message, "could not list AMIs") {
+		t.Errorf("expected 'could not list AMIs' in message, got: %s", result.Message)
+	}
+}
+
+func TestCheckStaleAMIs_UnparsableCreationDate_Skipped(t *testing.T) {
+	// Malformed date — this AMI should be skipped, not flagged.
+	badImage := ec2types.Image{
+		ImageId:      aws.String("ami-0baddate111111"),
+		CreationDate: aws.String("not-a-date"),
+	}
+	// Add a genuinely stale AMI alongside it.
+	client := &mockEC2AMIDoctor{images: []ec2types.Image{
+		badImage,
+		makeTestAMI("ami-0stale3333333", 60),
+	}}
+	result := checkStaleAMIs(context.Background(), "us-east-1", client, nil, nil, 30)
+	// bad-date AMI should not appear; stale AMI should.
+	if strings.Contains(result.Message, "ami-0baddate111111") {
+		t.Errorf("expected bad-date AMI to be silently skipped, got: %s", result.Message)
+	}
+	if result.Status != CheckWarn {
+		t.Errorf("expected CheckWarn for the genuine stale AMI, got %s", result.Status)
+	}
+}
+
+func TestCheckStaleAMIs_RegionInName(t *testing.T) {
+	client := &mockEC2AMIDoctor{images: []ec2types.Image{}}
+	result := checkStaleAMIs(context.Background(), "ap-southeast-1", client, nil, nil, 30)
+	if !strings.Contains(result.Name, "ap-southeast-1") {
+		t.Errorf("expected region in check name for multi-region distinguishability, got: %s", result.Name)
+	}
+}
+
+// Verify compile-time satisfaction of kmaws.EC2AMIAPI by mockEC2AMIDoctor.
+var _ kmaws.EC2AMIAPI = (*mockEC2AMIDoctor)(nil)
+
 // Suppress unused import warning
 var _ = fmt.Sprintf
 var _ = strings.Contains
+var _ = filepath.Join
