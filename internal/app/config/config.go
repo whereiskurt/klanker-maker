@@ -126,6 +126,12 @@ type Config struct {
 	// to provision sandboxes on a deferred or recurring basis.
 	// Set via create_handler_lambda_arn in km-config.yaml or KM_CREATE_HANDLER_LAMBDA_ARN.
 	CreateHandlerLambdaARN string
+
+	// DoctorStaleAMIDays is the age threshold (in days) used by `km doctor` to flag
+	// unused AMIs as stale. An AMI is "stale" when (a) it is older than this threshold,
+	// (b) no profile in cfg.ProfileSearchPaths references it, AND (c) no running sandbox
+	// currently uses it. Maps to km-config.yaml key doctor_stale_ami_days. Defaults to 30.
+	DoctorStaleAMIDays int
 }
 
 // isSetByEnv returns true if the given viper key has been overridden by an environment
@@ -163,6 +169,7 @@ func Load() (*Config, error) {
 	v.SetDefault("rsync_paths", []string{".claude", ".bashrc", ".bash_profile", ".gitconfig"})
 	v.SetDefault("schedules_table_name", "km-schedules")
 	v.SetDefault("create_handler_lambda_arn", "")
+	v.SetDefault("doctor_stale_ami_days", 30)
 
 	// Primary config file: ~/.km/config.yaml
 	v.SetConfigName("config")
@@ -225,6 +232,7 @@ func Load() (*Config, error) {
 			"create_handler_lambda_arn",
 			"ttl_lambda_arn",
 			"scheduler_role_arn",
+			"doctor_stale_ami_days",
 		} {
 			if v2.IsSet(key) && !isSetByEnv(v, key) {
 				v.Set(key, v2.Get(key))
@@ -261,6 +269,7 @@ func Load() (*Config, error) {
 		MaxSandboxes:           v.GetInt("max_sandboxes"),
 		SchedulesTableName:     v.GetString("schedules_table_name"),
 		CreateHandlerLambdaARN: v.GetString("create_handler_lambda_arn"),
+		DoctorStaleAMIDays:     v.GetInt("doctor_stale_ami_days"),
 	}
 
 	// If the AWS profile was set by default (not explicitly configured), verify it
@@ -271,6 +280,12 @@ func Load() (*Config, error) {
 		if !awsProfileExists(cfg.AWSProfile) {
 			cfg.AWSProfile = ""
 		}
+	}
+
+	// Clamp DoctorStaleAMIDays: a zero or negative value would never flag any AMI,
+	// which is almost certainly operator misconfiguration. Fall back to the default.
+	if cfg.DoctorStaleAMIDays <= 0 {
+		cfg.DoctorStaleAMIDays = 30
 	}
 
 	return cfg, nil
