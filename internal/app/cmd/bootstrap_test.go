@@ -11,6 +11,20 @@ import (
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 )
 
+// testTrustedBase returns a minimal trusted-base ARN slice for use in SCP tests.
+// Uses a fixed account ID so tests are deterministic without AWS access.
+func testTrustedBase() []string {
+	acct := "123456789012"
+	return []string{
+		"arn:aws:iam::" + acct + ":role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
+		"arn:aws:iam::" + acct + ":role/km-provisioner-*",
+		"arn:aws:iam::" + acct + ":role/km-lifecycle-*",
+		"arn:aws:iam::" + acct + ":role/km-ecs-spot-handler",
+		"arn:aws:iam::" + acct + ":role/km-ttl-handler",
+		"arn:aws:iam::" + acct + ":role/km-create-handler",
+	}
+}
+
 // runBootstrapCmd is a helper that runs the bootstrap cobra command with the
 // given dryRun flag and applyFn DI override. It captures stdout and returns it.
 func runBootstrapCmd(t *testing.T, cfg *config.Config, dryRun bool, applyFn cmd.TerragruntApplyFunc) (string, error) {
@@ -119,5 +133,154 @@ func TestBootstrapSCPApplyPath(t *testing.T) {
 	wantSuffix := "infra/live/management/scp"
 	if !strings.HasSuffix(capturedDir, wantSuffix) {
 		t.Errorf("terragrunt apply called with dir %q; want suffix %q", capturedDir, wantSuffix)
+	}
+}
+
+// TestBootstrapSCP_IncludesAMILifecycleMutatingOps verifies that the DenyInfraAndStorage
+// statement in the SCP policy includes all three Phase 56 AMI-lifecycle mutating operations.
+// Calls buildSCPPolicy directly — requires no AWS config.
+func TestBootstrapSCP_IncludesAMILifecycleMutatingOps(t *testing.T) {
+	trustedBase := testTrustedBase()
+	trustedInstance := append([]string{}, trustedBase...)
+	trustedIAM := append(append([]string{}, trustedBase...), "arn:aws:iam::123456789012:role/km-budget-enforcer-*")
+	trustedSSM := []string{"arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*"}
+
+	policy := cmd.BuildSCPPolicy(trustedBase, trustedInstance, trustedIAM, trustedSSM, "us-east-1")
+
+	wantOps := []string{
+		"ec2:DeregisterImage",
+		"ec2:DeleteSnapshot",
+		"ec2:CreateTags",
+	}
+
+	var denyActions []string
+	for _, stmt := range policy.Statement {
+		if stmt.Sid == "DenyInfraAndStorage" {
+			denyActions = stmt.Action
+			break
+		}
+	}
+
+	if denyActions == nil {
+		t.Fatal("DenyInfraAndStorage statement not found in SCP policy")
+	}
+
+	for _, op := range wantOps {
+		found := false
+		for _, a := range denyActions {
+			if a == op {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("DenyInfraAndStorage Action missing %q; actions: %v", op, denyActions)
+		}
+	}
+}
+
+// TestBootstrapSCP_DescribeOpsNotInDeny verifies that read-only Describe operations
+// are NOT in any Deny statement — they must remain implicitly allowed.
+// Calls buildSCPPolicy directly — requires no AWS config.
+func TestBootstrapSCP_DescribeOpsNotInDeny(t *testing.T) {
+	trustedBase := testTrustedBase()
+	trustedInstance := append([]string{}, trustedBase...)
+	trustedIAM := append(append([]string{}, trustedBase...), "arn:aws:iam::123456789012:role/km-budget-enforcer-*")
+	trustedSSM := []string{"arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*"}
+
+	policy := cmd.BuildSCPPolicy(trustedBase, trustedInstance, trustedIAM, trustedSSM, "us-east-1")
+
+	readOnlyOps := []string{
+		"ec2:DescribeImages",
+		"ec2:DescribeSnapshots",
+	}
+
+	for _, stmt := range policy.Statement {
+		if stmt.Effect != "Deny" {
+			continue
+		}
+		for _, op := range readOnlyOps {
+			for _, a := range stmt.Action {
+				if a == op {
+					t.Errorf("read-only op %q must NOT appear in Deny statement %q", op, stmt.Sid)
+				}
+			}
+		}
+	}
+}
+
+// TestBootstrapSCP_TrustedBaseUnchanged verifies that the ArnNotLike condition on
+// DenyInfraAndStorage still includes the expected trusted-base principal patterns.
+// Calls buildSCPPolicy directly — requires no AWS config.
+func TestBootstrapSCP_TrustedBaseUnchanged(t *testing.T) {
+	trustedBase := testTrustedBase()
+	trustedInstance := append([]string{}, trustedBase...)
+	trustedIAM := append(append([]string{}, trustedBase...), "arn:aws:iam::123456789012:role/km-budget-enforcer-*")
+	trustedSSM := []string{"arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*"}
+
+	policy := cmd.BuildSCPPolicy(trustedBase, trustedInstance, trustedIAM, trustedSSM, "us-east-1")
+
+	var denyStmt *cmd.SCPStatement
+	for i := range policy.Statement {
+		if policy.Statement[i].Sid == "DenyInfraAndStorage" {
+			denyStmt = &policy.Statement[i]
+			break
+		}
+	}
+
+	if denyStmt == nil {
+		t.Fatal("DenyInfraAndStorage statement not found")
+	}
+
+	// Condition must be an ArnNotLike map containing the trusted-base ARNs.
+	condMap, ok := denyStmt.Condition.(map[string]interface{})
+	if !ok {
+		t.Fatalf("DenyInfraAndStorage Condition is not map[string]interface{}; got %T", denyStmt.Condition)
+	}
+	arnNotLike, ok := condMap["ArnNotLike"].(map[string]interface{})
+	if !ok {
+		t.Fatal("DenyInfraAndStorage Condition missing ArnNotLike key")
+	}
+	principals, ok := arnNotLike["aws:PrincipalARN"].([]string)
+	if !ok {
+		t.Fatalf("ArnNotLike aws:PrincipalARN is not []string; got %T", arnNotLike["aws:PrincipalARN"])
+	}
+
+	wantPatterns := []string{"AWSReservedSSO", "km-provisioner", "km-lifecycle"}
+	for _, pat := range wantPatterns {
+		found := false
+		for _, arn := range principals {
+			if strings.Contains(arn, pat) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("trusted-base condition missing principal pattern %q; got: %v", pat, principals)
+		}
+	}
+}
+
+// TestBootstrapShowSCP_EmitsOperatorPositiveAllowGuidance verifies that writeOperatorIAMGuidance
+// emits all required AMI-lifecycle ops and the SCP-vs-IAM-allow distinction rationale.
+// Uses bytes.Buffer injection — requires no AWS config.
+func TestBootstrapShowSCP_EmitsOperatorPositiveAllowGuidance(t *testing.T) {
+	var buf bytes.Buffer
+	cmd.WriteOperatorIAMGuidance(&buf)
+	out := buf.String()
+
+	wants := []string{
+		"Operator IAM Positive-Allow Requirements",
+		"ec2:DescribeImages",
+		"ec2:DescribeSnapshots",
+		"ec2:DeregisterImage",
+		"ec2:DeleteSnapshot",
+		"ec2:CreateTags",
+		"NOT the same as granting",
+	}
+	for _, want := range wants {
+		if !strings.Contains(out, want) {
+			t.Errorf("operator guidance missing %q\nGot:\n%s", want, out)
+		}
 	}
 }

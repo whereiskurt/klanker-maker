@@ -19,6 +19,180 @@ import (
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
 )
 
+// SCPStatement represents a single statement in an SCP policy document.
+// Exported so tests can inspect individual statement fields without AWS access.
+type SCPStatement struct {
+	Sid       string      `json:"Sid"`
+	Effect    string      `json:"Effect"`
+	Action    []string    `json:"Action,omitempty"`
+	NotAction []string    `json:"NotAction,omitempty"`
+	Resource  string      `json:"Resource"`
+	Condition interface{} `json:"Condition,omitempty"`
+}
+
+// SCPPolicyDoc is the top-level SCP policy document structure.
+// Exported so tests can inspect the full policy without AWS access.
+type SCPPolicyDoc struct {
+	Version   string         `json:"Version"`
+	Statement []SCPStatement `json:"Statement"`
+}
+
+// BuildSCPPolicy returns the SCP policy document for the application account
+// given the resolved trusted-principal sets. Pure (no AWS calls); tested directly.
+func BuildSCPPolicy(trustedBase, trustedInstance, trustedIAM, trustedSSM []string, region string) SCPPolicyDoc {
+	arnNotLike := func(arns []string) interface{} {
+		return map[string]interface{}{
+			"ArnNotLike": map[string]interface{}{
+				"aws:PrincipalARN": arns,
+			},
+		}
+	}
+
+	return SCPPolicyDoc{
+		Version: "2012-10-17",
+		Statement: []SCPStatement{
+			{
+				Sid:    "DenyInfraAndStorage",
+				Effect: "Deny",
+				Action: []string{
+					"ec2:CreateSecurityGroup", "ec2:DeleteSecurityGroup",
+					"ec2:AuthorizeSecurityGroup*", "ec2:RevokeSecurityGroup*",
+					"ec2:ModifySecurityGroupRules",
+					"ec2:CreateVpc", "ec2:CreateSubnet", "ec2:CreateRouteTable",
+					"ec2:CreateRoute", "ec2:*InternetGateway", "ec2:CreateNatGateway",
+					"ec2:*VpcPeeringConnection", "ec2:CreateTransitGateway*",
+					"ec2:CreateSnapshot", "ec2:CopySnapshot", "ec2:DeleteSnapshot",
+					// AMI / EBS snapshot lifecycle (Phase 56): trusted-base principals (operator,
+					// km-provisioner, km-lifecycle) may bake, copy, deregister, and clean up.
+					// Describe* ops are read-only and intentionally NOT denied here — they remain
+					// implicitly allowed for inspection. NOTE: SCP exemption alone does not grant
+					// permission — operator IAM allow policy must affirmatively include these ops.
+					// See WriteOperatorIAMGuidance() output for operator-side requirements.
+					"ec2:CreateImage", "ec2:CopyImage", "ec2:ExportImage", "ec2:DeregisterImage",
+					"ec2:CreateTags",
+				},
+				Resource:  "*",
+				Condition: arnNotLike(trustedBase),
+			},
+			{
+				Sid:    "DenyInstanceMutation",
+				Effect: "Deny",
+				Action: []string{
+					"ec2:RunInstances", "ec2:ModifyInstanceAttribute",
+					"ec2:ModifyInstanceMetadataOptions",
+				},
+				Resource:  "*",
+				Condition: arnNotLike(trustedInstance),
+			},
+			{
+				Sid:    "DenyIAMEscalation",
+				Effect: "Deny",
+				Action: []string{
+					"iam:CreateRole", "iam:AttachRolePolicy", "iam:DetachRolePolicy",
+					"iam:PassRole", "iam:AssumeRole",
+				},
+				Resource:  "*",
+				Condition: arnNotLike(trustedIAM),
+			},
+			{
+				Sid:      "DenySSMPivot",
+				Effect:   "Deny",
+				Action:   []string{"ssm:SendCommand", "ssm:StartSession"},
+				Resource: "*",
+				Condition: arnNotLike(trustedSSM),
+			},
+			{
+				Sid:    "DenyOrgDiscovery",
+				Effect: "Deny",
+				Action: []string{"organizations:List*", "organizations:Describe*"},
+				Resource: "*",
+			},
+			{
+				Sid:    "DenyOutsideRegion",
+				Effect: "Deny",
+				NotAction: []string{
+					"iam:*", "sts:*", "organizations:*", "support:*", "health:*",
+					"trustedadvisor:*", "cloudfront:*", "waf:*", "shield:*",
+					"route53:*", "route53domains:*", "budgets:*", "ce:*", "cur:*",
+					"globalaccelerator:*", "networkmanager:*", "pricing:*", "bedrock:*",
+					"s3:GetAccountPublicAccessBlock", "s3:ListAllMyBuckets",
+					"s3:PutAccountPublicAccessBlock",
+				},
+				Resource: "*",
+				Condition: map[string]interface{}{
+					"StringNotEquals": map[string]interface{}{
+						"aws:RequestedRegion": []string{region},
+					},
+					"ArnNotLike": map[string]interface{}{
+						"aws:PrincipalArn": trustedBase,
+					},
+				},
+			},
+		},
+	}
+}
+
+// WriteOperatorIAMGuidance writes the Phase 56 AMI-lifecycle positive-allow
+// requirements block to w. Documents read-only and mutating ops the operator
+// role must have in its IAM allow policy (independent of the SCP exemption).
+// Exported so tests can verify the guidance text without invoking runShowSCP.
+func WriteOperatorIAMGuidance(w io.Writer) {
+	fmt.Fprintln(w, "# ============================================================")
+	fmt.Fprintln(w, "# Operator IAM Positive-Allow Requirements (Phase 56 AMI Lifecycle)")
+	fmt.Fprintln(w, "# ============================================================")
+	fmt.Fprintln(w, "#")
+	fmt.Fprintln(w, "# The SCP above (DenyInfraAndStorage) un-blocks the following AMI-lifecycle")
+	fmt.Fprintln(w, "# operations for trusted-base principals via ArnNotLike exemption:")
+	fmt.Fprintln(w, "#")
+	fmt.Fprintln(w, "#   ec2:CreateImage, ec2:CopyImage, ec2:ExportImage,")
+	fmt.Fprintln(w, "#   ec2:DeregisterImage, ec2:DeleteSnapshot, ec2:CreateTags")
+	fmt.Fprintln(w, "#")
+	fmt.Fprintln(w, "# IMPORTANT: Un-blocking via SCP is NOT the same as granting permission.")
+	fmt.Fprintln(w, "# The operator's SSO permission set (or the klanker-terraform role's inline")
+	fmt.Fprintln(w, "# policy) must AFFIRMATIVELY ALLOW these actions in addition to the SCP")
+	fmt.Fprintln(w, "# exemption.")
+	fmt.Fprintln(w, "#")
+	fmt.Fprintln(w, "# Required AMI-lifecycle permissions for the operator role:")
+	fmt.Fprintln(w, "#")
+	fmt.Fprintln(w, "#   Mutating (also exempted in SCP above):")
+	fmt.Fprintln(w, "#     - ec2:CreateImage")
+	fmt.Fprintln(w, "#     - ec2:CopyImage")
+	fmt.Fprintln(w, "#     - ec2:DeregisterImage")
+	fmt.Fprintln(w, "#     - ec2:DeleteSnapshot")
+	fmt.Fprintln(w, "#     - ec2:CreateTags")
+	fmt.Fprintln(w, "#")
+	fmt.Fprintln(w, "#   Read-only (NOT in SCP — must be in IAM allow policy):")
+	fmt.Fprintln(w, "#     - ec2:DescribeImages       (km ami list, km doctor stale-AMI check)")
+	fmt.Fprintln(w, "#     - ec2:DescribeSnapshots    (km ami list --wide for snapshot count)")
+	fmt.Fprintln(w, "#")
+	fmt.Fprintln(w, "# Example IAM policy statement to add to the operator's SSO permission set")
+	fmt.Fprintln(w, "# or the klanker-terraform role inline policy:")
+	fmt.Fprintln(w, "#")
+	fmt.Fprintln(w, "# {")
+	fmt.Fprintln(w, "#   \"Version\": \"2012-10-17\",")
+	fmt.Fprintln(w, "#   \"Statement\": [")
+	fmt.Fprintln(w, "#     {")
+	fmt.Fprintln(w, "#       \"Sid\": \"KMAMILifecycle\",")
+	fmt.Fprintln(w, "#       \"Effect\": \"Allow\",")
+	fmt.Fprintln(w, "#       \"Action\": [")
+	fmt.Fprintln(w, "#         \"ec2:CreateImage\",")
+	fmt.Fprintln(w, "#         \"ec2:CopyImage\",")
+	fmt.Fprintln(w, "#         \"ec2:DeregisterImage\",")
+	fmt.Fprintln(w, "#         \"ec2:DeleteSnapshot\",")
+	fmt.Fprintln(w, "#         \"ec2:CreateTags\",")
+	fmt.Fprintln(w, "#         \"ec2:DescribeImages\",")
+	fmt.Fprintln(w, "#         \"ec2:DescribeSnapshots\"")
+	fmt.Fprintln(w, "#       ],")
+	fmt.Fprintln(w, "#       \"Resource\": \"*\"")
+	fmt.Fprintln(w, "#     }")
+	fmt.Fprintln(w, "#   ]")
+	fmt.Fprintln(w, "# }")
+	fmt.Fprintln(w, "#")
+	fmt.Fprintln(w, "# Without these, `km ami list`, `km ami delete`, `km ami copy`, and")
+	fmt.Fprintln(w, "# `km doctor` stale-AMI checks will fail with UnauthorizedOperation.")
+	fmt.Fprintln(w, "# ============================================================")
+}
+
 // KMSEnsureAPI covers the KMS operations needed to create a key and alias.
 // Allows test injection without real AWS calls.
 type KMSEnsureAPI interface {
@@ -343,107 +517,7 @@ func runShowSCP(ctx context.Context, cfg *config.Config, w io.Writer) error {
 	}
 
 	// Build SCP policy document (mirrors the Terraform data.aws_iam_policy_document).
-	type condition struct {
-		Test     string   `json:"test"`
-		Variable string   `json:"variable"`
-		Values   []string `json:"values"`
-	}
-	type statement struct {
-		Sid        string      `json:"Sid"`
-		Effect     string      `json:"Effect"`
-		Action     []string    `json:"Action,omitempty"`
-		NotAction  []string    `json:"NotAction,omitempty"`
-		Resource   string      `json:"Resource"`
-		Condition  interface{} `json:"Condition,omitempty"`
-	}
-	type policyDoc struct {
-		Version   string      `json:"Version"`
-		Statement []statement `json:"Statement"`
-	}
-
-	arnNotLike := func(arns []string) interface{} {
-		return map[string]interface{}{
-			"ArnNotLike": map[string]interface{}{
-				"aws:PrincipalARN": arns,
-			},
-		}
-	}
-
-	policy := policyDoc{
-		Version: "2012-10-17",
-		Statement: []statement{
-			{
-				Sid:    "DenyInfraAndStorage",
-				Effect: "Deny",
-				Action: []string{
-					"ec2:CreateSecurityGroup", "ec2:DeleteSecurityGroup",
-					"ec2:AuthorizeSecurityGroup*", "ec2:RevokeSecurityGroup*",
-					"ec2:ModifySecurityGroupRules",
-					"ec2:CreateVpc", "ec2:CreateSubnet", "ec2:CreateRouteTable",
-					"ec2:CreateRoute", "ec2:*InternetGateway", "ec2:CreateNatGateway",
-					"ec2:*VpcPeeringConnection", "ec2:CreateTransitGateway*",
-					"ec2:CreateSnapshot", "ec2:CopySnapshot",
-					"ec2:CreateImage", "ec2:CopyImage", "ec2:ExportImage",
-				},
-				Resource:  "*",
-				Condition: arnNotLike(trustedBase),
-			},
-			{
-				Sid:    "DenyInstanceMutation",
-				Effect: "Deny",
-				Action: []string{
-					"ec2:RunInstances", "ec2:ModifyInstanceAttribute",
-					"ec2:ModifyInstanceMetadataOptions",
-				},
-				Resource:  "*",
-				Condition: arnNotLike(trustedInstance),
-			},
-			{
-				Sid:    "DenyIAMEscalation",
-				Effect: "Deny",
-				Action: []string{
-					"iam:CreateRole", "iam:AttachRolePolicy", "iam:DetachRolePolicy",
-					"iam:PassRole", "iam:AssumeRole",
-				},
-				Resource:  "*",
-				Condition: arnNotLike(trustedIAM),
-			},
-			{
-				Sid:    "DenySSMPivot",
-				Effect: "Deny",
-				Action: []string{"ssm:SendCommand", "ssm:StartSession"},
-				Resource:  "*",
-				Condition: arnNotLike(trustedSSM),
-			},
-			{
-				Sid:       "DenyOrgDiscovery",
-				Effect:    "Deny",
-				Action:    []string{"organizations:List*", "organizations:Describe*"},
-				Resource:  "*",
-			},
-			{
-				Sid:    "DenyOutsideRegion",
-				Effect: "Deny",
-				NotAction: []string{
-					"iam:*", "sts:*", "organizations:*", "support:*", "health:*",
-					"trustedadvisor:*", "cloudfront:*", "waf:*", "shield:*",
-					"route53:*", "route53domains:*", "budgets:*", "ce:*", "cur:*",
-					"globalaccelerator:*", "networkmanager:*", "pricing:*", "bedrock:*",
-					"s3:GetAccountPublicAccessBlock", "s3:ListAllMyBuckets",
-					"s3:PutAccountPublicAccessBlock",
-				},
-				Resource: "*",
-				Condition: map[string]interface{}{
-					"StringNotEquals": map[string]interface{}{
-						"aws:RequestedRegion": []string{region},
-					},
-					"ArnNotLike": map[string]interface{}{
-						"aws:PrincipalArn": trustedBase,
-					},
-				},
-			},
-		},
-	}
+	policy := BuildSCPPolicy(trustedBase, trustedInstance, trustedIAM, trustedSSM, region)
 
 	policyJSON, err := json.MarshalIndent(policy, "", "  ")
 	if err != nil {
@@ -459,6 +533,10 @@ func runShowSCP(ctx context.Context, cfg *config.Config, w io.Writer) error {
 	fmt.Fprintln(w, "# ============================================================")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, string(policyJSON))
+	fmt.Fprintln(w)
+
+	// Operator IAM positive-allow guidance for Phase 56 AMI lifecycle.
+	WriteOperatorIAMGuidance(w)
 	fmt.Fprintln(w)
 
 	// --- Print km-org-admin role/trust policy ---
