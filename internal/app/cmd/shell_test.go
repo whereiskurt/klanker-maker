@@ -390,7 +390,7 @@ func TestLearnObservedStateJSONRoundTrip(t *testing.T) {
 
 	// GenerateProfileFromJSON uses learnObservedState internally; we verify
 	// that commands survive the JSON round-trip by checking they appear in the YAML output.
-	yamlBytes, err := cmd.GenerateProfileFromJSON(data, "")
+	yamlBytes, err := cmd.GenerateProfileFromJSON(data, "", "")
 	if err != nil {
 		t.Fatalf("GenerateProfileFromJSON returned error: %v", err)
 	}
@@ -413,7 +413,7 @@ func TestGenerateProfileFromJSONWithCommands(t *testing.T) {
 		"commands": ["apt-get install -y jq", "curl https://example.com/setup.sh | bash"]
 	}`)
 
-	yamlBytes, err := cmd.GenerateProfileFromJSON(data, "")
+	yamlBytes, err := cmd.GenerateProfileFromJSON(data, "", "")
 	if err != nil {
 		t.Fatalf("GenerateProfileFromJSON returned error: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestGenerateProfileFromJSONNoCommands(t *testing.T) {
 		"repos": []
 	}`)
 
-	yamlBytes, err := cmd.GenerateProfileFromJSON(data, "")
+	yamlBytes, err := cmd.GenerateProfileFromJSON(data, "", "")
 	if err != nil {
 		t.Fatalf("GenerateProfileFromJSON returned error: %v", err)
 	}

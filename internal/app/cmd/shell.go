@@ -34,6 +34,18 @@ func defaultShellExec(c *exec.Cmd) error {
 	return c.Run()
 }
 
+// bakeFromSandboxFn is the function used to bake an AMI from a sandbox record.
+// Package-level variable allows tests to inject a mock without AWS credentials.
+var bakeFromSandboxFn = BakeFromSandbox
+
+// flushEC2ObservationsFn is the function used to flush eBPF observations.
+// Package-level variable allows tests to inject a mock and verify call ordering.
+var flushEC2ObservationsFn = flushEC2Observations
+
+// fetchEC2ObservedJSONFn is the function used to fetch the observed JSON from S3.
+// Package-level variable allows tests to inject canned observed-state data.
+var fetchEC2ObservedJSONFn = fetchEC2ObservedJSON
+
 // runSSMInteractiveSubprocess runs a subprocess that hosts an interactive SSM
 // session and ignores terminal signals (SIGINT, SIGQUIT, SIGTSTP) for the
 // duration so the session-manager-plugin can handle them — Ctrl+C / Ctrl-\
@@ -63,6 +75,7 @@ func NewShellCmdWithFetcher(cfg *config.Config, fetcher SandboxFetcher, execFn S
 	var ports []string
 	var learn bool
 	var learnOutput string
+	var amiFlag bool
 
 	cmd := &cobra.Command{
 		Use:     "shell <sandbox-id | #number>",
@@ -82,6 +95,9 @@ Port forwarding:
 			if ctx == nil {
 				ctx = context.Background()
 			}
+			if amiFlag && !learn {
+				return fmt.Errorf("--ami requires --learn")
+			}
 			sandboxID, err := ResolveSandboxID(ctx, cfg, args[0])
 			if err != nil {
 				return err
@@ -100,7 +116,7 @@ Port forwarding:
 
 			// --learn post-exit: generate profile from observed traffic.
 			if learn {
-				return runLearnPostExit(ctx, cfg, fetcher, sandboxID, learnOutput)
+				return runLearnPostExit(ctx, cfg, fetcher, sandboxID, learnOutput, amiFlag)
 			}
 			return nil
 		},
@@ -111,6 +127,7 @@ Port forwarding:
 	cmd.Flags().StringSliceVar(&ports, "ports", nil, "Port forwards: 8080, 8080:80, or comma-separated list")
 	cmd.Flags().BoolVar(&learn, "learn", false, "Run in learning mode: observe traffic and generate profile on exit")
 	cmd.Flags().StringVar(&learnOutput, "learn-output", "", "Path to write the generated SandboxProfile YAML (default: learned.<sandbox-id>.YYYYMMDDHHMMSS.yaml)")
+	cmd.Flags().BoolVar(&amiFlag, "ami", false, "Bake an AMI from the sandbox state when learn-mode exits (requires --learn). Snapshot fires before the eBPF flush.")
 
 	return cmd
 }
@@ -508,7 +525,8 @@ func DefaultLearnFilename(sandboxID string, now time.Time) string {
 // AWS credentials or Docker.
 //
 // base is an optional profile name for the Extends field (pass "" to omit).
-func GenerateProfileFromJSON(data []byte, base string) ([]byte, error) {
+// amiID is an optional AMI ID to embed in spec.runtime.ami (pass "" to omit).
+func GenerateProfileFromJSON(data []byte, base, amiID string) ([]byte, error) {
 	var state learnObservedState
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("parse observed state: %w", err)
@@ -528,6 +546,9 @@ func GenerateProfileFromJSON(data []byte, base string) ([]byte, error) {
 	}
 	for _, cmd := range state.Commands {
 		rec.RecordCommand(cmd)
+	}
+	if amiID != "" {
+		rec.RecordAMI(amiID)
 	}
 	return rec.GenerateAnnotatedYAML(base)
 }
@@ -589,7 +610,8 @@ func CollectDockerObservations(sandboxID string, dnsLogs, httpLogs, auditLogs io
 // runLearnPostExit is called after the shell exits when --learn is active.
 // It fetches observed traffic data, generates a SandboxProfile YAML, writes it
 // to learnOutput, and uploads the raw observed JSON to S3 for future aggregation.
-func runLearnPostExit(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, sandboxID, learnOutput string) error {
+// bakeAMI triggers an AMI snapshot (EC2 only) before the eBPF flush when true.
+func runLearnPostExit(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, sandboxID, learnOutput string, bakeAMI bool) error {
 	if fetcher == nil {
 		if cfg.StateBucket == "" {
 			return fmt.Errorf("state bucket not configured")
@@ -613,20 +635,39 @@ func runLearnPostExit(ctx context.Context, cfg *config.Config, fetcher SandboxFe
 	}
 
 	var observedJSON []byte
+	var amiID string
+	var bakeErr error
 
 	switch rec.Substrate {
 	case "ec2", "ec2spot", "ec2demand":
+		// Bake AMI BEFORE the eBPF flush (CONTEXT.md locked decision: snapshot captures
+		// the state the operator just shaped; flush runs after against a stable instance).
+		if bakeAMI {
+			fmt.Fprintln(os.Stderr, "Baking AMI from sandbox state...")
+			amiID, bakeErr = bakeFromSandboxFn(ctx, cfg, *rec, sandboxID, rec.Profile, cfg.Version)
+			if bakeErr != nil {
+				log.Warn().Err(bakeErr).Msg("AMI bake failed — generating profile without ami field")
+				amiID = ""
+			} else {
+				fmt.Fprintf(os.Stderr, "AMI ready: %s\n", amiID)
+			}
+		}
+
 		// Trigger SIGUSR1 on the eBPF enforcer to flush observations to disk + S3.
 		fmt.Fprintln(os.Stderr, "Flushing eBPF observations...")
-		if flushErr := flushEC2Observations(ctx, cfg, sandboxID); flushErr != nil {
+		if flushErr := flushEC2ObservationsFn(ctx, cfg, sandboxID); flushErr != nil {
 			log.Warn().Err(flushErr).Msg("learn: flush via SIGUSR1 failed (will try S3 anyway)")
 		}
-		observedJSON, err = fetchEC2ObservedJSON(ctx, cfg, sandboxID)
+		observedJSON, err = fetchEC2ObservedJSONFn(ctx, cfg, sandboxID)
 		if err != nil {
 			return err
 		}
 
 	case "docker":
+		if bakeAMI {
+			log.Warn().Str("substrate", rec.Substrate).Msg("AMI bake skipped: substrate docker not supported")
+		}
+
 		dnsContainer := fmt.Sprintf("km-%s-dns-proxy", sandboxID)
 		httpContainer := fmt.Sprintf("km-%s-http-proxy", sandboxID)
 		// Container name matches compose.go template: km-{{ .SandboxID }}-audit-log
@@ -661,6 +702,9 @@ func runLearnPostExit(ctx context.Context, cfg *config.Config, fetcher SandboxFe
 		uploadLearnSession(ctx, cfg, sandboxID, observedJSON)
 
 	case "ecs":
+		if bakeAMI {
+			log.Warn().Str("substrate", rec.Substrate).Msg("AMI bake skipped: substrate ecs not supported")
+		}
 		fmt.Fprintln(os.Stderr, "Learning mode is not yet supported on ECS substrate. Use EC2 or Docker.")
 		return nil
 
@@ -668,7 +712,7 @@ func runLearnPostExit(ctx context.Context, cfg *config.Config, fetcher SandboxFe
 		return fmt.Errorf("unsupported substrate %q for --learn", rec.Substrate)
 	}
 
-	yamlBytes, err := GenerateProfileFromJSON(observedJSON, "")
+	yamlBytes, err := GenerateProfileFromJSON(observedJSON, "", amiID)
 	if err != nil {
 		return fmt.Errorf("generate profile: %w", err)
 	}
@@ -682,6 +726,12 @@ func runLearnPostExit(ctx context.Context, cfg *config.Config, fetcher SandboxFe
 	}
 
 	fmt.Fprintf(os.Stderr, "\nGenerated SandboxProfile: %s\nReview and apply with: km validate %s\n", learnOutput, learnOutput)
+
+	// If the AMI bake failed, return a non-nil error so the process exits non-zero.
+	// The profile is already written (without the ami field) so the operator is not blocked.
+	if bakeErr != nil {
+		return fmt.Errorf("AMI bake failed: %w (profile generated without ami field)", bakeErr)
+	}
 	return nil
 }
 

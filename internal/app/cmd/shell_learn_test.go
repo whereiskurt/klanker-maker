@@ -61,7 +61,7 @@ func TestLearnOutputPath(t *testing.T) {
 func TestGenerateProfileFromObservedJSON(t *testing.T) {
 	input := []byte(`{"dns":["api.github.com","pypi.org"],"hosts":["registry.npmjs.org"],"repos":["octocat/hello"]}`)
 
-	yamlBytes, err := cmd.GenerateProfileFromJSON(input, "")
+	yamlBytes, err := cmd.GenerateProfileFromJSON(input, "", "")
 	if err != nil {
 		t.Fatalf("generateProfileFromJSON returned error: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestGenerateProfileFromObservedJSON(t *testing.T) {
 func TestGenerateProfileFromObservedJSON_Empty(t *testing.T) {
 	input := []byte(`{"dns":[],"hosts":[],"repos":[]}`)
 
-	yamlBytes, err := cmd.GenerateProfileFromJSON(input, "")
+	yamlBytes, err := cmd.GenerateProfileFromJSON(input, "", "")
 	if err != nil {
 		t.Fatalf("generateProfileFromJSON returned error: %v", err)
 	}
