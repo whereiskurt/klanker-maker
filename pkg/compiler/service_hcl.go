@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"text/template"
 	"time"
@@ -13,6 +14,18 @@ import (
 	pkggithub "github.com/whereiskurt/klankrmkr/pkg/github"
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
 )
+
+// rawAMIIDPattern matches a valid EC2 AMI ID: "ami-" followed by 8-17 lowercase hex chars.
+// AWS used 8-char IDs before June 2018 and 17-char IDs since. Both remain valid per
+// `aws ec2 describe-images`. AMI IDs are always lowercase — uppercase hex is non-canonical.
+var rawAMIIDPattern = regexp.MustCompile(`^ami-[0-9a-f]{8,17}$`)
+
+// isRawAMIID returns true if s is a raw EC2 AMI ID (Phase 33.1) rather than an AMI slug.
+// Used by generateEC2ServiceHCL to branch between slug lookup (data.aws_ami) and
+// direct ID passthrough in the Terraform module.
+func isRawAMIID(s string) bool {
+	return rawAMIIDPattern.MatchString(s)
+}
 
 // ============================================================
 // EC2 service.hcl template

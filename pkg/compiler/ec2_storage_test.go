@@ -240,3 +240,75 @@ func TestAdditionalVolumeAbsentInHCL(t *testing.T) {
 		t.Errorf("HCL output missing %q\ngot:\n%s", want, hcl)
 	}
 }
+
+// ============================================================
+// Phase 33.1 Plan 01: isRawAMIID helper + Wave 0 HCL scaffold
+// ============================================================
+
+// TestIsRawAMIID verifies the isRawAMIID() helper function.
+func TestIsRawAMIID(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"8-char valid", "ami-0abc1234", true},
+		{"17-char canonical", "ami-0abcdef1234567890", true},
+		{"slug ubuntu-24.04", "ubuntu-24.04", false},
+		{"slug amazon-linux-2023", "amazon-linux-2023", false},
+		{"empty string", "", false},
+		{"uppercase hex", "ami-GGGGGGGG", false},
+		{"too short 7 hex", "ami-123", false},
+		{"uppercase prefix", "AMI-0abc12345", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isRawAMIID(tc.input)
+			if got != tc.want {
+				t.Errorf("isRawAMIID(%q) = %v, want %v", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAMIRawIDInHCL verifies that a raw AMI ID emits ami_id and ami_slug = "" in HCL.
+// Wave 0: red until Plan 02 wires HCL template to emit ami_id.
+func TestAMIRawIDInHCL(t *testing.T) {
+	// Wave 0: red until Plan 02 wires HCL template to emit ami_id.
+	p := minimalEC2StorageProfile()
+	p.Spec.Runtime.AMI = "ami-0abcdef1234567890"
+
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantAMIID := `ami_id                 = "ami-0abcdef1234567890"`
+	if !strings.Contains(hcl, wantAMIID) {
+		t.Errorf("HCL output missing %q\ngot:\n%s", wantAMIID, hcl)
+	}
+	wantSlugEmpty := `ami_slug               = ""`
+	if !strings.Contains(hcl, wantSlugEmpty) {
+		t.Errorf("HCL output missing %q\ngot:\n%s", wantSlugEmpty, hcl)
+	}
+}
+
+// TestAMISlugInHCLEmitsEmptyAMIID verifies that a slug path emits ami_id = "" alongside ami_slug.
+// Wave 0: red until Plan 02 wires HCL template to emit ami_id.
+func TestAMISlugInHCLEmitsEmptyAMIID(t *testing.T) {
+	// Wave 0: red until Plan 02 wires HCL template to emit ami_id.
+	p := minimalEC2StorageProfile()
+	p.Spec.Runtime.AMI = "ubuntu-24.04"
+
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantSlug := `ami_slug               = "ubuntu-24.04"`
+	if !strings.Contains(hcl, wantSlug) {
+		t.Errorf("HCL output missing %q\ngot:\n%s", wantSlug, hcl)
+	}
+	wantAMIIDEmpty := `ami_id                 = ""`
+	if !strings.Contains(hcl, wantAMIIDEmpty) {
+		t.Errorf("HCL output missing %q\ngot:\n%s", wantAMIIDEmpty, hcl)
+	}
+}
