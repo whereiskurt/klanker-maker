@@ -1593,6 +1593,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 	var jsonOutput bool
 	var quietMode bool
 	var dryRun bool
+	var allRegions bool
 
 	cmd := &cobra.Command{
 		Use:          "doctor",
@@ -1609,18 +1610,20 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 			default:
 				return fmt.Errorf("unsupported config type %T", cfg)
 			}
-			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun)
+			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output results as JSON array")
 	cmd.Flags().BoolVar(&quietMode, "quiet", false, "Suppress OK results; show only warnings and errors")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", true,
 		"Show stale resources without deleting (use --dry-run=false to clean up)")
+	cmd.Flags().BoolVar(&allRegions, "all-regions", false,
+		"Run regional checks against all configured regions (PrimaryRegion + KM_REPLICA_REGION CSV)")
 	return cmd
 }
 
 // runDoctor is the core execution logic for km doctor.
-func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun bool) error {
+func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions bool) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -1639,7 +1642,10 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 
 	// Initialize real AWS clients when deps is nil or partially nil.
 	if deps == nil {
-		deps = initRealDeps(ctx, cfg)
+		// Propagate allRegions into deps before initRealDeps so the region list
+		// construction (EC2Clients, EC2AMIClients) picks it up.
+		deps = &DoctorDeps{AllRegions: allRegions}
+		deps = initRealDepsWithExisting(ctx, cfg, deps)
 	}
 	deps.DryRun = dryRun
 
@@ -1945,11 +1951,14 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	return checks
 }
 
-// initRealDeps creates real AWS clients from configuration.
+// initRealDepsWithExisting fills an existing DoctorDeps with real AWS clients from configuration.
+// The caller may pre-populate AllRegions (and other boolean fields) before calling.
 // Client creation failures are non-fatal — the corresponding field is set to nil
 // and the check will be skipped.
-func initRealDeps(ctx context.Context, cfg DoctorConfigProvider) *DoctorDeps {
-	deps := &DoctorDeps{}
+func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, deps *DoctorDeps) *DoctorDeps {
+	if deps == nil {
+		deps = &DoctorDeps{}
+	}
 
 	profile := cfg.GetAWSProfile()
 	if profile == "" {
@@ -2156,4 +2165,9 @@ func checkPinnedVersions() CheckResult {
 		Status:  CheckOK,
 		Message: strings.Join(msgs, "; ") + " — update available, test before unpinning",
 	}
+}
+
+// initRealDeps creates real AWS clients from configuration (backward-compatible wrapper).
+func initRealDeps(ctx context.Context, cfg DoctorConfigProvider) *DoctorDeps {
+	return initRealDepsWithExisting(ctx, cfg, &DoctorDeps{})
 }
