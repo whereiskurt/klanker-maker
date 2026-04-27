@@ -1248,10 +1248,14 @@ Plans:
 **Goal:** Fix km-send and km-recv bash scripts to handle external (non-sandbox) email. km-send gets `--no-sign` flag that skips Ed25519 SSM key fetch and X-KM-* headers, enabling plain email to Gmail/external addresses. km-recv gets RFC 5322 folded header parsing, multipart/alternative body extraction (Gmail HTML emails), and `--from-external` display hint. Inbound external emails must contain the configured safe phrase (from km configure) to be accepted — the SES receipt rule Lambda validates this before delivery to the sandbox mailbox. Update the marketplace plugin/skill docs to document /opt/km/bin/km-send and km-recv paths, external email workflow, and safe phrase requirements.
 **Requirements**: TBD
 **Depends on:** Phase 45 (km-send/km-recv scripts), Phase 46 (AI email-to-command / safe phrase)
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 57 to break down)
+- [ ] 57-00-PLAN.md — Wave 0 test scaffolding (RED test stubs + MIME fixtures for Plans 01-03)
+- [ ] 57-01-PLAN.md — km-send --no-sign flag (skip SSM/openssl, omit X-KM-* headers, keep KM-AUTH)
+- [ ] 57-02-PLAN.md — km-recv RFC 5322 unfold + multipart/alternative + nested + [EXTERNAL] hint
+- [ ] 57-03-PLAN.md — km-mail-poller safe-phrase validation for external inbound (fail-open SSM)
+- [ ] 57-04-PLAN.md — Marketplace plugin docs: skills/email + skills/sandbox SKILL.md updates
 
 ### Phase 58: km agent run codex support with --claude/--codex flags, codexArgs profile field, and claude-only --no-bedrock gating
 
