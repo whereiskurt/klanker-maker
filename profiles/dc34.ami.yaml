@@ -1,0 +1,152 @@
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: dc34
+  labels:
+    tier: development
+    tool: alltools
+  prefix: dc34
+
+spec:
+  lifecycle:
+    ttl: "8h"
+    idleTimeout: "1h"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    spot: false
+    instanceType: t3.large
+    region: us-east-1
+    rootVolumeSize: 15
+    hibernation: true
+    ami: ami-08b1e6a38f4fb1528
+    mountEFS: true
+    efsMountPoint: /shared
+    additionalVolume:
+      size: 20
+      mountPoint: /data
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: true
+    privileged: true
+    env:
+      SANDBOX_MODE: goose-ebpf-gatekeeper
+      GOOSE_PROVIDER: aws_bedrock
+      GOOSE_MODEL: us.anthropic.claude-opus-4-6-v1
+      GOOSE_MODE: auto
+      GOOSE_TELEMETRY_ENABLED: "false"
+      CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
+      OPENAI_API_KEY: ""
+    configFiles:
+      "/home/sandbox/.claude/settings.json": |
+        {"trustedDirectories":["/home/sandbox","/workspace"],"autoApprove":["Bash","Read","Write","Edit","Glob","Grep","WebFetch","WebSearch","NotebookEdit"]}
+      "/home/sandbox/.claude/plugins/known_marketplaces.json": |
+        {"klanker-maker":{"source":{"source":"github","repo":"whereiskurt/klanker-maker"},"installLocation":"/home/sandbox/.claude/plugins/marketplaces/klanker-maker","lastUpdated":"2026-04-16T00:00:00Z"}}
+
+    # For plugin-only snapshots, use rsyncPaths: [".claude/plugins"] in your profile
+    rsyncPaths:
+      - ".gitconfig"
+      - ".config/goose"
+      - ".claude"
+      - ".claude.json"
+      - ".codex"
+      - ".aws"
+    initCommands: 
+      - cd /workspace/klanker-maker/ && git pull
+      - cd /workspace/defcon.run.34/ && git pull
+      - cd /workspace/meshtk/ && git pull
+            
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+      - nvm-sh/nvm
+      - whereiskurt/klanker-maker
+      - whereiskurt/defcon.run.34
+      - whereiskurt/meshtk
+      allowedRefs:
+      - "*"
+
+  network:
+    enforcement: both
+    egress:
+      allowedDNSSuffixes:
+        - "*"
+      allowedHosts:
+        - "*"
+
+  budget:
+    compute:
+      maxSpendUSD: 0.50
+    ai:
+      maxSpendUSD: 2.00
+    warningThreshold: 0.80
+
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 500
+
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    learnMode: true
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/network
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+    tlsCapture:
+      enabled: true
+      libraries:
+        - openssl
+      capturePayloads: false
+
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: required
+    allowedSenders:
+      - "self"
+      - "whereiskurt@gmail.com"
+      - "kurt.hundeck@*"
+
+  agent:
+    maxConcurrentTasks: 1
+    taskTimeout: "30m"
+    allowedTools:
+      - bash
+      - read_file
+      - write_file
+      - list_files
+
+  cli:
+    noBedrock: true
+    claudeArgs:
+      - "--dangerously-skip-permissions"
