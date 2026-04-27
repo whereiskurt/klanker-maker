@@ -1222,6 +1222,16 @@ Plans:
 - [ ] 56-05-PLAN.md — km shell --learn --ami integration + Recorder.RecordAMI + generator emits spec.runtime.ami
 - [ ] 56-06-PLAN.md — km doctor checkStaleAMIs + DoctorDeps.EC2AMIClients + --all-regions fan-out
 
+### Phase 56.1: Bake-loop hardening — fix additionalVolume/AMI BDM collision, non-blocking audit hook, sidecar FIFO-retry + post-env-rewrite restart (lessons from Phase 56 e2e) (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 56
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 56.1 to break down)
+
 ### Phase 57: Email enhancement — km-send --no-sign for external recipients, km-recv multipart/RFC5322 fixes, safe phrase validation on inbound, marketplace plugin email docs
 
 **Goal:** Fix km-send and km-recv bash scripts to handle external (non-sandbox) email. km-send gets `--no-sign` flag that skips Ed25519 SSM key fetch and X-KM-* headers, enabling plain email to Gmail/external addresses. km-recv gets RFC 5322 folded header parsing, multipart/alternative body extraction (Gmail HTML emails), and `--from-external` display hint. Inbound external emails must contain the configured safe phrase (from km configure) to be accepted — the SES receipt rule Lambda validates this before delivery to the sandbox mailbox. Update the marketplace plugin/skill docs to document /opt/km/bin/km-send and km-recv paths, external email workflow, and safe phrase requirements.

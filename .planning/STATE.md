@@ -685,6 +685,7 @@ None yet.
 - Phase 61 added: km shell Ctrl+C fix — switch interactive SSM sessions from AWS-StartInteractiveCommand to a parameterized Standard_Stream document with runAsDefaultUser=sandbox
 - Phase 33.1 inserted after Phase 33: Raw AMI ID support — extend schema, compiler, and Terraform to accept ami-xxxxxxxx IDs alongside slugs (prereq for Phase 56 snapshot lifecycle) (URGENT)
 - Phase 62 added: Claude Code operator-notify hook — emit signed emails to operator (or override address) on Notification (permission) and Stop (idle) hook events; profile-driven (`spec.cli.notifyOnPermission/notifyOnIdle/notifyCooldownSeconds/notificationEmailAddress`) with `--notify-on-permission`/`--notify-on-idle` CLI overrides on `km shell`/`km agent run`. Hook installed at compile time; v1 notification-only with v2 closed-loop forward-compatible. Spec: `docs/superpowers/specs/2026-04-26-operator-notify-hook-design.md`
+- Phase 56.1 inserted after Phase 56: Bake-loop hardening — fix additionalVolume/AMI BDM collision, non-blocking audit hook, sidecar FIFO-retry + post-env-rewrite restart (URGENT — lessons from Phase 56 e2e: AMI'd sandbox failed to launch due to /dev/sdf BDM collision; once fixed, login shells deadlocked because audit hook FIFO write blocks when km-audit-log starts before /run/km/audit-pipe exists and never retries)
 
 ## Session Continuity
 
