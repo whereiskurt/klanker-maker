@@ -1222,6 +1222,16 @@ Plans:
 - [ ] 56-05-PLAN.md — km shell --learn --ami integration + Recorder.RecordAMI + generator emits spec.runtime.ami
 - [ ] 56-06-PLAN.md — km doctor checkStaleAMIs + DoctorDeps.EC2AMIClients + --all-regions fan-out
 
+### Phase 56.2: Resume hardening — km-bootstrap.service for cgroup + /run/km recreation on every boot, harden cgroup.procs redirect writes (lessons from Phase 56.1 km resume e2e) (INSERTED)
+
+**Goal:** Eliminate two errors observed on shell entry after `km resume` of a stopped (or baked-then-resumed) sandbox: (1) `bash: /sys/fs/cgroup/km.slice/km-{sandbox-id}.scope/cgroup.procs: No such file or directory` from `/etc/profile.d/km-cgroup.sh` and the `km-sandbox-shell` wrapper — `/sys/fs/cgroup` is a kernel-managed pseudo-fs that's empty after EC2 stop+start, the scope created during cloud-init at `pkg/compiler/userdata.go:1369` is gone, cloud-init does not re-run on resume, and the existing `2>/dev/null || true` does not catch the error because bash opens the redirect target before applying stderr suppression — net effect: shell is not placed in the eBPF cgroup, enforcement may be bypassed; (2) `bash: /run/km/learn-commands.log: No such file or directory` from the learn-mode PROMPT_COMMAND append at `userdata.go:498` — `/run` is tmpfs and gets recreated empty at every boot, so the file `touch`ed once at `userdata.go:426` disappears on resume. Approach: add `km-bootstrap.service` (Type=oneshot, RemainAfterExit=yes, Before=amazon-ssm-agent.service, Wants=km.slice) emitted by the compiler and packaged into the userdata systemd-unit drop, running a small bash script that (a) sources `/etc/profile.d/km-identity.sh` so SANDBOX_ID is correct on baked-AMI relaunch, (b) `mkdir -p /sys/fs/cgroup/km.slice/km-${SANDBOX_ID}.scope` and chowns `cgroup.procs`, (c) `mkdir -p /run/km` and `touch` the well-known sentinel files (`learn-commands.log`, `audit-pipe` placeholder) with the right ownership/permissions; harden the existing `echo $$ > cgroup.procs` writes in `km-cgroup.sh` and `km-sandbox-shell` to use `{ echo $$ > path; } 2>/dev/null || true` so redirect-open errors are actually suppressed.
+**Requirements**: P56.2-01, P56.2-02, P56.2-03, P56.2-04, P56.2-05, P56.2-06, P56.2-07
+**Depends on:** Phase 56.1
+**Plans:** 1 plan
+
+Plans:
+- [ ] 56.2-01-PLAN.md — Emit km-bootstrap.service + /usr/local/bin/km-bootstrap script + systemctl enable; harden cgroup.procs writes with compound-command form (TDD)
+
 ### Phase 56.1: Bake-loop hardening — fix additionalVolume/AMI BDM collision, non-blocking audit hook, sidecar FIFO-retry + post-env-rewrite restart (lessons from Phase 56 e2e) (INSERTED)
 
 **Goal:** Fix four runtime bugs in the bake-loop discovered in Phase 56 e2e: (1) hardcoded /dev/sdf in ec2spot Terraform module collides with baked-AMI BDMs that already declare it — compiler now detects and picks /dev/sdg…/dev/sdp; (2) bare > redirect in _km_audit PROMPT_COMMAND deadlocks login shells when the FIFO has no reader — replace with timeout 0.1 tee; (3) km-audit-log sidecar opens FIFO once and falls through to empty stdin on race — add 10-attempt retry with backoff that re-creates /run/km/ + the FIFO; (4) sidecars on a baked AMI inherit the bake-source's SANDBOX_ID — add systemctl restart of km-* units after env-rewrite + sidecar download.
