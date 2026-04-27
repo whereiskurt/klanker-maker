@@ -28,6 +28,42 @@ func isRawAMIID(s string) bool {
 	return rawAMIIDPattern.MatchString(s)
 }
 
+// IsRawAMIID is the exported variant of isRawAMIID for callers outside this package.
+func IsRawAMIID(s string) bool { return isRawAMIID(s) }
+
+// additionalVolumeDeviceCandidates is the ordered list of valid AWS additional EBS volume
+// device names. AWS accepts /dev/sd[f-p] for additional volumes on EC2 instances.
+var additionalVolumeDeviceCandidates = []string{
+	"/dev/sdf", "/dev/sdg", "/dev/sdh", "/dev/sdi",
+	"/dev/sdj", "/dev/sdk", "/dev/sdl", "/dev/sdm",
+	"/dev/sdn", "/dev/sdo", "/dev/sdp",
+}
+
+// pickAdditionalVolumeDevice returns the first device name from additionalVolumeDeviceCandidates
+// that is not occupied by any device in amiDevices. Both /dev/sdX and /dev/xvdX aliases are
+// treated as equivalent (NVMe alias normalization — see RESEARCH.md Open Question 2).
+// Returns "/dev/sdf" (the first candidate) when amiDevices is nil or empty.
+// Returns "/dev/sdf" as fallback when all candidates are occupied (unreachable in practice).
+func pickAdditionalVolumeDevice(amiDevices []string) string {
+	occupied := make(map[string]bool, len(amiDevices)*2)
+	for _, d := range amiDevices {
+		occupied[d] = true
+		// Treat /dev/xvdX as occupying /dev/sdX and vice versa (NVMe alias)
+		if strings.HasPrefix(d, "/dev/xvd") {
+			occupied["/dev/sd"+d[len("/dev/xvd"):]] = true
+		}
+		if strings.HasPrefix(d, "/dev/sd") {
+			occupied["/dev/xvd"+d[len("/dev/sd"):]] = true
+		}
+	}
+	for _, c := range additionalVolumeDeviceCandidates {
+		if !occupied[c] {
+			return c
+		}
+	}
+	return "/dev/sdf" // fallback: unreachable when AMI has fewer than 11 additional volumes
+}
+
 // ============================================================
 // EC2 service.hcl template
 // ============================================================
@@ -86,9 +122,10 @@ const ec2ServiceHCLTemplate = `locals {
     ami_slug               = "{{ .AMISlug }}"
     ami_id                 = "{{ .AMIID }}"
 
-    # Additional EBS volume (Phase 33)
+    # Additional EBS volume (Phase 33 / 56.1)
     additional_volume_size_gb    = {{ .AdditionalVolumeSizeGB }}
     additional_volume_encrypted  = {{ .AdditionalVolumeEncrypted }}
+    additional_volume_device_name = "{{ .AdditionalVolumeDeviceName }}"
   }
 {{- if .HasBudget }}
 
@@ -419,10 +456,11 @@ type ec2HCLParams struct {
 	HibernationEnabled bool   // enable EC2 hibernation (on-demand only)
 	AMISlug            string // AMI slug for data.aws_ami lookup; empty when raw ID is used
 	AMIID              string // raw EC2 AMI ID (Phase 33.1); empty when slug is used
-	// Additional EBS volume fields (Phase 33)
-	AdditionalVolumeSizeGB    int    // additional data volume size in GB; 0 means no additional volume
-	AdditionalVolumeEncrypted bool   // encrypt the additional EBS volume
+	// Additional EBS volume fields (Phase 33 / 56.1)
+	AdditionalVolumeSizeGB     int    // additional data volume size in GB; 0 means no additional volume
+	AdditionalVolumeEncrypted  bool   // encrypt the additional EBS volume
 	AdditionalVolumeMountPoint string // mount point for the additional volume (e.g. "/data")
+	AdditionalVolumeDeviceName string // device name for the additional volume (e.g. "/dev/sdf" or "/dev/sdg")
 }
 
 // ============================================================
@@ -633,7 +671,7 @@ func validateEC2StorageFields(p *profile.SandboxProfile, useSpot bool) error {
 	return nil
 }
 
-func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot bool, sgRules []SGRule, iamPolicy *IAMSessionPolicy, userData string, network *NetworkConfig) (string, error) {
+func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot bool, sgRules []SGRule, iamPolicy *IAMSessionPolicy, userData string, network *NetworkConfig, amiBDMDeviceNames []string) (string, error) {
 	if err := validateEC2StorageFields(p, useSpot); err != nil {
 		return "", err
 	}
@@ -705,6 +743,9 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 			}
 			return ""
 		}(),
+		// Phase 56.1: pick the first non-colliding device name from the AMI's BDMs.
+		// pickAdditionalVolumeDevice returns "/dev/sdf" when amiBDMDeviceNames is nil/empty.
+		AdditionalVolumeDeviceName: pickAdditionalVolumeDevice(amiBDMDeviceNames),
 	}
 
 	// Populate GitHub token fields when sourceAccess.github is configured with at least one repo.

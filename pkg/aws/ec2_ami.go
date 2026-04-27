@@ -146,6 +146,29 @@ func BakeAMI(ctx context.Context, client EC2AMIAPI, instanceID, amiName, descrip
 	return amiID, nil
 }
 
+// AMIBDMDeviceNames returns the device names from BlockDeviceMappings for an AMI.
+// Returns (nil, nil) when amiID is empty or no images are returned.
+// Used by the compiler to detect /dev/sdf collision before emitting additionalVolume HCL.
+func AMIBDMDeviceNames(ctx context.Context, client EC2AMIAPI, amiID string) ([]string, error) {
+	if amiID == "" {
+		return nil, nil
+	}
+	out, err := client.DescribeImages(ctx, &ec2.DescribeImagesInput{ImageIds: []string{amiID}})
+	if err != nil {
+		return nil, fmt.Errorf("describe images %s for BDM: %w", amiID, err)
+	}
+	if len(out.Images) == 0 {
+		return nil, nil
+	}
+	var devices []string
+	for _, bdm := range out.Images[0].BlockDeviceMappings {
+		if bdm.DeviceName != nil {
+			devices = append(devices, *bdm.DeviceName)
+		}
+	}
+	return devices, nil
+}
+
 // ListBakedAMIs returns all self-owned AMIs that carry a km:sandbox-id tag and
 // are in the "available" state. Results are sorted newest-first by CreationDate.
 // DescribeImages is not a paginated API for self-owned images; no NextToken loop

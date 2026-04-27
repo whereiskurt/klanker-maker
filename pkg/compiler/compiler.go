@@ -77,13 +77,18 @@ type IAMSessionPolicy struct {
 //   - p: the parsed and validated SandboxProfile
 //   - sandboxID: the unique sandbox identifier (e.g. "sb-a1b2c3d4")
 //   - onDemand: when true, overrides profile's spot=true to force on-demand provisioning
+//   - network: VPC/subnet configuration from km init
+//   - amiBDMDeviceNames: device names from the source AMI's block device mappings (Phase 56.1).
+//     When non-nil, the compiler picks the first non-colliding device from /dev/sd[f-p] for
+//     the additionalVolume attachment. Pass nil for non-raw-AMI paths or when no BDM lookup
+//     is needed — defaults to "/dev/sdf" (preserves pre-56.1 behavior).
 //
 // Compile is a pure function with no AWS side effects — fully testable without credentials.
-func Compile(p *profile.SandboxProfile, sandboxID string, onDemand bool, network *NetworkConfig) (*CompiledArtifacts, error) {
+func Compile(p *profile.SandboxProfile, sandboxID string, onDemand bool, network *NetworkConfig, amiBDMDeviceNames []string) (*CompiledArtifacts, error) {
 	substrate := p.Spec.Runtime.Substrate
 	switch substrate {
 	case "ec2":
-		return compileEC2(p, sandboxID, onDemand, network)
+		return compileEC2(p, sandboxID, onDemand, network, amiBDMDeviceNames)
 	case "ecs":
 		return compileECS(p, sandboxID, onDemand, network)
 	case "docker":
@@ -94,7 +99,7 @@ func Compile(p *profile.SandboxProfile, sandboxID string, onDemand bool, network
 }
 
 // compileEC2 handles the EC2 substrate compilation path.
-func compileEC2(p *profile.SandboxProfile, sandboxID string, onDemand bool, network *NetworkConfig) (*CompiledArtifacts, error) {
+func compileEC2(p *profile.SandboxProfile, sandboxID string, onDemand bool, network *NetworkConfig, amiBDMDeviceNames []string) (*CompiledArtifacts, error) {
 	// onDemand=true overrides profile's spot=true
 	useSpot := p.Spec.Runtime.Spot && !onDemand
 
@@ -147,7 +152,7 @@ exec /tmp/km-userdata.sh
 	userDataB64 := base64.StdEncoding.EncodeToString([]byte(userData))
 
 	// Generate service.hcl (includes user-data inline in ec2spots[].user_data_base64)
-	svcHCL, err := generateEC2ServiceHCL(p, sandboxID, useSpot, sgRules, iamPolicy, userDataB64, network)
+	svcHCL, err := generateEC2ServiceHCL(p, sandboxID, useSpot, sgRules, iamPolicy, userDataB64, network, amiBDMDeviceNames)
 	if err != nil {
 		return nil, fmt.Errorf("generate EC2 service.hcl: %w", err)
 	}

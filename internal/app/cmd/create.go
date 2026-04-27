@@ -24,6 +24,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	ec2svc "github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	iampkg "github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
@@ -426,8 +427,9 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 
 	// Step 7: Compile profile into Terragrunt/Docker artifacts.
 	// For docker substrate, compile once and dispatch immediately — no AZ retry loop needed.
+	// Docker substrate does not use EBS volumes — BDM lookup is not needed; pass nil.
 	{
-		artifacts, err := compiler.Compile(resolvedProfile, sandboxID, onDemand, network)
+		artifacts, err := compiler.Compile(resolvedProfile, sandboxID, onDemand, network, nil)
 		if err != nil {
 			return fmt.Errorf("failed to compile profile: %w", err)
 		}
@@ -446,6 +448,20 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		maxAttempts = 1 // on-demand doesn't need AZ rotation
 	}
 
+	// Phase 56.1: BDM collision detection for additionalVolume + raw AMI combinations.
+	// Look up the AMI's block device mappings once (before the AZ retry loop) so the
+	// compiler can pick a non-colliding device name for the additional EBS volume.
+	var amiBDMDevices []string
+	if compiler.IsRawAMIID(resolvedProfile.Spec.Runtime.AMI) && resolvedProfile.Spec.Runtime.AdditionalVolume != nil {
+		ec2Client := ec2svc.NewFromConfig(awsCfg)
+		devices, lookupErr := awspkg.AMIBDMDeviceNames(ctx, ec2Client, resolvedProfile.Spec.Runtime.AMI)
+		if lookupErr != nil {
+			log.Warn().Err(lookupErr).Str("ami", resolvedProfile.Spec.Runtime.AMI).Msg("BDM lookup failed; defaulting to /dev/sdf")
+		} else {
+			amiBDMDevices = devices
+		}
+	}
+
 	var sandboxDir string
 	var artifacts *compiler.CompiledArtifacts
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
@@ -461,7 +477,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 
 		// Step 7: Compile profile into Terragrunt artifacts
 		var compileErr error
-		artifacts, compileErr = compiler.Compile(resolvedProfile, sandboxID, onDemand, network)
+		artifacts, compileErr = compiler.Compile(resolvedProfile, sandboxID, onDemand, network, amiBDMDevices)
 		if compileErr != nil {
 			return fmt.Errorf("failed to compile profile: %w", compileErr)
 		}
@@ -1653,8 +1669,20 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		stripBedrockEnvVars(resolvedProfile)
 	}
 
+	// Phase 56.1: BDM collision detection for additionalVolume + raw AMI combinations.
+	var remoteAmiBDMDevices []string
+	if compiler.IsRawAMIID(resolvedProfile.Spec.Runtime.AMI) && resolvedProfile.Spec.Runtime.AdditionalVolume != nil {
+		ec2Client := ec2svc.NewFromConfig(awsCfg)
+		devices, lookupErr := awspkg.AMIBDMDeviceNames(ctx, ec2Client, resolvedProfile.Spec.Runtime.AMI)
+		if lookupErr != nil {
+			log.Warn().Err(lookupErr).Str("ami", resolvedProfile.Spec.Runtime.AMI).Msg("BDM lookup failed; defaulting to /dev/sdf")
+		} else {
+			remoteAmiBDMDevices = devices
+		}
+	}
+
 	// Step 7: Compile profile into artifacts
-	artifacts, err := compiler.Compile(resolvedProfile, sandboxID, onDemand, network)
+	artifacts, err := compiler.Compile(resolvedProfile, sandboxID, onDemand, network, remoteAmiBDMDevices)
 	if err != nil {
 		return "", fmt.Errorf("failed to compile profile: %w", err)
 	}

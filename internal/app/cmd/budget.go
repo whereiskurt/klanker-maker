@@ -389,7 +389,7 @@ func reprovisionECSSandbox(ctx context.Context, cfg *config.Config, sandboxID, a
 
 	// Step 5: Compile with existing sandboxID — never generate a new one.
 	// Reusing the existing ID ensures Terraform state maps to the existing ECS cluster.
-	artifacts, err := compiler.Compile(resolvedProfile, sandboxID, false, network)
+	artifacts, err := compiler.Compile(resolvedProfile, sandboxID, false, network, nil)
 	if err != nil {
 		return fmt.Errorf("compile profile for re-provisioning: %w", err)
 	}
