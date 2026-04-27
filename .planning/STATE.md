@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 56.1-02-PLAN.md
-last_updated: "2026-04-27T01:46:44.548Z"
+stopped_at: Completed 56.2-01-PLAN.md
+last_updated: "2026-04-27T13:18:13.059Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
-  total_phases: 64
-  completed_phases: 59
-  total_plans: 185
-  completed_plans: 181
+  total_phases: 65
+  completed_phases: 60
+  total_plans: 186
+  completed_plans: 182
   percent: 0
 ---
 
@@ -222,6 +222,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 56-learn-mode-ami-snapshot-and-lifecycle-management P05 | 45min | 2 tasks | 6 files |
 | Phase 56.1 P01 | 841s | 3 tasks | 9 files |
 | Phase 56.1 P02 | 936 | 3 tasks | 9 files |
+| Phase 56.2 P01 | 10min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -618,6 +619,9 @@ Recent decisions affecting current work:
 - [Phase 56.1]: Use timeout-tee pattern for FIFO writes in bash (not O_NONBLOCK or background fork)
 - [Phase 56.1]: Place systemctl restart as last cloud-init step to guarantee runs after sidecar binaries downloaded
 - [Phase 56.1]: Add FIFO retry in main.go (not ExecStartPre= systemd unit) to keep logic testable
+- [Phase 56.2]: No Wants=km.slice in km-bootstrap.service: km.slice is a cgroup directory not a systemd unit; script uses mkdir -p to create the parent
+- [Phase 56.2]: km-bootstrap.service always emitted (not gated on enforcement mode): /run/km parent dir needed for km-audit-log FIFO on all enforcement modes
+- [Phase 56.2]: No km init --sidecars needed: template-only changes compiled into km binary; operator runs make build only
 
 ### Roadmap Evolution
 
@@ -693,9 +697,10 @@ None yet.
 - Phase 33.1 inserted after Phase 33: Raw AMI ID support — extend schema, compiler, and Terraform to accept ami-xxxxxxxx IDs alongside slugs (prereq for Phase 56 snapshot lifecycle) (URGENT)
 - Phase 62 added: Claude Code operator-notify hook — emit signed emails to operator (or override address) on Notification (permission) and Stop (idle) hook events; profile-driven (`spec.cli.notifyOnPermission/notifyOnIdle/notifyCooldownSeconds/notificationEmailAddress`) with `--notify-on-permission`/`--notify-on-idle` CLI overrides on `km shell`/`km agent run`. Hook installed at compile time; v1 notification-only with v2 closed-loop forward-compatible. Spec: `docs/superpowers/specs/2026-04-26-operator-notify-hook-design.md`
 - Phase 56.1 inserted after Phase 56: Bake-loop hardening — fix additionalVolume/AMI BDM collision, non-blocking audit hook, sidecar FIFO-retry + post-env-rewrite restart (URGENT — lessons from Phase 56 e2e: AMI'd sandbox failed to launch due to /dev/sdf BDM collision; once fixed, login shells deadlocked because audit hook FIFO write blocks when km-audit-log starts before /run/km/audit-pipe exists and never retries)
+- Phase 56.2 inserted after Phase 56.1: Resume hardening — relocate cgroup scope creation and /run/km bootstrap from cloud-init user-data into a `km-bootstrap.service` systemd unit that runs on every boot, and harden `echo $$ > cgroup.procs` writes against bash redirect-error leaks (URGENT — lessons from Phase 56.1 km resume e2e: on a stop+resume of a baked sandbox, /sys/fs/cgroup is empty so the eBPF scope created during cloud-init vanishes and `bash: cgroup.procs: No such file or directory` leaks past `2>/dev/null` because bash opens the redirect target before applying stderr suppression — eBPF enforcement may be bypassed; /run is tmpfs so /run/km/learn-commands.log disappears on resume but cloud-init only ran once at first boot; fix: km-bootstrap.service oneshot Before=amazon-ssm-agent recreates the cgroup scope + /run/km files every boot, sourcing /etc/profile.d/km-identity.sh so SANDBOX_ID is correct on baked-AMI relaunch, and `{ echo $$ > path; } 2>/dev/null || true` wraps cgroup writes so redirect failures are suppressed)
 
 ## Session Continuity
 
-Last session: 2026-04-27T01:23:02.132Z
-Stopped at: Completed 56.1-02-PLAN.md
+Last session: 2026-04-27T13:18:13.054Z
+Stopped at: Completed 56.2-01-PLAN.md
 Resume file: None
