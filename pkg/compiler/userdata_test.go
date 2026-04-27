@@ -1666,16 +1666,20 @@ func TestKMBootstrapScript(t *testing.T) {
 		}
 	}
 	// LearnMode=false: bootstrap script body must NOT contain learn-commands.log touch.
-	// Slice the script body between the heredoc opener and BOOTSTRAPEOF terminator.
-	startIdx := strings.Index(out, "cat > /usr/local/bin/km-bootstrap")
+	// Slice the script body between the heredoc opener line's newline and BOOTSTRAPEOF terminator.
+	// We find the opener, skip to the next newline (end of opener line), then find BOOTSTRAPEOF.
+	openerStr := "cat > /usr/local/bin/km-bootstrap << 'BOOTSTRAPEOF'"
+	startIdx := strings.Index(out, openerStr)
 	if startIdx == -1 {
 		t.Fatal("default render: bootstrap script heredoc absent")
 	}
-	endIdx := strings.Index(out[startIdx:], "BOOTSTRAPEOF")
+	// advance past the opener line to the content of the heredoc
+	bodyStart := startIdx + strings.Index(out[startIdx:], "\n") + 1
+	endIdx := strings.Index(out[bodyStart:], "\nBOOTSTRAPEOF")
 	if endIdx == -1 {
 		t.Fatal("default render: BOOTSTRAPEOF terminator absent")
 	}
-	scriptBody := out[startIdx : startIdx+endIdx]
+	scriptBody := out[bodyStart : bodyStart+endIdx]
 	if strings.Contains(scriptBody, "touch /run/km/learn-commands.log") {
 		t.Errorf("default render (LearnMode=false): bootstrap script body must NOT contain 'touch /run/km/learn-commands.log'")
 	}
@@ -1702,15 +1706,18 @@ func TestKMBootstrapScript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateUserData (ebpf) failed: %v", err)
 	}
-	startIdx3 := strings.Index(out3, "cat > /usr/local/bin/km-bootstrap")
+	// Slice the bootstrap script body: skip past the opener line to the BOOTSTRAPEOF terminator.
+	openerStr3 := "cat > /usr/local/bin/km-bootstrap << 'BOOTSTRAPEOF'"
+	startIdx3 := strings.Index(out3, openerStr3)
 	if startIdx3 == -1 {
 		t.Fatal("ebpf render: bootstrap script heredoc absent")
 	}
-	endIdx3 := strings.Index(out3[startIdx3:], "BOOTSTRAPEOF")
+	bodyStart3 := startIdx3 + strings.Index(out3[startIdx3:], "\n") + 1
+	endIdx3 := strings.Index(out3[bodyStart3:], "\nBOOTSTRAPEOF")
 	if endIdx3 == -1 {
 		t.Fatal("ebpf render: BOOTSTRAPEOF terminator absent")
 	}
-	script3 := out3[startIdx3 : startIdx3+endIdx3]
+	script3 := out3[bodyStart3 : bodyStart3+endIdx3]
 	if !strings.Contains(script3, "mkdir -p") {
 		t.Errorf("ebpf render: bootstrap script body missing 'mkdir -p' for cgroup scope")
 	}

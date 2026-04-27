@@ -525,7 +525,79 @@ trap 'kill $_KM_HEARTBEAT_PID 2>/dev/null' EXIT
 HOOK
 chmod 644 /etc/profile.d/km-audit.sh
 
+# ============================================================
+# 5b. km-bootstrap.service: per-boot cgroup + /run/km recreation
+# ============================================================
+# /sys/fs/cgroup is a kernel pseudo-fs (empty after every stop+start).
+# /run is tmpfs (recreated empty at every boot).
+# cloud-init does NOT re-run on resume. So both vanish on stop+resume.
+# km-bootstrap.service runs on every boot (Before=amazon-ssm-agent.service)
+# and re-creates them idempotently. Sources km-identity.sh so SANDBOX_ID
+# is correct on baked-AMI relaunch (Phase 56.1 Bug 4 lesson).
+
+cat > /usr/local/bin/km-bootstrap << 'BOOTSTRAPEOF'
+#!/bin/bash
+# km-bootstrap: re-creates ephemeral state on every boot.
+# Run by km-bootstrap.service (Type=oneshot, Before=amazon-ssm-agent.service).
+set -uo pipefail
+
+# Source current sandbox identity -- picks up baked-AMI's NEW SANDBOX_ID,
+# not the stale one baked into the unit file's Environment= directive.
+# shellcheck source=/etc/profile.d/km-identity.sh
+. /etc/profile.d/km-identity.sh 2>/dev/null || true
+
+# (1) Cgroup scope: re-create on every boot for eBPF enforcement.
+#     /sys/fs/cgroup is a pseudo-fs so the scope dir created during
+#     cloud-init at userdata.go:1369 is gone after stop+resume.
+if [ -n "${KM_SANDBOX_ID:-}" ]; then
+  CGROUP_DIR="/sys/fs/cgroup/km.slice/km-${KM_SANDBOX_ID}.scope"
+  mkdir -p "${CGROUP_DIR}"
+  chown root:sandbox "${CGROUP_DIR}/cgroup.procs" 2>/dev/null || true
+  chmod 664 "${CGROUP_DIR}/cgroup.procs" 2>/dev/null || true
+  echo "[km-bootstrap] cgroup scope ready: ${CGROUP_DIR}"
+fi
+
+# (2) /run/km parent dir: tmpfs is wiped on every boot. Re-create the
+#     directory and ownership. The audit-pipe FIFO is owned by the
+#     km-audit-log sidecar's FIFO-retry loop (Phase 56.1 P56.1-04) --
+#     do NOT create the FIFO here to avoid an ownership/permission race.
+mkdir -p /run/km
+chown km-sidecar:km-sidecar /run/km 2>/dev/null || true
+echo "[km-bootstrap] /run/km ready"
+{{- if .LearnMode }}
+
+# (3) learn-commands.log: written by _km_learn PROMPT_COMMAND in learn mode.
+#     File must exist before any shell session runs.
+touch /run/km/learn-commands.log
+chmod 666 /run/km/learn-commands.log
+echo "[km-bootstrap] /run/km/learn-commands.log ready (LearnMode)"
+{{- end }}
+BOOTSTRAPEOF
+chmod +x /usr/local/bin/km-bootstrap
+
+# km-bootstrap.service: run km-bootstrap on every boot before SSM accepts sessions.
+# Type=oneshot + RemainAfterExit=yes: service stays "active" after script exits.
+# Before=amazon-ssm-agent.service: cgroup scope + /run/km exist before any SSM
+# session entry (km shell, km agent) runs the first command.
+# NOTE: no Wants dependency on km.slice -- km.slice is a cgroup directory,
+# not a systemd unit file; such a Wants= would emit "unit not found" on boot.
+# NOTE: no DefaultDependencies=no -- keep implicit After=sysinit.target so the
+# cgroup filesystem is mounted before mkdir -p runs.
+cat > /etc/systemd/system/km-bootstrap.service << 'UNIT'
+[Unit]
+Description=Klankrmkr sandbox bootstrap (per-boot cgroup and /run/km setup)
+Before=amazon-ssm-agent.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/km-bootstrap
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 systemctl daemon-reload
+# km-bootstrap.service: persist enable so it runs on every boot (incl. resume).
+systemctl enable km-bootstrap 2>/dev/null || true
 {{- if .SandboxEmail }}
 # Mail poller: syncs inbound email from S3 to /var/mail/km/ every 30 seconds.
 # Agents can watch /var/mail/km/new/ for incoming messages.
@@ -1449,11 +1521,15 @@ fi
 # This ensures ALL sandbox user sessions (SSM, su, login) are enforced by eBPF.
 cat > /usr/local/bin/km-sandbox-shell << 'SHELLEOF'
 #!/bin/bash
-# km-sandbox-shell: moves into sandbox cgroup then execs bash
+# km-sandbox-shell: moves into sandbox cgroup then execs bash.
+# Compound-command redirect ({ ...; } 2>/dev/null) suppresses the
+# redirect-open ENOENT error if the cgroup dir is missing. The bare
+# form (echo $$ > path 2>/dev/null) does NOT suppress because bash
+# opens the redirect target BEFORE applying stderr redirect (Phase 56.2).
+# km-bootstrap.service guarantees the dir exists post-resume; the
+# compound form is defense-in-depth.
 CGROUP_PROCS="/sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope/cgroup.procs"
-if [ -w "$CGROUP_PROCS" ]; then
-  echo $$ > "$CGROUP_PROCS" 2>/dev/null
-fi
+{ echo $$ > "$CGROUP_PROCS"; } 2>/dev/null || true
 exec /bin/bash --login "$@"
 SHELLEOF
 chmod +x /usr/local/bin/km-sandbox-shell
@@ -1482,9 +1558,12 @@ chmod +x /usr/local/bin/km-session-entry
 
 # Also keep profile.d as belt-and-suspenders for interactive sessions
 cat > /etc/profile.d/km-cgroup.sh << 'CGROUPEOF'
-# Move current process into sandbox cgroup for eBPF enforcement
+# Move current process into sandbox cgroup for eBPF enforcement.
+# Compound-command redirect ({ ...; } 2>/dev/null) suppresses the
+# redirect-open ENOENT error that the bare form leaks past 2>/dev/null
+# (Phase 56.2: bash opens redirect targets before applying stderr redirect).
 if [ "$(whoami)" = "sandbox" ]; then
-  echo $$ > /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope/cgroup.procs 2>/dev/null || true
+  { echo $$ > /sys/fs/cgroup/km.slice/km-{{ .SandboxID }}.scope/cgroup.procs; } 2>/dev/null || true
 fi
 CGROUPEOF
 
