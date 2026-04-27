@@ -1227,7 +1227,7 @@ Plans:
 **Goal:** Fix four runtime bugs in the bake-loop discovered in Phase 56 e2e: (1) hardcoded /dev/sdf in ec2spot Terraform module collides with baked-AMI BDMs that already declare it — compiler now detects and picks /dev/sdg…/dev/sdp; (2) bare > redirect in _km_audit PROMPT_COMMAND deadlocks login shells when the FIFO has no reader — replace with timeout 0.1 tee; (3) km-audit-log sidecar opens FIFO once and falls through to empty stdin on race — add 10-attempt retry with backoff that re-creates /run/km/ + the FIFO; (4) sidecars on a baked AMI inherit the bake-source's SANDBOX_ID — add systemctl restart of km-* units after env-rewrite + sidecar download.
 **Requirements**: P56.1-01, P56.1-02, P56.1-03, P56.1-04, P56.1-05, P56.1-06
 **Depends on:** Phase 56
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 56.1-01-PLAN.md — BDM collision fix: AMIBDMDeviceNames helper + pickAdditionalVolumeDevice + thread device name through Compile + parameterize ec2spot Terraform module
