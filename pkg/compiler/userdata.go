@@ -482,9 +482,12 @@ _km_audit() {
   [ -z "$cmd" ] && return 0
   # Escape backslashes first, then double-quotes, then newlines for valid JSON
   cmd=$(printf '%s' "$cmd" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/ /g' | head -c 500)
+  # Phase 56.1 Bug 2: Use timeout-tee to bound the FIFO write at 100ms.
+  # A bare redirect (> /run/km/audit-pipe) blocks indefinitely when no reader
+  # has opened the pipe yet (common race on first login before km-audit-log starts).
   printf '{"timestamp":"%s","sandbox_id":"%s","event_type":"command","source":"shell","detail":{"command":"%s","user":"%s"}}\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "{{ .SandboxID }}" "$cmd" "$(whoami)" \
-    > /run/km/audit-pipe 2>/dev/null
+    | timeout 0.1 tee /run/km/audit-pipe > /dev/null 2>/dev/null || true
 }
 {{- if .LearnMode }}
 _km_learn() {
@@ -510,8 +513,10 @@ _km_heartbeat() {
   trap '' INT TERM
   while true; do
     sleep 60
+    # Phase 56.1 Bug 2: same non-blocking timeout-tee pattern as _km_audit.
     printf '{"timestamp":"%s","sandbox_id":"%s","event_type":"heartbeat","source":"shell","detail":{}}\n' \
-      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "{{ .SandboxID }}" > /run/km/audit-pipe 2>/dev/null
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "{{ .SandboxID }}" \
+      | timeout 0.1 tee /run/km/audit-pipe > /dev/null 2>/dev/null || true
   done
 }
 _km_heartbeat &
@@ -1703,6 +1708,20 @@ if aws s3 ls "s3://{{ .KMArtifactsBucket }}/${KM_CLONE_KEY}" 2>/dev/null | grep 
     echo "[km-bootstrap] Clone workspace restored"
   } || echo "[km-bootstrap] WARNING: clone workspace download failed"
 fi
+
+# ============================================================
+# Phase 56.1 Bug 4: Post-env-rewrite sidecar restart
+# ============================================================
+# When this sandbox is launched from a baked AMI, the AMI carries the previous
+# sandbox's SANDBOX_ID/CW_LOG_GROUP baked into /etc/systemd/system/km-*.service
+# Environment= directives. cloud-init has already rewritten the unit files above
+# (via the cat > heredocs in section 4) and run daemon-reload. Restarting here
+# ensures sidecars pick up the NEW SANDBOX_ID and CW_LOG_GROUP written in
+# sections 2.8-2.9, not the identity from the AMI bake source.
+# The 2>/dev/null || true guards against units that are conditionally absent
+# (e.g. km-dns-proxy is skipped in eBPF-only mode).
+systemctl restart km-audit-log km-dns-proxy km-http-proxy km-tracing 2>/dev/null || true
+echo "[km-bootstrap] Sidecars restarted to pick up post-env-rewrite identity"
 
 # ============================================================
 # 8. Sandbox ready signal
