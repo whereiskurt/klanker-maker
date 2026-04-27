@@ -22,6 +22,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -170,14 +171,15 @@ func main() {
 	}()
 
 	// Open audit pipe (FIFO) if KM_AUDIT_PIPE is set; otherwise read from stdin.
-	// Opening the FIFO read-write (O_RDWR) prevents blocking — the same fd acts as
-	// both reader and writer, so the open succeeds immediately without waiting for
-	// an external writer. External writers open the FIFO normally for writing.
+	// Phase 56.1 Bug 3: use openAuditPipeWithRetry instead of a single os.OpenFile
+	// attempt. On baked-AMI re-launches the FIFO may not exist yet when this binary
+	// starts; the retry loop creates /run/km/ and the FIFO, then opens them,
+	// backing off linearly so cumulative wait is ~27.5s before giving up.
 	var inputReader io.Reader = os.Stdin
 	if pipePath := envOr("KM_AUDIT_PIPE", ""); pipePath != "" {
-		f, openErr := os.OpenFile(pipePath, os.O_RDWR, 0)
+		f, openErr := openAuditPipeWithRetry(pipePath, 10, 500*time.Millisecond)
 		if openErr != nil {
-			log.Error().Err(openErr).Str("pipe", pipePath).Msg("audit-log: failed to open audit pipe")
+			log.Error().Err(openErr).Str("pipe", pipePath).Msg("audit-log: giving up on pipe after retries, reading stdin")
 		} else {
 			inputReader = f
 			log.Info().Str("pipe", pipePath).Msg("audit-log: reading from audit pipe")
@@ -208,6 +210,48 @@ func main() {
 	}
 
 	log.Info().Msg("audit-log: exiting")
+}
+
+// openAuditPipeWithRetry opens (and creates if necessary) a FIFO at pipePath,
+// retrying up to maxAttempts times with linear backoff (attempt N waits N*baseBackoff
+// before the next try). Cumulative wait for default params (10, 500ms) is ~27.5s.
+//
+// On each iteration the function:
+//  1. Ensures filepath.Dir(pipePath) exists (os.MkdirAll, mode 0755).
+//  2. Re-creates the FIFO if missing (syscall.Mkfifo, mode 0666; ignores EEXIST).
+//  3. Attempts os.OpenFile(pipePath, os.O_RDWR, 0). O_RDWR avoids the
+//     classic FIFO open() block when no reader/writer is present.
+//
+// Returns the open *os.File on success, or the last error after exhausting attempts.
+func openAuditPipeWithRetry(pipePath string, maxAttempts int, baseBackoff time.Duration) (*os.File, error) {
+	if pipePath == "" {
+		return nil, fmt.Errorf("openAuditPipeWithRetry: empty pipePath")
+	}
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if mkErr := os.MkdirAll(filepath.Dir(pipePath), 0755); mkErr != nil {
+			lastErr = mkErr
+			log.Warn().Err(mkErr).Int("attempt", attempt).Msg("audit-log: cannot create pipe dir")
+		} else {
+			// Create FIFO if missing (ignore EEXIST).
+			if _, statErr := os.Stat(pipePath); os.IsNotExist(statErr) {
+				if mkfErr := syscall.Mkfifo(pipePath, 0666); mkfErr != nil && !os.IsExist(mkfErr) {
+					lastErr = mkfErr
+					log.Warn().Err(mkfErr).Int("attempt", attempt).Msg("audit-log: mkfifo failed")
+				}
+			}
+			f, openErr := os.OpenFile(pipePath, os.O_RDWR, 0)
+			if openErr == nil {
+				return f, nil
+			}
+			lastErr = openErr
+			log.Warn().Err(openErr).Int("attempt", attempt).Str("pipe", pipePath).Msg("audit-log: retrying pipe open")
+		}
+		if attempt < maxAttempts {
+			time.Sleep(time.Duration(attempt) * baseBackoff)
+		}
+	}
+	return nil, lastErr
 }
 
 func envOr(key, fallback string) string {
