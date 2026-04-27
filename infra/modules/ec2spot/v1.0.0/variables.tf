@@ -121,3 +121,9 @@ variable "additional_volume_encrypted" {
   description = "Encrypt the additional EBS volume"
   default     = false
 }
+
+variable "additional_volume_device_name" {
+  type        = string
+  description = "Device name for the additional EBS volume attachment. Defaults to /dev/sdf; the compiler picks the first non-colliding name from /dev/sd[f-p] when the source AMI's BDMs already include /dev/sdf (Phase 56.1 BDM collision fix)."
+  default     = "/dev/sdf"
+}
