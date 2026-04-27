@@ -374,3 +374,111 @@ func TestListBakedAMIs_SortedNewestFirst(t *testing.T) {
 		}
 	}
 }
+
+// ============================================================
+// Test 13: TestAMIBDMDeviceNames — Phase 56.1 RED test
+// ============================================================
+
+// TestAMIBDMDeviceNames exercises the not-yet-existing AMIBDMDeviceNames helper.
+func TestAMIBDMDeviceNames(t *testing.T) {
+	sentinelErr := errors.New("describe-images-sentinel-error")
+
+	cases := []struct {
+		name         string
+		amiID        string
+		mockOut      *ec2.DescribeImagesOutput
+		mockErr      error
+		wantDevices  []string
+		wantErr      bool
+		wantErrSent  bool // true => errors.Is(err, sentinelErr)
+		wantDescCall bool // true => DescribeImages must be called
+	}{
+		{
+			name:         "empty amiID",
+			amiID:        "",
+			wantDevices:  nil,
+			wantErr:      false,
+			wantDescCall: false, // must NOT call DescribeImages
+		},
+		{
+			name:  "no images returned",
+			amiID: "ami-00000001",
+			mockOut: &ec2.DescribeImagesOutput{
+				Images: []types.Image{},
+			},
+			wantDevices:  nil,
+			wantErr:      false,
+			wantDescCall: true,
+		},
+		{
+			name:  "two BDMs",
+			amiID: "ami-0abcdef123456789a",
+			mockOut: &ec2.DescribeImagesOutput{
+				Images: []types.Image{
+					{
+						ImageId: awssdk.String("ami-0abcdef123456789a"),
+						BlockDeviceMappings: []types.BlockDeviceMapping{
+							{DeviceName: awssdk.String("/dev/sda1")},
+							{DeviceName: awssdk.String("/dev/sdf")},
+						},
+					},
+				},
+			},
+			wantDevices:  []string{"/dev/sda1", "/dev/sdf"},
+			wantErr:      false,
+			wantDescCall: true,
+		},
+		{
+			name:         "describe error",
+			amiID:        "ami-0baderror12345678",
+			mockErr:      sentinelErr,
+			wantDevices:  nil,
+			wantErr:      true,
+			wantErrSent:  true,
+			wantDescCall: true,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			m := &mockEC2AMI{
+				describeOut: tc.mockOut,
+				describeErr: tc.mockErr,
+			}
+
+			devices, err := AMIBDMDeviceNames(context.Background(), m, tc.amiID)
+
+			if tc.wantDescCall && m.describeCalls == 0 {
+				t.Errorf("case %q: expected DescribeImages to be called, but it was not", tc.name)
+			}
+			if !tc.wantDescCall && m.describeCalls > 0 {
+				t.Errorf("case %q: expected DescribeImages NOT to be called (empty amiID), but it was called %d time(s)", tc.name, m.describeCalls)
+			}
+
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("case %q: expected error, got nil", tc.name)
+				}
+				if tc.wantErrSent && !errors.Is(err, sentinelErr) {
+					t.Errorf("case %q: errors.Is(err, sentinelErr) = false; err = %v", tc.name, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("case %q: unexpected error: %v", tc.name, err)
+				return
+			}
+
+			if len(devices) != len(tc.wantDevices) {
+				t.Errorf("case %q: got %d devices %v, want %d devices %v", tc.name, len(devices), devices, len(tc.wantDevices), tc.wantDevices)
+				return
+			}
+			for i, want := range tc.wantDevices {
+				if devices[i] != want {
+					t.Errorf("case %q: devices[%d] = %q, want %q", tc.name, i, devices[i], want)
+				}
+			}
+		})
+	}
+}

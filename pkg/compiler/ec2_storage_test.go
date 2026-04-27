@@ -320,6 +320,101 @@ func TestAMISlugInHCLEmitsEmptyAMIID(t *testing.T) {
 // Phase 33.1 Plan 02: Hibernation + raw AMI warning test
 // ============================================================
 
+// ============================================================
+// Phase 56.1 Plan 01 RED tests: pickAdditionalVolumeDevice + HCL device name
+// ============================================================
+
+// TestPickAdditionalVolumeDevice verifies the not-yet-existing pickAdditionalVolumeDevice helper.
+func TestPickAdditionalVolumeDevice(t *testing.T) {
+	cases := []struct {
+		name       string
+		amiDevices []string
+		want       string
+	}{
+		{
+			name:       "nil input defaults to /dev/sdf",
+			amiDevices: nil,
+			want:       "/dev/sdf",
+		},
+		{
+			name:       "empty slice defaults to /dev/sdf",
+			amiDevices: []string{},
+			want:       "/dev/sdf",
+		},
+		{
+			name:       "only root device, sdf free",
+			amiDevices: []string{"/dev/sda1"},
+			want:       "/dev/sdf",
+		},
+		{
+			name:       "sdf occupied, pick sdg",
+			amiDevices: []string{"/dev/sda1", "/dev/sdf"},
+			want:       "/dev/sdg",
+		},
+		{
+			name:       "sdf and sdg occupied, pick sdh",
+			amiDevices: []string{"/dev/sda1", "/dev/sdf", "/dev/sdg"},
+			want:       "/dev/sdh",
+		},
+		{
+			name: "all candidates occupied, fallback to /dev/sdf",
+			amiDevices: []string{
+				"/dev/sdf", "/dev/sdg", "/dev/sdh", "/dev/sdi",
+				"/dev/sdj", "/dev/sdk", "/dev/sdl", "/dev/sdm",
+				"/dev/sdn", "/dev/sdo", "/dev/sdp",
+			},
+			want: "/dev/sdf",
+		},
+		{
+			name:       "xvdf alias treated as occupying sdf, pick sdg",
+			amiDevices: []string{"/dev/sda1", "/dev/xvdf"},
+			want:       "/dev/sdg",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := pickAdditionalVolumeDevice(tc.amiDevices)
+			if got != tc.want {
+				t.Errorf("pickAdditionalVolumeDevice(%v) = %q, want %q", tc.amiDevices, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAdditionalVolumeDeviceNameInHCL verifies that generateEC2ServiceHCL emits the
+// additional_volume_device_name line and that Compile threads amiBDMDeviceNames through.
+func TestAdditionalVolumeDeviceNameInHCL(t *testing.T) {
+	p := minimalEC2StorageProfile()
+	p.Spec.Runtime.AdditionalVolume = &profile.AdditionalVolumeSpec{
+		Size:       100,
+		MountPoint: "/data",
+	}
+
+	t.Run("nil BDM list defaults to /dev/sdf", func(t *testing.T) {
+		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := `additional_volume_device_name = "/dev/sdf"`
+		if !strings.Contains(hcl, want) {
+			t.Errorf("HCL missing %q\ngot:\n%s", want, hcl)
+		}
+	})
+
+	t.Run("sdf occupied in AMI BDMs, picks sdg", func(t *testing.T) {
+		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), []string{"/dev/sda1", "/dev/sdf"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := `additional_volume_device_name = "/dev/sdg"`
+		if !strings.Contains(hcl, want) {
+			t.Errorf("HCL missing %q\ngot:\n%s", want, hcl)
+		}
+	})
+}
+
 // TestHibernationRawAMIWarning verifies that hibernation=true + raw AMI ID emits a log warning
 // (not an error) and the HCL still contains the raw ami_id passthrough.
 func TestHibernationRawAMIWarning(t *testing.T) {
