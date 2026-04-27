@@ -78,7 +78,7 @@ func TestSpotRateEC2NonZero(t *testing.T) {
 		AllowedRegions:     []string{"us-east-1"},
 	}
 
-	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net)
+	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net, nil)
 	if err != nil {
 		t.Fatalf("generateEC2ServiceHCL failed: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestSpotRateEC2ZeroFallback(t *testing.T) {
 		AllowedRegions:     []string{"us-east-1"},
 	}
 
-	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net)
+	out, err := generateEC2ServiceHCL(p, "test-sb", true, nil, iamPolicy, "", net, nil)
 	if err != nil {
 		t.Fatalf("generateEC2ServiceHCL failed: %v", err)
 	}

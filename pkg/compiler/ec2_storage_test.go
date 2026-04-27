@@ -49,7 +49,7 @@ func TestHibernationSpotConflict(t *testing.T) {
 	p.Spec.Runtime.Hibernation = true
 	p.Spec.Runtime.Spot = true
 
-	_, err := generateEC2ServiceHCL(p, "test-sb", true, nil, nil, "", minimalEC2StorageNetwork())
+	_, err := generateEC2ServiceHCL(p, "test-sb", true, nil, nil, "", minimalEC2StorageNetwork(), nil)
 	if err == nil {
 		t.Fatal("expected error for hibernation=true + spot=true, got nil")
 	}
@@ -67,7 +67,7 @@ func TestHibernationECSConflict(t *testing.T) {
 	p.Spec.Runtime.Substrate = "ecs"
 	p.Spec.Runtime.Hibernation = true
 
-	_, err := generateEC2ServiceHCL(p, "test-sb", false, nil, nil, "", minimalEC2StorageNetwork())
+	_, err := generateEC2ServiceHCL(p, "test-sb", false, nil, nil, "", minimalEC2StorageNetwork(), nil)
 	if err == nil {
 		t.Fatal("expected error for hibernation=true on ECS substrate, got nil")
 	}
@@ -85,7 +85,7 @@ func TestAdditionalVolumeECSConflict(t *testing.T) {
 		MountPoint: "/data",
 	}
 
-	_, err := generateEC2ServiceHCL(p, "test-sb", false, nil, nil, "", minimalEC2StorageNetwork())
+	_, err := generateEC2ServiceHCL(p, "test-sb", false, nil, nil, "", minimalEC2StorageNetwork(), nil)
 	if err == nil {
 		t.Fatal("expected error for additionalVolume on ECS substrate, got nil")
 	}
@@ -100,7 +100,7 @@ func TestHibernationOnDemandValid(t *testing.T) {
 	p.Spec.Runtime.Hibernation = true
 	p.Spec.Runtime.Spot = false
 
-	_, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	_, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
 	if err != nil {
 		t.Errorf("expected no error for hibernation=true + spot=false (on-demand), got: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestAdditionalVolumeEC2Valid(t *testing.T) {
 		Encrypted:  true,
 	}
 
-	_, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	_, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
 	if err != nil {
 		t.Errorf("expected no error for additionalVolume on EC2 substrate, got: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestRootVolumeSizeInHCL(t *testing.T) {
 	p := minimalEC2StorageProfile()
 	p.Spec.Runtime.RootVolumeSize = 50
 
-	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestRootVolumeSizeZeroInHCL(t *testing.T) {
 	p := minimalEC2StorageProfile()
 	// RootVolumeSize defaults to 0
 
-	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestHibernationEnabledInHCL(t *testing.T) {
 	p := minimalEC2StorageProfile()
 	p.Spec.Runtime.Hibernation = true
 
-	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestAMISlugExplicitInHCL(t *testing.T) {
 	p := minimalEC2StorageProfile()
 	p.Spec.Runtime.AMI = "ubuntu-24.04"
 
-	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestAMISlugDefaultInHCL(t *testing.T) {
 	p := minimalEC2StorageProfile()
 	// AMI field is empty — should default to amazon-linux-2023
 
-	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestAdditionalVolumeInHCL(t *testing.T) {
 		Encrypted:  true,
 	}
 
-	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestAdditionalVolumeAbsentInHCL(t *testing.T) {
 	p := minimalEC2StorageProfile()
 	// AdditionalVolume is nil — no additional volume
 
-	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestAMIRawIDInHCL(t *testing.T) {
 	p := minimalEC2StorageProfile()
 	p.Spec.Runtime.AMI = "ami-0abcdef1234567890"
 
-	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestAMISlugInHCLEmitsEmptyAMIID(t *testing.T) {
 	p := minimalEC2StorageProfile()
 	p.Spec.Runtime.AMI = "ubuntu-24.04"
 
-	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -428,7 +428,7 @@ func TestHibernationRawAMIWarning(t *testing.T) {
 	defer log.SetOutput(os.Stderr)
 
 	// useSpot = false (hibernation requires on-demand)
-	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork())
+	hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
 	if err != nil {
 		t.Fatalf("expected success (warning only), got error: %v", err)
 	}

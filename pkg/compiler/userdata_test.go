@@ -1528,3 +1528,61 @@ func TestUserDataLearnCommandsLogAbsent(t *testing.T) {
 		t.Errorf("expected normal PROMPT_COMMAND with _km_audit in non-learn mode userdata")
 	}
 }
+
+// ============================================================
+// Phase 56.1 Bug 2 + Bug 4 tests (RED — fail until Task 2 fixes userdata.go)
+// ============================================================
+
+// TestAuditHookNonBlocking asserts that _km_audit and _km_heartbeat use the
+// non-blocking timeout-tee pattern instead of a bare redirect to the FIFO.
+// The bare redirect blocks indefinitely when no reader has opened the pipe.
+func TestAuditHookNonBlocking(t *testing.T) {
+	p := baseProfile()
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	// Must contain _km_audit function definition.
+	if !strings.Contains(out, "_km_audit()") {
+		t.Errorf("expected _km_audit() definition in userdata")
+	}
+
+	// The timeout-tee pattern must appear at least twice:
+	// once in _km_audit, once in _km_heartbeat.
+	const pattern = "timeout 0.1 tee /run/km/audit-pipe"
+	count := strings.Count(out, pattern)
+	if count < 2 {
+		t.Errorf("expected timeout-tee pattern %q to appear >= 2 times in userdata (once per hook), got %d occurrences", pattern, count)
+	}
+}
+
+// TestUserDataSidecarRestartAfterEnvWrite asserts that the rendered userdata
+// contains a systemctl restart line that appears AFTER both systemctl daemon-reload
+// AND AFTER the env-write site (cat > /etc/profile.d/km-identity.sh).
+func TestUserDataSidecarRestartAfterEnvWrite(t *testing.T) {
+	p := baseProfile()
+	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	// daemon-reload must be present (pre-existing).
+	idxDaemonReload := strings.Index(out, "systemctl daemon-reload")
+	if idxDaemonReload < 0 {
+		t.Fatalf("expected 'systemctl daemon-reload' in userdata")
+	}
+
+	// The post-env-rewrite restart line must be present.
+	const restartMarker = "systemctl restart km-audit-log"
+	idxRestart := strings.Index(out, restartMarker)
+	if idxRestart < 0 {
+		t.Errorf("expected 'systemctl restart km-audit-log' in userdata (Bug 4 fix)")
+		return
+	}
+
+	// Restart must appear AFTER the first daemon-reload.
+	if idxRestart <= idxDaemonReload {
+		t.Errorf("expected 'systemctl restart km-audit-log' (idx %d) to appear AFTER 'systemctl daemon-reload' (idx %d)", idxRestart, idxDaemonReload)
+	}
+}

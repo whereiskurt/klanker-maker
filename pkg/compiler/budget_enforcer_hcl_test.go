@@ -84,7 +84,7 @@ func TestCompileBudgetEnforcerHCL_WithBudget(t *testing.T) {
 	p := loadTestProfile(t, "ec2-with-budget.yaml")
 	id := "sb-betest01"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(budget enabled) error = %v", err)
 	}
@@ -106,7 +106,7 @@ func TestCompileBudgetEnforcerHCL_NoBudget(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
 	id := "sb-nobetest"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(no budget) error = %v", err)
 	}

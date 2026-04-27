@@ -104,7 +104,7 @@ func TestCompileEC2(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
 	id := compiler.GenerateSandboxID("")
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -127,7 +127,7 @@ func TestCompileEC2ServiceHCL(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
 	id := "sb-testec2a"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -154,7 +154,7 @@ func TestCompileEC2UserData(t *testing.T) {
 	p := loadTestProfile(t, "ec2-with-secrets.yaml")
 	id := "sb-testud01"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -180,7 +180,7 @@ func TestCompileEC2Spot(t *testing.T) {
 	id := "sb-spottest"
 
 	// spot=true (from profile) and onDemand=false -> should have spot config
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(spot=true, onDemand=false) error = %v", err)
 	}
@@ -189,7 +189,7 @@ func TestCompileEC2Spot(t *testing.T) {
 	}
 
 	// onDemand=true override: should NOT have spot config
-	artifactsOD, err := compiler.Compile(p, id, true, testNetwork())
+	artifactsOD, err := compiler.Compile(p, id, true, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(spot=true, onDemand=true) error = %v", err)
 	}
@@ -202,7 +202,7 @@ func TestCompileTagging(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
 	id := "sb-tagtest1"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -220,7 +220,7 @@ func TestCompileSGEgressRulesInServiceHCL(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
 	id := "sb-sgrules1"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -249,7 +249,7 @@ func TestCompileIAMPolicyInServiceHCL(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
 	id := "sb-iampol01"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -277,7 +277,7 @@ func TestCompileSecretsInjection(t *testing.T) {
 	p := loadTestProfile(t, "ec2-with-secrets.yaml")
 	id := "sb-sectest1"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -301,7 +301,7 @@ func TestCompileSecretsInjection(t *testing.T) {
 
 	// Empty allowlist
 	pEmpty := loadTestProfile(t, "ec2-basic.yaml")
-	artifactsEmpty, err := compiler.Compile(pEmpty, id, false, testNetwork())
+	artifactsEmpty, err := compiler.Compile(pEmpty, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(empty secrets) error = %v", err)
 	}
@@ -319,7 +319,7 @@ func TestCompileGitHubToken(t *testing.T) {
 	p := loadTestProfile(t, "ec2-with-secrets.yaml")
 	id := "sb-ghtest01"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -341,7 +341,7 @@ func TestCompileGitHubToken(t *testing.T) {
 
 	// Profile without github -> no GIT_ASKPASS injection
 	pNoGH := loadTestProfile(t, "ec2-basic.yaml")
-	artifactsNoGH, err := compiler.Compile(pNoGH, id, false, testNetwork())
+	artifactsNoGH, err := compiler.Compile(pNoGH, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(no github) error = %v", err)
 	}
@@ -358,7 +358,7 @@ func TestGitHubUserDataGITASKPASS(t *testing.T) {
 	p := loadTestProfile(t, "ec2-with-secrets.yaml")
 	id := "sb-ghaskps1"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -389,7 +389,7 @@ func TestGitHubUserDataNoGITHUBTOKENExport(t *testing.T) {
 	p := loadTestProfile(t, "ec2-with-secrets.yaml")
 	id := "sb-noghenv1"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -405,7 +405,7 @@ func TestCompileSecretsNoGitHubAppToken(t *testing.T) {
 	p := loadTestProfile(t, "ec2-with-secrets.yaml")
 	id := "sb-nosecgh1"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -439,7 +439,7 @@ func TestCompileSecretsNoGitHubUnchanged(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
 	id := "sb-noghsec1"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(no github) error = %v", err)
 	}
@@ -458,7 +458,7 @@ func TestCompileECS(t *testing.T) {
 	p := loadTestProfile(t, "ecs-basic.yaml")
 	id := "sb-ecstest1"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(ECS) error = %v", err)
 	}
@@ -478,7 +478,7 @@ func TestCompileECSContainers(t *testing.T) {
 	p := loadTestProfile(t, "ecs-basic.yaml")
 	id := "sb-ecscont1"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(ECS) error = %v", err)
 	}
@@ -498,7 +498,7 @@ func TestCompileECSTaskConfig(t *testing.T) {
 	p := loadTestProfile(t, "ecs-basic.yaml")
 	id := "sb-ecstask1"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(ECS) error = %v", err)
 	}
@@ -518,7 +518,7 @@ func TestCompileECSFargateSpot(t *testing.T) {
 	p := loadTestProfile(t, "ecs-basic.yaml") // spot: true
 	id := "sb-ecsspot1"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(ECS, spot=true) error = %v", err)
 	}
@@ -529,7 +529,7 @@ func TestCompileECSFargateSpot(t *testing.T) {
 	// spot=false
 	pNoSpot := loadTestProfile(t, "ecs-basic.yaml")
 	pNoSpot.Spec.Runtime.Spot = false
-	artifactsNoSpot, err := compiler.Compile(pNoSpot, id, false, testNetwork())
+	artifactsNoSpot, err := compiler.Compile(pNoSpot, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(ECS, spot=false) error = %v", err)
 	}
@@ -543,7 +543,7 @@ func TestCompileECSOnDemandOverride(t *testing.T) {
 	id := "sb-ecsod001"
 
 	// onDemand=true overrides spot=true -> use FARGATE not FARGATE_SPOT
-	artifacts, err := compiler.Compile(p, id, true, testNetwork())
+	artifacts, err := compiler.Compile(p, id, true, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(ECS, spot=true, onDemand=true) error = %v", err)
 	}
@@ -556,7 +556,7 @@ func TestCompileECSNetworkConfig(t *testing.T) {
 	p := loadTestProfile(t, "ecs-basic.yaml")
 	id := "sb-ecssd001"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(ECS) error = %v", err)
 	}
@@ -578,7 +578,7 @@ func TestCompileECSTagging(t *testing.T) {
 	p := loadTestProfile(t, "ecs-basic.yaml")
 	id := "sb-ecstag01"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(ECS) error = %v", err)
 	}
@@ -600,7 +600,7 @@ func TestCompileEC2WithBudget(t *testing.T) {
 	p := loadTestProfile(t, "ec2-with-budget.yaml")
 	id := "sb-budgec2a"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(EC2, with budget) error = %v", err)
 	}
@@ -626,7 +626,7 @@ func TestCompileEC2NoBudget(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
 	id := "sb-nobudget"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(EC2, no budget) error = %v", err)
 	}
@@ -642,7 +642,7 @@ func TestCompileEC2BudgetCAInjection(t *testing.T) {
 	p := loadTestProfile(t, "ec2-with-budget.yaml")
 	id := "sb-budgca01"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(EC2, with budget) error = %v", err)
 	}
@@ -673,7 +673,7 @@ func TestCompileEC2NoBudgetNoCACert(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
 	id := "sb-nocert01"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(EC2, no budget) error = %v", err)
 	}
@@ -693,7 +693,7 @@ func TestGitHubTokenHCL(t *testing.T) {
 	p := loadTestProfile(t, "ec2-with-secrets.yaml") // has sourceAccess.github
 	id := "sb-ghtkn001"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -715,7 +715,7 @@ func TestNoGitHubTokenHCL(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml") // no sourceAccess.github
 	id := "sb-nghtkn01"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -731,7 +731,7 @@ func TestServiceHCLEC2GitHubInputs(t *testing.T) {
 	p := loadTestProfile(t, "ec2-with-secrets.yaml")
 	id := "sb-ghec2hcl"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -769,7 +769,7 @@ func TestServiceHCLECSGitHubInputs(t *testing.T) {
 	p := loadTestProfile(t, "ecs-with-github.yaml")
 	id := "sb-ghecs001"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(ECS) error = %v", err)
 	}
@@ -795,7 +795,7 @@ func TestServiceHCLEC2NoGitHubInputs(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml") // no github
 	id := "sb-noghec21"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
@@ -811,7 +811,7 @@ func TestServiceHCLECSNoGitHubInputs(t *testing.T) {
 	p := loadTestProfile(t, "ecs-basic.yaml") // no github
 	id := "sb-noghecs1"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(ECS) error = %v", err)
 	}
@@ -827,7 +827,7 @@ func TestGitHubTokenHCLECS(t *testing.T) {
 	p := loadTestProfile(t, "ecs-with-github.yaml")
 	id := "sb-ghecshcl"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(ECS) error = %v", err)
 	}
@@ -852,7 +852,7 @@ func TestCompileEC2EmptyAllowedRepos_DenyByDefault(t *testing.T) {
 	p := loadTestProfile(t, "ec2-empty-repos.yaml")
 	id := "sb-ec2norepo"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(EC2 empty repos) error = %v", err)
 	}
@@ -872,7 +872,7 @@ func TestCompileECSEmptyAllowedRepos_DenyByDefault(t *testing.T) {
 	p := loadTestProfile(t, "ecs-empty-repos.yaml")
 	id := "sb-ecsnorepo"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(ECS empty repos) error = %v", err)
 	}
@@ -892,7 +892,7 @@ func TestUserDataEmptyAllowedRepos_NoGITASKPASS(t *testing.T) {
 	p := loadTestProfile(t, "ec2-empty-repos.yaml")
 	id := "sb-udnoask"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(EC2 empty repos) error = %v", err)
 	}
@@ -915,7 +915,7 @@ func TestUserDataAllowedRefsEnvVar(t *testing.T) {
 	p := loadTestProfile(t, "ec2-with-allowed-refs.yaml")
 	id := "sb-refsenv1"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(EC2 with allowed refs) error = %v", err)
 	}
@@ -937,7 +937,7 @@ func TestUserDataEmptyAllowedRefs_NoEnvVar(t *testing.T) {
 	// Override to remove allowedRefs
 	p.Spec.SourceAccess.GitHub.AllowedRefs = []string{}
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(EC2 empty allowedRefs) error = %v", err)
 	}
@@ -953,7 +953,7 @@ func TestUserDataPrePushHookPresent(t *testing.T) {
 	p := loadTestProfile(t, "ec2-with-allowed-refs.yaml")
 	id := "sb-hookpres"
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(EC2 with allowed refs) error = %v", err)
 	}
@@ -977,7 +977,7 @@ func TestUserDataPrePushHookAbsent(t *testing.T) {
 	// Override to remove allowedRefs
 	p.Spec.SourceAccess.GitHub.AllowedRefs = []string{}
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(EC2 no allowedRefs) error = %v", err)
 	}
@@ -999,7 +999,7 @@ func TestUserDataNilAllowedRefs_NoHook(t *testing.T) {
 	// Set allowedRefs to nil explicitly
 	p.Spec.SourceAccess.GitHub.AllowedRefs = nil
 
-	artifacts, err := compiler.Compile(p, id, false, testNetwork())
+	artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
 	if err != nil {
 		t.Fatalf("Compile(EC2 nil allowedRefs) error = %v", err)
 	}

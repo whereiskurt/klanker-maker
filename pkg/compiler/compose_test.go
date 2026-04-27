@@ -15,7 +15,7 @@ func TestCompileDocker(t *testing.T) {
 	p := loadTestProfile(t, "docker-basic.yaml")
 	net := testNetwork()
 
-	artifacts, err := compiler.Compile(p, "sb-test001", false, net)
+	artifacts, err := compiler.Compile(p, "sb-test001", false, net, nil)
 	if err != nil {
 		t.Fatalf("Compile() with docker substrate returned error: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestDockerComposeContainers(t *testing.T) {
 	p := loadTestProfile(t, "docker-basic.yaml")
 	net := testNetwork()
 
-	artifacts, err := compiler.Compile(p, "sb-test002", false, net)
+	artifacts, err := compiler.Compile(p, "sb-test002", false, net, nil)
 	if err != nil {
 		t.Fatalf("Compile() error: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestDockerComposeDNS(t *testing.T) {
 	net := testNetwork()
 
 	sandboxID := "sb-test003"
-	artifacts, err := compiler.Compile(p, sandboxID, false, net)
+	artifacts, err := compiler.Compile(p, sandboxID, false, net, nil)
 	if err != nil {
 		t.Fatalf("Compile() error: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestDockerComposeCredIsolation(t *testing.T) {
 	p := loadTestProfile(t, "docker-basic.yaml")
 	net := testNetwork()
 
-	artifacts, err := compiler.Compile(p, "sb-test004", false, net)
+	artifacts, err := compiler.Compile(p, "sb-test004", false, net, nil)
 	if err != nil {
 		t.Fatalf("Compile() error: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestDockerComposeWithBudget(t *testing.T) {
 	p := loadTestProfile(t, "docker-with-budget.yaml")
 	net := testNetwork()
 
-	artifacts, err := compiler.Compile(p, "sb-test005", false, net)
+	artifacts, err := compiler.Compile(p, "sb-test005", false, net, nil)
 	if err != nil {
 		t.Fatalf("Compile() error: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestDockerComposeNetwork(t *testing.T) {
 	net := testNetwork()
 
 	sandboxID := "sb-test006"
-	artifacts, err := compiler.Compile(p, sandboxID, false, net)
+	artifacts, err := compiler.Compile(p, sandboxID, false, net, nil)
 	if err != nil {
 		t.Fatalf("Compile() error: %v", err)
 	}
