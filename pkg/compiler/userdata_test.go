@@ -1586,3 +1586,196 @@ func TestUserDataSidecarRestartAfterEnvWrite(t *testing.T) {
 		t.Errorf("expected 'systemctl restart km-audit-log' (idx %d) to appear AFTER 'systemctl daemon-reload' (idx %d)", idxRestart, idxDaemonReload)
 	}
 }
+
+// ============================================================
+// Phase 56.2 tests: km-bootstrap.service + script + enable + cgroup.procs hardening
+// RED until Task 2 (userdata.go edits) turns them GREEN.
+// ============================================================
+
+// TestKMBootstrapServiceUnit asserts that the rendered userdata contains a
+// km-bootstrap.service unit file written via heredoc with the correct directives.
+// Covers: P56.2-01 (unit presence + directives), P56.2-07 (no Wants=km.slice).
+func TestKMBootstrapServiceUnit(t *testing.T) {
+	// proxy mode (default) — bootstrap service must be present regardless of enforcement
+	p := baseProfile()
+	out, err := generateUserData(p, "sb-test", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData (proxy) failed: %v", err)
+	}
+	for _, want := range []string{
+		"cat > /etc/systemd/system/km-bootstrap.service",
+		"Type=oneshot",
+		"RemainAfterExit=yes",
+		"Before=amazon-ssm-agent.service",
+		"ExecStart=/usr/local/bin/km-bootstrap",
+		"WantedBy=multi-user.target",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("proxy mode: expected %q in userdata, got absent", want)
+		}
+	}
+	// P56.2-07: km.slice is a cgroup directory, not a systemd unit file.
+	// Wants=km.slice would emit a "unit not found" warning on every boot.
+	if strings.Contains(out, "Wants=km.slice") {
+		t.Errorf("proxy mode: did not expect Wants=km.slice (P56.2-07: km.slice is a cgroup dir, not a systemd unit)")
+	}
+
+	// ebpf mode — bootstrap service must also be present
+	p2 := baseProfile()
+	p2.Spec.Network.Enforcement = "ebpf"
+	out2, err := generateUserData(p2, "sb-test", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData (ebpf) failed: %v", err)
+	}
+	for _, want := range []string{
+		"cat > /etc/systemd/system/km-bootstrap.service",
+		"Type=oneshot",
+		"RemainAfterExit=yes",
+		"Before=amazon-ssm-agent.service",
+		"ExecStart=/usr/local/bin/km-bootstrap",
+		"WantedBy=multi-user.target",
+	} {
+		if !strings.Contains(out2, want) {
+			t.Errorf("ebpf mode: expected %q in userdata, got absent", want)
+		}
+	}
+	if strings.Contains(out2, "Wants=km.slice") {
+		t.Errorf("ebpf mode: did not expect Wants=km.slice (P56.2-07)")
+	}
+}
+
+// TestKMBootstrapScript asserts that the rendered userdata writes the
+// /usr/local/bin/km-bootstrap script with correct body for three render modes:
+// default (LearnMode=false, proxy), LearnMode=true, and enforcement=ebpf.
+// Covers: P56.2-02.
+func TestKMBootstrapScript(t *testing.T) {
+	// --- Render 1: default (LearnMode=false, enforcement=proxy) ---
+	p := baseProfile()
+	out, err := generateUserData(p, "sb-test", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData (default) failed: %v", err)
+	}
+	for _, want := range []string{
+		"cat > /usr/local/bin/km-bootstrap",
+		". /etc/profile.d/km-identity.sh",
+		"mkdir -p /run/km",
+		"chmod +x /usr/local/bin/km-bootstrap",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("default render: expected %q in userdata, got absent", want)
+		}
+	}
+	// LearnMode=false: bootstrap script body must NOT contain learn-commands.log touch.
+	// Slice the script body between the heredoc opener and BOOTSTRAPEOF terminator.
+	startIdx := strings.Index(out, "cat > /usr/local/bin/km-bootstrap")
+	if startIdx == -1 {
+		t.Fatal("default render: bootstrap script heredoc absent")
+	}
+	endIdx := strings.Index(out[startIdx:], "BOOTSTRAPEOF")
+	if endIdx == -1 {
+		t.Fatal("default render: BOOTSTRAPEOF terminator absent")
+	}
+	scriptBody := out[startIdx : startIdx+endIdx]
+	if strings.Contains(scriptBody, "touch /run/km/learn-commands.log") {
+		t.Errorf("default render (LearnMode=false): bootstrap script body must NOT contain 'touch /run/km/learn-commands.log'")
+	}
+
+	// --- Render 2: LearnMode=true ---
+	p2 := baseProfile()
+	p2.Spec.Observability.LearnMode = true
+	out2, err := generateUserData(p2, "sb-test", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData (LearnMode=true) failed: %v", err)
+	}
+	// Expect at least 2 occurrences: one from cloud-init block, one from bootstrap script.
+	if got := strings.Count(out2, "touch /run/km/learn-commands.log"); got < 2 {
+		t.Errorf("LearnMode=true: expected >=2 occurrences of 'touch /run/km/learn-commands.log' (cloud-init + bootstrap), got %d", got)
+	}
+	if got := strings.Count(out2, "chmod 666 /run/km/learn-commands.log"); got < 2 {
+		t.Errorf("LearnMode=true: expected >=2 occurrences of 'chmod 666 /run/km/learn-commands.log' (cloud-init + bootstrap), got %d", got)
+	}
+
+	// --- Render 3: enforcement=ebpf (bootstrap must create cgroup scope) ---
+	p3 := baseProfile()
+	p3.Spec.Network.Enforcement = "ebpf"
+	out3, err := generateUserData(p3, "sb-test", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData (ebpf) failed: %v", err)
+	}
+	startIdx3 := strings.Index(out3, "cat > /usr/local/bin/km-bootstrap")
+	if startIdx3 == -1 {
+		t.Fatal("ebpf render: bootstrap script heredoc absent")
+	}
+	endIdx3 := strings.Index(out3[startIdx3:], "BOOTSTRAPEOF")
+	if endIdx3 == -1 {
+		t.Fatal("ebpf render: BOOTSTRAPEOF terminator absent")
+	}
+	script3 := out3[startIdx3 : startIdx3+endIdx3]
+	if !strings.Contains(script3, "mkdir -p") {
+		t.Errorf("ebpf render: bootstrap script body missing 'mkdir -p' for cgroup scope")
+	}
+	if !strings.Contains(script3, "/sys/fs/cgroup/km.slice/km-${KM_SANDBOX_ID}.scope") &&
+		!strings.Contains(script3, "CGROUP_DIR=") {
+		t.Errorf("ebpf render: bootstrap script body missing cgroup scope path or CGROUP_DIR variable")
+	}
+	if !strings.Contains(script3, "chown root:sandbox") {
+		t.Errorf("ebpf render: bootstrap script body missing 'chown root:sandbox'")
+	}
+	if !strings.Contains(script3, "chmod 664") {
+		t.Errorf("ebpf render: bootstrap script body missing 'chmod 664'")
+	}
+}
+
+// TestKMBootstrapEnabled asserts that the rendered userdata contains
+// 'systemctl enable km-bootstrap' AFTER 'systemctl daemon-reload'.
+// Covers: P56.2-03.
+func TestKMBootstrapEnabled(t *testing.T) {
+	p := baseProfile()
+	out, err := generateUserData(p, "sb-test", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	idxReload := strings.Index(out, "systemctl daemon-reload")
+	idxEnable := strings.Index(out, "systemctl enable km-bootstrap")
+
+	if idxReload == -1 {
+		t.Errorf("expected 'systemctl daemon-reload' in userdata")
+	}
+	if idxEnable == -1 {
+		t.Errorf("expected 'systemctl enable km-bootstrap' in userdata")
+	}
+	if idxReload != -1 && idxEnable != -1 && idxEnable <= idxReload {
+		t.Errorf("expected 'systemctl enable km-bootstrap' (idx %d) to appear AFTER 'systemctl daemon-reload' (idx %d)", idxEnable, idxReload)
+	}
+}
+
+// TestCgroupProcsRedirectHardened asserts that both cgroup.procs write sites
+// use the compound-command redirect form { echo $$ > path; } 2>/dev/null || true
+// instead of the bare redirect echo $$ > path 2>/dev/null that leaks errors.
+// Covers: P56.2-04 (km-cgroup.sh), P56.2-05 (km-sandbox-shell).
+func TestCgroupProcsRedirectHardened(t *testing.T) {
+	p := baseProfile()
+	p.Spec.Network.Enforcement = "ebpf"
+	out, err := generateUserData(p, "sb-test", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	// Compound-command form must appear at least twice (km-cgroup.sh + km-sandbox-shell).
+	if got := strings.Count(out, "{ echo $$ > "); got < 2 {
+		t.Errorf("expected >=2 compound-command cgroup.procs writes ({ echo $$ > ...), got %d", got)
+	}
+
+	// km-sandbox-shell must NOT use the bare-redirect form with variable path.
+	// The bare form: echo $$ > "$CGROUP_PROCS" 2>/dev/null
+	if strings.Contains(out, `echo $$ > "$CGROUP_PROCS" 2>/dev/null`) {
+		t.Errorf("km-sandbox-shell still uses bare-redirect form (must use compound { ... } 2>/dev/null || true)")
+	}
+
+	// km-cgroup.sh must NOT use the bare-redirect form with the literal interpolated path.
+	// The bare form: echo $$ > /sys/fs/cgroup/km.slice/km-sb-test.scope/cgroup.procs 2>/dev/null
+	if strings.Contains(out, "echo $$ > /sys/fs/cgroup/km.slice/km-sb-test.scope/cgroup.procs 2>/dev/null") {
+		t.Errorf("km-cgroup.sh still uses bare-redirect form (must use compound { ... } 2>/dev/null || true)")
+	}
+}
