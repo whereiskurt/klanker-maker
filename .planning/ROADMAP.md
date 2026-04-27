@@ -1224,13 +1224,14 @@ Plans:
 
 ### Phase 56.1: Bake-loop hardening — fix additionalVolume/AMI BDM collision, non-blocking audit hook, sidecar FIFO-retry + post-env-rewrite restart (lessons from Phase 56 e2e) (INSERTED)
 
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Goal:** Fix four runtime bugs in the bake-loop discovered in Phase 56 e2e: (1) hardcoded /dev/sdf in ec2spot Terraform module collides with baked-AMI BDMs that already declare it — compiler now detects and picks /dev/sdg…/dev/sdp; (2) bare > redirect in _km_audit PROMPT_COMMAND deadlocks login shells when the FIFO has no reader — replace with timeout 0.1 tee; (3) km-audit-log sidecar opens FIFO once and falls through to empty stdin on race — add 10-attempt retry with backoff that re-creates /run/km/ + the FIFO; (4) sidecars on a baked AMI inherit the bake-source's SANDBOX_ID — add systemctl restart of km-* units after env-rewrite + sidecar download.
+**Requirements**: P56.1-01, P56.1-02, P56.1-03, P56.1-04, P56.1-05, P56.1-06
 **Depends on:** Phase 56
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 56.1 to break down)
+- [ ] 56.1-01-PLAN.md — BDM collision fix: AMIBDMDeviceNames helper + pickAdditionalVolumeDevice + thread device name through Compile + parameterize ec2spot Terraform module
+- [ ] 56.1-02-PLAN.md — Non-blocking audit hook + sidecar FIFO retry + post-env-rewrite systemctl restart of km-* sidecars
 
 ### Phase 57: Email enhancement — km-send --no-sign for external recipients, km-recv multipart/RFC5322 fixes, safe phrase validation on inbound, marketplace plugin email docs
 
