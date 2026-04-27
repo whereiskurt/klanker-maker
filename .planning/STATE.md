@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 56.1-01-PLAN.md
-last_updated: "2026-04-27T01:20:29.415Z"
+stopped_at: Completed 56.1-02-PLAN.md
+last_updated: "2026-04-27T01:23:02.137Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
   total_phases: 64
-  completed_phases: 58
+  completed_phases: 59
   total_plans: 185
-  completed_plans: 180
+  completed_plans: 181
   percent: 0
 ---
 
@@ -221,6 +221,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 56-learn-mode-ami-snapshot-and-lifecycle-management P06 | 477 | 3 tasks | 3 files |
 | Phase 56-learn-mode-ami-snapshot-and-lifecycle-management P05 | 45min | 2 tasks | 6 files |
 | Phase 56.1 P01 | 841s | 3 tasks | 9 files |
+| Phase 56.1 P02 | 936 | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -614,6 +615,9 @@ Recent decisions affecting current work:
 - [Phase 56]: shell_ami_test.go in package cmd (not cmd_test) — required to access unexported runLearnPostExit and package-level vars
 - [Phase 56.1]: BDM lookup at compile time (not Terraform data source): compile-time inspection keeps logic in testable Go and avoids Terraform complexity
 - [Phase 56.1]: amiBDMDeviceNames passed as pre-computed slice to Compile: avoids leaking AWS deps into pure HCL-generation layer (generateEC2ServiceHCL stays testable)
+- [Phase 56.1]: Use timeout-tee pattern for FIFO writes in bash (not O_NONBLOCK or background fork)
+- [Phase 56.1]: Place systemctl restart as last cloud-init step to guarantee runs after sidecar binaries downloaded
+- [Phase 56.1]: Add FIFO retry in main.go (not ExecStartPre= systemd unit) to keep logic testable
 
 ### Roadmap Evolution
 
@@ -692,6 +696,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-27T01:20:29.410Z
-Stopped at: Completed 56.1-01-PLAN.md
+Last session: 2026-04-27T01:23:02.132Z
+Stopped at: Completed 56.1-02-PLAN.md
 Resume file: None
