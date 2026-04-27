@@ -139,7 +139,7 @@ The `km` CLI selects the right AWS profile per command. Commands are grouped by 
 | `km configure github` | `klanker-terraform` | Configure GitHub App token integration |
 | `km bootstrap` | `klanker-terraform` | Deploy SCP containment policy + KMS key + artifacts bucket |
 | `km init` | `klanker-application` | Build Lambdas/sidecars, provision shared VPC/network |
-| `km doctor` | `klanker-terraform` | Validate platform health across all accounts (20 checks) |
+| `km doctor` | `klanker-terraform` | Validate platform health across all accounts (21 checks; `--all-regions` to scan every active region) |
 | `km info` | - | Show platform config, accounts, SES quota, AWS spend, DynamoDB tables |
 
 **Sandbox lifecycle**
@@ -151,7 +151,7 @@ The `km` CLI selects the right AWS profile per command. Commands are grouped by 
 | `km clone <sandbox>` | `klanker-terraform` | Duplicate a running sandbox (`--alias`, `--count`, `--no-copy`) |
 | `km list` (alias: `ls`) | `klanker-terraform` | List sandboxes with live status (DynamoDB scan; `--wide`, `--json`, `--tags`) |
 | `km status <sandbox>` | `klanker-terraform` | Budget, identity, idle countdown, resources |
-| `km shell <sandbox>` (alias: `sh`) | `klanker-terraform` | SSM session (`--root`, `--ports`, `--no-bedrock`, `--learn`) |
+| `km shell <sandbox>` (alias: `sh`) | `klanker-terraform` | SSM session (`--root`, `--ports`, `--no-bedrock`, `--learn`, `--ami` to bake an AMI on exit, `--learn-output <path>`) |
 | `km agent <sandbox>` | `klanker-terraform` | Launch AI agent in sandbox (`--claude`, `--codex`) |
 
 **Observability**
@@ -183,6 +183,18 @@ The `km` CLI selects the right AWS profile per command. Commands are grouped by 
 | `km at list` | `klanker-terraform` | List scheduled operations |
 | `km at cancel <name>` | `klanker-terraform` | Cancel a scheduled operation |
 | `km roll` | `klanker-terraform` | Rotate platform and sandbox credentials (`--platform`, `--sandbox`, `--dry-run`) |
+
+**AMI snapshot and lifecycle**
+
+| Command | AWS Profile | What it does |
+|---------|-------------|--------------|
+| `km shell --learn --ami <sandbox>` | `klanker-application` | Bake the running EC2 instance into a custom AMI on shell exit; AMI ID is written into the generated `learned.*.yaml` profile at `spec.runtime.ami` |
+| `km ami list` | `klanker-application` | List operator-baked AMIs with profile references and size (`--wide` for region/snapshot/encryption columns) |
+| `km ami bake <sandbox>` | `klanker-application` | Snapshot a running sandbox into a custom AMI tagged with sandbox metadata |
+| `km ami copy <ami-id> --region <dest>` | `klanker-application` | Copy an AMI to another region in the same account, re-tagging the destination |
+| `km ami delete <ami-id>` | `klanker-application` | Deregister an AMI and delete its associated EBS snapshots atomically |
+
+AMIs are private to the application AWS account (no `LaunchPermission` set), live in a single region until copied, and are surfaced as a `WARN` in `km doctor` when older than `doctor_stale_ami_days` (default 30) and unreferenced by any profile or running sandbox. `spec.runtime.ami` accepts both slugs (`amazon-linux-2023`, `ubuntu-24.04`, `ubuntu-22.04`) and raw AMI IDs (`ami-xxxxxxxx`); the compiler auto-rotates `additionalVolume` off `/dev/sdf` if a baked AMI already claims it.
 
 **Email (operator-side)**
 
@@ -891,11 +903,13 @@ km uninit --region us-east-1
 | 46 | AI Email-to-Command — Haiku Interprets Free-Form Operator Emails | **Complete** |
 | 47 | Privileged Execution Mode & Learn Profile | **Complete** |
 | 48 | Profile Override Flags for km create (--ttl, --idle) | **Complete** |
-| 49 | Prebaked AMI Support | Planned |
+| 49 | Prebaked AMI Support | Superseded by Phase 56 |
 | 50 | km agent Non-Interactive Execution (--prompt, results, list) | **Complete** |
 | 51 | km agent Tmux Sessions (attach, --interactive) | **Complete** |
 | 52 | km clone — Duplicate a Running Sandbox | **Complete** |
 | 53 | Persistent Local Sandbox Numbering | **Complete** |
+| 56 | Learn-Mode AMI Snapshot & Lifecycle (`km shell --ami`, `km ami` subcommand tree, stale-AMI doctor check) | **Complete** |
+| 56.1 | Bake-Loop Hardening (BDM auto-rotation, non-blocking audit hook, sidecar FIFO retry, post-env-rewrite restart) | **Complete** |
 
 See [.planning/ROADMAP.md](.planning/ROADMAP.md) for detailed phase breakdowns and success criteria.
 

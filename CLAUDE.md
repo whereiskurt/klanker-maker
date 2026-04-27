@@ -27,9 +27,13 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 - `km email read <sandbox>` — read sandbox mailbox with signature verification and auto-decryption (`--json`, `--mark-read`)
 - `km otel <sandbox-id>` — OTEL telemetry + AI spend summary (--prompts, --events, --tools, --timeline)
 - `km init` — initialize regional infrastructure (`--sidecars` for fast binary deploy, `--lambdas` for Lambda-only deploy)
-- `km shell <sandbox-id>` — SSM shell (`--root`, `--ports`, `--no-bedrock`, `--learn` to generate profile from observed traffic)
+- `km shell <sandbox-id>` — SSM shell (`--root`, `--ports`, `--no-bedrock`, `--learn` to generate profile from observed traffic, `--ami` to bake the EC2 instance into a custom AMI on exit)
+- `km ami list` — list operator-baked AMIs with profile references and size (`--wide` for region/snapshot/encryption columns)
+- `km ami bake <sandbox-id>` — snapshot a running sandbox into a custom AMI tagged with sandbox metadata
+- `km ami copy <ami-id> --region <dest>` — copy AMI to another region in the same account, re-tagging the destination
+- `km ami delete <ami-id>` — deregister an AMI and delete its associated EBS snapshots atomically
 - `km info` — platform config, accounts, SES quota, AWS spend, DynamoDB tables
-- `km doctor` — validate platform health (17 checks: config, credentials, SES, Lambda, VPC, stale resources, etc.)
+- `km doctor` — validate platform health (18 checks: config, credentials, SES, Lambda, VPC, stale resources, stale AMIs, etc.; `--all-regions` to scan every active region)
 
 ## Email
 
@@ -125,6 +129,17 @@ km validate learned.*.yaml             # validate before use
 - `spec.execution.privileged` — grants sandbox user wheel/sudo access (any profile)
 - `spec.observability.learnMode` — enables eBPF traffic recording (`--observe` on enforcer)
 - `--learn` triggers SIGUSR1 flush on the enforcer to snapshot observations to S3
+
+### Bake AMI on exit
+
+```bash
+km shell --learn --ami <sandbox-id>    # observe traffic + snapshot to AMI on exit
+cat learned.*.yaml                     # generated profile now includes spec.runtime.ami: ami-xxxxxxxx
+km validate learned.*.yaml             # validate before reuse
+km create learned.*.yaml               # spin up a new sandbox from the baked AMI
+```
+
+`--ami` requires `--learn`. The bake fires before the SIGUSR1 flush so the AMI ID can be embedded in the generated profile. AMIs are private to the application AWS account, tagged with sandbox metadata, and tracked by `km ami list` / `km doctor` (stale check). `spec.runtime.ami` accepts both slugs (`amazon-linux-2023`, `ubuntu-24.04`, `ubuntu-22.04`) and raw AMI IDs (`ami-xxxxxxxx`). When launching from a baked AMI that already declares `/dev/sdf` in its block device mappings, the compiler auto-rotates `additionalVolume` onto the next free device (`/dev/sdg`..`/dev/sdp`) so launches don't collide.
 
 ## Agent Execution
 

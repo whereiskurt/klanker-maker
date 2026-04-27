@@ -21,6 +21,7 @@
   - [km configure github](#km-configure-github)
   - [km budget add](#km-budget-add)
   - [km shell](#km-shell)
+  - [km ami](#km-ami)
   - [km agent](#km-agent)
   - [km stop](#km-stop)
   - [km resume](#km-resume)
@@ -718,7 +719,7 @@ km logs sb-7f3a9e12 --stream network
 Check platform health and bootstrap verification.
 
 ```
-km doctor [--json] [--quiet] [--dry-run]
+km doctor [--json] [--quiet] [--dry-run] [--all-regions]
 ```
 
 | Flag | Default | Description |
@@ -726,6 +727,7 @@ km doctor [--json] [--quiet] [--dry-run]
 | `--json` | `false` | Output results as a JSON array |
 | `--quiet` | `false` | Suppress OK and SKIPPED results; show only WARN and ERROR |
 | `--dry-run` | `true` | Show stale resources without deleting (use `--dry-run=false` to clean up) |
+| `--all-regions` | `false` | Scan every active region (regions with at least one km-tagged sandbox) instead of just the primary region. Used by stale-resource checks (KMS, IAM, AMI). |
 
 **What it checks:**
 
@@ -748,6 +750,7 @@ km doctor [--json] [--quiet] [--dry-run]
 | Safe Phrase | Verifies KM-AUTH safe phrase configured in SSM |
 | Stale KMS Keys | Detects unused KMS keys from destroyed sandboxes |
 | Stale IAM Roles | Detects unused IAM roles from destroyed sandboxes |
+| Stale AMIs | WARN for km-tagged AMIs older than `doctor_stale_ami_days` (default 30) that are unreferenced by any profile and not backing a running sandbox; expand to every active region with `--all-regions` |
 
 All checks run in parallel. Results are sorted alphabetically and include a remediation hint for failures.
 
@@ -906,7 +909,7 @@ When AI spend (tracked by the http-proxy MITM) reaches 100%, the Bedrock IAM pol
 Open an interactive shell into a running sandbox via SSM.
 
 ```
-km shell <sandbox-id | #number> [--root] [--no-bedrock] [--ports <ports>] [--learn] [--learn-output <path>]
+km shell <sandbox-id | #number> [--root] [--no-bedrock] [--ports <ports>] [--learn] [--learn-output <path>] [--ami]
 ```
 
 | Flag | Default | Description |
@@ -916,6 +919,7 @@ km shell <sandbox-id | #number> [--root] [--no-bedrock] [--ports <ports>] [--lea
 | `--ports` | `""` | Port forwards (e.g. `8080`, `8080:80`, or comma-separated `8080:80,3000`) |
 | `--learn` | `false` | After shell exit, generate a SandboxProfile YAML from observed DNS/TLS traffic |
 | `--learn-output` | `learned.YYYYMMDDHHMMSS.yaml` | Path to write the generated profile (timestamped by default) |
+| `--ami` | `false` | After shell exit, snapshot the EC2 instance into a custom AMI; the AMI ID is embedded in the generated profile at `spec.runtime.ami`. Requires `--learn`. |
 
 **What it does:**
 
@@ -924,9 +928,10 @@ km shell <sandbox-id | #number> [--root] [--no-bedrock] [--ports <ports>] [--lea
 3. Opens an SSM session to the sandbox
 4. If `--ports` specified, establishes port forwarding (Docker-style `local:remote` syntax)
 5. If `--learn` specified, after the shell exits:
+   - If `--ami` is also set: calls `CreateImage` with `NoReboot=true` and km tags, waits for the AMI to reach `available`, captures the AMI ID
    - Sends SIGUSR1 to the eBPF enforcer to flush observed traffic to S3
    - Downloads the observation data from S3
-   - Generates an annotated SandboxProfile YAML with DNS suffix summary
+   - Generates an annotated SandboxProfile YAML with DNS suffix summary (and `spec.runtime.ami: ami-xxxxxxxx` if `--ami` was set)
    - Writes to `--learn-output` path
 
 **Example:**
@@ -939,9 +944,84 @@ km shell 1 --ports 8080:80,3000   # multiple forwards
 
 # Learn mode: generate a profile from observed traffic
 km shell --learn sb-abc123        # do stuff, exit → learned.202604181854.yaml
+
+# Bake mode: snapshot to AMI on exit and embed it in the profile
+km shell --learn --ami sb-abc123  # → learned.*.yaml with spec.runtime.ami: ami-xxxxxxxx
 ```
 
 **Learn mode** generates a timestamped profile (`learned.YYYYMMDDHHMMSS.yaml`) from observed DNS queries, TLS connections, GitHub repos, and shell commands typed during the session. Commands appear as `initCommands` in the generated profile. The sandbox must have `spec.observability.learnMode: true` (e.g. `profiles/learn.yaml`). Use `--learn-output <path>` to override the default filename.
+
+**Bake mode (`--ami`)** snapshots the running EC2 instance into a custom AMI before the eBPF flush, so the AMI ID can be written into the profile. The bake call uses `NoReboot=true`, applies the same tag spec to both the image and its underlying snapshot atomically, and the wait timeout defaults to 15 minutes. AMIs are private to the application account and are also tracked by `km ami list` and the `km doctor` stale-AMI check. `--ami` requires `--learn`; using it alone is rejected at flag-parse time.
+
+---
+
+### km ami
+
+Manage operator-baked AMIs. Subcommands inspect, snapshot, copy, and delete AMIs that were created from sandboxes via `km shell --ami` or `km ami bake`.
+
+```
+km ami list [--wide] [--region <r>] [--profile <name>] [--json]
+km ami bake <sandbox-id | #number> [--name <ami-name>] [--description <text>] [--wait <duration>]
+km ami copy <ami-id> --region <dest-region> [--name <ami-name>] [--description <text>]
+km ami delete <ami-id> [--yes]
+```
+
+#### km ami list
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--wide` | `false` | Add REGION, SANDBOX-ID, SNAPS, ENCRYPTED, INSTANCE, $/MONTH columns |
+| `--region` | primary | Restrict to a specific region |
+| `--profile` | `""` | Show only AMIs referenced by a given profile |
+| `--json` | `false` | JSON output for scripting |
+
+Narrow output: AMI ID, NAME, AGE, SIZE, PROFILE, REFS. `REFS` counts profiles in `profiles/` whose `spec.runtime.ami` resolves to this AMI plus any running sandboxes whose EC2 instance was launched from it. AMIs with `REFS=0` and `AGE > doctor_stale_ami_days` are flagged by `km doctor`.
+
+#### km ami bake
+
+Snapshot a running sandbox into a custom AMI without needing to drop into a shell. Equivalent to the second half of `km shell --learn --ami` but doesn't generate a learned profile.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--name` | `km-<sandbox-id>-<timestamp>` | AMI name (must be unique per region) |
+| `--description` | `Baked from <sandbox-id>` | AMI description |
+| `--wait` | `15m` | Maximum time to wait for the AMI to reach `available` state |
+
+The bake uses `CreateImage` with `NoReboot=true` and applies a single `TagSpecifications` block covering both the image and the underlying snapshots so tags are atomic.
+
+#### km ami copy
+
+Copy an AMI to another region in the same AWS account. Use this when a sandbox baked in `us-east-1` needs to be relaunched in `eu-west-1`. The destination AMI is re-tagged with the same metadata as the source, and the underlying snapshots are also copied (AWS copies snapshots automatically as part of `CopyImage`).
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--region` | required | Destination region |
+| `--name` | source name + region suffix | Override the destination AMI name |
+| `--description` | source description | Override the destination AMI description |
+
+#### km ami delete
+
+Deregister the AMI and delete its associated EBS snapshots in a single SDK call (`DeregisterImage` with `DeleteAssociatedSnapshots=true`).
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--yes` | `false` | Skip the confirmation prompt |
+
+**Examples:**
+
+```bash
+km ami list                                    # narrow table
+km ami list --wide                             # full columns including $/month
+km ami list --profile dc34.ami.yaml            # AMIs referenced by a specific profile
+
+km ami bake sb-abc123                          # bake without entering shell
+km ami bake sb-abc123 --name my-baseline-2026  # custom name
+
+km ami copy ami-0abc123 --region eu-west-1
+km ami delete ami-0abc123 --yes
+```
+
+**Account scope:** AMIs are private to the application AWS account — `CreateImage` is called without any `LaunchPermission`, so no other account or AWS user can see, launch, or copy them. Cross-region copy stays within the same account.
 
 ---
 

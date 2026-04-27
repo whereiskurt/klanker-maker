@@ -385,6 +385,8 @@ spec:
       encrypted: true
 ```
 
+The compiler attaches the volume at `/dev/sdf` by default. When `spec.runtime.ami` references a baked AMI whose own block device mappings already declare `/dev/sdf`, the compiler queries the AMI's BDMs via `DescribeImages` at compile time and rotates onto the next free slot in `/dev/sd[g-p]` (NVMe aliases `/dev/xvdf` are normalized to `/dev/sdf` for collision detection). This makes baked-AMI relaunches transparent — no profile change required.
+
 ### `spec.runtime.hibernation`
 
 | Property   | Value                          |
@@ -409,22 +411,32 @@ spec:
 | Property   | Value                          |
 |------------|--------------------------------|
 | YAML path  | `spec.runtime.ami`             |
-| Type       | string (enum)                  |
+| Type       | string (slug or AMI ID)        |
 | Required   | No                             |
 | Default    | `""` (Amazon Linux 2023)       |
-| Validation | One of: `"amazon-linux-2023"`, `"ubuntu-24.04"`, `"ubuntu-22.04"`, `""` |
+| Validation | One of the slugs below, OR a raw AMI ID matching `^ami-[0-9a-f]+$` |
 
-AMI slug to resolve per-region. When empty or omitted, defaults to Amazon Linux 2023. Supported values:
+Either a slug (resolved per-region by Terraform's `data.aws_ami` lookup) or a raw AMI ID owned by the application AWS account. When empty or omitted, defaults to Amazon Linux 2023.
+
+**Supported slugs:**
 
 - **`"amazon-linux-2023"`** -- Amazon Linux 2023 (default)
 - **`"ubuntu-24.04"`** -- Ubuntu 24.04 LTS
 - **`"ubuntu-22.04"`** -- Ubuntu 22.04 LTS
 - **`""`** -- Empty string, same as `amazon-linux-2023`
 
+**Raw AMI IDs** (`ami-xxxxxxxx`) skip the slug-to-AMI lookup entirely and pass the ID straight through to the EC2 launch. Use this with AMIs you've baked yourself via `km shell --learn --ami` or `km ami bake` — the generated `learned.*.yaml` profile already includes the right value here. Raw IDs are region-specific: an AMI baked in `us-east-1` cannot be referenced from a profile that compiles for `eu-west-1` until you run `km ami copy --region eu-west-1`.
+
 ```yaml
 spec:
   runtime:
-    ami: "ubuntu-24.04"
+    ami: "ubuntu-24.04"            # slug — resolved per-region
+```
+
+```yaml
+spec:
+  runtime:
+    ami: "ami-0abc123def456"       # raw AMI ID — exact, region-locked
 ```
 
 ### `spec.runtime.mountEFS`
