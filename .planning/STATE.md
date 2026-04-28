@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 57-02-PLAN.md (km-recv RFC 5322 + multipart/alternative + [EXTERNAL] hint)
-last_updated: "2026-04-28T20:37:55.151Z"
+stopped_at: "Completed 57-03-PLAN.md (km-mail-poller safe phrase gate: SSM fetch + sender_id hoist + grep -qF)"
+last_updated: "2026-04-28T20:43:13.318Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
   total_phases: 65
   completed_phases: 60
   total_plans: 191
-  completed_plans: 185
+  completed_plans: 186
   percent: 0
 ---
 
@@ -226,6 +226,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 57-email-enhancement P00 | 3min | 2 tasks | 5 files |
 | Phase 57 P01 | 6min | 2 tasks | 1 files |
 | Phase 57 P02 | 235 | 3 tasks | 1 files |
+| Phase 57 P03 | 157s | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -630,6 +631,9 @@ Recent decisions affecting current work:
 - [Phase 57]: unfold_headers applied ONLY to header section: avoids base64 attachment line corruption (Pitfall 3)
 - [Phase 57]: alt_boundary separate from outer boundary: avoids variable collision in second-level multipart scan (Pitfall 6)
 - [Phase 57]: from-external: automatic detection via absent X-KM-Sender-ID + SIG_STATUS=unsigned, no CLI flag needed
+- [Phase 57]: Enforcement layer is km-mail-poller (bash systemd service), not a SES receipt rule Lambda — sandbox_inbound SES rule is pure S3 action with no Lambda hook (infra/modules/ses/v1.0.0/main.tf line 126)
+- [Phase 57]: grep -qF fixed-string match used for safe phrase (not grep -qP/-qE) to prevent regex injection from SSM-stored phrase values
+- [Phase 57]: sender_id/sender_email hoisted unconditionally out of KM_ALLOWED_SENDERS block so safe-phrase gate can distinguish sandbox vs external senders when no allowlist is configured
 
 ### Roadmap Evolution
 
@@ -709,6 +713,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-28T20:37:55.146Z
-Stopped at: Completed 57-02-PLAN.md (km-recv RFC 5322 + multipart/alternative + [EXTERNAL] hint)
+Last session: 2026-04-28T20:43:13.313Z
+Stopped at: Completed 57-03-PLAN.md (km-mail-poller safe phrase gate: SSM fetch + sender_id hoist + grep -qF)
 Resume file: None
