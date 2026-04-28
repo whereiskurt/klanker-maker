@@ -369,6 +369,29 @@ type CLISpec struct {
 	// `km agent <sb> --codex` path). Use to bake in flags like --model for a
 	// given profile. Args supplied after `--` on the CLI still take precedence.
 	CodexArgs []string `yaml:"codexArgs,omitempty"`
+
+	// NotifyOnPermission enables emailing the operator when Claude Code emits a
+	// `Notification` hook event (typically a tool-permission prompt). Default false.
+	// When set, the compiler writes KM_NOTIFY_ON_PERMISSION=1 (or =0) into the
+	// sandbox's /etc/profile.d/km-notify-env.sh; per-invocation
+	// --notify-on-permission/--no-notify-on-permission flags on `km shell` and
+	// `km agent run` override at SSM-launch time.
+	NotifyOnPermission bool `yaml:"notifyOnPermission,omitempty"`
+
+	// NotifyOnIdle enables emailing the operator when Claude Code emits a `Stop`
+	// hook event (turn complete / waiting for input). Default false. Same env-var
+	// + CLI override semantics as NotifyOnPermission, via KM_NOTIFY_ON_IDLE.
+	NotifyOnIdle bool `yaml:"notifyOnIdle,omitempty"`
+
+	// NotifyCooldownSeconds suppresses notify-hook emails within N seconds of the
+	// last successful send (per-sandbox, shared across both event types).
+	// Default 0 = no cooldown. Profile-only in v1 (no CLI flag).
+	NotifyCooldownSeconds int `yaml:"notifyCooldownSeconds,omitempty"`
+
+	// NotificationEmailAddress overrides the default notification recipient
+	// (which is the operator inbox per km-send default). E.g., a team alias.
+	// Profile-only in v1 (no CLI flag).
+	NotificationEmailAddress string `yaml:"notificationEmailAddress,omitempty"`
 }
 
 // Parse unmarshals a SandboxProfile from raw YAML bytes.

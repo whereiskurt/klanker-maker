@@ -492,6 +492,23 @@
               "type": "array",
               "items": { "type": "string" },
               "description": "Extra args appended to the `codex exec` command when launching via km agent run --codex (e.g. --model o4-mini). User-supplied args still take precedence."
+            },
+            "notifyOnPermission": {
+              "type": "boolean",
+              "description": "Email the operator when Claude Code emits a Notification hook event (permission prompt). Default false. Override per invocation with --notify-on-permission / --no-notify-on-permission on km shell and km agent run."
+            },
+            "notifyOnIdle": {
+              "type": "boolean",
+              "description": "Email the operator when Claude Code emits a Stop hook event (turn complete / idle). Default false. Override per invocation with --notify-on-idle / --no-notify-on-idle on km shell and km agent run."
+            },
+            "notifyCooldownSeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Suppress notify-hook emails within N seconds of the last successful send (per-sandbox, shared across both event types). Default 0 = no cooldown. Profile-only (no CLI flag)."
+            },
+            "notificationEmailAddress": {
+              "type": "string",
+              "description": "Override recipient for notify-hook emails. Default is the operator inbox configured in km-config.yaml. Profile-only (no CLI flag)."
             }
           }
         }
