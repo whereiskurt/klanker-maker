@@ -1060,14 +1060,25 @@ parse_headers() {
 }
 
 # ----------------------------------------------------------------
+# strip_html: best-effort HTML to plaintext for display in km-recv.
+# Removes tags, decodes a small set of entities, collapses whitespace.
+# Not a full HTML parser — sufficient for human-readable Gmail bodies.
+# ----------------------------------------------------------------
+strip_html() {
+  sed 's/<[^>]*>//g' | sed 's/&nbsp;/ /g; s/&amp;/\&/g; s/&lt;/</g; s/&gt;/>/g; s/&quot;/"/g' | tr -s ' \n' | sed '/^[[:space:]]*$/d'
+}
+
+# ----------------------------------------------------------------
 # extract_body: return the plain-text body of a MIME message.
 # For single-part messages: everything after the first blank line.
 # For multipart/: returns the first text/plain part's content.
+# Handles multipart/mixed wrapping multipart/alternative (Gmail layout).
 # ----------------------------------------------------------------
 extract_body() {
   local raw="$1"
 
-  # Check for multipart boundary
+  # Check for top-level multipart boundary (works for multipart/mixed
+  # AND multipart/alternative -- the regex matches boundary= regardless of subtype).
   local boundary
   boundary=$(echo "$HDR_CONTENT_TYPE" | grep -oi 'boundary="[^"]*"' | sed 's/boundary="//;s/"$//')
   if [ -z "$boundary" ]; then
@@ -1075,10 +1086,14 @@ extract_body() {
   fi
 
   if [ -n "$boundary" ]; then
-    # Multipart: find first text/plain part
+    # First-level scan: find text/plain at the outer boundary (covers multipart/mixed
+    # with text/plain + attachments, and multipart/alternative with text/plain).
     local in_text_plain=false
     local past_part_headers=false
     local body_lines=""
+    # Capture inner alternative boundary if we encounter Content-Type: multipart/alternative
+    local alt_boundary=""
+    local capturing_alt_boundary=false
 
     while IFS= read -r line; do
       line_clean=$(echo "$line" | tr -d '\r')
@@ -1089,7 +1104,21 @@ extract_body() {
         in_text_plain=false
         past_part_headers=false
         body_lines=""
+        capturing_alt_boundary=false
         continue
+      fi
+      # Capture alt_boundary when we see an inner multipart/alternative content-type
+      if ! $in_text_plain && [ -z "$alt_boundary" ]; then
+        if echo "$line_clean" | grep -qi "^Content-Type:.*multipart/alternative"; then
+          capturing_alt_boundary=true
+        fi
+        if $capturing_alt_boundary; then
+          # boundary= may appear on same line OR on a continuation; check both
+          alt_boundary=$(echo "$line_clean" | grep -oi 'boundary="[^"]*"' | sed 's/boundary="//;s/"$//')
+          if [ -z "$alt_boundary" ]; then
+            alt_boundary=$(echo "$line_clean" | grep -oi "boundary=[^;[:space:]]*" | sed 's/boundary=//')
+          fi
+        fi
       fi
       if ! $in_text_plain; then
         if echo "$line_clean" | grep -qi "^Content-Type:.*text/plain"; then
@@ -1112,6 +1141,74 @@ extract_body() {
     if [ -n "$body_lines" ]; then
       echo "$body_lines"
       return
+    fi
+
+    # Second-level scan: top-level had no direct text/plain, but we saw
+    # an inner multipart/alternative. Scan inside alt_boundary for text/plain.
+    if [ -n "$alt_boundary" ]; then
+      local alt_in_text_plain=false
+      local alt_past_part_headers=false
+      local alt_body_lines=""
+      local alt_in_html=false
+      local alt_html_past_headers=false
+      local alt_html_lines=""
+
+      while IFS= read -r line; do
+        line_clean=$(echo "$line" | tr -d '\r')
+        if [[ "$line_clean" == "--${alt_boundary}"* ]]; then
+          if $alt_in_text_plain && [ -n "$alt_body_lines" ]; then
+            break
+          fi
+          alt_in_text_plain=false
+          alt_past_part_headers=false
+          alt_body_lines=""
+          alt_in_html=false
+          alt_html_past_headers=false
+          continue
+        fi
+        if ! $alt_in_text_plain && ! $alt_in_html; then
+          if echo "$line_clean" | grep -qi "^Content-Type:.*text/plain"; then
+            alt_in_text_plain=true
+            alt_past_part_headers=false
+            continue
+          fi
+          if echo "$line_clean" | grep -qi "^Content-Type:.*text/html"; then
+            alt_in_html=true
+            alt_html_past_headers=false
+            continue
+          fi
+          continue
+        fi
+        if $alt_in_text_plain; then
+          if ! $alt_past_part_headers; then
+            if [ -z "$line_clean" ]; then
+              alt_past_part_headers=true
+            fi
+            continue
+          fi
+          alt_body_lines="${alt_body_lines}${line_clean}
+"
+        fi
+        if $alt_in_html; then
+          if ! $alt_html_past_headers; then
+            if [ -z "$line_clean" ]; then
+              alt_html_past_headers=true
+            fi
+            continue
+          fi
+          alt_html_lines="${alt_html_lines}${line_clean}
+"
+        fi
+      done <<< "$raw"
+
+      if [ -n "$alt_body_lines" ]; then
+        echo "$alt_body_lines"
+        return
+      fi
+      if [ -n "$alt_html_lines" ]; then
+        echo "$alt_html_lines" | strip_html
+        return
+      fi
     fi
   fi
 
