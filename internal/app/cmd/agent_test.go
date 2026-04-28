@@ -1201,3 +1201,111 @@ func TestAgentParametersEscaping(t *testing.T) {
 		t.Errorf("inner command appears to contain over-escaped backslashes (manual escaping leak), got: %q", inner)
 	}
 }
+
+// agentTestBoolPtr is a helper for the notify gate tests (Phase 62 HOOK-04).
+func agentTestBoolPtr(b bool) *bool { return &b }
+
+// TestBuildAgentShellCommands_NotifyOnPermission verifies that a non-nil
+// NotifyOnPermission=true pointer injects export KM_NOTIFY_ON_PERMISSION="1"
+// into the generated script and does NOT inject KM_NOTIFY_ON_IDLE (idle nil).
+func TestBuildAgentShellCommands_NotifyOnPermission(t *testing.T) {
+	cmds, _ := cmd.BuildAgentShellCommands("test prompt", cmd.AgentRunOptions{
+		AgentType:          "claude",
+		NotifyOnPermission: agentTestBoolPtr(true),
+		ArtifactsBucket:    "test-bucket",
+	})
+	script := strings.Join(cmds, "\n")
+	if !strings.Contains(script, `export KM_NOTIFY_ON_PERMISSION="1"`) {
+		t.Errorf("expected KM_NOTIFY_ON_PERMISSION=1 export, got:\n%s", script)
+	}
+	if strings.Contains(script, "KM_NOTIFY_ON_IDLE") {
+		t.Errorf("did not expect KM_NOTIFY_ON_IDLE (idle pointer was nil), got:\n%s", script)
+	}
+}
+
+// TestBuildAgentShellCommands_NotifyOnIdle verifies that NotifyOnIdle=true
+// injects export KM_NOTIFY_ON_IDLE="1" and does NOT inject KM_NOTIFY_ON_PERMISSION.
+func TestBuildAgentShellCommands_NotifyOnIdle(t *testing.T) {
+	cmds, _ := cmd.BuildAgentShellCommands("test prompt", cmd.AgentRunOptions{
+		AgentType:       "claude",
+		NotifyOnIdle:    agentTestBoolPtr(true),
+		ArtifactsBucket: "test-bucket",
+	})
+	script := strings.Join(cmds, "\n")
+	if !strings.Contains(script, `export KM_NOTIFY_ON_IDLE="1"`) {
+		t.Errorf("expected KM_NOTIFY_ON_IDLE=1 export, got:\n%s", script)
+	}
+	if strings.Contains(script, "KM_NOTIFY_ON_PERMISSION") {
+		t.Errorf("did not expect KM_NOTIFY_ON_PERMISSION (permission pointer was nil), got:\n%s", script)
+	}
+}
+
+// TestBuildAgentShellCommands_NotifyBoth verifies that both pointers set to true
+// produce both export lines.
+func TestBuildAgentShellCommands_NotifyBoth(t *testing.T) {
+	cmds, _ := cmd.BuildAgentShellCommands("test prompt", cmd.AgentRunOptions{
+		AgentType:          "claude",
+		NotifyOnPermission: agentTestBoolPtr(true),
+		NotifyOnIdle:       agentTestBoolPtr(true),
+		ArtifactsBucket:    "test-bucket",
+	})
+	script := strings.Join(cmds, "\n")
+	if !strings.Contains(script, `export KM_NOTIFY_ON_PERMISSION="1"`) {
+		t.Errorf("expected KM_NOTIFY_ON_PERMISSION=1 export, got:\n%s", script)
+	}
+	if !strings.Contains(script, `export KM_NOTIFY_ON_IDLE="1"`) {
+		t.Errorf("expected KM_NOTIFY_ON_IDLE=1 export, got:\n%s", script)
+	}
+}
+
+// TestBuildAgentShellCommands_NotifyNeitherEmitsNoEnv verifies that nil pointers
+// produce NO KM_NOTIFY_ON_* exports in the script.
+func TestBuildAgentShellCommands_NotifyNeitherEmitsNoEnv(t *testing.T) {
+	cmds, _ := cmd.BuildAgentShellCommands("test prompt", cmd.AgentRunOptions{
+		AgentType:       "claude",
+		ArtifactsBucket: "test-bucket",
+	})
+	script := strings.Join(cmds, "\n")
+	if strings.Contains(script, "KM_NOTIFY_ON_PERMISSION") {
+		t.Errorf("did not expect KM_NOTIFY_ON_PERMISSION when pointer is nil, got:\n%s", script)
+	}
+	if strings.Contains(script, "KM_NOTIFY_ON_IDLE") {
+		t.Errorf("did not expect KM_NOTIFY_ON_IDLE when pointer is nil, got:\n%s", script)
+	}
+}
+
+// TestBuildAgentShellCommands_NotifyExplicitFalse verifies that a non-nil pointer
+// with value false emits export KM_NOTIFY_ON_PERMISSION="0" (explicit override).
+func TestBuildAgentShellCommands_NotifyExplicitFalse(t *testing.T) {
+	cmds, _ := cmd.BuildAgentShellCommands("test prompt", cmd.AgentRunOptions{
+		AgentType:          "claude",
+		NotifyOnPermission: agentTestBoolPtr(false),
+		ArtifactsBucket:    "test-bucket",
+	})
+	script := strings.Join(cmds, "\n")
+	if !strings.Contains(script, `export KM_NOTIFY_ON_PERMISSION="0"`) {
+		t.Errorf("explicit false should emit KM_NOTIFY_ON_PERMISSION=0, got:\n%s", script)
+	}
+}
+
+// TestBuildAgentShellCommands_NotifyOrderingBeforeAgentLaunch verifies that
+// KM_NOTIFY_ON_* exports appear in the script BEFORE the agent invocation line.
+func TestBuildAgentShellCommands_NotifyOrderingBeforeAgentLaunch(t *testing.T) {
+	cmds, _ := cmd.BuildAgentShellCommands("test prompt", cmd.AgentRunOptions{
+		AgentType:          "claude",
+		NotifyOnPermission: agentTestBoolPtr(true),
+		ArtifactsBucket:    "test-bucket",
+	})
+	script := strings.Join(cmds, "\n")
+	permIdx := strings.Index(script, "KM_NOTIFY_ON_PERMISSION")
+	claudeIdx := strings.Index(script, "claude -p")
+	if permIdx < 0 {
+		t.Fatalf("export KM_NOTIFY_ON_PERMISSION not found in script")
+	}
+	if claudeIdx < 0 {
+		t.Fatalf("claude -p invocation not found in script")
+	}
+	if permIdx > claudeIdx {
+		t.Errorf("export must appear before agent launch; perm at %d, claude at %d\nscript:\n%s", permIdx, claudeIdx, script)
+	}
+}

@@ -158,6 +158,8 @@ func newAgentRunCmd(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExec
 	var autoStart bool
 	var useClaude bool
 	var useCodex bool
+	var notifyOnPermission bool
+	var notifyOnIdle bool
 
 	cmd := &cobra.Command{
 		Use:   "run <sandbox-id | #number>",
@@ -219,6 +221,37 @@ Examples:
 				}
 			}
 
+			// Phase 62 (HOOK-04): resolve per-invocation notify gate overrides.
+			// CLI flag wins; if neither CLI flag was set, read profile default.
+			var notifyPermPtr, notifyIdlePtr *bool
+			resolveNotifyFlagAgent := func(posFlag, negFlag string, cliVal bool) *bool {
+				if cmd.Flags().Changed(posFlag) {
+					v := cliVal
+					return &v
+				}
+				if cmd.Flags().Changed(negFlag) {
+					f := false
+					return &f
+				}
+				return nil
+			}
+			notifyPermPtr = resolveNotifyFlagAgent("notify-on-permission", "no-notify-on-permission", notifyOnPermission)
+			notifyIdlePtr = resolveNotifyFlagAgent("notify-on-idle", "no-notify-on-idle", notifyOnIdle)
+
+			// If neither CLI flag set, check profile default.
+			if notifyPermPtr == nil || notifyIdlePtr == nil {
+				if cli := loadProfileCLI(ctx, cfg, sandboxID); cli != nil {
+					if notifyPermPtr == nil {
+						v := cli.NotifyOnPermission
+						notifyPermPtr = &v
+					}
+					if notifyIdlePtr == nil {
+						v := cli.NotifyOnIdle
+						notifyIdlePtr = &v
+					}
+				}
+			}
+
 			// If --prompt value is a file path, read its contents as the prompt.
 			if info, statErr := os.Stat(prompt); statErr == nil && !info.IsDir() {
 				data, readErr := os.ReadFile(prompt)
@@ -228,7 +261,7 @@ Examples:
 				prompt = string(data)
 			}
 
-			return runAgentNonInteractive(ctx, cfg, fetcher, execFn, ssmClient, ebClient, sandboxID, prompt, wait, interactive, noBedrock, autoStart, agentType)
+			return runAgentNonInteractive(ctx, cfg, fetcher, execFn, ssmClient, ebClient, sandboxID, prompt, wait, interactive, noBedrock, autoStart, agentType, notifyPermPtr, notifyIdlePtr)
 		},
 	}
 
@@ -239,6 +272,11 @@ Examples:
 	cmd.Flags().BoolVar(&autoStart, "auto-start", false, "Automatically resume sandbox if paused/stopped")
 	cmd.Flags().BoolVar(&useClaude, "claude", false, "Run claude (default if neither --claude nor --codex is set)")
 	cmd.Flags().BoolVar(&useCodex, "codex", false, "Run codex exec (mutually exclusive with --claude; incompatible with --no-bedrock)")
+	// Phase 62 (HOOK-04): notify gate overrides.
+	cmd.Flags().BoolVar(&notifyOnPermission, "notify-on-permission", false, "Email operator on Claude permission prompts (overrides profile default)")
+	cmd.Flags().BoolVar(&notifyOnIdle, "notify-on-idle", false, "Email operator when Claude finishes a turn (overrides profile default)")
+	cmd.Flags().Bool("no-notify-on-permission", false, "Force-disable Claude permission-prompt emails for this invocation")
+	cmd.Flags().Bool("no-notify-on-idle", false, "Force-disable Claude idle emails for this invocation")
 	_ = cmd.MarkFlagRequired("prompt")
 
 	return cmd
@@ -411,7 +449,7 @@ Examples:
 // It base64-encodes the prompt to prevent shell injection, creates a run directory
 // on the sandbox, and either returns immediately (fire-and-forget) or waits for
 // completion with idle-reset heartbeats.
-func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, ebClient kmaws.EventBridgeAPI, sandboxID, prompt string, wait, interactive, noBedrock, autoStart bool, agentType string) error {
+func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, ebClient kmaws.EventBridgeAPI, sandboxID, prompt string, wait, interactive, noBedrock, autoStart bool, agentType string, notifyPermPtr, notifyIdlePtr *bool) error {
 	printBanner("km agent run", sandboxID)
 
 	// Initialize real clients if not injected
@@ -523,11 +561,13 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 
 	// Build the shell commands using shared helper (AGENT-02, AGENT-03)
 	cmds, runID := BuildAgentShellCommands(prompt, AgentRunOptions{
-		AgentType:       agentType,
-		NoBedrock:       noBedrock,
-		ClaudeArgs:      claudeArgs,
-		CodexArgs:       codexArgs,
-		ArtifactsBucket: cfg.ArtifactsBucket,
+		AgentType:          agentType,
+		NoBedrock:          noBedrock,
+		ClaudeArgs:         claudeArgs,
+		CodexArgs:          codexArgs,
+		ArtifactsBucket:    cfg.ArtifactsBucket,
+		NotifyOnPermission: notifyPermPtr,
+		NotifyOnIdle:       notifyIdlePtr,
 	})
 
 	// --interactive mode: write script to disk, then open SSM session with tmux new-session (attached)
@@ -1105,6 +1145,12 @@ type AgentRunOptions struct {
 	ClaudeArgs      []string // appended to claude invocation (claude branch only)
 	CodexArgs       []string // appended to codex invocation (codex branch only)
 	ArtifactsBucket string   // S3 bucket for output.json upload
+	// Phase 62 (HOOK-04): per-invocation notify gate overrides.
+	// nil = not set (no env line emitted; profile default takes effect via
+	// /etc/profile.d/km-notify-env.sh written at compile time).
+	// Non-nil = explicit CLI override: emit export KM_NOTIFY_ON_*="0"|"1".
+	NotifyOnPermission *bool
+	NotifyOnIdle       *bool
 }
 
 // BuildAgentShellCommands returns SSM RunShellScript commands for non-interactive
@@ -1159,6 +1205,28 @@ fi`
 		}
 	}
 
+	// Phase 62 (HOOK-04): build per-invocation notify env-var overrides.
+	// Only emits lines for non-nil pointers; nil means "let profile.d default take effect".
+	var notifyEnvLines string
+	if opts.NotifyOnPermission != nil || opts.NotifyOnIdle != nil {
+		var sb strings.Builder
+		if opts.NotifyOnPermission != nil {
+			v := "0"
+			if *opts.NotifyOnPermission {
+				v = "1"
+			}
+			fmt.Fprintf(&sb, "export KM_NOTIFY_ON_PERMISSION=%q\n", v)
+		}
+		if opts.NotifyOnIdle != nil {
+			v := "0"
+			if *opts.NotifyOnIdle {
+				v = "1"
+			}
+			fmt.Fprintf(&sb, "export KM_NOTIFY_ON_IDLE=%q\n", v)
+		}
+		notifyEnvLines = sb.String()
+	}
+
 	// Write a bash script to a temp file, then execute inside a tmux session.
 	// The tmux session persists after SSM disconnect, allowing live attach.
 	// Completion is signaled via tmux wait-for channel so --wait can block.
@@ -1167,7 +1235,7 @@ export HOME=/home/sandbox
 source /etc/profile.d/km-profile-env.sh 2>/dev/null
 source /etc/profile.d/km-identity.sh 2>/dev/null
 %s
-KM_ARTIFACTS_BUCKET="%s"
+%sKM_ARTIFACTS_BUCKET="%s"
 cd /workspace
 RUN_ID="%s"
 RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
@@ -1181,7 +1249,7 @@ if [ -n "$KM_ARTIFACTS_BUCKET" ] && [ -n "$KM_SANDBOX_ID" ]; then
   aws s3 cp "$RUN_DIR/output.json" "s3://$KM_ARTIFACTS_BUCKET/agent-runs/$KM_SANDBOX_ID/$RUN_ID/output.json" --quiet 2>/dev/null || true
   aws s3 cp "$RUN_DIR/status" "s3://$KM_ARTIFACTS_BUCKET/agent-runs/$KM_SANDBOX_ID/$RUN_ID/status" --quiet 2>/dev/null || true
 fi
-tmux wait-for -S km-done-%s`, noBedrockLines, opts.ArtifactsBucket, runID, b64Prompt, agentLine, runID)
+tmux wait-for -S km-done-%s`, noBedrockLines, notifyEnvLines, opts.ArtifactsBucket, runID, b64Prompt, agentLine, runID)
 
 	sessionName := fmt.Sprintf("km-agent-%s", runID)
 
