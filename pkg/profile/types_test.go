@@ -1074,3 +1074,230 @@ spec:
 		t.Errorf("expected empty codexArgs, got %v", p.Spec.CLI.CodexArgs)
 	}
 }
+
+// TestParse_CLISpec_NotifyFields verifies that a YAML profile setting all four
+// notify fields round-trips correctly through profile.Parse().
+func TestParse_CLISpec_NotifyFields(t *testing.T) {
+	yamlData := []byte(`
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: notify-fields-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+  identity:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: true
+      image: "km-tracing:latest"
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+  agent:
+    maxConcurrentTasks: 2
+    taskTimeout: 30m
+  cli:
+    notifyOnPermission: true
+    notifyOnIdle: true
+    notifyCooldownSeconds: 120
+    notificationEmailAddress: "ops-team@example.com"
+`)
+
+	p, err := profile.Parse(yamlData)
+	if err != nil {
+		t.Fatalf("expected profile with notify fields to parse without error, got: %v", err)
+	}
+	if p.Spec.CLI == nil {
+		t.Fatal("expected Spec.CLI to be set, got nil")
+	}
+	if !p.Spec.CLI.NotifyOnPermission {
+		t.Error("expected CLI.NotifyOnPermission=true, got false")
+	}
+	if !p.Spec.CLI.NotifyOnIdle {
+		t.Error("expected CLI.NotifyOnIdle=true, got false")
+	}
+	if p.Spec.CLI.NotifyCooldownSeconds != 120 {
+		t.Errorf("expected CLI.NotifyCooldownSeconds=120, got %d", p.Spec.CLI.NotifyCooldownSeconds)
+	}
+	if p.Spec.CLI.NotificationEmailAddress != "ops-team@example.com" {
+		t.Errorf("expected CLI.NotificationEmailAddress=%q, got %q", "ops-team@example.com", p.Spec.CLI.NotificationEmailAddress)
+	}
+}
+
+// TestParse_CLISpec_NotifyFields_DefaultsZero verifies that a YAML profile
+// omitting all four notify fields parses cleanly with zero values (backwards compat).
+func TestParse_CLISpec_NotifyFields_DefaultsZero(t *testing.T) {
+	yamlData := []byte(`
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: notify-zero-defaults-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+  identity:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: true
+      image: "km-tracing:latest"
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+  agent:
+    maxConcurrentTasks: 2
+    taskTimeout: 30m
+  cli:
+    noBedrock: true
+`)
+
+	p, err := profile.Parse(yamlData)
+	if err != nil {
+		t.Fatalf("expected profile without notify fields to parse without error, got: %v", err)
+	}
+	if p.Spec.CLI == nil {
+		t.Fatal("expected Spec.CLI to be set, got nil")
+	}
+	// All four notify fields must be zero-valued when omitted
+	if p.Spec.CLI.NotifyOnPermission {
+		t.Error("expected CLI.NotifyOnPermission=false (zero) when omitted, got true")
+	}
+	if p.Spec.CLI.NotifyOnIdle {
+		t.Error("expected CLI.NotifyOnIdle=false (zero) when omitted, got true")
+	}
+	if p.Spec.CLI.NotifyCooldownSeconds != 0 {
+		t.Errorf("expected CLI.NotifyCooldownSeconds=0 when omitted, got %d", p.Spec.CLI.NotifyCooldownSeconds)
+	}
+	if p.Spec.CLI.NotificationEmailAddress != "" {
+		t.Errorf("expected CLI.NotificationEmailAddress=\"\" when omitted, got %q", p.Spec.CLI.NotificationEmailAddress)
+	}
+}
+
+// TestParse_CLISpec_NotifyFields_ExplicitFalse verifies that explicit false values
+// for notifyOnPermission and notifyOnIdle round-trip correctly.
+func TestParse_CLISpec_NotifyFields_ExplicitFalse(t *testing.T) {
+	yamlData := []byte(`
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: notify-explicit-false-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+  identity:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: true
+      image: "km-tracing:latest"
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+  agent:
+    maxConcurrentTasks: 2
+    taskTimeout: 30m
+  cli:
+    notifyOnPermission: false
+    notifyOnIdle: false
+`)
+
+	p, err := profile.Parse(yamlData)
+	if err != nil {
+		t.Fatalf("expected profile to parse, got: %v", err)
+	}
+	if p.Spec.CLI == nil {
+		t.Fatal("expected Spec.CLI to be set, got nil")
+	}
+	if p.Spec.CLI.NotifyOnPermission != false {
+		t.Error("expected CLI.NotifyOnPermission=false (explicit), got true")
+	}
+	if p.Spec.CLI.NotifyOnIdle != false {
+		t.Error("expected CLI.NotifyOnIdle=false (explicit), got true")
+	}
+}

@@ -177,6 +177,129 @@ spec:
 	}
 }
 
+// minimalCLIBase is a complete base profile YAML for CLI-related tests.
+// Tests append a `  cli:` block to this base.
+const minimalCLIBase = `apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: notify-validate-test
+spec:
+  lifecycle:
+    ttl: "24h"
+    idleTimeout: "1h"
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+      allowedHosts: []
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+  agent:
+    maxConcurrentTasks: 4
+    taskTimeout: "30m"
+`
+
+// TestValidate_NotifyFields_AllSet verifies that a profile with all four notify
+// fields set to valid values passes schema validation.
+func TestValidate_NotifyFields_AllSet(t *testing.T) {
+	yaml := minimalCLIBase + `  cli:
+    notifyOnPermission: true
+    notifyOnIdle: true
+    notifyCooldownSeconds: 60
+    notificationEmailAddress: "ops@example.com"
+`
+	errs := profile.ValidateSchema([]byte(yaml))
+	if len(errs) != 0 {
+		t.Errorf("expected no schema errors for profile with all notify fields, got %d errors:", len(errs))
+		for _, e := range errs {
+			t.Logf("  - %s", e.Error())
+		}
+	}
+}
+
+// TestValidate_NotifyFields_WrongType_CooldownString verifies that schema
+// validation rejects notifyCooldownSeconds given as a string instead of integer.
+func TestValidate_NotifyFields_WrongType_CooldownString(t *testing.T) {
+	yaml := minimalCLIBase + `  cli:
+    notifyCooldownSeconds: "60"
+`
+	errs := profile.ValidateSchema([]byte(yaml))
+	if len(errs) == 0 {
+		t.Error("expected schema validation to reject notifyCooldownSeconds as string, got no errors")
+		return
+	}
+
+	found := false
+	for _, e := range errs {
+		msg := e.Error()
+		if strings.Contains(msg, "notifyCooldownSeconds") || strings.Contains(msg, "integer") ||
+			strings.Contains(msg, "type") || strings.Contains(msg, "cli") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error referencing notifyCooldownSeconds type, errors were: %v", errs)
+	}
+}
+
+// TestValidate_NotifyFields_WrongType_PermissionString verifies that schema
+// validation rejects notifyOnPermission given as a string instead of boolean.
+func TestValidate_NotifyFields_WrongType_PermissionString(t *testing.T) {
+	yaml := minimalCLIBase + `  cli:
+    notifyOnPermission: "yes"
+`
+	errs := profile.ValidateSchema([]byte(yaml))
+	if len(errs) == 0 {
+		t.Error("expected schema validation to reject notifyOnPermission as string, got no errors")
+		return
+	}
+
+	found := false
+	for _, e := range errs {
+		msg := e.Error()
+		if strings.Contains(msg, "notifyOnPermission") || strings.Contains(msg, "boolean") ||
+			strings.Contains(msg, "type") || strings.Contains(msg, "cli") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected error referencing notifyOnPermission type, errors were: %v", errs)
+	}
+}
+
 func TestSemanticInvalidSubstrate(t *testing.T) {
 	data, err := os.ReadFile("../../testdata/profiles/invalid-bad-substrate.yaml")
 	if err != nil {
