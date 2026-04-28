@@ -1,0 +1,5 @@
+{"type":"user","message":{"content":[{"type":"text","text":"please refactor"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Starting refactor..."}]}}
+{"type":"tool_use","name":"Edit","input":{}}
+{"type":"tool_result","content":"ok"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"I've finished refactoring the auth middleware. Let me know what you'd like to test next."}]}}
