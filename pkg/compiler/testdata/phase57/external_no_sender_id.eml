@@ -1,0 +1,6 @@
+From: rando@example.org
+To: sb-fixture-3@sandboxes.example.com
+Subject: hi
+Content-Type: text/plain; charset=UTF-8
+
+Hello, this is an unsigned external message without the safe phrase.

@@ -1,0 +1,8 @@
+From: rando@example.org
+To: sb-fixture-3@sandboxes.example.com
+Subject: hi with phrase
+Content-Type: text/plain; charset=UTF-8
+
+KM-AUTH: open-sesame-phrase
+
+This external message includes the safe phrase.

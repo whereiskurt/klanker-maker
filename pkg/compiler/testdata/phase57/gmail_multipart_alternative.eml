@@ -1,0 +1,28 @@
+From: external.user@gmail.com
+To: sb-fixture-1@sandboxes.example.com
+Subject: Hello from Gmail
+MIME-Version: 1.0
+Date: Mon, 28 Apr 2026 09:00:00 +0000
+Content-Type: multipart/mixed; boundary="outer"
+
+--outer
+Content-Type: multipart/alternative; boundary="inner"
+
+--inner
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: 8bit
+
+Plain body for Phase 57 test
+--inner
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: 8bit
+
+<html><body><p>HTML body for Phase 57 test</p></body></html>
+--inner--
+--outer
+Content-Type: application/octet-stream; name="note.txt"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="note.txt"
+
+aGVsbG8K
+--outer--
