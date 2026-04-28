@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 56.2-01-PLAN.md
-last_updated: "2026-04-27T13:47:46.501Z"
+stopped_at: "Completed 57-00-PLAN.md (RED scaffold: 15 test stubs + 4 MIME fixtures)"
+last_updated: "2026-04-28T20:26:51.491Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
   total_phases: 65
   completed_phases: 60
-  total_plans: 186
-  completed_plans: 182
+  total_plans: 191
+  completed_plans: 183
   percent: 0
 ---
 
@@ -223,6 +223,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 56.1 P01 | 841s | 3 tasks | 9 files |
 | Phase 56.1 P02 | 936 | 3 tasks | 9 files |
 | Phase 56.2 P01 | 10min | 3 tasks | 2 files |
+| Phase 57-email-enhancement P00 | 3min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -622,6 +623,7 @@ Recent decisions affecting current work:
 - [Phase 56.2]: No Wants=km.slice in km-bootstrap.service: km.slice is a cgroup directory not a systemd unit; script uses mkdir -p to create the parent
 - [Phase 56.2]: km-bootstrap.service always emitted (not gated on enforcement mode): /run/km parent dir needed for km-audit-log FIFO on all enforcement modes
 - [Phase 56.2]: No km init --sidecars needed: template-only changes compiled into km binary; operator runs make build only
+- [Phase 57-email-enhancement]: TestUserData_MailPoller_SkipsCheckForSandbox tightened to combined guard to avoid false PASS from pre-existing bare assertion in km-recv
 
 ### Roadmap Evolution
 
@@ -701,6 +703,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-27T13:18:13.054Z
-Stopped at: Completed 56.2-01-PLAN.md
+Last session: 2026-04-28T20:26:51.485Z
+Stopped at: Completed 57-00-PLAN.md (RED scaffold: 15 test stubs + 4 MIME fixtures)
 Resume file: None
