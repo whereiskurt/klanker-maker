@@ -699,10 +699,13 @@ ATTACH_CSV=""
 CC_CSV=""
 USE_BCC=false
 REPLY_TO=""
+NO_SIGN=false
+PEM_FILE=""
+SIGNATURE=""
 
 usage() {
   echo "Usage: km-send --to <addr> --subject <subject> [--body <file>] [--attach file1,file2,...]" >&2
-  echo "       [--cc addr1,addr2,...] [--use-bcc] [--reply-to <addr>]" >&2
+  echo "       [--cc addr1,addr2,...] [--use-bcc] [--reply-to <addr>] [--no-sign]" >&2
   exit 1
 }
 
@@ -715,6 +718,7 @@ while [[ $# -gt 0 ]]; do
     --cc)        CC_CSV="$2";    shift 2 ;;
     --use-bcc)   USE_BCC=true;   shift ;;
     --reply-to)  REPLY_TO="$2";  shift 2 ;;
+    --no-sign)   NO_SIGN=true;  shift ;;
     --)          shift; break ;;
     -*)          echo "[km-send] Unknown option: $1" >&2; usage ;;
     *)           break ;;
