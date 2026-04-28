@@ -70,6 +70,8 @@ aws ssm get-parameter --name "/sandbox/$KM_SANDBOX_ID/signing-key" --with-decryp
 
 If the signing key is missing and `signing: required`, outbound email will fail.
 
+**External email exception:** If you are sending to a non-sandbox recipient (Gmail, corporate email, etc.), use `km-send --no-sign` — it skips the signing key fetch entirely. The signing key is only required for sandbox-to-sandbox communication. See `klanker:email` skill section "Sending to External Recipients" for details.
+
 ## Identity Summary
 
 After running the above checks, you should know:
@@ -79,5 +81,7 @@ After running the above checks, you should know:
 - **Operator email:** `$KM_OPERATOR_EMAIL`
 - **Email policy:** signing/encryption/verification settings
 - **Tooling status:** km-send and km-recv availability
+
+- **External email policy:** For non-sandbox recipients use `km-send --no-sign`. Inbound replies from non-sandbox senders must include `KM-AUTH: <safe-phrase>` in the body — otherwise the `km-mail-poller` filter drops them silently to `/var/mail/km/skipped/`.
 
 Use this context when invoking `klanker:email` or `klanker:operator`.
