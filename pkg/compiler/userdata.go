@@ -1032,6 +1032,17 @@ ed25519_pubkey_to_pem() {
 }
 
 # ----------------------------------------------------------------
+# unfold_headers: RFC 5322 header unfolding via awk one-liner.
+# Continuation lines (starting with space or tab) are joined to the
+# preceding header line with a single space replacing the leading whitespace.
+# MUST be applied ONLY to the header section — never to the body, because
+# base64-encoded attachment lines may start with whitespace and would be corrupted.
+# ----------------------------------------------------------------
+unfold_headers() {
+  awk 'BEGIN{line=""} /^[ \t]/{sub(/^[ \t]+/, " "); line = line $0; next} {if(line!="") print line; line=$0} END{if(line!="") print line}'
+}
+
+# ----------------------------------------------------------------
 # parse_headers: extract all commonly used headers from raw email.
 # Sets global variables: HDR_FROM HDR_TO HDR_SUBJECT HDR_SENDER_ID
 # HDR_SIGNATURE HDR_ENCRYPTED HDR_CONTENT_TYPE
@@ -1247,8 +1258,17 @@ process_messages() {
     local raw
     raw=$(head -c 1048576 "$msg_file")
 
-    # Parse headers into global HDR_* variables
-    parse_headers "$raw"
+    # Parse headers into global HDR_* variables.
+    # Split into header section (up to first blank line) and body section,
+    # unfold headers, recombine — so parse_headers sees unfolded headers
+    # while extract_body sees the original raw bytes (base64 lines preserved).
+    local raw_headers raw_body raw_for_parse
+    raw_headers=$(printf '%s' "$raw" | awk '/^[[:space:]]*$/{exit} {print}')
+    raw_body=$(printf '%s' "$raw" | awk 'found{print} /^[[:space:]]*$/{found=1}')
+    raw_for_parse="$(printf '%s' "$raw_headers" | unfold_headers)
+
+${raw_body}"
+    parse_headers "$raw_for_parse"
 
     # Sender allowlist enforcement (belt-and-suspenders with km-mail-poller)
     if [ -n "${KM_ALLOWED_SENDERS:-}" ]; then
