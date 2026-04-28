@@ -106,6 +106,14 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **OPER-01**: All terragrunt-calling CLI commands (`km create`, `km destroy`, `km init`, `km uninit`) suppress raw terragrunt/terraform output by default — show step-level summaries instead; `--verbose` flag restores full output streaming; errors and warnings always shown regardless of mode
 
+### Operator Notification Hooks
+
+- **HOOK-01**: Compiler unconditionally writes `/opt/km/bin/km-notify-hook` bash script during user-data execution; script exists on every sandbox regardless of profile settings, and is gated at run-time by env vars
+- **HOOK-02**: Compiler merges `Notification` and `Stop` hook entries into `~/.claude/settings.json`, preserving any user-supplied entries from `spec.execution.configFiles` (parses existing JSON, appends km hook command, writes merged result; fails fast if user JSON is invalid)
+- **HOOK-03**: Compiler writes `/etc/profile.d/km-notify-env.sh` with `KM_NOTIFY_ON_PERMISSION` / `KM_NOTIFY_ON_IDLE` / `KM_NOTIFY_COOLDOWN_SECONDS` / `KM_NOTIFY_EMAIL` only when the corresponding `spec.cli.notify*` profile field is set; unset profile fields produce no env var
+- **HOOK-04**: `km shell` and `km agent run` honor `--notify-on-permission` / `--no-notify-on-permission` / `--notify-on-idle` / `--no-notify-on-idle` CLI flags, overriding profile defaults via env vars injected at SSM-launch time (interactive shell uses pre-session SendCommand to write `/etc/profile.d/zz-km-notify.sh`; agent run prepends `export KM_NOTIFY_ON_*=...` lines to the generated bash script)
+- **HOOK-05**: `/opt/km/bin/km-notify-hook` honors gate env vars, cooldown (`/tmp/km-notify.last`), builds correct subjects (`[<sandbox-id>] needs permission` / `[<sandbox-id>] idle`) and bodies (Notification: `.message` from stdin payload; Stop: last assistant text from `transcript_path` JSONL), calls `km-send --body <file>` (not stdin, per CLAUDE.md OpenSSL 3.5+ requirement), and never blocks Claude on send failure (always exits 0)
+
 ### eBPF Network Enforcement
 
 - **EBPF-NET-01**: `pkg/ebpf/` package scaffold with bpf2go pipeline — `go generate` compiles BPF C programs, bpf2go generates Go loader code, `make build` embeds compiled bytecode in km binary
@@ -297,10 +305,15 @@ Which phases cover which requirements. Updated during roadmap creation.
 | EBPF-TLS-12 | Phase 41 | Planned |
 | EBPF-TLS-13 | Phase 41 | Planned |
 | EBPF-TLS-14 | Phase 41 | Planned |
+| HOOK-01 | Phase 62 | Planned |
+| HOOK-02 | Phase 62 | Planned |
+| HOOK-03 | Phase 62 | Planned |
+| HOOK-04 | Phase 62 | Planned |
+| HOOK-05 | Phase 62 | Planned |
 
 **Coverage:**
-- v1 requirements: 66 total
-- Mapped to phases: 56
+- v1 requirements: 71 total
+- Mapped to phases: 61
 - Unmapped: 0
 - eBPF requirements (Phase 40-41): 26 total
 
@@ -311,3 +324,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 *Last updated: 2026-03-21 — PROV-11, PROV-12, PROV-13 added: spot instances by default for EC2 and ECS, graceful interruption handling with artifact upload*
 *Last updated: 2026-03-21 — OBSV-08, OBSV-09, OBSV-10 added: OTel tracing sidecar, MLflow experiment tracking per sandbox session, trace context propagation through proxy sidecars*
 *Last updated: 2026-03-22 — COST-01 promoted from v2, expanded into BUDG-01 through BUDG-09: per-sandbox budget enforcement with DynamoDB global table, http-proxy Bedrock metering, threshold warnings, hard enforcement, operator top-up*
+*Last updated: 2026-04-26 — HOOK-01..HOOK-05 added: operator-notify hook for Claude Code Notification (permission) and Stop (idle) events; profile-driven via spec.cli.notifyOn{Permission,Idle}/notifyCooldownSeconds/notificationEmailAddress with --notify-on-{permission,idle} CLI overrides on km shell and km agent run (Phase 62)*
