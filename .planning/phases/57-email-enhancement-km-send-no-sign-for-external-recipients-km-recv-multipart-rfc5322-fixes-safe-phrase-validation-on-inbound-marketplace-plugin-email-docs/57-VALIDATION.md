@@ -45,6 +45,7 @@ created: 2026-04-28
 | 57-02-02 | 02 | 1 | km-recv extracts text/plain from multipart/alternative | unit | `go test ./pkg/compiler/... -run TestUserData_KmRecv_MultipartAlternative` | ❌ W0 | ⬜ pending |
 | 57-02-03 | 02 | 1 | km-recv handles nested multipart/mixed → multipart/alternative | unit | `go test ./pkg/compiler/... -run TestUserData_KmRecv_NestedMultipart` | ❌ W0 | ⬜ pending |
 | 57-02-04 | 02 | 1 | km-recv shows external sender hint when X-KM-Sender-ID absent | unit | `go test ./pkg/compiler/... -run TestUserData_KmRecv_ExternalDisplay` | ❌ W0 | ⬜ pending |
+| 57-02-05 | 02 | 1 | km-recv adds "external": true to JSON output for external senders | unit | `go test ./pkg/compiler/... -run TestUserData_KmRecv_ExternalJSONField` | ❌ W0 | ⬜ pending |
 | 57-03-01 | 03 | 1 | km-mail-poller extracts sender_id unconditionally (after To-match) | unit | `go test ./pkg/compiler/... -run TestUserData_MailPoller_ExtractsSenderIdUnconditionally` | ❌ W0 | ⬜ pending |
 | 57-03-02 | 03 | 1 | km-mail-poller fetches safe phrase from SSM at startup | unit | `go test ./pkg/compiler/... -run TestUserData_MailPoller_FetchesSafePhrase` | ❌ W0 | ⬜ pending |
 | 57-03-03 | 03 | 1 | km-mail-poller drops external email missing safe phrase | unit | `go test ./pkg/compiler/... -run TestUserData_MailPoller_DropsExternalNoPhrase` | ❌ W0 | ⬜ pending |
@@ -63,7 +64,7 @@ created: 2026-04-28
 
 ## Wave 0 Requirements
 
-- [ ] `pkg/compiler/userdata_phase57_test.go` — new test file containing all 14 RED unit-test stubs (57-01-* through 57-03-*)
+- [ ] `pkg/compiler/userdata_phase57_test.go` — new test file containing all 15 RED unit-test stubs (57-01-* through 57-03-*)
 - [ ] `pkg/compiler/testdata/phase57/gmail_multipart_alternative.eml` — Gmail multipart/mixed → multipart/alternative fixture
 - [ ] `pkg/compiler/testdata/phase57/folded_headers.eml` — RFC 5322 folded header (e.g., long X-KM-Signature) fixture
 - [ ] `pkg/compiler/testdata/phase57/external_no_sender_id.eml` — external email without X-KM-Sender-ID
