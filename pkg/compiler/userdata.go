@@ -654,11 +654,15 @@ while true; do
         # Check if the To header contains this sandbox's address or alias
         if head -c 8192 "$tmp_file" | tr '[:upper:]' '[:lower:]' | grep -qE "$MATCH_PATTERN"; then
           mv "$tmp_file" "$local_file"
+
+          # Always extract sender_id for external validation (even when no allowlist configured).
+          # Both gates below -- allowlist and safe-phrase -- depend on these values.
+          sender_from=$(head -c 8192 "$local_file" | grep -i "^From:" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')
+          sender_email=$(echo "$sender_from" | grep -oP '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' | head -1 | tr '[:upper:]' '[:lower:]')
+          sender_id=$(head -c 8192 "$local_file" | grep -i "^X-KM-Sender-ID:" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')
+
           # Sender allowlist enforcement
           if [ -n "${KM_ALLOWED_SENDERS:-}" ]; then
-            sender_from=$(head -c 8192 "$local_file" | grep -i "^From:" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')
-            sender_email=$(echo "$sender_from" | grep -oP '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' | head -1 | tr '[:upper:]' '[:lower:]')
-            sender_id=$(head -c 8192 "$local_file" | grep -i "^X-KM-Sender-ID:" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')
             sender_allowed=false
             IFS=: read -ra _PATTERNS <<< "$KM_ALLOWED_SENDERS"
             for _p in "${_PATTERNS[@]}"; do
@@ -684,6 +688,23 @@ while true; do
               continue
             fi
           fi
+
+          # External email safe phrase validation.
+          # When sender_id is empty (no X-KM-Sender-ID header) and a safe phrase is configured,
+          # require KM-AUTH: <phrase> in the message body. Sandbox-to-sandbox email
+          # (sender_id non-empty) is exempt because it is cryptographically signed.
+          if [ -z "$sender_id" ] && [ -n "${KM_SAFE_PHRASE_CACHED:-}" ]; then
+            body_check=$(head -c 4096 "$local_file" 2>/dev/null || true)
+            if ! echo "$body_check" | grep -qF "KM-AUTH: ${KM_SAFE_PHRASE_CACHED}"; then
+              rm -f "$local_file"
+              mkdir -p "$MAIL_DIR/skipped"
+              touch "$MAIL_DIR/skipped/$key"
+              echo "[km-mail-poller] External email from ${sender_email:-unknown} rejected: missing/invalid safe phrase, skipping $key" >&2
+              continue
+            fi
+            echo "[km-mail-poller] External email from ${sender_email:-unknown} accepted (safe phrase OK)"
+          fi
+
           echo "[km-mail-poller] New mail: $key"
         else
           rm -f "$tmp_file"
