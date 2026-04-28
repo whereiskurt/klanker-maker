@@ -1427,13 +1427,15 @@ ${raw_body}"
       json_sig=$(json_escape "$SIG_STATUS")
       local json_enc="false"
       $is_encrypted && json_enc="true"
+      local json_external="false"
+      [ -z "$HDR_SENDER_ID" ] && json_external="true"
       local attach_json="[]"
       if [ -n "$attachment_list" ]; then
         attach_json='["'"$(echo "$attachment_list" | sed 's/,/","/g')"'"]'
       fi
-      printf '{"index":%d,"from":"%s","sender_id":"%s","to":"%s","subject":"%s","signature":"%s","encrypted":%s,"body":"%s","attachments":%s}\n' \
+      printf '{"index":%d,"from":"%s","sender_id":"%s","to":"%s","subject":"%s","signature":"%s","encrypted":%s,"external":%s,"body":"%s","attachments":%s}\n' \
         "$index" "$json_from" "$json_sender_id" "$json_to" "$json_subject" \
-        "$json_sig" "$json_enc" "$json_body" "$attach_json"
+        "$json_sig" "$json_enc" "$json_external" "$json_body" "$attach_json"
     else
       # Human-readable output
       local sig_display enc_display from_display
@@ -1446,7 +1448,11 @@ ${raw_body}"
       esac
       enc_display="no"
       $is_encrypted && enc_display="yes"
-      from_display="${HDR_SENDER_ID:-${HDR_FROM}}"
+      if [ -z "$HDR_SENDER_ID" ] && [ "$SIG_STATUS" = "unsigned" ]; then
+        from_display="${HDR_FROM} [EXTERNAL]"
+      else
+        from_display="${HDR_SENDER_ID:-${HDR_FROM}}"
+      fi
       printf '[%d] From: %-20s  Subject: %-20s  Sig: %-12s  Enc: %s\n' \
         "$index" "$from_display" "${HDR_SUBJECT:-<no subject>}" \
         "$sig_display" "$enc_display"
