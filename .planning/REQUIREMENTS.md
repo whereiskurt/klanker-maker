@@ -308,7 +308,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HOOK-01 | Phase 62 | Planned |
 | HOOK-02 | Phase 62 | Planned |
 | HOOK-03 | Phase 62 | Planned |
-| HOOK-04 | Phase 62 | Planned |
+| HOOK-04 | Phase 62 | Complete |
 | HOOK-05 | Phase 62 | Planned |
 
 **Coverage:**

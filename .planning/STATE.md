@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 62-02-PLAN.md (km-notify-hook script + settings.json merge + HOOK-01/02/03 tests)
-last_updated: "2026-04-28T22:07:06.684Z"
+stopped_at: Completed 62-04-PLAN.md (CLI flags for notify gates on km shell and km agent run)
+last_updated: "2026-04-28T22:12:46.808Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
   total_phases: 65
   completed_phases: 61
   total_plans: 191
-  completed_plans: 189
+  completed_plans: 190
   percent: 0
 ---
 
@@ -230,6 +230,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 57 P04 | 85s | 2 tasks | 2 files |
 | Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events P01 | 182s | 2 tasks | 5 files |
 | Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events P02 | 18min | 3 tasks | 4 files |
+| Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events P04 | 12min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -643,6 +644,8 @@ Recent decisions affecting current work:
 - [Phase 62]: Emit KM_NOTIFY_ON_PERMISSION/ON_IDLE whenever Spec.CLI != nil (v1 pragmatic); Go bool zero value + omitempty cannot distinguish explicit-false from unset
 - [Phase 62]: Write notify env vars to /etc/profile.d/km-notify-env.sh (NOT /etc/environment); profile.d is guaranteed sourced in SSM sessions on Amazon Linux 2
 - [Phase 62]: mergeNotifyHookIntoSettings() runs at compile time in Go (not shell jq); KM_NOTIFY_LAST_FILE override in hook script enables test isolation in Plan 03
+- [Phase 62]: Use *bool for AgentRunOptions.NotifyOnPermission/Idle: nil=unset (no export emitted), non-nil=explicit override. Avoids explicit-false ambiguity without a companion Explicit field.
+- [Phase 62]: km shell resolveNotifyFlags returns nil when no CLI flag changed — avoids SSM SendCommand roundtrip; profile.d km-notify-env.sh from Plan 02 supplies defaults.
 
 ### Roadmap Evolution
 
@@ -722,6 +725,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-28T22:07:06.679Z
-Stopped at: Completed 62-02-PLAN.md (km-notify-hook script + settings.json merge + HOOK-01/02/03 tests)
+Last session: 2026-04-28T22:12:46.803Z
+Stopped at: Completed 62-04-PLAN.md (CLI flags for notify gates on km shell and km agent run)
 Resume file: None
