@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Completed 57-03-PLAN.md (km-mail-poller safe phrase gate: SSM fetch + sender_id hoist + grep -qF)"
-last_updated: "2026-04-28T20:43:13.318Z"
+stopped_at: "Completed 57-04-PLAN.md (skills/email/SKILL.md + skills/sandbox/SKILL.md: --no-sign, external field, safe-phrase, /opt/km/bin/ paths)"
+last_updated: "2026-04-28T21:10:39.274Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
   total_phases: 65
-  completed_phases: 60
+  completed_phases: 61
   total_plans: 191
-  completed_plans: 186
+  completed_plans: 187
   percent: 0
 ---
 
@@ -227,6 +227,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 57 P01 | 6min | 2 tasks | 1 files |
 | Phase 57 P02 | 235 | 3 tasks | 1 files |
 | Phase 57 P03 | 157s | 2 tasks | 1 files |
+| Phase 57 P04 | 85s | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -634,6 +635,8 @@ Recent decisions affecting current work:
 - [Phase 57]: Enforcement layer is km-mail-poller (bash systemd service), not a SES receipt rule Lambda — sandbox_inbound SES rule is pure S3 action with no Lambda hook (infra/modules/ses/v1.0.0/main.tf line 126)
 - [Phase 57]: grep -qF fixed-string match used for safe phrase (not grep -qP/-qE) to prevent regex injection from SSM-stored phrase values
 - [Phase 57]: sender_id/sender_email hoisted unconditionally out of KM_ALLOWED_SENDERS block so safe-phrase gate can distinguish sandbox vs external senders when no allowlist is configured
+- [Phase 57]: skills/operator/SKILL.md and skills/user/SKILL.md not modified — operator skill is operator-inbox-bound (always signed); user skill covers operator CLI only; neither involves external email (per RESEARCH.md scope decision)
+- [Phase 57]: Tooling location note added with /opt/km/bin/ absolute paths for scripts/cron/systemd where PATH may be minimal
 
 ### Roadmap Evolution
 
@@ -713,6 +716,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-28T20:43:13.313Z
-Stopped at: Completed 57-03-PLAN.md (km-mail-poller safe phrase gate: SSM fetch + sender_id hoist + grep -qF)
+Last session: 2026-04-28T21:10:39.269Z
+Stopped at: Completed 57-04-PLAN.md (skills/email/SKILL.md + skills/sandbox/SKILL.md: --no-sign, external field, safe-phrase, /opt/km/bin/ paths)
 Resume file: None
