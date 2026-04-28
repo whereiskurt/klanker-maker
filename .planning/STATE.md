@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Completed 57-04-PLAN.md (skills/email/SKILL.md + skills/sandbox/SKILL.md: --no-sign, external field, safe-phrase, /opt/km/bin/ paths)"
-last_updated: "2026-04-28T21:14:25.798Z"
+stopped_at: Completed 62-01-PLAN.md (CLISpec notify fields + JSON schema + HOOK-01..HOOK-05 in REQUIREMENTS.md)
+last_updated: "2026-04-28T21:56:21.883Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
   total_phases: 65
   completed_phases: 61
   total_plans: 191
-  completed_plans: 187
+  completed_plans: 188
   percent: 0
 ---
 
@@ -228,6 +228,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 57 P02 | 235 | 3 tasks | 1 files |
 | Phase 57 P03 | 157s | 2 tasks | 1 files |
 | Phase 57 P04 | 85s | 2 tasks | 2 files |
+| Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events P01 | 182s | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -637,6 +638,7 @@ Recent decisions affecting current work:
 - [Phase 57]: sender_id/sender_email hoisted unconditionally out of KM_ALLOWED_SENDERS block so safe-phrase gate can distinguish sandbox vs external senders when no allowlist is configured
 - [Phase 57]: skills/operator/SKILL.md and skills/user/SKILL.md not modified — operator skill is operator-inbox-bound (always signed); user skill covers operator CLI only; neither involves external email (per RESEARCH.md scope decision)
 - [Phase 57]: Tooling location note added with /opt/km/bin/ absolute paths for scripts/cron/systemd where PATH may be minimal
+- [Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events]: Dropped format: email from JSON schema for notificationEmailAddress — santhosh-tekuri/jsonschema/v6 treats format as annotation-only; actual validation at SES send time
 
 ### Roadmap Evolution
 
@@ -716,6 +718,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-28T21:10:39.269Z
-Stopped at: Completed 57-04-PLAN.md (skills/email/SKILL.md + skills/sandbox/SKILL.md: --no-sign, external field, safe-phrase, /opt/km/bin/ paths)
+Last session: 2026-04-28T21:56:21.878Z
+Stopped at: Completed 62-01-PLAN.md (CLISpec notify fields + JSON schema + HOOK-01..HOOK-05 in REQUIREMENTS.md)
 Resume file: None
