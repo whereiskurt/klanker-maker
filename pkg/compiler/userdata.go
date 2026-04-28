@@ -418,7 +418,7 @@ body_file=$(mktemp /tmp/km-notify-body.XXXXXX)
 # 6. Send. Failure does not propagate (hook always exits 0).
 to_args=()
 [[ -n "${KM_NOTIFY_EMAIL:-}" ]] && to_args=(--to "$KM_NOTIFY_EMAIL")
-if /opt/km/bin/km-send "${to_args[@]}" --subject "$subject" --body "$body_file"; then
+if /opt/km/bin/km-send ${to_args[@]+"${to_args[@]}"} --subject "$subject" --body "$body_file"; then
   # 7. Update cooldown timestamp on success only.
   date +%s > "$last_file"
 fi
