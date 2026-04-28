@@ -59,6 +59,65 @@ func runSSMInteractiveSubprocess(execFn ShellExecFunc, c *exec.Cmd) error {
 	return execFn(c)
 }
 
+// resolveNotifyFlags returns the effective per-invocation notify gate overrides
+// based on which cobra flags were explicitly changed. Returns (nil, nil) when
+// neither positive nor negative flag was set — the profile.d file written at
+// compile time (Plan 02) supplies defaults in that case, and no SSM SendCommand
+// for notify is issued (avoids pointless network traffic).
+//
+// When a CLI flag WAS changed, returns a non-nil *bool matching its value.
+func resolveNotifyFlags(cmd *cobra.Command) (perm, idle *bool) {
+	if cmd.Flags().Changed("notify-on-permission") {
+		v, _ := cmd.Flags().GetBool("notify-on-permission")
+		perm = &v
+	} else if cmd.Flags().Changed("no-notify-on-permission") {
+		f := false
+		perm = &f
+	}
+	if cmd.Flags().Changed("notify-on-idle") {
+		v, _ := cmd.Flags().GetBool("notify-on-idle")
+		idle = &v
+	} else if cmd.Flags().Changed("no-notify-on-idle") {
+		f := false
+		idle = &f
+	}
+	return perm, idle
+}
+
+// buildNotifySendCommands returns the bash command lines for SSM RunShellScript
+// to write/remove /etc/profile.d/zz-km-notify.sh with KM_NOTIFY_ON_* overrides.
+//
+// Returns (nil, nil) when both pointers are nil — no SSM SendCommand is issued.
+// When at least one pointer is non-nil, returns a write slice (heredoc + chmod)
+// and a cleanup slice (rm -f) to bracket the SSM session.
+func buildNotifySendCommands(perm, idle *bool) (writeCmds, cleanupCmds []string) {
+	if perm == nil && idle == nil {
+		return nil, nil
+	}
+	var lines []string
+	if perm != nil {
+		v := "0"
+		if *perm {
+			v = "1"
+		}
+		lines = append(lines, fmt.Sprintf(`export KM_NOTIFY_ON_PERMISSION=%q`, v))
+	}
+	if idle != nil {
+		v := "0"
+		if *idle {
+			v = "1"
+		}
+		lines = append(lines, fmt.Sprintf(`export KM_NOTIFY_ON_IDLE=%q`, v))
+	}
+	body := strings.Join(lines, "\n")
+	writeCmds = []string{
+		fmt.Sprintf("cat > /etc/profile.d/zz-km-notify.sh << 'KM_NOTIFY_OVERRIDE_EOF'\n%s\nKM_NOTIFY_OVERRIDE_EOF", body),
+		`chmod 644 /etc/profile.d/zz-km-notify.sh`,
+	}
+	cleanupCmds = []string{`rm -f /etc/profile.d/zz-km-notify.sh`}
+	return writeCmds, cleanupCmds
+}
+
 // NewShellCmd creates the "km shell" subcommand using the real AWS-backed fetcher.
 // Usage: km shell <sandbox-id>
 func NewShellCmd(cfg *config.Config) *cobra.Command {
@@ -111,8 +170,10 @@ Port forwarding:
 					noBedrock = true
 				}
 			}
+			// Phase 62 (HOOK-04): resolve per-invocation notify gate overrides from CLI flags.
+			notifyPerm, notifyIdle := resolveNotifyFlags(cmd)
 			// Run the shell (blocks until user exits).
-			_ = runShell(cmd, cfg, fetcher, execFn, sandboxID, asRoot, noBedrock)
+			_ = runShell(cmd, cfg, fetcher, execFn, sandboxID, asRoot, noBedrock, notifyPerm, notifyIdle)
 
 			// --learn post-exit: generate profile from observed traffic.
 			if learn {
@@ -128,14 +189,19 @@ Port forwarding:
 	cmd.Flags().BoolVar(&learn, "learn", false, "Run in learning mode: observe traffic and generate profile on exit")
 	cmd.Flags().StringVar(&learnOutput, "learn-output", "", "Path to write the generated SandboxProfile YAML (default: learned.<sandbox-id>.YYYYMMDDHHMMSS.yaml)")
 	cmd.Flags().BoolVar(&amiFlag, "ami", false, "Bake an AMI from the sandbox state when learn-mode exits (requires --learn). Snapshot fires before the eBPF flush.")
+	// Phase 62 (HOOK-04): notify gate overrides for this session.
+	cmd.Flags().Bool("notify-on-permission", false, "Email operator on Claude permission prompts (overrides profile default for this session)")
+	cmd.Flags().Bool("no-notify-on-permission", false, "Force-disable Claude permission-prompt emails for this session")
+	cmd.Flags().Bool("notify-on-idle", false, "Email operator when Claude finishes a turn (overrides profile default for this session)")
+	cmd.Flags().Bool("no-notify-on-idle", false, "Force-disable Claude idle emails for this session")
 
 	return cmd
 }
 
 // runShell is the command RunE logic for km shell.
-func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, sandboxID string, flags ...bool) error {
-	root := len(flags) > 0 && flags[0]
-	noBedrock := len(flags) > 1 && flags[1]
+// notifyPerm and notifyIdle are the resolved per-invocation notify gate overrides
+// (nil = no override; use profile.d defaults from compile time).
+func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, sandboxID string, asRoot, noBedrock bool, notifyPerm, notifyIdle *bool) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -172,7 +238,7 @@ func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 		if err != nil {
 			return fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
 		}
-		return execSSMSession(ctx, instanceID, rec.Region, root, noBedrock, execFn)
+		return execSSMSession(ctx, instanceID, rec.Region, asRoot, noBedrock, notifyPerm, notifyIdle, execFn)
 	case "ecs":
 		clusterARN, err := findResourceARN(rec.Resources, ":cluster/")
 		if err != nil {
@@ -184,7 +250,7 @@ func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 		}
 		return execECSCommand(ctx, clusterARN, taskARN, rec.Region, execFn)
 	case "docker":
-		return execDockerShell(ctx, sandboxID, root, execFn)
+		return execDockerShell(ctx, sandboxID, asRoot, execFn)
 	default:
 		return fmt.Errorf("unsupported substrate %q for km shell", rec.Substrate)
 	}
@@ -207,7 +273,11 @@ const ssmRetryDelay = 3 * time.Second
 // + runAsDefaultUser=sandbox), which lands as the restricted sandbox user with
 // a real PTY so Ctrl+C is forwarded as a byte to the remote shell.
 // When root is true, it starts a default SSM session (root via SSM agent).
-func execSSMSession(ctx context.Context, instanceID, region string, root, noBedrock bool, execFn ShellExecFunc) error {
+//
+// notifyPerm and notifyIdle are Phase 62 (HOOK-04) per-invocation notify gate
+// overrides. nil = no SSM SendCommand for notify (profile.d defaults apply).
+// Non-nil = write /etc/profile.d/zz-km-notify.sh before session, remove after.
+func execSSMSession(ctx context.Context, instanceID, region string, root, noBedrock bool, notifyPerm, notifyIdle *bool, execFn ShellExecFunc) error {
 	if root {
 		return execSSMWithRetry(ctx, func() *exec.Cmd {
 			return exec.CommandContext(ctx, "aws", "ssm", "start-session",
@@ -240,6 +310,29 @@ func execSSMSession(ctx context.Context, instanceID, region string, root, noBedr
 					InstanceIds:  []string{instanceID},
 					DocumentName: awssdk.String("AWS-RunShellScript"),
 					Parameters:   map[string][]string{"commands": {"rm -f /etc/profile.d/zz-km-no-bedrock.sh"}},
+				})
+			}()
+		}
+	}
+
+	// Phase 62 (HOOK-04): per-invocation notify env override.
+	// Only issues a SendCommand when at least one pointer is non-nil.
+	writeCmds, cleanupCmds := buildNotifySendCommands(notifyPerm, notifyIdle)
+	if len(writeCmds) > 0 {
+		awsCfg, ssmErr := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+		if ssmErr == nil {
+			ssmClient := ssm.NewFromConfig(awsCfg)
+			_, _ = ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
+				InstanceIds:  []string{instanceID},
+				DocumentName: awssdk.String("AWS-RunShellScript"),
+				Parameters:   map[string][]string{"commands": writeCmds},
+			})
+			time.Sleep(2 * time.Second)
+			defer func() {
+				_, _ = ssmClient.SendCommand(context.Background(), &ssm.SendCommandInput{
+					InstanceIds:  []string{instanceID},
+					DocumentName: awssdk.String("AWS-RunShellScript"),
+					Parameters:   map[string][]string{"commands": cleanupCmds},
 				})
 			}()
 		}
