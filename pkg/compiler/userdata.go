@@ -826,8 +826,8 @@ build_mime() {
     [[ -n "$REPLY_TO" ]] && printf 'Reply-To: %s\r\n' "$REPLY_TO"
     printf 'Subject: %s\r\n' "$subject"
     printf 'Date: %s\r\n' "$date_str"
-    printf 'X-KM-Sender-ID: %s\r\n' "$sender_id"
-    printf 'X-KM-Signature: %s\r\n' "$signature"
+    [[ -n "$sender_id" ]] && printf 'X-KM-Sender-ID: %s\r\n' "$sender_id"
+    [[ -n "$signature" ]] && printf 'X-KM-Signature: %s\r\n' "$signature"
     printf 'MIME-Version: 1.0\r\n'
   }
 
@@ -872,20 +872,20 @@ build_mime() {
 }
 
 # ------------------------------------------------------------------
-# Fetch Ed25519 private key from SSM and build PEM
+# Fetch Ed25519 private key + sign body (skipped when --no-sign)
 # ------------------------------------------------------------------
-PRIVKEY_B64=$(aws ssm get-parameter \
-  --name "/sandbox/$KM_SANDBOX_ID/signing-key" \
-  --with-decryption \
-  --query 'Parameter.Value' \
-  --output text)
-
-PEM_FILE=$(ed25519_privkey_to_pem "$PRIVKEY_B64")
-
-# ------------------------------------------------------------------
-# Sign the message body
-# ------------------------------------------------------------------
-SIGNATURE=$(openssl pkeyutl -sign -inkey "$PEM_FILE" -rawin -in "$BODY_TMP" | base64 -w0)
+if ! $NO_SIGN; then
+  PRIVKEY_B64=$(aws ssm get-parameter \
+    --name "/sandbox/$KM_SANDBOX_ID/signing-key" \
+    --with-decryption \
+    --query 'Parameter.Value' \
+    --output text)
+  PEM_FILE=$(ed25519_privkey_to_pem "$PRIVKEY_B64")
+  SIGNATURE=$(openssl pkeyutl -sign -inkey "$PEM_FILE" -rawin -in "$BODY_TMP" | base64 -w0)
+else
+  PEM_FILE=""
+  SIGNATURE=""
+fi
 
 # ------------------------------------------------------------------
 # Build MIME message
@@ -893,6 +893,11 @@ SIGNATURE=$(openssl pkeyutl -sign -inkey "$PEM_FILE" -rawin -in "$BODY_TMP" | ba
 declare -a ATTACH_FILES=()
 if [[ -n "$ATTACH_CSV" ]]; then
   IFS=',' read -ra ATTACH_FILES <<< "$ATTACH_CSV"
+fi
+
+# When --no-sign, clear SENDER_ID so emit_headers omits X-KM-Sender-ID
+if $NO_SIGN; then
+  SENDER_ID=""
 fi
 
 MIME_FILE=$(build_mime "$FROM" "$TO" "$SUBJECT" "$SENDER_ID" "$SIGNATURE" "$BODY_TMP" "${ATTACH_FILES[@]+"${ATTACH_FILES[@]}"}")
@@ -919,7 +924,11 @@ aws sesv2 send-email \
   --destination "$SES_DEST" \
   --content "Raw={Data=$MIME_B64}"
 
-echo "[km-send] Sent signed email to $TO (sig: ${SIGNATURE:0:12}...)"
+if $NO_SIGN; then
+  echo "[km-send] Sent unsigned email to $TO"
+else
+  echo "[km-send] Sent signed email to $TO (sig: ${SIGNATURE:0:12}...)"
+fi
 KMSEND
 chmod +x /opt/km/bin/km-send
 echo "[km-bootstrap] km-send installed at /opt/km/bin/km-send"
