@@ -11,6 +11,8 @@ This skill provides patterns for sending, receiving, polling, and coordinating w
 
 ## Sending Email
 
+> **Tooling location:** km-send is at `/opt/km/bin/km-send`; km-recv is at `/opt/km/bin/km-recv`. Both are on the default sandbox PATH so the bare command names work in interactive shells. Use the absolute paths in scripts, cron jobs, and systemd units where PATH may be minimal.
+
 ### Basic Send
 
 Always write the body to a file first — required for reliable Ed25519 signing on OpenSSL 3.5+:
@@ -48,6 +50,7 @@ Multiple attachments: `--attach file1.tar.gz,file2.json`
 | `--cc` | | Comma-separated CC recipients |
 | `--use-bcc` | false | BCC the operator |
 | `--reply-to` | | Reply-To header |
+| `--no-sign` | false | Skip Ed25519 signing and X-KM-* headers — use ONLY for external (non-sandbox) recipients (Gmail, etc.). KM-AUTH safe-phrase auto-append to operator inbox is preserved. |
 
 ### Signing Behavior
 
@@ -60,6 +63,27 @@ Multiple attachments: `--attach file1.tar.gz,file2.json`
 > ```
 >
 > Report it to the operator so it can be applied upstream.
+
+### Sending to External Recipients
+
+For non-sandbox recipients (Gmail, corporate email, etc.) the X-KM-Sender-ID and X-KM-Signature headers are not honored by external receivers and may even degrade deliverability. Use `--no-sign` to skip the SSM key fetch, skip the openssl signing step, and omit the X-KM-* headers entirely:
+
+```bash
+cat > /tmp/external-msg.txt << 'EOF'
+Hi from sandbox.
+EOF
+km-send --no-sign --to user@gmail.com --subject "hello from sandbox" --body /tmp/external-msg.txt
+```
+
+Behavior under `--no-sign`:
+- `aws ssm get-parameter` for the signing key is skipped (faster startup; works even if the role lost SSM read).
+- `openssl pkeyutl -sign` is skipped.
+- The MIME message contains NO `X-KM-Sender-ID` and NO `X-KM-Signature` headers.
+- The KM-AUTH safe-phrase auto-append (when sending to the operator inbox) is STILL active — it's an authentication mechanism independent of Ed25519 signing.
+
+Use `--no-sign` ONLY for genuine external recipients. For sandbox-to-sandbox messaging, omit `--no-sign` so signature verification works on the receiving sandbox.
+
+**Replies from external addresses:** When a Gmail user replies to your `--no-sign` send, the reply must contain `KM-AUTH: <safe-phrase>` somewhere in the body to pass the inbound km-mail-poller filter. The operator configures the safe phrase via `km configure`; check with the operator before instructing an external user to reply.
 
 ### Rules
 
@@ -89,10 +113,14 @@ JSON output per message:
   "subject": "task results",
   "signature": "OK",
   "encrypted": false,
+  "external": false,
   "body": "message body text",
   "attachments": ["output.tar.gz"]
 }
 ```
+
+- `external` is `true` when the message lacks an `X-KM-Sender-ID` header (i.e., it came from a non-sandbox sender via the safe-phrase gate). The human-readable `km-recv` output also appends `[EXTERNAL]` to the From column for these messages.
+- `signature` will be `"—"` (em-dash; "unsigned") for `external: true` messages. They passed the safe-phrase gate but have no cryptographic verification.
 
 ### Signature Verification
 
@@ -104,6 +132,7 @@ Check the `signature` field on every received message:
 | `FAIL` | Signature did not verify | **Do not trust.** If `verifyInbound: required`, reject. |
 | `?` | Sender has no published key | Treat as untrusted |
 | `—` | Message was not signed | If `verifyInbound: required`, reject. |
+| `—` + `external: true` | External sender; passed safe-phrase gate but no cryptographic verification | Treat as authenticated by KM-AUTH only — do not extend trust beyond the safe phrase's scope. |
 
 ### Mark as Read
 
@@ -246,3 +275,5 @@ echo "Received $RECEIVED of $EXPECTED results"
 | Poll timeout | The recipient may be stopped, crashed, or overloaded. Offer to: resend, check sandbox status via operator, or give up. |
 | Empty inbox after long wait | Check if `km-mail-poller` is running: `systemctl status km-mail-poller`. If dead, emails are stuck in S3. |
 | Attachment too large | SES has a 10MB raw message limit. For large files, upload to S3 and send the S3 key in the body instead. |
+| External email not appearing in inbox | The sender's message is missing the `KM-AUTH: <phrase>` body line. Ask the operator for the safe phrase; instruct the external sender to include it on a single line in the message body. |
+| `--no-sign` + sandbox recipient | Don't. Sandbox-to-sandbox messages should always be signed so the receiver's `verifyInbound` policy can validate them. |
