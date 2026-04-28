@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 62-01-PLAN.md (CLISpec notify fields + JSON schema + HOOK-01..HOOK-05 in REQUIREMENTS.md)
-last_updated: "2026-04-28T21:56:21.883Z"
+stopped_at: Completed 62-02-PLAN.md (km-notify-hook script + settings.json merge + HOOK-01/02/03 tests)
+last_updated: "2026-04-28T22:07:06.684Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
   total_phases: 65
   completed_phases: 61
   total_plans: 191
-  completed_plans: 188
+  completed_plans: 189
   percent: 0
 ---
 
@@ -229,6 +229,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 57 P03 | 157s | 2 tasks | 1 files |
 | Phase 57 P04 | 85s | 2 tasks | 2 files |
 | Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events P01 | 182s | 2 tasks | 5 files |
+| Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events P02 | 18min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -639,6 +640,9 @@ Recent decisions affecting current work:
 - [Phase 57]: skills/operator/SKILL.md and skills/user/SKILL.md not modified — operator skill is operator-inbox-bound (always signed); user skill covers operator CLI only; neither involves external email (per RESEARCH.md scope decision)
 - [Phase 57]: Tooling location note added with /opt/km/bin/ absolute paths for scripts/cron/systemd where PATH may be minimal
 - [Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events]: Dropped format: email from JSON schema for notificationEmailAddress — santhosh-tekuri/jsonschema/v6 treats format as annotation-only; actual validation at SES send time
+- [Phase 62]: Emit KM_NOTIFY_ON_PERMISSION/ON_IDLE whenever Spec.CLI != nil (v1 pragmatic); Go bool zero value + omitempty cannot distinguish explicit-false from unset
+- [Phase 62]: Write notify env vars to /etc/profile.d/km-notify-env.sh (NOT /etc/environment); profile.d is guaranteed sourced in SSM sessions on Amazon Linux 2
+- [Phase 62]: mergeNotifyHookIntoSettings() runs at compile time in Go (not shell jq); KM_NOTIFY_LAST_FILE override in hook script enables test isolation in Plan 03
 
 ### Roadmap Evolution
 
@@ -718,6 +722,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-28T21:56:21.878Z
-Stopped at: Completed 62-01-PLAN.md (CLISpec notify fields + JSON schema + HOOK-01..HOOK-05 in REQUIREMENTS.md)
+Last session: 2026-04-28T22:07:06.679Z
+Stopped at: Completed 62-02-PLAN.md (km-notify-hook script + settings.json merge + HOOK-01/02/03 tests)
 Resume file: None

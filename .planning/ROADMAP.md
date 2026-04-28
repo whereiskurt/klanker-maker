@@ -1317,7 +1317,7 @@ Plans:
 **Spec:** `docs/superpowers/specs/2026-04-26-operator-notify-hook-design.md`
 **Requirements:** [HOOK-01, HOOK-02, HOOK-03, HOOK-04, HOOK-05]
 **Depends on:** Phase 45 (km-send/km-recv), Phase 50/51 (km agent run + tmux). All upstream deps already complete.
-**Plans:** 1/5 plans executed
+**Plans:** 2/5 plans executed
 
 Plans:
 - [ ] 62-01-PLAN.md — Profile schema additions (`spec.cli.notify*`) + REQUIREMENTS.md HOOK-01..HOOK-05 registration
