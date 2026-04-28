@@ -626,6 +626,23 @@ else
   echo "[km-mail-poller] Polling s3://$BUCKET/mail/ for $MY_ADDR every ${POLL_INTERVAL}s -> $MAIL_DIR/new/"
 fi
 
+# ----------------------------------------------------------------
+# Safe phrase for external inbound validation (fail-open if SSM unreachable).
+# External (non-sandbox) email must contain KM-AUTH: <phrase> in the body
+# to be delivered. Sandbox-to-sandbox email (X-KM-Sender-ID present) bypasses.
+# ----------------------------------------------------------------
+KM_SAFE_PHRASE_CACHED=""
+KM_SAFE_PHRASE_CACHED=$(aws ssm get-parameter \
+  --name "/km/config/remote-create/safe-phrase" \
+  --with-decryption \
+  --query 'Parameter.Value' \
+  --output text 2>/dev/null || true)
+if [ -n "$KM_SAFE_PHRASE_CACHED" ]; then
+  echo "[km-mail-poller] Safe phrase loaded for external email validation"
+else
+  echo "[km-mail-poller] WARN: safe phrase not available, external email filter disabled" >&2
+fi
+
 while true; do
   # List all mail objects, download, and keep only messages addressed to this sandbox
   aws s3 ls "s3://$BUCKET/mail/" 2>/dev/null | awk '{print $NF}' | while read -r key; do
