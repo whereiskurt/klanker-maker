@@ -1256,8 +1256,13 @@ func TestKmSendPresentWhenEmailSet(t *testing.T) {
 	}
 }
 
-// TestKmSendAbsentWhenNoEmail verifies km-send is NOT deployed when SandboxEmail is empty.
+// TestKmSendAbsentWhenNoEmail verifies km-send is NOT *deployed* when SandboxEmail is empty.
 // This tests the template directly with an empty SandboxEmail (bypassing generateUserData which always sets it).
+//
+// NOTE (Phase 62): /opt/km/bin/km-send is referenced by the km-notify-hook script body
+// (which is always installed) as the email sender. The test therefore checks for the
+// km-send *installation* heredoc marker ("cat > /opt/km/bin/km-send << 'KMSEND'") rather
+// than any path mention, distinguishing deployment from mere reference.
 func TestKmSendAbsentWhenNoEmail(t *testing.T) {
 	tmpl, err := parseUserDataTemplate()
 	if err != nil {
@@ -1266,7 +1271,7 @@ func TestKmSendAbsentWhenNoEmail(t *testing.T) {
 	// Use params with empty SandboxEmail to exercise the {{- if .SandboxEmail }} branch
 	params := userDataParams{
 		SandboxID:         "sb-noemail-1",
-		SandboxEmail:      "", // explicitly empty — km-send should not appear
+		SandboxEmail:      "", // explicitly empty — km-send should not be deployed
 		KMArtifactsBucket: "my-bucket",
 	}
 	var buf strings.Builder
@@ -1274,8 +1279,11 @@ func TestKmSendAbsentWhenNoEmail(t *testing.T) {
 		t.Fatalf("template.Execute failed: %v", err)
 	}
 	out := buf.String()
-	if strings.Contains(out, "/opt/km/bin/km-send") {
-		t.Error("expected /opt/km/bin/km-send to be absent in userdata when SandboxEmail is empty")
+	// Check that the km-send *install* heredoc is absent (the KMSEND marker is the deploy boundary).
+	// The notify-hook script body references /opt/km/bin/km-send as a caller — that is expected
+	// even when email is not configured.
+	if strings.Contains(out, "cat > /opt/km/bin/km-send << 'KMSEND'") {
+		t.Error("expected km-send deploy heredoc to be absent in userdata when SandboxEmail is empty")
 	}
 }
 
