@@ -144,6 +144,7 @@ spec:
     notificationEmailAddress: "team@example.com"
 
     # new (this phase)
+    notifyEmailEnabled: true             # default true; set false for Slack-only profiles
     notifySlackEnabled: true
     notifySlackPerSandbox: false
     notifySlackChannelOverride: "C0123ABC"
@@ -152,6 +153,7 @@ spec:
 
 | Field | Type | Default | Effect |
 |---|---|---|---|
+| `notifyEmailEnabled` | bool | `true` | When `false`, skip the email dispatch in the hook even if event gates fire. Backward-compatible with phase 62 (default keeps email on). |
 | `notifySlackEnabled` | bool | `false` | Enable Slack delivery for whatever events `notifyOn*` already gates |
 | `notifySlackPerSandbox` | bool | `false` | Create `#sb-{id}` at `km create`, archive at `km destroy`. Ignored if `notifySlackEnabled: false` |
 | `notifySlackChannelOverride` | string | unset → `/km/slack/shared-channel-id` | Hard-pin to a specific channel ID; overrides both shared and per-sandbox modes |
@@ -167,6 +169,8 @@ spec:
   → validation warning (no-op).
 - `notifySlackChannelOverride` not matching `^C[A-Z0-9]+$`
   → validation error.
+- `notifyEmailEnabled: false` AND `notifySlackEnabled: false`
+  → validation warning (no notification channels — gates fire into a void).
 
 ### What's *not* a field
 
@@ -279,16 +283,16 @@ existing gate + cooldown logic (untouched), the dispatch section grows:
 
 sent_any=0
 
-# Email path (existing — phase 62 always runs this when the gate fires;
-# recipient defaults to operator if KM_NOTIFY_EMAIL is unset).
-# NOTE: pseudocode below assumes the "opt-in toggle" decision from
-# "Email enable semantics" below. Bash check pattern depends on which
-# of options (i)/(ii)/(iii) is chosen.
-to_args=()
-[[ -n "${KM_NOTIFY_EMAIL:-}" ]] && to_args=(--to "$KM_NOTIFY_EMAIL")
-/opt/km/bin/km-send "${to_args[@]+"${to_args[@]}"}" --subject "$subject" --body "$body_file" \
-  && sent_any=1 \
-  || true
+# Email path (existing phase 62 logic, now gated by KM_NOTIFY_EMAIL_ENABLED).
+# Default is "1" so existing phase 62 profiles continue to send email.
+# Set notifyEmailEnabled: false in profile for Slack-only delivery.
+if [[ "${KM_NOTIFY_EMAIL_ENABLED:-1}" == "1" ]]; then
+  to_args=()
+  [[ -n "${KM_NOTIFY_EMAIL:-}" ]] && to_args=(--to "$KM_NOTIFY_EMAIL")
+  /opt/km/bin/km-send "${to_args[@]+"${to_args[@]}"}" --subject "$subject" --body "$body_file" \
+    && sent_any=1 \
+    || true
+fi
 
 # Slack path (new)
 if [[ "${KM_NOTIFY_SLACK_ENABLED:-0}" == "1" && -n "${KM_SLACK_CHANNEL_ID:-}" ]]; then
@@ -306,39 +310,16 @@ fi
 exit 0
 ```
 
-### Email enable semantics — DECISION POINT (pending operator confirmation)
+### Email enable semantics
 
-Phase 62's hook always sends email once the event gate fires — there is
-no email enable/disable toggle distinct from `notifyOnPermission` /
-`notifyOnIdle`. Adding Slack creates a new requirement: a profile that
-wants Slack-only delivery has no clean way to express that.
-
-Three candidate resolutions, each with consequences for the schema table
-in §"Profile Schema Additions":
-
-- **(i) Status quo.** Email stays always-on once the event gate fires.
-  Operators who want Slack-only set `notificationEmailAddress` to a
-  black-hole address. No new field. Ugly UX but zero schema/code change
-  to phase 62 logic.
-- **(ii) New `notifyEmailEnabled: bool` field, default `true`.**
-  Symmetric with `notifySlackEnabled`. Backward-compatible (existing
-  phase 62 profiles unchanged). Compiler emits
-  `KM_NOTIFY_EMAIL_ENABLED=1`/`0`; hook gates the email path on it.
-  Recommended unless there's reason to avoid the extra field.
-- **(iii) Email is on iff `notificationEmailAddress` is set.** Currently
-  email is on regardless and falls back to the operator default. This
-  *changes* phase 62 semantics — any profile that relied on the operator
-  fallback would silently stop sending email. Not recommended without
-  an explicit migration path.
-
-**Implementation note:** if (ii) is chosen, add `notifyEmailEnabled` to
-the validation rules table, the compiler env-var emission, and the hook
-script's email-path gate. The bash example above shows the (i) form;
-swap in `[[ "${KM_NOTIFY_EMAIL_ENABLED:-1}" == "1" ]] &&` before the
-`km-send` invocation if (ii) is chosen.
-
-This decision is the only open item before this spec is implementation-
-ready.
+Phase 62's hook unconditionally sent email once the event gate fired —
+no separate enable/disable toggle. This phase introduces
+`notifyEmailEnabled: bool` (default `true`) for symmetry with
+`notifySlackEnabled`. Compiler emits `KM_NOTIFY_EMAIL_ENABLED=1` (or `0`)
+into `/etc/profile.d/km-notify-env.sh`; the hook gates the email
+dispatch path on it. Default `true` keeps existing phase 62 profiles
+unchanged. Setting `notifyEmailEnabled: false` together with
+`notifySlackEnabled: true` enables clean Slack-only delivery.
 
 ### Invariants preserved from phase 62
 
@@ -494,7 +475,12 @@ No internet egress restriction needed (only external endpoint is
 ### Compiler unit tests (`pkg/compiler/compiler_test.go`)
 
 - Profile with `notifySlackEnabled: false` → no `KM_NOTIFY_SLACK_*` lines
-  in `/etc/environment`, no `km-slack` invocation in hook script.
+  in `/etc/profile.d/km-notify-env.sh`, no `km-slack` invocation in hook
+  script.
+- Profile with `notifyEmailEnabled: false` →
+  `KM_NOTIFY_EMAIL_ENABLED=0` written, hook skips `km-send`.
+- Profile with `notifyEmailEnabled` unset → `KM_NOTIFY_EMAIL_ENABLED` not
+  emitted (hook default of `1` takes effect — phase 62 backward compat).
 - Profile with `notifySlackEnabled: true` shared mode →
   `KM_NOTIFY_SLACK_ENABLED=1`, `KM_SLACK_CHANNEL_ID=<shared-id>`,
   `KM_SLACK_BRIDGE_URL=<url>` written to `/etc/profile.d/km-notify-env.sh`.
@@ -517,15 +503,17 @@ No internet egress restriction needed (only external endpoint is
 
 ### `km-notify-hook` script tests (extending phase 62 harness)
 
-- `KM_NOTIFY_SLACK_ENABLED=0` + `KM_NOTIFY_EMAIL` set → only `km-send`
-  invoked, `km-slack` never called.
-- `KM_NOTIFY_SLACK_ENABLED=1` + no email config → only `km-slack`
-  invoked.
-- Both configured → both invoked; cooldown updates iff at least one
+- `KM_NOTIFY_SLACK_ENABLED=0` + `KM_NOTIFY_EMAIL_ENABLED=1` (or unset) →
+  only `km-send` invoked, `km-slack` never called.
+- `KM_NOTIFY_SLACK_ENABLED=1` + `KM_NOTIFY_EMAIL_ENABLED=0` → only
+  `km-slack` invoked, `km-send` never called.
+- Both enabled → both invoked; cooldown updates iff at least one
   succeeded.
 - `km-slack` returns 1 + `km-send` returns 0 → cooldown updates, hook
   exits 0.
 - Both fail → cooldown does not update, hook exits 0.
+- `KM_NOTIFY_EMAIL_ENABLED` unset (phase 62 backward compat) → email
+  path runs (default of `1` takes effect).
 - Stubs for `km-send` and `km-slack` via PATH override.
 
 ### Bridge Lambda tests (`pkg/slack/bridge/handler_test.go`)
