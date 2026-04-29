@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 62-03-PLAN.md (hook script runtime tests)
-last_updated: "2026-04-28T22:18:39.001Z"
+stopped_at: Completed 62-05-PLAN.md (live UAT — Phase 62 signed off)
+last_updated: "2026-04-29T12:57:12.396Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
   total_phases: 65
-  completed_phases: 61
+  completed_phases: 62
   total_plans: 191
-  completed_plans: 191
+  completed_plans: 192
   percent: 0
 ---
 
@@ -232,6 +232,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events P02 | 18min | 3 tasks | 4 files |
 | Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events P04 | 12min | 3 tasks | 5 files |
 | Phase 62 P03 | 3 | 2 tasks | 5 files |
+| Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events P05 | 90min | 8 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -648,6 +649,9 @@ Recent decisions affecting current work:
 - [Phase 62]: Use *bool for AgentRunOptions.NotifyOnPermission/Idle: nil=unset (no export emitted), non-nil=explicit override. Avoids explicit-false ambiguity without a companion Explicit field.
 - [Phase 62]: km shell resolveNotifyFlags returns nil when no CLI flag changed — avoids SSM SendCommand roundtrip; profile.d km-notify-env.sh from Plan 02 supplies defaults.
 - [Phase 62]: bash -u nounset empty-array fix: ${to_args[@]+"${to_args[@]}"} pattern required in hook heredoc for macOS bash compatibility
+- [Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events]: T4 inline Rule-1 fix: jq exit-5 propagation in Stop-path transcript extraction — added '|| echo ""' fallback at userdata.go:399-401 + regression test (commits 095a51e + 9c0690c). Required km init --sidecars redeploy. HOOK-05 'never blocks Claude' invariant restored.
+- [Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events]: T3 methodology: manual hook fire is the legitimate Notification test path — km agent run's implicit --dangerously-skip-permissions makes the path untriggerable via real Claude flow. Plan 03 unit tests cover firing semantics; live test confirms SES routing + Ed25519 signing.
+- [Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events]: T5 methodology: env-var direct test (KM_NOTIFY_EMAIL) exercises the same runtime routing as the profile field. Compile-time path that writes /etc/profile.d/km-notify-env.sh already verified in T2. Avoids redundant sandbox provisioning.
 
 ### Roadmap Evolution
 
@@ -727,6 +731,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-28T22:18:38.997Z
-Stopped at: Completed 62-03-PLAN.md (hook script runtime tests)
+Last session: 2026-04-29T12:57:03.452Z
+Stopped at: Completed 62-05-PLAN.md (live UAT — Phase 62 signed off)
 Resume file: None

@@ -1317,12 +1317,12 @@ Plans:
 **Spec:** `docs/superpowers/specs/2026-04-26-operator-notify-hook-design.md`
 **Requirements:** [HOOK-01, HOOK-02, HOOK-03, HOOK-04, HOOK-05]
 **Depends on:** Phase 45 (km-send/km-recv), Phase 50/51 (km agent run + tmux). All upstream deps already complete.
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 
 Plans:
-- [ ] 62-01-PLAN.md — Profile schema additions (`spec.cli.notify*`) + REQUIREMENTS.md HOOK-01..HOOK-05 registration
-- [ ] 62-02-PLAN.md — Compiler: inline km-notify-hook script via heredoc in `userdata.go`, write `/etc/profile.d/km-notify-env.sh` from profile fields, Go-side merge of settings.json hook entries via `encoding/json`
-- [ ] 62-03-PLAN.md — Hook script behavior tests: extract heredoc body, exec via bash with synthetic env + stdin payloads + stub km-send, cover gate / cooldown / Notification / Stop / send-failure invariants
-- [ ] 62-04-PLAN.md — CLI flag wiring: `km shell` (pre-session SendCommand writes `/etc/profile.d/zz-km-notify.sh`) + `km agent run` (extend `AgentRunOptions` with `*bool` notify fields, prepend `notifyEnvLines` to `BuildAgentShellCommands` script)
-- [ ] 62-05-PLAN.md — Manual UAT: provision live sandbox, exercise both event paths, confirm signed emails arrive at operator + override addresses, verify cooldown + CLI override behavior end-to-end
+- [x] 62-01-PLAN.md — Profile schema additions (`spec.cli.notify*`) + REQUIREMENTS.md HOOK-01..HOOK-05 registration
+- [x] 62-02-PLAN.md — Compiler: inline km-notify-hook script via heredoc in `userdata.go`, write `/etc/profile.d/km-notify-env.sh` from profile fields, Go-side merge of settings.json hook entries via `encoding/json`
+- [x] 62-03-PLAN.md — Hook script behavior tests: extract heredoc body, exec via bash with synthetic env + stdin payloads + stub km-send, cover gate / cooldown / Notification / Stop / send-failure invariants
+- [x] 62-04-PLAN.md — CLI flag wiring: `km shell` (pre-session SendCommand writes `/etc/profile.d/zz-km-notify.sh`) + `km agent run` (extend `AgentRunOptions` with `*bool` notify fields, prepend `notifyEnvLines` to `BuildAgentShellCommands` script)
+- [x] 62-05-PLAN.md — Manual UAT: provision live sandbox, exercise both event paths, confirm signed emails arrive at operator + override addresses, verify cooldown + CLI override behavior end-to-end
 

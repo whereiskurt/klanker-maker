@@ -108,11 +108,11 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Operator Notification Hooks
 
-- **HOOK-01**: Compiler unconditionally writes `/opt/km/bin/km-notify-hook` bash script during user-data execution; script exists on every sandbox regardless of profile settings, and is gated at run-time by env vars
-- **HOOK-02**: Compiler merges `Notification` and `Stop` hook entries into `~/.claude/settings.json`, preserving any user-supplied entries from `spec.execution.configFiles` (parses existing JSON, appends km hook command, writes merged result; fails fast if user JSON is invalid)
-- **HOOK-03**: Compiler writes `/etc/profile.d/km-notify-env.sh` with `KM_NOTIFY_ON_PERMISSION` / `KM_NOTIFY_ON_IDLE` / `KM_NOTIFY_COOLDOWN_SECONDS` / `KM_NOTIFY_EMAIL` only when the corresponding `spec.cli.notify*` profile field is set; unset profile fields produce no env var
-- **HOOK-04**: `km shell` and `km agent run` honor `--notify-on-permission` / `--no-notify-on-permission` / `--notify-on-idle` / `--no-notify-on-idle` CLI flags, overriding profile defaults via env vars injected at SSM-launch time (interactive shell uses pre-session SendCommand to write `/etc/profile.d/zz-km-notify.sh`; agent run prepends `export KM_NOTIFY_ON_*=...` lines to the generated bash script)
-- **HOOK-05**: `/opt/km/bin/km-notify-hook` honors gate env vars, cooldown (`/tmp/km-notify.last`), builds correct subjects (`[<sandbox-id>] needs permission` / `[<sandbox-id>] idle`) and bodies (Notification: `.message` from stdin payload; Stop: last assistant text from `transcript_path` JSONL), calls `km-send --body <file>` (not stdin, per CLAUDE.md OpenSSL 3.5+ requirement), and never blocks Claude on send failure (always exits 0)
+- [x] **HOOK-01**: Compiler unconditionally writes `/opt/km/bin/km-notify-hook` bash script during user-data execution; script exists on every sandbox regardless of profile settings, and is gated at run-time by env vars
+- [x] **HOOK-02**: Compiler merges `Notification` and `Stop` hook entries into `~/.claude/settings.json`, preserving any user-supplied entries from `spec.execution.configFiles` (parses existing JSON, appends km hook command, writes merged result; fails fast if user JSON is invalid)
+- [x] **HOOK-03**: Compiler writes `/etc/profile.d/km-notify-env.sh` with `KM_NOTIFY_ON_PERMISSION` / `KM_NOTIFY_ON_IDLE` / `KM_NOTIFY_COOLDOWN_SECONDS` / `KM_NOTIFY_EMAIL` only when the corresponding `spec.cli.notify*` profile field is set; unset profile fields produce no env var
+- [x] **HOOK-04**: `km shell` and `km agent run` honor `--notify-on-permission` / `--no-notify-on-permission` / `--notify-on-idle` / `--no-notify-on-idle` CLI flags, overriding profile defaults via env vars injected at SSM-launch time (interactive shell uses pre-session SendCommand to write `/etc/profile.d/zz-km-notify.sh`; agent run prepends `export KM_NOTIFY_ON_*=...` lines to the generated bash script)
+- [x] **HOOK-05**: `/opt/km/bin/km-notify-hook` honors gate env vars, cooldown (`/tmp/km-notify.last`), builds correct subjects (`[<sandbox-id>] needs permission` / `[<sandbox-id>] idle`) and bodies (Notification: `.message` from stdin payload; Stop: last assistant text from `transcript_path` JSONL), calls `km-send --body <file>` (not stdin, per CLAUDE.md OpenSSL 3.5+ requirement), and never blocks Claude on send failure (always exits 0)
 
 ### eBPF Network Enforcement
 
@@ -305,11 +305,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | EBPF-TLS-12 | Phase 41 | Planned |
 | EBPF-TLS-13 | Phase 41 | Planned |
 | EBPF-TLS-14 | Phase 41 | Planned |
-| HOOK-01 | Phase 62 | Planned |
-| HOOK-02 | Phase 62 | Planned |
-| HOOK-03 | Phase 62 | Planned |
+| HOOK-01 | Phase 62 | Complete |
+| HOOK-02 | Phase 62 | Complete |
+| HOOK-03 | Phase 62 | Complete |
 | HOOK-04 | Phase 62 | Complete |
-| HOOK-05 | Phase 62 | Planned |
+| HOOK-05 | Phase 62 | Complete |
 
 **Coverage:**
 - v1 requirements: 71 total
