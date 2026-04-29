@@ -352,6 +352,47 @@ func TestNotifyHook_Stop(t *testing.T) {
 	}
 }
 
+// TestNotifyHook_Stop_MalformedTranscript_StillExitsZero is a regression test
+// for the live-UAT defect where a transcript containing JSON split across
+// multiple physical lines caused jq to exit 5 inside the body-extraction
+// pipeline; under set -euo pipefail that propagated and the hook returned 5,
+// violating the "never blocks Claude" invariant. The fix wraps the pipeline
+// in `|| echo ""` so the fallback `(no recent assistant text)` kicks in.
+func TestNotifyHook_Stop_MalformedTranscript_StillExitsZero(t *testing.T) {
+	hookPath, logPath, tmpdir := setupHookEnv(t)
+
+	// Malformed JSONL: a JSON object with a literal newline inside a string
+	// value, mimicking a paste-mangled transcript. jq cannot parse this.
+	malformedPath := filepath.Join(tmpdir, "malformed-transcript.jsonl")
+	malformed := `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"line one
+line two with embedded newline"}]}}
+`
+	if err := os.WriteFile(malformedPath, []byte(malformed), 0644); err != nil {
+		t.Fatalf("write malformed transcript: %v", err)
+	}
+
+	payload := loadFixture(t, "notify-hook-fixture-stop.json", malformedPath)
+
+	code, _, stderr := runHook(t, hookPath, "Stop", map[string]string{
+		"KM_NOTIFY_ON_IDLE": "1",
+		"KM_SANDBOX_ID":     "sb-test",
+	}, payload)
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0 (hook must never block Claude on transcript parse failure); stderr: %s", code, stderr)
+	}
+
+	// km-send must still have been invoked with the fallback body — the hook
+	// should reach step 6 even when transcript parsing fails.
+	calls := readStubLog(t, logPath)
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 km-send invocation (fallback body path), got %d; stderr: %s", len(calls), stderr)
+	}
+	if !strings.Contains(calls[0].bodyContent, "(no recent assistant text)") {
+		t.Errorf("body missing fallback marker; body=%q", calls[0].bodyContent)
+	}
+}
+
 // ============================================================
 // HOOK-05d: Cooldown — second call within window suppressed
 // ============================================================
