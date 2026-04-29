@@ -1326,3 +1326,13 @@ Plans:
 - [x] 62-04-PLAN.md — CLI flag wiring: `km shell` (pre-session SendCommand writes `/etc/profile.d/zz-km-notify.sh`) + `km agent run` (extend `AgentRunOptions` with `*bool` notify fields, prepend `notifyEnvLines` to `BuildAgentShellCommands` script)
 - [x] 62-05-PLAN.md — Manual UAT: provision live sandbox, exercise both event paths, confirm signed emails arrive at operator + override addresses, verify cooldown + CLI override behavior end-to-end
 
+
+### Phase 63: Slack-notify hook for Claude Code permission and idle events
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 62
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 63 to break down)
