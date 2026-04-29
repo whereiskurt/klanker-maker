@@ -398,7 +398,7 @@ case "$event" in
     if [[ -n "$transcript" && -f "$transcript" ]]; then
       body_text=$(tail -n 50 "$transcript" 2>/dev/null \
         | jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text' 2>/dev/null \
-        | tail -n 1)
+        | tail -n 1 || echo "")
     fi
     [[ -z "$body_text" ]] && body_text="(no recent assistant text)"
     ;;
