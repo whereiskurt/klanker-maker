@@ -2147,7 +2147,7 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	})
 	deps.SlackScanner = &doctorSlackMetadataScanner{
 		client:    dynamodb.NewFromConfig(awsCfg),
-		tableName: "km-sandbox-metadata",
+		tableName: "km-sandboxes",
 	}
 	deps.SlackEC2Lister = &doctorEC2InstanceLister{
 		client: ec2.NewFromConfig(awsCfg),
