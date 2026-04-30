@@ -142,6 +142,21 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
 		},
 		{
+			// Phase 63: DynamoDB nonce table for Slack bridge replay protection.
+			// Must apply before lambda-slack-bridge (dependency in terragrunt.hcl).
+			name:    "dynamodb-slack-nonces",
+			dir:     filepath.Join(regionDir, "dynamodb-slack-nonces"),
+			envReqs: nil,
+		},
+		{
+			// Phase 63: Slack-notify bridge Lambda with Function URL (auth=NONE;
+			// Ed25519 + nonce provide application-layer auth). Depends on
+			// dynamodb-identities, dynamodb-sandboxes, and dynamodb-slack-nonces.
+			name:    "lambda-slack-bridge",
+			dir:     filepath.Join(regionDir, "lambda-slack-bridge"),
+			envReqs: []string{"KM_ARTIFACTS_BUCKET"},
+		},
+		{
 			// SES must apply LAST because it owns the consolidated S3 bucket policy.
 			// The email-handler must apply before SES so its ARN is available for
 			// the operator-inbound receipt rule.
@@ -870,6 +885,8 @@ func buildLambdaZips(repoRoot string) error {
 		{name: "github-token-refresher", srcDir: "cmd/github-token-refresher"},
 		{name: "email-create-handler", srcDir: "cmd/email-create-handler"},
 		{name: "create-handler", srcDir: "cmd/create-handler"},
+		// Phase 63: Slack-notify bridge Lambda — accepts signed envelopes from sandboxes.
+		{name: "km-slack-bridge", srcDir: "cmd/km-slack-bridge"},
 	}
 
 	// Ensure terraform binary is available for bundling with ttl-handler

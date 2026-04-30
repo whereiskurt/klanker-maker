@@ -382,3 +382,45 @@ func TestRunInitIdempotent(t *testing.T) {
 		t.Fatalf("second RunInitWithRunner (idempotent): %v", err)
 	}
 }
+
+// TestRegionalModulesIncludesSlackBridge verifies that both Phase 63 Slack modules
+// are registered in regionalModules() in the correct dependency order:
+//   - dynamodb-slack-nonces before lambda-slack-bridge (dependency requirement)
+//   - lambda-slack-bridge after email-handler (consistent with artifact Lambda ordering)
+func TestRegionalModulesIncludesSlackBridge(t *testing.T) {
+	mods := cmd.RegionalModules(t.TempDir())
+
+	found := 0
+	noncesIdx := -1
+	bridgeIdx := -1
+	emailIdx := -1
+	for i, m := range mods {
+		switch m.Name {
+		case "dynamodb-slack-nonces":
+			found++
+			noncesIdx = i
+		case "lambda-slack-bridge":
+			found++
+			bridgeIdx = i
+		case "email-handler":
+			emailIdx = i
+		}
+	}
+
+	if found != 2 {
+		t.Fatalf("expected 2 slack modules in regionalModules(), got %d (nonces=%d, bridge=%d)",
+			found, noncesIdx, bridgeIdx)
+	}
+
+	// dynamodb-slack-nonces must appear before lambda-slack-bridge (dependency order)
+	if noncesIdx >= bridgeIdx {
+		t.Errorf("dynamodb-slack-nonces (idx %d) must appear before lambda-slack-bridge (idx %d)",
+			noncesIdx, bridgeIdx)
+	}
+
+	// lambda-slack-bridge must appear after email-handler
+	if emailIdx >= 0 && bridgeIdx <= emailIdx {
+		t.Errorf("lambda-slack-bridge (idx %d) must appear after email-handler (idx %d)",
+			bridgeIdx, emailIdx)
+	}
+}
