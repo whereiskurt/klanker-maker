@@ -472,16 +472,20 @@ func (r *slackTerragruntRunner) Output(ctx context.Context, dir string) (map[str
 func buildSlackCmdDeps(cfg *config.Config) (*SlackCmdDeps, error) {
 	ctx := context.Background()
 	awsProfile := cfg.AWSProfile
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithSharedConfigProfile(awsProfile))
-	if err != nil {
-		return nil, fmt.Errorf("load AWS config: %w", err)
-	}
 
 	region := cfg.PrimaryRegion
 	if region == "" {
 		region = "us-east-1"
 	}
 	regionLabel := compiler.RegionLabel(region)
+
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithSharedConfigProfile(awsProfile),
+		awsconfig.WithRegion(region),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load AWS config: %w", err)
+	}
 	repoRoot := findRepoRoot()
 	kmsKey := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
 	if kmsKey == "" {
