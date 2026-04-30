@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	ed25519key "crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"os"
@@ -29,6 +31,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	appcfg "github.com/whereiskurt/klankrmkr/internal/app/config"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	slackpkg "github.com/whereiskurt/klankrmkr/pkg/slack"
 )
 
 // --- Mock STS ---
@@ -1380,6 +1383,192 @@ func TestDoctor_AllRegionsFlag_PopulatesMultipleAMIClients(t *testing.T) {
 		if !found {
 			t.Errorf("expected region %s in Stale AMIs check names, got: %v", want, foundRegions)
 		}
+	}
+}
+
+// =============================================================================
+// Tests: checkSlackTokenValidity (Plan 63-09)
+// =============================================================================
+
+// mockSlackSSMStore is a simple map-backed SSMParamStore for doctor tests.
+// Note: SSMParamStore interface is declared in create_slack.go (same package).
+type mockSlackSSMStore struct {
+	params map[string]string
+}
+
+func (m *mockSlackSSMStore) Get(_ context.Context, name string, _ bool) (string, error) {
+	return m.params[name], nil
+}
+
+// mockSlackBridgePoster counts calls and can be configured to return specific responses.
+type mockSlackBridgePoster struct {
+	resp *slackpkg.PostResponse
+	err  error
+}
+
+func (m *mockSlackBridgePoster) post(_ context.Context, _ string, _ *slackpkg.SlackEnvelope, _ []byte) (*slackpkg.PostResponse, error) {
+	if m.resp != nil {
+		return m.resp, m.err
+	}
+	return &slackpkg.PostResponse{OK: true, TS: "12345.678"}, m.err
+}
+
+func genDoctorKey(t *testing.T) ed25519key.PrivateKey {
+	t.Helper()
+	_, priv, err := ed25519key.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	return priv
+}
+
+// TestCheckSlackTokenValidity_NotConfigured_Skipped: /km/slack/bot-token absent → SKIPPED.
+func TestCheckSlackTokenValidity_NotConfigured_Skipped(t *testing.T) {
+	ssm := &mockSlackSSMStore{params: map[string]string{}} // no bot-token
+	keyLoader := func(_ context.Context, _ string) (ed25519key.PrivateKey, error) { return nil, nil }
+	poster := &mockSlackBridgePoster{}
+	r := checkSlackTokenValidity(context.Background(), ssm, "us-east-1", keyLoader, poster.post)
+	if r.Status != CheckSkipped {
+		t.Errorf("expected SKIPPED, got %s: %s", r.Status, r.Message)
+	}
+}
+
+// TestCheckSlackTokenValidity_NoBridgeURL_Warn: bot-token set, no bridge-url → WARN.
+func TestCheckSlackTokenValidity_NoBridgeURL_Warn(t *testing.T) {
+	ssm := &mockSlackSSMStore{params: map[string]string{
+		"/km/slack/bot-token": "xoxb-test",
+		// No bridge-url
+	}}
+	keyLoader := func(_ context.Context, _ string) (ed25519key.PrivateKey, error) { return nil, nil }
+	poster := &mockSlackBridgePoster{}
+	r := checkSlackTokenValidity(context.Background(), ssm, "us-east-1", keyLoader, poster.post)
+	if r.Status != CheckWarn {
+		t.Errorf("expected WARN, got %s: %s", r.Status, r.Message)
+	}
+}
+
+// TestCheckSlackTokenValidity_BridgeReturnsOK_StatusOK: happy path.
+func TestCheckSlackTokenValidity_BridgeReturnsOK_StatusOK(t *testing.T) {
+	priv := genDoctorKey(t)
+	ssm := &mockSlackSSMStore{params: map[string]string{
+		"/km/slack/bot-token":       "xoxb-test",
+		"/km/slack/bridge-url":      "https://bridge.example.com",
+		"/km/slack/shared-channel-id": "C0SHARED",
+	}}
+	keyLoader := func(_ context.Context, _ string) (ed25519key.PrivateKey, error) { return priv, nil }
+	poster := &mockSlackBridgePoster{resp: &slackpkg.PostResponse{OK: true, TS: "123.456"}}
+	r := checkSlackTokenValidity(context.Background(), ssm, "us-east-1", keyLoader, poster.post)
+	if r.Status != CheckOK {
+		t.Errorf("expected OK, got %s: %s", r.Status, r.Message)
+	}
+}
+
+// TestCheckSlackTokenValidity_BridgeReturns401_Warn: bridge returns not-ok → WARN.
+func TestCheckSlackTokenValidity_BridgeReturns401_Warn(t *testing.T) {
+	priv := genDoctorKey(t)
+	ssm := &mockSlackSSMStore{params: map[string]string{
+		"/km/slack/bot-token":       "xoxb-bad",
+		"/km/slack/bridge-url":      "https://bridge.example.com",
+		"/km/slack/shared-channel-id": "C0SHARED",
+	}}
+	keyLoader := func(_ context.Context, _ string) (ed25519key.PrivateKey, error) { return priv, nil }
+	poster := &mockSlackBridgePoster{resp: &slackpkg.PostResponse{OK: false, Error: "invalid_auth"}}
+	r := checkSlackTokenValidity(context.Background(), ssm, "us-east-1", keyLoader, poster.post)
+	if r.Status != CheckWarn {
+		t.Errorf("expected WARN, got %s: %s", r.Status, r.Message)
+	}
+}
+
+// TestCheckSlackTokenValidity_BridgeReturns5xx_Error: bridge network error → ERROR.
+func TestCheckSlackTokenValidity_BridgeReturns5xx_Error(t *testing.T) {
+	priv := genDoctorKey(t)
+	ssm := &mockSlackSSMStore{params: map[string]string{
+		"/km/slack/bot-token":       "xoxb-test",
+		"/km/slack/bridge-url":      "https://bridge.example.com",
+		"/km/slack/shared-channel-id": "C0SHARED",
+	}}
+	keyLoader := func(_ context.Context, _ string) (ed25519key.PrivateKey, error) { return priv, nil }
+	poster := &mockSlackBridgePoster{err: errors.New("connection refused")}
+	r := checkSlackTokenValidity(context.Background(), ssm, "us-east-1", keyLoader, poster.post)
+	if r.Status != CheckError {
+		t.Errorf("expected ERROR, got %s: %s", r.Status, r.Message)
+	}
+}
+
+// =============================================================================
+// Tests: checkStaleSlackChannels (Plan 63-09)
+// =============================================================================
+
+// mockSandboxMetadataScanner is a mock for SlackMetadataScanner.
+type mockSandboxMetadataScanner struct {
+	records []kmaws.SandboxMetadata
+	err     error
+}
+
+func (m *mockSandboxMetadataScanner) ListSlackEnabled(ctx context.Context) ([]kmaws.SandboxMetadata, error) {
+	return m.records, m.err
+}
+
+// mockEC2InstanceLister is a mock for EC2InstanceLister.
+type mockEC2InstanceLister struct {
+	exists map[string]bool
+	err    error
+}
+
+func (m *mockEC2InstanceLister) InstanceExists(ctx context.Context, sandboxID string) (bool, error) {
+	if m.err != nil {
+		return false, m.err
+	}
+	return m.exists[sandboxID], nil
+}
+
+// TestCheckStaleSlackChannels_NoSlackRecords_OK: no Slack-enabled records → OK.
+func TestCheckStaleSlackChannels_NoSlackRecords_OK(t *testing.T) {
+	scanner := &mockSandboxMetadataScanner{records: []kmaws.SandboxMetadata{}}
+	ec2 := &mockEC2InstanceLister{exists: map[string]bool{}}
+	r := checkStaleSlackChannels(context.Background(), scanner, ec2)
+	if r.Status != CheckOK {
+		t.Errorf("expected OK, got %s: %s", r.Status, r.Message)
+	}
+}
+
+// TestCheckStaleSlackChannels_NoStale_OK: all sandboxes have active instances.
+func TestCheckStaleSlackChannels_NoStale_OK(t *testing.T) {
+	scanner := &mockSandboxMetadataScanner{records: []kmaws.SandboxMetadata{
+		{SandboxID: "sb-alive1", SlackChannelID: "C0111", SlackPerSandbox: true},
+		{SandboxID: "sb-alive2", SlackChannelID: "C0222", SlackPerSandbox: true},
+	}}
+	ec2 := &mockEC2InstanceLister{exists: map[string]bool{
+		"sb-alive1": true,
+		"sb-alive2": true,
+	}}
+	r := checkStaleSlackChannels(context.Background(), scanner, ec2)
+	if r.Status != CheckOK {
+		t.Errorf("expected OK, got %s: %s", r.Status, r.Message)
+	}
+}
+
+// TestCheckStaleSlackChannels_HasStale_Warn: 2 records with dead instances → WARN.
+func TestCheckStaleSlackChannels_HasStale_Warn(t *testing.T) {
+	scanner := &mockSandboxMetadataScanner{records: []kmaws.SandboxMetadata{
+		{SandboxID: "sb-dead1", SlackChannelID: "C0AAA", SlackPerSandbox: true},
+		{SandboxID: "sb-dead2", SlackChannelID: "C0BBB", SlackPerSandbox: true},
+		{SandboxID: "sb-alive", SlackChannelID: "C0CCC", SlackPerSandbox: true},
+	}}
+	ec2 := &mockEC2InstanceLister{exists: map[string]bool{
+		"sb-dead1": false,
+		"sb-dead2": false,
+		"sb-alive": true,
+	}}
+	r := checkStaleSlackChannels(context.Background(), scanner, ec2)
+	if r.Status != CheckWarn {
+		t.Errorf("expected WARN, got %s: %s", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "2") {
+		t.Errorf("message should mention 2 stale channels, got: %s", r.Message)
+	}
+	if !strings.Contains(r.Message, "C0AAA") || !strings.Contains(r.Message, "C0BBB") {
+		t.Errorf("message should list stale channel IDs, got: %s", r.Message)
 	}
 }
 
