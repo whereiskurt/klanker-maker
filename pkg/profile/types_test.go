@@ -1301,3 +1301,161 @@ spec:
 		t.Error("expected CLI.NotifyOnIdle=false (explicit), got true")
 	}
 }
+
+// minimalCLIProfileYAML returns a valid profile YAML with the cli section containing the given cliFields.
+func minimalCLIProfileYAML(cliFields string) []byte {
+	return []byte(`apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: slack-fields-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+  identity:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: true
+      image: "km-tracing:latest"
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+  agent:
+    maxConcurrentTasks: 2
+    taskTimeout: 30m
+  cli:
+` + cliFields)
+}
+
+// TestParse_CLISpec_SlackFields_AllSet verifies that a YAML profile setting all five
+// Phase 63 Slack fields round-trips correctly through profile.Parse().
+func TestParse_CLISpec_SlackFields_AllSet(t *testing.T) {
+	yamlData := minimalCLIProfileYAML(`    notifyEmailEnabled: false
+    notifySlackEnabled: true
+    notifySlackPerSandbox: true
+    notifySlackChannelOverride: "C0123ABC"
+    slackArchiveOnDestroy: false
+`)
+
+	p, err := profile.Parse(yamlData)
+	if err != nil {
+		t.Fatalf("expected profile with all five Slack fields to parse, got: %v", err)
+	}
+	if p.Spec.CLI == nil {
+		t.Fatal("expected Spec.CLI to be set, got nil")
+	}
+	cli := p.Spec.CLI
+	if cli.NotifyEmailEnabled == nil {
+		t.Fatal("expected NotifyEmailEnabled to be non-nil, got nil")
+	}
+	if *cli.NotifyEmailEnabled != false {
+		t.Errorf("expected *NotifyEmailEnabled=false, got %v", *cli.NotifyEmailEnabled)
+	}
+	if cli.NotifySlackEnabled == nil {
+		t.Fatal("expected NotifySlackEnabled to be non-nil, got nil")
+	}
+	if *cli.NotifySlackEnabled != true {
+		t.Errorf("expected *NotifySlackEnabled=true, got %v", *cli.NotifySlackEnabled)
+	}
+	if !cli.NotifySlackPerSandbox {
+		t.Error("expected NotifySlackPerSandbox=true, got false")
+	}
+	if cli.NotifySlackChannelOverride != "C0123ABC" {
+		t.Errorf("expected NotifySlackChannelOverride=%q, got %q", "C0123ABC", cli.NotifySlackChannelOverride)
+	}
+	if cli.SlackArchiveOnDestroy == nil {
+		t.Fatal("expected SlackArchiveOnDestroy to be non-nil, got nil")
+	}
+	if *cli.SlackArchiveOnDestroy != false {
+		t.Errorf("expected *SlackArchiveOnDestroy=false, got %v", *cli.SlackArchiveOnDestroy)
+	}
+}
+
+// TestParse_CLISpec_SlackFields_OmittedNilPointers verifies that a YAML profile with
+// no Slack fields parses cleanly with nil pointers (Phase 62 backward compat).
+func TestParse_CLISpec_SlackFields_OmittedNilPointers(t *testing.T) {
+	yamlData := minimalCLIProfileYAML(`    notifyOnPermission: true
+`)
+
+	p, err := profile.Parse(yamlData)
+	if err != nil {
+		t.Fatalf("expected Phase 62 profile to parse cleanly, got: %v", err)
+	}
+	if p.Spec.CLI == nil {
+		t.Fatal("expected Spec.CLI to be set, got nil")
+	}
+	cli := p.Spec.CLI
+	if cli.NotifyEmailEnabled != nil {
+		t.Errorf("expected NotifyEmailEnabled=nil (unset), got %v", *cli.NotifyEmailEnabled)
+	}
+	if cli.NotifySlackEnabled != nil {
+		t.Errorf("expected NotifySlackEnabled=nil (unset), got %v", *cli.NotifySlackEnabled)
+	}
+	if cli.SlackArchiveOnDestroy != nil {
+		t.Errorf("expected SlackArchiveOnDestroy=nil (unset), got %v", *cli.SlackArchiveOnDestroy)
+	}
+	if cli.NotifySlackPerSandbox {
+		t.Error("expected NotifySlackPerSandbox=false (zero), got true")
+	}
+	if cli.NotifySlackChannelOverride != "" {
+		t.Errorf("expected NotifySlackChannelOverride=%q (empty), got %q", "", cli.NotifySlackChannelOverride)
+	}
+}
+
+// TestParse_CLISpec_SlackFields_ExplicitFalse verifies that explicit false for
+// *bool Slack fields round-trips as non-nil pointer to false (not nil).
+// This is the key bool-vs-*bool discrimination test.
+func TestParse_CLISpec_SlackFields_ExplicitFalse(t *testing.T) {
+	yamlData := minimalCLIProfileYAML(`    notifyEmailEnabled: false
+    notifySlackEnabled: false
+`)
+
+	p, err := profile.Parse(yamlData)
+	if err != nil {
+		t.Fatalf("expected profile with explicit false Slack booleans to parse, got: %v", err)
+	}
+	if p.Spec.CLI == nil {
+		t.Fatal("expected Spec.CLI to be set, got nil")
+	}
+	cli := p.Spec.CLI
+	if cli.NotifyEmailEnabled == nil {
+		t.Fatal("expected NotifyEmailEnabled to be non-nil (explicit false), got nil")
+	}
+	if *cli.NotifyEmailEnabled != false {
+		t.Errorf("expected *NotifyEmailEnabled=false, got %v", *cli.NotifyEmailEnabled)
+	}
+	if cli.NotifySlackEnabled == nil {
+		t.Fatal("expected NotifySlackEnabled to be non-nil (explicit false), got nil")
+	}
+	if *cli.NotifySlackEnabled != false {
+		t.Errorf("expected *NotifySlackEnabled=false, got %v", *cli.NotifySlackEnabled)
+	}
+}

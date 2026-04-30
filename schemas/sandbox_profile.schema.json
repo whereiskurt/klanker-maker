@@ -431,6 +431,65 @@
               "description": "Tool names the agent is permitted to use"
             }
           }
+        },
+        "cli": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Operator-side defaults for km shell / km agent commands. Does not affect sandbox provisioning.",
+          "properties": {
+            "noBedrock": {
+              "type": "boolean",
+              "description": "Default to --no-bedrock for km shell and km agent run"
+            },
+            "claudeArgs": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Extra args appended to the claude command when launching via km agent --claude"
+            },
+            "codexArgs": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Extra args appended to the codex exec command when launching via km agent run --codex"
+            },
+            "notifyOnPermission": {
+              "type": "boolean",
+              "description": "Email the operator when Claude Code emits a Notification hook event"
+            },
+            "notifyOnIdle": {
+              "type": "boolean",
+              "description": "Email the operator when Claude Code emits a Stop hook event"
+            },
+            "notifyCooldownSeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Suppress notify-hook emails within N seconds of the last successful send"
+            },
+            "notificationEmailAddress": {
+              "type": "string",
+              "description": "Override recipient for notify-hook emails"
+            },
+            "notifyEmailEnabled": {
+              "type": "boolean",
+              "description": "Phase 63: enable/disable email dispatch from the notify-hook"
+            },
+            "notifySlackEnabled": {
+              "type": "boolean",
+              "description": "Phase 63: enable Slack delivery for events that pass notifyOn* gates"
+            },
+            "notifySlackPerSandbox": {
+              "type": "boolean",
+              "description": "Phase 63: create #sb-{id} channel at km create and archive at km destroy"
+            },
+            "notifySlackChannelOverride": {
+              "type": "string",
+              "pattern": "^C[A-Z0-9]+$",
+              "description": "Phase 63: Slack channel ID to hard-pin notifications"
+            },
+            "slackArchiveOnDestroy": {
+              "type": "boolean",
+              "description": "Phase 63: archive the per-sandbox channel at km destroy"
+            }
+          }
         }
       }
     }

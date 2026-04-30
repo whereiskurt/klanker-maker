@@ -392,6 +392,39 @@ type CLISpec struct {
 	// (which is the operator inbox per km-send default). E.g., a team alias.
 	// Profile-only in v1 (no CLI flag).
 	NotificationEmailAddress string `yaml:"notificationEmailAddress,omitempty"`
+
+	// --- Phase 63: Slack notifications ---
+
+	// NotifyEmailEnabled controls whether the notify-hook dispatches email.
+	// Pointer type so unset (nil) is distinguishable from explicit false (per
+	// RESEARCH.md Pitfall 4): nil means the compiler emits no env var, so the
+	// hook's KM_NOTIFY_EMAIL_ENABLED:-1 default takes effect (Phase 62 backward
+	// compat). &false skips email; &true forces email even if Slack is also set.
+	NotifyEmailEnabled *bool `yaml:"notifyEmailEnabled,omitempty"`
+
+	// NotifySlackEnabled enables Slack delivery for whatever events notifyOn*
+	// already gates. Pointer type for the same unset/explicit-false reason as
+	// NotifyEmailEnabled. nil = Slack disabled (Phase 62 default).
+	NotifySlackEnabled *bool `yaml:"notifySlackEnabled,omitempty"`
+
+	// NotifySlackPerSandbox creates a #sb-{id} channel at km create and archives
+	// it at km destroy. Default false → use the platform-wide shared channel
+	// configured at /km/slack/shared-channel-id. Ignored if NotifySlackEnabled
+	// is nil or &false.
+	NotifySlackPerSandbox bool `yaml:"notifySlackPerSandbox,omitempty"`
+
+	// NotifySlackChannelOverride hard-pins notifications to a specific Slack
+	// channel ID (matches ^C[A-Z0-9]+$). Mutually exclusive with
+	// NotifySlackPerSandbox=true. Empty = use shared or per-sandbox per the
+	// other fields.
+	NotifySlackChannelOverride string `yaml:"notifySlackChannelOverride,omitempty"`
+
+	// SlackArchiveOnDestroy archives the per-sandbox channel at km destroy.
+	// Default true. Set false to preserve the channel post-teardown for an audit
+	// trail. Only meaningful when NotifySlackPerSandbox=true; otherwise
+	// ValidateSemantic emits a no-op warning. Pointer type so unset is
+	// distinguishable from explicit false in tests.
+	SlackArchiveOnDestroy *bool `yaml:"slackArchiveOnDestroy,omitempty"`
 }
 
 // Parse unmarshals a SandboxProfile from raw YAML bytes.

@@ -3,6 +3,7 @@ package profile
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -17,6 +18,11 @@ type ValidationError struct {
 	Path string
 	// Message describes what is wrong with the value at Path.
 	Message string
+	// IsWarning marks non-blocking findings. Phase 63 introduces this for
+	// semantic rules that flag no-op combinations (e.g. perSandbox without
+	// slackEnabled). km validate prints warnings to stderr with a WARN: prefix
+	// but does not flip the anyFailed flag for them.
+	IsWarning bool
 }
 
 // Error implements the error interface. Returns "path: message" format.
@@ -261,6 +267,61 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 			errs = append(errs, ValidationError{
 				Path:    "spec.network.enforcement",
 				Message: "eBPF enforcement is EC2-only in Phase 40; Docker substrate uses proxy enforcement regardless",
+			})
+		}
+	}
+
+	// Phase 63 — Slack notification validation (SLCK-01).
+	if p.Spec.CLI != nil {
+		cli := p.Spec.CLI
+		perSandbox := cli.NotifySlackPerSandbox
+		override := cli.NotifySlackChannelOverride
+		slackOn := cli.NotifySlackEnabled != nil && *cli.NotifySlackEnabled
+		emailOn := cli.NotifyEmailEnabled == nil || *cli.NotifyEmailEnabled // nil = backward-compat true
+
+		// Rule S1 (error): perSandbox AND override → mutually exclusive.
+		if perSandbox && override != "" {
+			errs = append(errs, ValidationError{
+				Path:    "spec.cli",
+				Message: "notifySlackPerSandbox: true and notifySlackChannelOverride are mutually exclusive — choose one",
+			})
+		}
+
+		// Rule S2 (warning): perSandbox without slackEnabled → no-op.
+		if perSandbox && cli.NotifySlackEnabled != nil && !*cli.NotifySlackEnabled {
+			errs = append(errs, ValidationError{
+				Path:      "spec.cli.notifySlackPerSandbox",
+				Message:   "notifySlackPerSandbox: true has no effect when notifySlackEnabled is false",
+				IsWarning: true,
+			})
+		}
+
+		// Rule S3 (warning): slackArchiveOnDestroy set without perSandbox → no-op.
+		if cli.SlackArchiveOnDestroy != nil && !perSandbox {
+			errs = append(errs, ValidationError{
+				Path:      "spec.cli.slackArchiveOnDestroy",
+				Message:   "slackArchiveOnDestroy is only meaningful when notifySlackPerSandbox: true",
+				IsWarning: true,
+			})
+		}
+
+		// Rule S4 (error): channel ID regex. Belt-and-suspenders with the JSON schema pattern.
+		if override != "" {
+			ok, _ := regexp.MatchString(`^C[A-Z0-9]+$`, override)
+			if !ok {
+				errs = append(errs, ValidationError{
+					Path:    "spec.cli.notifySlackChannelOverride",
+					Message: fmt.Sprintf("invalid Slack channel ID %q — must match ^C[A-Z0-9]+$", override),
+				})
+			}
+		}
+
+		// Rule S5 (warning): both channels off → no notification path.
+		if !slackOn && !emailOn {
+			errs = append(errs, ValidationError{
+				Path:      "spec.cli",
+				Message:   "notifyEmailEnabled: false and notifySlackEnabled: false — no notification channel will deliver",
+				IsWarning: true,
 			})
 		}
 	}

@@ -8,6 +8,9 @@ import (
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
 )
 
+// boolPtr is a helper to create *bool values for semantic tests.
+func boolPtr(b bool) *bool { return &b }
+
 func TestValidateSchemaValid(t *testing.T) {
 	data, err := os.ReadFile("../../testdata/profiles/valid-minimal.yaml")
 	if err != nil {
@@ -786,5 +789,183 @@ func TestValidateSchema_MetadataPrefix(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// --- Phase 63: Slack validation tests ---
+
+// minimalCLISpecWith returns a minimal SandboxProfile with the given CLISpec for
+// direct ValidateSemantic testing.
+func minimalCLISpecWith(cli *profile.CLISpec) *profile.SandboxProfile {
+	return &profile.SandboxProfile{
+		APIVersion: "klankermaker.ai/v1alpha1",
+		Kind:       "SandboxProfile",
+		Spec: profile.Spec{
+			CLI: cli,
+		},
+	}
+}
+
+// TestValidateSemantic_Slack_PerSandboxAndOverride_Error verifies that setting
+// notifySlackPerSandbox=true and notifySlackChannelOverride is a non-warning error.
+func TestValidateSemantic_Slack_PerSandboxAndOverride_Error(t *testing.T) {
+	p := minimalCLISpecWith(&profile.CLISpec{
+		NotifySlackPerSandbox:      true,
+		NotifySlackChannelOverride: "CABC123",
+	})
+	errs := profile.ValidateSemantic(p)
+	if len(errs) == 0 {
+		t.Fatal("expected 1 error for perSandbox+override combo, got none")
+	}
+	found := false
+	for _, e := range errs {
+		if e.IsWarning {
+			continue
+		}
+		if strings.Contains(e.Message, "mutually exclusive") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected non-warning error with 'mutually exclusive', got: %v", errs)
+	}
+}
+
+// TestValidateSemantic_Slack_PerSandboxWithoutSlackEnabled_Warning verifies that
+// notifySlackPerSandbox=true with notifySlackEnabled=&false is a warning (not error).
+func TestValidateSemantic_Slack_PerSandboxWithoutSlackEnabled_Warning(t *testing.T) {
+	p := minimalCLISpecWith(&profile.CLISpec{
+		NotifySlackPerSandbox: true,
+		NotifySlackEnabled:    boolPtr(false),
+	})
+	errs := profile.ValidateSemantic(p)
+	if len(errs) == 0 {
+		t.Fatal("expected 1 warning for perSandbox+slackDisabled, got none")
+	}
+	found := false
+	for _, e := range errs {
+		if e.IsWarning && strings.Contains(e.Message, "notifySlackPerSandbox") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected IsWarning=true with 'notifySlackPerSandbox' message, got: %v", errs)
+	}
+	// Must not be a hard error
+	for _, e := range errs {
+		if !e.IsWarning {
+			t.Errorf("expected only warnings, but got a hard error: %s", e.Error())
+		}
+	}
+}
+
+// TestValidateSemantic_Slack_ArchiveWithoutPerSandbox_Warning verifies that
+// slackArchiveOnDestroy set without notifySlackPerSandbox=true is a warning.
+func TestValidateSemantic_Slack_ArchiveWithoutPerSandbox_Warning(t *testing.T) {
+	p := minimalCLISpecWith(&profile.CLISpec{
+		NotifySlackPerSandbox: false,
+		SlackArchiveOnDestroy: boolPtr(true),
+	})
+	errs := profile.ValidateSemantic(p)
+	if len(errs) == 0 {
+		t.Fatal("expected 1 warning for archiveOnDestroy without perSandbox, got none")
+	}
+	found := false
+	for _, e := range errs {
+		if e.IsWarning && strings.Contains(e.Message, "slackArchiveOnDestroy") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected IsWarning=true with 'slackArchiveOnDestroy' message, got: %v", errs)
+	}
+	for _, e := range errs {
+		if !e.IsWarning {
+			t.Errorf("expected only warnings, got a hard error: %s", e.Error())
+		}
+	}
+}
+
+// TestValidateSemantic_Slack_BadChannelOverride_Error verifies that an invalid
+// channel ID (not matching ^C[A-Z0-9]+$) is a hard error.
+func TestValidateSemantic_Slack_BadChannelOverride_Error(t *testing.T) {
+	p := minimalCLISpecWith(&profile.CLISpec{
+		NotifySlackChannelOverride: "not-a-channel",
+	})
+	errs := profile.ValidateSemantic(p)
+	if len(errs) == 0 {
+		t.Fatal("expected 1 error for invalid channel ID, got none")
+	}
+	found := false
+	for _, e := range errs {
+		if !e.IsWarning && strings.Contains(e.Message, "channel ID") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected non-warning error with 'channel ID', got: %v", errs)
+	}
+}
+
+// TestValidateSemantic_Slack_BothChannelsDisabled_Warning verifies that
+// notifyEmailEnabled=&false and notifySlackEnabled=&false is a warning.
+func TestValidateSemantic_Slack_BothChannelsDisabled_Warning(t *testing.T) {
+	p := minimalCLISpecWith(&profile.CLISpec{
+		NotifyEmailEnabled: boolPtr(false),
+		NotifySlackEnabled: boolPtr(false),
+	})
+	errs := profile.ValidateSemantic(p)
+	if len(errs) == 0 {
+		t.Fatal("expected 1 warning for both channels disabled, got none")
+	}
+	found := false
+	for _, e := range errs {
+		if e.IsWarning && strings.Contains(e.Message, "no notification channel") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected IsWarning=true with 'no notification channel' message, got: %v", errs)
+	}
+	for _, e := range errs {
+		if !e.IsWarning {
+			t.Errorf("expected only warnings, got a hard error: %s", e.Error())
+		}
+	}
+}
+
+// TestValidateSemantic_Slack_HappyPath_NoErrors verifies that a valid Slack config
+// (slackEnabled=true, perSandbox=true, archiveOnDestroy=true, no override) emits no errors.
+func TestValidateSemantic_Slack_HappyPath_NoErrors(t *testing.T) {
+	p := minimalCLISpecWith(&profile.CLISpec{
+		NotifySlackEnabled:    boolPtr(true),
+		NotifySlackPerSandbox: true,
+		SlackArchiveOnDestroy: boolPtr(true),
+	})
+	errs := profile.ValidateSemantic(p)
+	if len(errs) != 0 {
+		t.Errorf("expected no errors for valid Slack happy-path config, got: %v", errs)
+	}
+}
+
+// TestValidateSemantic_Slack_BackwardCompat_Phase62Profile verifies that a profile
+// with only Phase 62 fields and no Slack fields produces zero Slack-related errors.
+// This is the critical Phase 62 regression test.
+func TestValidateSemantic_Slack_BackwardCompat_Phase62Profile(t *testing.T) {
+	p := minimalCLISpecWith(&profile.CLISpec{
+		NotifyOnPermission:       true,
+		NotifyOnIdle:             true,
+		NotifyCooldownSeconds:    60,
+		NotificationEmailAddress: "ops@example.com",
+		// All Phase 63 fields absent (nil / zero values)
+	})
+	errs := profile.ValidateSemantic(p)
+	if len(errs) != 0 {
+		t.Errorf("expected zero errors for Phase 62 backward-compat profile, got: %v", errs)
 	}
 }

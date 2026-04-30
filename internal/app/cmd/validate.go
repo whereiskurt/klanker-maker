@@ -103,8 +103,18 @@ func validateFile(cfg *config.Config, filePath string) bool {
 
 		allErrs := append(schemaErrs, semanticErrs...)
 		if len(allErrs) > 0 {
+			failed := false
 			for _, e := range allErrs {
-				fmt.Fprintf(os.Stderr, "ERROR: %s: %s\n", filePath, e.Error())
+				if e.IsWarning {
+					fmt.Fprintf(os.Stderr, "WARN: %s: %s\n", filePath, e.Error())
+				} else {
+					fmt.Fprintf(os.Stderr, "ERROR: %s: %s\n", filePath, e.Error())
+					failed = true
+				}
+			}
+			if !failed {
+				fmt.Printf("%s: valid (with warnings)\n", filePath)
+				return false
 			}
 			return true
 		}
@@ -119,10 +129,22 @@ func validateFile(cfg *config.Config, filePath string) bool {
 	// Step 4: Run validation
 	errs := profile.Validate(validationTarget)
 
-	// Step 5: Report results
+	// Step 5: Report results — separate warnings from errors.
+	// Warnings (IsWarning=true) print with WARN: prefix but do not cause exit 1.
+	// Errors print with ERROR: prefix and flip anyFailed in the caller.
 	if len(errs) > 0 {
+		failed := false
 		for _, e := range errs {
-			fmt.Fprintf(os.Stderr, "ERROR: %s: %s\n", filePath, e.Error())
+			if e.IsWarning {
+				fmt.Fprintf(os.Stderr, "WARN: %s: %s\n", filePath, e.Error())
+			} else {
+				fmt.Fprintf(os.Stderr, "ERROR: %s: %s\n", filePath, e.Error())
+				failed = true
+			}
+		}
+		if !failed {
+			fmt.Printf("%s: valid (with warnings)\n", filePath)
+			return false
 		}
 		return true
 	}

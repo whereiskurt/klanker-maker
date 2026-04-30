@@ -509,6 +509,27 @@
             "notificationEmailAddress": {
               "type": "string",
               "description": "Override recipient for notify-hook emails. Default is the operator inbox configured in km-config.yaml. Profile-only (no CLI flag)."
+            },
+            "notifyEmailEnabled": {
+              "type": "boolean",
+              "description": "Phase 63: enable/disable email dispatch from the notify-hook. Default behaviorally true (Phase 62 backward compat); explicit false skips email even when notifyOn* events fire."
+            },
+            "notifySlackEnabled": {
+              "type": "boolean",
+              "description": "Phase 63: enable Slack delivery for events that pass notifyOn* gates. Default false. Requires km slack init to have provisioned the bridge Lambda."
+            },
+            "notifySlackPerSandbox": {
+              "type": "boolean",
+              "description": "Phase 63: create #sb-{id} channel at km create and archive at km destroy. Default false (use platform-wide shared channel). Ignored if notifySlackEnabled is false."
+            },
+            "notifySlackChannelOverride": {
+              "type": "string",
+              "pattern": "^C[A-Z0-9]+$",
+              "description": "Phase 63: Slack channel ID (must start with C) to hard-pin notifications. Mutually exclusive with notifySlackPerSandbox=true."
+            },
+            "slackArchiveOnDestroy": {
+              "type": "boolean",
+              "description": "Phase 63: archive the per-sandbox channel at km destroy. Default true. Only meaningful with notifySlackPerSandbox=true."
             }
           }
         }
