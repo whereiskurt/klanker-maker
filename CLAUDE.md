@@ -26,6 +26,9 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 - `km email send` — send signed email between sandboxes or to/from operator (`--from`, `--to`, `--cc`, `--use-bcc`, `--reply-to`)
 - `km email read <sandbox>` — read sandbox mailbox with signature verification and auto-decryption (`--json`, `--mark-read`)
 - `km otel <sandbox-id>` — OTEL telemetry + AI spend summary (--prompts, --events, --tools, --timeline)
+- `km slack init` — bootstrap Slack integration: validate bot token, write SSM params, create shared channel, send Slack Connect invite, deploy bridge Lambda (`--bot-token`, `--invite-email`, `--shared-channel`, `--force`)
+- `km slack test` — end-to-end smoke test through the bridge using operator signing key
+- `km slack status` — print SSM-backed Slack config (workspace, channel, bridge URL, last test)
 - `km init` — initialize regional infrastructure (`--sidecars` for fast binary deploy, `--lambdas` for Lambda-only deploy)
 - `km shell <sandbox-id>` — SSM shell (`--root`, `--ports`, `--no-bedrock`, `--learn` to generate profile from observed traffic, `--ami` to bake the EC2 instance into a custom AMI on exit)
 - `km ami list` — list operator-baked AMIs with profile references and size (`--wide` for region/snapshot/encryption columns)
@@ -90,6 +93,57 @@ km-recv --mark-read      # mark as processed
 | `KM_ARTIFACTS_BUCKET` | S3 bucket backing the mail poller |
 
 See `docs/multi-agent-email.md` for full details on SES setup, IAM policy, signing protocol, and cross-sandbox orchestration.
+
+## Slack Notifications
+
+Phase 63 extends Phase 62's operator-notify hook with parallel Slack delivery. Sandboxes call a `km-slack-bridge` Lambda with Ed25519-signed payloads (same trust model as `km-send`); operators are invited to channels via Slack Connect.
+
+### One-time setup
+
+```bash
+make build               # Always rebuild km after edits (memory: feedback_rebuild_km)
+km init --sidecars       # Upload km-slack binary to S3 (required after Phase 63 ships)
+km init                  # Deploy bridge Lambda + nonce DynamoDB table
+km slack init            # Interactive bootstrap (or pass --bot-token + --invite-email)
+```
+
+### Profile fields (`spec.cli`)
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `notifyEmailEnabled` | bool* | true | Phase 62 compat; set false to skip email when Slack is on |
+| `notifySlackEnabled` | bool* | false | Enable Slack delivery |
+| `notifySlackPerSandbox` | bool | false | Create `#sb-{id}` channel; archive at destroy |
+| `notifySlackChannelOverride` | string | empty | Pin to channel ID (`^C[A-Z0-9]+$`) |
+| `slackArchiveOnDestroy` | bool* | true | Per-sandbox only; false preserves channel |
+
+### Sandbox env vars
+
+| Variable | Source |
+|---|---|
+| `KM_NOTIFY_EMAIL_ENABLED` | profile `spec.cli.notifyEmailEnabled` (omit = default 1) |
+| `KM_NOTIFY_SLACK_ENABLED` | profile `spec.cli.notifySlackEnabled` (omit = default 0) |
+| `KM_SLACK_CHANNEL_ID` | runtime, injected by km create |
+| `KM_SLACK_BRIDGE_URL` | runtime, injected by km create |
+
+### SSM parameters
+
+| Parameter | Purpose |
+|---|---|
+| `/km/slack/bot-token` (SecureString) | KMS-encrypted bot token; bridge Lambda + operator only |
+| `/km/slack/workspace` | JSON: `{"team_id":"...","team_name":"..."}` |
+| `/km/slack/invite-email` | Email for Slack Connect invites |
+| `/km/slack/shared-channel-id` | Default shared channel ID |
+| `/km/slack/bridge-url` | Lambda Function URL |
+
+### Important workflow notes
+
+- **`km init --sidecars` is required** after Phase 63 ships so management Lambdas pick up the schema additions and the new `km-slack` sidecar binary lands in S3.
+- Existing sandboxes do NOT get km-slack retroactively — `km destroy` + `km create` to provision with the binary.
+- Slack Connect (`conversations.inviteShared`) requires a **Pro Slack workspace** (free tier returns `not_allowed_token_type`).
+- Bot token rotation: `km slack init --force --bot-token <new>`. Lambda picks up new token on cold start or after 15-min cache TTL.
+
+See `docs/slack-notifications.md` for the full operator guide.
 
 ## Architecture
 
