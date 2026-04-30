@@ -1333,7 +1333,7 @@ Plans:
 **Spec:** `docs/superpowers/specs/2026-04-29-slack-notify-hook-design.md`
 **Requirements**: SLCK-01, SLCK-02, SLCK-03, SLCK-04, SLCK-05, SLCK-06, SLCK-07, SLCK-08, SLCK-09, SLCK-10
 **Depends on:** Phase 62 (operator-notify hook), Phase 45 (km-send signed email + operator identity), Phase 14 (Ed25519 sandbox identity), Phase 39 (DynamoDB sandbox metadata), Phase 23 (credential rotation), Phase 27 (OTEL integration). All upstream deps complete.
-**Plans:** 10 plans
+**Plans:** 1/10 plans executed
 
 Plans:
 - [ ] 63-01-PLAN.md — Profile schema (5 new spec.cli fields, *bool semantics) + ValidationError.IsWarning + 5 semantic validation rules + REQUIREMENTS.md SLCK-01..SLCK-10 registration

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 62-05-PLAN.md (live UAT — Phase 62 signed off)
-last_updated: "2026-04-29T13:04:58.967Z"
+stopped_at: Completed 63-02-PLAN.md (pkg/slack foundation — payload + client)
+last_updated: "2026-04-30T01:20:12.303Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
-  total_phases: 65
+  total_phases: 66
   completed_phases: 62
-  total_plans: 191
-  completed_plans: 192
+  total_plans: 201
+  completed_plans: 193
   percent: 0
 ---
 
@@ -233,6 +233,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events P04 | 12min | 3 tasks | 5 files |
 | Phase 62 P03 | 3 | 2 tasks | 5 files |
 | Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events P05 | 90min | 8 tasks | 5 files |
+| Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P02 | 12min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -652,6 +653,7 @@ Recent decisions affecting current work:
 - [Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events]: T4 inline Rule-1 fix: jq exit-5 propagation in Stop-path transcript extraction — added '|| echo ""' fallback at userdata.go:399-401 + regression test (commits 095a51e + 9c0690c). Required km init --sidecars redeploy. HOOK-05 'never blocks Claude' invariant restored.
 - [Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events]: T3 methodology: manual hook fire is the legitimate Notification test path — km agent run's implicit --dangerously-skip-permissions makes the path untriggerable via real Claude flow. Plan 03 unit tests cover firing semantics; live test confirms SES routing + Ed25519 signing.
 - [Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events]: T5 methodology: env-var direct test (KM_NOTIFY_EMAIL) exercises the same runtime routing as the profile field. Compile-time path that writes /etc/profile.d/km-notify-env.sh already verified in T2. Avoids redundant sandbox provisioning.
+- [Phase 63-slack-notify-hook]: pkg/slack: Alphabetical struct tag order + encoding/json gives deterministic canonical JSON; no custom serializer; BridgeBackoff exported var for test shim; PostToBridge uses http.DefaultClient (sandbox-side); 4 total attempts (1+3 retries) matching SLCK-03
 
 ### Roadmap Evolution
 
@@ -732,6 +734,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-29T12:57:03.452Z
-Stopped at: Completed 62-05-PLAN.md (live UAT — Phase 62 signed off)
+Last session: 2026-04-30T01:20:12.297Z
+Stopped at: Completed 63-02-PLAN.md (pkg/slack foundation — payload + client)
 Resume file: None
