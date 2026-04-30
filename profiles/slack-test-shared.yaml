@@ -38,19 +38,12 @@ spec:
       - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace"
 
   network:
-    enforcement: proxy
+    enforcement: both
     egress:
       allowedDNSSuffixes:
-        - ".amazonaws.com"
-        - ".anthropic.com"
-        - ".claude.ai"
-        - ".claude.com"
-        - ".sentry.io"
-        - ".cloudfront.net"
-        - ".npmjs.org"
-        - ".npmjs.com"
-        - ".nodejs.org"
-      allowedHosts: []
+        - "*"
+      allowedHosts:
+        - "*"
 
   budget:
     compute:

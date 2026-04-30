@@ -1,12 +1,12 @@
 apiVersion: klankermaker.ai/v1alpha1
 kind: SandboxProfile
 metadata:
-  name: slack-test-per-sandbox
+  name: slack-test-per-sandbox-keep
   labels:
     tier: development
     tool: claude-code
     builtin: "true"
-  prefix: stp
+  prefix: stk
 
 spec:
   lifecycle:
@@ -26,7 +26,7 @@ spec:
     shell: /bin/bash
     workingDir: /workspace
     env:
-      SANDBOX_MODE: slack-test-per-sandbox
+      SANDBOX_MODE: slack-test-per-sandbox-keep
       ANTHROPIC_BASE_URL: "https://bedrock-runtime.us-east-1.amazonaws.com"
       ANTHROPIC_DEFAULT_SONNET_MODEL: us.anthropic.claude-sonnet-4-6
       CLAUDE_CODE_USE_BEDROCK: "1"
@@ -104,7 +104,7 @@ spec:
     notifyEmailEnabled: false
     notifySlackEnabled: true
     notifySlackPerSandbox: true
-    slackArchiveOnDestroy: true
+    slackArchiveOnDestroy: false
 
   agent:
     maxConcurrentTasks: 1
