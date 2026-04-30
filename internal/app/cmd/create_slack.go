@@ -211,3 +211,26 @@ grep -q '^export KM_SLACK_BRIDGE_URL=' "$ENV_FILE" && sed -i 's|^export KM_SLACK
 `, channelID, channelID, bridgeURL, bridgeURL)
 	return runner.RunShell(ctx, instanceID, script)
 }
+
+// ssmSendCommandClient is the minimal SSM interface needed by productionSSMRunner.
+type ssmSendCommandClient interface {
+	SendCommand(ctx context.Context, input *ssm.SendCommandInput, optFns ...func(*ssm.Options)) (*ssm.SendCommandOutput, error)
+}
+
+// productionSSMRunner implements SSMRunner using AWS SSM SendCommand.
+// Used by injectSlackEnvIntoSandbox to push env vars into a running sandbox.
+type productionSSMRunner struct {
+	client ssmSendCommandClient
+}
+
+func (r *productionSSMRunner) RunShell(ctx context.Context, instanceID string, script string) error {
+	_, err := r.client.SendCommand(ctx, &ssm.SendCommandInput{
+		InstanceIds:  []string{instanceID},
+		DocumentName: awssdk.String("AWS-RunShellScript"),
+		Parameters: map[string][]string{
+			"commands": {script},
+		},
+		TimeoutSeconds: awssdk.Int32(30),
+	})
+	return err
+}

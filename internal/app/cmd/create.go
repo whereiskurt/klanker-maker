@@ -46,6 +46,7 @@ import (
 	githubpkg "github.com/whereiskurt/klankrmkr/pkg/github"
 	"github.com/whereiskurt/klankrmkr/pkg/localnumber"
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	slack "github.com/whereiskurt/klankrmkr/pkg/slack"
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
 )
 
@@ -425,6 +426,29 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// Pass alias to compiler so userdata can set KM_SANDBOX_ALIAS and alias email delivery.
 	network.Alias = aliasOverride
 
+	// Step 6c: Resolve Slack channel before terragrunt apply so a Slack failure aborts
+	// the create before any infra is provisioned. Shared mode: no API calls (SSM only).
+	// Per-sandbox mode: conversations.create + inviteShared. Override mode: ChannelInfo validate.
+	// On failure: aborts create with a clear error; no half-built sandboxes.
+	// Disabled (non-fatal skip) when profile does not set notifySlackEnabled.
+	var slackChannelID string
+	var slackPerSandbox bool
+	if resolvedProfile.Spec.CLI != nil && resolvedProfile.Spec.CLI.NotifySlackEnabled != nil && *resolvedProfile.Spec.CLI.NotifySlackEnabled {
+		ssmClientForSlack := ssm.NewFromConfig(awsCfg)
+		ssmStore := &productionSSMParamStore{client: ssmClientForSlack}
+		botToken, _ := ssmStore.Get(ctx, "/km/slack/bot-token", true)
+		if botToken == "" {
+			return fmt.Errorf("profile requires Slack notifications but /km/slack/bot-token is not configured — run km slack init first")
+		}
+		slackClient := slack.NewClient(botToken, nil)
+		chID, perSb, slackErr := resolveSlackChannel(ctx, resolvedProfile, sandboxID, aliasOverride, slackClient, ssmStore)
+		if slackErr != nil {
+			return fmt.Errorf("provision Slack channel: %w", slackErr)
+		}
+		slackChannelID = chID
+		slackPerSandbox = perSb
+	}
+
 	// Step 7: Compile profile into Terragrunt/Docker artifacts.
 	// For docker substrate, compile once and dispatch immediately — no AZ retry loop needed.
 	// Docker substrate does not use EBS volumes — BDM lookup is not needed; pass nil.
@@ -654,6 +678,15 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			TeardownPolicy: resolvedProfile.Spec.Lifecycle.TeardownPolicy,
 			CreatedBy:      "cli",
 			Alias:          sandboxAlias,
+			// Phase 63 — Slack metadata. Populated from Step 6c resolution.
+			SlackChannelID:  slackChannelID,
+			SlackPerSandbox: slackPerSandbox,
+		}
+		// SlackArchiveOnDestroy: persist *bool from profile so km destroy (Plan 63-09) is
+		// self-contained and does not need to re-read the original profile YAML at teardown time.
+		// nil round-trips as nil through DynamoDB (omitempty on marshal).
+		if resolvedProfile.Spec.CLI != nil {
+			meta.SlackArchiveOnDestroy = resolvedProfile.Spec.CLI.SlackArchiveOnDestroy
 		}
 		if len(clonedFromOverride) > 0 && clonedFromOverride[0] != "" {
 			meta.ClonedFrom = clonedFromOverride[0]
@@ -751,6 +784,43 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			log.Warn().Err(putErr).Msg("failed to upload init script to S3 (non-fatal)")
 		} else {
 			fmt.Fprintf(os.Stderr, "  ✓ Init script uploaded to S3 (%d bytes)\n", initScript.Len())
+		}
+	}
+
+	// Step 11d: Inject KM_SLACK_CHANNEL_ID and KM_SLACK_BRIDGE_URL into the running
+	// sandbox's /etc/profile.d/km-notify-env.sh via SSM SendCommand. Only runs when
+	// a Slack channel was resolved in Step 6c (shared or per-sandbox modes; override
+	// mode pre-bakes the channel ID at compile time via NotifySlackChannelOverride).
+	// Non-fatal: sandbox is provisioned even if SSM inject fails. SSM agent must be
+	// up before this completes; the SendCommand waits up to 30s for the agent.
+	if slackChannelID != "" {
+		ssmClientForInject := ssm.NewFromConfig(awsCfg)
+		ssmStoreForInject := &productionSSMParamStore{client: ssmClientForInject}
+		bridgeURL, _ := ssmStoreForInject.Get(ctx, "/km/slack/bridge-url", false)
+		if bridgeURL == "" {
+			log.Warn().Str("sandbox_id", sandboxID).
+				Msg("Step 11d: /km/slack/bridge-url not configured — Slack env not injected (run km slack init)")
+		} else {
+			// Get EC2 instance ID from Terraform outputs.
+			outputs, outErr := runner.Output(ctx, sandboxDir)
+			if outErr != nil {
+				log.Warn().Err(outErr).Str("sandbox_id", sandboxID).
+					Msg("Step 11d: failed to read sandbox outputs for Slack env inject (non-fatal)")
+			} else {
+				instanceID := extractOutputInstanceID(outputs)
+				if instanceID == "" {
+					log.Warn().Str("sandbox_id", sandboxID).
+						Msg("Step 11d: no EC2 instance ID in terraform outputs — Slack env not injected (docker/non-EC2 substrate)")
+				} else {
+					ssmRunner := &productionSSMRunner{client: ssmClientForInject}
+					if injectErr := injectSlackEnvIntoSandbox(ctx, ssmRunner, instanceID, slackChannelID, bridgeURL); injectErr != nil {
+						log.Warn().Err(injectErr).Str("sandbox_id", sandboxID).
+							Msg("Step 11d: failed to inject Slack env via SSM SendCommand (non-fatal — sandbox is provisioned)")
+					} else {
+						fmt.Fprintf(os.Stderr, "  ✓ Slack: channel %s wired into sandbox env\n", slackChannelID)
+					}
+				}
+			}
 		}
 	}
 

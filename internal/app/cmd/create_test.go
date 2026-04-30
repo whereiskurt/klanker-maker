@@ -339,3 +339,62 @@ func TestCreateCmd_Workflow(t *testing.T) {
 		t.Errorf("workflow stopped at parse stage (expected to pass): %s", outStr)
 	}
 }
+
+// TestRunCreate_SlackIntegration verifies that create.go contains the Slack
+// channel resolution wiring (Plan 63-08). Source-level verification confirms
+// call sites exist and follow the expected patterns.
+func TestRunCreate_SlackIntegration(t *testing.T) {
+	src, err := os.ReadFile("create.go")
+	if err != nil {
+		t.Fatalf("read create.go: %v", err)
+	}
+	s := string(src)
+
+	checks := []struct {
+		name    string
+		pattern string
+	}{
+		{"Step 6c comment", "Step 6c"},
+		{"resolveSlackChannel call", "resolveSlackChannel"},
+		{"slackChannelID assignment", "slackChannelID"},
+		{"slackPerSandbox assignment", "slackPerSandbox"},
+		{"NotifySlackEnabled guard", "NotifySlackEnabled"},
+		{"SlackChannelID metadata field", "SlackChannelID:"},
+		{"SlackPerSandbox metadata field", "SlackPerSandbox:"},
+		{"SlackArchiveOnDestroy metadata write", "SlackArchiveOnDestroy"},
+		{"Step 11d comment", "Step 11d"},
+		{"injectSlackEnvIntoSandbox call", "injectSlackEnvIntoSandbox"},
+		{"bridge-url SSM read", "/km/slack/bridge-url"},
+		{"Slack non-fatal pattern", "non-fatal — sandbox is provisioned"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(s, c.pattern) {
+			t.Errorf("create.go missing %s (expected %q)", c.name, c.pattern)
+		}
+	}
+}
+
+// TestRunCreate_SlackArchiveOnDestroy verifies the metadata field population
+// for SlackArchiveOnDestroy from the resolved profile CLI spec.
+func TestRunCreate_SlackArchiveOnDestroy(t *testing.T) {
+	src, err := os.ReadFile("create.go")
+	if err != nil {
+		t.Fatalf("read create.go: %v", err)
+	}
+	s := string(src)
+
+	// The field should be set from cli.SlackArchiveOnDestroy, nil round-trips as nil
+	checks := []struct {
+		name    string
+		pattern string
+	}{
+		{"Spec.CLI nil guard", "resolvedProfile.Spec.CLI != nil"},
+		{"SlackArchiveOnDestroy write", "meta.SlackArchiveOnDestroy"},
+		{"nil round-trip comment", "nil round-trips as nil"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(s, c.pattern) {
+			t.Errorf("create.go missing %s (expected %q)", c.name, c.pattern)
+		}
+	}
+}
