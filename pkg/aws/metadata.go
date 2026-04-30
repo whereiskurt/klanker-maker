@@ -25,4 +25,12 @@ type SandboxMetadata struct {
 	LockedAt       *time.Time `json:"locked_at,omitempty"`      // when the sandbox was locked
 	TeardownPolicy string     `json:"teardown_policy,omitempty"` // "destroy", "stop", or "retain" — from profile lifecycle
 	ExpiresAt      *time.Time `json:"expires_at,omitempty"`     // display-only expiry (always set when TTL configured, not used by DynamoDB native TTL)
+
+	// Phase 63 — Slack notification metadata.
+	// SlackChannelID is the Slack channel ID (C...) the sandbox posts to.
+	// Empty when notifySlackEnabled was false at create time.
+	SlackChannelID string `json:"slack_channel_id,omitempty"`
+	// SlackPerSandbox indicates the channel was created exclusively for this
+	// sandbox (vs. shared mode). Drives km destroy archive behavior.
+	SlackPerSandbox bool `json:"slack_per_sandbox,omitempty"`
 }

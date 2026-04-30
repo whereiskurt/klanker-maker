@@ -230,6 +230,21 @@ func unmarshalSandboxItem(item map[string]dynamodbtypes.AttributeValue) (*sandbo
 	return d, nil
 }
 
+// unmarshalSlackFields reads Phase 63 Slack fields from a raw DynamoDB item into SandboxMetadata.
+// Called by ReadSandboxMetadataDynamo and ListAllSandboxesByDynamo after toSandboxMetadata().
+func unmarshalSlackFields(item map[string]dynamodbtypes.AttributeValue, meta *SandboxMetadata) {
+	if v, ok := item["slack_channel_id"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			meta.SlackChannelID = sv.Value
+		}
+	}
+	if v, ok := item["slack_per_sandbox"]; ok {
+		if bv, ok := v.(*dynamodbtypes.AttributeValueMemberBOOL); ok {
+			meta.SlackPerSandbox = bv.Value
+		}
+	}
+}
+
 // marshalSandboxItem converts a SandboxMetadata to a raw DynamoDB item map.
 // Manually builds the item to guarantee correct attribute types — in particular:
 //   - ttl_expiry: AttributeValueMemberN (Number, Unix epoch) for DynamoDB TTL
@@ -288,6 +303,14 @@ func marshalSandboxItem(meta *SandboxMetadata) map[string]dynamodbtypes.Attribut
 		}
 	}
 
+	// Phase 63 — Slack notification metadata.
+	if meta.SlackChannelID != "" {
+		item["slack_channel_id"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.SlackChannelID}
+	}
+	if meta.SlackPerSandbox {
+		item["slack_per_sandbox"] = &dynamodbtypes.AttributeValueMemberBOOL{Value: true}
+	}
+
 	return item
 }
 
@@ -321,6 +344,7 @@ func ReadSandboxMetadataDynamo(ctx context.Context, client SandboxMetadataAPI, t
 		return nil, fmt.Errorf("convert sandbox metadata for %s: %w", sandboxID, err)
 	}
 
+	unmarshalSlackFields(out.Item, meta)
 	return meta, nil
 }
 
@@ -384,6 +408,7 @@ func ListAllSandboxesByDynamo(ctx context.Context, client SandboxMetadataAPI, ta
 			if err != nil {
 				continue
 			}
+			unmarshalSlackFields(item, meta)
 			records = append(records, metadataToRecord(meta))
 		}
 

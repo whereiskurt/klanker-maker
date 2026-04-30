@@ -638,6 +638,78 @@ func TestClonedFrom_MetadataToRecordPropagates(t *testing.T) {
 	}
 }
 
+// ---- Phase 63: SlackChannelID / SlackPerSandbox round-trip tests ----
+
+// TestMarshalUnmarshalSlackFields verifies that SlackChannelID and SlackPerSandbox
+// survive a marshal → unmarshal round-trip through the DynamoDB item representation.
+func TestMarshalUnmarshalSlackFields(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	meta := kmaws.SandboxMetadata{
+		SandboxID:       "sb-slack01",
+		ProfileName:     "dev",
+		Substrate:       "ec2",
+		Region:          "us-east-1",
+		Status:          "running",
+		CreatedAt:       now,
+		SlackChannelID:  "C0987654321",
+		SlackPerSandbox: true,
+	}
+
+	// Build the item map and round-trip through ReadSandboxMetadataDynamo.
+	item := mustMarshalSandboxItem(t, meta)
+
+	// Add Slack fields explicitly (mustMarshalSandboxItem does not know about Phase 63 yet).
+	item["slack_channel_id"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.SlackChannelID}
+	item["slack_per_sandbox"] = &dynamodbtypes.AttributeValueMemberBOOL{Value: meta.SlackPerSandbox}
+
+	mock := &mockSandboxMetadataAPI{
+		getItemOutput: &dynamodb.GetItemOutput{Item: item},
+	}
+
+	got, err := kmaws.ReadSandboxMetadataDynamo(context.Background(), mock, "km-sandboxes", "sb-slack01")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.SlackChannelID != "C0987654321" {
+		t.Errorf("SlackChannelID = %q, want %q", got.SlackChannelID, "C0987654321")
+	}
+	if !got.SlackPerSandbox {
+		t.Errorf("SlackPerSandbox = false, want true")
+	}
+}
+
+// TestMarshalSlackFields_OmitWhenEmpty verifies that SlackChannelID and SlackPerSandbox
+// are not included in the DynamoDB item when empty/false.
+func TestMarshalSlackFields_OmitWhenEmpty(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+
+	mock := &mockSandboxMetadataAPI{
+		putItemOutput: &dynamodb.PutItemOutput{},
+	}
+
+	meta := kmaws.SandboxMetadata{
+		SandboxID:   "sb-noslack",
+		ProfileName: "dev",
+		Substrate:   "ec2",
+		Region:      "us-east-1",
+		CreatedAt:   now,
+		// SlackChannelID and SlackPerSandbox intentionally empty/false
+	}
+
+	if err := kmaws.WriteSandboxMetadataDynamo(context.Background(), mock, "km-sandboxes", &meta); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// PutItem captures the item in mock.putItemInput.Item
+	capturedItem := mock.putItemInput.Item
+	if _, ok := capturedItem["slack_channel_id"]; ok {
+		t.Error("slack_channel_id should be omitted when empty")
+	}
+	if _, ok := capturedItem["slack_per_sandbox"]; ok {
+		t.Error("slack_per_sandbox should be omitted when false")
+	}
+}
+
 // ---- Helpers ----
 
 func contains(s, sub string) bool {
