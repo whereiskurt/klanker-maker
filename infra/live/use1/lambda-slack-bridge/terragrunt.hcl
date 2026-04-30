@@ -1,6 +1,6 @@
 locals {
-  repo_root  = dirname(find_in_parent_folders("CLAUDE.md"))
-  site_vars  = read_terragrunt_config("${local.repo_root}/infra/live/site.hcl")
+  repo_root = dirname(find_in_parent_folders("CLAUDE.md"))
+  site_vars = read_terragrunt_config("${local.repo_root}/infra/live/site.hcl")
 
   region_config = read_terragrunt_config("${get_terragrunt_dir()}/../region.hcl")
   region_label  = local.region_config.locals.region_label
@@ -35,31 +35,31 @@ terraform {
 # km-identities: provides Ed25519 public key table (RESEARCH.md correction #1)
 dependency "identities" {
   config_path = "../dynamodb-identities"
-  mock_outputs_allowed_on_destroy = true
   mock_outputs = {
     table_name = "km-identities"
     table_arn  = "arn:aws:dynamodb:us-east-1:000000000000:table/km-identities"
   }
+  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply"]
 }
 
 # km-sandboxes: provides slack_channel_id for channel ownership checks
 dependency "sandboxes" {
   config_path = "../dynamodb-sandboxes"
-  mock_outputs_allowed_on_destroy = true
   mock_outputs = {
     table_name = "km-sandboxes"
     table_arn  = "arn:aws:dynamodb:us-east-1:000000000000:table/km-sandboxes"
   }
+  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply"]
 }
 
 # km-slack-bridge-nonces: provides the replay-protection nonce table
 dependency "nonces" {
   config_path = "../dynamodb-slack-nonces"
-  mock_outputs_allowed_on_destroy = true
   mock_outputs = {
     table_name = "km-slack-bridge-nonces"
     table_arn  = "arn:aws:dynamodb:us-east-1:000000000000:table/km-slack-bridge-nonces"
   }
+  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply"]
 }
 
 inputs = {
