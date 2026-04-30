@@ -432,7 +432,8 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 
 	// Step 3b: Provision operator identity (Ed25519 signing key + DynamoDB public key).
 	// The operator inbox needs an identity so km email send --from operator sends signed emails.
-	// Uses sandbox_id="operator" as the identity key. Idempotent — PutParameter overwrites, PublishIdentity skips if exists.
+	// Uses sandbox_id="operator" as the identity key. EnsureSandboxIdentity returns the
+	// existing public key on re-runs (avoids drifting SSM private vs DynamoDB public).
 	{
 		fmt.Println()
 		fmt.Println("Ensuring operator email identity...")
@@ -442,7 +443,7 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 			kmsKeyAlias = "alias/km-platform"
 		}
 		operatorID := "operator"
-		pubKey, identErr := awspkg.GenerateSandboxIdentity(ctx, ssmClient, operatorID, kmsKeyAlias)
+		pubKey, identErr := awspkg.EnsureSandboxIdentity(ctx, ssmClient, operatorID, kmsKeyAlias)
 		if identErr != nil {
 			fmt.Printf("  ⚠ Operator identity key generation failed: %v\n", identErr)
 		} else {

@@ -6,6 +6,7 @@
 package aws_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -204,6 +205,49 @@ func TestIdentity_GenerateSandboxIdentity_PublicKey32Bytes(t *testing.T) {
 	pubKey, err := kmaws.GenerateSandboxIdentity(context.Background(), mockSSM, "sb-test02", "alias/km-key")
 	if err != nil {
 		t.Fatalf("GenerateSandboxIdentity returned error: %v", err)
+	}
+	if len(pubKey) != ed25519.PublicKeySize {
+		t.Errorf("public key length = %d; want 32", len(pubKey))
+	}
+}
+
+// ============================================================
+// EnsureSandboxIdentity tests
+// ============================================================
+
+func TestIdentity_EnsureSandboxIdentity_ExistingKey_ReturnsDerivedPublic(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	mockSSM := &mockIdentitySSMAPI{
+		getParameterValue: base64.StdEncoding.EncodeToString(priv),
+	}
+	gotPub, err := kmaws.EnsureSandboxIdentity(context.Background(), mockSSM, "operator", "alias/km-key")
+	if err != nil {
+		t.Fatalf("EnsureSandboxIdentity returned error: %v", err)
+	}
+	if mockSSM.putParameterCalled {
+		t.Error("expected PutParameter NOT to be called when SSM key already exists")
+	}
+	if !bytes.Equal(gotPub, pub) {
+		t.Errorf("public key drift: got != generated")
+	}
+	if mockSSM.getParameterInput == nil || aws.ToString(mockSSM.getParameterInput.Name) != "/sandbox/operator/signing-key" {
+		t.Errorf("unexpected GetParameter path: %v", mockSSM.getParameterInput)
+	}
+}
+
+func TestIdentity_EnsureSandboxIdentity_NotFound_GeneratesNew(t *testing.T) {
+	mockSSM := &mockIdentitySSMAPI{
+		getParameterErr: &ssmtypes.ParameterNotFound{},
+	}
+	pubKey, err := kmaws.EnsureSandboxIdentity(context.Background(), mockSSM, "operator", "alias/km-key")
+	if err != nil {
+		t.Fatalf("EnsureSandboxIdentity returned error: %v", err)
+	}
+	if !mockSSM.putParameterCalled {
+		t.Error("expected PutParameter to be called when SSM key does not exist")
 	}
 	if len(pubKey) != ed25519.PublicKeySize {
 		t.Errorf("public key length = %d; want 32", len(pubKey))

@@ -131,6 +131,43 @@ func GenerateSandboxIdentity(ctx context.Context, ssmClient IdentitySSMAPI, sand
 	return pub, nil
 }
 
+// EnsureSandboxIdentity returns the public key for an existing SSM signing-key,
+// or generates a new key pair if none exists. Idempotent across multiple calls
+// — safe for `km init` step 3b which re-runs on every platform init.
+//
+// Behavior:
+//   - SSM has signing key → derive and return public key from existing private key
+//   - SSM has no key → call GenerateSandboxIdentity (generates + stores)
+//
+// Why this exists: GenerateSandboxIdentity unconditionally rotates the SSM key.
+// Pairing it with PublishIdentity (which uses attribute_not_exists) silently drifts
+// the SSM private key away from the published DynamoDB public key on re-runs.
+func EnsureSandboxIdentity(ctx context.Context, ssmClient IdentitySSMAPI, sandboxID, kmsKeyID string) (ed25519.PublicKey, error) {
+	keyPath := signingKeyPath(sandboxID)
+	out, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           awssdk.String(keyPath),
+		WithDecryption: awssdk.Bool(true),
+	})
+	if err != nil {
+		var notFound *ssmtypes.ParameterNotFound
+		if errors.As(err, &notFound) {
+			return GenerateSandboxIdentity(ctx, ssmClient, sandboxID, kmsKeyID)
+		}
+		return nil, fmt.Errorf("get signing key from SSM at %s: %w", keyPath, err)
+	}
+	if out.Parameter == nil || out.Parameter.Value == nil {
+		return GenerateSandboxIdentity(ctx, ssmClient, sandboxID, kmsKeyID)
+	}
+	raw, err := base64.StdEncoding.DecodeString(*out.Parameter.Value)
+	if err != nil {
+		return nil, fmt.Errorf("decode signing key at %s: %w", keyPath, err)
+	}
+	if len(raw) != ed25519.PrivateKeySize {
+		return nil, fmt.Errorf("signing key at %s has wrong length: got %d bytes, want %d", keyPath, len(raw), ed25519.PrivateKeySize)
+	}
+	return ed25519.PrivateKey(raw).Public().(ed25519.PublicKey), nil
+}
+
 // GenerateEncryptionKey generates an X25519 (NaCl box) key pair and stores the private key
 // in SSM Parameter Store at /sandbox/{sandboxID}/encryption-key.
 //
