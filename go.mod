@@ -7,7 +7,9 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.12
 	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.20.36
+	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.50.4
 	github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.64.1
+	github.com/aws/aws-sdk-go-v2/service/costexplorer v1.63.6
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.57.0
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.296.0
 	github.com/aws/aws-sdk-go-v2/service/ecs v1.74.0
@@ -39,6 +41,7 @@ require (
 	github.com/vishvananda/netlink v1.3.1
 	go.opentelemetry.io/otel v1.42.0
 	golang.org/x/crypto v0.49.0
+	golang.org/x/net v0.51.0
 	golang.org/x/sys v0.43.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -52,8 +55,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.21 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/ini v1.8.6 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.21 // indirect
-	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.50.4 // indirect
-	github.com/aws/aws-sdk-go-v2/service/costexplorer v1.63.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/dynamodbstreams v1.32.13 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.7 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.12 // indirect
@@ -93,9 +94,7 @@ require (
 	go.uber.org/multierr v1.9.0 // indirect
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect
 	golang.org/x/mod v0.33.0 // indirect
-	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/term v0.42.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 	golang.org/x/tools v0.42.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect

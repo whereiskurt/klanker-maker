@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"io"
@@ -33,6 +34,7 @@ import (
 	"github.com/whereiskurt/klankrmkr/pkg/lifecycle"
 	"github.com/whereiskurt/klankrmkr/pkg/localnumber"
 	profilepkg "github.com/whereiskurt/klankrmkr/pkg/profile"
+	slackpkg "github.com/whereiskurt/klankrmkr/pkg/slack"
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
 )
 
@@ -452,11 +454,24 @@ locals {
 			tableName = "km-sandboxes"
 		}
 		dynamoClientDel := dynamodbpkg.NewFromConfig(awsCfg)
-		// Read existing metadata to check for alias — non-fatal if read fails.
+		// Read existing metadata to check for alias AND for Slack teardown — non-fatal if read fails.
 		if existingMeta, readErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClientDel, tableName, sandboxID); readErr == nil {
 			if existingMeta.Alias != "" {
 				fmt.Printf("Alias freed: %s\n", existingMeta.Alias)
 			}
+			// Phase 63 — per-sandbox Slack archive flow. Reads SlackArchiveOnDestroy from
+			// the metadata record (populated by km create per Plan 63-08). Non-fatal: destroy
+			// has already succeeded; Slack failures are WARN-logged and never block teardown.
+			slackSSMClient := ssm.NewFromConfig(awsCfg)
+			slackSSMStore := &productionSSMParamStore{client: slackSSMClient}
+			slackRegion := awsCfg.Region
+			if slackRegion == "" {
+				slackRegion = "us-east-1"
+			}
+			slackKeyLoader := PrivKeyLoaderFunc(func(innerCtx context.Context, _ string) (ed25519.PrivateKey, error) {
+				return loadSlackOperatorKey(innerCtx, slackSSMClient)
+			})
+			_ = destroySlackChannel(ctx, existingMeta, slackRegion, slackSSMStore, slackKeyLoader, BridgePosterFunc(slackpkg.PostToBridge))
 		} else {
 			// S3 fallback for alias read.
 			stateBucketForAlias := cfg.StateBucket

@@ -710,6 +710,112 @@ func TestMarshalSlackFields_OmitWhenEmpty(t *testing.T) {
 	}
 }
 
+// ---- Phase 63-09: SlackArchiveOnDestroy round-trip tests ----
+
+// TestSlackArchiveOnDestroy_NilRoundTrip verifies that a nil SlackArchiveOnDestroy
+// is preserved after a marshal → unmarshal round-trip (field absent from DynamoDB item).
+func TestSlackArchiveOnDestroy_NilRoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	meta := &kmaws.SandboxMetadata{
+		SandboxID:            "sb-arch01",
+		ProfileName:          "dev",
+		Substrate:            "ec2",
+		Region:               "us-east-1",
+		CreatedAt:            now,
+		SlackChannelID:       "C0111",
+		SlackPerSandbox:      true,
+		SlackArchiveOnDestroy: nil, // default: archive
+	}
+
+	if err := kmaws.WriteSandboxMetadataDynamo(context.Background(), &mockSandboxMetadataAPI{
+		putItemOutput: &dynamodb.PutItemOutput{},
+	}, "km-sandboxes", meta); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// nil pointer → field must be ABSENT from the item (omitempty semantics)
+	item := mustMarshalSandboxItemFull(t, meta)
+	if _, ok := item["slack_archive_on_destroy"]; ok {
+		t.Error("slack_archive_on_destroy should be omitted when nil")
+	}
+}
+
+// TestSlackArchiveOnDestroy_TrueRoundTrip verifies that &true survives marshal → unmarshal.
+func TestSlackArchiveOnDestroy_TrueRoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	tru := true
+	meta := &kmaws.SandboxMetadata{
+		SandboxID:            "sb-arch02",
+		ProfileName:          "dev",
+		Substrate:            "ec2",
+		Region:               "us-east-1",
+		CreatedAt:            now,
+		SlackChannelID:       "C0222",
+		SlackPerSandbox:      true,
+		SlackArchiveOnDestroy: &tru,
+	}
+
+	item := mustMarshalSandboxItemFull(t, meta)
+
+	mock := &mockSandboxMetadataAPI{
+		getItemOutput: &dynamodb.GetItemOutput{Item: item},
+	}
+	got, err := kmaws.ReadSandboxMetadataDynamo(context.Background(), mock, "km-sandboxes", "sb-arch02")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got.SlackArchiveOnDestroy == nil {
+		t.Fatal("SlackArchiveOnDestroy: got nil, want &true")
+	}
+	if !*got.SlackArchiveOnDestroy {
+		t.Errorf("SlackArchiveOnDestroy: got &false, want &true")
+	}
+}
+
+// TestSlackArchiveOnDestroy_FalseRoundTrip verifies that &false survives marshal → unmarshal.
+func TestSlackArchiveOnDestroy_FalseRoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	fls := false
+	meta := &kmaws.SandboxMetadata{
+		SandboxID:            "sb-arch03",
+		ProfileName:          "dev",
+		Substrate:            "ec2",
+		Region:               "us-east-1",
+		CreatedAt:            now,
+		SlackChannelID:       "C0333",
+		SlackPerSandbox:      true,
+		SlackArchiveOnDestroy: &fls,
+	}
+
+	item := mustMarshalSandboxItemFull(t, meta)
+
+	mock := &mockSandboxMetadataAPI{
+		getItemOutput: &dynamodb.GetItemOutput{Item: item},
+	}
+	got, err := kmaws.ReadSandboxMetadataDynamo(context.Background(), mock, "km-sandboxes", "sb-arch03")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got.SlackArchiveOnDestroy == nil {
+		t.Fatal("SlackArchiveOnDestroy: got nil, want &false")
+	}
+	if *got.SlackArchiveOnDestroy {
+		t.Errorf("SlackArchiveOnDestroy: got &true, want &false")
+	}
+}
+
+// mustMarshalSandboxItemFull calls the real marshalSandboxItem exported function via
+// WriteSandboxMetadataDynamo so we can capture the item map.
+// It uses the existing mock and reads back the captured item from PutItem.
+func mustMarshalSandboxItemFull(t *testing.T, meta *kmaws.SandboxMetadata) map[string]dynamodbtypes.AttributeValue {
+	t.Helper()
+	m := &mockSandboxMetadataAPI{putItemOutput: &dynamodb.PutItemOutput{}}
+	if err := kmaws.WriteSandboxMetadataDynamo(context.Background(), m, "km-sandboxes", meta); err != nil {
+		t.Fatalf("mustMarshalSandboxItemFull write: %v", err)
+	}
+	return m.putItemInput.Item
+}
+
 // ---- Helpers ----
 
 func contains(s, sub string) bool {
