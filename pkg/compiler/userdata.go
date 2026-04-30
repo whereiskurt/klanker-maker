@@ -479,6 +479,7 @@ KM_ARTIFACTS_BUCKET="{{ .KMArtifactsBucket }}"
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/dns-proxy" /opt/km/bin/km-dns-proxy
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/http-proxy" /opt/km/bin/km-http-proxy
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/audit-log" /opt/km/bin/km-audit-log
+aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-slack" /opt/km/bin/km-slack
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/tracing/config.yaml" /etc/km/tracing/config.yaml
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/otelcol-contrib" /opt/km/bin/otelcol-contrib
 chmod +x /opt/km/bin/km-*

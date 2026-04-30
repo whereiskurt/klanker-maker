@@ -87,10 +87,12 @@ sidecars: fetch-otelcol
 	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -ldflags '$(LDFLAGS)' -o build/http-proxy ./sidecars/http-proxy/
 	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -ldflags '$(LDFLAGS)' -o build/audit-log ./sidecars/audit-log/cmd/
 	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -ldflags '$(LDFLAGS)' -o build/km-linux ./cmd/km/
+	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -trimpath -ldflags '-s -w' -o build/km-slack ./cmd/km-slack/
 	aws s3 cp build/dns-proxy  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/dns-proxy
 	aws s3 cp build/http-proxy s3://$(KM_ARTIFACTS_BUCKET)/sidecars/http-proxy
 	aws s3 cp build/audit-log  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/audit-log
 	aws s3 cp build/km-linux   s3://$(KM_ARTIFACTS_BUCKET)/sidecars/km
+	aws s3 cp build/km-slack   s3://$(KM_ARTIFACTS_BUCKET)/sidecars/km-slack
 	aws s3 cp build/otelcol-contrib s3://$(KM_ARTIFACTS_BUCKET)/sidecars/otelcol-contrib
 	aws s3 cp sidecars/tracing/config.yaml s3://$(KM_ARTIFACTS_BUCKET)/sidecars/tracing/config.yaml
 	@echo ""
@@ -99,6 +101,7 @@ sidecars: fetch-otelcol
 	@echo "  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/http-proxy"
 	@echo "  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/audit-log"
 	@echo "  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/km"
+	@echo "  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/km-slack"
 	@echo "  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/otelcol-contrib"
 	@echo "  s3://$(KM_ARTIFACTS_BUCKET)/sidecars/tracing/config.yaml"
 
@@ -121,6 +124,7 @@ build-sidecars:
 	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -ldflags '$(LDFLAGS)' -o build/dns-proxy ./sidecars/dns-proxy/
 	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -ldflags '$(LDFLAGS)' -o build/http-proxy ./sidecars/http-proxy/
 	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -ldflags '$(LDFLAGS)' -o build/audit-log ./sidecars/audit-log/cmd/
+	GOOS=$(GOOS) GOARCH=$(GOARCH) CGO_ENABLED=$(CGO_ENABLED) go build -trimpath -ldflags '-s -w' -o build/km-slack ./cmd/km-slack/
 
 ## ecr-login: authenticate Docker daemon to ECR
 ecr-login:

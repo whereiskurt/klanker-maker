@@ -1005,6 +1005,7 @@ func buildAndUploadSidecars(repoRoot, bucket string) error {
 		{name: "dns-proxy", srcDir: "sidecars/dns-proxy"},
 		{name: "http-proxy", srcDir: "sidecars/http-proxy"},
 		{name: "audit-log", srcDir: "sidecars/audit-log/cmd"},
+		{name: "km-slack", srcDir: "cmd/km-slack"},
 	}
 
 	// Build and upload km binary for EC2 instances (linux/amd64).
