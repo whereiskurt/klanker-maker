@@ -415,13 +415,33 @@ body_file=$(mktemp /tmp/km-notify-body.XXXXXX)
   echo "Results: km agent results $sandbox_id"
 } > "$body_file"
 
-# 6. Send. Failure does not propagate (hook always exits 0).
-to_args=()
-[[ -n "${KM_NOTIFY_EMAIL:-}" ]] && to_args=(--to "$KM_NOTIFY_EMAIL")
-if /opt/km/bin/km-send ${to_args[@]+"${to_args[@]}"} --subject "$subject" --body "$body_file"; then
-  # 7. Update cooldown timestamp on success only.
-  date +%s > "$last_file"
+# 6. Multi-channel dispatch (Phase 63). Failure does not propagate (hook always exits 0).
+# sent_any=1 when at least one channel succeeded — controls cooldown update below.
+sent_any=0
+
+# 6a. Email branch (default enabled via :-1 so Phase 62 profiles without
+#     KM_NOTIFY_EMAIL_ENABLED behave identically to Phase 62).
+if [[ "${KM_NOTIFY_EMAIL_ENABLED:-1}" == "1" ]]; then
+  to_args=()
+  [[ -n "${KM_NOTIFY_EMAIL:-}" ]] && to_args=(--to "$KM_NOTIFY_EMAIL")
+  if /opt/km/bin/km-send ${to_args[@]+"${to_args[@]}"} --subject "$subject" --body "$body_file"; then
+    sent_any=1
+  fi
 fi
+
+# 6b. Slack branch. Gated on both the enabled flag AND a non-empty channel ID
+#     (defensive: never call km-slack with an empty --channel even if enabled=1).
+if [[ "${KM_NOTIFY_SLACK_ENABLED:-0}" == "1" && -n "${KM_SLACK_CHANNEL_ID:-}" ]]; then
+  if /opt/km/bin/km-slack post \
+       --channel "$KM_SLACK_CHANNEL_ID" \
+       --subject "$subject" \
+       --body "$body_file"; then
+    sent_any=1
+  fi
+fi
+
+# 7. Update cooldown timestamp iff at least one channel succeeded.
+[[ $sent_any -eq 1 ]] && date +%s > "$last_file"
 
 rm -f "$body_file"
 exit 0
@@ -2440,6 +2460,23 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		if p.Spec.CLI.NotificationEmailAddress != "" {
 			notifyEnv["KM_NOTIFY_EMAIL"] = p.Spec.CLI.NotificationEmailAddress
 		}
+		// Phase 63 — Slack-related env keys. *bool pointer semantics: nil = unset
+		// (don't emit the env var; the hook's :-default takes effect for Phase 62 compat).
+		// Non-nil = emit KEY=0|1.
+		if p.Spec.CLI.NotifyEmailEnabled != nil {
+			notifyEnv["KM_NOTIFY_EMAIL_ENABLED"] = boolToZeroOne(*p.Spec.CLI.NotifyEmailEnabled)
+		}
+		if p.Spec.CLI.NotifySlackEnabled != nil {
+			notifyEnv["KM_NOTIFY_SLACK_ENABLED"] = boolToZeroOne(*p.Spec.CLI.NotifySlackEnabled)
+		}
+		// Compile-time channel pinning via NotifySlackChannelOverride. If unset,
+		// Plan 08 (km create) injects KM_SLACK_CHANNEL_ID and KM_SLACK_BRIDGE_URL
+		// at runtime by appending to /etc/profile.d/km-notify-env.sh post-launch.
+		if p.Spec.CLI.NotifySlackChannelOverride != "" {
+			notifyEnv["KM_SLACK_CHANNEL_ID"] = p.Spec.CLI.NotifySlackChannelOverride
+		}
+		// KM_SLACK_BRIDGE_URL is intentionally NOT emitted at compile time —
+		// it requires a runtime SSM lookup of /km/slack/bridge-url. See Plan 08.
 		params.NotifyEnv = notifyEnv
 	}
 

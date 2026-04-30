@@ -335,3 +335,217 @@ func TestUserDataNotifySettingsJSON_InvalidUserJSON_FailsFast(t *testing.T) {
 		t.Errorf("error message should mention settings.json, got %q", err.Error())
 	}
 }
+
+// ============================================================
+// Phase 63 (Plan 04): sent_any dispatch + Slack env var tests
+// ============================================================
+
+// profileWithSlack is a test helper that builds a minimal profile with Slack fields set.
+// emailEnabled / slackEnabled are *bool (nil = not set). channelOverride is optional.
+func profileWithSlack(slackEnabled *bool, emailEnabled *bool, channelOverride string) *profile.SandboxProfile {
+	p := baseProfile()
+	p.Spec.CLI = &profile.CLISpec{
+		NotifyOnPermission:         true,
+		NotifySlackEnabled:         slackEnabled,
+		NotifyEmailEnabled:         emailEnabled,
+		NotifySlackChannelOverride: channelOverride,
+	}
+	return p
+}
+
+// TestUserDataNotifyHook_HasSentAnyDispatch verifies that the km-notify-hook heredoc
+// contains the sent_any multi-channel dispatch pattern (Phase 63 Plan 04).
+func TestUserDataNotifyHook_HasSentAnyDispatch(t *testing.T) {
+	p := baseProfile()
+	ud, err := generateUserData(p, "sb-test-p63-01", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"sent_any=0",
+		`KM_NOTIFY_EMAIL_ENABLED:-1`,
+		`KM_NOTIFY_SLACK_ENABLED:-0`,
+		`[[ $sent_any -eq 1 ]]`,
+		"/opt/km/bin/km-slack post",
+	} {
+		if !strings.Contains(ud, want) {
+			t.Errorf("missing %q in user-data heredoc", want)
+		}
+	}
+}
+
+// TestUserDataNotifyEnv_SlackEnabledTrue verifies that notifySlackEnabled: true
+// emits KM_NOTIFY_SLACK_ENABLED="1" in the env file.
+func TestUserDataNotifyEnv_SlackEnabledTrue(t *testing.T) {
+	tru := true
+	p := profileWithSlack(&tru, nil, "")
+	ud, err := generateUserData(p, "sb-test-p63-02", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ud, `KM_NOTIFY_SLACK_ENABLED="1"`) {
+		t.Errorf("expected KM_NOTIFY_SLACK_ENABLED=\"1\" in user-data")
+	}
+	if !strings.Contains(ud, "/etc/profile.d/km-notify-env.sh") {
+		t.Errorf("expected /etc/profile.d/km-notify-env.sh to be referenced")
+	}
+}
+
+// TestUserDataNotifyEnv_SlackEnabledFalse verifies that notifySlackEnabled: false
+// (explicit) emits KM_NOTIFY_SLACK_ENABLED="0".
+func TestUserDataNotifyEnv_SlackEnabledFalse(t *testing.T) {
+	fal := false
+	p := profileWithSlack(&fal, nil, "")
+	ud, err := generateUserData(p, "sb-test-p63-03", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ud, `KM_NOTIFY_SLACK_ENABLED="0"`) {
+		t.Errorf("expected KM_NOTIFY_SLACK_ENABLED=\"0\" in user-data")
+	}
+}
+
+// TestUserDataNotifyEnv_SlackEnabledNilPointer verifies that when notifySlackEnabled
+// is omitted from the profile (nil pointer), the env file does NOT contain
+// KM_NOTIFY_SLACK_ENABLED — hook uses its :-0 default (Phase 62 backward compat).
+// Same expectation for KM_NOTIFY_EMAIL_ENABLED when notifyEmailEnabled is nil.
+func TestUserDataNotifyEnv_SlackEnabledNilPointer(t *testing.T) {
+	p := profileWithSlack(nil, nil, "") // both nil
+	ud, err := generateUserData(p, "sb-test-p63-04", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(ud, "KM_NOTIFY_SLACK_ENABLED=") {
+		t.Errorf("user-data should NOT contain KM_NOTIFY_SLACK_ENABLED when notifySlackEnabled is nil")
+	}
+	if strings.Contains(ud, "KM_NOTIFY_EMAIL_ENABLED=") {
+		t.Errorf("user-data should NOT contain KM_NOTIFY_EMAIL_ENABLED when notifyEmailEnabled is nil")
+	}
+}
+
+// TestUserDataNotifyEnv_EmailEnabledFalse verifies that notifyEmailEnabled: false
+// emits KM_NOTIFY_EMAIL_ENABLED="0" in the env file.
+func TestUserDataNotifyEnv_EmailEnabledFalse(t *testing.T) {
+	fal := false
+	p := profileWithSlack(nil, &fal, "")
+	ud, err := generateUserData(p, "sb-test-p63-05", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ud, `KM_NOTIFY_EMAIL_ENABLED="0"`) {
+		t.Errorf("expected KM_NOTIFY_EMAIL_ENABLED=\"0\" in user-data")
+	}
+}
+
+// TestUserDataNotifyEnv_ChannelOverrideBaked verifies that notifySlackChannelOverride
+// bakes KM_SLACK_CHANNEL_ID into the env file at compile time.
+func TestUserDataNotifyEnv_ChannelOverrideBaked(t *testing.T) {
+	tru := true
+	p := profileWithSlack(&tru, nil, "C0123ABC")
+	ud, err := generateUserData(p, "sb-test-p63-06", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ud, `KM_SLACK_CHANNEL_ID="C0123ABC"`) {
+		t.Errorf("expected KM_SLACK_CHANNEL_ID=\"C0123ABC\" in user-data")
+	}
+}
+
+// TestUserDataNotifyEnv_NoChannelOverride_NoChannelID verifies that when no
+// notifySlackChannelOverride is set, KM_SLACK_CHANNEL_ID is NOT emitted in the
+// env file at compile time (Plan 08 injects it at runtime).
+func TestUserDataNotifyEnv_NoChannelOverride_NoChannelID(t *testing.T) {
+	tru := true
+	p := profileWithSlack(&tru, nil, "") // enabled but no override
+	ud, err := generateUserData(p, "sb-test-p63-07", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(ud, `KM_SLACK_CHANNEL_ID=`) {
+		t.Errorf("user-data should NOT contain KM_SLACK_CHANNEL_ID when notifySlackChannelOverride is empty")
+	}
+}
+
+// TestUserDataNotifyEnv_BridgeURLNeverEmittedAtCompileTime verifies that
+// KM_SLACK_BRIDGE_URL is never written to the env file at compile time —
+// it requires a runtime SSM lookup performed by Plan 08 km create.
+func TestUserDataNotifyEnv_BridgeURLNeverEmittedAtCompileTime(t *testing.T) {
+	tru := true
+	p := profileWithSlack(&tru, nil, "C0123ABC")
+	ud, err := generateUserData(p, "sb-test-p63-08", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(ud, `KM_SLACK_BRIDGE_URL=`) {
+		t.Errorf("user-data must NOT contain KM_SLACK_BRIDGE_URL at compile time (Plan 08 injects at runtime)")
+	}
+}
+
+// TestUserDataNotifyHook_Phase62Profile_NoRegression verifies that a profile
+// using only Phase 62 fields (no Slack fields) produces an env file with no
+// KM_SLACK_* entries — Phase 62 backward compatibility end-to-end.
+func TestUserDataNotifyHook_Phase62Profile_NoRegression(t *testing.T) {
+	p := baseProfile()
+	p.Spec.CLI = &profile.CLISpec{
+		NotifyOnPermission:       true,
+		NotifyOnIdle:             true,
+		NotifyCooldownSeconds:    60,
+		NotificationEmailAddress: "ops@example.com",
+		// No Slack fields — all nil/zero
+	}
+	ud, err := generateUserData(p, "sb-test-p63-09", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The env file section must not contain any Slack keys.
+	// The heredoc itself references KM_SLACK_CHANNEL_ID as a runtime var; we need
+	// to check only the env file emission block. A simple grep for the assignment
+	// form KEY="..." is sufficient because runtime references use ${...} form.
+	if strings.Contains(ud, `KM_NOTIFY_SLACK_ENABLED="`) {
+		t.Errorf("Phase 62 profile must not emit KM_NOTIFY_SLACK_ENABLED in env file")
+	}
+	if strings.Contains(ud, `KM_NOTIFY_EMAIL_ENABLED="`) {
+		t.Errorf("Phase 62 profile must not emit KM_NOTIFY_EMAIL_ENABLED in env file")
+	}
+	if strings.Contains(ud, `KM_SLACK_CHANNEL_ID="`) {
+		t.Errorf("Phase 62 profile must not emit KM_SLACK_CHANNEL_ID in env file")
+	}
+	if strings.Contains(ud, `KM_SLACK_BRIDGE_URL="`) {
+		t.Errorf("Phase 62 profile must not emit KM_SLACK_BRIDGE_URL in env file")
+	}
+	// Phase 62 fields still present.
+	if !strings.Contains(ud, `KM_NOTIFY_ON_PERMISSION="1"`) {
+		t.Errorf("Phase 62 KM_NOTIFY_ON_PERMISSION should still be emitted")
+	}
+	if !strings.Contains(ud, `KM_NOTIFY_EMAIL="ops@example.com"`) {
+		t.Errorf("Phase 62 KM_NOTIFY_EMAIL should still be emitted")
+	}
+}
+
+// TestUserDataNotifyHook_HookScriptStillExitsZero verifies that the km-notify-hook
+// heredoc always ends with exit 0 (Phase 62 HOOK-05 invariant: hook never blocks Claude).
+func TestUserDataNotifyHook_HookScriptStillExitsZero(t *testing.T) {
+	p := baseProfile()
+	ud, err := generateUserData(p, "sb-test-p63-10", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Find the heredoc body between the open and close delimiters.
+	startMarker := "cat > /opt/km/bin/km-notify-hook << 'KM_NOTIFY_HOOK_EOF'"
+	endMarker := "KM_NOTIFY_HOOK_EOF"
+	startIdx := strings.Index(ud, startMarker)
+	if startIdx < 0 {
+		t.Fatal("km-notify-hook heredoc open not found")
+	}
+	afterOpen := ud[startIdx+len(startMarker):]
+	closeIdx := strings.Index(afterOpen, endMarker)
+	if closeIdx < 0 {
+		t.Fatal("km-notify-hook heredoc close not found")
+	}
+	heredocBody := strings.TrimSpace(afterOpen[:closeIdx])
+	lines := strings.Split(heredocBody, "\n")
+	lastLine := strings.TrimSpace(lines[len(lines)-1])
+	if lastLine != "exit 0" {
+		t.Errorf("last line of km-notify-hook heredoc = %q, want \"exit 0\"", lastLine)
+	}
+}
