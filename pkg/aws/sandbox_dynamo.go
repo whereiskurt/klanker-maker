@@ -432,6 +432,48 @@ func ListAllSandboxesByDynamo(ctx context.Context, client SandboxMetadataAPI, ta
 	return records, nil
 }
 
+// ListAllSandboxMetadataDynamo scans the km-sandbox-metadata table and returns
+// all records as the richer SandboxMetadata type (preserving Slack fields that
+// SandboxRecord does not carry). Used by Plan 63-09 doctor Slack checks.
+func ListAllSandboxMetadataDynamo(ctx context.Context, client SandboxMetadataAPI, tableName string) ([]SandboxMetadata, error) {
+	var metas []SandboxMetadata
+	var lastKey map[string]dynamodbtypes.AttributeValue
+
+	for {
+		input := &dynamodb.ScanInput{
+			TableName: awssdk.String(tableName),
+		}
+		if len(lastKey) > 0 {
+			input.ExclusiveStartKey = lastKey
+		}
+
+		out, err := client.Scan(ctx, input)
+		if err != nil {
+			return nil, fmt.Errorf("scan sandbox metadata table %s: %w", tableName, err)
+		}
+
+		for _, item := range out.Items {
+			d, err := unmarshalSandboxItem(item)
+			if err != nil {
+				continue
+			}
+			meta, err := d.toSandboxMetadata()
+			if err != nil {
+				continue
+			}
+			unmarshalSlackFields(item, meta)
+			metas = append(metas, *meta)
+		}
+
+		if len(out.LastEvaluatedKey) == 0 {
+			break
+		}
+		lastKey = out.LastEvaluatedKey
+	}
+
+	return metas, nil
+}
+
 // ResolveSandboxAliasDynamo queries the alias-index GSI for O(1) alias resolution.
 // Returns the sandbox_id of the matching sandbox, or an error if not found.
 func ResolveSandboxAliasDynamo(ctx context.Context, client SandboxMetadataAPI, tableName, alias string) (string, error) {

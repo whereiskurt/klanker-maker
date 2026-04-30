@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +36,7 @@ import (
 	appcfg "github.com/whereiskurt/klankrmkr/internal/app/config"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 	profilepkg "github.com/whereiskurt/klankrmkr/pkg/profile"
+	slackpkg "github.com/whereiskurt/klankrmkr/pkg/slack"
 )
 
 // CheckStatus is the result classification for a single doctor check.
@@ -215,6 +217,13 @@ type DoctorDeps struct {
 	// AllRegions controls whether regional checks run against all configured regions
 	// (PrimaryRegion + KM_REPLICA_REGION CSV) or only the primary region.
 	AllRegions bool
+	// Slack health check dependencies (Plan 63-09).
+	// Nil fields cause the corresponding Slack checks to be skipped without error.
+	SlackSSMStore   SSMParamStore          // SSM store for /km/slack/* params
+	SlackRegion     string                 // AWS region used to load the signing key
+	SlackKeyLoader  PrivKeyLoaderFunc      // loads the operator Ed25519 signing key
+	SlackScanner    SlackMetadataScanner   // scans DynamoDB for Slack-enabled sandboxes
+	SlackEC2Lister  EC2InstanceLister      // checks whether a sandbox EC2 instance exists
 }
 
 // =============================================================================
@@ -1948,6 +1957,47 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkPinnedVersions()
 	})
 
+	// Slack health checks (Plan 63-09).
+	// Failures are non-blocking: Slack errors produce WARN/SKIPPED, never ERROR that
+	// would imply a broken platform.  Both checks are skipped when their deps are nil.
+	slackSSMStore := deps.SlackSSMStore
+	slackRegion := deps.SlackRegion
+	slackKeyLoader := deps.SlackKeyLoader
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		if slackSSMStore == nil || slackKeyLoader == nil {
+			return CheckResult{
+				Name:    "Slack bot token",
+				Status:  CheckSkipped,
+				Message: "Slack SSM client not available",
+			}
+		}
+		r := checkSlackTokenValidity(ctx, slackSSMStore, slackRegion,
+			slackKeyLoader, slackpkg.PostToBridge)
+		// Demote ERROR to WARN so Slack issues never fail km doctor.
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
+	slackScanner := deps.SlackScanner
+	slackEC2Lister := deps.SlackEC2Lister
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		if slackScanner == nil || slackEC2Lister == nil {
+			return CheckResult{
+				Name:    "Stale Slack channels",
+				Status:  CheckSkipped,
+				Message: "Slack scanner or EC2 lister not available",
+			}
+		}
+		r := checkStaleSlackChannels(ctx, slackScanner, slackEC2Lister)
+		// Demote ERROR to WARN so Slack issues never fail km doctor.
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
 	return checks
 }
 
@@ -2086,6 +2136,23 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 		}
 	}
 
+	// Slack health check deps (Plan 63-09).
+	// Wire in the SSM store, key loader, metadata scanner, and EC2 lister.
+	// All are non-fatal: if any client fails to build the check is skipped.
+	ssmClientForSlack := ssm.NewFromConfig(awsCfg)
+	deps.SlackSSMStore = &productionSSMParamStore{client: ssmClientForSlack}
+	deps.SlackRegion = primaryRegion
+	deps.SlackKeyLoader = PrivKeyLoaderFunc(func(innerCtx context.Context, _ string) (ed25519.PrivateKey, error) {
+		return loadSlackOperatorKey(innerCtx, ssmClientForSlack)
+	})
+	deps.SlackScanner = &doctorSlackMetadataScanner{
+		client:    dynamodb.NewFromConfig(awsCfg),
+		tableName: "km-sandbox-metadata",
+	}
+	deps.SlackEC2Lister = &doctorEC2InstanceLister{
+		client: ec2.NewFromConfig(awsCfg),
+	}
+
 	return deps
 }
 
@@ -2170,4 +2237,56 @@ func checkPinnedVersions() CheckResult {
 // initRealDeps creates real AWS clients from configuration (backward-compatible wrapper).
 func initRealDeps(ctx context.Context, cfg DoctorConfigProvider) *DoctorDeps {
 	return initRealDepsWithExisting(ctx, cfg, &DoctorDeps{})
+}
+
+// =============================================================================
+// Slack health check production implementations (Plan 63-09)
+// =============================================================================
+
+// doctorSlackMetadataScanner implements SlackMetadataScanner against the
+// km-sandbox-metadata DynamoDB table. Returns only records that have Slack enabled.
+type doctorSlackMetadataScanner struct {
+	client    kmaws.SandboxMetadataAPI
+	tableName string
+}
+
+func (s *doctorSlackMetadataScanner) ListSlackEnabled(ctx context.Context) ([]kmaws.SandboxMetadata, error) {
+	records, err := kmaws.ListAllSandboxMetadataDynamo(ctx, s.client, s.tableName)
+	if err != nil {
+		return nil, err
+	}
+	var out []kmaws.SandboxMetadata
+	for _, m := range records {
+		if m.SlackChannelID != "" {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+// doctorEC2InstanceLister implements EC2InstanceLister using DescribeInstances to
+// check whether a sandbox's EC2 instance is still running or pending.
+type doctorEC2InstanceLister struct {
+	client EC2InstanceAPI
+}
+
+func (l *doctorEC2InstanceLister) InstanceExists(ctx context.Context, sandboxID string) (bool, error) {
+	if l.client == nil {
+		return false, nil
+	}
+	out, err := l.client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		Filters: []ec2types.Filter{
+			{Name: awssdk.String("tag:sandbox_id"), Values: []string{sandboxID}},
+			{Name: awssdk.String("instance-state-name"), Values: []string{"running", "pending", "stopping", "stopped"}},
+		},
+	})
+	if err != nil {
+		return false, fmt.Errorf("DescribeInstances for %s: %w", sandboxID, err)
+	}
+	for _, r := range out.Reservations {
+		if len(r.Instances) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
