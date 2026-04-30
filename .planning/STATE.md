@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 63-05-PLAN.md (km-slack binary + pipeline wiring)
-last_updated: "2026-04-30T01:28:22.038Z"
+stopped_at: "Completed 63-06-PLAN.md (km-slack-bridge Lambda wired: 5 AWS adapters + Function URL + DynamoDB nonce table + km init integration)"
+last_updated: "2026-04-30T01:33:42.180Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
   total_phases: 66
   completed_phases: 62
   total_plans: 201
-  completed_plans: 197
+  completed_plans: 198
   percent: 0
 ---
 
@@ -238,6 +238,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P01 | 5min | 2 tasks | 7 files |
 | Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P04 | 2min | 1 tasks | 2 files |
 | Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P05 | 162 | 2 tasks | 5 files |
+| Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P06 | 7min | 2 tasks | 15 files |
 
 ## Accumulated Context
 
@@ -665,6 +666,9 @@ Recent decisions affecting current work:
 - [Phase 63-04]: KM_SLACK_BRIDGE_URL not emitted at compile time — requires runtime SSM lookup of /km/slack/bridge-url; Plan 08 injects it post-launch into /etc/profile.d/km-notify-env.sh
 - [Phase 63-04]: sent_any *bool pointer semantics: nil NotifyEmailEnabled/NotifySlackEnabled = no env var emitted (hook :-default takes effect for Phase 62 compat); non-nil = emit KEY=0|1 via boolToZeroOne
 - [Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events]: runWith() inner function accepts (ctx, priv, sandboxID, bridgeURL) for testability — SSM bypass in unit tests; GOARCH=amd64 for km-slack matching existing EC2 sidecars (RESEARCH.md Pitfall 7); three-site pipeline sync required (Makefile + init.go + userdata.go)
+- [Phase 63-slack-notify-hook]: SlackPosterAdapter uses direct HTTP (Option B) not pkg/slack.Client to expose Retry-After headers for 429→ErrSlackRateLimited
+- [Phase 63-slack-notify-hook]: Lambda Function URL: authorization_type=NONE; Ed25519 signature + nonce table provide application-layer auth (first Function URL in codebase)
+- [Phase 63-slack-notify-hook]: replace_triggered_by = [aws_iam_role.slack_bridge] on Lambda function prevents stale KMS grants when IAM role recreated (CLAUDE.md memory)
 
 ### Roadmap Evolution
 
@@ -745,6 +749,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-30T01:28:22.030Z
-Stopped at: Completed 63-05-PLAN.md (km-slack binary + pipeline wiring)
+Last session: 2026-04-30T01:33:42.174Z
+Stopped at: Completed 63-06-PLAN.md (km-slack-bridge Lambda wired: 5 AWS adapters + Function URL + DynamoDB nonce table + km init integration)
 Resume file: None
