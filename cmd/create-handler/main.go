@@ -237,7 +237,7 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 				kmsKeyAlias = "alias/km-platform"
 			}
 
-			pubKey, identErr := awspkg.GenerateSandboxIdentity(ctx, h.SSMClient, event.SandboxID, kmsKeyAlias)
+			pubKey, identErr := awspkg.EnsureSandboxIdentity(ctx, h.SSMClient, event.SandboxID, kmsKeyAlias)
 			if identErr != nil {
 				log.Warn().Err(identErr).Str("sandbox_id", event.SandboxID).
 					Msg("failed to provision sandbox identity (non-fatal)")
