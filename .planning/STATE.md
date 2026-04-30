@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 63-01-PLAN.md (Slack schema fields + IsWarning + five validation rules)
-last_updated: "2026-04-30T01:22:22.698Z"
+stopped_at: Completed 63-05-PLAN.md (km-slack binary + pipeline wiring)
+last_updated: "2026-04-30T01:28:22.038Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
   total_phases: 66
   completed_phases: 62
   total_plans: 201
-  completed_plans: 195
+  completed_plans: 197
   percent: 0
 ---
 
@@ -236,6 +236,8 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P02 | 12min | 2 tasks | 4 files |
 | Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P03 | 177 | 1 tasks | 3 files |
 | Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P01 | 5min | 2 tasks | 7 files |
+| Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P04 | 2min | 1 tasks | 2 files |
+| Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P05 | 162 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -660,6 +662,9 @@ Recent decisions affecting current work:
 - [Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events]: Bridge handler: no AWS SDK imports in pkg/slack/bridge — pure library; Plan 06 owns production wiring via injectable interfaces
 - [Phase 63-01]: *bool for notifyEmailEnabled/notifySlackEnabled/slackArchiveOnDestroy: nil=unset (Phase 62 backward compat default), explicit-false=disabled, explicit-true=forced on
 - [Phase 63-01]: IsWarning bool on ValidationError (not separate type): minimal change, km validate is sole caller that needs separation; five Slack rules in ValidateSemantic (not JSON schema) because cross-field constraints require semantic layer
+- [Phase 63-04]: KM_SLACK_BRIDGE_URL not emitted at compile time — requires runtime SSM lookup of /km/slack/bridge-url; Plan 08 injects it post-launch into /etc/profile.d/km-notify-env.sh
+- [Phase 63-04]: sent_any *bool pointer semantics: nil NotifyEmailEnabled/NotifySlackEnabled = no env var emitted (hook :-default takes effect for Phase 62 compat); non-nil = emit KEY=0|1 via boolToZeroOne
+- [Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events]: runWith() inner function accepts (ctx, priv, sandboxID, bridgeURL) for testability — SSM bypass in unit tests; GOARCH=amd64 for km-slack matching existing EC2 sidecars (RESEARCH.md Pitfall 7); three-site pipeline sync required (Makefile + init.go + userdata.go)
 
 ### Roadmap Evolution
 
@@ -740,6 +745,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-30T01:22:22.692Z
-Stopped at: Completed 63-01-PLAN.md (Slack schema fields + IsWarning + five validation rules)
+Last session: 2026-04-30T01:28:22.030Z
+Stopped at: Completed 63-05-PLAN.md (km-slack binary + pipeline wiring)
 Resume file: None
