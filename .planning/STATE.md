@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 63-03-PLAN.md (bridge Lambda handler with 21 unit tests)
-last_updated: "2026-04-30T01:21:16.947Z"
+stopped_at: Completed 63-01-PLAN.md (Slack schema fields + IsWarning + five validation rules)
+last_updated: "2026-04-30T01:22:22.698Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
   total_phases: 66
   completed_phases: 62
   total_plans: 201
-  completed_plans: 194
+  completed_plans: 195
   percent: 0
 ---
 
@@ -235,6 +235,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 62-claude-code-operator-notify-hook-for-permission-and-idle-events P05 | 90min | 8 tasks | 5 files |
 | Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P02 | 12min | 2 tasks | 4 files |
 | Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P03 | 177 | 1 tasks | 3 files |
+| Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P01 | 5min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -657,6 +658,8 @@ Recent decisions affecting current work:
 - [Phase 63-slack-notify-hook]: pkg/slack: Alphabetical struct tag order + encoding/json gives deterministic canonical JSON; no custom serializer; BridgeBackoff exported var for test shim; PostToBridge uses http.DefaultClient (sandbox-side); 4 total attempts (1+3 retries) matching SLCK-03
 - [Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events]: PublicKeyFetcher interface enforces DynamoDB as backend (NOT SSM) at the type contract level — RESEARCH.md correction #1 baked in
 - [Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events]: Bridge handler: no AWS SDK imports in pkg/slack/bridge — pure library; Plan 06 owns production wiring via injectable interfaces
+- [Phase 63-01]: *bool for notifyEmailEnabled/notifySlackEnabled/slackArchiveOnDestroy: nil=unset (Phase 62 backward compat default), explicit-false=disabled, explicit-true=forced on
+- [Phase 63-01]: IsWarning bool on ValidationError (not separate type): minimal change, km validate is sole caller that needs separation; five Slack rules in ValidateSemantic (not JSON schema) because cross-field constraints require semantic layer
 
 ### Roadmap Evolution
 
@@ -737,6 +740,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-30T01:21:16.938Z
-Stopped at: Completed 63-03-PLAN.md (bridge Lambda handler with 21 unit tests)
+Last session: 2026-04-30T01:22:22.692Z
+Stopped at: Completed 63-01-PLAN.md (Slack schema fields + IsWarning + five validation rules)
 Resume file: None

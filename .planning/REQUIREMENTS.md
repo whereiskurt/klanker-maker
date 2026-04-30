@@ -116,7 +116,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Slack Notifications
 
-- **SLCK-01**: Profile schema gains five `spec.cli` fields — `notifyEmailEnabled` (*bool), `notifySlackEnabled` (*bool), `notifySlackPerSandbox` (bool), `notifySlackChannelOverride` (string, pattern `^C[A-Z0-9]+$`), `slackArchiveOnDestroy` (*bool); `ValidationError` gains `IsWarning bool` field; five semantic validation rules (mutual-exclusion error, two no-op warnings, channel-ID regex error, neither-channel warning); `km validate` prints warnings without failing
+- [x] **SLCK-01**: Profile schema gains five `spec.cli` fields — `notifyEmailEnabled` (*bool), `notifySlackEnabled` (*bool), `notifySlackPerSandbox` (bool), `notifySlackChannelOverride` (string, pattern `^C[A-Z0-9]+$`), `slackArchiveOnDestroy` (*bool); `ValidationError` gains `IsWarning bool` field; five semantic validation rules (mutual-exclusion error, two no-op warnings, channel-ID regex error, neither-channel warning); `km validate` prints warnings without failing
 - **SLCK-02**: Compiler extends the inlined `km-notify-hook` heredoc in `pkg/compiler/userdata.go` for parallel email + Slack dispatch (sent_any pattern), adds `KM_NOTIFY_EMAIL_ENABLED`, `KM_NOTIFY_SLACK_ENABLED`, `KM_SLACK_CHANNEL_ID`, `KM_SLACK_BRIDGE_URL` to the `/etc/profile.d/km-notify-env.sh` template emitted via `NotifyEnv`; cooldown updates iff at least one channel succeeded; Phase 62 backward compat preserved (unset `notifyEmailEnabled` → no env var → hook default of `1` keeps email on)
 - **SLCK-03**: `km-slack` Go binary at `/opt/km/bin/km-slack` (built via `cmd/km-slack/main.go`, deployed via the sidecar Makefile target + S3 upload, downloaded in user-data); signs canonical JSON envelope with sandbox Ed25519 key from `/sandbox/{id}/signing-key`, POSTs to `$KM_SLACK_BRIDGE_URL`, retries 3 attempts on 5xx/network with 1s/2s/4s backoff, refuses bodies >40 KB; `--body <file>` only (no stdin, OpenSSL 3.5+ constraint per CLAUDE.md)
 - **SLCK-04**: `km-slack-bridge` Go Lambda with Function URL (auth=NONE, first publicly-addressable Lambda in this codebase); verifies Ed25519 signature using public key from DynamoDB `km-identities` table (NOT SSM — RESEARCH.md correction #1); enforces ±5-min timestamp window + nonce table `km-slack-bridge-nonces` (10-min TTL, conditional write); channel-mismatch authorization (sandbox `post` rejected if channel ≠ `slack_channel_id` in `km-sandboxes` DynamoDB); action authorization (`archive`/`test` only from operator); dispatches to Slack `chat.postMessage` / `conversations.archive`; returns 503 + Retry-After on Slack 429
@@ -324,7 +324,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HOOK-03 | Phase 62 | Complete |
 | HOOK-04 | Phase 62 | Complete |
 | HOOK-05 | Phase 62 | Complete |
-| SLCK-01 | Phase 63 | Planned |
+| SLCK-01 | Phase 63 | Complete |
 | SLCK-02 | Phase 63 | Planned |
 | SLCK-03 | Phase 63 | Planned |
 | SLCK-04 | Phase 63 | Planned |
