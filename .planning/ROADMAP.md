@@ -1329,10 +1329,20 @@ Plans:
 
 ### Phase 63: Slack-notify hook for Claude Code permission and idle events
 
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Depends on:** Phase 62
-**Plans:** 0 plans
+**Goal:** Claude Code agents on km sandboxes deliver hook events (Notification for tool-permission prompts, Stop for idle/turn-complete) to a klankermaker.ai-owned Slack workspace in parallel with Phase 62 email delivery. Bot token never leaves AWS — sandboxes call a new `km-slack-bridge` Lambda Function URL with Ed25519-signed payloads (same trust model as Phase 45 km-send). Operators are invited to channels via Slack Connect from their separate workspace. Three channel modes (shared default `#km-notifications`, per-sandbox `#sb-{id}` opt-in, operator-pinned override). New `notifyEmailEnabled` *bool field gives Phase 62 backward compat plus the option to switch fully to Slack-only delivery. ValidationError gains `IsWarning` so non-blocking validation rules (no-op combinations) don't fail `km validate`.
+**Spec:** `docs/superpowers/specs/2026-04-29-slack-notify-hook-design.md`
+**Requirements**: SLCK-01, SLCK-02, SLCK-03, SLCK-04, SLCK-05, SLCK-06, SLCK-07, SLCK-08, SLCK-09, SLCK-10
+**Depends on:** Phase 62 (operator-notify hook), Phase 45 (km-send signed email + operator identity), Phase 14 (Ed25519 sandbox identity), Phase 39 (DynamoDB sandbox metadata), Phase 23 (credential rotation), Phase 27 (OTEL integration). All upstream deps complete.
+**Plans:** 10 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 63 to break down)
+- [ ] 63-01-PLAN.md — Profile schema (5 new spec.cli fields, *bool semantics) + ValidationError.IsWarning + 5 semantic validation rules + REQUIREMENTS.md SLCK-01..SLCK-10 registration
+- [ ] 63-02-PLAN.md — pkg/slack package: SlackEnvelope + canonical JSON + Ed25519 sign/verify + 40 KB body cap + thin Slack Web API client + PostToBridge retry helper
+- [ ] 63-03-PLAN.md — pkg/slack/bridge handler skeleton: 7-step verification flow (parse, replay, signature, action-auth, channel-mismatch, token, dispatch) against narrow injectable interfaces (DynamoDB-backed public-key fetch per RESEARCH correction #1)
+- [ ] 63-04-PLAN.md — Compiler: extend Phase 62 km-notify-hook heredoc for sent_any multi-channel dispatch + emit KM_NOTIFY_EMAIL_ENABLED / KM_NOTIFY_SLACK_ENABLED / KM_SLACK_CHANNEL_ID / KM_SLACK_BRIDGE_URL into /etc/profile.d/km-notify-env.sh honoring *bool pointer semantics
+- [ ] 63-05-PLAN.md — cmd/km-slack Go binary (post subcommand, SSM key load, retry) + Makefile build-sidecars target + init.go --sidecars upload + userdata.go aws s3 cp wiring (first sandbox-side Go binary in codebase)
+- [ ] 63-06-PLAN.md — cmd/km-slack-bridge Lambda entry + AWS-backed adapters (5 interfaces) + infra/modules/lambda-slack-bridge (Function URL auth=NONE, replace_triggered_by) + infra/modules/dynamodb-slack-nonces + Terragrunt live wiring + regionalModules + buildLambdaZips + SandboxMetadata.SlackChannelID/SlackPerSandbox
+- [ ] 63-07-PLAN.md — internal/app/cmd/slack.go: km slack init/test/status operator commands; idempotent bootstrap with --bot-token / --invite-email / --shared-channel / --force flags; Terragrunt apply integration
+- [ ] 63-08-PLAN.md — km create channel provisioning: shared/per-sandbox/override resolution + sanitizeChannelName + ChannelInfo client extension; populate DynamoDB SlackChannelID + SlackPerSandbox + SlackArchiveOnDestroy; runtime SSM SendCommand env injection
+- [ ] 63-09-PLAN.md — km destroy archive flow (final post + conversations.archive matrix; never blocks destroy on Slack failures) + km doctor checks (checkSlackTokenValidity via bridge auth.test, checkStaleSlackChannels via DynamoDB scan)
+- [ ] 63-10-PLAN.md — Live UAT: test/e2e/slack/ harness gated by RUN_SLACK_E2E=1 + reusable test profiles + docs/slack-notifications.md operator guide + CLAUDE.md updates + 63-10-UAT.md sign-off

@@ -114,6 +114,20 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **HOOK-04**: `km shell` and `km agent run` honor `--notify-on-permission` / `--no-notify-on-permission` / `--notify-on-idle` / `--no-notify-on-idle` CLI flags, overriding profile defaults via env vars injected at SSM-launch time (interactive shell uses pre-session SendCommand to write `/etc/profile.d/zz-km-notify.sh`; agent run prepends `export KM_NOTIFY_ON_*=...` lines to the generated bash script)
 - [x] **HOOK-05**: `/opt/km/bin/km-notify-hook` honors gate env vars, cooldown (`/tmp/km-notify.last`), builds correct subjects (`[<sandbox-id>] needs permission` / `[<sandbox-id>] idle`) and bodies (Notification: `.message` from stdin payload; Stop: last assistant text from `transcript_path` JSONL), calls `km-send --body <file>` (not stdin, per CLAUDE.md OpenSSL 3.5+ requirement), and never blocks Claude on send failure (always exits 0)
 
+### Slack Notifications
+
+- **SLCK-01**: Profile schema gains five `spec.cli` fields — `notifyEmailEnabled` (*bool), `notifySlackEnabled` (*bool), `notifySlackPerSandbox` (bool), `notifySlackChannelOverride` (string, pattern `^C[A-Z0-9]+$`), `slackArchiveOnDestroy` (*bool); `ValidationError` gains `IsWarning bool` field; five semantic validation rules (mutual-exclusion error, two no-op warnings, channel-ID regex error, neither-channel warning); `km validate` prints warnings without failing
+- **SLCK-02**: Compiler extends the inlined `km-notify-hook` heredoc in `pkg/compiler/userdata.go` for parallel email + Slack dispatch (sent_any pattern), adds `KM_NOTIFY_EMAIL_ENABLED`, `KM_NOTIFY_SLACK_ENABLED`, `KM_SLACK_CHANNEL_ID`, `KM_SLACK_BRIDGE_URL` to the `/etc/profile.d/km-notify-env.sh` template emitted via `NotifyEnv`; cooldown updates iff at least one channel succeeded; Phase 62 backward compat preserved (unset `notifyEmailEnabled` → no env var → hook default of `1` keeps email on)
+- **SLCK-03**: `km-slack` Go binary at `/opt/km/bin/km-slack` (built via `cmd/km-slack/main.go`, deployed via the sidecar Makefile target + S3 upload, downloaded in user-data); signs canonical JSON envelope with sandbox Ed25519 key from `/sandbox/{id}/signing-key`, POSTs to `$KM_SLACK_BRIDGE_URL`, retries 3 attempts on 5xx/network with 1s/2s/4s backoff, refuses bodies >40 KB; `--body <file>` only (no stdin, OpenSSL 3.5+ constraint per CLAUDE.md)
+- **SLCK-04**: `km-slack-bridge` Go Lambda with Function URL (auth=NONE, first publicly-addressable Lambda in this codebase); verifies Ed25519 signature using public key from DynamoDB `km-identities` table (NOT SSM — RESEARCH.md correction #1); enforces ±5-min timestamp window + nonce table `km-slack-bridge-nonces` (10-min TTL, conditional write); channel-mismatch authorization (sandbox `post` rejected if channel ≠ `slack_channel_id` in `km-sandboxes` DynamoDB); action authorization (`archive`/`test` only from operator); dispatches to Slack `chat.postMessage` / `conversations.archive`; returns 503 + Retry-After on Slack 429
+- **SLCK-05**: `km slack init` operator command — interactive bootstrap that validates bot token via `auth.test`, writes SSM params `/km/slack/{bot-token,workspace,invite-email,shared-channel-id,bridge-url}`, creates `#km-notifications` shared channel, sends Slack Connect invite to invite-email, deploys bridge Lambda via Terraform apply; companion commands `km slack test` and `km slack status`
+- **SLCK-06**: `km create` provisions Slack channel before user-data finalizes — shared mode reads `/km/slack/shared-channel-id`, per-sandbox mode calls `conversations.create` for `#sb-{id}` (with sanitized channel name) + `conversations.inviteShared`, override mode validates the channel exists; channel ID stored in DynamoDB `km-sandboxes.slack_channel_id` and injected into `/etc/profile.d/km-notify-env.sh` as `KM_SLACK_CHANNEL_ID`; failure during channel creation aborts `km create` and tears down partially-created infra
+- **SLCK-07**: `km destroy` archive flow — for sandboxes provisioned with `notifySlackPerSandbox: true` and `slackArchiveOnDestroy != false`, posts a final "destroyed at <timestamp>" message and calls `conversations.archive` via the bridge Lambda using operator signing key; archive failure logs warning, does NOT block destroy; missing `/km/slack/bridge-url` skips the Slack archive entirely with a clear log line
+- **SLCK-08**: `km doctor` adds two checks — `checkSlackTokenValidity` calls `auth.test` via the bridge Lambda using operator signing, returns WARN on invalid/expired token; `checkStaleSlackChannels` scans `km-sandboxes` for records with `slack_channel_id` whose sandbox no longer exists, returns WARN listing stale channels
+- **SLCK-09**: End-to-end live verification — `test/e2e/slack/` harness gated by `RUN_SLACK_E2E=1`; covers shared-mode notification delivery, per-sandbox lifecycle + archive, Phase 62 email backward compat, Slack rate-limit propagation; bot token rotation and Slack Connect invite acceptance covered as documented UAT in `63-10-UAT.md`
+- **SLCK-10**: Documentation — `docs/slack-notifications.md` operator guide (workspace prerequisites, `km slack init` walkthrough, profile field reference, troubleshooting matrix, security model, rotation procedures); `CLAUDE.md` updated with new commands (`km slack init/test/status`), env var conventions (`KM_NOTIFY_SLACK_ENABLED`, `KM_SLACK_CHANNEL_ID`, `KM_SLACK_BRIDGE_URL`, `KM_NOTIFY_EMAIL_ENABLED`), and SSM parameter convention (`/km/slack/*`)
+
+
 ### eBPF Network Enforcement
 
 - **EBPF-NET-01**: `pkg/ebpf/` package scaffold with bpf2go pipeline — `go generate` compiles BPF C programs, bpf2go generates Go loader code, `make build` embeds compiled bytecode in km binary
@@ -310,10 +324,20 @@ Which phases cover which requirements. Updated during roadmap creation.
 | HOOK-03 | Phase 62 | Complete |
 | HOOK-04 | Phase 62 | Complete |
 | HOOK-05 | Phase 62 | Complete |
+| SLCK-01 | Phase 63 | Planned |
+| SLCK-02 | Phase 63 | Planned |
+| SLCK-03 | Phase 63 | Planned |
+| SLCK-04 | Phase 63 | Planned |
+| SLCK-05 | Phase 63 | Planned |
+| SLCK-06 | Phase 63 | Planned |
+| SLCK-07 | Phase 63 | Planned |
+| SLCK-08 | Phase 63 | Planned |
+| SLCK-09 | Phase 63 | Planned |
+| SLCK-10 | Phase 63 | Planned |
 
 **Coverage:**
-- v1 requirements: 71 total
-- Mapped to phases: 61
+- v1 requirements: 81 total
+- Mapped to phases: 71
 - Unmapped: 0
 - eBPF requirements (Phase 40-41): 26 total
 
@@ -325,3 +349,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 *Last updated: 2026-03-21 — OBSV-08, OBSV-09, OBSV-10 added: OTel tracing sidecar, MLflow experiment tracking per sandbox session, trace context propagation through proxy sidecars*
 *Last updated: 2026-03-22 — COST-01 promoted from v2, expanded into BUDG-01 through BUDG-09: per-sandbox budget enforcement with DynamoDB global table, http-proxy Bedrock metering, threshold warnings, hard enforcement, operator top-up*
 *Last updated: 2026-04-26 — HOOK-01..HOOK-05 added: operator-notify hook for Claude Code Notification (permission) and Stop (idle) events; profile-driven via spec.cli.notifyOn{Permission,Idle}/notifyCooldownSeconds/notificationEmailAddress with --notify-on-{permission,idle} CLI overrides on km shell and km agent run (Phase 62)*
+*Last updated: 2026-04-29 — SLCK-01..SLCK-10 added: Slack-notify hook for Claude Code permission and idle events extending Phase 62 with parallel Slack delivery via klankermaker.ai-owned Pro workspace; profile-driven via spec.cli.notifyEmailEnabled/notifySlackEnabled/notifySlackPerSandbox/notifySlackChannelOverride/slackArchiveOnDestroy; bridge Lambda + km-slack binary + km slack init/test/status commands; ValidationError gains IsWarning field for non-blocking validation messages (Phase 63)*
