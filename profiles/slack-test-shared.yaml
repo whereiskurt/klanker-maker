@@ -1,0 +1,127 @@
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: slack-test-shared
+  labels:
+    tier: development
+    tool: claude-code
+    builtin: "true"
+  prefix: sts
+
+spec:
+  lifecycle:
+    ttl: "30m"
+    idleTimeout: "10m"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.medium
+    region: us-east-1
+    rootVolumeSize: 15
+    hibernation: false
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    env:
+      SANDBOX_MODE: slack-test-shared
+      ANTHROPIC_BASE_URL: "https://bedrock-runtime.us-east-1.amazonaws.com"
+      ANTHROPIC_DEFAULT_SONNET_MODEL: us.anthropic.claude-sonnet-4-6
+      CLAUDE_CODE_USE_BEDROCK: "1"
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+    initCommands:
+      - "yum install -y git tmux jq"
+      - "curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - && yum install -y nodejs"
+      - "npm install -g @anthropic-ai/claude-code@latest"
+      - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace"
+
+  network:
+    enforcement: proxy
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+        - ".anthropic.com"
+        - ".claude.ai"
+        - ".claude.com"
+        - ".sentry.io"
+        - ".cloudfront.net"
+        - ".npmjs.org"
+        - ".npmjs.com"
+        - ".nodejs.org"
+      allowedHosts: []
+
+  budget:
+    compute:
+      maxSpendUSD: 2.00
+    ai:
+      maxSpendUSD: 5.00
+    warningThreshold: 0.80
+
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 500
+
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/network
+    learnMode: false
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: required
+    allowedSenders:
+      - "self"
+
+  cli:
+    notifyOnIdle: true
+    notifyCooldownSeconds: 0
+    notifyEmailEnabled: false
+    notifySlackEnabled: true
+
+  agent:
+    maxConcurrentTasks: 1
+    taskTimeout: "30m"
+    allowedTools:
+      - bash
+      - read_file
+      - write_file
+      - list_files
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos: []
+      allowedRefs:
+        - "main"
