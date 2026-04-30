@@ -243,6 +243,12 @@ func unmarshalSlackFields(item map[string]dynamodbtypes.AttributeValue, meta *Sa
 			meta.SlackPerSandbox = bv.Value
 		}
 	}
+	if v, ok := item["slack_archive_on_destroy"]; ok {
+		if bv, ok := v.(*dynamodbtypes.AttributeValueMemberBOOL); ok {
+			val := bv.Value
+			meta.SlackArchiveOnDestroy = &val
+		}
+	}
 }
 
 // marshalSandboxItem converts a SandboxMetadata to a raw DynamoDB item map.
@@ -309,6 +315,11 @@ func marshalSandboxItem(meta *SandboxMetadata) map[string]dynamodbtypes.Attribut
 	}
 	if meta.SlackPerSandbox {
 		item["slack_per_sandbox"] = &dynamodbtypes.AttributeValueMemberBOOL{Value: true}
+	}
+	// slack_archive_on_destroy: only store when explicitly set (nil = default, omit).
+	// This preserves round-trip semantics: nil in → nil out, &bool in → &bool out.
+	if meta.SlackArchiveOnDestroy != nil {
+		item["slack_archive_on_destroy"] = &dynamodbtypes.AttributeValueMemberBOOL{Value: *meta.SlackArchiveOnDestroy}
 	}
 
 	return item

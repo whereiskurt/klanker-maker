@@ -40,7 +40,9 @@ type SlackAPIResponse struct {
 	Error   string `json:"error,omitempty"`
 	TS      string `json:"ts,omitempty"`
 	Channel struct {
-		ID string `json:"id"`
+		ID         string `json:"id"`
+		IsMember   bool   `json:"is_member"`
+		NumMembers int    `json:"num_members"`
 	} `json:"channel,omitempty"`
 }
 
@@ -135,6 +137,20 @@ func (c *Client) InviteShared(ctx context.Context, channelID, email string) erro
 		"external_limited": true,
 	})
 	return err
+}
+
+// ChannelInfo returns the channel's member count and whether the bot itself is
+// a member (is_member field). Used by km create override-mode validation to
+// give early feedback before infra is provisioned.
+func (c *Client) ChannelInfo(ctx context.Context, channelID string) (int, bool, error) {
+	resp, err := c.callJSON(ctx, "conversations.info", map[string]any{
+		"channel":             channelID,
+		"include_num_members": true,
+	})
+	if err != nil {
+		return 0, false, err
+	}
+	return resp.Channel.NumMembers, resp.Channel.IsMember, nil
 }
 
 // ArchiveChannel calls conversations.archive.

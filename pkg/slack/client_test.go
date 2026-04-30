@@ -185,6 +185,76 @@ func TestClient_InviteShared_OK(t *testing.T) {
 	}
 }
 
+func TestClient_ChannelInfo_BotIsMember(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(slackOK(map[string]any{
+			"channel": map[string]any{
+				"id":          "C0123ABC",
+				"is_member":   true,
+				"num_members": 7,
+			},
+		}))
+	}))
+	defer ts.Close()
+
+	c := newClientAgainstServer(ts)
+	count, isMember, err := c.ChannelInfo(context.Background(), "C0123ABC")
+	if err != nil {
+		t.Fatalf("ChannelInfo: %v", err)
+	}
+	if !isMember {
+		t.Error("isMember = false; want true")
+	}
+	if count != 7 {
+		t.Errorf("memberCount = %d; want 7", count)
+	}
+}
+
+func TestClient_ChannelInfo_BotNotMember(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(slackOK(map[string]any{
+			"channel": map[string]any{
+				"id":          "C0123ABC",
+				"is_member":   false,
+				"num_members": 3,
+			},
+		}))
+	}))
+	defer ts.Close()
+
+	c := newClientAgainstServer(ts)
+	_, isMember, err := c.ChannelInfo(context.Background(), "C0123ABC")
+	if err != nil {
+		t.Fatalf("ChannelInfo: %v", err)
+	}
+	if isMember {
+		t.Error("isMember = true; want false")
+	}
+}
+
+func TestClient_ChannelInfo_ChannelNotFound(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(slackErr("channel_not_found"))
+	}))
+	defer ts.Close()
+
+	c := newClientAgainstServer(ts)
+	_, _, err := c.ChannelInfo(context.Background(), "C9NOTFOUND")
+	if err == nil {
+		t.Fatal("expected error for channel_not_found, got nil")
+	}
+	apiErr, ok := err.(*slack.SlackAPIError)
+	if !ok {
+		t.Fatalf("expected *SlackAPIError, got %T: %v", err, err)
+	}
+	if apiErr.Code != "channel_not_found" {
+		t.Errorf("Code = %q; want %q", apiErr.Code, "channel_not_found")
+	}
+}
+
 func TestClient_ArchiveChannel_OK(t *testing.T) {
 	var capturedBody []byte
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -33,4 +33,11 @@ type SandboxMetadata struct {
 	// SlackPerSandbox indicates the channel was created exclusively for this
 	// sandbox (vs. shared mode). Drives km destroy archive behavior.
 	SlackPerSandbox bool `json:"slack_per_sandbox,omitempty"`
+
+	// SlackArchiveOnDestroy controls whether km destroy archives the per-sandbox
+	// Slack channel at teardown. nil = default (archive); &true = archive;
+	// &false = preserve for audit trail. Only meaningful when SlackPerSandbox=true.
+	// Persisted at km create so km destroy is self-contained (Plan 63-08 sets it;
+	// Plan 63-09 reads it at destroy time).
+	SlackArchiveOnDestroy *bool `json:"slack_archive_on_destroy,omitempty"`
 }
