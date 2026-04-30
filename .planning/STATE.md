@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Completed 63-06-PLAN.md (km-slack-bridge Lambda wired: 5 AWS adapters + Function URL + DynamoDB nonce table + km init integration)"
-last_updated: "2026-04-30T01:33:42.180Z"
+stopped_at: Completed 63-07-PLAN.md (km slack init/test/status with 10 unit tests + root.go wiring)
+last_updated: "2026-04-30T01:56:45.521Z"
 last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
 progress:
   total_phases: 66
   completed_phases: 62
   total_plans: 201
-  completed_plans: 198
+  completed_plans: 200
   percent: 0
 ---
 
@@ -239,6 +239,8 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P04 | 2min | 1 tasks | 2 files |
 | Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P05 | 162 | 2 tasks | 5 files |
 | Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P06 | 7min | 2 tasks | 15 files |
+| Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P08 | 989 | 2 tasks | 12 files |
+| Phase 63 P07 | 1135s | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -669,6 +671,11 @@ Recent decisions affecting current work:
 - [Phase 63-slack-notify-hook]: SlackPosterAdapter uses direct HTTP (Option B) not pkg/slack.Client to expose Retry-After headers for 429→ErrSlackRateLimited
 - [Phase 63-slack-notify-hook]: Lambda Function URL: authorization_type=NONE; Ed25519 signature + nonce table provide application-layer auth (first Function URL in codebase)
 - [Phase 63-slack-notify-hook]: replace_triggered_by = [aws_iam_role.slack_bridge] on Lambda function prevents stale KMS grants when IAM role recreated (CLAUDE.md memory)
+- [Phase 63]: Per-sandbox name collision aborts km create with actionable error; no suffix fallback
+- [Phase 63]: Per-sandbox channel NOT rolled back on create failure; operator does manual cleanup
+- [Phase 63]: SlackArchiveOnDestroy field pulled forward from Plan 63-09 into Plan 63-08 to unblock build
+- [Phase 63]: km slack init uses SlackInitAPI (adds AuthTest) separate from SlackAPI in create_slack.go; both satisfied by *slack.Client
+- [Phase 63]: --force is the only way to recreate populated SSM state; default is idempotent skip
 
 ### Roadmap Evolution
 
@@ -749,6 +756,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-30T01:33:42.174Z
-Stopped at: Completed 63-06-PLAN.md (km-slack-bridge Lambda wired: 5 AWS adapters + Function URL + DynamoDB nonce table + km init integration)
+Last session: 2026-04-30T01:56:45.515Z
+Stopped at: Completed 63-07-PLAN.md (km slack init/test/status with 10 unit tests + root.go wiring)
 Resume file: None
