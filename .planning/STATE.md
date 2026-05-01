@@ -5,7 +5,7 @@ milestone_name: milestone
 status: completed
 stopped_at: Completed 63.1-02-PLAN.md (SLCK-12 remote destroy Slack teardown fix, Option A, 5 commits, 34 destroy tests green)
 last_updated: "2026-05-01T13:30:42.894Z"
-last_activity: "2026-05-01 — Completed 63.1-03-PLAN.md (SLCK-13: km slack rotate-token, bridge structured logging, fail-fast 5xx, UAT ts=1777638955.854989)"
+last_activity: "2026-05-01 — Completed quick task 6: Fix GitHub App installation-ID resolution for wildcard-only allowedRepos (TDD red→green, 4 commits, learn.yaml clones unblocked pending operator gate)"
 progress:
   total_phases: 67
   completed_phases: 64
@@ -723,6 +723,7 @@ None yet.
 | 3 | Fix budget-enforcer-instance-id | 2026-03-29 | 9d884e1 | [3-fix-budget-enforcer-instance-id](./quick/3-fix-budget-enforcer-instance-id/) |
 | 4 | Add cache token metering to HTTP proxy Anthropic API cost calculation | 2026-04-19 | b35f9d5 | [4-add-cache-token-metering-to-http-proxy-a](./quick/4-add-cache-token-metering-to-http-proxy-a/) |
 | 5 | Plugin snapshot save/restore workflow for Claude plugins via rsync to S3 | 2026-04-19 | 66b303e | [5-plugin-snapshot-save-restore-workflow-fo](./quick/5-plugin-snapshot-save-restore-workflow-fo/) |
+| 6 | Fix GitHub App installation-ID resolution for wildcard-only allowedRepos so learn.yaml clones work without prompting | 2026-05-01 | 99f49eb | [6-fix-github-app-installation-id-resolutio](./quick/6-fix-github-app-installation-id-resolutio/) |
 
 ## Accumulated Context
 
