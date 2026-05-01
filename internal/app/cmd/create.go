@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -55,11 +56,40 @@ import (
 // "skipped (not configured)" log message rather than showing a stack trace.
 var ErrGitHubNotConfigured = errors.New("GitHub App not configured in SSM — run 'km configure github' first")
 
+// ErrAmbiguousInstallation is returned by resolveInstallationID when allowedRepos
+// contains only wildcards (or bare repos) AND multiple per-owner installation
+// parameters exist under /km/config/github/installations/. Without a concrete
+// owner to disambiguate and with multiple installations on file, the function
+// cannot pick one safely. Candidates lists the owner names (the trailing path
+// segment of each /km/config/github/installations/<owner> parameter), sorted.
+//
+// Callers should use errors.As(err, &target) where target is *ErrAmbiguousInstallation
+// to recover the candidate list and present a remediation hint.
+type ErrAmbiguousInstallation struct {
+	Candidates []string
+}
+
+func (e *ErrAmbiguousInstallation) Error() string {
+	example := ""
+	if len(e.Candidates) > 0 {
+		example = e.Candidates[0]
+	}
+	return fmt.Sprintf(
+		"ambiguous GitHub App installation: found %d candidates (%s); "+
+			"either set /km/config/github/installation-id to disambiguate, "+
+			"or add an owner-prefixed entry like %q to spec.sourceAccess.github.allowedRepos",
+		len(e.Candidates), strings.Join(e.Candidates, ", "), example+"/*")
+}
+
 // SSMGetPutAPI is a narrow interface covering the SSM operations used by
-// generateAndStoreGitHubToken. *ssm.Client satisfies this interface.
+// generateAndStoreGitHubToken and resolveInstallationID. *ssm.Client satisfies
+// this interface. GetParametersByPath is used by resolveInstallationID to
+// enumerate /km/config/github/installations/ when no concrete owner can be
+// extracted from allowedRepos (e.g. wildcard-only).
 type SSMGetPutAPI interface {
 	GetParameter(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error)
 	PutParameter(ctx context.Context, params *ssm.PutParameterInput, optFns ...func(*ssm.Options)) (*ssm.PutParameterOutput, error)
+	GetParametersByPath(ctx context.Context, params *ssm.GetParametersByPathInput, optFns ...func(*ssm.Options)) (*ssm.GetParametersByPathOutput, error)
 }
 
 // NewCreateCmd creates the "km create" subcommand.
@@ -1886,11 +1916,17 @@ func extractRepoOwner(repo string) string {
 
 // resolveInstallationID determines the GitHub App installation ID to use.
 // It extracts unique owners from allowedRepos (format "owner/repo"), then:
-//  1. For the first non-empty owner found, tries /km/config/github/installations/{owner}
-//  2. If that key exists, returns its value
-//  3. If not found (ParameterNotFound), falls back to legacy /km/config/github/installation-id
-//  4. If no owners extracted (all bare/wildcard), goes directly to legacy key
-//  5. If legacy also not found, returns ErrGitHubNotConfigured
+//  1. For the first non-empty owner found, tries /km/config/github/installations/{owner}.
+//     If found, returns its value. If ParameterNotFound, falls back to legacy.
+//  2. If NO concrete owner could be extracted (all wildcards / bare repos), the
+//     function enumerates /km/config/github/installations/ via GetParametersByPath
+//     BEFORE consulting the legacy key:
+//       - exactly one installation parameter -> auto-select and return its value
+//       - two or more -> return *ErrAmbiguousInstallation with sorted candidates
+//       - zero -> fall through to legacy /km/config/github/installation-id
+//     A non-nil enumeration error is treated as a soft failure and we still try
+//     the legacy key (preserves graceful degradation on AccessDenied).
+//  3. If the legacy key is also missing (ParameterNotFound), returns ErrGitHubNotConfigured.
 func resolveInstallationID(ctx context.Context, ssmClient SSMGetPutAPI, allowedRepos []string) (string, error) {
 	withDecryption := true
 
@@ -1903,7 +1939,8 @@ func resolveInstallationID(ctx context.Context, ssmClient SSMGetPutAPI, allowedR
 		}
 	}
 
-	// Try per-account key if we have an owner.
+	// Concrete-owner path: try per-account key, then legacy fallback. This branch
+	// MUST NOT call GetParametersByPath (regression guard in tests).
 	if firstOwner != "" {
 		perAccountOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
 			Name:           aws.String("/km/config/github/installations/" + firstOwner),
@@ -1917,6 +1954,35 @@ func resolveInstallationID(ctx context.Context, ssmClient SSMGetPutAPI, allowedR
 			return "", fmt.Errorf("read per-account installation ID for %q from SSM: %w", firstOwner, err)
 		}
 		// Per-account key not found — fall through to legacy.
+	} else {
+		// Wildcard-only / bare-repos path: enumerate per-owner installations to
+		// auto-select when the operator has exactly one installation on file.
+		pathOut, pathErr := ssmClient.GetParametersByPath(ctx, &ssm.GetParametersByPathInput{
+			Path:           aws.String("/km/config/github/installations/"),
+			Recursive:      aws.Bool(false),
+			WithDecryption: aws.Bool(true),
+		})
+		if pathErr == nil {
+			switch n := len(pathOut.Parameters); {
+			case n == 1:
+				return aws.ToString(pathOut.Parameters[0].Value), nil
+			case n >= 2:
+				owners := make([]string, 0, n)
+				for _, p := range pathOut.Parameters {
+					name := aws.ToString(p.Name)
+					// Name is e.g. "/km/config/github/installations/orgA"
+					parts := strings.Split(name, "/")
+					if len(parts) > 0 {
+						owners = append(owners, parts[len(parts)-1])
+					}
+				}
+				sort.Strings(owners)
+				return "", &ErrAmbiguousInstallation{Candidates: owners}
+			}
+			// n == 0: fall through to legacy lookup.
+		}
+		// pathErr != nil: enumeration failed (e.g. AccessDenied). Don't block —
+		// fall through to legacy so a working legacy key still resolves.
 	}
 
 	// Fall back to legacy single installation-id.
