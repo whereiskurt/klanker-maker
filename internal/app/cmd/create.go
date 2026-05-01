@@ -800,7 +800,11 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		outputter := func(ctx context.Context, dir string) (map[string]any, error) {
 			return runner.Output(ctx, dir)
 		}
-		runStep11dInject(ctx, ssmStoreForInject, ssmRunnerForInject, sandboxDir, outputter, extractOutputInstanceID, sandboxID, slackChannelID, 1, 0)
+		const (
+			step11dSSMRetryMax   = 6
+			step11dSSMRetryDelay = 5 * time.Second
+		)
+		runStep11dInject(ctx, ssmStoreForInject, ssmRunnerForInject, sandboxDir, outputter, extractOutputInstanceID, sandboxID, slackChannelID, step11dSSMRetryMax, step11dSSMRetryDelay)
 	}
 
 	// Step 12: Create EventBridge TTL schedule if TTL is configured.

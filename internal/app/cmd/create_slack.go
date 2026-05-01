@@ -281,13 +281,22 @@ func runStep11dInject(
 		return
 	}
 
-	// VISIBILITY-ONLY: single attempt; retry loop comes in Task 3.
-	// retryMax / retryDelay are accepted but ignored for now to keep this commit minimal.
-	_ = retryMax
-	_ = retryDelay
-	if injectErr := injectSlackEnvIntoSandbox(ctx, runner, instanceID, slackChannelID, bridgeURL); injectErr != nil {
-		log.Warn().Err(injectErr).Str("sandbox_id", sandboxID).
-			Msg("Step 11d: failed to inject Slack env via SSM SendCommand (non-fatal — sandbox is provisioned)")
+	// Bounded retry loop: up to retryMax attempts with retryDelay between each.
+	// Covers the SSM agent boot window — the agent may not be reachable when
+	// runner.Output returns. Production: 6 × 5s = 30s max. Tests: Microsecond delay.
+	var injectErr error
+	for attempt := 1; attempt <= retryMax; attempt++ {
+		injectErr = injectSlackEnvIntoSandbox(ctx, runner, instanceID, slackChannelID, bridgeURL)
+		if injectErr == nil {
+			break
+		}
+		if attempt < retryMax {
+			time.Sleep(retryDelay)
+		}
+	}
+	if injectErr != nil {
+		log.Warn().Err(injectErr).Int("attempts", retryMax).Str("sandbox_id", sandboxID).
+			Msg("Step 11d: failed to inject Slack env via SSM SendCommand after retries (non-fatal — sandbox is provisioned)")
 		fmt.Fprintf(os.Stderr, "  ⚠ Slack: SSM SendCommand failed — env not injected (non-fatal): %v\n", injectErr)
 		return
 	}
