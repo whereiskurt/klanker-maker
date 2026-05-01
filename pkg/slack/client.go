@@ -168,14 +168,22 @@ type PostResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
-// BridgeBackoff is the retry schedule used by PostToBridge. Exposed for tests
-// so they can shrink it to milliseconds.
+// BridgeBackoff is the retry schedule for network-level errors in PostToBridge.
+// Exposed for tests so they can shrink it to milliseconds.
+// Note: 5xx HTTP responses are NOT retried (see PostToBridge for rationale).
 var BridgeBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
 
 // PostToBridge submits a signed envelope to the bridge Lambda Function URL.
-// Retries on 5xx and network errors per BridgeBackoff. Fails fast on 4xx.
-// Uses http.DefaultClient for the actual transport (configurable via BridgeBackoff
-// for tests; production code uses the default client).
+//
+// Retry policy:
+//   - Network errors (pre-HTTP, connection refused, timeout) → retry per BridgeBackoff.
+//   - 4xx responses → fail fast (same nonce must not be reused).
+//   - 5xx responses → fail fast (same rationale: the bridge has already reserved the
+//     nonce in DynamoDB; retrying the same envelope triggers "replayed_nonce" 401 and
+//     masks the real upstream error from the operator).
+//
+// Callers that need idempotent retry on transient bridge errors should build a
+// fresh envelope (new nonce) and call PostToBridge again.
 func PostToBridge(ctx context.Context, bridgeURL string, env *SlackEnvelope, sig []byte) (*PostResponse, error) {
 	canonical, err := CanonicalJSON(env)
 	if err != nil {
@@ -226,12 +234,11 @@ func PostToBridge(ctx context.Context, bridgeURL string, env *SlackEnvelope, sig
 			}
 			return &pr, nil
 		}
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			return nil, fmt.Errorf("slack: bridge returned %d: %s",
-				resp.StatusCode, string(body))
-		}
-		// 5xx → retry
-		lastErr = fmt.Errorf("slack: bridge %d: %s", resp.StatusCode, string(body))
+		// 4xx or 5xx: fail fast — do NOT retry.
+		// For 5xx: the bridge has already reserved the nonce; retrying the same
+		// envelope causes "replayed_nonce" 401, masking the real Slack error.
+		return nil, fmt.Errorf("slack: bridge returned %d: %s",
+			resp.StatusCode, string(body))
 	}
 	if lastErr == nil {
 		lastErr = errors.New("slack: bridge unreachable after retries")
