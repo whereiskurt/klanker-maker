@@ -1352,7 +1352,7 @@ Plans:
 **Goal:** Close two operational gaps and one rotation-hardening item from Phase 63 UAT (2026-04-30). (1) Lambda subprocess silently swallowed step 11d runtime-injection outcomes — `KM_SLACK_CHANNEL_ID` and `KM_SLACK_BRIDGE_URL` never reached `/etc/profile.d/km-notify-env.sh` on remote-created sandboxes. Make the outcome visible on stderr (success path AND every failure branch) and fix the root cause so injection actually persists. (2) `km destroy` calls `destroySlackChannel` but the archive bridge call evidently doesn't reach Slack — visible logging shipped in `377b588` is the diagnostic harness; this phase diagnoses root cause and fixes it. (3) Full bot-token rotation cycle (revoke → cache TTL elapse → reissue → smoke test) end-to-end, deferred from UAT Scen 7. Operator workarounds remain documented in CLAUDE.md until shipped.
 **Requirements**: SLCK-11, SLCK-12, SLCK-13
 **Depends on:** Phase 63
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
 - [ ] 63.1-01-PLAN.md — SLCK-11: km create step 11d runtime injection — visibility commit + bounded SSM retry loop (6 × 5s) for agent readiness; 5 stderr branches; Wave 0 stderr-capture tests

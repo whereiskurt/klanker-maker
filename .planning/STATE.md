@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 63-07-PLAN.md (km slack init/test/status with 10 unit tests + root.go wiring)
-last_updated: "2026-05-01T01:23:33.112Z"
+stopped_at: Completed 63.1-01-PLAN.md (step 11d visibility + retry loop, 3 commits, 8 tests green)
+last_updated: "2026-05-01T02:36:20.998Z"
 last_activity: 2026-04-30 — Completed 63-10-PLAN.md (E2E harness, operator docs, live UAT sign-off, 8 hardening fixes)
 progress:
-  total_phases: 66
+  total_phases: 67
   completed_phases: 63
-  total_plans: 201
-  completed_plans: 202
+  total_plans: 204
+  completed_plans: 203
   percent: 0
 ---
 
@@ -241,6 +241,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P06 | 7min | 2 tasks | 15 files |
 | Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P08 | 989 | 2 tasks | 12 files |
 | Phase 63 P07 | 1135s | 1 tasks | 2 files |
+| Phase 63.1 P01 | 993s | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -679,6 +680,9 @@ Recent decisions affecting current work:
 - [Phase 63-10]: EnsureSandboxIdentity called at both km init (operator) and km create (sandbox) boundaries to prevent DynamoDB/SSM key drift causing bad_signature on bridge
 - [Phase 63-10]: km slack init --force made idempotent on name_taken — reuses existing channel ID; full revoke+cache TTL wait deferred as uncommon path
 - [Phase 63-10]: Phase 63.1 gap list scoped to 2 items: Step 11d runtime injection (KM_SLACK_CHANNEL_ID/KM_SLACK_BRIDGE_URL not injected into /etc/profile.d) and km destroy Slack archive auto-trigger; both have operator workarounds and do not compromise security model
+- [Phase 63.1]: Extract runStep11dInject to create_slack.go with retryMax/retryDelay injection for testability (Plan 63.1-01)
+- [Phase 63.1]: Two-commit sequencing: visibility (single attempt) first, retry loop second — allows diagnosing which branch fires before adding retry noise (Plan 63.1-01)
+- [Phase 63.1]: captureStderr lives exclusively in testhelpers_test.go — prevents duplicate-symbol compile errors when Plan 02 tests compile in Wave 1 (Plan 63.1-01)
 
 ### Roadmap Evolution
 
@@ -760,6 +764,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-30T01:56:45.515Z
-Stopped at: Completed 63-07-PLAN.md (km slack init/test/status with 10 unit tests + root.go wiring)
+Last session: 2026-05-01T02:36:20.993Z
+Stopped at: Completed 63.1-01-PLAN.md (step 11d visibility + retry loop, 3 commits, 8 tests green)
 Resume file: None
