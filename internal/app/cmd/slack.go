@@ -212,18 +212,27 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 	if chID == "" || opts.Force {
 		newID, err := api.CreateChannel(ctx, chName)
 		if err != nil {
-			return fmt.Errorf("create shared channel %q: %w", chName, err)
-		}
-		chID = newID
-		if err := d.SSM.Put(ctx, "/km/slack/shared-channel-id", chID, false); err != nil {
-			return fmt.Errorf("store shared-channel-id: %w", err)
-		}
-		if inv != "" {
-			if invErr := api.InviteShared(ctx, chID, inv); invErr != nil {
-				if isSlackProWorkspaceError(invErr) {
-					return fmt.Errorf("send Slack Connect invite to %s: requires a Pro Slack workspace (error: %w)", inv, invErr)
+			// --force is idempotent: if the channel already exists, keep the stored ID
+			// and re-apply the rest (Lambda redeploy, token rotation). Slack does not
+			// allow renaming back to an existing #name, so reuse beats fail.
+			var apierr *kmslack.SlackAPIError
+			if opts.Force && chID != "" && errors.As(err, &apierr) && apierr.Code == "name_taken" {
+				fmt.Fprintf(os.Stderr, "shared channel %q already exists (%s); reusing\n", chName, chID)
+			} else {
+				return fmt.Errorf("create shared channel %q: %w", chName, err)
+			}
+		} else {
+			chID = newID
+			if err := d.SSM.Put(ctx, "/km/slack/shared-channel-id", chID, false); err != nil {
+				return fmt.Errorf("store shared-channel-id: %w", err)
+			}
+			if inv != "" {
+				if invErr := api.InviteShared(ctx, chID, inv); invErr != nil {
+					if isSlackProWorkspaceError(invErr) {
+						return fmt.Errorf("send Slack Connect invite to %s: requires a Pro Slack workspace (error: %w)", inv, invErr)
+					}
+					return fmt.Errorf("send Slack Connect invite to %s (workspace must be Pro): %w", inv, invErr)
 				}
-				return fmt.Errorf("send Slack Connect invite to %s (workspace must be Pro): %w", inv, invErr)
 			}
 		}
 	} else {
