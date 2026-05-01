@@ -57,11 +57,13 @@ func destroySlackChannel(
 ) error {
 	// Case A — no channel configured.
 	if meta.SlackChannelID == "" {
+		fmt.Fprintf(os.Stderr, "  Slack: no channel configured — teardown notification skipped\n")
 		return nil
 	}
 
 	// Case B — shared/override mode: don't post teardown or archive.
 	if !meta.SlackPerSandbox {
+		fmt.Fprintf(os.Stderr, "  Slack: shared/override mode — teardown notification skipped\n")
 		return nil
 	}
 
@@ -71,6 +73,7 @@ func destroySlackChannel(
 		// Case F — bridge URL not configured.
 		log.Warn().Str("sandbox_id", meta.SandboxID).
 			Msg("destroySlackChannel: /km/slack/bridge-url not configured; skipping teardown notification")
+		fmt.Fprintf(os.Stderr, "  ⚠ Slack: /km/slack/bridge-url not configured — teardown notification skipped\n")
 		return nil
 	}
 
@@ -80,6 +83,7 @@ func destroySlackChannel(
 		// Case G — key load failed.
 		log.Warn().Err(err).Str("sandbox_id", meta.SandboxID).
 			Msg("destroySlackChannel: failed to load operator signing key; skipping teardown notification")
+		fmt.Fprintf(os.Stderr, "  ⚠ Slack: failed to load operator signing key — teardown notification skipped: %v\n", err)
 		return nil
 	}
 
@@ -107,13 +111,16 @@ func destroySlackChannel(
 		// Case H — final post failed; skip archive.
 		log.Warn().Err(postErr).Str("sandbox_id", meta.SandboxID).
 			Msg("destroySlackChannel: final-post bridge call failed; skipping archive")
+		fmt.Fprintf(os.Stderr, "  ⚠ Slack: final-post bridge call failed — archive skipped: %v\n", postErr)
 		return nil
 	}
+	fmt.Fprintf(os.Stderr, "  ✓ Slack: posted teardown message to %s\n", meta.SlackChannelID)
 
 	// Determine whether to archive (nil = default true; &false = skip).
 	shouldArchive := meta.SlackArchiveOnDestroy == nil || *meta.SlackArchiveOnDestroy
 	if !shouldArchive {
 		// Case E — explicit archive=false.
+		fmt.Fprintf(os.Stderr, "  Slack: archive disabled (slackArchiveOnDestroy=false) — channel %s kept\n", meta.SlackChannelID)
 		return nil
 	}
 
