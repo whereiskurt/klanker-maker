@@ -1358,3 +1358,13 @@ Plans:
 - [ ] 63.1-01-PLAN.md — SLCK-11: km create step 11d runtime injection — visibility commit + bounded SSM retry loop (6 × 5s) for agent readiness; 5 stderr branches; Wave 0 stderr-capture tests
 - [ ] 63.1-02-PLAN.md — SLCK-12: km destroy Slack archive auto-trigger — visibility commit for cases A/B/E/F/G/H + success-path split + targeted root-cause fix driven by live destroy diagnosis
 - [ ] 63.1-03-PLAN.md — SLCK-13: bot-token rotation full E2E — km slack rotate-token subcommand + forceSlackBridgeColdStart helper + operator runbook in docs/slack-notifications.md + live revoke-and-rotate UAT
+
+### Phase 64: km create reliability and doctor cleanup hardening
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 63
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 64 to break down)
