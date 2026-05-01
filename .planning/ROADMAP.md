@@ -1346,3 +1346,13 @@ Plans:
 - [ ] 63-08-PLAN.md — km create channel provisioning: shared/per-sandbox/override resolution + sanitizeChannelName + ChannelInfo client extension; populate DynamoDB SlackChannelID + SlackPerSandbox + SlackArchiveOnDestroy; runtime SSM SendCommand env injection
 - [ ] 63-09-PLAN.md — km destroy archive flow (final post + conversations.archive matrix; never blocks destroy on Slack failures) + km doctor checks (checkSlackTokenValidity via bridge auth.test, checkStaleSlackChannels via DynamoDB scan)
 - [ ] 63-10-PLAN.md — Live UAT: test/e2e/slack/ harness gated by RUN_SLACK_E2E=1 + reusable test profiles + docs/slack-notifications.md operator guide + CLAUDE.md updates + 63-10-UAT.md sign-off
+
+### Phase 63.1: Slack notify hook gap closure: step 11d runtime injection visibility, km destroy archive auto-trigger, and bridge token rotation hardening (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 63
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 63.1 to break down)
