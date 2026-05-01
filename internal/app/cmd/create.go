@@ -796,32 +796,11 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	if slackChannelID != "" {
 		ssmClientForInject := ssm.NewFromConfig(awsCfg)
 		ssmStoreForInject := &productionSSMParamStore{client: ssmClientForInject}
-		bridgeURL, _ := ssmStoreForInject.Get(ctx, "/km/slack/bridge-url", false)
-		if bridgeURL == "" {
-			log.Warn().Str("sandbox_id", sandboxID).
-				Msg("Step 11d: /km/slack/bridge-url not configured — Slack env not injected (run km slack init)")
-		} else {
-			// Get EC2 instance ID from Terraform outputs.
-			outputs, outErr := runner.Output(ctx, sandboxDir)
-			if outErr != nil {
-				log.Warn().Err(outErr).Str("sandbox_id", sandboxID).
-					Msg("Step 11d: failed to read sandbox outputs for Slack env inject (non-fatal)")
-			} else {
-				instanceID := extractOutputInstanceID(outputs)
-				if instanceID == "" {
-					log.Warn().Str("sandbox_id", sandboxID).
-						Msg("Step 11d: no EC2 instance ID in terraform outputs — Slack env not injected (docker/non-EC2 substrate)")
-				} else {
-					ssmRunner := &productionSSMRunner{client: ssmClientForInject}
-					if injectErr := injectSlackEnvIntoSandbox(ctx, ssmRunner, instanceID, slackChannelID, bridgeURL); injectErr != nil {
-						log.Warn().Err(injectErr).Str("sandbox_id", sandboxID).
-							Msg("Step 11d: failed to inject Slack env via SSM SendCommand (non-fatal — sandbox is provisioned)")
-					} else {
-						fmt.Fprintf(os.Stderr, "  ✓ Slack: channel %s wired into sandbox env\n", slackChannelID)
-					}
-				}
-			}
+		ssmRunnerForInject := &productionSSMRunner{client: ssmClientForInject}
+		outputter := func(ctx context.Context, dir string) (map[string]any, error) {
+			return runner.Output(ctx, dir)
 		}
+		runStep11dInject(ctx, ssmStoreForInject, ssmRunnerForInject, sandboxDir, outputter, extractOutputInstanceID, sandboxID, slackChannelID, 1, 0)
 	}
 
 	// Step 12: Create EventBridge TTL schedule if TTL is configured.

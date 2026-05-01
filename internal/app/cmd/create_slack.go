@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"github.com/rs/zerolog/log"
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
 	"github.com/whereiskurt/klankrmkr/pkg/slack"
 )
@@ -233,4 +236,60 @@ func (r *productionSSMRunner) RunShell(ctx context.Context, instanceID string, s
 		TimeoutSeconds: awssdk.Int32(30),
 	})
 	return err
+}
+
+// runStep11dInject orchestrates the step 11d Slack env injection — extracted from
+// create.go for testability. Reads bridge URL from ssmStore, terraform outputs from
+// outputter, instance ID via extractor, and runs the bounded retry loop. Emits
+// exactly one stderr line on every code path. Non-fatal: never returns an error.
+//
+// retryMax and retryDelay control the retry loop:
+//   - Production: retryMax=6, retryDelay=5*time.Second (covers SSM agent boot window)
+//   - Tests: retryDelay=time.Microsecond for fast wall-clock execution
+func runStep11dInject(
+	ctx context.Context,
+	ssmStore SSMParamStore,
+	runner SSMRunner,
+	sandboxDir string,
+	outputter func(ctx context.Context, dir string) (map[string]any, error),
+	extractor func(map[string]any) string,
+	sandboxID, slackChannelID string,
+	retryMax int,
+	retryDelay time.Duration,
+) {
+	bridgeURL, _ := ssmStore.Get(ctx, "/km/slack/bridge-url", false)
+	if bridgeURL == "" {
+		log.Warn().Str("sandbox_id", sandboxID).
+			Msg("Step 11d: /km/slack/bridge-url not configured — Slack env not injected (run km slack init)")
+		fmt.Fprintf(os.Stderr, "  ⚠ Slack: /km/slack/bridge-url not configured — env not injected (run km slack init)\n")
+		return
+	}
+
+	outputs, outErr := outputter(ctx, sandboxDir)
+	if outErr != nil {
+		log.Warn().Err(outErr).Str("sandbox_id", sandboxID).
+			Msg("Step 11d: failed to read sandbox outputs for Slack env inject (non-fatal)")
+		fmt.Fprintf(os.Stderr, "  ⚠ Slack: failed to read terraform outputs — env not injected (non-fatal): %v\n", outErr)
+		return
+	}
+
+	instanceID := extractor(outputs)
+	if instanceID == "" {
+		log.Warn().Str("sandbox_id", sandboxID).
+			Msg("Step 11d: no EC2 instance ID in terraform outputs — Slack env not injected (docker/non-EC2 substrate)")
+		fmt.Fprintf(os.Stderr, "  ⚠ Slack: no EC2 instance ID in outputs — env not injected (docker/non-EC2 substrate)\n")
+		return
+	}
+
+	// VISIBILITY-ONLY: single attempt; retry loop comes in Task 3.
+	// retryMax / retryDelay are accepted but ignored for now to keep this commit minimal.
+	_ = retryMax
+	_ = retryDelay
+	if injectErr := injectSlackEnvIntoSandbox(ctx, runner, instanceID, slackChannelID, bridgeURL); injectErr != nil {
+		log.Warn().Err(injectErr).Str("sandbox_id", sandboxID).
+			Msg("Step 11d: failed to inject Slack env via SSM SendCommand (non-fatal — sandbox is provisioned)")
+		fmt.Fprintf(os.Stderr, "  ⚠ Slack: SSM SendCommand failed — env not injected (non-fatal): %v\n", injectErr)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "  ✓ Slack: channel %s wired into sandbox env\n", slackChannelID)
 }
