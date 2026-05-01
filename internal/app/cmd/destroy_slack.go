@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
+	"os"
 
 	"github.com/rs/zerolog/log"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
@@ -136,7 +137,10 @@ func destroySlackChannel(
 		// Case I — archive failed; non-fatal.
 		log.Warn().Err(archErr).Str("sandbox_id", meta.SandboxID).
 			Msg("destroySlackChannel: archive bridge call failed (non-fatal)")
+		fmt.Fprintf(os.Stderr, "  ⚠ Slack: archive of %s failed (non-fatal): %v\n", meta.SlackChannelID, archErr)
+		return nil
 	}
 
+	fmt.Fprintf(os.Stderr, "  ✓ Slack: archived channel %s\n", meta.SlackChannelID)
 	return nil
 }
