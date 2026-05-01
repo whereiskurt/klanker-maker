@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 63.1-01-PLAN.md (step 11d visibility + retry loop, 3 commits, 8 tests green)
-last_updated: "2026-05-01T02:36:20.998Z"
+stopped_at: Completed 63.1-02-PLAN.md (SLCK-12 remote destroy Slack teardown fix, Option A, 5 commits, 34 destroy tests green)
+last_updated: "2026-05-01T11:30:33.132Z"
 last_activity: 2026-04-30 — Completed 63-10-PLAN.md (E2E harness, operator docs, live UAT sign-off, 8 hardening fixes)
 progress:
   total_phases: 67
   completed_phases: 63
   total_plans: 204
-  completed_plans: 203
+  completed_plans: 204
   percent: 0
 ---
 
@@ -242,6 +242,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 63-slack-notify-hook-for-claude-code-permission-and-idle-events P08 | 989 | 2 tasks | 12 files |
 | Phase 63 P07 | 1135s | 1 tasks | 2 files |
 | Phase 63.1 P01 | 993s | 3 tasks | 4 files |
+| Phase 63.1 P02 | 11 | 5 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -683,6 +684,8 @@ Recent decisions affecting current work:
 - [Phase 63.1]: Extract runStep11dInject to create_slack.go with retryMax/retryDelay injection for testability (Plan 63.1-01)
 - [Phase 63.1]: Two-commit sequencing: visibility (single attempt) first, retry loop second — allows diagnosing which branch fires before adding retry noise (Plan 63.1-01)
 - [Phase 63.1]: captureStderr lives exclusively in testhelpers_test.go — prevents duplicate-symbol compile errors when Plan 02 tests compile in Wave 1 (Plan 63.1-01)
+- [Phase 63.1]: SLCK-12 root cause: km destroy --remote early-returns before destroySlackChannel; Lambda has no Slack code. Option A chosen: run Slack teardown locally before EventBridge dispatch.
+- [Phase 63.1]: runSlackTeardown() shared helper extracted to destroy_slack.go — both remote and local paths use it to prevent drift.
 
 ### Roadmap Evolution
 
@@ -764,6 +767,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-01T02:36:20.993Z
-Stopped at: Completed 63.1-01-PLAN.md (step 11d visibility + retry loop, 3 commits, 8 tests green)
+Last session: 2026-05-01T11:30:33.127Z
+Stopped at: Completed 63.1-02-PLAN.md (SLCK-12 remote destroy Slack teardown fix, Option A, 5 commits, 34 destroy tests green)
 Resume file: None
