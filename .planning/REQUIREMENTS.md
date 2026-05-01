@@ -338,8 +338,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SLCK-09 | Phase 63 | Planned |
 | SLCK-10 | Phase 63 | Planned |
 | SLCK-11 | Phase 63.1 | Complete |
-| SLCK-12 | Phase 63.1 | Planned |
-| SLCK-13 | Phase 63.1 | Planned |
+| SLCK-12 | Phase 63.1 | Complete |
+| SLCK-13 | Phase 63.1 | Complete |
 
 **Coverage:**
 - v1 requirements: 81 total

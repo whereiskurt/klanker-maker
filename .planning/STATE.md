@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 63.1-02-PLAN.md (SLCK-12 remote destroy Slack teardown fix, Option A, 5 commits, 34 destroy tests green)
-last_updated: "2026-05-01T11:30:33.132Z"
+stopped_at: Completed 63.1-03-PLAN.md (SLCK-13 rotation hardening + bridge observability, 8 commits, Task 5 added during UAT)
+last_updated: "2026-05-01T13:15:00.000Z"
 last_activity: 2026-04-30 — Completed 63-10-PLAN.md (E2E harness, operator docs, live UAT sign-off, 8 hardening fixes)
 progress:
   total_phases: 67
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 
 ## Current Position
 
-Phase: 63 (slack-notify hook for Claude Code permission and idle events) — COMPLETE
-Plan: 10 of 10 in current phase — ALL PLANS COMPLETE
+Phase: 63.1 (slack-notify hook gap closure — step 11d, destroy archive, bridge token rotation hardening) — COMPLETE
+Plan: 3 of 3 in current phase — ALL PLANS COMPLETE
 Status: phase complete
-Last activity: 2026-04-30 — Completed 63-10-PLAN.md (E2E harness, operator docs, live UAT sign-off, 8 hardening fixes)
+Last activity: 2026-05-01 — Completed 63.1-03-PLAN.md (SLCK-13: km slack rotate-token, bridge structured logging, fail-fast 5xx, UAT ts=1777638955.854989)
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -243,6 +243,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 63 P07 | 1135s | 1 tasks | 2 files |
 | Phase 63.1 P01 | 993s | 3 tasks | 4 files |
 | Phase 63.1 P02 | 11 | 5 tasks | 4 files |
+| Phase 63.1 P03 | 45min | 5 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -686,6 +687,9 @@ Recent decisions affecting current work:
 - [Phase 63.1]: captureStderr lives exclusively in testhelpers_test.go — prevents duplicate-symbol compile errors when Plan 02 tests compile in Wave 1 (Plan 63.1-01)
 - [Phase 63.1]: SLCK-12 root cause: km destroy --remote early-returns before destroySlackChannel; Lambda has no Slack code. Option A chosen: run Slack teardown locally before EventBridge dispatch.
 - [Phase 63.1]: runSlackTeardown() shared helper extracted to destroy_slack.go — both remote and local paths use it to prevent drift.
+- [Phase 63.1-03]: B1 (fail-fast on 5xx) chosen for PostToBridge: nonce-replay protection makes same-envelope 5xx retry harmful (turns Slack error into replayed_nonce); no caller needs retry-on-5xx; network errors pre-nonce-reserve still retried.
+- [Phase 63.1-03]: Task 5 added during UAT (not in PLAN.md): bridge had zero logging; 5xx errors masked as replayed_nonce; both root causes fixed with slog + fail-fast policy.
+- [Phase 63.1-03]: SetLogger() exported from bridge package for test log capture via bytes.Buffer; avoids test/production divergence.
 
 ### Roadmap Evolution
 
