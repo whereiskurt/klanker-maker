@@ -126,6 +126,9 @@ Requirements for initial release. Each maps to roadmap phases.
 - **SLCK-08**: `km doctor` adds two checks — `checkSlackTokenValidity` calls `auth.test` via the bridge Lambda using operator signing, returns WARN on invalid/expired token; `checkStaleSlackChannels` scans `km-sandboxes` for records with `slack_channel_id` whose sandbox no longer exists, returns WARN listing stale channels
 - **SLCK-09**: End-to-end live verification — `test/e2e/slack/` harness gated by `RUN_SLACK_E2E=1`; covers shared-mode notification delivery, per-sandbox lifecycle + archive, Phase 62 email backward compat, Slack rate-limit propagation; bot token rotation and Slack Connect invite acceptance covered as documented UAT in `63-10-UAT.md`
 - **SLCK-10**: Documentation — `docs/slack-notifications.md` operator guide (workspace prerequisites, `km slack init` walkthrough, profile field reference, troubleshooting matrix, security model, rotation procedures); `CLAUDE.md` updated with new commands (`km slack init/test/status`), env var conventions (`KM_NOTIFY_SLACK_ENABLED`, `KM_SLACK_CHANNEL_ID`, `KM_SLACK_BRIDGE_URL`, `KM_NOTIFY_EMAIL_ENABLED`), and SSM parameter convention (`/km/slack/*`)
+- **SLCK-11**: `km create` step 11d runtime injection visibility — Lambda subprocess (`internal/app/cmd/create.go:790-825`) currently silences zerolog (`destroy.go:138`-style `log.Logger = zerolog.New(io.Discard)` in `create.go:189-193`), so all step 11d failure branches (bridge URL missing, terragrunt outputs read failure, instance ID missing, SSM SendCommand failure) discard their warnings. Each branch must emit a visible `fmt.Fprintf(os.Stderr, ...)` line — explicit success (`✓ Slack: channel C... wired into sandbox env`) AND each failure variant — so operators can diagnose why `KM_SLACK_CHANNEL_ID`/`KM_SLACK_BRIDGE_URL` aren't appearing in `/etc/profile.d/km-notify-env.sh` after `km create --remote`. Root cause of the silent failure must also be diagnosed and fixed (likely SSM SendCommand timing — agent may not be reachable when `runner.Output` returns).
+- **SLCK-12**: `km destroy` Slack archive auto-trigger — `destroySlackChannel` (`internal/app/cmd/destroy_slack.go`) is invoked at `destroy.go:474` but the archive bridge call evidently doesn't reach Slack (verified during UAT 4b: direct `conversations.archive` returned `ok:true` after destroy completed, proving channel was NOT archived by destroy). Visible logging shipped in `377b588` — diagnose root cause from next-attempt stderr output and fix. Likely cause: final-post bridge call returns an error (Case H at `destroy_slack.go:106`) which skips the archive entirely; instrument WHY the final-post fails (operator key load? SSM access? Bridge URL mismatch?). End state: a `km destroy` of a per-sandbox sandbox with `slackArchiveOnDestroy != false` must archive the channel and emit `✓ Slack: archived channel C...` on stderr.
+- **SLCK-13**: Bot-token rotation full E2E — UAT Scen 7 verified the idempotent path (`--force` reuses existing channel after `1ad765c`); the FULL rotation cycle remains unverified: revoke token in Slack App admin → wait for the bridge Lambda's `SSMBotTokenFetcher` 15-min cache TTL to elapse → reissue new token → `km slack init --force --bot-token <new>` → `km slack test` succeeds with the new token. Plan must include a documented operator runbook step + automated test where feasible (cache invalidation via Lambda cold-start trigger as a fallback to the 15-min wait).
 
 
 ### eBPF Network Enforcement
@@ -334,6 +337,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SLCK-08 | Phase 63 | Planned |
 | SLCK-09 | Phase 63 | Planned |
 | SLCK-10 | Phase 63 | Planned |
+| SLCK-11 | Phase 63.1 | Planned |
+| SLCK-12 | Phase 63.1 | Planned |
+| SLCK-13 | Phase 63.1 | Planned |
 
 **Coverage:**
 - v1 requirements: 81 total

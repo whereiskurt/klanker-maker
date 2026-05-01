@@ -1347,10 +1347,10 @@ Plans:
 - [ ] 63-09-PLAN.md — km destroy archive flow (final post + conversations.archive matrix; never blocks destroy on Slack failures) + km doctor checks (checkSlackTokenValidity via bridge auth.test, checkStaleSlackChannels via DynamoDB scan)
 - [ ] 63-10-PLAN.md — Live UAT: test/e2e/slack/ harness gated by RUN_SLACK_E2E=1 + reusable test profiles + docs/slack-notifications.md operator guide + CLAUDE.md updates + 63-10-UAT.md sign-off
 
-### Phase 63.1: Slack notify hook gap closure: step 11d runtime injection visibility, km destroy archive auto-trigger, and bridge token rotation hardening (INSERTED)
+### Phase 63.1: Slack notify hook gap closure (INSERTED)
 
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Goal:** Close two operational gaps and one rotation-hardening item from Phase 63 UAT (2026-04-30). (1) Lambda subprocess silently swallowed step 11d runtime-injection outcomes — `KM_SLACK_CHANNEL_ID` and `KM_SLACK_BRIDGE_URL` never reached `/etc/profile.d/km-notify-env.sh` on remote-created sandboxes. Make the outcome visible on stderr (success path AND every failure branch) and fix the root cause so injection actually persists. (2) `km destroy` calls `destroySlackChannel` but the archive bridge call evidently doesn't reach Slack — visible logging shipped in `377b588` is the diagnostic harness; this phase diagnoses root cause and fixes it. (3) Full bot-token rotation cycle (revoke → cache TTL elapse → reissue → smoke test) end-to-end, deferred from UAT Scen 7. Operator workarounds remain documented in CLAUDE.md until shipped.
+**Requirements**: SLCK-11, SLCK-12, SLCK-13
 **Depends on:** Phase 63
 **Plans:** 0 plans
 
