@@ -5,12 +5,22 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/whereiskurt/klankrmkr/pkg/slack"
 )
+
+// logger is the package-level structured logger. Lambda ships stderr to
+// CloudWatch automatically — no additional log-group configuration needed.
+// The logger is replaced in tests via SetLogger.
+var logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+// SetLogger replaces the package logger. Used in tests to capture output.
+func SetLogger(l *slog.Logger) { logger = l }
 
 // MaxClockSkewSeconds is the half-window for replay-timestamp protection.
 const MaxClockSkewSeconds = 300
@@ -64,17 +74,34 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 	// Step 1 — parse envelope.
 	var env slack.SlackEnvelope
 	if err := json.Unmarshal([]byte(req.Body), &env); err != nil {
+		logger.WarnContext(ctx, "bridge: bad_envelope", "step", "parse", "error", err.Error(), "status", 400)
 		return errResp(400, "bad_envelope")
 	}
 	if env.Action == "" || env.SenderID == "" || env.Channel == "" || env.Nonce == "" || env.Timestamp == 0 || env.Version == 0 {
+		logger.WarnContext(ctx, "bridge: missing_fields", "step", "parse", "action", env.Action, "sender_id", env.SenderID, "status", 400)
 		return errResp(400, "missing_fields")
 	}
 	if env.Version != slack.EnvelopeVersion {
+		logger.WarnContext(ctx, "bridge: unsupported_version", "step", "parse", "version", env.Version, "status", 400)
 		return errResp(400, "unsupported_version")
 	}
 	if env.Action != slack.ActionPost && env.Action != slack.ActionArchive && env.Action != slack.ActionTest {
+		logger.WarnContext(ctx, "bridge: unknown_action", "step", "parse", "action", env.Action, "status", 400)
 		return errResp(400, "unknown_action")
 	}
+
+	// Truncate nonce for log — first 8 chars sufficient for correlation.
+	noncePrefix := env.Nonce
+	if len(noncePrefix) > 8 {
+		noncePrefix = noncePrefix[:8]
+	}
+
+	logger.InfoContext(ctx, "bridge: request",
+		"action", env.Action,
+		"sender_id", env.SenderID,
+		"channel", env.Channel,
+		"nonce_prefix", noncePrefix,
+	)
 
 	// Header sender consistency (defense in depth — sig still verifies the body).
 	headerSender := req.Headers["X-KM-Sender-ID"]
@@ -82,6 +109,12 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		headerSender = req.Headers["x-km-sender-id"]
 	}
 	if headerSender != "" && headerSender != env.SenderID {
+		logger.WarnContext(ctx, "bridge: sender_header_mismatch",
+			"step", "header_check",
+			"header_sender", headerSender,
+			"envelope_sender", env.SenderID,
+			"status", 401,
+		)
 		return errResp(401, "sender_header_mismatch")
 	}
 
@@ -92,14 +125,31 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		skew = -skew
 	}
 	if skew > MaxClockSkewSeconds {
+		logger.WarnContext(ctx, "bridge: stale_timestamp",
+			"step", "timestamp",
+			"skew_seconds", skew,
+			"envelope_ts", env.Timestamp,
+			"status", 401,
+		)
 		return errResp(401, "stale_timestamp")
 	}
 
 	// Step 3 — replay-nonce.
 	if err := h.Nonces.Reserve(ctx, env.Nonce, NonceTTLSeconds); err != nil {
 		if errors.Is(err, ErrNonceReplayed) {
+			logger.WarnContext(ctx, "bridge: replayed_nonce",
+				"step", "nonce",
+				"nonce_prefix", noncePrefix,
+				"sender_id", env.SenderID,
+				"status", 401,
+			)
 			return errResp(401, "replayed_nonce")
 		}
+		logger.ErrorContext(ctx, "bridge: nonce_unavailable",
+			"step", "nonce",
+			"error", err.Error(),
+			"status", 500,
+		)
 		return errResp(500, "nonce_unavailable")
 	}
 
@@ -107,8 +157,19 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 	pub, err := h.Keys.Fetch(ctx, env.SenderID)
 	if err != nil {
 		if errors.Is(err, ErrSenderNotFound) {
+			logger.WarnContext(ctx, "bridge: unknown_sender",
+				"step", "key_fetch",
+				"sender_id", env.SenderID,
+				"status", 404,
+			)
 			return errResp(404, "unknown_sender")
 		}
+		logger.ErrorContext(ctx, "bridge: key_lookup_failed",
+			"step", "key_fetch",
+			"sender_id", env.SenderID,
+			"error", err.Error(),
+			"status", 500,
+		)
 		return errResp(500, "key_lookup_failed")
 	}
 
@@ -119,9 +180,21 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 	}
 	sig, err := base64.StdEncoding.DecodeString(sigB64)
 	if err != nil {
+		logger.WarnContext(ctx, "bridge: bad_signature_encoding",
+			"step", "signature",
+			"sender_id", env.SenderID,
+			"error", err.Error(),
+			"status", 401,
+		)
 		return errResp(401, "bad_signature_encoding")
 	}
 	if err := slack.VerifyEnvelope(&env, sig, pub); err != nil {
+		logger.WarnContext(ctx, "bridge: bad_signature",
+			"step", "signature",
+			"sender_id", env.SenderID,
+			"error", err.Error(),
+			"status", 401,
+		)
 		return errResp(401, "bad_signature")
 	}
 
@@ -129,20 +202,44 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 	isOperator := env.SenderID == slack.SenderOperator
 	if !isOperator {
 		if env.Action == slack.ActionArchive || env.Action == slack.ActionTest {
+			logger.WarnContext(ctx, "bridge: sandbox_action_forbidden",
+				"step", "authz",
+				"action", env.Action,
+				"sender_id", env.SenderID,
+				"status", 403,
+			)
 			return errResp(403, "sandbox_action_forbidden")
 		}
 		// Sandbox post: channel must match owned channel.
 		owned, err := h.Channels.OwnedChannel(ctx, env.SenderID)
 		if err != nil {
+			logger.ErrorContext(ctx, "bridge: channel_lookup_failed",
+				"step", "authz",
+				"sender_id", env.SenderID,
+				"error", err.Error(),
+				"status", 500,
+			)
 			return errResp(500, "channel_lookup_failed")
 		}
 		if owned == "" || owned != env.Channel {
+			logger.WarnContext(ctx, "bridge: channel_mismatch",
+				"step", "authz",
+				"sender_id", env.SenderID,
+				"channel", env.Channel,
+				"owned_channel", owned,
+				"status", 403,
+			)
 			return errResp(403, "channel_mismatch")
 		}
 	}
 
 	// Step 7 — bot token.
 	if _, err := h.Token.Fetch(ctx); err != nil {
+		logger.ErrorContext(ctx, "bridge: bot_token_unavailable",
+			"step", "token_fetch",
+			"error", err.Error(),
+			"status", 500,
+		)
 		return errResp(500, "bot_token_unavailable")
 	}
 
@@ -150,10 +247,34 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 	switch env.Action {
 	case slack.ActionPost, slack.ActionTest:
 		ts, err := h.Slack.PostMessage(ctx, env.Channel, env.Subject, env.Body, env.ThreadTS)
-		return slackResponse(ts, err)
+		resp := slackResponse(ts, err)
+		if err != nil {
+			logger.ErrorContext(ctx, "bridge: slack_call_failed",
+				"step", "dispatch",
+				"action", env.Action,
+				"channel", env.Channel,
+				"slack_error", err.Error(),
+				"status", resp.StatusCode,
+			)
+		} else {
+			logger.InfoContext(ctx, "bridge: ok", "action", env.Action, "channel", env.Channel, "ts", ts, "status", 200)
+		}
+		return resp
 	case slack.ActionArchive:
 		err := h.Slack.ArchiveChannel(ctx, env.Channel)
-		return slackResponse("", err)
+		resp := slackResponse("", err)
+		if err != nil {
+			logger.ErrorContext(ctx, "bridge: slack_call_failed",
+				"step", "dispatch",
+				"action", env.Action,
+				"channel", env.Channel,
+				"slack_error", err.Error(),
+				"status", resp.StatusCode,
+			)
+		} else {
+			logger.InfoContext(ctx, "bridge: ok", "action", env.Action, "channel", env.Channel, "status", 200)
+		}
+		return resp
 	}
 	return errResp(500, "internal") // unreachable
 }
