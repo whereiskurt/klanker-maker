@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
 	"github.com/whereiskurt/klankrmkr/pkg/slack"
@@ -385,13 +386,29 @@ func TestResolveSlack_InvalidOverrideID_Error(t *testing.T) {
 // ────────────────────────────────────────────────────────────────────────────
 
 // fakeSSMRunner implements SSMRunner for tests.
+// callCount tracks how many times RunShell has been called.
+// failTimes specifies how many initial calls should return err before succeeding.
+// If failTimes is negative or larger than callCount, err is always returned.
 type fakeSSMRunner struct {
 	capturedScript string
+	lastInstance   string
 	err            error
+	callCount      int
+	failTimes      int // fail this many times before succeeding (0 = always succeed)
 }
 
-func (f *fakeSSMRunner) RunShell(_ context.Context, _ string, script string) error {
+func (f *fakeSSMRunner) RunShell(_ context.Context, instanceID string, script string) error {
+	f.callCount++
 	f.capturedScript = script
+	f.lastInstance = instanceID
+	// failTimes > 0: fail that many times then succeed.
+	// failTimes == 0 and err != nil: always fail (backward compat with existing tests).
+	if f.failTimes > 0 {
+		if f.callCount <= f.failTimes {
+			return f.err
+		}
+		return nil
+	}
 	return f.err
 }
 
@@ -423,5 +440,183 @@ func TestInjectSlackEnvIntoSandbox_PropagatesRunnerError(t *testing.T) {
 	err := injectSlackEnvIntoSandbox(context.Background(), runner, "i-abc123", "C0CHANNEL", "https://bridge.example.com")
 	if err == nil {
 		t.Fatal("expected error from runner failure")
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// fakeOutputter — used by runStep11dInject tests
+// ────────────────────────────────────────────────────────────────────────────
+
+type fakeOutputter struct {
+	outputs map[string]any
+	err     error
+}
+
+func (f *fakeOutputter) run(_ context.Context, _ string) (map[string]any, error) {
+	return f.outputs, f.err
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// TestStep11d_VisibleOutput — 5 stderr-branch tests (Wave 0 RED)
+// ────────────────────────────────────────────────────────────────────────────
+
+// errInvalidInstance simulates an SSM InvalidInstanceId error.
+var errInvalidInstance = errors.New("InvalidInstanceId: instance not yet registered")
+
+func TestStep11d_VisibleOutput_NoBridgeURL(t *testing.T) {
+	store := &fakeSSMParamStore{params: map[string]string{}} // no bridge-url
+	runner := &fakeSSMRunner{}
+	out := &fakeOutputter{
+		outputs: map[string]any{
+			"ec2spot_instances": map[string]any{
+				"i-abc": map[string]any{"instance_id": "i-abc123"},
+			},
+		},
+	}
+	got := captureStderr(t, func() {
+		runStep11dInject(context.Background(), store, runner, "/tmp/sandbox", out.run, extractOutputInstanceID, "sb-test", "CTEST", 1, time.Microsecond)
+	})
+	if !strings.Contains(got, "⚠ Slack: /km/slack/bridge-url not configured") {
+		t.Errorf("stderr %q should contain bridge-url not-configured message", got)
+	}
+}
+
+func TestStep11d_VisibleOutput_OutputsErr(t *testing.T) {
+	store := &fakeSSMParamStore{params: map[string]string{"/km/slack/bridge-url": "https://bridge.example.com"}}
+	runner := &fakeSSMRunner{}
+	outErr := errors.New("terraform output failed")
+	out := &fakeOutputter{err: outErr}
+	got := captureStderr(t, func() {
+		runStep11dInject(context.Background(), store, runner, "/tmp/sandbox", out.run, extractOutputInstanceID, "sb-test", "CTEST", 1, time.Microsecond)
+	})
+	if !strings.Contains(got, "⚠ Slack: failed to read terraform outputs") {
+		t.Errorf("stderr %q should contain terraform outputs failure message", got)
+	}
+	if !strings.Contains(got, outErr.Error()) {
+		t.Errorf("stderr %q should contain error text %q", got, outErr.Error())
+	}
+}
+
+func TestStep11d_VisibleOutput_NoInstanceID(t *testing.T) {
+	store := &fakeSSMParamStore{params: map[string]string{"/km/slack/bridge-url": "https://bridge.example.com"}}
+	runner := &fakeSSMRunner{}
+	out := &fakeOutputter{
+		outputs: map[string]any{}, // no ec2spot_instances → extractOutputInstanceID returns ""
+	}
+	got := captureStderr(t, func() {
+		runStep11dInject(context.Background(), store, runner, "/tmp/sandbox", out.run, extractOutputInstanceID, "sb-test", "CTEST", 1, time.Microsecond)
+	})
+	if !strings.Contains(got, "⚠ Slack: no EC2 instance ID in outputs") {
+		t.Errorf("stderr %q should contain no-instance-ID message", got)
+	}
+}
+
+func TestStep11d_VisibleOutput_SSMFail(t *testing.T) {
+	store := &fakeSSMParamStore{params: map[string]string{"/km/slack/bridge-url": "https://bridge.example.com"}}
+	runner := &fakeSSMRunner{err: errInvalidInstance, failTimes: 0} // always fail (failTimes=0 + err != nil)
+	out := &fakeOutputter{
+		outputs: map[string]any{
+			"ec2spot_instances": map[string]any{
+				"i-abc": map[string]any{"instance_id": "i-abc123"},
+			},
+		},
+	}
+	got := captureStderr(t, func() {
+		runStep11dInject(context.Background(), store, runner, "/tmp/sandbox", out.run, extractOutputInstanceID, "sb-test", "CTEST", 1, time.Microsecond)
+	})
+	if !strings.Contains(got, "⚠ Slack: SSM SendCommand failed") {
+		t.Errorf("stderr %q should contain SSM SendCommand failed message", got)
+	}
+	if !strings.Contains(got, errInvalidInstance.Error()) {
+		t.Errorf("stderr %q should contain error text %q", got, errInvalidInstance.Error())
+	}
+}
+
+func TestStep11d_VisibleOutput_Success(t *testing.T) {
+	store := &fakeSSMParamStore{params: map[string]string{"/km/slack/bridge-url": "https://bridge.example.com"}}
+	runner := &fakeSSMRunner{} // no err — succeeds
+	out := &fakeOutputter{
+		outputs: map[string]any{
+			"ec2spot_instances": map[string]any{
+				"i-abc": map[string]any{"instance_id": "i-abc123"},
+			},
+		},
+	}
+	got := captureStderr(t, func() {
+		runStep11dInject(context.Background(), store, runner, "/tmp/sandbox", out.run, extractOutputInstanceID, "sb-test", "C-TEST", 1, time.Microsecond)
+	})
+	if !strings.Contains(got, "✓ Slack: channel C-TEST wired into sandbox env") {
+		t.Errorf("stderr %q should contain success message with channel ID", got)
+	}
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// TestInjectSlackEnv retry-loop tests (Wave 0 RED)
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestInjectSlackEnv_RetryUntilAgentReady(t *testing.T) {
+	store := &fakeSSMParamStore{params: map[string]string{"/km/slack/bridge-url": "https://bridge.example.com"}}
+	// failTimes=2: fails on attempts 1 and 2, succeeds on attempt 3
+	runner := &fakeSSMRunner{err: errInvalidInstance, failTimes: 2}
+	out := &fakeOutputter{
+		outputs: map[string]any{
+			"ec2spot_instances": map[string]any{
+				"i-abc": map[string]any{"instance_id": "i-abc123"},
+			},
+		},
+	}
+	captureStderr(t, func() {
+		runStep11dInject(context.Background(), store, runner, "/tmp/sandbox", out.run, extractOutputInstanceID, "sb-test", "CTEST", 6, time.Microsecond)
+	})
+	if runner.callCount != 3 {
+		t.Errorf("expected 3 attempts (fail 2, succeed 1), got %d", runner.callCount)
+	}
+}
+
+func TestInjectSlackEnv_MaxRetryThenFail(t *testing.T) {
+	store := &fakeSSMParamStore{params: map[string]string{"/km/slack/bridge-url": "https://bridge.example.com"}}
+	// failTimes=0 with err != nil: always fails
+	runner := &fakeSSMRunner{err: errInvalidInstance, failTimes: 0}
+	out := &fakeOutputter{
+		outputs: map[string]any{
+			"ec2spot_instances": map[string]any{
+				"i-abc": map[string]any{"instance_id": "i-abc123"},
+			},
+		},
+	}
+	got := captureStderr(t, func() {
+		runStep11dInject(context.Background(), store, runner, "/tmp/sandbox", out.run, extractOutputInstanceID, "sb-test", "CTEST", 6, time.Microsecond)
+	})
+	if runner.callCount != 6 {
+		t.Errorf("expected exactly 6 attempts, got %d", runner.callCount)
+	}
+	if !strings.Contains(got, "⚠ Slack: SSM SendCommand failed") {
+		t.Errorf("stderr %q should contain SSM failure message after 6 attempts", got)
+	}
+}
+
+func TestInjectSlackEnv_RetryRespectsBound(t *testing.T) {
+	store := &fakeSSMParamStore{params: map[string]string{"/km/slack/bridge-url": "https://bridge.example.com"}}
+	runner := &fakeSSMRunner{err: errInvalidInstance, failTimes: 0}
+	out := &fakeOutputter{
+		outputs: map[string]any{
+			"ec2spot_instances": map[string]any{
+				"i-abc": map[string]any{"instance_id": "i-abc123"},
+			},
+		},
+	}
+	start := time.Now()
+	captureStderr(t, func() {
+		// Use time.Microsecond so wall-clock stays well under 1s while still testing
+		// that retryDelay is honored (delay > 0 means at least some pause occurs).
+		runStep11dInject(context.Background(), store, runner, "/tmp/sandbox", out.run, extractOutputInstanceID, "sb-test", "CTEST", 6, time.Microsecond)
+	})
+	elapsed := time.Since(start)
+	// With time.Microsecond delay, 6 attempts should complete in far less than 1s.
+	if elapsed > 5*time.Second {
+		t.Errorf("retry loop with time.Microsecond delay took too long: %v (retryDelay override not honored)", elapsed)
+	}
+	if runner.callCount != 6 {
+		t.Errorf("expected 6 attempts, got %d", runner.callCount)
 	}
 }
