@@ -1021,9 +1021,22 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		gh := resolvedProfile.Spec.SourceAccess.GitHub
 		instID, tokenErr := generateAndStoreGitHubToken(ctx, ssmClient, sandboxID, kmsKeyARN, gh.AllowedRepos, nil)
 		if tokenErr != nil {
-			if errors.Is(tokenErr, ErrGitHubNotConfigured) {
+			var ambig *ErrAmbiguousInstallation
+			switch {
+			case errors.Is(tokenErr, ErrGitHubNotConfigured):
 				fmt.Printf("  ⊘ GitHub token: skipped (not configured)\n")
-			} else {
+			case errors.As(tokenErr, &ambig):
+				// Loud warning — operator has multiple per-owner installations
+				// configured but allowedRepos is wildcard-only, so we cannot
+				// pick one safely. Surface both fix paths.
+				fmt.Fprintf(os.Stderr, "  ⚠ GitHub token: skipped — ambiguous installation\n")
+				fmt.Fprintf(os.Stderr, "    Candidates: %s\n", strings.Join(ambig.Candidates, ", "))
+				fmt.Fprintf(os.Stderr, "    Fix: either (a) set /km/config/github/installation-id in SSM to pick one,\n")
+				fmt.Fprintf(os.Stderr, "         or  (b) add an owner-prefixed entry like %q to spec.sourceAccess.github.allowedRepos\n",
+					ambig.Candidates[0]+"/*")
+				log.Warn().Strs("candidates", ambig.Candidates).Str("sandbox_id", sandboxID).
+					Msg("Step 13a: GitHub App installation ambiguous — token not generated (non-fatal)")
+			default:
 				log.Warn().Err(tokenErr).Str("sandbox_id", sandboxID).
 					Msg("Step 13a: GitHub App token generation failed (non-fatal — sandbox is provisioned)")
 			}
