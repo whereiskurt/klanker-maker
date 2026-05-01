@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"io"
@@ -34,7 +33,6 @@ import (
 	"github.com/whereiskurt/klankrmkr/pkg/lifecycle"
 	"github.com/whereiskurt/klankrmkr/pkg/localnumber"
 	profilepkg "github.com/whereiskurt/klankrmkr/pkg/profile"
-	slackpkg "github.com/whereiskurt/klankrmkr/pkg/slack"
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
 )
 
@@ -89,17 +87,26 @@ func NewDestroyCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) 
 				}
 			}
 			// Docker substrates always destroy locally — remote Lambda can't reach local containers.
+			// SLCK-12 fix (Plan 63.1-02 Option A): run Slack teardown locally BEFORE dispatching
+			// the remote destroy event, because the Lambda handler has no Slack code. The operator
+			// workstation already holds the signing key and IAM perms, matching the local-path trust
+			// model. Failures are non-fatal — Slack issues never block destroy.
 			if remote {
-				awsCfg, awsErr := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
-				if awsErr == nil {
+				remoteAWSCfg, remoteAWSErr := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
+				if remoteAWSErr == nil {
 					tableName := cfg.SandboxTableName
 					if tableName == "" {
 						tableName = "km-sandboxes"
 					}
-					dynClient := dynamodbpkg.NewFromConfig(awsCfg)
-					if meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynClient, tableName, sandboxID); metaErr == nil && meta.Substrate == "docker" {
-						remote = false
-						fmt.Printf("  [info] Docker substrate — destroying locally\n")
+					dynClient := dynamodbpkg.NewFromConfig(remoteAWSCfg)
+					if meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynClient, tableName, sandboxID); metaErr == nil {
+						if meta.Substrate == "docker" {
+							remote = false
+							fmt.Printf("  [info] Docker substrate — destroying locally\n")
+						} else {
+							// Still remote: run Slack teardown locally before dispatch.
+							runSlackTeardown(ctx, remoteAWSCfg, meta)
+						}
 					}
 				}
 			}
@@ -459,19 +466,10 @@ locals {
 			if existingMeta.Alias != "" {
 				fmt.Printf("Alias freed: %s\n", existingMeta.Alias)
 			}
-			// Phase 63 — per-sandbox Slack archive flow. Reads SlackArchiveOnDestroy from
-			// the metadata record (populated by km create per Plan 63-08). Non-fatal: destroy
-			// has already succeeded; Slack failures are WARN-logged and never block teardown.
-			slackSSMClient := ssm.NewFromConfig(awsCfg)
-			slackSSMStore := &productionSSMParamStore{client: slackSSMClient}
-			slackRegion := awsCfg.Region
-			if slackRegion == "" {
-				slackRegion = "us-east-1"
-			}
-			slackKeyLoader := PrivKeyLoaderFunc(func(innerCtx context.Context, _ string) (ed25519.PrivateKey, error) {
-				return loadSlackOperatorKey(innerCtx, slackSSMClient)
-			})
-			_ = destroySlackChannel(ctx, existingMeta, slackRegion, slackSSMStore, slackKeyLoader, BridgePosterFunc(slackpkg.PostToBridge))
+			// Phase 63 — per-sandbox Slack archive flow (local destroy path).
+			// runSlackTeardown is the shared helper; the remote path calls it before dispatch.
+			// Non-fatal: destroy has already succeeded; Slack failures are WARN-logged.
+			runSlackTeardown(ctx, awsCfg, existingMeta)
 		} else {
 			// S3 fallback for alias read.
 			stateBucketForAlias := cfg.StateBucket

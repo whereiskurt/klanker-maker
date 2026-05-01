@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/rs/zerolog/log"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/slack"
@@ -150,4 +152,28 @@ func destroySlackChannel(
 
 	fmt.Fprintf(os.Stderr, "  ✓ Slack: archived channel %s\n", meta.SlackChannelID)
 	return nil
+}
+
+// runSlackTeardown is the shared Slack-archive helper called by both the local
+// and remote destroy paths. It constructs the SSM client, key loader, and bridge
+// poster from the provided AWS config, then delegates to destroySlackChannel.
+//
+// All failures are non-fatal: the caller discards the returned error. This
+// function is the single canonical call site — use it for both local and remote
+// destroy to prevent drift.
+//
+// SLCK-12 (Plan 63.1-02 Option A): remote destroy path calls this BEFORE
+// dispatching the EventBridge event so the operator-workstation signs and posts
+// the teardown message even when km destroy runs with --remote (the default).
+func runSlackTeardown(ctx context.Context, awsCfg aws.Config, meta *kmaws.SandboxMetadata) {
+	ssmClient := ssm.NewFromConfig(awsCfg)
+	ssmStore := &productionSSMParamStore{client: ssmClient}
+	region := awsCfg.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+	keyLoader := PrivKeyLoaderFunc(func(innerCtx context.Context, _ string) (ed25519.PrivateKey, error) {
+		return loadSlackOperatorKey(innerCtx, ssmClient)
+	})
+	_ = destroySlackChannel(ctx, meta, region, ssmStore, keyLoader, BridgePosterFunc(slack.PostToBridge))
 }
