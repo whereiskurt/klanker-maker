@@ -2,12 +2,14 @@ package cmd_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/whereiskurt/klankrmkr/internal/app/cmd"
 )
 
@@ -422,5 +424,56 @@ func TestRegionalModulesIncludesSlackBridge(t *testing.T) {
 	if emailIdx >= 0 && bridgeIdx <= emailIdx {
 		t.Errorf("lambda-slack-bridge (idx %d) must appear after email-handler (idx %d)",
 			bridgeIdx, emailIdx)
+	}
+}
+
+// ──────────────────────────────────────────────
+// forceSlackBridgeColdStart tests (SLCK-13)
+// ──────────────────────────────────────────────
+
+// fakeLambdaUpdater records the last UpdateFunctionConfiguration call.
+type fakeLambdaUpdater struct {
+	lastInput *lambda.UpdateFunctionConfigurationInput
+	err       error
+}
+
+func (f *fakeLambdaUpdater) UpdateFunctionConfiguration(
+	_ context.Context,
+	input *lambda.UpdateFunctionConfigurationInput,
+	_ ...func(*lambda.Options),
+) (*lambda.UpdateFunctionConfigurationOutput, error) {
+	f.lastInput = input
+	return &lambda.UpdateFunctionConfigurationOutput{}, f.err
+}
+
+// TestSlackBridgeColdStart_TargetsCorrectFunction verifies that
+// ForceSlackBridgeColdStartWith calls UpdateFunctionConfiguration with
+// FunctionName="km-slack-bridge" and includes TOKEN_ROTATION_TS env var.
+func TestSlackBridgeColdStart_TargetsCorrectFunction(t *testing.T) {
+	f := &fakeLambdaUpdater{}
+	if err := cmd.ForceSlackBridgeColdStartWith(context.Background(), f); err != nil {
+		t.Fatalf("ForceSlackBridgeColdStartWith: %v", err)
+	}
+	if f.lastInput == nil {
+		t.Fatal("UpdateFunctionConfiguration was not called")
+	}
+	if got := *f.lastInput.FunctionName; got != "km-slack-bridge" {
+		t.Errorf("FunctionName = %q; want km-slack-bridge", got)
+	}
+	if f.lastInput.Environment == nil {
+		t.Fatal("Environment not set")
+	}
+	if _, ok := f.lastInput.Environment.Variables["TOKEN_ROTATION_TS"]; !ok {
+		t.Errorf("TOKEN_ROTATION_TS not in env vars; got %v", f.lastInput.Environment.Variables)
+	}
+}
+
+// TestSlackBridgeColdStart_PropagatesError verifies that errors from
+// UpdateFunctionConfiguration are returned unchanged.
+func TestSlackBridgeColdStart_PropagatesError(t *testing.T) {
+	wantErr := errors.New("AccessDeniedException")
+	f := &fakeLambdaUpdater{err: wantErr}
+	if err := cmd.ForceSlackBridgeColdStartWith(context.Background(), f); err != wantErr {
+		t.Errorf("got err %v; want %v", err, wantErr)
 	}
 }

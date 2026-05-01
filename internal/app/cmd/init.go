@@ -1651,3 +1651,38 @@ func forceLambdaColdStart(ctx context.Context, cfg aws.Config) error {
 	})
 	return err
 }
+
+// lambdaConfigUpdater is a narrow interface over the Lambda SDK client used by
+// forceSlackBridgeColdStartWith — exists solely to enable unit-test mocking
+// without a real AWS connection.
+type lambdaConfigUpdater interface {
+	UpdateFunctionConfiguration(ctx context.Context, input *lambda.UpdateFunctionConfigurationInput, optFns ...func(*lambda.Options)) (*lambda.UpdateFunctionConfigurationOutput, error)
+}
+
+// ForceSlackBridgeColdStartWith updates the km-slack-bridge Lambda's
+// environment using the supplied client, forcing a new execution environment
+// and invalidating the in-process SSMBotTokenFetcher cache (15-min TTL).
+// Exported for unit testing; production code should call forceSlackBridgeColdStart.
+func ForceSlackBridgeColdStartWith(ctx context.Context, client lambdaConfigUpdater) error {
+	_, err := client.UpdateFunctionConfiguration(ctx, &lambda.UpdateFunctionConfigurationInput{
+		FunctionName: aws.String("km-slack-bridge"),
+		Environment: &lambdatypes.Environment{
+			Variables: map[string]string{
+				"TOKEN_ROTATION_TS": fmt.Sprintf("%d", time.Now().Unix()),
+			},
+		},
+	})
+	return err
+}
+
+// forceSlackBridgeColdStart updates the km-slack-bridge Lambda's environment
+// to force a new execution environment, invalidating the in-process
+// SSMBotTokenFetcher cache (15-min TTL). Used by km slack rotate-token to
+// make a newly-persisted bot token effective immediately rather than waiting
+// for the cache TTL to expire.
+//
+// Distinct from forceLambdaColdStart (which targets km-create-handler with
+// TOOLCHAIN_VERSION) — uses TOKEN_ROTATION_TS to keep the namespaces clean.
+func forceSlackBridgeColdStart(ctx context.Context, cfg aws.Config) error {
+	return ForceSlackBridgeColdStartWith(ctx, lambda.NewFromConfig(cfg))
+}
