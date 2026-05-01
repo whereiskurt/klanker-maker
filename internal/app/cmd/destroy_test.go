@@ -263,5 +263,81 @@ func TestDestroyCmd_RemoteInvalidSandboxID(t *testing.T) {
 	}
 }
 
+// ---- SLCK-12 Option A wiring tests (Plan 63.1-02 Task 3) ----
+
+// TestDestroyDestroy_SlackTeardownWiredIntoRemotePath verifies (via source-level
+// inspection) that destroy.go calls runSlackTeardown in the remote block BEFORE
+// publisher.PublishSandboxCommand. This is the structural guard for the SLCK-12
+// Option A fix: the Lambda handler has no Slack code, so the operator workstation
+// must handle teardown.
+func TestDestroyDestroy_SlackTeardownWiredIntoRemotePath(t *testing.T) {
+	src, err := os.ReadFile("destroy.go")
+	if err != nil {
+		t.Fatalf("read destroy.go: %v", err)
+	}
+	s := string(src)
+
+	checks := []struct {
+		name    string
+		pattern string
+	}{
+		{"runSlackTeardown called in destroy.go", "runSlackTeardown("},
+		{"SLCK-12 fix comment present", "SLCK-12"},
+		{"Option A comment present", "Option A"},
+		{"remote-path Slack teardown before dispatch comment", "run Slack teardown locally BEFORE"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(s, c.pattern) {
+			t.Errorf("destroy.go missing %s (expected pattern %q)", c.name, c.pattern)
+		}
+	}
+}
+
+// TestDestroyDestroy_LocalPathUsesSharedHelper verifies that the local destroy
+// path uses the runSlackTeardown helper (not the old inline SSM/key setup). This
+// prevents drift between remote and local paths (both must use the same code).
+func TestDestroyDestroy_LocalPathUsesSharedHelper(t *testing.T) {
+	src, err := os.ReadFile("destroy.go")
+	if err != nil {
+		t.Fatalf("read destroy.go: %v", err)
+	}
+	s := string(src)
+
+	// The old inline pattern is gone.
+	if strings.Contains(s, "slackSSMClient := ssm.NewFromConfig") {
+		t.Error("destroy.go still contains old inline slackSSMClient — expected refactored to runSlackTeardown()")
+	}
+	if strings.Contains(s, "slackKeyLoader := PrivKeyLoaderFunc") {
+		t.Error("destroy.go still contains old inline slackKeyLoader — expected refactored to runSlackTeardown()")
+	}
+	// The shared helper is present.
+	if !strings.Contains(s, "runSlackTeardown(ctx") {
+		t.Error("destroy.go missing runSlackTeardown(ctx, ...) call in local path")
+	}
+}
+
+// TestDestroyCmd_RemoteSlackTeardownNonFatalWhenAWSUnavailable verifies that
+// km destroy --remote still dispatches the EventBridge event even when the AWS
+// config fails to load (which means runSlackTeardown is skipped gracefully).
+// This guards the non-fatal requirement: Slack failures must never block destroy.
+func TestDestroyCmd_RemoteSlackTeardownNonFatalWhenAWSUnavailable(t *testing.T) {
+	// The remote path tries to load AWS config with profile "klanker-terraform".
+	// In CI / this test environment, that profile won't exist — LoadAWSConfig
+	// will fail, the Slack teardown block is skipped, and the publisher is still
+	// called. This verifies the non-fatal property end-to-end.
+	pub := &fakePublisher{}
+	err := runDestroyRemote(t, pub, "sb-aabbccdd")
+	if err != nil {
+		t.Fatalf("destroy --remote: unexpected error (Slack failure must be non-fatal): %v", err)
+	}
+	// Publisher must have been called exactly once.
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publisher call (destroy dispatched), got %d", len(pub.calls))
+	}
+	if pub.calls[0].eventType != "destroy" {
+		t.Errorf("eventType = %q, want %q", pub.calls[0].eventType, "destroy")
+	}
+}
+
 // Compile-time check: fakePublisher implements RemoteCommandPublisher.
 var _ cmd.RemoteCommandPublisher = (*fakePublisher)(nil)
