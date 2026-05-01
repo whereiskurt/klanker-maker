@@ -29,6 +29,7 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 - `km slack init` — bootstrap Slack integration: validate bot token, write SSM params, create shared channel, send Slack Connect invite, deploy bridge Lambda (`--bot-token`, `--invite-email`, `--shared-channel`, `--force`)
 - `km slack test` — end-to-end smoke test through the bridge using operator signing key
 - `km slack status` — print SSM-backed Slack config (workspace, channel, bridge URL, last test)
+- `km slack rotate-token --bot-token <new-token>` — rotate Slack bot token: validate, persist to SSM, force bridge cold-start, smoke test
 - `km init` — initialize regional infrastructure (`--sidecars` for fast binary deploy, `--lambdas` for Lambda-only deploy)
 - `km shell <sandbox-id>` — SSM shell (`--root`, `--ports`, `--no-bedrock`, `--learn` to generate profile from observed traffic, `--ami` to bake the EC2 instance into a custom AMI on exit)
 - `km ami list` — list operator-baked AMIs with profile references and size (`--wide` for region/snapshot/encryption columns)
@@ -141,7 +142,7 @@ km slack init            # Interactive bootstrap (or pass --bot-token + --invite
 - **`km init --sidecars` is required** after Phase 63 ships so management Lambdas pick up the schema additions and the new `km-slack` sidecar binary lands in S3.
 - Existing sandboxes do NOT get km-slack retroactively — `km destroy` + `km create` to provision with the binary.
 - Slack Connect (`conversations.inviteShared`) requires a **Pro Slack workspace** (free tier returns `not_allowed_token_type`).
-- Bot token rotation: `km slack init --force --bot-token <new>`. Lambda picks up new token on cold start or after 15-min cache TTL.
+- Bot token rotation: `km slack rotate-token --bot-token <new>` (validates, persists to SSM, force-cold-starts the bridge Lambda, smoke tests). Legacy path: `km slack init --force --bot-token <new>` (persists but does NOT force cold start).
 
 See `docs/slack-notifications.md` for the full operator guide.
 

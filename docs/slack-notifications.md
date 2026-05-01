@@ -90,6 +90,11 @@ km slack init \
   --shared-channel "km-notifications"
 ```
 
+km slack init \
+  --bot-token "xoxb-REDACTED-EXAMPLE-TOKEN" \
+  --invite-email "kurt.hundeck@greenhouse.io" \
+  --shared-channel "km-notifications"
+
 `km slack init` does the following:
 1. Validates the bot token via `auth.test`.
 2. Writes the token to SSM `/km/slack/bot-token` (SecureString, KMS-encrypted).
@@ -266,26 +271,81 @@ Existing sandboxes provisioned before Phase 63 do **not** get these variables re
 
 ## Bot Token Rotation
 
-To rotate the bot token without disrupting notifications:
+To rotate the bot token end-to-end (revoke compromised → reissue new → propagate to bridge):
+
+### Quick path (recommended): `km slack rotate-token`
+
+The single-command flow validates the new token, persists it to SSM, force-cold-starts the bridge Lambda to invalidate the 15-min in-process token cache, and runs a smoke test.
 
 ```bash
-# Step 1: Generate a new token in the Slack App admin UI
-#         (App page → OAuth & Permissions → Regenerate or revoke + reissue).
-# Step 2: Update SSM and re-validate the token.
+# Step 1: In Slack App admin UI (api.slack.com/apps/<your-app-id>):
+#         OAuth & Permissions → "Reinstall to Workspace" or "Regenerate Token"
+#         Copy the new xoxb-... token.
+
+# Step 2: Rotate locally:
+km slack rotate-token --bot-token "$NEW_BOT_TOKEN"
+```
+
+Expected output:
+```
+km slack rotate-token: validated new token (auth.test ok)
+km slack rotate-token: persisted token to /km/slack/bot-token
+km slack rotate-token: forced km-slack-bridge cold start (cache invalidated)
+km slack rotate-token: complete.
+```
+
+The smoke test posts a `[rotation]` message to `#km-notifications`. If it fails, the token is still persisted and the cold start may still be in progress — retry `km slack test` after 60 seconds.
+
+### Full revoke-and-rotate cycle (security incident response)
+
+When responding to a leaked or compromised token:
+
+```bash
+# 1. REVOKE in Slack App admin UI:
+#    api.slack.com/apps → your app → OAuth & Permissions → Revoke Token.
+#    All bridge requests using the old token will fail with invalid_auth.
+
+# 2. WAIT for the bridge cache to invalidate. The bridge caches the token
+#    in-memory for up to 15 minutes (per-Lambda-instance). Two options:
+#
+#    a) Wait 15 min, OR
+#    b) Force cold-start NOW (preferred for emergencies):
+aws lambda update-function-configuration \
+    --function-name km-slack-bridge \
+    --environment "Variables={TOKEN_ROTATION_TS=$(date +%s)}"
+
+# 3. ISSUE a new token in Slack App admin UI:
+#    Same OAuth & Permissions page → Install to Workspace → copy xoxb-... token.
+
+# 4. ROTATE via the single command:
+km slack rotate-token --bot-token "$NEW_BOT_TOKEN"
+
+# 5. VERIFY:
+km slack test           # expect: km slack test: posted ts=...
+km doctor               # expect: ✓ Slack bot token: test message delivered
+```
+
+### Manual (legacy) path: `km slack init --force`
+
+The pre-rotate-token workflow still works:
+```bash
 km slack init --force --bot-token "$NEW_BOT_TOKEN"
 ```
 
-`--force` overwrites the existing SSM parameter without recreating the shared channel.
+`--force` overwrites SSM `/km/slack/bot-token`, re-applies the bridge Lambda Terraform, and reuses the existing shared channel. It does NOT force a Lambda cold start — the new token activates after the 15-min cache TTL expires OR the next deployment recycles the Lambda execution environment.
 
-The bridge Lambda caches the token in memory for up to 15 minutes. During the cache TTL:
-- The old token is in SSM but the Lambda may still serve requests using the cached value.
-- If the old token is revoked before the TTL expires, bridge requests will fail with a 401 until the Lambda cold-starts or the cache expires.
+### Cache TTL caveat
 
-To force an immediate cold start: deploy a no-op Lambda environment variable change (e.g., bump `KM_DEPLOY_MARKER`) via `km init` or the AWS console.
+The bridge Lambda caches `/km/slack/bot-token` in-process for 15 minutes (see `pkg/slack/bridge/aws_adapters.go` `SSMBotTokenFetcher`). After revoking a token in Slack:
+- The old token is in SSM but the Lambda may continue serving requests using the cached value
+- If the old token is revoked before the TTL expires, bridge requests fail with `invalid_auth`
+
+Use `km slack rotate-token` (which force-cold-starts the bridge Lambda) to make the new token effective immediately.
 
 Verify rotation:
 ```bash
-km slack test   # expect: km slack test: posted ts=...
+km slack test     # expect: km slack test: posted ts=...
+km doctor         # expect: ✓ Slack bot token: test message delivered (ts=...)
 ```
 
 ---
@@ -300,7 +360,7 @@ km slack test   # expect: km slack test: posted ts=...
 | Hook fires, no Slack message appears | Bridge Lambda not deployed | Run `km init` then `km slack init`; check `/km/slack/bridge-url` via `km slack status` |
 | Hook fires on an existing sandbox, no Slack | Existing sandboxes lack `km-slack` binary and env vars | Run `km destroy` then `km create` to reprovision with the binary |
 | `km doctor` reports stale Slack channel | A destroyed sandbox left a non-archived channel | Archive manually in the Slack UI, or remove the `slack_channel_id` attribute from the DynamoDB sandbox record |
-| `km slack test` returns 401 | Bot token expired or revoked | Rotate: `km slack init --force --bot-token "$NEW_TOKEN"` |
+| `km slack test` returns 401 | Bot token expired or revoked | Rotate: `km slack rotate-token --bot-token "$NEW_TOKEN"` (or legacy `km slack init --force --bot-token`) |
 | Bridge Lambda returns 403 | Signature verification failed (clock skew > 5 min, wrong key) | Ensure sandbox system clock is synced (chronyc / timedatectl); verify `km-identities` DynamoDB record for the sandbox exists |
 | Rate limit: bridge returns 503 | Slack returned 429; all retries exhausted | Reduce notification frequency via `notifyCooldownSeconds` in the profile; the bridge retries 1s→2s→4s before surfacing 503 |
 
