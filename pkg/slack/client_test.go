@@ -355,33 +355,37 @@ func TestPostToBridge_4xx_FailFast(t *testing.T) {
 	}
 }
 
-func TestPostToBridge_RetryOn5xx_ThenSucceed(t *testing.T) {
+// TestPostToBridge_5xxNotRetried verifies that a 5xx response is treated as
+// fail-fast (same as 4xx), NOT retried. This prevents the nonce-replay masking
+// bug where a retried 5xx envelope would return 401 replayed_nonce from the bridge.
+func TestPostToBridge_5xxNotRetried(t *testing.T) {
 	var count int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&count, 1)
-		if n <= 2 {
-			w.WriteHeader(503)
-			w.Write([]byte("service unavailable"))
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(slack.PostResponse{OK: true, TS: "ok"})
+		atomic.AddInt32(&count, 1)
+		w.WriteHeader(502)
+		w.Write([]byte(`{"ok":false,"error":"not_in_channel"}`))
 	}))
 	defer ts.Close()
 
-	resp, err := slack.PostToBridge(context.Background(), ts.URL, bridgeEnvelope(), fakeSig())
-	if err != nil {
-		t.Fatalf("PostToBridge: %v", err)
+	_, err := slack.PostToBridge(context.Background(), ts.URL, bridgeEnvelope(), fakeSig())
+	if err == nil {
+		t.Fatal("expected error on 5xx, got nil")
 	}
-	if !resp.OK {
-		t.Error("PostResponse.OK = false; want true")
+	// Must NOT retry: exactly 1 request.
+	if atomic.LoadInt32(&count) != 1 {
+		t.Errorf("request count = %d; want 1 (5xx must not retry)", count)
 	}
-	if atomic.LoadInt32(&count) != 3 {
-		t.Errorf("request count = %d; want 3", count)
+	// Error must surface the HTTP status and body verbatim.
+	if !strings.Contains(err.Error(), "502") {
+		t.Errorf("error %q does not mention status 502", err.Error())
+	}
+	if !strings.Contains(err.Error(), "not_in_channel") {
+		t.Errorf("error %q does not contain bridge error body", err.Error())
 	}
 }
 
-func TestPostToBridge_PersistentRetryFail(t *testing.T) {
+// TestPostToBridge_503NotRetried verifies 503 is also fail-fast (not just 502).
+func TestPostToBridge_503NotRetried(t *testing.T) {
 	var count int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&count, 1)
@@ -392,11 +396,10 @@ func TestPostToBridge_PersistentRetryFail(t *testing.T) {
 
 	_, err := slack.PostToBridge(context.Background(), ts.URL, bridgeEnvelope(), fakeSig())
 	if err == nil {
-		t.Fatal("expected error after persistent 5xx, got nil")
+		t.Fatal("expected error on 503, got nil")
 	}
-	// 1 attempt + 3 retries = 4 total
-	if atomic.LoadInt32(&count) != 4 {
-		t.Errorf("request count = %d; want 4", count)
+	if atomic.LoadInt32(&count) != 1 {
+		t.Errorf("request count = %d; want 1 (5xx must not retry)", count)
 	}
 	if !strings.Contains(err.Error(), "503") {
 		t.Errorf("error %q does not mention 503", err.Error())
