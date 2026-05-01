@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 63-09-PLAN.md (km doctor Slack health checks wired, destroy Slack integration complete)
-last_updated: "2026-04-30T02:20:00.000Z"
-last_activity: 2026-04-21 — Completed 59-01-PLAN.md (MatchesAllowList email patterns, platformConfig email.allowedSenders)
+stopped_at: Completed 63-10-PLAN.md (E2E harness + docs + UAT sign-off — Phase 63 complete)
+last_updated: "2026-04-30T00:00:00.000Z"
+last_activity: 2026-04-30 — Completed 63-10-PLAN.md (Slack E2E harness, operator docs, UAT sign-off)
 progress:
   total_phases: 66
-  completed_phases: 62
+  completed_phases: 63
   total_plans: 201
-  completed_plans: 200
-  percent: 0
+  completed_plans: 201
+  percent: 100
 ---
 
 # Project State
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 
 ## Current Position
 
-Phase: 63 (slack-notify hook for Claude Code permission and idle events)
-Plan: 9 of 10 in current phase
-Status: executing
-Last activity: 2026-04-29 — Completed 63-09-PLAN.md (km doctor Slack health checks + km destroy Slack lifecycle)
+Phase: 63 (slack-notify hook for Claude Code permission and idle events) — COMPLETE
+Plan: 10 of 10 in current phase — ALL PLANS COMPLETE
+Status: phase complete
+Last activity: 2026-04-30 — Completed 63-10-PLAN.md (E2E harness, operator docs, live UAT sign-off, 8 hardening fixes)
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -676,6 +676,9 @@ Recent decisions affecting current work:
 - [Phase 63]: SlackArchiveOnDestroy field pulled forward from Plan 63-09 into Plan 63-08 to unblock build
 - [Phase 63]: km slack init uses SlackInitAPI (adds AuthTest) separate from SlackAPI in create_slack.go; both satisfied by *slack.Client
 - [Phase 63]: --force is the only way to recreate populated SSM state; default is idempotent skip
+- [Phase 63-10]: EnsureSandboxIdentity called at both km init (operator) and km create (sandbox) boundaries to prevent DynamoDB/SSM key drift causing bad_signature on bridge
+- [Phase 63-10]: km slack init --force made idempotent on name_taken — reuses existing channel ID; full revoke+cache TTL wait deferred as uncommon path
+- [Phase 63-10]: Phase 63.1 gap list scoped to 2 items: Step 11d runtime injection (KM_SLACK_CHANNEL_ID/KM_SLACK_BRIDGE_URL not injected into /etc/profile.d) and km destroy Slack archive auto-trigger; both have operator workarounds and do not compromise security model
 
 ### Roadmap Evolution
 
