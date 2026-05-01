@@ -362,7 +362,56 @@ km doctor         # expect: ✓ Slack bot token: test message delivered (ts=...)
 | `km doctor` reports stale Slack channel | A destroyed sandbox left a non-archived channel | Archive manually in the Slack UI, or remove the `slack_channel_id` attribute from the DynamoDB sandbox record |
 | `km slack test` returns 401 | Bot token expired or revoked | Rotate: `km slack rotate-token --bot-token "$NEW_TOKEN"` (or legacy `km slack init --force --bot-token`) |
 | Bridge Lambda returns 403 | Signature verification failed (clock skew > 5 min, wrong key) | Ensure sandbox system clock is synced (chronyc / timedatectl); verify `km-identities` DynamoDB record for the sandbox exists |
-| Rate limit: bridge returns 503 | Slack returned 429; all retries exhausted | Reduce notification frequency via `notifyCooldownSeconds` in the profile; the bridge retries 1s→2s→4s before surfacing 503 |
+| Rate limit: bridge returns 503 | Slack returned 429 (rate limit) | Reduce notification frequency via `notifyCooldownSeconds` in the profile |
+| Bridge returns 502 with `not_in_channel` | Bot is not a member of the channel | Add the bot to the channel in Slack UI, OR if the bot has `channels:join` scope it can self-rescue: `km slack test` after re-adding should succeed |
+
+---
+
+### Bridge error observability
+
+**CloudWatch log group:** `/aws/lambda/km-slack-bridge`
+
+The bridge Lambda logs all requests and every error path to stderr (shipped to CloudWatch automatically). Each log line is structured text with `key=value` pairs. Key fields:
+
+| Field | What it tells you |
+|-------|------------------|
+| `action` | `post`, `archive`, or `test` |
+| `sender_id` | sandbox ID or `operator` |
+| `channel` | Slack channel ID |
+| `nonce_prefix` | First 8 chars of the request nonce (for cross-referencing) |
+| `step` | Which verification step failed (e.g. `nonce`, `signature`, `token_fetch`, `dispatch`) |
+| `slack_error` | Full Slack API error code when the bridge's Slack call fails (e.g. `not_in_channel`, `invalid_auth`) |
+| `status` | HTTP status the bridge returned |
+
+**Diagnosing "smoke test fails but rotation appeared to work":**
+
+If `km slack rotate-token` or `km slack test` returns an error after token rotation, use this sequence:
+
+```bash
+# 1. Verify the new token is valid (direct Slack API call — no bridge involved)
+curl -s -H "Authorization: Bearer $NEW_BOT_TOKEN" https://slack.com/api/auth.test | jq .
+
+# 2. Check CloudWatch for the real error
+aws logs tail /aws/lambda/km-slack-bridge --since 5m --format short
+
+# 3. Look for slack_error= in the log output
+# Common codes:
+#   not_in_channel — bot needs to join the channel (see channels:join scope note below)
+#   invalid_auth   — token rotation did not propagate (wait 60s or re-run km slack rotate-token)
+#   channel_not_found — channel ID is stale or wrong
+```
+
+**channels:join scope and bot channel membership:**
+
+If the bot's Slack App does not have `channels:join` scope, the bot cannot self-join channels it was removed from. During token rotation via "Reinstall to Workspace" in the Slack App admin UI, the bot may lose channel membership for non-shared channels.
+
+Diagnosis: `km slack test` returns `not_in_channel` but `auth.test` succeeds directly.
+
+Fix options:
+1. **Add bot to channel manually** — in Slack, open `#km-notifications` → Add people → invite the bot.
+2. **Add `channels:join` scope** — in Slack App admin → OAuth & Permissions → add `channels:join` to Bot Token Scopes → reinstall → the bot can self-rescue via `conversations.join`.
+
+**"rotation vs channel" diagnostic rule:** if `auth.test` succeeds but `km slack test` fails with `not_in_channel` or a bridge 502, the rotation itself succeeded — the issue is channel membership, not the token.
 
 ---
 
