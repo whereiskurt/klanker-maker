@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"strings"
 	"testing"
 
@@ -407,7 +408,7 @@ func TestSlackStatus_PrintsSummary(t *testing.T) {
 }
 
 // ──────────────────────────────────────────────
-// Cobra wiring smoke test — km slack --help registers init/test/status
+// Cobra wiring smoke test — km slack --help registers init/test/status/rotate-token
 // ──────────────────────────────────────────────
 
 func TestSlackCmd_Registered(t *testing.T) {
@@ -417,7 +418,7 @@ func TestSlackCmd_Registered(t *testing.T) {
 	for _, sub := range slackCmd.Commands() {
 		names = append(names, sub.Name())
 	}
-	for _, want := range []string{"init", "test", "status"} {
+	for _, want := range []string{"init", "test", "status", "rotate-token"} {
 		found := false
 		for _, n := range names {
 			if n == want {
@@ -428,5 +429,157 @@ func TestSlackCmd_Registered(t *testing.T) {
 		if !found {
 			t.Errorf("subcommand %q not registered; found: %v", want, names)
 		}
+	}
+}
+
+// ──────────────────────────────────────────────
+// km slack rotate-token tests (SLCK-13)
+// ──────────────────────────────────────────────
+
+// fakeRotateAPI wraps fakeSlackInitAPI and tracks AuthTest call count separately.
+type fakeRotateAPI struct {
+	authErr           error
+	authTestCallCount int
+}
+
+func (f *fakeRotateAPI) AuthTest(_ context.Context) error {
+	f.authTestCallCount++
+	return f.authErr
+}
+
+func (f *fakeRotateAPI) CreateChannel(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+
+func (f *fakeRotateAPI) InviteShared(_ context.Context, _, _ string) error {
+	return nil
+}
+
+// fakeBridgeColdStartCounter counts BridgeColdStart invocations.
+type fakeBridgeColdStartCounter struct {
+	callCount int
+	err       error
+}
+
+func (f *fakeBridgeColdStartCounter) call(ctx context.Context) error {
+	f.callCount++
+	return f.err
+}
+
+// buildRotateTokenDeps wires rotate-token deps with caller-supplied fakes.
+func buildRotateTokenDeps(
+	api *fakeRotateAPI,
+	ssmStore *fakeSSM,
+	cs *fakeBridgeColdStartCounter,
+	poster *fakeBridgePoster,
+) *cmd.SlackCmdDeps {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	return &cmd.SlackCmdDeps{
+		SSM: ssmStore,
+		NewSlackAPI: func(token string) cmd.SlackInitAPI {
+			return api
+		},
+		BridgeColdStart: cs.call,
+		OperatorKeyLoader: func(_ context.Context, _ string) (ed25519.PrivateKey, error) {
+			return priv, nil
+		},
+		BridgePoster: poster.Post,
+		Region:       "use1",
+		RepoRoot:     "/repo",
+	}
+}
+
+// TestSlackRotateToken_HappyPath verifies the full 5-step flow succeeds:
+// AuthTest called once (validation only, NOT for the smoke test), SSM.Put writes the
+// new token, BridgeColdStart fires once, and the smoke test posts via BridgePoster.
+func TestSlackRotateToken_HappyPath(t *testing.T) {
+	ssmStore := newFakeSSM(map[string]string{
+		"/km/slack/bridge-url":        "https://bridge.example.com/",
+		"/km/slack/shared-channel-id": "C-SHARED",
+	})
+	api := &fakeRotateAPI{}
+	cs := &fakeBridgeColdStartCounter{}
+	poster := &fakeBridgePoster{resp: &slack.PostResponse{OK: true, TS: "ts-rotate-happy"}}
+
+	deps := buildRotateTokenDeps(api, ssmStore, cs, poster)
+
+	if err := cmd.RunSlackRotateToken(context.Background(), deps, cmd.SlackRotateTokenOpts{BotToken: "xoxb-new"}); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	// SSM must have the new token.
+	if got := ssmStore.store["/km/slack/bot-token"]; got != "xoxb-new" {
+		t.Errorf("SSM /km/slack/bot-token = %q; want xoxb-new", got)
+	}
+	// BridgeColdStart fires exactly once.
+	if cs.callCount != 1 {
+		t.Errorf("BridgeColdStart calls = %d; want 1", cs.callCount)
+	}
+	// AuthTest fires exactly once (validation only — smoke test goes through BridgePoster).
+	if api.authTestCallCount != 1 {
+		t.Errorf("AuthTest call count = %d; want 1 (validation only)", api.authTestCallCount)
+	}
+	// Smoke test (BridgePoster) fires exactly once.
+	if poster.called != 1 {
+		t.Errorf("BridgePoster calls = %d; want 1", poster.called)
+	}
+}
+
+// TestSlackRotateToken_AuthTestFails verifies that an invalid token aborts before
+// touching SSM, the cold-start, or the bridge poster.
+func TestSlackRotateToken_AuthTestFails(t *testing.T) {
+	ssmStore := newFakeSSM(nil)
+	api := &fakeRotateAPI{authErr: &slack.SlackAPIError{Method: "auth.test", Code: "invalid_auth"}}
+	cs := &fakeBridgeColdStartCounter{}
+	poster := &fakeBridgePoster{}
+
+	deps := buildRotateTokenDeps(api, ssmStore, cs, poster)
+
+	err := cmd.RunSlackRotateToken(context.Background(), deps, cmd.SlackRotateTokenOpts{BotToken: "xoxb-revoked"})
+	if err == nil {
+		t.Fatal("expected error from auth.test failure, got nil")
+	}
+	// SSM must NOT have been written.
+	if _, ok := ssmStore.store["/km/slack/bot-token"]; ok {
+		t.Error("SSM /km/slack/bot-token should NOT be written on auth.test failure")
+	}
+	// Cold-start must NOT be called.
+	if cs.callCount != 0 {
+		t.Errorf("BridgeColdStart should not be called; got %d calls", cs.callCount)
+	}
+	// Smoke test (BridgePoster) must NOT be called.
+	if poster.called != 0 {
+		t.Errorf("BridgePoster should not be called; got %d calls", poster.called)
+	}
+}
+
+// TestSlackRotateToken_ColdStartFailsButSmokePasses verifies that a cold-start
+// failure is non-fatal: the token is still persisted, a warning is printed, and
+// the smoke test continues (and succeeds), returning nil.
+func TestSlackRotateToken_ColdStartFailsButSmokePasses(t *testing.T) {
+	ssmStore := newFakeSSM(map[string]string{
+		"/km/slack/bridge-url":        "https://bridge.example.com/",
+		"/km/slack/shared-channel-id": "C-SHARED",
+	})
+	api := &fakeRotateAPI{}
+	cs := &fakeBridgeColdStartCounter{err: errors.New("AccessDeniedException")}
+	poster := &fakeBridgePoster{resp: &slack.PostResponse{OK: true, TS: "ts-coldfail"}}
+
+	deps := buildRotateTokenDeps(api, ssmStore, cs, poster)
+
+	if err := cmd.RunSlackRotateToken(context.Background(), deps, cmd.SlackRotateTokenOpts{BotToken: "xoxb-new"}); err != nil {
+		t.Errorf("expected nil error (cold-start failure is non-fatal), got %v", err)
+	}
+	// Token must still be persisted even when cold-start fails.
+	if got := ssmStore.store["/km/slack/bot-token"]; got != "xoxb-new" {
+		t.Errorf("SSM /km/slack/bot-token must still be persisted; got %q", got)
+	}
+	// Cold-start was attempted (and failed).
+	if cs.callCount != 1 {
+		t.Errorf("BridgeColdStart should be called once; got %d calls", cs.callCount)
+	}
+	// Smoke test runs despite cold-start failure.
+	if poster.called != 1 {
+		t.Errorf("BridgePoster should still be called after cold-start failure; got %d calls", poster.called)
 	}
 }

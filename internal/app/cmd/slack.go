@@ -70,8 +70,12 @@ type SlackCmdDeps struct {
 	Prompter          SlackPrompter
 	OperatorKeyLoader func(ctx context.Context, region string) (ed25519.PrivateKey, error)
 	BridgePoster      func(ctx context.Context, bridgeURL string, env *kmslack.SlackEnvelope, sig []byte) (*kmslack.PostResponse, error)
-	Region            string // short label, e.g. "use1"
-	RepoRoot          string // absolute path to repo root
+	// BridgeColdStart force-cold-starts the km-slack-bridge Lambda to invalidate
+	// the in-process bot-token cache. Defaults in production to a closure around
+	// forceSlackBridgeColdStart. Injected in tests via a stub for SLCK-13.
+	BridgeColdStart func(ctx context.Context) error
+	Region          string // short label, e.g. "use1"
+	RepoRoot        string // absolute path to repo root
 }
 
 // SlackInitOpts holds parsed flag values for km slack init.
@@ -105,6 +109,7 @@ func newSlackCmdInternal(cfg *config.Config, deps *SlackCmdDeps) *cobra.Command 
 	slackCmd.AddCommand(newSlackInitCmd(cfg, deps))
 	slackCmd.AddCommand(newSlackTestCmd(cfg, deps))
 	slackCmd.AddCommand(newSlackStatusCmd(cfg, deps))
+	slackCmd.AddCommand(newSlackRotateTokenCmd(cfg, deps))
 	return slackCmd
 }
 
@@ -401,6 +406,97 @@ func RunSlackStatus(ctx context.Context, d *SlackCmdDeps, w io.Writer) error {
 }
 
 // ──────────────────────────────────────────────
+// km slack rotate-token
+// ──────────────────────────────────────────────
+
+// SlackRotateTokenOpts holds parsed flag values for km slack rotate-token.
+type SlackRotateTokenOpts struct {
+	BotToken string
+}
+
+func newSlackRotateTokenCmd(cfg *config.Config, sharedDeps *SlackCmdDeps) *cobra.Command {
+	var botToken string
+	c := &cobra.Command{
+		Use:          "rotate-token",
+		Short:        "Rotate Slack bot token: validate, persist to SSM, force bridge cold-start, smoke test",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			deps := sharedDeps
+			if deps == nil {
+				var err error
+				deps, err = buildSlackCmdDeps(cfg)
+				if err != nil {
+					return err
+				}
+			}
+			return RunSlackRotateToken(ctx, deps, SlackRotateTokenOpts{BotToken: botToken})
+		},
+	}
+	c.Flags().StringVar(&botToken, "bot-token", "", "New Slack bot token (xoxb-...); prompts if omitted")
+	return c
+}
+
+// RunSlackRotateToken is the exported rotate-token logic (testable via dependency injection).
+// It performs a 5-step flow:
+//  1. Resolve the new bot token (flag or interactive prompt)
+//  2. Validate via auth.test (short-circuit on failure — nothing written)
+//  3. Persist to SSM /km/slack/bot-token (short-circuit on failure)
+//  4. Force km-slack-bridge Lambda cold-start to invalidate 15-min token cache (best-effort)
+//  5. Smoke test via RunSlackTest (best-effort — token is persisted regardless)
+func RunSlackRotateToken(ctx context.Context, d *SlackCmdDeps, opts SlackRotateTokenOpts) error {
+	// Step 1: Resolve new token.
+	token := opts.BotToken
+	if token == "" {
+		t, err := d.Prompter.PromptSecret("New Slack bot token (xoxb-...): ")
+		if err != nil {
+			return fmt.Errorf("prompt: %w", err)
+		}
+		token = strings.TrimSpace(t)
+	}
+
+	// Step 2: Validate via auth.test — fail fast before touching SSM.
+	api := d.NewSlackAPI(token)
+	if err := api.AuthTest(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "km slack rotate-token: invalid token: %v\n", err)
+		return fmt.Errorf("invalid Slack bot token: %w", err)
+	}
+	fmt.Println("km slack rotate-token: validated new token (auth.test ok)")
+
+	// Step 3: Persist to SSM (SecureString).
+	if err := d.SSM.Put(ctx, "/km/slack/bot-token", token, true); err != nil {
+		fmt.Fprintf(os.Stderr, "km slack rotate-token: failed to persist token: %v\n", err)
+		return fmt.Errorf("persist token: %w", err)
+	}
+	fmt.Println("km slack rotate-token: persisted token to /km/slack/bot-token")
+
+	// Step 4: Force bridge Lambda cold-start (best-effort).
+	// Failure here does not abort — the token is already persisted and the bridge
+	// will pick it up within 15 min (SSMBotTokenFetcher cache TTL).
+	if d.BridgeColdStart != nil {
+		if err := d.BridgeColdStart(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "km slack rotate-token: failed to force bridge cold start: %v (token IS persisted; bridge will pick up new token within 15 min)\n", err)
+			// Continue to smoke test anyway.
+		} else {
+			fmt.Println("km slack rotate-token: forced km-slack-bridge cold start (cache invalidated)")
+		}
+	}
+
+	// Step 5: Smoke test (best-effort — token persistence is the primary success criterion).
+	// RunSlackTest posts a signed test envelope through the bridge Lambda.
+	if err := RunSlackTest(ctx, d, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "km slack rotate-token: smoke test failed: %v (token IS persisted; bridge cold start may still be in progress — retry km slack test in 60s)\n", err)
+		// Return nil — the operator's token is persisted; smoke failure is not fatal.
+		return nil
+	}
+	fmt.Println("km slack rotate-token: complete.")
+	return nil
+}
+
+// ──────────────────────────────────────────────
 // Production wiring
 // ──────────────────────────────────────────────
 
@@ -504,6 +600,7 @@ func buildSlackCmdDeps(cfg *config.Config) (*SlackCmdDeps, error) {
 	ssmClient := ssm.NewFromConfig(awsCfg)
 	tgRunner := terragrunt.NewRunner(awsProfile, repoRoot)
 
+	awsCfgForBridge := awsCfg // capture for closure
 	return &SlackCmdDeps{
 		NewSlackAPI: func(token string) SlackInitAPI {
 			return kmslack.NewClient(token, nil)
@@ -515,8 +612,11 @@ func buildSlackCmdDeps(cfg *config.Config) (*SlackCmdDeps, error) {
 			return loadSlackOperatorKey(ctx, ssmClient)
 		},
 		BridgePoster: kmslack.PostToBridge,
-		Region:       regionLabel,
-		RepoRoot:     repoRoot,
+		BridgeColdStart: func(ctx context.Context) error {
+			return forceSlackBridgeColdStart(ctx, awsCfgForBridge)
+		},
+		Region:   regionLabel,
+		RepoRoot: repoRoot,
 	}, nil
 }
 
