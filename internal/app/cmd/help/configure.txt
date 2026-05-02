@@ -14,37 +14,69 @@ Examples:
   # Non-interactive setup for CI/scripts
   km configure --non-interactive \
     --domain myplatform.dev \
-    --management-account 111111111111 \
+    --organization-account 111111111111 \
+    --dns-parent-account 111111111111 \
     --terraform-account 222222222222 \
     --application-account 333333333333 \
     --sso-start-url https://my-sso.awsapps.com/start \
     --sso-region us-east-1 \
     --region us-east-1
 
+  # Single-account install (no AWS Organizations access)
+  km configure --non-interactive \
+    --domain myplatform.dev \
+    --dns-parent-account 444444444444 \
+    --terraform-account 444444444444 \
+    --application-account 444444444444 \
+    --sso-start-url https://my-sso.awsapps.com/start \
+    --sso-region us-east-1 \
+    --region us-east-1
+  # (omit --organization-account → blank → SCP deployment skipped)
+
   # Write config to a custom directory
   km configure --output-dir /tmp/km-test
 
-Flags:
+Flags (account IDs):
+  --organization-account     AWS Organizations management account ID
+                             (SCP target). Optional — blank skips SCP.
+  --dns-parent-account       AWS account ID owning the parent Route53
+                             hosted zone for the domain.
+  --terraform-account        AWS account ID for Terraform/state.
+  --application-account      AWS account ID where sandboxes run
+                             (can equal terraform for simpler topology).
+
+Flags (other required):
+  --domain                   Base domain (e.g. myplatform.dev)
+  --sso-start-url            AWS SSO portal URL
+  --sso-region               AWS SSO region
+  --region                   Primary AWS region for sandboxes
+  --operator-email           Notification recipient
+  --safe-phrase              Email-to-create KM-AUTH header value
+
+Flags (optional):
   --non-interactive          Skip prompts; use flag values directly
-  --output-dir string        Directory to write km-config.yaml
-  --domain string            Base domain (e.g. myplatform.dev)
-  --management-account       AWS management account ID
-  --terraform-account        AWS Terraform account ID
-  --application-account      AWS application account ID (optional for
-                             2-account topology)
-  --sso-start-url string     AWS SSO start URL
-  --sso-region string        AWS SSO region
-  --region string            Primary AWS region for sandboxes
+  --output-dir               Directory to write km-config.yaml
+  --max-sandboxes            Concurrent sandbox cap (default 10)
+  --state-bucket             Override default Terraform state bucket
+  --artifacts-bucket         Override default artifacts bucket name
 
-Account Topologies:
-  2-account:  Management + Terraform (simpler, Terraform account runs
-              sandboxes directly)
-  3-account:  Management + Terraform + Application (production setup,
-              sandboxes run in isolated Application account)
+Account topology:
+  Four roles in km-config.yaml under accounts:
 
-  The wizard detects 2-account vs 3-account based on whether you provide
-  an application account ID. For 3-account setups, DNS delegation
-  guidance is printed after config generation.
+    organization  — AWS Organizations management account (SCP target).
+                    Leave blank to skip SCP deployment (single-account
+                    installs without org access).
+    dns_parent    — Owner of the parent Route53 zone for cfg.Domain.
+                    Required when domain is set.
+    terraform     — Where state, locks, and Lambdas live.
+    application   — Where sandboxes run. Can equal terraform.
+
+  Single-account topology: set application/terraform/dns_parent to the
+  same ID and leave organization blank.
+
+  Cross-account topology: pick distinct values per role. For setups
+  where dns_parent and application differ, NS-delegation guidance is
+  printed after config generation.
 
 The generated km-config.yaml should be added to .gitignore — it
 contains AWS account IDs specific to your deployment.
