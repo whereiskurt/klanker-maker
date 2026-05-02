@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: "Completed 67-00-PLAN.md (Wave 0: SQS SDK dep + REQ-SLACK-IN-* requirements + 6 test stubs)"
-last_updated: "2026-05-02T23:50:35.274Z"
+stopped_at: "Completed 67-01-PLAN.md (Wave 1A: notifySlackInboundEnabled field + schema + 3 validation rules + 4 tests)"
+last_updated: "2026-05-02T23:55:16.629Z"
 last_activity: "2026-05-01 — Completed 63.1-03-PLAN.md (SLCK-13: km slack rotate-token, bridge structured logging, fail-fast 5xx, UAT ts=1777638955.854989)"
 progress:
   total_phases: 71
   completed_phases: 65
   total_plans: 224
-  completed_plans: 210
+  completed_plans: 211
   percent: 0
 ---
 
@@ -249,6 +249,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 65-four-account-config-model-separate-accounts-organization-scp-from-accounts-dns-parent-and-rename P03 | 553s | 2 tasks | 2 files |
 | Phase 65 P04 | 504s | 3 tasks | 5 files |
 | Phase 67 P00 | 366 | 2 tasks | 9 files |
+| Phase 67-slack-inbound P01 | 102s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -704,6 +705,8 @@ Recent decisions affecting current work:
 - [Phase 65]: Phase 65 plan 04: HCL + docs fully migrated — accounts.management split to organization (SCP) + dns_parent (Route53) across all surfaces; km-config.yaml was pre-migrated
 - [Phase 67]: SQS dep kept as indirect in go.mod; anchored via go get without tidy so Wave 1+ plans compile without re-fetching
 - [Phase 67]: Wave 0 stub test files use internal package names (bridge/profile/compiler/cmd) consistent with existing non-_test source files in each directory
+- [Phase 67-slack-inbound]: Use plain bool (not *bool) for NotifySlackInboundEnabled — false is the correct default, matches NotifySlackPerSandbox pattern
+- [Phase 67-slack-inbound]: Three inbound validation rules (SI1/SI2/SI3) are hard errors, not warnings — misconfiguration must be caught at km validate time
 
 ### Roadmap Evolution
 
@@ -790,6 +793,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-02T23:50:35.269Z
-Stopped at: Completed 67-00-PLAN.md (Wave 0: SQS SDK dep + REQ-SLACK-IN-* requirements + 6 test stubs)
+Last session: 2026-05-02T23:55:16.623Z
+Stopped at: Completed 67-01-PLAN.md (Wave 1A: notifySlackInboundEnabled field + schema + 3 validation rules + 4 tests)
 Resume file: None
