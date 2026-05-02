@@ -1381,3 +1381,40 @@ Plans:
 - [ ] 65-02-PLAN.md — Migrate Go callers (bootstrap.go, init.go, create.go, uninit.go, info.go, configure.go + their tests)
 - [ ] 65-03-PLAN.md — Doctor checks (DoctorConfigProvider rename, checkOrganizationAccountBlank WARN, checkLegacyManagementField FAIL)
 - [ ] 65-04-PLAN.md — HCL/docs/live km-config migration + grep-audit verification
+
+### Phase 66: Multi-instance support: configurable resource_prefix and email_subdomain
+
+**Goal:** Allow multiple km installs to coexist in a single AWS account by introducing two configurable knobs in km-config.yaml — `resource_prefix` (default `"km"`) and `email_subdomain` (default `"sandboxes"`) — and threading them through every account-globally-unique resource name and the ~25 hardcoded `"sandboxes."` call sites. Defaults preserve today's behavior so existing installs upgrade without rename or data migration.
+
+**Scope — names that must accept the prefix:**
+- DynamoDB tables: `{prefix}-budgets`, `{prefix}-sandboxes`, `{prefix}-identities`, `{prefix}-schedules`, `{prefix}-slack-bridge-nonces`
+- Management Lambdas: `{prefix}-ttl-handler`, `{prefix}-create-handler`, `{prefix}-email-create-handler`, `{prefix}-slack-bridge`, `{prefix}-ecs-spot-handler`
+- Lambda IAM roles: `{prefix}-ttl-scheduler`, `{prefix}-email-handler-*`, `{prefix}-create-handler-*`, `{prefix}-spot-handler-*` (~12 sub-policies each)
+- EventBridge: schedule group `{prefix}-at`, rule `{prefix}-ecs-spot-interruption`
+- CloudWatch log group prefix: `/{prefix}/sandboxes/*`
+- SSM parameter prefix: `/{prefix}/slack/*`, `/{prefix}/config/github/*`, `/{prefix}/config/remote-create/*`
+- TF state: bucket `tf-{prefix}-state-{region}`, lock table `tf-{prefix}-locks-{region}`
+- SES domain identity + Route53 zone: `{email_subdomain}.{domain}`
+- All ~25 inline `"sandboxes." + cfg.Domain` call sites collapse to a single `Config.GetEmailDomain()` helper
+
+**Out of scope (do NOT rename):**
+- The `km` binary, CLI command names, `KM_*` env vars (sandbox-internal scope), `~/.km/` operator directory, `/opt/km/bin/` on sandboxes — these are runtime/UX, not AWS resources
+- Per-sandbox resource names that already include `{sandboxID}` or `{region}` (e.g. `km-budget-enforcer-{sandboxID}`, ECS task families) — already collision-free
+- Migrating existing installs from `km` to a new prefix — operators choose at `km init` and live with it
+
+**Constraints:**
+- **Terraform resource renames must NOT trigger destroy/create on stateful resources** (DynamoDB tables especially — data loss). Keep TF logical names (`aws_dynamodb_table.budget`) constant; parameterize only the `name` attribute via existing `var.table_name` pattern in modules
+- **Org SCP escape hatch**: `km-sandbox-containment` is org-scoped, not account-scoped. If two installs share the org, only one can deploy SCP. Reuse the existing `accounts.organization == ""` skip path; document the caveat
+- **Backwards compat is via defaults**: existing installs see no diff because `resource_prefix=km` and `email_subdomain=sandboxes` reproduce current names exactly
+- **Slack bot token is per-prefix** (`/{prefix}/slack/bot-token`) — two installs use separate bot apps, not a shared workspace credential
+
+**Requirements**: REQ-PLATFORM-MULTI-INSTANCE (new), REQ-CONFIG-EXTENSIBILITY (extends existing config model from Phase 65)
+**Depends on:** Phase 65 (four-account config rename — this phase extends the same config struct)
+**Plans:** 5 plans
+
+Plans:
+- [ ] 66-01-PLAN.md — Config struct (ResourcePrefix + EmailSubdomain) + helper methods (GetResourcePrefix, GetEmailDomain, GetSsmPrefix) + DoctorConfigProvider extension + Wave 0 unit tests
+- [ ] 66-02-PLAN.md — Migrate Go email-domain call sites (~30 sites) to cfg.GetEmailDomain(); Lambda handlers read KM_EMAIL_DOMAIN env var; pkg/aws/ec2_ami.go AMI filter prefix-aware
+- [ ] 66-03-PLAN.md — Migrate Go resource-name + SSM-path call sites (100+ sites) to cfg.GetResourcePrefix/GetSsmPrefix; Lambda handlers env-var-driven; ttl-handler self-naming (Pitfall 4); configui kmPrefix runtime variable (Pitfall 5)
+- [ ] 66-04-PLAN.md — Extend site.hcl with KM_RESOURCE_PREFIX + KM_EMAIL_SUBDOMAIN; add var.resource_prefix to five Lambda modules; migrate five DynamoDB live configs + four Lambda live configs; TF plan smoke check (zero destroy/replace)
+- [ ] 66-05-PLAN.md — km init env exports + km configure wizard + km doctor checkPrefixCollision/checkEmailDomainMatchesSESIdentity; OPERATOR-GUIDE + CLAUDE.md + km-config.yaml docs; final grep-audit gates
