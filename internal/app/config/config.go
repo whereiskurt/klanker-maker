@@ -136,6 +136,19 @@ type Config struct {
 	// (b) no profile in cfg.ProfileSearchPaths references it, AND (c) no running sandbox
 	// currently uses it. Maps to km-config.yaml key doctor_stale_ami_days. Defaults to 30.
 	DoctorStaleAMIDays int
+
+	// SlackThreadsTableName is the DynamoDB table name for the Slack-inbound
+	// (channel_id, thread_ts) → claude_session_id mapping. Default
+	// "km-slack-threads"; respects ResourcePrefix when set (Phase 66
+	// forward-compat). Maps to km-config.yaml key slack_threads_table_name.
+	SlackThreadsTableName string
+
+	// ResourcePrefix is the Phase-66 multi-instance prefix applied to AWS
+	// resource names (e.g. "km", "stg", "kpf"). Default "km" via
+	// GetResourcePrefix(). Phase 66 will populate this from km-config.yaml;
+	// Phase 67 ships the shim helper so downstream code can use the helper
+	// unconditionally. Maps to km-config.yaml key resource_prefix.
+	ResourcePrefix string
 }
 
 // isSetByEnv returns true if the given viper key has been overridden by an environment
@@ -174,6 +187,8 @@ func Load() (*Config, error) {
 	v.SetDefault("schedules_table_name", "km-schedules")
 	v.SetDefault("create_handler_lambda_arn", "")
 	v.SetDefault("doctor_stale_ami_days", 30)
+	v.SetDefault("slack_threads_table_name", "km-slack-threads")
+	v.SetDefault("resource_prefix", "km")
 
 	// Primary config file: ~/.km/config.yaml
 	v.SetConfigName("config")
@@ -238,6 +253,8 @@ func Load() (*Config, error) {
 			"ttl_lambda_arn",
 			"scheduler_role_arn",
 			"doctor_stale_ami_days",
+			"slack_threads_table_name",
+			"resource_prefix",
 		} {
 			if v2.IsSet(key) && !isSetByEnv(v, key) {
 				v.Set(key, v2.Get(key))
@@ -276,6 +293,8 @@ func Load() (*Config, error) {
 		SchedulesTableName:     v.GetString("schedules_table_name"),
 		CreateHandlerLambdaARN: v.GetString("create_handler_lambda_arn"),
 		DoctorStaleAMIDays:     v.GetInt("doctor_stale_ami_days"),
+		SlackThreadsTableName:  v.GetString("slack_threads_table_name"),
+		ResourcePrefix:         v.GetString("resource_prefix"),
 	}
 
 	// If the AWS profile was set by default (not explicitly configured), verify it
@@ -295,6 +314,30 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// GetResourcePrefix returns the configured resource prefix, falling back to
+// "km" when unset. Phase 66 populates this from km-config.yaml; Phase 67
+// callers use this helper directly so they remain forward-compatible.
+func (c *Config) GetResourcePrefix() string {
+	if c == nil || c.ResourcePrefix == "" {
+		return "km"
+	}
+	return c.ResourcePrefix
+}
+
+// GetSlackThreadsTableName returns the Slack-threads DynamoDB table name.
+// If SlackThreadsTableName is explicitly set, that value wins. Otherwise
+// the name is derived from GetResourcePrefix() + "-slack-threads", which
+// defaults to "km-slack-threads" when no prefix is configured.
+func (c *Config) GetSlackThreadsTableName() string {
+	if c == nil {
+		return "km-slack-threads"
+	}
+	if c.SlackThreadsTableName != "" {
+		return c.SlackThreadsTableName
+	}
+	return c.GetResourcePrefix() + "-slack-threads"
 }
 
 // awsProfileExists checks whether a named AWS profile is defined in
