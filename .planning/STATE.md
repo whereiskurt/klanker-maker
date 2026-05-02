@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 63.1-02-PLAN.md (SLCK-12 remote destroy Slack teardown fix, Option A, 5 commits, 34 destroy tests green)
-last_updated: "2026-05-01T13:30:42.894Z"
-last_activity: "2026-05-01 — Completed quick task 6: Fix GitHub App installation-ID resolution for wildcard-only allowedRepos (TDD red→green, 4 commits, learn.yaml clones unblocked pending operator gate)"
+stopped_at: Completed 65-01-PLAN.md (config struct rename + Wave 0 stubs, 3 tasks, 7 files)
+last_updated: "2026-05-02T01:26:17.049Z"
+last_activity: "2026-05-01 — Completed 63.1-03-PLAN.md (SLCK-13: km slack rotate-token, bridge structured logging, fail-fast 5xx, UAT ts=1777638955.854989)"
 progress:
-  total_phases: 67
+  total_phases: 69
   completed_phases: 64
-  total_plans: 204
-  completed_plans: 205
+  total_plans: 208
+  completed_plans: 206
   percent: 0
 ---
 
@@ -244,6 +244,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 63.1 P01 | 993s | 3 tasks | 4 files |
 | Phase 63.1 P02 | 11 | 5 tasks | 4 files |
 | Phase 63.1 P03 | 45min | 5 tasks | 9 files |
+| Phase 65-four-account-config-model-separate-accounts-organization-scp-from-accounts-dns-parent-and-rename P01 | 373 | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -690,6 +691,7 @@ Recent decisions affecting current work:
 - [Phase 63.1-03]: B1 (fail-fast on 5xx) chosen for PostToBridge: nonce-replay protection makes same-envelope 5xx retry harmful (turns Slack error into replayed_nonce); no caller needs retry-on-5xx; network errors pre-nonce-reserve still retried.
 - [Phase 63.1-03]: Task 5 added during UAT (not in PLAN.md): bridge had zero logging; 5xx errors masked as replayed_nonce; both root causes fixed with slog + fail-fast policy.
 - [Phase 63.1-03]: SetLogger() exported from bridge package for test log capture via bytes.Buffer; avoids test/production divergence.
+- [Phase 65]: Hard rename of ManagementAccountID into OrganizationAccountID (SCP, optional) + DNSParentAccountID (DNS parent zone); no back-compat alias; Wave 1 cmd package intentionally broken until plan 02
 
 ### Roadmap Evolution
 
@@ -770,9 +772,10 @@ None yet.
 - Phase 56.2 inserted after Phase 56.1: Resume hardening — relocate cgroup scope creation and /run/km bootstrap from cloud-init user-data into a `km-bootstrap.service` systemd unit that runs on every boot, and harden `echo $$ > cgroup.procs` writes against bash redirect-error leaks (URGENT — lessons from Phase 56.1 km resume e2e: on a stop+resume of a baked sandbox, /sys/fs/cgroup is empty so the eBPF scope created during cloud-init vanishes and `bash: cgroup.procs: No such file or directory` leaks past `2>/dev/null` because bash opens the redirect target before applying stderr suppression — eBPF enforcement may be bypassed; /run is tmpfs so /run/km/learn-commands.log disappears on resume but cloud-init only ran once at first boot; fix: km-bootstrap.service oneshot Before=amazon-ssm-agent recreates the cgroup scope + /run/km files every boot, sourcing /etc/profile.d/km-identity.sh so SANDBOX_ID is correct on baked-AMI relaunch, and `{ echo $$ > path; } 2>/dev/null || true` wraps cgroup writes so redirect failures are suppressed)
 - Phase 63 added: Slack-notify hook for Claude Code permission and idle events — extends Phase 62's email notify with Slack delivery via klankermaker.ai-owned Pro Slack workspace; bot token in SSM never leaves AWS; sandboxes call new `km-slack-bridge` Lambda with Ed25519-signed payloads (same signing model as `km-send`); operators invited via Slack Connect from their own workspace; hybrid channel mode (default `#km-notifications` shared, opt-in per-sandbox `#sb-{id}` via `notifySlackPerSandbox`); new `notifyEmailEnabled` field for symmetry with `notifySlackEnabled` enables Slack-only delivery while preserving Phase 62 backward compat. Spec: `docs/superpowers/specs/2026-04-29-slack-notify-hook-design.md`
 - Phase 64 added: km create reliability and doctor cleanup hardening — bundles operational hygiene gaps from Phase 63.1 with related create-flow reliability todos. CLEAN-1 fix pre-existing `TestUnlockCmd_RequiresStateBucket` failure (predates 63.1, last touched commit 22366b1), CLEAN-2 add `km doctor --auto-fix` to archive stale Slack channels and orphan resources, CLEAN-3 fix `km create` orphan-channel-on-failure (Slack provisioned before infra apply, persists when terraform fails), CLEAN-4 doctor checks sidecar systemd health on active sandboxes (from todo doctor-sidecar-health.md), CLEAN-5 spot capacity multi-AZ retry (from todo spot-multi-az.md)
+- Phase 65 added: Four-account config model — split today's `accounts.management` (which conflates AWS Organizations management with the DNS parent-zone owner) into `accounts.organization` (SCP target, blank → skip SCP) and `accounts.dns_parent` (Route53 parent zone owner used by `ensureSandboxHostedZone`). Hard rename, no back-compat alias (pre-1.0). Updates `internal/app/config/config.go`, `bootstrap.go` SCP gate, `init.go` DNS lookup, `infra/live/site.hcl`, `infra/live/management/scp/terragrunt.hcl`, and adds `km doctor` warning when `accounts.organization` is blank ("SCP enforcement disabled — sandbox containment relies on IAM only"). Motivation: upcoming single-account install lacks org-management access; bootstrap must skip SCP cleanly while DNS still works. AWS profile names (`klanker-management` etc) are explicitly out of scope.
 
 ## Session Continuity
 
-Last session: 2026-05-01T11:30:33.127Z
-Stopped at: Completed 63.1-02-PLAN.md (SLCK-12 remote destroy Slack teardown fix, Option A, 5 commits, 34 destroy tests green)
+Last session: 2026-05-02T01:26:17.043Z
+Stopped at: Completed 65-01-PLAN.md (config struct rename + Wave 0 stubs, 3 tasks, 7 files)
 Resume file: None
