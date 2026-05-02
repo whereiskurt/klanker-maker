@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: "Completed 67-01-PLAN.md (Wave 1A: notifySlackInboundEnabled field + schema + 3 validation rules + 4 tests)"
-last_updated: "2026-05-02T23:55:16.629Z"
+stopped_at: Completed 67-02-PLAN.md (DynamoDB modules + Config helpers)
+last_updated: "2026-05-02T23:58:11.520Z"
 last_activity: "2026-05-01 — Completed 63.1-03-PLAN.md (SLCK-13: km slack rotate-token, bridge structured logging, fail-fast 5xx, UAT ts=1777638955.854989)"
 progress:
   total_phases: 71
   completed_phases: 65
   total_plans: 224
-  completed_plans: 211
+  completed_plans: 213
   percent: 0
 ---
 
@@ -250,6 +250,8 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 65 P04 | 504s | 3 tasks | 5 files |
 | Phase 67 P00 | 366 | 2 tasks | 9 files |
 | Phase 67-slack-inbound P01 | 102s | 2 tasks | 4 files |
+| Phase 67-slack-inbound P03 | 231s | 2 tasks | 4 files |
+| Phase 67-slack-inbound P02 | 4min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -707,6 +709,11 @@ Recent decisions affecting current work:
 - [Phase 67]: Wave 0 stub test files use internal package names (bridge/profile/compiler/cmd) consistent with existing non-_test source files in each directory
 - [Phase 67-slack-inbound]: Use plain bool (not *bool) for NotifySlackInboundEnabled — false is the correct default, matches NotifySlackPerSandbox pattern
 - [Phase 67-slack-inbound]: Three inbound validation rules (SI1/SI2/SI3) are hard errors, not warnings — misconfiguration must be caught at km validate time
+- [Phase 67-03]: EventNonceStore interface separate from NonceStore: CheckAndStore returns (bool,error) vs Reserve returns error with sentinel — cleaner for events dedup branch
+- [Phase 67-03]: 200-on-all-internal-errors invariant: SQS/DDB/sandbox-lookup/signing-secret failures return 200 not 5xx — Slack retries 5xx with new event_id bypassing dedup
+- [Phase 67-slack-inbound]: Live Terragrunt configs at infra/live/use1/dynamodb-* not management/dynamodb/
+- [Phase 67-slack-inbound]: GetResourcePrefix shim added in 67-02; Phase 66 can migrate later without breaking callers
+- [Phase 67-slack-inbound]: dynamodb-sandboxes GSI bump is v1.1.0 copy, v1.0.0 left unchanged (stateful table safety)
 
 ### Roadmap Evolution
 
@@ -793,6 +800,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-02T23:55:16.623Z
-Stopped at: Completed 67-01-PLAN.md (Wave 1A: notifySlackInboundEnabled field + schema + 3 validation rules + 4 tests)
+Last session: 2026-05-02T23:58:11.515Z
+Stopped at: Completed 67-02-PLAN.md (DynamoDB modules + Config helpers)
 Resume file: None
