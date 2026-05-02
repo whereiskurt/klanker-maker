@@ -37,7 +37,7 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 - `km ami copy <ami-id> --region <dest>` — copy AMI to another region in the same account, re-tagging the destination
 - `km ami delete <ami-id>` — deregister an AMI and delete its associated EBS snapshots atomically
 - `km info` — platform config, accounts, SES quota, AWS spend, DynamoDB tables
-- `km doctor` — validate platform health (18 checks: config, credentials, SES, Lambda, VPC, stale resources, stale AMIs, etc.; `--all-regions` to scan every active region)
+- `km doctor` — validate platform health (20 checks: config, credentials, SES, Lambda, VPC, stale resources, stale AMIs, etc.; `--all-regions` to scan every active region)
 
 ## Email
 

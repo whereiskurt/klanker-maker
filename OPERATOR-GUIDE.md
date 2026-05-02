@@ -10,31 +10,34 @@ sandbox. Follow the sections in order.
 
 ### AWS Accounts
 
-Klanker Maker supports two AWS Organizations topologies:
+Klanker Maker supports multiple AWS Organizations topologies:
 
-**3-account topology** (recommended for production):
+**4-account topology** (recommended for production):
 
-| Account | Role | Purpose |
-|---------|------|---------|
-| Management | Billing owner, SCP policy root | AWS Organizations root; SCP policies that constrain sandbox accounts are applied here |
-| Terraform | Infrastructure execution account | Terraform and Terragrunt run with credentials from this account; state bucket lives here |
-| Application | Sandbox workload account | EC2 instances and ECS tasks run here; sandboxes are provisioned into this account |
+| Account | km-config.yaml field | Role | Purpose |
+|---------|----------------------|------|---------|
+| Organization | `accounts.organization` | AWS Organizations management account (SCP policy root) | SCP policies that constrain sandbox accounts are applied here. Set blank to skip SCP deployment. |
+| DNS Parent | `accounts.dns_parent` | Route53 parent-zone owner | AWS account that owns the parent hosted zone for `cfg.Domain`. Required for DNS delegation during `km init`. |
+| Terraform | `accounts.terraform` | Infrastructure execution account | Terraform and Terragrunt run with credentials from this account; state bucket lives here |
+| Application | `accounts.application` | Sandbox workload account | EC2 instances and ECS tasks run here; sandboxes are provisioned into this account |
 
-**2-account topology** (simpler for development):
+**Single-account topology** (simpler for development):
 
-| Account | Role | Purpose |
-|---------|------|---------|
-| Management | Billing owner, SCP policy root | AWS Organizations root; SCP policies applied here |
-| Application | Terraform + sandbox workload account | Infrastructure operations and sandbox workloads share this account |
+All four `accounts.*` fields point at the same account. Set `accounts.organization` to blank
+(skips SCP) or the same account ID (enables SCP from the same account). DNS parent and
+application fields both point at the single account.
 
-In the 2-account topology, set the Terraform and Application account IDs to the same value
-during `km configure`. The configure wizard detects this automatically.
+The configure wizard detects single-account topology and prints a confirmation.
 
-All accounts must be member accounts of the same AWS Organization before proceeding.
+> **Migration note (Phase 65):** The previous `accounts.management` field has been split into
+> `accounts.organization` (SCP target) and `accounts.dns_parent` (Route53 parent zone owner).
+> If your `km-config.yaml` still contains `accounts.management`, rename it to `accounts.dns_parent`
+> and add `accounts.organization` (leave blank to skip SCP). Run `km doctor` for remediation
+> guidance — it will flag legacy `accounts.management` with an error message and instructions.
 
 ### AWS SSO (IAM Identity Center)
 
-Configure IAM Identity Center in the management account:
+Configure IAM Identity Center in the organization account (AWS Organizations management account):
 
 1. Enable IAM Identity Center in the AWS Console under Security, Identity, & Compliance.
 2. Create at least one permission set with AdministratorAccess (or a scoped policy covering
@@ -46,7 +49,7 @@ Configure IAM Identity Center in the management account:
 
 - Register a domain name (e.g., `example.com`).
 - Create a Route53 hosted zone for the sandboxes subdomain: `sandboxes.example.com`.
-  This zone can live in the management account or the application account — the operator
+  This zone can live in the DNS parent account or the application account — the operator
   guide assumes the application account.
 - Note the hosted zone ID (format: `Z1234ABCDEFGH`). You will set this as
   `KM_ROUTE53_ZONE_ID`.
@@ -106,7 +109,8 @@ deploying shared infrastructure in Section 4). Set these in your shell or a per-
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `KM_DOMAIN` | Base domain for sandboxes | `example.com` |
-| `KM_ACCOUNTS_MANAGEMENT` | AWS account ID for the management account | `111111111111` |
+| `KM_ACCOUNTS_ORGANIZATION` | AWS Organizations management account ID. Used by `km bootstrap` SCP deployment. Optional — blank skips SCP. | `111111111111` |
+| `KM_ACCOUNTS_DNS_PARENT` | AWS account ID owning the parent Route53 hosted zone for `cfg.Domain`. Used by `km init` DNS delegation. Optional if no domain is configured. | `111111111111` |
 | `KM_ACCOUNTS_TERRAFORM` | AWS account ID for the Terraform account | `222222222222` |
 | `KM_ACCOUNTS_APPLICATION` | AWS account ID for the application (sandbox) account | `333333333333` |
 | `KM_ARTIFACTS_BUCKET` | S3 bucket for Lambda zips, sidecar binaries, artifacts | `my-km-artifacts` |
@@ -132,23 +136,25 @@ km configure
 The command prompts for:
 
 - Base domain (e.g., `klankermaker.ai`)
-- Management AWS account ID
+- Organization AWS account ID (AWS Organizations management account; blank to skip SCP)
+- DNS parent AWS account ID (account owning the parent Route53 zone for your domain)
 - Terraform AWS account ID
 - Application AWS account ID
 - SSO start URL (e.g., `https://myorg.awsapps.com/start`)
 - SSO region (e.g., `us-east-1`)
 - Primary region (e.g., `us-east-1`)
 
-The command writes `./km-config.yaml` at the repo root. If the Terraform and Application
-account IDs match, it detects a 2-account topology and prints a confirmation. For a
-3-account topology, it prints DNS delegation instructions.
+The command writes `./km-config.yaml` at the repo root. If all account IDs match, it detects
+a single-account topology and prints a confirmation. For multi-account topologies, it prints
+DNS delegation instructions.
 
 For non-interactive use (CI/CD or scripted setup), pass values as flags:
 
 ```bash
 km configure --non-interactive \
   --domain klankermaker.ai \
-  --management-account 111111111111 \
+  --organization-account 111111111111 \
+  --dns-parent-account 111111111111 \
   --terraform-account 222222222222 \
   --application-account 333333333333 \
   --sso-start-url https://myorg.awsapps.com/start \
@@ -183,7 +189,8 @@ derive them from `km-config.yaml`:
 
 ```bash
 export KM_DOMAIN=example.com
-export KM_ACCOUNTS_MANAGEMENT=111111111111
+export KM_ACCOUNTS_ORGANIZATION=""              # blank for single-account; set to AWS Org management account ID otherwise
+export KM_ACCOUNTS_DNS_PARENT=111111111111      # AWS account ID owning your domain's parent Route53 zone
 export KM_ACCOUNTS_TERRAFORM=222222222222
 export KM_ACCOUNTS_APPLICATION=333333333333
 export KM_ARTIFACTS_BUCKET=my-km-artifacts
@@ -195,8 +202,10 @@ export KM_REGION=us-east-1
 ### Bootstrap SCP Policy
 
 Before deploying shared infrastructure, bootstrap the SCP sandbox-containment policy.
-This step requires credentials that can assume the `km-org-admin` role in the management
-account.
+This step requires credentials that can assume the `km-org-admin` role in the organization
+account (the AWS Organizations management account set in `accounts.organization`). If
+`accounts.organization` is blank, SCP deployment is skipped — `km bootstrap` exits with
+a notice and sandbox containment relies on IAM policies only.
 
 Preview what will be created:
 
@@ -217,9 +226,9 @@ The SCP policy constrains the application account to prevent sandbox workloads f
 escaping their containment boundary (security group mutation, network escape, IAM
 escalation, etc.). The bootstrap step must complete before creating sandboxes.
 
-**Prerequisite**: The `km-org-admin` IAM role must exist in the management account with
-an Organizations permissions policy and a trust relationship allowing your operator
-credentials to assume it.
+**Prerequisite**: The `km-org-admin` IAM role must exist in the organization account
+(`accounts.organization`) with an Organizations permissions policy and a trust relationship
+allowing your operator credentials to assume it.
 
 ---
 
@@ -447,13 +456,13 @@ sandbox:
 
 ### "Cannot assume IAM Role" during km bootstrap
 
-The `km-org-admin` role does not exist in the management account, or the trust policy does
-not allow your current credentials to assume it. Verify:
+The `km-org-admin` role does not exist in the organization account (`accounts.organization`),
+or the trust policy does not allow your current credentials to assume it. Verify:
 
-1. The role exists in the management account:
+1. The role exists in the organization account:
 
    ```bash
-   aws iam get-role --role-name km-org-admin --profile <management-profile>
+   aws iam get-role --role-name km-org-admin --profile <organization-account-profile>
    ```
 
 2. The trust policy includes your operator principal (SSO role or IAM user).
