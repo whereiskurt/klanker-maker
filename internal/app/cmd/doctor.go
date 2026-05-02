@@ -37,6 +37,7 @@ import (
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 	profilepkg "github.com/whereiskurt/klankrmkr/pkg/profile"
 	slackpkg "github.com/whereiskurt/klankrmkr/pkg/slack"
+	"gopkg.in/yaml.v3"
 )
 
 // CheckStatus is the result classification for a single doctor check.
@@ -269,6 +270,82 @@ func checkConfig(cfg DoctorConfigProvider) CheckResult {
 		Name:    "Config",
 		Status:  CheckOK,
 		Message: fmt.Sprintf("domain=%s region=%s", cfg.GetDomain(), cfg.GetPrimaryRegion()),
+	}
+}
+
+// checkOrganizationAccountBlank surfaces SCP enforcement status to operators.
+// Returns WARN when accounts.organization is blank (single-account topology — no SCP).
+// Returns OK when accounts.organization is set.
+func checkOrganizationAccountBlank(cfg DoctorConfigProvider) CheckResult {
+	org := cfg.GetOrganizationAccountID()
+	if org != "" {
+		return CheckResult{
+			Name:    "SCP Enforcement Config",
+			Status:  CheckOK,
+			Message: fmt.Sprintf("accounts.organization = %s (SCP enabled)", org),
+		}
+	}
+	return CheckResult{
+		Name:        "SCP Enforcement Config",
+		Status:      CheckWarn,
+		Message:     "SCP enforcement disabled — sandbox containment relies on IAM policies only",
+		Remediation: "Set accounts.organization in km-config.yaml to enable org-level SCP sandbox containment",
+	}
+}
+
+// checkLegacyManagementField detects a stale accounts.management key in km-config.yaml.
+// Pre-rename configs silently load with OrganizationAccountID == "" and DNSParentAccountID == "" because
+// viper ignores unknown keys. This check reads the raw YAML to surface the migration need.
+// The kmConfigPath parameter enables testability; pass empty string to use findKMConfigPath().
+func checkLegacyManagementField(kmConfigPath string) CheckResult {
+	path := kmConfigPath
+	if path == "" {
+		p := findKMConfigPath()
+		if p == "" {
+			return CheckResult{
+				Name:    "Legacy Config Field",
+				Status:  CheckSkipped,
+				Message: "km-config.yaml not found — skipping legacy-field check",
+			}
+		}
+		path = p
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return CheckResult{
+			Name:    "Legacy Config Field",
+			Status:  CheckSkipped,
+			Message: fmt.Sprintf("km-config.yaml not readable: %v", err),
+		}
+	}
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return CheckResult{
+			Name:    "Legacy Config Field",
+			Status:  CheckSkipped,
+			Message: fmt.Sprintf("km-config.yaml not parseable: %v", err),
+		}
+	}
+	accountsRaw, ok := raw["accounts"].(map[string]interface{})
+	if !ok {
+		return CheckResult{
+			Name:    "Legacy Config Field",
+			Status:  CheckOK,
+			Message: "no accounts block — nothing to migrate",
+		}
+	}
+	if _, hasMgmt := accountsRaw["management"]; hasMgmt {
+		return CheckResult{
+			Name:        "Legacy Config Field",
+			Status:      CheckError,
+			Message:     "accounts.management has been split — rename to accounts.dns_parent and add accounts.organization (or leave blank to skip SCP)",
+			Remediation: "Edit km-config.yaml: rename 'management' to 'dns_parent' (same value) and add 'organization' (blank for single-account topology)",
+		}
+	}
+	return CheckResult{
+		Name:    "Legacy Config Field",
+		Status:  CheckOK,
+		Message: "no legacy accounts.management key found",
 	}
 }
 
@@ -1791,6 +1868,11 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		func(ctx context.Context) CheckResult { return checkConfig(cfg) },
 	}
 
+	// Legacy config field check — reads raw km-config.yaml to detect accounts.management (no AWS calls).
+	checks = append(checks, func(_ context.Context) CheckResult {
+		return checkLegacyManagementField("") // empty = use findKMConfigPath
+	})
+
 	// Credential checks — one per AWS profile.
 	profile := cfg.GetAWSProfile()
 	if profile == "" {
@@ -1835,6 +1917,11 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	kmsClient := deps.KMSClient
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		return checkKMSKey(ctx, kmsClient, "km-platform")
+	})
+
+	// Organization account blank check — warns when SCP enforcement is disabled (no AWS calls).
+	checks = append(checks, func(_ context.Context) CheckResult {
+		return checkOrganizationAccountBlank(cfg)
 	})
 
 	// SCP check — the SCP is attached to the application account, queried via Organizations API.

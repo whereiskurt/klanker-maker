@@ -5,7 +5,6 @@ import (
 	ed25519key "crypto/ed25519"
 	"crypto/rand"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1576,33 +1575,90 @@ func TestCheckStaleSlackChannels_HasStale_Warn(t *testing.T) {
 	}
 }
 
-// Suppress unused import warning
-var _ = fmt.Sprintf
-var _ = strings.Contains
-var _ = filepath.Join
-
-// Wave 0 stubs — implementation owned by Phase 65 plan 03.
+// =============================================================================
+// Tests: checkOrganizationAccountBlank (VALIDATION 65-03-01, 65-03-02)
+// =============================================================================
 
 func TestCheckOrganizationAccountBlank_BlankReturnsWarn(t *testing.T) {
-	t.Skip("Plan 03 — implement in Phase 65 plan 03")
+	cfg := &testDoctorConfig{orgAcct: ""}
+	result := checkOrganizationAccountBlank(cfg)
+	if result.Status != CheckWarn {
+		t.Errorf("expected CheckWarn, got %s: %s", result.Status, result.Message)
+	}
+	if !strings.Contains(result.Message, "IAM policies only") {
+		t.Errorf("expected message to contain 'IAM policies only', got: %s", result.Message)
+	}
 }
 
 func TestCheckOrganizationAccountBlank_SetReturnsOK(t *testing.T) {
-	t.Skip("Plan 03 — implement in Phase 65 plan 03")
+	cfg := &testDoctorConfig{orgAcct: "111111111111"}
+	result := checkOrganizationAccountBlank(cfg)
+	if result.Status != CheckOK {
+		t.Errorf("expected CheckOK, got %s: %s", result.Status, result.Message)
+	}
+	if !strings.Contains(result.Message, "111111111111") {
+		t.Errorf("expected message to contain org account ID '111111111111', got: %s", result.Message)
+	}
 }
 
+// =============================================================================
+// Tests: checkLegacyManagementField (VALIDATION 65-03-03, 65-03-04, 65-03-05)
+// =============================================================================
+
 func TestCheckLegacyManagementField_FieldPresent(t *testing.T) {
-	t.Skip("Plan 03 — implement in Phase 65 plan 03")
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "km-config.yaml")
+	yamlWithMgmt := []byte("accounts:\n  management: \"111111111111\"\n")
+	if err := os.WriteFile(cfgPath, yamlWithMgmt, 0600); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+	result := checkLegacyManagementField(cfgPath)
+	if result.Status != CheckError {
+		t.Errorf("expected CheckError, got %s: %s", result.Status, result.Message)
+	}
+	if !strings.Contains(result.Remediation, "rename") {
+		t.Errorf("expected remediation to contain 'rename', got: %s", result.Remediation)
+	}
 }
 
 func TestCheckLegacyManagementField_FieldAbsent(t *testing.T) {
-	t.Skip("Plan 03 — implement in Phase 65 plan 03")
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "km-config.yaml")
+	yamlWithoutMgmt := []byte("accounts:\n  organization: \"\"\n  dns_parent: \"222222222222\"\n")
+	if err := os.WriteFile(cfgPath, yamlWithoutMgmt, 0600); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+	result := checkLegacyManagementField(cfgPath)
+	if result.Status != CheckOK {
+		t.Errorf("expected CheckOK, got %s: %s", result.Status, result.Message)
+	}
 }
 
 func TestCheckLegacyManagementField_NoConfigFile(t *testing.T) {
-	t.Skip("Plan 03 — implement in Phase 65 plan 03")
+	missingPath := filepath.Join(t.TempDir(), "missing.yaml")
+	result := checkLegacyManagementField(missingPath)
+	if result.Status != CheckSkipped {
+		t.Errorf("expected CheckSkipped for missing file, got %s: %s", result.Status, result.Message)
+	}
 }
 
+// =============================================================================
+// Tests: checkConfig required-list does NOT include management_account_id (VALIDATION 65-03-06)
+// =============================================================================
+
 func TestCheckConfigDoesNotRequireManagement(t *testing.T) {
-	t.Skip("Plan 03 — implement in Phase 65 plan 03")
+	// A fully blank orgAcct should NOT cause checkConfig to return CheckError.
+	// The org account is optional; only the legacy-field check surfaces the migration need.
+	cfg := &testDoctorConfig{
+		orgAcct:  "", // blank — single-account topology
+		tfAcct:   "222222222222",
+		appAcct:  "333333333333",
+		ssoURL:   "https://sso.example.com/start",
+		region:   "us-east-1",
+		domain:   "example.com",
+	}
+	result := checkConfig(cfg)
+	if result.Status == CheckError {
+		t.Errorf("checkConfig should not return CheckError for blank accounts.organization, got: %s", result.Message)
+	}
 }
