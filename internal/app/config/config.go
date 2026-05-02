@@ -47,9 +47,13 @@ type Config struct {
 	// forks work with any domain without code changes.
 	Domain string
 
-	// ManagementAccountID is the AWS account ID for the management/root account.
-	// Maps to km-config.yaml key accounts.management.
-	ManagementAccountID string
+	// OrganizationAccountID is the AWS Organizations management account ID (SCP target).
+	// Maps to km-config.yaml key accounts.organization. Optional: blank skips SCP deployment.
+	OrganizationAccountID string
+
+	// DNSParentAccountID is the AWS account ID owning the parent Route53 hosted zone for cfg.Domain.
+	// Maps to km-config.yaml key accounts.dns_parent. Blank skips DNS delegation in km init.
+	DNSParentAccountID    string
 
 	// TerraformAccountID is the AWS account ID used for Terraform/infrastructure operations.
 	// Maps to km-config.yaml key accounts.terraform.
@@ -211,7 +215,8 @@ func Load() (*Config, error) {
 		// Merge platform keys from v2 into v only when not already overridden by env.
 		for _, key := range []string{
 			"domain",
-			"accounts.management",
+			"accounts.organization",
+			"accounts.dns_parent",
 			"accounts.terraform",
 			"accounts.application",
 			"sso.start_url",
@@ -250,9 +255,10 @@ func Load() (*Config, error) {
 		SchedulerRoleARN:   v.GetString("scheduler_role_arn"),
 
 		// New platform fields
-		Domain:               v.GetString("domain"),
-		ManagementAccountID:  v.GetString("accounts.management"),
-		TerraformAccountID:   v.GetString("accounts.terraform"),
+		Domain:                v.GetString("domain"),
+		OrganizationAccountID: v.GetString("accounts.organization"),
+		DNSParentAccountID:    v.GetString("accounts.dns_parent"),
+		TerraformAccountID:    v.GetString("accounts.terraform"),
 		ApplicationAccountID: v.GetString("accounts.application"),
 		SSOStartURL:          v.GetString("sso.start_url"),
 		SSORegion:            v.GetString("sso.region"),

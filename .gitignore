@@ -35,6 +35,7 @@ bin/
 /github-token-refresher
 /email-create-handler
 /create-handler
+/km-slack-bridge
 
 /excalidraw.log
 

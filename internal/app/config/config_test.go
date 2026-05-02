@@ -22,7 +22,7 @@ func TestLoadPlatformFields(t *testing.T) {
 	writeKMConfig(t, dir, `
 domain: klankermaker.ai
 accounts:
-  management: "111111111111"
+  dns_parent: "111111111111"
   terraform: "222222222222"
   application: "333333333333"
 sso:
@@ -47,8 +47,8 @@ budget_table_name: my-budgets
 	if cfg.Domain != "klankermaker.ai" {
 		t.Errorf("Domain: got %q, want %q", cfg.Domain, "klankermaker.ai")
 	}
-	if cfg.ManagementAccountID != "111111111111" {
-		t.Errorf("ManagementAccountID: got %q, want %q", cfg.ManagementAccountID, "111111111111")
+	if cfg.DNSParentAccountID != "111111111111" {
+		t.Errorf("DNSParentAccountID: got %q, want %q", cfg.DNSParentAccountID, "111111111111")
 	}
 	if cfg.TerraformAccountID != "222222222222" {
 		t.Errorf("TerraformAccountID: got %q, want %q", cfg.TerraformAccountID, "222222222222")
@@ -97,8 +97,11 @@ func TestLoadBackwardCompat(t *testing.T) {
 	if cfg.Domain != "" {
 		t.Errorf("Domain: expected empty, got %q", cfg.Domain)
 	}
-	if cfg.ManagementAccountID != "" {
-		t.Errorf("ManagementAccountID: expected empty, got %q", cfg.ManagementAccountID)
+	if cfg.DNSParentAccountID != "" {
+		t.Errorf("DNSParentAccountID: expected empty, got %q", cfg.DNSParentAccountID)
+	}
+	if cfg.OrganizationAccountID != "" {
+		t.Errorf("OrganizationAccountID: expected empty, got %q", cfg.OrganizationAccountID)
 	}
 }
 
@@ -361,5 +364,62 @@ domain: from-file.example.com
 
 	if cfg.Domain != "from-env.example.com" {
 		t.Errorf("Domain: expected env override %q, got %q", "from-env.example.com", cfg.Domain)
+	}
+}
+
+// TestLoadOrganizationAndDNSParentFields verifies that accounts.organization and
+// accounts.dns_parent in km-config.yaml are loaded into their respective struct fields.
+func TestLoadOrganizationAndDNSParentFields(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+accounts:
+  organization: "111111111111"
+  dns_parent: "222222222222"
+  application: "333333333333"
+  terraform: "333333333333"
+`)
+
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.OrganizationAccountID != "111111111111" {
+		t.Errorf("OrganizationAccountID: got %q, want %q", cfg.OrganizationAccountID, "111111111111")
+	}
+	if cfg.DNSParentAccountID != "222222222222" {
+		t.Errorf("DNSParentAccountID: got %q, want %q", cfg.DNSParentAccountID, "222222222222")
+	}
+}
+
+// TestLoadBlankOrganizationIsValid verifies that km-config.yaml without
+// accounts.organization loads without error and yields an empty OrganizationAccountID.
+func TestLoadBlankOrganizationIsValid(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+accounts:
+  dns_parent: "444444444444"
+  application: "333333333333"
+  terraform: "222222222222"
+`)
+
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+	if cfg.OrganizationAccountID != "" {
+		t.Errorf("OrganizationAccountID: expected empty string for missing key, got %q", cfg.OrganizationAccountID)
 	}
 }
