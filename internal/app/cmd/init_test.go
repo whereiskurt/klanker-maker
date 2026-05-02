@@ -480,18 +480,15 @@ func TestSlackBridgeColdStart_PropagatesError(t *testing.T) {
 }
 
 // TestInitExportsNewAccountEnvVars verifies that ExportConfigEnvVars sets
-// KM_ACCOUNTS_ORGANIZATION and KM_ACCOUNTS_DNS_PARENT from the config,
-// and does NOT set KM_ACCOUNTS_MANAGEMENT.
+// KM_ACCOUNTS_ORGANIZATION and KM_ACCOUNTS_DNS_PARENT from the config.
 func TestInitExportsNewAccountEnvVars(t *testing.T) {
 	// Use t.Setenv for all env vars so Go's test framework restores them after
 	// the test, preventing leakage into subsequent tests that run km as a subprocess.
 	t.Setenv("KM_ACCOUNTS_ORGANIZATION", "")
 	t.Setenv("KM_ACCOUNTS_DNS_PARENT", "")
-	t.Setenv("KM_ACCOUNTS_MANAGEMENT", "")
 	// Unset them (t.Setenv above registers cleanup to restore original value).
 	os.Unsetenv("KM_ACCOUNTS_ORGANIZATION")
 	os.Unsetenv("KM_ACCOUNTS_DNS_PARENT")
-	os.Unsetenv("KM_ACCOUNTS_MANAGEMENT")
 
 	cfg := &config.Config{
 		OrganizationAccountID: "111111111111",
@@ -506,9 +503,6 @@ func TestInitExportsNewAccountEnvVars(t *testing.T) {
 	}
 	if got := os.Getenv("KM_ACCOUNTS_DNS_PARENT"); got != "222222222222" {
 		t.Errorf("KM_ACCOUNTS_DNS_PARENT = %q, want %q", got, "222222222222")
-	}
-	if got := os.Getenv("KM_ACCOUNTS_MANAGEMENT"); got != "" {
-		t.Errorf("KM_ACCOUNTS_MANAGEMENT should be empty (old var), got %q", got)
 	}
 	// Note: t.Setenv registered cleanups above will restore the env vars after this test,
 	// preventing the set values from leaking into subsequent subprocess-based tests.
