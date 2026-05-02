@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 65-04-PLAN.md (HCL + docs migration, grep audit zero-count, Phase 65 complete, 3 tasks, 5 files)
-last_updated: "2026-05-02T02:19:49.946Z"
+stopped_at: Phase 67 context gathered
+last_updated: "2026-05-02T22:28:33.439Z"
 last_activity: "2026-05-01 — Completed 63.1-03-PLAN.md (SLCK-13: km slack rotate-token, bridge structured logging, fail-fast 5xx, UAT ts=1777638955.854989)"
 progress:
-  total_phases: 69
+  total_phases: 71
   completed_phases: 65
-  total_plans: 208
+  total_plans: 213
   completed_plans: 209
   percent: 0
 ---
@@ -776,15 +776,17 @@ Recent decisions affecting current work:
 - Phase 61 added: km shell Ctrl+C fix — switch interactive SSM sessions from AWS-StartInteractiveCommand to a parameterized Standard_Stream document with runAsDefaultUser=sandbox
 - Phase 33.1 inserted after Phase 33: Raw AMI ID support — extend schema, compiler, and Terraform to accept ami-xxxxxxxx IDs alongside slugs (prereq for Phase 56 snapshot lifecycle) (URGENT)
 - Phase 63.1 inserted after Phase 63: Slack notify hook gap closure — step 11d runtime injection visibility, km destroy archive auto-trigger, and bridge token rotation hardening (URGENT — Phase 63 UAT followups)
+- Phase 67 added: Slack inbound: per-sandbox channel as bidirectional chat with km agent run dispatch
 - Phase 62 added: Claude Code operator-notify hook — emit signed emails to operator (or override address) on Notification (permission) and Stop (idle) hook events; profile-driven (`spec.cli.notifyOnPermission/notifyOnIdle/notifyCooldownSeconds/notificationEmailAddress`) with `--notify-on-permission`/`--notify-on-idle` CLI overrides on `km shell`/`km agent run`. Hook installed at compile time; v1 notification-only with v2 closed-loop forward-compatible. Spec: `docs/superpowers/specs/2026-04-26-operator-notify-hook-design.md`
 - Phase 56.1 inserted after Phase 56: Bake-loop hardening — fix additionalVolume/AMI BDM collision, non-blocking audit hook, sidecar FIFO-retry + post-env-rewrite restart (URGENT — lessons from Phase 56 e2e: AMI'd sandbox failed to launch due to /dev/sdf BDM collision; once fixed, login shells deadlocked because audit hook FIFO write blocks when km-audit-log starts before /run/km/audit-pipe exists and never retries)
 - Phase 56.2 inserted after Phase 56.1: Resume hardening — relocate cgroup scope creation and /run/km bootstrap from cloud-init user-data into a `km-bootstrap.service` systemd unit that runs on every boot, and harden `echo $$ > cgroup.procs` writes against bash redirect-error leaks (URGENT — lessons from Phase 56.1 km resume e2e: on a stop+resume of a baked sandbox, /sys/fs/cgroup is empty so the eBPF scope created during cloud-init vanishes and `bash: cgroup.procs: No such file or directory` leaks past `2>/dev/null` because bash opens the redirect target before applying stderr suppression — eBPF enforcement may be bypassed; /run is tmpfs so /run/km/learn-commands.log disappears on resume but cloud-init only ran once at first boot; fix: km-bootstrap.service oneshot Before=amazon-ssm-agent recreates the cgroup scope + /run/km files every boot, sourcing /etc/profile.d/km-identity.sh so SANDBOX_ID is correct on baked-AMI relaunch, and `{ echo $$ > path; } 2>/dev/null || true` wraps cgroup writes so redirect failures are suppressed)
 - Phase 63 added: Slack-notify hook for Claude Code permission and idle events — extends Phase 62's email notify with Slack delivery via klankermaker.ai-owned Pro Slack workspace; bot token in SSM never leaves AWS; sandboxes call new `km-slack-bridge` Lambda with Ed25519-signed payloads (same signing model as `km-send`); operators invited via Slack Connect from their own workspace; hybrid channel mode (default `#km-notifications` shared, opt-in per-sandbox `#sb-{id}` via `notifySlackPerSandbox`); new `notifyEmailEnabled` field for symmetry with `notifySlackEnabled` enables Slack-only delivery while preserving Phase 62 backward compat. Spec: `docs/superpowers/specs/2026-04-29-slack-notify-hook-design.md`
 - Phase 64 added: km create reliability and doctor cleanup hardening — bundles operational hygiene gaps from Phase 63.1 with related create-flow reliability todos. CLEAN-1 fix pre-existing `TestUnlockCmd_RequiresStateBucket` failure (predates 63.1, last touched commit 22366b1), CLEAN-2 add `km doctor --auto-fix` to archive stale Slack channels and orphan resources, CLEAN-3 fix `km create` orphan-channel-on-failure (Slack provisioned before infra apply, persists when terraform fails), CLEAN-4 doctor checks sidecar systemd health on active sandboxes (from todo doctor-sidecar-health.md), CLEAN-5 spot capacity multi-AZ retry (from todo spot-multi-az.md)
 - Phase 65 added: Four-account config model — split today's `accounts.management` (which conflates AWS Organizations management with the DNS parent-zone owner) into `accounts.organization` (SCP target, blank → skip SCP) and `accounts.dns_parent` (Route53 parent zone owner used by `ensureSandboxHostedZone`). Hard rename, no back-compat alias (pre-1.0). Updates `internal/app/config/config.go`, `bootstrap.go` SCP gate, `init.go` DNS lookup, `infra/live/site.hcl`, `infra/live/management/scp/terragrunt.hcl`, and adds `km doctor` warning when `accounts.organization` is blank ("SCP enforcement disabled — sandbox containment relies on IAM only"). Motivation: upcoming single-account install lacks org-management access; bootstrap must skip SCP cleanly while DNS still works. AWS profile names (`klanker-management` etc) are explicitly out of scope.
+- Phase 66 added: Multi-instance support — introduce `resource_prefix` (default `"km"`) and `email_subdomain` (default `"sandboxes"`) in km-config.yaml so multiple km installs can coexist in one AWS account. Threads both knobs through DynamoDB tables (`km-budgets`, `km-sandboxes`, `km-identities`, `km-schedules`, `km-slack-bridge-nonces`), management Lambdas (`km-ttl-handler`, `km-create-handler`, `km-email-create-handler`, `km-slack-bridge`, `km-ecs-spot-handler`), Lambda IAM roles (~12 sub-policies per handler), EventBridge schedule group (`km-at`) and rule (`km-ecs-spot-interruption`), CloudWatch log group prefix (`/km/sandboxes/*`), SSM parameter prefixes (`/km/slack/*`, `/km/config/github/*`, `/km/config/remote-create/*`), TF state backend (`tf-km-state-{region}` + lock table), SES domain identity / Route53 zone (`sandboxes.{domain}`), and the ~25 inline `"sandboxes." + cfg.Domain` call sites (collapse to `Config.GetEmailDomain()`). Defaults preserve existing-install behavior; new installs override at `km init`. Migration of existing installs is explicitly out of scope. Org SCP (`km-sandbox-containment`) reuses the Phase 65 `accounts.organization == ""` skip path since SCPs are org-scoped and only one install per org can deploy. TF resource renames must keep logical names constant (parameterize `name` attribute only) to avoid destroy/create on stateful DynamoDB tables.
 
 ## Session Continuity
 
-Last session: 2026-05-02T02:19:49.940Z
-Stopped at: Completed 65-04-PLAN.md (HCL + docs migration, grep audit zero-count, Phase 65 complete, 3 tasks, 5 files)
-Resume file: None
+Last session: 2026-05-02T22:28:33.425Z
+Stopped at: Phase 67 context gathered
+Resume file: .planning/phases/67-slack-inbound-per-sandbox-channel-as-bidirectional-chat-with-km-agent-run-dispatch/67-CONTEXT.md
