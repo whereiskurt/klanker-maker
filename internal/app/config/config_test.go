@@ -398,6 +398,46 @@ accounts:
 	}
 }
 
+// TestConfig_GetResourcePrefix_FallbackKM verifies that GetResourcePrefix returns "km"
+// when ResourcePrefix is empty, and returns the configured value when set.
+func TestConfig_GetResourcePrefix_FallbackKM(t *testing.T) {
+	c := &config.Config{}
+	if got := c.GetResourcePrefix(); got != "km" {
+		t.Fatalf("expected fallback 'km', got %q", got)
+	}
+	c.ResourcePrefix = "stg"
+	if got := c.GetResourcePrefix(); got != "stg" {
+		t.Fatalf("expected 'stg' from set field, got %q", got)
+	}
+}
+
+// TestConfig_GetSlackThreadsTableName_DefaultAndPrefix verifies table name derivation.
+func TestConfig_GetSlackThreadsTableName_DefaultAndPrefix(t *testing.T) {
+	c := &config.Config{}
+	if got := c.GetSlackThreadsTableName(); got != "km-slack-threads" {
+		t.Fatalf("expected default 'km-slack-threads', got %q", got)
+	}
+	c.ResourcePrefix = "stg"
+	if got := c.GetSlackThreadsTableName(); got != "stg-slack-threads" {
+		t.Fatalf("expected 'stg-slack-threads', got %q", got)
+	}
+	c.SlackThreadsTableName = "explicit-name"
+	if got := c.GetSlackThreadsTableName(); got != "explicit-name" {
+		t.Fatalf("explicit field should win, got %q", got)
+	}
+}
+
+// TestConfig_NilReceiverSafe verifies that nil Config receivers return safe defaults.
+func TestConfig_NilReceiverSafe(t *testing.T) {
+	var c *config.Config
+	if got := c.GetResourcePrefix(); got != "km" {
+		t.Fatalf("nil receiver: want 'km', got %q", got)
+	}
+	if got := c.GetSlackThreadsTableName(); got != "km-slack-threads" {
+		t.Fatalf("nil receiver: want 'km-slack-threads', got %q", got)
+	}
+}
+
 // TestLoadBlankOrganizationIsValid verifies that km-config.yaml without
 // accounts.organization loads without error and yields an empty OrganizationAccountID.
 func TestLoadBlankOrganizationIsValid(t *testing.T) {
