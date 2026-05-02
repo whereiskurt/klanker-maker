@@ -497,12 +497,12 @@ func TestCheckIdentityTable_MissingIsWarn(t *testing.T) {
 
 func TestCheckConfig_OK(t *testing.T) {
 	cfg := &testConfig{
-		domain:      "example.com",
-		mgmtAcct:    "111111111111",
-		tfAcct:      "222222222222",
-		appAcct:     "333333333333",
-		ssoURL:      "https://sso.example.com/start",
-		region:      "us-east-1",
+		domain:        "example.com",
+		dnsParentAcct: "111111111111",
+		tfAcct:        "222222222222",
+		appAcct:       "333333333333",
+		ssoURL:        "https://sso.example.com/start",
+		region:        "us-east-1",
 	}
 	result := checkConfig(cfg)
 	if result.Status != CheckOK {
@@ -608,30 +608,32 @@ func TestCheckSandboxSummary_OK(t *testing.T) {
 // testConfig is a simple struct used in checkConfig tests to avoid depending
 // on a fully-loaded config.Config.
 type testConfig struct {
-	domain   string
-	mgmtAcct string
-	tfAcct   string
-	appAcct  string
-	ssoURL   string
-	region   string
+	domain        string
+	dnsParentAcct string
+	orgAcct       string
+	tfAcct        string
+	appAcct       string
+	ssoURL        string
+	region        string
 }
 
 // doctorConfigProvider is the interface that checkConfig accepts.
 // Defined in doctor.go.
 
-func (c *testConfig) GetDomain() string               { return c.domain }
-func (c *testConfig) GetManagementAccountID() string   { return c.mgmtAcct }
-func (c *testConfig) GetTerraformAccountID() string    { return c.tfAcct }
-func (c *testConfig) GetApplicationAccountID() string  { return c.appAcct }
-func (c *testConfig) GetSSOStartURL() string           { return c.ssoURL }
-func (c *testConfig) GetPrimaryRegion() string         { return c.region }
-func (c *testConfig) GetStateBucket() string           { return "" }
-func (c *testConfig) GetBudgetTableName() string       { return "" }
-func (c *testConfig) GetIdentityTableName() string     { return "" }
-func (c *testConfig) GetAWSProfile() string            { return "" }
-func (c *testConfig) GetArtifactsBucket() string       { return "" }
-func (c *testConfig) GetDoctorStaleAMIDays() int       { return 30 }
-func (c *testConfig) GetProfileSearchPaths() []string  { return nil }
+func (c *testConfig) GetDomain() string                   { return c.domain }
+func (c *testConfig) GetOrganizationAccountID() string    { return c.orgAcct }
+func (c *testConfig) GetDNSParentAccountID() string       { return c.dnsParentAcct }
+func (c *testConfig) GetTerraformAccountID() string       { return c.tfAcct }
+func (c *testConfig) GetApplicationAccountID() string     { return c.appAcct }
+func (c *testConfig) GetSSOStartURL() string              { return c.ssoURL }
+func (c *testConfig) GetPrimaryRegion() string            { return c.region }
+func (c *testConfig) GetStateBucket() string              { return "" }
+func (c *testConfig) GetBudgetTableName() string          { return "" }
+func (c *testConfig) GetIdentityTableName() string        { return "" }
+func (c *testConfig) GetAWSProfile() string               { return "" }
+func (c *testConfig) GetArtifactsBucket() string          { return "" }
+func (c *testConfig) GetDoctorStaleAMIDays() int          { return 30 }
+func (c *testConfig) GetProfileSearchPaths() []string     { return nil }
 
 // =============================================================================
 // Tests: DoctorCmd (Task 2)
@@ -767,12 +769,12 @@ func (b *bufWriter) String() string { return string(b.data) }
 func minimalConfig() *testDoctorConfig {
 	// Fully populated so checkConfig returns OK.
 	return &testDoctorConfig{
-		domain:   "example.com",
-		mgmtAcct: "111111111111",
-		tfAcct:   "222222222222",
-		appAcct:  "333333333333",
-		ssoURL:   "https://sso.example.com/start",
-		region:   "us-east-1",
+		domain:        "example.com",
+		dnsParentAcct: "111111111111",
+		tfAcct:        "222222222222",
+		appAcct:       "333333333333",
+		ssoURL:        "https://sso.example.com/start",
+		region:        "us-east-1",
 	}
 }
 
@@ -784,28 +786,30 @@ func minimalConfigWithProfile() *testDoctorConfig {
 
 // testDoctorConfig implements the DoctorConfigProvider interface.
 type testDoctorConfig struct {
-	domain     string
-	mgmtAcct   string
-	tfAcct     string
-	appAcct    string
-	ssoURL     string
-	region     string
-	awsProfile string
+	domain        string
+	dnsParentAcct string
+	orgAcct       string
+	tfAcct        string
+	appAcct       string
+	ssoURL        string
+	region        string
+	awsProfile    string
 }
 
-func (c *testDoctorConfig) GetDomain() string               { return c.domain }
-func (c *testDoctorConfig) GetManagementAccountID() string   { return c.mgmtAcct }
-func (c *testDoctorConfig) GetTerraformAccountID() string    { return c.tfAcct }
-func (c *testDoctorConfig) GetApplicationAccountID() string  { return c.appAcct }
-func (c *testDoctorConfig) GetSSOStartURL() string           { return c.ssoURL }
-func (c *testDoctorConfig) GetPrimaryRegion() string         { return c.region }
-func (c *testDoctorConfig) GetStateBucket() string           { return "" }
-func (c *testDoctorConfig) GetBudgetTableName() string       { return "" }
-func (c *testDoctorConfig) GetIdentityTableName() string     { return "" }
-func (c *testDoctorConfig) GetAWSProfile() string            { return c.awsProfile }
-func (c *testDoctorConfig) GetArtifactsBucket() string       { return "" }
-func (c *testDoctorConfig) GetDoctorStaleAMIDays() int       { return 30 }
-func (c *testDoctorConfig) GetProfileSearchPaths() []string  { return nil }
+func (c *testDoctorConfig) GetDomain() string                   { return c.domain }
+func (c *testDoctorConfig) GetOrganizationAccountID() string    { return c.orgAcct }
+func (c *testDoctorConfig) GetDNSParentAccountID() string       { return c.dnsParentAcct }
+func (c *testDoctorConfig) GetTerraformAccountID() string       { return c.tfAcct }
+func (c *testDoctorConfig) GetApplicationAccountID() string     { return c.appAcct }
+func (c *testDoctorConfig) GetSSOStartURL() string              { return c.ssoURL }
+func (c *testDoctorConfig) GetPrimaryRegion() string            { return c.region }
+func (c *testDoctorConfig) GetStateBucket() string              { return "" }
+func (c *testDoctorConfig) GetBudgetTableName() string          { return "" }
+func (c *testDoctorConfig) GetIdentityTableName() string        { return "" }
+func (c *testDoctorConfig) GetAWSProfile() string               { return c.awsProfile }
+func (c *testDoctorConfig) GetArtifactsBucket() string          { return "" }
+func (c *testDoctorConfig) GetDoctorStaleAMIDays() int          { return 30 }
+func (c *testDoctorConfig) GetProfileSearchPaths() []string     { return nil }
 
 func allOKDeps() *DoctorDeps {
 	return &DoctorDeps{
@@ -846,9 +850,15 @@ var _ OrgsListPoliciesAPI = (*mockOrgsClient)(nil)
 var _ SSMReadAPI = (*mockSSMReadClient)(nil)
 var _ EC2DescribeAPI = (*mockEC2Client)(nil)
 
-// Compile-time: ensure testConfig implements DoctorConfigProvider
-var _ DoctorConfigProvider = (*testConfig)(nil)
-var _ DoctorConfigProvider = (*testDoctorConfig)(nil)
+// _testConfigPostRename statically asserts the test stubs expose the renamed
+// accessors. The real DoctorConfigProvider in doctor.go is updated by plan 03.
+type _testConfigPostRename interface {
+	GetOrganizationAccountID() string
+	GetDNSParentAccountID() string
+}
+
+var _ _testConfigPostRename = (*testConfig)(nil)
+var _ _testConfigPostRename = (*testDoctorConfig)(nil)
 
 // =============================================================================
 // Tests: checkLambdaFunction (TestDoctorLambda)
