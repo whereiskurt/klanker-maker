@@ -1368,3 +1368,16 @@ Plans:
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 64 to break down)
+
+### Phase 65: Four-account config model: separate accounts.organization (SCP) from accounts.dns_parent and rename
+
+**Goal:** Rename km-config.yaml accounts.management into accounts.organization (SCP target, optional) and accounts.dns_parent (Route53 parent zone owner) so single-account installs run km bootstrap and km init cleanly with accounts.organization blank.
+**Requirements**: none — operator-driven phase
+**Depends on:** Phase 64
+**Plans:** 4 plans
+
+Plans:
+- [ ] 65-01-PLAN.md — Config struct rename + Wave 0 test stubs (config.go, config_test.go, doctor_test.go stubs, cmd test skeletons)
+- [ ] 65-02-PLAN.md — Migrate Go callers (bootstrap.go, init.go, create.go, uninit.go, info.go, configure.go + their tests)
+- [ ] 65-03-PLAN.md — Doctor checks (DoctorConfigProvider rename, checkOrganizationAccountBlank WARN, checkLegacyManagementField FAIL)
+- [ ] 65-04-PLAN.md — HCL/docs/live km-config migration + grep-audit verification
