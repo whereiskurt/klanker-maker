@@ -305,12 +305,87 @@ region: us-east-1
 	}
 }
 
-// Wave 0 stubs — implementation owned by Phase 65 plan 02.
-
+// TestConfigureWritesOrganizationAndDNSParent verifies that km configure --non-interactive
+// writes accounts.organization and accounts.dns_parent to km-config.yaml and does NOT
+// write the legacy accounts.management key.
 func TestConfigureWritesOrganizationAndDNSParent(t *testing.T) {
-	t.Skip("Plan 02 — implement in Phase 65 plan 02")
+	km := buildKM(t)
+	dir := t.TempDir()
+
+	out, err := runKMArgs(km, "",
+		"configure",
+		"--non-interactive",
+		"--output-dir", dir,
+		"--domain", "test.example.com",
+		"--organization-account", "111111111111",
+		"--dns-parent-account", "222222222222",
+		"--application-account", "333333333333",
+		"--terraform-account", "333333333333",
+		"--sso-start-url", "https://sso.example.com/start",
+		"--sso-region", "us-east-1",
+		"--region", "us-east-1",
+	)
+	if err != nil {
+		t.Fatalf("km configure --non-interactive: %v\noutput: %s", err, out)
+	}
+
+	cfg := kmConfigYAML(t, dir)
+	accounts, ok := cfg["accounts"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("accounts key missing or wrong type: %T", cfg["accounts"])
+	}
+
+	if accounts["organization"] != "111111111111" {
+		t.Errorf("accounts.organization: got %v, want 111111111111", accounts["organization"])
+	}
+	if accounts["dns_parent"] != "222222222222" {
+		t.Errorf("accounts.dns_parent: got %v, want 222222222222", accounts["dns_parent"])
+	}
+	if _, present := accounts["management"]; present {
+		t.Errorf("accounts.management must be ABSENT from km-config.yaml; got %v", accounts["management"])
+	}
 }
 
+// TestConfigureInteractivePromptsUseNewNames verifies that the interactive wizard
+// prompts for "Organization" and "DNS parent" fields, not "Management".
 func TestConfigureInteractivePromptsUseNewNames(t *testing.T) {
-	t.Skip("Plan 02 — implement in Phase 65 plan 02")
+	km := buildKM(t)
+	dir := t.TempDir()
+
+	// Provide interactive input answering each prompt in order:
+	// domain, organization account, dns_parent account, terraform, application,
+	// sso start url, sso region, region, state bucket, artifacts bucket,
+	// operator email, safe phrase, max sandboxes.
+	stdinInput := strings.Join([]string{
+		"test.example.com",
+		"111111111111",
+		"222222222222",
+		"333333333333",
+		"444444444444",
+		"https://sso.example.com/start",
+		"us-east-1",
+		"us-east-1",
+		"", // state bucket (empty = default)
+		"", // artifacts bucket (empty)
+		"", // operator email (empty)
+		"", // safe phrase (empty)
+		"", // max sandboxes (empty = default)
+	}, "\n") + "\n"
+
+	out, err := runKMArgsInDir(km, dir, stdinInput, "configure")
+	if err != nil {
+		t.Fatalf("km configure (interactive): %v\noutput: %s", err, out)
+	}
+
+	// The prompt text should include "Organization" and "DNS parent" (new names).
+	if !strings.Contains(out, "Organization") {
+		t.Errorf("interactive prompt output should contain 'Organization'; output:\n%s", out)
+	}
+	if !strings.Contains(strings.ToLower(out), "dns parent") {
+		t.Errorf("interactive prompt output should contain 'DNS parent' (case-insensitive); output:\n%s", out)
+	}
+	// The old "Management" account prompt must not appear.
+	if strings.Contains(out, "Management AWS account") {
+		t.Errorf("interactive prompt must NOT show 'Management AWS account' prompt; output:\n%s", out)
+	}
 }

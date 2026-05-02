@@ -35,9 +35,10 @@ type platformConfig struct {
 }
 
 type accountsConfig struct {
-	Management  string `yaml:"management"`
-	Terraform   string `yaml:"terraform"`
-	Application string `yaml:"application"`
+	Organization string `yaml:"organization,omitempty"`
+	DNSParent    string `yaml:"dns_parent,omitempty"`
+	Terraform    string `yaml:"terraform"`
+	Application  string `yaml:"application"`
 }
 
 type ssoConfig struct {
@@ -56,7 +57,8 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		nonInteractive  bool
 		outputDir       string
 		domain          string
-		managementAcct  string
+		organizationAcct string
+		dnsParentAcct   string
 		terraformAcct   string
 		applicationAcct string
 		ssoStartURL     string
@@ -76,7 +78,7 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		Long:  helpText("configure"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runConfigure(in, out, outputDir, nonInteractive, domain,
-				managementAcct, terraformAcct, applicationAcct,
+				organizationAcct, dnsParentAcct, terraformAcct, applicationAcct,
 				ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket, operatorEmail, safePhrase, maxSandboxes)
 		},
 	}
@@ -87,8 +89,10 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		"Directory to write km-config.yaml (default: repo root or current dir)")
 	cmd.Flags().StringVar(&domain, "domain", "",
 		"Base domain (e.g. klankermaker.ai)")
-	cmd.Flags().StringVar(&managementAcct, "management-account", "",
-		"AWS account ID for the management/root account")
+	cmd.Flags().StringVar(&organizationAcct, "organization-account", "",
+		"AWS Organizations management account ID (optional — blank skips SCP deployment)")
+	cmd.Flags().StringVar(&dnsParentAcct, "dns-parent-account", "",
+		"AWS account ID owning the parent Route53 hosted zone for the domain (optional)")
 	cmd.Flags().StringVar(&terraformAcct, "terraform-account", "",
 		"AWS account ID for Terraform/infrastructure operations")
 	cmd.Flags().StringVar(&applicationAcct, "application-account", "",
@@ -117,7 +121,7 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 
 // runConfigure implements the configure wizard logic.
 func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive bool,
-	domain, managementAcct, terraformAcct, applicationAcct,
+	domain, organizationAcct, dnsParentAcct, terraformAcct, applicationAcct,
 	ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket, operatorEmail, safePhrase string,
 	maxSandboxes int) error {
 
@@ -127,9 +131,8 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		if domain == "" {
 			missing = append(missing, "--domain")
 		}
-		if managementAcct == "" {
-			missing = append(missing, "--management-account")
-		}
+		// --organization-account and --dns-parent-account are both optional in non-interactive mode.
+		// Doctor will surface missing config after the fact.
 		if terraformAcct == "" {
 			missing = append(missing, "--terraform-account")
 		}
@@ -157,7 +160,11 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		if err != nil {
 			return err
 		}
-		managementAcct, err = prompt(out, scanner, "Management AWS account ID", managementAcct)
+		organizationAcct, err = prompt(out, scanner, "AWS Organizations management account ID (optional — leave blank to skip SCP)", organizationAcct)
+		if err != nil {
+			return err
+		}
+		dnsParentAcct, err = prompt(out, scanner, "DNS parent zone account ID (account owning the parent Route53 zone for your domain — optional if no DNS)", dnsParentAcct)
 		if err != nil {
 			return err
 		}
@@ -223,7 +230,7 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		fmt.Fprintln(out, "Detected 3-account topology.")
 		fmt.Fprintf(out, "\nDNS delegation required:\n")
 		fmt.Fprintf(out, "  1. Create a hosted zone for sandboxes.%s in the application account (%s).\n", domain, applicationAcct)
-		fmt.Fprintf(out, "  2. Copy the NS records and add them as NS records in the management account (%s)\n", managementAcct)
+		fmt.Fprintf(out, "  2. Copy the NS records and add them as NS records in the DNS parent account (%s)\n", dnsParentAcct)
 		fmt.Fprintf(out, "     under %s pointing to sandboxes.%s.\n\n", domain, domain)
 	}
 
@@ -231,9 +238,10 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 	pc := platformConfig{
 		Domain: domain,
 		Accounts: accountsConfig{
-			Management:  managementAcct,
-			Terraform:   terraformAcct,
-			Application: applicationAcct,
+			Organization: organizationAcct,
+			DNSParent:    dnsParentAcct,
+			Terraform:    terraformAcct,
+			Application:  applicationAcct,
 		},
 		SSO: ssoConfig{
 			StartURL: ssoStartURL,
