@@ -621,7 +621,6 @@ type testConfig struct {
 // Defined in doctor.go.
 
 func (c *testConfig) GetDomain() string                   { return c.domain }
-func (c *testConfig) GetManagementAccountID() string      { return "" } // temporary shim until plan 03 removes this from DoctorConfigProvider
 func (c *testConfig) GetOrganizationAccountID() string    { return c.orgAcct }
 func (c *testConfig) GetDNSParentAccountID() string       { return c.dnsParentAcct }
 func (c *testConfig) GetTerraformAccountID() string       { return c.tfAcct }
@@ -798,7 +797,6 @@ type testDoctorConfig struct {
 }
 
 func (c *testDoctorConfig) GetDomain() string                   { return c.domain }
-func (c *testDoctorConfig) GetManagementAccountID() string      { return "" } // temporary shim until plan 03 removes this from DoctorConfigProvider
 func (c *testDoctorConfig) GetOrganizationAccountID() string    { return c.orgAcct }
 func (c *testDoctorConfig) GetDNSParentAccountID() string       { return c.dnsParentAcct }
 func (c *testDoctorConfig) GetTerraformAccountID() string       { return c.tfAcct }
@@ -852,15 +850,9 @@ var _ OrgsListPoliciesAPI = (*mockOrgsClient)(nil)
 var _ SSMReadAPI = (*mockSSMReadClient)(nil)
 var _ EC2DescribeAPI = (*mockEC2Client)(nil)
 
-// _testConfigPostRename statically asserts the test stubs expose the renamed
-// accessors. The real DoctorConfigProvider in doctor.go is updated by plan 03.
-type _testConfigPostRename interface {
-	GetOrganizationAccountID() string
-	GetDNSParentAccountID() string
-}
-
-var _ _testConfigPostRename = (*testConfig)(nil)
-var _ _testConfigPostRename = (*testDoctorConfig)(nil)
+// Compile-time assertions that test stubs satisfy the full DoctorConfigProvider interface.
+var _ DoctorConfigProvider = (*testConfig)(nil)
+var _ DoctorConfigProvider = (*testDoctorConfig)(nil)
 
 // =============================================================================
 // Tests: checkLambdaFunction (TestDoctorLambda)
@@ -1160,8 +1152,8 @@ func newDoctorStaleAMICfg(staleDays int, searchPaths []string) *doctorStaleAMICo
 	}
 }
 
-// Compile-time: ensure new interface methods are implemented.
-var _ _testConfigPostRename = (*doctorStaleAMIConfig)(nil)
+// Compile-time: ensure doctorStaleAMIConfig satisfies the full DoctorConfigProvider interface.
+var _ DoctorConfigProvider = (*doctorStaleAMIConfig)(nil)
 
 func TestCheckStaleAMIs_NilClient_Skipped(t *testing.T) {
 	result := checkStaleAMIs(context.Background(), "us-east-1", nil, nil, nil, 30)

@@ -147,7 +147,12 @@ type SESGetEmailIdentityAPI interface {
 // Both *config.Config (production) and test stubs implement this interface.
 type DoctorConfigProvider interface {
 	GetDomain() string
-	GetManagementAccountID() string
+	// GetOrganizationAccountID returns the AWS Organizations management account ID (SCP target).
+	// Empty string means no org account is configured — SCP enforcement is disabled.
+	GetOrganizationAccountID() string
+	// GetDNSParentAccountID returns the AWS account ID owning the parent Route53 hosted zone.
+	// Empty string means no DNS parent account is configured — DNS delegation is skipped.
+	GetDNSParentAccountID() string
 	GetTerraformAccountID() string
 	GetApplicationAccountID() string
 	GetSSOStartURL() string
@@ -170,9 +175,10 @@ type appConfigAdapter struct {
 	cfg *appcfg.Config
 }
 
-func (a *appConfigAdapter) GetDomain() string              { return a.cfg.Domain }
-func (a *appConfigAdapter) GetManagementAccountID() string  { return "" } // ManagementAccountID removed in phase 65; plan 03 removes this from DoctorConfigProvider interface
-func (a *appConfigAdapter) GetTerraformAccountID() string   { return a.cfg.TerraformAccountID }
+func (a *appConfigAdapter) GetDomain() string                { return a.cfg.Domain }
+func (a *appConfigAdapter) GetOrganizationAccountID() string { return a.cfg.OrganizationAccountID }
+func (a *appConfigAdapter) GetDNSParentAccountID() string    { return a.cfg.DNSParentAccountID }
+func (a *appConfigAdapter) GetTerraformAccountID() string    { return a.cfg.TerraformAccountID }
 func (a *appConfigAdapter) GetApplicationAccountID() string { return a.cfg.ApplicationAccountID }
 func (a *appConfigAdapter) GetSSOStartURL() string          { return a.cfg.SSOStartURL }
 func (a *appConfigAdapter) GetPrimaryRegion() string        { return a.cfg.PrimaryRegion }
@@ -2029,10 +2035,10 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	deps.SSMReadClient = ssm.NewFromConfig(awsCfg)
 
 	// Organizations client (for SCP check) — assume km-org-admin role in
-	// management account, which has Organizations permissions.
-	mgmtAccountID := cfg.GetManagementAccountID()
-	if mgmtAccountID != "" {
-		roleARN := fmt.Sprintf("arn:aws:iam::%s:role/km-org-admin", mgmtAccountID)
+	// organization account, which has Organizations permissions.
+	orgAccountID := cfg.GetOrganizationAccountID()
+	if orgAccountID != "" {
+		roleARN := fmt.Sprintf("arn:aws:iam::%s:role/km-org-admin", orgAccountID)
 		stsClient := sts.NewFromConfig(awsCfg)
 		assumeOut, assumeErr := stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
 			RoleArn:         awssdk.String(roleARN),
