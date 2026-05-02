@@ -255,7 +255,8 @@ func runInitDryRun(cfg *config.Config, region string) error {
 		"KM_REGION":           cfg.PrimaryRegion != "",
 		"KM_OPERATOR_EMAIL":   cfg.OperatorEmail != "",
 		"KM_SCHEDULER_ROLE_ARN": cfg.SchedulerRoleARN != "",
-		"KM_ACCOUNTS_MANAGEMENT":  cfg.ManagementAccountID != "",
+		"KM_ACCOUNTS_ORGANIZATION": cfg.OrganizationAccountID != "",
+		"KM_ACCOUNTS_DNS_PARENT":   cfg.DNSParentAccountID != "",
 		"KM_ACCOUNTS_APPLICATION": cfg.ApplicationAccountID != "",
 	}
 
@@ -298,8 +299,11 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 	if cfg.ArtifactsBucket != "" && os.Getenv("KM_ARTIFACTS_BUCKET") == "" {
 		os.Setenv("KM_ARTIFACTS_BUCKET", cfg.ArtifactsBucket)
 	}
-	if cfg.ManagementAccountID != "" && os.Getenv("KM_ACCOUNTS_MANAGEMENT") == "" {
-		os.Setenv("KM_ACCOUNTS_MANAGEMENT", cfg.ManagementAccountID)
+	if cfg.OrganizationAccountID != "" && os.Getenv("KM_ACCOUNTS_ORGANIZATION") == "" {
+		os.Setenv("KM_ACCOUNTS_ORGANIZATION", cfg.OrganizationAccountID)
+	}
+	if cfg.DNSParentAccountID != "" && os.Getenv("KM_ACCOUNTS_DNS_PARENT") == "" {
+		os.Setenv("KM_ACCOUNTS_DNS_PARENT", cfg.DNSParentAccountID)
 	}
 	if cfg.ApplicationAccountID != "" && os.Getenv("KM_ACCOUNTS_APPLICATION") == "" {
 		os.Setenv("KM_ACCOUNTS_APPLICATION", cfg.ApplicationAccountID)
@@ -322,8 +326,12 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 	printBanner("km init", fmt.Sprintf("%s (%s)", region, compiler.RegionLabel(region)))
 
 	// Always ensure sandboxes.{domain} hosted zone AND NS delegation exist.
-	// Even if the zone ID is known, delegation in the management account may be missing.
-	if cfg.Domain != "" {
+	// Even if the zone ID is known, delegation in the DNS parent account may be missing.
+	// Skip if domain is blank OR if dns_parent account is blank (delegation would have nowhere to go).
+	if cfg.Domain != "" && cfg.DNSParentAccountID == "" {
+		fmt.Printf("  [warn] DNS delegation skipped — accounts.dns_parent not set in km-config.yaml\n")
+	}
+	if cfg.Domain != "" && cfg.DNSParentAccountID != "" {
 		fmt.Println()
 		fmt.Printf("Ensuring DNS zone and NS delegation for sandboxes.%s...\n", cfg.Domain)
 		zoneID, err := ensureSandboxHostedZone(ctx, cfg)
@@ -566,6 +574,36 @@ func runInitPartial(cfg *config.Config, awsProfile, region string, verbose, side
 	fmt.Println()
 	fmt.Println("Done.")
 	return nil
+}
+
+// ExportConfigEnvVars exports the config-derived env vars that Terragrunt's site.hcl uses via
+// get_env(). Exported so cmd_test package can verify the correct vars are set without triggering
+// a full runInit (which requires real AWS credentials).
+func ExportConfigEnvVars(cfg *config.Config) {
+	if cfg.ArtifactsBucket != "" && os.Getenv("KM_ARTIFACTS_BUCKET") == "" {
+		os.Setenv("KM_ARTIFACTS_BUCKET", cfg.ArtifactsBucket)
+	}
+	if cfg.OrganizationAccountID != "" && os.Getenv("KM_ACCOUNTS_ORGANIZATION") == "" {
+		os.Setenv("KM_ACCOUNTS_ORGANIZATION", cfg.OrganizationAccountID)
+	}
+	if cfg.DNSParentAccountID != "" && os.Getenv("KM_ACCOUNTS_DNS_PARENT") == "" {
+		os.Setenv("KM_ACCOUNTS_DNS_PARENT", cfg.DNSParentAccountID)
+	}
+	if cfg.ApplicationAccountID != "" && os.Getenv("KM_ACCOUNTS_APPLICATION") == "" {
+		os.Setenv("KM_ACCOUNTS_APPLICATION", cfg.ApplicationAccountID)
+	}
+	if cfg.Domain != "" && os.Getenv("KM_DOMAIN") == "" {
+		os.Setenv("KM_DOMAIN", cfg.Domain)
+	}
+	if cfg.PrimaryRegion != "" && os.Getenv("KM_REGION") == "" {
+		os.Setenv("KM_REGION", cfg.PrimaryRegion)
+	}
+	if cfg.OperatorEmail != "" && os.Getenv("KM_OPERATOR_EMAIL") == "" {
+		os.Setenv("KM_OPERATOR_EMAIL", cfg.OperatorEmail)
+	}
+	if cfg.SchedulerRoleARN != "" && os.Getenv("KM_SCHEDULER_ROLE_ARN") == "" {
+		os.Setenv("KM_SCHEDULER_ROLE_ARN", cfg.SchedulerRoleARN)
+	}
 }
 
 // RunInitWithRunner implements the full init flow using an InitRunner interface.
@@ -1460,8 +1498,11 @@ func ensureProxyCACert(repoRoot, bucket string) error {
 }
 
 // ensureSandboxHostedZone creates the sandboxes.{domain} hosted zone in the application
-// account and sets up NS delegation from the parent zone in the management account.
+// account and sets up NS delegation from the parent zone in the account designated by
+// accounts.dns_parent in km-config.yaml.
 // Returns the zone ID of the sandboxes zone.
+// Note: the AWS profile name 'klanker-management' is unchanged — it's just an SDK profile
+// identifier, not the semantic field name. Renaming the profile is out of scope for phase 65.
 func ensureSandboxHostedZone(ctx context.Context, cfg *config.Config) (string, error) {
 	sandboxDomain := "sandboxes." + cfg.Domain
 

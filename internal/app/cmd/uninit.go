@@ -86,8 +86,11 @@ func runUninit(cfg *config.Config, awsProfile, region string, force bool, verbos
 	if cfg.ArtifactsBucket != "" && os.Getenv("KM_ARTIFACTS_BUCKET") == "" {
 		os.Setenv("KM_ARTIFACTS_BUCKET", cfg.ArtifactsBucket)
 	}
-	if cfg.ManagementAccountID != "" && os.Getenv("KM_ACCOUNTS_MANAGEMENT") == "" {
-		os.Setenv("KM_ACCOUNTS_MANAGEMENT", cfg.ManagementAccountID)
+	if cfg.OrganizationAccountID != "" && os.Getenv("KM_ACCOUNTS_ORGANIZATION") == "" {
+		os.Setenv("KM_ACCOUNTS_ORGANIZATION", cfg.OrganizationAccountID)
+	}
+	if cfg.DNSParentAccountID != "" && os.Getenv("KM_ACCOUNTS_DNS_PARENT") == "" {
+		os.Setenv("KM_ACCOUNTS_DNS_PARENT", cfg.DNSParentAccountID)
 	}
 	if cfg.ApplicationAccountID != "" && os.Getenv("KM_ACCOUNTS_APPLICATION") == "" {
 		os.Setenv("KM_ACCOUNTS_APPLICATION", cfg.ApplicationAccountID)

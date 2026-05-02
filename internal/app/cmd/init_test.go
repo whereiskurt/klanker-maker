@@ -11,6 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/whereiskurt/klankrmkr/internal/app/cmd"
+	"github.com/whereiskurt/klankrmkr/internal/app/config"
 )
 
 // mockRunner records Apply calls in order for testing.
@@ -478,8 +479,33 @@ func TestSlackBridgeColdStart_PropagatesError(t *testing.T) {
 	}
 }
 
-// Wave 0 stubs — implementation owned by Phase 65 plan 02.
-
+// TestInitExportsNewAccountEnvVars verifies that ExportConfigEnvVars sets
+// KM_ACCOUNTS_ORGANIZATION and KM_ACCOUNTS_DNS_PARENT from the config,
+// and does NOT set KM_ACCOUNTS_MANAGEMENT.
 func TestInitExportsNewAccountEnvVars(t *testing.T) {
-	t.Skip("Plan 02 — implement in Phase 65 plan 02")
+	// Ensure a clean slate for these env vars before the test.
+	t.Setenv("KM_ACCOUNTS_ORGANIZATION", "")
+	t.Setenv("KM_ACCOUNTS_DNS_PARENT", "")
+	t.Setenv("KM_ACCOUNTS_MANAGEMENT", "")
+	os.Unsetenv("KM_ACCOUNTS_ORGANIZATION")
+	os.Unsetenv("KM_ACCOUNTS_DNS_PARENT")
+	os.Unsetenv("KM_ACCOUNTS_MANAGEMENT")
+
+	cfg := &config.Config{
+		OrganizationAccountID: "111111111111",
+		DNSParentAccountID:    "222222222222",
+		ApplicationAccountID:  "333333333333",
+	}
+
+	cmd.ExportConfigEnvVars(cfg)
+
+	if got := os.Getenv("KM_ACCOUNTS_ORGANIZATION"); got != "111111111111" {
+		t.Errorf("KM_ACCOUNTS_ORGANIZATION = %q, want %q", got, "111111111111")
+	}
+	if got := os.Getenv("KM_ACCOUNTS_DNS_PARENT"); got != "222222222222" {
+		t.Errorf("KM_ACCOUNTS_DNS_PARENT = %q, want %q", got, "222222222222")
+	}
+	if got := os.Getenv("KM_ACCOUNTS_MANAGEMENT"); got != "" {
+		t.Errorf("KM_ACCOUNTS_MANAGEMENT should be empty (old var), got %q", got)
+	}
 }

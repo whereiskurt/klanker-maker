@@ -356,8 +356,11 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	if cfg.ApplicationAccountID != "" {
 		os.Setenv("KM_ACCOUNTS_APPLICATION", cfg.ApplicationAccountID)
 	}
-	if cfg.ManagementAccountID != "" {
-		os.Setenv("KM_ACCOUNTS_MANAGEMENT", cfg.ManagementAccountID)
+	if cfg.OrganizationAccountID != "" {
+		os.Setenv("KM_ACCOUNTS_ORGANIZATION", cfg.OrganizationAccountID)
+	}
+	if cfg.DNSParentAccountID != "" {
+		os.Setenv("KM_ACCOUNTS_DNS_PARENT", cfg.DNSParentAccountID)
 	}
 	if cfg.Domain != "" {
 		os.Setenv("KM_DOMAIN", cfg.Domain)

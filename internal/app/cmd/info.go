@@ -54,7 +54,8 @@ func runInfo(ctx context.Context, cfg *config.Config, w io.Writer) error {
 
 	// Accounts
 	fmt.Fprintf(w, "AWS Accounts\n")
-	fmt.Fprintf(w, "  Management:       %s\n", valOrDash(cfg.ManagementAccountID))
+	fmt.Fprintf(w, "  Organization:     %s\n", valOrDash(cfg.OrganizationAccountID))
+	fmt.Fprintf(w, "  DNS parent:       %s\n", valOrDash(cfg.DNSParentAccountID))
 	fmt.Fprintf(w, "  Terraform:        %s\n", valOrDash(cfg.TerraformAccountID))
 	fmt.Fprintf(w, "  Application:      %s\n", valOrDash(cfg.ApplicationAccountID))
 	fmt.Fprintf(w, "\n")
