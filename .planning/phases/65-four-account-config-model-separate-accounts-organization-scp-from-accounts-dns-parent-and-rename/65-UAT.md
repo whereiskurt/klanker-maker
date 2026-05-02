@@ -110,18 +110,20 @@ note: |
 total: 9
 passed: 8
 issues: 1
+resolved: 1
 pending: 0
 skipped: 0
 
 ## Gaps
 
 - truth: "km configure --help displays migrated four-account vocabulary throughout, no references to --management-account or 2-account/3-account topology framing"
-  status: failed
+  status: resolved
   reason: "User reported: configure command's Long help text contains stale --management-account flag in the Examples block, lists --management-account in the inline flag descriptions under Long, and the Account Topologies section still describes 2-account/3-account framing instead of the 4-account model. The actual cobra flag definitions ARE correct (--organization-account, --dns-parent-account, no --management-account). The drift is purely in the Long string."
   severity: major
   test: 8
-  location: "internal/app/cmd/configure.go — cobra command Long: string"
-  root_cause: ""     # to fill on diagnose
-  artifacts: []      # to fill on diagnose
-  missing: []        # to fill on diagnose
-  debug_session: ""  # to fill on diagnose
+  location: "internal/app/cmd/help/configure.txt (embedded via helpText() — not the Go Long: literal as initially suspected)"
+  root_cause: "Phase 65 plan 02 migrated the cobra flag definitions in configure.go but the embedded help file at internal/app/cmd/help/configure.txt was authored pre-phase-65 and was not updated. The help text is loaded via helpText(\"configure\") at configure.go:78."
+  resolution: "Rewrote internal/app/cmd/help/configure.txt: Examples block uses --organization-account + --dns-parent-account, added single-account install example showing how to omit --organization-account, regrouped flag list by purpose (account IDs / required / optional), replaced 2-account/3-account topology section with four-role description (organization / dns_parent / terraform / application) including single-account vs cross-account guidance."
+  fix_commit: "9456512"
+  fix_pushed: "origin/main 9456512"
+  fix_verified: "./km configure --help | grep -c 'management-account\\|2-account\\|3-account' returns 0"
