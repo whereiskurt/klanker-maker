@@ -621,6 +621,7 @@ type testConfig struct {
 // Defined in doctor.go.
 
 func (c *testConfig) GetDomain() string                   { return c.domain }
+func (c *testConfig) GetManagementAccountID() string      { return "" } // temporary shim until plan 03 removes this from DoctorConfigProvider
 func (c *testConfig) GetOrganizationAccountID() string    { return c.orgAcct }
 func (c *testConfig) GetDNSParentAccountID() string       { return c.dnsParentAcct }
 func (c *testConfig) GetTerraformAccountID() string       { return c.tfAcct }
@@ -797,6 +798,7 @@ type testDoctorConfig struct {
 }
 
 func (c *testDoctorConfig) GetDomain() string                   { return c.domain }
+func (c *testDoctorConfig) GetManagementAccountID() string      { return "" } // temporary shim until plan 03 removes this from DoctorConfigProvider
 func (c *testDoctorConfig) GetOrganizationAccountID() string    { return c.orgAcct }
 func (c *testDoctorConfig) GetDNSParentAccountID() string       { return c.dnsParentAcct }
 func (c *testDoctorConfig) GetTerraformAccountID() string       { return c.tfAcct }

@@ -171,7 +171,7 @@ type appConfigAdapter struct {
 }
 
 func (a *appConfigAdapter) GetDomain() string              { return a.cfg.Domain }
-func (a *appConfigAdapter) GetManagementAccountID() string  { return a.cfg.ManagementAccountID }
+func (a *appConfigAdapter) GetManagementAccountID() string  { return "" } // ManagementAccountID removed in phase 65; plan 03 removes this from DoctorConfigProvider interface
 func (a *appConfigAdapter) GetTerraformAccountID() string   { return a.cfg.TerraformAccountID }
 func (a *appConfigAdapter) GetApplicationAccountID() string { return a.cfg.ApplicationAccountID }
 func (a *appConfigAdapter) GetSSOStartURL() string          { return a.cfg.SSOStartURL }

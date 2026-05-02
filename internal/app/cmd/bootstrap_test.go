@@ -285,20 +285,106 @@ func TestBootstrapShowSCP_EmitsOperatorPositiveAllowGuidance(t *testing.T) {
 	}
 }
 
-// Wave 0 stubs — implementation owned by Phase 65 plan 02.
-
+// TestBootstrapDryRunShowsOrganizationAccount verifies that dry-run output includes
+// "Organization account:" and "DNS parent account:" lines when both fields are set.
 func TestBootstrapDryRunShowsOrganizationAccount(t *testing.T) {
-	t.Skip("Plan 02 — implement in Phase 65 plan 02")
+	cfg := &config.Config{
+		OrganizationAccountID: "111111111111",
+		DNSParentAccountID:    "222222222222",
+		ApplicationAccountID:  "333333333333",
+		PrimaryRegion:         "us-east-1",
+		Domain:                "test.example.com",
+	}
+
+	out, err := runBootstrapCmd(t, cfg, true, nil)
+	if err != nil {
+		t.Fatalf("bootstrap --dry-run: %v\noutput: %s", err, out)
+	}
+
+	if !strings.Contains(out, "Organization account: 111111111111") {
+		t.Errorf("expected 'Organization account: 111111111111' in output; got:\n%s", out)
+	}
+	if !strings.Contains(out, "DNS parent account: 222222222222") {
+		t.Errorf("expected 'DNS parent account: 222222222222' in output; got:\n%s", out)
+	}
 }
 
+// TestBootstrapDryRunNoOrganizationAccount verifies that dry-run output includes a
+// SCP-skipped message referencing "accounts.organization" when OrganizationAccountID is blank.
 func TestBootstrapDryRunNoOrganizationAccount(t *testing.T) {
-	t.Skip("Plan 02 — implement in Phase 65 plan 02")
+	cfg := &config.Config{
+		OrganizationAccountID: "",
+		DNSParentAccountID:    "222222222222",
+		ApplicationAccountID:  "333333333333",
+		PrimaryRegion:         "us-east-1",
+		Domain:                "test.example.com",
+	}
+
+	out, err := runBootstrapCmd(t, cfg, true, nil)
+	if err != nil {
+		t.Fatalf("bootstrap --dry-run no-org: %v\noutput: %s", err, out)
+	}
+
+	if !strings.Contains(out, "SKIPPED") {
+		t.Errorf("expected 'SKIPPED' in dry-run output when org blank; output:\n%s", out)
+	}
+	if !strings.Contains(out, "accounts.organization") {
+		t.Errorf("expected 'accounts.organization' in SCP-skip message; output:\n%s", out)
+	}
 }
 
+// TestBootstrapSCPSkipped_OrganizationBlank verifies that the non-dry-run path does NOT
+// invoke terragrunt apply when OrganizationAccountID is blank.
 func TestBootstrapSCPSkipped_OrganizationBlank(t *testing.T) {
-	t.Skip("Plan 02 — implement in Phase 65 plan 02")
+	cfg := &config.Config{
+		OrganizationAccountID: "",
+		ApplicationAccountID:  "333333333333",
+		PrimaryRegion:         "us-east-1",
+		Domain:                "test.example.com",
+	}
+
+	applyCount := 0
+	fakeApply := cmd.TerragruntApplyFunc(func(_ context.Context, _ string) error {
+		applyCount++
+		return nil
+	})
+
+	_, err := runBootstrapCmd(t, cfg, false, fakeApply)
+	if err != nil {
+		t.Fatalf("bootstrap (non-dry-run, org blank): %v", err)
+	}
+
+	if applyCount != 0 {
+		t.Errorf("terragrunt apply should NOT be invoked when OrganizationAccountID is blank; got %d calls", applyCount)
+	}
 }
 
+// TestShowPrereqsNoOrganizationAccount verifies that runShowPrereqs (via --show-prereqs)
+// returns nil (not an error) and prints a descriptive message referencing accounts.organization
+// when OrganizationAccountID is blank.
 func TestShowPrereqsNoOrganizationAccount(t *testing.T) {
-	t.Skip("Plan 02 — implement in Phase 65 plan 02")
+	cfg := &config.Config{
+		OrganizationAccountID: "",
+		ApplicationAccountID:  "333333333333",
+		PrimaryRegion:         "us-east-1",
+		Domain:                "test.example.com",
+	}
+
+	var buf bytes.Buffer
+	root := &cobra.Command{Use: "km"}
+	bootstrapCmd := cmd.NewBootstrapCmdWithWriter(cfg, &buf)
+	root.AddCommand(bootstrapCmd)
+	root.SetArgs([]string{"bootstrap", "--show-prereqs"})
+	root.SetOut(&buf)
+	root.SetErr(&buf)
+
+	err := root.Execute()
+	if err != nil {
+		t.Errorf("expected no error from --show-prereqs with blank org; got: %v\noutput: %s", err, buf.String())
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "accounts.organization") {
+		t.Errorf("expected 'accounts.organization' in show-prereqs output; got:\n%s", out)
+	}
 }

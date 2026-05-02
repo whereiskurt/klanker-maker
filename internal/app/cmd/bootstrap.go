@@ -277,15 +277,17 @@ func findKMConfigPath() string {
 	return filepath.Join(findRepoRoot(), "km-config.yaml")
 }
 
-// runShowPrereqs prints the IAM role and trust policy needed in the management account.
+// runShowPrereqs prints the IAM role and trust policy needed in the organization account.
 func runShowPrereqs(ctx context.Context, cfg *config.Config, w io.Writer) error {
 	loadedCfg, err := loadBootstrapConfig(cfg)
 	if err != nil {
 		return err
 	}
 
-	if loadedCfg.ManagementAccountID == "" {
-		return fmt.Errorf("no management account configured\nRun 'km configure' and set accounts.management first")
+	if loadedCfg.OrganizationAccountID == "" {
+		fmt.Fprintln(w, "accounts.organization not set — SCP deployment disabled.")
+		fmt.Fprintln(w, "Set accounts.organization in km-config.yaml to enable org-level sandbox containment via Service Control Policies.")
+		return nil
 	}
 
 	// Determine the caller identity for the trust policy
@@ -297,17 +299,17 @@ func runShowPrereqs(ctx context.Context, cfg *config.Config, w io.Writer) error 
 		callerAccount = "<APPLICATION_ACCOUNT_ID>"
 	}
 
-	mgmtAccount := loadedCfg.ManagementAccountID
+	orgAccount := loadedCfg.OrganizationAccountID
 	roleName := "km-org-admin"
 
 	fmt.Fprintln(w, "# Prerequisites for km bootstrap")
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "The SCP deployment assumes a role `%s` in the management account (%s).\n", roleName, mgmtAccount)
+	fmt.Fprintf(w, "The SCP deployment assumes a role `%s` in the organization account (%s).\n", roleName, orgAccount)
 	fmt.Fprintf(w, "This role must be created manually before running `km bootstrap --dry-run=false`.\n")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "## Option 1: AWS CLI")
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "Run these commands while authenticated to the management account (%s):\n", mgmtAccount)
+	fmt.Fprintf(w, "Run these commands while authenticated to the organization account (%s):\n", orgAccount)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "```bash")
 	fmt.Fprintln(w, "# 1. Create the role with a trust policy allowing the application account to assume it")
@@ -378,12 +380,12 @@ func runShowPrereqs(ctx context.Context, cfg *config.Config, w io.Writer) error 
     }
   ]
 }'
-`, roleName, mgmtAccount, mgmtAccount, mgmtAccount, callerAccount)
+`, roleName, orgAccount, orgAccount, orgAccount, callerAccount)
 	fmt.Fprintln(w, "```")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "## Option 2: CloudFormation")
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "Deploy this stack in the management account (%s):\n", mgmtAccount)
+	fmt.Fprintf(w, "Deploy this stack in the organization account (%s):\n", orgAccount)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "```yaml")
 	fmt.Fprintln(w, "AWSTemplateFormatVersion: '2010-09-09'")
@@ -422,15 +424,15 @@ func runShowPrereqs(ctx context.Context, cfg *config.Config, w io.Writer) error 
 	fmt.Fprintln(w, "                  - organizations:UntagResource")
 	fmt.Fprintln(w, "                  - organizations:ListTagsForResource")
 	fmt.Fprintln(w, "                Resource:")
-	fmt.Fprintf(w, "                  - 'arn:aws:organizations::%s:policy/*/service_control_policy/*'\n", mgmtAccount)
+	fmt.Fprintf(w, "                  - 'arn:aws:organizations::%s:policy/*/service_control_policy/*'\n", orgAccount)
 	fmt.Fprintln(w, "              - Sid: SCPAttachDetach")
 	fmt.Fprintln(w, "                Effect: Allow")
 	fmt.Fprintln(w, "                Action:")
 	fmt.Fprintln(w, "                  - organizations:AttachPolicy")
 	fmt.Fprintln(w, "                  - organizations:DetachPolicy")
 	fmt.Fprintln(w, "                Resource:")
-	fmt.Fprintf(w, "                  - 'arn:aws:organizations::%s:policy/*/service_control_policy/*'\n", mgmtAccount)
-	fmt.Fprintf(w, "                  - 'arn:aws:organizations::%s:account/*/%s'\n", mgmtAccount, callerAccount)
+	fmt.Fprintf(w, "                  - 'arn:aws:organizations::%s:policy/*/service_control_policy/*'\n", orgAccount)
+	fmt.Fprintf(w, "                  - 'arn:aws:organizations::%s:account/*/%s'\n", orgAccount, callerAccount)
 	fmt.Fprintln(w, "              - Sid: SCPCreateListDescribe")
 	fmt.Fprintln(w, "                Effect: Allow")
 	fmt.Fprintln(w, "                Action:")
@@ -443,7 +445,7 @@ func runShowPrereqs(ctx context.Context, cfg *config.Config, w io.Writer) error 
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "## Step 0: Enable SCPs in your Organization")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "SCPs must be enabled before bootstrap can create policies. Check and enable from the management account:")
+	fmt.Fprintln(w, "SCPs must be enabled before bootstrap can create policies. Check and enable from the organization account:")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "```bash")
 	fmt.Fprintln(w, "# Check if SCPs are enabled")
@@ -457,7 +459,7 @@ func runShowPrereqs(ctx context.Context, cfg *config.Config, w io.Writer) error 
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "## What this role does")
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "- **Role ARN:** arn:aws:iam::%s:role/%s\n", mgmtAccount, roleName)
+	fmt.Fprintf(w, "- **Role ARN:** arn:aws:iam::%s:role/%s\n", orgAccount, roleName)
 	fmt.Fprintf(w, "- **Trusted by:** Application account %s (SSO and provisioner roles only)\n", callerAccount)
 	fmt.Fprintln(w, "- **Permissions:** Organizations SCP CRUD — create, attach, update, and delete Service Control Policies")
 	fmt.Fprintln(w, "- **Used by:** `km bootstrap --dry-run=false` to deploy the km-sandbox-containment SCP")
@@ -479,9 +481,11 @@ func runShowSCP(ctx context.Context, cfg *config.Config, w io.Writer) error {
 	if appAccount == "" {
 		return fmt.Errorf("no application account configured\nRun 'km configure' and set accounts.application first")
 	}
-	mgmtAccount := loadedCfg.ManagementAccountID
-	if mgmtAccount == "" {
-		return fmt.Errorf("no management account configured\nRun 'km configure' and set accounts.management first")
+	orgAccount := loadedCfg.OrganizationAccountID
+	if orgAccount == "" {
+		fmt.Fprintln(w, "SCP enforcement disabled — no organization account configured.")
+		fmt.Fprintln(w, "Set accounts.organization in km-config.yaml to enable SCP deployment.")
+		return nil
 	}
 
 	region := loadedCfg.PrimaryRegion
@@ -576,15 +580,15 @@ func runShowSCP(ctx context.Context, cfg *config.Config, w io.Writer) error {
 					"organizations:TagResource", "organizations:UntagResource",
 					"organizations:ListTagsForResource",
 				},
-				"Resource": fmt.Sprintf("arn:aws:organizations::%s:policy/*/service_control_policy/*", mgmtAccount),
+				"Resource": fmt.Sprintf("arn:aws:organizations::%s:policy/*/service_control_policy/*", orgAccount),
 			},
 			{
 				"Sid":    "SCPAttachDetach",
 				"Effect": "Allow",
 				"Action": []string{"organizations:AttachPolicy", "organizations:DetachPolicy"},
 				"Resource": []string{
-					fmt.Sprintf("arn:aws:organizations::%s:policy/*/service_control_policy/*", mgmtAccount),
-					fmt.Sprintf("arn:aws:organizations::%s:account/*/%s", mgmtAccount, appAccount),
+					fmt.Sprintf("arn:aws:organizations::%s:policy/*/service_control_policy/*", orgAccount),
+					fmt.Sprintf("arn:aws:organizations::%s:account/*/%s", orgAccount, appAccount),
 				},
 			},
 			{
@@ -598,7 +602,7 @@ func runShowSCP(ctx context.Context, cfg *config.Config, w io.Writer) error {
 	rolePolicyJSON, _ := json.MarshalIndent(rolePolicy, "", "  ")
 
 	fmt.Fprintln(w, "# ============================================================")
-	fmt.Fprintf(w, "# km-org-admin Role — Management account %s\n", mgmtAccount)
+	fmt.Fprintf(w, "# km-org-admin Role — Organization account %s\n", orgAccount)
 	fmt.Fprintln(w, "#")
 	fmt.Fprintf(w, "# Assumed by: Application account %s (SSO + provisioner roles)\n", callerAccount)
 	fmt.Fprintln(w, "# Used by:    km bootstrap --dry-run=false")
@@ -622,7 +626,7 @@ func runShowSCP(ctx context.Context, cfg *config.Config, w io.Writer) error {
 
 // loadBootstrapConfig loads config from the injected cfg or from disk.
 func loadBootstrapConfig(cfg *config.Config) (*config.Config, error) {
-	if cfg != nil && (cfg.ManagementAccountID != "" || cfg.ApplicationAccountID != "" || cfg.Domain != "") {
+	if cfg != nil && (cfg.OrganizationAccountID != "" || cfg.DNSParentAccountID != "" || cfg.ApplicationAccountID != "" || cfg.Domain != "") {
 		return cfg, nil
 	}
 
@@ -651,7 +655,16 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 
 	fmt.Fprintf(w, "Domain:  %s\n", loadedCfg.Domain)
 	fmt.Fprintf(w, "Region:  %s\n", loadedCfg.PrimaryRegion)
-	fmt.Fprintf(w, "Management account: %s\n", loadedCfg.ManagementAccountID)
+	orgDisplay := loadedCfg.OrganizationAccountID
+	if orgDisplay == "" {
+		orgDisplay = "(not set)"
+	}
+	dnsParentDisplay := loadedCfg.DNSParentAccountID
+	if dnsParentDisplay == "" {
+		dnsParentDisplay = "(not set)"
+	}
+	fmt.Fprintf(w, "Organization account: %s\n", orgDisplay)
+	fmt.Fprintf(w, "DNS parent account: %s\n", dnsParentDisplay)
 	fmt.Fprintf(w, "Application account: %s\n", loadedCfg.ApplicationAccountID)
 	fmt.Fprintln(w)
 
@@ -691,7 +704,7 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 		fmt.Fprintln(w)
 
 		// SCP policy section
-		if loadedCfg.ManagementAccountID != "" {
+		if loadedCfg.OrganizationAccountID != "" {
 			fmt.Fprintf(w, "  SCP Policy:        km-sandbox-containment\n")
 			fmt.Fprintf(w, "    Target:          Application account (%s)\n", loadedCfg.ApplicationAccountID)
 			fmt.Fprintf(w, "    Threat coverage: SG mutation, network escape, instance mutation,\n")
@@ -699,10 +712,10 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 			fmt.Fprintf(w, "                     Organizations discovery, region lock\n")
 			fmt.Fprintf(w, "    Trusted roles:   AWSReservedSSO_*_*, km-provisioner-*, km-lifecycle-*,\n")
 			fmt.Fprintf(w, "                     km-ecs-spot-handler, km-ttl-handler\n")
-			fmt.Fprintf(w, "    Deploy via:      km bootstrap (management account credentials required)\n")
+			fmt.Fprintf(w, "    Deploy via:      km bootstrap (organization account credentials required)\n")
 		} else {
-			fmt.Fprintf(w, "  SCP Policy:        [SKIPPED — no management account configured]\n")
-			fmt.Fprintf(w, "    Run 'km configure' and set accounts.management to enable SCP deployment.\n")
+			fmt.Fprintf(w, "  SCP Policy:        [SKIPPED — accounts.organization not set]\n")
+			fmt.Fprintf(w, "    Run 'km configure' and set accounts.organization to enable SCP deployment.\n")
 		}
 		fmt.Fprintln(w)
 		fmt.Fprintf(w, "  KMS key:           km-platform\n")
@@ -725,9 +738,11 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 	}
 
 	// Non-dry-run: deploy SCP sandbox-containment policy.
-	if loadedCfg.ManagementAccountID != "" {
+	// DNS parent env var is always exported (independent of org).
+	os.Setenv("KM_ACCOUNTS_DNS_PARENT", loadedCfg.DNSParentAccountID)
+	if loadedCfg.OrganizationAccountID != "" {
 		// Export config values as env vars for Terragrunt's site.hcl get_env() calls.
-		os.Setenv("KM_ACCOUNTS_MANAGEMENT", loadedCfg.ManagementAccountID)
+		os.Setenv("KM_ACCOUNTS_ORGANIZATION", loadedCfg.OrganizationAccountID)
 		os.Setenv("KM_ACCOUNTS_APPLICATION", loadedCfg.ApplicationAccountID)
 		if loadedCfg.Domain != "" {
 			os.Setenv("KM_DOMAIN", loadedCfg.Domain)
@@ -743,7 +758,7 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 		}
 		fmt.Fprintln(w, "SCP sandbox-containment policy deployed to application account.")
 	} else {
-		fmt.Fprintln(w, "Skipping SCP deployment — no management account configured.")
+		fmt.Fprintln(w, "Skipping SCP deployment — no organization account configured.")
 	}
 
 	// Create KMS key with alias/km-platform for SSM SecureString encryption.
