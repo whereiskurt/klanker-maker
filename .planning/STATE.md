@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 65-02-PLAN.md (cmd callers migrated, 3 tasks, 12 files)
-last_updated: "2026-05-02T01:56:20.892Z"
+stopped_at: Completed 65-03-PLAN.md (doctor.go interface cleanup + two new checks, 2 tasks, 2 files)
+last_updated: "2026-05-02T02:09:17.729Z"
 last_activity: "2026-05-01 — Completed 63.1-03-PLAN.md (SLCK-13: km slack rotate-token, bridge structured logging, fail-fast 5xx, UAT ts=1777638955.854989)"
 progress:
   total_phases: 69
   completed_phases: 64
   total_plans: 208
-  completed_plans: 207
+  completed_plans: 208
   percent: 0
 ---
 
@@ -246,6 +246,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 63.1 P03 | 45min | 5 tasks | 9 files |
 | Phase 65-four-account-config-model-separate-accounts-organization-scp-from-accounts-dns-parent-and-rename P01 | 373 | 3 tasks | 7 files |
 | Phase 65 P02 | 26min | 3 tasks | 12 files |
+| Phase 65-four-account-config-model-separate-accounts-organization-scp-from-accounts-dns-parent-and-rename P03 | 553s | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -696,6 +697,8 @@ Recent decisions affecting current work:
 - [Phase 65]: runShowPrereqs returns nil + message when OrganizationAccountID blank (not error)
 - [Phase 65]: --dns-parent-account and --organization-account both optional in --non-interactive mode
 - [Phase 65]: doctor.go checkConfig: management_account_id removed from required list (both new fields optional)
+- [Phase 65-four-account-config-model-separate-accounts-organization-scp-from-accounts-dns-parent-and-rename]: checkLegacyManagementField reads raw YAML (not Viper-loaded config) because Viper silently drops unknown keys — plan 02 shims fully removed from DoctorConfigProvider interface in plan 03
+- [Phase 65-four-account-config-model-separate-accounts-organization-scp-from-accounts-dns-parent-and-rename]: km doctor check count increased from 18 to 20 (two new checks: org-blank WARN, legacy-management FAIL) — CLAUDE.md update deferred to plan 04
 
 ### Roadmap Evolution
 
@@ -780,6 +783,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-02T01:56:20.886Z
-Stopped at: Completed 65-02-PLAN.md (cmd callers migrated, 3 tasks, 12 files)
+Last session: 2026-05-02T02:09:17.724Z
+Stopped at: Completed 65-03-PLAN.md (doctor.go interface cleanup + two new checks, 2 tasks, 2 files)
 Resume file: None
