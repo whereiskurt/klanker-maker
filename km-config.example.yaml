@@ -18,10 +18,14 @@ domain: example.com                          # [REQUIRED]
 # AWS region for infrastructure.
 region: us-east-1                            # [REQUIRED]
 
-# AWS account IDs.
+# AWS account IDs (Phase 65 four-account topology).
+#
+# Single-account install? Set application/terraform/dns_parent to the same ID
+# and leave organization blank — `km bootstrap` skips SCP deployment.
 accounts:
-  management: "111111111111"                 # [REQUIRED] root/org account (SCP deployment)
-  terraform: "222222222222"                  # [REQUIRED] infra account (state, Lambdas)
+  organization: "111111111111"               # [OPTIONAL] AWS Organizations management account (SCP target). Leave blank to skip SCP.
+  dns_parent:  "111111111111"                # [REQUIRED if domain set] account owning the Route53 parent zone for `domain`
+  terraform:   "222222222222"                # [REQUIRED] infra account (state, Lambdas)
   application: "222222222222"                # [REQUIRED] where sandboxes run (can be same as terraform)
 
 # AWS SSO portal for credential refresh.
