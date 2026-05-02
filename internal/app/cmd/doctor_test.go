@@ -1159,7 +1159,7 @@ func newDoctorStaleAMICfg(staleDays int, searchPaths []string) *doctorStaleAMICo
 }
 
 // Compile-time: ensure new interface methods are implemented.
-var _ DoctorConfigProvider = (*doctorStaleAMIConfig)(nil)
+var _ _testConfigPostRename = (*doctorStaleAMIConfig)(nil)
 
 func TestCheckStaleAMIs_NilClient_Skipped(t *testing.T) {
 	result := checkStaleAMIs(context.Background(), "us-east-1", nil, nil, nil, 30)
@@ -1586,3 +1586,29 @@ func TestCheckStaleSlackChannels_HasStale_Warn(t *testing.T) {
 var _ = fmt.Sprintf
 var _ = strings.Contains
 var _ = filepath.Join
+
+// Wave 0 stubs — implementation owned by Phase 65 plan 03.
+
+func TestCheckOrganizationAccountBlank_BlankReturnsWarn(t *testing.T) {
+	t.Skip("Plan 03 — implement in Phase 65 plan 03")
+}
+
+func TestCheckOrganizationAccountBlank_SetReturnsOK(t *testing.T) {
+	t.Skip("Plan 03 — implement in Phase 65 plan 03")
+}
+
+func TestCheckLegacyManagementField_FieldPresent(t *testing.T) {
+	t.Skip("Plan 03 — implement in Phase 65 plan 03")
+}
+
+func TestCheckLegacyManagementField_FieldAbsent(t *testing.T) {
+	t.Skip("Plan 03 — implement in Phase 65 plan 03")
+}
+
+func TestCheckLegacyManagementField_NoConfigFile(t *testing.T) {
+	t.Skip("Plan 03 — implement in Phase 65 plan 03")
+}
+
+func TestCheckConfigDoesNotRequireManagement(t *testing.T) {
+	t.Skip("Plan 03 — implement in Phase 65 plan 03")
+}

@@ -47,7 +47,7 @@ func TestInitAllModulesOrder(t *testing.T) {
 	// Write a minimal km-config.yaml
 	cfgContent := `domain: test.example.com
 accounts:
-  management: "111111111111"
+  dns_parent: "111111111111"
   terraform: "222222222222"
   application: "333333333333"
 sso:
@@ -476,4 +476,10 @@ func TestSlackBridgeColdStart_PropagatesError(t *testing.T) {
 	if err := cmd.ForceSlackBridgeColdStartWith(context.Background(), f); err != wantErr {
 		t.Errorf("got err %v; want %v", err, wantErr)
 	}
+}
+
+// Wave 0 stubs — implementation owned by Phase 65 plan 02.
+
+func TestInitExportsNewAccountEnvVars(t *testing.T) {
+	t.Skip("Plan 02 — implement in Phase 65 plan 02")
 }

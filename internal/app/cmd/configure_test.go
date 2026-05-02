@@ -56,7 +56,7 @@ func TestConfigureNonInteractiveWritesConfig(t *testing.T) {
 		"--non-interactive",
 		"--output-dir", dir,
 		"--domain", "test.example.com",
-		"--management-account", "111111111111",
+		"--dns-parent-account", "111111111111",
 		"--terraform-account", "222222222222",
 		"--application-account", "333333333333",
 		"--sso-start-url", "https://sso.example.com/start",
@@ -77,8 +77,8 @@ func TestConfigureNonInteractiveWritesConfig(t *testing.T) {
 	if !ok {
 		t.Fatalf("accounts key missing or wrong type: %T", cfg["accounts"])
 	}
-	if accounts["management"] != "111111111111" {
-		t.Errorf("accounts.management: got %v, want 111111111111", accounts["management"])
+	if accounts["dns_parent"] != "111111111111" {
+		t.Errorf("accounts.dns_parent: got %v, want 111111111111", accounts["dns_parent"])
 	}
 	if accounts["terraform"] != "222222222222" {
 		t.Errorf("accounts.terraform: got %v, want 222222222222", accounts["terraform"])
@@ -114,7 +114,7 @@ func TestConfigureTwoAccountTopology(t *testing.T) {
 		"--non-interactive",
 		"--output-dir", dir,
 		"--domain", "test.example.com",
-		"--management-account", "111111111111",
+		"--dns-parent-account", "111111111111",
 		"--terraform-account", "333333333333", // same as application
 		"--application-account", "333333333333",
 		"--sso-start-url", "https://sso.example.com/start",
@@ -130,7 +130,7 @@ func TestConfigureTwoAccountTopology(t *testing.T) {
 	}
 }
 
-// TestConfigureThreeAccountTopology verifies that when management != application,
+// TestConfigureThreeAccountTopology verifies that when dns_parent != application,
 // DNS delegation guidance IS shown.
 func TestConfigureThreeAccountTopology(t *testing.T) {
 	km := buildKM(t)
@@ -141,7 +141,7 @@ func TestConfigureThreeAccountTopology(t *testing.T) {
 		"--non-interactive",
 		"--output-dir", dir,
 		"--domain", "test.example.com",
-		"--management-account", "111111111111",
+		"--dns-parent-account", "111111111111",
 		"--terraform-account", "222222222222",
 		"--application-account", "333333333333",
 		"--sso-start-url", "https://sso.example.com/start",
@@ -167,7 +167,7 @@ func TestConfigureStateBucketFlag(t *testing.T) {
 		"--non-interactive",
 		"--output-dir", dir,
 		"--domain", "test.example.com",
-		"--management-account", "111111111111",
+		"--dns-parent-account", "111111111111",
 		"--terraform-account", "222222222222",
 		"--application-account", "333333333333",
 		"--sso-start-url", "https://sso.example.com/start",
@@ -196,7 +196,7 @@ func TestConfigureStateBucketOmittedWhenEmpty(t *testing.T) {
 		"--non-interactive",
 		"--output-dir", dir,
 		"--domain", "test.example.com",
-		"--management-account", "111111111111",
+		"--dns-parent-account", "111111111111",
 		"--terraform-account", "222222222222",
 		"--application-account", "333333333333",
 		"--sso-start-url", "https://sso.example.com/start",
@@ -224,7 +224,7 @@ func TestConfigureMaxSandboxesFlag(t *testing.T) {
 		"--non-interactive",
 		"--output-dir", dir,
 		"--domain", "test.example.com",
-		"--management-account", "111111111111",
+		"--dns-parent-account", "111111111111",
 		"--terraform-account", "222222222222",
 		"--application-account", "333333333333",
 		"--sso-start-url", "https://sso.example.com/start",
@@ -253,7 +253,7 @@ func TestConfigureMaxSandboxesOmittedWhenZero(t *testing.T) {
 		"--non-interactive",
 		"--output-dir", dir,
 		"--domain", "test.example.com",
-		"--management-account", "111111111111",
+		"--dns-parent-account", "111111111111",
 		"--terraform-account", "222222222222",
 		"--application-account", "333333333333",
 		"--sso-start-url", "https://sso.example.com/start",
@@ -280,7 +280,7 @@ func TestBootstrapDryRun(t *testing.T) {
 	// Write a minimal km-config.yaml so bootstrap can validate it exists
 	cfgContent := `domain: test.example.com
 accounts:
-  management: "111111111111"
+  dns_parent: "111111111111"
   terraform: "222222222222"
   application: "333333333333"
 sso:
@@ -303,4 +303,14 @@ region: us-east-1
 		!strings.Contains(lc, "kms") && !strings.Contains(lc, "would") {
 		t.Errorf("bootstrap --dry-run should describe what would be created; output: %s", out)
 	}
+}
+
+// Wave 0 stubs — implementation owned by Phase 65 plan 02.
+
+func TestConfigureWritesOrganizationAndDNSParent(t *testing.T) {
+	t.Skip("Plan 02 — implement in Phase 65 plan 02")
+}
+
+func TestConfigureInteractivePromptsUseNewNames(t *testing.T) {
+	t.Skip("Plan 02 — implement in Phase 65 plan 02")
 }

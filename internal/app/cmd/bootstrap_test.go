@@ -57,13 +57,13 @@ func runBootstrapCmd(t *testing.T, cfg *config.Config, dryRun bool, applyFn cmd.
 }
 
 // TestBootstrapDryRunShowsSCP verifies that dry-run output includes SCP policy details
-// when ManagementAccountID and ApplicationAccountID are both populated.
+// when OrganizationAccountID and ApplicationAccountID are both populated.
 func TestBootstrapDryRunShowsSCP(t *testing.T) {
 	cfg := &config.Config{
-		ManagementAccountID:  "123456789012",
-		ApplicationAccountID: "987654321098",
-		PrimaryRegion:        "us-east-1",
-		Domain:               "test.example.com",
+		OrganizationAccountID: "123456789012",
+		ApplicationAccountID:  "987654321098",
+		PrimaryRegion:         "us-east-1",
+		Domain:                "test.example.com",
 	}
 
 	out, err := runBootstrapCmd(t, cfg, true, nil)
@@ -89,13 +89,13 @@ func TestBootstrapDryRunShowsSCP(t *testing.T) {
 }
 
 // TestBootstrapDryRunNoManagementAccount verifies that dry-run output includes a
-// warning when ManagementAccountID is empty.
+// SCP-skipped message when OrganizationAccountID is empty.
 func TestBootstrapDryRunNoManagementAccount(t *testing.T) {
 	cfg := &config.Config{
-		ManagementAccountID:  "",
-		ApplicationAccountID: "987654321098",
-		PrimaryRegion:        "us-east-1",
-		Domain:               "test.example.com",
+		OrganizationAccountID: "",
+		ApplicationAccountID:  "987654321098",
+		PrimaryRegion:         "us-east-1",
+		Domain:                "test.example.com",
 	}
 
 	out, err := runBootstrapCmd(t, cfg, true, nil)
@@ -113,10 +113,10 @@ func TestBootstrapDryRunNoManagementAccount(t *testing.T) {
 // on a directory ending with "infra/live/management/scp".
 func TestBootstrapSCPApplyPath(t *testing.T) {
 	cfg := &config.Config{
-		ManagementAccountID:  "123456789012",
-		ApplicationAccountID: "987654321098",
-		PrimaryRegion:        "us-east-1",
-		Domain:               "test.example.com",
+		OrganizationAccountID: "123456789012",
+		ApplicationAccountID:  "987654321098",
+		PrimaryRegion:         "us-east-1",
+		Domain:                "test.example.com",
 	}
 
 	var capturedDir string
@@ -283,4 +283,22 @@ func TestBootstrapShowSCP_EmitsOperatorPositiveAllowGuidance(t *testing.T) {
 			t.Errorf("operator guidance missing %q\nGot:\n%s", want, out)
 		}
 	}
+}
+
+// Wave 0 stubs — implementation owned by Phase 65 plan 02.
+
+func TestBootstrapDryRunShowsOrganizationAccount(t *testing.T) {
+	t.Skip("Plan 02 — implement in Phase 65 plan 02")
+}
+
+func TestBootstrapDryRunNoOrganizationAccount(t *testing.T) {
+	t.Skip("Plan 02 — implement in Phase 65 plan 02")
+}
+
+func TestBootstrapSCPSkipped_OrganizationBlank(t *testing.T) {
+	t.Skip("Plan 02 — implement in Phase 65 plan 02")
+}
+
+func TestShowPrereqsNoOrganizationAccount(t *testing.T) {
+	t.Skip("Plan 02 — implement in Phase 65 plan 02")
 }
