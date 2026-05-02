@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 65-01-PLAN.md (config struct rename + Wave 0 stubs, 3 tasks, 7 files)
-last_updated: "2026-05-02T01:26:17.049Z"
+stopped_at: Completed 65-02-PLAN.md (cmd callers migrated, 3 tasks, 12 files)
+last_updated: "2026-05-02T01:56:20.892Z"
 last_activity: "2026-05-01 — Completed 63.1-03-PLAN.md (SLCK-13: km slack rotate-token, bridge structured logging, fail-fast 5xx, UAT ts=1777638955.854989)"
 progress:
   total_phases: 69
   completed_phases: 64
   total_plans: 208
-  completed_plans: 206
+  completed_plans: 207
   percent: 0
 ---
 
@@ -245,6 +245,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 63.1 P02 | 11 | 5 tasks | 4 files |
 | Phase 63.1 P03 | 45min | 5 tasks | 9 files |
 | Phase 65-four-account-config-model-separate-accounts-organization-scp-from-accounts-dns-parent-and-rename P01 | 373 | 3 tasks | 7 files |
+| Phase 65 P02 | 26min | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -692,6 +693,9 @@ Recent decisions affecting current work:
 - [Phase 63.1-03]: Task 5 added during UAT (not in PLAN.md): bridge had zero logging; 5xx errors masked as replayed_nonce; both root causes fixed with slog + fail-fast policy.
 - [Phase 63.1-03]: SetLogger() exported from bridge package for test log capture via bytes.Buffer; avoids test/production divergence.
 - [Phase 65]: Hard rename of ManagementAccountID into OrganizationAccountID (SCP, optional) + DNSParentAccountID (DNS parent zone); no back-compat alias; Wave 1 cmd package intentionally broken until plan 02
+- [Phase 65]: runShowPrereqs returns nil + message when OrganizationAccountID blank (not error)
+- [Phase 65]: --dns-parent-account and --organization-account both optional in --non-interactive mode
+- [Phase 65]: doctor.go checkConfig: management_account_id removed from required list (both new fields optional)
 
 ### Roadmap Evolution
 
@@ -776,6 +780,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-02T01:26:17.043Z
-Stopped at: Completed 65-01-PLAN.md (config struct rename + Wave 0 stubs, 3 tasks, 7 files)
+Last session: 2026-05-02T01:56:20.886Z
+Stopped at: Completed 65-02-PLAN.md (cmd callers migrated, 3 tasks, 12 files)
 Resume file: None

@@ -1374,7 +1374,7 @@ Plans:
 **Goal:** Rename km-config.yaml accounts.management into accounts.organization (SCP target, optional) and accounts.dns_parent (Route53 parent zone owner) so single-account installs run km bootstrap and km init cleanly with accounts.organization blank.
 **Requirements**: none — operator-driven phase
 **Depends on:** Phase 64
-**Plans:** 1/4 plans executed
+**Plans:** 2/4 plans executed
 
 Plans:
 - [ ] 65-01-PLAN.md — Config struct rename + Wave 0 test stubs (config.go, config_test.go, doctor_test.go stubs, cmd test skeletons)
