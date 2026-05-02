@@ -25,7 +25,7 @@ generate "provider" {
       region = "us-east-1"
 
       assume_role {
-        role_arn = "arn:aws:iam::${local.accounts.management}:role/km-org-admin"
+        role_arn = "arn:aws:iam::${local.accounts.organization}:role/km-org-admin"
       }
 
       default_tags {

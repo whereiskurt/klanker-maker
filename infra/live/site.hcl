@@ -8,10 +8,13 @@ locals {
   }
 
   # Account IDs from km-config.yaml via KM_* env vars (CONF-03)
+  # organization = AWS Organizations management account (SCP target); blank skips SCP deployment.
+  # dns_parent   = AWS account owning the parent Route53 hosted zone for cfg.Domain DNS delegation.
   accounts = {
-    management  = get_env("KM_ACCOUNTS_MANAGEMENT", "")
-    terraform   = get_env("KM_ACCOUNTS_TERRAFORM", "")
-    application = get_env("KM_ACCOUNTS_APPLICATION", "")
+    organization = get_env("KM_ACCOUNTS_ORGANIZATION", "")
+    dns_parent   = get_env("KM_ACCOUNTS_DNS_PARENT", "")
+    terraform    = get_env("KM_ACCOUNTS_TERRAFORM", "")
+    application  = get_env("KM_ACCOUNTS_APPLICATION", "")
   }
 
   # Secrets loaded from SOPS-encrypted file or plaintext fallback.
