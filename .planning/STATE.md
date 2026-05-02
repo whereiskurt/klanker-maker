@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 65-03-PLAN.md (doctor.go interface cleanup + two new checks, 2 tasks, 2 files)
-last_updated: "2026-05-02T02:09:17.729Z"
+stopped_at: Completed 65-04-PLAN.md (HCL + docs migration, grep audit zero-count, Phase 65 complete, 3 tasks, 5 files)
+last_updated: "2026-05-02T02:19:49.946Z"
 last_activity: "2026-05-01 — Completed 63.1-03-PLAN.md (SLCK-13: km slack rotate-token, bridge structured logging, fail-fast 5xx, UAT ts=1777638955.854989)"
 progress:
   total_phases: 69
-  completed_phases: 64
+  completed_phases: 65
   total_plans: 208
-  completed_plans: 208
+  completed_plans: 209
   percent: 0
 ---
 
@@ -247,6 +247,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 65-four-account-config-model-separate-accounts-organization-scp-from-accounts-dns-parent-and-rename P01 | 373 | 3 tasks | 7 files |
 | Phase 65 P02 | 26min | 3 tasks | 12 files |
 | Phase 65-four-account-config-model-separate-accounts-organization-scp-from-accounts-dns-parent-and-rename P03 | 553s | 2 tasks | 2 files |
+| Phase 65 P04 | 504s | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -699,6 +700,7 @@ Recent decisions affecting current work:
 - [Phase 65]: doctor.go checkConfig: management_account_id removed from required list (both new fields optional)
 - [Phase 65-four-account-config-model-separate-accounts-organization-scp-from-accounts-dns-parent-and-rename]: checkLegacyManagementField reads raw YAML (not Viper-loaded config) because Viper silently drops unknown keys — plan 02 shims fully removed from DoctorConfigProvider interface in plan 03
 - [Phase 65-four-account-config-model-separate-accounts-organization-scp-from-accounts-dns-parent-and-rename]: km doctor check count increased from 18 to 20 (two new checks: org-blank WARN, legacy-management FAIL) — CLAUDE.md update deferred to plan 04
+- [Phase 65]: Phase 65 plan 04: HCL + docs fully migrated — accounts.management split to organization (SCP) + dns_parent (Route53) across all surfaces; km-config.yaml was pre-migrated
 
 ### Roadmap Evolution
 
@@ -783,6 +785,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-05-02T02:09:17.724Z
-Stopped at: Completed 65-03-PLAN.md (doctor.go interface cleanup + two new checks, 2 tasks, 2 files)
+Last session: 2026-05-02T02:19:49.940Z
+Stopped at: Completed 65-04-PLAN.md (HCL + docs migration, grep audit zero-count, Phase 65 complete, 3 tasks, 5 files)
 Resume file: None
