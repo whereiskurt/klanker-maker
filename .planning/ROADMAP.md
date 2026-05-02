@@ -1418,3 +1418,23 @@ Plans:
 - [ ] 66-03-PLAN.md — Migrate Go resource-name + SSM-path call sites (100+ sites) to cfg.GetResourcePrefix/GetSsmPrefix; Lambda handlers env-var-driven; ttl-handler self-naming (Pitfall 4); configui kmPrefix runtime variable (Pitfall 5)
 - [ ] 66-04-PLAN.md — Extend site.hcl with KM_RESOURCE_PREFIX + KM_EMAIL_SUBDOMAIN; add var.resource_prefix to five Lambda modules; migrate five DynamoDB live configs + four Lambda live configs; TF plan smoke check (zero destroy/replace)
 - [ ] 66-05-PLAN.md — km init env exports + km configure wizard + km doctor checkPrefixCollision/checkEmailDomainMatchesSESIdentity; OPERATOR-GUIDE + CLAUDE.md + km-config.yaml docs; final grep-audit gates
+
+### Phase 67: Slack inbound: per-sandbox channel as bidirectional chat with km agent run dispatch
+
+**Goal:** Close the Slack bidirectional loop deferred from Phase 63: messages in per-sandbox channels become Claude turns inside the sandbox via SQS FIFO dispatch, with sessions persisted by (channel_id, thread_ts) → claude_session_id mapping for in-thread continuity. Outbound replies (Phase 63's Stop / Notification hook) thread under the inbound message. Per-sandbox channel mode only (shared / override remain outbound-only).
+**Requirements**: REQ-SLACK-IN-SCHEMA, REQ-SLACK-IN-DDB, REQ-SLACK-IN-EVENTS, REQ-SLACK-IN-DELIVERY, REQ-SLACK-IN-POLLER, REQ-SLACK-IN-LIFECYCLE, REQ-SLACK-IN-OBSERVABILITY, REQ-SLACK-IN-INIT (all new — added to REQUIREMENTS.md by Plan 67-00)
+**Depends on:** Phase 66 (Phase 67 ships a forward-compatible GetResourcePrefix shim so it can be implemented before Phase 66 lands)
+**Plans:** 11 plans
+
+Plans:
+- [ ] 67-00-PLAN.md — Wave 0: add github.com/aws/aws-sdk-go-v2/service/sqs dep, append REQ-SLACK-IN-* to REQUIREMENTS.md, seed six test stub files
+- [ ] 67-01-PLAN.md — Profile schema + JSON schema field notifySlackInboundEnabled + three validation rules
+- [ ] 67-02-PLAN.md — DynamoDB module dynamodb-slack-threads v1.0.0 + dynamodb-sandboxes v1.1.0 (additive slack_channel_id-index GSI) + Config helpers (SlackThreadsTableName, GetResourcePrefix shim, GetSlackThreadsTableName)
+- [ ] 67-03-PLAN.md — Bridge /events handler (signing-secret HMAC, url_verification, bot-loop filter, nonce dedup) + five new interfaces + comprehensive table-driven tests
+- [ ] 67-04-PLAN.md — Compiler poller (km-slack-inbound-poller bash + systemd unit, inline heredoc) + KM_SLACK_INBOUND_QUEUE_URL env + km-notify-hook --thread pass-through
+- [ ] 67-05-PLAN.md — Five AWS adapters (SQSSender, DDBThreadStore, SandboxByChannel, SSMSigningSecretFetcher, CachedBotUserIDFetcher) + Lambda main.go path dispatch + bridge IAM extensions
+- [ ] 67-06-PLAN.md — pkg/aws/sqs.go helpers + km create SQS provisioning + DDB persist + env injection + rollback + sandbox EC2 IAM (sqs:Receive/Delete/ChangeVisibility on own queue)
+- [ ] 67-07-PLAN.md — km create ready announcement + km destroy drain (stop poller, wait ≤30s, queue delete, threads cleanup) before Phase 63 archive
+- [ ] 67-08-PLAN.md — km status / km list --wide / km doctor (three new checks: queue exists, stale queues, Events scopes)
+- [ ] 67-09-PLAN.md — km slack init --signing-secret + scope verification + Events URL print
+- [ ] 67-10-PLAN.md — RUN_SLACK_E2E gated end-to-end test + docs/slack-notifications.md inbound section + CLAUDE.md update + manual UAT checkpoint
