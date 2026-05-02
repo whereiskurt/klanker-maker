@@ -2,7 +2,6 @@ locals {
   repo_root  = dirname(find_in_parent_folders("CLAUDE.md"))
   site_vars  = read_terragrunt_config("${local.repo_root}/infra/live/site.hcl")
 
-  # Region from region.hcl in the parent directory (e.g., infra/live/us-east-1/region.hcl)
   region_config = read_terragrunt_config("${get_terragrunt_dir()}/../region.hcl")
   region_label  = local.region_config.locals.region_label
   region_full   = local.region_config.locals.region_full
@@ -22,7 +21,7 @@ remote_state {
 
   config = {
     bucket         = local.site_vars.locals.backend.bucket
-    key            = "${local.site_vars.locals.site.tf_state_prefix}/${local.region_label}/dynamodb-sandboxes/terraform.tfstate"
+    key            = "${local.site_vars.locals.site.tf_state_prefix}/${local.region_label}/dynamodb-slack-threads/terraform.tfstate"
     region         = local.site_vars.locals.backend.region
     encrypt        = local.site_vars.locals.backend.encrypt
     dynamodb_table = local.site_vars.locals.backend.dynamodb_table
@@ -30,13 +29,13 @@ remote_state {
 }
 
 terraform {
-  source = "${local.repo_root}/infra/modules/dynamodb-sandboxes/v1.1.0"
+  source = "${local.repo_root}/infra/modules/dynamodb-slack-threads/v1.0.0"
 }
 
 inputs = {
-  table_name = "km-sandboxes"
+  table_name = "km-slack-threads"
   tags = {
-    "km:component" = "sandbox-metadata"
+    "km:component" = "km-slack-inbound"
     "km:managed"   = "true"
   }
 }
