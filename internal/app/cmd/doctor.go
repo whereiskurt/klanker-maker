@@ -238,7 +238,8 @@ func checkConfig(cfg DoctorConfigProvider) CheckResult {
 	}
 	required := []field{
 		{"domain", cfg.GetDomain()},
-		{"management_account_id", cfg.GetManagementAccountID()},
+		// management_account_id removed in phase 65 — organization is optional (blank = no SCP),
+		// dns_parent is optional (blank = no DNS delegation). Neither is "required".
 		{"terraform_account_id", cfg.GetTerraformAccountID()},
 		{"application_account_id", cfg.GetApplicationAccountID()},
 		{"sso_start_url", cfg.GetSSOStartURL()},

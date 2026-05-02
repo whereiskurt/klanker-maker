@@ -28,6 +28,15 @@ region: us-east-1
 		t.Fatalf("write km-config.yaml: %v", err)
 	}
 
+	// Ensure that env vars set by other tests (e.g. runBootstrap in-process calls)
+	// don't bleed into the km subprocess and override the km-config.yaml values.
+	// KM_ACCOUNTS_ORGANIZATION and KM_ACCOUNTS_DNS_PARENT take precedence over
+	// km-config.yaml in the isSetByEnv guard, so we must clear them for this test.
+	t.Setenv("KM_ACCOUNTS_ORGANIZATION", "")
+	t.Setenv("KM_ACCOUNTS_DNS_PARENT", "")
+	os.Unsetenv("KM_ACCOUNTS_ORGANIZATION")
+	os.Unsetenv("KM_ACCOUNTS_DNS_PARENT")
+
 	out, err := runKMArgsInDir(km, dir, "", "info")
 	if err != nil {
 		t.Fatalf("km info: %v\noutput: %s", err, out)
