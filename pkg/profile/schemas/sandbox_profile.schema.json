@@ -530,6 +530,11 @@
             "slackArchiveOnDestroy": {
               "type": "boolean",
               "description": "Phase 63: archive the per-sandbox channel at km destroy. Default true. Only meaningful with notifySlackPerSandbox=true."
+            },
+            "notifySlackInboundEnabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Enable bidirectional Slack chat (per-sandbox channel inbound). Requires notifySlackEnabled=true and notifySlackPerSandbox=true; incompatible with notifySlackChannelOverride."
             }
           }
         }

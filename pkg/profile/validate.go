@@ -324,6 +324,32 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 				IsWarning: true,
 			})
 		}
+
+		// Phase 67 — Slack inbound validation rules.
+		inboundOn := cli.NotifySlackInboundEnabled
+		if inboundOn {
+			// Rule SI1 (error): inbound requires outbound Slack enabled.
+			if !slackOn {
+				errs = append(errs, ValidationError{
+					Path:    "spec.cli.notifySlackInboundEnabled",
+					Message: "notifySlackInboundEnabled: true requires notifySlackEnabled: true",
+				})
+			}
+			// Rule SI2 (error): inbound requires per-sandbox channel (1:1 routing).
+			if !perSandbox {
+				errs = append(errs, ValidationError{
+					Path:    "spec.cli.notifySlackInboundEnabled",
+					Message: "notifySlackInboundEnabled: true requires notifySlackPerSandbox: true",
+				})
+			}
+			// Rule SI3 (error): inbound incompatible with channel override (ambiguous routing).
+			if override != "" {
+				errs = append(errs, ValidationError{
+					Path:    "spec.cli.notifySlackInboundEnabled",
+					Message: "notifySlackInboundEnabled: true is incompatible with notifySlackChannelOverride (channel→sandbox routing requires 1:1 mapping in v1)",
+				})
+			}
+		}
 	}
 
 	return errs
