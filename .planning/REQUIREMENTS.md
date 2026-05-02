@@ -130,6 +130,16 @@ Requirements for initial release. Each maps to roadmap phases.
 - **SLCK-12**: `km destroy` Slack archive auto-trigger — `destroySlackChannel` (`internal/app/cmd/destroy_slack.go`) is invoked at `destroy.go:474` but the archive bridge call evidently doesn't reach Slack (verified during UAT 4b: direct `conversations.archive` returned `ok:true` after destroy completed, proving channel was NOT archived by destroy). Visible logging shipped in `377b588` — diagnose root cause from next-attempt stderr output and fix. Likely cause: final-post bridge call returns an error (Case H at `destroy_slack.go:106`) which skips the archive entirely; instrument WHY the final-post fails (operator key load? SSM access? Bridge URL mismatch?). End state: a `km destroy` of a per-sandbox sandbox with `slackArchiveOnDestroy != false` must archive the channel and emit `✓ Slack: archived channel C...` on stderr.
 - **SLCK-13**: Bot-token rotation full E2E — UAT Scen 7 verified the idempotent path (`--force` reuses existing channel after `1ad765c`); the FULL rotation cycle remains unverified: revoke token in Slack App admin → wait for the bridge Lambda's `SSMBotTokenFetcher` 15-min cache TTL to elapse → reissue new token → `km slack init --force --bot-token <new>` → `km slack test` succeeds with the new token. Plan must include a documented operator runbook step + automated test where feasible (cache invalidation via Lambda cold-start trigger as a fallback to the 15-min wait).
 
+### Slack Inbound (Bidirectional Chat — Phase 67)
+
+- **REQ-SLACK-IN-SCHEMA**: Profile schema gains `spec.cli.notifySlackInboundEnabled` (bool, default false); validation rules: requires `notifySlackEnabled: true` AND `notifySlackPerSandbox: true`; rejects `notifySlackChannelOverride` set; default-false has no validation impact (Phase 67)
+- **REQ-SLACK-IN-DDB**: New DynamoDB table `{prefix}-km-slack-threads` (PK=channel_id S, SK=thread_ts S; attrs claude_session_id, sandbox_id, last_turn_ts, turn_count, ttl_expiry; TTL 30 days via `ttl_expiry` Number attribute); new GSI `slack_channel_id-index` on `km-sandboxes` (additive, dynamodb-sandboxes module v1.1.0); Config struct gains SlackThreadsTableName field + GetSlackThreadsTableName helper + GetResourcePrefix fallback ("km") (Phase 67)
+- **REQ-SLACK-IN-EVENTS**: Bridge Lambda gains `POST /events` route handling Slack Events API webhook; verifies HMAC-SHA256 signing secret from `/km/slack/signing-secret` SSM SecureString with ±5min timestamp window; echoes `url_verification` challenge before signature check; deduplicates `event_id` via existing km_slack_bridge_nonces table; bot-loop filter (event.bot_id, subtype bot_message/message_changed/message_deleted, event.user == cached bot user_id from auth.test) (Phase 67)
+- **REQ-SLACK-IN-DELIVERY**: Bridge `/events` resolves channel→sandbox via slack_channel_id-index GSI on km-sandboxes; writes per-sandbox SQS FIFO message (MessageGroupId=sandbox-id, MessageDeduplicationId=event_id) carrying {channel, thread_ts, text, user, event_ts}; idempotently upserts km_slack_threads row keyed by (channel_id, thread_ts) with attribute_not_exists condition; returns 200 in <3s (Slack Events API requirement) (Phase 67)
+- **REQ-SLACK-IN-POLLER**: Sandbox-side `/opt/km/bin/km-slack-inbound-poller` bash script + `/etc/systemd/system/km-slack-inbound-poller.service` systemd unit (inline heredoc in `pkg/compiler/userdata.go`, mirrors km-mail-poller); SQS long-poll (WaitTimeSeconds=20), ChangeMessageVisibility 300s before agent run, DDB GetItem for session lookup, claude -p --resume invocation, session_id capture from output.json, DDB PutItem write-back, DeleteMessage only on success; conditionally generated when `notifySlackInboundEnabled: true`; exports `KM_SLACK_THREAD_TS` env var consumed by Phase 63 km-notify-hook → km-slack post --thread (Phase 67)
+- **REQ-SLACK-IN-LIFECYCLE**: `km create` provisions per-sandbox SQS FIFO queue `{prefix}-slack-inbound-{sandbox-id}.fifo` (14d retention, 30s VisibilityTimeout, ContentBasedDeduplication=false) before user-data finalization; URL stored in km-sandboxes DDB as `slack_inbound_queue_url`; injected as `KM_SLACK_INBOUND_QUEUE_URL` into `/etc/profile.d/km-notify-env.sh`; failure aborts km create with full rollback (channel + queue + infra); operator-signed "ready" announcement posted via existing bridge `post` action with its ts recorded in km_slack_threads; `km destroy` stops poller, drains in-flight up to 30s, posts final "destroyed" message, deletes SQS queue, deletes km_slack_threads rows for channel_id (Phase 67)
+- **REQ-SLACK-IN-OBSERVABILITY**: `km status <sandbox-id>` adds queue URL, ApproximateNumberOfMessages, last-receive timestamp, active thread count; `km list --wide` adds column (active thread count); `km doctor --all-regions` adds three checks — `slack_inbound_queue_exists` (every notifySlackInboundEnabled sandbox has accessible queue), `slack_inbound_stale_queues` (`{prefix}-slack-inbound-*.fifo` queues without matching DDB sandbox row), `slack_app_events_subscription` (Events API URL configured + required scopes channels:history, groups:history) (Phase 67)
+- **REQ-SLACK-IN-INIT**: `km slack init` extension — captures Slack signing secret (new prompt), persists to `/km/slack/signing-secret` SSM SecureString (KMS-encrypted, separate from existing `/km/slack/bot-token`); validates Events API URL points to bridge Function URL `/events` path; verifies bot has additional scopes channels:history + groups:history via auth.test diagnostic; documented manual operator runbook for signing-secret rotation (force Lambda cold-start) (Phase 67)
 
 ### eBPF Network Enforcement
 
@@ -340,10 +350,18 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SLCK-11 | Phase 63.1 | Complete |
 | SLCK-12 | Phase 63.1 | Complete |
 | SLCK-13 | Phase 63.1 | Complete |
+| REQ-SLACK-IN-SCHEMA | Phase 67 | Planned |
+| REQ-SLACK-IN-DDB | Phase 67 | Planned |
+| REQ-SLACK-IN-EVENTS | Phase 67 | Planned |
+| REQ-SLACK-IN-DELIVERY | Phase 67 | Planned |
+| REQ-SLACK-IN-POLLER | Phase 67 | Planned |
+| REQ-SLACK-IN-LIFECYCLE | Phase 67 | Planned |
+| REQ-SLACK-IN-OBSERVABILITY | Phase 67 | Planned |
+| REQ-SLACK-IN-INIT | Phase 67 | Planned |
 
 **Coverage:**
-- v1 requirements: 81 total
-- Mapped to phases: 71
+- v1 requirements: 89 total (81 original + 8 Slack Inbound)
+- Mapped to phases: 79
 - Unmapped: 0
 - eBPF requirements (Phase 40-41): 26 total
 
