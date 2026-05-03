@@ -329,6 +329,17 @@ func marshalSandboxItem(meta *SandboxMetadata) map[string]dynamodbtypes.Attribut
 		item["slack_archive_on_destroy"] = &dynamodbtypes.AttributeValueMemberBOOL{Value: *meta.SlackArchiveOnDestroy}
 	}
 
+	// Phase 67 — Slack-inbound metadata. WriteSandboxMetadataDynamo uses PutItem
+	// (full replace), so any read-modify-write path (resume.go TTL recreation,
+	// extend.go, ttl-handler Lambda, etc.) silently dropped this field if it
+	// wasn't included here. The bridge Lambda then warned "unknown channel or
+	// inbound disabled" and dropped Slack messages — observed on l11 after a
+	// TTL/extend write between successful turns. Symmetric with unmarshal at
+	// line ~254.
+	if meta.SlackInboundQueueURL != "" {
+		item["slack_inbound_queue_url"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.SlackInboundQueueURL}
+	}
+
 	return item
 }
 
