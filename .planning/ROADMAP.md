@@ -1424,7 +1424,7 @@ Plans:
 **Goal:** Close the Slack bidirectional loop deferred from Phase 63: messages in per-sandbox channels become Claude turns inside the sandbox via SQS FIFO dispatch, with sessions persisted by (channel_id, thread_ts) → claude_session_id mapping for in-thread continuity. Outbound replies (Phase 63's Stop / Notification hook) thread under the inbound message. Per-sandbox channel mode only (shared / override remain outbound-only).
 **Requirements**: REQ-SLACK-IN-SCHEMA, REQ-SLACK-IN-DDB, REQ-SLACK-IN-EVENTS, REQ-SLACK-IN-DELIVERY, REQ-SLACK-IN-POLLER, REQ-SLACK-IN-LIFECYCLE, REQ-SLACK-IN-OBSERVABILITY, REQ-SLACK-IN-INIT (all new — added to REQUIREMENTS.md by Plan 67-00)
 **Depends on:** Phase 66 (Phase 67 ships a forward-compatible GetResourcePrefix shim so it can be implemented before Phase 66 lands)
-**Plans:** 10/11 plans executed
+**Plans:** 10/13 plans executed (gap-closure plans 67-11, 67-12 added 2026-05-03 from UAT diagnoses)
 
 Plans:
 - [ ] 67-00-PLAN.md — Wave 0: add github.com/aws/aws-sdk-go-v2/service/sqs dep, append REQ-SLACK-IN-* to REQUIREMENTS.md, seed six test stub files
@@ -1438,6 +1438,8 @@ Plans:
 - [ ] 67-08-PLAN.md — km status / km list --wide / km doctor (three new checks: queue exists, stale queues, Events scopes)
 - [ ] 67-09-PLAN.md — km slack init --signing-secret + scope verification + Events URL print
 - [ ] 67-10-PLAN.md — RUN_SLACK_E2E gated end-to-end test + docs/slack-notifications.md inbound section + CLAUDE.md update + manual UAT checkpoint
+- [ ] 67-11-PLAN.md — Gap A closure: move Slack reply post from Stop hook into the inbound poller (read .result from output.json) + KM_SLACK_INBOUND_REPLY_HANDLED gate to suppress double-post + 2 new compiler tests + UAT re-test section
+- [ ] 67-12-PLAN.md — Gap B closure: switch isBotLoop from deny-list to allow-list semantics (only "" + "thread_broadcast" pass) + 14 new system-subtype test cases + ThreadBroadcastPasses positive test + debug log line for forensics + UAT re-test section
 
 ### Phase 68: Slack transcript streaming — per-turn chat + gzipped JSONL upload (Phase A)
 
