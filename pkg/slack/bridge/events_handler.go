@@ -34,6 +34,15 @@ type EventsHandler struct {
 	Logger        *slog.Logger
 	// Now is injected for tests; defaults to time.Now.
 	Now func() time.Time
+
+	// Phase 67.1: ACK reaction (👀) on successful SQS enqueue.
+	// Reactor is optional — nil means feature off (back-compat for tests
+	// and for early deployments before SlackReactorAdapter is wired).
+	Reactor Reactor
+	// AckEmoji is the emoji name (without colons) for the ACK reaction.
+	// Empty defaults to "eyes" at call site. Configured via KM_SLACK_ACK_EMOJI
+	// env var at cold start.
+	AckEmoji string
 }
 
 func (h *EventsHandler) now() time.Time {
@@ -64,6 +73,9 @@ func (h *EventsHandler) log() *slog.Logger {
 //  8. Send SQS message.
 //  9. If info.Paused, fire PauseHinter.PostIfCooldownExpired in a goroutine
 //     so we still return 200 within Slack's 3s ack window. Errors logged.
+//  10. If Reactor is wired, fire Reactor.Add in a goroutine to ACK with 👀
+//      (or whatever KM_SLACK_ACK_EMOJI is set to). Errors logged. NEVER blocks.
+//      Reacts on msg.TS (the originating message), NOT threadTS.
 //
 // Response codes:
 //   - 400 ONLY for malformed JSON / missing required fields (truly bad request)
@@ -204,6 +216,26 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			defer cancel()
 			if err := h.PauseHinter.PostIfCooldownExpired(bgCtx, ch, ts); err != nil {
 				h.log().Warn("events: pause hint post failed", "err", err, "channel", ch, "thread_ts", ts)
+			}
+		}()
+	}
+
+	// 10. ACK reaction (Phase 67.1).
+	//     Fire-and-forget so the 200 still ships within Slack's 3s ack window.
+	//     React on msg.TS — the originating message, NOT threadTS (which is the
+	//     session anchor and points to the thread root for in-thread replies).
+	//     RESEARCH.md Pitfall 1: using threadTS causes message_not_found for replies.
+	if h.Reactor != nil {
+		ch, msgTS := msg.Channel, msg.TS
+		emoji := h.AckEmoji
+		if emoji == "" {
+			emoji = "eyes"
+		}
+		go func() {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := h.Reactor.Add(bgCtx, ch, msgTS, emoji); err != nil {
+				h.log().Warn("events: reaction failed", "err", err, "channel", ch, "ts", msgTS, "emoji", emoji)
 			}
 		}()
 	}

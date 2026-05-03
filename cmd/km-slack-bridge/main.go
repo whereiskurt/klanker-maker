@@ -105,6 +105,7 @@ func init() {
 		"KM_SANDBOXES_TABLE", sandboxesTable,
 		"KM_SLACK_THREADS_TABLE", threadsTable,
 		"KM_SIGNING_SECRET_PATH", signingSecretPath,
+		"KM_SLACK_ACK_EMOJI", envOr("KM_SLACK_ACK_EMOJI", "eyes"),
 	)
 
 	signingSecret := &bridge.SSMSigningSecretFetcher{
@@ -164,6 +165,20 @@ func init() {
 		CooldownSeconds:    3600,
 	}
 	eventsHandler.PauseHinter = pauseHinter
+
+	// Phase 67.1: ACK reaction wiring.
+	// Reuse the SAME httpClient and tokenFetcher as SlackPosterAdapter so
+	// the BotTokenFetcher's 15-min token cache is shared (avoids an extra
+	// SSM call on every reaction).
+	ackEmoji := os.Getenv("KM_SLACK_ACK_EMOJI")
+	if ackEmoji == "" {
+		ackEmoji = "eyes"
+	}
+	eventsHandler.Reactor = &bridge.SlackReactorAdapter{
+		HTTPClient: httpClient,
+		Tokens:     tokenFetcher,
+	}
+	eventsHandler.AckEmoji = ackEmoji
 }
 
 func main() {
