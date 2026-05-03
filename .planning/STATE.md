@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: Completed 67-10-PLAN.md (Phase 67 close-out, GREEN ship verdict)
-last_updated: "2026-05-03T15:00:38.104Z"
+stopped_at: "Completed 67.1-01-PLAN.md (ACK reaction bridge code: Reactor interface, SlackReactorAdapter, EventsHandler.Reactor field, cold-start wiring, 8 new tests GREEN)"
+last_updated: "2026-05-03T18:42:09.044Z"
 last_activity: 2026-05-03 — Completed 67-10-PLAN.md (E2E test, operator docs, UAT round-3 GREEN verdict on l11; 11/13 actively-exercised steps PASS, 1 partial, 2 NOT-EXERCISED with compensating coverage. Pause/resume validated post-checkpoint)
 progress:
-  total_phases: 72
+  total_phases: 73
   completed_phases: 66
-  total_plans: 239
-  completed_plans: 222
+  total_plans: 242
+  completed_plans: 223
   percent: 0
 ---
 
@@ -261,6 +261,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 67-slack-inbound-per-sandbox-channel-as-bidirectional-chat-with-km-agent-run-dispatch P11 | 6min | 2 tasks | 5 files |
 | Phase 67 P12 | 2min | 2 tasks | 3 files |
 | Phase 67-slack-inbound P10 | 2 days | 2 tasks | 5 files |
+| Phase 67.1-slack-inbound-ack-reaction P01 | 447 | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -741,6 +742,9 @@ Recent decisions affecting current work:
 - [Phase 67-slack-inbound]: Phase 67 GREEN ship verdict: 11/13 actively-exercised UAT steps PASS, 1 partial, 2 NOT-EXERCISED with compensating coverage
 - [Phase 67-slack-inbound]: RUN_SLACK_E2E=1 env-var gate (no -tags=e2e build tag) for opt-in live-workspace E2E tests; default go test stays green
 - [Phase 67-slack-inbound]: UAT.md uses 4 verdict states (PASS/FAIL/PARTIAL/NOT-EXERCISED) where NOT-EXERCISED must cite compensating coverage (unit tests, AWS service guarantee, or alternative defence)
+- [Phase 67.1-01]: Duplicate HTTP call body in SlackReactorAdapter rather than extract shared helper (one method; factor if third adapter appears)
+- [Phase 67.1-01]: SlackReactorAdapter shares tokenFetcher instance with SlackPosterAdapter to preserve 15-min SSM token cache
+- [Phase 67.1-01]: KM_SLACK_ACK_EMOJI env var (default eyes) controls ACK emoji — bridge-global, no profile field for v1
 
 ### Roadmap Evolution
 
@@ -825,9 +829,10 @@ Recent decisions affecting current work:
 - Phase 65 added: Four-account config model — split today's `accounts.management` (which conflates AWS Organizations management with the DNS parent-zone owner) into `accounts.organization` (SCP target, blank → skip SCP) and `accounts.dns_parent` (Route53 parent zone owner used by `ensureSandboxHostedZone`). Hard rename, no back-compat alias (pre-1.0). Updates `internal/app/config/config.go`, `bootstrap.go` SCP gate, `init.go` DNS lookup, `infra/live/site.hcl`, `infra/live/management/scp/terragrunt.hcl`, and adds `km doctor` warning when `accounts.organization` is blank ("SCP enforcement disabled — sandbox containment relies on IAM only"). Motivation: upcoming single-account install lacks org-management access; bootstrap must skip SCP cleanly while DNS still works. AWS profile names (`klanker-management` etc) are explicitly out of scope.
 - Phase 66 added: Multi-instance support — introduce `resource_prefix` (default `"km"`) and `email_subdomain` (default `"sandboxes"`) in km-config.yaml so multiple km installs can coexist in one AWS account. Threads both knobs through DynamoDB tables (`km-budgets`, `km-sandboxes`, `km-identities`, `km-schedules`, `km-slack-bridge-nonces`), management Lambdas (`km-ttl-handler`, `km-create-handler`, `km-email-create-handler`, `km-slack-bridge`, `km-ecs-spot-handler`), Lambda IAM roles (~12 sub-policies per handler), EventBridge schedule group (`km-at`) and rule (`km-ecs-spot-interruption`), CloudWatch log group prefix (`/km/sandboxes/*`), SSM parameter prefixes (`/km/slack/*`, `/km/config/github/*`, `/km/config/remote-create/*`), TF state backend (`tf-km-state-{region}` + lock table), SES domain identity / Route53 zone (`sandboxes.{domain}`), and the ~25 inline `"sandboxes." + cfg.Domain` call sites (collapse to `Config.GetEmailDomain()`). Defaults preserve existing-install behavior; new installs override at `km init`. Migration of existing installs is explicitly out of scope. Org SCP (`km-sandbox-containment`) reuses the Phase 65 `accounts.organization == ""` skip path since SCPs are org-scoped and only one install per org can deploy. TF resource renames must keep logical names constant (parameterize `name` attribute only) to avoid destroy/create on stateful DynamoDB tables.
 - Phase 68 added: Slack transcript streaming (Phase A) — per-turn assistant text + tool one-liner streaming via PostToolUse hook to per-sandbox Slack thread, plus final gzipped JSONL transcript upload via S3 → bridge → Slack files API at Stop. New profile field `notifySlackTranscriptEnabled` gated on `notifySlackEnabled + notifySlackPerSandbox`; CLI overrides `--transcript-stream/--no-transcript-stream` on `km agent run` and `km shell`. New bridge `ActionUpload`, Slack scope `files:write`, DDB table `km-slack-stream-messages` mapping `(channel_id, slack_ts) → (sandbox_id, session_id, transcript_offset)` to enable a future reaction-fork phase (Phase B, deferred). Auto-creates thread parent for operator-initiated runs (no `KM_SLACK_THREAD_TS`). Spec: `docs/superpowers/specs/2026-05-03-slack-transcript-streaming-design.md`
+- Phase 67.1 inserted after Phase 67: Slack inbound ACK reaction — bridge-side fire-and-forget `reactions.add` (👀) after successful SQS enqueue, mirrors existing PauseHinter goroutine pattern; new Slack scope `reactions:write`, scope checks added to `km slack init` and `km doctor`, configurable emoji via `KM_SLACK_ACK_EMOJI` env var (default `eyes`), bridge-only deploy (no sandbox redeploy) (URGENT — Phase 67 UX gap: users get no feedback that Slack message was received until agent boots)
 
 ## Session Continuity
 
-Last session: 2026-05-03T15:00:38.098Z
-Stopped at: Completed 67-10-PLAN.md (Phase 67 close-out, GREEN ship verdict)
+Last session: 2026-05-03T18:42:09.038Z
+Stopped at: Completed 67.1-01-PLAN.md (ACK reaction bridge code: Reactor interface, SlackReactorAdapter, EventsHandler.Reactor field, cold-start wiring, 8 new tests GREEN)
 Resume file: None
