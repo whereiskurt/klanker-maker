@@ -1441,6 +1441,18 @@ Plans:
 - [ ] 67-11-PLAN.md — Gap A closure: move Slack reply post from Stop hook into the inbound poller (read .result from output.json) + KM_SLACK_INBOUND_REPLY_HANDLED gate to suppress double-post + 2 new compiler tests + UAT re-test section
 - [ ] 67-12-PLAN.md — Gap B closure: switch isBotLoop from deny-list to allow-list semantics (only "" + "thread_broadcast" pass) + 14 new system-subtype test cases + ThreadBroadcastPasses positive test + debug log line for forensics + UAT re-test section
 
+### Phase 67.1: Slack inbound ACK reaction (INSERTED)
+
+**Goal:** Close the Phase 67 UAT UX gap where Slack users get no visual feedback that their inbound message was received until the agent boots and posts its first reply (10-60s for paused sandboxes). The bridge Lambda adds a 👀 emoji reaction to the originating Slack message within ~1 second of successful SQS enqueue via Slack `reactions.add` Web API. Bridge-only change — no sandbox redeploy. Configurable emoji via `KM_SLACK_ACK_EMOJI` Lambda env var (default `eyes`). New required Slack scope: `reactions:write`.
+**Requirements**: UAT-1..UAT-5 (per 67.1-CONTEXT.md success criteria — no REQ-* IDs assigned; this is a UAT-gap-closure phase)
+**Depends on:** Phase 67
+**Plans:** 3 plans
+
+Plans:
+- [ ] 67.1-01-PLAN.md — Bridge code: Reactor interface + SlackReactorAdapter + EventsHandler fire-and-forget call after SQS write + cold-start KM_SLACK_ACK_EMOJI wiring + 4 unit tests + newHandler test signature ripple
+- [ ] 67.1-02-PLAN.md — Scope checks: append `reactions:write` to required-slice in `km slack init` (VerifyEventsAPIScopes) and `km doctor` (checkSlackAppEventsScopes) + extended tests
+- [ ] 67.1-03-PLAN.md — Terraform env passthrough (lambda-slack-bridge module) + docs/slack-notifications.md ACK section + CLAUDE.md update + manual UAT checkpoint (operator scope-add + reinstall + 👀 smoke test)
+
 ### Phase 68: Slack transcript streaming — per-turn chat + gzipped JSONL upload (Phase A)
 
 **Spec:** `docs/superpowers/specs/2026-05-03-slack-transcript-streaming-design.md`
