@@ -82,12 +82,12 @@ Add new const `ActionUpload = "upload"`. Existing `BuildEnvelope` signature unch
 ### `km-slack` sandbox binary (`cmd/km-slack/`)
 
 - New subcommand `upload`: signs an `ActionUpload` envelope with the existing Ed25519 key (loaded from SSM), POSTs to `KM_SLACK_BRIDGE_URL`, retries via existing `BridgeBackoff` on network errors (1s/2s/4s).
-- New subcommand `record-mapping`: writes `(channel_id, slack_ts) → {sandbox_id, session_id, transcript_offset, ttl_expiry}` to DDB `km-slack-stream-messages`. Uses sandbox IAM `dynamodb:PutItem`.
+- New subcommand `record-mapping`: writes `(channel_id, slack_ts) → {sandbox_id, session_id, transcript_offset, ttl_expiry}` to DDB `{prefix}-slack-stream-messages` (RESOLVED 2026-05-03 — see "DDB table" decision below). Uses sandbox IAM `dynamodb:PutItem`.
 - Existing `post` subcommand unchanged.
 
 ### DDB table
 
-- **Name:** `{prefix}-km-slack-stream-messages` (follows existing `{prefix}-km-slack-threads` pattern from Phase 67)
+- **Name:** `{prefix}-slack-stream-messages` (follows existing `{prefix}-slack-threads` pattern from Phase 67 — RESOLVED 2026-05-03 during Plan 03; the originally-spec'd `{prefix}-km-...` would have produced a double-prefixed name with the default prefix; corrected to match Phase 67's `{prefix}-slack-threads` convention)
 - **Schema:** PK `channel_id` (String), SK `slack_ts` (String). Attributes: `sandbox_id`, `session_id`, `transcript_offset` (Number), `ttl_expiry` (Number, Unix epoch seconds, 30 days from write).
 - **Billing:** on-demand
 - **TTL:** enabled on `ttl_expiry`
@@ -102,7 +102,7 @@ Add new const `ActionUpload = "upload"`. Existing `BuildEnvelope` signature unch
 
 **Sandbox EC2 instance role:**
 - `s3:PutObject` on `${KM_ARTIFACTS_BUCKET}/transcripts/{sandbox_id}/*` — alongside existing email-attachment prefix grants
-- `dynamodb:PutItem` on `arn:aws:dynamodb:*:*:table/{prefix}-km-slack-stream-messages`
+- `dynamodb:PutItem` on `arn:aws:dynamodb:*:*:table/{prefix}-slack-stream-messages` (RESOLVED 2026-05-03)
 
 ### S3 layout
 
@@ -127,7 +127,7 @@ Add new const `ActionUpload = "upload"`. Existing `BuildEnvelope` signature unch
 
 ### `km doctor` checks (three new)
 
-1. `slack_transcript_table_exists` — DDB `{prefix}-km-slack-stream-messages` exists and is reachable
+1. `slack_transcript_table_exists` — DDB `{prefix}-slack-stream-messages` exists and is reachable (RESOLVED 2026-05-03)
 2. `slack_files_write_scope` — bot has `files:write` (probe `auth.test` response → scopes list contains `files:write`)
 3. `slack_transcript_stale_objects` — S3 prefix `transcripts/{sandbox_id}/` for sandboxes that no longer exist in DDB sandboxes table (cleanup advisory)
 
