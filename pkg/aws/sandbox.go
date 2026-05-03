@@ -35,6 +35,17 @@ type SandboxRecord struct {
 	Hibernation    bool       `json:"hibernation,omitempty"`    // true if EC2 instance has hibernation configured
 	TeardownPolicy string     `json:"teardown_policy,omitempty"` // "destroy", "stop", or "retain"
 	Resources      []string   `json:"resources,omitempty"`      // ARNs, populated in status output only
+
+	// Phase 63/67 — Slack metadata (populated from DDB in status/list).
+	// SlackChannelID is the Slack channel ID (C...) the sandbox posts to.
+	// Empty when notifySlackEnabled was false at create time.
+	SlackChannelID string `json:"slack_channel_id,omitempty"`
+	// SlackInboundQueueURL is the SQS FIFO queue URL for inbound Slack messages.
+	// Empty when notifySlackInboundEnabled was false at create time.
+	SlackInboundQueueURL string `json:"slack_inbound_queue_url,omitempty"`
+	// ActiveThreads is the number of active threads in km-slack-threads for this sandbox.
+	// Populated only in --wide list output.
+	ActiveThreads int `json:"active_threads,omitempty"`
 }
 
 // S3ListAPI is the narrow interface for S3 operations needed by list functions.

@@ -19,6 +19,7 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/spf13/cobra"
@@ -202,7 +203,7 @@ func runStatus(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, b
 	}
 	fprintBanner(cmd.OutOrStdout(), "km status", bannerID)
 	isTTY := isTerminal(cmd.OutOrStdout())
-	printSandboxStatus(cmd, rec, budget, identity, isTTY)
+	printSandboxStatus(ctx, cmd, rec, budget, identity, isTTY)
 	return nil
 }
 
@@ -332,7 +333,7 @@ func colorPercent(percent float64, isTTY bool) string {
 }
 
 // printSandboxStatus prints detailed sandbox information including optional budget and identity sections.
-func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *kmaws.BudgetSummary, identity *kmaws.IdentityRecord, isTTY bool) {
+func printSandboxStatus(ctx context.Context, cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *kmaws.BudgetSummary, identity *kmaws.IdentityRecord, isTTY bool) {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "Sandbox ID:  %s\n", rec.SandboxID)
 	if rec.Alias != "" {
@@ -421,6 +422,45 @@ func printSandboxStatus(cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *km
 			warnPct = 0.80
 		}
 		fmt.Fprintf(out, "  Warning threshold: %.0f%%\n", warnPct*100)
+	}
+
+	// Slack inbound section — only printed when sandbox has Slack channel set.
+	// Shows queue URL and depth for inbound-enabled sandboxes, or "disabled" for
+	// outbound-only Slack sandboxes (Phase 63).
+	if rec.SlackInboundQueueURL != "" {
+		fmt.Fprintf(out, "Slack Inbound:\n")
+		fmt.Fprintf(out, "  queue:        %s\n", rec.SlackInboundQueueURL)
+
+		// Lazy-init SQS client — mirrors the EC2 client pattern in computeIdleRemaining.
+		awsCfg, sqsErr := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+		if sqsErr == nil {
+			sqsClient := sqs.NewFromConfig(awsCfg)
+			depth, depthErr := kmaws.QueueDepth(ctx, sqsClient, rec.SlackInboundQueueURL)
+			if depthErr != nil {
+				fmt.Fprintf(out, "  queue depth:  <error: %v>\n", depthErr)
+			} else {
+				fmt.Fprintf(out, "  queue depth:  %d message(s) waiting\n", depth)
+			}
+		} else {
+			fmt.Fprintf(out, "  queue depth:  <error: %v>\n", sqsErr)
+		}
+
+		// Thread count from km-slack-threads DDB.
+		if rec.SlackChannelID != "" {
+			awsCfg2, ddbErr := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+			if ddbErr == nil {
+				ddbClient := dynamodb.NewFromConfig(awsCfg2)
+				threadCount, threadErr := countActiveThreads(ctx, ddbClient, "km-slack-threads", rec.SlackChannelID)
+				if threadErr != nil {
+					fmt.Fprintf(out, "  threads:      <error: %v>\n", threadErr)
+				} else {
+					fmt.Fprintf(out, "  threads:      %d active\n", threadCount)
+				}
+			}
+		}
+	} else if rec.SlackChannelID != "" {
+		// Sandbox has Slack outbound (Phase 63) but no inbound — note for clarity.
+		fmt.Fprintf(out, "Slack Inbound: disabled\n")
 	}
 
 	// Identity section — only printed when identity record is available and has a public key
@@ -634,4 +674,31 @@ func hasActiveSSMSession(ctx context.Context, awsCfg awssdk.Config, sandboxID st
 		return false
 	}
 	return len(sessOut.Sessions) > 0
+}
+
+// DDBQueryClient is the narrow DynamoDB interface used by countActiveThreads.
+// Satisfied by *dynamodb.Client and by test fakes.
+type DDBQueryClient interface {
+	Query(ctx context.Context, params *dynamodb.QueryInput, optFns ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error)
+}
+
+// countActiveThreads returns the number of rows in the given DynamoDB table
+// (e.g. km-slack-threads) whose partition key channel_id equals channelID.
+// Returns 0 silently when channelID is empty.
+func countActiveThreads(ctx context.Context, ddb DDBQueryClient, tableName, channelID string) (int, error) {
+	if channelID == "" {
+		return 0, nil
+	}
+	out, err := ddb.Query(ctx, &dynamodb.QueryInput{
+		TableName:              awssdk.String(tableName),
+		KeyConditionExpression: awssdk.String("channel_id = :cid"),
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":cid": &dynamodbtypes.AttributeValueMemberS{Value: channelID},
+		},
+		Select: dynamodbtypes.SelectCount,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return int(out.Count), nil
 }
