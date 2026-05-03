@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -101,6 +102,31 @@ func (f *fakePauseHinter) snapshot() []struct{ ch, ts string } {
 	return out
 }
 
+type reactorCall struct {
+	channel, ts, emoji string
+}
+
+type fakeReactor struct {
+	mu    sync.Mutex
+	calls []reactorCall
+	err   error
+}
+
+func (f *fakeReactor) Add(ctx context.Context, channel, ts, emoji string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, reactorCall{channel, ts, emoji})
+	return f.err
+}
+
+func (f *fakeReactor) snapshot() []reactorCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]reactorCall, len(f.calls))
+	copy(out, f.calls)
+	return out
+}
+
 // ---- helpers ----
 
 const testSigningSecret = "test-signing-secret-32-chars-aaaa"
@@ -115,7 +141,7 @@ func signSlackPayload(t *testing.T, body string, ts time.Time) (tsHdr, sigHdr st
 	return
 }
 
-func newHandler(now time.Time) (*EventsHandler, *fakeSQS, *fakeThreads, *fakeNonces, *fakeSandboxes, *fakePauseHinter) {
+func newHandler(now time.Time) (*EventsHandler, *fakeSQS, *fakeThreads, *fakeNonces, *fakeSandboxes, *fakePauseHinter, *fakeReactor) {
 	sqs := &fakeSQS{}
 	threads := &fakeThreads{}
 	nonces := &fakeNonces{}
@@ -123,6 +149,7 @@ func newHandler(now time.Time) (*EventsHandler, *fakeSQS, *fakeThreads, *fakeNon
 		info: SandboxRoutingInfo{SandboxID: "sb-abc123", QueueURL: "https://sqs.example/queue.fifo"},
 	}
 	pauseHinter := &fakePauseHinter{}
+	reactor := &fakeReactor{}
 	return &EventsHandler{
 		SigningSecret: &fakeSigningSecret{secret: testSigningSecret},
 		BotUserID:     &fakeBotUserID{uid: "UBOT123"},
@@ -131,15 +158,17 @@ func newHandler(now time.Time) (*EventsHandler, *fakeSQS, *fakeThreads, *fakeNon
 		Threads:       threads,
 		SQS:           sqs,
 		PauseHinter:   pauseHinter,
+		Reactor:       reactor,
+		AckEmoji:      "eyes",
 		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Now:           func() time.Time { return now },
-	}, sqs, threads, nonces, sandboxes, pauseHinter
+	}, sqs, threads, nonces, sandboxes, pauseHinter, reactor
 }
 
 // ---- tests ----
 
 func TestEventsHandler_URLVerification(t *testing.T) {
-	h, sqs, _, _, _, _ := newHandler(time.Now())
+	h, sqs, _, _, _, _, _ := newHandler(time.Now())
 	body := `{"type":"url_verification","challenge":"abc-xyz"}`
 	resp := h.Handle(context.Background(), EventsRequest{Body: body})
 	if resp.StatusCode != 200 {
@@ -157,7 +186,7 @@ func TestEventsHandler_URLVerification(t *testing.T) {
 
 func TestEventsHandler_BadSigningSecret(t *testing.T) {
 	now := time.Now()
-	h, sqs, _, _, _, _ := newHandler(now)
+	h, sqs, _, _, _, _, _ := newHandler(now)
 	body := `{"type":"event_callback","event_id":"E1","event":{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"1.0"}}`
 	tsHdr, _ := signSlackPayload(t, body, now)
 	badSig := "v0=" + fmt.Sprintf("%064d", 0)
@@ -175,7 +204,7 @@ func TestEventsHandler_BadSigningSecret(t *testing.T) {
 
 func TestEventsHandler_StaleTimestamp(t *testing.T) {
 	now := time.Now()
-	h, _, _, _, _, _ := newHandler(now)
+	h, _, _, _, _, _, _ := newHandler(now)
 	body := `{"type":"event_callback"}`
 	tsHdr, sigHdr := signSlackPayload(t, body, now.Add(-10*time.Minute)) // 600s+ old, sign with same age
 	resp := h.Handle(context.Background(), EventsRequest{
@@ -189,7 +218,7 @@ func TestEventsHandler_StaleTimestamp(t *testing.T) {
 
 func TestEventsHandler_FutureTimestamp(t *testing.T) {
 	now := time.Now()
-	h, _, _, _, _, _ := newHandler(now)
+	h, _, _, _, _, _, _ := newHandler(now)
 	body := `{"type":"event_callback"}`
 	tsHdr, sigHdr := signSlackPayload(t, body, now.Add(10*time.Minute))
 	resp := h.Handle(context.Background(), EventsRequest{
@@ -236,7 +265,7 @@ func TestEventsHandler_BotSelfMessageFiltered(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			now := time.Now()
-			h, sqs, threads, _, _, _ := newHandler(now)
+			h, sqs, threads, _, _, _, _ := newHandler(now)
 			body := fmt.Sprintf(`{"type":"event_callback","event_id":"E-%s","event":%s}`, tc.name, tc.event)
 			tsHdr, sigHdr := signSlackPayload(t, body, now)
 			resp := h.Handle(context.Background(), EventsRequest{
@@ -261,7 +290,7 @@ func TestEventsHandler_BotSelfMessageFiltered(t *testing.T) {
 // "Also send to channel" ticked) carries human content and MUST reach SQS.
 func TestEventsHandler_ThreadBroadcastPasses(t *testing.T) {
 	now := time.Now()
-	h, sqs, threads, _, _, _ := newHandler(now)
+	h, sqs, threads, _, _, _, _ := newHandler(now)
 	body := `{"type":"event_callback","event_id":"E-tb","event":{"type":"message","channel":"C1","subtype":"thread_broadcast","user":"U1","text":"shouting from thread","ts":"1.5","thread_ts":"1.0"}}`
 	tsHdr, sigHdr := signSlackPayload(t, body, now)
 	resp := h.Handle(context.Background(), EventsRequest{
@@ -281,7 +310,7 @@ func TestEventsHandler_ThreadBroadcastPasses(t *testing.T) {
 
 func TestEventsHandler_ReplayedEventID(t *testing.T) {
 	now := time.Now()
-	h, sqs, _, nonces, _, _ := newHandler(now)
+	h, sqs, _, nonces, _, _, _ := newHandler(now)
 	nonces.seen = map[string]bool{EventNoncePrefix + "EVT-DUP": true}
 	body := `{"type":"event_callback","event_id":"EVT-DUP","event":{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"1.0"}}`
 	tsHdr, sigHdr := signSlackPayload(t, body, now)
@@ -299,7 +328,7 @@ func TestEventsHandler_ReplayedEventID(t *testing.T) {
 
 func TestEventsHandler_UnknownChannel(t *testing.T) {
 	now := time.Now()
-	h, sqs, _, _, sandboxes, _ := newHandler(now)
+	h, sqs, _, _, sandboxes, _, _ := newHandler(now)
 	sandboxes.info = SandboxRoutingInfo{} // empty SandboxID — channel not in our DB
 	body := `{"type":"event_callback","event_id":"E1","event":{"type":"message","channel":"CUNKNOWN","user":"U1","text":"hi","ts":"1.0"}}`
 	tsHdr, sigHdr := signSlackPayload(t, body, now)
@@ -317,7 +346,7 @@ func TestEventsHandler_UnknownChannel(t *testing.T) {
 
 func TestEventsHandler_TopLevelPost_UsesTSAsThreadTS(t *testing.T) {
 	now := time.Now()
-	h, sqs, threads, _, _, _ := newHandler(now)
+	h, sqs, threads, _, _, _, _ := newHandler(now)
 	body := `{"type":"event_callback","event_id":"E1","event":{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"1714280400.001"}}`
 	tsHdr, sigHdr := signSlackPayload(t, body, now)
 	resp := h.Handle(context.Background(), EventsRequest{
@@ -339,7 +368,7 @@ func TestEventsHandler_TopLevelPost_UsesTSAsThreadTS(t *testing.T) {
 
 func TestEventsHandler_InThreadReply_PreservesThreadTS(t *testing.T) {
 	now := time.Now()
-	h, sqs, _, _, _, _ := newHandler(now)
+	h, sqs, _, _, _, _, _ := newHandler(now)
 	body := `{"type":"event_callback","event_id":"E2","event":{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"1714280400.999","thread_ts":"1714280400.001"}}`
 	tsHdr, sigHdr := signSlackPayload(t, body, now)
 	resp := h.Handle(context.Background(), EventsRequest{
@@ -358,7 +387,7 @@ func TestEventsHandler_InThreadReply_PreservesThreadTS(t *testing.T) {
 
 func TestEventsHandler_ValidMessage_HappyPath(t *testing.T) {
 	now := time.Now()
-	h, sqs, threads, _, _, _ := newHandler(now)
+	h, sqs, threads, _, _, _, _ := newHandler(now)
 	body := `{"type":"event_callback","event_id":"E3","event":{"type":"message","channel":"C1","user":"U1","text":"refactor the auth module","ts":"1714280400.001"}}`
 	tsHdr, sigHdr := signSlackPayload(t, body, now)
 	resp := h.Handle(context.Background(), EventsRequest{
@@ -386,7 +415,7 @@ func TestEventsHandler_ValidMessage_HappyPath(t *testing.T) {
 
 func TestEventsHandler_SQSWriteFailure_Returns200(t *testing.T) {
 	now := time.Now()
-	h, sqs, _, _, _, _ := newHandler(now)
+	h, sqs, _, _, _, _, _ := newHandler(now)
 	sqs.err = fmt.Errorf("simulated AccessDeniedException")
 	body := `{"type":"event_callback","event_id":"EFAIL","event":{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"1.0"}}`
 	tsHdr, sigHdr := signSlackPayload(t, body, now)
@@ -407,7 +436,7 @@ func TestEventsHandler_SQSWriteFailure_Returns200(t *testing.T) {
 
 func TestEventsHandler_DDBUpsertFailure_Returns200(t *testing.T) {
 	now := time.Now()
-	h, sqs, threads, _, _, _ := newHandler(now)
+	h, sqs, threads, _, _, _, _ := newHandler(now)
 	threads.err = fmt.Errorf("simulated ProvisionedThroughputExceededException")
 	body := `{"type":"event_callback","event_id":"EDDB","event":{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"1.0"}}`
 	tsHdr, sigHdr := signSlackPayload(t, body, now)
@@ -425,7 +454,7 @@ func TestEventsHandler_DDBUpsertFailure_Returns200(t *testing.T) {
 
 func TestEventsHandler_SandboxLookupFailure_Returns200(t *testing.T) {
 	now := time.Now()
-	h, sqs, _, _, sandboxes, _ := newHandler(now)
+	h, sqs, _, _, sandboxes, _, _ := newHandler(now)
 	sandboxes.err = fmt.Errorf("simulated DDB Query failure")
 	body := `{"type":"event_callback","event_id":"ELOOKUP","event":{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"1.0"}}`
 	tsHdr, sigHdr := signSlackPayload(t, body, now)
@@ -443,7 +472,7 @@ func TestEventsHandler_SandboxLookupFailure_Returns200(t *testing.T) {
 
 func TestEventsHandler_SigningSecretFetchFailure_Returns200(t *testing.T) {
 	now := time.Now()
-	h, sqs, _, _, _, _ := newHandler(now)
+	h, sqs, _, _, _, _, _ := newHandler(now)
 	h.SigningSecret = &fakeSigningSecret{err: fmt.Errorf("simulated SSM throttle")}
 	body := `{"type":"event_callback","event_id":"ESEC","event":{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"1.0"}}`
 	tsHdr, sigHdr := signSlackPayload(t, body, now)
@@ -466,7 +495,7 @@ func TestEventsHandler_PausedSandbox_FirstMessage(t *testing.T) {
 	// contract: invoke PauseHinter when info.Paused=true AFTER SQS write,
 	// in a goroutine, fire-and-forget.
 	now := time.Now()
-	h, sqs, _, _, sandboxes, hinter := newHandler(now)
+	h, sqs, _, _, sandboxes, hinter, _ := newHandler(now)
 	sandboxes.info = SandboxRoutingInfo{
 		SandboxID: "sb-paused", QueueURL: "https://sqs.example/q.fifo",
 		Paused: true,
@@ -504,7 +533,7 @@ func TestEventsHandler_PausedSandbox_WithinCooldown(t *testing.T) {
 	// This test verifies the handler's "always invoke when paused" contract;
 	// adapter test in Plan 67-05 verifies actual cooldown skip behavior.
 	now := time.Now()
-	h, sqs, _, _, sandboxes, hinter := newHandler(now)
+	h, sqs, _, _, sandboxes, hinter, _ := newHandler(now)
 	sandboxes.info = SandboxRoutingInfo{
 		SandboxID: "sb-paused", QueueURL: "https://sqs.example/q.fifo",
 		Paused: true,
@@ -536,7 +565,7 @@ func TestEventsHandler_PausedSandbox_WithinCooldown(t *testing.T) {
 
 func TestEventsHandler_NotPaused_NoHint(t *testing.T) {
 	now := time.Now()
-	h, sqs, _, _, _, hinter := newHandler(now)
+	h, sqs, _, _, _, hinter, _ := newHandler(now)
 	body := `{"type":"event_callback","event_id":"ELIVE","event":{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"1.0"}}`
 	tsHdr, sigHdr := signSlackPayload(t, body, now)
 	resp := h.Handle(context.Background(), EventsRequest{
@@ -555,7 +584,7 @@ func TestEventsHandler_NotPaused_NoHint(t *testing.T) {
 func TestEventsHandler_PausedSandbox_NilHinter_IsNoop(t *testing.T) {
 	// nil PauseHinter must not panic; nothing to verify but absence of crash.
 	now := time.Now()
-	h, sqs, _, _, sandboxes, _ := newHandler(now)
+	h, sqs, _, _, sandboxes, _, _ := newHandler(now)
 	h.PauseHinter = nil
 	sandboxes.info = SandboxRoutingInfo{
 		SandboxID: "sb-paused", QueueURL: "https://sqs.example/q.fifo",
@@ -572,5 +601,188 @@ func TestEventsHandler_PausedSandbox_NilHinter_IsNoop(t *testing.T) {
 	}
 	if len(sqs.sends) != 1 {
 		t.Fatalf("nil PauseHinter must not block SQS write, got %d", len(sqs.sends))
+	}
+}
+
+// ---- Phase 67.1: ACK reaction test helpers ----
+
+// buildMessageEventBody builds a signed Slack event_callback body for a regular
+// human message. channel, ts, threadTS (empty for top-level), user, and text are
+// configurable. eventID is auto-generated from the ts to keep tests unique.
+func buildMessageEventBody(t *testing.T, channel, ts, threadTS, user, text string) string {
+	t.Helper()
+	event := map[string]any{
+		"type":    "message",
+		"channel": channel,
+		"user":    user,
+		"text":    text,
+		"ts":      ts,
+	}
+	if threadTS != "" {
+		event["thread_ts"] = threadTS
+	}
+	eventBytes, _ := json.Marshal(event)
+	outer := map[string]any{
+		"type":     "event_callback",
+		"event_id": "E-" + ts,
+		"event":    json.RawMessage(eventBytes),
+	}
+	b, _ := json.Marshal(outer)
+	return string(b)
+}
+
+// buildBotMessageEventBody builds a Slack event_callback body for a bot message
+// (bot_id set). Used to exercise the isBotLoop short-circuit.
+func buildBotMessageEventBody(t *testing.T, channel, ts, botID, text string) string {
+	t.Helper()
+	event := map[string]any{
+		"type":    "message",
+		"channel": channel,
+		"text":    text,
+		"ts":      ts,
+		"bot_id":  botID,
+	}
+	eventBytes, _ := json.Marshal(event)
+	outer := map[string]any{
+		"type":     "event_callback",
+		"event_id": "E-bot-" + ts,
+		"event":    json.RawMessage(eventBytes),
+	}
+	b, _ := json.Marshal(outer)
+	return string(b)
+}
+
+// ============================================================
+// Phase 67.1: ACK reaction tests
+// ============================================================
+
+// TestEventsHandler_Reactor_HappyPath: valid message → Reactor.Add called once
+// with (msg.Channel, msg.TS, "eyes") after SQS Send returns nil.
+func TestEventsHandler_Reactor_HappyPath(t *testing.T) {
+	now := time.Now()
+	h, sqs, _, _, _, _, reactor := newHandler(now)
+
+	body := buildMessageEventBody(t, "C01234567", "1714280400.001", "", "U_HUMAN", "hello sandbox")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+	resp := h.Handle(context.Background(), EventsRequest{
+		Body: body,
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+		},
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d (body=%s)", resp.StatusCode, resp.Body)
+	}
+	if len(sqs.sends) != 1 {
+		t.Fatalf("expected 1 SQS message, got %d", len(sqs.sends))
+	}
+
+	// Goroutine — poll for up to 1s.
+	var calls []reactorCall
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		calls = reactor.snapshot()
+		if len(calls) >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 reactor call, got %d", len(calls))
+	}
+	if calls[0].channel != "C01234567" || calls[0].ts != "1714280400.001" || calls[0].emoji != "eyes" {
+		t.Errorf("unexpected reactor call: %+v", calls[0])
+	}
+}
+
+// TestEventsHandler_Reactor_FailureDoesNotBlock: Reactor.Add error does NOT
+// surface to caller; SQS still has the message; response is still 200.
+func TestEventsHandler_Reactor_FailureDoesNotBlock(t *testing.T) {
+	now := time.Now()
+	h, sqs, _, _, _, _, reactor := newHandler(now)
+	reactor.err = errors.New("simulated missing_scope")
+
+	body := buildMessageEventBody(t, "C01234567", "1714280400.002", "", "U_HUMAN", "hello")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+	resp := h.Handle(context.Background(), EventsRequest{
+		Body: body,
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+		},
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200 even on reactor failure, got %d", resp.StatusCode)
+	}
+	if len(sqs.sends) != 1 {
+		t.Fatalf("expected SQS write to succeed despite reactor error, got %d sends", len(sqs.sends))
+	}
+	// Give the goroutine a chance to run so the test isn't flaky on race.
+	time.Sleep(50 * time.Millisecond)
+	if len(reactor.snapshot()) != 1 {
+		t.Errorf("expected reactor invoked exactly once even on error path")
+	}
+}
+
+// TestEventsHandler_Reactor_BotLoopSkips: a message matching isBotLoop
+// (bot_id set) returns at step 4, never reaches step 10 → Reactor not called.
+func TestEventsHandler_Reactor_BotLoopSkips(t *testing.T) {
+	now := time.Now()
+	h, sqs, _, _, _, _, reactor := newHandler(now)
+
+	// Build a bot-loop message: bot_id set.
+	body := buildBotMessageEventBody(t, "C01234567", "1714280400.003", "B_BOT", "I am a bot")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+	resp := h.Handle(context.Background(), EventsRequest{
+		Body: body,
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+		},
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if len(sqs.sends) != 0 {
+		t.Errorf("expected NO SQS send for bot-loop, got %d", len(sqs.sends))
+	}
+	// Give any (would-be-buggy) goroutine a chance to fire.
+	time.Sleep(50 * time.Millisecond)
+	if calls := reactor.snapshot(); len(calls) != 0 {
+		t.Errorf("expected NO reactor calls for bot-loop, got %d: %+v", len(calls), calls)
+	}
+}
+
+// TestEventsHandler_Reactor_NilReactorIsNoop: with Reactor=nil, Handle does
+// not panic and SQS still receives the message. Back-compat for tests that
+// don't wire a reactor.
+func TestEventsHandler_Reactor_NilReactorIsNoop(t *testing.T) {
+	now := time.Now()
+	h, sqs, _, _, _, _, _ := newHandler(now)
+	h.Reactor = nil // explicit nil
+
+	body := buildMessageEventBody(t, "C01234567", "1714280400.004", "", "U_HUMAN", "hi")
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+
+	// Must not panic.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Handle panicked with nil Reactor: %v", r)
+		}
+	}()
+
+	resp := h.Handle(context.Background(), EventsRequest{
+		Body: body,
+		Headers: map[string]string{
+			"x-slack-request-timestamp": tsHdr,
+			"x-slack-signature":         sigHdr,
+		},
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if len(sqs.sends) != 1 {
+		t.Errorf("expected 1 SQS send even without reactor, got %d", len(sqs.sends))
 	}
 }
