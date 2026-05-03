@@ -147,3 +147,41 @@ skipped: 0
 - **Recommended fix order:** Gap A (Stop hook → poller-driven reply) first — without it, no replies make it to Slack at all, so Gap B is invisible from the operator's seat. Gap B independent of A but easy to land alongside.
 - **Sandbox lrn2-16a1cff8 is left running** for re-test after fixes land. TTL is 8h. Channel C0B1FLZL0NQ retains the broken-state evidence.
 - **Stale resources (3) deferred** until after gap closure: 2 orphan SQS queues (lrn2-429624f2, lrn2-e218a532), 1 stale Slack channel (C0B0VSKMDBR). Tracked separately.
+
+## Gap A Closure Re-test
+
+After Plan 67-11 ships and `make build` + `km init --sidecars` propagates the new userdata template:
+
+### Re-test sequence
+
+1. `km destroy lrn2-16a1cff8 --remote --yes` (existing sandbox does NOT get the fix retroactively — userdata only runs at create time).
+2. Re-create with the same profile that produced lrn2-16a1cff8: `notifySlackInboundEnabled=true`, per-sandbox channel mode, alias "l9".
+3. Wait for ready announcement in the new `#sb-XXX` channel.
+4. **Re-run UAT Step 6:** post "What model are you?" in-thread.
+5. Within 30s, the in-thread reply should contain literal text matching `output.json .result` (e.g. "I'm Claude Opus 4.7..." — NOT "(no recent assistant text)").
+6. SSH to the sandbox via `km shell <new-id>` and confirm:
+   ```bash
+   ls /workspace/.km-agent/runs/
+   cat /workspace/.km-agent/runs/<latest>/output.json | jq -r .result
+   journalctl -u km-slack-inbound-poller --since "5 min ago" | grep -E "Posted reply|Starting"
+   ```
+   Expected log lines:
+   - `[km-slack-inbound-poller] Starting — queue=...` (with non-empty queue URL)
+   - `[km-slack-inbound-poller] Posted reply to Slack (thread=..., len=N)` after each turn
+   - NO `KM_SLACK_CHANNEL_ID/KM_SLACK_BRIDGE_URL unset, skipping Slack post` warnings (would indicate SSM fallback failed)
+7. **Re-run UAT Step 7** (session continuity): post "Repeat my last question verbatim". Reply should contain "what model are you" — confirms `--resume` continuity is also unblocked.
+8. **Re-run UAT Step 8** (new top-level thread): post a top-level message. Reply lands as a thread on that new message, not the old one.
+9. **Failure-mode regression check (optional):** force a Claude failure by posting an extreme prompt that times out (e.g. instruct it to wait 600s). Confirm:
+   - SQS message returns to queue (visible in `aws sqs get-queue-attributes`)
+   - `journalctl -u km-slack-inbound-poller` shows `WARN: agent run failed`
+   - NO Slack message appears in the thread (silence-on-failure is the documented Gap A trade-off; operator diagnoses via journalctl and `km agent list`, not via fake fallback messages)
+
+### Pass gate
+
+- Step 4-5 PASS: Slack reply body matches `.result` from output.json
+- Step 6 PASS: poller logs show `Starting — queue=...` (SSM fallback resolved channel/bridge URL) and `Posted reply` (not Stop hook driven)
+- Step 7 PASS: session continuity preserved
+- Step 8 PASS: new top-level threads work
+- Step 9 (if exercised) PASS: failure mode is silent in Slack but visible in journalctl
+
+If all PASS, mark gap A status = closed in this file's frontmatter (`status: closed-A` or update the Gaps entry's `status: failed` → `status: closed`). If any FAIL, file a fresh gap.
