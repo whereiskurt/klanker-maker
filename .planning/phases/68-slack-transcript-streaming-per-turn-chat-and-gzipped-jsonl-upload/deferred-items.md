@@ -178,3 +178,36 @@ Plan 68-12 actual scope (docs-only):
 - CLAUDE.md gained "Slack transcript streaming (Phase 68)" sub-section
 - 68-12-UAT.md created with 9 manual UAT scenarios
 - All scope artifacts present; no Go code touched.
+
+## Phase 68.1 candidate — Plan 10 transcript warning misses --remote path
+
+**Discovered:** 2026-05-03 during Phase 68 UAT Scenario 6.
+
+**What:** `printTranscriptWarning` is wired into `runCreate` (the local
+create dispatch) but NOT into `runCreateRemote`. Since `--remote` is the
+default for EC2 substrates, most operators will never see the audience-
+containment warning the plan promised.
+
+**Code:** `internal/app/cmd/create.go:490` calls `printTranscriptWarning`.
+`runCreateRemote` (line ~1768) compiles + uploads + dispatches but does
+not resolve the Slack channel locally and does not call the warning.
+
+**Why it slipped through:** Plan 10's three unit tests
+(`TestCreate_TranscriptWarning_PrintsWhenEnabled`,
+`TestCreate_TranscriptWarning_AbsentWhenDisabled`,
+`TestCreate_TranscriptWarning_IncludesMemberCount`) all PASS — they
+test the helper directly, not the dispatch wiring. So the gap was
+purely structural; no test would have caught it without an end-to-end
+`km create --remote` test, which is hard to run as a unit test.
+
+**Fix options:**
+1. Wire warning into `runCreateRemote` — would require resolving the
+   Slack channel + calling the API locally before dispatch (mirrors
+   ~15 lines from runCreate's Slack block at lines 467-492).
+2. Have the create-handler Lambda emit the warning into its
+   completion email to the operator. Less ergonomic (delayed delivery)
+   but matches where the channel actually gets provisioned.
+
+**Disposition:** Out of scope for Phase 68 UAT. File as Phase 68.1
+candidate. Functional correctness of the warning helper itself is
+verified by the 3 PASS unit tests.
