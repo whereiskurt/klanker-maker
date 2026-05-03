@@ -68,3 +68,25 @@ were re-confirmed as pre-existing — they fail identically on the pre-change tr
 template, and adding new IAM policies in `infra/modules/ec2spot/v1.0.0`) do not
 touch the KM_SLACK_CHANNEL_ID / KM_SLACK_BRIDGE_URL emission path. `go build ./...`
 clean after Plan 68-06 changes.
+
+## Plan 68-07 confirmation: pre-existing TestShellCmd_* failures unchanged
+
+While executing Plan 68-07 (`--transcript-stream` / `--no-transcript-stream` flag
+plumbing for `km agent run` and `km shell`), the three `TestShellCmd_StoppedSandbox`,
+`TestShellCmd_UnknownSubstrate`, and `TestShellCmd_MissingInstanceID` failures listed
+above were re-confirmed as pre-existing — they fail identically on the pre-change
+tree (verified via `git stash --keep-index … && go test … && git stash pop`). Plan
+68-07's changes (adding `TranscriptStream *bool` to `AgentRunOptions`, two new flags
+on each command, a `resolveTranscriptFlag` helper, and extending
+`buildNotifySendCommands` with a third `transcript` arg) do NOT touch the
+`runShell` error-propagation path that those tests assert on. The pre-existing
+`_ = runShell(…)` swallow at shell.go:209 is not a Plan 68-07 regression.
+
+Plan 68-07's actual scope is 100% green:
+- All 3 new `TestAgentRun_TranscriptStream*` tests PASS
+- All 3 new `TestShell_TranscriptStream*` tests PASS
+- All existing `TestBuildAgentShellCommands_Notify*`, `TestBuildNotifySendCommands_*`,
+  and `TestResolveNotifyFlags_*` tests still PASS (the existing
+  `buildNotifySendCommands` callers in `shell_notify_test.go` were updated to pass
+  `nil` as the new third arg — preserves Phase 62 semantics)
+- `go build ./...` clean

@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 7
+current_plan: 8
 status: in-progress
-stopped_at: Completed 68-06-PLAN.md
-last_updated: "2026-05-03T20:15:26.485Z"
+stopped_at: Completed 68-07-PLAN.md
+last_updated: "2026-05-03T20:22:02.178Z"
 last_activity: 2026-05-03
 progress:
   total_phases: 73
   completed_phases: 67
   total_plans: 242
-  completed_plans: 232
+  completed_plans: 233
   percent: 93
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 Phase: 68 (slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload) — Wave 0 stub seeding COMPLETE
 Plan: 1 of 13 in current phase (Plan 68-00 COMPLETE; 68-01..68-12 pending)
 Total Plans in Phase: 13
-Current Plan: 7
+Current Plan: 8
 Status: in-progress
 Last activity: 2026-05-03
 
@@ -274,6 +274,7 @@ Progress: [█████████░] 93%
 | Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P04 | 3min | 2 tasks | 2 files |
 | Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P05 | 30min | 4 tasks | 2 files |
 | Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P06 | 8min | 4 tasks | 6 files |
+| Phase 68 P07 | 22min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -778,6 +779,8 @@ Recent decisions affecting current work:
 - [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: ec2spot transcript IAM policies gated on var.artifacts_bucket and var.slack_stream_messages_table_name (count = ... > 0 ? 1 : 0); empty defaults preserve back-compat for callers that have not yet wired the inputs
 - [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Bridge transcript S3 read policy is broad (transcripts/*); per-sandbox prefix enforcement happens in handler.go envelope validation (application-layer security boundary), per RESEARCH Pitfall 4
 - [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: SlackStreamMessagesTableName follows Phase 67 SlackThreadsTableName precedent: env var KM_SLACK_STREAM_TABLE with default km-slack-stream-messages; Plan 10 propagates Config.GetSlackStreamMessagesTableName() into the env var via km create
+- [Phase 68]: Plan 68-07: Mirrored Phase 62 (HOOK-04) tri-state flag pattern for --transcript-stream / --no-transcript-stream on km agent run + km shell
+- [Phase 68]: Plan 68-07: Extended buildNotifySendCommands to 3-arg (perm, idle, transcript) rather than introducing a parallel helper — keeps SSM SendCommand single-shot
 
 ### Roadmap Evolution
 
@@ -866,6 +869,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-03T20:15:26.479Z
-Stopped at: Completed 68-06-PLAN.md
+Last session: 2026-05-03T20:22:02.173Z
+Stopped at: Completed 68-07-PLAN.md
 Resume file: None
