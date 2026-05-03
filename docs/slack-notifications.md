@@ -456,6 +456,7 @@ becomes a bidirectional chat surface.
 - Slack App has these additional scopes (add via Slack App config → OAuth & Permissions):
   - `channels:history` — read messages in public channels
   - `groups:history` — read messages in private channels
+  - `reactions:write` — post the 👀 ACK reaction on accepted messages (Phase 67.1)
   After adding scopes, **reinstall the app** to your workspace.
 - Slack signing secret captured. Get it from Slack App config → **Basic
   Information → App Credentials → Signing Secret**.
@@ -511,6 +512,34 @@ in v1.
 - `km destroy` drains in-flight turns up to 30s, posts a final "destroyed"
   message, deletes the SQS queue, and archives the channel.
 
+### ACK reaction (Phase 67.1)
+
+When the bridge accepts an inbound message and successfully writes it to the
+sandbox's SQS queue, it adds a 👀 emoji reaction to the originating Slack
+message within ~1 second. This gives the user immediate visual confirmation
+that the sandbox saw their message — even before the agent boots, before any
+paused-sandbox hint posts, before any reply.
+
+The 👀 means "we accepted this for processing" — not just "we received the
+HTTP request". If the SQS write fails, no reaction is added (and the
+operator sees the failure in CloudWatch logs).
+
+**Required scope:** `reactions:write` (Bot Token Scope, added via Slack App
+config → OAuth & Permissions; reinstall the app after adding).
+
+**Bridge env var:** `KM_SLACK_ACK_EMOJI` (default `eyes`). Set on the Lambda
+to override the emoji workspace-wide. Always omit the surrounding colons
+(`hourglass_flowing_sand`, NOT `:hourglass_flowing_sand:`).
+
+**Deploying:** `make build && km init --lambdas`. Existing inbound-enabled
+sandboxes pick up the change automatically — no `km destroy/create` needed
+because this is a bridge-only change.
+
+**Failure modes** (all logged at WARN, none block delivery):
+- Missing `reactions:write` scope → `events: reaction failed err=missing_scope`. Add scope and reinstall app.
+- Bot kicked from channel → `events: reaction failed err=channel_not_found`. Re-invite the bot.
+- Slack delivered the same event twice (cold-start replay) → `already_reacted`. Treated as idempotent success — NOT logged at WARN.
+
 ### Inspecting
 
 ```bash
@@ -536,6 +565,7 @@ km doctor                    # three new checks: queue exists, stale queues,
 | `km destroy` hangs | Drain timeout exceeded — agent run still active at 30s | Drain is bounded; `km destroy` proceeds anyway. Check `journalctl` for "drain: agent-run still active" |
 | Claude reply lands on the wrong (previous) message instead of the latest | FIFO ordering vs `KM_SLACK_THREAD_TS` re-use across rapid back-to-back posts | Open: tracked as gap G15 in `.planning/phases/67-.../UAT-2-HANDOFF.md`. Workaround: pause briefly between rapid posts; investigate via `journalctl -u km-slack-inbound-poller \| grep THREAD_TS`. |
 | Fresh `--remote` create needs `claude login` inside the sandbox before inbound replies work | Local rsync of `~/.claude` does not apply to remote creates; OAuth credentials don't ride the wire | Open: tracked as gap G12. Workaround: `km shell <id>` once after create, run `claude login`, retry the Slack message. |
+| No 👀 reaction appears within 1-2s of a Slack post (but Claude still replies) | Bot is missing `reactions:write` scope, OR `KM_SLACK_ACK_EMOJI` is set to an invalid emoji name (with colons, or a name Slack does not recognize) | `km doctor` will FAIL with `reactions:write` listed missing → add scope in Slack App config → OAuth & Permissions → reinstall app → `make build && km init --lambdas`. For invalid emoji, check `KM_SLACK_ACK_EMOJI` does NOT have surrounding colons (`eyes` not `:eyes:`). No token rotation needed — bot token is unchanged by reinstall. |
 
 ### How replies flow (validated end-to-end)
 

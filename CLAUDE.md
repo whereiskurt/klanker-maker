@@ -210,7 +210,17 @@ km slack rotate-signing-secret --signing-secret <new-secret>
 
 - `slack_inbound_queue_exists` — every inbound-enabled sandbox has a healthy queue
 - `slack_inbound_stale_queues` — orphan SQS queues with no DDB sandbox row
-- `slack_app_events_subscription` — bot has channels:history + groups:history scopes
+- `slack_app_events_subscription` — bot has channels:history + groups:history + reactions:write scopes
+
+#### ACK reaction (Phase 67.1)
+
+When the bridge enqueues an inbound message to SQS, it adds a 👀 reaction
+to the originating Slack message via `reactions.add` (fire-and-forget,
+~1s round-trip). Bot needs `reactions:write` scope (added via Slack App
+config → OAuth & Permissions → reinstall app). Bridge-global emoji is
+configurable via `KM_SLACK_ACK_EMOJI` Lambda env var (default `eyes`,
+no colons). Bridge-only change — deploy with `make build && km init --lambdas`;
+no sandbox redeploy needed. See `docs/slack-notifications.md` § ACK reaction.
 
 See `docs/slack-notifications.md` for the full operator guide including setup steps, troubleshooting, and security model.
 

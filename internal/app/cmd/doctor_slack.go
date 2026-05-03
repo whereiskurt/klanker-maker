@@ -389,7 +389,7 @@ func checkSlackAppEventsScopes(
 			Name:        name,
 			Status:      CheckError,
 			Message:     fmt.Sprintf("Slack App missing required scopes for inbound: %s", strings.Join(missing, ", ")),
-			Remediation: "Add scopes via Slack App config → OAuth & Permissions → Bot Token Scopes, then run 'km slack rotate-token' to refresh the SSM-cached token",
+			Remediation: "Add scopes via Slack App config → OAuth & Permissions → Bot Token Scopes, then reinstall the app to your workspace (bot token is unchanged by reinstall — no 'km slack rotate-token' needed). Run 'km doctor' again to verify.",
 		}
 	}
 	return CheckResult{
