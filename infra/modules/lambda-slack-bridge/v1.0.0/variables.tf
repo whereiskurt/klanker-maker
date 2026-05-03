@@ -75,3 +75,13 @@ variable "signing_secret_path" {
   type        = string
   default     = "/km/slack/signing-secret"
 }
+
+# ============================================================
+# Phase 67.1 — ACK reaction emoji (👀 by default)
+# ============================================================
+
+variable "slack_ack_emoji" {
+  description = "Emoji NAME (without colons, e.g. \"eyes\" not \":eyes:\") used for the ACK reaction the bridge posts after a successful SQS enqueue of an inbound Slack message. Defaults to \"eyes\" (👀). Override to use a different emoji workspace-wide. Bot must have reactions:write scope."
+  type        = string
+  default     = "eyes"
+}

@@ -253,6 +253,8 @@ resource "aws_lambda_function" "slack_bridge" {
       KM_SIGNING_SECRET_PATH = var.signing_secret_path
       KM_SLACK_THREADS_TABLE = var.slack_threads_table_name
       KM_RESOURCE_PREFIX     = var.resource_prefix
+      # Phase 67.1 addition — ACK reaction emoji
+      KM_SLACK_ACK_EMOJI = var.slack_ack_emoji
     }
   }
 
