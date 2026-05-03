@@ -526,15 +526,56 @@ km doctor                    # three new checks: queue exists, stale queues,
 |---|---|---|
 | Slack message disappears, no Claude reply | Bot doesn't have `channels:history` scope | Add scope, reinstall app, run `km slack rotate-token` |
 | `url_verification` failed in Slack App config | Signing secret not configured | `km slack init --force --signing-secret <value>` |
-| Duplicate Claude responses | VisibilityTimeout race | Already mitigated (poller extends to 300s); if persists, check `journalctl -u km-slack-inbound-poller` |
+| Duplicate Claude responses (one real reply + one `(no recent assistant text)`) | Stop hook posting alongside the poller. The Stop hook gates on `KM_SLACK_THREAD_TS` (set by the poller BEFORE Claude launches); if you see this, the gate is broken or the env file is not loading | Confirm `/etc/profile.d/km-notify-env.sh` is sourced into Claude's bash (`echo $KM_SLACK_THREAD_TS` mid-turn). Older builds gated on `KM_SLACK_INBOUND_REPLY_HANDLED` which is set AFTER Claude exits — `make build && km init --sidecars && km destroy + km create` to pick up the fix. |
+| `(no recent assistant text)` appears in Slack instead of Claude's actual reply | Same root cause as above — Stop hook running its fallback because the poller-driven reply was suppressed by an old gate | Same fix as above |
+| Duplicate Claude responses (two real replies) | VisibilityTimeout race | Already mitigated (poller extends to 300s); if it persists, check `journalctl -u km-slack-inbound-poller` |
+| Poller logs `AWS_REGION not set` and `km-slack post` returns no usable error | systemd's `EnvironmentFile=` directive does NOT accept the shell-style `export VAR=val` lines used by `/etc/profile.d/*.sh`; every entry is silently rejected | The poller writes a parallel systemd-format file `/etc/km/notify.env` (no `export` prefix) and the systemd unit's `EnvironmentFile=` points there. Confirm the file exists on the sandbox and `systemctl show km-slack-inbound-poller -p Environment` lists `AWS_REGION`/`KM_SLACK_*`. If missing, the userdata template is stale — `km destroy + km create` after `make build && km init --sidecars`. |
+| Channel-join / channel-topic / pinned-item / other Slack system events trigger Claude turns and burn Bedrock spend | Old deny-list `isBotLoop` filter in the bridge | Bridge now uses allow-list semantics — only `subtype == ""` (real human turn) or `thread_broadcast` reaches SQS. Redeploy the bridge: `cd infra/live/management/lambda-slack-bridge && terragrunt apply` (or wait for the next `km init` cycle). |
+| Channel-join from Slack Connect invite acceptance triggers a Claude turn | Same as above | Same fix |
 | Claude doesn't continue session across turns | `--resume` interaction with session map | Check `~/.claude/projects/<cwd>/` exists on sandbox; check session_id appears in km-slack-threads DDB row |
 | `km destroy` hangs | Drain timeout exceeded — agent run still active at 30s | Drain is bounded; `km destroy` proceeds anyway. Check `journalctl` for "drain: agent-run still active" |
+| Claude reply lands on the wrong (previous) message instead of the latest | FIFO ordering vs `KM_SLACK_THREAD_TS` re-use across rapid back-to-back posts | Open: tracked as gap G15 in `.planning/phases/67-.../UAT-2-HANDOFF.md`. Workaround: pause briefly between rapid posts; investigate via `journalctl -u km-slack-inbound-poller \| grep THREAD_TS`. |
+| Fresh `--remote` create needs `claude login` inside the sandbox before inbound replies work | Local rsync of `~/.claude` does not apply to remote creates; OAuth credentials don't ride the wire | Open: tracked as gap G12. Workaround: `km shell <id>` once after create, run `claude login`, retry the Slack message. |
+
+### How replies flow (validated end-to-end)
+
+```
+Slack post → Bridge /events (HMAC-verified, allow-list filtered) →
+SQS FIFO {prefix}-slack-inbound-{sandbox-id}.fifo →
+sandbox systemd poller (km-slack-inbound-poller.service) →
+poller exports KM_SLACK_THREAD_TS into Claude's env →
+claude -p (Bedrock or OAuth) →
+output.json .result captured by poller →
+poller calls /opt/km/bin/km-slack post --thread $KM_SLACK_THREAD_TS →
+SQS DeleteMessage (only after successful post) →
+Bridge re-issues chat.postMessage → reply lands in same Slack thread
+```
+
+- The **Stop hook** is gated on `KM_SLACK_THREAD_TS` (which the poller exports
+  BEFORE launching Claude). When the poller is driving the turn, the Stop
+  hook's Slack branch is suppressed — exactly one bot post per turn.
+- Failure mode is **silent in Slack** — if Claude exits non-zero or `.result`
+  is empty, no fallback string is posted; the SQS message returns to the
+  queue and SQS redelivers. Operators diagnose via
+  `journalctl -u km-slack-inbound-poller` and `km agent list <sandbox>`.
 
 ### Security model
 
 - **Signing secret** verifies that incoming `/events` requests are from Slack
   (HMAC-SHA256 with a 5-minute timestamp window).
-- **Bot user_id filter** drops self-messages (no infinite loops).
+- **Allow-list subtype filter** in the bridge: only `subtype == ""` (real
+  human turn) and `subtype == "thread_broadcast"` reach SQS. Every other
+  subtype (`channel_join`, `channel_leave`, `channel_topic`, `pinned_item`,
+  `bot_message`, `message_changed`, `me_message`, etc.) is dropped at the
+  bridge with a debug log line `events: subtype filter dropped subtype=...`.
+  Forensic CloudWatch query:
+  ```
+  fields @timestamp, subtype, channel
+  | filter @message like /subtype filter dropped/
+  | stats count() by subtype
+  ```
+- **Bot user_id filter** is the second-line defence under the allow-list
+  (drops self-messages even if a future Slack subtype slips through).
 - **Per-sandbox IAM**: each sandbox can only `ReceiveMessage` from its own
   queue ARN.
 - **Cross-sandbox isolation**: bridge's `sqs:SendMessage` permission is

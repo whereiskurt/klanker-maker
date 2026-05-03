@@ -165,8 +165,16 @@ Incompatible with `notifySlackChannelOverride`.
 | Variable | Source |
 |---|---|
 | `KM_SLACK_INBOUND_QUEUE_URL` | poller reads `/sandbox/{id}/slack-inbound-queue-url` from SSM Parameter Store at boot when the env var is empty (an org-level SCP blocks SSM SendCommand for the application account, so the value cannot be injected directly into the env file) |
-| `KM_SLACK_THREAD_TS` | exported by poller before each `km agent run` (passed via `--thread` to km-slack post) |
+| `KM_SLACK_THREAD_TS` | exported by poller into Claude's env BEFORE `claude -p` launches (passed via `--thread` to km-slack post). The Stop hook gates its Slack branch on this var — when set, the poller is driving the reply and the Stop hook stays out of the way. |
 | `KM_SLACK_THREADS_TABLE` | DDB table name for session-id persistence, injected by km create |
+
+**systemd EnvironmentFile gotcha:** `systemd` does NOT accept the shell-style
+`export VAR=val` lines in `/etc/profile.d/*.sh` — it silently rejects them.
+The userdata template writes a parallel `/etc/km/notify.env` (no `export`
+prefix, systemd-format) and `km-slack-inbound-poller.service` points
+`EnvironmentFile=/etc/km/notify.env`. Both files are kept in sync at
+cloud-init time; `/etc/profile.d/km-notify-env.sh` remains the source of
+truth for shell sessions and Claude's bash env.
 
 **SSM parameters added in Phase 67:**
 
