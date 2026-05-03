@@ -11,8 +11,10 @@ package cmd
 //     SQSClient interface — mockable in tests without a real AWS connection).
 //   - DDB attribute update is injected as a func — matches the pattern used by
 //     create_slack_test.go so no real DynamoDB connection is required in tests.
-//   - SSM env injection is injected as a func — reuses the SSMRunner interface
-//     already established by Phase 63's injectSlackEnvIntoSandbox.
+//   - Queue URL is published to SSM Parameter Store
+//     (/sandbox/{id}/slack-inbound-queue-url). The sandbox poller reads it at
+//     startup with a retry/backoff fallback. SSM SendCommand is intentionally
+//     avoided because an org-level SCP denies it for the application account.
 //   - Rollback is explicit and always best-effort: each cleanup step is
 //     attempted even when a prior cleanup step fails.
 
@@ -47,13 +49,11 @@ type slackInboundDeps struct {
 	// DynamoDB row. Signature matches the internal DynamoDB UpdateItem pattern
 	// used throughout sandbox_dynamo.go.
 	UpdateSandboxAttr func(ctx context.Context, sandboxID, attr, value string) error
-	// InjectEnvVar appends an export line to /etc/profile.d/km-notify-env.sh on
-	// the running sandbox via SSM SendCommand. Mirrors the Phase 63 Step 11d
-	// injection path (injectSlackEnvIntoSandbox).
-	InjectEnvVar func(ctx context.Context, instanceID, name, value string) error
-	// InstanceID is the EC2 instance ID of the running sandbox, needed by
-	// InjectEnvVar. Empty string is valid when InjectEnvVar is a no-op mock.
-	InstanceID string
+	// PutSSMParameter writes a String SSM Parameter Store entry. The sandbox
+	// poller reads /sandbox/{id}/slack-inbound-queue-url at startup with a
+	// retry/backoff fallback when the env var is empty. SSM SendCommand cannot
+	// be used because an org-level SCP denies it for the application account.
+	PutSSMParameter func(ctx context.Context, name, value string) error
 
 	// Phase 67-07: ready-announcement fields.
 	// PostOperatorSigned posts a message to the given Slack channel via the
@@ -122,19 +122,22 @@ func provisionSlackInboundQueue(ctx context.Context, deps slackInboundDeps) (que
 		return "", fmt.Errorf("persist slack_inbound_queue_url to DDB: %w", updateErr)
 	}
 
-	// Inject KM_SLACK_INBOUND_QUEUE_URL into sandbox env file via SSM SendCommand.
-	// This mirrors the Phase 63 Step 11d injection for KM_SLACK_CHANNEL_ID.
-	if injectErr := deps.InjectEnvVar(ctx, deps.InstanceID, "KM_SLACK_INBOUND_QUEUE_URL", queueURL); injectErr != nil {
+	// Publish queue URL to SSM Parameter Store. The sandbox poller reads
+	// /sandbox/{id}/slack-inbound-queue-url at startup with a retry/backoff
+	// fallback when KM_SLACK_INBOUND_QUEUE_URL is empty. SSM SendCommand is
+	// not used because an org-level SCP denies it for the application account.
+	paramName := "/sandbox/" + deps.SandboxID + "/slack-inbound-queue-url"
+	if putErr := deps.PutSSMParameter(ctx, paramName, queueURL); putErr != nil {
 		// Best-effort queue cleanup. The DDB slack_inbound_queue_url attribute
 		// is left in place — km destroy's stale-queue check and km doctor will
 		// reconcile it. Documented in CONTEXT.md edge cases.
 		if delErr := awspkg.DeleteSlackInboundQueue(ctx, deps.SQS, queueURL); delErr != nil {
 			log.Warn().Err(delErr).Str("queue_url", queueURL).
-				Msg("rollback: failed to delete SQS queue after SSM inject failure")
+				Msg("rollback: failed to delete SQS queue after SSM Parameter Store write failure")
 		}
-		return "", fmt.Errorf("inject KM_SLACK_INBOUND_QUEUE_URL env var: %w", injectErr)
+		return "", fmt.Errorf("write SSM parameter %s: %w", paramName, putErr)
 	}
-	fmt.Fprintf(os.Stderr, "  ✓ Slack: injected KM_SLACK_INBOUND_QUEUE_URL into sandbox env\n")
+	fmt.Fprintf(os.Stderr, "  ✓ Slack: wrote queue URL to SSM Parameter Store %s\n", paramName)
 
 	return queueURL, nil
 }
@@ -223,27 +226,6 @@ func postReadyAnnouncement(ctx context.Context, deps slackInboundDeps, channelID
 		}
 	}
 	return nil
-}
-
-// injectSlackInboundQueueURLIntoSandbox appends the KM_SLACK_INBOUND_QUEUE_URL
-// export line to /etc/profile.d/km-notify-env.sh on the sandbox. Idempotent:
-// uses grep/sed to avoid duplicate lines on re-runs.
-//
-// This is a concrete implementation of the InjectEnvVar func signature used in
-// slackInboundDeps. Production callers pass this via:
-//
-//	deps.InjectEnvVar = makeInjectEnvVar(runner)
-//
-// where runner is the productionSSMRunner from create.go.
-func injectSlackInboundQueueURLIntoSandbox(ctx context.Context, runner SSMRunner, instanceID, queueURL string) error {
-	script := fmt.Sprintf(`ENV_FILE=/etc/profile.d/km-notify-env.sh
-mkdir -p /etc/profile.d
-touch "$ENV_FILE"
-grep -q '^export KM_SLACK_INBOUND_QUEUE_URL=' "$ENV_FILE" \
-  && sed -i 's|^export KM_SLACK_INBOUND_QUEUE_URL=.*|export KM_SLACK_INBOUND_QUEUE_URL="%s"|' "$ENV_FILE" \
-  || echo 'export KM_SLACK_INBOUND_QUEUE_URL="%s"' >> "$ENV_FILE"
-`, queueURL, queueURL)
-	return runner.RunShell(ctx, instanceID, script)
 }
 
 // makePostOperatorSigned returns a PostOperatorSigned callback that loads the

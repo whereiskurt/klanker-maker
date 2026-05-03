@@ -62,6 +62,11 @@ type destroyInboundDeps struct {
 	// Returns an error if the deadline elapsed before idle.
 	// nil skips this step.
 	WaitForAgentRunIdle func(ctx context.Context, instanceID string, deadline time.Time) error
+
+	// DeleteSSMParameter removes the SSM Parameter Store entry that holds the
+	// inbound queue URL (km create writes /sandbox/{id}/slack-inbound-queue-url
+	// when SSM SendCommand is denied by SCP). nil skips this step.
+	DeleteSSMParameter func(ctx context.Context, name string) error
 }
 
 // drainSlackInbound is the orchestrator for km destroy's Slack-inbound path.
@@ -116,6 +121,16 @@ func drainSlackInbound(ctx context.Context, deps destroyInboundDeps) {
 	if deps.ChannelID != "" && deps.DDB != nil && deps.SlackThreadsTableName != "" {
 		if err := cleanupSlackThreads(ctx, deps); err != nil {
 			fmt.Fprintf(os.Stderr, "  ⚠ Slack inbound drain: threads cleanup failed: %v\n", err)
+		}
+	}
+
+	// Step 5: delete the SSM Parameter Store entry holding the queue URL.
+	if deps.DeleteSSMParameter != nil && deps.SandboxID != "" {
+		paramName := "/sandbox/" + deps.SandboxID + "/slack-inbound-queue-url"
+		if err := deps.DeleteSSMParameter(ctx, paramName); err != nil {
+			fmt.Fprintf(os.Stderr, "  ⚠ Slack inbound drain: SSM parameter delete failed: %v (continuing)\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "  ✓ Slack inbound drain: SSM parameter deleted\n")
 		}
 	}
 }

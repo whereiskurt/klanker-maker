@@ -164,7 +164,7 @@ Incompatible with `notifySlackChannelOverride`.
 
 | Variable | Source |
 |---|---|
-| `KM_SLACK_INBOUND_QUEUE_URL` | runtime, injected by km create |
+| `KM_SLACK_INBOUND_QUEUE_URL` | poller reads `/sandbox/{id}/slack-inbound-queue-url` from SSM Parameter Store at boot when the env var is empty (an org-level SCP blocks SSM SendCommand for the application account, so the value cannot be injected directly into the env file) |
 | `KM_SLACK_THREAD_TS` | exported by poller before each `km agent run` (passed via `--thread` to km-slack post) |
 | `KM_SLACK_THREADS_TABLE` | DDB table name for session-id persistence, injected by km create |
 
@@ -173,6 +173,7 @@ Incompatible with `notifySlackChannelOverride`.
 | Parameter | Purpose |
 |---|---|
 | `/km/slack/signing-secret` (SecureString) | Slack App signing secret for HMAC-SHA256 verification of /events webhooks |
+| `/sandbox/{sandbox-id}/slack-inbound-queue-url` (String) | Per-sandbox SQS FIFO queue URL written by `km create` and read by the sandbox-side poller. Deleted by `km destroy`. |
 
 **DynamoDB tables added in Phase 67:**
 

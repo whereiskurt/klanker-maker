@@ -847,13 +847,6 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// FATAL: failure rolls back the queue AND archives the Slack channel — km create
 	// aborts (contrast with Step 11d which is non-fatal).
 	if resolvedProfile.Spec.CLI != nil && resolvedProfile.Spec.CLI.NotifySlackInboundEnabled {
-		// Resolve EC2 instance ID from Terraform outputs (same path as Step 11d).
-		step11eOutputs, step11eOutErr := runner.Output(ctx, sandboxDir)
-		var step11eInstanceID string
-		if step11eOutErr == nil {
-			step11eInstanceID = extractOutputInstanceID(step11eOutputs)
-		}
-
 		sandboxDynamoClient := dynamodbpkg.NewFromConfig(awsCfg)
 		step11eTableName := cfg.SandboxTableName
 		if step11eTableName == "" {
@@ -881,7 +874,6 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			return fmt.Errorf("km create: slack inbound provisioning (SQS client): %w", sqsClientErr)
 		}
 
-		ssmRunnerFor11e := &productionSSMRunner{client: ssm.NewFromConfig(awsCfg)}
 		ssmClientFor11e := ssm.NewFromConfig(awsCfg)
 		ssmStoreFor11e := &productionSSMParamStore{client: ssmClientFor11e}
 		// Fetch bridge URL once for the ready-announcement callback below.
@@ -890,13 +882,22 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			Profile:   resolvedProfile,
 			Cfg:       cfg,
 			SandboxID: sandboxID,
-			InstanceID: step11eInstanceID,
 			SQS:       sqsClientForInbound,
 			UpdateSandboxAttr: func(ictx context.Context, sid, attr, val string) error {
 				return awspkg.UpdateSandboxStringAttrDynamo(ictx, sandboxDynamoClient, step11eTableName, sid, attr, val)
 			},
-			InjectEnvVar: func(ictx context.Context, iid, name, val string) error {
-				return injectSlackInboundQueueURLIntoSandbox(ictx, ssmRunnerFor11e, iid, val)
+			// Publish queue URL to SSM Parameter Store. The sandbox poller reads it
+			// at startup with retry/backoff. SSM SendCommand is denied by an
+			// org-level SCP for the application account, so we cannot inject the
+			// value directly into the sandbox env file from this side.
+			PutSSMParameter: func(ictx context.Context, name, val string) error {
+				_, err := ssmClientFor11e.PutParameter(ictx, &ssm.PutParameterInput{
+					Name:      aws.String(name),
+					Value:     aws.String(val),
+					Type:      ssmtypes.ParameterTypeString,
+					Overwrite: aws.Bool(true),
+				})
+				return err
 			},
 			// Phase 67-07: ready announcement callbacks.
 			PostOperatorSigned: makePostOperatorSigned(ssmClientFor11e, bridgeURLFor11e),

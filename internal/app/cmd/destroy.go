@@ -490,6 +490,18 @@ locals {
 						SlackThreadsTableName: cfg.GetSlackThreadsTableName(),
 						StopPoller:            makeStopPoller(ssmClientForDrain),
 						WaitForAgentRunIdle:   makeWaitForAgentRunIdle(ssmClientForDrain),
+						DeleteSSMParameter: func(dctx context.Context, name string) error {
+							_, err := ssmClientForDrain.DeleteParameter(dctx, &ssm.DeleteParameterInput{
+								Name: aws.String(name),
+							})
+							if err != nil {
+								var notFound *ssmtypes.ParameterNotFound
+								if errors.As(err, &notFound) {
+									return nil
+								}
+							}
+							return err
+						},
 					}
 					drainSlackInbound(ctx, drainDeps)
 				}

@@ -875,8 +875,29 @@ SANDBOX_ID="${KM_SANDBOX_ID:-}"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 THREADS_TABLE="${KM_SLACK_THREADS_TABLE:-km-slack-threads}"
 
-[ -z "$QUEUE_URL" ] && echo "[km-slack-inbound-poller] KM_SLACK_INBOUND_QUEUE_URL not set, exiting" && exit 0
 [ -z "$SANDBOX_ID" ] && echo "[km-slack-inbound-poller] KM_SANDBOX_ID not set, exiting" && exit 0
+
+# Fall back to SSM Parameter Store when the env var is empty. km create writes
+# /sandbox/${SANDBOX_ID}/slack-inbound-queue-url after the SQS queue is created
+# (an org-level SCP blocks SSM SendCommand, so the value cannot be injected
+# directly into the env file). The poller starts at boot and may race the
+# create-handler write — retry with backoff for up to ~5 minutes.
+PARAM_NAME="/sandbox/${SANDBOX_ID}/slack-inbound-queue-url"
+if [ -z "$QUEUE_URL" ]; then
+  echo "[km-slack-inbound-poller] KM_SLACK_INBOUND_QUEUE_URL empty, reading $PARAM_NAME from SSM"
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    QUEUE_URL=$(aws ssm get-parameter \
+      --name "$PARAM_NAME" \
+      --region "$REGION" \
+      --query 'Parameter.Value' \
+      --output text 2>/dev/null || true)
+    [ -n "$QUEUE_URL" ] && [ "$QUEUE_URL" != "None" ] && break
+    QUEUE_URL=""
+    echo "[km-slack-inbound-poller] $PARAM_NAME not yet available (attempt $attempt/10), sleeping 30s"
+    sleep 30
+  done
+fi
+[ -z "$QUEUE_URL" ] && echo "[km-slack-inbound-poller] queue URL unavailable after retries, exiting" && exit 0
 
 echo "[km-slack-inbound-poller] Starting — queue=$QUEUE_URL table=$THREADS_TABLE region=$REGION"
 

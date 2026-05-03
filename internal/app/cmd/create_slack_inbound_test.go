@@ -77,10 +77,10 @@ func (f *fakeSQS) ListQueues(_ context.Context, _ *sqs.ListQueuesInput, _ ...fun
 // Test helpers
 // ============================================================
 
-// testState captures DDB attribute writes and SSM env injections.
+// testState captures DDB attribute writes and SSM Parameter Store writes.
 type testState struct {
-	ddbAttrs map[string]string // attr → value
-	ssmEnv   map[string]string // env var name → value
+	ddbAttrs  map[string]string // attr → value
+	ssmParams map[string]string // parameter name → value
 }
 
 // makeDeps builds a slackInboundDeps wired to the given fakeSQS and error
@@ -90,8 +90,8 @@ func makeDeps(t *testing.T, inboundEnabled bool, fSQS *fakeSQS,
 	t.Helper()
 
 	state := &testState{
-		ddbAttrs: make(map[string]string),
-		ssmEnv:   make(map[string]string),
+		ddbAttrs:  make(map[string]string),
+		ssmParams: make(map[string]string),
 	}
 
 	t.Helper()
@@ -102,11 +102,10 @@ func makeDeps(t *testing.T, inboundEnabled bool, fSQS *fakeSQS,
 	p.Spec.CLI = cli
 
 	return slackInboundDeps{
-		Profile:    p,
-		Cfg:        &config.Config{ResourcePrefix: "km"},
-		SandboxID:  "sb-abc123",
-		InstanceID: "i-0abc1234def567890",
-		SQS:        fSQS,
+		Profile:   p,
+		Cfg:       &config.Config{ResourcePrefix: "km"},
+		SandboxID: "sb-abc123",
+		SQS:       fSQS,
 		UpdateSandboxAttr: func(_ context.Context, _, attr, val string) error {
 			if ddbErr != nil {
 				return ddbErr
@@ -114,11 +113,11 @@ func makeDeps(t *testing.T, inboundEnabled bool, fSQS *fakeSQS,
 			state.ddbAttrs[attr] = val
 			return nil
 		},
-		InjectEnvVar: func(_ context.Context, _, name, val string) error {
+		PutSSMParameter: func(_ context.Context, name, val string) error {
 			if ssmErr != nil {
 				return ssmErr
 			}
-			state.ssmEnv[name] = val
+			state.ssmParams[name] = val
 			return nil
 		},
 	}, state
@@ -132,7 +131,7 @@ func makeDeps(t *testing.T, inboundEnabled bool, fSQS *fakeSQS,
 // - profile has notifySlackInboundEnabled=true
 // - CreateQueue is called exactly once with correct FIFO attributes
 // - DDB attr slack_inbound_queue_url is written with the returned URL
-// - SSM env var KM_SLACK_INBOUND_QUEUE_URL is injected with the same URL
+// - SSM parameter /sandbox/{id}/slack-inbound-queue-url is written with the same URL
 // - provisionSlackInboundQueue returns the non-empty queue URL
 func TestCreate_SlackInboundQueueProvisioned(t *testing.T) {
 	fs := &fakeSQS{}
@@ -170,9 +169,12 @@ func TestCreate_SlackInboundQueueProvisioned(t *testing.T) {
 	if got := state.ddbAttrs["slack_inbound_queue_url"]; got != url {
 		t.Fatalf("DDB slack_inbound_queue_url: got %q, want %q", got, url)
 	}
-	// SSM must have the env var injected
-	if got := state.ssmEnv["KM_SLACK_INBOUND_QUEUE_URL"]; got != url {
-		t.Fatalf("SSM KM_SLACK_INBOUND_QUEUE_URL: got %q, want %q", got, url)
+	// SSM Parameter Store must have the queue URL written under the
+	// /sandbox/{id}/slack-inbound-queue-url path so the sandbox poller can
+	// read it on boot.
+	expectedParam := "/sandbox/sb-abc123/slack-inbound-queue-url"
+	if got := state.ssmParams[expectedParam]; got != url {
+		t.Fatalf("SSM param %s: got %q, want %q", expectedParam, got, url)
 	}
 }
 
@@ -198,25 +200,26 @@ func TestCreate_SlackInboundEnvVarInjection(t *testing.T) {
 	if len(state.ddbAttrs) != 0 {
 		t.Fatalf("inbound off: expected 0 DDB writes, got %v", state.ddbAttrs)
 	}
-	if len(state.ssmEnv) != 0 {
-		t.Fatalf("inbound off: expected 0 SSM injections, got %v", state.ssmEnv)
+	if len(state.ssmParams) != 0 {
+		t.Fatalf("inbound off: expected 0 SSM parameter writes, got %v", state.ssmParams)
 	}
 }
 
-// TestCreate_SlackInboundQueueRollback verifies SSM inject failure triggers rollback:
+// TestCreate_SlackInboundQueueRollback verifies SSM Parameter Store write
+// failure triggers rollback:
 // - CreateQueue succeeds (1 call)
 // - DDB UpdateAttr succeeds
-// - InjectEnvVar fails
+// - PutSSMParameter fails
 // - DeleteQueue is called exactly once (best-effort rollback)
 // - provisionSlackInboundQueue returns an error with empty URL
 func TestCreate_SlackInboundQueueRollback(t *testing.T) {
 	fs := &fakeSQS{}
-	ssmErr := errors.New("ssm send-command timeout")
+	ssmErr := errors.New("ssm put-parameter timeout")
 	deps, _ := makeDeps(t, true, fs, nil, ssmErr)
 
 	url, err := provisionSlackInboundQueue(context.Background(), deps)
 	if err == nil {
-		t.Fatal("expected error from SSM injection failure")
+		t.Fatal("expected error from SSM Parameter Store write failure")
 	}
 	if url != "" {
 		t.Fatalf("expected empty URL on failure, got %q", url)
