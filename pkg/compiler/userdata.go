@@ -407,13 +407,7 @@ esac
 # 5. Build body file (km-send requires --body <file>, not stdin, per CLAUDE.md
 #    — OpenSSL 3.5+ signing reliability).
 body_file=$(mktemp /tmp/km-notify-body.XXXXXX)
-{
-  echo "$body_text"
-  echo
-  echo "---"
-  echo "Attach:  km agent attach $sandbox_id"
-  echo "Results: km agent results $sandbox_id"
-} > "$body_file"
+echo "$body_text" > "$body_file"
 
 # 6. Multi-channel dispatch (Phase 63). Failure does not propagate (hook always exits 0).
 # sent_any=1 when at least one channel succeeded — controls cooldown update below.
@@ -962,7 +956,12 @@ while true; do
   # || true keeps a claude failure from killing the poller (set -euo pipefail).
   # The output.json / exit_code files are inspected below to decide whether to
   # ack-and-continue or leave the message for redelivery.
+  # Source all profile.d files so claude inherits OTEL endpoints + KM_SLACK_*
+  # env (notify-hook needs KM_SLACK_BRIDGE_URL/CHANNEL_ID/SANDBOX_ID, OTEL needs
+  # OTEL_EXPORTER_OTLP_*). bash -c is non-interactive and skips profile.d by
+  # default, so we source it explicitly before launching claude.
   sudo -u sandbox bash -c "
+    set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
     export KM_SLACK_THREAD_TS='$THREAD_TS'
     claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
       --dangerously-skip-permissions $RESUME_ARG \

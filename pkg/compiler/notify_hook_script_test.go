@@ -269,12 +269,11 @@ func TestNotifyHook_Notification(t *testing.T) {
 	if !strings.Contains(c.bodyContent, "Claude needs your permission to use Bash") {
 		t.Errorf("body missing permission message; body=%q", c.bodyContent)
 	}
-	// Body footer must include attach and results commands.
-	if !strings.Contains(c.bodyContent, "km agent attach sb-test") {
-		t.Errorf("body missing 'km agent attach sb-test'; body=%q", c.bodyContent)
-	}
-	if !strings.Contains(c.bodyContent, "km agent results sb-test") {
-		t.Errorf("body missing 'km agent results sb-test'; body=%q", c.bodyContent)
+	// UAT cleanup: chrome footer (---/Attach:/Results:) was removed so per-sandbox
+	// Slack channel replies aren't padded with redundant context. Email branch
+	// shares the same body file. Assert the chrome is *absent*.
+	if strings.Contains(c.bodyContent, "km agent attach") || strings.Contains(c.bodyContent, "km agent results") {
+		t.Errorf("body should NOT contain attach/results footer; body=%q", c.bodyContent)
 	}
 }
 
