@@ -56,3 +56,15 @@ Plan 68-02's actual scope (`pkg/slack/...`) is 100% green:
 - 4 new TestCanonicalJSON_ActionUpload / TestBuildEnvelopeUpload tests PASS
 - All Phase 63 baseline tests still PASS (golden constant updated for new fields)
 - `go build ./...` clean
+
+## Plan 68-06 confirmation: pre-existing TestUserDataNotifyEnv_* failures unchanged
+
+While executing Plan 68-06, the two `TestUserDataNotifyEnv_NoChannelOverride_NoChannelID`
+and `TestUserDataNotifyEnv_BridgeURLNeverEmittedAtCompileTime` failures listed above
+were re-confirmed as pre-existing — they fail identically on the pre-change tree
+(verified via `git stash && go test … && git stash pop`). Plan 68-06's changes
+(adding `SlackStreamMessagesTableName` to `userDataParams` + `ec2HCLParams`, wiring
+`artifacts_bucket` + `slack_stream_messages_table_name` into the ec2spot terragrunt
+template, and adding new IAM policies in `infra/modules/ec2spot/v1.0.0`) do not
+touch the KM_SLACK_CHANNEL_ID / KM_SLACK_BRIDGE_URL emission path. `go build ./...`
+clean after Plan 68-06 changes.
