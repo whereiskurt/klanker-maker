@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 5
+current_plan: 6
 status: in-progress
-stopped_at: Completed 68-04-PLAN.md
-last_updated: "2026-05-03T20:08:40.604Z"
+stopped_at: Completed 68-05-PLAN.md (km-slack multi-subcommand dispatcher)
+last_updated: "2026-05-03T20:12:02.846Z"
 last_activity: 2026-05-03
 progress:
   total_phases: 73
   completed_phases: 67
   total_plans: 242
-  completed_plans: 230
+  completed_plans: 231
   percent: 93
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 Phase: 68 (slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload) — Wave 0 stub seeding COMPLETE
 Plan: 1 of 13 in current phase (Plan 68-00 COMPLETE; 68-01..68-12 pending)
 Total Plans in Phase: 13
-Current Plan: 5
+Current Plan: 6
 Status: in-progress
 Last activity: 2026-05-03
 
@@ -272,6 +272,7 @@ Progress: [█████████░] 93%
 | Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P02 | 4min | 2 tasks | 3 files |
 | Phase 68 P01 | 230s | 2 tasks | 4 files |
 | Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P04 | 3min | 2 tasks | 2 files |
+| Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P05 | 30min | 4 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -770,6 +771,9 @@ Recent decisions affecting current work:
 - [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: UploadFile does NOT retry internally; retry stays at BridgeBackoff envelope layer to avoid replayed_nonce masking
 - [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Streaming proven by 1 MiB SHA-256 round-trip + explicit Content-Length header assertion (Slack rejects chunked encoding on signed upload URLs)
 - [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: thread_ts key omitted from completeUploadExternal JSON when empty (Slack rejects empty-string thread_ts)
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-05: Extracted dispatch(args, stderr) helper from main() so dispatch tests inject args/stderr directly — cleaner than os.Args mutation suggested in plan
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-05: km-slack subcommands all use flag.ContinueOnError + fs.SetOutput(stderr) so flag-error paths are deterministic and unit-testable (Pattern B for future cmd/* binaries)
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-05: km-slack record-mapping uses LoadDefaultConfig (region from IMDS) instead of explicit AWS_REGION; runUpload retains explicit region requirement to mirror runPost
 
 ### Roadmap Evolution
 
@@ -858,6 +862,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-03T20:08:32.794Z
-Stopped at: Completed 68-04-PLAN.md
+Last session: 2026-05-03T20:12:02.840Z
+Stopped at: Completed 68-05-PLAN.md (km-slack multi-subcommand dispatcher)
 Resume file: None
