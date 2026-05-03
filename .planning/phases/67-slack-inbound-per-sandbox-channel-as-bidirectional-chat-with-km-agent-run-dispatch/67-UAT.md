@@ -185,3 +185,52 @@ After Plan 67-11 ships and `make build` + `km init --sidecars` propagates the ne
 - Step 9 (if exercised) PASS: failure mode is silent in Slack but visible in journalctl
 
 If all PASS, mark gap A status = closed in this file's frontmatter (`status: closed-A` or update the Gaps entry's `status: failed` → `status: closed`). If any FAIL, file a fresh gap.
+
+## Gap B Closure Re-test
+
+After Plan 67-12 ships and the bridge Lambda is redeployed:
+
+### Pre-conditions
+
+1. `cd infra/live/management/lambda-slack-bridge && terragrunt apply` — picks up the new isBotLoop semantics. (Or wait for the next `km init` cycle which redeploys the bridge.)
+2. Confirm the new Lambda image is live: invoke `aws lambda get-function --function-name km-slack-bridge --query Configuration.LastModified` and verify the timestamp post-dates the merge.
+
+### Re-test sequence
+
+1. **Re-run UAT Step 14** (Bot-loop prevention with system-event variant):
+   - In the `#sb-XXX` channel, invite an operator collaborator via Slack Connect.
+   - When they accept, Slack emits a `channel_join` system message.
+   - Confirm in CloudWatch logs (log group `/aws/lambda/km-slack-bridge`):
+     - Line: `events: subtype filter dropped subtype=channel_join channel=C... ts=...` appears
+     - Line: `events: enqueued ...` does NOT appear for that event
+   - Confirm SQS queue depth stays 0 (`aws sqs get-queue-attributes --attribute-names ApproximateNumberOfMessages`).
+   - Confirm no new agent run created on the sandbox (`km agent list <sandbox>` count unchanged).
+   - **No bedrock spend** for the channel_join.
+
+2. **Sanity test for thread_broadcast (positive)** — confirm we didn't break "Also send to channel":
+   - In an active thread in the channel, post a reply with the "Also send to channel" checkbox ticked.
+   - Slack delivers a `subtype: thread_broadcast` event.
+   - Confirm: `events: enqueued ...` log line appears, Claude does process the turn, reply lands in the thread (subject to Gap A being closed for the reply post itself).
+
+3. **Re-run UAT Step 15** (Slack Connect invite gate, USER):
+   - From a workspace member NOT invited to a different test channel, attempt to post.
+   - Bridge should drop with `events: unknown channel or inbound disabled` (sandbox-by-channel resolver fails).
+   - This is now meaningfully testable: previously, the channel_join from invite acceptance polluted state.
+
+### Pass gate
+
+- Step 1: `channel_join` is dropped, debug log line emitted, no SQS write, no agent run, no spend
+- Step 2: `thread_broadcast` reaches SQS and produces a Claude reply (positive case preserved)
+- Step 3: Uninvited user message dropped at channel→sandbox lookup
+
+If all three PASS, mark Gap B status = closed in this file's frontmatter Gaps section. If any FAIL, file a fresh gap.
+
+### Forensic hint for future regressions
+
+If a system subtype slips through again, search CloudWatch:
+```
+fields @timestamp, subtype, channel
+| filter @message like /subtype filter dropped/
+| stats count() by subtype
+```
+This catalogues all subtypes the bridge sees in production. If a new subtype appears in user-visible behavior, decide whether to add it to the allow-list (e.g. some future Slack feature) or document why it stays filtered.
