@@ -1438,3 +1438,16 @@ Plans:
 - [ ] 67-08-PLAN.md — km status / km list --wide / km doctor (three new checks: queue exists, stale queues, Events scopes)
 - [ ] 67-09-PLAN.md — km slack init --signing-secret + scope verification + Events URL print
 - [ ] 67-10-PLAN.md — RUN_SLACK_E2E gated end-to-end test + docs/slack-notifications.md inbound section + CLAUDE.md update + manual UAT checkpoint
+
+### Phase 68: Slack transcript streaming — per-turn chat + gzipped JSONL upload (Phase A)
+
+**Spec:** `docs/superpowers/specs/2026-05-03-slack-transcript-streaming-design.md`
+**Goal:** [To be planned — see spec]
+**Requirements**: TBD
+**Depends on:** Phase 67
+**Plans:** 0 plans
+
+Note: Phase A only. Reaction-triggered session fork deferred to a future phase.
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 68 to break down)
