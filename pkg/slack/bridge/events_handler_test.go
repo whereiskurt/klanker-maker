@@ -212,6 +212,26 @@ func TestEventsHandler_BotSelfMessageFiltered(t *testing.T) {
 		{"subtype_message_deleted", `{"type":"message","channel":"C1","subtype":"message_deleted","ts":"1.0"}`},
 		{"user_equals_bot_uid", `{"type":"message","channel":"C1","user":"UBOT123","text":"hi","ts":"1.0"}`},
 		{"empty_user", `{"type":"message","channel":"C1","text":"hi","ts":"1.0"}`},
+		// Phase 67-12 Gap B: extended system-subtype coverage. Allow-list semantics in
+		// isBotLoop drop every subtype except "" and "thread_broadcast" — these cases
+		// document a representative sample of Slack system subtypes that were previously
+		// passed through to SQS by the deny-list and burned Bedrock spend on no-op turns.
+		{"subtype_channel_join", `{"type":"message","channel":"C1","subtype":"channel_join","user":"U1","text":"<@U1> has joined","ts":"1.0"}`},
+		{"subtype_channel_leave", `{"type":"message","channel":"C1","subtype":"channel_leave","user":"U1","ts":"1.0"}`},
+		{"subtype_channel_topic", `{"type":"message","channel":"C1","subtype":"channel_topic","user":"U1","topic":"new","ts":"1.0"}`},
+		{"subtype_channel_purpose", `{"type":"message","channel":"C1","subtype":"channel_purpose","user":"U1","purpose":"new","ts":"1.0"}`},
+		{"subtype_channel_name", `{"type":"message","channel":"C1","subtype":"channel_name","user":"U1","old_name":"a","name":"b","ts":"1.0"}`},
+		{"subtype_channel_archive", `{"type":"message","channel":"C1","subtype":"channel_archive","user":"U1","ts":"1.0"}`},
+		{"subtype_channel_unarchive", `{"type":"message","channel":"C1","subtype":"channel_unarchive","user":"U1","ts":"1.0"}`},
+		{"subtype_pinned_item", `{"type":"message","channel":"C1","subtype":"pinned_item","user":"U1","ts":"1.0"}`},
+		{"subtype_unpinned_item", `{"type":"message","channel":"C1","subtype":"unpinned_item","user":"U1","ts":"1.0"}`},
+		{"subtype_file_share", `{"type":"message","channel":"C1","subtype":"file_share","user":"U1","text":"shared a file","ts":"1.0"}`},
+		{"subtype_me_message", `{"type":"message","channel":"C1","subtype":"me_message","user":"U1","text":"/me waves","ts":"1.0"}`},
+		{"subtype_reminder_add", `{"type":"message","channel":"C1","subtype":"reminder_add","user":"U1","ts":"1.0"}`},
+		{"subtype_ekm_access_denied", `{"type":"message","channel":"C1","subtype":"ekm_access_denied","ts":"1.0"}`},
+		// Allow-list regression-proof guarantee: any future subtype Slack invents
+		// is filtered by default until explicitly added to the allow-list.
+		{"subtype_unknown_future", `{"type":"message","channel":"C1","subtype":"some_new_2027_subtype","user":"U1","text":"hi","ts":"1.0"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -233,6 +253,29 @@ func TestEventsHandler_BotSelfMessageFiltered(t *testing.T) {
 				t.Fatalf("%s: expected no Threads upsert, got %+v", tc.name, threads.upserts)
 			}
 		})
+	}
+}
+
+// TestEventsHandler_ThreadBroadcastPasses verifies the positive case in the
+// Phase 67-12 allow-list: thread_broadcast (a user replied in a thread with
+// "Also send to channel" ticked) carries human content and MUST reach SQS.
+func TestEventsHandler_ThreadBroadcastPasses(t *testing.T) {
+	now := time.Now()
+	h, sqs, threads, _, _, _ := newHandler(now)
+	body := `{"type":"event_callback","event_id":"E-tb","event":{"type":"message","channel":"C1","subtype":"thread_broadcast","user":"U1","text":"shouting from thread","ts":"1.5","thread_ts":"1.0"}}`
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{"x-slack-request-timestamp": tsHdr, "x-slack-signature": sigHdr},
+		Body:    body,
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, resp.Body)
+	}
+	if len(sqs.sends) != 1 {
+		t.Fatalf("expected 1 SQS send for thread_broadcast, got %d", len(sqs.sends))
+	}
+	if len(threads.upserts) != 1 {
+		t.Fatalf("expected 1 threads upsert for thread_broadcast, got %d", len(threads.upserts))
 	}
 }
 
