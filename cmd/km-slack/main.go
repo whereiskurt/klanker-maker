@@ -1,16 +1,19 @@
-// Command km-slack is the sandbox-side Phase 63 Slack-notify client. It
-// signs an envelope with the sandbox's Ed25519 key (loaded from SSM
+// Command km-slack is the sandbox-side Phase 63 / Phase 68 Slack-notify client.
+// It signs an envelope with the sandbox's Ed25519 key (loaded from SSM
 // /sandbox/{id}/signing-key) and POSTs it to the km-slack-bridge Lambda
 // Function URL ($KM_SLACK_BRIDGE_URL). It is invoked by /opt/km/bin/km-notify-hook
 // when KM_NOTIFY_SLACK_ENABLED=1 — see pkg/compiler/userdata.go.
 //
-// Usage:
+// Subcommands:
 //
-//	km-slack post --channel C0123ABC --subject "[sb-id] needs permission" --body /tmp/body.txt
+//	km-slack post           --channel C... --body /tmp/body.txt [--subject ...] [--thread ts]
+//	km-slack upload         --channel C... --thread ts --s3-key transcripts/sb-x/y --filename name.gz \
+//	                        --content-type application/gzip --size-bytes 12345
+//	km-slack record-mapping --channel C... --slack-ts 1.2 --offset 1024 --session sid
 //
-// Required env: KM_SANDBOX_ID, KM_SLACK_BRIDGE_URL, AWS_REGION (or
-// AWS_DEFAULT_REGION). Body file argument required; --body - (stdin) is
-// rejected per the OpenSSL 3.5+ signing constraint (CLAUDE.md).
+// Required env (post + upload): KM_SANDBOX_ID, KM_SLACK_BRIDGE_URL, AWS_REGION
+// (or AWS_DEFAULT_REGION).
+// Required env (record-mapping):  KM_SANDBOX_ID, KM_SLACK_STREAM_TABLE.
 package main
 
 import (
@@ -20,6 +23,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -35,32 +39,83 @@ import (
 const defaultTimeout = 30 * time.Second
 
 func main() {
-	if len(os.Args) < 2 || os.Args[1] != "post" {
-		fmt.Fprintln(os.Stderr, "usage: km-slack post --channel <id> --body <file> [--subject <text>] [--thread <ts>]")
-		os.Exit(2)
+	os.Exit(dispatch(os.Args[1:], os.Stderr))
+}
+
+// dispatch routes a subcommand argument vector (without the program name) to
+// the matching runX implementation. Extracted from main() so tests can drive
+// the dispatch table without manipulating os.Args.
+func dispatch(args []string, stderr io.Writer) int {
+	if len(args) < 1 {
+		usage(stderr)
+		return 2
 	}
-	fs := flag.NewFlagSet("post", flag.ExitOnError)
+	switch args[0] {
+	case "post":
+		return runPost(args[1:], stderr)
+	case "upload":
+		return runUpload(args[1:], stderr)
+	case "record-mapping":
+		return runRecordMapping(args[1:], stderr)
+	case "-h", "--help", "help":
+		usage(stderr)
+		return 0
+	default:
+		fmt.Fprintf(stderr, "unknown subcommand: %q\n", args[0])
+		usage(stderr)
+		return 2
+	}
+}
+
+func usage(w io.Writer) {
+	fmt.Fprintln(w, `usage: km-slack <subcommand> [args]
+Subcommands:
+  post           Post a message to a channel/thread (signs and POSTs to bridge).
+  upload         Upload a file via the bridge (3-step flow), referencing an S3 key.
+  record-mapping Write a (channel_id, slack_ts) → transcript-offset row to DDB.`)
+}
+
+// runPost is the Phase 63 post subcommand entry point. Returns a process exit
+// code (0 success, non-zero failure) so dispatch() can surface it.
+func runPost(args []string, stderr io.Writer) int {
+	fs := flag.NewFlagSet("post", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 	var channel, subject, bodyPath, thread string
 	fs.StringVar(&channel, "channel", "", "Slack channel ID (C...)")
 	fs.StringVar(&subject, "subject", "", "Optional subject text (rendered as bold header by bridge; omit for clean threaded replies)")
 	fs.StringVar(&bodyPath, "body", "", "Path to body file (stdin '-' NOT supported)")
 	fs.StringVar(&thread, "thread", "", "Thread parent ts")
-	if err := fs.Parse(os.Args[2:]); err != nil {
-		os.Exit(2)
+	if err := fs.Parse(args); err != nil {
+		return 2
 	}
 	if channel == "" || bodyPath == "" {
-		fmt.Fprintln(os.Stderr, "km-slack: --channel and --body are required")
-		os.Exit(2)
+		fmt.Fprintln(stderr, "km-slack post: --channel and --body are required")
+		return 2
 	}
 	if bodyPath == "-" {
-		fmt.Fprintln(os.Stderr, "km-slack: stdin not supported (use a file path); see CLAUDE.md OpenSSL 3.5+ constraint")
-		os.Exit(1)
+		fmt.Fprintln(stderr, "km-slack post: stdin not supported (use a file path); see CLAUDE.md OpenSSL 3.5+ constraint")
+		return 1
 	}
 
 	if err := run(channel, subject, bodyPath, thread); err != nil {
-		fmt.Fprintf(os.Stderr, "km-slack: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(stderr, "km-slack post: %v\n", err)
+		return 1
 	}
+	return 0
+}
+
+// runUpload signs an ActionUpload envelope and POSTs it to the bridge.
+// Stub body: filled in by Plan 68-05 Task 2.
+func runUpload(args []string, stderr io.Writer) int {
+	fmt.Fprintln(stderr, "km-slack upload: not yet implemented")
+	return 1
+}
+
+// runRecordMapping writes a (channel_id, slack_ts) → transcript-offset row to
+// DynamoDB. Stub body: filled in by Plan 68-05 Task 3.
+func runRecordMapping(args []string, stderr io.Writer) int {
+	fmt.Fprintln(stderr, "km-slack record-mapping: not yet implemented")
+	return 1
 }
 
 // run is the outer entry point that loads env vars and the SSM key before
