@@ -630,3 +630,104 @@ redeploy) so the `SSMSigningSecretFetcher` cache invalidates within 15 minutes.
 - DM delivery, multi-recipient routing.
 - Block Kit / rich formatting for outbound replies.
 - Permission-prompt round-trip via Slack reply.
+
+## Slack transcript streaming (Phase 68)
+
+Per-turn streaming of Claude assistant text + tool one-liners to a per-sandbox
+Slack thread, plus a final gzipped JSONL transcript uploaded as a Slack file
+when the response ends. Replaces the Phase 63 single idle-ping for sandboxes
+that opt in.
+
+### One-time operator setup
+
+```bash
+# 1. Add `files:write` scope to the Slack App
+#    (Slack admin → App → OAuth & Permissions → add `files:write` → re-install)
+
+# 2. Provision the new DDB table + bridge code + sidecar binary
+make build
+km init --sidecars   # uploads new km-slack binary + bridge zip
+km init              # provisions {prefix}-slack-stream-messages DynamoDB table
+
+# 3. Verify
+km doctor            # slack_transcript_table_exists / slack_files_write_scope green
+```
+
+### Profile field
+
+| Field | Type | Default | Effect |
+|---|---|---|---|
+| `notifySlackTranscriptEnabled` | bool | `false` | Per-turn streaming + final upload to per-sandbox Slack thread |
+
+**Validation rules:**
+- Requires `notifySlackEnabled: true` AND `notifySlackPerSandbox: true`
+- Incompatible with `notifySlackChannelOverride`
+
+### CLI overrides
+
+```bash
+km agent run sb-X --prompt "..." --transcript-stream      # force-enable for this run
+km agent run sb-X --prompt "..." --no-transcript-stream   # force-disable for this run
+km shell sb-X --transcript-stream
+km shell sb-X --no-transcript-stream
+```
+
+Sets `KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED=1`/`=0` in the SSM session env, taking precedence over the profile default.
+
+### How it works
+
+1. **PostToolUse hook (per Claude tool call):**
+   - Reads new transcript JSONL entries from byte offset
+   - Renders assistant text + `🔧 ToolName: input` one-liners
+   - Posts to per-sandbox channel thread
+   - Records `(channel_id, slack_ts) → transcript_offset` in DynamoDB
+
+2. **Stop hook (end of Claude response):**
+   - Drains any unstreamed text
+   - `gzip` transcript, `aws s3 cp` to `s3://${KM_ARTIFACTS_BUCKET}/transcripts/{sandbox-id}/{session-id}.jsonl.gz`
+   - Calls bridge `upload` action; bridge fetches from S3 (streamed), uploads to Slack via 3-step files API
+
+3. **Auto-thread-parent:** Operator-initiated runs (no Phase 67 inbound thread context) post a parent message `🤖 [sb-X] turn started — {prompt}` and cache its ts so all turns of the response thread under it.
+
+### Security model
+
+- **Audience containment:** transcripts only land in per-sandbox channels (validation rejects shared channel + override combinations)
+- **Cross-sandbox isolation:** bridge enforces S3 prefix `transcripts/{envelope.sender_id}/` before GetObject; one sandbox cannot upload another's transcript via crafted envelope
+- **Trust boundary:** unchanged from Phase 63/67 — sandbox holds Ed25519 signing key; bridge holds Slack bot token
+
+⚠️ **Transcripts contain whatever Claude saw.** Bash output, file reads, env dumps, API responses — all visible in the channel and the uploaded file. Do NOT enable for sandboxes processing sensitive data without operator awareness. Transcript redaction is OUT OF SCOPE for Phase 68.
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `km doctor` flags `slack_transcript_table_exists` WARN | DDB table not provisioned | `km init` (terraform apply) |
+| `km doctor` flags `slack_files_write_scope` WARN | Bot lacks files:write | Re-auth Slack App with files:write scope |
+| Streaming works but file upload missing | files:write missing on bot | Same as above; bridge returns 400 scope_missing |
+| Bridge logs show `s3_key_prefix_mismatch` | Sandbox attempted upload with wrong prefix | Should never happen in normal flow; investigate sandbox compromise |
+| Lambda timeout / OOM during upload | Transcript >100 MB | Out of scope; current cap 100 MB |
+| Slack thread shows gaps during heavy runs | Slack rate limit | By design — file upload at Stop has the full record |
+| `km doctor` flags `slack_transcript_stale_objects` WARN | S3 has transcripts for destroyed sandboxes | Cleanup advisory; bucket lifecycle eventually reaps |
+
+### Operator runbook: enabling files:write scope
+
+1. Slack admin → App → OAuth & Permissions
+2. Bot Token Scopes → Add scope → `files:write`
+3. Re-install app (top of page)
+4. New token issued; rotate via `km slack rotate-token --bot-token <new>`
+5. Verify: `km doctor` should show `slack_files_write_scope` OK
+6. (Optional) Force bridge cold-start to pick up cached scope state: `km slack rotate-token` does this automatically
+
+### Phase 68 ↔ Phase 67 interaction
+
+- Inbound (Phase 67) and transcript streaming (Phase 68) compose cleanly. When BOTH are on:
+  - Inbound message arrives → poller dispatches `km agent run` with `KM_SLACK_THREAD_TS` set to the inbound thread parent
+  - PostToolUse hooks stream into THAT thread (no auto-parent created — Phase 67 thread used)
+  - Stop hook uploads the transcript into the same thread
+- Inbound off + transcript on:
+  - PostToolUse auto-creates a thread parent in the per-sandbox channel
+  - All turns + final upload thread under it
+
+### Phase B preview (deferred, not part of Phase 68)
+
+The DynamoDB stream-messages table written by Phase 68 is the integration seam for a future "reaction-triggered session fork" phase: an operator reaction (e.g. 🍴) on a streamed message would mint a new Claude session forked at that transcript offset. Phase 68 has no consumer for the table — it just writes.
