@@ -14,11 +14,13 @@ package cmd
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"os"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/rs/zerolog/log"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/slack"
@@ -176,4 +178,18 @@ func runSlackTeardown(ctx context.Context, awsCfg aws.Config, meta *kmaws.Sandbo
 		return loadSlackOperatorKey(innerCtx, ssmClient)
 	})
 	_ = destroySlackChannel(ctx, meta, region, ssmStore, keyLoader, BridgePosterFunc(slack.PostToBridge))
+
+	// Phase 67 gap closure: clean up the per-sandbox slack-channel-id SSM
+	// parameter that runStep11dInject wrote at create time. Best-effort —
+	// km doctor's stale-parameter check would catch it otherwise.
+	if meta != nil && meta.SandboxID != "" {
+		paramName := "/sandbox/" + meta.SandboxID + "/slack-channel-id"
+		if _, err := ssmClient.DeleteParameter(ctx, &ssm.DeleteParameterInput{Name: aws.String(paramName)}); err != nil {
+			var notFound *ssmtypes.ParameterNotFound
+			if !errors.As(err, &notFound) {
+				log.Warn().Err(err).Str("sandbox_id", meta.SandboxID).Str("param", paramName).
+					Msg("runSlackTeardown: failed to delete slack-channel-id SSM parameter (non-fatal)")
+			}
+		}
+	}
 }

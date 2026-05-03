@@ -404,6 +404,18 @@ resource "aws_iam_role_policy" "ec2spot_github_token" {
         Resource = [
           "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/sandbox/${var.sandbox_id}/*",
         ]
+      },
+      {
+        # Phase 67 gap closure: cloud-init bootstrap polls the operator-wide
+        # bridge URL so it can write KM_SLACK_BRIDGE_URL into the env file.
+        # /km/slack/bridge-url is shared across sandboxes (one bridge Lambda
+        # per region), so it lives outside the per-sandbox prefix.
+        Sid    = "SSMReadSlackBridgeURL"
+        Effect = "Allow"
+        Action = ["ssm:GetParameter"]
+        Resource = [
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/km/slack/bridge-url",
+        ]
       }
     ]
   })

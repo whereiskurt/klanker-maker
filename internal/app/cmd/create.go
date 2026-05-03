@@ -820,24 +820,31 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		}
 	}
 
-	// Step 11d: Inject KM_SLACK_CHANNEL_ID and KM_SLACK_BRIDGE_URL into the running
-	// sandbox's /etc/profile.d/km-notify-env.sh via SSM SendCommand. Only runs when
-	// a Slack channel was resolved in Step 6c (shared or per-sandbox modes; override
-	// mode pre-bakes the channel ID at compile time via NotifySlackChannelOverride).
-	// Non-fatal: sandbox is provisioned even if SSM inject fails. SSM agent must be
-	// up before this completes; the SendCommand waits up to 30s for the agent.
+	// Step 11d: Publish the resolved Slack channel ID to SSM Parameter Store at
+	// /sandbox/{id}/slack-channel-id. The sandbox's cloud-init bootstrap (Phase
+	// 67 gap closure in pkg/compiler/userdata.go) polls this path and the
+	// operator-wide /km/slack/bridge-url and writes both into
+	// /etc/profile.d/km-slack-runtime.sh.
+	// Replaces the previous ssm:SendCommand path (denied by org-level SCP for
+	// the application account). Non-fatal: sandbox is provisioned even on
+	// PutParameter failure; the bootstrap WARN-logs and continues.
 	if slackChannelID != "" {
 		ssmClientForInject := ssm.NewFromConfig(awsCfg)
 		ssmStoreForInject := &productionSSMParamStore{client: ssmClientForInject}
-		ssmRunnerForInject := &productionSSMRunner{client: ssmClientForInject}
-		outputter := func(ctx context.Context, dir string) (map[string]any, error) {
-			return runner.Output(ctx, dir)
+		putParamForInject := func(pctx context.Context, name, value string) error {
+			_, err := ssmClientForInject.PutParameter(pctx, &ssm.PutParameterInput{
+				Name:      aws.String(name),
+				Value:     aws.String(value),
+				Type:      ssmtypes.ParameterTypeString,
+				Overwrite: aws.Bool(true),
+			})
+			return err
 		}
 		const (
 			step11dSSMRetryMax   = 6
 			step11dSSMRetryDelay = 5 * time.Second
 		)
-		runStep11dInject(ctx, ssmStoreForInject, ssmRunnerForInject, sandboxDir, outputter, extractOutputInstanceID, sandboxID, slackChannelID, step11dSSMRetryMax, step11dSSMRetryDelay)
+		runStep11dInject(ctx, ssmStoreForInject, putParamForInject, sandboxID, slackChannelID, step11dSSMRetryMax, step11dSSMRetryDelay)
 	}
 
 	// Step 11e: Provision per-sandbox SQS FIFO inbound queue (Phase 67-06).

@@ -169,6 +169,51 @@ EOF
 chmod 644 /etc/profile.d/km-identity.sh
 echo "[km-bootstrap] Hostname set to ${SANDBOX_FQDN}"
 
+{{- if .NotifySlackEnabled }}
+# ============================================================
+# 2.7. Phase 67 gap closure: fetch Slack runtime config from SSM Parameter Store
+# ============================================================
+# Replaces Phase 63 Step 11d (ssm:SendCommand) — that path is denied by an
+# org-level SCP for the application account. km create now writes the
+# per-sandbox channel id to /sandbox/{id}/slack-channel-id; the operator-wide
+# bridge URL is already at /km/slack/bridge-url (written by km slack init).
+# Cloud-init blocks here with retry/backoff until both are present so the
+# inbound poller and Stop hook see them on first dispatch.
+echo "[km-bootstrap] Fetching Slack runtime config from SSM Parameter Store..."
+SLACK_CHANNEL_ID_PARAM="/sandbox/{{ .SandboxID }}/slack-channel-id"
+SLACK_BRIDGE_URL_PARAM="/km/slack/bridge-url"
+SLACK_RUNTIME_FILE="/etc/profile.d/km-slack-runtime.sh"
+CHANNEL_ID=""
+BRIDGE_URL=""
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  if [ -z "$CHANNEL_ID" ]; then
+    CHANNEL_ID=$(aws ssm get-parameter --name "$SLACK_CHANNEL_ID_PARAM" --region "$REGION" --query 'Parameter.Value' --output text 2>/dev/null || true)
+    [ "$CHANNEL_ID" = "None" ] && CHANNEL_ID=""
+  fi
+  if [ -z "$BRIDGE_URL" ]; then
+    BRIDGE_URL=$(aws ssm get-parameter --name "$SLACK_BRIDGE_URL_PARAM" --region "$REGION" --query 'Parameter.Value' --output text 2>/dev/null || true)
+    [ "$BRIDGE_URL" = "None" ] && BRIDGE_URL=""
+  fi
+  if [ -n "$CHANNEL_ID" ] && [ -n "$BRIDGE_URL" ]; then
+    break
+  fi
+  echo "[km-bootstrap] Slack runtime params not yet available (attempt $attempt/10), waiting 30s..."
+  sleep 30
+done
+if [ -n "$CHANNEL_ID" ] && [ -n "$BRIDGE_URL" ]; then
+  cat > "$SLACK_RUNTIME_FILE" <<RUNTIMEEOF
+export KM_SLACK_CHANNEL_ID="$CHANNEL_ID"
+export KM_SLACK_BRIDGE_URL="$BRIDGE_URL"
+export AWS_REGION="$REGION"
+export AWS_DEFAULT_REGION="$REGION"
+RUNTIMEEOF
+  chmod 644 "$SLACK_RUNTIME_FILE"
+  echo "[km-bootstrap] Wrote $SLACK_RUNTIME_FILE (channel=$CHANNEL_ID)"
+else
+  echo "[km-bootstrap] WARN: Slack runtime config unavailable after retries; replies will fail"
+fi
+{{- end }}
+
 # ============================================================
 # 2.8. Profile environment variables: write to /etc/profile.d/
 # ============================================================
@@ -2396,6 +2441,12 @@ type userDataParams struct {
 	// bash script, its systemd unit, and the systemctl enable/start lines.
 	// Set from profile.Spec.CLI.NotifySlackInboundEnabled (Phase 67).
 	SlackInboundEnabled bool
+	// NotifySlackEnabled gates conditional emission of the runtime SSM-fetch
+	// bootstrap step that polls /sandbox/{id}/slack-channel-id and
+	// /km/slack/bridge-url, writing them into /etc/profile.d/km-slack-runtime.sh.
+	// Replaces the SCP-blocked ssm:SendCommand path (Phase 63 Step 11d) — set
+	// from profile.Spec.CLI.NotifySlackEnabled.
+	NotifySlackEnabled bool
 	// SlackThreadsTableName is the DynamoDB table name for km_slack_threads.
 	// Populated from KM_SLACK_THREADS_TABLE env var (fallback "km-slack-threads").
 	// Phase 66 multi-instance overrides propagate via this field so the poller's
@@ -2683,6 +2734,16 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 				threadsTable = "km-slack-threads"
 			}
 			params.SlackThreadsTableName = threadsTable
+		}
+
+		// Phase 67 gap closure: replaces Phase 63 Step 11d ssm:SendCommand path.
+		// Cloud-init polls SSM Parameter Store for the channel id (per-sandbox) and
+		// the bridge URL (operator-wide) and writes them to a profile.d file the
+		// poller / hooks can source. ssm:SendCommand is denied by an org-level SCP
+		// for the application account, so the original push-into-the-instance
+		// approach silently fails.
+		if p.Spec.CLI.NotifySlackEnabled != nil && *p.Spec.CLI.NotifySlackEnabled {
+			params.NotifySlackEnabled = true
 		}
 	}
 

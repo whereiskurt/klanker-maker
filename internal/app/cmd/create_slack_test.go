@@ -381,242 +381,70 @@ func TestResolveSlack_InvalidOverrideID_Error(t *testing.T) {
 	}
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// injectSlackEnvIntoSandbox tests
-// ────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────
+// runStep11dInject tests — Phase 67 SSM Parameter Store path
+//
+// Replaces the prior SendCommand tests after the SCP-bypass refactor. The new
+// step writes /sandbox/{id}/slack-channel-id and reads /km/slack/bridge-url
+// from SSM Parameter Store; the sandbox bootstrap (pkg/compiler/userdata.go)
+// is responsible for picking these up at boot.
+// ─────────────────────────────────────────────────────────────────────────
 
-// fakeSSMRunner implements SSMRunner for tests.
-// callCount tracks how many times RunShell has been called.
-// failTimes specifies how many initial calls should return err before succeeding.
-// If failTimes is negative or larger than callCount, err is always returned.
-type fakeSSMRunner struct {
-	capturedScript string
-	lastInstance   string
-	err            error
-	callCount      int
-	failTimes      int // fail this many times before succeeding (0 = always succeed)
+type fakePutParam struct {
+	calls []struct{ Name, Value string }
+	err   error
 }
 
-func (f *fakeSSMRunner) RunShell(_ context.Context, instanceID string, script string) error {
-	f.callCount++
-	f.capturedScript = script
-	f.lastInstance = instanceID
-	// failTimes > 0: fail that many times then succeed.
-	// failTimes == 0 and err != nil: always fail (backward compat with existing tests).
-	if f.failTimes > 0 {
-		if f.callCount <= f.failTimes {
-			return f.err
-		}
-		return nil
-	}
+func (f *fakePutParam) put(_ context.Context, name, value string) error {
+	f.calls = append(f.calls, struct{ Name, Value string }{name, value})
 	return f.err
 }
 
-func TestInjectSlackEnvIntoSandbox_ScriptContainsEnvVars(t *testing.T) {
-	runner := &fakeSSMRunner{}
-
-	err := injectSlackEnvIntoSandbox(context.Background(), runner, "i-abc123", "C0CHANNEL", "https://bridge.example.com")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if !strings.Contains(runner.capturedScript, "KM_SLACK_CHANNEL_ID") {
-		t.Error("script should contain KM_SLACK_CHANNEL_ID")
-	}
-	if !strings.Contains(runner.capturedScript, "KM_SLACK_BRIDGE_URL") {
-		t.Error("script should contain KM_SLACK_BRIDGE_URL")
-	}
-	if !strings.Contains(runner.capturedScript, "C0CHANNEL") {
-		t.Error("script should contain channel ID value C0CHANNEL")
-	}
-	if !strings.Contains(runner.capturedScript, "https://bridge.example.com") {
-		t.Error("script should contain bridge URL value")
-	}
-}
-
-func TestInjectSlackEnvIntoSandbox_PropagatesRunnerError(t *testing.T) {
-	runner := &fakeSSMRunner{err: errors.New("ssm failed")}
-
-	err := injectSlackEnvIntoSandbox(context.Background(), runner, "i-abc123", "C0CHANNEL", "https://bridge.example.com")
-	if err == nil {
-		t.Fatal("expected error from runner failure")
-	}
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// fakeOutputter — used by runStep11dInject tests
-// ────────────────────────────────────────────────────────────────────────────
-
-type fakeOutputter struct {
-	outputs map[string]any
-	err     error
-}
-
-func (f *fakeOutputter) run(_ context.Context, _ string) (map[string]any, error) {
-	return f.outputs, f.err
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// TestStep11d_VisibleOutput — 5 stderr-branch tests (Wave 0 RED)
-// ────────────────────────────────────────────────────────────────────────────
-
-// errInvalidInstance simulates an SSM InvalidInstanceId error.
-var errInvalidInstance = errors.New("InvalidInstanceId: instance not yet registered")
-
-func TestStep11d_VisibleOutput_NoBridgeURL(t *testing.T) {
-	store := &fakeSSMParamStore{params: map[string]string{}} // no bridge-url
-	runner := &fakeSSMRunner{}
-	out := &fakeOutputter{
-		outputs: map[string]any{
-			"ec2spot_instances": map[string]any{
-				"i-abc": map[string]any{"instance_id": "i-abc123"},
-			},
-		},
-	}
+func TestStep11d_NoBridgeURL_SkipsPut(t *testing.T) {
+	store := &fakeSSMParamStore{params: map[string]string{}}
+	put := &fakePutParam{}
 	got := captureStderr(t, func() {
-		runStep11dInject(context.Background(), store, runner, "/tmp/sandbox", out.run, extractOutputInstanceID, "sb-test", "CTEST", 1, time.Microsecond)
+		runStep11dInject(context.Background(), store, put.put, "sb-test", "CTEST", 1, time.Microsecond)
 	})
 	if !strings.Contains(got, "⚠ Slack: /km/slack/bridge-url not configured") {
 		t.Errorf("stderr %q should contain bridge-url not-configured message", got)
 	}
+	if len(put.calls) != 0 {
+		t.Errorf("expected no PutParameter calls when bridge URL is missing, got %d", len(put.calls))
+	}
 }
 
-func TestStep11d_VisibleOutput_OutputsErr(t *testing.T) {
+func TestStep11d_PutFailure_LogsWarn(t *testing.T) {
 	store := &fakeSSMParamStore{params: map[string]string{"/km/slack/bridge-url": "https://bridge.example.com"}}
-	runner := &fakeSSMRunner{}
-	outErr := errors.New("terraform output failed")
-	out := &fakeOutputter{err: outErr}
+	put := &fakePutParam{err: errors.New("ssm putparam failed")}
 	got := captureStderr(t, func() {
-		runStep11dInject(context.Background(), store, runner, "/tmp/sandbox", out.run, extractOutputInstanceID, "sb-test", "CTEST", 1, time.Microsecond)
+		runStep11dInject(context.Background(), store, put.put, "sb-test", "CTEST", 1, time.Microsecond)
 	})
-	if !strings.Contains(got, "⚠ Slack: failed to read terraform outputs") {
-		t.Errorf("stderr %q should contain terraform outputs failure message", got)
+	if !strings.Contains(got, "⚠ Slack: SSM PutParameter failed") {
+		t.Errorf("stderr %q should contain SSM PutParameter failed warn", got)
 	}
-	if !strings.Contains(got, outErr.Error()) {
-		t.Errorf("stderr %q should contain error text %q", got, outErr.Error())
+	if len(put.calls) != 1 {
+		t.Errorf("expected exactly 1 PutParameter attempt, got %d", len(put.calls))
 	}
 }
 
-func TestStep11d_VisibleOutput_NoInstanceID(t *testing.T) {
+func TestStep11d_Success_WritesChannelIDParam(t *testing.T) {
 	store := &fakeSSMParamStore{params: map[string]string{"/km/slack/bridge-url": "https://bridge.example.com"}}
-	runner := &fakeSSMRunner{}
-	out := &fakeOutputter{
-		outputs: map[string]any{}, // no ec2spot_instances → extractOutputInstanceID returns ""
-	}
+	put := &fakePutParam{}
 	got := captureStderr(t, func() {
-		runStep11dInject(context.Background(), store, runner, "/tmp/sandbox", out.run, extractOutputInstanceID, "sb-test", "CTEST", 1, time.Microsecond)
+		runStep11dInject(context.Background(), store, put.put, "sb-test", "C-TEST", 1, time.Microsecond)
 	})
-	if !strings.Contains(got, "⚠ Slack: no EC2 instance ID in outputs") {
-		t.Errorf("stderr %q should contain no-instance-ID message", got)
+	if !strings.Contains(got, "✓ Slack: channel C-TEST published to SSM Parameter Store") {
+		t.Errorf("stderr %q should announce successful publish", got)
 	}
-}
-
-func TestStep11d_VisibleOutput_SSMFail(t *testing.T) {
-	store := &fakeSSMParamStore{params: map[string]string{"/km/slack/bridge-url": "https://bridge.example.com"}}
-	runner := &fakeSSMRunner{err: errInvalidInstance, failTimes: 0} // always fail (failTimes=0 + err != nil)
-	out := &fakeOutputter{
-		outputs: map[string]any{
-			"ec2spot_instances": map[string]any{
-				"i-abc": map[string]any{"instance_id": "i-abc123"},
-			},
-		},
+	if len(put.calls) != 1 {
+		t.Fatalf("expected 1 PutParameter call, got %d", len(put.calls))
 	}
-	got := captureStderr(t, func() {
-		runStep11dInject(context.Background(), store, runner, "/tmp/sandbox", out.run, extractOutputInstanceID, "sb-test", "CTEST", 1, time.Microsecond)
-	})
-	if !strings.Contains(got, "⚠ Slack: SSM SendCommand failed") {
-		t.Errorf("stderr %q should contain SSM SendCommand failed message", got)
+	wantName := "/sandbox/sb-test/slack-channel-id"
+	if put.calls[0].Name != wantName {
+		t.Errorf("PutParameter Name: got %q, want %q", put.calls[0].Name, wantName)
 	}
-	if !strings.Contains(got, errInvalidInstance.Error()) {
-		t.Errorf("stderr %q should contain error text %q", got, errInvalidInstance.Error())
-	}
-}
-
-func TestStep11d_VisibleOutput_Success(t *testing.T) {
-	store := &fakeSSMParamStore{params: map[string]string{"/km/slack/bridge-url": "https://bridge.example.com"}}
-	runner := &fakeSSMRunner{} // no err — succeeds
-	out := &fakeOutputter{
-		outputs: map[string]any{
-			"ec2spot_instances": map[string]any{
-				"i-abc": map[string]any{"instance_id": "i-abc123"},
-			},
-		},
-	}
-	got := captureStderr(t, func() {
-		runStep11dInject(context.Background(), store, runner, "/tmp/sandbox", out.run, extractOutputInstanceID, "sb-test", "C-TEST", 1, time.Microsecond)
-	})
-	if !strings.Contains(got, "✓ Slack: channel C-TEST wired into sandbox env") {
-		t.Errorf("stderr %q should contain success message with channel ID", got)
-	}
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// TestInjectSlackEnv retry-loop tests (Wave 0 RED)
-// ────────────────────────────────────────────────────────────────────────────
-
-func TestInjectSlackEnv_RetryUntilAgentReady(t *testing.T) {
-	store := &fakeSSMParamStore{params: map[string]string{"/km/slack/bridge-url": "https://bridge.example.com"}}
-	// failTimes=2: fails on attempts 1 and 2, succeeds on attempt 3
-	runner := &fakeSSMRunner{err: errInvalidInstance, failTimes: 2}
-	out := &fakeOutputter{
-		outputs: map[string]any{
-			"ec2spot_instances": map[string]any{
-				"i-abc": map[string]any{"instance_id": "i-abc123"},
-			},
-		},
-	}
-	captureStderr(t, func() {
-		runStep11dInject(context.Background(), store, runner, "/tmp/sandbox", out.run, extractOutputInstanceID, "sb-test", "CTEST", 6, time.Microsecond)
-	})
-	if runner.callCount != 3 {
-		t.Errorf("expected 3 attempts (fail 2, succeed 1), got %d", runner.callCount)
-	}
-}
-
-func TestInjectSlackEnv_MaxRetryThenFail(t *testing.T) {
-	store := &fakeSSMParamStore{params: map[string]string{"/km/slack/bridge-url": "https://bridge.example.com"}}
-	// failTimes=0 with err != nil: always fails
-	runner := &fakeSSMRunner{err: errInvalidInstance, failTimes: 0}
-	out := &fakeOutputter{
-		outputs: map[string]any{
-			"ec2spot_instances": map[string]any{
-				"i-abc": map[string]any{"instance_id": "i-abc123"},
-			},
-		},
-	}
-	got := captureStderr(t, func() {
-		runStep11dInject(context.Background(), store, runner, "/tmp/sandbox", out.run, extractOutputInstanceID, "sb-test", "CTEST", 6, time.Microsecond)
-	})
-	if runner.callCount != 6 {
-		t.Errorf("expected exactly 6 attempts, got %d", runner.callCount)
-	}
-	if !strings.Contains(got, "⚠ Slack: SSM SendCommand failed") {
-		t.Errorf("stderr %q should contain SSM failure message after 6 attempts", got)
-	}
-}
-
-func TestInjectSlackEnv_RetryRespectsBound(t *testing.T) {
-	store := &fakeSSMParamStore{params: map[string]string{"/km/slack/bridge-url": "https://bridge.example.com"}}
-	runner := &fakeSSMRunner{err: errInvalidInstance, failTimes: 0}
-	out := &fakeOutputter{
-		outputs: map[string]any{
-			"ec2spot_instances": map[string]any{
-				"i-abc": map[string]any{"instance_id": "i-abc123"},
-			},
-		},
-	}
-	start := time.Now()
-	captureStderr(t, func() {
-		// Use time.Microsecond so wall-clock stays well under 1s while still testing
-		// that retryDelay is honored (delay > 0 means at least some pause occurs).
-		runStep11dInject(context.Background(), store, runner, "/tmp/sandbox", out.run, extractOutputInstanceID, "sb-test", "CTEST", 6, time.Microsecond)
-	})
-	elapsed := time.Since(start)
-	// With time.Microsecond delay, 6 attempts should complete in far less than 1s.
-	if elapsed > 5*time.Second {
-		t.Errorf("retry loop with time.Microsecond delay took too long: %v (retryDelay override not honored)", elapsed)
-	}
-	if runner.callCount != 6 {
-		t.Errorf("expected 6 attempts, got %d", runner.callCount)
+	if put.calls[0].Value != "C-TEST" {
+		t.Errorf("PutParameter Value: got %q, want %q", put.calls[0].Value, "C-TEST")
 	}
 }

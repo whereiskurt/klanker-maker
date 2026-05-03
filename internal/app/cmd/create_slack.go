@@ -200,19 +200,16 @@ func sanitizeChannelName(s string) string {
 	return out
 }
 
-// injectSlackEnvIntoSandbox runs an SSM SendCommand on instanceID that
-// appends KM_SLACK_CHANNEL_ID and KM_SLACK_BRIDGE_URL to
-// /etc/profile.d/km-notify-env.sh. Idempotent: uses grep/sed to avoid
-// duplicate lines on re-runs. The export format matches the compile-time
-// template in pkg/compiler/userdata.go.
-func injectSlackEnvIntoSandbox(ctx context.Context, runner SSMRunner, instanceID, channelID, bridgeURL string) error {
-	script := fmt.Sprintf(`ENV_FILE=/etc/profile.d/km-notify-env.sh
-mkdir -p /etc/profile.d
-touch "$ENV_FILE"
-grep -q '^export KM_SLACK_CHANNEL_ID=' "$ENV_FILE" && sed -i 's|^export KM_SLACK_CHANNEL_ID=.*|export KM_SLACK_CHANNEL_ID="%s"|' "$ENV_FILE" || echo 'export KM_SLACK_CHANNEL_ID="%s"' >> "$ENV_FILE"
-grep -q '^export KM_SLACK_BRIDGE_URL=' "$ENV_FILE" && sed -i 's|^export KM_SLACK_BRIDGE_URL=.*|export KM_SLACK_BRIDGE_URL="%s"|' "$ENV_FILE" || echo 'export KM_SLACK_BRIDGE_URL="%s"' >> "$ENV_FILE"
-`, channelID, channelID, bridgeURL, bridgeURL)
-	return runner.RunShell(ctx, instanceID, script)
+// writeSlackChannelIDToSSM writes the resolved Slack channel ID to
+// /sandbox/{id}/slack-channel-id. The sandbox's cloud-init bootstrap polls
+// this path (with the operator-wide /km/slack/bridge-url) and writes both
+// values to /etc/profile.d/km-slack-runtime.sh so the inbound poller and Stop
+// hook can source them.
+//
+// Replaces injectSlackEnvIntoSandbox (ssm:SendCommand, denied by org-level SCP
+// for the application account). Phase 67 gap closure.
+func writeSlackChannelIDToSSM(ctx context.Context, putParam func(ctx context.Context, name, value string) error, sandboxID, channelID string) error {
+	return putParam(ctx, "/sandbox/"+sandboxID+"/slack-channel-id", channelID)
 }
 
 // ssmSendCommandClient is the minimal SSM interface needed by productionSSMRunner.
@@ -238,67 +235,40 @@ func (r *productionSSMRunner) RunShell(ctx context.Context, instanceID string, s
 	return err
 }
 
-// runStep11dInject orchestrates the step 11d Slack env injection — extracted from
-// create.go for testability. Reads bridge URL from ssmStore, terraform outputs from
-// outputter, instance ID via extractor, and runs the bounded retry loop. Emits
-// exactly one stderr line on every code path. Non-fatal: never returns an error.
+// runStep11dInject publishes the resolved Slack channel ID to SSM Parameter
+// Store at /sandbox/{id}/slack-channel-id so the sandbox's cloud-init bootstrap
+// can pick it up alongside the operator-wide /km/slack/bridge-url.
 //
-// retryMax and retryDelay control the retry loop:
-//   - Production: retryMax=6, retryDelay=5*time.Second (covers SSM agent boot window)
-//   - Tests: retryDelay=time.Microsecond for fast wall-clock execution
+// Replaces the previous ssm:SendCommand-based injection (denied by org-level
+// SCP for the application account). Non-fatal on failure: the sandbox is
+// already provisioned; the bootstrap step will emit a WARN if the param never
+// appears.
+//
+// The retryMax/retryDelay parameters are kept on the signature for source
+// compatibility with existing call sites and tests but aren't used — a single
+// PutParameter call is enough.
 func runStep11dInject(
 	ctx context.Context,
 	ssmStore SSMParamStore,
-	runner SSMRunner,
-	sandboxDir string,
-	outputter func(ctx context.Context, dir string) (map[string]any, error),
-	extractor func(map[string]any) string,
+	putParam func(ctx context.Context, name, value string) error,
 	sandboxID, slackChannelID string,
 	retryMax int,
 	retryDelay time.Duration,
 ) {
+	_ = retryMax
+	_ = retryDelay
 	bridgeURL, _ := ssmStore.Get(ctx, "/km/slack/bridge-url", false)
 	if bridgeURL == "" {
 		log.Warn().Str("sandbox_id", sandboxID).
-			Msg("Step 11d: /km/slack/bridge-url not configured — Slack env not injected (run km slack init)")
-		fmt.Fprintf(os.Stderr, "  ⚠ Slack: /km/slack/bridge-url not configured — env not injected (run km slack init)\n")
+			Msg("Step 11d: /km/slack/bridge-url not configured — Slack env not published (run km slack init)")
+		fmt.Fprintf(os.Stderr, "  ⚠ Slack: /km/slack/bridge-url not configured — env not published (run km slack init)\n")
 		return
 	}
-
-	outputs, outErr := outputter(ctx, sandboxDir)
-	if outErr != nil {
-		log.Warn().Err(outErr).Str("sandbox_id", sandboxID).
-			Msg("Step 11d: failed to read sandbox outputs for Slack env inject (non-fatal)")
-		fmt.Fprintf(os.Stderr, "  ⚠ Slack: failed to read terraform outputs — env not injected (non-fatal): %v\n", outErr)
+	if err := writeSlackChannelIDToSSM(ctx, putParam, sandboxID, slackChannelID); err != nil {
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).
+			Msg("Step 11d: failed to write slack-channel-id to SSM Parameter Store (non-fatal — sandbox is provisioned)")
+		fmt.Fprintf(os.Stderr, "  ⚠ Slack: SSM PutParameter failed — env not published (non-fatal): %v\n", err)
 		return
 	}
-
-	instanceID := extractor(outputs)
-	if instanceID == "" {
-		log.Warn().Str("sandbox_id", sandboxID).
-			Msg("Step 11d: no EC2 instance ID in terraform outputs — Slack env not injected (docker/non-EC2 substrate)")
-		fmt.Fprintf(os.Stderr, "  ⚠ Slack: no EC2 instance ID in outputs — env not injected (docker/non-EC2 substrate)\n")
-		return
-	}
-
-	// Bounded retry loop: up to retryMax attempts with retryDelay between each.
-	// Covers the SSM agent boot window — the agent may not be reachable when
-	// runner.Output returns. Production: 6 × 5s = 30s max. Tests: Microsecond delay.
-	var injectErr error
-	for attempt := 1; attempt <= retryMax; attempt++ {
-		injectErr = injectSlackEnvIntoSandbox(ctx, runner, instanceID, slackChannelID, bridgeURL)
-		if injectErr == nil {
-			break
-		}
-		if attempt < retryMax {
-			time.Sleep(retryDelay)
-		}
-	}
-	if injectErr != nil {
-		log.Warn().Err(injectErr).Int("attempts", retryMax).Str("sandbox_id", sandboxID).
-			Msg("Step 11d: failed to inject Slack env via SSM SendCommand after retries (non-fatal — sandbox is provisioned)")
-		fmt.Fprintf(os.Stderr, "  ⚠ Slack: SSM SendCommand failed — env not injected (non-fatal): %v\n", injectErr)
-		return
-	}
-	fmt.Fprintf(os.Stderr, "  ✓ Slack: channel %s wired into sandbox env\n", slackChannelID)
+	fmt.Fprintf(os.Stderr, "  ✓ Slack: channel %s published to SSM Parameter Store\n", slackChannelID)
 }
