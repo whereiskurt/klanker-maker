@@ -1446,7 +1446,7 @@ Plans:
 **Goal:** Close the Phase 67 UAT UX gap where Slack users get no visual feedback that their inbound message was received until the agent boots and posts its first reply (10-60s for paused sandboxes). The bridge Lambda adds a 👀 emoji reaction to the originating Slack message within ~1 second of successful SQS enqueue via Slack `reactions.add` Web API. Bridge-only change — no sandbox redeploy. Configurable emoji via `KM_SLACK_ACK_EMOJI` Lambda env var (default `eyes`). New required Slack scope: `reactions:write`.
 **Requirements**: UAT-1..UAT-5 (per 67.1-CONTEXT.md success criteria — no REQ-* IDs assigned; this is a UAT-gap-closure phase)
 **Depends on:** Phase 67
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 - [ ] 67.1-01-PLAN.md — Bridge code: Reactor interface + SlackReactorAdapter + EventsHandler fire-and-forget call after SQS write + cold-start KM_SLACK_ACK_EMOJI wiring + 4 unit tests + newHandler test signature ripple

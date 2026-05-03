@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: "Completed 67.1-01-PLAN.md (ACK reaction bridge code: Reactor interface, SlackReactorAdapter, EventsHandler.Reactor field, cold-start wiring, 8 new tests GREEN)"
-last_updated: "2026-05-03T18:42:09.044Z"
+stopped_at: "Completed 67.1-02-PLAN.md (scope verification for reactions:write)"
+last_updated: "2026-05-03T18:45:03.041Z"
 last_activity: 2026-05-03 — Completed 67-10-PLAN.md (E2E test, operator docs, UAT round-3 GREEN verdict on l11; 11/13 actively-exercised steps PASS, 1 partial, 2 NOT-EXERCISED with compensating coverage. Pause/resume validated post-checkpoint)
 progress:
   total_phases: 73
   completed_phases: 66
   total_plans: 242
-  completed_plans: 223
+  completed_plans: 224
   percent: 0
 ---
 
@@ -262,6 +262,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 67 P12 | 2min | 2 tasks | 3 files |
 | Phase 67-slack-inbound P10 | 2 days | 2 tasks | 5 files |
 | Phase 67.1-slack-inbound-ack-reaction P01 | 447 | 3 tasks | 6 files |
+| Phase 67.1 P02 | 634 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -745,6 +746,7 @@ Recent decisions affecting current work:
 - [Phase 67.1-01]: Duplicate HTTP call body in SlackReactorAdapter rather than extract shared helper (one method; factor if third adapter appears)
 - [Phase 67.1-01]: SlackReactorAdapter shares tokenFetcher instance with SlackPosterAdapter to preserve 15-min SSM token cache
 - [Phase 67.1-01]: KM_SLACK_ACK_EMOJI env var (default eyes) controls ACK emoji — bridge-global, no profile field for v1
+- [Phase 67.1]: reactions:write added as third required scope in both VerifyEventsAPIScopes and checkSlackAppEventsScopes; Remediation text softening deferred to Plan 03 (token rotation not needed for scope-add)
 
 ### Roadmap Evolution
 
@@ -833,6 +835,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-03T18:42:09.038Z
-Stopped at: Completed 67.1-01-PLAN.md (ACK reaction bridge code: Reactor interface, SlackReactorAdapter, EventsHandler.Reactor field, cold-start wiring, 8 new tests GREEN)
+Last session: 2026-05-03T18:45:03.034Z
+Stopped at: Completed 67.1-02-PLAN.md (scope verification for reactions:write)
 Resume file: None
