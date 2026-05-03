@@ -113,10 +113,14 @@ func TestCanonicalJSON_FieldOrderAlphabetical(t *testing.T) {
 	}
 	s := string(b)
 
-	// Fields in order: action, body, channel, nonce, sender_id, subject, thread_ts, timestamp, version
+	// Fields in alphabetical-by-tag order. Phase 68 added four upload-only
+	// fields (content_type, filename, s3_key, size_bytes); they serialize
+	// as zero values for non-upload actions so canonical signing remains
+	// deterministic across all action types.
 	fields := []string{
-		`"action"`, `"body"`, `"channel"`, `"nonce"`,
-		`"sender_id"`, `"subject"`, `"thread_ts"`, `"timestamp"`, `"version"`,
+		`"action"`, `"body"`, `"channel"`, `"content_type"`, `"filename"`,
+		`"nonce"`, `"s3_key"`, `"sender_id"`, `"size_bytes"`, `"subject"`,
+		`"thread_ts"`, `"timestamp"`, `"version"`,
 	}
 	last := 0
 	for _, field := range fields {
@@ -131,9 +135,10 @@ func TestCanonicalJSON_FieldOrderAlphabetical(t *testing.T) {
 		last = pos
 	}
 
-	// Also check against a golden constant
-	// The exact output should match this (no trailing newline, fields alphabetical)
-	golden := `{"action":"post","body":"hello","channel":"C0123ABC","nonce":"00000000000000000000000000000000","sender_id":"sb-abc123","subject":"[sb-abc123] needs permission","thread_ts":"","timestamp":1714280400,"version":1}`
+	// Also check against a golden constant. The exact output should match
+	// this (no trailing newline, fields alphabetical). The four Phase 68
+	// upload fields appear at their alphabetical positions with zero values.
+	golden := `{"action":"post","body":"hello","channel":"C0123ABC","content_type":"","filename":"","nonce":"00000000000000000000000000000000","s3_key":"","sender_id":"sb-abc123","size_bytes":0,"subject":"[sb-abc123] needs permission","thread_ts":"","timestamp":1714280400,"version":1}`
 	if s != golden {
 		t.Errorf("canonical JSON mismatch:\n  got:  %s\n  want: %s", s, golden)
 	}
