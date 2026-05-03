@@ -69,6 +69,26 @@ template, and adding new IAM policies in `infra/modules/ec2spot/v1.0.0`) do not
 touch the KM_SLACK_CHANNEL_ID / KM_SLACK_BRIDGE_URL emission path. `go build ./...`
 clean after Plan 68-06 changes.
 
+## Plan 68-09 confirmation: pre-existing TestUserDataNotifyEnv_* failures unchanged
+
+While executing Plan 68-09 (km-notify-hook PostToolUse + Stop transcript
+upload), the same two `TestUserDataNotifyEnv_NoChannelOverride_NoChannelID`
+and `TestUserDataNotifyEnv_BridgeURLNeverEmittedAtCompileTime` failures listed
+above were re-confirmed as pre-existing (verified via `git stash && go test
+… && git stash pop`). Plan 68-09's changes (km-notify-hook heredoc extension
++ PostToolUse settings.json registration + 11 new tests) do not touch the
+KM_SLACK_CHANNEL_ID / KM_SLACK_BRIDGE_URL emission path, and `go build ./...`
+remains clean after Plan 68-09 commits.
+
+Plan 68-09's actual scope is 100% green:
+- 10 new `TestNotifyHook_PostToolUse_*` and `TestNotifyHook_Stop_*` tests PASS
+- 1 new `TestUserData_PostToolUseHookRegistered` test PASS
+- 8 pre-existing Phase 62/63 `TestNotifyHook_*` tests still PASS (no regression)
+- 2 pre-existing Phase 67 `TestUserdata_StopHook*` tests still PASS (the
+  `# 6a.` / `# 6b.` markers in the heredoc are preserved)
+- Full pkg/compiler suite: all tests PASS except the two pre-existing
+  baseline failures listed above.
+
 ## Plan 68-07 confirmation: pre-existing TestShellCmd_* failures unchanged
 
 While executing Plan 68-07 (`--transcript-stream` / `--no-transcript-stream` flag
