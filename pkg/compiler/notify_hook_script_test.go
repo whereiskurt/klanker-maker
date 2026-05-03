@@ -36,10 +36,11 @@ func extractNotifyHookScript(t *testing.T) string {
 	}
 	body := rest[:j]
 
-	// Substitute absolute path with PATH-resolved name so tests can inject
-	// a stub via PATH prepend. The hook calls /opt/km/bin/km-send; on test
-	// machines that path does not exist. Replace all occurrences.
+	// Substitute absolute paths with PATH-resolved names so tests can inject
+	// stubs via PATH prepend. The hook calls /opt/km/bin/km-send and (Phase 68)
+	// /opt/km/bin/km-slack; on test machines those paths do not exist.
 	body = strings.ReplaceAll(body, "/opt/km/bin/km-send", "km-send")
+	body = strings.ReplaceAll(body, "/opt/km/bin/km-slack", "km-slack")
 
 	return body
 }

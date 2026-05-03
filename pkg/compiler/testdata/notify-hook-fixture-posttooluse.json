@@ -1,6 +1,6 @@
 {
   "session_id": "sess-abc123",
-  "transcript_path": "/tmp/test-transcript.jsonl",
+  "transcript_path": "__TRANSCRIPT_PATH__",
   "hook_event_name": "PostToolUse",
   "tool_name": "Edit",
   "tool_input": {"file_path": "/workspace/main.go", "old_string": "foo", "new_string": "bar"},
