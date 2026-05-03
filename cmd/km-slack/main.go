@@ -104,11 +104,76 @@ func runPost(args []string, stderr io.Writer) int {
 	return 0
 }
 
-// runUpload signs an ActionUpload envelope and POSTs it to the bridge.
-// Stub body: filled in by Plan 68-05 Task 2.
+// runUpload signs an ActionUpload envelope and POSTs it to the bridge. The
+// bridge does the actual Slack 3-step file upload using the S3 key.
 func runUpload(args []string, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "km-slack upload: not yet implemented")
-	return 1
+	fs := flag.NewFlagSet("upload", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var (
+		channel     = fs.String("channel", "", "Slack channel ID (C...) — required")
+		thread      = fs.String("thread", "", "Thread timestamp (parent ts)")
+		s3Key       = fs.String("s3-key", "", "S3 key (transcripts/{sandbox_id}/...) — required")
+		filename    = fs.String("filename", "", "Filename for Slack — required")
+		contentType = fs.String("content-type", "", "MIME type (application/gzip|application/json|text/plain) — required")
+		sizeBytes   = fs.Int64("size-bytes", 0, "Size in bytes (must equal actual S3 object size) — required")
+	)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *channel == "" || *s3Key == "" || *filename == "" || *contentType == "" || *sizeBytes <= 0 {
+		fmt.Fprintln(stderr, "km-slack upload: missing required flags (--channel --s3-key --filename --content-type --size-bytes)")
+		return 2
+	}
+	sandboxID := os.Getenv("KM_SANDBOX_ID")
+	bridgeURL := os.Getenv("KM_SLACK_BRIDGE_URL")
+	if sandboxID == "" || bridgeURL == "" {
+		fmt.Fprintln(stderr, "km-slack upload: KM_SANDBOX_ID and KM_SLACK_BRIDGE_URL required")
+		return 2
+	}
+	region := os.Getenv("AWS_REGION")
+	if region == "" {
+		region = os.Getenv("AWS_DEFAULT_REGION")
+	}
+	if region == "" {
+		fmt.Fprintln(stderr, "km-slack upload: AWS_REGION (or AWS_DEFAULT_REGION) not set")
+		return 2
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() { <-sigCh; cancel() }()
+
+	priv, err := loadPrivateKey(ctx, region, sandboxID)
+	if err != nil {
+		fmt.Fprintf(stderr, "km-slack upload: load signing key: %v\n", err)
+		return 1
+	}
+
+	env, err := slack.BuildEnvelopeUpload(sandboxID, *channel, *thread, *s3Key, *filename, *contentType, *sizeBytes)
+	if err != nil {
+		fmt.Fprintf(stderr, "km-slack upload: build envelope: %v\n", err)
+		return 1
+	}
+
+	_, sig, err := slack.SignEnvelope(env, priv)
+	if err != nil {
+		fmt.Fprintf(stderr, "km-slack upload: sign: %v\n", err)
+		return 1
+	}
+
+	resp, err := slack.PostToBridge(ctx, bridgeURL, env, sig)
+	if err != nil {
+		fmt.Fprintf(stderr, "km-slack upload: bridge POST: %v\n", err)
+		return 1
+	}
+	if !resp.OK {
+		fmt.Fprintf(stderr, "km-slack upload: bridge returned not-ok: %s\n", resp.Error)
+		return 1
+	}
+	fmt.Fprintf(stderr, "km-slack upload: ok ts=%s\n", resp.TS)
+	return 0
 }
 
 // runRecordMapping writes a (channel_id, slack_ts) → transcript-offset row to
