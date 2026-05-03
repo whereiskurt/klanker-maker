@@ -1,0 +1,16 @@
+apiVersion: klanker.io/v1
+kind: SandboxProfile
+metadata:
+  name: inbound-e2e
+spec:
+  runtime:
+    substrate: ec2
+    instanceType: t3.micro
+  cli:
+    notifyEmailEnabled: false
+    notifySlackEnabled: true
+    notifySlackPerSandbox: true
+    notifySlackInboundEnabled: true   # Phase 67
+    slackArchiveOnDestroy: true
+  lifecycle:
+    ttlMinutes: 30

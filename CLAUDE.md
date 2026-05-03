@@ -146,6 +146,65 @@ km slack init            # Interactive bootstrap (or pass --bot-token + --invite
 
 See `docs/slack-notifications.md` for the full operator guide.
 
+### Slack inbound (Phase 67)
+
+Bidirectional chat: Slack messages in `#sb-{id}` channels become Claude
+turns inside the sandbox via SQS FIFO dispatch.
+
+**Profile field (under `spec.cli`):**
+
+| Field | Type | Default | Effect |
+|---|---|---|---|
+| `notifySlackInboundEnabled` | bool | false | Provision per-sandbox SQS FIFO queue, install systemd poller, subscribe to channel events |
+
+Requires `notifySlackEnabled: true` AND `notifySlackPerSandbox: true`.
+Incompatible with `notifySlackChannelOverride`.
+
+**Sandbox env vars added at runtime:**
+
+| Variable | Source |
+|---|---|
+| `KM_SLACK_INBOUND_QUEUE_URL` | runtime, injected by km create |
+| `KM_SLACK_THREAD_TS` | exported by poller before each `km agent run` (passed via `--thread` to km-slack post) |
+| `KM_SLACK_THREADS_TABLE` | DDB table name for session-id persistence, injected by km create |
+
+**SSM parameters added in Phase 67:**
+
+| Parameter | Purpose |
+|---|---|
+| `/km/slack/signing-secret` (SecureString) | Slack App signing secret for HMAC-SHA256 verification of /events webhooks |
+
+**DynamoDB tables added in Phase 67:**
+
+- `{prefix}-km-slack-threads` — `(channel_id, thread_ts) → claude_session_id` map. TTL 30 days from `last_turn_ts`.
+- New GSI on `{prefix}-sandboxes`: `slack_channel_id-index` (additive, no PK/SK changes).
+
+**SQS resources (per-sandbox, runtime-provisioned):**
+
+- `{prefix}-slack-inbound-{sandbox-id}.fifo` — FIFO queue, 14d retention, 30s VisibilityTimeout, ContentBasedDeduplication=false.
+
+**One-time operator setup:**
+
+```bash
+km slack init --force --signing-secret <signing-secret-from-slack-app>
+# Then: paste printed Events URL into Slack App → Event Subscriptions → Request URL
+```
+
+**Signing secret rotation:**
+
+```bash
+km slack rotate-signing-secret --signing-secret <new-secret>
+# Or: km slack init --force --signing-secret <new-secret>
+```
+
+**km doctor adds three new checks:**
+
+- `slack_inbound_queue_exists` — every inbound-enabled sandbox has a healthy queue
+- `slack_inbound_stale_queues` — orphan SQS queues with no DDB sandbox row
+- `slack_app_events_subscription` — bot has channels:history + groups:history scopes
+
+See `docs/slack-notifications.md` for the full operator guide including setup steps, troubleshooting, and security model.
+
 ## Architecture
 
 - `cmd/km/` — CLI entry point

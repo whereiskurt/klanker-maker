@@ -440,3 +440,122 @@ Fix options:
 - `docs/superpowers/specs/2026-04-29-slack-notify-hook-design.md` — full Phase 63 design spec
 - `CLAUDE.md` — CLI quick reference, env var and SSM path conventions
 - Phase 62 email notification hook (predecessor to Phase 63 Slack delivery)
+
+---
+
+## Inbound chat (Phase 67)
+
+Phase 67 closes the loop opened by Phase 63: Slack messages in a per-sandbox
+channel become Claude turns inside that sandbox. The same `#sb-{id}` channel
+becomes a bidirectional chat surface.
+
+### Prerequisites
+
+- Phase 63 already configured: bridge Lambda deployed, bot token persisted at
+  `/km/slack/bot-token`, shared channel created.
+- Slack App has these additional scopes (add via Slack App config → OAuth & Permissions):
+  - `channels:history` — read messages in public channels
+  - `groups:history` — read messages in private channels
+  After adding scopes, **reinstall the app** to your workspace.
+- Slack signing secret captured. Get it from Slack App config → **Basic
+  Information → App Credentials → Signing Secret**.
+
+### One-time setup
+
+```bash
+km slack init --force --signing-secret <signing-secret-from-slack-app-config>
+```
+
+This persists the secret to `/km/slack/signing-secret` (KMS-encrypted) and
+prints the **Events API URL** to paste into the Slack App config.
+
+In Slack App config → **Event Subscriptions** → enable, then paste:
+
+- Request URL: `https://<bridge-fn-url>/events`
+- Subscribe to bot event: `message.channels` (and optionally `message.groups`
+  for private channels).
+
+Slack will hit the URL with a `url_verification` challenge — the bridge
+auto-acks. You should see "Verified" in the Slack App config.
+
+### Per-sandbox enablement
+
+Add to your profile under `spec.cli`:
+
+```yaml
+spec:
+  cli:
+    notifyEmailEnabled: false
+    notifySlackEnabled: true
+    notifySlackPerSandbox: true
+    notifySlackInboundEnabled: true   # Phase 67
+    slackArchiveOnDestroy: true
+```
+
+`notifySlackInboundEnabled: true` requires `notifySlackEnabled: true` AND
+`notifySlackPerSandbox: true`. It is **incompatible with**
+`notifySlackChannelOverride` — channel-to-sandbox routing requires 1:1 mapping
+in v1.
+
+### Behavior
+
+- After `km create`, the bridge posts: "Sandbox `sb-abc123` ready. Reply here
+  or in any thread to give it a task." Reply directly to that message to
+  start a fresh Claude session.
+- Top-level posts in the channel start new conversations. Each thread is its
+  own Claude session (resumed via `claude --resume <session-id>` keyed by
+  `(channel_id, thread_ts)`).
+- Claude's replies land in the same thread as the user's message.
+- `km pause` doesn't drop messages — the SQS queue retains for 14 days. Run
+  `km resume` to drain.
+- `km destroy` drains in-flight turns up to 30s, posts a final "destroyed"
+  message, deletes the SQS queue, and archives the channel.
+
+### Inspecting
+
+```bash
+km status sb-abc123          # queue depth + active thread count
+km list --wide               # column shows active threads per sandbox
+km doctor                    # three new checks: queue exists, stale queues,
+                             # Slack App scopes
+```
+
+### Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Slack message disappears, no Claude reply | Bot doesn't have `channels:history` scope | Add scope, reinstall app, run `km slack rotate-token` |
+| `url_verification` failed in Slack App config | Signing secret not configured | `km slack init --force --signing-secret <value>` |
+| Duplicate Claude responses | VisibilityTimeout race | Already mitigated (poller extends to 300s); if persists, check `journalctl -u km-slack-inbound-poller` |
+| Claude doesn't continue session across turns | `--resume` interaction with session map | Check `~/.claude/projects/<cwd>/` exists on sandbox; check session_id appears in km-slack-threads DDB row |
+| `km destroy` hangs | Drain timeout exceeded — agent run still active at 30s | Drain is bounded; `km destroy` proceeds anyway. Check `journalctl` for "drain: agent-run still active" |
+
+### Security model
+
+- **Signing secret** verifies that incoming `/events` requests are from Slack
+  (HMAC-SHA256 with a 5-minute timestamp window).
+- **Bot user_id filter** drops self-messages (no infinite loops).
+- **Per-sandbox IAM**: each sandbox can only `ReceiveMessage` from its own
+  queue ARN.
+- **Cross-sandbox isolation**: bridge's `sqs:SendMessage` permission is
+  scoped to the queue-name pattern; cannot write to a sandbox's queue without
+  knowing the channel-to-sandbox mapping (DDB GSI).
+
+### Signing secret rotation
+
+```bash
+km slack init --force --signing-secret <new-secret>
+```
+
+Then manually force-cold-start the bridge Lambda (touch its env var or
+redeploy) so the `SSMSigningSecretFetcher` cache invalidates within 15 minutes.
+
+### Limitations (deferred to later phases)
+
+- Mention-based sandbox spawning (`@km-bot create profile=foo prompt="..."`).
+- Slack interactive features (Block Kit buttons, slash commands, modals).
+- Auto-resume of paused sandboxes on inbound activity.
+- Inbound on shared channel or override-mode channels.
+- DM delivery, multi-recipient routing.
+- Block Kit / rich formatting for outbound replies.
+- Permission-prompt round-trip via Slack reply.
