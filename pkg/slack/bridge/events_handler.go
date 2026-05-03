@@ -211,19 +211,40 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	return EventsResponse{StatusCode: 200, Body: "ok"}
 }
 
-// isBotLoop returns true if the message originated from our bot or is a
-// non-user message subtype.
+// isBotLoop returns true if the message should NOT be dispatched to the
+// sandbox: bot self-messages, system events (channel_join, file_share, etc.),
+// or messages with no user attribution.
+//
+// Slack subtype semantics: an empty subtype field means a regular human
+// post. `thread_broadcast` means a user replied in a thread with "Also send
+// to channel" ticked — also a real human turn. Every other subtype is a
+// system event or alternate message form (file_share, channel_join,
+// channel_topic, ekm_access_denied, ...) that is either un-threadable
+// (system messages can't accept replies, breaks bot post) or carries no
+// user prompt content. Use an allow-list rather than a deny-list because
+// Slack has historically added new subtypes (e.g. ekm_access_denied came
+// years after launch) and a deny-list silently regresses each time —
+// Phase 67 UAT Gap B was a channel_join slip-through that burned a Claude
+// turn on a Slack Connect invite acceptance.
 func (h *EventsHandler) isBotLoop(ctx context.Context, m slackMessageEvent) bool {
+	// (1) Bot ID set — definitively a bot post (covers all bot_message variants).
 	if m.BotID != "" {
 		return true
 	}
+	// (2) Allow-list: only these two subtypes count as a real human turn.
 	switch m.Subtype {
-	case "bot_message", "message_changed", "message_deleted":
+	case "", "thread_broadcast":
+		// fall through
+	default:
+		h.log().Debug("events: subtype filter dropped",
+			"subtype", m.Subtype, "channel", m.Channel, "ts", m.TS)
 		return true
 	}
+	// (3) No user attribution — not a real human turn.
 	if m.User == "" {
-		return true // no user, not a real human turn
+		return true
 	}
+	// (4) Second-line defence: user is our own bot's user_id.
 	botUID, err := h.BotUserID.Fetch(ctx)
 	if err != nil {
 		h.log().Warn("events: bot user_id fetch failed", "err", err)
