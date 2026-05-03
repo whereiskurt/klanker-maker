@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 8
+current_plan: 9
 status: in-progress
-stopped_at: Completed 68-07-PLAN.md
-last_updated: "2026-05-03T20:22:02.178Z"
+stopped_at: Completed 68-08-PLAN.md
+last_updated: "2026-05-03T20:34:21.856Z"
 last_activity: 2026-05-03
 progress:
   total_phases: 73
   completed_phases: 67
   total_plans: 242
-  completed_plans: 233
+  completed_plans: 234
   percent: 93
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 Phase: 68 (slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload) — Wave 0 stub seeding COMPLETE
 Plan: 1 of 13 in current phase (Plan 68-00 COMPLETE; 68-01..68-12 pending)
 Total Plans in Phase: 13
-Current Plan: 8
+Current Plan: 9
 Status: in-progress
 Last activity: 2026-05-03
 
@@ -275,6 +275,7 @@ Progress: [█████████░] 93%
 | Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P05 | 30min | 4 tasks | 2 files |
 | Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P06 | 8min | 4 tasks | 6 files |
 | Phase 68 P07 | 22min | 3 tasks | 5 files |
+| Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P08 | 8 min | 5 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -781,6 +782,8 @@ Recent decisions affecting current work:
 - [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: SlackStreamMessagesTableName follows Phase 67 SlackThreadsTableName precedent: env var KM_SLACK_STREAM_TABLE with default km-slack-stream-messages; Plan 10 propagates Config.GetSlackStreamMessagesTableName() into the env var via km create
 - [Phase 68]: Plan 68-07: Mirrored Phase 62 (HOOK-04) tri-state flag pattern for --transcript-stream / --no-transcript-stream on km agent run + km shell
 - [Phase 68]: Plan 68-07: Extended buildNotifySendCommands to 3-arg (perm, idle, transcript) rather than introducing a parallel helper — keeps SSM SendCommand single-shot
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Bridge ActionUpload uses raw HTTP X-OAuth-Scopes probe at cold start (RESEARCH OQ 2) — Avoids extending Phase 63 SlackPosterAdapter.call() to surface response headers; one-shot probe at init() runs <100ms with 5s timeout cap; result cached for Lambda warm lifetime; fail-open on probe failure (empty header → MissingFilesWrite=false) so transient infra issues do not block all uploads.
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Streaming S3 → Slack via io.ReadCloser → io.Reader (zero buffering) — S3GetterAdapter returns out.Body directly; bridge defers body.Close() and passes the reader to Plan 04 pkg/slack.Client.UploadFile which streams to Slack with explicit Content-Length. Sustains 100MB cap on 256MB Lambda; peak memory stays at Go HTTP client baseline regardless of upload size.
 
 ### Roadmap Evolution
 
@@ -869,6 +872,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-03T20:22:02.173Z
-Stopped at: Completed 68-07-PLAN.md
+Last session: 2026-05-03T20:34:21.851Z
+Stopped at: Completed 68-08-PLAN.md
 Resume file: None
