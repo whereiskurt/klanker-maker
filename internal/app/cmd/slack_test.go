@@ -642,7 +642,7 @@ func TestSlackInit_PersistsSigningSecret(t *testing.T) {
 
 // TestSlackInit_ScopeCheck_AllPresent verifies no missing scopes when all required present.
 func TestSlackInit_ScopeCheck_AllPresent(t *testing.T) {
-	ok, missing := cmd.VerifyEventsAPIScopes([]string{"chat:write", "channels:history", "groups:history"})
+	ok, missing := cmd.VerifyEventsAPIScopes([]string{"chat:write", "channels:history", "groups:history", "reactions:write"})
 	if !ok || len(missing) != 0 {
 		t.Fatalf("expected all scopes present, got missing=%v", missing)
 	}
@@ -650,17 +650,40 @@ func TestSlackInit_ScopeCheck_AllPresent(t *testing.T) {
 
 // TestSlackInit_ScopeCheck_MissingOne verifies groups:history is detected missing.
 func TestSlackInit_ScopeCheck_MissingOne(t *testing.T) {
-	ok, missing := cmd.VerifyEventsAPIScopes([]string{"chat:write", "channels:history"})
+	ok, missing := cmd.VerifyEventsAPIScopes([]string{"chat:write", "channels:history", "reactions:write"})
 	if ok || len(missing) != 1 || missing[0] != "groups:history" {
 		t.Fatalf("expected groups:history missing, got ok=%v missing=%v", ok, missing)
 	}
 }
 
-// TestSlackInit_ScopeCheck_MissingBoth verifies both scopes detected missing.
+// TestSlackInit_ScopeCheck_MissingBoth verifies all three scopes detected missing when only chat:write provided.
 func TestSlackInit_ScopeCheck_MissingBoth(t *testing.T) {
 	ok, missing := cmd.VerifyEventsAPIScopes([]string{"chat:write"})
-	if ok || len(missing) != 2 {
-		t.Fatalf("expected both scopes missing, got ok=%v missing=%v", ok, missing)
+	if ok || len(missing) != 3 {
+		t.Fatalf("expected three scopes missing, got ok=%v missing=%v", ok, missing)
+	}
+	foundReactionsWrite := false
+	for _, m := range missing {
+		if m == "reactions:write" {
+			foundReactionsWrite = true
+			break
+		}
+	}
+	if !foundReactionsWrite {
+		t.Errorf("expected reactions:write in missing list, got %v", missing)
+	}
+}
+
+// TestSlackInit_ScopeCheck_MissingReactionsWrite: only the new Phase 67.1 scope is missing.
+// Mirrors the operator's reality: Phase 63 already required channels:history + groups:history,
+// so the most common failure is forgetting to add reactions:write specifically.
+func TestSlackInit_ScopeCheck_MissingReactionsWrite(t *testing.T) {
+	ok, missing := cmd.VerifyEventsAPIScopes([]string{"chat:write", "channels:history", "groups:history"})
+	if ok {
+		t.Fatal("expected reactions:write missing, got ok=true")
+	}
+	if len(missing) != 1 || missing[0] != "reactions:write" {
+		t.Fatalf("expected missing=[reactions:write], got %v", missing)
 	}
 }
 

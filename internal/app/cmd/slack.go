@@ -760,11 +760,12 @@ func PersistSigningSecret(ctx context.Context, store SlackSSMStore, secret, kmsK
 }
 
 // VerifyEventsAPIScopes checks whether the provided scope list contains the
-// scopes required for Slack Events API inbound (channels:history, groups:history).
+// scopes required for Slack Events API inbound (channels:history, groups:history)
+// AND the ACK reaction (reactions:write — Phase 67.1).
 // Returns (allPresent bool, missing []string).
 // Exported for testability.
 func VerifyEventsAPIScopes(scopes []string) (bool, []string) {
-	required := []string{"channels:history", "groups:history"}
+	required := []string{"channels:history", "groups:history", "reactions:write"}
 	scopeSet := make(map[string]bool, len(scopes))
 	for _, s := range scopes {
 		scopeSet[s] = true
