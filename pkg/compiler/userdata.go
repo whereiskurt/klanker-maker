@@ -468,9 +468,13 @@ if [[ "${KM_NOTIFY_EMAIL_ENABLED:-1}" == "1" ]]; then
   fi
 fi
 
-# 6b. Slack branch. Gated on both the enabled flag AND a non-empty channel ID
-#     (defensive: never call km-slack with an empty --channel even if enabled=1).
-if [[ "${KM_NOTIFY_SLACK_ENABLED:-0}" == "1" && -n "${KM_SLACK_CHANNEL_ID:-}" ]]; then
+# 6b. Slack branch. Gated on enabled flag + non-empty channel ID + NOT already
+#     handled by the inbound poller (Phase 67-11 Gap A — when the poller drives
+#     the run via 'claude -p', it has already posted .result before the Stop
+#     hook fires; double-posting would put the same reply in the thread twice).
+if [[ "${KM_NOTIFY_SLACK_ENABLED:-0}" == "1" \
+   && -n "${KM_SLACK_CHANNEL_ID:-}" \
+   && "${KM_SLACK_INBOUND_REPLY_HANDLED:-0}" != "1" ]]; then
   THREAD_FLAG=""
   if [[ -n "${KM_SLACK_THREAD_TS:-}" ]]; then
     THREAD_FLAG="--thread $KM_SLACK_THREAD_TS"
@@ -942,6 +946,52 @@ if [ -z "$QUEUE_URL" ]; then
 fi
 [ -z "$QUEUE_URL" ] && echo "[km-slack-inbound-poller] queue URL unavailable after retries, exiting" && exit 0
 
+# Phase 67-11 Gap A: resolve KM_SLACK_CHANNEL_ID + KM_SLACK_BRIDGE_URL from SSM
+# at startup. Cloud-init writes both to /etc/profile.d/km-slack-runtime.sh, but
+# the systemd unit's EnvironmentFile only loads /etc/profile.d/km-notify-env.sh,
+# so the env vars are NOT visible to the root-side post block we add below
+# (that block runs OUTSIDE the existing 'sudo -u sandbox bash -c' invocation
+# which re-sources profile.d/*.sh). Mirror the queue-url SSM fallback above —
+# values don't change between turns, so resolve once at startup and cache in
+# shell vars for the lifetime of the systemd service. A short retry (3×5s) is
+# sufficient: by the time the queue URL has resolved, channel-id and
+# bridge-url SSM params are guaranteed to exist (km create writes channel-id
+# atomically with the queue, and bridge-url exists from 'km slack init').
+KM_SLACK_CHANNEL_ID="${KM_SLACK_CHANNEL_ID:-}"
+KM_SLACK_BRIDGE_URL="${KM_SLACK_BRIDGE_URL:-}"
+CHANNEL_PARAM="/sandbox/${SANDBOX_ID}/slack-channel-id"
+BRIDGE_PARAM="/km/slack/bridge-url"
+if [ -z "$KM_SLACK_CHANNEL_ID" ]; then
+  for attempt in 1 2 3; do
+    KM_SLACK_CHANNEL_ID=$(aws ssm get-parameter \
+      --name "$CHANNEL_PARAM" \
+      --region "$REGION" \
+      --query 'Parameter.Value' \
+      --output text 2>/dev/null || true)
+    [ -n "$KM_SLACK_CHANNEL_ID" ] && [ "$KM_SLACK_CHANNEL_ID" != "None" ] && break
+    KM_SLACK_CHANNEL_ID=""
+    echo "[km-slack-inbound-poller] $CHANNEL_PARAM not yet available (attempt $attempt/3), sleeping 5s"
+    sleep 5
+  done
+fi
+if [ -z "$KM_SLACK_BRIDGE_URL" ]; then
+  for attempt in 1 2 3; do
+    KM_SLACK_BRIDGE_URL=$(aws ssm get-parameter \
+      --name "$BRIDGE_PARAM" \
+      --region "$REGION" \
+      --query 'Parameter.Value' \
+      --output text 2>/dev/null || true)
+    [ -n "$KM_SLACK_BRIDGE_URL" ] && [ "$KM_SLACK_BRIDGE_URL" != "None" ] && break
+    KM_SLACK_BRIDGE_URL=""
+    echo "[km-slack-inbound-poller] $BRIDGE_PARAM not yet available (attempt $attempt/3), sleeping 5s"
+    sleep 5
+  done
+fi
+if [ -z "$KM_SLACK_CHANNEL_ID" ] || [ -z "$KM_SLACK_BRIDGE_URL" ]; then
+  echo "[km-slack-inbound-poller] WARN: KM_SLACK_CHANNEL_ID or KM_SLACK_BRIDGE_URL unavailable; reply posting will be skipped this run"
+fi
+export KM_SLACK_CHANNEL_ID KM_SLACK_BRIDGE_URL
+
 echo "[km-slack-inbound-poller] Starting — queue=$QUEUE_URL table=$THREADS_TABLE region=$REGION"
 
 while true; do
@@ -1040,10 +1090,48 @@ while true; do
         \"ttl_expiry\":{\"N\":\"$TTL_EXPIRY\"}
       }" 2>/dev/null || true
 
+    # Ack first — posting to Slack BEFORE delete would open a host-crash
+    # window where the user sees a reply but the message gets redelivered
+    # → duplicate Claude run + duplicate post on visibility-timeout expiry.
     aws sqs delete-message \
       --queue-url "$QUEUE_URL" \
       --receipt-handle "$RECEIPT" \
       --region "$REGION" 2>/dev/null || true
+
+    # Phase 67-11 Gap A fix: post the canonical .result text to Slack from
+    # the poller. The Stop hook's transcript-JSONL scraping is unreliable in
+    # 'claude -p' (--print) mode (transcript may be un-flushed or differently
+    # shaped). Setting KM_SLACK_INBOUND_REPLY_HANDLED=1 short-circuits the
+    # Stop hook's Slack branch so we don't double-post.
+    #
+    # Trade-off: this block is gated on $NEW_SESSION (a successful run with
+    # a non-empty .session_id). On agent failure the else-branch's WARN log
+    # fires and SQS redelivers — the user sees no fallback message in Slack.
+    # Operator diagnoses via 'journalctl -u km-slack-inbound-poller' and
+    # 'km agent list'. Documented trade-off: silence-on-failure is safer
+    # than a misleading "(no recent assistant text)" fallback that operators
+    # cannot distinguish from genuine empty replies.
+    RESULT_TEXT=$(jq -r '.result // empty' "$RUN_DIR/output.json" 2>/dev/null || true)
+    if [ -n "$RESULT_TEXT" ] && [ -n "$KM_SLACK_CHANNEL_ID" ] && [ -n "$KM_SLACK_BRIDGE_URL" ]; then
+      POST_FILE=$(mktemp /tmp/km-slack-inbound-post.XXXXXX)
+      printf '%s' "$RESULT_TEXT" > "$POST_FILE"
+      export KM_SLACK_INBOUND_REPLY_HANDLED=1
+      if /opt/km/bin/km-slack post \
+           --channel "$KM_SLACK_CHANNEL_ID" \
+           --subject "" \
+           --thread "$THREAD_TS" \
+           --body "$POST_FILE" 2>>"$RUN_DIR/stderr.log"; then
+        echo "[km-slack-inbound-poller] Posted reply to Slack (thread=$THREAD_TS, len=${#RESULT_TEXT})"
+      else
+        echo "[km-slack-inbound-poller] WARN: km-slack post failed for thread=$THREAD_TS" >&2
+      fi
+      rm -f "$POST_FILE"
+    elif [ -z "$KM_SLACK_CHANNEL_ID" ] || [ -z "$KM_SLACK_BRIDGE_URL" ]; then
+      echo "[km-slack-inbound-poller] WARN: KM_SLACK_CHANNEL_ID/KM_SLACK_BRIDGE_URL unset, skipping Slack post for thread=$THREAD_TS"
+    else
+      echo "[km-slack-inbound-poller] WARN: empty .result in output.json, skipping Slack post for thread=$THREAD_TS"
+    fi
+
     echo "[km-slack-inbound-poller] Turn complete — session=$NEW_SESSION thread=$THREAD_TS"
   else
     echo "[km-slack-inbound-poller] WARN: agent run failed (exit $RUN_EXIT), message returns to queue"
