@@ -457,6 +457,51 @@ resource "aws_iam_role_policy" "ec2spot_slack_inbound_sqs" {
   })
 }
 
+# Phase 68: PutObject permission for Slack transcript uploads.
+# Scoped to the sandbox's own prefix under transcripts/{sandbox_id}/* so a
+# compromised sandbox cannot overwrite another sandbox's transcripts. Gated
+# on var.artifacts_bucket — when empty, the policy is omitted entirely so
+# pre-Phase-68 callers continue to compile unchanged.
+resource "aws_iam_role_policy" "ec2spot_slack_transcript_s3" {
+  count = (local.total_ec2spot_count > 0 && var.artifacts_bucket != "") ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-slack-transcript-s3"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "S3PutTranscript"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = "arn:aws:s3:::${var.artifacts_bucket}/transcripts/${var.sandbox_id}/*"
+      }
+    ]
+  })
+}
+
+# Phase 68: PutItem permission for the stream-message → transcript-offset map.
+# Wildcard region/account so the same module template works across regions
+# the sandbox might be launched in. Gated on var.slack_stream_messages_table_name —
+# when empty, the policy is omitted.
+resource "aws_iam_role_policy" "ec2spot_slack_transcript_ddb" {
+  count = (local.total_ec2spot_count > 0 && var.slack_stream_messages_table_name != "") ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-slack-transcript-ddb"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "DDBPutItemStreamMessages"
+        Effect   = "Allow"
+        Action   = ["dynamodb:PutItem"]
+        Resource = "arn:aws:dynamodb:*:*:table/${var.slack_stream_messages_table_name}"
+      }
+    ]
+  })
+}
+
 resource "aws_iam_instance_profile" "ec2spot" {
   count = local.total_ec2spot_count > 0 ? 1 : 0
 

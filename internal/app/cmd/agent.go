@@ -160,6 +160,7 @@ func newAgentRunCmd(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExec
 	var useCodex bool
 	var notifyOnPermission bool
 	var notifyOnIdle bool
+	var transcriptStream bool
 
 	cmd := &cobra.Command{
 		Use:   "run <sandbox-id | #number>",
@@ -237,6 +238,9 @@ Examples:
 			}
 			notifyPermPtr = resolveNotifyFlagAgent("notify-on-permission", "no-notify-on-permission", notifyOnPermission)
 			notifyIdlePtr = resolveNotifyFlagAgent("notify-on-idle", "no-notify-on-idle", notifyOnIdle)
+			// Plan 68-07: --transcript-stream / --no-transcript-stream override.
+			// nil = neither flag changed; profile default applies via /etc/profile.d/km-notify-env.sh.
+			transcriptStreamPtr := resolveNotifyFlagAgent("transcript-stream", "no-transcript-stream", transcriptStream)
 
 			// If neither CLI flag set, check profile default.
 			if notifyPermPtr == nil || notifyIdlePtr == nil {
@@ -261,7 +265,7 @@ Examples:
 				prompt = string(data)
 			}
 
-			return runAgentNonInteractive(ctx, cfg, fetcher, execFn, ssmClient, ebClient, sandboxID, prompt, wait, interactive, noBedrock, autoStart, agentType, notifyPermPtr, notifyIdlePtr)
+			return runAgentNonInteractive(ctx, cfg, fetcher, execFn, ssmClient, ebClient, sandboxID, prompt, wait, interactive, noBedrock, autoStart, agentType, notifyPermPtr, notifyIdlePtr, transcriptStreamPtr)
 		},
 	}
 
@@ -277,6 +281,9 @@ Examples:
 	cmd.Flags().BoolVar(&notifyOnIdle, "notify-on-idle", false, "Email operator when Claude finishes a turn (overrides profile default)")
 	cmd.Flags().Bool("no-notify-on-permission", false, "Force-disable Claude permission-prompt emails for this invocation")
 	cmd.Flags().Bool("no-notify-on-idle", false, "Force-disable Claude idle emails for this invocation")
+	// Plan 68-07: per-invocation transcript-stream override (Phase 68 Slack transcript streaming).
+	cmd.Flags().BoolVar(&transcriptStream, "transcript-stream", false, "Stream Claude transcript turns to per-sandbox Slack thread + upload final JSONL (overrides profile default)")
+	cmd.Flags().Bool("no-transcript-stream", false, "Force-disable transcript streaming for this invocation")
 	_ = cmd.MarkFlagRequired("prompt")
 
 	return cmd
@@ -449,7 +456,7 @@ Examples:
 // It base64-encodes the prompt to prevent shell injection, creates a run directory
 // on the sandbox, and either returns immediately (fire-and-forget) or waits for
 // completion with idle-reset heartbeats.
-func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, ebClient kmaws.EventBridgeAPI, sandboxID, prompt string, wait, interactive, noBedrock, autoStart bool, agentType string, notifyPermPtr, notifyIdlePtr *bool) error {
+func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, ebClient kmaws.EventBridgeAPI, sandboxID, prompt string, wait, interactive, noBedrock, autoStart bool, agentType string, notifyPermPtr, notifyIdlePtr, transcriptStreamPtr *bool) error {
 	printBanner("km agent run", sandboxID)
 
 	// Initialize real clients if not injected
@@ -568,6 +575,7 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 		ArtifactsBucket:    cfg.ArtifactsBucket,
 		NotifyOnPermission: notifyPermPtr,
 		NotifyOnIdle:       notifyIdlePtr,
+		TranscriptStream:   transcriptStreamPtr,
 	})
 
 	// --interactive mode: write script to disk, then open SSM session with tmux new-session (attached)
@@ -1151,6 +1159,11 @@ type AgentRunOptions struct {
 	// Non-nil = explicit CLI override: emit export KM_NOTIFY_ON_*="0"|"1".
 	NotifyOnPermission *bool
 	NotifyOnIdle       *bool
+	// Plan 68-07: per-invocation transcript-stream override (Phase 68 Slack
+	// transcript streaming). Same nil/non-nil semantics as NotifyOn* above:
+	// nil = let profile default win; non-nil = emit export
+	// KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED="0"|"1" before the agent invocation.
+	TranscriptStream *bool
 }
 
 // BuildAgentShellCommands returns SSM RunShellScript commands for non-interactive
@@ -1205,10 +1218,10 @@ fi`
 		}
 	}
 
-	// Phase 62 (HOOK-04): build per-invocation notify env-var overrides.
+	// Phase 62 (HOOK-04) + Plan 68-07: build per-invocation notify env-var overrides.
 	// Only emits lines for non-nil pointers; nil means "let profile.d default take effect".
 	var notifyEnvLines string
-	if opts.NotifyOnPermission != nil || opts.NotifyOnIdle != nil {
+	if opts.NotifyOnPermission != nil || opts.NotifyOnIdle != nil || opts.TranscriptStream != nil {
 		var sb strings.Builder
 		if opts.NotifyOnPermission != nil {
 			v := "0"
@@ -1223,6 +1236,13 @@ fi`
 				v = "1"
 			}
 			fmt.Fprintf(&sb, "export KM_NOTIFY_ON_IDLE=%q\n", v)
+		}
+		if opts.TranscriptStream != nil {
+			v := "0"
+			if *opts.TranscriptStream {
+				v = "1"
+			}
+			fmt.Fprintf(&sb, "export KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED=%q\n", v)
 		}
 		notifyEnvLines = sb.String()
 	}
