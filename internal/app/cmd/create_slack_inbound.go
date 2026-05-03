@@ -18,13 +18,17 @@ package cmd
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"os"
 
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/rs/zerolog/log"
 	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	slackpkg "github.com/whereiskurt/klankrmkr/pkg/slack"
+	slackbridge "github.com/whereiskurt/klankrmkr/pkg/slack/bridge"
 )
 
 // slackInboundDeps bundles all dependencies for provisionSlackInboundQueue.
@@ -33,7 +37,7 @@ import (
 type slackInboundDeps struct {
 	// Profile is the resolved SandboxProfile (read from YAML + CLI overrides).
 	Profile *profile.SandboxProfile
-	// Cfg is the operator config (provides GetResourcePrefix(), SandboxTableName).
+	// Cfg is the operator config (provides GetResourcePrefix(), SandboxTableName, Region).
 	Cfg *config.Config
 	// SandboxID is the sandbox being created (e.g. "sb-abc123").
 	SandboxID string
@@ -50,6 +54,18 @@ type slackInboundDeps struct {
 	// InstanceID is the EC2 instance ID of the running sandbox, needed by
 	// InjectEnvVar. Empty string is valid when InjectEnvVar is a no-op mock.
 	InstanceID string
+
+	// Phase 67-07: ready-announcement fields.
+	// PostOperatorSigned posts a message to the given Slack channel via the
+	// operator-signed bridge `post` action and returns the message timestamp (ts).
+	// Used by postReadyAnnouncement to post the "Sandbox ready" message.
+	// May be nil — postReadyAnnouncement is a no-op when nil.
+	PostOperatorSigned func(ctx context.Context, channelID, body string) (messageTS string, err error)
+	// UpsertSlackThread writes (or updates) a km-slack-threads row anchoring the
+	// (channelID, threadTS) → sandboxID mapping. Empty claude_session_id is written
+	// intentionally — the first reply starts a fresh Claude session.
+	// May be nil — postReadyAnnouncement skips the upsert when nil.
+	UpsertSlackThread func(ctx context.Context, channelID, threadTS, sandboxID string) error
 }
 
 // provisionSlackInboundQueue creates the per-sandbox SQS FIFO queue, persists
@@ -153,6 +169,62 @@ func rollbackSlackInboundQueue(ctx context.Context, deps slackInboundDeps, queue
 	return firstErr
 }
 
+// postReadyAnnouncement posts the "Sandbox <id> ready" message via the existing
+// Phase 63 operator-signed bridge `post` action and records the returned
+// message_ts in km-slack-threads with an empty claude_session_id.
+//
+// The first user reply directly under that message starts a fresh Claude session.
+//
+// Returns nil on best-effort failure (logs WARN) — failing to post the ready
+// announcement does NOT abort km create. The user can always start a top-level
+// post.
+func postReadyAnnouncement(ctx context.Context, deps slackInboundDeps, channelID string) error {
+	if deps.Profile == nil || deps.Profile.Spec.CLI == nil || !deps.Profile.Spec.CLI.NotifySlackInboundEnabled {
+		return nil
+	}
+	if deps.PostOperatorSigned == nil {
+		return nil
+	}
+	if channelID == "" {
+		// No channel — skip silently (not an error condition).
+		return nil
+	}
+
+	region := ""
+	if deps.Cfg != nil {
+		region = deps.Cfg.PrimaryRegion
+	}
+
+	profileName := ""
+	if deps.Profile != nil {
+		profileName = deps.Profile.Metadata.Name
+	}
+
+	// Compose announcement message.
+	msg := fmt.Sprintf(
+		"Sandbox `%s` ready. Reply here or in any thread to give it a task.\n"+
+			"_Profile: %s · Region: %s · Reply with a prompt to start a Claude turn._",
+		deps.SandboxID, profileName, region,
+	)
+
+	// Post via the existing operator-signed bridge action.
+	messageTS, err := deps.PostOperatorSigned(ctx, channelID, msg)
+	if err != nil {
+		// Non-fatal: log WARN and continue.
+		fmt.Fprintf(os.Stderr, "  ⚠ Slack: ready announcement failed: %v (km create continues)\n", err)
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "  ✓ Slack: posted ready announcement (ts=%s)\n", messageTS)
+
+	// Anchor in km-slack-threads with empty claude_session_id.
+	if deps.UpsertSlackThread != nil && messageTS != "" {
+		if upsertErr := deps.UpsertSlackThread(ctx, channelID, messageTS, deps.SandboxID); upsertErr != nil {
+			fmt.Fprintf(os.Stderr, "  ⚠ Slack: thread anchor write failed: %v (non-fatal)\n", upsertErr)
+		}
+	}
+	return nil
+}
+
 // injectSlackInboundQueueURLIntoSandbox appends the KM_SLACK_INBOUND_QUEUE_URL
 // export line to /etc/profile.d/km-notify-env.sh on the sandbox. Idempotent:
 // uses grep/sed to avoid duplicate lines on re-runs.
@@ -172,4 +244,43 @@ grep -q '^export KM_SLACK_INBOUND_QUEUE_URL=' "$ENV_FILE" \
   || echo 'export KM_SLACK_INBOUND_QUEUE_URL="%s"' >> "$ENV_FILE"
 `, queueURL, queueURL)
 	return runner.RunShell(ctx, instanceID, script)
+}
+
+// makePostOperatorSigned returns a PostOperatorSigned callback that loads the
+// operator signing key from SSM, builds an envelope, signs it, and posts it to
+// the bridge Lambda. Returns the Slack message timestamp (ts) on success.
+//
+// This is the production factory for slackInboundDeps.PostOperatorSigned.
+// It mirrors the signing pattern in destroy_slack.go (destroySlackChannel).
+func makePostOperatorSigned(ssmClient *ssm.Client, bridgeURL string) func(ctx context.Context, channelID, body string) (string, error) {
+	return func(ctx context.Context, channelID, body string) (string, error) {
+		if bridgeURL == "" {
+			return "", fmt.Errorf("PostOperatorSigned: bridge URL is empty")
+		}
+		priv, err := loadSlackOperatorKey(ctx, ssmClient)
+		if err != nil {
+			return "", fmt.Errorf("PostOperatorSigned: load key: %w", err)
+		}
+		env, err := slackpkg.BuildEnvelope(slackpkg.ActionPost, slackpkg.SenderOperator, channelID, "Sandbox Ready", body, "")
+		if err != nil {
+			return "", fmt.Errorf("PostOperatorSigned: build envelope: %w", err)
+		}
+		_, sig, err := slackpkg.SignEnvelope(env, ed25519.PrivateKey(priv))
+		if err != nil {
+			return "", fmt.Errorf("PostOperatorSigned: sign envelope: %w", err)
+		}
+		resp, err := slackpkg.PostToBridge(ctx, bridgeURL, env, sig)
+		if err != nil {
+			return "", fmt.Errorf("PostOperatorSigned: post to bridge: %w", err)
+		}
+		return resp.TS, nil
+	}
+}
+
+// makeUpsertSlackThread returns a UpsertSlackThread callback that writes a
+// km-slack-threads anchor row using the existing bridge DDBThreadStore.
+// Reuses pkg/slack/bridge.DDBThreadStore.Upsert so the schema stays consistent.
+func makeUpsertSlackThread(ddbClient slackbridge.DDBQueryGetPutAPI, tableName string) func(ctx context.Context, channelID, threadTS, sandboxID string) error {
+	store := &slackbridge.DDBThreadStore{Client: ddbClient, TableName: tableName}
+	return store.Upsert
 }

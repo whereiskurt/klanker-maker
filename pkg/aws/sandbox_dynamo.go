@@ -121,19 +121,21 @@ func metadataToRecord(meta *SandboxMetadata) SandboxRecord {
 		status = "running" // backward compat: old metadata without status field
 	}
 	return SandboxRecord{
-		SandboxID:      meta.SandboxID,
-		Profile:        meta.ProfileName,
-		Substrate:      meta.Substrate,
-		Region:         meta.Region,
-		Status:         status,
-		CreatedAt:      meta.CreatedAt,
-		TTLExpiry:      meta.TTLExpiry,
-		TTLRemaining:   computeTTLRemaining(meta.TTLExpiry),
-		IdleTimeout:    meta.IdleTimeout,
-		Alias:          meta.Alias,
-		ClonedFrom:     meta.ClonedFrom,
-		Locked:         meta.Locked,
-		TeardownPolicy: meta.TeardownPolicy,
+		SandboxID:            meta.SandboxID,
+		Profile:              meta.ProfileName,
+		Substrate:            meta.Substrate,
+		Region:               meta.Region,
+		Status:               status,
+		CreatedAt:            meta.CreatedAt,
+		TTLExpiry:            meta.TTLExpiry,
+		TTLRemaining:         computeTTLRemaining(meta.TTLExpiry),
+		IdleTimeout:          meta.IdleTimeout,
+		Alias:                meta.Alias,
+		ClonedFrom:           meta.ClonedFrom,
+		Locked:               meta.Locked,
+		TeardownPolicy:       meta.TeardownPolicy,
+		SlackChannelID:       meta.SlackChannelID,
+		SlackInboundQueueURL: meta.SlackInboundQueueURL,
 	}
 }
 
@@ -247,6 +249,11 @@ func unmarshalSlackFields(item map[string]dynamodbtypes.AttributeValue, meta *Sa
 		if bv, ok := v.(*dynamodbtypes.AttributeValueMemberBOOL); ok {
 			val := bv.Value
 			meta.SlackArchiveOnDestroy = &val
+		}
+	}
+	if v, ok := item["slack_inbound_queue_url"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			meta.SlackInboundQueueURL = sv.Value
 		}
 	}
 }

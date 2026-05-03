@@ -8,6 +8,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
@@ -242,7 +243,76 @@ func TestCreate_SlackInboundDDBPersistFailure(t *testing.T) {
 	}
 }
 
-// TestCreate_SlackInboundReadyAnnouncement is scoped to Plan 67-07.
+// ============================================================
+// Phase 67-07 tests — postReadyAnnouncement
+// ============================================================
+
+// profileWithInbound builds a minimal SandboxProfile with the given
+// notifySlackInboundEnabled value. Used by the ready-announcement tests.
+func profileWithInbound(on bool) *profile.SandboxProfile {
+	p := &profile.SandboxProfile{}
+	p.Spec.CLI = &profile.CLISpec{NotifySlackInboundEnabled: on}
+	return p
+}
+
+// TestCreate_SlackInboundReadyAnnouncement verifies the happy path:
+//   - PostOperatorSigned is called exactly once with the correct channel
+//   - Body contains the sandbox ID
+//   - UpsertSlackThread is called with the returned ts
 func TestCreate_SlackInboundReadyAnnouncement(t *testing.T) {
-	t.Skip("Wave 0 stub — Plan 67-07")
+	type postRecord struct{ ch, body string }
+	type upsertRecord struct{ ch, ts, sb string }
+	var posted []postRecord
+	var upserted []upsertRecord
+	deps := slackInboundDeps{
+		Profile:   profileWithInbound(true),
+		Cfg:       &config.Config{ResourcePrefix: "km", PrimaryRegion: "us-east-1"},
+		SandboxID: "sb-abc123",
+		PostOperatorSigned: func(ctx context.Context, ch, body string) (string, error) {
+			posted = append(posted, postRecord{ch, body})
+			return "1714280400.001", nil
+		},
+		UpsertSlackThread: func(ctx context.Context, ch, ts, sb string) error {
+			upserted = append(upserted, upsertRecord{ch, ts, sb})
+			return nil
+		},
+	}
+	if err := postReadyAnnouncement(context.Background(), deps, "C1"); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(posted) != 1 || posted[0].ch != "C1" {
+		t.Fatalf("posted: %+v", posted)
+	}
+	if !strings.Contains(posted[0].body, "sb-abc123") {
+		t.Fatalf("body missing sandbox id: %q", posted[0].body)
+	}
+	if len(upserted) != 1 || upserted[0].ts != "1714280400.001" {
+		t.Fatalf("upsert: %+v", upserted)
+	}
+}
+
+// TestCreate_SlackInboundReadyAnnouncement_Disabled verifies that when
+// notifySlackInboundEnabled is false, postReadyAnnouncement is a no-op.
+func TestCreate_SlackInboundReadyAnnouncement_Disabled(t *testing.T) {
+	deps := slackInboundDeps{Profile: profileWithInbound(false)}
+	if err := postReadyAnnouncement(context.Background(), deps, "C1"); err != nil {
+		t.Fatalf("disabled inbound should be silent no-op, got %v", err)
+	}
+}
+
+// TestCreate_SlackInboundReadyAnnouncement_PostFailureNonFatal verifies
+// that a bridge post failure does NOT bubble up as an error.
+func TestCreate_SlackInboundReadyAnnouncement_PostFailureNonFatal(t *testing.T) {
+	deps := slackInboundDeps{
+		Profile:   profileWithInbound(true),
+		Cfg:       &config.Config{ResourcePrefix: "km"},
+		SandboxID: "sb-abc",
+		PostOperatorSigned: func(ctx context.Context, ch, body string) (string, error) {
+			return "", errors.New("bridge unavailable")
+		},
+		UpsertSlackThread: func(ctx context.Context, ch, ts, sb string) error { return nil },
+	}
+	if err := postReadyAnnouncement(context.Background(), deps, "C1"); err != nil {
+		t.Fatalf("post failure must not bubble up: got %v", err)
+	}
 }

@@ -882,6 +882,10 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		}
 
 		ssmRunnerFor11e := &productionSSMRunner{client: ssm.NewFromConfig(awsCfg)}
+		ssmClientFor11e := ssm.NewFromConfig(awsCfg)
+		ssmStoreFor11e := &productionSSMParamStore{client: ssmClientFor11e}
+		// Fetch bridge URL once for the ready-announcement callback below.
+		bridgeURLFor11e, _ := ssmStoreFor11e.Get(ctx, "/km/slack/bridge-url", false)
 		step11eDeps := slackInboundDeps{
 			Profile:   resolvedProfile,
 			Cfg:       cfg,
@@ -894,6 +898,12 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			InjectEnvVar: func(ictx context.Context, iid, name, val string) error {
 				return injectSlackInboundQueueURLIntoSandbox(ictx, ssmRunnerFor11e, iid, val)
 			},
+			// Phase 67-07: ready announcement callbacks.
+			PostOperatorSigned: makePostOperatorSigned(ssmClientFor11e, bridgeURLFor11e),
+			UpsertSlackThread: makeUpsertSlackThread(
+				dynamodbpkg.NewFromConfig(awsCfg),
+				cfg.GetSlackThreadsTableName(),
+			),
 		}
 
 		inboundQueueURL, inboundErr := provisionSlackInboundQueue(ctx, step11eDeps)
@@ -915,6 +925,14 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		if inboundQueueURL != "" {
 			log.Info().Str("sandbox_id", sandboxID).Str("queue_url", inboundQueueURL).
 				Msg("Slack inbound queue provisioned")
+		}
+
+		// Phase 67-07: Post the "Sandbox ready" announcement to the per-sandbox channel.
+		// Non-fatal: the sandbox is already provisioned; failure here does NOT abort km create.
+		if slackChannelID != "" && slackPerSandbox {
+			if annErr := postReadyAnnouncement(ctx, step11eDeps, slackChannelID); annErr != nil {
+				log.Warn().Err(annErr).Str("sandbox_id", sandboxID).Msg("ready announcement error (non-fatal)")
+			}
 		}
 	}
 
