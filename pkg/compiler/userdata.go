@@ -432,9 +432,14 @@ fi
 # 6b. Slack branch. Gated on both the enabled flag AND a non-empty channel ID
 #     (defensive: never call km-slack with an empty --channel even if enabled=1).
 if [[ "${KM_NOTIFY_SLACK_ENABLED:-0}" == "1" && -n "${KM_SLACK_CHANNEL_ID:-}" ]]; then
+  THREAD_FLAG=""
+  if [[ -n "${KM_SLACK_THREAD_TS:-}" ]]; then
+    THREAD_FLAG="--thread $KM_SLACK_THREAD_TS"
+  fi
   if /opt/km/bin/km-slack post \
        --channel "$KM_SLACK_CHANNEL_ID" \
        --subject "$subject" \
+       $THREAD_FLAG \
        --body "$body_file"; then
     sent_any=1
   fi
@@ -855,6 +860,124 @@ done
 MAILPOLL
 chmod +x /opt/km/bin/km-mail-poller
 
+{{- if .SlackInboundEnabled }}
+# Phase 67: km-slack-inbound-poller — SQS long-poll dispatch to km agent run
+# Mirrors km-mail-poller pattern: bash + systemd, inline heredoc, no sidecar binary.
+cat > /opt/km/bin/km-slack-inbound-poller << 'SLACKINBOUND'
+#!/bin/bash
+set -euo pipefail
+# km-slack-inbound-poller: poll SQS FIFO queue for inbound Slack messages and
+# dispatch each turn via km agent run. Session continuity via DynamoDB km_slack_threads.
+# Runs as root via systemd; claude invocation uses sudo -u sandbox for session files.
+
+QUEUE_URL="${KM_SLACK_INBOUND_QUEUE_URL:-}"
+SANDBOX_ID="${KM_SANDBOX_ID:-}"
+REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+THREADS_TABLE="${KM_SLACK_THREADS_TABLE:-km-slack-threads}"
+
+[ -z "$QUEUE_URL" ] && echo "[km-slack-inbound-poller] KM_SLACK_INBOUND_QUEUE_URL not set, exiting" && exit 0
+[ -z "$SANDBOX_ID" ] && echo "[km-slack-inbound-poller] KM_SANDBOX_ID not set, exiting" && exit 0
+
+echo "[km-slack-inbound-poller] Starting — queue=$QUEUE_URL table=$THREADS_TABLE region=$REGION"
+
+while true; do
+  MSG=$(aws sqs receive-message \
+    --queue-url "$QUEUE_URL" \
+    --wait-time-seconds 20 \
+    --max-number-of-messages 1 \
+    --region "$REGION" \
+    --output json 2>/dev/null || true)
+
+  BODY=$(echo "$MSG" | jq -r '.Messages[0].Body // empty' 2>/dev/null || true)
+  RECEIPT=$(echo "$MSG" | jq -r '.Messages[0].ReceiptHandle // empty' 2>/dev/null || true)
+
+  [ -z "$BODY" ] && continue
+
+  CHANNEL=$(echo "$BODY" | jq -r '.channel // empty')
+  THREAD_TS=$(echo "$BODY" | jq -r '.thread_ts // empty')
+  TEXT=$(echo "$BODY" | jq -r '.text // empty')
+
+  if [ -z "$CHANNEL" ] || [ -z "$THREAD_TS" ] || [ -z "$TEXT" ]; then
+    echo "[km-slack-inbound-poller] WARN: malformed message body, acking to avoid retry: $BODY"
+    aws sqs delete-message \
+      --queue-url "$QUEUE_URL" \
+      --receipt-handle "$RECEIPT" \
+      --region "$REGION" 2>/dev/null || true
+    continue
+  fi
+
+  # Extend visibility BEFORE agent run to prevent re-delivery during long turns (Pitfall 1).
+  aws sqs change-message-visibility \
+    --queue-url "$QUEUE_URL" \
+    --receipt-handle "$RECEIPT" \
+    --visibility-timeout 300 \
+    --region "$REGION" 2>/dev/null || true
+
+  # DDB lookup for existing Claude session in this thread.
+  DDB_ITEM=$(aws dynamodb get-item \
+    --table-name "$THREADS_TABLE" \
+    --key "{\"channel_id\":{\"S\":\"$CHANNEL\"},\"thread_ts\":{\"S\":\"$THREAD_TS\"}}" \
+    --region "$REGION" \
+    --output json 2>/dev/null || true)
+  CLAUDE_SESSION=$(echo "$DDB_ITEM" | jq -r '.Item.claude_session_id.S // empty' 2>/dev/null || true)
+
+  RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
+  RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
+  mkdir -p "$RUN_DIR"
+
+  RESUME_ARG=""
+  [ -n "$CLAUDE_SESSION" ] && RESUME_ARG="--resume $CLAUDE_SESSION"
+
+  PROMPT_FILE=$(mktemp)
+  echo "$TEXT" > "$PROMPT_FILE"
+
+  # Export KM_SLACK_THREAD_TS so km-notify-hook passes --thread to km-slack post (Phase 67).
+  export KM_SLACK_THREAD_TS="$THREAD_TS"
+
+  sudo -u sandbox bash -c "
+    export KM_SLACK_THREAD_TS='$THREAD_TS'
+    claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
+      --dangerously-skip-permissions --bare $RESUME_ARG \
+      > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+    echo \$? > '$RUN_DIR/exit_code'
+  "
+  rm -f "$PROMPT_FILE"
+
+  RUN_EXIT=$(cat "$RUN_DIR/exit_code" 2>/dev/null || echo 1)
+  NEW_SESSION=""
+  if [ "$RUN_EXIT" -eq 0 ] && [ -s "$RUN_DIR/output.json" ]; then
+    NEW_SESSION=$(jq -r '.session_id // empty' "$RUN_DIR/output.json" 2>/dev/null || true)
+  fi
+
+  if [ -n "$NEW_SESSION" ]; then
+    NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    TTL_EXPIRY=$(( $(date +%s) + 30*24*3600 ))
+    aws dynamodb put-item \
+      --table-name "$THREADS_TABLE" \
+      --region "$REGION" \
+      --item "{
+        \"channel_id\":{\"S\":\"$CHANNEL\"},
+        \"thread_ts\":{\"S\":\"$THREAD_TS\"},
+        \"claude_session_id\":{\"S\":\"$NEW_SESSION\"},
+        \"sandbox_id\":{\"S\":\"$SANDBOX_ID\"},
+        \"last_turn_ts\":{\"S\":\"$NOW\"},
+        \"ttl_expiry\":{\"N\":\"$TTL_EXPIRY\"}
+      }" 2>/dev/null || true
+
+    aws sqs delete-message \
+      --queue-url "$QUEUE_URL" \
+      --receipt-handle "$RECEIPT" \
+      --region "$REGION" 2>/dev/null || true
+    echo "[km-slack-inbound-poller] Turn complete — session=$NEW_SESSION thread=$THREAD_TS"
+  else
+    echo "[km-slack-inbound-poller] WARN: agent run failed (exit $RUN_EXIT), message returns to queue"
+  fi
+done
+SLACKINBOUND
+chmod +x /opt/km/bin/km-slack-inbound-poller
+echo "[km-bootstrap] km-slack-inbound-poller installed at /opt/km/bin/km-slack-inbound-poller"
+{{- end }}
+
 # km-send: send Ed25519-signed email with optional attachments via SES
 cat > /opt/km/bin/km-send << 'KMSEND'
 #!/bin/bash
@@ -1119,6 +1242,25 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 UNIT
+
+{{- if .SlackInboundEnabled }}
+cat > /etc/systemd/system/km-slack-inbound-poller.service << 'SLACKINBOUNDUNIT'
+[Unit]
+Description=Klanker Maker Slack inbound poller — dispatches Slack messages to km agent run
+After=network.target
+[Service]
+User=root
+EnvironmentFile=/etc/profile.d/km-notify-env.sh
+Environment=SANDBOX_ID={{ .SandboxID }}
+Environment=KM_SANDBOX_ID={{ .SandboxID }}
+ExecStart=/opt/km/bin/km-slack-inbound-poller
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+SLACKINBOUNDUNIT
+echo "[km-bootstrap] km-slack-inbound-poller.service installed"
+{{- end }}
 
 # km-recv: read and display signed emails from /var/mail/km/new/
 # Usage: km-recv [--json] [--watch] [--mark-read]
@@ -1664,12 +1806,12 @@ echo "[km-bootstrap] km-recv installed at /opt/km/bin/km-recv"
 
 {{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
 # In eBPF/gatekeeper mode, skip km-dns-proxy (enforcer runs its own DNS resolver)
-systemctl enable km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}
-systemctl start km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}
+systemctl enable km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
+systemctl start km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
 echo "[km-bootstrap] Sidecars started (DNS via eBPF enforcer, not km-dns-proxy)"
 {{- else }}
-systemctl enable km-dns-proxy km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}
-systemctl start km-dns-proxy km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}
+systemctl enable km-dns-proxy km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
+systemctl start km-dns-proxy km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
 echo "[km-bootstrap] Sidecars started"
 {{- end }}
 echo "[km-bootstrap] Shell audit hook installed at /etc/profile.d/km-audit.sh"
@@ -2224,6 +2366,15 @@ type userDataParams struct {
 	// during user-data execution. Populated from spec.cli.notify* profile fields.
 	// When empty (Spec.CLI == nil), no env file is written.
 	NotifyEnv map[string]string
+	// SlackInboundEnabled gates conditional emission of the km-slack-inbound-poller
+	// bash script, its systemd unit, and the systemctl enable/start lines.
+	// Set from profile.Spec.CLI.NotifySlackInboundEnabled (Phase 67).
+	SlackInboundEnabled bool
+	// SlackThreadsTableName is the DynamoDB table name for km_slack_threads.
+	// Populated from KM_SLACK_THREADS_TABLE env var (fallback "km-slack-threads").
+	// Phase 66 multi-instance overrides propagate via this field so the poller's
+	// ${KM_SLACK_THREADS_TABLE:-km-slack-threads} fallback can see a non-default prefix.
+	SlackThreadsTableName string
 }
 
 // parseUserDataTemplate parses the userDataTemplate and returns the compiled template.
@@ -2478,7 +2629,35 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		}
 		// KM_SLACK_BRIDGE_URL is intentionally NOT emitted at compile time —
 		// it requires a runtime SSM lookup of /km/slack/bridge-url. See Plan 08.
+
+		// Phase 67: Slack inbound — emit KM_SLACK_THREADS_TABLE so the poller's
+		// ${KM_SLACK_THREADS_TABLE:-km-slack-threads} fallback can see Phase 66
+		// multi-instance overrides (e.g. stg-slack-threads). Also emit
+		// KM_SLACK_INBOUND_QUEUE_URL as an empty placeholder; km create fills
+		// it at runtime via SSM SendCommand after queue creation (Plan 67-06).
+		if p.Spec.CLI.NotifySlackInboundEnabled {
+			threadsTable := os.Getenv("KM_SLACK_THREADS_TABLE")
+			if threadsTable == "" {
+				threadsTable = "km-slack-threads"
+			}
+			notifyEnv["KM_SLACK_THREADS_TABLE"] = threadsTable
+			// KM_SLACK_INBOUND_QUEUE_URL is a runtime value injected by km create.
+			// Reserve the slot here so the env file always has the key; km create
+			// overwrites the empty value after creating the SQS queue.
+			notifyEnv["KM_SLACK_INBOUND_QUEUE_URL"] = ""
+		}
 		params.NotifyEnv = notifyEnv
+
+		// Phase 67: wire SlackInboundEnabled for template conditionals and
+		// SlackThreadsTableName for the systemd EnvironmentFile (informational).
+		if p.Spec.CLI.NotifySlackInboundEnabled {
+			params.SlackInboundEnabled = true
+			threadsTable := os.Getenv("KM_SLACK_THREADS_TABLE")
+			if threadsTable == "" {
+				threadsTable = "km-slack-threads"
+			}
+			params.SlackThreadsTableName = threadsTable
+		}
 	}
 
 	// Phase 62 (HOOK-02): merge km-notify-hook entries into ~/.claude/settings.json.
