@@ -93,7 +93,7 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		logger.WarnContext(ctx, "bridge: unsupported_version", "step", "parse", "version", env.Version, "status", 400)
 		return errResp(400, "unsupported_version")
 	}
-	if env.Action != slack.ActionPost && env.Action != slack.ActionArchive && env.Action != slack.ActionTest {
+	if env.Action != slack.ActionPost && env.Action != slack.ActionArchive && env.Action != slack.ActionTest && env.Action != slack.ActionUpload {
 		logger.WarnContext(ctx, "bridge: unknown_action", "step", "parse", "action", env.Action, "status", 400)
 		return errResp(400, "unknown_action")
 	}
@@ -283,6 +283,105 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 			logger.InfoContext(ctx, "bridge: ok", "action", env.Action, "channel", env.Channel, "status", 200)
 		}
 		return resp
+	case slack.ActionUpload:
+		// Phase 68 — stream a transcript object from S3 directly into Slack's
+		// 3-step file upload flow (no full-buffering in Lambda memory).
+		//
+		// Validation order (CONTEXT.md, must_haves.truths): cold-start scope
+		// gate first; then envelope-level validations (cheap, fail-fast) before
+		// any AWS call. S3 GetObject is the first AWS-side step; if it fails
+		// we surface 502.
+
+		// 0. Cold-start scope gate.
+		if h.MissingFilesWrite {
+			logger.WarnContext(ctx, "bridge: scope_missing",
+				"step", "dispatch",
+				"action", env.Action,
+				"status", 400,
+			)
+			return errResp(400, "bot lacks files:write — operator must re-auth Slack App")
+		}
+
+		// 1. S3Key prefix must match transcripts/{senderID}/ — defense in
+		//    depth even after channel-ownership check above.
+		expectedPrefix := "transcripts/" + env.SenderID + "/"
+		if !strings.HasPrefix(env.S3Key, expectedPrefix) {
+			logger.WarnContext(ctx, "bridge: s3_key_prefix_mismatch",
+				"step", "dispatch",
+				"sender_id", env.SenderID,
+				"s3_key", env.S3Key,
+				"status", 403,
+			)
+			return errResp(403, "s3_key_prefix_mismatch")
+		}
+		// 2. Filename must be safe.
+		if env.Filename == "" || len(env.Filename) > 255 || strings.ContainsAny(env.Filename, "/\x00") {
+			logger.WarnContext(ctx, "bridge: filename_invalid",
+				"step", "dispatch",
+				"filename_len", len(env.Filename),
+				"status", 400,
+			)
+			return errResp(400, "filename_invalid")
+		}
+		// 3. ContentType allow-list.
+		switch env.ContentType {
+		case "application/gzip", "application/json", "text/plain":
+		default:
+			logger.WarnContext(ctx, "bridge: content_type_not_allowed",
+				"step", "dispatch",
+				"content_type", env.ContentType,
+				"status", 400,
+			)
+			return errResp(400, "content_type_not_allowed")
+		}
+		// 4. SizeBytes in (0, 100MB].
+		const maxUploadBytes = 100 * 1024 * 1024
+		if env.SizeBytes <= 0 || env.SizeBytes > maxUploadBytes {
+			logger.WarnContext(ctx, "bridge: size_invalid",
+				"step", "dispatch",
+				"size_bytes", env.SizeBytes,
+				"status", 400,
+			)
+			return errResp(400, "size_invalid")
+		}
+		// 5. Channel non-empty (defensive — header-level missing_fields would
+		//    normally have caught this; keep parity with CONTEXT.md spec).
+		if env.Channel == "" {
+			return errResp(400, "channel_empty")
+		}
+
+		// 6. Stream S3 → Slack.
+		body, _, err := h.S3Getter.GetObject(ctx, env.S3Key)
+		if err != nil {
+			logger.WarnContext(ctx, "bridge: s3_get_failed",
+				"step", "dispatch",
+				"s3_key", env.S3Key,
+				"error", err.Error(),
+				"status", 502,
+			)
+			return errResp(502, "s3_get_failed")
+		}
+		defer body.Close()
+
+		fileID, permalink, err := h.FileUploader.UploadFile(ctx, env.Channel, env.ThreadTS, env.Filename, env.ContentType, env.SizeBytes, body)
+		if err != nil {
+			logger.WarnContext(ctx, "bridge: upload_failed",
+				"step", "dispatch",
+				"channel", env.Channel,
+				"error", err.Error(),
+				"status", 502,
+			)
+			return errResp(502, "upload_failed")
+		}
+
+		logger.InfoContext(ctx, "bridge: ok",
+			"action", env.Action,
+			"channel", env.Channel,
+			"file_id", fileID,
+			"size_bytes", env.SizeBytes,
+			"status", 200,
+		)
+		return jsonResp(200, map[string]any{"ok": true, "file_id": fileID, "permalink": permalink})
 	}
 	return errResp(500, "internal") // unreachable
 }
