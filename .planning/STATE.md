@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: verifying
-stopped_at: "Completed 67.1-02-PLAN.md (scope verification for reactions:write)"
-last_updated: "2026-05-03T18:45:03.041Z"
-last_activity: 2026-05-03 — Completed 67-10-PLAN.md (E2E test, operator docs, UAT round-3 GREEN verdict on l11; 11/13 actively-exercised steps PASS, 1 partial, 2 NOT-EXERCISED with compensating coverage. Pause/resume validated post-checkpoint)
+stopped_at: "Completed 67.1-03-PLAN.md (Terraform passthrough + docs + manual UAT — Phase 67.1 COMPLETE GREEN)"
+last_updated: "2026-05-03T19:23:42Z"
+last_activity: 2026-05-03 — Completed 67.1-03-PLAN.md (Terraform slack_ack_emoji variable + Lambda KM_SLACK_ACK_EMOJI env passthrough; docs/slack-notifications.md ACK reaction section; CLAUDE.md update; operator UAT APPROVED — 👀 appears within 1-2s on correct message, in-thread correctness validated, bot-loop filter holds; Phase 67.1 COMPLETE)
 progress:
   total_phases: 73
   completed_phases: 66
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 
 ## Current Position
 
-Phase: 67 (slack-inbound: per-sandbox channel as bidirectional chat with km-agent-run dispatch) — COMPLETE (GREEN ship verdict)
-Plan: 12 of 12 in current phase (all plans 67-00 through 67-12 + 67-10 final close-out COMPLETE)
-Status: Phase 67 ready for /gsd:verify-work; ready to start Phase 68 (transcript streaming)
-Last activity: 2026-05-03 — Completed 67-10-PLAN.md (E2E test, operator docs, UAT round-3 GREEN verdict on l11; 11/13 actively-exercised steps PASS, 1 partial, 2 NOT-EXERCISED with compensating coverage. Pause/resume validated post-checkpoint)
+Phase: 67.1 (slack-inbound-ack-reaction: bridge fire-and-forget 👀 ACK reaction on SQS enqueue) — COMPLETE (GREEN ship verdict)
+Plan: 3 of 3 in current phase (all plans 67.1-01 through 67.1-03 COMPLETE)
+Status: Phase 67.1 COMPLETE — ready to start Phase 68 (transcript streaming)
+Last activity: 2026-05-03 — Completed 67.1-03-PLAN.md (Terraform slack_ack_emoji variable + Lambda KM_SLACK_ACK_EMOJI env passthrough; docs/slack-notifications.md ACK reaction section; CLAUDE.md update; operator UAT APPROVED — 👀 appears within 1-2s on correct message, in-thread correctness validated, bot-loop filter holds)
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -263,6 +263,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 67-slack-inbound P10 | 2 days | 2 tasks | 5 files |
 | Phase 67.1-slack-inbound-ack-reaction P01 | 447 | 3 tasks | 6 files |
 | Phase 67.1 P02 | 634 | 2 tasks | 4 files |
+| Phase 67.1 P03 | ~10min (+ UAT) | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -747,6 +748,9 @@ Recent decisions affecting current work:
 - [Phase 67.1-01]: SlackReactorAdapter shares tokenFetcher instance with SlackPosterAdapter to preserve 15-min SSM token cache
 - [Phase 67.1-01]: KM_SLACK_ACK_EMOJI env var (default eyes) controls ACK emoji — bridge-global, no profile field for v1
 - [Phase 67.1]: reactions:write added as third required scope in both VerifyEventsAPIScopes and checkSlackAppEventsScopes; Remediation text softening deferred to Plan 03 (token rotation not needed for scope-add)
+- [Phase 67.1-03]: lambda-slack-bridge v1.0.0 slack_ack_emoji variable added in-place (not version bump) — consistent with Phase 67-05 precedent of additive in-place env var additions with safe defaults
+- [Phase 67.1-03]: Live terragrunt config relies on slack_ack_emoji default "eyes" — no live-config edit needed for v1 deployment
+- [Phase 67.1-03]: Phase 67.1 COMPLETE GREEN — all 5 UAT requirements satisfied; operator confirmed 👀 on correct msg.TS, bot-loop filter holds, in-thread correctness validated
 
 ### Roadmap Evolution
 
