@@ -1475,5 +1475,5 @@ Plans:
 - [ ] 68-08-PLAN.md — Bridge ActionUpload handler: validation + S3 stream → Slack 3-step upload + cold-start files:write scope check
 - [ ] 68-09-PLAN.md — Hook script: PostToolUse branch (auto-thread-parent + offset tracking + tool one-liners + record-mapping) + Stop branch transcript upload + settings.json registration
 - [ ] 68-10-PLAN.md — km create env injection (KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED + KM_SLACK_STREAM_TABLE) + operator audience warning with Slack channel member count
-- [ ] 68-11-PLAN.md — km doctor checks: slack_transcript_table_exists + slack_files_write_scope + slack_transcript_stale_objects
+- [x] 68-11-PLAN.md — km doctor checks: slack_transcript_table_exists + slack_files_write_scope + slack_transcript_stale_objects
 - [ ] 68-12-PLAN.md — Documentation (docs/slack-notifications.md + CLAUDE.md) + UAT (9 manual scenarios)

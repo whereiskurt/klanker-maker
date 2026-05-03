@@ -110,3 +110,26 @@ Plan 68-07's actual scope is 100% green:
   `buildNotifySendCommands` callers in `shell_notify_test.go` were updated to pass
   `nil` as the new third arg — preserves Phase 62 semantics)
 - `go build ./...` clean
+
+## Plan 68-11 transient cross-plan compile conflict (resolved during execution)
+
+While executing Plan 68-11 (km doctor checks for transcript streaming), the
+test binary for `internal/app/cmd/...` briefly failed to link due to in-flight
+artifacts from Plan 68-10 (running in parallel on the same branch per the
+executor concurrency note):
+
+- `internal/app/cmd/testhelpers_test.go:13:6: captureStderr redeclared in this block`
+  (other declaration in `create_slack_transcript_test.go:36:6`)
+- `internal/app/cmd/create_slack_transcript_test.go:61:3: undefined: printTranscriptWarning`
+- `internal/app/cmd/create_slack_transcript_test.go:95:3: undefined: printTranscriptWarning`
+
+Plan 68-11 did NOT modify any of these files (scope boundary). The conflict
+resolved itself during Plan 68-11 execution as Plan 68-10's executor advanced
+its tasks (printTranscriptWarning was added to its production source and the
+duplicate captureStderr declaration was reconciled).
+
+Final verification on Plan 68-11 commits:
+- `go build ./...` clean
+- `go vet ./internal/app/cmd/...` clean
+- `go test ./internal/app/cmd/... -count=1 -run "TestDoctor_SlackTranscript|TestDoctor_SlackFilesWrite" -v` reports 12 PASS (5 original Wave-0 stub names + 7 added coverage cases)
+- All Phase 67 `TestDoctor_SlackInbound*` tests still PASS (no regression — the new checks share the existing `getScopes` callback that the inbound suite drives).
