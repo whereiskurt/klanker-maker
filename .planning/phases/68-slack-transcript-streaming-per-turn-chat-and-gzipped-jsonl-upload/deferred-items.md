@@ -211,3 +211,45 @@ purely structural; no test would have caught it without an end-to-end
 **Disposition:** Out of scope for Phase 68 UAT. File as Phase 68.1
 candidate. Functional correctness of the warning helper itself is
 verified by the 3 PASS unit tests.
+
+## Phase 68.1 candidate — claude -p (non-interactive print mode) doesn't fire PostToolUse hooks
+
+**Discovered:** 2026-05-03 during Phase 68 UAT Scenarios 1+2.
+
+**What:** `km agent run` invokes Claude as `claude -p "$PROMPT" --output-format json
+--dangerously-skip-permissions` (agent.go:1198). Claude Code's `-p` (print/
+non-interactive) mode does NOT fire PostToolUse hooks the way interactive
+mode does — so `/opt/km/bin/km-notify-hook PostToolUse` is never called,
+and Phase 68 transcript streaming silently no-ops for `km agent run`.
+
+**Verified:** Direct stderr-redirect to `/tmp/km-hook.log` showed 0 bytes
+written across multiple `km agent run` invocations even with
+`--transcript-stream` flag explicitly set. The same sandbox in interactive
+Claude (via `km shell`) DOES fire the hooks correctly: operator sees
+`🤖 [tt-7091bf92] turn started — Bash` auto-thread-parents and threaded
+per-turn replies in `#sb-tt-7091bf92`.
+
+**Initial fix attempt (kept):** Removed `--bare` from agent.go:1198 since
+`--bare` explicitly skips hooks per Claude Code's `--help`. Necessary but
+not sufficient — `claude -p` skips PostToolUse hooks even without `--bare`.
+
+**Possible fixes for Phase 68.1:**
+1. Use `claude --bare ...` (interactive bare? doesn't exist) or remove `-p`
+   and use a different invocation pattern (e.g. via tmux + scripted prompt).
+2. Wait for Claude Code to support PostToolUse hooks in print mode.
+3. Skip hook-based streaming for `km agent run`; only stream the FINAL
+   transcript at Stop (single hook fire is more permissive in print mode?).
+4. Pivot: post-process the transcript after the run finishes, from the
+   km agent run wrapper (read the run's transcript path, gzip it, upload —
+   no Claude hook needed).
+
+**Disposition:** Out of scope for Phase 68 base UAT. Interactive Claude
+(via `km shell`) gives operators full transcript streaming today; `km
+agent run` non-interactive transcript streaming will need a Phase 68.1
+fix. Mark this as a known limitation in `docs/slack-notifications.md`.
+
+**Ancillary fix already applied (commit 7911c1c context — but actually 
+in agent.go diff from this session):** Removed `--bare` flag from claude
+invocation in agent.go:1198. `--bare` always skips hooks per its help
+text; even though it didn't fix print-mode hook firing, it removes one
+known blocker on the local invocation path.

@@ -1195,7 +1195,14 @@ func BuildAgentShellCommands(prompt string, opts AgentRunOptions) ([]string, str
 		// noBedrockLines stays empty — codex never uses Bedrock env vars
 
 	default: // "", "claude", or anything unknown defaults to claude
-		parts := []string{`claude -p "$PROMPT"`, "--output-format json", "--dangerously-skip-permissions", "--bare"}
+		// Phase 68 UAT: --bare unconditionally skips hooks (per Claude Code's
+		// help text: "Minimal mode: skip hooks, LSP, plugin sync...") which
+		// breaks Phase 68 transcript streaming + Phase 62/63 notification
+		// hooks. Always omit --bare on the claude branch so settings.json
+		// hooks fire. Tradeoff: small startup cost (Anthropic keychain reads
+		// fall through gracefully on Linux); credentials still extracted from
+		// ~/.claude/.credentials.json into ANTHROPIC_API_KEY by noBedrockLines.
+		parts := []string{`claude -p "$PROMPT"`, "--output-format json", "--dangerously-skip-permissions"}
 		for _, a := range opts.ClaudeArgs {
 			if a == "" {
 				continue
