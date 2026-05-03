@@ -69,3 +69,11 @@ type EventNonceStore interface {
 	// (false, nil) on first insertion, or (false, err) on storage failure.
 	CheckAndStore(ctx context.Context, id string, ttl time.Duration) (alreadySeen bool, err error)
 }
+
+// Reactor posts a reaction emoji to a Slack message.
+// Used by EventsHandler to ACK inbound messages with 👀 after SQS enqueue.
+// Implementations MUST treat already_reacted as idempotent success (return nil).
+// React to msg.TS (the originating message), NOT threadTS (the session anchor).
+type Reactor interface {
+	Add(ctx context.Context, channel, ts, emoji string) error
+}

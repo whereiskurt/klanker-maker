@@ -391,6 +391,95 @@ func (s *SlackPosterAdapter) ArchiveChannel(ctx context.Context, channelID strin
 }
 
 // ============================================================
+// Phase 67.1: SlackReactorAdapter — Reactor implementation
+// ============================================================
+
+// SlackReactorAdapter implements Reactor via direct HTTP to Slack's reactions.add Web API.
+// Mirrors SlackPosterAdapter shape for consistency. Treats already_reacted as
+// idempotent success because Slack delivers events at-least-once.
+//
+// Design decision (CONTEXT.md Claude's Discretion): duplicate the HTTP call body
+// rather than extracting a shared slackAPICall helper. SlackReactorAdapter has
+// only ONE method; duplication is ~40 lines vs a shared helper requiring careful
+// generic-payload typing. Factor if a third adapter appears.
+type SlackReactorAdapter struct {
+	HTTPClient *http.Client
+	BaseURL    string          // defaults to "https://slack.com/api"; overridden in tests
+	Tokens     BotTokenFetcher // SHARE with SlackPosterAdapter to reuse the 15-min token cache
+}
+
+func (s *SlackReactorAdapter) getBaseURL() string {
+	if s.BaseURL != "" {
+		return s.BaseURL
+	}
+	return "https://slack.com/api"
+}
+
+// Add posts a reaction to a Slack message. Returns nil on success or
+// already_reacted (idempotent). Returns ErrSlackRateLimited on HTTP 429.
+// Returns a wrapped error for any other failure mode.
+//
+// emoji must be the bare emoji name without colons ("eyes", NOT ":eyes:").
+// ts must be the originating message's TS field, NOT the thread root.
+func (s *SlackReactorAdapter) Add(ctx context.Context, channel, ts, emoji string) error {
+	token, err := s.Tokens.Fetch(ctx)
+	if err != nil {
+		return fmt.Errorf("bridge: get bot token for reactions.add: %w", err)
+	}
+
+	payload := map[string]any{
+		"channel":   channel,
+		"timestamp": ts,
+		"name":      emoji,
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("bridge: marshal reactions.add: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", s.getBaseURL()+"/reactions.add", bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	hc := s.HTTPClient
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+
+	resp, err := hc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	retryAfterHeader := resp.Header.Get("Retry-After")
+	if rlErr := checkRateLimit(resp.StatusCode, retryAfterHeader, "reactions.add"); rlErr != nil {
+		return rlErr
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("bridge: read reactions.add response: %w", err)
+	}
+	var apiResp slackAPIResponse
+	if err := json.Unmarshal(body, &apiResp); err != nil {
+		return fmt.Errorf("bridge: decode reactions.add: %w", err)
+	}
+	if !apiResp.OK {
+		if apiResp.Error == "already_reacted" {
+			// Slack delivered the event twice; we already reacted on first delivery.
+			// Idempotent success — do not log at WARN.
+			return nil
+		}
+		return fmt.Errorf("bridge: reactions.add: %s", apiResp.Error)
+	}
+	return nil
+}
+
+// ============================================================
 // Plan 67-05: SQSAdapter — SQSSender implementation
 // ============================================================
 

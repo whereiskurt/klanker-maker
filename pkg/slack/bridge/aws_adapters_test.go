@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -960,5 +961,113 @@ func TestDDBPauseHinter_UpdateItemOtherError_BubblesUp(t *testing.T) {
 	}
 	if postCalled {
 		t.Error("Post must NOT be called when UpdateItem fails")
+	}
+}
+
+// ============================================================
+// SlackReactorAdapter tests (Phase 67.1)
+// ============================================================
+
+func TestSlackReactorAdapter_HappyPath(t *testing.T) {
+	var capturedPath string
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.Path
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"ok":true}`)
+	}))
+	defer srv.Close()
+
+	tokenFetcher := &bridge.SSMBotTokenFetcher{Client: &mockSSMClient{
+		getParam: func(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
+			return &ssm.GetParameterOutput{Parameter: &ssmtypes.Parameter{Value: aws.String("xoxb-test")}}, nil
+		},
+	}, Path: "/km/slack/bot-token"}
+
+	adapter := &bridge.SlackReactorAdapter{HTTPClient: srv.Client(), BaseURL: srv.URL, Tokens: tokenFetcher}
+	err := adapter.Add(context.Background(), "C01234567", "1714280400.001", "eyes")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedPath != "/reactions.add" {
+		t.Errorf("expected path /reactions.add, got %q", capturedPath)
+	}
+	if !strings.Contains(string(capturedBody), `"name":"eyes"`) {
+		t.Errorf("expected name=eyes in body, got %s", capturedBody)
+	}
+	if !strings.Contains(string(capturedBody), `"timestamp":"1714280400.001"`) {
+		t.Errorf("expected timestamp in body, got %s", capturedBody)
+	}
+}
+
+func TestSlackReactorAdapter_AlreadyReacted_IsIdempotentSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"ok":false,"error":"already_reacted"}`)
+	}))
+	defer srv.Close()
+
+	tokenFetcher := &bridge.SSMBotTokenFetcher{Client: &mockSSMClient{
+		getParam: func(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
+			return &ssm.GetParameterOutput{Parameter: &ssmtypes.Parameter{Value: aws.String("xoxb-test")}}, nil
+		},
+	}, Path: "/km/slack/bot-token"}
+
+	adapter := &bridge.SlackReactorAdapter{HTTPClient: srv.Client(), BaseURL: srv.URL, Tokens: tokenFetcher}
+	err := adapter.Add(context.Background(), "C01234567", "1714280400.001", "eyes")
+	if err != nil {
+		t.Fatalf("expected nil error on already_reacted, got %v", err)
+	}
+}
+
+func TestSlackReactorAdapter_GenericError_Propagates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"ok":false,"error":"invalid_name"}`)
+	}))
+	defer srv.Close()
+
+	tokenFetcher := &bridge.SSMBotTokenFetcher{Client: &mockSSMClient{
+		getParam: func(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
+			return &ssm.GetParameterOutput{Parameter: &ssmtypes.Parameter{Value: aws.String("xoxb-test")}}, nil
+		},
+	}, Path: "/km/slack/bot-token"}
+
+	adapter := &bridge.SlackReactorAdapter{HTTPClient: srv.Client(), BaseURL: srv.URL, Tokens: tokenFetcher}
+	err := adapter.Add(context.Background(), "C01234567", "1714280400.001", ":eyes:")
+	if err == nil {
+		t.Fatal("expected error on invalid_name, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid_name") {
+		t.Errorf("expected error to mention invalid_name, got: %v", err)
+	}
+}
+
+func TestSlackReactorAdapter_RateLimited(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "5")
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprintln(w, `{"ok":false,"error":"ratelimited"}`)
+	}))
+	defer srv.Close()
+
+	tokenFetcher := &bridge.SSMBotTokenFetcher{Client: &mockSSMClient{
+		getParam: func(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
+			return &ssm.GetParameterOutput{Parameter: &ssmtypes.Parameter{Value: aws.String("xoxb-test")}}, nil
+		},
+	}, Path: "/km/slack/bot-token"}
+
+	adapter := &bridge.SlackReactorAdapter{HTTPClient: srv.Client(), BaseURL: srv.URL, Tokens: tokenFetcher}
+	err := adapter.Add(context.Background(), "C01234567", "1714280400.001", "eyes")
+	if err == nil {
+		t.Fatal("expected ErrSlackRateLimited, got nil")
+	}
+	var rl *bridge.ErrSlackRateLimited
+	if !errors.As(err, &rl) {
+		t.Fatalf("expected *ErrSlackRateLimited, got %T: %v", err, err)
+	}
+	if rl.Method != "reactions.add" {
+		t.Errorf("expected Method=reactions.add, got %q", rl.Method)
 	}
 }
