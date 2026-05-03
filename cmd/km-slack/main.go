@@ -26,11 +26,14 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
 	"github.com/whereiskurt/klankrmkr/pkg/slack"
@@ -176,11 +179,65 @@ func runUpload(args []string, stderr io.Writer) int {
 	return 0
 }
 
-// runRecordMapping writes a (channel_id, slack_ts) → transcript-offset row to
-// DynamoDB. Stub body: filled in by Plan 68-05 Task 3.
+// runRecordMapping writes a (channel_id, slack_ts) → transcript-offset row
+// directly to DynamoDB using the sandbox's IAM PutItem permission. Called by
+// the hook script after a successful km-slack post so a future Phase B
+// reaction-handler can resolve a Slack message back to its transcript byte
+// offset.
 func runRecordMapping(args []string, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "km-slack record-mapping: not yet implemented")
-	return 1
+	fs := flag.NewFlagSet("record-mapping", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var (
+		channel = fs.String("channel", "", "Slack channel ID (PK) — required")
+		slackTS = fs.String("slack-ts", "", "Slack message ts (SK) — required")
+		offset  = fs.Int64("offset", -1, "Transcript byte offset at time of post — required")
+		session = fs.String("session", "", "Claude session_id — required")
+	)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *channel == "" || *slackTS == "" || *offset < 0 || *session == "" {
+		fmt.Fprintln(stderr, "km-slack record-mapping: missing required flags (--channel --slack-ts --offset --session)")
+		return 2
+	}
+	sandboxID := os.Getenv("KM_SANDBOX_ID")
+	table := os.Getenv("KM_SLACK_STREAM_TABLE")
+	if sandboxID == "" || table == "" {
+		fmt.Fprintln(stderr, "km-slack record-mapping: KM_SANDBOX_ID and KM_SLACK_STREAM_TABLE required")
+		return 2
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() { <-sigCh; cancel() }()
+
+	cfg, err := awsconfig.LoadDefaultConfig(ctx)
+	if err != nil {
+		fmt.Fprintf(stderr, "km-slack record-mapping: aws config: %v\n", err)
+		return 1
+	}
+	ddb := dynamodb.NewFromConfig(cfg)
+
+	ttlExpiry := time.Now().Add(30 * 24 * time.Hour).Unix()
+
+	_, err = ddb.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(table),
+		Item: map[string]ddbtypes.AttributeValue{
+			"channel_id":        &ddbtypes.AttributeValueMemberS{Value: *channel},
+			"slack_ts":          &ddbtypes.AttributeValueMemberS{Value: *slackTS},
+			"sandbox_id":        &ddbtypes.AttributeValueMemberS{Value: sandboxID},
+			"session_id":        &ddbtypes.AttributeValueMemberS{Value: *session},
+			"transcript_offset": &ddbtypes.AttributeValueMemberN{Value: strconv.FormatInt(*offset, 10)},
+			"ttl_expiry":        &ddbtypes.AttributeValueMemberN{Value: strconv.FormatInt(ttlExpiry, 10)},
+		},
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "km-slack record-mapping: PutItem: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 // run is the outer entry point that loads env vars and the SSM key before
