@@ -342,8 +342,9 @@ func checkSlackInboundStaleQueues(
 }
 
 // checkSlackAppEventsScopes verifies that the Slack bot token has the required
-// scopes for inbound event processing: channels:history and groups:history.
-// These are required in addition to the Phase 63 outbound scopes.
+// scopes for inbound event processing (channels:history, groups:history) AND
+// for the Phase 67.1 ACK reaction (reactions:write). These are required in
+// addition to the Phase 63 outbound scopes.
 //
 // Returns:
 //   - SKIPPED: no SlackAuthTestScopes func configured.
@@ -371,7 +372,7 @@ func checkSlackAppEventsScopes(
 		}
 	}
 
-	required := []string{"channels:history", "groups:history"}
+	required := []string{"channels:history", "groups:history", "reactions:write"}
 	scopeSet := make(map[string]bool, len(scopes))
 	for _, s := range scopes {
 		scopeSet[s] = true
@@ -394,7 +395,7 @@ func checkSlackAppEventsScopes(
 	return CheckResult{
 		Name:    name,
 		Status:  CheckOK,
-		Message: "Slack App has all required inbound scopes (channels:history, groups:history)",
+		Message: "Slack App has all required inbound scopes (channels:history, groups:history, reactions:write)",
 	}
 }
 

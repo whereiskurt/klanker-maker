@@ -159,41 +159,47 @@ func TestDoctor_SlackInboundStaleQueues_NilDeps(t *testing.T) {
 // checkSlackAppEventsScopes
 // =============================================================================
 
-// TestDoctor_SlackInboundEventsSubscription_HasAllScopes: bot has both required
-// scopes → OK.
+// TestDoctor_SlackInboundEventsSubscription_HasAllScopes: bot has all required
+// scopes including reactions:write → OK with success message naming all three.
 func TestDoctor_SlackInboundEventsSubscription_HasAllScopes(t *testing.T) {
 	getScopes := func(_ context.Context) ([]string, error) {
-		return []string{"chat:write", "channels:history", "groups:history", "channels:read"}, nil
+		return []string{"chat:write", "channels:history", "groups:history", "channels:read", "reactions:write"}, nil
 	}
 	r := checkSlackAppEventsScopes(context.Background(), getScopes)
 	if r.Status != CheckOK {
 		t.Fatalf("expected OK, got %s (msg=%s)", r.Status, r.Message)
 	}
+	// Verify success message names the new scope (operators read this output).
+	if !strings.Contains(r.Message, "reactions:write") {
+		t.Errorf("expected success message to mention reactions:write, got: %s", r.Message)
+	}
 }
 
-// TestDoctor_SlackInboundEventsSubscription_MissingScope: bot is missing both
-// required scopes → FAIL with both scope names surfaced in the message.
+// TestDoctor_SlackInboundEventsSubscription_MissingScope: bot is missing all
+// three required scopes → FAIL with all three scope names surfaced in the message.
 func TestDoctor_SlackInboundEventsSubscription_MissingScope(t *testing.T) {
 	getScopes := func(_ context.Context) ([]string, error) {
-		return []string{"chat:write"}, nil // missing both
+		return []string{"chat:write"}, nil // missing all three required scopes
 	}
 	r := checkSlackAppEventsScopes(context.Background(), getScopes)
 	if r.Status != CheckError {
 		t.Fatalf("expected FAIL, got %s (msg=%s)", r.Status, r.Message)
 	}
-	if !strings.Contains(r.Message, "channels:history") || !strings.Contains(r.Message, "groups:history") {
-		t.Errorf("expected message to list both missing scopes, got: %s", r.Message)
+	if !strings.Contains(r.Message, "channels:history") ||
+		!strings.Contains(r.Message, "groups:history") ||
+		!strings.Contains(r.Message, "reactions:write") {
+		t.Errorf("expected message to list all three missing scopes, got: %s", r.Message)
 	}
 	if r.Remediation == "" {
 		t.Error("expected non-empty remediation hint")
 	}
 }
 
-// TestDoctor_SlackInboundEventsSubscription_PartialScopes: bot has one of the
-// two required scopes → FAIL listing only the missing one.
+// TestDoctor_SlackInboundEventsSubscription_PartialScopes: bot has channels:history
+// and reactions:write but is missing groups:history → FAIL listing only the missing one.
 func TestDoctor_SlackInboundEventsSubscription_PartialScopes(t *testing.T) {
 	getScopes := func(_ context.Context) ([]string, error) {
-		return []string{"chat:write", "channels:history"}, nil // missing groups:history
+		return []string{"chat:write", "channels:history", "reactions:write"}, nil // missing groups:history
 	}
 	r := checkSlackAppEventsScopes(context.Background(), getScopes)
 	if r.Status != CheckError {
@@ -201,6 +207,30 @@ func TestDoctor_SlackInboundEventsSubscription_PartialScopes(t *testing.T) {
 	}
 	if !strings.Contains(r.Message, "groups:history") {
 		t.Errorf("expected message to mention groups:history, got: %s", r.Message)
+	}
+}
+
+// TestDoctor_SlackInboundEventsSubscription_MissingReactionsWrite: realistic Phase 67.1
+// upgrade scenario — operator already has channels:history + groups:history from Phase 63
+// inbound deployment but forgot to add reactions:write when upgrading.
+// Should FAIL with only reactions:write surfaced in the message.
+func TestDoctor_SlackInboundEventsSubscription_MissingReactionsWrite(t *testing.T) {
+	getScopes := func(_ context.Context) ([]string, error) {
+		return []string{"chat:write", "channels:history", "groups:history", "channels:read"}, nil
+	}
+	r := checkSlackAppEventsScopes(context.Background(), getScopes)
+	if r.Status != CheckError {
+		t.Fatalf("expected FAIL when only reactions:write missing, got %s (msg=%s)", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "reactions:write") {
+		t.Errorf("expected message to mention reactions:write specifically, got: %s", r.Message)
+	}
+	// Should NOT mention the scopes that are present (avoid noise in the operator-facing message).
+	if strings.Contains(r.Message, "channels:history") || strings.Contains(r.Message, "groups:history") {
+		t.Errorf("expected message to ONLY list missing scopes, got: %s", r.Message)
+	}
+	if r.Remediation == "" {
+		t.Error("expected non-empty remediation hint")
 	}
 }
 
