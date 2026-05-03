@@ -253,3 +253,45 @@ in agent.go diff from this session):** Removed `--bare` flag from claude
 invocation in agent.go:1198. `--bare` always skips hooks per its help
 text; even though it didn't fix print-mode hook firing, it removes one
 known blocker on the local invocation path.
+
+## Phase 68.1 candidate — subagent boundary creates one Slack thread per Claude session, not per operator turn
+
+**Discovered:** 2026-05-03 during Phase 68 UAT operator observation.
+
+**What:** Phase 68's auto-thread-parent caches `ts` per Claude
+`session_id` (`/tmp/km-slack-thread.${sid}`). When the operator's Claude
+runs a `/clone`-style command (or any Task-tool spawn that creates a
+sub-agent), each subagent gets a fresh `session_id`, so each one creates
+its own auto-thread-parent. Operator sees N top-level "turn started"
+messages in `#sb-X` instead of one threaded session.
+
+**Verified:** DynamoDB query against `km-slack-stream-messages` for one
+operator activity showed 3 distinct `session_id`s posting parents:
+- f5cff4dc-fe1a-416c-9218-23dd62159fa3 (offset 13756)
+- 5db22761-f6b1-416b-bcaf-562d8084c289 (offset 0, fresh)
+- 220ab8d8-ce98-4f23-a2e4-37d4881298bb (offset 20653)
+
+**Why it slipped:** Plan 68-09's `_km_stream_drain` function uses
+`session_id` as the unique thread key (line 486:
+`local thread_cache="/tmp/km-slack-thread.${sid}"`). This is correct for
+single-session conversations but doesn't account for Claude Code's
+Task-tool subagent fan-out where each subagent has its own session.
+
+**Possible fixes for Phase 68.1:**
+1. **Operator-turn root grouping**: inject `KM_OPERATOR_TURN_ID` (or
+   reuse the top-level run's session_id) into Claude's env before each
+   `km agent run` / `km shell` invocation, and use that as the cache
+   key instead of the per-subagent `session_id`.
+2. **Detect-and-reuse**: at thread-create time, scan
+   `/tmp/km-slack-thread.*` for a recent (< N min) cache file; reuse
+   if found. Imprecise but no env wiring.
+3. **Per-sandbox single thread**: cache one thread per sandbox per UTC
+   day; all activity threads under it. Loses per-task grouping but
+   makes the channel scannable.
+4. **Document current behavior**: explain that each subagent thread is
+   intentional for fan-out visibility — let operators decide via
+   profile flag whether to consolidate.
+
+**Disposition:** Functional correctness confirmed (each subagent does
+post correctly to its own thread; transcripts upload as expected at
+Stop). UX issue surfaced by operator. Address in Phase 68.1.
