@@ -352,7 +352,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SLCK-13 | Phase 63.1 | Complete |
 | REQ-SLACK-IN-SCHEMA | Phase 67 | Planned |
 | REQ-SLACK-IN-DDB | Phase 67 | Complete |
-| REQ-SLACK-IN-EVENTS | Phase 67 | Planned |
+| REQ-SLACK-IN-EVENTS | Phase 67 | Complete |
 | REQ-SLACK-IN-DELIVERY | Phase 67 | Planned |
 | REQ-SLACK-IN-POLLER | Phase 67 | Planned |
 | REQ-SLACK-IN-LIFECYCLE | Phase 67 | Planned |

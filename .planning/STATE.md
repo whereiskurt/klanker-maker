@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: "Completed 67-11-PLAN.md (Gap A closure: poller posts .result + Stop hook gate + SSM startup resolve; 4 new compiler tests; UAT.md re-test plan appended)"
-last_updated: "2026-05-03T13:17:10.097Z"
-last_activity: "2026-05-01 — Completed 63.1-03-PLAN.md (SLCK-13: km slack rotate-token, bridge structured logging, fail-fast 5xx, UAT ts=1777638955.854989)"
+stopped_at: Completed 67-12-PLAN.md
+last_updated: "2026-05-03T13:24:37.872Z"
+last_activity: "2026-05-03 — Completed 67-12-PLAN.md (Gap B: isBotLoop allow-list switch — closes UAT Step 14 channel_join slip-through, ~$0.05 Bedrock burn per Slack Connect invite accept)"
 progress:
   total_phases: 72
   completed_phases: 65
   total_plans: 239
-  completed_plans: 220
+  completed_plans: 221
   percent: 0
 ---
 
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 
 ## Current Position
 
-Phase: 63.1 (slack-notify hook gap closure — step 11d, destroy archive, bridge token rotation hardening) — COMPLETE
-Plan: 3 of 3 in current phase — ALL PLANS COMPLETE
-Status: phase complete
-Last activity: 2026-05-01 — Completed 63.1-03-PLAN.md (SLCK-13: km slack rotate-token, bridge structured logging, fail-fast 5xx, UAT ts=1777638955.854989)
+Phase: 67 (slack-inbound: per-sandbox channel as bidirectional chat with km-agent-run dispatch) — UAT gap closure in progress
+Plan: 12 of 12 in current phase (UAT gap closures 67-11 + 67-12 both COMPLETE)
+Status: gap-closure plans complete; awaiting UAT re-execution after bridge Lambda redeploy
+Last activity: 2026-05-03 — Completed 67-12-PLAN.md (Gap B: isBotLoop allow-list switch — closes UAT Step 14 channel_join slip-through, ~$0.05 Bedrock burn per Slack Connect invite accept)
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -259,6 +259,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 67 P07 | 783 | 2 tasks | 8 files |
 | Phase 67-slack-inbound-per-sandbox-channel-as-bidirectional-chat-with-km-agent-run-dispatch P08 | 48min | 2 tasks | 7 files |
 | Phase 67-slack-inbound-per-sandbox-channel-as-bidirectional-chat-with-km-agent-run-dispatch P11 | 6min | 2 tasks | 5 files |
+| Phase 67 P12 | 2min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -735,6 +736,7 @@ Recent decisions affecting current work:
 - [Phase 67]: Drain placed in Step 12 (after Terraform destroy) — instance may be gone but StopPoller/WaitForAgentRunIdle fail gracefully (best-effort)
 - [Phase 67-slack-inbound-per-sandbox-channel-as-bidirectional-chat-with-km-agent-run-dispatch]: Plan 67-08: SlackChannelID/SlackInboundQueueURL/ActiveThreads added to SandboxRecord (instead of separate metadata fetch in status/list); X-OAuth-Scopes response header parsing for auth.test (not body); type-assert *appConfigAdapter to derive ResourcePrefix
 - [Phase 67]: Slack inbound Gap A closure: poller posts .result from output.json to Slack via km-slack post --thread AFTER aws sqs delete-message (ack-first); KM_SLACK_INBOUND_REPLY_HANDLED sentinel gates the Stop hook Slack branch (# 6b.) to prevent double-post; SSM resolves channel/bridge URL at poller startup (mirrors existing queue-url fallback) since systemd EnvironmentFile only loads km-notify-env.sh.
+- [Phase 67]: isBotLoop uses allow-list (empty + thread_broadcast) instead of deny-list — closes UAT Gap B (channel_join slip-through) AND prevents every future Slack subtype regression by default
 
 ### Roadmap Evolution
 
@@ -822,6 +824,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-03T13:17:10.091Z
-Stopped at: Completed 67-11-PLAN.md (Gap A closure: poller posts .result + Stop hook gate + SSM startup resolve; 4 new compiler tests; UAT.md re-test plan appended)
+Last session: 2026-05-03T13:24:37.866Z
+Stopped at: Completed 67-12-PLAN.md
 Resume file: None
