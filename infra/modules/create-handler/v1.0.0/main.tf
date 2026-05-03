@@ -371,6 +371,57 @@ resource "aws_iam_role_policy" "ssm" {
   })
 }
 
+# Policy: SSM SendCommand for runtime env var injection into newly-launched
+# sandboxes. Used by:
+#   - Phase 63 Step 11d (KM_SLACK_CHANNEL_ID injection — non-fatal)
+#   - Phase 67 Step 11e (KM_SLACK_INBOUND_QUEUE_URL injection — fatal)
+# Document scope: AWS-RunShellScript only. Target scope: km-tagged EC2
+# instances (KMSandboxID tag matches sandbox IDs, prevents lateral movement).
+resource "aws_iam_role_policy" "ssm_send_command" {
+  name = "km-create-handler-ssm-send-command"
+  role = aws_iam_role.create_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SSMSendCommandDocument"
+        Effect = "Allow"
+        Action = [
+          "ssm:SendCommand",
+        ]
+        Resource = [
+          "arn:aws:ssm:*::document/AWS-RunShellScript",
+        ]
+      },
+      {
+        Sid    = "SSMSendCommandTaggedInstances"
+        Effect = "Allow"
+        Action = [
+          "ssm:SendCommand",
+        ]
+        Resource = [
+          "arn:aws:ec2:*:${data.aws_caller_identity.current.account_id}:instance/*",
+        ]
+        Condition = {
+          StringLike = {
+            "ssm:resourceTag/KMSandboxID" = "*"
+          }
+        }
+      },
+      {
+        Sid    = "SSMGetCommandInvocation"
+        Effect = "Allow"
+        Action = [
+          "ssm:GetCommandInvocation",
+          "ssm:ListCommandInvocations",
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 # Policy: SES for sandbox creation notification emails
 resource "aws_iam_role_policy" "ses_send" {
   name = "km-create-handler-ses"
