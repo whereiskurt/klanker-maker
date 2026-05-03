@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 67-02-PLAN.md (DynamoDB modules + Config helpers)
-last_updated: "2026-05-02T23:58:11.520Z"
+stopped_at: Completed 67-04-PLAN.md (compiler Slack inbound poller + tests)
+last_updated: "2026-05-03T00:07:14.790Z"
 last_activity: "2026-05-01 — Completed 63.1-03-PLAN.md (SLCK-13: km slack rotate-token, bridge structured logging, fail-fast 5xx, UAT ts=1777638955.854989)"
 progress:
   total_phases: 71
   completed_phases: 65
   total_plans: 224
-  completed_plans: 213
+  completed_plans: 214
   percent: 0
 ---
 
@@ -252,6 +252,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 67-slack-inbound P01 | 102s | 2 tasks | 4 files |
 | Phase 67-slack-inbound P03 | 231s | 2 tasks | 4 files |
 | Phase 67-slack-inbound P02 | 4min | 2 tasks | 9 files |
+| Phase 67-slack-inbound-per-sandbox-channel-as-bidirectional-chat-with-km-agent-run-dispatch P04 | 240s | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -714,6 +715,9 @@ Recent decisions affecting current work:
 - [Phase 67-slack-inbound]: Live Terragrunt configs at infra/live/use1/dynamodb-* not management/dynamodb/
 - [Phase 67-slack-inbound]: GetResourcePrefix shim added in 67-02; Phase 66 can migrate later without breaking callers
 - [Phase 67-slack-inbound]: dynamodb-sandboxes GSI bump is v1.1.0 copy, v1.0.0 left unchanged (stateful table safety)
+- [Phase 67-slack-inbound]: Compile-time KM_SLACK_INBOUND_QUEUE_URL slot with empty value in env file; km create fills at runtime (Plan 67-06)
+- [Phase 67-slack-inbound]: EnvironmentFile=/etc/profile.d/km-notify-env.sh in km-slack-inbound-poller.service for runtime-injected env vars
+- [Phase 67-slack-inbound]: SlackThreadsTableName from KM_SLACK_THREADS_TABLE env var (mirrors budgetTable pattern); no Config threading needed
 
 ### Roadmap Evolution
 
@@ -800,6 +804,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-02T23:58:11.515Z
-Stopped at: Completed 67-02-PLAN.md (DynamoDB modules + Config helpers)
+Last session: 2026-05-03T00:07:14.785Z
+Stopped at: Completed 67-04-PLAN.md (compiler Slack inbound poller + tests)
 Resume file: None
