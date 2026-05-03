@@ -626,16 +626,16 @@ if [[ "$do_email_branch" -eq 1 && "$cooldown_block" -ne 1 ]]; then
       ;;
   esac
 
-  # 6. Build body file (km-send requires --body <file>, not stdin, per CLAUDE.md
-  #    — OpenSSL 3.5+ signing reliability).
+  # 5b. Build body file (km-send requires --body <file>, not stdin, per CLAUDE.md
+  #     — OpenSSL 3.5+ signing reliability).
   body_file=$(mktemp /tmp/km-notify-body.XXXXXX)
   echo "$body_text" > "$body_file"
 
-  # 7. Multi-channel dispatch (Phase 63). Failure does not propagate (hook always exits 0).
+  # 6. Multi-channel dispatch (Phase 63). Failure does not propagate (hook always exits 0).
   # sent_any=1 when at least one channel succeeded — controls cooldown update below.
   sent_any=0
 
-  # 7a. Email branch (default enabled via :-1 so Phase 62 profiles without
+  # 6a. Email branch (default enabled via :-1 so Phase 62 profiles without
   #     KM_NOTIFY_EMAIL_ENABLED behave identically to Phase 62).
   if [[ "${KM_NOTIFY_EMAIL_ENABLED:-1}" == "1" ]]; then
     to_args=()
@@ -645,7 +645,7 @@ if [[ "$do_email_branch" -eq 1 && "$cooldown_block" -ne 1 ]]; then
     fi
   fi
 
-  # 7b. Slack branch. Gated on enabled flag + non-empty channel ID + NOT a
+  # 6b. Slack branch. Gated on enabled flag + non-empty channel ID + NOT a
   #     poller-driven inbound run. KM_SLACK_THREAD_TS is exported into Claude's
   #     env BEFORE launch (the inbound poller sets it; nothing else does), so
   #     its presence is the reliable signal that "the poller is driving this
@@ -665,13 +665,13 @@ if [[ "$do_email_branch" -eq 1 && "$cooldown_block" -ne 1 ]]; then
     fi
   fi
 
-  # 8. Update cooldown timestamp iff at least one channel succeeded.
+  # 7. Update cooldown timestamp iff at least one channel succeeded.
   [[ $sent_any -eq 1 ]] && date +%s > "$last_file"
 
   rm -f "$body_file"
 fi
 
-# 9. Stop transcript upload (Phase 68). Runs when KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED=1
+# 8. Stop transcript upload (Phase 68). Runs when KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED=1
 #    regardless of cooldown or KM_NOTIFY_ON_IDLE state. Drains any final unsent
 #    assistant text, then gzips + s3 cp + km-slack upload + cleanup.
 if [[ "$event" == "Stop" && "${KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED:-0}" == "1" ]]; then
