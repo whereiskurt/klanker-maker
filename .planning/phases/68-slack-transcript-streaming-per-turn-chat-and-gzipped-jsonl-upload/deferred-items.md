@@ -133,3 +133,48 @@ Final verification on Plan 68-11 commits:
 - `go vet ./internal/app/cmd/...` clean
 - `go test ./internal/app/cmd/... -count=1 -run "TestDoctor_SlackTranscript|TestDoctor_SlackFilesWrite" -v` reports 12 PASS (5 original Wave-0 stub names + 7 added coverage cases)
 - All Phase 67 `TestDoctor_SlackInbound*` tests still PASS (no regression — the new checks share the existing `getScopes` callback that the inbound suite drives).
+
+## Plan 68-12 confirmation: full-suite failures all pre-existing
+
+Plan 68-12 is a documentation-only plan (CONTEXT.md table-name amendment,
+docs/slack-notifications.md Phase 68 section, CLAUDE.md sub-section, UAT). It
+makes ZERO Go source changes. The full `go test ./... -timeout 300s -count=1`
+run during Plan 12 Task 3 surfaced 19 unique FAIL test names plus a
+`cmd/ttl-handler` timeout. Each was confirmed pre-existing by re-running the
+suite on the baseline (with Plan 12's doc edits stashed and the unrelated WT
+modifications to VERSION, otel.go, status.go, pricing.go, bedrock.go,
+anthropic.go, anthropic_test.go also stashed). Result: identical FAIL names
+on baseline. Plan 12 introduces NO new failures.
+
+Newly observed in Plan 12's run (not previously listed above):
+
+### `cmd/configui/`
+- `TestHandleValidate_ValidYAML` — schema rejects `spec.sourceAccess.github.permissions` (pre-existing schema/test drift)
+
+### `internal/app/cmd/`
+- `TestStatusCmd_EmptyStateBucketError` — same state-bucket gate pattern as the other `*_RequiresStateBucket` failures already listed; pre-existing
+
+### `cmd/ttl-handler/`
+- `cmd/ttl-handler` package times out at 300s — long-running test or hang; pre-existing
+
+### Transient (non-deterministic)
+- `TestLoadEFSOutputs_NotExist` — failed once during the full-suite run, PASS on isolated re-run; flake (filesystem race or environment dependency)
+
+These do NOT block Plan 68-12 completion because:
+
+1. Plan 12 makes no Go source changes.
+2. All listed failures (except `TestStatusCmd_EmptyStateBucketError`,
+   `TestHandleValidate_ValidYAML`, `cmd/ttl-handler` timeout, and the
+   `TestLoadEFSOutputs_NotExist` flake) were already documented in this file
+   before Plan 12 began.
+3. The four newly-named failures all reproduce on the unmodified baseline
+   (verified via stash-and-rerun).
+4. Triage of these failures belongs in a future cleanup phase, not Phase 68.
+
+Plan 68-12 actual scope (docs-only):
+- 68-CONTEXT.md amended (table name + RESOLVED 2026-05-03 audit annotations)
+- STATE.md Phase 68 entry amended
+- docs/slack-notifications.md gained "Slack transcript streaming (Phase 68)" section
+- CLAUDE.md gained "Slack transcript streaming (Phase 68)" sub-section
+- 68-12-UAT.md created with 9 manual UAT scenarios
+- All scope artifacts present; no Go code touched.
