@@ -1442,12 +1442,24 @@ Plans:
 ### Phase 68: Slack transcript streaming — per-turn chat + gzipped JSONL upload (Phase A)
 
 **Spec:** `docs/superpowers/specs/2026-05-03-slack-transcript-streaming-design.md`
-**Goal:** [To be planned — see spec]
-**Requirements**: TBD
+**Goal:** Make a Slack-connected sandbox a faithful real-time view of its Claude session — every assistant turn streams to a per-sandbox Slack thread as it happens, and the full session transcript (gzipped JSONL) lands as a downloadable file in the same thread when the run ends. Provisions a stream-message → transcript-position mapping table that a future Phase B (reaction-triggered session fork) can consume.
+**Requirements**: Spec-driven (no REQ-* IDs) — see 68-CONTEXT.md locked decisions
 **Depends on:** Phase 67
-**Plans:** 0 plans
+**Plans:** 13 plans
 
 Note: Phase A only. Reaction-triggered session fork deferred to a future phase.
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 68 to break down)
+- [ ] 68-00-PLAN.md — Wave 0: seed 13 stub test files + 3 testdata fixtures so Plans 01-12 have green-baseline test surfaces
+- [ ] 68-01-PLAN.md — Profile schema: notifySlackTranscriptEnabled field + 3 validation rules + JSON Schema entry
+- [ ] 68-02-PLAN.md — Envelope schema: ActionUpload const + 4 additive fields (S3Key/Filename/ContentType/SizeBytes) + canonical JSON forward+backward compat
+- [ ] 68-03-PLAN.md — DDB Terraform module dynamodb-slack-stream-messages + Config.GetSlackStreamMessagesTableName helper (resolves table-naming open question)
+- [ ] 68-04-PLAN.md — pkg/slack.Client.UploadFile method (Slack 3-step file upload flow, streaming, explicit Content-Length)
+- [ ] 68-05-PLAN.md — cmd/km-slack restructure: multi-subcommand dispatcher (post + upload + record-mapping)
+- [ ] 68-06-PLAN.md — IAM additions: ec2spot artifacts_bucket variable + transcript S3 PutObject + DDB PutItem policies; lambda-slack-bridge S3 GetObject + HeadObject on transcripts/*
+- [ ] 68-07-PLAN.md — CLI flags: --transcript-stream / --no-transcript-stream on km agent run + km shell
+- [ ] 68-08-PLAN.md — Bridge ActionUpload handler: validation + S3 stream → Slack 3-step upload + cold-start files:write scope check
+- [ ] 68-09-PLAN.md — Hook script: PostToolUse branch (auto-thread-parent + offset tracking + tool one-liners + record-mapping) + Stop branch transcript upload + settings.json registration
+- [ ] 68-10-PLAN.md — km create env injection (KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED + KM_SLACK_STREAM_TABLE) + operator audience warning with Slack channel member count
+- [ ] 68-11-PLAN.md — km doctor checks: slack_transcript_table_exists + slack_files_write_scope + slack_transcript_stale_objects
+- [ ] 68-12-PLAN.md — Documentation (docs/slack-notifications.md + CLAUDE.md) + UAT (9 manual scenarios)
