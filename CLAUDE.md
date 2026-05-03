@@ -224,6 +224,58 @@ no sandbox redeploy needed. See `docs/slack-notifications.md` § ACK reaction.
 
 See `docs/slack-notifications.md` for the full operator guide including setup steps, troubleshooting, and security model.
 
+### Slack transcript streaming (Phase 68)
+
+Per-turn assistant text + tool one-liners stream to per-sandbox channel thread;
+final gzipped JSONL transcript uploaded as Slack file at Stop. Opt-in.
+
+**Profile field (under `spec.cli`):**
+
+| Field | Type | Default | Effect |
+|---|---|---|---|
+| `notifySlackTranscriptEnabled` | bool | false | Stream + upload transcripts to per-sandbox Slack thread |
+
+Requires `notifySlackEnabled: true` AND `notifySlackPerSandbox: true`.
+Incompatible with `notifySlackChannelOverride`.
+
+**CLI overrides:** `--transcript-stream` / `--no-transcript-stream` on `km agent run` and `km shell`.
+
+**Sandbox env vars added at runtime:**
+
+| Variable | Source |
+|---|---|
+| `KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED` | profile `spec.cli.notifySlackTranscriptEnabled` (omit ⇒ 0) |
+| `KM_SLACK_STREAM_TABLE` | runtime, injected by `km create` |
+
+**DynamoDB table added in Phase 68:**
+
+- `{prefix}-slack-stream-messages` — `(channel_id, slack_ts) → {sandbox_id, session_id, transcript_offset, ttl_expiry}`. TTL 30 days. Phase B (reaction-triggered fork) will consume this table; Phase 68 only writes.
+
+**S3 layout:** `transcripts/{sandbox_id}/{session_id}.jsonl.gz` in `KM_ARTIFACTS_BUCKET`.
+
+**Slack bot scope required:** `files:write` (one-time re-auth via Slack App admin).
+
+**km doctor adds three new checks:**
+
+- `slack_transcript_table_exists` — DDB table is provisioned + ACTIVE
+- `slack_files_write_scope` — bot has `files:write`
+- `slack_transcript_stale_objects` — S3 cleanup advisory for destroyed sandboxes
+
+**One-time operator setup:**
+
+```bash
+# 1. Add `files:write` scope to Slack App, re-install, rotate token
+km slack rotate-token --bot-token <new-token>
+
+# 2. Provision new DDB table + sidecar + bridge
+make build && km init --sidecars && km init
+
+# 3. Verify
+km doctor
+```
+
+See `docs/slack-notifications.md` for full operator guide.
+
 ## Architecture
 
 - `cmd/km/` — CLI entry point
