@@ -945,23 +945,30 @@ while true; do
   RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
   RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
   mkdir -p "$RUN_DIR"
+  # The poller runs as root; chown so the sandbox-user claude can write output.
+  chown sandbox:sandbox "$RUN_DIR"
 
   RESUME_ARG=""
   [ -n "$CLAUDE_SESSION" ] && RESUME_ARG="--resume $CLAUDE_SESSION"
 
   PROMPT_FILE=$(mktemp)
   echo "$TEXT" > "$PROMPT_FILE"
+  # mktemp defaults to 0600 owned by root — sandbox user can't read it without this.
+  chmod 644 "$PROMPT_FILE"
 
   # Export KM_SLACK_THREAD_TS so km-notify-hook passes --thread to km-slack post (Phase 67).
   export KM_SLACK_THREAD_TS="$THREAD_TS"
 
+  # || true keeps a claude failure from killing the poller (set -euo pipefail).
+  # The output.json / exit_code files are inspected below to decide whether to
+  # ack-and-continue or leave the message for redelivery.
   sudo -u sandbox bash -c "
     export KM_SLACK_THREAD_TS='$THREAD_TS'
     claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
-      --dangerously-skip-permissions --bare $RESUME_ARG \
+      --dangerously-skip-permissions $RESUME_ARG \
       > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
     echo \$? > '$RUN_DIR/exit_code'
-  "
+  " || true
   rm -f "$PROMPT_FILE"
 
   RUN_EXIT=$(cat "$RUN_DIR/exit_code" 2>/dev/null || echo 1)
