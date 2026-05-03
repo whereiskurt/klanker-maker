@@ -480,6 +480,15 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		}
 		slackChannelID = chID
 		slackPerSandbox = perSb
+
+		// Phase 68 Plan 10: emit an audience-containment warning when transcript
+		// streaming is enabled. Surfaces the channel id + member count to the
+		// operator BEFORE terragrunt apply runs, so they can abort if the
+		// audience is wider than expected. Non-blocking: ChannelInfo failures
+		// degrade gracefully to "Audience: unknown" rather than aborting create.
+		if resolvedProfile.Spec.CLI.NotifySlackTranscriptEnabled && slackChannelID != "" {
+			printTranscriptWarning(ctx, slackClient, slackChannelID)
+		}
 	}
 
 	// Step 7: Compile profile into Terragrunt/Docker artifacts.

@@ -235,6 +235,29 @@ func (r *productionSSMRunner) RunShell(ctx context.Context, instanceID string, s
 	return err
 }
 
+// printTranscriptWarning emits a single audience-containment warning to stderr
+// when notifySlackTranscriptEnabled resolves to true at km create time. Includes
+// the resolved channel ID and the current Slack member count (fetched via the
+// Phase 67 ChannelInfo helper). Non-blocking: any ChannelInfo error degrades to
+// "Audience: unknown Slack users" but does NOT fail km create.
+//
+// Phase 68 Plan 10 — operators must see this warning early enough to abort
+// (Ctrl-C) before the sandbox provisions and starts streaming transcripts that
+// may include sensitive tool I/O.
+func printTranscriptWarning(ctx context.Context, api SlackAPI, channelID string) {
+	memberCount := "unknown"
+	if api != nil {
+		members, _, err := api.ChannelInfo(ctx, channelID)
+		if err == nil && members > 0 {
+			memberCount = fmt.Sprintf("%d", members)
+		}
+	}
+	fmt.Fprintf(os.Stderr,
+		"⚠ Slack transcript streaming enabled — full Claude transcripts (including tool I/O) will be posted to channel %s. Audience: %s Slack users.\n",
+		channelID, memberCount,
+	)
+}
+
 // runStep11dInject publishes the resolved Slack channel ID to SSM Parameter
 // Store at /sandbox/{id}/slack-channel-id so the sandbox's cloud-init bootstrap
 // can pick it up alongside the operator-wide /km/slack/bridge-url.
