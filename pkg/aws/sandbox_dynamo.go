@@ -608,3 +608,47 @@ func UpdateSandboxStatusAndClearTTL(ctx context.Context, client SandboxMetadataA
 	}
 	return nil
 }
+
+// UpdateSandboxStringAttrDynamo sets a single string attribute on an existing
+// km-sandboxes DynamoDB row. Used by Phase 67 Plan 06 to write
+// slack_inbound_queue_url after the SQS queue is created.
+//
+// When value is empty, the attribute is REMOVED from the item (cleans up
+// rollback leftovers without leaving empty-string entries in DynamoDB).
+func UpdateSandboxStringAttrDynamo(ctx context.Context, client SandboxMetadataAPI, tableName, sandboxID, attr, value string) error {
+	if value == "" {
+		// Remove the attribute entirely — matches "absent = not set" convention
+		// used by last_pause_hint_ts and other optional Phase 67 attributes.
+		_, err := client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+			TableName: awssdk.String(tableName),
+			Key: map[string]dynamodbtypes.AttributeValue{
+				"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+			},
+			UpdateExpression: awssdk.String("REMOVE #a"),
+			ExpressionAttributeNames: map[string]string{
+				"#a": attr,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("remove attr %q for sandbox %s: %w", attr, sandboxID, err)
+		}
+		return nil
+	}
+	_, err := client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: awssdk.String(tableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+		},
+		UpdateExpression: awssdk.String("SET #a = :val"),
+		ExpressionAttributeNames: map[string]string{
+			"#a": attr,
+		},
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":val": &dynamodbtypes.AttributeValueMemberS{Value: value},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("set attr %q for sandbox %s: %w", attr, sandboxID, err)
+	}
+	return nil
+}

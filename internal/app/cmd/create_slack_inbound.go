@@ -1,0 +1,175 @@
+package cmd
+
+// create_slack_inbound.go — Phase 67 Plan 06
+//
+// Orchestration helpers for per-sandbox SQS FIFO queue provisioning at
+// km create time. Called from the Slack channel-creation block in create.go
+// immediately after resolveSlackChannel succeeds.
+//
+// Design principles:
+//   - Thin over pkg/aws/sqs.go helpers (all SQS SDK calls go through the
+//     SQSClient interface — mockable in tests without a real AWS connection).
+//   - DDB attribute update is injected as a func — matches the pattern used by
+//     create_slack_test.go so no real DynamoDB connection is required in tests.
+//   - SSM env injection is injected as a func — reuses the SSMRunner interface
+//     already established by Phase 63's injectSlackEnvIntoSandbox.
+//   - Rollback is explicit and always best-effort: each cleanup step is
+//     attempted even when a prior cleanup step fails.
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/rs/zerolog/log"
+	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klankrmkr/internal/app/config"
+)
+
+// slackInboundDeps bundles all dependencies for provisionSlackInboundQueue.
+// Using a struct enables clean dependency injection in tests without passing
+// a dozen individual arguments.
+type slackInboundDeps struct {
+	// Profile is the resolved SandboxProfile (read from YAML + CLI overrides).
+	Profile *profile.SandboxProfile
+	// Cfg is the operator config (provides GetResourcePrefix(), SandboxTableName).
+	Cfg *config.Config
+	// SandboxID is the sandbox being created (e.g. "sb-abc123").
+	SandboxID string
+	// SQS is the SQS client (real or mock).
+	SQS awspkg.SQSClient
+	// UpdateSandboxAttr persists a single string attribute to the km-sandboxes
+	// DynamoDB row. Signature matches the internal DynamoDB UpdateItem pattern
+	// used throughout sandbox_dynamo.go.
+	UpdateSandboxAttr func(ctx context.Context, sandboxID, attr, value string) error
+	// InjectEnvVar appends an export line to /etc/profile.d/km-notify-env.sh on
+	// the running sandbox via SSM SendCommand. Mirrors the Phase 63 Step 11d
+	// injection path (injectSlackEnvIntoSandbox).
+	InjectEnvVar func(ctx context.Context, instanceID, name, value string) error
+	// InstanceID is the EC2 instance ID of the running sandbox, needed by
+	// InjectEnvVar. Empty string is valid when InjectEnvVar is a no-op mock.
+	InstanceID string
+}
+
+// provisionSlackInboundQueue creates the per-sandbox SQS FIFO queue, persists
+// its URL to the km-sandboxes DynamoDB row as slack_inbound_queue_url, and
+// injects KM_SLACK_INBOUND_QUEUE_URL into the sandbox's env file via SSM.
+//
+// Returns ("", nil) when notifySlackInboundEnabled is false or unset — the
+// no-op path leaves no SQS API calls, no DDB writes, and no SSM commands.
+//
+// On any failure after queue creation, the function attempts rollback (delete
+// queue, best-effort DDB clear) and returns a wrapped error. The caller in
+// create.go MUST also archive the Slack channel if this returns an error
+// (mirrors Phase 63 channel-failure rollback semantics).
+//
+// INVARIANT — last_pause_hint_ts is NOT pre-populated:
+//   The km-sandboxes row MUST NOT have last_pause_hint_ts written at create
+//   time. Plan 67-05's DDBPauseHinter treats "attribute absent" as
+//   "cooldown expired — post the first hint immediately." Writing epoch-0 or
+//   now() would either always trigger (epoch-0 is older than 1h cooldown) or
+//   suppress the very first pause hint if the sandbox pauses immediately after
+//   creation. The attribute is written only by DDBPauseHinter itself on its
+//   first successful post. This function MUST NOT call UpdateSandboxAttr for
+//   last_pause_hint_ts.
+func provisionSlackInboundQueue(ctx context.Context, deps slackInboundDeps) (queueURL string, err error) {
+	cli := deps.Profile.Spec.CLI
+	if cli == nil || !cli.NotifySlackInboundEnabled {
+		return "", nil
+	}
+
+	resourcePrefix := "km"
+	if deps.Cfg != nil {
+		resourcePrefix = deps.Cfg.GetResourcePrefix()
+	}
+	queueName := awspkg.SlackInboundQueueName(resourcePrefix, deps.SandboxID)
+
+	queueURL, err = awspkg.CreateSlackInboundQueue(ctx, deps.SQS, queueName)
+	if err != nil {
+		return "", fmt.Errorf("provision slack inbound queue: %w", err)
+	}
+	log.Info().Str("sandbox_id", deps.SandboxID).Str("queue_name", queueName).
+		Msg("Slack inbound queue created")
+	fmt.Fprintf(os.Stderr, "  ✓ Slack: created inbound queue %s\n", queueName)
+
+	// Persist queue URL to DDB sandbox metadata row.
+	//
+	// NOTE: we only write slack_inbound_queue_url here. We deliberately do NOT
+	// write last_pause_hint_ts (see INVARIANT comment on provisionSlackInboundQueue).
+	if updateErr := deps.UpdateSandboxAttr(ctx, deps.SandboxID, "slack_inbound_queue_url", queueURL); updateErr != nil {
+		// Best-effort queue cleanup to avoid orphaned AWS resources.
+		if delErr := awspkg.DeleteSlackInboundQueue(ctx, deps.SQS, queueURL); delErr != nil {
+			log.Warn().Err(delErr).Str("queue_url", queueURL).
+				Msg("rollback: failed to delete SQS queue after DDB persist failure")
+		}
+		return "", fmt.Errorf("persist slack_inbound_queue_url to DDB: %w", updateErr)
+	}
+
+	// Inject KM_SLACK_INBOUND_QUEUE_URL into sandbox env file via SSM SendCommand.
+	// This mirrors the Phase 63 Step 11d injection for KM_SLACK_CHANNEL_ID.
+	if injectErr := deps.InjectEnvVar(ctx, deps.InstanceID, "KM_SLACK_INBOUND_QUEUE_URL", queueURL); injectErr != nil {
+		// Best-effort queue cleanup. The DDB slack_inbound_queue_url attribute
+		// is left in place — km destroy's stale-queue check and km doctor will
+		// reconcile it. Documented in CONTEXT.md edge cases.
+		if delErr := awspkg.DeleteSlackInboundQueue(ctx, deps.SQS, queueURL); delErr != nil {
+			log.Warn().Err(delErr).Str("queue_url", queueURL).
+				Msg("rollback: failed to delete SQS queue after SSM inject failure")
+		}
+		return "", fmt.Errorf("inject KM_SLACK_INBOUND_QUEUE_URL env var: %w", injectErr)
+	}
+	fmt.Fprintf(os.Stderr, "  ✓ Slack: injected KM_SLACK_INBOUND_QUEUE_URL into sandbox env\n")
+
+	return queueURL, nil
+}
+
+// rollbackSlackInboundQueue deletes the SQS queue and clears the DDB attribute.
+// Best-effort: always attempts both steps; returns the first non-nil error but
+// does not short-circuit on the first failure.
+//
+// Called from create.go when a step after provisionSlackInboundQueue fails.
+// When queueURL is empty (provisioning was skipped), returns nil immediately.
+func rollbackSlackInboundQueue(ctx context.Context, deps slackInboundDeps, queueURL string) error {
+	if queueURL == "" {
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "  ↺ Slack: rolling back inbound queue %s\n", queueURL)
+
+	var firstErr error
+	if delErr := awspkg.DeleteSlackInboundQueue(ctx, deps.SQS, queueURL); delErr != nil {
+		log.Warn().Err(delErr).Str("queue_url", queueURL).Msg("rollback: delete queue failed")
+		firstErr = delErr
+	}
+	// Clear the DDB attribute so km doctor doesn't flag a stale queue.
+	if deps.UpdateSandboxAttr != nil {
+		if clearErr := deps.UpdateSandboxAttr(ctx, deps.SandboxID, "slack_inbound_queue_url", ""); clearErr != nil {
+			log.Warn().Err(clearErr).Str("sandbox_id", deps.SandboxID).
+				Msg("rollback: failed to clear slack_inbound_queue_url from DDB")
+			if firstErr == nil {
+				firstErr = clearErr
+			}
+		}
+	}
+	return firstErr
+}
+
+// injectSlackInboundQueueURLIntoSandbox appends the KM_SLACK_INBOUND_QUEUE_URL
+// export line to /etc/profile.d/km-notify-env.sh on the sandbox. Idempotent:
+// uses grep/sed to avoid duplicate lines on re-runs.
+//
+// This is a concrete implementation of the InjectEnvVar func signature used in
+// slackInboundDeps. Production callers pass this via:
+//
+//	deps.InjectEnvVar = makeInjectEnvVar(runner)
+//
+// where runner is the productionSSMRunner from create.go.
+func injectSlackInboundQueueURLIntoSandbox(ctx context.Context, runner SSMRunner, instanceID, queueURL string) error {
+	script := fmt.Sprintf(`ENV_FILE=/etc/profile.d/km-notify-env.sh
+mkdir -p /etc/profile.d
+touch "$ENV_FILE"
+grep -q '^export KM_SLACK_INBOUND_QUEUE_URL=' "$ENV_FILE" \
+  && sed -i 's|^export KM_SLACK_INBOUND_QUEUE_URL=.*|export KM_SLACK_INBOUND_QUEUE_URL="%s"|' "$ENV_FILE" \
+  || echo 'export KM_SLACK_INBOUND_QUEUE_URL="%s"' >> "$ENV_FILE"
+`, queueURL, queueURL)
+	return runner.RunShell(ctx, instanceID, script)
+}

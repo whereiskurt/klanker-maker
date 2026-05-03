@@ -127,3 +127,9 @@ variable "additional_volume_device_name" {
   description = "Device name for the additional EBS volume attachment. Defaults to /dev/sdf; the compiler picks the first non-colliding name from /dev/sd[f-p] when the source AMI's BDMs already include /dev/sdf (Phase 56.1 BDM collision fix)."
   default     = "/dev/sdf"
 }
+
+variable "resource_prefix" {
+  type        = string
+  description = "Phase 66 multi-instance resource prefix (e.g. 'km', 'stg', 'kpf'). Applied to SQS queue names and IAM policy names scoped to this sandbox instance. Default 'km' matches the platform default."
+  default     = "km"
+}

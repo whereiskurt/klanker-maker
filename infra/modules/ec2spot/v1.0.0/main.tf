@@ -409,6 +409,42 @@ resource "aws_iam_role_policy" "ec2spot_github_token" {
   })
 }
 
+# Policy: SQS read access for Phase 67 Slack-inbound per-sandbox queue.
+# The sandbox-side poller (Plan 67-08) reads/deletes its own queue to consume
+# inbound Slack messages dispatched by the bridge Lambda. Scoped to the
+# sandbox's own queue ARN only — cross-sandbox read/write is prevented by IAM
+# (not just naming convention).
+#
+# The queue name follows the pattern: {resource_prefix}-slack-inbound-{sandbox_id}.fifo
+# where resource_prefix defaults to "km" (Phase 66 multi-instance aware).
+resource "aws_iam_role_policy" "ec2spot_slack_inbound_sqs" {
+  count = local.total_ec2spot_count > 0 ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-slack-inbound"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SQSReadOwnInboundQueue"
+        Effect = "Allow"
+        Action = [
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl",
+          "sqs:ChangeMessageVisibility",
+        ]
+        # Sandbox can only access ITS OWN queue — var.sandbox_id and
+        # var.resource_prefix are interpolated at module-instance time.
+        # Wildcard on region and account prevents cross-region issues when
+        # the same module template is applied in multiple regions.
+        Resource = "arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:${var.resource_prefix}-slack-inbound-${var.sandbox_id}.fifo"
+      }
+    ]
+  })
+}
+
 resource "aws_iam_instance_profile" "ec2spot" {
   count = local.total_ec2spot_count > 0 ? 1 : 0
 
