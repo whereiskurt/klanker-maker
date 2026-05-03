@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: "67-10-PLAN.md checkpoint: human-verify UAT (task 2 of 2 — 67-10-UAT.md created, awaiting operator verification)"
-last_updated: "2026-05-03T01:17:25.808Z"
+stopped_at: "Completed 67-11-PLAN.md (Gap A closure: poller posts .result + Stop hook gate + SSM startup resolve; 4 new compiler tests; UAT.md re-test plan appended)"
+last_updated: "2026-05-03T13:17:10.097Z"
 last_activity: "2026-05-01 — Completed 63.1-03-PLAN.md (SLCK-13: km slack rotate-token, bridge structured logging, fail-fast 5xx, UAT ts=1777638955.854989)"
 progress:
-  total_phases: 71
+  total_phases: 72
   completed_phases: 65
-  total_plans: 224
-  completed_plans: 219
+  total_plans: 239
+  completed_plans: 220
   percent: 0
 ---
 
@@ -258,6 +258,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 67-slack-inbound P09 | 18 | 1 tasks | 2 files |
 | Phase 67 P07 | 783 | 2 tasks | 8 files |
 | Phase 67-slack-inbound-per-sandbox-channel-as-bidirectional-chat-with-km-agent-run-dispatch P08 | 48min | 2 tasks | 7 files |
+| Phase 67-slack-inbound-per-sandbox-channel-as-bidirectional-chat-with-km-agent-run-dispatch P11 | 6min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -733,6 +734,7 @@ Recent decisions affecting current work:
 - [Phase 67]: Used DDBThreadStore.Upsert from pkg/slack/bridge (not reimplementing) for consistent km-slack-threads schema
 - [Phase 67]: Drain placed in Step 12 (after Terraform destroy) — instance may be gone but StopPoller/WaitForAgentRunIdle fail gracefully (best-effort)
 - [Phase 67-slack-inbound-per-sandbox-channel-as-bidirectional-chat-with-km-agent-run-dispatch]: Plan 67-08: SlackChannelID/SlackInboundQueueURL/ActiveThreads added to SandboxRecord (instead of separate metadata fetch in status/list); X-OAuth-Scopes response header parsing for auth.test (not body); type-assert *appConfigAdapter to derive ResourcePrefix
+- [Phase 67]: Slack inbound Gap A closure: poller posts .result from output.json to Slack via km-slack post --thread AFTER aws sqs delete-message (ack-first); KM_SLACK_INBOUND_REPLY_HANDLED sentinel gates the Stop hook Slack branch (# 6b.) to prevent double-post; SSM resolves channel/bridge URL at poller startup (mirrors existing queue-url fallback) since systemd EnvironmentFile only loads km-notify-env.sh.
 
 ### Roadmap Evolution
 
@@ -820,6 +822,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-03T01:17:25.796Z
-Stopped at: 67-10-PLAN.md checkpoint: human-verify UAT (task 2 of 2 — 67-10-UAT.md created, awaiting operator verification)
+Last session: 2026-05-03T13:17:10.091Z
+Stopped at: Completed 67-11-PLAN.md (Gap A closure: poller posts .result + Stop hook gate + SSM startup resolve; 4 new compiler tests; UAT.md re-test plan appended)
 Resume file: None
