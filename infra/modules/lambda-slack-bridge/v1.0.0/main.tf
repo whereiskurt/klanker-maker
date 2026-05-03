@@ -206,6 +206,35 @@ resource "aws_iam_role_policy" "dynamodb_sandboxes_pause_hint" {
   })
 }
 
+# Phase 68: bridge reads transcripts under transcripts/* on the artifacts bucket.
+# The IAM grant is intentionally broad (cross-sandbox) — the bridge enforces
+# per-sandbox prefix at envelope-validation time inside handler.go before
+# GetObject. The application-layer check is the security boundary; this IAM
+# grant is just the AWS-side "you are allowed to attempt the call" gate.
+# Gated on var.artifacts_bucket — when empty, the policy is omitted.
+# RESEARCH Pitfall 4: adding a policy to the role does NOT trigger the
+# replace_triggered_by chain on the Lambda function (only role recreation does).
+resource "aws_iam_role_policy" "slack_bridge_transcript_s3_read" {
+  count = var.artifacts_bucket != "" ? 1 : 0
+  name  = "${local.function_name}-transcript-s3-read"
+  role  = aws_iam_role.slack_bridge.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3GetTranscripts"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:HeadObject",
+        ]
+        Resource = "arn:aws:s3:::${var.artifacts_bucket}/transcripts/*"
+      }
+    ]
+  })
+}
+
 # Policy: SSM — read signing secret (SecureString, decrypted via kms_decrypt above)
 resource "aws_iam_role_policy" "ssm_signing_secret" {
   name = "${local.function_name}-ssm-signing-secret"

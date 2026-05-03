@@ -85,3 +85,13 @@ variable "slack_ack_emoji" {
   type        = string
   default     = "eyes"
 }
+
+# ============================================================
+# Phase 68 — Slack transcript streaming
+# ============================================================
+
+variable "artifacts_bucket" {
+  description = "Project-wide S3 artifacts bucket. The bridge reads transcript objects under transcripts/* (Phase 68). When empty, the bridge S3 read policy is omitted."
+  type        = string
+  default     = ""
+}
