@@ -475,8 +475,13 @@ if [[ "${KM_NOTIFY_SLACK_ENABLED:-0}" == "1" && -n "${KM_SLACK_CHANNEL_ID:-}" ]]
   if [[ -n "${KM_SLACK_THREAD_TS:-}" ]]; then
     THREAD_FLAG="--thread $KM_SLACK_THREAD_TS"
   fi
+  # --subject is intentionally empty: in per-sandbox channel threaded replies
+  # the bold "[sandbox-id] idle" header is redundant noise. km-slack accepts
+  # empty subject; the bridge / SlackPosterAdapter skips the header in that
+  # case and posts just the body.
   if /opt/km/bin/km-slack post \
        --channel "$KM_SLACK_CHANNEL_ID" \
+       --subject "" \
        $THREAD_FLAG \
        --body "$body_file"; then
     sent_any=1

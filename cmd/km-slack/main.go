@@ -36,20 +36,20 @@ const defaultTimeout = 30 * time.Second
 
 func main() {
 	if len(os.Args) < 2 || os.Args[1] != "post" {
-		fmt.Fprintln(os.Stderr, "usage: km-slack post --channel <id> --subject <text> --body <file> [--thread <ts>]")
+		fmt.Fprintln(os.Stderr, "usage: km-slack post --channel <id> --body <file> [--subject <text>] [--thread <ts>]")
 		os.Exit(2)
 	}
 	fs := flag.NewFlagSet("post", flag.ExitOnError)
 	var channel, subject, bodyPath, thread string
 	fs.StringVar(&channel, "channel", "", "Slack channel ID (C...)")
-	fs.StringVar(&subject, "subject", "", "Subject text (used as bold header by bridge)")
+	fs.StringVar(&subject, "subject", "", "Optional subject text (rendered as bold header by bridge; omit for clean threaded replies)")
 	fs.StringVar(&bodyPath, "body", "", "Path to body file (stdin '-' NOT supported)")
-	fs.StringVar(&thread, "thread", "", "Thread parent ts (wired, unused in v1)")
+	fs.StringVar(&thread, "thread", "", "Thread parent ts")
 	if err := fs.Parse(os.Args[2:]); err != nil {
 		os.Exit(2)
 	}
-	if channel == "" || subject == "" || bodyPath == "" {
-		fmt.Fprintln(os.Stderr, "km-slack: --channel, --subject, --body are required")
+	if channel == "" || bodyPath == "" {
+		fmt.Fprintln(os.Stderr, "km-slack: --channel and --body are required")
 		os.Exit(2)
 	}
 	if bodyPath == "-" {

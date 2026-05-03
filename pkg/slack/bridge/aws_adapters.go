@@ -342,10 +342,16 @@ func checkRateLimit(httpStatus int, retryAfterHeader, method string) error {
 }
 
 // PostMessage posts to a Slack channel. Returns the message ts on success.
+// An empty subject renders the body alone (no bold header) — useful for
+// per-sandbox threaded replies where the channel already conveys context.
 func (s *SlackPosterAdapter) PostMessage(ctx context.Context, channel, subject, body, threadTS string) (string, error) {
+	text := body
+	if subject != "" {
+		text = fmt.Sprintf("*%s*\n\n%s", subject, body)
+	}
 	payload := map[string]any{
 		"channel":      channel,
-		"text":         fmt.Sprintf("*%s*\n\n%s", subject, body),
+		"text":         text,
 		"unfurl_links": false,
 		"unfurl_media": false,
 		"mrkdwn":       true,

@@ -97,9 +97,14 @@ func (c *Client) AuthTest(ctx context.Context) error {
 }
 
 // PostMessage posts to channel with the bold-header format from CONTEXT.md.
+// An empty subject renders the body alone (no bold header) — useful for
+// per-sandbox threaded replies where the channel already conveys context.
 // Returns the message ts on success.
 func (c *Client) PostMessage(ctx context.Context, channel, subject, body, threadTS string) (string, error) {
-	text := fmt.Sprintf("*%s*\n\n%s", subject, body)
+	text := body
+	if subject != "" {
+		text = fmt.Sprintf("*%s*\n\n%s", subject, body)
+	}
 	payload := map[string]any{
 		"channel":      channel,
 		"text":         text,
