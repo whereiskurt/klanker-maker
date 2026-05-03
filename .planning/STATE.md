@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 1
+current_plan: 4
 status: in-progress
-stopped_at: Completed 68-00-PLAN.md
-last_updated: "2026-05-03T19:54:10.165Z"
-last_activity: 2026-05-03 — Completed 68-00-PLAN.md (13 stub _test.go files + 3 testdata fixtures + deferred-items.md; go build clean; 63 SKIPs across targeted regex)
+stopped_at: Completed 68-02-PLAN.md
+last_updated: "2026-05-03T20:01:18.410Z"
+last_activity: 2026-05-03
 progress:
   total_phases: 73
   completed_phases: 67
   total_plans: 242
-  completed_plans: 226
+  completed_plans: 229
   percent: 93
 ---
 
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 Phase: 68 (slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload) — Wave 0 stub seeding COMPLETE
 Plan: 1 of 13 in current phase (Plan 68-00 COMPLETE; 68-01..68-12 pending)
 Total Plans in Phase: 13
-Current Plan: 1
+Current Plan: 4
 Status: in-progress
-Last activity: 2026-05-03 — Completed 68-00-PLAN.md (13 stub _test.go files + 3 testdata fixtures + deferred-items.md; go build clean; 63 SKIPs across targeted regex)
+Last activity: 2026-05-03
 
 Progress: [█████████░] 93%
 
@@ -268,6 +268,8 @@ Progress: [█████████░] 93%
 | Phase 67.1 P02 | 634 | 2 tasks | 4 files |
 | Phase 67.1 P03 | ~10min (+ UAT) | 3 tasks | 4 files |
 | Phase 68 P00 | 7min | 2 tasks | 17 files |
+| Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P03 | 3min | 2 tasks | 5 files |
+| Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P02 | 4min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -756,6 +758,10 @@ Recent decisions affecting current work:
 - [Phase 67.1-03]: Live terragrunt config relies on slack_ack_emoji default "eyes" — no live-config edit needed for v1 deployment
 - [Phase 67.1-03]: Phase 67.1 COMPLETE GREEN — all 5 UAT requirements satisfied; operator confirmed 👀 on correct msg.TS, bot-loop filter holds, in-thread correctness validated
 - [Phase 68]: Phase 68 Wave-0 stub-seeding mirrors Phase 67-00 — t.Skip stubs in package-aligned _test.go files, separate km-slack stub helper from km-send to keep post/upload/record-mapping subcommands explicit; out-of-scope baseline failures logged to deferred-items.md rather than auto-fixed
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-03: table name resolved to {prefix}-slack-stream-messages (NOT {prefix}-km-slack-stream-messages); resolves CONTEXT.md Open Question 1 — 68-CONTEXT.md should be amended on next pass
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-03: dynamodb-slack-stream-messages module mirrors Phase 67 dynamodb-slack-threads layout 1:1 (PAY_PER_REQUEST, native TTL on Number ttl_expiry, SSE on, PITR off); only resource name + key schema + Component=km-slack-transcript tag differ
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-02: Reused EnvelopeVersion=1 (no bump) for the four additive upload-envelope fields — zero values on legacy actions guarantee byte-identical canonical signing, so Phase 63 verifiers and Phase 68 senders interoperate after the struct refresh
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-02: Validation split between client (BuildEnvelopeUpload: filename ≤255B, no slash/NUL, sizeBytes>0, channel/s3Key non-empty) and bridge (content-type allow-list, deferred to Plan 08) — keeps the trust boundary at the network edge while giving callers fast-fail on shape errors
 
 ### Roadmap Evolution
 
@@ -844,6 +850,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-03T19:54:10.159Z
-Stopped at: Completed 68-00-PLAN.md
+Last session: 2026-05-03T20:00:42.272Z
+Stopped at: Completed 68-02-PLAN.md
 Resume file: None
