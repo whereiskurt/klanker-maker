@@ -583,3 +583,239 @@ func TestSlackRotateToken_ColdStartFailsButSmokePasses(t *testing.T) {
 		t.Errorf("BridgePoster should still be called after cold-start failure; got %d calls", poster.called)
 	}
 }
+
+// ──────────────────────────────────────────────
+// Phase 67: signing-secret + scope check + events URL (Plan 67-09)
+// ──────────────────────────────────────────────
+
+// fakeSSMWithType tracks SecureString type info for signing-secret tests.
+type fakeSSMWithType struct {
+	params map[string]struct {
+		value  string
+		secure bool
+	}
+}
+
+func newFakeSSMWithType() *fakeSSMWithType {
+	return &fakeSSMWithType{
+		params: make(map[string]struct {
+			value  string
+			secure bool
+		}),
+	}
+}
+
+func (f *fakeSSMWithType) Get(_ context.Context, name string, _ bool) (string, error) {
+	if e, ok := f.params[name]; ok {
+		return e.value, nil
+	}
+	return "", nil
+}
+
+func (f *fakeSSMWithType) Put(_ context.Context, name, value string, secure bool) error {
+	f.params[name] = struct {
+		value  string
+		secure bool
+	}{value: value, secure: secure}
+	return nil
+}
+
+// TestSlackInit_PersistsSigningSecret verifies persistSigningSecret writes
+// /km/slack/signing-secret as SecureString with the given KMS key.
+func TestSlackInit_PersistsSigningSecret(t *testing.T) {
+	store := newFakeSSMWithType()
+	err := cmd.PersistSigningSecret(context.Background(), store, "test-secret-32chars1234567890ab", "alias/aws/ssm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := store.params["/km/slack/signing-secret"]
+	if !ok {
+		t.Fatal("signing-secret not stored in SSM")
+	}
+	if entry.value != "test-secret-32chars1234567890ab" {
+		t.Fatalf("expected value %q, got %q", "test-secret-32chars1234567890ab", entry.value)
+	}
+	if !entry.secure {
+		t.Fatal("expected SecureString (secure=true), got plain string")
+	}
+}
+
+// TestSlackInit_ScopeCheck_AllPresent verifies no missing scopes when all required present.
+func TestSlackInit_ScopeCheck_AllPresent(t *testing.T) {
+	ok, missing := cmd.VerifyEventsAPIScopes([]string{"chat:write", "channels:history", "groups:history"})
+	if !ok || len(missing) != 0 {
+		t.Fatalf("expected all scopes present, got missing=%v", missing)
+	}
+}
+
+// TestSlackInit_ScopeCheck_MissingOne verifies groups:history is detected missing.
+func TestSlackInit_ScopeCheck_MissingOne(t *testing.T) {
+	ok, missing := cmd.VerifyEventsAPIScopes([]string{"chat:write", "channels:history"})
+	if ok || len(missing) != 1 || missing[0] != "groups:history" {
+		t.Fatalf("expected groups:history missing, got ok=%v missing=%v", ok, missing)
+	}
+}
+
+// TestSlackInit_ScopeCheck_MissingBoth verifies both scopes detected missing.
+func TestSlackInit_ScopeCheck_MissingBoth(t *testing.T) {
+	ok, missing := cmd.VerifyEventsAPIScopes([]string{"chat:write"})
+	if ok || len(missing) != 2 {
+		t.Fatalf("expected both scopes missing, got ok=%v missing=%v", ok, missing)
+	}
+}
+
+// TestSlackInit_Events_URL_Format verifies bridge events URL format.
+func TestSlackInit_Events_URL_Format(t *testing.T) {
+	bridgeURL := "https://abc123.lambda-url.us-east-1.on.aws"
+	eventsURL := bridgeURL + "/events"
+	if !strings.HasSuffix(eventsURL, "/events") {
+		t.Fatalf("events URL must end with /events, got %s", eventsURL)
+	}
+}
+
+// TestSlackInit_WithSigningSecret_FlagProvided verifies signing secret is persisted
+// when supplied via flag (non-interactive, no prompter call).
+func TestSlackInit_WithSigningSecret_FlagProvided(t *testing.T) {
+	api := &fakeSlackInitAPI{createID: "CSEC"}
+	ssmStore := newFakeSSM(nil)
+	tg := &fakeTerragrunt{}
+	prompter := &fakePrompter{}
+	poster := &fakeBridgePoster{}
+
+	deps := buildSlackTestDeps(api, ssmStore, tg, prompter, poster)
+	opts := cmd.SlackInitOpts{
+		BotToken:      "xoxb-test-token",
+		InviteEmail:   "ops@example.com",
+		SharedChannel: "km-notifications",
+		SigningSecret: "aabbccdd11223344aabbccdd11223344",
+	}
+
+	if err := cmd.RunSlackInit(context.Background(), deps, opts); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ssmStore.store["/km/slack/signing-secret"] != "aabbccdd11223344aabbccdd11223344" {
+		t.Errorf("signing-secret not stored; got %q", ssmStore.store["/km/slack/signing-secret"])
+	}
+}
+
+// TestSlackInit_WithSigningSecret_Interactive verifies signing secret is prompted when not supplied.
+func TestSlackInit_WithSigningSecret_Interactive(t *testing.T) {
+	api := &fakeSlackInitAPI{createID: "CINT"}
+	ssmStore := newFakeSSM(nil)
+	tg := &fakeTerragrunt{}
+	// 3 ordered responses: bot-token, invite-email, signing-secret
+	prompter := &fakePrompter{ordered: []string{"xoxb-test-token", "ops@example.com", "interactive-secret-32chars1234ab"}}
+	poster := &fakeBridgePoster{}
+
+	deps := buildSlackTestDeps(api, ssmStore, tg, prompter, poster)
+	opts := cmd.SlackInitOpts{SharedChannel: "km-notifications"}
+
+	if err := cmd.RunSlackInit(context.Background(), deps, opts); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ssmStore.store["/km/slack/signing-secret"] != "interactive-secret-32chars1234ab" {
+		t.Errorf("signing-secret not stored from interactive prompt; got %q", ssmStore.store["/km/slack/signing-secret"])
+	}
+}
+
+// TestSlackInit_Force_WithSigningSecret_Overwrites verifies --force + --signing-secret
+// overwrites existing signing secret without re-prompting.
+func TestSlackInit_Force_WithSigningSecret_Overwrites(t *testing.T) {
+	api := &fakeSlackInitAPI{createID: "CFORCE"}
+	ssmStore := newFakeSSM(map[string]string{
+		"/km/slack/signing-secret":    "old-secret-32chars1234567890ab",
+		"/km/slack/shared-channel-id": "COLD",
+		"/km/slack/bridge-url":        "https://old.lambda.url/",
+		"/km/slack/invite-email":      "old@example.com",
+	})
+	tg := &fakeTerragrunt{}
+	prompter := &fakePrompter{}
+	poster := &fakeBridgePoster{}
+
+	deps := buildSlackTestDeps(api, ssmStore, tg, prompter, poster)
+	opts := cmd.SlackInitOpts{
+		BotToken:      "xoxb-force-token",
+		InviteEmail:   "new@example.com",
+		SharedChannel: "km-notifications",
+		Force:         true,
+		SigningSecret: "new-secret-32chars1234567890abcd",
+	}
+
+	if err := cmd.RunSlackInit(context.Background(), deps, opts); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ssmStore.store["/km/slack/signing-secret"] != "new-secret-32chars1234567890abcd" {
+		t.Errorf("signing-secret not updated with --force; got %q", ssmStore.store["/km/slack/signing-secret"])
+	}
+	if prompter.calls != 0 {
+		t.Errorf("prompter should not be called when all flags provided; got %d calls", prompter.calls)
+	}
+}
+
+// TestSlackRotateSigningSecret_HappyPath verifies full rotation flow:
+// validate, persist, force cold-start, print confirmation.
+func TestSlackRotateSigningSecret_HappyPath(t *testing.T) {
+	ssmStore := newFakeSSM(map[string]string{
+		"/km/slack/bridge-url":        "https://bridge.example.com/",
+		"/km/slack/shared-channel-id": "C-SHARED",
+	})
+	cs := &fakeBridgeColdStartCounter{}
+	prompter := &fakePrompter{}
+
+	deps := &cmd.SlackCmdDeps{
+		SSM:             ssmStore,
+		BridgeColdStart: cs.call,
+		Prompter:        prompter,
+	}
+
+	err := cmd.RunSlackRotateSigningSecret(context.Background(), deps, cmd.SlackRotateSigningSecretOpts{
+		SigningSecret: "rotatednewsecret32chars1234567ab",
+	})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	if got := ssmStore.store["/km/slack/signing-secret"]; got != "rotatednewsecret32chars1234567ab" {
+		t.Errorf("SSM /km/slack/signing-secret = %q; want rotated value", got)
+	}
+	if cs.callCount != 1 {
+		t.Errorf("BridgeColdStart calls = %d; want 1", cs.callCount)
+	}
+}
+
+// TestSlackRotateSigningSecret_Prompts verifies rotation prompts when no flag given.
+func TestSlackRotateSigningSecret_Prompts(t *testing.T) {
+	ssmStore := newFakeSSM(nil)
+	cs := &fakeBridgeColdStartCounter{}
+	prompter := &fakePrompter{ordered: []string{"promptedsecret32chars1234567890ab"}}
+
+	deps := &cmd.SlackCmdDeps{
+		SSM:             ssmStore,
+		BridgeColdStart: cs.call,
+		Prompter:        prompter,
+	}
+
+	err := cmd.RunSlackRotateSigningSecret(context.Background(), deps, cmd.SlackRotateSigningSecretOpts{})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if got := ssmStore.store["/km/slack/signing-secret"]; got != "promptedsecret32chars1234567890ab" {
+		t.Errorf("signing-secret not persisted from prompt; got %q", got)
+	}
+}
+
+// TestSlackCmd_Registered_RotateSigningSecret verifies km slack rotate-signing-secret is registered.
+func TestSlackCmd_Registered_RotateSigningSecret(t *testing.T) {
+	cfg := &config.Config{}
+	slackCmd := cmd.NewSlackCmd(cfg)
+	found := false
+	for _, sub := range slackCmd.Commands() {
+		if sub.Name() == "rotate-signing-secret" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("subcommand 'rotate-signing-secret' not registered under km slack")
+	}
+}

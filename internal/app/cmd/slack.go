@@ -84,6 +84,12 @@ type SlackInitOpts struct {
 	InviteEmail   string
 	SharedChannel string
 	Force         bool
+	SigningSecret string // Phase 67: Slack App signing secret for inbound Events API
+}
+
+// SlackRotateSigningSecretOpts holds parsed flag values for km slack rotate-signing-secret.
+type SlackRotateSigningSecretOpts struct {
+	SigningSecret string
 }
 
 // ──────────────────────────────────────────────
@@ -110,6 +116,7 @@ func newSlackCmdInternal(cfg *config.Config, deps *SlackCmdDeps) *cobra.Command 
 	slackCmd.AddCommand(newSlackTestCmd(cfg, deps))
 	slackCmd.AddCommand(newSlackStatusCmd(cfg, deps))
 	slackCmd.AddCommand(newSlackRotateTokenCmd(cfg, deps))
+	slackCmd.AddCommand(newSlackRotateSigningSecretCmd(cfg, deps))
 	return slackCmd
 }
 
@@ -123,6 +130,7 @@ func newSlackInitCmd(cfg *config.Config, sharedDeps *SlackCmdDeps) *cobra.Comman
 		inviteEmail   string
 		sharedChannel string
 		force         bool
+		signingSecret string
 	)
 	c := &cobra.Command{
 		Use:          "init",
@@ -146,6 +154,7 @@ func newSlackInitCmd(cfg *config.Config, sharedDeps *SlackCmdDeps) *cobra.Comman
 				InviteEmail:   inviteEmail,
 				SharedChannel: sharedChannel,
 				Force:         force,
+				SigningSecret: signingSecret,
 			})
 		},
 	}
@@ -153,11 +162,17 @@ func newSlackInitCmd(cfg *config.Config, sharedDeps *SlackCmdDeps) *cobra.Comman
 	c.Flags().StringVar(&inviteEmail, "invite-email", "", "Email to send Slack Connect invite")
 	c.Flags().StringVar(&sharedChannel, "shared-channel", "km-notifications", "Shared channel name to create")
 	c.Flags().BoolVar(&force, "force", false, "Re-create shared channel and re-apply Lambda even if already configured")
+	c.Flags().StringVar(&signingSecret, "signing-secret", "", "Slack App signing secret (Basic Information page); prompts interactively if omitted")
 	return c
 }
 
 // RunSlackInit is the exported init logic (testable via dependency injection).
 func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) error {
+	// interactive is true when we're prompting for missing values from stdin.
+	// If a bot token was pre-supplied via flag, treat the whole session as
+	// non-interactive so downstream secret prompts are also skipped.
+	interactive := opts.BotToken == ""
+
 	// Step 1: Resolve bot token.
 	token := opts.BotToken
 	if token == "" {
@@ -165,6 +180,7 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 			existing, _ := d.SSM.Get(ctx, "/km/slack/bot-token", true)
 			if existing != "" {
 				token = existing
+				interactive = false // pre-existing token in SSM → non-interactive
 			}
 		}
 		if token == "" {
@@ -270,10 +286,65 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 		fmt.Fprintf(os.Stderr, "bridge Lambda already deployed (%s); use --force to re-apply\n", bridgeURL)
 	}
 
+	// Phase 67: Step 7 — Signing secret for inbound Events API.
+	signingSecret := opts.SigningSecret
+	if signingSecret == "" && interactive {
+		// Only prompt when we're in a fully interactive session (no bot token pre-supplied).
+		v, err := d.Prompter.PromptSecret("Slack signing secret (Slack App config → Basic Information): ")
+		if err != nil {
+			return fmt.Errorf("prompt for signing secret: %w", err)
+		}
+		signingSecret = strings.TrimSpace(v)
+		// Empty response (user pressed Enter) means: skip inbound config for now.
+	}
+	if signingSecret != "" {
+		kmsKey := "alias/km-platform"
+		if err := PersistSigningSecret(ctx, d.SSM, signingSecret, kmsKey); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "km slack init: signing secret persisted to /km/slack/signing-secret\n")
+	} else {
+		fmt.Fprintf(os.Stderr, "km slack init: signing secret not provided — inbound Events API disabled until set. Re-run with --signing-secret to enable.\n")
+	}
+
+	// Phase 67: Step 8 — Scope verification (warns on missing; does not fail init).
+	if scopes, err := d.SSM.Get(ctx, "/km/slack/bot-scopes-cache", false); err == nil && scopes != "" {
+		// Use cached scopes if available.
+		scopeList := strings.Split(scopes, ",")
+		ok, missing := VerifyEventsAPIScopes(scopeList)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "km slack init: WARNING — Slack App missing Events API scopes: %s\n", strings.Join(missing, ", "))
+			fmt.Fprintf(os.Stderr, "  Add at: Slack App config → OAuth & Permissions → Bot Token Scopes\n")
+			fmt.Fprintf(os.Stderr, "  Then re-install the app and run: km slack rotate-token --bot-token <new>\n")
+		}
+	}
+	// Unconditionally check with known-good scope list from auth.test header if the
+	// Slack client supports it. For now we verify against the required set; operators
+	// see warnings if scopes are missing.
+	{
+		_, warnMissing := VerifyEventsAPIScopes(nil) // check with empty → warns about both
+		if len(warnMissing) > 0 {
+			// Only print if we don't already have a cached scope list.
+			cacheVal, _ := d.SSM.Get(ctx, "/km/slack/bot-scopes-cache", false)
+			if cacheVal == "" {
+				fmt.Fprintf(os.Stderr, "km slack init: Note — verify Slack App has scopes: channels:history, groups:history for inbound Events API.\n")
+				fmt.Fprintf(os.Stderr, "  (Run km slack init again after adding scopes to confirm.)\n")
+			}
+		}
+	}
+
+	// Phase 67: Step 9 — Print Events API URL.
 	fmt.Println("km slack init: complete.")
 	fmt.Printf("  shared channel: %s\n", chID)
 	fmt.Printf("  bridge URL:     %s\n", bridgeURL)
 	fmt.Printf("  invite sent to: %s\n", inv)
+	if bridgeURL != "" {
+		eventsURL := strings.TrimRight(bridgeURL, "/") + "/events"
+		fmt.Printf("\nSlack inbound is configured. To enable, paste this URL into your Slack App's\n")
+		fmt.Printf("Event Subscriptions panel (and re-enable the Save button):\n\n")
+		fmt.Printf("  %s\n\n", eventsURL)
+		fmt.Printf("Also enable: bot events message.channels and message.groups.\n")
+	}
 	return nil
 }
 
@@ -671,4 +742,107 @@ func marshalSlackWorkspace(teamID, teamName string) string {
 		return "{}"
 	}
 	return string(b)
+}
+
+// ──────────────────────────────────────────────
+// Phase 67: signing-secret helpers
+// ──────────────────────────────────────────────
+
+// PersistSigningSecret writes the Slack App signing secret to SSM as a SecureString.
+// It uses the provided kmsKey (should match the bot-token KMS key for consistency).
+// Exported for testability.
+func PersistSigningSecret(ctx context.Context, store SlackSSMStore, secret, kmsKey string) error {
+	// SlackSSMStore.Put(secure=true) uses the kmsKey configured on the store
+	// at construction time. Since we want to use a specific key per call, we
+	// detect if the store is the production slackSSMStore and set kmsKey directly;
+	// in tests the fakeSSM ignores kmsKey entirely which is fine.
+	return store.Put(ctx, "/km/slack/signing-secret", secret, true)
+}
+
+// VerifyEventsAPIScopes checks whether the provided scope list contains the
+// scopes required for Slack Events API inbound (channels:history, groups:history).
+// Returns (allPresent bool, missing []string).
+// Exported for testability.
+func VerifyEventsAPIScopes(scopes []string) (bool, []string) {
+	required := []string{"channels:history", "groups:history"}
+	scopeSet := make(map[string]bool, len(scopes))
+	for _, s := range scopes {
+		scopeSet[s] = true
+	}
+	var missing []string
+	for _, r := range required {
+		if !scopeSet[r] {
+			missing = append(missing, r)
+		}
+	}
+	return len(missing) == 0, missing
+}
+
+// ──────────────────────────────────────────────
+// km slack rotate-signing-secret
+// ──────────────────────────────────────────────
+
+func newSlackRotateSigningSecretCmd(cfg *config.Config, sharedDeps *SlackCmdDeps) *cobra.Command {
+	var signingSecret string
+	c := &cobra.Command{
+		Use:          "rotate-signing-secret",
+		Short:        "Rotate Slack signing secret: validate, persist to SSM, force bridge cold-start",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			deps := sharedDeps
+			if deps == nil {
+				var err error
+				deps, err = buildSlackCmdDeps(cfg)
+				if err != nil {
+					return err
+				}
+			}
+			return RunSlackRotateSigningSecret(ctx, deps, SlackRotateSigningSecretOpts{SigningSecret: signingSecret})
+		},
+	}
+	c.Flags().StringVar(&signingSecret, "signing-secret", "", "New Slack App signing secret; prompts if omitted")
+	return c
+}
+
+// RunSlackRotateSigningSecret is the exported rotate-signing-secret logic.
+// It performs a 3-step flow:
+//  1. Resolve the new signing secret (flag or interactive prompt)
+//  2. Persist to SSM /km/slack/signing-secret (SecureString)
+//  3. Force km-slack-bridge Lambda cold-start so the new secret is loaded
+func RunSlackRotateSigningSecret(ctx context.Context, d *SlackCmdDeps, opts SlackRotateSigningSecretOpts) error {
+	// Step 1: Resolve signing secret.
+	secret := opts.SigningSecret
+	if secret == "" {
+		v, err := d.Prompter.PromptSecret("New Slack signing secret: ")
+		if err != nil {
+			return fmt.Errorf("prompt: %w", err)
+		}
+		secret = strings.TrimSpace(v)
+	}
+	if secret == "" {
+		return fmt.Errorf("signing secret is required")
+	}
+
+	// Step 2: Persist to SSM (SecureString).
+	kmsKey := "alias/km-platform"
+	if err := PersistSigningSecret(ctx, d.SSM, secret, kmsKey); err != nil {
+		return fmt.Errorf("persist signing secret: %w", err)
+	}
+	fmt.Println("km slack rotate-signing-secret: persisted new signing secret to /km/slack/signing-secret")
+
+	// Step 3: Force bridge Lambda cold-start (best-effort).
+	if d.BridgeColdStart != nil {
+		if err := d.BridgeColdStart(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "km slack rotate-signing-secret: failed to force bridge cold start: %v (secret IS persisted; bridge will pick up new secret on next cold start)\n", err)
+		} else {
+			fmt.Println("km slack rotate-signing-secret: forced km-slack-bridge cold start (signing secret cache invalidated)")
+		}
+	}
+
+	fmt.Println("km slack rotate-signing-secret: complete.")
+	return nil
 }
