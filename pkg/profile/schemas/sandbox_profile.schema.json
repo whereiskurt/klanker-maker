@@ -535,6 +535,11 @@
               "type": "boolean",
               "default": false,
               "description": "Enable bidirectional Slack chat (per-sandbox channel inbound). Requires notifySlackEnabled=true and notifySlackPerSandbox=true; incompatible with notifySlackChannelOverride."
+            },
+            "notifySlackTranscriptEnabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "When true, every Claude PostToolUse fires per-turn streaming to the per-sandbox Slack thread, and Stop uploads the gzipped transcript JSONL as a Slack file. Requires notifySlackEnabled and notifySlackPerSandbox; incompatible with notifySlackChannelOverride."
             }
           }
         }

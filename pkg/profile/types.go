@@ -434,6 +434,16 @@ type CLISpec struct {
 	//
 	// Default: false. Profile-only — no CLI flag override (Phase 67).
 	NotifySlackInboundEnabled bool `yaml:"notifySlackInboundEnabled,omitempty"`
+
+	// NotifySlackTranscriptEnabled enables per-turn Slack transcript streaming.
+	// When true, every Claude PostToolUse hook fires per-turn streaming to the
+	// per-sandbox Slack thread, and the Stop hook uploads the gzipped transcript
+	// JSONL as a Slack file. Requires NotifySlackEnabled=true AND
+	// NotifySlackPerSandbox=true. Incompatible with NotifySlackChannelOverride
+	// (transcript audience must be operator-controlled).
+	//
+	// Default: false. Profile-only — no CLI flag override (Phase 68).
+	NotifySlackTranscriptEnabled bool `yaml:"notifySlackTranscriptEnabled,omitempty" json:"notifySlackTranscriptEnabled,omitempty"`
 }
 
 // Parse unmarshals a SandboxProfile from raw YAML bytes.
