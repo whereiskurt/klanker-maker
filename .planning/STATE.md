@@ -2,16 +2,17 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: "Completed 67.1-02-PLAN.md (scope verification for reactions:write)"
-last_updated: "2026-05-03T19:30:50.876Z"
-last_activity: 2026-05-03 — Completed 67.1-03-PLAN.md (Terraform slack_ack_emoji variable + Lambda KM_SLACK_ACK_EMOJI env passthrough; docs/slack-notifications.md ACK reaction section; CLAUDE.md update; operator UAT APPROVED — 👀 appears within 1-2s on correct message, in-thread correctness validated, bot-loop filter holds)
+current_plan: 1
+status: in-progress
+stopped_at: Completed 68-00-PLAN.md
+last_updated: "2026-05-03T19:54:10.165Z"
+last_activity: 2026-05-03 — Completed 68-00-PLAN.md (13 stub _test.go files + 3 testdata fixtures + deferred-items.md; go build clean; 63 SKIPs across targeted regex)
 progress:
   total_phases: 73
   completed_phases: 67
   total_plans: 242
-  completed_plans: 225
-  percent: 0
+  completed_plans: 226
+  percent: 93
 ---
 
 # Project State
@@ -25,12 +26,14 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 
 ## Current Position
 
-Phase: 67.1 (slack-inbound-ack-reaction: bridge fire-and-forget 👀 ACK reaction on SQS enqueue) — COMPLETE (GREEN ship verdict)
-Plan: 3 of 3 in current phase (all plans 67.1-01 through 67.1-03 COMPLETE)
-Status: Phase 67.1 COMPLETE — ready to start Phase 68 (transcript streaming)
-Last activity: 2026-05-03 — Completed 67.1-03-PLAN.md (Terraform slack_ack_emoji variable + Lambda KM_SLACK_ACK_EMOJI env passthrough; docs/slack-notifications.md ACK reaction section; CLAUDE.md update; operator UAT APPROVED — 👀 appears within 1-2s on correct message, in-thread correctness validated, bot-loop filter holds)
+Phase: 68 (slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload) — Wave 0 stub seeding COMPLETE
+Plan: 1 of 13 in current phase (Plan 68-00 COMPLETE; 68-01..68-12 pending)
+Total Plans in Phase: 13
+Current Plan: 1
+Status: in-progress
+Last activity: 2026-05-03 — Completed 68-00-PLAN.md (13 stub _test.go files + 3 testdata fixtures + deferred-items.md; go build clean; 63 SKIPs across targeted regex)
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█████████░] 93%
 
 ## Performance Metrics
 
@@ -264,6 +267,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 67.1-slack-inbound-ack-reaction P01 | 447 | 3 tasks | 6 files |
 | Phase 67.1 P02 | 634 | 2 tasks | 4 files |
 | Phase 67.1 P03 | ~10min (+ UAT) | 3 tasks | 4 files |
+| Phase 68 P00 | 7min | 2 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -751,6 +755,7 @@ Recent decisions affecting current work:
 - [Phase 67.1-03]: lambda-slack-bridge v1.0.0 slack_ack_emoji variable added in-place (not version bump) — consistent with Phase 67-05 precedent of additive in-place env var additions with safe defaults
 - [Phase 67.1-03]: Live terragrunt config relies on slack_ack_emoji default "eyes" — no live-config edit needed for v1 deployment
 - [Phase 67.1-03]: Phase 67.1 COMPLETE GREEN — all 5 UAT requirements satisfied; operator confirmed 👀 on correct msg.TS, bot-loop filter holds, in-thread correctness validated
+- [Phase 68]: Phase 68 Wave-0 stub-seeding mirrors Phase 67-00 — t.Skip stubs in package-aligned _test.go files, separate km-slack stub helper from km-send to keep post/upload/record-mapping subcommands explicit; out-of-scope baseline failures logged to deferred-items.md rather than auto-fixed
 
 ### Roadmap Evolution
 
@@ -839,6 +844,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-03T18:45:03.034Z
-Stopped at: Completed 67.1-02-PLAN.md (scope verification for reactions:write)
+Last session: 2026-05-03T19:54:10.159Z
+Stopped at: Completed 68-00-PLAN.md
 Resume file: None
