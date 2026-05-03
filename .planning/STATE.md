@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: "Completed 67-07-PLAN.md (Slack-inbound lifecycle: ready announcement + destroy drain)"
-last_updated: "2026-05-03T00:34:01.204Z"
+stopped_at: "Completed 67-08-PLAN.md (Slack inbound diagnostics: km status, list --wide 💬, 3 doctor checks)"
+last_updated: "2026-05-03T01:10:14.317Z"
 last_activity: "2026-05-01 — Completed 63.1-03-PLAN.md (SLCK-13: km slack rotate-token, bridge structured logging, fail-fast 5xx, UAT ts=1777638955.854989)"
 progress:
   total_phases: 71
   completed_phases: 65
   total_plans: 224
-  completed_plans: 218
+  completed_plans: 219
   percent: 0
 ---
 
@@ -257,6 +257,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 67-slack-inbound P06 | 699s | 2 tasks | 8 files |
 | Phase 67-slack-inbound P09 | 18 | 1 tasks | 2 files |
 | Phase 67 P07 | 783 | 2 tasks | 8 files |
+| Phase 67-slack-inbound-per-sandbox-channel-as-bidirectional-chat-with-km-agent-run-dispatch P08 | 48min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -731,6 +732,7 @@ Recent decisions affecting current work:
 - [Phase 67-slack-inbound]: km slack rotate-signing-secret mirrors rotate-token but omits smoke test (no inbound smoke path)
 - [Phase 67]: Used DDBThreadStore.Upsert from pkg/slack/bridge (not reimplementing) for consistent km-slack-threads schema
 - [Phase 67]: Drain placed in Step 12 (after Terraform destroy) — instance may be gone but StopPoller/WaitForAgentRunIdle fail gracefully (best-effort)
+- [Phase 67-slack-inbound-per-sandbox-channel-as-bidirectional-chat-with-km-agent-run-dispatch]: Plan 67-08: SlackChannelID/SlackInboundQueueURL/ActiveThreads added to SandboxRecord (instead of separate metadata fetch in status/list); X-OAuth-Scopes response header parsing for auth.test (not body); type-assert *appConfigAdapter to derive ResourcePrefix
 
 ### Roadmap Evolution
 
@@ -817,6 +819,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-03T00:34:01.197Z
-Stopped at: Completed 67-07-PLAN.md (Slack-inbound lifecycle: ready announcement + destroy drain)
+Last session: 2026-05-03T01:10:08.713Z
+Stopped at: Completed 67-08-PLAN.md (Slack inbound diagnostics: km status, list --wide 💬, 3 doctor checks)
 Resume file: None
