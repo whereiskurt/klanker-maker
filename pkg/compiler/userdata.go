@@ -3106,6 +3106,20 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		}
 		params.SlackStreamMessagesTableName = streamTable
 
+		// Phase 68 Plan 10: transcript streaming env vars. When the profile sets
+		// notifySlackTranscriptEnabled: true, emit both env vars into
+		// /etc/profile.d/km-notify-env.sh and /etc/km/notify.env. The hook's
+		// PostToolUse + Stop+transcript branches gate on
+		// KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED=1, and km-slack record-mapping /
+		// upload calls read the table name from KM_SLACK_STREAM_TABLE.
+		// When false (or unset), emit neither — the hook's :-0 default keeps
+		// the feature off (Phase 62 convention: omit env lines for unset
+		// features).
+		if p.Spec.CLI.NotifySlackTranscriptEnabled {
+			params.NotifyEnv["KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED"] = "1"
+			params.NotifyEnv["KM_SLACK_STREAM_TABLE"] = params.SlackStreamMessagesTableName
+		}
+
 		// Phase 67 gap closure: replaces Phase 63 Step 11d ssm:SendCommand path.
 		// Cloud-init polls SSM Parameter Store for the channel id (per-sandbox) and
 		// the bridge URL (operator-wide) and writes them to a profile.d file the
