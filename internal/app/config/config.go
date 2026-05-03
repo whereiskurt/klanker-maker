@@ -53,7 +53,7 @@ type Config struct {
 
 	// DNSParentAccountID is the AWS account ID owning the parent Route53 hosted zone for cfg.Domain.
 	// Maps to km-config.yaml key accounts.dns_parent. Blank skips DNS delegation in km init.
-	DNSParentAccountID    string
+	DNSParentAccountID string
 
 	// TerraformAccountID is the AWS account ID used for Terraform/infrastructure operations.
 	// Maps to km-config.yaml key accounts.terraform.
@@ -143,6 +143,13 @@ type Config struct {
 	// forward-compat). Maps to km-config.yaml key slack_threads_table_name.
 	SlackThreadsTableName string
 
+	// SlackStreamMessagesTableName is the DynamoDB table name for the Phase 68
+	// transcript-streaming (channel_id, slack_ts) → {sandbox_id, session_id,
+	// transcript_offset, ttl_expiry} mapping. Default "km-slack-stream-messages";
+	// respects ResourcePrefix when set. Maps to km-config.yaml key
+	// slack_stream_messages_table_name.
+	SlackStreamMessagesTableName string
+
 	// ResourcePrefix is the Phase-66 multi-instance prefix applied to AWS
 	// resource names (e.g. "km", "stg", "kpf"). Default "km" via
 	// GetResourcePrefix(). Phase 66 will populate this from km-config.yaml;
@@ -188,6 +195,7 @@ func Load() (*Config, error) {
 	v.SetDefault("create_handler_lambda_arn", "")
 	v.SetDefault("doctor_stale_ami_days", 30)
 	v.SetDefault("slack_threads_table_name", "km-slack-threads")
+	v.SetDefault("slack_stream_messages_table_name", "km-slack-stream-messages")
 	v.SetDefault("resource_prefix", "km")
 
 	// Primary config file: ~/.km/config.yaml
@@ -254,6 +262,7 @@ func Load() (*Config, error) {
 			"scheduler_role_arn",
 			"doctor_stale_ami_days",
 			"slack_threads_table_name",
+			"slack_stream_messages_table_name",
 			"resource_prefix",
 		} {
 			if v2.IsSet(key) && !isSetByEnv(v, key) {
@@ -272,29 +281,30 @@ func Load() (*Config, error) {
 		SchedulerRoleARN:   v.GetString("scheduler_role_arn"),
 
 		// New platform fields
-		Domain:                v.GetString("domain"),
-		OrganizationAccountID: v.GetString("accounts.organization"),
-		DNSParentAccountID:    v.GetString("accounts.dns_parent"),
-		TerraformAccountID:    v.GetString("accounts.terraform"),
-		ApplicationAccountID: v.GetString("accounts.application"),
-		SSOStartURL:          v.GetString("sso.start_url"),
-		SSORegion:            v.GetString("sso.region"),
-		PrimaryRegion:        v.GetString("region"),
-		BudgetTableName:      v.GetString("budget_table_name"),
-		IdentityTableName:    v.GetString("identity_table_name"),
-		SandboxTableName:     v.GetString("sandbox_table_name"),
-		ArtifactsBucket:      v.GetString("artifacts_bucket"),
-		AWSProfile:           v.GetString("aws_profile"),
-		Route53ZoneID:        v.GetString("route53_zone_id"),
-		OperatorEmail:        v.GetString("operator_email"),
-		SafePhrase:           v.GetString("safe_phrase"),
-		RsyncPaths:             v.GetStringSlice("rsync_paths"),
-		MaxSandboxes:           v.GetInt("max_sandboxes"),
-		SchedulesTableName:     v.GetString("schedules_table_name"),
-		CreateHandlerLambdaARN: v.GetString("create_handler_lambda_arn"),
-		DoctorStaleAMIDays:     v.GetInt("doctor_stale_ami_days"),
-		SlackThreadsTableName:  v.GetString("slack_threads_table_name"),
-		ResourcePrefix:         v.GetString("resource_prefix"),
+		Domain:                       v.GetString("domain"),
+		OrganizationAccountID:        v.GetString("accounts.organization"),
+		DNSParentAccountID:           v.GetString("accounts.dns_parent"),
+		TerraformAccountID:           v.GetString("accounts.terraform"),
+		ApplicationAccountID:         v.GetString("accounts.application"),
+		SSOStartURL:                  v.GetString("sso.start_url"),
+		SSORegion:                    v.GetString("sso.region"),
+		PrimaryRegion:                v.GetString("region"),
+		BudgetTableName:              v.GetString("budget_table_name"),
+		IdentityTableName:            v.GetString("identity_table_name"),
+		SandboxTableName:             v.GetString("sandbox_table_name"),
+		ArtifactsBucket:              v.GetString("artifacts_bucket"),
+		AWSProfile:                   v.GetString("aws_profile"),
+		Route53ZoneID:                v.GetString("route53_zone_id"),
+		OperatorEmail:                v.GetString("operator_email"),
+		SafePhrase:                   v.GetString("safe_phrase"),
+		RsyncPaths:                   v.GetStringSlice("rsync_paths"),
+		MaxSandboxes:                 v.GetInt("max_sandboxes"),
+		SchedulesTableName:           v.GetString("schedules_table_name"),
+		CreateHandlerLambdaARN:       v.GetString("create_handler_lambda_arn"),
+		DoctorStaleAMIDays:           v.GetInt("doctor_stale_ami_days"),
+		SlackThreadsTableName:        v.GetString("slack_threads_table_name"),
+		SlackStreamMessagesTableName: v.GetString("slack_stream_messages_table_name"),
+		ResourcePrefix:               v.GetString("resource_prefix"),
 	}
 
 	// If the AWS profile was set by default (not explicitly configured), verify it
@@ -338,6 +348,26 @@ func (c *Config) GetSlackThreadsTableName() string {
 		return c.SlackThreadsTableName
 	}
 	return c.GetResourcePrefix() + "-slack-threads"
+}
+
+// GetSlackStreamMessagesTableName returns the Slack-stream-messages DynamoDB
+// table name (Phase 68 transcript streaming). If SlackStreamMessagesTableName
+// is explicitly set, that value wins. Otherwise the name is derived from
+// GetResourcePrefix() + "-slack-stream-messages", which defaults to
+// "km-slack-stream-messages" when no prefix is configured.
+//
+// Decision (Plan 68-03 Open Question 1): the suffix is "-slack-stream-messages"
+// (NOT "-km-slack-stream-messages"), mirroring Phase 67's "-slack-threads"
+// pattern, so the default prefix yields "km-slack-stream-messages" rather
+// than "km-km-slack-stream-messages".
+func (c *Config) GetSlackStreamMessagesTableName() string {
+	if c == nil {
+		return "km-slack-stream-messages"
+	}
+	if c.SlackStreamMessagesTableName != "" {
+		return c.SlackStreamMessagesTableName
+	}
+	return c.GetResourcePrefix() + "-slack-stream-messages"
 }
 
 // awsProfileExists checks whether a named AWS profile is defined in
