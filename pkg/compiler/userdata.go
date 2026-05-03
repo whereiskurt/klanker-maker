@@ -432,7 +432,6 @@ if [[ "${KM_NOTIFY_SLACK_ENABLED:-0}" == "1" && -n "${KM_SLACK_CHANNEL_ID:-}" ]]
   fi
   if /opt/km/bin/km-slack post \
        --channel "$KM_SLACK_CHANNEL_ID" \
-       --subject "$subject" \
        $THREAD_FLAG \
        --body "$body_file"; then
     sent_any=1
