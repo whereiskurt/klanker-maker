@@ -50,6 +50,14 @@ type Handler struct {
 	Channels ChannelOwnershipFetcher
 	Token    BotTokenFetcher
 	Slack    SlackPoster
+
+	// Phase 68 — ActionUpload support. These three fields are zero-valued for
+	// the existing post/archive/test paths and only consulted in the
+	// ActionUpload dispatch case; tests for the legacy paths can leave them
+	// unset.
+	S3Getter          S3ObjectGetter
+	FileUploader      SlackFileUploader
+	MissingFilesWrite bool // set by main.go cold-start scope probe
 }
 
 // jsonResp builds a Response with a JSON body.
