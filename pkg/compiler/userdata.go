@@ -468,25 +468,21 @@ if [[ "${KM_NOTIFY_EMAIL_ENABLED:-1}" == "1" ]]; then
   fi
 fi
 
-# 6b. Slack branch. Gated on enabled flag + non-empty channel ID + NOT already
-#     handled by the inbound poller (Phase 67-11 Gap A — when the poller drives
-#     the run via 'claude -p', it has already posted .result before the Stop
-#     hook fires; double-posting would put the same reply in the thread twice).
+# 6b. Slack branch. Gated on enabled flag + non-empty channel ID + NOT a
+#     poller-driven inbound run. KM_SLACK_THREAD_TS is exported into Claude's
+#     env BEFORE launch (the inbound poller sets it; nothing else does), so
+#     its presence is the reliable signal that "the poller is driving this
+#     turn — do not post; the poller will post .result after Claude exits".
+#     When KM_SLACK_THREAD_TS is unset, this is a normal Phase 63 idle
+#     notification path and the Stop hook posts a top-level channel message.
 if [[ "${KM_NOTIFY_SLACK_ENABLED:-0}" == "1" \
    && -n "${KM_SLACK_CHANNEL_ID:-}" \
-   && "${KM_SLACK_INBOUND_REPLY_HANDLED:-0}" != "1" ]]; then
-  THREAD_FLAG=""
-  if [[ -n "${KM_SLACK_THREAD_TS:-}" ]]; then
-    THREAD_FLAG="--thread $KM_SLACK_THREAD_TS"
-  fi
-  # --subject is intentionally empty: in per-sandbox channel threaded replies
-  # the bold "[sandbox-id] idle" header is redundant noise. km-slack accepts
-  # empty subject; the bridge / SlackPosterAdapter skips the header in that
-  # case and posts just the body.
+   && -z "${KM_SLACK_THREAD_TS:-}" ]]; then
+  # No thread flag: when KM_SLACK_THREAD_TS is empty we're outside an inbound
+  # turn, so post as a top-level message in the per-sandbox channel.
   if /opt/km/bin/km-slack post \
        --channel "$KM_SLACK_CHANNEL_ID" \
-       --subject "" \
-       $THREAD_FLAG \
+       --subject "$subject" \
        --body "$body_file"; then
     sent_any=1
   fi
@@ -922,6 +918,15 @@ SANDBOX_ID="${KM_SANDBOX_ID:-}"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 THREADS_TABLE="${KM_SLACK_THREADS_TABLE:-km-slack-threads}"
 
+# Export AWS_REGION so subprocesses (km-slack post, km-send, etc.) inherit it.
+# The systemd unit's EnvironmentFile=/etc/profile.d/km-notify-env.sh uses
+# shell-style 'export VAR=val' which systemd rejects ("Ignoring invalid
+# environment assignment"), so AWS_REGION is empty in the poller's process
+# env. Bash falls back to us-east-1 above for its own aws CLI calls, but
+# that shell var doesn't propagate to spawned binaries unless exported.
+# Without this, /opt/km/bin/km-slack post fails with "AWS_REGION not set".
+export AWS_REGION="$REGION"
+
 [ -z "$SANDBOX_ID" ] && echo "[km-slack-inbound-poller] KM_SANDBOX_ID not set, exiting" && exit 0
 
 # Fall back to SSM Parameter Store when the env var is empty. km create writes
@@ -1101,8 +1106,9 @@ while true; do
     # Phase 67-11 Gap A fix: post the canonical .result text to Slack from
     # the poller. The Stop hook's transcript-JSONL scraping is unreliable in
     # 'claude -p' (--print) mode (transcript may be un-flushed or differently
-    # shaped). Setting KM_SLACK_INBOUND_REPLY_HANDLED=1 short-circuits the
-    # Stop hook's Slack branch so we don't double-post.
+    # shaped). The Stop hook's Slack branch is now gated on KM_SLACK_THREAD_TS
+    # being unset — since the poller exports KM_SLACK_THREAD_TS into Claude's
+    # env BEFORE launch, the Stop hook sees it and skips its post.
     #
     # Trade-off: this block is gated on $NEW_SESSION (a successful run with
     # a non-empty .session_id). On agent failure the else-branch's WARN log
@@ -1115,7 +1121,6 @@ while true; do
     if [ -n "$RESULT_TEXT" ] && [ -n "$KM_SLACK_CHANNEL_ID" ] && [ -n "$KM_SLACK_BRIDGE_URL" ]; then
       POST_FILE=$(mktemp /tmp/km-slack-inbound-post.XXXXXX)
       printf '%s' "$RESULT_TEXT" > "$POST_FILE"
-      export KM_SLACK_INBOUND_REPLY_HANDLED=1
       if /opt/km/bin/km-slack post \
            --channel "$KM_SLACK_CHANNEL_ID" \
            --subject "" \

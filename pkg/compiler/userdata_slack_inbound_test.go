@@ -123,21 +123,38 @@ func TestUserdata_SlackInboundSystemctlEnable(t *testing.T) {
 	t.Fatalf("did not find systemctl enable line containing km-slack-inbound-poller\n%s", abbreviateUD(out))
 }
 
-// TestUserdata_SlackInboundThreadFlag verifies that the km-notify-hook Slack branch
-// reads KM_SLACK_THREAD_TS and passes --thread to km-slack post (Phase 67 consumes
-// the flag that was wired but unused in Phase 63).
-func TestUserdata_SlackInboundThreadFlag(t *testing.T) {
+// TestUserdata_StopHookReferencesThreadTSGate — Phase 67-11 Gap A follow-up.
+// The Stop hook's Slack branch must reference KM_SLACK_THREAD_TS in its gate
+// (so it can detect "poller is driving this turn — skip post"). It must NOT
+// pass --thread to km-slack post: when the gate evaluates true (KM_SLACK_THREAD_TS
+// is empty), there's no thread to anchor to, so the post is a top-level
+// message in the per-sandbox channel.
+//
+// Replaces the obsolete TestUserdata_SlackInboundThreadFlag whose premise
+// (Stop hook passes --thread when KM_SLACK_THREAD_TS is set) was the source
+// of Gap A: it caused the Stop hook to post the unreliable transcript-JSONL
+// fallback BEFORE the poller posted the real .result.
+func TestUserdata_StopHookReferencesThreadTSGate(t *testing.T) {
 	p := minimalSlackInboundProfile(t, true)
 	out := compileInboundUserData(t, p)
 
-	if !strings.Contains(out, "KM_SLACK_THREAD_TS") {
-		t.Fatalf("km-notify-hook must reference KM_SLACK_THREAD_TS\n%s", abbreviateUD(out))
+	// Bound to the # 6b. Slack branch.
+	sec6bIdx := strings.Index(out, "# 6b.")
+	if sec6bIdx < 0 {
+		t.Fatalf("# 6b. marker not found")
 	}
-	if !strings.Contains(out, "THREAD_FLAG") {
-		t.Fatalf("km-notify-hook must define THREAD_FLAG variable\n%s", abbreviateUD(out))
+	var section6b string
+	if rel := strings.Index(out[sec6bIdx:], "# 7."); rel > 0 {
+		section6b = out[sec6bIdx : sec6bIdx+rel]
+	} else {
+		section6b = out[sec6bIdx:]
 	}
-	if !strings.Contains(out, "$THREAD_FLAG") {
-		t.Fatalf("km-notify-hook must pass $THREAD_FLAG to km-slack post\n%s", abbreviateUD(out))
+
+	if !strings.Contains(section6b, "KM_SLACK_THREAD_TS") {
+		t.Fatalf("# 6b. Slack branch must reference KM_SLACK_THREAD_TS in its gate\n%s", abbreviateUD(section6b))
+	}
+	if strings.Contains(section6b, "--thread") {
+		t.Fatalf("# 6b. Slack branch must NOT pass --thread — when the gate evaluates true, KM_SLACK_THREAD_TS is empty by construction so there's no thread to anchor to\n%s", abbreviateUD(section6b))
 	}
 }
 
@@ -173,8 +190,31 @@ func TestUserdata_PollerPostsResultToSlack(t *testing.T) {
 	if !strings.Contains(poller, `--thread "$THREAD_TS"`) {
 		t.Fatalf("poller missing --thread \"$THREAD_TS\" flag\n%s", abbreviateUD(poller))
 	}
-	if !strings.Contains(poller, "KM_SLACK_INBOUND_REPLY_HANDLED=1") {
-		t.Fatalf("poller missing KM_SLACK_INBOUND_REPLY_HANDLED=1 export\n%s", abbreviateUD(poller))
+}
+
+// TestUserdata_PollerExportsAWSRegion — Phase 67-11 Gap A follow-up.
+// The systemd unit's EnvironmentFile=/etc/profile.d/km-notify-env.sh uses
+// shell-style 'export VAR=val' which systemd silently rejects, so AWS_REGION
+// is empty in the poller's process env. The poller must explicitly export
+// AWS_REGION so subprocesses (km-slack post, km-send) see it — otherwise
+// km-slack post fails with "AWS_REGION (or AWS_DEFAULT_REGION) not set".
+func TestUserdata_PollerExportsAWSRegion(t *testing.T) {
+	p := minimalSlackInboundProfile(t, true)
+	out := compileInboundUserData(t, p)
+	poller := extractSlackInboundPoller(t, out)
+
+	if !strings.Contains(poller, `export AWS_REGION="$REGION"`) {
+		t.Fatalf("poller missing 'export AWS_REGION=$REGION' — km-slack post will fail with 'AWS_REGION not set'\n%s", abbreviateUD(poller))
+	}
+
+	// Export must happen BEFORE the while-loop so every km-slack post call
+	// inherits it (one-time at startup, not per-turn).
+	loopIdx := strings.Index(poller, "while true")
+	if loopIdx < 0 {
+		t.Fatalf("poller while-loop not found")
+	}
+	if !strings.Contains(poller[:loopIdx], `export AWS_REGION="$REGION"`) {
+		t.Fatalf("AWS_REGION export must occur BEFORE while-loop (startup, not per-turn)")
 	}
 }
 
@@ -242,12 +282,21 @@ func TestUserdata_PollerPostsAfterDeleteMessage(t *testing.T) {
 	}
 }
 
-// TestUserdata_StopHookSkipsSlackWhenInboundHandled — Phase 67-11 Gap A.
-// Structural assertion (per plan): split rendered userdata on the # 6a. (email)
-// and # 6b. (Slack) markers and assert
-//   - email branch (6a) does NOT mention the new gate (Slack-only suppression)
-//   - Slack branch (6b) DOES contain the KM_SLACK_INBOUND_REPLY_HANDLED guard
-func TestUserdata_StopHookSkipsSlackWhenInboundHandled(t *testing.T) {
+// TestUserdata_StopHookSkipsSlackWhenPollerDriving — Phase 67-11 Gap A follow-up.
+// Structural assertion: split rendered userdata on the # 6a. (email) and # 6b.
+// (Slack) markers and assert
+//   - email branch (6a) does NOT mention KM_SLACK_THREAD_TS (gate is Slack-only)
+//   - Slack branch (6b) gates on `-z "${KM_SLACK_THREAD_TS:-}"` — when the poller
+//     is driving the run it has exported KM_SLACK_THREAD_TS into Claude's env,
+//     so the Stop hook (which runs INSIDE Claude) sees it and skips its post,
+//     leaving the poller's own post-after-exit as the single thread reply.
+//
+// The earlier KM_SLACK_INBOUND_REPLY_HANDLED gate failed because that env var
+// was set by the poller AFTER claude exits, so it was never visible inside
+// the Claude process when the Stop hook fired — both posts ran (Stop hook's
+// fallback first, poller's .result second), or the .result post failed and
+// only the misleading "(no recent assistant text)" fallback landed.
+func TestUserdata_StopHookSkipsSlackWhenPollerDriving(t *testing.T) {
 	p := minimalSlackInboundProfile(t, true)
 	out := compileInboundUserData(t, p)
 
@@ -265,12 +314,17 @@ func TestUserdata_StopHookSkipsSlackWhenInboundHandled(t *testing.T) {
 		section6b = out[sec6bIdx:]
 	}
 
-	// Email branch (6a) must NOT mention the new gate — gate is Slack-only.
-	if strings.Contains(section6a, "KM_SLACK_INBOUND_REPLY_HANDLED") {
-		t.Fatalf("KM_SLACK_INBOUND_REPLY_HANDLED leaked into the email branch (# 6a.) — gate must be Slack-only to preserve email idle notifications\n%s", abbreviateUD(section6a))
+	// Email branch (6a) must NOT mention KM_SLACK_THREAD_TS — gate is Slack-only.
+	if strings.Contains(section6a, "KM_SLACK_THREAD_TS") {
+		t.Fatalf("KM_SLACK_THREAD_TS leaked into the email branch (# 6a.) — gate must be Slack-only to preserve email idle notifications\n%s", abbreviateUD(section6a))
 	}
-	// Slack branch (6b) MUST contain the gate guard.
-	if !strings.Contains(section6b, `"${KM_SLACK_INBOUND_REPLY_HANDLED:-0}" != "1"`) {
-		t.Fatalf("Stop hook Slack branch (# 6b.) missing KM_SLACK_INBOUND_REPLY_HANDLED guard\n%s", abbreviateUD(section6b))
+	// Slack branch (6b) MUST gate on KM_SLACK_THREAD_TS being unset.
+	if !strings.Contains(section6b, `-z "${KM_SLACK_THREAD_TS:-}"`) {
+		t.Fatalf("Stop hook Slack branch (# 6b.) missing `-z \"${KM_SLACK_THREAD_TS:-}\"` gate — poller-driven runs will double-post fallback + .result\n%s", abbreviateUD(section6b))
+	}
+	// And the dead KM_SLACK_INBOUND_REPLY_HANDLED gate must be gone from both
+	// the Stop hook AND the poller (it never worked).
+	if strings.Contains(out, "KM_SLACK_INBOUND_REPLY_HANDLED") {
+		t.Fatalf("KM_SLACK_INBOUND_REPLY_HANDLED still present in userdata — was set after Claude exits so it was never visible inside the Stop hook; remove entirely")
 	}
 }
