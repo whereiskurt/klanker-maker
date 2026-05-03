@@ -53,3 +53,25 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+# ============================================================
+# Phase 67-05 additions — inbound events path
+# ============================================================
+
+variable "resource_prefix" {
+  description = "Resource prefix used for per-sandbox SQS queue names ({resource_prefix}-slack-inbound-{sandbox_id}.fifo)"
+  type        = string
+  default     = "km"
+}
+
+variable "slack_threads_table_name" {
+  description = "Name of the DynamoDB km-slack-threads table for Slack thread tracking"
+  type        = string
+  default     = "km-slack-threads"
+}
+
+variable "signing_secret_path" {
+  description = "SSM parameter path for the Slack signing secret (SecureString used for HMAC verification)"
+  type        = string
+  default     = "/km/slack/signing-secret"
+}

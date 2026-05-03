@@ -127,6 +127,106 @@ resource "aws_iam_role_policy" "dynamodb_nonce" {
   })
 }
 
+# Policy: SQS — send inbound messages to per-sandbox FIFO queues (Phase 67-05)
+# Per-sandbox queues are runtime-created with the naming convention
+# {resource_prefix}-slack-inbound-{sandbox_id}.fifo; wildcard covers all of them.
+resource "aws_iam_role_policy" "sqs_send_inbound" {
+  name = "${local.function_name}-sqs-inbound"
+  role = aws_iam_role.slack_bridge.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SQSSendInbound"
+        Effect = "Allow"
+        Action = [
+          "sqs:SendMessage",
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl",
+        ]
+        Resource = "arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:${var.resource_prefix}-slack-inbound-*.fifo"
+      }
+    ]
+  })
+}
+
+# Policy: DynamoDB — Slack thread tracking reads/writes (Phase 67-05)
+resource "aws_iam_role_policy" "dynamodb_slack_threads" {
+  name = "${local.function_name}-dynamodb-slack-threads"
+  role = aws_iam_role.slack_bridge.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "DDBSlackThreads"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:Query",
+        ]
+        Resource = [
+          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.slack_threads_table_name}",
+          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.slack_threads_table_name}/index/*",
+        ]
+      },
+      {
+        Sid    = "DDBSandboxesChannelGSI"
+        Effect = "Allow"
+        Action = ["dynamodb:Query"]
+        Resource = [
+          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.sandboxes_table_name}/index/slack_channel_id-index",
+        ]
+      }
+    ]
+  })
+}
+
+# Policy: DynamoDB — UpdateItem on km-sandboxes for DDBPauseHinter LWT (Phase 67-05)
+# Phase 63 already grants GetItem on km-sandboxes via dynamodb_read above.
+# Phase 67 adds UpdateItem for the last_pause_hint_ts cooldown attribute.
+# NOTE: DynamoDB IAM does not support attribute-level scoping; the bridge code
+# only writes last_pause_hint_ts.
+resource "aws_iam_role_policy" "dynamodb_sandboxes_pause_hint" {
+  name = "${local.function_name}-dynamodb-sandboxes-pause-hint"
+  role = aws_iam_role.slack_bridge.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "DDBSandboxesUpdateLastPauseHint"
+        Effect   = "Allow"
+        Action   = ["dynamodb:UpdateItem"]
+        Resource = var.sandboxes_table_arn
+      }
+    ]
+  })
+}
+
+# Policy: SSM — read signing secret (SecureString, decrypted via kms_decrypt above)
+resource "aws_iam_role_policy" "ssm_signing_secret" {
+  name = "${local.function_name}-ssm-signing-secret"
+  role = aws_iam_role.slack_bridge.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SSMSigningSecret"
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+        ]
+        Resource = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter${var.signing_secret_path}"
+      }
+    ]
+  })
+}
+
 # ============================================================
 # Lambda function
 # ============================================================
@@ -149,6 +249,10 @@ resource "aws_lambda_function" "slack_bridge" {
       KM_SANDBOXES_TABLE  = var.sandboxes_table_name
       KM_NONCE_TABLE      = var.nonces_table_name
       KM_BOT_TOKEN_PATH   = var.bot_token_path
+      # Phase 67-05 additions — inbound events path
+      KM_SIGNING_SECRET_PATH = var.signing_secret_path
+      KM_SLACK_THREADS_TABLE = var.slack_threads_table_name
+      KM_RESOURCE_PREFIX     = var.resource_prefix
     }
   }
 
