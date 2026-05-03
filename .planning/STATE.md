@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 11
+current_plan: 12
 status: in-progress
-stopped_at: Completed 68-11-PLAN.md (km doctor checks for transcript streaming)
-last_updated: "2026-05-03T20:49:13.911Z"
+stopped_at: Completed 68-10-PLAN.md
+last_updated: "2026-05-03T20:54:22.108Z"
 last_activity: 2026-05-03
 progress:
   total_phases: 73
   completed_phases: 67
   total_plans: 242
-  completed_plans: 236
+  completed_plans: 237
   percent: 93
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 Phase: 68 (slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload) — Wave 0 stub seeding COMPLETE
 Plan: 1 of 13 in current phase (Plan 68-00 COMPLETE; 68-01..68-12 pending)
 Total Plans in Phase: 13
-Current Plan: 11
+Current Plan: 12
 Status: in-progress
 Last activity: 2026-05-03
 
@@ -278,6 +278,7 @@ Progress: [█████████░] 93%
 | Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P08 | 8 min | 5 tasks | 6 files |
 | Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P09 | 30min | 5 tasks | 7 files |
 | Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P11 | 7min | 3 tasks | 4 files |
+| Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P10 | 13min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -791,6 +792,7 @@ Recent decisions affecting current work:
 - [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: 68-09: Preserved # 6a./# 6b. markers inside email-branch wrapper to keep Phase 67 slack-inbound structural tests passing without modification
 - [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-11: pivoted from plan's Doctor-struct pseudo-code to closure-based dep injection (Phase 67 doctor_slack.go pattern); checkSlackFilesWriteScope reuses the existing Phase 67 SlackAuthTestScopes closure rather than duplicating fetchSlackBotScopes wiring
 - [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-11: all three transcript-streaming doctor checks demote CheckError to CheckWarn at registration — Phase 68 is opt-in, so missing stream-messages table or absent files:write scope must not turn km doctor red for non-opted-in deployments (mirrors Phase 63/67 Slack-check policy)
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-10: NotifyEnv-block placement after SlackStreamMessagesTableName mirrors the Phase 62/63 'append additive Slack fields after existing assignments' pattern; printTranscriptWarning placed inside the existing Slack-resolution if-block to reuse slackClient
 
 ### Roadmap Evolution
 
@@ -879,6 +881,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-03T20:49:13.904Z
-Stopped at: Completed 68-11-PLAN.md (km doctor checks for transcript streaming)
+Last session: 2026-05-03T20:54:22.102Z
+Stopped at: Completed 68-10-PLAN.md
 Resume file: None
