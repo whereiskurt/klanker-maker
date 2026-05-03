@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 67-05-PLAN.md (AWS adapters + Lambda dispatch + IAM policy)
-last_updated: "2026-05-03T00:10:45.564Z"
+stopped_at: Completed 67-06-PLAN.md (SQS queue provisioning at km create)
+last_updated: "2026-05-03T00:16:25.947Z"
 last_activity: "2026-05-01 — Completed 63.1-03-PLAN.md (SLCK-13: km slack rotate-token, bridge structured logging, fail-fast 5xx, UAT ts=1777638955.854989)"
 progress:
   total_phases: 71
   completed_phases: 65
   total_plans: 224
-  completed_plans: 215
+  completed_plans: 216
   percent: 0
 ---
 
@@ -254,6 +254,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 67-slack-inbound P02 | 4min | 2 tasks | 9 files |
 | Phase 67-slack-inbound-per-sandbox-channel-as-bidirectional-chat-with-km-agent-run-dispatch P04 | 240s | 2 tasks | 2 files |
 | Phase 67 P05 | 467 | 2 tasks | 5 files |
+| Phase 67-slack-inbound P06 | 699s | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -722,6 +723,8 @@ Recent decisions affecting current work:
 - [Phase 67-05]: slackAuthTestAdapter in main.go: pkg/slack.Client.AuthTest does not return user_id, so implemented thin HTTP adapter rather than breaking public API
 - [Phase 67-05]: nonceStoreAdapter bridges DynamoNonceStore.Reserve to EventNonceStore.CheckAndStore — avoids duplicating nonce table logic
 - [Phase 67-05]: DDBUpdateItemAPI extends DDBQueryGetPutAPI so single *dynamodb.Client satisfies both; threads adapter never needs UpdateItem
+- [Phase 67-slack-inbound]: SQS queue provisioning is FATAL (not non-fatal): failure archives the per-sandbox Slack channel and aborts km create; without the queue the inbound path is permanently broken
+- [Phase 67-slack-inbound]: last_pause_hint_ts must NOT be pre-populated at km create: DDBPauseHinter (67-05) treats absent as cooldown-expired, enabling first hint to fire immediately
 
 ### Roadmap Evolution
 
@@ -808,6 +811,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-03T00:10:45.558Z
-Stopped at: Completed 67-05-PLAN.md (AWS adapters + Lambda dispatch + IAM policy)
+Last session: 2026-05-03T00:16:25.941Z
+Stopped at: Completed 67-06-PLAN.md (SQS queue provisioning at km create)
 Resume file: None
