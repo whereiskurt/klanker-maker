@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -120,6 +123,129 @@ func (c *Client) PostMessage(ctx context.Context, channel, subject, body, thread
 		return "", err
 	}
 	return resp.TS, nil
+}
+
+// UploadFileResult carries Slack's response identifiers from the 3-step file
+// upload flow (files.getUploadURLExternal + completeUploadExternal).
+type UploadFileResult struct {
+	FileID    string
+	Permalink string
+}
+
+// UploadFile uploads a file to Slack via the 3-step flow that replaced the
+// deprecated files.upload endpoint:
+//
+//  1. POST files.getUploadURLExternal → returns upload_url + file_id.
+//  2. PUT bytes to upload_url with explicit Content-Length (streamed; Slack
+//     rejects chunked transfer-encoding).
+//  3. POST files.completeUploadExternal with channel_id (and thread_ts when
+//     non-empty — Slack rejects "" for thread_ts).
+//
+// body is streamed directly to Slack — no full-buffering of file content into
+// memory. Peak bridge memory stays at the Go HTTP client baseline regardless
+// of upload size. threadTS may be ""; when set the file appears in the thread.
+//
+// Failures at any step return descriptive errors identifying which step failed.
+// Callers (km-slack via the bridge) handle retry policy via BridgeBackoff at
+// the envelope level — UploadFile itself does NOT retry.
+func (c *Client) UploadFile(ctx context.Context, channel, threadTS, filename, contentType string, sizeBytes int64, body io.Reader) (*UploadFileResult, error) {
+	if channel == "" || filename == "" || sizeBytes <= 0 {
+		return nil, fmt.Errorf("slack: UploadFile invalid args (channel=%q filename=%q size=%d)", channel, filename, sizeBytes)
+	}
+
+	// Step 1: files.getUploadURLExternal — application/x-www-form-urlencoded.
+	step1Form := url.Values{}
+	step1Form.Set("filename", filename)
+	step1Form.Set("length", strconv.FormatInt(sizeBytes, 10))
+	step1URL := c.baseURL + "/files.getUploadURLExternal"
+	req1, err := http.NewRequestWithContext(ctx, "POST", step1URL, strings.NewReader(step1Form.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("slack: files.getUploadURLExternal: build req: %w", err)
+	}
+	req1.Header.Set("Authorization", "Bearer "+c.botToken)
+	req1.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp1, err := c.httpClient.Do(req1)
+	if err != nil {
+		return nil, fmt.Errorf("slack: files.getUploadURLExternal: %w", err)
+	}
+	defer resp1.Body.Close()
+	var s1 struct {
+		OK        bool   `json:"ok"`
+		Error     string `json:"error,omitempty"`
+		UploadURL string `json:"upload_url"`
+		FileID    string `json:"file_id"`
+	}
+	if err := json.NewDecoder(resp1.Body).Decode(&s1); err != nil {
+		return nil, fmt.Errorf("slack: files.getUploadURLExternal: decode: %w", err)
+	}
+	if !s1.OK {
+		return nil, fmt.Errorf("slack: files.getUploadURLExternal: %s", s1.Error)
+	}
+
+	// Step 2: PUT bytes (streamed). Set ContentLength explicitly so the Go
+	// HTTP client uses Content-Length framing rather than chunked encoding,
+	// which Slack rejects for these signed upload URLs.
+	req2, err := http.NewRequestWithContext(ctx, "PUT", s1.UploadURL, body)
+	if err != nil {
+		return nil, fmt.Errorf("slack: PUT upload: build req: %w", err)
+	}
+	req2.ContentLength = sizeBytes
+	req2.Header.Set("Content-Type", contentType)
+	resp2, err := c.httpClient.Do(req2)
+	if err != nil {
+		return nil, fmt.Errorf("slack: PUT upload: %w", err)
+	}
+	io.Copy(io.Discard, resp2.Body)
+	resp2.Body.Close()
+	if resp2.StatusCode < 200 || resp2.StatusCode >= 300 {
+		return nil, fmt.Errorf("slack: PUT upload: status %d", resp2.StatusCode)
+	}
+
+	// Step 3: files.completeUploadExternal — application/json.
+	step3Body := map[string]any{
+		"files": []map[string]string{
+			{"id": s1.FileID, "title": filename},
+		},
+		"channel_id": channel,
+	}
+	if threadTS != "" {
+		step3Body["thread_ts"] = threadTS
+	}
+	step3JSON, err := json.Marshal(step3Body)
+	if err != nil {
+		return nil, fmt.Errorf("slack: files.completeUploadExternal: marshal: %w", err)
+	}
+	step3URL := c.baseURL + "/files.completeUploadExternal"
+	req3, err := http.NewRequestWithContext(ctx, "POST", step3URL, bytes.NewReader(step3JSON))
+	if err != nil {
+		return nil, fmt.Errorf("slack: files.completeUploadExternal: build req: %w", err)
+	}
+	req3.Header.Set("Authorization", "Bearer "+c.botToken)
+	req3.Header.Set("Content-Type", "application/json; charset=utf-8")
+	resp3, err := c.httpClient.Do(req3)
+	if err != nil {
+		return nil, fmt.Errorf("slack: files.completeUploadExternal: %w", err)
+	}
+	defer resp3.Body.Close()
+	var s3 struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+		Files []struct {
+			ID        string `json:"id"`
+			Permalink string `json:"permalink"`
+		} `json:"files"`
+	}
+	if err := json.NewDecoder(resp3.Body).Decode(&s3); err != nil {
+		return nil, fmt.Errorf("slack: files.completeUploadExternal: decode: %w", err)
+	}
+	if !s3.OK {
+		return nil, fmt.Errorf("slack: files.completeUploadExternal: %s", s3.Error)
+	}
+	res := &UploadFileResult{FileID: s1.FileID}
+	if len(s3.Files) > 0 {
+		res.Permalink = s3.Files[0].Permalink
+	}
+	return res, nil
 }
 
 // CreateChannel calls conversations.create. Slack returns the new channel ID.
