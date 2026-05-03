@@ -18,6 +18,7 @@
 //	KM_SIGNING_SECRET_PATH  — SSM parameter path for Slack signing secret (default: /km/slack/signing-secret)
 //	KM_SLACK_THREADS_TABLE  — DynamoDB table for Slack thread tracking (default: km-slack-threads)
 //	KM_RESOURCE_PREFIX      — resource prefix for SQS queue name pattern (default: km)
+//	KM_ARTIFACTS_BUCKET     — S3 bucket holding transcript objects for ActionUpload (Phase 68; required for upload path, otherwise upload returns 502)
 package main
 
 import (
@@ -37,9 +38,11 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
+	pkgslack "github.com/whereiskurt/klankrmkr/pkg/slack"
 	"github.com/whereiskurt/klankrmkr/pkg/slack/bridge"
 )
 
@@ -88,6 +91,59 @@ func init() {
 		Channels: channels,
 		Token:    tokenFetcher,
 		Slack:    poster,
+	}
+
+	// ==============================================================
+	// Phase 68 — ActionUpload wiring: S3 getter + Slack file uploader
+	// + cold-start files:write scope probe. KM_ARTIFACTS_BUCKET is the
+	// transcript object store (already used by km-mail/km-slack); when
+	// unset, the upload path returns 502 at runtime (the adapter still
+	// constructs cleanly).
+	// ==============================================================
+	artifactsBucket := os.Getenv("KM_ARTIFACTS_BUCKET")
+	if artifactsBucket == "" {
+		slog.Warn("km-slack-bridge: KM_ARTIFACTS_BUCKET not set; ActionUpload will fail at runtime",
+			"path", "init", "remediation", "set KM_ARTIFACTS_BUCKET in Lambda env")
+	}
+	s3Client := s3.NewFromConfig(cfg)
+	handler.S3Getter = &bridge.S3GetterAdapter{
+		Client: s3Client,
+		Bucket: artifactsBucket,
+	}
+
+	// SlackFileUploaderAdapter wraps a pkg/slack.Client; the bot token is
+	// fetched once at cold start (via the same SSM cache as SlackPosterAdapter).
+	// On token rotation, the operator force-cold-starts the Lambda
+	// (`km slack rotate-token`) — this matches Phase 63 behavior exactly.
+	uploadToken, tokErr := tokenFetcher.Fetch(ctx)
+	if tokErr != nil {
+		// We do NOT log.Fatalf here — Phase 63 paths (post/archive/test)
+		// must keep working even if the token fetch fails at cold start
+		// (e.g. transient SSM unavailability). The upload path will
+		// surface bot_token_unavailable through Step 7 of Handle.
+		slog.Warn("km-slack-bridge: cold-start token fetch failed; upload adapter and scope probe disabled",
+			"path", "init", "err", tokErr.Error())
+	} else {
+		uploadClient := pkgslack.NewClient(uploadToken, httpClient)
+		handler.FileUploader = &bridge.SlackFileUploaderAdapter{Client: uploadClient}
+
+		// Cold-start scope probe (RESEARCH Open Question 2 resolution).
+		// Use a dedicated raw HTTP probe at "https://slack.com" so we don't
+		// have to extend SlackPosterAdapter.call() to surface the X-OAuth-Scopes
+		// response header. On probe failure (network blip, scopes header
+		// absent), default to missing=false — let the per-request Slack
+		// response surface the real error rather than hard-blocking all uploads.
+		missing, probeErr := probeFilesWriteScope(ctx, "https://slack.com", uploadToken)
+		if probeErr != nil {
+			slog.Warn("km-slack-bridge: scope probe failed; falling back to per-request scope errors",
+				"path", "init", "err", probeErr.Error())
+		}
+		handler.MissingFilesWrite = missing
+		slog.Info("km-slack-bridge: files:write scope probe",
+			"missing_files_write", missing,
+			"probe_err", probeErr,
+			"KM_ARTIFACTS_BUCKET", artifactsBucket,
+		)
 	}
 
 	// ==============================================================
@@ -319,6 +375,53 @@ func (a *slackAuthTestAdapter) AuthTest(ctx context.Context, token string) (stri
 		return "", fmt.Errorf("auth.test: slack error: %s", apiResp.Error)
 	}
 	return apiResp.UserID, nil
+}
+
+// ============================================================
+// Phase 68: probeFilesWriteScope — cold-start files:write scope check
+// (RESEARCH Open Question 2 resolution).
+// ============================================================
+
+// probeFilesWriteScope queries auth.test once at cold start and inspects the
+// X-OAuth-Scopes response header to determine whether the bot has files:write.
+// Cached on Handler.MissingFilesWrite for the Lambda's lifetime — bot scopes
+// only change when the operator re-installs the Slack App, which forces a
+// Lambda cold start anyway.
+//
+// Decision (RESEARCH OQ 2): use a dedicated raw HTTP probe rather than
+// extending SlackPosterAdapter.call() to surface response headers. Keeps the
+// Phase 63 SlackPosterAdapter surface stable and isolates this Phase-68
+// concern.
+//
+// Error handling: on transport failure or absent X-OAuth-Scopes header,
+// returns (false, nil) — fail-open so the per-request Slack call surfaces
+// the real error. This matches the conservative default: don't block all
+// uploads on a flaky probe.
+func probeFilesWriteScope(ctx context.Context, baseURL, botToken string) (missing bool, err error) {
+	probeURL := strings.TrimRight(baseURL, "/") + "/api/auth.test"
+	req, reqErr := http.NewRequestWithContext(ctx, "POST", probeURL, nil)
+	if reqErr != nil {
+		return false, fmt.Errorf("scope probe: build request: %w", reqErr)
+	}
+	req.Header.Set("Authorization", "Bearer "+botToken)
+	// auth.test accepts either form-encoded or empty body; explicit Content-Type
+	// prevents some HTTP middlewares from rejecting the empty POST.
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	hc := &http.Client{Timeout: 5 * time.Second}
+	resp, doErr := hc.Do(req)
+	if doErr != nil {
+		return false, fmt.Errorf("scope probe: %w", doErr)
+	}
+	defer resp.Body.Close()
+
+	scopes := resp.Header.Get("X-OAuth-Scopes")
+	if scopes == "" {
+		// Header absent — fail-open. Some Slack installs return scopes only
+		// on certain methods or with non-standard headers.
+		return false, nil
+	}
+	return !strings.Contains(scopes, "files:write"), nil
 }
 
 // ============================================================
