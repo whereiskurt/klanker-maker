@@ -425,6 +425,34 @@ resource "aws_iam_role_policy" "kms" {
   })
 }
 
+# Policy: SQS for Phase 67 inbound queue lifecycle (per-sandbox FIFO queues
+# named km-slack-inbound-<sandbox-id>.fifo). km create provisions the queue
+# at create time; rollback deletes it on failure. Scoped to the inbound
+# queue ARN pattern only.
+resource "aws_iam_role_policy" "sqs_slack_inbound" {
+  name = "km-create-handler-sqs-slack-inbound"
+  role = aws_iam_role.create_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SlackInboundQueueLifecycle"
+        Effect = "Allow"
+        Action = [
+          "sqs:CreateQueue",
+          "sqs:DeleteQueue",
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl",
+          "sqs:SetQueueAttributes",
+          "sqs:TagQueue",
+        ]
+        Resource = "arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:km-slack-inbound-*.fifo"
+      }
+    ]
+  })
+}
+
 # ============================================================
 # Lambda function: create-handler (container image, arm64)
 # ============================================================
