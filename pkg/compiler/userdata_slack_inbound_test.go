@@ -193,11 +193,10 @@ func TestUserdata_PollerPostsResultToSlack(t *testing.T) {
 }
 
 // TestUserdata_PollerExportsAWSRegion — Phase 67-11 Gap A follow-up.
-// The systemd unit's EnvironmentFile=/etc/profile.d/km-notify-env.sh uses
-// shell-style 'export VAR=val' which systemd silently rejects, so AWS_REGION
-// is empty in the poller's process env. The poller must explicitly export
-// AWS_REGION so subprocesses (km-slack post, km-send) see it — otherwise
-// km-slack post fails with "AWS_REGION (or AWS_DEFAULT_REGION) not set".
+// AWS_REGION is not a NotifyEnv field, so it's never in the systemd
+// EnvironmentFile. The poller must explicitly export AWS_REGION so
+// subprocesses (km-slack post, km-send) see it — otherwise km-slack post
+// fails with "AWS_REGION (or AWS_DEFAULT_REGION) not set".
 func TestUserdata_PollerExportsAWSRegion(t *testing.T) {
 	p := minimalSlackInboundProfile(t, true)
 	out := compileInboundUserData(t, p)
@@ -326,5 +325,81 @@ func TestUserdata_StopHookSkipsSlackWhenPollerDriving(t *testing.T) {
 	// the Stop hook AND the poller (it never worked).
 	if strings.Contains(out, "KM_SLACK_INBOUND_REPLY_HANDLED") {
 		t.Fatalf("KM_SLACK_INBOUND_REPLY_HANDLED still present in userdata — was set after Claude exits so it was never visible inside the Stop hook; remove entirely")
+	}
+}
+
+// TestUserdata_SystemdEnvFileNoExport — Phase 67-11 follow-up.
+// systemd's EnvironmentFile= directive does NOT accept the 'export VAR=val'
+// shell-keyword prefix used by /etc/profile.d/km-notify-env.sh. The compiler
+// writes a parallel /etc/km/notify.env in systemd-native format (no export
+// prefix) for systemd-managed services. The km-slack-inbound-poller.service
+// unit's EnvironmentFile= must point at the systemd-format file, NOT the
+// shell file.
+func TestUserdata_SystemdEnvFileNoExport(t *testing.T) {
+	p := minimalSlackInboundProfile(t, true)
+	out := compileInboundUserData(t, p)
+
+	// (1) Systemd-format env file is written.
+	if !strings.Contains(out, "cat > /etc/km/notify.env") {
+		t.Fatalf("compiler must write /etc/km/notify.env (systemd-format) when NotifyEnv is non-empty\n%s", abbreviateUD(out))
+	}
+
+	// (2) Inside the /etc/km/notify.env heredoc, NO line starts with 'export'.
+	startMarker := "cat > /etc/km/notify.env << 'KM_NOTIFY_SYSTEMD_EOF'"
+	endMarker := "\nKM_NOTIFY_SYSTEMD_EOF\n"
+	startIdx := strings.Index(out, startMarker)
+	endIdx := strings.Index(out, endMarker)
+	if startIdx < 0 || endIdx < 0 || endIdx <= startIdx {
+		t.Fatalf("KM_NOTIFY_SYSTEMD_EOF heredoc markers missing/misordered")
+	}
+	body := out[startIdx+len(startMarker) : endIdx]
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "export ") {
+			t.Fatalf("/etc/km/notify.env must NOT contain 'export' prefix (systemd rejects it): %q", line)
+		}
+	}
+
+	// (3) The km-slack-inbound-poller.service unit references the new file
+	//     and does NOT reference the broken shell file.
+	unitStart := strings.Index(out, "<< 'SLACKINBOUNDUNIT'")
+	unitEnd := strings.Index(out, "\nSLACKINBOUNDUNIT\n")
+	if unitStart < 0 || unitEnd < 0 || unitEnd <= unitStart {
+		t.Fatalf("SLACKINBOUNDUNIT heredoc markers missing/misordered")
+	}
+	unit := out[unitStart:unitEnd]
+	if !strings.Contains(unit, "EnvironmentFile=-/etc/km/notify.env") {
+		t.Fatalf("km-slack-inbound-poller.service must reference EnvironmentFile=-/etc/km/notify.env (with leading '-' for missing-file tolerance)\n%s", unit)
+	}
+	if strings.Contains(unit, "EnvironmentFile=/etc/profile.d/km-notify-env.sh") ||
+		strings.Contains(unit, "EnvironmentFile=-/etc/profile.d/km-notify-env.sh") {
+		t.Fatalf("km-slack-inbound-poller.service must NOT reference shell-format /etc/profile.d/km-notify-env.sh (systemd rejects 'export' prefix in that file)\n%s", unit)
+	}
+}
+
+// TestUserdata_ShellEnvFileStillWritten — Phase 67-11 follow-up.
+// The original shell-format /etc/profile.d/km-notify-env.sh must STILL be
+// written — interactive SSM sessions, the km-notify-hook bash script, and
+// any other shell consumers depend on it being sourced via profile.d. The
+// systemd-format file is added in PARALLEL, not as a replacement.
+func TestUserdata_ShellEnvFileStillWritten(t *testing.T) {
+	p := minimalSlackInboundProfile(t, true)
+	out := compileInboundUserData(t, p)
+
+	if !strings.Contains(out, "cat > /etc/profile.d/km-notify-env.sh") {
+		t.Fatalf("compiler must continue writing /etc/profile.d/km-notify-env.sh (shell consumers depend on it)")
+	}
+	// Sanity: shell file SHOULD still use 'export' (that's why we needed a
+	// systemd-format parallel — the shell file's format is correct for shells).
+	startMarker := "cat > /etc/profile.d/km-notify-env.sh << 'KM_NOTIFY_ENV_EOF'"
+	endMarker := "\nKM_NOTIFY_ENV_EOF\n"
+	s := strings.Index(out, startMarker)
+	e := strings.Index(out, endMarker)
+	if s < 0 || e < 0 || e <= s {
+		t.Fatalf("KM_NOTIFY_ENV_EOF heredoc markers missing/misordered")
+	}
+	body := out[s+len(startMarker) : e]
+	if !strings.Contains(body, "export ") {
+		t.Fatalf("/etc/profile.d/km-notify-env.sh must use 'export VAR=val' for shell sourcing (regression vs Phase 62)")
 	}
 }
