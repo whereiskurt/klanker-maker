@@ -410,88 +410,315 @@ set -euo pipefail
 event="${1:?event-name required}"
 
 # 1. Gate check (env-var driven; defaults to off so unset = no-op).
+#    Phase 68 extends:
+#      - PostToolUse fires only when KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED=1.
+#      - Stop fires when EITHER idle-ping (Phase 62/63) OR transcript streaming
+#        (Phase 68) is enabled — both can run side-by-side.
 case "$event" in
-  Notification) [[ "${KM_NOTIFY_ON_PERMISSION:-0}" == "1" ]] || exit 0 ;;
-  Stop)         [[ "${KM_NOTIFY_ON_IDLE:-0}"       == "1" ]] || exit 0 ;;
-  *)            exit 0 ;;
+  PostToolUse)
+    [[ "${KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED:-0}" == "1" ]] || exit 0
+    ;;
+  Notification)
+    [[ "${KM_NOTIFY_ON_PERMISSION:-0}" == "1" ]] || exit 0
+    ;;
+  Stop)
+    if [[ "${KM_NOTIFY_ON_IDLE:-0}" != "1" && "${KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED:-0}" != "1" ]]; then
+      exit 0
+    fi
+    ;;
+  *)
+    exit 0
+    ;;
 esac
 
-# 2. Cooldown check (per-sandbox, shared across both event types).
+# 2. Cooldown check. Gates only the email + slack-channel-root notification
+#    path; Phase 68 PostToolUse streaming and Stop transcript upload are NOT
+#    cooldown-gated (transcript completeness is non-negotiable).
+cooldown_block=0
 cooldown="${KM_NOTIFY_COOLDOWN_SECONDS:-0}"
 last_file="${KM_NOTIFY_LAST_FILE:-/tmp/km-notify.last}"
 if [[ "$cooldown" -gt 0 && -f "$last_file" ]]; then
   last=$(cat "$last_file" 2>/dev/null || echo 0)
   now=$(date +%s)
-  (( now - last < cooldown )) && exit 0
+  (( now - last < cooldown )) && cooldown_block=1
 fi
+# Notification: cooldown is fatal (preserves Phase 62 TestNotifyHook_Cooldown).
+if [[ "$cooldown_block" -eq 1 && "$event" == "Notification" ]]; then
+  exit 0
+fi
+# Stop with no transcript streaming: cooldown is fatal (preserves Phase 63).
+if [[ "$cooldown_block" -eq 1 && "$event" == "Stop" \
+   && "${KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED:-0}" != "1" ]]; then
+  exit 0
+fi
+# PostToolUse + Stop+transcript continue past cooldown; the email/slack-root
+# branch below honors $cooldown_block to skip duplicate sends.
 
 # 3. Read hook payload from stdin (JSON).
 payload=$(cat)
-
-# 4. Build subject + body.
 sandbox_id="${KM_SANDBOX_ID:-unknown}"
-case "$event" in
-  Notification)
-    subject="[$sandbox_id] needs permission"
-    msg=$(echo "$payload" | jq -r '.message // "(no message)"' 2>/dev/null || echo "(payload parse failed)")
-    body_text="$msg"
-    ;;
-  Stop)
-    subject="[$sandbox_id] idle"
-    transcript=$(echo "$payload" | jq -r '.transcript_path // ""' 2>/dev/null || echo "")
-    body_text=""
-    if [[ -n "$transcript" && -f "$transcript" ]]; then
-      body_text=$(tail -n 50 "$transcript" 2>/dev/null \
-        | jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text' 2>/dev/null \
-        | tail -n 1 || echo "")
+
+# Phase 68 helper: drain any new transcript bytes since /tmp/km-slack-stream.{sid}.offset
+# and post them as a chat message in the auto-created or cached thread. Used by
+# both the PostToolUse branch (per-tool firings) and the Stop transcript branch
+# (catches the final assistant turn before upload).
+#
+# Args: $1 = session_id, $2 = transcript_path
+# Side effects (on success):
+#   - May create /tmp/km-slack-thread.{sid} (auto-thread parent ts cache).
+#   - Updates /tmp/km-slack-stream.{sid}.offset to the new EOF byte position.
+#   - Calls /opt/km/bin/km-slack post  (one fire per non-empty render).
+#   - Calls /opt/km/bin/km-slack record-mapping (offset → posted Slack ts).
+# Always exits 0; failures are logged to stderr (hook contract).
+_km_stream_drain() {
+  local sid="$1"
+  local transcript_path="$2"
+  if [[ -z "$sid" || -z "$transcript_path" || ! -f "$transcript_path" ]]; then
+    echo "[km-notify-hook] stream-drain: missing session_id/transcript_path" >&2
+    return 0
+  fi
+  if [[ -z "${KM_SLACK_CHANNEL_ID:-}" ]]; then
+    echo "[km-notify-hook] stream-drain: KM_SLACK_CHANNEL_ID unset; skipping" >&2
+    return 0
+  fi
+
+  # Resolve thread ts: env > /tmp cache > auto-create.
+  local thread_cache="/tmp/km-slack-thread.${sid}"
+  local ts=""
+  if [[ -n "${KM_SLACK_THREAD_TS:-}" ]]; then
+    ts="$KM_SLACK_THREAD_TS"
+  elif [[ -f "$thread_cache" ]]; then
+    ts=$(cat "$thread_cache" 2>/dev/null || echo "")
+  else
+    # Auto-thread-parent: post a parent message and cache its ts.
+    local prompt_summary
+    prompt_summary=$(echo "$payload" | jq -r '.tool_input.prompt // .tool_name // "auto-run"' 2>/dev/null | head -c 80 || echo "auto-run")
+    local parent_body
+    parent_body=$(mktemp /tmp/km-slack-parent.XXXXXX)
+    printf '🤖 [%s] turn started — %s\n' "$sandbox_id" "$prompt_summary" > "$parent_body"
+    local parent_resp
+    parent_resp=$(/opt/km/bin/km-slack post --channel "$KM_SLACK_CHANNEL_ID" --body "$parent_body" 2>&1 || echo "")
+    rm -f "$parent_body"
+    ts=$(echo "$parent_resp" | grep -oE 'ts=[0-9.]+' | head -n1 | sed 's/^ts=//')
+    if [[ -n "$ts" ]]; then
+      echo "$ts" > "$thread_cache"
+    else
+      echo "[km-notify-hook] stream-drain: failed to create thread parent; skipping" >&2
+      return 0
     fi
-    [[ -z "$body_text" ]] && body_text="(no recent assistant text)"
-    ;;
-esac
-
-# 5. Build body file (km-send requires --body <file>, not stdin, per CLAUDE.md
-#    — OpenSSL 3.5+ signing reliability).
-body_file=$(mktemp /tmp/km-notify-body.XXXXXX)
-echo "$body_text" > "$body_file"
-
-# 6. Multi-channel dispatch (Phase 63). Failure does not propagate (hook always exits 0).
-# sent_any=1 when at least one channel succeeded — controls cooldown update below.
-sent_any=0
-
-# 6a. Email branch (default enabled via :-1 so Phase 62 profiles without
-#     KM_NOTIFY_EMAIL_ENABLED behave identically to Phase 62).
-if [[ "${KM_NOTIFY_EMAIL_ENABLED:-1}" == "1" ]]; then
-  to_args=()
-  [[ -n "${KM_NOTIFY_EMAIL:-}" ]] && to_args=(--to "$KM_NOTIFY_EMAIL")
-  if /opt/km/bin/km-send ${to_args[@]+"${to_args[@]}"} --subject "$subject" --body "$body_file"; then
-    sent_any=1
   fi
+
+  # Offset tracking.
+  local offset_file="/tmp/km-slack-stream.${sid}.offset"
+  local offset=0
+  [[ -f "$offset_file" ]] && offset=$(cat "$offset_file" 2>/dev/null || echo 0)
+
+  # Tail JSONL from offset (tail -c byte index is 1-based).
+  local new_lines=""
+  new_lines=$(tail -c +$((offset + 1)) "$transcript_path" 2>/dev/null || echo "")
+  local new_offset
+  new_offset=$(wc -c < "$transcript_path" 2>/dev/null | tr -d ' \t' || echo "$offset")
+
+  if [[ -z "$new_lines" ]]; then
+    echo "$new_offset" > "$offset_file"
+    return 0
+  fi
+
+  # Render new entries to a chat body.
+  local body_file
+  body_file=$(mktemp /tmp/km-slack-stream-body.XXXXXX)
+  : > "$body_file"
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local jline_type
+    jline_type=$(echo "$line" | jq -r '.type // ""' 2>/dev/null || echo "")
+    case "$jline_type" in
+      assistant)
+        echo "$line" | jq -r '.message.content[]? | select(.type=="text") | .text' 2>/dev/null >> "$body_file" || true
+        ;;
+      tool_use)
+        local tname one_liner
+        tname=$(echo "$line" | jq -r '.name // ""' 2>/dev/null || echo "")
+        case "$tname" in
+          Edit)
+            one_liner=$(echo "$line" | jq -r '.input.file_path // "?"' 2>/dev/null | head -c 200)
+            ;;
+          Bash)
+            one_liner=$(echo "$line" | jq -r '.input.command // "?"' 2>/dev/null | head -c 200)
+            ;;
+          *)
+            one_liner=$(echo "$line" | jq -c '.input // {}' 2>/dev/null | head -c 80)
+            ;;
+        esac
+        printf '🔧 %s: %s\n' "$tname" "$one_liner" >> "$body_file"
+        ;;
+    esac
+  done <<< "$new_lines"
+
+  if [[ ! -s "$body_file" ]]; then
+    echo "$new_offset" > "$offset_file"
+    rm -f "$body_file"
+    return 0
+  fi
+
+  # Post to Slack thread, capturing the returned ts so we can record the mapping.
+  local post_resp posted_ts
+  post_resp=$(/opt/km/bin/km-slack post \
+    --channel "$KM_SLACK_CHANNEL_ID" \
+    --thread "$ts" \
+    --body "$body_file" 2>&1 || echo "")
+  rm -f "$body_file"
+  posted_ts=$(echo "$post_resp" | grep -oE 'ts=[0-9.]+' | head -n1 | sed 's/^ts=//')
+
+  if [[ -n "$posted_ts" && -n "${KM_SLACK_STREAM_TABLE:-}" ]]; then
+    /opt/km/bin/km-slack record-mapping \
+      --channel "$KM_SLACK_CHANNEL_ID" \
+      --slack-ts "$posted_ts" \
+      --offset "$offset" \
+      --session "$sid" \
+      2>/dev/null || echo "[km-notify-hook] record-mapping failed (non-fatal)" >&2
+  fi
+
+  # Advance offset.
+  echo "$new_offset" > "$offset_file"
+  return 0
+}
+
+# 4. PostToolUse: stream new transcript bytes, then exit. Never falls through
+#    to the email/slack-root branches below.
+if [[ "$event" == "PostToolUse" ]]; then
+  pt_sid=$(echo "$payload" | jq -r '.session_id // ""' 2>/dev/null || echo "")
+  pt_transcript=$(echo "$payload" | jq -r '.transcript_path // ""' 2>/dev/null || echo "")
+  if [[ -z "$pt_sid" || -z "$pt_transcript" ]]; then
+    echo "[km-notify-hook] PostToolUse: missing session_id/transcript_path" >&2
+    exit 0
+  fi
+  _km_stream_drain "$pt_sid" "$pt_transcript"
+  exit 0
 fi
 
-# 6b. Slack branch. Gated on enabled flag + non-empty channel ID + NOT a
-#     poller-driven inbound run. KM_SLACK_THREAD_TS is exported into Claude's
-#     env BEFORE launch (the inbound poller sets it; nothing else does), so
-#     its presence is the reliable signal that "the poller is driving this
-#     turn — do not post; the poller will post .result after Claude exits".
-#     When KM_SLACK_THREAD_TS is unset, this is a normal Phase 63 idle
-#     notification path and the Stop hook posts a top-level channel message.
-if [[ "${KM_NOTIFY_SLACK_ENABLED:-0}" == "1" \
-   && -n "${KM_SLACK_CHANNEL_ID:-}" \
-   && -z "${KM_SLACK_THREAD_TS:-}" ]]; then
-  # No thread flag: when KM_SLACK_THREAD_TS is empty we're outside an inbound
-  # turn, so post as a top-level message in the per-sandbox channel.
-  if /opt/km/bin/km-slack post \
-       --channel "$KM_SLACK_CHANNEL_ID" \
-       --subject "$subject" \
-       --body "$body_file"; then
-    sent_any=1
-  fi
+# 5. Build subject + body for the email/slack-root path. Skipped when the only
+#    reason this Stop hook fired was transcript-streaming (KM_NOTIFY_ON_IDLE=0).
+do_email_branch=0
+if [[ "$event" == "Notification" ]]; then
+  do_email_branch=1
+elif [[ "$event" == "Stop" && "${KM_NOTIFY_ON_IDLE:-0}" == "1" ]]; then
+  do_email_branch=1
 fi
 
-# 7. Update cooldown timestamp iff at least one channel succeeded.
-[[ $sent_any -eq 1 ]] && date +%s > "$last_file"
+if [[ "$do_email_branch" -eq 1 && "$cooldown_block" -ne 1 ]]; then
+  case "$event" in
+    Notification)
+      subject="[$sandbox_id] needs permission"
+      msg=$(echo "$payload" | jq -r '.message // "(no message)"' 2>/dev/null || echo "(payload parse failed)")
+      body_text="$msg"
+      ;;
+    Stop)
+      subject="[$sandbox_id] idle"
+      transcript=$(echo "$payload" | jq -r '.transcript_path // ""' 2>/dev/null || echo "")
+      body_text=""
+      if [[ -n "$transcript" && -f "$transcript" ]]; then
+        body_text=$(tail -n 50 "$transcript" 2>/dev/null \
+          | jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text' 2>/dev/null \
+          | tail -n 1 || echo "")
+      fi
+      [[ -z "$body_text" ]] && body_text="(no recent assistant text)"
+      ;;
+  esac
 
-rm -f "$body_file"
+  # 6. Build body file (km-send requires --body <file>, not stdin, per CLAUDE.md
+  #    — OpenSSL 3.5+ signing reliability).
+  body_file=$(mktemp /tmp/km-notify-body.XXXXXX)
+  echo "$body_text" > "$body_file"
+
+  # 7. Multi-channel dispatch (Phase 63). Failure does not propagate (hook always exits 0).
+  # sent_any=1 when at least one channel succeeded — controls cooldown update below.
+  sent_any=0
+
+  # 7a. Email branch (default enabled via :-1 so Phase 62 profiles without
+  #     KM_NOTIFY_EMAIL_ENABLED behave identically to Phase 62).
+  if [[ "${KM_NOTIFY_EMAIL_ENABLED:-1}" == "1" ]]; then
+    to_args=()
+    [[ -n "${KM_NOTIFY_EMAIL:-}" ]] && to_args=(--to "$KM_NOTIFY_EMAIL")
+    if /opt/km/bin/km-send ${to_args[@]+"${to_args[@]}"} --subject "$subject" --body "$body_file"; then
+      sent_any=1
+    fi
+  fi
+
+  # 7b. Slack branch. Gated on enabled flag + non-empty channel ID + NOT a
+  #     poller-driven inbound run. KM_SLACK_THREAD_TS is exported into Claude's
+  #     env BEFORE launch (the inbound poller sets it; nothing else does), so
+  #     its presence is the reliable signal that "the poller is driving this
+  #     turn — do not post; the poller will post .result after Claude exits".
+  #     When KM_SLACK_THREAD_TS is unset, this is a normal Phase 63 idle
+  #     notification path and the Stop hook posts a top-level channel message.
+  if [[ "${KM_NOTIFY_SLACK_ENABLED:-0}" == "1" \
+     && -n "${KM_SLACK_CHANNEL_ID:-}" \
+     && -z "${KM_SLACK_THREAD_TS:-}" ]]; then
+    # No thread flag: when KM_SLACK_THREAD_TS is empty we're outside an inbound
+    # turn, so post as a top-level message in the per-sandbox channel.
+    if /opt/km/bin/km-slack post \
+         --channel "$KM_SLACK_CHANNEL_ID" \
+         --subject "$subject" \
+         --body "$body_file"; then
+      sent_any=1
+    fi
+  fi
+
+  # 8. Update cooldown timestamp iff at least one channel succeeded.
+  [[ $sent_any -eq 1 ]] && date +%s > "$last_file"
+
+  rm -f "$body_file"
+fi
+
+# 9. Stop transcript upload (Phase 68). Runs when KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED=1
+#    regardless of cooldown or KM_NOTIFY_ON_IDLE state. Drains any final unsent
+#    assistant text, then gzips + s3 cp + km-slack upload + cleanup.
+if [[ "$event" == "Stop" && "${KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED:-0}" == "1" ]]; then
+  st_sid=$(echo "$payload" | jq -r '.session_id // ""' 2>/dev/null || echo "")
+  st_transcript=$(echo "$payload" | jq -r '.transcript_path // ""' 2>/dev/null || echo "")
+
+  if [[ -n "$st_sid" && -n "$st_transcript" && -f "$st_transcript" ]]; then
+    # Drain any unstreamed final text first so the thread shows the last turn
+    # before the gzipped artifact lands.
+    _km_stream_drain "$st_sid" "$st_transcript"
+
+    # Resolve thread ts (same precedence as drain, used for upload's --thread).
+    st_thread_cache="/tmp/km-slack-thread.${st_sid}"
+    st_ts=""
+    if [[ -n "${KM_SLACK_THREAD_TS:-}" ]]; then
+      st_ts="$KM_SLACK_THREAD_TS"
+    elif [[ -f "$st_thread_cache" ]]; then
+      st_ts=$(cat "$st_thread_cache" 2>/dev/null || echo "")
+    fi
+
+    gz_path="/tmp/transcript.${st_sid}.jsonl.gz"
+    if gzip -c "$st_transcript" > "$gz_path" 2>/dev/null; then
+      gz_size=$(wc -c < "$gz_path" 2>/dev/null | tr -d ' \t' || echo 0)
+      s3_key="transcripts/${sandbox_id}/${st_sid}.jsonl.gz"
+      if [[ -n "${KM_ARTIFACTS_BUCKET:-}" ]] \
+         && aws s3 cp "$gz_path" "s3://${KM_ARTIFACTS_BUCKET}/${s3_key}" >/dev/null 2>&1; then
+        /opt/km/bin/km-slack upload \
+          --channel "$KM_SLACK_CHANNEL_ID" \
+          --thread "$st_ts" \
+          --s3-key "$s3_key" \
+          --filename "claude-transcript-${st_sid}.jsonl.gz" \
+          --content-type "application/gzip" \
+          --size-bytes "$gz_size" \
+          2>&1 || echo "[km-notify-hook] upload failed (non-fatal)" >&2
+      else
+        echo "[km-notify-hook] s3 cp failed (or KM_ARTIFACTS_BUCKET unset); skipping upload" >&2
+      fi
+      rm -f "$gz_path"
+    else
+      echo "[km-notify-hook] gzip failed; skipping upload" >&2
+    fi
+  fi
+
+  # Cleanup per-session tmp state regardless of upload success/failure.
+  rm -f "/tmp/km-slack-thread.${st_sid}" "/tmp/km-slack-stream.${st_sid}.offset"
+fi
+
 exit 0
 KM_NOTIFY_HOOK_EOF
 chmod +x /opt/km/bin/km-notify-hook
@@ -2680,6 +2907,10 @@ func mergeNotifyHookIntoSettings(configFiles map[string]string) (map[string]stri
 
 	appendKMHook("Notification", "/opt/km/bin/km-notify-hook Notification")
 	appendKMHook("Stop", "/opt/km/bin/km-notify-hook Stop")
+	// Phase 68: per-turn transcript streaming. The hook entry is unconditional
+	// (matches Phase 62/63 pattern) and the script gates at runtime via
+	// KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED.
+	appendKMHook("PostToolUse", "/opt/km/bin/km-notify-hook PostToolUse")
 
 	settings["hooks"] = hooks
 
