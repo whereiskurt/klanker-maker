@@ -39,3 +39,20 @@ These should be triaged separately (likely environment-dependent — many are bu
 3. None of the failing tests overlap with the 13 stub files seeded in Plan 68-00.
 
 If these are intended to pass on this branch, they should be addressed in a dedicated cleanup plan or marked `t.Skip` with a tracking note in their own packages.
+
+## Plan 68-02 follow-up: 68-01 validation tests pre-promoted but not implemented
+
+While executing Plan 68-02, the working tree contained an in-flight modification to `pkg/profile/validate_slack_transcript_test.go` that promoted four Plan 68-01 stubs to real assertions BEFORE the corresponding validation logic was added to `pkg/profile/validate.go`. That file was inadvertently swept into commit `78955b8` (Plan 68-02's Task 2 commit) because it was already-modified in the worktree.
+
+Failing tests (all live in Plan 68-01's scope, not 68-02):
+
+- `TestValidate_SlackTranscript_RequiresSlackEnabled`
+- `TestValidate_SlackTranscript_RequiresPerSandbox`
+- `TestValidate_SlackTranscript_IncompatibleWithChannelOverride`
+
+These tests expect `notifySlackTranscriptEnabled` validation rules (must require `notifySlackEnabled: true`, must require `notifySlackPerSandbox: true`, must conflict with `notifySlackChannelOverride`). The validation logic landing in Plan 68-01's full implementation will turn them green. Until then, they are out-of-scope failures bundled into Plan 68-02's commit due to a worktree-staging accident — Plan 68-01's executor should pick them up when it adds the validation rules to `pkg/profile/validate.go`.
+
+Plan 68-02's actual scope (`pkg/slack/...`) is 100% green:
+- 4 new TestCanonicalJSON_ActionUpload / TestBuildEnvelopeUpload tests PASS
+- All Phase 63 baseline tests still PASS (golden constant updated for new fields)
+- `go build ./...` clean
