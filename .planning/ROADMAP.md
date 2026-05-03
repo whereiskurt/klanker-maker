@@ -1459,14 +1459,14 @@ Plans:
 **Goal:** Make a Slack-connected sandbox a faithful real-time view of its Claude session — every assistant turn streams to a per-sandbox Slack thread as it happens, and the full session transcript (gzipped JSONL) lands as a downloadable file in the same thread when the run ends. Provisions a stream-message → transcript-position mapping table that a future Phase B (reaction-triggered session fork) can consume.
 **Requirements**: Spec-driven (no REQ-* IDs) — see 68-CONTEXT.md locked decisions
 **Depends on:** Phase 67
-**Plans:** 3/13 plans executed
+**Plans:** 4/13 plans executed
 
 Note: Phase A only. Reaction-triggered session fork deferred to a future phase.
 
 Plans:
 - [ ] 68-00-PLAN.md — Wave 0: seed 13 stub test files + 3 testdata fixtures so Plans 01-12 have green-baseline test surfaces
 - [ ] 68-01-PLAN.md — Profile schema: notifySlackTranscriptEnabled field + 3 validation rules + JSON Schema entry
-- [ ] 68-02-PLAN.md — Envelope schema: ActionUpload const + 4 additive fields (S3Key/Filename/ContentType/SizeBytes) + canonical JSON forward+backward compat
+- [x] 68-02-PLAN.md — Envelope schema: ActionUpload const + 4 additive fields (S3Key/Filename/ContentType/SizeBytes) + canonical JSON forward+backward compat
 - [ ] 68-03-PLAN.md — DDB Terraform module dynamodb-slack-stream-messages + Config.GetSlackStreamMessagesTableName helper (resolves table-naming open question)
 - [ ] 68-04-PLAN.md — pkg/slack.Client.UploadFile method (Slack 3-step file upload flow, streaming, explicit Content-Length)
 - [ ] 68-05-PLAN.md — cmd/km-slack restructure: multi-subcommand dispatcher (post + upload + record-mapping)

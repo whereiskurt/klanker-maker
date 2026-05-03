@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 4
 status: in-progress
-stopped_at: Completed 68-02-PLAN.md
-last_updated: "2026-05-03T20:01:18.410Z"
+stopped_at: Completed 68-01-PLAN.md
+last_updated: "2026-05-03T20:01:40.270Z"
 last_activity: 2026-05-03
 progress:
   total_phases: 73
@@ -270,6 +270,7 @@ Progress: [█████████░] 93%
 | Phase 68 P00 | 7min | 2 tasks | 17 files |
 | Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P03 | 3min | 2 tasks | 5 files |
 | Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P02 | 4min | 2 tasks | 3 files |
+| Phase 68 P01 | 230s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -762,6 +763,9 @@ Recent decisions affecting current work:
 - [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-03: dynamodb-slack-stream-messages module mirrors Phase 67 dynamodb-slack-threads layout 1:1 (PAY_PER_REQUEST, native TTL on Number ttl_expiry, SSE on, PITR off); only resource name + key schema + Component=km-slack-transcript tag differ
 - [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-02: Reused EnvelopeVersion=1 (no bump) for the four additive upload-envelope fields — zero values on legacy actions guarantee byte-identical canonical signing, so Phase 63 verifiers and Phase 68 senders interoperate after the struct refresh
 - [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-02: Validation split between client (BuildEnvelopeUpload: filename ≤255B, no slash/NUL, sizeBytes>0, channel/s3Key non-empty) and bridge (content-type allow-list, deferred to Plan 08) — keeps the trust boundary at the network edge while giving callers fast-fail on shape errors
+- [Phase 68]: Plan 68-01: notifySlackTranscriptEnabled field type bool (not *bool) — default false is no-opt-in semantic, mirrors Phase 67 NotifySlackInboundEnabled
+- [Phase 68]: Plan 68-01: three transcript validation rules (ST1/ST2/ST3) emit hard errors mirroring Phase 67 inbound — same audience-containment prerequisites
+- [Phase 68]: Plan 68-01: schema entry placed in pkg/profile/schemas/sandbox_profile.schema.json (real path), not the path stated in plan
 
 ### Roadmap Evolution
 
@@ -850,6 +854,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-03T20:00:42.272Z
-Stopped at: Completed 68-02-PLAN.md
+Last session: 2026-05-03T20:01:40.264Z
+Stopped at: Completed 68-01-PLAN.md
 Resume file: None
