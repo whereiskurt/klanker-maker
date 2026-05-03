@@ -1459,7 +1459,7 @@ Plans:
 **Goal:** Make a Slack-connected sandbox a faithful real-time view of its Claude session — every assistant turn streams to a per-sandbox Slack thread as it happens, and the full session transcript (gzipped JSONL) lands as a downloadable file in the same thread when the run ends. Provisions a stream-message → transcript-position mapping table that a future Phase B (reaction-triggered session fork) can consume.
 **Requirements**: Spec-driven (no REQ-* IDs) — see 68-CONTEXT.md locked decisions
 **Depends on:** Phase 67
-**Plans:** 8/13 plans executed
+**Plans:** 10/13 plans executed
 
 Note: Phase A only. Reaction-triggered session fork deferred to a future phase.
 
