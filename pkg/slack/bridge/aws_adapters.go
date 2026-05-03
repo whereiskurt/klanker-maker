@@ -43,9 +43,11 @@ import (
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	pkgslack "github.com/whereiskurt/klankrmkr/pkg/slack"
 )
 
 // ============================================================
@@ -859,4 +861,70 @@ func (a *DDBPauseHinter) PostIfCooldownExpired(ctx context.Context, channelID, t
 		return fmt.Errorf("pause-hint: post: %w", err)
 	}
 	return nil
+}
+
+// ============================================================
+// Phase 68: S3GetterAdapter — S3ObjectGetter implementation
+// ============================================================
+
+// S3GetObjectAPI is the narrow S3 interface used by S3GetterAdapter.
+// Both *s3.Client and mock implementations satisfy it.
+type S3GetObjectAPI interface {
+	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+}
+
+// S3GetterAdapter adapts an S3 GetObject call to the S3ObjectGetter interface.
+// Phase 68 — bridge reads transcript objects from KM_ARTIFACTS_BUCKET and
+// streams them through Slack's 3-step file upload flow without buffering the
+// full body in Lambda memory.
+type S3GetterAdapter struct {
+	Client S3GetObjectAPI
+	Bucket string
+}
+
+// GetObject returns the body stream and Content-Length for the given key.
+// Caller MUST Close() the returned reader (the bridge handler does so via defer).
+func (a *S3GetterAdapter) GetObject(ctx context.Context, key string) (io.ReadCloser, int64, error) {
+	out, err := a.Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: awssdk.String(a.Bucket),
+		Key:    awssdk.String(key),
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("bridge: s3 get s3://%s/%s: %w", a.Bucket, key, err)
+	}
+	var sz int64
+	if out.ContentLength != nil {
+		sz = *out.ContentLength
+	}
+	return out.Body, sz, nil
+}
+
+// ============================================================
+// Phase 68: SlackFileUploaderAdapter — SlackFileUploader implementation
+// ============================================================
+
+// SlackFileUploaderAdapter adapts the pkg/slack.Client.UploadFile method
+// (Plan 04, 3-step Slack file upload flow) to the SlackFileUploader interface.
+// Phase 68.
+//
+// The Client field is a thin owned dependency — the bridge constructs a
+// pkg/slack.Client at cold start using the same bot token that
+// SSMBotTokenFetcher caches. Token rotation requires a Lambda cold start,
+// which is acceptable since this matches the existing SlackPosterAdapter
+// behavior (Phase 63 token-cache TTL is 15 min).
+type SlackFileUploaderAdapter struct {
+	Client *pkgslack.Client
+}
+
+// UploadFile forwards to pkg/slack.Client.UploadFile (Plan 04) and unwraps the
+// result struct, returning fileID + permalink for the bridge response body.
+func (a *SlackFileUploaderAdapter) UploadFile(ctx context.Context, channel, threadTS, filename, contentType string, sizeBytes int64, body io.Reader) (string, string, error) {
+	res, err := a.Client.UploadFile(ctx, channel, threadTS, filename, contentType, sizeBytes, body)
+	if err != nil {
+		return "", "", err
+	}
+	if res == nil {
+		return "", "", fmt.Errorf("bridge: UploadFile returned nil result")
+	}
+	return res.FileID, res.Permalink, nil
 }
