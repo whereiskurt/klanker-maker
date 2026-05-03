@@ -29,6 +29,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -231,6 +232,17 @@ type DoctorDeps struct {
 	SlackKeyLoader  PrivKeyLoaderFunc      // loads the operator Ed25519 signing key
 	SlackScanner    SlackMetadataScanner   // scans DynamoDB for Slack-enabled sandboxes
 	SlackEC2Lister  EC2InstanceLister      // checks whether a sandbox EC2 instance exists
+
+	// Slack inbound health check dependencies (Plan 67-08).
+	// Nil fields cause the corresponding inbound checks to be skipped without error.
+	// SlackInboundSQS is the SQS client used for queue depth and list operations.
+	SlackInboundSQS kmaws.SQSClient
+	// SlackListSandboxesWithInbound returns sandbox rows that have inbound enabled.
+	SlackListSandboxesWithInbound func(ctx context.Context) ([]inboundRow, error)
+	// SlackAuthTestScopes returns the list of OAuth scopes the bot token has.
+	SlackAuthTestScopes func(ctx context.Context) ([]string, error)
+	// SlackResourcePrefix is the resource prefix used to detect stale queues.
+	SlackResourcePrefix string
 }
 
 // =============================================================================
@@ -2092,6 +2104,34 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return r
 	})
 
+	// Plan 67-08 — Slack inbound diagnostic checks.
+	// Failures produce WARN/SKIPPED, never ERROR that would imply a broken platform.
+	inboundSQS := deps.SlackInboundSQS
+	listInbound := deps.SlackListSandboxesWithInbound
+	resourcePrefix := deps.SlackResourcePrefix
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkSlackInboundQueueExists(ctx, listInbound, inboundSQS)
+		// Demote ERROR to WARN so Slack issues never fail km doctor.
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkSlackInboundStaleQueues(ctx, listInbound, inboundSQS, resourcePrefix)
+	})
+
+	slackScopes := deps.SlackAuthTestScopes
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkSlackAppEventsScopes(ctx, slackScopes)
+		// Demote ERROR to WARN so Slack issues never fail km doctor.
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
 	return checks
 }
 
@@ -2245,6 +2285,31 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	}
 	deps.SlackEC2Lister = &doctorEC2InstanceLister{
 		client: ec2.NewFromConfig(awsCfg),
+	}
+
+	// Slack inbound health check deps (Plan 67-08).
+	// Wire SQS client, inbound sandbox list, auth-test scopes func.
+	deps.SlackInboundSQS = sqs.NewFromConfig(awsCfg)
+	ddbClientForInbound := dynamodb.NewFromConfig(awsCfg)
+	deps.SlackListSandboxesWithInbound = func(innerCtx context.Context) ([]inboundRow, error) {
+		return listSandboxesWithInboundImpl(innerCtx, ddbClientForInbound, "km-sandboxes")
+	}
+	// Derive the resource prefix from the concrete config type.
+	// DoctorConfigProvider doesn't expose GetResourcePrefix, so we type-assert.
+	deps.SlackResourcePrefix = "km" // default fallback
+	if appCfgTyped, ok := cfg.(*appConfigAdapter); ok {
+		deps.SlackResourcePrefix = appCfgTyped.cfg.GetResourcePrefix()
+	}
+	// SlackAuthTestScopes calls Slack auth.test and returns the OAuth scopes.
+	deps.SlackAuthTestScopes = func(innerCtx context.Context) ([]string, error) {
+		token, tokenErr := ssmClientForSlack.GetParameter(innerCtx, &ssm.GetParameterInput{
+			Name:           awssdk.String("/km/slack/bot-token"),
+			WithDecryption: awssdk.Bool(true),
+		})
+		if tokenErr != nil {
+			return nil, fmt.Errorf("get bot token: %w", tokenErr)
+		}
+		return fetchSlackBotScopes(innerCtx, awssdk.ToString(token.Parameter.Value))
 	}
 
 	return deps

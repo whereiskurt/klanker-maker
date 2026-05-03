@@ -31,6 +31,11 @@ type fakeSQS struct {
 	deleteCalled int
 	deleteURL    string
 	deleteErr    error
+
+	// getAttrsErr controls the error returned by GetQueueAttributes (for doctor checks).
+	getAttrsErr error
+	// listResult controls the queue URLs returned by ListQueues (for doctor checks).
+	listResult []string
 }
 
 func (f *fakeSQS) CreateQueue(_ context.Context, in *sqs.CreateQueueInput, _ ...func(*sqs.Options)) (*sqs.CreateQueueOutput, error) {
@@ -56,13 +61,16 @@ func (f *fakeSQS) DeleteQueue(_ context.Context, in *sqs.DeleteQueueInput, _ ...
 }
 
 func (f *fakeSQS) GetQueueAttributes(_ context.Context, _ *sqs.GetQueueAttributesInput, _ ...func(*sqs.Options)) (*sqs.GetQueueAttributesOutput, error) {
+	if f.getAttrsErr != nil {
+		return nil, f.getAttrsErr
+	}
 	return &sqs.GetQueueAttributesOutput{
 		Attributes: map[string]string{"ApproximateNumberOfMessages": "0"},
 	}, nil
 }
 
 func (f *fakeSQS) ListQueues(_ context.Context, _ *sqs.ListQueuesInput, _ ...func(*sqs.Options)) (*sqs.ListQueuesOutput, error) {
-	return &sqs.ListQueuesOutput{}, nil
+	return &sqs.ListQueuesOutput{QueueUrls: f.listResult}, nil
 }
 
 // ============================================================
