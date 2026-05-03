@@ -126,6 +126,12 @@ const ec2ServiceHCLTemplate = `locals {
     additional_volume_size_gb    = {{ .AdditionalVolumeSizeGB }}
     additional_volume_encrypted  = {{ .AdditionalVolumeEncrypted }}
     additional_volume_device_name = "{{ .AdditionalVolumeDeviceName }}"
+
+    # Phase 68 — Slack transcript streaming. Empty values cause the
+    # ec2spot module to skip the corresponding IAM policies (PutObject on
+    # transcripts/{sandbox_id}/* and PutItem on the stream-messages table).
+    artifacts_bucket                  = "{{ .ArtifactsBucket }}"
+    slack_stream_messages_table_name  = "{{ .SlackStreamMessagesTableName }}"
   }
 {{- if .HasBudget }}
 
@@ -461,6 +467,13 @@ type ec2HCLParams struct {
 	AdditionalVolumeEncrypted  bool   // encrypt the additional EBS volume
 	AdditionalVolumeMountPoint string // mount point for the additional volume (e.g. "/data")
 	AdditionalVolumeDeviceName string // device name for the additional volume (e.g. "/dev/sdf" or "/dev/sdg")
+	// Phase 68 — Slack transcript streaming. Both fields default to empty,
+	// in which case the ec2spot module's transcript IAM policies are omitted.
+	// ArtifactsBucket = project-wide S3 bucket name (KM_ARTIFACTS_BUCKET).
+	// SlackStreamMessagesTableName = DDB table for stream-message → offset map
+	// (Config.GetSlackStreamMessagesTableName()).
+	ArtifactsBucket              string
+	SlackStreamMessagesTableName string
 }
 
 // ============================================================
@@ -747,6 +760,24 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		// pickAdditionalVolumeDevice returns "/dev/sdf" when amiBDMDeviceNames is nil/empty.
 		AdditionalVolumeDeviceName: pickAdditionalVolumeDevice(amiBDMDeviceNames),
 	}
+
+	// Phase 68: wire transcript-streaming module inputs. ArtifactsBucket comes
+	// from NetworkConfig (already plumbed through compileEC2). The stream-messages
+	// table name follows the Phase 67 SlackThreadsTableName pattern — env var with
+	// a sane default — so Phase 66 multi-instance prefix overrides flow through
+	// KM_SLACK_STREAM_TABLE that km create will inject (Plan 68-10).
+	// Empty values cause the ec2spot module's IAM policies to be skipped.
+	if network != nil {
+		params.ArtifactsBucket = network.ArtifactsBucket
+	}
+	if params.ArtifactsBucket == "" {
+		params.ArtifactsBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
+	}
+	streamTable := os.Getenv("KM_SLACK_STREAM_TABLE")
+	if streamTable == "" {
+		streamTable = "km-slack-stream-messages"
+	}
+	params.SlackStreamMessagesTableName = streamTable
 
 	// Populate GitHub token fields when sourceAccess.github is configured with at least one repo.
 	// Empty allowedRepos is treated as deny-by-default (same as nil github config).

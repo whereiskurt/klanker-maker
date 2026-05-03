@@ -2571,6 +2571,12 @@ type userDataParams struct {
 	// Phase 66 multi-instance overrides propagate via this field so the poller's
 	// ${KM_SLACK_THREADS_TABLE:-km-slack-threads} fallback can see a non-default prefix.
 	SlackThreadsTableName string
+	// SlackStreamMessagesTableName is the DynamoDB table name for the Phase 68
+	// km-slack-stream-messages table (channel_id + slack_ts → transcript-offset
+	// mapping). Populated from Config.GetSlackStreamMessagesTableName() so Phase 66
+	// multi-instance prefix overrides propagate to KM_SLACK_STREAM_TABLE consumers
+	// (Plan 68-09 hook script, Plan 68-10 km create env injection).
+	SlackStreamMessagesTableName string
 }
 
 // parseUserDataTemplate parses the userDataTemplate and returns the compiled template.
@@ -2854,6 +2860,20 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 			}
 			params.SlackThreadsTableName = threadsTable
 		}
+
+		// Phase 68: populate SlackStreamMessagesTableName for the transcript hook
+		// path. Mirrors the SlackThreadsTableName pattern — env var with a sane
+		// default. Plan 10 (km create env injection) propagates the operator's
+		// Config.GetSlackStreamMessagesTableName() into KM_SLACK_STREAM_TABLE so
+		// Phase 66 multi-instance prefix overrides reach the sandbox-side hook.
+		// We read it unconditionally (not gated on NotifySlackTranscriptEnabled)
+		// so the field is always available to downstream template consumers; the
+		// hook itself short-circuits when the feature is off.
+		streamTable := os.Getenv("KM_SLACK_STREAM_TABLE")
+		if streamTable == "" {
+			streamTable = "km-slack-stream-messages"
+		}
+		params.SlackStreamMessagesTableName = streamTable
 
 		// Phase 67 gap closure: replaces Phase 63 Step 11d ssm:SendCommand path.
 		// Cloud-init polls SSM Parameter Store for the channel id (per-sandbox) and
