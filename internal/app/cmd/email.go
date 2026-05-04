@@ -86,10 +86,7 @@ func newEmailCmdInternal(cfg *config.Config, sendDeps *EmailSendDeps, readDeps *
 
 // emailDomain returns the configured email domain (e.g. "sandboxes.klankermaker.ai").
 func emailDomain(cfg *config.Config) string {
-	if cfg.Domain != "" {
-		return "sandboxes." + cfg.Domain
-	}
-	return "sandboxes.klankermaker.ai"
+	return cfg.GetEmailDomain()
 }
 
 // ============================================================

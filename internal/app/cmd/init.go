@@ -1519,7 +1519,7 @@ func ensureProxyCACert(repoRoot, bucket string) error {
 // Note: the AWS profile name 'klanker-management' is unchanged — it's just an SDK profile
 // identifier, not the semantic field name. Renaming the profile is out of scope for phase 65.
 func ensureSandboxHostedZone(ctx context.Context, cfg *config.Config) (string, error) {
-	sandboxDomain := "sandboxes." + cfg.Domain
+	sandboxDomain := cfg.GetEmailDomain()
 
 	fmt.Printf("  Setting up DNS zone for %s...\n", sandboxDomain)
 

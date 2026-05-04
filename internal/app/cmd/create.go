@@ -385,10 +385,6 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	repoRoot := findRepoRoot()
 	region := resolvedProfile.Spec.Runtime.Region
 	regionLabel := compiler.RegionLabel(region)
-	networkDomain := cfg.Domain
-	if networkDomain == "" {
-		networkDomain = "klankermaker.ai"
-	}
 	artifactsBucket := cfg.ArtifactsBucket
 	if artifactsBucket == "" {
 		artifactsBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
@@ -397,7 +393,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	if substrate == "docker" {
 		// Docker substrate: construct minimal NetworkConfig — no Terragrunt outputs needed.
 		network = &compiler.NetworkConfig{
-			EmailDomain:     "sandboxes." + networkDomain,
+			EmailDomain:     cfg.GetEmailDomain(),
 			ArtifactsBucket: artifactsBucket,
 		}
 	} else {
@@ -410,7 +406,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			PublicSubnets:     networkOutputs.PublicSubnets,
 			AvailabilityZones: networkOutputs.AvailabilityZones,
 			RegionLabel:       regionLabel,
-			EmailDomain:       "sandboxes." + networkDomain,
+			EmailDomain:       cfg.GetEmailDomain(),
 			ArtifactsBucket:   artifactsBucket,
 		}
 	}
@@ -1111,12 +1107,8 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 				log.Warn().Err(phraseErr).Str("sandbox_id", sandboxID).
 					Msg("Step 12d: failed to store safe phrase in SSM (non-fatal)")
 			} else {
-				safeDomain := "sandboxes." + cfg.Domain
-			if cfg.Domain == "" {
-				safeDomain = "sandboxes.klankermaker.ai"
-			}
 			fmt.Fprintf(os.Stderr, "  ✓ Safe phrase: %s\n", phrase)
-			fmt.Printf("    Email: %s@%s\n", sandboxID, safeDomain)
+			fmt.Printf("    Email: %s@%s\n", sandboxID, cfg.GetEmailDomain())
 				log.Info().Str("sandbox_id", sandboxID).
 					Msg("Step 12d: safe phrase stored in SSM")
 			}
@@ -1199,12 +1191,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 
 	// Step 13: Provision SES email identity for the sandbox.
 	// Non-fatal: sandbox is still usable without email.
-	// Derive email domain from config; default to "klankermaker.ai" when not set.
-	baseDomain := cfg.Domain
-	if baseDomain == "" {
-		baseDomain = "klankermaker.ai"
-	}
-	emailDomain := "sandboxes." + baseDomain
+	emailDomain := cfg.GetEmailDomain()
 	sesClient := sesv2.NewFromConfig(awsCfg)
 	emailAddr, emailErr := awspkg.ProvisionSandboxEmail(ctx, sesClient, sandboxID, emailDomain)
 	if emailErr != nil {
@@ -1648,14 +1635,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 
 			// Publish identity to DynamoDB.
 			// Derive email domain the same way as Step 13 in the main create path.
-			dockerBaseDomain := cfg.Domain
-			if dockerBaseDomain == "" {
-				dockerBaseDomain = os.Getenv("KM_EMAIL_DOMAIN")
-			}
-			if dockerBaseDomain == "" {
-				dockerBaseDomain = "klankermaker.ai"
-			}
-			emailDomain := "sandboxes." + dockerBaseDomain
+			emailDomain := cfg.GetEmailDomain()
 			identityTableName := cfg.IdentityTableName
 			if identityTableName == "" {
 				identityTableName = "km-identities"
@@ -1850,10 +1830,6 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	if err != nil {
 		return "", fmt.Errorf("failed to load network config for %s: %w\nRun 'km init --region %s' first", region, err, region)
 	}
-	networkDomain := cfg.Domain
-	if networkDomain == "" {
-		networkDomain = "klankermaker.ai"
-	}
 	remoteArtifactsBucket := cfg.ArtifactsBucket
 	if remoteArtifactsBucket == "" {
 		remoteArtifactsBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
@@ -1863,7 +1839,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		PublicSubnets:     networkOutputs.PublicSubnets,
 		AvailabilityZones: networkOutputs.AvailabilityZones,
 		RegionLabel:       regionLabel,
-		EmailDomain:       "sandboxes." + networkDomain,
+		EmailDomain:       cfg.GetEmailDomain(),
 		ArtifactsBucket:   remoteArtifactsBucket,
 	}
 

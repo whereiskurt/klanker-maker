@@ -375,16 +375,12 @@ func reprovisionECSSandbox(ctx context.Context, cfg *config.Config, sandboxID, a
 	if err != nil {
 		return fmt.Errorf("load network config: %w", err)
 	}
-	domain := cfg.Domain
-	if domain == "" {
-		domain = "klankermaker.ai"
-	}
 	network := &compiler.NetworkConfig{
 		VPCID:             networkOutputs.VPCID,
 		PublicSubnets:     networkOutputs.PublicSubnets,
 		AvailabilityZones: networkOutputs.AvailabilityZones,
 		RegionLabel:       regionLabel,
-		EmailDomain:       "sandboxes." + domain,
+		EmailDomain:       cfg.GetEmailDomain(),
 	}
 
 	// Step 5: Compile with existing sandboxID — never generate a new one.

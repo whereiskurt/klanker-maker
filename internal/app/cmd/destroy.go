@@ -389,12 +389,7 @@ locals {
 		return err
 	}
 	// Step 8 (continued): build SES client for notification callback.
-	// Derive email domain from config; default to "klankermaker.ai" when not set.
-	destroyBaseDomain := cfg.Domain
-	if destroyBaseDomain == "" {
-		destroyBaseDomain = "klankermaker.ai"
-	}
-	emailDomain := "sandboxes." + destroyBaseDomain
+	emailDomain := cfg.GetEmailDomain()
 	sesClient := sesv2.NewFromConfig(awsCfg)
 
 	callbacks := lifecycle.TeardownCallbacks{
@@ -686,11 +681,7 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 	cleanupBudgetEnforcerResources(ctx, awsCfg, sandboxID)
 
 	// Step DD3e: Clean up SES email identity.
-	destroyBaseDomain := cfg.Domain
-	if destroyBaseDomain == "" {
-		destroyBaseDomain = "klankermaker.ai"
-	}
-	emailDomain := "sandboxes." + destroyBaseDomain
+	emailDomain := cfg.GetEmailDomain()
 	sesClient := sesv2.NewFromConfig(awsCfg)
 	if err := awspkg.CleanupSandboxEmail(ctx, sesClient, sandboxID, emailDomain); err != nil {
 		log.Warn().Err(err).Msg("failed to cleanup sandbox email (non-fatal)")

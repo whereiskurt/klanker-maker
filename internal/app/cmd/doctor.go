@@ -789,10 +789,10 @@ func checkLambdaFunction(ctx context.Context, client LambdaGetFunctionAPI, funcN
 }
 
 // checkSESIdentity verifies the SES domain identity is verified.
-// The identity checked is "sandboxes.{domain}" derived from cfg.GetDomain().
+// The identity checked is the email domain (e.g. "sandboxes.klankermaker.ai") from cfg.GetEmailDomain().
 // Returns CheckSkipped when client is nil, CheckWarn when not found or not verified.
-func checkSESIdentity(ctx context.Context, client SESGetEmailIdentityAPI, domain string) CheckResult {
-	identity := fmt.Sprintf("sandboxes.%s", domain)
+func checkSESIdentity(ctx context.Context, client SESGetEmailIdentityAPI, emailDomain string) CheckResult {
+	identity := emailDomain
 	name := "SES Domain Identity"
 	if client == nil {
 		return CheckResult{
@@ -2023,9 +2023,9 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 
 	// SES domain identity check.
 	sesClient := deps.SESClient
-	domain := cfg.GetDomain()
+	emailDomain := cfg.GetEmailDomain()
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkSESIdentity(ctx, sesClient, domain)
+		return checkSESIdentity(ctx, sesClient, emailDomain)
 	})
 
 	// Sandbox summary check.
