@@ -134,17 +134,20 @@ func CalculateAnthropicCost(inputTokens, outputTokens, cacheReadTokens, cacheWri
 }
 
 // staticAnthropicRates maps Anthropic API model IDs to their per-1K-token USD rates.
-// Source: platform.claude.com/docs/en/about-claude/pricing (verified 2026-03-24).
+// Source: platform.claude.com/docs/en/about-claude/pricing (verified 2026-05-03).
 // Rates in USD per 1,000 tokens.
 //
 // Both alias forms (e.g. "claude-sonnet-4-6") and dated variants
 // (e.g. "claude-sonnet-4-5-20250929") are included because Anthropic API responses
 // echo back the model name as sent in the request — aliases and dated IDs may both appear.
 //
-// Valid until: 2026-07-01 (update when new models launch).
+// Valid until: 2026-09-01 (update when new models launch).
 // Note: claude-3-haiku-20240307 is deprecated and retires 2026-04-19.
+// Note: Opus 4.7 includes the 1M context window at standard pricing — no separate tier.
 var staticAnthropicRates = map[string]aws.BedrockModelRate{
-	// Current models (Claude 4.6)
+	// Current models (Claude 4.7)
+	"claude-opus-4-7": {InputPricePer1KTokens: 0.005, OutputPricePer1KTokens: 0.025},
+	// Claude 4.6
 	"claude-opus-4-6":   {InputPricePer1KTokens: 0.005, OutputPricePer1KTokens: 0.025},
 	"claude-sonnet-4-6": {InputPricePer1KTokens: 0.003, OutputPricePer1KTokens: 0.015},
 	"claude-haiku-4-5":  {InputPricePer1KTokens: 0.001, OutputPricePer1KTokens: 0.005},

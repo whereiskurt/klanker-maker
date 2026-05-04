@@ -314,6 +314,21 @@ func isTerminal(w io.Writer) bool {
 	return false
 }
 
+// formatTokenCount renders a token count for human display: raw number under 1k,
+// "X.Xk" up to 999.9k, and "X.XM" beyond. Replaces the prior `%dK` integer divide
+// which collapsed every count below 500 to "0K" — masking real activity for short
+// sessions where Opus charges 6 input + 223 output tokens but display showed 0K/0K.
+func formatTokenCount(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000.0)
+	case n >= 1000:
+		return fmt.Sprintf("%.1fk", float64(n)/1000.0)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
+
 // colorPercent wraps a percentage string with ANSI color codes based on threshold.
 // green < 80%, yellow 80-99%, red >= 100%.
 func colorPercent(percent float64, isTTY bool) string {
@@ -407,11 +422,11 @@ func printSandboxStatus(ctx context.Context, cmd *cobra.Command, rec *kmaws.Sand
 				sort.Strings(models)
 				for _, modelID := range models {
 					ms := budget.AIByModel[modelID]
-					fmt.Fprintf(out, "    %-30s $%.4f (%dK in / %dK out)\n",
+					fmt.Fprintf(out, "    %-30s $%.4f (%s in / %s out)\n",
 						modelID+":",
 						ms.SpentUSD,
-						ms.InputTokens/1000,
-						ms.OutputTokens/1000,
+						formatTokenCount(ms.InputTokens),
+						formatTokenCount(ms.OutputTokens),
 					)
 				}
 			}

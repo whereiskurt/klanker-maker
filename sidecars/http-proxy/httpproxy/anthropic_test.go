@@ -132,9 +132,10 @@ func TestAnthropicBlockedResponse(t *testing.T) {
 	}
 }
 
-// Test 6 — Rate table completeness: staticAnthropicRates covers all 11 model IDs.
+// Test 6 — Rate table completeness: staticAnthropicRates covers all 12 model IDs.
 func TestAnthropicRateTableCompleteness(t *testing.T) {
 	required := []string{
+		"claude-opus-4-7",
 		"claude-opus-4-6",
 		"claude-sonnet-4-6",
 		"claude-haiku-4-5",
