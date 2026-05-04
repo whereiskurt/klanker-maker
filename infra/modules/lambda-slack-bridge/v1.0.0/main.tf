@@ -284,6 +284,8 @@ resource "aws_lambda_function" "slack_bridge" {
       KM_RESOURCE_PREFIX     = var.resource_prefix
       # Phase 67.1 addition — ACK reaction emoji
       KM_SLACK_ACK_EMOJI = var.slack_ack_emoji
+      # Phase 68 addition — S3 artifacts bucket (transcripts/* read path)
+      KM_ARTIFACTS_BUCKET = var.artifacts_bucket
     }
   }
 
