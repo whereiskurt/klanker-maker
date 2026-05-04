@@ -173,6 +173,14 @@ type DoctorConfigProvider interface {
 	// GetSlackStreamMessagesTableName returns the Phase 68 Slack-stream-messages
 	// DynamoDB table name (used by checkSlackTranscriptTableExists).
 	GetSlackStreamMessagesTableName() string
+	// GetResourcePrefix returns the Phase-66 multi-instance prefix; "km" by default.
+	GetResourcePrefix() string
+	// GetEmailDomain returns the SES email domain "{subdomain}.{domain}".
+	GetEmailDomain() string
+	// GetSsmPrefix returns the SSM parameter prefix "/{prefix}/".
+	GetSsmPrefix() string
+	// GetSlackThreadsTableName returns the Phase-67 Slack-threads table name.
+	GetSlackThreadsTableName() string
 }
 
 // appConfigAdapter wraps *config.Config to satisfy DoctorConfigProvider.
@@ -197,6 +205,10 @@ func (a *appConfigAdapter) GetProfileSearchPaths() []string { return a.cfg.Profi
 func (a *appConfigAdapter) GetSlackStreamMessagesTableName() string {
 	return a.cfg.GetSlackStreamMessagesTableName()
 }
+func (a *appConfigAdapter) GetResourcePrefix() string        { return a.cfg.GetResourcePrefix() }
+func (a *appConfigAdapter) GetEmailDomain() string           { return a.cfg.GetEmailDomain() }
+func (a *appConfigAdapter) GetSsmPrefix() string             { return a.cfg.GetSsmPrefix() }
+func (a *appConfigAdapter) GetSlackThreadsTableName() string { return a.cfg.GetSlackThreadsTableName() }
 
 // DoctorDeps holds all injected AWS clients for doctor checks.
 // Nil fields cause their corresponding checks to be skipped.
@@ -2340,12 +2352,9 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	deps.SlackListSandboxesWithInbound = func(innerCtx context.Context) ([]inboundRow, error) {
 		return listSandboxesWithInboundImpl(innerCtx, ddbClientForInbound, "km-sandboxes")
 	}
-	// Derive the resource prefix from the concrete config type.
-	// DoctorConfigProvider doesn't expose GetResourcePrefix, so we type-assert.
-	deps.SlackResourcePrefix = "km" // default fallback
-	if appCfgTyped, ok := cfg.(*appConfigAdapter); ok {
-		deps.SlackResourcePrefix = appCfgTyped.cfg.GetResourcePrefix()
-	}
+	// Derive the resource prefix directly via the interface (Phase 66: GetResourcePrefix
+	// is now part of DoctorConfigProvider — no type-assert needed).
+	deps.SlackResourcePrefix = cfg.GetResourcePrefix()
 	// SlackAuthTestScopes calls Slack auth.test and returns the OAuth scopes.
 	deps.SlackAuthTestScopes = func(innerCtx context.Context) ([]string, error) {
 		token, tokenErr := ssmClientForSlack.GetParameter(innerCtx, &ssm.GetParameterInput{

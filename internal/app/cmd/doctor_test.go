@@ -636,6 +636,10 @@ func (c *testConfig) GetProfileSearchPaths() []string     { return nil }
 func (c *testConfig) GetSlackStreamMessagesTableName() string {
 	return "km-slack-stream-messages"
 }
+func (c *testConfig) GetResourcePrefix() string        { return "km" }
+func (c *testConfig) GetEmailDomain() string           { return "sandboxes.klankermaker.ai" }
+func (c *testConfig) GetSsmPrefix() string             { return "/km/" }
+func (c *testConfig) GetSlackThreadsTableName() string { return "km-slack-threads" }
 
 // =============================================================================
 // Tests: DoctorCmd (Task 2)
@@ -815,6 +819,10 @@ func (c *testDoctorConfig) GetProfileSearchPaths() []string     { return nil }
 func (c *testDoctorConfig) GetSlackStreamMessagesTableName() string {
 	return "km-slack-stream-messages"
 }
+func (c *testDoctorConfig) GetResourcePrefix() string        { return "km" }
+func (c *testDoctorConfig) GetEmailDomain() string           { return "sandboxes.klankermaker.ai" }
+func (c *testDoctorConfig) GetSsmPrefix() string             { return "/km/" }
+func (c *testDoctorConfig) GetSlackThreadsTableName() string { return "km-slack-threads" }
 
 func allOKDeps() *DoctorDeps {
 	return &DoctorDeps{
