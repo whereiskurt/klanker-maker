@@ -105,10 +105,7 @@ func runExtend(ctx context.Context, cfg *config.Config, sandboxID string, addDur
 		return fmt.Errorf("load AWS config: %w", err)
 	}
 
-	tableName := cfg.SandboxTableName
-	if tableName == "" {
-		tableName = "km-sandboxes"
-	}
+	tableName := cfg.GetSandboxTableName()
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)
 	schedulerClient := scheduler.NewFromConfig(awsCfg)
 
@@ -148,7 +145,7 @@ func runExtend(ctx context.Context, cfg *config.Config, sandboxID string, addDur
 	// Auto-discover TTL Lambda ARN
 	lambdaClient := lambda.NewFromConfig(awsCfg)
 	fnOut, fnErr := lambdaClient.GetFunction(ctx, &lambda.GetFunctionInput{
-		FunctionName: aws.String("km-ttl-handler"),
+		FunctionName: aws.String(cfg.GetResourcePrefix() + "-ttl-handler"),
 	})
 	if fnErr != nil {
 		return fmt.Errorf("TTL handler Lambda not found — cannot create schedule: %w", fnErr)
@@ -158,7 +155,7 @@ func runExtend(ctx context.Context, cfg *config.Config, sandboxID string, addDur
 	// Auto-discover scheduler role ARN
 	iamClient := iampkg.NewFromConfig(awsCfg)
 	roleOut, roleErr := iamClient.GetRole(ctx, &iampkg.GetRoleInput{
-		RoleName: aws.String("km-ttl-scheduler"),
+		RoleName: aws.String(cfg.GetResourcePrefix() + "-ttl-scheduler"),
 	})
 	if roleErr != nil {
 		return fmt.Errorf("TTL scheduler role not found — run 'km init': %w", roleErr)
@@ -180,7 +177,7 @@ func runExtend(ctx context.Context, cfg *config.Config, sandboxID string, addDur
 			metaJSON, _ := json.Marshal(meta)
 			_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
 				Bucket:      aws.String(cfg.StateBucket),
-				Key:         aws.String("tf-km/sandboxes/" + sandboxID + "/metadata.json"),
+				Key:         aws.String("tf-" + cfg.GetResourcePrefix() + "/sandboxes/" + sandboxID + "/metadata.json"),
 				Body:        bytes.NewReader(metaJSON),
 				ContentType: aws.String("application/json"),
 			})
@@ -206,10 +203,7 @@ func runExtendIdle(ctx context.Context, cfg *config.Config, sandboxID, idleTimeo
 		return fmt.Errorf("load AWS config: %w", err)
 	}
 
-	tableName := cfg.SandboxTableName
-	if tableName == "" {
-		tableName = "km-sandboxes"
-	}
+	tableName := cfg.GetSandboxTableName()
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)
 
 	meta, err := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClient, tableName, sandboxID)

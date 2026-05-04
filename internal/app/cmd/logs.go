@@ -52,7 +52,7 @@ func runLogs(cmd *cobra.Command, cfg *config.Config, sandboxID, stream string, f
 		ctx = context.Background()
 	}
 
-	logGroup := "/km/sandboxes/" + sandboxID + "/"
+	logGroup := "/" + cfg.GetResourcePrefix() + "/sandboxes/" + sandboxID + "/"
 
 	awsProfile := "klanker-terraform"
 	awsCfg, err := kmaws.LoadAWSConfig(ctx, awsProfile)

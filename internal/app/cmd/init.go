@@ -1715,13 +1715,14 @@ type lambdaConfigUpdater interface {
 	UpdateFunctionConfiguration(ctx context.Context, input *lambda.UpdateFunctionConfigurationInput, optFns ...func(*lambda.Options)) (*lambda.UpdateFunctionConfigurationOutput, error)
 }
 
-// ForceSlackBridgeColdStartWith updates the km-slack-bridge Lambda's
-// environment using the supplied client, forcing a new execution environment
+// ForceSlackBridgeColdStartWith updates the Slack bridge Lambda's environment
+// using the supplied client and functionName, forcing a new execution environment
 // and invalidating the in-process SSMBotTokenFetcher cache (15-min TTL).
 // Exported for unit testing; production code should call forceSlackBridgeColdStart.
-func ForceSlackBridgeColdStartWith(ctx context.Context, client lambdaConfigUpdater) error {
+// functionName should be cfg.GetResourcePrefix() + "-slack-bridge".
+func ForceSlackBridgeColdStartWith(ctx context.Context, client lambdaConfigUpdater, functionName string) error {
 	_, err := client.UpdateFunctionConfiguration(ctx, &lambda.UpdateFunctionConfigurationInput{
-		FunctionName: aws.String("km-slack-bridge"),
+		FunctionName: aws.String(functionName),
 		Environment: &lambdatypes.Environment{
 			Variables: map[string]string{
 				"TOKEN_ROTATION_TS": fmt.Sprintf("%d", time.Now().Unix()),
@@ -1739,6 +1740,6 @@ func ForceSlackBridgeColdStartWith(ctx context.Context, client lambdaConfigUpdat
 //
 // Distinct from forceLambdaColdStart (which targets km-create-handler with
 // TOOLCHAIN_VERSION) — uses TOKEN_ROTATION_TS to keep the namespaces clean.
-func forceSlackBridgeColdStart(ctx context.Context, cfg aws.Config) error {
-	return ForceSlackBridgeColdStartWith(ctx, lambda.NewFromConfig(cfg))
+func forceSlackBridgeColdStart(ctx context.Context, awsCfgParam aws.Config, resourcePrefix string) error {
+	return ForceSlackBridgeColdStartWith(ctx, lambda.NewFromConfig(awsCfgParam), resourcePrefix+"-slack-bridge")
 }

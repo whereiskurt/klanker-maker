@@ -684,7 +684,7 @@ func buildSlackCmdDeps(cfg *config.Config) (*SlackCmdDeps, error) {
 		},
 		BridgePoster: kmslack.PostToBridge,
 		BridgeColdStart: func(ctx context.Context) error {
-			return forceSlackBridgeColdStart(ctx, awsCfgForBridge)
+			return forceSlackBridgeColdStart(ctx, awsCfgForBridge, cfg.GetResourcePrefix())
 		},
 		Region:   regionLabel,
 		RepoRoot: repoRoot,

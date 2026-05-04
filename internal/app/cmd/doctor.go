@@ -181,6 +181,8 @@ type DoctorConfigProvider interface {
 	GetSsmPrefix() string
 	// GetSlackThreadsTableName returns the Phase-67 Slack-threads table name.
 	GetSlackThreadsTableName() string
+	// GetSandboxTableName returns the DynamoDB sandboxes table name (Phase 66).
+	GetSandboxTableName() string
 }
 
 // appConfigAdapter wraps *config.Config to satisfy DoctorConfigProvider.
@@ -209,6 +211,7 @@ func (a *appConfigAdapter) GetResourcePrefix() string        { return a.cfg.GetR
 func (a *appConfigAdapter) GetEmailDomain() string           { return a.cfg.GetEmailDomain() }
 func (a *appConfigAdapter) GetSsmPrefix() string             { return a.cfg.GetSsmPrefix() }
 func (a *appConfigAdapter) GetSlackThreadsTableName() string { return a.cfg.GetSlackThreadsTableName() }
+func (a *appConfigAdapter) GetSandboxTableName() string      { return a.cfg.GetSandboxTableName() }
 
 // DoctorDeps holds all injected AWS clients for doctor checks.
 // Nil fields cause their corresponding checks to be skipped.
@@ -554,15 +557,13 @@ func checkSCP(ctx context.Context, client OrgsListPoliciesAPI, accountID string)
 //
 // Check order:
 //  1. app-client-id must exist (WARN if missing)
-//  2. Per-account installations at /km/config/github/installations/ (preferred)
-//  3. Fallback to legacy /km/config/github/installation-id
+//  2. Per-account installations at {ssmPrefix}config/github/installations/ (preferred)
+//  3. Fallback to legacy {ssmPrefix}config/github/installation-id
 //  4. WARN only when neither per-account nor legacy installation keys exist
-func checkGitHubConfig(ctx context.Context, client SSMReadAPI) CheckResult {
-	const (
-		appClientIDParam       = "/km/config/github/app-client-id"
-		installationIDParam    = "/km/config/github/installation-id"
-		installationsPathPrefix = "/km/config/github/installations/"
-	)
+func checkGitHubConfig(ctx context.Context, client SSMReadAPI, ssmPrefix string) CheckResult {
+	appClientIDParam := ssmPrefix + "config/github/app-client-id"
+	installationIDParam := ssmPrefix + "config/github/installation-id"
+	installationsPathPrefix := ssmPrefix + "config/github/installations/"
 
 	// Step 1: Check app-client-id exists.
 	_, err := client.GetParameter(ctx, &ssm.GetParameterInput{
@@ -634,10 +635,10 @@ func checkGitHubConfig(ctx context.Context, client SSMReadAPI) CheckResult {
 // has not been updated within the specified threshold. It uses LastModifiedDate as the
 // rotation timestamp source. Missing parameters are skipped gracefully — their existence
 // is validated by checkGitHubConfig.
-func checkCredentialRotationAge(ctx context.Context, ssmClient SSMReadAPI, thresholdDays int) CheckResult {
+func checkCredentialRotationAge(ctx context.Context, ssmClient SSMReadAPI, thresholdDays int, ssmPrefix string) CheckResult {
 	params := []string{
-		"/km/config/github/private-key",
-		"/km/config/github/app-client-id",
+		ssmPrefix + "config/github/private-key",
+		ssmPrefix + "config/github/app-client-id",
 	}
 	threshold := time.Duration(thresholdDays) * 24 * time.Hour
 	now := time.Now()
@@ -884,8 +885,9 @@ func checkSidecarArtifacts(ctx context.Context, client S3HeadBucketAPI, bucket s
 }
 
 // checkSafePhrase verifies the email-to-create safe phrase exists in SSM Parameter Store.
+// ssmPrefix is the SSM parameter prefix (e.g. "/km/").
 // Returns CheckWarn if missing - email-to-create won't work without it.
-func checkSafePhrase(ctx context.Context, client SSMReadAPI) CheckResult {
+func checkSafePhrase(ctx context.Context, client SSMReadAPI, ssmPrefix string) CheckResult {
 	name := "Safe Phrase (Email-to-Create)"
 	if client == nil {
 		return CheckResult{
@@ -895,7 +897,7 @@ func checkSafePhrase(ctx context.Context, client SSMReadAPI) CheckResult {
 		}
 	}
 
-	param := "/km/config/remote-create/safe-phrase"
+	param := ssmPrefix + "config/remote-create/safe-phrase"
 	_, err := client.GetParameter(ctx, &ssm.GetParameterInput{
 		Name: awssdk.String(param),
 	})
@@ -1932,19 +1934,19 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	dynamoClient := deps.DynamoClient
 	budgetTable := cfg.GetBudgetTableName()
 	if budgetTable == "" {
-		budgetTable = "km-budgets"
+		budgetTable = cfg.GetResourcePrefix() + "-budgets"
 	}
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkDynamoTable(ctx, dynamoClient, budgetTable, "Budget Table (km-budgets)")
+		return checkDynamoTable(ctx, dynamoClient, budgetTable, "Budget Table ("+budgetTable+")")
 	})
 
 	// DynamoDB: identity table — demote error to warn.
 	identityTable := cfg.GetIdentityTableName()
 	if identityTable == "" {
-		identityTable = "km-identities"
+		identityTable = cfg.GetResourcePrefix() + "-identities"
 	}
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		r := checkDynamoTable(ctx, dynamoClient, identityTable, "Identity Table (km-identities)")
+		r := checkDynamoTable(ctx, dynamoClient, identityTable, "Identity Table ("+identityTable+")")
 		if r.Status == CheckError {
 			r.Status = CheckWarn // identity table is optional
 		}
@@ -1979,7 +1981,7 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 				Message: "SSM client not available",
 			}
 		}
-		return checkGitHubConfig(ctx, ssmClient)
+		return checkGitHubConfig(ctx, ssmClient, cfg.GetSsmPrefix())
 	})
 
 	// Credential rotation age check.
@@ -1991,7 +1993,7 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 				Message: "SSM client not available",
 			}
 		}
-		return checkCredentialRotationAge(ctx, ssmClient, 90)
+		return checkCredentialRotationAge(ctx, ssmClient, 90, cfg.GetSsmPrefix())
 	})
 
 	// Per-region VPC checks.
@@ -2017,8 +2019,9 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 
 	// Lambda TTL handler check.
 	lambdaClient := deps.LambdaClient
+	ttlHandlerName := cfg.GetResourcePrefix() + "-ttl-handler"
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkLambdaFunction(ctx, lambdaClient, "km-ttl-handler")
+		return checkLambdaFunction(ctx, lambdaClient, ttlHandlerName)
 	})
 
 	// SES domain identity check.
@@ -2042,7 +2045,7 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 
 	// Safe phrase check.
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkSafePhrase(ctx, ssmClient)
+		return checkSafePhrase(ctx, ssmClient, cfg.GetSsmPrefix())
 	})
 
 	// Stale KMS keys check.
@@ -2104,7 +2107,7 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 			}
 		}
 		r := checkSlackTokenValidity(ctx, slackSSMStore, slackRegion,
-			slackKeyLoader, slackpkg.PostToBridge)
+			slackKeyLoader, slackpkg.PostToBridge, cfg.GetSsmPrefix())
 		// Demote ERROR to WARN so Slack issues never fail km doctor.
 		if r.Status == CheckError {
 			r.Status = CheckWarn
@@ -2323,8 +2326,9 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	if stateBucket := cfg.GetStateBucket(); stateBucket != "" {
 		listerCfg := awsCfg.Copy()
 		deps.Lister = &doctorSandboxLister{
-			awsCfg: listerCfg,
-			bucket: stateBucket,
+			awsCfg:    listerCfg,
+			bucket:    stateBucket,
+			tableName: cfg.GetSandboxTableName(),
 		}
 	}
 
@@ -2339,7 +2343,7 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	})
 	deps.SlackScanner = &doctorSlackMetadataScanner{
 		client:    dynamodb.NewFromConfig(awsCfg),
-		tableName: "km-sandboxes",
+		tableName: cfg.GetSandboxTableName(),
 	}
 	deps.SlackEC2Lister = &doctorEC2InstanceLister{
 		client: ec2.NewFromConfig(awsCfg),
@@ -2350,7 +2354,7 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	deps.SlackInboundSQS = sqs.NewFromConfig(awsCfg)
 	ddbClientForInbound := dynamodb.NewFromConfig(awsCfg)
 	deps.SlackListSandboxesWithInbound = func(innerCtx context.Context) ([]inboundRow, error) {
-		return listSandboxesWithInboundImpl(innerCtx, ddbClientForInbound, "km-sandboxes")
+		return listSandboxesWithInboundImpl(innerCtx, ddbClientForInbound, cfg.GetSandboxTableName())
 	}
 	// Derive the resource prefix directly via the interface (Phase 66: GetResourcePrefix
 	// is now part of DoctorConfigProvider — no type-assert needed).
@@ -2358,7 +2362,7 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	// SlackAuthTestScopes calls Slack auth.test and returns the OAuth scopes.
 	deps.SlackAuthTestScopes = func(innerCtx context.Context) ([]string, error) {
 		token, tokenErr := ssmClientForSlack.GetParameter(innerCtx, &ssm.GetParameterInput{
-			Name:           awssdk.String("/km/slack/bot-token"),
+			Name:           awssdk.String(cfg.GetSsmPrefix() + "slack/bot-token"),
 			WithDecryption: awssdk.Bool(true),
 		})
 		if tokenErr != nil {
@@ -2393,12 +2397,17 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 
 // doctorSandboxLister wraps the real AWS lister for the doctor command.
 type doctorSandboxLister struct {
-	awsCfg awssdk.Config
-	bucket string
+	awsCfg    awssdk.Config
+	bucket    string
+	tableName string
 }
 
 func (l *doctorSandboxLister) ListSandboxes(ctx context.Context, useTagScan bool) ([]kmaws.SandboxRecord, error) {
-	inner := newRealLister(l.awsCfg, l.bucket, "km-sandboxes")
+	tableName := l.tableName
+	if tableName == "" {
+		tableName = "km-sandboxes"
+	}
+	inner := newRealLister(l.awsCfg, l.bucket, tableName)
 	return inner.ListSandboxes(ctx, useTagScan)
 }
 

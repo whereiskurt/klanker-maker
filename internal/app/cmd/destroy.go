@@ -94,12 +94,8 @@ func NewDestroyCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) 
 			if remote {
 				remoteAWSCfg, remoteAWSErr := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
 				if remoteAWSErr == nil {
-					tableName := cfg.SandboxTableName
-					if tableName == "" {
-						tableName = "km-sandboxes"
-					}
 					dynClient := dynamodbpkg.NewFromConfig(remoteAWSCfg)
-					if meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynClient, tableName, sandboxID); metaErr == nil {
+					if meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynClient, cfg.GetSandboxTableName(), sandboxID); metaErr == nil {
 						if meta.Substrate == "docker" {
 							remote = false
 							fmt.Printf("  [info] Docker substrate — destroying locally\n")
@@ -176,12 +172,8 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool, ve
 	// Docker sandboxes have no AWS-tagged EC2/ECS resources, so tag lookup would fail.
 	// Primary: DynamoDB; fallback: S3 on ResourceNotFoundException.
 	{
-		tableName := cfg.SandboxTableName
-		if tableName == "" {
-			tableName = "km-sandboxes"
-		}
 		dynamoClientEarly := dynamodbpkg.NewFromConfig(awsCfg)
-		meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClientEarly, tableName, sandboxID)
+		meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClientEarly, cfg.GetSandboxTableName(), sandboxID)
 		if metaErr != nil {
 			var rnf *dynamodbtypes.ResourceNotFoundException
 			if errors.As(metaErr, &rnf) {
@@ -439,7 +431,7 @@ locals {
 		identityDynClient := dynamodbpkg.NewFromConfig(awsCfg)
 		identityTableName := cfg.IdentityTableName
 		if identityTableName == "" {
-			identityTableName = "km-identities"
+			identityTableName = cfg.GetResourcePrefix() + "-identities"
 		}
 		if identErr := awspkg.CleanupSandboxIdentity(ctx, identitySSMClient, identityDynClient, identityTableName, sandboxID); identErr != nil {
 			log.Warn().Err(identErr).Str("sandbox_id", sandboxID).
@@ -451,11 +443,8 @@ locals {
 
 	// Step 12: Delete sandbox metadata from DynamoDB (with S3 fallback) so km list no longer shows it.
 	{
-		tableName := cfg.SandboxTableName
-		if tableName == "" {
-			tableName = "km-sandboxes"
-		}
 		dynamoClientDel := dynamodbpkg.NewFromConfig(awsCfg)
+		tableName := cfg.GetSandboxTableName()
 		// Read existing metadata to check for alias AND for Slack teardown — non-fatal if read fails.
 		if existingMeta, readErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClientDel, tableName, sandboxID); readErr == nil {
 			if existingMeta.Alias != "" {
@@ -693,7 +682,7 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 		identityDynClient := dynamodbpkg.NewFromConfig(awsCfg)
 		identityTableName := cfg.IdentityTableName
 		if identityTableName == "" {
-			identityTableName = "km-identities"
+			identityTableName = cfg.GetResourcePrefix() + "-identities"
 		}
 		if identErr := awspkg.CleanupSandboxIdentity(ctx, identitySSMClient, identityDynClient, identityTableName, sandboxID); identErr != nil {
 			log.Warn().Err(identErr).Str("sandbox_id", sandboxID).
@@ -703,11 +692,8 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 
 	// Step DD4: Delete sandbox metadata from DynamoDB (and S3 fallback).
 	{
-		tableName := cfg.SandboxTableName
-		if tableName == "" {
-			tableName = "km-sandboxes"
-		}
 		dynamoClientDD := dynamodbpkg.NewFromConfig(awsCfg)
+		tableName := cfg.GetSandboxTableName()
 		if delErr := awspkg.DeleteSandboxMetadataDynamo(ctx, dynamoClientDD, tableName, sandboxID); delErr != nil {
 			var rnf *dynamodbtypes.ResourceNotFoundException
 			if !errors.As(delErr, &rnf) {

@@ -130,16 +130,12 @@ func runBudgetAdd(cmd *cobra.Command, cfg *config.Config, budgetClient kmaws.Bud
 		budgetClient = dynamodb.NewFromConfig(awsCfg)
 		ec2Client = ec2.NewFromConfig(awsCfg)
 		iamClient = iam.NewFromConfig(awsCfg)
-		tableName := cfg.SandboxTableName
-		if tableName == "" {
-			tableName = "km-sandboxes"
-		}
-		metaFetcher = &realMetaFetcher{awsCfg: awsCfg, bucket: cfg.StateBucket, tableName: tableName}
+		metaFetcher = &realMetaFetcher{awsCfg: awsCfg, bucket: cfg.StateBucket, tableName: cfg.GetSandboxTableName()}
 	}
 
 	tableName := cfg.BudgetTableName
 	if tableName == "" {
-		tableName = "km-budgets"
+		tableName = cfg.GetResourcePrefix() + "-budgets"
 	}
 
 	// Step 1: Read current limits from DynamoDB

@@ -400,6 +400,18 @@ func (c *Config) GetSlackStreamMessagesTableName() string {
 	return c.GetResourcePrefix() + "-slack-stream-messages"
 }
 
+// GetSandboxTableName returns the DynamoDB sandboxes table name.
+// Derives from GetResourcePrefix() + "-sandboxes", defaulting to "km-sandboxes".
+func (c *Config) GetSandboxTableName() string {
+	if c == nil {
+		return "km-sandboxes"
+	}
+	if c.SandboxTableName != "" {
+		return c.SandboxTableName
+	}
+	return c.GetResourcePrefix() + "-sandboxes"
+}
+
 // awsProfileExists checks whether a named AWS profile is defined in
 // ~/.aws/config or ~/.aws/credentials.
 func awsProfileExists(profile string) bool {

@@ -62,31 +62,32 @@ func checkSlackTokenValidity(
 	region string,
 	keyLoader PrivKeyLoaderFunc,
 	poster BridgePosterFunc,
+	ssmPrefix string,
 ) CheckResult {
-	botToken, _ := ssmStore.Get(ctx, "/km/slack/bot-token", true)
+	botToken, _ := ssmStore.Get(ctx, ssmPrefix+"slack/bot-token", true)
 	if botToken == "" {
 		return CheckResult{
 			Name:    "Slack bot token",
 			Status:  CheckSkipped,
-			Message: "/km/slack/bot-token not configured — Slack integration not set up",
+			Message: ssmPrefix + "slack/bot-token not configured — Slack integration not set up",
 		}
 	}
 
-	bridgeURL, _ := ssmStore.Get(ctx, "/km/slack/bridge-url", false)
+	bridgeURL, _ := ssmStore.Get(ctx, ssmPrefix+"slack/bridge-url", false)
 	if bridgeURL == "" {
 		return CheckResult{
 			Name:    "Slack bot token",
 			Status:  CheckWarn,
-			Message: "/km/slack/bridge-url not configured — run km slack init to deploy the bridge Lambda",
+			Message: ssmPrefix + "slack/bridge-url not configured — run km slack init to deploy the bridge Lambda",
 		}
 	}
 
-	channelID, _ := ssmStore.Get(ctx, "/km/slack/shared-channel-id", false)
+	channelID, _ := ssmStore.Get(ctx, ssmPrefix+"slack/shared-channel-id", false)
 	if channelID == "" {
 		return CheckResult{
 			Name:    "Slack bot token",
 			Status:  CheckWarn,
-			Message: "/km/slack/shared-channel-id not configured — run km slack init",
+			Message: ssmPrefix + "slack/shared-channel-id not configured — run km slack init",
 		}
 	}
 

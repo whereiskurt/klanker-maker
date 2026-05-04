@@ -142,33 +142,29 @@ func runStatus(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, b
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
 		}
-		tableName := cfg.SandboxTableName
-		if tableName == "" {
-			tableName = "km-sandboxes"
-		}
-		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, tableName)
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())
 
 		// Also initialize real budget fetcher if not injected
 		if budgetFetcher == nil {
-			tableName := cfg.BudgetTableName
-			if tableName == "" {
-				tableName = "km-budgets"
+			budgetTableName := cfg.BudgetTableName
+			if budgetTableName == "" {
+				budgetTableName = cfg.GetResourcePrefix() + "-budgets"
 			}
 			budgetFetcher = &realBudgetFetcher{
 				client:    dynamodb.NewFromConfig(awsCfg),
-				tableName: tableName,
+				tableName: budgetTableName,
 			}
 		}
 
 		// Also initialize real identity fetcher if not injected
 		if identityFetcher == nil {
-			tableName := cfg.IdentityTableName
-			if tableName == "" {
-				tableName = "km-identities"
+			identityTableName := cfg.IdentityTableName
+			if identityTableName == "" {
+				identityTableName = cfg.GetResourcePrefix() + "-identities"
 			}
 			identityFetcher = &realIdentityFetcher{
 				client:    dynamodb.NewFromConfig(awsCfg),
-				tableName: tableName,
+				tableName: identityTableName,
 			}
 		}
 	}
@@ -203,7 +199,7 @@ func runStatus(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, b
 	}
 	fprintBanner(cmd.OutOrStdout(), "km status", bannerID)
 	isTTY := isTerminal(cmd.OutOrStdout())
-	printSandboxStatus(ctx, cmd, rec, budget, identity, isTTY)
+	printSandboxStatus(ctx, cmd, rec, budget, identity, isTTY, cfg.GetResourcePrefix())
 	return nil
 }
 
@@ -348,7 +344,7 @@ func colorPercent(percent float64, isTTY bool) string {
 }
 
 // printSandboxStatus prints detailed sandbox information including optional budget and identity sections.
-func printSandboxStatus(ctx context.Context, cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *kmaws.BudgetSummary, identity *kmaws.IdentityRecord, isTTY bool) {
+func printSandboxStatus(ctx context.Context, cmd *cobra.Command, rec *kmaws.SandboxRecord, budget *kmaws.BudgetSummary, identity *kmaws.IdentityRecord, isTTY bool, resourcePrefix string) {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "Sandbox ID:  %s\n", rec.SandboxID)
 	if rec.Alias != "" {
@@ -375,7 +371,7 @@ func printSandboxStatus(ctx context.Context, cmd *cobra.Command, rec *kmaws.Sand
 		if idleTimeout == "" {
 			idleTimeout = "15m" // default if not in metadata (old sandboxes)
 		}
-		idleStr := getIdleCountdown(context.Background(), rec.SandboxID, idleTimeout, rec.CreatedAt, isTTY, budget)
+		idleStr := getIdleCountdown(context.Background(), rec.SandboxID, idleTimeout, rec.CreatedAt, isTTY, budget, resourcePrefix)
 		if idleStr != "" {
 			idleLabel := "Idle Kill"
 			if rec.TeardownPolicy == "stop" || rec.TeardownPolicy == "retain" {
@@ -460,12 +456,12 @@ func printSandboxStatus(ctx context.Context, cmd *cobra.Command, rec *kmaws.Sand
 			fmt.Fprintf(out, "  queue depth:  <error: %v>\n", sqsErr)
 		}
 
-		// Thread count from km-slack-threads DDB.
+		// Thread count from {prefix}-slack-threads DDB (Phase 67/68 drift fix Pitfall 10).
 		if rec.SlackChannelID != "" {
 			awsCfg2, ddbErr := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
 			if ddbErr == nil {
 				ddbClient := dynamodb.NewFromConfig(awsCfg2)
-				threadCount, threadErr := countActiveThreads(ctx, ddbClient, "km-slack-threads", rec.SlackChannelID)
+				threadCount, threadErr := countActiveThreads(ctx, ddbClient, resourcePrefix+"-slack-threads", rec.SlackChannelID)
 				if threadErr != nil {
 					fmt.Fprintf(out, "  threads:      <error: %v>\n", threadErr)
 				} else {
@@ -521,8 +517,8 @@ func printSandboxStatus(ctx context.Context, cmd *cobra.Command, rec *kmaws.Sand
 // getIdleCountdown checks CloudWatch audit events and budget AI activity to find
 // the most recent sandbox activity, then returns a countdown string like "12m remaining"
 // colored by urgency. createdAt is the fallback when no activity signals are found.
-func getIdleCountdown(ctx context.Context, sandboxID, idleTimeout string, createdAt time.Time, isTTY bool, budget *kmaws.BudgetSummary) string {
-	remaining := computeIdleRemaining(ctx, sandboxID, idleTimeout, createdAt, budget)
+func getIdleCountdown(ctx context.Context, sandboxID, idleTimeout string, createdAt time.Time, isTTY bool, budget *kmaws.BudgetSummary, resourcePrefix string) string {
+	remaining := computeIdleRemaining(ctx, sandboxID, idleTimeout, createdAt, budget, resourcePrefix)
 	if remaining < 0 {
 		return ""
 	}
@@ -533,7 +529,7 @@ func getIdleCountdown(ctx context.Context, sandboxID, idleTimeout string, create
 // Returns -1 if idle timeout is not configured or cannot be determined.
 // Uses multiple activity signals: CloudWatch audit events, budget AI spend,
 // active SSM sessions, and sandbox creation time as fallback.
-func computeIdleRemaining(ctx context.Context, sandboxID, idleTimeout string, createdAt time.Time, budget *kmaws.BudgetSummary) time.Duration {
+func computeIdleRemaining(ctx context.Context, sandboxID, idleTimeout string, createdAt time.Time, budget *kmaws.BudgetSummary, resourcePrefix string) time.Duration {
 	idleDur, parseErr := time.ParseDuration(idleTimeout)
 	if parseErr != nil || idleDur == 0 {
 		return -1
@@ -579,7 +575,7 @@ func computeIdleRemaining(ctx context.Context, sandboxID, idleTimeout string, cr
 
 	// Signal 2: CloudWatch audit events (shell commands, heartbeats)
 	cwClient := cloudwatchlogs.NewFromConfig(awsCfg)
-	logGroup := "/km/sandboxes/" + sandboxID + "/"
+	logGroup := "/" + resourcePrefix + "/sandboxes/" + sandboxID + "/"
 	events, err := kmaws.GetLogEvents(ctx, cwClient, logGroup, "audit", 10)
 	if err == nil && len(events) > 0 {
 		// Events are returned from the tail; last element is most recent.

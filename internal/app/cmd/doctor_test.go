@@ -335,7 +335,7 @@ func TestCheckGitHubConfig_OK(t *testing.T) {
 			},
 		},
 	}
-	result := checkGitHubConfig(context.Background(), client)
+	result := checkGitHubConfig(context.Background(), client, "/km/")
 	if result.Status != CheckOK {
 		t.Errorf("expected CheckOK, got %s: %s", result.Status, result.Message)
 	}
@@ -356,7 +356,7 @@ func TestCheckGitHubConfig_PerAccountOnly(t *testing.T) {
 			},
 		},
 	}
-	result := checkGitHubConfig(context.Background(), client)
+	result := checkGitHubConfig(context.Background(), client, "/km/")
 	if result.Status != CheckOK {
 		t.Errorf("expected CheckOK for per-account installations, got %s: %s", result.Status, result.Message)
 	}
@@ -380,7 +380,7 @@ func TestCheckGitHubConfig_LegacyOnly(t *testing.T) {
 			},
 		},
 	}
-	result := checkGitHubConfig(context.Background(), client)
+	result := checkGitHubConfig(context.Background(), client, "/km/")
 	if result.Status != CheckOK {
 		t.Errorf("expected CheckOK for legacy installation-id, got %s: %s", result.Status, result.Message)
 	}
@@ -406,7 +406,7 @@ func TestCheckGitHubConfig_BothPerAccountAndLegacy(t *testing.T) {
 			},
 		},
 	}
-	result := checkGitHubConfig(context.Background(), client)
+	result := checkGitHubConfig(context.Background(), client, "/km/")
 	if result.Status != CheckOK {
 		t.Errorf("expected CheckOK when both exist, got %s: %s", result.Status, result.Message)
 	}
@@ -424,7 +424,7 @@ func TestCheckGitHubConfig_NeitherPerAccountNorLegacy(t *testing.T) {
 			},
 		},
 	}
-	result := checkGitHubConfig(context.Background(), client)
+	result := checkGitHubConfig(context.Background(), client, "/km/")
 	if result.Status != CheckWarn {
 		t.Errorf("expected CheckWarn when no installations exist, got %s: %s", result.Status, result.Message)
 	}
@@ -435,7 +435,7 @@ func TestCheckGitHubConfig_NotConfigured(t *testing.T) {
 	client := &mockSSMReadClient{
 		err: &ssmtypes.ParameterNotFound{},
 	}
-	result := checkGitHubConfig(context.Background(), client)
+	result := checkGitHubConfig(context.Background(), client, "/km/")
 	// Missing GitHub config is WARN (not ERROR) — GitHub integration is optional
 	if result.Status != CheckWarn {
 		t.Errorf("expected CheckWarn for missing GitHub config, got %s", result.Status)
@@ -640,6 +640,7 @@ func (c *testConfig) GetResourcePrefix() string        { return "km" }
 func (c *testConfig) GetEmailDomain() string           { return "sandboxes.klankermaker.ai" }
 func (c *testConfig) GetSsmPrefix() string             { return "/km/" }
 func (c *testConfig) GetSlackThreadsTableName() string { return "km-slack-threads" }
+func (c *testConfig) GetSandboxTableName() string      { return "km-sandboxes" }
 
 // =============================================================================
 // Tests: DoctorCmd (Task 2)
@@ -823,6 +824,7 @@ func (c *testDoctorConfig) GetResourcePrefix() string        { return "km" }
 func (c *testDoctorConfig) GetEmailDomain() string           { return "sandboxes.klankermaker.ai" }
 func (c *testDoctorConfig) GetSsmPrefix() string             { return "/km/" }
 func (c *testDoctorConfig) GetSlackThreadsTableName() string { return "km-slack-threads" }
+func (c *testDoctorConfig) GetSandboxTableName() string      { return "km-sandboxes" }
 
 func allOKDeps() *DoctorDeps {
 	return &DoctorDeps{
@@ -1016,7 +1018,7 @@ func TestCheckCredentialRotationAge_AllFresh(t *testing.T) {
 			"/km/config/github/app-client-id": makeSSMParamOutput("/km/config/github/app-client-id", freshTime),
 		},
 	}
-	result := checkCredentialRotationAge(context.Background(), client, 90)
+	result := checkCredentialRotationAge(context.Background(), client, 90, "/km/")
 	if result.Status != CheckOK {
 		t.Errorf("expected CheckOK for fresh creds, got %s: %s", result.Status, result.Message)
 	}
@@ -1034,7 +1036,7 @@ func TestCheckCredentialRotationAge_OneStale(t *testing.T) {
 			"/km/config/github/app-client-id": makeSSMParamOutput("/km/config/github/app-client-id", freshTime),
 		},
 	}
-	result := checkCredentialRotationAge(context.Background(), client, 90)
+	result := checkCredentialRotationAge(context.Background(), client, 90, "/km/")
 	if result.Status != CheckWarn {
 		t.Errorf("expected CheckWarn for stale cred, got %s: %s", result.Status, result.Message)
 	}
@@ -1057,7 +1059,7 @@ func TestCheckCredentialRotationAge_BothStale(t *testing.T) {
 			"/km/config/github/app-client-id": makeSSMParamOutput("/km/config/github/app-client-id", staleTime),
 		},
 	}
-	result := checkCredentialRotationAge(context.Background(), client, 90)
+	result := checkCredentialRotationAge(context.Background(), client, 90, "/km/")
 	if result.Status != CheckWarn {
 		t.Errorf("expected CheckWarn for both stale, got %s: %s", result.Status, result.Message)
 	}
@@ -1074,7 +1076,7 @@ func TestCheckCredentialRotationAge_ParamNotFound(t *testing.T) {
 	client := &mockSSMReadClient{
 		outputs: map[string]*ssm.GetParameterOutput{},
 	}
-	result := checkCredentialRotationAge(context.Background(), client, 90)
+	result := checkCredentialRotationAge(context.Background(), client, 90, "/km/")
 	if result.Status != CheckOK {
 		t.Errorf("expected CheckOK when params are missing (graceful skip), got %s: %s", result.Status, result.Message)
 	}
@@ -1096,7 +1098,7 @@ func TestCheckCredentialRotationAge_ChecksBothParams(t *testing.T) {
 		},
 	}
 	_ = calledParams
-	result := checkCredentialRotationAge(context.Background(), client, 90)
+	result := checkCredentialRotationAge(context.Background(), client, 90, "/km/")
 	// Both found and fresh → OK confirms both were checked.
 	if result.Status != CheckOK {
 		t.Errorf("expected CheckOK when both params present and fresh, got %s", result.Status)
@@ -1444,7 +1446,7 @@ func TestCheckSlackTokenValidity_NotConfigured_Skipped(t *testing.T) {
 	ssm := &mockSlackSSMStore{params: map[string]string{}} // no bot-token
 	keyLoader := func(_ context.Context, _ string) (ed25519key.PrivateKey, error) { return nil, nil }
 	poster := &mockSlackBridgePoster{}
-	r := checkSlackTokenValidity(context.Background(), ssm, "us-east-1", keyLoader, poster.post)
+	r := checkSlackTokenValidity(context.Background(), ssm, "us-east-1", keyLoader, poster.post, "/km/")
 	if r.Status != CheckSkipped {
 		t.Errorf("expected SKIPPED, got %s: %s", r.Status, r.Message)
 	}
@@ -1458,7 +1460,7 @@ func TestCheckSlackTokenValidity_NoBridgeURL_Warn(t *testing.T) {
 	}}
 	keyLoader := func(_ context.Context, _ string) (ed25519key.PrivateKey, error) { return nil, nil }
 	poster := &mockSlackBridgePoster{}
-	r := checkSlackTokenValidity(context.Background(), ssm, "us-east-1", keyLoader, poster.post)
+	r := checkSlackTokenValidity(context.Background(), ssm, "us-east-1", keyLoader, poster.post, "/km/")
 	if r.Status != CheckWarn {
 		t.Errorf("expected WARN, got %s: %s", r.Status, r.Message)
 	}
@@ -1474,7 +1476,7 @@ func TestCheckSlackTokenValidity_BridgeReturnsOK_StatusOK(t *testing.T) {
 	}}
 	keyLoader := func(_ context.Context, _ string) (ed25519key.PrivateKey, error) { return priv, nil }
 	poster := &mockSlackBridgePoster{resp: &slackpkg.PostResponse{OK: true, TS: "123.456"}}
-	r := checkSlackTokenValidity(context.Background(), ssm, "us-east-1", keyLoader, poster.post)
+	r := checkSlackTokenValidity(context.Background(), ssm, "us-east-1", keyLoader, poster.post, "/km/")
 	if r.Status != CheckOK {
 		t.Errorf("expected OK, got %s: %s", r.Status, r.Message)
 	}
@@ -1490,7 +1492,7 @@ func TestCheckSlackTokenValidity_BridgeReturns401_Warn(t *testing.T) {
 	}}
 	keyLoader := func(_ context.Context, _ string) (ed25519key.PrivateKey, error) { return priv, nil }
 	poster := &mockSlackBridgePoster{resp: &slackpkg.PostResponse{OK: false, Error: "invalid_auth"}}
-	r := checkSlackTokenValidity(context.Background(), ssm, "us-east-1", keyLoader, poster.post)
+	r := checkSlackTokenValidity(context.Background(), ssm, "us-east-1", keyLoader, poster.post, "/km/")
 	if r.Status != CheckWarn {
 		t.Errorf("expected WARN, got %s: %s", r.Status, r.Message)
 	}
@@ -1506,7 +1508,7 @@ func TestCheckSlackTokenValidity_BridgeReturns5xx_Error(t *testing.T) {
 	}}
 	keyLoader := func(_ context.Context, _ string) (ed25519key.PrivateKey, error) { return priv, nil }
 	poster := &mockSlackBridgePoster{err: errors.New("connection refused")}
-	r := checkSlackTokenValidity(context.Background(), ssm, "us-east-1", keyLoader, poster.post)
+	r := checkSlackTokenValidity(context.Background(), ssm, "us-east-1", keyLoader, poster.post, "/km/")
 	if r.Status != CheckError {
 		t.Errorf("expected ERROR, got %s: %s", r.Status, r.Message)
 	}

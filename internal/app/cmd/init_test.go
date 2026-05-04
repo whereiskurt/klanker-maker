@@ -452,7 +452,7 @@ func (f *fakeLambdaUpdater) UpdateFunctionConfiguration(
 // FunctionName="km-slack-bridge" and includes TOKEN_ROTATION_TS env var.
 func TestSlackBridgeColdStart_TargetsCorrectFunction(t *testing.T) {
 	f := &fakeLambdaUpdater{}
-	if err := cmd.ForceSlackBridgeColdStartWith(context.Background(), f); err != nil {
+	if err := cmd.ForceSlackBridgeColdStartWith(context.Background(), f, "km-slack-bridge"); err != nil {
 		t.Fatalf("ForceSlackBridgeColdStartWith: %v", err)
 	}
 	if f.lastInput == nil {
@@ -474,7 +474,7 @@ func TestSlackBridgeColdStart_TargetsCorrectFunction(t *testing.T) {
 func TestSlackBridgeColdStart_PropagatesError(t *testing.T) {
 	wantErr := errors.New("AccessDeniedException")
 	f := &fakeLambdaUpdater{err: wantErr}
-	if err := cmd.ForceSlackBridgeColdStartWith(context.Background(), f); err != wantErr {
+	if err := cmd.ForceSlackBridgeColdStartWith(context.Background(), f, "km-slack-bridge"); err != wantErr {
 		t.Errorf("got err %v; want %v", err, wantErr)
 	}
 }
