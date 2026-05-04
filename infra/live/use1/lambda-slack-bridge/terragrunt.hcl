@@ -72,6 +72,9 @@ inputs = {
   nonces_table_arn      = dependency.nonces.outputs.table_arn
   kms_key_arn           = get_env("KM_PLATFORM_KMS_KEY_ARN", "")
   bot_token_path        = "/km/slack/bot-token"
+  # Phase 68: bridge needs S3 read access to fetch transcripts/* objects
+  # uploaded by the sandbox-side hook before forwarding to Slack files.upload.
+  artifacts_bucket      = get_env("KM_ARTIFACTS_BUCKET", "")
   tags = {
     "km:component" = "slack-bridge"
     "km:managed"   = "true"
