@@ -133,6 +133,54 @@ func getEmailDomain() string {
 	return "sandboxes.klankermaker.ai"
 }
 
+// sandboxTableName returns the DynamoDB sandbox table name from the KM_SANDBOX_TABLE_NAME env var.
+func sandboxTableName() string {
+	if v := os.Getenv("KM_SANDBOX_TABLE_NAME"); v != "" {
+		return v
+	}
+	return "km-sandboxes"
+}
+
+// budgetTableName returns the DynamoDB budget table name from the KM_BUDGET_TABLE env var.
+func budgetTableName() string {
+	if v := os.Getenv("KM_BUDGET_TABLE"); v != "" {
+		return v
+	}
+	return "km-budgets"
+}
+
+// schedulesTableName returns the DynamoDB schedules table name from the KM_SCHEDULES_TABLE env var.
+func schedulesTableName() string {
+	if v := os.Getenv("KM_SCHEDULES_TABLE"); v != "" {
+		return v
+	}
+	return "km-schedules"
+}
+
+// ttlHandlerName returns the TTL handler Lambda function name from the KM_TTL_HANDLER_NAME env var.
+func ttlHandlerName() string {
+	if v := os.Getenv("KM_TTL_HANDLER_NAME"); v != "" {
+		return v
+	}
+	return "km-ttl-handler"
+}
+
+// ttlSchedulerRole returns the TTL scheduler IAM role name from the KM_TTL_SCHEDULER_ROLE env var.
+func ttlSchedulerRole() string {
+	if v := os.Getenv("KM_TTL_SCHEDULER_ROLE"); v != "" {
+		return v
+	}
+	return "km-ttl-scheduler"
+}
+
+// atGroupName returns the EventBridge schedule group name from the KM_AT_GROUP_NAME env var.
+func atGroupName() string {
+	if v := os.Getenv("KM_AT_GROUP_NAME"); v != "" {
+		return v
+	}
+	return "km-at"
+}
+
 // HandleTTLEvent is the Lambda handler method. It is called by lambdaruntime.Start in main().
 func (h *TTLHandler) HandleTTLEvent(ctx context.Context, event TTLEvent) error {
 	if event.SandboxID == "" {
@@ -357,11 +405,11 @@ func (h *TTLHandler) handleResume(ctx context.Context, event TTLEvent) error {
 				// Discover Lambda ARN and scheduler role.
 				lambdaClient := lambdapkg.NewFromConfig(awsCfg)
 				fnOut, fnErr := lambdaClient.GetFunction(ctx, &lambdapkg.GetFunctionInput{
-					FunctionName: awssdk.String("km-ttl-handler"),
+					FunctionName: awssdk.String(ttlHandlerName()),
 				})
 				iamClient := iampkg.NewFromConfig(awsCfg)
 				roleOut, roleErr := iamClient.GetRole(ctx, &iampkg.GetRoleInput{
-					RoleName: awssdk.String("km-ttl-scheduler"),
+					RoleName: awssdk.String(ttlSchedulerRole()),
 				})
 
 				if fnErr == nil && roleErr == nil {
@@ -416,14 +464,11 @@ func (h *TTLHandler) handleBudgetAdd(ctx context.Context, event TTLEvent) error 
 		return fmt.Errorf("load AWS config: %w", err)
 	}
 	dynamoClient := dynamodbpkg.NewFromConfig(awsCfg)
-	budgetTableName := os.Getenv("KM_BUDGET_TABLE")
-	if budgetTableName == "" {
-		budgetTableName = "km-budgets"
-	}
+	budgetTbl := budgetTableName()
 
 	// Atomic increment of budget limits via UpdateItem ADD expression
 	update := &dynamodbpkg.UpdateItemInput{
-		TableName: awssdk.String(budgetTableName),
+		TableName: awssdk.String(budgetTbl),
 		Key: map[string]dynamodbtypes.AttributeValue{
 			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: event.SandboxID},
 			"sk":         &dynamodbtypes.AttributeValueMemberS{Value: "budget"},
@@ -643,7 +688,7 @@ func (h *TTLHandler) handleScheduleCreate(ctx context.Context, event TTLEvent) e
 
 	schedInput := &scheduler.CreateScheduleInput{
 		Name:                       awssdk.String(scheduleName),
-		GroupName:                  awssdk.String("km-at"),
+		GroupName:                  awssdk.String(atGroupName()),
 		ScheduleExpression:         awssdk.String(spec.Expression),
 		ScheduleExpressionTimezone: awssdk.String("UTC"),
 		Target: &schedulertypes.Target{
@@ -661,11 +706,8 @@ func (h *TTLHandler) handleScheduleCreate(ctx context.Context, event TTLEvent) e
 		return fmt.Errorf("create schedule: %w", err)
 	}
 
-	// Save record to km-schedules so km at list shows it.
-	schedTableName := os.Getenv("KM_SCHEDULES_TABLE")
-	if schedTableName == "" {
-		schedTableName = "km-schedules"
-	}
+	// Save record to the schedules table so km at list shows it.
+	schedTableName := schedulesTableName()
 	rec := awspkg.ScheduleRecord{
 		ScheduleName: scheduleName,
 		Command:      "create",
@@ -717,14 +759,14 @@ func (h *TTLHandler) handleExtend(ctx context.Context, event TTLEvent) error {
 	awsCfg, _ := awspkg.LoadAWSConfig(ctx, "")
 	lambdaClient := lambdapkg.NewFromConfig(awsCfg)
 	fnOut, fnErr := lambdaClient.GetFunction(ctx, &lambdapkg.GetFunctionInput{
-		FunctionName: awssdk.String("km-ttl-handler"),
+		FunctionName: awssdk.String(ttlHandlerName()),
 	})
 	if fnErr != nil {
 		return fmt.Errorf("discover Lambda ARN: %w", fnErr)
 	}
 	iamClient := iampkg.NewFromConfig(awsCfg)
 	roleOut, roleErr := iamClient.GetRole(ctx, &iampkg.GetRoleInput{
-		RoleName: awssdk.String("km-ttl-scheduler"),
+		RoleName: awssdk.String(ttlSchedulerRole()),
 	})
 	if roleErr != nil {
 		return fmt.Errorf("discover scheduler role: %w", roleErr)
@@ -1067,7 +1109,11 @@ module "sandbox" {
 	// Also clean up budget-enforcer state file from S3.
 	if h.StateBucket != "" {
 		// Also clean up budget-enforcer state file
-		budgetStateKey := fmt.Sprintf("tf-km/sandboxes/%s/budget-enforcer/terraform.tfstate", sandboxID)
+		stateKeyPrefix := h.StatePrefix
+		if stateKeyPrefix == "" {
+			stateKeyPrefix = "tf-km"
+		}
+		budgetStateKey := fmt.Sprintf("%s/sandboxes/%s/budget-enforcer/terraform.tfstate", stateKeyPrefix, sandboxID)
 		h.S3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
 			Bucket: awssdk.String(h.StateBucket),
 			Key:    awssdk.String(budgetStateKey),
@@ -1407,15 +1453,8 @@ func main() {
 		region = "us-east-1"
 	}
 
-	sandboxTableName := os.Getenv("SANDBOX_TABLE_NAME")
-	if sandboxTableName == "" {
-		sandboxTableName = "km-sandboxes"
-	}
-
-	budgetTable := os.Getenv("KM_BUDGET_TABLE")
-	if budgetTable == "" {
-		budgetTable = "km-budgets"
-	}
+	sandboxTbl := sandboxTableName()
+	budgetTbl := budgetTableName()
 
 	s3Client := s3.NewFromConfig(awsCfg)
 	dynamoClient := dynamodbpkg.NewFromConfig(awsCfg)
@@ -1423,7 +1462,7 @@ func main() {
 	h := &TTLHandler{
 		S3Client:         s3Client,
 		DynamoClient:     dynamoClient,
-		SandboxTableName: sandboxTableName,
+		SandboxTableName: sandboxTbl,
 		SESClient:        sesv2.NewFromConfig(awsCfg),
 		Scheduler:        scheduler.NewFromConfig(awsCfg),
 		CWClient:         cloudwatchlogs.NewFromConfig(awsCfg),
@@ -1437,7 +1476,7 @@ func main() {
 		Domain:           domain,
 		// BudgetClient reuses the existing DynamoDB client — no second client construction.
 		BudgetClient: dynamoClient,
-		BudgetTable:  budgetTable,
+		BudgetTable:  budgetTbl,
 		TeardownFunc: nil, // set below
 	}
 

@@ -100,6 +100,22 @@ func getEmailDomain() string {
 	return "sandboxes.klankermaker.ai"
 }
 
+// sandboxTableName returns the DynamoDB sandbox table name from the KM_SANDBOX_TABLE_NAME env var.
+func sandboxTableName() string {
+	if v := os.Getenv("KM_SANDBOX_TABLE_NAME"); v != "" {
+		return v
+	}
+	return "km-sandboxes"
+}
+
+// identitiesTable returns the DynamoDB identities table name from the KM_IDENTITIES_TABLE env var.
+func identitiesTable() string {
+	if v := os.Getenv("KM_IDENTITIES_TABLE"); v != "" {
+		return v
+	}
+	return "km-identities"
+}
+
 // Handle is the Lambda handler method. EventBridge Rules deliver the full envelope;
 // the CreateEvent payload is inside the Detail field as a JSON string.
 func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEvent) error {
@@ -270,7 +286,7 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 
 				identityTableName := h.IdentityTableName
 				if identityTableName == "" {
-					identityTableName = "km-identities"
+					identityTableName = identitiesTable()
 				}
 				identityEmailAddr := fmt.Sprintf("%s@%s", event.SandboxID, emailDomain)
 				signing := parsedProfile.Spec.Email.Signing
@@ -448,16 +464,6 @@ func main() {
 		toolchainDir = "/tmp/toolchain"
 	}
 
-	tableName := os.Getenv("KM_SANDBOX_TABLE")
-	if tableName == "" {
-		tableName = "km-sandboxes"
-	}
-
-	identityTableName := os.Getenv("KM_IDENTITY_TABLE")
-	if identityTableName == "" {
-		identityTableName = "km-identities"
-	}
-
 	dynClient := awsdynamodb.NewFromConfig(awsCfg)
 	h := &CreateHandler{
 		S3Client:          s3.NewFromConfig(awsCfg),
@@ -465,8 +471,8 @@ func main() {
 		DynamoClient:      dynClient,
 		SSMClient:         ssm.NewFromConfig(awsCfg),
 		IdentityClient:    dynClient,
-		TableName:         tableName,
-		IdentityTableName: identityTableName,
+		TableName:         sandboxTableName(),
+		IdentityTableName: identitiesTable(),
 		Domain:            domain,
 		ToolchainDir:      toolchainDir,
 	}

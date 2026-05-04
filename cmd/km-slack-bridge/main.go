@@ -66,7 +66,7 @@ func init() {
 	ssmc := ssm.NewFromConfig(cfg)
 
 	identitiesTable := envOr("KM_IDENTITIES_TABLE", "km-identities")
-	sandboxesTable := envOr("KM_SANDBOXES_TABLE", "km-sandboxes")
+	sandboxesTable := envOr("KM_SANDBOX_TABLE_NAME", "km-sandboxes")
 	nonceTable := envOr("KM_NONCE_TABLE", "km-slack-bridge-nonces")
 	botTokenPath := envOr("KM_BOT_TOKEN_PATH", "/km/slack/bot-token")
 
@@ -158,7 +158,7 @@ func init() {
 		slog.Warn("km-slack-bridge: KM_SLACK_THREADS_TABLE not set; defaulting to km-slack-threads (Phase 67 inbound path)")
 	}
 	slog.Info("km-slack-bridge: cold start",
-		"KM_SANDBOXES_TABLE", sandboxesTable,
+		"KM_SANDBOX_TABLE_NAME", sandboxesTable,
 		"KM_SLACK_THREADS_TABLE", threadsTable,
 		"KM_SIGNING_SECRET_PATH", signingSecretPath,
 		"KM_SLACK_ACK_EMOJI", envOr("KM_SLACK_ACK_EMOJI", "eyes"),

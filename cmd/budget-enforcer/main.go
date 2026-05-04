@@ -128,6 +128,22 @@ func getEmailDomain() string {
 	return "sandboxes.klankermaker.ai"
 }
 
+// sandboxTableName returns the DynamoDB sandbox table name from the KM_SANDBOX_TABLE_NAME env var.
+func sandboxTableName() string {
+	if v := os.Getenv("KM_SANDBOX_TABLE_NAME"); v != "" {
+		return v
+	}
+	return "km-sandboxes"
+}
+
+// budgetTableName returns the DynamoDB budget table name from the KM_BUDGET_TABLE env var.
+func budgetTableName() string {
+	if v := os.Getenv("KM_BUDGET_TABLE"); v != "" {
+		return v
+	}
+	return "km-budgets"
+}
+
 // HandleBudgetCheck is the Lambda handler method.
 func (h *BudgetHandler) HandleBudgetCheck(ctx context.Context, event BudgetCheckEvent) error {
 	if event.SandboxID == "" {
@@ -642,16 +658,9 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to load AWS config")
 	}
 
-	budgetTable := os.Getenv("KM_BUDGET_TABLE")
-	if budgetTable == "" {
-		budgetTable = "km-budgets"
-	}
 	emailDomain := getEmailDomain()
-
-	sandboxTable := os.Getenv("KM_SANDBOX_TABLE")
-	if sandboxTable == "" {
-		sandboxTable = "km-sandboxes"
-	}
+	budgetTable := budgetTableName()
+	sandboxTable := sandboxTableName()
 	stateBucket := os.Getenv("KM_STATE_BUCKET")
 
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)

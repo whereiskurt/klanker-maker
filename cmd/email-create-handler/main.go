@@ -105,6 +105,23 @@ type SESEmailAPI interface {
 
 // ---- handler ----
 
+// sandboxTableName returns the DynamoDB sandbox table name from the KM_SANDBOX_TABLE_NAME env var.
+func sandboxTableName() string {
+	if v := os.Getenv("KM_SANDBOX_TABLE_NAME"); v != "" {
+		return v
+	}
+	return "km-sandboxes"
+}
+
+// ssmConfigPrefix returns the SSM config prefix from the KM_SSM_CONFIG_PREFIX env var.
+// Used for operator-level config paths like remote-create/safe-phrase.
+func ssmConfigPrefix() string {
+	if v := os.Getenv("KM_SSM_PREFIX"); v != "" {
+		return v
+	}
+	return "/km/"
+}
+
 // OperatorEmailHandler processes SES-delivered emails to operator@sandboxes.{domain}.
 type OperatorEmailHandler struct {
 	S3Client          OperatorS3API
@@ -960,12 +977,9 @@ func main() {
 	domain := os.Getenv("KM_EMAIL_DOMAIN")
 	safePhraseKey := os.Getenv("KM_SAFE_PHRASE_SSM_KEY")
 	if safePhraseKey == "" {
-		safePhraseKey = "/km/config/remote-create/safe-phrase"
+		safePhraseKey = ssmConfigPrefix() + "config/remote-create/safe-phrase"
 	}
-	sandboxTableName := os.Getenv("SANDBOX_TABLE_NAME")
-	if sandboxTableName == "" {
-		sandboxTableName = "km-sandboxes"
-	}
+	sandboxTbl := sandboxTableName()
 
 	bedrockModelID := os.Getenv("BEDROCK_MODEL_ID")
 	var bedrockClient BedrockRuntimeAPI
@@ -976,7 +990,7 @@ func main() {
 	h := &OperatorEmailHandler{
 		S3Client:          s3.NewFromConfig(cfg),
 		DynamoClient:      dynamodbpkg.NewFromConfig(cfg),
-		SandboxTableName:  sandboxTableName,
+		SandboxTableName:  sandboxTbl,
 		SSMClient:         ssm.NewFromConfig(cfg),
 		EventBridgeClient: eventbridge.NewFromConfig(cfg),
 		SESClient:         sesv2.NewFromConfig(cfg),

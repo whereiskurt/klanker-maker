@@ -35,12 +35,25 @@ import (
 // SSM config paths
 // ============================================================
 
-const (
-	// ssmPrivateKeyPath is the SSM path for the GitHub App RSA private key PEM.
-	ssmPrivateKeyPath = "/km/config/github/private-key"
-	// ssmAppClientIDPath is the SSM path for the GitHub App client ID (used as JWT issuer).
-	ssmAppClientIDPath = "/km/config/github/app-client-id"
-)
+// githubSsmConfigPrefix returns the SSM path prefix for GitHub App config from the
+// KM_GITHUB_SSM_CONFIG_PREFIX env var. Falls back to "/km/config/github" for
+// un-migrated installs until plan 04 wires the env block.
+func githubSsmConfigPrefix() string {
+	if v := os.Getenv("KM_GITHUB_SSM_CONFIG_PREFIX"); v != "" {
+		return v
+	}
+	return "/km/config/github"
+}
+
+// ssmPrivateKeyPath returns the SSM path for the GitHub App RSA private key PEM.
+func ssmPrivateKeyPath() string {
+	return githubSsmConfigPrefix() + "/private-key"
+}
+
+// ssmAppClientIDPath returns the SSM path for the GitHub App client ID.
+func ssmAppClientIDPath() string {
+	return githubSsmConfigPrefix() + "/app-client-id"
+}
 
 // ============================================================
 // Narrow SSM GetParameter interface
@@ -86,20 +99,22 @@ func main() {
 	ssmClient := ssm.NewFromConfig(awsCfg)
 
 	// Read GitHub App credentials from SSM at Lambda startup.
-	// These are operator-level secrets stored at /km/config/github/ prefix.
-	privateKeyPEM, err := readSSMSecret(ctx, ssmClient, ssmPrivateKeyPath)
+	// These are operator-level secrets stored at the KM_GITHUB_SSM_CONFIG_PREFIX prefix.
+	pkPath := ssmPrivateKeyPath()
+	privateKeyPEM, err := readSSMSecret(ctx, ssmClient, pkPath)
 	if err != nil {
 		slog.Error("failed to read GitHub App private key from SSM",
-			slog.String("path", ssmPrivateKeyPath),
+			slog.String("path", pkPath),
 			slog.String("error", err.Error()),
 		)
 		os.Exit(1)
 	}
 
-	appClientID, err := readSSMSecret(ctx, ssmClient, ssmAppClientIDPath)
+	cidPath := ssmAppClientIDPath()
+	appClientID, err := readSSMSecret(ctx, ssmClient, cidPath)
 	if err != nil {
 		slog.Error("failed to read GitHub App client ID from SSM",
-			slog.String("path", ssmAppClientIDPath),
+			slog.String("path", cidPath),
 			slog.String("error", err.Error()),
 		)
 		os.Exit(1)
