@@ -55,6 +55,15 @@ type S3ListAPI interface {
 	GetObject(ctx context.Context, input *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 }
 
+// S3CleanupAPI is the narrow interface for destructive S3 operations used by
+// km doctor cleanup (Plan quick-7). Embeds S3ListAPI so callers can pass a
+// single value to checks that both list and delete. The real *s3.Client
+// satisfies this interface directly.
+type S3CleanupAPI interface {
+	S3ListAPI
+	DeleteObjects(ctx context.Context, input *s3.DeleteObjectsInput, opts ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error)
+}
+
 // metadataKey returns the S3 object key for a sandbox's metadata.json.
 // Format: tf-km/sandboxes/<sandbox-id>/metadata.json
 func metadataKey(sandboxID string) string {

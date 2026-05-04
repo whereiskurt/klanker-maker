@@ -124,6 +124,12 @@ type SSMReadAPI interface {
 	GetParametersByPath(ctx context.Context, params *ssm.GetParametersByPathInput, optFns ...func(*ssm.Options)) (*ssm.GetParametersByPathOutput, error)
 }
 
+// SSMDeleterAPI covers SSM DeleteParameter for stale-resource cleanup
+// (Plan quick-7). The real *ssm.Client satisfies this interface directly.
+type SSMDeleterAPI interface {
+	DeleteParameter(ctx context.Context, params *ssm.DeleteParameterInput, optFns ...func(*ssm.Options)) (*ssm.DeleteParameterOutput, error)
+}
+
 // EC2DescribeAPI covers EC2 DescribeVpcs and DescribeSubnets.
 type EC2DescribeAPI interface {
 	DescribeVpcs(ctx context.Context, params *ec2.DescribeVpcsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVpcsOutput, error)
@@ -264,11 +270,16 @@ type DoctorDeps struct {
 	SlackAuthTestScopes func(ctx context.Context) ([]string, error)
 	// SlackResourcePrefix is the resource prefix used to detect stale queues.
 	SlackResourcePrefix string
+	// SlackSSMDeleter (Plan quick-7) is used by the stale-inbound-queues check
+	// to best-effort delete the matching /sandbox/{id}/slack-inbound-queue-url
+	// SSM parameter when --dry-run=false is set. Nil = skip SSM cleanup.
+	SlackSSMDeleter SSMDeleterAPI
 
 	// Slack transcript-streaming health check dependencies (Plan 68-11).
 	// Nil fields cause the corresponding transcript checks to be skipped without error.
-	// SlackTranscriptS3 is the S3 client used for ListObjectsV2 on transcripts/ prefix.
-	SlackTranscriptS3 kmaws.S3ListAPI
+	// SlackTranscriptS3 is the S3 client used for ListObjectsV2 on transcripts/
+	// prefix and (Plan quick-7) for DeleteObjects when --dry-run=false is set.
+	SlackTranscriptS3 kmaws.S3CleanupAPI
 	// SlackListSandboxIDs returns the set of currently-known sandbox IDs (live in DDB).
 	// Used by checkSlackTranscriptStaleObjects to flag orphan S3 prefixes.
 	SlackListSandboxIDs func(ctx context.Context) ([]string, error)
@@ -1979,7 +1990,13 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 
 	if !dryRun {
 		// Show post-cleanup summary for stale resource checks.
-		cleanupChecks := []string{"Stale KMS Keys", "Stale IAM Roles", "Stale Schedules"}
+		cleanupChecks := []string{
+			"Stale KMS Keys",
+			"Stale IAM Roles",
+			"Stale Schedules",
+			"Slack inbound stale queues",
+			"Slack transcript stale objects",
+		}
 		var cleanupLines []string
 		for _, r := range results {
 			for _, name := range cleanupChecks {
@@ -2244,6 +2261,7 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	inboundSQS := deps.SlackInboundSQS
 	listInbound := deps.SlackListSandboxesWithInbound
 	resourcePrefix := deps.SlackResourcePrefix
+	slackSSMDeleter := deps.SlackSSMDeleter
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		r := checkSlackInboundQueueExists(ctx, listInbound, inboundSQS)
 		// Demote ERROR to WARN so Slack issues never fail km doctor.
@@ -2254,7 +2272,7 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	})
 
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkSlackInboundStaleQueues(ctx, listInbound, inboundSQS, resourcePrefix)
+		return checkSlackInboundStaleQueues(ctx, listInbound, inboundSQS, resourcePrefix, dryRun, slackSSMDeleter)
 	})
 
 	slackScopes := deps.SlackAuthTestScopes
@@ -2292,7 +2310,7 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	transcriptBucket := cfg.GetArtifactsBucket()
 	listSandboxIDs := deps.SlackListSandboxIDs
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		r := checkSlackTranscriptStaleObjects(ctx, transcriptS3, transcriptBucket, listSandboxIDs)
+		r := checkSlackTranscriptStaleObjects(ctx, transcriptS3, transcriptBucket, listSandboxIDs, dryRun)
 		if r.Status == CheckError {
 			r.Status = CheckWarn
 		}
@@ -2467,6 +2485,9 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	// Slack inbound health check deps (Plan 67-08).
 	// Wire SQS client, inbound sandbox list, auth-test scopes func.
 	deps.SlackInboundSQS = sqs.NewFromConfig(awsCfg)
+	// Plan quick-7: best-effort SSM DeleteParameter for orphan queue cleanup.
+	// Reuses ssmClientForSlack (already constructed above for the Plan 63-09 wiring).
+	deps.SlackSSMDeleter = ssmClientForSlack
 	ddbClientForInbound := dynamodb.NewFromConfig(awsCfg)
 	deps.SlackListSandboxesWithInbound = func(innerCtx context.Context) ([]inboundRow, error) {
 		return listSandboxesWithInboundImpl(innerCtx, ddbClientForInbound, cfg.GetSandboxTableName())

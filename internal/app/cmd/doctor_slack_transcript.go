@@ -154,9 +154,10 @@ func checkSlackFilesWriteScope(
 //   - WARN: one or more orphan prefixes detected.
 func checkSlackTranscriptStaleObjects(
 	ctx context.Context,
-	s3Client kmaws.S3ListAPI,
+	s3Client kmaws.S3CleanupAPI,
 	bucket string,
 	listSandboxIDs func(context.Context) ([]string, error),
+	dryRun bool,
 ) CheckResult {
 	name := "Slack transcript stale objects"
 	if s3Client == nil || listSandboxIDs == nil {
@@ -173,6 +174,9 @@ func checkSlackTranscriptStaleObjects(
 			Message: "artifacts bucket not configured",
 		}
 	}
+
+	// Plan quick-7: dryRun consumed by Task 2 cleanup body.
+	_ = dryRun
 
 	// List unique sandbox-id prefixes under transcripts/.
 	var prefixes []string

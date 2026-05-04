@@ -98,7 +98,7 @@ func TestDoctor_SlackInboundStaleQueues_FoundOrphans(t *testing.T) {
 			{SandboxID: "sb-a", QueueURL: "https://sqs/km-slack-inbound-sb-a.fifo"},
 		}, nil
 	}
-	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km")
+	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", true, nil)
 	if r.Status != CheckWarn {
 		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
 	}
@@ -122,7 +122,7 @@ func TestDoctor_SlackInboundStaleQueues_AllAccountedFor(t *testing.T) {
 			{SandboxID: "sb-b", QueueURL: "https://sqs/km-slack-inbound-sb-b.fifo"},
 		}, nil
 	}
-	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km")
+	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", true, nil)
 	if r.Status != CheckOK {
 		t.Fatalf("expected OK, got %s (msg=%s)", r.Status, r.Message)
 	}
@@ -138,7 +138,7 @@ func TestDoctor_SlackInboundStaleQueues_NoQueues(t *testing.T) {
 	listInbound := func(_ context.Context) ([]inboundRow, error) {
 		return []inboundRow{}, nil
 	}
-	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km")
+	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", true, nil)
 	if r.Status != CheckOK {
 		t.Fatalf("expected OK, got %s", r.Status)
 	}
@@ -149,7 +149,7 @@ func TestDoctor_SlackInboundStaleQueues_NoQueues(t *testing.T) {
 
 // TestDoctor_SlackInboundStaleQueues_NilDeps: nil deps → SKIPPED.
 func TestDoctor_SlackInboundStaleQueues_NilDeps(t *testing.T) {
-	r := checkSlackInboundStaleQueues(context.Background(), nil, nil, "km")
+	r := checkSlackInboundStaleQueues(context.Background(), nil, nil, "km", true, nil)
 	if r.Status != CheckSkipped {
 		t.Fatalf("expected SKIPPED, got %s", r.Status)
 	}

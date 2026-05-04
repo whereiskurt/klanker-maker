@@ -35,6 +35,12 @@ type fakeS3List struct {
 	pages   []*s3.ListObjectsV2Output
 	listErr error
 	calls   int
+
+	// Plan quick-7: DeleteObjects mock state.
+	deleteObjectsCalls int
+	deleteObjectsKeys  []string
+	deleteObjectsErr   error   // returned for every call when set
+	deleteObjectsErrs  []error // returned per-call (overrides deleteObjectsErr) when index in range
 }
 
 func (f *fakeS3List) ListObjectsV2(_ context.Context, _ *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
@@ -57,6 +63,30 @@ func (f *fakeS3List) ListObjectsV2(_ context.Context, _ *s3.ListObjectsV2Input, 
 // the sandbox-listing code path).
 func (f *fakeS3List) GetObject(_ context.Context, _ *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
 	return nil, errors.New("not implemented in fakeS3List")
+}
+
+// DeleteObjects records the keys passed in each call (Plan quick-7 cleanup
+// path). When deleteObjectsErrs is set, errors are returned per-call (in
+// order); otherwise deleteObjectsErr (single value) is returned for every
+// call. Required so fakeS3List satisfies kmaws.S3CleanupAPI.
+func (f *fakeS3List) DeleteObjects(_ context.Context, in *s3.DeleteObjectsInput, _ ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
+	idx := f.deleteObjectsCalls
+	f.deleteObjectsCalls++
+	if in != nil && in.Delete != nil {
+		for _, o := range in.Delete.Objects {
+			if o.Key != nil {
+				f.deleteObjectsKeys = append(f.deleteObjectsKeys, *o.Key)
+			}
+		}
+	}
+	if idx < len(f.deleteObjectsErrs) {
+		if e := f.deleteObjectsErrs[idx]; e != nil {
+			return nil, e
+		}
+	} else if f.deleteObjectsErr != nil {
+		return nil, f.deleteObjectsErr
+	}
+	return &s3.DeleteObjectsOutput{}, nil
 }
 
 // =============================================================================
@@ -185,7 +215,7 @@ func TestDoctor_SlackTranscriptStaleObjects(t *testing.T) {
 	listIDs := func(_ context.Context) ([]string, error) {
 		return []string{"sb-a", "sb-b"}, nil
 	}
-	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs)
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, true)
 	if r.Status != CheckWarn {
 		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
 	}
@@ -216,7 +246,7 @@ func TestDoctor_SlackTranscriptStaleObjects_AllLive(t *testing.T) {
 	listIDs := func(_ context.Context) ([]string, error) {
 		return []string{"sb-a", "sb-b", "sb-c"}, nil // sb-c has no transcripts yet, that's fine
 	}
-	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs)
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, true)
 	if r.Status != CheckOK {
 		t.Fatalf("expected OK, got %s (msg=%s)", r.Status, r.Message)
 	}
@@ -232,7 +262,7 @@ func TestDoctor_SlackTranscriptStaleObjects_NoPrefixes(t *testing.T) {
 	listIDs := func(_ context.Context) ([]string, error) {
 		return []string{"sb-a"}, nil
 	}
-	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs)
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, true)
 	if r.Status != CheckOK {
 		t.Fatalf("expected OK, got %s", r.Status)
 	}
@@ -246,7 +276,7 @@ func TestDoctor_SlackTranscriptStaleObjects_NoPrefixes(t *testing.T) {
 func TestDoctor_SlackTranscriptStaleObjects_S3Error(t *testing.T) {
 	s3Cli := &fakeS3List{listErr: errors.New("AccessDenied")}
 	listIDs := func(_ context.Context) ([]string, error) { return nil, nil }
-	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs)
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, true)
 	if r.Status != CheckWarn {
 		t.Fatalf("expected WARN on S3 error, got %s", r.Status)
 	}
@@ -257,7 +287,7 @@ func TestDoctor_SlackTranscriptStaleObjects_S3Error(t *testing.T) {
 
 // TestDoctor_SlackTranscriptStaleObjects_NilDeps: nil deps → SKIPPED.
 func TestDoctor_SlackTranscriptStaleObjects_NilDeps(t *testing.T) {
-	r := checkSlackTranscriptStaleObjects(context.Background(), nil, "bucket", nil)
+	r := checkSlackTranscriptStaleObjects(context.Background(), nil, "bucket", nil, true)
 	if r.Status != CheckSkipped {
 		t.Fatalf("expected SKIPPED, got %s", r.Status)
 	}
@@ -267,7 +297,7 @@ func TestDoctor_SlackTranscriptStaleObjects_NilDeps(t *testing.T) {
 func TestDoctor_SlackTranscriptStaleObjects_NoBucket(t *testing.T) {
 	s3Cli := &fakeS3List{}
 	listIDs := func(_ context.Context) ([]string, error) { return nil, nil }
-	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "", listIDs)
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "", listIDs, true)
 	if r.Status != CheckSkipped {
 		t.Fatalf("expected SKIPPED, got %s", r.Status)
 	}

@@ -274,6 +274,8 @@ func checkSlackInboundStaleQueues(
 	listInbound func(context.Context) ([]inboundRow, error),
 	sqsClient kmaws.SQSClient,
 	resourcePrefix string,
+	dryRun bool,
+	ssmDeleter SSMDeleterAPI,
 ) CheckResult {
 	name := "Slack inbound stale queues"
 	if listInbound == nil || sqsClient == nil {
@@ -287,6 +289,10 @@ func checkSlackInboundStaleQueues(
 	if resourcePrefix == "" {
 		resourcePrefix = "km"
 	}
+
+	// Plan quick-7: dryRun + ssmDeleter consumed by Task 2 cleanup body.
+	_ = dryRun
+	_ = ssmDeleter
 
 	// List all queues with the inbound prefix.
 	listOut, listErr := sqsClient.ListQueues(ctx, &sqssvc.ListQueuesInput{
