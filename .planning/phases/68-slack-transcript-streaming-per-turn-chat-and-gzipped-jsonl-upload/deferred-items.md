@@ -295,3 +295,61 @@ Task-tool subagent fan-out where each subagent has its own session.
 **Disposition:** Functional correctness confirmed (each subagent does
 post correctly to its own thread; transcripts upload as expected at
 Stop). UX issue surfaced by operator. Address in Phase 68.1.
+
+## Phase 68.1 candidate — Slack Connect externally-shared channels reject files.completeUploadExternal
+
+**Discovered:** 2026-05-03 during Phase 68 UAT Scenario 1.
+
+**What:** Phase 68's design uses Slack's modern 3-step file upload flow
+(files.getUploadURLExternal → PUT to upload URL → files.completeUploadExternal,
+implemented in pkg/slack/Client.UploadFile per Plan 04). UAT against a
+real per-sandbox Slack Connect channel (`is_ext_shared: true`) reveals
+that `files.completeUploadExternal` returns `internal_error` on the
+final step — silent server-side rejection — even when:
+
+  - The bot is a full member (`is_member: true`)
+  - The bot has `files:write` scope (verified by cold-start probe)
+  - The bot can post regular messages to the same channel via
+    chat.postMessage (Phase 62/63/68 chat paths all work)
+  - The S3 GetObject returns the gzipped transcript correctly
+  - The PUT upload step succeeds (no error)
+
+**Verified:** `auth.test` confirms bot identity. `conversations.info`
+confirms `is_ext_shared: true` and bot in members list. Bridge logs
+show step-1 + step-2 succeed; step-3 returns `internal_error` with no
+further detail.
+
+**Slack platform constraint:** Slack Connect externally-shared channels
+have additional restrictions on bot file uploads via the new API.
+Standard chat.postMessage works because Connect handles message
+sharing across workspaces; file uploads have stricter cross-workspace
+boundary checks.
+
+**Fix options for Phase 68.1:**
+
+1. **Deprecated files.upload fallback**: try files.upload (the v1 API)
+   when files.completeUploadExternal returns internal_error in Connect
+   channels. Trade-off: deprecated API may stop working at any time;
+   adds a code path that's only used in Connect channels.
+
+2. **S3 presigned URL message**: post a chat message with a presigned
+   S3 GET URL instead of a native Slack file attachment. Operator
+   clicks the link to download. Trade-off: leaves Slack's file
+   indexing/preview behind; URL must include auth.
+
+3. **Channel-type detection at create time**: when km create
+   provisions a per-sandbox Slack Connect channel, record the channel
+   type. Bridge ActionUpload handler then chooses the upload path
+   based on channel type (native upload for internal, URL message for
+   Connect).
+
+4. **Document and accept**: native Slack file upload only works in
+   internal channels. Operators using Slack Connect get every other
+   transcript-streaming feature (per-turn chat lines, auto-thread,
+   record-mapping) but no .jsonl.gz attachment. Surface this in
+   docs/slack-notifications.md and km doctor.
+
+**Disposition:** UAT continues — every other Phase 68 path validates
+correctly. The final upload step is a Slack platform limitation that
+needs Phase 68.1 architectural choice. Recommended: option 3
+(channel-type detection + dual-path upload) for cleanest UX.
