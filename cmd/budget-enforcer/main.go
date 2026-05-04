@@ -119,6 +119,15 @@ type BudgetHandler struct {
 	setMetaFlagFn func(ctx context.Context, sandboxID, attrName string) error
 }
 
+// getEmailDomain returns the sandbox email domain from the KM_EMAIL_DOMAIN env var.
+// Falls back to "sandboxes.klankermaker.ai" for un-migrated installs until plan 04 wires the env block.
+func getEmailDomain() string {
+	if v := os.Getenv("KM_EMAIL_DOMAIN"); v != "" {
+		return v
+	}
+	return "sandboxes.klankermaker.ai"
+}
+
 // HandleBudgetCheck is the Lambda handler method.
 func (h *BudgetHandler) HandleBudgetCheck(ctx context.Context, event BudgetCheckEvent) error {
 	if event.SandboxID == "" {
@@ -637,10 +646,7 @@ func main() {
 	if budgetTable == "" {
 		budgetTable = "km-budgets"
 	}
-	emailDomain := os.Getenv("KM_EMAIL_DOMAIN")
-	if emailDomain == "" {
-		emailDomain = "sandboxes.klankermaker.ai"
-	}
+	emailDomain := getEmailDomain()
 
 	sandboxTable := os.Getenv("KM_SANDBOX_TABLE")
 	if sandboxTable == "" {

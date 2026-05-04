@@ -124,6 +124,15 @@ type TTLHandler struct {
 	TeardownFunc func(ctx context.Context, sandboxID string) error
 }
 
+// getEmailDomain returns the sandbox email domain from the KM_EMAIL_DOMAIN env var.
+// Falls back to "sandboxes.klankermaker.ai" for un-migrated installs until plan 04 wires the env block.
+func getEmailDomain() string {
+	if v := os.Getenv("KM_EMAIL_DOMAIN"); v != "" {
+		return v
+	}
+	return "sandboxes.klankermaker.ai"
+}
+
 // HandleTTLEvent is the Lambda handler method. It is called by lambdaruntime.Start in main().
 func (h *TTLHandler) HandleTTLEvent(ctx context.Context, event TTLEvent) error {
 	if event.SandboxID == "" {
@@ -1391,10 +1400,7 @@ func main() {
 	if bucket == "" {
 		bucket = "km-artifacts" // fallback; should be set via Lambda env var
 	}
-	domain := os.Getenv("KM_EMAIL_DOMAIN")
-	if domain == "" {
-		domain = "sandboxes.klankermaker.ai"
-	}
+	domain := getEmailDomain()
 
 	region := os.Getenv("AWS_REGION")
 	if region == "" {

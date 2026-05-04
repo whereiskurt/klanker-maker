@@ -91,6 +91,15 @@ type CreateHandler struct {
 var coldStartOnce sync.Once
 var coldStartErr error
 
+// getEmailDomain returns the sandbox email domain from the KM_EMAIL_DOMAIN env var.
+// Falls back to "sandboxes.klankermaker.ai" for un-migrated installs until plan 04 wires the env block.
+func getEmailDomain() string {
+	if v := os.Getenv("KM_EMAIL_DOMAIN"); v != "" {
+		return v
+	}
+	return "sandboxes.klankermaker.ai"
+}
+
 // Handle is the Lambda handler method. EventBridge Rules deliver the full envelope;
 // the CreateEvent payload is inside the Detail field as a JSON string.
 func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEvent) error {
@@ -253,17 +262,10 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 					}
 				}
 
-				// Derive email domain from environment (same logic as km create Step 13).
-				emailDomain := os.Getenv("KM_EMAIL_DOMAIN")
+				// Derive email domain from handler config (set at init from KM_EMAIL_DOMAIN env var).
+				emailDomain := h.Domain
 				if emailDomain == "" {
-					emailDomain = h.Domain
-				}
-				if emailDomain == "" {
-					emailDomain = "sandboxes.klankermaker.ai"
-				}
-				// Ensure domain has "sandboxes." prefix when a bare domain is provided.
-				if !strings.HasPrefix(emailDomain, "sandboxes.") {
-					emailDomain = "sandboxes." + emailDomain
+					emailDomain = getEmailDomain()
 				}
 
 				identityTableName := h.IdentityTableName
@@ -439,10 +441,7 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to load AWS config")
 	}
 
-	domain := os.Getenv("KM_EMAIL_DOMAIN")
-	if domain == "" {
-		domain = "sandboxes.klankermaker.ai"
-	}
+	domain := getEmailDomain()
 
 	toolchainDir := os.Getenv("KM_TOOLCHAIN_DIR")
 	if toolchainDir == "" {
