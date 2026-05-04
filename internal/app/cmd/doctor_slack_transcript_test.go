@@ -13,6 +13,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -228,6 +229,11 @@ func TestDoctor_SlackTranscriptStaleObjects(t *testing.T) {
 	if r.Remediation == "" {
 		t.Error("expected non-empty remediation hint for cleanup")
 	}
+	// Plan quick-7: dry-run remediation must point operators at --dry-run=false,
+	// not the legacy aws-cli command.
+	if !strings.Contains(r.Remediation, "--dry-run=false") {
+		t.Errorf("expected remediation to point at --dry-run=false, got: %s", r.Remediation)
+	}
 }
 
 // TestDoctor_SlackTranscriptStaleObjects_AllLive: every S3 prefix matches a
@@ -300,5 +306,174 @@ func TestDoctor_SlackTranscriptStaleObjects_NoBucket(t *testing.T) {
 	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "", listIDs, true)
 	if r.Status != CheckSkipped {
 		t.Fatalf("expected SKIPPED, got %s", r.Status)
+	}
+}
+
+// =============================================================================
+// Plan quick-7 — checkSlackTranscriptStaleObjects cleanup-path tests
+// =============================================================================
+
+// TestDoctor_SlackTranscriptStaleObjects_DryRunTrue_NoDestructiveCalls:
+// stale prefix sb-c present, dryRun=true → WARN with sb-c surfaced, no
+// DeleteObjects calls.
+func TestDoctor_SlackTranscriptStaleObjects_DryRunTrue_NoDestructiveCalls(t *testing.T) {
+	s3Cli := &fakeS3List{
+		pages: []*s3.ListObjectsV2Output{
+			{
+				CommonPrefixes: []s3types.CommonPrefix{
+					{Prefix: awssdk.String("transcripts/sb-a/")},
+					{Prefix: awssdk.String("transcripts/sb-c/")},
+				},
+			},
+		},
+	}
+	listIDs := func(_ context.Context) ([]string, error) {
+		return []string{"sb-a"}, nil
+	}
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, true)
+	if r.Status != CheckWarn {
+		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "transcripts/sb-c/") {
+		t.Errorf("expected sb-c in message, got: %s", r.Message)
+	}
+	if s3Cli.deleteObjectsCalls != 0 {
+		t.Errorf("dryRun=true must not call DeleteObjects; saw %d calls", s3Cli.deleteObjectsCalls)
+	}
+}
+
+// TestDoctor_SlackTranscriptStaleObjects_DryRunFalse_HappyPath: 1 stale
+// prefix (sb-c) with 3 objects → 1 DeleteObjects call carrying 3 keys,
+// WARN with (1 deleted, 0 skipped, 3 objects total).
+func TestDoctor_SlackTranscriptStaleObjects_DryRunFalse_HappyPath(t *testing.T) {
+	s3Cli := &fakeS3List{
+		pages: []*s3.ListObjectsV2Output{
+			// Page 0: top-level CommonPrefixes scan.
+			{
+				CommonPrefixes: []s3types.CommonPrefix{
+					{Prefix: awssdk.String("transcripts/sb-a/")},
+					{Prefix: awssdk.String("transcripts/sb-c/")},
+				},
+			},
+			// Page 1: listAllKeysUnderPrefix("transcripts/sb-c/") — 3 keys, no truncation.
+			{
+				Contents: []s3types.Object{
+					{Key: awssdk.String("transcripts/sb-c/sess-1.jsonl.gz")},
+					{Key: awssdk.String("transcripts/sb-c/sess-2.jsonl.gz")},
+					{Key: awssdk.String("transcripts/sb-c/sess-3.jsonl.gz")},
+				},
+			},
+		},
+	}
+	listIDs := func(_ context.Context) ([]string, error) {
+		return []string{"sb-a"}, nil
+	}
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, false)
+	if r.Status != CheckWarn {
+		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
+	}
+	if s3Cli.deleteObjectsCalls != 1 {
+		t.Errorf("expected 1 DeleteObjects call, got %d", s3Cli.deleteObjectsCalls)
+	}
+	if len(s3Cli.deleteObjectsKeys) != 3 {
+		t.Errorf("expected 3 keys passed to DeleteObjects, got %d", len(s3Cli.deleteObjectsKeys))
+	}
+	if !strings.Contains(r.Message, "(1 deleted, 0 skipped, 3 objects total)") {
+		t.Errorf("expected '(1 deleted, 0 skipped, 3 objects total)', got: %s", r.Message)
+	}
+}
+
+// TestDoctor_SlackTranscriptStaleObjects_DryRunFalse_PartialFailure: 2 stale
+// prefixes; first prefix's DeleteObjects succeeds, second prefix's fails →
+// WARN with (1 deleted, 1 skipped, ...) — loop is not aborted on error.
+func TestDoctor_SlackTranscriptStaleObjects_DryRunFalse_PartialFailure(t *testing.T) {
+	s3Cli := &fakeS3List{
+		pages: []*s3.ListObjectsV2Output{
+			// Page 0: top-level CommonPrefixes — 2 stale (sb-c, sb-d).
+			{
+				CommonPrefixes: []s3types.CommonPrefix{
+					{Prefix: awssdk.String("transcripts/sb-c/")},
+					{Prefix: awssdk.String("transcripts/sb-d/")},
+				},
+			},
+			// Page 1: listAll for sb-c — 1 key, no truncation.
+			{
+				Contents: []s3types.Object{
+					{Key: awssdk.String("transcripts/sb-c/sess-c.jsonl.gz")},
+				},
+			},
+			// Page 2: listAll for sb-d — 2 keys, no truncation.
+			{
+				Contents: []s3types.Object{
+					{Key: awssdk.String("transcripts/sb-d/sess-d1.jsonl.gz")},
+					{Key: awssdk.String("transcripts/sb-d/sess-d2.jsonl.gz")},
+				},
+			},
+		},
+		// Per-call errors: call 0 (sb-c) succeeds, call 1 (sb-d) fails.
+		deleteObjectsErrs: []error{nil, errors.New("AccessDenied")},
+	}
+	listIDs := func(_ context.Context) ([]string, error) {
+		return []string{}, nil // no live sandboxes — both prefixes are stale
+	}
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, false)
+	if r.Status != CheckWarn {
+		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "(1 deleted, 1 skipped,") {
+		t.Errorf("expected '(1 deleted, 1 skipped,...)', got: %s", r.Message)
+	}
+}
+
+// TestDoctor_SlackTranscriptStaleObjects_DryRunFalse_MultiPage: 1 stale prefix
+// with 1500 objects across 2 ListObjectsV2 pages → 2 DeleteObjects batches
+// (1000 + 500), 1500 objects total deleted.
+func TestDoctor_SlackTranscriptStaleObjects_DryRunFalse_MultiPage(t *testing.T) {
+	// Build 1500 keys split across two ListObjectsV2 pages.
+	page1 := make([]s3types.Object, 1000)
+	for i := 0; i < 1000; i++ {
+		page1[i] = s3types.Object{Key: awssdk.String(fmt.Sprintf("transcripts/sb-c/k%04d.jsonl.gz", i))}
+	}
+	page2 := make([]s3types.Object, 500)
+	for i := 0; i < 500; i++ {
+		page2[i] = s3types.Object{Key: awssdk.String(fmt.Sprintf("transcripts/sb-c/k%04d.jsonl.gz", 1000+i))}
+	}
+	truthy := true
+	s3Cli := &fakeS3List{
+		pages: []*s3.ListObjectsV2Output{
+			// Page 0: top-level scan.
+			{
+				CommonPrefixes: []s3types.CommonPrefix{
+					{Prefix: awssdk.String("transcripts/sb-c/")},
+				},
+			},
+			// Page 1: listAll for sb-c — 1000 keys, IsTruncated=true.
+			{
+				Contents:              page1,
+				IsTruncated:           &truthy,
+				NextContinuationToken: awssdk.String("page2-token"),
+			},
+			// Page 2: listAll for sb-c continuation — 500 keys, IsTruncated=false.
+			{
+				Contents: page2,
+			},
+		},
+	}
+	listIDs := func(_ context.Context) ([]string, error) {
+		return []string{}, nil
+	}
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, false)
+	if r.Status != CheckWarn {
+		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
+	}
+	// Two DeleteObjects batches: 1000 + 500.
+	if s3Cli.deleteObjectsCalls != 2 {
+		t.Errorf("expected 2 DeleteObjects batches, got %d", s3Cli.deleteObjectsCalls)
+	}
+	if len(s3Cli.deleteObjectsKeys) != 1500 {
+		t.Errorf("expected 1500 keys total across both batches, got %d", len(s3Cli.deleteObjectsKeys))
+	}
+	if !strings.Contains(r.Message, "1500 objects total") {
+		t.Errorf("expected '1500 objects total' in message, got: %s", r.Message)
 	}
 }

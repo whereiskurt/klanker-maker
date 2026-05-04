@@ -30,6 +30,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 )
 
@@ -175,9 +176,6 @@ func checkSlackTranscriptStaleObjects(
 		}
 	}
 
-	// Plan quick-7: dryRun consumed by Task 2 cleanup body.
-	_ = dryRun
-
 	// List unique sandbox-id prefixes under transcripts/.
 	var prefixes []string
 	var continuationToken *string
@@ -240,17 +238,101 @@ func checkSlackTranscriptStaleObjects(
 			stale = append(stale, p)
 		}
 	}
-	if len(stale) > 0 {
+	if len(stale) == 0 {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckOK,
+			Message: fmt.Sprintf("%d transcript prefix(es); none stale", len(prefixes)),
+		}
+	}
+
+	// Plan quick-7: dry-run path — detect-only; point operator at --dry-run=false.
+	if dryRun {
 		return CheckResult{
 			Name:        name,
 			Status:      CheckWarn,
 			Message:     fmt.Sprintf("%d stale transcript prefix(es): %s", len(stale), strings.Join(stale, ", ")),
-			Remediation: "These prefixes belong to destroyed sandboxes. Cleanup is optional; remove with: aws s3 rm s3://<bucket>/<prefix> --recursive",
+			Remediation: "Re-run with --dry-run=false to delete the orphan transcript objects",
+		}
+	}
+
+	// Plan quick-7: destructive cleanup path. Per stale prefix, paginate
+	// ListObjectsV2 (no delimiter) to collect every object key, then batch
+	// DeleteObjects in groups of 1000 (S3 API limit). Per-prefix failures
+	// don't abort the loop.
+	deleted, skipped, objectsDeleted := 0, 0, 0
+	for _, p := range stale {
+		keys, listErr := listAllKeysUnderPrefix(ctx, s3Client, bucket, p)
+		if listErr != nil {
+			skipped++
+			continue
+		}
+		if len(keys) == 0 {
+			// Empty prefix (no objects to delete) — count as cleaned.
+			deleted++
+			continue
+		}
+		prefixOK := true
+		for batchStart := 0; batchStart < len(keys); batchStart += 1000 {
+			end := batchStart + 1000
+			if end > len(keys) {
+				end = len(keys)
+			}
+			objs := make([]s3types.ObjectIdentifier, 0, end-batchStart)
+			for _, k := range keys[batchStart:end] {
+				objs = append(objs, s3types.ObjectIdentifier{Key: awssdk.String(k)})
+			}
+			_, delErr := s3Client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+				Bucket: awssdk.String(bucket),
+				Delete: &s3types.Delete{
+					Objects: objs,
+					Quiet:   awssdk.Bool(true),
+				},
+			})
+			if delErr != nil {
+				prefixOK = false
+				break
+			}
+			objectsDeleted += end - batchStart
+		}
+		if prefixOK {
+			deleted++
+		} else {
+			skipped++
 		}
 	}
 	return CheckResult{
 		Name:    name,
-		Status:  CheckOK,
-		Message: fmt.Sprintf("%d transcript prefix(es); none stale", len(prefixes)),
+		Status:  CheckWarn,
+		Message: fmt.Sprintf("%d stale transcript prefix(es) (%d deleted, %d skipped, %d objects total)", len(stale), deleted, skipped, objectsDeleted),
 	}
 }
+
+// listAllKeysUnderPrefix paginates ListObjectsV2 (no delimiter) and returns
+// every object key under the given prefix. Used by the Plan quick-7 cleanup
+// path to enumerate keys before batched DeleteObjects.
+func listAllKeysUnderPrefix(ctx context.Context, c kmaws.S3CleanupAPI, bucket, prefix string) ([]string, error) {
+	var keys []string
+	var token *string
+	for {
+		out, err := c.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            awssdk.String(bucket),
+			Prefix:            awssdk.String(prefix),
+			ContinuationToken: token,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, obj := range out.Contents {
+			if obj.Key != nil {
+				keys = append(keys, *obj.Key)
+			}
+		}
+		if out.IsTruncated == nil || !*out.IsTruncated {
+			break
+		}
+		token = out.NextContinuationToken
+	}
+	return keys, nil
+}
+

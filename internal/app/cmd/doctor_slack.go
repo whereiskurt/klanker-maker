@@ -18,12 +18,15 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	sqssvc "github.com/aws/aws-sdk-go-v2/service/sqs"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 	slackpkg "github.com/whereiskurt/klankrmkr/pkg/slack"
@@ -290,10 +293,6 @@ func checkSlackInboundStaleQueues(
 		resourcePrefix = "km"
 	}
 
-	// Plan quick-7: dryRun + ssmDeleter consumed by Task 2 cleanup body.
-	_ = dryRun
-	_ = ssmDeleter
-
 	// List all queues with the inbound prefix.
 	listOut, listErr := sqsClient.ListQueues(ctx, &sqssvc.ListQueuesInput{
 		QueueNamePrefix: awssdk.String(resourcePrefix + "-slack-inbound-"),
@@ -333,18 +332,71 @@ func checkSlackInboundStaleQueues(
 			stale = append(stale, qURL)
 		}
 	}
-	if len(stale) > 0 {
+	if len(stale) == 0 {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckOK,
+			Message: fmt.Sprintf("all %d inbound queue(s) accounted for in DDB", len(listOut.QueueUrls)),
+		}
+	}
+
+	// Plan quick-7: dry-run path — detect-only, point operator at --dry-run=false.
+	if dryRun {
 		return CheckResult{
 			Name:        name,
 			Status:      CheckWarn,
 			Message:     fmt.Sprintf("%d stale inbound queue(s) without DDB record: %s", len(stale), strings.Join(stale, ", ")),
-			Remediation: "Run: aws sqs delete-queue --queue-url <url> for each stale queue listed above",
+			Remediation: "Re-run with --dry-run=false to delete the orphan queues + their SSM parameters",
+		}
+	}
+
+	// Plan quick-7: destructive cleanup path. Best-effort per orphan; failures
+	// increment skipped and the loop continues to the next queue.
+	prefixSegment := resourcePrefix + "-slack-inbound-"
+	deleted, skipped := 0, 0
+	for _, qURL := range stale {
+		if delErr := kmaws.DeleteSlackInboundQueue(ctx, sqsClient, qURL); delErr != nil {
+			skipped++
+			continue
+		}
+		deleted++
+		// Best-effort SSM cleanup of the matching /sandbox/{id}/slack-inbound-queue-url
+		// parameter. Only attempted after a successful queue delete so we don't
+		// orphan the SSM param when the queue delete fails (the next doctor run
+		// will retry both).
+		if ssmDeleter == nil {
+			continue
+		}
+		lastSlash := strings.LastIndex(qURL, "/")
+		if lastSlash < 0 {
+			continue
+		}
+		queueName := qURL[lastSlash+1:]
+		sbID := strings.TrimSuffix(strings.TrimPrefix(queueName, prefixSegment), ".fifo")
+		// Guard: TrimPrefix is a no-op when the prefix doesn't match — detect that
+		// case (sbID == queueName) and skip the SSM step rather than build a
+		// malformed parameter name.
+		if sbID == "" || sbID == queueName {
+			continue
+		}
+		paramName := "/sandbox/" + sbID + "/slack-inbound-queue-url"
+		_, ssmErr := ssmDeleter.DeleteParameter(ctx, &ssm.DeleteParameterInput{
+			Name: awssdk.String(paramName),
+		})
+		if ssmErr != nil {
+			var notFound *ssmtypes.ParameterNotFound
+			if errors.As(ssmErr, &notFound) {
+				// Param already gone — treat as success. No state change.
+				continue
+			}
+			// Other SSM errors are swallowed: queue is already deleted, the
+			// orphan SSM param can be reaped on the next doctor run.
 		}
 	}
 	return CheckResult{
 		Name:    name,
-		Status:  CheckOK,
-		Message: fmt.Sprintf("all %d inbound queue(s) accounted for in DDB", len(listOut.QueueUrls)),
+		Status:  CheckWarn,
+		Message: fmt.Sprintf("%d stale inbound queue(s) without DDB record (%d deleted, %d skipped)", len(stale), deleted, skipped),
 	}
 }
 

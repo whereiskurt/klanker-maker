@@ -13,7 +13,30 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 )
+
+// =============================================================================
+// fakeSSMDeleter — Plan quick-7 in-memory SSMDeleterAPI for cleanup tests.
+// =============================================================================
+
+// fakeSSMDeleter records DeleteParameter calls and optionally returns an error.
+type fakeSSMDeleter struct {
+	deleteCalls []string
+	deleteErr   error // returned for every call when set
+}
+
+func (f *fakeSSMDeleter) DeleteParameter(_ context.Context, in *ssm.DeleteParameterInput, _ ...func(*ssm.Options)) (*ssm.DeleteParameterOutput, error) {
+	if in != nil && in.Name != nil {
+		f.deleteCalls = append(f.deleteCalls, *in.Name)
+	}
+	if f.deleteErr != nil {
+		return nil, f.deleteErr
+	}
+	return &ssm.DeleteParameterOutput{}, nil
+}
 
 // =============================================================================
 // checkSlackInboundQueueExists
@@ -104,6 +127,11 @@ func TestDoctor_SlackInboundStaleQueues_FoundOrphans(t *testing.T) {
 	}
 	if !strings.Contains(r.Message, "orphan") {
 		t.Errorf("expected message to mention orphan queue, got: %s", r.Message)
+	}
+	// Plan quick-7: dry-run remediation must point operators at --dry-run=false,
+	// not the legacy aws-cli command.
+	if !strings.Contains(r.Remediation, "--dry-run=false") {
+		t.Errorf("expected remediation to point at --dry-run=false, got: %s", r.Remediation)
 	}
 }
 
@@ -251,5 +279,137 @@ func TestDoctor_SlackInboundEventsSubscription_NilDeps(t *testing.T) {
 	r := checkSlackAppEventsScopes(context.Background(), nil)
 	if r.Status != CheckSkipped {
 		t.Fatalf("expected SKIPPED, got %s", r.Status)
+	}
+}
+
+// =============================================================================
+// Plan quick-7 — checkSlackInboundStaleQueues cleanup-path tests
+// =============================================================================
+
+// TestDoctor_SlackInboundStaleQueues_DryRunTrue_NoDestructiveCalls: orphan
+// queue exists, dryRun=true → WARN with orphan URL surfaced, NO DeleteQueue
+// call, NO SSM call.
+func TestDoctor_SlackInboundStaleQueues_DryRunTrue_NoDestructiveCalls(t *testing.T) {
+	sqsCli := &fakeSQS{
+		listResult: []string{"https://sqs/km-slack-inbound-orphan.fifo"},
+	}
+	listInbound := func(_ context.Context) ([]inboundRow, error) {
+		return []inboundRow{}, nil
+	}
+	ssmCli := &fakeSSMDeleter{}
+	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", true, ssmCli)
+	if r.Status != CheckWarn {
+		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "orphan") {
+		t.Errorf("expected message to mention orphan URL, got: %s", r.Message)
+	}
+	if sqsCli.deleteCalled != 0 {
+		t.Errorf("dryRun=true must not call DeleteQueue; saw %d calls", sqsCli.deleteCalled)
+	}
+	if len(ssmCli.deleteCalls) != 0 {
+		t.Errorf("dryRun=true must not call SSM DeleteParameter; saw %d calls", len(ssmCli.deleteCalls))
+	}
+}
+
+// TestDoctor_SlackInboundStaleQueues_DryRunFalse_HappyPath: 2 orphan queues,
+// SQS DeleteQueue succeeds, SSM DeleteParameter succeeds → WARN with
+// (2 deleted, 0 skipped), 2 SSM calls with the matching parameter names.
+func TestDoctor_SlackInboundStaleQueues_DryRunFalse_HappyPath(t *testing.T) {
+	sqsCli := &fakeSQS{
+		listResult: []string{
+			"https://sqs/km-slack-inbound-sb-x1.fifo",
+			"https://sqs/km-slack-inbound-sb-x2.fifo",
+		},
+	}
+	listInbound := func(_ context.Context) ([]inboundRow, error) {
+		return []inboundRow{}, nil
+	}
+	ssmCli := &fakeSSMDeleter{}
+	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", false, ssmCli)
+	if r.Status != CheckWarn {
+		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
+	}
+	if sqsCli.deleteCalled != 2 {
+		t.Errorf("expected 2 DeleteQueue calls, got %d", sqsCli.deleteCalled)
+	}
+	if !strings.Contains(r.Message, "(2 deleted, 0 skipped)") {
+		t.Errorf("expected message to contain '(2 deleted, 0 skipped)', got: %s", r.Message)
+	}
+	if len(ssmCli.deleteCalls) != 2 {
+		t.Fatalf("expected 2 SSM DeleteParameter calls, got %d", len(ssmCli.deleteCalls))
+	}
+	expected := map[string]bool{
+		"/sandbox/sb-x1/slack-inbound-queue-url": false,
+		"/sandbox/sb-x2/slack-inbound-queue-url": false,
+	}
+	for _, name := range ssmCli.deleteCalls {
+		if _, ok := expected[name]; !ok {
+			t.Errorf("unexpected SSM param name %q", name)
+			continue
+		}
+		expected[name] = true
+	}
+	for name, seen := range expected {
+		if !seen {
+			t.Errorf("missing SSM DeleteParameter call for %q", name)
+		}
+	}
+}
+
+// TestDoctor_SlackInboundStaleQueues_DryRunFalse_PartialFailure: 2 orphans,
+// every DeleteQueue returns AccessDenied → WARN with (0 deleted, 2 skipped).
+// SSM is NOT called for failed queue deletes (we only attempt SSM after a
+// successful queue delete to avoid orphaning the param).
+func TestDoctor_SlackInboundStaleQueues_DryRunFalse_PartialFailure(t *testing.T) {
+	sqsCli := &fakeSQS{
+		listResult: []string{
+			"https://sqs/km-slack-inbound-sb-y1.fifo",
+			"https://sqs/km-slack-inbound-sb-y2.fifo",
+		},
+		deleteErr: errors.New("AccessDenied"),
+	}
+	listInbound := func(_ context.Context) ([]inboundRow, error) {
+		return []inboundRow{}, nil
+	}
+	ssmCli := &fakeSSMDeleter{}
+	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", false, ssmCli)
+	if r.Status != CheckWarn {
+		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "(0 deleted, 2 skipped)") {
+		t.Errorf("expected '(0 deleted, 2 skipped)', got: %s", r.Message)
+	}
+	if sqsCli.deleteCalled != 2 {
+		t.Errorf("expected 2 DeleteQueue attempts, got %d", sqsCli.deleteCalled)
+	}
+	if len(ssmCli.deleteCalls) != 0 {
+		t.Errorf("expected NO SSM calls when queue delete failed, got %d", len(ssmCli.deleteCalls))
+	}
+}
+
+// TestDoctor_SlackInboundStaleQueues_DryRunFalse_SSMParameterNotFound:
+// 1 orphan, SQS DeleteQueue succeeds, SSM returns ParameterNotFound →
+// treated as success, WARN with (1 deleted, 0 skipped).
+func TestDoctor_SlackInboundStaleQueues_DryRunFalse_SSMParameterNotFound(t *testing.T) {
+	sqsCli := &fakeSQS{
+		listResult: []string{"https://sqs/km-slack-inbound-sb-z1.fifo"},
+	}
+	listInbound := func(_ context.Context) ([]inboundRow, error) {
+		return []inboundRow{}, nil
+	}
+	ssmCli := &fakeSSMDeleter{deleteErr: &ssmtypes.ParameterNotFound{}}
+	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", false, ssmCli)
+	if r.Status != CheckWarn {
+		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "(1 deleted, 0 skipped)") {
+		t.Errorf("ParameterNotFound must be treated as success; got msg: %s", r.Message)
+	}
+	if sqsCli.deleteCalled != 1 {
+		t.Errorf("expected 1 DeleteQueue call, got %d", sqsCli.deleteCalled)
+	}
+	if len(ssmCli.deleteCalls) != 1 {
+		t.Errorf("expected 1 SSM DeleteParameter call (which returned NotFound), got %d", len(ssmCli.deleteCalls))
 	}
 }
