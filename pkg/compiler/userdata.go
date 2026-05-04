@@ -2956,7 +2956,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		return "", err
 	}
 
-	emailDomain := "sandboxes.klankermaker.ai"
+	emailDomain := "sandboxes.klankermaker.ai" // TODO Phase 66 plan 04: migrate nil-network fallback to cfg.GetEmailDomain() via caller
 	alias := ""
 	if len(emailDomainOverride) > 0 && emailDomainOverride[0] != "" {
 		emailDomain = emailDomainOverride[0]

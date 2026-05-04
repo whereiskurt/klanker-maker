@@ -703,7 +703,7 @@ func bakeFromSandboxInternal(ctx context.Context, cfg *config.Config, rec kmaws.
 		return "", fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
 	}
 
-	amiName := kmaws.AMIName(profileName, sandboxID, time.Now())
+	amiName := kmaws.AMIName(profileName, sandboxID, time.Now(), cfg.GetResourcePrefix()+"-")
 	tags := kmaws.KMBakeTags(sandboxID, profileName, rec.Alias, "", rec.Region, kmVersion)
 
 	if description == "" {
