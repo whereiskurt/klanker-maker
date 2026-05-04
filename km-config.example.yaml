@@ -49,6 +49,19 @@ safe_phrase: change-me-to-something-unique   # [REQUIRED]
 # Max concurrent sandboxes (0 = unlimited, default: 10)
 # max_sandboxes: 10
 
+# Prefix for all account-globally-unique AWS resource names (DDB tables,
+# Lambdas, IAM roles, SSM paths, etc.). Default: "km".
+# Change only when running a second km install in the same AWS account
+# (e.g. "kmdev") to avoid collisions. One-time choice — changing later
+# orphans existing resources.
+# resource_prefix: km
+
+# Subdomain under `domain` used for sandbox SES email addresses
+# (sb-xxxxxxxx@{email_subdomain}.{domain}). Default: "sandboxes".
+# One-time choice — changing requires fresh SES domain identity
+# verification (DKIM, MX records).
+# email_subdomain: sandboxes
+
 # =============================================================================
 # AUTO-POPULATED by km init — uncomment to override
 # =============================================================================
