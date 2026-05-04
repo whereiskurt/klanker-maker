@@ -86,7 +86,7 @@ func runInfo(ctx context.Context, cfg *config.Config, w io.Writer) error {
 	fmt.Fprintf(w, "Email\n")
 	fmt.Fprintf(w, "  Operator:         %s\n", valOrDash(cfg.OperatorEmail))
 	if cfg.Domain != "" {
-		fmt.Fprintf(w, "  Sandbox domain:   @sandboxes.%s\n", cfg.Domain)
+		fmt.Fprintf(w, "  Sandbox domain:   @%s\n", cfg.GetEmailDomain())
 	}
 	fmt.Fprintf(w, "  Signing:          Ed25519 (keys in SSM, pubkeys in identities table)\n")
 	fmt.Fprintf(w, "  In-sandbox:       km-send / km-recv\n")
@@ -96,7 +96,7 @@ func runInfo(ctx context.Context, cfg *config.Config, w io.Writer) error {
 	if cfg.OperatorEmail != "" || cfg.SafePhrase != "" {
 		fmt.Fprintf(w, "Email-to-Create\n")
 		if cfg.Domain != "" {
-			fmt.Fprintf(w, "  Send to:          operator@sandboxes.%s\n", cfg.Domain)
+			fmt.Fprintf(w, "  Send to:          operator@%s\n", cfg.GetEmailDomain())
 		}
 		if cfg.SafePhrase != "" {
 			fmt.Fprintf(w, "  Safe phrase:      %s\n", cfg.SafePhrase)
