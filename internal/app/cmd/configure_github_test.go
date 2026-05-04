@@ -608,7 +608,7 @@ func TestDiscoverInstallation_MultipleInstallations_WritesPerAccountKeys(t *test
 	})
 	out := &bytes.Buffer{}
 
-	err := cmd.RunDiscoverInstallation(t.Context(), mock, out, true)
+	err := cmd.RunDiscoverInstallation(t.Context(), mock, out, true, &config.Config{})
 	if err != nil {
 		t.Fatalf("RunDiscoverInstallation: %v", err)
 	}
@@ -657,7 +657,7 @@ func TestDiscoverInstallation_MultipleInstallations_WritesLegacyKey(t *testing.T
 	})
 	out := &bytes.Buffer{}
 
-	err := cmd.RunDiscoverInstallation(t.Context(), mock, out, true)
+	err := cmd.RunDiscoverInstallation(t.Context(), mock, out, true, &config.Config{})
 	if err != nil {
 		t.Fatalf("RunDiscoverInstallation: %v", err)
 	}
@@ -698,7 +698,7 @@ func TestDiscoverInstallation_SingleInstallation_WritesBothKeys(t *testing.T) {
 	})
 	out := &bytes.Buffer{}
 
-	err := cmd.RunDiscoverInstallation(t.Context(), mock, out, true)
+	err := cmd.RunDiscoverInstallation(t.Context(), mock, out, true, &config.Config{})
 	if err != nil {
 		t.Fatalf("RunDiscoverInstallation: %v", err)
 	}
@@ -748,7 +748,7 @@ func TestDiscoverInstallation_OutputListsAllAccounts(t *testing.T) {
 	})
 	out := &bytes.Buffer{}
 
-	err := cmd.RunDiscoverInstallation(t.Context(), mock, out, true)
+	err := cmd.RunDiscoverInstallation(t.Context(), mock, out, true, &config.Config{})
 	if err != nil {
 		t.Fatalf("RunDiscoverInstallation: %v", err)
 	}

@@ -119,6 +119,39 @@ type BudgetHandler struct {
 	setMetaFlagFn func(ctx context.Context, sandboxID, attrName string) error
 }
 
+// getEmailDomain returns the sandbox email domain from the KM_EMAIL_DOMAIN env var.
+// Falls back to "sandboxes.klankermaker.ai" for un-migrated installs until plan 04 wires the env block.
+func getEmailDomain() string {
+	if v := os.Getenv("KM_EMAIL_DOMAIN"); v != "" {
+		return v
+	}
+	return "sandboxes.klankermaker.ai"
+}
+
+// sandboxTableName returns the DynamoDB sandbox table name from the KM_SANDBOX_TABLE_NAME env var.
+func sandboxTableName() string {
+	if v := os.Getenv("KM_SANDBOX_TABLE_NAME"); v != "" {
+		return v
+	}
+	return "km-sandboxes"
+}
+
+// budgetTableName returns the DynamoDB budget table name from the KM_BUDGET_TABLE env var.
+func budgetTableName() string {
+	if v := os.Getenv("KM_BUDGET_TABLE"); v != "" {
+		return v
+	}
+	return "km-budgets"
+}
+
+// resourcePrefix returns the resource prefix from the KM_RESOURCE_PREFIX env var.
+func resourcePrefix() string {
+	if v := os.Getenv("KM_RESOURCE_PREFIX"); v != "" {
+		return v
+	}
+	return "km"
+}
+
 // HandleBudgetCheck is the Lambda handler method.
 func (h *BudgetHandler) HandleBudgetCheck(ctx context.Context, event BudgetCheckEvent) error {
 	if event.SandboxID == "" {
@@ -496,7 +529,7 @@ func (h *BudgetHandler) enforceBudgetCompute(ctx context.Context, event BudgetCh
 
 		// Delete TTL schedule — stopped sandbox shouldn't be destroyed on TTL expiry.
 		if h.SchedulerClient != nil {
-			if schedErr := awspkg.DeleteTTLSchedule(ctx, h.SchedulerClient, sandboxID); schedErr != nil {
+			if schedErr := awspkg.DeleteTTLSchedule(ctx, h.SchedulerClient, sandboxID, resourcePrefix()); schedErr != nil {
 				log.Warn().Err(schedErr).Str("sandbox_id", sandboxID).Msg("failed to delete TTL schedule (non-fatal)")
 			}
 		}
@@ -633,19 +666,9 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to load AWS config")
 	}
 
-	budgetTable := os.Getenv("KM_BUDGET_TABLE")
-	if budgetTable == "" {
-		budgetTable = "km-budgets"
-	}
-	emailDomain := os.Getenv("KM_EMAIL_DOMAIN")
-	if emailDomain == "" {
-		emailDomain = "sandboxes.klankermaker.ai"
-	}
-
-	sandboxTable := os.Getenv("KM_SANDBOX_TABLE")
-	if sandboxTable == "" {
-		sandboxTable = "km-sandboxes"
-	}
+	emailDomain := getEmailDomain()
+	budgetTable := budgetTableName()
+	sandboxTable := sandboxTableName()
 	stateBucket := os.Getenv("KM_STATE_BUCKET")
 
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)

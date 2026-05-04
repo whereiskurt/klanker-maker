@@ -36,12 +36,13 @@ var amiNameSanitizer = regexp.MustCompile(`[^a-zA-Z0-9._/ \-\[\]()'@]`)
 
 // AMIName returns an AMI Name value in the format:
 //
-//	km-{sanitized-profile}-{sandboxID}-{YYYYMMDDHHMMSS}
+//	{prefix}-{sanitized-profile}-{sandboxID}-{YYYYMMDDHHMMSS}
 //
+// prefix should be cfg.GetResourcePrefix() + "-" (e.g. "km-"). When empty, "km-" is used.
 // The sanitizer replaces illegal characters with '-' and the total output is
 // capped at 128 characters (AWS maximum). If profileName is empty the literal
 // placeholder "profile" is used.
-func AMIName(profileName, sandboxID string, t time.Time) string {
+func AMIName(profileName, sandboxID string, t time.Time, prefix ...string) string {
 	if profileName == "" {
 		profileName = "profile"
 	}
@@ -50,10 +51,13 @@ func AMIName(profileName, sandboxID string, t time.Time) string {
 	// Suffix is fixed-width: "-" + sandboxID + "-" + 14-digit timestamp.
 	suffix := fmt.Sprintf("-%s-%s", sandboxID, t.UTC().Format("20060102150405"))
 
-	// Prefix is "km-".
-	prefix := "km-"
+	// Prefix: caller passes cfg.GetResourcePrefix() + "-"; default "km-" for backward compat.
+	p := "km-"
+	if len(prefix) > 0 && prefix[0] != "" {
+		p = prefix[0]
+	}
 
-	maxSafe := 128 - len(prefix) - len(suffix)
+	maxSafe := 128 - len(p) - len(suffix)
 	if maxSafe < 0 {
 		maxSafe = 0
 	}
@@ -61,7 +65,7 @@ func AMIName(profileName, sandboxID string, t time.Time) string {
 		safe = safe[:maxSafe]
 	}
 
-	return prefix + safe + suffix
+	return p + safe + suffix
 }
 
 // KMBakeTags returns the standard tag set applied to a km-baked AMI and its

@@ -160,6 +160,7 @@ func buildSlackTestDeps(api *fakeSlackInitAPI, ssm *fakeSSM, tg *fakeTerragrunt,
 		BridgePoster: poster.Post,
 		Region:       "use1",
 		RepoRoot:     "/repo",
+		SsmPrefix:    "/km/",
 	}
 }
 
@@ -347,6 +348,7 @@ func TestSlackTest_HappyPath(t *testing.T) {
 		BridgePoster: poster.Post,
 		Region:       "use1",
 		RepoRoot:     "/repo",
+		SsmPrefix:    "/km/",
 	}
 
 	var buf bytes.Buffer
@@ -366,9 +368,10 @@ func TestSlackTest_NoBridgeURL_Exits1(t *testing.T) {
 	ssm := newFakeSSM(nil)
 	poster := &fakeBridgePoster{}
 	deps := &cmd.SlackCmdDeps{
-		SSM:    ssm,
-		Region: "use1",
+		SSM:          ssm,
+		Region:       "use1",
 		BridgePoster: poster.Post,
+		SsmPrefix:    "/km/",
 	}
 
 	var buf bytes.Buffer
@@ -391,8 +394,9 @@ func TestSlackStatus_PrintsSummary(t *testing.T) {
 		"/km/slack/last-test-timestamp": "2026-04-29T12:00:00Z",
 	})
 	deps := &cmd.SlackCmdDeps{
-		SSM:    ssm,
-		Region: "use1",
+		SSM:       ssm,
+		Region:    "use1",
+		SsmPrefix: "/km/",
 	}
 
 	var buf bytes.Buffer
@@ -486,6 +490,7 @@ func buildRotateTokenDeps(
 		BridgePoster: poster.Post,
 		Region:       "use1",
 		RepoRoot:     "/repo",
+		SsmPrefix:    "/km/",
 	}
 }
 
@@ -624,7 +629,7 @@ func (f *fakeSSMWithType) Put(_ context.Context, name, value string, secure bool
 // /km/slack/signing-secret as SecureString with the given KMS key.
 func TestSlackInit_PersistsSigningSecret(t *testing.T) {
 	store := newFakeSSMWithType()
-	err := cmd.PersistSigningSecret(context.Background(), store, "test-secret-32chars1234567890ab", "alias/aws/ssm")
+	err := cmd.PersistSigningSecret(context.Background(), store, "test-secret-32chars1234567890ab", "/km/", "alias/aws/ssm")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -789,6 +794,7 @@ func TestSlackRotateSigningSecret_HappyPath(t *testing.T) {
 		SSM:             ssmStore,
 		BridgeColdStart: cs.call,
 		Prompter:        prompter,
+		SsmPrefix:       "/km/",
 	}
 
 	err := cmd.RunSlackRotateSigningSecret(context.Background(), deps, cmd.SlackRotateSigningSecretOpts{
@@ -816,6 +822,7 @@ func TestSlackRotateSigningSecret_Prompts(t *testing.T) {
 		SSM:             ssmStore,
 		BridgeColdStart: cs.call,
 		Prompter:        prompter,
+		SsmPrefix:       "/km/",
 	}
 
 	err := cmd.RunSlackRotateSigningSecret(context.Background(), deps, cmd.SlackRotateSigningSecretOpts{})

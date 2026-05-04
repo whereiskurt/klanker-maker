@@ -30,10 +30,10 @@ output "ssm_parameter_names" {
 output "summary" {
   description = "Summary of created secrets"
   value = {
-    region         = var.region_full
-    sandbox_id     = var.sandbox_id
-    ssm_count      = length(aws_ssm_parameter.secret)
-    ssm_prefix     = local.ssm_prefix
-    kms_key_arn    = aws_kms_key.ssm.arn
+    region      = var.region_full
+    sandbox_id  = var.sandbox_id
+    ssm_count   = length(aws_ssm_parameter.secret)
+    ssm_prefix  = local.ssm_prefix
+    kms_key_arn = aws_kms_key.ssm.arn
   }
 }

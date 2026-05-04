@@ -237,7 +237,7 @@ func (h *Handler) handleSandboxLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	output, err := h.cwClient.FilterLogEvents(r.Context(), &cloudwatchlogs.FilterLogEventsInput{
-		LogGroupName:  ptrStr("/km/sandboxes"),
+		LogGroupName:  ptrStr(kmPrefix + "sandboxes"),
 		FilterPattern: ptrStr(sandboxID),
 		Limit:         ptrInt32(20),
 	})

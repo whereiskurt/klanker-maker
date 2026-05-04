@@ -67,10 +67,7 @@ func runUnlock(ctx context.Context, cfg *config.Config, sandboxID string, yes bo
 	}
 
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)
-	tableName := cfg.SandboxTableName
-	if tableName == "" {
-		tableName = "km-sandboxes"
-	}
+	tableName := cfg.GetSandboxTableName()
 
 	// Primary path: try DynamoDB atomic unlock.
 	unlockErr := awspkg.UnlockSandboxDynamo(ctx, dynamoClient, tableName, sandboxID)
@@ -128,7 +125,7 @@ func runUnlockS3Fallback(ctx context.Context, cfg *config.Config, sandboxID stri
 	metaJSON, _ := json.Marshal(meta)
 	_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.StateBucket),
-		Key:         aws.String("tf-km/sandboxes/" + sandboxID + "/metadata.json"),
+		Key:         aws.String("tf-" + cfg.GetResourcePrefix() + "/sandboxes/" + sandboxID + "/metadata.json"),
 		Body:        bytes.NewReader(metaJSON),
 		ContentType: aws.String("application/json"),
 	})

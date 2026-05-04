@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 12
+current_plan: 13
 status: in-progress
-stopped_at: Completed 68-10-PLAN.md
-last_updated: "2026-05-04T04:02:31.297Z"
-last_activity: 2026-05-03
+stopped_at: Completed 66-05-PLAN.md
+last_updated: "2026-05-04T16:33:48.970Z"
+last_activity: 2026-05-04
 progress:
   total_phases: 73
-  completed_phases: 68
+  completed_phases: 69
   total_plans: 242
-  completed_plans: 238
+  completed_plans: 243
   percent: 93
 ---
 
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 Phase: 68 (slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload) — Wave 0 stub seeding COMPLETE
 Plan: 1 of 13 in current phase (Plan 68-00 COMPLETE; 68-01..68-12 pending)
 Total Plans in Phase: 13
-Current Plan: 12
+Current Plan: 13
 Status: in-progress
-Last activity: 2026-05-03
+Last activity: 2026-05-04
 
 Progress: [█████████░] 93%
 
@@ -279,6 +279,10 @@ Progress: [█████████░] 93%
 | Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P09 | 30min | 5 tasks | 7 files |
 | Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P11 | 7min | 3 tasks | 4 files |
 | Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P10 | 13min | 2 tasks | 5 files |
+| Phase 66-multi-instance-support-configurable-resource-prefix-and-email-subdomain P01 | 179 | 2 tasks | 4 files |
+| Phase 66-multi-instance-support-configurable-resource-prefix-and-email-subdomain P02 | 1023 | 3 tasks | 14 files |
+| Phase 66-multi-instance-support-configurable-resource-prefix-and-email-subdomain P04 | 31539929 | 4 tasks | 22 files |
+| Phase 66-multi-instance-support-configurable-resource-prefix-and-email-subdomain P05 | 25min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -793,6 +797,16 @@ Recent decisions affecting current work:
 - [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-11: pivoted from plan's Doctor-struct pseudo-code to closure-based dep injection (Phase 67 doctor_slack.go pattern); checkSlackFilesWriteScope reuses the existing Phase 67 SlackAuthTestScopes closure rather than duplicating fetchSlackBotScopes wiring
 - [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-11: all three transcript-streaming doctor checks demote CheckError to CheckWarn at registration — Phase 68 is opt-in, so missing stream-messages table or absent files:write scope must not turn km doctor red for non-opted-in deployments (mirrors Phase 63/67 Slack-check policy)
 - [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-10: NotifyEnv-block placement after SlackStreamMessagesTableName mirrors the Phase 62/63 'append additive Slack fields after existing assignments' pattern; printTranscriptWarning placed inside the existing Slack-resolution if-block to reuse slackClient
+- [Phase 66-01]: EmailSubdomain field uses nil-safe GetEmailDomain() helper matching Phase 67 GetResourcePrefix() nil-safety pattern
+- [Phase 66-01]: DoctorConfigProvider interface extended with 4 methods; type-assert hack at doctor.go:2344 removed (Pitfall 12 resolved)
+- [Phase 66-02]: AMIName() uses variadic prefix string to preserve backward compat; caller passes cfg.GetResourcePrefix()+"-"
+- [Phase 66-02]: Lambda getEmailDomain() uses lazy env read (not init-time var) so test tools can override at test time
+- [Phase 66-02]: HCL template deferrals to plan 04 use inline TODO on same line as literal to enable grep audit
+- [Phase 66]: mock_outputs in dependency blocks retain literal km- defaults (plan-time stubs, not deployed values)
+- [Phase 66]: ecs-spot-handler has no live config under infra/live/use1/ — management SCP only; module parameterized but no live wire needed
+- [Phase 66]: Lambda function_name rename caveat: default-prefix installs unaffected; custom-prefix migrations from default need terraform state mv for lambda-slack-bridge
+- [Phase 66]: ExportConfigEnvVars now exports KM_RESOURCE_PREFIX + KM_EMAIL_SUBDOMAIN; fetchAndCacheOutputs uses env var for prefix-aware bucket naming
+- [Phase 66]: km-config.yaml is gitignored by design; email_subdomain added on disk; grep audit residuals are pre-existing from phases 02-67 and documented
 
 ### Roadmap Evolution
 
@@ -881,6 +895,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-03T20:54:22.102Z
-Stopped at: Completed 68-10-PLAN.md
+Last session: 2026-05-04T15:53:15.470Z
+Stopped at: Completed 66-05-PLAN.md
 Resume file: None

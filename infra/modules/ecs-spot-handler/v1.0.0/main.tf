@@ -13,7 +13,7 @@ data "archive_file" "spot_handler" {
 # ============================================================
 
 resource "aws_iam_role" "spot_handler" {
-  name = "km-ecs-spot-handler"
+  name = "${var.resource_prefix}-ecs-spot-handler"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -34,7 +34,7 @@ resource "aws_iam_role" "spot_handler" {
 
 # Policy: CloudWatch Logs for Lambda execution logs
 resource "aws_iam_role_policy" "cloudwatch_logs" {
-  name = "km-spot-handler-cw-logs"
+  name = "${var.resource_prefix}-spot-handler-cw-logs"
   role = aws_iam_role.spot_handler.id
 
   policy = jsonencode({
@@ -55,7 +55,7 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
 
 # Policy: ECS Exec to trigger artifact upload inside the stopping container
 resource "aws_iam_role_policy" "ecs_exec" {
-  name = "km-spot-handler-ecs-exec"
+  name = "${var.resource_prefix}-spot-handler-ecs-exec"
   role = aws_iam_role.spot_handler.id
 
   policy = jsonencode({
@@ -92,7 +92,7 @@ resource "aws_iam_role_policy" "ecs_exec" {
 # ============================================================
 
 resource "aws_lambda_function" "spot_handler" {
-  function_name    = "km-ecs-spot-handler"
+  function_name    = "${var.resource_prefix}-ecs-spot-handler"
   description      = "Triggers artifact upload via ECS Exec when a Fargate Spot task is interrupted"
   role             = aws_iam_role.spot_handler.arn
   runtime          = "python3.12"
@@ -120,7 +120,7 @@ resource "aws_lambda_function" "spot_handler" {
 
 # CloudWatch Log Group for Lambda logs
 resource "aws_cloudwatch_log_group" "spot_handler" {
-  name              = "/aws/lambda/km-ecs-spot-handler"
+  name              = "/aws/lambda/${var.resource_prefix}-ecs-spot-handler"
   retention_in_days = 30
 
   tags = {
@@ -134,7 +134,7 @@ resource "aws_cloudwatch_log_group" "spot_handler" {
 # ============================================================
 
 resource "aws_cloudwatch_event_rule" "ecs_spot_interruption" {
-  name        = "km-ecs-spot-interruption"
+  name        = "${var.resource_prefix}-ecs-spot-interruption"
   description = "Captures ECS Fargate Spot task stopping events for artifact upload"
 
   event_pattern = jsonencode({
@@ -156,7 +156,7 @@ resource "aws_cloudwatch_event_rule" "ecs_spot_interruption" {
 # EventBridge target: invoke the spot handler Lambda
 resource "aws_cloudwatch_event_target" "lambda" {
   rule      = aws_cloudwatch_event_rule.ecs_spot_interruption.name
-  target_id = "km-ecs-spot-handler"
+  target_id = "${var.resource_prefix}-ecs-spot-handler"
   arn       = aws_lambda_function.spot_handler.arn
 }
 

@@ -109,6 +109,8 @@ deploying shared infrastructure in Section 4). Set these in your shell or a per-
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `KM_DOMAIN` | Base domain for sandboxes | `example.com` |
+| `KM_RESOURCE_PREFIX` | Prefix for all account-globally-unique AWS resource names. Default: `km`. Set this when running a second km install in the same AWS account. One-time choice at `km init` — changing on a live install is unsupported. | `km` |
+| `KM_EMAIL_SUBDOMAIN` | Subdomain for SES email addresses (`{sandboxID}@{subdomain}.{domain}`). Default: `sandboxes`. Changing requires fresh DNS verification + DKIM/MX records in Route53 (up to 72h propagation). | `sandboxes` |
 | `KM_ACCOUNTS_ORGANIZATION` | AWS Organizations management account ID. Used by `km bootstrap` SCP deployment. Optional — blank skips SCP. | `111111111111` |
 | `KM_ACCOUNTS_DNS_PARENT` | AWS account ID owning the parent Route53 hosted zone for `cfg.Domain`. Used by `km init` DNS delegation. Optional if no domain is configured. | `111111111111` |
 | `KM_ACCOUNTS_TERRAFORM` | AWS account ID for the Terraform account | `222222222222` |
@@ -135,6 +137,8 @@ km configure
 
 The command prompts for:
 
+- Resource prefix for AWS resource names (default: `km`; one-time choice — see [Multi-instance support](#multi-instance-support))
+- Email subdomain for SES addresses (default: `sandboxes`; one-time choice — changing requires fresh SES verification)
 - Base domain (e.g., `klankermaker.ai`)
 - Organization AWS account ID (AWS Organizations management account; blank to skip SCP)
 - DNS parent AWS account ID (account owning the parent Route53 zone for your domain)
@@ -547,3 +551,69 @@ profile for a `spec.budget` section. If the budget enforcer apply failed, it is 
 ```bash
 cd infra/live/sandboxes/<sandbox-id>/budget-enforcer && terragrunt apply
 ```
+
+---
+
+## 8. Multi-instance support
+
+km supports multiple installs in a single AWS account via the `resource_prefix` configuration
+knob. Each install uses a distinct prefix for all account-globally-unique resource names
+(DynamoDB tables, Lambda functions, IAM roles, EventBridge schedules, SSM parameters).
+
+### Configuration knobs
+
+| km-config.yaml key | Default | Purpose |
+|--------------------|---------|---------|
+| `resource_prefix` | `km` | Prefix for all AWS resource names. One-time choice at `km init`. |
+| `email_subdomain` | `sandboxes` | Subdomain for SES email addresses (`{id}@{subdomain}.{domain}`). One-time choice — changing requires fresh SES verification. |
+
+Sample `km-config.yaml` block:
+
+```yaml
+resource_prefix: "km"        # default; change only for a second install in the same account
+email_subdomain: "sandboxes" # default; one-time choice — changing requires fresh SES verification
+```
+
+### How to configure a second install
+
+1. Create a separate checkout of this repository (or a separate working directory).
+2. Edit `km-config.yaml` and set a distinct prefix before running `km init`:
+
+   ```bash
+   # km-config.yaml for the second install
+   resource_prefix: "km2"
+   email_subdomain: "sandboxes2"
+   domain: mycompany.ai
+   # ... other fields ...
+   ```
+
+3. Run the wizard: `km configure` — it will prompt for `resource_prefix` and `email_subdomain` first.
+4. Run `km init` — all AWS resources will be created under the new prefix.
+
+### Constraints
+
+**Prefix is a one-time choice.** Changing `resource_prefix` on a live install is unsupported.
+DynamoDB tables, EventBridge schedules, IAM roles, Lambda functions, and SSM parameters all carry
+the original prefix in their names and ARNs. Migration to a new prefix would require manual
+`terraform state mv` and recreation of stateful resources — this is not a supported workflow.
+
+**SES domain caveat.** Changing `email_subdomain` after `km init` requires fresh DNS verification
+and DKIM/MX records in Route53 (up to 72 hours propagation). `km doctor` warns if the configured
+email domain does not match a verified SES identity.
+
+**SCP is org-scoped.** The `km-sandbox-containment` SCP is deployed at the AWS Organizations
+level (not per-account). If two installs share the same AWS Organization, only one can deploy
+the SCP. The second install should leave `accounts.organization` blank in `km-config.yaml` to
+skip SCP deployment — the existing SCP from the first install continues to enforce sandbox
+containment for both.
+
+### Doctor checks
+
+`km doctor` adds two Phase 66 checks for multi-instance operators:
+
+- **Prefix Collision** — warns if `{prefix}-ttl-handler` Lambda already exists. If you have
+  already run `km init`, this is expected and informational. If you have NOT run `km init`,
+  this indicates another install is using the same prefix; change `resource_prefix` before
+  proceeding.
+- **Email Domain SES Match** — warns if `cfg.GetEmailDomain()` is not a verified SES identity.
+  Run `km init` to verify the domain, or check DNS records if you recently changed `email_subdomain`.

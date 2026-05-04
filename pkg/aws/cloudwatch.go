@@ -63,9 +63,10 @@ func EnsureLogGroup(ctx context.Context, client CWLogsAPI, logGroup, logStream s
 }
 
 // DeleteSandboxLogGroup deletes the CloudWatch log group for a sandbox.
+// prefix is the resource prefix (e.g. "km") used to construct the log group path.
 // Idempotent — ignores ResourceNotFoundException.
-func DeleteSandboxLogGroup(ctx context.Context, client CWLogsAPI, sandboxID string) error {
-	logGroup := "/km/sandboxes/" + sandboxID + "/"
+func DeleteSandboxLogGroup(ctx context.Context, client CWLogsAPI, sandboxID, prefix string) error {
+	logGroup := "/" + prefix + "/sandboxes/" + sandboxID + "/"
 	_, err := client.DeleteLogGroup(ctx, &cloudwatchlogs.DeleteLogGroupInput{
 		LogGroupName: aws.String(logGroup),
 	})
@@ -80,11 +81,12 @@ func DeleteSandboxLogGroup(ctx context.Context, client CWLogsAPI, sandboxID stri
 }
 
 // ExportSandboxLogs initiates a CloudWatch Logs export task to S3 for the given sandbox.
+// prefix is the resource prefix (e.g. "km") used to construct the log group path.
 // The export covers the last 7 days (matching the log group retention policy) up to now.
 // Returns nil if the log group does not exist (ResourceNotFoundException) — no logs to export.
 // The export is async (CreateExportTask is fire-and-forget); log group deletion proceeds immediately.
-func ExportSandboxLogs(ctx context.Context, client CWLogsAPI, sandboxID, destBucket string) error {
-	logGroup := "/km/sandboxes/" + sandboxID + "/"
+func ExportSandboxLogs(ctx context.Context, client CWLogsAPI, sandboxID, destBucket, prefix string) error {
+	logGroup := "/" + prefix + "/sandboxes/" + sandboxID + "/"
 	now := time.Now().UTC()
 	from := now.Add(-7 * 24 * time.Hour)
 

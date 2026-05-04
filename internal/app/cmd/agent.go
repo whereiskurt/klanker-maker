@@ -311,13 +311,7 @@ func runAgent(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
 		}
-		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, func() string {
-			t := cfg.SandboxTableName
-			if t == "" {
-				t = "km-sandboxes"
-			}
-			return t
-		}())
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())
 	}
 	if execFn == nil {
 		execFn = defaultShellExec
@@ -402,13 +396,7 @@ Examples:
 				if err != nil {
 					return fmt.Errorf("load AWS config: %w", err)
 				}
-				fetcher = newRealFetcher(awsCfg, cfg.StateBucket, func() string {
-					t := cfg.SandboxTableName
-					if t == "" {
-						t = "km-sandboxes"
-					}
-					return t
-				}())
+				fetcher = newRealFetcher(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())
 			}
 			if execFn == nil {
 				execFn = defaultShellExec
@@ -468,13 +456,7 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
 		}
-		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, func() string {
-			t := cfg.SandboxTableName
-			if t == "" {
-				t = "km-sandboxes"
-			}
-			return t
-		}())
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())
 		if ssmClient == nil {
 			ssmClient = ssm.NewFromConfig(awsCfg)
 		}
@@ -837,13 +819,7 @@ func runAgentResults(ctx context.Context, cobraCmd *cobra.Command, cfg *config.C
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
 		}
-		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, func() string {
-			t := cfg.SandboxTableName
-			if t == "" {
-				t = "km-sandboxes"
-			}
-			return t
-		}())
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())
 		if ssmClient == nil {
 			ssmClient = ssm.NewFromConfig(awsCfg)
 		}
@@ -1024,13 +1000,7 @@ func runAgentList(ctx context.Context, cobraCmd *cobra.Command, cfg *config.Conf
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
 		}
-		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, func() string {
-			t := cfg.SandboxTableName
-			if t == "" {
-				t = "km-sandboxes"
-			}
-			return t
-		}())
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())
 		if ssmClient == nil {
 			ssmClient = ssm.NewFromConfig(awsCfg)
 		}

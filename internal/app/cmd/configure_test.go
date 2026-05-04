@@ -346,6 +346,86 @@ func TestConfigureWritesOrganizationAndDNSParent(t *testing.T) {
 	}
 }
 
+// TestConfigureWizardWritesResourcePrefixAndEmailSubdomain verifies that the interactive
+// wizard writes resource_prefix and email_subdomain to km-config.yaml (Phase 66).
+func TestConfigureWizardWritesResourcePrefixAndEmailSubdomain(t *testing.T) {
+	km := buildKM(t)
+	dir := t.TempDir()
+
+	// Prompts are in order: resource_prefix, email_subdomain, domain, organization,
+	// dns_parent, terraform, application, sso start url, sso region, region,
+	// state bucket, artifacts bucket, operator email, safe phrase, max sandboxes.
+	stdinInput := strings.Join([]string{
+		"km2",            // resource_prefix
+		"mail",           // email_subdomain
+		"test.example.com",
+		"111111111111",
+		"222222222222",
+		"333333333333",
+		"444444444444",
+		"https://sso.example.com/start",
+		"us-east-1",
+		"us-east-1",
+		"", // state bucket
+		"", // artifacts bucket
+		"", // operator email
+		"", // safe phrase
+		"", // max sandboxes
+	}, "\n") + "\n"
+
+	out, err := runKMArgs(km, stdinInput, "configure", "--output-dir", dir)
+	if err != nil {
+		t.Fatalf("km configure (interactive resource_prefix): %v\noutput: %s", err, out)
+	}
+
+	cfg := kmConfigYAML(t, dir)
+	if cfg["resource_prefix"] != "km2" {
+		t.Errorf("resource_prefix: got %v, want km2", cfg["resource_prefix"])
+	}
+	if cfg["email_subdomain"] != "mail" {
+		t.Errorf("email_subdomain: got %v, want mail", cfg["email_subdomain"])
+	}
+}
+
+// TestConfigureWizardDefaultsApply verifies that pressing enter twice for
+// resource_prefix and email_subdomain writes the defaults "km" and "sandboxes" (Phase 66).
+func TestConfigureWizardDefaultsApply(t *testing.T) {
+	km := buildKM(t)
+	dir := t.TempDir()
+
+	// Two leading empty entries = accept defaults for resource_prefix and email_subdomain.
+	stdinInput := strings.Join([]string{
+		"",               // resource_prefix (default: km)
+		"",               // email_subdomain (default: sandboxes)
+		"test.example.com",
+		"111111111111",
+		"222222222222",
+		"333333333333",
+		"444444444444",
+		"https://sso.example.com/start",
+		"us-east-1",
+		"us-east-1",
+		"", // state bucket
+		"", // artifacts bucket
+		"", // operator email
+		"", // safe phrase
+		"", // max sandboxes
+	}, "\n") + "\n"
+
+	out, err := runKMArgs(km, stdinInput, "configure", "--output-dir", dir)
+	if err != nil {
+		t.Fatalf("km configure (interactive defaults): %v\noutput: %s", err, out)
+	}
+
+	cfg := kmConfigYAML(t, dir)
+	if cfg["resource_prefix"] != "km" {
+		t.Errorf("resource_prefix default: got %v, want km", cfg["resource_prefix"])
+	}
+	if cfg["email_subdomain"] != "sandboxes" {
+		t.Errorf("email_subdomain default: got %v, want sandboxes", cfg["email_subdomain"])
+	}
+}
+
 // TestConfigureInteractivePromptsUseNewNames verifies that the interactive wizard
 // prompts for "Organization" and "DNS parent" fields, not "Management".
 func TestConfigureInteractivePromptsUseNewNames(t *testing.T) {
@@ -353,10 +433,12 @@ func TestConfigureInteractivePromptsUseNewNames(t *testing.T) {
 	dir := t.TempDir()
 
 	// Provide interactive input answering each prompt in order:
-	// domain, organization account, dns_parent account, terraform, application,
-	// sso start url, sso region, region, state bucket, artifacts bucket,
-	// operator email, safe phrase, max sandboxes.
+	// resource_prefix, email_subdomain, domain, organization account, dns_parent account,
+	// terraform, application, sso start url, sso region, region, state bucket,
+	// artifacts bucket, operator email, safe phrase, max sandboxes.
 	stdinInput := strings.Join([]string{
+		"",               // resource_prefix (default: km)
+		"",               // email_subdomain (default: sandboxes)
 		"test.example.com",
 		"111111111111",
 		"222222222222",
@@ -372,7 +454,7 @@ func TestConfigureInteractivePromptsUseNewNames(t *testing.T) {
 		"", // max sandboxes (empty = default)
 	}, "\n") + "\n"
 
-	out, err := runKMArgsInDir(km, dir, stdinInput, "configure")
+	out, err := runKMArgs(km, stdinInput, "configure", "--output-dir", dir)
 	if err != nil {
 		t.Fatalf("km configure (interactive): %v\noutput: %s", err, out)
 	}

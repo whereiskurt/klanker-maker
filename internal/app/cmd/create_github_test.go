@@ -81,7 +81,7 @@ func TestCreateGitHubSkip_AppClientIDNotFound(t *testing.T) {
 		},
 	}
 
-	_, err := generateAndStoreGitHubToken(context.Background(), mock, "sb-test", "alias/km-platform", nil, nil)
+	_, err := generateAndStoreGitHubToken(context.Background(), mock, "sb-test", "alias/km-platform", nil, nil, "/km/")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -101,7 +101,7 @@ func TestCreateGitHubSkip_InstallationIDNotFound(t *testing.T) {
 		},
 	}
 
-	_, err := generateAndStoreGitHubToken(context.Background(), mock, "sb-test", "alias/km-platform", nil, nil)
+	_, err := generateAndStoreGitHubToken(context.Background(), mock, "sb-test", "alias/km-platform", nil, nil, "/km/")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -120,7 +120,7 @@ func TestCreateGitHubSkip_AccessDeniedIsNotSkipped(t *testing.T) {
 		},
 	}
 
-	_, err := generateAndStoreGitHubToken(context.Background(), mock, "sb-test", "alias/km-platform", nil, nil)
+	_, err := generateAndStoreGitHubToken(context.Background(), mock, "sb-test", "alias/km-platform", nil, nil, "/km/")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -197,7 +197,7 @@ func TestResolveInstallationID_PerAccountFound(t *testing.T) {
 			"/km/config/github/installations/userA": {value: "12345678"},
 		},
 	}
-	id, err := resolveInstallationID(context.Background(), mock, []string{"userA/repo1"})
+	id, err := resolveInstallationID(context.Background(), mock, []string{"userA/repo1"}, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestResolveInstallationID_FallbackToLegacy(t *testing.T) {
 			"/km/config/github/installation-id":     {value: "99999"},
 		},
 	}
-	id, err := resolveInstallationID(context.Background(), mock, []string{"userA/repo1"})
+	id, err := resolveInstallationID(context.Background(), mock, []string{"userA/repo1"}, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestResolveInstallationID_BothMissing(t *testing.T) {
 			"/km/config/github/installation-id":     {err: paramNotFound("/km/config/github/installation-id")},
 		},
 	}
-	_, err := resolveInstallationID(context.Background(), mock, []string{"userA/repo1"})
+	_, err := resolveInstallationID(context.Background(), mock, []string{"userA/repo1"}, "/km/")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -244,7 +244,7 @@ func TestResolveInstallationID_BareReposFallbackToLegacy(t *testing.T) {
 			"/km/config/github/installation-id": {value: "legacy-id"},
 		},
 	}
-	id, err := resolveInstallationID(context.Background(), mock, []string{"bare-repo"})
+	id, err := resolveInstallationID(context.Background(), mock, []string{"bare-repo"}, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestResolveInstallationID_WildcardFallbackToLegacy(t *testing.T) {
 			"/km/config/github/installation-id": {value: "legacy-id"},
 		},
 	}
-	id, err := resolveInstallationID(context.Background(), mock, []string{"*"})
+	id, err := resolveInstallationID(context.Background(), mock, []string{"*"}, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestResolveInstallationID_MixedOwnersUsesFirst(t *testing.T) {
 			"/km/config/github/installations/orgA": {value: "11111"},
 		},
 	}
-	id, err := resolveInstallationID(context.Background(), mock, []string{"orgA/repo1", "orgB/repo2"})
+	id, err := resolveInstallationID(context.Background(), mock, []string{"orgA/repo1", "orgB/repo2"}, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestResolveInstallationID_NilReposFallbackToLegacy(t *testing.T) {
 			"/km/config/github/installation-id": {value: "legacy-id"},
 		},
 	}
-	id, err := resolveInstallationID(context.Background(), mock, nil)
+	id, err := resolveInstallationID(context.Background(), mock, nil, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestResolveInstallationID_WildcardOnly_SingleInstallation_ReturnsIt(t *test
 			},
 		},
 	}
-	id, err := resolveInstallationID(context.Background(), mock, []string{"*"})
+	id, err := resolveInstallationID(context.Background(), mock, []string{"*"}, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -360,7 +360,7 @@ func TestResolveInstallationID_WildcardOnly_MultipleInstallations_ReturnsAmbiguo
 			},
 		},
 	}
-	id, err := resolveInstallationID(context.Background(), mock, []string{"*"})
+	id, err := resolveInstallationID(context.Background(), mock, []string{"*"}, "/km/")
 	if err == nil {
 		t.Fatalf("expected error, got id=%q", id)
 	}
@@ -400,7 +400,7 @@ func TestResolveInstallationID_WildcardOnly_NoInstallations_LegacySet_ReturnsLeg
 			installationsPathPrefix: {}, // explicitly empty
 		},
 	}
-	id, err := resolveInstallationID(context.Background(), mock, []string{"*"})
+	id, err := resolveInstallationID(context.Background(), mock, []string{"*"}, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestResolveInstallationID_WildcardOnly_NoInstallations_NoLegacy_ReturnsNotC
 			installationsPathPrefix: {},
 		},
 	}
-	_, err := resolveInstallationID(context.Background(), mock, []string{"*"})
+	_, err := resolveInstallationID(context.Background(), mock, []string{"*"}, "/km/")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -442,7 +442,7 @@ func TestResolveInstallationID_ConcreteOwner_StillUsesPerOwnerKey_RegressionGuar
 		},
 		// pathResults intentionally nil — concrete-owner branch must not enumerate.
 	}
-	id, err := resolveInstallationID(context.Background(), mock, []string{"whereiskurt/foo"})
+	id, err := resolveInstallationID(context.Background(), mock, []string{"whereiskurt/foo"}, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

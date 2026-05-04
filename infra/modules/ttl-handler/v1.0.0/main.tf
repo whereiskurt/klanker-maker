@@ -5,7 +5,7 @@ data "aws_caller_identity" "current" {}
 # ============================================================
 
 resource "aws_iam_role" "ttl_handler" {
-  name = "km-ttl-handler"
+  name = "${var.resource_prefix}-ttl-handler"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -26,7 +26,7 @@ resource "aws_iam_role" "ttl_handler" {
 
 # Policy: CloudWatch Logs for Lambda execution logs and sandbox log export
 resource "aws_iam_role_policy" "cloudwatch_logs" {
-  name = "km-ttl-handler-cw-logs"
+  name = "${var.resource_prefix}-ttl-handler-cw-logs"
   role = aws_iam_role.ttl_handler.id
 
   policy = jsonencode({
@@ -50,7 +50,7 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
 
 # Policy: S3 access for profile download and artifact upload
 resource "aws_iam_role_policy" "s3_artifacts" {
-  name = "km-ttl-handler-s3"
+  name = "${var.resource_prefix}-ttl-handler-s3"
   role = aws_iam_role.ttl_handler.id
 
   policy = jsonencode({
@@ -74,7 +74,7 @@ resource "aws_iam_role_policy" "s3_artifacts" {
 
 # Policy: SES for lifecycle notification emails
 resource "aws_iam_role_policy" "ses_send" {
-  name = "km-ttl-handler-ses"
+  name = "${var.resource_prefix}-ttl-handler-ses"
   role = aws_iam_role.ttl_handler.id
 
   policy = jsonencode({
@@ -91,7 +91,7 @@ resource "aws_iam_role_policy" "ses_send" {
 
 # Policy: EventBridge Scheduler self-cleanup (delete the TTL schedule after firing)
 resource "aws_iam_role_policy" "scheduler_delete" {
-  name = "km-ttl-handler-scheduler"
+  name = "${var.resource_prefix}-ttl-handler-scheduler"
   role = aws_iam_role.ttl_handler.id
 
   policy = jsonencode({
@@ -100,7 +100,7 @@ resource "aws_iam_role_policy" "scheduler_delete" {
       {
         Effect   = "Allow"
         Action   = ["scheduler:DeleteSchedule"]
-        Resource = "arn:aws:scheduler:*:*:schedule/default/km-ttl-*"
+        Resource = "arn:aws:scheduler:*:*:schedule/default/${var.resource_prefix}-ttl-*"
       },
       {
         Effect = "Allow"
@@ -109,7 +109,7 @@ resource "aws_iam_role_policy" "scheduler_delete" {
           "scheduler:DeleteSchedule",
           "scheduler:GetSchedule",
         ]
-        Resource = "arn:aws:scheduler:*:*:schedule/km-at/*"
+        Resource = "arn:aws:scheduler:*:*:schedule/${var.resource_prefix}-at/*"
       },
       {
         Effect   = "Allow"
@@ -123,7 +123,7 @@ resource "aws_iam_role_policy" "scheduler_delete" {
 # Policy: Terraform destroy permissions — allows the Lambda to run terraform destroy
 # on sandbox state. Scoped to km-* resources where possible.
 resource "aws_iam_role_policy" "terraform_destroy" {
-  name = "km-ttl-handler-terraform-destroy"
+  name = "${var.resource_prefix}-ttl-handler-terraform-destroy"
   role = aws_iam_role.ttl_handler.id
 
   policy = jsonencode({
@@ -217,10 +217,10 @@ resource "aws_iam_role_policy" "terraform_destroy" {
           "iam:TagRole",
         ]
         Resource = [
-          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/km-ec2spot-*",
-          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/km-budget-enforcer-*",
-          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/km-budget-scheduler-*",
-          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/km-ec2spot-*",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_prefix}-ec2spot-*",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_prefix}-budget-enforcer-*",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_prefix}-budget-scheduler-*",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/${var.resource_prefix}-ec2spot-*",
         ]
       },
       {
@@ -232,7 +232,7 @@ resource "aws_iam_role_policy" "terraform_destroy" {
           "lambda:RemovePermission",
           "lambda:GetPolicy",
         ]
-        Resource = "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:km-budget-enforcer-*"
+        Resource = "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:${var.resource_prefix}-budget-enforcer-*"
       },
       {
         Sid    = "SchedulerCleanup"
@@ -241,7 +241,7 @@ resource "aws_iam_role_policy" "terraform_destroy" {
           "scheduler:DeleteSchedule",
           "scheduler:GetSchedule",
         ]
-        Resource = "arn:aws:scheduler:*:*:schedule/default/km-budget-*"
+        Resource = "arn:aws:scheduler:*:*:schedule/default/${var.resource_prefix}-budget-*"
       },
       {
         Sid    = "KMSCleanup"
@@ -263,7 +263,7 @@ resource "aws_iam_role_policy" "terraform_destroy" {
 # ============================================================
 
 resource "aws_lambda_function" "ttl_handler" {
-  function_name = "km-ttl-handler"
+  function_name = "${var.resource_prefix}-ttl-handler"
   description   = "Uploads artifacts and sends ttl-expired notification when EventBridge TTL fires"
   role          = aws_iam_role.ttl_handler.arn
 
@@ -285,15 +285,21 @@ resource "aws_lambda_function" "ttl_handler" {
 
   environment {
     variables = {
-      KM_ARTIFACTS_BUCKET = var.artifact_bucket_name
-      KM_EMAIL_DOMAIN     = var.email_domain
-      KM_OPERATOR_EMAIL   = var.operator_email
-      KM_STATE_BUCKET     = var.state_bucket
-      KM_STATE_PREFIX     = var.state_prefix
+      KM_ARTIFACTS_BUCKET   = var.artifact_bucket_name
+      KM_EMAIL_DOMAIN       = var.email_domain
+      KM_OPERATOR_EMAIL     = var.operator_email
+      KM_STATE_BUCKET       = var.state_bucket
+      KM_STATE_PREFIX       = var.state_prefix
       KM_REGION_LABEL       = var.region_label
-      SANDBOX_TABLE_NAME    = "km-sandboxes"
+      SANDBOX_TABLE_NAME    = var.sandbox_table_name
       KM_CREATE_HANDLER_ARN = var.create_handler_arn
       KM_SCHEDULER_ROLE_ARN = var.scheduler_role_arn
+      KM_TTL_HANDLER_NAME   = "${var.resource_prefix}-ttl-handler"
+      KM_TTL_SCHEDULER_ROLE = "${var.resource_prefix}-ttl-scheduler"
+      KM_AT_GROUP_NAME      = "${var.resource_prefix}-at"
+      KM_SANDBOX_TABLE_NAME = var.sandbox_table_name
+      KM_BUDGET_TABLE       = var.budget_table_name
+      KM_SCHEDULES_TABLE    = var.schedules_table_name
     }
   }
 
@@ -310,7 +316,7 @@ resource "aws_lambda_function" "ttl_handler" {
 
 # CloudWatch Log Group for Lambda logs
 resource "aws_cloudwatch_log_group" "ttl_handler" {
-  name              = "/aws/lambda/km-ttl-handler"
+  name              = "/aws/lambda/${var.resource_prefix}-ttl-handler"
   retention_in_days = 30
 
   tags = {
@@ -324,7 +330,7 @@ resource "aws_cloudwatch_log_group" "ttl_handler" {
 # ============================================================
 
 resource "aws_iam_role" "scheduler_invoke" {
-  name = "km-ttl-scheduler"
+  name = "${var.resource_prefix}-ttl-scheduler"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -346,15 +352,15 @@ resource "aws_iam_role" "scheduler_invoke" {
 }
 
 resource "aws_iam_role_policy" "scheduler_invoke_lambda" {
-  name = "km-ttl-scheduler-invoke"
+  name = "${var.resource_prefix}-ttl-scheduler-invoke"
   role = aws_iam_role.scheduler_invoke.id
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = "lambda:InvokeFunction"
+        Effect = "Allow"
+        Action = "lambda:InvokeFunction"
         Resource = compact([
           aws_lambda_function.ttl_handler.arn,
           var.create_handler_arn,
@@ -380,7 +386,7 @@ resource "aws_lambda_permission" "eventbridge_scheduler" {
 # ============================================================
 
 resource "aws_cloudwatch_event_rule" "sandbox_idle" {
-  name        = "km-sandbox-idle"
+  name        = "${var.resource_prefix}-sandbox-idle"
   description = "Routes SandboxIdle events from audit-log sidecar to TTL Lambda for sandbox teardown"
 
   event_pattern = jsonencode({
@@ -399,7 +405,7 @@ resource "aws_cloudwatch_event_rule" "sandbox_idle" {
 
 resource "aws_cloudwatch_event_target" "idle_to_ttl" {
   rule      = aws_cloudwatch_event_rule.sandbox_idle.name
-  target_id = "km-ttl-handler-idle"
+  target_id = "${var.resource_prefix}-ttl-handler-idle"
   arn       = aws_lambda_function.ttl_handler.arn
 
   # Transform EventBridge envelope to match TTLEvent struct shape
@@ -429,7 +435,7 @@ resource "aws_lambda_permission" "eventbridge_events" {
 # ============================================================
 
 resource "aws_cloudwatch_event_rule" "sandbox_command" {
-  name        = "km-sandbox-command"
+  name        = "${var.resource_prefix}-sandbox-command"
   description = "Routes SandboxCommand events to TTL Lambda — full detail passthrough for schedule-create relay"
 
   event_pattern = jsonencode({
@@ -448,7 +454,7 @@ resource "aws_cloudwatch_event_rule" "sandbox_command" {
 
 resource "aws_cloudwatch_event_target" "command_to_ttl" {
   rule      = aws_cloudwatch_event_rule.sandbox_command.name
-  target_id = "km-ttl-handler-command"
+  target_id = "${var.resource_prefix}-ttl-handler-command"
   arn       = aws_lambda_function.ttl_handler.arn
 
   # Pass full detail through — no input transformer.
@@ -470,7 +476,7 @@ resource "aws_lambda_permission" "eventbridge_command" {
 
 # Policy: Tag API for discovering sandbox resources by km:sandbox-id tag
 resource "aws_iam_role_policy" "tag_discovery" {
-  name = "km-ttl-handler-tag-discovery"
+  name = "${var.resource_prefix}-ttl-handler-tag-discovery"
   role = aws_iam_role.ttl_handler.id
 
   policy = jsonencode({
@@ -485,7 +491,7 @@ resource "aws_iam_role_policy" "tag_discovery" {
 
 # Policy: EC2 terminate for destroying sandbox instances after TTL/idle
 resource "aws_iam_role_policy" "ec2_teardown" {
-  name = "km-ttl-handler-ec2-teardown"
+  name = "${var.resource_prefix}-ttl-handler-ec2-teardown"
   role = aws_iam_role.ttl_handler.id
 
   policy = jsonencode({
@@ -505,7 +511,7 @@ resource "aws_iam_role_policy" "ec2_teardown" {
 
 # Policy: DynamoDB km-sandboxes — read/write sandbox metadata
 resource "aws_iam_role_policy" "dynamodb_sandboxes" {
-  name = "km-ttl-handler-dynamodb-sandboxes"
+  name = "${var.resource_prefix}-ttl-handler-dynamodb-sandboxes"
   role = aws_iam_role.ttl_handler.id
 
   policy = jsonencode({
@@ -523,8 +529,8 @@ resource "aws_iam_role_policy" "dynamodb_sandboxes" {
           "dynamodb:Query",
         ]
         Resource = [
-          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/km-sandboxes",
-          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/km-sandboxes/index/alias-index",
+          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.sandbox_table_name}",
+          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.sandbox_table_name}/index/alias-index",
         ]
       }
     ]

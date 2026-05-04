@@ -58,7 +58,9 @@ func destroySlackChannel(
 	ssmStore SSMParamStore,
 	keyLoader PrivKeyLoaderFunc,
 	bridgePoster BridgePosterFunc,
+	ssmPrefix string,
 ) error {
+	bridgeURLPath := ssmPrefix + "slack/bridge-url"
 	// Case A — no channel configured.
 	if meta.SlackChannelID == "" {
 		fmt.Fprintf(os.Stderr, "  Slack: no channel configured — teardown notification skipped\n")
@@ -72,12 +74,13 @@ func destroySlackChannel(
 	}
 
 	// Fetch bridge URL from SSM.
-	bridgeURL, _ := ssmStore.Get(ctx, "/km/slack/bridge-url", false)
+	bridgeURL, _ := ssmStore.Get(ctx, bridgeURLPath, false)
 	if bridgeURL == "" {
 		// Case F — bridge URL not configured.
 		log.Warn().Str("sandbox_id", meta.SandboxID).
-			Msg("destroySlackChannel: /km/slack/bridge-url not configured; skipping teardown notification")
-		fmt.Fprintf(os.Stderr, "  ⚠ Slack: /km/slack/bridge-url not configured — teardown notification skipped\n")
+			Str("path", bridgeURLPath).
+			Msg("destroySlackChannel: bridge-url SSM param not configured; skipping teardown notification")
+		fmt.Fprintf(os.Stderr, "  ⚠ Slack: %s not configured — teardown notification skipped\n", bridgeURLPath)
 		return nil
 	}
 
@@ -167,7 +170,7 @@ func destroySlackChannel(
 // SLCK-12 (Plan 63.1-02 Option A): remote destroy path calls this BEFORE
 // dispatching the EventBridge event so the operator-workstation signs and posts
 // the teardown message even when km destroy runs with --remote (the default).
-func runSlackTeardown(ctx context.Context, awsCfg aws.Config, meta *kmaws.SandboxMetadata) {
+func runSlackTeardown(ctx context.Context, awsCfg aws.Config, meta *kmaws.SandboxMetadata, ssmPrefix string) {
 	ssmClient := ssm.NewFromConfig(awsCfg)
 	ssmStore := &productionSSMParamStore{client: ssmClient}
 	region := awsCfg.Region
@@ -177,7 +180,7 @@ func runSlackTeardown(ctx context.Context, awsCfg aws.Config, meta *kmaws.Sandbo
 	keyLoader := PrivKeyLoaderFunc(func(innerCtx context.Context, _ string) (ed25519.PrivateKey, error) {
 		return loadSlackOperatorKey(innerCtx, ssmClient)
 	})
-	_ = destroySlackChannel(ctx, meta, region, ssmStore, keyLoader, BridgePosterFunc(slack.PostToBridge))
+	_ = destroySlackChannel(ctx, meta, region, ssmStore, keyLoader, BridgePosterFunc(slack.PostToBridge), ssmPrefix)
 
 	// Phase 67 gap closure: clean up the per-sandbox slack-channel-id SSM
 	// parameter that runStep11dInject wrote at create time. Best-effort —

@@ -76,6 +76,9 @@ type SlackCmdDeps struct {
 	BridgeColdStart func(ctx context.Context) error
 	Region          string // short label, e.g. "use1"
 	RepoRoot        string // absolute path to repo root
+	// SsmPrefix is the SSM parameter path prefix (e.g. "/km/"). Populated by
+	// buildSlackCmdDeps from cfg.GetSsmPrefix(). Tests default to "/km/".
+	SsmPrefix string
 }
 
 // SlackInitOpts holds parsed flag values for km slack init.
@@ -177,7 +180,7 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 	token := opts.BotToken
 	if token == "" {
 		if !opts.Force {
-			existing, _ := d.SSM.Get(ctx, "/km/slack/bot-token", true)
+			existing, _ := d.SSM.Get(ctx, d.SsmPrefix+"slack/bot-token", true)
 			if existing != "" {
 				token = existing
 				interactive = false // pre-existing token in SSM → non-interactive
@@ -199,7 +202,7 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 	}
 
 	// Step 3: Persist token (SecureString).
-	if err := d.SSM.Put(ctx, "/km/slack/bot-token", token, true); err != nil {
+	if err := d.SSM.Put(ctx, d.SsmPrefix+"slack/bot-token", token, true); err != nil {
 		return fmt.Errorf("store bot token: %w", err)
 	}
 
@@ -207,7 +210,7 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 	inv := opts.InviteEmail
 	if inv == "" {
 		if !opts.Force {
-			existing, _ := d.SSM.Get(ctx, "/km/slack/invite-email", false)
+			existing, _ := d.SSM.Get(ctx, d.SsmPrefix+"slack/invite-email", false)
 			if existing != "" {
 				inv = existing
 			}
@@ -220,7 +223,7 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 			inv = strings.TrimSpace(v)
 		}
 	}
-	if err := d.SSM.Put(ctx, "/km/slack/invite-email", inv, false); err != nil {
+	if err := d.SSM.Put(ctx, d.SsmPrefix+"slack/invite-email", inv, false); err != nil {
 		return fmt.Errorf("store invite-email: %w", err)
 	}
 
@@ -229,7 +232,7 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 	if chName == "" {
 		chName = "km-notifications"
 	}
-	chID, _ := d.SSM.Get(ctx, "/km/slack/shared-channel-id", false)
+	chID, _ := d.SSM.Get(ctx, d.SsmPrefix+"slack/shared-channel-id", false)
 	if chID == "" || opts.Force {
 		newID, err := api.CreateChannel(ctx, chName)
 		if err != nil {
@@ -244,7 +247,7 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 			}
 		} else {
 			chID = newID
-			if err := d.SSM.Put(ctx, "/km/slack/shared-channel-id", chID, false); err != nil {
+			if err := d.SSM.Put(ctx, d.SsmPrefix+"slack/shared-channel-id", chID, false); err != nil {
 				return fmt.Errorf("store shared-channel-id: %w", err)
 			}
 			if inv != "" {
@@ -261,7 +264,7 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 	}
 
 	// Step 6: Deploy dynamodb-slack-nonces + lambda-slack-bridge, then read function_url.
-	bridgeURL, _ := d.SSM.Get(ctx, "/km/slack/bridge-url", false)
+	bridgeURL, _ := d.SSM.Get(ctx, d.SsmPrefix+"slack/bridge-url", false)
 	if bridgeURL == "" || opts.Force {
 		noncesDir := filepath.Join(d.RepoRoot, "infra", "live", d.Region, "dynamodb-slack-nonces")
 		bridgeDir := filepath.Join(d.RepoRoot, "infra", "live", d.Region, "lambda-slack-bridge")
@@ -279,7 +282,7 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 			return errors.New("function_url not found in lambda-slack-bridge Terraform output")
 		}
 		bridgeURL = url
-		if err := d.SSM.Put(ctx, "/km/slack/bridge-url", bridgeURL, false); err != nil {
+		if err := d.SSM.Put(ctx, d.SsmPrefix+"slack/bridge-url", bridgeURL, false); err != nil {
 			return fmt.Errorf("store bridge-url: %w", err)
 		}
 	} else {
@@ -299,16 +302,16 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 	}
 	if signingSecret != "" {
 		kmsKey := "alias/km-platform"
-		if err := PersistSigningSecret(ctx, d.SSM, signingSecret, kmsKey); err != nil {
+		if err := PersistSigningSecret(ctx, d.SSM, signingSecret, d.SsmPrefix, kmsKey); err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "km slack init: signing secret persisted to /km/slack/signing-secret\n")
+		fmt.Fprintf(os.Stderr, "km slack init: signing secret persisted to %sslack/signing-secret\n", d.SsmPrefix)
 	} else {
 		fmt.Fprintf(os.Stderr, "km slack init: signing secret not provided — inbound Events API disabled until set. Re-run with --signing-secret to enable.\n")
 	}
 
 	// Phase 67: Step 8 — Scope verification (warns on missing; does not fail init).
-	if scopes, err := d.SSM.Get(ctx, "/km/slack/bot-scopes-cache", false); err == nil && scopes != "" {
+	if scopes, err := d.SSM.Get(ctx, d.SsmPrefix+"slack/bot-scopes-cache", false); err == nil && scopes != "" {
 		// Use cached scopes if available.
 		scopeList := strings.Split(scopes, ",")
 		ok, missing := VerifyEventsAPIScopes(scopeList)
@@ -325,7 +328,7 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 		_, warnMissing := VerifyEventsAPIScopes(nil) // check with empty → warns about both
 		if len(warnMissing) > 0 {
 			// Only print if we don't already have a cached scope list.
-			cacheVal, _ := d.SSM.Get(ctx, "/km/slack/bot-scopes-cache", false)
+			cacheVal, _ := d.SSM.Get(ctx, d.SsmPrefix+"slack/bot-scopes-cache", false)
 			if cacheVal == "" {
 				fmt.Fprintf(os.Stderr, "km slack init: Note — verify Slack App has scopes: channels:history, groups:history for inbound Events API.\n")
 				fmt.Fprintf(os.Stderr, "  (Run km slack init again after adding scopes to confirm.)\n")
@@ -392,13 +395,13 @@ func newSlackTestCmd(cfg *config.Config, sharedDeps *SlackCmdDeps) *cobra.Comman
 
 // RunSlackTest is the exported test logic (testable via dependency injection).
 func RunSlackTest(ctx context.Context, d *SlackCmdDeps, w io.Writer) error {
-	bridgeURL, _ := d.SSM.Get(ctx, "/km/slack/bridge-url", false)
+	bridgeURL, _ := d.SSM.Get(ctx, d.SsmPrefix+"slack/bridge-url", false)
 	if bridgeURL == "" {
-		return errors.New("/km/slack/bridge-url not set; run km slack init first")
+		return fmt.Errorf("%sslack/bridge-url not set; run km slack init first", d.SsmPrefix)
 	}
-	chID, _ := d.SSM.Get(ctx, "/km/slack/shared-channel-id", false)
+	chID, _ := d.SSM.Get(ctx, d.SsmPrefix+"slack/shared-channel-id", false)
 	if chID == "" {
-		return errors.New("/km/slack/shared-channel-id not set; run km slack init first")
+		return fmt.Errorf("%sslack/shared-channel-id not set; run km slack init first", d.SsmPrefix)
 	}
 	priv, err := d.OperatorKeyLoader(ctx, d.Region)
 	if err != nil {
@@ -423,7 +426,7 @@ func RunSlackTest(ctx context.Context, d *SlackCmdDeps, w io.Writer) error {
 		return fmt.Errorf("bridge returned not-ok: %s", resp.Error)
 	}
 	fmt.Fprintf(w, "km slack test: posted ts=%s\n", resp.TS)
-	_ = d.SSM.Put(ctx, "/km/slack/last-test-timestamp", time.Now().UTC().Format(time.RFC3339), false)
+	_ = d.SSM.Put(ctx, d.SsmPrefix+"slack/last-test-timestamp", time.Now().UTC().Format(time.RFC3339), false)
 	return nil
 }
 
@@ -458,11 +461,11 @@ func newSlackStatusCmd(cfg *config.Config, sharedDeps *SlackCmdDeps) *cobra.Comm
 // RunSlackStatus is the exported status logic (testable via dependency injection).
 func RunSlackStatus(ctx context.Context, d *SlackCmdDeps, w io.Writer) error {
 	keys := []string{
-		"/km/slack/workspace",
-		"/km/slack/shared-channel-id",
-		"/km/slack/invite-email",
-		"/km/slack/bridge-url",
-		"/km/slack/last-test-timestamp",
+		d.SsmPrefix + "slack/workspace",
+		d.SsmPrefix + "slack/shared-channel-id",
+		d.SsmPrefix + "slack/invite-email",
+		d.SsmPrefix + "slack/bridge-url",
+		d.SsmPrefix + "slack/last-test-timestamp",
 	}
 	fmt.Fprintf(w, "%-45s %s\n", "Key", "Value")
 	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 80))
@@ -538,11 +541,11 @@ func RunSlackRotateToken(ctx context.Context, d *SlackCmdDeps, opts SlackRotateT
 	fmt.Println("km slack rotate-token: validated new token (auth.test ok)")
 
 	// Step 3: Persist to SSM (SecureString).
-	if err := d.SSM.Put(ctx, "/km/slack/bot-token", token, true); err != nil {
+	if err := d.SSM.Put(ctx, d.SsmPrefix+"slack/bot-token", token, true); err != nil {
 		fmt.Fprintf(os.Stderr, "km slack rotate-token: failed to persist token: %v\n", err)
 		return fmt.Errorf("persist token: %w", err)
 	}
-	fmt.Println("km slack rotate-token: persisted token to /km/slack/bot-token")
+	fmt.Printf("km slack rotate-token: persisted token to %sslack/bot-token\n", d.SsmPrefix)
 
 	// Step 4: Force bridge Lambda cold-start (best-effort).
 	// Failure here does not abort — the token is already persisted and the bridge
@@ -684,10 +687,11 @@ func buildSlackCmdDeps(cfg *config.Config) (*SlackCmdDeps, error) {
 		},
 		BridgePoster: kmslack.PostToBridge,
 		BridgeColdStart: func(ctx context.Context) error {
-			return forceSlackBridgeColdStart(ctx, awsCfgForBridge)
+			return forceSlackBridgeColdStart(ctx, awsCfgForBridge, cfg.GetResourcePrefix())
 		},
-		Region:   regionLabel,
-		RepoRoot: repoRoot,
+		Region:    regionLabel,
+		RepoRoot:  repoRoot,
+		SsmPrefix: cfg.GetSsmPrefix(),
 	}, nil
 }
 
@@ -749,14 +753,14 @@ func marshalSlackWorkspace(teamID, teamName string) string {
 // ──────────────────────────────────────────────
 
 // PersistSigningSecret writes the Slack App signing secret to SSM as a SecureString.
-// It uses the provided kmsKey (should match the bot-token KMS key for consistency).
+// ssmPrefix is the SSM path prefix (e.g. "/km/"); kmsKey is the KMS alias/ARN to use.
 // Exported for testability.
-func PersistSigningSecret(ctx context.Context, store SlackSSMStore, secret, kmsKey string) error {
+func PersistSigningSecret(ctx context.Context, store SlackSSMStore, secret, ssmPrefix, kmsKey string) error {
 	// SlackSSMStore.Put(secure=true) uses the kmsKey configured on the store
 	// at construction time. Since we want to use a specific key per call, we
 	// detect if the store is the production slackSSMStore and set kmsKey directly;
 	// in tests the fakeSSM ignores kmsKey entirely which is fine.
-	return store.Put(ctx, "/km/slack/signing-secret", secret, true)
+	return store.Put(ctx, ssmPrefix+"slack/signing-secret", secret, true)
 }
 
 // VerifyEventsAPIScopes checks whether the provided scope list contains the
@@ -830,10 +834,10 @@ func RunSlackRotateSigningSecret(ctx context.Context, d *SlackCmdDeps, opts Slac
 
 	// Step 2: Persist to SSM (SecureString).
 	kmsKey := "alias/km-platform"
-	if err := PersistSigningSecret(ctx, d.SSM, secret, kmsKey); err != nil {
+	if err := PersistSigningSecret(ctx, d.SSM, secret, d.SsmPrefix, kmsKey); err != nil {
 		return fmt.Errorf("persist signing secret: %w", err)
 	}
-	fmt.Println("km slack rotate-signing-secret: persisted new signing secret to /km/slack/signing-secret")
+	fmt.Printf("km slack rotate-signing-secret: persisted new signing secret to %sslack/signing-secret\n", d.SsmPrefix)
 
 	// Step 3: Force bridge Lambda cold-start (best-effort).
 	if d.BridgeColdStart != nil {

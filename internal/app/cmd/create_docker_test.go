@@ -52,7 +52,7 @@ func TestCreateDockerNetworkConfig(t *testing.T) {
 	}{
 		{"docker network config branch", `if substrate == "docker"`},
 		{"skip LoadNetworkOutputs comment", "no Terragrunt outputs needed"},
-		{"EmailDomain from cfg", `"sandboxes." + networkDomain`},
+		{"EmailDomain from cfg", `EmailDomain:     cfg.GetEmailDomain()`},
 		{"ArtifactsBucket from cfg", "ArtifactsBucket: artifactsBucket"},
 		{"else branch calls LoadNetworkOutputs", "LoadNetworkOutputs"},
 	}

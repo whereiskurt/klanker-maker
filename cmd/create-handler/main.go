@@ -91,6 +91,31 @@ type CreateHandler struct {
 var coldStartOnce sync.Once
 var coldStartErr error
 
+// getEmailDomain returns the sandbox email domain from the KM_EMAIL_DOMAIN env var.
+// Falls back to "sandboxes.klankermaker.ai" for un-migrated installs until plan 04 wires the env block.
+func getEmailDomain() string {
+	if v := os.Getenv("KM_EMAIL_DOMAIN"); v != "" {
+		return v
+	}
+	return "sandboxes.klankermaker.ai"
+}
+
+// sandboxTableName returns the DynamoDB sandbox table name from the KM_SANDBOX_TABLE_NAME env var.
+func sandboxTableName() string {
+	if v := os.Getenv("KM_SANDBOX_TABLE_NAME"); v != "" {
+		return v
+	}
+	return "km-sandboxes"
+}
+
+// identitiesTable returns the DynamoDB identities table name from the KM_IDENTITIES_TABLE env var.
+func identitiesTable() string {
+	if v := os.Getenv("KM_IDENTITIES_TABLE"); v != "" {
+		return v
+	}
+	return "km-identities"
+}
+
 // Handle is the Lambda handler method. EventBridge Rules deliver the full envelope;
 // the CreateEvent payload is inside the Detail field as a JSON string.
 func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEvent) error {
@@ -253,22 +278,15 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 					}
 				}
 
-				// Derive email domain from environment (same logic as km create Step 13).
-				emailDomain := os.Getenv("KM_EMAIL_DOMAIN")
+				// Derive email domain from handler config (set at init from KM_EMAIL_DOMAIN env var).
+				emailDomain := h.Domain
 				if emailDomain == "" {
-					emailDomain = h.Domain
-				}
-				if emailDomain == "" {
-					emailDomain = "sandboxes.klankermaker.ai"
-				}
-				// Ensure domain has "sandboxes." prefix when a bare domain is provided.
-				if !strings.HasPrefix(emailDomain, "sandboxes.") {
-					emailDomain = "sandboxes." + emailDomain
+					emailDomain = getEmailDomain()
 				}
 
 				identityTableName := h.IdentityTableName
 				if identityTableName == "" {
-					identityTableName = "km-identities"
+					identityTableName = identitiesTable()
 				}
 				identityEmailAddr := fmt.Sprintf("%s@%s", event.SandboxID, emailDomain)
 				signing := parsedProfile.Spec.Email.Signing
@@ -439,24 +457,11 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to load AWS config")
 	}
 
-	domain := os.Getenv("KM_EMAIL_DOMAIN")
-	if domain == "" {
-		domain = "sandboxes.klankermaker.ai"
-	}
+	domain := getEmailDomain()
 
 	toolchainDir := os.Getenv("KM_TOOLCHAIN_DIR")
 	if toolchainDir == "" {
 		toolchainDir = "/tmp/toolchain"
-	}
-
-	tableName := os.Getenv("KM_SANDBOX_TABLE")
-	if tableName == "" {
-		tableName = "km-sandboxes"
-	}
-
-	identityTableName := os.Getenv("KM_IDENTITY_TABLE")
-	if identityTableName == "" {
-		identityTableName = "km-identities"
 	}
 
 	dynClient := awsdynamodb.NewFromConfig(awsCfg)
@@ -466,8 +471,8 @@ func main() {
 		DynamoClient:      dynClient,
 		SSMClient:         ssm.NewFromConfig(awsCfg),
 		IdentityClient:    dynClient,
-		TableName:         tableName,
-		IdentityTableName: identityTableName,
+		TableName:         sandboxTableName(),
+		IdentityTableName: identitiesTable(),
 		Domain:            domain,
 		ToolchainDir:      toolchainDir,
 	}

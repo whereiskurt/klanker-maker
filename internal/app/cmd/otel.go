@@ -86,17 +86,21 @@ func runOtel(ctx context.Context, cfg *config.Config, sandboxID string, opts ote
 	}
 
 	// Default: summary view.
-	return runOtelSummary(ctx, dynClient, s3Client, bucket, sandboxID, w)
+	budgetTable := cfg.BudgetTableName
+	if budgetTable == "" {
+		budgetTable = cfg.GetResourcePrefix() + "-budgets"
+	}
+	return runOtelSummary(ctx, dynClient, s3Client, bucket, budgetTable, sandboxID, w)
 }
 
 // ─── Summary view (default) ────────────────────────────────────────────────
 
-func runOtelSummary(ctx context.Context, dynClient *dynamodb.Client, s3Client *s3.Client, bucket, sandboxID string, w io.Writer) error {
+func runOtelSummary(ctx context.Context, dynClient *dynamodb.Client, s3Client *s3.Client, bucket, budgetTable, sandboxID string, w io.Writer) error {
 	fmt.Fprintf(w, "\nkm otel — %s\n", sandboxID)
 	fmt.Fprintf(w, "────────────────────────────────────────────────────────────\n\n")
 
 	// Budget-enforcer AI spend (DynamoDB).
-	budget, budgetErr := kmaws.GetBudget(ctx, dynClient, "km-budgets", sandboxID)
+	budget, budgetErr := kmaws.GetBudget(ctx, dynClient, budgetTable, sandboxID)
 	if budgetErr != nil {
 		fmt.Fprintf(w, "Budget: (error: %v)\n\n", budgetErr)
 	} else {

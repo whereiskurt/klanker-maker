@@ -41,12 +41,12 @@ resource "aws_kms_key" "ssm" {
   policy                  = data.aws_iam_policy_document.ssm_key_policy.json
 
   tags = {
-    Name             = "${var.km_label}-ssm-key-${var.region_label}"
-    "km:label"       = var.km_label
-    "km:sandbox-id"  = var.sandbox_id
-    Region           = var.region_label
-    Purpose          = "ssm-parameter-encryption"
-    ManagedBy        = "Terragrunt"
+    Name            = "${var.km_label}-ssm-key-${var.region_label}"
+    "km:label"      = var.km_label
+    "km:sandbox-id" = var.sandbox_id
+    Region          = var.region_label
+    Purpose         = "ssm-parameter-encryption"
+    ManagedBy       = "Terragrunt"
   }
 }
 

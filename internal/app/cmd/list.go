@@ -73,11 +73,7 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonO
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
 		}
-		tableName := cfg.SandboxTableName
-		if tableName == "" {
-			tableName = "km-sandboxes"
-		}
-		lister = newRealLister(awsCfg, cfg.StateBucket, tableName)
+		lister = newRealLister(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())
 	}
 
 	records, err := lister.ListSandboxes(ctx, useTagScan)
@@ -109,7 +105,7 @@ func runList(cmd *cobra.Command, cfg *config.Config, lister SandboxLister, jsonO
 	if wide || jsonOutput {
 		for i := range records {
 			if records[i].Status == "running" && records[i].IdleTimeout != "" {
-				remaining := computeIdleRemaining(ctx, records[i].SandboxID, records[i].IdleTimeout, records[i].CreatedAt, nil)
+				remaining := computeIdleRemaining(ctx, records[i].SandboxID, records[i].IdleTimeout, records[i].CreatedAt, nil, cfg.GetResourcePrefix())
 				if remaining >= 0 {
 					records[i].IdleRemaining = formatIdleLabel(remaining, false)
 				}

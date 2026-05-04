@@ -71,7 +71,7 @@ func TestDestroySlackChannel_CaseA_NoSlack(t *testing.T) {
 	keyLoader := func(_ context.Context, _ string) (ed25519.PrivateKey, error) { return priv, nil }
 
 	m := metaWithSlack("", false, nil)
-	err := destroySlackChannel(context.Background(), m, "us-east-1", ssm, keyLoader, fp.post)
+	err := destroySlackChannel(context.Background(), m, "us-east-1", ssm, keyLoader, fp.post, "/km/")
 	if err != nil {
 		t.Errorf("case A: expected nil error, got %v", err)
 	}
@@ -90,7 +90,7 @@ func TestDestroySlackChannel_CaseB_SharedMode(t *testing.T) {
 	keyLoader := func(_ context.Context, _ string) (ed25519.PrivateKey, error) { return priv, nil }
 
 	m := metaWithSlack("C0SHARED", false, nil)
-	err := destroySlackChannel(context.Background(), m, "us-east-1", ssm, keyLoader, fp.post)
+	err := destroySlackChannel(context.Background(), m, "us-east-1", ssm, keyLoader, fp.post, "/km/")
 	if err != nil {
 		t.Errorf("case B: expected nil error, got %v", err)
 	}
@@ -109,7 +109,7 @@ func TestDestroySlackChannel_CaseC_ArchiveDefault(t *testing.T) {
 	keyLoader := func(_ context.Context, _ string) (ed25519.PrivateKey, error) { return priv, nil }
 
 	m := metaWithSlack("C0PERSB", true, nil) // nil = default archive
-	err := destroySlackChannel(context.Background(), m, "us-east-1", ssm, keyLoader, fp.post)
+	err := destroySlackChannel(context.Background(), m, "us-east-1", ssm, keyLoader, fp.post, "/km/")
 	if err != nil {
 		t.Errorf("case C: expected nil error, got %v", err)
 	}
@@ -135,7 +135,7 @@ func TestDestroySlackChannel_CaseD_ArchiveExplicitTrue(t *testing.T) {
 
 	tru := true
 	m := metaWithSlack("C0PERSB", true, &tru)
-	err := destroySlackChannel(context.Background(), m, "us-east-1", ssm, keyLoader, fp.post)
+	err := destroySlackChannel(context.Background(), m, "us-east-1", ssm, keyLoader, fp.post, "/km/")
 	if err != nil {
 		t.Errorf("case D: expected nil error, got %v", err)
 	}
@@ -155,7 +155,7 @@ func TestDestroySlackChannel_CaseE_NoArchive(t *testing.T) {
 
 	fls := false
 	m := metaWithSlack("C0PERSB", true, &fls)
-	err := destroySlackChannel(context.Background(), m, "us-east-1", ssm, keyLoader, fp.post)
+	err := destroySlackChannel(context.Background(), m, "us-east-1", ssm, keyLoader, fp.post, "/km/")
 	if err != nil {
 		t.Errorf("case E: expected nil error, got %v", err)
 	}
@@ -175,7 +175,7 @@ func TestDestroySlackChannel_CaseF_NoBridgeURL(t *testing.T) {
 	keyLoader := func(_ context.Context, _ string) (ed25519.PrivateKey, error) { return priv, nil }
 
 	m := metaWithSlack("C0PERSB", true, nil)
-	err := destroySlackChannel(context.Background(), m, "us-east-1", ssm, keyLoader, fp.post)
+	err := destroySlackChannel(context.Background(), m, "us-east-1", ssm, keyLoader, fp.post, "/km/")
 	if err != nil {
 		t.Errorf("case F: expected nil error, got %v", err)
 	}
@@ -195,7 +195,7 @@ func TestDestroySlackChannel_CaseG_KeyLoadFail(t *testing.T) {
 	}
 
 	m := metaWithSlack("C0PERSB", true, nil)
-	err := destroySlackChannel(context.Background(), m, "us-east-1", ssm, keyLoader, fp.post)
+	err := destroySlackChannel(context.Background(), m, "us-east-1", ssm, keyLoader, fp.post, "/km/")
 	if err != nil {
 		t.Errorf("case G: expected nil error, got %v", err)
 	}
@@ -217,7 +217,7 @@ func TestDestroySlackChannel_CaseH_FinalPostFails(t *testing.T) {
 	keyLoader := func(_ context.Context, _ string) (ed25519.PrivateKey, error) { return priv, nil }
 
 	m := metaWithSlack("C0PERSB", true, nil)
-	err := destroySlackChannel(context.Background(), m, "us-east-1", ssm, keyLoader, fp.post)
+	err := destroySlackChannel(context.Background(), m, "us-east-1", ssm, keyLoader, fp.post, "/km/")
 	if err != nil {
 		t.Errorf("case H: expected nil error, got %v", err)
 	}
@@ -244,7 +244,7 @@ func TestDestroySlackChannel_CaseI_ArchiveFails(t *testing.T) {
 	keyLoader := func(_ context.Context, _ string) (ed25519.PrivateKey, error) { return priv, nil }
 
 	m := metaWithSlack("C0PERSB", true, nil) // nil = archive enabled
-	err := destroySlackChannel(context.Background(), m, "us-east-1", ssm, keyLoader, fp.post)
+	err := destroySlackChannel(context.Background(), m, "us-east-1", ssm, keyLoader, fp.post, "/km/")
 	if err != nil {
 		t.Errorf("case I: expected nil error, got %v", err)
 	}
@@ -272,7 +272,7 @@ func TestDestroySlackChannel_VisibleOutput_CaseA(t *testing.T) {
 
 	var ret error
 	captured := captureStderr(t, func() {
-		ret = destroySlackChannel(context.Background(), m, "us-east-1", ssmStore, keyLoader, fp.post)
+		ret = destroySlackChannel(context.Background(), m, "us-east-1", ssmStore, keyLoader, fp.post, "/km/")
 	})
 	if ret != nil {
 		t.Errorf("case A: expected nil error, got %v", ret)
@@ -297,7 +297,7 @@ func TestDestroySlackChannel_VisibleOutput_CaseB(t *testing.T) {
 
 	var ret error
 	captured := captureStderr(t, func() {
-		ret = destroySlackChannel(context.Background(), m, "us-east-1", ssmStore, keyLoader, fp.post)
+		ret = destroySlackChannel(context.Background(), m, "us-east-1", ssmStore, keyLoader, fp.post, "/km/")
 	})
 	if ret != nil {
 		t.Errorf("case B: expected nil error, got %v", ret)
@@ -323,7 +323,7 @@ func TestDestroySlackChannel_VisibleOutput_CaseE(t *testing.T) {
 
 	var ret error
 	captured := captureStderr(t, func() {
-		ret = destroySlackChannel(context.Background(), m, "us-east-1", ssmStore, keyLoader, fp.post)
+		ret = destroySlackChannel(context.Background(), m, "us-east-1", ssmStore, keyLoader, fp.post, "/km/")
 	})
 	if ret != nil {
 		t.Errorf("case E: expected nil error, got %v", ret)
@@ -343,7 +343,7 @@ func TestDestroySlackChannel_VisibleOutput_CaseF(t *testing.T) {
 
 	var ret error
 	captured := captureStderr(t, func() {
-		ret = destroySlackChannel(context.Background(), m, "us-east-1", ssmStore, keyLoader, fp.post)
+		ret = destroySlackChannel(context.Background(), m, "us-east-1", ssmStore, keyLoader, fp.post, "/km/")
 	})
 	if ret != nil {
 		t.Errorf("case F: expected nil error, got %v", ret)
@@ -370,7 +370,7 @@ func TestDestroySlackChannel_VisibleOutput_CaseG(t *testing.T) {
 
 	var ret error
 	captured := captureStderr(t, func() {
-		ret = destroySlackChannel(context.Background(), m, "us-east-1", ssmStore, keyLoader, fp.post)
+		ret = destroySlackChannel(context.Background(), m, "us-east-1", ssmStore, keyLoader, fp.post, "/km/")
 	})
 	if ret != nil {
 		t.Errorf("case G: expected nil error, got %v", ret)
@@ -398,7 +398,7 @@ func TestDestroySlackChannel_VisibleOutput_CaseH(t *testing.T) {
 
 	var ret error
 	captured := captureStderr(t, func() {
-		ret = destroySlackChannel(context.Background(), m, "us-east-1", ssmStore, keyLoader, fp.post)
+		ret = destroySlackChannel(context.Background(), m, "us-east-1", ssmStore, keyLoader, fp.post, "/km/")
 	})
 	if ret != nil {
 		t.Errorf("case H: expected nil error, got %v", ret)
@@ -446,7 +446,7 @@ func TestRunSlackTeardown_NonFatalOnBridgeError(t *testing.T) {
 	// we test the path rather than the AWS-dependent wrapper).
 	var ret error
 	captured := captureStderr(t, func() {
-		ret = destroySlackChannel(context.Background(), m, "us-east-1", ssmStore, keyLoader, fp.post)
+		ret = destroySlackChannel(context.Background(), m, "us-east-1", ssmStore, keyLoader, fp.post, "/km/")
 	})
 
 	// Non-fatal: returned error must be nil.
@@ -481,7 +481,7 @@ func TestRunSlackTeardown_SuccessPathFiresBothEmissions(t *testing.T) {
 
 	var ret error
 	captured := captureStderr(t, func() {
-		ret = destroySlackChannel(context.Background(), m, "us-east-1", ssmStore, keyLoader, fp.post)
+		ret = destroySlackChannel(context.Background(), m, "us-east-1", ssmStore, keyLoader, fp.post, "/km/")
 	})
 
 	if ret != nil {
@@ -510,7 +510,7 @@ func TestDestroySlackChannel_VisibleOutput_Success(t *testing.T) {
 
 	var ret error
 	captured := captureStderr(t, func() {
-		ret = destroySlackChannel(context.Background(), m, "us-east-1", ssmStore, keyLoader, fp.post)
+		ret = destroySlackChannel(context.Background(), m, "us-east-1", ssmStore, keyLoader, fp.post, "/km/")
 	})
 	if ret != nil {
 		t.Errorf("success: expected nil error, got %v", ret)

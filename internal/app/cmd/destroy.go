@@ -94,18 +94,14 @@ func NewDestroyCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) 
 			if remote {
 				remoteAWSCfg, remoteAWSErr := awspkg.LoadAWSConfig(ctx, "klanker-terraform")
 				if remoteAWSErr == nil {
-					tableName := cfg.SandboxTableName
-					if tableName == "" {
-						tableName = "km-sandboxes"
-					}
 					dynClient := dynamodbpkg.NewFromConfig(remoteAWSCfg)
-					if meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynClient, tableName, sandboxID); metaErr == nil {
+					if meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynClient, cfg.GetSandboxTableName(), sandboxID); metaErr == nil {
 						if meta.Substrate == "docker" {
 							remote = false
 							fmt.Printf("  [info] Docker substrate — destroying locally\n")
 						} else {
 							// Still remote: run Slack teardown locally before dispatch.
-							runSlackTeardown(ctx, remoteAWSCfg, meta)
+							runSlackTeardown(ctx, remoteAWSCfg, meta, cfg.GetSsmPrefix())
 						}
 					}
 				}
@@ -176,12 +172,8 @@ func runDestroy(cfg *config.Config, sandboxID, awsProfile string, force bool, ve
 	// Docker sandboxes have no AWS-tagged EC2/ECS resources, so tag lookup would fail.
 	// Primary: DynamoDB; fallback: S3 on ResourceNotFoundException.
 	{
-		tableName := cfg.SandboxTableName
-		if tableName == "" {
-			tableName = "km-sandboxes"
-		}
 		dynamoClientEarly := dynamodbpkg.NewFromConfig(awsCfg)
-		meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClientEarly, tableName, sandboxID)
+		meta, metaErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClientEarly, cfg.GetSandboxTableName(), sandboxID)
 		if metaErr != nil {
 			var rnf *dynamodbtypes.ResourceNotFoundException
 			if errors.As(metaErr, &rnf) {
@@ -278,7 +270,7 @@ locals {
 	// Idempotent — DeleteTTLSchedule ignores ResourceNotFoundException.
 	// Done before terragrunt destroy so schedules are cancelled even if destroy partially fails.
 	schedulerClient := scheduler.NewFromConfig(awsCfg)
-	if err := awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID); err != nil {
+	if err := awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID, cfg.GetResourcePrefix()); err != nil {
 		log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("failed to delete TTL schedule (non-fatal)")
 	}
 	// Clean up budget schedule (km-budget-{sandbox-id}).
@@ -389,12 +381,7 @@ locals {
 		return err
 	}
 	// Step 8 (continued): build SES client for notification callback.
-	// Derive email domain from config; default to "klankermaker.ai" when not set.
-	destroyBaseDomain := cfg.Domain
-	if destroyBaseDomain == "" {
-		destroyBaseDomain = "klankermaker.ai"
-	}
-	emailDomain := "sandboxes." + destroyBaseDomain
+	emailDomain := cfg.GetEmailDomain()
 	sesClient := sesv2.NewFromConfig(awsCfg)
 
 	callbacks := lifecycle.TeardownCallbacks{
@@ -444,7 +431,7 @@ locals {
 		identityDynClient := dynamodbpkg.NewFromConfig(awsCfg)
 		identityTableName := cfg.IdentityTableName
 		if identityTableName == "" {
-			identityTableName = "km-identities"
+			identityTableName = cfg.GetResourcePrefix() + "-identities"
 		}
 		if identErr := awspkg.CleanupSandboxIdentity(ctx, identitySSMClient, identityDynClient, identityTableName, sandboxID); identErr != nil {
 			log.Warn().Err(identErr).Str("sandbox_id", sandboxID).
@@ -456,11 +443,8 @@ locals {
 
 	// Step 12: Delete sandbox metadata from DynamoDB (with S3 fallback) so km list no longer shows it.
 	{
-		tableName := cfg.SandboxTableName
-		if tableName == "" {
-			tableName = "km-sandboxes"
-		}
 		dynamoClientDel := dynamodbpkg.NewFromConfig(awsCfg)
+		tableName := cfg.GetSandboxTableName()
 		// Read existing metadata to check for alias AND for Slack teardown — non-fatal if read fails.
 		if existingMeta, readErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClientDel, tableName, sandboxID); readErr == nil {
 			if existingMeta.Alias != "" {
@@ -509,7 +493,7 @@ locals {
 			// Phase 63 — per-sandbox Slack archive flow (local destroy path).
 			// runSlackTeardown is the shared helper; the remote path calls it before dispatch.
 			// Non-fatal: destroy has already succeeded; Slack failures are WARN-logged.
-			runSlackTeardown(ctx, awsCfg, existingMeta)
+			runSlackTeardown(ctx, awsCfg, existingMeta, cfg.GetSsmPrefix())
 		} else {
 			// S3 fallback for alias read.
 			stateBucketForAlias := cfg.StateBucket
@@ -551,7 +535,7 @@ locals {
 	// Export is fire-and-forget (async in AWS) and non-fatal — deletion proceeds regardless.
 	cwClient := cloudwatchlogs.NewFromConfig(awsCfg)
 	if artifactBucket != "" {
-		if exportErr := awspkg.ExportSandboxLogs(ctx, cwClient, sandboxID, artifactBucket); exportErr != nil {
+		if exportErr := awspkg.ExportSandboxLogs(ctx, cwClient, sandboxID, artifactBucket, cfg.GetResourcePrefix()); exportErr != nil {
 			log.Warn().Err(exportErr).Str("sandbox_id", sandboxID).
 				Msg("failed to export sandbox logs to S3 (non-fatal)")
 		} else {
@@ -559,7 +543,7 @@ locals {
 				Msg("sandbox logs export task initiated")
 		}
 	}
-	if cwErr := awspkg.DeleteSandboxLogGroup(ctx, cwClient, sandboxID); cwErr != nil {
+	if cwErr := awspkg.DeleteSandboxLogGroup(ctx, cwClient, sandboxID, cfg.GetResourcePrefix()); cwErr != nil {
 		log.Warn().Err(cwErr).Str("sandbox_id", sandboxID).
 			Msg("failed to delete sandbox log group (non-fatal)")
 	} else {
@@ -670,7 +654,7 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 
 	// Step DD3c: Cancel EventBridge schedules (TTL, budget) so they don't fire after resources are gone.
 	schedulerClient := scheduler.NewFromConfig(awsCfg)
-	if err := awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID); err != nil {
+	if err := awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID, cfg.GetResourcePrefix()); err != nil {
 		log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("failed to delete TTL schedule (non-fatal)")
 	}
 	budgetScheduleName := "km-budget-" + sandboxID
@@ -686,11 +670,7 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 	cleanupBudgetEnforcerResources(ctx, awsCfg, sandboxID)
 
 	// Step DD3e: Clean up SES email identity.
-	destroyBaseDomain := cfg.Domain
-	if destroyBaseDomain == "" {
-		destroyBaseDomain = "klankermaker.ai"
-	}
-	emailDomain := "sandboxes." + destroyBaseDomain
+	emailDomain := cfg.GetEmailDomain()
 	sesClient := sesv2.NewFromConfig(awsCfg)
 	if err := awspkg.CleanupSandboxEmail(ctx, sesClient, sandboxID, emailDomain); err != nil {
 		log.Warn().Err(err).Msg("failed to cleanup sandbox email (non-fatal)")
@@ -702,7 +682,7 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 		identityDynClient := dynamodbpkg.NewFromConfig(awsCfg)
 		identityTableName := cfg.IdentityTableName
 		if identityTableName == "" {
-			identityTableName = "km-identities"
+			identityTableName = cfg.GetResourcePrefix() + "-identities"
 		}
 		if identErr := awspkg.CleanupSandboxIdentity(ctx, identitySSMClient, identityDynClient, identityTableName, sandboxID); identErr != nil {
 			log.Warn().Err(identErr).Str("sandbox_id", sandboxID).
@@ -712,11 +692,8 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 
 	// Step DD4: Delete sandbox metadata from DynamoDB (and S3 fallback).
 	{
-		tableName := cfg.SandboxTableName
-		if tableName == "" {
-			tableName = "km-sandboxes"
-		}
 		dynamoClientDD := dynamodbpkg.NewFromConfig(awsCfg)
+		tableName := cfg.GetSandboxTableName()
 		if delErr := awspkg.DeleteSandboxMetadataDynamo(ctx, dynamoClientDD, tableName, sandboxID); delErr != nil {
 			var rnf *dynamodbtypes.ResourceNotFoundException
 			if !errors.As(delErr, &rnf) {

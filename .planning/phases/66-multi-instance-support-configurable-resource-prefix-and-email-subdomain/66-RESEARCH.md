@@ -1,6 +1,6 @@
 # Phase 66: Multi-instance Support (resource_prefix + email_subdomain) — Research
 
-**Researched:** 2026-05-01
+**Researched:** 2026-05-04 (REPLAN — prior research 2026-05-01 archived in git at commit 0d74e7f)
 **Domain:** Go config struct extension, Terraform module parameterization, Terragrunt site.hcl threading, Lambda env-var hygiene
 **Confidence:** HIGH
 
@@ -10,11 +10,9 @@
 
 Phase 66 introduces two knobs — `resource_prefix` (default `"km"`) and `email_subdomain` (default `"sandboxes"`) — that together make every account-globally-unique AWS resource name and every email address derivable from config rather than hardcoded. The change is purely additive: with defaults in place, the existing install produces identical resource names.
 
-The work divides cleanly into five layers: (1) config struct + helper methods, (2) Go call-site migration for email domain, (3) Go call-site migration for resource names (table names, Lambda names, SSM paths, log groups), (4) Terraform module parameterization (Lambda/EventBridge modules do NOT yet accept a prefix variable; DynamoDB modules already do), and (5) Terragrunt live config + site.hcl threading.
+**Since the prior research (2026-05-01)**, Phases 67, 67.1, and 68 landed and added significant new surface area: two new DynamoDB tables (`km-slack-threads`, `km-slack-stream-messages`), one new SSM SecureString (`/km/slack/signing-secret`), per-sandbox SQS FIFO queues (`{prefix}-slack-inbound-{sandbox-id}.fifo`), and an expanded km-slack-bridge Lambda with four new environment variables. The good news: Phase 67 shipped a forward-compat `GetResourcePrefix()` helper and `ResourcePrefix` field in config.go **as a shim**, so the config-layer foundation for Phase 66 is partially built. The bad news: six specific new call sites are hardcoded and not yet routed through the helper.
 
-The heaviest change is in layer 4: the five management Lambda modules (`create-handler`, `ttl-handler`, `email-handler`, `lambda-slack-bridge`, `ecs-spot-handler`) all hardcode `"km-"` directly in IAM role names, policy names, and function names inside the TF module. Each module needs a `var.resource_prefix` (default `"km"`) threaded through every `name` attribute. The DynamoDB modules already accept `var.table_name` so the live `terragrunt.hcl` files just need to switch from the literal `"km-..."` to `"${local.site_vars.locals.site.label}-..."`.
-
-**Primary recommendation:** Extend `site.hcl`'s `site` block with `label = get_env("KM_RESOURCE_PREFIX", "km")` and `email_subdomain = get_env("KM_EMAIL_SUBDOMAIN", "sandboxes")`. All HCL consumers already read `local.site_vars.locals.site.label` — the existing `"tf-km"` state prefix already uses this field pattern. The Go side reads `resource_prefix` and `email_subdomain` from `km-config.yaml` via viper.
+**Primary recommendation:** Extend `site.hcl`'s `site` block with `label = get_env("KM_RESOURCE_PREFIX", "km")` and `email_subdomain = get_env("KM_EMAIL_SUBDOMAIN", "sandboxes")`. The Go side already has `GetResourcePrefix()` — complete it with `GetEmailDomain()`, `GetSsmPrefix()`, and `EmailSubdomain` field. Migrate all hardcoded call sites to the helpers.
 
 <phase_requirements>
 ## Phase Requirements
@@ -27,14 +25,35 @@ The heaviest change is in layer 4: the five management Lambda modules (`create-h
 
 ---
 
+## What Phase 67/68 Already Did For Phase 66 (Forward-compat Shims)
+
+Before the drift audit below, note what arrived as partially done:
+
+| Component | What's Already There | What's Still Missing |
+|-----------|---------------------|---------------------|
+| `config.go` `ResourcePrefix` field | Added (Phase 67 shim) | `EmailSubdomain` field |
+| `config.go` `GetResourcePrefix()` | Implemented, fallback `"km"` (Phase 67) | — |
+| `config.go` `GetSlackThreadsTableName()` | Implemented, uses `GetResourcePrefix()` (Phase 67) | — |
+| `config.go` `GetSlackStreamMessagesTableName()` | Implemented, uses `GetResourcePrefix()` (Phase 68) | — |
+| `pkg/aws/sqs.go` `SlackInboundQueueName()` | Uses `resourcePrefix` param (Phase 67) | — |
+| `create_slack_inbound.go` | Calls `cfg.GetResourcePrefix()` (Phase 67) | — |
+| `doctor.go` `SlackResourcePrefix` | Populated via type-assert on `appConfigAdapter` (Phase 67) | Should move to interface proper |
+| `list.go:132` `cfg.GetSlackThreadsTableName()` | Correct (Phase 67) | — |
+| `config.go` viper default `resource_prefix = "km"` | Added (Phase 67) | `email_subdomain` default |
+| `GetEmailDomain()` helper | **NOT yet in config.go** | Needed for Phase 66 |
+| `GetSsmPrefix()` helper | **NOT yet in config.go** | Needed for Phase 66 |
+| `DoctorConfigProvider` interface `GetResourcePrefix()` | **NOT in interface** (type-assert hack at line 2344) | Add to interface + adapter |
+
+---
+
 ## Standard Stack
 
 ### Core
 | Library / Tool | Version | Purpose | Why Standard |
 |---------------|---------|---------|--------------|
-| `github.com/spf13/viper` | already in use | km-config.yaml merging with env override | Same viper flow used for all Phase 65 fields |
-| Go `internal/app/config/config.go` | N/A (in-repo) | Single source of truth for config fields | Established pattern; Phase 65 added `OrganizationAccountID`, `DNSParentAccountID` here |
-| Terragrunt `site.hcl` | already in use | Injects site-level vars into all module calls | Already threads `label`, `tf_state_prefix`, `domain` — extend with two more keys |
+| `github.com/spf13/viper` | already in use | km-config.yaml merging with env override | Same viper flow used for all Phase 65/67 fields |
+| Go `internal/app/config/config.go` | N/A (in-repo) | Single source of truth for config fields | Phase 67 already added `ResourcePrefix`, `GetResourcePrefix()`, `GetSlackThreadsTableName()`, `GetSlackStreamMessagesTableName()` here |
+| Terragrunt `infra/live/site.hcl` | already in use | Injects site-level vars into all module calls | Already threads `label`, `tf_state_prefix`, `domain` — extend with `email_subdomain` and make `label` env-driven |
 
 ### No New Dependencies
 Phase 66 is purely a threading/migration phase. Zero new external dependencies.
@@ -43,46 +62,41 @@ Phase 66 is purely a threading/migration phase. Zero new external dependencies.
 
 ## Architecture Patterns
 
-### Pattern 1: Config Struct Extension (follows Phase 65)
+### Pattern 1: Config Struct Extension (partially done by Phase 67)
 
-Add two fields to `internal/app/config/config.go`:
+Phase 67 added `ResourcePrefix string` field and `GetResourcePrefix()` to `internal/app/config/config.go`. Phase 66 adds the remaining two:
 
 ```go
-// ResourcePrefix is the prefix for all account-globally-unique resource names.
-// Maps to km-config.yaml key resource_prefix. Defaults to "km".
-ResourcePrefix string
-
 // EmailSubdomain is the subdomain used for SES email addresses.
 // Maps to km-config.yaml key email_subdomain. Defaults to "sandboxes".
 EmailSubdomain string
 ```
 
-In `Load()`, add defaults and viper merge keys following the exact Phase 65 pattern:
+In `Load()`, add defaults and viper merge keys following the existing Phase 67 pattern:
 
 ```go
-v.SetDefault("resource_prefix", "km")
 v.SetDefault("email_subdomain", "sandboxes")
+// resource_prefix default already added by Phase 67
 ```
 
 Add to the km-config.yaml key merge list:
 ```go
-"resource_prefix",
 "email_subdomain",
+// "resource_prefix" already in list from Phase 67
 ```
 
 In the cfg struct literal:
 ```go
-ResourcePrefix: v.GetString("resource_prefix"),
 EmailSubdomain: v.GetString("email_subdomain"),
+// ResourcePrefix already added by Phase 67
 ```
 
-### Pattern 2: Helper Methods on Config
+### Pattern 2: Helper Methods on Config (two still missing)
 
-Add three helpers. These collapse 30+ inline string concatenations to a single authoritative source:
+`GetResourcePrefix()` and `GetSlackThreadsTableName()` / `GetSlackStreamMessagesTableName()` already exist. Add the remaining two:
 
 ```go
 // GetEmailDomain returns the full email domain (e.g. "sandboxes.klankermaker.ai").
-// Falls back to "sandboxes.klankermaker.ai" when both fields are empty.
 func (c *Config) GetEmailDomain() string {
     sub := c.EmailSubdomain
     if sub == "" {
@@ -95,15 +109,6 @@ func (c *Config) GetEmailDomain() string {
     return sub + "." + domain
 }
 
-// GetResourcePrefix returns the resource prefix (e.g. "km").
-// Falls back to "km" when empty.
-func (c *Config) GetResourcePrefix() string {
-    if c.ResourcePrefix == "" {
-        return "km"
-    }
-    return c.ResourcePrefix
-}
-
 // GetSsmPrefix returns the SSM parameter prefix (e.g. "/km/").
 func (c *Config) GetSsmPrefix() string {
     return "/" + c.GetResourcePrefix() + "/"
@@ -112,106 +117,207 @@ func (c *Config) GetSsmPrefix() string {
 
 ### Pattern 3: DoctorConfigProvider Interface Extension
 
-`DoctorConfigProvider` in `doctor.go` is the interface pattern used so doctor checks are testable. Add the same three getters to the interface and the `appConfigAdapter`:
+The `DoctorConfigProvider` interface in `doctor.go` currently accesses `GetResourcePrefix()` via a **type-assert hack** (line 2344: `if appCfgTyped, ok := cfg.(*appConfigAdapter); ok`). Phase 68 added `GetSlackStreamMessagesTableName()` to the interface but NOT `GetResourcePrefix()` or `GetSlackThreadsTableName()`. Phase 66 MUST:
+
+1. Add `GetResourcePrefix()`, `GetEmailDomain()`, `GetSsmPrefix()`, and `GetSlackThreadsTableName()` to the `DoctorConfigProvider` interface.
+2. Add corresponding adapter methods to `appConfigAdapter`.
+3. Remove the type-assert hack at doctor.go:2344.
 
 ```go
-// In DoctorConfigProvider interface:
+// In DoctorConfigProvider interface (additions to existing 12 methods):
 GetResourcePrefix() string
 GetEmailDomain() string
 GetSsmPrefix() string
+GetSlackThreadsTableName() string
+// GetSlackStreamMessagesTableName already in interface from Phase 68
 
-// In appConfigAdapter:
-func (a *appConfigAdapter) GetResourcePrefix() string { return a.cfg.GetResourcePrefix() }
-func (a *appConfigAdapter) GetEmailDomain() string    { return a.cfg.GetEmailDomain() }
-func (a *appConfigAdapter) GetSsmPrefix() string      { return a.cfg.GetSsmPrefix() }
+// In appConfigAdapter (additions):
+func (a *appConfigAdapter) GetResourcePrefix() string      { return a.cfg.GetResourcePrefix() }
+func (a *appConfigAdapter) GetEmailDomain() string         { return a.cfg.GetEmailDomain() }
+func (a *appConfigAdapter) GetSsmPrefix() string           { return a.cfg.GetSsmPrefix() }
+func (a *appConfigAdapter) GetSlackThreadsTableName() string { return a.cfg.GetSlackThreadsTableName() }
 ```
 
 ### Pattern 4: site.hcl Threading
 
-The existing `site.hcl` already has:
+The existing `site.hcl` (`infra/live/site.hcl`) currently has:
 
 ```hcl
 site = {
-    label           = "km"
-    tf_state_prefix = "tf-km"
+    label           = "km"           # HARDCODED — needs to become env-driven
+    tf_state_prefix = "tf-km"        # HARDCODED — derived from label
     domain          = get_env("KM_DOMAIN", "klankermaker.ai")
-    ...
+    random_suffix   = get_env("KMGUID", "")
+    # email_subdomain is ABSENT — needs to be added
 }
 ```
 
-Extend the site block with two new keys read from env vars that `km init` exports (same pattern as `KM_DOMAIN`):
+Extend the site block:
 
 ```hcl
 site = {
-    label            = get_env("KM_RESOURCE_PREFIX", "km")
-    tf_state_prefix  = "tf-${get_env("KM_RESOURCE_PREFIX", "km")}"
-    domain           = get_env("KM_DOMAIN", "klankermaker.ai")
-    email_subdomain  = get_env("KM_EMAIL_SUBDOMAIN", "sandboxes")
-    random_suffix    = get_env("KMGUID", "")
+    label           = get_env("KM_RESOURCE_PREFIX", "km")
+    tf_state_prefix = "tf-${get_env("KM_RESOURCE_PREFIX", "km")}"
+    domain          = get_env("KM_DOMAIN", "klankermaker.ai")
+    email_subdomain = get_env("KM_EMAIL_SUBDOMAIN", "sandboxes")
+    random_suffix   = get_env("KMGUID", "")
 }
 ```
 
 `local.site_vars.locals.backend.bucket` and `local.site_vars.locals.backend.dynamodb_table` are already derived from `local.site.tf_state_prefix`, so TF state backend renames flow automatically.
 
-All live `terragrunt.hcl` files that currently hardcode `table_name = "km-budgets"` switch to:
+All live `terragrunt.hcl` DynamoDB files that currently hardcode `table_name = "km-budgets"` switch to:
 ```hcl
 table_name = "${local.site_vars.locals.site.label}-budgets"
 ```
 
-All live `terragrunt.hcl` files that currently build `email_domain = "sandboxes.${local.site_vars.locals.site.domain}"` switch to:
-```hcl
-email_domain = "${local.site_vars.locals.site.email_subdomain}.${local.site_vars.locals.site.domain}"
-```
-
 ### Pattern 5: Lambda Module Parameterization
 
-The five management Lambda modules currently hardcode `"km-"` everywhere inside the module. The fix is to add `var.resource_prefix` (default `"km"`) to each module's `variables.tf` and reference it throughout `main.tf`. This is the safe TF-rename approach: change only the `name` attribute value, not the TF logical resource name.
+The five management Lambda modules hardcode `"km-"` inside the module. The lambda-slack-bridge module gained `var.resource_prefix` in Phase 67 for SQS policy ARNs but its `function_name` local is STILL `"km-slack-bridge"` (hardcoded). All five modules need Phase 66 treatment:
 
-**Modules requiring this treatment:**
+**Modules requiring `var.resource_prefix` added or completed:**
 - `infra/modules/create-handler/v1.0.0/` — 20+ hardcoded `"km-"` strings
 - `infra/modules/ttl-handler/v1.0.0/` — 15+ hardcoded `"km-"` strings
-- `infra/modules/email-handler/v1.0.0/` — 12+ hardcoded `"km-"` strings, PLUS `SANDBOX_TABLE_NAME = "km-sandboxes"` env var (must become `var.sandbox_table_name`)
-- `infra/modules/lambda-slack-bridge/v1.0.0/` — uses `locals { function_name = "km-slack-bridge" }` pattern already; change to `locals { function_name = "${var.resource_prefix}-slack-bridge" }`
-- `infra/modules/ecs-spot-handler/v1.0.0/` — 6 hardcoded `"km-"` strings; singleton per-account concern documented in pitfalls
+- `infra/modules/email-handler/v1.0.0/` — 12+ hardcoded `"km-"` strings, PLUS `SANDBOX_TABLE_NAME = "km-sandboxes"` env var
+- `infra/modules/lambda-slack-bridge/v1.0.0/` — `locals { function_name = "km-slack-bridge" }` at line 5 — must become `"${var.resource_prefix}-slack-bridge"`; `var.resource_prefix` already exists but is not used for function_name
+- `infra/modules/ecs-spot-handler/v1.0.0/` — 6 hardcoded `"km-"` strings
 
-**Modules already safe (DynamoDB — already accept var.table_name):**
-- `dynamodb-budget`, `dynamodb-identities` (both v1.0.0 and v1.1.0), `dynamodb-sandboxes`, `dynamodb-schedules`, `dynamodb-slack-nonces` — `name = var.table_name` confirmed. Only live `terragrunt.hcl` inputs need updating.
+**Modules already safe (DynamoDB — already accept `var.table_name`):**
+- `dynamodb-budget`, `dynamodb-identities` (v1.0.0 and v1.1.0), `dynamodb-sandboxes`, `dynamodb-schedules`, `dynamodb-slack-nonces` — `name = var.table_name` confirmed.
+- `dynamodb-slack-threads/v1.0.0/` — `name = var.table_name` confirmed (Phase 67).
+- `dynamodb-slack-stream-messages/v1.0.0/` — `name = var.table_name` confirmed (Phase 68).
 
-**Variable defaults in all module-level `variables.tf` files:**
-```hcl
-variable "resource_prefix" {
-  description = "Resource name prefix for all km AWS resources (e.g. 'km', 'km2')"
-  type        = string
-  default     = "km"
-}
+### Pattern 6: Lambda Env-Var Hygiene (unchanged from stale research, still applies)
+
+The right pattern is: TF module sets env var from `var.*_table_name`, Lambda code reads env var with `"km-"` fallback. Both must be updated. The lambda-slack-bridge now has `KM_SLACK_THREADS_TABLE` and `KM_SIGNING_SECRET_PATH` as env vars in the module, but the live `terragrunt.hcl` does NOT pass `slack_threads_table_name` or `signing_secret_path` — they rely on module defaults (which happen to be correct for the default prefix). Phase 66 must wire these through `site.label`.
+
+### Pattern 7: create.go Env Var Propagation to Compiler
+
+The `pkg/compiler/userdata.go` and `pkg/compiler/service_hcl.go` do not receive `*config.Config` directly — they read resource names from process environment variables set by `create.go`'s `os.Setenv()` block. Phase 67/68 added `KM_SLACK_THREADS_TABLE` and `KM_SLACK_STREAM_TABLE` as env vars that the compiler reads, but `create.go` does NOT set these in its `os.Setenv` block. Result: the compiler falls back to hardcoded `"km-slack-threads"` / `"km-slack-stream-messages"` even when `resource_prefix` is set.
+
+**Fix required in create.go:** Add two lines to the `os.Setenv` block (around line 360):
+```go
+os.Setenv("KM_SLACK_THREADS_TABLE", cfg.GetSlackThreadsTableName())
+os.Setenv("KM_SLACK_STREAM_TABLE", cfg.GetSlackStreamMessagesTableName())
 ```
-
-### Pattern 6: Lambda Env-Var Hygiene (critical discovery)
-
-**Current state (UNEVEN — must be unified):**
-
-| Lambda | Table env var | Hardcoded fallback |
-|--------|---------------|-------------------|
-| `km-slack-bridge` | `KM_IDENTITIES_TABLE`, `KM_SANDBOXES_TABLE`, `KM_NONCE_TABLE` | Yes, `"km-*"` |
-| `km-budget-enforcer` | `KM_BUDGET_TABLE` (via TF `KM_BUDGET_TABLE = var.budget_table_name`) | Yes, `"km-budgets"` |
-| `ttl-handler` | `SANDBOX_TABLE_NAME`, `KM_BUDGET_TABLE` | Yes — `"km-sandboxes"`, `"km-budgets"` |
-| `ttl-handler` | `km-ttl-handler`, `km-ttl-scheduler` (function names, not env) | Hardcoded strings — NOT env-driven |
-| `create-handler` | `SANDBOX_TABLE_NAME` | Yes, `"km-sandboxes"` |
-| `email-create-handler` | `SANDBOX_TABLE_NAME` | Yes, `"km-sandboxes"` |
-| `configui` | `KM_BUDGET_TABLE` | Yes, `"km-budgets"` |
-
-**The right pattern (used by `km-slack-bridge`):**
-- TF module sets env var using `var.identities_table_name` (which comes from `dependency.identities.outputs.table_name`)
-- Lambda code reads env var and falls back to default string
-- Both must be updated: TF sets the prefix-aware name; Lambda code hardcoded default becomes a second-line defense only (still `"km-"` until env is set)
-
-**Additional issue:** `ttl-handler` hardcodes Lambda function names directly in code (`"km-ttl-handler"`, `"km-ttl-scheduler"`) when creating/managing EventBridge schedules. These must become env-var-driven (`KM_TTL_HANDLER_NAME`, `KM_TTL_SCHEDULER_ROLE`).
 
 ### Anti-Patterns to Avoid
 
 - **Rename TF logical resource identifiers** (e.g. `resource "aws_iam_role" "km_handler"` → `resource "aws_iam_role" "handler"`): this triggers destroy/create on stateful resources. Only change the `name` attribute.
-- **Introduce a new module version** just to add `var.resource_prefix`: edit in-place within the existing `v1.0.0/` — no new version directory needed. These are internal modules with no external consumers.
-- **Thread `resource_prefix` into per-sandbox names** that already include `{sandboxID}`: out of scope per roadmap. Names like `km-budget-enforcer-{sandboxID}` are already collision-free across installs.
+- **Introduce a new module version** just to add `var.resource_prefix`: edit in-place within the existing `v1.0.0/` — no new version directory needed.
+- **Thread `resource_prefix` into per-sandbox names** that already include `{sandboxID}`: out of scope per roadmap.
+
+---
+
+## Phase 67/68 Drift Audit
+
+This section documents the delta between the stale 2026-05-01 research and today's codebase after Phases 67, 67.1, and 68 landed. For each new resource, exact file:line references are given.
+
+### New DynamoDB Tables
+
+| Table | Module | module `name` attribute | Live Config File | Live `table_name` | Status |
+|-------|--------|------------------------|-----------------|-------------------|--------|
+| `km-slack-threads` (Phase 67) | `infra/modules/dynamodb-slack-threads/v1.0.0/main.tf` | `var.table_name` (safe) | `infra/live/use1/dynamodb-slack-threads/terragrunt.hcl:36` | `"km-slack-threads"` HARDCODED | Needs `site.label` substitution |
+| `km-slack-stream-messages` (Phase 68) | `infra/modules/dynamodb-slack-stream-messages/v1.0.0/main.tf` | `var.table_name` (safe) | `infra/live/use1/dynamodb-slack-stream-messages/terragrunt.hcl:36` | `"km-slack-stream-messages"` HARDCODED | Needs `site.label` substitution |
+
+Both modules use `name = var.table_name` — the module itself is already safe. Only the live Terragrunt config needs the literal replaced with `"${local.site_vars.locals.site.label}-slack-threads"` and `"${local.site_vars.locals.site.label}-slack-stream-messages"`.
+
+### New SSM Parameters
+
+| Parameter | Where Written (Go) | Current State | Fix |
+|-----------|-------------------|---------------|-----|
+| `/km/slack/signing-secret` (Phase 67, SecureString) | `internal/app/cmd/slack.go:759` (`PersistSigningSecret`) | HARDCODED path | `store.Put(ctx, cfg.GetSsmPrefix()+"slack/signing-secret", ...)` |
+| `/km/slack/signing-secret` | `internal/app/cmd/slack.go:836` (log message) | String literal in log | Update message only |
+| `/km/slack/signing-secret` (Lambda default) | `infra/modules/lambda-slack-bridge/v1.0.0/variables.tf:76` | `default = "/km/slack/signing-secret"` | Live config must pass `signing_secret_path = "/${local.site_vars.locals.site.label}/slack/signing-secret"` |
+| `/km/slack/bot-scopes-cache` (Phase 67) | `internal/app/cmd/slack.go:311,328` | HARDCODED `/km/` prefix | Migrate to `cfg.GetSsmPrefix()+"slack/bot-scopes-cache"` |
+| `/km/slack/last-test-timestamp` (Phase 67) | `internal/app/cmd/slack.go:426,465` | HARDCODED `/km/` prefix | Migrate to `cfg.GetSsmPrefix()+"slack/last-test-timestamp"` |
+| `/km/slack/workspace` (Phase 67) | `internal/app/cmd/slack.go:461` | HARDCODED `/km/` prefix | Migrate to `cfg.GetSsmPrefix()+"slack/workspace"` |
+| `/sandbox/{id}/slack-inbound-queue-url` (Phase 67, per-sandbox) | `internal/app/cmd/create_slack_inbound.go:129` | `/sandbox/{id}/...` — **not prefixed** by design | Out of scope per roadmap (per-sandbox SSM path) |
+
+### New SQS Resources (Per-Sandbox)
+
+`{prefix}-slack-inbound-{sandbox-id}.fifo` queues are provisioned at `km create` and deleted at `km destroy`.
+
+**Already prefix-aware (Phase 67 did this correctly):**
+- `pkg/aws/sqs.go:44-45`: `SlackInboundQueueName(resourcePrefix, sandboxID)` takes `resourcePrefix` as a parameter.
+- `internal/app/cmd/create_slack_inbound.go:100`: calls `deps.Cfg.GetResourcePrefix()`.
+- `internal/app/cmd/doctor_slack.go:292`: `checkSlackInboundStaleQueues` takes `resourcePrefix` parameter; populated from `deps.SlackResourcePrefix`.
+- `internal/app/cmd/doctor.go:2345-2347`: `deps.SlackResourcePrefix` populated via type-assert on `appConfigAdapter`.
+
+**Still needs fix (Phase 66 normalizes):** The type-assert hack at `doctor.go:2344-2347` should be replaced once `GetResourcePrefix()` is properly added to the `DoctorConfigProvider` interface.
+
+**Lambda-slack-bridge SQS IAM policy:** `infra/modules/lambda-slack-bridge/v1.0.0/main.tf:148` uses `var.resource_prefix` in the SQS wildcard ARN — correct. But the live config (`infra/live/use1/lambda-slack-bridge/terragrunt.hcl`) does **not** pass `resource_prefix`, so the bridge's SQS policy uses the default `"km"` even with a custom prefix. Fix: add `resource_prefix = local.site_vars.locals.site.label` to the live config inputs.
+
+### New Lambda Environment Variables in km-slack-bridge
+
+The bridge Lambda now has these Phase 67/68 env vars (from `infra/modules/lambda-slack-bridge/v1.0.0/main.tf:282-286`):
+
+| Env Var | Set From | Default in Module | Live Config Passes It? | Phase 66 Action |
+|---------|---------|------------------|------------------------|-----------------|
+| `KM_SIGNING_SECRET_PATH` | `var.signing_secret_path` | `"/km/slack/signing-secret"` | No — uses default | Live config must pass prefix-aware path |
+| `KM_SLACK_THREADS_TABLE` | `var.slack_threads_table_name` | `"km-slack-threads"` | No — uses default | Live config must pass `dependency.slack_threads.outputs.table_name` |
+| `KM_SLACK_ACK_EMOJI` | `var.slack_ack_emoji` | `"eyes"` | No — uses default | No prefix concern; default is fine |
+| `KM_RESOURCE_PREFIX` | `var.resource_prefix` | `"km"` | No — uses default | Live config must pass `local.site_vars.locals.site.label` |
+
+**The live config is missing a `dependency "slack_threads"` block.** Without it, the bridge can't resolve `dependency.slack_threads.outputs.table_name`. The live config must add:
+```hcl
+dependency "slack_threads" {
+  config_path = "../dynamodb-slack-threads"
+  mock_outputs = { table_name = "km-slack-threads" }
+  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply"]
+}
+```
+
+### New DynamoDB GSI
+
+`slack_channel_id-index` on the `km-sandboxes` table (Phase 67, in `infra/modules/dynamodb-sandboxes/v1.1.0/main.tf:55`). The GSI is within the table module which already uses `var.table_name` — no new prefix-awareness needed. The GSI ARN pattern `${var.sandboxes_table_name}/index/slack_channel_id-index` in the bridge module's IAM policy at `main.tf:180` already uses the variable — safe.
+
+### New Go Call Sites Added by Phase 67/68
+
+**Category B additions (new /km/ SSM paths in Go, Phase 67 delta):**
+
+| File | New Lines | Old Count (stale) | New Count (today) |
+|------|-----------|-------------------|-------------------|
+| `internal/app/cmd/slack.go` | +14 new paths (signing-secret, bot-scopes-cache, last-test-timestamp, workspace, etc.) | 8 paths | 22 paths |
+| `internal/app/cmd/doctor_slack.go` | +0 new /km/ paths | 4 paths | 4 paths |
+| `internal/app/cmd/create_slack.go` | +0 new /km/ paths | 4 paths | 4 paths |
+| **Total `/km/` in Go** | **+11 net new** | **75** | **86** |
+
+New `"/km/"` paths not in stale research, all requiring `cfg.GetSsmPrefix()` migration:
+- `internal/app/cmd/slack.go:311,328` — `/km/slack/bot-scopes-cache`
+- `internal/app/cmd/slack.go:426,465` — `/km/slack/last-test-timestamp`
+- `internal/app/cmd/slack.go:461` — `/km/slack/workspace`
+- `internal/app/cmd/slack.go:759` — `/km/slack/signing-secret` (Phase 67 critical)
+- `internal/app/cmd/slack.go:836` — log message mentioning `/km/slack/signing-secret` (low-impact, update for consistency)
+- `internal/app/cmd/destroy_slack.go:75` — `/km/slack/bridge-url` (was already in stale research, verified unchanged)
+- `pkg/compiler/userdata.go:184,1211` — bash script templates with `/km/slack/bridge-url`, `/km/slack/bridge-url` (sandbox-side scripts, **same concern as before**, still needs HCL template migration)
+
+**Category C additions (new `"km-"` singleton names in Go, Phase 67/68 delta):**
+
+The stale research counted 100+ singleton `"km-"` sites. Today the count is ~134 across all singleton resource names. New sites from Phase 67/68 that need migration:
+
+| File | Line | Hardcoded Name | Fix |
+|------|------|----------------|-----|
+| `internal/app/cmd/status.go` | 468 | `"km-slack-threads"` | `cfg.GetSlackThreadsTableName()` — `cfg` must be threaded into the `km status` display path |
+| `internal/app/cmd/doctor.go` | 2330 | `"km-sandboxes"` in `doctorSlackMetadataScanner.tableName` | Use `cfg.GetSandboxTableName()` (already in cfg struct) |
+| `internal/app/cmd/doctor.go` | 2341 | `"km-sandboxes"` in `listSandboxesWithInboundImpl` call | Same fix |
+| `internal/app/cmd/doctor.go` | 2392 | `"km-sandboxes"` in `newRealLister` call | Same fix |
+| `internal/app/cmd/init.go` | 1724 | `"km-slack-bridge"` in `ForceSlackBridgeColdStartWith` | `cfg.GetResourcePrefix() + "-slack-bridge"` — cfg must be threaded in or env var read |
+| `pkg/compiler/userdata.go` | 3074, 3090 | `"km-slack-threads"` fallback | Fixed by `create.go` setting `KM_SLACK_THREADS_TABLE` env var before compiler call |
+| `pkg/compiler/userdata.go` | 3105 | `"km-slack-stream-messages"` fallback | Fixed by `create.go` setting `KM_SLACK_STREAM_TABLE` env var |
+| `pkg/compiler/service_hcl.go` | 778 | `"km-slack-stream-messages"` fallback | Fixed by `create.go` setting `KM_SLACK_STREAM_TABLE` env var |
+
+**Note:** `list.go:132` correctly uses `cfg.GetSlackThreadsTableName()` — no fix needed. `cmd/km-slack-bridge/main.go:157` uses `threadsTable = "km-slack-threads"` as env-var fallback — correct pattern; the Lambda module sets `KM_SLACK_THREADS_TABLE` from `var.slack_threads_table_name`.
+
+### Env Files / systemd Units (Phase 67)
+
+Phase 67 added `/etc/km/notify.env` and `km-slack-inbound-poller.service`. These consume env vars set at cloud-init time:
+
+- `KM_SLACK_THREADS_TABLE` — set from `KM_SLACK_THREADS_TABLE` env var in userdata template (needs `create.go` to export correct value)
+- `KM_SLACK_INBOUND_QUEUE_URL` — per-sandbox URL, **not prefix-dependent** (queue URL is a full AWS URL)
+- `/etc/km/notify.env` — contains `KM_SLACK_STREAM_TABLE` and `KM_SLACK_THREADS_TABLE` lines written from `notifyEnv["KM_SLACK_THREADS_TABLE"]` in userdata.go (correct, env-var driven)
+
+No systemd unit files contain hardcoded `km-` resource names beyond what they read from the env file. These are safe once `create.go` exports the correct env vars.
 
 ---
 
@@ -219,10 +325,11 @@ variable "resource_prefix" {
 
 | Problem | Don't Build | Use Instead | Why |
 |---------|-------------|-------------|-----|
-| Multi-value viper defaults | Custom config file parser | `v.SetDefault()` + viper merge | Already established — identical to Phase 65 |
+| Multi-value viper defaults | Custom config file parser | `v.SetDefault()` + viper merge | Already established — identical to Phase 65 and Phase 67 |
 | Helper method test | Manual string comparison | Existing `config_test.go` pattern with `writeKMConfig()` helper | Fits seamlessly |
 | TF resource parameterization | New TF module version | Add `var.resource_prefix` to existing v1.0.0 in-place | No external module consumers |
 | site.hcl env var reads | Shell scripts or init bootstrapping | `get_env()` with default, same as existing `KM_DOMAIN` | Already the site.hcl pattern |
+| slack_threads table name in bridge | New module variable | Wire existing `var.slack_threads_table_name` through live config via dependency | Module already parameterized; only live config needs updating |
 
 ---
 
@@ -230,66 +337,61 @@ variable "resource_prefix" {
 
 ### Pitfall 1: DynamoDB Table Rename = Data Loss
 **What goes wrong:** If a TF logical resource name change causes `terraform plan` to show "destroy" + "create" for a DynamoDB table, applying that plan destroys all data.
-**Why it happens:** TF tracks resources by logical name in state. Renaming the logical name (`resource "aws_dynamodb_table" "budget"` → `resource "aws_dynamodb_table" "my_budget"`) forces replacement.
-**How to avoid:** ONLY change the `name` attribute (the physical AWS name), never the TF resource label. All five DynamoDB modules already use `name = var.table_name` — the TF logical name (`aws_dynamodb_table.budget`) stays constant. Verify every plan with `terraform plan -detailed-exitcode` before apply.
+**Why it happens:** TF tracks resources by logical name in state. Renaming the logical name forces replacement.
+**How to avoid:** ONLY change the `name` attribute (the physical AWS name), never the TF resource label. All seven DynamoDB modules (including the two new ones from Phase 67/68) already use `name = var.table_name`. Verify every plan with `terraform plan -detailed-exitcode` before apply.
 **Warning signs:** `terraform plan` shows `-/+ destroy and then create replacement` for any DynamoDB resource.
 
 ### Pitfall 2: SES Domain Identity DNS Round-Trip
-**What goes wrong:** Changing `email_subdomain` on an existing install (e.g., `sandboxes` → `myco`) invalidates SES domain verification. The new domain needs new DKIM + MX + verification TXT records in Route53 and can take up to 72h for DNS propagation.
-**Why it happens:** SES verifies the domain identity string. A different subdomain is a different identity.
-**How to avoid:** Document clearly that `email_subdomain` is a one-time choice at `km init` time. Do NOT change it on a live install. `km doctor` should check that the configured email domain matches the verified SES domain identity.
-**Warning signs:** SES shows "verification pending" after changing the subdomain.
+**What goes wrong:** Changing `email_subdomain` on an existing install invalidates SES domain verification. New domain needs new DKIM + MX + verification TXT records, up to 72h propagation.
+**How to avoid:** Document that `email_subdomain` is a one-time choice at `km init` time. `km doctor` should check that the configured email domain matches the verified SES domain identity.
 
 ### Pitfall 3: EventBridge Schedule Group Cannot be Renamed Safely
-**What goes wrong:** If `resource_prefix` changes on a live install, the EventBridge schedule group `km-at` (created by ttl-handler module) cannot be renamed — all existing schedules under it carry the old group name. They'd need to be recreated.
-**Why it happens:** EventBridge schedules are children of a schedule group; the group name is embedded in the schedule ARN.
-**How to avoid:** Document that `resource_prefix` is a one-time choice at `km init`. Migrations are out of scope per roadmap. At initial install, the group name will be `{prefix}-at`.
-**Warning signs:** `km at list` returns empty after prefix change while schedules still exist in the old group.
+**What goes wrong:** The EventBridge schedule group `km-at` cannot be renamed — all existing schedules under it carry the old group name. They'd need to be recreated.
+**How to avoid:** Document that `resource_prefix` is a one-time choice at `km init`. Migrations are out of scope per roadmap.
 
 ### Pitfall 4: ttl-handler Hardcodes Own Function Name in Lambda Code
-**What goes wrong:** `cmd/ttl-handler/main.go:351` hardcodes `"km-ttl-handler"` when creating EventBridge schedules that target itself. With a custom prefix, the Lambda is deployed as `{prefix}-ttl-handler` but the code still constructs schedule targets pointing to `"km-ttl-handler"` — schedules fire into void.
-**Why it happens:** The Lambda code does not read its own function name from context; it hardcodes it.
+**What goes wrong:** `cmd/ttl-handler/main.go:351` hardcodes `"km-ttl-handler"` when creating EventBridge schedules that target itself. With a custom prefix, the Lambda is deployed as `{prefix}-ttl-handler` but the code still constructs schedule targets pointing to `"km-ttl-handler"`.
 **How to avoid:** Add `KM_TTL_HANDLER_NAME` and `KM_TTL_SCHEDULER_ROLE` env vars to the ttl-handler module, set from `var.resource_prefix`. Lambda code reads them with a `"km-ttl-handler"` fallback.
-**Warning signs:** Scheduled sandbox TTLs never fire; EventBridge shows schedule targets unresolvable.
 
 ### Pitfall 5: configui's `kmPrefix = "/km/"` Constant
 **What goes wrong:** `cmd/configui/handlers_secrets.go:47` defines `const kmPrefix = "/km/"` and uses it as a path prefix for SSM parameter CRUD. With a custom prefix, SSM params land under `/{prefix}/` but configui only shows and manages `/km/` params.
-**Why it happens:** The constant is set at compile time, not runtime.
-**How to avoid:** Change `const kmPrefix = "/km/"` to a variable read from `KM_RESOURCE_PREFIX` env var with `"km"` as default, constructing `"/" + prefix + "/"`.
-**Warning signs:** configui shows no secrets / Slack config missing in UI.
+**How to avoid:** Change `const kmPrefix = "/km/"` to a variable read from `KM_RESOURCE_PREFIX` env var with `"km"` as default.
 
 ### Pitfall 6: ecs-spot-handler is an Account-Singleton Today
-**What goes wrong:** `infra/modules/ecs-spot-handler/v1.0.0/main.tf` hardcodes `name = "km-ecs-spot-handler"` for the Lambda, IAM role, and EventBridge rule. If two km installs exist in the same account, the second `terragrunt apply` will attempt to create an IAM role with an identical name — IAM enforces uniqueness per account.
-**Why it happens:** The module was designed as an account-singleton.
-**How to avoid:** Add `var.resource_prefix` to the ecs-spot-handler module. Both installs use distinct prefixes and the names no longer collide.
-**Warning signs:** `terragrunt apply` of ecs-spot-handler fails with `EntityAlreadyExists`.
+**What goes wrong:** `infra/modules/ecs-spot-handler/v1.0.0/main.tf` hardcodes `name = "km-ecs-spot-handler"` for Lambda, IAM role, and EventBridge rule. Two km installs = IAM name collision.
+**How to avoid:** Add `var.resource_prefix` to the ecs-spot-handler module.
 
 ### Pitfall 7: email-handler Module Hardcodes SANDBOX_TABLE_NAME
-**What goes wrong:** `infra/modules/email-handler/v1.0.0/main.tf:252` has `SANDBOX_TABLE_NAME = "km-sandboxes"` hardcoded in the Lambda env block — it does NOT use a variable. The `email-create-handler` Lambda code reads `os.Getenv("SANDBOX_TABLE_NAME")` and falls back to `"km-sandboxes"`. With a custom prefix, the table is `{prefix}-sandboxes` but the Lambda writes to `km-sandboxes`.
-**Why it happens:** The email-handler module was not updated alongside slack-bridge (which does use a variable).
-**How to avoid:** Add `var.sandbox_table_name` (default `"km-sandboxes"`) to the email-handler module and wire it into the env block.
-**Warning signs:** Remote sandbox create via email succeeds but sandbox record never appears in DynamoDB.
+**What goes wrong:** `infra/modules/email-handler/v1.0.0/main.tf:252` has `SANDBOX_TABLE_NAME = "km-sandboxes"` hardcoded in the Lambda env block — it does NOT use a variable. With a custom prefix, the table is `{prefix}-sandboxes` but the Lambda writes to `km-sandboxes`.
+**How to avoid:** Add `var.sandbox_table_name` (default `"km-sandboxes"`) to the email-handler module.
 
 ### Pitfall 8: TF State Backend Bucket is Read at Plan Time
-**What goes wrong:** The TF state backend bucket (`tf-km-state-{region}`) must exist BEFORE any `terragrunt apply`. `km init` creates this bucket with a hardcoded `tf-km-state-{regionLabel}` format. If `resource_prefix` is set after the bucket already exists under the old name, there will be a mismatch.
-**Why it happens:** `init.go:832` constructs the bucket name as `fmt.Sprintf("tf-km-state-%s", regionLabel)` — hardcoded `tf-km`.
-**How to avoid:** Make `km init` read `cfg.GetResourcePrefix()` to construct the bucket name. The `site.hcl` `tf_state_prefix` is also derived from `label` already — making `label` configurable via env var automatically fixes the HCL side. The Go side (`fetchAndCacheOutputs`, `init.go`) needs explicit cfg plumbing.
-**Warning signs:** `terragrunt init` fails with backend bucket not found after changing prefix.
+**What goes wrong:** The TF state backend bucket (`tf-km-state-{region}`) must exist BEFORE any `terragrunt apply`. `init.go:832` constructs the bucket name as `fmt.Sprintf("tf-km-state-%s", regionLabel)` — hardcoded `tf-km`.
+**How to avoid:** Make `km init` read `cfg.GetResourcePrefix()` to construct the bucket name.
+
+### Pitfall 9 (NEW — Phase 67/68): lambda-slack-bridge Live Config Missing Phase 67 Variables
+**What goes wrong:** The live `infra/live/use1/lambda-slack-bridge/terragrunt.hcl` does NOT pass `signing_secret_path`, `slack_threads_table_name`, `resource_prefix`, or have a `dependency "slack_threads"` block. For the default prefix these all happen to resolve to the correct `"km"` defaults, so the current install works. But with a custom prefix, the bridge Lambda will: (a) look for signing secret at `/km/slack/signing-secret` instead of `/{prefix}/slack/signing-secret`, (b) use `km-slack-threads` regardless of actual table name, (c) use the wrong SQS IAM wildcard.
+**How to avoid:** Phase 66 must add the `dependency "slack_threads"` block and wire all four variables through `site.label`.
+
+### Pitfall 10 (NEW — Phase 67/68): status.go Hardcodes km-slack-threads
+**What goes wrong:** `internal/app/cmd/status.go:468` calls `countActiveThreads(ctx, ddbClient, "km-slack-threads", rec.SlackChannelID)` with a hardcoded table name. The `km status` command does not receive `*config.Config` in this code path — it constructs a DDB client locally at line 456.
+**How to avoid:** Thread `cfg.GetSlackThreadsTableName()` into the `km status` wide-output Slack threads display, similar to how `list.go:132` already does it.
+
+### Pitfall 11 (NEW — Phase 67/68): ForceSlackBridgeColdStartWith Hardcodes Function Name
+**What goes wrong:** `internal/app/cmd/init.go:1724` hardcodes `aws.String("km-slack-bridge")` in `ForceSlackBridgeColdStartWith`. With a custom prefix, the bridge is deployed as `{prefix}-slack-bridge` but `km slack rotate-token` tries to cold-start `km-slack-bridge`, failing silently (Lambda UpdateFunctionConfiguration returns `ResourceNotFoundException`).
+**How to avoid:** Parameterize `ForceSlackBridgeColdStartWith` to accept function name, or read `KM_RESOURCE_PREFIX` env var inside the function.
+
+### Pitfall 12 (NEW — Phase 67): DoctorConfigProvider GetResourcePrefix Type-Assert Hack
+**What goes wrong:** `doctor.go:2344` uses `if appCfgTyped, ok := cfg.(*appConfigAdapter); ok` to get `GetResourcePrefix()` because the method is not in the `DoctorConfigProvider` interface. Test stubs that implement `DoctorConfigProvider` won't expose `GetResourcePrefix()`, meaning `deps.SlackResourcePrefix` always falls back to `"km"` in tests.
+**How to avoid:** Add `GetResourcePrefix()` to `DoctorConfigProvider` and remove the type-assert.
 
 ---
 
 ## Code Examples
 
-### Config helper methods (unit-testable pattern)
+### Config helper methods (add GetEmailDomain + GetSsmPrefix)
 ```go
-// Source: internal/app/config/config.go — new methods
-func (c *Config) GetResourcePrefix() string {
-    if c.ResourcePrefix == "" {
-        return "km"
-    }
-    return c.ResourcePrefix
-}
-
+// Source: internal/app/config/config.go — new methods (GetResourcePrefix already exists)
 func (c *Config) GetEmailDomain() string {
     sub := c.EmailSubdomain
     if sub == "" {
@@ -307,38 +409,9 @@ func (c *Config) GetSsmPrefix() string {
 }
 ```
 
-### Config test pattern (follows existing config_test.go style)
-```go
-func TestGetEmailDomain_Default(t *testing.T) {
-    dir := t.TempDir()
-    writeKMConfig(t, dir, "domain: example.com\n")
-    orig, _ := os.Getwd(); defer os.Chdir(orig)
-    os.Chdir(dir)
-    cfg, _ := config.Load()
-    if got := cfg.GetEmailDomain(); got != "sandboxes.example.com" {
-        t.Errorf("got %q, want %q", got, "sandboxes.example.com")
-    }
-}
-
-func TestGetEmailDomain_CustomSubdomain(t *testing.T) {
-    dir := t.TempDir()
-    writeKMConfig(t, dir, "domain: example.com\nemail_subdomain: mail\n")
-    // ... cfg.GetEmailDomain() == "mail.example.com"
-}
-
-func TestGetResourcePrefix_Default(t *testing.T) {
-    // with empty config, GetResourcePrefix() returns "km"
-}
-
-func TestGetResourcePrefix_Custom(t *testing.T) {
-    writeKMConfig(t, dir, "resource_prefix: km2\n")
-    // cfg.GetResourcePrefix() == "km2"
-}
-```
-
 ### site.hcl extension
 ```hcl
-# Source: infra/live/site.hcl — add to site block
+# Source: infra/live/site.hcl — modify site block
 site = {
     label           = get_env("KM_RESOURCE_PREFIX", "km")
     tf_state_prefix = "tf-${get_env("KM_RESOURCE_PREFIX", "km")}"
@@ -349,219 +422,149 @@ site = {
 # backend block stays derived from site.tf_state_prefix (unchanged logic)
 ```
 
-### live terragrunt.hcl DynamoDB table names
+### Live DynamoDB terragrunt.hcl — new Phase 67/68 tables
 ```hcl
-# Before (infra/live/use1/dynamodb-budget/terragrunt.hcl):
-inputs = { table_name = "km-budgets" }
+# Before (infra/live/use1/dynamodb-slack-threads/terragrunt.hcl):
+inputs = { table_name = "km-slack-threads" }
 
 # After:
-inputs = { table_name = "${local.site_vars.locals.site.label}-budgets" }
+inputs = { table_name = "${local.site_vars.locals.site.label}-slack-threads" }
+
+# Before (infra/live/use1/dynamodb-slack-stream-messages/terragrunt.hcl):
+inputs = { table_name = "km-slack-stream-messages" }
+
+# After:
+inputs = { table_name = "${local.site_vars.locals.site.label}-slack-stream-messages" }
 ```
 
-### Lambda module var.resource_prefix pattern
+### lambda-slack-bridge live config — add Phase 67 missing wiring
 ```hcl
-# Source: infra/modules/create-handler/v1.0.0/variables.tf — add
-variable "resource_prefix" {
-  description = "Prefix for all resource names (default: km)"
-  type        = string
-  default     = "km"
+# Add to infra/live/use1/lambda-slack-bridge/terragrunt.hcl:
+
+dependency "slack_threads" {
+  config_path = "../dynamodb-slack-threads"
+  mock_outputs = {
+    table_name = "km-slack-threads"
+    table_arn  = "arn:aws:dynamodb:us-east-1:000000000000:table/km-slack-threads"
+  }
+  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply"]
 }
 
-# Source: infra/modules/create-handler/v1.0.0/main.tf — replace hardcoded "km-"
-resource "aws_iam_role" "create_handler" {
-  name = "${var.resource_prefix}-create-handler"
-  ...
-}
-```
-
-### live terragrunt.hcl passing prefix to Lambda modules
-```hcl
-# Source: infra/live/use1/create-handler/terragrunt.hcl — add to inputs
+# Add to inputs block:
 inputs = {
-  ...
-  resource_prefix = local.site_vars.locals.site.label
+  ...existing inputs...
+  resource_prefix          = local.site_vars.locals.site.label
+  signing_secret_path      = "/${local.site_vars.locals.site.label}/slack/signing-secret"
+  slack_threads_table_name = dependency.slack_threads.outputs.table_name
+  # slack_threads_table_arn is needed for IAM — must add to module variables.tf too
 }
 ```
 
-### email domain in live HCL (ttl-handler, create-handler, email-handler)
+### lambda-slack-bridge module — fix function_name
 ```hcl
-# Before:
-email_domain = "sandboxes.${local.site_vars.locals.site.domain}"
-
-# After:
-email_domain = "${local.site_vars.locals.site.email_subdomain}.${local.site_vars.locals.site.domain}"
-```
-
-### Go call-site migration (example for email.go)
-```go
-// Before (internal/app/cmd/email.go):
-func emailDomain(cfg *config.Config) string {
-    if cfg.Domain != "" {
-        return "sandboxes." + cfg.Domain
-    }
-    return "sandboxes.klankermaker.ai"
-}
-
-// After:
-func emailDomain(cfg *config.Config) string {
-    return cfg.GetEmailDomain()
+# Source: infra/modules/lambda-slack-bridge/v1.0.0/main.tf — change local
+locals {
+  # Before:
+  # function_name = "km-slack-bridge"
+  # After:
+  function_name = "${var.resource_prefix}-slack-bridge"
 }
 ```
 
-### SSM path migration (example for slack.go)
+### slack.go — migrate signing-secret path
 ```go
-// Before:
-botToken, _ := ssmStore.Get(ctx, "/km/slack/bot-token", true)
+// Before (internal/app/cmd/slack.go:759):
+func PersistSigningSecret(ctx context.Context, store SlackSSMStore, secret, kmsKey string) error {
+    return store.Put(ctx, "/km/slack/signing-secret", secret, true)
+}
 
-// After:
-botToken, _ := ssmStore.Get(ctx, cfg.GetSsmPrefix()+"slack/bot-token", true)
+// After — requires adding cfg parameter or reading from env:
+func PersistSigningSecret(ctx context.Context, store SlackSSMStore, secret, kmsKey, ssmPrefix string) error {
+    return store.Put(ctx, ssmPrefix+"slack/signing-secret", secret, true)
+}
+// Callers pass cfg.GetSsmPrefix()
+```
+
+### create.go — set env vars for compiler
+```go
+// Add to the os.Setenv block in create.go (around line 379):
+os.Setenv("KM_SLACK_THREADS_TABLE", cfg.GetSlackThreadsTableName())
+os.Setenv("KM_SLACK_STREAM_TABLE", cfg.GetSlackStreamMessagesTableName())
 ```
 
 ---
 
 ## Complete Call-Site Inventory
 
-### Category A: email domain (`"sandboxes." + domain`) — 30 sites across 8 files
-All collapse to `cfg.GetEmailDomain()` or equivalent:
+### Category A: email domain (`"sandboxes." + domain`) — 30 sites across 8 files (UNCHANGED from stale)
+All collapse to `cfg.GetEmailDomain()` or equivalent. No new sites added by Phase 67/68.
 
 | File | Lines | Pattern |
 |------|-------|---------|
-| `internal/app/cmd/create.go` | 400, 413, 1001, 1003, 1094, 1545, 1753 | `"sandboxes." + networkDomain` |
-| `internal/app/cmd/destroy.go` | 397, 653 | `"sandboxes." + destroyBaseDomain` |
+| `internal/app/cmd/create.go` | 400, 413, 1114, 1116, 1207, 1658, 1866 | `"sandboxes." + networkDomain` |
+| `internal/app/cmd/destroy.go` | 397, 693 | `"sandboxes." + destroyBaseDomain` |
 | `internal/app/cmd/budget.go` | 387 | `"sandboxes." + domain` |
-| `internal/app/cmd/email.go` | 87–92 | `emailDomain()` helper (refactor helper to use `cfg.GetEmailDomain()`) |
-| `internal/app/cmd/init.go` | 225, 336, 466, 493, 1507 | `"sandboxes." + cfg.Domain` |
-| `internal/app/cmd/doctor.go` | 754, 757 | `fmt.Sprintf("sandboxes.%s", domain)` |
-| `internal/app/cmd/configure.go` | 232, 234 | `"sandboxes.%s"` printf |
-| `internal/app/cmd/info.go` | 88, 98 | `"@sandboxes." + cfg.Domain` |
+| `internal/app/cmd/email.go` | 87–92 | `emailDomain()` helper |
+| `internal/app/cmd/init.go` | 1522 | `"sandboxes." + cfg.Domain` |
+| `internal/app/cmd/doctor.go` | 780, 783 | `fmt.Sprintf("sandboxes.%s", domain)` |
 | `cmd/budget-enforcer/main.go` | 642 | `"sandboxes.klankermaker.ai"` fallback |
-| `cmd/create-handler/main.go` | 262–266, 444 | `"sandboxes.klankermaker.ai"` fallback + prefix check |
 | `cmd/ttl-handler/main.go` | 1396 | `"sandboxes.klankermaker.ai"` fallback |
-| `pkg/compiler/service_hcl.go` | 793 | `"sandboxes.klankermaker.ai"` default in compiler |
-| `pkg/compiler/userdata.go` | 2375 | `"sandboxes.klankermaker.ai"` default in userdata generator |
-| `pkg/compiler/budget_enforcer_hcl.go` | 85 | HCL template string — migrate to `email_subdomain` site var |
+| `pkg/compiler/userdata.go` | 2959 | `"sandboxes.klankermaker.ai"` default |
+| `pkg/compiler/service_hcl.go` | 824 | `"sandboxes.klankermaker.ai"` default |
+| `pkg/compiler/budget_enforcer_hcl.go` | 85 | HCL template string |
+| `cmd/create-handler/main.go` | 262–266, 444 | `"sandboxes.klankermaker.ai"` fallback + prefix check |
 
-Note: `pkg/aws/ses.go` has NO hardcoded subdomain — it already takes `domain` as a parameter (the caller is responsible). `ses.go` does NOT need changes.
+### Category B: SSM path prefix (`"/km/"`) — 86 sites (was 75+, grew by 11)
 
-### Category B: SSM path prefix (`"/km/"`) — 75+ sites across 11 files
-All collapse to `cfg.GetSsmPrefix()` prefix:
+New sites added by Phase 67 (all in `internal/app/cmd/slack.go`):
+- `:311, :328` — `/km/slack/bot-scopes-cache`
+- `:426, :461, :462, :463, :464, :465` — `/km/slack/last-test-timestamp`, `/km/slack/workspace`, `/km/slack/shared-channel-id`, `/km/slack/invite-email`, `/km/slack/bridge-url`, `/km/slack/last-test-timestamp`
+- `:541` — `/km/slack/bot-token` (in `SlackRotateToken`)
+- `:759` — `/km/slack/signing-secret` (Phase 67 — critical new site)
 
-| File | Key paths |
-|------|-----------|
-| `internal/app/cmd/create.go` | `/km/slack/bot-token`, `/km/config/github/*` |
-| `internal/app/cmd/create_slack.go` | `/km/slack/*` (4 paths) |
-| `internal/app/cmd/slack.go` | `/km/slack/*` (8 paths) |
-| `internal/app/cmd/configure_github.go` | `/km/config/github/*` (10 paths) |
-| `internal/app/cmd/doctor_slack.go` | `/km/slack/*` (4 paths) |
-| `internal/app/cmd/doctor.go` | `/km/config/github/*` (4 paths) |
-| `internal/app/cmd/init.go` | `/km/config/remote-create/safe-phrase` |
-| `internal/app/cmd/logs.go` | `/km/sandboxes/` log group |
-| `internal/app/cmd/status.go` | `/km/sandboxes/` log group |
-| `cmd/configui/handlers.go` | `/km/sandboxes` log group |
-| `cmd/configui/handlers_secrets.go` | `const kmPrefix = "/km/"` — must become variable |
-| `cmd/github-token-refresher/main.go` | `/km/config/github/*` (2 paths) |
-| `cmd/km-slack-bridge/main.go` | `/km/slack/bot-token` (via env var `KM_BOT_TOKEN_PATH`) |
-| `infra/live/use1/lambda-slack-bridge/terragrunt.hcl` | `bot_token_path = "/km/slack/bot-token"` — becomes `"/${local.site_vars.locals.site.label}/slack/bot-token"` |
-| `infra/modules/lambda-slack-bridge/v1.0.0/variables.tf` | default `"/km/slack/bot-token"` |
-| `infra/modules/email-handler/v1.0.0/variables.tf` | default `"/km/config/remote-create/safe-phrase"` |
-| `infra/modules/github-token/v1.0.0/main.tf` | `KM_GITHUB_SSM_CONFIG_PREFIX = "/km/config/github"` |
+Existing sites from stale research: see stale research Categories B table (unchanged). Full file-by-file count: `configure_github.go` 10 paths, `doctor.go` 4+4 paths, `init.go` 1 path, `logs.go` 1 path, `status.go` 1 path, `configui/handlers_secrets.go` const, `configui/handlers.go` 2, `github-token-refresher/main.go` 2, `km-slack-bridge/main.go` 2, `email-create-handler/main.go` 1, `pkg/aws/cloudwatch.go` 2, `pkg/aws/rotation.go` 1 (log group), `pkg/compiler/service_hcl.go` 2, `pkg/compiler/userdata.go` 3 (bash templates), `pkg/slack/bridge/aws_adapters.go` 2 (doc comments), `infra/live/use1/lambda-slack-bridge/terragrunt.hcl:74` (`bot_token_path`), `infra/modules/lambda-slack-bridge/v1.0.0/variables.tf:9,76`.
 
-### Category C: Resource prefix (`"km-"` resource names) — 100+ sites
+### Category C: Resource prefix (`"km-"` resource names) — ~134 sites (was 100+)
 
-**Singletons (global per install — must become `{prefix}-`):**
+**New singleton sites from Phase 67/68 requiring action (not in stale research):**
 
-| File | Lines | Names |
-|------|-------|-------|
-| `internal/app/cmd/create.go` | 649, 696, 851, 865, 892, 1162, 1873 | `km-sandboxes`, `km-ttl-handler`, `km-ttl-scheduler`, `km-budgets`, `km-identities` |
-| `internal/app/cmd/destroy.go` | 99, 181, 285, 447, 461, 665, 677 | `km-sandboxes`, `km-identities`, `km-budget-*` |
-| `internal/app/cmd/resume.go` | 83, 87, 166, 170 | `km-sandboxes`, `km-budgets`, `km-ttl-handler`, `km-ttl-scheduler` |
-| `internal/app/cmd/shell.go` | 219, 451, 719, 843 | `km-sandboxes` |
-| `internal/app/cmd/extend.go` | 110, 151, 161 | `km-sandboxes`, `km-ttl-handler`, `km-ttl-scheduler` |
-| `internal/app/cmd/list.go` | 77 | `km-sandboxes` |
-| `internal/app/cmd/unlock.go` | 72 | `km-sandboxes` |
-| `internal/app/cmd/stop.go` | 77 | `km-sandboxes` |
-| `internal/app/cmd/budget.go` | 52, 135, 142 | `km-sandbox-{id}-role`, `km-sandboxes`, `km-budgets` |
-| `internal/app/cmd/ami.go` | 153, 837 | `km-sandboxes` |
-| `internal/app/cmd/init.go` | 464, 1686, 1709 | `km-identities`, `km-create-handler`, `km-slack-bridge` |
-| `internal/app/cmd/doctor.go` | 496, 1025, 1048, 1179, 1204, 1897, 1906, 1919, 1983, 2244, 2260 | various `km-*` checks |
-| `internal/app/cmd/at.go` | 319, 702 | `km-at` group default |
-| `cmd/ttl-handler/main.go` | 351, 355, 412, 637, 658, 711, 718, and 15+ more | `km-ttl-handler`, `km-ttl-scheduler`, `km-at`, `km-budgets`, `km-schedules`, etc. |
-| `cmd/create-handler/main.go` | 271, 454, 459 | `km-identities`, `km-sandboxes` |
-| `cmd/budget-enforcer/main.go` | 549, 586, 638, 647 | `km-budget-*`, `km-budgets`, `km-sandboxes` |
-| `cmd/email-create-handler/main.go` | 967 | `km-sandboxes` |
-| `cmd/km-slack-bridge/main.go` | 48, 49, 50 | `km-identities`, `km-sandboxes`, `km-slack-bridge-nonces` |
-| `cmd/configui/main.go` | 107 | `km-budgets` |
-| `pkg/aws/cloudwatch.go` | 68, 87 | `/km/sandboxes/` log group |
-| `pkg/aws/scheduler.go` | 44 | `km-ttl-{sandboxID}` |
-| `pkg/compiler/lifecycle.go` | 29 | `km-ttl-{sandboxID}` |
-| `pkg/compiler/service_hcl.go` | 316, 322 | `/km/sandboxes/` log group |
-| `internal/app/cmd/configure.go` | 251 | `km-budgets` default in wizard output |
-| `infra/live/use1/dynamodb-*/terragrunt.hcl` | inputs | `table_name = "km-*"` (5 files) |
-| `infra/live/use1/lambda-slack-bridge/terragrunt.hcl` | mock_outputs | `"km-*"` table names in mock outputs |
-| `infra/modules/{5 Lambda modules}` | main.tf | All IAM + Lambda names |
+| File | Line | Name | Action |
+|------|------|------|--------|
+| `internal/app/cmd/status.go` | 468 | `"km-slack-threads"` | Use `cfg.GetSlackThreadsTableName()` |
+| `internal/app/cmd/doctor.go` | 2330 | `"km-sandboxes"` | Use `cfg.GetSandboxTableName()` via interface |
+| `internal/app/cmd/doctor.go` | 2341 | `"km-sandboxes"` | Same |
+| `internal/app/cmd/doctor.go` | 2392 | `"km-sandboxes"` | Same |
+| `internal/app/cmd/init.go` | 1724 | `"km-slack-bridge"` | `cfg.GetResourcePrefix() + "-slack-bridge"` |
+| `pkg/compiler/userdata.go` | 3074, 3090 | `"km-slack-threads"` | Fixed by `KM_SLACK_THREADS_TABLE` env var from `create.go` |
+| `pkg/compiler/userdata.go` | 3105 | `"km-slack-stream-messages"` | Fixed by `KM_SLACK_STREAM_TABLE` env var from `create.go` |
+| `pkg/compiler/service_hcl.go` | 778 | `"km-slack-stream-messages"` | Fixed by `KM_SLACK_STREAM_TABLE` env var from `create.go` |
+| `infra/live/use1/dynamodb-slack-threads/terragrunt.hcl` | 36 | `"km-slack-threads"` | `"${local.site_vars.locals.site.label}-slack-threads"` |
+| `infra/live/use1/dynamodb-slack-stream-messages/terragrunt.hcl` | 36 | `"km-slack-stream-messages"` | `"${local.site_vars.locals.site.label}-slack-stream-messages"` |
+| `infra/modules/lambda-slack-bridge/v1.0.0/main.tf` | 5 | `function_name = "km-slack-bridge"` | `"${var.resource_prefix}-slack-bridge"` |
 
-**Per-sandbox names (ALREADY collision-free via sandboxID — DO NOT change):**
-`km-budget-enforcer-{sandboxID}`, `km-github-token-refresher-{sandboxID}`, `km-ec2spot-ssm-{sandboxID}-{region}`, `km-ec2spot-profile-{sandboxID}-{region}`, `km-docker-{sandboxID}-{region}`, `km-sidecar-{sandboxID}-{region}`, `km-ttl-{sandboxID}`, `km-budget-{sandboxID}`, `km-github-token-{sandboxID}`
+**Existing singleton sites (unchanged, still in scope for Phase 66):** See stale research Category C for full list — `create.go`, `destroy.go`, `resume.go`, `shell.go`, `extend.go`, `list.go`, `unlock.go`, `stop.go`, `budget.go`, `ami.go`, `init.go`, `doctor.go`, `at.go`, `cmd/ttl-handler/main.go`, `cmd/create-handler/main.go`, `cmd/budget-enforcer/main.go`, `cmd/email-create-handler/main.go`, `cmd/km-slack-bridge/main.go`, `cmd/configui/main.go`, `pkg/aws/cloudwatch.go`, `pkg/aws/scheduler.go`, `pkg/compiler/lifecycle.go`, `pkg/compiler/service_hcl.go`, `internal/app/cmd/configure.go`, all five DynamoDB + two new DynamoDB + one Lambda live TF configs, all five Lambda TF modules + lambda-slack-bridge.
 
-These appear in `destroy.go`, `create.go`, `ttl-handler/main.go`, `budget-enforcer module`, `budget-enforcer/main.go` but are explicitly out of scope per roadmap.
-
-### Category D: TF state prefix (`"tf-km"`) — 14 sites
-
-| File | Line | Code |
-|------|------|------|
-| `infra/live/site.hcl` | 5 | `tf_state_prefix = "tf-km"` — becomes `"tf-${get_env(...)}"` |
-| `internal/app/cmd/init.go` | 832, 833 | `fmt.Sprintf("tf-km-state-%s", regionLabel)` — use `cfg.GetResourcePrefix()` |
-| `internal/app/cmd/resume.go` | 138 | `"tf-km/sandboxes/"` — use cfg prefix |
-| `internal/app/cmd/unlock.go` | 131 | `"tf-km/sandboxes/"` — use cfg prefix |
-| `internal/app/cmd/extend.go` | 183 | `"tf-km/sandboxes/"` — use cfg prefix |
-| `internal/app/cmd/lock.go` | 120 | `"tf-km/sandboxes/"` — use cfg prefix |
-| `cmd/ttl-handler/main.go` | 954, 962, 1061 | `statePrefix = "tf-km"` fallback |
-| `cmd/configui/main.go` | 66 | `KM_BUCKET` default `"tf-km"` |
-
----
-
-## State of the Art
-
-| Old Approach | Current Approach | When Changed | Impact for Phase 66 |
-|--------------|------------------|--------------|---------------------|
-| `accounts.management` single field | `accounts.organization` + `accounts.dns_parent` | Phase 65 | Same struct extension pattern applies here |
-| DynamoDB modules hardcoding `name = "km-*"` | `name = var.table_name` with default | Already done (before Phase 66) | DynamoDB live configs just need literal → site.label substitution |
-| `lambda-slack-bridge` module using locals | `locals { function_name = "km-slack-bridge" }` | Phase 63 | Good pattern — extend to `"${var.resource_prefix}-slack-bridge"` |
-| TTL/create/email Lambda modules | Fully hardcoded names | Still current | Require var.resource_prefix addition in Phase 66 |
-
-**Deprecated/outdated patterns to remove:**
-- All inline `"sandboxes." + cfg.Domain` → `cfg.GetEmailDomain()`
-- `const kmPrefix = "/km/"` in configui → runtime variable
-- `fmt.Sprintf("tf-km-state-%s", regionLabel)` in init.go → use `cfg.GetResourcePrefix()`
+### Category D: TF state prefix (`"tf-km"`) — 14 sites (UNCHANGED)
+See stale research — no new `"tf-km"` sites added by Phase 67/68.
 
 ---
 
 ## Recommended Plan Slicing
 
-Based on the dependency graph and atomic commit constraints:
+Based on the dependency graph and the Phase 67/68 additions, the wave structure from the stale research is still correct but wave content expands:
 
 ### Wave 1 (independent):
-- **66-01**: Config struct (`ResourcePrefix`, `EmailSubdomain`), helper methods (`GetEmailDomain`, `GetResourcePrefix`, `GetSsmPrefix`), unit tests. Touches: `internal/app/config/config.go`, `config_test.go`. Zero AWS changes.
-- **66-02**: Migrate all Go email-domain call sites (Category A, ~30 sites). Depends on 66-01. Touches: `internal/app/cmd/*.go`, `cmd/*/main.go`, `pkg/compiler/*.go`.
+- **66-01**: Config struct (`EmailSubdomain`), helper methods (`GetEmailDomain`, `GetSsmPrefix`), unit tests. **NOTE:** `ResourcePrefix` field, `GetResourcePrefix()`, and the two Slack table helpers already exist from Phase 67 — add only the missing parts. Extend `DoctorConfigProvider` interface to include `GetResourcePrefix()`, `GetEmailDomain()`, `GetSsmPrefix()`, `GetSlackThreadsTableName()`. Remove type-assert hack at doctor.go:2344. Touches: `internal/app/config/config.go`, `config_test.go`, `internal/app/cmd/doctor.go`.
 
 ### Wave 2 (depends on 66-01):
-- **66-03**: Migrate all Go SSM path + resource name call sites (Categories B+C, 100+ sites in internal/cmd/pkg). Extends `DoctorConfigProvider` interface. Touches: essentially all `internal/app/cmd/*.go`, `cmd/*/main.go`, `pkg/aws/*.go`. This is the largest change.
+- **66-02**: Migrate all Go email-domain call sites (Category A, ~30 sites). Touches: `internal/app/cmd/*.go`, `cmd/*/main.go`, `pkg/compiler/*.go`.
+- **66-03**: Migrate all Go SSM path + resource name call sites (Categories B+C, ~100 sites). **Now includes Phase 67/68 new sites:** `slack.go` signing-secret and 4 other new paths, `status.go:468` km-slack-threads, `doctor.go:2330,2341,2392` km-sandboxes, `init.go:1724` km-slack-bridge. Add `os.Setenv("KM_SLACK_THREADS_TABLE",...)` and `os.Setenv("KM_SLACK_STREAM_TABLE",...)` to `create.go`.
 
 ### Wave 3 (depends on 66-01 for env var names):
-- **66-04**: Thread `resource_prefix` into the five Lambda TF modules (add `var.resource_prefix` to create-handler, ttl-handler, email-handler, lambda-slack-bridge, ecs-spot-handler). Update live `terragrunt.hcl` DynamoDB inputs. Update `site.hcl` to add `label` and `email_subdomain` env vars. Update the five DynamoDB live configs.
+- **66-04**: Thread `resource_prefix` into the five Lambda TF modules + lambda-slack-bridge function_name fix. Update live `terragrunt.hcl` DynamoDB inputs (including two new Phase 67/68 tables). Add `dependency "slack_threads"` block and four new `inputs` to `lambda-slack-bridge/terragrunt.hcl`. Update `site.hcl` to add `label` and `email_subdomain` env vars.
 
 ### Wave 4 (depends on all prior):
-- **66-05**: TF state backend (`tf-km-state-{region}` → `tf-{prefix}-state-{region}`), `km init` state bucket naming, `km configure` wizard additions (prompt for prefix + subdomain), `km doctor` prefix-collision warning, grep-audit verification pass (zero `"sandboxes."` literals, zero `"/km/"` literals outside `.planning/`, zero `"km-"` literals for singleton resources outside `.planning/`).
-
-**Wave layout:**
-```
-Wave 1: [66-01]
-Wave 2: [66-02, 66-03 in parallel (independent call-site domains)]
-Wave 3: [66-04]
-Wave 4: [66-05]
-```
-
-66-02 and 66-03 can run in parallel because they touch different call-site categories (email domain vs. resource names) with no shared file conflicts.
+- **66-05**: TF state backend (`tf-km-state-{region}` → `tf-{prefix}-state-{region}`), `km init` state bucket naming, `km configure` wizard additions, `km doctor` prefix-collision warning, grep-audit verification pass.
 
 ---
 
@@ -581,15 +584,17 @@ nyquist_validation is enabled per `.planning/config.json`.
 
 | Req ID | Behavior | Test Type | Automated Command | File Exists? |
 |--------|----------|-----------|-------------------|-------------|
-| REQ-PLATFORM-MULTI-INSTANCE | `GetResourcePrefix()` defaults to "km" | unit | `go test ./internal/app/config/... -run TestGetResourcePrefix_Default` | ❌ Wave 0 |
+| REQ-PLATFORM-MULTI-INSTANCE | `GetResourcePrefix()` defaults to "km" | unit | `go test ./internal/app/config/... -run TestGetResourcePrefix_Default` | ✅ already passes (Phase 67 added shim) |
 | REQ-PLATFORM-MULTI-INSTANCE | `GetResourcePrefix()` returns custom value from km-config.yaml | unit | `go test ./internal/app/config/... -run TestGetResourcePrefix_Custom` | ❌ Wave 0 |
 | REQ-PLATFORM-MULTI-INSTANCE | `GetEmailDomain()` defaults to "sandboxes.{domain}" | unit | `go test ./internal/app/config/... -run TestGetEmailDomain_Default` | ❌ Wave 0 |
 | REQ-PLATFORM-MULTI-INSTANCE | `GetEmailDomain()` returns custom subdomain | unit | `go test ./internal/app/config/... -run TestGetEmailDomain_Custom` | ❌ Wave 0 |
 | REQ-PLATFORM-MULTI-INSTANCE | `GetSsmPrefix()` returns "/{prefix}/" | unit | `go test ./internal/app/config/... -run TestGetSsmPrefix` | ❌ Wave 0 |
+| REQ-PLATFORM-MULTI-INSTANCE | `GetSlackThreadsTableName()` uses resource prefix | unit | `go test ./internal/app/config/... -run TestGetSlackThreadsTableName` | ❌ Wave 0 |
+| REQ-PLATFORM-MULTI-INSTANCE | `GetSlackStreamMessagesTableName()` uses resource prefix | unit | `go test ./internal/app/config/... -run TestGetSlackStreamMessagesTableName` | ❌ Wave 0 |
 | REQ-CONFIG-EXTENSIBILITY | km-config.yaml with no resource_prefix loads without error | unit | `go test ./internal/app/config/... -run TestLoadBackwardCompat` | ✅ (extend existing) |
 | REQ-CONFIG-EXTENSIBILITY | km-config.yaml resource_prefix overrides default | unit | `go test ./internal/app/config/... -run TestLoadResourcePrefix` | ❌ Wave 0 |
 | REQ-PLATFORM-MULTI-INSTANCE | Zero `"sandboxes."` literal string concats remain | grep audit | `! grep -rn '"sandboxes\.' ./internal ./pkg ./cmd --include='*.go'` | ❌ Wave 0 (gate in 66-05) |
-| REQ-PLATFORM-MULTI-INSTANCE | Zero `"/km/"` hardcoded SSM paths remain (outside _test.go) | grep audit | `! grep -rn '"/km/' ./internal ./pkg ./cmd --include='*.go'` | ❌ Wave 0 (gate in 66-05) |
+| REQ-PLATFORM-MULTI-INSTANCE | Zero `"/km/"` hardcoded SSM paths remain (outside _test.go) | grep audit | `! grep -rn '"/km/' ./internal ./pkg ./cmd --include='*.go' \| grep -v _test.go` | ❌ Wave 0 (gate in 66-05) |
 | REQ-PLATFORM-MULTI-INSTANCE | TF plan on DynamoDB modules shows no destroy/create with prefix change | manual | `terragrunt plan` (manual smoke) | manual-only |
 
 ### Sampling Rate
@@ -598,7 +603,8 @@ nyquist_validation is enabled per `.planning/config.json`.
 - **Phase gate:** Full suite green (`go test ./...`) before `/gsd:verify-work`
 
 ### Wave 0 Gaps
-- [ ] `internal/app/config/config_test.go` — extend with `TestGetResourcePrefix_Default`, `TestGetResourcePrefix_Custom`, `TestGetEmailDomain_Default`, `TestGetEmailDomain_Custom`, `TestGetSsmPrefix`, `TestLoadResourcePrefix`, `TestLoadEmailSubdomain`
+- [ ] `internal/app/config/config_test.go` — extend with `TestGetResourcePrefix_Custom`, `TestGetEmailDomain_Default`, `TestGetEmailDomain_Custom`, `TestGetSsmPrefix`, `TestGetSlackThreadsTableName`, `TestGetSlackStreamMessagesTableName`, `TestLoadResourcePrefix`, `TestLoadEmailSubdomain`
+- [ ] Note: `TestGetResourcePrefix_Default` may already pass (Phase 67 shim) — verify and extend if needed
 - [ ] No new framework install needed — stdlib `go test` already in use
 
 ---
@@ -606,54 +612,71 @@ nyquist_validation is enabled per `.planning/config.json`.
 ## Open Questions
 
 1. **Should `resource_prefix` be prompted in `km configure` wizard?**
-   - What we know: `km configure` currently asks for domain, accounts, SSO, region, email, safe_phrase
-   - What's unclear: User experience — do operators set this upfront or only when needed?
+   - What we know: `km configure` currently asks for domain, accounts, SSO, region, email, safe_phrase.
    - Recommendation: Add to wizard with default value `"km"`, prompt: "Resource prefix (default: km — change only for second install in same account)"
 
 2. **Should `km init` error if another prefix's resources already exist?**
-   - What we know: A "prefix collision" detection would require listing all Lambda/DynamoDB names and checking for the requested prefix
-   - What's unclear: Whether `km doctor` is the right gate vs. `km init` pre-flight
-   - Recommendation: Add a `km doctor` check `checkPrefixCollision` that warns if `{prefix}-ttl-handler` Lambda already exists (indicates a running install), rather than blocking `km init`
+   - Recommendation: Add a `km doctor` check `checkPrefixCollision` that warns if `{prefix}-ttl-handler` Lambda already exists, rather than blocking `km init`.
 
 3. **`km-sandbox-containment` SCP name — does it need to be prefixed?**
-   - What we know: `infra/modules/scp/v1.0.0/main.tf:216` hardcodes `name = "km-sandbox-containment"`. The SCP is org-scoped, not account-scoped. Only one install can deploy the SCP per org.
-   - What's unclear: Is there a scenario where two installs in the same org each want their own SCP?
-   - Recommendation: Leave SCP name as `"km-sandbox-containment"` (hardcoded, not prefixed) per the roadmap constraint. Document the caveat. This is the planned approach — only one SCP per org account.
+   - Recommendation: Leave SCP name as `"km-sandbox-containment"` (hardcoded, not prefixed). Only one SCP per org. Documented caveat.
 
-4. **`pkg/aws/ec2_ami.go:54` uses prefix `"km-"` to filter operator-baked AMIs in `km ami list`**
-   - What we know: `ec2_ami.go:54: prefix := "km-"` filters AMI names when listing
-   - What's unclear: With a custom prefix, `km ami list` would show no AMIs
-   - Recommendation: Thread `cfg.GetResourcePrefix()` into the AMI listing call and use `prefix + "-"` as the filter
+4. **`pkg/aws/ec2_ami.go:54` uses prefix `"km-"` to filter AMIs in `km ami list`**
+   - Recommendation: Thread `cfg.GetResourcePrefix()` into the AMI listing call.
+
+5. **NEW: `PersistSigningSecret` signature change — does it break callers?**
+   - What we know: The function is used in `km slack init` (calls `PersistSigningSecret`) and `km slack rotate-signing-secret`. Both are in `slack.go` and receive `cfg`.
+   - Recommendation: Add `ssmPrefix string` parameter. Callers in `slack.go` pass `cfg.GetSsmPrefix()`.
+
+6. **NEW: `ForceSlackBridgeColdStartWith` is exported (public) for tests — how to parameterize?**
+   - What we know: `internal/app/cmd/init.go:1718` exports this function for unit testing. Tests pass a fake Lambda client.
+   - Recommendation: Add a `functionName string` parameter; callers pass `cfg.GetResourcePrefix() + "-slack-bridge"`. Test stubs verify the function name passed, not a hardcoded constant.
 
 ---
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- Direct code audit of `/Users/khundeck/working/klankrmkr/` codebase (2026-05-01)
-- `internal/app/config/config.go` — Config struct definition and Load() function
-- `internal/app/config/config_test.go` — Existing test patterns
-- `internal/app/cmd/doctor.go` — DoctorConfigProvider interface + appConfigAdapter
-- `infra/live/site.hcl` — site block structure and existing env var threading pattern
-- `infra/modules/dynamodb-*/v1.0.0/main.tf` — All confirmed to use `name = var.table_name`
-- `.planning/phases/65-*/65-04-PLAN.md` — Phase 65 rename pattern study
+- Direct code audit of `/Users/khundeck/working/klankrmkr/` codebase (2026-05-04)
+- `internal/app/config/config.go` — Config struct definition, Load() function, confirmed `ResourcePrefix` + `GetResourcePrefix()` already added by Phase 67
+- `internal/app/config/config.go:339-371` — `GetSlackThreadsTableName()` and `GetSlackStreamMessagesTableName()` confirmed implemented
+- `internal/app/cmd/doctor.go:148-200` — `DoctorConfigProvider` interface — confirmed does NOT have `GetResourcePrefix()` (type-assert hack at 2344)
+- `internal/app/cmd/status.go:468` — confirmed hardcoded `"km-slack-threads"`
+- `internal/app/cmd/init.go:1724` — confirmed hardcoded `"km-slack-bridge"`
+- `internal/app/cmd/slack.go:759` — confirmed hardcoded `/km/slack/signing-secret`
+- `infra/live/site.hcl` — confirmed `label = "km"` hardcoded, `email_subdomain` absent
+- `infra/modules/lambda-slack-bridge/v1.0.0/main.tf:5` — confirmed `function_name = "km-slack-bridge"` hardcoded local
+- `infra/modules/lambda-slack-bridge/v1.0.0/variables.tf` — confirmed `var.resource_prefix` exists (Phase 67) but not used for function_name
+- `infra/live/use1/lambda-slack-bridge/terragrunt.hcl` — confirmed missing `signing_secret_path`, `slack_threads_table_name`, `resource_prefix` inputs
+- `infra/live/use1/dynamodb-slack-threads/terragrunt.hcl:36` — confirmed `table_name = "km-slack-threads"` hardcoded
+- `infra/live/use1/dynamodb-slack-stream-messages/terragrunt.hcl:36` — confirmed `table_name = "km-slack-stream-messages"` hardcoded
+- `infra/modules/dynamodb-slack-threads/v1.0.0/main.tf` — confirmed `name = var.table_name` (safe)
+- `infra/modules/dynamodb-slack-stream-messages/v1.0.0/main.tf` — confirmed `name = var.table_name` (safe)
+- `pkg/aws/sqs.go:44-45` — confirmed `SlackInboundQueueName(resourcePrefix, sandboxID)` already prefix-aware
+- `internal/app/cmd/create_slack_inbound.go:100` — confirmed uses `cfg.GetResourcePrefix()`
+- `internal/app/cmd/list.go:132` — confirmed uses `cfg.GetSlackThreadsTableName()` (correct)
+- `.planning/phases/66-multi-instance-support-configurable-resource-prefix-and-email-subdomain/66-VALIDATION.md` — validation strategy (unchanged)
 
 ### Secondary (MEDIUM confidence)
-- `infra/modules/create-handler/`, `ttl-handler/`, `email-handler/`, `lambda-slack-bridge/`, `ecs-spot-handler/` module `main.tf` files — confirmed hardcoded resource names
-- `km-config.yaml` (live operator config) — current field set
+- `git log --oneline --since="2026-05-01"` — confirmed Phase 67, 67.1, 68 commits and new files
+- `infra/modules/lambda-slack-bridge/v1.0.0/main.tf:148,155,171,180,239,282-286` — Phase 67/68 IAM policy and env var additions confirmed
 
 ### Tertiary (LOW confidence — manual verification needed)
-- TF plan behavior for module `name` attribute changes: LOW — not tested. Must run `terragrunt plan -detailed-exitcode` to confirm no unexpected replaces before applying.
+- TF plan behavior for `function_name` change on `aws_lambda_function`: LOW — changing the local from `"km-slack-bridge"` to `"${var.resource_prefix}-slack-bridge"` changes the physical Lambda name, which triggers destroy+create on the Lambda function resource. Existing install must use `terraform state mv` or add `lifecycle { create_before_destroy = true }`. **This is a significant risk for existing installs** — document explicitly that changing prefix on a live install requires manual state moves.
 
 ---
 
 ## Metadata
 
 **Confidence breakdown:**
-- Standard stack: HIGH — well-established viper + config pattern, Phase 65 precedent
-- Architecture: HIGH — site.hcl threading and module parameterization patterns fully verified
-- Pitfalls: HIGH — all identified from direct code audit; DynamoDB replace risk is architectural fact
-- Call-site inventory: HIGH — generated from live grep of codebase
+- Standard stack: HIGH — well-established viper + config pattern, Phase 65 and 67 precedents
+- Architecture: HIGH — site.hcl threading and module parameterization patterns fully verified; Phase 67 forward-compat shims confirmed in live code
+- Pitfalls: HIGH — all identified from direct code audit; DynamoDB replace risk is architectural fact; new pitfalls 9-12 confirmed from live grep
+- Call-site inventory: HIGH — generated from live grep of codebase (2026-05-04)
+- Phase 67/68 drift audit: HIGH — every file and line number verified against live codebase
 
-**Research date:** 2026-05-01
-**Valid until:** 2026-06-01 (stable codebase, no external dependencies changing)
+**Research date:** 2026-05-04
+**Valid until:** 2026-06-04 (stable codebase, no external dependencies changing)
+**Supersedes:** 2026-05-01 research (archived in git at commit 0d74e7f)
+
+## RESEARCH COMPLETE

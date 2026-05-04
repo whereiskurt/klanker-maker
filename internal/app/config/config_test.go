@@ -105,7 +105,9 @@ func TestLoadBackwardCompat(t *testing.T) {
 	}
 }
 
-// TestLoadBudgetTableDefault verifies that BudgetTableName defaults to "km-budgets" when not set.
+// TestLoadBudgetTableDefault verifies that GetBudgetTableName() returns "km-budgets" by default.
+// Phase 66: the raw field defaults to "" so the prefix-aware helper can derive the name from
+// resource_prefix; for default prefix "km" the helper returns "km-budgets" preserving behavior.
 func TestLoadBudgetTableDefault(t *testing.T) {
 	dir := t.TempDir()
 	// Write a km-config.yaml without budget_table_name
@@ -124,12 +126,13 @@ domain: test.example.com
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	if cfg.BudgetTableName != "km-budgets" {
-		t.Errorf("BudgetTableName: expected default %q, got %q", "km-budgets", cfg.BudgetTableName)
+	if got := cfg.GetBudgetTableName(); got != "km-budgets" {
+		t.Errorf("GetBudgetTableName(): expected default %q, got %q", "km-budgets", got)
 	}
 }
 
-// TestLoadIdentityTableDefault verifies that IdentityTableName defaults to "km-identities" when not set.
+// TestLoadIdentityTableDefault verifies that GetIdentityTableName() returns "km-identities" by default.
+// Phase 66: see TestLoadBudgetTableDefault for the same field/helper rationale.
 func TestLoadIdentityTableDefault(t *testing.T) {
 	dir := t.TempDir()
 	// Write a km-config.yaml without identity_table_name
@@ -148,8 +151,8 @@ domain: test.example.com
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	if cfg.IdentityTableName != "km-identities" {
-		t.Errorf("IdentityTableName: expected default %q, got %q", "km-identities", cfg.IdentityTableName)
+	if got := cfg.GetIdentityTableName(); got != "km-identities" {
+		t.Errorf("GetIdentityTableName(): expected default %q, got %q", "km-identities", got)
 	}
 }
 
@@ -435,6 +438,85 @@ func TestConfig_NilReceiverSafe(t *testing.T) {
 	}
 	if got := c.GetSlackThreadsTableName(); got != "km-slack-threads" {
 		t.Fatalf("nil receiver: want 'km-slack-threads', got %q", got)
+	}
+}
+
+// TestGetResourcePrefix_Custom verifies that GetResourcePrefix returns the configured value.
+func TestGetResourcePrefix_Custom(t *testing.T) {
+	c := &config.Config{ResourcePrefix: "alt"}
+	if got := c.GetResourcePrefix(); got != "alt" {
+		t.Fatalf("expected 'alt', got %q", got)
+	}
+}
+
+// TestGetEmailDomain_Default verifies that GetEmailDomain returns "sandboxes.{domain}"
+// when EmailSubdomain is unset.
+func TestGetEmailDomain_Default(t *testing.T) {
+	c := &config.Config{Domain: "example.com"}
+	if got := c.GetEmailDomain(); got != "sandboxes.example.com" {
+		t.Fatalf("expected 'sandboxes.example.com', got %q", got)
+	}
+}
+
+// TestGetEmailDomain_Custom verifies that GetEmailDomain returns "{subdomain}.{domain}"
+// when EmailSubdomain is set.
+func TestGetEmailDomain_Custom(t *testing.T) {
+	c := &config.Config{Domain: "example.com", EmailSubdomain: "mail"}
+	if got := c.GetEmailDomain(); got != "mail.example.com" {
+		t.Fatalf("expected 'mail.example.com', got %q", got)
+	}
+}
+
+// TestGetEmailDomain_NilSafe verifies that a nil Config receiver returns the hardcoded
+// fallback "sandboxes.klankermaker.ai" (mirrors Phase 67's nil-safety pattern).
+func TestGetEmailDomain_NilSafe(t *testing.T) {
+	var c *config.Config
+	if got := c.GetEmailDomain(); got != "sandboxes.klankermaker.ai" {
+		t.Fatalf("nil receiver: expected 'sandboxes.klankermaker.ai', got %q", got)
+	}
+}
+
+// TestGetSsmPrefix_Default verifies that GetSsmPrefix returns "/km/" with empty config.
+func TestGetSsmPrefix_Default(t *testing.T) {
+	c := &config.Config{}
+	if got := c.GetSsmPrefix(); got != "/km/" {
+		t.Fatalf("expected '/km/', got %q", got)
+	}
+}
+
+// TestGetSsmPrefix_Custom verifies that GetSsmPrefix returns "/{prefix}/" when prefix is set.
+func TestGetSsmPrefix_Custom(t *testing.T) {
+	c := &config.Config{ResourcePrefix: "alt"}
+	if got := c.GetSsmPrefix(); got != "/alt/" {
+		t.Fatalf("expected '/alt/', got %q", got)
+	}
+}
+
+// TestLoadEmailSubdomain verifies that km-config.yaml with email_subdomain sets
+// cfg.EmailSubdomain AND that GetEmailDomain() returns "{subdomain}.{domain}".
+func TestLoadEmailSubdomain(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+email_subdomain: mail
+`)
+
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.EmailSubdomain != "mail" {
+		t.Errorf("EmailSubdomain: got %q, want %q", cfg.EmailSubdomain, "mail")
+	}
+	if got := cfg.GetEmailDomain(); got != "mail.example.com" {
+		t.Errorf("GetEmailDomain(): got %q, want %q", got, "mail.example.com")
 	}
 }
 

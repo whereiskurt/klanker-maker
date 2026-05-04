@@ -241,6 +241,7 @@ func runRollCreds(
 	// For tests (deps != nil, cfg == nil) we use reasonable defaults.
 	const tableName = "km-identities"
 	const stateBucket = "km-terraform-state"
+	const resourcePrefix = "km" // TODO(plan-04): thread cfg.GetResourcePrefix() when runRollCreds receives cfg
 
 	var failures []rollError
 	succeeded := 0
@@ -259,7 +260,7 @@ func runRollCreds(
 			return nil
 		}
 
-		if err := rotateSandbox(ctx, out, jsonOutput, deps, sandboxID, kmsKeyID, tableName); err != nil {
+		if err := rotateSandbox(ctx, out, jsonOutput, deps, sandboxID, kmsKeyID, tableName, resourcePrefix); err != nil {
 			failures = append(failures, rollError{SandboxID: sandboxID, Error: err.Error()})
 		} else {
 			succeeded++
@@ -286,7 +287,7 @@ func runRollCreds(
 			return nil
 		}
 
-		if err := rotatePlatform(ctx, out, jsonOutput, deps, kmsKeyID, githubKeyFile, stateBucket); err != nil {
+		if err := rotatePlatform(ctx, out, jsonOutput, deps, kmsKeyID, githubKeyFile, stateBucket, resourcePrefix); err != nil {
 			return fmt.Errorf("platform rotation failed: %w", err)
 		}
 		succeeded++
@@ -329,7 +330,7 @@ func runRollCreds(
 	}
 
 	// Step 1: Rotate platform
-	if err := rotatePlatform(ctx, out, jsonOutput, deps, kmsKeyID, githubKeyFile, stateBucket); err != nil {
+	if err := rotatePlatform(ctx, out, jsonOutput, deps, kmsKeyID, githubKeyFile, stateBucket, resourcePrefix); err != nil {
 		return fmt.Errorf("platform rotation failed: %w", err)
 	}
 	succeeded++
@@ -347,7 +348,7 @@ func runRollCreds(
 
 	// Step 3: Rotate each running sandbox (per-sandbox failures are non-fatal)
 	for _, sb := range running {
-		if err := rotateSandbox(ctx, out, jsonOutput, deps, sb.SandboxID, kmsKeyID, tableName); err != nil {
+		if err := rotateSandbox(ctx, out, jsonOutput, deps, sb.SandboxID, kmsKeyID, tableName, resourcePrefix); err != nil {
 			failures = append(failures, rollError{SandboxID: sb.SandboxID, Error: err.Error()})
 			if !jsonOutput {
 				fmt.Fprintf(out, "  [error] sandbox %s: %v\n", sb.SandboxID, err)
@@ -371,7 +372,8 @@ func runRollCreds(
 // ============================================================
 
 // rotatePlatform rotates proxy CA cert, KMS key on-demand, and optional GitHub App key.
-func rotatePlatform(ctx context.Context, out interface{ Write([]byte) (int, error) }, jsonOutput bool, deps *RollDeps, kmsKeyID, githubKeyFile, bucket string) error {
+// prefix is the resource prefix (e.g. "km") used for CloudWatch log group paths.
+func rotatePlatform(ctx context.Context, out interface{ Write([]byte) (int, error) }, jsonOutput bool, deps *RollDeps, kmsKeyID, githubKeyFile, bucket, prefix string) error {
 	// Step 1: Rotate proxy CA cert
 	oldFP, newFP, err := kmaws.RotateProxyCACert(ctx, deps.S3Client, bucket)
 	if err != nil {
@@ -388,7 +390,7 @@ func rotatePlatform(ctx context.Context, out interface{ Write([]byte) (int, erro
 		AfterFP:   newFP,
 		Timestamp: time.Now().UTC(),
 		Success:   true,
-	})
+	}, prefix)
 
 	// Step 2: KMS rotate key on demand
 	// Verify key exists first via DescribeKey
@@ -415,7 +417,7 @@ func rotatePlatform(ctx context.Context, out interface{ Write([]byte) (int, erro
 		AfterFP:   kmsKeyID,
 		Timestamp: time.Now().UTC(),
 		Success:   true,
-	})
+	}, prefix)
 
 	// Step 3: Optional GitHub App key rotation
 	if githubKeyFile != "" {
@@ -477,7 +479,7 @@ func rotateGitHubKey(ctx context.Context, out interface{ Write([]byte) (int, err
 // ============================================================
 
 // rotateSandbox rotates a single sandbox's Ed25519 key and re-encrypts SSM parameters.
-func rotateSandbox(ctx context.Context, out interface{ Write([]byte) (int, error) }, jsonOutput bool, deps *RollDeps, sandboxID, kmsKeyID, tableName string) error {
+func rotateSandbox(ctx context.Context, out interface{ Write([]byte) (int, error) }, jsonOutput bool, deps *RollDeps, sandboxID, kmsKeyID, tableName, prefix string) error {
 	oldFP, newFP, err := kmaws.RotateSandboxIdentity(ctx, deps.SSMClient, deps.DynamoClient, sandboxID, kmsKeyID, tableName)
 	if err != nil {
 		return fmt.Errorf("rotate sandbox identity: %w", err)
@@ -494,7 +496,7 @@ func rotateSandbox(ctx context.Context, out interface{ Write([]byte) (int, error
 		AfterFP:   newFP,
 		Timestamp: time.Now().UTC(),
 		Success:   true,
-	})
+	}, prefix)
 
 	// Re-encrypt SSM parameters under the sandbox path
 	count, err := kmaws.ReEncryptSSMParameters(ctx, deps.SSMClient, sandboxID, kmsKeyID)
@@ -512,7 +514,7 @@ func rotateSandbox(ctx context.Context, out interface{ Write([]byte) (int, error
 		AfterFP:   fmt.Sprintf("count:%d", count),
 		Timestamp: time.Now().UTC(),
 		Success:   true,
-	})
+	}, prefix)
 
 	return nil
 }

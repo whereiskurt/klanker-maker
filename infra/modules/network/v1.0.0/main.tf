@@ -21,8 +21,8 @@ resource "aws_vpc" "vpc" {
   tags = merge(
     var.vpc.tags,
     {
-      Name             = "${var.km_label}-${var.region_label}-vpc"
-      "km:sandbox-id"  = var.sandbox_id
+      Name            = "${var.km_label}-${var.region_label}-vpc"
+      "km:sandbox-id" = var.sandbox_id
     }
   )
 }
@@ -38,8 +38,8 @@ resource "aws_subnet" "public_subnet" {
   tags = merge(
     var.vpc.tags,
     {
-      Name             = "${var.km_label}-${var.region_label}-public-${element(local.availability_zones, count.index)}"
-      "km:sandbox-id"  = var.sandbox_id
+      Name            = "${var.km_label}-${var.region_label}-public-${element(local.availability_zones, count.index)}"
+      "km:sandbox-id" = var.sandbox_id
     }
   )
 }
@@ -55,8 +55,8 @@ resource "aws_subnet" "private_subnet" {
   tags = merge(
     var.vpc.tags,
     {
-      Name             = "${var.km_label}-${var.region_label}-private-${element(local.availability_zones, count.index)}"
-      "km:sandbox-id"  = var.sandbox_id
+      Name            = "${var.km_label}-${var.region_label}-private-${element(local.availability_zones, count.index)}"
+      "km:sandbox-id" = var.sandbox_id
     }
   )
 }
@@ -68,8 +68,8 @@ resource "aws_route_table" "private" {
   tags = merge(
     var.vpc.tags,
     {
-      Name             = "${var.km_label}-${var.region_label}-private-rt"
-      "km:sandbox-id"  = var.sandbox_id
+      Name            = "${var.km_label}-${var.region_label}-private-rt"
+      "km:sandbox-id" = var.sandbox_id
     }
   )
 }
@@ -80,8 +80,8 @@ resource "aws_route_table" "public" {
   tags = merge(
     var.vpc.tags,
     {
-      Name             = "${var.km_label}-${var.region_label}-public-rt"
-      "km:sandbox-id"  = var.sandbox_id
+      Name            = "${var.km_label}-${var.region_label}-public-rt"
+      "km:sandbox-id" = var.sandbox_id
     }
   )
 }
@@ -106,8 +106,8 @@ resource "aws_internet_gateway" "ig" {
   tags = merge(
     var.vpc.tags,
     {
-      Name             = "${var.km_label}-${var.region_label}-igw"
-      "km:sandbox-id"  = var.sandbox_id
+      Name            = "${var.km_label}-${var.region_label}-igw"
+      "km:sandbox-id" = var.sandbox_id
     }
   )
 }
@@ -127,8 +127,8 @@ resource "aws_eip" "nat" {
   tags = merge(
     var.vpc.tags,
     {
-      Name             = "${var.km_label}-${var.region_label}-nat-eip"
-      "km:sandbox-id"  = var.sandbox_id
+      Name            = "${var.km_label}-${var.region_label}-nat-eip"
+      "km:sandbox-id" = var.sandbox_id
     }
   )
 }
@@ -142,8 +142,8 @@ resource "aws_nat_gateway" "nat" {
   tags = merge(
     var.vpc.tags,
     {
-      Name             = "${var.km_label}-${var.region_label}-nat"
-      "km:sandbox-id"  = var.sandbox_id
+      Name            = "${var.km_label}-${var.region_label}-nat"
+      "km:sandbox-id" = var.sandbox_id
     }
   )
 
@@ -172,8 +172,8 @@ resource "aws_security_group" "sandbox_mgmt" {
   tags = merge(
     var.vpc.tags,
     {
-      Name             = "${var.km_label}-${var.region_label}-sandbox-mgmt"
-      "km:sandbox-id"  = var.sandbox_id
+      Name            = "${var.km_label}-${var.region_label}-sandbox-mgmt"
+      "km:sandbox-id" = var.sandbox_id
     }
   )
 }
@@ -195,8 +195,8 @@ resource "aws_security_group" "sandbox_internal" {
   tags = merge(
     var.vpc.tags,
     {
-      Name             = "${var.km_label}-${var.region_label}-sandbox-internal"
-      "km:sandbox-id"  = var.sandbox_id
+      Name            = "${var.km_label}-${var.region_label}-sandbox-internal"
+      "km:sandbox-id" = var.sandbox_id
     }
   )
 }

@@ -316,7 +316,7 @@ Examples:
 
 	cmd.Flags().StringVar(&cronFlag, "cron", "", "Raw EventBridge cron() expression (bypasses NL parsing)")
 	cmd.Flags().StringVar(&nameFlag, "name", "", "Override auto-generated schedule name")
-	cmd.Flags().StringVar(&groupFlag, "group", "km-at", "EventBridge Scheduler group name")
+	cmd.Flags().StringVar(&groupFlag, "group", cfg.GetResourcePrefix()+"-at", "EventBridge Scheduler group name")
 
 	// Stop parsing flags after the first positional arg so that
 	// command-specific flags (--alias, --on-demand, --docker) are passed through
@@ -699,7 +699,7 @@ func NewAtCancelCmdWithDeps(cfg *config.Config, sched awspkg.SchedulerAPI, dynam
 		},
 	}
 
-	cmd.Flags().StringVar(&groupFlag, "group", "km-at", "EventBridge Scheduler group name")
+	cmd.Flags().StringVar(&groupFlag, "group", cfg.GetResourcePrefix()+"-at", "EventBridge Scheduler group name")
 	return cmd
 }
 

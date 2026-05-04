@@ -148,11 +148,7 @@ func newAMIListCmd(cfg *config.Config, ec2Factory func(region string) kmaws.EC2A
 					if err != nil {
 						return fmt.Errorf("load AWS config: %w", err)
 					}
-					tableName := cfg.SandboxTableName
-					if tableName == "" {
-						tableName = "km-sandboxes"
-					}
-					realLister = newRealLister(awsCfg, cfg.StateBucket, tableName)
+					realLister = newRealLister(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())
 				}
 				allImages = filterUnused(ctx, cfg, allImages, realLister)
 			}
@@ -703,7 +699,7 @@ func bakeFromSandboxInternal(ctx context.Context, cfg *config.Config, rec kmaws.
 		return "", fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
 	}
 
-	amiName := kmaws.AMIName(profileName, sandboxID, time.Now())
+	amiName := kmaws.AMIName(profileName, sandboxID, time.Now(), cfg.GetResourcePrefix()+"-")
 	tags := kmaws.KMBakeTags(sandboxID, profileName, rec.Alias, "", rec.Region, kmVersion)
 
 	if description == "" {
@@ -832,12 +828,8 @@ func (f *realAMISandboxFetcher) FetchSandbox(ctx context.Context, sandboxID stri
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
-	tableName := f.cfg.SandboxTableName
-	if tableName == "" {
-		tableName = "km-sandboxes"
-	}
 	dynClient := dynamodbsvc.NewFromConfig(awsCfg)
-	meta, err := kmaws.ReadSandboxMetadataDynamo(ctx, dynClient, tableName, sandboxID)
+	meta, err := kmaws.ReadSandboxMetadataDynamo(ctx, dynClient, f.cfg.GetSandboxTableName(), sandboxID)
 	if err != nil {
 		return nil, fmt.Errorf("fetch sandbox %s: %w", sandboxID, err)
 	}

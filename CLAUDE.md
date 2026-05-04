@@ -6,6 +6,8 @@ This file serves as the Terragrunt repo root anchor for `find_in_parent_folders(
 
 Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
+Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in km-config.yaml (default `km`); see `OPERATOR-GUIDE.md` § Multi-instance support. `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN` env vars).
+
 ## CLI
 
 - `km validate <profile.yaml>` — validate a SandboxProfile

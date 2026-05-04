@@ -156,6 +156,12 @@ type Config struct {
 	// Phase 67 ships the shim helper so downstream code can use the helper
 	// unconditionally. Maps to km-config.yaml key resource_prefix.
 	ResourcePrefix string
+
+	// EmailSubdomain is the subdomain used for SES email addresses
+	// ({sandboxID}@{subdomain}.{domain}). Maps to km-config.yaml key
+	// email_subdomain. Defaults to "sandboxes" via GetEmailDomain().
+	// One-time choice at km init — changing requires fresh DNS/SES verification.
+	EmailSubdomain string
 }
 
 // isSetByEnv returns true if the given viper key has been overridden by an environment
@@ -183,20 +189,24 @@ func Load() (*Config, error) {
 	v.SetDefault("ttl_lambda_arn", "")
 	v.SetDefault("scheduler_role_arn", "")
 
-	// Defaults for new platform fields
+	// Defaults for new platform fields.
+	// Note: table names default to "" so prefix-aware helpers like
+	// GetSandboxTableName() can derive {prefix}-{table} from resource_prefix.
+	// Hardcoded "km-*" defaults would defeat multi-instance support.
 	v.SetDefault("max_sandboxes", 10)
-	v.SetDefault("budget_table_name", "km-budgets")
-	v.SetDefault("identity_table_name", "km-identities")
-	v.SetDefault("sandbox_table_name", "km-sandboxes")
+	v.SetDefault("budget_table_name", "")
+	v.SetDefault("identity_table_name", "")
+	v.SetDefault("sandbox_table_name", "")
 	v.SetDefault("artifacts_bucket", "")
 	v.SetDefault("aws_profile", "klanker-terraform")
 	v.SetDefault("rsync_paths", []string{".claude", ".bashrc", ".bash_profile", ".gitconfig"})
-	v.SetDefault("schedules_table_name", "km-schedules")
+	v.SetDefault("schedules_table_name", "")
 	v.SetDefault("create_handler_lambda_arn", "")
 	v.SetDefault("doctor_stale_ami_days", 30)
-	v.SetDefault("slack_threads_table_name", "km-slack-threads")
-	v.SetDefault("slack_stream_messages_table_name", "km-slack-stream-messages")
+	v.SetDefault("slack_threads_table_name", "")
+	v.SetDefault("slack_stream_messages_table_name", "")
 	v.SetDefault("resource_prefix", "km")
+	v.SetDefault("email_subdomain", "sandboxes")
 
 	// Primary config file: ~/.km/config.yaml
 	v.SetConfigName("config")
@@ -264,6 +274,7 @@ func Load() (*Config, error) {
 			"slack_threads_table_name",
 			"slack_stream_messages_table_name",
 			"resource_prefix",
+			"email_subdomain",
 		} {
 			if v2.IsSet(key) && !isSetByEnv(v, key) {
 				v.Set(key, v2.Get(key))
@@ -305,6 +316,7 @@ func Load() (*Config, error) {
 		SlackThreadsTableName:        v.GetString("slack_threads_table_name"),
 		SlackStreamMessagesTableName: v.GetString("slack_stream_messages_table_name"),
 		ResourcePrefix:               v.GetString("resource_prefix"),
+		EmailSubdomain:               v.GetString("email_subdomain"),
 	}
 
 	// If the AWS profile was set by default (not explicitly configured), verify it
@@ -334,6 +346,27 @@ func (c *Config) GetResourcePrefix() string {
 		return "km"
 	}
 	return c.ResourcePrefix
+}
+
+// GetEmailDomain returns the full email domain (e.g. "sandboxes.klankermaker.ai").
+// Falls back to "sandboxes.klankermaker.ai" when both fields are empty or the receiver
+// is nil — mirrors the nil-safety pattern used by GetResourcePrefix.
+func (c *Config) GetEmailDomain() string {
+	sub := "sandboxes"
+	if c != nil && c.EmailSubdomain != "" {
+		sub = c.EmailSubdomain
+	}
+	domain := "klankermaker.ai"
+	if c != nil && c.Domain != "" {
+		domain = c.Domain
+	}
+	return sub + "." + domain
+}
+
+// GetSsmPrefix returns the SSM parameter path prefix (e.g. "/km/").
+// Uses GetResourcePrefix() which handles nil-safety and the "km" default.
+func (c *Config) GetSsmPrefix() string {
+	return "/" + c.GetResourcePrefix() + "/"
 }
 
 // GetSlackThreadsTableName returns the Slack-threads DynamoDB table name.
@@ -368,6 +401,54 @@ func (c *Config) GetSlackStreamMessagesTableName() string {
 		return c.SlackStreamMessagesTableName
 	}
 	return c.GetResourcePrefix() + "-slack-stream-messages"
+}
+
+// GetSandboxTableName returns the DynamoDB sandboxes table name.
+// Derives from GetResourcePrefix() + "-sandboxes", defaulting to "km-sandboxes".
+func (c *Config) GetSandboxTableName() string {
+	if c == nil {
+		return "km-sandboxes"
+	}
+	if c.SandboxTableName != "" {
+		return c.SandboxTableName
+	}
+	return c.GetResourcePrefix() + "-sandboxes"
+}
+
+// GetBudgetTableName returns the DynamoDB budgets table name.
+// Derives from GetResourcePrefix() + "-budgets", defaulting to "km-budgets".
+func (c *Config) GetBudgetTableName() string {
+	if c == nil {
+		return "km-budgets"
+	}
+	if c.BudgetTableName != "" {
+		return c.BudgetTableName
+	}
+	return c.GetResourcePrefix() + "-budgets"
+}
+
+// GetIdentityTableName returns the DynamoDB identities table name.
+// Derives from GetResourcePrefix() + "-identities", defaulting to "km-identities".
+func (c *Config) GetIdentityTableName() string {
+	if c == nil {
+		return "km-identities"
+	}
+	if c.IdentityTableName != "" {
+		return c.IdentityTableName
+	}
+	return c.GetResourcePrefix() + "-identities"
+}
+
+// GetSchedulesTableName returns the DynamoDB schedules table name.
+// Derives from GetResourcePrefix() + "-schedules", defaulting to "km-schedules".
+func (c *Config) GetSchedulesTableName() string {
+	if c == nil {
+		return "km-schedules"
+	}
+	if c.SchedulesTableName != "" {
+		return c.SchedulesTableName
+	}
+	return c.GetResourcePrefix() + "-schedules"
 }
 
 // awsProfileExists checks whether a named AWS profile is defined in

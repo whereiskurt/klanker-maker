@@ -12,3 +12,9 @@ variable "artifact_bucket_arn" {
   description = "ARN of the S3 artifact bucket for IAM policy"
   type        = string
 }
+
+variable "resource_prefix" {
+  description = "Prefix for all resource names (default: km)"
+  type        = string
+  default     = "km"
+}

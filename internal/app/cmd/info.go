@@ -74,18 +74,19 @@ func runInfo(ctx context.Context, cfg *config.Config, w io.Writer) error {
 	fmt.Fprintf(w, "\n")
 
 	// Infrastructure — DynamoDB tables
+	prefix := cfg.GetResourcePrefix()
 	fmt.Fprintf(w, "DynamoDB Tables\n")
-	fmt.Fprintf(w, "  Sandboxes:        %s\n", valOrDefault(cfg.SandboxTableName, "km-sandboxes"))
-	fmt.Fprintf(w, "  Budgets:          %s\n", valOrDefault(cfg.BudgetTableName, "km-budgets"))
-	fmt.Fprintf(w, "  Identities:       %s\n", valOrDefault(cfg.IdentityTableName, "km-identities"))
-	fmt.Fprintf(w, "  Schedules:        %s\n", valOrDefault(cfg.SchedulesTableName, "km-schedules"))
+	fmt.Fprintf(w, "  Sandboxes:        %s\n", valOrDefault(cfg.SandboxTableName, prefix+"-sandboxes"))
+	fmt.Fprintf(w, "  Budgets:          %s\n", valOrDefault(cfg.BudgetTableName, prefix+"-budgets"))
+	fmt.Fprintf(w, "  Identities:       %s\n", valOrDefault(cfg.IdentityTableName, prefix+"-identities"))
+	fmt.Fprintf(w, "  Schedules:        %s\n", valOrDefault(cfg.SchedulesTableName, prefix+"-schedules"))
 	fmt.Fprintf(w, "\n")
 
 	// Email — operator + sandbox email system
 	fmt.Fprintf(w, "Email\n")
 	fmt.Fprintf(w, "  Operator:         %s\n", valOrDash(cfg.OperatorEmail))
 	if cfg.Domain != "" {
-		fmt.Fprintf(w, "  Sandbox domain:   @sandboxes.%s\n", cfg.Domain)
+		fmt.Fprintf(w, "  Sandbox domain:   @%s\n", cfg.GetEmailDomain())
 	}
 	fmt.Fprintf(w, "  Signing:          Ed25519 (keys in SSM, pubkeys in identities table)\n")
 	fmt.Fprintf(w, "  In-sandbox:       km-send / km-recv\n")
@@ -95,7 +96,7 @@ func runInfo(ctx context.Context, cfg *config.Config, w io.Writer) error {
 	if cfg.OperatorEmail != "" || cfg.SafePhrase != "" {
 		fmt.Fprintf(w, "Email-to-Create\n")
 		if cfg.Domain != "" {
-			fmt.Fprintf(w, "  Send to:          operator@sandboxes.%s\n", cfg.Domain)
+			fmt.Fprintf(w, "  Send to:          operator@%s\n", cfg.GetEmailDomain())
 		}
 		if cfg.SafePhrase != "" {
 			fmt.Fprintf(w, "  Safe phrase:      %s\n", cfg.SafePhrase)

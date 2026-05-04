@@ -319,13 +319,13 @@ const ecsServiceHCLTemplate = `locals {
         environment = [
           { name = "SANDBOX_ID",      value = "{{ .SandboxID }}" },
           { name = "AUDIT_LOG_DEST",  value = "cloudwatch" },
-          { name = "CW_LOG_GROUP",    value = "/km/sandboxes/{{ .SandboxID }}/" },
+          { name = "CW_LOG_GROUP",    value = "/km/sandboxes/{{ .SandboxID }}/" }, {{/* TODO(plan-04): replace /km/ with dynamic prefix from ResourcePrefix field */}}
           { name = "AWS_REGION",      value = "{{ .Region }}" },
         ]
         log_configuration = {
           log_driver = "awslogs"
           options = {
-            "awslogs-group"         = "/km/sidecars/{{ .SandboxID }}"
+            "awslogs-group"         = "/km/sidecars/{{ .SandboxID }}" {{/* TODO(plan-04): replace /km/ with dynamic prefix */}}
             "awslogs-region"        = "{{ .Region }}"
             "awslogs-stream-prefix" = "audit-log"
           }
@@ -821,9 +821,12 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 	mainMemoryReservation := mainMemory / 2
 
 	// Email domain for Phase 4: use domain from NetworkConfig when set, otherwise default.
-	emailDomain := "sandboxes.klankermaker.ai"
+	// NetworkConfig.EmailDomain is set by create.go from cfg.GetEmailDomain() before calling Compile().
+	var emailDomain string
 	if network != nil && network.EmailDomain != "" {
 		emailDomain = network.EmailDomain
+	} else {
+		emailDomain = "sandboxes.klankermaker.ai" // TODO Phase 66 plan 04: migrate nil-network fallback to ${local.site_vars.locals.site.email_subdomain} site var
 	}
 	artifactBucket := os.Getenv("KM_ARTIFACTS_BUCKET")
 	// No hardcoded fallback — artifacts_bucket should be set via km-config.yaml or env var.

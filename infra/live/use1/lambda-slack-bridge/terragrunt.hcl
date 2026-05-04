@@ -62,19 +62,34 @@ dependency "nonces" {
   mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply"]
 }
 
+# km-slack-threads: provides the Slack thread-to-session mapping table (Phase 67/Pitfall 9)
+dependency "slack_threads" {
+  config_path = "../dynamodb-slack-threads"
+  mock_outputs = {
+    table_name = "km-slack-threads"
+    table_arn  = "arn:aws:dynamodb:us-east-1:000000000000:table/km-slack-threads"
+  }
+  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply"]
+}
+
 inputs = {
-  lambda_zip_path       = "${local.repo_root}/build/km-slack-bridge.zip"
-  identities_table_name = dependency.identities.outputs.table_name
-  identities_table_arn  = dependency.identities.outputs.table_arn
-  sandboxes_table_name  = dependency.sandboxes.outputs.table_name
-  sandboxes_table_arn   = dependency.sandboxes.outputs.table_arn
-  nonces_table_name     = dependency.nonces.outputs.table_name
-  nonces_table_arn      = dependency.nonces.outputs.table_arn
-  kms_key_arn           = get_env("KM_PLATFORM_KMS_KEY_ARN", "")
-  bot_token_path        = "/km/slack/bot-token"
+  lambda_zip_path          = "${local.repo_root}/build/km-slack-bridge.zip"
+  identities_table_name    = dependency.identities.outputs.table_name
+  identities_table_arn     = dependency.identities.outputs.table_arn
+  sandboxes_table_name     = "${local.site_vars.locals.site.label}-sandboxes"
+  sandboxes_table_arn      = dependency.sandboxes.outputs.table_arn
+  nonces_table_name        = dependency.nonces.outputs.table_name
+  nonces_table_arn         = dependency.nonces.outputs.table_arn
+  kms_key_arn              = get_env("KM_PLATFORM_KMS_KEY_ARN", "")
+  bot_token_path           = "/${local.site_vars.locals.site.label}/slack/bot-token"
   # Phase 68: bridge needs S3 read access to fetch transcripts/* objects
   # uploaded by the sandbox-side hook before forwarding to Slack files.upload.
-  artifacts_bucket      = get_env("KM_ARTIFACTS_BUCKET", "")
+  artifacts_bucket         = get_env("KM_ARTIFACTS_BUCKET", "")
+  # Phase 66: prefix-aware inputs (Pitfall 9 fix)
+  resource_prefix          = local.site_vars.locals.site.label
+  signing_secret_path      = "/${local.site_vars.locals.site.label}/slack/signing-secret"
+  slack_threads_table_name = dependency.slack_threads.outputs.table_name
+  nonce_table_name         = "${local.site_vars.locals.site.label}-slack-bridge-nonces"
   tags = {
     "km:component" = "slack-bridge"
     "km:managed"   = "true"

@@ -66,10 +66,7 @@ func runLock(ctx context.Context, cfg *config.Config, sandboxID string) error {
 	}
 
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)
-	tableName := cfg.SandboxTableName
-	if tableName == "" {
-		tableName = "km-sandboxes"
-	}
+	tableName := cfg.GetSandboxTableName()
 
 	// Primary path: atomic DynamoDB lock via ConditionExpression (no read-modify-write).
 	lockErr := awspkg.LockSandboxDynamo(ctx, dynamoClient, tableName, sandboxID)
@@ -117,7 +114,7 @@ func runLockS3Fallback(ctx context.Context, cfg *config.Config, sandboxID string
 	metaJSON, _ := json.Marshal(meta)
 	_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.StateBucket),
-		Key:         aws.String("tf-km/sandboxes/" + sandboxID + "/metadata.json"),
+		Key:         aws.String("tf-" + cfg.GetResourcePrefix() + "/sandboxes/" + sandboxID + "/metadata.json"),
 		Body:        bytes.NewReader(metaJSON),
 		ContentType: aws.String("application/json"),
 	})
@@ -141,10 +138,7 @@ func CheckSandboxLock(ctx context.Context, cfg *config.Config, sandboxID string)
 	}
 
 	// Try DynamoDB first.
-	tableName := cfg.SandboxTableName
-	if tableName == "" {
-		tableName = "km-sandboxes"
-	}
+	tableName := cfg.GetSandboxTableName()
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)
 	meta, dynErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamoClient, tableName, sandboxID)
 	if dynErr != nil {

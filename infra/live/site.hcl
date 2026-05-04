@@ -1,9 +1,10 @@
 locals {
 
   site = {
-    label           = "km"
-    tf_state_prefix = "tf-km"
+    label           = get_env("KM_RESOURCE_PREFIX", "km")
+    tf_state_prefix = "tf-${get_env("KM_RESOURCE_PREFIX", "km")}"
     domain          = get_env("KM_DOMAIN", "klankermaker.ai")
+    email_subdomain = get_env("KM_EMAIL_SUBDOMAIN", "sandboxes")
     random_suffix   = get_env("KMGUID", "")
   }
 

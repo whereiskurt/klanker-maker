@@ -378,6 +378,12 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		os.Setenv("KM_OPERATOR_EMAIL", cfg.OperatorEmail)
 		os.Setenv("KM_AWS_PROFILE", awsProfile)
 	}
+	// Phase 67/68 drift fix (RESEARCH Pattern 7): export Slack table names so the compiler
+	// picks up the correct names when resource_prefix is set. pkg/compiler/userdata.go and
+	// service_hcl.go read these env vars with "km-slack-threads"/"km-slack-stream-messages"
+	// as fallbacks; without these exports, custom-prefix installs use the wrong DDB tables.
+	os.Setenv("KM_SLACK_THREADS_TABLE", cfg.GetSlackThreadsTableName())
+	os.Setenv("KM_SLACK_STREAM_TABLE", cfg.GetSlackStreamMessagesTableName())
 
 	// Step 6: Load shared network config for the profile's region.
 	// For docker substrate, skip LoadNetworkOutputs — there are no Terragrunt network outputs.
@@ -385,10 +391,6 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	repoRoot := findRepoRoot()
 	region := resolvedProfile.Spec.Runtime.Region
 	regionLabel := compiler.RegionLabel(region)
-	networkDomain := cfg.Domain
-	if networkDomain == "" {
-		networkDomain = "klankermaker.ai"
-	}
 	artifactsBucket := cfg.ArtifactsBucket
 	if artifactsBucket == "" {
 		artifactsBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
@@ -397,7 +399,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	if substrate == "docker" {
 		// Docker substrate: construct minimal NetworkConfig — no Terragrunt outputs needed.
 		network = &compiler.NetworkConfig{
-			EmailDomain:     "sandboxes." + networkDomain,
+			EmailDomain:     cfg.GetEmailDomain(),
 			ArtifactsBucket: artifactsBucket,
 		}
 	} else {
@@ -410,7 +412,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			PublicSubnets:     networkOutputs.PublicSubnets,
 			AvailabilityZones: networkOutputs.AvailabilityZones,
 			RegionLabel:       regionLabel,
-			EmailDomain:       "sandboxes." + networkDomain,
+			EmailDomain:       cfg.GetEmailDomain(),
 			ArtifactsBucket:   artifactsBucket,
 		}
 	}
@@ -469,12 +471,12 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	if resolvedProfile.Spec.CLI != nil && resolvedProfile.Spec.CLI.NotifySlackEnabled != nil && *resolvedProfile.Spec.CLI.NotifySlackEnabled {
 		ssmClientForSlack := ssm.NewFromConfig(awsCfg)
 		ssmStore := &productionSSMParamStore{client: ssmClientForSlack}
-		botToken, _ := ssmStore.Get(ctx, "/km/slack/bot-token", true)
+		botToken, _ := ssmStore.Get(ctx, cfg.GetSsmPrefix()+"slack/bot-token", true)
 		if botToken == "" {
-			return fmt.Errorf("profile requires Slack notifications but /km/slack/bot-token is not configured — run km slack init first")
+			return fmt.Errorf("profile requires Slack notifications but %sslack/bot-token is not configured — run km slack init first", cfg.GetSsmPrefix())
 		}
 		slackClient := slack.NewClient(botToken, nil)
-		chID, perSb, slackErr := resolveSlackChannel(ctx, resolvedProfile, sandboxID, aliasOverride, slackClient, ssmStore)
+		chID, perSb, slackErr := resolveSlackChannel(ctx, resolvedProfile, sandboxID, aliasOverride, slackClient, ssmStore, cfg.GetSsmPrefix())
 		if slackErr != nil {
 			return fmt.Errorf("provision Slack channel: %w", slackErr)
 		}
@@ -653,10 +655,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// For remote creates, use the original creation timestamp (written pre-provisioning in Step 8b)
 	// so TTL counts from when the sandbox was requested, not when provisioning finished.
 	if os.Getenv("KM_REMOTE_CREATE") == "true" {
-		tbl := cfg.SandboxTableName
-		if tbl == "" {
-			tbl = "km-sandboxes"
-		}
+		tbl := cfg.GetSandboxTableName()
 		if existing, readErr := awspkg.ReadSandboxMetadataDynamo(ctx, dynamodbpkg.NewFromConfig(awsCfg), tbl, sandboxID); readErr == nil && existing != nil && !existing.CreatedAt.IsZero() {
 			now = existing.CreatedAt
 		}
@@ -700,10 +699,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 
 	// Alias comes from --alias flag only (metadata.alias auto-generation removed).
 	sandboxAlias := aliasOverride
-	sandboxTableName := cfg.SandboxTableName
-	if sandboxTableName == "" {
-		sandboxTableName = "km-sandboxes"
-	}
+	sandboxTableName := cfg.GetSandboxTableName()
 	dynamoClientCreate := dynamodbpkg.NewFromConfig(awsCfg)
 
 	// Write sandbox metadata to DynamoDB. Non-fatal: sandbox is provisioned even if metadata write fails.
@@ -853,7 +849,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			step11dSSMRetryMax   = 6
 			step11dSSMRetryDelay = 5 * time.Second
 		)
-		runStep11dInject(ctx, ssmStoreForInject, putParamForInject, sandboxID, slackChannelID, step11dSSMRetryMax, step11dSSMRetryDelay)
+		runStep11dInject(ctx, ssmStoreForInject, putParamForInject, sandboxID, slackChannelID, step11dSSMRetryMax, step11dSSMRetryDelay, cfg.GetSsmPrefix())
 	}
 
 	// Step 11e: Provision per-sandbox SQS FIFO inbound queue (Phase 67-06).
@@ -864,10 +860,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// aborts (contrast with Step 11d which is non-fatal).
 	if resolvedProfile.Spec.CLI != nil && resolvedProfile.Spec.CLI.NotifySlackInboundEnabled {
 		sandboxDynamoClient := dynamodbpkg.NewFromConfig(awsCfg)
-		step11eTableName := cfg.SandboxTableName
-		if step11eTableName == "" {
-			step11eTableName = "km-sandboxes"
-		}
+		step11eTableName := cfg.GetSandboxTableName()
 
 		sqsRegion := resolvedProfile.Spec.Runtime.Region
 		if sqsRegion == "" {
@@ -878,7 +871,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			// Roll back Slack channel on SQS client init failure.
 			if slackChannelID != "" && slackPerSandbox {
 				ssmClientForArchive := ssm.NewFromConfig(awsCfg)
-				archiveBotToken, _ := (&productionSSMParamStore{client: ssmClientForArchive}).Get(ctx, "/km/slack/bot-token", true)
+				archiveBotToken, _ := (&productionSSMParamStore{client: ssmClientForArchive}).Get(ctx, cfg.GetSsmPrefix()+"slack/bot-token", true)
 				if archiveBotToken != "" {
 					archiveClient := slack.NewClient(archiveBotToken, nil)
 					if archErr := archiveClient.ArchiveChannel(ctx, slackChannelID); archErr != nil {
@@ -893,7 +886,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		ssmClientFor11e := ssm.NewFromConfig(awsCfg)
 		ssmStoreFor11e := &productionSSMParamStore{client: ssmClientFor11e}
 		// Fetch bridge URL once for the ready-announcement callback below.
-		bridgeURLFor11e, _ := ssmStoreFor11e.Get(ctx, "/km/slack/bridge-url", false)
+		bridgeURLFor11e, _ := ssmStoreFor11e.Get(ctx, cfg.GetSsmPrefix()+"slack/bridge-url", false)
 		step11eDeps := slackInboundDeps{
 			Profile:   resolvedProfile,
 			Cfg:       cfg,
@@ -928,7 +921,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			// Mirror Phase 63 channel-failure rollback: archive the per-sandbox channel.
 			if slackChannelID != "" && slackPerSandbox {
 				ssmClientForArchive := ssm.NewFromConfig(awsCfg)
-				archiveBotToken, _ := (&productionSSMParamStore{client: ssmClientForArchive}).Get(ctx, "/km/slack/bot-token", true)
+				archiveBotToken, _ := (&productionSSMParamStore{client: ssmClientForArchive}).Get(ctx, cfg.GetSsmPrefix()+"slack/bot-token", true)
 				if archiveBotToken != "" {
 					archiveClient := slack.NewClient(archiveBotToken, nil)
 					if archErr := archiveClient.ArchiveChannel(ctx, slackChannelID); archErr != nil {
@@ -961,7 +954,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		// Auto-discover from the well-known Lambda function name.
 		lambdaClient := lambda.NewFromConfig(awsCfg)
 		fnOut, fnErr := lambdaClient.GetFunction(ctx, &lambda.GetFunctionInput{
-			FunctionName: aws.String("km-ttl-handler"),
+			FunctionName: aws.String(cfg.GetResourcePrefix() + "-ttl-handler"),
 		})
 		if fnErr == nil {
 			ttlLambdaARN = aws.ToString(fnOut.Configuration.FunctionArn)
@@ -975,7 +968,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	if schedulerRoleARN == "" && ttlExpiry != nil {
 		iamClient := iampkg.NewFromConfig(awsCfg)
 		roleOut, roleErr := iamClient.GetRole(ctx, &iampkg.GetRoleInput{
-			RoleName: aws.String("km-ttl-scheduler"),
+			RoleName: aws.String(cfg.GetResourcePrefix() + "-ttl-scheduler"),
 		})
 		if roleErr == nil {
 			schedulerRoleARN = aws.ToString(roleOut.Role.Arn)
@@ -985,7 +978,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		}
 	}
 	if ttlExpiry != nil && ttlLambdaARN != "" && schedulerRoleARN != "" {
-		schedInput := compiler.BuildTTLScheduleInput(sandboxID, *ttlExpiry, ttlLambdaARN, schedulerRoleARN)
+		schedInput := compiler.BuildTTLScheduleInput(sandboxID, *ttlExpiry, ttlLambdaARN, schedulerRoleARN, cfg.GetResourcePrefix())
 		schedulerClient := scheduler.NewFromConfig(awsCfg)
 		if err := awspkg.CreateTTLSchedule(ctx, schedulerClient, schedInput); err != nil {
 			log.Error().Err(err).Str("sandbox_id", sandboxID).
@@ -1002,7 +995,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	if resolvedProfile.Spec.Budget != nil {
 		tableName := cfg.BudgetTableName
 		if tableName == "" {
-			tableName = "km-budgets"
+			tableName = cfg.GetResourcePrefix() + "-budgets"
 		}
 		budgetClient := dynamodbpkg.NewFromConfig(awsCfg)
 
@@ -1111,12 +1104,8 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 				log.Warn().Err(phraseErr).Str("sandbox_id", sandboxID).
 					Msg("Step 12d: failed to store safe phrase in SSM (non-fatal)")
 			} else {
-				safeDomain := "sandboxes." + cfg.Domain
-			if cfg.Domain == "" {
-				safeDomain = "sandboxes.klankermaker.ai"
-			}
 			fmt.Fprintf(os.Stderr, "  ✓ Safe phrase: %s\n", phrase)
-			fmt.Printf("    Email: %s@%s\n", sandboxID, safeDomain)
+			fmt.Printf("    Email: %s@%s\n", sandboxID, cfg.GetEmailDomain())
 				log.Info().Str("sandbox_id", sandboxID).
 					Msg("Step 12d: safe phrase stored in SSM")
 			}
@@ -1135,7 +1124,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			kmsKeyARN = "alias/km-platform" // fallback — real key resolved by SSM
 		}
 		gh := resolvedProfile.Spec.SourceAccess.GitHub
-		instID, tokenErr := generateAndStoreGitHubToken(ctx, ssmClient, sandboxID, kmsKeyARN, gh.AllowedRepos, nil)
+		instID, tokenErr := generateAndStoreGitHubToken(ctx, ssmClient, sandboxID, kmsKeyARN, gh.AllowedRepos, nil, cfg.GetSsmPrefix())
 		if tokenErr != nil {
 			var ambig *ErrAmbiguousInstallation
 			switch {
@@ -1199,12 +1188,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 
 	// Step 13: Provision SES email identity for the sandbox.
 	// Non-fatal: sandbox is still usable without email.
-	// Derive email domain from config; default to "klankermaker.ai" when not set.
-	baseDomain := cfg.Domain
-	if baseDomain == "" {
-		baseDomain = "klankermaker.ai"
-	}
-	emailDomain := "sandboxes." + baseDomain
+	emailDomain := cfg.GetEmailDomain()
 	sesClient := sesv2.NewFromConfig(awsCfg)
 	emailAddr, emailErr := awspkg.ProvisionSandboxEmail(ctx, sesClient, sandboxID, emailDomain)
 	if emailErr != nil {
@@ -1272,7 +1256,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			// Publish identity to DynamoDB.
 			identityTableName := cfg.IdentityTableName
 			if identityTableName == "" {
-				identityTableName = "km-identities"
+				identityTableName = cfg.GetResourcePrefix() + "-identities"
 			}
 			identityEmailAddr := fmt.Sprintf("%s@%s", sandboxID, emailDomain)
 			dynamoIdentClient := dynamodbpkg.NewFromConfig(awsCfg)
@@ -1588,10 +1572,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 				ttlExpiry = &t
 			}
 		}
-		dockerTableName := cfg.SandboxTableName
-		if dockerTableName == "" {
-			dockerTableName = "km-sandboxes"
-		}
+		dockerTableName := cfg.GetSandboxTableName()
 		dockerDynamoClient := dynamodbpkg.NewFromConfig(awsCfg)
 
 		sandboxAlias := aliasOverride
@@ -1648,17 +1629,10 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 
 			// Publish identity to DynamoDB.
 			// Derive email domain the same way as Step 13 in the main create path.
-			dockerBaseDomain := cfg.Domain
-			if dockerBaseDomain == "" {
-				dockerBaseDomain = os.Getenv("KM_EMAIL_DOMAIN")
-			}
-			if dockerBaseDomain == "" {
-				dockerBaseDomain = "klankermaker.ai"
-			}
-			emailDomain := "sandboxes." + dockerBaseDomain
+			emailDomain := cfg.GetEmailDomain()
 			identityTableName := cfg.IdentityTableName
 			if identityTableName == "" {
-				identityTableName = "km-identities"
+				identityTableName = cfg.GetResourcePrefix() + "-identities"
 			}
 			identityEmailAddr := fmt.Sprintf("%s@%s", sandboxID, emailDomain)
 			dynamoIdentClient := dynamodbpkg.NewFromConfig(awsCfg)
@@ -1850,10 +1824,6 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	if err != nil {
 		return "", fmt.Errorf("failed to load network config for %s: %w\nRun 'km init --region %s' first", region, err, region)
 	}
-	networkDomain := cfg.Domain
-	if networkDomain == "" {
-		networkDomain = "klankermaker.ai"
-	}
 	remoteArtifactsBucket := cfg.ArtifactsBucket
 	if remoteArtifactsBucket == "" {
 		remoteArtifactsBucket = os.Getenv("KM_ARTIFACTS_BUCKET")
@@ -1863,7 +1833,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		PublicSubnets:     networkOutputs.PublicSubnets,
 		AvailabilityZones: networkOutputs.AvailabilityZones,
 		RegionLabel:       regionLabel,
-		EmailDomain:       "sandboxes." + networkDomain,
+		EmailDomain:       cfg.GetEmailDomain(),
 		ArtifactsBucket:   remoteArtifactsBucket,
 	}
 
@@ -1981,10 +1951,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 			remoteSubstrateLabel = "ec2demand"
 		}
 	}
-	tableName := cfg.SandboxTableName
-	if tableName == "" {
-		tableName = "km-sandboxes"
-	}
+	tableName := cfg.GetSandboxTableName()
 	dynamoClient := dynamodbpkg.NewFromConfig(awsCfg)
 	startingMeta := &awspkg.SandboxMetadata{
 		SandboxID:   sandboxID,
@@ -2056,7 +2023,7 @@ func extractRepoOwner(repo string) string {
 //     A non-nil enumeration error is treated as a soft failure and we still try
 //     the legacy key (preserves graceful degradation on AccessDenied).
 //  3. If the legacy key is also missing (ParameterNotFound), returns ErrGitHubNotConfigured.
-func resolveInstallationID(ctx context.Context, ssmClient SSMGetPutAPI, allowedRepos []string) (string, error) {
+func resolveInstallationID(ctx context.Context, ssmClient SSMGetPutAPI, allowedRepos []string, ssmPrefix string) (string, error) {
 	withDecryption := true
 
 	// Extract unique owners from allowedRepos.
@@ -2072,7 +2039,7 @@ func resolveInstallationID(ctx context.Context, ssmClient SSMGetPutAPI, allowedR
 	// MUST NOT call GetParametersByPath (regression guard in tests).
 	if firstOwner != "" {
 		perAccountOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
-			Name:           aws.String("/km/config/github/installations/" + firstOwner),
+			Name:           aws.String(ssmPrefix + "config/github/installations/" + firstOwner),
 			WithDecryption: &withDecryption,
 		})
 		if err == nil {
@@ -2087,7 +2054,7 @@ func resolveInstallationID(ctx context.Context, ssmClient SSMGetPutAPI, allowedR
 		// Wildcard-only / bare-repos path: enumerate per-owner installations to
 		// auto-select when the operator has exactly one installation on file.
 		pathOut, pathErr := ssmClient.GetParametersByPath(ctx, &ssm.GetParametersByPathInput{
-			Path:           aws.String("/km/config/github/installations/"),
+			Path:           aws.String(ssmPrefix + "config/github/installations/"),
 			Recursive:      aws.Bool(false),
 			WithDecryption: aws.Bool(true),
 		})
@@ -2116,7 +2083,7 @@ func resolveInstallationID(ctx context.Context, ssmClient SSMGetPutAPI, allowedR
 
 	// Fall back to legacy single installation-id.
 	legacyOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
-		Name:           aws.String("/km/config/github/installation-id"),
+		Name:           aws.String(ssmPrefix + "config/github/installation-id"),
 		WithDecryption: &withDecryption,
 	})
 	if err != nil {
@@ -2135,11 +2102,11 @@ func resolveInstallationID(ctx context.Context, ssmClient SSMGetPutAPI, allowedR
 // Called from runCreate when profile.Spec.SourceAccess.GitHub is non-nil.
 // Returns ErrGitHubNotConfigured when any SSM parameter is missing (ParameterNotFound).
 // Returns a wrapped error for all other failures — the caller treats this as non-fatal.
-func generateAndStoreGitHubToken(ctx context.Context, ssmClient SSMGetPutAPI, sandboxID, kmsKeyARN string, allowedRepos, permissions []string) (string, error) {
+func generateAndStoreGitHubToken(ctx context.Context, ssmClient SSMGetPutAPI, sandboxID, kmsKeyARN string, allowedRepos, permissions []string, ssmPrefix string) (string, error) {
 	withDecryption := true
 
 	appClientIDOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
-		Name:           aws.String("/km/config/github/app-client-id"),
+		Name:           aws.String(ssmPrefix + "config/github/app-client-id"),
 		WithDecryption: &withDecryption,
 	})
 	if err != nil {
@@ -2151,7 +2118,7 @@ func generateAndStoreGitHubToken(ctx context.Context, ssmClient SSMGetPutAPI, sa
 	}
 
 	privateKeyOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
-		Name:           aws.String("/km/config/github/private-key"),
+		Name:           aws.String(ssmPrefix + "config/github/private-key"),
 		WithDecryption: &withDecryption,
 	})
 	if err != nil {
@@ -2162,7 +2129,7 @@ func generateAndStoreGitHubToken(ctx context.Context, ssmClient SSMGetPutAPI, sa
 		return "", fmt.Errorf("read private-key from SSM: %w", err)
 	}
 
-	installationID, err := resolveInstallationID(ctx, ssmClient, allowedRepos)
+	installationID, err := resolveInstallationID(ctx, ssmClient, allowedRepos, ssmPrefix)
 	if err != nil {
 		return "", err
 	}

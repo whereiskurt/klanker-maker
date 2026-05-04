@@ -33,7 +33,7 @@ terraform {
 }
 
 inputs = {
-  table_name = "km-slack-stream-messages"
+  table_name = "${local.site_vars.locals.site.label}-slack-stream-messages"
   tags = {
     "km:component" = "km-slack-transcript"
     "km:managed"   = "true"

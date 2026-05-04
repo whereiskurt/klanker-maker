@@ -82,7 +82,7 @@ inputs = merge(
     sandbox_table_name = "${local.site_vars.locals.site.label}-sandboxes"
     sandbox_table_arn  = local.sandbox_table_arn
     state_bucket       = get_env("KM_ARTIFACTS_BUCKET", "")
-    email_domain       = "sandboxes.${local.site_vars.locals.site.domain}"
+    email_domain       = "${local.site_vars.locals.site.email_subdomain}.${local.site_vars.locals.site.domain}"
     operator_email     = get_env("KM_OPERATOR_EMAIL", "")
 
     # Resolved from parent sandbox terraform outputs and appended to service.hcl

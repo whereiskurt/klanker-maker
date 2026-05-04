@@ -54,3 +54,27 @@ variable "scheduler_role_arn" {
   type        = string
   default     = ""
 }
+
+variable "resource_prefix" {
+  description = "Prefix for all resource names (default: km)"
+  type        = string
+  default     = "km"
+}
+
+variable "sandbox_table_name" {
+  description = "Name of the DynamoDB sandbox metadata table"
+  type        = string
+  default     = "km-sandboxes"
+}
+
+variable "budget_table_name" {
+  description = "Name of the DynamoDB budget table"
+  type        = string
+  default     = "km-budgets"
+}
+
+variable "schedules_table_name" {
+  description = "Name of the DynamoDB schedules table"
+  type        = string
+  default     = "km-schedules"
+}

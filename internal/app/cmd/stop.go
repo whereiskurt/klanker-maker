@@ -72,10 +72,7 @@ func runStop(ctx context.Context, cfg *config.Config, sandboxID string) error {
 
 	// Check metadata for docker substrate — route before EC2 API calls.
 	// Docker sandboxes have no AWS-tagged EC2 resources, so EC2 lookup would fail.
-	tableName := cfg.SandboxTableName
-	if tableName == "" {
-		tableName = "km-sandboxes"
-	}
+	tableName := cfg.GetSandboxTableName()
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)
 	displayRef := sandboxID
 	{

@@ -164,14 +164,14 @@ resource "aws_ecs_task_definition" "sandbox" {
 
   container_definitions = jsonencode([
     for c in var.containers : {
-      name               = c.name
-      image              = c.image
-      cpu                = c.cpu
-      memory             = c.memory
-      memoryReservation  = c.memory_reservation
-      essential          = c.essential
-      command            = length(c.command) > 0 ? c.command : null
-      environment        = c.environment
+      name              = c.name
+      image             = c.image
+      cpu               = c.cpu
+      memory            = c.memory
+      memoryReservation = c.memory_reservation
+      essential         = c.essential
+      command           = length(c.command) > 0 ? c.command : null
+      environment       = c.environment
       portMappings = [
         for pm in c.port_mappings : {
           containerPort = pm.containerPort

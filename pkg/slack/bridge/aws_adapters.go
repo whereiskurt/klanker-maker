@@ -74,10 +74,10 @@ type BotTokenSSMClient interface {
 // Uses pkg/aws.FetchPublicKey — NOT SSM (RESEARCH.md correction #1).
 type DynamoPublicKeyFetcher struct {
 	Client    DynamoGetPutter
-	TableName string // "km-identities"
+	TableName string // e.g. "km-identities" (from KM_IDENTITIES_TABLE env var)
 }
 
-// Fetch retrieves a sandbox's Ed25519 public key from DynamoDB km-identities.
+// Fetch retrieves a sandbox's Ed25519 public key from DynamoDB (table set via KM_IDENTITIES_TABLE).
 // Returns ErrSenderNotFound if no identity row exists for senderID.
 func (f *DynamoPublicKeyFetcher) Fetch(ctx context.Context, senderID string) (ed25519.PublicKey, error) {
 	// FetchPublicKey is the canonical pkg/aws function for identity lookup.
@@ -132,7 +132,7 @@ func (a *identityTableAdapter) DeleteItem(ctx context.Context, input *dynamodb.D
 // Atomic conditional write with attribute_not_exists guarantees replay-safety.
 type DynamoNonceStore struct {
 	Client    DynamoGetPutter
-	TableName string // "km-slack-bridge-nonces"
+	TableName string // e.g. "km-slack-bridge-nonces" (from KM_NONCE_TABLE env var)
 }
 
 // Reserve inserts nonce atomically. Returns ErrNonceReplayed if already present.
@@ -167,7 +167,7 @@ func (s *DynamoNonceStore) Reserve(ctx context.Context, nonce string, ttlSeconds
 // DynamoChannelOwnershipFetcher implements ChannelOwnershipFetcher using DynamoDB km-sandboxes.
 type DynamoChannelOwnershipFetcher struct {
 	Client    DynamoGetPutter
-	TableName string // "km-sandboxes"
+	TableName string // e.g. "km-sandboxes" (from KM_SANDBOX_TABLE_NAME env var)
 }
 
 // OwnedChannel reads the slack_channel_id field from the sandbox's metadata row.
@@ -212,7 +212,7 @@ type tokenCache struct {
 // (e.g. time.Millisecond for tests).
 type SSMBotTokenFetcher struct {
 	Client   BotTokenSSMClient
-	Path     string        // e.g. "/km/slack/bot-token"
+	Path     string        // e.g. "/km/slack/bot-token" (from KM_BOT_TOKEN_PATH env var)
 	CacheTTL time.Duration // defaults to defaultTokenCacheTTL (15 min)
 
 	mu    sync.Mutex
@@ -534,7 +534,7 @@ type DDBQueryGetPutAPI interface {
 // the bridge never overwrites a claude_session_id written by the poller.
 type DDBThreadStore struct {
 	Client    DDBQueryGetPutAPI
-	TableName string // "km-slack-threads"
+	TableName string // e.g. "km-slack-threads" (from KM_SLACK_THREADS_TABLE env var)
 }
 
 // Get returns the claude_session_id for (channelID, threadTS), or "" if absent.
@@ -599,7 +599,7 @@ func (s *DDBThreadStore) Upsert(ctx context.Context, channelID, threadTS, sandbo
 // slack_channel_id-index GSI on km-sandboxes (provisioned by Plan 67-02 v1.1.0).
 type DDBSandboxByChannel struct {
 	Client    DDBQueryGetPutAPI
-	TableName string // "km-sandboxes"
+	TableName string // e.g. "km-sandboxes" (from KM_SANDBOX_TABLE_NAME env var)
 	IndexName string // "slack_channel_id-index"
 }
 
@@ -645,7 +645,7 @@ func (f *DDBSandboxByChannel) FetchByChannel(ctx context.Context, channelID stri
 // in-process for CacheTTL (default 15 min) to avoid per-request SSM calls.
 type SSMSigningSecretFetcher struct {
 	Client   BotTokenSSMClient // reuses the same narrow interface as SSMBotTokenFetcher
-	Path     string            // e.g. "/km/slack/signing-secret"
+	Path     string            // e.g. "/km/slack/signing-secret" (from KM_SIGNING_SECRET_PATH env var)
 	CacheTTL time.Duration     // defaults to defaultTokenCacheTTL (15 min)
 
 	mu    sync.Mutex
@@ -769,7 +769,7 @@ type PostHintFunc func(ctx context.Context, channelID, threadTS, text string) er
 //  3. If cooldown active: return nil without posting.
 type DDBPauseHinter struct {
 	Client             DDBUpdateItemAPI
-	SandboxesTableName string                 // "km-sandboxes"
+	SandboxesTableName string                 // e.g. "km-sandboxes" (from KM_SANDBOX_TABLE_NAME env var)
 	SandboxByChannel   SandboxByChannelFetcher // resolves channel_id → sandbox_id
 	Post               PostHintFunc
 	HintText           string          // posted hint message

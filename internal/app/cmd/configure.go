@@ -20,6 +20,8 @@ type emailConfig struct {
 
 // platformConfig is the structure written to km-config.yaml.
 type platformConfig struct {
+	ResourcePrefix  string         `yaml:"resource_prefix"`
+	EmailSubdomain  string         `yaml:"email_subdomain"`
 	Domain          string         `yaml:"domain"`
 	Accounts        accountsConfig `yaml:"accounts"`
 	SSO             ssoConfig      `yaml:"sso"`
@@ -56,6 +58,8 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 	var (
 		nonInteractive  bool
 		outputDir       string
+		resourcePrefix  string
+		emailSubdomain  string
 		domain          string
 		organizationAcct string
 		dnsParentAcct   string
@@ -77,8 +81,8 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		Short: "Interactive wizard to set up km-config.yaml",
 		Long:  helpText("configure"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runConfigure(in, out, outputDir, nonInteractive, domain,
-				organizationAcct, dnsParentAcct, terraformAcct, applicationAcct,
+			return runConfigure(in, out, outputDir, nonInteractive, resourcePrefix, emailSubdomain,
+				domain, organizationAcct, dnsParentAcct, terraformAcct, applicationAcct,
 				ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket, operatorEmail, safePhrase, maxSandboxes)
 		},
 	}
@@ -87,6 +91,10 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		"Skip prompts; use flag values directly")
 	cmd.Flags().StringVar(&outputDir, "output-dir", "",
 		"Directory to write km-config.yaml (default: repo root or current dir)")
+	cmd.Flags().StringVar(&resourcePrefix, "resource-prefix", "km",
+		"Prefix for all account-globally-unique AWS resource names (default: km). One-time choice at km init.")
+	cmd.Flags().StringVar(&emailSubdomain, "email-subdomain", "sandboxes",
+		"Subdomain for SES email addresses (default: sandboxes). One-time choice requiring fresh SES verification to change.")
 	cmd.Flags().StringVar(&domain, "domain", "",
 		"Base domain (e.g. klankermaker.ai)")
 	cmd.Flags().StringVar(&organizationAcct, "organization-account", "",
@@ -121,11 +129,19 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 
 // runConfigure implements the configure wizard logic.
 func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive bool,
+	resourcePrefix, emailSubdomain,
 	domain, organizationAcct, dnsParentAcct, terraformAcct, applicationAcct,
 	ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket, operatorEmail, safePhrase string,
 	maxSandboxes int) error {
 
 	if nonInteractive {
+		// Apply defaults for resource_prefix and email_subdomain when not explicitly provided.
+		if resourcePrefix == "" {
+			resourcePrefix = "km"
+		}
+		if emailSubdomain == "" {
+			emailSubdomain = "sandboxes"
+		}
 		// Validate required flags
 		missing := []string{}
 		if domain == "" {
@@ -155,6 +171,30 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		// Interactive wizard
 		scanner := bufio.NewScanner(in)
 		var err error
+
+		// Phase 66: resource_prefix and email_subdomain are asked first — they are
+		// fundamental one-time choices that affect all downstream resource names.
+		if resourcePrefix == "" {
+			resourcePrefix = "km"
+		}
+		resourcePrefix, err = prompt(out, scanner, "Resource prefix for AWS resource names (one-time choice)", resourcePrefix)
+		if err != nil {
+			return err
+		}
+		if resourcePrefix == "" {
+			resourcePrefix = "km"
+		}
+
+		if emailSubdomain == "" {
+			emailSubdomain = "sandboxes"
+		}
+		emailSubdomain, err = prompt(out, scanner, "Email subdomain for SES addresses (one-time choice)", emailSubdomain)
+		if err != nil {
+			return err
+		}
+		if emailSubdomain == "" {
+			emailSubdomain = "sandboxes"
+		}
 
 		domain, err = prompt(out, scanner, "Base domain (e.g. klankermaker.ai)", domain)
 		if err != nil {
@@ -236,6 +276,8 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 
 	// Build config
 	pc := platformConfig{
+		ResourcePrefix:  resourcePrefix,
+		EmailSubdomain:  emailSubdomain,
 		Domain: domain,
 		Accounts: accountsConfig{
 			Organization: organizationAcct,
@@ -248,7 +290,7 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 			Region:   ssoRegion,
 		},
 		Region:          region,
-		BudgetTableName: "km-budgets",
+		BudgetTableName: resourcePrefix + "-budgets",
 		StateBucket:     stateBucket,
 		ArtifactsBucket: artifactsBucket,
 		OperatorEmail:   operatorEmail,

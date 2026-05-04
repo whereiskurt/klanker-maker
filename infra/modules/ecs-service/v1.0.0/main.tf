@@ -76,11 +76,11 @@ resource "aws_service_discovery_service" "service" {
   }
 
   tags = {
-    Name             = each.value.service_discovery.name
-    Service          = each.key
-    Region           = var.region_label
-    "km:label"       = var.km_label
-    "km:sandbox-id"  = var.sandbox_id
+    Name            = each.value.service_discovery.name
+    Service         = each.key
+    Region          = var.region_label
+    "km:label"      = var.km_label
+    "km:sandbox-id" = var.sandbox_id
   }
 }
 
@@ -128,11 +128,11 @@ resource "aws_ecs_service" "service" {
   deployment_minimum_healthy_percent = each.value.deployment_minimum_healthy_percent
 
   tags = {
-    Name             = each.value.service_name
-    Service          = each.key
-    Cluster          = each.value.cluster_name
-    Region           = var.region_label
-    "km:label"       = var.km_label
-    "km:sandbox-id"  = var.sandbox_id
+    Name            = each.value.service_name
+    Service         = each.key
+    Cluster         = each.value.cluster_name
+    Region          = var.region_label
+    "km:label"      = var.km_label
+    "km:sandbox-id" = var.sandbox_id
   }
 }

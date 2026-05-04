@@ -78,13 +78,10 @@ func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error 
 		return fmt.Errorf("load AWS config: %w", err)
 	}
 
-	tableName := cfg.SandboxTableName
-	if tableName == "" {
-		tableName = "km-sandboxes"
-	}
+	tableName := cfg.GetSandboxTableName()
 	budgetTable := cfg.BudgetTableName
 	if budgetTable == "" {
-		budgetTable = "km-budgets"
+		budgetTable = cfg.GetResourcePrefix() + "-budgets"
 	}
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)
 
@@ -135,7 +132,7 @@ func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error 
 				metaJSON, _ := json.Marshal(meta)
 				_, _ = s3Client.PutObject(ctx, &s3.PutObjectInput{
 					Bucket:      aws.String(cfg.StateBucket),
-					Key:         aws.String("tf-km/sandboxes/" + sandboxID + "/metadata.json"),
+					Key:         aws.String("tf-" + cfg.GetResourcePrefix() + "/sandboxes/" + sandboxID + "/metadata.json"),
 					Body:        bytes.NewReader(metaJSON),
 					ContentType: aws.String("application/json"),
 				})
@@ -163,19 +160,20 @@ func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error 
 					newExpiry := time.Now().Add(ttlDuration)
 					lambdaClient := lambda.NewFromConfig(awsCfg)
 					fnOut, fnErr := lambdaClient.GetFunction(ctx, &lambda.GetFunctionInput{
-						FunctionName: aws.String("km-ttl-handler"),
+						FunctionName: aws.String(cfg.GetResourcePrefix() + "-ttl-handler"),
 					})
 					iamClient := iam.NewFromConfig(awsCfg)
 					roleOut, roleErr := iamClient.GetRole(ctx, &iam.GetRoleInput{
-						RoleName: aws.String("km-ttl-scheduler"),
+						RoleName: aws.String(cfg.GetResourcePrefix() + "-ttl-scheduler"),
 					})
 					if fnErr == nil && roleErr == nil {
 						schedulerClient := scheduler.NewFromConfig(awsCfg)
 						// Delete any existing schedule first (may linger from previous TTL cycle).
-						awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID)
+						awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID, cfg.GetResourcePrefix())
 						schedInput := compiler.BuildTTLScheduleInput(sandboxID, newExpiry,
 							aws.ToString(fnOut.Configuration.FunctionArn),
-							aws.ToString(roleOut.Role.Arn))
+							aws.ToString(roleOut.Role.Arn),
+							cfg.GetResourcePrefix())
 						if schedErr := awspkg.CreateTTLSchedule(ctx, schedulerClient, schedInput); schedErr == nil {
 							fmt.Printf("  TTL schedule recreated: expires in %s\n", p.Spec.Lifecycle.TTL)
 							// Update TTL expiry in DynamoDB.

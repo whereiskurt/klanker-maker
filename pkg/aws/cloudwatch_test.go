@@ -202,7 +202,7 @@ func TestTailLogs_NoFollow(t *testing.T) {
 // with the correct log group, destination bucket, prefix, and time range.
 func TestExportSandboxLogs_Success(t *testing.T) {
 	mock := &mockCWLogsAPI{}
-	err := kmaws.ExportSandboxLogs(context.Background(), mock, "sb-aabbccdd", "km-artifacts-bucket")
+	err := kmaws.ExportSandboxLogs(context.Background(), mock, "sb-aabbccdd", "km-artifacts-bucket", "km")
 	if err != nil {
 		t.Fatalf("ExportSandboxLogs returned error: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestExportSandboxLogs_ResourceNotFound(t *testing.T) {
 			Message: aws.String("log group does not exist"),
 		},
 	}
-	err := kmaws.ExportSandboxLogs(context.Background(), mock, "sb-notexist", "km-artifacts-bucket")
+	err := kmaws.ExportSandboxLogs(context.Background(), mock, "sb-notexist", "km-artifacts-bucket", "km")
 	if err != nil {
 		t.Errorf("ExportSandboxLogs should return nil for ResourceNotFoundException, got: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestExportSandboxLogs_OtherError(t *testing.T) {
 	mock := &mockCWLogsAPI{
 		exportTaskErr: errors.New("access denied"),
 	}
-	err := kmaws.ExportSandboxLogs(context.Background(), mock, "sb-aabbccdd", "km-artifacts-bucket")
+	err := kmaws.ExportSandboxLogs(context.Background(), mock, "sb-aabbccdd", "km-artifacts-bucket", "km")
 	if err == nil {
 		t.Fatal("expected error for non-ResourceNotFoundException failure, got nil")
 	}

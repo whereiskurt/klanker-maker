@@ -125,7 +125,7 @@ Flags:
 				if !ok {
 					return fmt.Errorf("SSM client does not support GetParameter (needed for --discover)")
 				}
-				return RunDiscoverInstallation(ctx, rwClient, writer, force)
+				return RunDiscoverInstallation(ctx, rwClient, writer, force, cfg)
 			}
 
 			return runConfigureGitHub(ctx, *ssmClientPtr, writer, reader,
@@ -207,27 +207,27 @@ func runConfigureGitHub(ctx context.Context, ssmClient SSMWriteAPI, out io.Write
 	// Determine KMS key ARN for SecureString encryption.
 	// Use platform KMS key from config if available; SSM uses the default service key otherwise.
 	kmsKeyID := ""
-	_ = cfg // no KMS ARN field on Config yet — SSM default service key is used
+	ghPrefix := cfg.GetSsmPrefix() + "config/github/"
 
 	overwrite := force
 
-	// Write /km/config/github/app-client-id
-	if err := putSSMParam(ctx, ssmClient, "/km/config/github/app-client-id",
+	// Write {prefix}config/github/app-client-id
+	if err := putSSMParam(ctx, ssmClient, ghPrefix+"app-client-id",
 		appClientID, ssmtypes.ParameterTypeString, "", overwrite); err != nil {
 		return fmt.Errorf("writing app-client-id to SSM: %w", err)
 	}
-	fmt.Fprintf(out, "Written: /km/config/github/app-client-id\n")
+	fmt.Fprintf(out, "Written: %sapp-client-id\n", ghPrefix)
 
-	// Write /km/config/github/private-key (SecureString)
-	if err := putSSMParam(ctx, ssmClient, "/km/config/github/private-key",
+	// Write {prefix}config/github/private-key (SecureString)
+	if err := putSSMParam(ctx, ssmClient, ghPrefix+"private-key",
 		string(pemBytes), ssmtypes.ParameterTypeSecureString, kmsKeyID, overwrite); err != nil {
 		return fmt.Errorf("writing private-key to SSM: %w", err)
 	}
-	fmt.Fprintf(out, "Written: /km/config/github/private-key (SecureString)\n")
+	fmt.Fprintf(out, "Written: %sprivate-key (SecureString)\n", ghPrefix)
 
 	// Write per-account installation key if --account is provided.
 	if account != "" {
-		paramPath := fmt.Sprintf("/km/config/github/installations/%s", account)
+		paramPath := ghPrefix + "installations/" + account
 		if err := putSSMParam(ctx, ssmClient, paramPath,
 			installationID, ssmtypes.ParameterTypeString, "", overwrite); err != nil {
 			return fmt.Errorf("writing per-account installation key to SSM: %w", err)
@@ -235,12 +235,12 @@ func runConfigureGitHub(ctx context.Context, ssmClient SSMWriteAPI, out io.Write
 		fmt.Fprintf(out, "Written: %s (%s)\n", paramPath, installationID)
 	}
 
-	// Write /km/config/github/installation-id (legacy, always written for backward compat)
-	if err := putSSMParam(ctx, ssmClient, "/km/config/github/installation-id",
+	// Write {prefix}config/github/installation-id (legacy, always written for backward compat)
+	if err := putSSMParam(ctx, ssmClient, ghPrefix+"installation-id",
 		installationID, ssmtypes.ParameterTypeString, "", overwrite); err != nil {
 		return fmt.Errorf("writing installation-id to SSM: %w", err)
 	}
-	fmt.Fprintf(out, "Written: /km/config/github/installation-id\n")
+	fmt.Fprintf(out, "Written: %sinstallation-id\n", ghPrefix)
 
 	fmt.Fprintf(out, "GitHub App credentials stored. Run 'km create' with a profile that has sourceAccess.github to use them.\n")
 	return nil
@@ -249,10 +249,11 @@ func runConfigureGitHub(ctx context.Context, ssmClient SSMWriteAPI, out io.Write
 // RunDiscoverInstallation reads the App credentials from SSM, fetches installations
 // from the GitHub API, and stores the installation ID(s) in SSM.
 // Exported for testability.
-func RunDiscoverInstallation(ctx context.Context, client SSMReadWriteAPI, out io.Writer, force bool) error {
+func RunDiscoverInstallation(ctx context.Context, client SSMReadWriteAPI, out io.Writer, force bool, cfg *config.Config) error {
+	ghPrefix := cfg.GetSsmPrefix() + "config/github/"
 	// Read app-client-id (used as the App ID / JWT issuer for the installations API).
 	clientIDOut, err := client.GetParameter(ctx, &ssm.GetParameterInput{
-		Name: aws.String("/km/config/github/app-client-id"),
+		Name: aws.String(ghPrefix + "app-client-id"),
 	})
 	if err != nil {
 		return fmt.Errorf("reading app-client-id from SSM: %w\nRun 'km configure github --setup' first", err)
@@ -261,7 +262,7 @@ func RunDiscoverInstallation(ctx context.Context, client SSMReadWriteAPI, out io
 
 	// Read private key (needed to sign the JWT for the GitHub API).
 	privKeyOut, err := client.GetParameter(ctx, &ssm.GetParameterInput{
-		Name:           aws.String("/km/config/github/private-key"),
+		Name:           aws.String(ghPrefix + "private-key"),
 		WithDecryption: aws.Bool(true),
 	})
 	if err != nil {
@@ -292,7 +293,7 @@ func RunDiscoverInstallation(ctx context.Context, client SSMReadWriteAPI, out io
 	// Write per-account installation keys for ALL installations.
 	for _, inst := range installations {
 		instID := strconv.FormatInt(inst.ID, 10)
-		paramPath := fmt.Sprintf("/km/config/github/installations/%s", inst.Account)
+		paramPath := ghPrefix + "installations/" + inst.Account
 		if err := putSSMParam(ctx, client, paramPath,
 			instID, ssmtypes.ParameterTypeString, "", force); err != nil {
 			return fmt.Errorf("writing per-account installation key to SSM: %w", err)
@@ -300,13 +301,13 @@ func RunDiscoverInstallation(ctx context.Context, client SSMReadWriteAPI, out io
 		fmt.Fprintf(out, "Written: %s (%s)\n", paramPath, instID)
 	}
 
-	// Write legacy /km/config/github/installation-id with the first installation (backward compat).
+	// Write legacy {prefix}config/github/installation-id with the first installation (backward compat).
 	installID := strconv.FormatInt(installations[0].ID, 10)
-	if err := putSSMParam(ctx, client, "/km/config/github/installation-id",
+	if err := putSSMParam(ctx, client, ghPrefix+"installation-id",
 		installID, ssmtypes.ParameterTypeString, "", force); err != nil {
 		return fmt.Errorf("writing installation-id to SSM: %w", err)
 	}
-	fmt.Fprintf(out, "Written: /km/config/github/installation-id (%s)\n", installID)
+	fmt.Fprintf(out, "Written: %sinstallation-id (%s)\n", ghPrefix, installID)
 	fmt.Fprintf(out, "GitHub App configuration complete.\n")
 	return nil
 }
@@ -648,22 +649,22 @@ func RunConfigureGitHubSetup(ctx context.Context, ssmClient SSMWriteAPI, out io.
 	fmt.Fprintf(out, "GitHub App created: %s\n", appCreds.HTMLURL)
 
 	kmsKeyID := ""
-	_ = cfg // no KMS ARN field on Config yet — SSM default service key is used
+	ghPrefix := cfg.GetSsmPrefix() + "config/github/"
 	overwrite := force
 
 	// Write App client ID.
-	if err := putSSMParam(ctx, ssmClient, "/km/config/github/app-client-id",
+	if err := putSSMParam(ctx, ssmClient, ghPrefix+"app-client-id",
 		appCreds.ClientID, ssmtypes.ParameterTypeString, "", overwrite); err != nil {
 		return fmt.Errorf("manifest setup: write app-client-id to SSM: %w", err)
 	}
-	fmt.Fprintf(out, "Written: /km/config/github/app-client-id (%s)\n", appCreds.ClientID)
+	fmt.Fprintf(out, "Written: %sapp-client-id (%s)\n", ghPrefix, appCreds.ClientID)
 
 	// Write private key.
-	if err := putSSMParam(ctx, ssmClient, "/km/config/github/private-key",
+	if err := putSSMParam(ctx, ssmClient, ghPrefix+"private-key",
 		appCreds.PEM, ssmtypes.ParameterTypeSecureString, kmsKeyID, overwrite); err != nil {
 		return fmt.Errorf("manifest setup: write private-key to SSM: %w", err)
 	}
-	fmt.Fprintf(out, "Written: /km/config/github/private-key (SecureString)\n")
+	fmt.Fprintf(out, "Written: %sprivate-key (SecureString)\n", ghPrefix)
 
 	// Try to fetch installations to get the installation ID.
 	installations, err := fetchInstallations(ctx, baseURL, strconv.FormatInt(appCreds.ID, 10), appCreds.PEM)
@@ -677,7 +678,7 @@ func RunConfigureGitHubSetup(ctx context.Context, ssmClient SSMWriteAPI, out io.
 		// Write per-account installation keys for ALL installations.
 		for _, inst := range installations {
 			instID := strconv.FormatInt(inst.ID, 10)
-			paramPath := fmt.Sprintf("/km/config/github/installations/%s", inst.Account)
+			paramPath := ghPrefix + "installations/" + inst.Account
 			if err := putSSMParam(ctx, ssmClient, paramPath,
 				instID, ssmtypes.ParameterTypeString, "", overwrite); err != nil {
 				return fmt.Errorf("manifest setup: write per-account installation key to SSM: %w", err)
@@ -685,13 +686,13 @@ func RunConfigureGitHubSetup(ctx context.Context, ssmClient SSMWriteAPI, out io.
 			fmt.Fprintf(out, "Written: %s (%s)\n", paramPath, instID)
 		}
 
-		// Write legacy /km/config/github/installation-id with first installation (backward compat).
+		// Write legacy {prefix}config/github/installation-id with first installation (backward compat).
 		installID := strconv.FormatInt(installations[0].ID, 10)
-		if err := putSSMParam(ctx, ssmClient, "/km/config/github/installation-id",
+		if err := putSSMParam(ctx, ssmClient, ghPrefix+"installation-id",
 			installID, ssmtypes.ParameterTypeString, "", overwrite); err != nil {
 			return fmt.Errorf("manifest setup: write installation-id to SSM: %w", err)
 		}
-		fmt.Fprintf(out, "Written: /km/config/github/installation-id (%s)\n", installID)
+		fmt.Fprintf(out, "Written: %sinstallation-id (%s)\n", ghPrefix, installID)
 		fmt.Fprintf(out, "GitHub App credentials stored. Run 'km create' with a profile that has sourceAccess.github to use them.\n")
 	} else {
 		fmt.Fprintf(out, "\nNo installations found. Install the App on your organization or account:\n")

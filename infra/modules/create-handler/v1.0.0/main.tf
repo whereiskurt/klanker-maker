@@ -5,7 +5,7 @@ data "aws_caller_identity" "current" {}
 # ============================================================
 
 resource "aws_iam_role" "create_handler" {
-  name = "km-create-handler"
+  name = "${var.resource_prefix}-create-handler"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -26,7 +26,7 @@ resource "aws_iam_role" "create_handler" {
 
 # Policy: CloudWatch Logs for Lambda execution logs
 resource "aws_iam_role_policy" "cloudwatch_logs" {
-  name = "km-create-handler-cw-logs"
+  name = "${var.resource_prefix}-create-handler-cw-logs"
   role = aws_iam_role.create_handler.id
 
   policy = jsonencode({
@@ -36,8 +36,8 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
         Effect = "Allow"
         Action = ["logs:*"]
         Resource = [
-          "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/km-*",
-          "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/km-*:*",
+          "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${var.resource_prefix}-*",
+          "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${var.resource_prefix}-*:*",
           "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/km/sandboxes/*",
           "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/km/sandboxes/*:*",
         ]
@@ -54,7 +54,7 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
 
 # Policy: S3 artifact bucket access (profile download, artifact upload)
 resource "aws_iam_role_policy" "s3_artifacts" {
-  name = "km-create-handler-s3"
+  name = "${var.resource_prefix}-create-handler-s3"
   role = aws_iam_role.create_handler.id
 
   policy = jsonencode({
@@ -80,7 +80,7 @@ resource "aws_iam_role_policy" "s3_artifacts" {
 
 # Policy: DynamoDB access for Terraform state locking and budget tracking
 resource "aws_iam_role_policy" "dynamodb" {
-  name = "km-create-handler-dynamodb"
+  name = "${var.resource_prefix}-create-handler-dynamodb"
   role = aws_iam_role.create_handler.id
 
   policy = jsonencode({
@@ -114,7 +114,7 @@ resource "aws_iam_role_policy" "dynamodb" {
 
 # Policy: DynamoDB km-sandboxes — read/write sandbox metadata
 resource "aws_iam_role_policy" "dynamodb_sandboxes" {
-  name = "km-create-handler-dynamodb-sandboxes"
+  name = "${var.resource_prefix}-create-handler-dynamodb-sandboxes"
   role = aws_iam_role.create_handler.id
 
   policy = jsonencode({
@@ -132,9 +132,9 @@ resource "aws_iam_role_policy" "dynamodb_sandboxes" {
           "dynamodb:Query",
         ]
         Resource = [
-          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/km-sandboxes",
-          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/km-sandboxes/index/alias-index",
-          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/km-identities",
+          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.sandbox_table_name}",
+          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.sandbox_table_name}/index/alias-index",
+          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.identities_table_name}",
         ]
       }
     ]
@@ -143,7 +143,7 @@ resource "aws_iam_role_policy" "dynamodb_sandboxes" {
 
 # Policy: Terraform state S3 access (state read/write for km create subprocess)
 resource "aws_iam_role_policy" "terraform_state" {
-  name = "km-create-handler-tf-state"
+  name = "${var.resource_prefix}-create-handler-tf-state"
   role = aws_iam_role.create_handler.id
 
   policy = jsonencode({
@@ -169,7 +169,7 @@ resource "aws_iam_role_policy" "terraform_state" {
 
 # Policy: EC2 provisioning for sandbox creation
 resource "aws_iam_role_policy" "ec2_provisioning" {
-  name = "km-create-handler-ec2"
+  name = "${var.resource_prefix}-create-handler-ec2"
   role = aws_iam_role.create_handler.id
 
   policy = jsonencode({
@@ -220,7 +220,7 @@ resource "aws_iam_role_policy" "ec2_provisioning" {
 
 # Policy: IAM role and instance profile management for sandbox EC2 roles
 resource "aws_iam_role_policy" "iam_sandbox" {
-  name = "km-create-handler-iam"
+  name = "${var.resource_prefix}-create-handler-iam"
   role = aws_iam_role.create_handler.id
 
   policy = jsonencode({
@@ -244,7 +244,7 @@ resource "aws_iam_role_policy" "iam_sandbox" {
           "iam:UntagRole",
         ]
         Resource = [
-          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/km-*",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_prefix}-*",
         ]
       },
       {
@@ -261,7 +261,7 @@ resource "aws_iam_role_policy" "iam_sandbox" {
           "iam:UntagInstanceProfile",
         ]
         Resource = [
-          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/km-*",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/${var.resource_prefix}-*",
         ]
       },
       {
@@ -269,7 +269,7 @@ resource "aws_iam_role_policy" "iam_sandbox" {
         Effect = "Allow"
         Action = ["iam:PassRole"]
         Resource = [
-          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/km-*",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_prefix}-*",
         ]
       },
       {
@@ -284,7 +284,7 @@ resource "aws_iam_role_policy" "iam_sandbox" {
 
 # Policy: ECS cluster and task management for sandbox workloads
 resource "aws_iam_role_policy" "ecs_provisioning" {
-  name = "km-create-handler-ecs"
+  name = "${var.resource_prefix}-create-handler-ecs"
   role = aws_iam_role.create_handler.id
 
   policy = jsonencode({
@@ -316,7 +316,7 @@ resource "aws_iam_role_policy" "ecs_provisioning" {
 
 # Policy: EventBridge Scheduler for TTL schedule creation
 resource "aws_iam_role_policy" "scheduler" {
-  name = "km-create-handler-scheduler"
+  name = "${var.resource_prefix}-create-handler-scheduler"
   role = aws_iam_role.create_handler.id
 
   policy = jsonencode({
@@ -331,15 +331,15 @@ resource "aws_iam_role_policy" "scheduler" {
           "scheduler:GetSchedule",
           "scheduler:UpdateSchedule",
         ]
-        Resource = "arn:aws:scheduler:*:${data.aws_caller_identity.current.account_id}:schedule/default/km-*"
+        Resource = "arn:aws:scheduler:*:${data.aws_caller_identity.current.account_id}:schedule/default/${var.resource_prefix}-*"
       },
       {
         Sid    = "SchedulerPassRole"
         Effect = "Allow"
         Action = ["iam:PassRole"]
         Resource = [
-          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/km-ttl-scheduler",
-          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/km-budget-scheduler-*",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_prefix}-ttl-scheduler",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.resource_prefix}-budget-scheduler-*",
         ]
       }
     ]
@@ -348,7 +348,7 @@ resource "aws_iam_role_policy" "scheduler" {
 
 # Policy: SSM Parameter Store for safe phrase and GitHub token
 resource "aws_iam_role_policy" "ssm" {
-  name = "km-create-handler-ssm"
+  name = "${var.resource_prefix}-create-handler-ssm"
   role = aws_iam_role.create_handler.id
 
   policy = jsonencode({
@@ -378,7 +378,7 @@ resource "aws_iam_role_policy" "ssm" {
 # Document scope: AWS-RunShellScript only. Target scope: km-tagged EC2
 # instances (KMSandboxID tag matches sandbox IDs, prevents lateral movement).
 resource "aws_iam_role_policy" "ssm_send_command" {
-  name = "km-create-handler-ssm-send-command"
+  name = "${var.resource_prefix}-create-handler-ssm-send-command"
   role = aws_iam_role.create_handler.id
 
   policy = jsonencode({
@@ -424,7 +424,7 @@ resource "aws_iam_role_policy" "ssm_send_command" {
 
 # Policy: SES for sandbox creation notification emails
 resource "aws_iam_role_policy" "ses_send" {
-  name = "km-create-handler-ses"
+  name = "${var.resource_prefix}-create-handler-ses"
   role = aws_iam_role.create_handler.id
 
   policy = jsonencode({
@@ -441,7 +441,7 @@ resource "aws_iam_role_policy" "ses_send" {
 
 # Policy: Lambda management for per-sandbox budget-enforcer functions
 resource "aws_iam_role_policy" "lambda_budget" {
-  name = "km-create-handler-lambda"
+  name = "${var.resource_prefix}-create-handler-lambda"
   role = aws_iam_role.create_handler.id
 
   policy = jsonencode({
@@ -452,7 +452,7 @@ resource "aws_iam_role_policy" "lambda_budget" {
         Effect = "Allow"
         Action = ["lambda:*"]
         Resource = [
-          "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:km-*",
+          "arn:aws:lambda:*:${data.aws_caller_identity.current.account_id}:function:${var.resource_prefix}-*",
         ]
       }
     ]
@@ -461,7 +461,7 @@ resource "aws_iam_role_policy" "lambda_budget" {
 
 # Policy: KMS for encrypting/decrypting sandbox secrets
 resource "aws_iam_role_policy" "kms" {
-  name = "km-create-handler-kms"
+  name = "${var.resource_prefix}-create-handler-kms"
   role = aws_iam_role.create_handler.id
 
   policy = jsonencode({
@@ -481,7 +481,7 @@ resource "aws_iam_role_policy" "kms" {
 # at create time; rollback deletes it on failure. Scoped to the inbound
 # queue ARN pattern only.
 resource "aws_iam_role_policy" "sqs_slack_inbound" {
-  name = "km-create-handler-sqs-slack-inbound"
+  name = "${var.resource_prefix}-create-handler-sqs-slack-inbound"
   role = aws_iam_role.create_handler.id
 
   policy = jsonencode({
@@ -498,7 +498,7 @@ resource "aws_iam_role_policy" "sqs_slack_inbound" {
           "sqs:SetQueueAttributes",
           "sqs:TagQueue",
         ]
-        Resource = "arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:km-slack-inbound-*.fifo"
+        Resource = "arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:${var.resource_prefix}-slack-inbound-*.fifo"
       }
     ]
   })
@@ -509,7 +509,7 @@ resource "aws_iam_role_policy" "sqs_slack_inbound" {
 # ============================================================
 
 resource "aws_lambda_function" "create_handler" {
-  function_name = "km-create-handler"
+  function_name = "${var.resource_prefix}-create-handler"
   description   = "Provisions a new sandbox by running km create as a subprocess when a SandboxCreate EventBridge event is received"
   role          = aws_iam_role.create_handler.arn
 
@@ -538,7 +538,7 @@ resource "aws_lambda_function" "create_handler" {
       KM_STATE_PREFIX     = var.state_prefix
       KM_REGION_LABEL     = var.region_label
       KM_TOOLCHAIN_DIR    = "/tmp/toolchain"
-      SANDBOX_TABLE_NAME  = "km-sandboxes"
+      SANDBOX_TABLE_NAME  = var.sandbox_table_name
     }
   }
 
@@ -555,7 +555,7 @@ resource "aws_lambda_function" "create_handler" {
 
 # CloudWatch Log Group for Lambda logs
 resource "aws_cloudwatch_log_group" "create_handler" {
-  name              = "/aws/lambda/km-create-handler"
+  name              = "/aws/lambda/${var.resource_prefix}-create-handler"
   retention_in_days = 30
 
   tags = {
@@ -569,7 +569,7 @@ resource "aws_cloudwatch_log_group" "create_handler" {
 # ============================================================
 
 resource "aws_cloudwatch_event_rule" "sandbox_create" {
-  name        = "km-sandbox-create"
+  name        = "${var.resource_prefix}-sandbox-create"
   description = "Routes SandboxCreate events to the create-handler Lambda for sandbox provisioning"
 
   event_pattern = jsonencode({
@@ -585,7 +585,7 @@ resource "aws_cloudwatch_event_rule" "sandbox_create" {
 
 resource "aws_cloudwatch_event_target" "create_to_lambda" {
   rule      = aws_cloudwatch_event_rule.sandbox_create.name
-  target_id = "km-create-handler"
+  target_id = "${var.resource_prefix}-create-handler"
   arn       = aws_lambda_function.create_handler.arn
 
   # CRITICAL: 0 retries — sandbox creation is NOT idempotent. A retry after partial

@@ -86,10 +86,7 @@ func newEmailCmdInternal(cfg *config.Config, sendDeps *EmailSendDeps, readDeps *
 
 // emailDomain returns the configured email domain (e.g. "sandboxes.klankermaker.ai").
 func emailDomain(cfg *config.Config) string {
-	if cfg.Domain != "" {
-		return "sandboxes." + cfg.Domain
-	}
-	return "sandboxes.klankermaker.ai"
+	return cfg.GetEmailDomain()
 }
 
 // ============================================================
@@ -198,7 +195,7 @@ func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, 
 	domain := emailDomain(cfg)
 	tableName := cfg.IdentityTableName
 	if tableName == "" {
-		tableName = "km-identities"
+		tableName = cfg.GetResourcePrefix() + "-identities"
 	}
 
 	// Build real clients if not injected.
@@ -400,7 +397,7 @@ func runEmailRead(ctx context.Context, cfg *config.Config, deps *EmailReadDeps, 
 	domain := emailDomain(cfg)
 	tableName := cfg.IdentityTableName
 	if tableName == "" {
-		tableName = "km-identities"
+		tableName = cfg.GetResourcePrefix() + "-identities"
 	}
 
 	// Build real clients if not injected.

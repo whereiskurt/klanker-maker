@@ -36,8 +36,11 @@ inputs = {
   artifact_bucket_name = get_env("KM_ARTIFACTS_BUCKET", "")
   artifact_bucket_arn  = "arn:aws:s3:::${get_env("KM_ARTIFACTS_BUCKET", "")}"
   state_bucket         = local.site_vars.locals.backend.bucket
-  email_domain         = "sandboxes.${local.site_vars.locals.site.domain}"
+  email_domain         = "${local.site_vars.locals.site.email_subdomain}.${local.site_vars.locals.site.domain}"
   lambda_zip_path      = "${local.repo_root}/build/email-create-handler.zip"
   scheduler_role_arn   = get_env("KM_SCHEDULER_ROLE_ARN", "")
   create_handler_arn   = get_env("KM_CREATE_HANDLER_ARN", "")
+  resource_prefix      = local.site_vars.locals.site.label
+  sandbox_table_name   = "${local.site_vars.locals.site.label}-sandboxes"
+  safe_phrase_ssm_key  = "/${local.site_vars.locals.site.label}/config/remote-create/safe-phrase"
 }

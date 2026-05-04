@@ -15,7 +15,7 @@ locals {
       region          = cluster.region
       enable_insights = cluster.enable_insights
       # Generate cluster name: sandbox-id-name-region_label (e.g., "my-sandbox-app-use1")
-      cluster_name   = "${var.sandbox_id}-${cluster.name}-${var.region_label}"
+      cluster_name = "${var.sandbox_id}-${cluster.name}-${var.region_label}"
       # Generate namespace: sandbox-id-name-region_label.local
       namespace_name = cluster.namespace_name != "" ? cluster.namespace_name : "${var.sandbox_id}-${cluster.name}-${var.region_label}.local"
     }
@@ -31,11 +31,11 @@ resource "aws_service_discovery_private_dns_namespace" "namespace" {
   vpc         = var.vpc_id
 
   tags = {
-    Name             = each.value.namespace_name
-    ClusterName      = each.key
-    Region           = var.region_label
-    "km:label"       = var.km_label
-    "km:sandbox-id"  = var.sandbox_id
+    Name            = each.value.namespace_name
+    ClusterName     = each.key
+    Region          = var.region_label
+    "km:label"      = var.km_label
+    "km:sandbox-id" = var.sandbox_id
   }
 }
 
@@ -51,11 +51,11 @@ resource "aws_ecs_cluster" "cluster" {
   }
 
   tags = {
-    Name             = each.value.cluster_name
-    ClusterName      = each.key
-    Region           = var.region_label
-    "km:label"       = var.km_label
-    "km:sandbox-id"  = var.sandbox_id
+    Name            = each.value.cluster_name
+    ClusterName     = each.key
+    Region          = var.region_label
+    "km:label"      = var.km_label
+    "km:sandbox-id" = var.sandbox_id
   }
 }
 
@@ -102,11 +102,11 @@ resource "aws_iam_role" "ecs_task_role" {
   })
 
   tags = {
-    Name             = "km-ecs-task-role-${each.value.cluster_name}"
-    ClusterName      = each.key
-    Region           = var.region_label
-    "km:label"       = var.km_label
-    "km:sandbox-id"  = var.sandbox_id
+    Name            = "km-ecs-task-role-${each.value.cluster_name}"
+    ClusterName     = each.key
+    Region          = var.region_label
+    "km:label"      = var.km_label
+    "km:sandbox-id" = var.sandbox_id
   }
 }
 

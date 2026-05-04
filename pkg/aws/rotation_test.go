@@ -566,7 +566,7 @@ func TestWriteRotationAudit_WritesStructuredJSON(t *testing.T) {
 		Success:   true,
 	}
 
-	err := kmaws.WriteRotationAudit(ctx, cwMock, event)
+	err := kmaws.WriteRotationAudit(ctx, cwMock, event, "km")
 	if err != nil {
 		t.Fatalf("WriteRotationAudit returned error: %v", err)
 	}
@@ -634,7 +634,7 @@ func TestWriteRotationAudit_LogStreamNameIncludesDate(t *testing.T) {
 		Success:   true,
 	}
 
-	err := kmaws.WriteRotationAudit(ctx, cwMock, event)
+	err := kmaws.WriteRotationAudit(ctx, cwMock, event, "km")
 	if err != nil {
 		t.Fatalf("WriteRotationAudit returned error: %v", err)
 	}
