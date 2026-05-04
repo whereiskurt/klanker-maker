@@ -33,7 +33,7 @@ terraform {
 }
 
 inputs = {
-  table_name = "km-slack-threads"
+  table_name = "${local.site_vars.locals.site.label}-slack-threads"
   tags = {
     "km:component" = "km-slack-inbound"
     "km:managed"   = "true"

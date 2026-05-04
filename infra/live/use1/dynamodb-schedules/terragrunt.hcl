@@ -34,7 +34,7 @@ terraform {
 }
 
 inputs = {
-  table_name = "km-schedules"
+  table_name = "${local.site_vars.locals.site.label}-schedules"
   tags = {
     "km:component" = "schedule-metadata"
     "km:managed"   = "true"

@@ -33,7 +33,7 @@ terraform {
 }
 
 inputs = {
-  table_name = "km-slack-bridge-nonces"
+  table_name = "${local.site_vars.locals.site.label}-slack-bridge-nonces"
   tags = {
     "km:component" = "slack-bridge"
     "km:managed"   = "true"

@@ -34,7 +34,7 @@ terraform {
 }
 
 inputs = {
-  table_name = "km-sandboxes"
+  table_name = "${local.site_vars.locals.site.label}-sandboxes"
   tags = {
     "km:component" = "sandbox-metadata"
     "km:managed"   = "true"

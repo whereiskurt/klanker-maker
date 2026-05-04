@@ -34,7 +34,7 @@ terraform {
 }
 
 inputs = {
-  table_name      = "km-budgets"
+  table_name      = "${local.site_vars.locals.site.label}-budgets"
   replica_regions = []
   tags = {
     "km:component" = "budget-tracking"

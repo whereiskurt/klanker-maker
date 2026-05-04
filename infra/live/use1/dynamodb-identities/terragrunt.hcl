@@ -34,7 +34,7 @@ terraform {
 }
 
 inputs = {
-  table_name      = "km-identities"
+  table_name      = "${local.site_vars.locals.site.label}-identities"
   replica_regions = []
   tags = {
     "km:component" = "identity-tracking"
