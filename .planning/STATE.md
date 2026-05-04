@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: Completed 66-04-PLAN.md
-last_updated: "2026-05-04T15:25:37.698Z"
+stopped_at: Completed 66-05-PLAN.md
+last_updated: "2026-05-04T15:53:15.475Z"
 last_activity: 2026-05-04
 progress:
   total_phases: 73
-  completed_phases: 68
+  completed_phases: 69
   total_plans: 242
-  completed_plans: 242
+  completed_plans: 243
   percent: 93
 ---
 
@@ -282,6 +282,7 @@ Progress: [█████████░] 93%
 | Phase 66-multi-instance-support-configurable-resource-prefix-and-email-subdomain P01 | 179 | 2 tasks | 4 files |
 | Phase 66-multi-instance-support-configurable-resource-prefix-and-email-subdomain P02 | 1023 | 3 tasks | 14 files |
 | Phase 66-multi-instance-support-configurable-resource-prefix-and-email-subdomain P04 | 31539929 | 4 tasks | 22 files |
+| Phase 66-multi-instance-support-configurable-resource-prefix-and-email-subdomain P05 | 25min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -804,6 +805,8 @@ Recent decisions affecting current work:
 - [Phase 66]: mock_outputs in dependency blocks retain literal km- defaults (plan-time stubs, not deployed values)
 - [Phase 66]: ecs-spot-handler has no live config under infra/live/use1/ — management SCP only; module parameterized but no live wire needed
 - [Phase 66]: Lambda function_name rename caveat: default-prefix installs unaffected; custom-prefix migrations from default need terraform state mv for lambda-slack-bridge
+- [Phase 66]: ExportConfigEnvVars now exports KM_RESOURCE_PREFIX + KM_EMAIL_SUBDOMAIN; fetchAndCacheOutputs uses env var for prefix-aware bucket naming
+- [Phase 66]: km-config.yaml is gitignored by design; email_subdomain added on disk; grep audit residuals are pre-existing from phases 02-67 and documented
 
 ### Roadmap Evolution
 
@@ -892,6 +895,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-04T15:25:37.693Z
-Stopped at: Completed 66-04-PLAN.md
+Last session: 2026-05-04T15:53:15.470Z
+Stopped at: Completed 66-05-PLAN.md
 Resume file: None
