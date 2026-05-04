@@ -36,7 +36,7 @@ terraform {
 inputs = {
   artifact_bucket_name = get_env("KM_ARTIFACTS_BUCKET", "")
   artifact_bucket_arn  = "arn:aws:s3:::${get_env("KM_ARTIFACTS_BUCKET", "")}"
-  email_domain         = "sandboxes.${local.site_vars.locals.site.domain}"
+  email_domain         = "${local.site_vars.locals.site.email_subdomain}.${local.site_vars.locals.site.domain}"
   operator_email       = get_env("KM_OPERATOR_EMAIL", "")
   lambda_zip_path      = "${local.repo_root}/build/ttl-handler.zip"
   state_bucket         = local.site_vars.locals.backend.bucket
@@ -44,4 +44,8 @@ inputs = {
   region_label         = local.region_label
   create_handler_arn   = get_env("KM_CREATE_HANDLER_ARN", "")
   scheduler_role_arn   = get_env("KM_SCHEDULER_ROLE_ARN", "")
+  resource_prefix      = local.site_vars.locals.site.label
+  sandbox_table_name   = "${local.site_vars.locals.site.label}-sandboxes"
+  budget_table_name    = "${local.site_vars.locals.site.label}-budgets"
+  schedules_table_name = "${local.site_vars.locals.site.label}-schedules"
 }

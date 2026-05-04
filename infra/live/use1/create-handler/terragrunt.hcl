@@ -38,14 +38,17 @@ inputs = {
   lambda_zip_path      = "${local.repo_root}/build/create-handler.zip"
   artifact_bucket_name = get_env("KM_ARTIFACTS_BUCKET", "")
   artifact_bucket_arn  = "arn:aws:s3:::${get_env("KM_ARTIFACTS_BUCKET", "")}"
-  email_domain         = "sandboxes.${local.site_vars.locals.site.domain}"
+  email_domain         = "${local.site_vars.locals.site.email_subdomain}.${local.site_vars.locals.site.domain}"
   operator_email       = get_env("KM_OPERATOR_EMAIL", "")
   state_bucket         = local.site_vars.locals.backend.bucket
   state_prefix         = local.site_vars.locals.site.tf_state_prefix
   region_label         = local.region_label
   dynamodb_table_name  = local.site_vars.locals.backend.dynamodb_table
-  # DynamoDB budget table ARN — table name is km-budgets (see dynamodb-budget module)
-  dynamodb_budget_table_arn = "arn:aws:dynamodb:${local.region_full}:${local.account_id}:table/km-budgets"
+  # DynamoDB budget table ARN — derived from site.label to support custom prefixes
+  dynamodb_budget_table_arn = "arn:aws:dynamodb:${local.region_full}:${local.account_id}:table/${local.site_vars.locals.site.label}-budgets"
   # email_create_handler_arn — set after deploying the email-create-handler Lambda (22-02)
   email_create_handler_arn  = get_env("KM_EMAIL_CREATE_HANDLER_ARN", "")
+  resource_prefix            = local.site_vars.locals.site.label
+  sandbox_table_name         = "${local.site_vars.locals.site.label}-sandboxes"
+  identities_table_name      = "${local.site_vars.locals.site.label}-identities"
 }
