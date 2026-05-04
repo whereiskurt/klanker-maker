@@ -36,6 +36,7 @@ bin/
 /email-create-handler
 /create-handler
 /km-slack-bridge
+/km-slack
 
 /excalidraw.log
 
