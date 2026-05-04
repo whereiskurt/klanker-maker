@@ -1477,3 +1477,18 @@ Plans:
 - [ ] 68-10-PLAN.md — km create env injection (KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED + KM_SLACK_STREAM_TABLE) + operator audience warning with Slack channel member count
 - [x] 68-11-PLAN.md — km doctor checks: slack_transcript_table_exists + slack_files_write_scope + slack_transcript_stale_objects
 - [ ] 68-12-PLAN.md — Documentation (docs/slack-notifications.md + CLAUDE.md) + UAT (9 manual scenarios)
+
+### Phase 69: AWS API SCP-style allow/deny via SigV4 inspection
+
+**Spec:** `.planning/phases/69-aws-api-scp-style-allow-deny-via-sigv4-inspection/SPEC.md`
+**Goal:** Operators can declare a service-level AWS allowlist on a SandboxProfile and the http-proxy will allow, log-only, or block AWS API calls (any service that uses SigV4) made by the sandbox user, while platform sidecars (km-mail-poller, km-slack-inbound-poller, OTEL exporter, metadata sync) remain unaffected. Schema designed to be forward-compatible with operation-level entries (`s3:GetObject`) in a follow-up phase.
+**Requirements**: Spec-driven (no REQ-* IDs) — see SPEC.md locked decisions from brainstorming session 2026-05-04
+**Depends on:** Phase 6 (Bedrock metering + http-proxy MITM), Phase 40 (eBPF cgroup egress + transparent proxy maps), Phase 62/63 (audit-log sidecar event consumption)
+**Success Criteria** (what must be TRUE):
+  1. Profile with `inspection: enforce` + `awsAllowlist: ["*"]` lets `aws sts get-caller-identity` succeed; audit log shows `aws_api_allowed service=sts mode=enforce`
+  2. Profile with `inspection: enforce` + `awsAllowlist: []` returns HTTP 403 from the proxy on AWS CLI calls; audit log shows `aws_api_blocked reason=empty_allowlist`; concurrently `km email read <sandbox>` (driven by `km-mail-poller`) continues to work and emits `aws_api_platform` events
+  3. Profile with `inspection: observe` + `awsAllowlist: []` lets calls through but every call shows `aws_api_blocked` (mode=observe) — supports inventory-before-enforce
+  4. `km shell --learn` against a permissive profile generates `inspection: observe` + allowlist matching the exact set of services the operator touched
+  5. Profile with `inspection: enforce` + non-zero Bedrock budget but missing `bedrock-runtime` from allowlist fails `km validate` with a message naming the missing entry
+  6. `km doctor` runs `aws_inspection_uid_map` + `aws_allowlist_known_services` checks green on a sandbox using each of the three modes
+  7. `aws_api_allowed`, `aws_api_blocked`, `aws_api_platform` events flow through the audit-log sidecar to its configured destination with `sandbox_id`, `service`, `region`, `host`, `method`, `path`, `mode`, and (for platform events) `uid` + `caller` fields populated
