@@ -195,7 +195,7 @@ func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, 
 	domain := emailDomain(cfg)
 	tableName := cfg.IdentityTableName
 	if tableName == "" {
-		tableName = "km-identities"
+		tableName = cfg.GetResourcePrefix() + "-identities"
 	}
 
 	// Build real clients if not injected.
@@ -397,7 +397,7 @@ func runEmailRead(ctx context.Context, cfg *config.Config, deps *EmailReadDeps, 
 	domain := emailDomain(cfg)
 	tableName := cfg.IdentityTableName
 	if tableName == "" {
-		tableName = "km-identities"
+		tableName = cfg.GetResourcePrefix() + "-identities"
 	}
 
 	// Build real clients if not injected.

@@ -9,10 +9,10 @@ resource "aws_efs_file_system" "shared" {
   encrypted        = true
 
   tags = {
-    Name           = "km-shared-efs-${var.region_label}"
-    "km:label"     = var.km_label
-    "km:purpose"   = "shared-sandbox-filesystem"
-    "km:region"    = var.region_label
+    Name         = "km-shared-efs-${var.region_label}"
+    "km:label"   = var.km_label
+    "km:purpose" = "shared-sandbox-filesystem"
+    "km:region"  = var.region_label
   }
 }
 

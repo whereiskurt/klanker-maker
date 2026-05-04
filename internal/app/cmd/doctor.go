@@ -2518,11 +2518,7 @@ type doctorSandboxLister struct {
 }
 
 func (l *doctorSandboxLister) ListSandboxes(ctx context.Context, useTagScan bool) ([]kmaws.SandboxRecord, error) {
-	tableName := l.tableName
-	if tableName == "" {
-		tableName = "km-sandboxes"
-	}
-	inner := newRealLister(l.awsCfg, l.bucket, tableName)
+	inner := newRealLister(l.awsCfg, l.bucket, l.tableName)
 	return inner.ListSandboxes(ctx, useTagScan)
 }
 

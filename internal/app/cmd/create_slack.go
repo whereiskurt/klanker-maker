@@ -87,7 +87,8 @@ var channelIDRe = regexp.MustCompile(`^C[A-Z0-9]+$`)
 //     channel ID format + confirm bot membership via ChannelInfo; perSandbox=false
 //     (operator-controlled channel — do not archive at destroy).
 func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandboxID, alias string,
-	api SlackAPI, ssmStore SSMParamStore) (channelID string, perSandbox bool, err error) {
+	api SlackAPI, ssmStore SSMParamStore, ssmPrefix string) (channelID string, perSandbox bool, err error) {
+	slackPrefix := ssmPrefix + "slack/"
 
 	cli := p.Spec.CLI
 	if cli == nil || cli.NotifySlackEnabled == nil || !*cli.NotifySlackEnabled {
@@ -144,9 +145,9 @@ func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandbox
 		}
 
 		// Fetch the invite email from SSM so the bot can receive cross-workspace invites.
-		inviteEmail, ssmErr := ssmStore.Get(ctx, "/km/slack/invite-email", false)
+		inviteEmail, ssmErr := ssmStore.Get(ctx, slackPrefix+"invite-email", false)
 		if ssmErr != nil || inviteEmail == "" {
-			return "", false, fmt.Errorf("invite email not configured at /km/slack/invite-email — run km slack init first")
+			return "", false, fmt.Errorf("invite email not configured at %sinvite-email — run km slack init first", slackPrefix)
 		}
 
 		if inviteErr := api.InviteShared(ctx, chID, inviteEmail); inviteErr != nil {
@@ -160,9 +161,9 @@ func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandbox
 	}
 
 	// Mode 1 — shared (default): read channel ID from SSM.
-	chID, ssmErr := ssmStore.Get(ctx, "/km/slack/shared-channel-id", false)
+	chID, ssmErr := ssmStore.Get(ctx, slackPrefix+"shared-channel-id", false)
 	if ssmErr != nil || chID == "" {
-		return "", false, errors.New("/km/slack/shared-channel-id not set — run km slack init first")
+		return "", false, fmt.Errorf("%sshared-channel-id not set — run km slack init first", slackPrefix)
 	}
 	return chID, false, nil
 }
@@ -277,14 +278,16 @@ func runStep11dInject(
 	sandboxID, slackChannelID string,
 	retryMax int,
 	retryDelay time.Duration,
+	ssmPrefix string,
 ) {
 	_ = retryMax
 	_ = retryDelay
-	bridgeURL, _ := ssmStore.Get(ctx, "/km/slack/bridge-url", false)
+	bridgeURLPath := ssmPrefix + "slack/bridge-url"
+	bridgeURL, _ := ssmStore.Get(ctx, bridgeURLPath, false)
 	if bridgeURL == "" {
 		log.Warn().Str("sandbox_id", sandboxID).
-			Msg("Step 11d: /km/slack/bridge-url not configured — Slack env not published (run km slack init)")
-		fmt.Fprintf(os.Stderr, "  ⚠ Slack: /km/slack/bridge-url not configured — env not published (run km slack init)\n")
+			Msg("Step 11d: bridge-url SSM param not configured — Slack env not published (run km slack init)")
+		fmt.Fprintf(os.Stderr, "  ⚠ Slack: %s not configured — env not published (run km slack init)\n", bridgeURLPath)
 		return
 	}
 	if err := writeSlackChannelIDToSSM(ctx, putParam, sandboxID, slackChannelID); err != nil {

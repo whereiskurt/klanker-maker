@@ -2967,7 +2967,11 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 
 	budgetTable := os.Getenv("KM_BUDGET_TABLE")
 	if budgetTable == "" {
-		budgetTable = "km-budgets"
+		prefix := os.Getenv("KM_RESOURCE_PREFIX")
+		if prefix == "" {
+			prefix = "km"
+		}
+		budgetTable = prefix + "-budgets"
 	}
 
 	params := userDataParams{

@@ -476,7 +476,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			return fmt.Errorf("profile requires Slack notifications but %sslack/bot-token is not configured — run km slack init first", cfg.GetSsmPrefix())
 		}
 		slackClient := slack.NewClient(botToken, nil)
-		chID, perSb, slackErr := resolveSlackChannel(ctx, resolvedProfile, sandboxID, aliasOverride, slackClient, ssmStore)
+		chID, perSb, slackErr := resolveSlackChannel(ctx, resolvedProfile, sandboxID, aliasOverride, slackClient, ssmStore, cfg.GetSsmPrefix())
 		if slackErr != nil {
 			return fmt.Errorf("provision Slack channel: %w", slackErr)
 		}
@@ -849,7 +849,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			step11dSSMRetryMax   = 6
 			step11dSSMRetryDelay = 5 * time.Second
 		)
-		runStep11dInject(ctx, ssmStoreForInject, putParamForInject, sandboxID, slackChannelID, step11dSSMRetryMax, step11dSSMRetryDelay)
+		runStep11dInject(ctx, ssmStoreForInject, putParamForInject, sandboxID, slackChannelID, step11dSSMRetryMax, step11dSSMRetryDelay, cfg.GetSsmPrefix())
 	}
 
 	// Step 11e: Provision per-sandbox SQS FIFO inbound queue (Phase 67-06).

@@ -99,11 +99,11 @@ resource "aws_iam_role" "execution_role" {
   })
 
   tags = {
-    Name             = "km-${each.value.family}-exec-role"
-    TaskName         = each.key
-    Region           = var.region_label
-    "km:label"       = var.km_label
-    "km:sandbox-id"  = var.sandbox_id
+    Name            = "km-${each.value.family}-exec-role"
+    TaskName        = each.key
+    Region          = var.region_label
+    "km:label"      = var.km_label
+    "km:sandbox-id" = var.sandbox_id
   }
 }
 
@@ -296,11 +296,11 @@ resource "aws_ecs_task_definition" "task" {
   ])
 
   tags = {
-    Name             = each.value.family
-    TaskName         = each.key
-    Cluster          = each.value.cluster_name
-    Region           = var.region_label
-    "km:label"       = var.km_label
-    "km:sandbox-id"  = var.sandbox_id
+    Name            = each.value.family
+    TaskName        = each.key
+    Cluster         = each.value.cluster_name
+    Region          = var.region_label
+    "km:label"      = var.km_label
+    "km:sandbox-id" = var.sandbox_id
   }
 }

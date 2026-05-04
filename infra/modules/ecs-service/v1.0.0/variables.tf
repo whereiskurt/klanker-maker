@@ -51,7 +51,7 @@ variable "ecs_services" {
       capacity_provider = string
       weight            = number
       base              = optional(number, 0)
-    })), [
+      })), [
       {
         capacity_provider = "FARGATE_SPOT"
         weight            = 1

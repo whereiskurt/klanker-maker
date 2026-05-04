@@ -125,7 +125,7 @@ func TestResolveSlack_NotEnabled_Skipped(t *testing.T) {
 	api := &fakeSlackAPI{}
 	ssmStore := &fakeSSMParamStore{}
 
-	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "myalias", api, ssmStore)
+	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "myalias", api, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -139,7 +139,7 @@ func TestResolveSlack_NilEnabled_Skipped(t *testing.T) {
 	api := &fakeSlackAPI{}
 	ssmStore := &fakeSSMParamStore{}
 
-	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore)
+	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -157,7 +157,7 @@ func TestResolveSlack_SharedMode_HappyPath(t *testing.T) {
 		},
 	}
 
-	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore)
+	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestResolveSlack_SharedMode_NotConfigured_Error(t *testing.T) {
 	api := &fakeSlackAPI{}
 	ssmStore := &fakeSSMParamStore{} // no /km/slack/shared-channel-id
 
-	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore)
+	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore, "/km/")
 	if err == nil {
 		t.Fatal("expected error when shared channel not configured")
 	}
@@ -197,7 +197,7 @@ func TestResolveSlack_PerSandbox_HappyPath_WithAlias(t *testing.T) {
 		},
 	}
 
-	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore)
+	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestResolveSlack_PerSandbox_HappyPath_NoAlias(t *testing.T) {
 		},
 	}
 
-	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc12345", "", api, ssmStore)
+	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc12345", "", api, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestResolveSlack_PerSandbox_AliasWithDots(t *testing.T) {
 		},
 	}
 
-	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "research.team-A", api, ssmStore)
+	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "research.team-A", api, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestResolveSlack_PerSandbox_NameTaken_Error(t *testing.T) {
 		},
 	}
 
-	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore)
+	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
 	if err == nil {
 		t.Fatal("expected error for name_taken")
 	}
@@ -301,7 +301,7 @@ func TestResolveSlack_PerSandbox_InviteFails_Error(t *testing.T) {
 		},
 	}
 
-	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore)
+	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
 	if err == nil {
 		t.Fatal("expected error when invite fails")
 	}
@@ -318,7 +318,7 @@ func TestResolveSlack_Override_HappyPath_BotIsMember(t *testing.T) {
 	}
 	ssmStore := &fakeSSMParamStore{}
 
-	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore)
+	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore, "/km/")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestResolveSlack_Override_BotNotMember_Error(t *testing.T) {
 	}
 	ssmStore := &fakeSSMParamStore{}
 
-	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore)
+	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore, "/km/")
 	if err == nil {
 		t.Fatal("expected error when bot is not a member")
 	}
@@ -360,7 +360,7 @@ func TestResolveSlack_Override_ChannelNotFound_Error(t *testing.T) {
 	}
 	ssmStore := &fakeSSMParamStore{}
 
-	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore)
+	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore, "/km/")
 	if err == nil {
 		t.Fatal("expected error when channel not found")
 	}
@@ -375,7 +375,7 @@ func TestResolveSlack_InvalidOverrideID_Error(t *testing.T) {
 	api := &fakeSlackAPI{}
 	ssmStore := &fakeSSMParamStore{}
 
-	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore)
+	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "", api, ssmStore, "/km/")
 	if err == nil {
 		t.Fatal("expected error for invalid channel ID format")
 	}
@@ -404,7 +404,7 @@ func TestStep11d_NoBridgeURL_SkipsPut(t *testing.T) {
 	store := &fakeSSMParamStore{params: map[string]string{}}
 	put := &fakePutParam{}
 	got := captureStderr(t, func() {
-		runStep11dInject(context.Background(), store, put.put, "sb-test", "CTEST", 1, time.Microsecond)
+		runStep11dInject(context.Background(), store, put.put, "sb-test", "CTEST", 1, time.Microsecond, "/km/")
 	})
 	if !strings.Contains(got, "⚠ Slack: /km/slack/bridge-url not configured") {
 		t.Errorf("stderr %q should contain bridge-url not-configured message", got)
@@ -418,7 +418,7 @@ func TestStep11d_PutFailure_LogsWarn(t *testing.T) {
 	store := &fakeSSMParamStore{params: map[string]string{"/km/slack/bridge-url": "https://bridge.example.com"}}
 	put := &fakePutParam{err: errors.New("ssm putparam failed")}
 	got := captureStderr(t, func() {
-		runStep11dInject(context.Background(), store, put.put, "sb-test", "CTEST", 1, time.Microsecond)
+		runStep11dInject(context.Background(), store, put.put, "sb-test", "CTEST", 1, time.Microsecond, "/km/")
 	})
 	if !strings.Contains(got, "⚠ Slack: SSM PutParameter failed") {
 		t.Errorf("stderr %q should contain SSM PutParameter failed warn", got)
@@ -432,7 +432,7 @@ func TestStep11d_Success_WritesChannelIDParam(t *testing.T) {
 	store := &fakeSSMParamStore{params: map[string]string{"/km/slack/bridge-url": "https://bridge.example.com"}}
 	put := &fakePutParam{}
 	got := captureStderr(t, func() {
-		runStep11dInject(context.Background(), store, put.put, "sb-test", "C-TEST", 1, time.Microsecond)
+		runStep11dInject(context.Background(), store, put.put, "sb-test", "C-TEST", 1, time.Microsecond, "/km/")
 	})
 	if !strings.Contains(got, "✓ Slack: channel C-TEST published to SSM Parameter Store") {
 		t.Errorf("stderr %q should announce successful publish", got)

@@ -120,10 +120,7 @@ func runClone(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, s
 		if awsErr != nil {
 			return fmt.Errorf("load AWS config: %w", awsErr)
 		}
-		tableName := cfg.SandboxTableName
-		if tableName == "" {
-			tableName = "km-sandboxes"
-		}
+		tableName := cfg.GetSandboxTableName()
 		realFetcher := newRealFetcher(awsCfg, cfg.StateBucket, tableName)
 		rec, err = realFetcher.FetchSandbox(ctx, sourceID)
 	}
@@ -390,10 +387,7 @@ func downloadWorkspaceToClone(ctx context.Context, cfg *config.Config, cloneID, 
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
 		}
-		tableName := cfg.SandboxTableName
-		if tableName == "" {
-			tableName = "km-sandboxes"
-		}
+		tableName := cfg.GetSandboxTableName()
 		cloneFetcher = newRealFetcher(awsCfg, cfg.StateBucket, tableName)
 	} else {
 		// In tests, skip post-provision workspace download
@@ -456,10 +450,7 @@ func waitForCloneRunning(ctx context.Context, cfg *config.Config, cloneAlias str
 	if err != nil {
 		return "", fmt.Errorf("load AWS config: %w", err)
 	}
-	tableName := cfg.SandboxTableName
-	if tableName == "" {
-		tableName = "km-sandboxes"
-	}
+	tableName := cfg.GetSandboxTableName()
 	dynamoClient := dynamodb.NewFromConfig(awsCfg)
 
 	deadline := time.Now().Add(timeout)

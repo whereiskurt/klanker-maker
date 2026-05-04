@@ -74,11 +74,12 @@ func runInfo(ctx context.Context, cfg *config.Config, w io.Writer) error {
 	fmt.Fprintf(w, "\n")
 
 	// Infrastructure — DynamoDB tables
+	prefix := cfg.GetResourcePrefix()
 	fmt.Fprintf(w, "DynamoDB Tables\n")
-	fmt.Fprintf(w, "  Sandboxes:        %s\n", valOrDefault(cfg.SandboxTableName, "km-sandboxes"))
-	fmt.Fprintf(w, "  Budgets:          %s\n", valOrDefault(cfg.BudgetTableName, "km-budgets"))
-	fmt.Fprintf(w, "  Identities:       %s\n", valOrDefault(cfg.IdentityTableName, "km-identities"))
-	fmt.Fprintf(w, "  Schedules:        %s\n", valOrDefault(cfg.SchedulesTableName, "km-schedules"))
+	fmt.Fprintf(w, "  Sandboxes:        %s\n", valOrDefault(cfg.SandboxTableName, prefix+"-sandboxes"))
+	fmt.Fprintf(w, "  Budgets:          %s\n", valOrDefault(cfg.BudgetTableName, prefix+"-budgets"))
+	fmt.Fprintf(w, "  Identities:       %s\n", valOrDefault(cfg.IdentityTableName, prefix+"-identities"))
+	fmt.Fprintf(w, "  Schedules:        %s\n", valOrDefault(cfg.SchedulesTableName, prefix+"-schedules"))
 	fmt.Fprintf(w, "\n")
 
 	// Email — operator + sandbox email system

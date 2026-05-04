@@ -416,7 +416,7 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 	// Write safe phrase to SSM if configured (idempotent — overwrites to stay in sync with config).
 	if cfg.SafePhrase != "" {
 		ssmClient := ssm.NewFromConfig(awsCfg)
-		safePhraseKey := "/km/config/remote-create/safe-phrase"
+		safePhraseKey := cfg.GetSsmPrefix() + "config/remote-create/safe-phrase"
 		_, putErr := ssmClient.PutParameter(ctx, &ssm.PutParameterInput{
 			Name:      aws.String(safePhraseKey),
 			Value:     aws.String(cfg.SafePhrase),
@@ -453,9 +453,9 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 			}
 			identityTableName := cfg.IdentityTableName
 			if identityTableName == "" {
-				identityTableName = "km-identities"
+				identityTableName = cfg.GetResourcePrefix() + "-identities"
 			}
-			operatorEmail := fmt.Sprintf("operator@sandboxes.%s", domain)
+			operatorEmail := fmt.Sprintf("operator@%s", cfg.GetEmailDomain())
 			dynamoClient := dynamodb.NewFromConfig(awsCfg)
 			if pubErr := awspkg.PublishIdentity(ctx, dynamoClient, identityTableName, operatorID, operatorEmail, pubKey, nil, "required", "required", "off", "operator", []string{"*"}); pubErr != nil {
 				fmt.Printf("  ⚠ Operator identity publish failed: %v\n", pubErr)

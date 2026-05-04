@@ -189,19 +189,22 @@ func Load() (*Config, error) {
 	v.SetDefault("ttl_lambda_arn", "")
 	v.SetDefault("scheduler_role_arn", "")
 
-	// Defaults for new platform fields
+	// Defaults for new platform fields.
+	// Note: table names default to "" so prefix-aware helpers like
+	// GetSandboxTableName() can derive {prefix}-{table} from resource_prefix.
+	// Hardcoded "km-*" defaults would defeat multi-instance support.
 	v.SetDefault("max_sandboxes", 10)
-	v.SetDefault("budget_table_name", "km-budgets")
-	v.SetDefault("identity_table_name", "km-identities")
-	v.SetDefault("sandbox_table_name", "km-sandboxes")
+	v.SetDefault("budget_table_name", "")
+	v.SetDefault("identity_table_name", "")
+	v.SetDefault("sandbox_table_name", "")
 	v.SetDefault("artifacts_bucket", "")
 	v.SetDefault("aws_profile", "klanker-terraform")
 	v.SetDefault("rsync_paths", []string{".claude", ".bashrc", ".bash_profile", ".gitconfig"})
-	v.SetDefault("schedules_table_name", "km-schedules")
+	v.SetDefault("schedules_table_name", "")
 	v.SetDefault("create_handler_lambda_arn", "")
 	v.SetDefault("doctor_stale_ami_days", 30)
-	v.SetDefault("slack_threads_table_name", "km-slack-threads")
-	v.SetDefault("slack_stream_messages_table_name", "km-slack-stream-messages")
+	v.SetDefault("slack_threads_table_name", "")
+	v.SetDefault("slack_stream_messages_table_name", "")
 	v.SetDefault("resource_prefix", "km")
 	v.SetDefault("email_subdomain", "sandboxes")
 
@@ -410,6 +413,42 @@ func (c *Config) GetSandboxTableName() string {
 		return c.SandboxTableName
 	}
 	return c.GetResourcePrefix() + "-sandboxes"
+}
+
+// GetBudgetTableName returns the DynamoDB budgets table name.
+// Derives from GetResourcePrefix() + "-budgets", defaulting to "km-budgets".
+func (c *Config) GetBudgetTableName() string {
+	if c == nil {
+		return "km-budgets"
+	}
+	if c.BudgetTableName != "" {
+		return c.BudgetTableName
+	}
+	return c.GetResourcePrefix() + "-budgets"
+}
+
+// GetIdentityTableName returns the DynamoDB identities table name.
+// Derives from GetResourcePrefix() + "-identities", defaulting to "km-identities".
+func (c *Config) GetIdentityTableName() string {
+	if c == nil {
+		return "km-identities"
+	}
+	if c.IdentityTableName != "" {
+		return c.IdentityTableName
+	}
+	return c.GetResourcePrefix() + "-identities"
+}
+
+// GetSchedulesTableName returns the DynamoDB schedules table name.
+// Derives from GetResourcePrefix() + "-schedules", defaulting to "km-schedules".
+func (c *Config) GetSchedulesTableName() string {
+	if c == nil {
+		return "km-schedules"
+	}
+	if c.SchedulesTableName != "" {
+		return c.SchedulesTableName
+	}
+	return c.GetResourcePrefix() + "-schedules"
 }
 
 // awsProfileExists checks whether a named AWS profile is defined in

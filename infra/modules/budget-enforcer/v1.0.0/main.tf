@@ -200,8 +200,8 @@ resource "aws_iam_role_policy" "s3_profiles" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect = "Allow"
-        Action = ["s3:GetObject"]
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
         Resource = "arn:aws:s3:::${var.state_bucket}/artifacts/${var.sandbox_id}/*"
       }
     ]
@@ -310,7 +310,7 @@ resource "aws_scheduler_schedule" "budget_check" {
   group_name = "default"
 
   # Run every minute for real-time compute cost tracking
-  schedule_expression         = "rate(1 minute)"
+  schedule_expression          = "rate(1 minute)"
   schedule_expression_timezone = "UTC"
 
   # NONE = continue running until explicitly deleted (we delete on sandbox destroy)

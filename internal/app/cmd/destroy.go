@@ -101,7 +101,7 @@ func NewDestroyCmdWithPublisher(cfg *config.Config, pub RemoteCommandPublisher) 
 							fmt.Printf("  [info] Docker substrate — destroying locally\n")
 						} else {
 							// Still remote: run Slack teardown locally before dispatch.
-							runSlackTeardown(ctx, remoteAWSCfg, meta)
+							runSlackTeardown(ctx, remoteAWSCfg, meta, cfg.GetSsmPrefix())
 						}
 					}
 				}
@@ -493,7 +493,7 @@ locals {
 			// Phase 63 — per-sandbox Slack archive flow (local destroy path).
 			// runSlackTeardown is the shared helper; the remote path calls it before dispatch.
 			// Non-fatal: destroy has already succeeded; Slack failures are WARN-logged.
-			runSlackTeardown(ctx, awsCfg, existingMeta)
+			runSlackTeardown(ctx, awsCfg, existingMeta, cfg.GetSsmPrefix())
 		} else {
 			// S3 fallback for alias read.
 			stateBucketForAlias := cfg.StateBucket
