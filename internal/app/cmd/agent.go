@@ -396,13 +396,7 @@ Examples:
 				if err != nil {
 					return fmt.Errorf("load AWS config: %w", err)
 				}
-				fetcher = newRealFetcher(awsCfg, cfg.StateBucket, func() string {
-					t := cfg.SandboxTableName
-					if t == "" {
-						t = "km-sandboxes"
-					}
-					return t
-				}())
+				fetcher = newRealFetcher(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())
 			}
 			if execFn == nil {
 				execFn = defaultShellExec

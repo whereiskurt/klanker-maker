@@ -253,7 +253,7 @@ func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
 		}
-		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, func() string { t := cfg.SandboxTableName; if t == "" { t = "km-sandboxes" }; return t }())
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())
 	}
 
 	if execFn == nil {
@@ -486,7 +486,7 @@ func runPortForward(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetch
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
 		}
-		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, func() string { t := cfg.SandboxTableName; if t == "" { t = "km-sandboxes" }; return t }())
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())
 	}
 	if execFn == nil {
 		execFn = defaultShellExec
@@ -751,13 +751,7 @@ func runLearnPostExit(ctx context.Context, cfg *config.Config, fetcher SandboxFe
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
 		}
-		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, func() string {
-			t := cfg.SandboxTableName
-			if t == "" {
-				t = "km-sandboxes"
-			}
-			return t
-		}())
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())
 	}
 
 	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
@@ -876,11 +870,7 @@ func flushEC2Observations(ctx context.Context, cfg *config.Config, sandboxID str
 	}
 
 	// Look up instance ID from DynamoDB record.
-	tableName := cfg.SandboxTableName
-	if tableName == "" {
-		tableName = "km-sandboxes"
-	}
-	fetcher := newRealFetcher(awsCfg, cfg.StateBucket, tableName)
+	fetcher := newRealFetcher(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())
 	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
 	if err != nil {
 		return fmt.Errorf("fetch sandbox: %w", err)
