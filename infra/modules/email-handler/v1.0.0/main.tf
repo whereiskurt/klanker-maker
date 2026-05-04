@@ -6,7 +6,7 @@ data "aws_region" "current" {}
 # ============================================================
 
 resource "aws_iam_role" "email_handler" {
-  name = "km-email-handler"
+  name = "${var.resource_prefix}-email-handler"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -27,7 +27,7 @@ resource "aws_iam_role" "email_handler" {
 
 # Policy: CloudWatch Logs
 resource "aws_iam_role_policy" "cloudwatch_logs" {
-  name = "km-email-handler-cw-logs"
+  name = "${var.resource_prefix}-email-handler-cw-logs"
   role = aws_iam_role.email_handler.id
 
   policy = jsonencode({
@@ -48,7 +48,7 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
 
 # Policy: S3 — read emails from mail/create/ prefix, read metadata, upload profiles
 resource "aws_iam_role_policy" "s3_access" {
-  name = "km-email-handler-s3"
+  name = "${var.resource_prefix}-email-handler-s3"
   role = aws_iam_role.email_handler.id
 
   policy = jsonencode({
@@ -81,7 +81,7 @@ resource "aws_iam_role_policy" "s3_access" {
 
 # Policy: SES — send reply emails
 resource "aws_iam_role_policy" "ses_send" {
-  name = "km-email-handler-ses"
+  name = "${var.resource_prefix}-email-handler-ses"
   role = aws_iam_role.email_handler.id
 
   policy = jsonencode({
@@ -98,7 +98,7 @@ resource "aws_iam_role_policy" "ses_send" {
 
 # Policy: SSM — read safe phrase parameter
 resource "aws_iam_role_policy" "ssm_read" {
-  name = "km-email-handler-ssm"
+  name = "${var.resource_prefix}-email-handler-ssm"
   role = aws_iam_role.email_handler.id
 
   policy = jsonencode({
@@ -115,7 +115,7 @@ resource "aws_iam_role_policy" "ssm_read" {
 
 # Policy: EventBridge — publish SandboxCreate events
 resource "aws_iam_role_policy" "eventbridge_publish" {
-  name = "km-email-handler-eventbridge"
+  name = "${var.resource_prefix}-email-handler-eventbridge"
   role = aws_iam_role.email_handler.id
 
   policy = jsonencode({
@@ -134,7 +134,7 @@ resource "aws_iam_role_policy" "eventbridge_publish" {
 resource "aws_iam_role_policy" "scheduler" {
   count = var.scheduler_role_arn != "" ? 1 : 0
 
-  name = "km-email-handler-scheduler"
+  name = "${var.resource_prefix}-email-handler-scheduler"
   role = aws_iam_role.email_handler.id
 
   policy = jsonencode({
@@ -147,7 +147,7 @@ resource "aws_iam_role_policy" "scheduler" {
           "scheduler:DeleteSchedule",
           "scheduler:GetSchedule",
         ]
-        Resource = "arn:aws:scheduler:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:schedule/km-at/*"
+        Resource = "arn:aws:scheduler:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:schedule/${var.resource_prefix}-at/*"
       },
       {
         Effect   = "Allow"
@@ -160,7 +160,7 @@ resource "aws_iam_role_policy" "scheduler" {
 
 # Policy: KMS — decrypt SSM SecureString parameters and Lambda env vars
 resource "aws_iam_role_policy" "kms_decrypt" {
-  name = "km-email-handler-kms"
+  name = "${var.resource_prefix}-email-handler-kms"
   role = aws_iam_role.email_handler.id
 
   policy = jsonencode({
@@ -178,15 +178,15 @@ resource "aws_iam_role_policy" "kms_decrypt" {
 
 # Policy: Bedrock — invoke Haiku model for AI email interpretation
 resource "aws_iam_role_policy" "bedrock_invoke" {
-  name = "km-email-handler-bedrock"
+  name = "${var.resource_prefix}-email-handler-bedrock"
   role = aws_iam_role.email_handler.id
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = ["bedrock:InvokeModel"]
+        Effect = "Allow"
+        Action = ["bedrock:InvokeModel"]
         Resource = [
           "arn:aws:bedrock:${data.aws_region.current.name}::foundation-model/*anthropic*",
           "arn:aws:bedrock:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:inference-profile/*anthropic*",
@@ -199,7 +199,7 @@ resource "aws_iam_role_policy" "bedrock_invoke" {
 
 # Policy: DynamoDB km-sandboxes — read/write sandbox metadata
 resource "aws_iam_role_policy" "dynamodb_sandboxes" {
-  name = "km-email-handler-dynamodb-sandboxes"
+  name = "${var.resource_prefix}-email-handler-dynamodb-sandboxes"
   role = aws_iam_role.email_handler.id
 
   policy = jsonencode({
@@ -217,8 +217,8 @@ resource "aws_iam_role_policy" "dynamodb_sandboxes" {
           "dynamodb:Query",
         ]
         Resource = [
-          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/km-sandboxes",
-          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/km-sandboxes/index/alias-index",
+          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.sandbox_table_name}",
+          "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.sandbox_table_name}/index/alias-index",
         ]
       }
     ]
@@ -230,7 +230,7 @@ resource "aws_iam_role_policy" "dynamodb_sandboxes" {
 # ============================================================
 
 resource "aws_lambda_function" "email_handler" {
-  function_name = "km-email-create-handler"
+  function_name = "${var.resource_prefix}-email-create-handler"
   description   = "Processes operator emails: create sandboxes, check status"
   role          = aws_iam_role.email_handler.arn
 
@@ -249,7 +249,7 @@ resource "aws_lambda_function" "email_handler" {
       KM_STATE_BUCKET        = var.state_bucket
       KM_EMAIL_DOMAIN        = var.email_domain
       KM_SAFE_PHRASE_SSM_KEY = var.safe_phrase_ssm_key
-      SANDBOX_TABLE_NAME     = "km-sandboxes"
+      SANDBOX_TABLE_NAME     = var.sandbox_table_name
       BEDROCK_MODEL_ID       = var.bedrock_model_id
       KM_SCHEDULER_ROLE_ARN  = var.scheduler_role_arn
       KM_CREATE_HANDLER_ARN  = var.create_handler_arn
@@ -269,7 +269,7 @@ resource "aws_lambda_function" "email_handler" {
 
 # CloudWatch Log Group
 resource "aws_cloudwatch_log_group" "email_handler" {
-  name              = "/aws/lambda/km-email-create-handler"
+  name              = "/aws/lambda/${var.resource_prefix}-email-create-handler"
   retention_in_days = 30
 
   tags = {

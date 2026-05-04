@@ -2,7 +2,7 @@ data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
 locals {
-  function_name = "km-slack-bridge"
+  function_name = "${var.resource_prefix}-slack-bridge"
 }
 
 # ============================================================

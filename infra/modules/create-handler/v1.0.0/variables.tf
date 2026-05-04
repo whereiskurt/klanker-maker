@@ -62,3 +62,21 @@ variable "scp_trusted_role_arns" {
   type        = list(string)
   default     = []
 }
+
+variable "resource_prefix" {
+  description = "Prefix for all resource names (default: km)"
+  type        = string
+  default     = "km"
+}
+
+variable "sandbox_table_name" {
+  description = "Name of the DynamoDB sandbox metadata table"
+  type        = string
+  default     = "km-sandboxes"
+}
+
+variable "identities_table_name" {
+  description = "Name of the DynamoDB identities table"
+  type        = string
+  default     = "km-identities"
+}
