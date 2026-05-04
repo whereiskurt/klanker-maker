@@ -1410,7 +1410,7 @@ Plans:
 
 **Requirements**: REQ-PLATFORM-MULTI-INSTANCE (new), REQ-CONFIG-EXTENSIBILITY (extends existing config model from Phase 65)
 **Depends on:** Phase 65 (four-account config rename — this phase extends the same config struct)
-**Plans:** 3/5 plans executed
+**Plans:** 4/5 plans executed
 
 Plans:
 - [ ] 66-01-PLAN.md — Config struct (ResourcePrefix + EmailSubdomain) + helper methods (GetResourcePrefix, GetEmailDomain, GetSsmPrefix) + DoctorConfigProvider extension + Wave 0 unit tests

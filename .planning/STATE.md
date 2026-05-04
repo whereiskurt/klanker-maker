@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: Completed 66-02-PLAN.md
-last_updated: "2026-05-04T14:18:49.931Z"
+stopped_at: Completed 66-04-PLAN.md
+last_updated: "2026-05-04T15:25:37.698Z"
 last_activity: 2026-05-04
 progress:
   total_phases: 73
   completed_phases: 68
   total_plans: 242
-  completed_plans: 240
+  completed_plans: 242
   percent: 93
 ---
 
@@ -281,6 +281,7 @@ Progress: [█████████░] 93%
 | Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P10 | 13min | 2 tasks | 5 files |
 | Phase 66-multi-instance-support-configurable-resource-prefix-and-email-subdomain P01 | 179 | 2 tasks | 4 files |
 | Phase 66-multi-instance-support-configurable-resource-prefix-and-email-subdomain P02 | 1023 | 3 tasks | 14 files |
+| Phase 66-multi-instance-support-configurable-resource-prefix-and-email-subdomain P04 | 31539929 | 4 tasks | 22 files |
 
 ## Accumulated Context
 
@@ -800,6 +801,9 @@ Recent decisions affecting current work:
 - [Phase 66-02]: AMIName() uses variadic prefix string to preserve backward compat; caller passes cfg.GetResourcePrefix()+"-"
 - [Phase 66-02]: Lambda getEmailDomain() uses lazy env read (not init-time var) so test tools can override at test time
 - [Phase 66-02]: HCL template deferrals to plan 04 use inline TODO on same line as literal to enable grep audit
+- [Phase 66]: mock_outputs in dependency blocks retain literal km- defaults (plan-time stubs, not deployed values)
+- [Phase 66]: ecs-spot-handler has no live config under infra/live/use1/ — management SCP only; module parameterized but no live wire needed
+- [Phase 66]: Lambda function_name rename caveat: default-prefix installs unaffected; custom-prefix migrations from default need terraform state mv for lambda-slack-bridge
 
 ### Roadmap Evolution
 
@@ -888,6 +892,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-04T14:18:49.925Z
-Stopped at: Completed 66-02-PLAN.md
+Last session: 2026-05-04T15:25:37.693Z
+Stopped at: Completed 66-04-PLAN.md
 Resume file: None
