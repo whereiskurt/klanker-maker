@@ -156,6 +156,12 @@ type Config struct {
 	// Phase 67 ships the shim helper so downstream code can use the helper
 	// unconditionally. Maps to km-config.yaml key resource_prefix.
 	ResourcePrefix string
+
+	// EmailSubdomain is the subdomain used for SES email addresses
+	// ({sandboxID}@{subdomain}.{domain}). Maps to km-config.yaml key
+	// email_subdomain. Defaults to "sandboxes" via GetEmailDomain().
+	// One-time choice at km init — changing requires fresh DNS/SES verification.
+	EmailSubdomain string
 }
 
 // isSetByEnv returns true if the given viper key has been overridden by an environment
@@ -197,6 +203,7 @@ func Load() (*Config, error) {
 	v.SetDefault("slack_threads_table_name", "km-slack-threads")
 	v.SetDefault("slack_stream_messages_table_name", "km-slack-stream-messages")
 	v.SetDefault("resource_prefix", "km")
+	v.SetDefault("email_subdomain", "sandboxes")
 
 	// Primary config file: ~/.km/config.yaml
 	v.SetConfigName("config")
@@ -264,6 +271,7 @@ func Load() (*Config, error) {
 			"slack_threads_table_name",
 			"slack_stream_messages_table_name",
 			"resource_prefix",
+			"email_subdomain",
 		} {
 			if v2.IsSet(key) && !isSetByEnv(v, key) {
 				v.Set(key, v2.Get(key))
@@ -305,6 +313,7 @@ func Load() (*Config, error) {
 		SlackThreadsTableName:        v.GetString("slack_threads_table_name"),
 		SlackStreamMessagesTableName: v.GetString("slack_stream_messages_table_name"),
 		ResourcePrefix:               v.GetString("resource_prefix"),
+		EmailSubdomain:               v.GetString("email_subdomain"),
 	}
 
 	// If the AWS profile was set by default (not explicitly configured), verify it
@@ -334,6 +343,27 @@ func (c *Config) GetResourcePrefix() string {
 		return "km"
 	}
 	return c.ResourcePrefix
+}
+
+// GetEmailDomain returns the full email domain (e.g. "sandboxes.klankermaker.ai").
+// Falls back to "sandboxes.klankermaker.ai" when both fields are empty or the receiver
+// is nil — mirrors the nil-safety pattern used by GetResourcePrefix.
+func (c *Config) GetEmailDomain() string {
+	sub := "sandboxes"
+	if c != nil && c.EmailSubdomain != "" {
+		sub = c.EmailSubdomain
+	}
+	domain := "klankermaker.ai"
+	if c != nil && c.Domain != "" {
+		domain = c.Domain
+	}
+	return sub + "." + domain
+}
+
+// GetSsmPrefix returns the SSM parameter path prefix (e.g. "/km/").
+// Uses GetResourcePrefix() which handles nil-safety and the "km" default.
+func (c *Config) GetSsmPrefix() string {
+	return "/" + c.GetResourcePrefix() + "/"
 }
 
 // GetSlackThreadsTableName returns the Slack-threads DynamoDB table name.

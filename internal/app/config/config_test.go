@@ -438,6 +438,85 @@ func TestConfig_NilReceiverSafe(t *testing.T) {
 	}
 }
 
+// TestGetResourcePrefix_Custom verifies that GetResourcePrefix returns the configured value.
+func TestGetResourcePrefix_Custom(t *testing.T) {
+	c := &config.Config{ResourcePrefix: "alt"}
+	if got := c.GetResourcePrefix(); got != "alt" {
+		t.Fatalf("expected 'alt', got %q", got)
+	}
+}
+
+// TestGetEmailDomain_Default verifies that GetEmailDomain returns "sandboxes.{domain}"
+// when EmailSubdomain is unset.
+func TestGetEmailDomain_Default(t *testing.T) {
+	c := &config.Config{Domain: "example.com"}
+	if got := c.GetEmailDomain(); got != "sandboxes.example.com" {
+		t.Fatalf("expected 'sandboxes.example.com', got %q", got)
+	}
+}
+
+// TestGetEmailDomain_Custom verifies that GetEmailDomain returns "{subdomain}.{domain}"
+// when EmailSubdomain is set.
+func TestGetEmailDomain_Custom(t *testing.T) {
+	c := &config.Config{Domain: "example.com", EmailSubdomain: "mail"}
+	if got := c.GetEmailDomain(); got != "mail.example.com" {
+		t.Fatalf("expected 'mail.example.com', got %q", got)
+	}
+}
+
+// TestGetEmailDomain_NilSafe verifies that a nil Config receiver returns the hardcoded
+// fallback "sandboxes.klankermaker.ai" (mirrors Phase 67's nil-safety pattern).
+func TestGetEmailDomain_NilSafe(t *testing.T) {
+	var c *config.Config
+	if got := c.GetEmailDomain(); got != "sandboxes.klankermaker.ai" {
+		t.Fatalf("nil receiver: expected 'sandboxes.klankermaker.ai', got %q", got)
+	}
+}
+
+// TestGetSsmPrefix_Default verifies that GetSsmPrefix returns "/km/" with empty config.
+func TestGetSsmPrefix_Default(t *testing.T) {
+	c := &config.Config{}
+	if got := c.GetSsmPrefix(); got != "/km/" {
+		t.Fatalf("expected '/km/', got %q", got)
+	}
+}
+
+// TestGetSsmPrefix_Custom verifies that GetSsmPrefix returns "/{prefix}/" when prefix is set.
+func TestGetSsmPrefix_Custom(t *testing.T) {
+	c := &config.Config{ResourcePrefix: "alt"}
+	if got := c.GetSsmPrefix(); got != "/alt/" {
+		t.Fatalf("expected '/alt/', got %q", got)
+	}
+}
+
+// TestLoadEmailSubdomain verifies that km-config.yaml with email_subdomain sets
+// cfg.EmailSubdomain AND that GetEmailDomain() returns "{subdomain}.{domain}".
+func TestLoadEmailSubdomain(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+email_subdomain: mail
+`)
+
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.EmailSubdomain != "mail" {
+		t.Errorf("EmailSubdomain: got %q, want %q", cfg.EmailSubdomain, "mail")
+	}
+	if got := cfg.GetEmailDomain(); got != "mail.example.com" {
+		t.Errorf("GetEmailDomain(): got %q, want %q", got, "mail.example.com")
+	}
+}
+
 // TestLoadBlankOrganizationIsValid verifies that km-config.yaml without
 // accounts.organization loads without error and yields an empty OrganizationAccountID.
 func TestLoadBlankOrganizationIsValid(t *testing.T) {
