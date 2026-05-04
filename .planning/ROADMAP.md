@@ -1424,7 +1424,7 @@ Plans:
 **Goal:** Close the Slack bidirectional loop deferred from Phase 63: messages in per-sandbox channels become Claude turns inside the sandbox via SQS FIFO dispatch, with sessions persisted by (channel_id, thread_ts) → claude_session_id mapping for in-thread continuity. Outbound replies (Phase 63's Stop / Notification hook) thread under the inbound message. Per-sandbox channel mode only (shared / override remain outbound-only).
 **Requirements**: REQ-SLACK-IN-SCHEMA, REQ-SLACK-IN-DDB, REQ-SLACK-IN-EVENTS, REQ-SLACK-IN-DELIVERY, REQ-SLACK-IN-POLLER, REQ-SLACK-IN-LIFECYCLE, REQ-SLACK-IN-OBSERVABILITY, REQ-SLACK-IN-INIT (all new — added to REQUIREMENTS.md by Plan 67-00)
 **Depends on:** Phase 66 (Phase 67 ships a forward-compatible GetResourcePrefix shim so it can be implemented before Phase 66 lands)
-**Plans:** 11 plans
+**Plans:** 13/13 plans complete
 
 Plans:
 - [ ] 67-00-PLAN.md — Wave 0: add github.com/aws/aws-sdk-go-v2/service/sqs dep, append REQ-SLACK-IN-* to REQUIREMENTS.md, seed six test stub files
@@ -1438,3 +1438,42 @@ Plans:
 - [ ] 67-08-PLAN.md — km status / km list --wide / km doctor (three new checks: queue exists, stale queues, Events scopes)
 - [ ] 67-09-PLAN.md — km slack init --signing-secret + scope verification + Events URL print
 - [ ] 67-10-PLAN.md — RUN_SLACK_E2E gated end-to-end test + docs/slack-notifications.md inbound section + CLAUDE.md update + manual UAT checkpoint
+- [ ] 67-11-PLAN.md — Gap A closure: move Slack reply post from Stop hook into the inbound poller (read .result from output.json) + KM_SLACK_INBOUND_REPLY_HANDLED gate to suppress double-post + 2 new compiler tests + UAT re-test section
+- [ ] 67-12-PLAN.md — Gap B closure: switch isBotLoop from deny-list to allow-list semantics (only "" + "thread_broadcast" pass) + 14 new system-subtype test cases + ThreadBroadcastPasses positive test + debug log line for forensics + UAT re-test section
+
+### Phase 67.1: Slack inbound ACK reaction (INSERTED)
+
+**Goal:** Close the Phase 67 UAT UX gap where Slack users get no visual feedback that their inbound message was received until the agent boots and posts its first reply (10-60s for paused sandboxes). The bridge Lambda adds a 👀 emoji reaction to the originating Slack message within ~1 second of successful SQS enqueue via Slack `reactions.add` Web API. Bridge-only change — no sandbox redeploy. Configurable emoji via `KM_SLACK_ACK_EMOJI` Lambda env var (default `eyes`). New required Slack scope: `reactions:write`.
+**Requirements**: UAT-1..UAT-5 (per 67.1-CONTEXT.md success criteria — no REQ-* IDs assigned; this is a UAT-gap-closure phase)
+**Depends on:** Phase 67
+**Plans:** 3/3 plans complete
+
+Plans:
+- [x] 67.1-01-PLAN.md — Bridge code: Reactor interface + SlackReactorAdapter + EventsHandler fire-and-forget call after SQS write + cold-start KM_SLACK_ACK_EMOJI wiring + 4 unit tests + newHandler test signature ripple
+- [x] 67.1-02-PLAN.md — Scope checks: append `reactions:write` to required-slice in `km slack init` (VerifyEventsAPIScopes) and `km doctor` (checkSlackAppEventsScopes) + extended tests
+- [x] 67.1-03-PLAN.md — Terraform env passthrough (lambda-slack-bridge module) + docs/slack-notifications.md ACK section + CLAUDE.md update + manual UAT checkpoint (operator scope-add + reinstall + 👀 smoke test) — UAT APPROVED
+
+### Phase 68: Slack transcript streaming — per-turn chat + gzipped JSONL upload (Phase A)
+
+**Spec:** `docs/superpowers/specs/2026-05-03-slack-transcript-streaming-design.md`
+**Goal:** Make a Slack-connected sandbox a faithful real-time view of its Claude session — every assistant turn streams to a per-sandbox Slack thread as it happens, and the full session transcript (gzipped JSONL) lands as a downloadable file in the same thread when the run ends. Provisions a stream-message → transcript-position mapping table that a future Phase B (reaction-triggered session fork) can consume.
+**Requirements**: Spec-driven (no REQ-* IDs) — see 68-CONTEXT.md locked decisions
+**Depends on:** Phase 67
+**Plans:** 13/13 plans complete
+
+Note: Phase A only. Reaction-triggered session fork deferred to a future phase.
+
+Plans:
+- [ ] 68-00-PLAN.md — Wave 0: seed 13 stub test files + 3 testdata fixtures so Plans 01-12 have green-baseline test surfaces
+- [ ] 68-01-PLAN.md — Profile schema: notifySlackTranscriptEnabled field + 3 validation rules + JSON Schema entry
+- [x] 68-02-PLAN.md — Envelope schema: ActionUpload const + 4 additive fields (S3Key/Filename/ContentType/SizeBytes) + canonical JSON forward+backward compat
+- [ ] 68-03-PLAN.md — DDB Terraform module dynamodb-slack-stream-messages + Config.GetSlackStreamMessagesTableName helper (resolves table-naming open question)
+- [ ] 68-04-PLAN.md — pkg/slack.Client.UploadFile method (Slack 3-step file upload flow, streaming, explicit Content-Length)
+- [ ] 68-05-PLAN.md — cmd/km-slack restructure: multi-subcommand dispatcher (post + upload + record-mapping)
+- [ ] 68-06-PLAN.md — IAM additions: ec2spot artifacts_bucket variable + transcript S3 PutObject + DDB PutItem policies; lambda-slack-bridge S3 GetObject + HeadObject on transcripts/*
+- [ ] 68-07-PLAN.md — CLI flags: --transcript-stream / --no-transcript-stream on km agent run + km shell
+- [ ] 68-08-PLAN.md — Bridge ActionUpload handler: validation + S3 stream → Slack 3-step upload + cold-start files:write scope check
+- [ ] 68-09-PLAN.md — Hook script: PostToolUse branch (auto-thread-parent + offset tracking + tool one-liners + record-mapping) + Stop branch transcript upload + settings.json registration
+- [ ] 68-10-PLAN.md — km create env injection (KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED + KM_SLACK_STREAM_TABLE) + operator audience warning with Slack channel member count
+- [x] 68-11-PLAN.md — km doctor checks: slack_transcript_table_exists + slack_files_write_scope + slack_transcript_stale_objects
+- [ ] 68-12-PLAN.md — Documentation (docs/slack-notifications.md + CLAUDE.md) + UAT (9 manual scenarios)

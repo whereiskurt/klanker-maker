@@ -425,6 +425,25 @@ type CLISpec struct {
 	// ValidateSemantic emits a no-op warning. Pointer type so unset is
 	// distinguishable from explicit false in tests.
 	SlackArchiveOnDestroy *bool `yaml:"slackArchiveOnDestroy,omitempty"`
+
+	// NotifySlackInboundEnabled enables bidirectional Slack chat — Slack messages
+	// in the per-sandbox channel become claude turns inside the sandbox via SQS
+	// FIFO dispatch. Requires NotifySlackEnabled=true AND NotifySlackPerSandbox=true.
+	// Incompatible with NotifySlackChannelOverride (channel→sandbox routing
+	// requires 1:1 mapping in v1).
+	//
+	// Default: false. Profile-only — no CLI flag override (Phase 67).
+	NotifySlackInboundEnabled bool `yaml:"notifySlackInboundEnabled,omitempty"`
+
+	// NotifySlackTranscriptEnabled enables per-turn Slack transcript streaming.
+	// When true, every Claude PostToolUse hook fires per-turn streaming to the
+	// per-sandbox Slack thread, and the Stop hook uploads the gzipped transcript
+	// JSONL as a Slack file. Requires NotifySlackEnabled=true AND
+	// NotifySlackPerSandbox=true. Incompatible with NotifySlackChannelOverride
+	// (transcript audience must be operator-controlled).
+	//
+	// Default: false. Profile-only — no CLI flag override (Phase 68).
+	NotifySlackTranscriptEnabled bool `yaml:"notifySlackTranscriptEnabled,omitempty" json:"notifySlackTranscriptEnabled,omitempty"`
 }
 
 // Parse unmarshals a SandboxProfile from raw YAML bytes.

@@ -633,6 +633,9 @@ func (c *testConfig) GetAWSProfile() string               { return "" }
 func (c *testConfig) GetArtifactsBucket() string          { return "" }
 func (c *testConfig) GetDoctorStaleAMIDays() int          { return 30 }
 func (c *testConfig) GetProfileSearchPaths() []string     { return nil }
+func (c *testConfig) GetSlackStreamMessagesTableName() string {
+	return "km-slack-stream-messages"
+}
 
 // =============================================================================
 // Tests: DoctorCmd (Task 2)
@@ -809,6 +812,9 @@ func (c *testDoctorConfig) GetAWSProfile() string               { return c.awsPr
 func (c *testDoctorConfig) GetArtifactsBucket() string          { return "" }
 func (c *testDoctorConfig) GetDoctorStaleAMIDays() int          { return 30 }
 func (c *testDoctorConfig) GetProfileSearchPaths() []string     { return nil }
+func (c *testDoctorConfig) GetSlackStreamMessagesTableName() string {
+	return "km-slack-stream-messages"
+}
 
 func allOKDeps() *DoctorDeps {
 	return &DoctorDeps{

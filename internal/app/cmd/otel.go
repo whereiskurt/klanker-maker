@@ -121,16 +121,16 @@ func runOtelSummary(ctx context.Context, dynClient *dynamodb.Client, s3Client *s
 				fmt.Fprintf(w, "  Bedrock:\n")
 				for _, model := range bedrockModels {
 					ms := budget.AIByModel[model]
-					fmt.Fprintf(w, "    %-45s $%.4f  (%dK in / %dK out)\n",
-						model, ms.SpentUSD, ms.InputTokens/1000, ms.OutputTokens/1000)
+					fmt.Fprintf(w, "    %-45s $%.4f  (%s in / %s out)\n",
+						model, ms.SpentUSD, formatTokenCount(ms.InputTokens), formatTokenCount(ms.OutputTokens))
 				}
 			}
 			if len(directModels) > 0 {
 				fmt.Fprintf(w, "  Anthropic Direct (Max/API):\n")
 				for _, model := range directModels {
 					ms := budget.AIByModel[model]
-					fmt.Fprintf(w, "    %-45s $%.4f  (%dK in / %dK out)\n",
-						model, ms.SpentUSD, ms.InputTokens/1000, ms.OutputTokens/1000)
+					fmt.Fprintf(w, "    %-45s $%.4f  (%s in / %s out)\n",
+						model, ms.SpentUSD, formatTokenCount(ms.InputTokens), formatTokenCount(ms.OutputTokens))
 				}
 			}
 		}

@@ -363,9 +363,9 @@ func TestRunCreate_SlackIntegration(t *testing.T) {
 		{"SlackPerSandbox metadata field", "SlackPerSandbox:"},
 		{"SlackArchiveOnDestroy metadata write", "SlackArchiveOnDestroy"},
 		{"Step 11d comment", "Step 11d"},
-		{"injectSlackEnvIntoSandbox call", "injectSlackEnvIntoSandbox"},
-		{"bridge-url SSM read", "/km/slack/bridge-url"},
-		{"Slack non-fatal pattern", "non-fatal — sandbox is provisioned"},
+		{"runStep11dInject call", "runStep11dInject"},
+		{"PutParameter wiring", "ssmClientForInject.PutParameter"},
+		{"Slack non-fatal pattern", "non-fatal"},
 	}
 	for _, c := range checks {
 		if !strings.Contains(s, c.pattern) {

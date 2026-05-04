@@ -53,3 +53,45 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+# ============================================================
+# Phase 67-05 additions — inbound events path
+# ============================================================
+
+variable "resource_prefix" {
+  description = "Resource prefix used for per-sandbox SQS queue names ({resource_prefix}-slack-inbound-{sandbox_id}.fifo)"
+  type        = string
+  default     = "km"
+}
+
+variable "slack_threads_table_name" {
+  description = "Name of the DynamoDB km-slack-threads table for Slack thread tracking"
+  type        = string
+  default     = "km-slack-threads"
+}
+
+variable "signing_secret_path" {
+  description = "SSM parameter path for the Slack signing secret (SecureString used for HMAC verification)"
+  type        = string
+  default     = "/km/slack/signing-secret"
+}
+
+# ============================================================
+# Phase 67.1 — ACK reaction emoji (👀 by default)
+# ============================================================
+
+variable "slack_ack_emoji" {
+  description = "Emoji NAME (without colons, e.g. \"eyes\" not \":eyes:\") used for the ACK reaction the bridge posts after a successful SQS enqueue of an inbound Slack message. Defaults to \"eyes\" (👀). Override to use a different emoji workspace-wide. Bot must have reactions:write scope."
+  type        = string
+  default     = "eyes"
+}
+
+# ============================================================
+# Phase 68 — Slack transcript streaming
+# ============================================================
+
+variable "artifacts_bucket" {
+  description = "Project-wide S3 artifacts bucket. The bridge reads transcript objects under transcripts/* (Phase 68). When empty, the bridge S3 read policy is omitted."
+  type        = string
+  default     = ""
+}

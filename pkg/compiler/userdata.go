@@ -169,6 +169,51 @@ EOF
 chmod 644 /etc/profile.d/km-identity.sh
 echo "[km-bootstrap] Hostname set to ${SANDBOX_FQDN}"
 
+{{- if .NotifySlackEnabled }}
+# ============================================================
+# 2.7. Phase 67 gap closure: fetch Slack runtime config from SSM Parameter Store
+# ============================================================
+# Replaces Phase 63 Step 11d (ssm:SendCommand) — that path is denied by an
+# org-level SCP for the application account. km create now writes the
+# per-sandbox channel id to /sandbox/{id}/slack-channel-id; the operator-wide
+# bridge URL is already at /km/slack/bridge-url (written by km slack init).
+# Cloud-init blocks here with retry/backoff until both are present so the
+# inbound poller and Stop hook see them on first dispatch.
+echo "[km-bootstrap] Fetching Slack runtime config from SSM Parameter Store..."
+SLACK_CHANNEL_ID_PARAM="/sandbox/{{ .SandboxID }}/slack-channel-id"
+SLACK_BRIDGE_URL_PARAM="/km/slack/bridge-url"
+SLACK_RUNTIME_FILE="/etc/profile.d/km-slack-runtime.sh"
+CHANNEL_ID=""
+BRIDGE_URL=""
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  if [ -z "$CHANNEL_ID" ]; then
+    CHANNEL_ID=$(aws ssm get-parameter --name "$SLACK_CHANNEL_ID_PARAM" --region "$REGION" --query 'Parameter.Value' --output text 2>/dev/null || true)
+    [ "$CHANNEL_ID" = "None" ] && CHANNEL_ID=""
+  fi
+  if [ -z "$BRIDGE_URL" ]; then
+    BRIDGE_URL=$(aws ssm get-parameter --name "$SLACK_BRIDGE_URL_PARAM" --region "$REGION" --query 'Parameter.Value' --output text 2>/dev/null || true)
+    [ "$BRIDGE_URL" = "None" ] && BRIDGE_URL=""
+  fi
+  if [ -n "$CHANNEL_ID" ] && [ -n "$BRIDGE_URL" ]; then
+    break
+  fi
+  echo "[km-bootstrap] Slack runtime params not yet available (attempt $attempt/10), waiting 30s..."
+  sleep 30
+done
+if [ -n "$CHANNEL_ID" ] && [ -n "$BRIDGE_URL" ]; then
+  cat > "$SLACK_RUNTIME_FILE" <<RUNTIMEEOF
+export KM_SLACK_CHANNEL_ID="$CHANNEL_ID"
+export KM_SLACK_BRIDGE_URL="$BRIDGE_URL"
+export AWS_REGION="$REGION"
+export AWS_DEFAULT_REGION="$REGION"
+RUNTIMEEOF
+  chmod 644 "$SLACK_RUNTIME_FILE"
+  echo "[km-bootstrap] Wrote $SLACK_RUNTIME_FILE (channel=$CHANNEL_ID)"
+else
+  echo "[km-bootstrap] WARN: Slack runtime config unavailable after retries; replies will fail"
+fi
+{{- end }}
+
 # ============================================================
 # 2.8. Profile environment variables: write to /etc/profile.d/
 # ============================================================
@@ -365,85 +410,315 @@ set -euo pipefail
 event="${1:?event-name required}"
 
 # 1. Gate check (env-var driven; defaults to off so unset = no-op).
+#    Phase 68 extends:
+#      - PostToolUse fires only when KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED=1.
+#      - Stop fires when EITHER idle-ping (Phase 62/63) OR transcript streaming
+#        (Phase 68) is enabled — both can run side-by-side.
 case "$event" in
-  Notification) [[ "${KM_NOTIFY_ON_PERMISSION:-0}" == "1" ]] || exit 0 ;;
-  Stop)         [[ "${KM_NOTIFY_ON_IDLE:-0}"       == "1" ]] || exit 0 ;;
-  *)            exit 0 ;;
+  PostToolUse)
+    [[ "${KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED:-0}" == "1" ]] || exit 0
+    ;;
+  Notification)
+    [[ "${KM_NOTIFY_ON_PERMISSION:-0}" == "1" ]] || exit 0
+    ;;
+  Stop)
+    if [[ "${KM_NOTIFY_ON_IDLE:-0}" != "1" && "${KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED:-0}" != "1" ]]; then
+      exit 0
+    fi
+    ;;
+  *)
+    exit 0
+    ;;
 esac
 
-# 2. Cooldown check (per-sandbox, shared across both event types).
+# 2. Cooldown check. Gates only the email + slack-channel-root notification
+#    path; Phase 68 PostToolUse streaming and Stop transcript upload are NOT
+#    cooldown-gated (transcript completeness is non-negotiable).
+cooldown_block=0
 cooldown="${KM_NOTIFY_COOLDOWN_SECONDS:-0}"
 last_file="${KM_NOTIFY_LAST_FILE:-/tmp/km-notify.last}"
 if [[ "$cooldown" -gt 0 && -f "$last_file" ]]; then
   last=$(cat "$last_file" 2>/dev/null || echo 0)
   now=$(date +%s)
-  (( now - last < cooldown )) && exit 0
+  (( now - last < cooldown )) && cooldown_block=1
 fi
+# Notification: cooldown is fatal (preserves Phase 62 TestNotifyHook_Cooldown).
+if [[ "$cooldown_block" -eq 1 && "$event" == "Notification" ]]; then
+  exit 0
+fi
+# Stop with no transcript streaming: cooldown is fatal (preserves Phase 63).
+if [[ "$cooldown_block" -eq 1 && "$event" == "Stop" \
+   && "${KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED:-0}" != "1" ]]; then
+  exit 0
+fi
+# PostToolUse + Stop+transcript continue past cooldown; the email/slack-root
+# branch below honors $cooldown_block to skip duplicate sends.
 
 # 3. Read hook payload from stdin (JSON).
 payload=$(cat)
-
-# 4. Build subject + body.
 sandbox_id="${KM_SANDBOX_ID:-unknown}"
-case "$event" in
-  Notification)
-    subject="[$sandbox_id] needs permission"
-    msg=$(echo "$payload" | jq -r '.message // "(no message)"' 2>/dev/null || echo "(payload parse failed)")
-    body_text="$msg"
-    ;;
-  Stop)
-    subject="[$sandbox_id] idle"
-    transcript=$(echo "$payload" | jq -r '.transcript_path // ""' 2>/dev/null || echo "")
-    body_text=""
-    if [[ -n "$transcript" && -f "$transcript" ]]; then
-      body_text=$(tail -n 50 "$transcript" 2>/dev/null \
-        | jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text' 2>/dev/null \
-        | tail -n 1 || echo "")
+
+# Phase 68 helper: drain any new transcript bytes since /tmp/km-slack-stream.{sid}.offset
+# and post them as a chat message in the auto-created or cached thread. Used by
+# both the PostToolUse branch (per-tool firings) and the Stop transcript branch
+# (catches the final assistant turn before upload).
+#
+# Args: $1 = session_id, $2 = transcript_path
+# Side effects (on success):
+#   - May create /tmp/km-slack-thread.{sid} (auto-thread parent ts cache).
+#   - Updates /tmp/km-slack-stream.{sid}.offset to the new EOF byte position.
+#   - Calls /opt/km/bin/km-slack post  (one fire per non-empty render).
+#   - Calls /opt/km/bin/km-slack record-mapping (offset → posted Slack ts).
+# Always exits 0; failures are logged to stderr (hook contract).
+_km_stream_drain() {
+  local sid="$1"
+  local transcript_path="$2"
+  if [[ -z "$sid" || -z "$transcript_path" || ! -f "$transcript_path" ]]; then
+    echo "[km-notify-hook] stream-drain: missing session_id/transcript_path" >&2
+    return 0
+  fi
+  if [[ -z "${KM_SLACK_CHANNEL_ID:-}" ]]; then
+    echo "[km-notify-hook] stream-drain: KM_SLACK_CHANNEL_ID unset; skipping" >&2
+    return 0
+  fi
+
+  # Resolve thread ts: env > /tmp cache > auto-create.
+  local thread_cache="/tmp/km-slack-thread.${sid}"
+  local ts=""
+  if [[ -n "${KM_SLACK_THREAD_TS:-}" ]]; then
+    ts="$KM_SLACK_THREAD_TS"
+  elif [[ -f "$thread_cache" ]]; then
+    ts=$(cat "$thread_cache" 2>/dev/null || echo "")
+  else
+    # Auto-thread-parent: post a parent message and cache its ts.
+    local prompt_summary
+    prompt_summary=$(echo "$payload" | jq -r '.tool_input.prompt // .tool_name // "auto-run"' 2>/dev/null | head -c 80 || echo "auto-run")
+    local parent_body
+    parent_body=$(mktemp /tmp/km-slack-parent.XXXXXX)
+    printf '🤖 [%s] turn started — %s\n' "$sandbox_id" "$prompt_summary" > "$parent_body"
+    local parent_resp
+    parent_resp=$(/opt/km/bin/km-slack post --channel "$KM_SLACK_CHANNEL_ID" --body "$parent_body" 2>&1 || echo "")
+    rm -f "$parent_body"
+    ts=$(echo "$parent_resp" | grep -oE 'ts=[0-9.]+' | head -n1 | sed 's/^ts=//')
+    if [[ -n "$ts" ]]; then
+      echo "$ts" > "$thread_cache"
+    else
+      echo "[km-notify-hook] stream-drain: failed to create thread parent; skipping" >&2
+      return 0
     fi
-    [[ -z "$body_text" ]] && body_text="(no recent assistant text)"
-    ;;
-esac
-
-# 5. Build body file (km-send requires --body <file>, not stdin, per CLAUDE.md
-#    — OpenSSL 3.5+ signing reliability).
-body_file=$(mktemp /tmp/km-notify-body.XXXXXX)
-{
-  echo "$body_text"
-  echo
-  echo "---"
-  echo "Attach:  km agent attach $sandbox_id"
-  echo "Results: km agent results $sandbox_id"
-} > "$body_file"
-
-# 6. Multi-channel dispatch (Phase 63). Failure does not propagate (hook always exits 0).
-# sent_any=1 when at least one channel succeeded — controls cooldown update below.
-sent_any=0
-
-# 6a. Email branch (default enabled via :-1 so Phase 62 profiles without
-#     KM_NOTIFY_EMAIL_ENABLED behave identically to Phase 62).
-if [[ "${KM_NOTIFY_EMAIL_ENABLED:-1}" == "1" ]]; then
-  to_args=()
-  [[ -n "${KM_NOTIFY_EMAIL:-}" ]] && to_args=(--to "$KM_NOTIFY_EMAIL")
-  if /opt/km/bin/km-send ${to_args[@]+"${to_args[@]}"} --subject "$subject" --body "$body_file"; then
-    sent_any=1
   fi
+
+  # Offset tracking.
+  local offset_file="/tmp/km-slack-stream.${sid}.offset"
+  local offset=0
+  [[ -f "$offset_file" ]] && offset=$(cat "$offset_file" 2>/dev/null || echo 0)
+
+  # Tail JSONL from offset (tail -c byte index is 1-based).
+  local new_lines=""
+  new_lines=$(tail -c +$((offset + 1)) "$transcript_path" 2>/dev/null || echo "")
+  local new_offset
+  new_offset=$(wc -c < "$transcript_path" 2>/dev/null | tr -d ' \t' || echo "$offset")
+
+  if [[ -z "$new_lines" ]]; then
+    echo "$new_offset" > "$offset_file"
+    return 0
+  fi
+
+  # Render new entries to a chat body.
+  local body_file
+  body_file=$(mktemp /tmp/km-slack-stream-body.XXXXXX)
+  : > "$body_file"
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local jline_type
+    jline_type=$(echo "$line" | jq -r '.type // ""' 2>/dev/null || echo "")
+    case "$jline_type" in
+      assistant)
+        echo "$line" | jq -r '.message.content[]? | select(.type=="text") | .text' 2>/dev/null >> "$body_file" || true
+        ;;
+      tool_use)
+        local tname one_liner
+        tname=$(echo "$line" | jq -r '.name // ""' 2>/dev/null || echo "")
+        case "$tname" in
+          Edit)
+            one_liner=$(echo "$line" | jq -r '.input.file_path // "?"' 2>/dev/null | head -c 200)
+            ;;
+          Bash)
+            one_liner=$(echo "$line" | jq -r '.input.command // "?"' 2>/dev/null | head -c 200)
+            ;;
+          *)
+            one_liner=$(echo "$line" | jq -c '.input // {}' 2>/dev/null | head -c 80)
+            ;;
+        esac
+        printf '🔧 %s: %s\n' "$tname" "$one_liner" >> "$body_file"
+        ;;
+    esac
+  done <<< "$new_lines"
+
+  if [[ ! -s "$body_file" ]]; then
+    echo "$new_offset" > "$offset_file"
+    rm -f "$body_file"
+    return 0
+  fi
+
+  # Post to Slack thread, capturing the returned ts so we can record the mapping.
+  local post_resp posted_ts
+  post_resp=$(/opt/km/bin/km-slack post \
+    --channel "$KM_SLACK_CHANNEL_ID" \
+    --thread "$ts" \
+    --body "$body_file" 2>&1 || echo "")
+  rm -f "$body_file"
+  posted_ts=$(echo "$post_resp" | grep -oE 'ts=[0-9.]+' | head -n1 | sed 's/^ts=//')
+
+  if [[ -n "$posted_ts" && -n "${KM_SLACK_STREAM_TABLE:-}" ]]; then
+    /opt/km/bin/km-slack record-mapping \
+      --channel "$KM_SLACK_CHANNEL_ID" \
+      --slack-ts "$posted_ts" \
+      --offset "$offset" \
+      --session "$sid" \
+      2>/dev/null || echo "[km-notify-hook] record-mapping failed (non-fatal)" >&2
+  fi
+
+  # Advance offset.
+  echo "$new_offset" > "$offset_file"
+  return 0
+}
+
+# 4. PostToolUse: stream new transcript bytes, then exit. Never falls through
+#    to the email/slack-root branches below.
+if [[ "$event" == "PostToolUse" ]]; then
+  pt_sid=$(echo "$payload" | jq -r '.session_id // ""' 2>/dev/null || echo "")
+  pt_transcript=$(echo "$payload" | jq -r '.transcript_path // ""' 2>/dev/null || echo "")
+  if [[ -z "$pt_sid" || -z "$pt_transcript" ]]; then
+    echo "[km-notify-hook] PostToolUse: missing session_id/transcript_path" >&2
+    exit 0
+  fi
+  _km_stream_drain "$pt_sid" "$pt_transcript"
+  exit 0
 fi
 
-# 6b. Slack branch. Gated on both the enabled flag AND a non-empty channel ID
-#     (defensive: never call km-slack with an empty --channel even if enabled=1).
-if [[ "${KM_NOTIFY_SLACK_ENABLED:-0}" == "1" && -n "${KM_SLACK_CHANNEL_ID:-}" ]]; then
-  if /opt/km/bin/km-slack post \
-       --channel "$KM_SLACK_CHANNEL_ID" \
-       --subject "$subject" \
-       --body "$body_file"; then
-    sent_any=1
-  fi
+# 5. Build subject + body for the email/slack-root path. Skipped when the only
+#    reason this Stop hook fired was transcript-streaming (KM_NOTIFY_ON_IDLE=0).
+do_email_branch=0
+if [[ "$event" == "Notification" ]]; then
+  do_email_branch=1
+elif [[ "$event" == "Stop" && "${KM_NOTIFY_ON_IDLE:-0}" == "1" ]]; then
+  do_email_branch=1
 fi
 
-# 7. Update cooldown timestamp iff at least one channel succeeded.
-[[ $sent_any -eq 1 ]] && date +%s > "$last_file"
+if [[ "$do_email_branch" -eq 1 && "$cooldown_block" -ne 1 ]]; then
+  case "$event" in
+    Notification)
+      subject="[$sandbox_id] needs permission"
+      msg=$(echo "$payload" | jq -r '.message // "(no message)"' 2>/dev/null || echo "(payload parse failed)")
+      body_text="$msg"
+      ;;
+    Stop)
+      subject="[$sandbox_id] idle"
+      transcript=$(echo "$payload" | jq -r '.transcript_path // ""' 2>/dev/null || echo "")
+      body_text=""
+      if [[ -n "$transcript" && -f "$transcript" ]]; then
+        body_text=$(tail -n 50 "$transcript" 2>/dev/null \
+          | jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text' 2>/dev/null \
+          | tail -n 1 || echo "")
+      fi
+      [[ -z "$body_text" ]] && body_text="(no recent assistant text)"
+      ;;
+  esac
 
-rm -f "$body_file"
+  # 5b. Build body file (km-send requires --body <file>, not stdin, per CLAUDE.md
+  #     — OpenSSL 3.5+ signing reliability).
+  body_file=$(mktemp /tmp/km-notify-body.XXXXXX)
+  echo "$body_text" > "$body_file"
+
+  # 6. Multi-channel dispatch (Phase 63). Failure does not propagate (hook always exits 0).
+  # sent_any=1 when at least one channel succeeded — controls cooldown update below.
+  sent_any=0
+
+  # 6a. Email branch (default enabled via :-1 so Phase 62 profiles without
+  #     KM_NOTIFY_EMAIL_ENABLED behave identically to Phase 62).
+  if [[ "${KM_NOTIFY_EMAIL_ENABLED:-1}" == "1" ]]; then
+    to_args=()
+    [[ -n "${KM_NOTIFY_EMAIL:-}" ]] && to_args=(--to "$KM_NOTIFY_EMAIL")
+    if /opt/km/bin/km-send ${to_args[@]+"${to_args[@]}"} --subject "$subject" --body "$body_file"; then
+      sent_any=1
+    fi
+  fi
+
+  # 6b. Slack branch. Gated on enabled flag + non-empty channel ID + NOT a
+  #     poller-driven inbound run. KM_SLACK_THREAD_TS is exported into Claude's
+  #     env BEFORE launch (the inbound poller sets it; nothing else does), so
+  #     its presence is the reliable signal that "the poller is driving this
+  #     turn — do not post; the poller will post .result after Claude exits".
+  #     When KM_SLACK_THREAD_TS is unset, this is a normal Phase 63 idle
+  #     notification path and the Stop hook posts a top-level channel message.
+  if [[ "${KM_NOTIFY_SLACK_ENABLED:-0}" == "1" \
+     && -n "${KM_SLACK_CHANNEL_ID:-}" \
+     && -z "${KM_SLACK_THREAD_TS:-}" ]]; then
+    # No thread flag: when KM_SLACK_THREAD_TS is empty we're outside an inbound
+    # turn, so post as a top-level message in the per-sandbox channel.
+    if /opt/km/bin/km-slack post \
+         --channel "$KM_SLACK_CHANNEL_ID" \
+         --subject "$subject" \
+         --body "$body_file"; then
+      sent_any=1
+    fi
+  fi
+
+  # 7. Update cooldown timestamp iff at least one channel succeeded.
+  [[ $sent_any -eq 1 ]] && date +%s > "$last_file"
+
+  rm -f "$body_file"
+fi
+
+# 8. Stop transcript upload (Phase 68). Runs when KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED=1
+#    regardless of cooldown or KM_NOTIFY_ON_IDLE state. Drains any final unsent
+#    assistant text, then gzips + s3 cp + km-slack upload + cleanup.
+if [[ "$event" == "Stop" && "${KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED:-0}" == "1" ]]; then
+  st_sid=$(echo "$payload" | jq -r '.session_id // ""' 2>/dev/null || echo "")
+  st_transcript=$(echo "$payload" | jq -r '.transcript_path // ""' 2>/dev/null || echo "")
+
+  if [[ -n "$st_sid" && -n "$st_transcript" && -f "$st_transcript" ]]; then
+    # Drain any unstreamed final text first so the thread shows the last turn
+    # before the gzipped artifact lands.
+    _km_stream_drain "$st_sid" "$st_transcript"
+
+    # Resolve thread ts (same precedence as drain, used for upload's --thread).
+    st_thread_cache="/tmp/km-slack-thread.${st_sid}"
+    st_ts=""
+    if [[ -n "${KM_SLACK_THREAD_TS:-}" ]]; then
+      st_ts="$KM_SLACK_THREAD_TS"
+    elif [[ -f "$st_thread_cache" ]]; then
+      st_ts=$(cat "$st_thread_cache" 2>/dev/null || echo "")
+    fi
+
+    gz_path="/tmp/transcript.${st_sid}.jsonl.gz"
+    if gzip -c "$st_transcript" > "$gz_path" 2>/dev/null; then
+      gz_size=$(wc -c < "$gz_path" 2>/dev/null | tr -d ' \t' || echo 0)
+      s3_key="transcripts/${sandbox_id}/${st_sid}.jsonl.gz"
+      if [[ -n "${KM_ARTIFACTS_BUCKET:-}" ]] \
+         && aws s3 cp "$gz_path" "s3://${KM_ARTIFACTS_BUCKET}/${s3_key}" >/dev/null 2>&1; then
+        /opt/km/bin/km-slack upload \
+          --channel "$KM_SLACK_CHANNEL_ID" \
+          --thread "$st_ts" \
+          --s3-key "$s3_key" \
+          --filename "claude-transcript-${st_sid}.jsonl.gz" \
+          --content-type "application/gzip" \
+          --size-bytes "$gz_size" \
+          2>&1 || echo "[km-notify-hook] upload failed (non-fatal)" >&2
+      else
+        echo "[km-notify-hook] s3 cp failed (or KM_ARTIFACTS_BUCKET unset); skipping upload" >&2
+      fi
+      rm -f "$gz_path"
+    else
+      echo "[km-notify-hook] gzip failed; skipping upload" >&2
+    fi
+  fi
+
+  # Cleanup per-session tmp state regardless of upload success/failure.
+  rm -f "/tmp/km-slack-thread.${st_sid}" "/tmp/km-slack-stream.${st_sid}.offset"
+fi
+
 exit 0
 KM_NOTIFY_HOOK_EOF
 chmod +x /opt/km/bin/km-notify-hook
@@ -466,6 +741,22 @@ export {{ $key }}="{{ $value }}"
 KM_NOTIFY_ENV_EOF
 chmod 644 /etc/profile.d/km-notify-env.sh
 echo "[km-bootstrap] Notify env defaults written to /etc/profile.d/km-notify-env.sh"
+
+# Phase 67-11 follow-up: systemd's EnvironmentFile= directive does NOT accept
+# the 'export' keyword prefix used by the shell file above ("Ignoring invalid
+# environment assignment" warning, value silently dropped). Write a parallel
+# systemd-format copy of the same key/value pairs for systemd-managed services.
+# Same source of truth (.NotifyEnv map at compile time), two output formats.
+mkdir -p /etc/km
+cat > /etc/km/notify.env << 'KM_NOTIFY_SYSTEMD_EOF'
+# Auto-generated by km compiler — systemd EnvironmentFile= format.
+# DO NOT add 'export' — systemd's parser rejects 'export VAR=val' as invalid.
+{{- range $key, $value := .NotifyEnv }}
+{{ $key }}={{ $value }}
+{{- end }}
+KM_NOTIFY_SYSTEMD_EOF
+chmod 644 /etc/km/notify.env
+echo "[km-bootstrap] Notify env defaults (systemd format) written to /etc/km/notify.env"
 {{- end }}
 
 # ============================================================
@@ -855,6 +1146,250 @@ done
 MAILPOLL
 chmod +x /opt/km/bin/km-mail-poller
 
+{{- if .SlackInboundEnabled }}
+# Phase 67: km-slack-inbound-poller — SQS long-poll dispatch to km agent run
+# Mirrors km-mail-poller pattern: bash + systemd, inline heredoc, no sidecar binary.
+cat > /opt/km/bin/km-slack-inbound-poller << 'SLACKINBOUND'
+#!/bin/bash
+set -euo pipefail
+# km-slack-inbound-poller: poll SQS FIFO queue for inbound Slack messages and
+# dispatch each turn via km agent run. Session continuity via DynamoDB km_slack_threads.
+# Runs as root via systemd; claude invocation uses sudo -u sandbox for session files.
+
+QUEUE_URL="${KM_SLACK_INBOUND_QUEUE_URL:-}"
+SANDBOX_ID="${KM_SANDBOX_ID:-}"
+REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
+THREADS_TABLE="${KM_SLACK_THREADS_TABLE:-km-slack-threads}"
+
+# Export AWS_REGION so subprocesses (km-slack post, km-send, etc.) inherit it.
+# The systemd unit's EnvironmentFile=/etc/profile.d/km-notify-env.sh uses
+# shell-style 'export VAR=val' which systemd rejects ("Ignoring invalid
+# environment assignment"), so AWS_REGION is empty in the poller's process
+# env. Bash falls back to us-east-1 above for its own aws CLI calls, but
+# that shell var doesn't propagate to spawned binaries unless exported.
+# Without this, /opt/km/bin/km-slack post fails with "AWS_REGION not set".
+export AWS_REGION="$REGION"
+
+[ -z "$SANDBOX_ID" ] && echo "[km-slack-inbound-poller] KM_SANDBOX_ID not set, exiting" && exit 0
+
+# Fall back to SSM Parameter Store when the env var is empty. km create writes
+# /sandbox/${SANDBOX_ID}/slack-inbound-queue-url after the SQS queue is created
+# (an org-level SCP blocks SSM SendCommand, so the value cannot be injected
+# directly into the env file). The poller starts at boot and may race the
+# create-handler write — retry with backoff for up to ~5 minutes.
+PARAM_NAME="/sandbox/${SANDBOX_ID}/slack-inbound-queue-url"
+if [ -z "$QUEUE_URL" ]; then
+  echo "[km-slack-inbound-poller] KM_SLACK_INBOUND_QUEUE_URL empty, reading $PARAM_NAME from SSM"
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    QUEUE_URL=$(aws ssm get-parameter \
+      --name "$PARAM_NAME" \
+      --region "$REGION" \
+      --query 'Parameter.Value' \
+      --output text 2>/dev/null || true)
+    [ -n "$QUEUE_URL" ] && [ "$QUEUE_URL" != "None" ] && break
+    QUEUE_URL=""
+    echo "[km-slack-inbound-poller] $PARAM_NAME not yet available (attempt $attempt/10), sleeping 30s"
+    sleep 30
+  done
+fi
+[ -z "$QUEUE_URL" ] && echo "[km-slack-inbound-poller] queue URL unavailable after retries, exiting" && exit 0
+
+# Phase 67-11 Gap A: resolve KM_SLACK_CHANNEL_ID + KM_SLACK_BRIDGE_URL from SSM
+# at startup. Cloud-init writes both to /etc/profile.d/km-slack-runtime.sh, but
+# the systemd unit's EnvironmentFile only loads /etc/profile.d/km-notify-env.sh,
+# so the env vars are NOT visible to the root-side post block we add below
+# (that block runs OUTSIDE the existing 'sudo -u sandbox bash -c' invocation
+# which re-sources profile.d/*.sh). Mirror the queue-url SSM fallback above —
+# values don't change between turns, so resolve once at startup and cache in
+# shell vars for the lifetime of the systemd service. A short retry (3×5s) is
+# sufficient: by the time the queue URL has resolved, channel-id and
+# bridge-url SSM params are guaranteed to exist (km create writes channel-id
+# atomically with the queue, and bridge-url exists from 'km slack init').
+KM_SLACK_CHANNEL_ID="${KM_SLACK_CHANNEL_ID:-}"
+KM_SLACK_BRIDGE_URL="${KM_SLACK_BRIDGE_URL:-}"
+CHANNEL_PARAM="/sandbox/${SANDBOX_ID}/slack-channel-id"
+BRIDGE_PARAM="/km/slack/bridge-url"
+if [ -z "$KM_SLACK_CHANNEL_ID" ]; then
+  for attempt in 1 2 3; do
+    KM_SLACK_CHANNEL_ID=$(aws ssm get-parameter \
+      --name "$CHANNEL_PARAM" \
+      --region "$REGION" \
+      --query 'Parameter.Value' \
+      --output text 2>/dev/null || true)
+    [ -n "$KM_SLACK_CHANNEL_ID" ] && [ "$KM_SLACK_CHANNEL_ID" != "None" ] && break
+    KM_SLACK_CHANNEL_ID=""
+    echo "[km-slack-inbound-poller] $CHANNEL_PARAM not yet available (attempt $attempt/3), sleeping 5s"
+    sleep 5
+  done
+fi
+if [ -z "$KM_SLACK_BRIDGE_URL" ]; then
+  for attempt in 1 2 3; do
+    KM_SLACK_BRIDGE_URL=$(aws ssm get-parameter \
+      --name "$BRIDGE_PARAM" \
+      --region "$REGION" \
+      --query 'Parameter.Value' \
+      --output text 2>/dev/null || true)
+    [ -n "$KM_SLACK_BRIDGE_URL" ] && [ "$KM_SLACK_BRIDGE_URL" != "None" ] && break
+    KM_SLACK_BRIDGE_URL=""
+    echo "[km-slack-inbound-poller] $BRIDGE_PARAM not yet available (attempt $attempt/3), sleeping 5s"
+    sleep 5
+  done
+fi
+if [ -z "$KM_SLACK_CHANNEL_ID" ] || [ -z "$KM_SLACK_BRIDGE_URL" ]; then
+  echo "[km-slack-inbound-poller] WARN: KM_SLACK_CHANNEL_ID or KM_SLACK_BRIDGE_URL unavailable; reply posting will be skipped this run"
+fi
+export KM_SLACK_CHANNEL_ID KM_SLACK_BRIDGE_URL
+
+echo "[km-slack-inbound-poller] Starting — queue=$QUEUE_URL table=$THREADS_TABLE region=$REGION"
+
+while true; do
+  MSG=$(aws sqs receive-message \
+    --queue-url "$QUEUE_URL" \
+    --wait-time-seconds 20 \
+    --max-number-of-messages 1 \
+    --region "$REGION" \
+    --output json 2>/dev/null || true)
+
+  BODY=$(echo "$MSG" | jq -r '.Messages[0].Body // empty' 2>/dev/null || true)
+  RECEIPT=$(echo "$MSG" | jq -r '.Messages[0].ReceiptHandle // empty' 2>/dev/null || true)
+
+  [ -z "$BODY" ] && continue
+
+  CHANNEL=$(echo "$BODY" | jq -r '.channel // empty')
+  THREAD_TS=$(echo "$BODY" | jq -r '.thread_ts // empty')
+  TEXT=$(echo "$BODY" | jq -r '.text // empty')
+
+  if [ -z "$CHANNEL" ] || [ -z "$THREAD_TS" ] || [ -z "$TEXT" ]; then
+    echo "[km-slack-inbound-poller] WARN: malformed message body, acking to avoid retry: $BODY"
+    aws sqs delete-message \
+      --queue-url "$QUEUE_URL" \
+      --receipt-handle "$RECEIPT" \
+      --region "$REGION" 2>/dev/null || true
+    continue
+  fi
+
+  # Extend visibility BEFORE agent run to prevent re-delivery during long turns (Pitfall 1).
+  aws sqs change-message-visibility \
+    --queue-url "$QUEUE_URL" \
+    --receipt-handle "$RECEIPT" \
+    --visibility-timeout 300 \
+    --region "$REGION" 2>/dev/null || true
+
+  # DDB lookup for existing Claude session in this thread.
+  DDB_ITEM=$(aws dynamodb get-item \
+    --table-name "$THREADS_TABLE" \
+    --key "{\"channel_id\":{\"S\":\"$CHANNEL\"},\"thread_ts\":{\"S\":\"$THREAD_TS\"}}" \
+    --region "$REGION" \
+    --output json 2>/dev/null || true)
+  CLAUDE_SESSION=$(echo "$DDB_ITEM" | jq -r '.Item.claude_session_id.S // empty' 2>/dev/null || true)
+
+  RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
+  RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
+  mkdir -p "$RUN_DIR"
+  # The poller runs as root; chown so the sandbox-user claude can write output.
+  chown sandbox:sandbox "$RUN_DIR"
+
+  RESUME_ARG=""
+  [ -n "$CLAUDE_SESSION" ] && RESUME_ARG="--resume $CLAUDE_SESSION"
+
+  PROMPT_FILE=$(mktemp)
+  echo "$TEXT" > "$PROMPT_FILE"
+  # mktemp defaults to 0600 owned by root — sandbox user can't read it without this.
+  chmod 644 "$PROMPT_FILE"
+
+  # Export KM_SLACK_THREAD_TS so km-notify-hook passes --thread to km-slack post (Phase 67).
+  export KM_SLACK_THREAD_TS="$THREAD_TS"
+
+  # || true keeps a claude failure from killing the poller (set -euo pipefail).
+  # The output.json / exit_code files are inspected below to decide whether to
+  # ack-and-continue or leave the message for redelivery.
+  # Source all profile.d files so claude inherits OTEL endpoints + KM_SLACK_*
+  # env (notify-hook needs KM_SLACK_BRIDGE_URL/CHANNEL_ID/SANDBOX_ID, OTEL needs
+  # OTEL_EXPORTER_OTLP_*). bash -c is non-interactive and skips profile.d by
+  # default, so we source it explicitly before launching claude.
+  sudo -u sandbox bash -c "
+    set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+    export KM_SLACK_THREAD_TS='$THREAD_TS'
+    claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
+      --dangerously-skip-permissions $RESUME_ARG \
+      > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+    echo \$? > '$RUN_DIR/exit_code'
+  " || true
+  rm -f "$PROMPT_FILE"
+
+  RUN_EXIT=$(cat "$RUN_DIR/exit_code" 2>/dev/null || echo 1)
+  NEW_SESSION=""
+  if [ "$RUN_EXIT" -eq 0 ] && [ -s "$RUN_DIR/output.json" ]; then
+    NEW_SESSION=$(jq -r '.session_id // empty' "$RUN_DIR/output.json" 2>/dev/null || true)
+  fi
+
+  if [ -n "$NEW_SESSION" ]; then
+    NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    TTL_EXPIRY=$(( $(date +%s) + 30*24*3600 ))
+    aws dynamodb put-item \
+      --table-name "$THREADS_TABLE" \
+      --region "$REGION" \
+      --item "{
+        \"channel_id\":{\"S\":\"$CHANNEL\"},
+        \"thread_ts\":{\"S\":\"$THREAD_TS\"},
+        \"claude_session_id\":{\"S\":\"$NEW_SESSION\"},
+        \"sandbox_id\":{\"S\":\"$SANDBOX_ID\"},
+        \"last_turn_ts\":{\"S\":\"$NOW\"},
+        \"ttl_expiry\":{\"N\":\"$TTL_EXPIRY\"}
+      }" 2>/dev/null || true
+
+    # Ack first — posting to Slack BEFORE delete would open a host-crash
+    # window where the user sees a reply but the message gets redelivered
+    # → duplicate Claude run + duplicate post on visibility-timeout expiry.
+    aws sqs delete-message \
+      --queue-url "$QUEUE_URL" \
+      --receipt-handle "$RECEIPT" \
+      --region "$REGION" 2>/dev/null || true
+
+    # Phase 67-11 Gap A fix: post the canonical .result text to Slack from
+    # the poller. The Stop hook's transcript-JSONL scraping is unreliable in
+    # 'claude -p' (--print) mode (transcript may be un-flushed or differently
+    # shaped). The Stop hook's Slack branch is now gated on KM_SLACK_THREAD_TS
+    # being unset — since the poller exports KM_SLACK_THREAD_TS into Claude's
+    # env BEFORE launch, the Stop hook sees it and skips its post.
+    #
+    # Trade-off: this block is gated on $NEW_SESSION (a successful run with
+    # a non-empty .session_id). On agent failure the else-branch's WARN log
+    # fires and SQS redelivers — the user sees no fallback message in Slack.
+    # Operator diagnoses via 'journalctl -u km-slack-inbound-poller' and
+    # 'km agent list'. Documented trade-off: silence-on-failure is safer
+    # than a misleading "(no recent assistant text)" fallback that operators
+    # cannot distinguish from genuine empty replies.
+    RESULT_TEXT=$(jq -r '.result // empty' "$RUN_DIR/output.json" 2>/dev/null || true)
+    if [ -n "$RESULT_TEXT" ] && [ -n "$KM_SLACK_CHANNEL_ID" ] && [ -n "$KM_SLACK_BRIDGE_URL" ]; then
+      POST_FILE=$(mktemp /tmp/km-slack-inbound-post.XXXXXX)
+      printf '%s' "$RESULT_TEXT" > "$POST_FILE"
+      if /opt/km/bin/km-slack post \
+           --channel "$KM_SLACK_CHANNEL_ID" \
+           --subject "" \
+           --thread "$THREAD_TS" \
+           --body "$POST_FILE" 2>>"$RUN_DIR/stderr.log"; then
+        echo "[km-slack-inbound-poller] Posted reply to Slack (thread=$THREAD_TS, len=${#RESULT_TEXT})"
+      else
+        echo "[km-slack-inbound-poller] WARN: km-slack post failed for thread=$THREAD_TS" >&2
+      fi
+      rm -f "$POST_FILE"
+    elif [ -z "$KM_SLACK_CHANNEL_ID" ] || [ -z "$KM_SLACK_BRIDGE_URL" ]; then
+      echo "[km-slack-inbound-poller] WARN: KM_SLACK_CHANNEL_ID/KM_SLACK_BRIDGE_URL unset, skipping Slack post for thread=$THREAD_TS"
+    else
+      echo "[km-slack-inbound-poller] WARN: empty .result in output.json, skipping Slack post for thread=$THREAD_TS"
+    fi
+
+    echo "[km-slack-inbound-poller] Turn complete — session=$NEW_SESSION thread=$THREAD_TS"
+  else
+    echo "[km-slack-inbound-poller] WARN: agent run failed (exit $RUN_EXIT), message returns to queue"
+  fi
+done
+SLACKINBOUND
+chmod +x /opt/km/bin/km-slack-inbound-poller
+echo "[km-bootstrap] km-slack-inbound-poller installed at /opt/km/bin/km-slack-inbound-poller"
+{{- end }}
+
 # km-send: send Ed25519-signed email with optional attachments via SES
 cat > /opt/km/bin/km-send << 'KMSEND'
 #!/bin/bash
@@ -1119,6 +1654,30 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 UNIT
+
+{{- if .SlackInboundEnabled }}
+cat > /etc/systemd/system/km-slack-inbound-poller.service << 'SLACKINBOUNDUNIT'
+[Unit]
+Description=Klanker Maker Slack inbound poller — dispatches Slack messages to km agent run
+After=network.target
+[Service]
+User=root
+# Phase 67-11 follow-up: was /etc/profile.d/km-notify-env.sh, but systemd
+# rejects the 'export VAR=val' shell prefix used by that file. The compiler
+# now also writes /etc/km/notify.env in systemd-native format (no export
+# prefix) with the same key/value pairs from spec.cli.notify*. Leading '-'
+# makes systemd tolerate a missing file (older AMIs / disabled NotifyEnv).
+EnvironmentFile=-/etc/km/notify.env
+Environment=SANDBOX_ID={{ .SandboxID }}
+Environment=KM_SANDBOX_ID={{ .SandboxID }}
+ExecStart=/opt/km/bin/km-slack-inbound-poller
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+SLACKINBOUNDUNIT
+echo "[km-bootstrap] km-slack-inbound-poller.service installed"
+{{- end }}
 
 # km-recv: read and display signed emails from /var/mail/km/new/
 # Usage: km-recv [--json] [--watch] [--mark-read]
@@ -1664,12 +2223,12 @@ echo "[km-bootstrap] km-recv installed at /opt/km/bin/km-recv"
 
 {{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
 # In eBPF/gatekeeper mode, skip km-dns-proxy (enforcer runs its own DNS resolver)
-systemctl enable km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}
-systemctl start km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}
+systemctl enable km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
+systemctl start km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
 echo "[km-bootstrap] Sidecars started (DNS via eBPF enforcer, not km-dns-proxy)"
 {{- else }}
-systemctl enable km-dns-proxy km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}
-systemctl start km-dns-proxy km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}
+systemctl enable km-dns-proxy km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
+systemctl start km-dns-proxy km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
 echo "[km-bootstrap] Sidecars started"
 {{- end }}
 echo "[km-bootstrap] Shell audit hook installed at /etc/profile.d/km-audit.sh"
@@ -2224,6 +2783,27 @@ type userDataParams struct {
 	// during user-data execution. Populated from spec.cli.notify* profile fields.
 	// When empty (Spec.CLI == nil), no env file is written.
 	NotifyEnv map[string]string
+	// SlackInboundEnabled gates conditional emission of the km-slack-inbound-poller
+	// bash script, its systemd unit, and the systemctl enable/start lines.
+	// Set from profile.Spec.CLI.NotifySlackInboundEnabled (Phase 67).
+	SlackInboundEnabled bool
+	// NotifySlackEnabled gates conditional emission of the runtime SSM-fetch
+	// bootstrap step that polls /sandbox/{id}/slack-channel-id and
+	// /km/slack/bridge-url, writing them into /etc/profile.d/km-slack-runtime.sh.
+	// Replaces the SCP-blocked ssm:SendCommand path (Phase 63 Step 11d) — set
+	// from profile.Spec.CLI.NotifySlackEnabled.
+	NotifySlackEnabled bool
+	// SlackThreadsTableName is the DynamoDB table name for km_slack_threads.
+	// Populated from KM_SLACK_THREADS_TABLE env var (fallback "km-slack-threads").
+	// Phase 66 multi-instance overrides propagate via this field so the poller's
+	// ${KM_SLACK_THREADS_TABLE:-km-slack-threads} fallback can see a non-default prefix.
+	SlackThreadsTableName string
+	// SlackStreamMessagesTableName is the DynamoDB table name for the Phase 68
+	// km-slack-stream-messages table (channel_id + slack_ts → transcript-offset
+	// mapping). Populated from Config.GetSlackStreamMessagesTableName() so Phase 66
+	// multi-instance prefix overrides propagate to KM_SLACK_STREAM_TABLE consumers
+	// (Plan 68-09 hook script, Plan 68-10 km create env injection).
+	SlackStreamMessagesTableName string
 }
 
 // parseUserDataTemplate parses the userDataTemplate and returns the compiled template.
@@ -2327,6 +2907,10 @@ func mergeNotifyHookIntoSettings(configFiles map[string]string) (map[string]stri
 
 	appendKMHook("Notification", "/opt/km/bin/km-notify-hook Notification")
 	appendKMHook("Stop", "/opt/km/bin/km-notify-hook Stop")
+	// Phase 68: per-turn transcript streaming. The hook entry is unconditional
+	// (matches Phase 62/63 pattern) and the script gates at runtime via
+	// KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED.
+	appendKMHook("PostToolUse", "/opt/km/bin/km-notify-hook PostToolUse")
 
 	settings["hooks"] = hooks
 
@@ -2478,7 +3062,73 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		}
 		// KM_SLACK_BRIDGE_URL is intentionally NOT emitted at compile time —
 		// it requires a runtime SSM lookup of /km/slack/bridge-url. See Plan 08.
+
+		// Phase 67: Slack inbound — emit KM_SLACK_THREADS_TABLE so the poller's
+		// ${KM_SLACK_THREADS_TABLE:-km-slack-threads} fallback can see Phase 66
+		// multi-instance overrides (e.g. stg-slack-threads). Also emit
+		// KM_SLACK_INBOUND_QUEUE_URL as an empty placeholder; km create fills
+		// it at runtime via SSM SendCommand after queue creation (Plan 67-06).
+		if p.Spec.CLI.NotifySlackInboundEnabled {
+			threadsTable := os.Getenv("KM_SLACK_THREADS_TABLE")
+			if threadsTable == "" {
+				threadsTable = "km-slack-threads"
+			}
+			notifyEnv["KM_SLACK_THREADS_TABLE"] = threadsTable
+			// KM_SLACK_INBOUND_QUEUE_URL is a runtime value injected by km create.
+			// Reserve the slot here so the env file always has the key; km create
+			// overwrites the empty value after creating the SQS queue.
+			notifyEnv["KM_SLACK_INBOUND_QUEUE_URL"] = ""
+		}
 		params.NotifyEnv = notifyEnv
+
+		// Phase 67: wire SlackInboundEnabled for template conditionals and
+		// SlackThreadsTableName for the systemd EnvironmentFile (informational).
+		if p.Spec.CLI.NotifySlackInboundEnabled {
+			params.SlackInboundEnabled = true
+			threadsTable := os.Getenv("KM_SLACK_THREADS_TABLE")
+			if threadsTable == "" {
+				threadsTable = "km-slack-threads"
+			}
+			params.SlackThreadsTableName = threadsTable
+		}
+
+		// Phase 68: populate SlackStreamMessagesTableName for the transcript hook
+		// path. Mirrors the SlackThreadsTableName pattern — env var with a sane
+		// default. Plan 10 (km create env injection) propagates the operator's
+		// Config.GetSlackStreamMessagesTableName() into KM_SLACK_STREAM_TABLE so
+		// Phase 66 multi-instance prefix overrides reach the sandbox-side hook.
+		// We read it unconditionally (not gated on NotifySlackTranscriptEnabled)
+		// so the field is always available to downstream template consumers; the
+		// hook itself short-circuits when the feature is off.
+		streamTable := os.Getenv("KM_SLACK_STREAM_TABLE")
+		if streamTable == "" {
+			streamTable = "km-slack-stream-messages"
+		}
+		params.SlackStreamMessagesTableName = streamTable
+
+		// Phase 68 Plan 10: transcript streaming env vars. When the profile sets
+		// notifySlackTranscriptEnabled: true, emit both env vars into
+		// /etc/profile.d/km-notify-env.sh and /etc/km/notify.env. The hook's
+		// PostToolUse + Stop+transcript branches gate on
+		// KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED=1, and km-slack record-mapping /
+		// upload calls read the table name from KM_SLACK_STREAM_TABLE.
+		// When false (or unset), emit neither — the hook's :-0 default keeps
+		// the feature off (Phase 62 convention: omit env lines for unset
+		// features).
+		if p.Spec.CLI.NotifySlackTranscriptEnabled {
+			params.NotifyEnv["KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED"] = "1"
+			params.NotifyEnv["KM_SLACK_STREAM_TABLE"] = params.SlackStreamMessagesTableName
+		}
+
+		// Phase 67 gap closure: replaces Phase 63 Step 11d ssm:SendCommand path.
+		// Cloud-init polls SSM Parameter Store for the channel id (per-sandbox) and
+		// the bridge URL (operator-wide) and writes them to a profile.d file the
+		// poller / hooks can source. ssm:SendCommand is denied by an org-level SCP
+		// for the application account, so the original push-into-the-instance
+		// approach silently fails.
+		if p.Spec.CLI.NotifySlackEnabled != nil && *p.Spec.CLI.NotifySlackEnabled {
+			params.NotifySlackEnabled = true
+		}
 	}
 
 	// Phase 62 (HOOK-02): merge km-notify-hook entries into ~/.claude/settings.json.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"io"
 )
 
 // ErrNonceReplayed is returned by NonceStore.Reserve when the nonce already
@@ -61,4 +62,25 @@ type BotTokenFetcher interface {
 type SlackPoster interface {
 	PostMessage(ctx context.Context, channel, subject, body, threadTS string) (string, error)
 	ArchiveChannel(ctx context.Context, channelID string) error
+}
+
+// S3ObjectGetter abstracts S3 GetObject for streaming transcripts to Slack
+// without buffering the full body in Lambda memory. Phase 68.
+//
+// Production implementation: S3GetterAdapter (aws_adapters.go) wraps an
+// *s3.Client and pulls from KM_ARTIFACTS_BUCKET. Caller MUST Close() the
+// returned reader.
+type S3ObjectGetter interface {
+	// GetObject returns the body stream and Content-Length for the given key.
+	GetObject(ctx context.Context, key string) (body io.ReadCloser, contentLength int64, err error)
+}
+
+// SlackFileUploader abstracts the 3-step Slack file upload flow (Plan 04
+// pkg/slack.Client.UploadFile). Phase 68.
+//
+// Production implementation: SlackFileUploaderAdapter (aws_adapters.go) wraps
+// a *slack.Client and forwards through UploadFile, returning fileID + permalink
+// for inclusion in the bridge response body.
+type SlackFileUploader interface {
+	UploadFile(ctx context.Context, channel, threadTS, filename, contentType string, sizeBytes int64, body io.Reader) (fileID, permalink string, err error)
 }

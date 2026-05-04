@@ -121,19 +121,21 @@ func metadataToRecord(meta *SandboxMetadata) SandboxRecord {
 		status = "running" // backward compat: old metadata without status field
 	}
 	return SandboxRecord{
-		SandboxID:      meta.SandboxID,
-		Profile:        meta.ProfileName,
-		Substrate:      meta.Substrate,
-		Region:         meta.Region,
-		Status:         status,
-		CreatedAt:      meta.CreatedAt,
-		TTLExpiry:      meta.TTLExpiry,
-		TTLRemaining:   computeTTLRemaining(meta.TTLExpiry),
-		IdleTimeout:    meta.IdleTimeout,
-		Alias:          meta.Alias,
-		ClonedFrom:     meta.ClonedFrom,
-		Locked:         meta.Locked,
-		TeardownPolicy: meta.TeardownPolicy,
+		SandboxID:            meta.SandboxID,
+		Profile:              meta.ProfileName,
+		Substrate:            meta.Substrate,
+		Region:               meta.Region,
+		Status:               status,
+		CreatedAt:            meta.CreatedAt,
+		TTLExpiry:            meta.TTLExpiry,
+		TTLRemaining:         computeTTLRemaining(meta.TTLExpiry),
+		IdleTimeout:          meta.IdleTimeout,
+		Alias:                meta.Alias,
+		ClonedFrom:           meta.ClonedFrom,
+		Locked:               meta.Locked,
+		TeardownPolicy:       meta.TeardownPolicy,
+		SlackChannelID:       meta.SlackChannelID,
+		SlackInboundQueueURL: meta.SlackInboundQueueURL,
 	}
 }
 
@@ -249,6 +251,11 @@ func unmarshalSlackFields(item map[string]dynamodbtypes.AttributeValue, meta *Sa
 			meta.SlackArchiveOnDestroy = &val
 		}
 	}
+	if v, ok := item["slack_inbound_queue_url"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			meta.SlackInboundQueueURL = sv.Value
+		}
+	}
 }
 
 // marshalSandboxItem converts a SandboxMetadata to a raw DynamoDB item map.
@@ -320,6 +327,17 @@ func marshalSandboxItem(meta *SandboxMetadata) map[string]dynamodbtypes.Attribut
 	// This preserves round-trip semantics: nil in → nil out, &bool in → &bool out.
 	if meta.SlackArchiveOnDestroy != nil {
 		item["slack_archive_on_destroy"] = &dynamodbtypes.AttributeValueMemberBOOL{Value: *meta.SlackArchiveOnDestroy}
+	}
+
+	// Phase 67 — Slack-inbound metadata. WriteSandboxMetadataDynamo uses PutItem
+	// (full replace), so any read-modify-write path (resume.go TTL recreation,
+	// extend.go, ttl-handler Lambda, etc.) silently dropped this field if it
+	// wasn't included here. The bridge Lambda then warned "unknown channel or
+	// inbound disabled" and dropped Slack messages — observed on l11 after a
+	// TTL/extend write between successful turns. Symmetric with unmarshal at
+	// line ~254.
+	if meta.SlackInboundQueueURL != "" {
+		item["slack_inbound_queue_url"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.SlackInboundQueueURL}
 	}
 
 	return item
@@ -605,6 +623,50 @@ func UpdateSandboxStatusAndClearTTL(ctx context.Context, client SandboxMetadataA
 	})
 	if err != nil {
 		return fmt.Errorf("update status and clear TTL for sandbox %s: %w", sandboxID, err)
+	}
+	return nil
+}
+
+// UpdateSandboxStringAttrDynamo sets a single string attribute on an existing
+// km-sandboxes DynamoDB row. Used by Phase 67 Plan 06 to write
+// slack_inbound_queue_url after the SQS queue is created.
+//
+// When value is empty, the attribute is REMOVED from the item (cleans up
+// rollback leftovers without leaving empty-string entries in DynamoDB).
+func UpdateSandboxStringAttrDynamo(ctx context.Context, client SandboxMetadataAPI, tableName, sandboxID, attr, value string) error {
+	if value == "" {
+		// Remove the attribute entirely — matches "absent = not set" convention
+		// used by last_pause_hint_ts and other optional Phase 67 attributes.
+		_, err := client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+			TableName: awssdk.String(tableName),
+			Key: map[string]dynamodbtypes.AttributeValue{
+				"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+			},
+			UpdateExpression: awssdk.String("REMOVE #a"),
+			ExpressionAttributeNames: map[string]string{
+				"#a": attr,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("remove attr %q for sandbox %s: %w", attr, sandboxID, err)
+		}
+		return nil
+	}
+	_, err := client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: awssdk.String(tableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+		},
+		UpdateExpression: awssdk.String("SET #a = :val"),
+		ExpressionAttributeNames: map[string]string{
+			"#a": attr,
+		},
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":val": &dynamodbtypes.AttributeValueMemberS{Value: value},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("set attr %q for sandbox %s: %w", attr, sandboxID, err)
 	}
 	return nil
 }

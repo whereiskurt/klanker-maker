@@ -16,7 +16,7 @@ func shellTestBoolPtr(b bool) *bool { return &b }
 
 // TestBuildNotifySendCommands_BothNil verifies that (nil, nil) returns empty slices.
 func TestBuildNotifySendCommands_BothNil(t *testing.T) {
-	write, cleanup := buildNotifySendCommands(nil, nil)
+	write, cleanup := buildNotifySendCommands(nil, nil, nil)
 	if write != nil || cleanup != nil {
 		t.Errorf("expected nil/nil, got write=%v cleanup=%v", write, cleanup)
 	}
@@ -26,7 +26,7 @@ func TestBuildNotifySendCommands_BothNil(t *testing.T) {
 // pointer produces write commands containing KM_NOTIFY_ON_PERMISSION="1"
 // but NOT KM_NOTIFY_ON_IDLE, plus a cleanup command.
 func TestBuildNotifySendCommands_PermissionOnly(t *testing.T) {
-	write, cleanup := buildNotifySendCommands(shellTestBoolPtr(true), nil)
+	write, cleanup := buildNotifySendCommands(shellTestBoolPtr(true), nil, nil)
 	if len(write) < 1 {
 		t.Fatal("expected at least 1 write cmd")
 	}
@@ -45,7 +45,7 @@ func TestBuildNotifySendCommands_PermissionOnly(t *testing.T) {
 // TestBuildNotifySendCommands_BothExplicit verifies that both pointers set
 // produces write commands containing both KM_NOTIFY_ON_PERMISSION and KM_NOTIFY_ON_IDLE.
 func TestBuildNotifySendCommands_BothExplicit(t *testing.T) {
-	write, cleanup := buildNotifySendCommands(shellTestBoolPtr(true), shellTestBoolPtr(false))
+	write, cleanup := buildNotifySendCommands(shellTestBoolPtr(true), shellTestBoolPtr(false), nil)
 	joined := strings.Join(write, "\n")
 	if !strings.Contains(joined, `KM_NOTIFY_ON_PERMISSION="1"`) {
 		t.Errorf("missing perm=1, got:\n%s", joined)

@@ -34,7 +34,14 @@ type BedrockModelRate struct {
 
 // staticBedrockRates is the fallback pricing table used when the AWS Pricing API
 // is unavailable. Rates are in USD per 1,000 tokens.
-// Source: https://aws.amazon.com/bedrock/pricing/ (as of 2025)
+// Source: https://aws.amazon.com/bedrock/pricing/ + platform.claude.com/docs/en/about-claude/pricing
+// (verified 2026-05-03)
+//
+// Note: Opus 4.7 includes the 1M context window at standard pricing — no separate tier.
+// Note: Bedrock model IDs may appear as the bare form (anthropic.claude-opus-4-7) or with
+// a cross-region inference profile prefix (us.anthropic.claude-opus-4-7-v1). Both variants
+// are included so the proxy's URL-extracted modelID matches regardless of how the SDK was
+// configured.
 var staticBedrockRates = map[string]BedrockModelRate{
 	// Claude 3 Haiku (deprecated 2026-04-19)
 	"anthropic.claude-3-haiku-20240307-v1:0": {
@@ -69,6 +76,17 @@ var staticBedrockRates = map[string]BedrockModelRate{
 		ModelID:                "anthropic.claude-haiku-4-5-20251001-v1:0",
 		InputPricePer1KTokens:  0.001,
 		OutputPricePer1KTokens: 0.005,
+	},
+	// Claude 4.7 — bare and cross-region inference profile variants
+	"anthropic.claude-opus-4-7": {
+		ModelID:                "anthropic.claude-opus-4-7",
+		InputPricePer1KTokens:  0.005,
+		OutputPricePer1KTokens: 0.025,
+	},
+	"anthropic.claude-opus-4-7-v1": {
+		ModelID:                "anthropic.claude-opus-4-7-v1",
+		InputPricePer1KTokens:  0.005,
+		OutputPricePer1KTokens: 0.025,
 	},
 }
 

@@ -27,7 +27,7 @@ func mergeBedrockEnv(p *profile.SandboxProfile) map[string]string {
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
 		"ANTHROPIC_BASE_URL":                     "https://bedrock-runtime." + region + ".amazonaws.com",
 		"ANTHROPIC_DEFAULT_SONNET_MODEL":          "us.anthropic.claude-sonnet-4-6",
-		"ANTHROPIC_DEFAULT_OPUS_MODEL":            "us.anthropic.claude-opus-4-6-v1",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL":            "us.anthropic.claude-opus-4-7-v1",
 		"ANTHROPIC_DEFAULT_HAIKU_MODEL":           "us.anthropic.claude-haiku-4-5-20251001-v1:0",
 		"AWS_DEFAULT_REGION":                      region,
 	}

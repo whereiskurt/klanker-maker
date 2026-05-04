@@ -404,6 +404,99 @@ resource "aws_iam_role_policy" "ec2spot_github_token" {
         Resource = [
           "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/sandbox/${var.sandbox_id}/*",
         ]
+      },
+      {
+        # Phase 67 gap closure: cloud-init bootstrap polls the operator-wide
+        # bridge URL so it can write KM_SLACK_BRIDGE_URL into the env file.
+        # /km/slack/bridge-url is shared across sandboxes (one bridge Lambda
+        # per region), so it lives outside the per-sandbox prefix.
+        Sid    = "SSMReadSlackBridgeURL"
+        Effect = "Allow"
+        Action = ["ssm:GetParameter"]
+        Resource = [
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/km/slack/bridge-url",
+        ]
+      }
+    ]
+  })
+}
+
+# Policy: SQS read access for Phase 67 Slack-inbound per-sandbox queue.
+# The sandbox-side poller (Plan 67-08) reads/deletes its own queue to consume
+# inbound Slack messages dispatched by the bridge Lambda. Scoped to the
+# sandbox's own queue ARN only — cross-sandbox read/write is prevented by IAM
+# (not just naming convention).
+#
+# The queue name follows the pattern: {resource_prefix}-slack-inbound-{sandbox_id}.fifo
+# where resource_prefix defaults to "km" (Phase 66 multi-instance aware).
+resource "aws_iam_role_policy" "ec2spot_slack_inbound_sqs" {
+  count = local.total_ec2spot_count > 0 ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-slack-inbound"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SQSReadOwnInboundQueue"
+        Effect = "Allow"
+        Action = [
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl",
+          "sqs:ChangeMessageVisibility",
+        ]
+        # Sandbox can only access ITS OWN queue — var.sandbox_id and
+        # var.resource_prefix are interpolated at module-instance time.
+        # Wildcard on region and account prevents cross-region issues when
+        # the same module template is applied in multiple regions.
+        Resource = "arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:${var.resource_prefix}-slack-inbound-${var.sandbox_id}.fifo"
+      }
+    ]
+  })
+}
+
+# Phase 68: PutObject permission for Slack transcript uploads.
+# Scoped to the sandbox's own prefix under transcripts/{sandbox_id}/* so a
+# compromised sandbox cannot overwrite another sandbox's transcripts. Gated
+# on var.artifacts_bucket — when empty, the policy is omitted entirely so
+# pre-Phase-68 callers continue to compile unchanged.
+resource "aws_iam_role_policy" "ec2spot_slack_transcript_s3" {
+  count = (local.total_ec2spot_count > 0 && var.artifacts_bucket != "") ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-slack-transcript-s3"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "S3PutTranscript"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = "arn:aws:s3:::${var.artifacts_bucket}/transcripts/${var.sandbox_id}/*"
+      }
+    ]
+  })
+}
+
+# Phase 68: PutItem permission for the stream-message → transcript-offset map.
+# Wildcard region/account so the same module template works across regions
+# the sandbox might be launched in. Gated on var.slack_stream_messages_table_name —
+# when empty, the policy is omitted.
+resource "aws_iam_role_policy" "ec2spot_slack_transcript_ddb" {
+  count = (local.total_ec2spot_count > 0 && var.slack_stream_messages_table_name != "") ? 1 : 0
+  name  = "${var.resource_prefix}-${var.sandbox_id}-slack-transcript-ddb"
+  role  = aws_iam_role.ec2spot_ssm[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "DDBPutItemStreamMessages"
+        Effect   = "Allow"
+        Action   = ["dynamodb:PutItem"]
+        Resource = "arn:aws:dynamodb:*:*:table/${var.slack_stream_messages_table_name}"
       }
     ]
   })

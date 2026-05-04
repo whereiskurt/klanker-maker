@@ -480,6 +480,15 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		}
 		slackChannelID = chID
 		slackPerSandbox = perSb
+
+		// Phase 68 Plan 10: emit an audience-containment warning when transcript
+		// streaming is enabled. Surfaces the channel id + member count to the
+		// operator BEFORE terragrunt apply runs, so they can abort if the
+		// audience is wider than expected. Non-blocking: ChannelInfo failures
+		// degrade gracefully to "Audience: unknown" rather than aborting create.
+		if resolvedProfile.Spec.CLI.NotifySlackTranscriptEnabled && slackChannelID != "" {
+			printTranscriptWarning(ctx, slackClient, slackChannelID)
+		}
 	}
 
 	// Step 7: Compile profile into Terragrunt/Docker artifacts.
@@ -820,24 +829,128 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		}
 	}
 
-	// Step 11d: Inject KM_SLACK_CHANNEL_ID and KM_SLACK_BRIDGE_URL into the running
-	// sandbox's /etc/profile.d/km-notify-env.sh via SSM SendCommand. Only runs when
-	// a Slack channel was resolved in Step 6c (shared or per-sandbox modes; override
-	// mode pre-bakes the channel ID at compile time via NotifySlackChannelOverride).
-	// Non-fatal: sandbox is provisioned even if SSM inject fails. SSM agent must be
-	// up before this completes; the SendCommand waits up to 30s for the agent.
+	// Step 11d: Publish the resolved Slack channel ID to SSM Parameter Store at
+	// /sandbox/{id}/slack-channel-id. The sandbox's cloud-init bootstrap (Phase
+	// 67 gap closure in pkg/compiler/userdata.go) polls this path and the
+	// operator-wide /km/slack/bridge-url and writes both into
+	// /etc/profile.d/km-slack-runtime.sh.
+	// Replaces the previous ssm:SendCommand path (denied by org-level SCP for
+	// the application account). Non-fatal: sandbox is provisioned even on
+	// PutParameter failure; the bootstrap WARN-logs and continues.
 	if slackChannelID != "" {
 		ssmClientForInject := ssm.NewFromConfig(awsCfg)
 		ssmStoreForInject := &productionSSMParamStore{client: ssmClientForInject}
-		ssmRunnerForInject := &productionSSMRunner{client: ssmClientForInject}
-		outputter := func(ctx context.Context, dir string) (map[string]any, error) {
-			return runner.Output(ctx, dir)
+		putParamForInject := func(pctx context.Context, name, value string) error {
+			_, err := ssmClientForInject.PutParameter(pctx, &ssm.PutParameterInput{
+				Name:      aws.String(name),
+				Value:     aws.String(value),
+				Type:      ssmtypes.ParameterTypeString,
+				Overwrite: aws.Bool(true),
+			})
+			return err
 		}
 		const (
 			step11dSSMRetryMax   = 6
 			step11dSSMRetryDelay = 5 * time.Second
 		)
-		runStep11dInject(ctx, ssmStoreForInject, ssmRunnerForInject, sandboxDir, outputter, extractOutputInstanceID, sandboxID, slackChannelID, step11dSSMRetryMax, step11dSSMRetryDelay)
+		runStep11dInject(ctx, ssmStoreForInject, putParamForInject, sandboxID, slackChannelID, step11dSSMRetryMax, step11dSSMRetryDelay)
+	}
+
+	// Step 11e: Provision per-sandbox SQS FIFO inbound queue (Phase 67-06).
+	// Only runs when notifySlackInboundEnabled=true AND a per-sandbox channel was
+	// created in Step 6c. The queue is created after Terraform apply so the EC2
+	// instance ID is available for the SSM SendCommand env injection.
+	// FATAL: failure rolls back the queue AND archives the Slack channel — km create
+	// aborts (contrast with Step 11d which is non-fatal).
+	if resolvedProfile.Spec.CLI != nil && resolvedProfile.Spec.CLI.NotifySlackInboundEnabled {
+		sandboxDynamoClient := dynamodbpkg.NewFromConfig(awsCfg)
+		step11eTableName := cfg.SandboxTableName
+		if step11eTableName == "" {
+			step11eTableName = "km-sandboxes"
+		}
+
+		sqsRegion := resolvedProfile.Spec.Runtime.Region
+		if sqsRegion == "" {
+			sqsRegion = awsCfg.Region
+		}
+		sqsClientForInbound, sqsClientErr := awspkg.NewSQSClient(ctx, sqsRegion)
+		if sqsClientErr != nil {
+			// Roll back Slack channel on SQS client init failure.
+			if slackChannelID != "" && slackPerSandbox {
+				ssmClientForArchive := ssm.NewFromConfig(awsCfg)
+				archiveBotToken, _ := (&productionSSMParamStore{client: ssmClientForArchive}).Get(ctx, "/km/slack/bot-token", true)
+				if archiveBotToken != "" {
+					archiveClient := slack.NewClient(archiveBotToken, nil)
+					if archErr := archiveClient.ArchiveChannel(ctx, slackChannelID); archErr != nil {
+						log.Warn().Err(archErr).Str("channel_id", slackChannelID).
+							Msg("Step 11e rollback: failed to archive Slack channel")
+					}
+				}
+			}
+			return fmt.Errorf("km create: slack inbound provisioning (SQS client): %w", sqsClientErr)
+		}
+
+		ssmClientFor11e := ssm.NewFromConfig(awsCfg)
+		ssmStoreFor11e := &productionSSMParamStore{client: ssmClientFor11e}
+		// Fetch bridge URL once for the ready-announcement callback below.
+		bridgeURLFor11e, _ := ssmStoreFor11e.Get(ctx, "/km/slack/bridge-url", false)
+		step11eDeps := slackInboundDeps{
+			Profile:   resolvedProfile,
+			Cfg:       cfg,
+			SandboxID: sandboxID,
+			SQS:       sqsClientForInbound,
+			UpdateSandboxAttr: func(ictx context.Context, sid, attr, val string) error {
+				return awspkg.UpdateSandboxStringAttrDynamo(ictx, sandboxDynamoClient, step11eTableName, sid, attr, val)
+			},
+			// Publish queue URL to SSM Parameter Store. The sandbox poller reads it
+			// at startup with retry/backoff. SSM SendCommand is denied by an
+			// org-level SCP for the application account, so we cannot inject the
+			// value directly into the sandbox env file from this side.
+			PutSSMParameter: func(ictx context.Context, name, val string) error {
+				_, err := ssmClientFor11e.PutParameter(ictx, &ssm.PutParameterInput{
+					Name:      aws.String(name),
+					Value:     aws.String(val),
+					Type:      ssmtypes.ParameterTypeString,
+					Overwrite: aws.Bool(true),
+				})
+				return err
+			},
+			// Phase 67-07: ready announcement callbacks.
+			PostOperatorSigned: makePostOperatorSigned(ssmClientFor11e, bridgeURLFor11e),
+			UpsertSlackThread: makeUpsertSlackThread(
+				dynamodbpkg.NewFromConfig(awsCfg),
+				cfg.GetSlackThreadsTableName(),
+			),
+		}
+
+		inboundQueueURL, inboundErr := provisionSlackInboundQueue(ctx, step11eDeps)
+		if inboundErr != nil {
+			// Mirror Phase 63 channel-failure rollback: archive the per-sandbox channel.
+			if slackChannelID != "" && slackPerSandbox {
+				ssmClientForArchive := ssm.NewFromConfig(awsCfg)
+				archiveBotToken, _ := (&productionSSMParamStore{client: ssmClientForArchive}).Get(ctx, "/km/slack/bot-token", true)
+				if archiveBotToken != "" {
+					archiveClient := slack.NewClient(archiveBotToken, nil)
+					if archErr := archiveClient.ArchiveChannel(ctx, slackChannelID); archErr != nil {
+						log.Warn().Err(archErr).Str("channel_id", slackChannelID).
+							Msg("Step 11e rollback: failed to archive Slack channel")
+					}
+				}
+			}
+			return fmt.Errorf("km create: slack inbound provisioning: %w", inboundErr)
+		}
+		if inboundQueueURL != "" {
+			log.Info().Str("sandbox_id", sandboxID).Str("queue_url", inboundQueueURL).
+				Msg("Slack inbound queue provisioned")
+		}
+
+		// Phase 67-07: Post the "Sandbox ready" announcement to the per-sandbox channel.
+		// Non-fatal: the sandbox is already provisioned; failure here does NOT abort km create.
+		if slackChannelID != "" && slackPerSandbox {
+			if annErr := postReadyAnnouncement(ctx, step11eDeps, slackChannelID); annErr != nil {
+				log.Warn().Err(annErr).Str("sandbox_id", sandboxID).Msg("ready announcement error (non-fatal)")
+			}
+		}
 	}
 
 	// Step 12: Create EventBridge TTL schedule if TTL is configured.

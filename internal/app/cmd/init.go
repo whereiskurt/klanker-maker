@@ -149,6 +149,21 @@ func regionalModules(regionDir string) []regionalModule {
 			envReqs: nil,
 		},
 		{
+			// Phase 67: DynamoDB threads table mapping (channel_id, thread_ts) →
+			// claude_session_id for Slack inbound. Bridge handler reads/writes it.
+			name:    "dynamodb-slack-threads",
+			dir:     filepath.Join(regionDir, "dynamodb-slack-threads"),
+			envReqs: nil,
+		},
+		{
+			// Phase 68: DynamoDB stream-messages table mapping (channel_id, slack_ts)
+			// → transcript byte offset for per-turn Slack streaming. Hook script
+			// writes rows; future Phase B reaction-fork reads them.
+			name:    "dynamodb-slack-stream-messages",
+			dir:     filepath.Join(regionDir, "dynamodb-slack-stream-messages"),
+			envReqs: nil,
+		},
+		{
 			// Phase 63: Slack-notify bridge Lambda with Function URL (auth=NONE;
 			// Ed25519 + nonce provide application-layer auth). Depends on
 			// dynamodb-identities, dynamodb-sandboxes, and dynamodb-slack-nonces.

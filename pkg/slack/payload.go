@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -29,6 +30,7 @@ const (
 	ActionPost    = "post"
 	ActionArchive = "archive"
 	ActionTest    = "test"
+	ActionUpload  = "upload"
 )
 
 // SenderOperator is the canonical sender_id for operator-signed envelopes.
@@ -37,20 +39,39 @@ const SenderOperator = "operator"
 // ErrBodyTooLarge is returned by BuildEnvelope when body exceeds MaxBodyBytes.
 var ErrBodyTooLarge = errors.New("slack: body exceeds 40KB limit")
 
+// Errors returned by BuildEnvelopeUpload. Named so downstream callers (Plan
+// 05 km-slack upload, Plan 08 bridge handler) can match precisely.
+var (
+	ErrUploadFilenameInvalid = errors.New("slack: upload filename invalid (must be non-empty, ≤255 bytes, no slash, no NUL)")
+	ErrUploadS3KeyEmpty      = errors.New("slack: upload s3_key required")
+	ErrUploadSizeInvalid     = errors.New("slack: upload size_bytes must be > 0")
+	ErrUploadChannelEmpty    = errors.New("slack: upload channel required")
+)
+
 // SlackEnvelope is the JSON shape of the bridge request. Fields are tagged
 // alphabetically so encoding/json produces deterministic canonical bytes for
 // signing — both sender (km-slack / operator) and verifier (bridge Lambda)
 // import this struct.
+//
+// Phase 68 added four upload-specific fields (content_type, filename, s3_key,
+// size_bytes) inserted in alphabetical-by-tag position. EnvelopeVersion stays
+// at 1: for non-upload actions the new fields serialize as their zero values
+// and are ignored bridge-side, preserving backwards compatibility with
+// existing post/archive/test signers.
 type SlackEnvelope struct {
-	Action    string `json:"action"`
-	Body      string `json:"body"`
-	Channel   string `json:"channel"`
-	Nonce     string `json:"nonce"`
-	SenderID  string `json:"sender_id"`
-	Subject   string `json:"subject"`
-	ThreadTS  string `json:"thread_ts"`
-	Timestamp int64  `json:"timestamp"`
-	Version   int    `json:"version"`
+	Action      string `json:"action"`
+	Body        string `json:"body"`
+	Channel     string `json:"channel"`
+	ContentType string `json:"content_type"`
+	Filename    string `json:"filename"`
+	Nonce       string `json:"nonce"`
+	S3Key       string `json:"s3_key"`
+	SenderID    string `json:"sender_id"`
+	SizeBytes   int64  `json:"size_bytes"`
+	Subject     string `json:"subject"`
+	ThreadTS    string `json:"thread_ts"`
+	Timestamp   int64  `json:"timestamp"`
+	Version     int    `json:"version"`
 }
 
 // BuildEnvelope constructs a fresh envelope with a random 128-bit nonce and the
@@ -73,6 +94,52 @@ func BuildEnvelope(action, senderID, channel, subject, body, threadTS string) (*
 		ThreadTS:  threadTS,
 		Timestamp: time.Now().Unix(),
 		Version:   EnvelopeVersion,
+	}, nil
+}
+
+// BuildEnvelopeUpload constructs a fresh ActionUpload envelope. The body field
+// is intentionally empty — uploads carry the file via S3 and the four new
+// upload-specific fields (content_type, filename, s3_key, size_bytes).
+// EnvelopeVersion stays at 1 (additive change). MaxBodyBytes does not apply.
+//
+// Validation:
+//   - channel must be non-empty
+//   - s3Key must be non-empty
+//   - filename must be non-empty, ≤255 bytes, contain no '/' or NUL byte
+//   - sizeBytes must be > 0
+//
+// contentType is not validated here (the bridge enforces an allow-list).
+func BuildEnvelopeUpload(senderID, channel, threadTS, s3Key, filename, contentType string, sizeBytes int64) (*SlackEnvelope, error) {
+	if channel == "" {
+		return nil, ErrUploadChannelEmpty
+	}
+	if s3Key == "" {
+		return nil, ErrUploadS3KeyEmpty
+	}
+	if filename == "" || len(filename) > 255 || strings.ContainsAny(filename, "/\x00") {
+		return nil, ErrUploadFilenameInvalid
+	}
+	if sizeBytes <= 0 {
+		return nil, ErrUploadSizeInvalid
+	}
+	var nb [16]byte
+	if _, err := rand.Read(nb[:]); err != nil {
+		return nil, fmt.Errorf("slack: nonce read: %w", err)
+	}
+	return &SlackEnvelope{
+		Action:      ActionUpload,
+		Body:        "",
+		Channel:     channel,
+		ContentType: contentType,
+		Filename:    filename,
+		Nonce:       hex.EncodeToString(nb[:]),
+		S3Key:       s3Key,
+		SenderID:    senderID,
+		SizeBytes:   sizeBytes,
+		Subject:     "",
+		ThreadTS:    threadTS,
+		Timestamp:   time.Now().Unix(),
+		Version:     EnvelopeVersion,
 	}, nil
 }
 

@@ -324,6 +324,63 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 				IsWarning: true,
 			})
 		}
+
+		// Phase 67 — Slack inbound validation rules.
+		inboundOn := cli.NotifySlackInboundEnabled
+		if inboundOn {
+			// Rule SI1 (error): inbound requires outbound Slack enabled.
+			if !slackOn {
+				errs = append(errs, ValidationError{
+					Path:    "spec.cli.notifySlackInboundEnabled",
+					Message: "notifySlackInboundEnabled: true requires notifySlackEnabled: true",
+				})
+			}
+			// Rule SI2 (error): inbound requires per-sandbox channel (1:1 routing).
+			if !perSandbox {
+				errs = append(errs, ValidationError{
+					Path:    "spec.cli.notifySlackInboundEnabled",
+					Message: "notifySlackInboundEnabled: true requires notifySlackPerSandbox: true",
+				})
+			}
+			// Rule SI3 (error): inbound incompatible with channel override (ambiguous routing).
+			if override != "" {
+				errs = append(errs, ValidationError{
+					Path:    "spec.cli.notifySlackInboundEnabled",
+					Message: "notifySlackInboundEnabled: true is incompatible with notifySlackChannelOverride (channel→sandbox routing requires 1:1 mapping in v1)",
+				})
+			}
+		}
+
+		// Phase 68 — Slack transcript streaming validation rules.
+		// Mirror Phase 67 inbound: same prerequisites (outbound Slack + per-sandbox)
+		// and same incompatibility (channel override) — both flags require
+		// audience-containment guarantees.
+		transcriptOn := cli.NotifySlackTranscriptEnabled
+		if transcriptOn {
+			// Rule ST1 (error): transcript requires outbound Slack enabled.
+			if !slackOn {
+				errs = append(errs, ValidationError{
+					Path:    "spec.cli.notifySlackTranscriptEnabled",
+					Message: "notifySlackTranscriptEnabled requires notifySlackEnabled",
+				})
+			}
+			// Rule ST2 (error): transcript requires per-sandbox channel.
+			if !perSandbox {
+				errs = append(errs, ValidationError{
+					Path:    "spec.cli.notifySlackTranscriptEnabled",
+					Message: "notifySlackTranscriptEnabled requires notifySlackPerSandbox",
+				})
+			}
+			// Rule ST3 (error): transcript incompatible with channel override
+			// (transcript audience must be operator-controlled — the per-sandbox
+			// channel guarantees a known invitee list).
+			if override != "" {
+				errs = append(errs, ValidationError{
+					Path:    "spec.cli.notifySlackTranscriptEnabled",
+					Message: "notifySlackTranscriptEnabled is incompatible with notifySlackChannelOverride (transcript audience must be operator-controlled)",
+				})
+			}
+		}
 	}
 
 	return errs

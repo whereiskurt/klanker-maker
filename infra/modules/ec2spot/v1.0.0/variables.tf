@@ -127,3 +127,25 @@ variable "additional_volume_device_name" {
   description = "Device name for the additional EBS volume attachment. Defaults to /dev/sdf; the compiler picks the first non-colliding name from /dev/sd[f-p] when the source AMI's BDMs already include /dev/sdf (Phase 56.1 BDM collision fix)."
   default     = "/dev/sdf"
 }
+
+variable "resource_prefix" {
+  type        = string
+  description = "Phase 66 multi-instance resource prefix (e.g. 'km', 'stg', 'kpf'). Applied to SQS queue names and IAM policy names scoped to this sandbox instance. Default 'km' matches the platform default."
+  default     = "km"
+}
+
+# ============================================================
+# Phase 68 — Slack transcript streaming (per-turn chat + gzipped JSONL upload)
+# ============================================================
+
+variable "artifacts_bucket" {
+  type        = string
+  description = "Name of the project-wide S3 artifacts bucket (KM_ARTIFACTS_BUCKET). Used to scope per-sandbox PutObject policies for transcripts and other sidecar uploads. When empty, the transcript S3 IAM policy is skipped."
+  default     = ""
+}
+
+variable "slack_stream_messages_table_name" {
+  type        = string
+  description = "DynamoDB table name for Slack transcript stream-messages mapping. When non-empty, the sandbox EC2 role gains dynamodb:PutItem on this table (Phase 68)."
+  default     = ""
+}

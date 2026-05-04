@@ -1,0 +1,12 @@
+{"type":"user","message":{"content":[{"type":"text","text":"please refactor main.go"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Starting refactor."}]}}
+{"type":"tool_use","name":"Edit","input":{"file_path":"/workspace/main.go","old_string":"foo","new_string":"bar"}}
+{"type":"tool_result","content":"ok"}
+{"type":"tool_use","name":"Bash","input":{"command":"go build ./..."}}
+{"type":"tool_result","content":"ok"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"First pass done."}]}}
+{"type":"user","message":{"content":[{"type":"text","text":"now run tests"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Running tests."}]}}
+{"type":"tool_use","name":"Bash","input":{"command":"go test ./..."}}
+{"type":"tool_result","content":"ok"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"All tests pass."}]}}

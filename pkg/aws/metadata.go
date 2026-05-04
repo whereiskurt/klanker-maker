@@ -40,4 +40,10 @@ type SandboxMetadata struct {
 	// Persisted at km create so km destroy is self-contained (Plan 63-08 sets it;
 	// Plan 63-09 reads it at destroy time).
 	SlackArchiveOnDestroy *bool `json:"slack_archive_on_destroy,omitempty"`
+
+	// Phase 67 — Slack-inbound metadata.
+	// SlackInboundQueueURL is the SQS FIFO queue URL for inbound Slack messages.
+	// Empty when notifySlackInboundEnabled was false at create time.
+	// Populated by provisionSlackInboundQueue (Plan 67-06); read by drainSlackInbound (Plan 67-07).
+	SlackInboundQueueURL string `json:"slack_inbound_queue_url,omitempty"`
 }

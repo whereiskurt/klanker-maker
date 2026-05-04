@@ -1,0 +1,355 @@
+# Deferred Items — Phase 68
+
+Tracks pre-existing test failures discovered while running `go test ./...` during Plan 68-00 (Wave 0 stub seeding). These are NOT caused by Plan 68-00 changes (verified by stashing the new stub files and rerunning — same failures reproduce on the unmodified baseline).
+
+Per the GSD execution scope-boundary rule, out-of-scope discoveries are logged here rather than auto-fixed.
+
+## Pre-existing failures on baseline (gsd/phase-67-slack-inbound, commit 36f263b)
+
+Confirmed via `git stash --include-untracked && go test … && git stash pop`.
+
+### `pkg/compiler/`
+- `TestUserDataNotifyEnv_NoChannelOverride_NoChannelID`
+- `TestUserDataNotifyEnv_BridgeURLNeverEmittedAtCompileTime`
+
+### `cmd/km-slack/`
+- `TestKmSlackPost_BridgeReturns503ThenSuccess_Exit0`
+
+### `internal/app/cmd/`
+- `TestAtList_WithRecords`
+- `TestConfigureInteractivePromptsUseNewNames`
+- `TestCreateDockerWritesComposeFile`
+- `TestApplyLifecycleOverrides_RunCreateRemoteSignature`
+- `TestListCmd_EmptyStateBucketError`
+- `TestLockCmd_RequiresStateBucket`
+- `TestShellDockerContainerName`
+- `TestShellDockerNoRootFlag`
+- `TestLearnOutputPath`
+- `TestShellCmd_StoppedSandbox`
+- `TestShellCmd_UnknownSubstrate`
+- `TestShellCmd_MissingInstanceID`
+- `TestUnlockCmd_RequiresStateBucket`
+
+## Disposition
+
+These should be triaged separately (likely environment-dependent — many are bucket/state checks that probably need AWS env or test fixtures). They do NOT block Plan 68-00 verification because:
+
+1. Plan 68-00 verify command targets only the new stub names — all 63 SKIPs reported.
+2. The targeted package builds (`go build ./...`) succeeded without errors.
+3. None of the failing tests overlap with the 13 stub files seeded in Plan 68-00.
+
+If these are intended to pass on this branch, they should be addressed in a dedicated cleanup plan or marked `t.Skip` with a tracking note in their own packages.
+
+## Plan 68-02 follow-up: 68-01 validation tests pre-promoted but not implemented
+
+While executing Plan 68-02, the working tree contained an in-flight modification to `pkg/profile/validate_slack_transcript_test.go` that promoted four Plan 68-01 stubs to real assertions BEFORE the corresponding validation logic was added to `pkg/profile/validate.go`. That file was inadvertently swept into commit `78955b8` (Plan 68-02's Task 2 commit) because it was already-modified in the worktree.
+
+Failing tests (all live in Plan 68-01's scope, not 68-02):
+
+- `TestValidate_SlackTranscript_RequiresSlackEnabled`
+- `TestValidate_SlackTranscript_RequiresPerSandbox`
+- `TestValidate_SlackTranscript_IncompatibleWithChannelOverride`
+
+These tests expect `notifySlackTranscriptEnabled` validation rules (must require `notifySlackEnabled: true`, must require `notifySlackPerSandbox: true`, must conflict with `notifySlackChannelOverride`). The validation logic landing in Plan 68-01's full implementation will turn them green. Until then, they are out-of-scope failures bundled into Plan 68-02's commit due to a worktree-staging accident — Plan 68-01's executor should pick them up when it adds the validation rules to `pkg/profile/validate.go`.
+
+Plan 68-02's actual scope (`pkg/slack/...`) is 100% green:
+- 4 new TestCanonicalJSON_ActionUpload / TestBuildEnvelopeUpload tests PASS
+- All Phase 63 baseline tests still PASS (golden constant updated for new fields)
+- `go build ./...` clean
+
+## Plan 68-06 confirmation: pre-existing TestUserDataNotifyEnv_* failures unchanged
+
+While executing Plan 68-06, the two `TestUserDataNotifyEnv_NoChannelOverride_NoChannelID`
+and `TestUserDataNotifyEnv_BridgeURLNeverEmittedAtCompileTime` failures listed above
+were re-confirmed as pre-existing — they fail identically on the pre-change tree
+(verified via `git stash && go test … && git stash pop`). Plan 68-06's changes
+(adding `SlackStreamMessagesTableName` to `userDataParams` + `ec2HCLParams`, wiring
+`artifacts_bucket` + `slack_stream_messages_table_name` into the ec2spot terragrunt
+template, and adding new IAM policies in `infra/modules/ec2spot/v1.0.0`) do not
+touch the KM_SLACK_CHANNEL_ID / KM_SLACK_BRIDGE_URL emission path. `go build ./...`
+clean after Plan 68-06 changes.
+
+## Plan 68-09 confirmation: pre-existing TestUserDataNotifyEnv_* failures unchanged
+
+While executing Plan 68-09 (km-notify-hook PostToolUse + Stop transcript
+upload), the same two `TestUserDataNotifyEnv_NoChannelOverride_NoChannelID`
+and `TestUserDataNotifyEnv_BridgeURLNeverEmittedAtCompileTime` failures listed
+above were re-confirmed as pre-existing (verified via `git stash && go test
+… && git stash pop`). Plan 68-09's changes (km-notify-hook heredoc extension
++ PostToolUse settings.json registration + 11 new tests) do not touch the
+KM_SLACK_CHANNEL_ID / KM_SLACK_BRIDGE_URL emission path, and `go build ./...`
+remains clean after Plan 68-09 commits.
+
+Plan 68-09's actual scope is 100% green:
+- 10 new `TestNotifyHook_PostToolUse_*` and `TestNotifyHook_Stop_*` tests PASS
+- 1 new `TestUserData_PostToolUseHookRegistered` test PASS
+- 8 pre-existing Phase 62/63 `TestNotifyHook_*` tests still PASS (no regression)
+- 2 pre-existing Phase 67 `TestUserdata_StopHook*` tests still PASS (the
+  `# 6a.` / `# 6b.` markers in the heredoc are preserved)
+- Full pkg/compiler suite: all tests PASS except the two pre-existing
+  baseline failures listed above.
+
+## Plan 68-07 confirmation: pre-existing TestShellCmd_* failures unchanged
+
+While executing Plan 68-07 (`--transcript-stream` / `--no-transcript-stream` flag
+plumbing for `km agent run` and `km shell`), the three `TestShellCmd_StoppedSandbox`,
+`TestShellCmd_UnknownSubstrate`, and `TestShellCmd_MissingInstanceID` failures listed
+above were re-confirmed as pre-existing — they fail identically on the pre-change
+tree (verified via `git stash --keep-index … && go test … && git stash pop`). Plan
+68-07's changes (adding `TranscriptStream *bool` to `AgentRunOptions`, two new flags
+on each command, a `resolveTranscriptFlag` helper, and extending
+`buildNotifySendCommands` with a third `transcript` arg) do NOT touch the
+`runShell` error-propagation path that those tests assert on. The pre-existing
+`_ = runShell(…)` swallow at shell.go:209 is not a Plan 68-07 regression.
+
+Plan 68-07's actual scope is 100% green:
+- All 3 new `TestAgentRun_TranscriptStream*` tests PASS
+- All 3 new `TestShell_TranscriptStream*` tests PASS
+- All existing `TestBuildAgentShellCommands_Notify*`, `TestBuildNotifySendCommands_*`,
+  and `TestResolveNotifyFlags_*` tests still PASS (the existing
+  `buildNotifySendCommands` callers in `shell_notify_test.go` were updated to pass
+  `nil` as the new third arg — preserves Phase 62 semantics)
+- `go build ./...` clean
+
+## Plan 68-11 transient cross-plan compile conflict (resolved during execution)
+
+While executing Plan 68-11 (km doctor checks for transcript streaming), the
+test binary for `internal/app/cmd/...` briefly failed to link due to in-flight
+artifacts from Plan 68-10 (running in parallel on the same branch per the
+executor concurrency note):
+
+- `internal/app/cmd/testhelpers_test.go:13:6: captureStderr redeclared in this block`
+  (other declaration in `create_slack_transcript_test.go:36:6`)
+- `internal/app/cmd/create_slack_transcript_test.go:61:3: undefined: printTranscriptWarning`
+- `internal/app/cmd/create_slack_transcript_test.go:95:3: undefined: printTranscriptWarning`
+
+Plan 68-11 did NOT modify any of these files (scope boundary). The conflict
+resolved itself during Plan 68-11 execution as Plan 68-10's executor advanced
+its tasks (printTranscriptWarning was added to its production source and the
+duplicate captureStderr declaration was reconciled).
+
+Final verification on Plan 68-11 commits:
+- `go build ./...` clean
+- `go vet ./internal/app/cmd/...` clean
+- `go test ./internal/app/cmd/... -count=1 -run "TestDoctor_SlackTranscript|TestDoctor_SlackFilesWrite" -v` reports 12 PASS (5 original Wave-0 stub names + 7 added coverage cases)
+- All Phase 67 `TestDoctor_SlackInbound*` tests still PASS (no regression — the new checks share the existing `getScopes` callback that the inbound suite drives).
+
+## Plan 68-12 confirmation: full-suite failures all pre-existing
+
+Plan 68-12 is a documentation-only plan (CONTEXT.md table-name amendment,
+docs/slack-notifications.md Phase 68 section, CLAUDE.md sub-section, UAT). It
+makes ZERO Go source changes. The full `go test ./... -timeout 300s -count=1`
+run during Plan 12 Task 3 surfaced 19 unique FAIL test names plus a
+`cmd/ttl-handler` timeout. Each was confirmed pre-existing by re-running the
+suite on the baseline (with Plan 12's doc edits stashed and the unrelated WT
+modifications to VERSION, otel.go, status.go, pricing.go, bedrock.go,
+anthropic.go, anthropic_test.go also stashed). Result: identical FAIL names
+on baseline. Plan 12 introduces NO new failures.
+
+Newly observed in Plan 12's run (not previously listed above):
+
+### `cmd/configui/`
+- `TestHandleValidate_ValidYAML` — schema rejects `spec.sourceAccess.github.permissions` (pre-existing schema/test drift)
+
+### `internal/app/cmd/`
+- `TestStatusCmd_EmptyStateBucketError` — same state-bucket gate pattern as the other `*_RequiresStateBucket` failures already listed; pre-existing
+
+### `cmd/ttl-handler/`
+- `cmd/ttl-handler` package times out at 300s — long-running test or hang; pre-existing
+
+### Transient (non-deterministic)
+- `TestLoadEFSOutputs_NotExist` — failed once during the full-suite run, PASS on isolated re-run; flake (filesystem race or environment dependency)
+
+These do NOT block Plan 68-12 completion because:
+
+1. Plan 12 makes no Go source changes.
+2. All listed failures (except `TestStatusCmd_EmptyStateBucketError`,
+   `TestHandleValidate_ValidYAML`, `cmd/ttl-handler` timeout, and the
+   `TestLoadEFSOutputs_NotExist` flake) were already documented in this file
+   before Plan 12 began.
+3. The four newly-named failures all reproduce on the unmodified baseline
+   (verified via stash-and-rerun).
+4. Triage of these failures belongs in a future cleanup phase, not Phase 68.
+
+Plan 68-12 actual scope (docs-only):
+- 68-CONTEXT.md amended (table name + RESOLVED 2026-05-03 audit annotations)
+- STATE.md Phase 68 entry amended
+- docs/slack-notifications.md gained "Slack transcript streaming (Phase 68)" section
+- CLAUDE.md gained "Slack transcript streaming (Phase 68)" sub-section
+- 68-12-UAT.md created with 9 manual UAT scenarios
+- All scope artifacts present; no Go code touched.
+
+## Phase 68.1 candidate — Plan 10 transcript warning misses --remote path
+
+**Discovered:** 2026-05-03 during Phase 68 UAT Scenario 6.
+
+**What:** `printTranscriptWarning` is wired into `runCreate` (the local
+create dispatch) but NOT into `runCreateRemote`. Since `--remote` is the
+default for EC2 substrates, most operators will never see the audience-
+containment warning the plan promised.
+
+**Code:** `internal/app/cmd/create.go:490` calls `printTranscriptWarning`.
+`runCreateRemote` (line ~1768) compiles + uploads + dispatches but does
+not resolve the Slack channel locally and does not call the warning.
+
+**Why it slipped through:** Plan 10's three unit tests
+(`TestCreate_TranscriptWarning_PrintsWhenEnabled`,
+`TestCreate_TranscriptWarning_AbsentWhenDisabled`,
+`TestCreate_TranscriptWarning_IncludesMemberCount`) all PASS — they
+test the helper directly, not the dispatch wiring. So the gap was
+purely structural; no test would have caught it without an end-to-end
+`km create --remote` test, which is hard to run as a unit test.
+
+**Fix options:**
+1. Wire warning into `runCreateRemote` — would require resolving the
+   Slack channel + calling the API locally before dispatch (mirrors
+   ~15 lines from runCreate's Slack block at lines 467-492).
+2. Have the create-handler Lambda emit the warning into its
+   completion email to the operator. Less ergonomic (delayed delivery)
+   but matches where the channel actually gets provisioned.
+
+**Disposition:** Out of scope for Phase 68 UAT. File as Phase 68.1
+candidate. Functional correctness of the warning helper itself is
+verified by the 3 PASS unit tests.
+
+## Phase 68.1 candidate — claude -p (non-interactive print mode) doesn't fire PostToolUse hooks
+
+**Discovered:** 2026-05-03 during Phase 68 UAT Scenarios 1+2.
+
+**What:** `km agent run` invokes Claude as `claude -p "$PROMPT" --output-format json
+--dangerously-skip-permissions` (agent.go:1198). Claude Code's `-p` (print/
+non-interactive) mode does NOT fire PostToolUse hooks the way interactive
+mode does — so `/opt/km/bin/km-notify-hook PostToolUse` is never called,
+and Phase 68 transcript streaming silently no-ops for `km agent run`.
+
+**Verified:** Direct stderr-redirect to `/tmp/km-hook.log` showed 0 bytes
+written across multiple `km agent run` invocations even with
+`--transcript-stream` flag explicitly set. The same sandbox in interactive
+Claude (via `km shell`) DOES fire the hooks correctly: operator sees
+`🤖 [tt-7091bf92] turn started — Bash` auto-thread-parents and threaded
+per-turn replies in `#sb-tt-7091bf92`.
+
+**Initial fix attempt (kept):** Removed `--bare` from agent.go:1198 since
+`--bare` explicitly skips hooks per Claude Code's `--help`. Necessary but
+not sufficient — `claude -p` skips PostToolUse hooks even without `--bare`.
+
+**Possible fixes for Phase 68.1:**
+1. Use `claude --bare ...` (interactive bare? doesn't exist) or remove `-p`
+   and use a different invocation pattern (e.g. via tmux + scripted prompt).
+2. Wait for Claude Code to support PostToolUse hooks in print mode.
+3. Skip hook-based streaming for `km agent run`; only stream the FINAL
+   transcript at Stop (single hook fire is more permissive in print mode?).
+4. Pivot: post-process the transcript after the run finishes, from the
+   km agent run wrapper (read the run's transcript path, gzip it, upload —
+   no Claude hook needed).
+
+**Disposition:** Out of scope for Phase 68 base UAT. Interactive Claude
+(via `km shell`) gives operators full transcript streaming today; `km
+agent run` non-interactive transcript streaming will need a Phase 68.1
+fix. Mark this as a known limitation in `docs/slack-notifications.md`.
+
+**Ancillary fix already applied (commit 7911c1c context — but actually 
+in agent.go diff from this session):** Removed `--bare` flag from claude
+invocation in agent.go:1198. `--bare` always skips hooks per its help
+text; even though it didn't fix print-mode hook firing, it removes one
+known blocker on the local invocation path.
+
+## Phase 68.1 candidate — subagent boundary creates one Slack thread per Claude session, not per operator turn
+
+**Discovered:** 2026-05-03 during Phase 68 UAT operator observation.
+
+**What:** Phase 68's auto-thread-parent caches `ts` per Claude
+`session_id` (`/tmp/km-slack-thread.${sid}`). When the operator's Claude
+runs a `/clone`-style command (or any Task-tool spawn that creates a
+sub-agent), each subagent gets a fresh `session_id`, so each one creates
+its own auto-thread-parent. Operator sees N top-level "turn started"
+messages in `#sb-X` instead of one threaded session.
+
+**Verified:** DynamoDB query against `km-slack-stream-messages` for one
+operator activity showed 3 distinct `session_id`s posting parents:
+- f5cff4dc-fe1a-416c-9218-23dd62159fa3 (offset 13756)
+- 5db22761-f6b1-416b-bcaf-562d8084c289 (offset 0, fresh)
+- 220ab8d8-ce98-4f23-a2e4-37d4881298bb (offset 20653)
+
+**Why it slipped:** Plan 68-09's `_km_stream_drain` function uses
+`session_id` as the unique thread key (line 486:
+`local thread_cache="/tmp/km-slack-thread.${sid}"`). This is correct for
+single-session conversations but doesn't account for Claude Code's
+Task-tool subagent fan-out where each subagent has its own session.
+
+**Possible fixes for Phase 68.1:**
+1. **Operator-turn root grouping**: inject `KM_OPERATOR_TURN_ID` (or
+   reuse the top-level run's session_id) into Claude's env before each
+   `km agent run` / `km shell` invocation, and use that as the cache
+   key instead of the per-subagent `session_id`.
+2. **Detect-and-reuse**: at thread-create time, scan
+   `/tmp/km-slack-thread.*` for a recent (< N min) cache file; reuse
+   if found. Imprecise but no env wiring.
+3. **Per-sandbox single thread**: cache one thread per sandbox per UTC
+   day; all activity threads under it. Loses per-task grouping but
+   makes the channel scannable.
+4. **Document current behavior**: explain that each subagent thread is
+   intentional for fan-out visibility — let operators decide via
+   profile flag whether to consolidate.
+
+**Disposition:** Functional correctness confirmed (each subagent does
+post correctly to its own thread; transcripts upload as expected at
+Stop). UX issue surfaced by operator. Address in Phase 68.1.
+
+## Phase 68.1 candidate — Slack Connect externally-shared channels reject files.completeUploadExternal
+
+**Discovered:** 2026-05-03 during Phase 68 UAT Scenario 1.
+
+**What:** Phase 68's design uses Slack's modern 3-step file upload flow
+(files.getUploadURLExternal → PUT to upload URL → files.completeUploadExternal,
+implemented in pkg/slack/Client.UploadFile per Plan 04). UAT against a
+real per-sandbox Slack Connect channel (`is_ext_shared: true`) reveals
+that `files.completeUploadExternal` returns `internal_error` on the
+final step — silent server-side rejection — even when:
+
+  - The bot is a full member (`is_member: true`)
+  - The bot has `files:write` scope (verified by cold-start probe)
+  - The bot can post regular messages to the same channel via
+    chat.postMessage (Phase 62/63/68 chat paths all work)
+  - The S3 GetObject returns the gzipped transcript correctly
+  - The PUT upload step succeeds (no error)
+
+**Verified:** `auth.test` confirms bot identity. `conversations.info`
+confirms `is_ext_shared: true` and bot in members list. Bridge logs
+show step-1 + step-2 succeed; step-3 returns `internal_error` with no
+further detail.
+
+**Slack platform constraint:** Slack Connect externally-shared channels
+have additional restrictions on bot file uploads via the new API.
+Standard chat.postMessage works because Connect handles message
+sharing across workspaces; file uploads have stricter cross-workspace
+boundary checks.
+
+**Fix options for Phase 68.1:**
+
+1. **Deprecated files.upload fallback**: try files.upload (the v1 API)
+   when files.completeUploadExternal returns internal_error in Connect
+   channels. Trade-off: deprecated API may stop working at any time;
+   adds a code path that's only used in Connect channels.
+
+2. **S3 presigned URL message**: post a chat message with a presigned
+   S3 GET URL instead of a native Slack file attachment. Operator
+   clicks the link to download. Trade-off: leaves Slack's file
+   indexing/preview behind; URL must include auth.
+
+3. **Channel-type detection at create time**: when km create
+   provisions a per-sandbox Slack Connect channel, record the channel
+   type. Bridge ActionUpload handler then chooses the upload path
+   based on channel type (native upload for internal, URL message for
+   Connect).
+
+4. **Document and accept**: native Slack file upload only works in
+   internal channels. Operators using Slack Connect get every other
+   transcript-streaming feature (per-turn chat lines, auto-thread,
+   record-mapping) but no .jsonl.gz attachment. Surface this in
+   docs/slack-notifications.md and km doctor.
+
+**Disposition:** UAT continues — every other Phase 68 path validates
+correctly. The final upload step is a Slack platform limitation that
+needs Phase 68.1 architectural choice. Recommended: option 3
+(channel-type detection + dual-path upload) for cleanest UX.

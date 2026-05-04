@@ -84,14 +84,38 @@ func resolveNotifyFlags(cmd *cobra.Command) (perm, idle *bool) {
 	return perm, idle
 }
 
-// buildNotifySendCommands returns the bash command lines for SSM RunShellScript
-// to write/remove /etc/profile.d/zz-km-notify.sh with KM_NOTIFY_ON_* overrides.
+// resolveTranscriptFlag returns the effective per-invocation override for
+// Phase 68 Slack transcript streaming (Plan 68-07).
 //
-// Returns (nil, nil) when both pointers are nil — no SSM SendCommand is issued.
+//   - nil           = neither --transcript-stream nor --no-transcript-stream
+//     was supplied; the profile-derived
+//     /etc/profile.d/km-notify-env.sh value applies and no
+//     SSM SendCommand for transcript is needed.
+//   - non-nil true  = --transcript-stream was set; force-enable for session.
+//   - non-nil false = --no-transcript-stream was set; force-disable for session.
+func resolveTranscriptFlag(cmd *cobra.Command) *bool {
+	if cmd.Flags().Changed("transcript-stream") {
+		v, _ := cmd.Flags().GetBool("transcript-stream")
+		return &v
+	}
+	if cmd.Flags().Changed("no-transcript-stream") {
+		f := false
+		return &f
+	}
+	return nil
+}
+
+// buildNotifySendCommands returns the bash command lines for SSM RunShellScript
+// to write/remove /etc/profile.d/zz-km-notify.sh with KM_NOTIFY_ON_* and
+// KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED overrides.
+//
+// Returns (nil, nil) when all pointers are nil — no SSM SendCommand is issued.
 // When at least one pointer is non-nil, returns a write slice (heredoc + chmod)
 // and a cleanup slice (rm -f) to bracket the SSM session.
-func buildNotifySendCommands(perm, idle *bool) (writeCmds, cleanupCmds []string) {
-	if perm == nil && idle == nil {
+//
+// transcript is the Plan 68-07 override for Slack transcript streaming.
+func buildNotifySendCommands(perm, idle, transcript *bool) (writeCmds, cleanupCmds []string) {
+	if perm == nil && idle == nil && transcript == nil {
 		return nil, nil
 	}
 	var lines []string
@@ -108,6 +132,13 @@ func buildNotifySendCommands(perm, idle *bool) (writeCmds, cleanupCmds []string)
 			v = "1"
 		}
 		lines = append(lines, fmt.Sprintf(`export KM_NOTIFY_ON_IDLE=%q`, v))
+	}
+	if transcript != nil {
+		v := "0"
+		if *transcript {
+			v = "1"
+		}
+		lines = append(lines, fmt.Sprintf(`export KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED=%q`, v))
 	}
 	body := strings.Join(lines, "\n")
 	writeCmds = []string{
@@ -172,8 +203,10 @@ Port forwarding:
 			}
 			// Phase 62 (HOOK-04): resolve per-invocation notify gate overrides from CLI flags.
 			notifyPerm, notifyIdle := resolveNotifyFlags(cmd)
+			// Plan 68-07: resolve transcript-stream override from CLI flags.
+			transcriptStream := resolveTranscriptFlag(cmd)
 			// Run the shell (blocks until user exits).
-			_ = runShell(cmd, cfg, fetcher, execFn, sandboxID, asRoot, noBedrock, notifyPerm, notifyIdle)
+			_ = runShell(cmd, cfg, fetcher, execFn, sandboxID, asRoot, noBedrock, notifyPerm, notifyIdle, transcriptStream)
 
 			// --learn post-exit: generate profile from observed traffic.
 			if learn {
@@ -194,14 +227,18 @@ Port forwarding:
 	cmd.Flags().Bool("no-notify-on-permission", false, "Force-disable Claude permission-prompt emails for this session")
 	cmd.Flags().Bool("notify-on-idle", false, "Email operator when Claude finishes a turn (overrides profile default for this session)")
 	cmd.Flags().Bool("no-notify-on-idle", false, "Force-disable Claude idle emails for this session")
+	// Plan 68-07: per-invocation transcript-stream override (Phase 68 Slack transcript streaming).
+	cmd.Flags().Bool("transcript-stream", false, "Stream Claude transcript turns to per-sandbox Slack thread + upload final JSONL (overrides profile default for this session)")
+	cmd.Flags().Bool("no-transcript-stream", false, "Force-disable transcript streaming for this session")
 
 	return cmd
 }
 
 // runShell is the command RunE logic for km shell.
-// notifyPerm and notifyIdle are the resolved per-invocation notify gate overrides
-// (nil = no override; use profile.d defaults from compile time).
-func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, sandboxID string, asRoot, noBedrock bool, notifyPerm, notifyIdle *bool) error {
+// notifyPerm, notifyIdle, and transcriptStream are the resolved per-invocation
+// overrides (nil = no override; use profile.d defaults from compile time).
+// transcriptStream is the Plan 68-07 Slack transcript-streaming override.
+func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, sandboxID string, asRoot, noBedrock bool, notifyPerm, notifyIdle, transcriptStream *bool) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -238,7 +275,7 @@ func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 		if err != nil {
 			return fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
 		}
-		return execSSMSession(ctx, instanceID, rec.Region, asRoot, noBedrock, notifyPerm, notifyIdle, execFn)
+		return execSSMSession(ctx, instanceID, rec.Region, asRoot, noBedrock, notifyPerm, notifyIdle, transcriptStream, execFn)
 	case "ecs":
 		clusterARN, err := findResourceARN(rec.Resources, ":cluster/")
 		if err != nil {
@@ -275,9 +312,10 @@ const ssmRetryDelay = 3 * time.Second
 // When root is true, it starts a default SSM session (root via SSM agent).
 //
 // notifyPerm and notifyIdle are Phase 62 (HOOK-04) per-invocation notify gate
-// overrides. nil = no SSM SendCommand for notify (profile.d defaults apply).
+// overrides. transcriptStream is the Plan 68-07 Slack transcript-streaming
+// override. nil = no SSM SendCommand for notify (profile.d defaults apply).
 // Non-nil = write /etc/profile.d/zz-km-notify.sh before session, remove after.
-func execSSMSession(ctx context.Context, instanceID, region string, root, noBedrock bool, notifyPerm, notifyIdle *bool, execFn ShellExecFunc) error {
+func execSSMSession(ctx context.Context, instanceID, region string, root, noBedrock bool, notifyPerm, notifyIdle, transcriptStream *bool, execFn ShellExecFunc) error {
 	if root {
 		return execSSMWithRetry(ctx, func() *exec.Cmd {
 			return exec.CommandContext(ctx, "aws", "ssm", "start-session",
@@ -315,9 +353,9 @@ func execSSMSession(ctx context.Context, instanceID, region string, root, noBedr
 		}
 	}
 
-	// Phase 62 (HOOK-04): per-invocation notify env override.
+	// Phase 62 (HOOK-04) + Plan 68-07: per-invocation notify env override.
 	// Only issues a SendCommand when at least one pointer is non-nil.
-	writeCmds, cleanupCmds := buildNotifySendCommands(notifyPerm, notifyIdle)
+	writeCmds, cleanupCmds := buildNotifySendCommands(notifyPerm, notifyIdle, transcriptStream)
 	if len(writeCmds) > 0 {
 		awsCfg, ssmErr := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
 		if ssmErr == nil {

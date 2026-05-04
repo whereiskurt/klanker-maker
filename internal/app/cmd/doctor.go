@@ -29,6 +29,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -169,6 +170,9 @@ type DoctorConfigProvider interface {
 	// GetProfileSearchPaths returns the list of directories searched for profile YAML files.
 	// Used by checkStaleAMIs to skip AMIs that are still referenced by a profile.
 	GetProfileSearchPaths() []string
+	// GetSlackStreamMessagesTableName returns the Phase 68 Slack-stream-messages
+	// DynamoDB table name (used by checkSlackTranscriptTableExists).
+	GetSlackStreamMessagesTableName() string
 }
 
 // appConfigAdapter wraps *config.Config to satisfy DoctorConfigProvider.
@@ -190,6 +194,9 @@ func (a *appConfigAdapter) GetAWSProfile() string           { return a.cfg.AWSPr
 func (a *appConfigAdapter) GetArtifactsBucket() string      { return a.cfg.ArtifactsBucket }
 func (a *appConfigAdapter) GetDoctorStaleAMIDays() int      { return a.cfg.DoctorStaleAMIDays }
 func (a *appConfigAdapter) GetProfileSearchPaths() []string { return a.cfg.ProfileSearchPaths }
+func (a *appConfigAdapter) GetSlackStreamMessagesTableName() string {
+	return a.cfg.GetSlackStreamMessagesTableName()
+}
 
 // DoctorDeps holds all injected AWS clients for doctor checks.
 // Nil fields cause their corresponding checks to be skipped.
@@ -231,6 +238,25 @@ type DoctorDeps struct {
 	SlackKeyLoader  PrivKeyLoaderFunc      // loads the operator Ed25519 signing key
 	SlackScanner    SlackMetadataScanner   // scans DynamoDB for Slack-enabled sandboxes
 	SlackEC2Lister  EC2InstanceLister      // checks whether a sandbox EC2 instance exists
+
+	// Slack inbound health check dependencies (Plan 67-08).
+	// Nil fields cause the corresponding inbound checks to be skipped without error.
+	// SlackInboundSQS is the SQS client used for queue depth and list operations.
+	SlackInboundSQS kmaws.SQSClient
+	// SlackListSandboxesWithInbound returns sandbox rows that have inbound enabled.
+	SlackListSandboxesWithInbound func(ctx context.Context) ([]inboundRow, error)
+	// SlackAuthTestScopes returns the list of OAuth scopes the bot token has.
+	SlackAuthTestScopes func(ctx context.Context) ([]string, error)
+	// SlackResourcePrefix is the resource prefix used to detect stale queues.
+	SlackResourcePrefix string
+
+	// Slack transcript-streaming health check dependencies (Plan 68-11).
+	// Nil fields cause the corresponding transcript checks to be skipped without error.
+	// SlackTranscriptS3 is the S3 client used for ListObjectsV2 on transcripts/ prefix.
+	SlackTranscriptS3 kmaws.S3ListAPI
+	// SlackListSandboxIDs returns the set of currently-known sandbox IDs (live in DDB).
+	// Used by checkSlackTranscriptStaleObjects to flag orphan S3 prefixes.
+	SlackListSandboxIDs func(ctx context.Context) ([]string, error)
 }
 
 // =============================================================================
@@ -2092,6 +2118,66 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return r
 	})
 
+	// Plan 67-08 — Slack inbound diagnostic checks.
+	// Failures produce WARN/SKIPPED, never ERROR that would imply a broken platform.
+	inboundSQS := deps.SlackInboundSQS
+	listInbound := deps.SlackListSandboxesWithInbound
+	resourcePrefix := deps.SlackResourcePrefix
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkSlackInboundQueueExists(ctx, listInbound, inboundSQS)
+		// Demote ERROR to WARN so Slack issues never fail km doctor.
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkSlackInboundStaleQueues(ctx, listInbound, inboundSQS, resourcePrefix)
+	})
+
+	slackScopes := deps.SlackAuthTestScopes
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkSlackAppEventsScopes(ctx, slackScopes)
+		// Demote ERROR to WARN so Slack issues never fail km doctor.
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
+	// Plan 68-11 — Slack transcript-streaming diagnostic checks.
+	// Failures produce WARN/SKIPPED; transcript health issues never fail km doctor
+	// (Phase 68 is opt-in, so a missing stream-messages table is not a hard error).
+	transcriptDDB := deps.DynamoClient
+	transcriptTable := cfg.GetSlackStreamMessagesTableName()
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkSlackTranscriptTableExists(ctx, transcriptDDB, transcriptTable)
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkSlackFilesWriteScope(ctx, slackScopes)
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
+	transcriptS3 := deps.SlackTranscriptS3
+	transcriptBucket := cfg.GetArtifactsBucket()
+	listSandboxIDs := deps.SlackListSandboxIDs
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkSlackTranscriptStaleObjects(ctx, transcriptS3, transcriptBucket, listSandboxIDs)
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
 	return checks
 }
 
@@ -2245,6 +2331,52 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	}
 	deps.SlackEC2Lister = &doctorEC2InstanceLister{
 		client: ec2.NewFromConfig(awsCfg),
+	}
+
+	// Slack inbound health check deps (Plan 67-08).
+	// Wire SQS client, inbound sandbox list, auth-test scopes func.
+	deps.SlackInboundSQS = sqs.NewFromConfig(awsCfg)
+	ddbClientForInbound := dynamodb.NewFromConfig(awsCfg)
+	deps.SlackListSandboxesWithInbound = func(innerCtx context.Context) ([]inboundRow, error) {
+		return listSandboxesWithInboundImpl(innerCtx, ddbClientForInbound, "km-sandboxes")
+	}
+	// Derive the resource prefix from the concrete config type.
+	// DoctorConfigProvider doesn't expose GetResourcePrefix, so we type-assert.
+	deps.SlackResourcePrefix = "km" // default fallback
+	if appCfgTyped, ok := cfg.(*appConfigAdapter); ok {
+		deps.SlackResourcePrefix = appCfgTyped.cfg.GetResourcePrefix()
+	}
+	// SlackAuthTestScopes calls Slack auth.test and returns the OAuth scopes.
+	deps.SlackAuthTestScopes = func(innerCtx context.Context) ([]string, error) {
+		token, tokenErr := ssmClientForSlack.GetParameter(innerCtx, &ssm.GetParameterInput{
+			Name:           awssdk.String("/km/slack/bot-token"),
+			WithDecryption: awssdk.Bool(true),
+		})
+		if tokenErr != nil {
+			return nil, fmt.Errorf("get bot token: %w", tokenErr)
+		}
+		return fetchSlackBotScopes(innerCtx, awssdk.ToString(token.Parameter.Value))
+	}
+
+	// Slack transcript-streaming health deps (Plan 68-11).
+	// S3 client typed as S3ListAPI for ListObjectsV2 on transcripts/ prefix.
+	deps.SlackTranscriptS3 = s3.NewFromConfig(awsCfg)
+	// Sandbox-id lister sources from the same SandboxLister used elsewhere
+	// in doctor (DDB-backed via doctorSandboxLister).
+	listerForTranscript := deps.Lister
+	deps.SlackListSandboxIDs = func(innerCtx context.Context) ([]string, error) {
+		if listerForTranscript == nil {
+			return nil, fmt.Errorf("sandbox lister not configured")
+		}
+		records, err := listerForTranscript.ListSandboxes(innerCtx, false)
+		if err != nil {
+			return nil, fmt.Errorf("list sandboxes: %w", err)
+		}
+		ids := make([]string, 0, len(records))
+		for _, r := range records {
+			ids = append(ids, r.SandboxID)
+		}
+		return ids, nil
 	}
 
 	return deps

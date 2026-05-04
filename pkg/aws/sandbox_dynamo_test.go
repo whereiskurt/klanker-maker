@@ -244,6 +244,67 @@ func TestWriteSandboxMetadataDynamo_OmitsAliasWhenEmpty(t *testing.T) {
 	}
 }
 
+// TestWriteSandboxMetadataDynamo_PersistsSlackInboundQueueURL is the regression
+// guard for the Phase 67 bug where read-modify-write paths (resume.go TTL
+// recreation, extend.go, ttl-handler Lambda) silently dropped the Phase 67
+// slack_inbound_queue_url field. WriteSandboxMetadataDynamo uses PutItem (full
+// replace), so any field unmarshal-able but not marshal-able would be wiped on
+// the next write. Symptom: bridge Lambda warned "unknown channel or inbound
+// disabled" and dropped Slack messages mid-session.
+func TestWriteSandboxMetadataDynamo_PersistsSlackInboundQueueURL(t *testing.T) {
+	queueURL := "https://sqs.us-east-1.amazonaws.com/052251888500/km-slack-inbound-test.fifo"
+	meta := &kmaws.SandboxMetadata{
+		SandboxID:            "sandbox-slack-in",
+		ProfileName:          "prof",
+		Substrate:            "ec2",
+		Region:               "us-east-1",
+		CreatedAt:            time.Now().UTC(),
+		SlackChannelID:       "C0123456789",
+		SlackInboundQueueURL: queueURL,
+	}
+
+	mock := &mockSandboxMetadataAPI{putItemOutput: &dynamodb.PutItemOutput{}}
+	if err := kmaws.WriteSandboxMetadataDynamo(context.Background(), mock, "km-sandbox-metadata", meta); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, ok := mock.putItemInput.Item["slack_inbound_queue_url"]
+	if !ok {
+		t.Fatal("slack_inbound_queue_url attribute missing from PutItem input — read-modify-write paths will silently drop it on the next write")
+	}
+	sv, ok := got.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok {
+		t.Fatalf("slack_inbound_queue_url should be AttributeValueMemberS, got %T", got)
+	}
+	if sv.Value != queueURL {
+		t.Errorf("slack_inbound_queue_url = %q, want %q", sv.Value, queueURL)
+	}
+}
+
+// TestWriteSandboxMetadataDynamo_OmitsSlackInboundQueueURLWhenEmpty verifies
+// the inverse: when SlackInboundQueueURL is empty (notifySlackInboundEnabled
+// was false), the attribute is NOT written, matching the omitempty pattern
+// used by the other Phase 63/67 Slack fields.
+func TestWriteSandboxMetadataDynamo_OmitsSlackInboundQueueURLWhenEmpty(t *testing.T) {
+	meta := &kmaws.SandboxMetadata{
+		SandboxID:            "sandbox-no-inbound",
+		ProfileName:          "prof",
+		Substrate:            "ec2",
+		Region:               "us-east-1",
+		CreatedAt:            time.Now().UTC(),
+		SlackInboundQueueURL: "",
+	}
+
+	mock := &mockSandboxMetadataAPI{putItemOutput: &dynamodb.PutItemOutput{}}
+	if err := kmaws.WriteSandboxMetadataDynamo(context.Background(), mock, "km-sandbox-metadata", meta); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, present := mock.putItemInput.Item["slack_inbound_queue_url"]; present {
+		t.Error("slack_inbound_queue_url should be omitted when empty")
+	}
+}
+
 // ---- Tests: DeleteSandboxMetadataDynamo ----
 
 func TestDeleteSandboxMetadataDynamo_CallsDeleteItem(t *testing.T) {

@@ -30,7 +30,7 @@ remote_state {
 }
 
 terraform {
-  source = "${local.repo_root}/infra/modules/dynamodb-sandboxes/v1.0.0"
+  source = "${local.repo_root}/infra/modules/dynamodb-sandboxes/v1.1.0"
 }
 
 inputs = {

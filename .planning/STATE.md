@@ -2,16 +2,17 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Phase 67 context gathered
-last_updated: "2026-05-02T22:28:33.439Z"
-last_activity: "2026-05-01 — Completed 63.1-03-PLAN.md (SLCK-13: km slack rotate-token, bridge structured logging, fail-fast 5xx, UAT ts=1777638955.854989)"
+current_plan: 12
+status: in-progress
+stopped_at: Completed 68-10-PLAN.md
+last_updated: "2026-05-04T04:02:31.297Z"
+last_activity: 2026-05-03
 progress:
-  total_phases: 71
-  completed_phases: 65
-  total_plans: 213
-  completed_plans: 209
-  percent: 0
+  total_phases: 73
+  completed_phases: 68
+  total_plans: 242
+  completed_plans: 238
+  percent: 93
 ---
 
 # Project State
@@ -25,12 +26,14 @@ See: .planning/PROJECT.md (updated 2026-03-21)
 
 ## Current Position
 
-Phase: 63.1 (slack-notify hook gap closure — step 11d, destroy archive, bridge token rotation hardening) — COMPLETE
-Plan: 3 of 3 in current phase — ALL PLANS COMPLETE
-Status: phase complete
-Last activity: 2026-05-01 — Completed 63.1-03-PLAN.md (SLCK-13: km slack rotate-token, bridge structured logging, fail-fast 5xx, UAT ts=1777638955.854989)
+Phase: 68 (slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload) — Wave 0 stub seeding COMPLETE
+Plan: 1 of 13 in current phase (Plan 68-00 COMPLETE; 68-01..68-12 pending)
+Total Plans in Phase: 13
+Current Plan: 12
+Status: in-progress
+Last activity: 2026-05-03
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█████████░] 93%
 
 ## Performance Metrics
 
@@ -248,6 +251,34 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 65 P02 | 26min | 3 tasks | 12 files |
 | Phase 65-four-account-config-model-separate-accounts-organization-scp-from-accounts-dns-parent-and-rename P03 | 553s | 2 tasks | 2 files |
 | Phase 65 P04 | 504s | 3 tasks | 5 files |
+| Phase 67 P00 | 366 | 2 tasks | 9 files |
+| Phase 67-slack-inbound P01 | 102s | 2 tasks | 4 files |
+| Phase 67-slack-inbound P03 | 231s | 2 tasks | 4 files |
+| Phase 67-slack-inbound P02 | 4min | 2 tasks | 9 files |
+| Phase 67-slack-inbound-per-sandbox-channel-as-bidirectional-chat-with-km-agent-run-dispatch P04 | 240s | 2 tasks | 2 files |
+| Phase 67 P05 | 467 | 2 tasks | 5 files |
+| Phase 67-slack-inbound P06 | 699s | 2 tasks | 8 files |
+| Phase 67-slack-inbound P09 | 18 | 1 tasks | 2 files |
+| Phase 67 P07 | 783 | 2 tasks | 8 files |
+| Phase 67-slack-inbound-per-sandbox-channel-as-bidirectional-chat-with-km-agent-run-dispatch P08 | 48min | 2 tasks | 7 files |
+| Phase 67-slack-inbound-per-sandbox-channel-as-bidirectional-chat-with-km-agent-run-dispatch P11 | 6min | 2 tasks | 5 files |
+| Phase 67 P12 | 2min | 2 tasks | 3 files |
+| Phase 67-slack-inbound P10 | 2 days | 2 tasks | 5 files |
+| Phase 67.1-slack-inbound-ack-reaction P01 | 447 | 3 tasks | 6 files |
+| Phase 67.1 P02 | 634 | 2 tasks | 4 files |
+| Phase 67.1 P03 | ~10min (+ UAT) | 3 tasks | 4 files |
+| Phase 68 P00 | 7min | 2 tasks | 17 files |
+| Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P03 | 3min | 2 tasks | 5 files |
+| Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P02 | 4min | 2 tasks | 3 files |
+| Phase 68 P01 | 230s | 2 tasks | 4 files |
+| Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P04 | 3min | 2 tasks | 2 files |
+| Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P05 | 30min | 4 tasks | 2 files |
+| Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P06 | 8min | 4 tasks | 6 files |
+| Phase 68 P07 | 22min | 3 tasks | 5 files |
+| Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P08 | 8 min | 5 tasks | 6 files |
+| Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P09 | 30min | 5 tasks | 7 files |
+| Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P11 | 7min | 3 tasks | 4 files |
+| Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P10 | 13min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -701,6 +732,67 @@ Recent decisions affecting current work:
 - [Phase 65-four-account-config-model-separate-accounts-organization-scp-from-accounts-dns-parent-and-rename]: checkLegacyManagementField reads raw YAML (not Viper-loaded config) because Viper silently drops unknown keys — plan 02 shims fully removed from DoctorConfigProvider interface in plan 03
 - [Phase 65-four-account-config-model-separate-accounts-organization-scp-from-accounts-dns-parent-and-rename]: km doctor check count increased from 18 to 20 (two new checks: org-blank WARN, legacy-management FAIL) — CLAUDE.md update deferred to plan 04
 - [Phase 65]: Phase 65 plan 04: HCL + docs fully migrated — accounts.management split to organization (SCP) + dns_parent (Route53) across all surfaces; km-config.yaml was pre-migrated
+- [Phase 67]: SQS dep kept as indirect in go.mod; anchored via go get without tidy so Wave 1+ plans compile without re-fetching
+- [Phase 67]: Wave 0 stub test files use internal package names (bridge/profile/compiler/cmd) consistent with existing non-_test source files in each directory
+- [Phase 67-slack-inbound]: Use plain bool (not *bool) for NotifySlackInboundEnabled — false is the correct default, matches NotifySlackPerSandbox pattern
+- [Phase 67-slack-inbound]: Three inbound validation rules (SI1/SI2/SI3) are hard errors, not warnings — misconfiguration must be caught at km validate time
+- [Phase 67-03]: EventNonceStore interface separate from NonceStore: CheckAndStore returns (bool,error) vs Reserve returns error with sentinel — cleaner for events dedup branch
+- [Phase 67-03]: 200-on-all-internal-errors invariant: SQS/DDB/sandbox-lookup/signing-secret failures return 200 not 5xx — Slack retries 5xx with new event_id bypassing dedup
+- [Phase 67-slack-inbound]: Live Terragrunt configs at infra/live/use1/dynamodb-* not management/dynamodb/
+- [Phase 67-slack-inbound]: GetResourcePrefix shim added in 67-02; Phase 66 can migrate later without breaking callers
+- [Phase 67-slack-inbound]: dynamodb-sandboxes GSI bump is v1.1.0 copy, v1.0.0 left unchanged (stateful table safety)
+- [Phase 67-slack-inbound]: Compile-time KM_SLACK_INBOUND_QUEUE_URL slot with empty value in env file; km create fills at runtime (Plan 67-06)
+- [Phase 67-slack-inbound]: EnvironmentFile=/etc/profile.d/km-notify-env.sh in km-slack-inbound-poller.service for runtime-injected env vars
+- [Phase 67-slack-inbound]: SlackThreadsTableName from KM_SLACK_THREADS_TABLE env var (mirrors budgetTable pattern); no Config threading needed
+- [Phase 67-05]: slackAuthTestAdapter in main.go: pkg/slack.Client.AuthTest does not return user_id, so implemented thin HTTP adapter rather than breaking public API
+- [Phase 67-05]: nonceStoreAdapter bridges DynamoNonceStore.Reserve to EventNonceStore.CheckAndStore — avoids duplicating nonce table logic
+- [Phase 67-05]: DDBUpdateItemAPI extends DDBQueryGetPutAPI so single *dynamodb.Client satisfies both; threads adapter never needs UpdateItem
+- [Phase 67-slack-inbound]: SQS queue provisioning is FATAL (not non-fatal): failure archives the per-sandbox Slack channel and aborts km create; without the queue the inbound path is permanently broken
+- [Phase 67-slack-inbound]: last_pause_hint_ts must NOT be pre-populated at km create: DDBPauseHinter (67-05) treats absent as cooldown-expired, enabling first hint to fire immediately
+- [Phase 67-slack-inbound]: Interactive mode gated on opts.BotToken=='' to avoid prompting for signing secret in CI mode
+- [Phase 67-slack-inbound]: km slack rotate-signing-secret mirrors rotate-token but omits smoke test (no inbound smoke path)
+- [Phase 67]: Used DDBThreadStore.Upsert from pkg/slack/bridge (not reimplementing) for consistent km-slack-threads schema
+- [Phase 67]: Drain placed in Step 12 (after Terraform destroy) — instance may be gone but StopPoller/WaitForAgentRunIdle fail gracefully (best-effort)
+- [Phase 67-slack-inbound-per-sandbox-channel-as-bidirectional-chat-with-km-agent-run-dispatch]: Plan 67-08: SlackChannelID/SlackInboundQueueURL/ActiveThreads added to SandboxRecord (instead of separate metadata fetch in status/list); X-OAuth-Scopes response header parsing for auth.test (not body); type-assert *appConfigAdapter to derive ResourcePrefix
+- [Phase 67]: Slack inbound Gap A closure: poller posts .result from output.json to Slack via km-slack post --thread AFTER aws sqs delete-message (ack-first); KM_SLACK_INBOUND_REPLY_HANDLED sentinel gates the Stop hook Slack branch (# 6b.) to prevent double-post; SSM resolves channel/bridge URL at poller startup (mirrors existing queue-url fallback) since systemd EnvironmentFile only loads km-notify-env.sh.
+- [Phase 67]: isBotLoop uses allow-list (empty + thread_broadcast) instead of deny-list — closes UAT Gap B (channel_join slip-through) AND prevents every future Slack subtype regression by default
+- [Phase 67-slack-inbound]: Phase 67 GREEN ship verdict: 11/13 actively-exercised UAT steps PASS, 1 partial, 2 NOT-EXERCISED with compensating coverage
+- [Phase 67-slack-inbound]: RUN_SLACK_E2E=1 env-var gate (no -tags=e2e build tag) for opt-in live-workspace E2E tests; default go test stays green
+- [Phase 67-slack-inbound]: UAT.md uses 4 verdict states (PASS/FAIL/PARTIAL/NOT-EXERCISED) where NOT-EXERCISED must cite compensating coverage (unit tests, AWS service guarantee, or alternative defence)
+- [Phase 67.1-01]: Duplicate HTTP call body in SlackReactorAdapter rather than extract shared helper (one method; factor if third adapter appears)
+- [Phase 67.1-01]: SlackReactorAdapter shares tokenFetcher instance with SlackPosterAdapter to preserve 15-min SSM token cache
+- [Phase 67.1-01]: KM_SLACK_ACK_EMOJI env var (default eyes) controls ACK emoji — bridge-global, no profile field for v1
+- [Phase 67.1]: reactions:write added as third required scope in both VerifyEventsAPIScopes and checkSlackAppEventsScopes; Remediation text softening deferred to Plan 03 (token rotation not needed for scope-add)
+- [Phase 67.1-03]: lambda-slack-bridge v1.0.0 slack_ack_emoji variable added in-place (not version bump) — consistent with Phase 67-05 precedent of additive in-place env var additions with safe defaults
+- [Phase 67.1-03]: Live terragrunt config relies on slack_ack_emoji default "eyes" — no live-config edit needed for v1 deployment
+- [Phase 67.1-03]: Phase 67.1 COMPLETE GREEN — all 5 UAT requirements satisfied; operator confirmed 👀 on correct msg.TS, bot-loop filter holds, in-thread correctness validated
+- [Phase 68]: Phase 68 Wave-0 stub-seeding mirrors Phase 67-00 — t.Skip stubs in package-aligned _test.go files, separate km-slack stub helper from km-send to keep post/upload/record-mapping subcommands explicit; out-of-scope baseline failures logged to deferred-items.md rather than auto-fixed
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-03: table name resolved to {prefix}-slack-stream-messages (NOT {prefix}-km-slack-stream-messages); resolves CONTEXT.md Open Question 1 — 68-CONTEXT.md should be amended on next pass
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-03: dynamodb-slack-stream-messages module mirrors Phase 67 dynamodb-slack-threads layout 1:1 (PAY_PER_REQUEST, native TTL on Number ttl_expiry, SSE on, PITR off); only resource name + key schema + Component=km-slack-transcript tag differ
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-02: Reused EnvelopeVersion=1 (no bump) for the four additive upload-envelope fields — zero values on legacy actions guarantee byte-identical canonical signing, so Phase 63 verifiers and Phase 68 senders interoperate after the struct refresh
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-02: Validation split between client (BuildEnvelopeUpload: filename ≤255B, no slash/NUL, sizeBytes>0, channel/s3Key non-empty) and bridge (content-type allow-list, deferred to Plan 08) — keeps the trust boundary at the network edge while giving callers fast-fail on shape errors
+- [Phase 68]: Plan 68-01: notifySlackTranscriptEnabled field type bool (not *bool) — default false is no-opt-in semantic, mirrors Phase 67 NotifySlackInboundEnabled
+- [Phase 68]: Plan 68-01: three transcript validation rules (ST1/ST2/ST3) emit hard errors mirroring Phase 67 inbound — same audience-containment prerequisites
+- [Phase 68]: Plan 68-01: schema entry placed in pkg/profile/schemas/sandbox_profile.schema.json (real path), not the path stated in plan
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: UploadFile does NOT retry internally; retry stays at BridgeBackoff envelope layer to avoid replayed_nonce masking
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Streaming proven by 1 MiB SHA-256 round-trip + explicit Content-Length header assertion (Slack rejects chunked encoding on signed upload URLs)
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: thread_ts key omitted from completeUploadExternal JSON when empty (Slack rejects empty-string thread_ts)
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-05: Extracted dispatch(args, stderr) helper from main() so dispatch tests inject args/stderr directly — cleaner than os.Args mutation suggested in plan
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-05: km-slack subcommands all use flag.ContinueOnError + fs.SetOutput(stderr) so flag-error paths are deterministic and unit-testable (Pattern B for future cmd/* binaries)
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-05: km-slack record-mapping uses LoadDefaultConfig (region from IMDS) instead of explicit AWS_REGION; runUpload retains explicit region requirement to mirror runPost
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: ec2spot transcript IAM policies gated on var.artifacts_bucket and var.slack_stream_messages_table_name (count = ... > 0 ? 1 : 0); empty defaults preserve back-compat for callers that have not yet wired the inputs
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Bridge transcript S3 read policy is broad (transcripts/*); per-sandbox prefix enforcement happens in handler.go envelope validation (application-layer security boundary), per RESEARCH Pitfall 4
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: SlackStreamMessagesTableName follows Phase 67 SlackThreadsTableName precedent: env var KM_SLACK_STREAM_TABLE with default km-slack-stream-messages; Plan 10 propagates Config.GetSlackStreamMessagesTableName() into the env var via km create
+- [Phase 68]: Plan 68-07: Mirrored Phase 62 (HOOK-04) tri-state flag pattern for --transcript-stream / --no-transcript-stream on km agent run + km shell
+- [Phase 68]: Plan 68-07: Extended buildNotifySendCommands to 3-arg (perm, idle, transcript) rather than introducing a parallel helper — keeps SSM SendCommand single-shot
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Bridge ActionUpload uses raw HTTP X-OAuth-Scopes probe at cold start (RESEARCH OQ 2) — Avoids extending Phase 63 SlackPosterAdapter.call() to surface response headers; one-shot probe at init() runs <100ms with 5s timeout cap; result cached for Lambda warm lifetime; fail-open on probe failure (empty header → MissingFilesWrite=false) so transient infra issues do not block all uploads.
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Streaming S3 → Slack via io.ReadCloser → io.Reader (zero buffering) — S3GetterAdapter returns out.Body directly; bridge defers body.Close() and passes the reader to Plan 04 pkg/slack.Client.UploadFile which streams to Slack with explicit Content-Length. Sustains 100MB cap on 256MB Lambda; peak memory stays at Go HTTP client baseline regardless of upload size.
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: 68-09: Extracted streaming logic into single _km_stream_drain() shell function (avoid 100-line duplication across PostToolUse + Stop branches)
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: 68-09: Cooldown becomes a soft block flag — Notification + plain Stop preserve hard-exit semantics; PostToolUse + Stop+transcript bypass it (transcript completeness non-negotiable)
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: 68-09: Preserved # 6a./# 6b. markers inside email-branch wrapper to keep Phase 67 slack-inbound structural tests passing without modification
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-11: pivoted from plan's Doctor-struct pseudo-code to closure-based dep injection (Phase 67 doctor_slack.go pattern); checkSlackFilesWriteScope reuses the existing Phase 67 SlackAuthTestScopes closure rather than duplicating fetchSlackBotScopes wiring
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-11: all three transcript-streaming doctor checks demote CheckError to CheckWarn at registration — Phase 68 is opt-in, so missing stream-messages table or absent files:write scope must not turn km doctor red for non-opted-in deployments (mirrors Phase 63/67 Slack-check policy)
+- [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-10: NotifyEnv-block placement after SlackStreamMessagesTableName mirrors the Phase 62/63 'append additive Slack fields after existing assignments' pattern; printTranscriptWarning placed inside the existing Slack-resolution if-block to reuse slackClient
 
 ### Roadmap Evolution
 
@@ -784,9 +876,11 @@ Recent decisions affecting current work:
 - Phase 64 added: km create reliability and doctor cleanup hardening — bundles operational hygiene gaps from Phase 63.1 with related create-flow reliability todos. CLEAN-1 fix pre-existing `TestUnlockCmd_RequiresStateBucket` failure (predates 63.1, last touched commit 22366b1), CLEAN-2 add `km doctor --auto-fix` to archive stale Slack channels and orphan resources, CLEAN-3 fix `km create` orphan-channel-on-failure (Slack provisioned before infra apply, persists when terraform fails), CLEAN-4 doctor checks sidecar systemd health on active sandboxes (from todo doctor-sidecar-health.md), CLEAN-5 spot capacity multi-AZ retry (from todo spot-multi-az.md)
 - Phase 65 added: Four-account config model — split today's `accounts.management` (which conflates AWS Organizations management with the DNS parent-zone owner) into `accounts.organization` (SCP target, blank → skip SCP) and `accounts.dns_parent` (Route53 parent zone owner used by `ensureSandboxHostedZone`). Hard rename, no back-compat alias (pre-1.0). Updates `internal/app/config/config.go`, `bootstrap.go` SCP gate, `init.go` DNS lookup, `infra/live/site.hcl`, `infra/live/management/scp/terragrunt.hcl`, and adds `km doctor` warning when `accounts.organization` is blank ("SCP enforcement disabled — sandbox containment relies on IAM only"). Motivation: upcoming single-account install lacks org-management access; bootstrap must skip SCP cleanly while DNS still works. AWS profile names (`klanker-management` etc) are explicitly out of scope.
 - Phase 66 added: Multi-instance support — introduce `resource_prefix` (default `"km"`) and `email_subdomain` (default `"sandboxes"`) in km-config.yaml so multiple km installs can coexist in one AWS account. Threads both knobs through DynamoDB tables (`km-budgets`, `km-sandboxes`, `km-identities`, `km-schedules`, `km-slack-bridge-nonces`), management Lambdas (`km-ttl-handler`, `km-create-handler`, `km-email-create-handler`, `km-slack-bridge`, `km-ecs-spot-handler`), Lambda IAM roles (~12 sub-policies per handler), EventBridge schedule group (`km-at`) and rule (`km-ecs-spot-interruption`), CloudWatch log group prefix (`/km/sandboxes/*`), SSM parameter prefixes (`/km/slack/*`, `/km/config/github/*`, `/km/config/remote-create/*`), TF state backend (`tf-km-state-{region}` + lock table), SES domain identity / Route53 zone (`sandboxes.{domain}`), and the ~25 inline `"sandboxes." + cfg.Domain` call sites (collapse to `Config.GetEmailDomain()`). Defaults preserve existing-install behavior; new installs override at `km init`. Migration of existing installs is explicitly out of scope. Org SCP (`km-sandbox-containment`) reuses the Phase 65 `accounts.organization == ""` skip path since SCPs are org-scoped and only one install per org can deploy. TF resource renames must keep logical names constant (parameterize `name` attribute only) to avoid destroy/create on stateful DynamoDB tables.
+- Phase 68 added: Slack transcript streaming (Phase A) — per-turn assistant text + tool one-liner streaming via PostToolUse hook to per-sandbox Slack thread, plus final gzipped JSONL transcript upload via S3 → bridge → Slack files API at Stop. New profile field `notifySlackTranscriptEnabled` gated on `notifySlackEnabled + notifySlackPerSandbox`; CLI overrides `--transcript-stream/--no-transcript-stream` on `km agent run` and `km shell`. New bridge `ActionUpload`, Slack scope `files:write`, DDB table `km-slack-stream-messages` mapping `(channel_id, slack_ts) → (sandbox_id, session_id, transcript_offset)` to enable a future reaction-fork phase (Phase B, deferred). Auto-creates thread parent for operator-initiated runs (no `KM_SLACK_THREAD_TS`). Spec: `docs/superpowers/specs/2026-05-03-slack-transcript-streaming-design.md`. Plan 03 resolved a CONTEXT.md naming ambiguity by choosing `{prefix}-slack-stream-messages` (NOT `{prefix}-km-…`) to match the Phase 67 `{prefix}-slack-threads` convention; CONTEXT.md amended in Plan 12 Task 0.
+- Phase 67.1 inserted after Phase 67: Slack inbound ACK reaction — bridge-side fire-and-forget `reactions.add` (👀) after successful SQS enqueue, mirrors existing PauseHinter goroutine pattern; new Slack scope `reactions:write`, scope checks added to `km slack init` and `km doctor`, configurable emoji via `KM_SLACK_ACK_EMOJI` env var (default `eyes`), bridge-only deploy (no sandbox redeploy) (URGENT — Phase 67 UX gap: users get no feedback that Slack message was received until agent boots)
 
 ## Session Continuity
 
-Last session: 2026-05-02T22:28:33.425Z
-Stopped at: Phase 67 context gathered
-Resume file: .planning/phases/67-slack-inbound-per-sandbox-channel-as-bidirectional-chat-with-km-agent-run-dispatch/67-CONTEXT.md
+Last session: 2026-05-03T20:54:22.102Z
+Stopped at: Completed 68-10-PLAN.md
+Resume file: None

@@ -146,6 +146,154 @@ km slack init            # Interactive bootstrap (or pass --bot-token + --invite
 
 See `docs/slack-notifications.md` for the full operator guide.
 
+### Slack inbound (Phase 67)
+
+Bidirectional chat: Slack messages in `#sb-{id}` channels become Claude
+turns inside the sandbox via SQS FIFO dispatch.
+
+**Profile field (under `spec.cli`):**
+
+| Field | Type | Default | Effect |
+|---|---|---|---|
+| `notifySlackInboundEnabled` | bool | false | Provision per-sandbox SQS FIFO queue, install systemd poller, subscribe to channel events |
+
+Requires `notifySlackEnabled: true` AND `notifySlackPerSandbox: true`.
+Incompatible with `notifySlackChannelOverride`.
+
+**Sandbox env vars added at runtime:**
+
+| Variable | Source |
+|---|---|
+| `KM_SLACK_INBOUND_QUEUE_URL` | poller reads `/sandbox/{id}/slack-inbound-queue-url` from SSM Parameter Store at boot when the env var is empty (an org-level SCP blocks SSM SendCommand for the application account, so the value cannot be injected directly into the env file) |
+| `KM_SLACK_THREAD_TS` | exported by poller into Claude's env BEFORE `claude -p` launches (passed via `--thread` to km-slack post). The Stop hook gates its Slack branch on this var — when set, the poller is driving the reply and the Stop hook stays out of the way. |
+| `KM_SLACK_THREADS_TABLE` | DDB table name for session-id persistence, injected by km create |
+
+**systemd EnvironmentFile gotcha:** `systemd` does NOT accept the shell-style
+`export VAR=val` lines in `/etc/profile.d/*.sh` — it silently rejects them.
+The userdata template writes a parallel `/etc/km/notify.env` (no `export`
+prefix, systemd-format) and `km-slack-inbound-poller.service` points
+`EnvironmentFile=/etc/km/notify.env`. Both files are kept in sync at
+cloud-init time; `/etc/profile.d/km-notify-env.sh` remains the source of
+truth for shell sessions and Claude's bash env.
+
+**SSM parameters added in Phase 67:**
+
+| Parameter | Purpose |
+|---|---|
+| `/km/slack/signing-secret` (SecureString) | Slack App signing secret for HMAC-SHA256 verification of /events webhooks |
+| `/sandbox/{sandbox-id}/slack-inbound-queue-url` (String) | Per-sandbox SQS FIFO queue URL written by `km create` and read by the sandbox-side poller. Deleted by `km destroy`. |
+
+**DynamoDB tables added in Phase 67:**
+
+- `{prefix}-km-slack-threads` — `(channel_id, thread_ts) → claude_session_id` map. TTL 30 days from `last_turn_ts`.
+- New GSI on `{prefix}-sandboxes`: `slack_channel_id-index` (additive, no PK/SK changes).
+
+**SQS resources (per-sandbox, runtime-provisioned):**
+
+- `{prefix}-slack-inbound-{sandbox-id}.fifo` — FIFO queue, 14d retention, 30s VisibilityTimeout, ContentBasedDeduplication=false.
+
+**One-time operator setup:**
+
+```bash
+km slack init --force --signing-secret <signing-secret-from-slack-app>
+# Then: paste printed Events URL into Slack App → Event Subscriptions → Request URL
+```
+
+**Signing secret rotation:**
+
+```bash
+km slack rotate-signing-secret --signing-secret <new-secret>
+# Or: km slack init --force --signing-secret <new-secret>
+```
+
+**km doctor adds three new checks:**
+
+- `slack_inbound_queue_exists` — every inbound-enabled sandbox has a healthy queue
+- `slack_inbound_stale_queues` — orphan SQS queues with no DDB sandbox row
+- `slack_app_events_subscription` — bot has channels:history + groups:history + reactions:write scopes
+
+#### ACK reaction (Phase 67.1)
+
+When the bridge enqueues an inbound message to SQS, it adds a 👀 reaction
+to the originating Slack message via `reactions.add` (fire-and-forget,
+~1s round-trip). Bot needs `reactions:write` scope (added via Slack App
+config → OAuth & Permissions → reinstall app). Bridge-global emoji is
+configurable via `KM_SLACK_ACK_EMOJI` Lambda env var (default `eyes`,
+no colons). Bridge-only change — deploy with `make build && km init --lambdas`;
+no sandbox redeploy needed. See `docs/slack-notifications.md` § ACK reaction.
+
+See `docs/slack-notifications.md` for the full operator guide including setup steps, troubleshooting, and security model.
+
+### Slack transcript streaming (Phase 68)
+
+Per-turn assistant text + tool one-liners stream to per-sandbox channel thread;
+final gzipped JSONL transcript uploaded as Slack file at Stop. Opt-in.
+
+**Profile field (under `spec.cli`):**
+
+| Field | Type | Default | Effect |
+|---|---|---|---|
+| `notifySlackTranscriptEnabled` | bool | false | Stream + upload transcripts to per-sandbox Slack thread |
+
+Requires `notifySlackEnabled: true` AND `notifySlackPerSandbox: true`.
+Incompatible with `notifySlackChannelOverride`.
+
+**CLI overrides:** `--transcript-stream` / `--no-transcript-stream` on `km agent run` and `km shell`.
+
+**Sandbox env vars added at runtime:**
+
+| Variable | Source |
+|---|---|
+| `KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED` | profile `spec.cli.notifySlackTranscriptEnabled` (omit ⇒ 0) |
+| `KM_SLACK_STREAM_TABLE` | runtime, injected by `km create` |
+
+**DynamoDB table added in Phase 68:**
+
+- `{prefix}-slack-stream-messages` — `(channel_id, slack_ts) → {sandbox_id, session_id, transcript_offset, ttl_expiry}`. TTL 30 days. Phase B (reaction-triggered fork) will consume this table; Phase 68 only writes.
+
+**S3 layout:** `transcripts/{sandbox_id}/{session_id}.jsonl.gz` in `KM_ARTIFACTS_BUCKET`.
+
+**Slack bot scope required:** `files:write` (one-time re-auth via Slack App admin).
+
+**km doctor adds three new checks:**
+
+- `slack_transcript_table_exists` — DDB table is provisioned + ACTIVE
+- `slack_files_write_scope` — bot has `files:write`
+- `slack_transcript_stale_objects` — S3 cleanup advisory for destroyed sandboxes
+
+**One-time operator setup:**
+
+```bash
+# 1. Add `files:write` scope to Slack App, re-install, rotate token
+km slack rotate-token --bot-token <new-token>
+
+# 2. Provision new DDB table + sidecar + bridge
+make build && km init --sidecars && km init
+
+# 3. Verify
+km doctor
+```
+
+**Known Phase 68 limitations (Phase 68.1 follow-ups):**
+
+- **Slack Connect channels reject final file upload.** Per-sandbox
+  channels are externally shared via Slack Connect (`is_ext_shared:
+  true`). Slack's `files.completeUploadExternal` returns silent
+  `internal_error` for these. Per-turn chat lines + auto-thread
+  + DDB record-mapping all work; only the `.jsonl.gz` attachment
+  is missing. Pull from S3 instead:
+  `aws s3 ls s3://${KM_ARTIFACTS_BUCKET}/transcripts/<sandbox-id>/`
+- **`km agent run` (non-interactive `claude -p`) skips PostToolUse
+  hooks** per Claude Code platform behavior. Use interactive
+  `km shell` for transcript streaming today.
+- **Subagent fan-out creates one Slack thread per `session_id`.**
+  `/clone` and Task-tool spawns each fire their own auto-thread-parent.
+- **Operator warning at `km create` only fires on `--local`** path,
+  not `--remote` (default for EC2 substrates).
+
+See `docs/slack-notifications.md` for full operator guide and
+`.planning/phases/68-…/deferred-items.md` for fix paths.
+
 ## Architecture
 
 - `cmd/km/` — CLI entry point

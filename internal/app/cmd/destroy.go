@@ -466,6 +466,46 @@ locals {
 			if existingMeta.Alias != "" {
 				fmt.Printf("Alias freed: %s\n", existingMeta.Alias)
 			}
+			// Phase 67-07: drain Slack-inbound queue and thread rows BEFORE the
+			// Phase 63 final-post + archive so the final "destroyed" message lands
+			// while the channel still exists.
+			// Non-fatal: each step is best-effort; destroy has already succeeded.
+			if existingMeta.SlackInboundQueueURL != "" {
+				sqsRegionForDrain := existingMeta.Region
+				if sqsRegionForDrain == "" {
+					sqsRegionForDrain = awsCfg.Region
+				}
+				sqsClientForDrain, sqsClientErr := awspkg.NewSQSClient(ctx, sqsRegionForDrain)
+				if sqsClientErr != nil {
+					log.Warn().Err(sqsClientErr).Str("sandbox_id", sandboxID).
+						Msg("drain: failed to init SQS client (non-fatal)")
+				} else {
+					ssmClientForDrain := ssm.NewFromConfig(awsCfg)
+					drainDeps := destroyInboundDeps{
+						SandboxID:             sandboxID,
+						QueueURL:              existingMeta.SlackInboundQueueURL,
+						ChannelID:             existingMeta.SlackChannelID,
+						SQS:                   sqsClientForDrain,
+						DDB:                   dynamoClientDel,
+						SlackThreadsTableName: cfg.GetSlackThreadsTableName(),
+						StopPoller:            makeStopPoller(ssmClientForDrain),
+						WaitForAgentRunIdle:   makeWaitForAgentRunIdle(ssmClientForDrain),
+						DeleteSSMParameter: func(dctx context.Context, name string) error {
+							_, err := ssmClientForDrain.DeleteParameter(dctx, &ssm.DeleteParameterInput{
+								Name: aws.String(name),
+							})
+							if err != nil {
+								var notFound *ssmtypes.ParameterNotFound
+								if errors.As(err, &notFound) {
+									return nil
+								}
+							}
+							return err
+						},
+					}
+					drainSlackInbound(ctx, drainDeps)
+				}
+			}
 			// Phase 63 — per-sandbox Slack archive flow (local destroy path).
 			// runSlackTeardown is the shared helper; the remote path calls it before dispatch.
 			// Non-fatal: destroy has already succeeded; Slack failures are WARN-logged.
