@@ -28,12 +28,8 @@ func ResolveSandboxID(ctx context.Context, cfg *config.Config, ref string) (stri
 	// lookup must take priority over pattern matching.
 	awsCfg, awsErr := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
 	if awsErr == nil {
-		tableName := cfg.SandboxTableName
-		if tableName == "" {
-			tableName = "km-sandboxes"
-		}
 		dynamoClient := dynamodb.NewFromConfig(awsCfg)
-		if resolved, aliasErr := kmaws.ResolveSandboxAliasDynamo(ctx, dynamoClient, tableName, ref); aliasErr == nil {
+		if resolved, aliasErr := kmaws.ResolveSandboxAliasDynamo(ctx, dynamoClient, cfg.GetSandboxTableName(), ref); aliasErr == nil {
 			fmt.Printf("Resolved alias %q → %s\n", ref, resolved)
 			return resolved, nil
 		}
@@ -70,10 +66,6 @@ func listSandboxes(ctx context.Context, cfg *config.Config) ([]kmaws.SandboxReco
 	if err != nil {
 		return nil, err
 	}
-	tableName := cfg.SandboxTableName
-	if tableName == "" {
-		tableName = "km-sandboxes"
-	}
-	lister := newRealLister(awsCfg, cfg.StateBucket, tableName)
+	lister := newRealLister(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())
 	return lister.ListSandboxes(ctx, false)
 }
