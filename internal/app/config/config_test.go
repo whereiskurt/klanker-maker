@@ -105,7 +105,9 @@ func TestLoadBackwardCompat(t *testing.T) {
 	}
 }
 
-// TestLoadBudgetTableDefault verifies that BudgetTableName defaults to "km-budgets" when not set.
+// TestLoadBudgetTableDefault verifies that GetBudgetTableName() returns "km-budgets" by default.
+// Phase 66: the raw field defaults to "" so the prefix-aware helper can derive the name from
+// resource_prefix; for default prefix "km" the helper returns "km-budgets" preserving behavior.
 func TestLoadBudgetTableDefault(t *testing.T) {
 	dir := t.TempDir()
 	// Write a km-config.yaml without budget_table_name
@@ -124,12 +126,13 @@ domain: test.example.com
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	if cfg.BudgetTableName != "km-budgets" {
-		t.Errorf("BudgetTableName: expected default %q, got %q", "km-budgets", cfg.BudgetTableName)
+	if got := cfg.GetBudgetTableName(); got != "km-budgets" {
+		t.Errorf("GetBudgetTableName(): expected default %q, got %q", "km-budgets", got)
 	}
 }
 
-// TestLoadIdentityTableDefault verifies that IdentityTableName defaults to "km-identities" when not set.
+// TestLoadIdentityTableDefault verifies that GetIdentityTableName() returns "km-identities" by default.
+// Phase 66: see TestLoadBudgetTableDefault for the same field/helper rationale.
 func TestLoadIdentityTableDefault(t *testing.T) {
 	dir := t.TempDir()
 	// Write a km-config.yaml without identity_table_name
@@ -148,8 +151,8 @@ domain: test.example.com
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	if cfg.IdentityTableName != "km-identities" {
-		t.Errorf("IdentityTableName: expected default %q, got %q", "km-identities", cfg.IdentityTableName)
+	if got := cfg.GetIdentityTableName(); got != "km-identities" {
+		t.Errorf("GetIdentityTableName(): expected default %q, got %q", "km-identities", got)
 	}
 }
 
