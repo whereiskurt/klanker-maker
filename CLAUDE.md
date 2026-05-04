@@ -274,7 +274,25 @@ make build && km init --sidecars && km init
 km doctor
 ```
 
-See `docs/slack-notifications.md` for full operator guide.
+**Known Phase 68 limitations (Phase 68.1 follow-ups):**
+
+- **Slack Connect channels reject final file upload.** Per-sandbox
+  channels are externally shared via Slack Connect (`is_ext_shared:
+  true`). Slack's `files.completeUploadExternal` returns silent
+  `internal_error` for these. Per-turn chat lines + auto-thread
+  + DDB record-mapping all work; only the `.jsonl.gz` attachment
+  is missing. Pull from S3 instead:
+  `aws s3 ls s3://${KM_ARTIFACTS_BUCKET}/transcripts/<sandbox-id>/`
+- **`km agent run` (non-interactive `claude -p`) skips PostToolUse
+  hooks** per Claude Code platform behavior. Use interactive
+  `km shell` for transcript streaming today.
+- **Subagent fan-out creates one Slack thread per `session_id`.**
+  `/clone` and Task-tool spawns each fire their own auto-thread-parent.
+- **Operator warning at `km create` only fires on `--local`** path,
+  not `--remote` (default for EC2 substrates).
+
+See `docs/slack-notifications.md` for full operator guide and
+`.planning/phases/68-…/deferred-items.md` for fix paths.
 
 ## Architecture
 

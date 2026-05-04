@@ -697,17 +697,54 @@ Sets `KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED=1`/`=0` in the SSM session env, taking 
 
 ⚠️ **Transcripts contain whatever Claude saw.** Bash output, file reads, env dumps, API responses — all visible in the channel and the uploaded file. Do NOT enable for sandboxes processing sensitive data without operator awareness. Transcript redaction is OUT OF SCOPE for Phase 68.
 
+### Known limitations
+
+#### Slack Connect externally-shared channels reject file uploads
+
+Per-sandbox channels created via `km create` with
+`notifySlackPerSandbox: true` are shared with the operator via Slack
+Connect (`is_ext_shared: true`). UAT discovered that Slack's modern
+3-step file upload API (`files.completeUploadExternal`) silently
+returns `internal_error` when the target channel is externally shared,
+even when:
+
+- The bot is a full member of the channel
+- The bot has `files:write` scope (verified by cold-start probe)
+- Steps 1+2 of the upload (URL request + PUT) succeed
+- Other API calls like `chat.postMessage` work fine in the same channel
+
+**Effect:** the per-turn `🔧 ToolName: …` chat lines, auto-thread
+parents, and DDB `record-mapping` rows all work correctly. Only the
+final `claude-transcript-{session_id}.jsonl.gz` attachment at Stop is
+affected — the upload silently fails and the operator gets no file.
+
+**Workarounds today:**
+- Pull transcripts directly from S3:
+  `aws s3 ls s3://<artifacts-bucket>/transcripts/<sandbox-id>/`
+- Use a non-Connect internal Slack channel (set
+  `notifySlackChannelOverride` to a host-workspace channel ID) — note
+  this loses per-sandbox isolation
+
+**Phase 68.1 fix (planned):** detect channel type at `km create`,
+fall back to posting an S3 presigned-URL message in Connect channels
+instead of a native Slack file attachment.
+
 ### Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | `km doctor` flags `slack_transcript_table_exists` WARN | DDB table not provisioned | `km init` (terraform apply) |
 | `km doctor` flags `slack_files_write_scope` WARN | Bot lacks files:write | Re-auth Slack App with files:write scope |
-| Streaming works but file upload missing | files:write missing on bot | Same as above; bridge returns 400 scope_missing |
+| Per-turn chat lines appear but no .jsonl.gz file at Stop | Channel is Slack Connect (`is_ext_shared: true`) | Known limitation; pull from S3 directly. Phase 68.1 will add presigned-URL fallback |
+| Streaming works but file upload missing AND channel is internal | files:write missing on bot | Re-auth Slack App with files:write; bridge returns 400 scope_missing |
 | Bridge logs show `s3_key_prefix_mismatch` | Sandbox attempted upload with wrong prefix | Should never happen in normal flow; investigate sandbox compromise |
+| Bridge logs show `s3_get_failed` 403 AccessDenied | Bridge IAM missing `s3:GetObject` on `transcripts/*` | Confirm `KM_ARTIFACTS_BUCKET` is set in bridge env (`aws lambda get-function-configuration`); re-run `km init` if missing |
+| Bridge logs show `upload_failed: internal_error` | Slack Connect channel limitation (see Known Limitations above) | Phase 68.1 |
+| `km agent run` produces no transcript activity | `claude -p` (print mode) skips PostToolUse hooks per Claude Code platform | Use interactive `km shell` instead; Phase 68.1 will pivot to non-hook mechanism |
+| Multiple top-level "turn started" messages for one task | Subagent fan-out — each Task-tool spawn has its own session_id | Phase 68.1 will introduce operator-turn root grouping |
 | Lambda timeout / OOM during upload | Transcript >100 MB | Out of scope; current cap 100 MB |
 | Slack thread shows gaps during heavy runs | Slack rate limit | By design — file upload at Stop has the full record |
-| `km doctor` flags `slack_transcript_stale_objects` WARN | S3 has transcripts for destroyed sandboxes | Cleanup advisory; bucket lifecycle eventually reaps |
+| `km doctor` flags `slack_transcript_stale_objects` WARN | S3 has transcripts for destroyed sandboxes | Cleanup advisory; configure bucket lifecycle policy or `aws s3 rm s3://<bucket>/transcripts/<sandbox-id>/ --recursive` |
 
 ### Operator runbook: enabling files:write scope
 
