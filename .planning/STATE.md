@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: Completed 66-01-PLAN.md
-last_updated: "2026-05-04T13:53:06.800Z"
+stopped_at: Completed 66-02-PLAN.md
+last_updated: "2026-05-04T14:18:49.931Z"
 last_activity: 2026-05-04
 progress:
   total_phases: 73
   completed_phases: 68
   total_plans: 242
-  completed_plans: 239
+  completed_plans: 240
   percent: 93
 ---
 
@@ -280,6 +280,7 @@ Progress: [█████████░] 93%
 | Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P11 | 7min | 3 tasks | 4 files |
 | Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload P10 | 13min | 2 tasks | 5 files |
 | Phase 66-multi-instance-support-configurable-resource-prefix-and-email-subdomain P01 | 179 | 2 tasks | 4 files |
+| Phase 66-multi-instance-support-configurable-resource-prefix-and-email-subdomain P02 | 1023 | 3 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -796,6 +797,9 @@ Recent decisions affecting current work:
 - [Phase 68-slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload]: Plan 68-10: NotifyEnv-block placement after SlackStreamMessagesTableName mirrors the Phase 62/63 'append additive Slack fields after existing assignments' pattern; printTranscriptWarning placed inside the existing Slack-resolution if-block to reuse slackClient
 - [Phase 66-01]: EmailSubdomain field uses nil-safe GetEmailDomain() helper matching Phase 67 GetResourcePrefix() nil-safety pattern
 - [Phase 66-01]: DoctorConfigProvider interface extended with 4 methods; type-assert hack at doctor.go:2344 removed (Pitfall 12 resolved)
+- [Phase 66-02]: AMIName() uses variadic prefix string to preserve backward compat; caller passes cfg.GetResourcePrefix()+"-"
+- [Phase 66-02]: Lambda getEmailDomain() uses lazy env read (not init-time var) so test tools can override at test time
+- [Phase 66-02]: HCL template deferrals to plan 04 use inline TODO on same line as literal to enable grep audit
 
 ### Roadmap Evolution
 
@@ -884,6 +888,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-04T13:53:06.793Z
-Stopped at: Completed 66-01-PLAN.md
+Last session: 2026-05-04T14:18:49.925Z
+Stopped at: Completed 66-02-PLAN.md
 Resume file: None
