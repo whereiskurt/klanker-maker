@@ -406,8 +406,11 @@ func ReEncryptSSMParameters(ctx context.Context, ssmClient RotationSSMAPI, sandb
 // This allows grouping rotation events by date and type.
 //
 // The RotationAuditEvent is JSON-marshaled and written as a single log event.
-func WriteRotationAudit(ctx context.Context, cwClient RotationCWAPI, event RotationAuditEvent) error {
-	const logGroup = "/km/credential-rotation"
+// WriteRotationAudit writes a structured JSON RotationAuditEvent to the
+// "/{prefix}/credential-rotation" CloudWatch log group. prefix is the resource
+// prefix (e.g. "km"), typically cfg.GetResourcePrefix() on the operator side.
+func WriteRotationAudit(ctx context.Context, cwClient RotationCWAPI, event RotationAuditEvent, prefix string) error {
+	logGroup := "/" + prefix + "/credential-rotation"
 
 	// Stream name includes date + event type for easy filtering.
 	date := event.Timestamp.UTC().Format("2006-01-02")

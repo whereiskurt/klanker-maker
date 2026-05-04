@@ -13,11 +13,11 @@ import (
 
 // BuildTTLScheduleInput constructs the CreateScheduleInput for an EventBridge one-time
 // at() schedule that fires at ttlExpiry and triggers the TTL handler Lambda.
+// prefix is the resource prefix (e.g. "km"); schedule name format: {prefix}-ttl-{sandboxID}.
 //
 // Returns nil if ttlExpiry.IsZero() — callers should treat nil as "TTL not configured".
-// Schedule name format: km-ttl-<sandboxID>.
 // ActionAfterCompletion: DELETE so the rule self-cleans after firing.
-func BuildTTLScheduleInput(sandboxID string, ttlExpiry time.Time, lambdaARN string, schedulerRoleARN string) *scheduler.CreateScheduleInput {
+func BuildTTLScheduleInput(sandboxID string, ttlExpiry time.Time, lambdaARN string, schedulerRoleARN string, prefix string) *scheduler.CreateScheduleInput {
 	if ttlExpiry.IsZero() {
 		return nil
 	}
@@ -26,7 +26,7 @@ func BuildTTLScheduleInput(sandboxID string, ttlExpiry time.Time, lambdaARN stri
 	atExpr := "at(" + ttlExpiry.UTC().Format("2006-01-02T15:04:05") + ")"
 
 	return &scheduler.CreateScheduleInput{
-		Name:                       aws.String("km-ttl-" + sandboxID),
+		Name:                       aws.String(prefix + "-ttl-" + sandboxID),
 		ScheduleExpression:         aws.String(atExpr),
 		ScheduleExpressionTimezone: aws.String("UTC"),
 		Target: &types.Target{

@@ -46,7 +46,7 @@ func (m *mockSchedulerAPI) GetSchedule(ctx context.Context, input *scheduler.Get
 
 func TestCreateTTLSchedule_Success(t *testing.T) {
 	ttlTime := time.Now().Add(2 * time.Hour)
-	input := compiler.BuildTTLScheduleInput("sb-123", ttlTime, "arn:aws:lambda:us-east-1:123456789012:function:km-ttl", "arn:aws:iam::123456789012:role/km-scheduler-role")
+	input := compiler.BuildTTLScheduleInput("sb-123", ttlTime, "arn:aws:lambda:us-east-1:123456789012:function:km-ttl", "arn:aws:iam::123456789012:role/km-scheduler-role", "km")
 
 	if input == nil {
 		t.Fatal("BuildTTLScheduleInput returned nil for non-zero ttlTime")
@@ -87,7 +87,7 @@ func TestCreateTTLSchedule_Success(t *testing.T) {
 
 func TestCreateTTLSchedule_NoTTL(t *testing.T) {
 	// Zero time = TTL not configured
-	input := compiler.BuildTTLScheduleInput("sb-123", time.Time{}, "arn:...", "arn:...")
+	input := compiler.BuildTTLScheduleInput("sb-123", time.Time{}, "arn:...", "arn:...", "km")
 	if input != nil {
 		t.Fatalf("BuildTTLScheduleInput should return nil for zero ttlTime, got %+v", input)
 	}
@@ -105,7 +105,7 @@ func TestCreateTTLSchedule_NoTTL(t *testing.T) {
 func TestDeleteTTLSchedule_Success(t *testing.T) {
 	mock := &mockSchedulerAPI{}
 
-	err := kmaws.DeleteTTLSchedule(context.Background(), mock, "sb-123")
+	err := kmaws.DeleteTTLSchedule(context.Background(), mock, "sb-123", "km")
 	if err != nil {
 		t.Fatalf("DeleteTTLSchedule returned unexpected error: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestDeleteTTLSchedule_NotFound(t *testing.T) {
 	}
 	mock := &mockSchedulerAPI{deleteErr: notFoundErr}
 
-	err := kmaws.DeleteTTLSchedule(context.Background(), mock, "sb-notfound")
+	err := kmaws.DeleteTTLSchedule(context.Background(), mock, "sb-notfound", "km")
 	if err != nil {
 		t.Fatalf("DeleteTTLSchedule should return nil for ResourceNotFoundException, got: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestDeleteTTLSchedule_OtherError(t *testing.T) {
 	otherErr := errors.New("throttled")
 	mock := &mockSchedulerAPI{deleteErr: otherErr}
 
-	err := kmaws.DeleteTTLSchedule(context.Background(), mock, "sb-err")
+	err := kmaws.DeleteTTLSchedule(context.Background(), mock, "sb-err", "km")
 	if err == nil {
 		t.Fatal("expected error from DeleteTTLSchedule when SDK returns non-NotFound error")
 	}

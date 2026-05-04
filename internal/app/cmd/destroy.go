@@ -270,7 +270,7 @@ locals {
 	// Idempotent — DeleteTTLSchedule ignores ResourceNotFoundException.
 	// Done before terragrunt destroy so schedules are cancelled even if destroy partially fails.
 	schedulerClient := scheduler.NewFromConfig(awsCfg)
-	if err := awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID); err != nil {
+	if err := awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID, cfg.GetResourcePrefix()); err != nil {
 		log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("failed to delete TTL schedule (non-fatal)")
 	}
 	// Clean up budget schedule (km-budget-{sandbox-id}).
@@ -535,7 +535,7 @@ locals {
 	// Export is fire-and-forget (async in AWS) and non-fatal — deletion proceeds regardless.
 	cwClient := cloudwatchlogs.NewFromConfig(awsCfg)
 	if artifactBucket != "" {
-		if exportErr := awspkg.ExportSandboxLogs(ctx, cwClient, sandboxID, artifactBucket); exportErr != nil {
+		if exportErr := awspkg.ExportSandboxLogs(ctx, cwClient, sandboxID, artifactBucket, cfg.GetResourcePrefix()); exportErr != nil {
 			log.Warn().Err(exportErr).Str("sandbox_id", sandboxID).
 				Msg("failed to export sandbox logs to S3 (non-fatal)")
 		} else {
@@ -543,7 +543,7 @@ locals {
 				Msg("sandbox logs export task initiated")
 		}
 	}
-	if cwErr := awspkg.DeleteSandboxLogGroup(ctx, cwClient, sandboxID); cwErr != nil {
+	if cwErr := awspkg.DeleteSandboxLogGroup(ctx, cwClient, sandboxID, cfg.GetResourcePrefix()); cwErr != nil {
 		log.Warn().Err(cwErr).Str("sandbox_id", sandboxID).
 			Msg("failed to delete sandbox log group (non-fatal)")
 	} else {
@@ -654,7 +654,7 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 
 	// Step DD3c: Cancel EventBridge schedules (TTL, budget) so they don't fire after resources are gone.
 	schedulerClient := scheduler.NewFromConfig(awsCfg)
-	if err := awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID); err != nil {
+	if err := awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID, cfg.GetResourcePrefix()); err != nil {
 		log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("failed to delete TTL schedule (non-fatal)")
 	}
 	budgetScheduleName := "km-budget-" + sandboxID

@@ -181,7 +181,7 @@ echo "[km-bootstrap] Hostname set to ${SANDBOX_FQDN}"
 # inbound poller and Stop hook see them on first dispatch.
 echo "[km-bootstrap] Fetching Slack runtime config from SSM Parameter Store..."
 SLACK_CHANNEL_ID_PARAM="/sandbox/{{ .SandboxID }}/slack-channel-id"
-SLACK_BRIDGE_URL_PARAM="/km/slack/bridge-url"
+SLACK_BRIDGE_URL_PARAM="/km/slack/bridge-url" # TODO(plan-04): read prefix from /etc/km/notify.env
 SLACK_RUNTIME_FILE="/etc/profile.d/km-slack-runtime.sh"
 CHANNEL_ID=""
 BRIDGE_URL=""
@@ -1208,7 +1208,7 @@ fi
 KM_SLACK_CHANNEL_ID="${KM_SLACK_CHANNEL_ID:-}"
 KM_SLACK_BRIDGE_URL="${KM_SLACK_BRIDGE_URL:-}"
 CHANNEL_PARAM="/sandbox/${SANDBOX_ID}/slack-channel-id"
-BRIDGE_PARAM="/km/slack/bridge-url"
+BRIDGE_PARAM="/km/slack/bridge-url" # TODO(plan-04): read prefix from /etc/km/notify.env
 if [ -z "$KM_SLACK_CHANNEL_ID" ]; then
   for attempt in 1 2 3; do
     KM_SLACK_CHANNEL_ID=$(aws ssm get-parameter \

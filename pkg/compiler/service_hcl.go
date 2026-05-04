@@ -319,13 +319,13 @@ const ecsServiceHCLTemplate = `locals {
         environment = [
           { name = "SANDBOX_ID",      value = "{{ .SandboxID }}" },
           { name = "AUDIT_LOG_DEST",  value = "cloudwatch" },
-          { name = "CW_LOG_GROUP",    value = "/km/sandboxes/{{ .SandboxID }}/" },
+          { name = "CW_LOG_GROUP",    value = "/km/sandboxes/{{ .SandboxID }}/" }, {{/* TODO(plan-04): replace /km/ with dynamic prefix from ResourcePrefix field */}}
           { name = "AWS_REGION",      value = "{{ .Region }}" },
         ]
         log_configuration = {
           log_driver = "awslogs"
           options = {
-            "awslogs-group"         = "/km/sidecars/{{ .SandboxID }}"
+            "awslogs-group"         = "/km/sidecars/{{ .SandboxID }}" {{/* TODO(plan-04): replace /km/ with dynamic prefix */}}
             "awslogs-region"        = "{{ .Region }}"
             "awslogs-stream-prefix" = "audit-log"
           }

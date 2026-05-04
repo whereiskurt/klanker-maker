@@ -169,10 +169,11 @@ func runResume(ctx context.Context, cfg *config.Config, sandboxID string) error 
 					if fnErr == nil && roleErr == nil {
 						schedulerClient := scheduler.NewFromConfig(awsCfg)
 						// Delete any existing schedule first (may linger from previous TTL cycle).
-						awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID)
+						awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID, cfg.GetResourcePrefix())
 						schedInput := compiler.BuildTTLScheduleInput(sandboxID, newExpiry,
 							aws.ToString(fnOut.Configuration.FunctionArn),
-							aws.ToString(roleOut.Role.Arn))
+							aws.ToString(roleOut.Role.Arn),
+							cfg.GetResourcePrefix())
 						if schedErr := awspkg.CreateTTLSchedule(ctx, schedulerClient, schedInput); schedErr == nil {
 							fmt.Printf("  TTL schedule recreated: expires in %s\n", p.Spec.Lifecycle.TTL)
 							// Update TTL expiry in DynamoDB.

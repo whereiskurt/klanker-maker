@@ -138,7 +138,7 @@ func runExtend(ctx context.Context, cfg *config.Config, sandboxID string, addDur
 	}
 
 	// Step 3: Delete old schedule and create new one
-	if delErr := awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID); delErr != nil {
+	if delErr := awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID, cfg.GetResourcePrefix()); delErr != nil {
 		fmt.Printf(ansiYellow+"  [warn] could not delete old TTL schedule: %v"+ansiReset+"\n", delErr)
 	}
 
@@ -162,7 +162,7 @@ func runExtend(ctx context.Context, cfg *config.Config, sandboxID string, addDur
 	}
 	schedulerRoleARN := aws.ToString(roleOut.Role.Arn)
 
-	schedInput := compiler.BuildTTLScheduleInput(sandboxID, newExpiry, ttlLambdaARN, schedulerRoleARN)
+	schedInput := compiler.BuildTTLScheduleInput(sandboxID, newExpiry, ttlLambdaARN, schedulerRoleARN, cfg.GetResourcePrefix())
 	if err := awspkg.CreateTTLSchedule(ctx, schedulerClient, schedInput); err != nil {
 		return fmt.Errorf("create TTL schedule: %w", err)
 	}

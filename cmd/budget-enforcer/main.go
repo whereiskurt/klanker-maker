@@ -144,6 +144,14 @@ func budgetTableName() string {
 	return "km-budgets"
 }
 
+// resourcePrefix returns the resource prefix from the KM_RESOURCE_PREFIX env var.
+func resourcePrefix() string {
+	if v := os.Getenv("KM_RESOURCE_PREFIX"); v != "" {
+		return v
+	}
+	return "km"
+}
+
 // HandleBudgetCheck is the Lambda handler method.
 func (h *BudgetHandler) HandleBudgetCheck(ctx context.Context, event BudgetCheckEvent) error {
 	if event.SandboxID == "" {
@@ -521,7 +529,7 @@ func (h *BudgetHandler) enforceBudgetCompute(ctx context.Context, event BudgetCh
 
 		// Delete TTL schedule — stopped sandbox shouldn't be destroyed on TTL expiry.
 		if h.SchedulerClient != nil {
-			if schedErr := awspkg.DeleteTTLSchedule(ctx, h.SchedulerClient, sandboxID); schedErr != nil {
+			if schedErr := awspkg.DeleteTTLSchedule(ctx, h.SchedulerClient, sandboxID, resourcePrefix()); schedErr != nil {
 				log.Warn().Err(schedErr).Str("sandbox_id", sandboxID).Msg("failed to delete TTL schedule (non-fatal)")
 			}
 		}

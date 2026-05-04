@@ -181,6 +181,14 @@ func atGroupName() string {
 	return "km-at"
 }
 
+// resourcePrefix returns the resource prefix from the KM_RESOURCE_PREFIX env var.
+func resourcePrefix() string {
+	if v := os.Getenv("KM_RESOURCE_PREFIX"); v != "" {
+		return v
+	}
+	return "km"
+}
+
 // HandleTTLEvent is the Lambda handler method. It is called by lambdaruntime.Start in main().
 func (h *TTLHandler) HandleTTLEvent(ctx context.Context, event TTLEvent) error {
 	if event.SandboxID == "" {
@@ -326,7 +334,7 @@ func (h *TTLHandler) handleStop(ctx context.Context, event TTLEvent) error {
 
 	// Delete TTL schedule — stopped sandbox shouldn't be destroyed on TTL expiry.
 	if h.Scheduler != nil {
-		if schedErr := awspkg.DeleteTTLSchedule(ctx, h.Scheduler, event.SandboxID); schedErr != nil {
+		if schedErr := awspkg.DeleteTTLSchedule(ctx, h.Scheduler, event.SandboxID, resourcePrefix()); schedErr != nil {
 			log.Warn().Err(schedErr).Str("sandbox_id", event.SandboxID).Msg("failed to delete TTL schedule (non-fatal)")
 		}
 	}
@@ -416,7 +424,8 @@ func (h *TTLHandler) handleResume(ctx context.Context, event TTLEvent) error {
 					schedulerClient := scheduler.NewFromConfig(awsCfg)
 					schedInput := compiler.BuildTTLScheduleInput(event.SandboxID, newExpiry,
 						awssdk.ToString(fnOut.Configuration.FunctionArn),
-						awssdk.ToString(roleOut.Role.Arn))
+						awssdk.ToString(roleOut.Role.Arn),
+						resourcePrefix())
 					if schedErr := awspkg.CreateTTLSchedule(ctx, schedulerClient, schedInput); schedErr != nil {
 						log.Warn().Err(schedErr).Str("sandbox_id", event.SandboxID).Msg("failed to recreate TTL schedule (non-fatal)")
 					} else {
@@ -753,7 +762,7 @@ func (h *TTLHandler) handleExtend(ctx context.Context, event TTLEvent) error {
 		cfg, _ := awspkg.LoadAWSConfig(ctx, "")
 		return cfg
 	}())
-	awspkg.DeleteTTLSchedule(ctx, schedulerClient, event.SandboxID)
+	awspkg.DeleteTTLSchedule(ctx, schedulerClient, event.SandboxID, resourcePrefix())
 
 	// Discover Lambda ARN and scheduler role for the new schedule
 	awsCfg, _ := awspkg.LoadAWSConfig(ctx, "")
@@ -774,7 +783,8 @@ func (h *TTLHandler) handleExtend(ctx context.Context, event TTLEvent) error {
 
 	schedInput := compiler.BuildTTLScheduleInput(event.SandboxID, newExpiry,
 		awssdk.ToString(fnOut.Configuration.FunctionArn),
-		awssdk.ToString(roleOut.Role.Arn))
+		awssdk.ToString(roleOut.Role.Arn),
+		resourcePrefix())
 	if err := awspkg.CreateTTLSchedule(ctx, schedulerClient, schedInput); err != nil {
 		return fmt.Errorf("create schedule: %w", err)
 	}
@@ -867,7 +877,7 @@ func (h *TTLHandler) handleDestroy(ctx context.Context, event TTLEvent) error {
 
 	// Step 5: Delete TTL schedule (self-cleanup, idempotent).
 	if h.Scheduler != nil {
-		if schedErr := awspkg.DeleteTTLSchedule(ctx, h.Scheduler, sandboxID); schedErr != nil {
+		if schedErr := awspkg.DeleteTTLSchedule(ctx, h.Scheduler, sandboxID, resourcePrefix()); schedErr != nil {
 			log.Warn().Err(schedErr).Str("sandbox_id", sandboxID).
 				Msg("failed to delete TTL schedule (non-fatal)")
 		}
@@ -1124,13 +1134,13 @@ module "sandbox" {
 	// Export is fire-and-forget (async in AWS) and non-fatal — deletion proceeds regardless.
 	if h.CWClient != nil {
 		if h.Bucket != "" {
-			if exportErr := awspkg.ExportSandboxLogs(ctx, h.CWClient, sandboxID, h.Bucket); exportErr != nil {
+			if exportErr := awspkg.ExportSandboxLogs(ctx, h.CWClient, sandboxID, h.Bucket, resourcePrefix()); exportErr != nil {
 				log.Warn().Err(exportErr).Str("sandbox_id", sandboxID).Msg("failed to export sandbox logs to S3 (non-fatal)")
 			} else {
 				log.Info().Str("sandbox_id", sandboxID).Str("bucket", h.Bucket).Msg("sandbox logs export task initiated")
 			}
 		}
-		if cwErr := awspkg.DeleteSandboxLogGroup(ctx, h.CWClient, sandboxID); cwErr != nil {
+		if cwErr := awspkg.DeleteSandboxLogGroup(ctx, h.CWClient, sandboxID, resourcePrefix()); cwErr != nil {
 			log.Warn().Err(cwErr).Str("sandbox_id", sandboxID).Msg("failed to delete log group (non-fatal)")
 		}
 	}
@@ -1424,9 +1434,9 @@ func sdkOnlyTeardown(ctx context.Context, h *TTLHandler, sandboxID string) error
 	// 6. Export and delete CloudWatch logs.
 	if h.CWClient != nil {
 		if h.Bucket != "" {
-			awspkg.ExportSandboxLogs(ctx, h.CWClient, sandboxID, h.Bucket)
+			awspkg.ExportSandboxLogs(ctx, h.CWClient, sandboxID, h.Bucket, resourcePrefix())
 		}
-		awspkg.DeleteSandboxLogGroup(ctx, h.CWClient, sandboxID)
+		awspkg.DeleteSandboxLogGroup(ctx, h.CWClient, sandboxID, resourcePrefix())
 	}
 
 	return nil

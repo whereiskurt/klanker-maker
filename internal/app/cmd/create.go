@@ -978,7 +978,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		}
 	}
 	if ttlExpiry != nil && ttlLambdaARN != "" && schedulerRoleARN != "" {
-		schedInput := compiler.BuildTTLScheduleInput(sandboxID, *ttlExpiry, ttlLambdaARN, schedulerRoleARN)
+		schedInput := compiler.BuildTTLScheduleInput(sandboxID, *ttlExpiry, ttlLambdaARN, schedulerRoleARN, cfg.GetResourcePrefix())
 		schedulerClient := scheduler.NewFromConfig(awsCfg)
 		if err := awspkg.CreateTTLSchedule(ctx, schedulerClient, schedInput); err != nil {
 			log.Error().Err(err).Str("sandbox_id", sandboxID).

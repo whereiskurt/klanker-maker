@@ -63,7 +63,7 @@ func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
 
 	// CLI flags and environment variable defaults.
-	bucketDefault := envOrDefault("KM_BUCKET", "tf-km")
+	bucketDefault := tfStateBucket()
 	addrDefault := envOrDefault("CONFIGUI_ADDR", ":8080")
 	profilesDirDefault := envOrDefault("KM_PROFILES_DIR", "profiles")
 
@@ -104,8 +104,7 @@ func main() {
 	finderAdapter := &tagFinderAdapter{client: tagClient}
 
 	// Budget fetcher: uses DynamoDB table name from KM_BUDGET_TABLE (default "km-budgets").
-	budgetTableName := envOrDefault("KM_BUDGET_TABLE", "km-budgets")
-	budgetFetcher := &dynoBudgetFetcher{client: dynamoClient, tableName: budgetTableName}
+	budgetFetcher := &dynoBudgetFetcher{client: dynamoClient, tableName: budgetTableName()}
 
 	// Production action implementations.
 	destroyer := &kmDestroyerImpl{}
@@ -205,6 +204,35 @@ func envOrDefault(key, defaultVal string) string {
 	return defaultVal
 }
 
+// tfStateBucket returns the Terraform state bucket name.
+// Reads KM_BUCKET first; if absent, derives "tf-{prefix}" from KM_RESOURCE_PREFIX.
+func tfStateBucket() string {
+	if v := os.Getenv("KM_BUCKET"); v != "" {
+		return v
+	}
+	prefix := "km"
+	if p := os.Getenv("KM_RESOURCE_PREFIX"); p != "" {
+		prefix = p
+	}
+	return "tf-" + prefix
+}
+
+// budgetTableName returns the DynamoDB budget table name from the KM_BUDGET_TABLE env var.
+func budgetTableName() string {
+	if v := os.Getenv("KM_BUDGET_TABLE"); v != "" {
+		return v
+	}
+	return "km-budgets"
+}
+
+// resourcePrefix returns the resource prefix from the KM_RESOURCE_PREFIX env var.
+func resourcePrefix() string {
+	if v := os.Getenv("KM_RESOURCE_PREFIX"); v != "" {
+		return v
+	}
+	return "km"
+}
+
 // --- AWS adapter types ---
 
 // s3ListerAdapter wraps *s3.Client to satisfy SandboxLister.
@@ -254,7 +282,7 @@ type schedulerTTLExtender struct {
 
 func (e *schedulerTTLExtender) ExtendTTL(ctx context.Context, sandboxID string, duration time.Duration) error {
 	// Delete existing schedule first (idempotent — returns nil if not found).
-	if err := kmaws.DeleteTTLSchedule(ctx, e.client, sandboxID); err != nil {
+	if err := kmaws.DeleteTTLSchedule(ctx, e.client, sandboxID, resourcePrefix()); err != nil {
 		return err
 	}
 	// TTL extension without a Lambda target ARN is a no-op at this point;

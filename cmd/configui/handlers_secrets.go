@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -44,9 +45,16 @@ type secretValueRecord struct {
 	Type  string `json:"type"`
 }
 
-const kmPrefix = "/km/"
+// kmPrefix is the SSM parameter path prefix, resolved once at startup from KM_RESOURCE_PREFIX.
+// configui is a long-running web server — reading env once at package init is correct semantics.
+var kmPrefix = func() string {
+	if v := os.Getenv("KM_RESOURCE_PREFIX"); v != "" {
+		return "/" + v + "/"
+	}
+	return "/km/"
+}()
 
-// validateKMPrefix returns an error if name does not start with /km/.
+// validateKMPrefix returns an error if name does not start with the configured kmPrefix.
 func validateKMPrefix(name string) error {
 	if !strings.HasPrefix(name, kmPrefix) {
 		return fmt.Errorf("parameter name %q must start with %q", name, kmPrefix)

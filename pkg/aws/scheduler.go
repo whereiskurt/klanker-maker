@@ -34,14 +34,14 @@ func CreateTTLSchedule(ctx context.Context, client SchedulerAPI, input *schedule
 }
 
 // DeleteTTLSchedule cancels the EventBridge TTL schedule for the given sandboxID.
-// The schedule name is "km-ttl-<sandboxID>".
+// prefix is the resource prefix (e.g. "km"); the schedule name is "{prefix}-ttl-{sandboxID}".
 //
 // This function is idempotent: if the schedule does not exist
 // (ResourceNotFoundException), nil is returned so that km destroy can safely
 // call it even when no TTL was configured.
-func DeleteTTLSchedule(ctx context.Context, client SchedulerAPI, sandboxID string) error {
+func DeleteTTLSchedule(ctx context.Context, client SchedulerAPI, sandboxID, prefix string) error {
 	_, err := client.DeleteSchedule(ctx, &scheduler.DeleteScheduleInput{
-		Name: schedulerNamePtr("km-ttl-" + sandboxID),
+		Name: schedulerNamePtr(prefix + "-ttl-" + sandboxID),
 	})
 	if err != nil {
 		var notFound *types.ResourceNotFoundException
