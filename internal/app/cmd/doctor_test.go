@@ -997,6 +997,79 @@ var _ LambdaGetFunctionAPI = (*mockLambdaClient)(nil)
 var _ SESGetEmailIdentityAPI = (*mockSESClient)(nil)
 
 // =============================================================================
+// Tests: checkPrefixCollision (Phase 66)
+// =============================================================================
+
+func TestCheckPrefixCollision_NoCollision(t *testing.T) {
+	// ResourceNotFoundException => no collision => OK
+	client := &mockLambdaClient{
+		err: &lambdatypes.ResourceNotFoundException{Message: aws.String("Function not found")},
+	}
+	cfg := minimalConfig()
+	result := checkPrefixCollision(context.Background(), cfg, client)
+	if result.Status != CheckOK {
+		t.Errorf("expected CheckOK when function not found (no collision), got %s: %s", result.Status, result.Message)
+	}
+}
+
+func TestCheckPrefixCollision_Collision(t *testing.T) {
+	// Function exists => potential collision => WARN
+	client := &mockLambdaClient{
+		output: &lambdasvc.GetFunctionOutput{},
+	}
+	cfg := minimalConfig()
+	result := checkPrefixCollision(context.Background(), cfg, client)
+	if result.Status != CheckWarn {
+		t.Errorf("expected CheckWarn when function exists (collision), got %s: %s", result.Status, result.Message)
+	}
+	wantFuncName := cfg.GetResourcePrefix() + "-ttl-handler"
+	if !containsString(result.Message, wantFuncName) {
+		t.Errorf("expected message to contain %q, got: %s", wantFuncName, result.Message)
+	}
+}
+
+// =============================================================================
+// Tests: checkEmailDomainMatchesSESIdentity (Phase 66)
+// =============================================================================
+
+func TestCheckEmailDomainMatchesSESIdentity_Verified(t *testing.T) {
+	client := &mockSESClient{
+		output: &sesv2svc.GetEmailIdentityOutput{
+			VerificationStatus: sesv2types.VerificationStatusSuccess,
+		},
+	}
+	cfg := minimalConfig()
+	result := checkEmailDomainMatchesSESIdentity(context.Background(), cfg, client)
+	if result.Status != CheckOK {
+		t.Errorf("expected CheckOK when SES identity is verified, got %s: %s", result.Status, result.Message)
+	}
+}
+
+func TestCheckEmailDomainMatchesSESIdentity_NotFound(t *testing.T) {
+	client := &mockSESClient{
+		err: &sesv2types.NotFoundException{Message: aws.String("Identity not found")},
+	}
+	cfg := minimalConfig()
+	result := checkEmailDomainMatchesSESIdentity(context.Background(), cfg, client)
+	if result.Status != CheckWarn {
+		t.Errorf("expected CheckWarn on NotFoundException, got %s", result.Status)
+	}
+}
+
+func TestCheckEmailDomainMatchesSESIdentity_Unverified(t *testing.T) {
+	client := &mockSESClient{
+		output: &sesv2svc.GetEmailIdentityOutput{
+			VerificationStatus: sesv2types.VerificationStatusPending,
+		},
+	}
+	cfg := minimalConfig()
+	result := checkEmailDomainMatchesSESIdentity(context.Background(), cfg, client)
+	if result.Status != CheckWarn {
+		t.Errorf("expected CheckWarn when SES identity not verified, got %s: %s", result.Status, result.Message)
+	}
+}
+
+// =============================================================================
 // Tests: checkCredentialRotationAge
 // =============================================================================
 

@@ -837,6 +837,112 @@ func checkSESIdentity(ctx context.Context, client SESGetEmailIdentityAPI, emailD
 	}
 }
 
+// checkPrefixCollision checks whether a Lambda named {prefix}-ttl-handler already exists.
+// If the Lambda exists, another km install may be sharing the same resource_prefix in this
+// account. Existence of the Lambda from THIS install is expected (StatusWarn is intentionally
+// informational — the operator running km doctor IS the deployer).
+// Returns CheckOK when the Lambda does not exist (no collision risk on a fresh account).
+// Returns CheckWarn when the Lambda exists (could be this install or another).
+// Returns CheckSkipped when the client is nil.
+func checkPrefixCollision(ctx context.Context, p DoctorConfigProvider, client LambdaGetFunctionAPI) CheckResult {
+	prefix := p.GetResourcePrefix()
+	ttlName := prefix + "-ttl-handler"
+	name := "Prefix Collision (" + prefix + ")"
+	if client == nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "Lambda client not available",
+		}
+	}
+	_, err := client.GetFunction(ctx, &lambda.GetFunctionInput{
+		FunctionName: awssdk.String(ttlName),
+	})
+	if err != nil {
+		var notFound *lambdatypes.ResourceNotFoundException
+		if errors.As(err, &notFound) {
+			return CheckResult{
+				Name:    name,
+				Status:  CheckOK,
+				Message: fmt.Sprintf("No prefix collision detected for %q (function not found)", ttlName),
+			}
+		}
+		return CheckResult{
+			Name:    name,
+			Status:  CheckOK,
+			Message: fmt.Sprintf("Could not check prefix collision for %q: %v (assuming no collision)", ttlName, err),
+		}
+	}
+	// Function exists — could be from this install (expected) or from a second install using the same prefix.
+	return CheckResult{
+		Name:   name,
+		Status: CheckWarn,
+		Message: fmt.Sprintf(
+			"Lambda %q already exists. Either you've already run km init (expected), OR "+
+				"another km install in this account is using the same resource_prefix. "+
+				"To run a second install, change resource_prefix in km-config.yaml.",
+			ttlName,
+		),
+	}
+}
+
+// checkEmailDomainMatchesSESIdentity verifies that the email domain derived from
+// cfg.GetEmailDomain() is a verified SES identity. This is a Phase 66 operator-facing
+// check: if the operator changed email_subdomain after km init, the new domain won't
+// have an SES identity yet and emails will fail to send.
+// Returns CheckOK when the domain is verified.
+// Returns CheckWarn when the domain is not found or not verified.
+// Returns CheckSkipped when the client is nil.
+func checkEmailDomainMatchesSESIdentity(ctx context.Context, p DoctorConfigProvider, client SESGetEmailIdentityAPI) CheckResult {
+	domain := p.GetEmailDomain()
+	name := "Email Domain SES Match"
+	if client == nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "SES client not available",
+		}
+	}
+	out, err := client.GetEmailIdentity(ctx, &sesv2.GetEmailIdentityInput{
+		EmailIdentity: awssdk.String(domain),
+	})
+	if err != nil {
+		var notFound *sesv2types.NotFoundException
+		if errors.As(err, &notFound) {
+			return CheckResult{
+				Name:   name,
+				Status: CheckWarn,
+				Message: fmt.Sprintf(
+					"SES identity %q not found. If you changed email_subdomain after km init, "+
+						"verify the new domain in SES and add DKIM/MX records to Route53.",
+					domain,
+				),
+			}
+		}
+		return CheckResult{
+			Name:    name,
+			Status:  CheckWarn,
+			Message: fmt.Sprintf("Could not check SES identity for %q: %v", domain, err),
+		}
+	}
+	if out.VerificationStatus != sesv2types.VerificationStatusSuccess {
+		return CheckResult{
+			Name:   name,
+			Status: CheckWarn,
+			Message: fmt.Sprintf(
+				"SES identity %q exists but is not verified for sending (status: %s). "+
+					"Complete DNS verification before sending emails.",
+				domain, out.VerificationStatus,
+			),
+		}
+	}
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("SES identity %q is verified for sending", domain),
+	}
+}
+
 // checkSidecarArtifacts verifies that required sidecar binaries and configs exist in the
 // artifacts S3 bucket. Returns CheckWarn if any are missing - sandboxes will fail to boot.
 func checkSidecarArtifacts(ctx context.Context, client S3HeadBucketAPI, bucket string) CheckResult {
@@ -2191,6 +2297,15 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 			r.Status = CheckWarn
 		}
 		return r
+	})
+
+	// Phase 66: prefix-collision check and email-domain SES match check.
+	// Both are informational (WARN only) and skipped when the Lambda/SES clients are nil.
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkPrefixCollision(ctx, cfg, lambdaClient)
+	})
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkEmailDomainMatchesSESIdentity(ctx, cfg, sesClient)
 	})
 
 	return checks

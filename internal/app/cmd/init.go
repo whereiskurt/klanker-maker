@@ -311,30 +311,7 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 
 	// Export config values as env vars for Terragrunt's site.hcl get_env() calls
 	// and for the envReqs checks in regionalModules.
-	if cfg.ArtifactsBucket != "" && os.Getenv("KM_ARTIFACTS_BUCKET") == "" {
-		os.Setenv("KM_ARTIFACTS_BUCKET", cfg.ArtifactsBucket)
-	}
-	if cfg.OrganizationAccountID != "" && os.Getenv("KM_ACCOUNTS_ORGANIZATION") == "" {
-		os.Setenv("KM_ACCOUNTS_ORGANIZATION", cfg.OrganizationAccountID)
-	}
-	if cfg.DNSParentAccountID != "" && os.Getenv("KM_ACCOUNTS_DNS_PARENT") == "" {
-		os.Setenv("KM_ACCOUNTS_DNS_PARENT", cfg.DNSParentAccountID)
-	}
-	if cfg.ApplicationAccountID != "" && os.Getenv("KM_ACCOUNTS_APPLICATION") == "" {
-		os.Setenv("KM_ACCOUNTS_APPLICATION", cfg.ApplicationAccountID)
-	}
-	if cfg.Domain != "" && os.Getenv("KM_DOMAIN") == "" {
-		os.Setenv("KM_DOMAIN", cfg.Domain)
-	}
-	if cfg.PrimaryRegion != "" && os.Getenv("KM_REGION") == "" {
-		os.Setenv("KM_REGION", cfg.PrimaryRegion)
-	}
-	if cfg.OperatorEmail != "" && os.Getenv("KM_OPERATOR_EMAIL") == "" {
-		os.Setenv("KM_OPERATOR_EMAIL", cfg.OperatorEmail)
-	}
-	if cfg.SchedulerRoleARN != "" && os.Getenv("KM_SCHEDULER_ROLE_ARN") == "" {
-		os.Setenv("KM_SCHEDULER_ROLE_ARN", cfg.SchedulerRoleARN)
-	}
+	ExportConfigEnvVars(cfg)
 
 	repoRoot := findRepoRoot()
 
@@ -619,6 +596,15 @@ func ExportConfigEnvVars(cfg *config.Config) {
 	if cfg.SchedulerRoleARN != "" && os.Getenv("KM_SCHEDULER_ROLE_ARN") == "" {
 		os.Setenv("KM_SCHEDULER_ROLE_ARN", cfg.SchedulerRoleARN)
 	}
+	// Phase 66: multi-instance prefix and email subdomain.
+	// Always export these so site.hcl get_env("KM_RESOURCE_PREFIX", "km") picks up the value.
+	// An empty string is a valid export (site.hcl fallback "km" kicks in).
+	if os.Getenv("KM_RESOURCE_PREFIX") == "" {
+		os.Setenv("KM_RESOURCE_PREFIX", cfg.GetResourcePrefix())
+	}
+	if os.Getenv("KM_EMAIL_SUBDOMAIN") == "" {
+		os.Setenv("KM_EMAIL_SUBDOMAIN", cfg.EmailSubdomain)
+	}
 }
 
 // RunInitWithRunner implements the full init flow using an InitRunner interface.
@@ -838,14 +824,19 @@ func LoadEFSOutputs(repoRoot, regionLabel string) (string, error) {
 // terragrunt installed and without a prior `km init`, as long as the infrastructure
 // was already provisioned.
 //
-// State bucket: tf-km-state-{regionLabel}
-// State key:    tf-km/{regionLabel}/{module}/terraform.tfstate
+// State bucket: tf-{prefix}-state-{regionLabel}  (prefix = KM_RESOURCE_PREFIX env var, default "km")
+// State key:    tf-{prefix}/{regionLabel}/{module}/terraform.tfstate
 func fetchAndCacheOutputs(repoRoot, regionLabel, module string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	bucket := fmt.Sprintf("tf-km-state-%s", regionLabel)
-	key := fmt.Sprintf("tf-km/%s/%s/terraform.tfstate", regionLabel, module)
+	// Use KM_RESOURCE_PREFIX env var (set by ExportConfigEnvVars) to mirror site.hcl naming.
+	resourcePrefix := os.Getenv("KM_RESOURCE_PREFIX")
+	if resourcePrefix == "" {
+		resourcePrefix = "km"
+	}
+	bucket := fmt.Sprintf("tf-%s-state-%s", resourcePrefix, regionLabel)
+	key := fmt.Sprintf("tf-%s/%s/%s/terraform.tfstate", resourcePrefix, regionLabel, module)
 
 	awsProfile := os.Getenv("AWS_PROFILE")
 	if awsProfile == "" {

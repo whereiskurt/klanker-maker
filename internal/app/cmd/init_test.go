@@ -507,3 +507,26 @@ func TestInitExportsNewAccountEnvVars(t *testing.T) {
 	// Note: t.Setenv registered cleanups above will restore the env vars after this test,
 	// preventing the set values from leaking into subsequent subprocess-based tests.
 }
+
+// TestInitExportsResourcePrefixAndEmailSubdomain verifies that ExportConfigEnvVars
+// exports KM_RESOURCE_PREFIX and KM_EMAIL_SUBDOMAIN from the config (Phase 66).
+func TestInitExportsResourcePrefixAndEmailSubdomain(t *testing.T) {
+	t.Setenv("KM_RESOURCE_PREFIX", "")
+	t.Setenv("KM_EMAIL_SUBDOMAIN", "")
+	os.Unsetenv("KM_RESOURCE_PREFIX")
+	os.Unsetenv("KM_EMAIL_SUBDOMAIN")
+
+	cfg := &config.Config{
+		ResourcePrefix: "km2",
+		EmailSubdomain: "mail",
+	}
+
+	cmd.ExportConfigEnvVars(cfg)
+
+	if got := os.Getenv("KM_RESOURCE_PREFIX"); got != "km2" {
+		t.Errorf("KM_RESOURCE_PREFIX = %q, want %q", got, "km2")
+	}
+	if got := os.Getenv("KM_EMAIL_SUBDOMAIN"); got != "mail" {
+		t.Errorf("KM_EMAIL_SUBDOMAIN = %q, want %q", got, "mail")
+	}
+}
