@@ -174,4 +174,5 @@ spec:
     notifyEmailEnabled: true
     notifySlackEnabled: true
     notifySlackPerSandbox: true
+    notifySlackInboundEnabled: true
     slackArchiveOnDestroy: true
