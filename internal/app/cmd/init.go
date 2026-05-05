@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -413,7 +414,26 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		fmt.Printf("  [skip] artifacts_bucket not configured\n")
 	}
 
-	// Write safe phrase to SSM if configured (idempotent — overwrites to stay in sync with config).
+	// Auto-generate safe phrase if missing (avoids silently disabling KM-AUTH
+	// email-to-create authorization). Persist to km-config.yaml BEFORE writing
+	// to SSM so a YAML failure doesn't leave SSM holding a phrase no operator
+	// command will ever read.
+	if cfg.SafePhrase == "" {
+		buf := make([]byte, 32)
+		if _, err := rand.Read(buf); err != nil {
+			fmt.Printf("  ⚠ Failed to generate safe phrase: %v\n", err)
+		} else {
+			generated := hex.EncodeToString(buf)
+			if err := persistKMConfigFields(map[string]string{"safe_phrase": generated}); err != nil {
+				fmt.Printf("  ⚠ Failed to persist generated safe phrase to km-config.yaml: %v\n", err)
+			} else {
+				cfg.SafePhrase = generated
+				fmt.Printf("  Safe phrase generated and written to km-config.yaml\n")
+			}
+		}
+	}
+
+	// Write safe phrase to SSM (idempotent — overwrites to stay in sync with config).
 	if cfg.SafePhrase != "" {
 		ssmClient := ssm.NewFromConfig(awsCfg)
 		safePhraseKey := cfg.GetSsmPrefix() + "config/remote-create/safe-phrase"

@@ -303,7 +303,7 @@ Examples:
 				Status:       "active",
 				CreatedAt:    deps.now(),
 			}
-			if err := awspkg.PutSchedule(ctx, deps.dynamo, cfg.SchedulesTableName, rec); err != nil {
+			if err := awspkg.PutSchedule(ctx, deps.dynamo, cfg.GetSchedulesTableName(), rec); err != nil {
 				return fmt.Errorf("store schedule record: %w", err)
 			}
 
@@ -587,7 +587,7 @@ func NewAtListCmdWithDeps(cfg *config.Config, dynamo awspkg.SandboxMetadataAPI) 
 				dynamoClient = dynamodb.NewFromConfig(awsCfg)
 			}
 
-			records, err := awspkg.ListScheduleRecords(ctx, dynamoClient, cfg.SchedulesTableName)
+			records, err := awspkg.ListScheduleRecords(ctx, dynamoClient, cfg.GetSchedulesTableName())
 			if err != nil {
 				return fmt.Errorf("list schedule records: %w", err)
 			}
@@ -608,7 +608,7 @@ func NewAtListCmdWithDeps(cfg *config.Config, dynamo awspkg.SandboxMetadataAPI) 
 					inner := r.CronExpr[3 : len(r.CronExpr)-1]
 					if t, err := time.Parse("2006-01-02T15:04:05", inner); err == nil && t.Before(now) {
 						// Schedule time has passed — clean up stale record
-						_ = awspkg.DeleteScheduleRecord(ctx, dynamoClient, cfg.SchedulesTableName, r.ScheduleName)
+						_ = awspkg.DeleteScheduleRecord(ctx, dynamoClient, cfg.GetSchedulesTableName(), r.ScheduleName)
 						continue
 					}
 				}
@@ -690,7 +690,7 @@ func NewAtCancelCmdWithDeps(cfg *config.Config, sched awspkg.SchedulerAPI, dynam
 			}
 
 			// Delete from DynamoDB (idempotent — no error if missing)
-			if err := awspkg.DeleteScheduleRecord(ctx, dynamoClient, cfg.SchedulesTableName, scheduleName); err != nil {
+			if err := awspkg.DeleteScheduleRecord(ctx, dynamoClient, cfg.GetSchedulesTableName(), scheduleName); err != nil {
 				return fmt.Errorf("delete schedule record: %w", err)
 			}
 
