@@ -191,6 +191,19 @@ func TestRunnerApplyCommand(t *testing.T) {
 	if !bootstrapFound {
 		t.Errorf("TG_BACKEND_BOOTSTRAP=true not found in cmd.Env; got %v", cmd.Env)
 	}
+
+	// TG_NON_INTERACTIVE must default to true so terragrunt doesn't prompt
+	// "Would you like Terragrunt to create it? (y/n)" and EOF on no stdin.
+	nonInteractiveFound := false
+	for _, e := range cmd.Env {
+		if e == "TG_NON_INTERACTIVE=true" {
+			nonInteractiveFound = true
+			break
+		}
+	}
+	if !nonInteractiveFound {
+		t.Errorf("TG_NON_INTERACTIVE=true not found in cmd.Env; got %v", cmd.Env)
+	}
 }
 
 // TestRunnerBackendBootstrapRespectsExternalEnv verifies that an externally
@@ -208,6 +221,22 @@ func TestRunnerBackendBootstrapRespectsExternalEnv(t *testing.T) {
 	for _, e := range cmd.Env {
 		if e == "TG_BACKEND_BOOTSTRAP=true" {
 			t.Errorf("runner appended TG_BACKEND_BOOTSTRAP=true despite operator setting TG_BACKEND_BOOTSTRAP=false; got env %v", cmd.Env)
+		}
+	}
+}
+
+// TestRunnerNonInteractiveRespectsExternalEnv verifies that an externally
+// exported TG_NON_INTERACTIVE value is preserved.
+func TestRunnerNonInteractiveRespectsExternalEnv(t *testing.T) {
+	t.Setenv("TG_NON_INTERACTIVE", "false")
+
+	r := terragrunt.NewRunner("klanker-terraform", "/repo/root")
+	sandboxDir := makeFakeSandboxDir(t)
+	cmd := r.BuildApplyCommand(context.Background(), sandboxDir)
+
+	for _, e := range cmd.Env {
+		if e == "TG_NON_INTERACTIVE=true" {
+			t.Errorf("runner appended TG_NON_INTERACTIVE=true despite operator setting TG_NON_INTERACTIVE=false; got env %v", cmd.Env)
 		}
 	}
 }

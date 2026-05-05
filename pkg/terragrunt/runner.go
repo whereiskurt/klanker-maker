@@ -181,12 +181,21 @@ func printWarningsAndErrors(output string) {
 // the S3 backend bucket. Older Terragrunt versions auto-bootstrapped on first
 // apply; v0.69+ requires the explicit opt-in. The flag is a no-op when the
 // bucket already exists, so it's safe for every subsequent apply/destroy/output.
+//
+// TG_NON_INTERACTIVE=true pairs with --backend-bootstrap: the bootstrap flag
+// only enables the *capability*, terragrunt still prompts "Would you like
+// Terragrunt to create it? (y/n)" by default. Without TG_NON_INTERACTIVE,
+// km init dies on EOF when nothing is on stdin. Every km command driving the
+// runner is non-interactive anyway, so this is safe to default on.
 func (r *Runner) buildCommand(ctx context.Context, sandboxDir string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "terragrunt", args...) //nolint:gosec // terragrunt binary is a fixed, trusted binary
 	cmd.Dir = sandboxDir
 	cmd.Env = append(os.Environ(), "AWS_PROFILE="+r.AWSProfile)
 	if os.Getenv("TG_BACKEND_BOOTSTRAP") == "" {
 		cmd.Env = append(cmd.Env, "TG_BACKEND_BOOTSTRAP=true")
+	}
+	if os.Getenv("TG_NON_INTERACTIVE") == "" {
+		cmd.Env = append(cmd.Env, "TG_NON_INTERACTIVE=true")
 	}
 	return cmd
 }
