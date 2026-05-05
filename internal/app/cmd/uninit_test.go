@@ -38,15 +38,16 @@ func (m *mockUninitLister) ListSandboxes(_ context.Context, _ bool) ([]kmaws.San
 	return m.records, m.err
 }
 
-// TestUninitDestroyOrder verifies that uninit destroys modules in reverse
-// dependency order: ttl-handler first, then s3-replication, ses,
-// dynamodb-identities, dynamodb-budget, and network last.
+// TestUninitDestroyOrder verifies that uninit destroys modules in the exact
+// reverse of regionalModules() order. SES is destroyed first (it owns the
+// consolidated S3 bucket policy), network is destroyed last (everything
+// depends on it).
 func TestUninitDestroyOrder(t *testing.T) {
 	runner := &mockUninitRunner{}
 	lister := &mockUninitLister{records: []kmaws.SandboxRecord{}}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", false)
 	if err != nil {
 		t.Fatalf("runUninitWithDeps returned error: %v", err)
 	}
@@ -55,13 +56,26 @@ func TestUninitDestroyOrder(t *testing.T) {
 		t.Fatal("expected Destroy to be called for modules, got 0 calls")
 	}
 
-	// Verify order: ttl-handler first, network last
+	// Reverse of regionalModules() apply order. Adding a module to init.go
+	// should automatically extend this list — if this test starts failing
+	// because a new module was added, update the slice here too (and
+	// double-check the reverse order respects dependencies).
 	wantOrder := []string{
-		"ttl-handler",
-		"s3-replication",
 		"ses",
+		"lambda-slack-bridge",
+		"dynamodb-slack-stream-messages",
+		"dynamodb-slack-threads",
+		"dynamodb-slack-nonces",
+		"email-handler",
+		"ttl-handler",
+		"create-handler",
+		"s3-replication",
+		"ssm-session-doc",
+		"dynamodb-schedules",
+		"dynamodb-sandboxes",
 		"dynamodb-identities",
 		"dynamodb-budget",
+		"efs",
 		"network",
 	}
 
@@ -88,7 +102,7 @@ func TestUninitRefusesWithActiveSandboxes(t *testing.T) {
 	}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", false)
 	if err == nil {
 		t.Fatal("expected error when active sandboxes exist and force=false, got nil")
 	}
@@ -113,7 +127,7 @@ func TestUninitProceedsWithForce(t *testing.T) {
 	}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, "us-east-1", true)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", true)
 	if err != nil {
 		t.Fatalf("expected uninit to proceed with --force, got error: %v", err)
 	}
@@ -135,7 +149,7 @@ func TestUninitProceedsNoActiveSandboxes(t *testing.T) {
 	}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", false)
 	if err != nil {
 		t.Fatalf("expected uninit to proceed with no active sandboxes in region, got: %v", err)
 	}
@@ -153,7 +167,7 @@ func TestUninitSkipsMissingModuleDirectory(t *testing.T) {
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
 	// Use a non-existent region label so all module dirs are missing
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, "ap-southeast-9", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "ap-southeast-9", false)
 	if err != nil {
 		t.Fatalf("expected uninit to continue past missing dirs, got: %v", err)
 	}
@@ -175,15 +189,17 @@ func TestUninitContinuesPastModuleErrors(t *testing.T) {
 	lister := &mockUninitLister{records: []kmaws.SandboxRecord{}}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", false)
 	// Non-fatal error: uninit should not return an error even if one module fails
 	if err != nil {
 		t.Fatalf("expected uninit to continue past module errors, got: %v", err)
 	}
 
-	// All 6 modules should still be attempted
-	if len(runner.calls) != 6 {
-		t.Errorf("expected 6 Destroy calls (all modules attempted), got %d: %v", len(runner.calls), runner.calls)
+	// All 16 modules should still be attempted (one module's destroy error is
+	// non-fatal; uninit warns and continues to the next).
+	const wantCalls = 16
+	if len(runner.calls) != wantCalls {
+		t.Errorf("expected %d Destroy calls (all modules attempted), got %d: %v", wantCalls, len(runner.calls), runner.calls)
 	}
 }
 
@@ -194,7 +210,7 @@ func TestUninitRequiresForceWhenStateBucketEmpty(t *testing.T) {
 	// lister is nil to simulate no lister available
 	cfg := &config.Config{StateBucket: ""}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, nil, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, nil, nil, "us-east-1", false)
 	if err == nil {
 		t.Fatal("expected error when StateBucket is empty and force=false, got nil")
 	}
@@ -215,7 +231,7 @@ func TestUninitRequiresForceWhenStateBucketEmptyProceedsWithForce(t *testing.T) 
 	cfg := &config.Config{StateBucket: ""}
 
 	// With --force, should proceed even without state bucket
-	err := cmd.RunUninitWithDeps(cfg, runner, nil, "us-east-1", true)
+	err := cmd.RunUninitWithDeps(cfg, runner, nil, nil, "us-east-1", true)
 	if err != nil {
 		t.Fatalf("expected uninit to proceed with --force and empty state bucket, got: %v", err)
 	}
@@ -268,7 +284,7 @@ func TestUninitOnlyCountsRegionSandboxes(t *testing.T) {
 	}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", false)
 	if err != nil {
 		t.Fatalf("expected no error (no running sandboxes in us-east-1), got: %v", err)
 	}
@@ -286,7 +302,7 @@ func TestUninitActiveSandboxErrorMessage(t *testing.T) {
 	}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", false)
 	if err == nil {
 		t.Fatal("expected error for active sandboxes")
 	}
@@ -299,5 +315,73 @@ func TestUninitActiveSandboxErrorMessage(t *testing.T) {
 	// Error message should mention the count
 	if !strings.Contains(errMsg, fmt.Sprintf("%d", 2)) {
 		t.Errorf("error message should mention sandbox count (2), got: %q", errMsg)
+	}
+}
+
+// mockECRDeleter records DeleteRepository calls and returns configured errors.
+type mockECRDeleter struct {
+	calls []string         // repo names in order
+	errs  map[string]error // name -> error to return (nil means success)
+}
+
+func (m *mockECRDeleter) DeleteRepository(_ context.Context, _, name string) error {
+	m.calls = append(m.calls, name)
+	if err, ok := m.errs[name]; ok {
+		return err
+	}
+	return nil
+}
+
+// TestUninitDeletesECRRepos verifies that uninit deletes the well-known ECR
+// repos created by km init's container-substrate path, in the documented order.
+func TestUninitDeletesECRRepos(t *testing.T) {
+	runner := &mockUninitRunner{}
+	lister := &mockUninitLister{records: []kmaws.SandboxRecord{}}
+	ecrDel := &mockECRDeleter{}
+	cfg := &config.Config{StateBucket: "my-bucket"}
+
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, ecrDel, "us-east-1", false)
+	if err != nil {
+		t.Fatalf("uninit returned error: %v", err)
+	}
+
+	wantRepos := []string{
+		"km-sandbox",
+		"km-dns-proxy",
+		"km-http-proxy",
+		"km-audit-log",
+		"km-tracing",
+	}
+	if len(ecrDel.calls) != len(wantRepos) {
+		t.Fatalf("expected %d ECR delete calls, got %d: %v", len(wantRepos), len(ecrDel.calls), ecrDel.calls)
+	}
+	for i, want := range wantRepos {
+		if ecrDel.calls[i] != want {
+			t.Errorf("ECR delete call[%d] = %q, want %q", i, ecrDel.calls[i], want)
+		}
+	}
+}
+
+// TestUninitContinuesPastECRDeleteErrors verifies that a single ECR delete
+// failure is non-fatal — uninit warns and proceeds through the remaining
+// repos. Mirrors the same continue-on-error behavior used for terragrunt
+// destroy failures.
+func TestUninitContinuesPastECRDeleteErrors(t *testing.T) {
+	runner := &mockUninitRunner{}
+	lister := &mockUninitLister{records: []kmaws.SandboxRecord{}}
+	ecrDel := &mockECRDeleter{
+		errs: map[string]error{
+			"km-http-proxy": errors.New("simulated AWS-side failure"),
+		},
+	}
+	cfg := &config.Config{StateBucket: "my-bucket"}
+
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, ecrDel, "us-east-1", false)
+	if err != nil {
+		t.Fatalf("expected uninit to continue past ECR delete errors, got: %v", err)
+	}
+	// All 5 repos should still be attempted despite the simulated error.
+	if len(ecrDel.calls) != 5 {
+		t.Errorf("expected 5 ECR delete calls (all repos attempted), got %d: %v", len(ecrDel.calls), ecrDel.calls)
 	}
 }

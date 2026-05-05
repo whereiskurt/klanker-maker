@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/spf13/cobra"
@@ -17,6 +19,54 @@ import (
 // UninitRunner is a narrow interface for the Destroy operation, allowing test injection.
 type UninitRunner interface {
 	Destroy(ctx context.Context, dir string) error
+}
+
+// ECRRepoDeleter abstracts ECR repository deletion. Returns nil when the
+// repository doesn't exist (treated as already-deleted) so callers can
+// loop idempotently across the well-known repo list.
+type ECRRepoDeleter interface {
+	DeleteRepository(ctx context.Context, region, name string) error
+}
+
+// awsCLIECRDeleter shells out to the AWS CLI to match init.go's existing
+// pattern (init.go also shells out to `aws ecr describe-repositories /
+// create-repository` rather than using the SDK), avoiding a new module
+// dependency. RepositoryNotFoundException is treated as success.
+type awsCLIECRDeleter struct {
+	awsProfile string
+}
+
+func (d *awsCLIECRDeleter) DeleteRepository(ctx context.Context, region, name string) error {
+	cmd := exec.CommandContext(ctx, "aws", "ecr", "delete-repository",
+		"--repository-name", name,
+		"--force",
+		"--region", region,
+		"--profile", d.awsProfile,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// AWS CLI prints "RepositoryNotFoundException" in stderr/stdout when
+		// the repo doesn't exist — treat as already-deleted.
+		if strings.Contains(string(out), "RepositoryNotFoundException") {
+			return nil
+		}
+		return fmt.Errorf("aws ecr delete-repository %s: %s: %w", name, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// ecrReposToDelete is the list of ECR repositories created by km init's
+// container-substrate path. Names are NOT prefixed with resource_prefix
+// (init.go hardcodes "km-sandbox" etc.), so a uninit on one resource_prefix
+// would also affect another install in the same AWS account if any exists.
+// Operators with multi-install setups should disable container_substrates_enabled
+// or skip ECR cleanup.
+var ecrReposToDelete = []string{
+	"km-sandbox",
+	"km-dns-proxy",
+	"km-http-proxy",
+	"km-audit-log",
+	"km-tracing",
 }
 
 // NewUninitCmd creates the "km uninit" subcommand.
@@ -105,14 +155,18 @@ func runUninit(cfg *config.Config, awsProfile, region string, force bool, verbos
 		}
 	}
 
-	return RunUninitWithDeps(cfg, runner, lister, region, force)
+	ecrDeleter := &awsCLIECRDeleter{awsProfile: awsProfile}
+
+	return RunUninitWithDeps(cfg, runner, lister, ecrDeleter, region, force)
 }
 
 // RunUninitWithDeps is the testable core of uninit with dependency injection.
-// It accepts a UninitRunner and SandboxLister to allow unit testing without AWS.
+// It accepts a UninitRunner, SandboxLister, and ECRRepoDeleter to allow unit
+// testing without AWS. Pass a nil ECRRepoDeleter to skip the ECR cleanup pass
+// (e.g. for tests that only exercise terragrunt destroy ordering).
 //
 // Exported for use in uninit_test.go.
-func RunUninitWithDeps(cfg *config.Config, runner UninitRunner, lister SandboxLister, region string, force bool) error {
+func RunUninitWithDeps(cfg *config.Config, runner UninitRunner, lister SandboxLister, ecrDeleter ECRRepoDeleter, region string, force bool) error {
 	ctx := context.Background()
 
 	// Step 1: Verify we can check for active sandboxes.
@@ -145,23 +199,19 @@ func RunUninitWithDeps(cfg *config.Config, runner UninitRunner, lister SandboxLi
 		}
 	}
 
-	// Step 3: Build module list in reverse dependency order.
+	// Step 3: Destroy modules in REVERSE dependency order using the same
+	// regionalModules() definition km init applies. Reversing keeps init/uninit
+	// in lockstep — adding a new module to init automatically destroys it on
+	// uninit too, no second list to drift.
 	repoRoot := findRepoRoot()
 	regionLabel := compiler.RegionLabel(region)
 	regionDir := filepath.Join(repoRoot, "infra", "live", regionLabel)
 
-	// Reverse dependency order: TTL handler first (depends on network), network last.
-	type moduleEntry struct {
-		dir  string
-		name string
-	}
-	modules := []moduleEntry{
-		{dir: filepath.Join(regionDir, "ttl-handler"), name: "TTL handler Lambda"},
-		{dir: filepath.Join(regionDir, "s3-replication"), name: "S3 artifact replication"},
-		{dir: filepath.Join(regionDir, "ses"), name: "SES email infrastructure"},
-		{dir: filepath.Join(regionDir, "dynamodb-identities"), name: "DynamoDB identity table"},
-		{dir: filepath.Join(regionDir, "dynamodb-budget"), name: "DynamoDB budget table"},
-		{dir: filepath.Join(regionDir, "network"), name: "network (VPC/subnets/SGs)"},
+	applyOrder := regionalModules(regionDir)
+	// Reverse in place into a fresh slice so applyOrder isn't mutated.
+	modules := make([]regionalModule, len(applyOrder))
+	for i, m := range applyOrder {
+		modules[len(applyOrder)-1-i] = m
 	}
 
 	// Step 4: Destroy each module. Skip missing directories; continue on error.
@@ -181,6 +231,28 @@ func RunUninitWithDeps(cfg *config.Config, runner UninitRunner, lister SandboxLi
 		destroyed++
 	}
 
-	fmt.Printf("\nUninit complete for %s (%s): %d module(s) destroyed\n", region, regionLabel, destroyed)
+	// Step 5: Delete ECR repositories. Optional (skipped in tests with nil deleter).
+	// Repos are global to the AWS account (not resource_prefix-namespaced), so a
+	// multi-install operator should be aware this cleanup is shared.
+	ecrDeleted := 0
+	if ecrDeleter != nil {
+		fmt.Println()
+		fmt.Println("Deleting ECR repositories...")
+		for _, repo := range ecrReposToDelete {
+			fmt.Printf("  Deleting %s...", repo)
+			if err := ecrDeleter.DeleteRepository(ctx, region, repo); err != nil {
+				fmt.Printf("\n  Warning: %s deletion failed (continuing): %v\n", repo, err)
+				continue
+			}
+			fmt.Println(" done")
+			ecrDeleted++
+		}
+	}
+
+	fmt.Printf("\nUninit complete for %s (%s): %d module(s) destroyed", region, regionLabel, destroyed)
+	if ecrDeleter != nil {
+		fmt.Printf(", %d ECR repo(s) deleted", ecrDeleted)
+	}
+	fmt.Println()
 	return nil
 }
