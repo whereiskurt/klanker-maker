@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -16,6 +17,7 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	"github.com/whereiskurt/klankrmkr/pkg/compiler"
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
 )
 
@@ -672,31 +674,34 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 		fmt.Fprintln(w, "Dry run — the following infrastructure would be created:")
 		fmt.Fprintln(w)
 
+		prefix := loadedCfg.GetResourcePrefix()
+		regionLabel := compiler.RegionLabel(loadedCfg.PrimaryRegion)
+
 		stateBucket := ""
 		if cfg != nil {
 			stateBucket = cfg.StateBucket
 		}
 		if stateBucket == "" {
-			stateBucket = "km-terraform-state-<hash>"
+			stateBucket = prefix + "-state-<hash>"
 		}
 
 		budgetTable := loadedCfg.BudgetTableName
 		if budgetTable == "" {
-			budgetTable = "km-budgets"
+			budgetTable = prefix + "-budgets"
 		}
 
 		fmt.Fprintf(w, "  S3 bucket:         %s\n", stateBucket)
-		fmt.Fprintf(w, "    Purpose:         Terraform state and sandbox metadata\n")
-		fmt.Fprintf(w, "    Encryption:      aws:kms (KMS key below)\n")
+		fmt.Fprintf(w, "    Purpose:         Sandbox metadata storage (km list/status)\n")
+		fmt.Fprintf(w, "    Encryption:      AES256 (S3-managed)\n")
 		fmt.Fprintf(w, "    Versioning:      enabled\n")
 		fmt.Fprintln(w)
-		fmt.Fprintf(w, "  DynamoDB table:    km-terraform-lock\n")
+		fmt.Fprintf(w, "  S3 bucket:         tf-%s-state-%s  [created by Terragrunt on first apply]\n", prefix, regionLabel)
+		fmt.Fprintf(w, "    Purpose:         Terraform remote state\n")
+		fmt.Fprintf(w, "    Encryption:      enabled (S3 default)\n")
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "  DynamoDB table:    tf-%s-locks-%s  [created by Terragrunt on first apply]\n", prefix, regionLabel)
 		fmt.Fprintf(w, "    Purpose:         Terraform state locking\n")
 		fmt.Fprintf(w, "    Billing:         PAY_PER_REQUEST\n")
-		fmt.Fprintln(w)
-		fmt.Fprintf(w, "  KMS key:           km-terraform-state\n")
-		fmt.Fprintf(w, "    Purpose:         S3 state bucket encryption\n")
-		fmt.Fprintf(w, "    Deletion window: 30 days\n")
 		fmt.Fprintln(w)
 		fmt.Fprintf(w, "  DynamoDB table:    %s\n", budgetTable)
 		fmt.Fprintf(w, "    Purpose:         Sandbox budget enforcement tracking\n")
@@ -718,9 +723,10 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 			fmt.Fprintf(w, "    Run 'km configure' and set accounts.organization to enable SCP deployment.\n")
 		}
 		fmt.Fprintln(w)
-		fmt.Fprintf(w, "  KMS key:           km-platform\n")
+		platformAlias := loadedCfg.GetPlatformKMSAlias()
+		fmt.Fprintf(w, "  KMS key:           %s\n", strings.TrimPrefix(platformAlias, "alias/"))
 		fmt.Fprintf(w, "    Purpose:         SSM SecureString encryption for sandbox identity keys and secrets\n")
-		fmt.Fprintf(w, "    Alias:           alias/km-platform\n")
+		fmt.Fprintf(w, "    Alias:           %s\n", platformAlias)
 		fmt.Fprintln(w)
 
 		if loadedCfg.ArtifactsBucket != "" {
@@ -761,7 +767,7 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 		fmt.Fprintln(w, "Skipping SCP deployment — no organization account configured.")
 	}
 
-	// Create KMS key with alias/km-platform for SSM SecureString encryption.
+	// Create the platform KMS key (alias/{prefix}-platform) for SSM SecureString encryption.
 	fmt.Fprintln(w)
 	if err := ensureKMSPlatformKey(ctx, loadedCfg, w); err != nil {
 		return fmt.Errorf("kms bootstrap: %w", err)
@@ -778,8 +784,9 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 	return nil
 }
 
-// ensureKMSPlatformKey creates the km-platform KMS key and alias if they don't exist.
-// Pass a non-nil kmsClient to override the default real AWS client (used in tests).
+// ensureKMSPlatformKey creates the platform KMS key and alias if they don't exist.
+// The alias is alias/{prefix}-platform where prefix comes from cfg.GetResourcePrefix()
+// (default "km"). Pass a non-nil kmsClient to override the default real AWS client (used in tests).
 func ensureKMSPlatformKey(ctx context.Context, cfg *config.Config, w io.Writer, kmsClient ...KMSEnsureAPI) error {
 	var client KMSEnsureAPI
 	if len(kmsClient) > 0 && kmsClient[0] != nil {
@@ -800,7 +807,7 @@ func ensureKMSPlatformKey(ctx context.Context, cfg *config.Config, w io.Writer, 
 		client = kms.NewFromConfig(awsCfg)
 	}
 
-	aliasName := "alias/km-platform"
+	aliasName := cfg.GetPlatformKMSAlias()
 
 	// Check if alias already exists.
 	_, err := client.DescribeKey(ctx, &kms.DescribeKeyInput{

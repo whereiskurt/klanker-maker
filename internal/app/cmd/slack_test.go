@@ -626,10 +626,11 @@ func (f *fakeSSMWithType) Put(_ context.Context, name, value string, secure bool
 }
 
 // TestSlackInit_PersistsSigningSecret verifies persistSigningSecret writes
-// /km/slack/signing-secret as SecureString with the given KMS key.
+// /km/slack/signing-secret as SecureString. Encryption uses the store's
+// pre-configured KMS key (cfg.GetPlatformKMSAlias() in production).
 func TestSlackInit_PersistsSigningSecret(t *testing.T) {
 	store := newFakeSSMWithType()
-	err := cmd.PersistSigningSecret(context.Background(), store, "test-secret-32chars1234567890ab", "/km/", "alias/aws/ssm")
+	err := cmd.PersistSigningSecret(context.Background(), store, "test-secret-32chars1234567890ab", "/km/")
 	if err != nil {
 		t.Fatal(err)
 	}

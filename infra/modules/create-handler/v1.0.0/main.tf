@@ -537,6 +537,7 @@ resource "aws_lambda_function" "create_handler" {
       KM_STATE_BUCKET     = var.state_bucket
       KM_STATE_PREFIX     = var.state_prefix
       KM_REGION_LABEL     = var.region_label
+      KM_RESOURCE_PREFIX  = var.resource_prefix
       KM_TOOLCHAIN_DIR    = "/tmp/toolchain"
       SANDBOX_TABLE_NAME  = var.sandbox_table_name
     }

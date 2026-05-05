@@ -259,7 +259,11 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 		} else if parsedProfile.Spec.Email != nil {
 			kmsKeyAlias := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
 			if kmsKeyAlias == "" {
-				kmsKeyAlias = "alias/km-platform"
+				prefix := os.Getenv("KM_RESOURCE_PREFIX")
+				if prefix == "" {
+					prefix = "km"
+				}
+				kmsKeyAlias = "alias/" + prefix + "-platform"
 			}
 
 			pubKey, identErr := awspkg.EnsureSandboxIdentity(ctx, h.SSMClient, event.SandboxID, kmsKeyAlias)

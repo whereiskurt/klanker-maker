@@ -1091,7 +1091,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			phraseSMSClient := ssm.NewFromConfig(awsCfg)
 			kmsKeyARNForPhrase := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
 			if kmsKeyARNForPhrase == "" {
-				kmsKeyARNForPhrase = "alias/km-platform"
+				kmsKeyARNForPhrase = cfg.GetPlatformKMSAlias()
 			}
 			_, phraseErr := phraseSMSClient.PutParameter(ctx, &ssm.PutParameterInput{
 				Name:      aws.String(phrasePath),
@@ -1121,7 +1121,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		ssmClient := ssm.NewFromConfig(awsCfg)
 		kmsKeyARN := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
 		if kmsKeyARN == "" {
-			kmsKeyARN = "alias/km-platform" // fallback — real key resolved by SSM
+			kmsKeyARN = cfg.GetPlatformKMSAlias()
 		}
 		gh := resolvedProfile.Spec.SourceAccess.GitHub
 		instID, tokenErr := generateAndStoreGitHubToken(ctx, ssmClient, sandboxID, kmsKeyARN, gh.AllowedRepos, nil, cfg.GetSsmPrefix())
@@ -1230,11 +1230,11 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// Only runs when profile has an email section (email policy configured).
 	if resolvedProfile.Spec.Email != nil {
 		identitySMSClient := ssm.NewFromConfig(awsCfg)
-		// KMS key alias: use platform KMS key ARN when set; fallback to alias/km-platform.
+		// KMS key alias: use platform KMS key ARN when set; fallback to cfg.GetPlatformKMSAlias().
 		// Same approach as Step 13a GitHub token provisioning.
 		kmsKeyAlias := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
 		if kmsKeyAlias == "" {
-			kmsKeyAlias = "alias/km-platform" // fallback — real key resolved by SSM
+			kmsKeyAlias = cfg.GetPlatformKMSAlias()
 		}
 
 		pubKey, identErr := awspkg.GenerateSandboxIdentity(ctx, identitySMSClient, sandboxID, kmsKeyAlias)
@@ -1608,7 +1608,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 		identitySSMClient := ssm.NewFromConfig(awsCfg)
 		kmsKeyAlias := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
 		if kmsKeyAlias == "" {
-			kmsKeyAlias = "alias/km-platform"
+			kmsKeyAlias = cfg.GetPlatformKMSAlias()
 		}
 
 		pubKey, identErr := awspkg.GenerateSandboxIdentity(ctx, identitySSMClient, sandboxID, kmsKeyAlias)

@@ -1041,16 +1041,18 @@ func checkSafePhrase(ctx context.Context, client SSMReadAPI, ssmPrefix string) C
 	}
 }
 
-// checkStaleKMSKeys finds KMS keys with km- aliases that don't belong to any active sandbox.
-// Keys with aliases matching km-platform or other non-sandbox patterns are skipped.
+// checkStaleKMSKeys finds KMS keys with {prefix}- aliases that don't belong to any active sandbox.
+// Keys with aliases matching {prefix}-platform or other non-sandbox patterns are skipped.
 // Stale keys are scheduled for deletion (7-day minimum waiting period enforced by AWS).
-func checkStaleKMSKeys(ctx context.Context, kmsClient KMSCleanupAPI, lister SandboxLister, dryRun bool) CheckResult {
+func checkStaleKMSKeys(ctx context.Context, kmsClient KMSCleanupAPI, lister SandboxLister, dryRun bool, resourcePrefix string) CheckResult {
 	name := "Stale KMS Keys"
 	if kmsClient == nil {
 		return CheckResult{Name: name, Status: CheckSkipped, Message: "KMS client not available"}
 	}
 
-	// Collect all km- aliases.
+	aliasPrefix := "alias/" + resourcePrefix + "-"
+
+	// Collect all aliases for this install (alias/{prefix}-...).
 	var aliases []kmstypes.AliasListEntry
 	var marker *string
 	for {
@@ -1059,7 +1061,7 @@ func checkStaleKMSKeys(ctx context.Context, kmsClient KMSCleanupAPI, lister Sand
 			return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not list KMS aliases: %v", err)}
 		}
 		for _, a := range out.Aliases {
-			if strings.HasPrefix(awssdk.ToString(a.AliasName), "alias/km-") {
+			if strings.HasPrefix(awssdk.ToString(a.AliasName), aliasPrefix) {
 				aliases = append(aliases, a)
 			}
 		}
@@ -1082,7 +1084,7 @@ func checkStaleKMSKeys(ctx context.Context, kmsClient KMSCleanupAPI, lister Sand
 
 	// Platform aliases to never touch.
 	platformAliases := map[string]bool{
-		"alias/km-platform": true,
+		"alias/" + resourcePrefix + "-platform": true,
 	}
 
 	// Identify stale aliases: extract sandbox ID from alias name pattern.
@@ -2078,8 +2080,9 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 
 	// KMS key check.
 	kmsClient := deps.KMSClient
+	platformKMSAlias := cfg.GetResourcePrefix() + "-platform"
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkKMSKey(ctx, kmsClient, "km-platform")
+		return checkKMSKey(ctx, kmsClient, platformKMSAlias)
 	})
 
 	// Organization account blank check — warns when SCP enforcement is disabled (no AWS calls).
@@ -2175,8 +2178,9 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	kmsCleanup := deps.KMSCleanupClient
 	listerForCleanup := deps.Lister
 	dryRun := deps.DryRun
+	kmsResourcePrefix := cfg.GetResourcePrefix()
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkStaleKMSKeys(ctx, kmsCleanup, listerForCleanup, dryRun)
+		return checkStaleKMSKeys(ctx, kmsCleanup, listerForCleanup, dryRun, kmsResourcePrefix)
 	})
 
 	// Stale IAM roles check.

@@ -185,7 +185,7 @@ Dry-run is ON by default — use --dry-run=false to actually execute rotations.`
 				deps = realDeps
 			}
 
-			return runRollCreds(cmd, deps, sandboxID, platformOnly, githubKeyFile, forceRestart, jsonOutput, dryRun)
+			return runRollCreds(cmd, cfg, deps, sandboxID, platformOnly, githubKeyFile, forceRestart, jsonOutput, dryRun)
 		},
 	}
 
@@ -216,6 +216,7 @@ func cfgTyped(cfg interface{}) *appcfg.Config {
 // runRollCreds is the core execution logic for km roll creds.
 func runRollCreds(
 	cmd *cobra.Command,
+	cfg interface{},
 	deps *RollDeps,
 	sandboxID string,
 	platformOnly bool,
@@ -232,16 +233,21 @@ func runRollCreds(
 	out := cmd.OutOrStdout()
 	start := time.Now()
 
-	// Default KMS key alias used throughout the platform.
-	const kmsKeyAlias = "alias/km-platform"
-	// Default KMS key ID — use alias, KMS accepts alias names.
-	const kmsKeyID = kmsKeyAlias
+	// Resolve cfg-derived names. cfgTyped(nil) returns nil; GetResourcePrefix()
+	// and GetPlatformKMSAlias() are nil-safe and fall back to "km" / "alias/km-platform".
+	tcfg := cfgTyped(cfg)
+	resourcePrefix := tcfg.GetResourcePrefix()
+	kmsKeyAlias := tcfg.GetPlatformKMSAlias()
+	kmsKeyID := kmsKeyAlias
 
-	// Empty string means use the test config — in production these come from config.
-	// For tests (deps != nil, cfg == nil) we use reasonable defaults.
-	const tableName = "km-identities"
-	const stateBucket = "km-terraform-state"
-	const resourcePrefix = "km" // TODO(plan-04): thread cfg.GetResourcePrefix() when runRollCreds receives cfg
+	tableName := resourcePrefix + "-identities"
+	if tcfg != nil && tcfg.IdentityTableName != "" {
+		tableName = tcfg.IdentityTableName
+	}
+	stateBucket := ""
+	if tcfg != nil {
+		stateBucket = tcfg.StateBucket
+	}
 
 	var failures []rollError
 	succeeded := 0
@@ -726,19 +732,14 @@ func printSummary(out interface{ Write([]byte) (int, error) }, jsonOutput bool, 
 
 // initRealRollDeps initializes real AWS clients for production use.
 func initRealRollDeps(ctx context.Context, cfg interface{}) (*RollDeps, error) {
-	var profile string
-	var stateBucket = "km-terraform-state"
-
-	switch v := cfg.(type) {
-	case *appcfg.Config:
-		if v != nil {
-			profile = v.AWSProfile
-			if v.StateBucket != "" {
-				stateBucket = v.StateBucket
-			}
-		}
+	tcfg := cfgTyped(cfg)
+	var profile, stateBucket string
+	if tcfg != nil {
+		profile = tcfg.AWSProfile
+		stateBucket = tcfg.StateBucket
 	}
-	_ = stateBucket
+	resourcePrefix := tcfg.GetResourcePrefix()
+	sandboxesTable := resourcePrefix + "-sandboxes"
 
 	opts := []func(*awsconfig.LoadOptions) error{}
 	if profile != "" {
@@ -758,7 +759,7 @@ func initRealRollDeps(ctx context.Context, cfg interface{}) (*RollDeps, error) {
 		CWClient:     cloudwatchlogs.NewFromConfig(awsCfg),
 		ECSClient:    ecs.NewFromConfig(awsCfg),
 		EC2Client:    ec2.NewFromConfig(awsCfg),
-		Lister:       newRealLister(awsCfg, "km-terraform-state", "km-sandboxes"),
+		Lister:       newRealLister(awsCfg, stateBucket, sandboxesTable),
 	}, nil
 }
 

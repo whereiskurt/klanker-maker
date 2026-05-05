@@ -348,6 +348,15 @@ func (c *Config) GetResourcePrefix() string {
 	return c.ResourcePrefix
 }
 
+// GetPlatformKMSAlias returns the KMS key alias used for SSM SecureString
+// encryption (sandbox identity keys, GitHub tokens, Slack signing secret, etc.).
+// Format: "alias/{prefix}-platform" where prefix is GetResourcePrefix() (default "km").
+// Multi-instance installs in the same AWS account get distinct aliases via
+// resource_prefix in km-config.yaml.
+func (c *Config) GetPlatformKMSAlias() string {
+	return "alias/" + c.GetResourcePrefix() + "-platform"
+}
+
 // GetEmailDomain returns the full email domain (e.g. "sandboxes.klankermaker.ai").
 // Falls back to "sandboxes.klankermaker.ai" when both fields are empty or the receiver
 // is nil — mirrors the nil-safety pattern used by GetResourcePrefix.

@@ -440,7 +440,7 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		ssmClient := ssm.NewFromConfig(awsCfg)
 		kmsKeyAlias := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
 		if kmsKeyAlias == "" {
-			kmsKeyAlias = "alias/km-platform"
+			kmsKeyAlias = cfg.GetPlatformKMSAlias()
 		}
 		operatorID := "operator"
 		pubKey, identErr := awspkg.EnsureSandboxIdentity(ctx, ssmClient, operatorID, kmsKeyAlias)

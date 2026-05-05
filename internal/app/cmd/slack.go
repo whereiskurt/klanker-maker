@@ -301,8 +301,7 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 		// Empty response (user pressed Enter) means: skip inbound config for now.
 	}
 	if signingSecret != "" {
-		kmsKey := "alias/km-platform"
-		if err := PersistSigningSecret(ctx, d.SSM, signingSecret, d.SsmPrefix, kmsKey); err != nil {
+		if err := PersistSigningSecret(ctx, d.SSM, signingSecret, d.SsmPrefix); err != nil {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "km slack init: signing secret persisted to %sslack/signing-secret\n", d.SsmPrefix)
@@ -668,7 +667,7 @@ func buildSlackCmdDeps(cfg *config.Config) (*SlackCmdDeps, error) {
 	repoRoot := findRepoRoot()
 	kmsKey := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
 	if kmsKey == "" {
-		kmsKey = "alias/km-platform"
+		kmsKey = cfg.GetPlatformKMSAlias()
 	}
 
 	ssmClient := ssm.NewFromConfig(awsCfg)
@@ -753,13 +752,10 @@ func marshalSlackWorkspace(teamID, teamName string) string {
 // ──────────────────────────────────────────────
 
 // PersistSigningSecret writes the Slack App signing secret to SSM as a SecureString.
-// ssmPrefix is the SSM path prefix (e.g. "/km/"); kmsKey is the KMS alias/ARN to use.
+// ssmPrefix is the SSM path prefix (e.g. "/km/"). Encryption uses the KMS key the
+// store was constructed with (cfg.GetPlatformKMSAlias() in production).
 // Exported for testability.
-func PersistSigningSecret(ctx context.Context, store SlackSSMStore, secret, ssmPrefix, kmsKey string) error {
-	// SlackSSMStore.Put(secure=true) uses the kmsKey configured on the store
-	// at construction time. Since we want to use a specific key per call, we
-	// detect if the store is the production slackSSMStore and set kmsKey directly;
-	// in tests the fakeSSM ignores kmsKey entirely which is fine.
+func PersistSigningSecret(ctx context.Context, store SlackSSMStore, secret, ssmPrefix string) error {
 	return store.Put(ctx, ssmPrefix+"slack/signing-secret", secret, true)
 }
 
@@ -833,8 +829,7 @@ func RunSlackRotateSigningSecret(ctx context.Context, d *SlackCmdDeps, opts Slac
 	}
 
 	// Step 2: Persist to SSM (SecureString).
-	kmsKey := "alias/km-platform"
-	if err := PersistSigningSecret(ctx, d.SSM, secret, d.SsmPrefix, kmsKey); err != nil {
+	if err := PersistSigningSecret(ctx, d.SSM, secret, d.SsmPrefix); err != nil {
 		return fmt.Errorf("persist signing secret: %w", err)
 	}
 	fmt.Printf("km slack rotate-signing-secret: persisted new signing secret to %sslack/signing-secret\n", d.SsmPrefix)
