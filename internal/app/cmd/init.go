@@ -238,7 +238,7 @@ func runInitDryRun(cfg *config.Config, region string) error {
 
 	// DNS
 	if cfg.Domain != "" {
-		fmt.Printf("  1. DNS: ensure hosted zone and NS delegation for sandboxes.%s\n", cfg.Domain)
+		fmt.Printf("  1. DNS: ensure hosted zone and NS delegation for %s\n", cfg.GetEmailDomain())
 	} else {
 		fmt.Printf("  1. DNS: [skip] no domain configured\n")
 	}
@@ -323,7 +323,7 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 
 	printBanner("km init", fmt.Sprintf("%s (%s)", region, compiler.RegionLabel(region)))
 
-	// Always ensure sandboxes.{domain} hosted zone AND NS delegation exist.
+	// Always ensure the email subdomain hosted zone AND NS delegation exist.
 	// Even if the zone ID is known, delegation in the DNS parent account may be missing.
 	// Skip if domain is blank OR if dns_parent account is blank (delegation would have nowhere to go).
 	if cfg.Domain != "" && cfg.DNSParentAccountID == "" {
@@ -331,7 +331,7 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 	}
 	if cfg.Domain != "" && cfg.DNSParentAccountID != "" {
 		fmt.Println()
-		fmt.Printf("Ensuring DNS zone and NS delegation for sandboxes.%s...\n", cfg.Domain)
+		fmt.Printf("Ensuring DNS zone and NS delegation for %s...\n", cfg.GetEmailDomain())
 		zoneID, err := ensureSandboxHostedZone(ctx, cfg)
 		if err != nil {
 			fmt.Printf("  [warn] DNS zone setup failed: %v\n", err)
@@ -507,13 +507,9 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 
 	// Display email-to-create details if operator email and safe phrase are configured.
 	if cfg.OperatorEmail != "" || cfg.SafePhrase != "" {
-		domain := cfg.Domain
-		if domain == "" {
-			domain = "klankermaker.ai"
-		}
 		fmt.Println()
 		fmt.Println("Email-to-create:")
-		fmt.Printf("  Send to:     operator@sandboxes.%s\n", domain)
+		fmt.Printf("  Send to:     operator@%s\n", cfg.GetEmailDomain())
 		if cfg.OperatorEmail != "" {
 			fmt.Printf("  Operator:    %s\n", cfg.OperatorEmail)
 		}

@@ -267,11 +267,18 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 	if twoAccount {
 		fmt.Fprintln(out, "Detected 2-account topology (terraform == application).")
 	} else {
+		// Reflect the operator's chosen email_subdomain in delegation guidance —
+		// hardcoding "sandboxes." used to mislead non-default installs (e.g.
+		// email_subdomain=km would still be told to set up sandboxes.<domain>).
+		emailSub := emailSubdomain
+		if emailSub == "" {
+			emailSub = "sandboxes"
+		}
 		fmt.Fprintln(out, "Detected 3-account topology.")
 		fmt.Fprintf(out, "\nDNS delegation required:\n")
-		fmt.Fprintf(out, "  1. Create a hosted zone for sandboxes.%s in the application account (%s).\n", domain, applicationAcct)
+		fmt.Fprintf(out, "  1. Create a hosted zone for %s.%s in the application account (%s).\n", emailSub, domain, applicationAcct)
 		fmt.Fprintf(out, "  2. Copy the NS records and add them as NS records in the DNS parent account (%s)\n", dnsParentAcct)
-		fmt.Fprintf(out, "     under %s pointing to sandboxes.%s.\n\n", domain, domain)
+		fmt.Fprintf(out, "     under %s pointing to %s.%s.\n\n", domain, emailSub, domain)
 	}
 
 	// Build config
