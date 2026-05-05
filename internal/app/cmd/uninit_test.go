@@ -12,15 +12,27 @@ import (
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 )
 
-// mockUninitRunner records Destroy calls in order.
+// mockUninitRunner records Destroy + Reconfigure calls in order.
 type mockUninitRunner struct {
-	calls []string
-	errs  map[string]error // dir suffix -> error to return (nil means success)
+	calls            []string
+	reconfigureCalls []string
+	errs             map[string]error // dir suffix -> Destroy error (nil means success)
+	reconfigureErrs  map[string]error // dir suffix -> Reconfigure error (nil means success)
 }
 
 func (m *mockUninitRunner) Destroy(_ context.Context, dir string) error {
 	m.calls = append(m.calls, dir)
 	for suffix, err := range m.errs {
+		if strings.HasSuffix(dir, suffix) {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *mockUninitRunner) Reconfigure(_ context.Context, dir string) error {
+	m.reconfigureCalls = append(m.reconfigureCalls, dir)
+	for suffix, err := range m.reconfigureErrs {
 		if strings.HasSuffix(dir, suffix) {
 			return err
 		}
@@ -359,6 +371,89 @@ func TestUninitDeletesECRRepos(t *testing.T) {
 		if ecrDel.calls[i] != want {
 			t.Errorf("ECR delete call[%d] = %q, want %q", i, ecrDel.calls[i], want)
 		}
+	}
+}
+
+// TestUninitReconfiguresBeforeEachDestroy verifies that uninit calls
+// Reconfigure before Destroy on every module — this is what fixes the
+// "Backend configuration block has changed" failure mode an operator hits
+// after upgrading km past the resource_prefix env-var fix.
+func TestUninitReconfiguresBeforeEachDestroy(t *testing.T) {
+	runner := &mockUninitRunner{}
+	lister := &mockUninitLister{records: []kmaws.SandboxRecord{}}
+	cfg := &config.Config{StateBucket: "my-bucket"}
+
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", false)
+	if err != nil {
+		t.Fatalf("uninit returned error: %v", err)
+	}
+
+	// Every Destroy call must be preceded by a Reconfigure on the same dir.
+	if len(runner.reconfigureCalls) != len(runner.calls) {
+		t.Fatalf("Reconfigure called %d times, Destroy called %d — should be 1:1",
+			len(runner.reconfigureCalls), len(runner.calls))
+	}
+	for i, dir := range runner.calls {
+		if runner.reconfigureCalls[i] != dir {
+			t.Errorf("module[%d]: reconfigure dir=%q, destroy dir=%q (mismatch)",
+				i, runner.reconfigureCalls[i], dir)
+		}
+	}
+}
+
+// TestUninitContinuesWhenReconfigureFails verifies that a Reconfigure failure
+// is informational only — uninit still attempts the Destroy. This matters
+// because Reconfigure can fail for benign reasons (e.g. an unrelated module
+// missing its terragrunt-cache) and we don't want that to block teardown.
+func TestUninitContinuesWhenReconfigureFails(t *testing.T) {
+	runner := &mockUninitRunner{
+		reconfigureErrs: map[string]error{
+			"network": errors.New("init -reconfigure simulated failure"),
+		},
+	}
+	lister := &mockUninitLister{records: []kmaws.SandboxRecord{}}
+	cfg := &config.Config{StateBucket: "my-bucket"}
+
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", false)
+	if err != nil {
+		t.Fatalf("uninit should continue past Reconfigure failure, got: %v", err)
+	}
+	// Destroy must still have been called for the network module.
+	foundNetworkDestroy := false
+	for _, c := range runner.calls {
+		if strings.HasSuffix(c, "network") {
+			foundNetworkDestroy = true
+			break
+		}
+	}
+	if !foundNetworkDestroy {
+		t.Error("Destroy on network was skipped after Reconfigure failure; should still attempt")
+	}
+}
+
+// TestUninitDetectsBackendDrift verifies that when Destroy fails with the
+// "Backend configuration block has changed" signature, uninit proceeds
+// through the remaining modules and treats the failure as a recoverable
+// drift case (rather than a generic terragrunt error). The actual
+// remediation summary is printed to stdout — we just confirm no fatal error.
+func TestUninitDetectsBackendDrift(t *testing.T) {
+	runner := &mockUninitRunner{
+		errs: map[string]error{
+			"lambda-slack-bridge": errors.New(
+				"exit status 1\nError: Backend configuration block has changed\nReason: ...",
+			),
+		},
+	}
+	lister := &mockUninitLister{records: []kmaws.SandboxRecord{}}
+	cfg := &config.Config{StateBucket: "my-bucket"}
+
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", false)
+	if err != nil {
+		t.Fatalf("uninit should not return error on backend drift; should continue and surface in summary: %v", err)
+	}
+	// All 16 modules should still be attempted.
+	if len(runner.calls) != 16 {
+		t.Errorf("expected 16 Destroy calls (continue past drift), got %d", len(runner.calls))
 	}
 }
 

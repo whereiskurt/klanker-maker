@@ -80,6 +80,21 @@ func (r *Runner) BuildOutputCommand(ctx context.Context, sandboxDir string) *exe
 	return r.buildCommand(ctx, sandboxDir, "output", "-json")
 }
 
+// Reconfigure runs `terragrunt init -reconfigure` inside sandboxDir to refresh
+// the local .terragrunt-cache backend metadata. Used before destroy when the
+// backend bucket name resolves differently than when state was last written
+// (e.g. KM_RESOURCE_PREFIX env var changed between apply and destroy because
+// the operator upgraded km past Phase 66's resource_prefix introduction or
+// past commit 504b4dd's slack-init env-var fix). Without -reconfigure,
+// terragrunt's auto-init on destroy hits "Backend configuration block has
+// changed" and refuses to proceed.
+//
+// Safe to call when no reconfigure is needed — it's a no-op in that case.
+func (r *Runner) Reconfigure(ctx context.Context, sandboxDir string) error {
+	cmd := r.buildCommand(ctx, sandboxDir, "init", "-reconfigure")
+	return r.runCommand(cmd)
+}
+
 // ApplyWithStderr runs apply, capturing stderr to the provided buffer (for error detection).
 // When Verbose is true: stdout streams to terminal, stderr streams to both terminal and stderrBuf.
 // When Verbose is false: stdout is captured, stderr goes to stderrBuf and is printed on failure.

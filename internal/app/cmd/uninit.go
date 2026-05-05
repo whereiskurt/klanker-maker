@@ -16,9 +16,49 @@ import (
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
 )
 
-// UninitRunner is a narrow interface for the Destroy operation, allowing test injection.
+// UninitRunner is a narrow interface for the Destroy + Reconfigure operations
+// uninit needs from terragrunt, allowing test injection.
+//
+// Reconfigure runs `terragrunt init -reconfigure` before each Destroy to
+// handle local .terragrunt-cache drift — common when an operator upgraded km
+// (or pulled the slack-init env-var fix) and the backend bucket name now
+// resolves to a different KM_RESOURCE_PREFIX than when state was first
+// written. Without it, terragrunt's auto-init hits "Backend configuration
+// block has changed" and bails before touching any resources.
+//
+// Destroy must return an error whose message includes terragrunt's stderr
+// (or at least the relevant error text) so callers can pattern-match on
+// signatures like "Backend configuration block has changed". The production
+// implementation (uninitRunnerAdapter) uses Runner.DestroyWithStderr to
+// satisfy this; mocks can return any error string they like.
 type UninitRunner interface {
 	Destroy(ctx context.Context, dir string) error
+	Reconfigure(ctx context.Context, dir string) error
+}
+
+// uninitRunnerAdapter wraps the production *terragrunt.Runner and embeds
+// terragrunt's stderr into Destroy's returned error so isBackendDriftError
+// can match on the actual terraform output. Without this, Destroy() returns
+// only the process exit error ("exit status 1") and the diagnostic text
+// — including "Backend configuration block has changed" — is lost.
+type uninitRunnerAdapter struct {
+	inner *terragrunt.Runner
+}
+
+func (a *uninitRunnerAdapter) Destroy(ctx context.Context, dir string) error {
+	var stderrBuf strings.Builder
+	if err := a.inner.DestroyWithStderr(ctx, dir, &stderrBuf); err != nil {
+		stderr := strings.TrimSpace(stderrBuf.String())
+		if stderr == "" {
+			return err
+		}
+		return fmt.Errorf("%w\n%s", err, stderr)
+	}
+	return nil
+}
+
+func (a *uninitRunnerAdapter) Reconfigure(ctx context.Context, dir string) error {
+	return a.inner.Reconfigure(ctx, dir)
 }
 
 // ECRRepoDeleter abstracts ECR repository deletion. Returns nil when the
@@ -143,8 +183,9 @@ func runUninit(cfg *config.Config, awsProfile, region string, force bool, verbos
 	}
 
 	repoRoot := findRepoRoot()
-	runner := terragrunt.NewRunner(awsProfile, repoRoot)
-	runner.Verbose = verbose
+	tgRunner := terragrunt.NewRunner(awsProfile, repoRoot)
+	tgRunner.Verbose = verbose
+	runner := &uninitRunnerAdapter{inner: tgRunner}
 
 	var lister SandboxLister
 	if cfg.StateBucket != "" {
@@ -215,16 +256,34 @@ func RunUninitWithDeps(cfg *config.Config, runner UninitRunner, lister SandboxLi
 	}
 
 	// Step 4: Destroy each module. Skip missing directories; continue on error.
+	// Run `terragrunt init -reconfigure` before destroy to refresh the local
+	// .terragrunt-cache backend pointer — this fixes the common drift case
+	// after a km upgrade. We track modules whose destroy hits the
+	// "backend configuration block has changed" signature so the operator
+	// gets one consolidated diagnostic at the end (instead of 30 lines of
+	// terraform stack trace per affected module).
 	destroyed := 0
+	var backendDriftModules []string
 	for _, mod := range modules {
 		if _, err := os.Stat(mod.dir); os.IsNotExist(err) {
 			fmt.Printf("  Skipping %s (directory not found)\n", mod.name)
 			continue
 		}
 
+		// Reconfigure first. Failure here is informational — we still try
+		// destroy; terragrunt may surface a clearer error than reconfigure does.
+		if err := runner.Reconfigure(ctx, mod.dir); err != nil {
+			fmt.Printf("  [info] %s init -reconfigure failed (continuing to destroy): %v\n", mod.name, err)
+		}
+
 		fmt.Printf("  Destroying %s...", mod.name)
 		if err := runner.Destroy(ctx, mod.dir); err != nil {
-			fmt.Printf("\n  Warning: %s destroy failed (continuing): %v\n", mod.name, err)
+			if isBackendDriftError(err) {
+				fmt.Printf("\n  Warning: %s — state appears to live in a different backend bucket than the current config resolves to (likely written before a resource_prefix change). Resources may need manual cleanup; see post-uninit summary below.\n", mod.name)
+				backendDriftModules = append(backendDriftModules, mod.name)
+			} else {
+				fmt.Printf("\n  Warning: %s destroy failed (continuing): %v\n", mod.name, err)
+			}
 			continue
 		}
 		fmt.Println(" done")
@@ -254,5 +313,51 @@ func RunUninitWithDeps(cfg *config.Config, runner UninitRunner, lister SandboxLi
 		fmt.Printf(", %d ECR repo(s) deleted", ecrDeleted)
 	}
 	fmt.Println()
+
+	// Surface a clear remediation block for any modules whose state lived in a
+	// different backend bucket than the current resolved one. The most common
+	// cause is a km upgrade that changed how KM_RESOURCE_PREFIX flows through
+	// site.hcl after the module was first applied. Resources for these modules
+	// were NOT destroyed by terragrunt and must be handled manually.
+	if len(backendDriftModules) > 0 {
+		fmt.Println()
+		fmt.Println("──────────────────────────────────────────────────")
+		fmt.Println("MANUAL CLEANUP REQUIRED")
+		fmt.Println("──────────────────────────────────────────────────")
+		fmt.Printf("The following %d module(s) hold state in a different backend bucket than the current km-config.yaml resolves to:\n\n", len(backendDriftModules))
+		for _, m := range backendDriftModules {
+			fmt.Printf("  • %s\n", m)
+		}
+		fmt.Println()
+		fmt.Println("Likely cause: these modules were applied under a different KM_RESOURCE_PREFIX")
+		fmt.Println("(usually pre-upgrade, when the prefix was empty/'km' instead of the operator's")
+		fmt.Println("current value). terragrunt cannot read state from a bucket the current backend")
+		fmt.Println("config doesn't reference, so destroy was skipped.")
+		fmt.Println()
+		fmt.Println("To recover, either:")
+		fmt.Printf("  1. aws s3 ls --profile <terraform-profile> | grep tf-.*-state-  # find the orphan bucket\n")
+		fmt.Println("     then run `terragrunt init -migrate-state` per affected module to move the state, then")
+		fmt.Println("     re-run `km uninit --force`.")
+		fmt.Println()
+		fmt.Println("  2. Hand-delete the orphaned AWS resources for each module via the AWS console / CLI.")
+		fmt.Println("──────────────────────────────────────────────────")
+	}
+
 	return nil
+}
+
+// isBackendDriftError returns true when err looks like a terragrunt failure
+// caused by the local .terragrunt-cache or current backend block referring
+// to a different bucket than the state was last written to. Matches both
+// the direct "Backend configuration block has changed" message and the
+// downstream "Backend initialization required" / dependency-resolution
+// errors that fire when terragrunt can't read a dependency module's outputs
+// for the same reason.
+func isBackendDriftError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Backend configuration block has changed") ||
+		strings.Contains(msg, "Backend initialization required")
 }
