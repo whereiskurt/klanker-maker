@@ -178,6 +178,38 @@ func TestRunnerApplyCommand(t *testing.T) {
 	if !found {
 		t.Errorf("AWS_PROFILE=klanker-terraform not found in cmd.Env; got %v", cmd.Env)
 	}
+
+	// TG_BACKEND_BOOTSTRAP must default to true so first `km init` against a
+	// fresh AWS account can auto-create the S3 backend bucket.
+	bootstrapFound := false
+	for _, e := range cmd.Env {
+		if e == "TG_BACKEND_BOOTSTRAP=true" {
+			bootstrapFound = true
+			break
+		}
+	}
+	if !bootstrapFound {
+		t.Errorf("TG_BACKEND_BOOTSTRAP=true not found in cmd.Env; got %v", cmd.Env)
+	}
+}
+
+// TestRunnerBackendBootstrapRespectsExternalEnv verifies that an externally
+// exported TG_BACKEND_BOOTSTRAP value is preserved (we only set the default
+// when the operator hasn't set one).
+func TestRunnerBackendBootstrapRespectsExternalEnv(t *testing.T) {
+	t.Setenv("TG_BACKEND_BOOTSTRAP", "false")
+
+	r := terragrunt.NewRunner("klanker-terraform", "/repo/root")
+	sandboxDir := makeFakeSandboxDir(t)
+	cmd := r.BuildApplyCommand(context.Background(), sandboxDir)
+
+	// External value should be inherited via os.Environ(); we should NOT have
+	// appended a second TG_BACKEND_BOOTSTRAP=true that would override it.
+	for _, e := range cmd.Env {
+		if e == "TG_BACKEND_BOOTSTRAP=true" {
+			t.Errorf("runner appended TG_BACKEND_BOOTSTRAP=true despite operator setting TG_BACKEND_BOOTSTRAP=false; got env %v", cmd.Env)
+		}
+	}
 }
 
 func TestRunnerDestroyCommand(t *testing.T) {

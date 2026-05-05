@@ -695,7 +695,7 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 		fmt.Fprintf(w, "    Encryption:      AES256 (S3-managed)\n")
 		fmt.Fprintf(w, "    Versioning:      enabled\n")
 		fmt.Fprintln(w)
-		fmt.Fprintf(w, "  S3 bucket:         tf-%s-state-%s  [created by Terragrunt on first apply]\n", prefix, regionLabel)
+		fmt.Fprintf(w, "  S3 bucket:         tf-%s-state-%s  [created by Terragrunt --backend-bootstrap on first apply]\n", prefix, regionLabel)
 		fmt.Fprintf(w, "    Purpose:         Terraform remote state\n")
 		fmt.Fprintf(w, "    Encryption:      enabled (S3 default)\n")
 		fmt.Fprintln(w)

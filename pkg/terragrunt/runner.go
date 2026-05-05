@@ -175,9 +175,18 @@ func printWarningsAndErrors(output string) {
 
 // buildCommand is the internal factory that constructs a Terragrunt command
 // with the correct working directory and environment.
+//
+// TG_BACKEND_BOOTSTRAP=true is set unconditionally (unless the operator already
+// exported it) so the first `km init` against a fresh AWS account auto-creates
+// the S3 backend bucket. Older Terragrunt versions auto-bootstrapped on first
+// apply; v0.69+ requires the explicit opt-in. The flag is a no-op when the
+// bucket already exists, so it's safe for every subsequent apply/destroy/output.
 func (r *Runner) buildCommand(ctx context.Context, sandboxDir string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "terragrunt", args...) //nolint:gosec // terragrunt binary is a fixed, trusted binary
 	cmd.Dir = sandboxDir
 	cmd.Env = append(os.Environ(), "AWS_PROFILE="+r.AWSProfile)
+	if os.Getenv("TG_BACKEND_BOOTSTRAP") == "" {
+		cmd.Env = append(cmd.Env, "TG_BACKEND_BOOTSTRAP=true")
+	}
 	return cmd
 }
