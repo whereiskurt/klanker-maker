@@ -479,6 +479,40 @@ func TestSlackBridgeColdStart_PropagatesError(t *testing.T) {
 	}
 }
 
+// TestCreateHandlerColdStart_HonorsResourcePrefix verifies that
+// ForceCreateHandlerColdStartWith targets the prefix-namespaced function name
+// and includes TOOLCHAIN_VERSION in the env update — guards against the
+// hardcoded "km-create-handler" regression that masked toolchain refresh on
+// non-default prefix installs (e.g. resource_prefix=kph).
+func TestCreateHandlerColdStart_HonorsResourcePrefix(t *testing.T) {
+	f := &fakeLambdaUpdater{}
+	if err := cmd.ForceCreateHandlerColdStartWith(context.Background(), f, "kph-create-handler"); err != nil {
+		t.Fatalf("ForceCreateHandlerColdStartWith: %v", err)
+	}
+	if f.lastInput == nil {
+		t.Fatal("UpdateFunctionConfiguration was not called")
+	}
+	if got := *f.lastInput.FunctionName; got != "kph-create-handler" {
+		t.Errorf("FunctionName = %q; want kph-create-handler", got)
+	}
+	if f.lastInput.Environment == nil {
+		t.Fatal("Environment not set")
+	}
+	if _, ok := f.lastInput.Environment.Variables["TOOLCHAIN_VERSION"]; !ok {
+		t.Errorf("TOOLCHAIN_VERSION not in env vars; got %v", f.lastInput.Environment.Variables)
+	}
+}
+
+// TestCreateHandlerColdStart_PropagatesError verifies that errors from
+// UpdateFunctionConfiguration are returned unchanged.
+func TestCreateHandlerColdStart_PropagatesError(t *testing.T) {
+	wantErr := errors.New("ResourceNotFoundException")
+	f := &fakeLambdaUpdater{err: wantErr}
+	if err := cmd.ForceCreateHandlerColdStartWith(context.Background(), f, "kph-create-handler"); err != wantErr {
+		t.Errorf("got err %v; want %v", err, wantErr)
+	}
+}
+
 // TestInitExportsNewAccountEnvVars verifies that ExportConfigEnvVars sets
 // KM_ACCOUNTS_ORGANIZATION and KM_ACCOUNTS_DNS_PARENT from the config.
 func TestInitExportsNewAccountEnvVars(t *testing.T) {

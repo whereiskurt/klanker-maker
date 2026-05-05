@@ -409,7 +409,7 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 	if cfg.ArtifactsBucket != "" {
 		fmt.Println()
 		fmt.Println("Forcing create-handler Lambda cold start...")
-		if err := forceLambdaColdStart(ctx, awsCfg); err != nil {
+		if err := forceLambdaColdStart(ctx, awsCfg, cfg.GetResourcePrefix()); err != nil {
 			fmt.Printf("  [warn] Lambda cold start trigger failed: %v\n", err)
 		} else {
 			fmt.Printf("  ✓ Lambda environment updated (next invocation downloads fresh toolchain)\n")
@@ -485,10 +485,7 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 			if domain == "" {
 				domain = "klankermaker.ai"
 			}
-			identityTableName := cfg.IdentityTableName
-			if identityTableName == "" {
-				identityTableName = cfg.GetResourcePrefix() + "-identities"
-			}
+			identityTableName := cfg.GetIdentityTableName()
 			operatorEmail := fmt.Sprintf("operator@%s", cfg.GetEmailDomain())
 			dynamoClient := dynamodb.NewFromConfig(awsCfg)
 			if pubErr := awspkg.PublishIdentity(ctx, dynamoClient, identityTableName, operatorID, operatorEmail, pubKey, nil, "required", "required", "off", "operator", []string{"*"}); pubErr != nil {
@@ -561,7 +558,7 @@ func runInitPartial(cfg *config.Config, awsProfile, region string, verbose, side
 		// Force cold start so new code takes effect.
 		fmt.Println()
 		fmt.Println("Forcing create-handler Lambda cold start...")
-		if err := forceLambdaColdStart(ctx, awsCfg); err != nil {
+		if err := forceLambdaColdStart(ctx, awsCfg, cfg.GetResourcePrefix()); err != nil {
 			fmt.Printf("  [warn] Lambda cold start trigger failed: %v\n", err)
 		} else {
 			fmt.Printf("  ✓ Lambda environment updated\n")
@@ -590,7 +587,7 @@ func runInitPartial(cfg *config.Config, awsProfile, region string, verbose, side
 		// Force cold start so Lambda picks up new km binary.
 		fmt.Println()
 		fmt.Println("Forcing create-handler Lambda cold start...")
-		if err := forceLambdaColdStart(ctx, awsCfg); err != nil {
+		if err := forceLambdaColdStart(ctx, awsCfg, cfg.GetResourcePrefix()); err != nil {
 			fmt.Printf("  [warn] Lambda cold start trigger failed: %v\n", err)
 		} else {
 			fmt.Printf("  ✓ Lambda environment updated\n")
@@ -1762,10 +1759,21 @@ func persistRoute53ZoneID(zoneID string) error {
 // force a cold start on the next invocation. The Lambda caches the toolchain
 // via sync.Once per container — updating the environment invalidates the
 // container and triggers a fresh toolchain download.
-func forceLambdaColdStart(ctx context.Context, cfg aws.Config) error {
-	client := lambda.NewFromConfig(cfg)
+//
+// resourcePrefix is the km-config.yaml resource_prefix (e.g. "km", "kph") so
+// the function name matches the prefix-namespaced Lambda created by terragrunt.
+func forceLambdaColdStart(ctx context.Context, awsCfg aws.Config, resourcePrefix string) error {
+	return ForceCreateHandlerColdStartWith(ctx, lambda.NewFromConfig(awsCfg), resourcePrefix+"-create-handler")
+}
+
+// ForceCreateHandlerColdStartWith updates the create-handler Lambda's
+// environment using the supplied client and functionName, forcing a new
+// execution environment so the next invocation re-downloads the toolchain.
+// Exported for unit testing; production code should call forceLambdaColdStart.
+// functionName should be cfg.GetResourcePrefix() + "-create-handler".
+func ForceCreateHandlerColdStartWith(ctx context.Context, client lambdaConfigUpdater, functionName string) error {
 	_, err := client.UpdateFunctionConfiguration(ctx, &lambda.UpdateFunctionConfigurationInput{
-		FunctionName: aws.String("km-create-handler"),
+		FunctionName: aws.String(functionName),
 		Environment: &lambdatypes.Environment{
 			Variables: map[string]string{
 				"TOOLCHAIN_VERSION": version.String(),
