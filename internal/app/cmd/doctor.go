@@ -2485,7 +2485,7 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	deps.SlackSSMStore = &productionSSMParamStore{client: ssmClientForSlack}
 	deps.SlackRegion = primaryRegion
 	deps.SlackKeyLoader = PrivKeyLoaderFunc(func(innerCtx context.Context, _ string) (ed25519.PrivateKey, error) {
-		return loadSlackOperatorKey(innerCtx, ssmClientForSlack)
+		return loadSlackOperatorKey(innerCtx, ssmClientForSlack, cfg.GetResourcePrefix())
 	})
 	deps.SlackScanner = &doctorSlackMetadataScanner{
 		client:    dynamodb.NewFromConfig(awsCfg),

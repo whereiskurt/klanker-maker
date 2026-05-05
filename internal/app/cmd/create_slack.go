@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/rs/zerolog/log"
+	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/profile"
 	"github.com/whereiskurt/klankrmkr/pkg/slack"
 )
@@ -202,15 +203,15 @@ func sanitizeChannelName(s string) string {
 }
 
 // writeSlackChannelIDToSSM writes the resolved Slack channel ID to
-// /sandbox/{id}/slack-channel-id. The sandbox's cloud-init bootstrap polls
-// this path (with the operator-wide /km/slack/bridge-url) and writes both
-// values to /etc/profile.d/km-slack-runtime.sh so the inbound poller and Stop
-// hook can source them.
+// /{resource_prefix}/sandbox/{id}/slack-channel-id. The sandbox's cloud-init
+// bootstrap polls this path (with the operator-wide bridge URL) and writes
+// both values to /etc/profile.d/km-slack-runtime.sh so the inbound poller
+// and Stop hook can source them.
 //
 // Replaces injectSlackEnvIntoSandbox (ssm:SendCommand, denied by org-level SCP
 // for the application account). Phase 67 gap closure.
-func writeSlackChannelIDToSSM(ctx context.Context, putParam func(ctx context.Context, name, value string) error, sandboxID, channelID string) error {
-	return putParam(ctx, "/sandbox/"+sandboxID+"/slack-channel-id", channelID)
+func writeSlackChannelIDToSSM(ctx context.Context, putParam func(ctx context.Context, name, value string) error, resourcePrefix, sandboxID, channelID string) error {
+	return putParam(ctx, kmaws.SandboxParameterPath(resourcePrefix, sandboxID, "slack-channel-id"), channelID)
 }
 
 // ssmSendCommandClient is the minimal SSM interface needed by productionSSMRunner.
@@ -290,7 +291,7 @@ func runStep11dInject(
 		fmt.Fprintf(os.Stderr, "  ⚠ Slack: %s not configured — env not published (run km slack init)\n", bridgeURLPath)
 		return
 	}
-	if err := writeSlackChannelIDToSSM(ctx, putParam, sandboxID, slackChannelID); err != nil {
+	if err := writeSlackChannelIDToSSM(ctx, putParam, strings.Trim(ssmPrefix, "/"), sandboxID, slackChannelID); err != nil {
 		log.Warn().Err(err).Str("sandbox_id", sandboxID).
 			Msg("Step 11d: failed to write slack-channel-id to SSM Parameter Store (non-fatal — sandbox is provisioned)")
 		fmt.Fprintf(os.Stderr, "  ⚠ Slack: SSM PutParameter failed — env not published (non-fatal): %v\n", err)

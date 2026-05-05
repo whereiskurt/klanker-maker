@@ -149,6 +149,7 @@ SANDBOX_FQDN="{{ .SandboxID }}.{{ .EmailDomain }}"
 hostnamectl set-hostname "${SANDBOX_FQDN}" 2>/dev/null || hostname "${SANDBOX_FQDN}"
 cat > /etc/profile.d/km-identity.sh << EOF
 export KM_SANDBOX_ID="{{ .SandboxID }}"
+export KM_RESOURCE_PREFIX="{{ .ResourcePrefix }}"
 export KM_SANDBOX_HOSTNAME="${SANDBOX_FQDN}"
 export KM_SANDBOX_DOMAIN="{{ .EmailDomain }}"
 export KM_SANDBOX_EMAIL="{{ .SandboxEmail }}"
@@ -180,7 +181,7 @@ echo "[km-bootstrap] Hostname set to ${SANDBOX_FQDN}"
 # Cloud-init blocks here with retry/backoff until both are present so the
 # inbound poller and Stop hook see them on first dispatch.
 echo "[km-bootstrap] Fetching Slack runtime config from SSM Parameter Store..."
-SLACK_CHANNEL_ID_PARAM="/sandbox/{{ .SandboxID }}/slack-channel-id"
+SLACK_CHANNEL_ID_PARAM="{{ .SsmPrefix }}sandbox/{{ .SandboxID }}/slack-channel-id"
 SLACK_BRIDGE_URL_PARAM="/km/slack/bridge-url" # TODO(plan-04): read prefix from /etc/km/notify.env
 SLACK_RUNTIME_FILE="/etc/profile.d/km-slack-runtime.sh"
 CHANNEL_ID=""
@@ -335,7 +336,7 @@ mkdir -p /opt/km/bin
 cat > /opt/km/bin/km-git-askpass << 'ASKPASS'
 #!/bin/bash
 TOKEN=$(aws ssm get-parameter \
-  --name "/sandbox/${SANDBOX_ID}/github-token" \
+  --name "{{ .SsmPrefix }}sandbox/${SANDBOX_ID}/github-token" \
   --with-decryption \
   --query "Parameter.Value" \
   --output text 2>/dev/null || echo "")
@@ -1057,7 +1058,7 @@ fi
 # ----------------------------------------------------------------
 KM_SAFE_PHRASE_CACHED=""
 KM_SAFE_PHRASE_CACHED=$(aws ssm get-parameter \
-  --name "/km/config/remote-create/safe-phrase" \
+  --name "{{ .SsmPrefix }}config/remote-create/safe-phrase" \
   --with-decryption \
   --query 'Parameter.Value' \
   --output text 2>/dev/null || true)
@@ -1177,7 +1178,7 @@ export AWS_REGION="$REGION"
 # (an org-level SCP blocks SSM SendCommand, so the value cannot be injected
 # directly into the env file). The poller starts at boot and may race the
 # create-handler write — retry with backoff for up to ~5 minutes.
-PARAM_NAME="/sandbox/${SANDBOX_ID}/slack-inbound-queue-url"
+PARAM_NAME="{{ .SsmPrefix }}sandbox/${SANDBOX_ID}/slack-inbound-queue-url"
 if [ -z "$QUEUE_URL" ]; then
   echo "[km-slack-inbound-poller] KM_SLACK_INBOUND_QUEUE_URL empty, reading $PARAM_NAME from SSM"
   for attempt in 1 2 3 4 5 6 7 8 9 10; do
@@ -1207,7 +1208,7 @@ fi
 # atomically with the queue, and bridge-url exists from 'km slack init').
 KM_SLACK_CHANNEL_ID="${KM_SLACK_CHANNEL_ID:-}"
 KM_SLACK_BRIDGE_URL="${KM_SLACK_BRIDGE_URL:-}"
-CHANNEL_PARAM="/sandbox/${SANDBOX_ID}/slack-channel-id"
+CHANNEL_PARAM="{{ .SsmPrefix }}sandbox/${SANDBOX_ID}/slack-channel-id"
 BRIDGE_PARAM="/km/slack/bridge-url" # TODO(plan-04): read prefix from /etc/km/notify.env
 if [ -z "$KM_SLACK_CHANNEL_ID" ]; then
   for attempt in 1 2 3; do
@@ -1470,7 +1471,7 @@ if [[ "$TO" == "$OPERATOR_INBOX" ]] || [[ "$TO" == *"$OPERATOR_INBOX"* ]]; then
   KM_SAFE_PHRASE="${KM_SAFE_PHRASE:-}"
   if [[ -z "$KM_SAFE_PHRASE" ]]; then
     # Try fetching from SSM
-    KM_SAFE_PHRASE=$(aws ssm get-parameter --name "/km/config/remote-create/safe-phrase" --with-decryption --query 'Parameter.Value' --output text 2>/dev/null || true)
+    KM_SAFE_PHRASE=$(aws ssm get-parameter --name "{{ .SsmPrefix }}config/remote-create/safe-phrase" --with-decryption --query 'Parameter.Value' --output text 2>/dev/null || true)
   fi
   if [[ -n "$KM_SAFE_PHRASE" ]]; then
     printf '\n\nKM-AUTH: %s' "$KM_SAFE_PHRASE" >> "$BODY_TMP"
@@ -1582,7 +1583,7 @@ build_mime() {
 # ------------------------------------------------------------------
 if ! $NO_SIGN; then
   PRIVKEY_B64=$(aws ssm get-parameter \
-    --name "/sandbox/$KM_SANDBOX_ID/signing-key" \
+    --name "{{ .SsmPrefix }}sandbox/$KM_SANDBOX_ID/signing-key" \
     --with-decryption \
     --query 'Parameter.Value' \
     --output text)
@@ -2699,6 +2700,18 @@ func idleActionFromProfile(p *profile.SandboxProfile) string {
 // userDataParams holds the template parameters for user-data generation.
 type userDataParams struct {
 	SandboxID          string
+	// ResourcePrefix is the bare km-config.yaml resource_prefix (e.g. "km",
+	// "kph"). Exported into the sandbox env as KM_RESOURCE_PREFIX so
+	// sandbox-side binaries (km-slack, km-send) can scope SSM paths the same
+	// way the operator did at create time.
+	ResourcePrefix     string
+	// SsmPrefix is the SSM key namespace root including leading and trailing
+	// slashes (e.g. "/km/" or "/kph/"). Equals "/" + ResourcePrefix + "/".
+	// Used to interpolate every per-sandbox SSM path the userdata template
+	// reads or writes (signing key, github token, slack-channel-id,
+	// slack-inbound-queue-url) and operator-level reads
+	// (config/remote-create/safe-phrase).
+	SsmPrefix          string
 	SecretPaths        []string
 	HasGitHub          bool
 	HasAllowedRefs     bool   // true when allowedRefs is non-empty
@@ -2965,17 +2978,21 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		alias = emailDomainOverride[1]
 	}
 
+	resourcePrefix := os.Getenv("KM_RESOURCE_PREFIX")
+	if resourcePrefix == "" {
+		resourcePrefix = "km"
+	}
+	ssmPrefix := "/" + resourcePrefix + "/"
+
 	budgetTable := os.Getenv("KM_BUDGET_TABLE")
 	if budgetTable == "" {
-		prefix := os.Getenv("KM_RESOURCE_PREFIX")
-		if prefix == "" {
-			prefix = "km"
-		}
-		budgetTable = prefix + "-budgets"
+		budgetTable = resourcePrefix + "-budgets"
 	}
 
 	params := userDataParams{
 		SandboxID:          sandboxID,
+		ResourcePrefix:     resourcePrefix,
+		SsmPrefix:          ssmPrefix,
 		SecretPaths:        secretPaths,
 		HasGitHub:          p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRepos) > 0,
 		HasAllowedRefs:     joinAllowedRefs(p) != "",
@@ -3042,6 +3059,10 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		notifyEnv := map[string]string{
 			"KM_NOTIFY_ON_PERMISSION": boolToZeroOne(p.Spec.CLI.NotifyOnPermission),
 			"KM_NOTIFY_ON_IDLE":       boolToZeroOne(p.Spec.CLI.NotifyOnIdle),
+			// KM_RESOURCE_PREFIX is required by km-slack (signing key SSM
+			// lookup) and any other sandbox-side reader that needs to scope
+			// /{prefix}/sandbox/... paths the same way the operator wrote them.
+			"KM_RESOURCE_PREFIX": params.ResourcePrefix,
 		}
 		if p.Spec.CLI.NotifyCooldownSeconds > 0 {
 			notifyEnv["KM_NOTIFY_COOLDOWN_SECONDS"] = strconv.Itoa(p.Spec.CLI.NotifyCooldownSeconds)

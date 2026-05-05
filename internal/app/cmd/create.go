@@ -919,7 +919,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 				return err
 			},
 			// Phase 67-07: ready announcement callbacks.
-			PostOperatorSigned: makePostOperatorSigned(ssmClientFor11e, bridgeURLFor11e),
+			PostOperatorSigned: makePostOperatorSigned(ssmClientFor11e, bridgeURLFor11e, cfg.GetResourcePrefix()),
 			UpsertSlackThread: makeUpsertSlackThread(
 				dynamodbpkg.NewFromConfig(awsCfg),
 				cfg.GetSlackThreadsTableName(),
@@ -1087,9 +1087,10 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	}
 
 	// Step 12d: Generate and store safe phrase for email override authorization.
-	// The safe phrase is a 32-char random hex string stored in SSM at /sandbox/{id}/safe-phrase.
-	// It is shown once to the operator here — never stored in profile YAML.
-	// Non-fatal: sandbox is provisioned even if safe phrase generation fails.
+	// The safe phrase is a 32-char random hex string stored in SSM at
+	// /{resource_prefix}/sandbox/{id}/safe-phrase. It is shown once to the
+	// operator here — never stored in profile YAML. Non-fatal: sandbox is
+	// provisioned even if safe phrase generation fails.
 	{
 		buf := make([]byte, 16)
 		if _, randErr := cryptorand.Read(buf); randErr != nil {
@@ -1097,7 +1098,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 				Msg("Step 12d: failed to generate safe phrase random bytes (non-fatal)")
 		} else {
 			phrase := hex.EncodeToString(buf)
-			phrasePath := "/sandbox/" + sandboxID + "/safe-phrase"
+			phrasePath := cfg.GetSsmPrefix() + "sandbox/" + sandboxID + "/safe-phrase"
 			phraseSMSClient := ssm.NewFromConfig(awsCfg)
 			kmsKeyARNForPhrase := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
 			if kmsKeyARNForPhrase == "" {
@@ -1247,7 +1248,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			kmsKeyAlias = cfg.GetPlatformKMSAlias()
 		}
 
-		pubKey, identErr := awspkg.GenerateSandboxIdentity(ctx, identitySMSClient, sandboxID, kmsKeyAlias)
+		pubKey, identErr := awspkg.GenerateSandboxIdentity(ctx, identitySMSClient, cfg.GetResourcePrefix(), sandboxID, kmsKeyAlias)
 		if identErr != nil {
 			log.Warn().Err(identErr).Str("sandbox_id", sandboxID).
 				Msg("failed to provision sandbox identity (non-fatal)")
@@ -1256,7 +1257,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 			var encPubKey *[32]byte
 			enc := resolvedProfile.Spec.Email.Encryption
 			if enc == "optional" || enc == "required" {
-				encPubKey, identErr = awspkg.GenerateEncryptionKey(ctx, identitySMSClient, sandboxID, kmsKeyAlias)
+				encPubKey, identErr = awspkg.GenerateEncryptionKey(ctx, identitySMSClient, cfg.GetResourcePrefix(), sandboxID, kmsKeyAlias)
 				if identErr != nil {
 					log.Warn().Err(identErr).Str("sandbox_id", sandboxID).
 						Msg("failed to generate encryption key (non-fatal — signing key still published)")
@@ -1389,8 +1390,8 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 		policyStatements = append(policyStatements, fmt.Sprintf(`{
       "Effect": "Allow",
       "Action": ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"],
-      "Resource": "arn:aws:ssm:%s:%s:parameter/km/%s/*"
-    }`, region, accountID, sandboxID))
+      "Resource": "arn:aws:ssm:%s:%s:parameter/%s/sandbox/%s/*"
+    }`, region, accountID, cfg.GetResourcePrefix(), sandboxID))
 		policyStatements = append(policyStatements, fmt.Sprintf(`{
       "Effect": "Allow",
       "Action": ["s3:PutObject", "s3:GetObject"],
@@ -1621,7 +1622,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 			kmsKeyAlias = cfg.GetPlatformKMSAlias()
 		}
 
-		pubKey, identErr := awspkg.GenerateSandboxIdentity(ctx, identitySSMClient, sandboxID, kmsKeyAlias)
+		pubKey, identErr := awspkg.GenerateSandboxIdentity(ctx, identitySSMClient, cfg.GetResourcePrefix(), sandboxID, kmsKeyAlias)
 		if identErr != nil {
 			log.Warn().Err(identErr).Str("sandbox_id", sandboxID).
 				Msg("failed to provision sandbox identity (non-fatal)")
@@ -1630,7 +1631,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 			var encPubKey *[32]byte
 			enc := resolvedProfile.Spec.Email.Encryption
 			if enc == "optional" || enc == "required" {
-				encPubKey, identErr = awspkg.GenerateEncryptionKey(ctx, identitySSMClient, sandboxID, kmsKeyAlias)
+				encPubKey, identErr = awspkg.GenerateEncryptionKey(ctx, identitySSMClient, cfg.GetResourcePrefix(), sandboxID, kmsKeyAlias)
 				if identErr != nil {
 					log.Warn().Err(identErr).Str("sandbox_id", sandboxID).
 						Msg("failed to generate encryption key (non-fatal — signing key still published)")
@@ -2158,7 +2159,7 @@ func generateAndStoreGitHubToken(ctx context.Context, ssmClient SSMGetPutAPI, sa
 		return "", fmt.Errorf("exchange JWT for installation token: %w", err)
 	}
 
-	if err := githubpkg.WriteTokenToSSM(ctx, ssmClient, sandboxID, token, kmsKeyARN, false); err != nil {
+	if err := githubpkg.WriteTokenToSSM(ctx, ssmClient, strings.Trim(ssmPrefix, "/"), sandboxID, token, kmsKeyARN, false); err != nil {
 		return "", fmt.Errorf("write token to SSM: %w", err)
 	}
 

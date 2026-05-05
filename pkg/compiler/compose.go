@@ -310,10 +310,16 @@ func generateDockerCompose(p *profile.SandboxProfile, sandboxID string, network 
 		proxyCAKeyS3 = fmt.Sprintf("s3://%s/sidecars/km-proxy-ca.key", artifactsBucket)
 	}
 
-	// GitHub token SSM path
+	// GitHub token SSM path. Scope to the operator's resource_prefix so the
+	// path matches what km create writes (and what IAM permits the sandbox
+	// to read).
 	gitHubTokenSSM := ""
 	if p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRepos) > 0 {
-		gitHubTokenSSM = fmt.Sprintf("/sandbox/%s/github-token", sandboxID)
+		resourcePrefix := os.Getenv("KM_RESOURCE_PREFIX")
+		if resourcePrefix == "" {
+			resourcePrefix = "km"
+		}
+		gitHubTokenSSM = fmt.Sprintf("/%s/sandbox/%s/github-token", resourcePrefix, sandboxID)
 	}
 
 	// Allowed repos/refs

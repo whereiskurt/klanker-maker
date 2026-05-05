@@ -334,7 +334,7 @@ locals {
 		cleanupGitHubTokenResources(ctx, awsCfg, sandboxID)
 	}
 	// Always attempt SSM cleanup (parameter may exist even if github-token dir is gone).
-	githubTokenParam := fmt.Sprintf("/sandbox/%s/github-token", sandboxID)
+	githubTokenParam := awspkg.SandboxParameterPath(cfg.GetResourcePrefix(), sandboxID, "github-token")
 	if _, delErr := ssmClient.DeleteParameter(ctx, &ssm.DeleteParameterInput{
 		Name: aws.String(githubTokenParam),
 	}); delErr != nil {
@@ -433,7 +433,7 @@ locals {
 		if identityTableName == "" {
 			identityTableName = cfg.GetResourcePrefix() + "-identities"
 		}
-		if identErr := awspkg.CleanupSandboxIdentity(ctx, identitySSMClient, identityDynClient, identityTableName, sandboxID); identErr != nil {
+		if identErr := awspkg.CleanupSandboxIdentity(ctx, identitySSMClient, identityDynClient, identityTableName, cfg.GetResourcePrefix(), sandboxID); identErr != nil {
 			log.Warn().Err(identErr).Str("sandbox_id", sandboxID).
 				Msg("failed to cleanup sandbox identity (non-fatal)")
 		} else {
@@ -467,6 +467,7 @@ locals {
 					ssmClientForDrain := ssm.NewFromConfig(awsCfg)
 					drainDeps := destroyInboundDeps{
 						SandboxID:             sandboxID,
+						ResourcePrefix:        cfg.GetResourcePrefix(),
 						QueueURL:              existingMeta.SlackInboundQueueURL,
 						ChannelID:             existingMeta.SlackChannelID,
 						SQS:                   sqsClientForDrain,
@@ -634,7 +635,7 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 
 	// Step DD3: Delete SSM GitHub token parameter.
 	ssmClient := ssm.NewFromConfig(awsCfg)
-	githubTokenParam := fmt.Sprintf("/sandbox/%s/github-token", sandboxID)
+	githubTokenParam := awspkg.SandboxParameterPath(cfg.GetResourcePrefix(), sandboxID, "github-token")
 	if _, delErr := ssmClient.DeleteParameter(ctx, &ssm.DeleteParameterInput{
 		Name: aws.String(githubTokenParam),
 	}); delErr != nil {
@@ -684,7 +685,7 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 		if identityTableName == "" {
 			identityTableName = cfg.GetResourcePrefix() + "-identities"
 		}
-		if identErr := awspkg.CleanupSandboxIdentity(ctx, identitySSMClient, identityDynClient, identityTableName, sandboxID); identErr != nil {
+		if identErr := awspkg.CleanupSandboxIdentity(ctx, identitySSMClient, identityDynClient, identityTableName, cfg.GetResourcePrefix(), sandboxID); identErr != nil {
 			log.Warn().Err(identErr).Str("sandbox_id", sandboxID).
 				Msg("failed to cleanup sandbox identity (non-fatal)")
 		}

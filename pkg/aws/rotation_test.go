@@ -251,7 +251,7 @@ func TestRotateSandboxIdentity_WithExistingKey(t *testing.T) {
 		getItemOutput: makeRotationGetItemOutput("sb-test", existingPubB64, "test@sandbox.local"),
 	}
 
-	oldFP, newFP, err := kmaws.RotateSandboxIdentity(ctx, ssmMock, dynamoMock, "sb-test", "kms-key-id", "km-identities")
+	oldFP, newFP, err := kmaws.RotateSandboxIdentity(ctx, ssmMock, dynamoMock, "km", "sb-test", "kms-key-id", "km-identities")
 	if err != nil {
 		t.Fatalf("RotateSandboxIdentity returned unexpected error: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestRotateSandboxIdentity_FreshSandbox(t *testing.T) {
 	// No getItemOutput set → returns empty GetItemOutput (nil record from FetchPublicKey)
 	dynamoMock := &mockRotationDynamoAPI{}
 
-	oldFP, newFP, err := kmaws.RotateSandboxIdentity(ctx, ssmMock, dynamoMock, "sb-fresh", "kms-key-id", "km-identities")
+	oldFP, newFP, err := kmaws.RotateSandboxIdentity(ctx, ssmMock, dynamoMock, "km", "sb-fresh", "kms-key-id", "km-identities")
 	if err != nil {
 		t.Fatalf("RotateSandboxIdentity (fresh sandbox) returned unexpected error: %v", err)
 	}
@@ -473,16 +473,16 @@ func TestReEncryptSSMParameters_ReEncryptsAllParams(t *testing.T) {
 	ctx := context.Background()
 
 	params := []ssmtypes.Parameter{
-		{Name: awssdk.String("/sandbox/sb-test/signing-key"), Value: awssdk.String("key1val"), Type: ssmtypes.ParameterTypeSecureString},
-		{Name: awssdk.String("/sandbox/sb-test/encryption-key"), Value: awssdk.String("key2val"), Type: ssmtypes.ParameterTypeSecureString},
-		{Name: awssdk.String("/sandbox/sb-test/db-password"), Value: awssdk.String("dbpass"), Type: ssmtypes.ParameterTypeSecureString},
+		{Name: awssdk.String("/km/sandbox/sb-test/signing-key"), Value: awssdk.String("key1val"), Type: ssmtypes.ParameterTypeSecureString},
+		{Name: awssdk.String("/km/sandbox/sb-test/encryption-key"), Value: awssdk.String("key2val"), Type: ssmtypes.ParameterTypeSecureString},
+		{Name: awssdk.String("/km/sandbox/sb-test/db-password"), Value: awssdk.String("dbpass"), Type: ssmtypes.ParameterTypeSecureString},
 	}
 
 	ssmMock := &mockRotationSSMAPI{
 		getParametersByPathResult: params,
 	}
 
-	count, err := kmaws.ReEncryptSSMParameters(ctx, ssmMock, "sb-test", "kms-key-id")
+	count, err := kmaws.ReEncryptSSMParameters(ctx, ssmMock, "km", "sb-test", "kms-key-id")
 	if err != nil {
 		t.Fatalf("ReEncryptSSMParameters returned error: %v", err)
 	}
@@ -499,7 +499,7 @@ func TestReEncryptSSMParameters_ReEncryptsAllParams(t *testing.T) {
 	if ssmMock.getParametersByPathInput == nil || ssmMock.getParametersByPathInput.Path == nil {
 		t.Fatal("GetParametersByPath input path is nil")
 	}
-	expectedPath := "/sandbox/sb-test/"
+	expectedPath := "/km/sandbox/sb-test/"
 	if *ssmMock.getParametersByPathInput.Path != expectedPath {
 		t.Errorf("GetParametersByPath path = %q, want %q",
 			*ssmMock.getParametersByPathInput.Path, expectedPath)
@@ -533,7 +533,7 @@ func TestReEncryptSSMParameters_EmptyPath(t *testing.T) {
 		getParametersByPathResult: []ssmtypes.Parameter{},
 	}
 
-	count, err := kmaws.ReEncryptSSMParameters(ctx, ssmMock, "sb-empty", "kms-key-id")
+	count, err := kmaws.ReEncryptSSMParameters(ctx, ssmMock, "km", "sb-empty", "kms-key-id")
 	if err != nil {
 		t.Fatalf("ReEncryptSSMParameters (empty) returned error: %v", err)
 	}
@@ -672,7 +672,7 @@ func TestEd25519Fingerprint_DeterministicFormat(t *testing.T) {
 		getItemOutput: makeRotationGetItemOutput("sb-fp", pubB64, "fp@sandbox.local"),
 	}
 
-	_, newFP, err := kmaws.RotateSandboxIdentity(ctx, ssmMock, dynamoMock, "sb-fp", "kms-key-id", "km-identities")
+	_, newFP, err := kmaws.RotateSandboxIdentity(ctx, ssmMock, dynamoMock, "km", "sb-fp", "kms-key-id", "km-identities")
 	if err != nil {
 		t.Fatalf("RotateSandboxIdentity returned error: %v", err)
 	}

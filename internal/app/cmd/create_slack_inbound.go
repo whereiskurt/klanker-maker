@@ -126,7 +126,7 @@ func provisionSlackInboundQueue(ctx context.Context, deps slackInboundDeps) (que
 	// /sandbox/{id}/slack-inbound-queue-url at startup with a retry/backoff
 	// fallback when KM_SLACK_INBOUND_QUEUE_URL is empty. SSM SendCommand is
 	// not used because an org-level SCP denies it for the application account.
-	paramName := "/sandbox/" + deps.SandboxID + "/slack-inbound-queue-url"
+	paramName := awspkg.SandboxParameterPath(deps.Cfg.GetResourcePrefix(), deps.SandboxID, "slack-inbound-queue-url")
 	if putErr := deps.PutSSMParameter(ctx, paramName, queueURL); putErr != nil {
 		// Best-effort queue cleanup. The DDB slack_inbound_queue_url attribute
 		// is left in place — km destroy's stale-queue check and km doctor will
@@ -234,12 +234,12 @@ func postReadyAnnouncement(ctx context.Context, deps slackInboundDeps, channelID
 //
 // This is the production factory for slackInboundDeps.PostOperatorSigned.
 // It mirrors the signing pattern in destroy_slack.go (destroySlackChannel).
-func makePostOperatorSigned(ssmClient *ssm.Client, bridgeURL string) func(ctx context.Context, channelID, body string) (string, error) {
+func makePostOperatorSigned(ssmClient *ssm.Client, bridgeURL, resourcePrefix string) func(ctx context.Context, channelID, body string) (string, error) {
 	return func(ctx context.Context, channelID, body string) (string, error) {
 		if bridgeURL == "" {
 			return "", fmt.Errorf("PostOperatorSigned: bridge URL is empty")
 		}
-		priv, err := loadSlackOperatorKey(ctx, ssmClient)
+		priv, err := loadSlackOperatorKey(ctx, ssmClient, resourcePrefix)
 		if err != nil {
 			return "", fmt.Errorf("PostOperatorSigned: load key: %w", err)
 		}

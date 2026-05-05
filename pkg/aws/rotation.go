@@ -214,7 +214,7 @@ func UpdateIdentityPublicKey(ctx context.Context, client IdentityTableAPI, table
 //   - oldFP: fingerprint of old key (empty string for fresh sandboxes with no existing key)
 //   - newFP: fingerprint of new key
 //   - err: non-nil on failure
-func RotateSandboxIdentity(ctx context.Context, ssmClient RotationSSMAPI, dynamoClient IdentityTableAPI, sandboxID, kmsKeyID, tableName string) (oldFP, newFP string, err error) {
+func RotateSandboxIdentity(ctx context.Context, ssmClient RotationSSMAPI, dynamoClient IdentityTableAPI, resourcePrefix, sandboxID, kmsKeyID, tableName string) (oldFP, newFP string, err error) {
 	// Step 1: Fetch old public key (nil is valid — fresh sandbox).
 	existing, err := FetchPublicKey(ctx, dynamoClient, tableName, sandboxID)
 	if err != nil {
@@ -232,7 +232,7 @@ func RotateSandboxIdentity(ctx context.Context, ssmClient RotationSSMAPI, dynamo
 
 	// Step 2: Generate new key pair and store private key in SSM.
 	// GenerateSandboxIdentity returns the new public key.
-	newPub, err := GenerateSandboxIdentity(ctx, ssmClient, sandboxID, kmsKeyID)
+	newPub, err := GenerateSandboxIdentity(ctx, ssmClient, resourcePrefix, sandboxID, kmsKeyID)
 	if err != nil {
 		return "", "", fmt.Errorf("generate new signing key for sandbox %s: %w", sandboxID, err)
 	}
@@ -348,15 +348,16 @@ func RotateProxyCACert(ctx context.Context, s3Client RotationS3API, bucket strin
 // ============================================================
 
 // ReEncryptSSMParameters re-encrypts all SSM SecureString parameters under
-// a sandbox's path prefix (/sandbox/{sandboxID}/) with the given KMS key.
+// a sandbox's path prefix (/{resourcePrefix}/sandbox/{sandboxID}/) with the
+// given KMS key.
 //
 // This is used after a KMS key rotation to re-wrap all ciphertext.
 // Uses GetParametersByPath with Recursive=true and WithDecryption=true,
 // then re-writes each parameter with PutParameter(Overwrite=true).
 //
 // Returns the count of parameters re-encrypted, or an error.
-func ReEncryptSSMParameters(ctx context.Context, ssmClient RotationSSMAPI, sandboxID, kmsKeyID string) (int, error) {
-	path := fmt.Sprintf("/sandbox/%s/", sandboxID)
+func ReEncryptSSMParameters(ctx context.Context, ssmClient RotationSSMAPI, resourcePrefix, sandboxID, kmsKeyID string) (int, error) {
+	path := fmt.Sprintf("/%s/sandbox/%s/", resourcePrefix, sandboxID)
 
 	out, err := ssmClient.GetParametersByPath(ctx, &ssm.GetParametersByPathInput{
 		Path:           awssdk.String(path),

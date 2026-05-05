@@ -486,7 +486,7 @@ func rotateGitHubKey(ctx context.Context, out interface{ Write([]byte) (int, err
 
 // rotateSandbox rotates a single sandbox's Ed25519 key and re-encrypts SSM parameters.
 func rotateSandbox(ctx context.Context, out interface{ Write([]byte) (int, error) }, jsonOutput bool, deps *RollDeps, sandboxID, kmsKeyID, tableName, prefix string) error {
-	oldFP, newFP, err := kmaws.RotateSandboxIdentity(ctx, deps.SSMClient, deps.DynamoClient, sandboxID, kmsKeyID, tableName)
+	oldFP, newFP, err := kmaws.RotateSandboxIdentity(ctx, deps.SSMClient, deps.DynamoClient, prefix, sandboxID, kmsKeyID, tableName)
 	if err != nil {
 		return fmt.Errorf("rotate sandbox identity: %w", err)
 	}
@@ -505,7 +505,7 @@ func rotateSandbox(ctx context.Context, out interface{ Write([]byte) (int, error
 	}, prefix)
 
 	// Re-encrypt SSM parameters under the sandbox path
-	count, err := kmaws.ReEncryptSSMParameters(ctx, deps.SSMClient, sandboxID, kmsKeyID)
+	count, err := kmaws.ReEncryptSSMParameters(ctx, deps.SSMClient, prefix, sandboxID, kmsKeyID)
 	if err != nil {
 		return fmt.Errorf("re-encrypt SSM parameters: %w", err)
 	}

@@ -212,12 +212,16 @@ func CompilePermissions(permissions []string) map[string]string {
 // ============================================================
 
 // WriteTokenToSSM writes a GitHub installation token to SSM Parameter Store at
-// /sandbox/{sandboxID}/github-token as a SecureString encrypted with kmsKeyARN.
+// /{resourcePrefix}/sandbox/{sandboxID}/github-token as a SecureString
+// encrypted with kmsKeyARN.
+//
+// resourcePrefix is the km-config.yaml resource_prefix used to scope the SSM
+// path so multi-instance installs don't collide.
 //
 // When overwrite is true, an existing parameter is updated in place (used for refresh).
 // When overwrite is false, creation fails if the parameter already exists.
-func WriteTokenToSSM(ctx context.Context, client SSMAPI, sandboxID, token, kmsKeyARN string, overwrite bool) error {
-	paramName := fmt.Sprintf("/sandbox/%s/github-token", sandboxID)
+func WriteTokenToSSM(ctx context.Context, client SSMAPI, resourcePrefix, sandboxID, token, kmsKeyARN string, overwrite bool) error {
+	paramName := fmt.Sprintf("/%s/sandbox/%s/github-token", resourcePrefix, sandboxID)
 	_, err := client.PutParameter(ctx, &ssm.PutParameterInput{
 		Name:      awssdk.String(paramName),
 		Value:     awssdk.String(token),
@@ -239,6 +243,7 @@ func WriteTokenToSSM(ctx context.Context, client SSMAPI, sandboxID, token, kmsKe
 // GitHub token refresher Lambda.
 type TokenRefreshEvent struct {
 	SandboxID      string   `json:"sandbox_id"`
+	ResourcePrefix string   `json:"resource_prefix"`
 	InstallationID string   `json:"installation_id"`
 	SSMParamName   string   `json:"ssm_parameter_name"`
 	KMSKeyARN      string   `json:"kms_key_arn"`
@@ -308,11 +313,11 @@ func (h *TokenRefreshHandler) HandleTokenRefresh(ctx context.Context, event Toke
 	}
 
 	// Step 3: Write token to SSM.
-	paramName := event.SSMParamName
-	if paramName == "" {
-		paramName = fmt.Sprintf("/sandbox/%s/github-token", sandboxID)
+	resourcePrefix := event.ResourcePrefix
+	if resourcePrefix == "" {
+		resourcePrefix = "km"
 	}
-	if err := WriteTokenToSSM(ctx, h.SSMClient, sandboxID, token, event.KMSKeyARN, true); err != nil {
+	if err := WriteTokenToSSM(ctx, h.SSMClient, resourcePrefix, sandboxID, token, event.KMSKeyARN, true); err != nil {
 		log.Error("token_generation_failed",
 			slog.String("event", "token_generation_failed"),
 			slog.String("sandbox_id", sandboxID),

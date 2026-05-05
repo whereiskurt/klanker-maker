@@ -379,7 +379,7 @@ func checkSlackInboundStaleQueues(
 		if sbID == "" || sbID == queueName {
 			continue
 		}
-		paramName := "/sandbox/" + sbID + "/slack-inbound-queue-url"
+		paramName := kmaws.SandboxParameterPath(resourcePrefix, sbID, "slack-inbound-queue-url")
 		_, ssmErr := ssmDeleter.DeleteParameter(ctx, &ssm.DeleteParameterInput{
 			Name: awssdk.String(paramName),
 		})

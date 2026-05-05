@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -178,7 +179,7 @@ func runSlackTeardown(ctx context.Context, awsCfg aws.Config, meta *kmaws.Sandbo
 		region = "us-east-1"
 	}
 	keyLoader := PrivKeyLoaderFunc(func(innerCtx context.Context, _ string) (ed25519.PrivateKey, error) {
-		return loadSlackOperatorKey(innerCtx, ssmClient)
+		return loadSlackOperatorKey(innerCtx, ssmClient, strings.Trim(ssmPrefix, "/"))
 	})
 	_ = destroySlackChannel(ctx, meta, region, ssmStore, keyLoader, BridgePosterFunc(slack.PostToBridge), ssmPrefix)
 
@@ -186,7 +187,7 @@ func runSlackTeardown(ctx context.Context, awsCfg aws.Config, meta *kmaws.Sandbo
 	// parameter that runStep11dInject wrote at create time. Best-effort —
 	// km doctor's stale-parameter check would catch it otherwise.
 	if meta != nil && meta.SandboxID != "" {
-		paramName := "/sandbox/" + meta.SandboxID + "/slack-channel-id"
+		paramName := kmaws.SandboxParameterPath(strings.Trim(ssmPrefix, "/"), meta.SandboxID, "slack-channel-id")
 		if _, err := ssmClient.DeleteParameter(ctx, &ssm.DeleteParameterInput{Name: aws.String(paramName)}); err != nil {
 			var notFound *ssmtypes.ParameterNotFound
 			if !errors.As(err, &notFound) {

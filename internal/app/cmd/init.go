@@ -263,9 +263,9 @@ func runInitDryRun(cfg *config.Config, region string) error {
 
 	// SSM + identity
 	if cfg.SafePhrase != "" {
-		fmt.Printf("  9. Write safe phrase to SSM /km/config/remote-create/safe-phrase\n")
+		fmt.Printf("  9. Write safe phrase to SSM %sconfig/remote-create/safe-phrase\n", cfg.GetSsmPrefix())
 	}
-	fmt.Printf(" 10. Ensure operator email identity (Ed25519 signing key)\n")
+	fmt.Printf(" 10. Ensure operator email identity (Ed25519 signing key at %s)\n", awspkg.SigningKeyPath(cfg.GetResourcePrefix(), "operator"))
 
 	// Terraform modules
 	// Build a map of env vars that runInit would set from config before applying.
@@ -477,7 +477,7 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 			kmsKeyAlias = cfg.GetPlatformKMSAlias()
 		}
 		operatorID := "operator"
-		pubKey, identErr := awspkg.EnsureSandboxIdentity(ctx, ssmClient, operatorID, kmsKeyAlias)
+		pubKey, identErr := awspkg.EnsureSandboxIdentity(ctx, ssmClient, cfg.GetResourcePrefix(), operatorID, kmsKeyAlias)
 		if identErr != nil {
 			fmt.Printf("  ⚠ Operator identity key generation failed: %v\n", identErr)
 		} else {
@@ -520,7 +520,7 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		if cfg.SafePhrase != "" {
 			fmt.Printf("  KM-AUTH:     %s\n", cfg.SafePhrase)
 		}
-		fmt.Printf("  SSM key:     /km/config/remote-create/safe-phrase\n")
+		fmt.Printf("  SSM key:     %sconfig/remote-create/safe-phrase\n", cfg.GetSsmPrefix())
 	}
 
 	return nil

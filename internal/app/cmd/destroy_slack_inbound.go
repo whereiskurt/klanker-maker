@@ -41,8 +41,9 @@ type DDBQueryDeleteAPI interface {
 // All fields are optional: nil pointers / empty strings cause the corresponding
 // step to be skipped (e.g. no QueueURL = drain no-op; nil StopPoller = skip step 1).
 type destroyInboundDeps struct {
-	SandboxID  string
-	InstanceID string
+	SandboxID      string
+	ResourcePrefix string // km-config.yaml resource_prefix for SSM key scoping
+	InstanceID     string
 	// QueueURL is the SQS FIFO queue URL. Empty → drain is a no-op.
 	QueueURL  string
 	ChannelID string
@@ -126,7 +127,7 @@ func drainSlackInbound(ctx context.Context, deps destroyInboundDeps) {
 
 	// Step 5: delete the SSM Parameter Store entry holding the queue URL.
 	if deps.DeleteSSMParameter != nil && deps.SandboxID != "" {
-		paramName := "/sandbox/" + deps.SandboxID + "/slack-inbound-queue-url"
+		paramName := awspkg.SandboxParameterPath(deps.ResourcePrefix, deps.SandboxID, "slack-inbound-queue-url")
 		if err := deps.DeleteSSMParameter(ctx, paramName); err != nil {
 			fmt.Fprintf(os.Stderr, "  ⚠ Slack inbound drain: SSM parameter delete failed: %v (continuing)\n", err)
 		} else {

@@ -281,7 +281,7 @@ func runEmailSend(ctx context.Context, cfg *config.Config, deps *EmailSendDeps, 
 		ssmClient,
 		identityClient,
 		fromAddr, toEmail, subject, body,
-		from, recipientID, tableName, encryptionPolicy,
+		cfg.GetResourcePrefix(), from, recipientID, tableName, encryptionPolicy,
 		emailOpts,
 	); err != nil {
 		return fmt.Errorf("send email: %w", err)
@@ -480,7 +480,7 @@ func runEmailRead(ctx context.Context, cfg *config.Config, deps *EmailReadDeps, 
 
 		// Auto-decrypt if the body is encrypted (regardless of signing status).
 		if parsedMsg.Encrypted && ssmClient != nil {
-			decrypted, decErr := autoDecrypt(ctx, ssmClient, identityClient, tableName, sandboxID, parsedMsg.Body)
+			decrypted, decErr := autoDecrypt(ctx, ssmClient, identityClient, tableName, cfg.GetResourcePrefix(), sandboxID, parsedMsg.Body)
 			if decErr == nil {
 				parsedMsg.Body = decrypted
 			}
@@ -498,9 +498,9 @@ func runEmailRead(ctx context.Context, cfg *config.Config, deps *EmailReadDeps, 
 }
 
 // autoDecrypt fetches the recipient's private key from SSM and decrypts the ciphertext.
-func autoDecrypt(ctx context.Context, ssmClient EmailSSMAPI, identityClient kmaws.IdentityTableAPI, tableName, sandboxID, ciphertextB64 string) (string, error) {
+func autoDecrypt(ctx context.Context, ssmClient EmailSSMAPI, identityClient kmaws.IdentityTableAPI, tableName, resourcePrefix, sandboxID, ciphertextB64 string) (string, error) {
 	// Fetch private key from SSM.
-	keyPath := fmt.Sprintf("/sandbox/%s/encryption-key", sandboxID)
+	keyPath := kmaws.EncryptionKeyPath(resourcePrefix, sandboxID)
 	ssmOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
 		Name:           strPtr(keyPath),
 		WithDecryption: boolPtr(true),

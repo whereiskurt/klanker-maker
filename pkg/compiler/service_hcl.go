@@ -783,7 +783,11 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 	// Empty allowedRepos is treated as deny-by-default (same as nil github config).
 	if p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRepos) > 0 {
 		params.HasGitHub = true
-		params.GitHubSSMPath = fmt.Sprintf("/sandbox/%s/github-token", sandboxID)
+		ec2ResourcePrefix := os.Getenv("KM_RESOURCE_PREFIX")
+		if ec2ResourcePrefix == "" {
+			ec2ResourcePrefix = "km"
+		}
+		params.GitHubSSMPath = fmt.Sprintf("/%s/sandbox/%s/github-token", ec2ResourcePrefix, sandboxID)
 		params.GitHubAllowedRepos = p.Spec.SourceAccess.GitHub.AllowedRepos
 		compiledPerms := pkggithub.CompilePermissions(nil)
 		params.GitHubPermissions = permissionsToHCL(compiledPerms)
@@ -897,7 +901,11 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 	// Empty allowedRepos is treated as deny-by-default (same as nil github config).
 	if p.Spec.SourceAccess.GitHub != nil && len(p.Spec.SourceAccess.GitHub.AllowedRepos) > 0 {
 		params.HasGitHub = true
-		params.GitHubSSMPath = fmt.Sprintf("/sandbox/%s/github-token", sandboxID)
+		ecsResourcePrefix := os.Getenv("KM_RESOURCE_PREFIX")
+		if ecsResourcePrefix == "" {
+			ecsResourcePrefix = "km"
+		}
+		params.GitHubSSMPath = fmt.Sprintf("/%s/sandbox/%s/github-token", ecsResourcePrefix, sandboxID)
 		params.GitHubAllowedRepos = p.Spec.SourceAccess.GitHub.AllowedRepos
 		compiledPerms := pkggithub.CompilePermissions(nil)
 		params.GitHubPermissions = permissionsToHCL(compiledPerms)

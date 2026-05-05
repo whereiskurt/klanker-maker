@@ -165,12 +165,50 @@ func makeIdentityGetItemOutput(sandboxID, pubKeyB64, email string, encKeyB64 str
 }
 
 // ============================================================
+// Key path helpers (resource-prefix scoped)
+// ============================================================
+
+// TestIdentity_SigningKeyPath_ScopesByResourcePrefix asserts SSM signing-key
+// paths are namespaced under /{resource_prefix}/sandbox/... so multiple
+// km installs in the same AWS account can't collide on /sandbox/operator/*.
+func TestIdentity_SigningKeyPath_ScopesByResourcePrefix(t *testing.T) {
+	cases := []struct {
+		prefix, sandboxID, want string
+	}{
+		{"km", "sb-test01", "/km/sandbox/sb-test01/signing-key"},
+		{"kph", "sb-test01", "/kph/sandbox/sb-test01/signing-key"},
+		{"kph", "operator", "/kph/sandbox/operator/signing-key"},
+	}
+	for _, c := range cases {
+		if got := kmaws.SigningKeyPath(c.prefix, c.sandboxID); got != c.want {
+			t.Errorf("SigningKeyPath(%q, %q) = %q; want %q", c.prefix, c.sandboxID, got, c.want)
+		}
+	}
+}
+
+// TestIdentity_EncryptionKeyPath_ScopesByResourcePrefix mirrors the
+// signing-key test for the X25519 encryption key path.
+func TestIdentity_EncryptionKeyPath_ScopesByResourcePrefix(t *testing.T) {
+	cases := []struct {
+		prefix, sandboxID, want string
+	}{
+		{"km", "sb-test01", "/km/sandbox/sb-test01/encryption-key"},
+		{"kph", "sb-test01", "/kph/sandbox/sb-test01/encryption-key"},
+	}
+	for _, c := range cases {
+		if got := kmaws.EncryptionKeyPath(c.prefix, c.sandboxID); got != c.want {
+			t.Errorf("EncryptionKeyPath(%q, %q) = %q; want %q", c.prefix, c.sandboxID, got, c.want)
+		}
+	}
+}
+
+// ============================================================
 // GenerateSandboxIdentity tests
 // ============================================================
 
 func TestIdentity_GenerateSandboxIdentity_SSMPathAndType(t *testing.T) {
 	mockSSM := &mockIdentitySSMAPI{}
-	pubKey, err := kmaws.GenerateSandboxIdentity(context.Background(), mockSSM, "sb-test01", "alias/km-key")
+	pubKey, err := kmaws.GenerateSandboxIdentity(context.Background(), mockSSM, "km", "sb-test01", "alias/km-key")
 	if err != nil {
 		t.Fatalf("GenerateSandboxIdentity returned error: %v", err)
 	}
@@ -180,7 +218,7 @@ func TestIdentity_GenerateSandboxIdentity_SSMPathAndType(t *testing.T) {
 	if mockSSM.putParameterInput == nil {
 		t.Fatal("PutParameter input is nil")
 	}
-	wantPath := "/sandbox/sb-test01/signing-key"
+	wantPath := "/km/sandbox/sb-test01/signing-key"
 	if mockSSM.putParameterInput.Name == nil || *mockSSM.putParameterInput.Name != wantPath {
 		t.Errorf("SSM Name = %v; want %q", mockSSM.putParameterInput.Name, wantPath)
 	}
@@ -202,7 +240,7 @@ func TestIdentity_GenerateSandboxIdentity_SSMPathAndType(t *testing.T) {
 
 func TestIdentity_GenerateSandboxIdentity_PublicKey32Bytes(t *testing.T) {
 	mockSSM := &mockIdentitySSMAPI{}
-	pubKey, err := kmaws.GenerateSandboxIdentity(context.Background(), mockSSM, "sb-test02", "alias/km-key")
+	pubKey, err := kmaws.GenerateSandboxIdentity(context.Background(), mockSSM, "km", "sb-test02", "alias/km-key")
 	if err != nil {
 		t.Fatalf("GenerateSandboxIdentity returned error: %v", err)
 	}
@@ -223,7 +261,7 @@ func TestIdentity_EnsureSandboxIdentity_ExistingKey_ReturnsDerivedPublic(t *test
 	mockSSM := &mockIdentitySSMAPI{
 		getParameterValue: base64.StdEncoding.EncodeToString(priv),
 	}
-	gotPub, err := kmaws.EnsureSandboxIdentity(context.Background(), mockSSM, "operator", "alias/km-key")
+	gotPub, err := kmaws.EnsureSandboxIdentity(context.Background(), mockSSM, "km", "operator", "alias/km-key")
 	if err != nil {
 		t.Fatalf("EnsureSandboxIdentity returned error: %v", err)
 	}
@@ -233,7 +271,7 @@ func TestIdentity_EnsureSandboxIdentity_ExistingKey_ReturnsDerivedPublic(t *test
 	if !bytes.Equal(gotPub, pub) {
 		t.Errorf("public key drift: got != generated")
 	}
-	if mockSSM.getParameterInput == nil || aws.ToString(mockSSM.getParameterInput.Name) != "/sandbox/operator/signing-key" {
+	if mockSSM.getParameterInput == nil || aws.ToString(mockSSM.getParameterInput.Name) != "/km/sandbox/operator/signing-key" {
 		t.Errorf("unexpected GetParameter path: %v", mockSSM.getParameterInput)
 	}
 }
@@ -242,7 +280,7 @@ func TestIdentity_EnsureSandboxIdentity_NotFound_GeneratesNew(t *testing.T) {
 	mockSSM := &mockIdentitySSMAPI{
 		getParameterErr: &ssmtypes.ParameterNotFound{},
 	}
-	pubKey, err := kmaws.EnsureSandboxIdentity(context.Background(), mockSSM, "operator", "alias/km-key")
+	pubKey, err := kmaws.EnsureSandboxIdentity(context.Background(), mockSSM, "km", "operator", "alias/km-key")
 	if err != nil {
 		t.Fatalf("EnsureSandboxIdentity returned error: %v", err)
 	}
@@ -260,14 +298,14 @@ func TestIdentity_EnsureSandboxIdentity_NotFound_GeneratesNew(t *testing.T) {
 
 func TestIdentity_GenerateEncryptionKey_SSMPathAndSize(t *testing.T) {
 	mockSSM := &mockIdentitySSMAPI{}
-	pubKey, err := kmaws.GenerateEncryptionKey(context.Background(), mockSSM, "sb-test03", "alias/km-key")
+	pubKey, err := kmaws.GenerateEncryptionKey(context.Background(), mockSSM, "km", "sb-test03", "alias/km-key")
 	if err != nil {
 		t.Fatalf("GenerateEncryptionKey returned error: %v", err)
 	}
 	if !mockSSM.putParameterCalled {
 		t.Fatal("expected PutParameter to be called")
 	}
-	wantPath := "/sandbox/sb-test03/encryption-key"
+	wantPath := "/km/sandbox/sb-test03/encryption-key"
 	if mockSSM.putParameterInput.Name == nil || *mockSSM.putParameterInput.Name != wantPath {
 		t.Errorf("SSM Name = %v; want %q", mockSSM.putParameterInput.Name, wantPath)
 	}
@@ -529,6 +567,7 @@ func TestIdentity_SendSignedEmail_RawMIMEHeaders(t *testing.T) {
 		"recipient@example.com",    // to
 		"Test subject",             // subject
 		"Hello this is the body.", // body
+		"km",                     // resourcePrefix
 		"sb-sender01",             // sandboxID
 		"sb-recipient01",          // recipientSandboxID
 		"km-identities",           // tableName
@@ -571,7 +610,7 @@ func TestIdentity_SendSignedEmail_BodyMatchesSigningInput(t *testing.T) {
 		sesMock, ssmMock, dynMock,
 		"sb-sender02@example.com", "recip@example.com",
 		"Subject", body,
-		"sb-sender02", "sb-recip02", "km-identities", "off", nil,
+		"km", "sb-sender02", "sb-recip02", "km-identities", "off", nil,
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail error: %v", err)
@@ -608,7 +647,7 @@ func TestIdentity_SendSignedEmail_EncryptionRequired_NoRecipientKey_ReturnsError
 		sesMock, ssmMock, dynMock,
 		"sb-sender03@example.com", "recip@example.com",
 		"Subject", "Body",
-		"sb-sender03", "sb-recip03", "km-identities", "required", nil,
+		"km", "sb-sender03", "sb-recip03", "km-identities", "required", nil,
 	)
 	if err == nil {
 		t.Error("expected error when encryption=required and recipient has no public key")
@@ -639,7 +678,7 @@ func TestIdentity_SendSignedEmail_EncryptionRequired_WithRecipientKey_Encrypted(
 		sesMock, ssmMock, dynMock,
 		"sb-sender04@example.com", "sb-recip04@example.com",
 		"Subject", "Confidential body",
-		"sb-sender04", "sb-recip04", "km-identities", "required", nil,
+		"km", "sb-sender04", "sb-recip04", "km-identities", "required", nil,
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail (required, with key) returned error: %v", err)
@@ -660,7 +699,7 @@ func TestIdentity_SendSignedEmail_EncryptionOptional_NoRecipientKey_SendsPlainte
 		sesMock, ssmMock, dynMock,
 		"sb-sender05@example.com", "recip@example.com",
 		"Subject", "Plain body",
-		"sb-sender05", "sb-recip05", "km-identities", "optional", nil,
+		"km", "sb-sender05", "sb-recip05", "km-identities", "optional", nil,
 	)
 	if err != nil {
 		t.Errorf("SendSignedEmail (optional, no key) should succeed; got: %v", err)
@@ -691,7 +730,7 @@ func TestIdentity_SendSignedEmail_EncryptionOptional_WithRecipientKey_Encrypted(
 		sesMock, ssmMock, dynMock,
 		"sb-sender06@example.com", "sb-recip06@example.com",
 		"Subject", "Secret",
-		"sb-sender06", "sb-recip06", "km-identities", "optional", nil,
+		"km", "sb-sender06", "sb-recip06", "km-identities", "optional", nil,
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail (optional, with key) returned error: %v", err)
@@ -711,7 +750,7 @@ func TestIdentity_SendSignedEmail_EncryptionOff_SkipsFetch(t *testing.T) {
 		sesMock, ssmMock, dynMock,
 		"sb-sender07@example.com", "recip@example.com",
 		"Subject", "Body",
-		"sb-sender07", "sb-recip07", "km-identities", "off", nil,
+		"km", "sb-sender07", "sb-recip07", "km-identities", "off", nil,
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail (off) returned error: %v", err)
@@ -747,7 +786,7 @@ func TestIdentity_SendSignedEmail_EncryptedBCC_SendsPlaintextToOperator(t *testi
 		sesMock, ssmMock, dynMock,
 		"sb-sender-bcc@example.com", "sb-recip-bcc@example.com",
 		"Secret subject", "Top secret body",
-		"sb-sender-bcc", "sb-recip-bcc", "km-identities", "required", opts,
+		"km", "sb-sender-bcc", "sb-recip-bcc", "km-identities", "required", opts,
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail (encrypted+BCC) returned error: %v", err)
@@ -801,7 +840,7 @@ func TestIdentity_SendSignedEmail_UnencryptedBCC_SingleSend(t *testing.T) {
 		sesMock, ssmMock, dynMock,
 		"sb-sender-bcc2@example.com", "recip@example.com",
 		"Subject", "Plain body",
-		"sb-sender-bcc2", "sb-recip-bcc2", "km-identities", "off", opts,
+		"km", "sb-sender-bcc2", "sb-recip-bcc2", "km-identities", "off", opts,
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail (unencrypted+BCC) returned error: %v", err)
@@ -824,7 +863,7 @@ func TestIdentity_Cleanup_DeletesSigningKey(t *testing.T) {
 	mockSSM := &mockIdentitySSMAPI{}
 	mockDyn := &mockIdentityTableAPI{}
 
-	err := kmaws.CleanupSandboxIdentity(context.Background(), mockSSM, mockDyn, "km-identities", "sb-clean01")
+	err := kmaws.CleanupSandboxIdentity(context.Background(), mockSSM, mockDyn, "km-identities", "km", "sb-clean01")
 	if err != nil {
 		t.Fatalf("CleanupSandboxIdentity returned error: %v", err)
 	}
@@ -832,7 +871,7 @@ func TestIdentity_Cleanup_DeletesSigningKey(t *testing.T) {
 	// Should have called DeleteParameter for signing-key
 	var foundSigningKey bool
 	for _, inp := range mockSSM.deleteParameterInputs {
-		if inp.Name != nil && *inp.Name == "/sandbox/sb-clean01/signing-key" {
+		if inp.Name != nil && *inp.Name == "/km/sandbox/sb-clean01/signing-key" {
 			foundSigningKey = true
 		}
 	}
@@ -858,14 +897,14 @@ func TestIdentity_Cleanup_DeletesEncryptionKey(t *testing.T) {
 	mockSSM := &mockIdentitySSMAPI{}
 	mockDyn := &mockIdentityTableAPI{}
 
-	err := kmaws.CleanupSandboxIdentity(context.Background(), mockSSM, mockDyn, "km-identities", "sb-clean02")
+	err := kmaws.CleanupSandboxIdentity(context.Background(), mockSSM, mockDyn, "km-identities", "km", "sb-clean02")
 	if err != nil {
 		t.Fatalf("CleanupSandboxIdentity returned error: %v", err)
 	}
 
 	var foundEncKey bool
 	for _, inp := range mockSSM.deleteParameterInputs {
-		if inp.Name != nil && *inp.Name == "/sandbox/sb-clean02/encryption-key" {
+		if inp.Name != nil && *inp.Name == "/km/sandbox/sb-clean02/encryption-key" {
 			foundEncKey = true
 		}
 	}
@@ -881,7 +920,7 @@ func TestIdentity_Cleanup_IdempotentOnParameterNotFound(t *testing.T) {
 	}
 	mockDyn := &mockIdentityTableAPI{}
 
-	err := kmaws.CleanupSandboxIdentity(context.Background(), mockSSM, mockDyn, "km-identities", "sb-gone")
+	err := kmaws.CleanupSandboxIdentity(context.Background(), mockSSM, mockDyn, "km-identities", "km", "sb-gone")
 	if err != nil {
 		t.Errorf("CleanupSandboxIdentity should return nil for ParameterNotFound, got: %v", err)
 	}
@@ -891,7 +930,7 @@ func TestIdentity_Cleanup_DynamoDeleteItemCalled(t *testing.T) {
 	mockSSM := &mockIdentitySSMAPI{}
 	mockDyn := &mockIdentityTableAPI{}
 
-	err := kmaws.CleanupSandboxIdentity(context.Background(), mockSSM, mockDyn, "km-identities", "sb-clean03")
+	err := kmaws.CleanupSandboxIdentity(context.Background(), mockSSM, mockDyn, "km-identities", "km", "sb-clean03")
 	if err != nil {
 		t.Fatalf("CleanupSandboxIdentity returned error: %v", err)
 	}
@@ -946,7 +985,7 @@ func TestIdentity_EncryptDecrypt_CorrectRoundTrip(t *testing.T) {
 	// Use GenerateEncryptionKey to get a real X25519 key pair via the library
 	// Since GenerateEncryptionKey stores in SSM, we use a mock.
 	mockSSM := &mockIdentitySSMAPI{}
-	encPubKey, err := kmaws.GenerateEncryptionKey(context.Background(), mockSSM, "sb-enc-rt", "alias/km-key")
+	encPubKey, err := kmaws.GenerateEncryptionKey(context.Background(), mockSSM, "km", "sb-enc-rt", "alias/km-key")
 	if err != nil {
 		t.Fatalf("GenerateEncryptionKey: %v", err)
 	}
@@ -1112,7 +1151,7 @@ func TestMultipart_SinglePartBackwardCompat(t *testing.T) {
 		context.Background(),
 		sesMock, ssmMock, dynMock,
 		"from@example.com", "to@example.com", "Subject", "Body text",
-		"sb-mp-back01", "sb-recip-back01", "km-identities", "off", nil,
+		"km", "sb-mp-back01", "sb-recip-back01", "km-identities", "off", nil,
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail (no attachments) returned error: %v", err)
@@ -1138,7 +1177,7 @@ func TestMultipart_OneAttachment(t *testing.T) {
 		context.Background(),
 		sesMock, ssmMock, dynMock,
 		"from@example.com", "to@example.com", "Subject", "Body text",
-		"sb-mp-att01", "sb-recip-att01", "km-identities", "off", &kmaws.EmailOptions{Attachments: attachments},
+		"km", "sb-mp-att01", "sb-recip-att01", "km-identities", "off", &kmaws.EmailOptions{Attachments: attachments},
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail with 1 attachment returned error: %v", err)
@@ -1172,7 +1211,7 @@ func TestMultipart_TwoAttachments(t *testing.T) {
 		context.Background(),
 		sesMock, ssmMock, dynMock,
 		"from@example.com", "to@example.com", "Subject", "Body",
-		"sb-mp-att02", "sb-recip-att02", "km-identities", "off", &kmaws.EmailOptions{Attachments: attachments},
+		"km", "sb-mp-att02", "sb-recip-att02", "km-identities", "off", &kmaws.EmailOptions{Attachments: attachments},
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail with 2 attachments returned error: %v", err)
@@ -1215,7 +1254,7 @@ func TestMultipart_SignatureCoversBodyOnly(t *testing.T) {
 		context.Background(),
 		sesMock, ssmMock, dynMock,
 		"from@example.com", "to@example.com", "Subject", body,
-		"sb-mp-sig01", "sb-recip-sig01", "km-identities", "off", &kmaws.EmailOptions{Attachments: attachments},
+		"km", "sb-mp-sig01", "sb-recip-sig01", "km-identities", "off", &kmaws.EmailOptions{Attachments: attachments},
 	)
 	if err != nil {
 		t.Fatalf("SendSignedEmail (multipart, signature test) returned error: %v", err)
@@ -1272,7 +1311,7 @@ func TestMultipart_RoundTrip(t *testing.T) {
 		context.Background(),
 		sesMock, ssmMock, dynMock,
 		"from@example.com", "to@example.com", "Round-trip subject", body,
-		"sb-rt01", "sb-rt-recv01", "km-identities", "off",
+		"km", "sb-rt01", "sb-rt-recv01", "km-identities", "off",
 		&kmaws.EmailOptions{Attachments: []kmaws.Attachment{att1, att2}},
 	)
 	if err != nil {

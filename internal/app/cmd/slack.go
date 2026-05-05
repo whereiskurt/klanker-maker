@@ -25,6 +25,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
 	"github.com/whereiskurt/klankrmkr/pkg/compiler"
 	kmslack "github.com/whereiskurt/klankrmkr/pkg/slack"
 	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
@@ -682,7 +683,7 @@ func buildSlackCmdDeps(cfg *config.Config) (*SlackCmdDeps, error) {
 		Terragrunt: &slackTerragruntRunner{inner: tgRunner},
 		Prompter:   &slackPrompter{},
 		OperatorKeyLoader: func(ctx context.Context, _ string) (ed25519.PrivateKey, error) {
-			return loadSlackOperatorKey(ctx, ssmClient)
+			return loadSlackOperatorKey(ctx, ssmClient, cfg.GetResourcePrefix())
 		},
 		BridgePoster: kmslack.PostToBridge,
 		BridgeColdStart: func(ctx context.Context) error {
@@ -694,10 +695,12 @@ func buildSlackCmdDeps(cfg *config.Config) (*SlackCmdDeps, error) {
 	}, nil
 }
 
-// loadSlackOperatorKey fetches /sandbox/operator/signing-key from SSM (same path
-// as km email --from operator), base64-decodes it, and returns an Ed25519 private key.
-func loadSlackOperatorKey(ctx context.Context, ssmClient *ssm.Client) (ed25519.PrivateKey, error) {
-	const keyPath = "/sandbox/operator/signing-key"
+// loadSlackOperatorKey fetches the operator's Ed25519 signing key from SSM
+// (the same path the operator-side km email --from operator uses), base64-
+// decodes it, and returns an Ed25519 private key. resourcePrefix is the
+// km-config.yaml resource_prefix used for SSM scoping.
+func loadSlackOperatorKey(ctx context.Context, ssmClient *ssm.Client, resourcePrefix string) (ed25519.PrivateKey, error) {
+	keyPath := kmaws.SigningKeyPath(resourcePrefix, "operator")
 	out, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
 		Name:           aws.String(keyPath),
 		WithDecryption: aws.Bool(true),

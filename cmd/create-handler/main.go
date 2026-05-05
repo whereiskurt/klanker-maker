@@ -257,20 +257,20 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 			log.Warn().Err(profileErr).Str("sandbox_id", event.SandboxID).
 				Msg("failed to parse profile for identity generation (non-fatal)")
 		} else if parsedProfile.Spec.Email != nil {
+			resourcePrefix := os.Getenv("KM_RESOURCE_PREFIX")
+			if resourcePrefix == "" {
+				resourcePrefix = "km"
+			}
 			kmsKeyAlias := os.Getenv("KM_PLATFORM_KMS_KEY_ARN")
 			if kmsKeyAlias == "" {
-				prefix := os.Getenv("KM_RESOURCE_PREFIX")
-				if prefix == "" {
-					prefix = "km"
-				}
 				region := os.Getenv("KM_REGION_LABEL")
 				if region == "" {
 					region = "use1"
 				}
-				kmsKeyAlias = "alias/km-platform-" + prefix + "-" + region
+				kmsKeyAlias = "alias/km-platform-" + resourcePrefix + "-" + region
 			}
 
-			pubKey, identErr := awspkg.EnsureSandboxIdentity(ctx, h.SSMClient, event.SandboxID, kmsKeyAlias)
+			pubKey, identErr := awspkg.EnsureSandboxIdentity(ctx, h.SSMClient, resourcePrefix, event.SandboxID, kmsKeyAlias)
 			if identErr != nil {
 				log.Warn().Err(identErr).Str("sandbox_id", event.SandboxID).
 					Msg("failed to provision sandbox identity (non-fatal)")
@@ -279,7 +279,7 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 				var encPubKey *[32]byte
 				enc := parsedProfile.Spec.Email.Encryption
 				if enc == "optional" || enc == "required" {
-					encPubKey, identErr = awspkg.GenerateEncryptionKey(ctx, h.SSMClient, event.SandboxID, kmsKeyAlias)
+					encPubKey, identErr = awspkg.GenerateEncryptionKey(ctx, h.SSMClient, resourcePrefix, event.SandboxID, kmsKeyAlias)
 					if identErr != nil {
 						log.Warn().Err(identErr).Str("sandbox_id", event.SandboxID).
 							Msg("failed to generate encryption key (non-fatal — signing key still published)")

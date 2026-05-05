@@ -88,14 +88,32 @@ type Attachment struct {
 	Data     []byte
 }
 
-// signingKeyPath returns the SSM parameter path for a sandbox's signing key.
-func signingKeyPath(sandboxID string) string {
-	return fmt.Sprintf("/sandbox/%s/signing-key", sandboxID)
+// SigningKeyPath returns the SSM parameter path for a sandbox's Ed25519
+// signing key, scoped to the given resource_prefix from km-config.yaml.
+//
+// Both operator-side and sandbox-side code MUST resolve the path through
+// this helper: a /sandbox/{id}/signing-key (no prefix) namespace would
+// collide between two km installs (e.g. resource_prefix=km and =kph) in
+// the same AWS account. The prefix-scoped form /{prefix}/sandbox/{id}/signing-key
+// keeps each install in its own SSM tree.
+func SigningKeyPath(resourcePrefix, sandboxID string) string {
+	return fmt.Sprintf("/%s/sandbox/%s/signing-key", resourcePrefix, sandboxID)
 }
 
-// encryptionKeyPath returns the SSM parameter path for a sandbox's encryption key.
-func encryptionKeyPath(sandboxID string) string {
-	return fmt.Sprintf("/sandbox/%s/encryption-key", sandboxID)
+// EncryptionKeyPath returns the SSM parameter path for a sandbox's X25519
+// (NaCl box) encryption key, scoped to the given resource_prefix. Same
+// multi-instance hazard motivates the prefix scope as SigningKeyPath.
+func EncryptionKeyPath(resourcePrefix, sandboxID string) string {
+	return fmt.Sprintf("/%s/sandbox/%s/encryption-key", resourcePrefix, sandboxID)
+}
+
+// SandboxParameterPath returns the SSM parameter path for an arbitrary
+// per-sandbox value (e.g. "github-token", "slack-channel-id",
+// "slack-inbound-queue-url"), scoped to the given resource_prefix.
+// Centralizes the /{prefix}/sandbox/{id}/{suffix} convention so writers
+// and readers can't drift.
+func SandboxParameterPath(resourcePrefix, sandboxID, suffix string) string {
+	return fmt.Sprintf("/%s/sandbox/%s/%s", resourcePrefix, sandboxID, suffix)
 }
 
 // ============================================================
@@ -103,11 +121,14 @@ func encryptionKeyPath(sandboxID string) string {
 // ============================================================
 
 // GenerateSandboxIdentity generates an Ed25519 key pair and stores the private key
-// in SSM Parameter Store as a SecureString at /sandbox/{sandboxID}/signing-key.
+// in SSM Parameter Store as a SecureString at /{resourcePrefix}/sandbox/{sandboxID}/signing-key.
+//
+// resourcePrefix is the km-config.yaml resource_prefix (e.g. "km", "kph") so
+// multi-instance installs don't collide on the SSM namespace.
 //
 // Returns the public key (32 bytes) for DynamoDB publishing.
 // Uses Overwrite=true for retry-safe operation (idempotent on re-run).
-func GenerateSandboxIdentity(ctx context.Context, ssmClient IdentitySSMAPI, sandboxID, kmsKeyID string) (ed25519.PublicKey, error) {
+func GenerateSandboxIdentity(ctx context.Context, ssmClient IdentitySSMAPI, resourcePrefix, sandboxID, kmsKeyID string) (ed25519.PublicKey, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generate Ed25519 key pair for sandbox %s: %w", sandboxID, err)
@@ -115,7 +136,7 @@ func GenerateSandboxIdentity(ctx context.Context, ssmClient IdentitySSMAPI, sand
 
 	// Store the full 64-byte private key (seed + public) as base64
 	privB64 := base64.StdEncoding.EncodeToString([]byte(priv))
-	path := signingKeyPath(sandboxID)
+	path := SigningKeyPath(resourcePrefix, sandboxID)
 
 	_, err = ssmClient.PutParameter(ctx, &ssm.PutParameterInput{
 		Name:      awssdk.String(path),
@@ -135,6 +156,9 @@ func GenerateSandboxIdentity(ctx context.Context, ssmClient IdentitySSMAPI, sand
 // or generates a new key pair if none exists. Idempotent across multiple calls
 // — safe for `km init` step 3b which re-runs on every platform init.
 //
+// resourcePrefix is the km-config.yaml resource_prefix (e.g. "km", "kph"); see
+// SigningKeyPath for the multi-instance scoping rationale.
+//
 // Behavior:
 //   - SSM has signing key → derive and return public key from existing private key
 //   - SSM has no key → call GenerateSandboxIdentity (generates + stores)
@@ -142,8 +166,8 @@ func GenerateSandboxIdentity(ctx context.Context, ssmClient IdentitySSMAPI, sand
 // Why this exists: GenerateSandboxIdentity unconditionally rotates the SSM key.
 // Pairing it with PublishIdentity (which uses attribute_not_exists) silently drifts
 // the SSM private key away from the published DynamoDB public key on re-runs.
-func EnsureSandboxIdentity(ctx context.Context, ssmClient IdentitySSMAPI, sandboxID, kmsKeyID string) (ed25519.PublicKey, error) {
-	keyPath := signingKeyPath(sandboxID)
+func EnsureSandboxIdentity(ctx context.Context, ssmClient IdentitySSMAPI, resourcePrefix, sandboxID, kmsKeyID string) (ed25519.PublicKey, error) {
+	keyPath := SigningKeyPath(resourcePrefix, sandboxID)
 	out, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
 		Name:           awssdk.String(keyPath),
 		WithDecryption: awssdk.Bool(true),
@@ -151,12 +175,12 @@ func EnsureSandboxIdentity(ctx context.Context, ssmClient IdentitySSMAPI, sandbo
 	if err != nil {
 		var notFound *ssmtypes.ParameterNotFound
 		if errors.As(err, &notFound) {
-			return GenerateSandboxIdentity(ctx, ssmClient, sandboxID, kmsKeyID)
+			return GenerateSandboxIdentity(ctx, ssmClient, resourcePrefix, sandboxID, kmsKeyID)
 		}
 		return nil, fmt.Errorf("get signing key from SSM at %s: %w", keyPath, err)
 	}
 	if out.Parameter == nil || out.Parameter.Value == nil {
-		return GenerateSandboxIdentity(ctx, ssmClient, sandboxID, kmsKeyID)
+		return GenerateSandboxIdentity(ctx, ssmClient, resourcePrefix, sandboxID, kmsKeyID)
 	}
 	raw, err := base64.StdEncoding.DecodeString(*out.Parameter.Value)
 	if err != nil {
@@ -169,18 +193,21 @@ func EnsureSandboxIdentity(ctx context.Context, ssmClient IdentitySSMAPI, sandbo
 }
 
 // GenerateEncryptionKey generates an X25519 (NaCl box) key pair and stores the private key
-// in SSM Parameter Store at /sandbox/{sandboxID}/encryption-key.
+// in SSM Parameter Store at /{resourcePrefix}/sandbox/{sandboxID}/encryption-key.
+//
+// resourcePrefix is the km-config.yaml resource_prefix; see EncryptionKeyPath
+// for the multi-instance scoping rationale.
 //
 // Returns a pointer to the 32-byte public key for DynamoDB publishing.
 // This key pair is separate from the Ed25519 signing key (per research recommendation).
-func GenerateEncryptionKey(ctx context.Context, ssmClient IdentitySSMAPI, sandboxID, kmsKeyID string) (*[32]byte, error) {
+func GenerateEncryptionKey(ctx context.Context, ssmClient IdentitySSMAPI, resourcePrefix, sandboxID, kmsKeyID string) (*[32]byte, error) {
 	encPub, encPriv, err := box.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generate X25519 encryption key pair for sandbox %s: %w", sandboxID, err)
 	}
 
 	privB64 := base64.StdEncoding.EncodeToString(encPriv[:])
-	path := encryptionKeyPath(sandboxID)
+	path := EncryptionKeyPath(resourcePrefix, sandboxID)
 
 	_, err = ssmClient.PutParameter(ctx, &ssm.PutParameterInput{
 		Name:      awssdk.String(path),
@@ -570,6 +597,7 @@ func DecryptFromSender(privKey *[32]byte, pubKey *[32]byte, ciphertext []byte) (
 //   - ssmClient: SSM client for reading the signing key
 //   - identityClient: DynamoDB client for fetching recipient's public key
 //   - from, to, subject, body: email fields
+//   - resourcePrefix: km-config.yaml resource_prefix for SSM scoping (see SigningKeyPath)
 //   - sandboxID: sender's sandbox ID (used for SSM key path and X-KM-Sender-ID header)
 //   - recipientSandboxID: recipient's sandbox ID for DynamoDB identity lookup
 //   - tableName: DynamoDB identities table name
@@ -581,14 +609,14 @@ func SendSignedEmail(
 	ssmClient IdentitySSMAPI,
 	identityClient IdentityTableAPI,
 	from, to, subject, body string,
-	sandboxID, recipientSandboxID, tableName, encryptionPolicy string,
+	resourcePrefix, sandboxID, recipientSandboxID, tableName, encryptionPolicy string,
 	opts *EmailOptions,
 ) error {
 	if opts == nil {
 		opts = &EmailOptions{}
 	}
 	// Step 1: Read signing key from SSM
-	keyPath := signingKeyPath(sandboxID)
+	keyPath := SigningKeyPath(resourcePrefix, sandboxID)
 	ssmOut, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
 		Name:           awssdk.String(keyPath),
 		WithDecryption: awssdk.Bool(true),
@@ -807,16 +835,19 @@ func generateMIMEBoundary() string {
 
 // CleanupSandboxIdentity removes a sandbox's keys from SSM and DynamoDB.
 //
+// resourcePrefix is the km-config.yaml resource_prefix used to derive the
+// SSM key paths via SigningKeyPath / EncryptionKeyPath.
+//
 // Idempotent: SSM ParameterNotFound is swallowed (safe for retried km destroy).
 // DynamoDB DeleteItem is a no-op for missing keys.
-func CleanupSandboxIdentity(ctx context.Context, ssmClient IdentitySSMAPI, dynClient IdentityTableAPI, tableName, sandboxID string) error {
+func CleanupSandboxIdentity(ctx context.Context, ssmClient IdentitySSMAPI, dynClient IdentityTableAPI, tableName, resourcePrefix, sandboxID string) error {
 	// Delete signing key from SSM
-	if err := deleteSSMParameter(ctx, ssmClient, signingKeyPath(sandboxID)); err != nil {
+	if err := deleteSSMParameter(ctx, ssmClient, SigningKeyPath(resourcePrefix, sandboxID)); err != nil {
 		return err
 	}
 
 	// Delete encryption key from SSM
-	if err := deleteSSMParameter(ctx, ssmClient, encryptionKeyPath(sandboxID)); err != nil {
+	if err := deleteSSMParameter(ctx, ssmClient, EncryptionKeyPath(resourcePrefix, sandboxID)); err != nil {
 		return err
 	}
 

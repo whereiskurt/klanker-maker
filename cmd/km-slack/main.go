@@ -314,15 +314,24 @@ func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL,
 	return nil
 }
 
-// loadPrivateKey fetches /sandbox/{sandboxID}/signing-key from SSM (decrypted),
-// base64-decodes, returns an ed25519.PrivateKey using the first 32 bytes as seed.
+// loadPrivateKey fetches /{resource_prefix}/sandbox/{sandboxID}/signing-key
+// from SSM (decrypted), base64-decodes, returns an ed25519.PrivateKey using
+// the first 32 bytes as seed.
+//
+// resource_prefix is read from KM_RESOURCE_PREFIX (defaults to "km") so this
+// binary, deployed to a sandbox, picks the same SSM namespace the operator-
+// side km create wrote the key into.
 func loadPrivateKey(ctx context.Context, region, sandboxID string) (ed25519.PrivateKey, error) {
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
 	if err != nil {
 		return nil, err
 	}
 	client := ssm.NewFromConfig(cfg)
-	keyPath := fmt.Sprintf("/sandbox/%s/signing-key", sandboxID)
+	resourcePrefix := os.Getenv("KM_RESOURCE_PREFIX")
+	if resourcePrefix == "" {
+		resourcePrefix = "km"
+	}
+	keyPath := fmt.Sprintf("/%s/sandbox/%s/signing-key", resourcePrefix, sandboxID)
 	out, err := client.GetParameter(ctx, &ssm.GetParameterInput{
 		Name:           aws.String(keyPath),
 		WithDecryption: aws.Bool(true),

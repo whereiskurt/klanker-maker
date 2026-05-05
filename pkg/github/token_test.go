@@ -400,15 +400,15 @@ func TestExchangeForInstallationToken_RepoShortNames(t *testing.T) {
 
 func TestWriteTokenToSSM_Success(t *testing.T) {
 	mock := &github.MockSSMClient{}
-	err := github.WriteTokenToSSM(context.Background(), mock, "sb-abc123", "ghs_token", "arn:aws:kms:us-east-1:123:key/abc", true)
+	err := github.WriteTokenToSSM(context.Background(), mock, "km", "sb-abc123", "ghs_token", "arn:aws:kms:us-east-1:123:key/abc", true)
 	if err != nil {
 		t.Fatalf("WriteTokenToSSM: %v", err)
 	}
 	if mock.PutParameterCallCount != 1 {
 		t.Errorf("expected 1 PutParameter call, got %d", mock.PutParameterCallCount)
 	}
-	if mock.LastName != "/sandbox/sb-abc123/github-token" {
-		t.Errorf("expected path /sandbox/sb-abc123/github-token, got %q", mock.LastName)
+	if mock.LastName != "/km/sandbox/sb-abc123/github-token" {
+		t.Errorf("expected path /km/sandbox/sb-abc123/github-token, got %q", mock.LastName)
 	}
 	if mock.LastValue != "ghs_token" {
 		t.Errorf("expected value ghs_token, got %q", mock.LastValue)
@@ -417,7 +417,7 @@ func TestWriteTokenToSSM_Success(t *testing.T) {
 
 func TestWriteTokenToSSM_Error(t *testing.T) {
 	mock := &github.MockSSMClient{Err: fmt.Errorf("ssm unavailable")}
-	err := github.WriteTokenToSSM(context.Background(), mock, "sb-xyz", "tok", "arn:aws:kms:us-east-1:123:key/xyz", true)
+	err := github.WriteTokenToSSM(context.Background(), mock, "km", "sb-xyz", "tok", "arn:aws:kms:us-east-1:123:key/xyz", true)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
