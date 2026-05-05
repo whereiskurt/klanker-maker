@@ -29,6 +29,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	smithy "github.com/aws/smithy-go"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 	"github.com/whereiskurt/klankrmkr/pkg/compiler"
@@ -349,11 +350,22 @@ func emptyAndDeleteBucket(ctx context.Context, client UnbootstrapS3API, bucket s
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "Tearing down S3 bucket %s...\n", bucket)
 
-	// Existence check — a NoSuchBucket here just means "already cleaned up".
+	// Existence check. Any "doesn't exist" signal means "already cleaned up".
+	// HeadBucket has TWO ways to say not-found, and we have to handle both:
+	//   1. Typed *s3types.NoSuchBucket (rare from HeadBucket, common from
+	//      other ops like GetObject)
+	//   2. Generic HTTP 404 wrapped in smithy.APIError with ErrorCode "NotFound"
+	//      (what HeadBucket actually returns in practice — confirmed against
+	//      real AWS in 2026-05).
 	_, err := client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucket)})
 	if err != nil {
 		var nsb *s3types.NoSuchBucket
 		if errors.As(err, &nsb) {
+			fmt.Fprintln(out, "  Bucket does not exist; nothing to do.")
+			return nil
+		}
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) && (apiErr.ErrorCode() == "NotFound" || apiErr.ErrorCode() == "NoSuchBucket") {
 			fmt.Fprintln(out, "  Bucket does not exist; nothing to do.")
 			return nil
 		}

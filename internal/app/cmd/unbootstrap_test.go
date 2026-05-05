@@ -16,6 +16,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 
+	smithy "github.com/aws/smithy-go"
+
 	"github.com/whereiskurt/klankrmkr/internal/app/cmd"
 	"github.com/whereiskurt/klankrmkr/internal/app/config"
 )
@@ -256,6 +258,61 @@ func TestUnbootstrapBucketAbsentIsNotAnError(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "does not exist") {
 		t.Errorf("expected 'does not exist' message in output, got: %s", out.String())
+	}
+}
+
+// smithyAPIError mimics the smithy.APIError shape returned by AWS SDK v2
+// when an operation fails with an HTTP-level error like 404 NotFound.
+// HeadBucket returns this (NOT *s3types.NoSuchBucket) when a bucket is
+// missing — confirmed against real AWS in 2026-05 against an already-deleted
+// km-artifacts bucket.
+//
+// Must use real smithy.ErrorFault as the return type so this satisfies the
+// smithy.APIError interface — otherwise errors.As(err, &smithy.APIError) in
+// production code won't match this fake.
+type smithyAPIError struct {
+	code    string
+	message string
+}
+
+func (e *smithyAPIError) Error() string             { return e.code + ": " + e.message }
+func (e *smithyAPIError) ErrorCode() string         { return e.code }
+func (e *smithyAPIError) ErrorMessage() string      { return e.message }
+func (e *smithyAPIError) ErrorFault() smithy.ErrorFault {
+	return smithy.FaultClient
+}
+
+// fakeS3WithGenericNotFound returns a smithy.APIError-shaped 404 from
+// HeadBucket — the actual error type real AWS returns for a missing bucket.
+type fakeS3WithGenericNotFound struct{ fakeUnbootstrapS3 }
+
+func (f *fakeS3WithGenericNotFound) HeadBucket(_ context.Context, _ *s3.HeadBucketInput, _ ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
+	return nil, &smithyAPIError{code: "NotFound", message: "Not Found"}
+}
+
+// TestUnbootstrapBucketAbsentSmithy404 covers the production failure mode:
+// HeadBucket on a missing bucket returns a generic smithy.APIError with code
+// "NotFound" rather than the typed *s3types.NoSuchBucket. Without explicit
+// handling for this shape, unbootstrap would surface a "teardown failed"
+// warning every time an operator re-ran unbootstrap (idempotency broken).
+func TestUnbootstrapBucketAbsentSmithy404(t *testing.T) {
+	cfg := &config.Config{
+		ResourcePrefix:  "kph",
+		ArtifactsBucket: "km-artifacts-kph-abc123",
+	}
+	deps := cmd.UnbootstrapDeps{S3: &fakeS3WithGenericNotFound{}}
+
+	var out bytes.Buffer
+	err := cmd.RunUnbootstrapWithDeps(cfg, deps, cmd.UnbootstrapOpts{Region: "us-east-1"}, &out)
+	if err != nil {
+		t.Fatalf("expected nil error on smithy.APIError NotFound, got: %v", err)
+	}
+	if !strings.Contains(out.String(), "does not exist") {
+		t.Errorf("expected 'does not exist' message, got: %s", out.String())
+	}
+	// And critically — no "teardown failed" warning that would scare the operator.
+	if strings.Contains(out.String(), "teardown failed") {
+		t.Errorf("expected idempotent skip, but output contains 'teardown failed': %s", out.String())
 	}
 }
 
