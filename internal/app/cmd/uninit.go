@@ -83,24 +83,11 @@ func runUninit(cfg *config.Config, awsProfile, region string, force bool, verbos
 	}
 
 	// Export config values as env vars for Terragrunt's site.hcl get_env() calls.
-	if cfg.ArtifactsBucket != "" && os.Getenv("KM_ARTIFACTS_BUCKET") == "" {
-		os.Setenv("KM_ARTIFACTS_BUCKET", cfg.ArtifactsBucket)
-	}
-	if cfg.OrganizationAccountID != "" && os.Getenv("KM_ACCOUNTS_ORGANIZATION") == "" {
-		os.Setenv("KM_ACCOUNTS_ORGANIZATION", cfg.OrganizationAccountID)
-	}
-	if cfg.DNSParentAccountID != "" && os.Getenv("KM_ACCOUNTS_DNS_PARENT") == "" {
-		os.Setenv("KM_ACCOUNTS_DNS_PARENT", cfg.DNSParentAccountID)
-	}
-	if cfg.ApplicationAccountID != "" && os.Getenv("KM_ACCOUNTS_APPLICATION") == "" {
-		os.Setenv("KM_ACCOUNTS_APPLICATION", cfg.ApplicationAccountID)
-	}
-	if cfg.Domain != "" && os.Getenv("KM_DOMAIN") == "" {
-		os.Setenv("KM_DOMAIN", cfg.Domain)
-	}
-	if cfg.PrimaryRegion != "" && os.Getenv("KM_REGION") == "" {
-		os.Setenv("KM_REGION", cfg.PrimaryRegion)
-	}
+	// Use the canonical helper so KM_RESOURCE_PREFIX (and other Phase-66 vars)
+	// are included — the previous hand-rolled copy missed those, which made
+	// terragrunt resolve the backend bucket as tf-km-state-* instead of the
+	// operator's tf-{prefix}-state-* and fail with HeadBucket 403.
+	ExportConfigEnvVars(cfg)
 	if cfg.Route53ZoneID != "" && os.Getenv("KM_ROUTE53_ZONE_ID") == "" {
 		os.Setenv("KM_ROUTE53_ZONE_ID", cfg.Route53ZoneID)
 	}

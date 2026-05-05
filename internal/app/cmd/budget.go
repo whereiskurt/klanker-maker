@@ -394,6 +394,13 @@ func reprovisionECSSandbox(ctx context.Context, cfg *config.Config, sandboxID, a
 	if err := terragrunt.PopulateSandboxDir(sandboxDir, artifacts.ServiceHCL, artifacts.UserData); err != nil {
 		return fmt.Errorf("populate sandbox dir: %w", err)
 	}
+
+	// Export config-derived env vars so terragrunt's site.hcl resolves the
+	// backend bucket against the operator's resource_prefix. Same pattern as
+	// runInit / slack.go / destroy.go — without this, non-default prefix
+	// installs hit 403 HeadBucket on terragrunt apply.
+	ExportConfigEnvVars(cfg)
+
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
 	return runner.Apply(ctx, sandboxDir)
 }

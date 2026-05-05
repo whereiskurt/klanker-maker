@@ -242,6 +242,12 @@ locals {
 	}
 	_ = regionLabel // used above for directory creation
 
+	// Export config-derived env vars so terragrunt's site.hcl resolves the
+	// backend bucket against the operator's resource_prefix (tf-{prefix}-state-{region})
+	// instead of the default "km" prefix. Without this, non-default installs hit
+	// 403 HeadBucket on terragrunt apply/destroy. Same pattern as runInit / slack.go.
+	ExportConfigEnvVars(cfg)
+
 	// Step 5: For EC2 substrate, explicitly terminate spot instance before destroy.
 	// Critical: aws_spot_instance_request destroy cancels the spot REQUEST but leaves
 	// the actual EC2 instance running. Explicit termination is required (Pitfall 1).

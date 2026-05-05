@@ -338,6 +338,12 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		return fmt.Errorf("AWS credential validation failed — check that profile %q is configured: %w", awsProfile, err)
 	}
 
+	// Export config-derived env vars so terragrunt's site.hcl resolves the
+	// backend bucket against the operator's resource_prefix. Local-substrate
+	// km create runs terragrunt directly; without this, non-default prefix
+	// installs hit 403 HeadBucket. Same pattern as runInit / slack.go.
+	ExportConfigEnvVars(cfg)
+
 	// Step 5c: Enforce sandbox limit before any provisioning.
 	if cfg.StateBucket != "" {
 		s3Client := s3.NewFromConfig(awsCfg)
