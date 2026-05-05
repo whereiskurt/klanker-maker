@@ -1526,4 +1526,17 @@ Plans:
   10. `km doctor` runs `playbook_runner_service_active`, `playbook_queue_exists`, `playbook_dlq_depth` checks green on healthy installs and red on broken
   11. `km destroy sb-ops` atomically deletes per-sandbox FIFO + DLQ + SSM param; `playbook-runs` and `playbook-sessions` rows retained (history); `km playbook delete` clears playbook-scoped state
   12. Operator-notify hook gains `kind: playbook-run-completed` payload (`playbook`, `sandbox_id`, `run_id`, `status`, `steps_completed`, `steps_total`, `duration_seconds`, `error_msg`); existing Phase 62/63 formatter routes to email and Slack with no new transport code
-**Plans:** TBD (created by `/gsd:plan-phase 71`)
+**Plans:** 11 plans
+
+Plans:
+- [ ] 71-00-PLAN.md — Wave 0 stubs: pkg/playbook + pkg/playbook/runner skeletons, 20 test stub files (one per Wave 1+ test target), 6 YAML testdata fixtures (one per SC-1 invalid-rule variant)
+- [ ] 71-01-PLAN.md — pkg/profile.PlaybookEnabled (bool, no cross-field rules) + JSON schema entry; pkg/playbook Parse + Validate with field-path errors covering all SPEC § Validation rules (closes SC-1 at the package layer)
+- [ ] 71-02-PLAN.md — Three DDB Terraform modules (dynamodb-{playbooks,playbook-sessions,playbook-runs}/v1.0.0/) + matching Terragrunt live entries + Go-side GetPlaybook*TableName helpers in pkg/aws/config.go (multi-instance prefix-aware)
+- [ ] 71-03-PLAN.md — pkg/aws/sqs.go gains PlaybookQueueName, PlaybookDLQName, CreatePlaybookQueues (two-step DLQ flow with RedrivePolicy maxReceiveCount=5), DeletePlaybookQueues (idempotent)
+- [ ] 71-04-PLAN.md — TTL Lambda playbook-run event handler (cmd/ttl-handler) covering {running, stopped, paused, terminated, missing} sandbox states, mints pr-{uuid} run_ids, sends SQS FIFO with MessageGroupId=playbook:{name}; ttl-handler Terraform module IAM policies + env vars extended for SQS + 3 playbook DDB tables
+- [ ] 71-05-PLAN.md — pkg/compiler/userdata.go conditional bash runner heredoc + systemd unit (EnvironmentFile=-/etc/km/notify.env per CLAUDE.md gotcha) + km-notify-hook playbook-run-completed case + env-file injection; pkg/playbook/runner Go shim with TestSessionResume + TestStepFailure (bash heredoc is production runner per Phase 67 precedent — Go is unit-testable shadow)
+- [ ] 71-06-PLAN.md — pkg/playbook/apply.go (content-addressed S3 + idempotent DDB) + internal/app/cmd/playbook.go cobra group with all 10 sub-commands (validate/apply/list/show/run/list-runs/show-run/logs/cancel-run/delete) wired into root.go with DI per at_test.go convention
+- [ ] 71-07-PLAN.md — internal/app/cmd/at.go three-point edit: schedulableCommands map entry, two-word command merge (playbook + run -> playbook-run), buildTargetInput branch reading --sandbox flag (with ResolveSandboxID guard for the playbook-name positional arg)
+- [ ] 71-08-PLAN.md — Lifecycle wiring: create_playbook.go (provision queue + SSM param + DDB row) + destroy_playbook.go (teardown preserving playbook-runs + playbook-sessions history per SC-11) + create.go/destroy.go integration + km init wiring of 3 DDB modules + ttl-handler terragrunt deps
+- [ ] 71-09-PLAN.md — internal/app/cmd/doctor_playbook.go three checks: playbook_queue_exists, playbook_dlq_depth, playbook_queue_healthy (renamed from SPEC playbook_runner_service_active per planner finding #9 — uses SQS attrs as runner liveness proxy since systemd state is not operator-side observable under SCP)
+- [ ] 71-10-PLAN.md — Closeout: docs/playbooks.md operator guide + CLAUDE.md update + playbooks/morning-ops.yaml reference + 2 integration tests (concurrent serialization SC-8 + crash recovery SC-9 with build tag) + 71-UAT.md (10 manual scenarios) + 71-VALIDATION.md Per-Task Verification Map populated; ends in operator UAT checkpoint
