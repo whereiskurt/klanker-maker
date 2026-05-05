@@ -545,3 +545,104 @@ accounts:
 		t.Errorf("OrganizationAccountID: expected empty string for missing key, got %q", cfg.OrganizationAccountID)
 	}
 }
+
+// TestContainerSubstratesEnabled_DefaultUnset verifies that when the operator
+// hasn't set container_substrates_enabled, ShouldBuildContainerImages returns
+// true (back-compat: existing installs continue building images).
+func TestContainerSubstratesEnabled_DefaultUnset(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: test.example.com
+`)
+
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.ContainerSubstratesEnabled != nil {
+		t.Errorf("ContainerSubstratesEnabled: expected nil pointer when unset, got %v", *cfg.ContainerSubstratesEnabled)
+	}
+	if !cfg.ShouldBuildContainerImages() {
+		t.Error("ShouldBuildContainerImages: expected true (back-compat default) when unset, got false")
+	}
+}
+
+// TestContainerSubstratesEnabled_ExplicitFalse verifies that
+// container_substrates_enabled: false in km-config.yaml is honored — operators
+// who only use EC2 sandboxes can disable ECR builds and skip ~2-10 min/init.
+func TestContainerSubstratesEnabled_ExplicitFalse(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: test.example.com
+container_substrates_enabled: false
+`)
+
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.ContainerSubstratesEnabled == nil {
+		t.Fatal("ContainerSubstratesEnabled: expected non-nil pointer when explicitly set, got nil")
+	}
+	if *cfg.ContainerSubstratesEnabled != false {
+		t.Errorf("ContainerSubstratesEnabled: expected false, got %v", *cfg.ContainerSubstratesEnabled)
+	}
+	if cfg.ShouldBuildContainerImages() {
+		t.Error("ShouldBuildContainerImages: expected false when container_substrates_enabled=false, got true")
+	}
+}
+
+// TestContainerSubstratesEnabled_ExplicitTrue verifies that
+// container_substrates_enabled: true in km-config.yaml round-trips and is the
+// same as the default — distinguishes "explicitly opted in" from "unset".
+func TestContainerSubstratesEnabled_ExplicitTrue(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: test.example.com
+container_substrates_enabled: true
+`)
+
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.ContainerSubstratesEnabled == nil {
+		t.Fatal("ContainerSubstratesEnabled: expected non-nil pointer when explicitly set, got nil")
+	}
+	if *cfg.ContainerSubstratesEnabled != true {
+		t.Errorf("ContainerSubstratesEnabled: expected true, got %v", *cfg.ContainerSubstratesEnabled)
+	}
+	if !cfg.ShouldBuildContainerImages() {
+		t.Error("ShouldBuildContainerImages: expected true when container_substrates_enabled=true, got false")
+	}
+}
+
+// TestShouldBuildContainerImages_NilReceiver verifies the helper is safe on a
+// nil *Config (defensive — callers occasionally use it on optional config).
+func TestShouldBuildContainerImages_NilReceiver(t *testing.T) {
+	var cfg *config.Config
+	if !cfg.ShouldBuildContainerImages() {
+		t.Error("ShouldBuildContainerImages on nil *Config: expected true (default), got false")
+	}
+}

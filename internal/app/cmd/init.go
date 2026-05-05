@@ -247,8 +247,13 @@ func runInitDryRun(cfg *config.Config, region string) error {
 	fmt.Printf("  2. Build Lambda zips\n")
 	if cfg.ArtifactsBucket != "" {
 		fmt.Printf("  3. Build and upload sidecars to s3://%s\n", cfg.ArtifactsBucket)
-		fmt.Printf("  4. Build and push km-sandbox container image to ECR\n")
-		fmt.Printf("  5. Build and push sidecar container images to ECR\n")
+		if cfg.ShouldBuildContainerImages() {
+			fmt.Printf("  4. Build and push km-sandbox container image to ECR\n")
+			fmt.Printf("  5. Build and push sidecar container images to ECR\n")
+		} else {
+			fmt.Printf("  4. [skip] km-sandbox ECR image — container_substrates_enabled=false\n")
+			fmt.Printf("  5. [skip] sidecar ECR images — container_substrates_enabled=false\n")
+		}
 		fmt.Printf("  6. Upload create-handler toolchain to s3://%s\n", cfg.ArtifactsBucket)
 		fmt.Printf("  7. Force create-handler Lambda cold start\n")
 		fmt.Printf("  8. Ensure proxy CA certificate in s3://%s\n", cfg.ArtifactsBucket)
@@ -361,22 +366,31 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		fmt.Printf("  [skip] artifacts_bucket not configured\n")
 	}
 
-	// Step 2a: Build and push km-sandbox container image to ECR
-	fmt.Println()
-	fmt.Printf("Building and pushing km-sandbox image [%s]...\n", version.String())
-	if err := buildAndPushSandboxImage(repoRoot, cfg); err != nil {
-		fmt.Printf("  [warn] Sandbox image build/push failed: %v\n", err)
-	} else {
-		fmt.Printf("  km-sandbox image pushed to ECR\n")
-	}
+	// Step 2a: Build and push km-sandbox container image to ECR.
+	// Skip when container_substrates_enabled=false — container images are only
+	// pulled by the docker and ecs substrates. EC2 sandboxes get raw binaries
+	// from S3 (Step 2 above), so EC2-only deployments can save ~2–10 min/init
+	// by disabling this in km-config.yaml.
+	if cfg.ShouldBuildContainerImages() {
+		fmt.Println()
+		fmt.Printf("Building and pushing km-sandbox image [%s]...\n", version.String())
+		if err := buildAndPushSandboxImage(repoRoot, cfg); err != nil {
+			fmt.Printf("  [warn] Sandbox image build/push failed: %v\n", err)
+		} else {
+			fmt.Printf("  km-sandbox image pushed to ECR\n")
+		}
 
-	// Step 2a.1: Build and push sidecar container images to ECR
-	fmt.Println()
-	fmt.Printf("Building and pushing sidecar images [%s]...\n", version.String())
-	if err := buildAndPushSidecarImages(repoRoot, cfg); err != nil {
-		fmt.Printf("  [warn] Sidecar image build/push failed: %v\n", err)
+		// Step 2a.1: Build and push sidecar container images to ECR
+		fmt.Println()
+		fmt.Printf("Building and pushing sidecar images [%s]...\n", version.String())
+		if err := buildAndPushSidecarImages(repoRoot, cfg); err != nil {
+			fmt.Printf("  [warn] Sidecar image build/push failed: %v\n", err)
+		} else {
+			fmt.Printf("  All sidecar images pushed to ECR\n")
+		}
 	} else {
-		fmt.Printf("  All sidecar images pushed to ECR\n")
+		fmt.Println()
+		fmt.Println("Skipping ECR image builds — container_substrates_enabled=false (EC2-only deployment)")
 	}
 
 	// Step 2b: Upload create-handler toolchain (km + terraform + terragrunt + infra/) to S3

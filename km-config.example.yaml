@@ -62,6 +62,15 @@ safe_phrase: change-me-to-something-unique   # [REQUIRED]
 # verification (DKIM, MX records).
 # email_subdomain: sandboxes
 
+# Build and push the km-sandbox + sidecar container images to ECR during
+# `km init`. Container images are only pulled by the `docker` and `ecs`
+# substrates; EC2 sandboxes get raw binaries from S3, so EC2-only
+# deployments can set this to false and save ~2–10 min per `km init`.
+# Default: true (preserves current behavior). Setting to false will cause
+# `km create --docker` (or any profile with substrate: docker/ecs) to fail
+# fast with a clear error pointing back at this knob.
+# container_substrates_enabled: true
+
 # =============================================================================
 # AUTO-POPULATED by km init — uncomment to override
 # =============================================================================

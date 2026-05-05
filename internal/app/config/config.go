@@ -162,6 +162,16 @@ type Config struct {
 	// email_subdomain. Defaults to "sandboxes" via GetEmailDomain().
 	// One-time choice at km init — changing requires fresh DNS/SES verification.
 	EmailSubdomain string
+
+	// ContainerSubstratesEnabled gates the ECR image build/push steps in
+	// km init: km-sandbox container image plus the four sidecar images
+	// (dns-proxy, http-proxy, audit-log, tracing). Container images are only
+	// pulled by the docker and ecs substrates; EC2 sandboxes get raw binaries
+	// from S3 (see pkg/compiler/userdata.go). Pointer-typed for tri-state
+	// (unset/true/false): nil means "use default", which ShouldBuildContainerImages
+	// resolves to true so existing installs keep building images. Maps to
+	// km-config.yaml key container_substrates_enabled.
+	ContainerSubstratesEnabled *bool
 }
 
 // isSetByEnv returns true if the given viper key has been overridden by an environment
@@ -275,6 +285,7 @@ func Load() (*Config, error) {
 			"slack_stream_messages_table_name",
 			"resource_prefix",
 			"email_subdomain",
+			"container_substrates_enabled",
 		} {
 			if v2.IsSet(key) && !isSetByEnv(v, key) {
 				v.Set(key, v2.Get(key))
@@ -319,6 +330,14 @@ func Load() (*Config, error) {
 		EmailSubdomain:               v.GetString("email_subdomain"),
 	}
 
+	// ContainerSubstratesEnabled is tri-state via *bool: only populated when
+	// the operator has explicitly set the key, so ShouldBuildContainerImages
+	// can default unset → true for back-compat.
+	if v.IsSet("container_substrates_enabled") {
+		val := v.GetBool("container_substrates_enabled")
+		cfg.ContainerSubstratesEnabled = &val
+	}
+
 	// If the AWS profile was set by default (not explicitly configured), verify it
 	// exists in ~/.aws/config or ~/.aws/credentials. On EC2 instances there are no
 	// named profiles — clear the field so the SDK falls through to the default
@@ -346,6 +365,18 @@ func (c *Config) GetResourcePrefix() string {
 		return "km"
 	}
 	return c.ResourcePrefix
+}
+
+// ShouldBuildContainerImages reports whether `km init` should build and push
+// the km-sandbox + sidecar container images to ECR. Container images are only
+// pulled by the docker and ecs substrates; EC2 sandboxes get raw binaries
+// from S3, so EC2-only deployments can disable this and skip ~2–10 min of
+// docker buildx + ECR push per init. Defaults to true when unset for back-compat.
+func (c *Config) ShouldBuildContainerImages() bool {
+	if c == nil || c.ContainerSubstratesEnabled == nil {
+		return true
+	}
+	return *c.ContainerSubstratesEnabled
 }
 
 // GetRegionLabel returns the short label for cfg.PrimaryRegion

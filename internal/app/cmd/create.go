@@ -290,6 +290,16 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		substrate = substrateOverride
 		resolvedProfile.Spec.Runtime.Substrate = substrateOverride
 	}
+
+	// Reject docker/ecs substrates when container images aren't being built.
+	// Without ECR pushes, the local docker daemon (docker substrate) or ECS
+	// task pull step (ecs substrate) would fail mid-create with a confusing
+	// "image not found" error. Fail fast with a clear remediation.
+	if (substrate == "docker" || substrate == "ecs") && !cfg.ShouldBuildContainerImages() {
+		return fmt.Errorf("substrate %q requires container images, but container_substrates_enabled is false in km-config.yaml; "+
+			"set container_substrates_enabled: true and re-run `km init` to push images to ECR", substrate)
+	}
+
 	spot := resolvedProfile.Spec.Runtime.Spot && !onDemand
 
 	// substrateLabel differentiates ec2spot vs ec2demand for km list display.
