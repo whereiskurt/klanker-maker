@@ -1492,3 +1492,17 @@ Plans:
   5. Profile with `inspection: enforce` + non-zero Bedrock budget but missing `bedrock-runtime` from allowlist fails `km validate` with a message naming the missing entry
   6. `km doctor` runs `aws_inspection_uid_map` + `aws_allowlist_known_services` checks green on a sandbox using each of the three modes
   7. `aws_api_allowed`, `aws_api_blocked`, `aws_api_platform` events flow through the audit-log sidecar to its configured destination with `sandbox_id`, `service`, `region`, `host`, `method`, `path`, `mode`, and (for platform events) `uid` + `caller` fields populated
+**Plans:** 11 plans
+
+Plans:
+- [ ] 69-00-PLAN.md — Wave 0: seed 4 stub test files + 2 shared testdata fixtures (SigV4 examples, proxy log events) so Plans 01-08 have green-baseline test surfaces
+- [ ] 69-01-PLAN.md — Profile schema: spec.sourceAccess.aws (Inspection enum + Allowlist) struct + JSON Schema + 4 ValidateSemantic rules (Bedrock cross-check, wildcard-mixing, allowlist-required-when-not-off, enum)
+- [ ] 69-02-PLAN.md — eBPF: new pinned sock_to_uid map (BPF_MAP_TYPE_HASH) populated by cgroup/connect4 via bpf_get_current_uid_gid; bpf2go regen + loader.go pin/unpin
+- [ ] 69-03-PLAN.md — Proxy AWS inspector: new sidecars/http-proxy/httpproxy/aws.go with SigV4 parser, allowlist matcher, four audit emitters (allowed/blocked/platform/unsigned), AWSBlockedResponse; proxy.go registers AWS handlers ahead of budget block
+- [ ] 69-04-PLAN.md — Vetted SigV4 service slug list: pkg/aws/sigv4_services.go with KnownSigV4Services + IsKnownSigV4Service helper (colon-suffix forward-compat)
+- [ ] 69-05-PLAN.md — Compiler env-var injection: KM_AWS_INSPECTION + KM_AWS_ALLOWLIST + KM_AWS_PLATFORM_UID_MAX into km-http-proxy systemd unit; UserDataParams + joinAWSAllowlist helper
+- [ ] 69-06-PLAN.md — Proxy wiring + transparent.go GetCallerUID: WithAWSPlatformUIDLookup option, sock_to_uid map load in transparent.go's sync.Once, main.go reads env vars
+- [ ] 69-07-PLAN.md — Learn-mode parser: AWSServices field on learnObservedState, dispatch aws_api_allowed/blocked into RecordAWSService (skip platform/unsigned), GenerateAnnotatedYAML emits inspection: observe + alphabetized allowlist
+- [ ] 69-08-PLAN.md — km doctor: two new checks (aws_inspection_uid_map probes km-mail-poller uid via SSM RunCommand; aws_allowlist_known_services WARNs on slugs not in pkg/aws/sigv4_services.go)
+- [ ] 69-09-PLAN.md — Documentation: docs/aws-allowlist.md operator guide + CLAUDE.md AWS allowlist section
+- [ ] 69-10-PLAN.md — Manual UAT: real EC2 sandbox running through 4-flow demo storyboard (wide-open + locked-down + observe + learn) + km doctor verification + 69-VERIFY.md captures
