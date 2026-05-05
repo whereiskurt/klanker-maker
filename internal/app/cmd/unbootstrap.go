@@ -296,7 +296,7 @@ func deleteSSMParametersRecursive(ctx context.Context, client UnbootstrapSSMAPI,
 			Recursive:      aws.Bool(true),
 			WithDecryption: aws.Bool(false), // we're just deleting, no need to decrypt
 			NextToken:      nextToken,
-			MaxResults:     aws.Int32(50),
+			MaxResults:     aws.Int32(10), // AWS hard cap — values >10 fail validation
 		})
 		if err != nil {
 			return 0, fmt.Errorf("enumerate ssm params: %w", err)
