@@ -392,14 +392,14 @@ func (c *Config) GetRegionLabel() string {
 
 // GetPlatformKMSAlias returns the KMS key alias used for SSM SecureString
 // encryption (sandbox identity keys, GitHub tokens, Slack signing secret, etc.).
-// Format: "alias/{prefix}-platform-{regionLabel}" — KMS keys are regional, so
-// the alias includes a regional suffix to mirror the layout of Terragrunt-managed
-// state/lock resources (tf-{prefix}-state-{regionLabel}). Multi-instance installs
-// in the same AWS account get distinct aliases via resource_prefix; multi-region
-// installs get a separate key per region. Defaults to "alias/km-platform-use1"
-// when neither prefix nor region is configured.
+// Format: "alias/km-platform-{prefix}-{regionLabel}" — "km" is the hardcoded
+// brand namespace, {prefix} is GetResourcePrefix(), {regionLabel} is the short
+// region label. The brand-prefix-region structure groups all platform aliases
+// under "alias/km-platform-*" for easy filtering, while still distinguishing
+// per-install (multi-instance) and per-region keys. Defaults to
+// "alias/km-platform-km-use1" when neither prefix nor region is configured.
 func (c *Config) GetPlatformKMSAlias() string {
-	return "alias/" + c.GetResourcePrefix() + "-platform-" + c.GetRegionLabel()
+	return "alias/km-platform-" + c.GetResourcePrefix() + "-" + c.GetRegionLabel()
 }
 
 // GetEmailDomain returns the full email domain (e.g. "sandboxes.klankermaker.ai").

@@ -1083,18 +1083,25 @@ func checkStaleKMSKeys(ctx context.Context, kmsClient KMSCleanupAPI, lister Sand
 		}
 	}
 
-	// Platform alias prefix to never touch. Matches both the legacy
-	// non-regional form (alias/{prefix}-platform) and the regional form
-	// (alias/{prefix}-platform-{regionLabel}); HasPrefix avoids enumerating
-	// every AWS region label.
-	platformAliasPrefix := "alias/" + resourcePrefix + "-platform"
+	// Platform alias prefix to never touch. All platform KMS aliases share
+	// the "alias/km-platform-" prefix (current format: alias/km-platform-{prefix}-{regionLabel}).
+	// We also tolerate two legacy forms during migration:
+	//   alias/{prefix}-platform              (pre-regional)
+	//   alias/{prefix}-platform-{regionLabel} (pre-brand-namespacing)
+	// HasPrefix on each guards against false-positive cleanup of aliases
+	// that haven't been migrated to the current naming convention yet.
+	const platformBrandPrefix = "alias/km-platform-"
+	legacyPlatformAlias := "alias/" + resourcePrefix + "-platform"
+	legacyRegionalPlatformPrefix := legacyPlatformAlias + "-"
 
 	// Identify stale aliases: extract sandbox ID from alias name pattern.
 	// Patterns: km-github-token-{name}-{hash}, km-docker-{name}-{hash}-{region}, etc.
 	var staleAliases []kmstypes.AliasListEntry
 	for _, a := range aliases {
 		aliasName := awssdk.ToString(a.AliasName)
-		if aliasName == platformAliasPrefix || strings.HasPrefix(aliasName, platformAliasPrefix+"-") {
+		if strings.HasPrefix(aliasName, platformBrandPrefix) ||
+			aliasName == legacyPlatformAlias ||
+			strings.HasPrefix(aliasName, legacyRegionalPlatformPrefix) {
 			continue
 		}
 		// Check if any active sandbox ID appears in the alias name.
@@ -2082,7 +2089,7 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 
 	// KMS key check.
 	kmsClient := deps.KMSClient
-	platformKMSAlias := cfg.GetResourcePrefix() + "-platform-" + compiler.RegionLabel(cfg.GetPrimaryRegion())
+	platformKMSAlias := "km-platform-" + cfg.GetResourcePrefix() + "-" + compiler.RegionLabel(cfg.GetPrimaryRegion())
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		return checkKMSKey(ctx, kmsClient, platformKMSAlias)
 	})

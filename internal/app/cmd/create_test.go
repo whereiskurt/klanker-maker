@@ -140,7 +140,7 @@ func TestRunCreate_IdentityProvisioning(t *testing.T) {
 		{"PublishIdentity call", "PublishIdentity"},
 		{"non-fatal pattern", "failed to provision sandbox identity (non-fatal)"},
 		{"encryption check", "GenerateEncryptionKey"},
-		{"kmsKeyAlias construction", "alias/km-platform"},
+		{"kmsKeyAlias construction", "cfg.GetPlatformKMSAlias()"},
 	}
 	for _, c := range checks {
 		if !strings.Contains(s, c.pattern) {
