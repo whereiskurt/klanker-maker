@@ -650,6 +650,15 @@ func (r *slackTerragruntRunner) Output(ctx context.Context, dir string) (map[str
 // buildSlackCmdDeps wires production AWS / Slack / Terragrunt / prompter implementations.
 func buildSlackCmdDeps(cfg *config.Config) (*SlackCmdDeps, error) {
 	ctx := context.Background()
+
+	// Export config-derived env vars so terragrunt's site.hcl get_env() resolves
+	// to the operator's resource_prefix / region / domain instead of falling back
+	// to defaults. Without this, `km slack init` (and other terragrunt-driven
+	// slack subcommands) hit the wrong backend state bucket — e.g. tf-km-state-use1
+	// instead of tf-kph-state-use1 — and fail with a 403 HeadBucket. km init does
+	// the same thing in runInit before its first terragrunt apply.
+	ExportConfigEnvVars(cfg)
+
 	awsProfile := cfg.AWSProfile
 
 	region := cfg.PrimaryRegion
