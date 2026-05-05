@@ -36,6 +36,7 @@ import (
 	"github.com/spf13/cobra"
 	appcfg "github.com/whereiskurt/klankrmkr/internal/app/config"
 	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klankrmkr/pkg/compiler"
 	profilepkg "github.com/whereiskurt/klankrmkr/pkg/profile"
 	slackpkg "github.com/whereiskurt/klankrmkr/pkg/slack"
 	"gopkg.in/yaml.v3"
@@ -1082,17 +1083,18 @@ func checkStaleKMSKeys(ctx context.Context, kmsClient KMSCleanupAPI, lister Sand
 		}
 	}
 
-	// Platform aliases to never touch.
-	platformAliases := map[string]bool{
-		"alias/" + resourcePrefix + "-platform": true,
-	}
+	// Platform alias prefix to never touch. Matches both the legacy
+	// non-regional form (alias/{prefix}-platform) and the regional form
+	// (alias/{prefix}-platform-{regionLabel}); HasPrefix avoids enumerating
+	// every AWS region label.
+	platformAliasPrefix := "alias/" + resourcePrefix + "-platform"
 
 	// Identify stale aliases: extract sandbox ID from alias name pattern.
 	// Patterns: km-github-token-{name}-{hash}, km-docker-{name}-{hash}-{region}, etc.
 	var staleAliases []kmstypes.AliasListEntry
 	for _, a := range aliases {
 		aliasName := awssdk.ToString(a.AliasName)
-		if platformAliases[aliasName] {
+		if aliasName == platformAliasPrefix || strings.HasPrefix(aliasName, platformAliasPrefix+"-") {
 			continue
 		}
 		// Check if any active sandbox ID appears in the alias name.
@@ -2080,7 +2082,7 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 
 	// KMS key check.
 	kmsClient := deps.KMSClient
-	platformKMSAlias := cfg.GetResourcePrefix() + "-platform"
+	platformKMSAlias := cfg.GetResourcePrefix() + "-platform-" + compiler.RegionLabel(cfg.GetPrimaryRegion())
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		return checkKMSKey(ctx, kmsClient, platformKMSAlias)
 	})

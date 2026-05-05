@@ -263,7 +263,11 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 				if prefix == "" {
 					prefix = "km"
 				}
-				kmsKeyAlias = "alias/" + prefix + "-platform"
+				region := os.Getenv("KM_REGION_LABEL")
+				if region == "" {
+					region = "use1"
+				}
+				kmsKeyAlias = "alias/" + prefix + "-platform-" + region
 			}
 
 			pubKey, identErr := awspkg.EnsureSandboxIdentity(ctx, h.SSMClient, event.SandboxID, kmsKeyAlias)

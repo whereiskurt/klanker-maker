@@ -348,13 +348,58 @@ func (c *Config) GetResourcePrefix() string {
 	return c.ResourcePrefix
 }
 
+// GetRegionLabel returns the short label for cfg.PrimaryRegion
+// (e.g. us-east-1 → use1, ca-central-1 → cac1, ap-southeast-2 → apse2).
+// Falls back to "use1" when PrimaryRegion is unset or malformed (<3 parts);
+// mirrors pkg/compiler.RegionLabel without importing it (avoids pulling
+// compiler into config). Used to suffix regional resource names like the
+// platform KMS alias.
+func (c *Config) GetRegionLabel() string {
+	region := ""
+	if c != nil {
+		region = c.PrimaryRegion
+	}
+	if region == "" {
+		return "use1"
+	}
+	parts := strings.Split(region, "-")
+	if len(parts) < 3 {
+		return region
+	}
+	areaShort := parts[1]
+	switch parts[1] {
+	case "east":
+		areaShort = "e"
+	case "west":
+		areaShort = "w"
+	case "central":
+		areaShort = "c"
+	case "south":
+		areaShort = "s"
+	case "north":
+		areaShort = "n"
+	case "southeast":
+		areaShort = "se"
+	case "northeast":
+		areaShort = "ne"
+	case "northwest":
+		areaShort = "nw"
+	case "southwest":
+		areaShort = "sw"
+	}
+	return parts[0] + areaShort + parts[2]
+}
+
 // GetPlatformKMSAlias returns the KMS key alias used for SSM SecureString
 // encryption (sandbox identity keys, GitHub tokens, Slack signing secret, etc.).
-// Format: "alias/{prefix}-platform" where prefix is GetResourcePrefix() (default "km").
-// Multi-instance installs in the same AWS account get distinct aliases via
-// resource_prefix in km-config.yaml.
+// Format: "alias/{prefix}-platform-{regionLabel}" — KMS keys are regional, so
+// the alias includes a regional suffix to mirror the layout of Terragrunt-managed
+// state/lock resources (tf-{prefix}-state-{regionLabel}). Multi-instance installs
+// in the same AWS account get distinct aliases via resource_prefix; multi-region
+// installs get a separate key per region. Defaults to "alias/km-platform-use1"
+// when neither prefix nor region is configured.
 func (c *Config) GetPlatformKMSAlias() string {
-	return "alias/" + c.GetResourcePrefix() + "-platform"
+	return "alias/" + c.GetResourcePrefix() + "-platform-" + c.GetRegionLabel()
 }
 
 // GetEmailDomain returns the full email domain (e.g. "sandboxes.klankermaker.ai").
