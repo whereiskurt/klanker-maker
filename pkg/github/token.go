@@ -241,14 +241,26 @@ func WriteTokenToSSM(ctx context.Context, client SSMAPI, resourcePrefix, sandbox
 
 // TokenRefreshEvent is the EventBridge Scheduler payload delivered to the
 // GitHub token refresher Lambda.
+//
+// Permissions is the ALREADY-COMPILED GitHub API permissions map (e.g.
+// {"contents": "read"}), not the profile's raw permission list ("clone",
+// "fetch", "push"). The compiler runs CompilePermissions at sandbox-create
+// time and the EventBridge Scheduler ships the compiled map as JSON; the
+// refresher just hands it to ExchangeForInstallationToken untouched.
+//
+// Earlier this was []string (raw profile names) and the refresher called
+// CompilePermissions itself — but the Terraform variable feeding the
+// payload was typed string and emitted an HCL-encoded blob that
+// json.Unmarshal couldn't parse, so the refresher crashed on every run
+// for the entire lifetime of the feature. Both layers are fixed now.
 type TokenRefreshEvent struct {
-	SandboxID      string   `json:"sandbox_id"`
-	ResourcePrefix string   `json:"resource_prefix"`
-	InstallationID string   `json:"installation_id"`
-	SSMParamName   string   `json:"ssm_parameter_name"`
-	KMSKeyARN      string   `json:"kms_key_arn"`
-	AllowedRepos   []string `json:"allowed_repos"`
-	Permissions    []string `json:"permissions"`
+	SandboxID      string            `json:"sandbox_id"`
+	ResourcePrefix string            `json:"resource_prefix"`
+	InstallationID string            `json:"installation_id"`
+	SSMParamName   string            `json:"ssm_parameter_name"`
+	KMSKeyARN      string            `json:"kms_key_arn"`
+	AllowedRepos   []string          `json:"allowed_repos"`
+	Permissions    map[string]string `json:"permissions"`
 }
 
 // GenerateJWTFunc is a function type for JWT generation, allowing DI in tests.
@@ -266,11 +278,11 @@ type TokenRefreshHandler struct {
 }
 
 // HandleTokenRefresh is the Lambda handler method. It:
-//  1. Compiles permissions from the event's Permissions list.
-//  2. Generates a GitHub App JWT.
-//  3. Exchanges the JWT for an installation token scoped to AllowedRepos.
-//  4. Writes the token to SSM.
-//  5. Logs a structured audit event to CloudWatch (via slog JSON to stdout).
+//  1. Generates a GitHub App JWT.
+//  2. Exchanges the JWT for an installation token scoped to AllowedRepos
+//     using the already-compiled permissions map from the event payload.
+//  3. Writes the token to SSM.
+//  4. Logs a structured audit event to CloudWatch (via slog JSON to stdout).
 //
 // On success, logs {"event": "token_generated", "sandbox_id": ..., "allowed_repos": ..., "permissions": ...}.
 // On failure, logs {"event": "token_generation_failed", "sandbox_id": ..., "error": ..., "allowed_repos": ...}
@@ -282,7 +294,11 @@ func (h *TokenRefreshHandler) HandleTokenRefresh(ctx context.Context, event Toke
 	}
 
 	sandboxID := event.SandboxID
-	compiledPerms := CompilePermissions(event.Permissions)
+	// event.Permissions is already a compiled GitHub API permissions map
+	// (e.g. {"contents": "read"}). The compiler ran CompilePermissions at
+	// sandbox-create time; the EventBridge schedule carries that compiled
+	// value through. CompilePermissions is NOT called again here.
+	compiledPerms := event.Permissions
 
 	// Step 1: Generate GitHub App JWT.
 	generateJWT := h.GenerateJWTFn

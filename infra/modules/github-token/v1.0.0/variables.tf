@@ -32,9 +32,17 @@ variable "allowed_repos" {
 }
 
 variable "permissions" {
-  description = "JSON-encoded GitHub App permissions map (e.g. '{\"contents\":\"read\"}')"
-  type        = string
-  default     = "{}"
+  # Was previously type = string with a hand-crafted JSON encoding. EventBridge
+  # serializes the Terraform value into the Lambda payload's JSON, and a string
+  # type made the entire HCL map literal flow through as a quoted string —
+  # the refresher Lambda's json.Unmarshal then failed every invocation
+  # because TokenRefreshEvent.Permissions expected a real object, not a string.
+  # Switching to map(string) means EventBridge gets a proper JSON object
+  # like {"contents": "read"} and the refresher decodes it into its
+  # map[string]string field directly.
+  description = "GitHub App permissions map (e.g. {contents = \"read\"})"
+  type        = map(string)
+  default     = {}
 }
 
 variable "sandbox_iam_role_arn" {

@@ -457,7 +457,9 @@ func TestLambdaHandler_AuditLog_Success(t *testing.T) {
 		SSMParamName:   "/sandbox/sb-test-001/github-token",
 		KMSKeyARN:      "arn:aws:kms:us-east-1:123:key/abc",
 		AllowedRepos:   []string{"org/my-repo"},
-		Permissions:    []string{"clone"},
+		// Permissions is now the already-compiled API map (refresher no longer
+		// runs CompilePermissions itself). Equivalent of CompilePermissions(["clone"]).
+		Permissions: map[string]string{"contents": "read"},
 	}
 
 	err := h.HandleTokenRefresh(context.Background(), event)
@@ -507,7 +509,9 @@ func TestLambdaHandler_AuditLog_Failure(t *testing.T) {
 		SSMParamName:   "/sandbox/sb-fail-001/github-token",
 		KMSKeyARN:      "arn:aws:kms:us-east-1:123:key/abc",
 		AllowedRepos:   []string{"org/fail-repo"},
-		Permissions:    []string{"clone"},
+		// Permissions is now the already-compiled API map (refresher no longer
+		// runs CompilePermissions itself). Equivalent of CompilePermissions(["clone"]).
+		Permissions: map[string]string{"contents": "read"},
 	}
 
 	err := h.HandleTokenRefresh(context.Background(), event)
