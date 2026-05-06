@@ -849,55 +849,6 @@ func checkSESIdentity(ctx context.Context, client SESGetEmailIdentityAPI, emailD
 	}
 }
 
-// checkPrefixCollision checks whether a Lambda named {prefix}-ttl-handler already exists.
-// If the Lambda exists, another km install may be sharing the same resource_prefix in this
-// account. Existence of the Lambda from THIS install is expected (StatusWarn is intentionally
-// informational — the operator running km doctor IS the deployer).
-// Returns CheckOK when the Lambda does not exist (no collision risk on a fresh account).
-// Returns CheckWarn when the Lambda exists (could be this install or another).
-// Returns CheckSkipped when the client is nil.
-func checkPrefixCollision(ctx context.Context, p DoctorConfigProvider, client LambdaGetFunctionAPI) CheckResult {
-	prefix := p.GetResourcePrefix()
-	ttlName := prefix + "-ttl-handler"
-	name := "Prefix Collision (" + prefix + ")"
-	if client == nil {
-		return CheckResult{
-			Name:    name,
-			Status:  CheckSkipped,
-			Message: "Lambda client not available",
-		}
-	}
-	_, err := client.GetFunction(ctx, &lambda.GetFunctionInput{
-		FunctionName: awssdk.String(ttlName),
-	})
-	if err != nil {
-		var notFound *lambdatypes.ResourceNotFoundException
-		if errors.As(err, &notFound) {
-			return CheckResult{
-				Name:    name,
-				Status:  CheckOK,
-				Message: fmt.Sprintf("No prefix collision detected for %q (function not found)", ttlName),
-			}
-		}
-		return CheckResult{
-			Name:    name,
-			Status:  CheckOK,
-			Message: fmt.Sprintf("Could not check prefix collision for %q: %v (assuming no collision)", ttlName, err),
-		}
-	}
-	// Function exists — could be from this install (expected) or from a second install using the same prefix.
-	return CheckResult{
-		Name:   name,
-		Status: CheckWarn,
-		Message: fmt.Sprintf(
-			"Lambda %q already exists. Either you've already run km init (expected), OR "+
-				"another km install in this account is using the same resource_prefix. "+
-				"To run a second install, change resource_prefix in km-config.yaml.",
-			ttlName,
-		),
-	}
-}
-
 // checkEmailDomainMatchesSESIdentity verifies that the email domain derived from
 // cfg.GetEmailDomain() is a verified SES identity. This is a Phase 66 operator-facing
 // check: if the operator changed email_subdomain after km init, the new domain won't
@@ -2330,11 +2281,18 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return r
 	})
 
-	// Phase 66: prefix-collision check and email-domain SES match check.
-	// Both are informational (WARN only) and skipped when the Lambda/SES clients are nil.
-	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkPrefixCollision(ctx, cfg, lambdaClient)
-	})
+	// Phase 66: email-domain SES match check.
+	//
+	// The prefix-collision check (checkPrefixCollision) used to live here too
+	// but was removed — it false-positived on every successful install. The
+	// check looked for "{prefix}-ttl-handler" Lambda existence to flag
+	// possible collisions with other installs sharing the same resource_prefix
+	// in the same AWS account, but couldn't distinguish ownership (no
+	// install-specific tag on the Lambda). Since "Lambda (kph-ttl-handler)"
+	// already checks the same thing for legitimate purposes, the prefix-
+	// collision check just produced confusing operator-facing noise. If we
+	// ever need real collision detection, terraform modules should grow a
+	// km:resource-prefix tag that doctor can verify against the expected value.
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		return checkEmailDomainMatchesSESIdentity(ctx, cfg, sesClient)
 	})

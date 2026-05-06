@@ -996,37 +996,10 @@ func TestBuildChecks_IncludesLambdaAndSES(t *testing.T) {
 var _ LambdaGetFunctionAPI = (*mockLambdaClient)(nil)
 var _ SESGetEmailIdentityAPI = (*mockSESClient)(nil)
 
-// =============================================================================
-// Tests: checkPrefixCollision (Phase 66)
-// =============================================================================
-
-func TestCheckPrefixCollision_NoCollision(t *testing.T) {
-	// ResourceNotFoundException => no collision => OK
-	client := &mockLambdaClient{
-		err: &lambdatypes.ResourceNotFoundException{Message: aws.String("Function not found")},
-	}
-	cfg := minimalConfig()
-	result := checkPrefixCollision(context.Background(), cfg, client)
-	if result.Status != CheckOK {
-		t.Errorf("expected CheckOK when function not found (no collision), got %s: %s", result.Status, result.Message)
-	}
-}
-
-func TestCheckPrefixCollision_Collision(t *testing.T) {
-	// Function exists => potential collision => WARN
-	client := &mockLambdaClient{
-		output: &lambdasvc.GetFunctionOutput{},
-	}
-	cfg := minimalConfig()
-	result := checkPrefixCollision(context.Background(), cfg, client)
-	if result.Status != CheckWarn {
-		t.Errorf("expected CheckWarn when function exists (collision), got %s: %s", result.Status, result.Message)
-	}
-	wantFuncName := cfg.GetResourcePrefix() + "-ttl-handler"
-	if !containsString(result.Message, wantFuncName) {
-		t.Errorf("expected message to contain %q, got: %s", wantFuncName, result.Message)
-	}
-}
+// (Tests for checkPrefixCollision removed alongside the function — see
+// comment in doctor.go where the check used to be appended to the doctor
+// check list. The check false-positived on every successful install and was
+// redundant with the Lambda-existence check.)
 
 // =============================================================================
 // Tests: checkEmailDomainMatchesSESIdentity (Phase 66)
