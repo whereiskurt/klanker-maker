@@ -249,10 +249,18 @@ resource "aws_lambda_function" "email_handler" {
       KM_STATE_BUCKET        = var.state_bucket
       KM_EMAIL_DOMAIN        = var.email_domain
       KM_SAFE_PHRASE_SSM_KEY = var.safe_phrase_ssm_key
-      SANDBOX_TABLE_NAME     = var.sandbox_table_name
-      BEDROCK_MODEL_ID       = var.bedrock_model_id
-      KM_SCHEDULER_ROLE_ARN  = var.scheduler_role_arn
-      KM_CREATE_HANDLER_ARN  = var.create_handler_arn
+      # Binary reads KM_SANDBOX_TABLE_NAME (cmd/email-create-handler/main.go).
+      # The previous SANDBOX_TABLE_NAME (no KM_ prefix) didn't match the
+      # binary's lookup, so it fell back to the hardcoded km-sandboxes
+      # default — broken on any non-default resource_prefix install.
+      KM_SANDBOX_TABLE_NAME = var.sandbox_table_name
+      # Binary uses KM_SSM_PREFIX as the SSM operator-config root (e.g.
+      # /kph/). Without it falls back to literal "/km/" and reads/writes
+      # the wrong SSM path on non-default-prefix installs.
+      KM_SSM_PREFIX         = "/${var.resource_prefix}/"
+      BEDROCK_MODEL_ID      = var.bedrock_model_id
+      KM_SCHEDULER_ROLE_ARN = var.scheduler_role_arn
+      KM_CREATE_HANDLER_ARN = var.create_handler_arn
     }
   }
 

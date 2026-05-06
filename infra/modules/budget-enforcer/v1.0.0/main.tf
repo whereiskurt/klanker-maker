@@ -230,9 +230,16 @@ resource "aws_lambda_function" "budget_enforcer" {
   environment {
     variables = {
       KM_BUDGET_TABLE  = var.budget_table_name
-      KM_SANDBOX_TABLE = var.sandbox_table_name
-      KM_EMAIL_DOMAIN  = var.email_domain
-      KM_STATE_BUCKET  = var.state_bucket
+      # Binary reads KM_SANDBOX_TABLE_NAME (cmd/budget-enforcer/main.go).
+      # Was set as KM_SANDBOX_TABLE — close but wrong, off by the _NAME
+      # suffix — so the binary fell back to its hardcoded km-sandboxes
+      # default and ignored the kph-sandboxes value the operator passed.
+      KM_SANDBOX_TABLE_NAME = var.sandbox_table_name
+      # Binary uses KM_RESOURCE_PREFIX for prefix-aware paths; without it
+      # falls back to literal "km" and writes/reads the wrong resource names.
+      KM_RESOURCE_PREFIX = var.resource_prefix
+      KM_EMAIL_DOMAIN    = var.email_domain
+      KM_STATE_BUCKET    = var.state_bucket
     }
   }
 

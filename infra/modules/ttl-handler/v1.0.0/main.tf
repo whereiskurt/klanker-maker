@@ -285,13 +285,15 @@ resource "aws_lambda_function" "ttl_handler" {
 
   environment {
     variables = {
-      KM_ARTIFACTS_BUCKET   = var.artifact_bucket_name
-      KM_EMAIL_DOMAIN       = var.email_domain
-      KM_OPERATOR_EMAIL     = var.operator_email
-      KM_STATE_BUCKET       = var.state_bucket
-      KM_STATE_PREFIX       = var.state_prefix
-      KM_REGION_LABEL       = var.region_label
-      SANDBOX_TABLE_NAME    = var.sandbox_table_name
+      KM_ARTIFACTS_BUCKET = var.artifact_bucket_name
+      KM_EMAIL_DOMAIN     = var.email_domain
+      KM_OPERATOR_EMAIL   = var.operator_email
+      KM_STATE_BUCKET     = var.state_bucket
+      KM_STATE_PREFIX     = var.state_prefix
+      KM_REGION_LABEL     = var.region_label
+      # SANDBOX_TABLE_NAME (no KM_ prefix) was a dead var — binary reads
+      # KM_SANDBOX_TABLE_NAME, set immediately below. Removed to avoid
+      # the same drift bug we fixed in create-handler / email-handler.
       KM_CREATE_HANDLER_ARN = var.create_handler_arn
       KM_SCHEDULER_ROLE_ARN = var.scheduler_role_arn
       KM_TTL_HANDLER_NAME   = "${var.resource_prefix}-ttl-handler"
@@ -300,6 +302,10 @@ resource "aws_lambda_function" "ttl_handler" {
       KM_SANDBOX_TABLE_NAME = var.sandbox_table_name
       KM_BUDGET_TABLE       = var.budget_table_name
       KM_SCHEDULES_TABLE    = var.schedules_table_name
+      # Binary uses KM_RESOURCE_PREFIX for prefix-aware paths; without it
+      # falls back to literal "km" — silently wrong-prefix on non-default
+      # installs.
+      KM_RESOURCE_PREFIX = var.resource_prefix
     }
   }
 
