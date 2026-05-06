@@ -327,8 +327,12 @@ func checkConfig(cfg DoctorConfigProvider) CheckResult {
 }
 
 // checkOrganizationAccountBlank surfaces SCP enforcement status to operators.
-// Returns WARN when accounts.organization is blank (single-account topology — no SCP).
-// Returns OK when accounts.organization is set.
+// Returns OK when accounts.organization is set (SCP enforcement is engaged).
+// Returns OK with an informational message when accounts.organization is
+// blank — leaving SCP unconfigured is a deliberate single-account-topology
+// choice, not a defect. (Earlier this returned WARN, but operators who had
+// chosen to skip SCP saw the warning on every doctor run forever; the
+// reminder isn't actionable on day 30 of a multi-month install.)
 func checkOrganizationAccountBlank(cfg DoctorConfigProvider) CheckResult {
 	org := cfg.GetOrganizationAccountID()
 	if org != "" {
@@ -339,10 +343,9 @@ func checkOrganizationAccountBlank(cfg DoctorConfigProvider) CheckResult {
 		}
 	}
 	return CheckResult{
-		Name:        "SCP Enforcement Config",
-		Status:      CheckWarn,
-		Message:     "SCP enforcement disabled — sandbox containment relies on IAM policies only",
-		Remediation: "Set accounts.organization in km-config.yaml to enable org-level SCP sandbox containment",
+		Name:    "SCP Enforcement Config",
+		Status:  CheckOK,
+		Message: "SCP not configured (single-account topology) — sandbox containment relies on IAM policies only",
 	}
 }
 
@@ -2051,9 +2054,22 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	})
 
 	// SCP check — the SCP is attached to the application account, queried via Organizations API.
+	// Skipped (with a clean OK status) when accounts.organization is blank: the operator has
+	// opted out of SCP enforcement entirely, so verifying the policy is attached to the app
+	// account is moot. Without this gate the check fired AccessDenied → WARN every time
+	// doctor ran on a single-account install, since Organizations API needs management-account
+	// credentials we don't have.
 	orgsClient := deps.OrgsClient
 	appAccount := cfg.GetApplicationAccountID()
+	orgConfigured := cfg.GetOrganizationAccountID() != ""
 	checks = append(checks, func(ctx context.Context) CheckResult {
+		if !orgConfigured {
+			return CheckResult{
+				Name:    "SCP (Sandbox Containment)",
+				Status:  CheckOK,
+				Message: "skipped — accounts.organization not configured (no SCP to verify)",
+			}
+		}
 		return checkSCP(ctx, orgsClient, appAccount)
 	})
 

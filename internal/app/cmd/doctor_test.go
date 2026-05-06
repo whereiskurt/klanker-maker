@@ -1641,14 +1641,21 @@ func TestCheckStaleSlackChannels_HasStale_Warn(t *testing.T) {
 // Tests: checkOrganizationAccountBlank (VALIDATION 65-03-01, 65-03-02)
 // =============================================================================
 
-func TestCheckOrganizationAccountBlank_BlankReturnsWarn(t *testing.T) {
+// Renamed from TestCheckOrganizationAccountBlank_BlankReturnsWarn — the
+// check now returns OK with an informational message (deliberately not a
+// warning) when the operator has chosen single-account topology. Repeatedly
+// warning about an opted-out feature was operator-noise.
+func TestCheckOrganizationAccountBlank_BlankReturnsOK(t *testing.T) {
 	cfg := &testDoctorConfig{orgAcct: ""}
 	result := checkOrganizationAccountBlank(cfg)
-	if result.Status != CheckWarn {
-		t.Errorf("expected CheckWarn, got %s: %s", result.Status, result.Message)
+	if result.Status != CheckOK {
+		t.Errorf("expected CheckOK (informational), got %s: %s", result.Status, result.Message)
 	}
-	if !strings.Contains(result.Message, "IAM policies only") {
-		t.Errorf("expected message to contain 'IAM policies only', got: %s", result.Message)
+	if !strings.Contains(result.Message, "single-account topology") {
+		t.Errorf("expected message to mention 'single-account topology', got: %s", result.Message)
+	}
+	if result.Remediation != "" {
+		t.Errorf("expected no Remediation when org is intentionally blank, got: %s", result.Remediation)
 	}
 }
 
