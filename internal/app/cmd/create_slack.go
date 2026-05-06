@@ -49,8 +49,17 @@ func (s *productionSSMParamStore) Get(ctx context.Context, name string, withDecr
 
 // SlackAPI is the operator-side Slack client interface used during km create.
 // *slack.Client satisfies this interface.
+//
+// FindChannelByName + JoinChannel were added so per-sandbox channel creation
+// can recover from the same name_taken failure mode km slack init already
+// handles: the channel exists in Slack from a prior create attempt, but the
+// bot isn't a member (Slack App reinstalls drop bot membership). Without
+// auto-recovery, every operator who hit this had to either manually delete
+// the channel, archive it, or invent a new --alias.
 type SlackAPI interface {
 	CreateChannel(ctx context.Context, name string) (string, error)
+	FindChannelByName(ctx context.Context, name string) (string, error)
+	JoinChannel(ctx context.Context, channelID string) error
 	InviteShared(ctx context.Context, channelID, email string) error
 	ChannelInfo(ctx context.Context, channelID string) (memberCount int, isMember bool, err error)
 }
@@ -134,28 +143,70 @@ func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandbox
 		}
 
 		chID, createErr := api.CreateChannel(ctx, channelName)
-		if createErr != nil {
-			var apierr *slack.SlackAPIError
-			if errors.As(createErr, &apierr) && apierr.Code == "name_taken" {
-				return "", false, fmt.Errorf(
-					"Slack channel #%s already exists (name_taken); choose a unique --alias or use notifySlackChannelOverride to reuse the existing channel",
-					channelName,
-				)
-			}
+		var apierr *slack.SlackAPIError
+		nameTaken := errors.As(createErr, &apierr) && apierr.Code == "name_taken"
+
+		switch {
+		case createErr != nil && !nameTaken:
 			return "", false, fmt.Errorf("create channel #%s: %w", channelName, createErr)
+
+		case nameTaken:
+			// Channel exists in Slack but isn't tracked here — typically because
+			// a prior create attempt for the same alias already created it (the
+			// failure mode km slack init also recovers from). Look up the existing
+			// channel and reuse rather than failing the whole sandbox provisioning.
+			existingID, lookupErr := api.FindChannelByName(ctx, channelName)
+			if lookupErr != nil {
+				return "", false, fmt.Errorf("channel #%s exists (name_taken) but lookup via conversations.list failed: %w\n"+
+					"Either grant the bot the channels:read scope and retry, or pick a unique --alias / use notifySlackChannelOverride", channelName, lookupErr)
+			}
+			if existingID == "" {
+				return "", false, fmt.Errorf("channel name #%s is reserved (likely by an archived channel within Slack's 30-day window); pick a unique --alias or unarchive the existing channel", channelName)
+			}
+			chID = existingID
+		}
+
+		// Ensure the bot is in the channel. Required because:
+		//   - Brand-new channel: Slack auto-joins the creator bot, but a Slack
+		//     App reinstall later drops the bot out.
+		//   - Reused channel (name_taken path above): bot may have been kicked
+		//     or never joined under the current bot session.
+		// Without this, chat.postMessage from the bridge fails with
+		// not_in_channel even though the channel exists.
+		if joinErr := api.JoinChannel(ctx, chID); joinErr != nil {
+			isAPIErr := errors.As(joinErr, &apierr)
+			switch {
+			case isAPIErr && apierr.Code == "missing_scope":
+				return "", false, fmt.Errorf("bot needs channels:join scope to ensure membership in #%s (channel %s): %w\n"+
+					"Add the scope in Slack App config → OAuth & Permissions, reinstall the app, then re-run km slack rotate-token", channelName, chID, joinErr)
+			case isAPIErr && apierr.Code == "is_archived":
+				return "", false, fmt.Errorf("channel #%s (%s) is archived; pick a different --alias or unarchive it via:\n"+
+					"  curl -H \"Authorization: Bearer $BOT_TOKEN\" -d \"channel=%s\" https://slack.com/api/conversations.unarchive",
+					channelName, chID, chID)
+			default:
+				log.Warn().Err(joinErr).Str("channel", chID).Msg("auto-join channel failed (non-fatal); /invite the bot manually if needed")
+			}
 		}
 
 		// Fetch the invite email from SSM so the bot can receive cross-workspace invites.
 		inviteEmail, ssmErr := ssmStore.Get(ctx, slackPrefix+"invite-email", false)
 		if ssmErr != nil || inviteEmail == "" {
-			return "", false, fmt.Errorf("invite email not configured at %sinvite-email — run km slack init first", slackPrefix)
+			// Missing invite-email is configurational — the channel exists and
+			// the bot is in it, so treat as warning rather than failing the
+			// whole create. Operator can run `km slack init` later.
+			log.Warn().Str("channel", chID).Msgf("Slack invite-email not configured at %sinvite-email; skipping cross-workspace invite (run km slack init to set)", slackPrefix)
+			return chID, true, nil
 		}
 
 		if inviteErr := api.InviteShared(ctx, chID, inviteEmail); inviteErr != nil {
-			// Channel was created but invite failed.
-			// We do NOT roll back the channel (option a per Plan 08 spec).
-			// Operator can manually re-invite. Trade-off documented in SUMMARY.
-			return "", false, fmt.Errorf("invite %s to channel %s: %w (channel was created; operator must invite manually)", inviteEmail, chID, inviteErr)
+			// Invite failure is non-fatal: the channel is live, the bot is in
+			// it, sandbox notifications will still flow. The cross-workspace
+			// invite is a convenience for the operator's external Slack;
+			// failing here used to abort sandbox provisioning, which was
+			// disproportionate (the failure typically means the operator
+			// already accepted the invite, the workspace isn't on Pro tier,
+			// or the email already has a connection).
+			log.Warn().Err(inviteErr).Str("channel", chID).Str("email", inviteEmail).Msg("Slack Connect invite failed (non-fatal — channel and bot are healthy; manually re-invite if needed)")
 		}
 
 		return chID, true, nil

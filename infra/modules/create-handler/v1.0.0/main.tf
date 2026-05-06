@@ -157,6 +157,16 @@ resource "aws_iam_role_policy" "terraform_state" {
           "s3:PutObject",
           "s3:DeleteObject",
           "s3:ListBucket",
+          # Terragrunt v0.69+ introspects bucket-level config (encryption,
+          # versioning, lifecycle, replication) before each terraform init to
+          # decide whether to bootstrap the backend. Without these, init fails
+          # with AccessDenied on bucket-level ops even when state read/write
+          # works fine.
+          "s3:GetBucketVersioning",
+          "s3:GetBucketLocation",
+          "s3:GetEncryptionConfiguration",
+          "s3:GetLifecycleConfiguration",
+          "s3:GetReplicationConfiguration",
         ]
         Resource = [
           "arn:aws:s3:::${var.state_bucket}",
@@ -537,13 +547,19 @@ resource "aws_lambda_function" "create_handler" {
     variables = {
       KM_ARTIFACTS_BUCKET = var.artifact_bucket_name
       KM_EMAIL_DOMAIN     = var.email_domain
-      KM_OPERATOR_EMAIL   = var.operator_email
-      KM_STATE_BUCKET     = var.state_bucket
-      KM_STATE_PREFIX     = var.state_prefix
-      KM_REGION_LABEL     = var.region_label
-      KM_RESOURCE_PREFIX  = var.resource_prefix
-      KM_TOOLCHAIN_DIR    = "/tmp/toolchain"
-      SANDBOX_TABLE_NAME  = var.sandbox_table_name
+      KM_OPERATOR_EMAIL     = var.operator_email
+      KM_STATE_BUCKET       = var.state_bucket
+      KM_STATE_PREFIX       = var.state_prefix
+      KM_REGION_LABEL       = var.region_label
+      KM_RESOURCE_PREFIX    = var.resource_prefix
+      KM_TOOLCHAIN_DIR      = "/tmp/toolchain"
+      # Handler reads KM_SANDBOX_TABLE_NAME and KM_IDENTITIES_TABLE
+      # (cmd/create-handler/main.go:103-115). The previous SANDBOX_TABLE_NAME
+      # name didn't match what the binary looked up, so the handler fell back
+      # to its hardcoded km-sandboxes default — broken on any non-default
+      # resource_prefix install.
+      KM_SANDBOX_TABLE_NAME = var.sandbox_table_name
+      KM_IDENTITIES_TABLE   = var.identities_table_name
     }
   }
 

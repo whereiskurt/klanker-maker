@@ -20,6 +20,9 @@ import (
 type fakeSlackAPI struct {
 	createChannelResult string
 	createChannelErr    error
+	findChannelResult   string // returned by FindChannelByName when name_taken triggers lookup
+	findChannelErr      error
+	joinChannelErr      error
 	inviteSharedErr     error
 	channelInfoMember   bool
 	channelInfoCount    int
@@ -27,6 +30,8 @@ type fakeSlackAPI struct {
 
 	// capture calls
 	createChannelName  string
+	findChannelCalled  bool
+	joinChannelCalled  bool
 	inviteSharedCalled bool
 	channelInfoCalled  bool
 }
@@ -34,6 +39,16 @@ type fakeSlackAPI struct {
 func (f *fakeSlackAPI) CreateChannel(_ context.Context, name string) (string, error) {
 	f.createChannelName = name
 	return f.createChannelResult, f.createChannelErr
+}
+
+func (f *fakeSlackAPI) FindChannelByName(_ context.Context, _ string) (string, error) {
+	f.findChannelCalled = true
+	return f.findChannelResult, f.findChannelErr
+}
+
+func (f *fakeSlackAPI) JoinChannel(_ context.Context, _ string) error {
+	f.joinChannelCalled = true
+	return f.joinChannelErr
 }
 
 func (f *fakeSlackAPI) InviteShared(_ context.Context, _, _ string) error {
@@ -262,10 +277,15 @@ func TestResolveSlack_PerSandbox_AliasWithDots(t *testing.T) {
 	}
 }
 
-func TestResolveSlack_PerSandbox_NameTaken_Error(t *testing.T) {
+// Renamed from TestResolveSlack_PerSandbox_NameTaken_Error — name_taken now
+// auto-recovers via FindChannelByName rather than failing. The hard-error
+// path only fires when the channel is unrecoverable (archived → reserved
+// name, or lookup unsupported by bot scopes).
+func TestResolveSlack_PerSandbox_NameTaken_AutoRecoversViaLookup(t *testing.T) {
 	p := profileWithSlack(boolPtrCreate(true), true, "")
 	api := &fakeSlackAPI{
-		createChannelErr: &slack.SlackAPIError{Method: "conversations.create", Code: "name_taken"},
+		createChannelErr:  &slack.SlackAPIError{Method: "conversations.create", Code: "name_taken"},
+		findChannelResult: "CEXISTING42", // simulates lookup finding the existing channel
 	}
 	ssmStore := &fakeSSMParamStore{
 		params: map[string]string{
@@ -273,23 +293,45 @@ func TestResolveSlack_PerSandbox_NameTaken_Error(t *testing.T) {
 		},
 	}
 
-	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
-	if err == nil {
-		t.Fatal("expected error for name_taken")
+	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
+	if err != nil {
+		t.Fatalf("expected name_taken to auto-recover, got error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "name_taken") {
-		t.Errorf("error %q should mention name_taken", err.Error())
+	if chID != "CEXISTING42" {
+		t.Errorf("expected reused channel ID CEXISTING42, got %q", chID)
 	}
-	// Should provide actionable guidance
-	if !strings.Contains(err.Error(), "--alias") && !strings.Contains(err.Error(), "notifySlackChannelOverride") {
-		t.Errorf("error %q should mention --alias or notifySlackChannelOverride", err.Error())
+	if !perSb {
+		t.Error("perSandbox should still be true on the reuse path")
 	}
-	if api.inviteSharedCalled {
-		t.Error("InviteShared should not be called after name_taken error")
+	if !api.findChannelCalled {
+		t.Error("FindChannelByName must be called when name_taken triggers")
+	}
+	if !api.joinChannelCalled {
+		t.Error("JoinChannel must be called after channel resolution to ensure bot membership")
 	}
 }
 
-func TestResolveSlack_PerSandbox_InviteFails_Error(t *testing.T) {
+func TestResolveSlack_PerSandbox_NameTaken_ArchivedReservation(t *testing.T) {
+	p := profileWithSlack(boolPtrCreate(true), true, "")
+	api := &fakeSlackAPI{
+		createChannelErr:  &slack.SlackAPIError{Method: "conversations.create", Code: "name_taken"},
+		findChannelResult: "", // lookup returns no match — archived-reservation case
+	}
+	ssmStore := &fakeSSMParamStore{}
+
+	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
+	if err == nil {
+		t.Fatal("expected error when name_taken AND lookup returns no match (archived reservation)")
+	}
+	if !strings.Contains(err.Error(), "archived") || !strings.Contains(err.Error(), "--alias") {
+		t.Errorf("error should mention archived state and --alias remediation, got: %v", err)
+	}
+}
+
+// Renamed from TestResolveSlack_PerSandbox_InviteFails_Error — invite failure
+// is now non-fatal so a healthy channel + bot doesn't get blocked by a
+// transient cross-workspace invite glitch. Operator can re-invite manually.
+func TestResolveSlack_PerSandbox_InviteFails_NonFatal(t *testing.T) {
 	p := profileWithSlack(boolPtrCreate(true), true, "")
 	api := &fakeSlackAPI{
 		createChannelResult: "CNEW",
@@ -301,12 +343,18 @@ func TestResolveSlack_PerSandbox_InviteFails_Error(t *testing.T) {
 		},
 	}
 
-	_, _, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
-	if err == nil {
-		t.Fatal("expected error when invite fails")
+	chID, perSb, err := resolveSlackChannel(context.Background(), p, "sb-abc123", "demo", api, ssmStore, "/km/")
+	if err != nil {
+		t.Fatalf("invite failure should be non-fatal, got error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "invite") {
-		t.Errorf("error %q should mention invite", err.Error())
+	if chID != "CNEW" {
+		t.Errorf("expected channel ID CNEW (channel was created), got %q", chID)
+	}
+	if !perSb {
+		t.Error("perSandbox should still be true even when invite fails")
+	}
+	if !api.inviteSharedCalled {
+		t.Error("InviteShared should still be attempted (just non-fatal on failure)")
 	}
 }
 

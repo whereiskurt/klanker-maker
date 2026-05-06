@@ -182,7 +182,7 @@ echo "[km-bootstrap] Hostname set to ${SANDBOX_FQDN}"
 # inbound poller and Stop hook see them on first dispatch.
 echo "[km-bootstrap] Fetching Slack runtime config from SSM Parameter Store..."
 SLACK_CHANNEL_ID_PARAM="{{ .SsmPrefix }}sandbox/{{ .SandboxID }}/slack-channel-id"
-SLACK_BRIDGE_URL_PARAM="/km/slack/bridge-url" # TODO(plan-04): read prefix from /etc/km/notify.env
+SLACK_BRIDGE_URL_PARAM="{{ .SsmPrefix }}slack/bridge-url"
 SLACK_RUNTIME_FILE="/etc/profile.d/km-slack-runtime.sh"
 CHANNEL_ID=""
 BRIDGE_URL=""
@@ -863,7 +863,7 @@ Environment=CW_LOG_GROUP=/km/sandboxes/{{ .SandboxID }}/
 Environment=AUDIT_LOG_DEST=cloudwatch
 {{- if gt .IdleTimeoutMinutes 0 }}
 Environment=IDLE_TIMEOUT_MINUTES={{ .IdleTimeoutMinutes }}
-Environment=KM_SANDBOX_TABLE=km-sandboxes
+Environment=KM_SANDBOX_TABLE={{ .ResourcePrefix }}-sandboxes
 {{- if .IdleAction }}
 Environment=IDLE_ACTION={{ .IdleAction }}
 {{- end }}
@@ -1209,7 +1209,7 @@ fi
 KM_SLACK_CHANNEL_ID="${KM_SLACK_CHANNEL_ID:-}"
 KM_SLACK_BRIDGE_URL="${KM_SLACK_BRIDGE_URL:-}"
 CHANNEL_PARAM="{{ .SsmPrefix }}sandbox/${SANDBOX_ID}/slack-channel-id"
-BRIDGE_PARAM="/km/slack/bridge-url" # TODO(plan-04): read prefix from /etc/km/notify.env
+BRIDGE_PARAM="{{ .SsmPrefix }}slack/bridge-url"
 if [ -z "$KM_SLACK_CHANNEL_ID" ]; then
   for attempt in 1 2 3; do
     KM_SLACK_CHANNEL_ID=$(aws ssm get-parameter \
