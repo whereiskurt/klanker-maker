@@ -331,16 +331,13 @@ echo "[km-bootstrap] KM_ALIAS_EMAIL={{ .AliasEmail }}"
 # ============================================================
 echo "[km-bootstrap] Installing GIT_ASKPASS credential helper..."
 mkdir -p /opt/km/bin
-# Askpass uses ${KM_SANDBOX_ID} (set in /etc/profile.d/km-identity.sh and
-# therefore present in every interactive shell + subshell) instead of
-# ${SANDBOX_ID} (which only exists during cloud-init and was empty in
-# every git operation that ran post-bootstrap, producing an empty token
-# and "Invalid username or token" from GitHub). The previous SANDBOX_ID=
-# export before this heredoc is removed since nothing else needs it now.
+# Askpass bakes in {{ .SandboxID }} at compile time (not ${KM_SANDBOX_ID})
+# so it works in any subprocess context — including ones that clear or
+# never received KM_SANDBOX_ID in their environment.
 cat > /opt/km/bin/km-git-askpass << 'ASKPASS'
 #!/bin/bash
 TOKEN=$(aws ssm get-parameter \
-  --name "{{ .SsmPrefix }}sandbox/${KM_SANDBOX_ID}/github-token" \
+  --name "{{ .SsmPrefix }}sandbox/{{ .SandboxID }}/github-token" \
   --with-decryption \
   --query "Parameter.Value" \
   --output text 2>/dev/null || echo "")
@@ -358,7 +355,28 @@ export GIT_ASKPASS=/opt/km/bin/km-git-askpass
 # GIT_ASKPASS and git fell back to prompting for credentials.
 echo 'export GIT_ASKPASS=/opt/km/bin/km-git-askpass' >> /etc/profile.d/km-profile-env.sh
 chmod 644 /etc/profile.d/km-profile-env.sh
-echo "[km-bootstrap] GIT_ASKPASS credential helper installed"
+git config --system core.askpass /opt/km/bin/km-git-askpass
+
+# credential.helper: Claude Code runs git clone with GIT_TERMINAL_PROMPT=0 and
+# clears GIT_ASKPASS, so core.askpass is bypassed. A credential.helper is a
+# separate code path that Claude Code does not override. The helper reads the
+# GitHub installation token from SSM at clone time.
+# Sandbox ID is baked in (not $KM_SANDBOX_ID) so it works in any subprocess context.
+cat > /opt/km/bin/km-git-credential-helper << 'CRED_HELPER'
+#!/bin/bash
+if [ "$1" = "get" ]; then
+  while IFS= read -r line; do [ -z "$line" ] && break; done
+  TOKEN=$(aws ssm get-parameter \
+    --name "{{ .SsmPrefix }}sandbox/{{ .SandboxID }}/github-token" \
+    --with-decryption \
+    --query "Parameter.Value" \
+    --output text 2>/dev/null)
+  [ -n "$TOKEN" ] && printf "username=x-access-token\npassword=%s\n" "$TOKEN"
+fi
+CRED_HELPER
+chmod +x /opt/km/bin/km-git-credential-helper
+git config --system credential.helper /opt/km/bin/km-git-credential-helper
+echo "[km-bootstrap] GitHub git credential helper installed"
 {{- end }}
 
 {{- if .HasAllowedRefs }}
