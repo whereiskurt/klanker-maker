@@ -359,8 +359,8 @@ resource "aws_iam_role_policy" "ec2spot_budget_dynamo" {
           "dynamodb:Query",
         ]
         Resource = [
-          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/km-budgets",
-          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/km-budgets/index/*",
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.resource_prefix}-budgets",
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.resource_prefix}-budgets/index/*",
         ]
       },
       {
@@ -369,7 +369,7 @@ resource "aws_iam_role_policy" "ec2spot_budget_dynamo" {
         Action = [
           "dynamodb:GetItem",
         ]
-        Resource = "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/km-sandboxes"
+        Resource = "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.resource_prefix}-sandboxes"
       }
     ]
   })
@@ -402,19 +402,23 @@ resource "aws_iam_role_policy" "ec2spot_github_token" {
         Effect = "Allow"
         Action = ["ssm:GetParameter"]
         Resource = [
-          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/sandbox/${var.sandbox_id}/*",
+          # Per-sandbox identity + GitHub token live at /{resource_prefix}/sandbox/{sandbox_id}/...
+          # (see pkg/aws/identity.go:99). The hardcoded /sandbox/ here used to deny access on
+          # any non-default-prefix install — sandbox couldn't read its own signing key.
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.resource_prefix}/sandbox/${var.sandbox_id}/*",
         ]
       },
       {
         # Phase 67 gap closure: cloud-init bootstrap polls the operator-wide
         # bridge URL so it can write KM_SLACK_BRIDGE_URL into the env file.
-        # /km/slack/bridge-url is shared across sandboxes (one bridge Lambda
-        # per region), so it lives outside the per-sandbox prefix.
+        # /{prefix}/slack/bridge-url is shared across sandboxes (one bridge Lambda
+        # per region), so it lives outside the per-sandbox segment but still under
+        # the operator's resource_prefix.
         Sid    = "SSMReadSlackBridgeURL"
         Effect = "Allow"
         Action = ["ssm:GetParameter"]
         Resource = [
-          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/km/slack/bridge-url",
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.resource_prefix}/slack/bridge-url",
         ]
       }
     ]

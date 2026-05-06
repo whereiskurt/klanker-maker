@@ -363,8 +363,12 @@ resource "aws_iam_role_policy" "ssm" {
           "ssm:DeleteParameter",
         ]
         Resource = [
-          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/km/*",
-          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/sandbox/*",
+          # Operator config + per-sandbox identity all live under the
+          # resource_prefix (see pkg/aws/identity.go:99). The previous
+          # hardcoded /km/* and /sandbox/* denied access on non-default-prefix
+          # installs — Lambda couldn't read /kph/config/... or write
+          # /kph/sandbox/{id}/signing-key.
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.resource_prefix}/*",
         ]
       }
     ]

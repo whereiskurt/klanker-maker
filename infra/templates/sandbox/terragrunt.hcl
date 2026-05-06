@@ -44,10 +44,18 @@ terraform {
 }
 
 inputs = merge(
-  # Common inputs for all sandboxes
+  # Common inputs for all sandboxes.
+  # km_label and resource_prefix carry the same value (the operator's
+  # resource_prefix) by different names — km_label is the Phase-2 name
+  # used in tags, resource_prefix is the Phase-66 name used in IAM ARNs.
+  # Passing both keeps the modules' two consumers happy until we converge
+  # on a single name in a future cleanup. Without resource_prefix here,
+  # ec2spot's IAM policies would default to "km" and deny access to any
+  # operator-prefixed resource (kph-budgets, kph-sandboxes, /kph/sandbox/*).
   {
     km_label         = local.site_vars.locals.site.label
     km_random_suffix = local.site_vars.locals.site.random_suffix
+    resource_prefix  = local.site_vars.locals.site.label
     region_label     = local.region_label
     region_full      = local.svc_config.locals.region_full
     sandbox_id       = local.sandbox_id
