@@ -100,20 +100,35 @@ func getEmailDomain() string {
 	return "sandboxes.klankermaker.ai"
 }
 
-// sandboxTableName returns the DynamoDB sandbox table name from the KM_SANDBOX_TABLE_NAME env var.
+// resourcePrefix returns the resource prefix from the KM_RESOURCE_PREFIX env var,
+// falling back to "km" only when truly unset. Source of truth for derived
+// defaults below so a non-default install (e.g. resource_prefix=kph) gets
+// prefix-correct fallbacks even if other env vars accidentally aren't set.
+func resourcePrefix() string {
+	if v := os.Getenv("KM_RESOURCE_PREFIX"); v != "" {
+		return v
+	}
+	return "km"
+}
+
+// sandboxTableName returns the DynamoDB sandbox table name from the
+// KM_SANDBOX_TABLE_NAME env var. Falls back to {prefix}-sandboxes derived
+// from KM_RESOURCE_PREFIX so a non-default install resolves to its actual
+// table (kph-sandboxes) instead of silently using the literal "km-sandboxes".
 func sandboxTableName() string {
 	if v := os.Getenv("KM_SANDBOX_TABLE_NAME"); v != "" {
 		return v
 	}
-	return "km-sandboxes"
+	return resourcePrefix() + "-sandboxes"
 }
 
-// identitiesTable returns the DynamoDB identities table name from the KM_IDENTITIES_TABLE env var.
+// identitiesTable returns the DynamoDB identities table name from the
+// KM_IDENTITIES_TABLE env var. Same prefix-derived fallback as sandboxTableName.
 func identitiesTable() string {
 	if v := os.Getenv("KM_IDENTITIES_TABLE"); v != "" {
 		return v
 	}
-	return "km-identities"
+	return resourcePrefix() + "-identities"
 }
 
 // Handle is the Lambda handler method. EventBridge Rules deliver the full envelope;

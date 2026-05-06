@@ -105,21 +105,37 @@ type SESEmailAPI interface {
 
 // ---- handler ----
 
-// sandboxTableName returns the DynamoDB sandbox table name from the KM_SANDBOX_TABLE_NAME env var.
+// resourcePrefix returns the resource prefix from the KM_RESOURCE_PREFIX env var,
+// falling back to "km" only when truly unset. Used as the source of truth for
+// derived defaults below — sandbox table, SSM config prefix — so a non-default
+// install (e.g. resource_prefix=kph) gets prefix-correct fallbacks even if
+// other env vars accidentally aren't set.
+func resourcePrefix() string {
+	if v := os.Getenv("KM_RESOURCE_PREFIX"); v != "" {
+		return v
+	}
+	return "km"
+}
+
+// sandboxTableName returns the DynamoDB sandbox table name from the
+// KM_SANDBOX_TABLE_NAME env var. Falls back to {prefix}-sandboxes derived
+// from KM_RESOURCE_PREFIX so a non-default install resolves to its actual
+// table (kph-sandboxes) instead of silently using the literal "km-sandboxes".
 func sandboxTableName() string {
 	if v := os.Getenv("KM_SANDBOX_TABLE_NAME"); v != "" {
 		return v
 	}
-	return "km-sandboxes"
+	return resourcePrefix() + "-sandboxes"
 }
 
-// ssmConfigPrefix returns the SSM config prefix from the KM_SSM_CONFIG_PREFIX env var.
+// ssmConfigPrefix returns the SSM config prefix from the KM_SSM_PREFIX env var.
 // Used for operator-level config paths like remote-create/safe-phrase.
+// Falls back to /{prefix}/ derived from KM_RESOURCE_PREFIX (was hardcoded /km/).
 func ssmConfigPrefix() string {
 	if v := os.Getenv("KM_SSM_PREFIX"); v != "" {
 		return v
 	}
-	return "/km/"
+	return "/" + resourcePrefix() + "/"
 }
 
 // OperatorEmailHandler processes SES-delivered emails to operator@sandboxes.{domain}.

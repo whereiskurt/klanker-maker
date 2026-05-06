@@ -133,28 +133,32 @@ func getEmailDomain() string {
 	return "sandboxes.klankermaker.ai"
 }
 
-// sandboxTableName returns the DynamoDB sandbox table name from the KM_SANDBOX_TABLE_NAME env var.
+// sandboxTableName / budgetTableName / schedulesTableName all derive their
+// fallback from KM_RESOURCE_PREFIX so a non-default install (e.g.
+// resource_prefix=kph) gets prefix-correct fallbacks (kph-sandboxes etc.)
+// instead of silently using literal "km-*" defaults that don't exist.
+// Defense in depth — the explicit KM_SANDBOX_TABLE_NAME / KM_BUDGET_TABLE
+// / KM_SCHEDULES_TABLE env vars are normally set by the Lambda terraform,
+// but this guards against future regressions in the env block.
 func sandboxTableName() string {
 	if v := os.Getenv("KM_SANDBOX_TABLE_NAME"); v != "" {
 		return v
 	}
-	return "km-sandboxes"
+	return resourcePrefix() + "-sandboxes"
 }
 
-// budgetTableName returns the DynamoDB budget table name from the KM_BUDGET_TABLE env var.
 func budgetTableName() string {
 	if v := os.Getenv("KM_BUDGET_TABLE"); v != "" {
 		return v
 	}
-	return "km-budgets"
+	return resourcePrefix() + "-budgets"
 }
 
-// schedulesTableName returns the DynamoDB schedules table name from the KM_SCHEDULES_TABLE env var.
 func schedulesTableName() string {
 	if v := os.Getenv("KM_SCHEDULES_TABLE"); v != "" {
 		return v
 	}
-	return "km-schedules"
+	return resourcePrefix() + "-schedules"
 }
 
 // ttlHandlerName returns the TTL handler Lambda function name from the KM_TTL_HANDLER_NAME env var.

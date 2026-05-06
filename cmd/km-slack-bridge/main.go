@@ -65,10 +65,15 @@ func init() {
 	ddb := dynamodb.NewFromConfig(cfg)
 	ssmc := ssm.NewFromConfig(cfg)
 
-	identitiesTable := envOr("KM_IDENTITIES_TABLE", "km-identities")
-	sandboxesTable := envOr("KM_SANDBOX_TABLE_NAME", "km-sandboxes")
-	nonceTable := envOr("KM_NONCE_TABLE", "km-slack-bridge-nonces")
-	botTokenPath := envOr("KM_BOT_TOKEN_PATH", "/km/slack/bot-token")
+	// Defaults derive from KM_RESOURCE_PREFIX so a non-default install
+	// (resource_prefix=kph) gets prefix-correct fallbacks (kph-identities,
+	// kph-sandboxes, /kph/slack/bot-token) even if any specific env var
+	// is accidentally not set by the Lambda terraform.
+	prefix := resourcePrefix()
+	identitiesTable := envOr("KM_IDENTITIES_TABLE", prefix+"-identities")
+	sandboxesTable := envOr("KM_SANDBOX_TABLE_NAME", prefix+"-sandboxes")
+	nonceTable := envOr("KM_NONCE_TABLE", prefix+"-slack-bridge-nonces")
+	botTokenPath := envOr("KM_BOT_TOKEN_PATH", "/"+prefix+"/slack/bot-token")
 
 	keys := &bridge.DynamoPublicKeyFetcher{Client: ddb, TableName: identitiesTable}
 	nonces := &bridge.DynamoNonceStore{Client: ddb, TableName: nonceTable}
@@ -151,7 +156,7 @@ func init() {
 	// If KM_SLACK_THREADS_TABLE is absent, log a warning and skip.
 	// The existing Phase 63 envelope path (POST /) continues to work.
 	// ==============================================================
-	signingSecretPath := envOr("KM_SIGNING_SECRET_PATH", "/km/slack/signing-secret")
+	signingSecretPath := envOr("KM_SIGNING_SECRET_PATH", "/"+prefix+"/slack/signing-secret")
 	threadsTable := os.Getenv("KM_SLACK_THREADS_TABLE")
 	if threadsTable == "" {
 		threadsTable = "km-slack-threads"
@@ -320,6 +325,19 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// resourcePrefix returns the operator's resource_prefix from the
+// KM_RESOURCE_PREFIX env var, falling back to "km" only when truly unset.
+// Used to derive prefix-aware fallbacks for table names and SSM paths so
+// a non-default install (e.g. resource_prefix=kph) gets prefix-correct
+// fallbacks even if a specific env var (KM_IDENTITIES_TABLE etc.) is
+// accidentally not set by the Lambda terraform.
+func resourcePrefix() string {
+	if v := os.Getenv("KM_RESOURCE_PREFIX"); v != "" {
+		return v
+	}
+	return "km"
 }
 
 // ============================================================

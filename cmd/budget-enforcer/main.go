@@ -128,20 +128,26 @@ func getEmailDomain() string {
 	return "sandboxes.klankermaker.ai"
 }
 
-// sandboxTableName returns the DynamoDB sandbox table name from the KM_SANDBOX_TABLE_NAME env var.
+// sandboxTableName returns the DynamoDB sandbox table name from the
+// KM_SANDBOX_TABLE_NAME env var. Falls back to {resource_prefix}-sandboxes
+// when the explicit env var is missing, using KM_RESOURCE_PREFIX as the
+// source of truth — so a non-default install (e.g. resource_prefix=kph)
+// still resolves to its actual table (kph-sandboxes) instead of silently
+// using the literal "km-sandboxes" default that doesn't exist there.
 func sandboxTableName() string {
 	if v := os.Getenv("KM_SANDBOX_TABLE_NAME"); v != "" {
 		return v
 	}
-	return "km-sandboxes"
+	return resourcePrefix() + "-sandboxes"
 }
 
 // budgetTableName returns the DynamoDB budget table name from the KM_BUDGET_TABLE env var.
+// Same prefix-derived fallback as sandboxTableName.
 func budgetTableName() string {
 	if v := os.Getenv("KM_BUDGET_TABLE"); v != "" {
 		return v
 	}
-	return "km-budgets"
+	return resourcePrefix() + "-budgets"
 }
 
 // resourcePrefix returns the resource prefix from the KM_RESOURCE_PREFIX env var.

@@ -1160,7 +1160,7 @@ set -euo pipefail
 QUEUE_URL="${KM_SLACK_INBOUND_QUEUE_URL:-}"
 SANDBOX_ID="${KM_SANDBOX_ID:-}"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
-THREADS_TABLE="${KM_SLACK_THREADS_TABLE:-km-slack-threads}"
+THREADS_TABLE="${KM_SLACK_THREADS_TABLE:-${KM_RESOURCE_PREFIX:-km}-slack-threads}"
 
 # Export AWS_REGION so subprocesses (km-slack post, km-send, etc.) inherit it.
 # The systemd unit's EnvironmentFile=/etc/profile.d/km-notify-env.sh uses
@@ -1722,7 +1722,7 @@ done
 
 MAIL_DIR="/var/mail/km"
 SANDBOX_ID="${KM_SANDBOX_ID:-}"
-IDENTITIES_TABLE="${KM_IDENTITIES_TABLE:-km-identities}"
+IDENTITIES_TABLE="${KM_IDENTITIES_TABLE:-${KM_RESOURCE_PREFIX:-km}-identities}"
 
 # ----------------------------------------------------------------
 # ed25519_pubkey_to_pem: convert a base64-encoded 32-byte Ed25519
