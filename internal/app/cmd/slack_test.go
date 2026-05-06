@@ -22,9 +22,12 @@ type fakeSlackInitAPI struct {
 	authErr     error
 	createID    string
 	createErr   error
+	findID      string // returned by FindChannelByName when name_taken triggered the lookup path
+	findErr     error
 	inviteErr   error
 	authCalls   int
 	createCalls int
+	findCalls   int
 	inviteCalls int
 }
 
@@ -36,6 +39,11 @@ func (f *fakeSlackInitAPI) AuthTest(_ context.Context) error {
 func (f *fakeSlackInitAPI) CreateChannel(_ context.Context, _ string) (string, error) {
 	f.createCalls++
 	return f.createID, f.createErr
+}
+
+func (f *fakeSlackInitAPI) FindChannelByName(_ context.Context, _ string) (string, error) {
+	f.findCalls++
+	return f.findID, f.findErr
 }
 
 func (f *fakeSlackInitAPI) InviteShared(_ context.Context, _, _ string) error {
@@ -265,6 +273,93 @@ func TestSlackInit_Force_RecreatesChannel(t *testing.T) {
 	}
 }
 
+// TestSlackInit_NameTaken_AutoReuses verifies the recovery path: when
+// CreateChannel returns name_taken (channel exists in Slack but not in SSM —
+// the canonical fresh-install / post-unbootstrap state), init looks up the
+// channel by name, persists its ID to SSM, and proceeds without operator
+// intervention.
+func TestSlackInit_NameTaken_AutoReuses(t *testing.T) {
+	api := &fakeSlackInitAPI{
+		createErr: &slack.SlackAPIError{Method: "conversations.create", Code: "name_taken"},
+		findID:    "CEXISTING42",
+	}
+	ssm := newFakeSSM(nil) // empty SSM mirrors fresh install
+	tg := &fakeTerragrunt{}
+	prompter := &fakePrompter{ordered: []string{"xoxb-test-token", "ops@example.com"}}
+	poster := &fakeBridgePoster{}
+
+	deps := buildSlackTestDeps(api, ssm, tg, prompter, poster)
+	opts := cmd.SlackInitOpts{SharedChannel: "km-notifications"}
+
+	if err := cmd.RunSlackInit(context.Background(), deps, opts); err != nil {
+		t.Fatalf("expected auto-recover, got error: %v", err)
+	}
+	if api.findCalls != 1 {
+		t.Errorf("FindChannelByName should run exactly once on name_taken; got %d calls", api.findCalls)
+	}
+	if ssm.store["/km/slack/shared-channel-id"] != "CEXISTING42" {
+		t.Errorf("looked-up channel ID should be persisted; got %q", ssm.store["/km/slack/shared-channel-id"])
+	}
+	// Reusing an existing channel skips the Slack Connect invite — operator
+	// presumably accepted at original creation time.
+	if api.inviteCalls != 0 {
+		t.Errorf("InviteShared should NOT be called when reusing an existing channel; got %d calls", api.inviteCalls)
+	}
+}
+
+// TestSlackInit_NameTaken_ButLookupFailsScopeError verifies the error message
+// when name_taken is followed by a lookup failure (e.g. bot lacks
+// channels:read scope). The operator gets an actionable hint, not a buried
+// error.
+func TestSlackInit_NameTaken_ButLookupFailsScopeError(t *testing.T) {
+	api := &fakeSlackInitAPI{
+		createErr: &slack.SlackAPIError{Method: "conversations.create", Code: "name_taken"},
+		findErr:   &slack.SlackAPIError{Method: "conversations.list", Code: "missing_scope"},
+	}
+	ssm := newFakeSSM(nil)
+	tg := &fakeTerragrunt{}
+	prompter := &fakePrompter{ordered: []string{"xoxb-test-token", "ops@example.com"}}
+	poster := &fakeBridgePoster{}
+
+	deps := buildSlackTestDeps(api, ssm, tg, prompter, poster)
+	opts := cmd.SlackInitOpts{SharedChannel: "km-notifications"}
+
+	err := cmd.RunSlackInit(context.Background(), deps, opts)
+	if err == nil {
+		t.Fatal("expected error when name_taken AND lookup fails")
+	}
+	if !strings.Contains(err.Error(), "channels:read") {
+		t.Errorf("error should mention channels:read scope hint, got: %v", err)
+	}
+}
+
+// TestSlackInit_NameTaken_ArchivedReservation verifies the error path when
+// CreateChannel says name_taken but FindChannelByName returns ("", nil) —
+// the canonical signature of an archived channel within Slack's 30-day name
+// reservation window. We can't reuse an archived channel ID, so instruct
+// the operator to either pick a different name or unarchive.
+func TestSlackInit_NameTaken_ArchivedReservation(t *testing.T) {
+	api := &fakeSlackInitAPI{
+		createErr: &slack.SlackAPIError{Method: "conversations.create", Code: "name_taken"},
+		findID:    "", // not found in non-archived listing
+	}
+	ssm := newFakeSSM(nil)
+	tg := &fakeTerragrunt{}
+	prompter := &fakePrompter{ordered: []string{"xoxb-test-token", "ops@example.com"}}
+	poster := &fakeBridgePoster{}
+
+	deps := buildSlackTestDeps(api, ssm, tg, prompter, poster)
+	opts := cmd.SlackInitOpts{SharedChannel: "km-notifications"}
+
+	err := cmd.RunSlackInit(context.Background(), deps, opts)
+	if err == nil {
+		t.Fatal("expected error when name reserved by archived channel")
+	}
+	if !strings.Contains(err.Error(), "archived") || !strings.Contains(err.Error(), "--shared-channel") {
+		t.Errorf("error should explain archived-channel reservation and offer remediation, got: %v", err)
+	}
+}
+
 // 4. Invalid token — AuthTest returns error → exit with "invalid Slack bot token".
 func TestSlackInit_InvalidToken_Exits1(t *testing.T) {
 	api := &fakeSlackInitAPI{authErr: &slack.SlackAPIError{Method: "auth.test", Code: "invalid_auth"}}
@@ -452,6 +547,10 @@ func (f *fakeRotateAPI) AuthTest(_ context.Context) error {
 }
 
 func (f *fakeRotateAPI) CreateChannel(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+
+func (f *fakeRotateAPI) FindChannelByName(_ context.Context, _ string) (string, error) {
 	return "", nil
 }
 

@@ -47,6 +47,21 @@ type SlackAPIResponse struct {
 		IsMember   bool   `json:"is_member"`
 		NumMembers int    `json:"num_members"`
 	} `json:"channel,omitempty"`
+
+	// Channels and ResponseMetadata are populated by conversations.list.
+	// JSON-decode-safe to leave them empty on responses that don't include them.
+	Channels         []SlackChannelSummary `json:"channels,omitempty"`
+	ResponseMetadata struct {
+		NextCursor string `json:"next_cursor,omitempty"`
+	} `json:"response_metadata,omitempty"`
+}
+
+// SlackChannelSummary is the per-channel shape returned by conversations.list.
+// We only need ID + Name for lookup; the API returns many more fields.
+type SlackChannelSummary struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	IsArchived bool   `json:"is_archived"`
 }
 
 // SlackAPIError carries a non-OK Slack response. Lambda surfaces the Error
@@ -258,6 +273,50 @@ func (c *Client) CreateChannel(ctx context.Context, name string) (string, error)
 		return "", err
 	}
 	return resp.Channel.ID, nil
+}
+
+// FindChannelByName scans public channels via conversations.list and returns
+// the first channel whose name exactly matches. Returns ("", nil) if no
+// match exists (caller decides whether that's an error). Errors are returned
+// untouched so callers can inspect SlackAPIError for missing_scope etc.
+//
+// Used by km slack init to recover from CreateChannel's name_taken — the
+// channel exists in Slack but its ID isn't in SSM (e.g. fresh install after
+// km unbootstrap, or first run on a new operator workstation).
+//
+// Requires the bot's `channels:read` scope. Slack returns "missing_scope" via
+// SlackAPIError if the bot wasn't granted it; the caller should surface that
+// as actionable guidance.
+//
+// Archived channels are excluded by default — name_taken on a name reserved
+// by an archived channel is a Slack-side 30-day reservation that no API call
+// can clear, so reuse of the archived ID isn't viable; the operator must
+// pick a new name or wait out the reservation.
+func (c *Client) FindChannelByName(ctx context.Context, name string) (string, error) {
+	cursor := ""
+	for {
+		body := map[string]any{
+			"types":            "public_channel",
+			"limit":            200, // Slack max 1000; 200 keeps each page fast
+			"exclude_archived": true,
+		}
+		if cursor != "" {
+			body["cursor"] = cursor
+		}
+		resp, err := c.callJSON(ctx, "conversations.list", body)
+		if err != nil {
+			return "", err
+		}
+		for _, ch := range resp.Channels {
+			if ch.Name == name {
+				return ch.ID, nil
+			}
+		}
+		if resp.ResponseMetadata.NextCursor == "" {
+			return "", nil
+		}
+		cursor = resp.ResponseMetadata.NextCursor
+	}
 }
 
 // InviteShared sends a Slack Connect invite to email.

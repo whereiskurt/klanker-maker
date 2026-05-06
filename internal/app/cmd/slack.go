@@ -37,10 +37,16 @@ import (
 
 // SlackInitAPI is the narrow Slack Web API surface needed by km slack init.
 // *kmslack.Client satisfies this interface.
+//
+// FindChannelByName lets init recover from CreateChannel's name_taken error
+// — common after km unbootstrap (which clears SSM but doesn't talk to Slack)
+// or on a fresh operator workstation that doesn't have shared-channel-id
+// in SSM yet.
 // (create_slack.go defines SlackAPI for km create; this adds AuthTest for bootstrap.)
 type SlackInitAPI interface {
 	AuthTest(ctx context.Context) error
 	CreateChannel(ctx context.Context, name string) (string, error)
+	FindChannelByName(ctx context.Context, name string) (string, error)
 	InviteShared(ctx context.Context, channelID, email string) error
 }
 
@@ -236,17 +242,44 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 	chID, _ := d.SSM.Get(ctx, d.SsmPrefix+"slack/shared-channel-id", false)
 	if chID == "" || opts.Force {
 		newID, err := api.CreateChannel(ctx, chName)
-		if err != nil {
-			// --force is idempotent: if the channel already exists, keep the stored ID
-			// and re-apply the rest (Lambda redeploy, token rotation). Slack does not
-			// allow renaming back to an existing #name, so reuse beats fail.
-			var apierr *kmslack.SlackAPIError
-			if opts.Force && chID != "" && errors.As(err, &apierr) && apierr.Code == "name_taken" {
-				fmt.Fprintf(os.Stderr, "shared channel %q already exists (%s); reusing\n", chName, chID)
-			} else {
-				return fmt.Errorf("create shared channel %q: %w", chName, err)
+		var apierr *kmslack.SlackAPIError
+		nameTaken := errors.As(err, &apierr) && apierr.Code == "name_taken"
+
+		switch {
+		case err != nil && !nameTaken:
+			return fmt.Errorf("create shared channel %q: %w", chName, err)
+
+		case nameTaken:
+			// Channel exists in Slack but its ID isn't in SSM (or is stale).
+			// Look it up and reuse rather than failing — every previous
+			// alternative (--force without stored ID, picking a fresh name,
+			// archiving) requires manual operator action and is brittle on
+			// fresh-install / post-unbootstrap workflows.
+			//
+			// FindChannelByName excludes archived channels, so a name reserved
+			// by a recently-archived channel still trips name_taken. Slack
+			// holds those names for ~30 days; if that's the case we can't
+			// reuse and must surface the situation clearly.
+			existingID, lookupErr := api.FindChannelByName(ctx, chName)
+			if lookupErr != nil {
+				return fmt.Errorf("channel %q exists (name_taken) but lookup via conversations.list failed: %w\n"+
+					"Either grant the bot the channels:read scope and re-run, or pick a different name with --shared-channel", chName, lookupErr)
 			}
-		} else {
+			if existingID == "" {
+				return fmt.Errorf("channel %q name is reserved (likely by an archived channel within Slack's 30-day reservation window). "+
+					"Pick a different name with --shared-channel, or unarchive the existing channel and re-run", chName)
+			}
+			fmt.Fprintf(os.Stderr, "shared channel %q already exists (%s); reusing\n", chName, existingID)
+			chID = existingID
+			// Persist so subsequent runs don't have to re-discover.
+			if err := d.SSM.Put(ctx, d.SsmPrefix+"slack/shared-channel-id", chID, false); err != nil {
+				return fmt.Errorf("store shared-channel-id: %w", err)
+			}
+			// Skip the invite — operator presumably accepted at first creation.
+			// If they didn't, re-running with a fresh --shared-channel name will
+			// drive a clean create+invite path.
+
+		default: // err == nil
 			chID = newID
 			if err := d.SSM.Put(ctx, d.SsmPrefix+"slack/shared-channel-id", chID, false); err != nil {
 				return fmt.Errorf("store shared-channel-id: %w", err)
