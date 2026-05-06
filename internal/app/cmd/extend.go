@@ -168,7 +168,15 @@ func runExtend(ctx context.Context, cfg *config.Config, sandboxID string, addDur
 	}
 
 	// Step 4: Update metadata with new expiry via DynamoDB (S3 fallback on ResourceNotFoundException).
+	// Both TTLExpiry and ExpiresAt must be updated. TTLExpiry feeds DynamoDB
+	// native TTL (ttl_expiry N attribute), ExpiresAt feeds the display string
+	// (expires_at S attribute). For sandboxes with teardown_policy = "stop",
+	// marshalSandboxItem deliberately omits ttl_expiry so DynamoDB doesn't
+	// auto-delete the row, and km list falls back to expires_at for display.
+	// Without updating ExpiresAt here, those sandboxes display the OLD expiry
+	// after every km extend even though the EventBridge schedule is correct.
 	meta.TTLExpiry = &newExpiry
+	meta.ExpiresAt = &newExpiry
 	if writeErr := awspkg.WriteSandboxMetadataDynamo(ctx, dynamoClient, tableName, meta); writeErr != nil {
 		var rnf *dynamodbtypes.ResourceNotFoundException
 		if errors.As(writeErr, &rnf) && cfg.StateBucket != "" {
