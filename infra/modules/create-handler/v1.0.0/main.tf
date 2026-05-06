@@ -163,12 +163,14 @@ resource "aws_iam_role_policy" "terraform_state" {
           "s3:DeleteObject",
           "s3:ListBucket",
           # Terragrunt v0.69+ introspects bucket-level config (policy,
-          # encryption, versioning, lifecycle, replication) before each
-          # terraform init to decide whether to bootstrap the backend.
-          # Without these, init fails with AccessDenied on bucket-level
-          # ops even when state read/write works fine. GetBucketPolicy
-          # was missed in the first pass and surfaced as a separate failure.
+          # public-access block, encryption, versioning, lifecycle,
+          # replication) before each terraform init to decide whether to
+          # bootstrap the backend. Without these, init fails with
+          # AccessDenied on bucket-level ops even when state read/write
+          # works fine. GetBucketPolicy + GetBucketPublicAccessBlock
+          # surfaced after the bucket-level batch in 76a614f shipped.
           "s3:GetBucketPolicy",
+          "s3:GetBucketPublicAccessBlock",
           "s3:GetBucketVersioning",
           "s3:GetBucketLocation",
           "s3:GetEncryptionConfiguration",

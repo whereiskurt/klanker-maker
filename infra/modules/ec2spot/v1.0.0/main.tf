@@ -195,7 +195,7 @@ data "aws_ec2_spot_price" "price" {
 resource "aws_security_group" "ec2spot" {
   count = local.total_ec2spot_count > 0 ? 1 : 0
 
-  name        = "km-ec2spot-${var.sandbox_id}-${var.region_label}"
+  name        = "${var.resource_prefix}-ec2spot-${var.sandbox_id}-${var.region_label}"
   description = "Security group for km sandbox EC2 spot hosts (SSM-only access)"
   vpc_id      = local.effective_vpc_id
 
@@ -226,7 +226,7 @@ resource "aws_security_group_rule" "ec2spot_egress" {
 resource "aws_iam_role" "ec2spot_ssm" {
   count = local.total_ec2spot_count > 0 ? 1 : 0
 
-  name                 = "km-ec2spot-ssm-${var.sandbox_id}-${var.region_label}"
+  name                 = "${var.resource_prefix}-ec2spot-ssm-${var.sandbox_id}-${var.region_label}"
   max_session_duration = var.iam_session_policy.max_session_duration
 
   assume_role_policy = jsonencode({
@@ -253,7 +253,7 @@ resource "aws_iam_role" "ec2spot_ssm" {
 resource "aws_iam_role_policy" "ec2spot_region_lock" {
   count = (local.total_ec2spot_count > 0 && length(var.iam_session_policy.allowed_regions) > 0) ? 1 : 0
 
-  name = "km-ec2spot-region-lock-${var.region_label}"
+  name = "${var.resource_prefix}-ec2spot-region-lock-${var.region_label}"
   role = aws_iam_role.ec2spot_ssm[0].id
 
   policy = jsonencode({
@@ -509,7 +509,7 @@ resource "aws_iam_role_policy" "ec2spot_slack_transcript_ddb" {
 resource "aws_iam_instance_profile" "ec2spot" {
   count = local.total_ec2spot_count > 0 ? 1 : 0
 
-  name = "km-ec2spot-profile-${var.sandbox_id}-${var.region_label}"
+  name = "${var.resource_prefix}-ec2spot-profile-${var.sandbox_id}-${var.region_label}"
   role = aws_iam_role.ec2spot_ssm[0].name
 
   tags = {
