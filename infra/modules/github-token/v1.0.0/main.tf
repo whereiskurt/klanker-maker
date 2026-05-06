@@ -230,8 +230,14 @@ resource "aws_scheduler_schedule" "github_token_refresh" {
 
     # EventBridge Scheduler passes this JSON payload to the Lambda on each invocation.
     # All metadata needed to mint and store the token is embedded at sandbox creation time.
+    # resource_prefix is required: HandleTokenRefresh defaults it to "km" when missing,
+    # so the refresher Lambda would try to write the new token to /km/sandbox/.../github-token
+    # — denied by IAM (the role is scoped to /${var.resource_prefix}/sandbox/...) on any
+    # non-default install. Result: refresh fails on every tick, the initial 1-hour token
+    # expires, git clone breaks. Bug-fix history: see git log entry for this commit.
     input = jsonencode({
       sandbox_id         = var.sandbox_id
+      resource_prefix    = var.resource_prefix
       installation_id    = var.installation_id
       ssm_parameter_name = local.ssm_param
       kms_key_arn        = aws_kms_key.github_token.arn
