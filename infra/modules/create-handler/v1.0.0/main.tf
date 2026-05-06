@@ -94,6 +94,11 @@ resource "aws_iam_role_policy" "dynamodb" {
           "dynamodb:PutItem",
           "dynamodb:UpdateItem",
           "dynamodb:DeleteItem",
+          # Terragrunt v0.69+ calls DescribeTable on the lock table during
+          # backend init to confirm it exists / decide whether to bootstrap.
+          # Without it init fails with AccessDenied on the lock table even
+          # when item-level read/write would work fine.
+          "dynamodb:DescribeTable",
         ]
         Resource = "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.dynamodb_table_name}"
       },
@@ -157,11 +162,13 @@ resource "aws_iam_role_policy" "terraform_state" {
           "s3:PutObject",
           "s3:DeleteObject",
           "s3:ListBucket",
-          # Terragrunt v0.69+ introspects bucket-level config (encryption,
-          # versioning, lifecycle, replication) before each terraform init to
-          # decide whether to bootstrap the backend. Without these, init fails
-          # with AccessDenied on bucket-level ops even when state read/write
-          # works fine.
+          # Terragrunt v0.69+ introspects bucket-level config (policy,
+          # encryption, versioning, lifecycle, replication) before each
+          # terraform init to decide whether to bootstrap the backend.
+          # Without these, init fails with AccessDenied on bucket-level
+          # ops even when state read/write works fine. GetBucketPolicy
+          # was missed in the first pass and surfaced as a separate failure.
+          "s3:GetBucketPolicy",
           "s3:GetBucketVersioning",
           "s3:GetBucketLocation",
           "s3:GetEncryptionConfiguration",
