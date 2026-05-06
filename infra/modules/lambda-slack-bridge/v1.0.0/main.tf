@@ -274,9 +274,13 @@ resource "aws_lambda_function" "slack_bridge" {
 
   environment {
     variables = {
-      KM_IDENTITIES_TABLE = var.identities_table_name
-      KM_SANDBOXES_TABLE  = var.sandboxes_table_name
-      KM_NONCE_TABLE      = var.nonces_table_name
+      KM_IDENTITIES_TABLE   = var.identities_table_name
+      # Binary reads KM_SANDBOX_TABLE_NAME (cmd/km-slack-bridge/main.go:69);
+      # the previous KM_SANDBOXES_TABLE name didn't match what the code looked
+      # up, so the bridge fell back to its hardcoded "km-sandboxes" default —
+      # broken on any non-default resource_prefix install.
+      KM_SANDBOX_TABLE_NAME = var.sandboxes_table_name
+      KM_NONCE_TABLE        = var.nonces_table_name
       KM_BOT_TOKEN_PATH   = var.bot_token_path
       # Phase 67-05 additions — inbound events path
       KM_SIGNING_SECRET_PATH = var.signing_secret_path

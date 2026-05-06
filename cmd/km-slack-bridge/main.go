@@ -12,7 +12,7 @@
 // Environment variables:
 //
 //	KM_IDENTITIES_TABLE     — DynamoDB table for public keys (default: km-identities)
-//	KM_SANDBOXES_TABLE      — DynamoDB table for sandbox metadata (default: km-sandboxes)
+//	KM_SANDBOX_TABLE_NAME   — DynamoDB table for sandbox metadata (default: km-sandboxes)
 //	KM_NONCE_TABLE          — DynamoDB table for nonce replay protection (default: km-slack-bridge-nonces)
 //	KM_BOT_TOKEN_PATH       — SSM parameter path for Slack bot token (default: /km/slack/bot-token)
 //	KM_SIGNING_SECRET_PATH  — SSM parameter path for Slack signing secret (default: /km/slack/signing-secret)
