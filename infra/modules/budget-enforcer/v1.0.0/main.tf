@@ -3,7 +3,7 @@
 # ============================================================
 
 resource "aws_iam_role" "budget_enforcer" {
-  name = "km-budget-enforcer-${var.sandbox_id}"
+  name = "${var.resource_prefix}-budget-enforcer-${var.sandbox_id}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -25,7 +25,7 @@ resource "aws_iam_role" "budget_enforcer" {
 
 # Policy: CloudWatch Logs for Lambda execution logs
 resource "aws_iam_role_policy" "cloudwatch_logs" {
-  name = "km-budget-enforcer-cw-logs-${var.sandbox_id}"
+  name = "${var.resource_prefix}-budget-enforcer-cw-logs-${var.sandbox_id}"
   role = aws_iam_role.budget_enforcer.id
 
   policy = jsonencode({
@@ -46,7 +46,7 @@ resource "aws_iam_role_policy" "cloudwatch_logs" {
 
 # Policy: DynamoDB budget table access (read spend, write spend, set notification flags)
 resource "aws_iam_role_policy" "dynamodb_budget" {
-  name = "km-budget-enforcer-dynamodb-${var.sandbox_id}"
+  name = "${var.resource_prefix}-budget-enforcer-dynamodb-${var.sandbox_id}"
   role = aws_iam_role.budget_enforcer.id
 
   policy = jsonencode({
@@ -70,7 +70,7 @@ resource "aws_iam_role_policy" "dynamodb_budget" {
 
 # Policy: EC2 instance control (suspend sandbox at compute budget exhaustion)
 resource "aws_iam_role_policy" "ec2_control" {
-  name = "km-budget-enforcer-ec2-${var.sandbox_id}"
+  name = "${var.resource_prefix}-budget-enforcer-ec2-${var.sandbox_id}"
   role = aws_iam_role.budget_enforcer.id
 
   policy = jsonencode({
@@ -96,7 +96,7 @@ resource "aws_iam_role_policy" "ec2_control" {
 
 # Policy: ECS task control (stop task at compute budget exhaustion)
 resource "aws_iam_role_policy" "ecs_control" {
-  name = "km-budget-enforcer-ecs-${var.sandbox_id}"
+  name = "${var.resource_prefix}-budget-enforcer-ecs-${var.sandbox_id}"
   role = aws_iam_role.budget_enforcer.id
 
   policy = jsonencode({
@@ -116,7 +116,7 @@ resource "aws_iam_role_policy" "ecs_control" {
 
 # Policy: IAM policy detachment (Bedrock backstop when AI budget exhausted)
 resource "aws_iam_role_policy" "iam_policy_control" {
-  name = "km-budget-enforcer-iam-${var.sandbox_id}"
+  name = "${var.resource_prefix}-budget-enforcer-iam-${var.sandbox_id}"
   role = aws_iam_role.budget_enforcer.id
 
   policy = jsonencode({
@@ -137,7 +137,7 @@ resource "aws_iam_role_policy" "iam_policy_control" {
 
 # Policy: SES for budget enforcement notification emails
 resource "aws_iam_role_policy" "ses_send" {
-  name = "km-budget-enforcer-ses-${var.sandbox_id}"
+  name = "${var.resource_prefix}-budget-enforcer-ses-${var.sandbox_id}"
   role = aws_iam_role.budget_enforcer.id
 
   policy = jsonencode({
@@ -155,7 +155,7 @@ resource "aws_iam_role_policy" "ses_send" {
 # Policy: DynamoDB sandbox metadata (lock check and status update)
 resource "aws_iam_role_policy" "dynamodb_sandbox" {
   count = var.sandbox_table_arn != "" ? 1 : 0
-  name  = "km-budget-enforcer-dynamo-sandbox-${var.sandbox_id}"
+  name  = "${var.resource_prefix}-budget-enforcer-dynamo-sandbox-${var.sandbox_id}"
   role  = aws_iam_role.budget_enforcer.id
 
   policy = jsonencode({
@@ -176,7 +176,7 @@ resource "aws_iam_role_policy" "dynamodb_sandbox" {
 
 # Policy: EventBridge Scheduler (delete TTL schedule on budget enforcement)
 resource "aws_iam_role_policy" "scheduler_cleanup" {
-  name = "km-budget-enforcer-scheduler-${var.sandbox_id}"
+  name = "${var.resource_prefix}-budget-enforcer-scheduler-${var.sandbox_id}"
   role = aws_iam_role.budget_enforcer.id
 
   policy = jsonencode({
@@ -193,7 +193,7 @@ resource "aws_iam_role_policy" "scheduler_cleanup" {
 
 # Policy: S3 access for reading stored sandbox profiles (ECS teardown path)
 resource "aws_iam_role_policy" "s3_profiles" {
-  name = "km-budget-enforcer-s3-${var.sandbox_id}"
+  name = "${var.resource_prefix}-budget-enforcer-s3-${var.sandbox_id}"
   role = aws_iam_role.budget_enforcer.id
 
   policy = jsonencode({
@@ -213,7 +213,7 @@ resource "aws_iam_role_policy" "s3_profiles" {
 # ============================================================
 
 resource "aws_lambda_function" "budget_enforcer" {
-  function_name = "km-budget-enforcer-${var.sandbox_id}"
+  function_name = "${var.resource_prefix}-budget-enforcer-${var.sandbox_id}"
   description   = "Tracks compute spend and enforces budget limits for sandbox ${var.sandbox_id}"
   role          = aws_iam_role.budget_enforcer.arn
 
@@ -265,7 +265,7 @@ resource "aws_cloudwatch_log_group" "budget_enforcer" {
 # ============================================================
 
 resource "aws_iam_role" "scheduler_invoke" {
-  name = "km-budget-scheduler-${var.sandbox_id}"
+  name = "${var.resource_prefix}-budget-scheduler-${var.sandbox_id}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -286,7 +286,7 @@ resource "aws_iam_role" "scheduler_invoke" {
 }
 
 resource "aws_iam_role_policy" "scheduler_invoke_lambda" {
-  name = "km-budget-scheduler-invoke-${var.sandbox_id}"
+  name = "${var.resource_prefix}-budget-scheduler-invoke-${var.sandbox_id}"
   role = aws_iam_role.scheduler_invoke.id
 
   policy = jsonencode({
@@ -306,7 +306,7 @@ resource "aws_iam_role_policy" "scheduler_invoke_lambda" {
 # ============================================================
 
 resource "aws_scheduler_schedule" "budget_check" {
-  name       = "km-budget-${var.sandbox_id}"
+  name       = "${var.resource_prefix}-budget-${var.sandbox_id}"
   group_name = "default"
 
   # Run every minute for real-time compute cost tracking

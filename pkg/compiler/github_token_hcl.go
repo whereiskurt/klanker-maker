@@ -63,7 +63,15 @@ inputs = merge(
     # Platform-level inputs resolved at apply time.
     lambda_zip_path      = "${local.repo_root}/build/github-token-refresher.zip"
     installation_id      = "" # populated at apply time from SSM or operator config
-    sandbox_iam_role_arn = "arn:aws:iam::${local.site_vars.locals.accounts.application}:role/km-ec2spot-ssm-${local.gh_inputs.sandbox_id}-${local.site_vars.locals.region.label}"
+    # Resource prefix flows through to github-token's IAM resource names AND
+    # the Lambda's KM_GITHUB_SSM_CONFIG_PREFIX env var (so it reads from
+    # /{prefix}/config/github/* not /km/config/github/*).
+    resource_prefix      = local.site_vars.locals.site.label
+    # Sandbox role ARN must match the ec2spot module's actual role name
+    # (renamed from km-ec2spot-ssm-* to ${prefix}-ec2spot-ssm-* in commit
+    # afca791); without the site.label substitution this would point at a
+    # non-existent role on any non-default-prefix install.
+    sandbox_iam_role_arn = "arn:aws:iam::${local.site_vars.locals.accounts.application}:role/${local.site_vars.locals.site.label}-ec2spot-ssm-${local.gh_inputs.sandbox_id}-${local.site_vars.locals.region.label}"
   }
 )
 `

@@ -42,7 +42,7 @@ resource "aws_kms_key" "github_token" {
 }
 
 resource "aws_kms_alias" "github_token" {
-  name          = "alias/km-github-token-${var.sandbox_id}"
+  name          = "alias/${var.resource_prefix}-github-token-${var.sandbox_id}"
   target_key_id = aws_kms_key.github_token.key_id
 }
 
@@ -51,7 +51,7 @@ resource "aws_kms_alias" "github_token" {
 # ============================================================
 
 resource "aws_iam_role" "github_token_refresher" {
-  name = "km-github-token-refresher-${var.sandbox_id}"
+  name = "${var.resource_prefix}-github-token-refresher-${var.sandbox_id}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -72,7 +72,7 @@ resource "aws_iam_role" "github_token_refresher" {
 }
 
 resource "aws_iam_role_policy" "github_token_refresher" {
-  name = "km-github-token-refresher-policy-${var.sandbox_id}"
+  name = "${var.resource_prefix}-github-token-refresher-policy-${var.sandbox_id}"
   role = aws_iam_role.github_token_refresher.id
 
   policy = jsonencode({
@@ -83,7 +83,7 @@ resource "aws_iam_role_policy" "github_token_refresher" {
         Effect = "Allow"
         Action = ["ssm:GetParameter", "ssm:GetParameters"]
         Resource = [
-          "arn:aws:ssm:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:parameter/km/config/github/*"
+          "arn:aws:ssm:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:parameter/${var.resource_prefix}/config/github/*"
         ]
       },
       {
@@ -123,7 +123,7 @@ resource "aws_iam_role_policy" "github_token_refresher" {
 # ============================================================
 
 resource "aws_lambda_function" "github_token_refresher" {
-  function_name = "km-github-token-refresher-${var.sandbox_id}"
+  function_name = "${var.resource_prefix}-github-token-refresher-${var.sandbox_id}"
   description   = "Refreshes GitHub App installation token every 45 minutes for sandbox ${var.sandbox_id}"
   role          = aws_iam_role.github_token_refresher.arn
 
@@ -138,7 +138,7 @@ resource "aws_lambda_function" "github_token_refresher" {
 
   environment {
     variables = {
-      KM_GITHUB_SSM_CONFIG_PREFIX = "/km/config/github"
+      KM_GITHUB_SSM_CONFIG_PREFIX = "/${var.resource_prefix}/config/github"
     }
   }
 
@@ -171,7 +171,7 @@ resource "aws_cloudwatch_log_group" "github_token_refresher" {
 # ============================================================
 
 resource "aws_iam_role" "scheduler_invoke" {
-  name = "km-github-token-scheduler-${var.sandbox_id}"
+  name = "${var.resource_prefix}-github-token-scheduler-${var.sandbox_id}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -192,7 +192,7 @@ resource "aws_iam_role" "scheduler_invoke" {
 }
 
 resource "aws_iam_role_policy" "scheduler_invoke_lambda" {
-  name = "km-github-token-scheduler-invoke-${var.sandbox_id}"
+  name = "${var.resource_prefix}-github-token-scheduler-invoke-${var.sandbox_id}"
   role = aws_iam_role.scheduler_invoke.id
 
   policy = jsonencode({
@@ -212,7 +212,7 @@ resource "aws_iam_role_policy" "scheduler_invoke_lambda" {
 # ============================================================
 
 resource "aws_scheduler_schedule" "github_token_refresh" {
-  name       = "km-github-token-${var.sandbox_id}"
+  name       = "${var.resource_prefix}-github-token-${var.sandbox_id}"
   group_name = "default"
 
   # Token refresh every 45 minutes — GitHub installation tokens expire after 1 hour

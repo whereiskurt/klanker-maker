@@ -77,6 +77,11 @@ inputs = merge(
     # Platform-level inputs resolved from site variables.
     # These are not stored in service.hcl because they are account/region globals.
     lambda_zip_path    = "${local.repo_root}/build/budget-enforcer.zip"
+    # Resource prefix flows through to budget-enforcer's IAM resource names.
+    # Without this, the module defaults to "km" and the create-handler's
+    # iam:CreateRole policy (scoped to {prefix}-*) denies role creation on
+    # any non-default-prefix install.
+    resource_prefix    = local.site_vars.locals.site.label
     budget_table_name  = "${local.site_vars.locals.site.label}-budgets"
     budget_table_arn   = local.budget_table_arn
     sandbox_table_name = "${local.site_vars.locals.site.label}-sandboxes"

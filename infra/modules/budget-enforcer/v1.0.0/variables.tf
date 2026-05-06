@@ -3,6 +3,12 @@ variable "lambda_zip_path" {
   type        = string
 }
 
+variable "resource_prefix" {
+  description = "Phase-66 multi-instance resource prefix (e.g. 'km', 'kph'). Applied to IAM resource names so the per-sandbox budget-enforcer doesn't trip the create-handler's iam:CreateRole policy that scopes to {prefix}-*."
+  type        = string
+  default     = "km"
+}
+
 variable "budget_table_name" {
   description = "Name of the DynamoDB budget tracking table (e.g. km-budgets)"
   type        = string

@@ -3,6 +3,12 @@ variable "sandbox_id" {
   type        = string
 }
 
+variable "resource_prefix" {
+  description = "Phase-66 multi-instance resource prefix (e.g. 'km', 'kph'). Applied to IAM resource names + the Lambda's KM_GITHUB_SSM_CONFIG_PREFIX env var so the per-sandbox github-token-refresher reads from /{prefix}/config/github/* and the create-handler's iam:CreateRole policy doesn't deny the role create."
+  type        = string
+  default     = "km"
+}
+
 variable "lambda_zip_path" {
   description = "Path to the compiled Go Lambda bootstrap zip file (github-token-refresher binary)"
   type        = string

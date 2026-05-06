@@ -284,7 +284,7 @@ resource "aws_iam_role_policy_attachment" "ec2spot_ssm" {
 # Note: PutEvents does not support resource-level restrictions for the default event bus.
 resource "aws_iam_role_policy" "ec2spot_eventbridge" {
   count = local.total_ec2spot_count > 0 ? 1 : 0
-  name  = "km-${var.sandbox_id}-eventbridge"
+  name  = "${var.resource_prefix}-${var.sandbox_id}-eventbridge"
   role  = aws_iam_role.ec2spot_ssm[0].id
 
   policy = jsonencode({
@@ -300,7 +300,7 @@ resource "aws_iam_role_policy" "ec2spot_eventbridge" {
 # Policy: Bedrock model invocation for Claude Code AI calls
 resource "aws_iam_role_policy" "ec2spot_bedrock" {
   count = local.total_ec2spot_count > 0 && var.enable_bedrock ? 1 : 0
-  name  = "km-${var.sandbox_id}-bedrock"
+  name  = "${var.resource_prefix}-${var.sandbox_id}-bedrock"
   role  = aws_iam_role.ec2spot_ssm[0].id
 
   policy = jsonencode({
@@ -344,7 +344,7 @@ resource "aws_iam_role_policy" "ec2spot_bedrock" {
 # counts, and writes AI spend to the km-budgets DynamoDB table.
 resource "aws_iam_role_policy" "ec2spot_budget_dynamo" {
   count = local.total_ec2spot_count > 0 ? 1 : 0
-  name  = "km-${var.sandbox_id}-budget-dynamo"
+  name  = "${var.resource_prefix}-${var.sandbox_id}-budget-dynamo"
   role  = aws_iam_role.ec2spot_ssm[0].id
 
   policy = jsonencode({
@@ -380,7 +380,7 @@ resource "aws_iam_role_policy" "ec2spot_budget_dynamo" {
 # The sandbox role needs kms:Decrypt to read the SSM SecureString token.
 resource "aws_iam_role_policy" "ec2spot_github_token" {
   count = local.total_ec2spot_count > 0 ? 1 : 0
-  name  = "km-${var.sandbox_id}-github-token"
+  name  = "${var.resource_prefix}-${var.sandbox_id}-github-token"
   role  = aws_iam_role.ec2spot_ssm[0].id
 
   policy = jsonencode({
