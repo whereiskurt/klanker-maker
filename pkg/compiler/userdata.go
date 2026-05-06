@@ -330,13 +330,17 @@ echo "[km-bootstrap] KM_ALIAS_EMAIL={{ .AliasEmail }}"
 # ECS credential helper delivery is deferred to a future phase.
 # ============================================================
 echo "[km-bootstrap] Installing GIT_ASKPASS credential helper..."
-SANDBOX_ID="{{ .SandboxID }}"
-export SANDBOX_ID
 mkdir -p /opt/km/bin
+# Askpass uses ${KM_SANDBOX_ID} (set in /etc/profile.d/km-identity.sh and
+# therefore present in every interactive shell + subshell) instead of
+# ${SANDBOX_ID} (which only exists during cloud-init and was empty in
+# every git operation that ran post-bootstrap, producing an empty token
+# and "Invalid username or token" from GitHub). The previous SANDBOX_ID=
+# export before this heredoc is removed since nothing else needs it now.
 cat > /opt/km/bin/km-git-askpass << 'ASKPASS'
 #!/bin/bash
 TOKEN=$(aws ssm get-parameter \
-  --name "{{ .SsmPrefix }}sandbox/${SANDBOX_ID}/github-token" \
+  --name "{{ .SsmPrefix }}sandbox/${KM_SANDBOX_ID}/github-token" \
   --with-decryption \
   --query "Parameter.Value" \
   --output text 2>/dev/null || echo "")
@@ -348,6 +352,12 @@ esac
 ASKPASS
 chmod +x /opt/km/bin/km-git-askpass
 export GIT_ASKPASS=/opt/km/bin/km-git-askpass
+# Persist GIT_ASKPASS so it's set in every interactive shell + subshell
+# without requiring users to source the bootstrap env. Was previously
+# only exported during cloud-init, so any shell opened later had no
+# GIT_ASKPASS and git fell back to prompting for credentials.
+echo 'export GIT_ASKPASS=/opt/km/bin/km-git-askpass' >> /etc/profile.d/km-profile-env.sh
+chmod 644 /etc/profile.d/km-profile-env.sh
 echo "[km-bootstrap] GIT_ASKPASS credential helper installed"
 {{- end }}
 
