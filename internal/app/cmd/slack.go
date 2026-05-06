@@ -47,6 +47,7 @@ type SlackInitAPI interface {
 	AuthTest(ctx context.Context) error
 	CreateChannel(ctx context.Context, name string) (string, error)
 	FindChannelByName(ctx context.Context, name string) (string, error)
+	JoinChannel(ctx context.Context, channelID string) error
 	InviteShared(ctx context.Context, channelID, email string) error
 }
 
@@ -291,6 +292,33 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 					}
 					return fmt.Errorf("send Slack Connect invite to %s (workspace must be Pro): %w", inv, invErr)
 				}
+			}
+		}
+
+		// Step 5b: Ensure the bot is a member of the channel. Required because:
+		//   - On the create path: Slack auto-joins the creator bot, but a Slack
+		//     App reinstall later drops the bot out of channels it had joined.
+		//   - On the reuse path: the channel was created by a previous (now
+		//     uninstalled) bot session, so the current bot has never joined.
+		// Without this, chat.postMessage from the bridge fails with
+		// not_in_channel even though the channel exists and the token works.
+		// conversations.join is idempotent — already-a-member returns ok.
+		if joinErr := api.JoinChannel(ctx, chID); joinErr != nil {
+			var apierr *kmslack.SlackAPIError
+			isAPIErr := errors.As(joinErr, &apierr)
+			switch {
+			case isAPIErr && apierr.Code == "missing_scope":
+				return fmt.Errorf("bot needs channels:join scope to ensure membership in %q (channel %s): %w\n"+
+					"Add the scope in Slack App config → OAuth & Permissions → Bot Token Scopes, reinstall the app, then re-run km slack rotate-token", chName, chID, joinErr)
+			case isAPIErr && apierr.Code == "is_archived":
+				return fmt.Errorf("channel %q (%s) is archived; cannot post messages until it is unarchived\n"+
+					"Either unarchive the channel in Slack (or via:\n"+
+					"  curl -H \"Authorization: Bearer $BOT_TOKEN\" -d \"channel=%s\" https://slack.com/api/conversations.unarchive)\n"+
+					"and re-run, OR pick a different name with --shared-channel", chName, chID, chID)
+			default:
+				// Other join errors are warnings, not fatal — operator may have
+				// added the bot manually via /invite.
+				fmt.Fprintf(os.Stderr, "  [warn] could not auto-join channel %s: %v (continuing — /invite the bot manually if needed)\n", chID, joinErr)
 			}
 		}
 	} else {

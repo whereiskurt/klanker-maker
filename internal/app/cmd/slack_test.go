@@ -24,10 +24,12 @@ type fakeSlackInitAPI struct {
 	createErr   error
 	findID      string // returned by FindChannelByName when name_taken triggered the lookup path
 	findErr     error
+	joinErr     error
 	inviteErr   error
 	authCalls   int
 	createCalls int
 	findCalls   int
+	joinCalls   int
 	inviteCalls int
 }
 
@@ -44,6 +46,11 @@ func (f *fakeSlackInitAPI) CreateChannel(_ context.Context, _ string) (string, e
 func (f *fakeSlackInitAPI) FindChannelByName(_ context.Context, _ string) (string, error) {
 	f.findCalls++
 	return f.findID, f.findErr
+}
+
+func (f *fakeSlackInitAPI) JoinChannel(_ context.Context, _ string) error {
+	f.joinCalls++
+	return f.joinErr
 }
 
 func (f *fakeSlackInitAPI) InviteShared(_ context.Context, _, _ string) error {
@@ -307,6 +314,102 @@ func TestSlackInit_NameTaken_AutoReuses(t *testing.T) {
 	}
 }
 
+// TestSlackInit_JoinsChannelOnCreatePath verifies the bot calls
+// conversations.join after a fresh CreateChannel. Slack auto-joins the
+// creator bot, but a later App reinstall would drop the bot — calling join
+// at init time guarantees membership through reinstalls and re-runs.
+func TestSlackInit_JoinsChannelOnCreatePath(t *testing.T) {
+	api := &fakeSlackInitAPI{createID: "CNEW42"}
+	ssm := newFakeSSM(nil)
+	tg := &fakeTerragrunt{}
+	prompter := &fakePrompter{ordered: []string{"xoxb-test-token", "ops@example.com"}}
+	poster := &fakeBridgePoster{}
+
+	deps := buildSlackTestDeps(api, ssm, tg, prompter, poster)
+	opts := cmd.SlackInitOpts{SharedChannel: "km-notifications"}
+
+	if err := cmd.RunSlackInit(context.Background(), deps, opts); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if api.joinCalls != 1 {
+		t.Errorf("JoinChannel should run once per init; got %d calls", api.joinCalls)
+	}
+}
+
+// TestSlackInit_JoinsChannelOnReusePath verifies join also runs after the
+// name_taken auto-recover path. This is the path that actually broke the
+// prodsec.gh.team install — Slack App had been reinstalled, channel ID was
+// looked up via name_taken, but the bot wasn't in the channel anymore so
+// chat.postMessage failed with not_in_channel.
+func TestSlackInit_JoinsChannelOnReusePath(t *testing.T) {
+	api := &fakeSlackInitAPI{
+		createErr: &slack.SlackAPIError{Method: "conversations.create", Code: "name_taken"},
+		findID:    "CEXISTING42",
+	}
+	ssm := newFakeSSM(nil)
+	tg := &fakeTerragrunt{}
+	prompter := &fakePrompter{ordered: []string{"xoxb-test-token", "ops@example.com"}}
+	poster := &fakeBridgePoster{}
+
+	deps := buildSlackTestDeps(api, ssm, tg, prompter, poster)
+	opts := cmd.SlackInitOpts{SharedChannel: "km-notifications"}
+
+	if err := cmd.RunSlackInit(context.Background(), deps, opts); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if api.joinCalls != 1 {
+		t.Errorf("JoinChannel must run on the name_taken reuse path too; got %d calls", api.joinCalls)
+	}
+}
+
+// TestSlackInit_JoinChannelNonScopeFailureIsWarning verifies a join failure
+// that ISN'T missing_scope is treated as informational rather than fatal —
+// the operator might have invited the bot manually via /invite, in which
+// case join could fail for benign reasons (e.g. transient Slack 5xx).
+func TestSlackInit_JoinChannelNonScopeFailureIsWarning(t *testing.T) {
+	api := &fakeSlackInitAPI{
+		createID: "CNEW",
+		joinErr:  errors.New("slack 503 server error"),
+	}
+	ssm := newFakeSSM(nil)
+	tg := &fakeTerragrunt{}
+	prompter := &fakePrompter{ordered: []string{"xoxb-test-token", "ops@example.com"}}
+	poster := &fakeBridgePoster{}
+
+	deps := buildSlackTestDeps(api, ssm, tg, prompter, poster)
+	opts := cmd.SlackInitOpts{SharedChannel: "km-notifications"}
+
+	if err := cmd.RunSlackInit(context.Background(), deps, opts); err != nil {
+		t.Fatalf("non-scope join error should be a warning, got fatal: %v", err)
+	}
+}
+
+// TestSlackInit_JoinChannelMissingScope verifies missing_scope IS fatal —
+// without channels:join the bot will silently never be in the channel and
+// chat.postMessage will keep failing. Surface it loudly so the operator
+// fixes the scope.
+func TestSlackInit_JoinChannelMissingScope(t *testing.T) {
+	api := &fakeSlackInitAPI{
+		createID: "CNEW",
+		joinErr:  &slack.SlackAPIError{Method: "conversations.join", Code: "missing_scope"},
+	}
+	ssm := newFakeSSM(nil)
+	tg := &fakeTerragrunt{}
+	prompter := &fakePrompter{ordered: []string{"xoxb-test-token", "ops@example.com"}}
+	poster := &fakeBridgePoster{}
+
+	deps := buildSlackTestDeps(api, ssm, tg, prompter, poster)
+	opts := cmd.SlackInitOpts{SharedChannel: "km-notifications"}
+
+	err := cmd.RunSlackInit(context.Background(), deps, opts)
+	if err == nil {
+		t.Fatal("missing_scope on join should be a fatal error so the operator notices and adds the scope")
+	}
+	if !strings.Contains(err.Error(), "channels:join") {
+		t.Errorf("error should name the missing scope, got: %v", err)
+	}
+}
+
 // TestSlackInit_NameTaken_ButLookupFailsScopeError verifies the error message
 // when name_taken is followed by a lookup failure (e.g. bot lacks
 // channels:read scope). The operator gets an actionable hint, not a buried
@@ -552,6 +655,10 @@ func (f *fakeRotateAPI) CreateChannel(_ context.Context, _ string) (string, erro
 
 func (f *fakeRotateAPI) FindChannelByName(_ context.Context, _ string) (string, error) {
 	return "", nil
+}
+
+func (f *fakeRotateAPI) JoinChannel(_ context.Context, _ string) error {
+	return nil
 }
 
 func (f *fakeRotateAPI) InviteShared(_ context.Context, _, _ string) error {

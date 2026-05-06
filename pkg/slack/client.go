@@ -275,6 +275,26 @@ func (c *Client) CreateChannel(ctx context.Context, name string) (string, error)
 	return resp.Channel.ID, nil
 }
 
+// JoinChannel calls conversations.join. Idempotent: Slack returns ok=true
+// when the bot is already a member, so callers can call this unconditionally
+// without checking membership first.
+//
+// Used by km slack init to guarantee the bot is in the shared channel after
+// name_taken recovery — Slack app reinstalls drop bots out of channels they
+// previously joined, so a channel ID stored from a prior install can become
+// stale. Without this, chat.postMessage from the bridge fails with
+// not_in_channel even though the channel exists and the bot has chat:write.
+//
+// Requires the bot's `channels:join` scope (default for most Slack apps but
+// not guaranteed). Slack returns "missing_scope" via SlackAPIError if not
+// granted.
+func (c *Client) JoinChannel(ctx context.Context, channelID string) error {
+	_, err := c.callJSON(ctx, "conversations.join", map[string]any{
+		"channel": channelID,
+	})
+	return err
+}
+
 // FindChannelByName scans public channels via conversations.list and returns
 // the first channel whose name exactly matches. Returns ("", nil) if no
 // match exists (caller decides whether that's an error). Errors are returned
