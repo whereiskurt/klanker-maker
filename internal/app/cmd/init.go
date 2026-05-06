@@ -464,10 +464,26 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		}
 	}
 
-	// Step 3b: Provision operator identity (Ed25519 signing key + DynamoDB public key).
-	// The operator inbox needs an identity so km email send --from operator sends signed emails.
-	// Uses sandbox_id="operator" as the identity key. EnsureSandboxIdentity returns the
-	// existing public key on re-runs (avoids drifting SSM private vs DynamoDB public).
+	// Step 4: Apply regional infrastructure
+	fmt.Println()
+	fmt.Println("Applying infrastructure...")
+	runner := terragrunt.NewRunner(awsProfile, repoRoot)
+	runner.Verbose = verbose
+	if err := RunInitWithRunner(runner, repoRoot, region); err != nil {
+		return err
+	}
+
+	// Step 5: Provision operator identity (Ed25519 signing key + DynamoDB public key).
+	// MUST run AFTER terragrunt apply — the dynamodb-identities module above creates
+	// the {prefix}-identities table that PublishIdentity writes to. Running it earlier
+	// (where the safe-phrase / proxy CA steps live) used to fail on first install with
+	// ResourceNotFoundException, leaving the operator with a private key in SSM but no
+	// matching public-key row in DDB. Result: km slack test failed with unknown_sender,
+	// km email send --from operator failed signature verification.
+	//
+	// EnsureSandboxIdentity is idempotent — returns the existing key on re-runs without
+	// regenerating, so a private key created by an earlier-failing init carries forward
+	// and only the publish step needs to succeed on the retry.
 	{
 		fmt.Println()
 		fmt.Println("Ensuring operator email identity...")
@@ -481,28 +497,15 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 		if identErr != nil {
 			fmt.Printf("  ⚠ Operator identity key generation failed: %v\n", identErr)
 		} else {
-			domain := cfg.Domain
-			if domain == "" {
-				domain = "klankermaker.ai"
-			}
 			identityTableName := cfg.GetIdentityTableName()
 			operatorEmail := fmt.Sprintf("operator@%s", cfg.GetEmailDomain())
 			dynamoClient := dynamodb.NewFromConfig(awsCfg)
 			if pubErr := awspkg.PublishIdentity(ctx, dynamoClient, identityTableName, operatorID, operatorEmail, pubKey, nil, "required", "required", "off", "operator", []string{"*"}); pubErr != nil {
 				fmt.Printf("  ⚠ Operator identity publish failed: %v\n", pubErr)
 			} else {
-				fmt.Printf("  ✓ Operator identity: Ed25519 key at /sandbox/operator/signing-key\n")
+				fmt.Printf("  ✓ Operator identity: Ed25519 key at /%s/sandbox/operator/signing-key\n", cfg.GetResourcePrefix())
 			}
 		}
-	}
-
-	// Step 4: Apply regional infrastructure
-	fmt.Println()
-	fmt.Println("Applying infrastructure...")
-	runner := terragrunt.NewRunner(awsProfile, repoRoot)
-	runner.Verbose = verbose
-	if err := RunInitWithRunner(runner, repoRoot, region); err != nil {
-		return err
 	}
 
 	// Display email-to-create details if operator email and safe phrase are configured.
