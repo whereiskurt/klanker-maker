@@ -146,7 +146,15 @@ SANDBOX_FQDN="{{ .Alias }}.{{ .EmailDomain }}"
 {{- else }}
 SANDBOX_FQDN="{{ .SandboxID }}.{{ .EmailDomain }}"
 {{- end }}
+# Write /etc/hostname directly so it persists even if hostnamectl/dbus isn't
+# ready yet during cloud-init, and survives hibernation resume.
+echo "${SANDBOX_FQDN}" > /etc/hostname
 hostnamectl set-hostname "${SANDBOX_FQDN}" 2>/dev/null || hostname "${SANDBOX_FQDN}"
+# Prevent cloud-init from resetting hostname on future boots (hibernation resume).
+echo "preserve_hostname: true" > /etc/cloud/cloud.cfg.d/99-km-preserve-hostname.cfg
+# Prevent NetworkManager from overriding hostname via DHCP option.
+mkdir -p /etc/NetworkManager/conf.d
+printf '[main]\nhostname-mode=none\n' > /etc/NetworkManager/conf.d/99-km-no-hostname.conf
 cat > /etc/profile.d/km-identity.sh << EOF
 export KM_SANDBOX_ID="{{ .SandboxID }}"
 export KM_RESOURCE_PREFIX="{{ .ResourcePrefix }}"
