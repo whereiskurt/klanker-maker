@@ -696,7 +696,23 @@ func bakeFromSandboxInternal(ctx context.Context, cfg *config.Config, rec kmaws.
 
 	instanceID, err := extractResourceID(rec.Resources, ":instance/")
 	if err != nil {
-		return "", fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
+		// rec.Resources is only populated by the tagging-API (legacy S3 path).
+		// DynamoDB-backed records never carry it, so fall back to EC2 describe-by-tag.
+		awsCfgFallback, cfgErr := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+		if cfgErr != nil {
+			return "", fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
+		}
+		ec2Fallback := ec2.NewFromConfig(awsCfgFallback, func(o *ec2.Options) { o.Region = rec.Region })
+		descOut, descErr := ec2Fallback.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+			Filters: []ec2types.Filter{
+				{Name: awssdk.String("tag:km:sandbox-id"), Values: []string{sandboxID}},
+				{Name: awssdk.String("instance-state-name"), Values: []string{"running", "stopped"}},
+			},
+		})
+		if descErr != nil || len(descOut.Reservations) == 0 || len(descOut.Reservations[0].Instances) == 0 {
+			return "", fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
+		}
+		instanceID = awssdk.ToString(descOut.Reservations[0].Instances[0].InstanceId)
 	}
 
 	amiName := kmaws.AMIName(profileName, sandboxID, time.Now(), cfg.GetResourcePrefix()+"-")
