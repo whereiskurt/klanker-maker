@@ -980,9 +980,13 @@ _km_heartbeat() {
       | timeout 0.1 tee /run/km/audit-pipe > /dev/null 2>/dev/null || true
   done
 }
-_km_heartbeat &
+# Redirect away from the pts so the heartbeat doesn't hold the slave fd open
+# after bash (the session leader) exits — otherwise the SSM session hangs
+# waiting for the pts to close. Use kill -9 because the heartbeat subshell
+# has trap '' INT TERM and ignores the default SIGTERM.
+_km_heartbeat > /dev/null 2>&1 < /dev/null &
 _KM_HEARTBEAT_PID=$!
-trap 'kill $_KM_HEARTBEAT_PID 2>/dev/null' EXIT
+trap 'kill -9 $_KM_HEARTBEAT_PID 2>/dev/null' EXIT
 HOOK
 chmod 644 /etc/profile.d/km-audit.sh
 
