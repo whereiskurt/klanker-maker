@@ -820,6 +820,23 @@ chmod +x /usr/local/bin/km
 echo "[km-bootstrap] km binary installed for eBPF enforcement"
 {{- end }}
 
+# Ensure Claude Code native binary is installed.
+# On AMI-baked instances the platform binary may be missing. Re-run install.cjs
+# idempotently — it's a no-op when the binary already exists.
+# Use the same node/npm that owns the claude installation (nvm-managed, not system node).
+CLAUDE_BIN=$(command -v claude 2>/dev/null || true)
+if [ -n "$CLAUDE_BIN" ]; then
+  NODE_BIN=$(readlink -f "$CLAUDE_BIN" 2>/dev/null || echo "$CLAUDE_BIN")
+  NODE_DIR=$(dirname "$NODE_BIN")
+  NODE_EXEC="$NODE_DIR/node"
+  NODE_MODULES="$NODE_DIR/../lib/node_modules"
+  CLAUDE_INSTALL_CJS="$NODE_MODULES/@anthropic-ai/claude-code/install.cjs"
+  if [ -f "$CLAUDE_INSTALL_CJS" ] && [ -x "$NODE_EXEC" ]; then
+    "$NODE_EXEC" "$CLAUDE_INSTALL_CJS" 2>/dev/null || true
+    echo "[km-bootstrap] Claude Code native binary ensured"
+  fi
+fi
+
 # Create dedicated sidecar user (exempt from iptables DNAT — prevents redirect loops)
 useradd -r -s /usr/sbin/nologin km-sidecar || true
 
@@ -1350,6 +1367,8 @@ while true; do
   # default, so we source it explicitly before launching claude.
   sudo -u sandbox bash -c "
     set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+    # Prefer the standalone claude binary in ~/.local/bin over the npm wrapper.
+    export PATH=\"/home/sandbox/.local/bin:\$PATH\"
     export KM_SLACK_THREAD_TS='$THREAD_TS'
     claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
       --dangerously-skip-permissions $RESUME_ARG \
@@ -2264,12 +2283,18 @@ echo "[km-bootstrap] km-recv installed at /opt/km/bin/km-recv"
 
 {{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
 # In eBPF/gatekeeper mode, skip km-dns-proxy (enforcer runs its own DNS resolver)
+# daemon-reload required: AMI-baked unit files may have the old sandbox ID; reload
+# picks up the freshly-written unit before enable/restart so the correct env is used.
+systemctl daemon-reload
 systemctl enable km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
-systemctl start km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
+systemctl restart km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
 echo "[km-bootstrap] Sidecars started (DNS via eBPF enforcer, not km-dns-proxy)"
 {{- else }}
+# daemon-reload required: AMI-baked unit files may have the old sandbox ID; reload
+# picks up the freshly-written unit before enable/restart so the correct env is used.
+systemctl daemon-reload
 systemctl enable km-dns-proxy km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
-systemctl start km-dns-proxy km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
+systemctl restart km-dns-proxy km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
 echo "[km-bootstrap] Sidecars started"
 {{- end }}
 echo "[km-bootstrap] Shell audit hook installed at /etc/profile.d/km-audit.sh"
