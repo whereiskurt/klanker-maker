@@ -564,18 +564,19 @@ func TestNotifyHook_Stop_TranscriptUpload(t *testing.T) {
 }
 
 // ============================================================
-// Test 8 — Final-stream-then-upload: when there's unstreamed assistant text
-//   at Stop, the hook posts it (drain) BEFORE invoking upload. The transcript
-//   fixture has multiple assistant turns; if no PostToolUse fired previously,
-//   the offset starts at 0 → drain posts the entire body → +1 post call,
-//   then upload runs.
+// Test 8 — Poller-driven Stop (KM_SLACK_THREAD_TS set): the Stop transcript
+//   drain MUST be skipped so the streamed text doesn't duplicate the inbound
+//   poller's .result post. The S3 upload + km-slack file upload still run for
+//   archival. In 'claude -p' mode PostToolUse hooks don't fire, so a Stop-time
+//   drain would post the entire transcript right before the poller posts
+//   .result — the two reads like Claude replying to itself.
 // ============================================================
 
-func TestNotifyHook_Stop_FinalStreamThenUpload(t *testing.T) {
+func TestNotifyHook_Stop_PollerDrivenSkipsDrain(t *testing.T) {
 	hookPath, _, slackLog, _, tmpdir := setupHookEnvWithSlack(t)
 	transcript := writeMultitoolTranscript(t, tmpdir)
 
-	const sid = "sess-final-stream"
+	const sid = "sess-poller-drain-skip"
 	removeSessionTmpFiles(t, sid)
 	t.Cleanup(func() { removeSessionTmpFiles(t, sid) })
 
@@ -587,7 +588,7 @@ func TestNotifyHook_Stop_FinalStreamThenUpload(t *testing.T) {
 		"KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED": "1",
 		"KM_NOTIFY_ON_IDLE":                  "0",
 		"KM_ARTIFACTS_BUCKET":                "test-bucket",
-		"KM_SLACK_THREAD_TS":                 "1700000000.000099",
+		"KM_SLACK_THREAD_TS":                 "1700000000.000099", // poller-driven
 		"KM_SLACK_STREAM_TABLE":              "km-slack-stream-messages",
 	}, stdin)
 	if code != 0 {
@@ -597,25 +598,11 @@ func TestNotifyHook_Stop_FinalStreamThenUpload(t *testing.T) {
 	calls := readSlackStubLog(t, slackLog)
 	posts := countCalls(calls, "post")
 	uploads := countCalls(calls, "upload")
-	if posts < 1 {
-		t.Errorf("expected ≥1 drain post before upload; got %d", posts)
+	if posts != 0 {
+		t.Errorf("expected 0 drain posts when poller-driven; got %d (calls=%v)", posts, calls)
 	}
 	if uploads != 1 {
 		t.Errorf("expected exactly 1 km-slack upload; got %d", uploads)
-	}
-	// Order matters: post must precede upload in the call sequence.
-	postIdx := -1
-	uploadIdx := -1
-	for i, c := range calls {
-		if c.subcommand == "post" && postIdx < 0 {
-			postIdx = i
-		}
-		if c.subcommand == "upload" && uploadIdx < 0 {
-			uploadIdx = i
-		}
-	}
-	if postIdx < 0 || uploadIdx < 0 || postIdx > uploadIdx {
-		t.Errorf("expected post (drain) BEFORE upload; postIdx=%d uploadIdx=%d", postIdx, uploadIdx)
 	}
 }
 

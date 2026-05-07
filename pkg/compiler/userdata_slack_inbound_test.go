@@ -125,10 +125,12 @@ func TestUserdata_SlackInboundSystemctlEnable(t *testing.T) {
 
 // TestUserdata_StopHookReferencesThreadTSGate — Phase 67-11 Gap A follow-up.
 // The Stop hook's Slack branch must reference KM_SLACK_THREAD_TS in its gate
-// (so it can detect "poller is driving this turn — skip post"). It must NOT
-// pass --thread to km-slack post: when the gate evaluates true (KM_SLACK_THREAD_TS
-// is empty), there's no thread to anchor to, so the post is a top-level
-// message in the per-sandbox channel.
+// (so it can detect "poller is driving this turn — skip post"). When the gate
+// evaluates true, KM_SLACK_THREAD_TS is empty by construction, so any --thread
+// argument MUST come from a transcript-streaming auto-thread cache lookup
+// (auto_thread_ts), not from KM_SLACK_THREAD_TS itself. That keeps the
+// Phase 67 invariant intact while letting Phase 68 transcript streaming
+// route the idle marker into the streaming thread.
 //
 // Replaces the obsolete TestUserdata_SlackInboundThreadFlag whose premise
 // (Stop hook passes --thread when KM_SLACK_THREAD_TS is set) was the source
@@ -153,8 +155,16 @@ func TestUserdata_StopHookReferencesThreadTSGate(t *testing.T) {
 	if !strings.Contains(section6b, "KM_SLACK_THREAD_TS") {
 		t.Fatalf("# 6b. Slack branch must reference KM_SLACK_THREAD_TS in its gate\n%s", abbreviateUD(section6b))
 	}
+	// When --thread appears in # 6b, it MUST be sourced from auto_thread_ts
+	// (transcript-streaming cache), not from KM_SLACK_THREAD_TS — the gate
+	// guarantees KM_SLACK_THREAD_TS is empty in this branch.
 	if strings.Contains(section6b, "--thread") {
-		t.Fatalf("# 6b. Slack branch must NOT pass --thread — when the gate evaluates true, KM_SLACK_THREAD_TS is empty by construction so there's no thread to anchor to\n%s", abbreviateUD(section6b))
+		if !strings.Contains(section6b, "auto_thread_ts") {
+			t.Fatalf("# 6b. Slack branch passes --thread but does not derive it from auto_thread_ts; KM_SLACK_THREAD_TS is empty by gate construction\n%s", abbreviateUD(section6b))
+		}
+		if strings.Contains(section6b, `--thread "$KM_SLACK_THREAD_TS"`) {
+			t.Fatalf("# 6b. Slack branch must NOT pass --thread \"$KM_SLACK_THREAD_TS\" — that var is empty by gate construction\n%s", abbreviateUD(section6b))
+		}
 	}
 }
 

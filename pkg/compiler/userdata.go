@@ -714,14 +714,42 @@ if [[ "$do_email_branch" -eq 1 && "$cooldown_block" -ne 1 ]]; then
   if [[ "${KM_NOTIFY_SLACK_ENABLED:-0}" == "1" \
      && -n "${KM_SLACK_CHANNEL_ID:-}" \
      && -z "${KM_SLACK_THREAD_TS:-}" ]]; then
-    # No thread flag: when KM_SLACK_THREAD_TS is empty we're outside an inbound
-    # turn, so post as a top-level message in the per-sandbox channel.
+    # KM_SLACK_THREAD_TS empty → not a poller-driven turn.
+    # Two sub-cases:
+    #   (a) Transcript streaming auto-created a thread for this session
+    #       (/tmp/km-slack-thread.{sid} exists). Per-turn assistant text
+    #       already streamed into that thread, so a channel-root post
+    #       containing the same last-text would duplicate content and read
+    #       like Claude replying to itself. Route the idle marker INTO the
+    #       thread with an empty body — the bold "[alias] idle" subject
+    #       acts as a turn-end signal without re-posting the text.
+    #   (b) No streaming thread → legacy Phase 63 channel-root post. Suppress
+    #       the "(no recent assistant text)" placeholder so the channel just
+    #       shows the bold subject when there's no real text. Email keeps the
+    #       placeholder body unchanged.
+    sid_for_thread=$(echo "$payload" | jq -r '.session_id // ""' 2>/dev/null || echo "")
+    auto_thread_ts=""
+    if [[ -n "$sid_for_thread" && -f "/tmp/km-slack-thread.${sid_for_thread}" ]]; then
+      auto_thread_ts=$(cat "/tmp/km-slack-thread.${sid_for_thread}" 2>/dev/null || echo "")
+    fi
+    slack_body_file="$body_file"
+    slack_thread_args=()
+    if [[ -n "$auto_thread_ts" ]]; then
+      slack_body_file=$(mktemp /tmp/km-notify-slack-body.XXXXXX)
+      : > "$slack_body_file"
+      slack_thread_args=(--thread "$auto_thread_ts")
+    elif [[ "$body_text" == "(no recent assistant text)" ]]; then
+      slack_body_file=$(mktemp /tmp/km-notify-slack-body.XXXXXX)
+      : > "$slack_body_file"
+    fi
     if /opt/km/bin/km-slack post \
          --channel "$KM_SLACK_CHANNEL_ID" \
+         ${slack_thread_args[@]+"${slack_thread_args[@]}"} \
          --subject "$subject" \
-         --body "$body_file"; then
+         --body "$slack_body_file"; then
       sent_any=1
     fi
+    [[ "$slack_body_file" != "$body_file" ]] && rm -f "$slack_body_file"
   fi
 
   # 7. Update cooldown timestamp iff at least one channel succeeded.
@@ -740,7 +768,18 @@ if [[ "$event" == "Stop" && "${KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED:-0}" == "1" ]]
   if [[ -n "$st_sid" && -n "$st_transcript" && -f "$st_transcript" ]]; then
     # Drain any unstreamed final text first so the thread shows the last turn
     # before the gzipped artifact lands.
-    _km_stream_drain "$st_sid" "$st_transcript"
+    #
+    # Skip when poller-driven (KM_SLACK_THREAD_TS set): in 'claude -p' mode
+    # PostToolUse hooks don't fire, so no incremental drain happens during the
+    # run — a Stop-time drain would post the entire transcript text in one go,
+    # which the inbound poller will immediately follow with a .result post
+    # containing (a subset of) the same content. The two posts read like
+    # Claude replying to itself in the user's Slack thread. The poller owns
+    # the Slack reply for poller-driven turns; the transcript artifact still
+    # uploads to S3 below for archival.
+    if [[ -z "${KM_SLACK_THREAD_TS:-}" ]]; then
+      _km_stream_drain "$st_sid" "$st_transcript"
+    fi
 
     # Resolve thread ts (same precedence as drain, used for upload's --thread).
     st_thread_cache="/tmp/km-slack-thread.${st_sid}"
