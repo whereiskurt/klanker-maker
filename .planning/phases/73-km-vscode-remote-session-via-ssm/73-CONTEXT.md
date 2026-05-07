@@ -1,200 +1,259 @@
 # Phase 73: km vscode remote session via SSM — Context
 
-**Gathered:** 2026-05-06
+**Gathered:** 2026-05-06 (rewritten 2026-05-06 after POC validation)
 **Status:** Ready for planning
-**Source:** Brainstorming dialogue (Q1–Q4 + Approach A user-approved). Full spec: `docs/superpowers/specs/2026-05-06-km-vscode-design.md`.
+**Source:** Brainstorming dialogue + live POC. Original design was VS Code Web (`code serve-web`); rejected after POC because it forces a browser experience instead of letting the operator use their local desktop VS Code with all their themes/keybindings/extensions. Redesigned around VS Code Remote-SSH over SSM port-forward with **per-sandbox auto-generated keypairs**.
 
 <domain>
 ## Phase Boundary
 
-Add `km vscode start | stop | status` so an operator can launch a VS Code Web session inside an
-existing sandbox, accessed locally over an SSM port-forward. The goal is companion-style usage:
-the operator runs `km agent run` (Claude rips on a task), then opens VS Code on the same sandbox
-to review and edit what the agent produced — sessions lasting "a couple of hours."
+Add `km vscode start <sandbox-id>` so an operator can connect their local desktop VS Code to a
+sandbox via the **Remote-SSH** extension. The command opens an SSM port-forward (sandbox port
+22 → operator local port 2222), upserts a managed entry in `~/.ssh/config`, and tells the
+operator how to connect from VS Code.
 
-km owns the runtime contract on the sandbox side (systemd unit, launch wrapper, token rotation,
-directory layout). The operator's only job is installing the `code` binary in their profile's
-`initCommands`. A new profile flag `spec.cli.vscodeEnabled` (default `true`) gates whether the
-unit/wrapper/dir are provisioned at sandbox boot.
+Sandboxes get an ed25519 keypair auto-generated **on the operator's laptop at `km create` time**.
+The private key stays in `~/.km/keys/sb-<id>`; the public key is shipped into userdata and
+written to `/home/sandbox/.ssh/authorized_keys` at sandbox boot. `km destroy` cleans up the
+key files and the ssh-config block.
+
+Use case is companion-style: operator runs `km agent run` (Claude rips on a task), then runs
+`km vscode start` to review/edit the result with their full local IDE experience for "the next
+couple of hours."
 
 **Out of scope:**
-- Installing the `code` binary itself (Microsoft `code serve-web`, Coder `code-server`,
-  openvscode-server are all valid choices — operator picks via `initCommands`; we document the
-  Microsoft `code` CLI as the tested default).
-- Auto-stop on idle, `--duration` time-boxing (operator can compose with existing `km at` if
-  they want a scheduled stop — explicit deferral).
-- Slack/email notification integration.
+- Browser-based VS Code (`code serve-web`) — explicitly rejected after POC.
+- Microsoft Remote Tunnels (`code tunnel`) — bypasses the SSM security boundary, requires
+  GitHub auth, no fit for klankermaker's trust model.
+- Auto-stop on idle, `--duration` time-boxing (operator can compose with `km at` if they want
+  scheduled stops; explicit deferral).
 - DDB schema changes, new SSM Parameter Store entries, new Lambda, new sidecar binary.
-- Changes to `km destroy` / `km pause` (systemd unit dies with the EC2 instance; nothing to
-  clean up).
-- Multiple concurrent VS Code sessions on different ports per sandbox (one per sandbox is enough;
-  power users can run `code serve-web` directly via `km shell`).
+- Cross-machine key portability (`km vscode export-key`/`import-key`) — deferred until it
+  actually bites.
+- Slack/email notification integration.
+- Multiple concurrent operators sharing one sandbox via additional `authorized_keys` entries.
+- Proper SSH host-key trust model (TOFU/cert-based) — v1 uses `StrictHostKeyChecking no` +
+  `UserKnownHostsFile /dev/null`, deferred follow-up flagged in spec.
+- Installation of a VS Code server binary on the sandbox — VS Code Remote-SSH auto-deploys
+  `vscode-server` on first connect; nothing pre-installed by km.
 
 </domain>
 
 <decisions>
 ## Implementation Decisions
 
-### Use case (Q1: B — companion to `km agent run`)
+### Architecture (locked after POC)
 
-- Companion-style, on-demand, time-boxed sessions ("next couple of hours").
-- Not a primary work surface — `km shell` and `km agent` remain the main surfaces.
-- Operator handles the `code` binary install in their profile's `initCommands`; km does not
-  install the binary.
+**VS Code Remote-SSH over SSM port-forward**, with per-sandbox auto-generated ed25519 keypairs.
+Operator's local desktop VS Code is the UI; `vscode-server` is auto-deployed by VS Code to the
+sandbox on first connect (no pre-install needed).
 
-### Lifecycle (Q2: B — manual stop, `--duration` deferred)
+The SSM tunnel is the security boundary; SSH layered on top adds key-based authentication,
+encrypted file transfer, terminal access, and lets the existing VS Code Remote-SSH extension
+"just work" without a custom protocol.
 
-- `km vscode start` brings up the server and tunnel; runs until `km vscode stop`.
-- No `--duration` flag in this phase. Operator can compose with `km at` for scheduled stops if
-  needed (no special-case wiring in km vscode).
-- No auto-stop on idle.
+### Keypair lifecycle (per-sandbox, auto-generated)
 
-### Architecture (Q3: A — thin systemd wrapper, recommended option approved)
+| Stage | Action |
+|-------|--------|
+| `km create` | Locally generate ed25519 keypair using Go's `crypto/ed25519` + `golang.org/x/crypto/ssh` (no shelling out). Write `~/.km/keys/sb-<id>` (mode 0600) and `~/.km/keys/sb-<id>.pub` (mode 0644). Read pubkey content; pass to userdata as template variable `VSCodeSSHPubKey`. |
+| Sandbox boot (cloud-init userdata) | Gated on `spec.cli.vscodeEnabled: true`: `systemctl enable --now sshd`; create `/home/sandbox/.ssh/` (0700, sandbox:sandbox); write pubkey to `authorized_keys` (0600, sandbox:sandbox); `restorecon -R -v /home/sandbox/.ssh` for AL2023 SELinux contexts. |
+| `km vscode start <sb>` | Upsert managed block in `~/.ssh/config`; open foreground SSM port-forward via existing `buildPortForwardCmd`; print connection instructions; block until Ctrl-C. |
+| `km destroy <sb>` | Remove the `Host km-sb-<id>` block from `~/.ssh/config`; delete `~/.km/keys/sb-<id>` + `.pub`. Mirrors how `km destroy` already cleans up DDB rows. |
 
-- Unit name: `km-vscode.service` (NOT `WantedBy=multi-user.target` — explicit start only).
-- Launch wrapper: `/opt/km/bin/km-vscode-launch`
-  - Generates fresh token: `TOKEN=$(openssl rand -hex 32)`
-  - Writes `/etc/km/vscode/token` mode 0600, owned by `sandbox`
-  - Execs `code serve-web --host 127.0.0.1 --port 8443 --connection-token-file /etc/km/vscode/token --without-connection-token=false --accept-server-license-terms`
-- Token directory: `/etc/km/vscode/` mode 0700, owned by `sandbox`.
-- Token rotates on every `systemctl restart km-vscode` (which is what `km vscode start` issues —
-  restart, not start, so each call rotates).
-- Server binds 127.0.0.1 only — SSM tunnel is the security boundary, URL token is
-  defense-in-depth against other processes on the operator's laptop.
-- Matches existing systemd-everywhere idiom (km-http-proxy, km-mail-poller,
-  km-slack-inbound-poller). Survives reboots, logs land in journald.
-
-### Ownership split (km installs more, operator installs less — user-clarified)
-
-- Operator's profile (`initCommands`): only installs the `code` binary.
-- km's `userdata.go`: writes the systemd unit, the launch wrapper, and the token directory at
-  cloud-init time, conditional on the profile flag.
-- km's CLI (`internal/app/cmd/vscode.go`): pure SSM wrapper.
-
-### Profile gate (Q4: profile flag default-true)
-
-- New field: `spec.cli.vscodeEnabled` (`bool*` pointer, omit ⇒ default `true`).
-- `true` ⇒ userdata writes unit/wrapper/dir.
-- `false` ⇒ userdata skips entirely; `km vscode start` against such a sandbox surfaces a clean
-  "VS Code not enabled in this sandbox's profile" error (detected by `systemctl status` returning
-  unit-not-found).
-- Inheritance follows the existing `spec.cli.*` pattern.
-- Schema change ⇒ `km init --sidecars` after rebuild (matches the project's documented pattern
-  in `memory/project_schema_change_requires_km_init.md`).
+Mirrors the existing `/sandbox/{id}/signing-key` SSM pattern for per-sandbox email signing keys
+— operators already understand this idiom.
 
 ### CLI surface
 
 ```
-km vscode start  <sandbox-id> [--local-port N] [--no-forward]
-km vscode stop   <sandbox-id>
+km vscode start  <sandbox-id> [--local-port N]
 km vscode status <sandbox-id>
 ```
 
 **`start`:**
-1. SSM `systemctl restart km-vscode` (token rotates).
-2. Poll `systemctl is-active km-vscode` for up to 10 s. On failure, surface last 20 lines of
-   `journalctl -u km-vscode --no-pager` and exit non-zero with hint pointing at `docs/vscode.md`.
-3. SSM read `/etc/km/vscode/token`.
-4. Print connection block:
+1. Resolve sandbox → instance ID + region (existing helper, see `shell.go`).
+2. Verify sandbox has `vscodeEnabled: true` (via SSM `systemctl is-active sshd` + check that
+   `/home/sandbox/.ssh/authorized_keys` exists). If not, fail fast with "VS Code not enabled
+   in this sandbox's profile (set `spec.cli.vscodeEnabled: true`)."
+3. Upsert managed block in `~/.ssh/config` (read existing, parse markers, replace or append
+   the Host entry for this sandbox, preserve everything else).
+4. Print connection instructions:
    ```
-   VS Code ready for sb-abc123:
-     URL: http://localhost:8443/?tkn=<token>
-     Forwarding localhost:8443 → sandbox:8443 (Ctrl-C to disconnect; server keeps running)
+   ✓ Updated ~/.ssh/config (Host: km-sb-abc123)
+   ✓ Forwarding localhost:2222 → sandbox:22
+
+   In VS Code: F1 → "Remote-SSH: Connect to Host..." → km-sb-abc123
+   Press Ctrl-C to close the tunnel (sshd keeps running on the sandbox).
    ```
-5. Open foreground SSM port-forward via existing `buildPortForwardCmd`
-   (`internal/app/cmd/shell.go:577`).
+5. Open the foreground SSM port-forward via `buildPortForwardCmd` (`shell.go:577`).
 
 **Flags:**
-- `--local-port N` overrides the local-side port if 8443 is taken on the operator's laptop.
-- `--no-forward` prints URL/token and exits without starting a tunnel (useful for reconnecting
-  from a fresh terminal).
+- `--local-port N` overrides the local-side port if 2222 is taken on the operator's laptop.
+  The `~/.ssh/config` entry's `Port` line is updated to match.
 
-**`stop`:** SSM `systemctl stop km-vscode`. Token file remains; next start overwrites.
+**`status`:** SSM query: `systemctl is-active sshd` + check `/home/sandbox/.ssh/authorized_keys`
+exists + presence of the operator's pubkey. Returns non-zero if any check fails.
 
-**`status`:** SSM `systemctl is-active` + last 20 lines of `journalctl -u km-vscode`. Returns
-non-zero if inactive.
+**No `stop` command in v1.** The session is the foreground port-forward; Ctrl-C ends it.
+sshd stays running on the sandbox; reconnect is just rerunning `start`.
 
-### Auth & security model (locked)
+### Profile gate
+
+- Field: `spec.cli.vscodeEnabled` (`bool*` pointer, omit ⇒ default `true`). Same name and
+  semantics as the original Option A, different effect: now gates "sshd up + key dropped"
+  instead of "systemd unit installed."
+- Inheritance follows the existing `spec.cli.*` pattern.
+- `false` ⇒ userdata skips the entire sshd-enable + key-drop block. `km vscode start` against
+  such a sandbox fails fast with the clean error above.
+- Schema change ⇒ `km init --sidecars` after rebuild (matches documented pattern in
+  `memory/project_schema_change_requires_km_init.md`).
+
+### `~/.ssh/config` management (operator-side)
+
+km manages a region of `~/.ssh/config` between marker comments:
+
+```
+# BEGIN km vscode hosts (managed; do not edit between markers)
+Host km-sb-abc123
+  HostName localhost
+  Port 2222
+  User sandbox
+  IdentityFile ~/.km/keys/sb-abc123
+  IdentitiesOnly yes
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ServerAliveInterval 30
+# END km vscode hosts
+```
+
+- The block is created if absent. `start` updates only the Host entry for the current sandbox;
+  other entries inside the block are preserved.
+- `km destroy <sb>` removes only that sandbox's Host entry.
+- Anything outside the markers is never touched.
+- File created with 0600 perms, in the operator's home directory.
+
+### Auth & security model
 
 - **SSM tunnel = real security boundary.** IAM-authenticated, encrypted, per-session.
-- **Token in URL = defense-in-depth.** Prevents other processes on the operator's laptop from
-  connecting via `http://localhost:8443/`. Rotated on every `start`.
-- **Server binds 127.0.0.1 only.** Nothing on the EC2 instance can reach it; no SG changes needed.
-- **Token file is `0600` owned by `sandbox`.** km reads it via SSM RunCommand (running as root
-  via the SSM agent), then prints to stdout on the operator's terminal.
+- **SSH on top adds key-based authentication.** Per-sandbox ed25519; private key never leaves
+  the operator's laptop; pubkey only ever exists on the operator's machine + the one sandbox
+  it was generated for.
+- **Compromise blast radius = 1 sandbox.** No shared key across sandboxes.
+- **`StrictHostKeyChecking no` + `UserKnownHostsFile /dev/null` for v1.** Acceptable because
+  the SSM tunnel already authenticates the target instance via IAM; the SSH host key is
+  defense-in-depth. Proper TOFU/cert-based trust is a deferred follow-up.
+- **No public exposure of port 22.** SG remains egress-only; SSM port-forward bypasses SG and
+  reaches the SSM agent on the instance, which connects to localhost:22.
+
+### POC lessons that the implementation must honor
+
+These were learned during live POC validation against an `learn.yaml` sandbox; userdata MUST
+incorporate all four:
+
+1. **Enable AND start sshd.** AL2023 ships `openssh-server` but sshd is often disabled by
+   default. `systemctl enable --now sshd` (both flags).
+2. **Create `~/.ssh/` as sandbox user, not root.** If created by root then `chown`'d, file
+   ownership is right, but if `chown` is omitted or scoped wrong, sshd refuses with "bad
+   ownership."
+3. **`restorecon -R -v /home/sandbox/.ssh` is mandatory on AL2023.** SELinux is enforcing.
+   Without restorecon, sshd cannot read `authorized_keys` even when ownership and mode are
+   correct, and fails silently with "Permission denied" in `journalctl -u sshd`.
+4. **Pubkey one line, no trailing whitespace artifacts.** Heredoc form (`cat > ... << 'EOF'`)
+   works correctly when the pubkey content has no embedded newlines (which `ssh-keygen` output
+   guarantees).
 
 </decisions>
 
 <specifics>
 ## Specific Ideas
 
-### File touch list (from spec)
+### File touch list
 
 **New:**
-- `internal/app/cmd/vscode.go`
-- `internal/app/cmd/vscode_test.go`
-- `docs/vscode.md` (operator-facing setup guide with sample `initCommands` snippet for the
-  Microsoft `code` CLI)
+- `internal/app/cmd/vscode.go` — cobra subcommand (`start`, `status`)
+- `internal/app/cmd/vscode_test.go` — Wave 0 stubs + green tests
+- `internal/app/cmd/sshconfig.go` — `~/.ssh/config` managed-block parser/writer (read existing, find markers, replace/append a Host entry, preserve everything else)
+- `internal/app/cmd/sshconfig_test.go` — exhaustive coverage for the parser/writer (no markers, markers only, markers + entries, multiple sandboxes, weird whitespace, missing trailing newline)
+- `pkg/sshkey/keygen.go` — Go-native ed25519 keypair generation, write OpenSSH-format private + public files. Wraps `crypto/ed25519` + `golang.org/x/crypto/ssh/marshal`. Single function `GenerateAndWrite(privPath, pubPath, comment string) (pubContent string, err error)`.
+- `pkg/sshkey/keygen_test.go` — coverage for path creation, mode bits, public-key derivation, idempotency.
+- `docs/vscode.md` — operator-facing setup guide (one-liner: install Remote-SSH extension; usage of `km vscode start`)
 
 **Modified:**
-- `pkg/profile/` — schema + inheritance for `vscodeEnabled` (default-true bool pointer)
-- `pkg/compiler/userdata.go` — conditional block writing unit + wrapper + dir
-- `pkg/compiler/userdata_test.go` — coverage for the new block
-- `internal/app/cmd/root.go` (or wherever cobra commands register) — wire up `vscode` subcommand
-- `CLAUDE.md` — add `km vscode start/stop/status` to the CLI command list
+- `pkg/profile/types.go` (or wherever `CLISpec` lives) — add `VSCodeEnabled *bool` with default-true semantics
+- `pkg/profile/sandbox_profile.schema.json` — add `vscodeEnabled` to the JSON schema
+- `pkg/compiler/userdata.go` — conditional block writing sshd enable + authorized_keys + restorecon; add `VSCodeSSHPubKey string` field to userdata template input struct
+- `pkg/compiler/userdata_test.go` — coverage for the new conditional block
+- `internal/app/cmd/create.go` (or wherever the create command lives) — call `pkg/sshkey.GenerateAndWrite` before rendering userdata; populate `VSCodeSSHPubKey` template variable
+- `internal/app/cmd/create_remote.go` (or equivalent for `--remote`) — pass `VSCodeSSHPubKey` to the management Lambda payload
+- `internal/app/cmd/destroy.go` — add cleanup steps: remove `Host km-sb-<id>` from `~/.ssh/config`, delete `~/.km/keys/sb-<id>*`
+- `internal/app/cmd/root.go` — register the new `vscode` subcommand (mirror `agent`/`slack`/`ami` pattern)
+- `CLAUDE.md` — add `km vscode start/status` to the CLI command list
+- The Lambda-side userdata renderer also needs the new `VSCodeSSHPubKey` variable threaded through (verify which Lambda handles `--remote` create — likely `km-create-handler`).
 
 ### Existing patterns to mirror
 
-- **systemd unit conditional in userdata.go:** look at how `km-mail-poller`,
-  `km-slack-inbound-poller`, `km-http-proxy` are written into `/etc/systemd/system/` from the
-  template and gated on profile fields (`if .SandboxEmail`, `if .SlackInboundEnabled`, etc.).
-- **SSM SendCommand wrapper:** look at `agent.go` for the pattern of issuing a command, polling
-  for completion, capturing stdout. Reuse the same helper functions.
-- **SSM port-forward:** reuse `buildPortForwardCmd` from `shell.go:577` verbatim — same
-  document name (`AWS-StartPortForwardingSession`), same parameter shape.
-- **Profile flag inheritance:** follow the pattern of `notifySlackEnabled`,
-  `notifySlackPerSandbox`, `notifySlackTranscriptEnabled` for the bool-pointer + default semantics.
-- **Daemon-reload + restart for AMI bakes:** the recent fix (commit `4030fce`) added
-  `systemctl daemon-reload` and `restart` (not `start`) before sidecar startup blocks for
-  AMI-baked instances. The new vscode unit is NOT auto-started at boot (no `WantedBy`), so this
-  particular fix doesn't apply directly — but the principle (write unit + daemon-reload before
-  any operation) still holds. After cloud-init writes the unit, the userdata script should
-  `systemctl daemon-reload` so the first `km vscode start` finds it.
+- **systemd enable + start in userdata.go:** existing patterns for `km-mail-poller`,
+  `km-slack-inbound-poller` show how to write conditional sidecar blocks. Use the same shape
+  for the sshd-enable + authorized_keys block.
+- **SSM port-forward (verbatim reuse):** `buildPortForwardCmd` at `shell.go:577`. No new
+  function needed for the port-forward primitive.
+- **SSM SendCommand wrapper:** `sendSSMAndWait` at `agent.go:1067` for the `status` command's
+  remote checks.
+- **Profile flag inheritance:** follow `notifySlackEnabled`, `notifySlackPerSandbox`,
+  `notifySlackTranscriptEnabled` for the bool-pointer + default-true semantics.
+- **Daemon-reload + restart for AMI bakes (commit `4030fce`):** the new userdata block writes
+  no new systemd unit (sshd ships pre-installed), so daemon-reload is not strictly required.
+  But the `systemctl enable --now sshd` step still needs to be in the same defensive idiom —
+  prefix the block with `systemctl daemon-reload` to be safe against AMI-baked stale state.
+- **Per-sandbox key files in `~/.km/`:** the `~/.km/keys/` directory mirrors how the rest of
+  km manages local operator state (km-config.yaml, etc. live under `~/.km/`).
 
-### Edge cases (from spec)
+### Edge cases (explicit handling required)
 
 | Case | Behavior |
 |------|----------|
-| `code` binary not installed on sandbox | `systemctl restart` fails → surface `journalctl` excerpt with hint pointing at `docs/vscode.md` |
-| Local port 8443 already in use | SSM port-forward exits with bind error → operator uses `--local-port` |
-| Re-running `start` while another tunnel is open | Second port-forward fails on bind; systemd restart silently rotates the token, breaking the first session. Document the recommendation: stop first, or use `--no-forward` for a fresh URL |
-| `vscodeEnabled: false` in profile | Userdata skips the unit/wrapper/dir entirely. `km vscode start` against such a sandbox fails with "VS Code not enabled in this sandbox's profile" (detected via `systemctl status` exit code for "unit not found") |
-| `km destroy` / `km pause` | No-op for vscode; systemd unit dies with the box |
+| `~/.km/keys/` doesn't exist on first `km create` | Create with mode 0700; document in docs/vscode.md |
+| Operator runs `km create` on machine A, `km vscode start` on machine B | Private key only exists on A. `start` fails with "private key not found at `~/.km/keys/sb-<id>`. If you created this sandbox on a different machine, copy the key files over." Document in docs/vscode.md |
+| `~/.ssh/config` doesn't exist | Create it with mode 0600, add the managed block |
+| `~/.ssh/config` exists but has no markers | Append managed block (with markers) plus first entry |
+| `~/.ssh/config` has markers but no Host entry for this sandbox | Add inside the markers |
+| `~/.ssh/config` has markers AND a Host entry for this sandbox | Replace just that entry, leave others intact |
+| Operator manually edits inside the markers | We document "do not edit between markers" but don't enforce it; replacement is whole-Host-entry, so manual additions to other Host entries inside the block survive |
+| Local port 2222 already in use | SSM port-forward exits with bind error → operator uses `--local-port N` |
+| `km destroy` called but key files already gone | Idempotent removal; no error |
+| `km destroy` called but ssh-config block doesn't exist for this sandbox | Idempotent removal; no error |
+| `vscodeEnabled: false` profile | Userdata skips sshd-enable + key-drop. `start` detects this via failed SSM check and surfaces the clean error |
 
 ### Sample operator setup (target for `docs/vscode.md`)
 
-```yaml
-# In a sandbox profile:
-spec:
-  cli:
-    vscodeEnabled: true   # default; can omit
-  execution:
-    initCommands:
-      - "curl -fsSL https://update.code.visualstudio.com/latest/cli-alpine-x64/stable -o /tmp/vscode-cli.tar.gz"
-      - "tar -xzf /tmp/vscode-cli.tar.gz -C /usr/local/bin/"
-      - "chmod +x /usr/local/bin/code"
+```
+# One-time: install VS Code's Remote-SSH extension.
+# Open VS Code → Extensions → search "Remote - SSH" → Install (Microsoft, free).
+
+# Per-sandbox lifecycle:
+km create profiles/<your-profile>.yaml --alias my-poc
+SB=$(km list | awk '/my-poc/ {print $1}')
+km vscode start $SB
+# (terminal blocks; in another window:)
+# F1 → "Remote-SSH: Connect to Host..." → km-$SB
+# VS Code installs vscode-server on first connect (~50MB), then opens an empty workspace.
+# File → Open Folder → /workspace.
+
+# When done:
+# Ctrl-C the terminal running km vscode start.
+# (sshd stays up; reconnect any time with km vscode start $SB)
+
+km destroy $SB --remote --yes
+# (removes the ssh-config block and the ~/.km/keys/sb-<id>* files automatically)
 ```
 
-(Exact URL / pinning strategy is an open question; phase planning may pin a specific version.)
-
-### Deployment requirements (locked)
+### Deployment requirements
 
 - Userdata template change ⇒ `make build` (embeds template in km binary).
 - Schema change ⇒ `km init --sidecars` (refreshes management Lambda).
 - Existing sandboxes that want VS Code ⇒ `km destroy` + `km create`.
-- AMI bakes pick up the unit + wrapper automatically on next boot via cloud-init (the unit
-  lives in userdata, not in the baked image — same pattern as every other systemd unit km
-  manages).
+- AMI bakes pick up the unit + wrapper automatically on next boot via cloud-init.
 
 </specifics>
 
@@ -204,22 +263,32 @@ spec:
 ### Explicitly deferred from this phase
 
 - **`--duration <D>` flag and auto-stop integration.** Operator can compose with `km at` for
-  scheduled stops if needed; no special wiring in `km vscode`.
-- **`km doctor` checks for VS Code** (e.g., "code binary present in any sandbox profile"). Skip
-  until there's evidence of operator confusion.
-- **Multiple concurrent sessions per sandbox on different ports.** One per sandbox is enough.
-- **Session persistence across `km destroy` + `km create`** (keeping `~/.vscode-server` data
-  alive between sandbox lifetimes). Beyond phase scope; existing AMI-bake / additionalVolume
-  patterns can carry user data if needed.
-- **`code-server` and `openvscode-server` first-class support.** The systemd unit is written
-  for `code serve-web` (Microsoft); operators using other flavors will need to tweak the
-  wrapper. Documenting only one tested install path keeps the docs honest.
-- **Pinning a specific `code` CLI version vs `latest`.** Phase planning to decide; lean toward
-  pinning for reproducibility, but `latest` is operationally simpler.
+  scheduled stops; no special wiring in `km vscode`.
+- **`km doctor` checks for VS Code** (e.g., "every sandbox with `vscodeEnabled: true` has
+  sshd active and authorized_keys present"). Skip until there's evidence of operator
+  confusion.
+- **Cross-machine key portability** (`km vscode export-key`/`import-key`). Document that keys
+  are per-machine for now; revisit if this bites.
+- **Multiple operators sharing a sandbox** via multi-line `authorized_keys`. v1 = one operator
+  per sandbox.
+- **Proper SSH host-key trust** (TOFU, ssh-cert with a per-install CA, etc.). v1 uses
+  `StrictHostKeyChecking no` + `UserKnownHostsFile /dev/null`. Tracked as a security follow-up
+  in the spec.
+- **`km vscode stop` command.** Foreground tunnel + Ctrl-C is enough; if operators ask for
+  detached + stop later, we add it.
+- **Provisioning sshd config customization** (changing the port, restricting cipher suites,
+  etc.). v1 ships with the AL2023 default sshd config. Operators who want to harden can
+  add `initCommands` or override sshd_config in their profile's `configFiles`.
+- **Browser fallback** (`code serve-web`) for use cases where the operator can't run VS Code
+  locally. Only pursued if there's evidence of demand.
+- **`vscodeEnabled` rename to `sshEnabled`.** The flag now gates SSH access broadly (which
+  enables VS Code Remote-SSH but also vim-over-ssh, scp, rsync, etc.). For v1 we keep
+  `vscodeEnabled` because that's the operator-facing name everyone agreed on; rename
+  candidate for a future cleanup if it's confusing.
 
 </deferred>
 
 ---
 
 *Phase: 73-km-vscode-remote-session-via-ssm*
-*Context gathered: 2026-05-06 via brainstorming dialogue*
+*Context gathered: 2026-05-06 via brainstorming dialogue + live POC validation*
