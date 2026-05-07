@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: Completed 66-05-PLAN.md
-last_updated: "2026-05-04T16:33:48.970Z"
-last_activity: 2026-05-04
+stopped_at: Completed 73-00-PLAN.md
+last_updated: "2026-05-07T23:49:28.516Z"
+last_activity: 2026-05-07
 progress:
-  total_phases: 73
+  total_phases: 77
   completed_phases: 69
-  total_plans: 242
-  completed_plans: 243
+  total_plans: 284
+  completed_plans: 244
   percent: 93
 ---
 
@@ -31,7 +31,7 @@ Plan: 1 of 13 in current phase (Plan 68-00 COMPLETE; 68-01..68-12 pending)
 Total Plans in Phase: 13
 Current Plan: 13
 Status: in-progress
-Last activity: 2026-05-04 - Completed quick task 7: km doctor --dry-run=false cleans up stale Slack SQS queues and S3 transcript prefixes
+Last activity: 2026-05-07
 
 Progress: [█████████░] 93%
 
@@ -283,6 +283,7 @@ Progress: [█████████░] 93%
 | Phase 66-multi-instance-support-configurable-resource-prefix-and-email-subdomain P02 | 1023 | 3 tasks | 14 files |
 | Phase 66-multi-instance-support-configurable-resource-prefix-and-email-subdomain P04 | 31539929 | 4 tasks | 22 files |
 | Phase 66-multi-instance-support-configurable-resource-prefix-and-email-subdomain P05 | 25min | 3 tasks | 8 files |
+| Phase 73-km-vscode-remote-session-via-ssm P00 | 855 | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -807,6 +808,7 @@ Recent decisions affecting current work:
 - [Phase 66]: Lambda function_name rename caveat: default-prefix installs unaffected; custom-prefix migrations from default need terraform state mv for lambda-slack-bridge
 - [Phase 66]: ExportConfigEnvVars now exports KM_RESOURCE_PREFIX + KM_EMAIL_SUBDOMAIN; fetchAndCacheOutputs uses env var for prefix-aware bucket naming
 - [Phase 66]: km-config.yaml is gitignored by design; email_subdomain added on disk; grep audit residuals are pre-existing from phases 02-67 and documented
+- [Phase 73-km-vscode-remote-session-via-ssm]: Test files in cmd use package cmd (not cmd_test) for internal-symbol access; boolPtr reused from validate_test.go to avoid redeclaration
 
 ### Roadmap Evolution
 
@@ -898,6 +900,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-04T15:53:15.470Z
-Stopped at: Completed 66-05-PLAN.md
+Last session: 2026-05-07T23:49:28.509Z
+Stopped at: Completed 73-00-PLAN.md
 Resume file: None
