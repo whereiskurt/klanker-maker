@@ -1,14 +1,14 @@
 {
   "name": "klanker-maker",
-  "description": "Klanker Maker sandbox platform — email orchestration, operator CLI, and sandbox identity",
+  "description": "Klanker Maker sandbox platform — email and Slack orchestration, operator CLI, and sandbox identity",
   "owner": {
     "name": "whereiskurt"
   },
   "plugins": [
     {
       "name": "klanker",
-      "description": "Sandbox email orchestration, operator communication, and CLI guide",
-      "version": "0.1.0",
+      "description": "Sandbox email and Slack orchestration, operator communication, and CLI guide",
+      "version": "0.2.0",
       "source": "./"
     }
   ]
