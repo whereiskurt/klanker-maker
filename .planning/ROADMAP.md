@@ -1563,9 +1563,18 @@ Plans:
 ### Phase 73: km vscode remote session via SSM
 
 **Goal:** Add `km vscode start | status` so an operator can connect their **local desktop VS Code** (via the Remote-SSH extension) to a sandbox over SSM port-forward. km auto-generates a per-sandbox ed25519 keypair on the operator's laptop at `km create` time (private key under `~/.km/keys/sb-<id>`, public key shipped via userdata to `/home/sandbox/.ssh/authorized_keys`). `km vscode start <sb>` opens a foreground SSM port-forward (sandbox port 22 → operator local port 2222), upserts a managed entry in `~/.ssh/config`, and tells the operator how to launch Remote-SSH. `km destroy` cleans up the ssh-config block and the key files. Gated by a new default-true `spec.cli.vscodeEnabled` profile flag. Nothing related to VS Code is installed on the sandbox — Remote-SSH auto-deploys `vscode-server` on first connect. Full design at `docs/superpowers/specs/2026-05-06-km-vscode-design.md`.
-**Requirements**: TBD
+**Requirements**: GOAL-1..9 (goal-backward; no REQ-IDs in REQUIREMENTS.md — developer-experience phase, see 73-CONTEXT.md must-haves)
 **Depends on:** Phase 72
-**Plans:** 0 plans
+**Plans:** 10 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 73 to break down)
+- [ ] 73-00-PLAN.md — Wave 0 stub seeding: 5 test stub files + 4 production stubs (sshkey/keygen.go, sshconfig.go, vscode.go, profile types_test, userdata_test additions)
+- [ ] 73-01-PLAN.md — pkg/sshkey/keygen.go: Go-native ed25519 keypair generation using crypto/ed25519 + golang.org/x/crypto/ssh.MarshalPrivateKey (Wave 1, parallel)
+- [ ] 73-02-PLAN.md — Profile field spec.cli.vscodeEnabled (*bool, default true) + IsVSCodeEnabled helper + JSON schema (Wave 1, parallel)
+- [ ] 73-03-PLAN.md — internal/app/cmd/sshconfig.go: ~/.ssh/config managed-block parser/writer (UpsertHost + RemoveHost, atomic temp+rename) (Wave 1, parallel)
+- [ ] 73-04-PLAN.md — pkg/compiler/userdata.go: conditional sshd-enable + authorized_keys + restorecon block + NetworkConfig.VSCodeSSHPubKey + loud-fail validation (Wave 1, parallel)
+- [ ] 73-05-PLAN.md — internal/app/cmd/create.go: generate per-sandbox keypair before compiler.Compile, populate NetworkConfig.VSCodeSSHPubKey (Wave 2)
+- [ ] 73-06-PLAN.md — internal/app/cmd/vscode.go: km vscode start + status cobra commands; reuses buildPortForwardCmd + sendSSMAndWait verbatim; root.go registration (Wave 3)
+- [ ] 73-07-PLAN.md — internal/app/cmd/destroy.go: cleanup hook removes ~/.ssh/config block + ~/.km/keys/sb-X* files (idempotent on missing) (Wave 2, parallel with 73-05)
+- [ ] 73-08-PLAN.md — Docs: docs/vscode.md operator guide + CLAUDE.md additions (Wave 4)
+- [ ] 73-09-PLAN.md — Closeout: 73-VALIDATION.md Per-Task Verification Map populated + 73-UAT.md (6 manual scenarios) + blocking operator UAT checkpoint (Wave 5)
