@@ -1559,3 +1559,18 @@ Plans:
 - [ ] 72-07-PLAN.md — km create per-sandbox auto-invite loop: profile-driven email loop after channel creation, fail-soft on SkippedExternal/Failed (Layer 7)
 - [ ] 72-08-PLAN.md — km doctor slack_users_read_email_scope check: mirrors slack_files_write_scope pattern; surfaces scope drift before runtime errors (Layer 8)
 - [ ] 72-09-PLAN.md — Closeout: docs/slack-notifications.md Phase 72 section + CLAUDE.md updates + 72-VALIDATION.md Per-Task Verification Map populated + 72-UAT.md (5 operator scenarios) + blocking operator UAT checkpoint
+
+### Phase 73: km vscode remote session via SSM
+
+**Goal:** Add `km vscode start | stop | status` so an operator can launch a VS Code Web session inside an existing sandbox, accessed locally via an SSM port-forward. km owns the runtime contract (systemd unit `km-vscode.service`, launch wrapper at `/opt/km/bin/km-vscode-launch`, per-start token rotation in `/etc/km/vscode/token`); the operator only installs the `code` binary in their profile's `initCommands`. Provisioning is gated by a new default-true `spec.cli.vscodeEnabled` profile flag. Full design at `docs/superpowers/specs/2026-05-06-km-vscode-design.md`.
+**Requirements**: TBD
+**Depends on:** Phase 72
+**Plans:** 6 plans
+
+Plans:
+- [ ] 73-00-PLAN.md — Wave 0 stubs: 8 vscode_test.go failing CLI tests, 2 profile schema tests, 4 userdata template tests; amend CONTEXT.md + design spec to drop invalid `--without-connection-token=false` and lock `--connection-token "$TOKEN"` form
+- [ ] 73-01-PLAN.md — Profile schema: `CLISpec.VSCodeEnabled *bool` + `DefaultVSCodeEnabled` helper + JSON schema entry (default-true semantics, nil-CLI safe)
+- [ ] 73-02-PLAN.md — Userdata template: `userDataParams.VSCodeEnabled bool` + conditional block writing km-vscode.service unit + /opt/km/bin/km-vscode-launch wrapper + /etc/km/vscode/ token dir + daemon-reload (no auto-start)
+- [ ] 73-03-PLAN.md — `internal/app/cmd/vscode.go` start/stop/status reusing `sendSSMAndWait` and `buildPortForwardCmd` verbatim; in-shell is-active polling; `vscodeEnabled: false` clean error path; `--local-port` and `--no-forward` flags; root.go wiring
+- [ ] 73-04-PLAN.md — `docs/vscode.md` operator guide (cli-alpine-x64 install, troubleshooting matrix, security model) + CLAUDE.md CLI list update + dedicated "## VS Code Web sessions" section
+- [ ] 73-05-PLAN.md — Closeout: populate 73-VALIDATION.md Per-Task Verification Map + flip nyquist_compliant/wave_0_complete; create 73-UAT.md with 4 manual scenarios; blocking operator UAT checkpoint
