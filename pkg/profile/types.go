@@ -444,6 +444,29 @@ type CLISpec struct {
 	//
 	// Default: false. Profile-only — no CLI flag override (Phase 68).
 	NotifySlackTranscriptEnabled bool `yaml:"notifySlackTranscriptEnabled,omitempty" json:"notifySlackTranscriptEnabled,omitempty"`
+
+	// VSCodeEnabled gates the cloud-init block that enables sshd and writes the operator's
+	// ed25519 pubkey to /home/sandbox/.ssh/authorized_keys. Phase 73.
+	//
+	// Pointer-bool with omit-means-true semantics: nil ⇒ enabled (default), &false ⇒ skip
+	// userdata block. Mirrors NotifyEmailEnabled at line 403.
+	//
+	// Schema addition requires `make build && km init --sidecars` after deploy so the
+	// management Lambda's km binary recognizes the field.
+	VSCodeEnabled *bool `yaml:"vscodeEnabled,omitempty" json:"vscodeEnabled,omitempty"`
+}
+
+// IsVSCodeEnabled returns true when the operator's profile has not opted out of VS Code
+// Remote-SSH provisioning. Default true (nil CLI or nil VSCodeEnabled both return true).
+//
+// Used by:
+//   - pkg/compiler/userdata.go to gate the conditional userdata block (Plan 73-04)
+//   - internal/app/cmd/create.go to decide whether to generate a keypair (Plan 73-05)
+func IsVSCodeEnabled(cli *CLISpec) bool {
+	if cli == nil || cli.VSCodeEnabled == nil {
+		return true
+	}
+	return *cli.VSCodeEnabled
 }
 
 // Parse unmarshals a SandboxProfile from raw YAML bytes.
