@@ -177,7 +177,7 @@ incorporate all four:
 - `internal/app/cmd/sshconfig_test.go` — exhaustive coverage for the parser/writer (no markers, markers only, markers + entries, multiple sandboxes, weird whitespace, missing trailing newline)
 - `pkg/sshkey/keygen.go` — Go-native ed25519 keypair generation, write OpenSSH-format private + public files. Wraps `crypto/ed25519` + `golang.org/x/crypto/ssh/marshal`. Single function `GenerateAndWrite(privPath, pubPath, comment string) (pubContent string, err error)`.
 - `pkg/sshkey/keygen_test.go` — coverage for path creation, mode bits, public-key derivation, idempotency.
-- `docs/vscode.md` — operator-facing setup guide (one-liner: install Remote-SSH extension; usage of `km vscode start`)
+- `docs/vscode.md` — operator-facing setup guide: install Remote-SSH extension, usage of `km vscode start`, **network requirements section with the suffix table from "vscode-server network requirements" below** (operators must add these to their own `spec.network.egress.allowedDNSSuffixes` for hardened profiles)
 
 **Modified:**
 - `pkg/profile/types.go` (or wherever `CLISpec` lives) — add `VSCodeEnabled *bool` with default-true semantics
@@ -247,6 +247,66 @@ km vscode start $SB
 km destroy $SB --remote --yes
 # (removes the ssh-config block and the ~/.km/keys/sb-<id>* files automatically)
 ```
+
+### vscode-server network requirements
+
+Remote-SSH downloads `vscode-server` to the sandbox on first connect (~50MB),
+and the running server fetches extensions + emits telemetry from the sandbox,
+not the desktop. A sandbox with `vscodeEnabled: true` AND a strict
+`spec.network.egress` allowlist that omits Microsoft endpoints fails
+confusingly: SSH lands, but the bootstrap install hangs and VS Code reports
+"Could not establish connection" with no useful diagnostic operator-side.
+
+**Decision (favoring egress allowlist over local-server tunnel).** We extend
+`spec.network.egress.allowedDNSSuffixes` in profiles that opt into vscode
+rather than setting `remote.SSH.useLocalServer: true` to tunnel the server
+download over SSH. The local-server path works but is reportedly flaky, and
+it doesn't improve the trust model - the SSM tunnel already authenticates the
+target instance via IAM. Documenting the egress surface is more honest than
+hiding it behind an SSH tunnel.
+
+**Suffix table for `docs/vscode.md`** (operators copy into their own profile;
+all values go under `spec.network.egress.allowedDNSSuffixes` as leading-dot
+suffixes per existing schema convention):
+
+| Suffix | What for | Required? |
+|---|---|---|
+| `.visualstudio.com` | server download (`update.code.visualstudio.com`), marketplace API (`marketplace.visualstudio.com`) | yes |
+| `vscode.download.prss.microsoft.com` | newer download CDN (Microsoft is migrating here) | yes |
+| `.vsassets.io` | extension content + CDN (`*.gallery.vsassets.io`, `*.gallerycdn.vsassets.io`) | only when extensions installed |
+| `.vscode-cdn.net`, `vscode.dev` | Settings Sync, vscode.dev | only if used |
+| `.githubcopilot.com` | Copilot | only if used |
+| `dc.services.visualstudio.com`, `vortex.data.microsoft.com`, `mobile.events.data.microsoft.com` | telemetry | **no** - disable in local VS Code instead (see below) |
+
+**Operator-side telemetry hygiene.** `docs/vscode.md` should recommend
+disabling telemetry in the operator's local VS Code settings before
+connecting, so the sandbox-side allowlist stays narrow:
+
+```json
+"telemetry.telemetryLevel": "off",
+"redhat.telemetry.enabled": false
+```
+
+Once disabled, vscode-server stops emitting to the data-platform endpoints,
+so they never need to be allowlisted.
+
+**Discovery for new extension stacks.** When operators adopt unfamiliar
+bundles (Copilot, language servers, devcontainer tooling), the egress
+surface grows. Supported recipe:
+
+```bash
+km create profiles/learn.yaml --alias vscode-learn
+km shell vscode-learn --learn --ports 2222:22
+# In another terminal: VS Code Remote-SSH → localhost:2222
+# Install extensions, exercise the workflow, then exit the shell.
+ls learned.vscode-learn-*.yaml   # generated profile with actual suffixes hit
+```
+
+**Phase 73 scope clarification.** Phase 73 ships `km vscode start/status` and
+userdata changes only. It does **not** modify default built-in profiles to
+include vscode egress. Operators add the suffixes to their own profile when
+they want vscode on a hardened profile. The suffix table above lives in
+`docs/vscode.md` (already on the file touch list, line 180).
 
 ### Deployment requirements
 
