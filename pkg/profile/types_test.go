@@ -1439,21 +1439,25 @@ func TestParse_CLISpec_SlackFields_OmittedNilPointers(t *testing.T) {
 // TestVSCodeEnabled_DefaultTrue asserts that IsVSCodeEnabled returns true for
 // nil CLISpec, empty CLISpec, and CLISpec{VSCodeEnabled: &true}.
 func TestVSCodeEnabled_DefaultTrue(t *testing.T) {
-	t.Skip("TODO Wave 1 Plan 73-02: add VSCodeEnabled field + IsVSCodeEnabled helper")
-	// if !profile.IsVSCodeEnabled(nil) { t.Fatal("nil cli should return true") }
-	// if !profile.IsVSCodeEnabled(&profile.CLISpec{}) { t.Fatal("empty CLISpec should return true") }
-	// tru := true
-	// if !profile.IsVSCodeEnabled(&profile.CLISpec{VSCodeEnabled: &tru}) { t.Fatal("&true should return true") }
-	_ = boolPtr
+	if !profile.IsVSCodeEnabled(nil) {
+		t.Fatal("nil cli should return true")
+	}
+	if !profile.IsVSCodeEnabled(&profile.CLISpec{}) {
+		t.Fatal("empty CLISpec should return true")
+	}
+	tru := true
+	if !profile.IsVSCodeEnabled(&profile.CLISpec{VSCodeEnabled: &tru}) {
+		t.Fatal("&true should return true")
+	}
 }
 
 // TestVSCodeEnabled_False asserts that IsVSCodeEnabled returns false when
 // CLISpec.VSCodeEnabled is explicitly set to &false.
 func TestVSCodeEnabled_False(t *testing.T) {
-	t.Skip("TODO Wave 1 Plan 73-02: add VSCodeEnabled field + IsVSCodeEnabled helper")
-	// fls := false
-	// if profile.IsVSCodeEnabled(&profile.CLISpec{VSCodeEnabled: &fls}) { t.Fatal("&false should return false") }
-	_ = boolPtr
+	fls := false
+	if profile.IsVSCodeEnabled(&profile.CLISpec{VSCodeEnabled: &fls}) {
+		t.Fatal("&false should return false")
+	}
 }
 
 // TestParse_CLISpec_SlackFields_ExplicitFalse verifies that explicit false for
