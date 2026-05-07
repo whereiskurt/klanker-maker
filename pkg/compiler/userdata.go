@@ -42,6 +42,23 @@ systemctl start amazon-ssm-agent
 echo "[km-bootstrap] SSM agent started"
 
 # ============================================================
+# 1.5. Sandbox + sidecar users: create early so a later userdata
+# abort still leaves the box usable for "km shell" (KM-Sandbox-Session
+# requires the local "sandbox" user to exist for runAsDefaultUser).
+# ============================================================
+useradd -r -s /usr/sbin/nologin km-sidecar || true
+{{- if .Privileged }}
+useradd -m -s /bin/bash -d /home/sandbox -G wheel sandbox 2>/dev/null || true
+echo "sandbox ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/sandbox
+chmod 0440 /etc/sudoers.d/sandbox
+{{- else }}
+useradd -m -s /bin/bash -d /home/sandbox sandbox 2>/dev/null || true
+{{- end }}
+mkdir -p /workspace
+chown sandbox:sandbox /workspace
+echo "[km-bootstrap] sandbox + km-sidecar users ready"
+
+# ============================================================
 # 2. IMDSv2: verify token-based metadata access is working
 # ============================================================
 echo "[km-bootstrap] Verifying IMDSv2 token..."
@@ -339,6 +356,11 @@ echo "[km-bootstrap] KM_ALIAS_EMAIL={{ .AliasEmail }}"
 # ============================================================
 echo "[km-bootstrap] Installing GIT_ASKPASS credential helper..."
 mkdir -p /opt/km/bin
+# AL2023 minimal does not ship git; install before any "git config" call.
+# Idempotent — no-op when an AMI bake already includes git.
+if ! command -v git >/dev/null 2>&1; then
+  yum install -y git 2>&1 | tail -1
+fi
 # Askpass bakes in {{ .SandboxID }} at compile time (not ${KM_SANDBOX_ID})
 # so it works in any subprocess context — including ones that clear or
 # never received KM_SANDBOX_ID in their environment.
@@ -837,21 +859,7 @@ if [ -n "$CLAUDE_BIN" ]; then
   fi
 fi
 
-# Create dedicated sidecar user (exempt from iptables DNAT — prevents redirect loops)
-useradd -r -s /usr/sbin/nologin km-sidecar || true
-
-# Create sandbox user for agent workloads.
-# When privileged=true, the user gets wheel group + passwordless sudo.
-{{- if .Privileged }}
-useradd -m -s /bin/bash -d /home/sandbox -G wheel sandbox 2>/dev/null || true
-echo "sandbox ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/sandbox
-chmod 0440 /etc/sudoers.d/sandbox
-{{- else }}
-# Restricted: no sudo, no root.
-useradd -m -s /bin/bash -d /home/sandbox sandbox 2>/dev/null || true
-{{- end }}
-mkdir -p /workspace
-chown sandbox:sandbox /workspace
+# sandbox + km-sidecar users are created in section 1.5 (early).
 # Ensure sandbox user gets proxy env vars and audit hook
 ln -sf /etc/profile.d/km-audit.sh /etc/profile.d/km-proxy.sh 2>/dev/null || true
 

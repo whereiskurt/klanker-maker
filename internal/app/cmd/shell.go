@@ -205,11 +205,20 @@ Port forwarding:
 			notifyPerm, notifyIdle := resolveNotifyFlags(cmd)
 			// Plan 68-07: resolve transcript-stream override from CLI flags.
 			transcriptStream := resolveTranscriptFlag(cmd)
-			// Run the shell (blocks until user exits).
-			_ = runShell(cmd, cfg, fetcher, execFn, sandboxID, asRoot, noBedrock, notifyPerm, notifyIdle, transcriptStream)
+			// Run the shell (blocks until user exits). The exec error is
+			// deliberately discarded in the non-learn path so cobra does not
+			// print a spurious error after a normal session exit (see the
+			// TestShellCmd_MissingSSMDoc comment for context).
+			runErr := runShell(cmd, cfg, fetcher, execFn, sandboxID, asRoot, noBedrock, notifyPerm, notifyIdle, transcriptStream)
 
 			// --learn post-exit: generate profile from observed traffic.
+			// Skip post-exit when the SSM session never landed — otherwise the
+			// "no observation data found" error masks the real fault (e.g.
+			// "RunAs user sandbox does not exist" from a half-bootstrapped box).
 			if learn {
+				if runErr != nil {
+					return runErr
+				}
 				return runLearnPostExit(ctx, cfg, fetcher, sandboxID, learnOutput, amiFlag)
 			}
 			return nil
