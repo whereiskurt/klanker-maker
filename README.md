@@ -67,7 +67,7 @@ $ ./km destroy g1 --yes
 - [Architecture](#architecture)
 - [Documentation](#documentation)
 - [Roadmap](#roadmap)
-- [License](#license)
+- [License & Project Status](#license--project-status)
 
 ---
 
@@ -966,6 +966,18 @@ See [.planning/ROADMAP.md](.planning/ROADMAP.md) for detailed phase breakdowns a
 
 ---
 
-## License
+## License & Project Status
 
-TBD
+Klanker Maker is the personal project of **Kurt Hundeck**, released under the [MIT License](LICENSE).
+
+It is **not** affiliated with, endorsed by, or sponsored by any current or past employer of the author, and it is **not** a commercial product or supported service. The software is provided **AS IS, without warranty of any kind** - see [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md) for the full disclaimer.
+
+| Document | Purpose |
+|---|---|
+| [LICENSE](LICENSE) | MIT License - the legal terms under which this code is shared |
+| [NOTICE.md](NOTICE.md) | Personal-project authorship, no employer affiliation, trademark notice, use-at-your-own-risk |
+| [SECURITY.md](SECURITY.md) | How to report security vulnerabilities |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | DCO sign-off requirement and contributor warranty (incl. third-party / employer IP terms) |
+| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Behavioral expectations for issues, PRs, and discussions |
+
+Klanker Maker provisions real AWS infrastructure that costs real money to operate and grants AI agents scoped credentials in your AWS account. If you use it, you accept full responsibility for everything it does on your bill, your network, and your data.
