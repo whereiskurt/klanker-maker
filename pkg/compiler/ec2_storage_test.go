@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // minimalEC2StorageProfile returns a minimal EC2 profile for storage validation tests.

@@ -4,7 +4,7 @@ import (
 	"os"
 	"strings"
 
-	dnsproxy "github.com/whereiskurt/klankrmkr/sidecars/dns-proxy/dnsproxy"
+	dnsproxy "github.com/whereiskurt/klanker-maker/sidecars/dns-proxy/dnsproxy"
 	"github.com/miekg/dns"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"

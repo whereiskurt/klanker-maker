@@ -7,7 +7,7 @@ import (
 	"time"
 
 	goyaml "github.com/goccy/go-yaml"
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 	"golang.org/x/net/publicsuffix"
 )
 
@@ -86,11 +86,11 @@ func (r *Recorder) Generate(base string) (*profile.SandboxProfile, error) {
 			Observability: profile.ObservabilitySpec{
 				CommandLog: profile.LogDestination{
 					Destination: "cloudwatch",
-					LogGroup:    "/klankrmkr/sandboxes",
+					LogGroup:    "/klanker-maker/sandboxes",
 				},
 				NetworkLog: profile.LogDestination{
 					Destination: "cloudwatch",
-					LogGroup:    "/klankrmkr/network",
+					LogGroup:    "/klanker-maker/network",
 				},
 			},
 			Agent: profile.AgentSpec{

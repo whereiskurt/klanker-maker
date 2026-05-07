@@ -9,8 +9,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/sidecars/http-proxy/httpproxy"
+	"github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/sidecars/http-proxy/httpproxy"
 )
 
 // Test 1 — Non-streaming extraction.

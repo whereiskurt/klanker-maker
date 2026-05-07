@@ -42,8 +42,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
-	pkgslack "github.com/whereiskurt/klankrmkr/pkg/slack"
-	"github.com/whereiskurt/klankrmkr/pkg/slack/bridge"
+	pkgslack "github.com/whereiskurt/klanker-maker/pkg/slack"
+	"github.com/whereiskurt/klanker-maker/pkg/slack/bridge"
 )
 
 // handler is the global Phase 63 bridge.Handler, constructed once per cold start.

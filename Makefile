@@ -13,8 +13,8 @@ CGO_ENABLED := 0
 # Semantic version — read without bumping; bump happens in the bump-version target
 KM_VERSION  := $(shell cat VERSION 2>/dev/null | tr -d '[:space:]')
 GIT_COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-LDFLAGS      = -X github.com/whereiskurt/klankrmkr/pkg/version.Number=v$(KM_VERSION) \
-               -X github.com/whereiskurt/klankrmkr/pkg/version.GitCommit=$(GIT_COMMIT)
+LDFLAGS      = -X github.com/whereiskurt/klanker-maker/pkg/version.Number=v$(KM_VERSION) \
+               -X github.com/whereiskurt/klanker-maker/pkg/version.GitCommit=$(GIT_COMMIT)
 
 VERSION     ?= latest
 REGION      ?= $(shell aws configure get region 2>/dev/null || grep '^region:' km-config.yaml 2>/dev/null | awk '{print $$2}')
@@ -59,7 +59,7 @@ bump-version:
 ## build: bump version then build the km CLI binary
 build: bump-version
 	$(eval KM_VERSION := $(shell cat VERSION | tr -d '[:space:]'))
-	go build -ldflags '-X github.com/whereiskurt/klankrmkr/pkg/version.Number=v$(KM_VERSION) -X github.com/whereiskurt/klankrmkr/pkg/version.GitCommit=$(GIT_COMMIT)' -o km ./cmd/km/
+	go build -ldflags '-X github.com/whereiskurt/klanker-maker/pkg/version.Number=v$(KM_VERSION) -X github.com/whereiskurt/klanker-maker/pkg/version.GitCommit=$(GIT_COMMIT)' -o km ./cmd/km/
 	@echo "Built: km v$(KM_VERSION) ($(GIT_COMMIT))"
 
 ## build-km: alias for build

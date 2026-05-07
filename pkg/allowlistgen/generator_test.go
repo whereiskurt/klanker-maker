@@ -6,8 +6,8 @@ import (
 	"time"
 
 	goyaml "github.com/goccy/go-yaml"
-	"github.com/whereiskurt/klankrmkr/pkg/allowlistgen"
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/allowlistgen"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // buildRecorder creates a recorder with specified observations.

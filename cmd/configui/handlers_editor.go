@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // maxProfileBodyBytes is the maximum size of a profile YAML body accepted from the client.

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // TestGetBedrockModelRatesStaticFallback verifies that GetBedrockModelRates

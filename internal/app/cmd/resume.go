@@ -20,10 +20,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/pkg/compiler"
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/compiler"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // NewResumeCmd creates the "km resume" subcommand.

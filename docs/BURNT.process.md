@@ -7,7 +7,7 @@ How to regenerate or update `docs/BURNT.md` from local Claude Code session data.
 All token usage comes from **local JSONL session files**:
 
 ```
-~/.claude/projects/-Users-khundeck-working-klankrmkr/*.jsonl
+~/.claude/projects/-Users-khundeck-working-klanker-maker/*.jsonl
 ```
 
 Each `.jsonl` file is one session. Each line is a JSON object. Messages with `usage` fields contain token counts.
@@ -37,7 +37,7 @@ The `input_tokens` field alone is tiny — it's only the non-cached portion. The
 ```python
 import json, os, glob
 
-for f in glob.glob("~/.claude/projects/-Users-khundeck-working-klankrmkr/*.jsonl"):
+for f in glob.glob("~/.claude/projects/-Users-khundeck-working-klanker-maker/*.jsonl"):
     for line in open(f):
         d = json.loads(line)
         if "message" in d and isinstance(d["message"], dict) and "usage" in d["message"]:

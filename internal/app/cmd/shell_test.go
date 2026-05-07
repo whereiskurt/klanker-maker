@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/whereiskurt/klankrmkr/internal/app/cmd"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	"github.com/whereiskurt/klankrmkr/pkg/allowlistgen"
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/internal/app/cmd"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	"github.com/whereiskurt/klanker-maker/pkg/allowlistgen"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // ---- Helpers ----

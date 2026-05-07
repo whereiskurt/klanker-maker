@@ -18,7 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
-	"github.com/whereiskurt/klankrmkr/pkg/slack/bridge"
+	"github.com/whereiskurt/klanker-maker/pkg/slack/bridge"
 )
 
 // ============================================================

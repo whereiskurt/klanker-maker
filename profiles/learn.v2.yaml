@@ -124,10 +124,10 @@ spec:
     learnMode: true
     commandLog:
       destination: cloudwatch
-      logGroup: /klankrmkr/sandboxes
+      logGroup: /klanker-maker/sandboxes
     networkLog:
       destination: cloudwatch
-      logGroup: /klankrmkr/network
+      logGroup: /klanker-maker/network
     claudeTelemetry:
       enabled: true
       logPrompts: true
@@ -161,7 +161,7 @@ spec:
     notifyOnIdle: true
     notifyOnPermission: true
     notifyEmailEnabled: true
-    notifySlackEnabled: true
-    notifySlackPerSandbox: true
-    notifySlackInboundEnabled: true
-    slackArchiveOnDestroy: true
+    notifySlackEnabled: false
+    # notifySlackPerSandbox: false
+    # notifySlackInboundEnabled: false
+    # slackArchiveOnDestroy: false

@@ -23,8 +23,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/rs/zerolog/log"
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/pkg/slack"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/slack"
 )
 
 // BridgePosterFunc is the function type used to post to the Slack bridge

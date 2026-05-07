@@ -20,7 +20,7 @@ import (
 
 	"github.com/elazarl/goproxy"
 	"github.com/rs/zerolog/log"
-	"github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/aws"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 )

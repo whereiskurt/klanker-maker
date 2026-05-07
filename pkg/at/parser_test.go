@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whereiskurt/klankrmkr/pkg/at"
+	"github.com/whereiskurt/klanker-maker/pkg/at"
 )
 
 // fixedNow returns a fixed reference time for deterministic tests.

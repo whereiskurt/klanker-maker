@@ -21,13 +21,13 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	"github.com/whereiskurt/klankrmkr/pkg/allowlistgen"
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/pkg/ebpf"
-	"github.com/whereiskurt/klankrmkr/pkg/ebpf/audit"
-	"github.com/whereiskurt/klankrmkr/pkg/ebpf/resolver"
-	ebpftls "github.com/whereiskurt/klankrmkr/pkg/ebpf/tls"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	"github.com/whereiskurt/klanker-maker/pkg/allowlistgen"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/ebpf"
+	"github.com/whereiskurt/klanker-maker/pkg/ebpf/audit"
+	"github.com/whereiskurt/klanker-maker/pkg/ebpf/resolver"
+	ebpftls "github.com/whereiskurt/klanker-maker/pkg/ebpf/tls"
 )
 
 // NewEBPFAttachCmd creates the "km ebpf-attach" subcommand.

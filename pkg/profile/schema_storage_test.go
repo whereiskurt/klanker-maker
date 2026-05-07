@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // TestSchemaRootVolumeParsing verifies that rootVolumeSize parses correctly from YAML.

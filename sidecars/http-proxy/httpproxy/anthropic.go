@@ -18,7 +18,7 @@ import (
 	"strings"
 
 	"github.com/elazarl/goproxy"
-	"github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // anthropicMessageStartPayload peeks at model + usage from a message_start SSE event.

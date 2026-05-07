@@ -7,8 +7,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // NewValidateCmd creates the "km validate" subcommand.

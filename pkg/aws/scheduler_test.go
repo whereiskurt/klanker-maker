@@ -9,8 +9,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler/types"
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/pkg/compiler"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 )
 
 // mockSchedulerAPI implements SchedulerAPI for unit tests.

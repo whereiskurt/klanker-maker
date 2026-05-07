@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	auditlog "github.com/whereiskurt/klankrmkr/sidecars/audit-log"
+	auditlog "github.com/whereiskurt/klanker-maker/sidecars/audit-log"
 )
 
 // ---- Mock Destinations ----

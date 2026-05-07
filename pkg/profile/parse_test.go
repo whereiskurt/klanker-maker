@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // minimalProfileYAML is a reusable base profile for email alias tests.
@@ -56,10 +56,10 @@ spec:
   observability:
     commandLog:
       destination: cloudwatch
-      logGroup: /klankrmkr/sandboxes
+      logGroup: /klanker-maker/sandboxes
     networkLog:
       destination: cloudwatch
-      logGroup: /klankrmkr/network
+      logGroup: /klanker-maker/network
 
   agent:
     maxConcurrentTasks: 4

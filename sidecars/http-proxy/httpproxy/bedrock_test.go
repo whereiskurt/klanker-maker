@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whereiskurt/klankrmkr/sidecars/http-proxy/httpproxy"
+	"github.com/whereiskurt/klanker-maker/sidecars/http-proxy/httpproxy"
 )
 
 // TestExtractBedrockTokens_SSEStream verifies SSE stream parsing for streaming responses.

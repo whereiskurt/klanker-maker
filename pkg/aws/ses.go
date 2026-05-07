@@ -13,7 +13,7 @@ import (
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
-	"github.com/whereiskurt/klankrmkr/pkg/version"
+	"github.com/whereiskurt/klanker-maker/pkg/version"
 )
 
 // SESV2API is the minimal SES v2 interface required by ProvisionSandboxEmail,

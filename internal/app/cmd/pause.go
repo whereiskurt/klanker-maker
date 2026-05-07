@@ -17,8 +17,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // RecordPauseForEC2 calls RecordPauseStart with warn-and-continue semantics.

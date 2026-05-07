@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/pkg/allowlistgen"
+	"github.com/whereiskurt/klanker-maker/pkg/allowlistgen"
 )
 
 func TestRecorderDNS(t *testing.T) {

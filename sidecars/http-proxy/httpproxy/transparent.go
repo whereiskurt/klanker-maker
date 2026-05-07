@@ -29,7 +29,7 @@ import (
 	"github.com/cilium/ebpf"
 	"github.com/elazarl/goproxy"
 	"github.com/rs/zerolog/log"
-	"github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // TransparentListener wraps a net.Listener and detects BPF-redirected

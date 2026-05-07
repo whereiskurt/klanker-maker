@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/pkg/compiler"
+	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 )
 
 // ============================================================

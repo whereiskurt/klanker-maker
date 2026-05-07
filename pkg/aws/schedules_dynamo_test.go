@@ -8,7 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // Note: mockSandboxMetadataAPI is defined in sandbox_dynamo_test.go and shared

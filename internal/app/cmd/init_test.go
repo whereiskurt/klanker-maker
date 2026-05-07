@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
-	"github.com/whereiskurt/klankrmkr/internal/app/cmd"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	"github.com/whereiskurt/klanker-maker/internal/app/cmd"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
 
 // mockRunner records Apply calls in order for testing.

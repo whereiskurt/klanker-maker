@@ -12,7 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // fakeBudgetClient is a test double for the BudgetAPI interface.

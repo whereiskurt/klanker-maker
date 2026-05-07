@@ -92,13 +92,13 @@ region = us-east-1
 
 ```bash
 # From source
-git clone https://github.com/whereiskurt/klankrmkr.git
-cd klankrmkr
+git clone https://github.com/whereiskurt/klanker-maker.git
+cd klanker-maker
 make build
 sudo mv km /usr/local/bin/
 
 # Or install directly
-go install github.com/whereiskurt/klankrmkr/cmd/km@latest
+go install github.com/whereiskurt/klanker-maker/cmd/km@latest
 
 # Verify
 km --help

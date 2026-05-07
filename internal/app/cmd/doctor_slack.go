@@ -28,8 +28,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	sqssvc "github.com/aws/aws-sdk-go-v2/service/sqs"
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
-	slackpkg "github.com/whereiskurt/klankrmkr/pkg/slack"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	slackpkg "github.com/whereiskurt/klanker-maker/pkg/slack"
 )
 
 // inboundRow is a lightweight record returned by the listSandboxesWithInbound

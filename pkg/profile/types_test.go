@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // TestArtifactsSpecParsesFromYAML verifies that ArtifactsSpec round-trips from YAML.

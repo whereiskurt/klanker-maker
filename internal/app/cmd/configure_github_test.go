@@ -19,8 +19,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
-	"github.com/whereiskurt/klankrmkr/internal/app/cmd"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	"github.com/whereiskurt/klanker-maker/internal/app/cmd"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
 
 // realTestPEM generates a real 2048-bit RSA private key PEM for tests that require

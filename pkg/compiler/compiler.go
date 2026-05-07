@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // CompiledArtifacts holds the output of compiling a SandboxProfile.

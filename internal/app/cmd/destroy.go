@@ -27,13 +27,13 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/pkg/compiler"
-	"github.com/whereiskurt/klankrmkr/pkg/lifecycle"
-	"github.com/whereiskurt/klankrmkr/pkg/localnumber"
-	profilepkg "github.com/whereiskurt/klankrmkr/pkg/profile"
-	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/compiler"
+	"github.com/whereiskurt/klanker-maker/pkg/lifecycle"
+	"github.com/whereiskurt/klanker-maker/pkg/localnumber"
+	profilepkg "github.com/whereiskurt/klanker-maker/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
 )
 
 // sandboxIDPattern matches valid sandbox IDs: {prefix}-{8hex}
@@ -410,7 +410,7 @@ locals {
 
 	// Step 8a: Finalize MLflow run record (OBSV-09).
 	// Non-fatal: destroy has already succeeded.
-	if mlflowErr := awspkg.FinalizeMLflowRun(ctx, s3Client, artifactBucket, sandboxID, "klankrmkr",
+	if mlflowErr := awspkg.FinalizeMLflowRun(ctx, s3Client, artifactBucket, sandboxID, "klanker-maker",
 		awspkg.MLflowMetrics{
 			ExitStatus: 0,
 		}); mlflowErr != nil {

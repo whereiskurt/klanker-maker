@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // IdleDetector polls the CloudWatch log group for a sandbox and fires the OnIdle

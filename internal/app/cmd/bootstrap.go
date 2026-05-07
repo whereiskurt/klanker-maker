@@ -16,9 +16,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/spf13/cobra"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	"github.com/whereiskurt/klankrmkr/pkg/compiler"
-	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	"github.com/whereiskurt/klanker-maker/pkg/compiler"
+	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
 )
 
 // SCPStatement represents a single statement in an SCP policy document.

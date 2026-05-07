@@ -31,8 +31,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	smithy "github.com/aws/smithy-go"
 	"github.com/spf13/cobra"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	"github.com/whereiskurt/klankrmkr/pkg/compiler"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 )
 
 // UnbootstrapSSMAPI is the subset of the SSM client used by unbootstrap.

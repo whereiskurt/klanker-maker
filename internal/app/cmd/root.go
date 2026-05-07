@@ -11,8 +11,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	"github.com/whereiskurt/klankrmkr/pkg/version"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	"github.com/whereiskurt/klanker-maker/pkg/version"
 )
 
 // NewRootCmd creates the root "km" command with global flags and subcommands attached.
@@ -21,7 +21,7 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 
 	root := &cobra.Command{
 		Use:   "km",
-		Short: "klankrmkr — sandbox profile management CLI",
+		Short: "klanker-maker — sandbox profile management CLI",
 		Long:  helpText("root"),
 		Version: cfg.Version,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {

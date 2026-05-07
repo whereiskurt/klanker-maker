@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // TestIdleActionHibernateInUserdata verifies that IDLE_ACTION=hibernate appears

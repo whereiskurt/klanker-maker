@@ -1,6 +1,6 @@
 # BURNT — Klanker Maker Token Scoreboard
 
-> Living ledger of Claude Code token consumption building klankrmkr.
+> Living ledger of Claude Code token consumption building klanker-maker.
 > Each chapter is a sprint snapshot; the cumulative running total is at the bottom of every chapter.
 
 ## TL;DR — Cumulative since 2026-03-20
@@ -33,7 +33,7 @@
 
 # BURNT I: Weekend Token Scoreboard
 
-> **March 20–23, 2026** | Claude Code on **5x MAX** (Opus) | klankrmkr weekend sprint
+> **March 20–23, 2026** | Claude Code on **5x MAX** (Opus) | klanker-maker weekend sprint
 
 ---
 
@@ -106,7 +106,7 @@
 
 | | |
 |---|---|
-| Session | #7 — klankrmkr |
+| Session | #7 — klanker-maker |
 | Duration | 7.5 hours (8:13pm Sat → 3:41am Sun) |
 | Input | 279,035,160 tokens |
 | Output | 170,575 tokens |
@@ -138,7 +138,7 @@
 
 # BURNT II: The Full Week
 
-> **March 21–28, 2026** | Claude Code on **5x MAX** (Opus) | klankrmkr week-long sprint
+> **March 21–28, 2026** | Claude Code on **5x MAX** (Opus) | klanker-maker week-long sprint
 
 ---
 
@@ -347,7 +347,7 @@
 
 # BURNT III: Monday & Tuesday
 
-> **March 30–31, 2026** | Claude Code on **5x MAX** (Opus) | klankrmkr DynamoDB migration sprint
+> **March 30–31, 2026** | Claude Code on **5x MAX** (Opus) | klanker-maker DynamoDB migration sprint
 
 ---
 
@@ -438,7 +438,7 @@
 
 # BURNT IV: The eBPF & Scheduler Sprint
 
-> **April 1–3, 2026** | Claude Code on **5x MAX** (Opus) | klankrmkr eBPF gatekeeper, EFS, storage, and km at/schedule
+> **April 1–3, 2026** | Claude Code on **5x MAX** (Opus) | klanker-maker eBPF gatekeeper, EFS, storage, and km at/schedule
 
 ---
 
@@ -540,7 +540,7 @@
 
 # BURNT V: The Agent & Email Sprint
 
-> **April 3–15, 2026** | Claude Code on **5x MAX** (Opus) | klankrmkr agents, email, clone, learn mode
+> **April 3–15, 2026** | Claude Code on **5x MAX** (Opus) | klanker-maker agents, email, clone, learn mode
 
 ---
 
@@ -742,7 +742,7 @@
 
 # BURNT VI: The AMI Lifecycle Sprint
 
-> **April 15–26, 2026** | Claude Code on **5x MAX** (Opus) | klankrmkr AMI bake/relaunch, codex agent, email allowlists, hibernation accounting, Ctrl+C fix
+> **April 15–26, 2026** | Claude Code on **5x MAX** (Opus) | klanker-maker AMI bake/relaunch, codex agent, email allowlists, hibernation accounting, Ctrl+C fix
 
 ---
 
@@ -913,7 +913,7 @@
 
 # BURNT VII: The Slack Bidirectional Sprint
 
-> **April 27 – May 4, 2026** | Claude Code on **5x MAX** (Opus 4.7) | klankrmkr Slack inbound, ack reactions, transcript streaming
+> **April 27 – May 4, 2026** | Claude Code on **5x MAX** (Opus 4.7) | klanker-maker Slack inbound, ack reactions, transcript streaming
 
 ---
 

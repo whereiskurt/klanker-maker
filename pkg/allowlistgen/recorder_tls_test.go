@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/pkg/allowlistgen"
-	"github.com/whereiskurt/klankrmkr/pkg/ebpf/tls"
+	"github.com/whereiskurt/klanker-maker/pkg/allowlistgen"
+	"github.com/whereiskurt/klanker-maker/pkg/ebpf/tls"
 )
 
 func makeTLSEvent(direction uint8, payload string) *tls.TLSEvent {

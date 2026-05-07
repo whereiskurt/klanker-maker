@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/whereiskurt/klankrmkr/pkg/slack"
-	"github.com/whereiskurt/klankrmkr/pkg/slack/bridge"
+	"github.com/whereiskurt/klanker-maker/pkg/slack"
+	"github.com/whereiskurt/klanker-maker/pkg/slack/bridge"
 )
 
 // ---------------------------------------------------------------------------

@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
-	"github.com/whereiskurt/klankrmkr/internal/app/cmd"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	"github.com/whereiskurt/klanker-maker/internal/app/cmd"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
 
 // testTrustedBase returns a minimal trusted-base ARN slice for use in SCP tests.

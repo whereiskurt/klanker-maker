@@ -23,10 +23,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/spf13/cobra"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
-	profilepkg "github.com/whereiskurt/klankrmkr/pkg/profile"
-	"github.com/whereiskurt/klankrmkr/pkg/version"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	profilepkg "github.com/whereiskurt/klanker-maker/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/version"
 )
 
 // NewAMICmd builds the "km ami" parent command with list/delete/bake/copy children.

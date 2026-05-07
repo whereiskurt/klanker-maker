@@ -13,8 +13,8 @@ import (
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/spf13/cobra"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // NewLockCmd creates the "km lock" subcommand.

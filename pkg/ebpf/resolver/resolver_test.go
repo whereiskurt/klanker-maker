@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whereiskurt/klankrmkr/pkg/ebpf/resolver"
+	"github.com/whereiskurt/klanker-maker/pkg/ebpf/resolver"
 )
 
 // mockMapUpdater records which IPs were allowed and which were marked for proxy.

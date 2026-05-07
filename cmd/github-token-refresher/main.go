@@ -27,8 +27,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-lambda-go/lambda"
-	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
-	githubpkg "github.com/whereiskurt/klankrmkr/pkg/github"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
+	githubpkg "github.com/whereiskurt/klanker-maker/pkg/github"
 )
 
 // ============================================================

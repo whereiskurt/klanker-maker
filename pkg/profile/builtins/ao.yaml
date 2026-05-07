@@ -151,10 +151,10 @@ spec:
   observability:
     commandLog:
       destination: cloudwatch
-      logGroup: /klankrmkr/sandboxes
+      logGroup: /klanker-maker/sandboxes
     networkLog:
       destination: cloudwatch
-      logGroup: /klankrmkr/network
+      logGroup: /klanker-maker/network
     learnMode: false
     claudeTelemetry:
       enabled: true

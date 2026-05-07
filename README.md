@@ -119,7 +119,7 @@ Get a budgeted Claude running on AWS in five commands. Assumes AWS SSO is alread
 
 ```bash
 # Install
-go install github.com/whereiskurt/klankrmkr/cmd/km@latest
+go install github.com/whereiskurt/klanker-maker/cmd/km@latest
 
 # 1. One-time platform configuration (domain, account IDs, region)
 km configure

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/pkg/localnumber"
+	"github.com/whereiskurt/klanker-maker/pkg/localnumber"
 )
 
 // loadFrom and saveTo are test helpers that use an explicit path instead of

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whereiskurt/klankrmkr/pkg/github"
+	"github.com/whereiskurt/klanker-maker/pkg/github"
 )
 
 // testPKCS1Key is a 2048-bit RSA private key in PKCS#1 PEM format (-----BEGIN RSA PRIVATE KEY-----).

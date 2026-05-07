@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whereiskurt/klankrmkr/pkg/slack"
+	"github.com/whereiskurt/klanker-maker/pkg/slack"
 )
 
 // TestMain shrinks BridgeBackoff to milliseconds so retry tests don't slow the suite.

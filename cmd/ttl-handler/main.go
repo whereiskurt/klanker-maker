@@ -42,10 +42,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	ssmpkg "github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/rs/zerolog/log"
-	atpkg "github.com/whereiskurt/klankrmkr/pkg/at"
-	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/pkg/compiler"
-	profilepkg "github.com/whereiskurt/klankrmkr/pkg/profile"
+	atpkg "github.com/whereiskurt/klanker-maker/pkg/at"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/compiler"
+	profilepkg "github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // TTLEvent is the EventBridge scheduler or EventBridge Events payload delivered to this Lambda.

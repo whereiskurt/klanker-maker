@@ -946,8 +946,8 @@ Allowlist of AWS SSM Parameter Store paths the sandbox may read at boot time. Se
 spec:
   identity:
     allowedSecretPaths:
-      - "/klankrmkr/sandbox/api-key"
-      - "/klankrmkr/sandbox/db-password"
+      - "/klanker-maker/sandbox/api-key"
+      - "/klanker-maker/sandbox/db-password"
 ```
 
 ---
@@ -1069,10 +1069,10 @@ spec:
   observability:
     commandLog:
       destination: cloudwatch
-      logGroup: /klankrmkr/sandboxes
+      logGroup: /klanker-maker/sandboxes
     networkLog:
       destination: cloudwatch
-      logGroup: /klankrmkr/network
+      logGroup: /klanker-maker/network
 ```
 
 ### `spec.observability.claudeTelemetry`
@@ -1692,8 +1692,8 @@ spec:
     auditLog:  { enabled: true, image: "km-audit-log:latest" }
     tracing:   { enabled: true, image: "km-tracing:latest" }
   observability:
-    commandLog: { destination: cloudwatch, logGroup: "/klankrmkr/sandboxes" }
-    networkLog: { destination: cloudwatch, logGroup: "/klankrmkr/network" }
+    commandLog: { destination: cloudwatch, logGroup: "/klanker-maker/sandboxes" }
+    networkLog: { destination: cloudwatch, logGroup: "/klanker-maker/network" }
     claudeTelemetry:
       enabled: true
       logPrompts: true
@@ -1764,8 +1764,8 @@ spec:
     auditLog:  { enabled: true, image: "km-audit-log:latest" }
     tracing:   { enabled: true, image: "km-tracing:latest" }
   observability:
-    commandLog: { destination: cloudwatch, logGroup: "/klankrmkr/sandboxes" }
-    networkLog: { destination: cloudwatch, logGroup: "/klankrmkr/network" }
+    commandLog: { destination: cloudwatch, logGroup: "/klanker-maker/sandboxes" }
+    networkLog: { destination: cloudwatch, logGroup: "/klanker-maker/network" }
     claudeTelemetry:
       enabled: true
       logPrompts: false
@@ -1819,8 +1819,8 @@ spec:
     auditLog:  { enabled: true, image: "km-audit-log:latest" }
     tracing:   { enabled: true, image: "km-tracing:latest" }
   observability:
-    commandLog: { destination: cloudwatch, logGroup: "/klankrmkr/sandboxes" }
-    networkLog: { destination: cloudwatch, logGroup: "/klankrmkr/network" }
+    commandLog: { destination: cloudwatch, logGroup: "/klanker-maker/sandboxes" }
+    networkLog: { destination: cloudwatch, logGroup: "/klanker-maker/network" }
     claudeTelemetry:
       enabled: true
       logPrompts: false
@@ -1876,8 +1876,8 @@ spec:
     auditLog:  { enabled: true, image: "km-audit-log:latest" }
     tracing:   { enabled: true, image: "km-tracing:latest" }
   observability:
-    commandLog: { destination: cloudwatch, logGroup: "/klankrmkr/sandboxes" }
-    networkLog: { destination: cloudwatch, logGroup: "/klankrmkr/network" }
+    commandLog: { destination: cloudwatch, logGroup: "/klanker-maker/sandboxes" }
+    networkLog: { destination: cloudwatch, logGroup: "/klanker-maker/network" }
     claudeTelemetry:
       enabled: true
       logPrompts: false
@@ -2002,8 +2002,8 @@ spec:
     auditLog:  { enabled: true, image: "km-audit-log:latest" }
     tracing:   { enabled: true, image: "km-tracing:latest" }
   observability:
-    commandLog: { destination: cloudwatch, logGroup: "/klankrmkr/sandboxes" }
-    networkLog: { destination: cloudwatch, logGroup: "/klankrmkr/network" }
+    commandLog: { destination: cloudwatch, logGroup: "/klanker-maker/sandboxes" }
+    networkLog: { destination: cloudwatch, logGroup: "/klanker-maker/network" }
     claudeTelemetry:
       enabled: true
       logPrompts: true
@@ -2099,8 +2099,8 @@ spec:
     auditLog:  { enabled: true, image: "km-audit-log:latest" }
     tracing:   { enabled: true, image: "km-tracing:latest" }
   observability:
-    commandLog: { destination: cloudwatch, logGroup: "/klankrmkr/sandboxes" }
-    networkLog: { destination: cloudwatch, logGroup: "/klankrmkr/network" }
+    commandLog: { destination: cloudwatch, logGroup: "/klanker-maker/sandboxes" }
+    networkLog: { destination: cloudwatch, logGroup: "/klanker-maker/network" }
     claudeTelemetry:
       enabled: true
       logPrompts: true
@@ -2219,8 +2219,8 @@ spec:
     auditLog:  { enabled: true, image: "km-audit-log:latest" }
     tracing:   { enabled: true, image: "km-tracing:latest" }
   observability:
-    commandLog: { destination: cloudwatch, logGroup: "/klankrmkr/sandboxes" }
-    networkLog: { destination: cloudwatch, logGroup: "/klankrmkr/network" }
+    commandLog: { destination: cloudwatch, logGroup: "/klanker-maker/sandboxes" }
+    networkLog: { destination: cloudwatch, logGroup: "/klanker-maker/network" }
     claudeTelemetry:
       enabled: true
       logPrompts: true
@@ -2285,8 +2285,8 @@ spec:
         - ".amazonaws.com"
       allowedHosts: []
   observability:
-    commandLog: { destination: cloudwatch, logGroup: "/klankrmkr/sandboxes" }
-    networkLog: { destination: cloudwatch, logGroup: "/klankrmkr/network" }
+    commandLog: { destination: cloudwatch, logGroup: "/klanker-maker/sandboxes" }
+    networkLog: { destination: cloudwatch, logGroup: "/klanker-maker/network" }
     tlsCapture:
       enabled: true
     learnMode: true
@@ -2427,6 +2427,6 @@ spec:
     allowedRegions: [us-east-1]
     sessionPolicy: minimal
     allowedSecretPaths:
-      - "/klankrmkr/sandbox/api-keys/github"
-      - "/klankrmkr/sandbox/api-keys/npm"
+      - "/klanker-maker/sandbox/api-keys/github"
+      - "/klanker-maker/sandbox/api-keys/npm"
 ```

@@ -7,9 +7,9 @@ import (
 	"strconv"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/pkg/localnumber"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/localnumber"
 )
 
 // sandboxIDLike matches strings that look like sandbox IDs: {prefix}-{suffix}.

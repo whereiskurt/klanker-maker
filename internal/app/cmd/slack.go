@@ -24,11 +24,11 @@ import (
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/spf13/cobra"
 
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/pkg/compiler"
-	kmslack "github.com/whereiskurt/klankrmkr/pkg/slack"
-	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/compiler"
+	kmslack "github.com/whereiskurt/klanker-maker/pkg/slack"
+	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
 )
 
 // ──────────────────────────────────────────────

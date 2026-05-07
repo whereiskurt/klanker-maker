@@ -26,11 +26,11 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/rs/zerolog/log"
-	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
-	slackpkg "github.com/whereiskurt/klankrmkr/pkg/slack"
-	slackbridge "github.com/whereiskurt/klankrmkr/pkg/slack/bridge"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
+	slackpkg "github.com/whereiskurt/klanker-maker/pkg/slack"
+	slackbridge "github.com/whereiskurt/klanker-maker/pkg/slack/bridge"
 )
 
 // slackInboundDeps bundles all dependencies for provisionSlackInboundQueue.

@@ -3,7 +3,7 @@ package allowlistgen_test
 import (
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/pkg/allowlistgen"
+	"github.com/whereiskurt/klanker-maker/pkg/allowlistgen"
 )
 
 func TestNormalizeSuffixes(t *testing.T) {

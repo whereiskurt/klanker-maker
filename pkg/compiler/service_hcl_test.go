@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // baseECSProfile returns a minimal SandboxProfile for ECS service.hcl tests.

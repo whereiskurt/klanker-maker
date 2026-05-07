@@ -13,8 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/sidecars/http-proxy/httpproxy"
+	"github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/sidecars/http-proxy/httpproxy"
 )
 
 func main() {

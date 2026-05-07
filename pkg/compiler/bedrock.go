@@ -1,6 +1,6 @@
 package compiler
 
-import "github.com/whereiskurt/klankrmkr/pkg/profile"
+import "github.com/whereiskurt/klanker-maker/pkg/profile"
 
 // mergeBedrockEnv returns the profile's Env map with Bedrock-specific variables
 // injected when UseBedrock is true. Explicit env entries take precedence over

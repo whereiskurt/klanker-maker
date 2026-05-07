@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // boolPtr is a helper to create *bool values for semantic tests.
@@ -150,10 +150,10 @@ spec:
   observability:
     commandLog:
       destination: cloudwatch
-      logGroup: /klankrmkr/sandboxes
+      logGroup: /klanker-maker/sandboxes
     networkLog:
       destination: cloudwatch
-      logGroup: /klankrmkr/network
+      logGroup: /klanker-maker/network
 
   agent:
     maxConcurrentTasks: 4
@@ -434,10 +434,10 @@ spec:
   observability:
     commandLog:
       destination: cloudwatch
-      logGroup: /klankrmkr/sandboxes
+      logGroup: /klanker-maker/sandboxes
     networkLog:
       destination: cloudwatch
-      logGroup: /klankrmkr/network
+      logGroup: /klanker-maker/network
 
   agent:
     maxConcurrentTasks: 4
@@ -492,10 +492,10 @@ spec:
   observability:
     commandLog:
       destination: cloudwatch
-      logGroup: /klankrmkr/sandboxes
+      logGroup: /klanker-maker/sandboxes
     networkLog:
       destination: cloudwatch
-      logGroup: /klankrmkr/network
+      logGroup: /klanker-maker/network
 
   agent:
     maxConcurrentTasks: 4
@@ -598,10 +598,10 @@ spec:
   observability:
     commandLog:
       destination: cloudwatch
-      logGroup: /klankrmkr/sandboxes
+      logGroup: /klanker-maker/sandboxes
     networkLog:
       destination: cloudwatch
-      logGroup: /klankrmkr/network
+      logGroup: /klanker-maker/network
 
   agent:
     maxConcurrentTasks: 4
@@ -662,10 +662,10 @@ spec:
   observability:
     commandLog:
       destination: cloudwatch
-      logGroup: /klankrmkr/sandboxes
+      logGroup: /klanker-maker/sandboxes
     networkLog:
       destination: cloudwatch
-      logGroup: /klankrmkr/network
+      logGroup: /klanker-maker/network
 ` + tlsCaptureYAML + `
 
   agent:

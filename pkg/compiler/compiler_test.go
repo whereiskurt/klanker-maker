@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/pkg/compiler"
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/compiler"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // testNetwork returns a test NetworkConfig for use in compiler tests.

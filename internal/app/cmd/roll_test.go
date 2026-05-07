@@ -22,8 +22,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 
-	cmd "github.com/whereiskurt/klankrmkr/internal/app/cmd"
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	cmd "github.com/whereiskurt/klanker-maker/internal/app/cmd"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // ============================================================

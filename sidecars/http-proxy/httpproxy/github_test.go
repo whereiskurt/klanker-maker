@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/sidecars/http-proxy/httpproxy"
+	"github.com/whereiskurt/klanker-maker/sidecars/http-proxy/httpproxy"
 )
 
 func TestExtractRepoFromPath(t *testing.T) {

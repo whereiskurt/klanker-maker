@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * bpf.c — Kernel-side eBPF network enforcement programs for klankrmkr.
+ * bpf.c — Kernel-side eBPF network enforcement programs for klanker-maker.
  *
  * Programs:
  *   1. cgroup/connect4    — Intercepts TCP connect(), enforces CIDR allowlist,

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whereiskurt/klankrmkr/pkg/slack"
+	"github.com/whereiskurt/klanker-maker/pkg/slack"
 )
 
 // makeFixedEnvelope returns a deterministic SlackEnvelope for signing/canonical tests.

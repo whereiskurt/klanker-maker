@@ -36,9 +36,9 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
-	lifecycle "github.com/whereiskurt/klankrmkr/pkg/lifecycle"
-	auditlog "github.com/whereiskurt/klankrmkr/sidecars/audit-log"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	lifecycle "github.com/whereiskurt/klanker-maker/pkg/lifecycle"
+	auditlog "github.com/whereiskurt/klanker-maker/sidecars/audit-log"
 )
 
 func main() {

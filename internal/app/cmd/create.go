@@ -41,14 +41,14 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/pkg/compiler"
-	githubpkg "github.com/whereiskurt/klankrmkr/pkg/github"
-	"github.com/whereiskurt/klankrmkr/pkg/localnumber"
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
-	slack "github.com/whereiskurt/klankrmkr/pkg/slack"
-	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/compiler"
+	githubpkg "github.com/whereiskurt/klanker-maker/pkg/github"
+	"github.com/whereiskurt/klanker-maker/pkg/localnumber"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
+	slack "github.com/whereiskurt/klanker-maker/pkg/slack"
+	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
 )
 
 // ErrGitHubNotConfigured is returned by generateAndStoreGitHubToken when the
@@ -704,7 +704,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		Region:      resolvedProfile.Spec.Runtime.Region,
 		TTL:         resolvedProfile.Spec.Lifecycle.TTL,
 		StartTime:   now,
-		Experiment:  "klankrmkr",
+		Experiment:  "klanker-maker",
 	}
 	if mlflowErr := awspkg.WriteMLflowRun(ctx, s3Client, artifactBucket, mlflowRun); mlflowErr != nil {
 		log.Warn().Err(mlflowErr).Str("sandbox_id", sandboxID).
@@ -1574,7 +1574,7 @@ func runCreateDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config,
 		Region:      region,
 		TTL:         resolvedProfile.Spec.Lifecycle.TTL,
 		StartTime:   now,
-		Experiment:  "klankrmkr",
+		Experiment:  "klanker-maker",
 	}
 	if mlflowErr := awspkg.WriteMLflowRun(ctx, s3Client, artifactBucket, mlflowRun); mlflowErr != nil {
 		log.Warn().Err(mlflowErr).Str("sandbox_id", sandboxID).Msg("failed to write MLflow run record (non-fatal)")

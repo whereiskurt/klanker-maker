@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/pkg/slack"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/slack"
 )
 
 // ---- Mocks ----

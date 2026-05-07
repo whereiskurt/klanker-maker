@@ -34,11 +34,11 @@ import (
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/spf13/cobra"
-	appcfg "github.com/whereiskurt/klankrmkr/internal/app/config"
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/pkg/compiler"
-	profilepkg "github.com/whereiskurt/klankrmkr/pkg/profile"
-	slackpkg "github.com/whereiskurt/klankrmkr/pkg/slack"
+	appcfg "github.com/whereiskurt/klanker-maker/internal/app/config"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/compiler"
+	profilepkg "github.com/whereiskurt/klanker-maker/pkg/profile"
+	slackpkg "github.com/whereiskurt/klanker-maker/pkg/slack"
 	"gopkg.in/yaml.v3"
 )
 

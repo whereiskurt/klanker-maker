@@ -50,10 +50,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
-	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/pkg/compiler"
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
-	"github.com/whereiskurt/klankrmkr/pkg/version"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/compiler"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/version"
 	"gopkg.in/yaml.v3"
 )
 

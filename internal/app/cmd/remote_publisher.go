@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // RemoteCommandPublisher abstracts the EventBridge publish call for remote

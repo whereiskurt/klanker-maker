@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // mockBudgetFetcher satisfies BudgetFetcher.

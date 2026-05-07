@@ -12,7 +12,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // ---- Mock ----
@@ -53,7 +53,7 @@ func TestWriteMLflowRun_PutsCorrectKey(t *testing.T) {
 		Region:      "us-east-1",
 		TTL:         "2h",
 		StartTime:   time.Now(),
-		Experiment:  "klankrmkr",
+		Experiment:  "klanker-maker",
 	}
 
 	err := kmaws.WriteMLflowRun(context.Background(), mock, "my-bucket", run)
@@ -65,7 +65,7 @@ func TestWriteMLflowRun_PutsCorrectKey(t *testing.T) {
 		t.Fatal("PutObject was not called")
 	}
 
-	expectedKey := "mlflow/klankrmkr/sb-123/meta.json"
+	expectedKey := "mlflow/klanker-maker/sb-123/meta.json"
 	if *mock.putInput.Key != expectedKey {
 		t.Errorf("S3 key = %q, want %q", *mock.putInput.Key, expectedKey)
 	}
@@ -86,7 +86,7 @@ func TestWriteMLflowRun_JSONContainsParams(t *testing.T) {
 		Region:      "us-west-2",
 		TTL:         "4h",
 		StartTime:   startTime,
-		Experiment:  "klankrmkr",
+		Experiment:  "klanker-maker",
 	}
 
 	err := kmaws.WriteMLflowRun(context.Background(), mock, "bucket", run)
@@ -128,7 +128,7 @@ func TestFinalizeMLflowRun_UpdatesMetrics(t *testing.T) {
 		Region:      "us-east-1",
 		TTL:         "1h",
 		StartTime:   time.Now().Add(-5 * time.Minute),
-		Experiment:  "klankrmkr",
+		Experiment:  "klanker-maker",
 	}
 	existingJSON, _ := json.Marshal(existing)
 
@@ -145,7 +145,7 @@ func TestFinalizeMLflowRun_UpdatesMetrics(t *testing.T) {
 		BytesEgressed:    1024,
 	}
 
-	err := kmaws.FinalizeMLflowRun(context.Background(), mock, "bucket", "sb-999", "klankrmkr", metrics)
+	err := kmaws.FinalizeMLflowRun(context.Background(), mock, "bucket", "sb-999", "klanker-maker", metrics)
 	if err != nil {
 		t.Fatalf("FinalizeMLflowRun returned error: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestWriteMLflowRun_S3Error(t *testing.T) {
 
 	run := kmaws.MLflowRun{
 		SandboxID:  "sb-err",
-		Experiment: "klankrmkr",
+		Experiment: "klanker-maker",
 		StartTime:  time.Now(),
 	}
 

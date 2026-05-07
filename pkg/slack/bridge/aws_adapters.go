@@ -46,8 +46,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
-	pkgslack "github.com/whereiskurt/klankrmkr/pkg/slack"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	pkgslack "github.com/whereiskurt/klanker-maker/pkg/slack"
 )
 
 // ============================================================

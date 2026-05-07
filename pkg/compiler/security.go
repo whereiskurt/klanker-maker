@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // compileSGRules returns the baseline SG egress rules compiled from the profile.

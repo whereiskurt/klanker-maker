@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // Wave 0 stubs for Plans 68-09 / 68-10 (userdata env injection + hook registration).

@@ -1,4 +1,4 @@
-km — sandbox profile management CLI for the klankrmkr platform.
+km — sandbox profile management CLI for the klanker-maker platform.
 
 km manages the full lifecycle of sandbox environments: from profile
 validation and compilation, through provisioning and monitoring, to

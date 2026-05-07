@@ -1,5 +1,5 @@
 // Package profile provides SandboxProfile type definitions and parsing logic
-// for the klankrmkr sandbox platform. Profiles follow a Kubernetes-style
+// for the klanker-maker sandbox platform. Profiles follow a Kubernetes-style
 // apiVersion/kind/metadata/spec structure at klankermaker.ai/v1alpha1.
 package profile
 

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	cmd "github.com/whereiskurt/klankrmkr/internal/app/cmd"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	cmd "github.com/whereiskurt/klanker-maker/internal/app/cmd"
 )
 
 // TestCreateCmd_RemoteFlag verifies that --remote flag is registered on the create command.

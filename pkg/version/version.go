@@ -2,8 +2,8 @@
 //
 // Usage in Makefile:
 //
-//	go build -ldflags "-X github.com/whereiskurt/klankrmkr/pkg/version.Number=v0.0.42
-//	  -X github.com/whereiskurt/klankrmkr/pkg/version.GitCommit=abc1234"
+//	go build -ldflags "-X github.com/whereiskurt/klanker-maker/pkg/version.Number=v0.0.42
+//	  -X github.com/whereiskurt/klanker-maker/pkg/version.GitCommit=abc1234"
 package version
 
 import "fmt"

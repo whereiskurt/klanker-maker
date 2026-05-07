@@ -4,7 +4,7 @@ package cmd
 
 import (
 	"github.com/spf13/cobra"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
 
 // registerEBPFCmds registers Linux-only eBPF subcommands on the root command.

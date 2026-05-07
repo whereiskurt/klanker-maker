@@ -5,7 +5,7 @@ Git worktrees clone the tracked repo but not gitignored files. Several gitignore
 ## Required gitignored files
 
 ```bash
-MAIN=~/working/klankrmkr
+MAIN=~/working/klanker-maker
 WT=<worktree-path>
 
 # 1. km-config.yaml — platform configuration (accounts, region, SSO, etc.)

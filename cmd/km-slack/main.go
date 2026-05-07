@@ -36,7 +36,7 @@ import (
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
-	"github.com/whereiskurt/klankrmkr/pkg/slack"
+	"github.com/whereiskurt/klanker-maker/pkg/slack"
 )
 
 const defaultTimeout = 30 * time.Second

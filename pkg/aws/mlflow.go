@@ -31,7 +31,7 @@ type MLflowRun struct {
 	Region      string    `json:"region"`
 	TTL         string    `json:"ttl"`        // duration string e.g. "2h"
 	StartTime   time.Time `json:"start_time"`
-	Experiment  string    `json:"experiment"` // default "klankrmkr"
+	Experiment  string    `json:"experiment"` // default "klanker-maker"
 
 	// Metrics — set at finalize time
 	EndTime          *time.Time `json:"end_time,omitempty"`

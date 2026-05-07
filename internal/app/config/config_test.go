@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
 
 // writeKMConfig writes a km-config.yaml file into dir with the given content.

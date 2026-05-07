@@ -31,11 +31,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/spf13/cobra"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/pkg/compiler"
-	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
-	"github.com/whereiskurt/klankrmkr/pkg/version"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/compiler"
+	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
+	"github.com/whereiskurt/klanker-maker/pkg/version"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1017,7 +1017,7 @@ func buildLambdaZips(repoRoot string) error {
 
 		// Cross-compile with version ldflags
 		bootstrapPath := filepath.Join(buildDir, "bootstrap")
-		ldflags := fmt.Sprintf("-X github.com/whereiskurt/klankrmkr/pkg/version.Number=%s -X github.com/whereiskurt/klankrmkr/pkg/version.GitCommit=%s",
+		ldflags := fmt.Sprintf("-X github.com/whereiskurt/klanker-maker/pkg/version.Number=%s -X github.com/whereiskurt/klanker-maker/pkg/version.GitCommit=%s",
 			version.Number, version.GitCommit)
 		buildCmd := exec.Command("go", "build", "-ldflags", ldflags, "-o", bootstrapPath, "./"+lb.srcDir+"/")
 		buildCmd.Dir = repoRoot
@@ -1133,7 +1133,7 @@ func buildAndUploadSidecars(repoRoot, bucket string) error {
 	{
 		fmt.Printf("  Building km (linux/amd64)...\n")
 		kmPath := filepath.Join(buildDir, "km-linux")
-		kmLdflags := fmt.Sprintf("-X github.com/whereiskurt/klankrmkr/pkg/version.Number=%s -X github.com/whereiskurt/klankrmkr/pkg/version.GitCommit=%s",
+		kmLdflags := fmt.Sprintf("-X github.com/whereiskurt/klanker-maker/pkg/version.Number=%s -X github.com/whereiskurt/klanker-maker/pkg/version.GitCommit=%s",
 			version.Number, version.GitCommit)
 		buildCmd := exec.Command("go", "build", "-ldflags", kmLdflags, "-o", kmPath, "./cmd/km/")
 		buildCmd.Dir = repoRoot
@@ -1167,7 +1167,7 @@ func buildAndUploadSidecars(repoRoot, bucket string) error {
 
 		// Cross-compile for linux/amd64 (EC2 and Fargate x86) with version ldflags
 		binaryPath := filepath.Join(buildDir, sc.name)
-		scLdflags := fmt.Sprintf("-X github.com/whereiskurt/klankrmkr/pkg/version.Number=%s -X github.com/whereiskurt/klankrmkr/pkg/version.GitCommit=%s",
+		scLdflags := fmt.Sprintf("-X github.com/whereiskurt/klanker-maker/pkg/version.Number=%s -X github.com/whereiskurt/klanker-maker/pkg/version.GitCommit=%s",
 			version.Number, version.GitCommit)
 		buildCmd := exec.Command("go", "build", "-ldflags", scLdflags, "-o", binaryPath, "./"+sc.srcDir+"/")
 		buildCmd.Dir = repoRoot
@@ -1395,7 +1395,7 @@ func uploadCreateHandlerToolchain(repoRoot, bucket string) error {
 	// 1. Build km binary for linux/arm64 (stripped)
 	kmPath := filepath.Join(buildDir, "km-toolchain")
 	fmt.Printf("  Building km (linux/arm64, stripped)...\n")
-	ldflags := fmt.Sprintf("-s -w -X github.com/whereiskurt/klankrmkr/pkg/version.Number=%s -X github.com/whereiskurt/klankrmkr/pkg/version.GitCommit=%s",
+	ldflags := fmt.Sprintf("-s -w -X github.com/whereiskurt/klanker-maker/pkg/version.Number=%s -X github.com/whereiskurt/klanker-maker/pkg/version.GitCommit=%s",
 		version.Number, version.GitCommit)
 	buildCmd := exec.Command("go", "build", "-ldflags", ldflags, "-o", kmPath, "./cmd/km/")
 	buildCmd.Dir = repoRoot

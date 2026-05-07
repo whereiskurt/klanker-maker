@@ -23,7 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
-	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // drainTimeout caps the wait for in-flight km agent run before km destroy

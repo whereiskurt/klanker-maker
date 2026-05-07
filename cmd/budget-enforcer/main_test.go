@@ -15,7 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
-	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // --------------------------------------------------------------------------

@@ -18,8 +18,8 @@ import (
 
 	smithy "github.com/aws/smithy-go"
 
-	"github.com/whereiskurt/klankrmkr/internal/app/cmd"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	"github.com/whereiskurt/klanker-maker/internal/app/cmd"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
 
 // fakeUnbootstrapSSM records GetParametersByPath / DeleteParameters calls and

@@ -9,7 +9,7 @@ variable "subnet_ids" {
 }
 
 variable "km_label" {
-  description = "Short platform label (e.g. 'klankrmkr') used for resource naming."
+  description = "Short platform label (e.g. 'klanker-maker') used for resource naming."
   type        = string
 }
 

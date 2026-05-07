@@ -3,7 +3,7 @@ package profile_test
 import (
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // TestEFSProfileFields verifies that mountEFS and efsMountPoint fields

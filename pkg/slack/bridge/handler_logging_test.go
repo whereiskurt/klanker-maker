@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whereiskurt/klankrmkr/pkg/slack"
-	"github.com/whereiskurt/klankrmkr/pkg/slack/bridge"
+	"github.com/whereiskurt/klanker-maker/pkg/slack"
+	"github.com/whereiskurt/klanker-maker/pkg/slack/bridge"
 )
 
 // captureLogger installs a bytes.Buffer slog handler and returns the buffer.

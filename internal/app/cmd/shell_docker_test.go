@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // TestShellDockerContainerName verifies that when substrate is "docker", shell

@@ -28,9 +28,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
-	appcfg "github.com/whereiskurt/klankrmkr/internal/app/config"
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
-	slackpkg "github.com/whereiskurt/klankrmkr/pkg/slack"
+	appcfg "github.com/whereiskurt/klanker-maker/internal/app/config"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	slackpkg "github.com/whereiskurt/klanker-maker/pkg/slack"
 )
 
 // --- Mock STS ---
@@ -1272,7 +1272,7 @@ func TestCheckStaleAMIs_ProfileRefSkipped(t *testing.T) {
 	// Write a profile YAML that references the AMI so it is not flagged.
 	dir := t.TempDir()
 	profileYAML := `
-apiVersion: sandbox.klankrmkr.io/v1
+apiVersion: sandbox.klanker-maker.io/v1
 kind: SandboxProfile
 metadata:
   name: test-prof
@@ -1299,7 +1299,7 @@ func TestCheckStaleAMIs_RunningSandboxSkipped(t *testing.T) {
 	// Write a profile YAML that maps sandbox's profile name to the AMI.
 	dir := t.TempDir()
 	profileYAML := `
-apiVersion: sandbox.klankrmkr.io/v1
+apiVersion: sandbox.klanker-maker.io/v1
 kind: SandboxProfile
 metadata:
   name: sb-running-prof

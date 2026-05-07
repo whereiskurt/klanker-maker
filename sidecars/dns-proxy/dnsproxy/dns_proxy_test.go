@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whereiskurt/klankrmkr/sidecars/dns-proxy/dnsproxy"
+	"github.com/whereiskurt/klanker-maker/sidecars/dns-proxy/dnsproxy"
 	"github.com/miekg/dns"
 )
 

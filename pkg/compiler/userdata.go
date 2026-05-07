@@ -11,7 +11,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // otpEnvName derives the env var name for an OTP secret from its SSM path.

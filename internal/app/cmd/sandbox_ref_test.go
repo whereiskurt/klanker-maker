@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	"github.com/whereiskurt/klankrmkr/internal/app/cmd"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	"github.com/whereiskurt/klanker-maker/internal/app/cmd"
 )
 
 // TestResolveSandboxID_CustomPrefix verifies that ResolveSandboxID recognizes

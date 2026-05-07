@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/whereiskurt/klankrmkr/pkg/slack"
+	"github.com/whereiskurt/klanker-maker/pkg/slack"
 )
 
 // logger is the package-level structured logger. Lambda ships stderr to

@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/elazarl/goproxy"
-	"github.com/whereiskurt/klankrmkr/sidecars/http-proxy/httpproxy"
+	"github.com/whereiskurt/klanker-maker/sidecars/http-proxy/httpproxy"
 )
 
 // proxyClient returns an *http.Client that routes all requests through proxyAddr.

@@ -18,9 +18,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	goyaml "github.com/goccy/go-yaml"
 	"github.com/spf13/cobra"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // rsyncPathRegex accepts safe relative paths with common shell glob characters.

@@ -19,9 +19,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/spf13/cobra"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
-	awspkg "github.com/whereiskurt/klankrmkr/pkg/aws"
-	ghpkg "github.com/whereiskurt/klankrmkr/pkg/github"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
+	ghpkg "github.com/whereiskurt/klanker-maker/pkg/github"
 )
 
 // GithubManifestBaseURL is the base URL for the GitHub manifest exchange API.
@@ -369,7 +369,7 @@ type installationInfo struct {
 func BuildManifestJSON(redirectURL string) string {
 	manifest := map[string]interface{}{
 		"name":   "klanker-maker-sandbox",
-		"url":    "https://github.com/whereiskurt/klankrmkr",
+		"url":    "https://github.com/whereiskurt/klanker-maker",
 		"public": true,
 		"default_permissions": map[string]interface{}{
 			"contents":      "read",

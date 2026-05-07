@@ -1,4 +1,4 @@
-module github.com/whereiskurt/klankrmkr
+module github.com/whereiskurt/klanker-maker
 
 go 1.25.5
 

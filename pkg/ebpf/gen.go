@@ -1,7 +1,7 @@
 //go:build linux
 
 // Package ebpf contains the kernel-side BPF programs and userspace loader for
-// klankrmkr network enforcement. The BPF bytecode is compiled from bpf.c via
+// klanker-maker network enforcement. The BPF bytecode is compiled from bpf.c via
 // bpf2go and embedded in the binary; no runtime clang dependency is required.
 //
 // To regenerate the loader code and embedded bytecode (requires clang):

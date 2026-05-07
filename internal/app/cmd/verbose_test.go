@@ -3,8 +3,8 @@ package cmd_test
 import (
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/internal/app/cmd"
-	"github.com/whereiskurt/klankrmkr/internal/app/config"
+	"github.com/whereiskurt/klanker-maker/internal/app/cmd"
+	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
 
 // TestVerboseFlagCreate verifies that NewCreateCmd registers a --verbose flag

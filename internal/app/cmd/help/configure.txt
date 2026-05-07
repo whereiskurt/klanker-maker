@@ -2,7 +2,7 @@ Interactive wizard to set up km-config.yaml for your platform deployment.
 
 Configure walks through the platform settings and writes km-config.yaml
 to the repo root (or --output-dir). Run this once when setting up a new
-deployment or fork of the klankrmkr platform.
+deployment or fork of the klanker-maker platform.
 
 Usage:
   km configure [flags]

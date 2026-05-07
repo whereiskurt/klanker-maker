@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/pkg/terragrunt"
+	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
 )
 
 // Helper: create a fake sandbox directory that looks like a real one

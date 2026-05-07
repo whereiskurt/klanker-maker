@@ -3,7 +3,7 @@
 package allowlistgen
 
 import (
-	"github.com/whereiskurt/klankrmkr/pkg/ebpf/tls"
+	"github.com/whereiskurt/klanker-maker/pkg/ebpf/tls"
 )
 
 // HandleTLSEvent implements tls.EventHandler. It processes outbound (DirWrite)

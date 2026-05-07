@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/pkg/compiler"
+	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 )
 
 // TestGenerateBudgetEnforcerHCL_EC2 verifies that the EC2 budget enforcer HCL contains

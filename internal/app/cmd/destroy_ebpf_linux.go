@@ -4,7 +4,7 @@ package cmd
 
 import (
 	"github.com/rs/zerolog"
-	ebpfpkg "github.com/whereiskurt/klankrmkr/pkg/ebpf"
+	ebpfpkg "github.com/whereiskurt/klanker-maker/pkg/ebpf"
 )
 
 // cleanupEBPF removes any pinned BPF programs and maps for the sandbox.

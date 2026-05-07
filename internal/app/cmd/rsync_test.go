@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/whereiskurt/klankrmkr/pkg/profile"
+	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
 // makeProfile builds a minimal SandboxProfile with the given rsyncPaths and rsyncFileList.

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // TestListCmd_AliasColumn verifies that km list shows an ALIAS column

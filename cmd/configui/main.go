@@ -33,7 +33,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // templateFuncs defines custom functions available in HTML templates.

@@ -7,8 +7,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	cwtypes "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
-	"github.com/whereiskurt/klankrmkr/pkg/lifecycle"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/lifecycle"
 )
 
 // mockCWLogsClient implements kmaws.CWLogsAPI for testing IdleDetector.

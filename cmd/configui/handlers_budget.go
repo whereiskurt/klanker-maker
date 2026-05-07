@@ -8,7 +8,7 @@ import (
 	"context"
 	"fmt"
 
-	kmaws "github.com/whereiskurt/klankrmkr/pkg/aws"
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // BudgetFetcher is the narrow interface for fetching per-sandbox budget display data.
