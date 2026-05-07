@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: Completed 73-00-PLAN.md
-last_updated: "2026-05-07T23:49:28.516Z"
+stopped_at: Completed 73-02-PLAN.md
+last_updated: "2026-05-07T23:57:36.879Z"
 last_activity: 2026-05-07
 progress:
   total_phases: 77
   completed_phases: 69
   total_plans: 284
-  completed_plans: 244
+  completed_plans: 246
   percent: 93
 ---
 
@@ -284,6 +284,8 @@ Progress: [█████████░] 93%
 | Phase 66-multi-instance-support-configurable-resource-prefix-and-email-subdomain P04 | 31539929 | 4 tasks | 22 files |
 | Phase 66-multi-instance-support-configurable-resource-prefix-and-email-subdomain P05 | 25min | 3 tasks | 8 files |
 | Phase 73-km-vscode-remote-session-via-ssm P00 | 855 | 3 tasks | 8 files |
+| Phase 73-km-vscode-remote-session-via-ssm P02 | 323 | 2 tasks | 3 files |
+| Phase 73 P01 | 352 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -809,6 +811,10 @@ Recent decisions affecting current work:
 - [Phase 66]: ExportConfigEnvVars now exports KM_RESOURCE_PREFIX + KM_EMAIL_SUBDOMAIN; fetchAndCacheOutputs uses env var for prefix-aware bucket naming
 - [Phase 66]: km-config.yaml is gitignored by design; email_subdomain added on disk; grep audit residuals are pre-existing from phases 02-67 and documented
 - [Phase 73-km-vscode-remote-session-via-ssm]: Test files in cmd use package cmd (not cmd_test) for internal-symbol access; boolPtr reused from validate_test.go to avoid redeclaration
+- [Phase 73-km-vscode-remote-session-via-ssm]: VSCodeEnabled uses *bool pointer for omit-means-true semantics, matching NotifyEmailEnabled precedent
+- [Phase 73-km-vscode-remote-session-via-ssm]: IsVSCodeEnabled exported as package-level helper (not inline nil-check) because 3 callers need it (compiler, create.go, doctor)
+- [Phase 73]: Manual pubkey line construction (fmt.Sprintf) instead of gossh.MarshalAuthorizedKey to preserve comment field in authorized_keys output
+- [Phase 73]: Returned pubContent has no trailing newline — safe for direct heredoc embedding in Wave 2 userdata templates
 
 ### Roadmap Evolution
 
@@ -900,6 +906,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-07T23:49:28.509Z
-Stopped at: Completed 73-00-PLAN.md
+Last session: 2026-05-07T23:57:24.882Z
+Stopped at: Completed 73-02-PLAN.md
 Resume file: None
