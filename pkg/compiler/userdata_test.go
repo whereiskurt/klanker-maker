@@ -1794,3 +1794,75 @@ func TestCgroupProcsRedirectHardened(t *testing.T) {
 		t.Errorf("km-cgroup.sh still uses bare-redirect form (must use compound { ... } 2>/dev/null || true)")
 	}
 }
+
+// ============================================================
+// Phase 73 VSCode userdata tests (Wave 0 stubs — Wave 1 Plan 73-04 implements)
+// ============================================================
+
+// TestUserDataVSCodeEnabled asserts that when VSCodeEnabled is true (default),
+// the generated userdata contains the sshd enable block, the authorized_keys
+// injection, and restorecon for SELinux correctness.
+func TestUserDataVSCodeEnabled(t *testing.T) {
+	t.Skip("TODO Wave 1 Plan 73-04: add VSCodeEnabled+VSCodeSSHPubKey to userdata template")
+	// const pubKey = "ssh-ed25519 AAAA km-sb-XXXX"
+	// p := baseProfile()
+	// // VSCodeEnabled defaults to true (nil pointer). Wire pubkey through the params.
+	// out, err := generateUserData(p, "sb-test", nil, "my-bucket", false, nil)
+	// if err != nil {
+	// 	t.Fatalf("generateUserData failed: %v", err)
+	// }
+	// if !strings.Contains(out, "systemctl enable --now sshd") {
+	// 	t.Error("expected 'systemctl enable --now sshd' in userdata when VSCodeEnabled=true")
+	// }
+	// if !strings.Contains(out, pubKey) {
+	// 	t.Errorf("expected pubkey %q in userdata when VSCodeEnabled=true", pubKey)
+	// }
+	// if !strings.Contains(out, "restorecon") {
+	// 	t.Error("expected 'restorecon' in userdata when VSCodeEnabled=true (SELinux correctness)")
+	// }
+	_ = profile.SandboxProfile{}
+}
+
+// TestUserDataVSCodeDisabled asserts that when VSCodeEnabled=&false, the
+// generated userdata does NOT contain the sshd block, authorized_keys, or the
+// pubkey content.
+func TestUserDataVSCodeDisabled(t *testing.T) {
+	t.Skip("TODO Wave 1 Plan 73-04: add VSCodeEnabled+VSCodeSSHPubKey to userdata template")
+	// fls := false
+	// p := baseProfile()
+	// p.Spec.CLI = &profile.CLISpec{VSCodeEnabled: &fls}
+	// out, err := generateUserData(p, "sb-test", nil, "my-bucket", false, nil)
+	// if err != nil {
+	// 	t.Fatalf("generateUserData failed: %v", err)
+	// }
+	// if strings.Contains(out, "systemctl enable --now sshd") {
+	// 	t.Error("expected NO 'systemctl enable --now sshd' in userdata when VSCodeEnabled=false")
+	// }
+	// if strings.Contains(out, "authorized_keys") {
+	// 	t.Error("expected NO 'authorized_keys' in userdata when VSCodeEnabled=false")
+	// }
+	_ = profile.SandboxProfile{}
+}
+
+// TestUserDataVSCodePubKey asserts that the generated userdata contains the
+// EXACT pubkey line passed in (no leading/trailing whitespace, no
+// double-quote artifacts). This covers Pitfall 3 from 73-RESEARCH.md: the
+// heredoc embedding must be exact.
+func TestUserDataVSCodePubKey(t *testing.T) {
+	t.Skip("TODO Wave 1 Plan 73-04: add VSCodeEnabled+VSCodeSSHPubKey to userdata template")
+	// const exactPubKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI km-sb-abc123"
+	// p := baseProfile()
+	// out, err := generateUserData(p, "sb-abc123", nil, "my-bucket", false, nil)
+	// if err != nil {
+	// 	t.Fatalf("generateUserData failed: %v", err)
+	// }
+	// // The pubkey must appear as an exact line — no leading whitespace, no trailing whitespace.
+	// for _, line := range strings.Split(out, "\n") {
+	// 	if strings.TrimSpace(line) == exactPubKey {
+	// 		// Found exact match — good.
+	// 		return
+	// 	}
+	// }
+	// t.Errorf("exact pubkey line %q not found in userdata (check for whitespace/quote artifacts)", exactPubKey)
+	_ = profile.SandboxProfile{}
+}

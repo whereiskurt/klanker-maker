@@ -1430,6 +1430,32 @@ func TestParse_CLISpec_SlackFields_OmittedNilPointers(t *testing.T) {
 	}
 }
 
+// ============================================================
+// Phase 73 VSCode field tests (Wave 0 stubs — Wave 1 Plan 73-02 implements)
+// ============================================================
+
+// Note: boolPtr is defined in validate_test.go (same package) — reuse it here.
+
+// TestVSCodeEnabled_DefaultTrue asserts that IsVSCodeEnabled returns true for
+// nil CLISpec, empty CLISpec, and CLISpec{VSCodeEnabled: &true}.
+func TestVSCodeEnabled_DefaultTrue(t *testing.T) {
+	t.Skip("TODO Wave 1 Plan 73-02: add VSCodeEnabled field + IsVSCodeEnabled helper")
+	// if !profile.IsVSCodeEnabled(nil) { t.Fatal("nil cli should return true") }
+	// if !profile.IsVSCodeEnabled(&profile.CLISpec{}) { t.Fatal("empty CLISpec should return true") }
+	// tru := true
+	// if !profile.IsVSCodeEnabled(&profile.CLISpec{VSCodeEnabled: &tru}) { t.Fatal("&true should return true") }
+	_ = boolPtr
+}
+
+// TestVSCodeEnabled_False asserts that IsVSCodeEnabled returns false when
+// CLISpec.VSCodeEnabled is explicitly set to &false.
+func TestVSCodeEnabled_False(t *testing.T) {
+	t.Skip("TODO Wave 1 Plan 73-02: add VSCodeEnabled field + IsVSCodeEnabled helper")
+	// fls := false
+	// if profile.IsVSCodeEnabled(&profile.CLISpec{VSCodeEnabled: &fls}) { t.Fatal("&false should return false") }
+	_ = boolPtr
+}
+
 // TestParse_CLISpec_SlackFields_ExplicitFalse verifies that explicit false for
 // *bool Slack fields round-trips as non-nil pointer to false (not nil).
 // This is the key bool-vs-*bool discrimination test.
