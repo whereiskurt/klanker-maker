@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: Completed 73-04-PLAN.md
-last_updated: "2026-05-08T00:09:56.235Z"
+stopped_at: Completed 73-05-PLAN.md
+last_updated: "2026-05-08T00:20:07.184Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 77
   completed_phases: 69
   total_plans: 284
-  completed_plans: 249
+  completed_plans: 250
   percent: 93
 ---
 
@@ -289,6 +289,7 @@ Progress: [█████████░] 93%
 | Phase 73-km-vscode-remote-session-via-ssm P03 | 9min | 3 tasks | 2 files |
 | Phase 73-km-vscode-remote-session-via-ssm P07 | 6min | 1 tasks | 2 files |
 | Phase 73-km-vscode-remote-session-via-ssm P04 | 6min | 4 tasks | 4 files |
+| Phase 73 P05 | 352 | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -824,6 +825,7 @@ Recent decisions affecting current work:
 - [Phase 73-km-vscode-remote-session-via-ssm]: 73-04: VSCodeSSHPubKey validation scoped to non-nil network path to avoid breaking 66+ existing tests that use nil network
 - [Phase 73-km-vscode-remote-session-via-ssm]: 73-04: template {{ .VSCodeSSHPubKey }} at column 0 in heredoc to prevent sshd silent key rejection (Pitfall 3)
 - [Phase 73-km-vscode-remote-session-via-ssm]: 73-04: restorecon wrapped with command -v guard for cross-distro compatibility (Pitfall 5)
+- [Phase 73]: Keypair generation inserted as Step 6d in runCreate between Slack resolution and compiler.Compile for fail-fast before AWS provisioning
 
 ### Roadmap Evolution
 
@@ -915,6 +917,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-08T00:09:56.229Z
-Stopped at: Completed 73-04-PLAN.md
+Last session: 2026-05-08T00:20:07.178Z
+Stopped at: Completed 73-05-PLAN.md
 Resume file: None
