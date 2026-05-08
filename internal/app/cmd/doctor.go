@@ -253,6 +253,11 @@ type DoctorDeps struct {
 	EC2AMIClients map[string]kmaws.EC2AMIAPI
 	// DryRun controls whether stale resource cleanup checks delete resources.
 	DryRun bool
+	// DeleteEBS opts the orphaned-EBS-volume check into deletion. It is only
+	// honored when DryRun is also false. Required because EBS volumes can hold
+	// user data — DryRun=false alone deletes safer resource types (KMS keys,
+	// IAM roles, schedules, Slack queues) but never volumes.
+	DeleteEBS bool
 	// AllRegions controls whether regional checks run against all configured regions
 	// (PrimaryRegion + KM_REPLICA_REGION CSV) or only the primary region.
 	AllRegions bool
@@ -1812,6 +1817,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 	var quietMode bool
 	var dryRun bool
 	var allRegions bool
+	var deleteEBS bool
 
 	cmd := &cobra.Command{
 		Use:          "doctor",
@@ -1828,7 +1834,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 			default:
 				return fmt.Errorf("unsupported config type %T", cfg)
 			}
-			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions)
+			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output results as JSON array")
@@ -1837,11 +1843,13 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 		"Show stale resources without deleting (use --dry-run=false to clean up)")
 	cmd.Flags().BoolVar(&allRegions, "all-regions", false,
 		"Run regional checks against all configured regions (PrimaryRegion + KM_REPLICA_REGION CSV)")
+	cmd.Flags().BoolVar(&deleteEBS, "delete-ebs", false,
+		"With --dry-run=false, delete detached orphan EBS volumes (in-use volumes are never auto-deleted; terminate the owning EC2 instance first)")
 	return cmd
 }
 
 // runDoctor is the core execution logic for km doctor.
-func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions bool) error {
+func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS bool) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -1866,6 +1874,7 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 		deps = initRealDepsWithExisting(ctx, cfg, deps)
 	}
 	deps.DryRun = dryRun
+	deps.DeleteEBS = deleteEBS
 
 	// Run credential check first — if SSO is expired, skip all AWS checks
 	// rather than repeating the same credential error for every check.
@@ -2180,11 +2189,13 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkOrphanedEC2(ctx, ec2InstanceClient, listerForCleanup)
 	})
 
-	// Orphaned EBS volume + snapshot checks (report-only, never deletes).
-	// Catches additionalVolume leaks and post-manual-deregister snapshot leaks.
+	// Orphaned EBS volume + snapshot checks. Volume check can delete detached
+	// orphans when --dry-run=false --delete-ebs are both set. Snapshot check
+	// remains report-only.
 	ec2VolumeClient := deps.EC2VolumeClient
+	deleteEBS := deps.DeleteEBS
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkOrphanedEBSVolumes(ctx, ec2VolumeClient, listerForCleanup)
+		return checkOrphanedEBSVolumes(ctx, ec2VolumeClient, listerForCleanup, dryRun, deleteEBS)
 	})
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		return checkOrphanedSnapshots(ctx, ec2VolumeClient)

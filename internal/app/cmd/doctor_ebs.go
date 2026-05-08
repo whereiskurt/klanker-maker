@@ -32,19 +32,32 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
 
-// EC2VolumeAPI covers EC2 DescribeVolumes / DescribeSnapshots / DescribeImages
-// for orphaned EBS resource detection. The real ec2.Client implements all three.
-// DescribeImages is needed by the snapshot check to map snapshot IDs back to
-// the AMIs that reference them.
+// EC2VolumeAPI covers EC2 DescribeVolumes / DescribeSnapshots / DescribeImages /
+// DeleteVolume for orphaned EBS resource detection and (optional) cleanup.
+// The real ec2.Client implements all four. DescribeImages is needed by the
+// snapshot check to map snapshot IDs back to the AMIs that reference them.
+// DeleteVolume is only invoked when both --dry-run=false and --delete-ebs
+// are set on `km doctor`, and only against volumes whose state is "available".
 type EC2VolumeAPI interface {
 	DescribeVolumes(ctx context.Context, params *ec2.DescribeVolumesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVolumesOutput, error)
 	DescribeSnapshots(ctx context.Context, params *ec2.DescribeSnapshotsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeSnapshotsOutput, error)
 	DescribeImages(ctx context.Context, params *ec2.DescribeImagesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeImagesOutput, error)
+	DeleteVolume(ctx context.Context, params *ec2.DeleteVolumeInput, optFns ...func(*ec2.Options)) (*ec2.DeleteVolumeOutput, error)
 }
 
 // checkOrphanedEBSVolumes lists EBS volumes tagged km:sandbox-id and warns on
-// any whose sandbox-id has no matching DynamoDB record. Report-only.
-func checkOrphanedEBSVolumes(ctx context.Context, ec2Client EC2VolumeAPI, lister SandboxLister) CheckResult {
+// any whose sandbox-id has no matching DynamoDB record.
+//
+// When both dryRun is false and deleteEBS is true, volumes whose state is
+// "available" (detached) are deleted via DeleteVolume; volumes in any other
+// state (in-use, creating, deleting, error) are reported but never touched —
+// in-use orphans need their owning EC2 instance terminated first, which is
+// the operator's call (km destroy or manual EC2 termination).
+//
+// Without deleteEBS, the check stays report-only even when --dry-run=false
+// is set globally. Volume data is user data; deletion is irreversible, so
+// it is gated on an explicit opt-in flag.
+func checkOrphanedEBSVolumes(ctx context.Context, ec2Client EC2VolumeAPI, lister SandboxLister, dryRun, deleteEBS bool) CheckResult {
 	name := "Orphaned EBS Volumes"
 	if ec2Client == nil {
 		return CheckResult{Name: name, Status: CheckSkipped, Message: "EC2 volume client not available"}
@@ -92,6 +105,7 @@ func checkOrphanedEBSVolumes(ctx context.Context, ec2Client EC2VolumeAPI, lister
 	}
 	var orphans []orphan
 	totalOrphanGB := int32(0)
+	detachedCount := 0
 	for _, v := range volumes {
 		var sandboxID string
 		for _, tag := range v.Tags {
@@ -104,14 +118,18 @@ func checkOrphanedEBSVolumes(ctx context.Context, ec2Client EC2VolumeAPI, lister
 			continue
 		}
 		size := awssdk.ToInt32(v.Size)
+		state := string(v.State)
 		orphans = append(orphans, orphan{
 			volumeID:  awssdk.ToString(v.VolumeId),
 			sandboxID: sandboxID,
 			sizeGB:    size,
-			state:     string(v.State),
+			state:     state,
 			az:        awssdk.ToString(v.AvailabilityZone),
 		})
 		totalOrphanGB += size
+		if state == string(ec2types.VolumeStateAvailable) {
+			detachedCount++
+		}
 	}
 
 	if len(orphans) == 0 {
@@ -122,18 +140,79 @@ func checkOrphanedEBSVolumes(ctx context.Context, ec2Client EC2VolumeAPI, lister
 		}
 	}
 
-	var sb strings.Builder
+	// Decide whether to actually delete. Delete only the detached subset; in-use
+	// volumes need their owning instance terminated first.
+	performDelete := !dryRun && deleteEBS
+	deleted := 0
+	failures := make(map[string]error)
+	if performDelete {
+		for _, o := range orphans {
+			if o.state != string(ec2types.VolumeStateAvailable) {
+				continue
+			}
+			_, err := ec2Client.DeleteVolume(ctx, &ec2.DeleteVolumeInput{
+				VolumeId: awssdk.String(o.volumeID),
+			})
+			if err != nil {
+				failures[o.volumeID] = err
+				continue
+			}
+			deleted++
+		}
+	}
+
 	// gp3 EBS list price ~$0.08/GB-month in us-east-1; close enough for an advisory cost cue.
 	monthlyUSD := float64(totalOrphanGB) * 0.08
-	fmt.Fprintf(&sb, "found %d orphaned EBS volumes (no DynamoDB record) — %d GB total ≈ $%.2f/mo:", len(orphans), totalOrphanGB, monthlyUSD)
-	for _, o := range orphans {
-		fmt.Fprintf(&sb, "\n  %s (%s, %dGB, %s) %s", o.volumeID, o.state, o.sizeGB, o.az, o.sandboxID)
+	inUseCount := len(orphans) - detachedCount
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "found %d orphaned EBS volumes (no DynamoDB record) — %d GB total ≈ $%.2f/mo (%d detached, %d in-use)",
+		len(orphans), totalOrphanGB, monthlyUSD, detachedCount, inUseCount)
+	if performDelete {
+		fmt.Fprintf(&sb, "; deleted %d, failed %d", deleted, len(failures))
+		if inUseCount > 0 {
+			fmt.Fprintf(&sb, " (%d in-use kept — terminate owning EC2 first)", inUseCount)
+		}
 	}
+	fmt.Fprint(&sb, ":")
+	for _, o := range orphans {
+		marker := ""
+		if performDelete {
+			switch {
+			case o.state != string(ec2types.VolumeStateAvailable):
+				marker = " [skipped — in-use]"
+			case failures[o.volumeID] != nil:
+				marker = fmt.Sprintf(" [delete failed: %v]", failures[o.volumeID])
+			default:
+				marker = " [deleted]"
+			}
+		}
+		fmt.Fprintf(&sb, "\n  %s (%s, %dGB, %s) %s%s", o.volumeID, o.state, o.sizeGB, o.az, o.sandboxID, marker)
+	}
+
+	remediation := "If the sandbox row exists: 'km destroy <sandbox-id> --remote --yes'. Otherwise: 'aws ec2 delete-volume --volume-id <id>' (after confirming the volume is detached)."
+	switch {
+	case dryRun && deleteEBS:
+		// --delete-ebs is a no-op when --dry-run is still on (the default). Tell
+		// the operator how to actually perform the delete.
+		remediation = fmt.Sprintf("Re-run with --dry-run=false --delete-ebs to delete the %d detached volume(s); %d in-use volume(s) need 'km destroy <sandbox-id>' or manual EC2 termination first.", detachedCount, inUseCount)
+	case !dryRun && deleteEBS:
+		// Action was already taken; downgrade remediation.
+		if len(failures) == 0 && inUseCount == 0 {
+			remediation = ""
+		} else {
+			remediation = "Re-run after detaching/terminating the owning EC2 instances to clean up the remaining in-use volumes."
+		}
+	case !dryRun && !deleteEBS:
+		// Operator opted into other cleanups but not EBS — explicit opt-in is required for EBS.
+		remediation = fmt.Sprintf("Add --delete-ebs to also delete the %d detached orphan volume(s); in-use volumes still require 'km destroy <sandbox-id>' or manual EC2 termination.", detachedCount)
+	}
+
 	return CheckResult{
 		Name:        name,
 		Status:      CheckWarn,
 		Message:     sb.String(),
-		Remediation: "If the sandbox row exists: 'km destroy <sandbox-id> --remote --yes'. Otherwise: 'aws ec2 delete-volume --volume-id <id>' (after confirming the volume is detached).",
+		Remediation: remediation,
 	}
 }
 
