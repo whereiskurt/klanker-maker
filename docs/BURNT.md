@@ -25,28 +25,79 @@
 
 ## Daily token burn (3/20 → 5/8)
 
-Each square = one calendar day in EDT. Rows are days of week (Sun → Sat, GitHub-style), columns are weeks.
-
-| Day | Wk 3/16 | Wk 3/22 | Wk 3/29 | Wk 4/5 | Wk 4/12 | Wk 4/19 | Wk 4/26 | Wk 5/3 |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Sun** | ⬜ | 🟥 | 🟩 | 🟧 | 🟨 | 🟨 | 🟨 | 🟥 |
-| **Mon** | ⬜ | 🟧 | 🟨 | 🟨 | 🟨 | 🟩 | 🟩 | 🟧 |
-| **Tue** | ⬜ | 🟥 | 🟧 | 🟨 | 🟨 | 🟩 | 🟩 | 🟥 |
-| **Wed** | ⬜ | 🟥 | 🟥 | 🟩 | 🟨 | 🟩 | 🟩 | 🟧 |
-| **Thu** | ⬜ | 🟥 | 🟧 | 🟩 | 🟩 | ⬜ | 🟨 | 🟨 |
-| **Fri** | 🟩 | 🟥 | 🟧 | 🟧 | 🟩 | ⬜ | 🟨 | 🟩 |
-| **Sat** | 🟥 | 🟥 | 🟥 | ⬜ | 🟨 | 🟨 | 🟧 | — |
-
-**Legend:** ⬜ none · 🟩 1–50M · 🟨 50–150M · 🟧 150–300M · 🟥 300M+ tokens / day
-
-**Sparkline (chronological, one bar per day):**
+One row per day. Bar length = total tokens consumed that day (input + cache reads + output). Grouped by ISO week (Sun → Sat) with weekly subtotals on the right.
 
 ```
-▁██▆█████▃▅▆█▆▆█▆▅▃▃▁▆ ▃▅▃▅▃▃▃▅▃▁▁  ▅▅▃▃▃▅▅▆█▆█▆▅▁
-Mar20                       Apr1                        May1   May8
+DAILY TOKEN BURN — 3/20 → 5/8 EDT  (each █ ≈ 23M tokens)
+
+WEEK 1 · 3/15–3/21  ──────────────────────  total: 429M
+  Fri 3/20  ▏                                 11M
+  Sat 3/21  ██████████████████               418M
+
+WEEK 2 · 3/22–3/28  ─────────────────────  total: 2.82B  ◀ peak week
+  Sun 3/22  ██████████████████████████████   694M  ◀ peak day
+  Mon 3/23  ███████                          169M
+  Tue 3/24  ███████████████                  346M
+  Wed 3/25  █████████████                    302M
+  Thu 3/26  ████████████████                 369M
+  Fri 3/27  ███████████████████████          520M
+  Sat 3/28  ██████████████████               423M
+
+WEEK 3 · 3/29–4/4  ──────────────────────  total: 1.61B
+  Sun 3/29  █                                 31M
+  Mon 3/30  ████                              94M
+  Tue 3/31  ████████                         178M
+  Wed  4/1  ███████████████████              438M
+  Thu  4/2  ███████                          161M
+  Fri  4/3  ███████                          168M
+  Sat  4/4  ████████████████████████         542M
+
+WEEK 4 · 4/5–4/11  ───────────────────────  total: 602M
+  Sun  4/5  ███████                          154M
+  Mon  4/6  ████                              96M
+  Tue  4/7  ███                               75M
+  Wed  4/8  █                                 28M
+  Thu  4/9  ▏                                  4M
+  Fri 4/10  ███████████                      245M
+  Sat 4/11  ·                                  0M
+
+WEEK 5 · 4/12–4/18  ──────────────────────  total: 492M
+  Sun 4/12  ███                               72M
+  Mon 4/13  ████                              88M
+  Tue 4/14  ███                               63M
+  Wed 4/15  ██████                           134M
+  Thu 4/16  ██                                38M
+  Fri 4/17  ██                                38M
+  Sat 4/18  ███                               59M
+
+WEEK 6 · 4/19–4/25  ──────────────────────  total: 278M
+  Sun 4/19  █████                            114M
+  Mon 4/20  ██                                39M
+  Tue 4/21  ▏                                 19M
+  Wed 4/22  ▏                                 17M
+  Thu 4/23  ·                                  0M
+  Fri 4/24  ·                                  0M
+  Sat 4/25  ████                              89M
+
+WEEK 7 · 4/26–5/2  ───────────────────────  total: 593M
+  Sun 4/26  ██████                           146M
+  Mon 4/27  █                                 26M
+  Tue 4/28  ██                                41M
+  Wed 4/29  █                                 32M
+  Thu 4/30  █████                            109M
+  Fri  5/1  ████                              87M
+  Sat  5/2  ███████                          152M
+
+WEEK 8 · 5/3–5/9  ───────────────────────  total: 1.42B
+  Sun  5/3  ████████████████                 359M
+  Mon  5/4  ██████████                       228M
+  Tue  5/5  ██████████████████               412M
+  Wed  5/6  ████████████                     274M
+  Thu  5/7  ██████                           142M
+  Fri  5/8  ▏                                  2M
 ```
 
-> Eight nights cleared 300M tokens in a single day. The 5/3–5/6 stretch — Phase 67/68 closeout flowing straight into Phase 66 multi-instance and Phase 73 VS Code — pulled **1.27B tokens in four days** without breaking the $200/mo plan.
+> Eight days cleared 300M tokens. Week 2 (3/22–3/28) was the all-time peak at **2.82B tokens in seven days** — the original "weekend that ate a week" pulling Phase 27 OTEL through Phase 28 GitHub MITM. The 5/3–5/6 stretch is the second-highest density stretch: **1.27B tokens in four days** rolling Phase 67/68 closeout into Phase 66 multi-instance and Phase 73 VS Code.
 
 ---
 

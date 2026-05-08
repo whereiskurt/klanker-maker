@@ -93,19 +93,24 @@ git log --since=... --name-only --pretty=format: | grep -oE '\.planning/phases/[
 4. Mark the day's peak hour with `⬅️ DAY PEAK` and the sprint's peak hour with `⬅️ SPRINT PEAK HOUR`.
 5. Collapse multi-hour quiet stretches with `<sub>· · · sleep 3am–7am · · ·</sub>` (or generic `· · ·`) divider rows.
 
-## Top-of-File Daily Heatmap (GitHub-style)
+## Top-of-File Daily Bar Chart
 
-Build the calendar grid from the per-day totals:
+Build a horizontal bar chart with one row per calendar day, grouped by ISO week (Sun → Sat). Color is **avoided** — bar length encodes intensity, which is unambiguous.
 
-| Bucket (M tokens) | Symbol |
-|---|---|
-| 0 | ⬜ |
-| 1–50 | 🟩 |
-| 50–150 | 🟨 |
-| 150–300 | 🟧 |
-| 300+ | 🟥 |
+Scale: `1 char ≈ 23M tokens` (so 694M peak ≈ 30 chars wide, fits in viewport without wrap).
 
-Layout: rows = days of week (Sun → Sat), columns = ISO weeks (Mon-anchored, but display as "Wk 3/22" with the Sunday date). Add a one-line ASCII sparkline below the table (`▁▃▅▆█` glyphs scaled to the same daily-M buckets).
+Glyphs:
+- `█` — full block, one per ~23M
+- `▏` — non-zero day under the scale (≤ ~23M)
+- `·` — explicit zero (rest day, no activity)
+
+Layout per week block:
+```
+WEEK <N> · <Sun-date>–<Sat-date>  ──────────  total: <weekly>M
+  <DOW> <date>  <bar>            <daily>M  [◀ peak day]
+```
+
+Mark the project's all-time peak day with `◀ peak day` and the all-time peak week with `◀ peak week`. The whole chart lives inside a single fenced code block so column alignment renders correctly.
 
 ## Per-Sprint Volume Bar Chart
 
@@ -196,6 +201,6 @@ Sort all chapters by token volume (descending), render as a fixed-width bar char
 2. Update the top **TL;DR** numbers (cumulative tokens / commits / net lines / chapters count / latest snapshot date).
 3. Append a row to the **Per-sprint token volume** bar chart, then re-sort by volume and re-mark the latest sprint with `← latest`.
 4. Add the new chapter to the **Chapters (latest first)** TOC at the top.
-5. Extend the **Daily token burn** heatmap table with the new days (a new column when crossing a Sunday).
-6. Extend the **Sparkline** strip with one bar per new day.
+5. Extend the **Daily token burn** bar chart with the new days (start a new `WEEK N` block when crossing a Sunday). Recompute the weekly subtotal on the right.
+6. Re-mark the `◀ peak day` and `◀ peak week` annotations if the new chapter set new highs.
 7. Update the snapshot footer in the chapter and the top-of-file `Latest snapshot` field.
