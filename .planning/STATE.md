@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: Completed 73-07-PLAN.md
-last_updated: "2026-05-08T00:09:39.805Z"
+stopped_at: Completed 73-04-PLAN.md
+last_updated: "2026-05-08T00:09:56.235Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 77
@@ -821,6 +821,9 @@ Recent decisions affecting current work:
 - [Phase 73-km-vscode-remote-session-via-ssm]: atomicWrite uses CreateTemp+Rename for existing-file modification; new-file creation uses WriteFile directly
 - [Phase 73-km-vscode-remote-session-via-ssm]: Fixed SSH defaults (IdentitiesOnly, StrictHostKeyChecking, UserKnownHostsFile, ServerAliveInterval) locked into renderHostBlock - not exposed as HostOptions fields
 - [Phase 73-km-vscode-remote-session-via-ssm]: 73-07: Factored Phase 73 destroy cleanup into cleanupVSCodeState helper called from both runDestroy and runDestroyDocker; unconditional + idempotent post-AWS-teardown
+- [Phase 73-km-vscode-remote-session-via-ssm]: 73-04: VSCodeSSHPubKey validation scoped to non-nil network path to avoid breaking 66+ existing tests that use nil network
+- [Phase 73-km-vscode-remote-session-via-ssm]: 73-04: template {{ .VSCodeSSHPubKey }} at column 0 in heredoc to prevent sshd silent key rejection (Pitfall 3)
+- [Phase 73-km-vscode-remote-session-via-ssm]: 73-04: restorecon wrapped with command -v guard for cross-distro compatibility (Pitfall 5)
 
 ### Roadmap Evolution
 
@@ -912,6 +915,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-08T00:09:36.745Z
-Stopped at: Completed 73-07-PLAN.md
+Last session: 2026-05-08T00:09:56.229Z
+Stopped at: Completed 73-04-PLAN.md
 Resume file: None
