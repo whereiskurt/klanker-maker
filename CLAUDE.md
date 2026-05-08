@@ -41,7 +41,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `km ami copy <ami-id> --region <dest>` — copy AMI to another region in the same account, re-tagging the destination
 - `km ami delete <ami-id>` — deregister an AMI and delete its associated EBS snapshots atomically
 - `km info` — platform config, accounts, SES quota, AWS spend, DynamoDB tables
-- `km doctor` — validate platform health (20 checks: config, credentials, SES, Lambda, VPC, stale resources, stale AMIs, etc.; `--all-regions` to scan every active region)
+- `km doctor` — validate platform health (22 checks: config, credentials, SES, Lambda, VPC, stale resources, stale AMIs, orphaned EBS volumes + snapshots, etc.; `--all-regions` to scan every active region)
 
 ## Email
 

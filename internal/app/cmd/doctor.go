@@ -244,6 +244,9 @@ type DoctorDeps struct {
 	SchedulerClient kmaws.SchedulerAPI
 	// EC2 instance client for orphaned instance detection.
 	EC2InstanceClient EC2InstanceAPI
+	// EC2 volume client for orphaned EBS volume + snapshot detection.
+	// Nil causes both checkOrphanedEBSVolumes and checkOrphanedSnapshots to be skipped.
+	EC2VolumeClient EC2VolumeAPI
 	// EC2AMIClients is a map from region name to EC2AMIAPI client.
 	// Populated by initRealDeps for the primary region (and all configured regions
 	// when --all-regions is set). Nil causes the stale-AMI check to be skipped.
@@ -2177,6 +2180,16 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkOrphanedEC2(ctx, ec2InstanceClient, listerForCleanup)
 	})
 
+	// Orphaned EBS volume + snapshot checks (report-only, never deletes).
+	// Catches additionalVolume leaks and post-manual-deregister snapshot leaks.
+	ec2VolumeClient := deps.EC2VolumeClient
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkOrphanedEBSVolumes(ctx, ec2VolumeClient, listerForCleanup)
+	})
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkOrphanedSnapshots(ctx, ec2VolumeClient)
+	})
+
 	// Stale AMI checks — one per region (mirrors EC2Clients fan-out pattern).
 	if deps.EC2AMIClients != nil {
 		staleDays := cfg.GetDoctorStaleAMIDays()
@@ -2380,6 +2393,7 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	deps.IAMCleanupClient = iam.NewFromConfig(awsCfg)
 	deps.SchedulerClient = scheduler.NewFromConfig(awsCfg)
 	deps.EC2InstanceClient = ec2.NewFromConfig(awsCfg)
+	deps.EC2VolumeClient = ec2.NewFromConfig(awsCfg)
 
 	// Per-region EC2 clients.
 	primaryRegion := cfg.GetPrimaryRegion()
