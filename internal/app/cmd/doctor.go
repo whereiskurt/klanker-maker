@@ -1339,10 +1339,23 @@ func checkStaleSchedules(ctx context.Context, schedulerClient kmaws.SchedulerAPI
 	}
 
 	// Identify stale schedules: any km- schedule whose name doesn't contain
-	// an active sandbox ID. Skip km-at-* schedules (user-created deferred ops).
+	// an active sandbox ID.
+	//
+	// km-at-* policy: per pkg/at/parser.go:280, the format is
+	// "km-at-{command}-{sandboxID}-{timeExpr}". Every km at command except
+	// "create" embeds a sandbox ID, so the sandbox-ID containment check
+	// applies to them just like every other km- schedule — and a previous
+	// blanket skip on "km-at-" was leaking orphans (km destroy doesn't
+	// clean up per-sandbox at-schedules, so they accumulated forever).
+	//
+	// The single exception is "km-at-create-*": these provision a NEW
+	// sandbox at fire time, so there is no pre-existing sandbox ID to embed
+	// in the name. EventBridge auto-deletes one-shot at() schedules after
+	// firing, so a lingering km-at-create-* is by definition still pending
+	// and must not be touched.
 	var staleNames []string
 	for _, sn := range schedules {
-		if strings.HasPrefix(sn, "km-at-") {
+		if strings.HasPrefix(sn, "km-at-create-") {
 			continue
 		}
 		isActive := false
