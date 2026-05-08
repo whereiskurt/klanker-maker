@@ -170,9 +170,11 @@ func TestCreate_SlackInboundQueueProvisioned(t *testing.T) {
 		t.Fatalf("DDB slack_inbound_queue_url: got %q, want %q", got, url)
 	}
 	// SSM Parameter Store must have the queue URL written under the
-	// /sandbox/{id}/slack-inbound-queue-url path so the sandbox poller can
-	// read it on boot.
-	expectedParam := "/sandbox/sb-abc123/slack-inbound-queue-url"
+	// /{prefix}/sandbox/{id}/slack-inbound-queue-url path so the sandbox
+	// poller can read it on boot. Pre-prefix-migration this assertion was
+	// /sandbox/{id}/... (no prefix); commit 26dd788 scoped the path under
+	// /{prefix}/ but this test wasn't updated.
+	expectedParam := "/km/sandbox/sb-abc123/slack-inbound-queue-url"
 	if got := state.ssmParams[expectedParam]; got != url {
 		t.Fatalf("SSM param %s: got %q, want %q", expectedParam, got, url)
 	}

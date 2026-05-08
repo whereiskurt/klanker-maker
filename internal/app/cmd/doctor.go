@@ -256,8 +256,13 @@ type DoctorDeps struct {
 	// DeleteEBS opts the orphaned-EBS-volume check into deletion. It is only
 	// honored when DryRun is also false. Required because EBS volumes can hold
 	// user data — DryRun=false alone deletes safer resource types (KMS keys,
-	// IAM roles, schedules, Slack queues) but never volumes.
+	// IAM roles, schedules) but never volumes.
 	DeleteEBS bool
+	// DeleteSQS opts the Slack-inbound stale-queue check into deletion. Only
+	// honored when DryRun is also false. Required because deleting an SQS
+	// queue races with the 60-second AWS-side creation cooldown, so a rogue
+	// delete during sandbox provisioning is hard to recover from.
+	DeleteSQS bool
 	// AllRegions controls whether regional checks run against all configured regions
 	// (PrimaryRegion + KM_REPLICA_REGION CSV) or only the primary region.
 	AllRegions bool
@@ -1818,6 +1823,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 	var dryRun bool
 	var allRegions bool
 	var deleteEBS bool
+	var deleteSQS bool
 
 	cmd := &cobra.Command{
 		Use:          "doctor",
@@ -1834,7 +1840,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 			default:
 				return fmt.Errorf("unsupported config type %T", cfg)
 			}
-			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS)
+			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output results as JSON array")
@@ -1845,11 +1851,13 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 		"Run regional checks against all configured regions (PrimaryRegion + KM_REPLICA_REGION CSV)")
 	cmd.Flags().BoolVar(&deleteEBS, "delete-ebs", false,
 		"With --dry-run=false, delete detached orphan EBS volumes (in-use volumes are never auto-deleted; terminate the owning EC2 instance first)")
+	cmd.Flags().BoolVar(&deleteSQS, "delete-sqs", false,
+		"With --dry-run=false, delete stale Slack inbound SQS queues + their SSM parameters (queues whose sandbox row is gone from DynamoDB)")
 	return cmd
 }
 
 // runDoctor is the core execution logic for km doctor.
-func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS bool) error {
+func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS bool) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -1875,6 +1883,7 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 	}
 	deps.DryRun = dryRun
 	deps.DeleteEBS = deleteEBS
+	deps.DeleteSQS = deleteSQS
 
 	// Run credential check first — if SSO is expired, skip all AWS checks
 	// rather than repeating the same credential error for every check.
@@ -2276,7 +2285,7 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	})
 
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkSlackInboundStaleQueues(ctx, listInbound, inboundSQS, resourcePrefix, dryRun, slackSSMDeleter)
+		return checkSlackInboundStaleQueues(ctx, listInbound, inboundSQS, resourcePrefix, dryRun, deps.DeleteSQS, slackSSMDeleter)
 	})
 
 	slackScopes := deps.SlackAuthTestScopes

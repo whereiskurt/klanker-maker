@@ -268,6 +268,13 @@ func checkSlackInboundQueueExists(
 // {prefix}-slack-inbound-*.fifo and warns when any have no corresponding DDB
 // sandbox row. These are orphans from failed km destroy runs.
 //
+// Cleanup gate: deletion happens only when both dryRun is false AND
+// deleteSQS is true. Without --delete-sqs, the check stays report-only
+// even when --dry-run=false is set globally — same explicit-opt-in pattern
+// as --delete-ebs. Queues themselves are cheap (no idle cost), but a
+// rogue delete during sandbox provisioning races with the 60-second SQS
+// creation cooldown, so we require the operator to commit explicitly.
+//
 // Returns:
 //   - SKIPPED: no SQS client or listInbound func configured.
 //   - OK: no inbound queues found, or all are accounted for in DDB.
@@ -278,6 +285,7 @@ func checkSlackInboundStaleQueues(
 	sqsClient kmaws.SQSClient,
 	resourcePrefix string,
 	dryRun bool,
+	deleteSQS bool,
 	ssmDeleter SSMDeleterAPI,
 ) CheckResult {
 	name := "Slack inbound stale queues"
@@ -340,18 +348,26 @@ func checkSlackInboundStaleQueues(
 		}
 	}
 
-	// Plan quick-7: dry-run path — detect-only, point operator at --dry-run=false.
-	if dryRun {
+	// Report-only path. Triggered when --dry-run is true (the default), OR when
+	// --dry-run=false is set without the --delete-sqs opt-in. The two cases
+	// produce different remediation hints so the operator knows which flag to
+	// add — point dry-run users at the full --dry-run=false --delete-sqs pair,
+	// and point --dry-run=false-without-opt-in users at just --delete-sqs.
+	if dryRun || !deleteSQS {
+		remediation := "Re-run with --dry-run=false --delete-sqs to delete the orphan queues + their SSM parameters"
+		if !dryRun && !deleteSQS {
+			remediation = "Add --delete-sqs to also delete the orphan queues + their SSM parameters"
+		}
 		return CheckResult{
 			Name:        name,
 			Status:      CheckWarn,
 			Message:     fmt.Sprintf("%d stale inbound queue(s) without DDB record: %s", len(stale), strings.Join(stale, ", ")),
-			Remediation: "Re-run with --dry-run=false to delete the orphan queues + their SSM parameters",
+			Remediation: remediation,
 		}
 	}
 
-	// Plan quick-7: destructive cleanup path. Best-effort per orphan; failures
-	// increment skipped and the loop continues to the next queue.
+	// Destructive cleanup path. Best-effort per orphan; failures increment
+	// skipped and the loop continues to the next queue.
 	prefixSegment := resourcePrefix + "-slack-inbound-"
 	deleted, skipped := 0, 0
 	for _, qURL := range stale {

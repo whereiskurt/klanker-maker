@@ -29,6 +29,13 @@ Examples:
   # are never auto-deleted — terminate the owning EC2 instance first)
   km doctor --dry-run=false --delete-ebs
 
+  # Also delete stale Slack inbound SQS queues + their SSM parameters (queues
+  # whose owning sandbox row has been removed from DynamoDB)
+  km doctor --dry-run=false --delete-sqs
+
+  # Combine all opt-ins for a full cleanup pass
+  km doctor --dry-run=false --delete-ebs --delete-sqs
+
   # Run regional checks against every configured region
   km doctor --all-regions
 
@@ -37,12 +44,16 @@ Flags:
   --quiet         Suppress OK results; show only warnings and errors
   --dry-run       Default true. With --dry-run=false, cleanup-capable checks
                   delete safe stale resources (KMS keys, IAM roles, schedules,
-                  Slack queues + transcripts). EBS volumes still require the
-                  separate --delete-ebs opt-in.
+                  Slack transcripts). EBS volumes and Slack inbound queues
+                  require their own --delete-ebs / --delete-sqs opt-ins.
   --delete-ebs    With --dry-run=false, also delete detached orphan EBS volumes
                   (state=available). In-use volumes are never auto-deleted —
                   terminate the owning EC2 instance first via 'km destroy
                   <sandbox-id> --remote --yes' or the AWS console.
+  --delete-sqs    With --dry-run=false, also delete stale Slack inbound SQS
+                  queues and their per-sandbox SSM parameters. Queue creation
+                  has a 60-second AWS-side cooldown, so the explicit opt-in
+                  prevents racing with sandbox provisioning.
   --all-regions   Run regional checks (VPC, AMIs) against PrimaryRegion plus
                   every region listed in KM_REPLICA_REGION (CSV).
 

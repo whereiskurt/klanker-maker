@@ -121,17 +121,18 @@ func TestDoctor_SlackInboundStaleQueues_FoundOrphans(t *testing.T) {
 			{SandboxID: "sb-a", QueueURL: "https://sqs/km-slack-inbound-sb-a.fifo"},
 		}, nil
 	}
-	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", true, nil)
+	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", true, false, nil)
 	if r.Status != CheckWarn {
 		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
 	}
 	if !strings.Contains(r.Message, "orphan") {
 		t.Errorf("expected message to mention orphan queue, got: %s", r.Message)
 	}
-	// Plan quick-7: dry-run remediation must point operators at --dry-run=false,
+	// Dry-run remediation must point operators at the full --dry-run=false
+	// --delete-sqs pair (the explicit-opt-in pattern shared with --delete-ebs),
 	// not the legacy aws-cli command.
-	if !strings.Contains(r.Remediation, "--dry-run=false") {
-		t.Errorf("expected remediation to point at --dry-run=false, got: %s", r.Remediation)
+	if !strings.Contains(r.Remediation, "--dry-run=false") || !strings.Contains(r.Remediation, "--delete-sqs") {
+		t.Errorf("expected remediation to mention both --dry-run=false and --delete-sqs, got: %s", r.Remediation)
 	}
 }
 
@@ -150,7 +151,7 @@ func TestDoctor_SlackInboundStaleQueues_AllAccountedFor(t *testing.T) {
 			{SandboxID: "sb-b", QueueURL: "https://sqs/km-slack-inbound-sb-b.fifo"},
 		}, nil
 	}
-	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", true, nil)
+	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", true, false, nil)
 	if r.Status != CheckOK {
 		t.Fatalf("expected OK, got %s (msg=%s)", r.Status, r.Message)
 	}
@@ -166,7 +167,7 @@ func TestDoctor_SlackInboundStaleQueues_NoQueues(t *testing.T) {
 	listInbound := func(_ context.Context) ([]inboundRow, error) {
 		return []inboundRow{}, nil
 	}
-	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", true, nil)
+	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", true, false, nil)
 	if r.Status != CheckOK {
 		t.Fatalf("expected OK, got %s", r.Status)
 	}
@@ -177,7 +178,7 @@ func TestDoctor_SlackInboundStaleQueues_NoQueues(t *testing.T) {
 
 // TestDoctor_SlackInboundStaleQueues_NilDeps: nil deps → SKIPPED.
 func TestDoctor_SlackInboundStaleQueues_NilDeps(t *testing.T) {
-	r := checkSlackInboundStaleQueues(context.Background(), nil, nil, "km", true, nil)
+	r := checkSlackInboundStaleQueues(context.Background(), nil, nil, "km", true, false, nil)
 	if r.Status != CheckSkipped {
 		t.Fatalf("expected SKIPPED, got %s", r.Status)
 	}
@@ -297,7 +298,7 @@ func TestDoctor_SlackInboundStaleQueues_DryRunTrue_NoDestructiveCalls(t *testing
 		return []inboundRow{}, nil
 	}
 	ssmCli := &fakeSSMDeleter{}
-	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", true, ssmCli)
+	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", true, true, ssmCli)
 	if r.Status != CheckWarn {
 		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
 	}
@@ -326,7 +327,7 @@ func TestDoctor_SlackInboundStaleQueues_DryRunFalse_HappyPath(t *testing.T) {
 		return []inboundRow{}, nil
 	}
 	ssmCli := &fakeSSMDeleter{}
-	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", false, ssmCli)
+	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", false, true, ssmCli)
 	if r.Status != CheckWarn {
 		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
 	}
@@ -339,9 +340,13 @@ func TestDoctor_SlackInboundStaleQueues_DryRunFalse_HappyPath(t *testing.T) {
 	if len(ssmCli.deleteCalls) != 2 {
 		t.Fatalf("expected 2 SSM DeleteParameter calls, got %d", len(ssmCli.deleteCalls))
 	}
+	// Production code uses kmaws.SandboxParameterPath which formats as
+	// /{prefix}/sandbox/{id}/{suffix}. Pre-prefix-migration this test asserted
+	// the unprefixed form and silently broke when commit 26dd788 scoped paths
+	// under /{prefix}/.
 	expected := map[string]bool{
-		"/sandbox/sb-x1/slack-inbound-queue-url": false,
-		"/sandbox/sb-x2/slack-inbound-queue-url": false,
+		"/km/sandbox/sb-x1/slack-inbound-queue-url": false,
+		"/km/sandbox/sb-x2/slack-inbound-queue-url": false,
 	}
 	for _, name := range ssmCli.deleteCalls {
 		if _, ok := expected[name]; !ok {
@@ -373,7 +378,7 @@ func TestDoctor_SlackInboundStaleQueues_DryRunFalse_PartialFailure(t *testing.T)
 		return []inboundRow{}, nil
 	}
 	ssmCli := &fakeSSMDeleter{}
-	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", false, ssmCli)
+	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", false, true, ssmCli)
 	if r.Status != CheckWarn {
 		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
 	}
@@ -399,7 +404,7 @@ func TestDoctor_SlackInboundStaleQueues_DryRunFalse_SSMParameterNotFound(t *test
 		return []inboundRow{}, nil
 	}
 	ssmCli := &fakeSSMDeleter{deleteErr: &ssmtypes.ParameterNotFound{}}
-	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", false, ssmCli)
+	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", false, true, ssmCli)
 	if r.Status != CheckWarn {
 		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
 	}
@@ -411,5 +416,38 @@ func TestDoctor_SlackInboundStaleQueues_DryRunFalse_SSMParameterNotFound(t *test
 	}
 	if len(ssmCli.deleteCalls) != 1 {
 		t.Errorf("expected 1 SSM DeleteParameter call (which returned NotFound), got %d", len(ssmCli.deleteCalls))
+	}
+}
+
+// TestDoctor_SlackInboundStaleQueues_DryRunFalseWithoutDeleteSQS_NoDestructiveCalls
+// verifies the explicit-opt-in property: --dry-run=false alone is NOT enough
+// to delete inbound queues — the operator must also pass --delete-sqs. Same
+// pattern as --delete-ebs. Before this change, --dry-run=false implicitly
+// deleted queues; the new opt-in is more conservative because deleting an
+// SQS queue races with the 60-second AWS-side creation cooldown.
+func TestDoctor_SlackInboundStaleQueues_DryRunFalseWithoutDeleteSQS_NoDestructiveCalls(t *testing.T) {
+	sqsCli := &fakeSQS{
+		listResult: []string{"https://sqs/km-slack-inbound-orphan.fifo"},
+	}
+	listInbound := func(_ context.Context) ([]inboundRow, error) {
+		return []inboundRow{}, nil
+	}
+	ssmCli := &fakeSSMDeleter{}
+	r := checkSlackInboundStaleQueues(context.Background(), listInbound, sqsCli, "km", false, false, ssmCli)
+	if r.Status != CheckWarn {
+		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
+	}
+	if sqsCli.deleteCalled != 0 {
+		t.Errorf("--dry-run=false alone (without --delete-sqs) must NOT call DeleteQueue; saw %d calls", sqsCli.deleteCalled)
+	}
+	if len(ssmCli.deleteCalls) != 0 {
+		t.Errorf("--dry-run=false alone (without --delete-sqs) must NOT call SSM DeleteParameter; saw %d calls", len(ssmCli.deleteCalls))
+	}
+	if !strings.Contains(r.Remediation, "--delete-sqs") {
+		t.Errorf("expected remediation to mention --delete-sqs, got: %s", r.Remediation)
+	}
+	// And the remediation should NOT also nag about --dry-run=false (already set).
+	if strings.Contains(r.Remediation, "--dry-run=false") {
+		t.Errorf("remediation already in --dry-run=false mode shouldn't repeat the flag, got: %s", r.Remediation)
 	}
 }
