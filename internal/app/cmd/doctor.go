@@ -2297,11 +2297,16 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 
 	// Orphaned EBS volume + snapshot checks. Volume check can delete detached
 	// orphans when --dry-run=false --delete-ebs are both set. Snapshot check
-	// remains report-only.
+	// remains report-only. Untagged-available check catches root volumes from
+	// spot instances that pre-date volume_tags in the ec2spot module.
 	ec2VolumeClient := deps.EC2VolumeClient
 	deleteEBS := deps.DeleteEBS
+	ebsResourcePrefix := cfg.GetResourcePrefix()
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		return checkOrphanedEBSVolumes(ctx, ec2VolumeClient, listerForCleanup, dryRun, deleteEBS)
+	})
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkUntaggedAvailableVolumes(ctx, ec2VolumeClient, ebsResourcePrefix)
 	})
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		return checkOrphanedSnapshots(ctx, ec2VolumeClient)

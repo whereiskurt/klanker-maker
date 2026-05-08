@@ -569,6 +569,13 @@ resource "aws_spot_instance_request" "ec2spot" {
     "km:sandbox-id" = each.value.sandbox_id
   }
 
+  # Tag root EBS volumes so doctor's untagged-available-volume check can find them.
+  # Without volume_tags, root volumes only inherit provider default_tags and miss km:sandbox-id.
+  volume_tags = {
+    "km:sandbox-id" = each.value.sandbox_id
+    Name            = "km-sandbox-${each.value.sandbox_id}-root"
+  }
+
   lifecycle {
     ignore_changes = [
       vpc_security_group_ids,

@@ -417,3 +417,103 @@ func TestCheckOrphanedSnapshots_DescribeImagesError_Warn(t *testing.T) {
 		t.Fatalf("expected CheckWarn when DescribeImages cross-ref fails, got %s: %s", r.Status, r.Message)
 	}
 }
+
+// =============================================================================
+// checkUntaggedAvailableVolumes
+// =============================================================================
+
+func makeUntaggedVolume(id, az string, sizeGB int32, age time.Duration) ec2types.Volume {
+	created := time.Now().Add(-age)
+	return ec2types.Volume{
+		VolumeId:         awssdk.String(id),
+		Size:             awssdk.Int32(sizeGB),
+		State:            ec2types.VolumeStateAvailable,
+		AvailabilityZone: awssdk.String(az),
+		CreateTime:       &created,
+		Tags: []ec2types.Tag{
+			{Key: awssdk.String("km_label"), Value: awssdk.String("kph")},
+			{Key: awssdk.String("ManagedBy"), Value: awssdk.String("Terragrunt")},
+		},
+	}
+}
+
+func makeTaggedAvailableVolume(id, sandboxID, az string, sizeGB int32, age time.Duration) ec2types.Volume {
+	created := time.Now().Add(-age)
+	return ec2types.Volume{
+		VolumeId:         awssdk.String(id),
+		Size:             awssdk.Int32(sizeGB),
+		State:            ec2types.VolumeStateAvailable,
+		AvailabilityZone: awssdk.String(az),
+		CreateTime:       &created,
+		Tags: []ec2types.Tag{
+			{Key: awssdk.String("km_label"), Value: awssdk.String("kph")},
+			{Key: awssdk.String("km:sandbox-id"), Value: awssdk.String(sandboxID)},
+		},
+	}
+}
+
+func TestCheckUntaggedAvailableVolumes_NilClient_Skipped(t *testing.T) {
+	r := checkUntaggedAvailableVolumes(context.Background(), nil, "kph")
+	if r.Status != CheckSkipped {
+		t.Fatalf("expected CheckSkipped for nil client, got %s: %s", r.Status, r.Message)
+	}
+}
+
+func TestCheckUntaggedAvailableVolumes_NoVolumes_OK(t *testing.T) {
+	client := &fakeEC2VolumeClient{volumes: nil}
+	r := checkUntaggedAvailableVolumes(context.Background(), client, "kph")
+	if r.Status != CheckOK {
+		t.Fatalf("expected CheckOK with no volumes, got %s: %s", r.Status, r.Message)
+	}
+}
+
+func TestCheckUntaggedAvailableVolumes_UntaggedOldVolume_Warn(t *testing.T) {
+	client := &fakeEC2VolumeClient{volumes: []ec2types.Volume{
+		makeUntaggedVolume("vol-stale1", "us-east-1a", 30, 2*time.Hour),
+		makeUntaggedVolume("vol-stale2", "us-east-1a", 20, 48*time.Hour),
+	}}
+	r := checkUntaggedAvailableVolumes(context.Background(), client, "kph")
+	if r.Status != CheckWarn {
+		t.Fatalf("expected CheckWarn for old untagged volumes, got %s: %s", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "vol-stale1") || !strings.Contains(r.Message, "vol-stale2") {
+		t.Errorf("expected both volume IDs in message, got: %s", r.Message)
+	}
+	if !strings.Contains(r.Message, "50 GB") {
+		t.Errorf("expected total '50 GB' in message, got: %s", r.Message)
+	}
+	if r.Remediation == "" {
+		t.Errorf("expected non-empty Remediation")
+	}
+}
+
+func TestCheckUntaggedAvailableVolumes_NewVolumeExcluded(t *testing.T) {
+	client := &fakeEC2VolumeClient{volumes: []ec2types.Volume{
+		makeUntaggedVolume("vol-new", "us-east-1a", 30, 2*time.Minute),
+	}}
+	r := checkUntaggedAvailableVolumes(context.Background(), client, "kph")
+	if r.Status != CheckOK {
+		t.Fatalf("expected CheckOK for recently created volume (provisioning window), got %s: %s", r.Status, r.Message)
+	}
+}
+
+func TestCheckUntaggedAvailableVolumes_VolumeWithSandboxIDExcluded(t *testing.T) {
+	client := &fakeEC2VolumeClient{volumes: []ec2types.Volume{
+		makeTaggedAvailableVolume("vol-tagged", "sb-abc123", "us-east-1a", 20, 2*time.Hour),
+	}}
+	r := checkUntaggedAvailableVolumes(context.Background(), client, "kph")
+	if r.Status != CheckOK {
+		t.Fatalf("expected CheckOK when volume has km:sandbox-id, got %s: %s", r.Status, r.Message)
+	}
+}
+
+func TestCheckUntaggedAvailableVolumes_DescribeError_Warn(t *testing.T) {
+	client := &fakeEC2VolumeClient{volumesErr: errors.New("AccessDenied")}
+	r := checkUntaggedAvailableVolumes(context.Background(), client, "kph")
+	if r.Status != CheckWarn {
+		t.Fatalf("expected CheckWarn on DescribeVolumes error, got %s: %s", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "AccessDenied") {
+		t.Errorf("expected error text in message, got: %s", r.Message)
+	}
+}

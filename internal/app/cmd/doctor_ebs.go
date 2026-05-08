@@ -26,6 +26,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -213,6 +214,103 @@ func checkOrphanedEBSVolumes(ctx context.Context, ec2Client EC2VolumeAPI, lister
 		Status:      CheckWarn,
 		Message:     sb.String(),
 		Remediation: remediation,
+	}
+}
+
+// checkUntaggedAvailableVolumes finds EBS volumes that are:
+//   - state: available (not attached to any instance)
+//   - tagged km_label={resourcePrefix} (Terragrunt default tag, proves km ownership)
+//   - NOT tagged km:sandbox-id (fell through the module tag gap)
+//
+// This catches root volumes from spot instance requests that were created before
+// volume_tags was added to the ec2spot module, as well as any future leak where
+// km:sandbox-id is missing. Because we have no sandbox-id to cross-reference
+// against DynamoDB, this check is report-only — the operator must inspect and
+// delete manually, or re-run after the module fix is deployed.
+//
+// Volumes created within the last 10 minutes are excluded to avoid false
+// positives during active sandbox provisioning (create → attach races).
+func checkUntaggedAvailableVolumes(ctx context.Context, ec2Client EC2VolumeAPI, resourcePrefix string) CheckResult {
+	name := "Untagged Available EBS Volumes"
+	if ec2Client == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "EC2 volume client not available"}
+	}
+
+	var volumes []ec2types.Volume
+	var nextToken *string
+	for {
+		out, err := ec2Client.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{
+			Filters: []ec2types.Filter{
+				{Name: awssdk.String("status"), Values: []string{"available"}},
+				{Name: awssdk.String("tag:km_label"), Values: []string{resourcePrefix}},
+			},
+			NextToken: nextToken,
+		})
+		if err != nil {
+			return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not describe EBS volumes: %v", err)}
+		}
+		volumes = append(volumes, out.Volumes...)
+		if out.NextToken == nil {
+			break
+		}
+		nextToken = out.NextToken
+	}
+
+	provisioningCutoff := time.Now().Add(-10 * time.Minute)
+
+	type stale struct {
+		volumeID  string
+		sizeGB    int32
+		az        string
+		createdAt string
+	}
+	var found []stale
+	totalGB := int32(0)
+	for _, v := range volumes {
+		hasSandboxID := false
+		for _, tag := range v.Tags {
+			if awssdk.ToString(tag.Key) == "km:sandbox-id" {
+				hasSandboxID = true
+				break
+			}
+		}
+		if hasSandboxID {
+			continue
+		}
+		if v.CreateTime != nil && v.CreateTime.After(provisioningCutoff) {
+			continue
+		}
+		size := awssdk.ToInt32(v.Size)
+		created := ""
+		if v.CreateTime != nil {
+			created = v.CreateTime.Format("2006-01-02T15:04Z")
+		}
+		found = append(found, stale{
+			volumeID:  awssdk.ToString(v.VolumeId),
+			sizeGB:    size,
+			az:        awssdk.ToString(v.AvailabilityZone),
+			createdAt: created,
+		})
+		totalGB += size
+	}
+
+	if len(found) == 0 {
+		return CheckResult{Name: name, Status: CheckOK, Message: "no untagged available km-labeled EBS volumes"}
+	}
+
+	monthlyUSD := float64(totalGB) * 0.08
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "found %d available EBS volumes with km_label=%s but no km:sandbox-id tag — %d GB total ≈ $%.2f/mo:",
+		len(found), resourcePrefix, totalGB, monthlyUSD)
+	for _, v := range found {
+		fmt.Fprintf(&sb, "\n  %s (%dGB, %s, created %s)", v.volumeID, v.sizeGB, v.az, v.createdAt)
+	}
+
+	return CheckResult{
+		Name:        name,
+		Status:      CheckWarn,
+		Message:     sb.String(),
+		Remediation: "These volumes have no sandbox-id tag; they are likely root volumes from destroyed spot instances. Verify the instance they belonged to is gone, then: 'aws ec2 delete-volume --volume-id <id>'. Going forward, the ec2spot module now sets volume_tags so new root volumes will carry km:sandbox-id and be caught by the Orphaned EBS Volumes check instead.",
 	}
 }
 
