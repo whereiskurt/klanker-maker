@@ -1190,12 +1190,7 @@ func BuildAgentShellCommands(prompt string, opts AgentRunOptions) ([]string, str
 unset ANTHROPIC_BASE_URL
 unset ANTHROPIC_DEFAULT_SONNET_MODEL
 unset ANTHROPIC_DEFAULT_HAIKU_MODEL
-unset ANTHROPIC_DEFAULT_OPUS_MODEL
-# Extract OAuth token from Claude credentials for --bare mode (which skips OAuth)
-if [ -z "$ANTHROPIC_API_KEY" ] && [ -f "$HOME/.claude/.credentials.json" ]; then
-  OAUTH_TOKEN=$(python3 -c "import json; d=json.load(open('$HOME/.claude/.credentials.json')); print(d.get('claudeAiOauth',{}).get('accessToken',''))" 2>/dev/null)
-  if [ -n "$OAUTH_TOKEN" ]; then export ANTHROPIC_API_KEY="$OAUTH_TOKEN"; fi
-fi`
+unset ANTHROPIC_DEFAULT_OPUS_MODEL`
 		}
 	}
 
