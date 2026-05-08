@@ -1,12 +1,11 @@
 apiVersion: klankermaker.ai/v1alpha1
 kind: SandboxProfile
 metadata:
-  name: learn-v2
+  name: learn🧠
   labels:
     tier: development
-    tool: alltools
-    phase: phase-67-uat
-  prefix: lrn2
+    tool: learning-sandbox-unsafe
+  prefix: learn
 
 spec:
   lifecycle:
@@ -15,17 +14,17 @@ spec:
     teardownPolicy: stop
 
   runtime:
+    ami: amazon-linux-2023
     substrate: ec2
     spot: false
     instanceType: t3.large
     region: us-east-1
     rootVolumeSize: 15
     hibernation: true
-    ami: amazon-linux-2023
     mountEFS: true
     efsMountPoint: /shared
     additionalVolume:
-      size: 20
+      size: 30
       mountPoint: /data
 
   execution:
@@ -61,7 +60,7 @@ spec:
       - "cat /usr/local/share/ca-certificates/km-proxy-ca.crt >> /etc/pki/tls/certs/ca-bundle.crt"
       - "echo export SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt >> /etc/profile.d/km-zz-goose-otel.sh"
       - "mkdir -p /home/sandbox/.local/bin && cp /usr/local/bin/goose-bin /usr/local/bin/goose && cp /usr/local/bin/goose /home/sandbox/.local/bin/goose || true"
-      - "npm install -g @anthropic-ai/claude-code@2.1.114"
+      - "npm install -g @anthropic-ai/claude-code@2.1.132"
       - "curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.121.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz"
       - "tar -xzf /tmp/codex.tar.gz -C /tmp && install -m 755 /tmp/codex-x86_64-unknown-linux-musl /usr/local/bin/codex"
       - "mkdir -p /home/sandbox/.config/goose /home/sandbox/.codex && chown -R sandbox:sandbox /home/sandbox/.codex"
@@ -161,7 +160,7 @@ spec:
     notifyOnIdle: true
     notifyOnPermission: true
     notifyEmailEnabled: true
-    notifySlackEnabled: false
-    # notifySlackPerSandbox: false
-    # notifySlackInboundEnabled: false
-    # slackArchiveOnDestroy: false
+    notifySlackEnabled: true
+    notifySlackPerSandbox: true
+    notifySlackInboundEnabled: true
+    slackArchiveOnDestroy: false
