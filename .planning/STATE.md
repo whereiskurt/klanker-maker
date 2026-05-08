@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: "Checkpoint 73-09 Task 3: Awaiting operator UAT sign-off"
-last_updated: "2026-05-08T01:52:01.000Z"
+stopped_at: Completed 73-09 — Phase 73 closeout UAT approved; ready for verifier
+last_updated: "2026-05-08T02:18:12.148Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 77
@@ -293,6 +293,7 @@ Progress: [█████████░] 93%
 | Phase 73-km-vscode-remote-session-via-ssm P06 | 900 | 3 tasks | 3 files |
 | Phase 73-km-vscode-remote-session-via-ssm P08 | 158 | 2 tasks | 2 files |
 | Phase 73-km-vscode-remote-session-via-ssm P09 | 4min | 2 tasks | 2 files |
+| Phase 73-km-vscode-remote-session-via-ssm P09 | 5min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -835,6 +836,8 @@ Recent decisions affecting current work:
 - [Phase 73-km-vscode-remote-session-via-ssm]: CLAUDE.md vscode bullets placed after km slack rotate-token; VS Code section placed after Phase 68 block before Architecture
 - [Phase 73]: Pre-existing pkg/compiler test failures (Slack-related) documented as out-of-scope for Phase 73 closeout
 - [Phase 73]: Mid-phase operator fixes (6fd2fde, 3e4a69a, 9fe2f16) captured in 73-09 SUMMARY — keypair in remote path, pubkey env var propagation, ResolveSandboxID wiring
+- [Phase 73-km-vscode-remote-session-via-ssm]: Scenarios 4+6 accepted as unit-test-covered for UAT sign-off; pre-bind port probe excludes Chrome DevTools port 9222
+- [Phase 73-km-vscode-remote-session-via-ssm]: Four mid-phase fixes (6fd2fde, 3e4a69a, 9fe2f16, 2501bc9) documented in 73-09-SUMMARY.md; all validated live against sandbox lrn2-ee9499b5
 
 ### Roadmap Evolution
 
@@ -926,6 +929,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-08T01:52:00.994Z
-Stopped at: Checkpoint 73-09 Task 3: Awaiting operator UAT sign-off
+Last session: 2026-05-08T02:18:12.142Z
+Stopped at: Completed 73-09 — Phase 73 closeout UAT approved; ready for verifier
 Resume file: None
