@@ -1,5 +1,5 @@
 <mxfile host="app.diagrams.net">
-  <diagram name="Page-1" id="3TwvgG0HaluKW9cYiYkR">
+  <diagram name="klanker-maker AWS Services Overview" id="3TwvgG0HaluKW9cYiYkR">
     <mxGraphModel grid="1" page="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
       <root>
         <mxCell id="0" />
@@ -53,9 +53,6 @@
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="329" y="420" as="targetPoint" />
           </mxGeometry>
-        </mxCell>
-        <mxCell id="K8bSLqFvXRHsyHsiR2mw-2" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontSize=33;textShadow=1;" value="klanker-maker AWS Services Overview" vertex="1">
-          <mxGeometry height="30" width="760" x="60" y="50" as="geometry" />
         </mxCell>
         <mxCell id="K8bSLqFvXRHsyHsiR2mw-4" connectable="0" parent="1" style="group" value="" vertex="1">
           <mxGeometry height="80" width="240" x="50" y="450" as="geometry" />
