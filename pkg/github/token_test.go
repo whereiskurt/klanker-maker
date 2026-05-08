@@ -251,6 +251,80 @@ func TestCompilePermissions_UnknownPermission(t *testing.T) {
 	}
 }
 
+// TestExchangeForInstallationToken_OrgWildcard verifies that "org/*" is
+// treated as "all repos this installation can access" — the repositories
+// field must be omitted from the request body, NOT sent as a literal "*".
+// Regression: repoShortName("org/*") returns "*", and an earlier version
+// only checked the raw entry against "*", so "*" got appended to the
+// repositories list and GitHub rejected the token request with 422. This
+// silently broke the Lambda refresher and any sandbox using "org/*" was
+// running on a token that expired one hour after creation.
+func TestExchangeForInstallationToken_OrgWildcard(t *testing.T) {
+	var capturedBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"token":"ghs_org_wild","expires_at":"2026-03-23T04:00:00Z"}`)
+	}))
+	defer server.Close()
+
+	github.GitHubAPIBaseURL = server.URL
+
+	tok, err := github.ExchangeForInstallationToken(
+		context.Background(),
+		"jwt",
+		"12345",
+		[]string{"grnhse/*"},
+		map[string]string{"contents": "read"},
+	)
+	if err != nil {
+		t.Fatalf("ExchangeForInstallationToken: %v", err)
+	}
+	if tok != "ghs_org_wild" {
+		t.Errorf("expected token ghs_org_wild, got %q", tok)
+	}
+	if _, present := capturedBody["repositories"]; present {
+		t.Errorf("repositories field must be omitted for org/* wildcard, got: %v", capturedBody["repositories"])
+	}
+}
+
+// TestExchangeForInstallationToken_OrgWildcardMixedWithExplicit verifies that
+// even when "org/*" appears alongside explicit repos, the wildcard wins —
+// the request omits repositories entirely. GitHub has no syntax for "all
+// repos in this org" beyond the installation scope, so explicit entries
+// alongside a wildcard cannot be honored partially.
+func TestExchangeForInstallationToken_OrgWildcardMixedWithExplicit(t *testing.T) {
+	var capturedBody map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"token":"ghs_mixed","expires_at":"2026-03-23T04:00:00Z"}`)
+	}))
+	defer server.Close()
+
+	github.GitHubAPIBaseURL = server.URL
+
+	_, err := github.ExchangeForInstallationToken(
+		context.Background(),
+		"jwt",
+		"12345",
+		[]string{"grnhse/security-tools", "grnhse/*", "grnhse/other"},
+		map[string]string{"contents": "read"},
+	)
+	if err != nil {
+		t.Fatalf("ExchangeForInstallationToken: %v", err)
+	}
+	if _, present := capturedBody["repositories"]; present {
+		t.Errorf("repositories field must be omitted when org/* is present, got: %v", capturedBody["repositories"])
+	}
+}
+
 // TestExchangeForInstallationToken_WildcardRepoName verifies behavior when a
 // wildcard-like repo name "*" is passed (after org-prefix stripping). GitHub
 // returns a 422 Unprocessable Entity for invalid repo names. The error must be
