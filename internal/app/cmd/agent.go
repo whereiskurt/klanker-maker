@@ -1235,6 +1235,7 @@ fi`
 export HOME=/home/sandbox
 source /etc/profile.d/km-profile-env.sh 2>/dev/null
 source /etc/profile.d/km-identity.sh 2>/dev/null
+source /etc/profile.d/km-audit.sh 2>/dev/null
 %s
 %sKM_ARTIFACTS_BUCKET="%s"
 cd /workspace
