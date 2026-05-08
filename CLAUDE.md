@@ -169,7 +169,7 @@ Incompatible with `notifySlackChannelOverride`.
 | Variable | Source |
 |---|---|
 | `KM_SLACK_INBOUND_QUEUE_URL` | poller reads `/sandbox/{id}/slack-inbound-queue-url` from SSM Parameter Store at boot when the env var is empty (an org-level SCP blocks SSM SendCommand for the application account, so the value cannot be injected directly into the env file) |
-| `KM_SLACK_THREAD_TS` | exported by poller into Claude's env BEFORE `claude -p` launches (passed via `--thread` to km-slack post). The Stop hook gates its Slack branch on this var — when set, the poller is driving the reply and the Stop hook stays out of the way. |
+| `KM_SLACK_THREAD_TS` | exported by poller into Claude's env BEFORE `claude -p` launches (passed via `--thread` to km-slack post). The Stop hook gates ALL "Claude is waiting"-style notifications on this var — when set, the poller is driving the reply and the Stop hook suppresses both the email branch (6a) and the Slack-root branch (6b). "Claude is waiting" notifications fire only for terminal-initiated sessions (KM_SLACK_THREAD_TS unset). |
 | `KM_SLACK_THREADS_TABLE` | DDB table name for session-id persistence, injected by km create |
 
 **systemd EnvironmentFile gotcha:** `systemd` does NOT accept the shell-style

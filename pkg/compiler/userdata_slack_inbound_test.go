@@ -291,30 +291,36 @@ func TestUserdata_PollerPostsAfterDeleteMessage(t *testing.T) {
 	}
 }
 
-// TestUserdata_StopHookSkipsSlackWhenPollerDriving — Phase 67-11 Gap A follow-up.
-// Structural assertion: split rendered userdata on the # 6a. (email) and # 6b.
-// (Slack) markers and assert
-//   - email branch (6a) does NOT mention KM_SLACK_THREAD_TS (gate is Slack-only)
-//   - Slack branch (6b) gates on `-z "${KM_SLACK_THREAD_TS:-}"` — when the poller
-//     is driving the run it has exported KM_SLACK_THREAD_TS into Claude's env,
-//     so the Stop hook (which runs INSIDE Claude) sees it and skips its post,
-//     leaving the poller's own post-after-exit as the single thread reply.
+// TestUserdata_StopHookSkipsAllNotifyWhenPollerDriving — Phase 67-11 Gap A
+// follow-up, refined per operator feedback (2026-05-08): when the inbound
+// poller is driving the turn the operator is already on Slack and the poller
+// will deliver Claude's reply into that thread. A "Claude is waiting"-style
+// email or channel-root post is noise. Both the email branch (6a) AND the
+// Slack-root branch (6b) must be suppressed in that case. Terminal-initiated
+// sessions (KM_SLACK_THREAD_TS unset) keep the legacy behavior.
+//
+// Structural assertions:
+//   - The # 5a. top-level suppression gate sets do_email_branch=0 when
+//     KM_SLACK_THREAD_TS is non-empty — this is the single source of truth
+//     and short-circuits both 6a and 6b.
+//   - The # 6b. Slack branch keeps its own `-z "${KM_SLACK_THREAD_TS:-}"`
+//     check as a defensive local invariant (so a future refactor that moves
+//     or removes the 5a gate can't silently re-introduce the double-post bug).
 //
 // The earlier KM_SLACK_INBOUND_REPLY_HANDLED gate failed because that env var
 // was set by the poller AFTER claude exits, so it was never visible inside
-// the Claude process when the Stop hook fired — both posts ran (Stop hook's
-// fallback first, poller's .result second), or the .result post failed and
-// only the misleading "(no recent assistant text)" fallback landed.
-func TestUserdata_StopHookSkipsSlackWhenPollerDriving(t *testing.T) {
+// the Claude process when the Stop hook fired.
+func TestUserdata_StopHookSkipsAllNotifyWhenPollerDriving(t *testing.T) {
 	p := minimalSlackInboundProfile(t, true)
 	out := compileInboundUserData(t, p)
 
+	sec5aIdx := strings.Index(out, "# 5a.")
 	sec6aIdx := strings.Index(out, "# 6a.")
 	sec6bIdx := strings.Index(out, "# 6b.")
-	if sec6aIdx < 0 || sec6bIdx < 0 || sec6bIdx <= sec6aIdx {
-		t.Fatalf("# 6a. and # 6b. markers not found in expected order — structural assumption broken")
+	if sec5aIdx < 0 || sec6aIdx < 0 || sec6bIdx < 0 || sec5aIdx >= sec6aIdx || sec6bIdx <= sec6aIdx {
+		t.Fatalf("# 5a., # 6a., # 6b. markers not found in expected order — structural assumption broken")
 	}
-	section6a := out[sec6aIdx:sec6bIdx]
+	section5a := out[sec5aIdx:sec6aIdx]
 	// section6b extends from "# 6b." to "# 7." or end-of-string.
 	var section6b string
 	if rel := strings.Index(out[sec6bIdx:], "# 7."); rel > 0 {
@@ -323,16 +329,23 @@ func TestUserdata_StopHookSkipsSlackWhenPollerDriving(t *testing.T) {
 		section6b = out[sec6bIdx:]
 	}
 
-	// Email branch (6a) must NOT mention KM_SLACK_THREAD_TS — gate is Slack-only.
-	if strings.Contains(section6a, "KM_SLACK_THREAD_TS") {
-		t.Fatalf("KM_SLACK_THREAD_TS leaked into the email branch (# 6a.) — gate must be Slack-only to preserve email idle notifications\n%s", abbreviateUD(section6a))
+	// (1) The # 5a. top-level gate MUST suppress do_email_branch when
+	//     KM_SLACK_THREAD_TS is set. This is what makes Slack-initiated turns
+	//     skip BOTH the email post and the channel-root post.
+	if !strings.Contains(section5a, `-n "${KM_SLACK_THREAD_TS:-}"`) {
+		t.Fatalf("# 5a. top-level gate missing `-n \"${KM_SLACK_THREAD_TS:-}\"` check — Slack-initiated turns will still send 'Claude is waiting' notifications\n%s", abbreviateUD(section5a))
 	}
-	// Slack branch (6b) MUST gate on KM_SLACK_THREAD_TS being unset.
+	if !strings.Contains(section5a, "do_email_branch=0") {
+		t.Fatalf("# 5a. top-level gate must set do_email_branch=0 when KM_SLACK_THREAD_TS is set\n%s", abbreviateUD(section5a))
+	}
+
+	// (2) Slack branch (6b) keeps its defensive `-z "${KM_SLACK_THREAD_TS:-}"`
+	//     check so removing the 5a gate later can't silently regress double-posting.
 	if !strings.Contains(section6b, `-z "${KM_SLACK_THREAD_TS:-}"`) {
-		t.Fatalf("Stop hook Slack branch (# 6b.) missing `-z \"${KM_SLACK_THREAD_TS:-}\"` gate — poller-driven runs will double-post fallback + .result\n%s", abbreviateUD(section6b))
+		t.Fatalf("Stop hook Slack branch (# 6b.) missing defensive `-z \"${KM_SLACK_THREAD_TS:-}\"` gate — needed even with 5a in place\n%s", abbreviateUD(section6b))
 	}
-	// And the dead KM_SLACK_INBOUND_REPLY_HANDLED gate must be gone from both
-	// the Stop hook AND the poller (it never worked).
+
+	// (3) Dead KM_SLACK_INBOUND_REPLY_HANDLED gate must stay removed.
 	if strings.Contains(out, "KM_SLACK_INBOUND_REPLY_HANDLED") {
 		t.Fatalf("KM_SLACK_INBOUND_REPLY_HANDLED still present in userdata — was set after Claude exits so it was never visible inside the Stop hook; remove entirely")
 	}

@@ -665,6 +665,18 @@ elif [[ "$event" == "Stop" && "${KM_NOTIFY_ON_IDLE:-0}" == "1" ]]; then
   do_email_branch=1
 fi
 
+# 5a. Inbound-poller suppression. When KM_SLACK_THREAD_TS is set, this turn was
+#     initiated by a Slack message — the operator is already on Slack and the
+#     poller will deliver Claude's reply into that thread. A "Claude is waiting"
+#     email or channel-root post is noise in that case (the operator did not
+#     start the session from the terminal and is not awaiting a notification).
+#     Suppress BOTH the email branch (6a) and the Slack-root branch (6b).
+#     "Claude is waiting"-style notifications fire only for terminal-initiated
+#     sessions where KM_SLACK_THREAD_TS is unset.
+if [[ -n "${KM_SLACK_THREAD_TS:-}" ]]; then
+  do_email_branch=0
+fi
+
 if [[ "$do_email_branch" -eq 1 && "$cooldown_block" -ne 1 ]]; then
   case "$event" in
     Notification)
@@ -705,12 +717,13 @@ if [[ "$do_email_branch" -eq 1 && "$cooldown_block" -ne 1 ]]; then
   fi
 
   # 6b. Slack branch. Gated on enabled flag + non-empty channel ID + NOT a
-  #     poller-driven inbound run. KM_SLACK_THREAD_TS is exported into Claude's
-  #     env BEFORE launch (the inbound poller sets it; nothing else does), so
-  #     its presence is the reliable signal that "the poller is driving this
-  #     turn — do not post; the poller will post .result after Claude exits".
-  #     When KM_SLACK_THREAD_TS is unset, this is a normal Phase 63 idle
-  #     notification path and the Stop hook posts a top-level channel message.
+  #     poller-driven inbound run. The KM_SLACK_THREAD_TS check is also enforced
+  #     at the top-level # 5a. gate (which already short-circuited do_email_branch
+  #     to 0 in that case), so this inner check is defensive — kept as a local
+  #     invariant so future refactors can't regress double-posting if the
+  #     top-level gate is moved or removed. When KM_SLACK_THREAD_TS is unset,
+  #     this is a normal Phase 63 idle notification path and the Stop hook posts
+  #     a top-level channel message.
   if [[ "${KM_NOTIFY_SLACK_ENABLED:-0}" == "1" \
      && -n "${KM_SLACK_CHANNEL_ID:-}" \
      && -z "${KM_SLACK_THREAD_TS:-}" ]]; then
