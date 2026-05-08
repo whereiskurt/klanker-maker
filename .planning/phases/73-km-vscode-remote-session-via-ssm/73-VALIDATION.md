@@ -1,10 +1,11 @@
 ---
 phase: 73
 slug: km-vscode-remote-session-via-ssm
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: complete
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-05-06
+completed: 2026-05-08
 ---
 
 # Phase 73 — Validation Strategy
@@ -40,11 +41,29 @@ created: 2026-05-06
 
 ## Per-Task Verification Map
 
-(Populated by gsd-planner during plan generation. Initial placeholder.)
-
 | Task ID | Plan | Wave | Concern | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|---------|-----------|-------------------|-------------|--------|
-| 73-00-01 | 00 | 0 | wave-0 stubs | wave-0 | `go test ./internal/app/cmd/ -run TestVscode -count=1` | ❌ W0 | ⬜ pending |
+| 73-00-01 | 00 | 0 | pkg/sshkey stub compiles, tests skip | unit | `go test ./pkg/sshkey/... -count=1` | ✅ | ✅ |
+| 73-00-02 | 00 | 0 | sshconfig+vscode stubs compile, tests skip | unit | `go test ./internal/app/cmd/ -run "TestSSHConfig\|TestVSCodeStart\|TestVSCodeStatus" -count=1` | ✅ | ✅ |
+| 73-00-03 | 00 | 0 | profile+compiler stubs compile, tests skip | unit | `go test ./pkg/profile/... ./pkg/compiler/... -count=1` | ✅ | ✅ |
+| 73-01-01 | 01 | 1 | GenerateAndWrite implementation compiles | unit | `go build ./pkg/sshkey/... && go vet ./pkg/sshkey/...` | ✅ | ✅ |
+| 73-01-02 | 01 | 1 | All 7 keygen tests pass (mode, parse, comment, newline, parentdir, idempotent) | unit | `go test ./pkg/sshkey/... -count=1 -v` | ✅ | ✅ |
+| 73-02-01 | 02 | 1 | VSCodeEnabled field + IsVSCodeEnabled helper added | unit | `go build ./pkg/profile/... && go vet ./pkg/profile/...` | ✅ | ✅ |
+| 73-02-02 | 02 | 1 | TestVSCodeEnabled_DefaultTrue + TestVSCodeEnabled_False pass; JSON schema valid | unit | `go test ./pkg/profile/... -count=1 -run "TestVSCodeEnabled" -v && python3 -c "import json; json.load(open('pkg/profile/schemas/sandbox_profile.schema.json'))"` | ✅ | ✅ |
+| 73-03-01 | 03 | 1 | UpsertHost production impl builds (atomicWrite, managedSections, parseHostBlocks) | unit | `go build ./internal/app/cmd/... && go vet ./internal/app/cmd/...` | ✅ | ✅ |
+| 73-03-02 | 03 | 1 | RemoveHost production impl builds; idempotent paths handled | unit | `go build ./internal/app/cmd/... && go vet ./internal/app/cmd/...` | ✅ | ✅ |
+| 73-03-03 | 03 | 1 | All 9 TestSSHConfig_* tests pass (upsert/remove/preserve/idempotent cases) | unit | `go test ./internal/app/cmd/ -run TestSSHConfig -count=1 -v` | ✅ | ✅ |
+| 73-04-01 | 04 | 2 | NetworkConfig.VSCodeSSHPubKey field added to service_hcl.go | unit | `go build ./pkg/compiler/... && grep -n "VSCodeSSHPubKey" pkg/compiler/service_hcl.go` | ✅ | ✅ |
+| 73-04-02 | 04 | 2 | userDataParams gains VSCodeEnabled+VSCodeSSHPubKey; generateUserData validates missing pubkey | unit | `go build ./pkg/compiler/... && grep -n "VSCodeEnabled\|VSCodeSSHPubKey" pkg/compiler/userdata.go | head -10` | ✅ | ✅ |
+| 73-04-03 | 04 | 2 | Template conditional block emits sshd/authorized_keys/restorecon when VSCodeEnabled=true | unit | `go build ./pkg/compiler/... && grep -n "VSCodeEnabled\|VSCodeSSHPubKey\|restorecon" pkg/compiler/userdata.go | head -10` | ✅ | ✅ |
+| 73-04-04 | 04 | 2 | All 4 TestUserDataVSCode* tests pass including column-0 pubkey + missing-key error | unit | `go test ./pkg/compiler/... -run TestUserDataVSCode -count=1 -v` | ✅ | ✅ |
+| 73-05-01 | 05 | 3 | km create generates keypair + threads pubkey to NetworkConfig; build passes | unit | `make build && ./km validate profiles/learn.yaml` | ✅ | ✅ |
+| 73-06-01 | 06 | 4 | runVSCodeStart implemented; binary builds; vet clean | unit | `make build && ./km --help && go vet ./internal/app/cmd/...` | ✅ | ✅ |
+| 73-06-02 | 06 | 4 | runVSCodeStatus + root.go registration; km vscode subcommand discoverable | unit | `make build && ./km vscode --help && ./km vscode start --help && ./km vscode status --help` | ✅ | ✅ |
+| 73-06-03 | 06 | 4 | All 6 TestVSCode* tests pass (missing-key, port-forward args, output, status cases) | unit | `go test ./internal/app/cmd/ -run "TestVSCodeStart\|TestVSCodeStatus" -count=1 -v` | ✅ | ✅ |
+| 73-07-01 | 07 | 2 | km destroy cleanup block added; RemoveHost + key file deletion; build passes | unit | `make build && ./km destroy --help` | ✅ | ✅ |
+| 73-08-01 | 08 | 5 | docs/vscode.md exists with ≥ 80 lines | doc | `test -f docs/vscode.md && wc -l docs/vscode.md | awk '{ if ($1 < 80) exit 1 }'` | ✅ | ✅ |
+| 73-08-02 | 08 | 5 | CLAUDE.md gains km vscode CLI entries + VS Code Remote-SSH section | doc | `grep -c "km vscode start\|VS Code Remote-SSH (Phase 73)" CLAUDE.md | awk '{ if ($1 < 2) exit 1 }'` | ✅ | ✅ |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -52,11 +71,11 @@ created: 2026-05-06
 
 ## Wave 0 Requirements
 
-- [ ] `pkg/sshkey/keygen_test.go` — failing stubs for `GenerateAndWrite` (file modes, idempotency, pubkey parses back via `ssh.ParseAuthorizedKey`, comment field embedded correctly, parent dir created with 0700 if missing)
-- [ ] `internal/app/cmd/sshconfig_test.go` — failing stubs for the managed-block parser/writer (no file / empty file / no markers / markers + entries / multiple entries / preserve content outside markers / Host alias collision / line-ending handling LF vs CRLF)
-- [ ] `internal/app/cmd/vscode_test.go` — failing stubs for `start` and `status` (flag parsing, error messages for missing private key locally, SSM command construction for the status checks, port-forward command construction)
-- [ ] `pkg/profile/types_test.go` (or `validate_test.go`) — failing stubs for `vscodeEnabled` default-true semantics + nil-CLI handling
-- [ ] `pkg/compiler/userdata_test.go` — failing stubs for the conditional userdata block (emits when `VSCodeEnabled: true`, omits when `false`, embedded pubkey content is correct, `restorecon` line is present)
+- [x] `pkg/sshkey/keygen_test.go` — failing stubs for `GenerateAndWrite` (file modes, idempotency, pubkey parses back via `ssh.ParseAuthorizedKey`, comment field embedded correctly, parent dir created with 0700 if missing)
+- [x] `internal/app/cmd/sshconfig_test.go` — failing stubs for the managed-block parser/writer (no file / empty file / no markers / markers + entries / multiple entries / preserve content outside markers / Host alias collision / line-ending handling LF vs CRLF)
+- [x] `internal/app/cmd/vscode_test.go` — failing stubs for `start` and `status` (flag parsing, error messages for missing private key locally, SSM command construction for the status checks, port-forward command construction)
+- [x] `pkg/profile/types_test.go` (or `validate_test.go`) — failing stubs for `vscodeEnabled` default-true semantics + nil-CLI handling
+- [x] `pkg/compiler/userdata_test.go` — failing stubs for the conditional userdata block (emits when `VSCodeEnabled: true`, omits when `false`, embedded pubkey content is correct, `restorecon` line is present)
 
 *Wave 0 is mandatory because the phase introduces multiple new code surfaces (`pkg/sshkey/`, `internal/app/cmd/sshconfig.go`, `internal/app/cmd/vscode.go`, schema field, userdata template branch). Stubs lock contracts before implementation.*
 
@@ -77,11 +96,11 @@ created: 2026-05-06
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references (sshkey package, sshconfig parser, vscode subcommand, profile schema, userdata template)
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 90s
-- [ ] `nyquist_compliant: true` set in frontmatter (after planner populates Per-Task Verification Map)
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (sshkey package, sshconfig parser, vscode subcommand, profile schema, userdata template)
+- [x] No watch-mode flags
+- [x] Feedback latency < 90s
+- [x] `nyquist_compliant: true` set in frontmatter (after planner populates Per-Task Verification Map)
 
-**Approval:** pending
+**Approval:** approved 2026-05-08
