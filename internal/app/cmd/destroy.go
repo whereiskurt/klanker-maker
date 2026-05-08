@@ -562,6 +562,9 @@ locals {
 		_ = localnumber.Save(lnState)
 	}
 
+	// Phase 73: clean up VS Code Remote-SSH operator state after successful AWS teardown.
+	cleanupVSCodeState(sandboxID)
+
 	fmt.Printf("Sandbox %s destroyed successfully.\n", sandboxID)
 
 	return nil
@@ -738,8 +741,42 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 		_ = localnumber.Save(lnState)
 	}
 
+	// Phase 73: clean up VS Code Remote-SSH operator state after successful Docker teardown.
+	cleanupVSCodeState(sandboxID)
+
 	fmt.Printf("Sandbox %s destroyed successfully.\n", sandboxID)
 	return nil
+}
+
+// cleanupVSCodeState removes the operator-side VS Code Remote-SSH state for a sandbox.
+// Idempotent — missing files and missing ssh-config entries are non-errors (works for
+// sandboxes created before Phase 73). Runs AFTER successful AWS teardown so that
+// failed destroys can be retried with the keypair still on disk.
+func cleanupVSCodeState(sandboxID string) {
+	homeDir, herr := os.UserHomeDir()
+	if herr != nil {
+		log.Warn().Err(herr).Str("sandbox_id", sandboxID).
+			Msg("could not locate home dir for vscode cleanup (non-fatal)")
+		return
+	}
+
+	// Remove the Host km-<id> block from ~/.ssh/config.
+	sshConfigPath := filepath.Join(homeDir, ".ssh", "config")
+	alias := "km-" + sandboxID
+	if rmErr := RemoveHost(sshConfigPath, alias); rmErr != nil {
+		log.Warn().Err(rmErr).Str("sandbox_id", sandboxID).
+			Msg("failed to remove ssh-config entry for vscode (non-fatal)")
+	}
+
+	// Delete ~/.km/keys/<sandbox-id> and ~/.km/keys/<sandbox-id>.pub.
+	keysDir := filepath.Join(homeDir, ".km", "keys")
+	for _, name := range []string{sandboxID, sandboxID + ".pub"} {
+		keyFile := filepath.Join(keysDir, name)
+		if err := os.Remove(keyFile); err != nil && !os.IsNotExist(err) {
+			log.Warn().Err(err).Str("file", keyFile).
+				Msg("failed to remove vscode key file (non-fatal)")
+		}
+	}
 }
 
 // cleanupGitHubTokenResources removes all resources created by the github-token
