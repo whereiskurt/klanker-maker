@@ -53,7 +53,11 @@ func newVSCodeStartCmd(cfg *config.Config, fetcher SandboxFetcher, execFn ShellE
 			if err != nil {
 				return err
 			}
-			return runVSCodeStart(c.Context(), cfg, f, e, s, args[0], localPort)
+			sandboxID, err := ResolveSandboxID(c.Context(), cfg, args[0])
+			if err != nil {
+				return err
+			}
+			return runVSCodeStart(c.Context(), cfg, f, e, s, sandboxID, localPort)
 		},
 	}
 	cmd.Flags().IntVar(&localPort, "local-port", 2222, "Local port for the SSM forward (default 2222)")
@@ -71,7 +75,11 @@ func newVSCodeStatusCmd(cfg *config.Config, fetcher SandboxFetcher, ssmClient SS
 			if err != nil {
 				return err
 			}
-			return runVSCodeStatus(c.Context(), cfg, f, s, args[0])
+			sandboxID, err := ResolveSandboxID(c.Context(), cfg, args[0])
+			if err != nil {
+				return err
+			}
+			return runVSCodeStatus(c.Context(), cfg, f, s, sandboxID)
 		},
 	}
 }
