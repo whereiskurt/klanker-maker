@@ -45,6 +45,13 @@ Examples:
   # Combine all opt-ins for a full cleanup pass
   km doctor --dry-run=false --delete-ebs --delete-sqs --delete-s3 --delete-lambdas
 
+  # Same thing, shortcut form
+  km doctor --dry-run=false --with-deletes
+
+  # Preview every potential delete without acting (combine the meta-flag with
+  # the default --dry-run=true)
+  km doctor --with-deletes
+
   # Run regional checks against every configured region
   km doctor --all-regions
 
@@ -81,6 +88,12 @@ Flags:
                   the check uses a per-sandbox component allowlist, not a
                   denylist, so a future platform Lambda can't accidentally
                   be classified as orphan.
+  --with-deletes  Shortcut for --delete-ebs --delete-sqs --delete-s3
+                  --delete-lambdas. Pair with --dry-run=false for a full
+                  cleanup pass; with the default --dry-run=true it just
+                  makes every report-only check consistently surface what
+                  it would delete. Per-resource flags can still be added
+                  individually — --with-deletes is a strict superset.
   --all-regions   Run regional checks (VPC, AMIs) against PrimaryRegion plus
                   every region listed in KM_REPLICA_REGION (CSV).
 

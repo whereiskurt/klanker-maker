@@ -1856,6 +1856,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 	var deleteSQS bool
 	var deleteS3 bool
 	var deleteLambdas bool
+	var withDeletes bool
 
 	cmd := &cobra.Command{
 		Use:          "doctor",
@@ -1871,6 +1872,19 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 				provider = v
 			default:
 				return fmt.Errorf("unsupported config type %T", cfg)
+			}
+			// --with-deletes is a meta-flag: it OR-merges into every per-resource
+			// opt-in. Each --delete-X flag still works on its own, and an
+			// explicit --delete-X=true on the command line is unaffected; the
+			// only effect is that --with-deletes flips any unset opt-ins on.
+			// Pair with --dry-run=false to actually delete; with the default
+			// --dry-run=true it just makes the report-only paths consistent
+			// across every check (each one shows what it would delete).
+			if withDeletes {
+				deleteEBS = true
+				deleteSQS = true
+				deleteS3 = true
+				deleteLambdas = true
 			}
 			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas)
 		},
@@ -1889,6 +1903,8 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 		"With --dry-run=false, delete orphaned S3 artifact and transcript prefixes for sandboxes whose DynamoDB row is gone (sweeps artifacts/{sandbox-id}/ and transcripts/{sandbox-id}/)")
 	cmd.Flags().BoolVar(&deleteLambdas, "delete-lambdas", false,
 		"With --dry-run=false, delete per-sandbox Lambda functions (budget-enforcer, github-token-refresher) whose sandbox row is gone from DynamoDB. Platform Lambdas are never touched.")
+	cmd.Flags().BoolVar(&withDeletes, "with-deletes", false,
+		"Shortcut for --delete-ebs --delete-sqs --delete-s3 --delete-lambdas. Pair with --dry-run=false for a full cleanup pass; with --dry-run=true (default) shows what each opt-in would clean.")
 	return cmd
 }
 

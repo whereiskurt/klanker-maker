@@ -659,6 +659,74 @@ func TestDoctorCmd_CommandShape(t *testing.T) {
 	}
 }
 
+// TestDoctorCmd_WithDeletes_EnablesAllDeleteOptIns verifies that the
+// --with-deletes meta-flag OR-merges into every per-resource opt-in.
+// The flag exists as a shortcut so operators don't have to type out
+// --delete-ebs --delete-sqs --delete-s3 --delete-lambdas every time.
+func TestDoctorCmd_WithDeletes_EnablesAllDeleteOptIns(t *testing.T) {
+	deps := allOKDeps()
+	cmd := NewDoctorCmdWithDeps(minimalConfig(), deps)
+	cmd.SetOut(new(nopWriter))
+	if err := cmd.Flags().Set("with-deletes", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.RunE(cmd, []string{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !deps.DeleteEBS {
+		t.Error("--with-deletes should set DeleteEBS=true")
+	}
+	if !deps.DeleteSQS {
+		t.Error("--with-deletes should set DeleteSQS=true")
+	}
+	if !deps.DeleteS3 {
+		t.Error("--with-deletes should set DeleteS3=true")
+	}
+	if !deps.DeleteLambdas {
+		t.Error("--with-deletes should set DeleteLambdas=true")
+	}
+}
+
+// TestDoctorCmd_NoWithDeletes_LeavesDeleteOptInsAlone is the inverse — a
+// plain `km doctor` run must not enable any --delete-* path. Locks in the
+// default-safe property so a future refactor that conflates --with-deletes
+// with the always-on path would fail loudly.
+func TestDoctorCmd_NoWithDeletes_LeavesDeleteOptInsAlone(t *testing.T) {
+	deps := allOKDeps()
+	cmd := NewDoctorCmdWithDeps(minimalConfig(), deps)
+	cmd.SetOut(new(nopWriter))
+	if err := cmd.RunE(cmd, []string{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if deps.DeleteEBS || deps.DeleteSQS || deps.DeleteS3 || deps.DeleteLambdas {
+		t.Errorf("default run must not enable any --delete-* opt-in; got EBS=%v SQS=%v S3=%v Lambdas=%v",
+			deps.DeleteEBS, deps.DeleteSQS, deps.DeleteS3, deps.DeleteLambdas)
+	}
+}
+
+// TestDoctorCmd_IndividualDeleteFlag_DoesNotImplyOthers verifies that
+// passing one --delete-X flag doesn't silently turn on the others — only
+// --with-deletes is the meta-flag. Catches a regression where someone
+// might be tempted to "simplify" by aliasing --delete-ebs to --with-deletes.
+func TestDoctorCmd_IndividualDeleteFlag_DoesNotImplyOthers(t *testing.T) {
+	deps := allOKDeps()
+	cmd := NewDoctorCmdWithDeps(minimalConfig(), deps)
+	cmd.SetOut(new(nopWriter))
+	if err := cmd.Flags().Set("delete-ebs", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.RunE(cmd, []string{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !deps.DeleteEBS {
+		t.Error("--delete-ebs alone should still set DeleteEBS=true")
+	}
+	if deps.DeleteSQS || deps.DeleteS3 || deps.DeleteLambdas {
+		t.Errorf("--delete-ebs alone must not enable other opt-ins; got SQS=%v S3=%v Lambdas=%v",
+			deps.DeleteSQS, deps.DeleteS3, deps.DeleteLambdas)
+	}
+}
+
 func TestDoctorCmd_AllChecksPass_ExitZero(t *testing.T) {
 	deps := allOKDeps()
 	cmd := NewDoctorCmdWithDeps(minimalConfig(), deps)
