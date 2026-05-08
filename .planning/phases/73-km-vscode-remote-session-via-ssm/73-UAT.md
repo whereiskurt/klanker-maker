@@ -290,25 +290,34 @@ scenarios: 6
    echo "nc PID: $NC_PID"
    ```
 
-3. Attempt to start on the occupied port (expect bind failure from SSM):
+3. Attempt to start on the occupied port — expect a clean km-side refusal
+   (not a tunnel that silently fails):
    ```bash
    km vscode start $SB
-   # This should fail because port 2222 is occupied
+   # Expected error:
+   #   local port 2222 is already in use — pick a different one with
+   #   --local-port (e.g. 22122)
    ```
 
-4. Start on an alternate port:
+4. Start on an alternate port (avoid 9222 — Chrome/VS Code DevTools default —
+   and 9229 — Node debugger). Use 22122 or another high port:
    ```bash
-   km vscode start $SB --local-port 9222
-   # This should succeed and block — Ctrl-C after the instructions print
+   # Terminal A (this blocks):
+   km vscode start $SB --local-port 22122
    ```
 
-5. Verify the ssh-config Host entry uses the override port:
+5. In a second terminal, verify the ssh-config Host entry uses the override
+   port AND that ssh actually lands on the sandbox:
    ```bash
+   # Terminal B
    grep -A 5 "Host km-$SB" ~/.ssh/config | grep Port
-   ```
-   Expected: `Port 9222`
+   # Expected: Port 22122
 
-6. Kill the nc process and destroy the sandbox:
+   ssh km-$SB true && echo "✓ ssh works on port 22122"
+   # Expected: lands on sandbox, exits 0
+   ```
+
+6. Ctrl-C terminal A, kill the nc process, and destroy the sandbox:
    ```bash
    kill $NC_PID 2>/dev/null || true
    km destroy $SB --remote --yes
@@ -316,9 +325,9 @@ scenarios: 6
 
 ### Expected Outcome
 
-- Step 3: `km vscode start` fails (SSM bind error for port 2222) — not a crash, a clear error
-- Step 4: `km vscode start --local-port 9222` succeeds, prints "✓ Forwarding localhost:9222 → sandbox:22"
-- Step 5: `grep Port` shows `Port 9222` in the Host block
+- Step 3: `km vscode start` fails with a clear "local port N is already in use" error — refuses cleanly before opening the SSM session
+- Step 4: `km vscode start --local-port 22122` succeeds, prints `✓ Forwarding localhost:22122 → sandbox:22`
+- Step 5: `grep Port` shows `Port 22122` in the Host block; `ssh` succeeds via the tunnel
 - Step 6: Cleanup completes; Host block and keypair files removed by destroy
 
 - [ ] Scenario 5 passed

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -110,6 +111,17 @@ func resolveVSCodeDeps(ctx context.Context, cfg *config.Config, fetcher SandboxF
 // check, upserts the ssh-config entry, prints the operator instruction block, then opens the
 // foreground SSM port-forward.
 func runVSCodeStart(ctx context.Context, _ *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, localPort int) error {
+	// Probe the local port before doing any AWS work or writing ssh-config.
+	// Common debug ports (9222 Chrome DevTools, 9229 Node, 5900 VNC) often
+	// already have a process bound — session-manager-plugin will silently
+	// fail to bind and ssh hits the squatter, producing a confusing
+	// "Connection closed by 127.0.0.1" error.
+	probeLn, probeErr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
+	if probeErr != nil {
+		return fmt.Errorf("local port %d is already in use — pick a different one with --local-port (e.g. 22122)", localPort)
+	}
+	probeLn.Close()
+
 	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
 	if err != nil {
 		return fmt.Errorf("fetch sandbox: %w", err)

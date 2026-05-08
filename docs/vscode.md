@@ -61,7 +61,9 @@ km create profiles/<your-profile>.yaml --alias my-poc
 # 2. Get the sandbox ID
 SB=$(km list | awk '/my-poc/ {print $1}')
 
-# 3. Open the SSM port-forward (blocks until Ctrl-C)
+# 3. Open the SSM port-forward IN A DEDICATED TERMINAL (blocks until Ctrl-C).
+#    The tunnel is foreground-only — every ssh / VS Code connection runs in
+#    a separate terminal while this one stays open.
 km vscode start $SB
 #    Output:
 #      ✓ Updated ~/.ssh/config (Host: km-<sandbox-id>)
@@ -69,10 +71,13 @@ km vscode start $SB
 #      In VS Code: F1 → "Remote-SSH: Connect to Host..." → km-$SB
 #      Press Ctrl-C to close the tunnel (sshd keeps running on the sandbox).
 
-# 4. Connect from VS Code
-#    F1 → "Remote-SSH: Connect to Host..." → km-$SB
-#    VS Code installs vscode-server on first connect (~50 MB), then opens an empty workspace.
-#    File → Open Folder → /workspace
+# 4. In a SECOND terminal, connect from VS Code or ssh:
+#    a) ssh sanity check
+ssh km-$SB true && echo "✓ tunnel works"
+#
+#    b) VS Code: F1 → "Remote-SSH: Connect to Host..." → km-$SB
+#       VS Code installs vscode-server on first connect (~50 MB),
+#       then opens an empty workspace.  File → Open Folder → /workspace
 
 # 5. Detach
 #    Ctrl-C the terminal running km vscode start.
@@ -220,20 +225,25 @@ ls learned.vscode-learn-*.yaml   # generated profile with actual suffixes hit
 
 ## Troubleshooting
 
-**"Private key for sb-X not found at ~/.km/keys/sb-X"**
+**"Private key for <sandbox-id> not found at ~/.km/keys/<sandbox-id>"**
 Cross-machine portability gap. Keys are generated on the creation machine only. Copy
-`~/.km/keys/sb-X` and `~/.km/keys/sb-X.pub` from the machine where `km create` was run.
+`~/.km/keys/<sandbox-id>` and `~/.km/keys/<sandbox-id>.pub` from the machine where `km create` was run.
 See [Limitations](#limitations).
 
 **"VS Code not enabled in this sandbox's profile"**
 The profile had `spec.cli.vscodeEnabled: false`. sshd was not provisioned at boot.
 Recreate the sandbox with the default (`vscodeEnabled` omitted = true).
 
-**"Local port 2222 already in use"**
-Another process holds port 2222. Use `--local-port 9222` (or any free port):
+**"local port N is already in use — pick a different one with --local-port"**
+Another process holds the port. `km vscode start` probes the local port before
+opening the SSM tunnel and refuses cleanly when it's occupied. Pick a free
+high port:
 ```bash
-km vscode start $SB --local-port 9222
+km vscode start $SB --local-port 22122
 ```
+Avoid common debug ports — Chrome and VS Code DevTools default to `9222`,
+Node's inspector to `9229`, VNC to `5900`. They accept TCP and silently break
+ssh.
 
 **VS Code hangs at "Setting up VS Code Server"**
 The sandbox can't reach Microsoft download endpoints. Check `spec.network.egress.allowedDNSSuffixes`
