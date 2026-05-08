@@ -905,6 +905,8 @@ func TestUserDataEFSMount(t *testing.T) {
 	net := &NetworkConfig{
 		VPCID:           "vpc-test",
 		EFSFilesystemID: "fs-test123",
+		// VSCodeSSHPubKey required when VSCodeEnabled=true (default). Phase 73.
+		VSCodeSSHPubKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 km-test-key",
 	}
 
 	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, net)
@@ -958,6 +960,8 @@ func TestUserDataEFSCustomMountPoint(t *testing.T) {
 	net := &NetworkConfig{
 		VPCID:           "vpc-test",
 		EFSFilesystemID: "fs-custom123",
+		// VSCodeSSHPubKey required when VSCodeEnabled=true (default). Phase 73.
+		VSCodeSSHPubKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 km-test-key",
 	}
 
 	out, err := generateUserData(p, "test-sb", nil, "my-bucket", false, net)

@@ -16,6 +16,8 @@ func testNetwork() *compiler.NetworkConfig {
 		VPCID:             "vpc-test123",
 		PublicSubnets:     []string{"subnet-pub1", "subnet-pub2"},
 		AvailabilityZones: []string{"us-east-1a", "us-east-1b"},
+		// VSCodeSSHPubKey is required when VSCodeEnabled=true (default). Phase 73.
+		VSCodeSSHPubKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 km-test-key",
 	}
 }
 

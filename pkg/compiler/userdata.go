@@ -2912,6 +2912,13 @@ type userDataParams struct {
 	// bash script, its systemd unit, and the systemctl enable/start lines.
 	// Set from profile.Spec.CLI.NotifySlackInboundEnabled (Phase 67).
 	SlackInboundEnabled bool
+	// VSCodeEnabled gates the cloud-init block that enables sshd and writes authorized_keys.
+	// Set from profile.IsVSCodeEnabled(p.Spec.CLI). Phase 73.
+	VSCodeEnabled bool
+	// VSCodeSSHPubKey is the single-line OpenSSH ed25519 public key content (no trailing newline)
+	// generated locally by sshkey.GenerateAndWrite during km create. Empty when VSCodeEnabled
+	// is false. Phase 73.
+	VSCodeSSHPubKey string
 	// NotifySlackEnabled gates conditional emission of the runtime SSM-fetch
 	// bootstrap step that polls /sandbox/{id}/slack-channel-id and
 	// /km/slack/bridge-url, writing them into /etc/profile.d/km-slack-runtime.sh.
@@ -3326,6 +3333,18 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 
 	// Learn mode: enable --observe on eBPF enforcer for traffic recording.
 	params.LearnMode = p.Spec.Observability.LearnMode
+
+	// Phase 73: VS Code Remote-SSH access (default true).
+	// Only validate when network is non-nil (EC2 compile path). When network is nil
+	// (ECS/Docker compile paths and unit tests), VSCodeEnabled has no effect (the
+	// template gate prevents the block from rendering without a pubkey).
+	params.VSCodeEnabled = profile.IsVSCodeEnabled(p.Spec.CLI)
+	if network != nil {
+		params.VSCodeSSHPubKey = network.VSCodeSSHPubKey
+		if params.VSCodeEnabled && params.VSCodeSSHPubKey == "" {
+			return "", fmt.Errorf("VSCodeEnabled=true but VSCodeSSHPubKey is empty — run `make build && km init --sidecars` to refresh the management Lambda or pass --remote=false to use a local create")
+		}
+	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, params); err != nil {
