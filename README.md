@@ -214,6 +214,10 @@ A sandbox is a **compiled policy object** - the YAML declares the constraints, t
 
 Klanker Maker is itself an AWS application. The `km` CLI is the front door, but most of the platform runs as Lambdas, EventBridge schedules, DynamoDB tables, and SQS queues - so a sandbox can be created, modified, or destroyed from anywhere there's AWS API access.
 
+![Klanker Maker AWS services overview](docs/aws-services-overview.png)
+
+Editable source: [`docs/aws-services-overview.drawio`](docs/aws-services-overview.drawio) - open in [app.diagrams.net](https://app.diagrams.net) or the VS Code Draw.io Integration extension.
+
 | Service | Role |
 |---|---|
 | **EventBridge Scheduler** | Drives `km at` deferred and recurring operations (one-shot creates, nightly destroys, recurring agent runs). Per-sandbox TTL schedules trigger the TTL handler Lambda. |
@@ -914,12 +918,6 @@ km CLI / ConfigUI
 ```
 
 Editable architecture diagram: [`docs/sandbox-architecture.excalidraw`](docs/sandbox-architecture.excalidraw) - open in [excalidraw.com](https://excalidraw.com) or the VS Code Excalidraw extension.
-
-### AWS services at a glance
-
-![Klanker Maker AWS services overview](docs/aws-services-overview.png)
-
-Editable source: [`docs/aws-services-overview.drawio`](docs/aws-services-overview.drawio) - open in [app.diagrams.net](https://app.diagrams.net) or the VS Code Draw.io Integration extension.
 
 ---
 
