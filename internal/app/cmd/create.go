@@ -1901,6 +1901,25 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		}
 	}
 
+	// Phase 73: generate per-sandbox VS Code SSH keypair on the operator's laptop
+	// before remote compile. The pubkey is embedded into the userdata template at
+	// boot (Plan 73-04). Mirrors runCreate Step 6d so --remote and --local both
+	// produce identical authorized_keys content.
+	if profile.IsVSCodeEnabled(resolvedProfile.Spec.CLI) {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("locate home directory for vscode keypair: %w", err)
+		}
+		privPath := filepath.Join(homeDir, ".km", "keys", sandboxID)
+		pubPath := privPath + ".pub"
+		pubLine, err := sshkey.GenerateAndWrite(privPath, pubPath, "km-"+sandboxID)
+		if err != nil {
+			return "", fmt.Errorf("generate vscode ssh keypair: %w", err)
+		}
+		network.VSCodeSSHPubKey = pubLine
+		fmt.Fprintf(os.Stderr, "  ✓ VS Code keypair written to %s\n", privPath)
+	}
+
 	// Step 7: Compile profile into artifacts
 	artifacts, err := compiler.Compile(resolvedProfile, sandboxID, onDemand, network, remoteAmiBDMDevices)
 	if err != nil {
