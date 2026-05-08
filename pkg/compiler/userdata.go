@@ -1785,6 +1785,20 @@ WantedBy=multi-user.target
 SLACKINBOUNDUNIT
 echo "[km-bootstrap] km-slack-inbound-poller.service installed"
 {{- end }}
+{{- if .VSCodeEnabled }}
+# Phase 73: VS Code Remote-SSH access (sshd + authorized_keys + SELinux context)
+systemctl daemon-reload
+systemctl enable --now sshd
+mkdir -p /home/sandbox/.ssh
+chmod 700 /home/sandbox/.ssh
+cat > /home/sandbox/.ssh/authorized_keys << 'KEY'
+{{ .VSCodeSSHPubKey }}
+KEY
+chmod 600 /home/sandbox/.ssh/authorized_keys
+chown -R sandbox:sandbox /home/sandbox/.ssh
+command -v restorecon >/dev/null 2>&1 && restorecon -R -v /home/sandbox/.ssh || true
+echo "[km-bootstrap] VS Code Remote-SSH configured (authorized_keys written)"
+{{- end }}
 
 # km-recv: read and display signed emails from /var/mail/km/new/
 # Usage: km-recv [--json] [--watch] [--mark-read]
