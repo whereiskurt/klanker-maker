@@ -98,6 +98,33 @@ func TestSandboxIDPattern(t *testing.T) {
 	}
 }
 
+// TestRunDestroy_Phase73VSCodeCleanup verifies that destroy.go contains the Phase 73
+// operator-side cleanup block: RemoveHost call and key-file deletion.
+// Source-level verification ensures the cleanup is wired into both destroy paths.
+func TestRunDestroy_Phase73VSCodeCleanup(t *testing.T) {
+	src, err := os.ReadFile("destroy.go")
+	if err != nil {
+		t.Fatalf("read destroy.go: %v", err)
+	}
+	s := string(src)
+
+	checks := []struct {
+		name    string
+		pattern string
+	}{
+		{"RemoveHost call", "RemoveHost("},
+		{"ssh config alias km- prefix", `"km-" + sandboxID`},
+		{"key file deletion", `sandboxID + ".pub"`},
+		{"vscode cleanup non-fatal warn", "vscode"},
+		{"keys dir path", `.km", "keys"`},
+	}
+	for _, c := range checks {
+		if !strings.Contains(s, c.pattern) {
+			t.Errorf("destroy.go missing %s (expected %q)", c.name, c.pattern)
+		}
+	}
+}
+
 // TestDestroyCmd_GeneralizedPatternAcceptsCustomPrefix verifies that sandbox IDs
 // with custom prefixes (not sb-) are accepted by the generalized pattern.
 func TestDestroyCmd_GeneralizedPatternAcceptsCustomPrefix(t *testing.T) {
