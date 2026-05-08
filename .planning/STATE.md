@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: Completed 73-06-PLAN.md
-last_updated: "2026-05-08T00:38:33.176Z"
+stopped_at: Completed 73-08-PLAN.md
+last_updated: "2026-05-08T01:06:45.762Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 77
   completed_phases: 69
   total_plans: 284
-  completed_plans: 251
+  completed_plans: 252
   percent: 93
 ---
 
@@ -291,6 +291,7 @@ Progress: [█████████░] 93%
 | Phase 73-km-vscode-remote-session-via-ssm P04 | 6min | 4 tasks | 4 files |
 | Phase 73 P05 | 352 | 1 tasks | 1 files |
 | Phase 73-km-vscode-remote-session-via-ssm P06 | 900 | 3 tasks | 3 files |
+| Phase 73-km-vscode-remote-session-via-ssm P08 | 158 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -829,6 +830,8 @@ Recent decisions affecting current work:
 - [Phase 73]: Keypair generation inserted as Step 6d in runCreate between Slack resolution and compiler.Compile for fail-fast before AWS provisioning
 - [Phase 73-km-vscode-remote-session-via-ssm]: parseVSCodeStatus extracted as shared helper so both runVSCodeStart pre-flight and runVSCodeStatus share identical 4-case sshd/authkeys discrimination
 - [Phase 73-km-vscode-remote-session-via-ssm]: vscode_test.go kept in package cmd (white-box) to allow direct calls to runVSCodeStart/runVSCodeStatus; vsCodeSSMMock defined locally since agent_test.go mocks are in cmd_test package
+- [Phase 73-km-vscode-remote-session-via-ssm]: docs/vscode.md follows slack-notifications.md structural pattern with ToC, section tables, and code-block lifecycle
+- [Phase 73-km-vscode-remote-session-via-ssm]: CLAUDE.md vscode bullets placed after km slack rotate-token; VS Code section placed after Phase 68 block before Architecture
 
 ### Roadmap Evolution
 
@@ -920,6 +923,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-08T00:38:33.169Z
-Stopped at: Completed 73-06-PLAN.md
+Last session: 2026-05-08T01:06:45.756Z
+Stopped at: Completed 73-08-PLAN.md
 Resume file: None
