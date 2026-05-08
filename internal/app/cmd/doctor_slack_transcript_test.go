@@ -216,7 +216,7 @@ func TestDoctor_SlackTranscriptStaleObjects(t *testing.T) {
 	listIDs := func(_ context.Context) ([]string, error) {
 		return []string{"sb-a", "sb-b"}, nil
 	}
-	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, true)
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, true, false)
 	if r.Status != CheckWarn {
 		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
 	}
@@ -252,7 +252,7 @@ func TestDoctor_SlackTranscriptStaleObjects_AllLive(t *testing.T) {
 	listIDs := func(_ context.Context) ([]string, error) {
 		return []string{"sb-a", "sb-b", "sb-c"}, nil // sb-c has no transcripts yet, that's fine
 	}
-	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, true)
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, true, false)
 	if r.Status != CheckOK {
 		t.Fatalf("expected OK, got %s (msg=%s)", r.Status, r.Message)
 	}
@@ -268,7 +268,7 @@ func TestDoctor_SlackTranscriptStaleObjects_NoPrefixes(t *testing.T) {
 	listIDs := func(_ context.Context) ([]string, error) {
 		return []string{"sb-a"}, nil
 	}
-	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, true)
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, true, false)
 	if r.Status != CheckOK {
 		t.Fatalf("expected OK, got %s", r.Status)
 	}
@@ -282,7 +282,7 @@ func TestDoctor_SlackTranscriptStaleObjects_NoPrefixes(t *testing.T) {
 func TestDoctor_SlackTranscriptStaleObjects_S3Error(t *testing.T) {
 	s3Cli := &fakeS3List{listErr: errors.New("AccessDenied")}
 	listIDs := func(_ context.Context) ([]string, error) { return nil, nil }
-	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, true)
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, true, false)
 	if r.Status != CheckWarn {
 		t.Fatalf("expected WARN on S3 error, got %s", r.Status)
 	}
@@ -293,7 +293,7 @@ func TestDoctor_SlackTranscriptStaleObjects_S3Error(t *testing.T) {
 
 // TestDoctor_SlackTranscriptStaleObjects_NilDeps: nil deps → SKIPPED.
 func TestDoctor_SlackTranscriptStaleObjects_NilDeps(t *testing.T) {
-	r := checkSlackTranscriptStaleObjects(context.Background(), nil, "bucket", nil, true)
+	r := checkSlackTranscriptStaleObjects(context.Background(), nil, "bucket", nil, true, false)
 	if r.Status != CheckSkipped {
 		t.Fatalf("expected SKIPPED, got %s", r.Status)
 	}
@@ -303,7 +303,7 @@ func TestDoctor_SlackTranscriptStaleObjects_NilDeps(t *testing.T) {
 func TestDoctor_SlackTranscriptStaleObjects_NoBucket(t *testing.T) {
 	s3Cli := &fakeS3List{}
 	listIDs := func(_ context.Context) ([]string, error) { return nil, nil }
-	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "", listIDs, true)
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "", listIDs, true, false)
 	if r.Status != CheckSkipped {
 		t.Fatalf("expected SKIPPED, got %s", r.Status)
 	}
@@ -330,7 +330,7 @@ func TestDoctor_SlackTranscriptStaleObjects_DryRunTrue_NoDestructiveCalls(t *tes
 	listIDs := func(_ context.Context) ([]string, error) {
 		return []string{"sb-a"}, nil
 	}
-	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, true)
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, true, false)
 	if r.Status != CheckWarn {
 		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
 	}
@@ -368,7 +368,7 @@ func TestDoctor_SlackTranscriptStaleObjects_DryRunFalse_HappyPath(t *testing.T) 
 	listIDs := func(_ context.Context) ([]string, error) {
 		return []string{"sb-a"}, nil
 	}
-	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, false)
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, false, true)
 	if r.Status != CheckWarn {
 		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
 	}
@@ -416,7 +416,7 @@ func TestDoctor_SlackTranscriptStaleObjects_DryRunFalse_PartialFailure(t *testin
 	listIDs := func(_ context.Context) ([]string, error) {
 		return []string{}, nil // no live sandboxes — both prefixes are stale
 	}
-	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, false)
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, false, true)
 	if r.Status != CheckWarn {
 		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
 	}
@@ -462,7 +462,7 @@ func TestDoctor_SlackTranscriptStaleObjects_DryRunFalse_MultiPage(t *testing.T) 
 	listIDs := func(_ context.Context) ([]string, error) {
 		return []string{}, nil
 	}
-	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, false)
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, false, true)
 	if r.Status != CheckWarn {
 		t.Fatalf("expected WARN, got %s (msg=%s)", r.Status, r.Message)
 	}
@@ -475,5 +475,32 @@ func TestDoctor_SlackTranscriptStaleObjects_DryRunFalse_MultiPage(t *testing.T) 
 	}
 	if !strings.Contains(r.Message, "1500 objects total") {
 		t.Errorf("expected '1500 objects total' in message, got: %s", r.Message)
+	}
+}
+
+// TestDoctor_SlackTranscriptStaleObjects_DryRunFalseWithoutDeleteS3_NoDestructiveCalls
+// verifies the explicit-opt-in property: --dry-run=false alone is NOT enough
+// to delete transcript prefixes — the operator must also pass --delete-s3.
+// Same gate as checkOrphanedArtifacts. Transcripts can hold conversation
+// history operators may want to retain.
+func TestDoctor_SlackTranscriptStaleObjects_DryRunFalseWithoutDeleteS3_NoDestructiveCalls(t *testing.T) {
+	s3Cli := &fakeS3List{
+		pages: []*s3.ListObjectsV2Output{
+			{CommonPrefixes: []s3types.CommonPrefix{{Prefix: awssdk.String("transcripts/sb-c/")}}},
+		},
+	}
+	listIDs := func(_ context.Context) ([]string, error) { return nil, nil }
+	r := checkSlackTranscriptStaleObjects(context.Background(), s3Cli, "test-bucket", listIDs, false, false)
+	if r.Status != CheckWarn {
+		t.Fatalf("expected WARN, got %s: %s", r.Status, r.Message)
+	}
+	if s3Cli.deleteObjectsCalls != 0 {
+		t.Errorf("--dry-run=false alone (without --delete-s3) must NOT call DeleteObjects; saw %d", s3Cli.deleteObjectsCalls)
+	}
+	if !strings.Contains(r.Remediation, "--delete-s3") {
+		t.Errorf("expected remediation to mention --delete-s3, got: %s", r.Remediation)
+	}
+	if strings.Contains(r.Remediation, "--dry-run=false") {
+		t.Errorf("remediation in --dry-run=false mode shouldn't repeat the flag, got: %s", r.Remediation)
 	}
 }

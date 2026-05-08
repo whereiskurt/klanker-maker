@@ -33,8 +33,12 @@ Examples:
   # whose owning sandbox row has been removed from DynamoDB)
   km doctor --dry-run=false --delete-sqs
 
+  # Also sweep orphan S3 prefixes — artifacts/{sandbox-id}/ and
+  # transcripts/{sandbox-id}/ for sandboxes no longer in DynamoDB
+  km doctor --dry-run=false --delete-s3
+
   # Combine all opt-ins for a full cleanup pass
-  km doctor --dry-run=false --delete-ebs --delete-sqs
+  km doctor --dry-run=false --delete-ebs --delete-sqs --delete-s3
 
   # Run regional checks against every configured region
   km doctor --all-regions
@@ -43,9 +47,9 @@ Flags:
   --json          Output results as a JSON array of CheckResult objects
   --quiet         Suppress OK results; show only warnings and errors
   --dry-run       Default true. With --dry-run=false, cleanup-capable checks
-                  delete safe stale resources (KMS keys, IAM roles, schedules,
-                  Slack transcripts). EBS volumes and Slack inbound queues
-                  require their own --delete-ebs / --delete-sqs opt-ins.
+                  delete safe stale resources (KMS keys, IAM roles, schedules).
+                  EBS volumes, SQS queues, and S3 prefixes each require their
+                  own --delete-ebs / --delete-sqs / --delete-s3 opt-in.
   --delete-ebs    With --dry-run=false, also delete detached orphan EBS volumes
                   (state=available). In-use volumes are never auto-deleted —
                   terminate the owning EC2 instance first via 'km destroy
@@ -54,6 +58,14 @@ Flags:
                   queues and their per-sandbox SSM parameters. Queue creation
                   has a 60-second AWS-side cooldown, so the explicit opt-in
                   prevents racing with sandbox provisioning.
+  --delete-s3     With --dry-run=false, also sweep orphan S3 prefixes:
+                    - artifacts/{sandbox-id}/  (rendered profile, userdata,
+                      exported logs — accumulates because km destroy never
+                      cleans this prefix)
+                    - transcripts/{sandbox-id}/  (Phase 68 conversation
+                      transcripts)
+                  Only prefixes whose sandbox is gone from DynamoDB are
+                  swept. Live sandboxes are never touched.
   --all-regions   Run regional checks (VPC, AMIs) against PrimaryRegion plus
                   every region listed in KM_REPLICA_REGION (CSV).
 

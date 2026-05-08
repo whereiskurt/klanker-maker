@@ -148,6 +148,11 @@ func checkSlackFilesWriteScope(
 // the live sandboxes from DDB, and warns about any orphan transcript prefix
 // whose sandbox row no longer exists.
 //
+// Deletion is gated on both dryRun==false AND deleteS3==true — same explicit
+// opt-in pattern shared with checkOrphanedArtifacts. Without --delete-s3 the
+// check stays report-only even when --dry-run=false is set globally;
+// transcripts can hold conversation history operators may want to retain.
+//
 // Cleanup advisory — never fails the doctor run. Returns:
 //
 //   - SKIPPED: deps are nil (no S3 client / no listSandboxes func / no bucket).
@@ -159,6 +164,7 @@ func checkSlackTranscriptStaleObjects(
 	bucket string,
 	listSandboxIDs func(context.Context) ([]string, error),
 	dryRun bool,
+	deleteS3 bool,
 ) CheckResult {
 	name := "Slack transcript stale objects"
 	if s3Client == nil || listSandboxIDs == nil {
@@ -246,17 +252,24 @@ func checkSlackTranscriptStaleObjects(
 		}
 	}
 
-	// Plan quick-7: dry-run path — detect-only; point operator at --dry-run=false.
-	if dryRun {
+	// Report-only path. Triggered when --dry-run is true, OR when
+	// --dry-run=false is set without the --delete-s3 opt-in. Two-flavored
+	// remediation: dry-run users get the full pair; --dry-run=false-without-
+	// opt-in users only get told to add --delete-s3.
+	if dryRun || !deleteS3 {
+		remediation := "Re-run with --dry-run=false --delete-s3 to delete the orphan transcript objects"
+		if !dryRun && !deleteS3 {
+			remediation = "Add --delete-s3 to also delete the orphan transcript objects"
+		}
 		return CheckResult{
 			Name:        name,
 			Status:      CheckWarn,
 			Message:     fmt.Sprintf("%d stale transcript prefix(es): %s", len(stale), strings.Join(stale, ", ")),
-			Remediation: "Re-run with --dry-run=false to delete the orphan transcript objects",
+			Remediation: remediation,
 		}
 	}
 
-	// Plan quick-7: destructive cleanup path. Per stale prefix, paginate
+	// Destructive cleanup path. Per stale prefix, paginate
 	// ListObjectsV2 (no delimiter) to collect every object key, then batch
 	// DeleteObjects in groups of 1000 (S3 API limit). Per-prefix failures
 	// don't abort the loop.

@@ -263,6 +263,12 @@ type DoctorDeps struct {
 	// queue races with the 60-second AWS-side creation cooldown, so a rogue
 	// delete during sandbox provisioning is hard to recover from.
 	DeleteSQS bool
+	// DeleteS3 opts the orphaned-S3 checks (artifacts/, transcripts/) into
+	// deletion. Only honored when DryRun is also false. Artifact prefixes
+	// can include rendered profiles, sandbox userdata, and exported
+	// CloudWatch logs; transcript prefixes hold conversation history. Both
+	// can be expensive to lose accidentally, hence the explicit opt-in.
+	DeleteS3 bool
 	// AllRegions controls whether regional checks run against all configured regions
 	// (PrimaryRegion + KM_REPLICA_REGION CSV) or only the primary region.
 	AllRegions bool
@@ -1824,6 +1830,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 	var allRegions bool
 	var deleteEBS bool
 	var deleteSQS bool
+	var deleteS3 bool
 
 	cmd := &cobra.Command{
 		Use:          "doctor",
@@ -1840,7 +1847,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 			default:
 				return fmt.Errorf("unsupported config type %T", cfg)
 			}
-			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS)
+			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output results as JSON array")
@@ -1853,11 +1860,13 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 		"With --dry-run=false, delete detached orphan EBS volumes (in-use volumes are never auto-deleted; terminate the owning EC2 instance first)")
 	cmd.Flags().BoolVar(&deleteSQS, "delete-sqs", false,
 		"With --dry-run=false, delete stale Slack inbound SQS queues + their SSM parameters (queues whose sandbox row is gone from DynamoDB)")
+	cmd.Flags().BoolVar(&deleteS3, "delete-s3", false,
+		"With --dry-run=false, delete orphaned S3 artifact and transcript prefixes for sandboxes whose DynamoDB row is gone (sweeps artifacts/{sandbox-id}/ and transcripts/{sandbox-id}/)")
 	return cmd
 }
 
 // runDoctor is the core execution logic for km doctor.
-func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS bool) error {
+func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3 bool) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -1884,6 +1893,7 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 	deps.DryRun = dryRun
 	deps.DeleteEBS = deleteEBS
 	deps.DeleteSQS = deleteSQS
+	deps.DeleteS3 = deleteS3
 
 	// Run credential check first — if SSO is expired, skip all AWS checks
 	// rather than repeating the same credential error for every check.
@@ -2323,11 +2333,18 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	transcriptBucket := cfg.GetArtifactsBucket()
 	listSandboxIDs := deps.SlackListSandboxIDs
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		r := checkSlackTranscriptStaleObjects(ctx, transcriptS3, transcriptBucket, listSandboxIDs, dryRun)
+		r := checkSlackTranscriptStaleObjects(ctx, transcriptS3, transcriptBucket, listSandboxIDs, dryRun, deps.DeleteS3)
 		if r.Status == CheckError {
 			r.Status = CheckWarn
 		}
 		return r
+	})
+
+	// Orphaned artifact prefixes — sweeps artifacts/{sandbox-id}/. Reuses the
+	// transcript check's S3 client and sandbox-list func (same bucket, same
+	// DDB query). Deletion gated on the same --delete-s3 opt-in.
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkOrphanedArtifacts(ctx, transcriptS3, transcriptBucket, listSandboxIDs, dryRun, deps.DeleteS3)
 	})
 
 	// Phase 66: email-domain SES match check.
