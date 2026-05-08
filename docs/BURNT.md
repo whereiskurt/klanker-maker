@@ -1,39 +1,97 @@
 # BURNT — Klanker Maker Token Scoreboard
 
-> Living ledger of Claude Code token consumption building klanker-maker.
-> Each chapter is a sprint snapshot; the cumulative running total is at the bottom of every chapter.
+> **The agent built it. The human tested it.**
+> Living ledger of Claude Code token consumption building klanker-maker. Every line of code, every commit, every plan — written by Claude Code on Opus 4.7. The operator's job: design SandboxProfiles, run UAT, and call ship/no-ship. The agent does the codework.
 
-## TL;DR — Cumulative since 2026-03-20
+---
+
+## TL;DR — 50 days, 9 billion tokens, one operator
 
 | | |
 |---|---|
-| **Total tokens consumed** | **~8.05 BILLION** |
-| Total commits | ~1,918 |
-| Net lines of code | ~375K |
-| Sprints chronicled | 7 |
-| Plan cost | **$200/mo** (Claude Code 5x MAX) |
-| Latest snapshot | 2026-05-04 EDT |
+| **Total tokens consumed** | **~9.08 BILLION** |
+| Total commits | ~2,075 |
+| Net lines of code | ~346K |
+| Phases shipped | **30+** across 8 sprints |
+| Sprints chronicled | 8 (and counting) |
+| Plan cost | **$200/mo** (Claude Code 5x MAX, Opus 4.7) |
+| Avg tokens / commit | ~4.4M |
+| Avg tokens / line of net code | ~26K |
+| Latest snapshot | **2026-05-08 EDT** |
 
-> Eight billion tokens. Nineteen hundred commits. ~375K lines. One $200/mo plan.
+> Nine billion tokens. Two thousand commits. ~346K lines of net code. **One $200/month plan. Zero hand-typed code.**
 
-**Chapters:**
+---
+
+## Daily token burn (3/20 → 5/8)
+
+Each square = one calendar day in EDT. Rows are days of week (Sun → Sat, GitHub-style), columns are weeks.
+
+| Day | Wk 3/16 | Wk 3/22 | Wk 3/29 | Wk 4/5 | Wk 4/12 | Wk 4/19 | Wk 4/26 | Wk 5/3 |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Sun** | ⬜ | 🟥 | 🟩 | 🟧 | 🟨 | 🟨 | 🟨 | 🟥 |
+| **Mon** | ⬜ | 🟧 | 🟨 | 🟨 | 🟨 | 🟩 | 🟩 | 🟧 |
+| **Tue** | ⬜ | 🟥 | 🟧 | 🟨 | 🟨 | 🟩 | 🟩 | 🟥 |
+| **Wed** | ⬜ | 🟥 | 🟥 | 🟩 | 🟨 | 🟩 | 🟩 | 🟧 |
+| **Thu** | ⬜ | 🟥 | 🟧 | 🟩 | 🟩 | ⬜ | 🟨 | 🟨 |
+| **Fri** | 🟩 | 🟥 | 🟧 | 🟧 | 🟩 | ⬜ | 🟨 | 🟩 |
+| **Sat** | 🟥 | 🟥 | 🟥 | ⬜ | 🟨 | 🟨 | 🟧 | — |
+
+**Legend:** ⬜ none · 🟩 1–50M · 🟨 50–150M · 🟧 150–300M · 🟥 300M+ tokens / day
+
+**Sparkline (chronological, one bar per day):**
+
+```
+▁██▆█████▃▅▆█▆▆█▆▅▃▃▁▆ ▃▅▃▅▃▃▃▅▃▁▁  ▅▅▃▃▃▅▅▆█▆█▆▅▁
+Mar20                       Apr1                        May1   May8
+```
+
+> Eight nights cleared 300M tokens in a single day. The 5/3–5/6 stretch — Phase 67/68 closeout flowing straight into Phase 66 multi-instance and Phase 73 VS Code — pulled **1.27B tokens in four days** without breaking the $200/mo plan.
+
+---
+
+## Per-sprint token volume
+
+```
+BURNT II   ████████████████████████████████████████████████████████████  2.74B   3/21–28  Full week
+BURNT V    ███████████████████████████████████                           1.55B   4/3–15   Agents & Email
+BURNT I    ██████████████████████████                                    1.13B   3/20–23  Weekend kickoff
+BURNT VIII ████████████████████████                                      1.06B   5/4–8    Multi-Instance + VS Code  ← latest
+BURNT VII  ███████████████████                                           0.84B   4/27–5/4 Slack Bidirectional
+BURNT VI   ████████████████                                              0.69B   4/15–26  AMI Lifecycle
+BURNT IV   ██████████████                                                0.60B   4/1–3    eBPF & Scheduler
+BURNT III  ████████████                                                  0.51B   3/30–31  DynamoDB migration
+```
+
+---
+
+## Chapters (latest first)
 
 | # | Sprint | Period | Tokens | Commits |
 |---|---|---|---:|---:|
-| I | Weekend kickoff | 3/20–23 | 1.13B | 300 |
-| II | Full week | 3/21–28 | 2.74B | 650 |
-| III | DynamoDB migration | 3/30–31 | 0.51B | 95 |
-| IV | eBPF & Scheduler | 4/1–3 | 0.60B | 145 |
-| V | Agents & Email | 4/3–15 | 1.55B | 201 |
-| VI | AMI Lifecycle | 4/15–26 | 0.69B | 216 |
+| **VIII** | **Multi-Instance & VS Code** | **5/4–5/8** | **1.06B** | **157** |
 | VII | Slack Bidirectional | 4/27–5/4 | 0.84B | 311 |
+| VI | AMI Lifecycle | 4/15–26 | 0.69B | 216 |
+| V | Agents & Email | 4/3–15 | 1.55B | 201 |
+| IV | eBPF & Scheduler | 4/1–3 | 0.60B | 145 |
+| III | DynamoDB migration | 3/30–31 | 0.51B | 95 |
+| II | Full week | 3/21–28 | 2.74B | 650 |
+| I | Weekend kickoff | 3/20–23 | 1.13B | 300 |
+
+---
+
+## How to read this file
+
+Chapters are ordered **latest first** (VIII at top, I at bottom). Each chapter is a self-contained snapshot from the moment it was generated, with its own running-total table — so the cumulative view at the bottom of any chapter reflects what was true on that snapshot date, not today. The numbers at the very top of this file are the live cumulative.
+
+Generation process: see [`BURNT.process.md`](./BURNT.process.md).
 
 ---
 ---
 
-# BURNT I: Weekend Token Scoreboard
+# BURNT VIII: Multi-Instance & VS Code Sprint
 
-> **March 20–23, 2026** | Claude Code on **5x MAX** (Opus) | klanker-maker weekend sprint
+> **May 4 – May 8, 2026** | Claude Code on **5x MAX** (Opus 4.7) | klanker-maker `resource_prefix` multi-tenancy + `km vscode` Remote-SSH
 
 ---
 
@@ -41,61 +99,613 @@
 
 | | |
 |---|---|
-| **Tokens consumed** | **1,126,000,000+** |
-| Input | 1,122,600,000 (99.72%) |
-| Output | 3,200,000 (0.28%) |
-| Input:Output ratio | 355 : 1 |
+| **Tokens consumed** | **1,057,000,000+** |
+| Input | 1,056,701,192 (99.62%) |
+| Output | 4,000,079 (0.38%) |
+| Input:Output ratio | 264 : 1 |
+| Cache read | 1,023,760,253 (96.88% of input) |
+| **Sessions** | **23** |
+| **API calls** | **4,504** |
+| **Turns** | **2,860** |
 | **Plan cost** | **$200/mo** |
 
-> **ONE BILLION TOKENS IN A WEEKEND**
+> **1.06 BILLION TOKENS in 5 days.** Two big phases shipped end-to-end (66 multi-instance, 73 VS Code Remote-SSH), four more researched + planned (69 SCP-via-SigV4, 70 codex parity, 71 agent playbook, 72 Slack corp workspace), plus a Slack double-post fix and the README's first AWS services diagram.
 
 ---
 
 ## Heat Map (EDT)
 
 <table>
-<tr><th colspan="4" align="left">FRIDAY 3/20 — 10.7M</th></tr>
-<tr><td>8am</td><td align="right">2.8M</td><td>🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">MONDAY 5/4 — 227.9M (Chapter VII tail + new sprint kick-off)</th></tr>
+<tr><td>12am</td><td align="right">26.3M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>1am</td><td align="right">1.1M</td><td>🟧</td><td></td></tr>
+<tr><td>7am</td><td align="right">3.5M</td><td>🟧</td><td></td></tr>
+<tr><td>8am</td><td align="right">4.4M</td><td>🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">7.6M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>10am</td><td align="right">9.1M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>11am</td><td align="right">10.3M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td><strong>12pm</strong></td><td align="right"><strong>55.3M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><td>3pm</td><td align="right">46.6M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>4pm</td><td align="right">1.5M</td><td>🟧</td><td></td></tr>
+<tr><td>5pm</td><td align="right">2.7M</td><td>🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">15.9M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">8.3M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">35.3M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">TUESDAY 5/5 — 411.6M (sprint peak day)</th></tr>
+<tr><td>6am</td><td align="right">8.6M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>8am</td><td align="right">3.8M</td><td>🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">1.8M</td><td>🟧</td><td></td></tr>
+<tr><td>10am</td><td align="right">36.0M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>11am</td><td align="right">24.3M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>12pm</td><td align="right">11.8M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>1pm</td><td align="right">10.7M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>2pm</td><td align="right">26.1M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td><strong>3pm</strong></td><td align="right"><strong>99.9M</strong></td><td>🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥</td><td>⬅️ <strong>SPRINT PEAK HOUR</strong></td></tr>
+<tr><td>4pm</td><td align="right">11.5M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>5pm</td><td align="right">75.8M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">19.0M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>9pm</td><td align="right">20.9M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">41.0M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>11pm</td><td align="right">20.5M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">WEDNESDAY 5/6 — 274.3M</th></tr>
+<tr><td>1am</td><td align="right">76.0M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>2am</td><td align="right">53.0M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · sleep 3am–9am · · ·</sub></td></tr>
+<tr><td>9am</td><td align="right">10.4M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>12pm</td><td align="right">24.1M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td><strong>1pm</strong></td><td align="right"><strong>52.1M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><td>3pm</td><td align="right">17.8M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>5pm</td><td align="right">20.5M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">7.2M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">1.6M</td><td>🟧</td><td></td></tr>
+<tr><td>9pm</td><td align="right">1.4M</td><td>🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">1.6M</td><td>🟧</td><td></td></tr>
+<tr><td>11pm</td><td align="right">8.6M</td><td>🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">THURSDAY 5/7 — 141.8M</th></tr>
+<tr><td>12am</td><td align="right">15.9M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>1am</td><td align="right">14.0M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>2am</td><td align="right">22.5M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>8am</td><td align="right">2.9M</td><td>🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">1.1M</td><td>🟧</td><td></td></tr>
+<tr><td>5pm</td><td align="right">4.6M</td><td>🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">3.5M</td><td>🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">22.0M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">2.5M</td><td>🟧</td><td></td></tr>
+<tr><td>9pm</td><td align="right">21.6M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td><strong>10pm</strong></td><td align="right"><strong>29.3M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><td>11pm</td><td align="right">2.1M</td><td>🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">FRIDAY 5/8 — 1.0M (snapshot cutoff)</th></tr>
+<tr><td>1am</td><td align="right">1.0M</td><td>🟧</td><td></td></tr>
+</table>
+
+> 🟧 = 4M tokens · 🔥 = 4M tokens (80M+ hours)
+
+---
+
+## Monster Sessions
+
+| Tokens | Output | API calls | Span | Window |
+|---:|---:|---:|---:|---|
+| **467.7M** | 970.5K | 1,096 | 28.4h | 5/5 13:34 → 5/6 17:59 — Phase 66 multi-instance migration end-to-end |
+| **145.7M** | 375.6K | 597 | 17.1h | 5/4 00:57 → 5/4 18:01 — Phase 73 wave kickoff + parallel 69/70/71/72 planning |
+| **103.0M** | 307.2K | 466 | 1.4h | 5/5 14:41 → 5/5 16:08 — burst on the 3pm peak hour |
+| **98.6M** | 370.1K | 517 | 17.2h | 5/4 20:21 → 5/5 13:35 — overnight Phase 73 plan execution |
+| **54.7M** | 252.2K | 358 | 3.3h | 5/7 19:32 → 5/7 22:51 — VS Code docs + UAT closeout |
+| **35.2M** | 367.8K | 237 | 4.1h | 5/6 22:49 → 5/7 02:53 — late-night Phase 73 testing |
+| **31.4M** | 283.4K | 195 | 9.2h | 5/7 00:09 → 5/7 09:19 — Phase 73 keypair flow + Lambda subprocess plumbing |
+
+> One session (`f4185b07`) did **467M tokens across 28 hours** — the biggest single session of the entire project. It carried Phase 66 (multi-instance `resource_prefix`) from research through 38-file migration, 7 DDB configs, and 5 Lambda module rewires, then rolled straight into Phase 73 VS Code Remote-SSH.
+
+---
+
+## What Got Built
+
+| | |
+|---|---|
+| Commits | 157 |
+| Files changed | 766 |
+| Lines added | 41,048 |
+| Lines deleted | 7,813 |
+| Net lines | +33,235 |
+| Phases shipped | **66** (multi-instance via `resource_prefix` + `email_subdomain`), **73** (`km vscode start/status` Remote-SSH via SSM), **67.x** (Slack double-post + idle noise fix) |
+| Phases planned end-to-end | **69** (SCP-style allow/deny via SigV4 inspection — 6 plans), **70** (Codex parity for operator-notify/Slack), **71** (agent playbook orchestration with cron + manual triggers — 11 plans / 5 waves), **72** (Slack corporate-workspace support with manifest generator) |
+| Features shipped | `km configure` prompts for `resource_prefix` + `email_subdomain` (one-time choices propagated via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN` env vars to terragrunt); 38-file resource-name + SSM-path migration; Config foundation `EmailSubdomain` + `GetEmailDomain`/`GetSsmPrefix` + `DoctorConfigProvider` extension; multi-region TF prefix wiring (site.hcl, 7 DDB configs, 5 Lambda modules); `km vscode start <id>` opens SSM port-forward + writes managed `~/.ssh/config` block (`# BEGIN km vscode hosts`) + `km-<sandbox-id>` Host entries; `km vscode status` validates sshd state + authorized_keys; `pkg/sshkey.GenerateAndWrite` ed25519 keypair into `~/.km/keys/<id>` (mode 0600); `pkg/sshconfig.UpsertHost` managed-block writer; userdata `VSCodeEnabled`+`VSCodeSSHPubKey` propagation through CLISpec / NetworkConfig / Lambda subprocess; `vscodeEnabled` profile field + JSON schema; `km destroy` cleanup of vscode keys + ssh-config block; klanker plugin v0.2.0 publishes new `slack` skill; AWS services overview diagram added to README + Cloud-Native Control Plane section; sandbox user created early in userdata; `--learn` runShell error propagation fix; `slack-double-post` fix on inbound flow; idle-noise cleanup in slack bridge; VERSION bumped to 0.2.561 |
+
+---
+
+## What Does 1.06 Billion Tokens Even Mean?
+
+| | |
+|---|---|
+| Pages of text | ~793,000 |
+| Full-length novels | ~2,640 |
+| English Wikipedias | ~3.20x |
+| Lord of the Rings cover-to-covers | ~705 |
+
+...to write back **4.00M tokens** and produce **157 commits** / **41K lines added** across **2 shipped phases plus 4 planned end-to-end** — every line authored by Claude Code on Opus 4.7. Operator did the profile design, UAT runbooks, and "ship it" calls.
+
+---
+
+## Running Total
+
+| Period | Tokens | Commits | Lines |
+|---|---:|---:|---:|
+| Weekend (3/20–23) | 1,126,000,000 | 300 | 82K |
+| Full week (3/21–28) | 2,740,000,000 | 650 | 114K |
+| Mon–Tue (3/30–31) | 507,000,000 | 95 | 16K |
+| eBPF sprint (4/1–3) | 604,000,000 | 145 | 23K |
+| Agent & Email (4/3–15) | 1,545,000,000 | 201 | 26K |
+| AMI Lifecycle (4/15–26) | 686,700,000 | 216 | 35K |
+| Slack Bidirectional (4/27–5/4) | 842,000,000 | 311 | 79K |
+| Multi-Instance & VS Code (5/4–5/8) | 1,025,000,000* | 157 | 33K net |
+| **Cumulative** | **~9,076,000,000** | **~2,075** | **~346K net** |
+
+\* *Chapter VII's snapshot included the first ~32M of 5/4 (early-morning hours); this chapter captures the remainder of 5/4 onward to avoid double-counting.*
+
+> **Past 9 BILLION.** Over 2,000 commits. 346K net lines. Still $200/mo. Still one human. The agent has been running.
+
+---
+
+*Generated by Claude Code · snapshot 2026-05-08 EDT*
+
+---
+---
+
+# BURNT VII: The Slack Bidirectional Sprint
+
+> **April 27 – May 4, 2026** | Claude Code on **5x MAX** (Opus 4.7) | klanker-maker Slack inbound, ack reactions, transcript streaming
+
+---
+
+## The Numbers
+
+| | |
+|---|---|
+| **Tokens consumed** | **842,000,000+** |
+| Input | 837,768,000 (99.46%) |
+| Output | 4,545,000 (0.54%) |
+| Input:Output ratio | 184 : 1 |
+| Cache read | 96.9% of input |
+| **Sessions** | **28** |
+| **API calls** | **4,352** |
+| **Turns** | **2,750** |
+| **Plan cost** | **$200/mo** |
+
+> **842 MILLION TOKENS in 8 days.** Three Slack phases landed end-to-end: bidirectional inbound chat, 👀 ack reactions, and per-turn transcript streaming with gzipped JSONL upload to S3.
+
+---
+
+## Heat Map (EDT)
+
+<table>
+<tr><th colspan="4" align="left">MONDAY 4/27 — 25.9M</th></tr>
+<tr><td>8am</td><td align="right">16.5M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">4.7M</td><td>🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">4.4M</td><td>🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">TUESDAY 4/28 — 41.4M</th></tr>
+<tr><td>9am</td><td align="right">3.2M</td><td>🟧</td><td></td></tr>
+<tr><td>4pm</td><td align="right">3.2M</td><td>🟧</td><td></td></tr>
+<tr><td>5pm</td><td align="right">9.0M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">6.2M</td><td>🟧</td><td></td></tr>
+<tr><td>9pm</td><td align="right">18.1M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">WEDNESDAY 4/29 — 32.3M</th></tr>
+<tr><td>8am</td><td align="right">9.2M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">7.5M</td><td>🟧</td><td></td></tr>
 <tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>9pm</td><td align="right">6.7M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>10pm</td><td align="right">1.2M</td><td>🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">SATURDAY 3/21 — 418.0M</th></tr>
-<tr><td>8am</td><td align="right">0.9M</td><td>🟧</td><td></td></tr>
-<tr><td>9am</td><td align="right">0.0M</td><td>⬜</td><td></td></tr>
-<tr><td>10am</td><td align="right">1.2M</td><td>🟧</td><td></td></tr>
+<tr><td>3pm</td><td align="right">3.4M</td><td>🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">2.5M</td><td>🟧</td><td></td></tr>
+<tr><td>9pm</td><td align="right">2.7M</td><td>🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">2.7M</td><td>🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">THURSDAY 4/30 — 109.6M</th></tr>
+<tr><td>7am</td><td align="right">2.6M</td><td>🟧</td><td></td></tr>
+<tr><td>8am</td><td align="right">5.2M</td><td>🟧</td><td></td></tr>
+<tr><td>11am</td><td align="right">11.6M</td><td>🟧🟧🟧</td><td></td></tr>
 <tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>1pm</td><td align="right">17.0M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>2pm</td><td align="right">22.0M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>3pm</td><td align="right">32.1M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>4pm</td><td align="right">38.1M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>5pm</td><td align="right">45.4M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>6pm</td><td align="right">21.8M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>7pm</td><td align="right">2.9M</td><td>🟧</td><td></td></tr>
-<tr><td>8pm</td><td align="right">56.7M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td><strong>9pm</strong></td><td align="right"><strong>109.9M</strong></td><td>🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥</td><td>⬅️ <strong>PEAK</strong></td></tr>
-<tr><td>10pm</td><td align="right">40.2M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>11pm</td><td align="right">29.9M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">SUNDAY 3/22 — 693.9M</th></tr>
-<tr><td>12am</td><td align="right">40.6M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>1am</td><td align="right">35.1M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · sleep 2am–9am · · ·</sub></td></tr>
-<tr><td>9am</td><td align="right">28.8M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>10am</td><td align="right">22.0M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>11am</td><td align="right">12.9M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>12pm</td><td align="right">14.7M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>1pm</td><td align="right">31.4M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>2pm</td><td align="right">42.5M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>3pm</td><td align="right">48.0M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>4pm</td><td align="right">82.7M</td><td>🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥</td><td></td></tr>
-<tr><td>5pm</td><td align="right">55.7M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>6pm</td><td align="right">60.7M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>7pm</td><td align="right">27.9M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>8pm</td><td align="right">2.6M</td><td>🟧</td><td></td></tr>
-<tr><td>9pm</td><td align="right">44.6M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>10pm</td><td align="right">94.7M</td><td>🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥</td><td></td></tr>
-<tr><td>11pm</td><td align="right">65.7M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">MONDAY 3/23 — 9.9M</th></tr>
-<tr><td>12am</td><td align="right">9.9M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">15.9M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">22.9M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">14.6M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>9pm</td><td align="right">29.5M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">5.5M</td><td>🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">FRIDAY 5/1 — 87.1M</th></tr>
+<tr><td>8am</td><td align="right">5.8M</td><td>🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">6.0M</td><td>🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>5pm</td><td align="right">10.9M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">6.3M</td><td>🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">11.1M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>11pm</td><td align="right">37.3M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">SATURDAY 5/2 — 152.7M</th></tr>
+<tr><td>12am</td><td align="right">10.0M</td><td>🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>5pm</td><td align="right">4.9M</td><td>🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">9.4M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">13.1M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>9pm</td><td align="right">22.7M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">56.8M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>11pm</td><td align="right">31.4M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">SUNDAY 5/3 — 361.1M (sprint peak day)</th></tr>
+<tr><td>12am</td><td align="right">37.3M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td><strong>1am</strong></td><td align="right"><strong>60.7M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>SPRINT PEAK HOUR</strong></td></tr>
+<tr><td>2am</td><td align="right">28.7M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · sleep 3am–7am · · ·</sub></td></tr>
+<tr><td>8am</td><td align="right">17.3M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">7.3M</td><td>🟧</td><td></td></tr>
+<tr><td>10am</td><td align="right">21.8M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>11am</td><td align="right">24.9M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>3pm</td><td align="right">8.0M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>4pm</td><td align="right">17.8M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>5pm</td><td align="right">15.6M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">49.1M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">34.6M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>11pm</td><td align="right">25.8M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">MONDAY 5/4 — 32.1M (partial)</th></tr>
+<tr><td>12am</td><td align="right">26.4M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>1am</td><td align="right">1.2M</td><td>🟧</td><td></td></tr>
+<tr><td>7am</td><td align="right">3.5M</td><td>🟧</td><td></td></tr>
+</table>
+
+> 🟧 = 4M tokens · 🔥 = 4M tokens (80M+ hours, none this sprint)
+
+---
+
+## Monster Sessions
+
+| Tokens | Output | Turns | Span | Window |
+|---:|---:|---:|---:|---|
+| **245.3M** | 915.7K | 603 | 26.0h | 5/2 00:26 → 5/3 02:24 — Phase 67 inbound execution + Phase 68 wave kickoff |
+| **153.6M** | 643.1K | 335 | 9.3h | 5/3 15:37 → 5/4 00:57 — Phase 68 transcript streaming + UAT |
+| **110.3M** | 428.5K | 293 | 25.0h | 4/29 21:15 → 4/30 22:15 — Phase 67 sub-plans (poller + DDB threads) |
+| **65.7M** | 355.4K | 215 | 6.7h | 5/1 17:42 → 5/2 00:26 — bridge handler + signing-secret rotation |
+| **51.8M** | 252.8K | 177 | 2.9h | 5/3 09:08 → 5/3 12:00 — Phase 68.1 hardening / files:write probe |
+| **36.7M** | 217.1K | 80 | 37.4h | 4/27 19:41 → 4/29 09:08 — Phase 67 research + plan-checker |
+| **24.3M** | 65.1K | 72 | 11.2h | 4/27 08:25 → 4/27 19:37 — Phase 66 archival + Phase 67 kickoff |
+
+> Two back-to-back marathons covered the heart of the sprint: 245M to land Phase 67, then 154M for Phase 68. The Sunday 5/3 peak (361M in a single day) traces directly to the Phase 68 plan execution + UAT cycle.
+
+---
+
+## What Got Built
+
+| | |
+|---|---|
+| Commits | 311 |
+| Files changed | 777 |
+| Lines added | 82,055 |
+| Lines deleted | 3,054 |
+| Phases completed | 67 (Slack inbound — bidirectional channel chat), 67.1 (👀 ack reaction), 68 (per-turn transcript streaming + gzipped JSONL upload) |
+| Features shipped | Slack→sandbox dispatch via per-sandbox SQS FIFO + systemd poller, bridge HMAC-SHA256 signature verification, `/sandbox/{id}/slack-inbound-queue-url` SSM Parameter, `{prefix}-km-slack-threads` DDB session-id continuity (30-day TTL), `slack_channel_id-index` GSI on sandboxes table, 👀 reaction ack on inbound enqueue (configurable via `KM_SLACK_ACK_EMOJI`), `KM_SLACK_THREAD_TS` env handoff for Stop hook gating, `notifySlackInboundEnabled` profile field, `notifySlackTranscriptEnabled` profile field, per-turn streaming PostToolUse hook, `S3` `transcripts/{sandbox}/{session}.jsonl.gz` upload, Slack `files.completeUploadExternal` 3-step flow with cold-start `files:write` scope probe, `{prefix}-slack-stream-messages` DDB record-mapping table, `--transcript-stream` / `--no-transcript-stream` flags on `km shell` and `km agent run`, `km slack rotate-signing-secret`, three new `km doctor` checks (`slack_inbound_queue_exists`, `slack_app_events_subscription`, `slack_transcript_table_exists` + companion `slack_files_write_scope` and `slack_transcript_stale_objects`), Opus 4.7 metering pricing + token display rounding fix |
+
+---
+
+## What Does 842 Million Tokens Even Mean?
+
+| | |
+|---|---|
+| Pages of text | ~632,000 |
+| Full-length novels | ~2,100 |
+| English Wikipedias | ~2.55x |
+| Lord of the Rings cover-to-covers | ~561 |
+
+...to write back **4.54M tokens** and produce **311 commits** / **79K net lines of code** across **3 shipped phases** (67, 67.1, 68).
+
+---
+
+## Running Total
+
+| Period | Tokens | Commits | Lines |
+|---|---:|---:|---:|
+| Weekend (3/20–23) | 1,126,000,000 | 300 | 82K |
+| Full week (3/21–28) | 2,740,000,000 | 650 | 114K |
+| Mon–Tue (3/30–31) | 507,000,000 | 95 | 16K |
+| eBPF sprint (4/1–3) | 604,000,000 | 145 | 23K |
+| Agent & Email (4/3–15) | 1,545,000,000 | 201 | 26K |
+| AMI Lifecycle (4/15–26) | 686,700,000 | 216 | 35K |
+| Slack Bidirectional (4/27–5/4) | 842,000,000 | 311 | 79K |
+| **Cumulative** | **~8,051,000,000** | **~1,918** | **~375K** |
+
+> **Past 8 BILLION.** 1,900+ commits. ~375K lines. Still $200/mo.
+
+---
+
+*Generated by Claude Code · snapshot 2026-05-04 EDT*
+
+
+---
+---
+
+# BURNT VI: The AMI Lifecycle Sprint
+
+> **April 15–26, 2026** | Claude Code on **5x MAX** (Opus) | klanker-maker AMI bake/relaunch, codex agent, email allowlists, hibernation accounting, Ctrl+C fix
+
+---
+
+## The Numbers
+
+| | |
+|---|---|
+| **Tokens consumed** | **686,700,000+** |
+| Input | 686,697,000 (99.69%) |
+| Output | 2,121,000 (0.31%) |
+| Input:Output ratio | 324 : 1 |
+| Cache read | 96.9% of input |
+| **Sessions** | **21** |
+| **API calls** | **4,547** |
+| **Turns** | **3,123** |
+| **Plan cost** | **$200/mo** |
+
+> **686 MILLION TOKENS in 12 days.** Ten phases touched: raw AMI ID support, learn-mode command capture, full AMI snapshot lifecycle, bake-loop hardening, codex agent support, email allowlists, paused-budget accounting, Ctrl+C fix, multi-account GitHub App, plus the operator-notify hook planned end-to-end.
+
+---
+
+## Heat Map (EDT)
+
+<table>
+<tr><th colspan="4" align="left">WEDNESDAY 4/15 — 134.1M</th></tr>
+<tr><td>8am</td><td align="right">5.1M</td><td>🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">1.4M</td><td>🟧</td><td></td></tr>
+<tr><td>3pm</td><td align="right">6.2M</td><td>🟧</td><td></td></tr>
+<tr><td>5pm</td><td align="right">1.7M</td><td>🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">24.1M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">23.3M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">16.1M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td><strong>9pm</strong></td><td align="right"><strong>37.9M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><td>10pm</td><td align="right">18.4M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">THURSDAY 4/16 — 37.6M</th></tr>
+<tr><td>8am</td><td align="right">5.6M</td><td>🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">12.9M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>10pm</td><td align="right">7.0M</td><td>🟧</td><td></td></tr>
+<tr><td>11pm</td><td align="right">12.1M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">FRIDAY 4/17 — 38.3M</th></tr>
+<tr><td>12am</td><td align="right">1.6M</td><td>🟧</td><td></td></tr>
+<tr><td>8am</td><td align="right">3.1M</td><td>🟧</td><td></td></tr>
+<tr><td>4pm</td><td align="right">2.4M</td><td>🟧</td><td></td></tr>
+<tr><td><strong>5pm</strong></td><td align="right"><strong>23.8M</strong></td><td>🟧🟧🟧🟧🟧</td><td>⬅️ <strong>v0.1.351 cut</strong></td></tr>
+<tr><td>6pm</td><td align="right">5.0M</td><td>🟧</td><td></td></tr>
+<tr><td>11pm</td><td align="right">1.6M</td><td>🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">SATURDAY 4/18 — 59.1M</th></tr>
+<tr><td>7am</td><td align="right">8.0M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>8am</td><td align="right">4.9M</td><td>🟧</td><td></td></tr>
+<tr><td>10am</td><td align="right">8.1M</td><td>🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>5pm</td><td align="right">9.2M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">6.1M</td><td>🟧</td><td></td></tr>
+<tr><td><strong>7pm</strong></td><td align="right"><strong>14.5M</strong></td><td>🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><th colspan="4" align="left">SUNDAY 4/19 — 114.2M</th></tr>
+<tr><td>6am</td><td align="right">4.5M</td><td>🟧</td><td></td></tr>
+<tr><td>8am</td><td align="right">7.0M</td><td>🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">19.3M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>10am</td><td align="right">8.9M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>3pm</td><td align="right">8.1M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>5pm</td><td align="right">11.1M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">5.9M</td><td>🟧</td><td></td></tr>
+<tr><td><strong>9pm</strong></td><td align="right"><strong>25.4M</strong></td><td>🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><td>10pm</td><td align="right">5.5M</td><td>🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">MONDAY 4/20 — 39.4M</th></tr>
+<tr><td>7am</td><td align="right">9.2M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>8am</td><td align="right">9.4M</td><td>🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>7pm</td><td align="right">6.8M</td><td>🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">8.8M</td><td>🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">TUESDAY 4/21 — 18.5M</th></tr>
+<tr><td>7am</td><td align="right">3.7M</td><td>🟧</td><td></td></tr>
+<tr><td>8am</td><td align="right">14.7M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">WEDNESDAY 4/22 — 16.8M</th></tr>
+<tr><td>2pm</td><td align="right">2.7M</td><td>🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">2.6M</td><td>🟧</td><td></td></tr>
+<tr><td>9pm</td><td align="right">2.6M</td><td>🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">6.1M</td><td>🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · gap (4/23–4/24, single multi-day session running) · · · · ·</sub></td></tr>
+<tr><th colspan="4" align="left">SATURDAY 4/25 — 88.9M</th></tr>
+<tr><td>6pm</td><td align="right">10.1M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">6.3M</td><td>🟧</td><td></td></tr>
+<tr><td><strong>8pm</strong></td><td align="right"><strong>27.8M</strong></td><td>🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><td>9pm</td><td align="right">15.4M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">10.0M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>11pm</td><td align="right">17.8M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">SUNDAY 4/26 — 139.8M (sprint peak day)</th></tr>
+<tr><td>12am</td><td align="right">17.9M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>8am</td><td align="right">7.6M</td><td>🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">5.2M</td><td>🟧</td><td></td></tr>
+<tr><td>10am</td><td align="right">6.3M</td><td>🟧</td><td></td></tr>
+<tr><td>12pm</td><td align="right">11.8M</td><td>🟧🟧</td><td></td></tr>
+<tr><td><strong>1pm</strong></td><td align="right"><strong>21.2M</strong></td><td>🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><td>4pm</td><td align="right">4.3M</td><td>🟧</td><td></td></tr>
+<tr><td>5pm</td><td align="right">14.9M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">8.6M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">10.3M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>11pm</td><td align="right">13.6M</td><td>🟧🟧🟧</td><td></td></tr>
+</table>
+
+---
+
+## Monster Sessions
+
+| Tokens | Output | Turns | Span | Window |
+|---|---|---|---|---|
+| **120.2M** | 105.6K | 465 | 17h | 4/15 17:02 → 4/16 09:56 — Phase 33.1 raw AMI ID end-to-end |
+| **118.0M** | 541.1K | 280 | 61h | 4/23 20:30 → 4/26 09:59 — Phase 56 plans 04/05/06 (km ami subcommand tree, --ami flag, checkStaleAMIs) |
+| **74.1M** | 345.4K | 213 | 12h | 4/26 08:45 → 4/26 20:35 — Phase 56.1 hardening + docs sprint |
+| **63.8M** | 70.4K | 336 | 60h | 4/15 19:56 → 4/18 07:44 — Phase 54 multi-account GitHub App |
+| **61.6M** | 58.7K | 300 | 25h | 4/18 07:52 → 4/19 09:25 — Phase 55 learn-mode command capture |
+| **57.5M** | 219.9K | 223 | 13h | 4/19 20:21 → 4/20 09:30 — Phase 56 plans 01/02/03 (BakeAMI helper + SCP AMI lifecycle) |
+| **49.4M** | 59.2K | 239 | 45h | 4/19 11:22 → 4/21 08:39 — Phase 58/59/60 stitching |
+| **34.5M** | 145.1K | 178 | 18h | 4/18 17:02 → 4/19 11:24 — Phase 61 km shell Ctrl+C investigation |
+
+> Two long-running sessions covered the whole AMI lifecycle: 120M to land raw AMI IDs, then 118M to ship the snapshot/lifecycle/doctor surface.
+
+---
+
+## What Got Built
+
+| | |
+|---|---|
+| Commits | 216 |
+| Files changed | 516 |
+| Lines added | 36,627 |
+| Lines deleted | 1,762 |
+| Phases completed | 33.1 (raw AMI IDs), 54 (multi-account GitHub App), 55 (learn-mode command capture), 56 (AMI snapshot lifecycle), 56.1 (bake-loop hardening), 58 (codex agent support), 59 (email sender allowlist), 60 (paused-interval budget accounting), 61 (km shell Ctrl+C fix) |
+| Phases planned end-to-end | 62 (operator-notify hook — research/context/validation/plan/checker, 5 plans / 4 waves, ready to execute) |
+| Features shipped | `spec.runtime.ami` accepts raw `ami-xxxxxxxx` IDs alongside slugs; `km shell --learn --ami` snapshots EC2 to a custom AMI on exit and embeds the ID in the generated profile; `km ami list/bake/copy/delete` subcommand tree; `km doctor` checkStaleAMIs + `--all-regions` flag (now 21 checks); SCP `DenyInfraAndStorage` extended for AMI lifecycle ops + positive-allow operator IAM guidance; learn mode now captures bash/zsh history into `initCommands`; multi-account GitHub App installations; `km agent run --codex`/`--claude` flags with profile `codexArgs` and claude-only `--no-bedrock` gating; email sender allowlist on operator inbox + sandbox inbound; paused/hibernated EC2 stops accruing compute spend; `km shell` Ctrl+C now propagates correctly via parameterized `Standard_Stream` SSM document; bake-loop hardening (BDM auto-rotation, non-blocking audit hook, sidecar FIFO retry, post-env-rewrite restart); README/CLAUDE.md/user-manual/profile-reference docs refreshed |
+
+---
+
+## What Does 686.7 Million Tokens Even Mean?
+
+| | |
+|---|---|
+| Pages of text | ~515,000 |
+| Full-length novels | ~1,717 |
+| English Wikipedias | ~2.08x |
+| Lord of the Rings cover-to-covers | ~458 |
+
+...to write back **2.12M tokens** and produce **216 commits** / **35K lines of code** across **9 shipped phases** (plus one planned end-to-end).
+
+---
+
+## Running Total
+
+| Period | Tokens | Commits | Lines |
+|---|---|---|---|
+| Weekend (3/20–23) | 1,126,000,000 | 300 | 82K |
+| Full week (3/21–28) | 2,740,000,000 | 650 | 114K |
+| Mon–Tue (3/30–31) | 507,000,000 | 95 | 16K |
+| eBPF sprint (4/1–3) | 604,000,000 | 145 | 23K |
+| Agent & Email (4/3–15) | 1,545,000,000 | 201 | 26K |
+| AMI Lifecycle (4/15–26) | 686,700,000 | 216 | 35K |
+| **Cumulative** | **~7,209,000,000** | **~1,607** | **~296K** |
+
+> **Past 7.2 BILLION.** 1,600+ commits. ~296K lines. Still $200/mo.
+
+---
+
+*Generated by Claude Code · snapshot 2026-04-26 EDT*
+
+
+---
+---
+
+# BURNT V: The Agent & Email Sprint
+
+> **April 3–15, 2026** | Claude Code on **5x MAX** (Opus) | klanker-maker agents, email, clone, learn mode
+
+---
+
+## The Numbers
+
+| | |
+|---|---|
+| **Tokens consumed** | **1,545,000,000+** |
+| Input | 1,543,681,000 (99.92%) |
+| Output | 1,280,000 (0.08%) |
+| Input:Output ratio | 1,206 : 1 |
+| Cache read | 98.6% of input |
+| **Sessions** | **27** |
+| **API calls** | **7,934** |
+| **Turns** | **5,644** |
+| **Plan cost** | **$200/mo** |
+
+> **1.5 BILLION TOKENS in 12 days.** Eight phases landed: learn mode, email-to-command AI, agent tmux sessions, clone, and persistent sandbox numbering.
+
+---
+
+## Heat Map (EDT)
+
+<table>
+<tr><th colspan="4" align="left">FRIDAY 4/3 — 163.9M</th></tr>
+<tr><td>4pm</td><td align="right">9.2M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>5pm</td><td align="right">13.0M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">16.8M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td><strong>7pm</strong></td><td align="right"><strong>39.9M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
+<tr><td>8pm</td><td align="right">22.8M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>9pm</td><td align="right">35.4M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">22.0M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">SATURDAY 4/4 — 542.4M</th></tr>
+<tr><td>8am</td><td align="right">18.0M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">3.1M</td><td>🟧</td><td></td></tr>
+<tr><td>10am</td><td align="right">7.1M</td><td>🟧🟧</td><td></td></tr>
+<tr><td><strong>11am</strong></td><td align="right"><strong>85.6M</strong></td><td>🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥</td><td>⬅️ <strong>SPRINT PEAK</strong></td></tr>
+<tr><td>12pm</td><td align="right">62.2M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>1pm</td><td align="right">41.9M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>2pm</td><td align="right">59.5M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>3pm</td><td align="right">27.2M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>4pm</td><td align="right">20.2M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>5pm</td><td align="right">11.4M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">55.5M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">20.9M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">5.8M</td><td>🟧</td><td></td></tr>
+<tr><td>9pm</td><td align="right">62.5M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">61.3M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">SUNDAY 4/5 — 153.6M</th></tr>
+<tr><td>7am</td><td align="right">23.3M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>8am</td><td align="right">20.5M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">34.1M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>6pm</td><td align="right">15.9M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">26.2M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">7.9M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">21.5M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">MONDAY 4/6 — 95.6M</th></tr>
+<tr><td>8am</td><td align="right">11.2M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>6pm</td><td align="right">5.4M</td><td>🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">13.1M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">31.4M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>9pm</td><td align="right">18.5M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">12.6M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">TUESDAY 4/7 — 75.1M</th></tr>
+<tr><td>8am</td><td align="right">15.9M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">14.2M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>11am</td><td align="right">8.0M</td><td>🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>8pm</td><td align="right">11.4M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>9pm</td><td align="right">23.0M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">WEDNESDAY 4/8 — 28.5M</th></tr>
+<tr><td>9am</td><td align="right">3.0M</td><td>🟧</td><td></td></tr>
+<tr><td>1pm</td><td align="right">8.6M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>11pm</td><td align="right">16.1M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">THURSDAY 4/9 — 4.4M</th></tr>
+<tr><td>5pm</td><td align="right">4.0M</td><td>🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">FRIDAY 4/10 — 244.8M</th></tr>
+<tr><td>6am</td><td align="right">10.5M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>7am</td><td align="right">7.7M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>8am</td><td align="right">24.0M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">36.3M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>10am</td><td align="right">9.8M</td><td>🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>1pm</td><td align="right">17.1M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>2pm</td><td align="right">7.9M</td><td>🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>5pm</td><td align="right">22.1M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">37.7M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">38.3M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>9pm</td><td align="right">25.0M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">SATURDAY 4/11 — quiet</th></tr>
+<tr><td colspan="4"><sub>· · · rest day · · ·</sub></td></tr>
+<tr><th colspan="4" align="left">SUNDAY 4/12 — 71.8M</th></tr>
+<tr><td>8am</td><td align="right">18.8M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">10.3M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>10am</td><td align="right">12.5M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>11am</td><td align="right">11.9M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>6pm</td><td align="right">5.8M</td><td>🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">6.6M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">5.2M</td><td>🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">MONDAY 4/13 — 88.1M</th></tr>
+<tr><td>11am</td><td align="right">9.1M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>1pm</td><td align="right">20.8M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>2pm</td><td align="right">11.8M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>3pm</td><td align="right">36.0M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>5pm</td><td align="right">5.3M</td><td>🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">TUESDAY 4/14 — 62.7M</th></tr>
+<tr><td>8am</td><td align="right">9.0M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">11.7M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>12pm</td><td align="right">16.7M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">15.4M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">WEDNESDAY 4/15 — 14.0M</th></tr>
+<tr><td>8am</td><td align="right">5.1M</td><td>🟧</td><td></td></tr>
+<tr><td>3pm</td><td align="right">6.2M</td><td>🟧🟧</td><td></td></tr>
 </table>
 
 > 🟧 = 4M tokens · 🔥 = 4M tokens (80M+ hours)
@@ -104,34 +714,273 @@
 
 ## The Monster Session
 
-| | |
-|---|---|
-| Session | #7 — klanker-maker |
-| Duration | 7.5 hours (8:13pm Sat → 3:41am Sun) |
-| Input | 279,035,160 tokens |
-| Output | 170,575 tokens |
-| Ratio | **1,636 : 1** |
-| Turns | 984 |
-| Cache read | 276,203,810 (99%) |
-
-> 279M tokens of context to generate 170K tokens of output. The context window was **SCREAMING**.
-
----
-
-## What Does 1.1 Billion Tokens Even Mean?
+### The Email Machine — Session 70c168e1
 
 | | |
 |---|---|
-| Pages of text | ~843,000 |
-| Full-length novels | ~2,810 |
-| English Wikipedias | ~3.4x |
-| Lord of the Rings cover-to-covers | 748 |
+| Duration | 30.6 hours |
+| Input | 631,500,000 tokens |
+| Output | 257,200 tokens |
+| Ratio | **2,456 : 1** |
+| Turns | 1,164 |
+| API calls | 1,673 |
+| Cache read | ~98.6% |
 
-...to write back **3.2M tokens** and produce **300 commits** / **82K lines of code**.
+> 631M tokens powering the email-to-command AI pipeline, Ed25519 signing, and the full `km at` scheduler.
+
+### The Long Tail — Session b9f08d42
+
+| | |
+|---|---|
+| Duration | 73.4 hours |
+| Input | 218,500,000 tokens |
+| Output | 140,400 tokens |
+| Ratio | **1,556 : 1** |
+| Turns | 688 |
+| API calls | 980 |
+
+> Three days of persistent context — agent tmux sessions, clone command, and sandbox numbering.
 
 ---
 
-*Generated by Claude Code · snapshot 2026-03-23 00:00 EDT*
+## What Got Built
+
+| | |
+|---|---|
+| Commits | 201 |
+| Files changed | 468 |
+| Lines added | 25,731 |
+| Lines deleted | 2,763 |
+| Phases completed | 31 (learn mode), 45 (email signing), 46 (AI email-to-command), 48 (--ttl/--idle overrides), 50 (agent non-interactive), 51 (agent tmux sessions), 52 (km clone), 53 (persistent local numbering) |
+| Features shipped | `km shell --learn` traffic observation + profile generation, Ed25519 email signing + verification, Haiku AI email-to-command dispatcher, `km at` scheduled operations (create/destroy/resume/budget-add), `km agent run/attach/results/list` with tmux persistence, `km clone` sandbox duplication, persistent local sandbox numbering, `--ttl`/`--idle` override flags, `--no-bedrock`/`--auto-start`, `km doctor` orphaned EC2 check, comprehensive docs overhaul |
+
+---
+
+## What Does 1.5 Billion Tokens Even Mean?
+
+| | |
+|---|---|
+| Pages of text | ~1,158,000 |
+| Full-length novels | ~3,860 |
+| English Wikipedias | ~4.7x |
+| Lord of the Rings cover-to-covers | 1,030 |
+
+...to write back **1.28M tokens** and produce **201 commits** / **26K lines of code**.
+
+---
+
+## Running Total
+
+| Period | Tokens | Commits | Lines |
+|---|---|---|---|
+| Weekend (3/20–23) | 1,126,000,000 | 300 | 82K |
+| Full week (3/21–28) | 2,740,000,000 | 650 | 114K |
+| Mon–Tue (3/30–31) | 507,000,000 | 95 | 16K |
+| eBPF sprint (4/1–3) | 604,000,000 | 145 | 23K |
+| Agent & Email (4/3–15) | 1,545,000,000 | 201 | 26K |
+| **Cumulative** | **~6,522,000,000** | **~1,391** | **~261K** |
+
+> **Past 6.5 BILLION.** Nearly 1,400 commits. Still $200/mo.
+
+---
+
+*Generated by Claude Code · snapshot 2026-04-15 EDT*
+
+
+---
+---
+
+# BURNT IV: The eBPF & Scheduler Sprint
+
+> **April 1–3, 2026** | Claude Code on **5x MAX** (Opus) | klanker-maker eBPF gatekeeper, EFS, storage, and km at/schedule
+
+---
+
+## The Numbers
+
+| | |
+|---|---|
+| **Tokens consumed** | **604,000,000+** |
+| Input | 603,766,000 (99.93%) |
+| Output | 419,000 (0.07%) |
+| Input:Output ratio | 1,441 : 1 |
+| Cache read | 98.3% of input |
+| **Sessions** | **10** |
+| **API calls** | **2,535** |
+| **Turns** | **1,823** |
+| **Plan cost** | **$200/mo** |
+
+> **600M tokens in three days.** Six phases landed: storage, eBPF SSL uprobes, gatekeeper mode, EFS, and scheduled operations.
+
+---
+
+## Heat Map (EDT)
+
+<table>
+<tr><th colspan="4" align="left">WEDNESDAY 4/1 — 438.1M</th></tr>
+<tr><td>12am</td><td align="right">67.1M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>1am</td><td align="right">13.0M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · sleep 4am–7am · · ·</sub></td></tr>
+<tr><td>7am</td><td align="right">3.3M</td><td>🟧</td><td></td></tr>
+<tr><td>8am</td><td align="right">50.2M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">42.6M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>10am</td><td align="right">15.9M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>11am</td><td align="right">38.9M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>12pm</td><td align="right">13.3M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>1pm</td><td align="right">33.7M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>2pm</td><td align="right">14.0M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>3pm</td><td align="right">4.3M</td><td>🟧</td><td></td></tr>
+<tr><td>4pm</td><td align="right">7.6M</td><td>🟧🟧</td><td></td></tr>
+<tr><td><strong>5pm</strong></td><td align="right"><strong>40.0M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">10.1M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">21.7M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">8.1M</td><td>🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>11pm</td><td align="right">49.2M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">THURSDAY 4/2 — 161.3M</th></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>8am</td><td align="right">10.2M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">20.2M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>3pm</td><td align="right">7.4M</td><td>🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>5pm</td><td align="right">14.3M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">7.9M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">15.5M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td><strong>8pm</strong></td><td align="right"><strong>26.4M</strong></td><td>🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>PEAK</strong></td></tr>
+<tr><td>9pm</td><td align="right">13.0M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">17.4M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>11pm</td><td align="right">23.2M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">FRIDAY 4/3 — 4.4M</th></tr>
+<tr><td>12am</td><td align="right">0.9M</td><td>🟧</td><td></td></tr>
+<tr><td>2am</td><td align="right">3.4M</td><td>🟧</td><td></td></tr>
+</table>
+
+> 🟧 = 4M tokens · 🔥 = 4M tokens (80M+ hours)
+
+---
+
+## What Got Built
+
+| | |
+|---|---|
+| Commits | 145 |
+| Files changed | 435 |
+| Lines added | 22,789 |
+| Lines deleted | 2,982 |
+| Phases completed | 33 (storage/hibernation), 41 (SSL uprobes), 42 (eBPF gatekeeper), 43 (EFS), 44 (km at/schedule) |
+| Features shipped | EC2 storage customization (rootVolumeSize, additionalVolume, hibernation, AMI), eBPF SSL uprobe TLS observability, eBPF gatekeeper mode with connect4 DNAT rewrite, regional EFS shared filesystem, `km at`/`km schedule` deferred operations, `--no-bedrock` flag, `--docker` shortcut, `--alias` flag, `km list` column truncation, `goose-ebpf-gatekeeper` profile |
+
+---
+
+## Running Total
+
+| Period | Tokens | Commits | Lines |
+|---|---|---|---|
+| Weekend (3/20–23) | 1,126,000,000 | 300 | 82K |
+| Full week (3/21–28) | 2,740,000,000 | 650 | 114K |
+| Mon–Tue (3/30–31) | 507,000,000 | 95 | 16K |
+| eBPF sprint (4/1–3) | 604,000,000 | 145 | 23K |
+| **Cumulative** | **~4,977,000,000** | **~1,190** | **~235K** |
+
+> **Knocking on 5 BILLION.** Nearly 1,200 commits. Still $200/mo.
+
+---
+
+*Generated by Claude Code · snapshot 2026-04-03 EDT*
+
+
+---
+---
+
+# BURNT III: Monday & Tuesday
+
+> **March 30–31, 2026** | Claude Code on **5x MAX** (Opus) | klanker-maker DynamoDB migration sprint
+
+---
+
+## The Numbers
+
+| | |
+|---|---|
+| **Tokens consumed** | **507,000,000+** |
+| Input | 506,400,000 (99.91%) |
+| Output | 444,000 (0.09%) |
+| Input:Output ratio | 1,140 : 1 |
+| Cache read | 98.1% of input |
+| **Sessions** | **4** |
+| **API calls** | **2,484** |
+| **Turns** | **1,811** |
+| **Plan cost** | **$200/mo** |
+
+> **Half a billion tokens in two days.** DynamoDB migration, Docker substrate fixes, rickrolls.
+
+---
+
+## Heat Map (EDT)
+
+<table>
+<tr><th colspan="4" align="left">SUNDAY 3/29 (late) — 30.5M</th></tr>
+<tr><td>11pm</td><td align="right">30.5M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">MONDAY 3/30 — 93.9M</th></tr>
+<tr><td>12am</td><td align="right">25.0M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · sleep 1am–8am · · ·</sub></td></tr>
+<tr><td>8am</td><td align="right">9.6M</td><td>🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>2pm</td><td align="right">5.1M</td><td>🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>5pm</td><td align="right">4.1M</td><td>🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">5.8M</td><td>🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">6.4M</td><td>🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">29.4M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>9pm</td><td align="right">8.1M</td><td>🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">TUESDAY 3/31 — 177.9M</th></tr>
+<tr><td>7am</td><td align="right">1.6M</td><td>🟧</td><td></td></tr>
+<tr><td>8am</td><td align="right">28.4M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">3.3M</td><td>🟧</td><td></td></tr>
+<tr><td>10am</td><td align="right">16.5M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td><strong>1pm</strong></td><td align="right"><strong>38.2M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>PEAK</strong></td></tr>
+<tr><td>2pm</td><td align="right">14.8M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>3pm</td><td align="right">13.0M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
+<tr><td>5pm</td><td align="right">19.4M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">25.2M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">14.9M</td><td>🟧🟧🟧</td><td></td></tr>
+</table>
+
+> 🟧 = 4M tokens · 🔥 = 4M tokens (80M+ hours)
+
+---
+
+## What Got Built
+
+| | |
+|---|---|
+| Commits | 95 |
+| Files changed | 224 |
+| Lines added | 15,608 |
+| Lines deleted | 914 |
+| Phase completed | 39 (S3 → DynamoDB metadata migration) |
+| Features shipped | DynamoDB CRUD layer, Terraform module + IAM, 22 call site switchover, `km kill` alias, `httpsOnly` toggle, Docker host check, rickroll easter egg, `.dockerignore`, profile allowlist sync |
+
+---
+
+## Running Total
+
+| Period | Tokens | Commits | Lines |
+|---|---|---|---|
+| Weekend (3/20–23) | 1,126,000,000 | 300 | 82K |
+| Full week (3/21–28) | 2,740,000,000 | 650 | 114K |
+| Mon–Tue (3/30–31) | 507,000,000 | 95 | 16K |
+| **Cumulative** | **~4,373,000,000** | **~1,045** | **~212K** |
+
+> **Past 4 BILLION.** Over a thousand commits. Still $200/mo.
+
+---
+
+*Generated by Claude Code · snapshot 2026-04-01 00:00 EDT*
+
 
 ---
 ---
@@ -342,103 +1191,13 @@
 
 *Generated by Claude Code · snapshot 2026-03-29 00:00 EDT*
 
----
----
-
-# BURNT III: Monday & Tuesday
-
-> **March 30–31, 2026** | Claude Code on **5x MAX** (Opus) | klanker-maker DynamoDB migration sprint
-
----
-
-## The Numbers
-
-| | |
-|---|---|
-| **Tokens consumed** | **507,000,000+** |
-| Input | 506,400,000 (99.91%) |
-| Output | 444,000 (0.09%) |
-| Input:Output ratio | 1,140 : 1 |
-| Cache read | 98.1% of input |
-| **Sessions** | **4** |
-| **API calls** | **2,484** |
-| **Turns** | **1,811** |
-| **Plan cost** | **$200/mo** |
-
-> **Half a billion tokens in two days.** DynamoDB migration, Docker substrate fixes, rickrolls.
-
----
-
-## Heat Map (EDT)
-
-<table>
-<tr><th colspan="4" align="left">SUNDAY 3/29 (late) — 30.5M</th></tr>
-<tr><td>11pm</td><td align="right">30.5M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">MONDAY 3/30 — 93.9M</th></tr>
-<tr><td>12am</td><td align="right">25.0M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · sleep 1am–8am · · ·</sub></td></tr>
-<tr><td>8am</td><td align="right">9.6M</td><td>🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>2pm</td><td align="right">5.1M</td><td>🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>5pm</td><td align="right">4.1M</td><td>🟧</td><td></td></tr>
-<tr><td>6pm</td><td align="right">5.8M</td><td>🟧</td><td></td></tr>
-<tr><td>7pm</td><td align="right">6.4M</td><td>🟧</td><td></td></tr>
-<tr><td>8pm</td><td align="right">29.4M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>9pm</td><td align="right">8.1M</td><td>🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">TUESDAY 3/31 — 177.9M</th></tr>
-<tr><td>7am</td><td align="right">1.6M</td><td>🟧</td><td></td></tr>
-<tr><td>8am</td><td align="right">28.4M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>9am</td><td align="right">3.3M</td><td>🟧</td><td></td></tr>
-<tr><td>10am</td><td align="right">16.5M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td><strong>1pm</strong></td><td align="right"><strong>38.2M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>PEAK</strong></td></tr>
-<tr><td>2pm</td><td align="right">14.8M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>3pm</td><td align="right">13.0M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>5pm</td><td align="right">19.4M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>6pm</td><td align="right">25.2M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>7pm</td><td align="right">14.9M</td><td>🟧🟧🟧</td><td></td></tr>
-</table>
-
-> 🟧 = 4M tokens · 🔥 = 4M tokens (80M+ hours)
-
----
-
-## What Got Built
-
-| | |
-|---|---|
-| Commits | 95 |
-| Files changed | 224 |
-| Lines added | 15,608 |
-| Lines deleted | 914 |
-| Phase completed | 39 (S3 → DynamoDB metadata migration) |
-| Features shipped | DynamoDB CRUD layer, Terraform module + IAM, 22 call site switchover, `km kill` alias, `httpsOnly` toggle, Docker host check, rickroll easter egg, `.dockerignore`, profile allowlist sync |
-
----
-
-## Running Total
-
-| Period | Tokens | Commits | Lines |
-|---|---|---|---|
-| Weekend (3/20–23) | 1,126,000,000 | 300 | 82K |
-| Full week (3/21–28) | 2,740,000,000 | 650 | 114K |
-| Mon–Tue (3/30–31) | 507,000,000 | 95 | 16K |
-| **Cumulative** | **~4,373,000,000** | **~1,045** | **~212K** |
-
-> **Past 4 BILLION.** Over a thousand commits. Still $200/mo.
-
----
-
-*Generated by Claude Code · snapshot 2026-04-01 00:00 EDT*
 
 ---
 ---
 
-# BURNT IV: The eBPF & Scheduler Sprint
+# BURNT I: Weekend Token Scoreboard
 
-> **April 1–3, 2026** | Claude Code on **5x MAX** (Opus) | klanker-maker eBPF gatekeeper, EFS, storage, and km at/schedule
+> **March 20–23, 2026** | Claude Code on **5x MAX** (Opus) | klanker-maker weekend sprint
 
 ---
 
@@ -446,218 +1205,61 @@
 
 | | |
 |---|---|
-| **Tokens consumed** | **604,000,000+** |
-| Input | 603,766,000 (99.93%) |
-| Output | 419,000 (0.07%) |
-| Input:Output ratio | 1,441 : 1 |
-| Cache read | 98.3% of input |
-| **Sessions** | **10** |
-| **API calls** | **2,535** |
-| **Turns** | **1,823** |
+| **Tokens consumed** | **1,126,000,000+** |
+| Input | 1,122,600,000 (99.72%) |
+| Output | 3,200,000 (0.28%) |
+| Input:Output ratio | 355 : 1 |
 | **Plan cost** | **$200/mo** |
 
-> **600M tokens in three days.** Six phases landed: storage, eBPF SSL uprobes, gatekeeper mode, EFS, and scheduled operations.
+> **ONE BILLION TOKENS IN A WEEKEND**
 
 ---
 
 ## Heat Map (EDT)
 
 <table>
-<tr><th colspan="4" align="left">WEDNESDAY 4/1 — 438.1M</th></tr>
-<tr><td>12am</td><td align="right">67.1M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>1am</td><td align="right">13.0M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · sleep 4am–7am · · ·</sub></td></tr>
-<tr><td>7am</td><td align="right">3.3M</td><td>🟧</td><td></td></tr>
-<tr><td>8am</td><td align="right">50.2M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>9am</td><td align="right">42.6M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>10am</td><td align="right">15.9M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>11am</td><td align="right">38.9M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>12pm</td><td align="right">13.3M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>1pm</td><td align="right">33.7M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>2pm</td><td align="right">14.0M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>3pm</td><td align="right">4.3M</td><td>🟧</td><td></td></tr>
-<tr><td>4pm</td><td align="right">7.6M</td><td>🟧🟧</td><td></td></tr>
-<tr><td><strong>5pm</strong></td><td align="right"><strong>40.0M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>6pm</td><td align="right">10.1M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>7pm</td><td align="right">21.7M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>8pm</td><td align="right">8.1M</td><td>🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">FRIDAY 3/20 — 10.7M</th></tr>
+<tr><td>8am</td><td align="right">2.8M</td><td>🟧</td><td></td></tr>
 <tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>11pm</td><td align="right">49.2M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">THURSDAY 4/2 — 161.3M</th></tr>
+<tr><td>9pm</td><td align="right">6.7M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">1.2M</td><td>🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">SATURDAY 3/21 — 418.0M</th></tr>
+<tr><td>8am</td><td align="right">0.9M</td><td>🟧</td><td></td></tr>
+<tr><td>9am</td><td align="right">0.0M</td><td>⬜</td><td></td></tr>
+<tr><td>10am</td><td align="right">1.2M</td><td>🟧</td><td></td></tr>
 <tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>8am</td><td align="right">10.2M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>9am</td><td align="right">20.2M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>3pm</td><td align="right">7.4M</td><td>🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>5pm</td><td align="right">14.3M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>6pm</td><td align="right">7.9M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>7pm</td><td align="right">15.5M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td><strong>8pm</strong></td><td align="right"><strong>26.4M</strong></td><td>🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>PEAK</strong></td></tr>
-<tr><td>9pm</td><td align="right">13.0M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>10pm</td><td align="right">17.4M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>11pm</td><td align="right">23.2M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">FRIDAY 4/3 — 4.4M</th></tr>
-<tr><td>12am</td><td align="right">0.9M</td><td>🟧</td><td></td></tr>
-<tr><td>2am</td><td align="right">3.4M</td><td>🟧</td><td></td></tr>
-</table>
-
-> 🟧 = 4M tokens · 🔥 = 4M tokens (80M+ hours)
-
----
-
-## What Got Built
-
-| | |
-|---|---|
-| Commits | 145 |
-| Files changed | 435 |
-| Lines added | 22,789 |
-| Lines deleted | 2,982 |
-| Phases completed | 33 (storage/hibernation), 41 (SSL uprobes), 42 (eBPF gatekeeper), 43 (EFS), 44 (km at/schedule) |
-| Features shipped | EC2 storage customization (rootVolumeSize, additionalVolume, hibernation, AMI), eBPF SSL uprobe TLS observability, eBPF gatekeeper mode with connect4 DNAT rewrite, regional EFS shared filesystem, `km at`/`km schedule` deferred operations, `--no-bedrock` flag, `--docker` shortcut, `--alias` flag, `km list` column truncation, `goose-ebpf-gatekeeper` profile |
-
----
-
-## Running Total
-
-| Period | Tokens | Commits | Lines |
-|---|---|---|---|
-| Weekend (3/20–23) | 1,126,000,000 | 300 | 82K |
-| Full week (3/21–28) | 2,740,000,000 | 650 | 114K |
-| Mon–Tue (3/30–31) | 507,000,000 | 95 | 16K |
-| eBPF sprint (4/1–3) | 604,000,000 | 145 | 23K |
-| **Cumulative** | **~4,977,000,000** | **~1,190** | **~235K** |
-
-> **Knocking on 5 BILLION.** Nearly 1,200 commits. Still $200/mo.
-
----
-
-*Generated by Claude Code · snapshot 2026-04-03 EDT*
-
----
----
-
-# BURNT V: The Agent & Email Sprint
-
-> **April 3–15, 2026** | Claude Code on **5x MAX** (Opus) | klanker-maker agents, email, clone, learn mode
-
----
-
-## The Numbers
-
-| | |
-|---|---|
-| **Tokens consumed** | **1,545,000,000+** |
-| Input | 1,543,681,000 (99.92%) |
-| Output | 1,280,000 (0.08%) |
-| Input:Output ratio | 1,206 : 1 |
-| Cache read | 98.6% of input |
-| **Sessions** | **27** |
-| **API calls** | **7,934** |
-| **Turns** | **5,644** |
-| **Plan cost** | **$200/mo** |
-
-> **1.5 BILLION TOKENS in 12 days.** Eight phases landed: learn mode, email-to-command AI, agent tmux sessions, clone, and persistent sandbox numbering.
-
----
-
-## Heat Map (EDT)
-
-<table>
-<tr><th colspan="4" align="left">FRIDAY 4/3 — 163.9M</th></tr>
-<tr><td>4pm</td><td align="right">9.2M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>5pm</td><td align="right">13.0M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>6pm</td><td align="right">16.8M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td><strong>7pm</strong></td><td align="right"><strong>39.9M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
-<tr><td>8pm</td><td align="right">22.8M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>9pm</td><td align="right">35.4M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>10pm</td><td align="right">22.0M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">SATURDAY 4/4 — 542.4M</th></tr>
-<tr><td>8am</td><td align="right">18.0M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>9am</td><td align="right">3.1M</td><td>🟧</td><td></td></tr>
-<tr><td>10am</td><td align="right">7.1M</td><td>🟧🟧</td><td></td></tr>
-<tr><td><strong>11am</strong></td><td align="right"><strong>85.6M</strong></td><td>🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥</td><td>⬅️ <strong>SPRINT PEAK</strong></td></tr>
-<tr><td>12pm</td><td align="right">62.2M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>1pm</td><td align="right">41.9M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>2pm</td><td align="right">59.5M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>3pm</td><td align="right">27.2M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>4pm</td><td align="right">20.2M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>5pm</td><td align="right">11.4M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>6pm</td><td align="right">55.5M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>7pm</td><td align="right">20.9M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>8pm</td><td align="right">5.8M</td><td>🟧</td><td></td></tr>
-<tr><td>9pm</td><td align="right">62.5M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>10pm</td><td align="right">61.3M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">SUNDAY 4/5 — 153.6M</th></tr>
-<tr><td>7am</td><td align="right">23.3M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>8am</td><td align="right">20.5M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>9am</td><td align="right">34.1M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>6pm</td><td align="right">15.9M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>7pm</td><td align="right">26.2M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>8pm</td><td align="right">7.9M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>10pm</td><td align="right">21.5M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">MONDAY 4/6 — 95.6M</th></tr>
-<tr><td>8am</td><td align="right">11.2M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>6pm</td><td align="right">5.4M</td><td>🟧</td><td></td></tr>
-<tr><td>7pm</td><td align="right">13.1M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>8pm</td><td align="right">31.4M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>9pm</td><td align="right">18.5M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>10pm</td><td align="right">12.6M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">TUESDAY 4/7 — 75.1M</th></tr>
-<tr><td>8am</td><td align="right">15.9M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>9am</td><td align="right">14.2M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>11am</td><td align="right">8.0M</td><td>🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>8pm</td><td align="right">11.4M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>9pm</td><td align="right">23.0M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">WEDNESDAY 4/8 — 28.5M</th></tr>
-<tr><td>9am</td><td align="right">3.0M</td><td>🟧</td><td></td></tr>
-<tr><td>1pm</td><td align="right">8.6M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>11pm</td><td align="right">16.1M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">THURSDAY 4/9 — 4.4M</th></tr>
-<tr><td>5pm</td><td align="right">4.0M</td><td>🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">FRIDAY 4/10 — 244.8M</th></tr>
-<tr><td>6am</td><td align="right">10.5M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>7am</td><td align="right">7.7M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>8am</td><td align="right">24.0M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>9am</td><td align="right">36.3M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>10am</td><td align="right">9.8M</td><td>🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>1pm</td><td align="right">17.1M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>2pm</td><td align="right">7.9M</td><td>🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>5pm</td><td align="right">22.1M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>6pm</td><td align="right">37.7M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>7pm</td><td align="right">38.3M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>9pm</td><td align="right">25.0M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">SATURDAY 4/11 — quiet</th></tr>
-<tr><td colspan="4"><sub>· · · rest day · · ·</sub></td></tr>
-<tr><th colspan="4" align="left">SUNDAY 4/12 — 71.8M</th></tr>
-<tr><td>8am</td><td align="right">18.8M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>9am</td><td align="right">10.3M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>10am</td><td align="right">12.5M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>11am</td><td align="right">11.9M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>6pm</td><td align="right">5.8M</td><td>🟧</td><td></td></tr>
-<tr><td>7pm</td><td align="right">6.6M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>8pm</td><td align="right">5.2M</td><td>🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">MONDAY 4/13 — 88.1M</th></tr>
-<tr><td>11am</td><td align="right">9.1M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>1pm</td><td align="right">20.8M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>2pm</td><td align="right">11.8M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>3pm</td><td align="right">36.0M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>5pm</td><td align="right">5.3M</td><td>🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">TUESDAY 4/14 — 62.7M</th></tr>
-<tr><td>8am</td><td align="right">9.0M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>9am</td><td align="right">11.7M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>12pm</td><td align="right">16.7M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>7pm</td><td align="right">15.4M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">WEDNESDAY 4/15 — 14.0M</th></tr>
-<tr><td>8am</td><td align="right">5.1M</td><td>🟧</td><td></td></tr>
-<tr><td>3pm</td><td align="right">6.2M</td><td>🟧🟧</td><td></td></tr>
+<tr><td>1pm</td><td align="right">17.0M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>2pm</td><td align="right">22.0M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>3pm</td><td align="right">32.1M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>4pm</td><td align="right">38.1M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>5pm</td><td align="right">45.4M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">21.8M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">2.9M</td><td>🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">56.7M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td><strong>9pm</strong></td><td align="right"><strong>109.9M</strong></td><td>🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥</td><td>⬅️ <strong>PEAK</strong></td></tr>
+<tr><td>10pm</td><td align="right">40.2M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>11pm</td><td align="right">29.9M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">SUNDAY 3/22 — 693.9M</th></tr>
+<tr><td>12am</td><td align="right">40.6M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>1am</td><td align="right">35.1M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td colspan="4"><sub>· · · sleep 2am–9am · · ·</sub></td></tr>
+<tr><td>9am</td><td align="right">28.8M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>10am</td><td align="right">22.0M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>11am</td><td align="right">12.9M</td><td>🟧🟧🟧</td><td></td></tr>
+<tr><td>12pm</td><td align="right">14.7M</td><td>🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>1pm</td><td align="right">31.4M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>2pm</td><td align="right">42.5M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>3pm</td><td align="right">48.0M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>4pm</td><td align="right">82.7M</td><td>🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥</td><td></td></tr>
+<tr><td>5pm</td><td align="right">55.7M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>6pm</td><td align="right">60.7M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>7pm</td><td align="right">27.9M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>8pm</td><td align="right">2.6M</td><td>🟧</td><td></td></tr>
+<tr><td>9pm</td><td align="right">44.6M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><td>10pm</td><td align="right">94.7M</td><td>🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥</td><td></td></tr>
+<tr><td>11pm</td><td align="right">65.7M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
+<tr><th colspan="4" align="left">MONDAY 3/23 — 9.9M</th></tr>
+<tr><td>12am</td><td align="right">9.9M</td><td>🟧🟧🟧</td><td></td></tr>
 </table>
 
 > 🟧 = 4M tokens · 🔥 = 4M tokens (80M+ hours)
@@ -666,406 +1268,32 @@
 
 ## The Monster Session
 
-### The Email Machine — Session 70c168e1
+| | |
+|---|---|
+| Session | #7 — klanker-maker |
+| Duration | 7.5 hours (8:13pm Sat → 3:41am Sun) |
+| Input | 279,035,160 tokens |
+| Output | 170,575 tokens |
+| Ratio | **1,636 : 1** |
+| Turns | 984 |
+| Cache read | 276,203,810 (99%) |
+
+> 279M tokens of context to generate 170K tokens of output. The context window was **SCREAMING**.
+
+---
+
+## What Does 1.1 Billion Tokens Even Mean?
 
 | | |
 |---|---|
-| Duration | 30.6 hours |
-| Input | 631,500,000 tokens |
-| Output | 257,200 tokens |
-| Ratio | **2,456 : 1** |
-| Turns | 1,164 |
-| API calls | 1,673 |
-| Cache read | ~98.6% |
+| Pages of text | ~843,000 |
+| Full-length novels | ~2,810 |
+| English Wikipedias | ~3.4x |
+| Lord of the Rings cover-to-covers | 748 |
 
-> 631M tokens powering the email-to-command AI pipeline, Ed25519 signing, and the full `km at` scheduler.
-
-### The Long Tail — Session b9f08d42
-
-| | |
-|---|---|
-| Duration | 73.4 hours |
-| Input | 218,500,000 tokens |
-| Output | 140,400 tokens |
-| Ratio | **1,556 : 1** |
-| Turns | 688 |
-| API calls | 980 |
-
-> Three days of persistent context — agent tmux sessions, clone command, and sandbox numbering.
+...to write back **3.2M tokens** and produce **300 commits** / **82K lines of code**.
 
 ---
 
-## What Got Built
+*Generated by Claude Code · snapshot 2026-03-23 00:00 EDT*
 
-| | |
-|---|---|
-| Commits | 201 |
-| Files changed | 468 |
-| Lines added | 25,731 |
-| Lines deleted | 2,763 |
-| Phases completed | 31 (learn mode), 45 (email signing), 46 (AI email-to-command), 48 (--ttl/--idle overrides), 50 (agent non-interactive), 51 (agent tmux sessions), 52 (km clone), 53 (persistent local numbering) |
-| Features shipped | `km shell --learn` traffic observation + profile generation, Ed25519 email signing + verification, Haiku AI email-to-command dispatcher, `km at` scheduled operations (create/destroy/resume/budget-add), `km agent run/attach/results/list` with tmux persistence, `km clone` sandbox duplication, persistent local sandbox numbering, `--ttl`/`--idle` override flags, `--no-bedrock`/`--auto-start`, `km doctor` orphaned EC2 check, comprehensive docs overhaul |
-
----
-
-## What Does 1.5 Billion Tokens Even Mean?
-
-| | |
-|---|---|
-| Pages of text | ~1,158,000 |
-| Full-length novels | ~3,860 |
-| English Wikipedias | ~4.7x |
-| Lord of the Rings cover-to-covers | 1,030 |
-
-...to write back **1.28M tokens** and produce **201 commits** / **26K lines of code**.
-
----
-
-## Running Total
-
-| Period | Tokens | Commits | Lines |
-|---|---|---|---|
-| Weekend (3/20–23) | 1,126,000,000 | 300 | 82K |
-| Full week (3/21–28) | 2,740,000,000 | 650 | 114K |
-| Mon–Tue (3/30–31) | 507,000,000 | 95 | 16K |
-| eBPF sprint (4/1–3) | 604,000,000 | 145 | 23K |
-| Agent & Email (4/3–15) | 1,545,000,000 | 201 | 26K |
-| **Cumulative** | **~6,522,000,000** | **~1,391** | **~261K** |
-
-> **Past 6.5 BILLION.** Nearly 1,400 commits. Still $200/mo.
-
----
-
-*Generated by Claude Code · snapshot 2026-04-15 EDT*
-
----
-
-# BURNT VI: The AMI Lifecycle Sprint
-
-> **April 15–26, 2026** | Claude Code on **5x MAX** (Opus) | klanker-maker AMI bake/relaunch, codex agent, email allowlists, hibernation accounting, Ctrl+C fix
-
----
-
-## The Numbers
-
-| | |
-|---|---|
-| **Tokens consumed** | **686,700,000+** |
-| Input | 686,697,000 (99.69%) |
-| Output | 2,121,000 (0.31%) |
-| Input:Output ratio | 324 : 1 |
-| Cache read | 96.9% of input |
-| **Sessions** | **21** |
-| **API calls** | **4,547** |
-| **Turns** | **3,123** |
-| **Plan cost** | **$200/mo** |
-
-> **686 MILLION TOKENS in 12 days.** Ten phases touched: raw AMI ID support, learn-mode command capture, full AMI snapshot lifecycle, bake-loop hardening, codex agent support, email allowlists, paused-budget accounting, Ctrl+C fix, multi-account GitHub App, plus the operator-notify hook planned end-to-end.
-
----
-
-## Heat Map (EDT)
-
-<table>
-<tr><th colspan="4" align="left">WEDNESDAY 4/15 — 134.1M</th></tr>
-<tr><td>8am</td><td align="right">5.1M</td><td>🟧</td><td></td></tr>
-<tr><td>9am</td><td align="right">1.4M</td><td>🟧</td><td></td></tr>
-<tr><td>3pm</td><td align="right">6.2M</td><td>🟧</td><td></td></tr>
-<tr><td>5pm</td><td align="right">1.7M</td><td>🟧</td><td></td></tr>
-<tr><td>6pm</td><td align="right">24.1M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>7pm</td><td align="right">23.3M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>8pm</td><td align="right">16.1M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td><strong>9pm</strong></td><td align="right"><strong>37.9M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
-<tr><td>10pm</td><td align="right">18.4M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">THURSDAY 4/16 — 37.6M</th></tr>
-<tr><td>8am</td><td align="right">5.6M</td><td>🟧</td><td></td></tr>
-<tr><td>9am</td><td align="right">12.9M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>10pm</td><td align="right">7.0M</td><td>🟧</td><td></td></tr>
-<tr><td>11pm</td><td align="right">12.1M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">FRIDAY 4/17 — 38.3M</th></tr>
-<tr><td>12am</td><td align="right">1.6M</td><td>🟧</td><td></td></tr>
-<tr><td>8am</td><td align="right">3.1M</td><td>🟧</td><td></td></tr>
-<tr><td>4pm</td><td align="right">2.4M</td><td>🟧</td><td></td></tr>
-<tr><td><strong>5pm</strong></td><td align="right"><strong>23.8M</strong></td><td>🟧🟧🟧🟧🟧</td><td>⬅️ <strong>v0.1.351 cut</strong></td></tr>
-<tr><td>6pm</td><td align="right">5.0M</td><td>🟧</td><td></td></tr>
-<tr><td>11pm</td><td align="right">1.6M</td><td>🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">SATURDAY 4/18 — 59.1M</th></tr>
-<tr><td>7am</td><td align="right">8.0M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>8am</td><td align="right">4.9M</td><td>🟧</td><td></td></tr>
-<tr><td>10am</td><td align="right">8.1M</td><td>🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>5pm</td><td align="right">9.2M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>6pm</td><td align="right">6.1M</td><td>🟧</td><td></td></tr>
-<tr><td><strong>7pm</strong></td><td align="right"><strong>14.5M</strong></td><td>🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
-<tr><th colspan="4" align="left">SUNDAY 4/19 — 114.2M</th></tr>
-<tr><td>6am</td><td align="right">4.5M</td><td>🟧</td><td></td></tr>
-<tr><td>8am</td><td align="right">7.0M</td><td>🟧</td><td></td></tr>
-<tr><td>9am</td><td align="right">19.3M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>10am</td><td align="right">8.9M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>3pm</td><td align="right">8.1M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>5pm</td><td align="right">11.1M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>8pm</td><td align="right">5.9M</td><td>🟧</td><td></td></tr>
-<tr><td><strong>9pm</strong></td><td align="right"><strong>25.4M</strong></td><td>🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
-<tr><td>10pm</td><td align="right">5.5M</td><td>🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">MONDAY 4/20 — 39.4M</th></tr>
-<tr><td>7am</td><td align="right">9.2M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>8am</td><td align="right">9.4M</td><td>🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>7pm</td><td align="right">6.8M</td><td>🟧</td><td></td></tr>
-<tr><td>8pm</td><td align="right">8.8M</td><td>🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">TUESDAY 4/21 — 18.5M</th></tr>
-<tr><td>7am</td><td align="right">3.7M</td><td>🟧</td><td></td></tr>
-<tr><td>8am</td><td align="right">14.7M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">WEDNESDAY 4/22 — 16.8M</th></tr>
-<tr><td>2pm</td><td align="right">2.7M</td><td>🟧</td><td></td></tr>
-<tr><td>7pm</td><td align="right">2.6M</td><td>🟧</td><td></td></tr>
-<tr><td>9pm</td><td align="right">2.6M</td><td>🟧</td><td></td></tr>
-<tr><td>10pm</td><td align="right">6.1M</td><td>🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · gap (4/23–4/24, single multi-day session running) · · · · ·</sub></td></tr>
-<tr><th colspan="4" align="left">SATURDAY 4/25 — 88.9M</th></tr>
-<tr><td>6pm</td><td align="right">10.1M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>7pm</td><td align="right">6.3M</td><td>🟧</td><td></td></tr>
-<tr><td><strong>8pm</strong></td><td align="right"><strong>27.8M</strong></td><td>🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
-<tr><td>9pm</td><td align="right">15.4M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>10pm</td><td align="right">10.0M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>11pm</td><td align="right">17.8M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">SUNDAY 4/26 — 139.8M (sprint peak day)</th></tr>
-<tr><td>12am</td><td align="right">17.9M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>8am</td><td align="right">7.6M</td><td>🟧</td><td></td></tr>
-<tr><td>9am</td><td align="right">5.2M</td><td>🟧</td><td></td></tr>
-<tr><td>10am</td><td align="right">6.3M</td><td>🟧</td><td></td></tr>
-<tr><td>12pm</td><td align="right">11.8M</td><td>🟧🟧</td><td></td></tr>
-<tr><td><strong>1pm</strong></td><td align="right"><strong>21.2M</strong></td><td>🟧🟧🟧🟧🟧</td><td>⬅️ <strong>DAY PEAK</strong></td></tr>
-<tr><td>4pm</td><td align="right">4.3M</td><td>🟧</td><td></td></tr>
-<tr><td>5pm</td><td align="right">14.9M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>6pm</td><td align="right">8.6M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>8pm</td><td align="right">10.3M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>11pm</td><td align="right">13.6M</td><td>🟧🟧🟧</td><td></td></tr>
-</table>
-
----
-
-## Monster Sessions
-
-| Tokens | Output | Turns | Span | Window |
-|---|---|---|---|---|
-| **120.2M** | 105.6K | 465 | 17h | 4/15 17:02 → 4/16 09:56 — Phase 33.1 raw AMI ID end-to-end |
-| **118.0M** | 541.1K | 280 | 61h | 4/23 20:30 → 4/26 09:59 — Phase 56 plans 04/05/06 (km ami subcommand tree, --ami flag, checkStaleAMIs) |
-| **74.1M** | 345.4K | 213 | 12h | 4/26 08:45 → 4/26 20:35 — Phase 56.1 hardening + docs sprint |
-| **63.8M** | 70.4K | 336 | 60h | 4/15 19:56 → 4/18 07:44 — Phase 54 multi-account GitHub App |
-| **61.6M** | 58.7K | 300 | 25h | 4/18 07:52 → 4/19 09:25 — Phase 55 learn-mode command capture |
-| **57.5M** | 219.9K | 223 | 13h | 4/19 20:21 → 4/20 09:30 — Phase 56 plans 01/02/03 (BakeAMI helper + SCP AMI lifecycle) |
-| **49.4M** | 59.2K | 239 | 45h | 4/19 11:22 → 4/21 08:39 — Phase 58/59/60 stitching |
-| **34.5M** | 145.1K | 178 | 18h | 4/18 17:02 → 4/19 11:24 — Phase 61 km shell Ctrl+C investigation |
-
-> Two long-running sessions covered the whole AMI lifecycle: 120M to land raw AMI IDs, then 118M to ship the snapshot/lifecycle/doctor surface.
-
----
-
-## What Got Built
-
-| | |
-|---|---|
-| Commits | 216 |
-| Files changed | 516 |
-| Lines added | 36,627 |
-| Lines deleted | 1,762 |
-| Phases completed | 33.1 (raw AMI IDs), 54 (multi-account GitHub App), 55 (learn-mode command capture), 56 (AMI snapshot lifecycle), 56.1 (bake-loop hardening), 58 (codex agent support), 59 (email sender allowlist), 60 (paused-interval budget accounting), 61 (km shell Ctrl+C fix) |
-| Phases planned end-to-end | 62 (operator-notify hook — research/context/validation/plan/checker, 5 plans / 4 waves, ready to execute) |
-| Features shipped | `spec.runtime.ami` accepts raw `ami-xxxxxxxx` IDs alongside slugs; `km shell --learn --ami` snapshots EC2 to a custom AMI on exit and embeds the ID in the generated profile; `km ami list/bake/copy/delete` subcommand tree; `km doctor` checkStaleAMIs + `--all-regions` flag (now 21 checks); SCP `DenyInfraAndStorage` extended for AMI lifecycle ops + positive-allow operator IAM guidance; learn mode now captures bash/zsh history into `initCommands`; multi-account GitHub App installations; `km agent run --codex`/`--claude` flags with profile `codexArgs` and claude-only `--no-bedrock` gating; email sender allowlist on operator inbox + sandbox inbound; paused/hibernated EC2 stops accruing compute spend; `km shell` Ctrl+C now propagates correctly via parameterized `Standard_Stream` SSM document; bake-loop hardening (BDM auto-rotation, non-blocking audit hook, sidecar FIFO retry, post-env-rewrite restart); README/CLAUDE.md/user-manual/profile-reference docs refreshed |
-
----
-
-## What Does 686.7 Million Tokens Even Mean?
-
-| | |
-|---|---|
-| Pages of text | ~515,000 |
-| Full-length novels | ~1,717 |
-| English Wikipedias | ~2.08x |
-| Lord of the Rings cover-to-covers | ~458 |
-
-...to write back **2.12M tokens** and produce **216 commits** / **35K lines of code** across **9 shipped phases** (plus one planned end-to-end).
-
----
-
-## Running Total
-
-| Period | Tokens | Commits | Lines |
-|---|---|---|---|
-| Weekend (3/20–23) | 1,126,000,000 | 300 | 82K |
-| Full week (3/21–28) | 2,740,000,000 | 650 | 114K |
-| Mon–Tue (3/30–31) | 507,000,000 | 95 | 16K |
-| eBPF sprint (4/1–3) | 604,000,000 | 145 | 23K |
-| Agent & Email (4/3–15) | 1,545,000,000 | 201 | 26K |
-| AMI Lifecycle (4/15–26) | 686,700,000 | 216 | 35K |
-| **Cumulative** | **~7,209,000,000** | **~1,607** | **~296K** |
-
-> **Past 7.2 BILLION.** 1,600+ commits. ~296K lines. Still $200/mo.
-
----
-
-*Generated by Claude Code · snapshot 2026-04-26 EDT*
-
----
----
-
-# BURNT VII: The Slack Bidirectional Sprint
-
-> **April 27 – May 4, 2026** | Claude Code on **5x MAX** (Opus 4.7) | klanker-maker Slack inbound, ack reactions, transcript streaming
-
----
-
-## The Numbers
-
-| | |
-|---|---|
-| **Tokens consumed** | **842,000,000+** |
-| Input | 837,768,000 (99.46%) |
-| Output | 4,545,000 (0.54%) |
-| Input:Output ratio | 184 : 1 |
-| Cache read | 96.9% of input |
-| **Sessions** | **28** |
-| **API calls** | **4,352** |
-| **Turns** | **2,750** |
-| **Plan cost** | **$200/mo** |
-
-> **842 MILLION TOKENS in 8 days.** Three Slack phases landed end-to-end: bidirectional inbound chat, 👀 ack reactions, and per-turn transcript streaming with gzipped JSONL upload to S3.
-
----
-
-## Heat Map (EDT)
-
-<table>
-<tr><th colspan="4" align="left">MONDAY 4/27 — 25.9M</th></tr>
-<tr><td>8am</td><td align="right">16.5M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>9am</td><td align="right">4.7M</td><td>🟧</td><td></td></tr>
-<tr><td>7pm</td><td align="right">4.4M</td><td>🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">TUESDAY 4/28 — 41.4M</th></tr>
-<tr><td>9am</td><td align="right">3.2M</td><td>🟧</td><td></td></tr>
-<tr><td>4pm</td><td align="right">3.2M</td><td>🟧</td><td></td></tr>
-<tr><td>5pm</td><td align="right">9.0M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>6pm</td><td align="right">6.2M</td><td>🟧</td><td></td></tr>
-<tr><td>9pm</td><td align="right">18.1M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">WEDNESDAY 4/29 — 32.3M</th></tr>
-<tr><td>8am</td><td align="right">9.2M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>9am</td><td align="right">7.5M</td><td>🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>3pm</td><td align="right">3.4M</td><td>🟧</td><td></td></tr>
-<tr><td>6pm</td><td align="right">2.5M</td><td>🟧</td><td></td></tr>
-<tr><td>9pm</td><td align="right">2.7M</td><td>🟧</td><td></td></tr>
-<tr><td>10pm</td><td align="right">2.7M</td><td>🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">THURSDAY 4/30 — 109.6M</th></tr>
-<tr><td>7am</td><td align="right">2.6M</td><td>🟧</td><td></td></tr>
-<tr><td>8am</td><td align="right">5.2M</td><td>🟧</td><td></td></tr>
-<tr><td>11am</td><td align="right">11.6M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>6pm</td><td align="right">15.9M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>7pm</td><td align="right">22.9M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>8pm</td><td align="right">14.6M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>9pm</td><td align="right">29.5M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>10pm</td><td align="right">5.5M</td><td>🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">FRIDAY 5/1 — 87.1M</th></tr>
-<tr><td>8am</td><td align="right">5.8M</td><td>🟧</td><td></td></tr>
-<tr><td>9am</td><td align="right">6.0M</td><td>🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>5pm</td><td align="right">10.9M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>6pm</td><td align="right">6.3M</td><td>🟧</td><td></td></tr>
-<tr><td>10pm</td><td align="right">11.1M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>11pm</td><td align="right">37.3M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">SATURDAY 5/2 — 152.7M</th></tr>
-<tr><td>12am</td><td align="right">10.0M</td><td>🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>5pm</td><td align="right">4.9M</td><td>🟧</td><td></td></tr>
-<tr><td>6pm</td><td align="right">9.4M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>7pm</td><td align="right">13.1M</td><td>🟧🟧🟧</td><td></td></tr>
-<tr><td>9pm</td><td align="right">22.7M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>10pm</td><td align="right">56.8M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>11pm</td><td align="right">31.4M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">SUNDAY 5/3 — 361.1M (sprint peak day)</th></tr>
-<tr><td>12am</td><td align="right">37.3M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td><strong>1am</strong></td><td align="right"><strong>60.7M</strong></td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td>⬅️ <strong>SPRINT PEAK HOUR</strong></td></tr>
-<tr><td>2am</td><td align="right">28.7M</td><td>🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · sleep 3am–7am · · ·</sub></td></tr>
-<tr><td>8am</td><td align="right">17.3M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>9am</td><td align="right">7.3M</td><td>🟧</td><td></td></tr>
-<tr><td>10am</td><td align="right">21.8M</td><td>🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>11am</td><td align="right">24.9M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td colspan="4"><sub>· · · · · · · · · · · · ·</sub></td></tr>
-<tr><td>3pm</td><td align="right">8.0M</td><td>🟧🟧</td><td></td></tr>
-<tr><td>4pm</td><td align="right">17.8M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>5pm</td><td align="right">15.6M</td><td>🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>6pm</td><td align="right">49.1M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>10pm</td><td align="right">34.6M</td><td>🟧🟧🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>11pm</td><td align="right">25.8M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><th colspan="4" align="left">MONDAY 5/4 — 32.1M (partial)</th></tr>
-<tr><td>12am</td><td align="right">26.4M</td><td>🟧🟧🟧🟧🟧🟧</td><td></td></tr>
-<tr><td>1am</td><td align="right">1.2M</td><td>🟧</td><td></td></tr>
-<tr><td>7am</td><td align="right">3.5M</td><td>🟧</td><td></td></tr>
-</table>
-
-> 🟧 = 4M tokens · 🔥 = 4M tokens (80M+ hours, none this sprint)
-
----
-
-## Monster Sessions
-
-| Tokens | Output | Turns | Span | Window |
-|---:|---:|---:|---:|---|
-| **245.3M** | 915.7K | 603 | 26.0h | 5/2 00:26 → 5/3 02:24 — Phase 67 inbound execution + Phase 68 wave kickoff |
-| **153.6M** | 643.1K | 335 | 9.3h | 5/3 15:37 → 5/4 00:57 — Phase 68 transcript streaming + UAT |
-| **110.3M** | 428.5K | 293 | 25.0h | 4/29 21:15 → 4/30 22:15 — Phase 67 sub-plans (poller + DDB threads) |
-| **65.7M** | 355.4K | 215 | 6.7h | 5/1 17:42 → 5/2 00:26 — bridge handler + signing-secret rotation |
-| **51.8M** | 252.8K | 177 | 2.9h | 5/3 09:08 → 5/3 12:00 — Phase 68.1 hardening / files:write probe |
-| **36.7M** | 217.1K | 80 | 37.4h | 4/27 19:41 → 4/29 09:08 — Phase 67 research + plan-checker |
-| **24.3M** | 65.1K | 72 | 11.2h | 4/27 08:25 → 4/27 19:37 — Phase 66 archival + Phase 67 kickoff |
-
-> Two back-to-back marathons covered the heart of the sprint: 245M to land Phase 67, then 154M for Phase 68. The Sunday 5/3 peak (361M in a single day) traces directly to the Phase 68 plan execution + UAT cycle.
-
----
-
-## What Got Built
-
-| | |
-|---|---|
-| Commits | 311 |
-| Files changed | 777 |
-| Lines added | 82,055 |
-| Lines deleted | 3,054 |
-| Phases completed | 67 (Slack inbound — bidirectional channel chat), 67.1 (👀 ack reaction), 68 (per-turn transcript streaming + gzipped JSONL upload) |
-| Features shipped | Slack→sandbox dispatch via per-sandbox SQS FIFO + systemd poller, bridge HMAC-SHA256 signature verification, `/sandbox/{id}/slack-inbound-queue-url` SSM Parameter, `{prefix}-km-slack-threads` DDB session-id continuity (30-day TTL), `slack_channel_id-index` GSI on sandboxes table, 👀 reaction ack on inbound enqueue (configurable via `KM_SLACK_ACK_EMOJI`), `KM_SLACK_THREAD_TS` env handoff for Stop hook gating, `notifySlackInboundEnabled` profile field, `notifySlackTranscriptEnabled` profile field, per-turn streaming PostToolUse hook, `S3` `transcripts/{sandbox}/{session}.jsonl.gz` upload, Slack `files.completeUploadExternal` 3-step flow with cold-start `files:write` scope probe, `{prefix}-slack-stream-messages` DDB record-mapping table, `--transcript-stream` / `--no-transcript-stream` flags on `km shell` and `km agent run`, `km slack rotate-signing-secret`, three new `km doctor` checks (`slack_inbound_queue_exists`, `slack_app_events_subscription`, `slack_transcript_table_exists` + companion `slack_files_write_scope` and `slack_transcript_stale_objects`), Opus 4.7 metering pricing + token display rounding fix |
-
----
-
-## What Does 842 Million Tokens Even Mean?
-
-| | |
-|---|---|
-| Pages of text | ~632,000 |
-| Full-length novels | ~2,100 |
-| English Wikipedias | ~2.55x |
-| Lord of the Rings cover-to-covers | ~561 |
-
-...to write back **4.54M tokens** and produce **311 commits** / **79K net lines of code** across **3 shipped phases** (67, 67.1, 68).
-
----
-
-## Running Total
-
-| Period | Tokens | Commits | Lines |
-|---|---:|---:|---:|
-| Weekend (3/20–23) | 1,126,000,000 | 300 | 82K |
-| Full week (3/21–28) | 2,740,000,000 | 650 | 114K |
-| Mon–Tue (3/30–31) | 507,000,000 | 95 | 16K |
-| eBPF sprint (4/1–3) | 604,000,000 | 145 | 23K |
-| Agent & Email (4/3–15) | 1,545,000,000 | 201 | 26K |
-| AMI Lifecycle (4/15–26) | 686,700,000 | 216 | 35K |
-| Slack Bidirectional (4/27–5/4) | 842,000,000 | 311 | 79K |
-| **Cumulative** | **~8,051,000,000** | **~1,918** | **~375K** |
-
-> **Past 8 BILLION.** 1,900+ commits. ~375K lines. Still $200/mo.
-
----
-
-*Generated by Claude Code · snapshot 2026-05-04 EDT*
