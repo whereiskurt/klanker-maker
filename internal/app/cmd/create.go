@@ -511,23 +511,28 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	}
 
 	// Step 6d: Phase 73 — generate per-sandbox VS Code SSH keypair on the operator's laptop.
-	// Default true (nil CLI or nil VSCodeEnabled both enable keygen). The pubkey content is
-	// threaded into NetworkConfig so compiler.Compile embeds it into /home/sandbox/.ssh/authorized_keys
-	// at boot via the userdata template block (Plan 73-04). Fails fast before any AWS resource
-	// creation so a disk-full or permission error never leaves orphan sandboxes.
+	// When KM_VSCODE_SSH_PUBKEY is set (--remote path: Lambda subprocess invocation),
+	// reuse the operator-generated pubkey rather than regenerating one in a read-only
+	// Lambda filesystem with no $HOME. This guarantees the operator's private key
+	// matches the sandbox's authorized_keys.
 	if profile.IsVSCodeEnabled(resolvedProfile.Spec.CLI) {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("locate home directory for vscode keypair: %w", err)
+		if envPub := os.Getenv("KM_VSCODE_SSH_PUBKEY"); envPub != "" {
+			network.VSCodeSSHPubKey = envPub
+			fmt.Fprintln(os.Stderr, "  ✓ VS Code keypair received from operator (KM_VSCODE_SSH_PUBKEY)")
+		} else {
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return fmt.Errorf("locate home directory for vscode keypair: %w", err)
+			}
+			privPath := filepath.Join(homeDir, ".km", "keys", sandboxID)
+			pubPath := privPath + ".pub"
+			pubLine, err := sshkey.GenerateAndWrite(privPath, pubPath, "km-"+sandboxID)
+			if err != nil {
+				return fmt.Errorf("generate vscode ssh keypair: %w", err)
+			}
+			network.VSCodeSSHPubKey = pubLine
+			fmt.Fprintf(os.Stderr, "  ✓ VS Code keypair written to %s\n", privPath)
 		}
-		privPath := filepath.Join(homeDir, ".km", "keys", sandboxID)
-		pubPath := privPath + ".pub"
-		pubLine, err := sshkey.GenerateAndWrite(privPath, pubPath, "km-"+sandboxID)
-		if err != nil {
-			return fmt.Errorf("generate vscode ssh keypair: %w", err)
-		}
-		network.VSCodeSSHPubKey = pubLine
-		fmt.Fprintf(os.Stderr, "  ✓ VS Code keypair written to %s\n", privPath)
 	}
 
 	// Step 7: Compile profile into Terragrunt/Docker artifacts.
@@ -1980,6 +1985,13 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		toUpload = append(toUpload, artifact{
 			key:     artifactPrefix + "/github-token.hcl",
 			content: artifacts.GitHubTokenHCL,
+			mime:    "text/plain",
+		})
+	}
+	if network.VSCodeSSHPubKey != "" {
+		toUpload = append(toUpload, artifact{
+			key:     artifactPrefix + "/vscode-pubkey.txt",
+			content: network.VSCodeSSHPubKey,
 			mime:    "text/plain",
 		})
 	}

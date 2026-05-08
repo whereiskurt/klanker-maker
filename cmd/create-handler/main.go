@@ -210,9 +210,25 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 		"PATH="+h.ToolchainDir+":/usr/local/bin:/usr/bin:/bin",
 		"KM_REPO_ROOT="+h.ToolchainDir,
 		"KM_CONFIG_PATH="+filepath.Join(h.ToolchainDir, "km-config.yaml"),
+		"HOME=/tmp",
 	)
 	if event.OperatorEmail != "" {
 		env = append(env, "KM_OPERATOR_EMAIL="+event.OperatorEmail)
+	}
+
+	// Phase 73: pass the operator-generated VS Code SSH pubkey through to the
+	// subprocess so its keypair-gen step reuses it instead of writing to a
+	// read-only Lambda filesystem and producing a key the operator doesn't have.
+	pubkeyKey := event.ArtifactPrefix + "/vscode-pubkey.txt"
+	if pkResp, pkErr := h.S3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: strPtr(event.ArtifactBucket),
+		Key:    strPtr(pubkeyKey),
+	}); pkErr == nil {
+		pkBytes, readErr := io.ReadAll(pkResp.Body)
+		pkResp.Body.Close()
+		if readErr == nil && len(pkBytes) > 0 {
+			env = append(env, "KM_VSCODE_SSH_PUBKEY="+strings.TrimSpace(string(pkBytes)))
+		}
 	}
 
 	// Step 4: Run km create subprocess
