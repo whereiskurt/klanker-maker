@@ -37,8 +37,13 @@ Examples:
   # transcripts/{sandbox-id}/ for sandboxes no longer in DynamoDB
   km doctor --dry-run=false --delete-s3
 
+  # Also delete per-sandbox Lambdas (budget-enforcer, github-token-refresher)
+  # whose owning sandbox is gone from DynamoDB. Platform Lambdas are never
+  # touched.
+  km doctor --dry-run=false --delete-lambdas
+
   # Combine all opt-ins for a full cleanup pass
-  km doctor --dry-run=false --delete-ebs --delete-sqs --delete-s3
+  km doctor --dry-run=false --delete-ebs --delete-sqs --delete-s3 --delete-lambdas
 
   # Run regional checks against every configured region
   km doctor --all-regions
@@ -66,6 +71,16 @@ Flags:
                       transcripts)
                   Only prefixes whose sandbox is gone from DynamoDB are
                   swept. Live sandboxes are never touched.
+  --delete-lambdas
+                  With --dry-run=false, also delete per-sandbox Lambda
+                  functions whose owning sandbox row is gone from DynamoDB:
+                    - {prefix}-budget-enforcer-{sandbox-id}
+                    - {prefix}-github-token-refresher-{sandbox-id}
+                  Platform Lambdas (create-handler, ttl-handler, slack-bridge,
+                  ecs-spot-handler, email-create-handler) are NEVER touched —
+                  the check uses a per-sandbox component allowlist, not a
+                  denylist, so a future platform Lambda can't accidentally
+                  be classified as orphan.
   --all-regions   Run regional checks (VPC, AMIs) against PrimaryRegion plus
                   every region listed in KM_REPLICA_REGION (CSV).
 

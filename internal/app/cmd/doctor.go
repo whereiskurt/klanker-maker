@@ -269,6 +269,17 @@ type DoctorDeps struct {
 	// CloudWatch logs; transcript prefixes hold conversation history. Both
 	// can be expensive to lose accidentally, hence the explicit opt-in.
 	DeleteS3 bool
+	// DeleteLambdas opts the orphaned-Lambda check into deletion. Only
+	// honored when DryRun is also false. Per-sandbox Lambdas
+	// ({prefix}-budget-enforcer-{id}, {prefix}-github-token-refresher-{id})
+	// linger after broken km destroy runs and need explicit cleanup.
+	// Platform Lambdas (e.g. {prefix}-create-handler) are never touched.
+	DeleteLambdas bool
+	// LambdaCleanup is the Lambda client used by checkStaleLambdas for
+	// ListFunctions + DeleteFunction. Distinct from LambdaClient (which
+	// only has GetFunction for the existence check) so doctor can keep
+	// the narrow-interface convention. Nil causes the check to be skipped.
+	LambdaCleanup LambdaCleanupAPI
 	// AllRegions controls whether regional checks run against all configured regions
 	// (PrimaryRegion + KM_REPLICA_REGION CSV) or only the primary region.
 	AllRegions bool
@@ -1844,6 +1855,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 	var deleteEBS bool
 	var deleteSQS bool
 	var deleteS3 bool
+	var deleteLambdas bool
 
 	cmd := &cobra.Command{
 		Use:          "doctor",
@@ -1860,7 +1872,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 			default:
 				return fmt.Errorf("unsupported config type %T", cfg)
 			}
-			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3)
+			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output results as JSON array")
@@ -1875,11 +1887,13 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 		"With --dry-run=false, delete stale Slack inbound SQS queues + their SSM parameters (queues whose sandbox row is gone from DynamoDB)")
 	cmd.Flags().BoolVar(&deleteS3, "delete-s3", false,
 		"With --dry-run=false, delete orphaned S3 artifact and transcript prefixes for sandboxes whose DynamoDB row is gone (sweeps artifacts/{sandbox-id}/ and transcripts/{sandbox-id}/)")
+	cmd.Flags().BoolVar(&deleteLambdas, "delete-lambdas", false,
+		"With --dry-run=false, delete per-sandbox Lambda functions (budget-enforcer, github-token-refresher) whose sandbox row is gone from DynamoDB. Platform Lambdas are never touched.")
 	return cmd
 }
 
 // runDoctor is the core execution logic for km doctor.
-func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3 bool) error {
+func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas bool) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -1907,6 +1921,7 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 	deps.DeleteEBS = deleteEBS
 	deps.DeleteSQS = deleteSQS
 	deps.DeleteS3 = deleteS3
+	deps.DeleteLambdas = deleteLambdas
 
 	// Run credential check first — if SSO is expired, skip all AWS checks
 	// rather than repeating the same credential error for every check.
@@ -2215,6 +2230,15 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkStaleSchedules(ctx, schedulerClient, listerForCleanup, dryRun)
 	})
 
+	// Stale per-sandbox Lambdas check (budget-enforcer + github-token-refresher
+	// for destroyed sandboxes). Deletion gated on --delete-lambdas opt-in.
+	lambdaCleanup := deps.LambdaCleanup
+	deleteLambdas := deps.DeleteLambdas
+	prefixForLambdas := cfg.GetResourcePrefix()
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkStaleLambdas(ctx, lambdaCleanup, listerForCleanup, dryRun, deleteLambdas, prefixForLambdas)
+	})
+
 	// Orphaned EC2 instances check (report-only, never terminates).
 	ec2InstanceClient := deps.EC2InstanceClient
 	checks = append(checks, func(ctx context.Context) CheckResult {
@@ -2438,6 +2462,7 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 
 	// Lambda and SES clients for regional infra checks.
 	deps.LambdaClient = lambda.NewFromConfig(awsCfg)
+	deps.LambdaCleanup = lambda.NewFromConfig(awsCfg)
 	deps.SESClient = sesv2.NewFromConfig(awsCfg)
 	deps.KMSCleanupClient = kms.NewFromConfig(awsCfg)
 	deps.IAMCleanupClient = iam.NewFromConfig(awsCfg)
