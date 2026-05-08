@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: Completed 73-01-PLAN.md
-last_updated: "2026-05-07T23:57:39.968Z"
-last_activity: 2026-05-07
+stopped_at: Completed 73-03-PLAN.md
+last_updated: "2026-05-08T00:00:54.264Z"
+last_activity: 2026-05-08
 progress:
   total_phases: 77
   completed_phases: 69
   total_plans: 284
-  completed_plans: 246
+  completed_plans: 247
   percent: 93
 ---
 
@@ -31,7 +31,7 @@ Plan: 1 of 13 in current phase (Plan 68-00 COMPLETE; 68-01..68-12 pending)
 Total Plans in Phase: 13
 Current Plan: 13
 Status: in-progress
-Last activity: 2026-05-07
+Last activity: 2026-05-08
 
 Progress: [█████████░] 93%
 
@@ -286,6 +286,7 @@ Progress: [█████████░] 93%
 | Phase 73-km-vscode-remote-session-via-ssm P00 | 855 | 3 tasks | 8 files |
 | Phase 73-km-vscode-remote-session-via-ssm P02 | 323 | 2 tasks | 3 files |
 | Phase 73 P01 | 352 | 2 tasks | 2 files |
+| Phase 73-km-vscode-remote-session-via-ssm P03 | 9min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -815,6 +816,8 @@ Recent decisions affecting current work:
 - [Phase 73-km-vscode-remote-session-via-ssm]: IsVSCodeEnabled exported as package-level helper (not inline nil-check) because 3 callers need it (compiler, create.go, doctor)
 - [Phase 73]: Manual pubkey line construction (fmt.Sprintf) instead of gossh.MarshalAuthorizedKey to preserve comment field in authorized_keys output
 - [Phase 73]: Returned pubContent has no trailing newline — safe for direct heredoc embedding in Wave 2 userdata templates
+- [Phase 73-km-vscode-remote-session-via-ssm]: atomicWrite uses CreateTemp+Rename for existing-file modification; new-file creation uses WriteFile directly
+- [Phase 73-km-vscode-remote-session-via-ssm]: Fixed SSH defaults (IdentitiesOnly, StrictHostKeyChecking, UserKnownHostsFile, ServerAliveInterval) locked into renderHostBlock - not exposed as HostOptions fields
 
 ### Roadmap Evolution
 
@@ -906,6 +909,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-07T23:57:39.961Z
-Stopped at: Completed 73-01-PLAN.md
+Last session: 2026-05-08T00:00:54.259Z
+Stopped at: Completed 73-03-PLAN.md
 Resume file: None
