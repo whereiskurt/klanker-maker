@@ -915,6 +915,12 @@ km CLI / ConfigUI
 
 Editable architecture diagram: [`docs/sandbox-architecture.excalidraw`](docs/sandbox-architecture.excalidraw) - open in [excalidraw.com](https://excalidraw.com) or the VS Code Excalidraw extension.
 
+### AWS services at a glance
+
+![Klanker Maker AWS services overview](docs/aws-services-overview.png)
+
+Editable source: [`docs/aws-services-overview.drawio`](docs/aws-services-overview.drawio) - open in [app.diagrams.net](https://app.diagrams.net) or the VS Code Draw.io Integration extension.
+
 ---
 
 ## Documentation
