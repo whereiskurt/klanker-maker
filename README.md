@@ -206,6 +206,7 @@ A sandbox is a **compiled policy object** - the YAML declares the constraints, t
 - **Spot-first economics** - `t3.medium` spot is ~$0.01/hr in `us-east-1`. Spot interruption handlers fire artifact uploads on the 2-minute warning. Run 10 sandboxes for a workday for under $1.
 - **Lifecycle automation** - TTL auto-destroy via EventBridge Scheduler, idle timeout, hibernation (`km pause` preserves RAM), stop/resume, lock/unlock, clone, AMI bake.
 - **AMI snapshot lifecycle** - bake a tuned sandbox into a private AMI on shell exit, reference by slug or ID in profiles, copy across regions, garbage-collect via `km doctor`.
+- **VS Code Remote-SSH** - `km vscode start <sandbox>` opens an SSM port-forward and writes a managed `~/.ssh/config` block; VS Code "Remote-SSH: Connect to Host..." lands directly in `/workspace`. Per-sandbox ed25519 keypairs generated locally, pubkey shipped via userdata. No public IP, no SSH bastion. See [VS Code Remote-SSH](docs/vscode.md).
 
 ---
 
@@ -932,12 +933,13 @@ Editable architecture diagram: [`docs/sandbox-architecture.excalidraw`](docs/san
 | [Docker Substrate](docs/docker.md) | Running sandboxes locally via Docker Compose (`km create --docker`) |
 | [Sidecar Reference](docs/sidecar-reference.md) | Each sidecar's config, env vars, log formats, EC2 vs ECS deployment |
 | [ConfigUI Guide](docs/configui-guide.md) | Web dashboard setup, profile editor, secrets management |
+| [VS Code Remote-SSH](docs/vscode.md) | `km vscode start/status`, ed25519 keypair lifecycle, SSM tunnel, troubleshooting |
 
 ---
 
 ## Roadmap
 
-Klanker Maker tracks work in [`.planning/`](.planning) using a phase-numbered roadmap. Phases 1–68 are complete; 67–73 are the current Slack-and-orchestration arc.
+Klanker Maker tracks work in [`.planning/`](.planning) using a phase-numbered roadmap. Phases 1–68 and 73 are complete; 69–72 are queued.
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -960,7 +962,7 @@ Klanker Maker tracks work in [`.planning/`](.planning) using a phase-numbered ro
 | 70 | Codex parity for operator-notify, Slack-notify, and Slack-inbound | Planned |
 | 71 | Agent playbook orchestration (multi-step prompts with session continuity) | Planned |
 | 72 | Slack corporate workspace support (auto-detect, invite, manifest generator) | Planned |
-| 73 | `km vscode` - remote VS Code session via SSM | Planned |
+| 73 | `km vscode` - remote VS Code Remote-SSH via SSM port-forward | **Complete** |
 
 See [.planning/ROADMAP.md](.planning/ROADMAP.md) for detailed phase breakdowns and success criteria.
 

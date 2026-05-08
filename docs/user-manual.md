@@ -23,6 +23,7 @@
   - [km shell](#km-shell)
   - [km ami](#km-ami)
   - [km agent](#km-agent)
+  - [km vscode](#km-vscode)
   - [km stop](#km-stop)
   - [km resume](#km-resume)
   - [km extend](#km-extend)
@@ -1130,6 +1131,57 @@ km agent list <sandbox-id | #number>
 ```bash
 km agent list sb-abc123
 ```
+
+---
+
+### km vscode
+
+Connect local desktop VS Code to a sandbox via Remote-SSH over SSM port-forward. No
+public IP, no SSH bastion — the sandbox stays inside its private subnet, traffic flows
+through your operator IAM via Session Manager.
+
+```bash
+# Start the tunnel — blocks the terminal until Ctrl-C
+km vscode start <sandbox-id> [--local-port 2222]
+
+# Check sshd state + authorized_keys without opening a tunnel
+km vscode status <sandbox-id>
+```
+
+**How it works:**
+
+- `km create` generates a per-sandbox ed25519 keypair locally at `~/.km/keys/<id>` and
+  ships the pubkey to the sandbox via userdata. The private key never leaves your laptop.
+- `km vscode start` runs an SSM pre-flight check (sshd active + authorized_keys
+  present), upserts a managed `Host km-<id>` block into `~/.ssh/config`, and then
+  opens the SSM port-forward in the foreground. Use a second terminal for ssh / VS Code.
+- `km destroy` removes the Host block and deletes the keypair files.
+
+**VS Code workflow:**
+
+1. `km vscode start <sandbox-id>` (terminal A — leave running)
+2. In VS Code: `F1` → `Remote-SSH: Connect to Host...` → `km-<sandbox-id>`
+3. `File → Open Folder → /workspace`
+4. Ctrl-C terminal A when finished. `sshd` keeps running on the sandbox; `km vscode
+   start` again to reattach.
+
+**Identifier resolution:** `km vscode start` accepts the same identifier formats as
+other subcommands — full sandbox ID (`lrn2-ee9499b5`), alias (`my-poc`), or list-row
+number.
+
+**Profile field:** add `spec.cli.vscodeEnabled: false` to opt out (default is true).
+When false, sshd is not enabled at boot and `km vscode start` returns a clean error.
+
+**Common errors:**
+
+- `local port N is already in use — pick a different one with --local-port` —
+  another process holds the port. Avoid 9222 (Chrome/VS Code DevTools), 9229 (Node
+  inspector), 5900 (VNC). Try `--local-port 22122` or higher.
+- `private key for <id> not found at ~/.km/keys/<id>` — sandbox was created on a
+  different machine. Copy `~/.km/keys/<id>` and `~/.km/keys/<id>.pub` over.
+
+See [VS Code Remote-SSH](vscode.md) for the full operator guide including network
+egress requirements and security model.
 
 ---
 

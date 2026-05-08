@@ -1556,6 +1556,28 @@ spec:
     noBedrock: true
 ```
 
+### `spec.cli.vscodeEnabled`
+
+| Property   | Value                          |
+|------------|--------------------------------|
+| YAML path  | `spec.cli.vscodeEnabled`       |
+| Type       | bool (pointer; omit = true)    |
+| Required   | No                             |
+| Default    | `true` when omitted            |
+| Validation | Boolean                        |
+
+Provisions sshd and writes the operator's pubkey to `/home/sandbox/.ssh/authorized_keys`
+at boot so VS Code Remote-SSH (over SSM port-forward) can land in `/workspace`. When
+true, `km create` also generates a per-sandbox ed25519 keypair at `~/.km/keys/<id>` on
+the operator's laptop. Set to `false` for sandboxes that should not accept SSH
+connections of any kind. See [`docs/vscode.md`](vscode.md) for the full operator guide.
+
+```yaml
+spec:
+  cli:
+    vscodeEnabled: false   # opt out — no sshd, no authorized_keys, no keypair
+```
+
 ---
 
 ## Profile Inheritance
