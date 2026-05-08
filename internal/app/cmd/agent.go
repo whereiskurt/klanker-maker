@@ -566,11 +566,15 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 			execFn = defaultShellExec
 		}
 
-		// Send only the script-write commands (first 2: cat script + chmod)
+		// Send the prep + script-write commands (first 3: mkdir/chown,
+		// cat script, chmod). Bumped from cmds[:2] when the prep-dir
+		// command was added — the interactive flow needs the chown to
+		// fire on the host before the tmux session opens, otherwise the
+		// sandbox-user script would still hit the root-owned-parent bug.
 		_, err = ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
 			InstanceIds:  []string{instanceID},
 			DocumentName: awssdk.String("AWS-RunShellScript"),
-			Parameters:   map[string][]string{"commands": cmds[:2]},
+			Parameters:   map[string][]string{"commands": cmds[:3]},
 		})
 		if err != nil {
 			return fmt.Errorf("write agent script via SSM: %w", err)
@@ -1250,7 +1254,20 @@ tmux wait-for -S km-done-%s`, noBedrockLines, notifyEnvLines, opts.ArtifactsBuck
 
 	sessionName := fmt.Sprintf("km-agent-%s", runID)
 
+	// SSM RunShellScript executes as root by default; only the bash script
+	// itself is wrapped in `sudo -u sandbox`. If /workspace/.km-agent was
+	// ever created by a root-running process before the first agent run,
+	// the sandbox-user script could not write into it: mkdir -p "$RUN_DIR"
+	// silently failed inside the tmux session, the script (no `set -e`)
+	// pressed on without ever invoking claude -p, and tmux wait-for -S
+	// still fired — so --wait reported "done" with no output.json. Fix:
+	// ensure the base directory exists with sandbox ownership BEFORE the
+	// sandbox-user script runs. Both mkdir -p and chown are idempotent;
+	// re-running on healthy state is a no-op.
+	prepDir := "mkdir -p /workspace/.km-agent/runs && chown sandbox:sandbox /workspace/.km-agent /workspace/.km-agent/runs"
+
 	return []string{
+		prepDir,
 		fmt.Sprintf("cat > /tmp/km-agent-run.sh << 'KMEOF'\n%s\nKMEOF", script),
 		"chmod +x /tmp/km-agent-run.sh",
 		fmt.Sprintf("sudo -u sandbox bash -c \"tmux new-session -d -s '%s' '/tmp/km-agent-run.sh; exec bash'\"", sessionName),

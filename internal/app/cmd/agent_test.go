@@ -133,6 +133,38 @@ func TestAgentNonInteractive_SendCommand(t *testing.T) {
 	}
 }
 
+// TestAgentShellCommands_PrepDirIsFirstAndChownsAsSandbox verifies the
+// prep-dir command lives at index 0 of the returned slice and ensures
+// /workspace/.km-agent (and runs/) end up sandbox-owned. Regression
+// guard against the silent-failure bug: if /workspace/.km-agent was
+// ever created as root by an earlier root-running process, the
+// sandbox-user script's `mkdir -p "$RUN_DIR"` would fail (no set -e
+// in the script), claude -p would never run, but tmux wait-for -S
+// still fired so --wait reported "done" with no output.json. The fix
+// is to mkdir+chown the base dir as root BEFORE the sandbox-user
+// script runs.
+func TestAgentShellCommands_PrepDirIsFirstAndChownsAsSandbox(t *testing.T) {
+	cmds, _ := cmd.BuildAgentShellCommands("anything", cmd.AgentRunOptions{AgentType: "claude"})
+	if len(cmds) == 0 {
+		t.Fatal("expected non-empty cmds slice")
+	}
+	first := cmds[0]
+	if !strings.Contains(first, "mkdir -p /workspace/.km-agent/runs") {
+		t.Errorf("first command must mkdir -p /workspace/.km-agent/runs, got: %s", first)
+	}
+	if !strings.Contains(first, "chown sandbox:sandbox /workspace/.km-agent") {
+		t.Errorf("first command must chown the base dir to sandbox:sandbox so the agent script can write into it, got: %s", first)
+	}
+	// The mkdir+chown must NOT be wrapped in `sudo -u sandbox` — the whole
+	// point is that this command runs as root (SSM RunShellScript default)
+	// to FIX wrong ownership. If someone ever wraps it in sudo -u sandbox,
+	// the chown will be a no-op against a root-owned dir and the bug
+	// returns silently.
+	if strings.Contains(first, "sudo -u sandbox") {
+		t.Errorf("prep command must run as root (no sudo -u sandbox wrapper), got: %s", first)
+	}
+}
+
 // TestAgentNonInteractive_CommandConstruction verifies the shell command contains
 // the correct Claude flags and base64-encoded prompt.
 func TestAgentNonInteractive_CommandConstruction(t *testing.T) {
@@ -855,15 +887,21 @@ func TestAgentInteractive(t *testing.T) {
 	}
 	call := mockSSM.sendCalls[0]
 	cmds := call.Parameters["commands"]
-	// Should have 2 commands: write script + chmod
-	if len(cmds) != 2 {
-		t.Fatalf("expected 2 commands in SendCommand (write + chmod), got %d: %v", len(cmds), cmds)
+	// Should have 3 commands: mkdir+chown prep, write script, chmod.
+	// The prep-dir command was added so the sandbox-user script can write
+	// into /workspace/.km-agent even when something previously created it
+	// as root.
+	if len(cmds) != 3 {
+		t.Fatalf("expected 3 commands in SendCommand (mkdir/chown + write + chmod), got %d: %v", len(cmds), cmds)
 	}
-	if !strings.Contains(cmds[0], "km-agent-run.sh") {
-		t.Errorf("expected script write command, got: %s", cmds[0])
+	if !strings.Contains(cmds[0], "mkdir -p /workspace/.km-agent") || !strings.Contains(cmds[0], "chown sandbox:sandbox") {
+		t.Errorf("expected first command to mkdir+chown the .km-agent base dir, got: %s", cmds[0])
 	}
-	if !strings.Contains(cmds[1], "chmod") {
-		t.Errorf("expected chmod command, got: %s", cmds[1])
+	if !strings.Contains(cmds[1], "km-agent-run.sh") {
+		t.Errorf("expected script write command, got: %s", cmds[1])
+	}
+	if !strings.Contains(cmds[2], "chmod") {
+		t.Errorf("expected chmod command, got: %s", cmds[2])
 	}
 
 	// Verify SSM start-session was called (via execFn)
