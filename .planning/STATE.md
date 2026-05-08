@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: Completed 73-05-PLAN.md
-last_updated: "2026-05-08T00:20:07.184Z"
+stopped_at: Completed 73-06-PLAN.md
+last_updated: "2026-05-08T00:38:33.176Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 77
   completed_phases: 69
   total_plans: 284
-  completed_plans: 250
+  completed_plans: 251
   percent: 93
 ---
 
@@ -290,6 +290,7 @@ Progress: [█████████░] 93%
 | Phase 73-km-vscode-remote-session-via-ssm P07 | 6min | 1 tasks | 2 files |
 | Phase 73-km-vscode-remote-session-via-ssm P04 | 6min | 4 tasks | 4 files |
 | Phase 73 P05 | 352 | 1 tasks | 1 files |
+| Phase 73-km-vscode-remote-session-via-ssm P06 | 900 | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -826,6 +827,8 @@ Recent decisions affecting current work:
 - [Phase 73-km-vscode-remote-session-via-ssm]: 73-04: template {{ .VSCodeSSHPubKey }} at column 0 in heredoc to prevent sshd silent key rejection (Pitfall 3)
 - [Phase 73-km-vscode-remote-session-via-ssm]: 73-04: restorecon wrapped with command -v guard for cross-distro compatibility (Pitfall 5)
 - [Phase 73]: Keypair generation inserted as Step 6d in runCreate between Slack resolution and compiler.Compile for fail-fast before AWS provisioning
+- [Phase 73-km-vscode-remote-session-via-ssm]: parseVSCodeStatus extracted as shared helper so both runVSCodeStart pre-flight and runVSCodeStatus share identical 4-case sshd/authkeys discrimination
+- [Phase 73-km-vscode-remote-session-via-ssm]: vscode_test.go kept in package cmd (white-box) to allow direct calls to runVSCodeStart/runVSCodeStatus; vsCodeSSMMock defined locally since agent_test.go mocks are in cmd_test package
 
 ### Roadmap Evolution
 
@@ -917,6 +920,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-08T00:20:07.178Z
-Stopped at: Completed 73-05-PLAN.md
+Last session: 2026-05-08T00:38:33.169Z
+Stopped at: Completed 73-06-PLAN.md
 Resume file: None
