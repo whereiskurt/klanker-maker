@@ -8,7 +8,7 @@
 ## Phase Boundary
 
 Support installing the KlankerMaker Slack app into a corporate workspace (e.g., the operator's
-Greenhouse workspace) where most invitees are native members of that workspace. Today the
+Corporate workspace) where most invitees are native members of that workspace. Today the
 install model assumes the operator is **external** to the bot's workspace and must receive a
 Slack Connect invite — that assumption is hard-coded into `km slack init`. After this phase,
 the same install supports **both** patterns transparently: native workspace members get a
@@ -22,7 +22,7 @@ not tribal knowledge.
 
 **Out of scope:**
 - Migration of existing PoC installs (multi-instance support already covers per-prefix isolation —
-  a Greenhouse install runs alongside the PoC under a different `resource_prefix`).
+  a Corporate install runs alongside the PoC under a different `resource_prefix`).
 - Bridge Lambda, signing, sidecars, Connect transport, existing channel/SSM keys (no changes).
 - DM / mpim flows, multi-workspace `org_deploy_enabled`, OAuth flows beyond manifest install.
 - Slack Enterprise Grid features, multi-team installs, workspace migration tooling.
@@ -70,7 +70,7 @@ Three call sites, all routed through one orchestrator:
 - Template lives in code (Go embedded string or `embed.FS`); single source of truth for scopes.
 - Template based on the production manifest at `/Users/khundeck/Downloads/km-personal.json`:
   - `display_information.name` parameterized: `KlankerMakerNotification` → derived from
-    resource_prefix (e.g., `KlankerMaker-greenhouse`). Free choice — must remain a valid Slack
+    resource_prefix (e.g., `KlankerMaker-corporate`). Free choice — must remain a valid Slack
     app name (≤35 chars, alphanumeric + spaces + hyphens).
   - `bot_user.display_name` mirrors the app name.
   - `oauth_config.scopes.bot` — full union of currently-used scopes PLUS the new
@@ -217,8 +217,8 @@ spec:
     notifySlackEnabled: true
     notifySlackPerSandbox: true
     notifySlackInviteEmails:
-      - alice@greenhouse.io
-      - bob@greenhouse.io
+      - alice@example.com
+      - bob@example.com
 ```
 
 When `km create` provisions this sandbox:

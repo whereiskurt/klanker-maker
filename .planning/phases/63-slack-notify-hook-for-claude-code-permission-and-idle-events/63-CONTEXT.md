@@ -484,7 +484,7 @@ check passes for any sandbox (correct — shared is shared).
 
 **E2E (manual / opt-in CI):**
 - Real klankermaker.ai workspace, real
-  `kurt.hundeck@greenhouse.io` invite acceptance done out-of-band
+  `kurt.hundeck@example.com` invite acceptance done out-of-band
   once.
 - Create sandbox with `notifySlackEnabled: true` shared mode +
   `notifyOnIdle: true`. Run `km agent run --prompt "What's 2+2?"`.

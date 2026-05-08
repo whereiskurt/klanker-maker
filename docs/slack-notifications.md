@@ -92,7 +92,7 @@ km slack init \
 
 km slack init \
   --bot-token "xoxb-REDACTED-EXAMPLE-TOKEN" \
-  --invite-email "kurt.hundeck@greenhouse.io" \
+  --invite-email "kurt.hundeck@example.com" \
   --shared-channel "km-notifications"
 
 `km slack init` does the following:

@@ -568,7 +568,7 @@ JSON schema mirror:
 **Warning signs:** Operator configures notifySlackInviteEmails with the bot's own email and gets no warning.
 
 ### Pitfall 4: Manifest template URL drift across instances
-**What goes wrong:** Operator copies a manifest from one install (`resource_prefix=km`) and pastes into another (`resource_prefix=greenhouse`); the bridge `request_url` points at the wrong Lambda Function URL.
+**What goes wrong:** Operator copies a manifest from one install (`resource_prefix=km`) and pastes into another (`resource_prefix=corporate`); the bridge `request_url` points at the wrong Lambda Function URL.
 **Why it happens:** Multi-instance support per CLAUDE.md — each `resource_prefix` has its own bridge Lambda with its own Function URL.
 **How to avoid:** `km slack manifest` MUST read bridge URL from SSM (`{ssm_prefix}slack/bridge-url`) and resource_prefix from `cfg.GetResourcePrefix()`, never hardcode either. Print a banner above the manifest output indicating which install the manifest is for: `# Slack App manifest for resource_prefix={prefix}, region={region}`.
 **Warning signs:** Slack `/events` 401s in the second install; bridge logs show no traffic.

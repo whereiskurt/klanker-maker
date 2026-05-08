@@ -561,7 +561,7 @@ No internet egress restriction needed (only external endpoint is
 
 ### E2E (manual / opt-in CI)
 
-Real klankermaker.ai workspace, real `kurt.hundeck@greenhouse.io` invite
+Real klankermaker.ai workspace, real `kurt.hundeck@example.com` invite
 acceptance done out-of-band once.
 
 - Create sandbox with `notifySlackEnabled: true` shared mode +
