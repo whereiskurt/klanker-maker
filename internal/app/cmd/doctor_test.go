@@ -685,6 +685,9 @@ func TestDoctorCmd_WithDeletes_EnablesAllDeleteOptIns(t *testing.T) {
 	if !deps.DeleteLambdas {
 		t.Error("--with-deletes should set DeleteLambdas=true")
 	}
+	if !deps.DeleteSSH {
+		t.Error("--with-deletes should set DeleteSSH=true")
+	}
 }
 
 // TestDoctorCmd_NoWithDeletes_LeavesDeleteOptInsAlone is the inverse — a
@@ -698,9 +701,9 @@ func TestDoctorCmd_NoWithDeletes_LeavesDeleteOptInsAlone(t *testing.T) {
 	if err := cmd.RunE(cmd, []string{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if deps.DeleteEBS || deps.DeleteSQS || deps.DeleteS3 || deps.DeleteLambdas {
-		t.Errorf("default run must not enable any --delete-* opt-in; got EBS=%v SQS=%v S3=%v Lambdas=%v",
-			deps.DeleteEBS, deps.DeleteSQS, deps.DeleteS3, deps.DeleteLambdas)
+	if deps.DeleteEBS || deps.DeleteSQS || deps.DeleteS3 || deps.DeleteLambdas || deps.DeleteSSH {
+		t.Errorf("default run must not enable any --delete-* opt-in; got EBS=%v SQS=%v S3=%v Lambdas=%v SSH=%v",
+			deps.DeleteEBS, deps.DeleteSQS, deps.DeleteS3, deps.DeleteLambdas, deps.DeleteSSH)
 	}
 }
 
@@ -721,9 +724,9 @@ func TestDoctorCmd_IndividualDeleteFlag_DoesNotImplyOthers(t *testing.T) {
 	if !deps.DeleteEBS {
 		t.Error("--delete-ebs alone should still set DeleteEBS=true")
 	}
-	if deps.DeleteSQS || deps.DeleteS3 || deps.DeleteLambdas {
-		t.Errorf("--delete-ebs alone must not enable other opt-ins; got SQS=%v S3=%v Lambdas=%v",
-			deps.DeleteSQS, deps.DeleteS3, deps.DeleteLambdas)
+	if deps.DeleteSQS || deps.DeleteS3 || deps.DeleteLambdas || deps.DeleteSSH {
+		t.Errorf("--delete-ebs alone must not enable other opt-ins; got SQS=%v S3=%v Lambdas=%v SSH=%v",
+			deps.DeleteSQS, deps.DeleteS3, deps.DeleteLambdas, deps.DeleteSSH)
 	}
 }
 

@@ -42,8 +42,14 @@ Examples:
   # touched.
   km doctor --dry-run=false --delete-lambdas
 
+  # Also remove stale operator-side VS Code Remote-SSH state — orphan
+  # "Host km-{sandbox-id}" entries in ~/.ssh/config and matching keypairs
+  # under ~/.km/keys/. Local-only — needed because remote/TTL/budget
+  # destroys can't reach the operator filesystem.
+  km doctor --dry-run=false --delete-ssh
+
   # Combine all opt-ins for a full cleanup pass
-  km doctor --dry-run=false --delete-ebs --delete-sqs --delete-s3 --delete-lambdas
+  km doctor --dry-run=false --delete-ebs --delete-sqs --delete-s3 --delete-lambdas --delete-ssh
 
   # Same thing, shortcut form
   km doctor --dry-run=false --with-deletes
@@ -88,12 +94,25 @@ Flags:
                   the check uses a per-sandbox component allowlist, not a
                   denylist, so a future platform Lambda can't accidentally
                   be classified as orphan.
+  --delete-ssh    With --dry-run=false, remove operator-side VS Code
+                  Remote-SSH state for sandboxes whose DynamoDB row is gone:
+                    - "Host km-{sandbox-id}" blocks inside the managed
+                      markers in ~/.ssh/config
+                    - matching keypair files in ~/.km/keys/
+                  Operator-local only — runs entirely on your machine.
+                  Needed because remote/TTL/budget destroys are
+                  Lambda-driven and can't reach your filesystem; the same
+                  is true if you ran 'km vscode start' on a different
+                  machine than the one running 'km destroy'.
+                  Non-km Host blocks inside the managed markers (operator-
+                  edited content) are NEVER touched.
   --with-deletes  Shortcut for --delete-ebs --delete-sqs --delete-s3
-                  --delete-lambdas. Pair with --dry-run=false for a full
-                  cleanup pass; with the default --dry-run=true it just
-                  makes every report-only check consistently surface what
-                  it would delete. Per-resource flags can still be added
-                  individually — --with-deletes is a strict superset.
+                  --delete-lambdas --delete-ssh. Pair with --dry-run=false
+                  for a full cleanup pass; with the default --dry-run=true
+                  it just makes every report-only check consistently
+                  surface what it would delete. Per-resource flags can
+                  still be added individually — --with-deletes is a strict
+                  superset.
   --all-regions   Run regional checks (VPC, AMIs) against PrimaryRegion plus
                   every region listed in KM_REPLICA_REGION (CSV).
 

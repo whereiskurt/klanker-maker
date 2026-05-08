@@ -275,6 +275,12 @@ type DoctorDeps struct {
 	// linger after broken km destroy runs and need explicit cleanup.
 	// Platform Lambdas (e.g. {prefix}-create-handler) are never touched.
 	DeleteLambdas bool
+	// DeleteSSH opts the operator-side VS Code Remote-SSH state check into
+	// deletion. Only honored when DryRun is also false. Cleans stale
+	// "Host km-{id}" blocks in ~/.ssh/config and matching key files in
+	// ~/.km/keys/ for sandboxes whose DynamoDB row is gone. Local-only;
+	// the cloud-side --remote destroy can't reach operator filesystems.
+	DeleteSSH bool
 	// LambdaCleanup is the Lambda client used by checkStaleLambdas for
 	// ListFunctions + DeleteFunction. Distinct from LambdaClient (which
 	// only has GetFunction for the existence check) so doctor can keep
@@ -1856,6 +1862,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 	var deleteSQS bool
 	var deleteS3 bool
 	var deleteLambdas bool
+	var deleteSSH bool
 	var withDeletes bool
 
 	cmd := &cobra.Command{
@@ -1885,8 +1892,9 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 				deleteSQS = true
 				deleteS3 = true
 				deleteLambdas = true
+				deleteSSH = true
 			}
-			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas)
+			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output results as JSON array")
@@ -1903,13 +1911,15 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 		"With --dry-run=false, delete orphaned S3 artifact and transcript prefixes for sandboxes whose DynamoDB row is gone (sweeps artifacts/{sandbox-id}/ and transcripts/{sandbox-id}/)")
 	cmd.Flags().BoolVar(&deleteLambdas, "delete-lambdas", false,
 		"With --dry-run=false, delete per-sandbox Lambda functions (budget-enforcer, github-token-refresher) whose sandbox row is gone from DynamoDB. Platform Lambdas are never touched.")
+	cmd.Flags().BoolVar(&deleteSSH, "delete-ssh", false,
+		"With --dry-run=false, remove stale 'Host km-{sandbox-id}' entries from ~/.ssh/config and matching key files in ~/.km/keys/. Local-only — needed because remote/TTL/budget destroys can't reach the operator filesystem.")
 	cmd.Flags().BoolVar(&withDeletes, "with-deletes", false,
-		"Shortcut for --delete-ebs --delete-sqs --delete-s3 --delete-lambdas. Pair with --dry-run=false for a full cleanup pass; with --dry-run=true (default) shows what each opt-in would clean.")
+		"Shortcut for --delete-ebs --delete-sqs --delete-s3 --delete-lambdas --delete-ssh. Pair with --dry-run=false for a full cleanup pass; with --dry-run=true (default) shows what each opt-in would clean.")
 	return cmd
 }
 
 // runDoctor is the core execution logic for km doctor.
-func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas bool) error {
+func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH bool) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -1938,6 +1948,7 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 	deps.DeleteSQS = deleteSQS
 	deps.DeleteS3 = deleteS3
 	deps.DeleteLambdas = deleteLambdas
+	deps.DeleteSSH = deleteSSH
 
 	// Run credential check first — if SSO is expired, skip all AWS checks
 	// rather than repeating the same credential error for every check.
@@ -2253,6 +2264,29 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	prefixForLambdas := cfg.GetResourcePrefix()
 	checks = append(checks, func(ctx context.Context) CheckResult {
 		return checkStaleLambdas(ctx, lambdaCleanup, listerForCleanup, dryRun, deleteLambdas, prefixForLambdas)
+	})
+
+	// Operator-side VS Code Remote-SSH state check. Inspects ~/.ssh/config
+	// managed-block entries and ~/.km/keys/* keypairs for sandboxes whose
+	// DDB row is gone. Local-only — no AWS calls beyond the shared lister.
+	deleteSSH := deps.DeleteSSH
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		home, herr := os.UserHomeDir()
+		if herr != nil {
+			return CheckResult{
+				Name:    "Stale VS Code SSH state",
+				Status:  CheckSkipped,
+				Message: fmt.Sprintf("could not locate home dir: %v", herr),
+			}
+		}
+		return checkStaleSSHConfig(
+			ctx,
+			filepath.Join(home, ".ssh", "config"),
+			filepath.Join(home, ".km", "keys"),
+			listerForCleanup,
+			dryRun,
+			deleteSSH,
+		)
 	})
 
 	// Orphaned EC2 instances check (report-only, never terminates).
