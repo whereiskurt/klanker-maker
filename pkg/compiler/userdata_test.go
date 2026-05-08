@@ -1460,7 +1460,10 @@ func TestUserdataPrivilegedEnabled(t *testing.T) {
 }
 
 // TestUserdataPrivilegedDisabled verifies that when Privileged=false (default), the generated
-// userdata does NOT add the sandbox user to wheel group or write any sudoers entry.
+// userdata does NOT add the sandbox user to wheel group or write any sudoers entry,
+// AND defensively scrubs both artifacts so a relaunch from an AMI baked off a privileged
+// sandbox cannot leak sudo access (which would let the user `sudo -s` to root and escape
+// the eBPF cgroup-scoped enforcement).
 func TestUserdataPrivilegedDisabled(t *testing.T) {
 	p := baseProfile()
 	// Privileged defaults to false — no explicit set needed, but we set it for clarity.
@@ -1471,13 +1474,24 @@ func TestUserdataPrivilegedDisabled(t *testing.T) {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
 
+	// Must NOT grant sudo: no wheel membership, no NOPASSWD entry, no echo into sudoers.d.
 	for _, notWant := range []string{
 		"-G wheel",
 		"NOPASSWD",
-		"sudoers.d",
+		`echo "sandbox ALL=`,
 	} {
 		if strings.Contains(out, notWant) {
 			t.Errorf("did not expect %q in userdata when Privileged=false", notWant)
+		}
+	}
+
+	// Must defensively scrub so AMI-baked sudoers/wheel cannot persist.
+	for _, want := range []string{
+		"rm -f /etc/sudoers.d/sandbox",
+		"gpasswd -d sandbox wheel",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected defensive scrub %q in userdata when Privileged=false (AMI-bake leak path)", want)
 		}
 	}
 }

@@ -53,6 +53,12 @@ echo "sandbox ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/sandbox
 chmod 0440 /etc/sudoers.d/sandbox
 {{- else }}
 useradd -m -s /bin/bash -d /home/sandbox sandbox 2>/dev/null || true
+# Defensive scrub: when launching from an AMI baked off a privileged sandbox, the
+# image carries /etc/sudoers.d/sandbox + wheel membership. Without this the
+# non-privileged user could sudo -s to root, escaping the eBPF cgroup
+# enforcement (root processes are never enrolled into the sandbox cgroup).
+rm -f /etc/sudoers.d/sandbox
+gpasswd -d sandbox wheel 2>/dev/null || true
 {{- end }}
 mkdir -p /workspace
 chown sandbox:sandbox /workspace
