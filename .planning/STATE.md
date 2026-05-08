@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: Completed 73-08-PLAN.md
-last_updated: "2026-05-08T01:06:45.762Z"
+stopped_at: "Checkpoint 73-09 Task 3: Awaiting operator UAT sign-off"
+last_updated: "2026-05-08T01:52:01.000Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 77
-  completed_phases: 69
+  completed_phases: 70
   total_plans: 284
-  completed_plans: 252
+  completed_plans: 253
   percent: 93
 ---
 
@@ -292,6 +292,7 @@ Progress: [█████████░] 93%
 | Phase 73 P05 | 352 | 1 tasks | 1 files |
 | Phase 73-km-vscode-remote-session-via-ssm P06 | 900 | 3 tasks | 3 files |
 | Phase 73-km-vscode-remote-session-via-ssm P08 | 158 | 2 tasks | 2 files |
+| Phase 73-km-vscode-remote-session-via-ssm P09 | 4min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -832,6 +833,8 @@ Recent decisions affecting current work:
 - [Phase 73-km-vscode-remote-session-via-ssm]: vscode_test.go kept in package cmd (white-box) to allow direct calls to runVSCodeStart/runVSCodeStatus; vsCodeSSMMock defined locally since agent_test.go mocks are in cmd_test package
 - [Phase 73-km-vscode-remote-session-via-ssm]: docs/vscode.md follows slack-notifications.md structural pattern with ToC, section tables, and code-block lifecycle
 - [Phase 73-km-vscode-remote-session-via-ssm]: CLAUDE.md vscode bullets placed after km slack rotate-token; VS Code section placed after Phase 68 block before Architecture
+- [Phase 73]: Pre-existing pkg/compiler test failures (Slack-related) documented as out-of-scope for Phase 73 closeout
+- [Phase 73]: Mid-phase operator fixes (6fd2fde, 3e4a69a, 9fe2f16) captured in 73-09 SUMMARY — keypair in remote path, pubkey env var propagation, ResolveSandboxID wiring
 
 ### Roadmap Evolution
 
@@ -923,6 +926,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-08T01:06:45.756Z
-Stopped at: Completed 73-08-PLAN.md
+Last session: 2026-05-08T01:52:00.994Z
+Stopped at: Checkpoint 73-09 Task 3: Awaiting operator UAT sign-off
 Resume file: None

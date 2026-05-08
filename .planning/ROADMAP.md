@@ -1565,7 +1565,7 @@ Plans:
 **Goal:** Add `km vscode start | status` so an operator can connect their **local desktop VS Code** (via the Remote-SSH extension) to a sandbox over SSM port-forward. km auto-generates a per-sandbox ed25519 keypair on the operator's laptop at `km create` time (private key under `~/.km/keys/sb-<id>`, public key shipped via userdata to `/home/sandbox/.ssh/authorized_keys`). `km vscode start <sb>` opens a foreground SSM port-forward (sandbox port 22 → operator local port 2222), upserts a managed entry in `~/.ssh/config`, and tells the operator how to launch Remote-SSH. `km destroy` cleans up the ssh-config block and the key files. Gated by a new default-true `spec.cli.vscodeEnabled` profile flag. Nothing related to VS Code is installed on the sandbox — Remote-SSH auto-deploys `vscode-server` on first connect. Full design at `docs/superpowers/specs/2026-05-06-km-vscode-design.md`.
 **Requirements**: GOAL-1..9 (goal-backward; no REQ-IDs in REQUIREMENTS.md — developer-experience phase, see 73-CONTEXT.md must-haves)
 **Depends on:** Phase 72
-**Plans:** 9/10 plans executed
+**Plans:** 10/10 plans complete
 
 Plans:
 - [ ] 73-00-PLAN.md — Wave 0 stub seeding: 5 test stub files + 4 production stubs (sshkey/keygen.go, sshconfig.go, vscode.go, profile types_test, userdata_test additions)
