@@ -48,6 +48,7 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/localnumber"
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
 	slack "github.com/whereiskurt/klanker-maker/pkg/slack"
+	"github.com/whereiskurt/klanker-maker/pkg/sshkey"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
 )
 
@@ -507,6 +508,26 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		if resolvedProfile.Spec.CLI.NotifySlackTranscriptEnabled && slackChannelID != "" {
 			printTranscriptWarning(ctx, slackClient, slackChannelID)
 		}
+	}
+
+	// Step 6d: Phase 73 — generate per-sandbox VS Code SSH keypair on the operator's laptop.
+	// Default true (nil CLI or nil VSCodeEnabled both enable keygen). The pubkey content is
+	// threaded into NetworkConfig so compiler.Compile embeds it into /home/sandbox/.ssh/authorized_keys
+	// at boot via the userdata template block (Plan 73-04). Fails fast before any AWS resource
+	// creation so a disk-full or permission error never leaves orphan sandboxes.
+	if profile.IsVSCodeEnabled(resolvedProfile.Spec.CLI) {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("locate home directory for vscode keypair: %w", err)
+		}
+		privPath := filepath.Join(homeDir, ".km", "keys", sandboxID)
+		pubPath := privPath + ".pub"
+		pubLine, err := sshkey.GenerateAndWrite(privPath, pubPath, "km-"+sandboxID)
+		if err != nil {
+			return fmt.Errorf("generate vscode ssh keypair: %w", err)
+		}
+		network.VSCodeSSHPubKey = pubLine
+		fmt.Fprintf(os.Stderr, "  ✓ VS Code keypair written to %s\n", privPath)
 	}
 
 	// Step 7: Compile profile into Terragrunt/Docker artifacts.
