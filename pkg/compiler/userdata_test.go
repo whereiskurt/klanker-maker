@@ -1807,66 +1807,96 @@ func TestCgroupProcsRedirectHardened(t *testing.T) {
 // the generated userdata contains the sshd enable block, the authorized_keys
 // injection, and restorecon for SELinux correctness.
 func TestUserDataVSCodeEnabled(t *testing.T) {
-	t.Skip("TODO Wave 1 Plan 73-04: add VSCodeEnabled+VSCodeSSHPubKey to userdata template")
-	// const pubKey = "ssh-ed25519 AAAA km-sb-XXXX"
-	// p := baseProfile()
-	// // VSCodeEnabled defaults to true (nil pointer). Wire pubkey through the params.
-	// out, err := generateUserData(p, "sb-test", nil, "my-bucket", false, nil)
-	// if err != nil {
-	// 	t.Fatalf("generateUserData failed: %v", err)
-	// }
-	// if !strings.Contains(out, "systemctl enable --now sshd") {
-	// 	t.Error("expected 'systemctl enable --now sshd' in userdata when VSCodeEnabled=true")
-	// }
-	// if !strings.Contains(out, pubKey) {
-	// 	t.Errorf("expected pubkey %q in userdata when VSCodeEnabled=true", pubKey)
-	// }
-	// if !strings.Contains(out, "restorecon") {
-	// 	t.Error("expected 'restorecon' in userdata when VSCodeEnabled=true (SELinux correctness)")
-	// }
-	_ = profile.SandboxProfile{}
+	const pubKey = "ssh-ed25519 AAAAC3 km-sb-test"
+	p := baseProfile()
+	// VSCodeEnabled defaults to true (nil pointer). Wire pubkey through the network config.
+	net := &NetworkConfig{
+		VSCodeSSHPubKey: pubKey,
+	}
+	out, err := generateUserData(p, "sb-test", nil, "my-bucket", false, net)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if !strings.Contains(out, "systemctl enable --now sshd") {
+		t.Error("expected 'systemctl enable --now sshd' in userdata when VSCodeEnabled=true")
+	}
+	if !strings.Contains(out, pubKey) {
+		t.Errorf("expected pubkey %q in userdata when VSCodeEnabled=true", pubKey)
+	}
+	if !strings.Contains(out, "restorecon") {
+		t.Error("expected 'restorecon' in userdata when VSCodeEnabled=true (SELinux correctness)")
+	}
 }
 
 // TestUserDataVSCodeDisabled asserts that when VSCodeEnabled=&false, the
 // generated userdata does NOT contain the sshd block, authorized_keys, or the
 // pubkey content.
 func TestUserDataVSCodeDisabled(t *testing.T) {
-	t.Skip("TODO Wave 1 Plan 73-04: add VSCodeEnabled+VSCodeSSHPubKey to userdata template")
-	// fls := false
-	// p := baseProfile()
-	// p.Spec.CLI = &profile.CLISpec{VSCodeEnabled: &fls}
-	// out, err := generateUserData(p, "sb-test", nil, "my-bucket", false, nil)
-	// if err != nil {
-	// 	t.Fatalf("generateUserData failed: %v", err)
-	// }
-	// if strings.Contains(out, "systemctl enable --now sshd") {
-	// 	t.Error("expected NO 'systemctl enable --now sshd' in userdata when VSCodeEnabled=false")
-	// }
-	// if strings.Contains(out, "authorized_keys") {
-	// 	t.Error("expected NO 'authorized_keys' in userdata when VSCodeEnabled=false")
-	// }
-	_ = profile.SandboxProfile{}
+	fls := false
+	p := baseProfile()
+	p.Spec.CLI = &profile.CLISpec{VSCodeEnabled: &fls}
+	// Network is nil: when VSCodeEnabled=false the template block is skipped, no pubkey needed.
+	out, err := generateUserData(p, "sb-test", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	if strings.Contains(out, "systemctl enable --now sshd") {
+		t.Error("expected NO 'systemctl enable --now sshd' in userdata when VSCodeEnabled=false")
+	}
+	if strings.Contains(out, "authorized_keys") {
+		t.Error("expected NO 'authorized_keys' in userdata when VSCodeEnabled=false")
+	}
 }
 
 // TestUserDataVSCodePubKey asserts that the generated userdata contains the
-// EXACT pubkey line passed in (no leading/trailing whitespace, no
-// double-quote artifacts). This covers Pitfall 3 from 73-RESEARCH.md: the
-// heredoc embedding must be exact.
+// EXACT pubkey line passed in at column 0 (no leading whitespace).
+// This covers Pitfall 3 from 73-RESEARCH.md: the heredoc embedding must be exact.
 func TestUserDataVSCodePubKey(t *testing.T) {
-	t.Skip("TODO Wave 1 Plan 73-04: add VSCodeEnabled+VSCodeSSHPubKey to userdata template")
-	// const exactPubKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI km-sb-abc123"
-	// p := baseProfile()
-	// out, err := generateUserData(p, "sb-abc123", nil, "my-bucket", false, nil)
-	// if err != nil {
-	// 	t.Fatalf("generateUserData failed: %v", err)
-	// }
-	// // The pubkey must appear as an exact line — no leading whitespace, no trailing whitespace.
-	// for _, line := range strings.Split(out, "\n") {
-	// 	if strings.TrimSpace(line) == exactPubKey {
-	// 		// Found exact match — good.
-	// 		return
-	// 	}
-	// }
-	// t.Errorf("exact pubkey line %q not found in userdata (check for whitespace/quote artifacts)", exactPubKey)
-	_ = profile.SandboxProfile{}
+	const exactPubKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI km-sb-abc123"
+	p := baseProfile()
+	net := &NetworkConfig{
+		VSCodeSSHPubKey: exactPubKey,
+	}
+	out, err := generateUserData(p, "sb-abc123", nil, "my-bucket", false, net)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+	// The pubkey line must appear at column 0 — no leading whitespace.
+	lines := strings.Split(out, "\n")
+	var found bool
+	for _, line := range lines {
+		if strings.Contains(line, exactPubKey) {
+			found = true
+			if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
+				t.Fatalf("pubkey line has leading whitespace (Pitfall 3): %q", line)
+			}
+			if !strings.HasPrefix(line, "ssh-ed25519 ") {
+				t.Fatalf("pubkey line does not start with 'ssh-ed25519 ': %q", line)
+			}
+		}
+	}
+	if !found {
+		t.Error("exact pubkey line not found in generated userdata (check for whitespace/quote artifacts)")
+	}
+}
+
+// TestUserDataVSCodeMissingKeyErrors asserts that generateUserData returns an
+// error when VSCodeEnabled=true (default) and VSCodeSSHPubKey is empty.
+// This covers Pitfall 4 from 73-RESEARCH.md: loud-fail for stale Lambda deploys.
+func TestUserDataVSCodeMissingKeyErrors(t *testing.T) {
+	// VSCodeEnabled defaults true; missing pubkey must fail loudly when network is non-nil.
+	p := baseProfile()
+	net := &NetworkConfig{
+		// VSCodeSSHPubKey intentionally empty
+	}
+	_, err := generateUserData(p, "sb-test", nil, "my-bucket", false, net)
+	if err == nil {
+		t.Fatal("expected error when VSCodeEnabled=true and VSCodeSSHPubKey is empty")
+	}
+	if !strings.Contains(err.Error(), "VSCodeEnabled=true but VSCodeSSHPubKey is empty") {
+		t.Fatalf("error message missing operator hint: %v", err)
+	}
+	if !strings.Contains(err.Error(), "km init --sidecars") {
+		t.Fatalf("error message missing remediation hint: %v", err)
+	}
 }
