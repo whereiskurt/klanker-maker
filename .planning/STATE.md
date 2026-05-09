@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: Phase 74 context gathered
-last_updated: "2026-05-09T04:01:05.921Z"
-last_activity: 2026-05-08
+stopped_at: Completed 74-01-PLAN.md
+last_updated: "2026-05-09T05:28:20.946Z"
+last_activity: 2026-05-09
 progress:
-  total_phases: 78
+  total_phases: 79
   completed_phases: 70
-  total_plans: 284
-  completed_plans: 253
+  total_plans: 286
+  completed_plans: 254
   percent: 93
 ---
 
@@ -31,7 +31,7 @@ Plan: 1 of 13 in current phase (Plan 68-00 COMPLETE; 68-01..68-12 pending)
 Total Plans in Phase: 13
 Current Plan: 13
 Status: in-progress
-Last activity: 2026-05-08
+Last activity: 2026-05-09
 
 Progress: [█████████░] 93%
 
@@ -294,6 +294,7 @@ Progress: [█████████░] 93%
 | Phase 73-km-vscode-remote-session-via-ssm P08 | 158 | 2 tasks | 2 files |
 | Phase 73-km-vscode-remote-session-via-ssm P09 | 4min | 2 tasks | 2 files |
 | Phase 73-km-vscode-remote-session-via-ssm P09 | 5min | 3 tasks | 2 files |
+| Phase 74-slack-mrkdwn-rendering P01 | 1703 | 3 tasks | 27 files |
 
 ## Accumulated Context
 
@@ -838,6 +839,9 @@ Recent decisions affecting current work:
 - [Phase 73]: Mid-phase operator fixes (6fd2fde, 3e4a69a, 9fe2f16) captured in 73-09 SUMMARY — keypair in remote path, pubkey env var propagation, ResolveSandboxID wiring
 - [Phase 73-km-vscode-remote-session-via-ssm]: Scenarios 4+6 accepted as unit-test-covered for UAT sign-off; pre-bind port probe excludes Chrome DevTools port 9222
 - [Phase 73-km-vscode-remote-session-via-ssm]: Four mid-phase fixes (6fd2fde, 3e4a69a, 9fe2f16, 2501bc9) documented in 73-09-SUMMARY.md; all validated live against sandbox lrn2-ee9499b5
+- [Phase 74-01]: Transform order: mapHeadings before collapseBold for idempotence with heading content containing asterisks
+- [Phase 74-01]: Slack link extraction at applyText level prevents convertLinks from re-matching on 2nd pass
+- [Phase 74-01]: Long placeholder tokens (KMHTML_, KMBOLD_, KMLINK_) prevent collision from adjacent NUL boundaries
 
 ### Roadmap Evolution
 
@@ -931,6 +935,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-09T04:01:05.909Z
-Stopped at: Phase 74 context gathered
-Resume file: .planning/phases/74-slack-mrkdwn-rendering-tokenizer-based-markdown-slack-mrkdwn-transformer-optional-block-kit-tier-for-streaming-hook-output/74-CONTEXT.md
+Last session: 2026-05-09T05:28:20.940Z
+Stopped at: Completed 74-01-PLAN.md
+Resume file: None
