@@ -851,6 +851,11 @@ func CleanupSandboxIdentity(ctx context.Context, ssmClient IdentitySSMAPI, dynCl
 		return err
 	}
 
+	// Delete safe phrase from SSM (created by km create step 12d, never rotated).
+	if err := deleteSSMParameter(ctx, ssmClient, SandboxParameterPath(resourcePrefix, sandboxID, "safe-phrase")); err != nil {
+		return err
+	}
+
 	// Delete DynamoDB identity row
 	_, err := dynClient.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: awssdk.String(tableName),

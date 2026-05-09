@@ -279,8 +279,8 @@ locals {
 	if err := awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID, cfg.GetResourcePrefix()); err != nil {
 		log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("failed to delete TTL schedule (non-fatal)")
 	}
-	// Clean up budget schedule (km-budget-{sandbox-id}).
-	budgetScheduleName := "km-budget-" + sandboxID
+	// Clean up budget schedule ({prefix}-budget-{sandbox-id}).
+	budgetScheduleName := cfg.GetResourcePrefix() + "-budget-" + sandboxID
 	if _, err := schedulerClient.DeleteSchedule(ctx, &scheduler.DeleteScheduleInput{
 		Name: aws.String(budgetScheduleName),
 	}); err != nil {
@@ -330,14 +330,14 @@ locals {
 		if ghErr := runner.Destroy(ctx, githubTokenDir); ghErr != nil {
 			log.Warn().Err(ghErr).Str("sandbox_id", sandboxID).
 				Msg("github-token terragrunt destroy failed — falling back to SDK cleanup")
-			cleanupGitHubTokenResources(ctx, awsCfg, sandboxID)
+			cleanupGitHubTokenResources(ctx, awsCfg, sandboxID, cfg.GetResourcePrefix())
 		} else {
 			log.Info().Str("sandbox_id", sandboxID).Msg("github-token refresher Lambda destroyed")
 		}
 	} else {
 		// No local Terragrunt dir — clean up via SDK (remote destroy, TTL handler, etc).
 		fmt.Printf("Cleaning up GitHub token resources for sandbox %s (SDK fallback)...\n", sandboxID)
-		cleanupGitHubTokenResources(ctx, awsCfg, sandboxID)
+		cleanupGitHubTokenResources(ctx, awsCfg, sandboxID, cfg.GetResourcePrefix())
 	}
 	// Always attempt SSM cleanup (parameter may exist even if github-token dir is gone).
 	githubTokenParam := awspkg.SandboxParameterPath(cfg.GetResourcePrefix(), sandboxID, "github-token")
@@ -660,14 +660,14 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 	// Step DD3b: Clean up github-token resources (KMS key, Lambda, EventBridge schedule,
 	// IAM roles, CloudWatch log group). These are created by the github-token Terraform
 	// module but the Docker destroy path doesn't run Terragrunt, so SDK cleanup is needed.
-	cleanupGitHubTokenResources(ctx, awsCfg, sandboxID)
+	cleanupGitHubTokenResources(ctx, awsCfg, sandboxID, cfg.GetResourcePrefix())
 
 	// Step DD3c: Cancel EventBridge schedules (TTL, budget) so they don't fire after resources are gone.
 	schedulerClient := scheduler.NewFromConfig(awsCfg)
 	if err := awspkg.DeleteTTLSchedule(ctx, schedulerClient, sandboxID, cfg.GetResourcePrefix()); err != nil {
 		log.Warn().Err(err).Str("sandbox_id", sandboxID).Msg("failed to delete TTL schedule (non-fatal)")
 	}
-	budgetScheduleName := "km-budget-" + sandboxID
+	budgetScheduleName := cfg.GetResourcePrefix() + "-budget-" + sandboxID
 	if _, err := schedulerClient.DeleteSchedule(ctx, &scheduler.DeleteScheduleInput{
 		Name: aws.String(budgetScheduleName),
 	}); err != nil {
@@ -677,7 +677,7 @@ func runDestroyDocker(ctx context.Context, cfg *config.Config, awsCfg aws.Config
 	}
 
 	// Step DD3d: Clean up budget-enforcer resources (Lambda, IAM roles, log group).
-	cleanupBudgetEnforcerResources(ctx, awsCfg, sandboxID)
+	cleanupBudgetEnforcerResources(ctx, awsCfg, sandboxID, cfg.GetResourcePrefix())
 
 	// Step DD3e: Clean up SES email identity.
 	emailDomain := cfg.GetEmailDomain()
@@ -783,7 +783,7 @@ func cleanupVSCodeState(sandboxID string) {
 // Terraform module using SDK calls. This is the fallback for when Terragrunt
 // destroy isn't available (Docker sandboxes, remote destroy, TTL handler).
 // Each step is idempotent and non-fatal.
-func cleanupGitHubTokenResources(ctx context.Context, awsCfg aws.Config, sandboxID string) {
+func cleanupGitHubTokenResources(ctx context.Context, awsCfg aws.Config, sandboxID string, prefix string) {
 	iamClient := iampkg.NewFromConfig(awsCfg)
 	kmsClient := kmspkg.NewFromConfig(awsCfg)
 	lambdaClient := lambdapkg.NewFromConfig(awsCfg)
@@ -791,7 +791,7 @@ func cleanupGitHubTokenResources(ctx context.Context, awsCfg aws.Config, sandbox
 	schedClient := scheduler.NewFromConfig(awsCfg)
 
 	// 1. Delete EventBridge schedule.
-	scheduleName := "km-github-token-" + sandboxID
+	scheduleName := prefix + "-github-token-" + sandboxID
 	if _, err := schedClient.DeleteSchedule(ctx, &scheduler.DeleteScheduleInput{
 		Name: aws.String(scheduleName),
 	}); err != nil {
@@ -803,7 +803,7 @@ func cleanupGitHubTokenResources(ctx context.Context, awsCfg aws.Config, sandbox
 	}
 
 	// 2. Delete Lambda function.
-	lambdaName := "km-github-token-refresher-" + sandboxID
+	lambdaName := prefix + "-github-token-refresher-" + sandboxID
 	if _, err := lambdaClient.DeleteFunction(ctx, &lambdapkg.DeleteFunctionInput{
 		FunctionName: aws.String(lambdaName),
 	}); err != nil {
@@ -815,7 +815,7 @@ func cleanupGitHubTokenResources(ctx context.Context, awsCfg aws.Config, sandbox
 	}
 
 	// 3. Delete CloudWatch log group.
-	logGroupName := "/aws/lambda/km-github-token-refresher-" + sandboxID
+	logGroupName := "/aws/lambda/" + prefix + "-github-token-refresher-" + sandboxID
 	if _, err := cwClient.DeleteLogGroup(ctx, &cloudwatchlogs.DeleteLogGroupInput{
 		LogGroupName: aws.String(logGroupName),
 	}); err != nil {
@@ -826,8 +826,8 @@ func cleanupGitHubTokenResources(ctx context.Context, awsCfg aws.Config, sandbox
 
 	// 4. Delete IAM roles (refresher + scheduler).
 	for _, roleName := range []string{
-		"km-github-token-refresher-" + sandboxID,
-		"km-github-token-scheduler-" + sandboxID,
+		prefix + "-github-token-refresher-" + sandboxID,
+		prefix + "-github-token-scheduler-" + sandboxID,
 	} {
 		// Delete inline policies.
 		listOut, _ := iamClient.ListRolePolicies(ctx, &iampkg.ListRolePoliciesInput{
@@ -853,7 +853,7 @@ func cleanupGitHubTokenResources(ctx context.Context, awsCfg aws.Config, sandbox
 	}
 
 	// 5. Schedule KMS key deletion and remove alias.
-	kmsAlias := "alias/km-github-token-" + sandboxID
+	kmsAlias := "alias/" + prefix + "-github-token-" + sandboxID
 	descOut, err := kmsClient.DescribeKey(ctx, &kmspkg.DescribeKeyInput{
 		KeyId: aws.String(kmsAlias),
 	})
@@ -879,10 +879,10 @@ func cleanupGitHubTokenResources(ctx context.Context, awsCfg aws.Config, sandbox
 // via SDK calls: Lambda function, IAM roles, CloudWatch log group.
 // The EventBridge schedule is handled separately (caller deletes it directly).
 // All errors are non-fatal (logged as warnings) — idempotent cleanup.
-func cleanupBudgetEnforcerResources(ctx context.Context, awsCfg aws.Config, sandboxID string) {
+func cleanupBudgetEnforcerResources(ctx context.Context, awsCfg aws.Config, sandboxID string, prefix string) {
 	// Delete budget-enforcer Lambda.
 	lambdaClient := lambdapkg.NewFromConfig(awsCfg)
-	fnName := "km-budget-enforcer-" + sandboxID
+	fnName := prefix + "-budget-enforcer-" + sandboxID
 	if _, err := lambdaClient.DeleteFunction(ctx, &lambdapkg.DeleteFunctionInput{
 		FunctionName: aws.String(fnName),
 	}); err != nil {
@@ -896,8 +896,8 @@ func cleanupBudgetEnforcerResources(ctx context.Context, awsCfg aws.Config, sand
 	// Delete budget-enforcer IAM roles.
 	iamClient := iampkg.NewFromConfig(awsCfg)
 	for _, roleName := range []string{
-		"km-budget-enforcer-" + sandboxID,
-		"km-budget-scheduler-" + sandboxID,
+		prefix + "-budget-enforcer-" + sandboxID,
+		prefix + "-budget-scheduler-" + sandboxID,
 	} {
 		listOut, _ := iamClient.ListRolePolicies(ctx, &iampkg.ListRolePoliciesInput{
 			RoleName: aws.String(roleName),
@@ -921,7 +921,7 @@ func cleanupBudgetEnforcerResources(ctx context.Context, awsCfg aws.Config, sand
 
 	// Delete budget-enforcer CloudWatch log group.
 	cwClient := cloudwatchlogs.NewFromConfig(awsCfg)
-	logGroup := "/aws/lambda/km-budget-enforcer-" + sandboxID
+	logGroup := "/aws/lambda/" + prefix + "-budget-enforcer-" + sandboxID
 	if _, err := cwClient.DeleteLogGroup(ctx, &cloudwatchlogs.DeleteLogGroupInput{
 		LogGroupName: aws.String(logGroup),
 	}); err != nil {

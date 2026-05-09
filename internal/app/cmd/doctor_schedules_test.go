@@ -69,7 +69,7 @@ func TestCheckStaleSchedules_KmAtForDestroyedSandbox_FlaggedStale(t *testing.T) 
 		},
 	}
 	// Empty active set — sandbox is destroyed.
-	r := checkStaleSchedules(context.Background(), sched, &fakeSandboxLister{}, true)
+	r := checkStaleSchedules(context.Background(), sched, &fakeSandboxLister{}, true, "km")
 	if r.Status != CheckWarn {
 		t.Fatalf("expected CheckWarn (orphan km-at-* schedules), got %s: %s", r.Status, r.Message)
 	}
@@ -91,7 +91,7 @@ func TestCheckStaleSchedules_KmAtForActiveSandbox_NotStale(t *testing.T) {
 	lister := &fakeSandboxLister{
 		records: []kmaws.SandboxRecord{{SandboxID: "sb-alive"}},
 	}
-	r := checkStaleSchedules(context.Background(), sched, lister, true)
+	r := checkStaleSchedules(context.Background(), sched, lister, true, "km")
 	if r.Status != CheckOK {
 		t.Fatalf("expected CheckOK when km-at-* references a live sandbox, got %s: %s", r.Status, r.Message)
 	}
@@ -111,7 +111,7 @@ func TestCheckStaleSchedules_KmAtCreate_AlwaysPreserved(t *testing.T) {
 		},
 	}
 	// Empty active set — but km-at-create-* must still be preserved.
-	r := checkStaleSchedules(context.Background(), sched, &fakeSandboxLister{}, false)
+	r := checkStaleSchedules(context.Background(), sched, &fakeSandboxLister{}, false, "km")
 	if r.Status != CheckOK {
 		t.Fatalf("km-at-create-* must never be flagged stale, got %s: %s", r.Status, r.Message)
 	}
@@ -135,7 +135,7 @@ func TestCheckStaleSchedules_DeletesStaleKmAtOnDryRunFalse(t *testing.T) {
 	lister := &fakeSandboxLister{
 		records: []kmaws.SandboxRecord{{SandboxID: "sb-alive"}},
 	}
-	r := checkStaleSchedules(context.Background(), sched, lister, false)
+	r := checkStaleSchedules(context.Background(), sched, lister, false, "km")
 	if r.Status != CheckWarn {
 		t.Fatalf("expected CheckWarn, got %s: %s", r.Status, r.Message)
 	}

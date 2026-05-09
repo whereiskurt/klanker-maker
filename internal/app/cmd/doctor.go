@@ -281,6 +281,11 @@ type DoctorDeps struct {
 	// ~/.km/keys/ for sandboxes whose DynamoDB row is gone. Local-only;
 	// the cloud-side --remote destroy can't reach operator filesystems.
 	DeleteSSH bool
+	// DeleteSSM opts the stale-SSM-parameters check into deletion. Only
+	// honored when DryRun is also false. Per-sandbox SSM parameters
+	// (signing-key, encryption-key, safe-phrase, github-token) contain
+	// cryptographic secrets and are never auto-deleted without explicit opt-in.
+	DeleteSSM bool
 	// LambdaCleanup is the Lambda client used by checkStaleLambdas for
 	// ListFunctions + DeleteFunction. Distinct from LambdaClient (which
 	// only has GetFunction for the existence check) so doctor can keep
@@ -307,6 +312,9 @@ type DoctorDeps struct {
 	SlackAuthTestScopes func(ctx context.Context) ([]string, error)
 	// SlackResourcePrefix is the resource prefix used to detect stale queues.
 	SlackResourcePrefix string
+	// SSMDeleterClient is used by checkStaleSSMParameters to delete orphaned
+	// per-sandbox SSM parameters when --dry-run=false. Nil = skip deletion.
+	SSMDeleterClient SSMDeleterAPI
 	// SlackSSMDeleter (Plan quick-7) is used by the stale-inbound-queues check
 	// to best-effort delete the matching /sandbox/{id}/slack-inbound-queue-url
 	// SSM parameter when --dry-run=false is set. Nil = skip SSM cleanup.
@@ -1312,17 +1320,128 @@ func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister San
 	}
 }
 
-// checkStaleSchedules finds EventBridge Scheduler schedules (km-ttl-*, km-budget-*,
-// km-github-token-*) that don't belong to any active sandbox and deletes them.
+// checkStaleSSMParameters finds per-sandbox SSM parameters under /{prefix}/sandbox/{id}/
+// whose sandbox ID is not in the active DynamoDB sandbox table. These are left behind
+// when km destroy fails or (historically) when safe-phrase was not deleted.
+// With dryRun=false and a non-nil ssmDeleter, stale parameters are deleted.
+func checkStaleSSMParameters(ctx context.Context, ssmReader SSMReadAPI, ssmDeleter SSMDeleterAPI, lister SandboxLister, dryRun bool, deleteSSM bool, prefix string) CheckResult {
+	name := "Stale SSM Parameters"
+	if ssmReader == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "SSM client not available"}
+	}
+
+	sandboxPath := fmt.Sprintf("/%s/sandbox/", prefix)
+
+	var staleParams []string
+	paramsBySandbox := make(map[string][]string)
+	var nextToken *string
+	for {
+		out, err := ssmReader.GetParametersByPath(ctx, &ssm.GetParametersByPathInput{
+			Path:           awssdk.String(sandboxPath),
+			Recursive:      awssdk.Bool(true),
+			WithDecryption: awssdk.Bool(false),
+			NextToken:      nextToken,
+		})
+		if err != nil {
+			return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not list SSM parameters: %v", err)}
+		}
+		for _, p := range out.Parameters {
+			paramName := awssdk.ToString(p.Name)
+			rest := strings.TrimPrefix(paramName, sandboxPath)
+			parts := strings.SplitN(rest, "/", 2)
+			if len(parts) < 2 {
+				continue
+			}
+			sbID := parts[0]
+			if sbID == "operator" {
+				continue
+			}
+			paramsBySandbox[sbID] = append(paramsBySandbox[sbID], paramName)
+		}
+		if out.NextToken == nil {
+			break
+		}
+		nextToken = out.NextToken
+	}
+
+	if len(paramsBySandbox) == 0 {
+		return CheckResult{Name: name, Status: CheckOK, Message: "no per-sandbox SSM parameters found"}
+	}
+
+	activeSandboxes := make(map[string]bool)
+	if lister != nil {
+		records, err := lister.ListSandboxes(ctx, false)
+		if err == nil {
+			for _, r := range records {
+				activeSandboxes[r.SandboxID] = true
+			}
+		}
+	}
+
+	for sbID, params := range paramsBySandbox {
+		if !activeSandboxes[sbID] {
+			staleParams = append(staleParams, params...)
+		}
+	}
+
+	if len(staleParams) == 0 {
+		total := 0
+		for _, pp := range paramsBySandbox {
+			total += len(pp)
+		}
+		return CheckResult{Name: name, Status: CheckOK, Message: fmt.Sprintf("%d sandbox SSM parameters, all active", total)}
+	}
+
+	if dryRun || !deleteSSM || ssmDeleter == nil {
+		hint := "use --dry-run=false --delete-ssm to delete"
+		if !dryRun && !deleteSSM {
+			hint = "use --delete-ssm to delete"
+		}
+		return CheckResult{
+			Name:    name,
+			Status:  CheckWarn,
+			Message: fmt.Sprintf("found %d stale SSM parameters across %d orphaned sandboxes (%s)", len(staleParams), len(paramsBySandbox)-len(activeSandboxes), hint),
+		}
+	}
+
+	var deleted, failed int
+	for _, paramName := range staleParams {
+		_, err := ssmDeleter.DeleteParameter(ctx, &ssm.DeleteParameterInput{
+			Name: awssdk.String(paramName),
+		})
+		if err != nil {
+			var notFound *ssmtypes.ParameterNotFound
+			if errors.As(err, &notFound) {
+				deleted++
+			} else {
+				failed++
+			}
+		} else {
+			deleted++
+		}
+	}
+
+	if failed == 0 {
+		return CheckResult{Name: name, Status: CheckOK, Message: fmt.Sprintf("deleted %d stale SSM parameters", deleted)}
+	}
+	return CheckResult{
+		Name:    name,
+		Status:  CheckWarn,
+		Message: fmt.Sprintf("deleted %d stale SSM parameters, %d failed", deleted, failed),
+	}
+}
+
+// checkStaleSchedules finds EventBridge Scheduler schedules ({prefix}-ttl-*, {prefix}-budget-*,
+// {prefix}-github-token-*) that don't belong to any active sandbox and deletes them.
 // Stale schedules are harmless but clutter the scheduler and may invoke Lambdas
 // against non-existent sandboxes.
-func checkStaleSchedules(ctx context.Context, schedulerClient kmaws.SchedulerAPI, lister SandboxLister, dryRun bool) CheckResult {
+func checkStaleSchedules(ctx context.Context, schedulerClient kmaws.SchedulerAPI, lister SandboxLister, dryRun bool, prefix string) CheckResult {
 	name := "Stale Schedules"
 	if schedulerClient == nil {
 		return CheckResult{Name: name, Status: CheckSkipped, Message: "Scheduler client not available"}
 	}
 
-	// Collect all km- schedules.
+	// Collect all {prefix}- schedules.
 	var schedules []string
 	var nextToken *string
 	for {
@@ -1334,7 +1453,7 @@ func checkStaleSchedules(ctx context.Context, schedulerClient kmaws.SchedulerAPI
 		}
 		for _, s := range out.Schedules {
 			n := awssdk.ToString(s.Name)
-			if strings.HasPrefix(n, "km-") {
+			if strings.HasPrefix(n, prefix+"-") {
 				schedules = append(schedules, n)
 			}
 		}
@@ -1372,7 +1491,7 @@ func checkStaleSchedules(ctx context.Context, schedulerClient kmaws.SchedulerAPI
 	// and must not be touched.
 	var staleNames []string
 	for _, sn := range schedules {
-		if strings.HasPrefix(sn, "km-at-create-") {
+		if strings.HasPrefix(sn, prefix+"-at-create-") {
 			continue
 		}
 		isActive := false
@@ -1388,7 +1507,7 @@ func checkStaleSchedules(ctx context.Context, schedulerClient kmaws.SchedulerAPI
 	}
 
 	if len(staleNames) == 0 {
-		return CheckResult{Name: name, Status: CheckOK, Message: fmt.Sprintf("%d km- schedules, all active", len(schedules))}
+		return CheckResult{Name: name, Status: CheckOK, Message: fmt.Sprintf("%d %s- schedules, all active", len(schedules), prefix)}
 	}
 
 	if dryRun {
@@ -1863,6 +1982,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 	var deleteS3 bool
 	var deleteLambdas bool
 	var deleteSSH bool
+	var deleteSSM bool
 	var withDeletes bool
 
 	cmd := &cobra.Command{
@@ -1893,8 +2013,9 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 				deleteS3 = true
 				deleteLambdas = true
 				deleteSSH = true
+				deleteSSM = true
 			}
-			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH)
+			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH, deleteSSM)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output results as JSON array")
@@ -1913,13 +2034,15 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 		"With --dry-run=false, delete per-sandbox Lambda functions (budget-enforcer, github-token-refresher) whose sandbox row is gone from DynamoDB. Platform Lambdas are never touched.")
 	cmd.Flags().BoolVar(&deleteSSH, "delete-ssh", false,
 		"With --dry-run=false, remove stale 'Host km-{sandbox-id}' entries from ~/.ssh/config and matching key files in ~/.km/keys/. Local-only — needed because remote/TTL/budget destroys can't reach the operator filesystem.")
+	cmd.Flags().BoolVar(&deleteSSM, "delete-ssm", false,
+		"With --dry-run=false, delete per-sandbox SSM parameters (signing-key, encryption-key, safe-phrase, github-token) whose sandbox row is gone from DynamoDB. Explicit opt-in required because these parameters contain cryptographic secrets.")
 	cmd.Flags().BoolVar(&withDeletes, "with-deletes", false,
-		"Shortcut for --delete-ebs --delete-sqs --delete-s3 --delete-lambdas --delete-ssh. Pair with --dry-run=false for a full cleanup pass; with --dry-run=true (default) shows what each opt-in would clean.")
+		"Shortcut for --delete-ebs --delete-sqs --delete-s3 --delete-lambdas --delete-ssh --delete-ssm. Pair with --dry-run=false for a full cleanup pass; with --dry-run=true (default) shows what each opt-in would clean.")
 	return cmd
 }
 
 // runDoctor is the core execution logic for km doctor.
-func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH bool) error {
+func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH, deleteSSM bool) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -1949,6 +2072,7 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 	deps.DeleteS3 = deleteS3
 	deps.DeleteLambdas = deleteLambdas
 	deps.DeleteSSH = deleteSSH
+	deps.DeleteSSM = deleteSSM
 
 	// Run credential check first — if SSO is expired, skip all AWS checks
 	// rather than repeating the same credential error for every check.
@@ -2253,8 +2377,18 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 
 	// Stale EventBridge schedules check.
 	schedulerClient := deps.SchedulerClient
+	schedulerResourcePrefix := cfg.GetResourcePrefix()
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkStaleSchedules(ctx, schedulerClient, listerForCleanup, dryRun)
+		return checkStaleSchedules(ctx, schedulerClient, listerForCleanup, dryRun, schedulerResourcePrefix)
+	})
+
+	// Stale per-sandbox SSM parameters check.
+	ssmReaderForCleanup := deps.SSMReadClient
+	ssmDeleterForCleanup := deps.SSMDeleterClient
+	ssmParamPrefix := cfg.GetResourcePrefix()
+	deleteSSM := deps.DeleteSSM
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkStaleSSMParameters(ctx, ssmReaderForCleanup, ssmDeleterForCleanup, listerForCleanup, dryRun, deleteSSM, ssmParamPrefix)
 	})
 
 	// Stale per-sandbox Lambdas check (budget-enforcer + github-token-refresher
@@ -2522,6 +2656,7 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	deps.KMSCleanupClient = kms.NewFromConfig(awsCfg)
 	deps.IAMCleanupClient = iam.NewFromConfig(awsCfg)
 	deps.SchedulerClient = scheduler.NewFromConfig(awsCfg)
+	deps.SSMDeleterClient = ssm.NewFromConfig(awsCfg)
 	deps.EC2InstanceClient = ec2.NewFromConfig(awsCfg)
 	deps.EC2VolumeClient = ec2.NewFromConfig(awsCfg)
 
