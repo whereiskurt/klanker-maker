@@ -112,9 +112,52 @@ func TestUserDataOTELLogPromptsAbsent(t *testing.T) {
 // TestStreamDrain_RenderFlag (HOOK-01): _km_stream_drain must include the
 // --render "${KM_SLACK_RENDER:-blocks}" flag so operators can downgrade
 // per-sandbox rendering without redeploying the binary.
-// Task 4 replaces this stub with a real implementation.
 func TestStreamDrain_RenderFlag(t *testing.T) {
-	t.Skip("Task 4 implementation")
+	p := baseProfile()
+	ud, err := generateUserData(p, "sb-hook-01", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData: %v", err)
+	}
+
+	// Assert the streaming hook includes the --render flag.
+	wantSubstr := `--render "${KM_SLACK_RENDER:-blocks}"`
+	if !strings.Contains(ud, wantSubstr) {
+		t.Fatalf("expected streaming hook to include %q\n(first 200 chars of userdata: %s)", wantSubstr, ud[:min200(ud)])
+	}
+
+	// Assert the flag appears specifically inside _km_stream_drain (not in some
+	// other km-slack call). Find the function start and end markers.
+	funcStart := strings.Index(ud, "_km_stream_drain()")
+	if funcStart == -1 {
+		t.Fatal("_km_stream_drain function definition not found in userdata")
+	}
+	// Find the closing brace of the function by searching for the next `^}` pattern
+	// after funcStart.
+	funcRemainder := ud[funcStart:]
+	// The function body ends at a line that is just `}` (function close).
+	funcEnd := strings.Index(funcRemainder, "\n}")
+	if funcEnd == -1 {
+		t.Fatal("_km_stream_drain end brace not found; cannot isolate function body")
+	}
+	funcBody := funcRemainder[:funcEnd]
+	if !strings.Contains(funcBody, wantSubstr) {
+		t.Fatalf("--render flag present in userdata but NOT inside _km_stream_drain function body.\nFunction body (first 500 chars): %s",
+			funcBody[:min500(funcBody)])
+	}
+}
+
+func min200(s string) int {
+	if len(s) < 200 {
+		return len(s)
+	}
+	return 200
+}
+
+func min500(s string) int {
+	if len(s) < 500 {
+		return len(s)
+	}
+	return 500
 }
 
 // TestUserDataOTELLogToolDetailsEnabled verifies OTEL_LOG_TOOL_DETAILS=1 appears when logToolDetails=true.
