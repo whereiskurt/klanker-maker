@@ -1578,3 +1578,14 @@ Plans:
 - [ ] 73-07-PLAN.md — internal/app/cmd/destroy.go: cleanup hook removes ~/.ssh/config block + ~/.km/keys/sb-X* files (idempotent on missing) (Wave 2, parallel with 73-05)
 - [ ] 73-08-PLAN.md — Docs: docs/vscode.md operator guide + CLAUDE.md additions (Wave 4)
 - [ ] 73-09-PLAN.md — Closeout: 73-VALIDATION.md Per-Task Verification Map populated + 73-UAT.md (6 manual scenarios) + blocking operator UAT checkpoint (Wave 5)
+
+### Phase 74: Slack mrkdwn rendering: tokenizer-based markdown→Slack mrkdwn transformer + optional Block Kit tier for streaming hook output
+
+**Goal:** Eliminate today's production failures (literal `***heading***` asterisks, dropped `# headings`, broken pipe-tables) by adding a tokenizer-based renderer that converts Claude's CommonMark-ish output into valid Slack mrkdwn (Tier 1) and structured Block Kit (Tier 2). Two-PR phasing: PR1 ships Tier 1 + `--render=mrkdwn` flag with the streaming hook unchanged; PR2 ships Tier 2 Block Kit + flips the Phase 68 streaming hook in `pkg/compiler/userdata.go _km_stream_drain` to `--render=blocks`. Existing Phase 62/63/67 callers stay on default `plain` (no behavior change). Robustness moat: tokenizer preserves code blocks byte-for-byte, idempotent + fail-soft properties, fuzz target, corpus fixtures.
+**Requirements**: REND-01..REND-16, BLK-01..BLK-10, BRDG-01..BRDG-03, HOOK-01 (local to phase, defined in 74-VALIDATION.md)
+**Depends on:** Phase 73
+**Plans:** 2 plans
+
+Plans:
+- [ ] 74-01-PLAN.md — PR1: tokenizer + Tier 1 mrkdwn transforms in pkg/slack/mrkdwn.go + corpus fixtures + fuzz target + `--render=plain|mrkdwn` flag on `km-slack post` with `KM_SLACK_RENDER` env safety valve; streaming hook unchanged. (Wave 1, autonomous, 3 tasks)
+- [ ] 74-02-PLAN.md — PR2: Tier 2 Block Kit builder in pkg/slack/blocks.go + additive bridge changes (SlackEnvelope.Blocks field, BlockPoster optional interface, SlackPosterAdapter.PostMessageBlocks, handler dispatch wrap) + `--render=blocks` execution path + `pkg/compiler/userdata.go _km_stream_drain` hook flip + manual end-to-end Slack verification. (Wave 2, has checkpoint, 5 tasks, depends on 74-01)
