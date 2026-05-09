@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -71,31 +72,37 @@ func TestKmSlackPost_HappyPath(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	err := runWith(context.Background(), priv, "sb-test", ts.URL, "C123", "Test subject", bodyPath, "")
+	err := runWith(context.Background(), priv, "sb-test", ts.URL, "C123", "Test subject", bodyPath, "", "plain")
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
 	}
 }
 
-// TestKmSlackPost_BodyTooLarge_ExitsBeforeHttp — 40KB+1 body → exit 1, no HTTP call.
-func TestKmSlackPost_BodyTooLarge_ExitsBeforeHttp(t *testing.T) {
+// TestKmSlackPost_BodyTooLarge_TruncatedAndSent — Phase 74: 40KB+1 body in plain
+// mode is truncated to MaxRenderedBytes and sent with a footer, NOT rejected.
+// The old "exit 1 on oversized body" behavior is superseded by the overflow path.
+func TestKmSlackPost_BodyTooLarge_TruncatedAndSent(t *testing.T) {
 	_, priv := genKey(t)
-	bigBody := string(make([]byte, slack.MaxBodyBytes+1))
+	// 40KB+1: exceeds MaxRenderedBytes (35KB), so overflow truncation fires.
+	bigBody := strings.Repeat("x", slack.MaxBodyBytes+1)
 	bodyPath := writeTmpBody(t, bigBody)
 
 	var callCount int32
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&callCount, 1)
-		fmt.Fprintln(w, `{"ok":true}`)
-	}))
-	defer ts.Close()
+	srv, captured := newFakeBridge(t)
+	defer srv.Close()
+	_ = callCount
 
-	err := runWith(context.Background(), priv, "sb-test", ts.URL, "C123", "subj", bodyPath, "")
-	if err == nil {
-		t.Fatal("expected error for oversized body, got nil")
+	// Phase 74: oversized bodies are truncated, not rejected.
+	err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "subj", bodyPath, "", "plain")
+	if err != nil {
+		t.Fatalf("expected oversized body to be truncated+sent, got error: %v", err)
 	}
-	if atomic.LoadInt32(&callCount) != 0 {
-		t.Errorf("expected 0 HTTP calls for oversized body, got %d", callCount)
+	if len(*captured) != 1 {
+		t.Fatalf("expected 1 request for truncated body, got %d", len(*captured))
+	}
+	const footer = "\n_…truncated; see full transcript at Stop_"
+	if !strings.HasSuffix((*captured)[0].Body, footer) {
+		t.Errorf("expected truncation footer in body; got: %q", (*captured)[0].Body[max(0, len((*captured)[0].Body)-len(footer)-5):])
 	}
 }
 
@@ -104,7 +111,7 @@ func TestKmSlackPost_MissingSandboxID_Exits1(t *testing.T) {
 	_, priv := genKey(t)
 	bodyPath := writeTmpBody(t, "test")
 
-	err := runWith(context.Background(), priv, "", "http://localhost/noop", "C123", "subj", bodyPath, "")
+	err := runWith(context.Background(), priv, "", "http://localhost/noop", "C123", "subj", bodyPath, "", "plain")
 	if err == nil {
 		t.Fatal("expected error for missing sandboxID")
 	}
@@ -115,7 +122,7 @@ func TestKmSlackPost_MissingBridgeURL_Exits1(t *testing.T) {
 	_, priv := genKey(t)
 	bodyPath := writeTmpBody(t, "test")
 
-	err := runWith(context.Background(), priv, "sb-test", "", "C123", "subj", bodyPath, "")
+	err := runWith(context.Background(), priv, "sb-test", "", "C123", "subj", bodyPath, "", "plain")
 	if err == nil {
 		t.Fatal("expected error for missing bridgeURL")
 	}
@@ -129,7 +136,7 @@ func TestKmSlackPost_BodyDash_Rejected(t *testing.T) {
 	// The stdin check is in main()'s flag validation, not in runWith.
 	// So we test it via the bodyPath "-" hitting the file-read path.
 	// runWith will try to os.ReadFile("-") which returns an error — that counts as exit 1.
-	err := runWith(context.Background(), priv, "sb-test", "http://localhost/noop", "C123", "subj", "-", "")
+	err := runWith(context.Background(), priv, "sb-test", "http://localhost/noop", "C123", "subj", "-", "", "plain")
 	if err == nil {
 		t.Fatal("expected error for body '-'")
 	}
@@ -148,7 +155,7 @@ func TestKmSlackPost_BridgeReturns401_Exit1(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	err := runWith(context.Background(), priv, "sb-test", ts.URL, "C123", "subj", bodyPath, "")
+	err := runWith(context.Background(), priv, "sb-test", ts.URL, "C123", "subj", bodyPath, "", "plain")
 	if err == nil {
 		t.Fatal("expected error for 401 response")
 	}
@@ -176,7 +183,7 @@ func TestKmSlackPost_BridgeReturns503ThenSuccess_Exit0(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	err := runWith(context.Background(), priv, "sb-test", ts.URL, "C123", "subj", bodyPath, "")
+	err := runWith(context.Background(), priv, "sb-test", ts.URL, "C123", "subj", bodyPath, "", "plain")
 	if err != nil {
 		t.Fatalf("expected success after 503 retries, got: %v", err)
 	}
@@ -219,8 +226,159 @@ func TestKmSlackPost_SignatureVerifiesAtServer(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	err := runWith(context.Background(), priv, "sb-test", ts.URL, "C123", "verify-subj", bodyPath, "")
+	err := runWith(context.Background(), priv, "sb-test", ts.URL, "C123", "verify-subj", bodyPath, "", "plain")
 	if err != nil {
 		t.Fatalf("signature verify failed at server: %v", err)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 74 REND-14..REND-16: render mode + overflow tests
+// ---------------------------------------------------------------------------
+
+// newFakeBridge returns an httptest.Server that captures the decoded envelope
+// from each POST and returns {"ok":true,"ts":"123.456"}.
+func newFakeBridge(t *testing.T) (*httptest.Server, *[]slack.SlackEnvelope) {
+	t.Helper()
+	var captured []slack.SlackEnvelope
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var env slack.SlackEnvelope
+		if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
+			http.Error(w, "bad body", 400)
+			return
+		}
+		captured = append(captured, env)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"ok":true,"ts":"123.456"}`)
+	}))
+	return srv, &captured
+}
+
+// TestRunWith_Plain (REND-15): renderMode="plain" passes body through verbatim —
+// Mrkdwnify is never invoked and existing Phase 62/63/68 callers see no change.
+func TestRunWith_Plain(t *testing.T) {
+	_, priv := genKey(t)
+	srv, captured := newFakeBridge(t)
+	defer srv.Close()
+
+	input := "**bold**\n# heading\n"
+	bodyPath := writeTmpBody(t, input)
+
+	err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "subj", bodyPath, "", "plain")
+	if err != nil {
+		t.Fatalf("runWith plain: %v", err)
+	}
+	if len(*captured) != 1 {
+		t.Fatalf("expected 1 envelope captured, got %d", len(*captured))
+	}
+	if got := (*captured)[0].Body; got != input {
+		t.Errorf("plain mode: body modified; got %q, want %q", got, input)
+	}
+}
+
+// TestRunWith_EnvOverride (REND-16): KM_SLACK_RENDER=mrkdwn causes Mrkdwnify
+// to run; explicit --render=plain flag overrides the env var.
+func TestRunWith_EnvOverride(t *testing.T) {
+	_, priv := genKey(t)
+
+	input := "**bold**\n# heading\n"
+
+	t.Run("env-set-no-flag", func(t *testing.T) {
+		t.Setenv("KM_SLACK_RENDER", "mrkdwn")
+		srv, captured := newFakeBridge(t)
+		defer srv.Close()
+		bodyPath := writeTmpBody(t, input)
+
+		// Simulate runPost flag resolution: flag empty → read env → "mrkdwn"
+		renderMode := ""
+		if renderMode == "" {
+			renderMode = os.Getenv("KM_SLACK_RENDER")
+		}
+		if renderMode == "" {
+			renderMode = "plain"
+		}
+
+		err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "subj", bodyPath, "", renderMode)
+		if err != nil {
+			t.Fatalf("runWith mrkdwn via env: %v", err)
+		}
+		if len(*captured) != 1 {
+			t.Fatalf("expected 1 envelope, got %d", len(*captured))
+		}
+		got := (*captured)[0].Body
+		// Should be transformed: **bold** → *bold*, # heading → *heading*
+		if got == input {
+			t.Errorf("env-override: expected mrkdwn transformation, got verbatim input: %q", got)
+		}
+		if !contains(got, "*bold*") {
+			t.Errorf("env-override: expected *bold* in output, got: %q", got)
+		}
+	})
+
+	t.Run("explicit-flag-wins", func(t *testing.T) {
+		t.Setenv("KM_SLACK_RENDER", "mrkdwn")
+		srv, captured := newFakeBridge(t)
+		defer srv.Close()
+		bodyPath := writeTmpBody(t, input)
+
+		// Explicit "--render=plain" wins over KM_SLACK_RENDER=mrkdwn.
+		// runPost logic: flag set → use flag (skip env lookup).
+		err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "subj", bodyPath, "", "plain")
+		if err != nil {
+			t.Fatalf("runWith explicit plain over env: %v", err)
+		}
+		if len(*captured) != 1 {
+			t.Fatalf("expected 1 envelope, got %d", len(*captured))
+		}
+		if got := (*captured)[0].Body; got != input {
+			t.Errorf("explicit-flag-wins: expected verbatim body, got: %q", got)
+		}
+	})
+}
+
+// TestRunWith_Overflow (REND-14): body > MaxRenderedBytes is truncated with a
+// footer; the defense-in-depth MaxBodyBytes check does NOT fire.
+func TestRunWith_Overflow(t *testing.T) {
+	_, priv := genKey(t)
+	srv, captured := newFakeBridge(t)
+	defer srv.Close()
+
+	// Build a body larger than MaxRenderedBytes. Mrkdwnify on plain ASCII returns
+	// the same bytes, so the rendered size equals the input size.
+	oversized := strings.Repeat("a", slack.MaxRenderedBytes+5000)
+	bodyPath := writeTmpBody(t, oversized)
+
+	err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "subj", bodyPath, "", "mrkdwn")
+	if err != nil {
+		t.Fatalf("runWith overflow: %v", err)
+	}
+	if len(*captured) != 1 {
+		t.Fatalf("expected 1 envelope, got %d", len(*captured))
+	}
+	const footer = "\n_…truncated; see full transcript at Stop_"
+	body := (*captured)[0].Body
+
+	if !strings.HasSuffix(body, footer) {
+		t.Errorf("overflow: body should end with footer; got suffix: %q", body[max(0, len(body)-len(footer)-5):])
+	}
+	if !strings.HasPrefix(body, oversized[:slack.MaxRenderedBytes]) {
+		t.Errorf("overflow: body should start with first MaxRenderedBytes bytes of input")
+	}
+	wantLen := slack.MaxRenderedBytes + len(footer)
+	if len(body) != wantLen {
+		t.Errorf("overflow: body length = %d, want %d", len(body), wantLen)
+	}
+}
+
+// contains is a helper to avoid importing strings in test-only code when already imported.
+func contains(s, sub string) bool {
+	return strings.Contains(s, sub)
+}
+
+// max returns the larger of two ints (backcompat for Go < 1.21 builtin).
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

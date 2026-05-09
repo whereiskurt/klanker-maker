@@ -80,17 +80,39 @@ Subcommands:
 
 // runPost is the Phase 63 post subcommand entry point. Returns a process exit
 // code (0 success, non-zero failure) so dispatch() can surface it.
+//
+// Phase 74 adds --render=plain|mrkdwn|blocks (default plain). An explicit
+// flag beats the KM_SLACK_RENDER environment variable. Unknown values fall
+// back to plain with a stderr warning. "blocks" is accepted by the flag but
+// treated as plain until Plan 74-02 (PR2) lands.
 func runPost(args []string, stderr io.Writer) int {
 	fs := flag.NewFlagSet("post", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var channel, subject, bodyPath, thread string
+	var renderMode string
 	fs.StringVar(&channel, "channel", "", "Slack channel ID (C...)")
 	fs.StringVar(&subject, "subject", "", "Optional subject text (rendered as bold header by bridge; omit for clean threaded replies)")
 	fs.StringVar(&bodyPath, "body", "", "Path to body file (stdin '-' NOT supported)")
 	fs.StringVar(&thread, "thread", "", "Thread parent ts")
+	fs.StringVar(&renderMode, "render", "", "Render mode: plain (default, no-op), mrkdwn (Phase 74 Tier 1 transformer), blocks (Phase 74 PR2; accepted but currently treated as plain)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	// Resolve render mode precedence: explicit flag > KM_SLACK_RENDER env > "plain".
+	if renderMode == "" {
+		renderMode = os.Getenv("KM_SLACK_RENDER")
+	}
+	if renderMode == "" {
+		renderMode = "plain"
+	}
+	switch renderMode {
+	case "plain", "mrkdwn", "blocks":
+		// valid
+	default:
+		fmt.Fprintf(stderr, "km-slack post: unknown --render value %q; falling back to plain\n", renderMode)
+		renderMode = "plain"
+	}
+
 	if channel == "" || bodyPath == "" {
 		fmt.Fprintln(stderr, "km-slack post: --channel and --body are required")
 		return 2
@@ -100,7 +122,7 @@ func runPost(args []string, stderr io.Writer) int {
 		return 1
 	}
 
-	if err := run(channel, subject, bodyPath, thread); err != nil {
+	if err := run(channel, subject, bodyPath, thread, renderMode); err != nil {
 		fmt.Fprintf(stderr, "km-slack post: %v\n", err)
 		return 1
 	}
@@ -242,7 +264,8 @@ func runRecordMapping(args []string, stderr io.Writer) int {
 
 // run is the outer entry point that loads env vars and the SSM key before
 // calling runWith. Separated so tests can inject an ephemeral key via runWith.
-func run(channel, subject, bodyPath, thread string) error {
+// renderMode is one of "plain", "mrkdwn", "blocks" — resolved by runPost before calling run.
+func run(channel, subject, bodyPath, thread, renderMode string) error {
 	sandboxID := os.Getenv("KM_SANDBOX_ID")
 	if sandboxID == "" {
 		return errors.New("KM_SANDBOX_ID env var not set")
@@ -272,12 +295,23 @@ func run(channel, subject, bodyPath, thread string) error {
 		return fmt.Errorf("load signing key: %w", err)
 	}
 
-	return runWith(ctx, priv, sandboxID, bridgeURL, channel, subject, bodyPath, thread)
+	return runWith(ctx, priv, sandboxID, bridgeURL, channel, subject, bodyPath, thread, renderMode)
 }
 
 // runWith is the testable inner entry point. Tests inject an ephemeral key and
 // stub bridge server URL directly, bypassing SSM entirely.
-func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL, channel, subject, bodyPath, thread string) error {
+//
+// renderMode controls Phase 74 rendering:
+//   - "plain" (default): body is passed through unchanged. Existing Phase 62/63/68
+//     callers omit --render and land here — no behavior change.
+//   - "mrkdwn": body is run through slack.Mrkdwnify before envelope construction.
+//   - "blocks": accepted by the flag (Phase 74 PR2 placeholder) but treated as
+//     plain until plan 74-02 lands.
+//
+// Overflow: if the rendered body exceeds slack.MaxRenderedBytes (35KB), it is
+// hard-truncated and a footer is appended. The existing MaxBodyBytes (40KB) check
+// remains as defense-in-depth AFTER the overflow truncation.
+func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL, channel, subject, bodyPath, thread, renderMode string) error {
 	if sandboxID == "" {
 		return errors.New("sandboxID is required")
 	}
@@ -289,11 +323,26 @@ func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL,
 	if err != nil {
 		return fmt.Errorf("read body file: %w", err)
 	}
-	if len(body) > slack.MaxBodyBytes {
-		return fmt.Errorf("body file %s exceeds %d bytes (40KB Slack limit)", bodyPath, slack.MaxBodyBytes)
+
+	// Phase 74: apply renderer then check overflow before building envelope.
+	var rendered string
+	switch renderMode {
+	case "mrkdwn":
+		rendered = slack.Mrkdwnify(string(body))
+	default: // "plain" and Phase 74 PR1 fallback for "blocks"
+		rendered = string(body)
+	}
+	if len(rendered) > slack.MaxRenderedBytes {
+		rendered = rendered[:slack.MaxRenderedBytes] +
+			"\n_…truncated; see full transcript at Stop_"
 	}
 
-	env, err := slack.BuildEnvelope(slack.ActionPost, sandboxID, channel, subject, string(body), thread)
+	// Defense-in-depth: the 40KB hard cap still applies post-render.
+	if len(rendered) > slack.MaxBodyBytes {
+		return fmt.Errorf("rendered body exceeds %d bytes (40KB Slack limit)", slack.MaxBodyBytes)
+	}
+
+	env, err := slack.BuildEnvelope(slack.ActionPost, sandboxID, channel, subject, rendered, thread)
 	if err != nil {
 		return err
 	}
