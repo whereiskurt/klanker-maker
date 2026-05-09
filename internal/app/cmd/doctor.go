@@ -1276,68 +1276,129 @@ func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister San
 
 	// Delete stale roles: remove inline policies, detach managed policies,
 	// remove from instance profiles, then delete the role.
-	var deleted, skipped int
+	//
+	// Each precursor failure is captured so the operator sees WHICH step
+	// failed instead of an opaque "skipped" count. A role with any
+	// precursor failure is NOT passed to DeleteRole — the inevitable
+	// DeleteConflict response would otherwise be the only signal the
+	// operator received about a lingering half-cleaned role.
+	type roleTeardownErr struct {
+		role string
+		step string
+		err  error
+	}
+	var (
+		deleted, skipped int
+		teardownErrs     []roleTeardownErr
+	)
 	for _, roleName := range staleRoles {
+		precursorFailed := false
+
 		// Remove inline policies.
 		listOut, err := iamClient.ListRolePolicies(ctx, &iam.ListRolePoliciesInput{
 			RoleName: awssdk.String(roleName),
 		})
 		if err != nil {
+			teardownErrs = append(teardownErrs, roleTeardownErr{roleName, "ListRolePolicies", err})
 			skipped++
 			continue
 		}
 		for _, policyName := range listOut.PolicyNames {
-			iamClient.DeleteRolePolicy(ctx, &iam.DeleteRolePolicyInput{
+			if _, err := iamClient.DeleteRolePolicy(ctx, &iam.DeleteRolePolicyInput{
 				RoleName:   awssdk.String(roleName),
 				PolicyName: awssdk.String(policyName),
-			})
+			}); err != nil {
+				teardownErrs = append(teardownErrs, roleTeardownErr{roleName, "DeleteRolePolicy:" + policyName, err})
+				precursorFailed = true
+			}
 		}
 
 		// Detach managed policies.
-		attachedOut, _ := iamClient.ListAttachedRolePolicies(ctx, &iam.ListAttachedRolePoliciesInput{
+		attachedOut, err := iamClient.ListAttachedRolePolicies(ctx, &iam.ListAttachedRolePoliciesInput{
 			RoleName: awssdk.String(roleName),
 		})
-		if attachedOut != nil {
+		if err != nil {
+			teardownErrs = append(teardownErrs, roleTeardownErr{roleName, "ListAttachedRolePolicies", err})
+			precursorFailed = true
+		} else if attachedOut != nil {
 			for _, p := range attachedOut.AttachedPolicies {
-				iamClient.DetachRolePolicy(ctx, &iam.DetachRolePolicyInput{
+				if _, err := iamClient.DetachRolePolicy(ctx, &iam.DetachRolePolicyInput{
 					RoleName:  awssdk.String(roleName),
 					PolicyArn: p.PolicyArn,
-				})
+				}); err != nil {
+					teardownErrs = append(teardownErrs, roleTeardownErr{roleName, "DetachRolePolicy:" + awssdk.ToString(p.PolicyArn), err})
+					precursorFailed = true
+				}
 			}
 		}
 
 		// Remove from instance profiles and delete them.
-		ipOut, _ := iamClient.ListInstanceProfilesForRole(ctx, &iam.ListInstanceProfilesForRoleInput{
-			RoleName: awssdk.String(roleName),
-		})
-		if ipOut != nil {
-			for _, ip := range ipOut.InstanceProfiles {
-				ipName := awssdk.ToString(ip.InstanceProfileName)
-				iamClient.RemoveRoleFromInstanceProfile(ctx, &iam.RemoveRoleFromInstanceProfileInput{
-					RoleName:            awssdk.String(roleName),
-					InstanceProfileName: awssdk.String(ipName),
-				})
-				iamClient.DeleteInstanceProfile(ctx, &iam.DeleteInstanceProfileInput{
-					InstanceProfileName: awssdk.String(ipName),
-				})
-			}
-		}
-
-		// Delete the role.
-		_, err = iamClient.DeleteRole(ctx, &iam.DeleteRoleInput{
+		ipOut, err := iamClient.ListInstanceProfilesForRole(ctx, &iam.ListInstanceProfilesForRoleInput{
 			RoleName: awssdk.String(roleName),
 		})
 		if err != nil {
-			skipped++
-		} else {
-			deleted++
+			teardownErrs = append(teardownErrs, roleTeardownErr{roleName, "ListInstanceProfilesForRole", err})
+			precursorFailed = true
+		} else if ipOut != nil {
+			for _, ip := range ipOut.InstanceProfiles {
+				ipName := awssdk.ToString(ip.InstanceProfileName)
+				if _, err := iamClient.RemoveRoleFromInstanceProfile(ctx, &iam.RemoveRoleFromInstanceProfileInput{
+					RoleName:            awssdk.String(roleName),
+					InstanceProfileName: awssdk.String(ipName),
+				}); err != nil {
+					teardownErrs = append(teardownErrs, roleTeardownErr{roleName, "RemoveRoleFromInstanceProfile:" + ipName, err})
+					precursorFailed = true
+				}
+				if _, err := iamClient.DeleteInstanceProfile(ctx, &iam.DeleteInstanceProfileInput{
+					InstanceProfileName: awssdk.String(ipName),
+				}); err != nil {
+					teardownErrs = append(teardownErrs, roleTeardownErr{roleName, "DeleteInstanceProfile:" + ipName, err})
+					precursorFailed = true
+				}
+			}
 		}
+
+		if precursorFailed {
+			// Don't attempt DeleteRole — it would just return DeleteConflict
+			// and mask the underlying precursor failure.
+			skipped++
+			continue
+		}
+
+		// Delete the role.
+		if _, err := iamClient.DeleteRole(ctx, &iam.DeleteRoleInput{
+			RoleName: awssdk.String(roleName),
+		}); err != nil {
+			teardownErrs = append(teardownErrs, roleTeardownErr{roleName, "DeleteRole", err})
+			skipped++
+			continue
+		}
+		deleted++
+	}
+
+	msg := fmt.Sprintf("found %d stale roles (%d deleted, %d skipped)", len(staleRoles), deleted, skipped)
+	if len(teardownErrs) > 0 {
+		var sb strings.Builder
+		sb.WriteString(msg)
+		sb.WriteString("; first failures:")
+		max := 3
+		if len(teardownErrs) < max {
+			max = len(teardownErrs)
+		}
+		for i := 0; i < max; i++ {
+			te := teardownErrs[i]
+			fmt.Fprintf(&sb, "\n  %s @ %s: %v", te.role, te.step, te.err)
+		}
+		if len(teardownErrs) > max {
+			fmt.Fprintf(&sb, "\n  …and %d more", len(teardownErrs)-max)
+		}
+		msg = sb.String()
 	}
 
 	return CheckResult{
 		Name:    name,
 		Status:  CheckWarn,
-		Message: fmt.Sprintf("found %d stale roles (%d deleted, %d skipped)", len(staleRoles), deleted, skipped),
+		Message: msg,
 	}
 }
 
