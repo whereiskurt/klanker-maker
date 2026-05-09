@@ -1589,3 +1589,19 @@ Plans:
 Plans:
 - [ ] 74-01-PLAN.md — PR1: tokenizer + Tier 1 mrkdwn transforms in pkg/slack/mrkdwn.go + corpus fixtures + fuzz target + `--render=plain|mrkdwn` flag on `km-slack post` with `KM_SLACK_RENDER` env safety valve; streaming hook unchanged. (Wave 1, autonomous, 3 tasks)
 - [ ] 74-02-PLAN.md — PR2: Tier 2 Block Kit builder in pkg/slack/blocks.go + additive bridge changes (SlackEnvelope.Blocks field, BlockPoster optional interface, SlackPosterAdapter.PostMessageBlocks, handler dispatch wrap) + `--render=blocks` execution path + `pkg/compiler/userdata.go _km_stream_drain` hook flip + manual end-to-end Slack verification. (Wave 2, has checkpoint, 5 tasks, depends on 74-01)
+
+### Phase 75: Slack inbound file attachments (images, PDFs) for per-sandbox channels
+
+**Goal:** Extend the Phase 67 Slack inbound flow so users can paste files (images, PDFs, etc.) into a per-sandbox channel/thread and reference them conversationally ("what's in this picture?"). Bridge Lambda detects `files[]` on inbound message events, downloads each file from `files.slack.com` using the bot token, and stages to S3 under `slack-inbound/<sandbox-id>/<thread_ts>/<filename>`. Sandbox-side `km-slack-inbound-poller` mirrors the staged files to `/workspace/.km-slack/attachments/<thread_ts>/<filename>` (chown sandbox), then prepends a "master prompt" wrapper to the `claude -p` turn enumerating each attachment by absolute path + MIME type so Claude reads them via its Read tool (multimodal for images, native for PDFs). Wrapper is added only when `files[]` is non-empty. Files persist for the session (matches the 30-day Slack-thread DDB TTL via S3 lifecycle on the staging prefix).
+
+**Caps:** 25 files per inbound message, 100MB per file. Bridge enforces; over-cap files are dropped with a warning posted as a thread reply. Filenames sanitized for path safety (strip `/`, `..`, non-printable chars) but original Slack-supplied name preserved in the master-prompt wrapper.
+
+**New Slack scope:** `files:read` (one-time re-auth via `km slack rotate-token` after re-installing the app).
+
+**Requirements**: Phase 67 inbound flow (SQS FIFO + km-slack-inbound-poller) and Phase 67.1 ACK reaction must be in place. No new SSM, DDB, or profile-schema changes anticipated; gated under existing `notifySlackInboundEnabled`. Bridge IAM gains `s3:PutObject` on the staging prefix; sandbox role already reads `KM_ARTIFACTS_BUCKET`.
+
+**Depends on:** Phase 74 (mrkdwn rendering, queued/in-flight)
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 75 to break down)
