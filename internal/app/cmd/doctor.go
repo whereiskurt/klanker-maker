@@ -1104,10 +1104,12 @@ func checkStaleKMSKeys(ctx context.Context, kmsClient KMSCleanupAPI, lister Sand
 			strings.HasPrefix(aliasName, legacyRegionalPlatformPrefix) {
 			continue
 		}
-		// Check if any active sandbox ID appears in the alias name.
+		// Check if any active sandbox ID appears in the alias name as a
+		// hyphen-delimited token — substring match would collide with
+		// unrelated resource names (e.g. lrn2-ee9499b5 inside a debug alias).
 		isActive := false
 		for sbID := range activeSandboxes {
-			if strings.Contains(aliasName, sbID) {
+			if nameContainsSandboxIDToken(aliasName, sbID) {
 				isActive = true
 				break
 			}
@@ -1246,10 +1248,11 @@ func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister San
 			continue
 		}
 
-		// Check if any active sandbox ID appears in the role name.
+		// Check if any active sandbox ID appears in the role name as a
+		// hyphen-delimited token (avoid substring-collision false-negatives).
 		isActive := false
 		for sbID := range activeSandboxes {
-			if strings.Contains(r.name, sbID) {
+			if nameContainsSandboxIDToken(r.name, sbID) {
 				isActive = true
 				break
 			}
@@ -1518,7 +1521,7 @@ func checkStaleSchedules(ctx context.Context, schedulerClient kmaws.SchedulerAPI
 		}
 		isActive := false
 		for sbID := range activeSandboxes {
-			if strings.Contains(sn, sbID) {
+			if nameContainsSandboxIDToken(sn, sbID) {
 				isActive = true
 				break
 			}

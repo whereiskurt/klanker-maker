@@ -80,8 +80,8 @@ func TestCheckStaleSchedules_KmAtForDestroyedSandbox_FlaggedStale(t *testing.T) 
 
 // TestCheckStaleSchedules_KmAtForActiveSandbox_NotStale verifies that
 // km-at-* schedules whose sandbox is still alive are NOT flagged. The
-// existing strings.Contains(name, sandboxID) check should match on the
-// sandbox ID embedded mid-name.
+// nameContainsSandboxIDToken matcher recognises sb-alive as a hyphen-
+// delimited token embedded mid-name (between `-extend-` and `-tomorrow`).
 func TestCheckStaleSchedules_KmAtForActiveSandbox_NotStale(t *testing.T) {
 	sched := &fakeSchedulerForDoctor{
 		scheduleNames: []string{
