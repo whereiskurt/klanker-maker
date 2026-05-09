@@ -1214,9 +1214,18 @@ func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister San
 	}
 
 	// Platform roles to never touch.
+	//
+	// "km-s3-replication-" is hardcoded (NOT rolePrefix-aware) because the
+	// s3-replication Terraform module names its role
+	// `km-s3-replication-{bucket}` regardless of var.resource_prefix
+	// (infra/modules/s3-replication/v1.0.0/main.tf:43). Until that module
+	// is parameterized, every install — including non-default
+	// resource_prefix installs — must allow-list the literal "km-" form.
 	platformPrefixes := []string{
 		rolePrefix + "create-handler", rolePrefix + "ttl-", rolePrefix + "org-admin", rolePrefix + "email-create-handler",
 		rolePrefix + "slack-bridge",
+		rolePrefix + "email-handler", rolePrefix + "ecs-spot-handler",
+		"km-s3-replication-",
 	}
 
 	var staleRoles []string
