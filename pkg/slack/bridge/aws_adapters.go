@@ -375,6 +375,17 @@ func (s *SlackPosterAdapter) PostMessage(ctx context.Context, channel, subject, 
 	return resp.TS, nil
 }
 
+// PostMessageBlocks posts to a Slack channel with a pre-serialized Block Kit JSON
+// array. The body parameter is the plain-text fallback for push notifications and
+// search. blocksJSON is the pre-serialized `blocks:` array value. Returns the
+// message ts on success.
+//
+// Phase 74 PR2 stub: returns "not implemented" so callers degrade to PostMessage
+// until Task 3 supplies the real implementation.
+func (s *SlackPosterAdapter) PostMessageBlocks(ctx context.Context, channel, subject, body, blocksJSON, threadTS string) (string, error) {
+	return "", errors.New("PostMessageBlocks: not implemented (Wave 1)")
+}
+
 // ArchiveChannel archives a Slack channel via conversations.archive.
 func (s *SlackPosterAdapter) ArchiveChannel(ctx context.Context, channelID string) error {
 	resp, httpStatus, retryAfter, err := s.call(ctx, "conversations.archive", map[string]any{

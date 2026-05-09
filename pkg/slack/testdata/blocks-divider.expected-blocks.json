@@ -1,0 +1,5 @@
+[
+  {"type":"section","text":{"type":"mrkdwn","text":"Para 1"}},
+  {"type":"divider"},
+  {"type":"section","text":{"type":"mrkdwn","text":"Para 2"}}
+]

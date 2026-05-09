@@ -109,6 +109,14 @@ func TestUserDataOTELLogPromptsAbsent(t *testing.T) {
 	}
 }
 
+// TestStreamDrain_RenderFlag (HOOK-01): _km_stream_drain must include the
+// --render "${KM_SLACK_RENDER:-blocks}" flag so operators can downgrade
+// per-sandbox rendering without redeploying the binary.
+// Task 4 replaces this stub with a real implementation.
+func TestStreamDrain_RenderFlag(t *testing.T) {
+	t.Skip("Task 4 implementation")
+}
+
 // TestUserDataOTELLogToolDetailsEnabled verifies OTEL_LOG_TOOL_DETAILS=1 appears when logToolDetails=true.
 func TestUserDataOTELLogToolDetailsEnabled(t *testing.T) {
 	p := baseProfile()

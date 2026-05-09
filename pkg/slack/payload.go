@@ -65,8 +65,16 @@ var (
 // and are ignored bridge-side, preserving backwards compatibility with
 // existing post/archive/test signers.
 type SlackEnvelope struct {
-	Action      string `json:"action"`
-	Body        string `json:"body"`
+	Action string `json:"action"`
+	// Blocks carries a pre-serialized Block Kit JSON array (e.g. `[{"type":"header",...}]`).
+	// Phase 74 Tier 2: km-slack post --render=blocks populates this field when
+	// RenderBlocks succeeds. Bridge dispatch type-asserts h.Slack.(BlockPoster) and
+	// routes to PostMessageBlocks when Blocks != ""; existing text-only callers
+	// leave this field empty and continue through the original PostMessage path
+	// (BRDG-01 backward-compat). Zero value ("") is signing-safe: canonical JSON
+	// always serializes the field so both sender and verifier produce identical bytes.
+	Blocks string `json:"blocks"`
+	Body   string `json:"body"`
 	Channel     string `json:"channel"`
 	ContentType string `json:"content_type"`
 	Filename    string `json:"filename"`

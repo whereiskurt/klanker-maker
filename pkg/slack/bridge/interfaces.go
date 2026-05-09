@@ -64,6 +64,15 @@ type SlackPoster interface {
 	ArchiveChannel(ctx context.Context, channelID string) error
 }
 
+// BlockPoster is an optional Slack-API surface for posts carrying a Block Kit
+// JSON array. Bridge dispatch type-asserts h.Slack.(BlockPoster) and falls
+// through to PostMessage when the assertion fails or env.Blocks == "".
+// SlackPoster stays UNCHANGED so existing fakes continue to satisfy it.
+// Production implementation: SlackPosterAdapter (Phase 74 PR2).
+type BlockPoster interface {
+	PostMessageBlocks(ctx context.Context, channel, subject, body, blocksJSON, threadTS string) (string, error)
+}
+
 // S3ObjectGetter abstracts S3 GetObject for streaming transcripts to Slack
 // without buffering the full body in Lambda memory. Phase 68.
 //

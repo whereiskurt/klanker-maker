@@ -1,0 +1,9 @@
+{
+  "blocks": [
+    {"type":"header","text":{"type":"plain_text","text":"My Heading"}},
+    {"type":"section","text":{"type":"mrkdwn","text":"Some *bold* text with a <https://example.com|link> and `code`."}},
+    {"type":"divider"},
+    {"type":"context","elements":[{"type":"mrkdwn","text":"🔧 Edit: /tmp/foo.go"}]}
+  ],
+  "text": "My Heading\n\nSome bold text with a link and code.\n\n🔧 Edit: /tmp/foo.go"
+}

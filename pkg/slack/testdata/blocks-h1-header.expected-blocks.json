@@ -1,0 +1,4 @@
+[
+  {"type":"header","text":{"type":"plain_text","text":"Refactoring Plan"}},
+  {"type":"section","text":{"type":"mrkdwn","text":"Some intro text."}}
+]

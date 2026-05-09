@@ -254,7 +254,22 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 	// Dispatch.
 	switch env.Action {
 	case slack.ActionPost, slack.ActionTest:
-		ts, err := h.Slack.PostMessage(ctx, env.Channel, env.Subject, env.Body, env.ThreadTS)
+		// Phase 74 Tier 2: if env.Blocks is set and the SlackPoster also implements
+		// BlockPoster, route to PostMessageBlocks which carries both the plain-text
+		// fallback (env.Body) and the Block Kit array. If the type assertion fails or
+		// env.Blocks == "", the original PostMessage path runs unchanged (BRDG-01).
+		var ts string
+		var err error
+		if env.Blocks != "" {
+			if bp, okBP := h.Slack.(BlockPoster); okBP {
+				ts, err = bp.PostMessageBlocks(ctx, env.Channel, env.Subject, env.Body, env.Blocks, env.ThreadTS)
+			} else {
+				// Adapter doesn't implement BlockPoster — degrade to text-only.
+				ts, err = h.Slack.PostMessage(ctx, env.Channel, env.Subject, env.Body, env.ThreadTS)
+			}
+		} else {
+			ts, err = h.Slack.PostMessage(ctx, env.Channel, env.Subject, env.Body, env.ThreadTS)
+		}
 		resp := slackResponse(ts, err)
 		if err != nil {
 			logger.ErrorContext(ctx, "bridge: slack_call_failed",

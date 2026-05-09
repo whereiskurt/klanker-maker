@@ -94,7 +94,7 @@ func runPost(args []string, stderr io.Writer) int {
 	fs.StringVar(&subject, "subject", "", "Optional subject text (rendered as bold header by bridge; omit for clean threaded replies)")
 	fs.StringVar(&bodyPath, "body", "", "Path to body file (stdin '-' NOT supported)")
 	fs.StringVar(&thread, "thread", "", "Thread parent ts")
-	fs.StringVar(&renderMode, "render", "", "Render mode: plain (default, no-op), mrkdwn (Phase 74 Tier 1 transformer), blocks (Phase 74 PR2; accepted but currently treated as plain)")
+	fs.StringVar(&renderMode, "render", "", "Render mode: plain (default, no-op), mrkdwn (Phase 74 Tier 1 transformer), blocks (Phase 74 PR2 Tier 2 Block Kit; falls back to mrkdwn on 50-block cap)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -305,8 +305,9 @@ func run(channel, subject, bodyPath, thread, renderMode string) error {
 //   - "plain" (default): body is passed through unchanged. Existing Phase 62/63/68
 //     callers omit --render and land here — no behavior change.
 //   - "mrkdwn": body is run through slack.Mrkdwnify before envelope construction.
-//   - "blocks": accepted by the flag (Phase 74 PR2 placeholder) but treated as
-//     plain until plan 74-02 lands.
+//   - "blocks": Phase 74 PR2 Tier 2. Calls slack.RenderBlocks; on ok==true sets
+//     env.Blocks to the Block Kit JSON array and uses the plain-text fallback as
+//     the body. On ok==false (50-block cap or panic), falls back to Mrkdwnify.
 //
 // Overflow: if the rendered body exceeds slack.MaxRenderedBytes (35KB), it is
 // hard-truncated and a footer is appended. The existing MaxBodyBytes (40KB) check
@@ -326,10 +327,22 @@ func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL,
 
 	// Phase 74: apply renderer then check overflow before building envelope.
 	var rendered string
+	var blocksJSON string
 	switch renderMode {
+	case "blocks":
+		// Tier 2: attempt Block Kit rendering. On ok==false (50-block cap or
+		// panic), degrade to Mrkdwnify (Tier 1). The fallback path is indistinguishable
+		// from an explicit --render=mrkdwn call for the bridge.
+		bj, fallback, okBK := slack.RenderBlocks(string(body))
+		if okBK {
+			rendered = fallback
+			blocksJSON = bj
+		} else {
+			rendered = slack.Mrkdwnify(string(body))
+		}
 	case "mrkdwn":
 		rendered = slack.Mrkdwnify(string(body))
-	default: // "plain" and Phase 74 PR1 fallback for "blocks"
+	default: // "plain" and any unknown value (already normalised in runPost)
 		rendered = string(body)
 	}
 	if len(rendered) > slack.MaxRenderedBytes {
@@ -345,6 +358,10 @@ func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL,
 	env, err := slack.BuildEnvelope(slack.ActionPost, sandboxID, channel, subject, rendered, thread)
 	if err != nil {
 		return err
+	}
+	// Tier 2: populate the Blocks field if RenderBlocks succeeded.
+	if blocksJSON != "" {
+		env.Blocks = blocksJSON
 	}
 
 	_, sig, err := slack.SignEnvelope(env, priv)

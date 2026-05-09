@@ -370,6 +370,13 @@ func TestRunWith_Overflow(t *testing.T) {
 	}
 }
 
+// TestRunWith_Blocks (BLK+BRDG-02): renderMode="blocks" populates env.Blocks with
+// valid Block Kit JSON beginning with a header block. Task 3 replaces this stub
+// once the full RenderBlocks builder lands.
+func TestRunWith_Blocks(t *testing.T) {
+	t.Skip("Task 3 implementation")
+}
+
 // contains is a helper to avoid importing strings in test-only code when already imported.
 func contains(s, sub string) bool {
 	return strings.Contains(s, sub)

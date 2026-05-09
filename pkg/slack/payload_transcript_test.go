@@ -38,7 +38,7 @@ func TestCanonicalJSON_ActionUpload(t *testing.T) {
 	// alphabetical order so signing/verification is deterministic across
 	// sender (km-slack) and verifier (bridge) without sorting overhead.
 	order := []string{
-		`"action"`, `"body"`, `"channel"`, `"content_type"`, `"filename"`,
+		`"action"`, `"blocks"`, `"body"`, `"channel"`, `"content_type"`, `"filename"`,
 		`"nonce"`, `"s3_key"`, `"sender_id"`, `"size_bytes"`, `"subject"`,
 		`"thread_ts"`, `"timestamp"`, `"version"`,
 	}
@@ -102,11 +102,12 @@ func TestCanonicalJSON_PostUnchangedAfterAdditiveFields(t *testing.T) {
 	}
 	s := string(canon)
 
-	// New upload-only fields must serialize with their zero values for non-
-	// upload actions. They are NOT omitempty: the canonical document must
-	// contain every struct field so signing produces identical bytes on
-	// sender and verifier sides regardless of action type.
+	// All fields must serialize with their zero values for non-upload actions.
+	// They are NOT omitempty: the canonical document must contain every struct
+	// field so signing produces identical bytes on sender and verifier sides
+	// regardless of action type. Phase 74 PR2 added "blocks":"".
 	for _, mustContain := range []string{
+		`"blocks":""`,
 		`"content_type":""`,
 		`"filename":""`,
 		`"s3_key":""`,
@@ -153,6 +154,68 @@ func TestBuildEnvelopeUpload_ValidatesRequired(t *testing.T) {
 				t.Fatalf("expected %v; got %v", c.wantErr, err)
 			}
 		})
+	}
+}
+
+// TestCanonicalJSON_BlocksOrdering (BRDG-03) — "blocks" must appear in the
+// canonical JSON between "action" and "body" so Ed25519 signing stays deterministic
+// for Tier 2 posts. Wrong ordering breaks every BlockPoster call with bad_signature 401.
+func TestCanonicalJSON_BlocksOrdering(t *testing.T) {
+	env, err := BuildEnvelope(ActionPost, "sb-test", "C123", "subj", "body text", "")
+	if err != nil {
+		t.Fatalf("BuildEnvelope: %v", err)
+	}
+	env.Blocks = `[{"type":"divider"}]`
+	canon, err := CanonicalJSON(env)
+	if err != nil {
+		t.Fatalf("CanonicalJSON: %v", err)
+	}
+	s := string(canon)
+
+	iAction := strings.Index(s, `"action"`)
+	iBlocks := strings.Index(s, `"blocks"`)
+	iBody := strings.Index(s, `"body"`)
+
+	if iAction < 0 {
+		t.Fatal("canonical JSON missing \"action\" key")
+	}
+	if iBlocks < 0 {
+		t.Fatal("canonical JSON missing \"blocks\" key")
+	}
+	if iBody < 0 {
+		t.Fatal("canonical JSON missing \"body\" key")
+	}
+	if iBlocks <= iAction {
+		t.Errorf("\"blocks\" (%d) must appear after \"action\" (%d)", iBlocks, iAction)
+	}
+	if iBlocks >= iBody {
+		t.Errorf("\"blocks\" (%d) must appear before \"body\" (%d)", iBlocks, iBody)
+	}
+}
+
+// TestCanonicalJSON_BlocksZeroValueSafe — zero-value Blocks field ("") must not
+// break signing for existing text-only callers (backward-compat BRDG-01).
+func TestCanonicalJSON_BlocksZeroValueSafe(t *testing.T) {
+	env, err := BuildEnvelope(ActionPost, "sb-test", "C123", "subj", "body text", "")
+	if err != nil {
+		t.Fatalf("BuildEnvelope: %v", err)
+	}
+	// Blocks is left at zero value "".
+	canon, err := CanonicalJSON(env)
+	if err != nil {
+		t.Fatalf("CanonicalJSON: %v", err)
+	}
+	s := string(canon)
+	if !strings.Contains(s, `"blocks":""`) {
+		t.Errorf("expected zero-value blocks field in canonical JSON; got: %s", s)
+	}
+	// Two marshals must produce identical bytes (deterministic).
+	canon2, err := CanonicalJSON(env)
+	if err != nil {
+		t.Fatalf("CanonicalJSON second: %v", err)
+	}
+	if string(canon) != string(canon2) {
+		t.Fatalf("canonical not deterministic:\n  %s\n  %s", canon, canon2)
 	}
 }
 

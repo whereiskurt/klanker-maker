@@ -680,3 +680,96 @@ func TestHandler_SandboxPost_NoOwnedChannel_403(t *testing.T) {
 		t.Errorf("error = %v; want channel_mismatch", body["error"])
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Phase 74 Tier 2: Block Kit dispatch tests (BRDG-01 + BRDG-02)
+// ---------------------------------------------------------------------------
+
+// fakeBlockPoster satisfies both SlackPoster and BlockPoster for handler tests.
+// It records which call path was taken so tests can assert routing.
+type fakeBlockPoster struct {
+	// SlackPoster calls
+	postMessageCalls []fakePostMessageCall
+	archiveCalls     []string
+	postErr          error
+	returnTS         string
+
+	// BlockPoster calls
+	postMessageBlocksCalls []fakePostMessageBlocksCall
+	postBlocksErr          error
+}
+
+type fakePostMessageCall struct {
+	channel, subject, body, threadTS string
+}
+
+type fakePostMessageBlocksCall struct {
+	channel, subject, body, blocksJSON, threadTS string
+}
+
+func (f *fakeBlockPoster) PostMessage(_ context.Context, ch, subj, body, threadTS string) (string, error) {
+	if f.postErr != nil {
+		return "", f.postErr
+	}
+	f.postMessageCalls = append(f.postMessageCalls, fakePostMessageCall{ch, subj, body, threadTS})
+	ts := f.returnTS
+	if ts == "" {
+		ts = "111.222"
+	}
+	return ts, nil
+}
+
+func (f *fakeBlockPoster) ArchiveChannel(_ context.Context, ch string) error {
+	f.archiveCalls = append(f.archiveCalls, ch)
+	return nil
+}
+
+func (f *fakeBlockPoster) PostMessageBlocks(_ context.Context, ch, subj, body, blocksJSON, threadTS string) (string, error) {
+	if f.postBlocksErr != nil {
+		return "", f.postBlocksErr
+	}
+	f.postMessageBlocksCalls = append(f.postMessageBlocksCalls, fakePostMessageBlocksCall{ch, subj, body, blocksJSON, threadTS})
+	ts := f.returnTS
+	if ts == "" {
+		ts = "222.333"
+	}
+	return ts, nil
+}
+
+// TestHandler_Post_NoBlocks (BRDG-01): env.Blocks=="" routes to PostMessage (text-only),
+// confirming backward-compat for all existing Phase 62/63/67/68 callers.
+func TestHandler_Post_NoBlocks(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	fp := &fakeBlockPoster{returnTS: "brdg01.ts"}
+	h := &bridge.Handler{
+		Now:      func() time.Time { return time.Unix(1714280400, 0) },
+		Keys:     &fakeKeys{keys: map[string]ed25519.PublicKey{"sb-abc123": pub}},
+		Nonces:   &fakeNonces{},
+		Channels: &fakeChannels{owned: map[string]string{"sb-abc123": "C0123ABC"}},
+		Token:    &fakeToken{tok: "xoxb"},
+		Slack:    fp,
+	}
+
+	env := makeEnv(slack.ActionPost, "sb-abc123", "C0123ABC")
+	// env.Blocks is zero-value "" — text-only path.
+	req := signRequest(t, env, priv)
+	resp := h.Handle(context.Background(), req)
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("StatusCode = %d; want 200. Body: %s", resp.StatusCode, resp.Body)
+	}
+	// PostMessage must be called; PostMessageBlocks must NOT be called.
+	if len(fp.postMessageCalls) != 1 {
+		t.Errorf("PostMessage calls = %d; want 1", len(fp.postMessageCalls))
+	}
+	if len(fp.postMessageBlocksCalls) != 0 {
+		t.Errorf("PostMessageBlocks calls = %d; want 0 (text-only path)", len(fp.postMessageBlocksCalls))
+	}
+}
+
+// TestHandler_Post_WithBlocks (BRDG-02): env.Blocks!="" routes to PostMessageBlocks
+// when the SlackPoster also implements BlockPoster. Task 3 replaces this stub
+// with a full implementation once PostMessageBlocks is wired for real.
+func TestHandler_Post_WithBlocks(t *testing.T) {
+	t.Skip("Task 3 implementation")
+}
