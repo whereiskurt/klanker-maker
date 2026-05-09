@@ -1216,6 +1216,7 @@ func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister San
 	// Platform roles to never touch.
 	platformPrefixes := []string{
 		rolePrefix + "create-handler", rolePrefix + "ttl-", rolePrefix + "org-admin", rolePrefix + "email-create-handler",
+		rolePrefix + "slack-bridge",
 	}
 
 	var staleRoles []string
