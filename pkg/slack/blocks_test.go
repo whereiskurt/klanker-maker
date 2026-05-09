@@ -25,43 +25,195 @@ import (
 
 // TestBlocks_H1Header (BLK-01): `# Heading` maps to a header block.
 func TestBlocks_H1Header(t *testing.T) {
-	t.Skip("Wave 1 implementation")
+	input := "# Refactoring Plan\n\nSome intro text.\n"
+	bj, _, ok := RenderBlocks(input)
+	if !ok {
+		t.Fatal("RenderBlocks returned ok=false")
+	}
+	var blocks []map[string]any
+	if err := json.Unmarshal([]byte(bj), &blocks); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(blocks) < 1 {
+		t.Fatal("expected at least 1 block")
+	}
+	if blocks[0]["type"] != "header" {
+		t.Errorf("first block type = %q; want header", blocks[0]["type"])
+	}
+	text, _ := blocks[0]["text"].(map[string]any)
+	if text["text"] != "Refactoring Plan" {
+		t.Errorf("header text = %q; want %q", text["text"], "Refactoring Plan")
+	}
+	if text["type"] != "plain_text" {
+		t.Errorf("header text type = %q; want plain_text", text["type"])
+	}
 }
 
-// TestBlocks_H2H3Section (BLK-02): `## sub` and `### sub` map to mrkdwn section blocks.
+// TestBlocks_H2H3Section (BLK-02): `## sub` and `### sub` map to mrkdwn section blocks with bold prefix.
 func TestBlocks_H2H3Section(t *testing.T) {
-	t.Skip("Wave 1 implementation")
+	for _, tc := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"h2", "## Step One\n", "*Step One*"},
+		{"h3", "### Sub\n", "*Sub*"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bj, _, ok := RenderBlocks(tc.input)
+			if !ok {
+				t.Fatal("ok=false")
+			}
+			var blocks []map[string]any
+			if err := json.Unmarshal([]byte(bj), &blocks); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if len(blocks) < 1 {
+				t.Fatal("expected at least 1 block")
+			}
+			if blocks[0]["type"] != "section" {
+				t.Errorf("type = %q; want section", blocks[0]["type"])
+			}
+			text, _ := blocks[0]["text"].(map[string]any)
+			txt, _ := text["text"].(string)
+			if !strings.HasPrefix(txt, tc.want) {
+				t.Errorf("section text = %q; want prefix %q", txt, tc.want)
+			}
+			if text["type"] != "mrkdwn" {
+				t.Errorf("text type = %q; want mrkdwn", text["type"])
+			}
+		})
+	}
 }
 
 // TestBlocks_ToolLine (BLK-03): `🔧 Edit: /path` maps to a context block.
 func TestBlocks_ToolLine(t *testing.T) {
-	t.Skip("Wave 1 implementation")
+	input := "🔧 Edit: /path/to/file.go (line 42)\n"
+	bj, _, ok := RenderBlocks(input)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	var blocks []map[string]any
+	if err := json.Unmarshal([]byte(bj), &blocks); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(blocks))
+	}
+	if blocks[0]["type"] != "context" {
+		t.Errorf("type = %q; want context", blocks[0]["type"])
+	}
+	elements, _ := blocks[0]["elements"].([]any)
+	if len(elements) != 1 {
+		t.Fatalf("expected 1 element, got %d", len(elements))
+	}
+	elem, _ := elements[0].(map[string]any)
+	if elem["type"] != "mrkdwn" {
+		t.Errorf("element type = %q; want mrkdwn", elem["type"])
+	}
+	txt, _ := elem["text"].(string)
+	if !strings.Contains(txt, "Edit:") {
+		t.Errorf("tool text = %q; want to contain 'Edit:'", txt)
+	}
 }
 
 // TestBlocks_Divider (BLK-04): `---` / `***` / `___` maps to a divider block.
 func TestBlocks_Divider(t *testing.T) {
-	t.Skip("Wave 1 implementation")
+	for _, sep := range []string{"---", "***", "___"} {
+		t.Run(sep, func(t *testing.T) {
+			input := "Para 1\n\n" + sep + "\n\nPara 2\n"
+			bj, _, ok := RenderBlocks(input)
+			if !ok {
+				t.Fatalf("ok=false for sep %q", sep)
+			}
+			var blocks []map[string]any
+			if err := json.Unmarshal([]byte(bj), &blocks); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			// Must contain a divider block.
+			hasDivider := false
+			for _, b := range blocks {
+				if b["type"] == "divider" {
+					hasDivider = true
+				}
+			}
+			if !hasDivider {
+				t.Errorf("no divider block found for separator %q; blocks: %s", sep, bj)
+			}
+		})
+	}
 }
 
 // TestBlocks_SectionOverflow (BLK-05): section text > 3000 chars splits into multiple section blocks.
 func TestBlocks_SectionOverflow(t *testing.T) {
-	t.Skip("Wave 1 implementation")
+	// 3100 chars of plain text (no headers/dividers so it all lands in one logical section).
+	big := strings.Repeat("A", 3100)
+	bj, _, ok := RenderBlocks(big)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	var blocks []map[string]any
+	if err := json.Unmarshal([]byte(bj), &blocks); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Should have split into at least 2 section blocks.
+	sectionCount := 0
+	for _, b := range blocks {
+		if b["type"] == "section" {
+			text, _ := b["text"].(map[string]any)
+			txt, _ := text["text"].(string)
+			if len(txt) > 3000 {
+				t.Errorf("section text length %d exceeds 3000", len(txt))
+			}
+			sectionCount++
+		}
+	}
+	if sectionCount < 2 {
+		t.Errorf("expected ≥2 section blocks for 3100-char input, got %d", sectionCount)
+	}
 }
 
 // TestBlocks_50BlockFallback (BLK-06): input that would produce > 50 blocks returns ok=false.
 func TestBlocks_50BlockFallback(t *testing.T) {
-	t.Skip("Wave 1 implementation")
+	// 60 dividers → 60 divider blocks → exceeds the 50-block cap.
+	input := strings.Repeat("---\n", 60)
+	_, _, ok := RenderBlocks(input)
+	if ok {
+		t.Error("expected ok=false for 60-divider input exceeding 50-block cap")
+	}
 }
 
 // TestBlocks_PlainTextFallback (BLK-07): fallbackText strips all formatting.
 func TestBlocks_PlainTextFallback(t *testing.T) {
-	t.Skip("Wave 1 implementation")
+	input := "# My Heading\n\nSome **bold** text with a [link](https://example.com) and `code`.\n"
+	_, fallback, ok := RenderBlocks(input)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	// Heading should appear without # prefix.
+	if strings.Contains(fallback, "#") {
+		t.Errorf("fallback should not contain '#'; got: %q", fallback)
+	}
+	// Bold markers stripped.
+	if strings.Contains(fallback, "**") {
+		t.Errorf("fallback should not contain '**'; got: %q", fallback)
+	}
+	// Link text preserved, URL dropped.
+	if !strings.Contains(fallback, "link") {
+		t.Errorf("fallback should contain 'link' (label); got: %q", fallback)
+	}
+	if strings.Contains(fallback, "https://") {
+		t.Errorf("fallback should not contain the URL; got: %q", fallback)
+	}
+	// Code backticks stripped.
+	if strings.Contains(fallback, "`") {
+		t.Errorf("fallback should not contain backticks; got: %q", fallback)
+	}
 }
 
 // TestBlocks_StructuralValidity (BLK-08): property test — all valid outputs satisfy
 // Slack's structural constraints (block types, text lengths, count ≤ 50).
 func TestBlocks_StructuralValidity(t *testing.T) {
-	t.Skip("Wave 1 implementation")
 	f := func(input string) bool {
 		bj, _, ok := RenderBlocks(input)
 		if !ok {
@@ -80,7 +232,7 @@ func TestBlocks_StructuralValidity(t *testing.T) {
 			case "header":
 				text, _ := b["text"].(map[string]any)
 				txt, _ := text["text"].(string)
-				if len(txt) > 150 {
+				if len([]rune(txt)) > 150 {
 					return false
 				}
 			case "section":
@@ -104,26 +256,79 @@ func TestBlocks_StructuralValidity(t *testing.T) {
 
 // TestBlocks_HeaderStrip (BLK-09): backticks/asterisks/underscores stripped from header text.
 func TestBlocks_HeaderStrip(t *testing.T) {
-	t.Skip("Wave 1 implementation")
+	input := "# The `foo` *bold* _italic_ function\n"
+	bj, _, ok := RenderBlocks(input)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	var blocks []map[string]any
+	if err := json.Unmarshal([]byte(bj), &blocks); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(blocks) < 1 || blocks[0]["type"] != "header" {
+		t.Fatal("expected header block as first block")
+	}
+	text, _ := blocks[0]["text"].(map[string]any)
+	txt, _ := text["text"].(string)
+
+	for _, forbidden := range []string{"`", "*", "_"} {
+		if strings.Contains(txt, forbidden) {
+			t.Errorf("header text %q contains forbidden char %q after strip", txt, forbidden)
+		}
+	}
+	// The words should still be present.
+	for _, want := range []string{"foo", "bold", "italic", "function"} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("header text %q missing expected word %q", txt, want)
+		}
+	}
 }
 
-// TestBlocks_HeaderTruncate (BLK-10): header text > 150 chars hard-truncated to 147 + `…`.
+// TestBlocks_HeaderTruncate (BLK-10): header text > 150 chars hard-truncated to 147 runes + `…`.
 func TestBlocks_HeaderTruncate(t *testing.T) {
-	t.Skip("Wave 1 implementation")
+	// 200 'A's → after strip (no markup), all 200 remain → truncate to 147 + '…' = 148 runes.
+	input := "# " + strings.Repeat("A", 200) + "\n"
+	bj, _, ok := RenderBlocks(input)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	var blocks []map[string]any
+	if err := json.Unmarshal([]byte(bj), &blocks); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(blocks) < 1 || blocks[0]["type"] != "header" {
+		t.Fatal("expected header block")
+	}
+	text, _ := blocks[0]["text"].(map[string]any)
+	txt, _ := text["text"].(string)
+	runes := []rune(txt)
+	if len(runes) > 150 {
+		t.Errorf("header text length %d exceeds 150 runes", len(runes))
+	}
+	if !strings.HasSuffix(txt, "…") {
+		t.Errorf("truncated header should end with '…'; got: %q", txt)
+	}
 }
 
 // TestBlocksCorpus walks pkg/slack/testdata/blocks-*.md, reads the companion
 // .expected-blocks.json, and asserts RenderBlocks produces matching output.
 // Fixtures whose name contains "50block-fallback" are skipped (no expected file).
 func TestBlocksCorpus(t *testing.T) {
-	t.Skip("Wave 1 implementation")
 	matches, err := filepath.Glob("testdata/blocks-*.md")
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}
+	if len(matches) == 0 {
+		t.Fatal("no corpus fixtures found")
+	}
 	for _, md := range matches {
 		base := strings.TrimSuffix(md, ".md")
 		if strings.Contains(base, "50block-fallback") {
+			// No expected-blocks.json for this fixture — tested in TestBlocks_50BlockFallback.
+			continue
+		}
+		if strings.Contains(base, "section-overflow") {
+			// Overflow fixture uses placeholder expected content; tested in TestBlocks_SectionOverflow.
 			continue
 		}
 		t.Run(filepath.Base(base), func(t *testing.T) {
@@ -142,6 +347,7 @@ func TestBlocksCorpus(t *testing.T) {
 			}
 
 			// Check for two-key fixture (BLK-07 plain-text fallback format).
+			// The two-key format has a JSON object with "blocks" array and "text" string.
 			var twoKey struct {
 				Blocks json.RawMessage `json:"blocks"`
 				Text   string          `json:"text"`
