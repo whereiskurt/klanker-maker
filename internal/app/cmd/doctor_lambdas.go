@@ -101,14 +101,16 @@ func checkStaleLambdas(
 	}
 
 	// Build the live-sandbox set.
+	if lister == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "sandbox lister not available (state bucket not configured)"}
+	}
+	records, err := lister.ListSandboxes(ctx, false)
+	if err != nil {
+		return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not list sandboxes: %v", err)}
+	}
 	activeSandboxes := make(map[string]bool)
-	if lister != nil {
-		records, err := lister.ListSandboxes(ctx, false)
-		if err == nil {
-			for _, r := range records {
-				activeSandboxes[r.SandboxID] = true
-			}
-		}
+	for _, r := range records {
+		activeSandboxes[r.SandboxID] = true
 	}
 
 	var stale []perSandboxLambda

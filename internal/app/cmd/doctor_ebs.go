@@ -87,14 +87,16 @@ func checkOrphanedEBSVolumes(ctx context.Context, ec2Client EC2VolumeAPI, lister
 		return CheckResult{Name: name, Status: CheckOK, Message: "no km-tagged EBS volumes found"}
 	}
 
+	if lister == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "sandbox lister not available (state bucket not configured)"}
+	}
+	records, err := lister.ListSandboxes(ctx, false)
+	if err != nil {
+		return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not list sandboxes: %v", err)}
+	}
 	activeSandboxes := make(map[string]bool)
-	if lister != nil {
-		records, err := lister.ListSandboxes(ctx, false)
-		if err == nil {
-			for _, r := range records {
-				activeSandboxes[r.SandboxID] = true
-			}
-		}
+	for _, r := range records {
+		activeSandboxes[r.SandboxID] = true
 	}
 
 	type orphan struct {

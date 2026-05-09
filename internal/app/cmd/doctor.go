@@ -1071,14 +1071,16 @@ func checkStaleKMSKeys(ctx context.Context, kmsClient KMSCleanupAPI, lister Sand
 	}
 
 	// Build set of active sandbox IDs.
+	if lister == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "sandbox lister not available (state bucket not configured)"}
+	}
+	records, err := lister.ListSandboxes(ctx, false)
+	if err != nil {
+		return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not list sandboxes: %v", err)}
+	}
 	activeSandboxes := make(map[string]bool)
-	if lister != nil {
-		records, err := lister.ListSandboxes(ctx, false)
-		if err == nil {
-			for _, r := range records {
-				activeSandboxes[r.SandboxID] = true
-			}
-		}
+	for _, r := range records {
+		activeSandboxes[r.SandboxID] = true
 	}
 
 	// Platform alias prefix to never touch. All platform KMS aliases share
@@ -1203,14 +1205,16 @@ func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister San
 	}
 
 	// Build set of active sandbox IDs.
+	if lister == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "sandbox lister not available (state bucket not configured)"}
+	}
+	records, err := lister.ListSandboxes(ctx, false)
+	if err != nil {
+		return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not list sandboxes: %v", err)}
+	}
 	activeSandboxes := make(map[string]bool)
-	if lister != nil {
-		records, err := lister.ListSandboxes(ctx, false)
-		if err == nil {
-			for _, r := range records {
-				activeSandboxes[r.SandboxID] = true
-			}
-		}
+	for _, r := range records {
+		activeSandboxes[r.SandboxID] = true
 	}
 
 	// Platform roles to never touch.
@@ -1382,14 +1386,16 @@ func checkStaleSSMParameters(ctx context.Context, ssmReader SSMReadAPI, ssmDelet
 		return CheckResult{Name: name, Status: CheckOK, Message: "no per-sandbox SSM parameters found"}
 	}
 
+	if lister == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "sandbox lister not available (state bucket not configured)"}
+	}
+	records, err := lister.ListSandboxes(ctx, false)
+	if err != nil {
+		return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not list sandboxes: %v", err)}
+	}
 	activeSandboxes := make(map[string]bool)
-	if lister != nil {
-		records, err := lister.ListSandboxes(ctx, false)
-		if err == nil {
-			for _, r := range records {
-				activeSandboxes[r.SandboxID] = true
-			}
-		}
+	for _, r := range records {
+		activeSandboxes[r.SandboxID] = true
 	}
 
 	for sbID, params := range paramsBySandbox {
@@ -1478,14 +1484,16 @@ func checkStaleSchedules(ctx context.Context, schedulerClient kmaws.SchedulerAPI
 	}
 
 	// Build set of active sandbox IDs.
+	if lister == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "sandbox lister not available (state bucket not configured)"}
+	}
+	records, err := lister.ListSandboxes(ctx, false)
+	if err != nil {
+		return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not list sandboxes: %v", err)}
+	}
 	activeSandboxes := make(map[string]bool)
-	if lister != nil {
-		records, err := lister.ListSandboxes(ctx, false)
-		if err == nil {
-			for _, r := range records {
-				activeSandboxes[r.SandboxID] = true
-			}
-		}
+	for _, r := range records {
+		activeSandboxes[r.SandboxID] = true
 	}
 
 	// Identify stale schedules: any km- schedule whose name doesn't contain
@@ -1592,14 +1600,16 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 	}
 
 	// Build set of active sandbox IDs from DynamoDB.
+	if lister == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "sandbox lister not available (state bucket not configured)"}
+	}
+	records, err := lister.ListSandboxes(ctx, false)
+	if err != nil {
+		return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not list sandboxes: %v", err)}
+	}
 	activeSandboxes := make(map[string]bool)
-	if lister != nil {
-		records, err := lister.ListSandboxes(ctx, false)
-		if err == nil {
-			for _, r := range records {
-				activeSandboxes[r.SandboxID] = true
-			}
-		}
+	for _, r := range records {
+		activeSandboxes[r.SandboxID] = true
 	}
 
 	// Find orphaned instances: tagged with km:sandbox-id but no DynamoDB record.
