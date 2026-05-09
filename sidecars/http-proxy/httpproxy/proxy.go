@@ -112,8 +112,12 @@ func WithHTTPSOnly() ProxyOption {
 // IsHostAllowed reports whether host is in the allowed list.
 // The port is stripped from "host:port" before comparison.
 // Matching is case-insensitive. An empty allowed list denies everything.
-// Entries starting with "." are treated as suffix matches (e.g. ".amazonaws.com"
-// matches "bedrock-runtime.us-east-1.amazonaws.com").
+// Entries starting with "." match BOTH the bare apex domain and any
+// subdomain — e.g. ".nodejs.org" matches "nodejs.org" AND
+// "nodejs.org/dist". This mirrors the DNS proxy's IsAllowed behavior;
+// a previous suffix-only implementation would resolve "nodejs.org" via
+// DNS but reject the HTTPS CONNECT, breaking apex-domain downloads
+// like `nvm install` (which fetches from https://nodejs.org/dist/).
 func IsHostAllowed(host string, allowed []string) bool {
 	h, _, err := net.SplitHostPort(host)
 	if err != nil {
@@ -127,8 +131,9 @@ func IsHostAllowed(host string, allowed []string) bool {
 		}
 		a = strings.ToLower(a)
 		if strings.HasPrefix(a, ".") {
-			// Suffix match: ".amazonaws.com" matches "x.y.amazonaws.com"
-			if strings.HasSuffix(h, a) {
+			// Apex + suffix match: ".amazonaws.com" matches both
+			// "amazonaws.com" itself AND "x.y.amazonaws.com".
+			if h == a[1:] || strings.HasSuffix(h, a) {
 				return true
 			}
 		} else if a == h {

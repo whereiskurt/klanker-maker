@@ -188,6 +188,14 @@ func TestIsHostAllowed(t *testing.T) {
 		{"empty allowed list", "example.com", []string{}, false},
 		{"multiple allowed", "b.com", []string{"a.com", "b.com", "c.com"}, true},
 		{"port only stripped", "example.com:8443", []string{"example.com"}, true},
+		// Dot-prefix entries match BOTH apex and subdomains (mirrors DNS
+		// proxy behavior). Regression: nvm fetched https://nodejs.org but
+		// the suffix-only matcher rejected the apex while DNS resolved it.
+		{"dot-prefix matches apex", "nodejs.org", []string{".nodejs.org"}, true},
+		{"dot-prefix matches apex with port", "nodejs.org:443", []string{".nodejs.org"}, true},
+		{"dot-prefix matches subdomain", "iojs.org.nodejs.org", []string{".nodejs.org"}, true},
+		{"dot-prefix does not match unrelated", "evilnodejs.org", []string{".nodejs.org"}, false},
+		{"dot-prefix case insensitive apex", "NODEJS.ORG", []string{".nodejs.org"}, true},
 	}
 
 	for _, tc := range tests {
