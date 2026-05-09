@@ -21,6 +21,12 @@ import (
 // at the bridge to defeat over-large signed payloads.
 const MaxBodyBytes = 40 * 1024
 
+// MaxRenderedBytes is the per-render-output cap, leaving 5 KB headroom under
+// MaxBodyBytes for envelope wrapping and the truncation footer. The overflow
+// path in cmd/km-slack/main.go trims rendered bodies to this size before
+// BuildEnvelope. Phase 74 PR1.
+const MaxRenderedBytes = 35 * 1024
+
 // EnvelopeVersion is the integer ABI version stamped on every payload. Phase
 // 63 ships v1; future major changes (v2 closed-loop) bump this.
 const EnvelopeVersion = 1
