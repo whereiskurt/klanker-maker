@@ -334,3 +334,16 @@ resource "aws_lambda_function_url" "slack_bridge" {
     allow_headers = ["content-type", "x-km-sender-id", "x-km-signature"]
   }
 }
+
+# Explicit resource-based policy for public Function URL invocation.
+# aws_lambda_function_url with authorization_type = "NONE" does NOT
+# automatically persist this policy when the Lambda is replaced.
+# Without it, any Lambda replacement (including role-triggered replacements)
+# causes the URL to return 403 until the policy is manually re-added.
+resource "aws_lambda_permission" "function_url_public" {
+  statement_id           = "FunctionURLAllowPublicAccess"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.slack_bridge.function_name
+  principal              = "*"
+  function_url_auth_type = "NONE"
+}
