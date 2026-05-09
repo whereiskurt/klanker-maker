@@ -1167,15 +1167,19 @@ func checkStaleKMSKeys(ctx context.Context, kmsClient KMSCleanupAPI, lister Sand
 	}
 }
 
-// checkStaleIAMRoles finds IAM roles with km- prefixes that don't belong to any active sandbox.
-// Platform roles (km-create-handler, km-ttl-*, km-org-admin) are skipped.
-func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister SandboxLister, dryRun bool) CheckResult {
+// checkStaleIAMRoles finds IAM roles with {resourcePrefix}- prefixes that don't belong to any active sandbox.
+// Platform roles ({prefix}-create-handler, {prefix}-ttl-*, {prefix}-org-admin) are skipped.
+func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister SandboxLister, dryRun bool, resourcePrefix string) CheckResult {
 	name := "Stale IAM Roles"
 	if iamClient == nil {
 		return CheckResult{Name: name, Status: CheckSkipped, Message: "IAM client not available"}
 	}
+	if resourcePrefix == "" {
+		resourcePrefix = "km"
+	}
+	rolePrefix := resourcePrefix + "-"
 
-	// Collect all km- roles.
+	// Collect all {resourcePrefix}- roles.
 	type roleEntry struct {
 		name string
 	}
@@ -1188,7 +1192,7 @@ func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister San
 		}
 		for _, r := range out.Roles {
 			rn := awssdk.ToString(r.RoleName)
-			if strings.HasPrefix(rn, "km-") {
+			if strings.HasPrefix(rn, rolePrefix) {
 				roles = append(roles, roleEntry{name: rn})
 			}
 		}
@@ -1211,7 +1215,7 @@ func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister San
 
 	// Platform roles to never touch.
 	platformPrefixes := []string{
-		"km-create-handler", "km-ttl-", "km-org-admin", "km-email-create-handler",
+		rolePrefix + "create-handler", rolePrefix + "ttl-", rolePrefix + "org-admin", rolePrefix + "email-create-handler",
 	}
 
 	var staleRoles []string
@@ -2371,8 +2375,9 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 
 	// Stale IAM roles check.
 	iamCleanup := deps.IAMCleanupClient
+	iamResourcePrefix := cfg.GetResourcePrefix()
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkStaleIAMRoles(ctx, iamCleanup, listerForCleanup, dryRun)
+		return checkStaleIAMRoles(ctx, iamCleanup, listerForCleanup, dryRun, iamResourcePrefix)
 	})
 
 	// Stale EventBridge schedules check.
