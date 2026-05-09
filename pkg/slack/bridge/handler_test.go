@@ -768,8 +768,41 @@ func TestHandler_Post_NoBlocks(t *testing.T) {
 }
 
 // TestHandler_Post_WithBlocks (BRDG-02): env.Blocks!="" routes to PostMessageBlocks
-// when the SlackPoster also implements BlockPoster. Task 3 replaces this stub
-// with a full implementation once PostMessageBlocks is wired for real.
+// when the SlackPoster also implements BlockPoster. PostMessage must NOT be called.
 func TestHandler_Post_WithBlocks(t *testing.T) {
-	t.Skip("Task 3 implementation")
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	fp := &fakeBlockPoster{returnTS: "brdg02.ts"}
+	h := &bridge.Handler{
+		Now:      func() time.Time { return time.Unix(1714280400, 0) },
+		Keys:     &fakeKeys{keys: map[string]ed25519.PublicKey{"sb-abc123": pub}},
+		Nonces:   &fakeNonces{},
+		Channels: &fakeChannels{owned: map[string]string{"sb-abc123": "C0123ABC"}},
+		Token:    &fakeToken{tok: "xoxb"},
+		Slack:    fp,
+	}
+
+	env := makeEnv(slack.ActionPost, "sb-abc123", "C0123ABC")
+	env.Blocks = `[{"type":"divider"}]`
+	req := signRequest(t, env, priv)
+	resp := h.Handle(context.Background(), req)
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("StatusCode = %d; want 200. Body: %s", resp.StatusCode, resp.Body)
+	}
+
+	// PostMessageBlocks must be called (NOT PostMessage).
+	if len(fp.postMessageBlocksCalls) != 1 {
+		t.Errorf("PostMessageBlocks calls = %d; want 1", len(fp.postMessageBlocksCalls))
+	}
+	if len(fp.postMessageCalls) != 0 {
+		t.Errorf("PostMessage calls = %d; want 0 (blocks path should not call PostMessage)", len(fp.postMessageCalls))
+	}
+
+	call := fp.postMessageBlocksCalls[0]
+	if call.channel != "C0123ABC" {
+		t.Errorf("channel = %q; want C0123ABC", call.channel)
+	}
+	if call.blocksJSON != `[{"type":"divider"}]` {
+		t.Errorf("blocksJSON = %q; want divider block JSON", call.blocksJSON)
+	}
 }

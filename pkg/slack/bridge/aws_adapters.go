@@ -375,15 +375,37 @@ func (s *SlackPosterAdapter) PostMessage(ctx context.Context, channel, subject, 
 	return resp.TS, nil
 }
 
-// PostMessageBlocks posts to a Slack channel with a pre-serialized Block Kit JSON
-// array. The body parameter is the plain-text fallback for push notifications and
-// search. blocksJSON is the pre-serialized `blocks:` array value. Returns the
-// message ts on success.
+// PostMessageBlocks posts to a Slack channel with both a plain-text fallback and a
+// pre-serialized Block Kit JSON array. The `text:` field is required by Slack for
+// push notifications and accessibility even when blocks are present. The subject is
+// intentionally ignored — Block Kit posts express headers via the header block itself.
 //
-// Phase 74 PR2 stub: returns "not implemented" so callers degrade to PostMessage
-// until Task 3 supplies the real implementation.
+// Rate-limit handling and error mapping are identical to PostMessage.
 func (s *SlackPosterAdapter) PostMessageBlocks(ctx context.Context, channel, subject, body, blocksJSON, threadTS string) (string, error) {
-	return "", errors.New("PostMessageBlocks: not implemented (Wave 1)")
+	payload := map[string]any{
+		"channel":      channel,
+		"text":         body, // plain-text fallback for push/search (required by Slack)
+		"blocks":       json.RawMessage(blocksJSON),
+		"unfurl_links": false,
+		"unfurl_media": false,
+		"mrkdwn":       true,
+	}
+	if threadTS != "" {
+		payload["thread_ts"] = threadTS
+	}
+	// subject is intentionally NOT in the payload — Block Kit header blocks express it.
+
+	resp, httpStatus, retryAfter, err := s.call(ctx, "chat.postMessage", payload)
+	if err != nil {
+		return "", err
+	}
+	if rlErr := checkRateLimit(httpStatus, retryAfter, "chat.postMessage"); rlErr != nil {
+		return "", rlErr
+	}
+	if !resp.OK {
+		return "", fmt.Errorf("bridge: chat.postMessage (blocks): %s", resp.Error)
+	}
+	return resp.TS, nil
 }
 
 // ArchiveChannel archives a Slack channel via conversations.archive.

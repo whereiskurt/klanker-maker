@@ -371,10 +371,48 @@ func TestRunWith_Overflow(t *testing.T) {
 }
 
 // TestRunWith_Blocks (BLK+BRDG-02): renderMode="blocks" populates env.Blocks with
-// valid Block Kit JSON beginning with a header block. Task 3 replaces this stub
-// once the full RenderBlocks builder lands.
+// valid Block Kit JSON beginning with a header block, and env.Body contains the
+// plain-text fallback (no markdown symbols).
 func TestRunWith_Blocks(t *testing.T) {
-	t.Skip("Task 3 implementation")
+	_, priv := genKey(t)
+	srv, captured := newFakeBridge(t)
+	defer srv.Close()
+
+	bodyPath := writeTmpBody(t, "# Heading\n\nbody text\n")
+
+	err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "", bodyPath, "1234.5", "blocks")
+	if err != nil {
+		t.Fatalf("runWith blocks: %v", err)
+	}
+	if len(*captured) != 1 {
+		t.Fatalf("expected 1 envelope, got %d", len(*captured))
+	}
+	env := (*captured)[0]
+	if env.Blocks == "" {
+		t.Fatal("expected env.Blocks non-empty for blocks render mode")
+	}
+	if !strings.HasPrefix(env.Blocks, `[{"`) {
+		t.Errorf("env.Blocks should be JSON array; got prefix: %q", env.Blocks[:min(20, len(env.Blocks))])
+	}
+	// The first block should be a header block.
+	if !strings.Contains(env.Blocks, `"type":"header"`) {
+		t.Errorf("expected header block in blocks JSON; got: %s", env.Blocks)
+	}
+	// Body should be the plain-text fallback (no markdown heading symbols).
+	if strings.Contains(env.Body, "#") {
+		t.Errorf("Body still contains '#' markdown; got: %q", env.Body)
+	}
+	if strings.Contains(env.Body, "**") {
+		t.Errorf("Body still contains '**' markdown; got: %q", env.Body)
+	}
+}
+
+// min returns the smaller of two ints.
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // contains is a helper to avoid importing strings in test-only code when already imported.
