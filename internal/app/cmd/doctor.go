@@ -1677,6 +1677,11 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 	}
 
 	// Find orphaned instances: tagged with km:sandbox-id but no DynamoDB record.
+	// Skip instances launched within the last 10 minutes — they are likely in
+	// the gap between EC2 RunInstances and the DDB sandbox row write inside
+	// km create. Cleaning those would race the operator and orphan a real
+	// in-flight sandbox.
+	provisioningCutoff := time.Now().Add(-10 * time.Minute)
 	type orphan struct {
 		instanceID  string
 		sandboxID   string
@@ -1697,6 +1702,9 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 			continue
 		}
 		if activeSandboxes[sandboxID] {
+			continue
+		}
+		if inst.LaunchTime != nil && inst.LaunchTime.After(provisioningCutoff) {
 			continue
 		}
 		launch := ""

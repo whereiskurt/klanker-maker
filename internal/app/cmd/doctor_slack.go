@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	sqssvc "github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 	slackpkg "github.com/whereiskurt/klanker-maker/pkg/slack"
 )
@@ -334,17 +336,49 @@ func checkSlackInboundStaleQueues(
 		known[r.QueueURL] = r.SandboxID
 	}
 
+	// 10-minute provisioning cutoff: skip queues younger than 10 minutes since
+	// km create provisions the SQS queue BEFORE the DDB sandbox row is written.
+	// Without this guard, a doctor run between those two writes flags an
+	// in-flight queue as orphan and (with --delete-sqs) deletes it. The 60-
+	// second SQS create-cooldown then blocks the operator from recreating it
+	// for the next minute. Cutoff comfortably exceeds the worst-case
+	// km create gap.
+	provisioningCutoff := time.Now().Add(-10 * time.Minute)
 	var stale []string
+	skippedYoung := 0
 	for _, qURL := range listOut.QueueUrls {
-		if _, ok := known[qURL]; !ok {
-			stale = append(stale, qURL)
+		if _, ok := known[qURL]; ok {
+			continue
 		}
+		// Fetch CreatedTimestamp; skip if too fresh. Errors (e.g. queue just
+		// got deleted between ListQueues and GetQueueAttributes) — treat as
+		// stale-eligible to avoid masking real orphans.
+		attrs, attrErr := sqsClient.GetQueueAttributes(ctx, &sqssvc.GetQueueAttributesInput{
+			QueueUrl:       awssdk.String(qURL),
+			AttributeNames: []sqstypes.QueueAttributeName{sqstypes.QueueAttributeNameCreatedTimestamp},
+		})
+		if attrErr == nil && attrs != nil {
+			if ts, ok := attrs.Attributes[string(sqstypes.QueueAttributeNameCreatedTimestamp)]; ok {
+				if epoch, err := strconv.ParseInt(ts, 10, 64); err == nil {
+					createdAt := time.Unix(epoch, 0)
+					if createdAt.After(provisioningCutoff) {
+						skippedYoung++
+						continue
+					}
+				}
+			}
+		}
+		stale = append(stale, qURL)
 	}
 	if len(stale) == 0 {
+		msg := fmt.Sprintf("all %d inbound queue(s) accounted for in DDB", len(listOut.QueueUrls))
+		if skippedYoung > 0 {
+			msg = fmt.Sprintf("%s (skipped %d queue(s) <10min old; possible in-flight km create)", msg, skippedYoung)
+		}
 		return CheckResult{
 			Name:    name,
 			Status:  CheckOK,
-			Message: fmt.Sprintf("all %d inbound queue(s) accounted for in DDB", len(listOut.QueueUrls)),
+			Message: msg,
 		}
 	}
 

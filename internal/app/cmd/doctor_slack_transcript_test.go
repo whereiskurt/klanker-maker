@@ -42,11 +42,27 @@ type fakeS3List struct {
 	deleteObjectsKeys  []string
 	deleteObjectsErr   error   // returned for every call when set
 	deleteObjectsErrs  []error // returned per-call (overrides deleteObjectsErr) when index in range
+
+	// MaxKeys=1 sample responses keyed by Input.Prefix (used by Bug 5 age
+	// guard in checkOrphanedArtifacts). Lookup misses return an empty
+	// response so the caller treats the prefix as stale-eligible —
+	// matches the production code's "bias toward stale on uncertain age".
+	samplesByPrefix map[string]*s3.ListObjectsV2Output
 }
 
-func (f *fakeS3List) ListObjectsV2(_ context.Context, _ *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+func (f *fakeS3List) ListObjectsV2(_ context.Context, in *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
 	if f.listErr != nil {
 		return nil, f.listErr
+	}
+	// MaxKeys=1 sample-call branch (Bug 5 age guard). Doesn't consume f.pages
+	// so existing pages[] scripts stay intact.
+	if in != nil && in.MaxKeys != nil && *in.MaxKeys == 1 {
+		if in.Prefix != nil {
+			if out, ok := f.samplesByPrefix[*in.Prefix]; ok {
+				return out, nil
+			}
+		}
+		return &s3.ListObjectsV2Output{}, nil
 	}
 	if len(f.pages) == 0 {
 		return &s3.ListObjectsV2Output{}, nil

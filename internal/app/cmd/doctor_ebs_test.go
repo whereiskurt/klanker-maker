@@ -177,6 +177,23 @@ func TestCheckOrphanedEBSVolumes_OrphanFound_Warn(t *testing.T) {
 	}
 }
 
+// TestCheckOrphanedEBSVolumes_FreshVolume_Skipped (Bug 5 age guard):
+// volumes created in the last 10 minutes are NOT flagged as orphans even
+// when their sandbox isn't in DDB yet — they're likely in the race window
+// between EC2 CreateVolume and km create's DDB row write.
+func TestCheckOrphanedEBSVolumes_FreshVolume_Skipped(t *testing.T) {
+	freshTime := time.Now().Add(-2 * time.Minute) // well inside the 10-min cutoff
+	v := makeVolume("vol-fresh", "sb-inflight", "available", "us-east-1a", 20)
+	v.CreateTime = &freshTime
+	client := &fakeEC2VolumeClient{volumes: []ec2types.Volume{v}}
+	// No live sandbox record — without the age guard, vol-fresh would be flagged stale.
+	lister := &fakeSandboxLister{records: []kmaws.SandboxRecord{}}
+	r := checkOrphanedEBSVolumes(context.Background(), client, lister, true, false)
+	if r.Status != CheckOK {
+		t.Fatalf("expected CheckOK for <10min-old volume, got %s: %s", r.Status, r.Message)
+	}
+}
+
 func TestCheckOrphanedEBSVolumes_VolumeWithoutTag_Skipped(t *testing.T) {
 	// A volume with no km:sandbox-id tag should never be flagged (filtered upstream
 	// by the API filter, but defensive check on tag-less rows belt-and-suspenders).

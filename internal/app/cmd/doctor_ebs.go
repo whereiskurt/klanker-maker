@@ -99,6 +99,10 @@ func checkOrphanedEBSVolumes(ctx context.Context, ec2Client EC2VolumeAPI, lister
 		activeSandboxes[r.SandboxID] = true
 	}
 
+	// Skip volumes created in the last 10 minutes — they are likely in the
+	// race window between EC2 CreateVolume and km create's DDB row write.
+	// Cleaning those would orphan a real in-flight sandbox.
+	provisioningCutoff := time.Now().Add(-10 * time.Minute)
 	type orphan struct {
 		volumeID  string
 		sandboxID string
@@ -118,6 +122,9 @@ func checkOrphanedEBSVolumes(ctx context.Context, ec2Client EC2VolumeAPI, lister
 			}
 		}
 		if sandboxID == "" || activeSandboxes[sandboxID] {
+			continue
+		}
+		if v.CreateTime != nil && v.CreateTime.After(provisioningCutoff) {
 			continue
 		}
 		size := awssdk.ToInt32(v.Size)

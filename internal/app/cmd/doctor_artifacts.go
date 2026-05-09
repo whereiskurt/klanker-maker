@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -109,7 +110,13 @@ func checkOrphanedArtifacts(
 		liveSet[id] = struct{}{}
 	}
 
+	// 10-minute provisioning cutoff: skip prefixes whose oldest object was
+	// created in the last 10 minutes — likely an in-flight km create. Sample
+	// one object per stale candidate (MaxKeys=1) to keep the extra S3 traffic
+	// proportional to the orphan list, not the full artifact set.
+	provisioningCutoff := time.Now().Add(-10 * time.Minute)
 	var stale []string
+	skippedYoung := 0
 	for _, p := range prefixes {
 		// p is "artifacts/sb-abc/", extract the sandbox ID.
 		trimmed := strings.TrimPrefix(p, "artifacts/")
@@ -117,15 +124,35 @@ func checkOrphanedArtifacts(
 		if sid == "" {
 			continue
 		}
-		if _, alive := liveSet[sid]; !alive {
-			stale = append(stale, p)
+		if _, alive := liveSet[sid]; alive {
+			continue
 		}
+		// Sample one object's LastModified — if all objects under the prefix
+		// are younger than the cutoff, skip; otherwise mark stale. Errors
+		// (transient S3, prefix race) bias toward "stale" to avoid masking
+		// real orphans.
+		sample, sampleErr := s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:  awssdk.String(bucket),
+			Prefix:  awssdk.String(p),
+			MaxKeys: awssdk.Int32(1),
+		})
+		if sampleErr == nil && sample != nil && len(sample.Contents) > 0 && sample.Contents[0].LastModified != nil {
+			if sample.Contents[0].LastModified.After(provisioningCutoff) {
+				skippedYoung++
+				continue
+			}
+		}
+		stale = append(stale, p)
 	}
 	if len(stale) == 0 {
+		msg := fmt.Sprintf("%d artifact prefix(es); none stale", len(prefixes))
+		if skippedYoung > 0 {
+			msg = fmt.Sprintf("%s (skipped %d prefix(es) <10min old; possible in-flight km create)", msg, skippedYoung)
+		}
 		return CheckResult{
 			Name:    name,
 			Status:  CheckOK,
-			Message: fmt.Sprintf("%d artifact prefix(es); none stale", len(prefixes)),
+			Message: msg,
 		}
 	}
 
