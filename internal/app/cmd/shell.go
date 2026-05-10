@@ -155,6 +155,75 @@ func NewShellCmd(cfg *config.Config) *cobra.Command {
 	return NewShellCmdWithFetcher(cfg, nil, nil)
 }
 
+// newShellCmdWithSSM is an internal constructor for tests that need to inject an
+// SSM client (e.g. for the --no-bedrock credentials pre-check in AUTH-11 tests).
+// Production code uses NewShellCmdWithFetcher (which passes nil ssmClient).
+func newShellCmdWithSSM(cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI) *cobra.Command {
+	var asRoot bool
+	var noBedrock bool
+	var ports []string
+	var learn bool
+	var learnOutput string
+	var amiFlag bool
+
+	cmd := &cobra.Command{
+		Use:          "shell <sandbox-id | #number>",
+		Aliases:      []string{"sh"},
+		Short:        "Open an interactive shell into a running sandbox",
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			if amiFlag && !learn {
+				return fmt.Errorf("--ami requires --learn")
+			}
+			sandboxID, err := ResolveSandboxID(ctx, cfg, args[0])
+			if err != nil {
+				return err
+			}
+			if len(ports) > 0 {
+				return runPortForward(cmd, cfg, fetcher, execFn, sandboxID, ports)
+			}
+			if !cmd.Flags().Changed("no-bedrock") {
+				if cliNB := loadProfileCLINoBedrock(ctx, cfg, sandboxID); cliNB {
+					noBedrock = true
+				}
+			}
+			notifyPerm, notifyIdle := resolveNotifyFlags(cmd)
+			transcriptStream := resolveTranscriptFlag(cmd)
+			runErr := runShellWithSSM(cmd, cfg, fetcher, execFn, ssmClient, sandboxID, asRoot, noBedrock, notifyPerm, notifyIdle, transcriptStream)
+			if learn {
+				if runErr != nil {
+					return runErr
+				}
+				return runLearnPostExit(ctx, cfg, fetcher, sandboxID, learnOutput, amiFlag)
+			}
+			// Return the error directly — this constructor is used in tests where
+			// pre-flight errors (e.g. missing credentials) must propagate. Interactive
+			// session exit errors also propagate here (unlike NewShellCmdWithFetcher
+			// which intentionally swallows them to avoid spurious cobra output).
+			return runErr
+		},
+	}
+
+	cmd.Flags().BoolVar(&asRoot, "root", false, "Connect as root instead of the restricted sandbox user")
+	cmd.Flags().BoolVar(&noBedrock, "no-bedrock", false, "Unset Bedrock env vars (use direct Anthropic API)")
+	cmd.Flags().StringSliceVar(&ports, "ports", nil, "Port forwards: 8080, 8080:80, or comma-separated list")
+	cmd.Flags().BoolVar(&learn, "learn", false, "Run in learning mode: observe traffic and generate profile on exit")
+	cmd.Flags().StringVar(&learnOutput, "learn-output", "", "Path to write the generated SandboxProfile YAML")
+	cmd.Flags().BoolVar(&amiFlag, "ami", false, "Bake an AMI from the sandbox state when learn-mode exits (requires --learn)")
+	cmd.Flags().Bool("notify-on-permission", false, "Email operator on Claude permission prompts (overrides profile default for this session)")
+	cmd.Flags().Bool("no-notify-on-permission", false, "Force-disable Claude permission-prompt emails for this session")
+	cmd.Flags().Bool("notify-on-idle", false, "Email operator when Claude finishes a turn (overrides profile default for this session)")
+	cmd.Flags().Bool("no-notify-on-idle", false, "Force-disable Claude idle emails for this session")
+	cmd.Flags().Bool("transcript-stream", false, "Stream Claude transcript turns to per-sandbox Slack thread")
+	cmd.Flags().Bool("no-transcript-stream", false, "Force-disable transcript streaming for this session")
+	return cmd
+}
+
 // NOTE: NewAgentCmd has been moved to agent.go with support for the "run" subcommand.
 
 // NewShellCmdWithFetcher builds the shell command with an optional custom fetcher and
@@ -247,7 +316,18 @@ Port forwarding:
 // notifyPerm, notifyIdle, and transcriptStream are the resolved per-invocation
 // overrides (nil = no override; use profile.d defaults from compile time).
 // transcriptStream is the Plan 68-07 Slack transcript-streaming override.
+// Delegates to runShellWithSSM with a nil ssmClient (real production path:
+// the noBedrock pre-check and profile.d write each create their own SSM client).
 func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, sandboxID string, asRoot, noBedrock bool, notifyPerm, notifyIdle, transcriptStream *bool) error {
+	return runShellWithSSM(cmd, cfg, fetcher, execFn, nil, sandboxID, asRoot, noBedrock, notifyPerm, notifyIdle, transcriptStream)
+}
+
+// runShellWithSSM is the full implementation of km shell.
+// ssmClient may be nil — when nil, the noBedrock pre-check is skipped (production
+// path where the check is done via execSSMSession's own client creation). When
+// non-nil (test injection path), the credentials pre-check runs before the
+// interactive session is opened.
+func runShellWithSSM(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, asRoot, noBedrock bool, notifyPerm, notifyIdle, transcriptStream *bool) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -284,6 +364,31 @@ func runShell(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 		if err != nil {
 			return fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
 		}
+
+		// Phase 78 (AUTH-11): when --no-bedrock is active and an SSM client is
+		// injected (test path) or available, check that ~/.claude/.credentials.json
+		// exists on the sandbox before opening the interactive session. This prevents
+		// a confusing silent failure where the session opens but claude immediately
+		// fails due to a missing OAuth token.
+		//
+		// Production path: ssmClient is nil here; execSSMSession's noBedrock block
+		// creates its own client for the profile.d write. We mirror that approach
+		// here for the pre-check so tests can inject the client without touching
+		// the production AWS credential path.
+		if noBedrock && ssmClient != nil {
+			checkOut, checkErr := sendSSMAndWait(ctx, ssmClient, instanceID,
+				"stat /home/sandbox/.claude/.credentials.json 2>/dev/null && echo ok || echo missing")
+			if checkErr == nil && strings.TrimSpace(checkOut) == "missing" {
+				return fmt.Errorf(
+					"claude credentials not found on sandbox %s\n"+
+						"  Run: km agent auth %s --claude\n"+
+						"  Then retry: km shell --no-bedrock %s",
+					sandboxID, sandboxID, sandboxID)
+			}
+			// If checkErr != nil (SSM transient), proceed silently — the interactive
+			// session will surface any real auth failure to the operator.
+		}
+
 		return execSSMSession(ctx, instanceID, rec.Region, asRoot, noBedrock, notifyPerm, notifyIdle, transcriptStream, execFn)
 	case "ecs":
 		clusterARN, err := findResourceARN(rec.Resources, ":cluster/")
