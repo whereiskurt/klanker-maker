@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: Phase 68.1 context gathered
-last_updated: "2026-05-10T15:30:43.305Z"
+stopped_at: "Completed 78-01 Tasks 1+2; stopped at Task 3 (checkpoint:human-verify)"
+last_updated: "2026-05-10T17:47:38.981Z"
 last_activity: 2026-05-10
 progress:
-  total_phases: 81
+  total_phases: 83
   completed_phases: 71
-  total_plans: 290
-  completed_plans: 258
+  total_plans: 297
+  completed_plans: 259
   percent: 93
 ---
 
@@ -299,6 +299,7 @@ Progress: [█████████░] 93%
 | Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox P01 | 4min | 2 tasks | 3 files |
 | Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox P03 | 2min | 2 tasks | 2 files |
 | Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox P02 | 854s | 2 tasks | 2 files |
+| Phase 78 P01 | 32 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -852,6 +853,8 @@ Recent decisions affecting current work:
 - [Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox]: Documentation written against locked CLI surface (Wave 2 pattern: docs in parallel with impl); CONTEXT.md samples mirrored verbatim as canonical source of truth
 - [Phase 76]: rekeyInstallSpyMock pattern: spy on install script SendCommand, extract embedded pubkey, return as readback — handles non-deterministic ed25519 keygen in tests
 - [Phase 76]: Atomic rename .pub-first: os.Rename(.pub.new → .pub) before os.Rename(.new → priv) — if second rename fails, ssh keeps using old private key, access preserved
+- [Phase 78]: Auth pre-check in runShellWithSSM (Option 2): smaller diff, ssmClient stays in scope via injection; production path uses nil ssmClient and silently skips check
+- [Phase 78]: agent_auth_test.go uses package cmd (internal) to access unexported dispatch vars, matching vscode_test.go convention
 
 ### Roadmap Evolution
 
@@ -949,6 +952,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-10T15:30:43.297Z
-Stopped at: Phase 68.1 context gathered
-Resume file: .planning/phases/68.1-fix-km-agent-run-posttooluse-hook-skip-blocking-transcript-streaming/68.1-CONTEXT.md
+Last session: 2026-05-10T17:47:38.975Z
+Stopped at: Completed 78-01 Tasks 1+2; stopped at Task 3 (checkpoint:human-verify)
+Resume file: None

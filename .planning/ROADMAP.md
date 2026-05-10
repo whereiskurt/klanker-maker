@@ -1660,7 +1660,7 @@ Plans:
 **Goal:** Operator can run `km agent auth <sandbox> [--claude | --codex]` to mediate the underlying CLI's OAuth login over SSM. Default `--claude` runs `claude auth login` interactively in the sandbox via SSM session (operator pastes the OAuth code into the SSM-attached terminal); `--codex` opens an SSM port-forward `localhost:1455 ↔ sandbox:1455` so codex's hardcoded callback URL flows back through the tunnel. Success signal is the credentials file (`~/.claude/.credentials.json` or `~/.codex/auth.json`) appearing on the sandbox. `km shell --no-bedrock` and `km agent run --no-bedrock` print a clear hint pointing at `km agent auth` when credentials are missing (no silent auto-bootstrap).
 **Requirements**: AUTH-01, AUTH-02, AUTH-03, AUTH-04, AUTH-05, AUTH-06, AUTH-07, AUTH-08, AUTH-09, AUTH-10, AUTH-11, AUTH-12, AUTH-13, INT-01, INT-02 (phase-local IDs defined in 78-VALIDATION.md — no formal REQUIREMENTS.md mapping; this is operator-tooling/UX)
 **Depends on:** Phase 77
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 78-01-PLAN.md — Wave 1 (`--claude` paste-code path + missing-credentials hint in `--no-bedrock` consumers; AUTH-01..07, AUTH-11..13)
