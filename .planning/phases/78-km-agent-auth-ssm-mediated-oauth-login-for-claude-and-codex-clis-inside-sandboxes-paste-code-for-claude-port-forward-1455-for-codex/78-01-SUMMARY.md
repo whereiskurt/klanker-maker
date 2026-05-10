@@ -135,11 +135,60 @@ None — plan executed exactly as written.
 
 ## Manual UAT
 
-**Status: PENDING** — Task 3 (checkpoint:human-verify) awaits operator sign-off.
+**Status: PASSED (Scenario A)** — Operator verified on L3 (`learn-24a69627`)
+2026-05-10: OAuth round-trip completed, credentials written, follow-up
+`km agent run --no-bedrock` worked. Browser auto-opened without intervention.
 
-Operator must verify Scenarios A, C, E, and the conflict bonus against a real AWS sandbox:
-- Scenario A: `km agent auth <sb> --claude` → OAuth round-trip → credentials written
-- Scenario C: `km shell --no-bedrock <sb>` without credentials → hint error
+### Post-checkpoint fixes (commits d500e44 + 83112ee)
+
+Two operator-facing defects surfaced during UAT and were fixed before close:
+
+**1. Verification false-negative (`stat` bug)** — commit d500e44
+
+`verifyCredentialsWritten` used `stat '%s' 2>/dev/null && echo ok || echo missing`
+and compared `strings.TrimSpace(out) == "ok"`. `stat` writes file metadata to
+stdout BEFORE the `&& echo ok`, so the output is multi-line (`metadata\nok`).
+TrimSpace yields the full block, never equal to `"ok"`. Operator saw
+`Login successful` followed by "session exited but claude credentials not
+found" on the happy path. Fixed by switching to
+`test -f '%s' && echo ok || echo missing` (no metadata on stdout).
+
+The two existing pre-checks in `shell.go`/`agent.go` use the same broken
+pattern but compare against `"missing"` — they work by accident (file-present
+yields metadata != "missing", proceeds correctly). Left untouched to keep
+the fix surgical.
+
+**2. Browser auto-open** — commit d500e44
+
+claude on a headless EC2 can't spawn a browser; it prints the OAuth URL.
+Operator had to copy/paste into their laptop browser. Added a parallel
+SSM-poller goroutine that watches a tee'd stdout file
+(`/tmp/km-claude-auth-<sb>.out`) for the OAuth URL, then opens it on the
+operator's laptop via `open` / `xdg-open` / `rundll32`. `browserOpener` is
+a package var so tests stub it. Polls 50 × 0.5s then gives up silently.
+
+**3. Paste UX polish** — commit 83112ee
+
+claude reads the OAuth code with stdin echo disabled, so paste appears
+invisible. Added a framed step-by-step instructions block before the SSM
+session opens, and a "✓ OAuth code accepted" line above the credentials
+confirmation.
+
+### Deferred (not blocking)
+
+- **Truly paste-less `--claude` flow.** claude's OAuth client is registered
+  with redirect_uri `https://platform.claude.com/oauth/code/callback` (manual-
+  paste URL, no localhost endpoint). Browser isn't trying to reach localhost
+  so the SSM tunnel pattern (codex Wave 2 / vscode Phase 73) can't apply.
+  Options for the future: (a) token transfer from operator's Keychain,
+  (b) macOS-only AppleScript browser-URL observation. Both add scope.
+- **Real `****abcd` masked echo during paste.** Would require wrapping SSM
+  in a PTY layer (creack/pty dep). Operator opted for the cheap framed-
+  instructions UX instead.
+
+### Scenarios remaining for operator (optional, not blocking)
+
+- Scenario C: `km shell --no-bedrock <fresh-sb>` without credentials → hint error
 - Scenario E: paused sandbox → clear "not running" error
 - Bonus: active agent run → conflict refuse
 
