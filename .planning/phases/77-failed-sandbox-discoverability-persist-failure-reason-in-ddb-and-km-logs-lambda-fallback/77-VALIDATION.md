@@ -51,6 +51,7 @@ created: 2026-05-10
 | 77-03-01 | 03 | 2 | `km status` failed with reason → `Failure:` line | unit | `go test ./internal/app/cmd/ -run TestStatusCmd_FailedWithReason -count=1` | ✅ | ⬜ pending |
 | 77-03-02 | 03 | 2 | `km status` failed without reason → `<unknown>` hint | unit | `go test ./internal/app/cmd/ -run TestStatusCmd_FailedNoReason -count=1` | ✅ | ⬜ pending |
 | 77-03-03 | 03 | 2 | `km status` running → no `Failure:` line | unit | `go test ./internal/app/cmd/ -run TestStatusCmd_Running_NoFailureLine -count=1` | ✅ | ⬜ pending |
+| 77-03-04 | 03 | 2 | `km status` nocap with reason → `Failure:` line printed | unit | `go test ./internal/app/cmd/ -run TestStatusCmd_NocapWithReason -count=1` | ✅ | ⬜ pending |
 | 77-04-01 | 04 | 2 | `km logs` per-sandbox group present → unchanged | unit | `go test ./internal/app/cmd/ -run TestLogsCmd_PerSandboxGroupPresent -count=1` | ❌ W0 | ⬜ pending |
 | 77-04-02 | 04 | 2 | `km logs` fallback prints prelude + Lambda events | unit | `go test ./internal/app/cmd/ -run TestLogsCmd_FallbackWithEvents -count=1` | ❌ W0 | ⬜ pending |
 | 77-04-03 | 04 | 2 | `km logs` both empty → friendly hint | unit | `go test ./internal/app/cmd/ -run TestLogsCmd_FallbackBothEmpty -count=1` | ❌ W0 | ⬜ pending |
