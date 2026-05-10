@@ -15,6 +15,8 @@ import (
 	"testing"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/spf13/cobra"
@@ -54,6 +56,32 @@ type vsCodeFetcherMock struct {
 
 func (f *vsCodeFetcherMock) FetchSandbox(_ context.Context, _ string) (*kmaws.SandboxRecord, error) {
 	return f.record, f.err
+}
+
+// ---- EC2 mock for vscode rekey tests ----
+
+// vsCodeEC2Mock implements ec2DescribeAPI for vscode rekey tests.
+type vsCodeEC2Mock struct {
+	output *ec2.DescribeInstancesOutput
+	err    error
+}
+
+func (m *vsCodeEC2Mock) DescribeInstances(_ context.Context, _ *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+	return m.output, m.err
+}
+
+func newRunningEC2Mock() *vsCodeEC2Mock {
+	return &vsCodeEC2Mock{
+		output: &ec2.DescribeInstancesOutput{
+			Reservations: []ec2types.Reservation{
+				{Instances: []ec2types.Instance{{InstanceId: awssdk.String("i-0vscodetest")}}},
+			},
+		},
+	}
+}
+
+func newStoppedEC2Mock() *vsCodeEC2Mock {
+	return &vsCodeEC2Mock{output: &ec2.DescribeInstancesOutput{Reservations: nil}}
 }
 
 // newVSCodeEC2Sandbox returns a minimal running EC2 sandbox record for tests.
@@ -287,45 +315,43 @@ func TestVSCodeStatus_Healthy(t *testing.T) {
 // TestVSCodeRekey_CommandRegistered verifies that newVSCodeRekeyCmd is registered
 // under the km vscode parent command with the correct Use string.
 func TestVSCodeRekey_CommandRegistered(t *testing.T) {
-	t.Skip("TODO Wave 1 (Plan 76-01): implement newVSCodeRekeyCmd registration")
-	// cfg := &config.Config{}
-	// fetcher := newVSCodeEC2Sandbox("sb-abc123")
-	// mockSSM := &vsCodeSSMMock{output: healthySSMOutput}
-	// parent := newVSCodeCmdInternal(cfg, fetcher, nil, mockSSM)
-	// var found *cobra.Command
-	// for _, sub := range parent.Commands() {
-	//     if sub.Use == "rekey <sandbox-id>" {
-	//         found = sub
-	//         break
-	//     }
-	// }
-	// if found == nil {
-	//     t.Fatalf("expected rekey subcommand registered under vscode; got: %v", parent.Commands())
-	// }
+	cfg := &config.Config{}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+	mockSSM := &vsCodeSSMMock{output: healthySSMOutput}
+	parent := newVSCodeCmdInternal(cfg, fetcher, nil, mockSSM)
+	var found *cobra.Command
+	for _, sub := range parent.Commands() {
+		if sub.Use == "rekey <sandbox-id>" {
+			found = sub
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected rekey subcommand registered under vscode; got: %v", parent.Commands())
+	}
 }
 
 // TestVSCodeRekey_FlagsExist verifies that --force and --yes flags are registered
 // on the rekey cobra command and have bool type.
 func TestVSCodeRekey_FlagsExist(t *testing.T) {
-	t.Skip("TODO Wave 1 (Plan 76-01): implement newVSCodeRekeyCmd flags")
-	// cfg := &config.Config{}
-	// fetcher := newVSCodeEC2Sandbox("sb-abc123")
-	// mockSSM := &vsCodeSSMMock{output: healthySSMOutput}
-	// cmd := newVSCodeRekeyCmd(cfg, fetcher, mockSSM)
-	// forceFlag := cmd.Flags().Lookup("force")
-	// if forceFlag == nil {
-	//     t.Fatal("expected --force flag to exist on rekey command")
-	// }
-	// if forceFlag.Value.Type() != "bool" {
-	//     t.Errorf("expected --force to be bool type; got %s", forceFlag.Value.Type())
-	// }
-	// yesFlag := cmd.Flags().Lookup("yes")
-	// if yesFlag == nil {
-	//     t.Fatal("expected --yes flag to exist on rekey command")
-	// }
-	// if yesFlag.Value.Type() != "bool" {
-	//     t.Errorf("expected --yes to be bool type; got %s", yesFlag.Value.Type())
-	// }
+	cfg := &config.Config{}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+	mockSSM := &vsCodeSSMMock{output: healthySSMOutput}
+	cmd := newVSCodeRekeyCmd(cfg, fetcher, mockSSM)
+	forceFlag := cmd.Flags().Lookup("force")
+	if forceFlag == nil {
+		t.Fatal("expected --force flag to exist on rekey command")
+	}
+	if forceFlag.Value.Type() != "bool" {
+		t.Errorf("expected --force to be bool type; got %s", forceFlag.Value.Type())
+	}
+	yesFlag := cmd.Flags().Lookup("yes")
+	if yesFlag == nil {
+		t.Fatal("expected --yes flag to exist on rekey command")
+	}
+	if yesFlag.Value.Type() != "bool" {
+		t.Errorf("expected --yes to be bool type; got %s", yesFlag.Value.Type())
+	}
 }
 
 // TestVSCodeRekey_NotRunning verifies that runVSCodeRekey returns an error containing
@@ -337,27 +363,20 @@ func TestVSCodeRekey_FlagsExist(t *testing.T) {
 // and runVSCodeRekey accepts an ec2DescribeAPI parameter. Tests inject a mock
 // implementing this interface; the cobra RunE handler initializes the real ec2 client.
 func TestVSCodeRekey_NotRunning(t *testing.T) {
-	t.Skip("TODO Wave 1 (Plan 76-01): implement EC2-not-running pre-flight check")
-	// t.Setenv("HOME", t.TempDir())
-	// ctx := context.Background()
-	// cfg := &config.Config{}
-	// fetcher := newVSCodeEC2Sandbox("sb-abc123")
-	// mockSSM := &vsCodeSSMMock{output: healthySSMOutput}
-	// // ec2Mock returns 0 reservations (no running instance).
-	// type ec2NoInstanceMock struct{}
-	// // func (m *ec2NoInstanceMock) DescribeInstances(ctx context.Context, in *ec2.DescribeInstancesInput, opts ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
-	// //     return &ec2.DescribeInstancesOutput{Reservations: nil}, nil
-	// // }
-	// // err := runVSCodeRekey(ctx, cfg, fetcher, &ec2NoInstanceMock{}, mockSSM, "sb-abc123", false, true)
-	// // if err == nil {
-	// //     t.Fatal("expected error when EC2 instance is not running, got nil")
-	// // }
-	// // if !strings.Contains(err.Error(), "not running") {
-	// //     t.Errorf("error missing 'not running': %v", err)
-	// // }
-	// // if !strings.Contains(err.Error(), "km resume") {
-	// //     t.Errorf("error missing 'km resume' hint: %v", err)
-	// // }
+	ctx := context.Background()
+	cfg := &config.Config{}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+	mockSSM := &vsCodeSSMMock{output: healthySSMOutput}
+	err := runVSCodeRekey(ctx, cfg, fetcher, newStoppedEC2Mock(), mockSSM, "sb-abc123", false, true)
+	if err == nil {
+		t.Fatal("expected error when EC2 instance is not running, got nil")
+	}
+	if !strings.Contains(err.Error(), "not running") {
+		t.Errorf("error missing 'not running': %v", err)
+	}
+	if !strings.Contains(err.Error(), "km resume") {
+		t.Errorf("error missing 'km resume' hint: %v", err)
+	}
 }
 
 // TestVSCodeRekey_Locked_NoForce verifies that runVSCodeRekey returns an error
@@ -369,115 +388,118 @@ func TestVSCodeRekey_NotRunning(t *testing.T) {
 //	defer func(orig func(...) error) { checkSandboxLock = orig }(checkSandboxLock)
 //	checkSandboxLock = func(...) error { return errors.New("locked") }
 func TestVSCodeRekey_Locked_NoForce(t *testing.T) {
-	t.Skip("TODO Wave 1 (Plan 76-01): implement lock check pre-flight")
-	// t.Setenv("HOME", t.TempDir())
-	// ctx := context.Background()
-	// cfg := &config.Config{}
-	// fetcher := newVSCodeEC2Sandbox("sb-abc123")
-	// mockSSM := &vsCodeSSMMock{output: healthySSMOutput}
-	// // Override checkSandboxLock to return a locked error.
-	// // defer func(orig func(context.Context, *config.Config, string) error) {
-	// //     checkSandboxLock = orig
-	// // }(checkSandboxLock)
-	// // checkSandboxLock = func(_ context.Context, _ *config.Config, _ string) error {
-	// //     return errors.New("sandbox is locked")
-	// // }
-	// // err := runVSCodeRekey(ctx, cfg, fetcher, nil, mockSSM, "sb-abc123", false, true)
-	// // if err == nil {
-	// //     t.Fatal("expected error when sandbox is locked without --force, got nil")
-	// // }
-	// // if !strings.Contains(err.Error(), "locked") {
-	// //     t.Errorf("error missing 'locked': %v", err)
-	// // }
-	// // if !strings.Contains(err.Error(), "--force") {
-	// //     t.Errorf("error missing '--force' hint: %v", err)
-	// // }
-	// // if !strings.Contains(err.Error(), "km unlock") {
-	// //     t.Errorf("error missing 'km unlock' hint: %v", err)
-	// // }
+	ctx := context.Background()
+	cfg := &config.Config{}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+	mockSSM := &vsCodeSSMMock{output: healthySSMOutput}
+	origChecker := checkSandboxLock
+	defer func() { checkSandboxLock = origChecker }()
+	checkSandboxLock = func(_ context.Context, _ *config.Config, sandboxID string) error {
+		return fmt.Errorf("sandbox %s is locked — run 'km unlock %s' first", sandboxID, sandboxID)
+	}
+	var gotErr error
+	captureStdout(func() {
+		gotErr = runVSCodeRekey(ctx, cfg, fetcher, newRunningEC2Mock(), mockSSM, "sb-abc123", false, true)
+	})
+	if gotErr == nil {
+		t.Fatal("expected error when sandbox is locked without --force, got nil")
+	}
+	if !strings.Contains(gotErr.Error(), "locked") {
+		t.Errorf("error missing 'locked': %v", gotErr)
+	}
+	if !strings.Contains(gotErr.Error(), "--force") {
+		t.Errorf("error missing '--force' hint: %v", gotErr)
+	}
+	if !strings.Contains(gotErr.Error(), "km unlock") {
+		t.Errorf("error missing 'km unlock' hint: %v", gotErr)
+	}
 }
 
 // TestVSCodeRekey_Locked_WithForce verifies that runVSCodeRekey skips the lock
 // check and proceeds to SSM pre-flight when --force is set.
 func TestVSCodeRekey_Locked_WithForce(t *testing.T) {
-	t.Skip("TODO Wave 1 (Plan 76-01): implement --force lock bypass")
-	// t.Setenv("HOME", t.TempDir())
-	// ctx := context.Background()
-	// cfg := &config.Config{}
-	// fetcher := newVSCodeEC2Sandbox("sb-abc123")
-	// mockSSM := &vsCodeSSMMock{output: healthySSMOutput}
-	// // Override checkSandboxLock to return a locked error.
-	// // defer func(orig func(context.Context, *config.Config, string) error) {
-	// //     checkSandboxLock = orig
-	// // }(checkSandboxLock)
-	// // checkSandboxLock = func(_ context.Context, _ *config.Config, _ string) error {
-	// //     return errors.New("sandbox is locked")
-	// // }
-	// // With force=true, the lock check is skipped; SSM pre-flight runs.
-	// // err := runVSCodeRekey(ctx, cfg, fetcher, nil, mockSSM, "sb-abc123", true, true)
-	// // // SSM returns healthy output, so rekey proceeds. Error is nil or from key gen.
-	// // // The important assertion: no "locked" error returned.
-	// // if err != nil && strings.Contains(err.Error(), "locked") {
-	// //     t.Errorf("expected --force to bypass lock check, but got locked error: %v", err)
-	// // }
+	ctx := context.Background()
+	cfg := &config.Config{}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+	mockSSM := &vsCodeSSMMock{output: healthySSMOutput}
+	callCount := 0
+	origChecker := checkSandboxLock
+	defer func() { checkSandboxLock = origChecker }()
+	checkSandboxLock = func(_ context.Context, _ *config.Config, _ string) error {
+		callCount++
+		return fmt.Errorf("sandbox is locked — run 'km unlock' first")
+	}
+	var gotErr error
+	captureStdout(func() {
+		gotErr = runVSCodeRekey(ctx, cfg, fetcher, newRunningEC2Mock(), mockSSM, "sb-abc123", true /*force*/, true /*yes*/)
+	})
+	if gotErr != nil {
+		t.Fatalf("expected nil with --force, got: %v", gotErr)
+	}
+	if callCount != 0 {
+		t.Errorf("checkSandboxLock should not be called when --force; got %d calls", callCount)
+	}
 }
 
 // TestVSCodeRekey_VSCodeDisabled verifies that runVSCodeRekey returns an error
 // containing "vscodeEnabled" when sshd is inactive AND authorized_keys are absent
 // (pre-Phase-73 sandbox or vscodeEnabled:false).
 func TestVSCodeRekey_VSCodeDisabled(t *testing.T) {
-	t.Skip("TODO Wave 1 (Plan 76-01): implement vscode-disabled pre-flight check")
-	// t.Setenv("HOME", t.TempDir())
-	// ctx := context.Background()
-	// cfg := &config.Config{}
-	// fetcher := newVSCodeEC2Sandbox("sb-abc123")
-	// disabledOutput := "=== sshd ===\ninactive\n=== authkeys exists ===\nno\n"
-	// mockSSM := &vsCodeSSMMock{output: disabledOutput}
-	// // err := runVSCodeRekey(ctx, cfg, fetcher, nil, mockSSM, "sb-abc123", false, true)
-	// // if err == nil {
-	// //     t.Fatal("expected error for vscode-disabled sandbox, got nil")
-	// // }
-	// // if !strings.Contains(err.Error(), "vscodeEnabled") {
-	// //     t.Errorf("error missing 'vscodeEnabled' hint: %v", err)
-	// // }
+	ctx := context.Background()
+	cfg := &config.Config{}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+	disabledOutput := "=== sshd ===\ninactive\n=== authkeys exists ===\nno\n"
+	mockSSM := &vsCodeSSMMock{output: disabledOutput}
+	var gotErr error
+	captureStdout(func() {
+		gotErr = runVSCodeRekey(ctx, cfg, fetcher, newRunningEC2Mock(), mockSSM, "sb-abc123", false, true)
+	})
+	if gotErr == nil {
+		t.Fatal("expected error for vscode-disabled sandbox, got nil")
+	}
+	if !strings.Contains(gotErr.Error(), "vscodeEnabled") {
+		t.Errorf("error missing 'vscodeEnabled' hint: %v", gotErr)
+	}
 }
 
 // TestVSCodeRekey_Inconsistent verifies that runVSCodeRekey returns an error
 // containing "unexpected state" when sshd is active but authorized_keys are absent.
 func TestVSCodeRekey_Inconsistent(t *testing.T) {
-	t.Skip("TODO Wave 1 (Plan 76-01): implement inconsistent-state pre-flight check")
-	// t.Setenv("HOME", t.TempDir())
-	// ctx := context.Background()
-	// cfg := &config.Config{}
-	// fetcher := newVSCodeEC2Sandbox("sb-abc123")
-	// inconsistentOutput := "=== sshd ===\nactive\n=== authkeys exists ===\nno\n"
-	// mockSSM := &vsCodeSSMMock{output: inconsistentOutput}
-	// // err := runVSCodeRekey(ctx, cfg, fetcher, nil, mockSSM, "sb-abc123", false, true)
-	// // if err == nil {
-	// //     t.Fatal("expected error for inconsistent state, got nil")
-	// // }
-	// // if !strings.Contains(err.Error(), "unexpected state") {
-	// //     t.Errorf("error missing 'unexpected state': %v", err)
-	// // }
+	ctx := context.Background()
+	cfg := &config.Config{}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+	inconsistentOutput := "=== sshd ===\nactive\n=== authkeys exists ===\nno\n"
+	mockSSM := &vsCodeSSMMock{output: inconsistentOutput}
+	var gotErr error
+	captureStdout(func() {
+		gotErr = runVSCodeRekey(ctx, cfg, fetcher, newRunningEC2Mock(), mockSSM, "sb-abc123", false, true)
+	})
+	if gotErr == nil {
+		t.Fatal("expected error for inconsistent state, got nil")
+	}
+	if !strings.Contains(gotErr.Error(), "unexpected state") {
+		t.Errorf("error missing 'unexpected state': %v", gotErr)
+	}
 }
 
 // TestVSCodeRekey_SSHDDown verifies that runVSCodeRekey returns an error
 // containing "sshd is not running" when sshd is inactive but authorized_keys exist.
 func TestVSCodeRekey_SSHDDown(t *testing.T) {
-	t.Skip("TODO Wave 1 (Plan 76-01): implement sshd-down pre-flight check")
-	// t.Setenv("HOME", t.TempDir())
-	// ctx := context.Background()
-	// cfg := &config.Config{}
-	// fetcher := newVSCodeEC2Sandbox("sb-abc123")
-	// sshdDownOutput := "=== sshd ===\ninactive\n=== authkeys exists ===\nyes\n"
-	// mockSSM := &vsCodeSSMMock{output: sshdDownOutput}
-	// // err := runVSCodeRekey(ctx, cfg, fetcher, nil, mockSSM, "sb-abc123", false, true)
-	// // if err == nil {
-	// //     t.Fatal("expected error when sshd is not running, got nil")
-	// // }
-	// // if !strings.Contains(err.Error(), "sshd is not running") {
-	// //     t.Errorf("error missing 'sshd is not running': %v", err)
-	// // }
+	ctx := context.Background()
+	cfg := &config.Config{}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+	sshdDownOutput := "=== sshd ===\ninactive\n=== authkeys exists ===\nyes\n"
+	mockSSM := &vsCodeSSMMock{output: sshdDownOutput}
+	var gotErr error
+	captureStdout(func() {
+		gotErr = runVSCodeRekey(ctx, cfg, fetcher, newRunningEC2Mock(), mockSSM, "sb-abc123", false, true)
+	})
+	if gotErr == nil {
+		t.Fatal("expected error when sshd is not running, got nil")
+	}
+	if !strings.Contains(gotErr.Error(), "sshd is not running") {
+		t.Errorf("error missing 'sshd is not running': %v", gotErr)
+	}
 }
 
 // TestVSCodeRekey_NormalRotation verifies that runVSCodeRekey succeeds when
