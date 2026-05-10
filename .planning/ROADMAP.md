@@ -1478,6 +1478,16 @@ Plans:
 - [x] 68-11-PLAN.md — km doctor checks: slack_transcript_table_exists + slack_files_write_scope + slack_transcript_stale_objects
 - [ ] 68-12-PLAN.md — Documentation (docs/slack-notifications.md + CLAUDE.md) + UAT (9 manual scenarios)
 
+### Phase 68.1: Fix km agent run PostToolUse hook skip blocking transcript streaming (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 68
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 68.1 to break down)
+
 ### Phase 69: AWS API SCP-style allow/deny via SigV4 inspection
 
 **Spec:** `.planning/phases/69-aws-api-scp-style-allow-deny-via-sigv4-inspection/SPEC.md`
