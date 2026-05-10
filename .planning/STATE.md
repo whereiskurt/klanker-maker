@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: "Completed 78-01 Tasks 1+2; stopped at Task 3 (checkpoint:human-verify)"
-last_updated: "2026-05-10T17:47:38.981Z"
+stopped_at: "Completed 78-02 Tasks 1+2; stopped at Task 3 (checkpoint:human-verify) — manual UAT for --codex path"
+last_updated: "2026-05-10T21:58:14.627Z"
 last_activity: 2026-05-10
 progress:
-  total_phases: 83
-  completed_phases: 71
-  total_plans: 297
-  completed_plans: 259
+  total_phases: 84
+  completed_phases: 72
+  total_plans: 300
+  completed_plans: 260
   percent: 93
 ---
 
@@ -300,6 +300,7 @@ Progress: [█████████░] 93%
 | Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox P03 | 2min | 2 tasks | 2 files |
 | Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox P02 | 854s | 2 tasks | 2 files |
 | Phase 78 P01 | 32 | 2 tasks | 4 files |
+| Phase 78 P02 | 8 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -855,6 +856,9 @@ Recent decisions affecting current work:
 - [Phase 76]: Atomic rename .pub-first: os.Rename(.pub.new → .pub) before os.Rename(.new → priv) — if second rename fails, ssh keeps using old private key, access preserved
 - [Phase 78]: Auth pre-check in runShellWithSSM (Option 2): smaller diff, ssmClient stays in scope via injection; production path uses nil ssmClient and silently skips check
 - [Phase 78]: agent_auth_test.go uses package cmd (internal) to access unexported dispatch vars, matching vscode_test.go convention
+- [Phase 78]: 78-02: localPort==remotePort for codex SSM port-forward (1455:1455 or 1457:1457); no mismatch needed because codex binds same port on both ends
+- [Phase 78]: 78-02: deferred pfCmd.Process.Kill() placed immediately after Start() to cover all exit paths; runSSMInteractiveSubprocess masks SIGINT so explicit Kill is the only reliable cleanup
+- [Phase 78]: 78-02: codex URL relay not auto-opened (v1 decision) — codex prints OAuth URL to SSM stdout where operator can click; no parallel poller goroutine added
 
 ### Roadmap Evolution
 
@@ -949,9 +953,10 @@ Recent decisions affecting current work:
 - Phase 68.1 inserted after Phase 68: Fix km agent run PostToolUse hook skip blocking transcript streaming (URGENT — Phase 68 follow-up: non-interactive `claude -p` skips PostToolUse hooks per Claude Code platform behavior, so fire-and-forget agent runs get no per-turn Slack streaming today; only interactive `km shell` works)
 - Phase 77 added: failed sandbox discoverability — persist `failure_reason` in DynamoDB at create-handler fail time, surface it in `km status`, and fall back `km logs` to the create-handler Lambda log group when the per-sandbox log group is missing. Triggered by L2/L3 (`learn-465e52e9`, `learn-ac6f33d2`) failing on archived `#sb-l2`/`#sb-l3` Slack channels — the actionable error existed only in `/aws/lambda/km-create-handler` and neither `km status` nor `km logs` could reach it. Spec: `docs/superpowers/specs/2026-05-10-failed-sandbox-discoverability-design.md`
 - Phase 78 added: km agent auth — SSM-mediated OAuth login for claude and codex CLIs inside sandboxes. Two paths confirmed by inspecting the CLIs: (1) `--claude` uses claude CLI's manual paste-the-code flow with NO localhost callback (binary references `MANUAL_REDIRECT_URL: https://platform.claude.com/oauth/code/callback`); operator opens URL on laptop, claude.ai displays a code, operator pastes back into the SSM-attached terminal, CLI exchanges code for tokens and writes `~/.claude/.credentials.json`. (2) `--codex` uses codex's fixed `127.0.0.1:1455` OAuth callback (fallback 1457) — confirmed in `openai/codex` source `codex-rs/login/src/server.rs`; no CLI flag to override the port; tokens persist to `~/.codex/auth.json`. Operator-side flow: spin up SSM port-forward `localhost:1455 ↔ sandbox:1455` (reuse `km shell --ports` SSM primitive), SSM-exec `codex login`, capture URL the CLI prints (xdg-open fails on headless EC2 so it falls back to printing), operator opens URL on laptop, callback flows back through tunnel, tear down on file mtime change or process exit. New Cobra subcommand at `internal/app/cmd/agent_auth.go`. Solves operator pain of manually `claude auth login` after every `km create`, and gives codex parity. Suggested phasing: Wave 1 ship `--claude` (trivial wrapper), Wave 2 ship `--codex` (port-forward + URL relay state). Auto-trigger from `km agent run`/`km shell --no-bedrock` when credentials file is missing — print hint, do NOT silently bootstrap. Does NOT install or update the CLIs themselves (already baked into AMI/userdata).
+- Phase 79 added: km-presence daemon — replace bash `_km_heartbeat` with a single systemd-managed liveness service (`km-presence.service`) that ticks every 60s and emits a heartbeat into `/run/km/audit-pipe` if any of five signals is positive: (1) login shells via `who`/utmp (covers SSM and SSH-via-Phase-73-port-forward), (2) attached tmux clients via `tmux list-clients`, (3) recent inbound email via mtime of newest `/var/mail/km/new/` file vs `/run/km/.presence-last-tick`, (4) recent inbound Slack via mtime of `/run/km/last-slack-inbound` (requires one-line `touch` addition in `km-slack-inbound-poller`), (5) headless agent process via `pgrep -af '(^|/)claude( |$)|(^|/)codex( |$)|km-agent-run\.sh'` (covers `km agent run` detached-tmux case). Drop-in replacement for the audit-pipe contract — zero changes to `km-audit-log` sidecar, `IdleDetector` (`sidecars/audit-log/cmd/main.go:327`), EventBridge, `ttl-handler` Lambda, or client-side `computeIdleRemaining` (`internal/app/cmd/status.go:532`); only diagnostic delta is `source:"presence"` instead of `"shell"`. Triggered by orphaned `_km_heartbeat` bug observed on `learn-14853201` (alias L1) on 2026-05-10: IDLE pegged at 60m for 3+ hours despite no active sessions, two orphaned heartbeats found via `aws ssm send-command` (one from a closed pts/0 SSM session, one from a 2h-old `km agent run` tmux that left two nested `exec bash` login shells each running their own heartbeat). New Go binary at `cmd/km-presence/main.go` (~150 LoC), systemd unit installed via userdata, ships through existing `km init --sidecars` pipeline. Removes lines 1056-1080 of `pkg/compiler/userdata.go` (the `_km_heartbeat()` function and its EXIT trap); keeps `_km_audit` per-command hook. New `km doctor` check `presence_daemon_healthy` flags sandboxes whose latest `source:"presence"` event is >5min old. Existing sandboxes don't get retroactively (matches Phases 63/67/68/73 pattern). Spec: `docs/superpowers/specs/2026-05-10-km-presence-daemon-design.md`
 
 ## Session Continuity
 
-Last session: 2026-05-10T17:47:38.975Z
-Stopped at: Completed 78-01 Tasks 1+2; stopped at Task 3 (checkpoint:human-verify)
+Last session: 2026-05-10T21:58:14.619Z
+Stopped at: Completed 78-02 Tasks 1+2; stopped at Task 3 (checkpoint:human-verify) — manual UAT for --codex path
 Resume file: None
