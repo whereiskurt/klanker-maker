@@ -1668,10 +1668,15 @@ Plans:
 
 ### Phase 79: km-presence daemon — replace bash _km_heartbeat with single systemd-managed liveness service checking login shells (utmp), attached tmux clients, recent inbound email/slack, and headless agent process
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Replace the per-shell bash `_km_heartbeat` function (which orphans subshells and pegs the IDLE column at full timeout — observed on sandbox L1 2026-05-10) with a single root-owned systemd daemon (`km-presence.service`) that ticks every 60s, OR's five concrete liveness signals (utmp, tmux clients, recent email, recent Slack, headless agent process), and emits `source:"presence"` heartbeat events to the existing `/run/km/audit-pipe`. Migration follows the Phase 63/67/68/73 pattern: `make build && make sidecars && km init --sidecars`; existing sandboxes keep bash heartbeats until `km destroy && km create`.
+**Requirements**: PHASE-79-PRESENCE-DAEMON (tactical bug fix — no formal REQ-IDs; goal-backward must_haves drive verification)
 **Depends on:** Phase 78
-**Plans:** 0 plans
+**Plans:** 6 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 79 to break down)
+- [ ] 79-00-PLAN.md — Wave 0 stub seeding (cmd/km-presence skeleton + commandRunner seam + 13 failing test stubs + doctor_presence.go stub + 3 doctor test stubs)
+- [ ] 79-01-PLAN.md — Wave 1 daemon implementation (5 signal checks + tick + emit + 60s ticker main loop; turns 13 stubs GREEN)
+- [ ] 79-02-PLAN.md — Wave 1 userdata.go edits (REMOVE _km_heartbeat lines 1056-1080, ADD km-presence S3 fetch + systemd unit heredoc + slack-inbound stamp touch + enable in both eBPF/proxy branches; 5 regression tests)
+- [ ] 79-03-PLAN.md — Wave 1 Makefile sidecar pipeline (km-presence build line + S3 upload line in `sidecars` target; build-only line in `build-sidecars`)
+- [ ] 79-04-PLAN.md — Wave 2 doctor check `presence_daemon_healthy` (CloudWatch FilterLogEvents for source:"presence" within 5min staleness threshold; WARN-not-ERROR; turns 3 stubs GREEN; registered in buildChecks)
+- [ ] 79-05-PLAN.md — Wave 3 closeout (CLAUDE.md docs section + populate VALIDATION.md Per-Task Verification Map + BLOCKING operator UAT for bug-fix regression on live sandbox)
