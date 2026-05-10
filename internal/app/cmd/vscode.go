@@ -15,6 +15,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/spf13/cobra"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/sshkey"
+	gossh "golang.org/x/crypto/ssh"
 
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
@@ -299,12 +301,114 @@ func runVSCodeRekey(ctx context.Context, cfg *config.Config, fetcher SandboxFetc
 	}
 	fmt.Printf("✓ Pre-flight check passed (sshd active, authorized_keys present)\n")
 
-	// TODO Plan 76-02: local-key classification → confirmation prompt → keygen → SSM
-	// install → verify → atomic commit. The marker below is the test seam Plan 76-02
-	// will replace; until then, runVSCodeRekey returns nil after pre-flight passes.
-	fmt.Printf("(Plan 76-02 wires up keygen + push + commit here)\n")
-	_ = yes // used in Plan 76-02's confirmation prompt
+	// Step 1: Local key state classification
+	home, _ := os.UserHomeDir()
+	keysDir := filepath.Join(home, ".km", "keys")
+	localPubPath := filepath.Join(keysDir, sandboxID+".pub")
+	_, statErr := os.Stat(localPubPath)
+	localKeyAbsent := os.IsNotExist(statErr)
+
+	// Step 2: Confirmation prompt (skipped when yes == true)
+	if !yes {
+		var oldFP string
+		if localKeyAbsent {
+			oldFP = "(no local key — cross-laptop bootstrap)"
+		} else {
+			oldFP = fmt.Sprintf("%s (~/.km/keys/%s)", pubkeyFingerprint(localPubPath), sandboxID)
+		}
+		fmt.Printf("\nRotating VS Code key for %s\n", sandboxID)
+		fmt.Printf("  Old: %s\n", oldFP)
+		fmt.Printf("  New: (will be generated)\n")
+		fmt.Printf("Continue? [y/N] ")
+		var answer string
+		fmt.Scanln(&answer)
+		fmt.Println()
+		if answer != "y" && answer != "Y" && answer != "yes" {
+			fmt.Println("Aborted.")
+			return nil
+		}
+	}
+
+	// Step 3: Keypair generation to scratch paths
+	privNewPath := filepath.Join(keysDir, sandboxID+".new")
+	pubNewPath := filepath.Join(keysDir, sandboxID+".pub.new")
+	newPubKeyLine, err := sshkey.GenerateAndWrite(privNewPath, pubNewPath, "km-"+sandboxID)
+	if err != nil {
+		return fmt.Errorf("generate new keypair: %w", err)
+	}
+	fmt.Printf("✓ New keypair generated (%s)\n", pubkeyFingerprint(pubNewPath))
+
+	// Step 4: SSM install script + readback (single round-trip)
+	installScript := fmt.Sprintf(`set -e
+mkdir -p /home/sandbox/.ssh
+chmod 700 /home/sandbox/.ssh
+chown sandbox:sandbox /home/sandbox/.ssh
+cat > /home/sandbox/.ssh/authorized_keys << 'KEY'
+%s
+KEY
+chmod 600 /home/sandbox/.ssh/authorized_keys
+chown sandbox:sandbox /home/sandbox/.ssh/authorized_keys
+command -v restorecon >/dev/null 2>&1 && restorecon -R -v /home/sandbox/.ssh || true
+echo "=== READBACK ==="
+head -1 /home/sandbox/.ssh/authorized_keys`, newPubKeyLine)
+
+	ssmOut, err := sendSSMAndWait(ctx, ssmClient, instanceID, installScript)
+	if err != nil {
+		return fmt.Errorf("ssm install: %w", err)
+	}
+
+	// Step 5: Readback verification
+	markerIdx := strings.Index(ssmOut, "=== READBACK ===")
+	if markerIdx < 0 {
+		return fmt.Errorf("ssm install readback missing — no '=== READBACK ===' marker in output.\nInspect via: km shell %s -- cat ~/.ssh/authorized_keys\nRe-run: km vscode rekey %s", sandboxID, sandboxID)
+	}
+	afterMarker := ssmOut[markerIdx+len("=== READBACK ==="):]
+	// Strip leading newline and find first non-empty line
+	afterMarker = strings.TrimLeft(afterMarker, "\n")
+	firstLine := afterMarker
+	if idx := strings.Index(afterMarker, "\n"); idx >= 0 {
+		firstLine = afterMarker[:idx]
+	}
+	readbackLine := strings.TrimRight(firstLine, "\r\n")
+	if readbackLine != newPubKeyLine {
+		return fmt.Errorf("remote key install verification failed. Old key still active locally.\nInspect via: km shell %s -- cat ~/.ssh/authorized_keys\nRe-run: km vscode rekey %s", sandboxID, sandboxID)
+	}
+	fmt.Printf("✓ Pushed to sandbox via SSM (verified — readback matches)\n")
+
+	// Step 6: Atomic local commit (.pub FIRST, then private)
+	privFinalPath := filepath.Join(keysDir, sandboxID)
+	pubFinalPath := filepath.Join(keysDir, sandboxID+".pub")
+	if err := os.Rename(pubNewPath, pubFinalPath); err != nil {
+		return fmt.Errorf("commit new public key: %w", err)
+	}
+	if err := os.Rename(privNewPath, privFinalPath); err != nil {
+		return fmt.Errorf("commit new private key: %w", err)
+	}
+
+	// Step 7: Final output
+	actionWord := "replaced"
+	if localKeyAbsent {
+		actionWord = "created"
+	}
+	fmt.Printf("✓ Local key %s atomically (~/.km/keys/%s)\n\n", actionWord, sandboxID)
+	fmt.Printf("Rekey complete. Active VS Code sessions stay on the old key until reconnect.\n")
 	return nil
+}
+
+// pubkeyFingerprint reads pubPath, parses with gossh.ParseAuthorizedKey, returns
+// gossh.FingerprintSHA256(pk) formatted as "SHA256:<base64>" (matches ssh-keygen -lf).
+// Returns a descriptive placeholder on read or parse error so the confirmation prompt
+// remains informative even when the local file is missing or corrupt.
+func pubkeyFingerprint(pubPath string) string {
+	raw, err := os.ReadFile(pubPath)
+	if err != nil {
+		return "(unable to read local pubkey)"
+	}
+	pk, _, _, _, err := gossh.ParseAuthorizedKey(raw)
+	if err != nil {
+		return "(unable to parse local pubkey)"
+	}
+	return gossh.FingerprintSHA256(pk)
 }
 
 // parseVSCodeStatus interprets the combined SSM script output and returns a descriptive error
