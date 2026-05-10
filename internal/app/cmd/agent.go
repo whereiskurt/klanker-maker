@@ -146,6 +146,9 @@ Examples:
 	// Add "list" subcommand for enumerating runs
 	cmd.AddCommand(newAgentListCmd(cfg, fetcher, ssmClient, s3Client))
 
+	// Add "auth" subcommand for authenticating claude/codex CLIs inside the sandbox
+	cmd.AddCommand(newAgentAuthCmd(cfg, fetcher, execFn, ssmClient))
+
 	return cmd
 }
 
@@ -537,6 +540,26 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 		if !ready {
 			return fmt.Errorf("SSM agent on %s did not become ready after resume", sandboxID)
 		}
+	}
+
+	// Phase 78 (AUTH-12): when --no-bedrock is active for the claude agent type,
+	// pre-check that ~/.claude/.credentials.json exists on the sandbox BEFORE
+	// launching the tmux session. This prevents a confusing silent failure where
+	// the tmux session fires and claude immediately fails at runtime due to a
+	// missing OAuth token. Exit non-zero with a clear hint pointing at km agent auth.
+	// Codex does not use --no-bedrock (guarded earlier), so only check claude branch.
+	if noBedrock && agentType != "codex" {
+		checkOut, checkErr := sendSSMAndWait(ctx, ssmClient, instanceID,
+			"stat /home/sandbox/.claude/.credentials.json 2>/dev/null && echo ok || echo missing")
+		if checkErr == nil && strings.TrimSpace(checkOut) == "missing" {
+			return fmt.Errorf(
+				"claude credentials not found on sandbox %s\n"+
+					"  Run: km agent auth %s --claude\n"+
+					"  Then retry: km agent run --no-bedrock %s --prompt ...",
+				sandboxID, sandboxID, sandboxID)
+		}
+		// If checkErr != nil (SSM transient), proceed silently — the agent session
+		// will surface any real auth failure to the operator.
 	}
 
 	// Load profile args for the selected agent type (avoid unnecessary S3 fetch).
