@@ -6,13 +6,19 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
+
+// browserOpener is the platform-specific URL launcher. Tests override it
+// to capture invocations without spawning a real subprocess.
+var browserOpener = openInBrowser
 
 // runAgentAuthClaudeFn and runAgentAuthCodexFn are package-level dispatch vars
 // that allow tests to stub the implementation without touching real AWS.
@@ -124,16 +130,26 @@ func runAgentAuthClaude(ctx context.Context, _ *config.Config, fetcher SandboxFe
 		return err
 	}
 
-	// Compose inner command: source profile env first to ensure claude is on PATH
+	// Tee claude's stdout into a sandbox-scoped temp file so a parallel SSM
+	// poller can scrape the OAuth URL and open it in the operator's browser.
+	teePath := fmt.Sprintf("/tmp/km-claude-auth-%s.out", sandboxID)
 	innerCmd := fmt.Sprintf(
-		"source /etc/profile.d/km-profile-env.sh 2>/dev/null; source /etc/profile.d/km-identity.sh 2>/dev/null; %s",
-		loginArgs)
+		"source /etc/profile.d/km-profile-env.sh 2>/dev/null; source /etc/profile.d/km-identity.sh 2>/dev/null; rm -f %s; set -o pipefail; %s 2>&1 | tee %s",
+		teePath, loginArgs, teePath)
 	paramsJSON, err := json.Marshal(map[string][]string{"command": {innerCmd}})
 	if err != nil {
 		return fmt.Errorf("marshal --parameters: %w", err)
 	}
 
+	// Spawn URL detector BEFORE the interactive session so it picks up the
+	// OAuth URL as soon as claude prints it. ctx is shared so the goroutine
+	// terminates cleanly when the session exits or the operator hits Ctrl-C.
+	detectCtx, cancelDetect := context.WithCancel(ctx)
+	defer cancelDetect()
+	go detectAndOpenOAuthURL(detectCtx, ssmClient, instanceID, teePath)
+
 	fmt.Printf("Opening SSM session to run `%s` on %s...\n", loginArgs, sandboxID)
+	fmt.Println("(km will auto-open the OAuth URL in your browser; paste the code back into this terminal)")
 	c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
 		"--target", instanceID, "--region", rec.Region, "--profile", "klanker-terraform",
 		"--document-name", "KM-Sandbox-Session",
@@ -143,9 +159,57 @@ func runAgentAuthClaude(ctx context.Context, _ *config.Config, fetcher SandboxFe
 	c.Stderr = os.Stderr
 
 	sessionErr := runSSMInteractiveSubprocess(execFn, c)
+	cancelDetect()
+
+	// Best-effort cleanup of the tee file (silent failure is fine — /tmp on the sandbox).
+	cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	_, _ = sendSSMAndWait(cleanCtx, ssmClient, instanceID, fmt.Sprintf("rm -f %s", teePath))
+	cleanCancel()
 
 	// Post-exit: verify credentials file was written on the sandbox
 	return verifyCredentialsWritten(ctx, ssmClient, instanceID, "claude", sandboxID, sessionErr)
+}
+
+// detectAndOpenOAuthURL polls the tee'd claude stdout on the sandbox via SSM
+// looking for the OAuth authorize URL. When found, it opens the URL in the
+// operator's local browser. Silent on failure — operator can still copy the
+// URL by hand. Polls every 0.5s for up to 25s (covers slow SSM session start).
+func detectAndOpenOAuthURL(ctx context.Context, ssmClient SSMSendAPI, instanceID, teePath string) {
+	pollScript := fmt.Sprintf(`for i in $(seq 1 50); do
+  url=$(grep -oE 'https://(claude\.com|claude\.ai|console\.anthropic\.com)/[^[:space:]]+' '%s' 2>/dev/null | head -1)
+  if [ -n "$url" ]; then echo "$url"; exit 0; fi
+  sleep 0.5
+done
+exit 1`, teePath)
+
+	out, err := sendSSMAndWait(ctx, ssmClient, instanceID, pollScript)
+	if err != nil {
+		return
+	}
+	url := strings.TrimSpace(out)
+	if !strings.HasPrefix(url, "https://") {
+		return
+	}
+	if err := browserOpener(url); err == nil {
+		fmt.Fprintln(os.Stderr, "✓ Opened OAuth URL in your default browser")
+	}
+}
+
+// openInBrowser launches the operator's default browser at url. Returns an
+// error if the platform isn't supported or the launch command fails to start.
+func openInBrowser(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "linux":
+		cmd = exec.Command("xdg-open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		return fmt.Errorf("unsupported OS for browser open: %s", runtime.GOOS)
+	}
+	return cmd.Start()
 }
 
 // runAgentAuthCodex is a Wave-1 stub. The real codex port-forward implementation
@@ -194,7 +258,7 @@ func verifyCredentialsWritten(ctx context.Context, ssmClient SSMSendAPI, instanc
 		cliName = "claude"
 	}
 
-	checkCmd := fmt.Sprintf("stat '%s' 2>/dev/null && echo ok || echo missing", credPath)
+	checkCmd := fmt.Sprintf("test -f '%s' && echo ok || echo missing", credPath)
 	out, err := sendSSMAndWait(ctx, ssmClient, instanceID, checkCmd)
 	if err != nil {
 		// SSM check failed — report session error if any, else the SSM error

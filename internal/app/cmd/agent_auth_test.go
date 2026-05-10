@@ -188,7 +188,7 @@ func TestAgentAuth_DefaultClaude(t *testing.T) {
 	mockSSM := &authTestSSM{
 		routedOutputs: []authSSMRoute{
 			{cmdSubstr: "tmux list-sessions", output: ""},
-			{cmdSubstr: "stat '/home/sandbox/.claude/.credentials.json'", output: "ok"},
+			{cmdSubstr: "test -f '/home/sandbox/.claude/.credentials.json'", output: "ok"},
 		},
 	}
 
@@ -289,12 +289,12 @@ func TestAgentAuth_ConflictRefuse(t *testing.T) {
 
 // ---- AUTH-06: verifyCredentialsWritten success ----
 
-// TestVerifyCredentialsWritten_Success verifies that when stat returns "ok",
+// TestVerifyCredentialsWritten_Success verifies that when test -f returns "ok",
 // verifyCredentialsWritten returns nil and prints the success confirmation line.
 func TestVerifyCredentialsWritten_Success(t *testing.T) {
 	mockSSM := &authTestSSM{
 		routedOutputs: []authSSMRoute{
-			{cmdSubstr: "stat '/home/sandbox/.claude/.credentials.json'", output: "ok"},
+			{cmdSubstr: "test -f '/home/sandbox/.claude/.credentials.json'", output: "ok"},
 		},
 	}
 
@@ -316,13 +316,13 @@ func TestVerifyCredentialsWritten_Success(t *testing.T) {
 
 // ---- AUTH-07: verifyCredentialsWritten missing ----
 
-// TestVerifyCredentialsWritten_Missing verifies that when stat returns "missing",
+// TestVerifyCredentialsWritten_Missing verifies that when test -f returns "missing",
 // verifyCredentialsWritten returns an error containing the expected message.
 func TestVerifyCredentialsWritten_Missing(t *testing.T) {
 	t.Run("sessionErr_nil", func(t *testing.T) {
 		mockSSM := &authTestSSM{
 			routedOutputs: []authSSMRoute{
-				{cmdSubstr: "stat '/home/sandbox/.claude/.credentials.json'", output: "missing"},
+				{cmdSubstr: "test -f '/home/sandbox/.claude/.credentials.json'", output: "missing"},
 			},
 		}
 		err := verifyCredentialsWritten(context.Background(), mockSSM, "i-0abc123def456", "claude", "sb-test", nil)
@@ -337,7 +337,7 @@ func TestVerifyCredentialsWritten_Missing(t *testing.T) {
 	t.Run("sessionErr_non_nil", func(t *testing.T) {
 		mockSSM := &authTestSSM{
 			routedOutputs: []authSSMRoute{
-				{cmdSubstr: "stat '/home/sandbox/.claude/.credentials.json'", output: "missing"},
+				{cmdSubstr: "test -f '/home/sandbox/.claude/.credentials.json'", output: "missing"},
 			},
 		}
 		sessionErr := fmt.Errorf("session exited non-zero")
@@ -579,5 +579,126 @@ func TestAgentRun_NoBedrock_CredentialsPresent(t *testing.T) {
 	err := root.Execute()
 	if err != nil && strings.Contains(err.Error(), "claude credentials not found") {
 		t.Errorf("credentials pre-check should pass when credentials are present, got: %v", err)
+	}
+}
+
+// ---- Browser auto-open: detectAndOpenOAuthURL ----
+
+// TestDetectAndOpenOAuthURL_Found verifies that when the poller scrapes a
+// claude.com URL out of the tee'd stdout, the browser opener is invoked
+// with that URL.
+func TestDetectAndOpenOAuthURL_Found(t *testing.T) {
+	mockSSM := &authTestSSM{
+		successOutput: "https://claude.com/cai/oauth/authorize?code=true&client_id=abc&state=xyz\n",
+	}
+
+	var openedURL string
+	original := browserOpener
+	browserOpener = func(url string) error { openedURL = url; return nil }
+	defer func() { browserOpener = original }()
+
+	// Capture stderr so we don't spam test output with the success line
+	captureAuthStdout(func() {
+		detectAndOpenOAuthURL(context.Background(), mockSSM, "i-0abc123def456",
+			"/tmp/km-claude-auth-sb-test.out")
+	})
+
+	if openedURL != "https://claude.com/cai/oauth/authorize?code=true&client_id=abc&state=xyz" {
+		t.Errorf("expected browser opener to receive the OAuth URL, got: %q", openedURL)
+	}
+
+	// The poll script must reference the per-sandbox tee path
+	if len(mockSSM.sendCalls) == 0 {
+		t.Fatal("expected at least one SSM SendCommand")
+	}
+	cmds := mockSSM.sendCalls[0].Parameters["commands"]
+	if len(cmds) == 0 || !strings.Contains(cmds[0], "/tmp/km-claude-auth-sb-test.out") {
+		t.Errorf("poll script should reference the per-sandbox tee path, got: %q", cmds)
+	}
+	if !strings.Contains(cmds[0], "grep -oE") {
+		t.Errorf("poll script should grep for the URL, got: %q", cmds[0])
+	}
+}
+
+// TestDetectAndOpenOAuthURL_NoURL verifies the opener is NOT called when the
+// poller returns no URL (timeout path).
+func TestDetectAndOpenOAuthURL_NoURL(t *testing.T) {
+	mockSSM := &authTestSSM{successOutput: ""}
+
+	openCalled := false
+	original := browserOpener
+	browserOpener = func(string) error { openCalled = true; return nil }
+	defer func() { browserOpener = original }()
+
+	detectAndOpenOAuthURL(context.Background(), mockSSM, "i-0abc123def456",
+		"/tmp/km-claude-auth-sb-empty.out")
+
+	if openCalled {
+		t.Error("browser opener should not be called when SSM returns no URL")
+	}
+}
+
+// TestDetectAndOpenOAuthURL_RejectsNonHTTPS guards against opening anything
+// that isn't an https:// URL — defensive against unexpected SSM output.
+func TestDetectAndOpenOAuthURL_RejectsNonHTTPS(t *testing.T) {
+	mockSSM := &authTestSSM{successOutput: "file:///etc/passwd\n"}
+
+	openCalled := false
+	original := browserOpener
+	browserOpener = func(string) error { openCalled = true; return nil }
+	defer func() { browserOpener = original }()
+
+	detectAndOpenOAuthURL(context.Background(), mockSSM, "i-0abc123def456",
+		"/tmp/km-claude-auth-sb-bad.out")
+
+	if openCalled {
+		t.Error("browser opener must reject non-https URLs")
+	}
+}
+
+// TestRunAgentAuthClaude_TeesAndCleans verifies that runAgentAuthClaude wraps
+// the login command in a tee pipeline keyed by sandbox ID, and that the
+// post-exit cleanup `rm -f` is issued. We can't run a real SSM session so we
+// stub execFn — the assertion is on the SendCommand history.
+func TestRunAgentAuthClaude_TeesAndCleans(t *testing.T) {
+	fetcher := newRunningEC2SandboxAuth("sb-tee-123")
+
+	mockSSM := &authTestSSM{
+		// Conflict check returns empty (no agent session)
+		// Detector poll returns nothing (timeout path; we don't care here)
+		// Credentials check returns "ok" so the function returns nil
+		routedOutputs: []authSSMRoute{
+			{cmdSubstr: "tmux list-sessions", output: ""},
+			{cmdSubstr: "test -f '/home/sandbox/.claude/.credentials.json'", output: "ok"},
+		},
+	}
+
+	// Stub browser opener to a no-op
+	original := browserOpener
+	browserOpener = func(string) error { return nil }
+	defer func() { browserOpener = original }()
+
+	cfg := &config.Config{}
+	captureAuthStdout(func() {
+		err := runAgentAuthClaude(context.Background(), cfg, fetcher,
+			func(c *exec.Cmd) error { return nil }, mockSSM,
+			"sb-tee-123", false, false, true, "")
+		if err != nil {
+			t.Errorf("runAgentAuthClaude returned error: %v", err)
+		}
+	})
+
+	// Look for the cleanup `rm -f` call in the SendCommand history
+	foundCleanup := false
+	for _, c := range mockSSM.sendCalls {
+		if cmds, ok := c.Parameters["commands"]; ok && len(cmds) > 0 {
+			if strings.Contains(cmds[0], "rm -f /tmp/km-claude-auth-sb-tee-123.out") {
+				foundCleanup = true
+				break
+			}
+		}
+	}
+	if !foundCleanup {
+		t.Errorf("expected cleanup 'rm -f /tmp/km-claude-auth-sb-tee-123.out' in SSM calls, got %d calls", len(mockSSM.sendCalls))
 	}
 }
