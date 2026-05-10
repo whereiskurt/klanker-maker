@@ -1644,3 +1644,23 @@ Plans:
 - [ ] 76-01-PLAN.md — Wave 1: register `km vscode rekey` cobra command + four pre-flight gates (EC2 running, lock with --force, SSM probe via parseVSCodeStatus); turn 8 stubs green
 - [ ] 76-02-PLAN.md — Wave 2: complete runVSCodeRekey (key classification, prompt, GenerateAndWrite to scratch, SSM install + readback verify, atomic .pub-first rename, output markers); turn remaining 8 stubs green
 - [ ] 76-03-PLAN.md — Wave 2 (parallel): documentation in CLAUDE.md and docs/vscode.md (Rotating a sandbox key section, three pain-point scenarios, runbook table)
+
+### Phase 77: failed sandbox discoverability — persist failure_reason in DDB and km logs Lambda fallback
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 76
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 77 to break down)
+
+### Phase 78: km agent auth — SSM-mediated OAuth login for claude and codex CLIs inside sandboxes (paste-code for claude, port-forward 1455 for codex)
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 77
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 78 to break down)
