@@ -34,6 +34,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `km slack rotate-token --bot-token <new-token>` — rotate Slack bot token: validate, persist to SSM, force bridge cold-start, smoke test
 - `km vscode start <sandbox-id>` — open SSM port-forward + ssh-config Host entry for VS Code Remote-SSH (`--local-port` to override 2222)
 - `km vscode status <sandbox-id>` — check sshd state + authorized_keys presence
+- `km vscode rekey <sandbox-id>` — rotate per-sandbox VS Code Remote-SSH keypair on a running sandbox without `km destroy && km create` (`--force` to override `km lock`, `--yes` to skip confirmation prompt). Active VS Code sessions stay on the old key until reconnect.
 - `km init` — initialize regional infrastructure (`--sidecars` for fast binary deploy, `--lambdas` for Lambda-only deploy)
 - `km shell <sandbox-id>` — SSM shell (`--root`, `--ports`, `--no-bedrock`, `--learn` to generate profile from observed traffic, `--ami` to bake the EC2 instance into a custom AMI on exit)
 - `km ami list` — list operator-baked AMIs with profile references and size (`--wide` for region/snapshot/encryption columns)
@@ -332,6 +333,7 @@ km create profiles/<your-profile>.yaml --alias my-poc   # keypair generated loca
 SB=$(km list | awk '/my-poc/ {print $1}')
 km vscode start $SB                                      # opens tunnel, blocks until Ctrl-C
 # In VS Code: F1 → "Remote-SSH: Connect to Host..." → km-$SB
+km vscode rekey $SB --yes                                # rotate keypair without destroy/create
 km destroy $SB --remote --yes                            # cleans up keys + ssh-config block
 ```
 
@@ -347,6 +349,18 @@ km destroy $SB --remote --yes                            # cleans up keys + ssh-
 - One operator per sandbox in v1 (single authorized_keys entry).
 - `km vscode start` and `km vscode status` accept the same identifier formats as other
   `km` subcommands: full sandbox ID (`lrn2-ee9499b5`), alias (`my-poc`), or list-row number.
+
+### Rotating a sandbox key (Phase 76)
+
+Solves three pain points: (1) baked-AMI relaunch carries stale `authorized_keys`,
+(2) cross-laptop portability — `km vscode rekey` on a second laptop bootstraps a fresh
+key without manual file copy, (3) post-incident rotation if a private key is suspected
+compromised. See `docs/vscode.md` § Rotating a sandbox key for full operator walkthrough.
+
+Pre-flight gates (any failure = no key changes): EC2 instance must be `running`,
+`km lock` must not block (override with `--force`), sandbox must have been created with
+`vscodeEnabled:true` (pre-Phase-73 sandboxes get a clear hard error pointing at
+`km destroy && km create`).
 
 See `docs/vscode.md` for the full operator guide.
 
