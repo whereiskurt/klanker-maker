@@ -9,12 +9,21 @@ import (
 	"strconv"
 	"strings"
 
+	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/spf13/cobra"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
+
+// ec2DescribeAPI is the minimal subset of ec2.Client used by runVSCodeRekey.
+// Tests inject a mock; production code passes a real ec2.NewFromConfig(awsCfg).
+type ec2DescribeAPI interface {
+	DescribeInstances(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
+}
 
 // vsCodeStatusScript is the single combined SSM script sent by both vscode start and vscode status.
 // Single round-trip: returns sshd state, authorized_keys existence, and first key line.
@@ -39,6 +48,7 @@ func newVSCodeCmdInternal(cfg *config.Config, fetcher SandboxFetcher, execFn She
 	}
 	parent.AddCommand(newVSCodeStartCmd(cfg, fetcher, execFn, ssmClient))
 	parent.AddCommand(newVSCodeStatusCmd(cfg, fetcher, ssmClient))
+	parent.AddCommand(newVSCodeRekeyCmd(cfg, fetcher, ssmClient))
 	return parent
 }
 
@@ -201,6 +211,99 @@ func runVSCodeStatus(ctx context.Context, _ *config.Config, fetcher SandboxFetch
 		return err
 	}
 	fmt.Printf("✓ VS Code Remote-SSH ready (sshd active, authorized_keys present)\n")
+	return nil
+}
+
+func newVSCodeRekeyCmd(cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI) *cobra.Command {
+	var force, yes bool
+	cmd := &cobra.Command{
+		Use:   "rekey <sandbox-id>",
+		Short: "Rotate the VS Code Remote-SSH ed25519 keypair for a running sandbox",
+		Long: `Rotate the per-sandbox VS Code Remote-SSH ed25519 keypair on a running sandbox.
+
+Generates a fresh keypair on the operator's machine, pushes the new public key to
+the sandbox via SSM (with readback verification), then atomically replaces the
+local key files. Active VS Code Remote-SSH sessions stay connected with the old
+key until you reconnect.`,
+		Args:         cobra.ExactArgs(1),
+		SilenceUsage: true,
+		RunE: func(c *cobra.Command, args []string) error {
+			f, _, s, err := resolveVSCodeDeps(c.Context(), cfg, fetcher, nil, ssmClient)
+			if err != nil {
+				return err
+			}
+			sandboxID, err := ResolveSandboxID(c.Context(), cfg, args[0])
+			if err != nil {
+				return err
+			}
+			awsCfg, err := kmaws.LoadAWSConfig(c.Context(), "klanker-terraform")
+			if err != nil {
+				return fmt.Errorf("load AWS config for EC2: %w", err)
+			}
+			realEC2 := ec2.NewFromConfig(awsCfg)
+			return runVSCodeRekey(c.Context(), cfg, f, realEC2, s, sandboxID, force, yes)
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false, "Override the km lock safety lock")
+	cmd.Flags().BoolVar(&yes, "yes", false, "Skip the confirmation prompt")
+	return cmd
+}
+
+func runVSCodeRekey(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, ec2Client ec2DescribeAPI, ssmClient SSMSendAPI, sandboxID string, force, yes bool) error {
+	// Gate 1: fetch sandbox + extract instance ID
+	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
+	if err != nil {
+		return fmt.Errorf("fetch sandbox: %w", err)
+	}
+	instanceID, err := extractResourceID(rec.Resources, ":instance/")
+	if err != nil {
+		return fmt.Errorf("find EC2 instance: %w", err)
+	}
+
+	// Gate 2: EC2 running-state check (mirrors pause.go:139-154)
+	descOut, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		Filters: []ec2types.Filter{
+			{Name: awssdk.String("tag:km:sandbox-id"), Values: []string{sandboxID}},
+			{Name: awssdk.String("instance-state-name"), Values: []string{"running"}},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("describe instances: %w", err)
+	}
+	running := false
+	for _, r := range descOut.Reservations {
+		if len(r.Instances) > 0 {
+			running = true
+			break
+		}
+	}
+	if !running {
+		return fmt.Errorf("sandbox %s is not running — check status with km list, then km resume %s", sandboxID, sandboxID)
+	}
+	fmt.Printf("✓ EC2 instance running (%s in %s)\n", instanceID, rec.Region)
+
+	// Gate 3: lock check (skipped when --force)
+	if !force {
+		if err := checkSandboxLock(ctx, cfg, sandboxID); err != nil {
+			return fmt.Errorf("sandbox is locked. Use --force to override or run: km unlock %s", sandboxID)
+		}
+	}
+
+	// Gate 4: SSM remote probe via reused vsCodeStatusScript + parseVSCodeStatus
+	out, err := sendSSMAndWait(ctx, ssmClient, instanceID, vsCodeStatusScript)
+	if err != nil {
+		return fmt.Errorf("ssm pre-flight: %w", err)
+	}
+	if err := parseVSCodeStatus(out, sandboxID); err != nil {
+		return err
+	}
+	fmt.Printf("✓ Pre-flight check passed (sshd active, authorized_keys present)\n")
+
+	// TODO Plan 76-02: local-key classification → confirmation prompt → keygen → SSM
+	// install → verify → atomic commit. The marker below is the test seam Plan 76-02
+	// will replace; until then, runVSCodeRekey returns nil after pre-flight passes.
+	fmt.Printf("(Plan 76-02 wires up keygen + push + commit here)\n")
+	_ = yes // used in Plan 76-02's confirmation prompt
 	return nil
 }
 

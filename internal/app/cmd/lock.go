@@ -126,6 +126,11 @@ func runLockS3Fallback(ctx context.Context, cfg *config.Config, sandboxID string
 	return nil
 }
 
+// checkSandboxLock is a package-level indirection for test injection. Tests override
+// checkSandboxLock to simulate locked-state without a real DDB. Production callers
+// continue to use CheckSandboxLock directly; rekey uses checkSandboxLock for testability.
+var checkSandboxLock = CheckSandboxLock
+
 // CheckSandboxLock reads metadata from DynamoDB (with S3 fallback) and returns an error
 // if the sandbox is locked.
 // Fail-open: returns nil if table/bucket not configured, AWS config fails, or metadata missing.
