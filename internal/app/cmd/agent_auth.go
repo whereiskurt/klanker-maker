@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -230,10 +231,97 @@ func openInBrowser(url string) error {
 	return cmd.Start()
 }
 
-// runAgentAuthCodex is a Wave-1 stub. The real codex port-forward implementation
-// ships in Plan 02 (Wave 2) and replaces this body.
-func runAgentAuthCodex(_ context.Context, _ *config.Config, _ SandboxFetcher, _ ShellExecFunc, _ SSMSendAPI, _ string) error {
-	return fmt.Errorf("--codex auth flow ships in Plan 02 (Wave 2) — see .planning/phases/78-km-agent-auth-ssm-mediated-oauth-login-for-claude-and-codex-clis-inside-sandboxes-paste-code-for-claude-port-forward-1455-for-codex/78-02-PLAN.md")
+// runAgentAuthCodex mediates the codex CLI's OAuth login flow via an SSM port-forward.
+//
+// Lifecycle (mirrors runVSCodeStart in vscode.go):
+//  1. Fetch sandbox record + extract EC2 instance ID.
+//  2. Pre-flight: sandbox must be running.
+//  3. Conflict check: refuse if a km-agent-* tmux session is active.
+//  4. Probe local port availability (1455 primary, 1457 fallback).
+//  5. Start background SSM port-forward localhost:PORT ↔ sandbox:PORT.
+//  6. defer kill the background process — covers success, error, and panic paths.
+//  7. Sleep 1s for session-manager-plugin to bind the local port.
+//  8. Open foreground interactive SSM session running "codex login".
+//  9. Verify ~/.codex/auth.json was written post-session.
+//
+// The SSM port-forward enables the codex OAuth callback:
+// browser hits laptop:1455 → SSM tunnel → sandbox:1455 where codex's callback
+// server completes the token exchange and writes ~/.codex/auth.json.
+func runAgentAuthCodex(ctx context.Context, _ *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string) error {
+	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
+	if err != nil {
+		return fmt.Errorf("fetch sandbox: %w", err)
+	}
+
+	instanceID, err := extractResourceID(rec.Resources, ":instance/")
+	if err != nil {
+		return fmt.Errorf("find EC2 instance: %w", err)
+	}
+
+	// Pre-flight: sandbox must be running
+	if rec.Status != "running" {
+		return fmt.Errorf("sandbox %s is not running (status: %s) — run 'km resume %s' first",
+			sandboxID, rec.Status, sandboxID)
+	}
+
+	// Conflict check: refuse if a km-agent-* tmux session is active on the sandbox
+	if err := checkAgentSessionConflict(ctx, ssmClient, instanceID); err != nil {
+		return err
+	}
+
+	// Probe local port availability (1455 primary, 1457 fallback per codex source)
+	localPort, err := probeCodexPort()
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Opening SSM port-forward localhost:%d ↔ sandbox:%d for codex login...\n", localPort, localPort)
+
+	// Start background port-forward subprocess.
+	// Both localPort and remotePort use the same chosen port because codex binds
+	// the same port (1455 or 1457) on the sandbox side that it expects on the client.
+	pfCmd := buildPortForwardCmd(ctx, instanceID, rec.Region, strconv.Itoa(localPort), strconv.Itoa(localPort))
+	pfCmd.Stdout = os.Stdout
+	pfCmd.Stderr = os.Stderr
+	if err := pfCmd.Start(); err != nil {
+		return fmt.Errorf("start SSM port-forward: %w", err)
+	}
+	// CRITICAL: deferred Kill covers all exit paths (success, error, panic).
+	// runSSMInteractiveSubprocess masks SIGINT process-wide, so Ctrl+C during
+	// the foreground session does NOT propagate to the background process.
+	// Only the deferred Kill cleans it up reliably.
+	defer func() {
+		if pfCmd.Process != nil {
+			_ = pfCmd.Process.Kill()
+		}
+	}()
+
+	// Allow session-manager-plugin time to bind the local port before codex starts.
+	time.Sleep(1 * time.Second)
+
+	// Open foreground codex login session.
+	// codex will print the OAuth URL to stdout (xdg-open fails on headless EC2);
+	// the operator clicks the URL from their terminal. The browser callback flows
+	// through the SSM tunnel to codex's callback server on the sandbox.
+	innerCmd := "source /etc/profile.d/km-profile-env.sh 2>/dev/null; codex login"
+	paramsJSON, err := json.Marshal(map[string][]string{"command": {innerCmd}})
+	if err != nil {
+		return fmt.Errorf("marshal --parameters: %w", err)
+	}
+	c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
+		"--target", instanceID,
+		"--region", rec.Region,
+		"--profile", "klanker-terraform",
+		"--document-name", "KM-Sandbox-Session",
+		"--parameters", string(paramsJSON))
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	sessionErr := runSSMInteractiveSubprocess(execFn, c)
+
+	// Post-exit: verify credentials file was written on the sandbox.
+	// deferred pfCmd.Process.Kill() fires after this returns.
+	return verifyCredentialsWritten(ctx, ssmClient, instanceID, "codex", sandboxID, sessionErr)
 }
 
 // probeCodexPort tries 1455 first (codex's hardcoded default), then 1457
