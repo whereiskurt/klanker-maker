@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: "Completed 76-03-PLAN.md (Wave 2: km vscode rekey documentation for CLAUDE.md and docs/vscode.md)"
-last_updated: "2026-05-10T02:00:11.871Z"
+stopped_at: "Completed 76-02-PLAN.md (Wave 2: complete runVSCodeRekey + turn 8 stub tests green)"
+last_updated: "2026-05-10T02:11:48.201Z"
 last_activity: 2026-05-10
 progress:
   total_phases: 80
-  completed_phases: 70
+  completed_phases: 71
   total_plans: 290
-  completed_plans: 257
+  completed_plans: 258
   percent: 93
 ---
 
@@ -298,6 +298,7 @@ Progress: [█████████░] 93%
 | Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox P00 | 268s | 1 tasks | 1 files |
 | Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox P01 | 4min | 2 tasks | 3 files |
 | Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox P03 | 2min | 2 tasks | 2 files |
+| Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox P02 | 854s | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -849,6 +850,8 @@ Recent decisions affecting current work:
 - [Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox]: Sequenced SSM mock documented inline per test body (commented) rather than shared helper — per 76-RESEARCH.md two-mock-instances recommendation
 - [Phase 76]: ec2DescribeAPI interface in vscode.go alongside SSMSendAPI; checkSandboxLock var in lock.go for test injection without real DDB; runVSCodeRekey returns nil after pre-flight with TODO marker Plan 76-02 will delete
 - [Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox]: Documentation written against locked CLI surface (Wave 2 pattern: docs in parallel with impl); CONTEXT.md samples mirrored verbatim as canonical source of truth
+- [Phase 76]: rekeyInstallSpyMock pattern: spy on install script SendCommand, extract embedded pubkey, return as readback — handles non-deterministic ed25519 keygen in tests
+- [Phase 76]: Atomic rename .pub-first: os.Rename(.pub.new → .pub) before os.Rename(.new → priv) — if second rename fails, ssh keeps using old private key, access preserved
 
 ### Roadmap Evolution
 
@@ -943,6 +946,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-10T02:00:11.864Z
-Stopped at: Completed 76-03-PLAN.md (Wave 2: km vscode rekey documentation for CLAUDE.md and docs/vscode.md)
+Last session: 2026-05-10T02:11:48.195Z
+Stopped at: Completed 76-02-PLAN.md (Wave 2: complete runVSCodeRekey + turn 8 stub tests green)
 Resume file: None

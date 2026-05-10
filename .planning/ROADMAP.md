@@ -1627,7 +1627,7 @@ Plans:
 **Requirements**: Phase 73 must be in place (per-sandbox keypair convention + ssh-config Host block managed in `~/.ssh/config`). Existing pre-Phase-73 sandboxes (no key on disk) should be detected and emit a clear error pointing at `km destroy && km create`.
 
 **Depends on:** Phase 75
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 - [ ] 76-00-PLAN.md — Wave 0 stub seeding: append 16 TestVSCodeRekey_* failing-stub tests to vscode_test.go
