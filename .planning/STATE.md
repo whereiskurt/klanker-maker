@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: Phase 76 context gathered
-last_updated: "2026-05-10T00:44:00.629Z"
-last_activity: 2026-05-09
+stopped_at: Completed 76-00-PLAN.md (Wave 0 stub seeding for Phase 76 vscode rekey)
+last_updated: "2026-05-10T01:47:50.827Z"
+last_activity: 2026-05-10
 progress:
   total_phases: 80
   completed_phases: 70
-  total_plans: 286
-  completed_plans: 254
+  total_plans: 290
+  completed_plans: 255
   percent: 93
 ---
 
@@ -31,7 +31,7 @@ Plan: 1 of 13 in current phase (Plan 68-00 COMPLETE; 68-01..68-12 pending)
 Total Plans in Phase: 13
 Current Plan: 13
 Status: in-progress
-Last activity: 2026-05-09
+Last activity: 2026-05-10
 
 Progress: [█████████░] 93%
 
@@ -295,6 +295,7 @@ Progress: [█████████░] 93%
 | Phase 73-km-vscode-remote-session-via-ssm P09 | 4min | 2 tasks | 2 files |
 | Phase 73-km-vscode-remote-session-via-ssm P09 | 5min | 3 tasks | 2 files |
 | Phase 74-slack-mrkdwn-rendering P01 | 1703 | 3 tasks | 27 files |
+| Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox P00 | 268s | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -842,6 +843,8 @@ Recent decisions affecting current work:
 - [Phase 74-01]: Transform order: mapHeadings before collapseBold for idempotence with heading content containing asterisks
 - [Phase 74-01]: Slack link extraction at applyText level prevents convertLinks from re-matching on 2nd pass
 - [Phase 74-01]: Long placeholder tokens (KMHTML_, KMBOLD_, KMLINK_) prevent collision from adjacent NUL boundaries
+- [Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox]: Wave 0 stub pattern: all 16 TestVSCodeRekey_* tests use t.Skip + fully commented assertion bodies (no _ = var blanks), keeping go vet clean without any new production symbols
+- [Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox]: Sequenced SSM mock documented inline per test body (commented) rather than shared helper — per 76-RESEARCH.md two-mock-instances recommendation
 
 ### Roadmap Evolution
 
@@ -936,6 +939,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-10T00:44:00.588Z
-Stopped at: Phase 76 context gathered
-Resume file: .planning/phases/76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox/76-CONTEXT.md
+Last session: 2026-05-10T01:47:50.820Z
+Stopped at: Completed 76-00-PLAN.md (Wave 0 stub seeding for Phase 76 vscode rekey)
+Resume file: None
