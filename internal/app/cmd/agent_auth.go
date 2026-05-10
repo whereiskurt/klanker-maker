@@ -148,8 +148,7 @@ func runAgentAuthClaude(ctx context.Context, _ *config.Config, fetcher SandboxFe
 	defer cancelDetect()
 	go detectAndOpenOAuthURL(detectCtx, ssmClient, instanceID, teePath)
 
-	fmt.Printf("Opening SSM session to run `%s` on %s...\n", loginArgs, sandboxID)
-	fmt.Println("(km will auto-open the OAuth URL in your browser; paste the code back into this terminal)")
+	printClaudeAuthInstructions(sandboxID, loginArgs)
 	c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
 		"--target", instanceID, "--region", rec.Region, "--profile", "klanker-terraform",
 		"--document-name", "KM-Sandbox-Session",
@@ -193,6 +192,24 @@ exit 1`, teePath)
 	if err := browserOpener(url); err == nil {
 		fmt.Fprintln(os.Stderr, "✓ Opened OAuth URL in your default browser")
 	}
+}
+
+// printClaudeAuthInstructions prints a clear, framed step-by-step block before
+// the SSM session opens. claude's OAuth flow uses a manual-paste redirect that
+// reads stdin in non-echo mode, so operators see no feedback while pasting.
+// This block sets expectations.
+func printClaudeAuthInstructions(sandboxID, loginArgs string) {
+	const bar = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	fmt.Println(bar)
+	fmt.Println("  km agent auth — claude OAuth flow")
+	fmt.Println(bar)
+	fmt.Println("  1. We'll auto-open claude.ai in your default browser.")
+	fmt.Println("  2. Authorize, then copy the code shown on the next page.")
+	fmt.Println("  3. Paste it below at `Paste code here if prompted >`")
+	fmt.Println("     (input is hidden — that's normal — then hit Enter)")
+	fmt.Println(bar)
+	fmt.Println()
+	fmt.Printf("Opening SSM session to run `%s` on %s...\n", loginArgs, sandboxID)
 }
 
 // openInBrowser launches the operator's default browser at url. Returns an
@@ -269,6 +286,10 @@ func verifyCredentialsWritten(ctx context.Context, ssmClient SSMSendAPI, instanc
 	}
 
 	if strings.TrimSpace(out) == "ok" {
+		fmt.Println()
+		if cliType == "claude" {
+			fmt.Println("✓ OAuth code accepted")
+		}
 		fmt.Printf("✓ %s credentials written to %s\n", cliName, credPath)
 		fmt.Printf("  Run 'km shell --no-bedrock %s' or 'km agent run --no-bedrock %s --prompt ...'\n", sandboxID, sandboxID)
 		return nil
