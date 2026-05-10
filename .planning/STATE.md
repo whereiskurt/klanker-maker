@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: "Completed 76-01-PLAN.md (Wave 1: km vscode rekey CLI surface + pre-flight gates)"
-last_updated: "2026-05-10T01:54:43.961Z"
+stopped_at: "Completed 76-03-PLAN.md (Wave 2: km vscode rekey documentation for CLAUDE.md and docs/vscode.md)"
+last_updated: "2026-05-10T02:00:11.871Z"
 last_activity: 2026-05-10
 progress:
   total_phases: 80
   completed_phases: 70
   total_plans: 290
-  completed_plans: 256
+  completed_plans: 257
   percent: 93
 ---
 
@@ -297,6 +297,7 @@ Progress: [█████████░] 93%
 | Phase 74-slack-mrkdwn-rendering P01 | 1703 | 3 tasks | 27 files |
 | Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox P00 | 268s | 1 tasks | 1 files |
 | Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox P01 | 4min | 2 tasks | 3 files |
+| Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox P03 | 2min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -847,6 +848,7 @@ Recent decisions affecting current work:
 - [Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox]: Wave 0 stub pattern: all 16 TestVSCodeRekey_* tests use t.Skip + fully commented assertion bodies (no _ = var blanks), keeping go vet clean without any new production symbols
 - [Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox]: Sequenced SSM mock documented inline per test body (commented) rather than shared helper — per 76-RESEARCH.md two-mock-instances recommendation
 - [Phase 76]: ec2DescribeAPI interface in vscode.go alongside SSMSendAPI; checkSandboxLock var in lock.go for test injection without real DDB; runVSCodeRekey returns nil after pre-flight with TODO marker Plan 76-02 will delete
+- [Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox]: Documentation written against locked CLI surface (Wave 2 pattern: docs in parallel with impl); CONTEXT.md samples mirrored verbatim as canonical source of truth
 
 ### Roadmap Evolution
 
@@ -941,6 +943,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-10T01:54:43.955Z
-Stopped at: Completed 76-01-PLAN.md (Wave 1: km vscode rekey CLI surface + pre-flight gates)
+Last session: 2026-05-10T02:00:11.864Z
+Stopped at: Completed 76-03-PLAN.md (Wave 2: km vscode rekey documentation for CLAUDE.md and docs/vscode.md)
 Resume file: None
