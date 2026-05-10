@@ -1,7 +1,7 @@
 apiVersion: klankermaker.ai/v1alpha1
 kind: SandboxProfile
 metadata:
-  name: learn🧠
+  name: learn
   labels:
     tier: development
     tool: learning-sandbox-unsafe
@@ -160,7 +160,7 @@ spec:
     notifyOnIdle: true
     notifyOnPermission: true
     notifyEmailEnabled: true
-    notifySlackEnabled: true
-    notifySlackPerSandbox: true
-    notifySlackInboundEnabled: true
-    slackArchiveOnDestroy: false
+    notifySlackEnabled: false
+    # notifySlackPerSandbox: true
+    # notifySlackInboundEnabled: true
+    # slackArchiveOnDestroy: false
