@@ -8,14 +8,15 @@ Phase 73 adds `km vscode start | status` so operators can connect their **local 
 1. [How it works](#how-it-works)
 2. [One-time setup](#one-time-setup)
 3. [Per-sandbox lifecycle](#per-sandbox-lifecycle)
-4. [Profile field](#profile-field)
-5. [CLI commands](#cli-commands)
-6. [Operator state on disk](#operator-state-on-disk)
-7. [Sandbox-side state](#sandbox-side-state)
-8. [Network requirements](#network-requirements)
-9. [Troubleshooting](#troubleshooting)
-10. [Limitations](#limitations)
-11. [Security model](#security-model)
+4. [Rotating a sandbox key](#rotating-a-sandbox-key)
+5. [Profile field](#profile-field)
+6. [CLI commands](#cli-commands)
+7. [Operator state on disk](#operator-state-on-disk)
+8. [Sandbox-side state](#sandbox-side-state)
+9. [Network requirements](#network-requirements)
+10. [Troubleshooting](#troubleshooting)
+11. [Limitations](#limitations)
+12. [Security model](#security-model)
 
 ---
 
@@ -87,6 +88,158 @@ km vscode start $SB
 # 6. Destroy (cleans up keys + ssh-config block automatically)
 km destroy $SB --remote --yes
 ```
+
+---
+
+## Rotating a sandbox key
+
+`km vscode rekey <sandbox-id>` rotates the per-sandbox VS Code Remote-SSH ed25519 keypair
+on a running sandbox without `km destroy && km create`. Three operator scenarios drove
+this command's existence:
+
+1. **Baked-AMI relaunch carries stale `authorized_keys`** — `km shell --learn --ami`
+   snapshots the EC2 instance mid-session, capturing `/home/sandbox/.ssh/authorized_keys`
+   from the bake-source sandbox. On relaunch from that AMI, cloud-init may mark itself
+   "done" and skip the userdata block that writes the new pubkey, leaving the old key in
+   place. Rekey forces the new key onto the sandbox via SSM.
+2. **Cross-laptop portability** — Phase 73 keys live on the creation machine only. An
+   operator who wants to `km vscode start` from a different laptop currently has to
+   manually copy `~/.km/keys/<sandbox-id>*`. Rekey on the second laptop generates a fresh
+   keypair locally and pushes the public key to the sandbox — no manual file copy.
+3. **Post-incident rotation** — if a private key is suspected compromised, rotate without
+   rebuilding the sandbox.
+
+### CLI
+
+```bash
+km vscode rekey <sandbox-id> [--force] [--yes]
+```
+
+| Flag | Purpose |
+|---|---|
+| `--force` | Override the `km lock` safety lock (rekey otherwise refuses on locked sandboxes; lock = "hands off this sandbox" applies to key material). |
+| `--yes` | Skip the confirmation prompt (for scripted use). |
+
+`<sandbox-id>` accepts the same identifier formats as other `km vscode` subcommands:
+full sandbox ID (`sb-abc12345`), alias (`my-poc`), or list-row number.
+
+### Active VS Code sessions
+
+sshd does NOT re-read `authorized_keys` for already-authenticated sessions, so existing
+VS Code Remote-SSH connections stay connected with the old key until you reconnect. New
+connections (operator quits the VS Code window and reconnects, or starts a new
+Remote-SSH host) pick up the new key transparently because `IdentityFile` in
+`~/.ssh/config` is unchanged.
+
+> **Active VS Code Remote-SSH sessions stay connected with the old key until you reconnect.**
+
+### Pre-flight gates
+
+Rekey performs these checks IN ORDER. Any failure aborts BEFORE any key material is
+generated:
+
+1. **EC2 instance state** — must be `running` (not `stopped`, `pending`, or `terminated`).
+   Error points at `km resume <id>` for stopped/paused sandboxes.
+2. **`km lock` check** — refuses with a clear error pointing at `km unlock <id>` unless
+   `--force` is provided.
+3. **Remote SSM probe** — confirms sshd is active and `/home/sandbox/.ssh/authorized_keys`
+   exists. Failure modes:
+   - `vscodeEnabled:false` (sshd inactive AND authkeys absent): "VS Code not enabled in
+     this sandbox's profile" — rekey can't enable VS Code retroactively.
+   - sshd inactive but authkeys present: "sshd is not running" — recover via
+     `km shell <id> -- sudo systemctl start sshd`.
+   - sshd active but authkeys absent: "unexpected state" — recreate the sandbox.
+4. **Local key state** — informational classification (no failure):
+   - Local key present + remote present → normal rotation.
+   - Local key absent + remote present → cross-laptop bootstrap (the new key is your first
+     key on this machine).
+
+### Sample operator interactions
+
+**Normal rotation (post-incident):**
+
+```
+$ km vscode rekey sb-abc12345
+✓ EC2 instance running (i-0... in us-east-1)
+✓ Pre-flight check passed (sshd active, authorized_keys present)
+
+Rotating VS Code key for sb-abc12345
+  Old: SHA256:7w2fQ... (~/.km/keys/sb-abc12345)
+  New: (will be generated)
+Continue? [y/N] y
+
+✓ New keypair generated (SHA256:K9m4Z...)
+✓ Pushed to sandbox via SSM (verified — readback matches)
+✓ Local key replaced atomically (~/.km/keys/sb-abc12345)
+
+Rekey complete. Active VS Code sessions stay on the old key until reconnect.
+```
+
+**Cross-laptop bootstrap (no local key on this machine):**
+
+```
+$ km vscode rekey sb-abc12345 --yes
+✓ EC2 instance running (i-0... in us-east-1)
+✓ Pre-flight check passed (sshd active, authorized_keys present)
+✓ New keypair generated (SHA256:K9m4Z...)
+✓ Pushed to sandbox via SSM (verified — readback matches)
+✓ Local key created atomically (~/.km/keys/sb-abc12345)
+
+Rekey complete. Reconnect VS Code to pick up the new key.
+```
+
+**pre-Phase-73 sandbox (or `vscodeEnabled:false`):**
+
+```
+$ km vscode rekey sb-old00001
+✓ EC2 instance running (i-0... in us-east-1)
+✗ VS Code not enabled in this sandbox's profile (set spec.cli.vscodeEnabled: true and recreate the sandbox)
+
+Hint: this sandbox predates Phase 73 or was created with vscodeEnabled:false.
+Rekey can't enable VS Code retroactively. Run: km destroy sb-old00001 --remote --yes && km create <profile.yaml>
+```
+
+**Locked sandbox:**
+
+```
+$ km vscode rekey sb-abc12345
+✓ EC2 instance running (i-0... in us-east-1)
+✗ Sandbox is locked. Use --force to override or run: km unlock sb-abc12345
+```
+
+### What rekey does NOT change
+
+- `~/.ssh/config` — the managed `Host km-<sandbox-id>` block already points
+  `IdentityFile` at `~/.km/keys/<sandbox-id>`. Rekey overwrites the file at that path; no
+  ssh-config edit needed.
+- DDB schema, SSM Parameter Store entries, Lambda code, sidecars, infra modules — none.
+  Rekey is operator-laptop-side only with one SSM SendCommand round-trip to install the
+  new public key.
+- Active VS Code Remote-SSH sessions (see "Active VS Code sessions" above).
+
+### Atomic local commit ordering
+
+Rekey writes the new keypair to scratch paths first (`~/.km/keys/<id>.new` mode 0600 and
+`~/.km/keys/<id>.pub.new` mode 0644). After the SSM install + readback verification
+succeeds, it commits via two atomic `os.Rename` calls:
+
+1. `~/.km/keys/<id>.pub.new` → `~/.km/keys/<id>.pub`
+2. `~/.km/keys/<id>.new` → `~/.km/keys/<id>` (the private key)
+
+`.pub` first because the private key is what `IdentityFile` in `~/.ssh/config` points at.
+If step 2 fails (rare — atomic rename on POSIX), ssh keeps using the old private key and
+your existing access to the sandbox is preserved.
+
+### Operator runbook
+
+| Scenario | Recovery |
+|---|---|
+| "sandbox is not running" | `km resume <id>`, wait for `km list` to show `running`, retry rekey |
+| "Sandbox is locked" | `km unlock <id>` first, OR `km vscode rekey <id> --force` |
+| "VS Code not enabled in this sandbox's profile" | Rekey cannot help; `km destroy <id> --remote --yes && km create <profile.yaml>` with `spec.cli.vscodeEnabled: true` (the default) |
+| "sshd is not running" | `km shell <id> -- sudo systemctl start sshd`, then retry rekey |
+| "remote key install verification failed" | Inspect via `km shell <id> -- cat ~/.ssh/authorized_keys`, then `km vscode rekey <id>` to retry |
+| VS Code can't connect after rekey | Quit and reopen VS Code; the existing connection used the old key. New connections pick up the new key transparently. |
 
 ---
 
