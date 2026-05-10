@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -635,6 +636,76 @@ func TestDetectAndOpenOAuthURL_NoURL(t *testing.T) {
 
 	if openCalled {
 		t.Error("browser opener should not be called when SSM returns no URL")
+	}
+}
+
+// ---- AUTH-08: probeCodexPort primary (1455 free) ----
+
+// TestProbeCodexPort_Primary verifies that probeCodexPort returns 1455 when
+// that port is available locally (AUTH-08). The probe uses net.Listen then
+// immediately Close, so the port is not left in LISTEN state after the call.
+func TestProbeCodexPort_Primary(t *testing.T) {
+	port, err := probeCodexPort()
+	if err != nil {
+		t.Fatalf("expected nil error when port 1455 is free, got: %v", err)
+	}
+	if port != 1455 {
+		t.Errorf("expected port 1455, got %d", port)
+	}
+}
+
+// ---- AUTH-09: probeCodexPort fallback (1455 in use, 1457 free) ----
+
+// TestProbeCodexPort_Fallback verifies that probeCodexPort returns 1457 when
+// port 1455 is already bound (AUTH-09). The test binds 1455 for its duration.
+// NOTE: this test is not marked t.Parallel() because it binds a real local port.
+func TestProbeCodexPort_Fallback(t *testing.T) {
+	// Hold port 1455 to force the fallback path
+	ln, err := net.Listen("tcp", "127.0.0.1:1455")
+	if err != nil {
+		t.Skipf("cannot bind 1455 for fallback test (already in use): %v", err)
+	}
+	defer ln.Close()
+
+	port, err := probeCodexPort()
+	if err != nil {
+		t.Fatalf("expected nil error when 1457 is free, got: %v", err)
+	}
+	if port != 1457 {
+		t.Errorf("expected fallback port 1457, got %d", port)
+	}
+}
+
+// ---- AUTH-10: probeCodexPort both ports in use ----
+
+// TestProbeCodexPort_BothInUse verifies that probeCodexPort returns an error
+// when both 1455 and 1457 are already bound (AUTH-10). The test binds both.
+// NOTE: this test is not marked t.Parallel() because it binds real local ports.
+func TestProbeCodexPort_BothInUse(t *testing.T) {
+	ln1, err := net.Listen("tcp", "127.0.0.1:1455")
+	if err != nil {
+		t.Skipf("cannot bind 1455 for both-in-use test: %v", err)
+	}
+	defer ln1.Close()
+
+	ln2, err := net.Listen("tcp", "127.0.0.1:1457")
+	if err != nil {
+		t.Skipf("cannot bind 1457 for both-in-use test (already in use): %v", err)
+	}
+	defer ln2.Close()
+
+	_, err = probeCodexPort()
+	if err == nil {
+		t.Fatal("expected error when both 1455 and 1457 are in use, got nil")
+	}
+	if !strings.Contains(err.Error(), "1455") {
+		t.Errorf("expected '1455' in error message, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "1457") {
+		t.Errorf("expected '1457' in error message, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "in use locally") {
+		t.Errorf("expected 'in use locally' in error message, got: %v", err)
 	}
 }
 

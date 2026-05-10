@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"runtime"
@@ -233,6 +234,26 @@ func openInBrowser(url string) error {
 // ships in Plan 02 (Wave 2) and replaces this body.
 func runAgentAuthCodex(_ context.Context, _ *config.Config, _ SandboxFetcher, _ ShellExecFunc, _ SSMSendAPI, _ string) error {
 	return fmt.Errorf("--codex auth flow ships in Plan 02 (Wave 2) — see .planning/phases/78-km-agent-auth-ssm-mediated-oauth-login-for-claude-and-codex-clis-inside-sandboxes-paste-code-for-claude-port-forward-1455-for-codex/78-02-PLAN.md")
+}
+
+// probeCodexPort tries 1455 first (codex's hardcoded default), then 1457
+// (codex's own fallback). Returns the first available local port, or an error
+// listing both as occupied.
+//
+// Codex CLI cannot be told which port to use — these are the only two it
+// will ever bind on the sandbox side. Confirmed in openai/codex
+// codex-rs/login/src/server.rs (DEFAULT_PORT=1455, FALLBACK_PORT=1457).
+func probeCodexPort() (int, error) {
+	for _, port := range []int{1455, 1457} {
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err == nil {
+			ln.Close()
+			return port, nil
+		}
+	}
+	return 0, fmt.Errorf(
+		"ports 1455 and 1457 are both in use locally — kill the local listener and retry " +
+			"(codex CLI hardcodes both, no override flag exists)")
 }
 
 // buildClaudeAuthArgs composes the exact 'claude auth login ...' command string
