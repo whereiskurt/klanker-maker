@@ -1605,3 +1605,29 @@ Plans:
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 75 to break down)
+
+### Phase 76: km vscode rekey: rotate ed25519 keypair for an existing sandbox
+
+**Goal:** Add `km vscode rekey <sandbox-id>` to rotate the per-sandbox VS Code Remote-SSH keypair on an already-running sandbox without `km destroy && km create`. Solves three operator pain points surfaced by Phase 73 in production:
+
+1. **Baked-AMI relaunch carries stale authorized_keys** — `km shell --learn --ami` snapshots the EC2 instance mid-session, capturing `/home/sandbox/.ssh/authorized_keys` from the bake-source sandbox. On relaunch from that AMI, cloud-init may mark itself "done" and skip the userdata block that writes the new pubkey, leaving the old key in place. (This is exactly the failure mode Phase 56.2 fixed for cgroup setup; the architectural fix — relocating the authorized_keys write into `km-bootstrap.service` — is deferred to a follow-up phase.)
+2. **Cross-laptop portability** — Phase 73 keys live on the creation machine only. An operator who wants to `km vscode start` from a different laptop currently has to manually copy `~/.km/keys/<sandbox-id>*`. Rekey gives them a path to issue themselves a fresh key without that copy.
+3. **Post-incident rotation** — if a private key is suspected compromised, the operator can rotate without rebuilding the sandbox.
+
+**Implementation:**
+
+- New subcommand under existing `km vscode` group; mirrors keypair-generation logic from `km create` (ed25519, written to `~/.km/keys/<sandbox-id>` mode 0600 + `<sandbox-id>.pub` mode 0644).
+- Atomic local replace: write the new keypair to `<path>.new`, then `os.Rename` over the old path so a partial failure doesn't brick local access.
+- Push the new pubkey to the sandbox via SSM SendCommand: `cat > /home/sandbox/.ssh/authorized_keys` (overwrite, not append — matches the existing userdata write pattern); `chmod 600`; `chown sandbox:sandbox`; `restorecon -R -v /home/sandbox/.ssh` (AL2023 SELinux mandatory). No sshd restart — sshd reads authorized_keys per-connection.
+- **Order matters:** push pubkey to sandbox FIRST, only replace local keypair on success. The reverse order can brick access if the SSM step fails.
+- Pre-flight: refuse if the sandbox isn't in `running` state (no SSM channel). Helpful error pointing at `km resume <id>`.
+- Active VS Code Remote-SSH sessions stay connected (sshd doesn't re-read authorized_keys for already-authenticated sessions); reconnect picks up the new key transparently because the local IdentityFile path under `~/.ssh/config` is unchanged.
+- No userdata template change. No DDB schema change. No new SSM parameters. No infra/modules change.
+
+**Requirements**: Phase 73 must be in place (per-sandbox keypair convention + ssh-config Host block managed in `~/.ssh/config`). Existing pre-Phase-73 sandboxes (no key on disk) should be detected and emit a clear error pointing at `km destroy && km create`.
+
+**Depends on:** Phase 75
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 76 to break down)
