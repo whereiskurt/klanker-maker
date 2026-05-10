@@ -1627,7 +1627,10 @@ Plans:
 **Requirements**: Phase 73 must be in place (per-sandbox keypair convention + ssh-config Host block managed in `~/.ssh/config`). Existing pre-Phase-73 sandboxes (no key on disk) should be detected and emit a clear error pointing at `km destroy && km create`.
 
 **Depends on:** Phase 75
-**Plans:** 0 plans
+**Plans:** 4 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 76 to break down)
+- [ ] 76-00-PLAN.md — Wave 0 stub seeding: append 16 TestVSCodeRekey_* failing-stub tests to vscode_test.go
+- [ ] 76-01-PLAN.md — Wave 1: register `km vscode rekey` cobra command + four pre-flight gates (EC2 running, lock with --force, SSM probe via parseVSCodeStatus); turn 8 stubs green
+- [ ] 76-02-PLAN.md — Wave 2: complete runVSCodeRekey (key classification, prompt, GenerateAndWrite to scratch, SSM install + readback verify, atomic .pub-first rename, output markers); turn remaining 8 stubs green
+- [ ] 76-03-PLAN.md — Wave 2 (parallel): documentation in CLAUDE.md and docs/vscode.md (Rotating a sandbox key section, three pain-point scenarios, runbook table)

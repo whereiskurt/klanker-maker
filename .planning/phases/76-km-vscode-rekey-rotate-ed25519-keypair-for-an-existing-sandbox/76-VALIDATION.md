@@ -2,9 +2,10 @@
 phase: 76
 slug: km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox
 status: draft
-nyquist_compliant: false
-wave_0_complete: false
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-05-09
+revised: 2026-05-09
 ---
 
 # Phase 76 — Validation Strategy
@@ -41,26 +42,28 @@ created: 2026-05-09
 | 76-00-01 | 00 | 0 | Test stubs for all rekey behaviors | unit | `go test ./internal/app/cmd/ -run 'TestVSCodeRekey' -timeout 30s` | ❌ W0 | ⬜ pending |
 | 76-01-01 | 01 | 1 | `newVSCodeRekeyCmd` registered under `km vscode` | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_CommandRegistered` | ❌ W0 | ⬜ pending |
 | 76-01-02 | 01 | 1 | `--force` and `--yes` flags accessible on rekey cobra command | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_FlagsExist` | ❌ W0 | ⬜ pending |
-| 76-02-01 | 02 | 2 | Pre-flight: EC2 not running → error pointing at `km resume` | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_NotRunning` | ❌ W0 | ⬜ pending |
-| 76-02-02 | 02 | 2 | Pre-flight: locked sandbox without `--force` → error pointing at `km unlock` | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_Locked_NoForce` | ❌ W0 | ⬜ pending |
-| 76-02-03 | 02 | 2 | Pre-flight: `--force` skips lock check entirely | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_Locked_WithForce` | ❌ W0 | ⬜ pending |
-| 76-02-04 | 02 | 2 | Pre-flight: `vscodeEnabled:false` (sshd+authkeys both absent) → vscode-not-enabled error (covers pre-Phase-73) | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_VSCodeDisabled` | ❌ W0 | ⬜ pending |
-| 76-02-05 | 02 | 2 | Pre-flight: sshd active + authkeys absent → unexpected-state error (local-key-present + remote-absent inconsistent case) | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_Inconsistent` | ❌ W0 | ⬜ pending |
-| 76-02-06 | 02 | 2 | Pre-flight: sshd inactive + authkeys present → sshd-not-running error | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_SSHDDown` | ❌ W0 | ⬜ pending |
-| 76-03-01 | 03 | 3 | Local-key state: local present + remote present → normal rotation succeeds | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_NormalRotation` | ❌ W0 | ⬜ pending |
-| 76-03-02 | 03 | 3 | Local-key state: local absent + remote present → cross-laptop bootstrap succeeds | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_CrossLaptop` | ❌ W0 | ⬜ pending |
-| 76-03-03 | 03 | 3 | SSM verification mismatch → hard error, local key untouched | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_VerifyMismatch` | ❌ W0 | ⬜ pending |
-| 76-03-04 | 03 | 3 | Atomic rename ordering: `.pub.new`→`.pub` then `.new`→priv | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_RenameOrdering` | ❌ W0 | ⬜ pending |
-| 76-03-05 | 03 | 3 | Pre-existing `.new` / `.pub.new` scratch files unconditionally overwritten | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_OverwritesScratch` | ❌ W0 | ⬜ pending |
-| 76-04-01 | 04 | 4 | Confirmation prompt: `--yes` skips prompt, no stdin read | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_YesFlag` | ❌ W0 | ⬜ pending |
-| 76-04-02 | 04 | 4 | Confirmation prompt: "n" answer aborts cleanly (exit 0, no key changes) | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_ConfirmNo` | ❌ W0 | ⬜ pending |
-| 76-04-03 | 04 | 4 | Output: `✓` step markers printed in correct order | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_OutputMarkers` | ❌ W0 | ⬜ pending |
-| 76-05-01 | 05 | 5 | Docs: `CLAUDE.md` lists `km vscode rekey` with flags | manual | `grep -q 'km vscode rekey' CLAUDE.md` | ❌ W0 | ⬜ pending |
-| 76-05-02 | 05 | 5 | Docs: `docs/vscode.md` covers all three pain-point scenarios + active-session note | manual | `grep -q 'rekey' docs/vscode.md && grep -q 'old key until reconnect' docs/vscode.md` | ❌ W0 | ⬜ pending |
+| 76-01-03 | 01 | 1 | Pre-flight: EC2 not running → error pointing at `km resume` | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_NotRunning` | ❌ W0 | ⬜ pending |
+| 76-01-04 | 01 | 1 | Pre-flight: locked sandbox without `--force` → error pointing at `km unlock` | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_Locked_NoForce` | ❌ W0 | ⬜ pending |
+| 76-01-05 | 01 | 1 | Pre-flight: `--force` skips lock check entirely | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_Locked_WithForce` | ❌ W0 | ⬜ pending |
+| 76-01-06 | 01 | 1 | Pre-flight: `vscodeEnabled:false` (sshd+authkeys both absent) → vscode-not-enabled error (covers pre-Phase-73) | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_VSCodeDisabled` | ❌ W0 | ⬜ pending |
+| 76-01-07 | 01 | 1 | Pre-flight: sshd active + authkeys absent → unexpected-state error (local-key-present + remote-absent inconsistent case) | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_Inconsistent` | ❌ W0 | ⬜ pending |
+| 76-01-08 | 01 | 1 | Pre-flight: sshd inactive + authkeys present → sshd-not-running error | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_SSHDDown` | ❌ W0 | ⬜ pending |
+| 76-02-01 | 02 | 2 | Local-key state: local present + remote present → normal rotation succeeds | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_NormalRotation` | ❌ W0 | ⬜ pending |
+| 76-02-02 | 02 | 2 | Local-key state: local absent + remote present → cross-laptop bootstrap succeeds | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_CrossLaptop` | ❌ W0 | ⬜ pending |
+| 76-02-03 | 02 | 2 | SSM verification mismatch → hard error, local key untouched | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_VerifyMismatch` | ❌ W0 | ⬜ pending |
+| 76-02-04 | 02 | 2 | Atomic rename ordering: `.pub.new`→`.pub` then `.new`→priv | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_RenameOrdering` | ❌ W0 | ⬜ pending |
+| 76-02-05 | 02 | 2 | Pre-existing `.new` / `.pub.new` scratch files unconditionally overwritten | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_OverwritesScratch` | ❌ W0 | ⬜ pending |
+| 76-02-06 | 02 | 2 | Confirmation prompt: `--yes` skips prompt, no stdin read | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_YesFlag` | ❌ W0 | ⬜ pending |
+| 76-02-07 | 02 | 2 | Confirmation prompt: "n" answer aborts cleanly (exit 0, no key changes) | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_ConfirmNo` | ❌ W0 | ⬜ pending |
+| 76-02-08 | 02 | 2 | Output: `✓` step markers printed in correct order | unit | `go test ./internal/app/cmd/ -run TestVSCodeRekey_OutputMarkers` | ❌ W0 | ⬜ pending |
+| 76-03-01 | 03 | 2 | Docs: `CLAUDE.md` lists `km vscode rekey` with flags | manual | `grep -q 'km vscode rekey' CLAUDE.md` | ❌ W0 | ⬜ pending |
+| 76-03-02 | 03 | 2 | Docs: `docs/vscode.md` covers all three pain-point scenarios + active-session note | manual | `grep -q 'rekey' docs/vscode.md && grep -q 'old key until reconnect' docs/vscode.md` | ❌ W0 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
-**Sampling continuity:** No 3 consecutive tasks lack automated verification. Tasks 76-05-01/02 (docs) use grep-based content checks as their automated proxy.
+**Sampling continuity:** No 3 consecutive tasks lack automated verification. Tasks 76-03-01/02 (docs) use grep-based content checks as their automated proxy.
+
+**Wave structure:** Phase 76 consolidated to 4 plans / 3 waves (originally drafted as 5 plans / 5 waves). Plan 03 (docs) runs in Wave 2 in parallel with Plan 02 (implementation) because docs only depend on the locked CLI surface from Plan 01 (Wave 1).
 
 ---
 
@@ -87,11 +90,11 @@ created: 2026-05-09
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references (single test stubs file append)
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 30s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (single test stubs file append)
+- [x] No watch-mode flags
+- [x] Feedback latency < 30s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** ready for execution
