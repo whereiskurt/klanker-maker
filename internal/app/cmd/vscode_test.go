@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/sshkey"
 )
 
 // ---- Mock SSM for vscode tests ----
@@ -44,6 +45,95 @@ func (m *vsCodeSSMMock) GetCommandInvocation(_ context.Context, _ *ssm.GetComman
 		Status:                ssmtypes.CommandInvocationStatusSuccess,
 		StandardOutputContent: awssdk.String(m.output),
 	}, nil
+}
+
+// sequencedSSMMock returns a different output on each successive GetCommandInvocation
+// call. Used by rekey tests that need distinct outputs for the pre-flight call vs. the
+// install call.
+type sequencedSSMMock struct {
+	outputs []string
+	calls   int
+}
+
+func (m *sequencedSSMMock) SendCommand(_ context.Context, _ *ssm.SendCommandInput, _ ...func(*ssm.Options)) (*ssm.SendCommandOutput, error) {
+	return &ssm.SendCommandOutput{Command: &ssmtypes.Command{CommandId: awssdk.String("cmd-rekey-test")}}, nil
+}
+
+func (m *sequencedSSMMock) GetCommandInvocation(_ context.Context, _ *ssm.GetCommandInvocationInput, _ ...func(*ssm.Options)) (*ssm.GetCommandInvocationOutput, error) {
+	out := m.outputs[m.calls]
+	m.calls++
+	return &ssm.GetCommandInvocationOutput{Status: ssmtypes.CommandInvocationStatusSuccess, StandardOutputContent: awssdk.String(out)}, nil
+}
+
+// rekeyInstallSpyMock is a sequencedSSMMock variant that captures the install script
+// (sent on the second SendCommand call) and dynamically builds the readback response so
+// it matches the pubkey GenerateAndWrite produced for THIS test run.
+type rekeyInstallSpyMock struct {
+	preflightOutput string
+	calls           int
+	capturedScript  string
+}
+
+func (m *rekeyInstallSpyMock) SendCommand(_ context.Context, in *ssm.SendCommandInput, _ ...func(*ssm.Options)) (*ssm.SendCommandOutput, error) {
+	if m.calls == 1 {
+		if in.Parameters != nil {
+			if cmds := in.Parameters["commands"]; len(cmds) > 0 {
+				m.capturedScript = cmds[0]
+			}
+		}
+	}
+	return &ssm.SendCommandOutput{Command: &ssmtypes.Command{CommandId: awssdk.String("cmd-rekey-spy")}}, nil
+}
+
+func (m *rekeyInstallSpyMock) GetCommandInvocation(_ context.Context, _ *ssm.GetCommandInvocationInput, _ ...func(*ssm.Options)) (*ssm.GetCommandInvocationOutput, error) {
+	var out string
+	if m.calls == 0 {
+		out = m.preflightOutput
+	} else {
+		// Build readback containing the pubkey embedded in the captured install script.
+		pubLine := extractPubkeyFromInstallScript(m.capturedScript)
+		out = "=== READBACK ===\n" + pubLine + "\n"
+	}
+	m.calls++
+	return &ssm.GetCommandInvocationOutput{Status: ssmtypes.CommandInvocationStatusSuccess, StandardOutputContent: awssdk.String(out)}, nil
+}
+
+// extractPubkeyFromInstallScript returns the single pubkey line embedded in the
+// install script's `cat > authorized_keys << 'KEY' ... KEY` heredoc.
+func extractPubkeyFromInstallScript(s string) string {
+	const startMarker = "<< 'KEY'\n"
+	const endMarker = "\nKEY\n"
+	si := strings.Index(s, startMarker)
+	if si < 0 {
+		return ""
+	}
+	rest := s[si+len(startMarker):]
+	ei := strings.Index(rest, endMarker)
+	if ei < 0 {
+		return ""
+	}
+	return rest[:ei]
+}
+
+// seedRekeyTestKeys writes a real ed25519 keypair to ~/.km/keys/<id>{,.pub} via
+// sshkey.GenerateAndWrite and returns the private key bytes and pubkey line for verification.
+func seedRekeyTestKeys(t *testing.T, home, sandboxID string) (privBytes []byte, pubLine string) {
+	t.Helper()
+	keysDir := filepath.Join(home, ".km", "keys")
+	if err := os.MkdirAll(keysDir, 0o700); err != nil {
+		t.Fatalf("mkdir keys: %v", err)
+	}
+	priv := filepath.Join(keysDir, sandboxID)
+	pub := filepath.Join(keysDir, sandboxID+".pub")
+	line, err := sshkey.GenerateAndWrite(priv, pub, "km-"+sandboxID)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	b, err := os.ReadFile(priv)
+	if err != nil {
+		t.Fatalf("read seeded priv: %v", err)
+	}
+	return b, line
 }
 
 // ---- Mock fetcher for vscode tests ----
@@ -418,10 +508,11 @@ func TestVSCodeRekey_Locked_NoForce(t *testing.T) {
 // TestVSCodeRekey_Locked_WithForce verifies that runVSCodeRekey skips the lock
 // check and proceeds to SSM pre-flight when --force is set.
 func TestVSCodeRekey_Locked_WithForce(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
 	ctx := context.Background()
 	cfg := &config.Config{}
 	fetcher := newVSCodeEC2Sandbox("sb-abc123")
-	mockSSM := &vsCodeSSMMock{output: healthySSMOutput}
 	callCount := 0
 	origChecker := checkSandboxLock
 	defer func() { checkSandboxLock = origChecker }()
@@ -429,9 +520,15 @@ func TestVSCodeRekey_Locked_WithForce(t *testing.T) {
 		callCount++
 		return fmt.Errorf("sandbox is locked — run 'km unlock' first")
 	}
+
+	// Pre-seed local keys so rekey can proceed past classification.
+	seedRekeyTestKeys(t, homeDir, "sb-abc123")
+
+	// Use the spy mock so the install call returns a valid readback.
+	spyMock := &rekeyInstallSpyMock{preflightOutput: healthySSMOutput}
 	var gotErr error
 	captureStdout(func() {
-		gotErr = runVSCodeRekey(ctx, cfg, fetcher, newRunningEC2Mock(), mockSSM, "sb-abc123", true /*force*/, true /*yes*/)
+		gotErr = runVSCodeRekey(ctx, cfg, fetcher, newRunningEC2Mock(), spyMock, "sb-abc123", true /*force*/, true /*yes*/)
 	})
 	if gotErr != nil {
 		t.Fatalf("expected nil with --force, got: %v", gotErr)
@@ -505,49 +602,34 @@ func TestVSCodeRekey_SSHDDown(t *testing.T) {
 // TestVSCodeRekey_NormalRotation verifies that runVSCodeRekey succeeds when
 // local keys already exist and the sandbox is healthy. The private key content
 // should change after rotation.
-// Uses a sequenced SSM mock: first call returns healthySSMOutput (pre-flight),
-// second call returns the readback of the new pubkey (verify).
+// Uses a rekeyInstallSpyMock: first call returns healthySSMOutput (pre-flight),
+// second call captures the install script and returns the readback dynamically.
 func TestVSCodeRekey_NormalRotation(t *testing.T) {
-	t.Skip("TODO Wave 2 (Plan 76-02): implement normal rotation (local key present + remote present)")
-	// t.Setenv("HOME", t.TempDir())
-	// ctx := context.Background()
-	// cfg := &config.Config{}
-	// fetcher := newVSCodeEC2Sandbox("sb-abc123")
-	//
-	// // Pre-seed ~/.km/keys/sb-abc123 and .pub with sentinel content.
-	// homeDir, _ := os.UserHomeDir()
-	// keysDir := filepath.Join(homeDir, ".km", "keys")
-	// _ = os.MkdirAll(keysDir, 0o700)
-	// privPath := filepath.Join(keysDir, "sb-abc123")
-	// pubPath := filepath.Join(keysDir, "sb-abc123.pub")
-	// _ = os.WriteFile(privPath, []byte("old-private-key-sentinel"), 0o600)
-	// _ = os.WriteFile(pubPath, []byte("ssh-ed25519 AAAA old-pub-sentinel km-sb-abc123"), 0o644)
-	// origPrivContent, _ := os.ReadFile(privPath)
-	//
-	// // Sequenced SSM mock: call 1 = pre-flight, call 2 = readback verify.
-	// type sequencedSSMMock struct {
-	//     outputs []string
-	//     calls   int
-	// }
-	// // func (m *sequencedSSMMock) SendCommand(ctx context.Context, in *ssm.SendCommandInput, opts ...func(*ssm.Options)) (*ssm.SendCommandOutput, error) {
-	// //     return &ssm.SendCommandOutput{Command: &ssmtypes.Command{CommandId: awssdk.String("cmd-seq-test")}}, nil
-	// // }
-	// // func (m *sequencedSSMMock) GetCommandInvocation(ctx context.Context, in *ssm.GetCommandInvocationInput, opts ...func(*ssm.Options)) (*ssm.GetCommandInvocationOutput, error) {
-	// //     out := m.outputs[m.calls]
-	// //     m.calls++
-	// //     return &ssm.GetCommandInvocationOutput{Status: ssmtypes.CommandInvocationStatusSuccess, StandardOutputContent: awssdk.String(out)}, nil
-	// // }
-	// // expectedReadback := "=== authkeys content ===\n" + <new-pubkey-line> + "\n"
-	// // mockSSM := &sequencedSSMMock{outputs: []string{healthySSMOutput, expectedReadback}}
-	// //
-	// // err := runVSCodeRekey(ctx, cfg, fetcher, nil, mockSSM, "sb-abc123", false, true)
-	// // if err != nil {
-	// //     t.Fatalf("expected nil error for normal rotation, got: %v", err)
-	// // }
-	// // newPrivContent, _ := os.ReadFile(privPath)
-	// // if bytes.Equal(origPrivContent, newPrivContent) {
-	// //     t.Error("expected private key content to change after rotation")
-	// // }
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	ctx := context.Background()
+	cfg := &config.Config{}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+
+	// Pre-seed ~/.km/keys/sb-abc123 and .pub with a real ed25519 keypair.
+	origPrivBytes, _ := seedRekeyTestKeys(t, homeDir, "sb-abc123")
+	privPath := filepath.Join(homeDir, ".km", "keys", "sb-abc123")
+
+	spyMock := &rekeyInstallSpyMock{preflightOutput: healthySSMOutput}
+	var gotErr error
+	captureStdout(func() {
+		gotErr = runVSCodeRekey(ctx, cfg, fetcher, newRunningEC2Mock(), spyMock, "sb-abc123", false, true)
+	})
+	if gotErr != nil {
+		t.Fatalf("expected nil error for normal rotation, got: %v", gotErr)
+	}
+	newPrivBytes, err := os.ReadFile(privPath)
+	if err != nil {
+		t.Fatalf("read private key after rotation: %v", err)
+	}
+	if bytes.Equal(origPrivBytes, newPrivBytes) {
+		t.Error("expected private key content to change after rotation")
+	}
 }
 
 // TestVSCodeRekey_CrossLaptop verifies that runVSCodeRekey succeeds when the
@@ -555,39 +637,44 @@ func TestVSCodeRekey_NormalRotation(t *testing.T) {
 // ~/.km/keys/sb-abc123 (mode 0600) and ~/.km/keys/sb-abc123.pub (mode 0644)
 // must exist.
 func TestVSCodeRekey_CrossLaptop(t *testing.T) {
-	t.Skip("TODO Wave 2 (Plan 76-02): implement cross-laptop bootstrap (local key absent + remote present)")
-	// t.Setenv("HOME", t.TempDir())
-	// ctx := context.Background()
-	// cfg := &config.Config{}
-	// fetcher := newVSCodeEC2Sandbox("sb-abc123")
-	//
-	// homeDir, _ := os.UserHomeDir()
-	// privPath := filepath.Join(homeDir, ".km", "keys", "sb-abc123")
-	// pubPath := filepath.Join(homeDir, ".km", "keys", "sb-abc123.pub")
-	//
-	// // Keys are deliberately absent — no pre-seeding.
-	//
-	// // Sequenced SSM mock: call 1 = pre-flight, call 2 = readback verify.
-	// // mockSSM := &sequencedSSMMock{outputs: []string{healthySSMOutput, expectedReadback}}
-	// //
-	// // err := runVSCodeRekey(ctx, cfg, fetcher, nil, mockSSM, "sb-abc123", false, true)
-	// // if err != nil {
-	// //     t.Fatalf("expected nil error for cross-laptop bootstrap, got: %v", err)
-	// // }
-	// // privInfo, err := os.Stat(privPath)
-	// // if err != nil {
-	// //     t.Fatalf("expected private key to exist at %s: %v", privPath, err)
-	// // }
-	// // if privInfo.Mode().Perm() != 0o600 {
-	// //     t.Errorf("expected private key mode 0600; got %o", privInfo.Mode().Perm())
-	// // }
-	// // pubInfo, err := os.Stat(pubPath)
-	// // if err != nil {
-	// //     t.Fatalf("expected public key to exist at %s: %v", pubPath, err)
-	// // }
-	// // if pubInfo.Mode().Perm() != 0o644 {
-	// //     t.Errorf("expected public key mode 0644; got %o", pubInfo.Mode().Perm())
-	// // }
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	ctx := context.Background()
+	cfg := &config.Config{}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+
+	// Keys are deliberately absent — no pre-seeding. keysDir must exist though
+	// so GenerateAndWrite (called during rekey) can create the keys dir.
+	privPath := filepath.Join(homeDir, ".km", "keys", "sb-abc123")
+	pubPath := filepath.Join(homeDir, ".km", "keys", "sb-abc123.pub")
+
+	spyMock := &rekeyInstallSpyMock{preflightOutput: healthySSMOutput}
+	var out string
+	var gotErr error
+	out = captureStdout(func() {
+		gotErr = runVSCodeRekey(ctx, cfg, fetcher, newRunningEC2Mock(), spyMock, "sb-abc123", false, true)
+	})
+	if gotErr != nil {
+		t.Fatalf("expected nil error for cross-laptop bootstrap, got: %v", gotErr)
+	}
+
+	privInfo, err := os.Stat(privPath)
+	if err != nil {
+		t.Fatalf("expected private key to exist at %s: %v", privPath, err)
+	}
+	if privInfo.Mode().Perm() != 0o600 {
+		t.Errorf("expected private key mode 0600; got %o", privInfo.Mode().Perm())
+	}
+	pubInfo, err := os.Stat(pubPath)
+	if err != nil {
+		t.Fatalf("expected public key to exist at %s: %v", pubPath, err)
+	}
+	if pubInfo.Mode().Perm() != 0o644 {
+		t.Errorf("expected public key mode 0644; got %o", pubInfo.Mode().Perm())
+	}
+	if !strings.Contains(out, "Local key created atomically") {
+		t.Errorf("expected 'Local key created atomically' in output for cross-laptop; got: %s", out)
+	}
 }
 
 // TestVSCodeRekey_VerifyMismatch verifies that runVSCodeRekey returns an error
@@ -595,45 +682,47 @@ func TestVSCodeRekey_CrossLaptop(t *testing.T) {
 // SSM readback returns a different pubkey than what was generated. Local key files
 // must remain unchanged.
 func TestVSCodeRekey_VerifyMismatch(t *testing.T) {
-	t.Skip("TODO Wave 2 (Plan 76-02): implement verification-mismatch error path")
-	// t.Setenv("HOME", t.TempDir())
-	// ctx := context.Background()
-	// cfg := &config.Config{}
-	// fetcher := newVSCodeEC2Sandbox("sb-abc123")
-	//
-	// homeDir, _ := os.UserHomeDir()
-	// keysDir := filepath.Join(homeDir, ".km", "keys")
-	// _ = os.MkdirAll(keysDir, 0o700)
-	// privPath := filepath.Join(keysDir, "sb-abc123")
-	// pubPath := filepath.Join(keysDir, "sb-abc123.pub")
-	// origPriv := []byte("original-private-key-sentinel")
-	// origPub := []byte("ssh-ed25519 AAAA original-pub-sentinel km-sb-abc123")
-	// _ = os.WriteFile(privPath, origPriv, 0o600)
-	// _ = os.WriteFile(pubPath, origPub, 0o644)
-	//
-	// // Readback returns a DIFFERENT pubkey (mismatch).
-	// mismatchReadback := "=== authkeys content ===\nssh-ed25519 AAAA different-key km-sb-abc123\n"
-	// // mockSSM := &sequencedSSMMock{outputs: []string{healthySSMOutput, mismatchReadback}}
-	// //
-	// // err := runVSCodeRekey(ctx, cfg, fetcher, nil, mockSSM, "sb-abc123", false, true)
-	// // if err == nil {
-	// //     t.Fatal("expected error for verification mismatch, got nil")
-	// // }
-	// // if !strings.Contains(err.Error(), "verification failed") {
-	// //     t.Errorf("error missing 'verification failed': %v", err)
-	// // }
-	// // if !strings.Contains(err.Error(), "Old key still active locally") {
-	// //     t.Errorf("error missing 'Old key still active locally': %v", err)
-	// // }
-	// // // Local files must be unchanged.
-	// // gotPriv, _ := os.ReadFile(privPath)
-	// // if !bytes.Equal(gotPriv, origPriv) {
-	// //     t.Error("expected private key file to be unchanged after mismatch")
-	// // }
-	// // gotPub, _ := os.ReadFile(pubPath)
-	// // if !bytes.Equal(gotPub, origPub) {
-	// //     t.Error("expected public key file to be unchanged after mismatch")
-	// // }
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	ctx := context.Background()
+	cfg := &config.Config{}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+
+	origPrivBytes, _ := seedRekeyTestKeys(t, homeDir, "sb-abc123")
+	keysDir := filepath.Join(homeDir, ".km", "keys")
+	privPath := filepath.Join(keysDir, "sb-abc123")
+	pubPath := filepath.Join(keysDir, "sb-abc123.pub")
+	origPubBytes, _ := os.ReadFile(pubPath)
+
+	// Readback returns a DIFFERENT pubkey (mismatch).
+	mismatchReadback := "=== READBACK ===\nssh-ed25519 AAAA wrong-key km-bogus\n"
+	mockSSM := &sequencedSSMMock{outputs: []string{healthySSMOutput, mismatchReadback}}
+
+	var gotErr error
+	captureStdout(func() {
+		gotErr = runVSCodeRekey(ctx, cfg, fetcher, newRunningEC2Mock(), mockSSM, "sb-abc123", false, true)
+	})
+	if gotErr == nil {
+		t.Fatal("expected error for verification mismatch, got nil")
+	}
+	if !strings.Contains(gotErr.Error(), "verification failed") {
+		t.Errorf("error missing 'verification failed': %v", gotErr)
+	}
+	if !strings.Contains(gotErr.Error(), "Old key still active locally") {
+		t.Errorf("error missing 'Old key still active locally': %v", gotErr)
+	}
+	if !strings.Contains(gotErr.Error(), "km vscode rekey") {
+		t.Errorf("error missing 'km vscode rekey' retry hint: %v", gotErr)
+	}
+	// Local files must be unchanged.
+	gotPriv, _ := os.ReadFile(privPath)
+	if !bytes.Equal(gotPriv, origPrivBytes) {
+		t.Error("expected private key file to be unchanged after mismatch")
+	}
+	gotPub, _ := os.ReadFile(pubPath)
+	if !bytes.Equal(gotPub, origPubBytes) {
+		t.Error("expected public key file to be unchanged after mismatch")
+	}
 }
 
 // TestVSCodeRekey_RenameOrdering verifies the atomic rename sequence:
@@ -641,157 +730,172 @@ func TestVSCodeRekey_VerifyMismatch(t *testing.T) {
 // End-state assertion: scratch files (.pub.new, .new) no longer exist; the
 // committed .pub and private key match what GenerateAndWrite produced.
 func TestVSCodeRekey_RenameOrdering(t *testing.T) {
-	t.Skip("TODO Wave 2 (Plan 76-02): implement atomic rename ordering verification")
-	// t.Setenv("HOME", t.TempDir())
-	// ctx := context.Background()
-	// cfg := &config.Config{}
-	// fetcher := newVSCodeEC2Sandbox("sb-abc123")
-	//
-	// homeDir, _ := os.UserHomeDir()
-	// keysDir := filepath.Join(homeDir, ".km", "keys")
-	// _ = os.MkdirAll(keysDir, 0o700)
-	// privPath := filepath.Join(keysDir, "sb-abc123")
-	// pubPath := filepath.Join(keysDir, "sb-abc123.pub")
-	// privNewPath := filepath.Join(keysDir, "sb-abc123.new")
-	// pubNewPath := filepath.Join(keysDir, "sb-abc123.pub.new")
-	// _ = os.WriteFile(privPath, []byte("old-private-sentinel"), 0o600)
-	// _ = os.WriteFile(pubPath, []byte("ssh-ed25519 AAAA old-pub-sentinel km-sb-abc123"), 0o644)
-	//
-	// // Run a successful rekey.
-	// // mockSSM := &sequencedSSMMock{outputs: []string{healthySSMOutput, expectedReadback}}
-	// // err := runVSCodeRekey(ctx, cfg, fetcher, nil, mockSSM, "sb-abc123", false, true)
-	// // if err != nil {
-	// //     t.Fatalf("expected nil error, got: %v", err)
-	// // }
-	// // // Scratch files must be gone.
-	// // if _, err := os.Stat(privNewPath); !os.IsNotExist(err) {
-	// //     t.Error("expected .new scratch file to be gone after rename")
-	// // }
-	// // if _, err := os.Stat(pubNewPath); !os.IsNotExist(err) {
-	// //     t.Error("expected .pub.new scratch file to be gone after rename")
-	// // }
-	// // // Committed files must contain fresh content.
-	// // gotPriv, _ := os.ReadFile(privPath)
-	// // if bytes.Equal(gotPriv, []byte("old-private-sentinel")) {
-	// //     t.Error("expected private key to be updated after rename, still shows sentinel")
-	// // }
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	ctx := context.Background()
+	cfg := &config.Config{}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+
+	seedRekeyTestKeys(t, homeDir, "sb-abc123")
+	keysDir := filepath.Join(homeDir, ".km", "keys")
+	privPath := filepath.Join(keysDir, "sb-abc123")
+	pubPath := filepath.Join(keysDir, "sb-abc123.pub")
+	privNewPath := filepath.Join(keysDir, "sb-abc123.new")
+	pubNewPath := filepath.Join(keysDir, "sb-abc123.pub.new")
+
+	spyMock := &rekeyInstallSpyMock{preflightOutput: healthySSMOutput}
+	var gotErr error
+	captureStdout(func() {
+		gotErr = runVSCodeRekey(ctx, cfg, fetcher, newRunningEC2Mock(), spyMock, "sb-abc123", false, true)
+	})
+	if gotErr != nil {
+		t.Fatalf("expected nil error, got: %v", gotErr)
+	}
+
+	// Scratch files must be gone.
+	if _, err := os.Stat(privNewPath); !os.IsNotExist(err) {
+		t.Error("expected .new scratch file to be gone after rename")
+	}
+	if _, err := os.Stat(pubNewPath); !os.IsNotExist(err) {
+		t.Error("expected .pub.new scratch file to be gone after rename")
+	}
+
+	// Committed .pub must contain the pubkey from the install script.
+	installedPubKey := extractPubkeyFromInstallScript(spyMock.capturedScript)
+	gotPub, _ := os.ReadFile(pubPath)
+	// pubPath content has a trailing newline (GenerateAndWrite writes pubLine+"\n")
+	gotPubTrimmed := strings.TrimRight(string(gotPub), "\n")
+	if gotPubTrimmed != installedPubKey {
+		t.Errorf("committed .pub (%q) does not match installed pubkey (%q)", gotPubTrimmed, installedPubKey)
+	}
+
+	// Private key content must differ from the seeded sentinel.
+	gotPriv, _ := os.ReadFile(privPath)
+	if len(gotPriv) == 0 {
+		t.Error("expected private key to be non-empty after rename")
+	}
 }
 
 // TestVSCodeRekey_OverwritesScratch verifies that runVSCodeRekey unconditionally
 // overwrites pre-existing .new and .pub.new scratch files (from a crashed prior rekey).
 func TestVSCodeRekey_OverwritesScratch(t *testing.T) {
-	t.Skip("TODO Wave 2 (Plan 76-02): implement scratch-file overwrite verification")
-	// t.Setenv("HOME", t.TempDir())
-	// ctx := context.Background()
-	// cfg := &config.Config{}
-	// fetcher := newVSCodeEC2Sandbox("sb-abc123")
-	//
-	// homeDir, _ := os.UserHomeDir()
-	// keysDir := filepath.Join(homeDir, ".km", "keys")
-	// _ = os.MkdirAll(keysDir, 0o700)
-	// privPath := filepath.Join(keysDir, "sb-abc123")
-	// pubPath := filepath.Join(keysDir, "sb-abc123.pub")
-	// privNewPath := filepath.Join(keysDir, "sb-abc123.new")
-	// pubNewPath := filepath.Join(keysDir, "sb-abc123.pub.new")
-	//
-	// // Pre-seed the scratch files (simulating a crashed prior rekey).
-	// _ = os.WriteFile(privNewPath, []byte("crashed-private-sentinel"), 0o600)
-	// _ = os.WriteFile(pubNewPath, []byte("ssh-ed25519 AAAA crashed-pub-sentinel"), 0o644)
-	// // Also pre-seed the live keys so pre-flight passes.
-	// _ = os.WriteFile(privPath, []byte("live-private-key"), 0o600)
-	// _ = os.WriteFile(pubPath, []byte("ssh-ed25519 AAAA live-pub-key km-sb-abc123"), 0o644)
-	//
-	// // Run a successful rekey.
-	// // mockSSM := &sequencedSSMMock{outputs: []string{healthySSMOutput, expectedReadback}}
-	// // err := runVSCodeRekey(ctx, cfg, fetcher, nil, mockSSM, "sb-abc123", false, true)
-	// // if err != nil {
-	// //     t.Fatalf("expected nil error, got: %v", err)
-	// // }
-	// // // Committed .pub must not contain the crashed sentinel.
-	// // gotPub, _ := os.ReadFile(pubPath)
-	// // if bytes.Equal(gotPub, []byte("ssh-ed25519 AAAA crashed-pub-sentinel")) {
-	// //     t.Error("expected committed .pub to be FRESH, not the crashed sentinel")
-	// // }
-	// // gotPriv, _ := os.ReadFile(privPath)
-	// // if bytes.Equal(gotPriv, []byte("crashed-private-sentinel")) {
-	// //     t.Error("expected committed private key to be FRESH, not the crashed sentinel")
-	// // }
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	ctx := context.Background()
+	cfg := &config.Config{}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+
+	seedRekeyTestKeys(t, homeDir, "sb-abc123")
+	keysDir := filepath.Join(homeDir, ".km", "keys")
+	privPath := filepath.Join(keysDir, "sb-abc123")
+	pubPath := filepath.Join(keysDir, "sb-abc123.pub")
+	privNewPath := filepath.Join(keysDir, "sb-abc123.new")
+	pubNewPath := filepath.Join(keysDir, "sb-abc123.pub.new")
+
+	// Pre-seed the scratch files (simulating a crashed prior rekey).
+	crashedPrivSentinel := []byte("crashed-private-sentinel")
+	crashedPubSentinel := []byte("ssh-ed25519 AAAA crashed-pub-sentinel")
+	if err := os.WriteFile(privNewPath, crashedPrivSentinel, 0o600); err != nil {
+		t.Fatalf("write crash sentinel priv: %v", err)
+	}
+	if err := os.WriteFile(pubNewPath, crashedPubSentinel, 0o644); err != nil {
+		t.Fatalf("write crash sentinel pub: %v", err)
+	}
+
+	spyMock := &rekeyInstallSpyMock{preflightOutput: healthySSMOutput}
+	var gotErr error
+	captureStdout(func() {
+		gotErr = runVSCodeRekey(ctx, cfg, fetcher, newRunningEC2Mock(), spyMock, "sb-abc123", false, true)
+	})
+	if gotErr != nil {
+		t.Fatalf("expected nil error, got: %v", gotErr)
+	}
+
+	// Committed .pub must NOT contain the crashed sentinel.
+	gotPub, _ := os.ReadFile(pubPath)
+	if bytes.Equal(gotPub, crashedPubSentinel) {
+		t.Error("expected committed .pub to be FRESH, not the crashed sentinel")
+	}
+	gotPriv, _ := os.ReadFile(privPath)
+	if bytes.Equal(gotPriv, crashedPrivSentinel) {
+		t.Error("expected committed private key to be FRESH, not the crashed sentinel")
+	}
 }
 
 // TestVSCodeRekey_YesFlag verifies that runVSCodeRekey with yes=true does not
 // block on stdin and does not print a "[y/N]" prompt.
 func TestVSCodeRekey_YesFlag(t *testing.T) {
-	t.Skip("TODO Wave 2 (Plan 76-02): implement --yes flag skipping confirmation prompt")
-	// t.Setenv("HOME", t.TempDir())
-	// ctx := context.Background()
-	// cfg := &config.Config{}
-	// fetcher := newVSCodeEC2Sandbox("sb-abc123")
-	//
-	// homeDir, _ := os.UserHomeDir()
-	// keysDir := filepath.Join(homeDir, ".km", "keys")
-	// _ = os.MkdirAll(keysDir, 0o700)
-	// privPath := filepath.Join(keysDir, "sb-abc123")
-	// pubPath := filepath.Join(keysDir, "sb-abc123.pub")
-	// _ = os.WriteFile(privPath, []byte("old-private-key"), 0o600)
-	// _ = os.WriteFile(pubPath, []byte("ssh-ed25519 AAAA old-pub-key km-sb-abc123"), 0o644)
-	//
-	// // Sequenced SSM mock: call 1 = pre-flight, call 2 = readback verify.
-	// // mockSSM := &sequencedSSMMock{outputs: []string{healthySSMOutput, expectedReadback}}
-	// //
-	// // var out string
-	// // out = captureStdout(func() {
-	// //     err := runVSCodeRekey(ctx, cfg, fetcher, nil, mockSSM, "sb-abc123", false, true)
-	// //     if err != nil {
-	// //         t.Errorf("expected nil error with --yes, got: %v", err)
-	// //     }
-	// // })
-	// // // The test completing without blocking proves --yes skipped stdin.
-	// // if strings.Contains(out, "[y/N]") {
-	// //     t.Errorf("expected no [y/N] prompt with --yes; got output: %s", out)
-	// // }
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	ctx := context.Background()
+	cfg := &config.Config{}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+
+	seedRekeyTestKeys(t, homeDir, "sb-abc123")
+
+	spyMock := &rekeyInstallSpyMock{preflightOutput: healthySSMOutput}
+	// Do NOT replace os.Stdin — if --yes is working, it never reads stdin.
+	var out string
+	out = captureStdout(func() {
+		err := runVSCodeRekey(ctx, cfg, fetcher, newRunningEC2Mock(), spyMock, "sb-abc123", false, true /*yes*/)
+		if err != nil {
+			t.Errorf("expected nil error with --yes, got: %v", err)
+		}
+	})
+	// The test completing without blocking proves --yes skipped stdin.
+	if strings.Contains(out, "[y/N]") {
+		t.Errorf("expected no [y/N] prompt with --yes; got output: %s", out)
+	}
 }
 
 // TestVSCodeRekey_ConfirmNo verifies that runVSCodeRekey returns nil and leaves
 // local key files unchanged when the user answers "n" to the confirmation prompt.
 func TestVSCodeRekey_ConfirmNo(t *testing.T) {
-	t.Skip("TODO Wave 2 (Plan 76-02): implement confirmation prompt 'n' abort path")
-	// t.Setenv("HOME", t.TempDir())
-	// ctx := context.Background()
-	// cfg := &config.Config{}
-	// fetcher := newVSCodeEC2Sandbox("sb-abc123")
-	//
-	// homeDir, _ := os.UserHomeDir()
-	// keysDir := filepath.Join(homeDir, ".km", "keys")
-	// _ = os.MkdirAll(keysDir, 0o700)
-	// privPath := filepath.Join(keysDir, "sb-abc123")
-	// pubPath := filepath.Join(keysDir, "sb-abc123.pub")
-	// origPriv := []byte("original-private-sentinel")
-	// origPub := []byte("ssh-ed25519 AAAA original-pub-sentinel km-sb-abc123")
-	// _ = os.WriteFile(privPath, origPriv, 0o600)
-	// _ = os.WriteFile(pubPath, origPub, 0o644)
-	//
-	// // Pipe "n\n" to stdin to simulate user declining the prompt.
-	// // r, w, _ := os.Pipe()
-	// // origStdin := os.Stdin
-	// // os.Stdin = r
-	// // defer func() { os.Stdin = origStdin }()
-	// // w.Write([]byte("n\n"))
-	// // w.Close()
-	// //
-	// // mockSSM := &vsCodeSSMMock{output: healthySSMOutput}
-	// // err := runVSCodeRekey(ctx, cfg, fetcher, nil, mockSSM, "sb-abc123", false, false)
-	// // if err != nil {
-	// //     t.Fatalf("expected nil error (clean abort) when user answers n, got: %v", err)
-	// // }
-	// // // Local files must be unchanged.
-	// // gotPriv, _ := os.ReadFile(privPath)
-	// // if !bytes.Equal(gotPriv, origPriv) {
-	// //     t.Error("expected private key file to be unchanged after 'n' abort")
-	// // }
-	// // gotPub, _ := os.ReadFile(pubPath)
-	// // if !bytes.Equal(gotPub, origPub) {
-	// //     t.Error("expected public key file to be unchanged after 'n' abort")
-	// // }
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	ctx := context.Background()
+	cfg := &config.Config{}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+
+	origPrivBytes, _ := seedRekeyTestKeys(t, homeDir, "sb-abc123")
+	keysDir := filepath.Join(homeDir, ".km", "keys")
+	privPath := filepath.Join(keysDir, "sb-abc123")
+	pubPath := filepath.Join(keysDir, "sb-abc123.pub")
+	origPubBytes, _ := os.ReadFile(pubPath)
+
+	// Pipe "n\n" to stdin to simulate user declining the prompt.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	origStdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = origStdin }()
+	w.Write([]byte("n\n"))
+	w.Close()
+
+	// Only one SSM call fires (pre-flight); install never fires because user aborted.
+	mockSSM := &vsCodeSSMMock{output: healthySSMOutput}
+	var out string
+	var gotErr error
+	out = captureStdout(func() {
+		gotErr = runVSCodeRekey(ctx, cfg, fetcher, newRunningEC2Mock(), mockSSM, "sb-abc123", false, false /*yes=false*/)
+	})
+	if gotErr != nil {
+		t.Fatalf("expected nil error (clean abort) when user answers n, got: %v", gotErr)
+	}
+	if !strings.Contains(out, "Aborted.") {
+		t.Errorf("expected 'Aborted.' in output; got: %s", out)
+	}
+	// Local files must be unchanged.
+	gotPriv, _ := os.ReadFile(privPath)
+	if !bytes.Equal(gotPriv, origPrivBytes) {
+		t.Error("expected private key file to be unchanged after 'n' abort")
+	}
+	gotPub, _ := os.ReadFile(pubPath)
+	if !bytes.Equal(gotPub, origPubBytes) {
+		t.Error("expected public key file to be unchanged after 'n' abort")
+	}
 }
 
 // TestVSCodeRekey_OutputMarkers verifies that a successful rekey prints all
@@ -799,49 +903,42 @@ func TestVSCodeRekey_ConfirmNo(t *testing.T) {
 // passed, ✓ New keypair generated (SHA256:, ✓ Pushed to sandbox via SSM (verified,
 // ✓ Local key, atomically, Rekey complete.
 func TestVSCodeRekey_OutputMarkers(t *testing.T) {
-	t.Skip("TODO Wave 2 (Plan 76-02): implement output step markers verification")
-	// t.Setenv("HOME", t.TempDir())
-	// ctx := context.Background()
-	// cfg := &config.Config{}
-	// fetcher := newVSCodeEC2Sandbox("sb-abc123")
-	//
-	// homeDir, _ := os.UserHomeDir()
-	// keysDir := filepath.Join(homeDir, ".km", "keys")
-	// _ = os.MkdirAll(keysDir, 0o700)
-	// privPath := filepath.Join(keysDir, "sb-abc123")
-	// pubPath := filepath.Join(keysDir, "sb-abc123.pub")
-	// _ = os.WriteFile(privPath, []byte("old-private-key"), 0o600)
-	// _ = os.WriteFile(pubPath, []byte("ssh-ed25519 AAAA old-pub-key km-sb-abc123"), 0o644)
-	//
-	// // Sequenced SSM mock: call 1 = pre-flight, call 2 = readback verify.
-	// // mockSSM := &sequencedSSMMock{outputs: []string{healthySSMOutput, expectedReadback}}
-	// //
-	// // var out string
-	// // out = captureStdout(func() {
-	// //     err := runVSCodeRekey(ctx, cfg, fetcher, nil, mockSSM, "sb-abc123", false, true)
-	// //     if err != nil {
-	// //         t.Errorf("expected nil error for output-markers test, got: %v", err)
-	// //     }
-	// // })
-	// // markers := []string{
-	// //     "✓ EC2 instance running",
-	// //     "✓ Pre-flight check passed",
-	// //     "✓ New keypair generated (SHA256:",
-	// //     "✓ Pushed to sandbox via SSM (verified",
-	// //     "✓ Local key",
-	// //     "atomically",
-	// //     "Rekey complete",
-	// // }
-	// // for i, marker := range markers {
-	// //     idx := strings.Index(out, marker)
-	// //     if idx < 0 {
-	// //         t.Errorf("marker[%d] %q not found in output: %s", i, marker, out)
-	// //     }
-	// //     if i > 0 {
-	// //         prevIdx := strings.Index(out, markers[i-1])
-	// //         if prevIdx > idx {
-	// //             t.Errorf("marker[%d] %q appears before marker[%d] %q in output", i, marker, i-1, markers[i-1])
-	// //         }
-	// //     }
-	// // }
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	ctx := context.Background()
+	cfg := &config.Config{}
+	fetcher := newVSCodeEC2Sandbox("sb-abc123")
+
+	seedRekeyTestKeys(t, homeDir, "sb-abc123")
+
+	spyMock := &rekeyInstallSpyMock{preflightOutput: healthySSMOutput}
+	var out string
+	out = captureStdout(func() {
+		err := runVSCodeRekey(ctx, cfg, fetcher, newRunningEC2Mock(), spyMock, "sb-abc123", false, true /*yes*/)
+		if err != nil {
+			t.Errorf("expected nil error for output-markers test, got: %v", err)
+		}
+	})
+
+	markers := []string{
+		"✓ EC2 instance running",
+		"✓ Pre-flight check passed",
+		"✓ New keypair generated (SHA256:",
+		"✓ Pushed to sandbox via SSM (verified",
+		"✓ Local key",
+		"atomically",
+		"Rekey complete",
+	}
+	prevIdx := -1
+	for i, marker := range markers {
+		idx := strings.Index(out, marker)
+		if idx < 0 {
+			t.Errorf("marker[%d] %q not found in output: %s", i, marker, out)
+			continue
+		}
+		if prevIdx >= 0 && idx < prevIdx {
+			t.Errorf("marker[%d] %q appears before marker[%d] %q in output", i, marker, i-1, markers[i-1])
+		}
+		prevIdx = idx
+	}
 }
