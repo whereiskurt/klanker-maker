@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: Completed 79-03-PLAN.md
-last_updated: "2026-05-11T01:14:00.758Z"
+stopped_at: Completed 79-01-PLAN.md
+last_updated: "2026-05-11T01:15:16.103Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 84
   completed_phases: 72
   total_plans: 303
-  completed_plans: 262
+  completed_plans: 263
   percent: 93
 ---
 
@@ -303,6 +303,7 @@ Progress: [█████████░] 93%
 | Phase 78 P02 | 8 | 2 tasks | 2 files |
 | Phase 79-km-presence-daemon P00 | 181 | 3 tasks | 6 files |
 | Phase 79-km-presence-daemon P03 | 112s | 1 tasks | 1 files |
+| Phase 79-km-presence-daemon P01 | 720 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -863,6 +864,9 @@ Recent decisions affecting current work:
 - [Phase 78]: 78-02: codex URL relay not auto-opened (v1 decision) — codex prints OAuth URL to SSM stdout where operator can click; no parallel poller goroutine added
 - [Phase 79-km-presence-daemon]: Renamed fakeRunningSandboxLister to avoid conflict with existing fakeSandboxLister in doctor_ebs_test.go
 - [Phase 79-km-presence-daemon]: Use -trimpath -ldflags '-s -w' for km-presence (stripped binary, no version embed, matches km-slack pattern)
+- [Phase 79-km-presence-daemon]: pgrep -afE: AL2023 pgrep defaults to BRE; -E flag required for | alternation in agent-process regex
+- [Phase 79-km-presence-daemon]: tmux list-clients without -t flag lists all sessions on default socket; matches agent.go:423 convention
+- [Phase 79-km-presence-daemon]: emitFn var seam allows tick() tests to intercept emit without /run/km/audit-pipe subprocess
 
 ### Roadmap Evolution
 
@@ -961,6 +965,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-11T01:14:00.750Z
-Stopped at: Completed 79-03-PLAN.md
+Last session: 2026-05-11T01:15:16.096Z
+Stopped at: Completed 79-01-PLAN.md
 Resume file: None

@@ -1671,7 +1671,7 @@ Plans:
 **Goal:** Replace the per-shell bash `_km_heartbeat` function (which orphans subshells and pegs the IDLE column at full timeout — observed on sandbox L1 2026-05-10) with a single root-owned systemd daemon (`km-presence.service`) that ticks every 60s, OR's five concrete liveness signals (utmp, tmux clients, recent email, recent Slack, headless agent process), and emits `source:"presence"` heartbeat events to the existing `/run/km/audit-pipe`. Migration follows the Phase 63/67/68/73 pattern: `make build && make sidecars && km init --sidecars`; existing sandboxes keep bash heartbeats until `km destroy && km create`.
 **Requirements**: PHASE-79-PRESENCE-DAEMON (tactical bug fix — no formal REQ-IDs; goal-backward must_haves drive verification)
 **Depends on:** Phase 78
-**Plans:** 2/6 plans executed
+**Plans:** 3/6 plans executed
 
 Plans:
 - [ ] 79-00-PLAN.md — Wave 0 stub seeding (cmd/km-presence skeleton + commandRunner seam + 13 failing test stubs + doctor_presence.go stub + 3 doctor test stubs)
