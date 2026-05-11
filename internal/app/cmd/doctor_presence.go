@@ -98,13 +98,17 @@ func checkPresenceDaemonHealthy(
 
 	// 5-minute staleness threshold per CONTEXT.md and Phase 79 PRD.
 	startMs := time.Now().Add(-5 * time.Minute).UnixMilli()
-	filterPattern := `"source":"presence"`
+	// CloudWatch Logs JSON metric filter syntax — text-style "source":"presence"
+	// is rejected by the API as InvalidParameterException.
+	filterPattern := `{ $.source = "presence" }`
 
 	var stale []string
 	for _, id := range sandboxIDs {
 		// Log group convention: "/{prefix}/sandboxes/{sandbox_id}/"
 		// Matches audit-log sidecar CW_LOG_GROUP default and pkg/aws helpers.
-		logGroup := logGroupPrefix + id
+		// Trailing slash is significant — CW treats "/km/sandboxes/X" and
+		// "/km/sandboxes/X/" as different groups.
+		logGroup := logGroupPrefix + id + "/"
 
 		out, cwErr := cw.FilterLogEvents(ctx, &cloudwatchlogs.FilterLogEventsInput{
 			LogGroupName:  awssdk.String(logGroup),

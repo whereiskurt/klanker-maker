@@ -15,9 +15,20 @@ import (
 type fakeCWLogsFilter struct {
 	events []cwltypes.FilteredLogEvent
 	err    error
+
+	// Captured input from the last FilterLogEvents call — used to assert
+	// LogGroupName and FilterPattern shape from regression tests.
+	gotLogGroup     string
+	gotFilterPattern string
 }
 
 func (f *fakeCWLogsFilter) FilterLogEvents(ctx context.Context, in *cloudwatchlogs.FilterLogEventsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.FilterLogEventsOutput, error) {
+	if in.LogGroupName != nil {
+		f.gotLogGroup = *in.LogGroupName
+	}
+	if in.FilterPattern != nil {
+		f.gotFilterPattern = *in.FilterPattern
+	}
 	return &cloudwatchlogs.FilterLogEventsOutput{Events: f.events}, f.err
 }
 
@@ -75,5 +86,30 @@ func TestDoctor_PresenceDaemonHealthy_Skipped(t *testing.T) {
 	got := checkPresenceDaemonHealthy(context.Background(), nil, lister, "/km/audit")
 	if got.Status != CheckSkipped {
 		t.Fatalf("expected CheckSkipped when CW client is nil, got %s", got.Status)
+	}
+}
+
+// TestDoctor_PresenceDaemonHealthy_LogGroupAndFilterShape is a UAT-discovered
+// regression test: the live km doctor check returned WARN for a sandbox that
+// had emitted a valid presence event because (1) the log group concat dropped
+// the trailing "/" required by CloudWatch (treated "/km/sandboxes/X" and
+// "/km/sandboxes/X/" as different groups) and (2) the filter pattern
+// `"source":"presence"` was rejected by the API as InvalidParameterException —
+// CloudWatch Logs requires JSON-object syntax `{ $.source = "presence" }` for
+// field matches.
+func TestDoctor_PresenceDaemonHealthy_LogGroupAndFilterShape(t *testing.T) {
+	cw := &fakeCWLogsFilter{}
+	lister := &fakeRunningSandboxLister{ids: []string{"sb-xyz789"}}
+
+	_ = checkPresenceDaemonHealthy(context.Background(), cw, lister, "/km/sandboxes/")
+
+	wantLogGroup := "/km/sandboxes/sb-xyz789/"
+	if cw.gotLogGroup != wantLogGroup {
+		t.Errorf("log group: got %q, want %q (trailing slash is significant in CloudWatch)", cw.gotLogGroup, wantLogGroup)
+	}
+
+	wantFilterPattern := `{ $.source = "presence" }`
+	if cw.gotFilterPattern != wantFilterPattern {
+		t.Errorf("filter pattern: got %q, want %q (CW rejects bare \"source\":\"presence\")", cw.gotFilterPattern, wantFilterPattern)
 	}
 }
