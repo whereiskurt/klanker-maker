@@ -10,6 +10,10 @@ Klanker Maker compiles a YAML profile into a real AWS sandbox: a scoped IAM role
   <sub>Art by Mike Wigmore (<a href="https://github.com/mikewigmore">@mikewigmore</a>)</sub>
 </p>
 
+<p align="center">
+  <img src="docs/diagrams/AWS-services-and-apps.svg" alt="AWS services and apps that make up Klanker Maker" />
+</p>
+
 A profile is the contract - declare what's allowed, get the infrastructure as the artifact:
 
 ```yaml
@@ -214,9 +218,7 @@ A sandbox is a **compiled policy object** - the YAML declares the constraints, t
 
 Klanker Maker is itself an AWS application. The `km` CLI is the front door, but most of the platform runs as Lambdas, EventBridge schedules, DynamoDB tables, and SQS queues - so a sandbox can be created, modified, or destroyed from anywhere there's AWS API access.
 
-![Klanker Maker AWS services overview](docs/aws-services-overview.png)
-
-Editable source: [`docs/aws-services-overview.drawio`](docs/aws-services-overview.drawio) - open in [app.diagrams.net](https://app.diagrams.net) or the VS Code Draw.io Integration extension.
+![Klanker Maker AWS services overview](docs/diagrams/AWS-services-and-apps.svg)
 
 | Service | Role |
 |---|---|
