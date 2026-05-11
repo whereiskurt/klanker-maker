@@ -31,7 +31,10 @@ remote_state {
 }
 
 terraform {
-  source = "${local.repo_root}/infra/modules/create-handler/v1.0.0"
+  # Use // so Terragrunt copies infra/modules/ into the cache (not just create-handler/v1.0.0),
+  # making the sibling km-operator-policy/v1.0.0/ module resolvable via the relative path
+  # "../../km-operator-policy/v1.0.0" in create-handler/v1.0.0/main.tf.
+  source = "${local.repo_root}/infra/modules//create-handler/v1.0.0"
 }
 
 inputs = {
