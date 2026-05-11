@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: Completed 79-00-PLAN.md
-last_updated: "2026-05-11T01:10:12.595Z"
+stopped_at: Completed 79-03-PLAN.md
+last_updated: "2026-05-11T01:14:00.758Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 84
   completed_phases: 72
   total_plans: 303
-  completed_plans: 261
+  completed_plans: 262
   percent: 93
 ---
 
@@ -302,6 +302,7 @@ Progress: [█████████░] 93%
 | Phase 78 P01 | 32 | 2 tasks | 4 files |
 | Phase 78 P02 | 8 | 2 tasks | 2 files |
 | Phase 79-km-presence-daemon P00 | 181 | 3 tasks | 6 files |
+| Phase 79-km-presence-daemon P03 | 112s | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -861,6 +862,7 @@ Recent decisions affecting current work:
 - [Phase 78]: 78-02: deferred pfCmd.Process.Kill() placed immediately after Start() to cover all exit paths; runSSMInteractiveSubprocess masks SIGINT so explicit Kill is the only reliable cleanup
 - [Phase 78]: 78-02: codex URL relay not auto-opened (v1 decision) — codex prints OAuth URL to SSM stdout where operator can click; no parallel poller goroutine added
 - [Phase 79-km-presence-daemon]: Renamed fakeRunningSandboxLister to avoid conflict with existing fakeSandboxLister in doctor_ebs_test.go
+- [Phase 79-km-presence-daemon]: Use -trimpath -ldflags '-s -w' for km-presence (stripped binary, no version embed, matches km-slack pattern)
 
 ### Roadmap Evolution
 
@@ -959,6 +961,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-11T01:10:12.588Z
-Stopped at: Completed 79-00-PLAN.md
+Last session: 2026-05-11T01:14:00.750Z
+Stopped at: Completed 79-03-PLAN.md
 Resume file: None
