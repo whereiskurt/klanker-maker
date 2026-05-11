@@ -77,12 +77,53 @@ None — plan executed exactly as written. Implementation matches the Example 5 
 
 ## Manual UAT Status
 
-**PENDING** — Task 3 (checkpoint:human-verify) requires operator to run:
-- **Scenario B** (happy path): `km agent auth <sandbox> --codex`, complete OAuth via browser, verify `~/.codex/auth.json` written
-- **Scenario D** (port collision): bind 1455 + 1457 locally, verify graceful error with expected wording
-- **Fallback scenario**: bind only 1455, verify km uses 1457
+**PASSED (Scenario B, happy path)** — Operator verified on `c1`
+(`learn-42092a47`) 2026-05-10. codex login completed end-to-end via the
+SSM port-forward; `/home/sandbox/.codex/auth.json` written; SSM session
+exited cleanly.
 
-**Open question for UAT**: Does codex on the sandbox also try 1457 when 1455 is taken (i.e., does it bind 1457 on the sandbox side when we forward 1457:1457)? The implementation uses 1:1 localPort:remotePort. If codex always binds only 1455 on the sandbox side regardless of what port the operator's laptop is using, then the 1457 fallback path would need `localPort=1457, remotePort=1455`. This must be confirmed empirically during UAT Scenario (Fallback port).
+### Post-checkpoint additions (commit 51f7ab0)
+
+UAT surfaced one operator-facing gap: the OAuth URL had to be copy-pasted
+into the browser by hand. The claude path already auto-opened — codex
+didn't.
+
+**Codex browser auto-open** — commit 51f7ab0
+
+Mirrored the claude tee+poller pattern for codex: codex stdout is
+teed into `/tmp/km-codex-auth-<sb>.out`; a new `detectAndOpenCodexURL`
+goroutine polls for `https://auth.openai.com/...` and opens it locally
+via `browserOpener` (reused from Wave 1). Same 0.5s × 50 poll budget,
+same silent fallback, same tee-file cleanup post-exit.
+
+### Known limitation: stale port-forward subprocess leak
+
+After successful codex auth, `session-manager-plugin` was found still
+listening on `localhost:1455` (operator's laptop). The `defer
+pfCmd.Process.Kill()` sends SIGKILL to the `aws` parent, but
+`session-manager-plugin` is a child of `aws ssm start-session` and
+doesn't get reaped. Manifests as `probeCodexPort` falling back to 1457
+on subsequent runs until the operator manually kills the plugin (or
+reboots). Likely fix: process-group kill or `pfCmd.WaitDelay` with a
+post-kill `lsof | grep | kill` sweep. Filed as a deferred follow-up.
+
+### Empirical fallback question still open
+
+The current implementation forwards `localhost:<chosen> ↔ sandbox:<chosen>`
+1:1. If codex on the sandbox always binds 1455 (its preferred port) but
+the operator's laptop has 1455 taken, the fallback (forwarding 1457:1457)
+would silently fail: codex's redirect_uri would still be
+`http://127.0.0.1:1455/cb`, the browser would hit nothing on the
+operator's laptop. Operator did not exercise this scenario during UAT.
+Deferred — likely needs `localPort=1457, remotePort=1455` mapping or a
+hard error when local 1455 is taken.
+
+### Scenarios remaining (optional, deferred)
+
+- **Scenario D** (port collision): bind both 1455 and 1457 locally, verify
+  graceful error wording
+- **Fallback scenario** (single port collision): bind only 1455 locally,
+  observe whether codex callback actually completes
 
 ## Requirements Covered
 
@@ -91,7 +132,7 @@ None — plan executed exactly as written. Implementation matches the Example 5 
 | AUTH-08 | TestProbeCodexPort_Primary | PASS |
 | AUTH-09 | TestProbeCodexPort_Fallback | PASS |
 | AUTH-10 | TestProbeCodexPort_BothInUse | PASS |
-| INT-01 | Manual UAT Scenario B | PENDING |
+| INT-01 | Manual UAT Scenario B | PASS |
 
 ## Self-Check: PARTIAL (Tasks 1+2 complete, Task 3 pending)
 
