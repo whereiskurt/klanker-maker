@@ -31,7 +31,7 @@
 - **Idempotency:** if a cluster with the same `--name` exists in `km-config.yaml`, print the existing role ARN and exit 0 without re-applying.
 - **Pre-flight validation:** call `sts.GetCallerIdentity` before any Terragrunt invocation (pattern from `cmd/init.go:310-316`).
 - **AWS profile resolution:** must call `ExportConfigEnvVars(cfg)` before invoking `terragrunt` (memory: non-default `resource_prefix` installs hit 403 HeadBucket otherwise).
-- **Output capture:** after apply, run `terragrunt output -json` in the stack directory, extract `role_arn` from the JSON map. Persist to `km-config.yaml` using a new `persistKMConfigFieldsWithSlice` variant (see Architecture Patterns section).
+- **Output capture:** after apply, run `terragrunt output -json` in the stack directory, extract `role_arn` from the JSON map. Persist to `km-config.yaml` using a new `persistClustersConfig` helper (see Architecture Patterns Pattern 5).
 - **Rollback on persistence failure:** if `terragrunt apply` succeeds but `km-config.yaml` write fails, leave the IAM role in place and emit a clear error pointing the operator at `km cluster rm` cleanup. Do NOT attempt to undo the apply automatically.
 
 ### Config Schema (LOCKED)
@@ -729,7 +729,7 @@ No integration-test fixtures for full `terragrunt plan` runs exist in the codeba
 - **Phase gate:** Full suite green before `/gsd:verify-work` + manual integration test confirms `km-cluster-dev-use1-0` role exists in IAM and is destroyed by `km cluster rm`
 
 ### Wave 0 Gaps
-- [ ] `internal/app/cmd/cluster_test.go` — covers TestGenerateClusterHCL, TestClusterAdd, TestClusterList, TestClusterRm, TestPersistClusters
+- [ ] `internal/app/cmd/cluster_test.go` — covers TestGenerateClusterHCL, TestClusterAdd, TestClusterList, TestClusterRm, TestPersistClusters, TestClusterAddPersistFailure
 - [ ] `internal/app/config/config_clusters_test.go` — covers TestClustersField loading from km-config.yaml
 
 *(Existing test infrastructure in `cmd_test` package covers the runner mock pattern; new tests reuse `mockRunner` from `init_test.go`.)*
