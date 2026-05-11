@@ -13,6 +13,18 @@ import (
 	"github.com/spf13/viper"
 )
 
+// ClusterConfig represents a single registered Kubernetes cluster for cross-account
+// IRSA (IAM Roles for Service Accounts) integration. Each entry maps a cluster's
+// OIDC provider to a per-namespace/service-account IAM role in the application account.
+// Populated from the km-config.yaml `clusters:` list (Plan 80).
+type ClusterConfig struct {
+	Name            string `mapstructure:"name"              yaml:"name"`
+	OIDCProviderARN string `mapstructure:"oidc_provider_arn" yaml:"oidc_provider_arn"`
+	Namespace       string `mapstructure:"namespace"         yaml:"namespace"`
+	ServiceAccount  string `mapstructure:"service_account"   yaml:"service_account"`
+	RoleARN         string `mapstructure:"role_arn"          yaml:"role_arn"`
+}
+
 // Config holds all configuration values for the km CLI.
 type Config struct {
 	// ProfileSearchPaths is the ordered list of directories to search for profiles.
@@ -172,6 +184,12 @@ type Config struct {
 	// resolves to true so existing installs keep building images. Maps to
 	// km-config.yaml key container_substrates_enabled.
 	ContainerSubstratesEnabled *bool
+
+	// Clusters is the list of registered Kubernetes clusters for cross-account IRSA
+	// integration. Each entry maps a cluster's OIDC provider to an IAM role in the
+	// application account. Maps to km-config.yaml key clusters (Plan 80).
+	// Absent key → empty slice (no error). Managed via `km cluster add/list/rm`.
+	Clusters []ClusterConfig `mapstructure:"clusters" yaml:"clusters"`
 }
 
 // isSetByEnv returns true if the given viper key has been overridden by an environment
@@ -217,6 +235,7 @@ func Load() (*Config, error) {
 	v.SetDefault("slack_stream_messages_table_name", "")
 	v.SetDefault("resource_prefix", "km")
 	v.SetDefault("email_subdomain", "sandboxes")
+	v.SetDefault("clusters", []interface{}{})
 
 	// Primary config file: ~/.km/config.yaml
 	v.SetConfigName("config")
@@ -286,6 +305,7 @@ func Load() (*Config, error) {
 			"resource_prefix",
 			"email_subdomain",
 			"container_substrates_enabled",
+			"clusters",
 		} {
 			if v2.IsSet(key) && !isSetByEnv(v, key) {
 				v.Set(key, v2.Get(key))
@@ -336,6 +356,13 @@ func Load() (*Config, error) {
 	if v.IsSet("container_substrates_enabled") {
 		val := v.GetBool("container_substrates_enabled")
 		cfg.ContainerSubstratesEnabled = &val
+	}
+
+	// Clusters is a structured slice — viper's UnmarshalKey handles the
+	// mapstructure decoding from the merged "clusters" key. SetDefault above
+	// ensures a non-nil empty slice when the key is absent (RESEARCH.md Pitfall 6).
+	if err := v.UnmarshalKey("clusters", &cfg.Clusters); err != nil {
+		return nil, fmt.Errorf("unmarshal clusters: %w", err)
 	}
 
 	// If the AWS profile was set by default (not explicitly configured), verify it
