@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: Completed 79-02-PLAN.md
-last_updated: "2026-05-11T01:16:10.686Z"
+stopped_at: Completed 79-04-PLAN.md
+last_updated: "2026-05-11T01:21:12.206Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 84
   completed_phases: 72
   total_plans: 303
-  completed_plans: 264
+  completed_plans: 265
   percent: 93
 ---
 
@@ -305,6 +305,7 @@ Progress: [█████████░] 93%
 | Phase 79-km-presence-daemon P03 | 112s | 1 tasks | 1 files |
 | Phase 79-km-presence-daemon P01 | 720 | 2 tasks | 3 files |
 | Phase 79-km-presence-daemon P02 | 174s | 1 tasks | 2 files |
+| Phase 79 P04 | 8min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -869,6 +870,8 @@ Recent decisions affecting current work:
 - [Phase 79-km-presence-daemon]: tmux list-clients without -t flag lists all sessions on default socket; matches agent.go:423 convention
 - [Phase 79-km-presence-daemon]: emitFn var seam allows tick() tests to intercept emit without /run/km/audit-pipe subprocess
 - [Phase 79-km-presence-daemon]: km-presence systemd unit placed unconditionally (outside SlackInboundEnabled gate), joining core sidecars in both eBPF and proxy enforcement branches
+- [Phase 79]: Used runningSandboxListerFunc closure wrapping existing SandboxLister.ListSandboxes filtered to status=running for presence check lister
+- [Phase 79]: Confirmed log group prefix as /{resource_prefix}/sandboxes/ from audit-log sidecar source
 
 ### Roadmap Evolution
 
@@ -967,6 +970,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-11T01:16:10.678Z
-Stopped at: Completed 79-02-PLAN.md
+Last session: 2026-05-11T01:21:12.197Z
+Stopped at: Completed 79-04-PLAN.md
 Resume file: None
