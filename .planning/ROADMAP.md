@@ -1680,3 +1680,13 @@ Plans:
 - [x] 79-03-PLAN.md — Wave 1 Makefile sidecar pipeline (km-presence build line + S3 upload line in `sidecars` target; build-only line in `build-sidecars`)
 - [x] 79-04-PLAN.md — Wave 2 doctor check `presence_daemon_healthy` (CloudWatch FilterLogEvents for source:"presence" within 5min staleness threshold; WARN-not-ERROR; turns 3 stubs GREEN; registered in buildChecks)
 - [x] 79-05-PLAN.md — Wave 3 closeout (CLAUDE.md docs section + populate VALIDATION.md Per-Task Verification Map + BLOCKING operator UAT for bug-fix regression on live sandbox)
+
+### Phase 80: km cluster — cross-account IRSA for k8s integrations
+
+**Goal:** Ship `km cluster add/list/rm` that provisions an IAM role in the klanker AWS account with a cross-account trust policy referencing a k8s cluster's OIDC provider in a *different* AWS account. K8s pods authenticate via projected service-account tokens (no static keys). Refactor `create-handler` and the new `cluster-irsa` module to share a single `km-operator-policy` Terraform module so Lambda and IRSA roles can never drift. Phase closes when full `km cluster add --dry-run=false` against the `klanker-application` profile creates the role, persists to `km-config.yaml`, and `km cluster rm` cleanly tears it down.
+**Requirements**: TBD
+**Depends on:** Phase 79
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 80 to break down)
