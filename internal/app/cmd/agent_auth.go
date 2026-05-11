@@ -214,6 +214,30 @@ func printClaudeAuthInstructions(sandboxID, loginArgs string) {
 	fmt.Printf("Opening SSM session to run `%s` on %s...\n", loginArgs, sandboxID)
 }
 
+// detectAndOpenCodexURL is the codex-flavored sibling of detectAndOpenOAuthURL.
+// codex prints its OAuth URL pointing at auth.openai.com (with localhost:1455
+// callback). Polls every 0.5s for up to 25s.
+func detectAndOpenCodexURL(ctx context.Context, ssmClient SSMSendAPI, instanceID, teePath string) {
+	pollScript := fmt.Sprintf(`for i in $(seq 1 50); do
+  url=$(grep -oE 'https://auth\.openai\.com/[^[:space:]]+' '%s' 2>/dev/null | head -1)
+  if [ -n "$url" ]; then echo "$url"; exit 0; fi
+  sleep 0.5
+done
+exit 1`, teePath)
+
+	out, err := sendSSMAndWait(ctx, ssmClient, instanceID, pollScript)
+	if err != nil {
+		return
+	}
+	url := strings.TrimSpace(out)
+	if !strings.HasPrefix(url, "https://") {
+		return
+	}
+	if err := browserOpener(url); err == nil {
+		fmt.Fprintln(os.Stderr, "✓ Opened OAuth URL in your default browser")
+	}
+}
+
 // openInBrowser launches the operator's default browser at url. Returns an
 // error if the platform isn't supported or the launch command fails to start.
 func openInBrowser(url string) error {
@@ -300,14 +324,24 @@ func runAgentAuthCodex(ctx context.Context, _ *config.Config, fetcher SandboxFet
 	time.Sleep(1 * time.Second)
 
 	// Open foreground codex login session.
-	// codex will print the OAuth URL to stdout (xdg-open fails on headless EC2);
-	// the operator clicks the URL from their terminal. The browser callback flows
-	// through the SSM tunnel to codex's callback server on the sandbox.
-	innerCmd := "source /etc/profile.d/km-profile-env.sh 2>/dev/null; codex login"
+	// codex prints the OAuth URL to stdout (xdg-open fails on headless EC2).
+	// Tee that stdout into a sandbox-scoped temp file so a parallel SSM poller
+	// can scrape the OAuth URL and open it on the operator's laptop. The
+	// browser callback then flows through the SSM port-forward to codex's
+	// callback server on the sandbox.
+	teePath := fmt.Sprintf("/tmp/km-codex-auth-%s.out", sandboxID)
+	innerCmd := fmt.Sprintf(
+		"source /etc/profile.d/km-profile-env.sh 2>/dev/null; rm -f %s; set -o pipefail; codex login 2>&1 | tee %s",
+		teePath, teePath)
 	paramsJSON, err := json.Marshal(map[string][]string{"command": {innerCmd}})
 	if err != nil {
 		return fmt.Errorf("marshal --parameters: %w", err)
 	}
+
+	detectCtx, cancelDetect := context.WithCancel(ctx)
+	defer cancelDetect()
+	go detectAndOpenCodexURL(detectCtx, ssmClient, instanceID, teePath)
+
 	c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
 		"--target", instanceID,
 		"--region", rec.Region,
@@ -318,6 +352,12 @@ func runAgentAuthCodex(ctx context.Context, _ *config.Config, fetcher SandboxFet
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	sessionErr := runSSMInteractiveSubprocess(execFn, c)
+	cancelDetect()
+
+	// Best-effort cleanup of the tee file on the sandbox.
+	cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	_, _ = sendSSMAndWait(cleanCtx, ssmClient, instanceID, fmt.Sprintf("rm -f %s", teePath))
+	cleanCancel()
 
 	// Post-exit: verify credentials file was written on the sandbox.
 	// deferred pfCmd.Process.Kill() fires after this returns.
