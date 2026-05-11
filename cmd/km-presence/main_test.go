@@ -31,9 +31,11 @@ func TestSignal_LoginShell_Negative(t *testing.T) {
 
 func TestSignal_TmuxClients_Positive(t *testing.T) {
 	// tmux list-clients returns at least one line → attached client present.
+	// No -t flag: list-clients without target lists clients across all sessions on
+	// the default socket (see resolved open question 2 and runner.go comment).
 	r := &fakeRunner{
 		responses: map[string][]byte{
-			"runuser -u sandbox -- tmux list-clients -t ": []byte("/dev/pts/0: session 0\n"),
+			"runuser -u sandbox -- tmux list-clients": []byte("/dev/pts/0: session 0\n"),
 		},
 	}
 	if !checkTmuxClients(r) {
@@ -46,7 +48,7 @@ func TestSignal_TmuxClients_NegativeNoServer(t *testing.T) {
 	// Signal must return false — not crash.
 	r := &fakeRunner{
 		responses: map[string][]byte{},
-		errors:    map[string]error{"runuser -u sandbox -- tmux list-clients -t ": errExit1},
+		errors:    map[string]error{"runuser -u sandbox -- tmux list-clients": errExit1},
 	}
 	if checkTmuxClients(r) {
 		t.Fatalf("expected negative when tmux list-clients returns exit code 1 (no server)")
@@ -135,9 +137,11 @@ func TestSignal_Slack_NegativeStampMissing(t *testing.T) {
 // =============================================================================
 
 func TestSignal_AgentProcess_Positive(t *testing.T) {
+	// Decision: pgrep -afE for ERE alternation (AL2023's pgrep defaults to BRE).
+	// The -E flag is required for | alternation in the regex.
 	r := &fakeRunner{
 		responses: map[string][]byte{
-			"pgrep -af (^|/)claude( |$)|(^|/)codex( |$)|km-agent-run\\.sh": []byte("1234 /usr/local/bin/claude -p do task\n"),
+			`pgrep -afE (^|/)claude( |$)|(^|/)codex( |$)|km-agent-run\.sh`: []byte("1234 /usr/local/bin/claude -p do task\n"),
 		},
 	}
 	if !checkAgentProcess(r) {
@@ -148,7 +152,7 @@ func TestSignal_AgentProcess_Positive(t *testing.T) {
 func TestSignal_AgentProcess_NegativeEmpty(t *testing.T) {
 	r := &fakeRunner{
 		responses: map[string][]byte{},
-		errors:    map[string]error{"pgrep -af (^|/)claude( |$)|(^|/)codex( |$)|km-agent-run\\.sh": errExit1},
+		errors:    map[string]error{`pgrep -afE (^|/)claude( |$)|(^|/)codex( |$)|km-agent-run\.sh`: errExit1},
 	}
 	if checkAgentProcess(r) {
 		t.Fatalf("expected negative when pgrep returns no matches (exit 1)")
@@ -171,12 +175,21 @@ func TestTick_NoEmitWhenAllNegative(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
+	// Intercept emitFn to detect unexpected calls.
+	called := false
+	orig := emitFn
+	emitFn = func(_ string) error { called = true; return nil }
+	defer func() { emitFn = orig }()
+
 	active, emitted := tick(r, "sb-test123", mailDir, slackStamp, presenceStamp)
 	if active {
 		t.Fatalf("expected no active signals when all checks return false")
 	}
 	if emitted {
 		t.Fatalf("expected no heartbeat emitted when all signals are negative")
+	}
+	if called {
+		t.Fatalf("expected emitFn not to be called when all signals are negative")
 	}
 }
 
@@ -191,12 +204,27 @@ func TestTick_EmitWhenAnyPositive(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
+	// Intercept emitFn to verify it is called exactly once and succeeds.
+	callCount := 0
+	orig := emitFn
+	emitFn = func(id string) error {
+		callCount++
+		if id != "sb-test123" {
+			t.Errorf("emitFn called with unexpected sandbox ID %q", id)
+		}
+		return nil
+	}
+	defer func() { emitFn = orig }()
+
 	active, emitted := tick(r, "sb-test123", mailDir, slackStamp, presenceStamp)
 	if !active {
 		t.Fatalf("expected at least one active signal when login shell is present")
 	}
 	if !emitted {
 		t.Fatalf("expected heartbeat emitted when a signal is active")
+	}
+	if callCount != 1 {
+		t.Fatalf("expected emitFn called once, got %d", callCount)
 	}
 }
 
