@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 13
+current_plan: 14
 status: in-progress
-stopped_at: "Paused at 79-05 UAT checkpoint (human-verify: operator must run live sandbox UAT)"
-last_updated: "2026-05-11T02:00:00Z"
-last_activity: 2026-05-11
+stopped_at: "Completed 79-05-PLAN.md — Phase 79 km-presence daemon COMPLETE (UAT passed 2026-05-10)"
+last_updated: "2026-05-10T00:00:00Z"
+last_activity: 2026-05-10
 progress:
   total_phases: 84
-  completed_phases: 72
+  completed_phases: 73
   total_plans: 303
-  completed_plans: 265
+  completed_plans: 266
   percent: 93
 ---
 
@@ -22,16 +22,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-21)
 
 **Core value:** A sandbox is a declarative policy object that compiles into a controlled, auditable execution environment
-**Current focus:** Phase 1 — Schema, Compiler & AWS Foundation
+**Current focus:** Phase 79 — km-presence daemon COMPLETE
 
 ## Current Position
 
-Phase: 68 (slack-transcript-streaming-per-turn-chat-and-gzipped-jsonl-upload) — Wave 0 stub seeding COMPLETE
-Plan: 1 of 13 in current phase (Plan 68-00 COMPLETE; 68-01..68-12 pending)
-Total Plans in Phase: 13
-Current Plan: 13
+Phase: 79 (km-presence-daemon) — ALL 6 PLANS COMPLETE
+Plan: 6 of 6 in phase 79 (all complete; 79-05 closeout + UAT passed 2026-05-10)
+Total Plans in Phase: 6
+Current Plan: 14
 Status: in-progress
-Last activity: 2026-05-11
+Last activity: 2026-05-10
 
 Progress: [█████████░] 93%
 
@@ -872,6 +872,9 @@ Recent decisions affecting current work:
 - [Phase 79-km-presence-daemon]: km-presence systemd unit placed unconditionally (outside SlackInboundEnabled gate), joining core sidecars in both eBPF and proxy enforcement branches
 - [Phase 79]: Used runningSandboxListerFunc closure wrapping existing SandboxLister.ListSandboxes filtered to status=running for presence check lister
 - [Phase 79]: Confirmed log group prefix as /{resource_prefix}/sandboxes/ from audit-log sidecar source
+- [Phase 79-05]: doctor_presence.go CloudWatch log group must include trailing slash (/km/sandboxes/X/ not /km/sandboxes/X); filter pattern must use JSON metric filter syntax { $.source = "presence" } not bare string
+- [Phase 79-05]: km init --sidecars Go-path gap deferred: buildAndUploadSidecars in init.go missing km-presence; workaround is make sidecars; flagged in deferred-items.md
+- [Phase 79-05]: Phase 79 COMPLETE — orphaned-heartbeat bug provably fixed on sandbox learn-78ac4247 (8/8 must_haves PASS, UAT 2026-05-10)
 
 ### Roadmap Evolution
 
@@ -970,6 +973,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-11T01:21:12.197Z
-Stopped at: Completed 79-04-PLAN.md
+Last session: 2026-05-10T00:00:00Z
+Stopped at: Completed 79-05-PLAN.md — Phase 79 km-presence daemon COMPLETE (UAT passed 2026-05-10)
 Resume file: None
