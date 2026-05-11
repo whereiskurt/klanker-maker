@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 79-05-PLAN.md — Phase 79 km-presence daemon COMPLETE (UAT passed 2026-05-10)
-last_updated: "2026-05-11T02:22:06.935Z"
-last_activity: 2026-05-10
+stopped_at: Completed 80-01-PLAN.md — Wave 0 test scaffold for km cluster IRSA feature
+last_updated: "2026-05-11T23:32:39.039Z"
+last_activity: 2026-05-11
 progress:
-  total_phases: 84
+  total_phases: 85
   completed_phases: 73
-  total_plans: 303
-  completed_plans: 266
+  total_plans: 309
+  completed_plans: 267
   percent: 93
 ---
 
@@ -31,7 +31,7 @@ Plan: 6 of 6 in phase 79 (all complete; 79-05 closeout + UAT passed 2026-05-10)
 Total Plans in Phase: 6
 Current Plan: 14
 Status: in-progress
-Last activity: 2026-05-10
+Last activity: 2026-05-11
 
 Progress: [█████████░] 93%
 
@@ -306,6 +306,7 @@ Progress: [█████████░] 93%
 | Phase 79-km-presence-daemon P01 | 720 | 2 tasks | 3 files |
 | Phase 79-km-presence-daemon P02 | 174s | 1 tasks | 2 files |
 | Phase 79 P04 | 8min | 2 tasks | 2 files |
+| Phase 80-km-cluster-cross-account-irsa-for-k8s-integrations P01 | 4min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -875,6 +876,8 @@ Recent decisions affecting current work:
 - [Phase 79-05]: doctor_presence.go CloudWatch log group must include trailing slash (/km/sandboxes/X/ not /km/sandboxes/X); filter pattern must use JSON metric filter syntax { $.source = "presence" } not bare string
 - [Phase 79-05]: km init --sidecars Go-path gap deferred: buildAndUploadSidecars in init.go missing km-presence; workaround is make sidecars; flagged in deferred-items.md
 - [Phase 79-05]: Phase 79 COMPLETE — orphaned-heartbeat bug provably fixed on sandbox learn-78ac4247 (8/8 must_haves PASS, UAT 2026-05-10)
+- [Phase 80-km-cluster-cross-account-irsa-for-k8s-integrations]: mockClusterRunner is local to cluster_test.go (not extending init_test.go's mockRunner) to avoid breaking unrelated init tests
+- [Phase 80-km-cluster-cross-account-irsa-for-k8s-integrations]: config_clusters_test.go uses package config_test (external) to exercise config.Load() through its public surface
 
 ### Roadmap Evolution
 
@@ -974,6 +977,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-10T00:00:00Z
-Stopped at: Completed 79-05-PLAN.md — Phase 79 km-presence daemon COMPLETE (UAT passed 2026-05-10)
+Last session: 2026-05-11T23:32:39.032Z
+Stopped at: Completed 80-01-PLAN.md — Wave 0 test scaffold for km cluster IRSA feature
 Resume file: None

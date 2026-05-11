@@ -3,7 +3,7 @@ phase: 80
 slug: km-cluster-cross-account-irsa-for-k8s-integrations
 status: draft
 nyquist_compliant: false
-wave_0_complete: false
+wave_0_complete: true
 created: 2026-05-11
 ---
 
