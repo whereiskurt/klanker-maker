@@ -1686,7 +1686,7 @@ Plans:
 **Goal:** Ship `km cluster add/list/rm` that provisions an IAM role in the klanker AWS account with a cross-account trust policy referencing a k8s cluster's OIDC provider in a *different* AWS account. K8s pods authenticate via projected service-account tokens (no static keys). Refactor `create-handler` and the new `cluster-irsa` module to share a single `km-operator-policy` Terraform module so Lambda and IRSA roles can never drift. Phase closes when full `km cluster add --dry-run=false` against the `klanker-application` profile creates the role, persists to `km-config.yaml`, and `km cluster rm` cleanly tears it down.
 **Requirements**: operator-feature-80 (synthetic ID — operator-facing feature, not in v1 REQUIREMENTS.md list)
 **Depends on:** Phase 79
-**Plans:** 1/6 plans executed
+**Plans:** 2/6 plans executed
 
 Plans:
 - [ ] 80-01-PLAN.md — Wave 0 test scaffolds (cluster_test.go + config_clusters_test.go skeletons; un-skipped by Plans 80-04/80-05)
