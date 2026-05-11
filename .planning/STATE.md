@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 13
 status: in-progress
-stopped_at: "Completed 78-02 Tasks 1+2; stopped at Task 3 (checkpoint:human-verify) — manual UAT for --codex path"
-last_updated: "2026-05-11T00:50:45.945Z"
-last_activity: 2026-05-10
+stopped_at: Completed 79-00-PLAN.md
+last_updated: "2026-05-11T01:10:12.595Z"
+last_activity: 2026-05-11
 progress:
   total_phases: 84
   completed_phases: 72
   total_plans: 303
-  completed_plans: 260
+  completed_plans: 261
   percent: 93
 ---
 
@@ -31,7 +31,7 @@ Plan: 1 of 13 in current phase (Plan 68-00 COMPLETE; 68-01..68-12 pending)
 Total Plans in Phase: 13
 Current Plan: 13
 Status: in-progress
-Last activity: 2026-05-10
+Last activity: 2026-05-11
 
 Progress: [█████████░] 93%
 
@@ -301,6 +301,7 @@ Progress: [█████████░] 93%
 | Phase 76-km-vscode-rekey-rotate-ed25519-keypair-for-an-existing-sandbox P02 | 854s | 2 tasks | 2 files |
 | Phase 78 P01 | 32 | 2 tasks | 4 files |
 | Phase 78 P02 | 8 | 2 tasks | 2 files |
+| Phase 79-km-presence-daemon P00 | 181 | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -859,6 +860,7 @@ Recent decisions affecting current work:
 - [Phase 78]: 78-02: localPort==remotePort for codex SSM port-forward (1455:1455 or 1457:1457); no mismatch needed because codex binds same port on both ends
 - [Phase 78]: 78-02: deferred pfCmd.Process.Kill() placed immediately after Start() to cover all exit paths; runSSMInteractiveSubprocess masks SIGINT so explicit Kill is the only reliable cleanup
 - [Phase 78]: 78-02: codex URL relay not auto-opened (v1 decision) — codex prints OAuth URL to SSM stdout where operator can click; no parallel poller goroutine added
+- [Phase 79-km-presence-daemon]: Renamed fakeRunningSandboxLister to avoid conflict with existing fakeSandboxLister in doctor_ebs_test.go
 
 ### Roadmap Evolution
 
@@ -957,6 +959,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-10T21:58:14.619Z
-Stopped at: Completed 78-02 Tasks 1+2; stopped at Task 3 (checkpoint:human-verify) — manual UAT for --codex path
+Last session: 2026-05-11T01:10:12.588Z
+Stopped at: Completed 79-00-PLAN.md
 Resume file: None
