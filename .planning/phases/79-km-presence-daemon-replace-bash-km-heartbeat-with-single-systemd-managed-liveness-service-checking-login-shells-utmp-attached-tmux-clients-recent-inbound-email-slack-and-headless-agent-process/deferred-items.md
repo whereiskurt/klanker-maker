@@ -7,9 +7,12 @@ Logged per deviation scope-boundary rule: do NOT fix pre-existing issues in unre
 
 ## DEFERRED-79-01: km-presence missing from `buildAndUploadSidecars` Go-side path
 
+**Status:** RESOLVED — fixed in-phase before PR merge.
+**Resolution:** Added `{name: "km-presence", srcDir: "cmd/km-presence"}` to the `sidecars` slice in `buildAndUploadSidecars` (`internal/app/cmd/init.go`). `km init --sidecars` now ships km-presence to S3 alongside the other sidecars.
+
 **Discovered during:** Plan 79-05 UAT (Task 3)
 **Severity:** Medium — operators using `km init --sidecars` without `make` access will miss km-presence
-**Workaround:** `make sidecars` (correctly uploads km-presence via Makefile target added in Plan 79-03)
+**Workaround (pre-fix):** `make sidecars` (correctly uploads km-presence via Makefile target added in Plan 79-03)
 
 ### What's wrong
 
