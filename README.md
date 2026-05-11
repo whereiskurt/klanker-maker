@@ -10,10 +10,6 @@ Klanker Maker compiles a YAML profile into a real AWS sandbox: a scoped IAM role
   <sub>Art by Mike Wigmore (<a href="https://github.com/mikewigmore">@mikewigmore</a>)</sub>
 </p>
 
-<p align="center">
-  <img src="docs/diagrams/AWS-services-and-apps.svg" alt="AWS services and apps that make up Klanker Maker" />
-</p>
-
 A profile is the contract - declare what's allowed, get the infrastructure as the artifact:
 
 ```yaml
