@@ -37,6 +37,7 @@ bin/
 /create-handler
 /km-slack-bridge
 /km-slack
+/km-presence
 
 /excalidraw.log
 

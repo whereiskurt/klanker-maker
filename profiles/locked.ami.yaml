@@ -1,0 +1,157 @@
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: lockami
+  labels:
+    tier: development
+    tool: alltools
+  prefix: lockami
+
+spec:
+  lifecycle:
+    ttl: "8h"
+    idleTimeout: "1h"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    spot: false
+    instanceType: t3.large
+    region: us-east-1
+    rootVolumeSize: 15
+    hibernation: true
+    ami: ami-0f52cccca59b2d757
+    mountEFS: true
+    efsMountPoint: /shared
+    additionalVolume:
+      size: 20
+      mountPoint: /data
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: false
+    privileged: false
+    env:
+      SANDBOX_MODE: learn-v2-direct-api
+      GOOSE_MODE: auto
+      GOOSE_TELEMETRY_ENABLED: "false"
+      CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
+      OPENAI_API_KEY: ""
+    configFiles:
+      "/home/sandbox/.claude/settings.json": |
+        {"trustedDirectories":["/home/sandbox","/workspace"],"autoApprove":["Bash","Read","Write","Edit","Glob","Grep","WebFetch","WebSearch","NotebookEdit"]}
+      "/home/sandbox/.claude/plugins/known_marketplaces.json": |
+        {"klanker-maker":{"source":{"source":"github","repo":"whereiskurt/klanker-maker"},"installLocation":"/home/sandbox/.claude/plugins/marketplaces/klanker-maker","lastUpdated":"2026-04-16T00:00:00Z"},"security-plugin-marketplace":{"source":{"source":"github","repo":"grnhse/security-plugin-marketplace"},"installLocation":"/home/sandbox/.claude/plugins/marketplaces/security-plugin-marketplace","lastUpdated":"2026-05-06T00:00:00Z"}}
+
+    rsyncPaths:
+      - ".gitconfig"
+      - ".config/goose"
+      - ".claude"
+      - ".claude.json"
+      - ".codex"
+    initCommands: []
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - grnhse/seedling
+      allowedRefs:
+        - "*"
+
+  network:
+    enforcement: both
+    egress:
+      allowedDNSSuffixes: 
+        # Amazon
+        - ".amazonaws.com"
+        - "time.aws.com"
+        # Claude
+        - ".anthropic.com"
+        - ".claude.ai"
+        - ".claude.com"
+        - ".sentry.io"
+        - ".cloudfront.net"
+        # GitHub (needed for git clone + API)
+        - ".github.com"
+        - ".githubusercontent.com"
+      allowedHosts: []
+
+  budget:
+    compute:
+      maxSpendUSD: 0.50
+    ai:
+      maxSpendUSD: 2.00
+    warningThreshold: 0.80
+
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 500
+
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    learnMode: false
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/network
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+    tlsCapture:
+      enabled: true
+      libraries:
+        - openssl
+      capturePayloads: false
+
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: required
+    allowedSenders:
+      - "*"
+
+  agent:
+    maxConcurrentTasks: 1
+    taskTimeout: "30m"
+    allowedTools:
+      - bash
+      - read_file
+      - write_file
+      - list_files
+
+  cli:
+    noBedrock: true
+    claudeArgs:
+      - "--dangerously-skip-permissions"
+    notifyOnIdle: true
+    notifyOnPermission: true
+    notifyEmailEnabled: true
+    notifySlackEnabled: false
+    # notifySlackPerSandbox: true
+    # notifySlackInboundEnabled: true
+    # slackArchiveOnDestroy: false
