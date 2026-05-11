@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: "Completed 79-05-PLAN.md — Phase 79 km-presence daemon COMPLETE (UAT passed 2026-05-10)"
-last_updated: "2026-05-10T00:00:00Z"
+stopped_at: Completed 79-05-PLAN.md — Phase 79 km-presence daemon COMPLETE (UAT passed 2026-05-10)
+last_updated: "2026-05-11T02:22:06.935Z"
 last_activity: 2026-05-10
 progress:
   total_phases: 84
