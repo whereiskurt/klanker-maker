@@ -364,6 +364,81 @@ Pre-flight gates (any failure = no key changes): EC2 instance must be `running`,
 
 See `docs/vscode.md` for the full operator guide.
 
+## Presence daemon (Phase 79)
+
+Per-sandbox systemd-managed liveness daemon. Replaces the legacy bash `_km_heartbeat`
+function (a per-shell background loop that historically orphaned itself, pegging the
+`IDLE` column at full timeout for hours). One daemon per sandbox, root-owned, ticks
+every 60s.
+
+### What it does
+
+`km-presence.service` checks five signals each tick and emits a single
+`source:"presence"` heartbeat event to `/run/km/audit-pipe` if **any** is positive
+(boolean OR):
+
+| # | Signal | Source |
+|---|---|---|
+| 1 | Login shells (SSM + SSH) | `who` (utmp) |
+| 2 | Attached tmux clients | `tmux list-clients` (as sandbox user) |
+| 3 | Recent inbound email | New file in `/var/mail/km/new/` since last tick |
+| 4 | Recent inbound Slack | `/run/km/last-slack-inbound` newer than stamp |
+| 5 | Headless agent process | `pgrep` for claude/codex/km-agent-run.sh |
+
+The daemon writes to `/run/km/audit-pipe` using the same `timeout 0.1 tee` pattern as
+the per-command `_km_audit` hook (Phase 56.1 Bug 2 fix). Stamp file
+`/run/km/.presence-last-tick` is touched unconditionally at end of every tick (in
+tmpfs; intentionally lost on reboot).
+
+### Migration
+
+Following the Phase 63 / 67 / 68 / 73 pattern:
+
+```bash
+make build               # rebuild km CLI + km-presence binary
+make sidecars            # upload km-presence to S3 alongside other sidecars
+km init --sidecars       # refresh management Lambda's userdata template
+```
+
+**Existing sandboxes do NOT get km-presence retroactively** — they keep their bash
+heartbeat until `km destroy && km create`. This is intentional and matches every
+prior sidecar phase.
+
+**Docker substrate retains the bash heartbeat** — Docker sandboxes cannot run systemd,
+so `pkg/compiler/compose.go` is intentionally unchanged. Only EC2 sandboxes get the
+daemon.
+
+### Doctor check
+
+`km doctor` adds `presence_daemon_healthy` (Phase 79). For each running sandbox, the
+check queries CloudWatch FilterLogEvents for a `source:"presence"` event in the last
+5 minutes; any sandbox with no recent event is reported as WARN (not ERROR — same
+"opt-in feature can't be a hard failure" rationale as the Slack inbound checks).
+
+A WARN typically means one of:
+- Sandbox was provisioned BEFORE Phase 79 rollout (`km destroy && km create` to fix)
+- The km-presence daemon crashed (check `journalctl -u km-presence` on the sandbox)
+- CloudWatch logs ingestion is delayed (transient — re-run `km doctor`)
+
+### Observability
+
+```bash
+# On the sandbox: see daemon's per-tick decisions
+sudo journalctl -u km-presence -f
+
+# Operator-side: distinguish new daemon events from legacy shell heartbeats
+km otel <sandbox-id> --events  # filter for source:"presence" vs source:"shell"
+```
+
+### Roll back
+
+Revert the `pkg/compiler/userdata.go` diff and re-run `km init --sidecars`. New
+sandboxes from that point are born with the legacy bash heartbeat. Existing sandboxes
+are unaffected (they keep whichever pattern they were born with). The km-presence
+binary in S3 is harmless to leave in place when nothing references it.
+
+See `docs/superpowers/specs/2026-05-10-km-presence-daemon-design.md` for the full PRD.
+
 ## Architecture
 
 - `cmd/km/` — CLI entry point

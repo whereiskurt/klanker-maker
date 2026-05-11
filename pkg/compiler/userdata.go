@@ -895,6 +895,7 @@ aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/dns-proxy" /opt/km/bin/km-dns-pr
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/http-proxy" /opt/km/bin/km-http-proxy
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/audit-log" /opt/km/bin/km-audit-log
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-slack" /opt/km/bin/km-slack
+aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/km-presence" /opt/km/bin/km-presence
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/tracing/config.yaml" /etc/km/tracing/config.yaml
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/otelcol-contrib" /opt/km/bin/otelcol-contrib
 chmod +x /opt/km/bin/km-*
@@ -1052,31 +1053,6 @@ PROMPT_COMMAND="_km_audit;_km_learn;${PROMPT_COMMAND}"
 {{- else }}
 PROMPT_COMMAND="_km_audit;${PROMPT_COMMAND}"
 {{- end }}
-
-# Background heartbeat: keeps the sandbox alive while a session is open,
-# even during long-running commands. Killed automatically when the shell exits.
-# Ignores SIGINT/SIGTERM so Ctrl+C at the bash prompt doesn't kill it (without
-# this trap, SIGINT to the shell process group reaps the heartbeat and the
-# sandbox can be auto-killed by the idle-kill timer while the user is still
-# working — bash itself ignores SIGINT at the prompt, but this background
-# function does not).
-_km_heartbeat() {
-  trap '' INT TERM
-  while true; do
-    sleep 60
-    # Phase 56.1 Bug 2: same non-blocking timeout-tee pattern as _km_audit.
-    printf '{"timestamp":"%s","sandbox_id":"%s","event_type":"heartbeat","source":"shell","detail":{}}\n' \
-      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "{{ .SandboxID }}" \
-      | timeout 0.1 tee /run/km/audit-pipe > /dev/null 2>/dev/null || true
-  done
-}
-# Redirect away from the pts so the heartbeat doesn't hold the slave fd open
-# after bash (the session leader) exits — otherwise the SSM session hangs
-# waiting for the pts to close. Use kill -9 because the heartbeat subshell
-# has trap '' INT TERM and ignores the default SIGTERM.
-_km_heartbeat > /dev/null 2>&1 < /dev/null &
-_KM_HEARTBEAT_PID=$!
-trap 'kill -9 $_KM_HEARTBEAT_PID 2>/dev/null' EXIT
 HOOK
 chmod 644 /etc/profile.d/km-audit.sh
 
@@ -1514,6 +1490,7 @@ while true; do
     fi
 
     echo "[km-slack-inbound-poller] Turn complete — session=$NEW_SESSION thread=$THREAD_TS"
+    touch /run/km/last-slack-inbound
   else
     echo "[km-slack-inbound-poller] WARN: agent run failed (exit $RUN_EXIT), message returns to queue"
   fi
@@ -1811,6 +1788,20 @@ WantedBy=multi-user.target
 SLACKINBOUNDUNIT
 echo "[km-bootstrap] km-slack-inbound-poller.service installed"
 {{- end }}
+cat > /etc/systemd/system/km-presence.service << 'UNIT'
+[Unit]
+Description=Klankrmkr presence daemon — sandbox liveness heartbeat
+After=network.target km-audit-log.service
+[Service]
+User=root
+Environment=SANDBOX_ID={{ .SandboxID }}
+ExecStart=/opt/km/bin/km-presence
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+UNIT
+echo "[km-bootstrap] km-presence.service installed"
 {{- if .VSCodeEnabled }}
 # Phase 73: VS Code Remote-SSH access (sshd + authorized_keys + SELinux context)
 systemctl daemon-reload
@@ -2373,15 +2364,15 @@ echo "[km-bootstrap] km-recv installed at /opt/km/bin/km-recv"
 # daemon-reload required: AMI-baked unit files may have the old sandbox ID; reload
 # picks up the freshly-written unit before enable/restart so the correct env is used.
 systemctl daemon-reload
-systemctl enable km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
-systemctl restart km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
+systemctl enable km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
+systemctl restart km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
 echo "[km-bootstrap] Sidecars started (DNS via eBPF enforcer, not km-dns-proxy)"
 {{- else }}
 # daemon-reload required: AMI-baked unit files may have the old sandbox ID; reload
 # picks up the freshly-written unit before enable/restart so the correct env is used.
 systemctl daemon-reload
-systemctl enable km-dns-proxy km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
-systemctl restart km-dns-proxy km-http-proxy km-audit-log km-tracing{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
+systemctl enable km-dns-proxy km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
+systemctl restart km-dns-proxy km-http-proxy km-audit-log km-tracing km-presence{{ if .SandboxEmail }} km-mail-poller{{ end }}{{ if .SlackInboundEnabled }} km-slack-inbound-poller{{ end }}
 echo "[km-bootstrap] Sidecars started"
 {{- end }}
 echo "[km-bootstrap] Shell audit hook installed at /etc/profile.d/km-audit.sh"

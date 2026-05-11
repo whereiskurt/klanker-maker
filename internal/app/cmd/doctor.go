@@ -16,6 +16,7 @@ import (
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
@@ -328,6 +329,20 @@ type DoctorDeps struct {
 	// SlackListSandboxIDs returns the set of currently-known sandbox IDs (live in DDB).
 	// Used by checkSlackTranscriptStaleObjects to flag orphan S3 prefixes.
 	SlackListSandboxIDs func(ctx context.Context) ([]string, error)
+
+	// Phase 79: km-presence daemon liveness check dependencies (Plan 79-04).
+	// CWFilterClient is the CloudWatch Logs FilterLogEvents client used by the
+	// presence-daemon health check. May be nil if AWS config init failed; the
+	// check returns SKIPPED in that case.
+	CWFilterClient CWLogsFilterAPI
+	// PresenceSandboxLister lists running sandbox IDs for the presence check.
+	// Wraps the existing DDB-backed SandboxLister, filtering for status="running".
+	// May be nil if the lister is unavailable; the check returns SKIPPED.
+	PresenceSandboxLister runningSandboxLister
+	// PresenceLogGroupPrefix is the CloudWatch log group prefix, e.g.
+	// "/km/sandboxes/" (resource-prefix-aware). Passed through to
+	// checkPresenceDaemonHealthy verbatim.
+	PresenceLogGroupPrefix string
 }
 
 // =============================================================================
@@ -2670,6 +2685,21 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkOrphanedArtifacts(ctx, transcriptS3, transcriptBucket, listSandboxIDs, dryRun, deps.DeleteS3)
 	})
 
+	// Phase 79: km-presence daemon liveness check. Demote ERROR to WARN —
+	// a stale presence daemon is a warning, not a hard platform failure
+	// (matches the Slack inbound check pattern). The check is SKIPPED when
+	// CWFilterClient or PresenceSandboxLister is nil.
+	cwFilter := deps.CWFilterClient
+	presenceLister := deps.PresenceSandboxLister
+	presenceLogGroupPrefix := deps.PresenceLogGroupPrefix
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkPresenceDaemonHealthy(ctx, cwFilter, presenceLister, presenceLogGroupPrefix)
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
 	// Phase 66: email-domain SES match check.
 	//
 	// The prefix-collision check (checkPrefixCollision) used to live here too
@@ -2890,6 +2920,31 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 		}
 		return ids, nil
 	}
+
+	// Phase 79: km-presence daemon liveness check deps (Plan 79-04).
+	deps.CWFilterClient = cloudwatchlogs.NewFromConfig(awsCfg)
+	// PresenceSandboxLister wraps the existing DDB-backed SandboxLister and
+	// filters to status="running" so the check only validates active sandboxes.
+	listerForPresence := deps.Lister
+	deps.PresenceSandboxLister = runningSandboxListerFunc(func(innerCtx context.Context) ([]string, error) {
+		if listerForPresence == nil {
+			return nil, fmt.Errorf("sandbox lister not configured")
+		}
+		records, err := listerForPresence.ListSandboxes(innerCtx, false)
+		if err != nil {
+			return nil, fmt.Errorf("list sandboxes: %w", err)
+		}
+		var ids []string
+		for _, r := range records {
+			if r.Status == "running" {
+				ids = append(ids, r.SandboxID)
+			}
+		}
+		return ids, nil
+	})
+	// Log group prefix convention: "/{resource_prefix}/sandboxes/"
+	// Matches audit-log sidecar CW_LOG_GROUP default and pkg/aws sandbox log group helpers.
+	deps.PresenceLogGroupPrefix = "/" + cfg.GetResourcePrefix() + "/sandboxes/"
 
 	return deps
 }

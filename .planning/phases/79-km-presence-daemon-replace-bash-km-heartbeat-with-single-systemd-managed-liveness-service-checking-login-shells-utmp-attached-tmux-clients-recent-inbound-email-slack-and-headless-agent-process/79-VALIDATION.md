@@ -1,9 +1,9 @@
 ---
 phase: 79
 slug: km-presence-daemon
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: active
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-05-10
 ---
 
@@ -40,7 +40,16 @@ The planner will populate this table during plan creation. Format:
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 79-01-01 | 01 | 1 | (TBD by planner) | unit | `go test ./cmd/km-presence/... -run TestCheckLoginShells` | ❌ W0 | ⬜ pending |
+| 79-00-01 | 00 | 0 | PHASE-79 stubs | unit | `go build ./cmd/km-presence/...` | ✅ | ⬜ pending |
+| 79-00-02 | 00 | 0 | PHASE-79 stubs | unit | `go test ./cmd/km-presence/... 2>&1 \| grep FAIL` | ✅ | ⬜ pending |
+| 79-00-03 | 00 | 0 | PHASE-79 stubs | unit | `go test ./internal/app/cmd/... -run 'TestDoctor_PresenceDaemonHealthy' 2>&1 \| grep FAIL` | ✅ | ⬜ pending |
+| 79-01-01 | 01 | 1 | Signal checks + tick + emit | unit | `go test ./cmd/km-presence/... -v -count=1 -run 'TestSignal_\|TestTick_\|TestFakeRunner_'` | ✅ | ⬜ pending |
+| 79-01-02 | 01 | 1 | Daemon main loop | build | `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o /tmp/km-presence-linux ./cmd/km-presence/ && test -f /tmp/km-presence-linux` | ✅ | ⬜ pending |
+| 79-02-01 | 02 | 1 | userdata.go edits | unit | `go test ./pkg/compiler/... -v -count=1 -run 'TestUserdata_(NoBashHeartbeat\|KmAuditHookPreserved\|PresenceSidecarInstalled\|PresenceEnabled_BothBranches\|SlackInboundTouchesPresenceStamp)'` | ✅ | ⬜ pending |
+| 79-03-01 | 03 | 1 | Makefile sidecar pipeline | build | `make build-sidecars && test -f build/km-presence` | ✅ | ⬜ pending |
+| 79-04-01 | 04 | 2 | Doctor check implementation | unit | `go test ./internal/app/cmd/... -v -count=1 -run 'TestDoctor_PresenceDaemonHealthy_(OK\|Stale\|Skipped)'` | ✅ | ⬜ pending |
+| 79-04-02 | 04 | 2 | Doctor check registration | unit | `go build ./... && go test ./internal/app/cmd/... -count=1 -run 'TestDoctor' && grep -q 'checkPresenceDaemonHealthy' internal/app/cmd/doctor.go` | ✅ | ⬜ pending |
+| 79-05-03 | 05 | 3 | Bug-fix regression UAT | manual | (operator drives — see Manual-Only Verifications) | ✅ | ⬜ pending (gates phase) |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -86,14 +95,14 @@ These cannot be automated in CI and require operator-driven sandbox provisioning
 
 ## Validation Sign-Off
 
-- [ ] All implementation tasks have `<automated>` verify command or Wave 0 stub dependency
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references (4 stub files listed above)
-- [ ] No watch-mode flags (`go test` is one-shot)
-- [ ] Feedback latency < 90 seconds for touched-package suite
-- [ ] All 5 signals have unit-test coverage (positive + negative)
-- [ ] Doctor check has unit-test coverage (3 cases: ok / fail / skip)
-- [ ] Manual verification table populated with concrete commands (above)
-- [ ] `nyquist_compliant: true` set in frontmatter once planner has populated Per-Task Verification Map
+- [x] All implementation tasks have `<automated>` verify command or Wave 0 stub dependency
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify (each task verifies)
+- [x] Wave 0 covers all MISSING references (4 stub files: main.go, runner.go, doctor_presence.go, doctor_presence_test.go)
+- [x] No watch-mode flags (`go test` is one-shot)
+- [x] Feedback latency < 90 seconds for touched-package suite
+- [x] All 5 signals have unit-test coverage (positive + negative): see `cmd/km-presence/main_test.go`
+- [x] Doctor check has unit-test coverage (3 cases: OK / Stale / Skipped)
+- [x] Manual verification table populated with concrete commands (see existing Manual-Only Verifications block)
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** active
