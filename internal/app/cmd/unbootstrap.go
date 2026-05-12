@@ -21,7 +21,6 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aws/aws-sdk-go-v2/service/route53"
@@ -32,6 +31,7 @@ import (
 	smithy "github.com/aws/smithy-go"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 )
 
@@ -157,10 +157,7 @@ is still useful.`,
 // client when includeZone is false to avoid constructing one we won't use.
 func buildUnbootstrapDeps(awsProfile, region string, includeZone bool) (UnbootstrapDeps, error) {
 	ctx := context.Background()
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithRegion(region),
-		awsconfig.WithSharedConfigProfile(awsProfile),
-	)
+	awsCfg, err := awspkg.LoadAWSConfigInRegion(ctx, awsProfile, region)
 	if err != nil {
 		return UnbootstrapDeps{}, fmt.Errorf("load AWS config: %w", err)
 	}

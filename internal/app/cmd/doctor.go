@@ -2820,10 +2820,7 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	// Add replica region for VPC checks (pre-existing single-region behaviour).
 	if !deps.AllRegions {
 		if replicaRegion := os.Getenv("KM_REPLICA_REGION"); replicaRegion != "" && replicaRegion != primaryRegion {
-			replicaCfg, rErr := config.LoadDefaultConfig(ctx,
-				config.WithSharedConfigProfile(profile),
-				config.WithRegion(replicaRegion),
-			)
+			replicaCfg, rErr := kmaws.LoadAWSConfigInRegion(ctx, profile, replicaRegion)
 			if rErr == nil {
 				deps.EC2Clients[replicaRegion] = ec2.NewFromConfig(replicaCfg)
 				// EC2AMIClients is NOT expanded here — only primary region in default scope.
@@ -2837,10 +2834,7 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 			if r == primaryRegion {
 				continue // already added above
 			}
-			rCfg, rErr := config.LoadDefaultConfig(ctx,
-				config.WithSharedConfigProfile(profile),
-				config.WithRegion(r),
-			)
+			rCfg, rErr := kmaws.LoadAWSConfigInRegion(ctx, profile, r)
 			if rErr == nil {
 				deps.EC2Clients[r] = ec2.NewFromConfig(rCfg)
 				deps.EC2AMIClients[r] = ec2.NewFromConfig(rCfg)

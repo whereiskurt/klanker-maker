@@ -19,7 +19,6 @@ import (
 	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -741,12 +740,7 @@ func initRealRollDeps(ctx context.Context, cfg interface{}) (*RollDeps, error) {
 	resourcePrefix := tcfg.GetResourcePrefix()
 	sandboxesTable := resourcePrefix + "-sandboxes"
 
-	opts := []func(*awsconfig.LoadOptions) error{}
-	if profile != "" {
-		opts = append(opts, awsconfig.WithSharedConfigProfile(profile))
-	}
-
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
+	awsCfg, err := kmaws.LoadAWSConfig(ctx, profile)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}

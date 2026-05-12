@@ -21,7 +21,6 @@ import (
 	"io"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
@@ -900,9 +899,7 @@ func fetchAndCacheOutputs(repoRoot, regionLabel, module string) ([]byte, error) 
 	if awsProfile == "" {
 		awsProfile = "klanker-terraform"
 	}
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithSharedConfigProfile(awsProfile),
-	)
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, awsProfile)
 	if err != nil {
 		return nil, fmt.Errorf("loading AWS config: %w", err)
 	}
@@ -1575,10 +1572,7 @@ func ensureSandboxHostedZone(ctx context.Context, cfg *config.Config) (string, e
 
 	// 1. Create Route53 client for application account (where the zone will live)
 	// Route53 is a global service but the SDK requires a region to resolve endpoints.
-	appCfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithSharedConfigProfile("klanker-terraform"),
-		awsconfig.WithRegion("us-east-1"),
-	)
+	appCfg, err := awspkg.LoadAWSConfigInRegion(ctx, "klanker-terraform", "us-east-1")
 	if err != nil {
 		return "", fmt.Errorf("load app AWS config: %w", err)
 	}
@@ -1631,10 +1625,7 @@ func ensureSandboxHostedZone(ctx context.Context, cfg *config.Config) (string, e
 
 	// 5. Create Route53 client for management account (where the parent zone lives)
 	fmt.Println("  Checking NS delegation in management account (profile: klanker-management)...")
-	mgmtCfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithSharedConfigProfile("klanker-management"),
-		awsconfig.WithRegion("us-east-1"),
-	)
+	mgmtCfg, err := awspkg.LoadAWSConfigInRegion(ctx, "klanker-management", "us-east-1")
 	if err != nil {
 		return zoneID, fmt.Errorf("could not load management AWS config (profile: klanker-management) for NS delegation: %w", err)
 	}

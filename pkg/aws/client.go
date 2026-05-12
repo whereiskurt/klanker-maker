@@ -20,6 +20,13 @@ var managedIdentityWarn sync.Once
 
 // LoadAWSConfig loads AWS configuration using a named shared config profile.
 // Region is hardcoded to us-east-1 (the single-region deployment model).
+// Thin wrapper around LoadAWSConfigInRegion.
+func LoadAWSConfig(ctx context.Context, profile string) (aws.Config, error) {
+	return LoadAWSConfigInRegion(ctx, profile, awsRegion)
+}
+
+// LoadAWSConfigInRegion loads AWS configuration for an explicit region using a
+// named shared config profile.
 //
 // AWS_DEFAULT_REGION is set as a fallback so credential providers (SSO,
 // AssumeRole) that need a region during config loading work in clean shells
@@ -30,10 +37,14 @@ var managedIdentityWarn sync.Once
 // chain picks up the runtime-injected web-identity token automatically and
 // no ~/.aws/config file is needed. CLI callers that hard-code
 // "klanker-terraform" therefore work unchanged in-pod via the SA annotation.
-func LoadAWSConfig(ctx context.Context, profile string) (aws.Config, error) {
+func LoadAWSConfigInRegion(ctx context.Context, profile, region string) (aws.Config, error) {
+	if region == "" {
+		region = awsRegion
+	}
+
 	// Ensure credential providers have a region available during config loading.
 	if os.Getenv("AWS_REGION") == "" && os.Getenv("AWS_DEFAULT_REGION") == "" {
-		os.Setenv("AWS_DEFAULT_REGION", awsRegion)
+		os.Setenv("AWS_DEFAULT_REGION", region)
 	}
 
 	if profile != "" && isManagedIdentityEnv() {
@@ -45,7 +56,7 @@ func LoadAWSConfig(ctx context.Context, profile string) (aws.Config, error) {
 	}
 
 	opts := []func(*config.LoadOptions) error{
-		config.WithRegion(awsRegion),
+		config.WithRegion(region),
 	}
 	if profile != "" {
 		opts = append(opts, config.WithSharedConfigProfile(profile))
