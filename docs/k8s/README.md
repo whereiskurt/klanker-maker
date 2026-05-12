@@ -38,6 +38,47 @@ oidc.eks.us-east-1.amazonaws         OIDC provider (mirror, same URL)
 pod with sa annotation                STS validates token, returns creds
 ```
 
+## Same-account installation
+
+When your EKS cluster is in the **same AWS account** as your klanker install,
+the cluster's OIDC provider is typically already registered in IAM (by
+`eksctl`, the AWS Console, or a Terraform EKS module). Earlier behavior would
+fail with `EntityAlreadyExists` when `km cluster add` tried to register a
+second provider for the same issuer URL.
+
+**Phase 80.1 handles this automatically.** Before generating the per-cluster
+terragrunt.hcl, `km cluster add` calls
+`aws iam list-open-id-connect-providers` against the target account. If a
+provider for the cluster's issuer URL already exists, the module sets
+`register_oidc_provider = false` and references the existing provider via a
+Terraform data source. The trust Principal still points at the correct
+provider ARN — same-account and cross-account both reach the right answer
+without operator flags.
+
+You'll see one of two log lines:
+
+```
+OIDC provider auto-detected: creating
+OIDC provider auto-detected: reusing existing arn:aws:iam::...:oidc-provider/...
+```
+
+### Manual override
+
+```bash
+# Force create a new OIDC provider (fails if one already exists for the same URL)
+km cluster add --name my-cluster --oidc-provider-arn <arn> --register-oidc-provider=true
+
+# Force reuse an existing provider (skips auto-detect; fails if none exists)
+km cluster add --name my-cluster --oidc-provider-arn <arn> --register-oidc-provider=false
+```
+
+### `km cluster rm` behavior
+
+When the stack was created via the reuse path (`register_oidc_provider=false`),
+`km cluster rm` destroys only the IAM role. The pre-existing OIDC provider is
+owned by the EKS provisioning toolchain (eksctl / Terraform EKS module /
+Console) and is left in place.
+
 ## One-time operator setup (klanker side)
 
 From the host where `km` is installed:

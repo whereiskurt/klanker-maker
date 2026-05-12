@@ -467,6 +467,7 @@ km cluster rm <name> [flags]                                      # destroy
 | `--region` | `us-east-1` | no |
 | `--verbose` | `false` | no |
 | `--dry-run` | `true` | no |
+| `--register-oidc-provider` | `auto` | no — `auto` detects from `aws iam list-open-id-connect-providers`; `true` always creates a new provider; `false` always references an existing one |
 
 `--dry-run=true` runs `terragrunt plan` only; `--dry-run=false` runs `terragrunt apply --auto-approve`.
 
@@ -502,7 +503,7 @@ make build       # always required after CLI edits (ldflags version embed)
 - **Rollback on persist failure:** if `terragrunt apply` succeeds but writing `km-config.yaml` fails, the IAM role is left in place. Run `km cluster rm <name>` (using the role name from terraform state) to clean up.
 - **Wildcard trust:** `--namespace=*` makes the role assumable by the named ServiceAccount in any namespace. Specify a literal namespace for tighter scoping.
 - **No `--sidecars` propagation required:** Unlike Phase 63/67/68/73/79, Phase 80 ships no sandbox-side or Lambda-side code. Operators only need a fresh `km` binary.
-- **One stack per issuer URL:** Each `cluster-irsa` stack registers its own `aws_iam_openid_connect_provider`. Running `km cluster add` twice against the *same* EKS cluster issuer fails on `EntityAlreadyExists` for the second stack. Use a wildcard namespace (`--namespace=*`) and a single stack to serve multiple ServiceAccounts on one cluster.
+- **OIDC provider auto-detect (Phase 80.1):** Before generating the per-cluster terragrunt.hcl, `km cluster add` calls `aws iam list-open-id-connect-providers` against the target account. If the cluster's issuer URL is already registered (same-account EKS, a second stack against the same EKS cluster, or `eksctl`/Terraform-EKS auto-registered the provider), the module sets `register_oidc_provider = false` and references the existing provider via a Terraform data source. If no match → creates a fresh `aws_iam_openid_connect_provider`. The log line `OIDC provider auto-detected: [creating | reusing existing arn:...]` reports which branch was taken. Override with `--register-oidc-provider=true|false`. `km cluster rm` only destroys providers that this stack registered — pre-existing providers (the `register=false` path) are left intact.
 
 ### Handoff to k8s operators
 
