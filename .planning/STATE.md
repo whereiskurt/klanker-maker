@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 80-04-PLAN.md — ClusterConfig struct + viper wiring + TestClustersField passing
-last_updated: "2026-05-12T00:00:38.458Z"
+stopped_at: Completed 80-03-PLAN.md — terraform validate PASSED (module + test fixture)
+last_updated: "2026-05-12T00:00:47.740Z"
 last_activity: 2026-05-12
 progress:
   total_phases: 85
@@ -884,6 +884,8 @@ Recent decisions affecting current work:
 - [Phase 80]: Terragrunt // double-slash source path required for cross-module local references: source = infra/modules//child-module/v1.0.0 copies infra/modules/ into cache, making sibling modules resolvable
 - [Phase 80]: km-operator-policy/v1.0.0 exposes 8 variables (role_id, resource_prefix, artifact_bucket_arn, state_bucket, dynamodb_table_name, dynamodb_budget_table_arn, sandbox_table_name, identities_table_name); cloudwatch_logs intentionally not extracted
 - [Phase 80]: ClusterConfig struct added above Config with dual mapstructure+yaml tags; Clusters field appended at end of Config struct; viper UnmarshalKey handles slice-of-structs decode
+- [Phase 80]: cluster-irsa trust policy uses dynamic sub_condition (StringLike for wildcards, StringEquals for literals) derived from oidc_provider_arn via regex replace
+- [Phase 80]: cluster-irsa/v1.0.0 module source path ../../km-operator-policy/v1.0.0 is relative; Plan 80-05 terragrunt.hcl must use // double-slash notation
 
 ### Roadmap Evolution
 
@@ -983,6 +985,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-12T00:00:26.773Z
-Stopped at: Completed 80-04-PLAN.md — ClusterConfig struct + viper wiring + TestClustersField passing
+Last session: 2026-05-12T00:00:47.733Z
+Stopped at: Completed 80-03-PLAN.md — terraform validate PASSED (module + test fixture)
 Resume file: None
