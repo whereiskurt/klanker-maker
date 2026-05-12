@@ -9,6 +9,6 @@ output "role_name" {
 }
 
 output "oidc_provider_arn" {
-  value       = aws_iam_openid_connect_provider.this.arn
-  description = "ARN of the locally-registered OIDC provider mirroring the remote cluster issuer (same account as the IAM role — required for STS token validation)"
+  value       = local.oidc_provider_arn_local
+  description = "ARN of the OIDC provider used as the trust Principal. When register_oidc_provider=true, this is the locally-registered provider created by this module. When register_oidc_provider=false, this is the existing provider looked up via data source."
 }
