@@ -43,10 +43,13 @@ spec:
   containers:
   - name: km
     image: alpine
-    command: ["sh", "-c", "mkdir -p /root/.aws && printf '[profile klanker-terraform]\\nregion = us-east-1\\nrole_arn = arn:aws:iam::'$KM_ACCOUNT_ID':role/km-cluster-dev-use1-0\\nweb_identity_token_file = /var/run/secrets/eks.amazonaws.com/serviceaccount/token\\n' > /root/.aws/config && /km/km list"]
+    # km auto-detects the managed-identity environment via
+    # KUBERNETES_SERVICE_HOST (injected by every kubelet) and falls through to
+    # the SDK default credential chain, which picks up the projected SA token
+    # mounted at /var/run/secrets/eks.amazonaws.com/serviceaccount/token. No
+    # ~/.aws/config file or AWS_PROFILE env var is needed in-pod.
+    command: ["/km/km", "list"]
     env:
-    - name: KM_AWS_PROFILE
-      value: ""
     - name: KM_CONFIG_PATH
       value: /config/km-config.yaml
     volumeMounts:
