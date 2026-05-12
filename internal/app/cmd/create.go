@@ -1863,6 +1863,10 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	repoRoot := findRepoRoot()
 	region := resolvedProfile.Spec.Runtime.Region
 	regionLabel := compiler.RegionLabel(region)
+	// LoadNetworkOutputs → fetchAndCacheOutputs reads KM_RESOURCE_PREFIX
+	// (init.go:891) to build the S3 state-bucket path. On non-default-prefix
+	// installs this otherwise defaults to "km" and queries the wrong bucket.
+	ExportConfigEnvVars(cfg)
 	networkOutputs, err := LoadNetworkOutputs(repoRoot, regionLabel)
 	if err != nil {
 		return "", fmt.Errorf("failed to load network config for %s: %w\nRun 'km init --region %s' first", region, err, region)
