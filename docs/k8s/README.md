@@ -14,7 +14,7 @@ Two accounts are involved end-to-end:
 | Account | Role | Example |
 |---|---|---|
 | **EKS cluster** account | Hosts the cluster, issues SA tokens, owns the cluster's OIDC issuer URL | Corporate `example.com`, `874364631781` |
-| **klanker** account | Hosts the IAM role and a *mirrored* OIDC provider; holds the artifacts/state buckets `km` reads | `850919910932` |
+| **klanker** account | Hosts the IAM role and a *mirrored* OIDC provider; holds the artifacts/state buckets `km` reads | `123456789012` |
 
 The non-obvious bit: **AWS STS validates `AssumeRoleWithWebIdentity` tokens
 against an OIDC provider registered in the same account as the IAM role.**
@@ -30,7 +30,7 @@ EKS cluster (account A)              klanker account (account B)
 oidc.eks.us-east-1.amazonaws         OIDC provider (mirror, same URL)
    .com/id/ABC123                            │
         │                                    ▼
-        │ projected SA token            IAM role kph-cluster-dev-use1-0
+        │ projected SA token            IAM role km-cluster-dev-use1-0
         │ signed by issuer ─────────►   Trust policy:
         │                                  Principal.Federated = <local mirror>
         │                                  sub = system:serviceaccount:security:km
@@ -72,7 +72,7 @@ cluster issuer URL):
 - `aws_iam_openid_connect_provider` mirroring the cluster's issuer URL +
   TLS thumbprint
 - `aws_iam_role` named `<resource_prefix>-cluster-<name>` (e.g.
-  `kph-cluster-dev-use1-0`) with a trust policy that accepts
+  `km-cluster-dev-use1-0`) with a trust policy that accepts
   `sts:AssumeRoleWithWebIdentity` from the *local mirror* — gated on
   `<host>:aud=sts.amazonaws.com` and
   `<host>:sub=system:serviceaccount:<namespace>:<service-account>`
@@ -132,9 +132,9 @@ Replace the placeholder env values to match your install:
 ```yaml
 env:
 - name: KM_ARTIFACTS_BUCKET
-  value: "km-artifacts-kph-abc123ef45"   # KM_ARTIFACTS_BUCKET from your km-config.yaml
+  value: "km-artifacts-EXAMPLE123"        # KM_ARTIFACTS_BUCKET from your km-config.yaml
 - name: KM_ACCOUNT_ID
-  value: "850919910932"                   # klanker account id (NOT the EKS account)
+  value: "123456789012"                   # klanker account id (NOT the EKS account)
 ```
 
 Apply and watch:
