@@ -5,13 +5,13 @@ milestone_name: milestone
 current_plan: 14
 status: in-progress
 stopped_at: Completed 80.1-04-PLAN.md (km cluster add OIDC auto-detect + 8 tests passing)
-last_updated: "2026-05-12T04:09:30.575Z"
+last_updated: "2026-05-12T04:21:38.964Z"
 last_activity: 2026-05-12
 progress:
   total_phases: 86
-  completed_phases: 74
+  completed_phases: 75
   total_plans: 314
-  completed_plans: 276
+  completed_plans: 277
   percent: 93
 ---
 
