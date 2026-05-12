@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 80-03-PLAN.md — terraform validate PASSED (module + test fixture)
-last_updated: "2026-05-12T00:00:47.740Z"
+stopped_at: Completed 80-05-PLAN.md (km cluster CLI)
+last_updated: "2026-05-12T00:15:07.861Z"
 last_activity: 2026-05-12
 progress:
   total_phases: 85
   completed_phases: 73
   total_plans: 309
-  completed_plans: 270
+  completed_plans: 271
   percent: 93
 ---
 
@@ -310,6 +310,7 @@ Progress: [█████████░] 93%
 | Phase 80-km-cluster-cross-account-irsa-for-k8s-integrations P02 | 20min | 3 tasks | 5 files |
 | Phase 80 P04 | 142s | 2 tasks | 2 files |
 | Phase 80 P03 | 198 | 2 tasks | 6 files |
+| Phase 80 P05 | 630 | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -886,6 +887,8 @@ Recent decisions affecting current work:
 - [Phase 80]: ClusterConfig struct added above Config with dual mapstructure+yaml tags; Clusters field appended at end of Config struct; viper UnmarshalKey handles slice-of-structs decode
 - [Phase 80]: cluster-irsa trust policy uses dynamic sub_condition (StringLike for wildcards, StringEquals for literals) derived from oidc_provider_arn via regex replace
 - [Phase 80]: cluster-irsa/v1.0.0 module source path ../../km-operator-policy/v1.0.0 is relative; Plan 80-05 terragrunt.hcl must use // double-slash notation
+- [Phase 80]: Exported RunClusterAdd/RunClusterRm/GenerateClusterHCL + seam vars so cmd_test (external package) can inject mocks; PersistClustersConfig(configPath, clusters) takes explicit path for testability
+- [Phase 80]: runner.Plan(ctx, dir) reuses buildCommand+runCommand factory — no new fields on Runner struct; dry-run path calls Plan, apply path calls Apply; rollback contract: no auto-destroy on persist failure
 
 ### Roadmap Evolution
 
@@ -985,6 +988,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-12T00:00:47.733Z
-Stopped at: Completed 80-03-PLAN.md — terraform validate PASSED (module + test fixture)
+Last session: 2026-05-12T00:15:07.854Z
+Stopped at: Completed 80-05-PLAN.md (km cluster CLI)
 Resume file: None
