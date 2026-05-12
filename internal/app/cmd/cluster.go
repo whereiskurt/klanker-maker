@@ -11,6 +11,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
@@ -24,14 +26,15 @@ import (
 
 // clusterAddOpts holds the parsed flags for km cluster add.
 type clusterAddOpts struct {
-	name           string
-	oidcProviderARN string
-	namespace      string
-	serviceAccount string
-	awsProfile     string
-	region         string
-	verbose        bool
-	dryRun         bool
+	name                 string
+	oidcProviderARN      string
+	namespace            string
+	serviceAccount       string
+	awsProfile           string
+	region               string
+	verbose              bool
+	dryRun               bool
+	registerOIDCProvider string // "auto" | "true" | "false"
 }
 
 // ClusterRunner is the seam tests use to inject a mockClusterRunner.
@@ -53,6 +56,22 @@ type ClusterRunner interface {
 var NewClusterRunnerFunc = func(profile, repoRoot string) ClusterRunner {
 	r := terragrunt.NewRunner(profile, repoRoot)
 	return r
+}
+
+// OidcProviderLister is the seam tests use to mock AWS IAM ListOpenIDConnectProviders.
+// Implemented by *iam.Client in production via NewOidcProviderListerFunc.
+type OidcProviderLister interface {
+	ListOpenIDConnectProviders(
+		ctx context.Context,
+		params *iam.ListOpenIDConnectProvidersInput,
+		optFns ...func(*iam.Options),
+	) (*iam.ListOpenIDConnectProvidersOutput, error)
+}
+
+// NewOidcProviderListerFunc is the factory tests override to inject a mockOidcLister.
+// Production wires iam.NewFromConfig(awsCfg) which satisfies OidcProviderLister.
+var NewOidcProviderListerFunc = func(awsCfg aws.Config) OidcProviderLister {
+	return iam.NewFromConfig(awsCfg)
 }
 
 // PersistClustersConfigFunc is the seam TestClusterAddPersistFailure overrides
@@ -113,6 +132,7 @@ inputs = {
   oidc_provider_arn         = "{OIDC_PROVIDER_ARN}"
   namespace                 = "{NAMESPACE}"
   service_account_name      = "{SERVICE_ACCOUNT_NAME}"
+  register_oidc_provider    = {REGISTER_OIDC_PROVIDER}
   resource_prefix           = local.site_vars.locals.site.label
   state_bucket              = local.site_vars.locals.backend.bucket
   artifact_bucket_arn       = "arn:aws:s3:::${get_env("KM_ARTIFACTS_BUCKET", "")}"
@@ -123,18 +143,64 @@ inputs = {
 }
 `
 
-// GenerateClusterHCL substitutes the four {PLACEHOLDER} markers in
-// clusterTerragruntHCLTemplate using strings.NewReplacer so the HCL ${...}
-// interpolations are never touched by Go's string replacement.
-// Exported for unit tests in the cmd_test package (TestGenerateClusterHCL).
-func GenerateClusterHCL(clusterName, oidcProviderARN, namespace, serviceAccount string) string {
+// GenerateClusterHCLWithOIDC is the internal implementation that substitutes all five
+// {PLACEHOLDER} markers including the new {REGISTER_OIDC_PROVIDER} field.
+// Exported so the cmd_test package can call it directly in TestGenerateClusterHCL_RegisterOidcProviderFalse.
+func GenerateClusterHCLWithOIDC(clusterName, oidcProviderARN, namespace, serviceAccount string, registerOIDCProvider bool) string {
+	registerStr := "true"
+	if !registerOIDCProvider {
+		registerStr = "false"
+	}
 	r := strings.NewReplacer(
 		"{CLUSTER_NAME}", clusterName,
 		"{OIDC_PROVIDER_ARN}", oidcProviderARN,
 		"{NAMESPACE}", namespace,
 		"{SERVICE_ACCOUNT_NAME}", serviceAccount,
+		"{REGISTER_OIDC_PROVIDER}", registerStr,
 	)
 	return r.Replace(clusterTerragruntHCLTemplate)
+}
+
+// GenerateClusterHCL substitutes the {PLACEHOLDER} markers in clusterTerragruntHCLTemplate.
+// Exported for unit tests (TestGenerateClusterHCL). Defaults register_oidc_provider=true
+// (preserves Phase 80 behavior). Use GenerateClusterHCLWithOIDC for the false branch.
+func GenerateClusterHCL(clusterName, oidcProviderARN, namespace, serviceAccount string) string {
+	return GenerateClusterHCLWithOIDC(clusterName, oidcProviderARN, namespace, serviceAccount, true)
+}
+
+// ======================== OIDC Auto-detect =====================================
+
+// AutoDetectOIDCProvider calls ListOpenIDConnectProviders and returns true (create new)
+// if no existing provider's ARN encodes a host matching targetURL, false (reuse) if one matches.
+// existingARN is set only when returning false (the matched ARN for the INFO log).
+//
+// targetURL must be the full HTTPS URL derived from --oidc-provider-arn, e.g.:
+//
+//	"https://oidc.eks.us-east-1.amazonaws.com/id/ABC123"
+//
+// Matching: each ARN has the form "arn:aws:iam::<account>:oidc-provider/<host/path>".
+// We split on ":oidc-provider/" and compare the second part to the host portion of targetURL
+// (stripped of "https://"). This is the same derivation the Terraform module uses for
+// local.oidc_provider_host.
+//
+// ListOpenIDConnectProviders is non-paginated — one call returns all providers.
+// Exported so the cmd_test package can call it directly in TestAutoDetectOidcProvider.
+func AutoDetectOIDCProvider(ctx context.Context, lister OidcProviderLister, targetURL string) (registerOIDCProvider bool, existingARN string, err error) {
+	out, err := lister.ListOpenIDConnectProviders(ctx, &iam.ListOpenIDConnectProvidersInput{})
+	if err != nil {
+		return true, "", fmt.Errorf("listing OIDC providers: %w", err)
+	}
+	targetHost := strings.TrimPrefix(targetURL, "https://")
+	for _, entry := range out.OpenIDConnectProviderList {
+		if entry.Arn == nil {
+			continue
+		}
+		parts := strings.SplitN(*entry.Arn, ":oidc-provider/", 2)
+		if len(parts) == 2 && parts[1] == targetHost {
+			return false, *entry.Arn, nil // reuse existing
+		}
+	}
+	return true, "", nil // create new
 }
 
 // ======================== Config Persistence ===================================
@@ -202,7 +268,7 @@ func newClusterAddCmd(cfg *config.Config) *cobra.Command {
 		Short:        "Provision a cross-account IRSA role for a k8s cluster",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return RunClusterAdd(cfg, opts.name, opts.oidcProviderARN, opts.namespace, opts.serviceAccount, opts.awsProfile, opts.region, opts.verbose, opts.dryRun, findRepoRoot())
+			return RunClusterAdd(cfg, opts.name, opts.oidcProviderARN, opts.namespace, opts.serviceAccount, opts.awsProfile, opts.region, opts.verbose, opts.dryRun, findRepoRoot(), opts.registerOIDCProvider)
 		},
 	}
 	cmd.Flags().StringVar(&opts.name, "name", "", "cluster name (required)")
@@ -213,6 +279,8 @@ func newClusterAddCmd(cfg *config.Config) *cobra.Command {
 	cmd.Flags().StringVar(&opts.region, "region", "us-east-1", "AWS region for the role")
 	cmd.Flags().BoolVar(&opts.verbose, "verbose", false, "stream terragrunt output")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", true, "plan only; set --dry-run=false to apply")
+	cmd.Flags().StringVar(&opts.registerOIDCProvider, "register-oidc-provider", "auto",
+		`OIDC provider registration mode: auto (detect from AWS), true (always create), false (always reuse existing)`)
 	if err := cmd.MarkFlagRequired("name"); err != nil {
 		panic(err)
 	}
@@ -273,7 +341,7 @@ func newClusterRmCmd(cfg *config.Config) *cobra.Command {
 //  8. PersistClustersConfigFunc — if it fails, return error mentioning "km cluster rm"
 //     WITHOUT calling runner.Destroy (rollback contract from CONTEXT.md).
 //  9. Print handoff output: banner + ServiceAccount YAML + 4-item bullet list.
-func RunClusterAdd(cfg *config.Config, name, oidcProviderARN, namespace, serviceAccount, awsProfile, region string, verbose, dryRun bool, repoRoot string) error {
+func RunClusterAdd(cfg *config.Config, name, oidcProviderARN, namespace, serviceAccount, awsProfile, region string, verbose, dryRun bool, repoRoot string, registerOIDCProviderFlag string) error {
 	ctx := context.Background()
 
 	// 1. Idempotency: if name already registered, print existing ARN and exit 0.
@@ -291,6 +359,37 @@ func RunClusterAdd(cfg *config.Config, name, oidcProviderARN, namespace, service
 	}
 	if err := awspkg.ValidateCredentials(ctx, awsCfg); err != nil {
 		return fmt.Errorf("AWS credential validation failed: %w", err)
+	}
+
+	// 2b. Auto-detect OIDC provider registration mode.
+	// The --register-oidc-provider flag: "auto" (default) | "true" | "false".
+	// "auto": call ListOpenIDConnectProviders to detect whether the target issuer URL
+	//         is already registered; log the decision.
+	// "true"/"false": skip the IAM call and use the operator-specified mode.
+	registerOIDCProvider := true // default: create new provider
+	switch registerOIDCProviderFlag {
+	case "true":
+		registerOIDCProvider = true
+		fmt.Println("OIDC provider auto-detected: creating (forced by --register-oidc-provider=true)")
+	case "false":
+		registerOIDCProvider = false
+		fmt.Println("OIDC provider auto-detected: reusing existing (forced by --register-oidc-provider=false)")
+	default: // "auto" or empty
+		// Derive the URL the same way the Terraform module does:
+		// local.oidc_provider_host = split(":oidc-provider/", arn)[1]
+		// local.oidc_provider_url  = "https://${local.oidc_provider_host}"
+		oidcProviderURL := "https://" + strings.SplitN(oidcProviderARN, ":oidc-provider/", 2)[1]
+		lister := NewOidcProviderListerFunc(awsCfg)
+		register, existingARN, autoErr := AutoDetectOIDCProvider(ctx, lister, oidcProviderURL)
+		if autoErr != nil {
+			return fmt.Errorf("OIDC provider auto-detect failed: %w", autoErr)
+		}
+		registerOIDCProvider = register
+		if register {
+			fmt.Printf("OIDC provider auto-detected: creating\n")
+		} else {
+			fmt.Printf("OIDC provider auto-detected: reusing existing %s\n", existingARN)
+		}
 	}
 
 	// 3. Export config env vars BEFORE any terragrunt invocation.
@@ -319,7 +418,7 @@ func RunClusterAdd(cfg *config.Config, name, oidcProviderARN, namespace, service
 	if err := os.MkdirAll(stackDir, 0o755); err != nil {
 		return fmt.Errorf("creating cluster stack directory: %w", err)
 	}
-	hclContent := GenerateClusterHCL(name, oidcProviderARN, namespace, serviceAccount)
+	hclContent := GenerateClusterHCLWithOIDC(name, oidcProviderARN, namespace, serviceAccount, registerOIDCProvider)
 	hclPath := filepath.Join(stackDir, "terragrunt.hcl")
 	if err := os.WriteFile(hclPath, []byte(hclContent), 0o644); err != nil {
 		return fmt.Errorf("writing terragrunt.hcl: %w", err)
