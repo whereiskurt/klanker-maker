@@ -10,6 +10,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+
 	cmd "github.com/whereiskurt/klanker-maker/internal/app/cmd"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
@@ -69,6 +73,26 @@ func (m *mockClusterRunner) Output(_ context.Context, _ string) (map[string]inte
 	}
 	return map[string]interface{}{
 		"role_arn": map[string]interface{}{"value": "arn:aws:iam::850919910932:role/km-cluster-dev-use1-0"},
+	}, nil
+}
+
+// mockOidcLister is a test double for the OidcProviderLister interface in cluster.go.
+// Shape mirrors mockClusterRunner above.
+type mockOidcLister struct {
+	Providers []iamtypes.OpenIDConnectProviderListEntry
+	Err       error
+}
+
+func (m *mockOidcLister) ListOpenIDConnectProviders(
+	_ context.Context,
+	_ *iam.ListOpenIDConnectProvidersInput,
+	_ ...func(*iam.Options),
+) (*iam.ListOpenIDConnectProvidersOutput, error) {
+	if m.Err != nil {
+		return nil, m.Err
+	}
+	return &iam.ListOpenIDConnectProvidersOutput{
+		OpenIDConnectProviderList: m.Providers,
 	}, nil
 }
 
@@ -398,4 +422,60 @@ func TestClusterAddPersistFailure(t *testing.T) {
 	if !mock.OutputCalled {
 		t.Error("Output should have been called before persist attempt")
 	}
+}
+
+// TestGenerateClusterHCL_RegisterOidcProviderFalse verifies that
+// generateClusterHCLWithOIDC produces "register_oidc_provider = false"
+// in the inputs block when registerOIDCProvider is false.
+// Implementation lands in Wave 2 (cluster.go).
+func TestGenerateClusterHCL_RegisterOidcProviderFalse(t *testing.T) {
+	t.Skip("pending: Wave 2 implements generateClusterHCLWithOIDC in cluster.go")
+}
+
+// TestAutoDetectOidcProvider verifies autoDetectOIDCProvider:
+//   - returns register=false when a matching ARN is in the list
+//   - returns register=true when no ARN matches
+//   - returns register=true for an empty provider list
+//   - propagates API errors
+//
+// Implementation lands in Wave 2 (cluster.go).
+func TestAutoDetectOidcProvider(t *testing.T) {
+	t.Skip("pending: Wave 2 implements autoDetectOIDCProvider in cluster.go")
+
+	const targetURL = "https://oidc.eks.us-east-1.amazonaws.com/id/ABC123"
+	const matchingARN = "arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/ABC123"
+	const otherARN = "arn:aws:iam::874364631781:oidc-provider/oidc.eks.eu-west-1.amazonaws.com/id/OTHER"
+
+	t.Run("match found → register=false", func(t *testing.T) {
+		mock := &mockOidcLister{
+			Providers: []iamtypes.OpenIDConnectProviderListEntry{
+				{Arn: aws.String(otherARN)},
+				{Arn: aws.String(matchingARN)},
+			},
+		}
+		_ = mock
+		// register, existingARN, err := cmd.AutoDetectOIDCProvider(context.Background(), mock, targetURL)
+		// assert register == false, existingARN == matchingARN, err == nil
+	})
+
+	t.Run("no match → register=true", func(t *testing.T) {
+		mock := &mockOidcLister{
+			Providers: []iamtypes.OpenIDConnectProviderListEntry{
+				{Arn: aws.String(otherARN)},
+			},
+		}
+		_ = mock
+	})
+
+	t.Run("empty list → register=true", func(t *testing.T) {
+		mock := &mockOidcLister{}
+		_ = mock
+	})
+
+	t.Run("API error → propagated", func(t *testing.T) {
+		mock := &mockOidcLister{Err: fmt.Errorf("AccessDenied")}
+		_ = mock
+	})
+
+	_ = targetURL // referenced in commented-out assertion above
 }
