@@ -222,7 +222,7 @@ kubectl delete -f km-list.test.yaml
 | `AccessDenied` from `sts.amazonaws.com` mentioning `Not authorized to perform sts:AssumeRoleWithWebIdentity` | OIDC provider mirror missing in klanker account, or the role's trust policy `sub` condition doesn't match `system:serviceaccount:<ns>:<sa>`. Verify with `aws iam list-open-id-connect-providers --profile <klanker>` and `aws iam get-role --role-name <name>`. |
 | `InvalidIdentityToken` | The cluster's OIDC issuer URL changed (cluster recreated). Run `km cluster rm` + `km cluster add` to refresh the mirror. |
 | `Could not connect to the endpoint URL` from the `fetch-km` init container | Pod isn't reaching S3 — check VPC endpoints / NAT and that `KM_ARTIFACTS_BUCKET` matches the klanker `km-config.yaml` `artifacts_bucket` value. |
-| `EntityAlreadyExists: Provider with url X already exists` during `km cluster add` | Second `km cluster add` against the same EKS issuer URL. Use one stack per cluster with wildcard `--namespace=*` instead. |
+| `EntityAlreadyExists: Provider with url X already exists` during `km cluster add` | Auto-detect was bypassed (e.g. `--register-oidc-provider=true` while a provider for that URL already exists in the target account). Either remove the override to let auto-detect pick `false`, or force reuse with `--register-oidc-provider=false`. See the "Same-account installation" section above. |
 | Pod gets credentials but `km` calls fail with `AccessDenied` on a specific API | The 14 inline policies attached via `module.km_operator_policy` don't cover that action. Phase 80 attached the same policy set as the create-handler Lambda — extend `infra/modules/km-operator-policy/v1.0.0/` and re-apply for both stacks. |
 
 ## See also
