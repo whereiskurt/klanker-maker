@@ -10,13 +10,13 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
 )
@@ -797,10 +797,7 @@ func ensureKMSPlatformKey(ctx context.Context, cfg *config.Config, w io.Writer, 
 			region = "us-east-1"
 		}
 
-		awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
-			awsconfig.WithRegion(region),
-			awsconfig.WithSharedConfigProfile("klanker-terraform"),
-		)
+		awsCfg, err := awspkg.LoadAWSConfigInRegion(ctx, "klanker-terraform", region)
 		if err != nil {
 			return fmt.Errorf("load AWS config: %w", err)
 		}
@@ -852,10 +849,7 @@ func ensureArtifactsBucket(ctx context.Context, cfg *config.Config, w io.Writer)
 		region = "us-east-1"
 	}
 
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithRegion(region),
-		awsconfig.WithSharedConfigProfile("klanker-terraform"),
-	)
+	awsCfg, err := awspkg.LoadAWSConfigInRegion(ctx, "klanker-terraform", region)
 	if err != nil {
 		return fmt.Errorf("load AWS config: %w", err)
 	}

@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/spf13/cobra"
@@ -728,10 +727,7 @@ func buildSlackCmdDeps(cfg *config.Config) (*SlackCmdDeps, error) {
 	}
 	regionLabel := compiler.RegionLabel(region)
 
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithSharedConfigProfile(awsProfile),
-		awsconfig.WithRegion(region),
-	)
+	awsCfg, err := kmaws.LoadAWSConfigInRegion(ctx, awsProfile, region)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}

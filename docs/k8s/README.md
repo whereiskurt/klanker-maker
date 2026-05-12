@@ -140,14 +140,20 @@ shared provider).
 
 ## In-cluster setup (k8s side)
 
-Single multi-document manifest in this directory: `km-list.test.yaml`. It
-contains both the ServiceAccount and the smoke-test Pod, separated by `---`.
+Two multi-document manifests in this directory:
 
-### `km-list.test.yaml`
+| File | Workload | When to use |
+|---|---|---|
+| `km-list.test.yaml` | `km list` | Quickest smoke test — proves the pod can assume the role and read sandbox metadata |
+| `pod.km-create.test.yaml` | `km create` against a learn profile | Heavier path — exercises the Terraform-state-bucket fetch and every site that previously hard-coded an AWS profile name. If this works, the rest of `km` works in-pod. |
 
-**ServiceAccount** — annotated with the role ARN from the klanker account.
-The `eks.amazonaws.com/role-arn` annotation is what the EKS pod-identity
-webhook reads to inject the `web_identity_token_file` + `role_arn` env
+Both contain a ServiceAccount and a Pod separated by `---`.
+
+### ServiceAccount
+
+Annotated with the role ARN from the klanker account. The
+`eks.amazonaws.com/role-arn` annotation is what the EKS pod-identity webhook
+reads to inject the `AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN` env vars
 into the pod.
 
 ```yaml
@@ -164,36 +170,60 @@ metadata:
 The `namespace` and `name` here MUST match the values you passed to
 `km cluster add` (or be wildcards if you used `*`).
 
-**Pod** — two containers:
+### Pod — `km-list.test.yaml`
+
+Two containers:
 
 1. **Init container (`fetch-km`)** — uses the projected SA token to assume
    the IRSA role and `aws s3 cp` the `km` binary from
-   `s3://${KM_ARTIFACTS_BUCKET}/sidecars/km` into an `emptyDir` shared
-   with the main container.
-2. **Main container (`km`)** — writes a tiny `~/.aws/config` profile
-   (`klanker-terraform`) that points at the same role and uses the
-   projected SA token, then runs `/km/km list`.
-
-Replace the placeholder env values to match your install:
-
-```yaml
-env:
-- name: KM_ARTIFACTS_BUCKET
-  value: "km-artifacts-EXAMPLE123"        # KM_ARTIFACTS_BUCKET from your km-config.yaml
-- name: KM_ACCOUNT_ID
-  value: "123456789012"                   # klanker account id (NOT the EKS account)
-```
-
-Apply and watch:
+   `s3://${KM_ARTIFACTS_BUCKET}/sidecars/km` into an `emptyDir` shared with
+   the main container.
+2. **Main container (`km`)** — runs `/km/km list` directly. No
+   `~/.aws/config` file, no `AWS_PROFILE` env var. `km` detects the
+   managed-identity environment via `KUBERNETES_SERVICE_HOST` and falls
+   through to the AWS SDK's default credential chain, which picks up the
+   projected SA token automatically. The first credential-loading call
+   prints a one-shot info log: `managed-identity environment detected;
+   ignoring AWS profile and using default credential chain`.
 
 ```bash
 kubectl apply -f km-list.test.yaml
 kubectl -n security logs km-list-test -c km
 ```
 
-A successful run prints the `km list` table (empty if no sandboxes), proving
-the pod assumed the klanker-account role and called klanker-account
-APIs through the IRSA chain.
+A successful run prints the `km list` table (empty if no sandboxes).
+
+### Pod — `pod.km-create.test.yaml`
+
+Same shape, but the main container runs
+`/km/km create /profiles/learn.v2.yaml --alias learn` and mounts two extra
+ConfigMaps:
+
+- `km-config` (mounted at `/config`) — operator's `km-config.yaml`
+- `km-learn-profile` (mounted at `/profiles`) — the learn profile YAML
+
+For non-default-prefix installs (anything other than `resource_prefix: km`),
+set `KM_RESOURCE_PREFIX` explicitly on the pod env. `ExportConfigEnvVars`
+fires inside `runCreateRemote` and would set it from `KM_CONFIG_PATH`, but
+some early code paths read the env var directly; the explicit value is
+belt-and-suspenders.
+
+```bash
+kubectl apply -f pod.km-create.test.yaml
+kubectl -n security logs km-create-test -c km -f
+```
+
+#### Required ConfigMaps
+
+Create these once in the cluster before applying `pod.km-create.test.yaml`:
+
+```bash
+kubectl -n security create configmap km-config \
+  --from-file=km-config.yaml=./km-config.yaml
+
+kubectl -n security create configmap km-learn-profile \
+  --from-file=learn.v2.yaml=./profiles/learn.yaml
+```
 
 ## Token flow (what happens at request time)
 
@@ -201,8 +231,9 @@ APIs through the IRSA chain.
    into the pod (signed JWT, audience `sts.amazonaws.com`, issuer = cluster's
    OIDC URL).
 2. AWS SDK reads `AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN` (injected by
-   the EKS webhook from the SA annotation), or the `~/.aws/config` profile
-   used in `km-list.test.yaml`.
+   the EKS webhook from the SA annotation). `km` strips its hard-coded
+   `klanker-terraform` profile name in this environment so the SDK actually
+   reaches step 3 instead of failing with `failed to get shared config profile`.
 3. SDK calls `sts:AssumeRoleWithWebIdentity` in the klanker account, sending
    the projected token.
 4. STS in the klanker account looks up the OIDC provider whose URL matches
@@ -229,6 +260,8 @@ km cluster rm dev-use1-0          # destroys the IAM role + stack
 
 # Inside the cluster:
 kubectl delete -f km-list.test.yaml
+kubectl delete -f pod.km-create.test.yaml
+kubectl -n security delete configmap km-config km-learn-profile  # if you created them for the create test
 ```
 
 ## Troubleshooting
@@ -238,6 +271,7 @@ kubectl delete -f km-list.test.yaml
 | `AccessDenied` from `sts.amazonaws.com` mentioning `Not authorized to perform sts:AssumeRoleWithWebIdentity` | (a) OIDC provider for the cluster's issuer URL not registered in the klanker account, (b) `client_id_list` on an existing provider doesn't include `sts.amazonaws.com`, or (c) the role's trust policy `sub` condition doesn't match `system:serviceaccount:<ns>:<sa>`. Verify with `aws iam list-open-id-connect-providers` (and `aws iam get-open-id-connect-provider --open-id-connect-provider-arn ...` to check `client_id_list`) and `aws iam get-role --role-name <name>`. |
 | `InvalidIdentityToken` | The cluster's OIDC issuer URL changed (cluster recreated). If the provider was registered by `km cluster add` (cross-account), run `km cluster rm` + `km cluster add` to refresh. If it was registered by EKS/eksctl, refresh the cluster-side provider through that toolchain. |
 | `Could not connect to the endpoint URL` from the `fetch-km` init container | Pod isn't reaching S3 — check VPC endpoints / NAT and that `KM_ARTIFACTS_BUCKET` matches the klanker `km-config.yaml` `artifacts_bucket` value. |
+| `failed to get shared config profile, klanker-terraform` (any km command) | Pod is running a pre-managed-identity-detection build of `km` (older than the `LoadAWSConfig` env-detect change). Rebuild with `make build && km init --sidecars` and re-create the pod so the init container fetches the fresh binary. |
 | `EntityAlreadyExists: Provider with url X already exists` during `km cluster add` | Auto-detect was bypassed (e.g. `--register-oidc-provider=true` while a provider for that URL already exists in the target account). Either remove the override to let auto-detect pick `false`, or force reuse with `--register-oidc-provider=false`. See the "Auto-detect (Phase 80.1)" section above. |
 | Pod gets credentials but `km` calls fail with `AccessDenied` on a specific API | The shared operator policies attached via `module.km_operator_policy` don't cover that action. The cluster-irsa role gets the same policy set as the create-handler Lambda — extend `infra/modules/km-operator-policy/v1.0.0/` and re-apply for both stacks. |
 
