@@ -217,7 +217,7 @@ APIs through the IRSA chain.
 
 The cluster account is never asked to assume anything — it only signs the
 projected token. The klanker account does all validation and authorization
-against its local mirror.
+against the OIDC provider registered in its own account.
 
 ## Teardown
 
@@ -246,6 +246,7 @@ kubectl delete -f km-list.test.yaml
 - `CLAUDE.md` § `## Cross-account k8s integrations (Phase 80)` — operator
   reference for the `km cluster` command tree
 - `infra/modules/cluster-irsa/v1.0.0/` — the Terraform module that
-  provisions the role + mirror provider
+  provisions the role and (conditionally, via `register_oidc_provider`) the
+  OIDC provider mirror
 - `infra/modules/km-operator-policy/v1.0.0/` — the shared IAM policy set
   consumed by both the IRSA role and the create-handler Lambda
