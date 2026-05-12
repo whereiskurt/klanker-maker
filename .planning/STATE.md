@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 80-02-PLAN.md — zero-net-diff gate PASSED (exit 0, 14 address-only moves)
-last_updated: "2026-05-11T23:53:16.959Z"
-last_activity: 2026-05-11
+stopped_at: Completed 80-04-PLAN.md — ClusterConfig struct + viper wiring + TestClustersField passing
+last_updated: "2026-05-12T00:00:38.458Z"
+last_activity: 2026-05-12
 progress:
   total_phases: 85
   completed_phases: 73
   total_plans: 309
-  completed_plans: 268
+  completed_plans: 270
   percent: 93
 ---
 
@@ -31,7 +31,7 @@ Plan: 6 of 6 in phase 79 (all complete; 79-05 closeout + UAT passed 2026-05-10)
 Total Plans in Phase: 6
 Current Plan: 14
 Status: in-progress
-Last activity: 2026-05-11
+Last activity: 2026-05-12
 
 Progress: [█████████░] 93%
 
@@ -308,6 +308,8 @@ Progress: [█████████░] 93%
 | Phase 79 P04 | 8min | 2 tasks | 2 files |
 | Phase 80-km-cluster-cross-account-irsa-for-k8s-integrations P01 | 4min | 2 tasks | 3 files |
 | Phase 80-km-cluster-cross-account-irsa-for-k8s-integrations P02 | 20min | 3 tasks | 5 files |
+| Phase 80 P04 | 142s | 2 tasks | 2 files |
+| Phase 80 P03 | 198 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -881,6 +883,7 @@ Recent decisions affecting current work:
 - [Phase 80-km-cluster-cross-account-irsa-for-k8s-integrations]: config_clusters_test.go uses package config_test (external) to exercise config.Load() through its public surface
 - [Phase 80]: Terragrunt // double-slash source path required for cross-module local references: source = infra/modules//child-module/v1.0.0 copies infra/modules/ into cache, making sibling modules resolvable
 - [Phase 80]: km-operator-policy/v1.0.0 exposes 8 variables (role_id, resource_prefix, artifact_bucket_arn, state_bucket, dynamodb_table_name, dynamodb_budget_table_arn, sandbox_table_name, identities_table_name); cloudwatch_logs intentionally not extracted
+- [Phase 80]: ClusterConfig struct added above Config with dual mapstructure+yaml tags; Clusters field appended at end of Config struct; viper UnmarshalKey handles slice-of-structs decode
 
 ### Roadmap Evolution
 
@@ -980,6 +983,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-11T23:53:16.953Z
-Stopped at: Completed 80-02-PLAN.md — zero-net-diff gate PASSED (exit 0, 14 address-only moves)
+Last session: 2026-05-12T00:00:26.773Z
+Stopped at: Completed 80-04-PLAN.md — ClusterConfig struct + viper wiring + TestClustersField passing
 Resume file: None
