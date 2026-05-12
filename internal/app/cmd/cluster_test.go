@@ -188,7 +188,7 @@ func TestClusterAdd(t *testing.T) {
 		}
 		t.Cleanup(func() { cmd.PersistClustersConfigFunc = origPersist })
 
-		err := cmd.RunClusterAdd(cfg, "test", oidcARN, "*", "km", "klanker-application", "us-east-1", false, false, repoRoot)
+		err := cmd.RunClusterAdd(cfg, "test", oidcARN, "*", "km", "klanker-application", "us-east-1", false, false, repoRoot, "false")
 		if err != nil {
 			t.Fatalf("RunClusterAdd: %v", err)
 		}
@@ -225,7 +225,7 @@ func TestClusterAdd(t *testing.T) {
 		cmd.NewClusterRunnerFunc = func(_, _ string) cmd.ClusterRunner { return mock }
 		t.Cleanup(func() { cmd.NewClusterRunnerFunc = origRunner })
 
-		err := cmd.RunClusterAdd(cfg, "test", oidcARN, "*", "km", "klanker-application", "us-east-1", false, true, repoRoot)
+		err := cmd.RunClusterAdd(cfg, "test", oidcARN, "*", "km", "klanker-application", "us-east-1", false, true, repoRoot, "false")
 		if err != nil {
 			t.Fatalf("RunClusterAdd (dry-run): %v", err)
 		}
@@ -257,7 +257,7 @@ func TestClusterAdd(t *testing.T) {
 		cmd.NewClusterRunnerFunc = func(_, _ string) cmd.ClusterRunner { return mock }
 		t.Cleanup(func() { cmd.NewClusterRunnerFunc = origRunner })
 
-		err := cmd.RunClusterAdd(cfg, "test", oidcARN, "*", "km", "klanker-application", "us-east-1", false, false, repoRoot)
+		err := cmd.RunClusterAdd(cfg, "test", oidcARN, "*", "km", "klanker-application", "us-east-1", false, false, repoRoot, "false")
 		if err != nil {
 			t.Fatalf("idempotency RunClusterAdd: %v", err)
 		}
@@ -398,7 +398,7 @@ func TestClusterAddPersistFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { cmd.PersistClustersConfigFunc = origPersist })
 
-	err := cmd.RunClusterAdd(cfg, "failtest", "arn:aws:iam::874364631781:oidc-provider/fake", "*", "km", "klanker-application", "us-east-1", false, false, repoRoot)
+	err := cmd.RunClusterAdd(cfg, "failtest", "arn:aws:iam::874364631781:oidc-provider/fake", "*", "km", "klanker-application", "us-east-1", false, false, repoRoot, "false")
 
 	// Must return an error.
 	if err == nil {
@@ -425,23 +425,46 @@ func TestClusterAddPersistFailure(t *testing.T) {
 }
 
 // TestGenerateClusterHCL_RegisterOidcProviderFalse verifies that
-// generateClusterHCLWithOIDC produces "register_oidc_provider = false"
+// GenerateClusterHCLWithOIDC produces "register_oidc_provider = false"
 // in the inputs block when registerOIDCProvider is false.
-// Implementation lands in Wave 2 (cluster.go).
 func TestGenerateClusterHCL_RegisterOidcProviderFalse(t *testing.T) {
-	t.Skip("pending: Wave 2 implements generateClusterHCLWithOIDC in cluster.go")
+	clusterName := "same-account-test"
+	oidcARN := "arn:aws:iam::850919910932:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/SAMEACCT"
+	namespace := "default"
+	serviceAccount := "km"
+
+	out := cmd.GenerateClusterHCLWithOIDC(clusterName, oidcARN, namespace, serviceAccount, false)
+
+	// register_oidc_provider = false must appear (unquoted HCL bool, no quotes around 'false')
+	if !strings.Contains(out, "register_oidc_provider") || !strings.Contains(out, "= false") {
+		t.Errorf("output missing 'register_oidc_provider    = false'; got:\n%s", out)
+	}
+
+	// The register_oidc_provider = true form must NOT appear
+	if strings.Contains(out, "= true") {
+		t.Errorf("output unexpectedly contains '= true'; got:\n%s", out)
+	}
+
+	// The {REGISTER_OIDC_PROVIDER} placeholder must be fully substituted
+	if strings.Contains(out, "{REGISTER_OIDC_PROVIDER}") {
+		t.Errorf("output still contains unsubstituted placeholder {REGISTER_OIDC_PROVIDER}")
+	}
+
+	// Cluster name and OIDC ARN must appear (confirms other substitutions still work)
+	if !strings.Contains(out, clusterName) {
+		t.Errorf("output missing cluster name %q", clusterName)
+	}
+	if !strings.Contains(out, oidcARN) {
+		t.Errorf("output missing oidc ARN %q", oidcARN)
+	}
 }
 
-// TestAutoDetectOidcProvider verifies autoDetectOIDCProvider:
+// TestAutoDetectOidcProvider verifies AutoDetectOIDCProvider:
 //   - returns register=false when a matching ARN is in the list
 //   - returns register=true when no ARN matches
 //   - returns register=true for an empty provider list
 //   - propagates API errors
-//
-// Implementation lands in Wave 2 (cluster.go).
 func TestAutoDetectOidcProvider(t *testing.T) {
-	t.Skip("pending: Wave 2 implements autoDetectOIDCProvider in cluster.go")
-
 	const targetURL = "https://oidc.eks.us-east-1.amazonaws.com/id/ABC123"
 	const matchingARN = "arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/ABC123"
 	const otherARN = "arn:aws:iam::874364631781:oidc-provider/oidc.eks.eu-west-1.amazonaws.com/id/OTHER"
@@ -453,9 +476,16 @@ func TestAutoDetectOidcProvider(t *testing.T) {
 				{Arn: aws.String(matchingARN)},
 			},
 		}
-		_ = mock
-		// register, existingARN, err := cmd.AutoDetectOIDCProvider(context.Background(), mock, targetURL)
-		// assert register == false, existingARN == matchingARN, err == nil
+		register, existingARN, err := cmd.AutoDetectOIDCProvider(context.Background(), mock, targetURL)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if register {
+			t.Error("expected register=false when matching provider exists, got register=true")
+		}
+		if existingARN != matchingARN {
+			t.Errorf("expected existingARN=%q, got %q", matchingARN, existingARN)
+		}
 	})
 
 	t.Run("no match → register=true", func(t *testing.T) {
@@ -464,18 +494,37 @@ func TestAutoDetectOidcProvider(t *testing.T) {
 				{Arn: aws.String(otherARN)},
 			},
 		}
-		_ = mock
+		register, existingARN, err := cmd.AutoDetectOIDCProvider(context.Background(), mock, targetURL)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !register {
+			t.Error("expected register=true when no matching provider, got register=false")
+		}
+		if existingARN != "" {
+			t.Errorf("expected empty existingARN when no match, got %q", existingARN)
+		}
 	})
 
 	t.Run("empty list → register=true", func(t *testing.T) {
 		mock := &mockOidcLister{}
-		_ = mock
+		register, _, err := cmd.AutoDetectOIDCProvider(context.Background(), mock, targetURL)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !register {
+			t.Error("expected register=true for empty provider list, got register=false")
+		}
 	})
 
 	t.Run("API error → propagated", func(t *testing.T) {
 		mock := &mockOidcLister{Err: fmt.Errorf("AccessDenied")}
-		_ = mock
+		_, _, err := cmd.AutoDetectOIDCProvider(context.Background(), mock, targetURL)
+		if err == nil {
+			t.Error("expected error from API failure, got nil")
+		}
+		if !strings.Contains(err.Error(), "listing OIDC providers") {
+			t.Errorf("expected error to mention 'listing OIDC providers'; got: %v", err)
+		}
 	})
-
-	_ = targetURL // referenced in commented-out assertion above
 }
