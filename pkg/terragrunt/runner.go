@@ -95,6 +95,17 @@ func (r *Runner) Reconfigure(ctx context.Context, sandboxDir string) error {
 	return r.runCommand(cmd)
 }
 
+// Plan runs `terragrunt plan` inside sandboxDir for dry-run preview without
+// mutating state. Used by km cluster add --dry-run=true so operators can review
+// the IAM role that WOULD be created before flipping --dry-run=false.
+//
+// Honors r.Verbose the same way Apply does: streams output when true, captures
+// and prints warnings/errors when false. No -auto-approve flag (plan is read-only).
+func (r *Runner) Plan(ctx context.Context, sandboxDir string) error {
+	cmd := r.buildCommand(ctx, sandboxDir, "plan")
+	return r.runCommand(cmd)
+}
+
 // ApplyWithStderr runs apply, capturing stderr to the provided buffer (for error detection).
 // When Verbose is true: stdout streams to terminal, stderr streams to both terminal and stderrBuf.
 // When Verbose is false: stdout is captured, stderr goes to stderrBuf and is printed on failure.
