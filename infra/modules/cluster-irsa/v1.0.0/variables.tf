@@ -5,7 +5,7 @@ variable "cluster_name" {
 }
 
 variable "oidc_provider_arn" {
-  description = "ARN naming the cluster's OIDC issuer (e.g. arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE). The account portion is informational — the module derives the issuer URL from this ARN and registers a LOCAL `aws_iam_openid_connect_provider` in the current account (STS requires the provider to live in the same account as the IAM role). Single stack per issuer URL: re-using the same URL across multiple cluster-irsa stacks will fail on duplicate provider — use wildcard namespace for multi-SA scenarios."
+  description = "ARN naming the cluster's OIDC issuer (e.g. arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE). The account portion is informational — the module derives the issuer URL from this ARN. When register_oidc_provider=true (default), the module creates a local aws_iam_openid_connect_provider. When register_oidc_provider=false, the module references an existing provider (same-account or multi-stack reuse)."
   type        = string
 }
 
@@ -17,6 +17,12 @@ variable "namespace" {
 variable "service_account_name" {
   description = "Kubernetes service account name; supports wildcard '*' for StringLike condition"
   type        = string
+}
+
+variable "register_oidc_provider" {
+  description = "When true (default), the module creates a new aws_iam_openid_connect_provider mirroring the cluster issuer URL in the klanker account. When false, the module references an existing provider via data source (same-account scenario, or multi-stack against the same EKS issuer). Set by km cluster add auto-detect logic; override with --register-oidc-provider=true|false."
+  type        = bool
+  default     = true
 }
 
 # Passthrough variables to km-operator-policy module (names must match km-operator-policy/v1.0.0/variables.tf verbatim)
