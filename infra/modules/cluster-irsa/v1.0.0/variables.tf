@@ -5,7 +5,7 @@ variable "cluster_name" {
 }
 
 variable "oidc_provider_arn" {
-  description = "ARN of the OIDC provider in the remote k8s account (e.g. arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE)"
+  description = "ARN naming the cluster's OIDC issuer (e.g. arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE). The account portion is informational — the module derives the issuer URL from this ARN and registers a LOCAL `aws_iam_openid_connect_provider` in the current account (STS requires the provider to live in the same account as the IAM role). Single stack per issuer URL: re-using the same URL across multiple cluster-irsa stacks will fail on duplicate provider — use wildcard namespace for multi-SA scenarios."
   type        = string
 }
 

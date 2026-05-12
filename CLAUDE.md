@@ -441,11 +441,13 @@ See `docs/superpowers/specs/2026-05-10-km-presence-daemon-design.md` for the ful
 
 ## Cross-account k8s integrations (Phase 80)
 
-Provisions IAM roles in the klanker AWS account with cross-account trust policies referencing k8s OIDC providers in *other* AWS accounts. Pods authenticate via projected ServiceAccount tokens (IRSA) — no static IAM user keys, auto-rotating 3600s session tokens. Both the IRSA role and the create-handler Lambda role consume the shared `km-operator-policy/v1.0.0/` Terraform module so the two surfaces can never drift.
+Provisions IAM roles in the klanker AWS account that trust k8s clusters in *other* AWS accounts. Pods authenticate via projected ServiceAccount tokens (IRSA) — no static IAM user keys, auto-rotating 3600s session tokens. Both the IRSA role and the create-handler Lambda role consume the shared `km-operator-policy/v1.0.0/` Terraform module so the two surfaces can never drift.
 
 ### What it does
 
-`km cluster add` generates a per-cluster `infra/live/{region-label}/cluster-{name}/terragrunt.hcl`, runs `terragrunt apply` against `infra/modules/cluster-irsa/v1.0.0/`, captures the role ARN output, and persists the cluster metadata to `km-config.yaml`. The trust policy permits `sts:AssumeRoleWithWebIdentity` from the supplied OIDC provider, scoped to a single namespace + ServiceAccount (wildcards allowed). The role is attached to the same 14 inline policies as the create-handler Lambda role via the shared `km-operator-policy/v1.0.0/` module.
+`km cluster add` generates a per-cluster `infra/live/{region-label}/cluster-{name}/terragrunt.hcl`, runs `terragrunt apply` against `infra/modules/cluster-irsa/v1.0.0/`, captures the role ARN output, and persists the cluster metadata to `km-config.yaml`. The trust policy permits `sts:AssumeRoleWithWebIdentity`, scoped to a single namespace + ServiceAccount (wildcards allowed). The role is attached to the same 14 inline policies as the create-handler Lambda role via the shared `km-operator-policy/v1.0.0/` module.
+
+**OIDC provider is account-local.** AWS STS validates web-identity tokens against an OIDC provider in the *same* account as the IAM role being assumed — it cannot reach across accounts to the cluster's own provider. The `cluster-irsa` module therefore mirrors the remote cluster's issuer URL into a new `aws_iam_openid_connect_provider` registered in the klanker account, then references that local provider as the trust Principal. The `--oidc-provider-arn` flag names the *remote* cluster's provider only to derive its issuer URL — the account portion of that ARN is informational.
 
 ### CLI
 
@@ -500,6 +502,7 @@ make build       # always required after CLI edits (ldflags version embed)
 - **Rollback on persist failure:** if `terragrunt apply` succeeds but writing `km-config.yaml` fails, the IAM role is left in place. Run `km cluster rm <name>` (using the role name from terraform state) to clean up.
 - **Wildcard trust:** `--namespace=*` makes the role assumable by the named ServiceAccount in any namespace. Specify a literal namespace for tighter scoping.
 - **No `--sidecars` propagation required:** Unlike Phase 63/67/68/73/79, Phase 80 ships no sandbox-side or Lambda-side code. Operators only need a fresh `km` binary.
+- **One stack per issuer URL:** Each `cluster-irsa` stack registers its own `aws_iam_openid_connect_provider`. Running `km cluster add` twice against the *same* EKS cluster issuer fails on `EntityAlreadyExists` for the second stack. Use a wildcard namespace (`--namespace=*`) and a single stack to serve multiple ServiceAccounts on one cluster.
 
 ### Handoff to k8s operators
 
