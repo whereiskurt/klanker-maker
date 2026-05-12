@@ -476,3 +476,34 @@ resource "aws_iam_role_policy" "sqs_slack_inbound" {
     ]
   })
 }
+
+# Policy: IAM OIDC provider management for cluster-irsa module.
+# register=true branch: Terraform creates/deletes/tags aws_iam_openid_connect_provider.this[0].
+# register=false branch: Terraform reads data.aws_iam_openid_connect_provider.existing[0]
+#   via ListOpenIDConnectProviders + GetOpenIDConnectProvider.
+# Note: iam:ListOpenIDConnectProviders only accepts Resource: "*" per IAM docs (no
+# resource-level restriction supported for List actions). Using "*" for all actions
+# matches the existing kms and ses_send policies for consistency.
+resource "aws_iam_role_policy" "oidc_provider" {
+  name = "${var.resource_prefix}-create-handler-oidc"
+  role = var.role_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "OIDCProviderManagement"
+        Effect = "Allow"
+        Action = [
+          "iam:CreateOpenIDConnectProvider",
+          "iam:DeleteOpenIDConnectProvider",
+          "iam:GetOpenIDConnectProvider",
+          "iam:ListOpenIDConnectProviders",
+          "iam:TagOpenIDConnectProvider",
+          "iam:UntagOpenIDConnectProvider",
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
