@@ -1,6 +1,4 @@
-// Wave 0 scaffold — see Plan 80-05 for implementations
-// Package cmd_test provides test skeletons for the km cluster subcommand.
-// These skeletons define the contract that Plan 80-04 (config) and Plan 80-05 (CLI) must satisfy.
+// Package cmd_test provides tests for the km cluster subcommand.
 package cmd_test
 
 import (
@@ -12,22 +10,12 @@ import (
 	"strings"
 	"testing"
 
+	cmd "github.com/whereiskurt/klanker-maker/internal/app/cmd"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
 
-// mockClusterRunner is a test double for the ClusterRunner interface that Plan 80-05 will declare.
+// mockClusterRunner is a test double for the ClusterRunner interface declared in cluster.go.
 // It records all method invocations so tests can assert which operations were performed.
-// Plan 80-05 will wire this via the newClusterRunner and persistClustersConfigFunc seams.
-//
-// Struct definition:
-//
-//	type ClusterRunner interface {
-//	    Plan(ctx context.Context, dir string) error
-//	    Apply(ctx context.Context, dir string) error
-//	    Destroy(ctx context.Context, dir string) error
-//	    Reconfigure(ctx context.Context, dir string) error
-//	    Output(ctx context.Context, dir string) (map[string]interface{}, error)
-//	}
 type mockClusterRunner struct {
 	PlanCalled     bool
 	Applied        []string
@@ -84,215 +72,330 @@ func (m *mockClusterRunner) Output(_ context.Context, _ string) (map[string]inte
 	}, nil
 }
 
-// TestGenerateClusterHCL verifies that generateClusterHCL substitutes all four
-// placeholders in the HCL template (CLUSTER_NAME, OIDC_PROVIDER_ARN, NAMESPACE,
-// SERVICE_ACCOUNT) so no literal brace-wrapped token remains in the output.
-//
-// Plan 80-05 will expose cmd.GenerateClusterHCL for this test to call.
-//
-// Expected assertions (Plan 80-05 will unskip and implement):
-//   - Call cmd.GenerateClusterHCL("dev-use1-0", "arn:aws:iam::123:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE", "*", "km")
-//   - Assert output does not contain "{CLUSTER_NAME}", "{OIDC_PROVIDER_ARN}", "{NAMESPACE}", "{SERVICE_ACCOUNT}"
-//   - Assert output contains "dev-use1-0", "arn:aws:iam::123:oidc-provider/", "*", "km"
-func TestGenerateClusterHCL(t *testing.T) {
-	t.Skip("pending implementation — Plan 80-04/80-05")
-
-	// Placeholder reference to avoid "imported and not used" for strings
-	_ = strings.Contains
+// makeTestRepoRoot creates a minimal temp directory tree that satisfies:
+//   - findRepoRoot()-style discovery (go.mod or CLAUDE.md anchor)
+//   - km-config.yaml at root
+//   - infra/live/{regionLabel}/ directory
+//   - WriteFile for region.hcl
+func makeTestRepoRoot(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	// Anchor file so region.hcl writes don't fail
+	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("# anchor\n"), 0o644); err != nil {
+		t.Fatalf("write CLAUDE.md: %v", err)
+	}
+	// Valid km-config.yaml
+	kmcfg := "domain: test.example.com\nclusters: []\n"
+	if err := os.WriteFile(filepath.Join(dir, "km-config.yaml"), []byte(kmcfg), 0o600); err != nil {
+		t.Fatalf("write km-config.yaml: %v", err)
+	}
+	// Create infra/live/use1 so region.hcl writes have a parent
+	if err := os.MkdirAll(filepath.Join(dir, "infra", "live", "use1"), 0o755); err != nil {
+		t.Fatalf("mkdir infra/live/use1: %v", err)
+	}
+	return dir
 }
 
-// TestClusterAdd verifies the km cluster add command wires the ClusterRunner correctly.
-//
-// Plan 80-05 will expose newClusterRunner and persistClustersConfigFunc package-level seams.
-//
-// Expected assertions (Plan 80-05 will unskip and implement):
-//   - With dryRun=false: mockClusterRunner.Apply was called with the cluster stack dir;
-//     Output() was called; role ARN appears in cfg.Clusters[0].RoleARN
-//   - With dryRun=true: mockClusterRunner.Plan was called (NOT Apply);
-//     Output() was NOT called; cfg.Clusters remains unchanged
-func TestClusterAdd(t *testing.T) {
-	t.Skip("pending implementation — Plan 80-04/80-05")
+// TestGenerateClusterHCL verifies that GenerateClusterHCL substitutes all four
+// {PLACEHOLDER} markers and leaves HCL ${...} interpolations intact.
+func TestGenerateClusterHCL(t *testing.T) {
+	clusterName := "dev-use1-0"
+	oidcARN := "arn:aws:iam::123:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE"
+	namespace := "*"
+	serviceAccount := "km"
 
-	repoRoot := t.TempDir()
-	mock := &mockClusterRunner{
-		OutputResult: map[string]interface{}{
-			"role_arn": map[string]interface{}{"value": "arn:aws:iam::850919910932:role/km-cluster-dev-use1-0"},
+	out := cmd.GenerateClusterHCL(clusterName, oidcARN, namespace, serviceAccount)
+
+	// All four placeholders must be replaced.
+	for _, placeholder := range []string{"{CLUSTER_NAME}", "{OIDC_PROVIDER_ARN}", "{NAMESPACE}", "{SERVICE_ACCOUNT_NAME}"} {
+		if strings.Contains(out, placeholder) {
+			t.Errorf("output still contains placeholder %q", placeholder)
+		}
+	}
+
+	// Substituted values must appear.
+	if !strings.Contains(out, clusterName) {
+		t.Errorf("output missing cluster name %q", clusterName)
+	}
+	if !strings.Contains(out, oidcARN) {
+		t.Errorf("output missing oidc ARN")
+	}
+	if !strings.Contains(out, namespace) {
+		t.Errorf("output missing namespace %q", namespace)
+	}
+	if !strings.Contains(out, serviceAccount) {
+		t.Errorf("output missing service account %q", serviceAccount)
+	}
+
+	// HCL ${...} interpolations must remain literal (Go replacement must not touch them).
+	if !strings.Contains(out, "${local.repo_root}") {
+		t.Errorf("HCL interpolation ${local.repo_root} was incorrectly modified; got:\n%s", out)
+	}
+
+	// Double-slash source pattern must be present.
+	if !strings.Contains(out, "infra/modules//cluster-irsa/v1.0.0") {
+		t.Errorf("double-slash // source pattern missing in output")
+	}
+}
+
+// TestClusterAdd verifies the km cluster add command wires the ClusterRunner correctly
+// via the NewClusterRunnerFunc seam.
+func TestClusterAdd(t *testing.T) {
+	const oidcARN = "arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/TESTEXAMPLE"
+
+	t.Run("dryRun=false applies and persists", func(t *testing.T) {
+		repoRoot := makeTestRepoRoot(t)
+		mock := &mockClusterRunner{
+			OutputResult: map[string]interface{}{
+				"role_arn": map[string]interface{}{"value": "arn:aws:iam::850919910932:role/km-cluster-test"},
+			},
+		}
+		cfg := &config.Config{}
+
+		// Inject runner seam.
+		origRunner := cmd.NewClusterRunnerFunc
+		cmd.NewClusterRunnerFunc = func(_, _ string) cmd.ClusterRunner { return mock }
+		t.Cleanup(func() { cmd.NewClusterRunnerFunc = origRunner })
+
+		// Inject persist seam — write to the temp km-config.yaml.
+		origPersist := cmd.PersistClustersConfigFunc
+		cmd.PersistClustersConfigFunc = func(clusters []config.ClusterConfig) error {
+			return cmd.PersistClustersConfig(filepath.Join(repoRoot, "km-config.yaml"), clusters)
+		}
+		t.Cleanup(func() { cmd.PersistClustersConfigFunc = origPersist })
+
+		err := cmd.RunClusterAdd(cfg, "test", oidcARN, "*", "km", "klanker-application", "us-east-1", false, false, repoRoot)
+		if err != nil {
+			t.Fatalf("RunClusterAdd: %v", err)
+		}
+
+		// Assertions.
+		if len(mock.Applied) != 1 {
+			t.Errorf("expected 1 Apply call, got %d", len(mock.Applied))
+		}
+		expectedSuffix := filepath.Join("cluster-test")
+		if len(mock.Applied) > 0 && !strings.HasSuffix(mock.Applied[0], expectedSuffix) {
+			t.Errorf("Apply dir %q should have suffix %q", mock.Applied[0], expectedSuffix)
+		}
+		if !mock.OutputCalled {
+			t.Error("Output should have been called")
+		}
+		if len(cfg.Clusters) != 1 {
+			t.Errorf("expected 1 cluster in cfg.Clusters, got %d", len(cfg.Clusters))
+		}
+		if cfg.Clusters[0].RoleARN != "arn:aws:iam::850919910932:role/km-cluster-test" {
+			t.Errorf("unexpected RoleARN: %s", cfg.Clusters[0].RoleARN)
+		}
+		// Plan must NOT have been called.
+		if mock.PlanCalled {
+			t.Error("Plan should not be called on the non-dry-run path")
+		}
+	})
+
+	t.Run("dryRun=true plans only", func(t *testing.T) {
+		repoRoot := makeTestRepoRoot(t)
+		mock := &mockClusterRunner{}
+		cfg := &config.Config{}
+
+		origRunner := cmd.NewClusterRunnerFunc
+		cmd.NewClusterRunnerFunc = func(_, _ string) cmd.ClusterRunner { return mock }
+		t.Cleanup(func() { cmd.NewClusterRunnerFunc = origRunner })
+
+		err := cmd.RunClusterAdd(cfg, "test", oidcARN, "*", "km", "klanker-application", "us-east-1", false, true, repoRoot)
+		if err != nil {
+			t.Fatalf("RunClusterAdd (dry-run): %v", err)
+		}
+
+		if !mock.PlanCalled {
+			t.Error("Plan should have been called on the dry-run path")
+		}
+		if len(mock.Applied) != 0 {
+			t.Errorf("Apply should NOT be called on dry-run; got %d calls", len(mock.Applied))
+		}
+		if mock.OutputCalled {
+			t.Error("Output should NOT be called on dry-run")
+		}
+		if len(cfg.Clusters) != 0 {
+			t.Errorf("cfg.Clusters should be unchanged on dry-run; got %d entries", len(cfg.Clusters))
+		}
+	})
+
+	t.Run("idempotency: existing name exits 0", func(t *testing.T) {
+		repoRoot := makeTestRepoRoot(t)
+		mock := &mockClusterRunner{}
+		cfg := &config.Config{
+			Clusters: []config.ClusterConfig{
+				{Name: "test", RoleARN: "arn:aws:iam::850919910932:role/km-cluster-test"},
+			},
+		}
+
+		origRunner := cmd.NewClusterRunnerFunc
+		cmd.NewClusterRunnerFunc = func(_, _ string) cmd.ClusterRunner { return mock }
+		t.Cleanup(func() { cmd.NewClusterRunnerFunc = origRunner })
+
+		err := cmd.RunClusterAdd(cfg, "test", oidcARN, "*", "km", "klanker-application", "us-east-1", false, false, repoRoot)
+		if err != nil {
+			t.Fatalf("idempotency RunClusterAdd: %v", err)
+		}
+		if mock.PlanCalled || len(mock.Applied) > 0 {
+			t.Error("neither Plan nor Apply should be called when cluster already exists")
+		}
+	})
+}
+
+// TestClusterList verifies the km cluster list command prints all registered clusters
+// with the expected column headers.
+func TestClusterList(t *testing.T) {
+	cfg := &config.Config{
+		Clusters: []config.ClusterConfig{
+			{Name: "dev-use1-0", Namespace: "*", ServiceAccount: "km", RoleARN: "arn:aws:iam::850919910932:role/km-cluster-dev-use1-0"},
+			{Name: "prod-use1-0", Namespace: "prod", ServiceAccount: "km", RoleARN: "arn:aws:iam::850919910932:role/km-cluster-prod-use1-0"},
 		},
 	}
-	cfg := &config.Config{}
 
-	_ = mock
-	_ = cfg
-	_ = repoRoot
-
-	// Non-dry-run path injection (Plan 80-05):
-	//   orig := cmd.NewClusterRunnerFunc
-	//   cmd.NewClusterRunnerFunc = func(_, _ string) cmd.ClusterRunner { return mock }
-	//   t.Cleanup(func() { cmd.NewClusterRunnerFunc = orig })
-	//   err := cmd.RunClusterAdd(cfg, "dev-use1-0", oidcARN, "*", "km", false, repoRoot)
-	//   if err != nil { t.Fatalf("RunClusterAdd: %v", err) }
-	//
-	// Assertions:
-	//   len(mock.Applied) == 1
-	//   strings.HasSuffix(mock.Applied[0], "km-cluster-dev-use1-0")
-	//   mock.OutputCalled == true
-	//   len(cfg.Clusters) == 1
-	//   cfg.Clusters[0].RoleARN == "arn:aws:iam::850919910932:role/km-cluster-dev-use1-0"
-	//
-	// Dry-run path assertions:
-	//   mock.PlanCalled == true
-	//   len(mock.Applied) == 0
-	//   mock.OutputCalled == false
-	//   len(cfg.Clusters) == 0
-	fmt.Println("placeholder to satisfy import — removed at unskip time")
-}
-
-// TestClusterList verifies the km cluster list command prints all registered clusters.
-//
-// Plan 80-05 will expose cmd.NewClusterCmd for building the cobra command.
-//
-// Expected assertions (Plan 80-05 will unskip and implement):
-//   - Seed cfg.Clusters with two entries (dev-use1-0, prod-use1-0)
-//   - Invoke list cobra command with bytes.Buffer capture
-//   - Assert both NAME values appear in output
-func TestClusterList(t *testing.T) {
-	t.Skip("pending implementation — Plan 80-04/80-05")
-
-	cfg := &config.Config{}
-	_ = cfg
-
+	listCmd := cmd.NewClusterCmd(cfg)
 	var buf bytes.Buffer
-	_ = buf
+	listCmd.SetOut(&buf)
+	listCmd.SetArgs([]string{"list"})
+	if err := listCmd.Execute(); err != nil {
+		t.Fatalf("Execute cluster list: %v", err)
+	}
 
-	// Plan 80-05 injection:
-	//   cfg.Clusters = []config.ClusterConfig{
-	//       {Name: "dev-use1-0",  RoleARN: "arn:aws:iam::850919910932:role/km-cluster-dev-use1-0"},
-	//       {Name: "prod-use1-0", RoleARN: "arn:aws:iam::850919910932:role/km-cluster-prod-use1-0"},
-	//   }
-	//   listCmd := cmd.NewClusterCmd(cfg)
-	//   listCmd.SetOut(&buf)
-	//   listCmd.SetArgs([]string{"list"})
-	//   listCmd.Execute()
-	//
-	// Assertions:
-	//   strings.Contains(buf.String(), "dev-use1-0")
-	//   strings.Contains(buf.String(), "prod-use1-0")
+	output := buf.String()
+	for _, want := range []string{"NAME", "NAMESPACE", "SERVICE ACCOUNT", "ROLE ARN", "dev-use1-0", "prod-use1-0"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output missing %q; got:\n%s", want, output)
+		}
+	}
 }
 
-// TestClusterRm verifies the km cluster rm command removes the entry from cfg.Clusters
-// and runs Destroy against the cluster stack directory.
-//
-// Plan 80-05 will expose newClusterRunner seam and RunClusterRm.
-//
-// Expected assertions (Plan 80-05 will unskip and implement):
-//   - Seed cfg.Clusters with one entry ("dev-use1-0")
-//   - Inject mockClusterRunner via newClusterRunner seam
-//   - Run "km cluster rm dev-use1-0"
-//   - Assert len(mock.Destroyed) == 1 AND mock.Destroyed[0] ends with "km-cluster-dev-use1-0"
-//   - Assert len(cfg.Clusters) == 0
+// TestClusterRm verifies the km cluster rm command calls Destroy on the correct
+// stack dir, removes the cluster from cfg.Clusters, and persists the change.
 func TestClusterRm(t *testing.T) {
-	t.Skip("pending implementation — Plan 80-04/80-05")
+	repoRoot := makeTestRepoRoot(t)
 
 	mock := &mockClusterRunner{}
-	cfg := &config.Config{}
-	_ = mock
-	_ = cfg
+	cfg := &config.Config{
+		Clusters: []config.ClusterConfig{
+			{Name: "dev-use1-0", OIDCProviderARN: "arn:aws:iam::874364631781:oidc-provider/fake", Namespace: "*", ServiceAccount: "km"},
+		},
+	}
 
-	// Plan 80-05 injection:
-	//   orig := cmd.NewClusterRunnerFunc
-	//   cmd.NewClusterRunnerFunc = func(_, _ string) cmd.ClusterRunner { return mock }
-	//   t.Cleanup(func() { cmd.NewClusterRunnerFunc = orig })
-	//   cfg.Clusters = []config.ClusterConfig{{Name: "dev-use1-0"}}
-	//   err := cmd.RunClusterRm(cfg, "dev-use1-0", repoRoot)
-	//   if err != nil { t.Fatalf("RunClusterRm: %v", err) }
-	//
-	// Assertions:
-	//   len(mock.Destroyed) == 1
-	//   strings.HasSuffix(mock.Destroyed[0], "km-cluster-dev-use1-0")
-	//   len(cfg.Clusters) == 0
+	// Inject runner seam.
+	origRunner := cmd.NewClusterRunnerFunc
+	cmd.NewClusterRunnerFunc = func(_, _ string) cmd.ClusterRunner { return mock }
+	t.Cleanup(func() { cmd.NewClusterRunnerFunc = origRunner })
+
+	// Inject persist seam.
+	origPersist := cmd.PersistClustersConfigFunc
+	cmd.PersistClustersConfigFunc = func(clusters []config.ClusterConfig) error {
+		return cmd.PersistClustersConfig(filepath.Join(repoRoot, "km-config.yaml"), clusters)
+	}
+	t.Cleanup(func() { cmd.PersistClustersConfigFunc = origPersist })
+
+	err := cmd.RunClusterRm(cfg, "dev-use1-0", "klanker-application", "us-east-1", false, false, repoRoot)
+	if err != nil {
+		t.Fatalf("RunClusterRm: %v", err)
+	}
+
+	if len(mock.Destroyed) != 1 {
+		t.Errorf("expected 1 Destroy call, got %d", len(mock.Destroyed))
+	}
+	expectedSuffix := filepath.Join("cluster-dev-use1-0")
+	if len(mock.Destroyed) > 0 && !strings.HasSuffix(mock.Destroyed[0], expectedSuffix) {
+		t.Errorf("Destroy dir %q should have suffix %q", mock.Destroyed[0], expectedSuffix)
+	}
+	if len(cfg.Clusters) != 0 {
+		t.Errorf("expected cfg.Clusters to be empty after rm, got %d entries", len(cfg.Clusters))
+	}
 }
 
-// TestPersistClusters verifies persistClustersConfig merges clusters into an existing
-// km-config.yaml without clobbering other top-level keys.
-//
-// Plan 80-05 will expose cmd.PersistClustersConfig (or via seam).
-//
-// Expected assertions (Plan 80-05 will unskip and implement):
-//   - Write temp km-config.yaml with domain: example.com
-//   - Call persistClustersConfig with two ClusterConfig entries
-//   - Re-read file; assert domain: still present AND clusters: list has two entries
+// TestPersistClusters verifies that PersistClustersConfig merges clusters into
+// an existing km-config.yaml without clobbering other top-level keys.
 func TestPersistClusters(t *testing.T) {
-	t.Skip("pending implementation — Plan 80-04/80-05")
-
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "km-config.yaml")
 
-	// Seed with one existing key
-	if err := os.WriteFile(cfgPath, []byte("domain: example.com\n"), 0600); err != nil {
+	// Seed with one existing key.
+	if err := os.WriteFile(cfgPath, []byte("domain: example.com\n"), 0o600); err != nil {
 		t.Fatalf("write km-config.yaml: %v", err)
 	}
-	_ = cfgPath
 
-	// Plan 80-05 injection:
-	//   clusters := []config.ClusterConfig{
-	//       {Name: "dev-use1-0",  OIDCProviderARN: "arn:...", Namespace: "*", ServiceAccount: "km"},
-	//       {Name: "prod-use1-0", OIDCProviderARN: "arn:...", Namespace: "*", ServiceAccount: "km"},
-	//   }
-	//   err := cmd.PersistClustersConfig(cfgPath, clusters)
-	//   if err != nil { t.Fatalf("PersistClustersConfig: %v", err) }
-	//   content, _ := os.ReadFile(cfgPath)
-	//
-	// Assertions:
-	//   strings.Contains(string(content), "domain: example.com")   — key preserved
-	//   strings.Contains(string(content), "clusters:")             — clusters section written
-	//   count of "name:" in content >= 2
+	clusters := []config.ClusterConfig{
+		{Name: "dev-use1-0", OIDCProviderARN: "arn:...", Namespace: "*", ServiceAccount: "km"},
+		{Name: "prod-use1-0", OIDCProviderARN: "arn:...", Namespace: "*", ServiceAccount: "km"},
+	}
+
+	if err := cmd.PersistClustersConfig(cfgPath, clusters); err != nil {
+		t.Fatalf("PersistClustersConfig: %v", err)
+	}
+
+	content, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read back km-config.yaml: %v", err)
+	}
+	s := string(content)
+
+	if !strings.Contains(s, "domain: example.com") {
+		t.Errorf("domain key missing from persisted config; got:\n%s", s)
+	}
+	if !strings.Contains(s, "clusters:") {
+		t.Errorf("clusters key missing from persisted config; got:\n%s", s)
+	}
+	nameCount := strings.Count(s, "name:")
+	if nameCount < 2 {
+		t.Errorf("expected at least 2 'name:' entries in clusters, got %d; content:\n%s", nameCount, s)
+	}
 }
 
-// TestClusterAddPersistFailure verifies the rollback contract: when persistClustersConfigFunc
-// returns an error AFTER Apply succeeds, runClusterAdd must:
-//
-//  1. return a non-nil error
-//  2. the error message contains "km cluster rm" (instructs operator on remediation)
-//  3. mockClusterRunner.Destroyed remains empty (no auto-destroy — cluster may be partial)
-//
-// Injection contract (Plan 80-05 wires these package-level seams):
-//   - Inject newClusterRunner returning a mockClusterRunner whose Apply returns nil
-//     and Output returns role_arn "arn:aws:iam::850919910932:role/km-cluster-dev-use1-0"
-//   - Inject persistClustersConfigFunc returning fmt.Errorf("disk full") via t.Cleanup
-//   - Call runClusterAdd with dryRun:false
-//   - Assert err != nil AND strings.Contains(err.Error(), "km cluster rm") AND len(mock.Destroyed) == 0
+// TestClusterAddPersistFailure verifies the rollback contract: when
+// PersistClustersConfigFunc returns an error AFTER Apply succeeds, RunClusterAdd
+// must return a non-nil error whose message contains "km cluster rm" and must NOT
+// call runner.Destroy (no auto-destroy — leave IAM role in place).
 func TestClusterAddPersistFailure(t *testing.T) {
-	t.Skip("pending — Plan 80-05 wires rollback path")
+	repoRoot := makeTestRepoRoot(t)
 
 	mock := &mockClusterRunner{
 		OutputResult: map[string]interface{}{
-			"role_arn": map[string]interface{}{"value": "arn:aws:iam::850919910932:role/km-cluster-dev-use1-0"},
+			"role_arn": map[string]interface{}{"value": "arn:aws:iam::850919910932:role/km-cluster-failtest"},
 		},
 	}
-	_ = mock
+	cfg := &config.Config{}
 
-	// Plan 80-05 implementation contract:
-	//
-	// 1. Inject newClusterRunner returning mock via t.Cleanup:
-	//    orig := cmd.NewClusterRunnerFunc
-	//    cmd.NewClusterRunnerFunc = func(_, _ string) cmd.ClusterRunner { return mock }
-	//    t.Cleanup(func() { cmd.NewClusterRunnerFunc = orig })
-	//
-	// 2. Inject persistClustersConfigFunc returning an error:
-	//    origP := cmd.PersistClustersConfigFunc
-	//    cmd.PersistClustersConfigFunc = func(_ []config.ClusterConfig) error {
-	//        return fmt.Errorf("disk full")
-	//    }
-	//    t.Cleanup(func() { cmd.PersistClustersConfigFunc = origP })
-	//
-	// 3. Call runClusterAdd(cfg, "dev-use1-0", oidcARN, "*", "km", false, repoRoot)
-	//
-	// 4. Assert:
-	//    if err == nil { t.Fatal("expected error from persist failure, got nil") }
-	//    if !strings.Contains(err.Error(), "km cluster rm") {
-	//        t.Errorf("error should mention 'km cluster rm'; got: %v", err)
-	//    }
-	//    if len(mock.Destroyed) != 0 {
-	//        t.Errorf("expected no auto-destroy on persist failure; Destroyed=%v", mock.Destroyed)
-	//    }
+	// Inject runner seam.
+	origRunner := cmd.NewClusterRunnerFunc
+	cmd.NewClusterRunnerFunc = func(_, _ string) cmd.ClusterRunner { return mock }
+	t.Cleanup(func() { cmd.NewClusterRunnerFunc = origRunner })
+
+	// Inject persist seam that always fails.
+	origPersist := cmd.PersistClustersConfigFunc
+	cmd.PersistClustersConfigFunc = func(_ []config.ClusterConfig) error {
+		return fmt.Errorf("disk full")
+	}
+	t.Cleanup(func() { cmd.PersistClustersConfigFunc = origPersist })
+
+	err := cmd.RunClusterAdd(cfg, "failtest", "arn:aws:iam::874364631781:oidc-provider/fake", "*", "km", "klanker-application", "us-east-1", false, false, repoRoot)
+
+	// Must return an error.
+	if err == nil {
+		t.Fatal("expected error from persist failure, got nil")
+	}
+
+	// Error must mention "km cluster rm" so operator knows how to clean up.
+	if !strings.Contains(err.Error(), "km cluster rm") {
+		t.Errorf("error should mention 'km cluster rm'; got: %v", err)
+	}
+
+	// Must NOT auto-destroy — leave IAM role in place.
+	if len(mock.Destroyed) != 0 {
+		t.Errorf("expected no auto-destroy on persist failure; Destroyed=%v", mock.Destroyed)
+	}
+
+	// Apply and Output must have been called (proves we reached the persist step).
+	if len(mock.Applied) != 1 {
+		t.Errorf("expected 1 Apply call, got %d", len(mock.Applied))
+	}
+	if !mock.OutputCalled {
+		t.Error("Output should have been called before persist attempt")
+	}
 }
