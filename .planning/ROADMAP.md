@@ -1701,7 +1701,7 @@ Plans:
 **Goal:** Make `km cluster add` Just Work whether the EKS cluster lives in the same AWS account as the klanker install or in a different account. Today the `cluster-irsa` module unconditionally creates a new `aws_iam_openid_connect_provider` mirroring the cluster's issuer URL, which fails with `EntityAlreadyExists` whenever an OIDC provider for that URL is already registered in the target account (the same-account case, the second-cluster-irsa-stack-against-same-EKS-issuer case, and the "EKS auto-registered the provider for us" case). Add a `register_oidc_provider` variable to the module (resource is `count = var.register ? 1 : 0`, a `data "aws_iam_openid_connect_provider"` lookup covers the false branch), and have `km cluster add` auto-detect by calling `aws iam list-open-id-connect-providers` against the target account before generating the terragrunt.hcl. Operator can override with `--register-oidc-provider=true|false`. Phase closes when (a) same-account `km cluster add` against a cluster whose provider is already registered succeeds without `EntityAlreadyExists` and surfaces the existing provider ARN as the trust Principal, (b) cross-account `km cluster add` against a brand-new issuer still registers a fresh provider (existing behavior preserved), and (c) running `km cluster add` twice against the same EKS issuer (multi-stack-per-cluster) succeeds for both invocations.
 **Requirements**: operator-feature-80 (extends Phase 80 — same synthetic ID)
 **Depends on:** Phase 80
-**Plans:** 5 plans
+**Plans:** 3/5 plans executed
 
 Plans:
 - [ ] 80.1-01-PLAN.md — Wave 1 test scaffold: mockOidcLister + two pending test stubs in cluster_test.go

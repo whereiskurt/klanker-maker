@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 80.1-01-PLAN.md (OIDC auto-detect Wave 1 test scaffold)
-last_updated: "2026-05-12T04:00:21.760Z"
+stopped_at: Completed 80.1-03-PLAN.md
+last_updated: "2026-05-12T04:05:26.244Z"
 last_activity: 2026-05-12
 progress:
   total_phases: 86
   completed_phases: 74
   total_plans: 314
-  completed_plans: 274
+  completed_plans: 275
   percent: 93
 ---
 
@@ -314,6 +314,7 @@ Progress: [█████████░] 93%
 | Phase 80-km-cluster-cross-account-irsa-for-k8s-integrations P06 | 420 | 3 tasks | 3 files |
 | Phase 80.1-auto-detect-existing-oidc-provider-in-cluster-irsa-module-supporting-same-account-irsa-without-manual-flags P02 | 1min | 1 tasks | 1 files |
 | Phase 80.1-auto-detect-existing-oidc-provider-in-cluster-irsa-module-supporting-same-account-irsa-without-manual-flags P01 | 3min | 1 tasks | 1 files |
+| Phase 80.1-auto-detect-existing-oidc-provider-in-cluster-irsa-module-supporting-same-account-irsa-without-manual-flags P03 | 2 | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -897,6 +898,9 @@ Recent decisions affecting current work:
 - [Phase 80.1]: OIDC provider IAM policy uses single-statement Resource '*' (consistent with kms/ses_send; List action cannot be resource-scoped per IAM docs)
 - [Phase 80.1]: Added iam:UntagOpenIDConnectProvider for completeness (Terraform may call on destroy of tagged provider)
 - [Phase 80.1]: Use aws.String() in t.Run bodies to keep aws import used while outer test is skipped; add _ = targetURL to prevent unused-const compile error
+- [Phase 80.1-03]: register_oidc_provider defaults to true — preserves Phase 80 behavior for all existing stacks
+- [Phase 80.1-03]: moved {} block before locals {} ensures Terraform state migration resolves before resource evaluation
+- [Phase 80.1-03]: oidc_provider_arn_local local unifies both OIDC branches; trust policy and outputs reference the local
 
 ### Roadmap Evolution
 
@@ -997,6 +1001,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-12T04:00:21.753Z
-Stopped at: Completed 80.1-01-PLAN.md (OIDC auto-detect Wave 1 test scaffold)
+Last session: 2026-05-12T04:05:26.234Z
+Stopped at: Completed 80.1-03-PLAN.md
 Resume file: None
