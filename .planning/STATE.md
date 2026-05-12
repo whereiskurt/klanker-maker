@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 80.1-03-PLAN.md
-last_updated: "2026-05-12T04:05:26.244Z"
+stopped_at: Completed 80.1-04-PLAN.md (km cluster add OIDC auto-detect + 8 tests passing)
+last_updated: "2026-05-12T04:09:30.575Z"
 last_activity: 2026-05-12
 progress:
   total_phases: 86
   completed_phases: 74
   total_plans: 314
-  completed_plans: 275
+  completed_plans: 276
   percent: 93
 ---
 
@@ -315,6 +315,7 @@ Progress: [█████████░] 93%
 | Phase 80.1-auto-detect-existing-oidc-provider-in-cluster-irsa-module-supporting-same-account-irsa-without-manual-flags P02 | 1min | 1 tasks | 1 files |
 | Phase 80.1-auto-detect-existing-oidc-provider-in-cluster-irsa-module-supporting-same-account-irsa-without-manual-flags P01 | 3min | 1 tasks | 1 files |
 | Phase 80.1-auto-detect-existing-oidc-provider-in-cluster-irsa-module-supporting-same-account-irsa-without-manual-flags P03 | 2 | 3 tasks | 3 files |
+| Phase 80.1-auto-detect-existing-oidc-provider-in-cluster-irsa-module-supporting-same-account-irsa-without-manual-flags P04 | 18 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -901,6 +902,7 @@ Recent decisions affecting current work:
 - [Phase 80.1-03]: register_oidc_provider defaults to true — preserves Phase 80 behavior for all existing stacks
 - [Phase 80.1-03]: moved {} block before locals {} ensures Terraform state migration resolves before resource evaluation
 - [Phase 80.1-03]: oidc_provider_arn_local local unifies both OIDC branches; trust policy and outputs reference the local
+- [Phase 80.1]: Export GenerateClusterHCLWithOIDC so cmd_test package can test the false branch; RunClusterAdd takes registerOIDCProviderFlag string as 11th param; unit tests pass 'false' to skip IAM auto-detect
 
 ### Roadmap Evolution
 
@@ -1001,6 +1003,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-12T04:05:26.234Z
-Stopped at: Completed 80.1-03-PLAN.md
+Last session: 2026-05-12T04:09:30.569Z
+Stopped at: Completed 80.1-04-PLAN.md (km cluster add OIDC auto-detect + 8 tests passing)
 Resume file: None
