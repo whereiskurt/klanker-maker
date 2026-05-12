@@ -1686,12 +1686,12 @@ Plans:
 **Goal:** Ship `km cluster add/list/rm` that provisions an IAM role in the klanker AWS account with a cross-account trust policy referencing a k8s cluster's OIDC provider in a *different* AWS account. K8s pods authenticate via projected service-account tokens (no static keys). Refactor `create-handler` and the new `cluster-irsa` module to share a single `km-operator-policy` Terraform module so Lambda and IRSA roles can never drift. Phase closes when full `km cluster add --dry-run=false` against the `klanker-application` profile creates the role, persists to `km-config.yaml`, and `km cluster rm` cleanly tears it down.
 **Requirements**: operator-feature-80 (synthetic ID — operator-facing feature, not in v1 REQUIREMENTS.md list)
 **Depends on:** Phase 79
-**Plans:** 5/6 plans executed
+**Plans:** 6/6 plans complete
 
 Plans:
-- [ ] 80-01-PLAN.md — Wave 0 test scaffolds (cluster_test.go + config_clusters_test.go skeletons; un-skipped by Plans 80-04/80-05)
-- [ ] 80-02-PLAN.md — Extract km-operator-policy/v1.0.0/ shared module from create-handler; 14 moved blocks; zero-net-diff terragrunt plan gate (BLOCKING checkpoint)
-- [ ] 80-03-PLAN.md — New cluster-irsa/v1.0.0/ Terraform module with cross-account trust policy + km_operator_policy module consumption
-- [ ] 80-04-PLAN.md — ClusterConfig struct + Config.Clusters field + viper merge wiring in internal/app/config/config.go
-- [ ] 80-05-PLAN.md — km cluster CLI (add/list/rm) in internal/app/cmd/cluster.go; generateClusterHCL, persistClustersConfig, region.hcl bootstrap, idempotency, handoff output
-- [ ] 80-06-PLAN.md — Phase-close integration test against klanker-application (BLOCKING checkpoint) + CLAUDE.md Cross-account k8s integrations section + closeout SUMMARY
+- [x] 80-01-PLAN.md — Wave 0 test scaffolds (cluster_test.go + config_clusters_test.go skeletons; un-skipped by Plans 80-04/80-05)
+- [x] 80-02-PLAN.md — Extract km-operator-policy/v1.0.0/ shared module from create-handler; 14 moved blocks; zero-net-diff terragrunt plan gate (BLOCKING checkpoint)
+- [x] 80-03-PLAN.md — New cluster-irsa/v1.0.0/ Terraform module with cross-account trust policy + km_operator_policy module consumption
+- [x] 80-04-PLAN.md — ClusterConfig struct + Config.Clusters field + viper merge wiring in internal/app/config/config.go
+- [x] 80-05-PLAN.md — km cluster CLI (add/list/rm) in internal/app/cmd/cluster.go; generateClusterHCL, persistClustersConfig, region.hcl bootstrap, idempotency, handoff output
+- [x] 80-06-PLAN.md — Phase-close integration test against klanker-application (BLOCKING checkpoint) + CLAUDE.md Cross-account k8s integrations section + closeout SUMMARY

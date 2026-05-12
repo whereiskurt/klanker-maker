@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 80-05-PLAN.md (km cluster CLI)
-last_updated: "2026-05-12T00:15:07.861Z"
+stopped_at: Completed 80-06-PLAN.md (Phase 80 integration test + docs + closeout)
+last_updated: "2026-05-12T00:25:15.741Z"
 last_activity: 2026-05-12
 progress:
   total_phases: 85
-  completed_phases: 73
+  completed_phases: 74
   total_plans: 309
-  completed_plans: 271
+  completed_plans: 272
   percent: 93
 ---
 
@@ -311,6 +311,7 @@ Progress: [█████████░] 93%
 | Phase 80 P04 | 142s | 2 tasks | 2 files |
 | Phase 80 P03 | 198 | 2 tasks | 6 files |
 | Phase 80 P05 | 630 | 3 tasks | 4 files |
+| Phase 80-km-cluster-cross-account-irsa-for-k8s-integrations P06 | 420 | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -889,6 +890,8 @@ Recent decisions affecting current work:
 - [Phase 80]: cluster-irsa/v1.0.0 module source path ../../km-operator-policy/v1.0.0 is relative; Plan 80-05 terragrunt.hcl must use // double-slash notation
 - [Phase 80]: Exported RunClusterAdd/RunClusterRm/GenerateClusterHCL + seam vars so cmd_test (external package) can inject mocks; PersistClustersConfig(configPath, clusters) takes explicit path for testability
 - [Phase 80]: runner.Plan(ctx, dir) reuses buildCommand+runCommand factory — no new fields on Runner struct; dry-run path calls Plan, apply path calls Apply; rollback contract: no auto-destroy on persist failure
+- [Phase 80]: km-config.yaml must be chmod 644 before km cluster add --dry-run=false; ships read-only (chmod 400) by design
+- [Phase 80]: CLAUDE.md Phase 80 section uses Phase 73/79 format: heading depth, flag table, one-time setup, important notes blocks
 
 ### Roadmap Evolution
 
@@ -988,6 +991,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-12T00:15:07.854Z
-Stopped at: Completed 80-05-PLAN.md (km cluster CLI)
+Last session: 2026-05-12T00:25:15.734Z
+Stopped at: Completed 80-06-PLAN.md (Phase 80 integration test + docs + closeout)
 Resume file: None
