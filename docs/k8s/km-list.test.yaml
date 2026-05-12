@@ -1,10 +1,25 @@
-# Smoke-test pod: download km from the klanker artifacts bucket via IRSA,
-# then run `km list` against the klanker account.
+# Smoke test: run `km list` inside an EKS pod via cross-account IRSA.
 #
-# Replace KM_ARTIFACTS_BUCKET with the artifacts_bucket from your km-config.yaml.
-# Replace KM_ACCOUNT_ID with your klanker AWS account id (NOT the EKS cluster's account).
-# The role name in the AWS profile must match the role provisioned by `km cluster add`
-# (format: <resource_prefix>-cluster-<name>).
+# Replace these placeholders before applying:
+#   123456789012             → your klanker AWS account id (NOT the EKS cluster's account)
+#   km-cluster-dev-use1-0    → <resource_prefix>-cluster-<--name from km cluster add>
+#   km-artifacts-EXAMPLE123  → artifacts_bucket from your km-config.yaml
+#
+# Apply:
+#   kubectl apply -f km-list.test.yaml
+# Watch:
+#   kubectl -n security logs km-list-test -c km
+# Cleanup:
+#   kubectl delete -f km-list.test.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: km
+  namespace: security
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/km-cluster-dev-use1-0
+    eks.amazonaws.com/token-expiration: "3600"
+---
 apiVersion: v1
 kind: Pod
 metadata:

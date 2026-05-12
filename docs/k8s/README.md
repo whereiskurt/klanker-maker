@@ -86,11 +86,12 @@ scenarios rather than running `km cluster add` per ServiceAccount.
 
 ## In-cluster setup (k8s side)
 
-Two manifests in this directory; apply them in order on the EKS cluster.
+Single multi-document manifest in this directory: `km-list.test.yaml`. It
+contains both the ServiceAccount and the smoke-test Pod, separated by `---`.
 
-### 1. `serviceaccount.km-irsa.yaml`
+### `km-list.test.yaml`
 
-Annotates a ServiceAccount with the role ARN from the klanker account.
+**ServiceAccount** — annotated with the role ARN from the klanker account.
 The `eks.amazonaws.com/role-arn` annotation is what the EKS pod-identity
 webhook reads to inject the `web_identity_token_file` + `role_arn` env
 into the pod.
@@ -106,18 +107,10 @@ metadata:
     eks.amazonaws.com/token-expiration: "3600"
 ```
 
-Apply it:
-
-```bash
-kubectl apply -f serviceaccount.km-irsa.yaml
-```
-
 The `namespace` and `name` here MUST match the values you passed to
 `km cluster add` (or be wildcards if you used `*`).
 
-### 2. `pod.km-list.yaml` — smoke-test pod
-
-A two-container pod that:
+**Pod** — two containers:
 
 1. **Init container (`fetch-km`)** — uses the projected SA token to assume
    the IRSA role and `aws s3 cp` the `km` binary from
@@ -140,7 +133,7 @@ env:
 Apply and watch:
 
 ```bash
-kubectl apply -f pod.km-list.yaml
+kubectl apply -f km-list.test.yaml
 kubectl -n security logs km-list-test -c km
 ```
 
@@ -155,7 +148,7 @@ APIs through the IRSA chain.
    OIDC URL).
 2. AWS SDK reads `AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN` (injected by
    the EKS webhook from the SA annotation), or the `~/.aws/config` profile
-   used in `pod.km-list.yaml`.
+   used in `km-list.test.yaml`.
 3. SDK calls `sts:AssumeRoleWithWebIdentity` in the klanker account, sending
    the projected token.
 4. STS in the klanker account looks up the OIDC provider whose URL matches
@@ -178,8 +171,7 @@ against its local mirror.
 km cluster rm dev-use1-0          # destroys the IAM role, mirror provider, and stack
 
 # Inside the cluster:
-kubectl -n security delete pod km-list-test
-kubectl -n security delete -f serviceaccount.km-irsa.yaml
+kubectl delete -f km-list.test.yaml
 ```
 
 ## Troubleshooting
