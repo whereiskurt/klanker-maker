@@ -1695,3 +1695,13 @@ Plans:
 - [x] 80-04-PLAN.md — ClusterConfig struct + Config.Clusters field + viper merge wiring in internal/app/config/config.go
 - [x] 80-05-PLAN.md — km cluster CLI (add/list/rm) in internal/app/cmd/cluster.go; generateClusterHCL, persistClustersConfig, region.hcl bootstrap, idempotency, handoff output
 - [x] 80-06-PLAN.md — Phase-close integration test against klanker-application (BLOCKING checkpoint) + CLAUDE.md Cross-account k8s integrations section + closeout SUMMARY
+
+### Phase 80.1: Auto-detect existing OIDC provider in cluster-irsa module, supporting same-account IRSA without manual flags (INSERTED)
+
+**Goal:** Make `km cluster add` Just Work whether the EKS cluster lives in the same AWS account as the klanker install or in a different account. Today the `cluster-irsa` module unconditionally creates a new `aws_iam_openid_connect_provider` mirroring the cluster's issuer URL, which fails with `EntityAlreadyExists` whenever an OIDC provider for that URL is already registered in the target account (the same-account case, the second-cluster-irsa-stack-against-same-EKS-issuer case, and the "EKS auto-registered the provider for us" case). Add a `register_oidc_provider` variable to the module (resource is `count = var.register ? 1 : 0`, a `data "aws_iam_openid_connect_provider"` lookup covers the false branch), and have `km cluster add` auto-detect by calling `aws iam list-open-id-connect-providers` against the target account before generating the terragrunt.hcl. Operator can override with `--register-oidc-provider=true|false`. Phase closes when (a) same-account `km cluster add` against a cluster whose provider is already registered succeeds without `EntityAlreadyExists` and surfaces the existing provider ARN as the trust Principal, (b) cross-account `km cluster add` against a brand-new issuer still registers a fresh provider (existing behavior preserved), and (c) running `km cluster add` twice against the same EKS issuer (multi-stack-per-cluster) succeeds for both invocations.
+**Requirements**: operator-feature-80 (extends Phase 80 — same synthetic ID)
+**Depends on:** Phase 80
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 80.1 to break down)
