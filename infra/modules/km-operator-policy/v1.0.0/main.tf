@@ -449,6 +449,26 @@ resource "aws_iam_role_policy" "kms" {
   })
 }
 
+# Policy: EventBridge for publishing sandbox lifecycle events (destroy, create).
+# km kill publishes a destroy event to the default bus to trigger the teardown
+# Lambda. Scoped to the default bus in the account only.
+resource "aws_iam_role_policy" "eventbridge" {
+  name = "${var.resource_prefix}-create-handler-eventbridge"
+  role = var.role_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "EventBridgePutEvents"
+        Effect   = "Allow"
+        Action   = ["events:PutEvents"]
+        Resource = "arn:aws:events:*:${data.aws_caller_identity.current.account_id}:event-bus/default"
+      }
+    ]
+  })
+}
+
 # Policy: SQS for Phase 67 inbound queue lifecycle (per-sandbox FIFO queues
 # named km-slack-inbound-<sandbox-id>.fifo). km create provisions the queue
 # at create time; rollback deletes it on failure. Scoped to the inbound
