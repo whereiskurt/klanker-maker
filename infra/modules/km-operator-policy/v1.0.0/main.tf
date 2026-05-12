@@ -96,6 +96,31 @@ resource "aws_iam_role_policy" "dynamodb_sandboxes" {
   })
 }
 
+# Policy: DynamoDB ${resource_prefix}-schedules — km at stores recurring
+# operation records here (key: schedule name, attrs: cron expr / target
+# payload). Not covered by the dynamodb state-lock or budget statements.
+resource "aws_iam_role_policy" "dynamodb_schedules" {
+  name = "${var.resource_prefix}-create-handler-dynamodb-schedules"
+  role = var.role_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "SchedulesTable"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Scan",
+        ]
+        Resource = "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.resource_prefix}-schedules"
+      }
+    ]
+  })
+}
+
 # Policy: Terraform state S3 access (state read/write for km create subprocess)
 resource "aws_iam_role_policy" "terraform_state" {
   name = "${var.resource_prefix}-create-handler-tf-state"
@@ -300,7 +325,21 @@ resource "aws_iam_role_policy" "scheduler" {
           "scheduler:GetSchedule",
           "scheduler:UpdateSchedule",
         ]
-        Resource = "arn:aws:scheduler:*:${data.aws_caller_identity.current.account_id}:schedule/default/${var.resource_prefix}-*"
+        Resource = [
+          "arn:aws:scheduler:*:${data.aws_caller_identity.current.account_id}:schedule/default/${var.resource_prefix}-*",
+          "arn:aws:scheduler:*:${data.aws_caller_identity.current.account_id}:schedule/${var.resource_prefix}-at/*",
+        ]
+      },
+      {
+        Sid    = "SchedulerGroupManagement"
+        Effect = "Allow"
+        Action = [
+          "scheduler:CreateScheduleGroup",
+          "scheduler:GetScheduleGroup",
+          "scheduler:DeleteScheduleGroup",
+          "scheduler:ListScheduleGroups",
+        ]
+        Resource = "arn:aws:scheduler:*:${data.aws_caller_identity.current.account_id}:schedule-group/${var.resource_prefix}-at"
       },
       {
         Sid    = "SchedulerPassRole"
@@ -449,6 +488,47 @@ resource "aws_iam_role_policy" "kms" {
   })
 }
 
+# Policy: Resource Groups Tagging API for sandbox resource enumeration
+# (km status, km list, doctor stale-resource scans). tag:GetResources is the
+# only action and does not support resource-level scoping.
+resource "aws_iam_role_policy" "tagging" {
+  name = "${var.resource_prefix}-create-handler-tagging"
+  role = var.role_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "ResourceTaggingRead"
+        Effect   = "Allow"
+        Action   = ["tag:GetResources"]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# Policy: AWS Pricing API for spot/on-demand rate lookup during km create
+# (EC2 and ECS provisioning). pricing:GetProducts requires the us-east-1
+# endpoint regardless of sandbox region and does not support resource-level
+# scoping.
+resource "aws_iam_role_policy" "pricing" {
+  name = "${var.resource_prefix}-create-handler-pricing"
+  role = var.role_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "PricingRead"
+        Effect   = "Allow"
+        Action   = ["pricing:GetProducts"]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 # Policy: EventBridge for publishing sandbox lifecycle events (destroy, create).
 # km kill publishes a destroy event to the default bus to trigger the teardown
 # Lambda. Scoped to the default bus in the account only.
@@ -488,9 +568,14 @@ resource "aws_iam_role_policy" "sqs_slack_inbound" {
           "sqs:DeleteQueue",
           "sqs:GetQueueAttributes",
           "sqs:GetQueueUrl",
+          "sqs:ListQueues",
           "sqs:SetQueueAttributes",
           "sqs:TagQueue",
         ]
+        # sqs:ListQueues does not support resource-level scoping; AWS evaluates
+        # it account-wide regardless of the Resource ARN. Left in this scoped
+        # statement for grouping — the constraint is silently ignored for that
+        # one action.
         Resource = "arn:aws:sqs:*:${data.aws_caller_identity.current.account_id}:${var.resource_prefix}-slack-inbound-*.fifo"
       }
     ]
