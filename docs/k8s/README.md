@@ -1,7 +1,7 @@
 # Running `km` inside a Kubernetes pod (cross-account IRSA)
 
 This directory holds the operator-facing artifacts for letting a pod in some
-other team's EKS cluster (e.g. Greenhouse) run the `km` CLI against your
+other team's EKS cluster (e.g. a corporate `example.com` cluster) run the `km` CLI against your
 klanker AWS account. The pod authenticates as an IAM role in the klanker
 account via IRSA — no static AWS keys, no `aws_access_key_id` env vars,
 auto-rotating 3600s session tokens issued by the cluster's projected
@@ -13,7 +13,7 @@ Two accounts are involved end-to-end:
 
 | Account | Role | Example |
 |---|---|---|
-| **EKS cluster** account | Hosts the cluster, issues SA tokens, owns the cluster's OIDC issuer URL | Greenhouse, `874364631781` |
+| **EKS cluster** account | Hosts the cluster, issues SA tokens, owns the cluster's OIDC issuer URL | Corporate `example.com`, `874364631781` |
 | **klanker** account | Hosts the IAM role and a *mirrored* OIDC provider; holds the artifacts/state buckets `km` reads | `850919910932` |
 
 The non-obvious bit: **AWS STS validates `AssumeRoleWithWebIdentity` tokens
