@@ -5,9 +5,11 @@
 Klanker Maker compiles a YAML profile into a real AWS sandbox: a scoped IAM role, a kernel-level network policy, a MITM proxy that meters every Bedrock/Anthropic/OpenAI token, a Slack channel that talks back to the agent, and a dollar ceiling that suspends compute when the money runs out. The point is to take agentic work off your laptop and put it on AWS at the size the work actually needs - a `t3.medium` for a quick fix, an `r7i.48xlarge` against EFS-backed datasets for a multi-day data pipeline, a GPU box for a training loop, or a crew of Claudes coordinating across all of the above. Drive any of it from a CLI, an `at` schedule, an inbound email, or a Slack thread - same control plane, same guardrails.
 
 <p align="center">
-  <img src="docs/klankerdome-dark.gif" alt="Klanker Maker - robots working inside a sandboxed dome" width="480" />
+  <a href="https://link.excalidraw.com/p/readonly/IRnJEYKzu0XezsHBg1mx">
+    <img src="docs/diagrams/excalidraw.presentation.gif" alt="Klanker Maker architecture slideshow preview" width="720" />
+  </a>
   <br />
-  <sub>Art by Mike Wigmore (<a href="https://github.com/mikewigmore">@mikewigmore</a>)</sub>
+  <sub>📊 <a href="https://link.excalidraw.com/p/readonly/IRnJEYKzu0XezsHBg1mx">Open the narrated walk-through</a></sub>
 </p>
 
 A profile is the contract - declare what's allowed, get the infrastructure as the artifact:
@@ -985,3 +987,11 @@ It is **not** affiliated with, endorsed by, or sponsored by any current or past 
 | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Behavioral expectations for issues, PRs, and discussions |
 
 Klanker Maker provisions real AWS infrastructure that costs real money to operate and grants AI agents scoped credentials in your AWS account. If you use it, you accept full responsibility for everything it does on your bill, your network, and your data.
+
+---
+
+<p align="center">
+  <img src="docs/klankerdome-dark.gif" alt="Klanker Maker - robots working inside a sandboxed dome" width="480" />
+  <br />
+  <sub>Art by Mike Wigmore (<a href="https://github.com/mikewigmore">@mikewigmore</a>)</sub>
+</p>
