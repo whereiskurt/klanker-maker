@@ -439,6 +439,87 @@ binary in S3 is harmless to leave in place when nothing references it.
 
 See `docs/superpowers/specs/2026-05-10-km-presence-daemon-design.md` for the full PRD.
 
+## Cross-account k8s integrations (Phase 80)
+
+Provisions IAM roles in the klanker AWS account with cross-account trust policies referencing k8s OIDC providers in *other* AWS accounts. Pods authenticate via projected ServiceAccount tokens (IRSA) — no static IAM user keys, auto-rotating 3600s session tokens. Both the IRSA role and the create-handler Lambda role consume the shared `km-operator-policy/v1.0.0/` Terraform module so the two surfaces can never drift.
+
+### What it does
+
+`km cluster add` generates a per-cluster `infra/live/{region-label}/cluster-{name}/terragrunt.hcl`, runs `terragrunt apply` against `infra/modules/cluster-irsa/v1.0.0/`, captures the role ARN output, and persists the cluster metadata to `km-config.yaml`. The trust policy permits `sts:AssumeRoleWithWebIdentity` from the supplied OIDC provider, scoped to a single namespace + ServiceAccount (wildcards allowed). The role is attached to the same 14 inline policies as the create-handler Lambda role via the shared `km-operator-policy/v1.0.0/` module.
+
+### CLI
+
+```bash
+km cluster add --name <name> --oidc-provider-arn <arn> [flags]   # provision
+km cluster list                                                   # show configured roles
+km cluster rm <name> [flags]                                      # destroy
+```
+
+| Flag | Default | Required |
+|---|---|---|
+| `--name` | (none) | yes |
+| `--oidc-provider-arn` | (none) | yes |
+| `--namespace` | `*` | no |
+| `--service-account` | `km` | no |
+| `--aws-profile` | `klanker-application` | no |
+| `--region` | `us-east-1` | no |
+| `--verbose` | `false` | no |
+| `--dry-run` | `true` | no |
+
+`--dry-run=true` runs `terragrunt plan` only; `--dry-run=false` runs `terragrunt apply --auto-approve`.
+
+### km-config.yaml schema
+
+`km cluster add` appends to `clusters:` in `km-config.yaml`:
+
+```yaml
+clusters:
+  - name: dev-use1-0
+    oidc_provider_arn: arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE
+    namespace: "*"
+    service_account: km
+    role_arn: arn:aws:iam::052251888500:role/km-cluster-dev-use1-0
+```
+
+Absent `clusters:` key is treated as empty slice — existing installs need no migration.
+
+### One-time setup
+
+```bash
+make build       # always required after CLI edits (ldflags version embed)
+# No km init --sidecars needed — Phase 80 does NOT modify the management Lambda's
+# userdata template or sandbox-side code. The km-operator-policy / cluster-irsa
+# modules are operator-applied (terragrunt apply from the operator workstation),
+# not Lambda-applied.
+```
+
+### Important workflow notes
+
+- **Zero-diff refactor of create-handler:** Plan 80-02 extracted 14 inline IAM policies from `infra/modules/create-handler/v1.0.0/main.tf` into the shared module via `moved {}` blocks. The first time an operator runs `terragrunt apply` in `infra/live/use1/create-handler/`, Terraform performs an address-only state move (no IAM mutations). Subsequent applies see no changes.
+- **Idempotency:** `km cluster add --name foo ...` returns the existing role ARN if `foo` already exists in `km-config.yaml` — safe to re-run.
+- **Rollback on persist failure:** if `terragrunt apply` succeeds but writing `km-config.yaml` fails, the IAM role is left in place. Run `km cluster rm <name>` (using the role name from terraform state) to clean up.
+- **Wildcard trust:** `--namespace=*` makes the role assumable by the named ServiceAccount in any namespace. Specify a literal namespace for tighter scoping.
+- **No `--sidecars` propagation required:** Unlike Phase 63/67/68/73/79, Phase 80 ships no sandbox-side or Lambda-side code. Operators only need a fresh `km` binary.
+
+### Handoff to k8s operators
+
+On successful `km cluster add --dry-run=false`, the command prints a ready-to-paste ServiceAccount manifest:
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: km
+  namespace: <your-namespace>
+  annotations:
+    eks.amazonaws.com/role-arn: <role-arn-printed-above>
+    eks.amazonaws.com/token-expiration: "3600"
+```
+
+Apply it with `kubectl apply -f sa.yaml`; pods annotated `serviceAccountName: km` will pick up the role automatically.
+
+See `docs/superpowers/specs/2026-05-11-km-cluster-cross-account-irsa-design.md` for the full design spec.
+
 ## Architecture
 
 - `cmd/km/` — CLI entry point
