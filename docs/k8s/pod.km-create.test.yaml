@@ -1,0 +1,87 @@
+# Smoke test: run `km create` (the heavier IRSA path) inside an EKS pod via
+# cross-account IRSA. Exercises the full create-handler flow including the
+# Terraform-state-bucket fetch path, which is the workload that revealed
+# every direct `LoadDefaultConfig + WithSharedConfigProfile` bypass in the
+# CLI tree. If this works, the rest of `km` works in-pod.
+#
+# Prerequisites:
+#   1. `km cluster add --name <cluster-name> --oidc-provider-arn <arn>
+#                      --namespace security --service-account km --dry-run=false`
+#      provisioned the IRSA role in the klanker account.
+#   2. `km-config` and `km-learn-profile` ConfigMaps exist in the `security`
+#      namespace — see "Required ConfigMaps" in README.md.
+#   3. The km binary is published to `s3://${KM_ARTIFACTS_BUCKET}/sidecars/km`
+#      (run `make build && km init --sidecars` from the operator host).
+#
+# Replace these placeholders before applying:
+#   123456789012             → your klanker AWS account id (NOT the EKS cluster's account)
+#   km-cluster-dev-use1-0    → <resource_prefix>-cluster-<--name from km cluster add>
+#   km-artifacts-EXAMPLE123  → artifacts_bucket from your km-config.yaml
+#   kph                      → your km-config.yaml resource_prefix (omit env var if you use the default "km")
+#
+# Apply:
+#   kubectl apply -f pod.km-create.test.yaml
+# Watch:
+#   kubectl -n security logs km-create-test -c km -f
+# Cleanup:
+#   kubectl delete -f pod.km-create.test.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: km
+  namespace: security
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/km-cluster-dev-use1-0
+    eks.amazonaws.com/token-expiration: "3600"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: km-create-test
+  namespace: security
+spec:
+  serviceAccountName: km
+  restartPolicy: Never
+  initContainers:
+  - name: fetch-km
+    image: amazon/aws-cli
+    command: ["sh", "-c", "aws s3 cp s3://$KM_ARTIFACTS_BUCKET/sidecars/km /km/km && chmod +x /km/km"]
+    env:
+    - name: KM_ARTIFACTS_BUCKET
+      value: "km-artifacts-EXAMPLE123"
+    volumeMounts:
+    - name: km-bin
+      mountPath: /km
+  containers:
+  - name: km
+    image: alpine
+    # km auto-detects the managed-identity environment via
+    # KUBERNETES_SERVICE_HOST and falls through to the SDK default credential
+    # chain, which picks up the projected SA token mounted at
+    # /var/run/secrets/eks.amazonaws.com/serviceaccount/token. No
+    # ~/.aws/config file is needed in-pod.
+    command: ["sh", "-c", "/km/km create /profiles/learn.v2.yaml --alias learn"]
+    env:
+    - name: KM_CONFIG_PATH
+      value: /config/km-config.yaml
+    # Belt-and-suspenders for non-default-prefix installs: setting this
+    # explicitly avoids any code path that reads KM_RESOURCE_PREFIX before
+    # ExportConfigEnvVars fires. Omit for installs using the default "km" prefix.
+    - name: KM_RESOURCE_PREFIX
+      value: "kph"
+    volumeMounts:
+    - name: km-bin
+      mountPath: /km
+    - name: km-config
+      mountPath: /config
+    - name: km-profiles
+      mountPath: /profiles
+  volumes:
+  - name: km-bin
+    emptyDir: {}
+  - name: km-config
+    configMap:
+      name: km-config
+  - name: km-profiles
+    configMap:
+      name: km-learn-profile
