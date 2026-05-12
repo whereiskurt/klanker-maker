@@ -214,7 +214,7 @@ A sandbox is a **compiled policy object** - the YAML declares the constraints, t
 
 Klanker Maker is itself an AWS application. The `km` CLI is the front door, but most of the platform runs as Lambdas, EventBridge schedules, DynamoDB tables, and SQS queues - so a sandbox can be created, modified, or destroyed from anywhere there's AWS API access.
 
-![Klanker Maker AWS services overview](docs/diagrams/AWS-services-and-apps.svg)
+![Klanker Maker AWS services overview](docs/diagrams/AWS.Services.Overview.png)
 
 | Service | Role |
 |---|---|
