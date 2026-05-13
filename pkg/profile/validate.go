@@ -255,6 +255,30 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 		})
 	}
 
+	// Rule: hibernation requires rootVolumeSize > instance RAM.
+	// AWS dumps RAM to the root EBS volume on suspend; if the volume is too
+	// small RunInstances rejects the launch with InvalidParameterCombination,
+	// long after km validate / km create has already accepted the profile.
+	// Caught here so the failure surfaces at validation time.
+	//
+	// Skips silently when:
+	//   - hibernation is off,
+	//   - instance type isn't in the RAM table (fail open — see instance_ram.go),
+	//   - rootVolumeSize is 0 (AMI default; we can't know the default at
+	//     semantic-validation time without an AWS API call).
+	if p.Spec.Runtime.Hibernation && p.Spec.Runtime.RootVolumeSize > 0 {
+		if ramGiB, ok := instanceRAMGiB(p.Spec.Runtime.InstanceType); ok {
+			if p.Spec.Runtime.RootVolumeSize <= ramGiB {
+				errs = append(errs, ValidationError{
+					Path: "spec.runtime.rootVolumeSize",
+					Message: fmt.Sprintf(
+						"rootVolumeSize=%d GiB is too small for hibernation on %s (%d GiB RAM); AWS dumps RAM to the root EBS volume on suspend. Increase rootVolumeSize to at least %d GiB (RAM + headroom for OS/workspace)",
+						p.Spec.Runtime.RootVolumeSize, p.Spec.Runtime.InstanceType, ramGiB, ramGiB+8),
+				})
+			}
+		}
+	}
+
 	// Rule 5: eBPF enforcement is EC2-only in Phase 40 — warn when requested on non-EC2 substrates
 	if enforcement == "ebpf" || enforcement == "both" {
 		switch substrate {
