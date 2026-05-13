@@ -54,6 +54,7 @@ func TestListCmd_TableOutput(t *testing.T) {
 		records: []kmaws.SandboxRecord{
 			{
 				SandboxID: "sb-aaa111",
+				Alias:     "my-poc-name",
 				Profile:   "open-dev",
 				Substrate: "ec2",
 				Region:    "us-east-1",
@@ -62,9 +63,26 @@ func TestListCmd_TableOutput(t *testing.T) {
 			},
 			{
 				SandboxID: "sb-bbb222",
+				Alias:     "demo",
 				Profile:   "restricted",
-				Substrate: "ecs",
-				Region:    "us-west-2",
+				Substrate: "ec2spot",
+				Region:    "ap-southeast-2",
+				Status:    "running",
+			},
+			{
+				SandboxID: "sb-ccc333",
+				Alias:     "k8s-poc",
+				Profile:   "default",
+				Substrate: "k8s",
+				Region:    "eu-central-1",
+				Status:    "stopped",
+			},
+			{
+				SandboxID: "sb-ddd444",
+				Alias:     "dock-test",
+				Profile:   "minimal",
+				Substrate: "docker",
+				Region:    "ap-northeast-1",
 				Status:    "running",
 			},
 		},
@@ -224,9 +242,9 @@ func TestListCmd_FailedSandboxDisplaysRedStatus(t *testing.T) {
 		t.Errorf("output missing failed sandbox 'sb-fail001':\n%s", out)
 	}
 
-	// Status "failed" must appear
-	if !strings.Contains(out, "failed") {
-		t.Errorf("output missing 'failed' status text:\n%s", out)
+	// Status label "fail" must appear (shortened from "failed")
+	if !strings.Contains(out, "fail") {
+		t.Errorf("output missing 'fail' status text:\n%s", out)
 	}
 
 	// Must have ANSI red color code for failed status
@@ -260,9 +278,9 @@ func TestListCmd_PartialSandboxDisplaysYellowStatus(t *testing.T) {
 		t.Errorf("output missing partial sandbox 'sb-part001':\n%s", out)
 	}
 
-	// Status "partial" must appear
-	if !strings.Contains(out, "partial") {
-		t.Errorf("output missing 'partial' status text:\n%s", out)
+	// Status label "part" must appear (shortened from "partial")
+	if !strings.Contains(out, "part") {
+		t.Errorf("output missing 'part' status text:\n%s", out)
 	}
 
 	// Must have ANSI yellow color code for partial status
@@ -328,11 +346,11 @@ func TestListCmd_RunningAndStoppedNoRegression(t *testing.T) {
 		t.Fatalf("list command returned error: %v", err)
 	}
 
-	if !strings.Contains(out, "running") {
-		t.Errorf("output missing 'running' status:\n%s", out)
+	if !strings.Contains(out, "run") {
+		t.Errorf("output missing 'run' status:\n%s", out)
 	}
-	if !strings.Contains(out, "stopped") {
-		t.Errorf("output missing 'stopped' status:\n%s", out)
+	if !strings.Contains(out, "stop") {
+		t.Errorf("output missing 'stop' status:\n%s", out)
 	}
 }
 
@@ -364,6 +382,32 @@ func TestListCmd_NarrowHidesColumns(t *testing.T) {
 	}
 	if !strings.Contains(out, "STATUS") {
 		t.Errorf("narrow output missing STATUS:\n%s", out)
+	}
+}
+
+// TestListCmd_Reset verifies that `km list --reset` sets the local-number
+// counter back to 1 without making any AWS calls. It redirects HOME so the
+// real user state is untouched.
+func TestListCmd_Reset(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", tmp+"/.config")
+
+	cfg := &config.Config{}
+	root := &cobra.Command{Use: "km"}
+	// nil lister is fine because --reset must short-circuit before the lister runs
+	root.AddCommand(cmd.NewListCmdWithLister(cfg, nil))
+
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"list", "--reset"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("--reset returned error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "next created sandbox will be #1") {
+		t.Errorf("expected reset confirmation message, got: %q", buf.String())
 	}
 }
 

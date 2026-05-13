@@ -38,6 +38,7 @@ func NewListCmdWithLister(cfg *config.Config, lister SandboxLister) *cobra.Comma
 	var jsonOutput bool
 	var useTagScan bool
 	var wide bool
+	var reset bool
 
 	cmd := &cobra.Command{
 		Use:          "list",
@@ -46,13 +47,37 @@ func NewListCmdWithLister(cfg *config.Config, lister SandboxLister) *cobra.Comma
 		Long:         helpText("list"),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if reset {
+				return runListReset(cmd)
+			}
 			return runList(cmd, cfg, lister, jsonOutput, useTagScan, wide)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output as JSON array")
 	cmd.Flags().BoolVar(&useTagScan, "tags", false, "Use AWS tag scan instead of S3 state scan")
 	cmd.Flags().BoolVar(&wide, "wide", false, "Show all columns (profile, substrate, region)")
+	cmd.Flags().BoolVar(&reset, "reset", false, "Reset local sandbox numbering so the next created sandbox is #1")
 	return cmd
+}
+
+// runListReset sets the local-number counter back to 1 without touching the
+// existing sandbox→number map. The next newly created sandbox will be assigned
+// #1; if an existing sandbox already holds that number the display will show
+// a collision until reconciliation rotates it out.
+func runListReset(cmd *cobra.Command) error {
+	state, err := localnumber.Load()
+	if err != nil {
+		return fmt.Errorf("load local numbers: %w", err)
+	}
+	if state == nil {
+		state = &localnumber.State{Next: 1, Map: map[string]int{}}
+	}
+	state.Next = 1
+	if err := localnumber.Save(state); err != nil {
+		return fmt.Errorf("save local numbers: %w", err)
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "Local sandbox counter reset; next created sandbox will be #1.")
+	return nil
 }
 
 // SandboxLister abstracts the sandbox discovery mechanism for testability.
@@ -226,6 +251,32 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 	}
 	idWidth += 2 // padding
 
+	// Compute max alias width so the full alias is always visible.
+	aliasWidth := len("ALIAS")
+	for _, r := range records {
+		if len(r.Alias) > aliasWidth {
+			aliasWidth = len(r.Alias)
+		}
+	}
+	aliasWidth += 2 // padding
+
+	// Compute the # column width. Default min 2 (typical case); grow when the
+	// persistent counter has climbed into 3+ digits so rows don't bleed into
+	// the ALIAS column.
+	numWidth := 2
+	for i, r := range records {
+		n := 0
+		if numbers != nil {
+			n = numbers[r.SandboxID]
+		}
+		if n == 0 {
+			n = i + 1
+		}
+		if w := len(fmt.Sprintf("%d", n)); w > numWidth {
+			numWidth = w
+		}
+	}
+
 	// truncCol truncates a string to maxLen, adding ".." suffix if truncated.
 	truncCol := func(s string, maxLen int) string {
 		if len(s) <= maxLen {
@@ -249,34 +300,45 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 		}
 	}
 
+	// Substrate and region columns use icon+word and AWS short codes. Pad by
+	// visual width so emoji-bearing rows align with ASCII rows. Widths must
+	// also fit the human-readable header strings.
+	const substrateColW = 10 // fits "SUBSTRATE" header and "🐳  dock" values
+	const regionColW = 7     // fits "REGION" header and "apse1" values
+
 	if wide {
 		if showThreads {
-			fmt.Fprintf(out, "%-3s %-8s  %-*s %-16s %-10s %-12s %-10s %-6s %-6s %-5s %s\n",
-				"#", "ALIAS", idWidth, "SANDBOX ID", "PROFILE", "SUBSTRATE", "REGION", "STATUS", "TTL", "IDLE", "💬", "CLONED FROM")
+			fmt.Fprintf(out, "%-*s %-*s  %-*s %-16s %s %s %-10s %-6s %-6s %-5s %s\n",
+				numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "PROFILE",
+				padVis("SUBSTRATE", substrateColW), padVis("REGION", regionColW),
+				"STATUS", "TTL", "IDLE", "💬", "CLONED FROM")
 		} else {
-			fmt.Fprintf(out, "%-3s %-8s  %-*s %-16s %-10s %-12s %-10s %-6s %-6s %s\n",
-				"#", "ALIAS", idWidth, "SANDBOX ID", "PROFILE", "SUBSTRATE", "REGION", "STATUS", "TTL", "IDLE", "CLONED FROM")
+			fmt.Fprintf(out, "%-*s %-*s  %-*s %-16s %s %s %-10s %-6s %-6s %s\n",
+				numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "PROFILE",
+				padVis("SUBSTRATE", substrateColW), padVis("REGION", regionColW),
+				"STATUS", "TTL", "IDLE", "CLONED FROM")
 		}
 	} else {
-		fmt.Fprintf(out, "%-3s %-8s  %-*s %-10s %s\n",
-			"#", "ALIAS", idWidth, "SANDBOX ID", "STATUS", "TTL")
+		fmt.Fprintf(out, "%-*s %-*s  %-*s %-10s %s\n",
+			numWidth, "#", aliasWidth, "ALIAS", idWidth, "SANDBOX ID", "STATUS", "TTL")
 	}
 	for i, r := range records {
 		ttl := r.TTLRemaining
 		if ttl == "" {
 			ttl = "-"
 		}
-		alias := truncCol(r.Alias, 8)
+		alias := r.Alias
 		if alias == "" {
 			alias = "-"
 		}
 		profile := truncCol(r.Profile, 16)
-		// Pad status to fixed width BEFORE adding color codes
-		statusLabel := r.Status
+		// Pad status to fixed width BEFORE adding color codes. Visual-width
+		// padding so emoji-prefixed labels align with ASCII rows.
+		statusLabel := statusDisplay(r.Status)
 		if wide && r.Hibernation {
 			statusLabel += "(h)"
 		}
-		paddedStatus := fmt.Sprintf("%-10s", statusLabel)
+		paddedStatus := padVis(statusLabel, 10)
 		colorStatus := colorizeRaw(r.Status, false, paddedStatus)
 		lock := ""
 		if r.Locked {
@@ -295,7 +357,7 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 		if localNum == 0 {
 			localNum = i + 1 // fallback to positional if no local number
 		}
-		num := bw(fmt.Sprintf("%-3d", localNum))
+		num := bw(fmt.Sprintf("%-*d", numWidth, localNum))
 		if wide {
 			idle := r.IdleRemaining
 			if idle == "" {
@@ -307,30 +369,146 @@ func printSandboxTable(cmd *cobra.Command, records []kmaws.SandboxRecord, wide b
 			if clonedFrom == "" {
 				clonedFrom = "-"
 			}
+			substrate := padVis(substrateDisplay(r.Substrate), substrateColW)
+			region := padVis(shortRegion(r.Region), regionColW)
 			if showThreads {
 				threads := "-"
 				if r.SlackChannelID != "" {
 					threads = fmt.Sprintf("%d", r.ActiveThreads)
 				}
 				fmt.Fprintf(out, "%s %s  %s %s %s %s %s %-6s %-6s %-5s %s%s\n",
-					num, bw(fmt.Sprintf("%-8s", alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
-					bw(fmt.Sprintf("%-16s", profile)), bw(fmt.Sprintf("%-10s", r.Substrate)),
-					bw(fmt.Sprintf("%-12s", r.Region)), colorStatus, bw(ttl), bw(idle),
+					num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
+					bw(fmt.Sprintf("%-16s", profile)), bw(substrate),
+					bw(region), colorStatus, bw(ttl), bw(idle),
 					bw(threads), bw(truncCol(clonedFrom, 14)), lock)
 			} else {
 				fmt.Fprintf(out, "%s %s  %s %s %s %s %s %-6s %-6s %s%s\n",
-					num, bw(fmt.Sprintf("%-8s", alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
-					bw(fmt.Sprintf("%-16s", profile)), bw(fmt.Sprintf("%-10s", r.Substrate)),
-					bw(fmt.Sprintf("%-12s", r.Region)), colorStatus, bw(ttl), bw(idle),
+					num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
+					bw(fmt.Sprintf("%-16s", profile)), bw(substrate),
+					bw(region), colorStatus, bw(ttl), bw(idle),
 					bw(truncCol(clonedFrom, 14)), lock)
 			}
 		} else {
 			fmt.Fprintf(out, "%s %s  %s %s %s%s\n",
-				num, bw(fmt.Sprintf("%-8s", alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
+				num, bw(fmt.Sprintf("%-*s", aliasWidth, alias)), bw(fmt.Sprintf("%-*s", idWidth, r.SandboxID)),
 				colorStatus, bw(ttl), lock)
 		}
 	}
 	return nil
+}
+
+// statusDisplay returns an icon + short-word label for a sandbox status.
+// Unknown statuses pass through unchanged so new states stay visible while
+// being added to this mapping.
+func statusDisplay(status string) string {
+	switch status {
+	case "running":
+		return "🟢 run"
+	case "starting":
+		return "🟡 strt"
+	case "failed":
+		return "🔴 fail"
+	case "nocap":
+		return "🔴 nocap"
+	case "paused":
+		return "⏸  paus"
+	case "stopped":
+		return "⏹  stop"
+	case "killed":
+		return "☠️  kill"
+	case "partial":
+		return "⚠️  part"
+	case "reaped":
+		return "👻 reap"
+	default:
+		return status
+	}
+}
+
+// substrateDisplay returns an icon + short-word label for a substrate kind.
+// Unknown substrates pass through unchanged so downstream tooling stays
+// debuggable when new kinds land.
+func substrateDisplay(s string) string {
+	switch s {
+	case "ec2", "ec2demand":
+		return "🖥️  ec2"
+	case "ec2spot":
+		return "⚡  spot"
+	case "ecs":
+		return "📦  ecs"
+	case "docker":
+		return "🐳  dock"
+	case "k8s":
+		return "☸️  k8s"
+	default:
+		return s
+	}
+}
+
+// shortRegion abbreviates an AWS region code (e.g. "us-east-1" → "use1",
+// "ap-southeast-2" → "apse2"). It takes the prefix as-is (us, ap, eu, ca,
+// sa, me, af), replaces directional words with their initials (north→n,
+// south→s, east→e, west→w, central→c, northeast→ne, etc.), and appends
+// the trailing zone number. Regions that don't match the standard
+// "<prefix>-<word>-<digit>" shape pass through unchanged.
+func shortRegion(r string) string {
+	parts := strings.Split(r, "-")
+	if len(parts) < 3 {
+		return r
+	}
+	abbrev := map[string]string{
+		"north":     "n",
+		"south":     "s",
+		"east":      "e",
+		"west":      "w",
+		"central":   "c",
+		"northeast": "ne",
+		"southeast": "se",
+		"northwest": "nw",
+		"southwest": "sw",
+	}
+	var sb strings.Builder
+	sb.WriteString(parts[0])
+	for _, p := range parts[1 : len(parts)-1] {
+		if a, ok := abbrev[p]; ok {
+			sb.WriteString(a)
+		} else if len(p) > 0 {
+			sb.WriteString(p[:1])
+		}
+	}
+	sb.WriteString(parts[len(parts)-1])
+	return sb.String()
+}
+
+// visualWidth approximates the number of terminal columns a string occupies.
+// It treats variation selectors as zero-width, common emoji ranges as 2 cols,
+// and everything else as 1 col. Good enough for list-table alignment; not a
+// full Unicode wcwidth.
+func visualWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		switch {
+		case r == 0xFE0E || r == 0xFE0F:
+			// variation selectors: no display width
+		case r >= 0x1F000,
+			r >= 0x2600 && r <= 0x27BF,
+			r >= 0x2300 && r <= 0x23FF:
+			w += 2
+		default:
+			w++
+		}
+	}
+	return w
+}
+
+// padVis right-pads s with spaces until its visual width reaches n. If s is
+// already wider, it is returned unchanged.
+func padVis(s string, n int) string {
+	vw := visualWidth(s)
+	if vw >= n {
+		return s
+	}
+	return s + strings.Repeat(" ", n-vw)
 }
 
 // colorizeListStatus returns the status string wrapped in ANSI color codes for display.
