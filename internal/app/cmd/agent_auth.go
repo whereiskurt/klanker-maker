@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -168,7 +169,68 @@ func runAgentAuthClaude(ctx context.Context, _ *config.Config, fetcher SandboxFe
 	cleanCancel()
 
 	// Post-exit: verify credentials file was written on the sandbox
-	return verifyCredentialsWritten(ctx, ssmClient, instanceID, "claude", sandboxID, sessionErr)
+	if err := verifyCredentialsWritten(ctx, ssmClient, instanceID, "claude", sandboxID, sessionErr); err != nil {
+		return err
+	}
+
+	// `claude auth login --claudeai` writes ~/.claude/.credentials.json but does
+	// not mark the first-launch wizard complete. Without that, interactive
+	// `claude` re-runs the wizard's "Select login method" screen and discards
+	// the OAuth tokens we just persisted. Set the gating keys directly so the
+	// REPL trusts what we just authed.
+	if err := markClaudeOnboardingComplete(ctx, ssmClient, instanceID); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not mark claude onboarding complete: %v\n"+
+			"  Interactive `claude` may still prompt to log in. Run `claude` once on the sandbox\n"+
+			"  and complete the wizard manually if it does.\n", err)
+	}
+	return nil
+}
+
+// markClaudeOnboardingComplete writes hasCompletedOnboarding=true and
+// lastOnboardingVersion=<claude --version> into ~/.claude.json on the sandbox.
+// These two keys are what Claude Code v2.1.x checks before deciding whether to
+// run the first-launch wizard. Without them the wizard re-runs every REPL
+// startup and re-issues OAuth, discarding what `claude auth login --claudeai`
+// wrote moments earlier. Idempotent — re-running this is safe.
+//
+// Runs the JSON read-modify-write as the sandbox user so file ownership and
+// HOME both resolve correctly (SSM SendCommand runs as root by default).
+//
+// The python source is base64-encoded so the transport (SSM RunShellScript
+// document) cannot strip newlines — earlier attempts with python3 -c and
+// nested heredocs got their multi-line bodies collapsed to a single line
+// before reaching the interpreter.
+func markClaudeOnboardingComplete(ctx context.Context, ssmClient SSMSendAPI, instanceID string) error {
+	pyBody := `import json, os, subprocess, pathlib
+path = pathlib.Path("/home/sandbox/.claude.json")
+try:
+    data = json.loads(path.read_text()) if path.exists() else {}
+except json.JSONDecodeError:
+    data = {}
+try:
+    ver = subprocess.check_output(["claude", "--version"], text=True).strip().split()[0]
+except Exception:
+    ver = ""
+data["hasCompletedOnboarding"] = True
+if ver:
+    data["lastOnboardingVersion"] = ver
+path.write_text(json.dumps(data, indent=2))
+os.chmod(path, 0o600)
+print("ok")
+`
+	b64 := base64.StdEncoding.EncodeToString([]byte(pyBody))
+	// Decode the base64 blob, pipe into `python3` running as the sandbox user.
+	// `sudo -u sandbox -i` would also reset $PATH and CWD — that's fine, the
+	// script only uses absolute paths and runs `claude --version` via PATH.
+	script := fmt.Sprintf("echo %s | base64 -d | sudo -u sandbox -i python3", b64)
+	out, err := sendSSMAndWait(ctx, ssmClient, instanceID, script)
+	if err != nil {
+		return fmt.Errorf("ssm: %w", err)
+	}
+	if strings.TrimSpace(out) != "ok" {
+		return fmt.Errorf("unexpected output: %q", strings.TrimSpace(out))
+	}
+	return nil
 }
 
 // detectAndOpenOAuthURL polls the tee'd claude stdout on the sandbox via SSM
