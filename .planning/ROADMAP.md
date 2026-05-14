@@ -1712,10 +1712,15 @@ Plans:
 
 ### Phase 81: GitHub Actions self-hosted runner — sandbox registers as runner for declared repos
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** A klanker sandbox can register as a long-lived self-hosted GitHub Actions runner for one or more repos declared in its profile (`spec.sourceAccess.github.runner.enabled: true`). Per-repo registration is best-effort (failures don't block km create, recoverable via `km runner reattach`). Clean teardown on `km destroy` via belt-and-suspenders Lambda DELETE (no ghost runners). New centralised token Lambda mints registration / removal tokens from the existing GitHub App credentials. Workflow jobs execute under the sandbox's full policy boundary (eBPF, proxy MITM, allowedDomains, budget, audit). EC2-only for v1; Docker substrate out of scope (no systemd). Migration follows the Phase 63/67/68/73/79/80 pattern (make build → make sidecars → km init --sidecars → terragrunt apply for the new Lambda → km init), plus one-time GitHub App re-install with `administration: write`.
+**Requirements**: RUNNER-PROFILE-SCHEMA, RUNNER-GITHUB-API, RUNNER-TOKEN-LAMBDA, RUNNER-LAMBDA-IAM, RUNNER-SIDECAR, RUNNER-SYSTEMD-UNITS, RUNNER-USERDATA-WIRING, RUNNER-NETWORK-ALLOWLIST, RUNNER-INSTANCE-ROLE, RUNNER-CLI, RUNNER-CREATE-WIRING, RUNNER-DESTROY-TEARDOWN, RUNNER-DOCTOR, RUNNER-PRESENCE-SIGNAL, RUNNER-DOCS, RUNNER-MIGRATION
 **Depends on:** Phase 80
-**Plans:** 0 plans
+**Plans:** 6 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 81 to break down)
+- [ ] 81-01-PLAN.md — Profile schema (RunnerSpec + JSON schema) + semantic validation rules + pkg/github/runner.go API wrappers with httptest unit tests (Wave 0 contract surface)
+- [ ] 81-02-PLAN.md — cmd/km-actions-runner-token Lambda (register/remove/delete/list dispatch) + infra/modules/actions-runner-token/v1.0.0 Terraform module (Function URL with AuthType: AWS_IAM) + live terragrunt unit + Makefile build-lambdas wiring (Wave 1)
+- [ ] 81-03-PLAN.md — sidecars/km-actions-runner Cobra binary (register/remove subcommands, sigv4 Lambda invoke, config.sh wrapper) + Makefile sidecar target (Wave 1)
+- [ ] 81-04-PLAN.md — Compiler userdata wiring (heredoc systemd template units + /etc/km/runner-repos.json + binary download), security.go DNS allowlist auto-injection, compiler.go IAM session policy lambda:InvokeFunctionUrl statement (Wave 2)
+- [ ] 81-05-PLAN.md — internal/app/cmd/runner.go (km runner status|reattach|detach) + km destroy belt-and-suspenders Lambda DELETE + km create runtime injection of KM_ACTIONS_RUNNER_TOKEN_URL with visible-stderr per SLCK-11 lesson (Wave 3)
+- [ ] 81-06-PLAN.md — Four km doctor checks (actions_runner_app_perms ERROR + register_failures/ghosts/drift WARN) + km-presence sixth signal (Runner.Listener pgrep extension) + docs/github.md Self-hosted Actions runners section + CLAUDE.md Phase 81 section + operator checkpoint (migration + GitHub App re-install + end-to-end smoke test) (Wave 4)
