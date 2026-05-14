@@ -426,6 +426,72 @@ func (s *SlackPosterAdapter) ArchiveChannel(ctx context.Context, channelID strin
 }
 
 // ============================================================
+// Phase 67.2: reactions.add error classifier (pure helper)
+// ============================================================
+
+// reactionErrorClass categorizes a reactions.add response so the
+// retry loop in SlackReactorAdapter.Add can decide whether to
+// succeed, give up, or retry with backoff.
+//
+// Locked taxonomy: 67.2-CONTEXT.md § "Error classification (locked)".
+// Default-unknown policy: an unknown apiErr string returns
+// classTransient (one extra retry on an actually-terminal error
+// is cheap; silently ignoring a new transient signal is not).
+type reactionErrorClass int
+
+const (
+	classSuccess          reactionErrorClass = iota
+	classTerminalAuth     // operator action required (token rotation, scope grant) — log at Error
+	classTerminalBadInput // unrecoverable client-side error — log at Warn (final give-up)
+	classTransient        // retryable: 5xx, net error, internal_error, unknown error string
+	classRateLimited      // 429 with Retry-After header — honor RetryAfterSeconds
+)
+
+// classifyReactionError returns the appropriate retry bucket for a
+// reactions.add response. Pure function — no I/O, no logging.
+// Enumerates the codes in 67.2-CONTEXT.md's locked taxonomy plus the
+// additional codes 67.2-RESEARCH.md identified from Slack docs; any
+// unrecognized apiErr falls through to classTransient (locked
+// default).
+func classifyReactionError(httpStatus int, apiErr string, netErr error) reactionErrorClass {
+	if netErr != nil {
+		return classTransient
+	}
+	if httpStatus == http.StatusTooManyRequests {
+		return classRateLimited
+	}
+	if httpStatus >= 500 && httpStatus < 600 {
+		return classTransient
+	}
+	if httpStatus == http.StatusOK && (apiErr == "" || apiErr == "already_reacted") {
+		return classSuccess
+	}
+	switch apiErr {
+	case "invalid_auth", "not_authed", "account_inactive",
+		"token_revoked", "missing_scope", "token_expired",
+		"no_permission", "access_denied", "ekm_access_denied",
+		"enterprise_is_restricted", "org_login_required",
+		"two_factor_setup_required":
+		return classTerminalAuth
+	case "bad_timestamp", "message_not_found", "channel_not_found",
+		"not_reactable", "thread_locked", "invalid_name",
+		"too_many_emoji", "too_many_reactions", "is_archived",
+		"invalid_arg_name", "invalid_arguments", "invalid_charset",
+		"invalid_form_data", "invalid_post_type",
+		"missing_post_type", "no_item_specified",
+		"not_allowed_token_type", "no_access":
+		return classTerminalBadInput
+	case "internal_error", "service_unavailable", "fatal_error",
+		"request_timeout", "ratelimited", "accesslimited",
+		"team_access_not_granted", "team_added_to_org",
+		"external_channel_migrating":
+		return classTransient
+	}
+	// Default for unknown error strings — locked CONTEXT.md policy.
+	return classTransient
+}
+
+// ============================================================
 // Phase 67.1: SlackReactorAdapter — Reactor implementation
 // ============================================================
 
