@@ -1709,3 +1709,13 @@ Plans:
 - [ ] 80.1-03-PLAN.md — Wave 2 cluster-irsa module: moved block + count-gated resource/data source + updated trust policy + outputs
 - [ ] 80.1-04-PLAN.md — Wave 2 cluster.go: OidcProviderLister interface + auto-detect + --register-oidc-provider flag + template placeholder + activate tests
 - [ ] 80.1-05-PLAN.md — Wave 3 docs update (CLAUDE.md + docs/k8s/README.md) + operator-supervised phase-close integration test
+
+### Phase 81: GitHub Actions self-hosted runner — sandbox registers as runner for declared repos
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 80
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 81 to break down)
