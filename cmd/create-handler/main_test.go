@@ -8,8 +8,10 @@ import (
 	"testing"
 
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // wrapEvent wraps a CreateEvent in a CloudWatchEvent envelope for testing.
@@ -63,6 +65,67 @@ func (m *mockSESAPI) SendEmail(ctx context.Context, input *sesv2.SendEmailInput,
 	}
 	return &sesv2.SendEmailOutput{}, m.sendErr
 }
+
+// mockSandboxMetadataAPI is a local stub for the SandboxMetadataAPI interface used by
+// cmd/create-handler tests. The package-private mock in pkg/aws/sandbox_dynamo_test.go
+// (package aws_test) cannot be imported, so this is a minimal copy of the interface.
+type mockSandboxMetadataAPI struct {
+	getInput    *dynamodb.GetItemInput
+	putInput    *dynamodb.PutItemInput
+	updateInput *dynamodb.UpdateItemInput
+	deleteInput *dynamodb.DeleteItemInput
+	scanInput   *dynamodb.ScanInput
+	queryInput  *dynamodb.QueryInput
+
+	getOutput   *dynamodb.GetItemOutput
+	putErr      error
+	updateErr   error
+	deleteErr   error
+	scanOutput  *dynamodb.ScanOutput
+	queryOutput *dynamodb.QueryOutput
+}
+
+func (m *mockSandboxMetadataAPI) GetItem(_ context.Context, input *dynamodb.GetItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
+	m.getInput = input
+	if m.getOutput != nil {
+		return m.getOutput, nil
+	}
+	return &dynamodb.GetItemOutput{}, nil
+}
+
+func (m *mockSandboxMetadataAPI) PutItem(_ context.Context, input *dynamodb.PutItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error) {
+	m.putInput = input
+	return &dynamodb.PutItemOutput{}, m.putErr
+}
+
+func (m *mockSandboxMetadataAPI) UpdateItem(_ context.Context, input *dynamodb.UpdateItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
+	m.updateInput = input
+	return &dynamodb.UpdateItemOutput{}, m.updateErr
+}
+
+func (m *mockSandboxMetadataAPI) DeleteItem(_ context.Context, input *dynamodb.DeleteItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error) {
+	m.deleteInput = input
+	return &dynamodb.DeleteItemOutput{}, m.deleteErr
+}
+
+func (m *mockSandboxMetadataAPI) Scan(_ context.Context, input *dynamodb.ScanInput, _ ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error) {
+	m.scanInput = input
+	if m.scanOutput != nil {
+		return m.scanOutput, nil
+	}
+	return &dynamodb.ScanOutput{}, nil
+}
+
+func (m *mockSandboxMetadataAPI) Query(_ context.Context, input *dynamodb.QueryInput, _ ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+	m.queryInput = input
+	if m.queryOutput != nil {
+		return m.queryOutput, nil
+	}
+	return &dynamodb.QueryOutput{}, nil
+}
+
+// compile-time check that mockSandboxMetadataAPI satisfies awspkg.SandboxMetadataAPI.
+var _ awspkg.SandboxMetadataAPI = (*mockSandboxMetadataAPI)(nil)
 
 // minimalProfile is a valid SandboxProfile YAML used in tests.
 const minimalProfile = `
