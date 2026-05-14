@@ -16,7 +16,16 @@ import (
 //
 // Tails CloudWatch log group /km/sandboxes/<sandbox-id>/ from the named stream (default "audit").
 // If --follow is set, streams log events until Ctrl+C (context cancellation).
+// Delegates to NewLogsCmdWithClient with a nil client (real AWS-backed client).
 func NewLogsCmd(cfg *config.Config) *cobra.Command {
+	return NewLogsCmdWithClient(cfg, nil)
+}
+
+// NewLogsCmdWithClient creates the "km logs" subcommand with an injected CWLogsAPI client.
+// When client is nil, the real cloudwatchlogs.Client is built at command execution time.
+// When client is non-nil, the injected client is used (for tests).
+// This DI seam mirrors the NewStatusCmdWithFetcher pattern in status.go.
+func NewLogsCmdWithClient(cfg *config.Config, client kmaws.CWLogsAPI) *cobra.Command {
 	var follow bool
 	var stream string
 
@@ -35,7 +44,7 @@ func NewLogsCmd(cfg *config.Config) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runLogs(cmd, cfg, sandboxID, stream, follow)
+			return runLogs(cmd, cfg, client, sandboxID, stream, follow)
 		},
 	}
 
@@ -46,7 +55,9 @@ func NewLogsCmd(cfg *config.Config) *cobra.Command {
 }
 
 // runLogs implements the km logs command.
-func runLogs(cmd *cobra.Command, cfg *config.Config, sandboxID, stream string, follow bool) error {
+// When client is nil, builds the real cloudwatchlogs.Client from the AWS config (production path).
+// When client is non-nil, uses the injected client (test path).
+func runLogs(cmd *cobra.Command, cfg *config.Config, client kmaws.CWLogsAPI, sandboxID, stream string, follow bool) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -54,15 +65,17 @@ func runLogs(cmd *cobra.Command, cfg *config.Config, sandboxID, stream string, f
 
 	logGroup := "/" + cfg.GetResourcePrefix() + "/sandboxes/" + sandboxID + "/"
 
-	awsProfile := "klanker-terraform"
-	awsCfg, err := kmaws.LoadAWSConfig(ctx, awsProfile)
-	if err != nil {
-		return fmt.Errorf("load AWS config: %w", err)
+	cwClient := client
+	if cwClient == nil {
+		awsProfile := "klanker-terraform"
+		awsCfg, err := kmaws.LoadAWSConfig(ctx, awsProfile)
+		if err != nil {
+			return fmt.Errorf("load AWS config: %w", err)
+		}
+		cwClient = cloudwatchlogs.NewFromConfig(awsCfg)
 	}
 
-	cwClient := cloudwatchlogs.NewFromConfig(awsCfg)
-
-	err = kmaws.TailLogs(ctx, cwClient, logGroup, stream, follow, cmd.OutOrStdout())
+	err := kmaws.TailLogs(ctx, cwClient, logGroup, stream, follow, cmd.OutOrStdout())
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("tail logs for sandbox %s: %w", sandboxID, err)
 	}
