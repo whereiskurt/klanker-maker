@@ -42,6 +42,10 @@ func (m *mockCWLogsClient) CreateExportTask(ctx context.Context, params *cloudwa
 	return &cloudwatchlogs.CreateExportTaskOutput{}, nil
 }
 
+func (m *mockCWLogsClient) FilterLogEvents(ctx context.Context, params *cloudwatchlogs.FilterLogEventsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.FilterLogEventsOutput, error) {
+	return &cloudwatchlogs.FilterLogEventsOutput{}, nil
+}
+
 func (m *mockCWLogsClient) GetLogEvents(ctx context.Context, params *cloudwatchlogs.GetLogEventsInput, optFns ...func(*cloudwatchlogs.Options)) (*cloudwatchlogs.GetLogEventsOutput, error) {
 	if m.getErr != nil {
 		return nil, m.getErr
