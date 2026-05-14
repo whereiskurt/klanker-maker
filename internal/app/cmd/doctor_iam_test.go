@@ -93,7 +93,7 @@ func TestCheckStaleIAMRoles_PrecursorFailure_ReportedInline(t *testing.T) {
 	lister := &fakeSandboxLister{records: []kmaws.SandboxRecord{}}
 
 	// dryRun=false to trigger the teardown branch.
-	r := checkStaleIAMRoles(context.Background(), iamFake, lister, false, "km")
+	r := checkStaleIAMRoles(context.Background(), iamFake, lister, false, "km", nil)
 
 	if r.Status != CheckWarn {
 		t.Fatalf("expected CheckWarn, got %s: %s", r.Status, r.Message)
@@ -120,6 +120,69 @@ func TestCheckStaleIAMRoles_PrecursorFailure_ReportedInline(t *testing.T) {
 	}
 }
 
+// TestCheckStaleIAMRoles_ClusterRoleProtectedByConfig asserts that a role
+// registered in km-config.yaml's clusters[] list (Phase 80 cross-account IRSA)
+// is NEVER classified as stale, even when no active sandbox owns it. The
+// unrelated stale role in the same listing must still be torn down.
+func TestCheckStaleIAMRoles_ClusterRoleProtectedByConfig(t *testing.T) {
+	clusterRole := "kph-cluster-foo"
+	staleRole := "kph-sandbox-xyz"
+	iamFake := &fakeIAMCleanup{
+		roles: []string{clusterRole, staleRole},
+		inlinePolicies: map[string][]string{
+			clusterRole: {},
+			staleRole:   {},
+		},
+	}
+	lister := &fakeSandboxLister{records: []kmaws.SandboxRecord{}}
+	clusterRoleNames := map[string]bool{clusterRole: true}
+
+	r := checkStaleIAMRoles(context.Background(), iamFake, lister, false, "kph", clusterRoleNames)
+
+	if r.Status != CheckWarn {
+		t.Fatalf("expected CheckWarn (one stale role found), got %s: %s", r.Status, r.Message)
+	}
+	// Only the sandbox role should be deleted; cluster role must be skipped.
+	if iamFake.deleteRoleCallCount != 1 {
+		t.Errorf("expected 1 DeleteRole call (for stale sandbox role), got %d", iamFake.deleteRoleCallCount)
+	}
+	for _, deleted := range iamFake.deletedRoles {
+		if deleted == clusterRole {
+			t.Errorf("cluster role %q must NOT be deleted; it is registered in km-config.yaml", clusterRole)
+		}
+	}
+	if len(iamFake.deletedRoles) != 1 || iamFake.deletedRoles[0] != staleRole {
+		t.Errorf("expected only %q deleted, got %v", staleRole, iamFake.deletedRoles)
+	}
+}
+
+// TestCheckStaleIAMRoles_ClusterRoleProtectedByPrefix asserts that even when
+// km-config.yaml has no clusters[] entry (e.g. operator deleted the row but
+// the IAM role still exists, or running km doctor from a stale workstation),
+// the {prefix}-cluster- prefix in platformPrefixes catches the role and keeps
+// it safe.
+func TestCheckStaleIAMRoles_ClusterRoleProtectedByPrefix(t *testing.T) {
+	orphanClusterRole := "kph-cluster-orphan"
+	iamFake := &fakeIAMCleanup{
+		roles:          []string{orphanClusterRole},
+		inlinePolicies: map[string][]string{orphanClusterRole: {}},
+	}
+	lister := &fakeSandboxLister{records: []kmaws.SandboxRecord{}}
+
+	// Empty clusterRoleNames — protection must come from platformPrefixes.
+	r := checkStaleIAMRoles(context.Background(), iamFake, lister, false, "kph", map[string]bool{})
+
+	if r.Status != CheckOK {
+		t.Fatalf("expected CheckOK (no stale roles after prefix filter), got %s: %s", r.Status, r.Message)
+	}
+	if iamFake.deleteRoleCallCount != 0 {
+		t.Errorf("DeleteRole must NOT be called for {prefix}-cluster- role; got %d calls", iamFake.deleteRoleCallCount)
+	}
+	if len(iamFake.deletedRoles) != 0 {
+		t.Errorf("no roles should be deleted, got %v", iamFake.deletedRoles)
+	}
+}
+
 // TestCheckStaleIAMRoles_HappyPath confirms a clean role tears down end-to-end
 // with no errors emitted in the message.
 func TestCheckStaleIAMRoles_HappyPath(t *testing.T) {
@@ -130,7 +193,7 @@ func TestCheckStaleIAMRoles_HappyPath(t *testing.T) {
 	}
 	lister := &fakeSandboxLister{records: []kmaws.SandboxRecord{}}
 
-	r := checkStaleIAMRoles(context.Background(), iamFake, lister, false, "km")
+	r := checkStaleIAMRoles(context.Background(), iamFake, lister, false, "km", nil)
 
 	if r.Status != CheckWarn {
 		t.Fatalf("expected CheckWarn (always emits warn when stale found), got %s: %s", r.Status, r.Message)

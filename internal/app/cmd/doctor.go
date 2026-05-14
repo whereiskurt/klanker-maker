@@ -191,6 +191,10 @@ type DoctorConfigProvider interface {
 	GetSlackThreadsTableName() string
 	// GetSandboxTableName returns the DynamoDB sandboxes table name (Phase 66).
 	GetSandboxTableName() string
+	// GetClusterRoleNames returns the IAM role names registered via `km cluster add`
+	// (Phase 80 cross-account IRSA), used by checkStaleIAMRoles to protect them
+	// from the stale-role sweep.
+	GetClusterRoleNames() []string
 }
 
 // appConfigAdapter wraps *config.Config to satisfy DoctorConfigProvider.
@@ -220,6 +224,16 @@ func (a *appConfigAdapter) GetEmailDomain() string           { return a.cfg.GetE
 func (a *appConfigAdapter) GetSsmPrefix() string             { return a.cfg.GetSsmPrefix() }
 func (a *appConfigAdapter) GetSlackThreadsTableName() string { return a.cfg.GetSlackThreadsTableName() }
 func (a *appConfigAdapter) GetSandboxTableName() string      { return a.cfg.GetSandboxTableName() }
+func (a *appConfigAdapter) GetClusterRoleNames() []string {
+	out := make([]string, 0, len(a.cfg.Clusters))
+	for _, c := range a.cfg.Clusters {
+		// role_arn looks like arn:aws:iam::<account>:role/<name>; extract the suffix.
+		if idx := strings.LastIndex(c.RoleARN, "/"); idx >= 0 && idx+1 < len(c.RoleARN) {
+			out = append(out, c.RoleARN[idx+1:])
+		}
+	}
+	return out
+}
 
 // DoctorDeps holds all injected AWS clients for doctor checks.
 // Nil fields cause their corresponding checks to be skipped.
@@ -1188,7 +1202,9 @@ func checkStaleKMSKeys(ctx context.Context, kmsClient KMSCleanupAPI, lister Sand
 
 // checkStaleIAMRoles finds IAM roles with {resourcePrefix}- prefixes that don't belong to any active sandbox.
 // Platform roles ({prefix}-create-handler, {prefix}-ttl-*, {prefix}-org-admin) are skipped.
-func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister SandboxLister, dryRun bool, resourcePrefix string) CheckResult {
+// clusterRoleNames is the set of role names registered via `km cluster add` (Phase 80 cross-account
+// IRSA) — any role in this set is protected regardless of platformPrefixes.
+func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister SandboxLister, dryRun bool, resourcePrefix string, clusterRoleNames map[string]bool) CheckResult {
 	name := "Stale IAM Roles"
 	if iamClient == nil {
 		return CheckResult{Name: name, Status: CheckSkipped, Message: "IAM client not available"}
@@ -1246,11 +1262,16 @@ func checkStaleIAMRoles(ctx context.Context, iamClient IAMCleanupAPI, lister San
 		rolePrefix + "create-handler", rolePrefix + "ttl-", rolePrefix + "org-admin", rolePrefix + "email-create-handler",
 		rolePrefix + "slack-bridge",
 		rolePrefix + "email-handler", rolePrefix + "ecs-spot-handler",
+		rolePrefix + "cluster-", // Phase 80 cross-account IRSA roles
 		"km-s3-replication-",
 	}
 
 	var staleRoles []string
 	for _, r := range roles {
+		// Protect roles registered as cross-account cluster IRSA roles (Phase 80).
+		if clusterRoleNames[r.name] {
+			continue
+		}
 		// Skip platform infrastructure roles.
 		isPlatform := false
 		for _, prefix := range platformPrefixes {
@@ -2483,8 +2504,13 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	// Stale IAM roles check.
 	iamCleanup := deps.IAMCleanupClient
 	iamResourcePrefix := cfg.GetResourcePrefix()
+	// Protect Phase 80 cross-account cluster IRSA roles from the stale-role sweep.
+	clusterRoleNames := make(map[string]bool)
+	for _, name := range cfg.GetClusterRoleNames() {
+		clusterRoleNames[name] = true
+	}
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkStaleIAMRoles(ctx, iamCleanup, listerForCleanup, dryRun, iamResourcePrefix)
+		return checkStaleIAMRoles(ctx, iamCleanup, listerForCleanup, dryRun, iamResourcePrefix, clusterRoleNames)
 	})
 
 	// Stale EventBridge schedules check.

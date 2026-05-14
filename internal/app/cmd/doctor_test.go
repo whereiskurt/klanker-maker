@@ -641,6 +641,7 @@ func (c *testConfig) GetEmailDomain() string           { return "sandboxes.klank
 func (c *testConfig) GetSsmPrefix() string             { return "/km/" }
 func (c *testConfig) GetSlackThreadsTableName() string { return "km-slack-threads" }
 func (c *testConfig) GetSandboxTableName() string      { return "km-sandboxes" }
+func (c *testConfig) GetClusterRoleNames() []string    { return nil }
 
 // =============================================================================
 // Tests: DoctorCmd (Task 2)
@@ -896,6 +897,7 @@ func (c *testDoctorConfig) GetEmailDomain() string           { return "sandboxes
 func (c *testDoctorConfig) GetSsmPrefix() string             { return "/km/" }
 func (c *testDoctorConfig) GetSlackThreadsTableName() string { return "km-slack-threads" }
 func (c *testDoctorConfig) GetSandboxTableName() string      { return "km-sandboxes" }
+func (c *testDoctorConfig) GetClusterRoleNames() []string    { return nil }
 
 func allOKDeps() *DoctorDeps {
 	return &DoctorDeps{
