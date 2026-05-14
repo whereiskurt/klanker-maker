@@ -1,10 +1,12 @@
 package bridge_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -961,6 +963,79 @@ func TestDDBPauseHinter_UpdateItemOtherError_BubblesUp(t *testing.T) {
 	}
 	if postCalled {
 		t.Error("Post must NOT be called when UpdateItem fails")
+	}
+}
+
+// ============================================================
+// Phase 67.2 shared test fixtures
+// ============================================================
+
+// recordingTransport is an http.RoundTripper used by Phase 67.2
+// retry-loop tests. It records every request and replays a queue of
+// canned responses. When the queue is exhausted, it returns a
+// synthetic "connection closed" error so tests can model a server
+// that drops the socket (TestReactor_NetworkError_Retries).
+type recordingTransport struct {
+	responses []func(r *http.Request) *http.Response
+	requests  []*http.Request
+	calls     int
+}
+
+func (rt *recordingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	// Capture request body (consume + restore so retries see the
+	// same body shape).
+	if r.Body != nil {
+		buf, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(buf))
+	}
+	rt.requests = append(rt.requests, r)
+	idx := rt.calls
+	rt.calls++
+	if idx >= len(rt.responses) {
+		return nil, fmt.Errorf("recordingTransport: connection closed after %d responses", len(rt.responses))
+	}
+	return rt.responses[idx](r), nil
+}
+
+// canned builds a closure returning a fresh *http.Response on each
+// call (the http.Client closes Body, so we cannot share a single
+// *Response across attempts).
+func canned(status int, headers map[string]string, body string) func(r *http.Request) *http.Response {
+	return func(r *http.Request) *http.Response {
+		resp := &http.Response{
+			StatusCode: status,
+			Body:       io.NopCloser(bytes.NewReader([]byte(body))),
+			Header:     make(http.Header),
+			Request:    r,
+		}
+		for k, v := range headers {
+			resp.Header.Set(k, v)
+		}
+		return resp
+	}
+}
+
+// captureBridgeLogger installs a fresh slog text handler writing to a
+// buffer at LevelDebug via bridge.SetLogger. Returns the buffer and a
+// restore closure that must be deferred. Mirrors the pattern from
+// handler_logging_test.go:25-34 (captureLogger).
+func captureBridgeLogger(t *testing.T) (*bytes.Buffer, func()) {
+	t.Helper()
+	var buf bytes.Buffer
+	bridge.SetLogger(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	return &buf, func() {
+		bridge.SetLogger(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	}
+}
+
+// assertContains is a small helper for log substring assertions.
+func assertContains(t *testing.T, haystack string, needles ...string) {
+	t.Helper()
+	for _, n := range needles {
+		if !strings.Contains(haystack, n) {
+			t.Errorf("expected log output to contain %q, got:\n%s", n, haystack)
+		}
 	}
 }
 
