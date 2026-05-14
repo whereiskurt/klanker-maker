@@ -18,15 +18,18 @@ import (
 // Implements kmaws.CWLogsAPI for unit testing without real AWS calls.
 
 type mockCWLogsAPI struct {
-	createGroupErr   error
-	createStreamErr  error
-	putEventsInput   *cloudwatchlogs.PutLogEventsInput
-	putEventsErr     error
-	getEventsOutput  *cloudwatchlogs.GetLogEventsOutput
-	getEventsErr     error
-	exportTaskInput  *cloudwatchlogs.CreateExportTaskInput
-	exportTaskOutput *cloudwatchlogs.CreateExportTaskOutput
-	exportTaskErr    error
+	createGroupErr        error
+	createStreamErr       error
+	putEventsInput        *cloudwatchlogs.PutLogEventsInput
+	putEventsErr          error
+	getEventsOutput       *cloudwatchlogs.GetLogEventsOutput
+	getEventsErr          error
+	exportTaskInput       *cloudwatchlogs.CreateExportTaskInput
+	exportTaskOutput      *cloudwatchlogs.CreateExportTaskOutput
+	exportTaskErr         error
+	filterLogEventsInput  *cloudwatchlogs.FilterLogEventsInput
+	filterLogEventsOutput *cloudwatchlogs.FilterLogEventsOutput
+	filterLogEventsErr    error
 }
 
 func (m *mockCWLogsAPI) CreateLogGroup(
@@ -88,6 +91,21 @@ func (m *mockCWLogsAPI) CreateExportTask(
 		return m.exportTaskOutput, m.exportTaskErr
 	}
 	return &cloudwatchlogs.CreateExportTaskOutput{}, m.exportTaskErr
+}
+
+func (m *mockCWLogsAPI) FilterLogEvents(
+	_ context.Context,
+	input *cloudwatchlogs.FilterLogEventsInput,
+	_ ...func(*cloudwatchlogs.Options),
+) (*cloudwatchlogs.FilterLogEventsOutput, error) {
+	m.filterLogEventsInput = input
+	if m.filterLogEventsErr != nil {
+		return nil, m.filterLogEventsErr
+	}
+	if m.filterLogEventsOutput != nil {
+		return m.filterLogEventsOutput, nil
+	}
+	return &cloudwatchlogs.FilterLogEventsOutput{}, nil
 }
 
 // ---- Tests ----
