@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 80.1-04-PLAN.md (km cluster add OIDC auto-detect + 8 tests passing)
-last_updated: "2026-05-12T04:21:38.964Z"
-last_activity: 2026-05-12
+stopped_at: Completed 77-00-PLAN.md (CWLogsAPI FilterLogEvents interface, NewLogsCmdWithClient DI seam, mockSandboxMetadataAPI test infrastructure)
+last_updated: "2026-05-14T23:57:44.406Z"
+last_activity: 2026-05-14
 progress:
-  total_phases: 86
+  total_phases: 87
   completed_phases: 75
-  total_plans: 314
-  completed_plans: 277
+  total_plans: 320
+  completed_plans: 278
   percent: 93
 ---
 
@@ -31,7 +31,7 @@ Plan: 6 of 6 in phase 79 (all complete; 79-05 closeout + UAT passed 2026-05-10)
 Total Plans in Phase: 6
 Current Plan: 14
 Status: in-progress
-Last activity: 2026-05-12
+Last activity: 2026-05-14
 
 Progress: [█████████░] 93%
 
@@ -316,6 +316,7 @@ Progress: [█████████░] 93%
 | Phase 80.1-auto-detect-existing-oidc-provider-in-cluster-irsa-module-supporting-same-account-irsa-without-manual-flags P01 | 3min | 1 tasks | 1 files |
 | Phase 80.1-auto-detect-existing-oidc-provider-in-cluster-irsa-module-supporting-same-account-irsa-without-manual-flags P03 | 2 | 3 tasks | 3 files |
 | Phase 80.1-auto-detect-existing-oidc-provider-in-cluster-irsa-module-supporting-same-account-irsa-without-manual-flags P04 | 18 | 2 tasks | 2 files |
+| Phase 77 P00 | 4min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -903,6 +904,9 @@ Recent decisions affecting current work:
 - [Phase 80.1-03]: moved {} block before locals {} ensures Terraform state migration resolves before resource evaluation
 - [Phase 80.1-03]: oidc_provider_arn_local local unifies both OIDC branches; trust policy and outputs reference the local
 - [Phase 80.1]: Export GenerateClusterHCLWithOIDC so cmd_test package can test the false branch; RunClusterAdd takes registerOIDCProviderFlag string as 11th param; unit tests pass 'false' to skip IAM auto-detect
+- [Phase 77]: FilterLogEvents added to CWLogsAPI interface end — real *cloudwatchlogs.Client already satisfies it natively
+- [Phase 77]: NewLogsCmdWithClient DI seam follows NewStatusCmdWithFetcher pattern: nil client builds real cloudwatchlogs.Client at runtime
+- [Phase 77]: mockSandboxMetadataAPI is a private copy in create-handler package (pkg/aws/sandbox_dynamo_test.go is aws_test and cannot be imported cross-package)
 
 ### Roadmap Evolution
 
@@ -1004,6 +1008,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-12T04:09:30.569Z
-Stopped at: Completed 80.1-04-PLAN.md (km cluster add OIDC auto-detect + 8 tests passing)
+Last session: 2026-05-14T23:57:44.399Z
+Stopped at: Completed 77-00-PLAN.md (CWLogsAPI FilterLogEvents interface, NewLogsCmdWithClient DI seam, mockSandboxMetadataAPI test infrastructure)
 Resume file: None
