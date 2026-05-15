@@ -484,6 +484,137 @@ func TestFileDownloader_403_LogsErrorAndDrops(t *testing.T) {
 }
 
 // ============================================================
+// Test 9.A: Phase 75.1 — stub file objects in event payloads.
+// Slack file_share events sometimes deliver SlackFile with only ID populated
+// (no url_private_download); the downloader must enrich via files.info
+// before issuing the GET. See pkg/slack/bridge/files_info.go.
+// ============================================================
+
+type mockFilesInfoFetcher struct {
+	calls  []string
+	result bridge.SlackFile
+	err    error
+}
+
+func (m *mockFilesInfoFetcher) FilesInfo(ctx context.Context, fileID string) (bridge.SlackFile, error) {
+	m.calls = append(m.calls, fileID)
+	if m.err != nil {
+		return bridge.SlackFile{}, m.err
+	}
+	return m.result, nil
+}
+
+func TestFileDownloader_EmptyURL_EnrichesViaFilesInfo(t *testing.T) {
+	body := []byte("enriched png bytes")
+	enrichedURL := "https://files.slack.com/files-pri/T0/F0B43BJ6D3Q/download/screenshot.png"
+
+	rt := &recordingTransport{
+		responses: []func(*http.Request) *http.Response{
+			canned(200, nil, string(body)),
+		},
+	}
+	s3mock := &mockS3Put{}
+	info := &mockFilesInfoFetcher{result: bridge.SlackFile{
+		ID:                 "F0B43BJ6D3Q",
+		Name:               "screenshot.png",
+		Mimetype:           "image/png",
+		URLPrivateDownload: enrichedURL,
+		Size:               int64(len(body)),
+	}}
+	d := newTestDownloader(t, rt, s3mock)
+	d.FilesInfo = info
+
+	// Stub file as Slack delivers in modern event payloads: id only.
+	files := []bridge.SlackFile{
+		{ID: "F0B43BJ6D3Q", Name: "", Mimetype: "", URLPrivateDownload: "", Size: int64(len(body))},
+	}
+
+	atts, errs, err := d.Download(context.Background(), files, "sb-test", "1700000010.000000")
+	if err != nil {
+		t.Fatalf("Download error: %v", err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("unexpected FileErrors: %+v", errs)
+	}
+	if len(info.calls) != 1 || info.calls[0] != "F0B43BJ6D3Q" {
+		t.Errorf("FilesInfo calls = %v, want [F0B43BJ6D3Q]", info.calls)
+	}
+	if len(rt.requests) != 1 {
+		t.Fatalf("expected 1 HTTP GET, got %d", len(rt.requests))
+	}
+	if got := rt.requests[0].URL.String(); got != enrichedURL {
+		t.Errorf("GET URL = %q, want enriched %q", got, enrichedURL)
+	}
+	if len(atts) != 1 {
+		t.Fatalf("expected 1 Attachment, got %d", len(atts))
+	}
+	// The enriched name + mimetype should propagate to the Attachment record.
+	if atts[0].OriginalName != "screenshot.png" {
+		t.Errorf("OriginalName=%q want screenshot.png (enrichment must propagate)", atts[0].OriginalName)
+	}
+	if atts[0].Mimetype != "image/png" {
+		t.Errorf("Mimetype=%q want image/png", atts[0].Mimetype)
+	}
+}
+
+func TestFileDownloader_EmptyURL_FilesInfoNil_FailsCleanly(t *testing.T) {
+	rt := &recordingTransport{}
+	s3mock := &mockS3Put{}
+	d := newTestDownloader(t, rt, s3mock)
+	// d.FilesInfo deliberately nil — older bridge images without enrichment wiring.
+
+	files := []bridge.SlackFile{
+		{ID: "F0B43BJ6D3Q", Name: "stub.png", Mimetype: "image/png", URLPrivateDownload: "", Size: 1024},
+	}
+
+	atts, errs, err := d.Download(context.Background(), files, "sb-test", "1700000011.000000")
+	if err != nil {
+		t.Fatalf("Download error: %v", err)
+	}
+	if len(rt.requests) != 0 {
+		t.Errorf("expected 0 GETs when URL empty + FilesInfo nil, got %d", len(rt.requests))
+	}
+	if len(atts) != 0 {
+		t.Errorf("expected 0 Attachments, got %d", len(atts))
+	}
+	if len(errs) != 1 {
+		t.Fatalf("expected 1 FileError, got %d", len(errs))
+	}
+	if errs[0].OriginalName != "stub.png" {
+		t.Errorf("OriginalName=%q want stub.png", errs[0].OriginalName)
+	}
+}
+
+func TestFileDownloader_EmptyURL_FilesInfoFails_RecordedAsFileError(t *testing.T) {
+	rt := &recordingTransport{}
+	s3mock := &mockS3Put{}
+	info := &mockFilesInfoFetcher{err: fmt.Errorf("slack files.info: HTTP 500")}
+	d := newTestDownloader(t, rt, s3mock)
+	d.FilesInfo = info
+
+	files := []bridge.SlackFile{
+		{ID: "F0B43BJ6D3Q", Name: "stub.png", Mimetype: "image/png", URLPrivateDownload: "", Size: 1024},
+	}
+
+	atts, errs, err := d.Download(context.Background(), files, "sb-test", "1700000012.000000")
+	if err != nil {
+		t.Fatalf("Download error: %v", err)
+	}
+	if len(rt.requests) != 0 {
+		t.Errorf("expected 0 HTTP GETs when files.info fails, got %d", len(rt.requests))
+	}
+	if len(atts) != 0 {
+		t.Errorf("expected 0 Attachments, got %d", len(atts))
+	}
+	if len(errs) != 1 {
+		t.Fatalf("expected 1 FileError, got %d", len(errs))
+	}
+	if !strings.Contains(strings.ToLower(errs[0].Reason), "files.info") {
+		t.Errorf("Reason=%q should mention files.info", errs[0].Reason)
+	}
+}
+
+// ============================================================
 // Test 9: Filename sanitization (table-driven).
 // ============================================================
 

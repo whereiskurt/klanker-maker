@@ -260,12 +260,22 @@ func init() {
 	// When KM_ARTIFACTS_BUCKET is unset (fresh/unconfigured install), the downloader
 	// stays nil and EventsHandler.Handle falls through to text-only SQS dispatch
 	// with a Warn log (intentional fail-closed degradation).
+	//
+	// Phase 75.1: FilesInfo is wired alongside the downloader. Modern Slack
+	// Apps receive stub file objects in file_share events (only `id` populated);
+	// the downloader uses FilesInfo to enrich each file with url_private_download
+	// before issuing the GET. SlackFilesInfoAdapter shares httpClient + tokenFetcher
+	// with poster/reactor so the 15-min token cache is reused.
 	if artifactsBucket != "" {
 		eventsHandler.FileDownloader = &bridge.S3FileDownloader{
 			HTTPClient: httpClient,
 			S3:         s3Client,
 			Bucket:     artifactsBucket,
 			Tokens:     tokenFetcher,
+			FilesInfo: &bridge.SlackFilesInfoAdapter{
+				HTTPClient: httpClient,
+				Tokens:     tokenFetcher,
+			},
 		}
 	} else {
 		slog.Warn("km-slack-bridge: phase-75 file downloader disabled: KM_ARTIFACTS_BUCKET unset; file_share events will dispatch text-only")

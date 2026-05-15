@@ -73,6 +73,14 @@ type FileError struct {
 	Reason       string // Human-readable description, e.g. "Skipped big.zip (101 MB > 100 MB cap)".
 }
 
+// FilesInfoFetcher resolves a Slack file ID to a fully-populated SlackFile.
+// Phase 75.1: modern Slack Apps receive stub file objects in file_share event
+// payloads (only `id` is guaranteed). Calling files.info enriches the file with
+// url_private_download, name, mimetype, etc. — fields the downloader requires.
+type FilesInfoFetcher interface {
+	FilesInfo(ctx context.Context, fileID string) (SlackFile, error)
+}
+
 // S3FileDownloader is the production FileDownloader implementation.
 // It downloads Slack file attachments from files.slack.com using the bot token
 // (preserving auth across 302 redirects) and buffers + PUTs them to S3 under
@@ -92,6 +100,11 @@ type S3FileDownloader struct {
 	// Tokens fetches the Slack bot token (shared with SlackPosterAdapter to
 	// reuse the 15-min SSM cache). The token is fetched once per Download call.
 	Tokens BotTokenFetcher
+
+	// FilesInfo enriches a SlackFile when the event payload delivered only the
+	// file ID (no url_private_download). Optional — when nil, files with empty
+	// URLPrivateDownload are recorded as FileErrors. Phase 75.1.
+	FilesInfo FilesInfoFetcher
 }
 
 // Download implements FileDownloader.
@@ -122,6 +135,44 @@ func (d *S3FileDownloader) Download(ctx context.Context, files []SlackFile, sand
 	var attachments []Attachment
 
 	for _, file := range files {
+		// Phase 75.1: enrich stub file objects (id-only) via files.info BEFORE
+		// any size check or HTTP call, so size/name/mimetype reflect reality
+		// and propagate to FileError.OriginalName and Attachment records.
+		if file.URLPrivateDownload == "" {
+			if d.FilesInfo == nil {
+				fileErrs = append(fileErrs, FileError{
+					OriginalName: file.Name,
+					Reason:       fmt.Sprintf("download %s (%s): empty url_private_download and no FilesInfo fetcher wired", file.Name, file.ID),
+				})
+				continue
+			}
+			enriched, infoErr := d.FilesInfo.FilesInfo(ctx, file.ID)
+			if infoErr != nil {
+				fileErrs = append(fileErrs, FileError{
+					OriginalName: file.Name,
+					Reason:       fmt.Sprintf("download %s (%s): files.info: %v", file.Name, file.ID, infoErr),
+				})
+				continue
+			}
+			if enriched.URLPrivateDownload == "" {
+				fileErrs = append(fileErrs, FileError{
+					OriginalName: file.Name,
+					Reason:       fmt.Sprintf("download %s (%s): files.info returned empty url_private_download", file.Name, file.ID),
+				})
+				continue
+			}
+			file.URLPrivateDownload = enriched.URLPrivateDownload
+			if file.Name == "" {
+				file.Name = enriched.Name
+			}
+			if file.Mimetype == "" {
+				file.Mimetype = enriched.Mimetype
+			}
+			if file.Size == 0 {
+				file.Size = enriched.Size
+			}
+		}
+
 		// Enforce per-file size cap before any HTTP call.
 		fileSizeMB := file.Size / (1024 * 1024)
 		if file.Size > MaxFileSizeBytes {
@@ -181,6 +232,9 @@ func (d *S3FileDownloader) Download(ctx context.Context, files []SlackFile, sand
 // manually issue a second GET to the Location URL with the Authorization header
 // re-attached. Only one redirect hop is supported; a second redirect logs and fails.
 func (d *S3FileDownloader) downloadOneFile(ctx context.Context, token string, file SlackFile) ([]byte, error) {
+	// Phase 75.1: enrichment of stub file objects happens in Download() before
+	// the per-file size check, so file.URLPrivateDownload is non-empty here.
+
 	issueGET := func(url string) (*http.Response, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
