@@ -16,13 +16,20 @@ spec:
   runtime:
     ami: amazon-linux-2023
     substrate: ec2
-    spot: false
-    instanceType: t3.large
+    instanceType: t3.2xlarge
     region: us-east-1
-    rootVolumeSize: 15
-    hibernation: true
+    
+    ##spot:true means hibernate must be false
+    spot: false
+    ## hibernation true means on stop memory is written to the root disk. 
+    hibernation: false
+    rootVolumeSize: 80
+    
+    ## Unlimited filesystem locked to the region
     mountEFS: true
     efsMountPoint: /shared
+    
+    ## Separate attached EBS
     additionalVolume:
       size: 30
       mountPoint: /data
@@ -30,7 +37,10 @@ spec:
   execution:
     shell: /bin/bash
     workingDir: /workspace
+    
+    ## This determines if instance profile can access bedrock
     useBedrock: false
+    
     privileged: true
     env:
       SANDBOX_MODE: learn-v2-direct-api
@@ -154,13 +164,14 @@ spec:
       - list_files
 
   cli:
+    ##Setting noBedrock calls the noBedrock() bash function call on loading and prevents accidentally Bedrock
     noBedrock: true
     claudeArgs:
       - "--dangerously-skip-permissions"
     notifyOnIdle: true
     notifyOnPermission: true
     notifyEmailEnabled: true
-    notifySlackEnabled: false
-    # notifySlackPerSandbox: true
-    # notifySlackInboundEnabled: true
-    # slackArchiveOnDestroy: false
+    notifySlackEnabled: true
+    notifySlackPerSandbox: true
+    notifySlackInboundEnabled: true
+    slackArchiveOnDestroy: false
