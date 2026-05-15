@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: "Merged Phase 77 (failed-sandbox-discoverability) with Phase 67.2 (Slack ACK retry) on main"
-last_updated: "2026-05-15T03:30:00.000Z"
+stopped_at: Completed 75-01-PLAN.md (SlackFile/Attachment types + isBotLoop file_share allow-list)
+last_updated: "2026-05-15T14:59:48.847Z"
 last_activity: 2026-05-15
 progress:
   total_phases: 88
   completed_phases: 77
-  total_plans: 325
-  completed_plans: 285
+  total_plans: 329
+  completed_plans: 286
   percent: 93
 ---
 
@@ -325,6 +325,7 @@ Progress: [█████████░] 93%
 | Phase 77 P02 | 4min | 2 tasks | 2 files |
 | Phase 77-failed-sandbox-discoverability P03 | 630 | 1 tasks | 2 files |
 | Phase 77-failed-sandbox-discoverability P04 | 631 | 2 tasks | 4 files |
+| Phase 75-slack-inbound-file-attachments-images-pdfs-for-per-sandbox-channels P01 | 175 | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -929,6 +930,9 @@ Recent decisions affecting current work:
 - [Phase 77]: Failure:/Failed At: lines placed AFTER Status: and BEFORE Created At: — logically paired with failure status; gate uses rec.Status field not field presence for defensive correctness
 - [Phase 77]: errors.As used (not errors.Is) for ResourceNotFoundException through %w wrapping in km logs fallback
 - [Phase 77]: --follow short-circuits before FilterLogEvents call so filter is never invoked in terminal-failure fallback mode
+- [Phase 75]: omitempty on InboundQueueBody.Attachments is load-bearing: absent key (not null) for back-compat with older SQS consumers using jq .attachments[]?
+- [Phase 75]: SlackFile mirrors Slack Events API shape; Attachment is the SQS payload schema — two separate types to prevent Slack API changes leaking into SQS contract
+- [Phase 75]: isBotLoop uses allow-list: file_share admitted in Phase 75 so user file uploads flow to SQS
 
 ### Roadmap Evolution
 
@@ -1031,6 +1035,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-15T03:30:00.000Z
-Stopped at: Merged Phase 77 with Phase 67.2 on main
+Last session: 2026-05-15T14:59:48.839Z
+Stopped at: Completed 75-01-PLAN.md (SlackFile/Attachment types + isBotLoop file_share allow-list)
 Resume file: None

@@ -1624,7 +1624,7 @@ Plans:
 **Requirements**: Phase 67 inbound flow (SQS FIFO + km-slack-inbound-poller) and Phase 67.1 ACK reaction must be in place. No new SSM, DDB, or profile-schema changes anticipated; gated under existing `notifySlackInboundEnabled`. Bridge IAM gains `s3:PutObject` on the staging prefix; sandbox role already reads `KM_ARTIFACTS_BUCKET`.
 
 **Depends on:** Phase 67, Phase 67.1
-**Plans:** 6 plans
+**Plans:** 1/6 plans executed
 
 Plans:
 - [ ] 75-01-PLAN.md — Wave 1: SQS payload types (SlackFile/Attachment) + isBotLoop allow-list (file_share) + ROADMAP fix (autonomous, 3 tasks)
