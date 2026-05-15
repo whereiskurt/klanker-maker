@@ -235,6 +235,29 @@ resource "aws_iam_role_policy" "slack_bridge_transcript_s3_read" {
   })
 }
 
+# Phase 75: bridge writes Slack file_share uploads to slack-inbound/<sandbox-id>/...
+# IAM is bucket-write-scoped to that prefix only — never bucket-wide.
+# Gated on var.artifacts_bucket — when empty (fresh installs pre-bootstrap), the policy is omitted.
+resource "aws_iam_role_policy" "slack_bridge_files_s3_write" {
+  count = var.artifacts_bucket != "" ? 1 : 0
+  name  = "${local.function_name}-files-s3-write"
+  role  = aws_iam_role.slack_bridge.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3PutSlackInboundFiles"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+        ]
+        Resource = "arn:aws:s3:::${var.artifacts_bucket}/slack-inbound/*"
+      }
+    ]
+  })
+}
+
 # Policy: SSM — read signing secret (SecureString, decrypted via kms_decrypt above)
 resource "aws_iam_role_policy" "ssm_signing_secret" {
   name = "${local.function_name}-ssm-signing-secret"
@@ -270,18 +293,21 @@ resource "aws_lambda_function" "slack_bridge" {
   runtime          = "provided.al2023"
   architectures    = ["arm64"]
   timeout          = 15
-  memory_size      = 256
+  # Phase 75: bumped 256 → 1024 to accommodate up to 100MB in-memory file
+  # buffering required by AWS SDK PutObject retry-rewindability semantics.
+  # See .planning/phases/75-.../75-RESEARCH.md § Pitfall 2.
+  memory_size = 1024
 
   environment {
     variables = {
-      KM_IDENTITIES_TABLE   = var.identities_table_name
+      KM_IDENTITIES_TABLE = var.identities_table_name
       # Binary reads KM_SANDBOX_TABLE_NAME (cmd/km-slack-bridge/main.go:69);
       # the previous KM_SANDBOXES_TABLE name didn't match what the code looked
       # up, so the bridge fell back to its hardcoded "km-sandboxes" default —
       # broken on any non-default resource_prefix install.
       KM_SANDBOX_TABLE_NAME = var.sandboxes_table_name
       KM_NONCE_TABLE        = var.nonces_table_name
-      KM_BOT_TOKEN_PATH   = var.bot_token_path
+      KM_BOT_TOKEN_PATH     = var.bot_token_path
       # Phase 67-05 additions — inbound events path
       KM_SIGNING_SECRET_PATH = var.signing_secret_path
       KM_SLACK_THREADS_TABLE = var.slack_threads_table_name
