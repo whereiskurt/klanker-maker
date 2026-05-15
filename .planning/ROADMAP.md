@@ -1623,11 +1623,16 @@ Plans:
 
 **Requirements**: Phase 67 inbound flow (SQS FIFO + km-slack-inbound-poller) and Phase 67.1 ACK reaction must be in place. No new SSM, DDB, or profile-schema changes anticipated; gated under existing `notifySlackInboundEnabled`. Bridge IAM gains `s3:PutObject` on the staging prefix; sandbox role already reads `KM_ARTIFACTS_BUCKET`.
 
-**Depends on:** Phase 74 (mrkdwn rendering, queued/in-flight)
-**Plans:** 0 plans
+**Depends on:** Phase 67, Phase 67.1
+**Plans:** 6 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 75 to break down)
+- [ ] 75-01-PLAN.md — Wave 1: SQS payload types (SlackFile/Attachment) + isBotLoop allow-list (file_share) + ROADMAP fix (autonomous, 3 tasks)
+- [ ] 75-02-PLAN.md — Wave 2: S3FileDownloader + bridge Handle fork on len(Files)>0 + Pitfall 1/2 mitigations (autonomous, 2 tasks)
+- [ ] 75-03-PLAN.md — Wave 2: Sandbox poller bash extension (S3 mirror + master-prompt wrapper + Pitfall 4 fix) (autonomous, 2 tasks)
+- [ ] 75-04-PLAN.md — Wave 2: Bridge IAM s3:PutObject + memory_size 1024 + S3 lifecycle module + files:read scope checks (autonomous, 3 tasks)
+- [ ] 75-05-PLAN.md — Wave 3: Bridge cold-start wiring (S3FileDownloader instantiated in main.go) (autonomous, 1 task)
+- [ ] 75-06-PLAN.md — Wave 4: Docs (slack-notifications.md + CLAUDE.md) + manual UAT runbook (checkpoint, 2 tasks)
 
 ### Phase 76: km vscode rekey: rotate ed25519 keypair for an existing sandbox
 
