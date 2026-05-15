@@ -877,6 +877,246 @@ func mustMarshalSandboxItemFull(t *testing.T, meta *kmaws.SandboxMetadata) map[s
 	return m.putItemInput.Item
 }
 
+// ---- Phase 77: UpdateSandboxStatusAndReasonDynamo tests ----
+
+// TestUpdateSandboxStatusAndReasonDynamo_RoundTrip verifies:
+// 1. The helper issues one UpdateItem with an expression containing
+//    failure_reason and failed_at.
+// 2. :reason and :ts expression-attribute values match the inputs.
+// 3. ReadSandboxMetadataDynamo correctly populates FailureReason and FailedAt
+//    when the DDB item carries those attributes.
+func TestUpdateSandboxStatusAndReasonDynamo_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	failedAt := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+
+	mock := &mockSandboxMetadataAPI{
+		updateItemOutput: &dynamodb.UpdateItemOutput{},
+	}
+
+	err := kmaws.UpdateSandboxStatusAndReasonDynamo(ctx, mock, "km-sandboxes", "sb-fail1", "failed", "Error: x", failedAt)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mock.updateItemInput == nil {
+		t.Fatal("UpdateItem was not called")
+	}
+
+	// UpdateExpression must reference both failure_reason and failed_at.
+	expr := awssdk.ToString(mock.updateItemInput.UpdateExpression)
+	if !contains(expr, "failure_reason") {
+		t.Errorf("UpdateExpression %q does not contain 'failure_reason'", expr)
+	}
+	if !contains(expr, "failed_at") {
+		t.Errorf("UpdateExpression %q does not contain 'failed_at'", expr)
+	}
+
+	// :reason must equal "Error: x".
+	reasonAttr, ok := mock.updateItemInput.ExpressionAttributeValues[":reason"]
+	if !ok {
+		t.Fatal(":reason expression attribute missing")
+	}
+	sv, ok := reasonAttr.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok {
+		t.Fatalf(":reason should be AttributeValueMemberS, got %T", reasonAttr)
+	}
+	if sv.Value != "Error: x" {
+		t.Errorf(":reason = %q, want %q", sv.Value, "Error: x")
+	}
+
+	// :ts must be a non-empty RFC3339-parseable string.
+	tsAttr, ok := mock.updateItemInput.ExpressionAttributeValues[":ts"]
+	if !ok {
+		t.Fatal(":ts expression attribute missing")
+	}
+	tsv, ok := tsAttr.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok {
+		t.Fatalf(":ts should be AttributeValueMemberS, got %T", tsAttr)
+	}
+	if tsv.Value == "" {
+		t.Fatal(":ts should be non-empty")
+	}
+	parsed, err := time.Parse(time.RFC3339, tsv.Value)
+	if err != nil {
+		t.Errorf(":ts value %q is not RFC3339-parseable: %v", tsv.Value, err)
+	}
+	if !parsed.Equal(failedAt) {
+		t.Errorf(":ts parsed = %v, want %v", parsed, failedAt)
+	}
+
+	// Now round-trip: pre-seed GetItem response with the new fields and confirm
+	// ReadSandboxMetadataDynamo populates them.
+	item := map[string]dynamodbtypes.AttributeValue{
+		"sandbox_id":     &dynamodbtypes.AttributeValueMemberS{Value: "sb-fail1"},
+		"profile_name":   &dynamodbtypes.AttributeValueMemberS{Value: "dev"},
+		"substrate":      &dynamodbtypes.AttributeValueMemberS{Value: "ec2"},
+		"region":         &dynamodbtypes.AttributeValueMemberS{Value: "us-east-1"},
+		"status":         &dynamodbtypes.AttributeValueMemberS{Value: "failed"},
+		"created_at":     &dynamodbtypes.AttributeValueMemberS{Value: failedAt.Format(time.RFC3339)},
+		"failure_reason": &dynamodbtypes.AttributeValueMemberS{Value: "Error: x"},
+		"failed_at":      &dynamodbtypes.AttributeValueMemberS{Value: failedAt.UTC().Format(time.RFC3339)},
+	}
+	readMock := &mockSandboxMetadataAPI{
+		getItemOutput: &dynamodb.GetItemOutput{Item: item},
+	}
+
+	got, err := kmaws.ReadSandboxMetadataDynamo(ctx, readMock, "km-sandboxes", "sb-fail1")
+	if err != nil {
+		t.Fatalf("ReadSandboxMetadataDynamo: unexpected error: %v", err)
+	}
+	if got.FailureReason != "Error: x" {
+		t.Errorf("FailureReason = %q, want %q", got.FailureReason, "Error: x")
+	}
+	if got.FailedAt == nil {
+		t.Fatal("FailedAt should not be nil")
+	}
+	if !got.FailedAt.Equal(failedAt) {
+		t.Errorf("FailedAt = %v, want %v", got.FailedAt, failedAt)
+	}
+}
+
+// TestUpdateSandboxStatusAndReasonDynamo_OldRecord_ZeroValue verifies that
+// ReadSandboxMetadataDynamo returns zero-values for FailureReason and FailedAt
+// when the DDB item does not carry those attributes (backward compat).
+func TestUpdateSandboxStatusAndReasonDynamo_OldRecord_ZeroValue(t *testing.T) {
+	ctx := context.Background()
+
+	// Old record: no failure_reason or failed_at attributes.
+	item := map[string]dynamodbtypes.AttributeValue{
+		"sandbox_id":   &dynamodbtypes.AttributeValueMemberS{Value: "sb-old"},
+		"profile_name": &dynamodbtypes.AttributeValueMemberS{Value: "dev"},
+		"substrate":    &dynamodbtypes.AttributeValueMemberS{Value: "ec2"},
+		"region":       &dynamodbtypes.AttributeValueMemberS{Value: "us-east-1"},
+		"status":       &dynamodbtypes.AttributeValueMemberS{Value: "running"},
+		"created_at":   &dynamodbtypes.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339)},
+	}
+	mock := &mockSandboxMetadataAPI{
+		getItemOutput: &dynamodb.GetItemOutput{Item: item},
+	}
+
+	got, err := kmaws.ReadSandboxMetadataDynamo(ctx, mock, "km-sandboxes", "sb-old")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.FailureReason != "" {
+		t.Errorf("FailureReason = %q, want empty string for old record without attribute", got.FailureReason)
+	}
+	if got.FailedAt != nil {
+		t.Errorf("FailedAt = %v, want nil for old record without attribute", got.FailedAt)
+	}
+}
+
+// TestSandboxMetadataMarshal_FailureFields verifies that FailureReason and FailedAt
+// survive a full marshal → unmarshal round-trip through WriteSandboxMetadataDynamo
+// and ReadSandboxMetadataDynamo.
+func TestSandboxMetadataMarshal_FailureFields(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	failedAt := now.Add(-5 * time.Minute)
+
+	meta := &kmaws.SandboxMetadata{
+		SandboxID:     "sb-fail-marshal",
+		ProfileName:   "dev",
+		Substrate:     "ec2",
+		Region:        "us-east-1",
+		Status:        "failed",
+		CreatedAt:     now,
+		FailureReason: "terraform apply timed out after 600s",
+		FailedAt:      &failedAt,
+	}
+
+	// Marshal via WriteSandboxMetadataDynamo, capture the PutItem item map.
+	writeMock := &mockSandboxMetadataAPI{putItemOutput: &dynamodb.PutItemOutput{}}
+	if err := kmaws.WriteSandboxMetadataDynamo(ctx, writeMock, "km-sandboxes", meta); err != nil {
+		t.Fatalf("WriteSandboxMetadataDynamo: %v", err)
+	}
+	item := writeMock.putItemInput.Item
+
+	// Verify failure_reason attribute is present and correct.
+	frAttr, ok := item["failure_reason"]
+	if !ok {
+		t.Fatal("failure_reason attribute missing from PutItem input")
+	}
+	frSv, ok := frAttr.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok {
+		t.Fatalf("failure_reason should be AttributeValueMemberS, got %T", frAttr)
+	}
+	if frSv.Value != meta.FailureReason {
+		t.Errorf("failure_reason = %q, want %q", frSv.Value, meta.FailureReason)
+	}
+
+	// Verify failed_at attribute is present and RFC3339.
+	faAttr, ok := item["failed_at"]
+	if !ok {
+		t.Fatal("failed_at attribute missing from PutItem input")
+	}
+	faSv, ok := faAttr.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok {
+		t.Fatalf("failed_at should be AttributeValueMemberS, got %T", faAttr)
+	}
+	parsedFA, err := time.Parse(time.RFC3339, faSv.Value)
+	if err != nil {
+		t.Fatalf("failed_at %q is not RFC3339: %v", faSv.Value, err)
+	}
+	if !parsedFA.Equal(failedAt) {
+		t.Errorf("failed_at parsed = %v, want %v", parsedFA, failedAt)
+	}
+
+	// Now unmarshal: pre-seed the GetItem response with the captured item and
+	// verify ReadSandboxMetadataDynamo restores both fields.
+	readMock := &mockSandboxMetadataAPI{
+		getItemOutput: &dynamodb.GetItemOutput{Item: item},
+	}
+	got, err := kmaws.ReadSandboxMetadataDynamo(ctx, readMock, "km-sandboxes", "sb-fail-marshal")
+	if err != nil {
+		t.Fatalf("ReadSandboxMetadataDynamo: %v", err)
+	}
+	if got.FailureReason != meta.FailureReason {
+		t.Errorf("FailureReason after round-trip = %q, want %q", got.FailureReason, meta.FailureReason)
+	}
+	if got.FailedAt == nil {
+		t.Fatal("FailedAt after round-trip should not be nil")
+	}
+	if !got.FailedAt.Equal(failedAt) {
+		t.Errorf("FailedAt after round-trip = %v, want %v", got.FailedAt, failedAt)
+	}
+}
+
+// TestUpdateSandboxStatusDynamo_StillWorks verifies the OLD helper is unchanged:
+// it updates only status, and the UpdateExpression does NOT reference failure_reason
+// or failed_at.
+func TestUpdateSandboxStatusDynamo_StillWorks(t *testing.T) {
+	mock := &mockSandboxMetadataAPI{
+		updateItemOutput: &dynamodb.UpdateItemOutput{},
+	}
+
+	if err := kmaws.UpdateSandboxStatusDynamo(context.Background(), mock, "km-sandbox-metadata", "sandbox-old-helper", "running"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mock.updateItemInput == nil {
+		t.Fatal("UpdateItem was not called")
+	}
+
+	expr := awssdk.ToString(mock.updateItemInput.UpdateExpression)
+	if contains(expr, "failure_reason") {
+		t.Errorf("UpdateSandboxStatusDynamo UpdateExpression %q should NOT contain 'failure_reason'", expr)
+	}
+	if contains(expr, "failed_at") {
+		t.Errorf("UpdateSandboxStatusDynamo UpdateExpression %q should NOT contain 'failed_at'", expr)
+	}
+
+	// :status must be set correctly.
+	statusAttr, ok := mock.updateItemInput.ExpressionAttributeValues[":status"]
+	if !ok {
+		t.Fatal(":status expression attribute missing")
+	}
+	sv, ok := statusAttr.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok || sv.Value != "running" {
+		t.Errorf(":status = %v, want AttributeValueMemberS{running}", statusAttr)
+	}
+}
+
 // ---- Helpers ----
 
 func contains(s, sub string) bool {
