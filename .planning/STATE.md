@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 67.2-01-PLAN.md (classifyReactionError + recordingTransport/captureBridgeLogger fixtures + 25-case table test, all green)
-last_updated: "2026-05-14T23:59:25.052Z"
-last_activity: 2026-05-14
+stopped_at: Completed 67.2-02-PLAN.md
+last_updated: "2026-05-15T02:02:38.845Z"
+last_activity: 2026-05-15
 progress:
   total_phases: 88
   completed_phases: 75
   total_plans: 323
-  completed_plans: 278
+  completed_plans: 279
   percent: 93
 ---
 
@@ -31,7 +31,7 @@ Plan: 6 of 6 in phase 79 (all complete; 79-05 closeout + UAT passed 2026-05-10)
 Total Plans in Phase: 6
 Current Plan: 14
 Status: in-progress
-Last activity: 2026-05-14
+Last activity: 2026-05-15
 
 Progress: [█████████░] 93%
 
@@ -317,6 +317,7 @@ Progress: [█████████░] 93%
 | Phase 80.1-auto-detect-existing-oidc-provider-in-cluster-irsa-module-supporting-same-account-irsa-without-manual-flags P03 | 2 | 3 tasks | 3 files |
 | Phase 80.1-auto-detect-existing-oidc-provider-in-cluster-irsa-module-supporting-same-account-irsa-without-manual-flags P04 | 18 | 2 tasks | 2 files |
 | Phase 67.2 P01 | 4 min | 3 tasks | 3 files |
+| Phase 67.2 P02 | 11min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -906,6 +907,9 @@ Recent decisions affecting current work:
 - [Phase 80.1]: Export GenerateClusterHCLWithOIDC so cmd_test package can test the false branch; RunClusterAdd takes registerOIDCProviderFlag string as 11th param; unit tests pass 'false' to skip IAM auto-detect
 - [Phase 67.2]: 67.2-01: Used new internal test file aws_adapters_internal_test.go (package bridge) rather than test-only exporter shim — keeps production aws_adapters.go free of *ForTest symbols, matches existing convention (events_handler_test.go is also package bridge)
 - [Phase 67.2]: 67.2-01: Enumerated all 11 extra Slack codes from RESEARCH.md in classifyReactionError switch (token_expired, ekm_access_denied, accesslimited, external_channel_migrating, etc.) instead of relying solely on default-unknown→transient — gives operators correct log levels (Error vs Warn) when these specific codes fire
+- [Phase 67.2]: Used math/rand v1 (not crypto/rand or v2) for jitter — locked CONTEXT.md decision; v1's *rand.Rand fits test injection cleanly
+- [Phase 67.2]: Removed inline already_reacted shortcut — classifier returns classSuccess for that case (single source of truth)
+- [Phase 67.2]: Per-iteration doOneAttempt helper instead of inline body — addresses RESEARCH.md Pitfall 4 (defer resp.Body.Close stacking on retry exhaustion)
 
 ### Roadmap Evolution
 
@@ -1008,6 +1012,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-14T23:59:25.045Z
-Stopped at: Completed 67.2-01-PLAN.md (classifyReactionError + recordingTransport/captureBridgeLogger fixtures + 25-case table test, all green)
+Last session: 2026-05-15T00:15:44.197Z
+Stopped at: Completed 67.2-02-PLAN.md
 Resume file: None
