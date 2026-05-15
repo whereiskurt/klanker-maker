@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +44,17 @@ type EventsHandler struct {
 	// Empty defaults to "eyes" at call site. Configured via KM_SLACK_ACK_EMOJI
 	// env var at cold start.
 	AckEmoji string
+
+	// Phase 75: file attachment download + S3 buffering.
+	// FileDownloader is optional — nil means feature off (back-compat for Lambda
+	// images deployed before Phase 75). When nil and msg.Files is non-empty, the
+	// handler falls through to the text-only SQS dispatch path with a Warn log.
+	FileDownloader FileDownloader
+
+	// Slack is the SlackPoster used for posting thread-reply warnings when file
+	// downloads fail (e.g. oversize, 403, S3 failure). Optional — nil means warnings
+	// are suppressed. Shared with the main bridge Handler via wiring in main.go.
+	Slack SlackPoster
 }
 
 func (h *EventsHandler) now() time.Time {
@@ -179,28 +191,112 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		// best-effort — poller can recreate the row when it does its DDB lookup
 	}
 
-	// 8. SQS write — the critical path
-	body := InboundQueueBody{
-		Channel:  msg.Channel,
-		ThreadTS: threadTS,
-		Text:     msg.Text,
-		User:     msg.User,
-		EventTS:  msg.TS,
-	}
-	bodyBytes, _ := json.Marshal(body)
+	// 8. SQS write — critical path.
+	//
+	// Phase 75 files-fork: when FileDownloader is wired and the message carries
+	// files[], skip the synchronous SQS write. Instead, fire a background goroutine
+	// that downloads files → PUTs to S3 → posts thread-reply warnings → writes SQS.
+	// This keeps Handle's round-trip within Slack's 3s ack window regardless of
+	// file sizes (up to 25 × 100 MB = 2.5 GB in theory).
+	//
+	// When FileDownloader is nil (pre-Phase-75 Lambda images, or tests that don't
+	// wire it), fall through to the existing synchronous SQS write path unchanged.
 	dedupID := env.EventID
 	if dedupID == "" {
 		dedupID = msg.TS
 	}
-	if err := h.SQS.Send(ctx, info.QueueURL, string(bodyBytes), info.SandboxID, dedupID); err != nil {
-		// Internal error — log and 200 (NOT 500) per RESEARCH.md Pitfall 2.
-		// CONTEXT.md flow step 9 mandates 200 on transport failure: 5xx triggers
-		// a Slack retry storm with new event_ids that bypass nonce dedup.
-		h.log().Error("events: sqs send", "err", err, "queue", info.QueueURL, "sandbox", info.SandboxID)
-		return EventsResponse{StatusCode: 200, Body: "ok"}
-	}
+	if h.FileDownloader != nil && len(msg.Files) > 0 {
+		// Capture loop variables for the goroutine (avoid closure-over-loop-var).
+		files := msg.Files
+		sandboxID := info.SandboxID
+		queueURL := info.QueueURL
+		channel := msg.Channel
+		gThreadTS := threadTS
+		eventID := env.EventID
+		eventTS := msg.TS
+		text := msg.Text
+		user := msg.User
+		slack := h.Slack
+		fd := h.FileDownloader
+		sqsSender := h.SQS
 
-	h.log().Info("events: enqueued", "sandbox", info.SandboxID, "channel", msg.Channel, "thread_ts", threadTS, "event_id", env.EventID)
+		go func() {
+			// Use a fresh context — the request ctx may be canceled after the
+			// 200 response is written. 90s budget covers: download(s) + S3 puts
+			// + warning posts + SQS write. Same pattern as Phase 67.1 reactor goroutine.
+			bgCtx, cancel := context.WithTimeout(context.Background(), DownloadTimeoutTotal)
+			defer cancel()
+
+			defer func() {
+				if r := recover(); r != nil {
+					h.log().Error("events: file downloader panic",
+						"err", r, "channel", channel, "thread_ts", gThreadTS)
+					if slack != nil {
+						_, _ = slack.PostMessage(bgCtx, channel, "", "Warning: file handling crashed; operator notified.", gThreadTS)
+					}
+				}
+			}()
+
+			atts, fileErrs, _ := fd.Download(bgCtx, files, sandboxID, gThreadTS)
+
+			// Post thread-reply warnings BEFORE the SQS write so the agent
+			// sees the failure context when it wakes up. Sort by OriginalName
+			// for deterministic warning order.
+			sort.Slice(fileErrs, func(i, j int) bool {
+				return fileErrs[i].OriginalName < fileErrs[j].OriginalName
+			})
+			for _, fe := range fileErrs {
+				if slack != nil {
+					if _, err := slack.PostMessage(bgCtx, channel, "", "Warning: "+fe.Reason, gThreadTS); err != nil {
+						h.log().Error("events: warning post failed", "err", err, "reason", fe.Reason)
+					}
+				}
+			}
+
+			// Build the SQS body with Attachments[] populated.
+			sqsBody := InboundQueueBody{
+				Channel:     channel,
+				ThreadTS:    gThreadTS,
+				Text:        text,
+				User:        user,
+				EventTS:     eventTS,
+				Attachments: atts,
+			}
+			sqsBodyBytes, _ := json.Marshal(sqsBody)
+			sqsDedupID := eventID
+			if sqsDedupID == "" {
+				sqsDedupID = eventTS
+			}
+			if err := sqsSender.Send(bgCtx, queueURL, string(sqsBodyBytes), sandboxID, sqsDedupID); err != nil {
+				h.log().Error("events: sqs send (files-fork) failed",
+					"err", err, "queue", queueURL, "sandbox", sandboxID)
+			} else {
+				h.log().Info("events: enqueued (files-fork)",
+					"sandbox", sandboxID, "channel", channel, "thread_ts", gThreadTS,
+					"attachments", len(atts), "event_id", eventID)
+			}
+		}()
+	} else {
+		// Files-empty path (or FileDownloader nil): synchronous SQS write. UNCHANGED.
+		// When FileDownloader is nil and files are present, we fall through here and
+		// dispatch text-only — back-compat for Lambda images deployed before Phase 75.
+		body := InboundQueueBody{
+			Channel:  msg.Channel,
+			ThreadTS: threadTS,
+			Text:     msg.Text,
+			User:     msg.User,
+			EventTS:  msg.TS,
+		}
+		bodyBytes, _ := json.Marshal(body)
+		if err := h.SQS.Send(ctx, info.QueueURL, string(bodyBytes), info.SandboxID, dedupID); err != nil {
+			// Internal error — log and 200 (NOT 500) per RESEARCH.md Pitfall 2.
+			// CONTEXT.md flow step 9 mandates 200 on transport failure: 5xx triggers
+			// a Slack retry storm with new event_ids that bypass nonce dedup.
+			h.log().Error("events: sqs send", "err", err, "queue", info.QueueURL, "sandbox", info.SandboxID)
+			return EventsResponse{StatusCode: 200, Body: "ok"}
+		}
+		h.log().Info("events: enqueued", "sandbox", info.SandboxID, "channel", msg.Channel, "thread_ts", threadTS, "event_id", env.EventID)
+	}
 
 	// 9. Paused-sandbox hint (LOCKED in CONTEXT.md "Edge Cases").
 	//    Fire-and-forget so Slack still gets a 200 within the 3s ack window.
