@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 75-03-PLAN.md (attachment mirror + Pitfall 4 guard + wrapper)
-last_updated: "2026-05-15T15:04:57.616Z"
+stopped_at: Completed 75-02-PLAN.md (S3FileDownloader adapter + EventsHandler files-fork goroutine)
+last_updated: "2026-05-15T15:10:27.675Z"
 last_activity: 2026-05-15
 progress:
   total_phases: 88
   completed_phases: 77
   total_plans: 329
-  completed_plans: 287
+  completed_plans: 288
   percent: 93
 ---
 
@@ -327,6 +327,7 @@ Progress: [█████████░] 93%
 | Phase 77-failed-sandbox-discoverability P04 | 631 | 2 tasks | 4 files |
 | Phase 75-slack-inbound-file-attachments-images-pdfs-for-per-sandbox-channels P01 | 175 | 3 tasks | 4 files |
 | Phase 75-slack-inbound-file-attachments-images-pdfs-for-per-sandbox-channels P03 | 137s | 2 tasks | 2 files |
+| Phase 75-slack-inbound-file-attachments-images-pdfs-for-per-sandbox-channels P02 | 438 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -936,6 +937,9 @@ Recent decisions affecting current work:
 - [Phase 75]: isBotLoop uses allow-list: file_share admitted in Phase 75 so user file uploads flow to SQS
 - [Phase 75-slack-inbound-file-attachments-images-pdfs-for-per-sandbox-channels]: Mirror block uses basename of s3_key; poller trusts bridge wrote the safe name
 - [Phase 75-slack-inbound-file-attachments-images-pdfs-for-per-sandbox-channels]: ATTACH_COUNT gating: text-only Phase 67 path is bit-for-bit unchanged when ATTACH_COUNT=0
+- [Phase 75-02]: Pitfall 1: HTTPClient.CheckRedirect=ErrUseLastResponse + manual redirect re-issue with Bearer token preserved
+- [Phase 75-02]: Pitfall 2: io.ReadAll into []byte buffer then bytes.NewReader for S3 PutObject.Body (re-readable for SDK retries)
+- [Phase 75-02]: FileDownloader field is nullable on EventsHandler for back-compat with pre-Phase-75 Lambda images
 
 ### Roadmap Evolution
 
@@ -1038,6 +1042,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-15T15:04:57.609Z
-Stopped at: Completed 75-03-PLAN.md (attachment mirror + Pitfall 4 guard + wrapper)
+Last session: 2026-05-15T15:10:27.668Z
+Stopped at: Completed 75-02-PLAN.md (S3FileDownloader adapter + EventsHandler files-fork goroutine)
 Resume file: None
