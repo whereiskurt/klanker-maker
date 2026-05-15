@@ -46,6 +46,10 @@ type SandboxRecord struct {
 	// ActiveThreads is the number of active threads in km-slack-threads for this sandbox.
 	// Populated only in --wide list output.
 	ActiveThreads int `json:"active_threads,omitempty"`
+
+	// Phase 77 — failure discoverability.
+	FailureReason string     `json:"failure_reason,omitempty"`
+	FailedAt      *time.Time `json:"failed_at,omitempty"`
 }
 
 // S3ListAPI is the narrow interface for S3 operations needed by list functions.

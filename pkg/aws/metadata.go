@@ -46,4 +46,10 @@ type SandboxMetadata struct {
 	// Empty when notifySlackInboundEnabled was false at create time.
 	// Populated by provisionSlackInboundQueue (Plan 67-06); read by drainSlackInbound (Plan 67-07).
 	SlackInboundQueueURL string `json:"slack_inbound_queue_url,omitempty"`
+
+	// Phase 77 — failure discoverability. Set by the create-handler on failure
+	// (see UpdateSandboxStatusAndReasonDynamo). Reads as zero-value on records
+	// that never failed.
+	FailureReason string     `json:"failure_reason,omitempty"`
+	FailedAt      *time.Time `json:"failed_at,omitempty"`
 }
