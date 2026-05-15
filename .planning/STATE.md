@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: "Completed 77-03-PLAN.md (km status Failure:/Failed At: render for failed/nocap sandboxes)"
-last_updated: "2026-05-15T00:22:18.946Z"
+stopped_at: Completed 77-04-PLAN.md (FilterCreateHandlerLogs + runLogsLambdaFallback for km logs ResourceNotFoundException fallback)
+last_updated: "2026-05-15T00:22:28.983Z"
 last_activity: 2026-05-15
 progress:
   total_phases: 87
@@ -320,6 +320,7 @@ Progress: [█████████░] 93%
 | Phase 77-failed-sandbox-discoverability-persist-failure-reason-in-ddb-and-km-logs-lambda-fallback P1 | 3min | 2 tasks | 4 files |
 | Phase 77 P02 | 4min | 2 tasks | 2 files |
 | Phase 77-failed-sandbox-discoverability P03 | 630 | 1 tasks | 2 files |
+| Phase 77-failed-sandbox-discoverability P04 | 631 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -916,6 +917,8 @@ Recent decisions affecting current work:
 - [Phase 77]: Bottom-up scan chosen for extractFailureReason over regex — returns last Error: line (most actionable root cause in km error format)
 - [Phase 77]: UpdateSandboxStatusDynamo removed from failure branch entirely; UpdateSandboxStatusAndReasonDynamo subsumes it for both failed+nocap status paths
 - [Phase 77-failed-sandbox-discoverability]: Failure:/Failed At: lines placed AFTER Status: and BEFORE Created At: — logically paired with failure status; gate uses rec.Status field not field presence for defensive correctness
+- [Phase 77]: errors.As used (not errors.Is) for ResourceNotFoundException through %w wrapping in km logs fallback
+- [Phase 77]: --follow short-circuits before FilterLogEvents call so filter is never invoked in terminal-failure fallback mode
 
 ### Roadmap Evolution
 
@@ -1017,6 +1020,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-15T00:22:08.401Z
-Stopped at: Completed 77-03-PLAN.md (km status Failure:/Failed At: render for failed/nocap sandboxes)
+Last session: 2026-05-15T00:22:28.976Z
+Stopped at: Completed 77-04-PLAN.md (FilterCreateHandlerLogs + runLogsLambdaFallback for km logs ResourceNotFoundException fallback)
 Resume file: None
