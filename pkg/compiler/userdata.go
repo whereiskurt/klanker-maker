@@ -1366,7 +1366,12 @@ while true; do
   THREAD_TS=$(echo "$BODY" | jq -r '.thread_ts // empty')
   TEXT=$(echo "$BODY" | jq -r '.text // empty')
 
-  if [ -z "$CHANNEL" ] || [ -z "$THREAD_TS" ] || [ -z "$TEXT" ]; then
+  # Phase 75: compute ATTACH_COUNT before the guard so file-only uploads are admitted.
+  ATTACH_COUNT=$(echo "$BODY" | jq -r '.attachments // [] | length')
+
+  # Phase 75: admit file-only uploads (empty text + non-empty attachments).
+  # See .planning/phases/75-.../75-RESEARCH.md § Pitfall 4.
+  if [ -z "$CHANNEL" ] || [ -z "$THREAD_TS" ] || { [ -z "$TEXT" ] && [ "$ATTACH_COUNT" -eq 0 ]; }; then
     echo "[km-slack-inbound-poller] WARN: malformed message body, acking to avoid retry: $BODY"
     aws sqs delete-message \
       --queue-url "$QUEUE_URL" \
@@ -1403,6 +1408,54 @@ while true; do
   echo "$TEXT" > "$PROMPT_FILE"
   # mktemp defaults to 0600 owned by root — sandbox user can't read it without this.
   chmod 644 "$PROMPT_FILE"
+
+  # Phase 75 — mirror Slack attachments from S3 staging to per-thread dir.
+  # Each attachment is {s3_key, original_name, mimetype}. We use the basename
+  # of s3_key (which already contains <file_id>-<sanitized_name>) as the local name.
+  ATTACH_DIR="/workspace/.km-slack/attachments/$THREAD_TS"
+  ATTACH_LIST=""  # for wrapper text — built below
+  if [ "$ATTACH_COUNT" -gt 0 ]; then
+    mkdir -p "$ATTACH_DIR"
+    chown sandbox:sandbox "$ATTACH_DIR" || true
+    # Iterate compact JSON lines so spaces in original_name don't break the loop.
+    while IFS= read -r ATTACH_JSON; do
+      [ -z "$ATTACH_JSON" ] && continue
+      S3_KEY=$(echo "$ATTACH_JSON" | jq -r '.s3_key')
+      ORIG_NAME=$(echo "$ATTACH_JSON" | jq -r '.original_name')
+      MIMETYPE=$(echo "$ATTACH_JSON" | jq -r '.mimetype')
+      LOCAL_NAME=$(basename "$S3_KEY")
+      LOCAL_PATH="$ATTACH_DIR/$LOCAL_NAME"
+      if aws s3 cp "s3://$KM_ARTIFACTS_BUCKET/$S3_KEY" "$LOCAL_PATH" 2>&1 | logger -t km-slack-inbound; then
+        chown sandbox:sandbox "$LOCAL_PATH" || true
+        ATTACH_LIST="${ATTACH_LIST}  - ${LOCAL_PATH} (${MIMETYPE})\n"
+      else
+        logger -t km-slack-inbound "attachment mirror failed: $S3_KEY"
+      fi
+    done < <(echo "$BODY" | jq -c '.attachments[]?')
+  fi
+
+  # Phase 75 — prepend master-prompt wrapper when attachments are present.
+  if [ "$ATTACH_COUNT" -gt 0 ]; then
+    DISPLAY_TEXT="$TEXT"
+    if [ -z "$DISPLAY_TEXT" ]; then
+      DISPLAY_TEXT="[no text — file-only]"
+    fi
+    WRAPPER_FILE="$(mktemp)"
+    {
+      echo "The user attached the following file(s) to this Slack message."
+      echo "Read them with your Read tool when relevant to the question:"
+      echo -e "$ATTACH_LIST"
+      echo ""
+      echo "User's message: $DISPLAY_TEXT"
+    } > "$WRAPPER_FILE"
+    # PROMPT_FILE is the existing file claude -p reads. Prepend by writing
+    # wrapper + existing content to a temp, then move into place.
+    if [ -f "$PROMPT_FILE" ]; then
+      cat "$PROMPT_FILE" >> "$WRAPPER_FILE"
+    fi
+    mv "$WRAPPER_FILE" "$PROMPT_FILE"
+    chown sandbox:sandbox "$PROMPT_FILE" || true
+  fi
 
   # Export KM_SLACK_THREAD_TS so km-notify-hook passes --thread to km-slack post (Phase 67).
   export KM_SLACK_THREAD_TS="$THREAD_TS"
