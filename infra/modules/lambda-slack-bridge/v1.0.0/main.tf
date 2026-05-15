@@ -292,7 +292,13 @@ resource "aws_lambda_function" "slack_bridge" {
   handler          = "bootstrap"
   runtime          = "provided.al2023"
   architectures    = ["arm64"]
-  timeout          = 15
+  # Phase 75.2: bumped 15s → 60s. Phase 75.2 changed file_share handling from
+  # a fire-and-forget goroutine (unsound on Lambda — the runtime freezes when
+  # the handler returns and the in-flight HTTP deadline elapses during freeze)
+  # to synchronous processing within the handler. 60s comfortably fits a typical
+  # 1–10 file batch (~1–2s per file). Slack's 3s ack window is absorbed by the
+  # existing event_id nonce dedup so the inevitable retry is a no-op 200.
+  timeout = 60
   # Phase 75: bumped 256 → 1024 to accommodate up to 100MB in-memory file
   # buffering required by AWS SDK PutObject retry-rewindability semantics.
   # See .planning/phases/75-.../75-RESEARCH.md § Pitfall 2.

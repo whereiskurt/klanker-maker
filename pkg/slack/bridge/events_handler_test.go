@@ -880,21 +880,28 @@ func TestEventsHandler_Reactor_NilReactorIsNoop(t *testing.T) {
 // Phase 75: File-fork goroutine tests
 // ============================================================
 
-// TestEventsHandler_WithFiles_FiresGoroutine_Returns200Fast verifies that when
-// a file_share event carries len(Files)>0 and a non-nil FileDownloader is wired:
-//  1. Handle returns 200 within 200ms even though the mock downloader sleeps 2s.
-//  2. Download is invoked asynchronously (signal received within 3s).
-//  3. No synchronous SQS write happens (the goroutine owns it).
-func TestEventsHandler_WithFiles_FiresGoroutine_Returns200Fast(t *testing.T) {
+// TestEventsHandler_WithFiles_Synchronous verifies that when a file_share event
+// carries len(Files)>0 and a non-nil FileDownloader is wired:
+//  1. Download is invoked synchronously within Handle.
+//  2. SQS write happens before Handle returns (with attachments populated).
+//  3. Handle returns 200.
+//
+// Phase 75.2: the original Phase 75 design spawned a goroutine to return 200
+// inside Slack's 3s ack window, but AWS Lambda freezes the runtime when the
+// handler returns and the in-flight HTTP request's wall-clock deadline
+// elapses during the freeze. Synchronous handling is sound because the
+// event_id dedup check earlier in Handle absorbs any 3s Slack retry.
+func TestEventsHandler_WithFiles_Synchronous(t *testing.T) {
 	now := time.Now()
 	h, sqs, _, _, _, _, _ := newHandler(now)
 
-	// Wire a SlackPoster so the goroutine can post warnings if needed.
+	// Wire a SlackPoster so warnings (if any) can be posted; no warnings in this test.
 	slackPoster := &fakeSlackPoster{}
 	h.Slack = slackPoster
 
-	// Inject a slow downloader (2s delay) with no attachments/errors.
-	dl := newSlowDownloader(2 * time.Second)
+	// Mock downloader: returns one Attachment, no errors. No artificial delay —
+	// synchronous handling is the contract; the test just asserts ordering.
+	dl := newSlowDownloader(0)
 	h.FileDownloader = dl
 
 	// Build a file_share event with 1 file.
@@ -925,7 +932,6 @@ func TestEventsHandler_WithFiles_FiresGoroutine_Returns200Fast(t *testing.T) {
 	bodyStr := string(body)
 	tsHdr, sigHdr := signSlackPayload(t, bodyStr, now)
 
-	start := time.Now()
 	resp := h.Handle(context.Background(), EventsRequest{
 		Body: bodyStr,
 		Headers: map[string]string{
@@ -933,28 +939,22 @@ func TestEventsHandler_WithFiles_FiresGoroutine_Returns200Fast(t *testing.T) {
 			"x-slack-signature":         sigHdr,
 		},
 	})
-	elapsed := time.Since(start)
 
-	// 1. Handle must return 200 within 200ms.
+	// 1. Handle must return 200.
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
-	if elapsed > 200*time.Millisecond {
-		t.Errorf("Handle took %v > 200ms; fire-and-forget goroutine is blocking", elapsed)
-	}
 
-	// 2. No synchronous SQS write — goroutine owns it.
-	// After 200ms (well before the 2s downloader finishes), SQS must have 0 sends.
-	// (We check immediately after Handle returns.)
-	if len(sqs.sends) != 0 {
-		t.Errorf("expected 0 synchronous SQS sends on files-fork path, got %d (goroutine should own SQS write)", len(sqs.sends))
-	}
-
-	// 3. Download must be called asynchronously within 3s.
+	// 2. Download must have been called inside Handle (signal was already sent).
 	select {
 	case <-dl.signal:
 		// Good — Download was invoked.
-	case <-time.After(3 * time.Second):
-		t.Error("Download was not called within 3s after Handle returned")
+	default:
+		t.Error("Download was not called before Handle returned (synchronous contract broken)")
+	}
+
+	// 3. Exactly 1 synchronous SQS send must have happened.
+	if len(sqs.sends) != 1 {
+		t.Fatalf("expected 1 synchronous SQS send, got %d", len(sqs.sends))
 	}
 }

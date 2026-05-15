@@ -206,76 +206,57 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		dedupID = msg.TS
 	}
 	if h.FileDownloader != nil && len(msg.Files) > 0 {
-		// Capture loop variables for the goroutine (avoid closure-over-loop-var).
-		files := msg.Files
-		sandboxID := info.SandboxID
-		queueURL := info.QueueURL
-		channel := msg.Channel
-		gThreadTS := threadTS
-		eventID := env.EventID
-		eventTS := msg.TS
-		text := msg.Text
-		user := msg.User
-		slack := h.Slack
-		fd := h.FileDownloader
-		sqsSender := h.SQS
+		// Phase 75.2: process file downloads SYNCHRONOUSLY within the handler.
+		//
+		// We originally spawned a goroutine here so the handler could return 200
+		// within Slack's 3-second ack window regardless of file sizes. That model
+		// is unsound on AWS Lambda: when the handler returns, the runtime is
+		// frozen, the in-flight HTTP request's wall-clock deadline elapses during
+		// the freeze, and the next thaw resumes the goroutine to find every
+		// operation already timed out (UAT 2026-05-15: every files-fork attempt
+		// failed with `Client.Timeout exceeded while awaiting headers`).
+		//
+		// Going synchronous: Slack may retry at 3s if a file batch takes longer,
+		// but the event_id dedup check above already cached this event_id, so the
+		// retry is a no-op 200. Lambda timeout is set to 60s to fit the 90s
+		// DownloadTimeoutTotal budget (in practice typical: ~1-2s/file).
+		bgCtx, bgCancel := context.WithTimeout(ctx, DownloadTimeoutTotal)
+		defer bgCancel()
 
-		go func() {
-			// Use a fresh context — the request ctx may be canceled after the
-			// 200 response is written. 90s budget covers: download(s) + S3 puts
-			// + warning posts + SQS write. Same pattern as Phase 67.1 reactor goroutine.
-			bgCtx, cancel := context.WithTimeout(context.Background(), DownloadTimeoutTotal)
-			defer cancel()
+		atts, fileErrs, _ := h.FileDownloader.Download(bgCtx, msg.Files, info.SandboxID, threadTS)
 
-			defer func() {
-				if r := recover(); r != nil {
-					h.log().Error("events: file downloader panic",
-						"err", r, "channel", channel, "thread_ts", gThreadTS)
-					if slack != nil {
-						_, _ = slack.PostMessage(bgCtx, channel, "", "Warning: file handling crashed; operator notified.", gThreadTS)
-					}
-				}
-			}()
-
-			atts, fileErrs, _ := fd.Download(bgCtx, files, sandboxID, gThreadTS)
-
-			// Post thread-reply warnings BEFORE the SQS write so the agent
-			// sees the failure context when it wakes up. Sort by OriginalName
-			// for deterministic warning order.
-			sort.Slice(fileErrs, func(i, j int) bool {
-				return fileErrs[i].OriginalName < fileErrs[j].OriginalName
-			})
-			for _, fe := range fileErrs {
-				if slack != nil {
-					if _, err := slack.PostMessage(bgCtx, channel, "", "Warning: "+fe.Reason, gThreadTS); err != nil {
-						h.log().Error("events: warning post failed", "err", err, "reason", fe.Reason)
-					}
+		// Post thread-reply warnings BEFORE the SQS write so the agent
+		// sees the failure context when it wakes up. Sort by OriginalName
+		// for deterministic warning order.
+		sort.Slice(fileErrs, func(i, j int) bool {
+			return fileErrs[i].OriginalName < fileErrs[j].OriginalName
+		})
+		for _, fe := range fileErrs {
+			if h.Slack != nil {
+				if _, err := h.Slack.PostMessage(bgCtx, msg.Channel, "", "Warning: "+fe.Reason, threadTS); err != nil {
+					h.log().Error("events: warning post failed", "err", err, "reason", fe.Reason)
 				}
 			}
+		}
 
-			// Build the SQS body with Attachments[] populated.
-			sqsBody := InboundQueueBody{
-				Channel:     channel,
-				ThreadTS:    gThreadTS,
-				Text:        text,
-				User:        user,
-				EventTS:     eventTS,
-				Attachments: atts,
-			}
-			sqsBodyBytes, _ := json.Marshal(sqsBody)
-			sqsDedupID := eventID
-			if sqsDedupID == "" {
-				sqsDedupID = eventTS
-			}
-			if err := sqsSender.Send(bgCtx, queueURL, string(sqsBodyBytes), sandboxID, sqsDedupID); err != nil {
-				h.log().Error("events: sqs send (files-fork) failed",
-					"err", err, "queue", queueURL, "sandbox", sandboxID)
-			} else {
-				h.log().Info("events: enqueued (files-fork)",
-					"sandbox", sandboxID, "channel", channel, "thread_ts", gThreadTS,
-					"attachments", len(atts), "event_id", eventID)
-			}
-		}()
+		// Build the SQS body with Attachments[] populated.
+		sqsBody := InboundQueueBody{
+			Channel:     msg.Channel,
+			ThreadTS:    threadTS,
+			Text:        msg.Text,
+			User:        msg.User,
+			EventTS:     msg.TS,
+			Attachments: atts,
+		}
+		sqsBodyBytes, _ := json.Marshal(sqsBody)
+		if err := h.SQS.Send(bgCtx, info.QueueURL, string(sqsBodyBytes), info.SandboxID, dedupID); err != nil {
+			h.log().Error("events: sqs send (files-sync) failed",
+				"err", err, "queue", info.QueueURL, "sandbox", info.SandboxID)
+		} else {
+			h.log().Info("events: enqueued (files-sync)",
+				"sandbox", info.SandboxID, "channel", msg.Channel, "thread_ts", threadTS,
+				"attachments", len(atts), "event_id", env.EventID)
+		}
 	} else {
 		// Files-empty path (or FileDownloader nil): synchronous SQS write. UNCHANGED.
 		// When FileDownloader is nil and files are present, we fall through here and
