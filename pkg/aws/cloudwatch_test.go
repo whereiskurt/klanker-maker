@@ -214,6 +214,127 @@ func TestTailLogs_NoFollow(t *testing.T) {
 	}
 }
 
+// ---- FilterCreateHandlerLogs tests ----
+
+// TestFilterCreateHandlerLogs_HappyPath verifies that FilterCreateHandlerLogs passes
+// the correct log group, filter pattern, and 24h time window to the SDK, and returns
+// events in the order they were returned.
+func TestFilterCreateHandlerLogs_HappyPath(t *testing.T) {
+	ctx := context.Background()
+	mock := &mockCWLogsAPI{
+		filterLogEventsOutput: &cloudwatchlogs.FilterLogEventsOutput{
+			Events: []types.FilteredLogEvent{
+				{Timestamp: aws.Int64(1715000000000), Message: aws.String(`{"level":"error","msg":"first"}`)},
+				{Timestamp: aws.Int64(1715000001000), Message: aws.String(`{"level":"info","msg":"second"}`)},
+			},
+		},
+	}
+
+	events, err := kmaws.FilterCreateHandlerLogs(ctx, mock, "km", "learn-abc12345")
+	if err != nil {
+		t.Fatalf("FilterCreateHandlerLogs returned unexpected error: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+	if events[0].Timestamp != 1715000000000 {
+		t.Errorf("events[0].Timestamp = %d, want 1715000000000", events[0].Timestamp)
+	}
+	if events[0].Message != `{"level":"error","msg":"first"}` {
+		t.Errorf("events[0].Message = %q, want first", events[0].Message)
+	}
+	if events[1].Timestamp != 1715000001000 {
+		t.Errorf("events[1].Timestamp = %d, want 1715000001000", events[1].Timestamp)
+	}
+
+	// Verify the FilterLogEvents input had the correct log group name.
+	if mock.filterLogEventsInput == nil {
+		t.Fatal("expected FilterLogEvents to be called, but filterLogEventsInput is nil")
+	}
+	wantLogGroup := "/aws/lambda/km-create-handler"
+	if got := aws.ToString(mock.filterLogEventsInput.LogGroupName); got != wantLogGroup {
+		t.Errorf("LogGroupName = %q, want %q", got, wantLogGroup)
+	}
+
+	// Verify the filter pattern is exactly the JSON-style pattern for the sandbox ID.
+	wantPattern := `{ $.sandbox_id = "learn-abc12345" }`
+	if got := aws.ToString(mock.filterLogEventsInput.FilterPattern); got != wantPattern {
+		t.Errorf("FilterPattern = %q, want %q", got, wantPattern)
+	}
+
+	// Verify the time window is approximately 24h (within 1 minute tolerance).
+	if mock.filterLogEventsInput.StartTime == nil || mock.filterLogEventsInput.EndTime == nil {
+		t.Fatal("StartTime or EndTime is nil")
+	}
+	windowMs := *mock.filterLogEventsInput.EndTime - *mock.filterLogEventsInput.StartTime
+	const h24Ms = int64(24 * 60 * 60 * 1000)
+	const toleranceMs = int64(60 * 1000) // 1 minute
+	if windowMs < h24Ms-toleranceMs || windowMs > h24Ms+toleranceMs {
+		t.Errorf("time window = %dms, want ~%dms (±%dms)", windowMs, h24Ms, toleranceMs)
+	}
+}
+
+// TestFilterCreateHandlerLogs_Empty verifies that an empty events response returns an
+// empty non-nil slice, matching the GetLogEvents convention.
+func TestFilterCreateHandlerLogs_Empty(t *testing.T) {
+	ctx := context.Background()
+	mock := &mockCWLogsAPI{
+		filterLogEventsOutput: &cloudwatchlogs.FilterLogEventsOutput{
+			Events: []types.FilteredLogEvent{},
+		},
+	}
+
+	events, err := kmaws.FilterCreateHandlerLogs(ctx, mock, "km", "learn-abc12345")
+	if err != nil {
+		t.Fatalf("FilterCreateHandlerLogs returned unexpected error: %v", err)
+	}
+	if events == nil {
+		t.Fatal("expected non-nil empty slice, got nil")
+	}
+	if len(events) != 0 {
+		t.Errorf("expected 0 events, got %d", len(events))
+	}
+}
+
+// TestFilterCreateHandlerLogs_MultiInstancePrefix verifies that the helper constructs
+// the Lambda log group path using the provided prefix, enabling multi-instance installs
+// (e.g., KM_RESOURCE_PREFIX=kph → /aws/lambda/kph-create-handler).
+func TestFilterCreateHandlerLogs_MultiInstancePrefix(t *testing.T) {
+	ctx := context.Background()
+	mock := &mockCWLogsAPI{}
+
+	_, err := kmaws.FilterCreateHandlerLogs(ctx, mock, "kph", "sb-abc12345")
+	if err != nil {
+		t.Fatalf("FilterCreateHandlerLogs returned unexpected error: %v", err)
+	}
+
+	if mock.filterLogEventsInput == nil {
+		t.Fatal("expected FilterLogEvents to be called")
+	}
+	wantLogGroup := "/aws/lambda/kph-create-handler"
+	if got := aws.ToString(mock.filterLogEventsInput.LogGroupName); got != wantLogGroup {
+		t.Errorf("LogGroupName = %q, want %q", got, wantLogGroup)
+	}
+}
+
+// TestFilterCreateHandlerLogs_PropagatesError verifies that SDK errors are returned
+// as wrapped errors, and the original sentinel is unwrappable via errors.Is.
+func TestFilterCreateHandlerLogs_PropagatesError(t *testing.T) {
+	ctx := context.Background()
+	sentinel := errors.New("sdk failure")
+	mock := &mockCWLogsAPI{
+		filterLogEventsErr: sentinel,
+	}
+
+	_, err := kmaws.FilterCreateHandlerLogs(ctx, mock, "km", "learn-abc12345")
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Errorf("expected errors.Is to find sentinel in wrapped error: %v", err)
+	}
+}
+
 // ---- ExportSandboxLogs tests ----
 
 // TestExportSandboxLogs_Success verifies that ExportSandboxLogs calls CreateExportTask

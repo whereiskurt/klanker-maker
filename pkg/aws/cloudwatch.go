@@ -209,6 +209,54 @@ func TailLogs(ctx context.Context, client CWLogsAPI, logGroup, logStream string,
 	}
 }
 
+// FilterCreateHandlerLogs queries the create-handler Lambda's CloudWatch log group
+// for entries pertaining to a single sandbox over the last 24h. Used by `km logs <id>`
+// as a fallback when the per-sandbox audit log group never existed (Phase 77).
+//
+// prefix is the resource prefix (e.g. "km") used to construct the Lambda log group
+// path "/aws/lambda/<prefix>-create-handler". Honors KM_RESOURCE_PREFIX via the
+// caller's cfg.GetResourcePrefix().
+//
+// The filterPattern is `{ $.sandbox_id = "<sandboxID>" }` — JSON-style filter against
+// the structured zerolog output the create-handler emits.
+//
+// Returns events in chronological order (SDK returns them in time order by default).
+// Returns an empty (non-nil) slice when the query succeeds but no events match.
+// Returns a wrapped error on SDK failure.
+//
+// Note: one page (default 10,000 events) is sufficient for a 24h window filtered by
+// a single sandbox_id. Pagination is intentionally omitted per Phase 77 design (77-RESEARCH.md § Open Q1).
+func FilterCreateHandlerLogs(ctx context.Context, client CWLogsAPI, prefix, sandboxID string) ([]LogEvent, error) {
+	logGroup := "/aws/lambda/" + prefix + "-create-handler"
+	now := time.Now().UTC()
+	startTime := now.Add(-24 * time.Hour)
+	filterPattern := `{ $.sandbox_id = "` + sandboxID + `" }`
+
+	out, err := client.FilterLogEvents(ctx, &cloudwatchlogs.FilterLogEventsInput{
+		LogGroupName:  aws.String(logGroup),
+		FilterPattern: aws.String(filterPattern),
+		StartTime:     aws.Int64(startTime.UnixMilli()),
+		EndTime:       aws.Int64(now.UnixMilli()),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("filter create-handler logs for sandbox %s: %w", sandboxID, err)
+	}
+
+	result := make([]LogEvent, 0, len(out.Events))
+	for _, ev := range out.Events {
+		var ts int64
+		if ev.Timestamp != nil {
+			ts = *ev.Timestamp
+		}
+		var msg string
+		if ev.Message != nil {
+			msg = *ev.Message
+		}
+		result = append(result, LogEvent{Timestamp: ts, Message: msg})
+	}
+	return result, nil
+}
+
 // isAlreadyExists reports whether err is a CloudWatch ResourceAlreadyExistsException.
 func isAlreadyExists(err error) bool {
 	var rae *types.ResourceAlreadyExistsException
