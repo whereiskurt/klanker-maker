@@ -35,6 +35,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"sync"
@@ -426,6 +427,72 @@ func (s *SlackPosterAdapter) ArchiveChannel(ctx context.Context, channelID strin
 }
 
 // ============================================================
+// Phase 67.2: reactions.add error classifier (pure helper)
+// ============================================================
+
+// reactionErrorClass categorizes a reactions.add response so the
+// retry loop in SlackReactorAdapter.Add can decide whether to
+// succeed, give up, or retry with backoff.
+//
+// Locked taxonomy: 67.2-CONTEXT.md § "Error classification (locked)".
+// Default-unknown policy: an unknown apiErr string returns
+// classTransient (one extra retry on an actually-terminal error
+// is cheap; silently ignoring a new transient signal is not).
+type reactionErrorClass int
+
+const (
+	classSuccess          reactionErrorClass = iota
+	classTerminalAuth     // operator action required (token rotation, scope grant) — log at Error
+	classTerminalBadInput // unrecoverable client-side error — log at Warn (final give-up)
+	classTransient        // retryable: 5xx, net error, internal_error, unknown error string
+	classRateLimited      // 429 with Retry-After header — honor RetryAfterSeconds
+)
+
+// classifyReactionError returns the appropriate retry bucket for a
+// reactions.add response. Pure function — no I/O, no logging.
+// Enumerates the codes in 67.2-CONTEXT.md's locked taxonomy plus the
+// additional codes 67.2-RESEARCH.md identified from Slack docs; any
+// unrecognized apiErr falls through to classTransient (locked
+// default).
+func classifyReactionError(httpStatus int, apiErr string, netErr error) reactionErrorClass {
+	if netErr != nil {
+		return classTransient
+	}
+	if httpStatus == http.StatusTooManyRequests {
+		return classRateLimited
+	}
+	if httpStatus >= 500 && httpStatus < 600 {
+		return classTransient
+	}
+	if httpStatus == http.StatusOK && (apiErr == "" || apiErr == "already_reacted") {
+		return classSuccess
+	}
+	switch apiErr {
+	case "invalid_auth", "not_authed", "account_inactive",
+		"token_revoked", "missing_scope", "token_expired",
+		"no_permission", "access_denied", "ekm_access_denied",
+		"enterprise_is_restricted", "org_login_required",
+		"two_factor_setup_required":
+		return classTerminalAuth
+	case "bad_timestamp", "message_not_found", "channel_not_found",
+		"not_reactable", "thread_locked", "invalid_name",
+		"too_many_emoji", "too_many_reactions", "is_archived",
+		"invalid_arg_name", "invalid_arguments", "invalid_charset",
+		"invalid_form_data", "invalid_post_type",
+		"missing_post_type", "no_item_specified",
+		"not_allowed_token_type", "no_access":
+		return classTerminalBadInput
+	case "internal_error", "service_unavailable", "fatal_error",
+		"request_timeout", "ratelimited", "accesslimited",
+		"team_access_not_granted", "team_added_to_org",
+		"external_channel_migrating":
+		return classTransient
+	}
+	// Default for unknown error strings — locked CONTEXT.md policy.
+	return classTransient
+}
+
+// ============================================================
 // Phase 67.1: SlackReactorAdapter — Reactor implementation
 // ============================================================
 
@@ -433,14 +500,30 @@ func (s *SlackPosterAdapter) ArchiveChannel(ctx context.Context, channelID strin
 // Mirrors SlackPosterAdapter shape for consistency. Treats already_reacted as
 // idempotent success because Slack delivers events at-least-once.
 //
-// Design decision (CONTEXT.md Claude's Discretion): duplicate the HTTP call body
-// rather than extracting a shared slackAPICall helper. SlackReactorAdapter has
-// only ONE method; duplication is ~40 lines vs a shared helper requiring careful
-// generic-payload typing. Factor if a third adapter appears.
+// Phase 67.2 added a bounded retry loop (max 3 attempts, 200ms→600ms ± 25%
+// jitter, Retry-After honoring, ctx-cancellable sleeps) on top of the existing
+// single-attempt shape. The classifier in classifyReactionError decides which
+// responses are transient (retry) vs terminal (give up). See 67.2-CONTEXT.md
+// for the locked taxonomy and 67.2-RESEARCH.md for the in-repo reference
+// pattern at pkg/slack/client.go:404-419.
 type SlackReactorAdapter struct {
 	HTTPClient *http.Client
 	BaseURL    string          // defaults to "https://slack.com/api"; overridden in tests
 	Tokens     BotTokenFetcher // SHARE with SlackPosterAdapter to reuse the 15-min token cache
+
+	// Phase 67.2: Sleep, if non-nil, is called instead of <-time.After
+	// during backoff. Tests set this to a stub that records sleeps
+	// without actually sleeping. nil → use real time.NewTimer+select.
+	Sleep func(d time.Duration)
+
+	// Phase 67.2: Rand, if non-nil, supplies the jitter PRNG. Tests
+	// inject a *rand.Rand with a fixed seed for deterministic backoff
+	// durations. nil → use math/rand's default global source
+	// (goroutine-safe; auto-seeded in go 1.20+).
+	//
+	// math/rand (NOT crypto/rand) is the correct choice — jitter is
+	// de-correlation, not a security primitive.
+	Rand *rand.Rand
 }
 
 func (s *SlackReactorAdapter) getBaseURL() string {
@@ -450,12 +533,105 @@ func (s *SlackReactorAdapter) getBaseURL() string {
 	return "https://slack.com/api"
 }
 
-// Add posts a reaction to a Slack message. Returns nil on success or
-// already_reacted (idempotent). Returns ErrSlackRateLimited on HTTP 429.
-// Returns a wrapped error for any other failure mode.
+// doOneAttempt runs ONE HTTP request to reactions.add. Returns the
+// parsed slackAPIResponse, the HTTP status code, the raw Retry-After
+// header string, and any non-nil network error from http.Client.Do or
+// response read/decode. Extracted from Add so the per-iteration
+// resp.Body.Close defer fires PER attempt, not stacked at function
+// return (67.2-RESEARCH.md Pitfall 4).
+func (s *SlackReactorAdapter) doOneAttempt(ctx context.Context, token string, body []byte) (*slackAPIResponse, int, string, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		s.getBaseURL()+"/reactions.add", bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	hc := s.HTTPClient
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	defer resp.Body.Close()
+
+	retryAfter := resp.Header.Get("Retry-After")
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, retryAfter,
+			fmt.Errorf("bridge: read reactions.add response: %w", err)
+	}
+	var r slackAPIResponse
+	if err := json.Unmarshal(b, &r); err != nil {
+		return nil, resp.StatusCode, retryAfter,
+			fmt.Errorf("bridge: decode reactions.add: %w", err)
+	}
+	return &r, resp.StatusCode, retryAfter, nil
+}
+
+// sleepWithCtx sleeps for d or until ctx is cancelled. Returns
+// ctx.Err() if cancelled, nil if the sleep completed.
+//
+// If s.Sleep is non-nil (test injection), calls s.Sleep(d) and returns
+// ctx.Err() — tests use this to fast-forward sleeps while still
+// respecting ctx cancellation.
+func (s *SlackReactorAdapter) sleepWithCtx(ctx context.Context, d time.Duration) error {
+	if s.Sleep != nil {
+		s.Sleep(d)
+		return ctx.Err()
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// withJitter returns d ± 25%. If r is non-nil (test injection), uses r
+// for the random factor; otherwise uses math/rand's package-level safe
+// source (auto-seeded in go 1.20+). Maps a Float64() roll in [0.0, 1.0)
+// to a multiplier in [0.75, 1.25).
+//
+// math/rand (NOT crypto/rand) is the correct choice — jitter is
+// de-correlation, not a security primitive.
+func withJitter(d time.Duration, r *rand.Rand) time.Duration {
+	var f float64
+	if r != nil {
+		f = r.Float64()
+	} else {
+		f = rand.Float64()
+	}
+	factor := 1.0 + (f-0.5)*0.5
+	return time.Duration(float64(d) * factor)
+}
+
+// Add posts a reaction to a Slack message with bounded retry on transient
+// failures. Returns nil on success or already_reacted (idempotent).
+// Returns *ErrSlackRateLimited when the Retry-After header exceeds the
+// remaining ctx budget or when retries are exhausted on a 429. Returns
+// a wrapped error for any other terminal or exhaustion case.
 //
 // emoji must be the bare emoji name without colons ("eyes", NOT ":eyes:").
 // ts must be the originating message's TS field, NOT the thread root.
+//
+// Retry policy (locked in 67.2-CONTEXT.md):
+//   - Max 3 attempts (1 initial + 2 retries) on classTransient outcomes
+//   - Backoff schedule: 200ms then 600ms, each ± 25% jitter
+//   - Retry-After header overrides the backoff schedule on 429
+//   - If Retry-After > remaining ctx budget → return *ErrSlackRateLimited
+//     immediately without sleeping
+//   - All sleeps are cancellable via ctx.Done()
+//   - Auth-class errors return on FIRST attempt (no retry) with Error log
+//   - Bad-input errors return on FIRST attempt (no retry, no extra log —
+//     the handler-side at events_handler.go:238 already Warns)
+//   - Retry exhaustion logs ONE Warn line with attempt=3
+//   - Intermediate retries log ONE Debug line each with attempt + next_delay_ms
 func (s *SlackReactorAdapter) Add(ctx context.Context, channel, ts, emoji string) error {
 	token, err := s.Tokens.Fetch(ctx)
 	if err != nil {
@@ -467,51 +643,95 @@ func (s *SlackReactorAdapter) Add(ctx context.Context, channel, ts, emoji string
 		"timestamp": ts,
 		"name":      emoji,
 	}
-	b, err := json.Marshal(payload)
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("bridge: marshal reactions.add: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", s.getBaseURL()+"/reactions.add", bytes.NewReader(b))
-	if err != nil {
-		return err
+	const maxAttempts = 3
+	baseDelays := [2]time.Duration{
+		200 * time.Millisecond,
+		600 * time.Millisecond,
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	var lastErr error
 
-	hc := s.HTTPClient
-	if hc == nil {
-		hc = http.DefaultClient
-	}
-
-	resp, err := hc.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	retryAfterHeader := resp.Header.Get("Retry-After")
-	if rlErr := checkRateLimit(resp.StatusCode, retryAfterHeader, "reactions.add"); rlErr != nil {
-		return rlErr
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("bridge: read reactions.add response: %w", err)
-	}
-	var apiResp slackAPIResponse
-	if err := json.Unmarshal(body, &apiResp); err != nil {
-		return fmt.Errorf("bridge: decode reactions.add: %w", err)
-	}
-	if !apiResp.OK {
-		if apiResp.Error == "already_reacted" {
-			// Slack delivered the event twice; we already reacted on first delivery.
-			// Idempotent success — do not log at WARN.
-			return nil
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		return fmt.Errorf("bridge: reactions.add: %s", apiResp.Error)
+
+		apiResp, httpStatus, retryAfter, netErr := s.doOneAttempt(ctx, token, body)
+		var apiErr string
+		if apiResp != nil {
+			apiErr = apiResp.Error
+		}
+		class := classifyReactionError(httpStatus, apiErr, netErr)
+
+		switch class {
+		case classSuccess:
+			return nil
+
+		case classTerminalAuth:
+			lastErr = fmt.Errorf("bridge: reactions.add: %s", apiErr)
+			logger.Error("events: reaction failed (auth)",
+				"channel", channel, "ts", ts, "emoji", emoji,
+				"attempt", attempt, "err", lastErr)
+			return lastErr
+
+		case classTerminalBadInput:
+			// No log here — the handler-side at events_handler.go:238
+			// already Warns on any error. Returning the wrapped error
+			// keeps the existing "bridge: reactions.add: <code>" grep
+			// target intact.
+			return fmt.Errorf("bridge: reactions.add: %s", apiErr)
+
+		case classTransient:
+			if netErr != nil {
+				lastErr = netErr
+			} else {
+				lastErr = fmt.Errorf("bridge: reactions.add: %s", apiErr)
+			}
+			if attempt < maxAttempts {
+				d := withJitter(baseDelays[attempt-1], s.Rand)
+				logger.Debug("events: reaction retry",
+					"channel", channel, "ts", ts, "emoji", emoji,
+					"attempt", attempt, "err", lastErr,
+					"next_delay_ms", d.Milliseconds())
+				if err := s.sleepWithCtx(ctx, d); err != nil {
+					return lastErr
+				}
+				continue
+			}
+			// attempt == maxAttempts: fall through to final Warn.
+
+		case classRateLimited:
+			ra := 1
+			if n, e := strconv.Atoi(retryAfter); e == nil && n > 0 {
+				ra = n
+			}
+			rl := &ErrSlackRateLimited{RetryAfterSeconds: ra, Method: "reactions.add"}
+			lastErr = rl
+			// If RetryAfter exceeds remaining ctx budget, give up
+			// immediately. Locked policy in CONTEXT.md.
+			if dl, ok := ctx.Deadline(); ok {
+				if time.Duration(ra)*time.Second > time.Until(dl) {
+					return rl
+				}
+			}
+			if attempt < maxAttempts {
+				if err := s.sleepWithCtx(ctx, time.Duration(ra)*time.Second); err != nil {
+					return lastErr
+				}
+				continue
+			}
+			// attempt == maxAttempts: fall through to final Warn.
+		}
 	}
-	return nil
+
+	logger.Warn("events: reaction failed",
+		"channel", channel, "ts", ts, "emoji", emoji,
+		"attempt", maxAttempts, "err", lastErr)
+	return fmt.Errorf("%w (attempt=%d exhausted)", lastErr, maxAttempts)
 }
 
 // ============================================================

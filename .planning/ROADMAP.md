@@ -1453,6 +1453,19 @@ Plans:
 - [x] 67.1-02-PLAN.md — Scope checks: append `reactions:write` to required-slice in `km slack init` (VerifyEventsAPIScopes) and `km doctor` (checkSlackAppEventsScopes) + extended tests
 - [x] 67.1-03-PLAN.md — Terraform env passthrough (lambda-slack-bridge module) + docs/slack-notifications.md ACK section + CLAUDE.md update + manual UAT checkpoint (operator scope-add + reinstall + 👀 smoke test) — UAT APPROVED
 
+### Phase 67.2: Slack ACK reaction bounded retry — absorb transient Slack API failures (429, 5xx, internal_error) with backoff + jitter inside SlackReactorAdapter.Add (INSERTED)
+
+**Spec:** `docs/superpowers/specs/2026-05-14-slack-ack-reaction-bounded-retry-design.md`
+**Goal:** Make the Phase 67.1 ACK reaction robust to transient Slack API failures. Today's single-attempt fire-and-forget at `pkg/slack/bridge/events_handler.go:228-241` logs and discards HTTP 429 (despite already producing a typed `ErrSlackRateLimited{RetryAfter}`), HTTP 5xx, network errors, and Slack JSON errors `internal_error`/`service_unavailable`/`fatal_error`/`request_timeout`. This proposal adds bounded retry (max 3 attempts, 200ms→600ms backoff with ±25% jitter, honoring `Retry-After` within the context budget) inside `SlackReactorAdapter.Add`, classifies error codes into success / terminal-no-retry (auth-class at Error log, bad-input at Warn) / transient-retry, defaults unknown error strings to transient (safer for new Slack codes). Bumps handler goroutine context 5s→10s to fit retry budget. `Reactor` interface signature unchanged; back-compat with existing fakes/tests. Triggered by intermittent missing 👀 during 2026-05-14 Slack-wide outages.
+**Requirements**: REQ-ACK-RETRY-CLASSIFY, REQ-ACK-RETRY-BUDGET, REQ-ACK-RETRY-RETRYAFTER, REQ-ACK-RETRY-CTXCANCEL, REQ-ACK-RETRY-JITTER-DETERMINISM, REQ-ACK-RETRY-LOGS, REQ-ACK-RETRY-HANDLER-TIMEOUT, REQ-ACK-RETRY-DEPLOY
+**Depends on:** Phase 67.1
+**Plans:** 3/3 plans complete
+
+Plans:
+- [x] 67.2-01-PLAN.md — Wave 1: Add reactionErrorClass + classifyReactionError pure helper + recordingTransport/log-capture test fixtures + TestClassifyReactionError table-driven test (REQ-ACK-RETRY-CLASSIFY)
+- [x] 67.2-02-PLAN.md — Wave 2: Wire classifier into SlackReactorAdapter.Add as bounded retry loop (3 attempts, 200ms→600ms ±25% jitter, Retry-After honoring, ctx-cancellable) + Sleep/Rand injection fields + doOneAttempt/sleepWithCtx/withJitter helpers + 10 new TestReactor_* tests + handler context 5s→10s bump (REQ-ACK-RETRY-BUDGET, REQ-ACK-RETRY-RETRYAFTER, REQ-ACK-RETRY-CTXCANCEL, REQ-ACK-RETRY-JITTER-DETERMINISM, REQ-ACK-RETRY-LOGS, REQ-ACK-RETRY-HANDLER-TIMEOUT)
+- [x] 67.2-03-PLAN.md — Wave 3: docs/slack-notifications.md retry paragraph + CLAUDE.md ACK section update + operator UAT checkpoint (make build && km init --lambdas + live #sb-{id} smoke test) (REQ-ACK-RETRY-DEPLOY)
+
 ### Phase 68: Slack transcript streaming — per-turn chat + gzipped JSONL upload (Phase A)
 
 **Spec:** `docs/superpowers/specs/2026-05-03-slack-transcript-streaming-design.md`

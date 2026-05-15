@@ -1,10 +1,13 @@
 package bridge_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -965,6 +968,79 @@ func TestDDBPauseHinter_UpdateItemOtherError_BubblesUp(t *testing.T) {
 }
 
 // ============================================================
+// Phase 67.2 shared test fixtures
+// ============================================================
+
+// recordingTransport is an http.RoundTripper used by Phase 67.2
+// retry-loop tests. It records every request and replays a queue of
+// canned responses. When the queue is exhausted, it returns a
+// synthetic "connection closed" error so tests can model a server
+// that drops the socket (TestReactor_NetworkError_Retries).
+type recordingTransport struct {
+	responses []func(r *http.Request) *http.Response
+	requests  []*http.Request
+	calls     int
+}
+
+func (rt *recordingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	// Capture request body (consume + restore so retries see the
+	// same body shape).
+	if r.Body != nil {
+		buf, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(buf))
+	}
+	rt.requests = append(rt.requests, r)
+	idx := rt.calls
+	rt.calls++
+	if idx >= len(rt.responses) {
+		return nil, fmt.Errorf("recordingTransport: connection closed after %d responses", len(rt.responses))
+	}
+	return rt.responses[idx](r), nil
+}
+
+// canned builds a closure returning a fresh *http.Response on each
+// call (the http.Client closes Body, so we cannot share a single
+// *Response across attempts).
+func canned(status int, headers map[string]string, body string) func(r *http.Request) *http.Response {
+	return func(r *http.Request) *http.Response {
+		resp := &http.Response{
+			StatusCode: status,
+			Body:       io.NopCloser(bytes.NewReader([]byte(body))),
+			Header:     make(http.Header),
+			Request:    r,
+		}
+		for k, v := range headers {
+			resp.Header.Set(k, v)
+		}
+		return resp
+	}
+}
+
+// captureBridgeLogger installs a fresh slog text handler writing to a
+// buffer at LevelDebug via bridge.SetLogger. Returns the buffer and a
+// restore closure that must be deferred. Mirrors the pattern from
+// handler_logging_test.go:25-34 (captureLogger).
+func captureBridgeLogger(t *testing.T) (*bytes.Buffer, func()) {
+	t.Helper()
+	var buf bytes.Buffer
+	bridge.SetLogger(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	return &buf, func() {
+		bridge.SetLogger(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	}
+}
+
+// assertContains is a small helper for log substring assertions.
+func assertContains(t *testing.T, haystack string, needles ...string) {
+	t.Helper()
+	for _, n := range needles {
+		if !strings.Contains(haystack, n) {
+			t.Errorf("expected log output to contain %q, got:\n%s", n, haystack)
+		}
+	}
+}
+
+// ============================================================
 // SlackReactorAdapter tests (Phase 67.1)
 // ============================================================
 
@@ -1045,6 +1121,11 @@ func TestSlackReactorAdapter_GenericError_Propagates(t *testing.T) {
 }
 
 func TestSlackReactorAdapter_RateLimited(t *testing.T) {
+	// Phase 67.2: with the new retry loop, the server must return 429
+	// on EVERY call (not once-then-success). Otherwise the loop sleeps
+	// ~5s between attempts and the test takes ~10s of wall-clock.
+	// Inject a no-op Sleep stub so the test stays sub-millisecond
+	// while still asserting the *ErrSlackRateLimited contract.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "5")
 		w.WriteHeader(http.StatusTooManyRequests)
@@ -1058,7 +1139,12 @@ func TestSlackReactorAdapter_RateLimited(t *testing.T) {
 		},
 	}, Path: "/km/slack/bot-token"}
 
-	adapter := &bridge.SlackReactorAdapter{HTTPClient: srv.Client(), BaseURL: srv.URL, Tokens: tokenFetcher}
+	adapter := &bridge.SlackReactorAdapter{
+		HTTPClient: srv.Client(),
+		BaseURL:    srv.URL,
+		Tokens:     tokenFetcher,
+		Sleep:      func(time.Duration) {}, // Phase 67.2: skip real wall-clock
+	}
 	err := adapter.Add(context.Background(), "C01234567", "1714280400.001", "eyes")
 	if err == nil {
 		t.Fatal("expected ErrSlackRateLimited, got nil")
@@ -1069,5 +1155,392 @@ func TestSlackReactorAdapter_RateLimited(t *testing.T) {
 	}
 	if rl.Method != "reactions.add" {
 		t.Errorf("expected Method=reactions.add, got %q", rl.Method)
+	}
+	if rl.RetryAfterSeconds != 5 {
+		t.Errorf("expected RetryAfterSeconds=5, got %d", rl.RetryAfterSeconds)
+	}
+}
+
+// ============================================================
+// Phase 67.2: SlackReactorAdapter retry-loop tests
+//
+// These 10 tests verify every behavior locked in 67.2-CONTEXT.md
+// for the bounded retry loop in SlackReactorAdapter.Add. All tests
+// use the recordingTransport / canned / captureBridgeLogger /
+// assertContains fixtures added in plan 67.2-01.
+// ============================================================
+
+// reactorTokenFetcher is a small helper that returns an
+// SSMBotTokenFetcher with a stub SSM client returning "xoxb-test".
+// Each TestReactor_* test calls this to construct an adapter; keeping
+// the token-fetcher boilerplate out of every test body keeps them
+// scannable.
+func reactorTokenFetcher() *bridge.SSMBotTokenFetcher {
+	return &bridge.SSMBotTokenFetcher{
+		Client: &mockSSMClient{
+			getParam: func(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
+				return &ssm.GetParameterOutput{Parameter: &ssmtypes.Parameter{Value: aws.String("xoxb-test")}}, nil
+			},
+		},
+		Path: "/km/slack/bot-token",
+	}
+}
+
+// 1. internal_error twice → ok:true succeeds at attempt 3.
+//
+// Covers REQ-ACK-RETRY-BUDGET (success-after-retry),
+// REQ-ACK-RETRY-JITTER-DETERMINISM, REQ-ACK-RETRY-LOGS (Debug).
+func TestReactor_Retries_OnInternalError_ThenSucceeds(t *testing.T) {
+	buf, restore := captureBridgeLogger(t)
+	defer restore()
+
+	rt := &recordingTransport{
+		responses: []func(r *http.Request) *http.Response{
+			canned(200, nil, `{"ok":false,"error":"internal_error"}`),
+			canned(200, nil, `{"ok":false,"error":"internal_error"}`),
+			canned(200, nil, `{"ok":true}`),
+		},
+	}
+	var sleeps []time.Duration
+
+	adapter := &bridge.SlackReactorAdapter{
+		HTTPClient: &http.Client{Transport: rt},
+		BaseURL:    "https://slack.test/api",
+		Tokens:     reactorTokenFetcher(),
+		Sleep:      func(d time.Duration) { sleeps = append(sleeps, d) },
+		Rand:       rand.New(rand.NewSource(42)),
+	}
+
+	err := adapter.Add(context.Background(), "C01234567", "1714280400.001", "eyes")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rt.calls != 3 {
+		t.Errorf("expected 3 transport calls, got %d", rt.calls)
+	}
+	if len(sleeps) != 2 {
+		t.Fatalf("expected 2 sleeps, got %d: %v", len(sleeps), sleeps)
+	}
+	// Jitter ±25%: first sleep ∈ [150ms, 250ms] (200ms ± 25%)
+	if sleeps[0] < 150*time.Millisecond || sleeps[0] > 250*time.Millisecond {
+		t.Errorf("first sleep %v outside [150ms, 250ms]", sleeps[0])
+	}
+	// Second sleep ∈ [450ms, 750ms] (600ms ± 25%)
+	if sleeps[1] < 450*time.Millisecond || sleeps[1] > 750*time.Millisecond {
+		t.Errorf("second sleep %v outside [450ms, 750ms]", sleeps[1])
+	}
+	assertContains(t, buf.String(),
+		"events: reaction retry", "attempt=1", "attempt=2", "next_delay_ms")
+}
+
+// 2. internal_error 4× (only 3 are consumed) → exhaustion error +
+// Warn line.
+//
+// Covers REQ-ACK-RETRY-BUDGET (exhaustion), REQ-ACK-RETRY-LOGS (Warn).
+func TestReactor_RetriesExhausted_ReturnsError(t *testing.T) {
+	buf, restore := captureBridgeLogger(t)
+	defer restore()
+
+	rt := &recordingTransport{
+		responses: []func(r *http.Request) *http.Response{
+			canned(200, nil, `{"ok":false,"error":"internal_error"}`),
+			canned(200, nil, `{"ok":false,"error":"internal_error"}`),
+			canned(200, nil, `{"ok":false,"error":"internal_error"}`),
+			canned(200, nil, `{"ok":false,"error":"internal_error"}`),
+		},
+	}
+	adapter := &bridge.SlackReactorAdapter{
+		HTTPClient: &http.Client{Transport: rt},
+		BaseURL:    "https://slack.test/api",
+		Tokens:     reactorTokenFetcher(),
+		Sleep:      func(d time.Duration) {},
+		Rand:       rand.New(rand.NewSource(42)),
+	}
+
+	err := adapter.Add(context.Background(), "C01234567", "1714280400.001", "eyes")
+	if err == nil {
+		t.Fatal("expected exhaustion error, got nil")
+	}
+	if rt.calls != 3 {
+		t.Errorf("expected 3 transport calls, got %d", rt.calls)
+	}
+	if !strings.Contains(err.Error(), "internal_error") {
+		t.Errorf("expected error to mention internal_error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "attempt=3 exhausted") {
+		t.Errorf("expected error to mention attempt=3 exhausted, got: %v", err)
+	}
+	assertContains(t, buf.String(),
+		"events: reaction failed", "attempt=3", "level=WARN")
+}
+
+// 3. message_not_found is terminal → 1 call, wrapped error, no retry.
+//
+// Covers REQ-ACK-RETRY-BUDGET (terminal-no-retry).
+func TestReactor_TerminalError_NoRetry(t *testing.T) {
+	rt := &recordingTransport{
+		responses: []func(r *http.Request) *http.Response{
+			canned(200, nil, `{"ok":false,"error":"message_not_found"}`),
+		},
+	}
+	adapter := &bridge.SlackReactorAdapter{
+		HTTPClient: &http.Client{Transport: rt},
+		BaseURL:    "https://slack.test/api",
+		Tokens:     reactorTokenFetcher(),
+		Sleep:      func(d time.Duration) {},
+	}
+
+	err := adapter.Add(context.Background(), "C01234567", "1714280400.001", "eyes")
+	if err == nil {
+		t.Fatal("expected terminal error, got nil")
+	}
+	if rt.calls != 1 {
+		t.Errorf("expected 1 transport call (no retry on terminal), got %d", rt.calls)
+	}
+	if !strings.Contains(err.Error(), "message_not_found") {
+		t.Errorf("expected error to mention message_not_found, got: %v", err)
+	}
+}
+
+// 4. invalid_auth → 1 call, Error-level log line, no retry.
+//
+// Covers REQ-ACK-RETRY-CLASSIFY (auth log level), REQ-ACK-RETRY-LOGS (Error).
+func TestReactor_AuthError_NoRetry_LogsError(t *testing.T) {
+	buf, restore := captureBridgeLogger(t)
+	defer restore()
+
+	rt := &recordingTransport{
+		responses: []func(r *http.Request) *http.Response{
+			canned(200, nil, `{"ok":false,"error":"invalid_auth"}`),
+		},
+	}
+	adapter := &bridge.SlackReactorAdapter{
+		HTTPClient: &http.Client{Transport: rt},
+		BaseURL:    "https://slack.test/api",
+		Tokens:     reactorTokenFetcher(),
+		Sleep:      func(d time.Duration) {},
+	}
+
+	err := adapter.Add(context.Background(), "C01234567", "1714280400.001", "eyes")
+	if err == nil {
+		t.Fatal("expected auth error, got nil")
+	}
+	if rt.calls != 1 {
+		t.Errorf("expected 1 transport call (no retry on auth), got %d", rt.calls)
+	}
+	if !strings.Contains(err.Error(), "invalid_auth") {
+		t.Errorf("expected error to mention invalid_auth, got: %v", err)
+	}
+	assertContains(t, buf.String(),
+		"events: reaction failed (auth)", "level=ERROR", "attempt=1")
+}
+
+// 5. 429 + Retry-After:1 → sleep exactly 1s (NOT jittered), then succeed.
+//
+// Covers REQ-ACK-RETRY-RETRYAFTER (honor).
+func TestReactor_429_HonorsRetryAfter(t *testing.T) {
+	rt := &recordingTransport{
+		responses: []func(r *http.Request) *http.Response{
+			canned(http.StatusTooManyRequests, map[string]string{"Retry-After": "1"},
+				`{"ok":false,"error":"ratelimited"}`),
+			canned(200, nil, `{"ok":true}`),
+		},
+	}
+	var sleeps []time.Duration
+	adapter := &bridge.SlackReactorAdapter{
+		HTTPClient: &http.Client{Transport: rt},
+		BaseURL:    "https://slack.test/api",
+		Tokens:     reactorTokenFetcher(),
+		Sleep:      func(d time.Duration) { sleeps = append(sleeps, d) },
+		Rand:       rand.New(rand.NewSource(42)),
+	}
+
+	err := adapter.Add(context.Background(), "C01234567", "1714280400.001", "eyes")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rt.calls != 2 {
+		t.Errorf("expected 2 transport calls, got %d", rt.calls)
+	}
+	if len(sleeps) != 1 {
+		t.Fatalf("expected 1 sleep, got %d: %v", len(sleeps), sleeps)
+	}
+	// Retry-After overrides backoff schedule — exact 1s, no jitter.
+	if sleeps[0] != 1*time.Second {
+		t.Errorf("expected exactly 1s sleep (Retry-After honored), got %v", sleeps[0])
+	}
+}
+
+// 6. 429 + Retry-After:30 with 2s ctx → return *ErrSlackRateLimited
+// immediately, no sleep, no second attempt.
+//
+// Covers REQ-ACK-RETRY-RETRYAFTER (budget exceeded).
+func TestReactor_429_RetryAfterExceedsBudget(t *testing.T) {
+	rt := &recordingTransport{
+		responses: []func(r *http.Request) *http.Response{
+			canned(http.StatusTooManyRequests, map[string]string{"Retry-After": "30"},
+				`{"ok":false,"error":"ratelimited"}`),
+		},
+	}
+	var sleeps []time.Duration
+	adapter := &bridge.SlackReactorAdapter{
+		HTTPClient: &http.Client{Transport: rt},
+		BaseURL:    "https://slack.test/api",
+		Tokens:     reactorTokenFetcher(),
+		Sleep:      func(d time.Duration) { sleeps = append(sleeps, d) },
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := adapter.Add(ctx, "C01234567", "1714280400.001", "eyes")
+	if err == nil {
+		t.Fatal("expected ErrSlackRateLimited, got nil")
+	}
+	if rt.calls != 1 {
+		t.Errorf("expected 1 transport call (Retry-After exceeds budget), got %d", rt.calls)
+	}
+	if len(sleeps) != 0 {
+		t.Errorf("expected 0 sleeps (Retry-After exceeds budget), got %d: %v", len(sleeps), sleeps)
+	}
+	var rl *bridge.ErrSlackRateLimited
+	if !errors.As(err, &rl) {
+		t.Fatalf("expected *ErrSlackRateLimited, got %T: %v", err, err)
+	}
+	if rl.RetryAfterSeconds != 30 {
+		t.Errorf("expected RetryAfterSeconds=30, got %d", rl.RetryAfterSeconds)
+	}
+}
+
+// 7. ctx cancelled during first backoff → 1 call, return promptly.
+//
+// Covers REQ-ACK-RETRY-CTXCANCEL.
+func TestReactor_ContextCanceled_StopsRetrying(t *testing.T) {
+	rt := &recordingTransport{
+		responses: []func(r *http.Request) *http.Response{
+			canned(200, nil, `{"ok":false,"error":"internal_error"}`),
+			canned(200, nil, `{"ok":false,"error":"internal_error"}`),
+			canned(200, nil, `{"ok":false,"error":"internal_error"}`),
+			canned(200, nil, `{"ok":false,"error":"internal_error"}`),
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Sleep stub cancels ctx on its first invocation, simulating
+	// cancellation during the first backoff. sleepWithCtx returns
+	// ctx.Err() to the loop, which then returns lastErr promptly.
+	cancelOnFirstSleep := func(d time.Duration) {
+		cancel()
+	}
+
+	adapter := &bridge.SlackReactorAdapter{
+		HTTPClient: &http.Client{Transport: rt},
+		BaseURL:    "https://slack.test/api",
+		Tokens:     reactorTokenFetcher(),
+		Sleep:      cancelOnFirstSleep,
+		Rand:       rand.New(rand.NewSource(42)),
+	}
+
+	err := adapter.Add(ctx, "C01234567", "1714280400.001", "eyes")
+	if rt.calls != 1 {
+		t.Errorf("expected 1 transport call (sleep cancelled before retry), got %d", rt.calls)
+	}
+	if err == nil {
+		t.Fatal("expected error after ctx cancel, got nil")
+	}
+	// CONTEXT.md allows either lastErr OR ctx.Err() — both are
+	// "promptly" returned.
+}
+
+// 8. Empty response queue → recordingTransport returns "connection closed"
+// for every call. Loop retries 3× then exhausts.
+//
+// Covers REQ-ACK-RETRY-CLASSIFY (net-error), REQ-ACK-RETRY-BUDGET
+// (exhaustion path for net errors).
+func TestReactor_NetworkError_Retries(t *testing.T) {
+	rt := &recordingTransport{
+		responses: nil, // exhausted on every call
+	}
+	adapter := &bridge.SlackReactorAdapter{
+		HTTPClient: &http.Client{Transport: rt},
+		BaseURL:    "https://slack.test/api",
+		Tokens:     reactorTokenFetcher(),
+		Sleep:      func(d time.Duration) {},
+		Rand:       rand.New(rand.NewSource(42)),
+	}
+
+	err := adapter.Add(context.Background(), "C01234567", "1714280400.001", "eyes")
+	if err == nil {
+		t.Fatal("expected network error, got nil")
+	}
+	if rt.calls != 3 {
+		t.Errorf("expected 3 transport calls, got %d", rt.calls)
+	}
+	if !strings.Contains(err.Error(), "connection closed") {
+		t.Errorf("expected error to mention 'connection closed', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "attempt=3 exhausted") {
+		t.Errorf("expected error to mention attempt=3 exhausted, got: %v", err)
+	}
+}
+
+// 9. already_reacted → idempotent success, 1 call, no error.
+//
+// Phase 67.1 idempotency regression guard. Covers
+// REQ-ACK-RETRY-CLASSIFY (idempotency).
+func TestReactor_AlreadyReacted_NoRetry_NoError(t *testing.T) {
+	rt := &recordingTransport{
+		responses: []func(r *http.Request) *http.Response{
+			canned(200, nil, `{"ok":false,"error":"already_reacted"}`),
+		},
+	}
+	adapter := &bridge.SlackReactorAdapter{
+		HTTPClient: &http.Client{Transport: rt},
+		BaseURL:    "https://slack.test/api",
+		Tokens:     reactorTokenFetcher(),
+		Sleep:      func(d time.Duration) {},
+	}
+
+	err := adapter.Add(context.Background(), "C01234567", "1714280400.001", "eyes")
+	if err != nil {
+		t.Fatalf("expected nil error on already_reacted, got %v", err)
+	}
+	if rt.calls != 1 {
+		t.Errorf("expected 1 transport call, got %d", rt.calls)
+	}
+}
+
+// 10. unknown error string → default-transient policy → retry 3× then
+// exhaust.
+//
+// Covers REQ-ACK-RETRY-CLASSIFY (unknown→transient).
+func TestReactor_UnknownErrorString_TreatedTransient(t *testing.T) {
+	rt := &recordingTransport{
+		responses: []func(r *http.Request) *http.Response{
+			canned(200, nil, `{"ok":false,"error":"some_new_thing"}`),
+			canned(200, nil, `{"ok":false,"error":"some_new_thing"}`),
+			canned(200, nil, `{"ok":false,"error":"some_new_thing"}`),
+		},
+	}
+	adapter := &bridge.SlackReactorAdapter{
+		HTTPClient: &http.Client{Transport: rt},
+		BaseURL:    "https://slack.test/api",
+		Tokens:     reactorTokenFetcher(),
+		Sleep:      func(d time.Duration) {},
+		Rand:       rand.New(rand.NewSource(42)),
+	}
+
+	err := adapter.Add(context.Background(), "C01234567", "1714280400.001", "eyes")
+	if err == nil {
+		t.Fatal("expected exhaustion error on unknown code, got nil")
+	}
+	if rt.calls != 3 {
+		t.Errorf("expected 3 transport calls (default-transient), got %d", rt.calls)
+	}
+	if !strings.Contains(err.Error(), "some_new_thing") {
+		t.Errorf("expected error to mention some_new_thing, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "attempt=3 exhausted") {
+		t.Errorf("expected error to mention attempt=3 exhausted, got: %v", err)
 	}
 }

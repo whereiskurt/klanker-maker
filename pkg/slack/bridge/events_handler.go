@@ -232,7 +232,11 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 			emoji = "eyes"
 		}
 		go func() {
-			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			// Phase 67.2: 10s budget fits ~800ms of retry sleeps + up to
+			// 3 HTTP round-trips while leaving headroom for Slack-incident
+			// latency. The goroutine does not block the 200 response, so
+			// the extra wall-clock is free.
+			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			if err := h.Reactor.Add(bgCtx, ch, msgTS, emoji); err != nil {
 				h.log().Warn("events: reaction failed", "err", err, "channel", ch, "ts", msgTS, "emoji", emoji)
