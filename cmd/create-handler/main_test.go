@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
@@ -436,5 +439,231 @@ func TestCreateHandler_NoAliasWhenEmpty(t *testing.T) {
 			t.Errorf("expected no --alias in args when event.Alias is empty, got: %v", capturedArgs)
 			break
 		}
+	}
+}
+
+// --------------------------------------------------------------------------
+// Branch tests for failure reason persistence (Phase 77, Task 2)
+// --------------------------------------------------------------------------
+
+// TestCreateHandler_FailurePath_WritesFailureReason verifies that on subprocess failure
+// the handler calls UpdateSandboxStatusAndReasonDynamo with status="failed",
+// the extracted reason, and a parseable RFC3339 timestamp.
+func TestCreateHandler_FailurePath_WritesFailureReason(t *testing.T) {
+	mockS3 := &mockS3GetAPI{getBody: minimalProfile}
+	mockDynamo := &mockSandboxMetadataAPI{}
+
+	subprocErr := errors.New("exit status 1")
+	subprocOut := []byte("some preamble\nError: provision Slack channel: archived\nmore noise")
+
+	h := &CreateHandler{
+		S3Client:     mockS3,
+		SESClient:    &mockSESAPI{},
+		DynamoClient: mockDynamo,
+		TableName:    "km-sandboxes",
+		Domain:       "sandboxes.example.com",
+		ToolchainDir: "/tmp",
+		RunCommand: func(cmd string, args []string, env []string) ([]byte, error) {
+			return subprocOut, subprocErr
+		},
+	}
+
+	event := CreateEvent{
+		SandboxID:      "sb-failreason",
+		ArtifactBucket: "km-artifacts",
+		ArtifactPrefix: "remote-create/sb-failreason",
+		OperatorEmail:  "op@example.com",
+	}
+
+	err := h.Handle(context.Background(), wrapEvent(event))
+	if err == nil {
+		t.Fatal("expected Handle to return an error on subprocess failure")
+	}
+	if !errors.Is(err, subprocErr) {
+		t.Errorf("expected wrapped subprocErr, got: %v", err)
+	}
+
+	if mockDynamo.updateInput == nil {
+		t.Fatal("expected DynamoDB UpdateItem to be called, but updateInput is nil")
+	}
+
+	expr := *mockDynamo.updateInput.UpdateExpression
+	if !strings.Contains(expr, "failure_reason") {
+		t.Errorf("UpdateExpression missing 'failure_reason': %q", expr)
+	}
+	if !strings.Contains(expr, "failed_at") {
+		t.Errorf("UpdateExpression missing 'failed_at': %q", expr)
+	}
+
+	statusVal, ok := mockDynamo.updateInput.ExpressionAttributeValues[":status"]
+	if !ok {
+		t.Fatal("missing :status in ExpressionAttributeValues")
+	}
+	statusS, ok := statusVal.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok || statusS.Value != "failed" {
+		t.Errorf("expected :status = 'failed', got: %v", statusVal)
+	}
+
+	reasonVal, ok := mockDynamo.updateInput.ExpressionAttributeValues[":reason"]
+	if !ok {
+		t.Fatal("missing :reason in ExpressionAttributeValues")
+	}
+	reasonS, ok := reasonVal.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok || reasonS.Value != "Error: provision Slack channel: archived" {
+		t.Errorf("expected :reason = 'Error: provision Slack channel: archived', got: %v", reasonVal)
+	}
+
+	tsVal, ok := mockDynamo.updateInput.ExpressionAttributeValues[":ts"]
+	if !ok {
+		t.Fatal("missing :ts in ExpressionAttributeValues")
+	}
+	tsS, ok := tsVal.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok || tsS.Value == "" {
+		t.Errorf("expected :ts to be a non-empty string, got: %v", tsVal)
+	}
+	if _, parseErr := time.Parse(time.RFC3339, tsS.Value); parseErr != nil {
+		t.Errorf("expected :ts to be RFC3339-parseable, got %q: %v", tsS.Value, parseErr)
+	}
+}
+
+// TestCreateHandler_NocapPath_WritesFailureReason verifies that capacity errors
+// set status="nocap" and the extracted reason is persisted via UpdateSandboxStatusAndReasonDynamo.
+func TestCreateHandler_NocapPath_WritesFailureReason(t *testing.T) {
+	mockS3 := &mockS3GetAPI{getBody: minimalProfile}
+	mockDynamo := &mockSandboxMetadataAPI{}
+
+	subprocErr := errors.New("exit status 1")
+	subprocOut := []byte("InsufficientInstanceCapacity\nError: no spot capacity in az us-east-1c")
+
+	h := &CreateHandler{
+		S3Client:     mockS3,
+		SESClient:    &mockSESAPI{},
+		DynamoClient: mockDynamo,
+		TableName:    "km-sandboxes",
+		Domain:       "sandboxes.example.com",
+		ToolchainDir: "/tmp",
+		RunCommand: func(cmd string, args []string, env []string) ([]byte, error) {
+			return subprocOut, subprocErr
+		},
+	}
+
+	event := CreateEvent{
+		SandboxID:      "sb-nocap",
+		ArtifactBucket: "km-artifacts",
+		ArtifactPrefix: "remote-create/sb-nocap",
+		OperatorEmail:  "op@example.com",
+	}
+
+	err := h.Handle(context.Background(), wrapEvent(event))
+	if err == nil {
+		t.Fatal("expected Handle to return an error on subprocess failure")
+	}
+
+	if mockDynamo.updateInput == nil {
+		t.Fatal("expected DynamoDB UpdateItem to be called, but updateInput is nil")
+	}
+
+	statusVal, ok := mockDynamo.updateInput.ExpressionAttributeValues[":status"]
+	if !ok {
+		t.Fatal("missing :status in ExpressionAttributeValues")
+	}
+	statusS, ok := statusVal.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok || statusS.Value != "nocap" {
+		t.Errorf("expected :status = 'nocap', got: %v", statusVal)
+	}
+
+	reasonVal, ok := mockDynamo.updateInput.ExpressionAttributeValues[":reason"]
+	if !ok {
+		t.Fatal("missing :reason in ExpressionAttributeValues")
+	}
+	reasonS, ok := reasonVal.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok || reasonS.Value != "Error: no spot capacity in az us-east-1c" {
+		t.Errorf("expected :reason = 'Error: no spot capacity in az us-east-1c', got: %v", reasonVal)
+	}
+}
+
+// TestCreateHandler_FailurePath_NoErrorLine_StillWritesTailReason verifies that when
+// subprocess output has no "Error:" prefix, the tail-fallback reason is still persisted.
+func TestCreateHandler_FailurePath_NoErrorLine_StillWritesTailReason(t *testing.T) {
+	mockS3 := &mockS3GetAPI{getBody: minimalProfile}
+	mockDynamo := &mockSandboxMetadataAPI{}
+
+	subprocErr := errors.New("exit status 1")
+	subprocOut := []byte("oh no the sky fell")
+
+	h := &CreateHandler{
+		S3Client:     mockS3,
+		SESClient:    &mockSESAPI{},
+		DynamoClient: mockDynamo,
+		TableName:    "km-sandboxes",
+		Domain:       "sandboxes.example.com",
+		ToolchainDir: "/tmp",
+		RunCommand: func(cmd string, args []string, env []string) ([]byte, error) {
+			return subprocOut, subprocErr
+		},
+	}
+
+	event := CreateEvent{
+		SandboxID:      "sb-notailreason",
+		ArtifactBucket: "km-artifacts",
+		ArtifactPrefix: "remote-create/sb-notailreason",
+	}
+
+	err := h.Handle(context.Background(), wrapEvent(event))
+	if err == nil {
+		t.Fatal("expected Handle to return an error on subprocess failure")
+	}
+
+	if mockDynamo.updateInput == nil {
+		t.Fatal("expected DynamoDB UpdateItem to be called, but updateInput is nil")
+	}
+
+	reasonVal, ok := mockDynamo.updateInput.ExpressionAttributeValues[":reason"]
+	if !ok {
+		t.Fatal("missing :reason in ExpressionAttributeValues")
+	}
+	reasonS, ok := reasonVal.(*dynamodbtypes.AttributeValueMemberS)
+	if !ok {
+		t.Fatalf("expected :reason to be a string attribute, got: %T", reasonVal)
+	}
+	const marker = "<no error line; tail of subprocess output> "
+	if !strings.HasPrefix(reasonS.Value, marker) {
+		t.Errorf("expected :reason to start with tail marker, got: %q", reasonS.Value)
+	}
+}
+
+// TestCreateHandler_DDBWriteFailure_NonFatal verifies that a DynamoDB write error does NOT
+// cause Handle to return the DDB error — it logs a warning and returns the original runErr.
+func TestCreateHandler_DDBWriteFailure_NonFatal(t *testing.T) {
+	mockS3 := &mockS3GetAPI{getBody: minimalProfile}
+	mockDynamo := &mockSandboxMetadataAPI{updateErr: errors.New("ddb throttled")}
+
+	subprocErr := errors.New("exit status 1")
+
+	h := &CreateHandler{
+		S3Client:     mockS3,
+		SESClient:    &mockSESAPI{},
+		DynamoClient: mockDynamo,
+		TableName:    "km-sandboxes",
+		Domain:       "sandboxes.example.com",
+		ToolchainDir: "/tmp",
+		RunCommand: func(cmd string, args []string, env []string) ([]byte, error) {
+			return []byte("some output"), subprocErr
+		},
+	}
+
+	event := CreateEvent{
+		SandboxID:      "sb-ddbfail",
+		ArtifactBucket: "km-artifacts",
+		ArtifactPrefix: "remote-create/sb-ddbfail",
+	}
+
+	err := h.Handle(context.Background(), wrapEvent(event))
+	if err == nil {
+		t.Fatal("expected Handle to return an error")
+	}
+	// The handler must return the wrapped subprocess error, NOT the DDB error.
+	if !errors.Is(err, subprocErr) {
+		t.Errorf("expected wrapped subprocErr in return value, got: %v", err)
 	}
 }

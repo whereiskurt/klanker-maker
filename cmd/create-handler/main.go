@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	lambdaruntime "github.com/aws/aws-lambda-go/lambda"
@@ -251,14 +252,19 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 			failStatus = "nocap"
 		}
 
-		// Update DynamoDB metadata so km list shows the failure instead of stuck "starting"
+		// Phase 77: extract a one-line summary from subprocess output for persistence.
+		failureReason := extractFailureReason(outStr)
+		failedAt := time.Now().UTC()
+
+		// Update DynamoDB metadata so km list shows the failure instead of stuck "starting".
+		// Phase 77: switch to the new helper so failure_reason and failed_at land in the same UpdateItem.
 		if h.DynamoClient != nil && h.TableName != "" {
-			if statusErr := awspkg.UpdateSandboxStatusDynamo(ctx, h.DynamoClient, h.TableName, event.SandboxID, failStatus); statusErr != nil {
+			if statusErr := awspkg.UpdateSandboxStatusAndReasonDynamo(ctx, h.DynamoClient, h.TableName, event.SandboxID, failStatus, failureReason, failedAt); statusErr != nil {
 				log.Warn().Err(statusErr).Str("sandbox_id", event.SandboxID).
-					Str("status", failStatus).Msg("failed to update metadata status (non-fatal)")
+					Str("status", failStatus).Msg("failed to update metadata status+reason (non-fatal)")
 			} else {
 				log.Info().Str("sandbox_id", event.SandboxID).
-					Str("status", failStatus).Msg("updated metadata status")
+					Str("status", failStatus).Msg("updated metadata status with failure reason")
 			}
 		}
 
