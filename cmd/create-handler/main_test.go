@@ -334,6 +334,76 @@ func TestCreateHandler_AliasForwarded(t *testing.T) {
 	}
 }
 
+// --------------------------------------------------------------------------
+// extractFailureReason tests (Phase 77, Task 1)
+// --------------------------------------------------------------------------
+
+// TestExtractFailureReason_LastErrorLine verifies bottom-up scan returns the LAST "Error:" line.
+func TestExtractFailureReason_LastErrorLine(t *testing.T) {
+	input := "some preamble\nError: first error\nmiddle noise\nError: actual root cause\ntrailing noise"
+	got := extractFailureReason(input)
+	want := "Error: actual root cause"
+	if got != want {
+		t.Errorf("extractFailureReason: got %q, want %q", got, want)
+	}
+}
+
+// TestExtractFailureReason_NoErrorLine_TailFallback verifies the no-Error-line fallback
+// prefixes with the marker and contains the tail of the input.
+func TestExtractFailureReason_NoErrorLine_TailFallback(t *testing.T) {
+	input := "timeout exceeded\nstack trace junk\nexit code 1"
+	got := extractFailureReason(input)
+	const marker = "<no error line; tail of subprocess output> "
+	if !strings.HasPrefix(got, marker) {
+		t.Errorf("extractFailureReason: expected prefix %q, got %q", marker, got)
+	}
+	if !strings.Contains(got, "exit code 1") {
+		t.Errorf("extractFailureReason: expected tail to contain 'exit code 1', got %q", got)
+	}
+}
+
+// TestExtractFailureReason_TrimsTo1024 verifies the result is capped at 1024 chars.
+func TestExtractFailureReason_TrimsTo1024(t *testing.T) {
+	line := "Error: " + strings.Repeat("X", 2000)
+	got := extractFailureReason(line)
+	if len(got) > 1024 {
+		t.Errorf("extractFailureReason: result length %d exceeds 1024", len(got))
+	}
+	if !strings.HasPrefix(got, "Error:") {
+		t.Errorf("extractFailureReason: expected result to start with 'Error:', got %q", got[:min(20, len(got))])
+	}
+}
+
+// TestExtractFailureReason_EmptyInput verifies empty input returns empty string.
+func TestExtractFailureReason_EmptyInput(t *testing.T) {
+	got := extractFailureReason("")
+	// Empty input: no Error: line, tail fallback with empty tail — marker + ""
+	// We accept either empty or marker-prefixed empty tail; document: returns marker+"".
+	const marker = "<no error line; tail of subprocess output> "
+	if got != "" && got != marker {
+		t.Errorf("extractFailureReason: empty input got %q, want empty string or marker", got)
+	}
+}
+
+// TestExtractFailureReason_TrailingWhitespace verifies trailing blank lines do not
+// prevent finding an Error: line (bottom-up scan skips blank trailing lines).
+func TestExtractFailureReason_TrailingWhitespace(t *testing.T) {
+	input := "preamble\nError: the real cause\n\n\n"
+	got := extractFailureReason(input)
+	want := "Error: the real cause"
+	if got != want {
+		t.Errorf("extractFailureReason: got %q, want %q", got, want)
+	}
+}
+
+// min is a local helper for Go 1.20 compatibility.
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // TestCreateHandler_NoAliasWhenEmpty verifies --alias is NOT passed when event
 // has no alias set.
 func TestCreateHandler_NoAliasWhenEmpty(t *testing.T) {

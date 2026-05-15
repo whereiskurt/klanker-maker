@@ -476,6 +476,43 @@ func extractTarGz(tarPath, destDir string) error {
 	return nil
 }
 
+// extractFailureReason pulls a failure summary out of subprocess output for persistence
+// in the sandbox DynamoDB record (Phase 77). The result is capped at 1024 chars per the
+// locked PRD decision in 77-CONTEXT.md.
+//
+// Strategy:
+//  1. Scan the output bottom-up. Take the first line that starts with "Error:" — that
+//     is the km error format and is the most actionable single-line summary.
+//  2. If no such line exists, take the last 1024 chars of the output and prefix with
+//     "<no error line; tail of subprocess output> " so the operator knows it is a tail
+//     dump rather than a structured error.
+//
+// The return value is always ≤1024 chars.
+func extractFailureReason(out string) string {
+	const maxLen = 1024
+	const noErrorMarker = "<no error line; tail of subprocess output> "
+
+	// Scan lines from the bottom. strings.Split on "\n" preserves trailing-empty
+	// entries — that's fine; the loop skips lines that don't start with "Error:".
+	lines := strings.Split(out, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := lines[i]
+		if strings.HasPrefix(line, "Error:") {
+			if len(line) > maxLen {
+				return line[:maxLen]
+			}
+			return line
+		}
+	}
+
+	// No Error: line — fall back to a tail dump.
+	tail := out
+	if len(tail) > maxLen-len(noErrorMarker) {
+		tail = tail[len(tail)-(maxLen-len(noErrorMarker)):]
+	}
+	return noErrorMarker + tail
+}
+
 // execRunCommand runs an external binary using os/exec.
 func execRunCommand(cmd string, args []string, env []string) ([]byte, error) {
 	return runOSExec(cmd, args, env)
