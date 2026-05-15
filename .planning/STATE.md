@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 75-02-PLAN.md (S3FileDownloader adapter + EventsHandler files-fork goroutine)
-last_updated: "2026-05-15T15:10:27.675Z"
+stopped_at: Completed 75-04-PLAN.md (IAM + lifecycle + scope checks for Slack file attachments)
+last_updated: "2026-05-15T15:14:01.790Z"
 last_activity: 2026-05-15
 progress:
   total_phases: 88
   completed_phases: 77
   total_plans: 329
-  completed_plans: 288
+  completed_plans: 289
   percent: 93
 ---
 
@@ -328,6 +328,7 @@ Progress: [█████████░] 93%
 | Phase 75-slack-inbound-file-attachments-images-pdfs-for-per-sandbox-channels P01 | 175 | 3 tasks | 4 files |
 | Phase 75-slack-inbound-file-attachments-images-pdfs-for-per-sandbox-channels P03 | 137s | 2 tasks | 2 files |
 | Phase 75-slack-inbound-file-attachments-images-pdfs-for-per-sandbox-channels P02 | 438 | 2 tasks | 4 files |
+| Phase 75-slack-inbound-file-attachments-images-pdfs-for-per-sandbox-channels P04 | 12min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -940,6 +941,9 @@ Recent decisions affecting current work:
 - [Phase 75-02]: Pitfall 1: HTTPClient.CheckRedirect=ErrUseLastResponse + manual redirect re-issue with Bearer token preserved
 - [Phase 75-02]: Pitfall 2: io.ReadAll into []byte buffer then bytes.NewReader for S3 PutObject.Body (re-readable for SDK retries)
 - [Phase 75-02]: FileDownloader field is nullable on EventsHandler for back-compat with pre-Phase-75 Lambda images
+- [Phase 75]: Bridge IAM scoped to slack-inbound/* prefix only (not bucket-wide); memory_size 256→1024 for Pitfall 2 PutObject retry-rewindability
+- [Phase 75]: New standalone s3-artifacts-lifecycle module (no required_providers per project convention); sourced via KM_ARTIFACTS_BUCKET env var matching lambda-slack-bridge pattern
+- [Phase 75]: files:read added to VerifyEventsAPIScopes + checkSlackAppEventsScopes required slices; success message updated to enumerate all four required scopes
 
 ### Roadmap Evolution
 
@@ -1042,6 +1046,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-15T15:10:27.668Z
-Stopped at: Completed 75-02-PLAN.md (S3FileDownloader adapter + EventsHandler files-fork goroutine)
+Last session: 2026-05-15T15:14:01.783Z
+Stopped at: Completed 75-04-PLAN.md (IAM + lifecycle + scope checks for Slack file attachments)
 Resume file: None
