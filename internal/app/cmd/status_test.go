@@ -615,6 +615,155 @@ func TestStatus_EmailAlias_Empty(t *testing.T) {
 	}
 }
 
+// TestStatusCmd_FailedWithReason verifies that km status prints Failure: and Failed At: lines
+// when the sandbox is in "failed" state and FailureReason is non-empty.
+func TestStatusCmd_FailedWithReason(t *testing.T) {
+	createdAt := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+	failedAt := time.Date(2026, 5, 10, 15, 5, 44, 0, time.UTC)
+
+	fetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID:     "sb-fail01",
+			Profile:       "open-dev",
+			Substrate:     "ec2",
+			Region:        "us-east-1",
+			Status:        "failed",
+			CreatedAt:     createdAt,
+			FailureReason: "provision Slack channel: archived",
+			FailedAt:      &failedAt,
+		},
+	}
+
+	out, err := runStatusCmd(t, fetcher, "sb-fail01")
+	if err != nil {
+		t.Fatalf("status command returned error: %v\noutput: %s", err, out)
+	}
+
+	// Must show Status: failed
+	if !strings.Contains(out, "Status:      failed") {
+		t.Errorf("output missing 'Status:      failed':\n%s", out)
+	}
+
+	// Must show Failure: line with reason
+	if !strings.Contains(out, "Failure:     provision Slack channel: archived") {
+		t.Errorf("output missing 'Failure:     provision Slack channel: archived':\n%s", out)
+	}
+
+	// Must show Failed At: line (formatted timestamp)
+	if !strings.Contains(out, "Failed At:   ") {
+		t.Errorf("output missing 'Failed At:   ' line:\n%s", out)
+	}
+
+	// Must NOT contain the <unknown hint
+	if strings.Contains(out, "<unknown") {
+		t.Errorf("output must not contain '<unknown' when FailureReason is set:\n%s", out)
+	}
+}
+
+// TestStatusCmd_FailedNoReason verifies that km status prints the <unknown> hint
+// when the sandbox is in "failed" state but FailureReason is empty.
+func TestStatusCmd_FailedNoReason(t *testing.T) {
+	createdAt := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+
+	fetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID:     "sb-fail02",
+			Profile:       "open-dev",
+			Substrate:     "ec2",
+			Region:        "us-east-1",
+			Status:        "failed",
+			CreatedAt:     createdAt,
+			FailureReason: "",
+			FailedAt:      nil,
+		},
+	}
+
+	out, err := runStatusCmd(t, fetcher, "sb-fail02")
+	if err != nil {
+		t.Fatalf("status command returned error: %v\noutput: %s", err, out)
+	}
+
+	// Must show Failure: line with <unknown> hint including sandbox ID
+	if !strings.Contains(out, "Failure:     <unknown — try km logs sb-fail02>") {
+		t.Errorf("output missing '<unknown> hint with sandbox ID:\n%s", out)
+	}
+
+	// Must NOT show Failed At: line when FailureReason is empty
+	if strings.Contains(out, "Failed At:") {
+		t.Errorf("output must not contain 'Failed At:' when FailureReason is empty:\n%s", out)
+	}
+}
+
+// TestStatusCmd_NocapWithReason verifies that km status prints Failure: and Failed At: lines
+// for sandboxes in "nocap" state (same render path as "failed").
+func TestStatusCmd_NocapWithReason(t *testing.T) {
+	createdAt := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+	failedAt := time.Date(2026, 5, 11, 9, 30, 0, 0, time.UTC)
+
+	fetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID:     "sb-nocap01",
+			Profile:       "open-dev",
+			Substrate:     "ec2",
+			Region:        "us-east-1",
+			Status:        "nocap",
+			CreatedAt:     createdAt,
+			FailureReason: "no Spot capacity",
+			FailedAt:      &failedAt,
+		},
+	}
+
+	out, err := runStatusCmd(t, fetcher, "sb-nocap01")
+	if err != nil {
+		t.Fatalf("status command returned error: %v\noutput: %s", err, out)
+	}
+
+	// Must show Failure: line with reason
+	if !strings.Contains(out, "Failure:     no Spot capacity") {
+		t.Errorf("output missing 'Failure:     no Spot capacity':\n%s", out)
+	}
+
+	// Must show Failed At: line
+	if !strings.Contains(out, "Failed At:   ") {
+		t.Errorf("output missing 'Failed At:   ' line:\n%s", out)
+	}
+}
+
+// TestStatusCmd_Running_NoFailureLine verifies that km status does NOT print Failure: or
+// Failed At: lines for a sandbox in "running" state, even if the fields contain stale values.
+func TestStatusCmd_Running_NoFailureLine(t *testing.T) {
+	createdAt := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+	staleTs := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+
+	fetcher := &fakeFetcher{
+		record: &kmaws.SandboxRecord{
+			SandboxID:     "sb-run01",
+			Profile:       "open-dev",
+			Substrate:     "ec2",
+			Region:        "us-east-1",
+			Status:        "running",
+			CreatedAt:     createdAt,
+			FailureReason: "stale value",
+			FailedAt:      &staleTs,
+		},
+	}
+
+	out, err := runStatusCmd(t, fetcher, "sb-run01")
+	if err != nil {
+		t.Fatalf("status command returned error: %v\noutput: %s", err, out)
+	}
+
+	// Must NOT show Failure: line for running sandboxes
+	if strings.Contains(out, "Failure:") {
+		t.Errorf("output must not contain 'Failure:' for running sandbox:\n%s", out)
+	}
+
+	// Must NOT show Failed At: line for running sandboxes
+	if strings.Contains(out, "Failed At:") {
+		t.Errorf("output must not contain 'Failed At:' for running sandbox:\n%s", out)
+	}
+}
+
 // TestStatus_NoIdentity verifies that km status does not show an Identity section
 // when the fetcher returns nil (sandbox has no published identity).
 func TestStatus_NoIdentity(t *testing.T) {
