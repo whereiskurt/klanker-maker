@@ -267,10 +267,11 @@ func (h *EventsHandler) isBotLoop(ctx context.Context, m slackMessageEvent) bool
 	if m.BotID != "" {
 		return true
 	}
-	// (2) Allow-list: only these two subtypes count as a real human turn.
+	// (2) Allow-list: only these subtypes count as a real human turn.
+	// Phase 75: "file_share" added — user-initiated file upload in a channel.
 	switch m.Subtype {
-	case "", "thread_broadcast":
-		// fall through
+	case "", "thread_broadcast", "file_share":
+		// fall through — file_share added in Phase 75
 	default:
 		h.log().Debug("events: subtype filter dropped",
 			"subtype", m.Subtype, "channel", m.Channel, "ts", m.TS)

@@ -254,7 +254,7 @@ func TestEventsHandler_BotSelfMessageFiltered(t *testing.T) {
 		{"subtype_channel_unarchive", `{"type":"message","channel":"C1","subtype":"channel_unarchive","user":"U1","ts":"1.0"}`},
 		{"subtype_pinned_item", `{"type":"message","channel":"C1","subtype":"pinned_item","user":"U1","ts":"1.0"}`},
 		{"subtype_unpinned_item", `{"type":"message","channel":"C1","subtype":"unpinned_item","user":"U1","ts":"1.0"}`},
-		{"subtype_file_share", `{"type":"message","channel":"C1","subtype":"file_share","user":"U1","text":"shared a file","ts":"1.0"}`},
+		// subtype_file_share row removed in Phase 75: file_share is now an allowed subtype (user-initiated file uploads).
 		{"subtype_me_message", `{"type":"message","channel":"C1","subtype":"me_message","user":"U1","text":"/me waves","ts":"1.0"}`},
 		{"subtype_reminder_add", `{"type":"message","channel":"C1","subtype":"reminder_add","user":"U1","ts":"1.0"}`},
 		{"subtype_ekm_access_denied", `{"type":"message","channel":"C1","subtype":"ekm_access_denied","ts":"1.0"}`},
@@ -282,6 +282,30 @@ func TestEventsHandler_BotSelfMessageFiltered(t *testing.T) {
 				t.Fatalf("%s: expected no Threads upsert, got %+v", tc.name, threads.upserts)
 			}
 		})
+	}
+}
+
+// TestEventsHandler_FileShareSubtype_Allowed verifies the Phase 75 positive case:
+// a file_share subtype event (human uploading a file) carries user content and
+// MUST pass through isBotLoop to reach SQS dispatch (allow-list extended in Phase 75).
+func TestEventsHandler_FileShareSubtype_Allowed(t *testing.T) {
+	now := time.Now()
+	h, sqs, threads, _, _, _, _ := newHandler(now)
+	body := `{"type":"event_callback","event_id":"E-fs","event":{"type":"message","channel":"C1","subtype":"file_share","user":"U1","text":"","ts":"1.7","thread_ts":"1.0","files":[{"id":"F012345","name":"screenshot.png","mimetype":"image/png","url_private_download":"https://files.slack.com/files-pri/T0/F012345/download/screenshot.png","size":12345}]}}`
+	tsHdr, sigHdr := signSlackPayload(t, body, now)
+	resp := h.Handle(context.Background(), EventsRequest{
+		Headers: map[string]string{"x-slack-request-timestamp": tsHdr, "x-slack-signature": sigHdr},
+		Body:    body,
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, resp.Body)
+	}
+	// file_share with user content must reach SQS (not short-circuit on isBotLoop).
+	if len(sqs.sends) != 1 {
+		t.Fatalf("expected 1 SQS send for file_share, got %d (isBotLoop may still be blocking it)", len(sqs.sends))
+	}
+	if len(threads.upserts) != 1 {
+		t.Fatalf("expected 1 threads upsert for file_share, got %d", len(threads.upserts))
 	}
 }
 
