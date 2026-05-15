@@ -189,18 +189,21 @@ func TestDoctor_SlackInboundStaleQueues_NilDeps(t *testing.T) {
 // =============================================================================
 
 // TestDoctor_SlackInboundEventsSubscription_HasAllScopes: bot has all required
-// scopes including reactions:write → OK with success message naming all three.
+// scopes including reactions:write and files:read (Phase 75) → OK with success message naming all four.
 func TestDoctor_SlackInboundEventsSubscription_HasAllScopes(t *testing.T) {
 	getScopes := func(_ context.Context) ([]string, error) {
-		return []string{"chat:write", "channels:history", "groups:history", "channels:read", "reactions:write"}, nil
+		return []string{"chat:write", "channels:history", "groups:history", "channels:read", "reactions:write", "files:read"}, nil
 	}
 	r := checkSlackAppEventsScopes(context.Background(), getScopes)
 	if r.Status != CheckOK {
 		t.Fatalf("expected OK, got %s (msg=%s)", r.Status, r.Message)
 	}
-	// Verify success message names the new scope (operators read this output).
+	// Verify success message names all required scopes (operators read this output).
 	if !strings.Contains(r.Message, "reactions:write") {
 		t.Errorf("expected success message to mention reactions:write, got: %s", r.Message)
+	}
+	if !strings.Contains(r.Message, "files:read") {
+		t.Errorf("expected success message to mention files:read, got: %s", r.Message)
 	}
 }
 
@@ -280,6 +283,42 @@ func TestDoctor_SlackInboundEventsSubscription_NilDeps(t *testing.T) {
 	r := checkSlackAppEventsScopes(context.Background(), nil)
 	if r.Status != CheckSkipped {
 		t.Fatalf("expected SKIPPED, got %s", r.Status)
+	}
+}
+
+// TestDoctor_FilesReadScope_Missing_Reports: Phase 75 upgrade scenario — operator
+// already has channels:history + groups:history + reactions:write from Phase 67.1
+// but forgot to add files:read when upgrading to Phase 75.
+// Should FAIL with only files:read surfaced in the message.
+func TestDoctor_FilesReadScope_Missing_Reports(t *testing.T) {
+	getScopes := func(_ context.Context) ([]string, error) {
+		return []string{"chat:write", "channels:history", "groups:history", "channels:read", "reactions:write"}, nil
+	}
+	r := checkSlackAppEventsScopes(context.Background(), getScopes)
+	if r.Status != CheckError {
+		t.Fatalf("expected FAIL when only files:read missing, got %s (msg=%s)", r.Status, r.Message)
+	}
+	if !strings.Contains(r.Message, "files:read") {
+		t.Errorf("expected message to mention files:read specifically, got: %s", r.Message)
+	}
+	// Should NOT mention the scopes that are present (avoid noise in the operator-facing message).
+	if strings.Contains(r.Message, "channels:history") || strings.Contains(r.Message, "groups:history") || strings.Contains(r.Message, "reactions:write") {
+		t.Errorf("expected message to ONLY list missing scopes, got: %s", r.Message)
+	}
+	if r.Remediation == "" {
+		t.Error("expected non-empty remediation hint")
+	}
+
+	// With all four scopes present, check should succeed and name files:read in the success message.
+	getAll := func(_ context.Context) ([]string, error) {
+		return []string{"chat:write", "channels:history", "groups:history", "reactions:write", "files:read"}, nil
+	}
+	rOK := checkSlackAppEventsScopes(context.Background(), getAll)
+	if rOK.Status != CheckOK {
+		t.Fatalf("expected OK with all four scopes, got %s (msg=%s)", rOK.Status, rOK.Message)
+	}
+	if !strings.Contains(rOK.Message, "files:read") {
+		t.Errorf("expected success message to enumerate files:read, got: %s", rOK.Message)
 	}
 }
 

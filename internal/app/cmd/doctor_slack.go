@@ -481,7 +481,7 @@ func checkSlackAppEventsScopes(
 		}
 	}
 
-	required := []string{"channels:history", "groups:history", "reactions:write"}
+	required := []string{"channels:history", "groups:history", "reactions:write", "files:read"}
 	scopeSet := make(map[string]bool, len(scopes))
 	for _, s := range scopes {
 		scopeSet[s] = true
@@ -504,7 +504,7 @@ func checkSlackAppEventsScopes(
 	return CheckResult{
 		Name:    name,
 		Status:  CheckOK,
-		Message: "Slack App has all required inbound scopes (channels:history, groups:history, reactions:write)",
+		Message: "Slack App has all required inbound scopes (channels:history, groups:history, reactions:write, files:read)",
 	}
 }
 
