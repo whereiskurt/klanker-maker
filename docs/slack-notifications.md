@@ -540,6 +540,50 @@ because this is a bridge-only change.
 - Bot kicked from channel → `events: reaction failed err=channel_not_found`. Re-invite the bot.
 - Slack delivered the same event twice (cold-start replay) → `already_reacted`. Treated as idempotent success — NOT logged at WARN.
 
+#### Phase 67.2: retry behavior
+
+The Phase 67.1 single-attempt ACK reaction was upgraded to a bounded
+retry loop inside `SlackReactorAdapter.Add`. Transient Slack API
+failures — HTTP 429 (rate limit), HTTP 5xx, network errors, and
+Slack JSON errors `internal_error` / `service_unavailable` /
+`fatal_error` / `request_timeout` — now trigger up to 2 retries
+with exponential backoff (200ms then 600ms, each with ±25% jitter
+to de-correlate retries across many sandboxes during a Slack
+incident). On HTTP 429, the loop honors the `Retry-After` header if
+its value fits within the remaining 10-second budget; otherwise it
+returns the typed `ErrSlackRateLimited` immediately.
+
+Error classification follows three buckets:
+
+- **Success** (no retry): HTTP 200 + `ok:true`, or `already_reacted`
+  (idempotency for double-delivered events).
+- **Terminal — no retry, Error log**: `invalid_auth`, `not_authed`,
+  `account_inactive`, `token_revoked`, `missing_scope`,
+  `token_expired`, plus related auth codes. These require operator
+  action (rotate bot token, re-install app for missing scope).
+- **Terminal — no retry, Warn log via handler**: `bad_timestamp`,
+  `message_not_found`, `channel_not_found`, `not_reactable`,
+  `thread_locked`, `invalid_name`, plus related bad-input codes.
+- **Transient — retry**: everything in the transient list above
+  PLUS any unknown error string (default-unknown→transient policy
+  — safer than hard-failing on an error code Slack adds tomorrow).
+
+Operator observability: the existing `events: reaction failed` Warn
+line in CloudWatch is preserved on final retry exhaustion, now with
+a new `attempt=N` structured field. Intermediate retries log at
+Debug (silent at the default Lambda log level; visible when
+`KM_LOG_LEVEL=debug`).
+
+The handler goroutine's context timeout was bumped from 5s to 10s
+to accommodate the retry budget (worst case: ~800ms of sleeps + 3
+HTTP round-trips, comfortably under 10s for normal Slack latency
+with headroom for incident-mode slowness).
+
+Bridge-only change. Deploy: `make build && km init --lambdas`.
+Rollback: PR revert + `km init --lambdas`. No sandbox redeploy.
+See `docs/superpowers/specs/2026-05-14-slack-ack-reaction-bounded-retry-design.md`
+for the full design spec.
+
 ### Inspecting
 
 ```bash
