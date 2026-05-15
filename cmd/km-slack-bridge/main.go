@@ -80,7 +80,20 @@ func init() {
 	channels := &bridge.DynamoChannelOwnershipFetcher{Client: ddb, TableName: sandboxesTable}
 	tokenFetcher := &bridge.SSMBotTokenFetcher{Client: ssmc, Path: botTokenPath}
 
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	// Phase 75: CheckRedirect=ErrUseLastResponse prevents Go's stdlib from
+	// stripping the Authorization header on cross-host 302 redirects
+	// (files.slack.com → files-edge.slack-edge.com). S3FileDownloader.downloadOneFile
+	// handles 302s manually and re-attaches Authorization on the follow-up GET.
+	// See .planning/phases/75-.../75-RESEARCH.md § Pitfall 1.
+	// Slack API methods (chat.postMessage, reactions.add, auth.test) return JSON
+	// directly with no redirects expected, so disabling auto-redirect is safe for
+	// all Phase 63/67/68 paths that also share this client.
+	httpClient := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 
 	// SlackPosterAdapter posts messages via the Slack Web API using the token
 	// fetched lazily (and cached for 15 min) by SSMBotTokenFetcher.
@@ -240,6 +253,28 @@ func init() {
 		Tokens:     tokenFetcher,
 	}
 	eventsHandler.AckEmoji = ackEmoji
+
+	// Phase 75: wire S3FileDownloader for inbound file_share events.
+	// Shares the same httpClient (redirect-disabled), s3Client, artifactsBucket,
+	// and tokenFetcher as the Phase 68 upload path — no extra SSM round-trips.
+	// When KM_ARTIFACTS_BUCKET is unset (fresh/unconfigured install), the downloader
+	// stays nil and EventsHandler.Handle falls through to text-only SQS dispatch
+	// with a Warn log (intentional fail-closed degradation).
+	if artifactsBucket != "" {
+		eventsHandler.FileDownloader = &bridge.S3FileDownloader{
+			HTTPClient: httpClient,
+			S3:         s3Client,
+			Bucket:     artifactsBucket,
+			Tokens:     tokenFetcher,
+		}
+	} else {
+		slog.Warn("km-slack-bridge: phase-75 file downloader disabled: KM_ARTIFACTS_BUCKET unset; file_share events will dispatch text-only")
+	}
+
+	// Phase 75: wire SlackPoster into EventsHandler so per-file warning messages
+	// (oversize, 403, S3 failure) are posted to the thread before agent delivery.
+	// Shares the same SlackPosterAdapter already wired to handler.Slack (Phase 63).
+	eventsHandler.Slack = poster
 }
 
 func main() {
