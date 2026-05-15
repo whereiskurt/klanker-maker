@@ -136,6 +136,8 @@ func metadataToRecord(meta *SandboxMetadata) SandboxRecord {
 		TeardownPolicy:       meta.TeardownPolicy,
 		SlackChannelID:       meta.SlackChannelID,
 		SlackInboundQueueURL: meta.SlackInboundQueueURL,
+		FailureReason:        meta.FailureReason,
+		FailedAt:             meta.FailedAt,
 	}
 }
 
@@ -258,6 +260,25 @@ func unmarshalSlackFields(item map[string]dynamodbtypes.AttributeValue, meta *Sa
 	}
 }
 
+// unmarshalFailureFields reads Phase 77 failure-discoverability fields from a raw
+// DynamoDB item into SandboxMetadata. Called by ReadSandboxMetadataDynamo and
+// ListAllSandboxesByDynamo after toSandboxMetadata().
+func unmarshalFailureFields(item map[string]dynamodbtypes.AttributeValue, meta *SandboxMetadata) {
+	if v, ok := item["failure_reason"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			meta.FailureReason = sv.Value
+		}
+	}
+	if v, ok := item["failed_at"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok && sv.Value != "" {
+			t, err := time.Parse(time.RFC3339, sv.Value)
+			if err == nil {
+				meta.FailedAt = &t
+			}
+		}
+	}
+}
+
 // marshalSandboxItem converts a SandboxMetadata to a raw DynamoDB item map.
 // Manually builds the item to guarantee correct attribute types — in particular:
 //   - ttl_expiry: AttributeValueMemberN (Number, Unix epoch) for DynamoDB TTL
@@ -340,6 +361,15 @@ func marshalSandboxItem(meta *SandboxMetadata) map[string]dynamodbtypes.Attribut
 		item["slack_inbound_queue_url"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.SlackInboundQueueURL}
 	}
 
+	// Phase 77 — failure discoverability. Only written when failure_reason is
+	// non-empty (i.e. sandbox failed). Symmetric with unmarshalFailureFields.
+	if meta.FailureReason != "" {
+		item["failure_reason"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.FailureReason}
+	}
+	if meta.FailedAt != nil {
+		item["failed_at"] = &dynamodbtypes.AttributeValueMemberS{Value: meta.FailedAt.UTC().Format(time.RFC3339)}
+	}
+
 	return item
 }
 
@@ -374,6 +404,7 @@ func ReadSandboxMetadataDynamo(ctx context.Context, client SandboxMetadataAPI, t
 	}
 
 	unmarshalSlackFields(out.Item, meta)
+	unmarshalFailureFields(out.Item, meta)
 	return meta, nil
 }
 
@@ -438,6 +469,7 @@ func ListAllSandboxesByDynamo(ctx context.Context, client SandboxMetadataAPI, ta
 				continue
 			}
 			unmarshalSlackFields(item, meta)
+			unmarshalFailureFields(item, meta)
 			records = append(records, metadataToRecord(meta))
 		}
 
@@ -480,6 +512,7 @@ func ListAllSandboxMetadataDynamo(ctx context.Context, client SandboxMetadataAPI
 				continue
 			}
 			unmarshalSlackFields(item, meta)
+			unmarshalFailureFields(item, meta)
 			metas = append(metas, *meta)
 		}
 
@@ -600,6 +633,36 @@ func UpdateSandboxStatusDynamo(ctx context.Context, client SandboxMetadataAPI, t
 	})
 	if err != nil {
 		return fmt.Errorf("update status for sandbox %s to %q: %w", sandboxID, status, err)
+	}
+	return nil
+}
+
+// UpdateSandboxStatusAndReasonDynamo updates status, failure_reason, and failed_at
+// in a single UpdateItem call. Used by the create-handler failure branch (Phase 77).
+// reason MUST already be trimmed to ≤1024 chars by the caller.
+// failedAt MUST be a UTC time.Time (caller passes time.Now().UTC()).
+//
+// Mirrors UpdateSandboxStatusDynamo for the same `#s = :status` aliasing reason
+// (status is a DynamoDB reserved word; failure_reason and failed_at are not, per
+// 77-RESEARCH.md § Pitfall 4).
+func UpdateSandboxStatusAndReasonDynamo(ctx context.Context, client SandboxMetadataAPI, tableName, sandboxID, status, reason string, failedAt time.Time) error {
+	_, err := client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: awssdk.String(tableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"sandbox_id": &dynamodbtypes.AttributeValueMemberS{Value: sandboxID},
+		},
+		UpdateExpression: awssdk.String("SET #s = :status, failure_reason = :reason, failed_at = :ts"),
+		ExpressionAttributeNames: map[string]string{
+			"#s": "status",
+		},
+		ExpressionAttributeValues: map[string]dynamodbtypes.AttributeValue{
+			":status": &dynamodbtypes.AttributeValueMemberS{Value: status},
+			":reason": &dynamodbtypes.AttributeValueMemberS{Value: reason},
+			":ts":     &dynamodbtypes.AttributeValueMemberS{Value: failedAt.UTC().Format(time.RFC3339)},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("update status+reason for sandbox %s to %q: %w", sandboxID, status, err)
 	}
 	return nil
 }
