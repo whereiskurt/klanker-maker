@@ -227,6 +227,20 @@ configurable via `KM_SLACK_ACK_EMOJI` Lambda env var (default `eyes`,
 no colons). Bridge-only change — deploy with `make build && km init --lambdas`;
 no sandbox redeploy needed. See `docs/slack-notifications.md` § ACK reaction.
 
+**Phase 67.2: bounded retry.** Transient failures (HTTP 429 with
+`Retry-After`, HTTP 5xx, network errors, and Slack JSON codes
+`internal_error` / `service_unavailable` / `fatal_error` /
+`request_timeout`, plus any unknown error string per the
+default-unknown→transient policy) now retry up to 2× with 200ms→600ms
+backoff and ±25% jitter inside `SlackReactorAdapter.Add`. Terminal
+auth-class errors (`invalid_auth`, `missing_scope`, `token_expired`,
+etc.) log at Error level and do NOT retry. Handler goroutine context
+bumped 5s → 10s to fit the retry budget. The existing `events:
+reaction failed` Warn line in CloudWatch is preserved on final
+exhaustion with a new `attempt=N` field. Bridge-only deploy: `make
+build && km init --lambdas`. See
+`docs/superpowers/specs/2026-05-14-slack-ack-reaction-bounded-retry-design.md`.
+
 See `docs/slack-notifications.md` for the full operator guide including setup steps, troubleshooting, and security model.
 
 ### Slack transcript streaming (Phase 68)
