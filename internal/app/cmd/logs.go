@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
+	cloudwatchlogstypes "github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs/types"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
@@ -77,8 +79,54 @@ func runLogs(cmd *cobra.Command, cfg *config.Config, client kmaws.CWLogsAPI, san
 
 	err := kmaws.TailLogs(ctx, cwClient, logGroup, stream, follow, cmd.OutOrStdout())
 	if err != nil && !errors.Is(err, context.Canceled) {
+		// Phase 77: fall back to the create-handler Lambda log group when the
+		// per-sandbox group never existed (failed sandboxes whose user-data
+		// never ran). Only trigger on ResourceNotFoundException — all other
+		// errors continue to surface as wrapped errors (per Pitfall 5 in
+		// 77-RESEARCH.md, errors.As is used; errors.Is does NOT unwrap %w-wrapped typed errors).
+		var notFound *cloudwatchlogstypes.ResourceNotFoundException
+		if errors.As(err, &notFound) {
+			return runLogsLambdaFallback(cmd, cfg, cwClient, sandboxID, follow)
+		}
 		return fmt.Errorf("tail logs for sandbox %s: %w", sandboxID, err)
 	}
 
+	return nil
+}
+
+// runLogsLambdaFallback queries the create-handler Lambda's CloudWatch log group
+// for entries pertaining to a single sandbox over the last 24h. Triggered when the
+// per-sandbox audit log group does not exist (Phase 77).
+//
+// The --follow flag is a no-op in fallback mode — failure is terminal and the log
+// group will never gain new entries after the create-handler exits.
+func runLogsLambdaFallback(cmd *cobra.Command, cfg *config.Config, client kmaws.CWLogsAPI, sandboxID string, follow bool) error {
+	out := cmd.OutOrStdout()
+	fmt.Fprintln(out, "── per-sandbox log group not found; falling back to create-handler Lambda ──")
+
+	if follow {
+		fmt.Fprintf(out, "--follow is not supported in fallback mode (failure is terminal); use km status %s for the persisted reason.\n", sandboxID)
+		return nil
+	}
+
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	events, err := kmaws.FilterCreateHandlerLogs(ctx, client, cfg.GetResourcePrefix(), sandboxID)
+	if err != nil {
+		return fmt.Errorf("filter create-handler logs for %s: %w", sandboxID, err)
+	}
+
+	if len(events) == 0 {
+		fmt.Fprintf(out, "No create-handler activity found for %s in the last 24h. Try km status %s for the persisted failure reason.\n", sandboxID, sandboxID)
+		return nil
+	}
+
+	for _, ev := range events {
+		ts := time.UnixMilli(ev.Timestamp).UTC().Format(time.RFC3339)
+		fmt.Fprintf(out, "%s %s\n", ts, ev.Message)
+	}
 	return nil
 }

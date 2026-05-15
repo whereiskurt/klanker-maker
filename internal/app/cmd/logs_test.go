@@ -3,6 +3,7 @@ package cmd_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -76,6 +77,164 @@ func (m *mockLogsCWLogsAPI) FilterLogEvents(_ context.Context, input *cloudwatch
 var _ kmaws.CWLogsAPI = (*mockLogsCWLogsAPI)(nil)
 
 // ---- Tests ----
+
+// TestLogsCmd_FallbackWithEvents verifies that when GetLogEvents returns a
+// ResourceNotFoundException, runLogs falls back to FilterLogEvents on the
+// create-handler Lambda log group and prints the prelude + chronological events.
+func TestLogsCmd_FallbackWithEvents(t *testing.T) {
+	cfg := &config.Config{}
+
+	mock := &mockLogsCWLogsAPI{
+		getLogEventsErr: &cwltypes.ResourceNotFoundException{Message: aws.String("group missing")},
+		filterLogEventsOutput: &cloudwatchlogs.FilterLogEventsOutput{
+			Events: []cwltypes.FilteredLogEvent{
+				{Timestamp: aws.Int64(1715000000000), Message: aws.String(`{"level":"error","msg":"slack channel archived"}`)},
+				{Timestamp: aws.Int64(1715000001000), Message: aws.String(`{"level":"info","msg":"retrying"}`)},
+			},
+		},
+	}
+
+	logsCmd := cmd.NewLogsCmdWithClient(cfg, mock)
+	root := &cobra.Command{Use: "km"}
+	root.AddCommand(logsCmd)
+
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"logs", "learn-abc12345"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("logs command returned unexpected error: %v", err)
+	}
+
+	out := buf.String()
+	const prelude = "── per-sandbox log group not found; falling back to create-handler Lambda ──"
+	if !strings.Contains(out, prelude) {
+		t.Errorf("output missing prelude line; got:\n%s", out)
+	}
+	// Events should be printed chronologically as "<RFC3339 ts> <message>".
+	if !strings.Contains(out, `{"level":"error","msg":"slack channel archived"}`) {
+		t.Errorf("output missing first event message; got:\n%s", out)
+	}
+	if !strings.Contains(out, `{"level":"info","msg":"retrying"}`) {
+		t.Errorf("output missing second event message; got:\n%s", out)
+	}
+	// Timestamps should be RFC3339 format — check for at least one date prefix.
+	if !strings.Contains(out, "2024-05-0") && !strings.Contains(out, "2024-05-1") {
+		// Just check there's some RFC3339-ish date in output.
+		if !strings.Contains(out, "T") || !strings.Contains(out, "Z") {
+			t.Errorf("output does not appear to contain RFC3339 timestamps; got:\n%s", out)
+		}
+	}
+}
+
+// TestLogsCmd_FallbackBothEmpty verifies that when GetLogEvents returns
+// ResourceNotFoundException AND FilterLogEvents returns no events, the command
+// prints the prelude and a friendly empty-state hint, then exits cleanly.
+func TestLogsCmd_FallbackBothEmpty(t *testing.T) {
+	cfg := &config.Config{}
+
+	mock := &mockLogsCWLogsAPI{
+		getLogEventsErr: &cwltypes.ResourceNotFoundException{Message: aws.String("group missing")},
+		filterLogEventsOutput: &cloudwatchlogs.FilterLogEventsOutput{
+			Events: []cwltypes.FilteredLogEvent{},
+		},
+	}
+
+	logsCmd := cmd.NewLogsCmdWithClient(cfg, mock)
+	root := &cobra.Command{Use: "km"}
+	root.AddCommand(logsCmd)
+
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"logs", "learn-abc12345"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("logs command returned unexpected error: %v", err)
+	}
+
+	out := buf.String()
+	const prelude = "── per-sandbox log group not found; falling back to create-handler Lambda ──"
+	if !strings.Contains(out, prelude) {
+		t.Errorf("output missing prelude line; got:\n%s", out)
+	}
+	const emptyHint = "No create-handler activity found for learn-abc12345 in the last 24h."
+	if !strings.Contains(out, emptyHint) {
+		t.Errorf("output missing empty-state hint; got:\n%s", out)
+	}
+	const statusHint = "km status learn-abc12345"
+	if !strings.Contains(out, statusHint) {
+		t.Errorf("output missing km status hint; got:\n%s", out)
+	}
+}
+
+// TestLogsCmd_FallbackFollow_NoOp verifies that when GetLogEvents returns
+// ResourceNotFoundException and --follow is set, the command prints the prelude
+// and a note that --follow is not supported in fallback mode, does NOT call
+// FilterLogEvents, and exits cleanly.
+func TestLogsCmd_FallbackFollow_NoOp(t *testing.T) {
+	cfg := &config.Config{}
+
+	mock := &mockLogsCWLogsAPI{
+		getLogEventsErr: &cwltypes.ResourceNotFoundException{Message: aws.String("group missing")},
+	}
+
+	logsCmd := cmd.NewLogsCmdWithClient(cfg, mock)
+	root := &cobra.Command{Use: "km"}
+	root.AddCommand(logsCmd)
+
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"logs", "learn-abc12345", "--follow"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("logs command returned unexpected error: %v", err)
+	}
+
+	out := buf.String()
+	const prelude = "── per-sandbox log group not found; falling back to create-handler Lambda ──"
+	if !strings.Contains(out, prelude) {
+		t.Errorf("output missing prelude line; got:\n%s", out)
+	}
+	if !strings.Contains(out, "--follow is not supported in fallback mode") {
+		t.Errorf("output missing --follow note; got:\n%s", out)
+	}
+	// FilterLogEvents must NOT be called when --follow is set in fallback mode.
+	if mock.filterLogEventsInput != nil {
+		t.Errorf("expected FilterLogEvents NOT to be called in follow-fallback mode, but it was")
+	}
+}
+
+// TestLogsCmd_NonNotFoundError_Surfaces verifies that non-ResourceNotFoundException
+// errors from GetLogEvents are returned as wrapped errors without triggering the
+// fallback path (FilterLogEvents must NOT be called).
+func TestLogsCmd_NonNotFoundError_Surfaces(t *testing.T) {
+	cfg := &config.Config{}
+
+	mock := &mockLogsCWLogsAPI{
+		getLogEventsErr: errors.New("network blip"),
+	}
+
+	logsCmd := cmd.NewLogsCmdWithClient(cfg, mock)
+	root := &cobra.Command{Use: "km"}
+	root.AddCommand(logsCmd)
+
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"logs", "learn-abc12345"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error for non-ResourceNotFoundException failure, got nil")
+	}
+	// Fallback must NOT be triggered.
+	if mock.filterLogEventsInput != nil {
+		t.Errorf("expected FilterLogEvents NOT to be called for non-ResourceNotFoundException error")
+	}
+}
 
 // TestLogsCmd_PerSandboxGroupPresent proves that:
 //  1. NewLogsCmdWithClient injects the mock client correctly (DI seam works).
