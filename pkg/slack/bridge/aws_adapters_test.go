@@ -1120,6 +1120,11 @@ func TestSlackReactorAdapter_GenericError_Propagates(t *testing.T) {
 }
 
 func TestSlackReactorAdapter_RateLimited(t *testing.T) {
+	// Phase 67.2: with the new retry loop, the server must return 429
+	// on EVERY call (not once-then-success). Otherwise the loop sleeps
+	// ~5s between attempts and the test takes ~10s of wall-clock.
+	// Inject a no-op Sleep stub so the test stays sub-millisecond
+	// while still asserting the *ErrSlackRateLimited contract.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "5")
 		w.WriteHeader(http.StatusTooManyRequests)
@@ -1133,7 +1138,12 @@ func TestSlackReactorAdapter_RateLimited(t *testing.T) {
 		},
 	}, Path: "/km/slack/bot-token"}
 
-	adapter := &bridge.SlackReactorAdapter{HTTPClient: srv.Client(), BaseURL: srv.URL, Tokens: tokenFetcher}
+	adapter := &bridge.SlackReactorAdapter{
+		HTTPClient: srv.Client(),
+		BaseURL:    srv.URL,
+		Tokens:     tokenFetcher,
+		Sleep:      func(time.Duration) {}, // Phase 67.2: skip real wall-clock
+	}
 	err := adapter.Add(context.Background(), "C01234567", "1714280400.001", "eyes")
 	if err == nil {
 		t.Fatal("expected ErrSlackRateLimited, got nil")
@@ -1144,5 +1154,8 @@ func TestSlackReactorAdapter_RateLimited(t *testing.T) {
 	}
 	if rl.Method != "reactions.add" {
 		t.Errorf("expected Method=reactions.add, got %q", rl.Method)
+	}
+	if rl.RetryAfterSeconds != 5 {
+		t.Errorf("expected RetryAfterSeconds=5, got %d", rl.RetryAfterSeconds)
 	}
 }
