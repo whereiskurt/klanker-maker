@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 75-04-PLAN.md (IAM + lifecycle + scope checks for Slack file attachments)
-last_updated: "2026-05-15T15:14:01.790Z"
+stopped_at: Completed 75-05-PLAN.md (wire S3FileDownloader into Lambda cold start)
+last_updated: "2026-05-15T15:24:11.908Z"
 last_activity: 2026-05-15
 progress:
   total_phases: 88
   completed_phases: 77
   total_plans: 329
-  completed_plans: 289
+  completed_plans: 290
   percent: 93
 ---
 
@@ -329,6 +329,7 @@ Progress: [█████████░] 93%
 | Phase 75-slack-inbound-file-attachments-images-pdfs-for-per-sandbox-channels P03 | 137s | 2 tasks | 2 files |
 | Phase 75-slack-inbound-file-attachments-images-pdfs-for-per-sandbox-channels P02 | 438 | 2 tasks | 4 files |
 | Phase 75-slack-inbound-file-attachments-images-pdfs-for-per-sandbox-channels P04 | 12min | 3 tasks | 7 files |
+| Phase 75-slack-inbound-file-attachments-images-pdfs-for-per-sandbox-channels P05 | 31541344 | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -944,6 +945,8 @@ Recent decisions affecting current work:
 - [Phase 75]: Bridge IAM scoped to slack-inbound/* prefix only (not bucket-wide); memory_size 256→1024 for Pitfall 2 PutObject retry-rewindability
 - [Phase 75]: New standalone s3-artifacts-lifecycle module (no required_providers per project convention); sourced via KM_ARTIFACTS_BUCKET env var matching lambda-slack-bridge pattern
 - [Phase 75]: files:read added to VerifyEventsAPIScopes + checkSlackAppEventsScopes required slices; success message updated to enumerate all four required scopes
+- [Phase 75-slack-inbound-file-attachments-images-pdfs-for-per-sandbox-channels]: Shared httpClient with CheckRedirect=ErrUseLastResponse: safe for Slack API methods (no redirects); avoids two http.Client instances
+- [Phase 75-slack-inbound-file-attachments-images-pdfs-for-per-sandbox-channels]: S3FileDownloader wired conditionally on KM_ARTIFACTS_BUCKET — nil guard matches Phase 68 pattern for graceful degradation
 
 ### Roadmap Evolution
 
@@ -1046,6 +1049,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-15T15:14:01.783Z
-Stopped at: Completed 75-04-PLAN.md (IAM + lifecycle + scope checks for Slack file attachments)
+Last session: 2026-05-15T15:24:11.901Z
+Stopped at: Completed 75-05-PLAN.md (wire S3FileDownloader into Lambda cold start)
 Resume file: None
