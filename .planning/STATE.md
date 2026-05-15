@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 77-02-PLAN.md (extractFailureReason helper + failure branch wired to UpdateSandboxStatusAndReasonDynamo)
-last_updated: "2026-05-15T00:14:32.738Z"
+stopped_at: "Completed 77-03-PLAN.md (km status Failure:/Failed At: render for failed/nocap sandboxes)"
+last_updated: "2026-05-15T00:22:18.946Z"
 last_activity: 2026-05-15
 progress:
   total_phases: 87
-  completed_phases: 75
+  completed_phases: 76
   total_plans: 320
-  completed_plans: 280
+  completed_plans: 282
   percent: 93
 ---
 
@@ -319,6 +319,7 @@ Progress: [█████████░] 93%
 | Phase 77 P00 | 4min | 3 tasks | 5 files |
 | Phase 77-failed-sandbox-discoverability-persist-failure-reason-in-ddb-and-km-logs-lambda-fallback P1 | 3min | 2 tasks | 4 files |
 | Phase 77 P02 | 4min | 2 tasks | 2 files |
+| Phase 77-failed-sandbox-discoverability P03 | 630 | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -914,6 +915,7 @@ Recent decisions affecting current work:
 - [Phase 77-failed-sandbox-discoverability-persist-failure-reason-in-ddb-and-km-logs-lambda-fallback]: marshalSandboxItem includes failure fields to prevent silent drop on read-modify-write paths (same rationale as SlackInboundQueueURL fix)
 - [Phase 77]: Bottom-up scan chosen for extractFailureReason over regex — returns last Error: line (most actionable root cause in km error format)
 - [Phase 77]: UpdateSandboxStatusDynamo removed from failure branch entirely; UpdateSandboxStatusAndReasonDynamo subsumes it for both failed+nocap status paths
+- [Phase 77-failed-sandbox-discoverability]: Failure:/Failed At: lines placed AFTER Status: and BEFORE Created At: — logically paired with failure status; gate uses rec.Status field not field presence for defensive correctness
 
 ### Roadmap Evolution
 
@@ -1015,6 +1017,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-15T00:14:32.729Z
-Stopped at: Completed 77-02-PLAN.md (extractFailureReason helper + failure branch wired to UpdateSandboxStatusAndReasonDynamo)
+Last session: 2026-05-15T00:22:08.401Z
+Stopped at: Completed 77-03-PLAN.md (km status Failure:/Failed At: render for failed/nocap sandboxes)
 Resume file: None

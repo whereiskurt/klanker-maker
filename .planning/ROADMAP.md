@@ -1650,10 +1650,10 @@ Plans:
 **Goal:** [To be planned]
 **Requirements**: TBD
 **Depends on:** Phase 76
-**Plans:** 3/5 plans executed
+**Plans:** 5/5 plans complete
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 77 to break down)
+- [x] TBD (run /gsd:plan-phase 77 to break down) (completed 2026-05-15)
 
 ### Phase 78: km agent auth — SSM-mediated OAuth login for claude and codex CLIs inside sandboxes (paste-code for claude, port-forward 1455 for codex)
 
