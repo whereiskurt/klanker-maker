@@ -360,6 +360,23 @@ func printSandboxStatus(ctx context.Context, cmd *cobra.Command, rec *kmaws.Sand
 		statusDisplay = colorizeListStatus(rec.Status)
 	}
 	fmt.Fprintf(out, "Status:      %s\n", statusDisplay)
+
+	// Phase 77 — surface the persisted failure reason for failed/nocap sandboxes.
+	// rec.FailureReason and rec.FailedAt are populated by the create-handler at fail
+	// time (see UpdateSandboxStatusAndReasonDynamo). Older records, or records where
+	// the DDB write itself failed, read back as zero-value — print the <unknown> hint
+	// so the operator knows the next move (km logs).
+	if rec.Status == "failed" || rec.Status == "nocap" {
+		if rec.FailureReason != "" {
+			fmt.Fprintf(out, "Failure:     %s\n", rec.FailureReason)
+			if rec.FailedAt != nil {
+				fmt.Fprintf(out, "Failed At:   %s\n", rec.FailedAt.Local().Format("2006-01-02 3:04:05 PM MST"))
+			}
+		} else {
+			fmt.Fprintf(out, "Failure:     <unknown — try km logs %s>\n", rec.SandboxID)
+		}
+	}
+
 	fmt.Fprintf(out, "Created At:  %s\n", rec.CreatedAt.Local().Format("2006-01-02 3:04:05 PM MST"))
 	if rec.TTLExpiry != nil {
 		fmt.Fprintf(out, "TTL Expiry:  %s\n", rec.TTLExpiry.Local().Format("2006-01-02 3:04:05 PM MST"))
