@@ -313,6 +313,27 @@ km doctor
 See `docs/slack-notifications.md` for full operator guide and
 `.planning/phases/68-…/deferred-items.md` for fix paths.
 
+### Slack inbound file attachments (Phase 75)
+
+Per-sandbox channels now accept file_share uploads (images, PDFs, etc.).
+Bridge Lambda downloads with bot token, stages to S3 under
+`slack-inbound/<sandbox-id>/<thread_ts>/`, sandbox poller mirrors to
+`/workspace/.km-slack/attachments/<thread_ts>/`, a natural-language
+wrapper prepended to the prompt lists absolute paths + MIME types.
+Caps: 25 files/msg, 100 MB/file. Over-cap → thread-reply warning.
+
+New bot scope: `files:read`. Operator path: re-install the Slack app
+with the new scope, run `km slack rotate-token --bot-token <new>`,
+then `make build && km init` (NOT `km init --lambdas` — that path
+doesn't deploy bridge zips).
+
+Lambda memory_size bumped 256 → 1024 to fit 100MB in-memory file
+buffering for SDK PutObject retry-rewindability.
+
+See `docs/slack-notifications.md` § Slack inbound file attachments
+(Phase 75) for the full operator runbook. Authoritative design:
+`docs/superpowers/specs/2026-05-15-slack-inbound-file-attachments-design.md`.
+
 ## VS Code Remote-SSH (Phase 73)
 
 Connect local desktop VS Code to a sandbox via SSM port-forward + per-sandbox ed25519 keypair.

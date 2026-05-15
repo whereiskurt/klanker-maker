@@ -812,3 +812,74 @@ instead of a native Slack file attachment.
 ### Phase B preview (deferred, not part of Phase 68)
 
 The DynamoDB stream-messages table written by Phase 68 is the integration seam for a future "reaction-triggered session fork" phase: an operator reaction (e.g. 🍴) on a streamed message would mint a new Claude session forked at that transcript offset. Phase 68 has no consumer for the table — it just writes.
+
+## Slack inbound file attachments (Phase 75)
+
+Users can drag-and-drop files (images, PDFs, etc.) into a per-sandbox
+`#sb-{sandbox-id}` channel. The bridge Lambda downloads each file from
+Slack using the bot token, stages it to S3, and the sandbox-side poller
+mirrors each file to `/workspace/.km-slack/attachments/<thread_ts>/`.
+A natural-language master-prompt wrapper is prepended to the Claude
+turn enumerating absolute paths and MIME types — Claude reads each file
+with its Read tool when relevant to the question.
+
+**Profile field:** No new field. Gated on the existing
+`spec.cli.notifySlackInboundEnabled: true` (Phase 67).
+
+**Caps:**
+
+- 25 files per message — over-cap files dropped with thread-reply warning
+- 100 MB per file — oversize files dropped with thread-reply warning
+
+**One-time operator setup (after Phase 75 deploys):**
+
+1. Add `files:read` to the Slack App's bot scopes (App config → OAuth & Permissions)
+2. Re-install the app to your workspace (admin approval may be required)
+3. Rotate the bot token to pick up the new scope:
+   ```bash
+   km slack rotate-token --bot-token <new-token-from-Slack-App-admin>
+   ```
+4. Rebuild + redeploy the bridge:
+   ```bash
+   make build && km init
+   ```
+   **Important:** use full `km init`, NOT `km init --lambdas`. The lambdas-only
+   path builds the zip but does NOT deploy it (see `project_km_init_lambdas_doesnt_deploy`
+   in operator memory).
+5. Verify scopes via `km doctor` — `slack_app_events_subscription` should
+   report `(channels:history, groups:history, reactions:write, files:read)`.
+
+**Sandbox provisioning:** Existing sandboxes do NOT get the Phase 75
+userdata changes retroactively (the poller bash is baked into userdata
+at create time). Run `km destroy && km create` on any sandbox that
+needs file-attachment support.
+
+**S3 staging layout:**
+
+- Key format: `slack-inbound/<sandbox-id>/<thread_ts>/<file_id>-<sanitized_name>`
+- `<file_id>` is the Slack `F012345` identifier — guarantees uniqueness
+  even when two files in the same thread share a name
+- `<sanitized_name>` strips path-unsafe characters and truncates to 255 bytes
+- **30-day lifecycle expiration** on the `slack-inbound/` prefix (matches
+  the `km-slack-threads` DDB TTL)
+
+**Sandbox-side layout:**
+
+- Directory: `/workspace/.km-slack/attachments/<thread_ts>/`
+- Files persist for the sandbox lifetime (cleaned by `km destroy`
+  taking the EBS volume); subsequent turns in the same thread don't
+  re-download
+
+**Troubleshooting:**
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| 👀 appears but Claude doesn't read the file | `files:read` scope missing | Re-install app + `km slack rotate-token`; verify with `km doctor` |
+| 👀 appears, agent replies as text-only | Sandbox was provisioned before Phase 75 deploy | `km destroy && km create` |
+| Bridge logs "files:read scope may be missing" | Same as above | Same as above |
+| Bridge logs "request body offset reset failed" | Lambda memory_size < 1024 (pre-bump) | Verify `terragrunt plan` and re-apply `infra/live/use1/lambda-slack-bridge/` |
+| First 25 of N files attached; rest skipped | 25-file cap by design | Split the upload across multiple messages |
+| Skipped foo.png (>100 MB cap) | 100MB cap by design | Trim or split the file |
+
+**Authoritative design:** `docs/superpowers/specs/2026-05-15-slack-inbound-file-attachments-design.md` —
+full PRD with failure-handling matrix, Pitfall catalog, and rollback procedure.
