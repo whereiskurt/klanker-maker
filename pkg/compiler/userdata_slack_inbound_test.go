@@ -400,6 +400,83 @@ func TestUserdata_SystemdEnvFileNoExport(t *testing.T) {
 	}
 }
 
+// TestUserdata_SlackInbound_AttachmentMirrorBlock — Phase 75.
+// The inbound poller heredoc must contain the S3-to-local mirror block that
+// extracts .attachments[]? from the SQS body and copies each file to
+// /workspace/.km-slack/attachments/<thread_ts>/. The mirror block must
+// occur BEFORE the claude -p invocation in bash control flow.
+func TestUserdata_SlackInbound_AttachmentMirrorBlock(t *testing.T) {
+	p := minimalSlackInboundProfile(t, true)
+	out := compileInboundUserData(t, p)
+	poller := extractSlackInboundPoller(t, out)
+
+	must := []string{
+		`jq -c '.attachments[]?'`,
+		"/workspace/.km-slack/attachments/",
+		"mkdir -p",
+		`aws s3 cp "s3://$KM_ARTIFACTS_BUCKET/`,
+		"chown sandbox:sandbox",
+	}
+	for _, s := range must {
+		if !strings.Contains(poller, s) {
+			t.Fatalf("attachment mirror block missing substring %q\n--- poller excerpt ---\n%s", s, abbreviateUD(poller))
+		}
+	}
+
+	// Mirror block must occur BEFORE claude -p invocation.
+	claudeIdx := strings.Index(poller, "claude -p")
+	mirrorIdx := strings.Index(poller, "/workspace/.km-slack/attachments/")
+	if mirrorIdx < 0 || claudeIdx < 0 || mirrorIdx >= claudeIdx {
+		t.Fatalf("mirror block must precede claude -p invocation (mirrorIdx=%d, claudeIdx=%d)\n%s", mirrorIdx, claudeIdx, abbreviateUD(poller))
+	}
+}
+
+// TestUserdata_SlackInbound_MasterPromptWrapper — Phase 75.
+// When attachments are present, the inbound poller must prepend a
+// master-prompt wrapper to the prompt file before invoking claude -p.
+// The wrapper must include exact phrasing from CONTEXT.md (including em-dash).
+// The wrapper must be gated on ATTACH_COUNT > 0.
+func TestUserdata_SlackInbound_MasterPromptWrapper(t *testing.T) {
+	p := minimalSlackInboundProfile(t, true)
+	out := compileInboundUserData(t, p)
+	poller := extractSlackInboundPoller(t, out)
+
+	// Exact phrasing from CONTEXT.md.
+	must := []string{
+		"The user attached the following file(s)",
+		"Read them with your Read tool when relevant",
+		"User's message:",
+		"[no text \xe2\x80\x94 file-only]", // em-dash U+2014 = UTF-8 0xE2 0x80 0x94
+	}
+	for _, s := range must {
+		if !strings.Contains(poller, s) {
+			t.Fatalf("master-prompt wrapper missing substring %q\n--- poller excerpt ---\n%s", s, abbreviateUD(poller))
+		}
+	}
+
+	// Wrapper must be gated on ATTACH_COUNT > 0.
+	if !strings.Contains(poller, "ATTACH_COUNT") || !strings.Contains(poller, "-gt 0") {
+		t.Fatalf("wrapper must be gated on ATTACH_COUNT -gt 0\n%s", abbreviateUD(poller))
+	}
+}
+
+// TestUserdata_SlackInbound_AllowsEmptyTextWhenAttachments — Phase 75 Pitfall 4.
+// The malformed-message guard must be updated to admit file-only uploads
+// (empty text + non-empty attachments). The OLD standalone form
+// `[ -z "$TEXT" ]` alone must be replaced by the compound
+// `{ [ -z "$TEXT" ] && [ "$ATTACH_COUNT" -eq 0 ]; }`.
+func TestUserdata_SlackInbound_AllowsEmptyTextWhenAttachments(t *testing.T) {
+	p := minimalSlackInboundProfile(t, true)
+	out := compileInboundUserData(t, p)
+	poller := extractSlackInboundPoller(t, out)
+
+	// The new compound expression must be present (Pitfall 4 fix).
+	compound := `[ -z "$TEXT" ] && [ "$ATTACH_COUNT" -eq 0 ]`
+	if !strings.Contains(poller, compound) {
+		t.Fatalf("malformed-message guard missing Pitfall-4 compound expression %q\n--- poller excerpt ---\n%s", compound, abbreviateUD(poller))
+	}
+}
+
 // TestUserdata_ShellEnvFileStillWritten — Phase 67-11 follow-up.
 // The original shell-format /etc/profile.d/km-notify-env.sh must STILL be
 // written — interactive SSM sessions, the km-notify-hook bash script, and
