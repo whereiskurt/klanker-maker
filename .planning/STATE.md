@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 77-00-PLAN.md (CWLogsAPI FilterLogEvents interface, NewLogsCmdWithClient DI seam, mockSandboxMetadataAPI test infrastructure)
-last_updated: "2026-05-14T23:57:44.406Z"
-last_activity: 2026-05-14
+stopped_at: Completed 77-01-PLAN.md (FailureReason/FailedAt schema + UpdateSandboxStatusAndReasonDynamo helper + read-path plumbing)
+last_updated: "2026-05-15T00:09:10.144Z"
+last_activity: 2026-05-15
 progress:
   total_phases: 87
   completed_phases: 75
   total_plans: 320
-  completed_plans: 278
+  completed_plans: 279
   percent: 93
 ---
 
@@ -31,7 +31,7 @@ Plan: 6 of 6 in phase 79 (all complete; 79-05 closeout + UAT passed 2026-05-10)
 Total Plans in Phase: 6
 Current Plan: 14
 Status: in-progress
-Last activity: 2026-05-14
+Last activity: 2026-05-15
 
 Progress: [█████████░] 93%
 
@@ -317,6 +317,7 @@ Progress: [█████████░] 93%
 | Phase 80.1-auto-detect-existing-oidc-provider-in-cluster-irsa-module-supporting-same-account-irsa-without-manual-flags P03 | 2 | 3 tasks | 3 files |
 | Phase 80.1-auto-detect-existing-oidc-provider-in-cluster-irsa-module-supporting-same-account-irsa-without-manual-flags P04 | 18 | 2 tasks | 2 files |
 | Phase 77 P00 | 4min | 3 tasks | 5 files |
+| Phase 77-failed-sandbox-discoverability-persist-failure-reason-in-ddb-and-km-logs-lambda-fallback P1 | 3min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -907,6 +908,9 @@ Recent decisions affecting current work:
 - [Phase 77]: FilterLogEvents added to CWLogsAPI interface end — real *cloudwatchlogs.Client already satisfies it natively
 - [Phase 77]: NewLogsCmdWithClient DI seam follows NewStatusCmdWithFetcher pattern: nil client builds real cloudwatchlogs.Client at runtime
 - [Phase 77]: mockSandboxMetadataAPI is a private copy in create-handler package (pkg/aws/sandbox_dynamo_test.go is aws_test and cannot be imported cross-package)
+- [Phase 77-failed-sandbox-discoverability-persist-failure-reason-in-ddb-and-km-logs-lambda-fallback]: failure_reason and failed_at stored as RFC3339 String attributes — consistent with locked_at/expires_at convention
+- [Phase 77-failed-sandbox-discoverability-persist-failure-reason-in-ddb-and-km-logs-lambda-fallback]: UpdateSandboxStatusAndReasonDynamo coexists with UpdateSandboxStatusDynamo; Wave 2 plans wire new helper into create-handler failure branch
+- [Phase 77-failed-sandbox-discoverability-persist-failure-reason-in-ddb-and-km-logs-lambda-fallback]: marshalSandboxItem includes failure fields to prevent silent drop on read-modify-write paths (same rationale as SlackInboundQueueURL fix)
 
 ### Roadmap Evolution
 
@@ -1008,6 +1012,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-14T23:57:44.399Z
-Stopped at: Completed 77-00-PLAN.md (CWLogsAPI FilterLogEvents interface, NewLogsCmdWithClient DI seam, mockSandboxMetadataAPI test infrastructure)
+Last session: 2026-05-15T00:09:10.137Z
+Stopped at: Completed 77-01-PLAN.md (FailureReason/FailedAt schema + UpdateSandboxStatusAndReasonDynamo helper + read-path plumbing)
 Resume file: None
