@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 77-01-PLAN.md (FailureReason/FailedAt schema + UpdateSandboxStatusAndReasonDynamo helper + read-path plumbing)
-last_updated: "2026-05-15T00:09:10.144Z"
+stopped_at: Completed 77-02-PLAN.md (extractFailureReason helper + failure branch wired to UpdateSandboxStatusAndReasonDynamo)
+last_updated: "2026-05-15T00:14:32.738Z"
 last_activity: 2026-05-15
 progress:
   total_phases: 87
   completed_phases: 75
   total_plans: 320
-  completed_plans: 279
+  completed_plans: 280
   percent: 93
 ---
 
@@ -318,6 +318,7 @@ Progress: [█████████░] 93%
 | Phase 80.1-auto-detect-existing-oidc-provider-in-cluster-irsa-module-supporting-same-account-irsa-without-manual-flags P04 | 18 | 2 tasks | 2 files |
 | Phase 77 P00 | 4min | 3 tasks | 5 files |
 | Phase 77-failed-sandbox-discoverability-persist-failure-reason-in-ddb-and-km-logs-lambda-fallback P1 | 3min | 2 tasks | 4 files |
+| Phase 77 P02 | 4min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -911,6 +912,8 @@ Recent decisions affecting current work:
 - [Phase 77-failed-sandbox-discoverability-persist-failure-reason-in-ddb-and-km-logs-lambda-fallback]: failure_reason and failed_at stored as RFC3339 String attributes — consistent with locked_at/expires_at convention
 - [Phase 77-failed-sandbox-discoverability-persist-failure-reason-in-ddb-and-km-logs-lambda-fallback]: UpdateSandboxStatusAndReasonDynamo coexists with UpdateSandboxStatusDynamo; Wave 2 plans wire new helper into create-handler failure branch
 - [Phase 77-failed-sandbox-discoverability-persist-failure-reason-in-ddb-and-km-logs-lambda-fallback]: marshalSandboxItem includes failure fields to prevent silent drop on read-modify-write paths (same rationale as SlackInboundQueueURL fix)
+- [Phase 77]: Bottom-up scan chosen for extractFailureReason over regex — returns last Error: line (most actionable root cause in km error format)
+- [Phase 77]: UpdateSandboxStatusDynamo removed from failure branch entirely; UpdateSandboxStatusAndReasonDynamo subsumes it for both failed+nocap status paths
 
 ### Roadmap Evolution
 
@@ -1012,6 +1015,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-15T00:09:10.137Z
-Stopped at: Completed 77-01-PLAN.md (FailureReason/FailedAt schema + UpdateSandboxStatusAndReasonDynamo helper + read-path plumbing)
+Last session: 2026-05-15T00:14:32.729Z
+Stopped at: Completed 77-02-PLAN.md (extractFailureReason helper + failure branch wired to UpdateSandboxStatusAndReasonDynamo)
 Resume file: None
