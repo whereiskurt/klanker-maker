@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: "Awaiting operator UAT for 67.2-03 Task 3 (checkpoint:human-verify) — make build && km init --lambdas, then verify 👀 reaction lands in #sb-{id}"
-last_updated: "2026-05-15T02:08:06.467Z"
+stopped_at: "Completed 67.2-03-PLAN.md — REQ-ACK-RETRY-DEPLOY end-to-end verified; bridge Lambda redeployed with retry loop; 👀 confirmed on live #sb-{id} smoke-test"
+last_updated: "2026-05-15T02:58:00.199Z"
 last_activity: 2026-05-15
 progress:
   total_phases: 88
@@ -319,6 +319,7 @@ Progress: [█████████░] 93%
 | Phase 67.2 P01 | 4 min | 3 tasks | 3 files |
 | Phase 67.2 P02 | 11min | 3 tasks | 3 files |
 | Phase 67.2 P03 | 2 min (Tasks 1-2; Task 3 awaiting operator UAT) | 2 tasks | 2 files |
+| Phase 67.2 P03 | 50min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -911,6 +912,7 @@ Recent decisions affecting current work:
 - [Phase 67.2]: Used math/rand v1 (not crypto/rand or v2) for jitter — locked CONTEXT.md decision; v1's *rand.Rand fits test injection cleanly
 - [Phase 67.2]: Removed inline already_reacted shortcut — classifier returns classSuccess for that case (single source of truth)
 - [Phase 67.2]: Per-iteration doOneAttempt helper instead of inline body — addresses RESEARCH.md Pitfall 4 (defer resp.Body.Close stacking on retry exhaustion)
+- [Phase 67.2]: 67.2-03: Operator UAT APPROVED 2026-05-15 — bridge Lambda redeployed (full `km init` required, not `km init --lambdas` partial path), live 👀 reaction confirmed on #sb-{id} smoke-test. Documentation accuracy issue noted: plan/spec/CLAUDE.md/slack-notifications.md all say `km init --lambdas` deploys the bridge zip — actually requires full `km init` since the bridge zip uploads via terragrunt-applied lambda-slack-bridge module. Phase 80 follow-up logged: `km init` should auto-remediate Terraform lock-file drift introduced by Phase 80 hashicorp/tls provider addition (operator hit this and resolved on a fresh workstation via `terragrunt run --all init -- -upgrade`).
 
 ### Roadmap Evolution
 
@@ -934,7 +936,6 @@ Recent decisions affecting current work:
 - [Phase 3]: iptables DNAT interaction with IMDSv2 hop limit not fully resolved on EC2 — research recommends `/gsd:research-phase` before Phase 3 planning
 - [Phase 3]: HTTPS proxy mode (SNI-only vs. full MITM) is a security trade-off that needs an explicit decision before Phase 3 implementation
 - [Phase 4]: Filesystem policy enforcement mechanism (seccomp, Linux mount namespaces, OverlayFS) not decided — research recommends `/gsd:research-phase` before Phase 4 planning
-- Phase 67.2-03 Task 3 awaits operator UAT (checkpoint:human-verify): operator must run 'make build && km init --lambdas' and confirm the eyes reaction lands within ~2s of a live #sb-{id} Slack message post. REQ-ACK-RETRY-DEPLOY pending end-to-end verification.
 
 ### Quick Tasks Completed
 
@@ -1014,6 +1015,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-15T02:07:53.315Z
-Stopped at: Awaiting operator UAT for 67.2-03 Task 3 (checkpoint:human-verify) — make build && km init --lambdas, then verify 👀 reaction lands in #sb-{id}
+Last session: 2026-05-15T02:57:50.149Z
+Stopped at: Completed 67.2-03-PLAN.md — REQ-ACK-RETRY-DEPLOY end-to-end verified; bridge Lambda redeployed with retry loop; 👀 confirmed on live #sb-{id} smoke-test
 Resume file: None
