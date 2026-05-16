@@ -3327,7 +3327,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		if p.Spec.CLI.NotifySlackInboundEnabled {
 			threadsTable := os.Getenv("KM_SLACK_THREADS_TABLE")
 			if threadsTable == "" {
-				threadsTable = "km-slack-threads"
+				threadsTable = resourcePrefix + "-slack-threads"
 			}
 			notifyEnv["KM_SLACK_THREADS_TABLE"] = threadsTable
 			// KM_SLACK_INBOUND_QUEUE_URL is a runtime value injected by km create.
@@ -3343,7 +3343,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 			params.SlackInboundEnabled = true
 			threadsTable := os.Getenv("KM_SLACK_THREADS_TABLE")
 			if threadsTable == "" {
-				threadsTable = "km-slack-threads"
+				threadsTable = resourcePrefix + "-slack-threads"
 			}
 			params.SlackThreadsTableName = threadsTable
 		}
@@ -3358,7 +3358,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		// hook itself short-circuits when the feature is off.
 		streamTable := os.Getenv("KM_SLACK_STREAM_TABLE")
 		if streamTable == "" {
-			streamTable = "km-slack-stream-messages"
+			streamTable = resourcePrefix + "-slack-stream-messages"
 		}
 		params.SlackStreamMessagesTableName = streamTable
 
