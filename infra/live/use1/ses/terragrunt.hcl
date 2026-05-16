@@ -30,19 +30,13 @@ remote_state {
 }
 
 terraform {
-  source = "${local.repo_root}/infra/modules/ses/v1.0.0"
+  source = "${local.repo_root}/infra/modules/ses/v2.0.0"
 }
 
 inputs = {
-  # Use email_subdomain so a non-default operator value (e.g. "km" instead of
-  # "sandboxes") flows through to SES. The hardcoded "sandboxes." here used to
-  # mismatch the DNS zone name for any non-default install — DKIM records had
-  # nowhere to land. Site-vars source is site.hcl line 7.
-  domain                    = "${local.site_vars.locals.site.email_subdomain}.${local.site_vars.locals.site.domain}"
-  route53_zone_id           = get_env("KM_ROUTE53_ZONE_ID", "")
-  artifact_bucket_name      = get_env("KM_ARTIFACTS_BUCKET", "")
-  artifact_bucket_arn       = "arn:aws:s3:::${get_env("KM_ARTIFACTS_BUCKET", "")}"
-  email_create_handler_arn  = get_env("KM_EMAIL_HANDLER_ARN", "")
-  resource_prefix           = get_env("KM_RESOURCE_PREFIX", "km")
-  activate_rule_set         = tobool(get_env("KM_SES_ACTIVATE_RULESET", "true"))
+  # v2.0.0: rule-only module; rule set, domain identity, DKIM, and MX records
+  # are owned by the foundation module (ses-shared-rule-set/v1.0.0, Phase 84).
+  email_domain         = "${local.site_vars.locals.site.email_subdomain}.${local.site_vars.locals.site.domain}"
+  artifact_bucket_name = get_env("KM_ARTIFACTS_BUCKET", "")
+  resource_prefix      = get_env("KM_RESOURCE_PREFIX", "km")
 }
