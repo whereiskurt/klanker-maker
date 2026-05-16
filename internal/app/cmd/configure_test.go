@@ -571,3 +571,92 @@ func TestConfigureInteractivePromptsUseNewNames(t *testing.T) {
 		t.Errorf("interactive prompt must NOT show 'Management AWS account' prompt; output:\n%s", out)
 	}
 }
+
+// TestConfigureBarePath_PreservesResourcePrefix verifies that a bare
+// `km configure --non-interactive` invocation (no --output-dir) against a
+// directory containing km-config.yaml with resource_prefix: rg preserves
+// that prefix — it must not silently reset to "km".
+//
+// Uses KM_REPO_ROOT env var so findRepoRoot() resolves to the temp directory.
+func TestConfigureBarePath_PreservesResourcePrefix(t *testing.T) {
+	km := buildKM(t)
+	dir := t.TempDir()
+
+	// Write an existing km-config.yaml with a non-default resource_prefix.
+	existingCfg := `resource_prefix: rg
+email_subdomain: sandboxes
+domain: test.example.com
+accounts:
+  dns_parent: "111111111111"
+  terraform: "222222222222"
+  application: "333333333333"
+sso:
+  start_url: https://sso.example.com/start
+  region: us-east-1
+region: us-east-1
+`
+	if err := os.WriteFile(filepath.Join(dir, "km-config.yaml"), []byte(existingCfg), 0600); err != nil {
+		t.Fatalf("write existing km-config.yaml: %v", err)
+	}
+
+	// Run km configure --non-interactive WITHOUT --output-dir.
+	// Set KM_REPO_ROOT so findRepoRoot() returns our temp dir.
+	c := exec.Command(km,
+		"configure",
+		"--non-interactive",
+		// NOTE: no --output-dir
+		"--domain", "test.example.com",
+		"--dns-parent-account", "111111111111",
+		"--terraform-account", "222222222222",
+		"--application-account", "333333333333",
+		"--sso-start-url", "https://sso.example.com/start",
+		"--sso-region", "us-east-1",
+		"--region", "us-east-1",
+	)
+	c.Env = append(os.Environ(), "KM_REPO_ROOT="+dir)
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("km configure bare-path: %v\noutput: %s", err, out)
+	}
+
+	cfg := kmConfigYAML(t, dir)
+	if cfg["resource_prefix"] != "rg" {
+		t.Errorf("resource_prefix: got %v, want rg (bare-path re-run must preserve existing prefix)", cfg["resource_prefix"])
+	}
+}
+
+// TestConfigureBarePath_FreshInstallDefaultsToKm verifies that a bare
+// `km configure --non-interactive` invocation (no --output-dir) against a
+// directory with NO existing km-config.yaml defaults resource_prefix to "km"
+// (the fresh-install path is unchanged).
+//
+// Uses KM_REPO_ROOT env var so findRepoRoot() resolves to the temp directory.
+func TestConfigureBarePath_FreshInstallDefaultsToKm(t *testing.T) {
+	km := buildKM(t)
+	dir := t.TempDir()
+
+	// No existing km-config.yaml — fresh install.
+
+	c := exec.Command(km,
+		"configure",
+		"--non-interactive",
+		// NOTE: no --output-dir
+		"--domain", "test.example.com",
+		"--dns-parent-account", "111111111111",
+		"--terraform-account", "222222222222",
+		"--application-account", "333333333333",
+		"--sso-start-url", "https://sso.example.com/start",
+		"--sso-region", "us-east-1",
+		"--region", "us-east-1",
+	)
+	c.Env = append(os.Environ(), "KM_REPO_ROOT="+dir)
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("km configure bare-path fresh install: %v\noutput: %s", err, out)
+	}
+
+	cfg := kmConfigYAML(t, dir)
+	if cfg["resource_prefix"] != "km" {
+		t.Errorf("resource_prefix: got %v, want km (fresh install must default to km)", cfg["resource_prefix"])
+	}
+}
