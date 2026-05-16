@@ -315,3 +315,46 @@ func TestSendApprovalRequest_Error(t *testing.T) {
 		t.Errorf("expected error to contain 'MessageRejected', got: %v", err)
 	}
 }
+
+// ============================================================
+// SendCreateNotification tests (W0-10)
+// ============================================================
+
+// TestSendCreateNotification_OperatorAddressUsesPrefix (W0-10) verifies that
+// SendCreateNotification produces a notification body whose email-to-create
+// address uses the prefix-aware form (operator-<prefix>@<domain>) rather than
+// the bare operator@ literal.
+func TestSendCreateNotification_OperatorAddressUsesPrefix(t *testing.T) {
+	mock := &mockSESV2API{}
+	// operatorEmail is the To: address (what the operator receives notifications at);
+	// the body should advertise the prefix-aware create address, not a bare operator@.
+	operatorEmail := "operator-kph@sandboxes.example.com"
+	err := kmaws.SendCreateNotification(
+		context.Background(), mock,
+		operatorEmail,
+		"sb-84-10",
+		"sandboxes.example.com",
+		"kph",         // resourcePrefix
+		"test-profile",
+		"4h",
+	)
+	if err != nil {
+		t.Fatalf("SendCreateNotification returned unexpected error: %v", err)
+	}
+	if !mock.sendEmailCalled {
+		t.Fatal("expected SendEmail to be called")
+	}
+
+	body := *mock.sendEmailInput.Content.Simple.Body.Text.Data
+
+	// The body's "email-to-create" address must be prefix-aware.
+	wantAddr := "operator-kph@sandboxes.example.com"
+	if !strings.Contains(body, wantAddr) {
+		t.Errorf("body does not contain prefix-aware operator address %q\nbody:\n%s", wantAddr, body)
+	}
+
+	// The bare operator@ literal must NOT appear in the body.
+	if strings.Contains(body, "operator@sandboxes.example.com") {
+		t.Errorf("body still contains bare 'operator@sandboxes.example.com' — must use prefix-aware address\nbody:\n%s", body)
+	}
+}
