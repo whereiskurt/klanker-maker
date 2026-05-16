@@ -568,3 +568,105 @@ func TestInitExportsResourcePrefixAndEmailSubdomain(t *testing.T) {
 		t.Errorf("KM_EMAIL_SUBDOMAIN = %q, want %q", got, "mail")
 	}
 }
+
+// --- Phase 84.1 plan 01: ExportTerragruntEnvVars coverage --------------------
+//
+// These tests cover the GAP-1 and GAP-7 fixes from Phase 84 UAT:
+//   - KM_ROUTE53_ZONE_ID was never exported (so km bootstrap could not apply the
+//     ses-shared-rule-set DKIM/MX/verification records).
+//   - KM_REGION_LABEL was never exported (so site.hcl get_env("KM_REGION_LABEL")
+//     fell through to its empty-string default).
+//
+// In Task 1 the helper is still named ExportConfigEnvVars; Task 2 renames it to
+// ExportTerragruntEnvVars and propagates the new name across all 8 production
+// callers (no shim — H5 from plan-checker rev 1). These tests are written
+// against the post-Task-2 name so they fail in RED for the right reason and
+// don't require editing once the rename lands.
+
+// TestExportTerragruntEnvVars_ExportsRoute53ZoneID verifies GAP-1 fix: the
+// helper exports KM_ROUTE53_ZONE_ID from cfg.Route53ZoneID.
+func TestExportTerragruntEnvVars_ExportsRoute53ZoneID(t *testing.T) {
+	t.Setenv("KM_ROUTE53_ZONE_ID", "")
+	os.Unsetenv("KM_ROUTE53_ZONE_ID")
+
+	cfg := &config.Config{
+		Route53ZoneID: "Z12345",
+	}
+
+	cmd.ExportConfigEnvVars(cfg)
+
+	if got := os.Getenv("KM_ROUTE53_ZONE_ID"); got != "Z12345" {
+		t.Errorf("KM_ROUTE53_ZONE_ID = %q, want %q", got, "Z12345")
+	}
+}
+
+// TestExportTerragruntEnvVars_ExportsArtifactsBucket verifies that the existing
+// KM_ARTIFACTS_BUCKET export (Phase 4) is preserved by the renamed helper.
+// Guards against accidental removal during the rename.
+func TestExportTerragruntEnvVars_ExportsArtifactsBucket(t *testing.T) {
+	t.Setenv("KM_ARTIFACTS_BUCKET", "")
+	os.Unsetenv("KM_ARTIFACTS_BUCKET")
+
+	cfg := &config.Config{
+		ArtifactsBucket: "km-artifacts-12345",
+	}
+
+	cmd.ExportConfigEnvVars(cfg)
+
+	if got := os.Getenv("KM_ARTIFACTS_BUCKET"); got != "km-artifacts-12345" {
+		t.Errorf("KM_ARTIFACTS_BUCKET = %q, want %q", got, "km-artifacts-12345")
+	}
+}
+
+// TestExportTerragruntEnvVars_ExportsRegionLabel verifies that the helper now
+// derives KM_REGION_LABEL from cfg.PrimaryRegion via compiler.RegionLabel
+// (e.g. us-east-1 → use1). Required by site.hcl get_env("KM_REGION_LABEL").
+func TestExportTerragruntEnvVars_ExportsRegionLabel(t *testing.T) {
+	t.Setenv("KM_REGION_LABEL", "")
+	os.Unsetenv("KM_REGION_LABEL")
+
+	cfg := &config.Config{
+		PrimaryRegion: "us-east-1",
+	}
+
+	cmd.ExportConfigEnvVars(cfg)
+
+	if got := os.Getenv("KM_REGION_LABEL"); got != "use1" {
+		t.Errorf("KM_REGION_LABEL = %q, want %q", got, "use1")
+	}
+}
+
+// TestExportTerragruntEnvVars_DoesNotOverrideExistingEnv verifies that the
+// helper honours an existing env-var value (operator override pattern shared
+// across every other export in this helper).
+func TestExportTerragruntEnvVars_DoesNotOverrideExistingEnv(t *testing.T) {
+	t.Setenv("KM_ROUTE53_ZONE_ID", "PRESET")
+
+	cfg := &config.Config{
+		Route53ZoneID: "Z99999",
+	}
+
+	cmd.ExportConfigEnvVars(cfg)
+
+	if got := os.Getenv("KM_ROUTE53_ZONE_ID"); got != "PRESET" {
+		t.Errorf("KM_ROUTE53_ZONE_ID = %q, want PRESET (operator override should win)", got)
+	}
+}
+
+// TestExportTerragruntEnvVars_BlankConfigSkipsExport verifies that a blank cfg
+// field does not call os.Setenv (and therefore os.LookupEnv returns false).
+// Matches the existing skip-on-blank behaviour of every other export in the helper.
+func TestExportTerragruntEnvVars_BlankConfigSkipsExport(t *testing.T) {
+	t.Setenv("KM_ROUTE53_ZONE_ID", "")
+	os.Unsetenv("KM_ROUTE53_ZONE_ID")
+
+	cfg := &config.Config{
+		Route53ZoneID: "",
+	}
+
+	cmd.ExportConfigEnvVars(cfg)
+
+	if _, ok := os.LookupEnv("KM_ROUTE53_ZONE_ID"); ok {
+		t.Errorf("KM_ROUTE53_ZONE_ID should not be set when cfg.Route53ZoneID is blank; got %q", os.Getenv("KM_ROUTE53_ZONE_ID"))
+	}
+}
