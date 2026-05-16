@@ -8,6 +8,34 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in km-config.yaml (default `km`); see `OPERATOR-GUIDE.md` § Multi-instance support. `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN` env vars).
 
+### Phase 82: Full resource-prefix isolation (multi-instance hardening)
+
+Phase 82 closes three infrastructure blockers that previously made a second `km init` unsafe:
+- **B1 (SES):** `resource_prefix` variable added to the SES module; rule-set name is now `${var.resource_prefix}-sandbox-email`.
+- **B2 (email-handler):** `state_prefix` variable added; IAM ARN + S3 path interpolate the prefix.
+- **B3 (ECS modules):** `km_label` variable added; SSM parameter ARN interpolates the prefix.
+
+Every per-install resource now carries a `km:resource-prefix=${prefix}` tag (emitted by the 6 Terraform modules that own platform resources and backfilled onto pre-Phase-82 resources via `km doctor --backfill-tags`).
+
+**km configure preserve behavior:** `km configure` no longer overwrites `resource_prefix` on re-run. The value set at first configure is preserved. To reset to the `km` default, run `km configure --reset-prefix`.
+
+**km doctor --backfill-tags:** One-time retro-tag sweep for pre-Phase-82 installs. Safe to re-run (idempotent — second run reports `Tagged: 0`). Requires `AWS_DEFAULT_REGION` and `AWS_PROFILE` env vars when running without `km configure` context:
+```bash
+AWS_DEFAULT_REGION=us-east-1 AWS_PROFILE=<your-profile> km doctor --backfill-tags --dry-run=true   # preview
+AWS_DEFAULT_REGION=us-east-1 AWS_PROFILE=<your-profile> km doctor --backfill-tags --dry-run=false  # apply
+```
+
+**Phase 82 upgrade prerequisites (one-time, existing installs):**
+```bash
+make build                   # ldflags-versioned km binary (required per feedback_rebuild_km)
+km init --sidecars           # refresh management Lambda + sidecar binaries in S3
+km init --dry-run=false      # apply Wave 3 Terraform module changes
+AWS_DEFAULT_REGION=us-east-1 AWS_PROFILE=<your-profile> \
+  km doctor --backfill-tags --dry-run=false   # one-time retro-tag sweep
+```
+
+See `docs/superpowers/specs/2026-05-16-multi-instance-resource-prefix-isolation-design.md` for the full design.
+
 ## CLI
 
 - `km validate <profile.yaml>` — validate a SandboxProfile
@@ -28,21 +56,25 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `km email send` — send signed email between sandboxes or to/from operator (`--from`, `--to`, `--cc`, `--use-bcc`, `--reply-to`)
 - `km email read <sandbox>` — read sandbox mailbox with signature verification and auto-decryption (`--json`, `--mark-read`)
 - `km otel <sandbox-id>` — OTEL telemetry + AI spend summary (--prompts, --events, --tools, --timeline)
-- `km slack init` — bootstrap Slack integration: validate bot token, write SSM params, create shared channel, send Slack Connect invite, deploy bridge Lambda (`--bot-token`, `--invite-email`, `--shared-channel`, `--force`)
+- `km slack init` — bootstrap Slack integration: validate bot token, write SSM params, create shared channel, send Slack Connect invite, deploy bridge Lambda (`--bot-token`, `--invite-email`, `--shared-channel`, `--signing-secret`, `--force`)
 - `km slack test` — end-to-end smoke test through the bridge using operator signing key
 - `km slack status` — print SSM-backed Slack config (workspace, channel, bridge URL, last test)
 - `km slack rotate-token --bot-token <new-token>` — rotate Slack bot token: validate, persist to SSM, force bridge cold-start, smoke test
+- `km slack rotate-signing-secret --signing-secret <new-secret>` — rotate Slack App signing secret in SSM
 - `km vscode start <sandbox-id>` — open SSM port-forward + ssh-config Host entry for VS Code Remote-SSH (`--local-port` to override 2222)
 - `km vscode status <sandbox-id>` — check sshd state + authorized_keys presence
 - `km vscode rekey <sandbox-id>` — rotate per-sandbox VS Code Remote-SSH keypair on a running sandbox without `km destroy && km create` (`--force` to override `km lock`, `--yes` to skip confirmation prompt). Active VS Code sessions stay on the old key until reconnect.
-- `km init` — initialize regional infrastructure (`--sidecars` for fast binary deploy, `--lambdas` for Lambda-only deploy)
+- `km cluster add --name <name> --oidc-provider-arn <arn>` — provision cross-account IRSA role for a k8s cluster (`--namespace`, `--service-account`, `--aws-profile`, `--region`, `--dry-run`, `--register-oidc-provider`)
+- `km cluster list` — show configured cross-account cluster roles
+- `km cluster rm <name>` — destroy a cluster IRSA role
+- `km init` — initialize regional infrastructure (`--sidecars` for fast binary deploy, `--lambdas` for Lambda-only deploy, `--dry-run=false` to actually apply)
 - `km shell <sandbox-id>` — SSM shell (`--root`, `--ports`, `--no-bedrock`, `--learn` to generate profile from observed traffic, `--ami` to bake the EC2 instance into a custom AMI on exit)
 - `km ami list` — list operator-baked AMIs with profile references and size (`--wide` for region/snapshot/encryption columns)
 - `km ami bake <sandbox-id>` — snapshot a running sandbox into a custom AMI tagged with sandbox metadata
 - `km ami copy <ami-id> --region <dest>` — copy AMI to another region in the same account, re-tagging the destination
 - `km ami delete <ami-id>` — deregister an AMI and delete its associated EBS snapshots atomically
 - `km info` — platform config, accounts, SES quota, AWS spend, DynamoDB tables
-- `km doctor` — validate platform health (22 checks: config, credentials, SES, Lambda, VPC, stale resources, stale AMIs, orphaned EBS volumes + snapshots, etc.; `--all-regions` to scan every active region)
+- `km doctor` — validate platform health (config, credentials, SES, Lambda, VPC, stale resources, stale AMIs, orphaned EBS volumes + snapshots, Slack inbound, presence daemon, etc.; `--all-regions` to scan every active region)
 
 ## Email
 
@@ -102,14 +134,14 @@ See `docs/multi-agent-email.md` for full details on SES setup, IAM policy, signi
 
 ## Slack Notifications
 
-Phase 63 extends Phase 62's operator-notify hook with parallel Slack delivery. Sandboxes call a `km-slack-bridge` Lambda with Ed25519-signed payloads (same trust model as `km-send`); operators are invited to channels via Slack Connect.
+Sandboxes call a `km-slack-bridge` Lambda with Ed25519-signed payloads (same trust model as `km-send`); operators are invited to channels via Slack Connect.
 
 ### One-time setup
 
 ```bash
-make build               # Always rebuild km after edits (memory: feedback_rebuild_km)
-km init --sidecars       # Upload km-slack binary to S3 (required after Phase 63 ships)
-km init                  # Deploy bridge Lambda + nonce DynamoDB table
+make build               # Always rebuild km after edits
+km init --sidecars       # Upload km-slack binary to S3
+km init --dry-run=false  # Deploy bridge Lambda + nonce DynamoDB table
 km slack init            # Interactive bootstrap (or pass --bot-token + --invite-email)
 ```
 
@@ -117,11 +149,13 @@ km slack init            # Interactive bootstrap (or pass --bot-token + --invite
 
 | Field | Type | Default | Purpose |
 |---|---|---|---|
-| `notifyEmailEnabled` | bool* | true | Phase 62 compat; set false to skip email when Slack is on |
+| `notifyEmailEnabled` | bool* | true | Set false to skip email when Slack is on |
 | `notifySlackEnabled` | bool* | false | Enable Slack delivery |
 | `notifySlackPerSandbox` | bool | false | Create `#sb-{id}` channel; archive at destroy |
 | `notifySlackChannelOverride` | string | empty | Pin to channel ID (`^C[A-Z0-9]+$`) |
 | `slackArchiveOnDestroy` | bool* | true | Per-sandbox only; false preserves channel |
+| `notifySlackInboundEnabled` | bool | false | Provision per-sandbox SQS FIFO queue, install systemd poller, subscribe to channel events (requires `notifySlackEnabled` + `notifySlackPerSandbox`; incompatible with `notifySlackChannelOverride`) |
+| `notifySlackTranscriptEnabled` | bool | false | Stream + upload transcripts to per-sandbox Slack thread (same requirements as inbound) |
 
 ### Sandbox env vars
 
@@ -129,304 +163,92 @@ km slack init            # Interactive bootstrap (or pass --bot-token + --invite
 |---|---|
 | `KM_NOTIFY_EMAIL_ENABLED` | profile `spec.cli.notifyEmailEnabled` (omit = default 1) |
 | `KM_NOTIFY_SLACK_ENABLED` | profile `spec.cli.notifySlackEnabled` (omit = default 0) |
+| `KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED` | profile `spec.cli.notifySlackTranscriptEnabled` (omit ⇒ 0) |
 | `KM_SLACK_CHANNEL_ID` | runtime, injected by km create |
 | `KM_SLACK_BRIDGE_URL` | runtime, injected by km create |
+| `KM_SLACK_INBOUND_QUEUE_URL` | poller reads `/sandbox/{id}/slack-inbound-queue-url` from SSM at boot when env var is empty (an org-level SCP blocks SSM SendCommand for the application account, so the value cannot be injected directly into the env file) |
+| `KM_SLACK_THREAD_TS` | exported by poller into Claude's env BEFORE `claude -p` launches. The Stop hook gates ALL "Claude is waiting"-style notifications on this var — when set, the poller is driving the reply and the Stop hook suppresses email + Slack-root branches |
+| `KM_SLACK_THREADS_TABLE` | DDB table name for session-id persistence, injected by km create |
+| `KM_SLACK_STREAM_TABLE` | runtime, injected by `km create` |
+| `KM_SLACK_RENDER` | `plain` \| `mrkdwn` \| `blocks` — per-sandbox render-mode safety valve (default `blocks`) |
 
 ### SSM parameters
 
 | Parameter | Purpose |
 |---|---|
 | `/km/slack/bot-token` (SecureString) | KMS-encrypted bot token; bridge Lambda + operator only |
+| `/km/slack/signing-secret` (SecureString) | Slack App signing secret for HMAC-SHA256 verification of /events webhooks |
 | `/km/slack/workspace` | JSON: `{"team_id":"...","team_name":"..."}` |
 | `/km/slack/invite-email` | Email for Slack Connect invites |
 | `/km/slack/shared-channel-id` | Default shared channel ID |
 | `/km/slack/bridge-url` | Lambda Function URL |
+| `/sandbox/{sandbox-id}/slack-inbound-queue-url` (String) | Per-sandbox SQS FIFO queue URL written by `km create`, read by the sandbox-side poller, deleted by `km destroy` |
 
-### Important workflow notes
-
-- **`km init --sidecars` is required** after Phase 63 ships so management Lambdas pick up the schema additions and the new `km-slack` sidecar binary lands in S3.
-- Existing sandboxes do NOT get km-slack retroactively — `km destroy` + `km create` to provision with the binary.
-- Slack Connect (`conversations.inviteShared`) requires a **Pro Slack workspace** (free tier returns `not_allowed_token_type`).
-- Bot token rotation: `km slack rotate-token --bot-token <new>` (validates, persists to SSM, force-cold-starts the bridge Lambda, smoke tests). Legacy path: `km slack init --force --bot-token <new>` (persists but does NOT force cold start).
-
-See `docs/slack-notifications.md` for the full operator guide.
-
-### Slack inbound (Phase 67)
-
-Bidirectional chat: Slack messages in `#sb-{id}` channels become Claude
-turns inside the sandbox via SQS FIFO dispatch.
-
-**Profile field (under `spec.cli`):**
-
-| Field | Type | Default | Effect |
-|---|---|---|---|
-| `notifySlackInboundEnabled` | bool | false | Provision per-sandbox SQS FIFO queue, install systemd poller, subscribe to channel events |
-
-Requires `notifySlackEnabled: true` AND `notifySlackPerSandbox: true`.
-Incompatible with `notifySlackChannelOverride`.
-
-**Sandbox env vars added at runtime:**
-
-| Variable | Source |
-|---|---|
-| `KM_SLACK_INBOUND_QUEUE_URL` | poller reads `/sandbox/{id}/slack-inbound-queue-url` from SSM Parameter Store at boot when the env var is empty (an org-level SCP blocks SSM SendCommand for the application account, so the value cannot be injected directly into the env file) |
-| `KM_SLACK_THREAD_TS` | exported by poller into Claude's env BEFORE `claude -p` launches (passed via `--thread` to km-slack post). The Stop hook gates ALL "Claude is waiting"-style notifications on this var — when set, the poller is driving the reply and the Stop hook suppresses both the email branch (6a) and the Slack-root branch (6b). "Claude is waiting" notifications fire only for terminal-initiated sessions (KM_SLACK_THREAD_TS unset). |
-| `KM_SLACK_THREADS_TABLE` | DDB table name for session-id persistence, injected by km create |
-
-**systemd EnvironmentFile gotcha:** `systemd` does NOT accept the shell-style
-`export VAR=val` lines in `/etc/profile.d/*.sh` — it silently rejects them.
-The userdata template writes a parallel `/etc/km/notify.env` (no `export`
-prefix, systemd-format) and `km-slack-inbound-poller.service` points
-`EnvironmentFile=/etc/km/notify.env`. Both files are kept in sync at
-cloud-init time; `/etc/profile.d/km-notify-env.sh` remains the source of
-truth for shell sessions and Claude's bash env.
-
-**SSM parameters added in Phase 67:**
-
-| Parameter | Purpose |
-|---|---|
-| `/km/slack/signing-secret` (SecureString) | Slack App signing secret for HMAC-SHA256 verification of /events webhooks |
-| `/sandbox/{sandbox-id}/slack-inbound-queue-url` (String) | Per-sandbox SQS FIFO queue URL written by `km create` and read by the sandbox-side poller. Deleted by `km destroy`. |
-
-**DynamoDB tables added in Phase 67:**
+### DynamoDB tables
 
 - `{prefix}-km-slack-threads` — `(channel_id, thread_ts) → claude_session_id` map. TTL 30 days from `last_turn_ts`.
-- New GSI on `{prefix}-sandboxes`: `slack_channel_id-index` (additive, no PK/SK changes).
+- `{prefix}-slack-stream-messages` — `(channel_id, slack_ts) → {sandbox_id, session_id, transcript_offset, ttl_expiry}`. TTL 30 days.
+- GSI on `{prefix}-sandboxes`: `slack_channel_id-index`.
 
-**SQS resources (per-sandbox, runtime-provisioned):**
+### SQS (per-sandbox, runtime-provisioned)
 
 - `{prefix}-slack-inbound-{sandbox-id}.fifo` — FIFO queue, 14d retention, 30s VisibilityTimeout, ContentBasedDeduplication=false.
 
-**One-time operator setup:**
+### S3 transcript layout
+
+`transcripts/{sandbox_id}/{session_id}.jsonl.gz` in `KM_ARTIFACTS_BUCKET`.
+
+### Inbound webhook bootstrap
 
 ```bash
 km slack init --force --signing-secret <signing-secret-from-slack-app>
 # Then: paste printed Events URL into Slack App → Event Subscriptions → Request URL
 ```
 
-**Signing secret rotation:**
+### Render modes
 
-```bash
-km slack rotate-signing-secret --signing-secret <new-secret>
-# Or: km slack init --force --signing-secret <new-secret>
-```
-
-**km doctor adds three new checks:**
-
-- `slack_inbound_queue_exists` — every inbound-enabled sandbox has a healthy queue
-- `slack_inbound_stale_queues` — orphan SQS queues with no DDB sandbox row
-- `slack_app_events_subscription` — bot has channels:history + groups:history + reactions:write scopes
-
-#### ACK reaction (Phase 67.1)
-
-When the bridge enqueues an inbound message to SQS, it adds a 👀 reaction
-to the originating Slack message via `reactions.add` (fire-and-forget,
-~1s round-trip). Bot needs `reactions:write` scope (added via Slack App
-config → OAuth & Permissions → reinstall app). Bridge-global emoji is
-configurable via `KM_SLACK_ACK_EMOJI` Lambda env var (default `eyes`,
-no colons). Bridge-only change — deploy with `make build && km init --lambdas`;
-no sandbox redeploy needed. See `docs/slack-notifications.md` § ACK reaction.
-
-**Phase 67.2: bounded retry.** Transient failures (HTTP 429 with
-`Retry-After`, HTTP 5xx, network errors, and Slack JSON codes
-`internal_error` / `service_unavailable` / `fatal_error` /
-`request_timeout`, plus any unknown error string per the
-default-unknown→transient policy) now retry up to 2× with 200ms→600ms
-backoff and ±25% jitter inside `SlackReactorAdapter.Add`. Terminal
-auth-class errors (`invalid_auth`, `missing_scope`, `token_expired`,
-etc.) log at Error level and do NOT retry. Handler goroutine context
-bumped 5s → 10s to fit the retry budget. The existing `events:
-reaction failed` Warn line in CloudWatch is preserved on final
-exhaustion with a new `attempt=N` field. Bridge-only deploy: `make
-build && km init --lambdas`. See
-`docs/superpowers/specs/2026-05-14-slack-ack-reaction-bounded-retry-design.md`.
-
-See `docs/slack-notifications.md` for the full operator guide including setup steps, troubleshooting, and security model.
-
-### Slack transcript streaming (Phase 68)
-
-Per-turn assistant text + tool one-liners stream to per-sandbox channel thread;
-final gzipped JSONL transcript uploaded as Slack file at Stop. Opt-in.
-
-**Profile field (under `spec.cli`):**
-
-| Field | Type | Default | Effect |
-|---|---|---|---|
-| `notifySlackTranscriptEnabled` | bool | false | Stream + upload transcripts to per-sandbox Slack thread |
-
-Requires `notifySlackEnabled: true` AND `notifySlackPerSandbox: true`.
-Incompatible with `notifySlackChannelOverride`.
-
-**CLI overrides:** `--transcript-stream` / `--no-transcript-stream` on `km agent run` and `km shell`.
-
-**Sandbox env vars added at runtime:**
-
-| Variable | Source |
-|---|---|
-| `KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED` | profile `spec.cli.notifySlackTranscriptEnabled` (omit ⇒ 0) |
-| `KM_SLACK_STREAM_TABLE` | runtime, injected by `km create` |
-
-**DynamoDB table added in Phase 68:**
-
-- `{prefix}-slack-stream-messages` — `(channel_id, slack_ts) → {sandbox_id, session_id, transcript_offset, ttl_expiry}`. TTL 30 days. Phase B (reaction-triggered fork) will consume this table; Phase 68 only writes.
-
-**S3 layout:** `transcripts/{sandbox_id}/{session_id}.jsonl.gz` in `KM_ARTIFACTS_BUCKET`.
-
-**Slack bot scope required:** `files:write` (one-time re-auth via Slack App admin).
-
-**km doctor adds three new checks:**
-
-- `slack_transcript_table_exists` — DDB table is provisioned + ACTIVE
-- `slack_files_write_scope` — bot has `files:write`
-- `slack_transcript_stale_objects` — S3 cleanup advisory for destroyed sandboxes
-
-**One-time operator setup:**
-
-```bash
-# 1. Add `files:write` scope to Slack App, re-install, rotate token
-km slack rotate-token --bot-token <new-token>
-
-# 2. Provision new DDB table + sidecar + bridge
-make build && km init --sidecars && km init
-
-# 3. Verify
-km doctor
-```
-
-**Known Phase 68 limitations (Phase 68.1 follow-ups):**
-
-- **Slack Connect channels reject final file upload.** Per-sandbox
-  channels are externally shared via Slack Connect (`is_ext_shared:
-  true`). Slack's `files.completeUploadExternal` returns silent
-  `internal_error` for these. Per-turn chat lines + auto-thread
-  + DDB record-mapping all work; only the `.jsonl.gz` attachment
-  is missing. Pull from S3 instead:
-  `aws s3 ls s3://${KM_ARTIFACTS_BUCKET}/transcripts/<sandbox-id>/`
-- **`km agent run` (non-interactive `claude -p`) skips PostToolUse
-  hooks** per Claude Code platform behavior. Use interactive
-  `km shell` for transcript streaming today.
-- **Subagent fan-out creates one Slack thread per `session_id`.**
-  `/clone` and Task-tool spawns each fire their own auto-thread-parent.
-- **Operator warning at `km create` only fires on `--local`** path,
-  not `--remote` (default for EC2 substrates).
-
-See `docs/slack-notifications.md` for full operator guide and
-`.planning/phases/68-…/deferred-items.md` for fix paths.
-
-### Slack Block Kit rendering (Phase 74)
-
-Two-tier markdown renderer for outbound Slack posts. Tier 1 maps
-CommonMark → Slack mrkdwn (bold, italic, links, code preserved
-byte-for-byte). Tier 2 emits Block Kit (header / section / context /
-divider) with auto-fallback to Tier 1 at the 50-block cap. Eliminates
-literal `***heading***`, dropped `# headings`, and broken pipe-tables
-that previously made transcript and inbound replies hard to read.
-
-`km-slack post --render plain|mrkdwn|blocks`. Default for no-flag
-callers stays `plain` (Phase 62/63 notify-hook callers untouched). The
-Phase 68 streaming hook (`_km_stream_drain`) and the Phase 67 inbound
-poller reply both pass `--render "${KM_SLACK_RENDER:-blocks}"`, so new
-sandboxes render as Block Kit by default with a per-sandbox safety
-valve.
-
-**Operator safety valve:**
+`km-slack post --render plain|mrkdwn|blocks`. Default for no-flag callers stays `plain`. Streaming + inbound reply paths pass `--render "${KM_SLACK_RENDER:-blocks}"`, so new sandboxes render as Block Kit by default. Operator safety valve to fall back:
 
 ```bash
 km shell <sandbox-id>
 echo 'KM_SLACK_RENDER=plain' | sudo tee -a /etc/km/notify.env
-# next outbound post on this sandbox → falls back to literal markdown
 ```
 
-Valid values: `plain` | `mrkdwn` | `blocks`.
+### Required Slack bot scopes
 
-**Operator path:** no new SSM params, DynamoDB tables, or Slack scopes.
-`make build && km init --sidecars && km init --dry-run=false` ships the
-new km-slack binary, the new userdata template (both Block-Kit-emitting
-paths), and the bridge Lambda dispatch wrap (`PostMessageBlocks`).
-Existing sandboxes do NOT get Block Kit rendering retroactively —
-`km destroy && km create` to provision with the new template.
+- `chat:write`, `channels:history`, `groups:history` — base posting + inbound
+- `reactions:write` — ACK reaction (👀) on inbound messages (configurable via `KM_SLACK_ACK_EMOJI` bridge env var, default `eyes`, no colons)
+- `files:write` — transcript uploads
+- `files:read` — inbound file attachments
 
-**Bridge envelope additions:** `Blocks string` field (alphabetical
-between `Action` and `Body` for deterministic signing); optional
-`BlockPoster` interface that the bridge type-asserts when `Blocks != ""`
-(existing `SlackPoster`-only fakes keep working).
+### Inbound file attachments
 
-**Known unrelated UAT side-find:** Phase 74 surfaced — but did not
-cause — a stale Anthropic OAuth token failure mode: `noBedrock: true`
-profiles whose `~/.claude/.credentials.json` has expired produce
-`api_error_status: 401` in `claude -p` output, which the inbound
-poller logs as `WARN: agent run failed (exit 1)`. Fix: `km shell` →
-`claude login`. Pre-dates Phase 74; documented here because the
-symptom looks identical to a Block Kit failure.
+Per-sandbox channels accept file_share uploads (images, PDFs, etc.). Bridge Lambda downloads with bot token, stages to S3 under `slack-inbound/<sandbox-id>/<thread_ts>/`, sandbox poller mirrors to `/workspace/.km-slack/attachments/<thread_ts>/`, a natural-language wrapper prepended to the prompt lists absolute paths + MIME types. Caps: 25 files/msg, 100 MB/file. Over-cap → thread-reply warning.
 
-See `docs/slack-notifications.md` § Slack Block Kit rendering (Phase 74)
-for render-mode table, full architecture, and troubleshooting matrix.
+### Important workflow notes
 
-### Slack inbound file attachments (Phase 75)
+- **`km init --sidecars` is required** when sandbox-side code changes so management Lambdas pick up schema additions and new sidecar binaries land in S3.
+- **`km init` defaults to `--dry-run=true`.** Forgetting `--dry-run=false` produces a no-op that *looks* like a deploy ran. After a successful apply, verify:
 
-Per-sandbox channels now accept file_share uploads (images, PDFs, etc.).
-Bridge Lambda downloads with bot token, stages to S3 under
-`slack-inbound/<sandbox-id>/<thread_ts>/`, sandbox poller mirrors to
-`/workspace/.km-slack/attachments/<thread_ts>/`, a natural-language
-wrapper prepended to the prompt lists absolute paths + MIME types.
-Caps: 25 files/msg, 100 MB/file. Over-cap → thread-reply warning.
+  ```bash
+  aws lambda get-function-configuration --function-name km-slack-bridge \
+    --query '{MemorySize:MemorySize, Timeout:Timeout, Vars:Environment.Variables}'
+  ```
 
-New bot scope: `files:read`. Operator path: re-install the Slack app
-with the new scope, run `km slack rotate-token --bot-token <new>`,
-then `make build && km init --dry-run=false` (NOT `km init --lambdas`,
-which builds the zip but doesn't deploy it).
+  Expect `MemorySize=1024`, `Timeout=60`, and `Vars` containing `KM_ARTIFACTS_BUCKET`. A `Vars` map with only `TOKEN_ROTATION_TS` means `km slack rotate-token` blew away the env vars and Terraform hasn't re-applied — re-run `km init --dry-run=false`.
+- **`km init --lambdas` builds zips but does NOT deploy them.** Use `km init --dry-run=false` for full bridge deploy.
+- Existing sandboxes do NOT get new sidecars retroactively — `km destroy && km create` to provision with new binaries.
+- Slack Connect (`conversations.inviteShared`) requires a **Pro Slack workspace** (free tier returns `not_allowed_token_type`).
+- Bot token rotation: `km slack rotate-token --bot-token <new>` (validates, persists to SSM, force-cold-starts the bridge Lambda, smoke tests).
+- **systemd EnvironmentFile gotcha:** `systemd` does NOT accept shell-style `export VAR=val` lines in `/etc/profile.d/*.sh` — it silently rejects them. The userdata template writes a parallel `/etc/km/notify.env` (no `export` prefix, systemd-format) and `km-slack-inbound-poller.service` points `EnvironmentFile=/etc/km/notify.env`. Both files are kept in sync at cloud-init time; `/etc/profile.d/km-notify-env.sh` remains the source of truth for shell sessions and Claude's bash env.
+- **Slack Connect channels reject final transcript file upload.** Per-sandbox channels are externally shared (`is_ext_shared: true`); Slack's `files.completeUploadExternal` returns silent `internal_error`. Per-turn chat lines + auto-thread + DDB record-mapping all work; only the `.jsonl.gz` attachment is missing. Pull from S3 instead: `aws s3 ls s3://${KM_ARTIFACTS_BUCKET}/transcripts/<sandbox-id>/`
+- **`km agent run` (non-interactive `claude -p`) skips PostToolUse hooks** per Claude Code platform behavior. Use interactive `km shell` for transcript streaming today.
+- Subagent fan-out creates one Slack thread per `session_id`. `/clone` and Task-tool spawns each fire their own auto-thread-parent.
+- Stale Anthropic OAuth tokens (`noBedrock: true` profiles with expired `~/.claude/.credentials.json`) produce `api_error_status: 401` in `claude -p` output, which the inbound poller logs as `WARN: agent run failed (exit 1)`. Fix: `km shell` → `claude login`.
 
-**Critical:** `km init` defaults to `--dry-run=true`. Forgetting
-`--dry-run=false` produces a no-op that *looks* like a deploy ran.
-After a successful apply, verify:
+See `docs/slack-notifications.md` for the full operator guide.
 
-```bash
-aws lambda get-function-configuration --function-name km-slack-bridge \
-  --query '{MemorySize:MemorySize, Timeout:Timeout, Vars:Environment.Variables}'
-```
-
-Expect `MemorySize=1024`, `Timeout=60`, and `Vars` containing
-`KM_ARTIFACTS_BUCKET`. A `Vars` map with only `TOKEN_ROTATION_TS`
-means `km slack rotate-token` blew away the env vars and Terraform
-hasn't re-applied — re-run `km init --dry-run=false`.
-
-Lambda config bumps: memory_size 256 → 1024 (Plan 04, fits 100MB
-in-memory file buffer for SDK PutObject retry-rewindability),
-timeout 15s → 60s (75.2 hotfix, fits synchronous file download).
-
-### Phase 75 hotfix lessons
-
-The end-to-end pipeline shipped through three follow-on hotfixes
-after the initial UAT exposed gaps the design RESEARCH missed:
-
-- **75.1** — Modern Slack workspaces deliver **stub file objects** in
-  `file_share` event payloads (only `id` populated; `url_private_download`
-  absent). The bridge must call `files.info` per file ID to enrich
-  before issuing the GET. Symptom pre-fix:
-  `Get "": unsupported protocol scheme ""` in thread-reply warning.
-- **75.2** — Original design ran the file download in a goroutine so
-  the handler could return 200 within Slack's 3-second ack window. This
-  is unsound on AWS Lambda: the runtime freezes once the handler returns
-  and the in-flight HTTP deadline elapses during freeze. 75.2 made the
-  `file_share` path synchronous. The handler may now exceed 3s and
-  Slack will retry, but the existing `event_id` nonce dedup absorbs the
-  retry as a no-op 200. Log marker changed: `events: enqueued (files-fork)`
-  → `events: enqueued (files-sync)`.
-- **75.3** — The `km-slack-inbound-poller.service` systemd unit was
-  missing `Environment=KM_ARTIFACTS_BUCKET={{ .KMArtifactsBucket }}`.
-  Plan 03 added bash that references `${KM_ARTIFACTS_BUCKET}` but the
-  sibling `km-mail-poller` unit had it and the inbound-poller unit
-  was simply missed in the template. Symptom pre-fix: poller journal
-  shows `KM_ARTIFACTS_BUCKET: unbound variable` and Claude replies
-  "I don't see any file path attached" because the bash bailed out of
-  the `aws s3 cp` mirror loop.
-
-See `docs/slack-notifications.md` § Slack inbound file attachments
-(Phase 75) for the full operator runbook + troubleshooting table.
-Authoritative design:
-`docs/superpowers/specs/2026-05-15-slack-inbound-file-attachments-design.md`.
-
-## VS Code Remote-SSH (Phase 73)
+## VS Code Remote-SSH
 
 Connect local desktop VS Code to a sandbox via SSM port-forward + per-sandbox ed25519 keypair.
 
@@ -448,8 +270,6 @@ Connect local desktop VS Code to a sandbox via SSM port-forward + per-sandbox ed
 
 ```bash
 # Install the Remote - SSH extension in VS Code (Microsoft, free)
-
-# Schema change → refresh management Lambda
 make build && km init --sidecars
 ```
 
@@ -466,43 +286,19 @@ km destroy $SB --remote --yes                            # cleans up keys + ssh-
 
 ### Important workflow notes
 
-- **`km init --sidecars` is required** after Phase 73 ships so the management Lambda's km
-  binary recognizes the new `VSCodeSSHPubKey` userdata field. Without it, `km create
-  --remote` produces a sandbox with broken authorized_keys (silent SSH failure).
-- Existing sandboxes created before Phase 73 do NOT get sshd provisioning retroactively —
-  `km destroy && km create` to provision.
-- Cross-machine portability: keys live on the creation machine only. Operators who want to
-  `km vscode start` from a different laptop must manually copy `~/.km/keys/<sandbox-id>*`.
-- One operator per sandbox in v1 (single authorized_keys entry).
-- `km vscode start` and `km vscode status` accept the same identifier formats as other
-  `km` subcommands: full sandbox ID (`lrn2-ee9499b5`), alias (`my-poc`), or list-row number.
-
-### Rotating a sandbox key (Phase 76)
-
-Solves three pain points: (1) baked-AMI relaunch carries stale `authorized_keys`,
-(2) cross-laptop portability — `km vscode rekey` on a second laptop bootstraps a fresh
-key without manual file copy, (3) post-incident rotation if a private key is suspected
-compromised. See `docs/vscode.md` § Rotating a sandbox key for full operator walkthrough.
-
-Pre-flight gates (any failure = no key changes): EC2 instance must be `running`,
-`km lock` must not block (override with `--force`), sandbox must have been created with
-`vscodeEnabled:true` (pre-Phase-73 sandboxes get a clear hard error pointing at
-`km destroy && km create`).
+- Existing sandboxes provisioned without `vscodeEnabled:true` do NOT get sshd retroactively — `km destroy && km create` to provision.
+- Cross-machine portability: keys live on the creation machine only. Operators who want to `km vscode start` from a different laptop must run `km vscode rekey` there, OR manually copy `~/.km/keys/<sandbox-id>*`.
+- One operator per sandbox (single authorized_keys entry).
+- `km vscode start` and `km vscode status` accept the same identifier formats as other `km` subcommands: full sandbox ID (`lrn2-ee9499b5`), alias (`my-poc`), or list-row number.
+- `km vscode rekey` pre-flight gates (any failure = no key changes): EC2 instance must be `running`; `km lock` must not block (override with `--force`); sandbox must have been created with `vscodeEnabled:true`.
 
 See `docs/vscode.md` for the full operator guide.
 
-## Presence daemon (Phase 79)
+## Presence daemon
 
-Per-sandbox systemd-managed liveness daemon. Replaces the legacy bash `_km_heartbeat`
-function (a per-shell background loop that historically orphaned itself, pegging the
-`IDLE` column at full timeout for hours). One daemon per sandbox, root-owned, ticks
-every 60s.
+Per-sandbox systemd-managed liveness daemon (replaces the legacy bash `_km_heartbeat`). One daemon per sandbox, root-owned, ticks every 60s.
 
-### What it does
-
-`km-presence.service` checks five signals each tick and emits a single
-`source:"presence"` heartbeat event to `/run/km/audit-pipe` if **any** is positive
-(boolean OR):
+`km-presence.service` checks five signals each tick and emits a single `source:"presence"` heartbeat event to `/run/km/audit-pipe` if **any** is positive (boolean OR):
 
 | # | Signal | Source |
 |---|---|---|
@@ -512,14 +308,9 @@ every 60s.
 | 4 | Recent inbound Slack | `/run/km/last-slack-inbound` newer than stamp |
 | 5 | Headless agent process | `pgrep` for claude/codex/km-agent-run.sh |
 
-The daemon writes to `/run/km/audit-pipe` using the same `timeout 0.1 tee` pattern as
-the per-command `_km_audit` hook (Phase 56.1 Bug 2 fix). Stamp file
-`/run/km/.presence-last-tick` is touched unconditionally at end of every tick (in
-tmpfs; intentionally lost on reboot).
+Stamp file `/run/km/.presence-last-tick` is touched unconditionally at end of every tick (in tmpfs; intentionally lost on reboot).
 
-### Migration
-
-Following the Phase 63 / 67 / 68 / 73 pattern:
+### Rollout
 
 ```bash
 make build               # rebuild km CLI + km-presence binary
@@ -527,92 +318,34 @@ make sidecars            # upload km-presence to S3 alongside other sidecars
 km init --sidecars       # refresh management Lambda's userdata template
 ```
 
-**Existing sandboxes do NOT get km-presence retroactively** — they keep their bash
-heartbeat until `km destroy && km create`. This is intentional and matches every
-prior sidecar phase.
-
-**Docker substrate retains the bash heartbeat** — Docker sandboxes cannot run systemd,
-so `pkg/compiler/compose.go` is intentionally unchanged. Only EC2 sandboxes get the
-daemon.
+**Docker substrate retains the bash heartbeat** — Docker sandboxes cannot run systemd, so only EC2 sandboxes get the daemon.
 
 ### Doctor check
 
-`km doctor` adds `presence_daemon_healthy` (Phase 79). For each running sandbox, the
-check queries CloudWatch FilterLogEvents for a `source:"presence"` event in the last
-5 minutes; any sandbox with no recent event is reported as WARN (not ERROR — same
-"opt-in feature can't be a hard failure" rationale as the Slack inbound checks).
+`km doctor` includes `presence_daemon_healthy`. For each running sandbox, the check queries CloudWatch FilterLogEvents for a `source:"presence"` event in the last 5 minutes; any sandbox with no recent event is reported as WARN.
 
 A WARN typically means one of:
-- Sandbox was provisioned BEFORE Phase 79 rollout (`km destroy && km create` to fix)
+- Sandbox was provisioned before presence daemon support (`km destroy && km create` to fix)
 - The km-presence daemon crashed (check `journalctl -u km-presence` on the sandbox)
 - CloudWatch logs ingestion is delayed (transient — re-run `km doctor`)
 
 ### Observability
 
 ```bash
-# On the sandbox: see daemon's per-tick decisions
-sudo journalctl -u km-presence -f
-
-# Operator-side: distinguish new daemon events from legacy shell heartbeats
-km otel <sandbox-id> --events  # filter for source:"presence" vs source:"shell"
+sudo journalctl -u km-presence -f                  # on the sandbox: per-tick decisions
+km otel <sandbox-id> --events                      # operator-side: filter source:"presence"
 ```
 
-### Roll back
+### Audit pipe on resumed sandboxes
 
-Revert the `pkg/compiler/userdata.go` diff and re-run `km init --sidecars`. New
-sandboxes from that point are born with the legacy bash heartbeat. Existing sandboxes
-are unaffected (they keep whichever pattern they were born with). The km-presence
-binary in S3 is harmless to leave in place when nothing references it.
+`/run` is tmpfs and is wiped on every boot; cloud-init does NOT re-run on second boot. To survive `km pause` + `km resume`:
 
-See `docs/superpowers/specs/2026-05-10-km-presence-daemon-design.md` for the full PRD.
+- `/usr/lib/tmpfiles.d/km.conf` uses `p+` to recreate `/run/km/audit-pipe` at every boot, before `sysinit.target`, with `km-sidecar:km-sidecar 0666` ownership. `p+` (not `p`) is critical — `p` is a silent no-op when a regular file occupies the path; `p+` clobbers it.
+- `openAuditPipeWithRetry` (in `sidecars/audit-log/cmd/main.go`) detects a non-FIFO path, unlinks it, and recreates the FIFO before retrying.
 
-### Phase 79.1 follow-up: audit-pipe FIFO recreation on resumed sandboxes
-
-Phase 79 shipped the km-presence daemon but its initial UAT was performed
-only on a fresh `km create` — never on a `km pause` + `km resume` cycle.
-On resumed sandboxes (`/run` is tmpfs and is wiped on every boot; cloud-init
-does NOT re-run on second boot because the instance-id semaphore matches),
-`/run/km/audit-pipe` vanishes. km-presence (root) starts before km-audit-log
-(km-sidecar) finishes its `openAuditPipeWithRetry` and writes via
-`printf ... | timeout 0.1 tee /run/km/audit-pipe` — which CREATES the path
-as a regular `root:root 0644` file. km-audit-log then tries `os.OpenFile`
-with `O_RDWR` and gets `EACCES`, gives up after 10 retries, the audit
-pipeline is dead, and `km doctor presence_daemon_healthy` falsely WARNs.
-Discovered on sandbox `learn-14f484c7` (2026-05-16).
-
-Two-layer fix:
-
-| Layer | What | Where |
-|---|---|---|
-| 1 (root cause) | `/usr/lib/tmpfiles.d/km.conf` with `p+` recreates the FIFO at every boot, before `sysinit.target`, with `km-sidecar:km-sidecar 0666` ownership | `pkg/compiler/userdata.go` (heredoc inserted between the existing `mkfifo /run/km/audit-pipe` block and the `km-audit-log.service` unit heredoc) |
-| 2 (defense in depth) | `openAuditPipeWithRetry` detects a non-FIFO path (`info.Mode()&os.ModeNamedPipe == 0`), unlinks it via `os.Remove`, and recreates the FIFO via `syscall.Mkfifo` before retrying the open | `sidecars/audit-log/cmd/main.go::openAuditPipeWithRetry` |
-
-`p+` (not `p`) is critical — `p` is a silent no-op when a regular file
-occupies the path; `p+` clobbers it. Linux VFS semantics allow km-sidecar
-to `unlink` the root-owned regular file because km-sidecar owns the
-containing `/run/km` directory (no sticky bit set).
-
-**Rollout (matches Phase 79 pattern):**
+Manual recovery for sandboxes that lack this protection and have already tripped the bug:
 
 ```bash
-make build               # rebuild km binary (Layer 1 template change)
-make sidecars            # rebuild + upload audit-log sidecar (Layer 2)
-km init --sidecars       # refresh management Lambda's userdata template
-```
-
-`make build` alone is insufficient — Layer 2 requires `make sidecars` so
-the new audit-log binary lands in S3 for new sandboxes to fetch. `km init
---lambdas` is NOT needed (no Lambda code changes); `terragrunt apply` is
-NOT needed (no Terraform resource changes).
-
-**Not retroactive.** Existing sandboxes provisioned before Phase 79.1 do
-NOT have `/usr/lib/tmpfiles.d/km.conf` and have the old audit-log binary.
-`km destroy && km create` to roll the fix forward, OR apply the manual
-recovery snippet on the resumed sandbox:
-
-```bash
-# Operator workaround for pre-Phase-79.1 sandboxes that have already
-# tripped the bug (audit pipe is a regular file, not a FIFO).
 km shell <sandbox-id>
 sudo rm /run/km/audit-pipe && \
   sudo mkfifo /run/km/audit-pipe && \
@@ -621,30 +354,17 @@ sudo rm /run/km/audit-pipe && \
   sudo systemctl restart km-audit-log
 ```
 
-Validation: after recovery, `journalctl -u km-audit-log` shows `reading
-from audit pipe pipe=/run/km/audit-pipe` (not `permission denied`), and
-`km doctor` reports `✓ Presence daemon healthy` within ~5 minutes of a
-real liveness signal (login shell, tmux attach, or agent process).
+Validation: `journalctl -u km-audit-log` should show `reading from audit pipe pipe=/run/km/audit-pipe` (not `permission denied`), and `km doctor` reports `✓ Presence daemon healthy` within ~5 minutes.
 
-See `.planning/phases/79.1-audit-pipe-fifo-recreation-on-resumed-sandboxes-systemd-tmpfiles-drop-in-audit-log-self-heal-when-path-exists-as-non-fifo-regular-file/79.1-RESEARCH.md` for full design (incl. systemd-tmpfiles boot ordering, `p` vs `p+` semantics, Linux unlink permission model).
-
-## Cross-account k8s integrations (Phase 80)
+## Cross-account k8s integrations
 
 Provisions IAM roles in the klanker AWS account that trust k8s clusters in *other* AWS accounts. Pods authenticate via projected ServiceAccount tokens (IRSA) — no static IAM user keys, auto-rotating 3600s session tokens. Both the IRSA role and the create-handler Lambda role consume the shared `km-operator-policy/v1.0.0/` Terraform module so the two surfaces can never drift.
 
-### What it does
+`km cluster add` generates a per-cluster `infra/live/{region-label}/cluster-{name}/terragrunt.hcl`, runs `terragrunt apply` against `infra/modules/cluster-irsa/v1.0.0/`, captures the role ARN output, and persists the cluster metadata to `km-config.yaml`. The trust policy permits `sts:AssumeRoleWithWebIdentity`, scoped to a single namespace + ServiceAccount (wildcards allowed).
 
-`km cluster add` generates a per-cluster `infra/live/{region-label}/cluster-{name}/terragrunt.hcl`, runs `terragrunt apply` against `infra/modules/cluster-irsa/v1.0.0/`, captures the role ARN output, and persists the cluster metadata to `km-config.yaml`. The trust policy permits `sts:AssumeRoleWithWebIdentity`, scoped to a single namespace + ServiceAccount (wildcards allowed). The role is attached to the same 14 inline policies as the create-handler Lambda role via the shared `km-operator-policy/v1.0.0/` module.
+**OIDC provider is account-local.** AWS STS validates web-identity tokens against an OIDC provider in the *same* account as the IAM role being assumed. The `cluster-irsa` module mirrors the remote cluster's issuer URL into a new `aws_iam_openid_connect_provider` registered in the klanker account, then references that local provider as the trust Principal. The `--oidc-provider-arn` flag names the *remote* cluster's provider only to derive its issuer URL — the account portion of that ARN is informational.
 
-**OIDC provider is account-local.** AWS STS validates web-identity tokens against an OIDC provider in the *same* account as the IAM role being assumed — it cannot reach across accounts to the cluster's own provider. The `cluster-irsa` module therefore mirrors the remote cluster's issuer URL into a new `aws_iam_openid_connect_provider` registered in the klanker account, then references that local provider as the trust Principal. The `--oidc-provider-arn` flag names the *remote* cluster's provider only to derive its issuer URL — the account portion of that ARN is informational.
-
-### CLI
-
-```bash
-km cluster add --name <name> --oidc-provider-arn <arn> [flags]   # provision
-km cluster list                                                   # show configured roles
-km cluster rm <name> [flags]                                      # destroy
-```
+### CLI flags
 
 | Flag | Default | Required |
 |---|---|---|
@@ -675,24 +395,13 @@ clusters:
 
 Absent `clusters:` key is treated as empty slice — existing installs need no migration.
 
-### One-time setup
-
-```bash
-make build       # always required after CLI edits (ldflags version embed)
-# No km init --sidecars needed — Phase 80 does NOT modify the management Lambda's
-# userdata template or sandbox-side code. The km-operator-policy / cluster-irsa
-# modules are operator-applied (terragrunt apply from the operator workstation),
-# not Lambda-applied.
-```
-
 ### Important workflow notes
 
-- **Zero-diff refactor of create-handler:** Plan 80-02 extracted 14 inline IAM policies from `infra/modules/create-handler/v1.0.0/main.tf` into the shared module via `moved {}` blocks. The first time an operator runs `terragrunt apply` in `infra/live/use1/create-handler/`, Terraform performs an address-only state move (no IAM mutations). Subsequent applies see no changes.
 - **Idempotency:** `km cluster add --name foo ...` returns the existing role ARN if `foo` already exists in `km-config.yaml` — safe to re-run.
 - **Rollback on persist failure:** if `terragrunt apply` succeeds but writing `km-config.yaml` fails, the IAM role is left in place. Run `km cluster rm <name>` (using the role name from terraform state) to clean up.
 - **Wildcard trust:** `--namespace=*` makes the role assumable by the named ServiceAccount in any namespace. Specify a literal namespace for tighter scoping.
-- **No `--sidecars` propagation required:** Unlike Phase 63/67/68/73/79, Phase 80 ships no sandbox-side or Lambda-side code. Operators only need a fresh `km` binary.
-- **OIDC provider auto-detect (Phase 80.1):** Before generating the per-cluster terragrunt.hcl, `km cluster add` calls `aws iam list-open-id-connect-providers` against the target account. If the cluster's issuer URL is already registered (same-account EKS, a second stack against the same EKS cluster, or `eksctl`/Terraform-EKS auto-registered the provider), the module sets `register_oidc_provider = false` and references the existing provider via a Terraform data source. If no match → creates a fresh `aws_iam_openid_connect_provider`. The log line `OIDC provider auto-detected: [creating | reusing existing arn:...]` reports which branch was taken. Override with `--register-oidc-provider=true|false`. `km cluster rm` only destroys providers that this stack registered — pre-existing providers (the `register=false` path) are left intact.
+- **No `--sidecars` propagation required:** Cluster IRSA ships no sandbox-side or Lambda-side code. Operators only need a fresh `km` binary.
+- **OIDC provider auto-detect:** Before generating the per-cluster terragrunt.hcl, `km cluster add` calls `aws iam list-open-id-connect-providers` against the target account. If the cluster's issuer URL is already registered, the module sets `register_oidc_provider = false` and references the existing provider via a Terraform data source. Otherwise it creates a fresh provider. Override with `--register-oidc-provider=true|false`. `km cluster rm` only destroys providers that this stack registered — pre-existing providers are left intact.
 
 ### Handoff to k8s operators
 
@@ -710,8 +419,6 @@ metadata:
 ```
 
 Apply it with `kubectl apply -f sa.yaml`; pods annotated `serviceAccountName: km` will pick up the role automatically.
-
-See `docs/superpowers/specs/2026-05-11-km-cluster-cross-account-irsa-design.md` for the full design spec.
 
 ## Architecture
 

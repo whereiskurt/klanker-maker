@@ -617,3 +617,28 @@ containment for both.
   proceeding.
 - **Email Domain SES Match** — warns if `cfg.GetEmailDomain()` is not a verified SES identity.
   Run `km init` to verify the domain, or check DNS records if you recently changed `email_subdomain`.
+
+### Phase 82 isolation guarantees
+
+Phase 82 (2026-05-16) completed the resource-prefix isolation work, making the two-install scenario safe:
+
+**What changed:**
+- **SES module** — receipt rule set name is now `${resource_prefix}-sandbox-email` (was hard-coded `km-sandbox-email`). A second install with `resource_prefix: km2` gets `km2-sandbox-email` without touching the first install's rule set.
+- **email-handler module** — IAM policy ARNs and S3 paths now interpolate `state_prefix`. A second install's Lambda role is scoped to its own prefix.
+- **ECS modules** — SSM parameter ARN interpolates `km_label`. ECS task containers reference only their own install's parameters.
+- **Resource tag** — every per-install platform resource carries `km:resource-prefix=${prefix}`. `km doctor` untagged-resource checks and cross-install safety filters all key off this tag to prevent false-positive deletions.
+
+**km configure preserve behavior:** Re-running `km configure` preserves the existing `resource_prefix` — it is never overwritten. Use `km configure --reset-prefix` to reset to the `km` default.
+
+**Upgrade procedure for existing installs (one-time):**
+```bash
+make build                   # rebuild km CLI
+km init --sidecars           # refresh management Lambda + sidecar binaries
+km init --dry-run=false      # apply Terraform module changes (tag additions only — no recreations)
+AWS_DEFAULT_REGION=us-east-1 AWS_PROFILE=<your-profile> \
+  km doctor --backfill-tags --dry-run=true    # preview which resources will be tagged
+AWS_DEFAULT_REGION=us-east-1 AWS_PROFILE=<your-profile> \
+  km doctor --backfill-tags --dry-run=false   # apply tags (idempotent — safe to re-run)
+```
+
+**Troubleshooting:** If `km doctor` reports WARN-level untagged-instance results after Phase 82 upgrade, run `km doctor --backfill-tags --dry-run=true` to preview, then `--dry-run=false` to commit. The cross-install safety guard skips resources whose `km:sandbox-id` tag does not match any row in the current install's DynamoDB sandbox table — those resources belong to a different install and are intentionally left alone.
