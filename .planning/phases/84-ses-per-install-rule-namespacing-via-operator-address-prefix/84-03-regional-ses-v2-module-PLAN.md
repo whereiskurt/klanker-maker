@@ -111,7 +111,7 @@ Live wiring update (`infra/live/use1/ses/terragrunt.hcl`):
 - Remove any `activate_rule_set` input.
 - Remove the `KM_SES_ACTIVATE_RULESET = get_env(...)` env read (if present in the file at line ~47 per RESEARCH).
 - Remove inputs for `domain`, `hosted_zone_id`, `email_subdomain` if they were only used for the moved-to-foundation resources (keep them only if v2.0.0 still needs them for `email_domain`).
-- Pass `email_domain` (built from `KM_EMAIL_SUBDOMAIN` + `KM_PARENT_DOMAIN`) and `artifact_bucket_name`.
+- Pass `email_domain` (built from `KM_EMAIL_SUBDOMAIN` + `KM_DOMAIN`) and `artifact_bucket_name`.
 - DO NOT modify the rest of the file structure (`include "root"`, `dependencies`, `locals`).
 </interfaces>
 </context>
@@ -288,7 +288,7 @@ After editing, ensure the file has NO references to:
 (These two strings remain elsewhere — CLAUDE.md, OPERATOR-GUIDE.md, v1.0.0/* — and will be cleaned by Plan 84-08. This task only handles the live terragrunt.hcl.)
   </action>
   <verify>
-    <automated>cd /Users/khundeck/working/klankrmkr/infra/live/use1/ses && grep -c "v2.0.0" terragrunt.hcl | grep -q "^1$" && echo "points at v2.0.0" && ! grep -q "activate_rule_set\|KM_SES_ACTIVATE_RULESET" terragrunt.hcl && echo "no Phase 82.1 leftovers in this file" && KM_RESOURCE_PREFIX=km KM_EMAIL_SUBDOMAIN=sandboxes KM_PARENT_DOMAIN=example.com terragrunt --terragrunt-non-interactive init -backend=false 2>&1 | tail -5</automated>
+    <automated>cd /Users/khundeck/working/klankrmkr/infra/live/use1/ses && grep -c "v2.0.0" terragrunt.hcl | grep -q "^1$" && echo "points at v2.0.0" && ! grep -q "activate_rule_set\|KM_SES_ACTIVATE_RULESET" terragrunt.hcl && echo "no Phase 82.1 leftovers in this file" && KM_RESOURCE_PREFIX=km KM_EMAIL_SUBDOMAIN=sandboxes KM_DOMAIN=example.com terragrunt --terragrunt-non-interactive init -backend=false 2>&1 | tail -5</automated>
   </verify>
   <done>Live terragrunt.hcl references v2.0.0, no Phase 82.1 references, terragrunt init succeeds offline.</done>
 </task>

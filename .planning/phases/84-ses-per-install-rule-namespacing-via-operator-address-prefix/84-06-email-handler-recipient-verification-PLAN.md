@@ -60,7 +60,7 @@ Output:
 
 Existing Handle entry path (RESEARCH § Pattern 2 + Code Examples):
 - The Lambda already reads `KM_RESOURCE_PREFIX` via `resourcePrefix()` helper at lines 113-118.
-- The Lambda already reads a domain — confirm exact env var (likely `KM_EMAIL_DOMAIN` or constructed from `KM_EMAIL_SUBDOMAIN` + `KM_PARENT_DOMAIN`).
+- The Lambda already reads a domain — confirm exact env var (likely `KM_EMAIL_DOMAIN` or constructed from `KM_EMAIL_SUBDOMAIN` + `KM_DOMAIN`).
 - The Handle method (~line 230+) extracts the sender via `mail.ParseAddress(msg.Header.Get("From"))`. We add an analogous extraction for `To:`.
 
 New gate code (insert BEFORE the existing allowlist/safe-phrase checks):
@@ -92,7 +92,7 @@ Outbound-reply From at line ~861:
 - Before: likely `from := fmt.Sprintf("operator@%s", h.Domain)` or similar.
 - After: `from := fmt.Sprintf("operator-%s@%s", resourcePrefix(), h.Domain)`.
 
-Domain resolution caveat: The handler reads its domain from an env var. If today it's reading a value that DOES include the email subdomain (e.g., `KM_EMAIL_DOMAIN=sandboxes.example.com`), use it as-is. If it's reading just `KM_PARENT_DOMAIN=example.com` and constructing the domain elsewhere, use the same construction at the verification point. Read the existing code carefully.
+Domain resolution caveat: The handler reads its domain from an env var. If today it's reading a value that DOES include the email subdomain (e.g., `KM_EMAIL_DOMAIN=sandboxes.example.com`), use it as-is. If it's reading just `KM_DOMAIN=example.com` and constructing the domain elsewhere, use the same construction at the verification point. Read the existing code carefully.
 
 Multiple `To:` recipients: if the email has multiple To-addresses (rare but possible, e.g., CC parsed as To by SES), check if ANY of them match the expected address. The example above takes only the first — refine to a loop if needed.
 

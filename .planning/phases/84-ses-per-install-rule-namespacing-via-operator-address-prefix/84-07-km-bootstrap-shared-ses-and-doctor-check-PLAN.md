@@ -104,7 +104,7 @@ func checkSESRules(ctx context.Context, client SESReceiptRuleAPI, localPrefix st
 
 `km bootstrap --shared-ses` flag wiring (in bootstrap.go's existing Cobra setup):
 - Add `bootstrapCmd.Flags().Bool("shared-ses", false, "Provision the account-shared SES rule set + domain identity (Phase 84)")`.
-- In the run function: if `--shared-ses` set, call `detectSharedSESState`, set env vars (`KM_REGISTER_SHARED_RULESET`, `KM_REGISTER_DOMAIN_IDENTITY`, `KM_EMAIL_SUBDOMAIN`, `KM_PARENT_DOMAIN`, `KM_HOSTED_ZONE_ID`), run `terragrunt apply --auto-approve` against `infra/live/use1/ses-shared-rule-set/`.
+- In the run function: if `--shared-ses` set, call `detectSharedSESState`, set env vars (`KM_REGISTER_SHARED_RULESET`, `KM_REGISTER_DOMAIN_IDENTITY`, `KM_EMAIL_SUBDOMAIN`, `KM_DOMAIN`, `KM_HOSTED_ZONE_ID`), run `terragrunt apply --auto-approve` against `infra/live/use1/ses-shared-rule-set/`.
 - Honor existing `--dry-run` flag (terragrunt plan vs apply).
 - Honor existing `ExportConfigEnvVars` requirement (MEMORY note: `terragrunt env export required`).
 - Log step-level summaries per OPER-01.
@@ -249,7 +249,7 @@ if sharedSES {
 
     os.Setenv("KM_REGISTER_SHARED_RULESET", strconv.FormatBool(registerRS))
     os.Setenv("KM_REGISTER_DOMAIN_IDENTITY", strconv.FormatBool(registerID))
-    // KM_EMAIL_SUBDOMAIN, KM_PARENT_DOMAIN, KM_HOSTED_ZONE_ID are set by ExportConfigEnvVars.
+    // KM_EMAIL_SUBDOMAIN, KM_DOMAIN, KM_HOSTED_ZONE_ID are set by ExportConfigEnvVars.
 
     return runTerragruntApply(ctx, "infra/live/use1/ses-shared-rule-set", dryRun, verbose)
 }

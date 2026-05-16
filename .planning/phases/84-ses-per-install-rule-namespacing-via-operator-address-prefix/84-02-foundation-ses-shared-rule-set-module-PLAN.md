@@ -251,7 +251,7 @@ terraform {
 locals {
   region_hcl    = read_terragrunt_config(find_in_parent_folders("region.hcl"))
   aws_region    = local.region_hcl.locals.aws_region
-  email_domain  = "${get_env("KM_EMAIL_SUBDOMAIN", "sandboxes")}.${get_env("KM_PARENT_DOMAIN", "example.com")}"
+  email_domain  = "${get_env("KM_EMAIL_SUBDOMAIN", "sandboxes")}.${get_env("KM_DOMAIN", "example.com")}"
   hosted_zone_id = get_env("KM_HOSTED_ZONE_ID", "")  # surfaced by km bootstrap
 }
 
@@ -271,12 +271,12 @@ inputs = {
 }
 ```
 
-Cross-check the existing `infra/live/use1/ses/terragrunt.hcl` for the EXACT env-var names already in use (e.g., `KM_EMAIL_SUBDOMAIN`, `KM_PARENT_DOMAIN`, `KM_HOSTED_ZONE_ID`). Reuse the same names — Plan 84-07's `km bootstrap` will call `ExportConfigEnvVars` (per MEMORY note "Terragrunt env export required") which sets these from `km-config.yaml`.
+Cross-check the existing `infra/live/use1/ses/terragrunt.hcl` for the EXACT env-var names already in use (e.g., `KM_EMAIL_SUBDOMAIN`, `KM_DOMAIN`, `KM_HOSTED_ZONE_ID`). Reuse the same names — Plan 84-07's `km bootstrap` will call `ExportConfigEnvVars` (per MEMORY note "Terragrunt env export required") which sets these from `km-config.yaml`.
 
 If the existing live SES dir references a different env-var name for the hosted zone, adopt that name here verbatim.
   </action>
   <verify>
-    <automated>cd /Users/khundeck/working/klankrmkr/infra/live/use1/ses-shared-rule-set && KM_REGISTER_SHARED_RULESET=true KM_REGISTER_DOMAIN_IDENTITY=true KM_EMAIL_SUBDOMAIN=sandboxes KM_PARENT_DOMAIN=example.com KM_HOSTED_ZONE_ID=Z00000000000000000000 terragrunt --terragrunt-non-interactive hclvalidate 2>&1 | tail -10 || echo "(hclvalidate may not be available; falling back to terraform validate via terragrunt init)"; terragrunt --terragrunt-non-interactive init -backend=false 2>&1 | tail -10</automated>
+    <automated>cd /Users/khundeck/working/klankrmkr/infra/live/use1/ses-shared-rule-set && KM_REGISTER_SHARED_RULESET=true KM_REGISTER_DOMAIN_IDENTITY=true KM_EMAIL_SUBDOMAIN=sandboxes KM_DOMAIN=example.com KM_HOSTED_ZONE_ID=Z00000000000000000000 terragrunt --terragrunt-non-interactive hclvalidate 2>&1 | tail -10 || echo "(hclvalidate may not be available; falling back to terraform validate via terragrunt init)"; terragrunt --terragrunt-non-interactive init -backend=false 2>&1 | tail -10</automated>
   </verify>
   <done>terragrunt.hcl parses cleanly. `terragrunt init -backend=false` succeeds (or `hclvalidate` clean). No AWS calls in plan-only mode.</done>
 </task>
