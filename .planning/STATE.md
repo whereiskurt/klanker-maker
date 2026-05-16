@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 82-02-PLAN.md — hard-fail sidecar Lambdas + prefix-aware userdata table names
-last_updated: "2026-05-16T12:55:58.049Z"
+stopped_at: Completed 82-01-PLAN.md — configure preserve-on-re-run resource_prefix + --reset-prefix flag
+last_updated: "2026-05-16T12:56:36.693Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 90
   completed_phases: 80
   total_plans: 343
-  completed_plans: 298
+  completed_plans: 299
   percent: 93
 ---
 
@@ -337,6 +337,7 @@ Progress: [█████████░] 93%
 | Phase 79.1 P04 | 600s | 2 tasks | 2 files |
 | Phase 82-multi-instance-resource-prefix-isolation P03 | 8min | 1 tasks | 3 files |
 | Phase 82-multi-instance-resource-prefix-isolation P02 | 30min | 2 tasks | 7 files |
+| Phase 82-multi-instance-resource-prefix-isolation P01 | 11min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -964,6 +965,8 @@ Recent decisions affecting current work:
 - [Phase 82-03]: KMBakeTags: resourcePrefix added as trailing positional parameter; km:resource-prefix tag alphabetized in returned slice; all baked AMIs now carry install-discriminator tag for Plan 04 filter
 - [Phase 82]: Move EventsHandler wiring from init() to wireEventsHandler() called from main() so test builds do not trigger os.Exit during package init
 - [Phase 82]: Use resourcePrefix+'-slack-threads' env+prefix-compute in userdata.go rather than threading cfg *config.Config into generateUserData (too invasive)
+- [Phase 82-01]: Changed --resource-prefix flag default from 'km' to '' so preserve-on-re-run logic can detect 'nothing passed' vs 'user explicitly passed km'; defaulting now lives in runConfigure after checking disk
+- [Phase 82-01]: Added --reset-prefix bool flag (default false) as explicit opt-in for re-defaulting resource_prefix back to km; guards against accidental silent reset on re-run
 
 ### Roadmap Evolution
 
@@ -1068,6 +1071,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T12:55:58.041Z
-Stopped at: Completed 82-02-PLAN.md — hard-fail sidecar Lambdas + prefix-aware userdata table names
+Last session: 2026-05-16T12:56:36.685Z
+Stopped at: Completed 82-01-PLAN.md — configure preserve-on-re-run resource_prefix + --reset-prefix flag
 Resume file: None
