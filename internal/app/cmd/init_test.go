@@ -29,6 +29,10 @@ func (m *mockRunner) Apply(_ context.Context, dir string) error {
 	return nil
 }
 
+func (m *mockRunner) Reconfigure(_ context.Context, _ string) error {
+	return nil
+}
+
 func (m *mockRunner) Output(_ context.Context, _ string) (map[string]interface{}, error) {
 	if m.outputs != nil {
 		return m.outputs, nil

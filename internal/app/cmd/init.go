@@ -45,6 +45,7 @@ import (
 type InitRunner interface {
 	Apply(ctx context.Context, dir string) error
 	Output(ctx context.Context, dir string) (map[string]interface{}, error)
+	Reconfigure(ctx context.Context, dir string) error
 }
 
 // SESPreflightFunc is a function that validates the shared SES rule set exists
@@ -740,6 +741,17 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 		if mod.name == "ses" && InitSESPreflight != nil {
 			if preflightErr := InitSESPreflight(ctx); preflightErr != nil {
 				return preflightErr
+			}
+		}
+
+		// Phase 84: reconfigure the ses module before apply. The module source
+		// changed from v1.0.0 to v2.0.0, which gives terragrunt a fresh cache
+		// directory whose .terraform/ has never been initialized. Auto-init
+		// doesn't fire when the backend config is new to this working tree.
+		// Reconfigure is a no-op when the backend is already initialized.
+		if mod.name == "ses" {
+			if err := runner.Reconfigure(ctx, mod.dir); err != nil {
+				return fmt.Errorf("reconfiguring ses backend: %w", err)
 			}
 		}
 
