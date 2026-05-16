@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 82-05-PLAN.md — km doctor --backfill-tags with cross-install safety guard
-last_updated: "2026-05-16T13:10:37.108Z"
+stopped_at: Completed 82-04-PLAN.md — ListBakedAMIs prefix filter + checkOrphanedEC2 discrimination
+last_updated: "2026-05-16T13:12:15.091Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 90
   completed_phases: 80
   total_plans: 343
-  completed_plans: 300
+  completed_plans: 301
   percent: 93
 ---
 
@@ -339,6 +339,7 @@ Progress: [█████████░] 93%
 | Phase 82-multi-instance-resource-prefix-isolation P02 | 30min | 2 tasks | 7 files |
 | Phase 82-multi-instance-resource-prefix-isolation P01 | 11min | 2 tasks | 2 files |
 | Phase 82-multi-instance-resource-prefix-isolation P05 | 617 | 2 tasks | 4 files |
+| Phase 82-multi-instance-resource-prefix-isolation P04 | 13min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -971,6 +972,8 @@ Recent decisions affecting current work:
 - [Phase 82-05]: BackfillTaggingAPI uses manual PaginationToken loop (not SDK paginator) to keep interface minimal and mocks simple
 - [Phase 82-05]: DDB GetItem cross-install guard: skip any resource whose sandbox_id is absent from this install's DDB (Pitfall 4 mitigation)
 - [Phase 82-05]: Default --dry-run=true for --backfill-tags matches km init UX pattern
+- [Phase 82-multi-instance-resource-prefix-isolation]: 82-04: ListBakedAMIs takes explicit string param (not functional option) — empty string means no prefix filter for all-installs diagnostics
+- [Phase 82-multi-instance-resource-prefix-isolation]: 82-04: checkOrphanedEC2 post-fetch tag discrimination (not API-level filter) so pre-Phase-82 untagged instances surface as WARN with --backfill-tags pointer
 
 ### Roadmap Evolution
 
@@ -1075,6 +1078,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T13:10:37.097Z
-Stopped at: Completed 82-05-PLAN.md — km doctor --backfill-tags with cross-install safety guard
+Last session: 2026-05-16T13:12:15.085Z
+Stopped at: Completed 82-04-PLAN.md — ListBakedAMIs prefix filter + checkOrphanedEC2 discrimination
 Resume file: None
