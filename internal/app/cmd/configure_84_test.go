@@ -140,13 +140,12 @@ region: us-east-1
 	body := string(data)
 
 	// After --reset-prefix the old operator_email must NOT be present.
-	// The new derived value should be operator-km@sandboxes.example.com (default prefix=km after reset).
 	if strings.Contains(body, "operator-kph@") {
 		t.Errorf("km-config.yaml must NOT contain old operator_email after --reset-prefix; got:\n%s", body)
 	}
-	// The new derived value must be present (re-derived from prefix=km).
-	wantNew := "operator-km@sandboxes.example.com"
-	if !strings.Contains(body, wantNew) {
-		t.Errorf("km-config.yaml should contain re-derived operator_email %q after --reset-prefix; got:\n%s", wantNew, body)
+	// The operator_email must also NOT be re-derived in the same --reset-prefix run.
+	// The NEXT configure run (without --reset-prefix) will derive it from the new prefix.
+	if strings.Contains(body, "operator_email:") {
+		t.Errorf("km-config.yaml must NOT contain operator_email field after --reset-prefix (should be empty/omitted); got:\n%s", body)
 	}
 }
