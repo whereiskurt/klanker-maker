@@ -1075,6 +1075,74 @@ var _ SESGetEmailIdentityAPI = (*mockSESClient)(nil)
 // redundant with the Lambda-existence check.)
 
 // =============================================================================
+// Phase 84.1 Plan 03 — GAP-8: state-lock digest check wired into buildChecks.
+//
+// Verifies the check is registered in the runDoctor pipeline by:
+//   1. Constructing DoctorDeps with the new StateLockS3Client + StateLockDDBClient
+//      fields populated (mocks).
+//   2. Calling buildChecks(cfg, deps) and runChecks.
+//   3. Asserting one of the CheckResults has Name "Terraform state lock digest".
+//
+// Also exercises the backendLockTableName helper to lock in the
+// "tf-${prefix}-locks-${region_label}" naming convention.
+// =============================================================================
+
+func TestBuildChecks_IncludesStateLockDigest(t *testing.T) {
+	cfg := minimalConfig() // prefix=km, region=us-east-1 → tf-km-locks-use1
+	deps := &DoctorDeps{
+		// Both clients return empty/skipped states so the check produces a
+		// deterministic SKIPPED result regardless of AWS state.
+		StateLockS3Client:  &mockS3StateReader{bodies: map[string][]byte{}},
+		StateLockDDBClient: &mockLockDigestReader{}, // no pages → empty scan → CheckOK with 0 items
+	}
+	checks := buildChecks(cfg, deps)
+	results := runChecks(context.Background(), checks)
+	var found bool
+	for _, r := range results {
+		if r.Name == "Terraform state lock digest" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("buildChecks should include the 'Terraform state lock digest' check")
+	}
+}
+
+func TestBackendLockTableName(t *testing.T) {
+	cfg := minimalConfig() // prefix=km, region=us-east-1
+	got := backendLockTableName(cfg)
+	want := "tf-km-locks-use1"
+	if got != want {
+		t.Errorf("backendLockTableName(prefix=km, region=us-east-1) = %q, want %q", got, want)
+	}
+}
+
+func TestBuildChecks_StateLockDigest_NilClientsSkippedCleanly(t *testing.T) {
+	cfg := minimalConfig()
+	deps := &DoctorDeps{
+		// Both nil — the check must surface as CheckSkipped, never panic.
+		StateLockS3Client:  nil,
+		StateLockDDBClient: nil,
+	}
+	checks := buildChecks(cfg, deps)
+	results := runChecks(context.Background(), checks)
+	var got CheckResult
+	for _, r := range results {
+		if r.Name == "Terraform state lock digest" {
+			got = r
+			break
+		}
+	}
+	if got.Name == "" {
+		t.Fatal("Terraform state lock digest check missing from buildChecks output")
+	}
+	if got.Status != CheckSkipped {
+		t.Errorf("expected CheckSkipped when both clients nil, got %s: %s", got.Status, got.Message)
+	}
+}
+
+// =============================================================================
 // Tests: checkEmailDomainMatchesSESIdentity (Phase 66)
 // =============================================================================
 
