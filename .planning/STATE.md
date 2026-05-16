@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84-02-PLAN.md — foundation ses-shared-rule-set module + live wiring
-last_updated: "2026-05-16T20:13:29.264Z"
+stopped_at: Completed 84-06-email-handler-recipient-verification-PLAN.md
+last_updated: "2026-05-16T20:14:39.461Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 93
   completed_phases: 82
   total_plans: 363
-  completed_plans: 310
+  completed_plans: 311
   percent: 93
 ---
 
@@ -349,6 +349,7 @@ Progress: [█████████░] 93%
 | Phase 82.1-01 P01 | 8min | 2 tasks | 2 files |
 | Phase 82.1-multi-instance-polish P03 | 25 | 4 tasks | 5 files |
 | Phase 84 P02 | 227 | 3 tasks | 4 files |
+| Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P06 | 182 | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -994,6 +995,8 @@ Recent decisions affecting current work:
 - [Phase 82.1-01]: configure.go preserve guard extended to bare-path invocations via effectiveDir = outputDir || findRepoRoot(), mirroring write-path logic
 - [Phase 82.1-03]: SES activate_rule_set opt-in (default true): count-gate aws_ses_active_receipt_rule_set so second installs set KM_SES_ACTIVATE_RULESET=false to avoid stealing primary install's inbound email activation; Terraform 1.x auto-migrates count-index address change (no moved{} block needed, confirmed by operator terragrunt plan)
 - [Phase 84]: ses-shared-rule-set/v1.0.0 foundation module: register_X flags for idempotency; no data-source fallback (AWS SES provider gap); KM_ROUTE53_ZONE_ID matches existing ses/ convention
+- [Phase 84-06]: Recipient verification gate inserted BEFORE allowlist/safe-phrase for cheap dispatch of foreign-prefix emails
+- [Phase 84-06]: Test handler Domain updated to sandboxes.example.com to match KM_EMAIL_DOMAIN production value; test email To: headers updated to operator-km@sandboxes.example.com
 
 ### Roadmap Evolution
 
@@ -1099,6 +1102,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T20:13:29.256Z
-Stopped at: Completed 84-02-PLAN.md — foundation ses-shared-rule-set module + live wiring
+Last session: 2026-05-16T20:14:39.453Z
+Stopped at: Completed 84-06-email-handler-recipient-verification-PLAN.md
 Resume file: None
