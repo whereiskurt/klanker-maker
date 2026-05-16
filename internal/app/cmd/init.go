@@ -27,6 +27,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/route53"
 	route53types "github.com/aws/aws-sdk-go-v2/service/route53/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/ses"
+	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/spf13/cobra"
@@ -43,6 +45,51 @@ import (
 type InitRunner interface {
 	Apply(ctx context.Context, dir string) error
 	Output(ctx context.Context, dir string) (map[string]interface{}, error)
+}
+
+// SESPreflightFunc is a function that validates the shared SES rule set exists
+// before the regional ses module applies. It is called by RunInitWithRunner
+// immediately before the ses module apply step.
+//
+// The default implementation calls SES ListReceiptRuleSets via the production
+// AWS config. Tests replace this variable with a mock to avoid real AWS calls.
+//
+// Signature: func(ctx context.Context) error
+// Returns nil when the preflight passes (rule set exists).
+// Returns an actionable error when the shared rule set is missing.
+type SESPreflightFunc func(ctx context.Context) error
+
+// InitSESPreflight is the package-level SES preflight function used by RunInitWithRunner.
+// Tests replace this variable to exercise the "missing rule set" branch.
+var InitSESPreflight SESPreflightFunc = defaultSESPreflight
+
+// defaultSESPreflight is the real implementation: loads AWS config and checks
+// whether the shared SES receipt rule set exists.
+func defaultSESPreflight(ctx context.Context) error {
+	// Load AWS config using the application profile (same as runInit).
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, "klanker-application")
+	if err != nil {
+		// If we cannot load AWS config, skip the preflight rather than blocking init.
+		// The apply will surface a more specific error if the rule set is truly absent.
+		return nil
+	}
+	// Use the ses classic v1 client for ListReceiptRuleSets.
+	lister := &realSESLister{
+		sesClient: ses.NewFromConfig(awsCfg),
+		// sesv2Client not needed for the rule-set check alone.
+		sesv2Client: sesv2.NewFromConfig(awsCfg),
+	}
+	registerRS, _, err := detectSharedSESState(ctx, lister, "sandbox-email-shared", "")
+	if err != nil {
+		// Treat detection error as a skip (network issue, permission issue, etc.)
+		// rather than aborting init. The Terraform apply will surface the real error.
+		return nil
+	}
+	if registerRS {
+		// registerRS=true means the shared rule set does NOT exist.
+		return fmt.Errorf("Foundation SES rule set 'sandbox-email-shared' not found. Run 'km bootstrap --shared-ses' first on a fresh account.")
+	}
+	return nil
 }
 
 // NetworkOutputs holds the Terraform outputs from the shared network module.
@@ -683,6 +730,17 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 		}
 		if skipped {
 			continue
+		}
+
+		// Phase 84: preflight check for the regional ses module.
+		// The ses v2.0.0 module references "sandbox-email-shared" as a string constant —
+		// no Terraform data source for SES rule sets exists. If the shared rule set
+		// doesn't exist, the Terraform apply will fail mid-flight with RuleSetDoesNotExist.
+		// Fail fast with a clear actionable message instead.
+		if mod.name == "ses" && InitSESPreflight != nil {
+			if preflightErr := InitSESPreflight(ctx); preflightErr != nil {
+				return preflightErr
+			}
 		}
 
 		fmt.Printf("  Applying %s...", mod.name)
