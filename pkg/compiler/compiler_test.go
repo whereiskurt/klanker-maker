@@ -200,6 +200,73 @@ func TestCompileEC2Spot(t *testing.T) {
 	}
 }
 
+func TestEC2ServiceHCL_StreamTableUsesResourcePrefix(t *testing.T) {
+	// RED: verify prefix-aware stream table derivation.
+	// With KM_RESOURCE_PREFIX=rg and no explicit KM_SLACK_STREAM_TABLE override,
+	// the generated ServiceHCL must reference "rg-slack-stream-messages", not the
+	// old hardcoded "km-slack-stream-messages" literal.
+
+	t.Run("custom prefix rg", func(t *testing.T) {
+		t.Setenv("KM_RESOURCE_PREFIX", "rg")
+		t.Setenv("KM_SLACK_STREAM_TABLE", "") // ensure fallback path is exercised
+
+		p := loadTestProfile(t, "ec2-basic.yaml")
+		id := "sb-streamtest"
+
+		artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
+		if err != nil {
+			t.Fatalf("Compile() error = %v", err)
+		}
+
+		hcl := artifacts.ServiceHCL
+		if !strings.Contains(hcl, "rg-slack-stream-messages") {
+			t.Errorf("ServiceHCL: expected %q but not found\nGot:\n%s", "rg-slack-stream-messages", hcl)
+		}
+		if strings.Contains(hcl, "km-slack-stream-messages") {
+			t.Errorf("ServiceHCL: old literal %q still present; should be replaced by prefix-aware name\nGot:\n%s", "km-slack-stream-messages", hcl)
+		}
+	})
+
+	t.Run("default prefix km", func(t *testing.T) {
+		t.Setenv("KM_RESOURCE_PREFIX", "") // unset → default "km"
+		t.Setenv("KM_SLACK_STREAM_TABLE", "")
+
+		p := loadTestProfile(t, "ec2-basic.yaml")
+		id := "sb-streamdflt"
+
+		artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
+		if err != nil {
+			t.Fatalf("Compile() error = %v", err)
+		}
+
+		hcl := artifacts.ServiceHCL
+		if !strings.Contains(hcl, "km-slack-stream-messages") {
+			t.Errorf("ServiceHCL: default prefix should produce %q\nGot:\n%s", "km-slack-stream-messages", hcl)
+		}
+	})
+
+	t.Run("explicit KM_SLACK_STREAM_TABLE override wins", func(t *testing.T) {
+		t.Setenv("KM_RESOURCE_PREFIX", "rg")
+		t.Setenv("KM_SLACK_STREAM_TABLE", "custom-table")
+
+		p := loadTestProfile(t, "ec2-basic.yaml")
+		id := "sb-streamcust"
+
+		artifacts, err := compiler.Compile(p, id, false, testNetwork(), nil)
+		if err != nil {
+			t.Fatalf("Compile() error = %v", err)
+		}
+
+		hcl := artifacts.ServiceHCL
+		if !strings.Contains(hcl, "custom-table") {
+			t.Errorf("ServiceHCL: explicit override should produce %q\nGot:\n%s", "custom-table", hcl)
+		}
+		if strings.Contains(hcl, "rg-slack-stream-messages") {
+			t.Errorf("ServiceHCL: prefix-derived name should not appear when override is set\nGot:\n%s", hcl)
+		}
+	})
+}
+
 func TestCompileTagging(t *testing.T) {
 	p := loadTestProfile(t, "ec2-basic.yaml")
 	id := "sb-tagtest1"
