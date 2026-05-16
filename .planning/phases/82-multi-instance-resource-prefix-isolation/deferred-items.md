@@ -4,6 +4,8 @@
 
 ### pkg/compiler/service_hcl.go:784 — literal "km-slack-stream-messages" fallback
 
+**Status:** RESOLVED — closed by Phase 82.1-02 (commit 42f7f25).
+
 **Discovered during:** Task 2 (grep audit)
 **File:** `pkg/compiler/service_hcl.go` line 784
 **Issue:** Same `km-slack-stream-messages` literal fallback pattern as the three
@@ -16,3 +18,9 @@ function in `service_hcl.go`) and was not identified in the plan's scope
 available in that function's scope first.
 **Priority:** Medium — affects sandbox HCL generation, same blast radius as
 the userdata.go sites.
+
+**Resolution:** Phase 82.1-02 replaced the literal with
+`ec2StreamPrefix + "-slack-stream-messages"` where `ec2StreamPrefix` reads
+`KM_RESOURCE_PREFIX` (defaulting to `"km"`). Test
+`TestEC2ServiceHCL_StreamTableUsesResourcePrefix` covers the custom-prefix,
+default-prefix, and explicit-override branches.

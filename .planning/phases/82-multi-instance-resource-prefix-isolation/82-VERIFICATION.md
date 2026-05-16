@@ -1,20 +1,23 @@
 ---
 phase: 82-multi-instance-resource-prefix-isolation
 verified: 2026-05-16T12:00:00Z
-status: human_needed
-score: 9/10 must-haves verified
+updated: 2026-05-16T12:30:00Z
+status: resolved
+score: 10/10 must-haves verified (after Phase 82.1 gap closure)
 gaps:
   - truth: "km configure re-run preserves resource_prefix in all invocation modes"
-    status: partial
+    status: resolved
     reason: "Preserve logic fires only when --output-dir is explicitly passed (line 145: `if !resetPrefix && outputDir != \"\"`). Bare `km configure` (no --output-dir) skips the read-existing-config block. The test TestConfigureRerunPreservesResourcePrefix exercises only the --output-dir path. CLAUDE.md claims 'preserving is never overwritten' without this qualifier."
+    resolved_by: "Phase 82.1-01 (commit 061fdc2): extended preserve guard to use findRepoRoot() fallback when outputDir is empty; TestConfigureBarePath_PreservesResourcePrefix + TestConfigureBarePath_FreshInstallDefaultsToKm added"
     artifacts:
       - path: "internal/app/cmd/configure.go"
         issue: "Preserve guard at line 145 is `outputDir != \"\"` — silent no-op when --output-dir absent (the default usage)"
     missing:
       - "Either extend the preserve guard to also attempt findRepoRoot() as a fallback read path, or qualify the CLAUDE.md/OPERATOR-GUIDE.md documentation to note the --output-dir requirement"
   - truth: "All four silent km-* literal fallbacks are replaced"
-    status: partial
+    status: resolved
     reason: "Three userdata.go sites are fixed. pkg/compiler/service_hcl.go:784 still has literal `\"km-slack-stream-messages\"` fallback — this was explicitly deferred in Plan 82-02 and logged to deferred-items.md, but the deferred-items file exists in the phase directory rather than in a future-phase plan."
+    resolved_by: "Phase 82.1-02 (commit 42f7f25): service_hcl.go:784 literal replaced with KM_RESOURCE_PREFIX-derived value; TestEC2ServiceHCL_StreamTableUsesResourcePrefix added"
     artifacts:
       - path: "pkg/compiler/service_hcl.go"
         issue: "Line 784: `streamTable = \"km-slack-stream-messages\"` literal not replaced with prefix-aware derivation"
