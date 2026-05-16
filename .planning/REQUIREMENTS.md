@@ -358,6 +358,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-SLACK-IN-LIFECYCLE | Phase 67 | Planned |
 | REQ-SLACK-IN-OBSERVABILITY | Phase 67 | Planned |
 | REQ-SLACK-IN-INIT | Phase 67 | Planned |
+| SES-PREFIX-ADDRESS | Phase 84 | Planned |
+| SES-SHARED-RULESET | Phase 84 | Planned |
+| SES-PER-INSTALL-RULES | Phase 84 | Planned |
+| SES-82.1-REMOVAL | Phase 84 | Planned |
+| SES-CONFIGURE-WIRING | Phase 84 | Planned |
+| SES-HANDLER-LOOKUP | Phase 84 | Planned |
+| SES-DOCTOR-ORPHANS | Phase 84 | Planned |
 
 **Coverage:**
 - v1 requirements: 89 total (81 original + 8 Slack Inbound)

@@ -1785,7 +1785,7 @@ Plans:
 Plans:
 - [ ] 82.1-01-PLAN.md — Bare-path configure preserve: extend outputDir guard to findRepoRoot() fallback (Wave 1, TDD, Go-only)
 - [ ] 82.1-02-PLAN.md — service_hcl.go stream-table prefix-aware derivation: replace literal at line 784 (Wave 1, TDD, Go-only)
-- [ ] 82.1-03-PLAN.md — SES activate_rule_set opt-in variable: count-gate aws_ses_active_receipt_rule_set + operator checkpoint (Wave 2, Terraform + docs)
+- [ ] 82.1-03-PLAN.md — SES activate_rule_set opt-in variable: count-gate aws_ses_active_receipt_rule_set + operator checkpoint (Wave 2, Terraform + docs) — **SUPERSEDED by Phase 84**
 
 ### Phase 83: Add km event command for operator-controlled EventBridge
 
@@ -1811,7 +1811,7 @@ Phase closes when (a) a second install can run `km init --dry-run=false` against
 
 **Requirements:** SES-PREFIX-ADDRESS, SES-SHARED-RULESET, SES-PER-INSTALL-RULES, SES-82.1-REMOVAL, SES-CONFIGURE-WIRING, SES-HANDLER-LOOKUP, SES-DOCTOR-ORPHANS (synthetic IDs — supersedes SES-ACTIVE-RULESET from Phase 82.1)
 **Depends on:** Phase 82.1
-**Plans:** 8/10 plans executed
+**Plans:** 9/10 plans executed
 
 Plans:
 - [ ] 84-01-wave0-test-scaffolds-PLAN.md — Wave 0 Nyquist failing-test infrastructure (11 stubs + Makefile grep gate)
