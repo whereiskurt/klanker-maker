@@ -3187,3 +3187,28 @@ func (l *doctorEC2InstanceLister) InstanceExists(ctx context.Context, sandboxID 
 	}
 	return false, nil
 }
+
+// SESReceiptRuleAPI is the narrow interface for the SES receipt rule set
+// operations used by checkSESRules. Plan 84-07 will wire this to the real
+// aws-sdk-go-v2/service/ses client; tests use a mock.
+//
+// Stub added by Plan 84-04 (Rule 3 auto-fix) to unblock package compilation
+// while Wave 0 doctor_test.go stubs reference the not-yet-implemented function.
+type SESReceiptRuleAPI interface {
+	// DescribeReceiptRuleSet will be implemented in Plan 84-07.
+}
+
+// checkSESRules lists the rules in the shared SES receipt rule set and warns
+// when any rule's prefix does not match the local resource_prefix (orphan rule).
+//
+// This is a STUB added by Plan 84-04 to allow the Wave 0 test stubs
+// (W0-06, W0-07) to compile. Full implementation lands in Plan 84-07.
+//
+// Current behavior: always returns CheckSkipped so CI is not broken.
+func checkSESRules(_ context.Context, _ SESReceiptRuleAPI, _ string) CheckResult {
+	return CheckResult{
+		Name:    "ses_rules",
+		Status:  CheckSkipped,
+		Message: "SES rule orphan check not yet implemented (Plan 84-07)",
+	}
+}

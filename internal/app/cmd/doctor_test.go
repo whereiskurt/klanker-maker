@@ -1897,3 +1897,45 @@ func TestCheckOrphanedEC2_WarnsUntagged(t *testing.T) {
 		t.Errorf("result should mention --backfill-tags; message=%q remediation=%q", result.Message, result.Remediation)
 	}
 }
+
+// =============================================================================
+// Phase 84 Wave 0 stubs — W0-06, W0-07
+// These tests are intentionally RED at Wave 0. They exercise checkSESRules,
+// a function that will be added to doctor.go by plan 84-07.
+// mockSESReceiptRuleAPI is defined in doctor_ses_rules_test.go (phase84_doctor tag).
+// =============================================================================
+
+// TestCheckSESRules_AllOwn (W0-06) verifies that when all rules in the active
+// rule set belong to the current resource_prefix, checkSESRules returns StatusOK.
+func TestCheckSESRules_AllOwn(t *testing.T) {
+	// mockSESReceiptRuleAPI is defined in doctor_ses_rules_test.go (build tag phase84_doctor).
+	// At Wave 0 the build tag prevents compilation, so this test stubs out the
+	// function signature reference to make the compile fail on checkSESRules,
+	// not on the mock type. checkSESRules does not exist yet in doctor.go.
+	result := checkSESRules(context.Background(), nil, "kph")
+	// Expected: CheckOK, message mentions "2 rules" and "kph".
+	if result.Status != CheckOK {
+		t.Errorf("expected CheckOK when all rules own prefix kph, got %s: %s", result.Status, result.Message)
+	}
+	if !strings.Contains(result.Message, "2 rules") {
+		t.Errorf("expected message to mention '2 rules', got: %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "kph") {
+		t.Errorf("expected message to mention 'kph', got: %s", result.Message)
+	}
+}
+
+// TestCheckSESRules_Orphans (W0-07) verifies that when the active rule set
+// contains a rule from a foreign prefix, checkSESRules returns StatusWarn
+// with the orphan rule name surfaced.
+func TestCheckSESRules_Orphans(t *testing.T) {
+	// checkSESRules does not exist yet — this test is RED at Wave 0.
+	result := checkSESRules(context.Background(), nil, "kph")
+	// Expected: CheckWarn, orphan list contains "xx-operator-inbound".
+	if result.Status != CheckWarn {
+		t.Errorf("expected CheckWarn when orphan rule xx-operator-inbound present, got %s: %s", result.Status, result.Message)
+	}
+	if !strings.Contains(result.Message, "xx-operator-inbound") {
+		t.Errorf("expected message to contain 'xx-operator-inbound', got: %s", result.Message)
+	}
+}

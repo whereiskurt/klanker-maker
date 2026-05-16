@@ -625,6 +625,143 @@ region: us-east-1
 	}
 }
 
+// =============================================================================
+// Phase 84 Wave 0 stubs — W0-01, W0-02, W0-03
+// These tests are intentionally RED at Wave 0. They exercise derive/reset logic
+// for operator_email that will be added by plan 84-04.
+// =============================================================================
+
+// TestConfigure_DerivesOperatorEmailFromPrefix (W0-01) verifies that km configure
+// derives operator_email as "operator-{prefix}@{email_subdomain}.{domain}" when
+// operator_email is not explicitly provided.
+func TestConfigure_DerivesOperatorEmailFromPrefix(t *testing.T) {
+	km := buildKM(t)
+	dir := t.TempDir()
+
+	out, err := runKMArgs(km, "",
+		"configure",
+		"--non-interactive",
+		"--output-dir", dir,
+		"--domain", "example.com",
+		"--dns-parent-account", "111111111111",
+		"--terraform-account", "222222222222",
+		"--application-account", "333333333333",
+		"--sso-start-url", "https://sso.example.com/start",
+		"--sso-region", "us-east-1",
+		"--region", "us-east-1",
+		"--resource-prefix", "kph",
+		"--email-subdomain", "sandboxes",
+		// no --operator-email flag: expect derivation
+	)
+	if err != nil {
+		t.Fatalf("km configure: %v\noutput: %s", err, out)
+	}
+
+	cfg := kmConfigYAML(t, dir)
+	want := "operator-kph@sandboxes.example.com"
+	if cfg["operator_email"] != want {
+		t.Errorf("operator_email: got %v, want %s (Phase 84 derivation not implemented yet)", cfg["operator_email"], want)
+	}
+}
+
+// TestConfigure_BlankOperatorEmail_DerivesFromPrefix (W0-02) verifies that when
+// operator_email is empty in the existing km-config.yaml, re-running km configure
+// derives it from resource_prefix, email_subdomain, and domain.
+func TestConfigure_BlankOperatorEmail_DerivesFromPrefix(t *testing.T) {
+	km := buildKM(t)
+	dir := t.TempDir()
+
+	existingCfg := `resource_prefix: rg
+email_subdomain: sandboxes
+domain: example.com
+accounts:
+  dns_parent: "111111111111"
+  terraform: "222222222222"
+  application: "333333333333"
+sso:
+  start_url: https://sso.example.com/start
+  region: us-east-1
+region: us-east-1
+operator_email: ""
+`
+	if err := os.WriteFile(filepath.Join(dir, "km-config.yaml"), []byte(existingCfg), 0600); err != nil {
+		t.Fatalf("write km-config.yaml: %v", err)
+	}
+
+	out, err := runKMArgs(km, "",
+		"configure",
+		"--non-interactive",
+		"--output-dir", dir,
+		"--domain", "example.com",
+		"--dns-parent-account", "111111111111",
+		"--terraform-account", "222222222222",
+		"--application-account", "333333333333",
+		"--sso-start-url", "https://sso.example.com/start",
+		"--sso-region", "us-east-1",
+		"--region", "us-east-1",
+		// no --operator-email: should derive from prefix rg
+	)
+	if err != nil {
+		t.Fatalf("km configure re-run: %v\noutput: %s", err, out)
+	}
+
+	cfg := kmConfigYAML(t, dir)
+	want := "operator-rg@sandboxes.example.com"
+	if cfg["operator_email"] != want {
+		t.Errorf("operator_email: got %v, want %s (Phase 84 blank-email derivation not implemented yet)", cfg["operator_email"], want)
+	}
+}
+
+// TestConfigure_ResetPrefix_ClearsOperatorEmail (W0-03) verifies that when
+// --reset-prefix is passed, operator_email is cleared so the next configure
+// re-derives it from the new (reset) prefix.
+func TestConfigure_ResetPrefix_ClearsOperatorEmail(t *testing.T) {
+	km := buildKM(t)
+	dir := t.TempDir()
+
+	existingCfg := `resource_prefix: kph
+email_subdomain: sandboxes
+domain: example.com
+accounts:
+  dns_parent: "111111111111"
+  terraform: "222222222222"
+  application: "333333333333"
+sso:
+  start_url: https://sso.example.com/start
+  region: us-east-1
+region: us-east-1
+operator_email: "operator-kph@sandboxes.example.com"
+`
+	if err := os.WriteFile(filepath.Join(dir, "km-config.yaml"), []byte(existingCfg), 0600); err != nil {
+		t.Fatalf("write km-config.yaml: %v", err)
+	}
+
+	out, err := runKMArgs(km, "",
+		"configure",
+		"--non-interactive",
+		"--output-dir", dir,
+		"--domain", "example.com",
+		"--dns-parent-account", "111111111111",
+		"--terraform-account", "222222222222",
+		"--application-account", "333333333333",
+		"--sso-start-url", "https://sso.example.com/start",
+		"--sso-region", "us-east-1",
+		"--region", "us-east-1",
+		"--reset-prefix",
+		// no --operator-email: after reset, operator_email must be cleared
+	)
+	if err != nil {
+		t.Fatalf("km configure --reset-prefix: %v\noutput: %s", err, out)
+	}
+
+	cfg := kmConfigYAML(t, dir)
+	// After --reset-prefix, operator_email must be "" (cleared) so the next configure
+	// re-derives from the new default prefix "km".
+	if opEmail, ok := cfg["operator_email"]; ok && opEmail != "" {
+		t.Errorf("operator_email: got %v after --reset-prefix, want empty string (Phase 84 reset-clears not implemented yet)", opEmail)
+	}
+}
+
 // TestConfigureBarePath_FreshInstallDefaultsToKm verifies that a bare
 // `km configure --non-interactive` invocation (no --output-dir) against a
 // directory with NO existing km-config.yaml defaults resource_prefix to "km"
