@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 82-01-PLAN.md — configure preserve-on-re-run resource_prefix + --reset-prefix flag
-last_updated: "2026-05-16T12:56:36.693Z"
+stopped_at: Completed 82-05-PLAN.md — km doctor --backfill-tags with cross-install safety guard
+last_updated: "2026-05-16T13:10:37.108Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 90
   completed_phases: 80
   total_plans: 343
-  completed_plans: 299
+  completed_plans: 300
   percent: 93
 ---
 
@@ -338,6 +338,7 @@ Progress: [█████████░] 93%
 | Phase 82-multi-instance-resource-prefix-isolation P03 | 8min | 1 tasks | 3 files |
 | Phase 82-multi-instance-resource-prefix-isolation P02 | 30min | 2 tasks | 7 files |
 | Phase 82-multi-instance-resource-prefix-isolation P01 | 11min | 2 tasks | 2 files |
+| Phase 82-multi-instance-resource-prefix-isolation P05 | 617 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -967,6 +968,9 @@ Recent decisions affecting current work:
 - [Phase 82]: Use resourcePrefix+'-slack-threads' env+prefix-compute in userdata.go rather than threading cfg *config.Config into generateUserData (too invasive)
 - [Phase 82-01]: Changed --resource-prefix flag default from 'km' to '' so preserve-on-re-run logic can detect 'nothing passed' vs 'user explicitly passed km'; defaulting now lives in runConfigure after checking disk
 - [Phase 82-01]: Added --reset-prefix bool flag (default false) as explicit opt-in for re-defaulting resource_prefix back to km; guards against accidental silent reset on re-run
+- [Phase 82-05]: BackfillTaggingAPI uses manual PaginationToken loop (not SDK paginator) to keep interface minimal and mocks simple
+- [Phase 82-05]: DDB GetItem cross-install guard: skip any resource whose sandbox_id is absent from this install's DDB (Pitfall 4 mitigation)
+- [Phase 82-05]: Default --dry-run=true for --backfill-tags matches km init UX pattern
 
 ### Roadmap Evolution
 
@@ -1071,6 +1075,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T12:56:36.685Z
-Stopped at: Completed 82-01-PLAN.md — configure preserve-on-re-run resource_prefix + --reset-prefix flag
+Last session: 2026-05-16T13:10:37.097Z
+Stopped at: Completed 82-05-PLAN.md — km doctor --backfill-tags with cross-install safety guard
 Resume file: None
