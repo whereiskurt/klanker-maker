@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84-06-email-handler-recipient-verification-PLAN.md
-last_updated: "2026-05-16T20:14:39.461Z"
+stopped_at: Completed 84-03-regional-ses-v2-module-PLAN.md
+last_updated: "2026-05-16T20:15:40.278Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 93
   completed_phases: 82
   total_plans: 363
-  completed_plans: 311
+  completed_plans: 312
   percent: 93
 ---
 
@@ -350,6 +350,7 @@ Progress: [█████████░] 93%
 | Phase 82.1-multi-instance-polish P03 | 25 | 4 tasks | 5 files |
 | Phase 84 P02 | 227 | 3 tasks | 4 files |
 | Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P06 | 182 | 1 tasks | 2 files |
+| Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P03 | 6 | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -997,6 +998,9 @@ Recent decisions affecting current work:
 - [Phase 84]: ses-shared-rule-set/v1.0.0 foundation module: register_X flags for idempotency; no data-source fallback (AWS SES provider gap); KM_ROUTE53_ZONE_ID matches existing ses/ convention
 - [Phase 84-06]: Recipient verification gate inserted BEFORE allowlist/safe-phrase for cheap dispatch of foreign-prefix emails
 - [Phase 84-06]: Test handler Domain updated to sandboxes.example.com to match KM_EMAIL_DOMAIN production value; test email To: headers updated to operator-km@sandboxes.example.com
+- [Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix]: rule_set_name is string constant 'sandbox-email-shared' — no aws_ses_receipt_rule_set data source exists in AWS Terraform provider
+- [Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix]: v2.0.0 S3 bucket policy preserves CloudWatch Logs export grants from v1.0.0 since only one aws_s3_bucket_policy can exist per bucket
+- [Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix]: v1.0.0 stays in tree untouched as historical reference per CONTEXT.md — not deleted, not modified
 
 ### Roadmap Evolution
 
@@ -1102,6 +1106,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T20:14:39.453Z
-Stopped at: Completed 84-06-email-handler-recipient-verification-PLAN.md
+Last session: 2026-05-16T20:15:40.269Z
+Stopped at: Completed 84-03-regional-ses-v2-module-PLAN.md
 Resume file: None
