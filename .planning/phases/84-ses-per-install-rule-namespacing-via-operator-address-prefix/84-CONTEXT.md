@@ -94,7 +94,69 @@
 
 </deferred>
 
+## Additional Decisions (resolved 2026-05-16 from research open questions)
+
+### Sandbox catchall recipient strategy
+- **Locked:** Whole-domain match. Each install's `${prefix}-sandbox-catchall` rule has recipient `sandboxes.${domain}` (the whole domain, no wildcards needed). Both installs' catchall rules fire on every sandbox-inbound email; each writes to its own S3 prefix (`mail/${prefix}/`).
+- **Why:** AWS SES does not support wildcards in recipient lists (confirmed in research). Compiler-enumerated recipient lists would force Terraform re-apply on every `km create`/`km destroy` — unacceptable churn. Per-install email subdomain would break the locked operator address format.
+- **Cost:** Wasted S3 puts on the sibling install (mail for kph sandbox writes to both `mail/kph/` and `mail/rg/`). The mail-handler Lambda silently drops unknown sandbox IDs, so cross-contamination is read-only and bounded by sandbox email volume. Acceptable.
+- **Rule ordering within the shared rule set:** Each install owns two rules — operator-inbound BEFORE catchall — but rule order across installs doesn't matter under "all matching rules fire" semantics.
+
+### SES domain identity, DKIM, MX, verification records
+- **Locked:** Moves to the foundation module. `ses-shared-rule-set/v1.0.0/` owns:
+  - `aws_ses_receipt_rule_set` (the shared rule set)
+  - `aws_ses_active_receipt_rule_set` (activation, always-active)
+  - `aws_ses_domain_identity` (for `sandboxes.${domain}`)
+  - `aws_ses_domain_dkim` (3 DKIM CNAMEs)
+  - `aws_route53_record.mx` (MX → SES inbound)
+  - `aws_route53_record.ses_verification` (DKIM verification TXT/CNAME)
+- **Regional `ses` module shrinks to:** `aws_ses_receipt_rule.operator_inbound` + `aws_ses_receipt_rule.sandbox_catchall` only, both with `rule_set_name = "sandbox-email-shared"`. Consumes `aws_ses_domain_identity` via data source.
+- **Why:** Shared domain means only one Terraform state can own the domain identity. Moving to foundation eliminates `EntityAlreadyExists` failures on second-install apply.
+- **Versioning:** Regional `infra/modules/ses/` bumps to `v2.0.0`. `v1.0.0` stays in tree for historical reference (not deleted).
+
+### Foundation module idempotency
+- **Locked:** Auto-detect pattern (Phase 80 `cluster-irsa` precedent). Foundation module accepts two flags:
+  - `register_shared_rule_set` (bool) — default behavior via `km bootstrap` auto-detect
+  - `register_domain_identity` (bool) — default behavior via `km bootstrap` auto-detect
+- **`km bootstrap` workflow:**
+  1. `aws ses list-receipt-rule-sets` — if `sandbox-email-shared` exists, set `register_shared_rule_set=false`
+  2. `aws ses list-identities --identity-type Domain` — if the target domain exists, set `register_domain_identity=false`
+  3. Generate terragrunt inputs with computed flags
+  4. `terragrunt apply` against the foundation module
+- **Terraform pattern:** Resources are `count = var.register_X ? 1 : 0`; data sources are `count = var.register_X ? 0 : 1` (mirror pattern from `cluster-irsa/v1.0.0/`).
+- **Why:** Safe to re-apply from any install context. Operator coordination would be fragile across concurrent operators or state drift.
+
+### Phase 82.1 migration runbook
+- **Locked:** No live migration needed. Operator confirmed no deployment uses the old `aws_ses_active_receipt_rule_set.km_sandbox` resource with live inbound email. Phase 84 upgrade for greenfield-or-unused installs:
+  1. `make build`
+  2. `km init --sidecars` (refresh sidecar binaries)
+  3. `km bootstrap --shared-ses` (NEW — provisions foundation rule set + domain identity, auto-detect flags decide whether to create or reference)
+  4. `km init --dry-run=true` to inspect (Phase 84 plan will show: REMOVE `aws_ses_active_receipt_rule_set.km_sandbox`, REMOVE `aws_ses_receipt_rule_set.km_sandbox`, REMOVE `aws_ses_domain_identity.sandbox`, REMOVE DKIM/MX/verification, ADD 2 prefix-named rules in the shared rule set)
+  5. `km init --dry-run=false` to apply
+  6. `km configure` (idempotent re-run derives `KM_OPERATOR_EMAIL=operator-${prefix}@...`)
+- **CLAUDE.md "Phase 82.1 follow-up: SES active-rule-set handoff" section:** DELETED outright in the docs plan. No deprecation note — the design is replaced wholesale.
+
+### Scope additions discovered during research
+The planner MUST cover these code locations beyond what CONTEXT.md originally listed:
+- `pkg/compiler/userdata.go:1621` and `pkg/compiler/userdata.go:1653` — sandbox-side `km-send` default `--to` literal `operator@` must become `${KM_OPERATOR_EMAIL}` env-var reference
+- `pkg/aws/ses.go:271` — operator-notification email body `From`/`To` literal must interpolate the derived operator address
+- `cmd/email-create-handler/main.go:861` — outbound-reply `From` literal must use the derived operator address
+- `OPERATOR-GUIDE.md:646-677` — Phase 82.1 SES handoff section deleted; replaced with shared-rule-set + auto-detect runbook
+
+### Test scope additions
+The planner's Wave 0 must add (per research Validation Architecture):
+- `internal/app/cmd/configure_test.go` — operator-email derivation tests (3 functions)
+- `cmd/email-create-handler/main_test.go` — own-prefix vs foreign-prefix routing tests (2 functions)
+- `internal/app/cmd/doctor_test.go` + `internal/app/cmd/doctor_ses_rules_test.go` — orphan-detection unit tests with mock SES API
+- `pkg/compiler/userdata_84_test.go` — env-var reference assertion (no `operator@` literal in generated userdata)
+- `pkg/aws/ses_test.go` — `TestSendCreateNotification_OperatorAddressUsesPrefix`
+- Makefile grep-based check for Phase 82.1 leftovers (`KM_SES_ACTIVATE_RULESET`, `activate_rule_set`)
+
+### Go module dependency
+Production wiring of `km doctor` SES rule check requires `aws-sdk-go-v2/service/ses` (classic v1 SES SDK — distinct from existing `sesv2` dependency). Add via `go get github.com/aws/aws-sdk-go-v2/service/ses`. Unit tests gate behind a narrow interface so test code does not pull the dependency.
+
 ---
 
 *Phase: 84-ses-per-install-rule-namespacing-via-operator-address-prefix*
 *Context gathered: 2026-05-16 via inline /gsd:plan-phase discussion*
+*Open-question resolutions appended: 2026-05-16 after gsd-phase-researcher surfaced shared-domain implications*
