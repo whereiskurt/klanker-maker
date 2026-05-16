@@ -1263,7 +1263,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 		if !isTTLDisabled(resolvedProfile.Spec.Lifecycle.TTL) {
 			ttl = resolvedProfile.Spec.Lifecycle.TTL
 		}
-		if err := awspkg.SendCreateNotification(ctx, sesClient, operatorEmail, sandboxID, emailDomain, profileName, ttl); err != nil {
+		if err := awspkg.SendCreateNotification(ctx, sesClient, operatorEmail, sandboxID, emailDomain, cfg.GetResourcePrefix(), profileName, ttl); err != nil {
 			log.Warn().Err(err).Msg("failed to send created notification (non-fatal)")
 		}
 	}

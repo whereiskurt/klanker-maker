@@ -244,10 +244,17 @@ func SendLimitNotification(ctx context.Context, client SESV2API, operatorEmail, 
 //   - Sets Reply-To to the sandbox's own email address so the operator can reply directly to the sandbox
 //   - Includes a reminder about the safe phrase for email-to-create
 //   - Shows sandbox details (profile, TTL, email address)
-func SendCreateNotification(ctx context.Context, client SESV2API, operatorEmail, sandboxID, domain, profileName, ttl string) error {
+//
+// resourcePrefix is the install's resource_prefix (e.g. "km", "kph") used to
+// derive the prefix-aware email-to-create address advertised in the body.
+func SendCreateNotification(ctx context.Context, client SESV2API, operatorEmail, sandboxID, domain, resourcePrefix, profileName, ttl string) error {
 	from := fmt.Sprintf("notifications@%s", domain)
 	sandboxAddr := sandboxEmailAddress(sandboxID, domain)
 	subject := fmt.Sprintf("km sandbox created: %s", sandboxID)
+
+	// Derive the prefix-aware operator address for the email-to-create reminder.
+	// Format: operator-<prefix>@<domain>  (e.g. operator-kph@sandboxes.example.com)
+	createAddr := fmt.Sprintf("operator-%s@%s", resourcePrefix, domain)
 
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Sandbox Created: %s\n", sandboxID))
@@ -268,7 +275,7 @@ func SendCreateNotification(ctx context.Context, client SESV2API, operatorEmail,
 	b.WriteString("\n")
 	b.WriteString("─── Email-to-Create Reminder ─────────────────\n")
 	b.WriteString(fmt.Sprintf("  To create new sandboxes via email, send to:\n"))
-	b.WriteString(fmt.Sprintf("  operator@%s\n", domain))
+	b.WriteString(fmt.Sprintf("  %s\n", createAddr))
 	b.WriteString("  Include the safe phrase in the subject line.\n")
 	b.WriteString(fmt.Sprintf("\n— %s\n", version.Header()))
 
