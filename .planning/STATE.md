@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 82-04-PLAN.md — ListBakedAMIs prefix filter + checkOrphanedEC2 discrimination
-last_updated: "2026-05-16T13:12:15.091Z"
+stopped_at: Completed 82-07-PLAN.md — email-handler state_prefix variable + IAM ARN literal replacement
+last_updated: "2026-05-16T13:14:50.351Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 90
   completed_phases: 80
   total_plans: 343
-  completed_plans: 301
+  completed_plans: 304
   percent: 93
 ---
 
@@ -340,6 +340,8 @@ Progress: [█████████░] 93%
 | Phase 82-multi-instance-resource-prefix-isolation P01 | 11min | 2 tasks | 2 files |
 | Phase 82-multi-instance-resource-prefix-isolation P05 | 617 | 2 tasks | 4 files |
 | Phase 82-multi-instance-resource-prefix-isolation P04 | 13min | 2 tasks | 5 files |
+| Phase 82 P07 | 30s | 1 tasks | 3 files |
+| Phase 82-multi-instance-resource-prefix-isolation P06 | 39s | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -974,6 +976,8 @@ Recent decisions affecting current work:
 - [Phase 82-05]: Default --dry-run=true for --backfill-tags matches km init UX pattern
 - [Phase 82-multi-instance-resource-prefix-isolation]: 82-04: ListBakedAMIs takes explicit string param (not functional option) — empty string means no prefix filter for all-installs diagnostics
 - [Phase 82-multi-instance-resource-prefix-isolation]: 82-04: checkOrphanedEC2 post-fetch tag discrimination (not API-level filter) so pre-Phase-82 untagged instances surface as WARN with --backfill-tags pointer
+- [Phase 82]: email-handler: add standalone state_prefix variable (default tf-km) rather than overloading resource_prefix — keeps IAM policy scope separate from resource naming
+- [Phase 82-06]: No moved{} block for SES rule-set: existing km install evaluates to identical name — zero Terraform diff
 
 ### Roadmap Evolution
 
@@ -1078,6 +1082,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T13:12:15.085Z
-Stopped at: Completed 82-04-PLAN.md — ListBakedAMIs prefix filter + checkOrphanedEC2 discrimination
+Last session: 2026-05-16T13:14:44.759Z
+Stopped at: Completed 82-07-PLAN.md — email-handler state_prefix variable + IAM ARN literal replacement
 Resume file: None

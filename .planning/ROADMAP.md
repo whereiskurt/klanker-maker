@@ -1761,7 +1761,7 @@ Plans:
 **Goal:** Close the gap between CLAUDE.md's 'multiple km installs per AWS account via resource_prefix' promise and reality — fix 3 hard Terraform blockers (SES rule-set, email-handler S3 IAM, ECS SSM ARN), 1 configure-flow footgun, 4 silent km-* fallbacks, add the km:resource-prefix install-discriminator tag at bake-time + via terraform + via a one-time km doctor --backfill-tags retro-sweep, and tag-filter doctor's cross-install destruction surfaces.
 **Requirements**: None — operator-driven phase (CONTEXT.md `<decisions>` block enumerates the locked deliverables in lieu of requirement IDs)
 **Depends on:** Phase 81
-**Plans:** 5/10 plans executed
+**Plans:** 8/10 plans executed
 
 Plans:
 - [ ] 82-01-PLAN.md — Configure preserve-on-re-run + --reset-prefix flag (Wave 1, Go-only)
