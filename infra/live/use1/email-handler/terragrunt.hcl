@@ -43,4 +43,5 @@ inputs = {
   resource_prefix      = local.site_vars.locals.site.label
   sandbox_table_name   = "${local.site_vars.locals.site.label}-sandboxes"
   safe_phrase_ssm_key  = "/${local.site_vars.locals.site.label}/config/remote-create/safe-phrase"
+  state_prefix         = "tf-${get_env("KM_RESOURCE_PREFIX", "km")}"
 }

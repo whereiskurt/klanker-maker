@@ -72,7 +72,7 @@ resource "aws_iam_role_policy" "s3_access" {
           "s3:GetObject",
         ]
         Resource = [
-          "arn:aws:s3:::${var.state_bucket}/tf-km/sandboxes/*/metadata.json",
+          "arn:aws:s3:::${var.state_bucket}/${var.state_prefix}/sandboxes/*/metadata.json",
         ]
       },
     ]

@@ -60,3 +60,9 @@ variable "sandbox_table_name" {
   type        = string
   default     = "km-sandboxes"
 }
+
+variable "state_prefix" {
+  type        = string
+  description = "Terragrunt state-bucket prefix (e.g. 'tf-km', 'tf-rg'). Used in IAM policies that read sandbox metadata from S3."
+  default     = "tf-km"
+}
