@@ -5,7 +5,14 @@ description: Operator CLI guide for the km command — creating sandboxes, runni
 
 # Klanker Maker Operator Guide
 
-This skill guides usage of the `km` CLI on the operator's workstation. It covers platform setup, sandbox creation, agent execution, learn mode, and lifecycle management.
+This skill guides usage of the `km` CLI on the operator's workstation. It covers sandbox creation, agent execution, learn mode, and lifecycle management.
+
+## Cross-references
+
+- `klanker:init` — one-time platform setup (`km configure`, `km init`, multi-instance `resource_prefix`, Slack bootstrap, rollout sequences)
+- `klanker:vscode` — VS Code Remote-SSH operator workflow
+- `klanker:cluster` — cross-account k8s IRSA onboarding
+- `klanker:email` / `klanker:slack` / `klanker:operator` — the matching agent-side skills that run *inside* a sandbox
 
 ## Getting Started
 
@@ -44,22 +51,14 @@ Shows: platform config, AWS accounts, SES quota, current AWS spend, DynamoDB tab
 
 ## Bootstrap / Init
 
-### Full Infrastructure Deploy
+See the `klanker:init` skill for full coverage of `km configure`, `km init` (and its `--sidecars` / `--lambdas` / `--dry-run` variants), multi-instance `resource_prefix` isolation, Slack bootstrap, and post-edit rollout sequences. Quick reference:
 
 ```bash
-km init
+make build                    # always required after editing km source
+km init --sidecars            # refresh sidecar binaries + management Lambda
+km init --dry-run=false       # apply Terraform module changes
+km doctor                     # verify
 ```
-
-Deploys all regional infrastructure: VPC, subnets, security groups, Lambda functions, DynamoDB tables, SES, EventBridge rules.
-
-### Fast Deploys (After Code Changes)
-
-```bash
-km init --sidecars    # Rebuild and upload sidecar binaries + km binary only
-km init --lambdas     # Redeploy Lambda functions only
-```
-
-Always run `km doctor` after init to verify.
 
 ## Creating Sandboxes
 

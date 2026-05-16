@@ -9,6 +9,13 @@ This skill handles communication between a sandbox and the Klanker Maker platfor
 
 **Prerequisites:** Run `klanker:sandbox` first to detect environment and email policy.
 
+## Cross-references
+
+- `klanker:sandbox` — environment + tooling detection (run first)
+- `klanker:email` — the underlying send/receive mechanics (this skill is a thin natural-language layer on top)
+- `klanker:slack` — for one-way operator pings that don't need a reply
+- `klanker:user` — what the operator can do from their workstation (so you know what to ask for)
+
 ## How It Works
 
 1. You compose a natural language request and send it to `$KM_OPERATOR_EMAIL`

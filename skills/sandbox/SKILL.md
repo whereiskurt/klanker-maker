@@ -9,6 +9,13 @@ This skill detects whether you are running inside a Klanker Maker sandbox, disco
 
 **Invoke this skill first** before using `klanker:email`, `klanker:operator`, or `klanker:slack`.
 
+## Cross-references
+
+- `klanker:email` — send/receive email between sandboxes and to the operator
+- `klanker:slack` — post from inside a sandbox to its per-sandbox Slack channel
+- `klanker:operator` — natural-language requests to the operator inbox
+- `klanker:init` — operator-side companion (one-time platform setup that provisions the env this skill detects)
+
 ## Step 1: Detect Environment
 
 Check for the presence of KM environment variables:

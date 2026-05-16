@@ -9,6 +9,12 @@ This skill provides patterns for sending, receiving, polling, and coordinating w
 
 **Prerequisites:** Run `klanker:sandbox` first to detect environment and email policy.
 
+## Cross-references
+
+- `klanker:sandbox` — environment + tooling detection (run first)
+- `klanker:slack` — alternative channel for operator-facing notifications (one-way, low-latency)
+- `klanker:operator` — to *request* an operator action (uses this skill under the hood)
+
 ## Sending Email
 
 > **Tooling location:** km-send is at `/opt/km/bin/km-send`; km-recv is at `/opt/km/bin/km-recv`. Both are on the default sandbox PATH so the bare command names work in interactive shells. Use the absolute paths in scripts, cron jobs, and systemd units where PATH may be minimal.
