@@ -313,6 +313,55 @@ km doctor
 See `docs/slack-notifications.md` for full operator guide and
 `.planning/phases/68-…/deferred-items.md` for fix paths.
 
+### Slack Block Kit rendering (Phase 74)
+
+Two-tier markdown renderer for outbound Slack posts. Tier 1 maps
+CommonMark → Slack mrkdwn (bold, italic, links, code preserved
+byte-for-byte). Tier 2 emits Block Kit (header / section / context /
+divider) with auto-fallback to Tier 1 at the 50-block cap. Eliminates
+literal `***heading***`, dropped `# headings`, and broken pipe-tables
+that previously made transcript and inbound replies hard to read.
+
+`km-slack post --render plain|mrkdwn|blocks`. Default for no-flag
+callers stays `plain` (Phase 62/63 notify-hook callers untouched). The
+Phase 68 streaming hook (`_km_stream_drain`) and the Phase 67 inbound
+poller reply both pass `--render "${KM_SLACK_RENDER:-blocks}"`, so new
+sandboxes render as Block Kit by default with a per-sandbox safety
+valve.
+
+**Operator safety valve:**
+
+```bash
+km shell <sandbox-id>
+echo 'KM_SLACK_RENDER=plain' | sudo tee -a /etc/km/notify.env
+# next outbound post on this sandbox → falls back to literal markdown
+```
+
+Valid values: `plain` | `mrkdwn` | `blocks`.
+
+**Operator path:** no new SSM params, DynamoDB tables, or Slack scopes.
+`make build && km init --sidecars && km init --dry-run=false` ships the
+new km-slack binary, the new userdata template (both Block-Kit-emitting
+paths), and the bridge Lambda dispatch wrap (`PostMessageBlocks`).
+Existing sandboxes do NOT get Block Kit rendering retroactively —
+`km destroy && km create` to provision with the new template.
+
+**Bridge envelope additions:** `Blocks string` field (alphabetical
+between `Action` and `Body` for deterministic signing); optional
+`BlockPoster` interface that the bridge type-asserts when `Blocks != ""`
+(existing `SlackPoster`-only fakes keep working).
+
+**Known unrelated UAT side-find:** Phase 74 surfaced — but did not
+cause — a stale Anthropic OAuth token failure mode: `noBedrock: true`
+profiles whose `~/.claude/.credentials.json` has expired produce
+`api_error_status: 401` in `claude -p` output, which the inbound
+poller logs as `WARN: agent run failed (exit 1)`. Fix: `km shell` →
+`claude login`. Pre-dates Phase 74; documented here because the
+symptom looks identical to a Block Kit failure.
+
+See `docs/slack-notifications.md` § Slack Block Kit rendering (Phase 74)
+for render-mode table, full architecture, and troubleshooting matrix.
+
 ### Slack inbound file attachments (Phase 75)
 
 Per-sandbox channels now accept file_share uploads (images, PDFs, etc.).

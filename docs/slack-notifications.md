@@ -672,8 +672,10 @@ redeploy) so the `SSMSigningSecretFetcher` cache invalidates within 15 minutes.
 - Auto-resume of paused sandboxes on inbound activity.
 - Inbound on shared channel or override-mode channels.
 - DM delivery, multi-recipient routing.
-- Block Kit / rich formatting for outbound replies.
 - Permission-prompt round-trip via Slack reply.
+
+(Block Kit / rich formatting for outbound replies shipped in
+Phase 74 — see § Slack Block Kit rendering below.)
 
 ## Slack transcript streaming (Phase 68)
 
@@ -812,6 +814,117 @@ instead of a native Slack file attachment.
 ### Phase B preview (deferred, not part of Phase 68)
 
 The DynamoDB stream-messages table written by Phase 68 is the integration seam for a future "reaction-triggered session fork" phase: an operator reaction (e.g. 🍴) on a streamed message would mint a new Claude session forked at that transcript offset. Phase 68 has no consumer for the table — it just writes.
+
+## Slack Block Kit rendering (Phase 74)
+
+Two-tier markdown renderer that turns Claude's CommonMark output into
+valid Slack mrkdwn (Tier 1) or structured Block Kit (Tier 2). Eliminates
+literal `***heading***` asterisks, dropped `# headings`, and broken
+pipe-tables in outbound replies. Code blocks pass through byte-for-byte
+(`**p = nil` stays intact), the tokenizer is idempotent and fail-soft,
+and a 50-block cap automatically falls back from Tier 2 → Tier 1.
+
+### Render modes
+
+`km-slack post --render <mode>` selects the output:
+
+| Mode | Output | Default user |
+|---|---|---|
+| `plain` | Literal markdown — no transformation | Phase 62/63 notify-hook (no `--render` flag passed) |
+| `mrkdwn` | Tier 1: tokenized markdown → Slack mrkdwn `text` field | Operators who want rendering without Block Kit |
+| `blocks` | Tier 2: Block Kit `blocks` field + Tier 1 mrkdwn fallback in `text` for mobile push previews; auto-falls-back to `mrkdwn` if the response exceeds 50 blocks | Phase 67 inbound poller reply + Phase 68 streaming hook on post-Phase-74 sandboxes |
+
+### Where Block Kit rendering is wired
+
+Phase 74 flips two paths from `plain` to `blocks` in
+`pkg/compiler/userdata.go`:
+
+- `_km_stream_drain` — per-turn streaming posts (interactive `km shell`
+  / Phase 68 path)
+- `km-slack-inbound-poller` reply — final reply for Slack-inbound chat
+  (Phase 67 path)
+
+Both lines pass `--render "${KM_SLACK_RENDER:-blocks}"`, so the env
+override (below) takes precedence.
+
+Phase 62/63 idle-pings and permission-prompt notifications stay on
+`plain` (the notify hook constructs envelopes without `--render`),
+so the existing email/Slack idle path is byte-identical.
+
+### Operator safety valve
+
+A per-sandbox env var downgrades the renderer without a redeploy:
+
+```bash
+km shell <sandbox-id>
+echo 'KM_SLACK_RENDER=plain' | sudo tee -a /etc/km/notify.env
+# Next outbound post → falls back to literal markdown
+```
+
+Valid values: `plain` | `mrkdwn` | `blocks`. Unset → defaults to the
+userdata template's hard-coded fallback (`blocks` for both
+Block-Kit-emitting paths).
+
+### One-time operator setup
+
+Phase 74 is a pure code change — no new SSM params, no new DynamoDB
+tables, no new Slack scopes. Bot scope requirements are unchanged from
+Phase 67/68.
+
+```bash
+make build
+km init --sidecars        # ships new km-slack binary + new userdata template
+km init --dry-run=false   # deploys updated bridge Lambda (PostMessageBlocks dispatch)
+```
+
+Existing sandboxes do NOT get Block Kit rendering retroactively (their
+userdata is baked at create time). `km destroy && km create` to
+provision a sandbox with the new template.
+
+### Verify the deploy
+
+After deploying, chat in `#sb-<sandbox-id>` from Slack:
+
+> Show me a Go function and explain it. Use a heading.
+
+Expect:
+
+- A bold/large header block (not literal `# Heading`)
+- A section block with monospaced code (not surrounded by triple-backticks in plain text)
+- No literal `**bold**`, `***italic***`, or `# heading` in the rendered text
+
+### Architecture
+
+`pkg/slack/payload.go` adds a `Blocks string` field to `SlackEnvelope`
+(alphabetical position between `Action` and `Body`, so the canonical
+JSON ordering used for Ed25519 signing stays deterministic). When
+non-empty, `pkg/slack/bridge/handler.go` type-asserts the configured
+`SlackPoster` to a `BlockPoster`
+(`pkg/slack/bridge/interfaces.go`) and dispatches to
+`PostMessageBlocks`, which posts BOTH the rendered blocks AND the
+Tier 1 `mrkdwn` text as the `text` fallback for Slack's mobile
+push previews and notification surfaces.
+
+The `BlockPoster` interface is optional — existing fakes that only
+implement `SlackPoster` keep working (additive change, BRDG-01).
+Any caller that omits the `Blocks` field hits the original
+`PostMessage` path; no Phase 62/63 callers set it.
+
+### Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Slack reply shows literal `# heading` or `**bold**` | Sandbox was provisioned BEFORE the new userdata template landed | `km init --sidecars` (refreshes the create-handler toolchain), then `km destroy && km create` |
+| Reply renders as Tier 1 mrkdwn (bold/italic work, no header blocks) on a very long Claude response | Response exceeded the 50-block Block Kit cap → automatic Tier 1 fallback | Working as designed; trim or split the response to land in Block Kit |
+| Reply renders as plain markdown despite a post-Phase-74 sandbox | `KM_SLACK_RENDER=plain` in `/etc/km/notify.env` | Remove the override and reload systemd units (`sudo systemctl daemon-reload`), or pass `--render blocks` explicitly |
+| Bridge returns 400 or `unknown action:` from Slack Web API when blocks are present | Bridge Lambda predates the BRDG-02 dispatch wrap | `km init --dry-run=false` to redeploy. Verify: `aws lambda get-function-configuration --function-name km-slack-bridge` shows a recent `LastModified` |
+| Block Kit appears in `#sb-<id>` but NOT in the shared channel | Shared-channel callers (Phase 62/63 notify-hook) intentionally stay on `plain` | Working as designed; pass `--render blocks` from a custom caller if needed |
+| `km-slack-inbound-poller` log: `WARN: agent run failed (exit 1)` and `output.json` shows `api_error_status: 401` | Unrelated to Phase 74 — Anthropic OAuth token in the sandbox is stale (only affects `noBedrock: true` profiles) | `km shell <sandbox-id>` then `claude login` to refresh `~/.claude/.credentials.json` |
+
+### Authoritative source
+
+Plan files and verification: `.planning/phases/74-slack-mrkdwn-…/`
+(`74-01-PLAN.md`, `74-02-PLAN.md`, `74-VERIFICATION.md`).
 
 ## Slack inbound file attachments (Phase 75)
 
