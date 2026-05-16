@@ -29,3 +29,9 @@ variable "resource_prefix" {
   description = "Install-level resource prefix (e.g. 'km', 'rg'). Ensures SES receipt rule sets are namespaced per install."
   default     = "km"
 }
+
+variable "activate_rule_set" {
+  type        = bool
+  description = "Whether to activate this rule set as the account-level active SES receipt rule set. Set to false for secondary installs sharing an AWS account to avoid deactivating the primary install's inbound email path. Default true preserves existing single-install behavior."
+  default     = true
+}

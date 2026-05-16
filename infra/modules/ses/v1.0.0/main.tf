@@ -62,8 +62,11 @@ resource "aws_ses_receipt_rule_set" "km_sandbox" {
   rule_set_name = "${var.resource_prefix}-sandbox-email"
 }
 
-# Activate the rule set — SES requires exactly one active rule set per region.
+# Activate the rule set — SES requires exactly one active rule set per account/region.
+# count = 0 when activate_rule_set = false (secondary installs must not steal activation
+# from the primary install). See OPERATOR-GUIDE.md § SES activation handoff.
 resource "aws_ses_active_receipt_rule_set" "km_sandbox" {
+  count         = var.activate_rule_set ? 1 : 0
   rule_set_name = aws_ses_receipt_rule_set.km_sandbox.rule_set_name
 }
 
