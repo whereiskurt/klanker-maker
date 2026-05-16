@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 82-10-PLAN.md — Phase 82 multi-instance resource-prefix isolation fully shipped
-last_updated: "2026-05-16T15:36:53.200Z"
+stopped_at: Completed 82.1-02-PLAN.md — service_hcl.go stream-table literal replaced with prefix-aware derivation
+last_updated: "2026-05-16T16:02:24.419Z"
 last_activity: 2026-05-16
 progress:
-  total_phases: 90
+  total_phases: 91
   completed_phases: 81
-  total_plans: 343
-  completed_plans: 306
+  total_plans: 346
+  completed_plans: 307
   percent: 93
 ---
 
@@ -345,6 +345,7 @@ Progress: [█████████░] 93%
 | Phase 82-multi-instance-resource-prefix-isolation P08 | 3min | 1 tasks | 3 files |
 | Phase 82-multi-instance-resource-prefix-isolation P09 | 220s | 2 tasks | 9 files |
 | Phase 82-multi-instance-resource-prefix-isolation P10 | 45min | 5 tasks | 3 files |
+| Phase 82.1 P02 | 96 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -985,6 +986,8 @@ Recent decisions affecting current work:
 - [Phase 82-multi-instance-resource-prefix-isolation]: 82-09: Added resource_prefix variable to ECS modules (ecs-task, ecs, ecs-cluster); all six Terraform modules now emit km:resource-prefix tag alongside km:sandbox-id
 - [Phase 82-multi-instance-resource-prefix-isolation]: Wave 3 apply: tag-only additions produce zero must-be-replaced lines; existing km prefix evaluates to km-sandbox-email unchanged
 - [Phase 82-multi-instance-resource-prefix-isolation]: km doctor --backfill-tags requires explicit AWS_DEFAULT_REGION env var; cross-install safety guard correctly skipped 30 foreign/orphaned resources
+- [Phase 82.1]: service_hcl.go: used variable name ec2StreamPrefix (not ec2ResourcePrefix) to avoid shadowing the existing ec2ResourcePrefix block at line 792
+- [Phase 82.1]: KM_RESOURCE_PREFIX fallback pattern (default 'km') now consistent across userdata.go (Phase 82), ec2ResourcePrefix block, and stream-table derivation in same function
 
 ### Roadmap Evolution
 
@@ -1089,6 +1092,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T14:27:53.050Z
-Stopped at: Completed 82-10-PLAN.md — Phase 82 multi-instance resource-prefix isolation fully shipped
+Last session: 2026-05-16T16:02:24.410Z
+Stopped at: Completed 82.1-02-PLAN.md — service_hcl.go stream-table literal replaced with prefix-aware derivation
 Resume file: None
