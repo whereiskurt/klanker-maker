@@ -110,36 +110,61 @@ test-no-82.1-leftovers:
 <tasks>
 
 <task type="auto">
-  <name>Task 1: Configure + doctor + email-handler + ses test stubs (W0-01..07, W0-10)</name>
-  <files>internal/app/cmd/configure_test.go, internal/app/cmd/doctor_test.go, cmd/email-create-handler/main_test.go, pkg/aws/ses_test.go</files>
+  <name>Task 1a: Configure + doctor test stubs (W0-01..03, W0-06..07) — internal/app/cmd package</name>
+  <files>internal/app/cmd/configure_test.go, internal/app/cmd/doctor_test.go</files>
   <action>
-Add failing test stubs to four existing test files. Each stub asserts the Phase 84 behavior that is NOT YET implemented:
+Add failing test stubs to two existing test files in the `internal/app/cmd` package. Same-package edits keep this task atomic.
 
-**`internal/app/cmd/configure_test.go`** — append three test functions:
+**REVISION FROM ITERATION 0 (Minor 11 split):** Originally part of a 4-file Task 1; split here for tighter atomicity within a single package.
+
+**`internal/app/cmd/configure_test.go`** — append three test functions (W0-01, W0-02, W0-03):
   - `TestConfigure_DerivesOperatorEmailFromPrefix` — call the function/helper that derives operator email (e.g., a new `deriveOperatorEmail(prefix, emailSubdomain, domain string) string`); assert `operator-kph@sandboxes.example.com` when prefix=`kph`, subdomain=`sandboxes`, domain=`example.com`. If the helper doesn't exist yet, the test must reference its expected exported name so the compile fails until task 84-04-01 lands.
   - `TestConfigure_BlankOperatorEmail_DerivesFromPrefix` — set up a `platformConfig` with `OperatorEmail=""`, `ResourcePrefix="rg"`, `EmailSubdomain="sandboxes"`, `Domain="example.com"`; drive `runConfigure` (or its helper) in a way that exercises the derivation; assert resulting `pc.OperatorEmail == "operator-rg@sandboxes.example.com"`.
   - `TestConfigure_ResetPrefix_ClearsOperatorEmail` — start from a config with `OperatorEmail="operator-kph@..."` and `ResourcePrefix="kph"`; run configure with `--reset-prefix` semantics (test exercises the reset path); assert `pc.OperatorEmail == ""` after reset (so the next configure re-derives from the new default prefix).
 
-**`internal/app/cmd/doctor_test.go`** — append two test functions:
-  - `TestCheckSESRules_AllOwn` — construct a `mockSESReceiptRuleAPI` (defined in W0-08 below) that returns rules `kph-operator-inbound` and `kph-sandbox-catchall`; call `checkSESRules(ctx, mock, "kph")`; assert `CheckResult{Status: StatusOK}` with message mentioning `2 rules` and `kph`.
+**Field-name verification (per plan-checker iteration 1):** The `platformConfig` struct fields are `ResourcePrefix`, `EmailSubdomain`, `Domain`, `OperatorEmail` (configure.go lines 22-33). NOT `ParentDomain`. Use the actual names.
+
+**`internal/app/cmd/doctor_test.go`** — append two test functions (W0-06, W0-07):
+  - `TestCheckSESRules_AllOwn` — construct a `mockSESReceiptRuleAPI` (defined in Task 2 below) that returns rules `kph-operator-inbound` and `kph-sandbox-catchall`; call `checkSESRules(ctx, mock, "kph")`; assert `CheckResult{Status: StatusOK}` with message mentioning `2 rules` and `kph`.
   - `TestCheckSESRules_Orphans` — mock returns `kph-operator-inbound`, `kph-sandbox-catchall`, `xx-operator-inbound`; call `checkSESRules(ctx, mock, "kph")`; assert `Status: StatusWarn` and that orphan list contains `xx-operator-inbound`.
 
-**`cmd/email-create-handler/main_test.go`** — append two test functions:
+For each new test function: `t.Skip()` is NOT acceptable — the assertion must be the real one (RED at this point).
+
+Do NOT modify any production code in this task.
+  </action>
+  <verify>
+    <automated>cd /Users/khundeck/working/klankrmkr && go vet ./internal/app/cmd/... 2>&1 | head -30 && go test ./internal/app/cmd/ -run 'TestConfigure_DerivesOperatorEmailFromPrefix|TestConfigure_BlankOperatorEmail_DerivesFromPrefix|TestConfigure_ResetPrefix_ClearsOperatorEmail|TestCheckSESRules_AllOwn|TestCheckSESRules_Orphans' -count=1 2>&1 | tail -20</automated>
+  </verify>
+  <done>Both files updated. `go vet` highlights the missing production symbols. `go test` reports RED for each of the 5 test names.</done>
+</task>
+
+<task type="auto">
+  <name>Task 1b: email-handler + pkg/aws test stubs (W0-04..05, W0-10) — cross-package</name>
+  <files>cmd/email-create-handler/main_test.go, pkg/aws/ses_test.go</files>
+  <action>
+Add failing test stubs to two test files in different packages. Small surface — 3 stubs total.
+
+**REVISION FROM ITERATION 0 (Minor 11 split):** Originally part of a 4-file Task 1; split here for tighter atomicity.
+
+**`cmd/email-create-handler/main_test.go`** — append two test functions (W0-04, W0-05):
   - `TestHandle_OperatorAddress_OwnPrefix` — set `KM_RESOURCE_PREFIX=kph` and a domain env (`KM_EMAIL_DOMAIN=sandboxes.example.com` or whatever the handler reads); build a raw MIME message with `To: operator-kph@sandboxes.example.com`; invoke the Handle path; assert NO silent drop, the existing allowlist/safe-phrase pipeline proceeds (use a sentinel — e.g., expect a specific later-stage error or call into a mock).
   - `TestHandle_OperatorAddress_ForeignPrefix_Drops` — same setup but `To: operator-rg@sandboxes.example.com`; assert the Handle returns `nil` (silent drop) AND writes the expected `[operator-email] silently dropping ...` line to a captured stderr.
 
-**`pkg/aws/ses_test.go`** — append:
+If these tests require additional helper scaffolding (captured-stderr helper, fake S3-event builder), add it here as unexported test helpers.
+
+**`pkg/aws/ses_test.go`** — append one test function (W0-10):
   - `TestSendCreateNotification_OperatorAddressUsesPrefix` — drive `SendCreateNotification` (or whichever function holds the literal at line 271); pass `resource_prefix="kph"`, `email_subdomain="sandboxes"`, `domain="example.com"`; assert the body string contains `operator-kph@sandboxes.example.com` and does NOT contain bare `operator@`.
 
-For each new test function: use `t.Skip()` is NOT acceptable — the assertion must be the real one (RED at this point).
+**Field-name verification (per plan-checker iteration 1):** If the test drives a function that takes a `*platformConfig`, use `Domain` (not `ParentDomain`). See `internal/app/cmd/configure.go` lines 22-33.
 
-Do NOT modify any production code in this task. The tests reference symbols that may not exist yet — that produces a compile error, which is the desired RED state for Wave 0.
+For each new test function: `t.Skip()` is NOT acceptable. Do NOT modify any production code.
   </action>
   <verify>
-    <automated>cd /Users/khundeck/working/klankrmkr && go vet ./... 2>&1 | head -40 && go test ./internal/app/cmd/ -run 'TestConfigure_DerivesOperatorEmailFromPrefix|TestConfigure_BlankOperatorEmail_DerivesFromPrefix|TestConfigure_ResetPrefix_ClearsOperatorEmail|TestCheckSESRules_AllOwn|TestCheckSESRules_Orphans' -count=1 2>&1 | tail -20</automated>
+    <automated>cd /Users/khundeck/working/klankrmkr && go vet ./cmd/email-create-handler/... ./pkg/aws/... 2>&1 | head -20 && go test ./cmd/email-create-handler/ -run 'TestHandle_OperatorAddress_OwnPrefix|TestHandle_OperatorAddress_ForeignPrefix_Drops' -count=1 2>&1 | tail -10 && go test ./pkg/aws/ -run TestSendCreateNotification_OperatorAddressUsesPrefix -count=1 2>&1 | tail -10</automated>
   </verify>
-  <done>All five files updated with stubs. `go vet` highlights the missing production symbols. `go test` reports RED (compile error or test failure) for every new test name — never PASS, never SKIP.</done>
+  <done>Both files updated. `go vet` highlights the missing production symbols. `go test` reports RED for each of the 3 test names.</done>
 </task>
+
 
 <task type="auto">
   <name>Task 2: New test files W0-08 (doctor_ses_rules_test.go) + W0-09 (userdata_84_test.go)</name>
@@ -170,12 +195,10 @@ Both files are RED at end of this task — the production symbols/strings they e
 </task>
 
 <task type="auto">
-  <name>Task 3: Email-handler stubs + W0-04..05 + Makefile grep gate W0-11</name>
-  <files>cmd/email-create-handler/main_test.go, Makefile</files>
+  <name>Task 3: Makefile grep gate W0-11 (Phase 82.1 leftover scanner — initial RED state)</name>
+  <files>Makefile</files>
   <action>
-Two unrelated additions, batched because both close out remaining W0 items.
-
-**`cmd/email-create-handler/main_test.go`** — verify that the two stubs from Task 1 (W0-04, W0-05) compile cleanly. If they require additional helper scaffolding (e.g., a captured-stderr helper or a fake S3-event builder), add it here as unexported test helpers. If Task 1 was self-contained, leave this file alone (this task degrades to a no-op for the test file).
+Add the W0-11 grep gate to the Makefile. W0-04 and W0-05 are now covered by Task 1b (split per plan-checker iteration 1, Minor 11).
 
 **`Makefile`** — append a new target near the existing test targets:
 ```makefile
@@ -185,9 +208,14 @@ test-no-82.1-leftovers:
 		|| (echo "Phase 82.1 leftovers found — see Phase 84"; exit 1)
 ```
 
-This target is RED at the end of Wave 0 because Phase 82.1 leftovers are still present in the codebase. Task 84-08 will land the deletions and turn it GREEN.
+Note: this target's grep is intentionally UN-scoped at Wave 0 — it WILL match `infra/modules/ses/v1.0.0/` and `.terragrunt-cache/` content. That's intentional: Wave 0's job is to land a RED gate. Plan 84-08 Task 3 updates the grep to add `--exclude-dir='v1.0.0' --exclude-dir='.terragrunt-cache'` filters AFTER the OPERATOR-GUIDE.md deletions land, so the gate turns GREEN.
 
-If a `test` umbrella target exists, do NOT yet add `test-no-82.1-leftovers` to its deps — that wiring happens in 84-08 alongside the deletions, to avoid breaking the existing CI green status during Wave 1.
+This target is RED at the end of Wave 0 because Phase 82.1 leftovers are still present:
+- `infra/modules/ses/v1.0.0/` (historical — stays untouched per CONTEXT.md lock)
+- `infra/live/use1/ses/terragrunt.hcl:47` (Plan 84-03 cleans this)
+- `OPERATOR-GUIDE.md` lines 646-677 (Plan 84-08 deletes this)
+
+If a `test` umbrella target exists, do NOT yet add `test-no-82.1-leftovers` to its deps — that wiring happens in Plan 84-08 alongside the deletions, to avoid breaking the existing CI green status during Wave 1.
   </action>
   <verify>
     <automated>cd /Users/khundeck/working/klankrmkr && make test-no-82.1-leftovers 2>&1 | tail -5; echo "exit=$?"</automated>

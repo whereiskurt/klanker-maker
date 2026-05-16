@@ -28,6 +28,9 @@ must_haves:
     - "`km doctor` reports `✓ SES rules healthy` for this install"
     - "An operator UAT record is captured at `.planning/phases/84-.../84-10-UAT.md` with command outputs and final status (`status: passed` or `status: diagnosed`)"
     - "STATE.md is updated to reflect Phase 84 completion"
+    - "closure_a_verified: A second install (different `KM_RESOURCE_PREFIX`) ran `km init --dry-run=true` and the plan showed NO destroy of the first install's rules — only ADD of the second install's two prefix-named rules. `km init --dry-run=false` then applied without any opt-out env var. (Covers ROADMAP Phase 84 closure criterion (a).)"
+    - "closure_c_verified: After the second-install setup, `terragrunt destroy` in the SECOND install's regional `infra/live/use1/ses/` left the first install's two prefix-named rules intact in the shared rule set (verified via `aws ses describe-receipt-rule-set --rule-set-name sandbox-email-shared`). (Covers criterion (c).)"
+    - "closure_d_verified: After step `km init --dry-run=false`, re-running `km bootstrap --shared-ses --dry-run=true` reported `register_shared_rule_set=false` and `register_domain_identity=false`, with the terragrunt plan showing a NO-OP. (Covers criterion (d).)"
   artifacts:
     - path: ".planning/phases/84-ses-per-install-rule-namespacing-via-operator-address-prefix/84-10-UAT.md"
       provides: "UAT log with all command outputs, observed behavior, deviations from expected"
@@ -145,6 +148,91 @@ km doctor 2>&1 | grep -A1 "SES rules"
 # Step 10: Cleanup test sandbox
 km destroy $SB --remote --yes
 ```
+
+**Closure-criterion verification (per plan-checker iteration 1, Blocker 2):**
+
+The happy-path steps above cover criteria (b), (e), (f). The following NEW steps cover (a), (c), (d) — they correspond directly to entries in 84-VALIDATION.md "Manual-Only Verifications" table.
+
+```bash
+# ============================================================================
+# Closure (d): Foundation module idempotency on re-apply
+# (84-VALIDATION.md row: "Foundation module plan is idempotent on second km bootstrap")
+# ============================================================================
+
+km bootstrap --shared-ses --dry-run=true
+# EXPECTED stderr output:
+#   Shared SES rule set: reusing existing
+#   Shared SES domain identity: reusing existing
+# EXPECTED terragrunt plan: "No changes. Your infrastructure matches the configuration."
+# IF DRIFT: investigate — register_X=false should map to count=0 resources, so plan is no-op.
+# Paste the full plan output into the UAT log.
+
+# ============================================================================
+# Closure (a): Second-install setup without opt-out env var
+# (84-VALIDATION.md row: "Two installs in same account/region coexist without colliding")
+# ============================================================================
+
+# Step a1: Switch to a second prefix. EITHER use a sibling checkout OR override env vars
+# from this session. Use a prefix distinct from the first install's (e.g., rg).
+export KM_RESOURCE_PREFIX=rg
+# DO NOT set KM_SES_ACTIVATE_RULESET anywhere — that env var is gone in Phase 84.
+
+# Step a2: re-configure for the second prefix
+km configure
+# EXPECTED: prompts derive operator email as operator-rg@sandboxes.<your-domain>
+# Accept default; verify in km-config.yaml:
+grep operator_email ~/.km/km-config.yaml
+# EXPECTED: operator_email: operator-rg@sandboxes.<your-domain>
+
+# Step a3: Plan the second install's km init
+km init --dry-run=true
+# EXPECTED terragrunt plan:
+#   - foundation `ses-shared-rule-set` module: NO-OP (rule set + domain identity already present)
+#   - regional `ses` module: ADD aws_ses_receipt_rule.operator_inbound (name "rg-operator-inbound", rule_set_name "sandbox-email-shared")
+#                            ADD aws_ses_receipt_rule.sandbox_catchall (name "rg-sandbox-catchall", rule_set_name "sandbox-email-shared")
+#   - NO aws_ses_active_receipt_rule_set in the plan
+#   - NO destroy of any kph-* rules
+# Paste the full plan output into the UAT log.
+
+# Step a4: Apply
+km init --dry-run=false
+
+# Step a5: Verify both installs' rules coexist
+aws ses describe-receipt-rule-set --rule-set-name sandbox-email-shared \
+  --query 'Rules[*].Name' --output table
+# EXPECTED: 4 rules total — kph-operator-inbound, kph-sandbox-catchall, rg-operator-inbound, rg-sandbox-catchall
+
+# Step a6: km doctor from the second install — should report kph rules as orphans (expected)
+km doctor 2>&1 | grep -A1 "SES rules"
+# EXPECTED: "⚠ orphan SES rules: kph-operator-inbound, kph-sandbox-catchall"
+# This WARN is normal multi-tenancy — it surfaces the sibling install's rules.
+
+# ============================================================================
+# Closure (c): km uninit isolation — sibling rules survive
+# (84-VALIDATION.md row: "km uninit on one prefix leaves sibling install's rules intact")
+# ============================================================================
+
+# From the second install (KM_RESOURCE_PREFIX=rg still set):
+cd infra/live/use1/ses && terragrunt destroy --auto-approve
+# EXPECTED: only rg-* rules destroyed; foundation rule set untouched; kph-* rules untouched
+
+# Verify
+aws ses describe-receipt-rule-set --rule-set-name sandbox-email-shared \
+  --query 'Rules[*].Name' --output table
+# EXPECTED: 2 rules — kph-operator-inbound, kph-sandbox-catchall
+
+# Foundation must still be intact:
+aws ses describe-active-receipt-rule-set --query 'Name' --output text
+# EXPECTED: sandbox-email-shared
+aws ses list-identities --identity-type Domain --query 'Identities'
+# EXPECTED: includes the configured email domain
+
+# ============================================================================
+# Restore the test back to first install context
+# ============================================================================
+unset KM_RESOURCE_PREFIX     # or whatever value the first install needs
+```
+
 
 **Write the UAT log** at `.planning/phases/84-ses-per-install-rule-namespacing-via-operator-address-prefix/84-10-UAT.md` with this structure:
 

@@ -77,6 +77,8 @@ Earlier in userdata.go, find where `/etc/profile.d/km-notify-env.sh` (or the equ
 
 Critical: the env-file line uses systemd format (`KM_OPERATOR_EMAIL=value`, no `export` prefix) per MEMORY note "systemd EnvironmentFile gotcha" — if the same value is also needed in `/etc/profile.d/*.sh`, write a shell-format export there too (parallel structure that Phase 67 uses for `KM_SLACK_*`).
 
+**Field-name verification (per plan-checker iteration 1):** The `platformConfig` struct field is `Domain` (NOT `ParentDomain`); see `internal/app/cmd/configure.go` lines 22-33. Executor should re-grep before coding to confirm no concurrent refactor.
+
 `pkg/aws/ses.go` — line ~271:
 - The function (likely `SendCreateNotification` per RESEARCH) currently has a literal like `fmt.Sprintf("From: operator@%s", domain)` or `to := "operator@" + domain`.
 - Replace with `to := fmt.Sprintf("operator-%s@%s", resourcePrefix, emailDomain)` (the function's signature already takes `resourcePrefix` per Phase 82-B2, or accepts a `*platformConfig` — confirm by reading the function).
@@ -100,7 +102,7 @@ Test contract (must pass after this plan):
     - The two km-send heredoc blocks in the generated userdata contain `--to ${KM_OPERATOR_EMAIL}` (or an equivalent shell-var reference) instead of `--to operator@${KM_SANDBOX_DOMAIN}`.
     - The env-file generation block (the same block that emits `KM_RESOURCE_PREFIX`, `KM_EMAIL_SUBDOMAIN`, etc.) ALSO emits `KM_OPERATOR_EMAIL=<derived>` — derived at compile time from the platform config.
     - The systemd-format env file is updated; if a shell-format `/etc/profile.d/*.sh` parallel exists, that's updated too.
-    - The compile-time derivation uses the same formula as Plan 84-04's `deriveOperatorEmail`: `operator-${resource_prefix}@${email_subdomain}.${parent_domain}`.
+    - The compile-time derivation uses the same formula as Plan 84-04's `deriveOperatorEmail`: `operator-${resource_prefix}@${email_subdomain}.${domain}`.
     - Test W0-09 (`TestUserdata_KmSendOperatorAddressUsesEnvVar`) passes.
   </behavior>
   <action>
@@ -110,13 +112,13 @@ Test contract (must pass after this plan):
    - Before: `--to operator@${KM_SANDBOX_DOMAIN}` (or whatever the exact literal is — read first)
    - After: `--to ${KM_OPERATOR_EMAIL}` (preserve the surrounding bash syntax)
 
-3. Locate the env-file generation block. Search for `KM_RESOURCE_PREFIX=` or `KM_EMAIL_SUBDOMAIN=` to find it. Add a new line writing `KM_OPERATOR_EMAIL=<derived value>` where `<derived value>` is computed from the same platform-config fields the surrounding lines already use. Use `fmt.Sprintf("operator-%s@%s.%s", resourcePrefix, emailSubdomain, parentDomain)` (or call the helper from Plan 84-04 if it's package-visible to `pkg/compiler`).
+3. Locate the env-file generation block. Search for `KM_RESOURCE_PREFIX=` or `KM_EMAIL_SUBDOMAIN=` to find it. Add a new line writing `KM_OPERATOR_EMAIL=<derived value>` where `<derived value>` is computed from the same platform-config fields the surrounding lines already use. Use `fmt.Sprintf("operator-%s@%s.%s", resourcePrefix, emailSubdomain, domain)` (or call the helper from Plan 84-04 if it's package-visible to `pkg/compiler`).
 
 4. If userdata.go has BOTH a systemd-format env file and a shell-format `/etc/profile.d/*.sh` (per MEMORY note on the systemd EnvironmentFile gotcha — Phase 67 established this pattern), update BOTH.
 
 5. Run `gofmt -w pkg/compiler/userdata.go`. Run `go vet ./pkg/compiler/...`. Confirm test W0-09 passes.
 
-If `pkg/compiler` doesn't currently take `parentDomain` as a separate field (it may be merged into `domain`), inspect the existing config struct passed to the userdata generator and use the right combination of fields to produce the canonical `operator-${prefix}@${subdomain}.${parent}` shape.
+If `pkg/compiler` doesn't currently take `domain` as a separate field (it may be merged into `domain`), inspect the existing config struct passed to the userdata generator and use the right combination of fields to produce the canonical `operator-${prefix}@${subdomain}.${parent}` shape.
   </action>
   <verify>
     <automated>cd /Users/khundeck/working/klankrmkr && go test ./pkg/compiler/ -run TestUserdata_KmSendOperatorAddressUsesEnvVar -count=1 2>&1 | tail -10 && ! grep -n "operator@\\${KM_SANDBOX_DOMAIN}" pkg/compiler/userdata.go && echo "no bare operator@ literal remains"</automated>
@@ -138,7 +140,7 @@ If `pkg/compiler` doesn't currently take `parentDomain` as a separate field (it 
 
 2. Examine the function signature. If it accepts a `*platformConfig` or similar struct that already carries `ResourcePrefix` and `EmailSubdomain`/`Domain`, derive the operator address inline:
    ```go
-   operatorAddr := fmt.Sprintf("operator-%s@%s.%s", pc.ResourcePrefix, pc.EmailSubdomain, pc.ParentDomain)
+   operatorAddr := fmt.Sprintf("operator-%s@%s.%s", pc.ResourcePrefix, pc.EmailSubdomain, pc.Domain)
    ```
    (Use the same field names that exist on the struct; confirm by reading.)
 

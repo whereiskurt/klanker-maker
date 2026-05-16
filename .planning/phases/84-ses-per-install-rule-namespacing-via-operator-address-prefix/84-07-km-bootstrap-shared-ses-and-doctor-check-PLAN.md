@@ -7,6 +7,7 @@ depends_on: [01, 02, 04]
 files_modified:
   - internal/app/cmd/bootstrap.go
   - internal/app/cmd/doctor.go
+  - internal/app/cmd/init.go
   - internal/app/cmd/doctor_ses_rules_test.go
   - go.mod
   - go.sum
@@ -88,6 +89,8 @@ type SESIdentityLister interface {
 // Returns: (registerSharedRuleSet bool, registerDomainIdentity bool, err error)
 func detectSharedSESState(ctx context.Context, lister SESIdentityLister, ruleSetName, domain string) (bool, bool, error)
 ```
+
+**Field-name verification (per plan-checker iteration 1):** Use `cfg.Domain` (NOT `cfg.ParentDomain`) and `cfg.EmailSubdomain` — see `internal/app/cmd/configure.go` lines 22-33. Executor should re-grep before coding.
 
 `SESReceiptRuleAPI` (in doctor.go) — narrow interface, RESEARCH § Pattern 3:
 
@@ -237,7 +240,7 @@ if sharedSES {
 
     sesClient := ses.NewFromConfig(awsCfg)
     sesv2Client := sesv2.NewFromConfig(awsCfg)
-    domain := fmt.Sprintf("%s.%s", cfg.EmailSubdomain, cfg.ParentDomain)
+    domain := fmt.Sprintf("%s.%s", cfg.EmailSubdomain, cfg.Domain)
     registerRS, registerID, err := detectSharedSESState(ctx, &realSESLister{ses: sesClient, sesv2: sesv2Client}, "sandbox-email-shared", domain)
     if err != nil { return err }
 
@@ -311,6 +314,57 @@ func detectSharedSESState(ctx context.Context, lister SESIdentityLister, ruleSet
     <automated>cd /Users/khundeck/working/klankrmkr && go test ./internal/app/cmd/ -run TestDetectSharedSESState -count=1 2>&1 | tail -10 && go build ./... 2>&1 | tail -5 && ./km bootstrap --help 2>&1 | grep -q "shared-ses" && echo "flag is registered"</automated>
   </verify>
   <done>`km bootstrap --shared-ses` flag exists and shows in help. `detectSharedSESState` unit-testable and tested with at least 3 scenarios. `go build` clean. `make build` produces a km binary that exposes the flag.</done>
+</task>
+
+
+<task type="auto" tdd="true">
+  <name>Task 3: Add regional ses-module preflight check (Major 7 — drift gate)</name>
+  <files>internal/app/cmd/init.go</files>
+  <behavior>
+    - Before `km init` runs `terragrunt apply` against `infra/live/use1/ses/` (the regional v2.0.0 module), it calls `ses.ListReceiptRuleSets` to verify the shared rule set `sandbox-email-shared` exists.
+    - When NOT present: emit a clear error to stderr (`"Foundation SES rule set 'sandbox-email-shared' not found. Run 'km bootstrap --shared-ses' first on a fresh account."`) and exit non-zero BEFORE invoking terragrunt.
+    - When present: continue with the existing `km init` flow unchanged.
+    - The preflight reuses the `SESIdentityLister` interface from Task 2 — no new interface, no duplicated SDK plumbing.
+    - At least one unit test covers the "rule set missing → error" branch using a mock lister.
+  </behavior>
+  <action>
+1. Open `internal/app/cmd/init.go`. Locate where the regional `ses` module's terragrunt apply is invoked (it will be in the `regionalModules` ordering — SES is the last entry per Phase 82-B1).
+
+2. Immediately before the SES-module apply step, add a preflight check:
+
+```go
+// Phase 84: Foundation rule set must exist before regional rules can attach.
+// The regional v2.0.0 ses module references `sandbox-email-shared` as a string
+// constant (no Terraform data source for SES rule sets exists in the AWS
+// provider). If the operator hasn't run `km bootstrap --shared-ses` yet, the
+// regional terragrunt apply will fail mid-flight with `RuleSetDoesNotExist`.
+// Fail fast with a clear actionable message instead.
+sesClient := ses.NewFromConfig(awsCfg)
+lister := &realSESLister{ses: sesClient, sesv2: sesv2.NewFromConfig(awsCfg)}
+domain := fmt.Sprintf("%s.%s", cfg.EmailSubdomain, cfg.Domain)
+registerRS, _, err := detectSharedSESState(ctx, lister, "sandbox-email-shared", domain)
+if err != nil {
+    return fmt.Errorf("ses preflight: %w", err)
+}
+if registerRS {
+    // registerRS=true means the rule set is NOT present.
+    return fmt.Errorf("Foundation SES rule set 'sandbox-email-shared' not found. Run 'km bootstrap --shared-ses' first on a fresh account.")
+}
+```
+
+3. The preflight only runs for the SES module step — not for other regional modules. Wrap it conditionally so it doesn't fire on every `km init` step.
+
+4. Add a unit test exercising the missing-rule-set branch with the mock `SESIdentityLister` from Task 2's test file:
+   - Mock returns empty `RuleSets`.
+   - Expect: the preflight returns the actionable error string.
+   - Expect: terragrunt is NOT invoked.
+
+5. Run `gofmt -w`. Run `go vet`. Run `go build ./...`. Run `make build`.
+  </action>
+  <verify>
+    <automated>cd /Users/khundeck/working/klankrmkr && go test ./internal/app/cmd/ -run 'TestInitSESPreflight|TestKmInit.*Preflight' -count=1 2>&1 | tail -10 && go build ./... 2>&1 | tail -3</automated>
+  </verify>
+  <done>`km init` fails fast with the actionable error when the shared rule set is missing. Preflight unit-tested. No regression for the happy path (shared rule set present → preflight passes, terragrunt apply proceeds).</done>
 </task>
 
 </tasks>

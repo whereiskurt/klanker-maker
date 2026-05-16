@@ -13,9 +13,9 @@ requirements:
 
 must_haves:
   truths:
-    - "`km configure` derives `operator_email` as `operator-${resource_prefix}@${email_subdomain}.${parent_domain}` when the user accepts the default (no manual override)"
+    - "`km configure` derives `operator_email` as `operator-${resource_prefix}@${email_subdomain}.${domain}` when the user accepts the default (no manual override)"
     - "`km configure --reset-prefix` also clears the stored `operator_email` so the next configure re-derives from the new default prefix"
-    - "An exported helper `deriveOperatorEmail(prefix, emailSubdomain, parentDomain string) string` exists in `configure.go` (or a peer file) so tests and other commands can reuse the derivation"
+    - "An exported helper `deriveOperatorEmail(prefix, emailSubdomain, domain string) string` exists in `configure.go` (or a peer file) so tests and other commands can reuse the derivation"
     - "When the operator manually enters a non-default operator email at the prompt, the manual value is preserved on re-run (preserve-on-rerun semantics from Phase 82.1)"
     - "Test stubs W0-01, W0-02, W0-03 from Plan 84-01 now PASS"
   artifacts:
@@ -33,7 +33,7 @@ must_haves:
 ---
 
 <objective>
-Update `km configure` to derive `KM_OPERATOR_EMAIL` from `resource_prefix + email_subdomain + parent_domain` (CONTEXT.md locked decision). Preserve operator-typed overrides on re-run. Clear stored operator email when `--reset-prefix` is passed so the next configure re-derives from the new default.
+Update `km configure` to derive `KM_OPERATOR_EMAIL` from `resource_prefix + email_subdomain + domain` (CONTEXT.md locked decision). Preserve operator-typed overrides on re-run. Clear stored operator email when `--reset-prefix` is passed so the next configure re-derives from the new default.
 
 Per RESEARCH § Pitfall 5: stale operator_email after re-configure is a real risk; `--reset-prefix` must clear it.
 
@@ -66,12 +66,12 @@ Output:
 // deriveOperatorEmail returns the canonical operator inbox address for a given
 // install. The address shape is locked by Phase 84 CONTEXT.md:
 //
-//   operator-${resource_prefix}@${email_subdomain}.${parent_domain}
+//   operator-${resource_prefix}@${email_subdomain}.${domain}
 //
 // Empty inputs return "" — callers should fall back to whatever they had before.
-func deriveOperatorEmail(resourcePrefix, emailSubdomain, parentDomain string) string
+func deriveOperatorEmail(resourcePrefix, emailSubdomain, domain string) string
 
-// In runConfigure, after the resource_prefix / email_subdomain / parent_domain
+// In runConfigure, after the resource_prefix / email_subdomain / domain
 // values have been confirmed (and before the operator_email prompt), compute
 // the derived value and use it as the prompt default. When the user accepts
 // the default, pc.OperatorEmail is set to the derived value.
@@ -82,9 +82,11 @@ func deriveOperatorEmail(resourcePrefix, emailSubdomain, parentDomain string) st
 
 Caveats from existing code (read configure.go to confirm exact spelling):
 - `platformConfig` field for resource prefix may be `ResourcePrefix` (Phase 82's preserve-on-rerun field) — match exactly.
-- `EmailSubdomain` and `ParentDomain` / `Domain` field names — match exactly.
+- `EmailSubdomain` and `Domain` / `Domain` field names — match exactly.
 - The `--reset-prefix` flag handling lives in Phase 82.1 — read that block carefully to extend it.
 - The prompt helper (`promptWithDefault`, `promptString`, etc.) — reuse the same helper to keep UX consistent.
+
+**Field-name verification (per plan-checker iteration 1):** Field names verified against `internal/app/cmd/configure.go` as of phase planning — executor should re-grep before coding to confirm no concurrent refactor. The actual field names on `platformConfig` are `ResourcePrefix`, `EmailSubdomain`, `Domain`, `OperatorEmail` (lines 22-33).
 
 Test contract (must pass after this plan):
 - `TestConfigure_DerivesOperatorEmailFromPrefix` — direct call to `deriveOperatorEmail("kph", "sandboxes", "example.com")` → `"operator-kph@sandboxes.example.com"`.
@@ -112,18 +114,18 @@ Test contract (must pass after this plan):
 
 ```go
 // deriveOperatorEmail returns the canonical operator inbox for an install.
-// Phase 84: operator-${resource_prefix}@${email_subdomain}.${parent_domain}.
+// Phase 84: operator-${resource_prefix}@${email_subdomain}.${domain}.
 // Returns "" when any input is empty — callers handle the fallback.
-func deriveOperatorEmail(resourcePrefix, emailSubdomain, parentDomain string) string {
-    if resourcePrefix == "" || emailSubdomain == "" || parentDomain == "" {
+func deriveOperatorEmail(resourcePrefix, emailSubdomain, domain string) string {
+    if resourcePrefix == "" || emailSubdomain == "" || domain == "" {
         return ""
     }
-    return fmt.Sprintf("operator-%s@%s.%s", resourcePrefix, emailSubdomain, parentDomain)
+    return fmt.Sprintf("operator-%s@%s.%s", resourcePrefix, emailSubdomain, domain)
 }
 ```
 
 3. In `runConfigure`, BEFORE the existing operator-email prompt:
-   - Compute `derivedDefault := deriveOperatorEmail(pc.ResourcePrefix, pc.EmailSubdomain, pc.ParentDomain)` (use the actual field names from configure.go).
+   - Compute `derivedDefault := deriveOperatorEmail(pc.ResourcePrefix, pc.EmailSubdomain, pc.Domain)` (use the actual field names from configure.go).
    - If `pc.OperatorEmail == ""` (fresh install or post-reset), use `derivedDefault` as the prompt's default value.
    - If `pc.OperatorEmail != ""`, preserve the existing value as the prompt default (per Phase 82.1 preserve-on-rerun).
 

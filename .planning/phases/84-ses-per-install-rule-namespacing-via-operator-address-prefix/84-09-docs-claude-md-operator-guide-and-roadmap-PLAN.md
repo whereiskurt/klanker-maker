@@ -75,7 +75,7 @@ CLAUDE.md additions:
 The section title is: "Phase 84: SES per-install rule namespacing via operator address prefix"
 
 It documents:
-- Operator address format: `operator-{resource_prefix}@{email_subdomain}.{parent_domain}` (e.g. `operator-km@sandboxes.example.com` for the default install).
+- Operator address format: `operator-{resource_prefix}@{email_subdomain}.{domain}` (e.g. `operator-km@sandboxes.example.com` for the default install).
 - Shared rule set name: `sandbox-email-shared`, owned by `infra/modules/ses-shared-rule-set/v1.0.0/`, has `lifecycle.prevent_destroy = true`.
 - Per-install rules: `{prefix}-operator-inbound` and `{prefix}-sandbox-catchall`, both pointing at `sandbox-email-shared` by string name.
 - Bootstrap: `km bootstrap --shared-ses` provisions the foundation; idempotent via auto-detect (Phase 80 cluster-irsa pattern).
@@ -94,7 +94,7 @@ km doctor
 
 End with: "See `OPERATOR-GUIDE.md` § Phase 84 upgrade for the detailed runbook and two-install coexistence scenario."
 
-(B) Update the "Key environment variables" table row for `KM_OPERATOR_EMAIL` in the Email section. New cell text: "Operator inbox address (operator-{resource_prefix}@{email_subdomain}.{parent_domain}; derived by `km configure` from Phase 84 onward)".
+(B) Update the "Key environment variables" table row for `KM_OPERATOR_EMAIL` in the Email section. New cell text: "Operator inbox address (operator-{resource_prefix}@{email_subdomain}.{domain}; derived by `km configure` from Phase 84 onward)".
 
 OPERATOR-GUIDE.md additions — new section "Phase 84 upgrade — shared SES rule set + per-install rules" at the same heading depth as the deleted Phase 82.1 SES section. Includes:
 
@@ -164,15 +164,20 @@ Each entry follows the pattern `- [ ] <filename> — <brief objective>` (the bri
   <name>Task 1: Add Phase 84 section to CLAUDE.md + update KM_OPERATOR_EMAIL description in Email section</name>
   <files>CLAUDE.md</files>
   <action>
-1. Read CLAUDE.md around the Phase 82 section to find where Plan 84-08 left a gap (between Phase 82 and `## CLI`).
+1. **Anchor verification (per plan-checker iteration 1, Major 5):** Read the CURRENT CLAUDE.md before editing. The previous-iteration assumption that the Phase 82.1 section sat between Phase 82 and `## CLI` is STALE — a prior refactor already removed those references AND the Phase 82 section itself. As of phase planning, CLAUDE.md is 147 lines with top-level headings: `## Project`, `## Where to look`, `## CLI`, `## Architecture`, `## Network Enforcement`, `## Learn Mode`, `## Agent Execution`. There is NO `Phase 8x` section to follow.
 
-2. Insert the new "### Phase 84: SES per-install rule namespacing via operator address prefix" section using the content described in the `<interfaces>` block. Preserve heading depth (`###`), surrounding blank lines, and fenced-code-block conventions used elsewhere in CLAUDE.md.
+2. **Choose an insertion anchor.** Inspect the current CLAUDE.md and pick the best fit:
+   - **Preferred:** Add a new top-level `## Phase History` section near the end (before any final references section) and place `### Phase 84: ...` underneath. If similar past-phase notes belong nearby, group them.
+   - **Alternative:** Insert `## Phase 84: SES per-install rule namespacing via operator address prefix` (no `###` — promote to `##` since there is no parent Phase section) immediately AFTER `## Architecture` and BEFORE `## Network Enforcement`.
+   - Document the anchor choice in the SUMMARY for downstream traceability.
 
-3. Locate the "Key environment variables" table inside the Email section. Update the `KM_OPERATOR_EMAIL` row's description cell to the new prefix-aware text per the `<interfaces>` block.
+3. Insert the new section content using the structure described in the `<interfaces>` block (operator address shape, shared rule set name, bootstrap step, doctor check, fenced bash code block with the upgrade procedure, see-also pointer to OPERATOR-GUIDE.md).
 
-4. Visual scan: confirm the surrounding markdown structure is intact — table formatting unchanged, Phase 82 section unchanged, `## CLI` unchanged.
+4. **KM_OPERATOR_EMAIL table row update:** Search CLAUDE.md for a `KM_OPERATOR_EMAIL` table cell. If present (Email section), update the description per the `<interfaces>` block. If ABSENT (current CLAUDE.md has no Email table), this sub-step is a no-op — document in SUMMARY that the variable description lives in another doc surface (likely `OPERATOR-GUIDE.md` or `docs/multi-agent-email.md`) and consider whether that doc also needs the Phase 84 description added (planner discretion).
 
-5. Confirm rendering: open CLAUDE.md in your editor's markdown preview; confirm no broken backticks, no orphaned headings.
+5. Visual scan: confirm the surrounding markdown structure is intact — no broken tables, no orphaned headings.
+
+6. Confirm rendering: confirm no broken backticks, no double-blank-lines.
   </action>
   <verify>
     <automated>cd /Users/khundeck/working/klankrmkr && grep -q "Phase 84: SES per-install rule namespacing" CLAUDE.md && echo "Phase 84 section present" && grep -q "operator inbox address" CLAUDE.md -i && echo "KM_OPERATOR_EMAIL description updated"</automated>

@@ -54,6 +54,18 @@ Output:
 - No AWS apply in this plan — `terragrunt plan` smoke-tested only
 </objective>
 
+<deviation_from_phase_80>
+**DEVIATION FROM PHASE 80 PATTERN (per plan-checker iteration 1, Major 7):**
+
+The Phase 80 `cluster-irsa` pattern uses paired `count = var.register ? 1 : 0` resource + `count = var.register ? 0 : 1` data source. AWS Terraform provider does NOT expose a `data "aws_ses_receipt_rule_set"` source (see 84-RESEARCH.md § Pitfall 2), so the second half of the pattern cannot be mirrored.
+
+**This module's implementation:** when `register_shared_rule_set=false`, the module produces NO rule-set resources or outputs (no data-source fallback). Downstream consumers (regional `ses/v2.0.0` module from Plan 84-03) reference the rule set by string constant `"sandbox-email-shared"` — no Terraform cross-state lookup needed.
+
+**Drift gate:** the `km bootstrap` auto-detect logic in Plan 84-07 is the runtime safeguard. If `register_shared_rule_set=false` is set without the rule set actually existing in AWS, `km init` will fail at apply time (the regional `aws_ses_receipt_rule` resource errors with `RuleSetDoesNotExist`). Plan 84-07 Task 2 adds an explicit pre-flight check that emits a clear error message: `"Foundation SES rule set 'sandbox-email-shared' not found. Run 'km bootstrap --shared-ses' first on a fresh account."`
+
+The same logic applies to `register_domain_identity=false` (no `data "aws_ses_domain_identity"` source exists in the AWS provider either; bootstrap auto-detect via `sesv2.ListEmailIdentities` is the drift gate).
+</deviation_from_phase_80>
+
 <execution_context>
 @/Users/khundeck/.claude/get-shit-done/workflows/execute-plan.md
 @/Users/khundeck/.claude/get-shit-done/templates/summary.md
