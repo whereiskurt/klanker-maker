@@ -365,11 +365,17 @@ type TerragruntApplyFunc func(ctx context.Context, dir string) error
 var ApplyTerragruntFunc TerragruntApplyFunc = defaultApplyTerragrunt
 
 // defaultApplyTerragrunt runs `terragrunt apply -auto-approve` on the given directory
-// using the management-account AWS profile.
+// using the management-account AWS profile. Calls Reconfigure first to initialize the
+// S3 backend on first apply of a new module (e.g. the Phase 84 ses-shared-rule-set
+// module on an in-place upgrade) — terragrunt's auto-init does not fire when the
+// backend config is new to this working tree.
 func defaultApplyTerragrunt(ctx context.Context, dir string) error {
 	awsProfile := "klanker-terraform"
 	repoRoot := findRepoRoot()
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
+	if err := runner.Reconfigure(ctx, dir); err != nil {
+		return fmt.Errorf("terragrunt init -reconfigure: %w", err)
+	}
 	return runner.Apply(ctx, dir)
 }
 
