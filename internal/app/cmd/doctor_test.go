@@ -1899,20 +1899,18 @@ func TestCheckOrphanedEC2_WarnsUntagged(t *testing.T) {
 }
 
 // =============================================================================
-// Phase 84 Wave 0 stubs — W0-06, W0-07
-// These tests are intentionally RED at Wave 0. They exercise checkSESRules,
-// a function that will be added to doctor.go by plan 84-07.
-// mockSESReceiptRuleAPI is defined in doctor_ses_rules_test.go (phase84_doctor tag).
+// Phase 84 — W0-06, W0-07
+// These tests exercise checkSESRules using the mockSESReceiptRuleAPI defined in
+// doctor_ses_rules_test.go (build tag removed; compiles in default build since Plan 84-07).
 // =============================================================================
 
 // TestCheckSESRules_AllOwn (W0-06) verifies that when all rules in the active
-// rule set belong to the current resource_prefix, checkSESRules returns StatusOK.
+// rule set belong to the current resource_prefix, checkSESRules returns CheckOK.
 func TestCheckSESRules_AllOwn(t *testing.T) {
-	// mockSESReceiptRuleAPI is defined in doctor_ses_rules_test.go (build tag phase84_doctor).
-	// At Wave 0 the build tag prevents compilation, so this test stubs out the
-	// function signature reference to make the compile fail on checkSESRules,
-	// not on the mock type. checkSESRules does not exist yet in doctor.go.
-	result := checkSESRules(context.Background(), nil, "kph")
+	mock := &mockSESReceiptRuleAPI{
+		ruleNames: []string{"kph-operator-inbound", "kph-sandbox-catchall"},
+	}
+	result := checkSESRules(context.Background(), mock, "kph")
 	// Expected: CheckOK, message mentions "2 rules" and "kph".
 	if result.Status != CheckOK {
 		t.Errorf("expected CheckOK when all rules own prefix kph, got %s: %s", result.Status, result.Message)
@@ -1926,11 +1924,17 @@ func TestCheckSESRules_AllOwn(t *testing.T) {
 }
 
 // TestCheckSESRules_Orphans (W0-07) verifies that when the active rule set
-// contains a rule from a foreign prefix, checkSESRules returns StatusWarn
+// contains a rule from a foreign prefix, checkSESRules returns CheckWarn
 // with the orphan rule name surfaced.
 func TestCheckSESRules_Orphans(t *testing.T) {
-	// checkSESRules does not exist yet — this test is RED at Wave 0.
-	result := checkSESRules(context.Background(), nil, "kph")
+	mock := &mockSESReceiptRuleAPI{
+		ruleNames: []string{
+			"kph-operator-inbound",
+			"kph-sandbox-catchall",
+			"xx-operator-inbound", // foreign prefix — orphan
+		},
+	}
+	result := checkSESRules(context.Background(), mock, "kph")
 	// Expected: CheckWarn, orphan list contains "xx-operator-inbound".
 	if result.Status != CheckWarn {
 		t.Errorf("expected CheckWarn when orphan rule xx-operator-inbound present, got %s: %s", result.Status, result.Message)

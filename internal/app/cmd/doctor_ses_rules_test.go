@@ -1,28 +1,22 @@
 // Package cmd — doctor_ses_rules_test.go
-// Phase 84 Wave 0 — W0-08: SES receipt rule check test infrastructure.
+// Phase 84 Wave 2 — W0-08: SES receipt rule check tests (build-tag removed).
 //
 // Defines mockSESReceiptRuleAPI implementing the SESReceiptRuleAPI interface
-// that doctor.go exposes. At Wave 0 the interface is an empty stub (Plan 84-07
-// will add DescribeReceiptRuleSet once go.mod includes aws-sdk-go-v2/service/ses).
-//
-// Build tag note: the plan specified //go:build phase84_doctor to guard against
-// importing the classic SES SDK before Plan 84-07. Since the current interface
-// is empty (no SDK import required), this file compiles without a build tag.
-// Plan 84-07 will add the tag when wiring the real SDK method.
-//
-// RED at end of Plan 84-01 — checkSESRules returns CheckSkipped; full assertion
-// suite turns GREEN when Plan 84-07 implements the real check.
+// declared in doctor.go. The mock implements DescribeReceiptRuleSet using the
+// real aws-sdk-go-v2/service/ses types (added to go.mod by Plan 84-07).
 package cmd
 
 import (
 	"context"
 	"strings"
 	"testing"
+
+	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ses"
+	sestypes "github.com/aws/aws-sdk-go-v2/service/ses/types"
 )
 
 // mockSESReceiptRuleAPI implements SESReceiptRuleAPI for testing.
-// At Wave 0 the interface is empty; Plan 84-07 will extend it with
-// DescribeReceiptRuleSet and update this mock accordingly.
 type mockSESReceiptRuleAPI struct {
 	// ruleNames are the rule names returned by DescribeReceiptRuleSet.
 	// Set by individual tests to exercise different scenarios.
@@ -31,12 +25,22 @@ type mockSESReceiptRuleAPI struct {
 	err error
 }
 
+// DescribeReceiptRuleSet satisfies SESReceiptRuleAPI.
+func (m *mockSESReceiptRuleAPI) DescribeReceiptRuleSet(_ context.Context, _ *ses.DescribeReceiptRuleSetInput, _ ...func(*ses.Options)) (*ses.DescribeReceiptRuleSetOutput, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	rules := make([]sestypes.ReceiptRule, 0, len(m.ruleNames))
+	for _, name := range m.ruleNames {
+		n := name
+		rules = append(rules, sestypes.ReceiptRule{Name: awssdk.String(n)})
+	}
+	return &ses.DescribeReceiptRuleSetOutput{Rules: rules}, nil
+}
+
 // TestCheckSESRules (W0-08) is the umbrella test for SES receipt rule checks.
-// It exercises both the happy path (all rules own prefix) and the orphan path
+// It exercises the happy path (all rules own prefix) and the orphan path
 // (rules from a foreign prefix present) via sub-tests.
-//
-// RED at Wave 0 because checkSESRules always returns CheckSkipped.
-// GREEN when Plan 84-07 replaces the stub with the real implementation.
 func TestCheckSESRules(t *testing.T) {
 	t.Run("AllOwnRules_ReturnsOK", func(t *testing.T) {
 		mock := &mockSESReceiptRuleAPI{
@@ -74,9 +78,10 @@ func TestCheckSESRules(t *testing.T) {
 	})
 
 	t.Run("NilClient_DoesNotPanic", func(t *testing.T) {
-		// nil client — production code should handle gracefully (e.g. CheckSkipped).
+		// nil client — production code returns CheckSkipped.
 		result := checkSESRules(context.Background(), nil, "kph")
-		// At Wave 0 this returns CheckSkipped; Plan 84-07 may return CheckSkipped or CheckError.
-		_ = result
+		if result.Status != CheckSkipped {
+			t.Errorf("expected CheckSkipped for nil client, got %s", result.Status)
+		}
 	})
 }

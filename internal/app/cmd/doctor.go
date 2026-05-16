@@ -27,13 +27,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
+	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/ses"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
-	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/spf13/cobra"
 	appcfg "github.com/whereiskurt/klanker-maker/internal/app/config"
@@ -251,6 +252,9 @@ type DoctorDeps struct {
 	LambdaClient LambdaGetFunctionAPI
 	// SES client for domain verification check.
 	SESClient SESGetEmailIdentityAPI
+	// SESRulesClient is the SES classic v1 client for the receipt-rule orphan check (Phase 84).
+	// Nil causes the check to be skipped.
+	SESRulesClient SESReceiptRuleAPI
 	// Lister for sandbox summary check.
 	Lister SandboxLister
 	// KMS and IAM clients for stale resource cleanup checks.
@@ -2556,6 +2560,13 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkSESIdentity(ctx, sesClient, emailDomain)
 	})
 
+	// SES receipt-rule orphan check (Phase 84).
+	sesRulesClient := deps.SESRulesClient
+	localPrefix := cfg.GetResourcePrefix()
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkSESRules(ctx, sesRulesClient, localPrefix)
+	})
+
 	// Sandbox summary check.
 	lister := deps.Lister
 	checks = append(checks, func(ctx context.Context) CheckResult {
@@ -2889,6 +2900,7 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	deps.LambdaClient = lambda.NewFromConfig(awsCfg)
 	deps.LambdaCleanup = lambda.NewFromConfig(awsCfg)
 	deps.SESClient = sesv2.NewFromConfig(awsCfg)
+	deps.SESRulesClient = ses.NewFromConfig(awsCfg)
 	deps.KMSCleanupClient = kms.NewFromConfig(awsCfg)
 	deps.IAMCleanupClient = iam.NewFromConfig(awsCfg)
 	deps.SchedulerClient = scheduler.NewFromConfig(awsCfg)
@@ -3188,27 +3200,76 @@ func (l *doctorEC2InstanceLister) InstanceExists(ctx context.Context, sandboxID 
 	return false, nil
 }
 
-// SESReceiptRuleAPI is the narrow interface for the SES receipt rule set
-// operations used by checkSESRules. Plan 84-07 will wire this to the real
-// aws-sdk-go-v2/service/ses client; tests use a mock.
-//
-// Stub added by Plan 84-04 (Rule 3 auto-fix) to unblock package compilation
-// while Wave 0 doctor_test.go stubs reference the not-yet-implemented function.
+// SESReceiptRuleAPI is the narrow interface for the SES classic v1
+// DescribeReceiptRuleSet operation used by checkSESRules (Phase 84).
+// The real *ses.Client satisfies this interface directly.
 type SESReceiptRuleAPI interface {
-	// DescribeReceiptRuleSet will be implemented in Plan 84-07.
+	DescribeReceiptRuleSet(ctx context.Context, params *ses.DescribeReceiptRuleSetInput, optFns ...func(*ses.Options)) (*ses.DescribeReceiptRuleSetOutput, error)
 }
 
-// checkSESRules lists the rules in the shared SES receipt rule set and warns
-// when any rule's prefix does not match the local resource_prefix (orphan rule).
+// checkSESRules lists the rules in the shared SES receipt rule set
+// ("sandbox-email-shared") and warns when any rule's prefix does not match
+// localPrefix (i.e. rules owned by a different km install — orphans).
 //
-// This is a STUB added by Plan 84-04 to allow the Wave 0 test stubs
-// (W0-06, W0-07) to compile. Full implementation lands in Plan 84-07.
-//
-// Current behavior: always returns CheckSkipped so CI is not broken.
-func checkSESRules(_ context.Context, _ SESReceiptRuleAPI, _ string) CheckResult {
+// Returns:
+//   - CheckSkipped  — client is nil (SES classic SDK not available)
+//   - CheckError    — DescribeReceiptRuleSet failed (rule set may not exist)
+//   - CheckWarn     — at least one rule has a foreign prefix (orphans listed)
+//   - CheckOK       — all rules belong to localPrefix (or rule set is empty)
+func checkSESRules(ctx context.Context, client SESReceiptRuleAPI, localPrefix string) CheckResult {
+	const name = "SES rules"
+	const sharedRuleSet = "sandbox-email-shared"
+
+	if client == nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "SES classic SDK client unavailable",
+		}
+	}
+
+	out, err := client.DescribeReceiptRuleSet(ctx, &ses.DescribeReceiptRuleSetInput{
+		RuleSetName: awssdk.String(sharedRuleSet),
+	})
+	if err != nil {
+		return CheckResult{
+			Name:        name,
+			Status:      CheckError,
+			Message:     fmt.Sprintf("DescribeReceiptRuleSet %q: %v", sharedRuleSet, err),
+			Remediation: "Verify the shared rule set exists; run `km bootstrap --shared-ses`",
+		}
+	}
+
+	var orphans []string
+	ownCount := 0
+	for _, r := range out.Rules {
+		n := awssdk.ToString(r.Name)
+		idx := strings.Index(n, "-")
+		if idx < 0 {
+			// No dash in rule name — cannot determine prefix; treat as orphan.
+			orphans = append(orphans, n)
+			continue
+		}
+		prefix := n[:idx]
+		if prefix == localPrefix {
+			ownCount++
+		} else {
+			orphans = append(orphans, n)
+		}
+	}
+
+	if len(orphans) > 0 {
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("orphan SES rules: %s", strings.Join(orphans, ", ")),
+			Remediation: "Other installs' rules — if no install owns them, delete via `aws ses delete-receipt-rule --rule-set-name sandbox-email-shared --rule-name <name>`",
+		}
+	}
+
 	return CheckResult{
-		Name:    "ses_rules",
-		Status:  CheckSkipped,
-		Message: "SES rule orphan check not yet implemented (Plan 84-07)",
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("SES rules healthy (%d rules for prefix %q)", ownCount, localPrefix),
 	}
 }
