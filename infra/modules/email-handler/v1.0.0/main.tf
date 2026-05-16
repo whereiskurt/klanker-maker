@@ -20,8 +20,9 @@ resource "aws_iam_role" "email_handler" {
   })
 
   tags = {
-    "km:component" = "email-handler"
-    "km:managed"   = "true"
+    "km:component"       = "email-handler"
+    "km:managed"         = "true"
+    "km:resource-prefix" = var.resource_prefix
   }
 }
 
@@ -265,8 +266,9 @@ resource "aws_lambda_function" "email_handler" {
   }
 
   tags = {
-    "km:component" = "email-handler"
-    "km:managed"   = "true"
+    "km:component"       = "email-handler"
+    "km:managed"         = "true"
+    "km:resource-prefix" = var.resource_prefix
   }
 
   # Replace Lambda if role is replaced — Lambda env-var KMS grants bind to role unique-ID
@@ -281,7 +283,8 @@ resource "aws_cloudwatch_log_group" "email_handler" {
   retention_in_days = 30
 
   tags = {
-    "km:component" = "email-handler"
-    "km:managed"   = "true"
+    "km:component"       = "email-handler"
+    "km:managed"         = "true"
+    "km:resource-prefix" = var.resource_prefix
   }
 }

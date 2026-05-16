@@ -31,11 +31,12 @@ resource "aws_service_discovery_private_dns_namespace" "namespace" {
   vpc         = var.vpc_id
 
   tags = {
-    Name            = each.value.namespace_name
-    ClusterName     = each.key
-    Region          = var.region_label
-    "km:label"      = var.km_label
-    "km:sandbox-id" = var.sandbox_id
+    Name                 = each.value.namespace_name
+    ClusterName          = each.key
+    Region               = var.region_label
+    "km:label"           = var.km_label
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
   }
 }
 
@@ -51,11 +52,12 @@ resource "aws_ecs_cluster" "cluster" {
   }
 
   tags = {
-    Name            = each.value.cluster_name
-    ClusterName     = each.key
-    Region          = var.region_label
-    "km:label"      = var.km_label
-    "km:sandbox-id" = var.sandbox_id
+    Name                 = each.value.cluster_name
+    ClusterName          = each.key
+    Region               = var.region_label
+    "km:label"           = var.km_label
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
   }
 }
 
@@ -102,11 +104,12 @@ resource "aws_iam_role" "ecs_task_role" {
   })
 
   tags = {
-    Name            = "km-ecs-task-role-${each.value.cluster_name}"
-    ClusterName     = each.key
-    Region          = var.region_label
-    "km:label"      = var.km_label
-    "km:sandbox-id" = var.sandbox_id
+    Name                 = "km-ecs-task-role-${each.value.cluster_name}"
+    ClusterName          = each.key
+    Region               = var.region_label
+    "km:label"           = var.km_label
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
   }
 }
 

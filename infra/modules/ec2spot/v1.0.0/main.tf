@@ -38,8 +38,9 @@ resource "aws_vpc" "sandbox" {
   enable_dns_hostnames = true
 
   tags = {
-    Name            = "km-sandbox-${var.sandbox_id}"
-    "km:sandbox-id" = var.sandbox_id
+    Name                 = "km-sandbox-${var.sandbox_id}"
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
   }
 }
 
@@ -48,8 +49,9 @@ resource "aws_internet_gateway" "sandbox" {
   vpc_id = aws_vpc.sandbox[0].id
 
   tags = {
-    Name            = "km-sandbox-${var.sandbox_id}-igw"
-    "km:sandbox-id" = var.sandbox_id
+    Name                 = "km-sandbox-${var.sandbox_id}-igw"
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
   }
 }
 
@@ -62,8 +64,9 @@ resource "aws_subnet" "sandbox" {
   map_public_ip_on_launch = true
 
   tags = {
-    Name            = "km-sandbox-${var.sandbox_id}-${local.effective_azs[count.index]}"
-    "km:sandbox-id" = var.sandbox_id
+    Name                 = "km-sandbox-${var.sandbox_id}-${local.effective_azs[count.index]}"
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
   }
 }
 
@@ -77,8 +80,9 @@ resource "aws_route_table" "sandbox" {
   }
 
   tags = {
-    Name            = "km-sandbox-${var.sandbox_id}-rt"
-    "km:sandbox-id" = var.sandbox_id
+    Name                 = "km-sandbox-${var.sandbox_id}-rt"
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
   }
 }
 
@@ -203,8 +207,9 @@ resource "aws_security_group" "ec2spot" {
   # No egress rules — Phase 2 profile compiler adds per-profile egress
 
   tags = {
-    Name            = "km-ec2spot-${var.region_label}"
-    "km:sandbox-id" = var.sandbox_id
+    Name                 = "km-ec2spot-${var.region_label}"
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
   }
 }
 
@@ -243,8 +248,9 @@ resource "aws_iam_role" "ec2spot_ssm" {
   })
 
   tags = {
-    Name            = "km-ec2spot-ssm-${var.region_label}"
-    "km:sandbox-id" = var.sandbox_id
+    Name                 = "km-ec2spot-ssm-${var.region_label}"
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
   }
 }
 
@@ -513,8 +519,9 @@ resource "aws_iam_instance_profile" "ec2spot" {
   role = aws_iam_role.ec2spot_ssm[0].name
 
   tags = {
-    Name            = "km-ec2spot-profile-${var.region_label}"
-    "km:sandbox-id" = var.sandbox_id
+    Name                 = "km-ec2spot-profile-${var.region_label}"
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
   }
 }
 
@@ -565,15 +572,17 @@ resource "aws_spot_instance_request" "ec2spot" {
   }
 
   tags = {
-    Name            = each.value.instance_name
-    "km:sandbox-id" = each.value.sandbox_id
+    Name                 = each.value.instance_name
+    "km:sandbox-id"      = each.value.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
   }
 
   # Tag root EBS volumes so doctor's untagged-available-volume check can find them.
   # Without volume_tags, root volumes only inherit provider default_tags and miss km:sandbox-id.
   volume_tags = {
-    "km:sandbox-id" = each.value.sandbox_id
-    Name            = "km-sandbox-${each.value.sandbox_id}-root"
+    "km:sandbox-id"      = each.value.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
+    Name                 = "km-sandbox-${each.value.sandbox_id}-root"
   }
 
   lifecycle {
@@ -607,6 +616,14 @@ resource "aws_ec2_tag" "ec2spot_sandbox_id" {
   resource_id = aws_spot_instance_request.ec2spot[each.key].spot_instance_id
   key         = "km:sandbox-id"
   value       = each.value.sandbox_id
+}
+
+resource "aws_ec2_tag" "ec2spot_resource_prefix" {
+  for_each = local.ec2spot_map
+
+  resource_id = aws_spot_instance_request.ec2spot[each.key].spot_instance_id
+  key         = "km:resource-prefix"
+  value       = var.resource_prefix
 }
 
 resource "aws_ec2_tag" "ec2spot_region" {
@@ -656,10 +673,11 @@ resource "aws_instance" "ec2_ondemand" {
   }
 
   tags = {
-    Name            = each.value.instance_name
-    "km:sandbox-id" = each.value.sandbox_id
-    "km:label"      = var.km_label
-    "Region"        = var.region_label
+    Name                 = each.value.instance_name
+    "km:sandbox-id"      = each.value.sandbox_id
+    "km:label"           = var.km_label
+    "km:resource-prefix" = var.resource_prefix
+    "Region"             = var.region_label
   }
 }
 
@@ -675,8 +693,9 @@ resource "aws_ebs_volume" "additional" {
   type              = "gp3"
 
   tags = {
-    "km:sandbox-id" = var.sandbox_id
-    Name            = "km-sandbox-${var.sandbox_id}-data"
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
+    Name                 = "km-sandbox-${var.sandbox_id}-data"
   }
 }
 

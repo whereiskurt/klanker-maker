@@ -21,9 +21,10 @@ resource "aws_ecs_cluster" "sandbox" {
   }
 
   tags = {
-    Name            = local.cluster_name
-    "km:sandbox-id" = var.sandbox_id
-    "km:label"      = var.km_label
+    Name                 = local.cluster_name
+    "km:sandbox-id"      = var.sandbox_id
+    "km:label"           = var.km_label
+    "km:resource-prefix" = var.resource_prefix
   }
 }
 
@@ -49,9 +50,10 @@ resource "aws_security_group" "sandbox" {
   vpc_id      = var.vpc_id
 
   tags = {
-    Name            = "km-ecs-sandbox-${var.sandbox_id}"
-    "km:sandbox-id" = var.sandbox_id
-    "km:label"      = var.km_label
+    Name                 = "km-ecs-sandbox-${var.sandbox_id}"
+    "km:sandbox-id"      = var.sandbox_id
+    "km:label"           = var.km_label
+    "km:resource-prefix" = var.resource_prefix
   }
 }
 
@@ -84,8 +86,9 @@ resource "aws_iam_role" "task_execution" {
   })
 
   tags = {
-    Name            = "km-ecs-exec-${var.sandbox_id}"
-    "km:sandbox-id" = var.sandbox_id
+    Name                 = "km-ecs-exec-${var.sandbox_id}"
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
   }
 }
 
@@ -107,8 +110,9 @@ resource "aws_iam_role" "task_role" {
   })
 
   tags = {
-    Name            = "km-ecs-task-${var.sandbox_id}"
-    "km:sandbox-id" = var.sandbox_id
+    Name                 = "km-ecs-task-${var.sandbox_id}"
+    "km:sandbox-id"      = var.sandbox_id
+    "km:resource-prefix" = var.resource_prefix
   }
 }
 
@@ -144,8 +148,9 @@ resource "aws_cloudwatch_log_group" "sandbox" {
   retention_in_days = 7
 
   tags = {
-    "km:sandbox-id" = var.sandbox_id
-    "km:label"      = var.km_label
+    "km:sandbox-id"      = var.sandbox_id
+    "km:label"           = var.km_label
+    "km:resource-prefix" = var.resource_prefix
   }
 }
 
@@ -190,9 +195,10 @@ resource "aws_ecs_task_definition" "sandbox" {
   ])
 
   tags = {
-    Name            = local.task_family
-    "km:sandbox-id" = var.sandbox_id
-    "km:label"      = var.km_label
+    Name                 = local.task_family
+    "km:sandbox-id"      = var.sandbox_id
+    "km:label"           = var.km_label
+    "km:resource-prefix" = var.resource_prefix
   }
 }
 
@@ -220,9 +226,10 @@ resource "aws_ecs_service" "sandbox" {
   }
 
   tags = {
-    Name            = local.service_name
-    "km:sandbox-id" = var.sandbox_id
-    "km:label"      = var.km_label
+    Name                 = local.service_name
+    "km:sandbox-id"      = var.sandbox_id
+    "km:label"           = var.km_label
+    "km:resource-prefix" = var.resource_prefix
   }
 
   depends_on = [aws_ecs_cluster_capacity_providers.sandbox]
