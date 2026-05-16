@@ -54,6 +54,21 @@ var handler *bridge.Handler
 // (backward-compat: existing Phase 63 sandboxes don't need inbound support).
 var eventsHandler *bridge.EventsHandler
 
+// Package-level AWS clients captured in init() and reused by wireEventsHandler().
+// Splitting init() from wireEventsHandler() keeps the env validation (os.Exit)
+// out of init() so test builds can exercise resolveThreadsTable without the
+// Lambda cold-start env requirements.
+var (
+	initDDB        *dynamodb.Client
+	initSSMC       *ssm.Client
+	initS3Client   *s3.Client
+	initSQSClient  *sqs.Client
+	initPoster     *bridge.SlackPosterAdapter
+	initToken      *bridge.SSMBotTokenFetcher
+	initHTTPClient *http.Client
+	initNonces     *bridge.DynamoNonceStore
+)
+
 func init() {
 	ctx := context.Background()
 
@@ -62,8 +77,8 @@ func init() {
 		log.Fatalf("km-slack-bridge: load AWS config: %v", err)
 	}
 
-	ddb := dynamodb.NewFromConfig(cfg)
-	ssmc := ssm.NewFromConfig(cfg)
+	initDDB = dynamodb.NewFromConfig(cfg)
+	initSSMC = ssm.NewFromConfig(cfg)
 
 	// Defaults derive from KM_RESOURCE_PREFIX so a non-default install
 	// (resource_prefix=kph) gets prefix-correct fallbacks (kph-identities,
@@ -75,10 +90,10 @@ func init() {
 	nonceTable := envOr("KM_NONCE_TABLE", prefix+"-slack-bridge-nonces")
 	botTokenPath := envOr("KM_BOT_TOKEN_PATH", "/"+prefix+"/slack/bot-token")
 
-	keys := &bridge.DynamoPublicKeyFetcher{Client: ddb, TableName: identitiesTable}
-	nonces := &bridge.DynamoNonceStore{Client: ddb, TableName: nonceTable}
-	channels := &bridge.DynamoChannelOwnershipFetcher{Client: ddb, TableName: sandboxesTable}
-	tokenFetcher := &bridge.SSMBotTokenFetcher{Client: ssmc, Path: botTokenPath}
+	keys := &bridge.DynamoPublicKeyFetcher{Client: initDDB, TableName: identitiesTable}
+	initNonces = &bridge.DynamoNonceStore{Client: initDDB, TableName: nonceTable}
+	channels := &bridge.DynamoChannelOwnershipFetcher{Client: initDDB, TableName: sandboxesTable}
+	initToken = &bridge.SSMBotTokenFetcher{Client: initSSMC, Path: botTokenPath}
 
 	// Phase 75: CheckRedirect=ErrUseLastResponse prevents Go's stdlib from
 	// stripping the Authorization header on cross-host 302 redirects
@@ -88,7 +103,7 @@ func init() {
 	// Slack API methods (chat.postMessage, reactions.add, auth.test) return JSON
 	// directly with no redirects expected, so disabling auto-redirect is safe for
 	// all Phase 63/67/68 paths that also share this client.
-	httpClient := &http.Client{
+	initHTTPClient = &http.Client{
 		Timeout: 10 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -97,18 +112,18 @@ func init() {
 
 	// SlackPosterAdapter posts messages via the Slack Web API using the token
 	// fetched lazily (and cached for 15 min) by SSMBotTokenFetcher.
-	poster := &bridge.SlackPosterAdapter{
-		HTTPClient: httpClient,
-		Tokens:     tokenFetcher,
+	initPoster = &bridge.SlackPosterAdapter{
+		HTTPClient: initHTTPClient,
+		Tokens:     initToken,
 	}
 
 	handler = &bridge.Handler{
 		Now:      time.Now,
 		Keys:     keys,
-		Nonces:   nonces,
+		Nonces:   initNonces,
 		Channels: channels,
-		Token:    tokenFetcher,
-		Slack:    poster,
+		Token:    initToken,
+		Slack:    initPoster,
 	}
 
 	// ==============================================================
@@ -123,9 +138,10 @@ func init() {
 		slog.Warn("km-slack-bridge: KM_ARTIFACTS_BUCKET not set; ActionUpload will fail at runtime",
 			"path", "init", "remediation", "set KM_ARTIFACTS_BUCKET in Lambda env")
 	}
-	s3Client := s3.NewFromConfig(cfg)
+	initS3Client = s3.NewFromConfig(cfg)
+	initSQSClient = sqs.NewFromConfig(cfg)
 	handler.S3Getter = &bridge.S3GetterAdapter{
-		Client: s3Client,
+		Client: initS3Client,
 		Bucket: artifactsBucket,
 	}
 
@@ -133,7 +149,7 @@ func init() {
 	// fetched once at cold start (via the same SSM cache as SlackPosterAdapter).
 	// On token rotation, the operator force-cold-starts the Lambda
 	// (`km slack rotate-token`) — this matches Phase 63 behavior exactly.
-	uploadToken, tokErr := tokenFetcher.Fetch(ctx)
+	uploadToken, tokErr := initToken.Fetch(ctx)
 	if tokErr != nil {
 		// We do NOT log.Fatalf here — Phase 63 paths (post/archive/test)
 		// must keep working even if the token fetch fails at cold start
@@ -142,7 +158,7 @@ func init() {
 		slog.Warn("km-slack-bridge: cold-start token fetch failed; upload adapter and scope probe disabled",
 			"path", "init", "err", tokErr.Error())
 	} else {
-		uploadClient := pkgslack.NewClient(uploadToken, httpClient)
+		uploadClient := pkgslack.NewClient(uploadToken, initHTTPClient)
 		handler.FileUploader = &bridge.SlackFileUploaderAdapter{Client: uploadClient}
 
 		// Cold-start scope probe (RESEARCH Open Question 2 resolution).
@@ -164,17 +180,38 @@ func init() {
 		)
 	}
 
+}
+
+func main() {
 	// ==============================================================
 	// Phase 67-05: EventsHandler wiring
-	// If KM_SLACK_THREADS_TABLE is absent, log a warning and skip.
-	// The existing Phase 63 envelope path (POST /) continues to work.
+	// KM_SLACK_THREADS_TABLE is required — missing it would silently
+	// cross-route to a stale "km-slack-threads" default belonging to a
+	// different install. Hard-fail before lambda.Start so the cold-start
+	// log clearly identifies the misconfiguration.
+	//
+	// This check is in main() rather than init() so that test builds
+	// (which do not call main()) can exercise the pure resolveThreadsTable
+	// helper without the Lambda cold-start env requirement.
 	// ==============================================================
+	wireEventsHandler()
+	lambda.Start(handle)
+}
+
+// wireEventsHandler builds and assigns the package-level eventsHandler using
+// the AWS clients captured by init(). It calls resolveThreadsTable which
+// calls os.Exit(1) when KM_SLACK_THREADS_TABLE is unset.
+func wireEventsHandler() {
+	prefix := resourcePrefix()
+	sandboxesTable := envOr("KM_SANDBOX_TABLE_NAME", prefix+"-sandboxes")
 	signingSecretPath := envOr("KM_SIGNING_SECRET_PATH", "/"+prefix+"/slack/signing-secret")
-	threadsTable := os.Getenv("KM_SLACK_THREADS_TABLE")
-	if threadsTable == "" {
-		threadsTable = "km-slack-threads"
-		slog.Warn("km-slack-bridge: KM_SLACK_THREADS_TABLE not set; defaulting to km-slack-threads (Phase 67 inbound path)")
-	}
+	artifactsBucket := os.Getenv("KM_ARTIFACTS_BUCKET")
+
+	threadsTable := resolveThreadsTable(func(key string) (string, bool) {
+		v := os.Getenv(key)
+		return v, v != ""
+	}, os.Exit)
+
 	slog.Info("km-slack-bridge: cold start",
 		"KM_SANDBOX_TABLE_NAME", sandboxesTable,
 		"KM_SLACK_THREADS_TABLE", threadsTable,
@@ -183,34 +220,33 @@ func init() {
 	)
 
 	signingSecret := &bridge.SSMSigningSecretFetcher{
-		Client:   ssmc,
+		Client:   initSSMC,
 		Path:     signingSecretPath,
 		CacheTTL: 15 * time.Minute,
 	}
 
-	sqsClient := sqs.NewFromConfig(cfg)
-	sqsSender := &bridge.SQSAdapter{Client: sqsClient}
+	sqsSender := &bridge.SQSAdapter{Client: initSQSClient}
 
 	threadStore := &bridge.DDBThreadStore{
-		Client:    ddb,
+		Client:    initDDB,
 		TableName: threadsTable,
 	}
 
 	sandboxResolver := &bridge.DDBSandboxByChannel{
-		Client:    ddb,
+		Client:    initDDB,
 		TableName: sandboxesTable,
 		IndexName: "slack_channel_id-index",
 	}
 
 	botUserIDFetcher := &bridge.CachedBotUserIDFetcher{
-		SlackAPI:     &slackAuthTestAdapter{httpClient: httpClient},
-		TokenFetcher: tokenFetcher,
+		SlackAPI:     &slackAuthTestAdapter{httpClient: initHTTPClient},
+		TokenFetcher: initToken,
 	}
 
 	// Reuse DynamoNonceStore wrapped in an EventNonceStore adapter.
 	// DynamoNonceStore uses Reserve/ErrNonceReplayed; we wrap it to provide
 	// the CheckAndStore bool interface expected by EventsHandler.
-	eventNonces := &nonceStoreAdapter{inner: nonces}
+	eventNonces := &nonceStoreAdapter{inner: initNonces}
 
 	eventsHandler = &bridge.EventsHandler{
 		SigningSecret: signingSecret,
@@ -223,15 +259,12 @@ func init() {
 	}
 
 	// Wire DDBPauseHinter to eventsHandler.PauseHinter.
-	// PostHintFunc is a closure that posts directly via the SlackPosterAdapter.
-	// We use the hint text as both subject and body so the rendered message is
-	// just the plain hint — no bold header duplication.
 	postHintFn := bridge.PostHintFunc(func(ctx context.Context, channelID, threadTS, text string) error {
-		_, err := poster.PostMessage(ctx, channelID, "", text, threadTS)
+		_, err := initPoster.PostMessage(ctx, channelID, "", text, threadTS)
 		return err
 	})
 	pauseHinter := &bridge.DDBPauseHinter{
-		Client:             ddb,
+		Client:             initDDB,
 		SandboxesTableName: sandboxesTable,
 		SandboxByChannel:   sandboxResolver,
 		Post:               postHintFn,
@@ -241,54 +274,34 @@ func init() {
 	eventsHandler.PauseHinter = pauseHinter
 
 	// Phase 67.1: ACK reaction wiring.
-	// Reuse the SAME httpClient and tokenFetcher as SlackPosterAdapter so
-	// the BotTokenFetcher's 15-min token cache is shared (avoids an extra
-	// SSM call on every reaction).
 	ackEmoji := os.Getenv("KM_SLACK_ACK_EMOJI")
 	if ackEmoji == "" {
 		ackEmoji = "eyes"
 	}
 	eventsHandler.Reactor = &bridge.SlackReactorAdapter{
-		HTTPClient: httpClient,
-		Tokens:     tokenFetcher,
+		HTTPClient: initHTTPClient,
+		Tokens:     initToken,
 	}
 	eventsHandler.AckEmoji = ackEmoji
 
 	// Phase 75: wire S3FileDownloader for inbound file_share events.
-	// Shares the same httpClient (redirect-disabled), s3Client, artifactsBucket,
-	// and tokenFetcher as the Phase 68 upload path — no extra SSM round-trips.
-	// When KM_ARTIFACTS_BUCKET is unset (fresh/unconfigured install), the downloader
-	// stays nil and EventsHandler.Handle falls through to text-only SQS dispatch
-	// with a Warn log (intentional fail-closed degradation).
-	//
-	// Phase 75.1: FilesInfo is wired alongside the downloader. Modern Slack
-	// Apps receive stub file objects in file_share events (only `id` populated);
-	// the downloader uses FilesInfo to enrich each file with url_private_download
-	// before issuing the GET. SlackFilesInfoAdapter shares httpClient + tokenFetcher
-	// with poster/reactor so the 15-min token cache is reused.
 	if artifactsBucket != "" {
 		eventsHandler.FileDownloader = &bridge.S3FileDownloader{
-			HTTPClient: httpClient,
-			S3:         s3Client,
+			HTTPClient: initHTTPClient,
+			S3:         initS3Client,
 			Bucket:     artifactsBucket,
-			Tokens:     tokenFetcher,
+			Tokens:     initToken,
 			FilesInfo: &bridge.SlackFilesInfoAdapter{
-				HTTPClient: httpClient,
-				Tokens:     tokenFetcher,
+				HTTPClient: initHTTPClient,
+				Tokens:     initToken,
 			},
 		}
 	} else {
 		slog.Warn("km-slack-bridge: phase-75 file downloader disabled: KM_ARTIFACTS_BUCKET unset; file_share events will dispatch text-only")
 	}
 
-	// Phase 75: wire SlackPoster into EventsHandler so per-file warning messages
-	// (oversize, 403, S3 failure) are posted to the thread before agent delivery.
-	// Shares the same SlackPosterAdapter already wired to handler.Slack (Phase 63).
-	eventsHandler.Slack = poster
-}
-
-func main() {
-	lambda.Start(handle)
+	// Phase 75: wire SlackPoster into EventsHandler.
+	eventsHandler.Slack = initPoster
 }
 
 // handle converts a Lambda Function URL request into the appropriate handler request,
@@ -383,6 +396,21 @@ func resourcePrefix() string {
 		return v
 	}
 	return "km"
+}
+
+// resolveThreadsTable is the testable core of the KM_SLACK_THREADS_TABLE
+// cold-start check. It accepts a getenv function and an exit function so unit
+// tests can capture both the return value and the exit call without forking a
+// subprocess. If KM_SLACK_THREADS_TABLE is unset or empty, it logs an error
+// and calls exit(1) to prevent silent cross-routing to a stale default table.
+func resolveThreadsTable(getenv func(string) (string, bool), exit func(int)) string {
+	if v, ok := getenv("KM_SLACK_THREADS_TABLE"); ok && v != "" {
+		return v
+	}
+	slog.Error("KM_SLACK_THREADS_TABLE not set; refusing to start with stale default",
+		"service", "km-slack-bridge")
+	exit(1)
+	return "" // unreachable
 }
 
 // ============================================================

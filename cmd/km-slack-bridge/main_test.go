@@ -80,6 +80,55 @@ func TestHandle_BadEnvelope(t *testing.T) {
 	}
 }
 
+// TestMain_RequiresThreadsTable verifies that resolveThreadsTable calls exit(1)
+// when KM_SLACK_THREADS_TABLE is not set and returns the env value when it is set.
+func TestMain_RequiresThreadsTable(t *testing.T) {
+	t.Run("exits when KM_SLACK_THREADS_TABLE is empty", func(t *testing.T) {
+		exitCalled := false
+		var exitCode int
+		captureExit := func(code int) {
+			exitCalled = true
+			exitCode = code
+		}
+
+		getenv := func(key string) (string, bool) {
+			return "", false
+		}
+
+		_ = resolveThreadsTable(getenv, captureExit)
+
+		if !exitCalled {
+			t.Fatal("expected exit to be called when KM_SLACK_THREADS_TABLE is unset")
+		}
+		if exitCode != 1 {
+			t.Fatalf("expected exit code 1, got %d", exitCode)
+		}
+	})
+
+	t.Run("returns env value when KM_SLACK_THREADS_TABLE is set", func(t *testing.T) {
+		exitCalled := false
+		captureExit := func(code int) {
+			exitCalled = true
+		}
+
+		getenv := func(key string) (string, bool) {
+			if key == "KM_SLACK_THREADS_TABLE" {
+				return "rg-slack-threads", true
+			}
+			return "", false
+		}
+
+		result := resolveThreadsTable(getenv, captureExit)
+
+		if exitCalled {
+			t.Fatal("exit should not be called when KM_SLACK_THREADS_TABLE is set")
+		}
+		if result != "rg-slack-threads" {
+			t.Fatalf("expected 'rg-slack-threads', got %q", result)
+		}
+	})
+}
+
 func TestHandle_ResponseHeadersPresent(t *testing.T) {
 	origHandler := handler
 	handler = &bridge.Handler{

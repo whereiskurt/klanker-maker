@@ -18,6 +18,7 @@ import (
 	"flag"
 	"html/template"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -217,12 +218,26 @@ func tfStateBucket() string {
 	return "tf-" + prefix
 }
 
-// budgetTableName returns the DynamoDB budget table name from the KM_BUDGET_TABLE env var.
-func budgetTableName() string {
-	if v := os.Getenv("KM_BUDGET_TABLE"); v != "" {
+// resolveBudgetTable is the testable core of budgetTableName. It accepts a
+// getenv function and an exit function so unit tests can capture both the
+// return value and the exit call without forking a subprocess.
+// If KM_BUDGET_TABLE is unset or empty, it logs an error and calls exit(1).
+func resolveBudgetTable(getenv func(string) (string, bool), exit func(int)) string {
+	if v, ok := getenv("KM_BUDGET_TABLE"); ok && v != "" {
 		return v
 	}
-	return "km-budgets"
+	slog.Error("KM_BUDGET_TABLE not set; cannot determine budget table name")
+	exit(1)
+	return "" // unreachable
+}
+
+// budgetTableName returns the DynamoDB budget table name from the KM_BUDGET_TABLE env var.
+// Exits non-zero if the env var is unset — prevents silent cross-routing to the km install's table.
+func budgetTableName() string {
+	return resolveBudgetTable(func(key string) (string, bool) {
+		v := os.Getenv(key)
+		return v, v != ""
+	}, os.Exit)
 }
 
 // resourcePrefix returns the resource prefix from the KM_RESOURCE_PREFIX env var.
