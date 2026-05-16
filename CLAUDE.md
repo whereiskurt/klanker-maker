@@ -566,6 +566,68 @@ binary in S3 is harmless to leave in place when nothing references it.
 
 See `docs/superpowers/specs/2026-05-10-km-presence-daemon-design.md` for the full PRD.
 
+### Phase 79.1 follow-up: audit-pipe FIFO recreation on resumed sandboxes
+
+Phase 79 shipped the km-presence daemon but its initial UAT was performed
+only on a fresh `km create` — never on a `km pause` + `km resume` cycle.
+On resumed sandboxes (`/run` is tmpfs and is wiped on every boot; cloud-init
+does NOT re-run on second boot because the instance-id semaphore matches),
+`/run/km/audit-pipe` vanishes. km-presence (root) starts before km-audit-log
+(km-sidecar) finishes its `openAuditPipeWithRetry` and writes via
+`printf ... | timeout 0.1 tee /run/km/audit-pipe` — which CREATES the path
+as a regular `root:root 0644` file. km-audit-log then tries `os.OpenFile`
+with `O_RDWR` and gets `EACCES`, gives up after 10 retries, the audit
+pipeline is dead, and `km doctor presence_daemon_healthy` falsely WARNs.
+Discovered on sandbox `learn-14f484c7` (2026-05-16).
+
+Two-layer fix:
+
+| Layer | What | Where |
+|---|---|---|
+| 1 (root cause) | `/usr/lib/tmpfiles.d/km.conf` with `p+` recreates the FIFO at every boot, before `sysinit.target`, with `km-sidecar:km-sidecar 0666` ownership | `pkg/compiler/userdata.go` (heredoc inserted between the existing `mkfifo /run/km/audit-pipe` block and the `km-audit-log.service` unit heredoc) |
+| 2 (defense in depth) | `openAuditPipeWithRetry` detects a non-FIFO path (`info.Mode()&os.ModeNamedPipe == 0`), unlinks it via `os.Remove`, and recreates the FIFO via `syscall.Mkfifo` before retrying the open | `sidecars/audit-log/cmd/main.go::openAuditPipeWithRetry` |
+
+`p+` (not `p`) is critical — `p` is a silent no-op when a regular file
+occupies the path; `p+` clobbers it. Linux VFS semantics allow km-sidecar
+to `unlink` the root-owned regular file because km-sidecar owns the
+containing `/run/km` directory (no sticky bit set).
+
+**Rollout (matches Phase 79 pattern):**
+
+```bash
+make build               # rebuild km binary (Layer 1 template change)
+make sidecars            # rebuild + upload audit-log sidecar (Layer 2)
+km init --sidecars       # refresh management Lambda's userdata template
+```
+
+`make build` alone is insufficient — Layer 2 requires `make sidecars` so
+the new audit-log binary lands in S3 for new sandboxes to fetch. `km init
+--lambdas` is NOT needed (no Lambda code changes); `terragrunt apply` is
+NOT needed (no Terraform resource changes).
+
+**Not retroactive.** Existing sandboxes provisioned before Phase 79.1 do
+NOT have `/usr/lib/tmpfiles.d/km.conf` and have the old audit-log binary.
+`km destroy && km create` to roll the fix forward, OR apply the manual
+recovery snippet on the resumed sandbox:
+
+```bash
+# Operator workaround for pre-Phase-79.1 sandboxes that have already
+# tripped the bug (audit pipe is a regular file, not a FIFO).
+km shell <sandbox-id>
+sudo rm /run/km/audit-pipe && \
+  sudo mkfifo /run/km/audit-pipe && \
+  sudo chown km-sidecar:km-sidecar /run/km/audit-pipe && \
+  sudo chmod 666 /run/km/audit-pipe && \
+  sudo systemctl restart km-audit-log
+```
+
+Validation: after recovery, `journalctl -u km-audit-log` shows `reading
+from audit pipe pipe=/run/km/audit-pipe` (not `permission denied`), and
+`km doctor` reports `✓ Presence daemon healthy` within ~5 minutes of a
+real liveness signal (login shell, tmux attach, or agent process).
+
+See `.planning/phases/79.1-audit-pipe-fifo-recreation-on-resumed-sandboxes-systemd-tmpfiles-drop-in-audit-log-self-heal-when-path-exists-as-non-fifo-regular-file/79.1-RESEARCH.md` for full design (incl. systemd-tmpfiles boot ordering, `p` vs `p+` semantics, Linux unlink permission model).
+
 ## Cross-account k8s integrations (Phase 80)
 
 Provisions IAM roles in the klanker AWS account that trust k8s clusters in *other* AWS accounts. Pods authenticate via projected ServiceAccount tokens (IRSA) — no static IAM user keys, auto-rotating 3600s session tokens. Both the IRSA role and the create-handler Lambda role consume the shared `km-operator-policy/v1.0.0/` Terraform module so the two surfaces can never drift.
