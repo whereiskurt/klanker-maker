@@ -77,6 +77,39 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `profiles/` — Built-in SandboxProfile YAML files
 - `skills/` — User-invocable skills (klanker plugin)
 
+## Phase 84: SES per-install rule namespacing via operator address prefix
+
+Phase 84 (2026-05-16) introduced per-install SES rule namespacing so a second `km init` in the same AWS account never touches the first install's inbound email path.
+
+**Operator address format:** `operator-{resource_prefix}@{email_subdomain}.{domain}`
+Example: `operator-km@sandboxes.example.com` for the default install; `operator-km2@sandboxes.example.com` for a second install with `resource_prefix: km2`.
+
+**Shared rule set:** `sandbox-email-shared` — account-shared, owned by `infra/modules/ses-shared-rule-set/v1.0.0/`, has `lifecycle.prevent_destroy = true`. Provisioned once per account/region by `km bootstrap --shared-ses`; idempotent on re-apply.
+
+**Per-install rules:** Each install adds exactly two rules to the shared rule set:
+- `{prefix}-operator-inbound` — routes `operator-{prefix}@` to the operator Lambda
+- `{prefix}-sandbox-catchall` — routes all other `{sandbox-id}@` addresses to sandbox mailboxes
+
+`km uninit` removes only this install's two rules and leaves the shared rule set and sibling installs' rules intact.
+
+**Bootstrap:** `km bootstrap --shared-ses` provisions the foundation (idempotent auto-detect via `SESIdentityLister` — Phase 80 cluster-irsa pattern). Must run once before `km init` on a fresh account, or after upgrading from Phase 82.
+
+**Doctor check:** `km doctor` reports `✓ SES rules healthy` when all rules in the shared rule set map to a known `resource_prefix`, or `⚠ orphan SES rules: <list>` when rules exist for prefixes not in the local `km-config.yaml`. The orphan check is WARN-level — expected when a sibling install is present.
+
+**Phase 84 upgrade procedure (one-time, existing installs):**
+
+```bash
+make build
+km init --sidecars
+km bootstrap --shared-ses
+km init --dry-run=true
+km init --dry-run=false
+km configure
+km doctor
+```
+
+See `OPERATOR-GUIDE.md` § Phase 84 upgrade for the detailed runbook and two-install coexistence scenario.
+
 ## Network Enforcement
 
 Three enforcement modes via `spec.network.enforcement`:
