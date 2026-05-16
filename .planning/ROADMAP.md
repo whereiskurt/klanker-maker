@@ -1811,3 +1811,17 @@ Phase closes when (a) a second install can run `km init --dry-run=false` against
 
 **Requirements:** SES-PREFIX-ADDRESS, SES-SHARED-RULESET, SES-PER-INSTALL-RULES, SES-82.1-REMOVAL, SES-CONFIGURE-WIRING, SES-HANDLER-LOOKUP, SES-DOCTOR-ORPHANS (synthetic IDs — supersedes SES-ACTIVE-RULESET from Phase 82.1)
 **Depends on:** Phase 82.1
+**Plans:** 10 plans
+
+Plans:
+- [ ] 84-01-wave0-test-scaffolds-PLAN.md — Wave 0 Nyquist failing-test infrastructure (11 stubs + Makefile grep gate)
+- [ ] 84-02-foundation-ses-shared-rule-set-module-PLAN.md — New foundation Terraform module + live wiring (rule set + active + domain identity + DKIM + MX + verification)
+- [ ] 84-03-regional-ses-v2-module-PLAN.md — New regional ses/v2.0.0 module owning prefix-named rules only + live dir cutover to v2.0.0
+- [ ] 84-04-km-configure-operator-email-derivation-PLAN.md — deriveOperatorEmail helper + runConfigure integration + --reset-prefix clears stored email
+- [ ] 84-05-userdata-and-ses-pkg-operator-literal-PLAN.md — Replace operator@ literals in pkg/compiler/userdata.go + pkg/aws/ses.go; export KM_OPERATOR_EMAIL in userdata env files
+- [ ] 84-06-email-handler-recipient-verification-PLAN.md — email-create-handler verifies operator-${prefix}@; silent-drops foreign; updates outbound From
+- [ ] 84-07-km-bootstrap-shared-ses-and-doctor-check-PLAN.md — km bootstrap --shared-ses (auto-detect via SESIdentityLister) + km doctor checkSESRules + go.mod aws-sdk-go-v2/service/ses
+- [ ] 84-08-phase-82.1-hard-removal-and-grep-gate-PLAN.md — Delete activate_rule_set from infra + Phase 82.1 sections from CLAUDE.md + OPERATOR-GUIDE.md; wire grep gate into make test
+- [ ] 84-09-docs-claude-md-operator-guide-and-roadmap-PLAN.md — CLAUDE.md Phase 84 section + OPERATOR-GUIDE.md upgrade runbook + ROADMAP/REQUIREMENTS closeout
+- [ ] 84-10-operator-uat-checkpoint-PLAN.md — Operator UAT against real AWS + STATE/ROADMAP closeout (NOT autonomous)
+
