@@ -88,11 +88,13 @@ func findTag(tags []types.Tag, key string) (string, bool) {
 // ============================================================================
 
 func TestKMBakeTags_IncludesAllRequiredKeys(t *testing.T) {
-	tags := KMBakeTags("sb-abc123", "myprofile", "myalias", "t3.micro", "us-east-1", "v1.0.0")
+	const testPrefix = "rg"
+	tags := KMBakeTags("sb-abc123", "myprofile", "myalias", "t3.micro", "us-east-1", "v1.0.0", testPrefix)
 
 	required := []string{
 		"km:sandbox-id", "km:profile", "km:alias", "km:baked-at",
-		"km:source-region", "km:instance-type", "km:baked-by", "km:km-version", "Name",
+		"km:source-region", "km:instance-type", "km:baked-by", "km:km-version",
+		"km:resource-prefix", "Name",
 	}
 	for _, k := range required {
 		v, ok := findTag(tags, k)
@@ -104,6 +106,13 @@ func TestKMBakeTags_IncludesAllRequiredKeys(t *testing.T) {
 			t.Errorf("tag %q has empty value", k)
 		}
 	}
+
+	// Assert the value of km:resource-prefix matches what was passed in.
+	if v, ok := findTag(tags, "km:resource-prefix"); !ok {
+		t.Error("km:resource-prefix tag not found")
+	} else if v != testPrefix {
+		t.Errorf("km:resource-prefix = %q, want %q", v, testPrefix)
+	}
 }
 
 // ============================================================================
@@ -111,7 +120,7 @@ func TestKMBakeTags_IncludesAllRequiredKeys(t *testing.T) {
 // ============================================================================
 
 func TestKMBakeTags_EmptyAlias_OmitsAliasOrLeavesBlank(t *testing.T) {
-	tags := KMBakeTags("sb-abc123", "myprofile", "", "t3.micro", "us-east-1", "v1.0.0")
+	tags := KMBakeTags("sb-abc123", "myprofile", "", "t3.micro", "us-east-1", "v1.0.0", "km")
 
 	// Must not panic; km:alias tag must be absent (our implementation omits it).
 	_, ok := findTag(tags, "km:alias")
@@ -120,7 +129,7 @@ func TestKMBakeTags_EmptyAlias_OmitsAliasOrLeavesBlank(t *testing.T) {
 	}
 
 	// All other required tags still present.
-	for _, k := range []string{"km:sandbox-id", "km:profile", "km:baked-at", "Name"} {
+	for _, k := range []string{"km:sandbox-id", "km:profile", "km:baked-at", "km:resource-prefix", "Name"} {
 		if _, ok := findTag(tags, k); !ok {
 			t.Errorf("missing tag %q when alias is empty", k)
 		}
