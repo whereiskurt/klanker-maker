@@ -60,10 +60,6 @@ resource "aws_route53_record" "mx" {
 
 resource "aws_ses_receipt_rule_set" "km_sandbox" {
   rule_set_name = "${var.resource_prefix}-sandbox-email"
-
-  tags = {
-    "km:resource-prefix" = var.resource_prefix
-  }
 }
 
 # Activate the rule set — SES requires exactly one active rule set per region.
