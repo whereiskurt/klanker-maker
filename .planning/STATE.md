@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84-05-userdata-and-ses-pkg-operator-literal-PLAN.md
-last_updated: "2026-05-16T20:16:20.017Z"
+stopped_at: Completed 84-01-PLAN.md — Phase 84 Wave 0 test scaffolds (W0-06..08, W0-11)
+last_updated: "2026-05-16T20:21:10.618Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 93
   completed_phases: 82
   total_plans: 363
-  completed_plans: 313
+  completed_plans: 314
   percent: 93
 ---
 
@@ -352,6 +352,7 @@ Progress: [█████████░] 93%
 | Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P06 | 182 | 1 tasks | 2 files |
 | Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P03 | 6 | 3 tasks | 4 files |
 | Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P05 | 5 | 2 tasks | 5 files |
+| Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P01 | 622 | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1004,6 +1005,8 @@ Recent decisions affecting current work:
 - [Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix]: v1.0.0 stays in tree untouched as historical reference per CONTEXT.md — not deleted, not modified
 - [Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix]: km-send heredoc uses backward-compat fallback: ${KM_OPERATOR_EMAIL:-operator@${KM_SANDBOX_DOMAIN:-...}} preserves old sandboxes
 - [Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix]: SendCreateNotification signature extended with resourcePrefix at position 6; call site passes cfg.GetResourcePrefix()
+- [Phase 84-01]: W0-06/07/08 stubs RED via checkSESRules returning CheckSkipped; SESReceiptRuleAPI kept empty until Plan 84-07 adds classic SES SDK
+- [Phase 84-01]: W0-11 test-no-82.1-leftovers Makefile target NOT wired into test umbrella; Plan 84-08 adds the dep once OPERATOR-GUIDE.md deletions land
 
 ### Roadmap Evolution
 
@@ -1109,6 +1112,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T20:16:20.009Z
-Stopped at: Completed 84-05-userdata-and-ses-pkg-operator-literal-PLAN.md
+Last session: 2026-05-16T20:21:10.609Z
+Stopped at: Completed 84-01-PLAN.md — Phase 84 Wave 0 test scaffolds (W0-06..08, W0-11)
 Resume file: None
