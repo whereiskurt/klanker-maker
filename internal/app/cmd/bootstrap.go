@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -14,12 +15,164 @@ import (
 	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/service/ses"
+	"github.com/aws/aws-sdk-go-v2/service/sesv2"
+	sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
 )
+
+// =============================================================================
+// Phase 84: km bootstrap --shared-ses
+// =============================================================================
+
+// SESIdentityLister abstracts the two SES read operations needed for shared-SES
+// auto-detection. The real *realSESLister satisfies this interface in production;
+// tests inject a mock.
+type SESIdentityLister interface {
+	// ListReceiptRuleSets returns the list of SES classic v1 receipt rule sets.
+	ListReceiptRuleSets(ctx context.Context, in *ses.ListReceiptRuleSetsInput, optFns ...func(*ses.Options)) (*ses.ListReceiptRuleSetsOutput, error)
+	// ListEmailIdentities returns the list of SES v2 email identities.
+	ListEmailIdentities(ctx context.Context, in *sesv2.ListEmailIdentitiesInput, optFns ...func(*sesv2.Options)) (*sesv2.ListEmailIdentitiesOutput, error)
+}
+
+// realSESLister adapts the production SES classic v1 and SES v2 clients to
+// satisfy SESIdentityLister.
+type realSESLister struct {
+	sesClient   *ses.Client
+	sesv2Client *sesv2.Client
+}
+
+func (r *realSESLister) ListReceiptRuleSets(ctx context.Context, in *ses.ListReceiptRuleSetsInput, optFns ...func(*ses.Options)) (*ses.ListReceiptRuleSetsOutput, error) {
+	return r.sesClient.ListReceiptRuleSets(ctx, in, optFns...)
+}
+
+func (r *realSESLister) ListEmailIdentities(ctx context.Context, in *sesv2.ListEmailIdentitiesInput, optFns ...func(*sesv2.Options)) (*sesv2.ListEmailIdentitiesOutput, error) {
+	return r.sesv2Client.ListEmailIdentities(ctx, in, optFns...)
+}
+
+// DetectSharedSESState checks whether the shared SES receipt rule set and the
+// target email domain identity already exist.
+// Exported for use in tests (cmd_test package).
+//
+// Returns:
+//   - registerSharedRuleSet: true when the rule set does NOT exist yet (i.e. Terraform should create it)
+//   - registerDomainIdentity: true when the domain identity does NOT exist yet (i.e. Terraform should create it)
+func DetectSharedSESState(ctx context.Context, lister SESIdentityLister, ruleSetName, emailDomain string) (registerSharedRuleSet, registerDomainIdentity bool, err error) {
+	return detectSharedSESState(ctx, lister, ruleSetName, emailDomain)
+}
+
+// detectSharedSESState is the unexported implementation called by DetectSharedSESState and runBootstrapSharedSES.
+func detectSharedSESState(ctx context.Context, lister SESIdentityLister, ruleSetName, emailDomain string) (registerSharedRuleSet, registerDomainIdentity bool, err error) {
+	// Default: create both (safe idempotent starting point).
+	registerSharedRuleSet = true
+	registerDomainIdentity = true
+
+	rsOut, err := lister.ListReceiptRuleSets(ctx, &ses.ListReceiptRuleSetsInput{})
+	if err != nil {
+		return registerSharedRuleSet, registerDomainIdentity, fmt.Errorf("ListReceiptRuleSets: %w", err)
+	}
+	for _, rs := range rsOut.RuleSets {
+		if aws.ToString(rs.Name) == ruleSetName {
+			registerSharedRuleSet = false
+			break
+		}
+	}
+
+	idOut, err := lister.ListEmailIdentities(ctx, &sesv2.ListEmailIdentitiesInput{})
+	if err != nil {
+		return registerSharedRuleSet, registerDomainIdentity, fmt.Errorf("ListEmailIdentities: %w", err)
+	}
+	for _, id := range idOut.EmailIdentities {
+		if id.IdentityType == sesv2types.IdentityTypeDomain && aws.ToString(id.IdentityName) == emailDomain {
+			registerDomainIdentity = false
+			break
+		}
+	}
+
+	return registerSharedRuleSet, registerDomainIdentity, nil
+}
+
+// runBootstrapSharedSES implements the `km bootstrap --shared-ses` workflow.
+// It auto-detects whether the shared SES rule set and domain identity exist,
+// sets the corresponding Terragrunt env vars, and applies
+// infra/live/use1/ses-shared-rule-set/ via ApplyTerragruntFunc (or plans it
+// when dryRun is true).
+func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool, w io.Writer, listerOverride SESIdentityLister) error {
+	loadedCfg, err := loadBootstrapConfig(cfg)
+	if err != nil {
+		return err
+	}
+
+	// Ensure all config env vars are exported so Terragrunt site.hcl picks them up.
+	ExportConfigEnvVars(loadedCfg)
+
+	// Build the full email domain: {email_subdomain}.{domain}
+	emailSubdomain := loadedCfg.EmailSubdomain
+	if emailSubdomain == "" {
+		emailSubdomain = "sandboxes"
+	}
+	emailDomain := fmt.Sprintf("%s.%s", emailSubdomain, loadedCfg.Domain)
+
+	// Build the SES client pair (or use the override in tests).
+	var lister SESIdentityLister
+	if listerOverride != nil {
+		lister = listerOverride
+	} else {
+		region := loadedCfg.PrimaryRegion
+		if region == "" {
+			region = "us-east-1"
+		}
+		awsCfg, err := awspkg.LoadAWSConfigInRegion(ctx, "klanker-terraform", region)
+		if err != nil {
+			return fmt.Errorf("load AWS config: %w", err)
+		}
+		lister = &realSESLister{
+			sesClient:   ses.NewFromConfig(awsCfg),
+			sesv2Client: sesv2.NewFromConfig(awsCfg),
+		}
+	}
+
+	registerRS, registerID, err := detectSharedSESState(ctx, lister, "sandbox-email-shared", emailDomain)
+	if err != nil {
+		return fmt.Errorf("SES auto-detect: %w", err)
+	}
+
+	// Log step-level summaries (OPER-01 pattern).
+	if registerRS {
+		fmt.Fprintln(w, "Shared SES rule set:      creating")
+	} else {
+		fmt.Fprintln(w, "Shared SES rule set:      reusing existing")
+	}
+	if registerID {
+		fmt.Fprintln(w, "Shared SES domain identity: creating")
+	} else {
+		fmt.Fprintln(w, "Shared SES domain identity: reusing existing")
+	}
+
+	// Export the two Phase-84-specific vars.
+	os.Setenv("KM_REGISTER_SHARED_RULESET", strconv.FormatBool(registerRS))
+	os.Setenv("KM_REGISTER_DOMAIN_IDENTITY", strconv.FormatBool(registerID))
+
+	sesDir := filepath.Join(findRepoRoot(), "infra", "live", "use1", "ses-shared-rule-set")
+
+	if dryRun {
+		fmt.Fprintf(w, "Dry run — would run: terragrunt plan %s\n", sesDir)
+		fmt.Fprintf(w, "  KM_REGISTER_SHARED_RULESET=%s\n", os.Getenv("KM_REGISTER_SHARED_RULESET"))
+		fmt.Fprintf(w, "  KM_REGISTER_DOMAIN_IDENTITY=%s\n", os.Getenv("KM_REGISTER_DOMAIN_IDENTITY"))
+		return nil
+	}
+
+	fmt.Fprintln(w, "Applying ses-shared-rule-set...")
+	if err := ApplyTerragruntFunc(ctx, sesDir); err != nil {
+		return fmt.Errorf("ses-shared-rule-set apply: %w", err)
+	}
+	fmt.Fprintln(w, "ses-shared-rule-set applied.")
+	return nil
+}
 
 // SCPStatement represents a single statement in an SCP policy document.
 // Exported so tests can inspect individual statement fields without AWS access.
@@ -239,6 +392,7 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 	var dryRun bool
 	var showPrereqs bool
 	var showSCP bool
+	var sharedSES bool
 
 	cmd := &cobra.Command{
 		Use:   "bootstrap",
@@ -251,6 +405,9 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 			if showPrereqs {
 				return runShowPrereqs(cmd.Context(), cfg, w)
 			}
+			if sharedSES {
+				return runBootstrapSharedSES(cmd.Context(), cfg, dryRun, w, nil)
+			}
 			return runBootstrap(cmd.Context(), cfg, dryRun, w)
 		},
 	}
@@ -261,6 +418,8 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 		"Print the IAM role and trust policy that must be created in the management account before bootstrap can deploy the SCP")
 	cmd.Flags().BoolVar(&showSCP, "scp", false,
 		"Print the km-sandbox-containment SCP policy JSON and the km-org-admin role/trust policy")
+	cmd.Flags().BoolVar(&sharedSES, "shared-ses", false,
+		"Provision the account-shared SES rule set + domain identity (Phase 84); run before km init on a fresh account")
 
 	return cmd
 }
