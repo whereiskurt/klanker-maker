@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84-07 km-bootstrap-shared-ses-and-doctor-check-PLAN.md
-last_updated: "2026-05-16T20:41:16.898Z"
+stopped_at: Completed 84-09 docs-claude-md-operator-guide-and-roadmap-PLAN.md
+last_updated: "2026-05-16T20:46:00.279Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 93
   completed_phases: 82
   total_plans: 363
-  completed_plans: 317
+  completed_plans: 318
   percent: 93
 ---
 
@@ -356,6 +356,7 @@ Progress: [█████████░] 93%
 | Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P04 | 770 | 1 tasks | 3 files |
 | Phase 84 P08 | 81 | 3 tasks | 2 files |
 | Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P07 | 45 | 3 tasks | 9 files |
+| Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P09 | 2min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1015,6 +1016,8 @@ Recent decisions affecting current work:
 - [Phase 84]: Grep gate excludes v1.0.0 dir via --exclude-dir='v1.0.0' (catches both canonical infra/modules/ses/v1.0.0/ and cached copies in .terragrunt-cache/)
 - [Phase 84]: No umbrella test target exists in Makefile; test-no-82.1-leftovers CI integration is operator-driven
 - [Phase 84-07]: SESIdentityLister combines ListReceiptRuleSets + ListEmailIdentities; InitSESPreflight is package-level func var for testable init gate; W0-06/W0-07 updated to use real mocks
+- [Phase 84-09]: CLAUDE.md Phase 84 section inserted between Architecture and Network Enforcement (Alternative anchor — no Phase History parent section exists)
+- [Phase 84-09]: KM_OPERATOR_EMAIL table row updated in OPERATOR-GUIDE.md not CLAUDE.md (variable description lives there; no duplicate created)
 
 ### Roadmap Evolution
 
@@ -1120,6 +1123,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T20:41:16.891Z
-Stopped at: Completed 84-07 km-bootstrap-shared-ses-and-doctor-check-PLAN.md
+Last session: 2026-05-16T20:46:00.272Z
+Stopped at: Completed 84-09 docs-claude-md-operator-guide-and-roadmap-PLAN.md
 Resume file: None
