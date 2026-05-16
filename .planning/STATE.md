@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 79.1-01-PLAN.md — four RED TDD stubs for FIFO recreation fix
-last_updated: "2026-05-16T05:48:46.621Z"
+stopped_at: Completed 79.1-02-PLAN.md — Layer 1 tmpfiles.d drop-in GREEN, 3 tests passing
+last_updated: "2026-05-16T05:53:25.266Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 90
   completed_phases: 79
   total_plans: 343
-  completed_plans: 293
+  completed_plans: 294
   percent: 93
 ---
 
@@ -332,6 +332,7 @@ Progress: [█████████░] 93%
 | Phase 75-slack-inbound-file-attachments-images-pdfs-for-per-sandbox-channels P05 | 31541344 | 1 tasks | 1 files |
 | Phase 74-slack-mrkdwn-rendering P02 | 6 days | 6 tasks | 27 files |
 | Phase 79.1 P01 | 97 | 2 tasks | 2 files |
+| Phase 79.1 P02 | 4min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -951,6 +952,8 @@ Recent decisions affecting current work:
 - [Phase 75-slack-inbound-file-attachments-images-pdfs-for-per-sandbox-channels]: S3FileDownloader wired conditionally on KM_ARTIFACTS_BUCKET — nil guard matches Phase 68 pattern for graceful degradation
 - [Phase 79.1]: Wave-0 RED-first: four test stubs written before implementations in Plans 02+03; no skip gates
 - [Phase 79.1]: Regex-tolerant whitespace for tmpfiles.d column assertions; exact mode+owner strings remain strict
+- [Phase 79.1]: Use p+ (not p) for tmpfiles.d audit-pipe entry: p alone is a no-op when a regular file exists at the path
+- [Phase 79.1]: Strip backticks from Go raw string template comments: backtick inside const backtick-string closes the literal
 
 ### Roadmap Evolution
 
@@ -1055,6 +1058,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T05:48:46.613Z
-Stopped at: Completed 79.1-01-PLAN.md — four RED TDD stubs for FIFO recreation fix
+Last session: 2026-05-16T05:53:25.259Z
+Stopped at: Completed 79.1-02-PLAN.md — Layer 1 tmpfiles.d drop-in GREEN, 3 tests passing
 Resume file: None
