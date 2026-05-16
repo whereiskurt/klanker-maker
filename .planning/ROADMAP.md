@@ -1825,3 +1825,18 @@ Plans:
 - [ ] 84-09-docs-claude-md-operator-guide-and-roadmap-PLAN.md — CLAUDE.md Phase 84 section + OPERATOR-GUIDE.md upgrade runbook + ROADMAP/REQUIREMENTS closeout
 - [ ] 84-10-operator-uat-checkpoint-PLAN.md — Operator UAT against real AWS + STATE/ROADMAP closeout (NOT autonomous)
 
+
+### Phase 84.1: SES upgrade safety — gap closure for in-place v1.0.0 → v2.0.0 cutover (INSERTED)
+
+**Goal:** Close the 8 gaps diagnosed by Phase 84's UAT so an operator can upgrade an existing Phase 82.x install to Phase 84 without manual recovery: (1) `km bootstrap` exports the full terragrunt env var set, (2) `km bootstrap` is idempotent across re-runs, (3) foundation safely takes ownership of pre-existing v1.0.0 resources (domain identity, DKIM, MX, verification TXT, active rule set pointer) without data loss during regional cutover, (4) wedged `terragrunt apply` surfaces as a timeout error instead of hanging silently, (5) state-digest mismatch recovery is documented and/or detected by `km doctor`. Outcome: re-running the UAT closures (a)/(c)/(d) that were skipped in Phase 84 all pass.
+
+**Requirements**: GAP-1, GAP-2, GAP-3, GAP-4, GAP-5, GAP-6, GAP-7, GAP-8, DRIFT-A, DRIFT-B, DRIFT-C (synthetic IDs — gap-derived from Phase 84 UAT diagnosis 84-10-UAT.md)
+**Depends on:** Phase 84
+**Plans:** 5 plans
+
+Plans:
+- [ ] 84.1-01-PLAN.md — Unified ExportTerragruntEnvVars helper closing GAP-1 + GAP-7 (Wave 1, TDD, Go-only)
+- [ ] 84.1-02-PLAN.md — Terragrunt runner per-module timeout + quiet-mode heartbeat closing GAP-4 + GAP-5 (Wave 1, TDD, Go-only)
+- [ ] 84.1-03-PLAN.md — km doctor state-lock-digest mismatch detection + Remediation closing GAP-8 (Wave 1, TDD, Go-only)
+- [ ] 84.1-04-PLAN.md — Foundation register_*=manage semantics + import/removed blocks for safe in-place v1.0.0→v2.0.0 cutover closing GAP-2 + GAP-3 + GAP-6 (Wave 2, Terraform + Go)
+- [ ] 84.1-05-PLAN.md — Operator UAT (3 skipped Phase 84 closures + DRIFT-A/B/C) + OPERATOR-GUIDE.md state-digest recovery + CLAUDE.md Phase 84.1 section + Phase 84 SUMMARY drift notes (Wave 3, OPERATOR CHECKPOINT — NOT autonomous)
