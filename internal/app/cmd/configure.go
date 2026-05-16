@@ -57,6 +57,7 @@ func NewConfigureCmd(cfg *config.Config) *cobra.Command {
 func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cobra.Command {
 	var (
 		nonInteractive  bool
+		resetPrefix     bool
 		outputDir       string
 		resourcePrefix  string
 		emailSubdomain  string
@@ -81,7 +82,7 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		Short: "Interactive wizard to set up km-config.yaml",
 		Long:  helpText("configure"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runConfigure(in, out, outputDir, nonInteractive, resourcePrefix, emailSubdomain,
+			return runConfigure(in, out, outputDir, nonInteractive, resetPrefix, resourcePrefix, emailSubdomain,
 				domain, organizationAcct, dnsParentAcct, terraformAcct, applicationAcct,
 				ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket, operatorEmail, safePhrase, maxSandboxes)
 		},
@@ -91,8 +92,10 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 		"Skip prompts; use flag values directly")
 	cmd.Flags().StringVar(&outputDir, "output-dir", "",
 		"Directory to write km-config.yaml (default: repo root or current dir)")
-	cmd.Flags().StringVar(&resourcePrefix, "resource-prefix", "km",
+	cmd.Flags().StringVar(&resourcePrefix, "resource-prefix", "",
 		"Prefix for all account-globally-unique AWS resource names (default: km). One-time choice at km init.")
+	cmd.Flags().BoolVar(&resetPrefix, "reset-prefix", false,
+		"Re-default resource_prefix to 'km' instead of preserving the value from an existing km-config.yaml")
 	cmd.Flags().StringVar(&emailSubdomain, "email-subdomain", "sandboxes",
 		"Subdomain for SES email addresses (default: sandboxes). One-time choice requiring fresh SES verification to change.")
 	cmd.Flags().StringVar(&domain, "domain", "",
@@ -128,16 +131,38 @@ func newConfigureCmdWithIO(cfg *config.Config, in io.Reader, out io.Writer) *cob
 }
 
 // runConfigure implements the configure wizard logic.
-func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive bool,
+func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive bool, resetPrefix bool,
 	resourcePrefix, emailSubdomain,
 	domain, organizationAcct, dnsParentAcct, terraformAcct, applicationAcct,
 	ssoStartURL, ssoRegion, region, stateBucket, artifactsBucket, operatorEmail, safePhrase string,
 	maxSandboxes int) error {
 
+	// Preserve-on-re-run: if an existing km-config.yaml is present and the
+	// operator has not requested a reset, use its resource_prefix as the default
+	// so a bare re-run (e.g. to update operator_email) does not silently reset the
+	// prefix back to "km".
+	existingPrefix := ""
+	if !resetPrefix && outputDir != "" {
+		existingConfigPath := filepath.Join(outputDir, "km-config.yaml")
+		if raw, readErr := os.ReadFile(existingConfigPath); readErr == nil {
+			var existing platformConfig
+			if unmarshalErr := yaml.Unmarshal(raw, &existing); unmarshalErr == nil && existing.ResourcePrefix != "" {
+				existingPrefix = existing.ResourcePrefix
+			}
+		}
+	}
+
+	// defaultPrefix is the effective default for resource_prefix prompts and
+	// non-interactive fallback. Uses existingPrefix when available, otherwise "km".
+	defaultPrefix := "km"
+	if existingPrefix != "" {
+		defaultPrefix = existingPrefix
+	}
+
 	if nonInteractive {
 		// Apply defaults for resource_prefix and email_subdomain when not explicitly provided.
 		if resourcePrefix == "" {
-			resourcePrefix = "km"
+			resourcePrefix = defaultPrefix
 		}
 		if emailSubdomain == "" {
 			emailSubdomain = "sandboxes"
@@ -174,15 +199,17 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 
 		// Phase 66: resource_prefix and email_subdomain are asked first — they are
 		// fundamental one-time choices that affect all downstream resource names.
+		// Phase 82: use defaultPrefix (which may be the existing prefix from disk)
+		// so a bare Enter on re-run preserves the non-default value.
 		if resourcePrefix == "" {
-			resourcePrefix = "km"
+			resourcePrefix = defaultPrefix
 		}
 		resourcePrefix, err = prompt(out, scanner, "Resource prefix for AWS resource names (one-time choice)", resourcePrefix)
 		if err != nil {
 			return err
 		}
 		if resourcePrefix == "" {
-			resourcePrefix = "km"
+			resourcePrefix = defaultPrefix
 		}
 
 		if emailSubdomain == "" {

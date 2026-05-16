@@ -426,6 +426,106 @@ func TestConfigureWizardDefaultsApply(t *testing.T) {
 	}
 }
 
+// TestConfigureRerunPreservesResourcePrefix verifies that re-running km configure
+// --non-interactive without --resource-prefix against a dir with an existing
+// km-config.yaml that has resource_prefix: rg preserves the existing prefix
+// (no silent reset to "km").
+func TestConfigureRerunPreservesResourcePrefix(t *testing.T) {
+	km := buildKM(t)
+	dir := t.TempDir()
+
+	// Write an existing km-config.yaml with a non-default resource_prefix.
+	existingCfg := `resource_prefix: rg
+email_subdomain: sandboxes
+domain: test.example.com
+accounts:
+  dns_parent: "111111111111"
+  terraform: "222222222222"
+  application: "333333333333"
+sso:
+  start_url: https://sso.example.com/start
+  region: us-east-1
+region: us-east-1
+`
+	if err := os.WriteFile(filepath.Join(dir, "km-config.yaml"), []byte(existingCfg), 0600); err != nil {
+		t.Fatalf("write existing km-config.yaml: %v", err)
+	}
+
+	// Re-run configure --non-interactive without --resource-prefix.
+	// The existing resource_prefix: rg must be preserved.
+	out, err := runKMArgs(km, "",
+		"configure",
+		"--non-interactive",
+		"--output-dir", dir,
+		"--domain", "test.example.com",
+		"--dns-parent-account", "111111111111",
+		"--terraform-account", "222222222222",
+		"--application-account", "333333333333",
+		"--sso-start-url", "https://sso.example.com/start",
+		"--sso-region", "us-east-1",
+		"--region", "us-east-1",
+		// NOTE: no --resource-prefix flag
+	)
+	if err != nil {
+		t.Fatalf("km configure re-run: %v\noutput: %s", err, out)
+	}
+
+	cfg := kmConfigYAML(t, dir)
+	if cfg["resource_prefix"] != "rg" {
+		t.Errorf("resource_prefix: got %v, want rg (existing prefix must be preserved on re-run)", cfg["resource_prefix"])
+	}
+}
+
+// TestConfigureResetPrefixFlag verifies that re-running km configure
+// --non-interactive --reset-prefix against a dir with an existing
+// km-config.yaml that has resource_prefix: rg resets the prefix to "km".
+func TestConfigureResetPrefixFlag(t *testing.T) {
+	km := buildKM(t)
+	dir := t.TempDir()
+
+	// Write an existing km-config.yaml with a non-default resource_prefix.
+	existingCfg := `resource_prefix: rg
+email_subdomain: sandboxes
+domain: test.example.com
+accounts:
+  dns_parent: "111111111111"
+  terraform: "222222222222"
+  application: "333333333333"
+sso:
+  start_url: https://sso.example.com/start
+  region: us-east-1
+region: us-east-1
+`
+	if err := os.WriteFile(filepath.Join(dir, "km-config.yaml"), []byte(existingCfg), 0600); err != nil {
+		t.Fatalf("write existing km-config.yaml: %v", err)
+	}
+
+	// Re-run configure --non-interactive --reset-prefix without --resource-prefix.
+	// The prefix should be reset to "km".
+	out, err := runKMArgs(km, "",
+		"configure",
+		"--non-interactive",
+		"--output-dir", dir,
+		"--domain", "test.example.com",
+		"--dns-parent-account", "111111111111",
+		"--terraform-account", "222222222222",
+		"--application-account", "333333333333",
+		"--sso-start-url", "https://sso.example.com/start",
+		"--sso-region", "us-east-1",
+		"--region", "us-east-1",
+		"--reset-prefix",
+		// NOTE: no --resource-prefix flag
+	)
+	if err != nil {
+		t.Fatalf("km configure re-run --reset-prefix: %v\noutput: %s", err, out)
+	}
+
+	cfg := kmConfigYAML(t, dir)
+	if cfg["resource_prefix"] != "km" {
+		t.Errorf("resource_prefix: got %v, want km (--reset-prefix must re-default to km)", cfg["resource_prefix"])
+	}
+}
+
 // TestConfigureInteractivePromptsUseNewNames verifies that the interactive wizard
 // prompts for "Organization" and "DNS parent" fields, not "Management".
 func TestConfigureInteractivePromptsUseNewNames(t *testing.T) {
