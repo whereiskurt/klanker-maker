@@ -15,7 +15,7 @@ variable "email_domain" {
 
 variable "artifact_bucket_name" {
   type        = string
-  description = "S3 bucket receiving inbound mail. SES writes under mail/${resource_prefix}/ and mail/create/${resource_prefix}/."
+  description = "S3 bucket receiving inbound mail. SES writes under mail/<resource_prefix>/ and mail/create/<resource_prefix>/."
 }
 
 variable "tags" {
