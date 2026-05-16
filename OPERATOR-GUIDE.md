@@ -117,7 +117,7 @@ deploying shared infrastructure in Section 4). Set these in your shell or a per-
 | `KM_ACCOUNTS_APPLICATION` | AWS account ID for the application (sandbox) account | `333333333333` |
 | `KM_ARTIFACTS_BUCKET` | S3 bucket for Lambda zips, sidecar binaries, artifacts | `my-km-artifacts` |
 | `KM_ROUTE53_ZONE_ID` | Route53 hosted zone ID for `sandboxes.<domain>` | `Z1234ABCDEFGH` |
-| `KM_OPERATOR_EMAIL` | Operator email for sandbox expiry notifications | `ops@example.com` |
+| `KM_OPERATOR_EMAIL` | Operator inbox address (operator-{resource_prefix}@{email_subdomain}.{domain}; derived by `km configure` from Phase 84 onward) | `operator-km@sandboxes.example.com` |
 | `KM_REGION` | AWS region (default: us-east-1) | `us-east-1` |
 
 Environment variables override values from `km-config.yaml` when both are present.
@@ -642,3 +642,81 @@ AWS_DEFAULT_REGION=us-east-1 AWS_PROFILE=<your-profile> \
 ```
 
 **Troubleshooting:** If `km doctor` reports WARN-level untagged-instance results after Phase 82 upgrade, run `km doctor --backfill-tags --dry-run=true` to preview, then `--dry-run=false` to commit. The cross-install safety guard skips resources whose `km:sandbox-id` tag does not match any row in the current install's DynamoDB sandbox table — those resources belong to a different install and are intentionally left alone.
+
+### Phase 84 upgrade — shared SES rule set + per-install rules
+
+Phase 84 (2026-05-16) replaces Phase 82.1's `activate_rule_set` handoff with per-install SES rule namespacing. Each install now adds prefix-named rules to a single account-shared rule set (`sandbox-email-shared`) that `km bootstrap --shared-ses` provisions. The operator inbound address becomes `operator-{resource_prefix}@{email_subdomain}.{domain}`.
+
+**This is a hard upgrade — Phase 82.1's `activate_rule_set` variable and `KM_SES_ACTIVATE_RULESET` path have been removed. No in-place rollback flag exists. Rollback requires checking out a pre-Phase-84 commit.**
+
+#### Prerequisites
+
+- `km` binary built from Phase 84 sources (`make build`)
+- AWS credentials with foundation scope (bootstrap account) and regional scope (application account)
+- For a second install: the primary operator has already run `km bootstrap --shared-ses` (the shared rule set must exist before any install runs `km init`)
+
+#### Single install or primary install in a multi-install account
+
+```bash
+make build
+km init --sidecars
+km bootstrap --shared-ses --dry-run=true
+km bootstrap --shared-ses --dry-run=false
+km init --dry-run=true
+km init --dry-run=false
+km configure
+km doctor
+```
+
+`km bootstrap --shared-ses` auto-detects whether `sandbox-email-shared` already exists via `SESIdentityLister` — subsequent runs are no-ops.
+
+`km configure` derives and stores `KM_OPERATOR_EMAIL` as `operator-{resource_prefix}@{email_subdomain}.{domain}` (e.g. `operator-km@sandboxes.example.com`). Use `km configure --reset-prefix` to clear the stored email if you are changing `resource_prefix`.
+
+#### Second install in an existing account
+
+A second install with a different `resource_prefix` (e.g. `km2`) follows the same sequence but skips re-running `km bootstrap --shared-ses` — the shared rule set is already active. If you do run it, the auto-detect path performs a no-op apply.
+
+```bash
+make build
+km init --sidecars
+km bootstrap --shared-ses --dry-run=true    # will plan no changes if rule set exists
+km bootstrap --shared-ses --dry-run=false   # no-op apply, safe to run
+km init --dry-run=true
+km init --dry-run=false
+km configure
+km doctor
+```
+
+After `km init`, the second install's rules (`km2-operator-inbound`, `km2-sandbox-catchall`) are added to the shared rule set alongside the first install's rules (`km-operator-inbound`, `km-sandbox-catchall`). Both installs remain fully isolated.
+
+`km doctor` will report `⚠ orphan SES rules: km-operator-inbound, km-sandbox-catchall` when run from the second install's context — this is EXPECTED. The first install's rules are healthy but unknown to the second install's `km-config.yaml`. Run `km doctor` from each install's shell context to get a clean report for that install.
+
+#### Rollback
+
+Phase 84 hard-removes Phase 82.1. No in-place rollback flag is available. To revert:
+
+```bash
+git checkout <pre-phase-84-commit>
+make build
+# Re-run km init to restore Phase 82.1 Terraform resources
+```
+
+#### Validation
+
+```bash
+# Confirm the shared rule set is active
+aws ses describe-active-receipt-rule-set --query 'Name'
+# Expected: "sandbox-email-shared"
+
+# Confirm this install's rules are present
+aws ses describe-receipt-rule-set \
+  --rule-set-name sandbox-email-shared \
+  --query "Rules[?starts_with(Name, \`${KM_RESOURCE_PREFIX}\`)].Name"
+# Expected: ["km-operator-inbound", "km-sandbox-catchall"] (for prefix=km)
+
+# Confirm km doctor is clean for this install
+km doctor | grep "SES rules"
+# Expected: ✓ SES rules healthy
+```
+
+See also: `CLAUDE.md` § Phase 84 for the architecture summary and operator address format.
