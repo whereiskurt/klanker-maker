@@ -13,6 +13,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// deriveOperatorEmail returns the canonical operator inbox address for a given
+// install. The address shape is locked by Phase 84 CONTEXT.md:
+//
+//	operator-${resource_prefix}@${email_subdomain}.${domain}
+//
+// Empty inputs return "" — callers should fall back to whatever they had before.
+func deriveOperatorEmail(resourcePrefix, emailSubdomain, domain string) string {
+	if resourcePrefix == "" || emailSubdomain == "" || domain == "" {
+		return ""
+	}
+	return fmt.Sprintf("operator-%s@%s.%s", resourcePrefix, emailSubdomain, domain)
+}
+
 // emailConfig holds operator-level email settings for km-config.yaml.
 type emailConfig struct {
 	AllowedSenders []string `yaml:"allowedSenders,omitempty"`
@@ -142,10 +155,15 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 	// so a bare re-run (e.g. to update operator_email) does not silently reset the
 	// prefix back to "km".
 	//
+	// Phase 84: also load existing operator_email for preserve-on-rerun semantics.
+	// When --reset-prefix is passed, operator_email is also cleared so the next
+	// configure re-derives from the new default prefix.
+	//
 	// The effective directory mirrors the write-path logic at the bottom of this
 	// function: use outputDir when provided, otherwise resolve via findRepoRoot().
 	// This ensures that bare invocations (no --output-dir) also preserve the prefix.
 	existingPrefix := ""
+	existingOperatorEmail := ""
 	if !resetPrefix {
 		effectiveDir := outputDir
 		if effectiveDir == "" {
@@ -154,11 +172,21 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		existingConfigPath := filepath.Join(effectiveDir, "km-config.yaml")
 		if raw, readErr := os.ReadFile(existingConfigPath); readErr == nil {
 			var existing platformConfig
-			if unmarshalErr := yaml.Unmarshal(raw, &existing); unmarshalErr == nil && existing.ResourcePrefix != "" {
-				existingPrefix = existing.ResourcePrefix
+			if unmarshalErr := yaml.Unmarshal(raw, &existing); unmarshalErr == nil {
+				if existing.ResourcePrefix != "" {
+					existingPrefix = existing.ResourcePrefix
+				}
+				// Preserve the operator_email from a prior run unless the caller
+				// has explicitly provided one via --operator-email flag.
+				if existing.OperatorEmail != "" && operatorEmail == "" {
+					existingOperatorEmail = existing.OperatorEmail
+				}
 			}
 		}
 	}
+	// When --reset-prefix is passed, operatorEmail is also cleared (set to "")
+	// so it will be re-derived from the new default prefix below.
+	// existingOperatorEmail remains "" in the resetPrefix path (not loaded above).
 
 	// defaultPrefix is the effective default for resource_prefix prompts and
 	// non-interactive fallback. Uses existingPrefix when available, otherwise "km".
@@ -174,6 +202,24 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		}
 		if emailSubdomain == "" {
 			emailSubdomain = "sandboxes"
+		}
+		// Phase 84: derive operator_email from prefix + email_subdomain + domain when
+		// not explicitly provided. Preserve-on-rerun: use existingOperatorEmail if set.
+		// --reset-prefix path: operatorEmail stays "" (cleared) so the NEXT configure
+		// run re-derives from the new default prefix.
+		if operatorEmail == "" && !resetPrefix {
+			if existingOperatorEmail != "" {
+				operatorEmail = existingOperatorEmail
+			}
+			// If still blank (fresh install), derive from prefix + email_subdomain + domain.
+			// domain may be empty at this point if --domain is also missing; that will
+			// be caught by the validation below. deriveOperatorEmail returns "" on blank
+			// inputs, so we only set it when derivation succeeds.
+			if operatorEmail == "" {
+				if derived := deriveOperatorEmail(resourcePrefix, emailSubdomain, domain); derived != "" {
+					operatorEmail = derived
+				}
+			}
 		}
 		// Validate required flags
 		missing := []string{}
@@ -270,6 +316,17 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		artifactsBucket, err = prompt(out, scanner, "S3 artifacts bucket for Lambda zips, sidecars, sandbox artifacts", artifactsBucket)
 		if err != nil {
 			return err
+		}
+		// Phase 84: derive operator_email as the prompt default when not yet set.
+		// Preserve-on-rerun: use existingOperatorEmail if loaded from disk.
+		// --reset-prefix path: existingOperatorEmail is "" and derivation is skipped so
+		// the operator sees an empty default and can type a value or leave blank.
+		if operatorEmail == "" && !resetPrefix {
+			if existingOperatorEmail != "" {
+				operatorEmail = existingOperatorEmail
+			} else if derived := deriveOperatorEmail(resourcePrefix, emailSubdomain, domain); derived != "" {
+				operatorEmail = derived
+			}
 		}
 		operatorEmail, err = prompt(out, scanner, "Operator email for sandbox notifications (TTL, idle, budget)", operatorEmail)
 		if err != nil {
