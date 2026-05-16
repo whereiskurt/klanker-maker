@@ -23,3 +23,9 @@ variable "email_create_handler_arn" {
   description = "ARN of the email-create-handler Lambda. When non-empty, the operator-inbound receipt rule and S3 notification are created to route operator@ emails to the mail/create/ prefix."
   default     = ""
 }
+
+variable "resource_prefix" {
+  type        = string
+  description = "Install-level resource prefix (e.g. 'km', 'rg'). Ensures SES receipt rule sets are namespaced per install."
+  default     = "km"
+}

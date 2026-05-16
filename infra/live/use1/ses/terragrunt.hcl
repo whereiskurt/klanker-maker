@@ -43,4 +43,5 @@ inputs = {
   artifact_bucket_name      = get_env("KM_ARTIFACTS_BUCKET", "")
   artifact_bucket_arn       = "arn:aws:s3:::${get_env("KM_ARTIFACTS_BUCKET", "")}"
   email_create_handler_arn  = get_env("KM_EMAIL_HANDLER_ARN", "")
+  resource_prefix           = get_env("KM_RESOURCE_PREFIX", "km")
 }
