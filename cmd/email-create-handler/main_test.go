@@ -135,12 +135,14 @@ compute:
 const testSafePhrase = "secret123"
 
 // buildMIMEEmailWithSubject creates a multipart/mixed RFC 5322 email with a custom subject.
+// To: is set to operator-km@sandboxes.example.com which matches the default resourcePrefix
+// ("km") and the test handler domain ("sandboxes.example.com").
 func buildMIMEEmailWithSubject(from, subject, body, yamlAttachment string) []byte {
 	var buf bytes.Buffer
 	boundary := "testboundary"
 
 	fmt.Fprintf(&buf, "From: %s\r\n", from)
-	fmt.Fprintf(&buf, "To: operator@sandboxes.example.com\r\n")
+	fmt.Fprintf(&buf, "To: operator-km@sandboxes.example.com\r\n")
 	fmt.Fprintf(&buf, "Subject: %s\r\n", subject)
 	fmt.Fprintf(&buf, "MIME-Version: 1.0\r\n")
 	fmt.Fprintf(&buf, "Content-Type: multipart/mixed; boundary=%q\r\n", boundary)
@@ -170,10 +172,12 @@ func buildMIMEEmail(from, body, yamlAttachment string) []byte {
 }
 
 // buildPlainEmailWithSubject creates a single-part text/plain email with a custom subject.
+// To: is set to operator-km@sandboxes.example.com which matches the default resourcePrefix
+// ("km") and the test handler domain ("sandboxes.example.com").
 func buildPlainEmailWithSubject(from, subject, body string) []byte {
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "From: %s\r\n", from)
-	fmt.Fprintf(&buf, "To: operator@sandboxes.example.com\r\n")
+	fmt.Fprintf(&buf, "To: operator-km@sandboxes.example.com\r\n")
 	fmt.Fprintf(&buf, "Subject: %s\r\n", subject)
 	fmt.Fprintf(&buf, "MIME-Version: 1.0\r\n")
 	fmt.Fprintf(&buf, "Content-Type: text/plain; charset=utf-8\r\n")
@@ -208,8 +212,11 @@ func newTestHandler(s3data map[string][]byte, safePhraseParam string, eb *mockEB
 		SESClient:         ses,
 		ArtifactBucket:    "test-bucket",
 		StateBucket:       "test-state-bucket",
-		Domain:            "example.com",
-		SafePhraseSSMKey:  "/km/config/remote-create/safe-phrase",
+		// Domain matches KM_EMAIL_DOMAIN in production (full email subdomain + domain).
+		// Email builders default To: to operator-km@sandboxes.example.com which matches
+		// resourcePrefix()="km" (the default) + this domain.
+		Domain:           "sandboxes.example.com",
+		SafePhraseSSMKey: "/km/config/remote-create/safe-phrase",
 	}
 }
 
@@ -226,18 +233,21 @@ func newTestHandlerWithAI(s3Client OperatorS3API, safePhraseParam string, eb *mo
 		SESClient:         ses,
 		ArtifactBucket:    "test-bucket",
 		StateBucket:       "test-state-bucket",
-		Domain:            "example.com",
-		SafePhraseSSMKey:  "/km/config/remote-create/safe-phrase",
-		BedrockClient:     bedrock,
-		BedrockModelID:    "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+		// Domain matches KM_EMAIL_DOMAIN in production (full email subdomain + domain).
+		Domain:           "sandboxes.example.com",
+		SafePhraseSSMKey: "/km/config/remote-create/safe-phrase",
+		BedrockClient:    bedrock,
+		BedrockModelID:   "us.anthropic.claude-haiku-4-5-20251001-v1:0",
 	}
 }
 
 // buildPlainEmailWithHeaders creates a plain-text email with custom headers.
+// To: is set to operator-km@sandboxes.example.com matching the default resourcePrefix ("km")
+// and the test handler domain ("sandboxes.example.com").
 func buildPlainEmailWithHeaders(from, subject, body string, extraHeaders map[string]string) []byte {
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "From: %s\r\n", from)
-	fmt.Fprintf(&buf, "To: operator@sandboxes.example.com\r\n")
+	fmt.Fprintf(&buf, "To: operator-km@sandboxes.example.com\r\n")
 	fmt.Fprintf(&buf, "Subject: %s\r\n", subject)
 	for k, v := range extraHeaders {
 		fmt.Fprintf(&buf, "%s: %s\r\n", k, v)

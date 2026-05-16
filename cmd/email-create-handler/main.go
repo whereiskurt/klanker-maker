@@ -43,8 +43,8 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
-	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	dynamodbpkg "github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
@@ -244,6 +244,27 @@ func (h *OperatorEmailHandler) Handle(ctx context.Context, event S3EventRecord) 
 		}
 	}
 
+	// Phase 84: verify the recipient belongs to THIS install. The foundation
+	// rule set is shared across installs in this account; a misrouted email
+	// to another install's operator address would land in our S3 prefix if
+	// the rule were misconfigured. Drop it silently with an INFO log.
+	// This check happens BEFORE the allowlist and safe-phrase checks so that
+	// foreign-prefix emails are rejected cheaply without further analysis.
+	toAddrs, _ := msg.Header.AddressList("To")
+	deliveredTo := ""
+	for _, a := range toAddrs {
+		if a != nil {
+			deliveredTo = strings.ToLower(a.Address)
+			break
+		}
+	}
+	expectedAddr := strings.ToLower(fmt.Sprintf("operator-%s@%s", resourcePrefix(), h.Domain))
+	if deliveredTo != expectedAddr {
+		fmt.Fprintf(os.Stderr, "[operator-email] silently dropping email to %s (expected %s)\n",
+			deliveredTo, expectedAddr)
+		return nil
+	}
+
 	// Step 4: Extract body text and YAML profile
 	bodyText, yamlBytes, err := extractBodyAndYAML(msg)
 	if err != nil {
@@ -412,7 +433,6 @@ func (h *OperatorEmailHandler) handleStatus(ctx context.Context, senderEmail, su
 		return h.sendReply(ctx, senderEmail, "Status failed",
 			"No sandbox ID found in subject. Use: Subject: status <sandbox-id>\n")
 	}
-
 
 	// Read metadata from DynamoDB.
 	meta, err := awspkg.ReadSandboxMetadataDynamo(ctx, h.DynamoClient, h.SandboxTableName, sandboxID)
@@ -762,7 +782,7 @@ func (h *OperatorEmailHandler) executeConfirmedCommand(ctx context.Context, send
 			execDetail = fmt.Sprintf("Sandbox ID: %s\nProfile: %s\nScheduled: %v\nOn-demand: %v\nAlias: %s\n",
 				sandboxID, cmd.Profile, schedTime, onDemand, alias)
 		} else {
-		// Immediate create: dispatch via EventBridge.
+			// Immediate create: dispatch via EventBridge.
 			aliasOverride := ""
 			if a, ok := cmd.Overrides["alias"]; ok {
 				aliasOverride = fmt.Sprintf("%v", a)
@@ -858,7 +878,7 @@ func (h *OperatorEmailHandler) sendReply(ctx context.Context, to, subject, body 
 
 // sendReplyGetID sends a reply and returns the SES Message-ID (for conversation threading).
 func (h *OperatorEmailHandler) sendReplyGetID(ctx context.Context, to, subject, body string) (string, error) {
-	from := fmt.Sprintf("\"operator\" <operator@%s>", h.Domain)
+	from := fmt.Sprintf("\"operator\" <operator-%s@%s>", resourcePrefix(), h.Domain)
 	fullBody := body + "\n— " + version.Header() + "\n"
 	dest := &sesv2types.Destination{
 		ToAddresses: []string{to},
@@ -978,7 +998,6 @@ func extractBodyAndYAML(msg *mail.Message) (bodyText string, yamlBytes []byte, e
 	}
 }
 
-
 // ---- Lambda entrypoint ----
 
 func main() {
@@ -1014,9 +1033,9 @@ func main() {
 		StateBucket:       stateBucket,
 		Domain:            domain,
 		SafePhraseSSMKey:  safePhraseKey,
-		BedrockClient:  bedrockClient,
-		BedrockModelID: bedrockModelID,
-		VerboseErrors:  os.Getenv("KM_VERBOSE_EMAIL_ERRORS") == "true",
+		BedrockClient:     bedrockClient,
+		BedrockModelID:    bedrockModelID,
+		VerboseErrors:     os.Getenv("KM_VERBOSE_EMAIL_ERRORS") == "true",
 	}
 
 	lambda.Start(h.Handle)
