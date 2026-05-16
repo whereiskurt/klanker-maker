@@ -33,6 +33,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/spf13/cobra"
 	appcfg "github.com/whereiskurt/klanker-maker/internal/app/config"
@@ -1664,7 +1665,14 @@ func checkStaleSchedules(ctx context.Context, schedulerClient kmaws.SchedulerAPI
 // matching DynamoDB record. These are likely left behind by failed teardowns or
 // idle handlers that didn't complete cleanup. This check is report-only — it
 // never terminates instances. Use `km destroy <sandbox-id>` to clean up manually.
-func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister SandboxLister) CheckResult {
+//
+// currentPrefix is cfg.GetResourcePrefix() for the running install (e.g. "km"
+// or "rg"). When an instance carries a km:resource-prefix tag with a different
+// value the instance belongs to a foreign install and is silently skipped. When
+// the tag is absent the instance predates Phase 82 and a separate WARN with a
+// --backfill-tags pointer is surfaced (per CONTEXT.md Decision § Tag-based
+// discrimination).
+func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister SandboxLister, currentPrefix string) CheckResult {
 	name := "Orphaned EC2 Instances"
 	if ec2Client == nil {
 		return CheckResult{Name: name, Status: CheckSkipped, Message: "EC2 client not available"}
@@ -1719,13 +1727,18 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 	// in-flight sandbox.
 	provisioningCutoff := time.Now().Add(-10 * time.Minute)
 	type orphan struct {
-		instanceID  string
-		sandboxID   string
-		state       string
-		hibernated  bool
-		launchTime  string
+		instanceID string
+		sandboxID  string
+		state      string
+		hibernated bool
+		launchTime string
 	}
 	var orphans []orphan
+	// untaggedCount tracks instances that have km:sandbox-id but no km:resource-prefix
+	// tag (pre-Phase-82 resources). These still participate in orphan detection but
+	// are also surfaced in a backfill-tags WARN.
+	var untaggedCount int
+
 	for _, inst := range instances {
 		var sandboxID string
 		for _, tag := range inst.Tags {
@@ -1737,6 +1750,27 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 		if sandboxID == "" {
 			continue
 		}
+
+		// Phase 82: discriminate by km:resource-prefix tag.
+		var instPrefix string
+		var hasResourcePrefix bool
+		for _, tag := range inst.Tags {
+			if awssdk.ToString(tag.Key) == "km:resource-prefix" {
+				hasResourcePrefix = true
+				instPrefix = awssdk.ToString(tag.Value)
+				break
+			}
+		}
+		if hasResourcePrefix && instPrefix != currentPrefix {
+			// This instance belongs to a different install — not our orphan to report.
+			continue
+		}
+		if !hasResourcePrefix {
+			// Pre-Phase-82 instance; count it for the backfill-tags advisory but
+			// still run normal orphan detection for it.
+			untaggedCount++
+		}
+
 		if activeSandboxes[sandboxID] {
 			continue
 		}
@@ -1757,11 +1791,23 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 		})
 	}
 
-	if len(orphans) == 0 {
+	// Build the result. If there are untagged pre-Phase-82 instances we always
+	// surface a WARN with a --backfill-tags remediation pointer, regardless of
+	// whether orphans were also found.
+	if len(orphans) == 0 && untaggedCount == 0 {
 		return CheckResult{
 			Name:    name,
 			Status:  CheckOK,
 			Message: fmt.Sprintf("%d km-tagged instances, all registered in DynamoDB", len(instances)),
+		}
+	}
+
+	if len(orphans) == 0 && untaggedCount > 0 {
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("%d pre-Phase-82 EC2 instance(s) missing km:resource-prefix tag; run `km doctor --backfill-tags` to retrofit", untaggedCount),
+			Remediation: "Run `km doctor --backfill-tags` to add the km:resource-prefix tag to pre-Phase-82 instances",
 		}
 	}
 
@@ -1777,11 +1823,18 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 		}
 		fmt.Fprintf(&sb, "\n  %s (%s) %-20s %s", o.instanceID, stateLabel, o.sandboxID, o.launchTime)
 	}
+
+	msg := sb.String()
+	remediation := "Run 'km destroy <sandbox-id> --remote --yes' for each orphan, or terminate manually in the AWS console"
+	if untaggedCount > 0 {
+		msg += fmt.Sprintf("\n  (%d instance(s) also missing km:resource-prefix tag; run `km doctor --backfill-tags`)", untaggedCount)
+	}
+
 	return CheckResult{
 		Name:        name,
 		Status:      CheckWarn,
-		Message:     sb.String(),
-		Remediation: "Run 'km destroy <sandbox-id> --remote --yes' for each orphan, or terminate manually in the AWS console",
+		Message:     msg,
+		Remediation: remediation,
 	}
 }
 
@@ -2116,6 +2169,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 	var deleteSSH bool
 	var deleteSSM bool
 	var withDeletes bool
+	var backfillTags bool
 
 	cmd := &cobra.Command{
 		Use:          "doctor",
@@ -2132,6 +2186,31 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 			default:
 				return fmt.Errorf("unsupported config type %T", cfg)
 			}
+
+			// --backfill-tags: single-purpose operation; skip normal doctor checks.
+			if backfillTags {
+				ctx := cmd.Context()
+				if ctx == nil {
+					ctx = context.Background()
+				}
+				awsCfg, err := config.LoadDefaultConfig(ctx, config.WithSharedConfigProfile(provider.GetAWSProfile()))
+				if err != nil {
+					return fmt.Errorf("load AWS config: %w", err)
+				}
+				taggingClient := resourcegroupstaggingapi.NewFromConfig(awsCfg)
+				ddbClient := dynamodb.NewFromConfig(awsCfg)
+				_, backfillErr := runBackfillTags(
+					ctx,
+					provider.GetResourcePrefix(),
+					provider.GetSandboxTableName(),
+					taggingClient,
+					ddbClient,
+					dryRun,
+					cmd.OutOrStdout(),
+				)
+				return backfillErr
+			}
+
 			// --with-deletes is a meta-flag: it OR-merges into every per-resource
 			// opt-in. Each --delete-X flag still works on its own, and an
 			// explicit --delete-X=true on the command line is unaffected; the
@@ -2170,6 +2249,8 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 		"With --dry-run=false, delete per-sandbox SSM parameters (signing-key, encryption-key, safe-phrase, github-token) whose sandbox row is gone from DynamoDB. Explicit opt-in required because these parameters contain cryptographic secrets.")
 	cmd.Flags().BoolVar(&withDeletes, "with-deletes", false,
 		"Shortcut for --delete-ebs --delete-sqs --delete-s3 --delete-lambdas --delete-ssh --delete-ssm. Pair with --dry-run=false for a full cleanup pass; with --dry-run=true (default) shows what each opt-in would clean.")
+	cmd.Flags().BoolVar(&backfillTags, "backfill-tags", false,
+		"Retrofit km:resource-prefix tag onto pre-Phase-82 resources. Uses tag:GetResources(km:sandbox-id=*) filtered by this install's DDB sandbox table. Default --dry-run=true — pass --dry-run=false to apply.")
 	return cmd
 }
 
@@ -2563,8 +2644,9 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 
 	// Orphaned EC2 instances check (report-only, never terminates).
 	ec2InstanceClient := deps.EC2InstanceClient
+	ec2ResourcePrefix := cfg.GetResourcePrefix()
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkOrphanedEC2(ctx, ec2InstanceClient, listerForCleanup)
+		return checkOrphanedEC2(ctx, ec2InstanceClient, listerForCleanup, ec2ResourcePrefix)
 	})
 
 	// Orphaned EBS volume + snapshot checks. Volume check can delete detached

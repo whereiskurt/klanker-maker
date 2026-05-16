@@ -1290,7 +1290,7 @@ func newDoctorStaleAMICfg(staleDays int, searchPaths []string) *doctorStaleAMICo
 var _ DoctorConfigProvider = (*doctorStaleAMIConfig)(nil)
 
 func TestCheckStaleAMIs_NilClient_Skipped(t *testing.T) {
-	result := checkStaleAMIs(context.Background(), "us-east-1", nil, nil, nil, 30)
+	result := checkStaleAMIs(context.Background(), "us-east-1", nil, nil, nil, 30, "km")
 	if result.Status != CheckSkipped {
 		t.Errorf("expected CheckSkipped for nil client, got %s: %s", result.Status, result.Message)
 	}
@@ -1298,7 +1298,7 @@ func TestCheckStaleAMIs_NilClient_Skipped(t *testing.T) {
 
 func TestCheckStaleAMIs_NoAMIs_OK(t *testing.T) {
 	client := &mockEC2AMIDoctor{images: []ec2types.Image{}}
-	result := checkStaleAMIs(context.Background(), "us-east-1", client, nil, nil, 30)
+	result := checkStaleAMIs(context.Background(), "us-east-1", client, nil, nil, 30, "km")
 	if result.Status != CheckOK {
 		t.Errorf("expected CheckOK for empty AMI list, got %s: %s", result.Status, result.Message)
 	}
@@ -1313,7 +1313,7 @@ func TestCheckStaleAMIs_AllWithinThreshold_OK(t *testing.T) {
 		makeTestAMI("ami-0fresh222222", 5),
 		makeTestAMI("ami-0fresh333333", 7),
 	}}
-	result := checkStaleAMIs(context.Background(), "us-east-1", client, nil, nil, 30)
+	result := checkStaleAMIs(context.Background(), "us-east-1", client, nil, nil, 30, "km")
 	if result.Status != CheckOK {
 		t.Errorf("expected CheckOK when all AMIs within threshold, got %s: %s", result.Status, result.Message)
 	}
@@ -1325,7 +1325,7 @@ func TestCheckStaleAMIs_StaleFound_Warn(t *testing.T) {
 		makeTestAMI("ami-0stale1111111", 45),
 		makeTestAMI("ami-0stale2222222", 90),
 	}}
-	result := checkStaleAMIs(context.Background(), "us-east-1", client, nil, nil, 30)
+	result := checkStaleAMIs(context.Background(), "us-east-1", client, nil, nil, 30, "km")
 	if result.Status != CheckWarn {
 		t.Errorf("expected CheckWarn when stale AMIs found, got %s: %s", result.Status, result.Message)
 	}
@@ -1361,7 +1361,7 @@ spec:
 		makeTestAMI("ami-0referenced111", 60),
 	}}
 	// Pass the temp dir as the search path — FindProfilesReferencingAMI should find the reference.
-	result := checkStaleAMIs(context.Background(), "us-east-1", client, nil, []string{dir}, 30)
+	result := checkStaleAMIs(context.Background(), "us-east-1", client, nil, []string{dir}, 30, "km")
 	// Referenced AMI should NOT be in the stale list.
 	if result.Status == CheckWarn && strings.Contains(result.Message, "ami-0referenced111") {
 		t.Errorf("expected profile-referenced AMI to be skipped, got message: %s", result.Message)
@@ -1392,7 +1392,7 @@ spec:
 			{SandboxID: "sb-abc1234", Profile: "sb-running-prof", Status: "running"},
 		},
 	}
-	result := checkStaleAMIs(context.Background(), "us-east-1", client, lister, []string{dir}, 30)
+	result := checkStaleAMIs(context.Background(), "us-east-1", client, lister, []string{dir}, 30, "km")
 	// AMI backing a running sandbox should NOT be flagged.
 	if result.Status == CheckWarn && strings.Contains(result.Message, "ami-0running11111111") {
 		t.Errorf("expected running-sandbox AMI to be skipped, got message: %s", result.Message)
@@ -1401,7 +1401,7 @@ spec:
 
 func TestCheckStaleAMIs_DescribeImagesError_Warn(t *testing.T) {
 	client := &mockEC2AMIDoctor{err: errors.New("describe-images: access denied")}
-	result := checkStaleAMIs(context.Background(), "us-east-1", client, nil, nil, 30)
+	result := checkStaleAMIs(context.Background(), "us-east-1", client, nil, nil, 30, "km")
 	if result.Status != CheckWarn {
 		t.Errorf("expected CheckWarn on DescribeImages error, got %s: %s", result.Status, result.Message)
 	}
@@ -1421,7 +1421,7 @@ func TestCheckStaleAMIs_UnparsableCreationDate_Skipped(t *testing.T) {
 		badImage,
 		makeTestAMI("ami-0stale3333333", 60),
 	}}
-	result := checkStaleAMIs(context.Background(), "us-east-1", client, nil, nil, 30)
+	result := checkStaleAMIs(context.Background(), "us-east-1", client, nil, nil, 30, "km")
 	// bad-date AMI should not appear; stale AMI should.
 	if strings.Contains(result.Message, "ami-0baddate111111") {
 		t.Errorf("expected bad-date AMI to be silently skipped, got: %s", result.Message)
@@ -1433,7 +1433,7 @@ func TestCheckStaleAMIs_UnparsableCreationDate_Skipped(t *testing.T) {
 
 func TestCheckStaleAMIs_RegionInName(t *testing.T) {
 	client := &mockEC2AMIDoctor{images: []ec2types.Image{}}
-	result := checkStaleAMIs(context.Background(), "ap-southeast-1", client, nil, nil, 30)
+	result := checkStaleAMIs(context.Background(), "ap-southeast-1", client, nil, nil, 30, "km")
 	if !strings.Contains(result.Name, "ap-southeast-1") {
 		t.Errorf("expected region in check name for multi-region distinguishability, got: %s", result.Name)
 	}
@@ -1802,5 +1802,98 @@ func TestCheckConfigDoesNotRequireManagement(t *testing.T) {
 	result := checkConfig(cfg)
 	if result.Status == CheckError {
 		t.Errorf("checkConfig should not return CheckError for blank accounts.organization, got: %s", result.Message)
+	}
+}
+
+// =============================================================================
+// Tests: checkOrphanedEC2 — Phase 82 km:resource-prefix discrimination
+// =============================================================================
+
+// mockEC2DescribeInstances implements EC2InstanceAPI for checkOrphanedEC2 tests.
+type mockEC2DescribeInstances struct {
+	instances []ec2types.Instance
+	err       error
+}
+
+func (m *mockEC2DescribeInstances) DescribeInstances(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &ec2.DescribeInstancesOutput{
+		Reservations: []ec2types.Reservation{
+			{Instances: m.instances},
+		},
+	}, nil
+}
+
+// makeEC2Instance is a helper that builds a minimal ec2types.Instance with the
+// given tags and a LaunchTime well outside the 10-minute provisioning cutoff.
+func makeEC2Instance(instanceID string, tags map[string]string) ec2types.Instance {
+	launchTime := time.Now().Add(-1 * time.Hour) // safely before provisioningCutoff
+	ec2tags := make([]ec2types.Tag, 0, len(tags))
+	for k, v := range tags {
+		k, v := k, v
+		ec2tags = append(ec2tags, ec2types.Tag{
+			Key:   aws.String(k),
+			Value: aws.String(v),
+		})
+	}
+	return ec2types.Instance{
+		InstanceId: aws.String(instanceID),
+		State:      &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
+		Tags:       ec2tags,
+		LaunchTime: &launchTime,
+	}
+}
+
+// TestCheckOrphanedEC2_SkipsForeignPrefix verifies that an instance tagged with
+// km:resource-prefix=rg is silently skipped when the current install prefix is
+// "km" — it is never included in the orphan list.
+func TestCheckOrphanedEC2_SkipsForeignPrefix(t *testing.T) {
+	// Instance belongs to the "rg" install, not "km".
+	inst := makeEC2Instance("i-foreign1", map[string]string{
+		"km:sandbox-id":      "rg-abc123",
+		"km:resource-prefix": "rg",
+	})
+	ec2mock := &mockEC2DescribeInstances{instances: []ec2types.Instance{inst}}
+	// No DDB record for this sandbox-id — it would look orphaned if not skipped.
+	lister := &mockSandboxLister{records: []kmaws.SandboxRecord{}}
+
+	result := checkOrphanedEC2(context.Background(), ec2mock, lister, "km")
+
+	// The foreign-prefix instance must not appear as an orphan. Expect OK.
+	if result.Status != CheckOK {
+		t.Errorf("expected CheckOK when foreign-prefix instance is skipped, got %s: %s", result.Status, result.Message)
+	}
+	// Sanity: message should NOT mention the instance or sandbox id.
+	if strings.Contains(result.Message, "i-foreign1") {
+		t.Errorf("foreign-prefix instance ID should not appear in result: %s", result.Message)
+	}
+}
+
+// TestCheckOrphanedEC2_WarnsUntagged verifies that an instance tagged with
+// km:sandbox-id but NO km:resource-prefix tag produces a WARN result with a
+// message containing "--backfill-tags". The instance is still evaluated for
+// orphan status (existing orphan detection still runs).
+func TestCheckOrphanedEC2_WarnsUntagged(t *testing.T) {
+	// Instance has sandbox-id but no resource-prefix — a pre-Phase-82 resource.
+	// No DDB record either, so it is also an orphan.
+	inst := makeEC2Instance("i-untagged1", map[string]string{
+		"km:sandbox-id": "km-orphan1",
+		// km:resource-prefix intentionally absent
+	})
+	ec2mock := &mockEC2DescribeInstances{instances: []ec2types.Instance{inst}}
+	lister := &mockSandboxLister{records: []kmaws.SandboxRecord{}}
+
+	result := checkOrphanedEC2(context.Background(), ec2mock, lister, "km")
+
+	// Must surface as WARN (not ERROR, not clean).
+	if result.Status != CheckWarn {
+		t.Errorf("expected CheckWarn for untagged pre-Phase-82 instance, got %s: %s", result.Status, result.Message)
+	}
+	// Message or Remediation must mention --backfill-tags.
+	combined := result.Message + result.Remediation
+	if !strings.Contains(combined, "--backfill-tags") {
+		t.Errorf("result should mention --backfill-tags; message=%q remediation=%q", result.Message, result.Remediation)
 	}
 }
