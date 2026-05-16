@@ -1774,3 +1774,15 @@ Plans:
 - [ ] 82-08-PLAN.md — Three ECS modules use var.km_label for SSM ARN (Wave 3, Terraform)
 - [ ] 82-09-PLAN.md — Tag every sandbox-creating module with km:resource-prefix (Wave 3, Terraform)
 - [ ] 82-10-PLAN.md — Apply Wave 3 + km doctor --backfill-tags + docs updates (Wave 4, OPERATOR CHECKPOINT — NOT autonomous)
+
+### Phase 82.1: Multi-instance polish — bare-path configure preserve + service_hcl literal + SES active-rule-set handoff (INSERTED)
+
+**Goal:** Close the three remaining multi-instance isolation gaps left after Phase 82: (1) the bare `km configure` invocation (no `--output-dir`) silently skips the preserve-on-rerun branch at `configure.go:145`, so operators rotating an unrelated field can still retarget their config at the wrong install; (2) `pkg/compiler/service_hcl.go:784` still emits the literal `"km-slack-stream-messages"` table-name fallback (Phase 82-02 deferred); (3) `aws_ses_active_receipt_rule_set` is a per-account/region singleton, so running `km init` under a second prefix deactivates the first install's inbound email path — Phase 82 fixed the name (B1) but not the activation handoff. Phase closes when (a) bare `km configure` preserves an existing non-default prefix without `--output-dir`, (b) `service_hcl.go:784` derives the stream-messages table name from the prefix the same way `userdata.go` does, and (c) running `km init --dry-run=true` under a second prefix does NOT plan to switch the SES active rule set (operator opt-in, documented handoff procedure, or split rule-set per prefix — design choice resolved by the planner via CONTEXT.md).
+**Requirements**: CONFIG-PRESERVE-BARE, SVCHCL-PREFIX-FALLBACK, SES-ACTIVE-RULESET (synthetic IDs; gap closure from Phase 82-VERIFICATION.md + operator UAT discovery)
+**Depends on:** Phase 82
+**Plans:** 3 plans
+
+Plans:
+- [ ] 82.1-01-PLAN.md — Bare-path configure preserve: extend outputDir guard to findRepoRoot() fallback (Wave 1, TDD, Go-only)
+- [ ] 82.1-02-PLAN.md — service_hcl.go stream-table prefix-aware derivation: replace literal at line 784 (Wave 1, TDD, Go-only)
+- [ ] 82.1-03-PLAN.md — SES activate_rule_set opt-in variable: count-gate aws_ses_active_receipt_rule_set + operator checkpoint (Wave 2, Terraform + docs)
