@@ -156,4 +156,30 @@ func TestMainFIFORetry_CreatesAndOpensFIFO(t *testing.T) {
 			t.Errorf("expected call to complete in <100ms for fast-backoff failure, took %v", elapsed)
 		}
 	})
+
+	t.Run("path exists as regular file - self-heal replaces with FIFO", func(t *testing.T) {
+		base := t.TempDir()
+		pipePath := filepath.Join(base, "audit-pipe")
+		// Simulate the post-resume scenario: a regular file at the FIFO path
+		// (in production this is left by km-presence's `timeout 0.1 tee` when
+		// the FIFO is absent on a fresh-tmpfs boot).
+		if err := os.WriteFile(pipePath, []byte("not a fifo"), 0644); err != nil {
+			t.Fatalf("setup: WriteFile: %v", err)
+		}
+		f, err := openAuditPipeWithRetry(pipePath, 3, 1*time.Millisecond)
+		if err != nil {
+			t.Fatalf("Phase 79.1 L2-SELFHEAL: expected self-heal success, got: %v", err)
+		}
+		if f == nil {
+			t.Fatal("Phase 79.1 L2-SELFHEAL: expected non-nil *os.File on self-heal path")
+		}
+		f.Close()
+		fi, statErr := os.Stat(pipePath)
+		if statErr != nil {
+			t.Fatalf("Phase 79.1 L2-SELFHEAL: pipePath must exist after self-heal: %v", statErr)
+		}
+		if fi.Mode()&os.ModeNamedPipe == 0 {
+			t.Errorf("Phase 79.1 L2-SELFHEAL: expected path to be named pipe after self-heal, got mode %v", fi.Mode())
+		}
+	})
 }
