@@ -67,13 +67,15 @@ build-km: build
 
 ## test-no-82.1-leftovers: Phase 84 W0-11 — grep gate for Phase 82.1 legacy symbols.
 ## GREEN at Wave 2 (Phase 82.1 symbols removed from doc + live wiring in Plans 84-08/84-03).
+## Scope: code paths only (infra/ internal/ pkg/ cmd/). OPERATOR-GUIDE.md and CLAUDE.md
+## may legitimately mention activate_rule_set in past-tense prose explaining the removal.
 ## Excludes infra/modules/ses/v1.0.0/ (historical reference — kept per CONTEXT.md lock)
 ## and .terragrunt-cache/ (cached copies of historical module).
 .PHONY: test-no-82.1-leftovers
 test-no-82.1-leftovers:
 	@! grep -rn --exclude-dir='v1.0.0' --exclude-dir='.terragrunt-cache' \
 		"KM_SES_ACTIVATE_RULESET\|activate_rule_set" \
-		infra/ internal/ pkg/ cmd/ OPERATOR-GUIDE.md CLAUDE.md \
+		infra/ internal/ pkg/ cmd/ \
 		|| (echo "Phase 82.1 leftovers found — see Phase 84"; exit 1)
 
 ## fetch-otelcol: download otelcol-contrib binary for EC2 tracing sidecar
