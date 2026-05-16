@@ -36,6 +36,38 @@ AWS_DEFAULT_REGION=us-east-1 AWS_PROFILE=<your-profile> \
 
 See `docs/superpowers/specs/2026-05-16-multi-instance-resource-prefix-isolation-design.md` for the full design.
 
+### Phase 82.1 follow-up: SES active-rule-set handoff for second installs
+
+AWS SES allows only ONE active receipt rule set per account/region. The `infra/modules/ses/v1.0.0/`
+module gains an `activate_rule_set` variable (default `true`) that controls whether `km init`
+activates this install's rule set. Second installs MUST set `KM_SES_ACTIVATE_RULESET=false`
+before running `km init` to avoid deactivating the primary install's inbound email path.
+
+**Operator runbook for second install:**
+
+```bash
+# 1. Export the second install's prefix
+export KM_RESOURCE_PREFIX=rg
+export KM_SES_ACTIVATE_RULESET=false  # critical — do not steal activation
+
+# 2. Run km init as normal; SES rule set is created but NOT activated
+km init --dry-run=true   # verify: no aws_ses_active_receipt_rule_set in plan
+km init --dry-run=false
+
+# 3. To hand off inbound email to the second install (deliberate operator action):
+#    First verify the new rule set name
+aws ses list-receipt-rule-sets --query 'RuleSets[*].Name'
+#    Then activate it (cuts over inbound email — brief gap possible)
+aws ses set-active-receipt-rule-set --rule-set-name rg-sandbox-email
+```
+
+**Rollback (restore primary install's activation):**
+```bash
+aws ses set-active-receipt-rule-set --rule-set-name km-sandbox-email
+```
+
+See `infra/modules/ses/v1.0.0/variables.tf` for the full variable description.
+
 ## CLI
 
 - `km validate <profile.yaml>` — validate a SandboxProfile

@@ -642,3 +642,36 @@ AWS_DEFAULT_REGION=us-east-1 AWS_PROFILE=<your-profile> \
 ```
 
 **Troubleshooting:** If `km doctor` reports WARN-level untagged-instance results after Phase 82 upgrade, run `km doctor --backfill-tags --dry-run=true` to preview, then `--dry-run=false` to commit. The cross-install safety guard skips resources whose `km:sandbox-id` tag does not match any row in the current install's DynamoDB sandbox table — those resources belong to a different install and are intentionally left alone.
+
+### SES activation handoff (Phase 82.1)
+
+AWS SES allows only **one active receipt rule set per account/region**. Each km install creates its own rule set (`${resource_prefix}-sandbox-email`), but the AWS API only lets one be active at a time. By default (`activate_rule_set = true`), `km init` activates the rule set for the current install. A second install running `km init` without overriding this default would silently deactivate the first install's inbound email path.
+
+**Phase 82.1 adds `KM_SES_ACTIVATE_RULESET`** — an env var that controls whether the SES activation resource is managed. Set it to `false` before running `km init` for any secondary install.
+
+**Operator runbook — second install:**
+
+```bash
+# 1. Export the second install's prefix
+export KM_RESOURCE_PREFIX=rg
+export KM_SES_ACTIVATE_RULESET=false  # critical — do not steal activation from primary install
+
+# 2. Run km init; SES rule set is created but NOT activated
+km init --dry-run=true   # verify: aws_ses_active_receipt_rule_set must NOT appear in plan
+km init --dry-run=false
+
+# 3. To deliberately hand off inbound email to the second install:
+#    List all rule sets to find the correct name
+aws ses list-receipt-rule-sets --query 'RuleSets[*].Name'
+#    Activate the second install's rule set (brief inbound gap possible during switchover)
+aws ses set-active-receipt-rule-set --rule-set-name rg-sandbox-email
+```
+
+**Rollback (restore primary install's inbound email):**
+```bash
+aws ses set-active-receipt-rule-set --rule-set-name km-sandbox-email
+```
+
+**Primary install behavior:** When `KM_SES_ACTIVATE_RULESET` is unset or `true`, behavior is unchanged — `km init` activates the rule set as always. Existing single-install operators see zero diff on `km init --dry-run=true`.
+
+See `infra/modules/ses/v1.0.0/variables.tf` for the full `activate_rule_set` variable description.
