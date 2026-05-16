@@ -1526,10 +1526,17 @@ while true; do
     if [ -n "$RESULT_TEXT" ] && [ -n "$KM_SLACK_CHANNEL_ID" ] && [ -n "$KM_SLACK_BRIDGE_URL" ]; then
       POST_FILE=$(mktemp /tmp/km-slack-inbound-post.XXXXXX)
       printf '%s' "$RESULT_TEXT" > "$POST_FILE"
+      # Phase 74 (HOOK-01 inbound coverage): --render=blocks (Tier 2 Block Kit) by
+      # default for the poller reply path so Slack-initiated chat sees structured
+      # messages, not literal markdown. Operator override:
+      # KM_SLACK_RENDER=plain|mrkdwn via /etc/km/notify.env or
+      # /etc/profile.d/km-notify-env.sh. km-slack falls back to Tier 1 mrkdwn
+      # automatically when the Block Kit build exceeds Slack's 50-block cap.
       if /opt/km/bin/km-slack post \
            --channel "$KM_SLACK_CHANNEL_ID" \
            --subject "" \
            --thread "$THREAD_TS" \
+           --render "${KM_SLACK_RENDER:-blocks}" \
            --body "$POST_FILE" 2>>"$RUN_DIR/stderr.log"; then
         echo "[km-slack-inbound-poller] Posted reply to Slack (thread=$THREAD_TS, len=${#RESULT_TEXT})"
       else

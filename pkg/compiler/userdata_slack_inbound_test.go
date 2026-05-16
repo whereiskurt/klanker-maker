@@ -227,6 +227,60 @@ func TestUserdata_PollerPostsResultToSlack(t *testing.T) {
 	}
 }
 
+// TestSlackInboundPoller_ReplyPost_RenderFlag — Phase 74 Task 6 (HOOK-01 inbound).
+// Plan 02 Task 4 flipped the Phase 68 transcript-streaming hook
+// (_km_stream_drain) to --render "${KM_SLACK_RENDER:-blocks}" so per-turn
+// streaming renders as Block Kit. But the Slack-inbound poller has its OWN
+// km-slack post call that posts the final .result from `claude -p` back into
+// the Slack thread — and prior to this task that call had no --render flag,
+// so it defaulted to plain. Symptom: operators chatting in #sb-<id> via Slack
+// (the most-used path) saw literal markdown (**bold**, # heading) even though
+// the streaming hook was correctly flipped.
+//
+// Assertions:
+//  1. The poller's reply post call carries --render "${KM_SLACK_RENDER:-blocks}"
+//     so it inherits the same Block Kit default + operator safety valve as
+//     _km_stream_drain.
+//  2. The --render flag appears BEFORE --body inside the same km-slack post
+//     invocation (so it's a sibling of --channel/--thread, not a stray match
+//     elsewhere in the heredoc).
+func TestSlackInboundPoller_ReplyPost_RenderFlag(t *testing.T) {
+	p := minimalSlackInboundProfile(t, true)
+	out := compileInboundUserData(t, p)
+	poller := extractSlackInboundPoller(t, out)
+
+	wantSubstr := `--render "${KM_SLACK_RENDER:-blocks}"`
+	if !strings.Contains(poller, wantSubstr) {
+		t.Fatalf("inbound poller reply post must carry %q so Slack-initiated chat renders as Block Kit (HOOK-01 inbound coverage)\n--- poller excerpt ---\n%s", wantSubstr, abbreviateUD(poller))
+	}
+
+	// Bound to the km-slack post invocation in the success branch. The earlier
+	// occurrence of the literal "km-slack post" in a comment must be skipped —
+	// anchor on the actual `if /opt/km/bin/km-slack post` shell statement.
+	postStmtIdx := strings.Index(poller, "if /opt/km/bin/km-slack post")
+	if postStmtIdx < 0 {
+		t.Fatalf("`if /opt/km/bin/km-slack post` shell statement not found in poller — structural assumption broken")
+	}
+	// The post call spans until the closing `; then` of the if-statement.
+	postSegmentEnd := strings.Index(poller[postStmtIdx:], "; then")
+	if postSegmentEnd < 0 {
+		t.Fatalf("km-slack post call has no terminating `; then` — structural assumption broken")
+	}
+	postCall := poller[postStmtIdx : postStmtIdx+postSegmentEnd]
+
+	renderIdx := strings.Index(postCall, wantSubstr)
+	bodyIdx := strings.Index(postCall, `--body "$POST_FILE"`)
+	if renderIdx < 0 {
+		t.Fatalf("--render flag missing from km-slack post call body — found elsewhere in poller but not in the reply-post invocation\n--- post call ---\n%s", postCall)
+	}
+	if bodyIdx < 0 {
+		t.Fatalf("--body \"$POST_FILE\" missing from km-slack post call — structural assumption broken\n--- post call ---\n%s", postCall)
+	}
+	if renderIdx >= bodyIdx {
+		t.Fatalf("--render flag (idx=%d) must appear BEFORE --body (idx=%d) inside the same post call\n--- post call ---\n%s", renderIdx, bodyIdx, postCall)
+	}
+}
+
 // TestUserdata_PollerExportsAWSRegion — Phase 67-11 Gap A follow-up.
 // AWS_REGION is not a NotifyEnv field, so it's never in the systemd
 // EnvironmentFile. The poller must explicitly export AWS_REGION so
