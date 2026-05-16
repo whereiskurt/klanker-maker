@@ -1618,7 +1618,11 @@ done
 
 # Default --to to operator inbox when omitted
 if [[ -z "$TO" ]]; then
-  TO="operator@${KM_SANDBOX_DOMAIN:-sandboxes.klankermaker.ai}"
+  TO="${KM_OPERATOR_EMAIL:-}"
+  if [[ -z "$TO" ]]; then
+    # KM_OPERATOR_EMAIL unset (legacy env): fall back to domain-based address.
+    TO="operator@${KM_SANDBOX_DOMAIN:-sandboxes.klankermaker.ai}"
+  fi
   echo "[km-send] No --to specified, defaulting to operator: $TO"
 fi
 
@@ -1650,7 +1654,7 @@ fi
 # Auto-include KM-AUTH when sending to the operator inbox.
 # The body is Ed25519 signed, so a third party can't forge a signed body
 # containing the phrase without the sender's private key.
-OPERATOR_INBOX="operator@${KM_SANDBOX_DOMAIN:-sandboxes.klankermaker.ai}"
+OPERATOR_INBOX="${KM_OPERATOR_EMAIL:-operator@${KM_SANDBOX_DOMAIN:-sandboxes.klankermaker.ai}}"
 if [[ "$TO" == "$OPERATOR_INBOX" ]] || [[ "$TO" == *"$OPERATOR_INBOX"* ]]; then
   KM_SAFE_PHRASE="${KM_SAFE_PHRASE:-}"
   if [[ -z "$KM_SAFE_PHRASE" ]]; then

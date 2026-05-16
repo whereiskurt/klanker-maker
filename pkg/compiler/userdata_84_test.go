@@ -22,8 +22,13 @@ func TestUserdata_KmSendOperatorAddressUsesEnvVar(t *testing.T) {
 	}
 
 	// Assert: both km-send heredoc default --to uses the env var reference.
-	if !strings.Contains(out, "${KM_OPERATOR_EMAIL}") {
-		t.Errorf("expected '${KM_OPERATOR_EMAIL}' reference in userdata (km-send heredoc default --to)\n--- snippet ---\n%s", abbreviateUD(out))
+	// The reference may be in bash parameter-expansion form: ${KM_OPERATOR_EMAIL:-...}
+	if !strings.Contains(out, "KM_OPERATOR_EMAIL") {
+		t.Errorf("expected 'KM_OPERATOR_EMAIL' reference in userdata (km-send heredoc default --to)\n--- snippet ---\n%s", abbreviateUD(out))
+	}
+	// More specific: the km-send default-to block should reference it directly.
+	if !strings.Contains(out, "TO=\"${KM_OPERATOR_EMAIL") && !strings.Contains(out, "TO=${KM_OPERATOR_EMAIL") {
+		t.Errorf("expected km-send default TO to reference KM_OPERATOR_EMAIL (not a bare domain literal)\n--- snippet ---\n%s", abbreviateUD(out))
 	}
 
 	// Assert: the legacy bare literal is gone from both heredoc occurrences.
