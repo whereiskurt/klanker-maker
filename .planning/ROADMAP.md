@@ -1699,6 +1699,19 @@ Plans:
 - [x] 79-04-PLAN.md — Wave 2 doctor check `presence_daemon_healthy` (CloudWatch FilterLogEvents for source:"presence" within 5min staleness threshold; WARN-not-ERROR; turns 3 stubs GREEN; registered in buildChecks)
 - [x] 79-05-PLAN.md — Wave 3 closeout (CLAUDE.md docs section + populate VALIDATION.md Per-Task Verification Map + BLOCKING operator UAT for bug-fix regression on live sandbox)
 
+### Phase 79.1: audit-pipe FIFO recreation on resumed sandboxes — systemd-tmpfiles drop-in + audit-log self-heal when path exists as non-FIFO regular file (INSERTED)
+
+**Goal:** Fix the Phase 79 stop+resume integration gap so that on EC2 stop+resume cycles (where `/run` tmpfs is wiped and cloud-init does NOT re-run), `/run/km/audit-pipe` is recreated as a correctly-owned FIFO before km-presence's first heartbeat can stamp the path as a regular file (Layer 1: `/usr/lib/tmpfiles.d/km.conf` with `p+`), and if the path somehow ends up wrong-typed, the audit-log sidecar self-heals on startup (Layer 2: `openAuditPipeWithRetry` unlinks + mkfifos before opening). Validated end-to-end by a live `km pause`+`km resume` UAT proving `journalctl -u km-audit-log` shows `reading from audit pipe` (not `permission denied`) and `km doctor` reports `✓ Presence daemon healthy`.
+**Requirements**: L1-TMPFILES, L1-ORDER, L1-MODE, L2-SELFHEAL, L2-EXISTING-FIFO, UAT-RESUME (synthetic IDs; tactical bug fix, no formal v1 REQ-IDs)
+**Depends on:** Phase 79
+**Plans:** 4 plans
+
+Plans:
+- [ ] 79.1-01-PLAN.md — Wave 0 RED test stubs: 3 failing userdata tests for Layer 1 (tmpfiles.d drop-in present/ordered/correct-mode) + 1 failing audit-log sub-test for Layer 2 (path-exists-as-regular-file self-heal)
+- [ ] 79.1-02-PLAN.md — Wave 1 Layer 1 implementation: insert `/usr/lib/tmpfiles.d/km.conf` heredoc in `pkg/compiler/userdata.go` between the existing mkfifo block and the km-audit-log.service unit heredoc (parallel with 79.1-03)
+- [ ] 79.1-03-PLAN.md — Wave 1 Layer 2 implementation: replace the stat+mkfifo guard in `sidecars/audit-log/cmd/main.go::openAuditPipeWithRetry` with a three-branch self-heal (absent → mkfifo; FIFO → no-op; wrong-type → unlink+mkfifo) (parallel with 79.1-02)
+- [ ] 79.1-04-PLAN.md — Wave 2 closeout: CLAUDE.md "Phase 79.1 follow-up" subsection under Presence daemon section + BLOCKING live AWS UAT (km create + km pause + km resume + journalctl + km doctor + ls -la) + write phase SUMMARY.md
+
 ### Phase 80: km cluster — cross-account IRSA for k8s integrations
 
 **Goal:** Ship `km cluster add/list/rm` that provisions an IAM role in the klanker AWS account with a cross-account trust policy referencing a k8s cluster's OIDC provider in a *different* AWS account. K8s pods authenticate via projected service-account tokens (no static keys). Refactor `create-handler` and the new `cluster-irsa` module to share a single `km-operator-policy` Terraform module so Lambda and IRSA roles can never drift. Phase closes when full `km cluster add --dry-run=false` against the `klanker-application` profile creates the role, persists to `km-config.yaml`, and `km cluster rm` cleanly tears it down.
