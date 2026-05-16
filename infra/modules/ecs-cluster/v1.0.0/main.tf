@@ -129,7 +129,7 @@ resource "aws_iam_role_policy" "ecs_task_policy" {
           "ssm:GetParameter",
           "ssm:GetParametersByPath"
         ]
-        Resource = "arn:aws:ssm:${var.region_full}:${data.aws_caller_identity.current.account_id}:parameter/km/*"
+        Resource = "arn:aws:ssm:${var.region_full}:${data.aws_caller_identity.current.account_id}:parameter/${var.km_label}/*"
       },
       {
         Sid    = "KMSDecrypt"

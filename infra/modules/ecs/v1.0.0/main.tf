@@ -123,7 +123,7 @@ resource "aws_iam_role_policy" "task_role" {
         Sid      = "SSMAccess"
         Effect   = "Allow"
         Action   = ["ssm:GetParameters", "ssm:GetParameter"]
-        Resource = "arn:aws:ssm:${var.region_full}:${data.aws_caller_identity.current.account_id}:parameter/km/*"
+        Resource = "arn:aws:ssm:${var.region_full}:${data.aws_caller_identity.current.account_id}:parameter/${var.km_label}/*"
       },
       {
         Sid      = "CloudWatchLogs"
