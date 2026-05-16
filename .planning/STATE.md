@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: "Completed 79.1-04-PLAN.md — Phase 79.1 closeout: CLAUDE.md docs + phase SUMMARY + UAT-RESUME satisfied (operator-approved live AWS run on learn-ec01f7f6)"
-last_updated: "2026-05-16T06:30:55.472Z"
+stopped_at: "Completed 82-03-PLAN.md — KMBakeTags extended with km:resource-prefix tag, all callers updated, TDD GREEN"
+last_updated: "2026-05-16T12:46:00.764Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 90
   completed_phases: 80
   total_plans: 343
-  completed_plans: 296
+  completed_plans: 297
   percent: 93
 ---
 
@@ -335,6 +335,7 @@ Progress: [█████████░] 93%
 | Phase 79.1 P02 | 4min | 1 tasks | 1 files |
 | Phase 79.1 P03 | 3min | 1 tasks | 1 files |
 | Phase 79.1 P04 | 600s | 2 tasks | 2 files |
+| Phase 82-multi-instance-resource-prefix-isolation P03 | 8min | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -959,6 +960,7 @@ Recent decisions affecting current work:
 - [Phase 79.1]: Self-heal on wrong-type path uses os.Remove + syscall.Mkfifo; on Remove failure record lastErr and let OpenFile fail naturally (consistent with existing retry discipline)
 - [Phase 79.1]: Insert tmpfiles.d p+ drop-in in EC2 userdata: systemd-tmpfiles-setup.service runs before sysinit.target on every boot, recreating the audit-pipe FIFO before km-presence or km-audit-log can race
 - [Phase 79.1]: Use p+ (not p) in tmpfiles.d: p is a silent no-op when a regular file exists at the path; p+ atomically replaces wrong-type entries — required for FIFO entries in tmpfs directories subject to write races
+- [Phase 82-03]: KMBakeTags: resourcePrefix added as trailing positional parameter; km:resource-prefix tag alphabetized in returned slice; all baked AMIs now carry install-discriminator tag for Plan 04 filter
 
 ### Roadmap Evolution
 
@@ -1063,6 +1065,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T06:26:28.435Z
-Stopped at: Completed 79.1-04-PLAN.md — Phase 79.1 closeout: CLAUDE.md docs + phase SUMMARY + UAT-RESUME satisfied (operator-approved live AWS run on learn-ec01f7f6)
+Last session: 2026-05-16T12:46:00.757Z
+Stopped at: Completed 82-03-PLAN.md — KMBakeTags extended with km:resource-prefix tag, all callers updated, TDD GREEN
 Resume file: None
