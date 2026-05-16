@@ -324,14 +324,57 @@ Caps: 25 files/msg, 100 MB/file. Over-cap → thread-reply warning.
 
 New bot scope: `files:read`. Operator path: re-install the Slack app
 with the new scope, run `km slack rotate-token --bot-token <new>`,
-then `make build && km init` (NOT `km init --lambdas` — that path
-doesn't deploy bridge zips).
+then `make build && km init --dry-run=false` (NOT `km init --lambdas`,
+which builds the zip but doesn't deploy it).
 
-Lambda memory_size bumped 256 → 1024 to fit 100MB in-memory file
-buffering for SDK PutObject retry-rewindability.
+**Critical:** `km init` defaults to `--dry-run=true`. Forgetting
+`--dry-run=false` produces a no-op that *looks* like a deploy ran.
+After a successful apply, verify:
+
+```bash
+aws lambda get-function-configuration --function-name km-slack-bridge \
+  --query '{MemorySize:MemorySize, Timeout:Timeout, Vars:Environment.Variables}'
+```
+
+Expect `MemorySize=1024`, `Timeout=60`, and `Vars` containing
+`KM_ARTIFACTS_BUCKET`. A `Vars` map with only `TOKEN_ROTATION_TS`
+means `km slack rotate-token` blew away the env vars and Terraform
+hasn't re-applied — re-run `km init --dry-run=false`.
+
+Lambda config bumps: memory_size 256 → 1024 (Plan 04, fits 100MB
+in-memory file buffer for SDK PutObject retry-rewindability),
+timeout 15s → 60s (75.2 hotfix, fits synchronous file download).
+
+### Phase 75 hotfix lessons
+
+The end-to-end pipeline shipped through three follow-on hotfixes
+after the initial UAT exposed gaps the design RESEARCH missed:
+
+- **75.1** — Modern Slack workspaces deliver **stub file objects** in
+  `file_share` event payloads (only `id` populated; `url_private_download`
+  absent). The bridge must call `files.info` per file ID to enrich
+  before issuing the GET. Symptom pre-fix:
+  `Get "": unsupported protocol scheme ""` in thread-reply warning.
+- **75.2** — Original design ran the file download in a goroutine so
+  the handler could return 200 within Slack's 3-second ack window. This
+  is unsound on AWS Lambda: the runtime freezes once the handler returns
+  and the in-flight HTTP deadline elapses during freeze. 75.2 made the
+  `file_share` path synchronous. The handler may now exceed 3s and
+  Slack will retry, but the existing `event_id` nonce dedup absorbs the
+  retry as a no-op 200. Log marker changed: `events: enqueued (files-fork)`
+  → `events: enqueued (files-sync)`.
+- **75.3** — The `km-slack-inbound-poller.service` systemd unit was
+  missing `Environment=KM_ARTIFACTS_BUCKET={{ .KMArtifactsBucket }}`.
+  Plan 03 added bash that references `${KM_ARTIFACTS_BUCKET}` but the
+  sibling `km-mail-poller` unit had it and the inbound-poller unit
+  was simply missed in the template. Symptom pre-fix: poller journal
+  shows `KM_ARTIFACTS_BUCKET: unbound variable` and Claude replies
+  "I don't see any file path attached" because the bash bailed out of
+  the `aws s3 cp` mirror loop.
 
 See `docs/slack-notifications.md` § Slack inbound file attachments
-(Phase 75) for the full operator runbook. Authoritative design:
+(Phase 75) for the full operator runbook + troubleshooting table.
+Authoritative design:
 `docs/superpowers/specs/2026-05-15-slack-inbound-file-attachments-design.md`.
 
 ## VS Code Remote-SSH (Phase 73)

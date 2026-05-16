@@ -841,18 +841,35 @@ with its Read tool when relevant to the question.
    ```
 4. Rebuild + redeploy the bridge:
    ```bash
-   make build && km init
+   make build && km init --dry-run=false
    ```
-   **Important:** use full `km init`, NOT `km init --lambdas`. The lambdas-only
-   path builds the zip but does NOT deploy it (see `project_km_init_lambdas_doesnt_deploy`
-   in operator memory).
-5. Verify scopes via `km doctor` — `slack_app_events_subscription` should
+   **Critical:** `km init` defaults to `--dry-run=true`. Without
+   `--dry-run=false` the command only prints what *would* deploy and
+   exits — no Terraform applies, no zip uploads. UAT 2026-05-15 lost
+   ~30 minutes to this. Also use full `km init`, NOT `km init --lambdas`
+   (lambdas-only builds the zip but never uploads it; see
+   `project_km_init_lambdas_doesnt_deploy` in operator memory).
+5. Verify the deploy actually landed:
+   ```bash
+   aws --profile klanker-application --region us-east-1 \
+     lambda get-function-configuration --function-name km-slack-bridge \
+     --query '{MemorySize:MemorySize, Timeout:Timeout, Vars:Environment.Variables}'
+   ```
+   Expected: `MemorySize=1024`, `Timeout=60`, `Vars` contains
+   `KM_ARTIFACTS_BUCKET` plus the rest of the Phase 67 set. If
+   `Vars` only has `TOKEN_ROTATION_TS`, the last `km slack rotate-token`
+   blew away the env vars and Terraform hasn't replaced them — re-run
+   `km init --dry-run=false`.
+6. Verify scopes via `km doctor` — `slack_app_events_subscription` should
    report `(channels:history, groups:history, reactions:write, files:read)`.
 
 **Sandbox provisioning:** Existing sandboxes do NOT get the Phase 75
 userdata changes retroactively (the poller bash is baked into userdata
 at create time). Run `km destroy && km create` on any sandbox that
-needs file-attachment support.
+needs file-attachment support. **The sandbox MUST be created AFTER
+`km init --dry-run=false` runs** — otherwise the create-handler Lambda
+will use its stale bundled `km` toolchain and generate pre-Phase-75
+userdata even though your local binary is current.
 
 **S3 staging layout:**
 
@@ -875,11 +892,25 @@ needs file-attachment support.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | 👀 appears but Claude doesn't read the file | `files:read` scope missing | Re-install app + `km slack rotate-token`; verify with `km doctor` |
-| 👀 appears, agent replies as text-only | Sandbox was provisioned before Phase 75 deploy | `km destroy && km create` |
-| Bridge logs "files:read scope may be missing" | Same as above | Same as above |
-| Bridge logs "request body offset reset failed" | Lambda memory_size < 1024 (pre-bump) | Verify `terragrunt plan` and re-apply `infra/live/use1/lambda-slack-bridge/` |
+| 👀 appears, Claude replies as text-only ("I don't see any file path attached") | (a) Sandbox provisioned before Phase 75 deploy, **or** (b) sandbox created via `--remote` BEFORE `km init --dry-run=false` ran (stale create-handler toolchain) | `km init --dry-run=false` first, then `km destroy && km create` |
+| Sandbox journal: `KM_ARTIFACTS_BUCKET: unbound variable` from km-slack-inbound-poller | Pre-75.3 userdata — the poller systemd unit doesn't set `KM_ARTIFACTS_BUCKET` and bash `set -u` fires on first file_share | `km init --dry-run=false` to refresh the create-handler toolchain, then `km destroy && km create` |
+| Bridge logs `Get "": unsupported protocol scheme ""` | Modern Slack workspaces deliver stub file objects in event payloads (only `id` populated). The bridge must call `files.info` to enrich. Pre-75.1 bridges issued `http.Get("")` on the empty URL field. | Deploy ≥ 75.1: `make build && km init --dry-run=false` |
+| Bridge logs `Client.Timeout exceeded while awaiting headers` on `files.slack.com` | Pre-75.2 bridge used a goroutine that outlived the handler return. AWS Lambda freezes the runtime once the 200 ships, and the in-flight HTTP deadline elapses during freeze. 75.2 made `file_share` handling synchronous. | Deploy ≥ 75.2 + redeploy bridge; verify Lambda `Timeout` ≥ 60s and bridge logs `events: enqueued (files-sync)` not `(files-fork)` |
+| Bridge logs `files:read scope may be missing` | Same as "👀 appears but Claude doesn't read the file" | Same fix |
+| Bridge logs `request body offset reset failed` | Lambda memory_size < 1024 (pre-bump) | Verify `terragrunt plan` and re-apply `infra/live/use1/lambda-slack-bridge/` |
 | First 25 of N files attached; rest skipped | 25-file cap by design | Split the upload across multiple messages |
 | Skipped foo.png (>100 MB cap) | 100MB cap by design | Trim or split the file |
+
+**Verify the full pipeline on a running sandbox:**
+
+```bash
+# Bridge enqueued via the synchronous file path (note the suffix):
+aws --profile klanker-application --region us-east-1 logs tail /aws/lambda/km-slack-bridge \
+  --since 10m | grep 'enqueued (files-sync)'
+
+# Poller mirrored attachments to the per-thread dir on the box:
+km shell <sandbox-id> 'ls -laR /workspace/.km-slack/attachments/ 2>/dev/null | head -20'
+```
 
 **Authoritative design:** `docs/superpowers/specs/2026-05-15-slack-inbound-file-attachments-design.md` —
 full PRD with failure-handling matrix, Pitfall catalog, and rollback procedure.
