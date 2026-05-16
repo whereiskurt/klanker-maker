@@ -324,7 +324,7 @@ func TestListBakedAMIs_FilterAndOwners(t *testing.T) {
 		describeOut: &ec2.DescribeImagesOutput{Images: []types.Image{}},
 	}
 
-	_, err := ListBakedAMIs(context.Background(), m)
+	_, err := ListBakedAMIs(context.Background(), m, "")
 	if err != nil {
 		t.Fatalf("ListBakedAMIs returned unexpected error: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestListBakedAMIs_SortedNewestFirst(t *testing.T) {
 		},
 	}
 
-	images, err := ListBakedAMIs(context.Background(), m)
+	images, err := ListBakedAMIs(context.Background(), m, "")
 	if err != nil {
 		t.Fatalf("ListBakedAMIs returned unexpected error: %v", err)
 	}
@@ -490,4 +490,64 @@ func TestAMIBDMDeviceNames(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ============================================================================
+// Test 14: TestListBakedAMIs_PrefixFilter — Phase 82 prefix filter
+// ============================================================================
+
+// TestListBakedAMIs_PrefixFilter verifies that a non-empty resourcePrefix adds a
+// third filter (tag:km:resource-prefix=<prefix>) to the DescribeImages call, and
+// that an empty resourcePrefix does NOT add the extra filter (backward compat).
+func TestListBakedAMIs_PrefixFilter(t *testing.T) {
+	t.Run("non-empty prefix adds three filters", func(t *testing.T) {
+		m := &mockEC2AMI{
+			describeOut: &ec2.DescribeImagesOutput{Images: []types.Image{}},
+		}
+		_, err := ListBakedAMIs(context.Background(), m, "rg")
+		if err != nil {
+			t.Fatalf("ListBakedAMIs returned unexpected error: %v", err)
+		}
+		if m.describeInput == nil {
+			t.Fatal("DescribeImages was not called")
+		}
+		if len(m.describeInput.Filters) != 3 {
+			t.Fatalf("expected 3 filters with prefix='rg', got %d: %v", len(m.describeInput.Filters), m.describeInput.Filters)
+		}
+		// Verify the prefix filter is present with the correct value.
+		found := false
+		for _, f := range m.describeInput.Filters {
+			if awssdk.ToString(f.Name) == "tag:km:resource-prefix" {
+				found = true
+				if len(f.Values) != 1 || f.Values[0] != "rg" {
+					t.Errorf("tag:km:resource-prefix filter has Values=%v, want [\"rg\"]", f.Values)
+				}
+			}
+		}
+		if !found {
+			t.Error("tag:km:resource-prefix filter not found in DescribeImages input")
+		}
+	})
+
+	t.Run("empty prefix keeps two filters (backward compat)", func(t *testing.T) {
+		m := &mockEC2AMI{
+			describeOut: &ec2.DescribeImagesOutput{Images: []types.Image{}},
+		}
+		_, err := ListBakedAMIs(context.Background(), m, "")
+		if err != nil {
+			t.Fatalf("ListBakedAMIs returned unexpected error: %v", err)
+		}
+		if m.describeInput == nil {
+			t.Fatal("DescribeImages was not called")
+		}
+		if len(m.describeInput.Filters) != 2 {
+			t.Fatalf("expected 2 filters with prefix='', got %d: %v", len(m.describeInput.Filters), m.describeInput.Filters)
+		}
+		// Confirm no prefix filter leaked in.
+		for _, f := range m.describeInput.Filters {
+			if awssdk.ToString(f.Name) == "tag:km:resource-prefix" {
+				t.Error("unexpected tag:km:resource-prefix filter present for empty prefix")
+			}
+		}
+	})
 }

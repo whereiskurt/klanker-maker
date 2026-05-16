@@ -182,13 +182,25 @@ func AMIBDMDeviceNames(ctx context.Context, client EC2AMIAPI, amiID string) ([]s
 // are in the "available" state. Results are sorted newest-first by CreationDate.
 // DescribeImages is not a paginated API for self-owned images; no NextToken loop
 // is needed.
-func ListBakedAMIs(ctx context.Context, client EC2AMIAPI) ([]types.Image, error) {
+//
+// When resourcePrefix is non-empty, an additional filter on the km:resource-prefix
+// tag is applied so that only AMIs belonging to this install are returned. Pass ""
+// to skip the prefix filter (e.g. --all-installs diagnostics or unit tests that
+// predate Phase 82).
+func ListBakedAMIs(ctx context.Context, client EC2AMIAPI, resourcePrefix string) ([]types.Image, error) {
+	filters := []types.Filter{
+		{Name: awssdk.String("tag:km:sandbox-id"), Values: []string{"*"}},
+		{Name: awssdk.String("state"), Values: []string{"available"}},
+	}
+	if resourcePrefix != "" {
+		filters = append(filters, types.Filter{
+			Name:   awssdk.String("tag:km:resource-prefix"),
+			Values: []string{resourcePrefix},
+		})
+	}
 	out, err := client.DescribeImages(ctx, &ec2.DescribeImagesInput{
-		Owners: []string{"self"},
-		Filters: []types.Filter{
-			{Name: awssdk.String("tag:km:sandbox-id"), Values: []string{"*"}},
-			{Name: awssdk.String("state"), Values: []string{"available"}},
-		},
+		Owners:  []string{"self"},
+		Filters: filters,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list baked AMIs: %w", err)

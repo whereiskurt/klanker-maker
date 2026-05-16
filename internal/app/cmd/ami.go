@@ -112,7 +112,7 @@ func newAMIListCmd(cfg *config.Config, ec2Factory func(region string) kmaws.EC2A
 				if client == nil {
 					continue
 				}
-				imgs, err := kmaws.ListBakedAMIs(ctx, client)
+				imgs, err := kmaws.ListBakedAMIs(ctx, client, cfg.GetResourcePrefix())
 				if err != nil {
 					return fmt.Errorf("list AMIs in %s: %w", r, err)
 				}

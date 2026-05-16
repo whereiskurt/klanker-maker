@@ -1853,14 +1853,14 @@ func sandboxUsesAMIInDoctor(sb kmaws.SandboxRecord, searchPaths []string, amiID 
 // in profileSearchPaths AND (c) not backing any running sandbox.
 // Returns CheckOK when no stale AMIs are found, CheckWarn with the list otherwise.
 // No deletion is performed in Phase 56 (flag-only).
-func checkStaleAMIs(ctx context.Context, region string, amiClient kmaws.EC2AMIAPI, lister SandboxLister, profileSearchPaths []string, staleDays int) CheckResult {
+func checkStaleAMIs(ctx context.Context, region string, amiClient kmaws.EC2AMIAPI, lister SandboxLister, profileSearchPaths []string, staleDays int, resourcePrefix string) CheckResult {
 	name := fmt.Sprintf("Stale AMIs (%s)", region)
 
 	if amiClient == nil {
 		return CheckResult{Name: name, Status: CheckSkipped, Message: "EC2 AMI client not available"}
 	}
 
-	images, err := kmaws.ListBakedAMIs(ctx, amiClient)
+	images, err := kmaws.ListBakedAMIs(ctx, amiClient, resourcePrefix)
 	if err != nil {
 		return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("could not list AMIs: %v", err)}
 	}
@@ -2588,11 +2588,12 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	if deps.EC2AMIClients != nil {
 		staleDays := cfg.GetDoctorStaleAMIDays()
 		searchPaths := cfg.GetProfileSearchPaths()
+		amiResourcePrefix := cfg.GetResourcePrefix()
 		for region, c := range deps.EC2AMIClients {
 			r := region
 			client := c
 			checks = append(checks, func(ctx context.Context) CheckResult {
-				return checkStaleAMIs(ctx, r, client, listerForCleanup, searchPaths, staleDays)
+				return checkStaleAMIs(ctx, r, client, listerForCleanup, searchPaths, staleDays, amiResourcePrefix)
 			})
 		}
 	}
