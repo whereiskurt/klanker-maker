@@ -3,6 +3,12 @@ variable "km_label" {
   description = "Klanker Maker site label (e.g. 'km')"
 }
 
+variable "resource_prefix" {
+  type        = string
+  description = "Install-level resource prefix (e.g. 'km', 'rg'). Emitted as the km:resource-prefix tag for cross-install discrimination."
+  default     = "km"
+}
+
 variable "km_random_suffix" {
   type        = string
   description = "Random suffix for globally-unique resource names"

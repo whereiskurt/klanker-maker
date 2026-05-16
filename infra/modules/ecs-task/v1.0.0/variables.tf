@@ -3,6 +3,12 @@ variable "km_label" {
   description = "Klanker Maker site label (e.g. 'km')"
 }
 
+variable "resource_prefix" {
+  type        = string
+  description = "Install-level resource prefix (e.g. 'km', 'rg'). Emitted as the km:resource-prefix tag for cross-install discrimination."
+  default     = "km"
+}
+
 variable "region_label" {
   type        = string
   description = "Short AWS region label (e.g. 'use1', 'usw2')"
