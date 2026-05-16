@@ -1704,7 +1704,7 @@ Plans:
 **Goal:** Fix the Phase 79 stop+resume integration gap so that on EC2 stop+resume cycles (where `/run` tmpfs is wiped and cloud-init does NOT re-run), `/run/km/audit-pipe` is recreated as a correctly-owned FIFO before km-presence's first heartbeat can stamp the path as a regular file (Layer 1: `/usr/lib/tmpfiles.d/km.conf` with `p+`), and if the path somehow ends up wrong-typed, the audit-log sidecar self-heals on startup (Layer 2: `openAuditPipeWithRetry` unlinks + mkfifos before opening). Validated end-to-end by a live `km pause`+`km resume` UAT proving `journalctl -u km-audit-log` shows `reading from audit pipe` (not `permission denied`) and `km doctor` reports `✓ Presence daemon healthy`.
 **Requirements**: L1-TMPFILES, L1-ORDER, L1-MODE, L2-SELFHEAL, L2-EXISTING-FIFO, UAT-RESUME (synthetic IDs; tactical bug fix, no formal v1 REQ-IDs)
 **Depends on:** Phase 79
-**Plans:** 4 plans
+**Plans:** 1/4 plans executed
 
 Plans:
 - [ ] 79.1-01-PLAN.md — Wave 0 RED test stubs: 3 failing userdata tests for Layer 1 (tmpfiles.d drop-in present/ordered/correct-mode) + 1 failing audit-log sub-test for Layer 2 (path-exists-as-regular-file self-heal)
@@ -1755,3 +1755,22 @@ Plans:
 - [ ] 81-04-PLAN.md — Compiler userdata wiring (heredoc systemd template units + /etc/km/runner-repos.json + binary download), security.go DNS allowlist auto-injection, compiler.go IAM session policy lambda:InvokeFunctionUrl statement (Wave 2)
 - [ ] 81-05-PLAN.md — internal/app/cmd/runner.go (km runner status|reattach|detach) + km destroy belt-and-suspenders Lambda DELETE + km create runtime injection of KM_ACTIONS_RUNNER_TOKEN_URL with visible-stderr per SLCK-11 lesson (Wave 3)
 - [ ] 81-06-PLAN.md — Four km doctor checks (actions_runner_app_perms ERROR + register_failures/ghosts/drift WARN) + km-presence sixth signal (Runner.Listener pgrep extension) + docs/github.md Self-hosted Actions runners section + CLAUDE.md Phase 81 section + operator checkpoint (migration + GitHub App re-install + end-to-end smoke test) (Wave 4)
+
+### Phase 82: Multi-instance resource_prefix isolation
+
+**Goal:** Close the gap between CLAUDE.md's 'multiple km installs per AWS account via resource_prefix' promise and reality — fix 3 hard Terraform blockers (SES rule-set, email-handler S3 IAM, ECS SSM ARN), 1 configure-flow footgun, 4 silent km-* fallbacks, add the km:resource-prefix install-discriminator tag at bake-time + via terraform + via a one-time km doctor --backfill-tags retro-sweep, and tag-filter doctor's cross-install destruction surfaces.
+**Requirements**: None — operator-driven phase (CONTEXT.md `<decisions>` block enumerates the locked deliverables in lieu of requirement IDs)
+**Depends on:** Phase 81
+**Plans:** 10 plans
+
+Plans:
+- [ ] 82-01-PLAN.md — Configure preserve-on-re-run + --reset-prefix flag (Wave 1, Go-only)
+- [ ] 82-02-PLAN.md — Hard-fail 4 silent km-* fallbacks (Wave 1, Go-only)
+- [ ] 82-03-PLAN.md — KMBakeTags emits km:resource-prefix tag (Wave 1, Go-only)
+- [ ] 82-04-PLAN.md — Doctor tag-filter: ListBakedAMIs + checkOrphanedEC2 (Wave 2, Go)
+- [ ] 82-05-PLAN.md — km doctor --backfill-tags command + cross-install guard (Wave 2, Go)
+- [ ] 82-06-PLAN.md — SES module resource_prefix variable + rule-set rename (Wave 3, Terraform)
+- [ ] 82-07-PLAN.md — Email-handler state_prefix variable (Wave 3, Terraform)
+- [ ] 82-08-PLAN.md — Three ECS modules use var.km_label for SSM ARN (Wave 3, Terraform)
+- [ ] 82-09-PLAN.md — Tag every sandbox-creating module with km:resource-prefix (Wave 3, Terraform)
+- [ ] 82-10-PLAN.md — Apply Wave 3 + km doctor --backfill-tags + docs updates (Wave 4, OPERATOR CHECKPOINT — NOT autonomous)
