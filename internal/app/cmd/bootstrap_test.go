@@ -3,6 +3,8 @@ package cmd_test
 import (
 	"bytes"
 	"context"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -386,5 +388,130 @@ func TestShowPrereqsNoOrganizationAccount(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "accounts.organization") {
 		t.Errorf("expected 'accounts.organization' in show-prereqs output; got:\n%s", out)
+	}
+}
+
+// --- Phase 84.1 plan 01 Task 2: end-to-end env-var assertions ---------------
+//
+// These tests verify GAP-1 / GAP-7 closure at the bootstrap level: by the time
+// runBootstrapSharedSES returns, every env var that site.hcl get_env() consults
+// must be exported. The third test is the "strict superset" canary — its
+// asserted-vars list MUST stay in sync with infra/live/**/terragrunt.hcl
+// get_env(...) calls.
+//
+// All three drive RunBootstrapSharedSES via the test seam, with dryRun=true and
+// a mockSESIdentityLister so no AWS call fires and no terragrunt subprocess runs.
+
+// bootstrapSharedSESCfg builds a representative cfg with every env-var-relevant
+// field populated. Reused across the three tests below.
+func bootstrapSharedSESCfg() *config.Config {
+	return &config.Config{
+		OrganizationAccountID: "111111111111",
+		DNSParentAccountID:    "222222222222",
+		ApplicationAccountID:  "333333333333",
+		Domain:                "test.example.com",
+		PrimaryRegion:         "us-east-1",
+		ArtifactsBucket:       "km-artifacts-12345",
+		Route53ZoneID:         "Z08522462XE7ANTIK5FTX",
+		ResourcePrefix:        "km",
+		EmailSubdomain:        "sandboxes",
+		OperatorEmail:         "operator-km@sandboxes.test.example.com",
+	}
+}
+
+// clearTerragruntEnv clears every env var that ExportTerragruntEnvVars writes,
+// using t.Setenv so cleanup happens automatically at test end.
+func clearTerragruntEnv(t *testing.T) {
+	t.Helper()
+	vars := []string{
+		"KM_ARTIFACTS_BUCKET",
+		"KM_ACCOUNTS_ORGANIZATION",
+		"KM_ACCOUNTS_DNS_PARENT",
+		"KM_ACCOUNTS_APPLICATION",
+		"KM_DOMAIN",
+		"KM_REGION",
+		"KM_REGION_LABEL",
+		"KM_OPERATOR_EMAIL",
+		"KM_SCHEDULER_ROLE_ARN",
+		"KM_RESOURCE_PREFIX",
+		"KM_EMAIL_SUBDOMAIN",
+		"KM_ROUTE53_ZONE_ID",
+	}
+	for _, v := range vars {
+		t.Setenv(v, "")
+		os.Unsetenv(v)
+	}
+}
+
+// TestRunBootstrapSharedSES_ExportsKMRoute53ZoneID is the GAP-1 closure test:
+// km bootstrap must export KM_ROUTE53_ZONE_ID before any terragrunt invocation
+// so the foundation MX/DKIM/verification record applies can resolve the zone.
+func TestRunBootstrapSharedSES_ExportsKMRoute53ZoneID(t *testing.T) {
+	clearTerragruntEnv(t)
+
+	cfg := bootstrapSharedSESCfg()
+	mock := &mockSESIdentityLister{} // both rule set + identity absent → dry-run-safe
+
+	err := cmd.RunBootstrapSharedSES(context.Background(), cfg, true, io.Discard, mock)
+	if err != nil {
+		t.Fatalf("RunBootstrapSharedSES dry-run: %v", err)
+	}
+
+	if got := os.Getenv("KM_ROUTE53_ZONE_ID"); got != "Z08522462XE7ANTIK5FTX" {
+		t.Errorf("KM_ROUTE53_ZONE_ID = %q, want %q (GAP-1 regression)", got, "Z08522462XE7ANTIK5FTX")
+	}
+}
+
+// TestRunBootstrapSharedSES_ExportsKMArtifactsBucket is the GAP-7 closure test:
+// km bootstrap must export KM_ARTIFACTS_BUCKET so direct-terragrunt operator
+// workflows produce well-formed S3 ARNs.
+func TestRunBootstrapSharedSES_ExportsKMArtifactsBucket(t *testing.T) {
+	clearTerragruntEnv(t)
+
+	cfg := bootstrapSharedSESCfg()
+	mock := &mockSESIdentityLister{}
+
+	err := cmd.RunBootstrapSharedSES(context.Background(), cfg, true, io.Discard, mock)
+	if err != nil {
+		t.Fatalf("RunBootstrapSharedSES dry-run: %v", err)
+	}
+
+	if got := os.Getenv("KM_ARTIFACTS_BUCKET"); got != "km-artifacts-12345" {
+		t.Errorf("KM_ARTIFACTS_BUCKET = %q, want %q (GAP-7 regression)", got, "km-artifacts-12345")
+	}
+}
+
+// TestRunBootstrapSharedSES_ExportsAllSiteHCLVars is the strict-superset canary.
+// Must remain in sync with infra/live/**/terragrunt.hcl get_env(...) calls.
+// If a new env var is added to site.hcl, add it here and to ExportTerragruntEnvVars.
+func TestRunBootstrapSharedSES_ExportsAllSiteHCLVars(t *testing.T) {
+	clearTerragruntEnv(t)
+
+	cfg := bootstrapSharedSESCfg()
+	mock := &mockSESIdentityLister{}
+
+	err := cmd.RunBootstrapSharedSES(context.Background(), cfg, true, io.Discard, mock)
+	if err != nil {
+		t.Fatalf("RunBootstrapSharedSES dry-run: %v", err)
+	}
+
+	// Must remain in sync with infra/live/**/terragrunt.hcl get_env(...) calls.
+	required := []string{
+		"KM_ACCOUNTS_APPLICATION",
+		"KM_ACCOUNTS_DNS_PARENT",
+		"KM_ACCOUNTS_ORGANIZATION",
+		"KM_ARTIFACTS_BUCKET",
+		"KM_DOMAIN",
+		"KM_EMAIL_SUBDOMAIN",
+		"KM_REGION",
+		"KM_REGION_LABEL",
+		"KM_RESOURCE_PREFIX",
+		"KM_ROUTE53_ZONE_ID",
+	}
+
+	for _, v := range required {
+		if got := os.Getenv(v); got == "" {
+			t.Errorf("%s not exported by RunBootstrapSharedSES (strict-superset violation)", v)
+		}
 	}
 }
