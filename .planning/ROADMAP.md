@@ -1704,7 +1704,7 @@ Plans:
 **Goal:** Fix the Phase 79 stop+resume integration gap so that on EC2 stop+resume cycles (where `/run` tmpfs is wiped and cloud-init does NOT re-run), `/run/km/audit-pipe` is recreated as a correctly-owned FIFO before km-presence's first heartbeat can stamp the path as a regular file (Layer 1: `/usr/lib/tmpfiles.d/km.conf` with `p+`), and if the path somehow ends up wrong-typed, the audit-log sidecar self-heals on startup (Layer 2: `openAuditPipeWithRetry` unlinks + mkfifos before opening). Validated end-to-end by a live `km pause`+`km resume` UAT proving `journalctl -u km-audit-log` shows `reading from audit pipe` (not `permission denied`) and `km doctor` reports `✓ Presence daemon healthy`.
 **Requirements**: L1-TMPFILES, L1-ORDER, L1-MODE, L2-SELFHEAL, L2-EXISTING-FIFO, UAT-RESUME (synthetic IDs; tactical bug fix, no formal v1 REQ-IDs)
 **Depends on:** Phase 79
-**Plans:** 1/4 plans executed
+**Plans:** 3/4 plans executed
 
 Plans:
 - [ ] 79.1-01-PLAN.md — Wave 0 RED test stubs: 3 failing userdata tests for Layer 1 (tmpfiles.d drop-in present/ordered/correct-mode) + 1 failing audit-log sub-test for Layer 2 (path-exists-as-regular-file self-heal)

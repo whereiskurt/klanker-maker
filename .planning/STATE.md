@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 79.1-02-PLAN.md — Layer 1 tmpfiles.d drop-in GREEN, 3 tests passing
-last_updated: "2026-05-16T05:53:25.266Z"
+stopped_at: Completed 79.1-03-PLAN.md — Layer 2 self-heal GREEN, all 4 sub-tests passing
+last_updated: "2026-05-16T05:56:42.760Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 90
   completed_phases: 79
   total_plans: 343
-  completed_plans: 294
+  completed_plans: 295
   percent: 93
 ---
 
@@ -333,6 +333,7 @@ Progress: [█████████░] 93%
 | Phase 74-slack-mrkdwn-rendering P02 | 6 days | 6 tasks | 27 files |
 | Phase 79.1 P01 | 97 | 2 tasks | 2 files |
 | Phase 79.1 P02 | 4min | 1 tasks | 1 files |
+| Phase 79.1 P03 | 3min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -954,6 +955,7 @@ Recent decisions affecting current work:
 - [Phase 79.1]: Regex-tolerant whitespace for tmpfiles.d column assertions; exact mode+owner strings remain strict
 - [Phase 79.1]: Use p+ (not p) for tmpfiles.d audit-pipe entry: p alone is a no-op when a regular file exists at the path
 - [Phase 79.1]: Strip backticks from Go raw string template comments: backtick inside const backtick-string closes the literal
+- [Phase 79.1]: Self-heal on wrong-type path uses os.Remove + syscall.Mkfifo; on Remove failure record lastErr and let OpenFile fail naturally (consistent with existing retry discipline)
 
 ### Roadmap Evolution
 
@@ -1058,6 +1060,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T05:53:25.259Z
-Stopped at: Completed 79.1-02-PLAN.md — Layer 1 tmpfiles.d drop-in GREEN, 3 tests passing
+Last session: 2026-05-16T05:56:42.753Z
+Stopped at: Completed 79.1-03-PLAN.md — Layer 2 self-heal GREEN, all 4 sub-tests passing
 Resume file: None
