@@ -1811,7 +1811,7 @@ Phase closes when (a) a second install can run `km init --dry-run=false` against
 
 **Requirements:** SES-PREFIX-ADDRESS, SES-SHARED-RULESET, SES-PER-INSTALL-RULES, SES-82.1-REMOVAL, SES-CONFIGURE-WIRING, SES-HANDLER-LOOKUP, SES-DOCTOR-ORPHANS (synthetic IDs — supersedes SES-ACTIVE-RULESET from Phase 82.1)
 **Depends on:** Phase 82.1
-**Plans:** 7/10 plans executed
+**Plans:** 8/10 plans executed
 
 Plans:
 - [ ] 84-01-wave0-test-scaffolds-PLAN.md — Wave 0 Nyquist failing-test infrastructure (11 stubs + Makefile grep gate)

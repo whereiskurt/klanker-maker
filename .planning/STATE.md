@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84-08-phase-82.1-hard-removal-and-grep-gate-PLAN.md
-last_updated: "2026-05-16T20:27:42.080Z"
+stopped_at: Completed 84-07 km-bootstrap-shared-ses-and-doctor-check-PLAN.md
+last_updated: "2026-05-16T20:41:16.898Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 93
   completed_phases: 82
   total_plans: 363
-  completed_plans: 316
+  completed_plans: 317
   percent: 93
 ---
 
@@ -355,6 +355,7 @@ Progress: [█████████░] 93%
 | Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P01 | 622 | 3 tasks | 5 files |
 | Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P04 | 770 | 1 tasks | 3 files |
 | Phase 84 P08 | 81 | 3 tasks | 2 files |
+| Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P07 | 45 | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -1013,6 +1014,7 @@ Recent decisions affecting current work:
 - [Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix]: deriveOperatorEmail returns empty string on any blank input; callers handle fallback
 - [Phase 84]: Grep gate excludes v1.0.0 dir via --exclude-dir='v1.0.0' (catches both canonical infra/modules/ses/v1.0.0/ and cached copies in .terragrunt-cache/)
 - [Phase 84]: No umbrella test target exists in Makefile; test-no-82.1-leftovers CI integration is operator-driven
+- [Phase 84-07]: SESIdentityLister combines ListReceiptRuleSets + ListEmailIdentities; InitSESPreflight is package-level func var for testable init gate; W0-06/W0-07 updated to use real mocks
 
 ### Roadmap Evolution
 
@@ -1118,6 +1120,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T20:27:42.072Z
-Stopped at: Completed 84-08-phase-82.1-hard-removal-and-grep-gate-PLAN.md
+Last session: 2026-05-16T20:41:16.891Z
+Stopped at: Completed 84-07 km-bootstrap-shared-ses-and-doctor-check-PLAN.md
 Resume file: None
