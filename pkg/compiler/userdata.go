@@ -979,6 +979,21 @@ touch /run/km/learn-commands.log
 chmod 666 /run/km/learn-commands.log
 {{- end }}
 
+# Layer 1 (Phase 79.1): systemd-tmpfiles drop-in for /run/km/audit-pipe.
+# Ensures the FIFO is recreated with correct ownership on every boot
+# (including EC2 stop+resume, when cloud-init does NOT re-run and the
+# /run tmpfs is wiped). systemd-tmpfiles-setup.service runs before
+# sysinit.target, so the FIFO exists before km-audit-log.service or
+# km-presence.service start. The p+ type replaces a regular file
+# (e.g., one left by km-presence tee racing the sidecar on a prior
+# boot) -- p alone would be a silent no-op in that case.
+cat > /usr/lib/tmpfiles.d/km.conf << 'TMPFILES'
+# Klankrmkr sandbox: volatile runtime directory and audit-pipe FIFO.
+# systemd-tmpfiles-setup.service reads this before sysinit.target on every boot.
+d  /run/km                  0755 km-sidecar km-sidecar - -
+p+ /run/km/audit-pipe       0666 km-sidecar km-sidecar - -
+TMPFILES
+
 cat > /etc/systemd/system/km-audit-log.service << 'UNIT'
 [Unit]
 Description=Klankrmkr audit log sidecar
