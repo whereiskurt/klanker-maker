@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/textproto"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -1105,6 +1106,38 @@ func TestHandle_EmptyAllowlist(t *testing.T) {
 	}
 }
 
+// buildPlainEmailWithTo creates a single-part text/plain email with custom From, To, and Subject.
+// Used by recipient-verification tests that need to control the To: header directly.
+func buildPlainEmailWithTo(from, to, subject, body string) []byte {
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "From: %s\r\n", from)
+	fmt.Fprintf(&buf, "To: %s\r\n", to)
+	fmt.Fprintf(&buf, "Subject: %s\r\n", subject)
+	fmt.Fprintf(&buf, "MIME-Version: 1.0\r\n")
+	fmt.Fprintf(&buf, "Content-Type: text/plain; charset=utf-8\r\n")
+	fmt.Fprintf(&buf, "\r\n")
+	fmt.Fprint(&buf, body)
+	return buf.Bytes()
+}
+
+// captureStderr replaces os.Stderr with a pipe and returns a function that
+// restores the original stderr and returns everything written to the pipe.
+func captureStderr() func() string {
+	r, w, err := os.Pipe()
+	if err != nil {
+		panic("captureStderr: os.Pipe failed: " + err.Error())
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	return func() string {
+		w.Close()
+		os.Stderr = orig
+		var buf bytes.Buffer
+		buf.ReadFrom(r)
+		return buf.String()
+	}
+}
+
 // Test: S3 error fetching km-config.yaml → fail-open (proceed normally).
 func TestHandle_AllowlistS3Error(t *testing.T) {
 	emailBody := fmt.Sprintf("KM-AUTH: %s\nHello\n", testSafePhrase)
@@ -1128,5 +1161,91 @@ func TestHandle_AllowlistS3Error(t *testing.T) {
 	// Should proceed — fail-open when km-config.yaml is missing
 	if len(ses.sent) == 0 {
 		t.Errorf("expected SES reply when km-config.yaml missing (fail-open), got none")
+	}
+}
+
+// W0-04: email addressed to this install's operator address is NOT silently dropped.
+// KM_RESOURCE_PREFIX=kph, To: operator-kph@sandboxes.example.com
+// The existing allowlist/safe-phrase pipeline should proceed (test stops at safe-phrase
+// failure or later stage — not at the recipient-verification gate).
+func TestHandle_OperatorAddress_OwnPrefix(t *testing.T) {
+	t.Setenv("KM_RESOURCE_PREFIX", "kph")
+
+	emailBody := "Hello"
+	// To: matches operator-kph@sandboxes.example.com — the expected address for prefix "kph"
+	rawEmail := buildPlainEmailWithTo(
+		"user@example.com",
+		"operator-kph@sandboxes.example.com",
+		"Hello",
+		emailBody,
+	)
+
+	s3data := map[string][]byte{
+		"mail/msg-ownprefix": rawEmail,
+	}
+	eb := &mockEB{}
+	ses := &mockSES{}
+	h := newTestHandler(s3data, testSafePhrase, eb, ses)
+	// Domain must match the full email domain including subdomain
+	h.Domain = "sandboxes.example.com"
+
+	flush := captureStderr()
+	event := buildEventRecord("test-bucket", "mail/msg-ownprefix")
+	err := h.Handle(context.Background(), event)
+	captured := flush()
+
+	// Handle must return nil (not a hard error) — the recipient gate passes and
+	// the email reaches the safe-phrase check (missing KM-AUTH → silent drop, not error).
+	if err != nil {
+		t.Fatalf("Handle returned unexpected error for own-prefix email: %v", err)
+	}
+
+	// The recipient-verification "silently dropping" log must NOT appear.
+	if strings.Contains(captured, "silently dropping email to operator-kph") {
+		t.Errorf("own-prefix email was silently dropped by recipient gate; stderr: %q", captured)
+	}
+}
+
+// W0-05: email addressed to a FOREIGN install's operator address is silently dropped.
+// KM_RESOURCE_PREFIX=kph, To: operator-rg@sandboxes.example.com
+// Handle must return nil AND write the "silently dropping" log line to stderr.
+func TestHandle_OperatorAddress_ForeignPrefix_Drops(t *testing.T) {
+	t.Setenv("KM_RESOURCE_PREFIX", "kph")
+
+	emailBody := fmt.Sprintf("KM-AUTH: %s\nHello\n", testSafePhrase)
+	// To: foreign prefix "rg" — this install should drop it
+	rawEmail := buildPlainEmailWithTo(
+		"user@example.com",
+		"operator-rg@sandboxes.example.com",
+		"Hello",
+		emailBody,
+	)
+
+	s3data := map[string][]byte{
+		"mail/msg-foreignprefix": rawEmail,
+	}
+	eb := &mockEB{}
+	ses := &mockSES{}
+	h := newTestHandler(s3data, testSafePhrase, eb, ses)
+	h.Domain = "sandboxes.example.com"
+
+	flush := captureStderr()
+	event := buildEventRecord("test-bucket", "mail/msg-foreignprefix")
+	err := h.Handle(context.Background(), event)
+	captured := flush()
+
+	// Must return nil — silent drop, not an error
+	if err != nil {
+		t.Fatalf("Handle returned unexpected error for foreign-prefix email: %v", err)
+	}
+
+	// No SES sends should occur
+	if len(ses.sent) != 0 {
+		t.Errorf("expected no SES sends for foreign-prefix email, got %d", len(ses.sent))
+	}
+
+	// The "silently dropping" log line must appear on stderr
+	if !strings.Contains(captured, "silently dropping") {
+		t.Errorf("expected 'silently dropping' in stderr for foreign-prefix email; got: %q", captured)
 	}
 }
