@@ -3,9 +3,11 @@ package cmd
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/md5"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
@@ -29,6 +32,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/ses"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
@@ -3272,4 +3276,135 @@ func checkSESRules(ctx context.Context, client SESReceiptRuleAPI, localPrefix st
 		Status:  CheckOK,
 		Message: fmt.Sprintf("SES rules healthy (%d rules for prefix %q)", ownCount, localPrefix),
 	}
+}
+
+// =============================================================================
+// Phase 84.1 Plan 03 — GAP-8: state-lock digest drift detection.
+//
+// Ctrl-C of a mid-flight `terragrunt apply` can leave the S3 state object and
+// the DynamoDB lock-table `Digest` attribute out of sync. Subsequent
+// terragrunt runs fail with cryptic checksum errors. checkStateLockDigest
+// detects this drift and surfaces a copy-paste recovery command — read-only:
+// it never writes to either AWS service.
+//
+// Source: Phase 84 UAT (`84-10-UAT.md` observation #8). Detection lives here;
+// recovery procedure is documented in OPERATOR-GUIDE.md by Plan 84.1-05.
+// =============================================================================
+
+// S3StateReader is the narrow S3 surface used by checkStateLockDigest. The
+// real *s3.Client satisfies this interface directly.
+type S3StateReader interface {
+	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+}
+
+// LockDigestReader is the narrow DynamoDB surface used by checkStateLockDigest.
+// It satisfies dynamodb.ScanAPIClient so the real *dynamodb.Client can be
+// passed directly to dynamodb.NewScanPaginator (H7 from plan-checker rev 1 —
+// aws-sdk-go-v2 does NOT auto-paginate Scan; a single call caps at 1MB).
+type LockDigestReader interface {
+	Scan(ctx context.Context, params *dynamodb.ScanInput, optFns ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error)
+}
+
+// checkStateLockDigest compares the MD5 of every Terraform state object in
+// the configured backend bucket against the Digest attribute in the
+// terragrunt lock table. A mismatch typically indicates a Ctrl-C'd apply
+// that left S3 state and DynamoDB lock-table out of sync (Phase 84 UAT GAP-8).
+//
+// Returns CheckWarn (not Error) because the mismatch blocks terragrunt
+// operations but does NOT corrupt state — the S3 state is the source of
+// truth and is correct; only the lock-table digest is stale.
+//
+// Read-only: never writes to either AWS service. Remediation is a copy-paste
+// command the operator runs deliberately.
+func checkStateLockDigest(ctx context.Context, s3Client S3StateReader, ddbClient LockDigestReader, lockTableName string) CheckResult {
+	const name = "Terraform state lock digest"
+	if s3Client == nil || ddbClient == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "S3 or DynamoDB client unavailable"}
+	}
+
+	// H7 (plan-checker rev 1): MUST use NewScanPaginator explicitly.
+	// aws-sdk-go-v2 does NOT auto-paginate Scan — a single Scan call caps at
+	// 1MB of items. A km install with many modules can exceed that bound.
+	paginator := dynamodb.NewScanPaginator(ddbClient, &dynamodb.ScanInput{TableName: awssdk.String(lockTableName)})
+
+	var mismatches []string
+	var remediations []string
+	checked := 0
+
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			// Distinguish "table doesn't exist" (CheckSkipped) from other errors (CheckError).
+			var rnf *dynamodbtypes.ResourceNotFoundException
+			if errors.As(err, &rnf) {
+				return CheckResult{Name: name, Status: CheckSkipped, Message: fmt.Sprintf("lock table %q does not exist", lockTableName)}
+			}
+			return CheckResult{Name: name, Status: CheckError, Message: fmt.Sprintf("scan lock table page: %v", err)}
+		}
+		for _, item := range page.Items {
+			lockIDAttr, ok := item["LockID"].(*dynamodbtypes.AttributeValueMemberS)
+			if !ok || !strings.HasSuffix(lockIDAttr.Value, "-md5") {
+				continue
+			}
+			digestAttr, ok := item["Digest"].(*dynamodbtypes.AttributeValueMemberS)
+			if !ok {
+				continue
+			}
+			// LockID format: <bucket>/<state-key>-md5
+			bucket, key, ok := parseLockID(lockIDAttr.Value)
+			if !ok {
+				continue
+			}
+			// GetObject + md5
+			obj, gErr := s3Client.GetObject(ctx, &s3.GetObjectInput{Bucket: awssdk.String(bucket), Key: awssdk.String(key)})
+			if gErr != nil {
+				// Orphaned lock — state object gone but digest still in table.
+				var noSuchKey *s3types.NoSuchKey
+				if errors.As(gErr, &noSuchKey) {
+					mismatches = append(mismatches, fmt.Sprintf("%s (orphan: state object missing)", lockIDAttr.Value))
+				}
+				continue
+			}
+			body, rErr := io.ReadAll(obj.Body)
+			_ = obj.Body.Close()
+			if rErr != nil {
+				continue
+			}
+			actualHash := fmt.Sprintf("%x", md5.Sum(body))
+			checked++
+			if actualHash != digestAttr.Value {
+				mismatches = append(mismatches, lockIDAttr.Value)
+				remediations = append(remediations, fmt.Sprintf(
+					`aws dynamodb update-item --table-name %s --key '{"LockID":{"S":"%s"}}' --update-expression 'SET Digest = :d' --expression-attribute-values '{":d":{"S":"%s"}}'`,
+					lockTableName, lockIDAttr.Value, actualHash))
+			}
+		}
+	}
+
+	if len(mismatches) > 0 {
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("state digest mismatch in %d item(s): %s", len(mismatches), strings.Join(mismatches, ", ")),
+			Remediation: "Recovery (run for each mismatched item):\n  " + strings.Join(remediations, "\n  "),
+		}
+	}
+	return CheckResult{Name: name, Status: CheckOK, Message: fmt.Sprintf("state digest consistent (%d items checked)", checked)}
+}
+
+// parseLockID splits a terragrunt LockID of the form "<bucket>/<key>-md5"
+// into its bucket and key components.
+//
+// H8 (plan-checker rev 1): first-slash split is correct because S3 bucket
+// names cannot contain "/" (AWS rule: bucket names are 3-63 chars,
+// lowercase letters/digits/dots/hyphens only). The state key portion CAN
+// contain slashes (e.g. "use1/ses/terraform.tfstate") and must be preserved
+// intact for the GetObject call.
+func parseLockID(lockID string) (bucket, key string, ok bool) {
+	trimmed := strings.TrimSuffix(lockID, "-md5")
+	idx := strings.Index(trimmed, "/")
+	if idx < 0 {
+		return "", "", false
+	}
+	return trimmed[:idx], trimmed[idx+1:], true
 }
