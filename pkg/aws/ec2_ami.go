@@ -75,16 +75,21 @@ func AMIName(profileName, sandboxID string, t time.Time, prefix ...string) strin
 // The kmVersion parameter should be the operator-side km binary version string
 // (e.g. "v1.2.3"); inject it at the call site to avoid coupling to a global.
 //
+// resourcePrefix is the install discriminator (cfg.GetResourcePrefix(), e.g.
+// "km" or "rg"). It is stored as the km:resource-prefix tag so that
+// ListBakedAMIs and km doctor can filter each install's AMIs independently.
+//
 // If alias is empty the km:alias tag is omitted from the returned slice.
-func KMBakeTags(sandboxID, profileName, alias, instanceType, sourceRegion, kmVersion string) []types.Tag {
+func KMBakeTags(sandboxID, profileName, alias, instanceType, sourceRegion, kmVersion, resourcePrefix string) []types.Tag {
 	tags := []types.Tag{
-		{Key: awssdk.String("km:sandbox-id"), Value: awssdk.String(sandboxID)},
-		{Key: awssdk.String("km:profile"), Value: awssdk.String(profileName)},
 		{Key: awssdk.String("km:baked-at"), Value: awssdk.String(time.Now().UTC().Format(time.RFC3339))},
-		{Key: awssdk.String("km:source-region"), Value: awssdk.String(sourceRegion)},
-		{Key: awssdk.String("km:instance-type"), Value: awssdk.String(instanceType)},
 		{Key: awssdk.String("km:baked-by"), Value: awssdk.String("km")},
+		{Key: awssdk.String("km:instance-type"), Value: awssdk.String(instanceType)},
 		{Key: awssdk.String("km:km-version"), Value: awssdk.String(kmVersion)},
+		{Key: awssdk.String("km:profile"), Value: awssdk.String(profileName)},
+		{Key: awssdk.String("km:resource-prefix"), Value: awssdk.String(resourcePrefix)},
+		{Key: awssdk.String("km:sandbox-id"), Value: awssdk.String(sandboxID)},
+		{Key: awssdk.String("km:source-region"), Value: awssdk.String(sourceRegion)},
 		{Key: awssdk.String("Name"), Value: awssdk.String(AMIName(profileName, sandboxID, time.Now().UTC()))},
 	}
 	if alias != "" {

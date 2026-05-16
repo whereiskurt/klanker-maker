@@ -716,7 +716,7 @@ func bakeFromSandboxInternal(ctx context.Context, cfg *config.Config, rec kmaws.
 	}
 
 	amiName := kmaws.AMIName(profileName, sandboxID, time.Now(), cfg.GetResourcePrefix()+"-")
-	tags := kmaws.KMBakeTags(sandboxID, profileName, rec.Alias, "", rec.Region, kmVersion)
+	tags := kmaws.KMBakeTags(sandboxID, profileName, rec.Alias, "", rec.Region, kmVersion, cfg.GetResourcePrefix())
 
 	if description == "" {
 		description = fmt.Sprintf("km bake of sandbox %s (profile: %s)", sandboxID, profileName)
