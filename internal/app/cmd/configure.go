@@ -141,9 +141,17 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 	// operator has not requested a reset, use its resource_prefix as the default
 	// so a bare re-run (e.g. to update operator_email) does not silently reset the
 	// prefix back to "km".
+	//
+	// The effective directory mirrors the write-path logic at the bottom of this
+	// function: use outputDir when provided, otherwise resolve via findRepoRoot().
+	// This ensures that bare invocations (no --output-dir) also preserve the prefix.
 	existingPrefix := ""
-	if !resetPrefix && outputDir != "" {
-		existingConfigPath := filepath.Join(outputDir, "km-config.yaml")
+	if !resetPrefix {
+		effectiveDir := outputDir
+		if effectiveDir == "" {
+			effectiveDir = findRepoRoot()
+		}
+		existingConfigPath := filepath.Join(effectiveDir, "km-config.yaml")
 		if raw, readErr := os.ReadFile(existingConfigPath); readErr == nil {
 			var existing platformConfig
 			if unmarshalErr := yaml.Unmarshal(raw, &existing); unmarshalErr == nil && existing.ResourcePrefix != "" {
