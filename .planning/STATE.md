@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 79.1-03-PLAN.md — Layer 2 self-heal GREEN, all 4 sub-tests passing
-last_updated: "2026-05-16T05:56:42.760Z"
+stopped_at: "Completed 79.1-04-PLAN.md — Phase 79.1 closeout: CLAUDE.md docs + phase SUMMARY + UAT-RESUME satisfied (operator-approved live AWS run on learn-ec01f7f6)"
+last_updated: "2026-05-16T06:26:28.444Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 90
-  completed_phases: 79
+  completed_phases: 80
   total_plans: 343
-  completed_plans: 295
+  completed_plans: 296
   percent: 93
 ---
 
@@ -334,6 +334,7 @@ Progress: [█████████░] 93%
 | Phase 79.1 P01 | 97 | 2 tasks | 2 files |
 | Phase 79.1 P02 | 4min | 1 tasks | 1 files |
 | Phase 79.1 P03 | 3min | 1 tasks | 1 files |
+| Phase 79.1 P04 | 600s | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -956,6 +957,8 @@ Recent decisions affecting current work:
 - [Phase 79.1]: Use p+ (not p) for tmpfiles.d audit-pipe entry: p alone is a no-op when a regular file exists at the path
 - [Phase 79.1]: Strip backticks from Go raw string template comments: backtick inside const backtick-string closes the literal
 - [Phase 79.1]: Self-heal on wrong-type path uses os.Remove + syscall.Mkfifo; on Remove failure record lastErr and let OpenFile fail naturally (consistent with existing retry discipline)
+- [Phase 79.1]: Insert tmpfiles.d p+ drop-in in EC2 userdata: systemd-tmpfiles-setup.service runs before sysinit.target on every boot, recreating the audit-pipe FIFO before km-presence or km-audit-log can race
+- [Phase 79.1]: Use p+ (not p) in tmpfiles.d: p is a silent no-op when a regular file exists at the path; p+ atomically replaces wrong-type entries — required for FIFO entries in tmpfs directories subject to write races
 
 ### Roadmap Evolution
 
@@ -1060,6 +1063,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T05:56:42.753Z
-Stopped at: Completed 79.1-03-PLAN.md — Layer 2 self-heal GREEN, all 4 sub-tests passing
+Last session: 2026-05-16T06:26:28.435Z
+Stopped at: Completed 79.1-04-PLAN.md — Phase 79.1 closeout: CLAUDE.md docs + phase SUMMARY + UAT-RESUME satisfied (operator-approved live AWS run on learn-ec01f7f6)
 Resume file: None
