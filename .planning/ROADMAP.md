@@ -1786,3 +1786,19 @@ Plans:
 - [ ] 82.1-01-PLAN.md — Bare-path configure preserve: extend outputDir guard to findRepoRoot() fallback (Wave 1, TDD, Go-only)
 - [ ] 82.1-02-PLAN.md — service_hcl.go stream-table prefix-aware derivation: replace literal at line 784 (Wave 1, TDD, Go-only)
 - [ ] 82.1-03-PLAN.md — SES activate_rule_set opt-in variable: count-gate aws_ses_active_receipt_rule_set + operator checkpoint (Wave 2, Terraform + docs)
+
+### Phase 83: Add km event command for operator-controlled EventBridge
+
+**Goal:** Operators can declare durable, cron-driven (and event-pattern-driven) platform actions in git-tracked YAML manifests deployed via terragrunt, with a singleton km-runner Lambda routing scheduled `km <command>` invocations. Preserves ad-hoc `km at` for one-shot operations and removes recurring support from `km at` (hard cut).
+**Requirements**: operator-feature-83 (synthetic ID — no v1 REQUIREMENTS.md entries; tracked under "Operator-controlled EventBridge")
+**Depends on:** Phase 81
+**Plans:** 7 plans
+
+Plans:
+- [ ] 83-01-wave0-test-scaffolds-PLAN.md — Wave 0 Nyquist test infrastructure (4 test files + mockEventRunner + pkg/events/testdata fixtures)
+- [ ] 83-02-foundations-pkg-events-and-config-PLAN.md — pkg/events package (manifest schema + at()→cron conversion + JSON Schema) + config.EventConfig + km-operator-policy widened to custom bus
+- [ ] 83-03-terraform-modules-bus-and-rule-PLAN.md — Two new Terraform modules: operator-event-bus/v1.0.0/ (singleton bus + 7-day archive + km-runner Lambda + IAM) and operator-event-rule/v1.0.0/ (per-rule resources)
+- [ ] 83-04-km-runner-lambda-binary-and-makefile-PLAN.md — cmd/km-runner Lambda binary (handler + main) + Makefile build-km-runner target (zips bootstrap + km together)
+- [ ] 83-05-km-event-cli-PLAN.md — internal/app/cmd/event.go Cobra tree (add/list/rm/apply) modeled on Phase 80 km cluster add + EventRunner seam + HCL template + PersistEventsConfig + root.go registration
+- [ ] 83-06-cleanup-km-init-doctor-PLAN.md — km at --cron strip + recurring NL reject + operator-event-bus in km init regionalModules + km-runner in lambdaBinaries + km doctor operator_event_rules_healthy WARN check
+- [ ] 83-07-docs-and-uat-PLAN.md — docs/operator-events.md operator runbook + CLAUDE.md Phase 83 section + 12-step operator UAT against real AWS + STATE.md/ROADMAP.md closeout
