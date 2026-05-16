@@ -1836,7 +1836,7 @@ Plans:
 
 Plans:
 - [ ] 84.1-01-PLAN.md — Unified ExportTerragruntEnvVars helper closing GAP-1 + GAP-7 (Wave 1, TDD, Go-only)
-- [ ] 84.1-02-PLAN.md — Terragrunt runner per-module timeout + quiet-mode heartbeat closing GAP-4 + GAP-5 (Wave 1, TDD, Go-only)
+- [ ] 84.1-02-PLAN.md — Terragrunt runner per-module timeout + quiet-mode heartbeat closing GAP-4 + GAP-5 + bounded km bootstrap defaultApplyTerragrunt (H6) (Wave 2, TDD, Go-only — depends on 84.1-01 per C1 file-conflict fix)
 - [ ] 84.1-03-PLAN.md — km doctor state-lock-digest mismatch detection + Remediation closing GAP-8 (Wave 1, TDD, Go-only)
 - [ ] 84.1-04-PLAN.md — Foundation register_*=manage semantics + import/removed blocks for safe in-place v1.0.0→v2.0.0 cutover closing GAP-2 + GAP-3 + GAP-6 (Wave 2, Terraform + Go)
 - [ ] 84.1-05-PLAN.md — Operator UAT (3 skipped Phase 84 closures + DRIFT-A/B/C) + OPERATOR-GUIDE.md state-digest recovery + CLAUDE.md Phase 84.1 section + Phase 84 SUMMARY drift notes (Wave 3, OPERATOR CHECKPOINT — NOT autonomous)
