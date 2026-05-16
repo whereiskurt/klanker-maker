@@ -645,10 +645,37 @@ func runInitPartial(cfg *config.Config, awsProfile, region string, verbose, side
 	return nil
 }
 
-// ExportConfigEnvVars exports the config-derived env vars that Terragrunt's site.hcl uses via
-// get_env(). Exported so cmd_test package can verify the correct vars are set without triggering
-// a full runInit (which requires real AWS credentials).
+// ExportConfigEnvVars exports the full set of env vars that Terragrunt's site.hcl
+// (and the per-module terragrunt.hcl files) consume via get_env(). Exported so the
+// cmd_test package can verify the correct vars are set without triggering a full
+// runInit (which requires real AWS credentials).
+//
+// Every km command that invokes terragrunt must call this exactly once before the
+// first terragrunt invocation. The current canonical set is:
+//
+//	KM_ARTIFACTS_BUCKET, KM_ACCOUNTS_ORGANIZATION, KM_ACCOUNTS_DNS_PARENT,
+//	KM_ACCOUNTS_APPLICATION, KM_DOMAIN, KM_REGION, KM_REGION_LABEL,
+//	KM_OPERATOR_EMAIL, KM_SCHEDULER_ROLE_ARN, KM_RESOURCE_PREFIX,
+//	KM_EMAIL_SUBDOMAIN, KM_ROUTE53_ZONE_ID
+//
+// Phase 84.1 (plan 01) added KM_ROUTE53_ZONE_ID + KM_REGION_LABEL to close GAP-1 /
+// GAP-7 from Phase 84 UAT (`km bootstrap --shared-ses` previously failed to apply
+// the foundation MX/DKIM/verification records because KM_ROUTE53_ZONE_ID was unset).
+// Task 2 of plan 84.1-01 renames this helper to ExportTerragruntEnvVars across all
+// production callers; the body is unchanged.
 func ExportConfigEnvVars(cfg *config.Config) {
+	// Phase 84.1: KM_ROUTE53_ZONE_ID — required by infra/live/use1/ses-shared-rule-set/
+	// terragrunt.hcl get_env("KM_ROUTE53_ZONE_ID", "") for DKIM / MX / verification
+	// records. Was previously set only inside runInit via ensureSandboxHostedZone,
+	// which never fires from km bootstrap. Closes GAP-1 (Phase 84 UAT).
+	if cfg.Route53ZoneID != "" && os.Getenv("KM_ROUTE53_ZONE_ID") == "" {
+		os.Setenv("KM_ROUTE53_ZONE_ID", cfg.Route53ZoneID)
+	}
+	// Phase 84.1: KM_REGION_LABEL — short region form (e.g. "use1") consumed by
+	// site.hcl and various terragrunt.hcl files. Derived via compiler.RegionLabel.
+	if cfg.PrimaryRegion != "" && os.Getenv("KM_REGION_LABEL") == "" {
+		os.Setenv("KM_REGION_LABEL", compiler.RegionLabel(cfg.PrimaryRegion))
+	}
 	if cfg.ArtifactsBucket != "" && os.Getenv("KM_ARTIFACTS_BUCKET") == "" {
 		os.Setenv("KM_ARTIFACTS_BUCKET", cfg.ArtifactsBucket)
 	}
