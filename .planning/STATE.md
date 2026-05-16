@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 82.1-02-PLAN.md — service_hcl.go stream-table literal replaced with prefix-aware derivation
-last_updated: "2026-05-16T16:02:24.419Z"
+stopped_at: Completed 82.1-01-PLAN.md — bare-path configure preserve guard shipped
+last_updated: "2026-05-16T16:08:50.014Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 91
   completed_phases: 81
   total_plans: 346
-  completed_plans: 307
+  completed_plans: 308
   percent: 93
 ---
 
@@ -346,6 +346,7 @@ Progress: [█████████░] 93%
 | Phase 82-multi-instance-resource-prefix-isolation P09 | 220s | 2 tasks | 9 files |
 | Phase 82-multi-instance-resource-prefix-isolation P10 | 45min | 5 tasks | 3 files |
 | Phase 82.1 P02 | 96 | 2 tasks | 2 files |
+| Phase 82.1-01 P01 | 8min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -988,6 +989,7 @@ Recent decisions affecting current work:
 - [Phase 82-multi-instance-resource-prefix-isolation]: km doctor --backfill-tags requires explicit AWS_DEFAULT_REGION env var; cross-install safety guard correctly skipped 30 foreign/orphaned resources
 - [Phase 82.1]: service_hcl.go: used variable name ec2StreamPrefix (not ec2ResourcePrefix) to avoid shadowing the existing ec2ResourcePrefix block at line 792
 - [Phase 82.1]: KM_RESOURCE_PREFIX fallback pattern (default 'km') now consistent across userdata.go (Phase 82), ec2ResourcePrefix block, and stream-table derivation in same function
+- [Phase 82.1-01]: configure.go preserve guard extended to bare-path invocations via effectiveDir = outputDir || findRepoRoot(), mirroring write-path logic
 
 ### Roadmap Evolution
 
@@ -1092,6 +1094,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T16:02:24.410Z
-Stopped at: Completed 82.1-02-PLAN.md — service_hcl.go stream-table literal replaced with prefix-aware derivation
+Last session: 2026-05-16T16:08:50.006Z
+Stopped at: Completed 82.1-01-PLAN.md — bare-path configure preserve guard shipped
 Resume file: None

@@ -1780,7 +1780,7 @@ Plans:
 **Goal:** Close the three remaining multi-instance isolation gaps left after Phase 82: (1) the bare `km configure` invocation (no `--output-dir`) silently skips the preserve-on-rerun branch at `configure.go:145`, so operators rotating an unrelated field can still retarget their config at the wrong install; (2) `pkg/compiler/service_hcl.go:784` still emits the literal `"km-slack-stream-messages"` table-name fallback (Phase 82-02 deferred); (3) `aws_ses_active_receipt_rule_set` is a per-account/region singleton, so running `km init` under a second prefix deactivates the first install's inbound email path — Phase 82 fixed the name (B1) but not the activation handoff. Phase closes when (a) bare `km configure` preserves an existing non-default prefix without `--output-dir`, (b) `service_hcl.go:784` derives the stream-messages table name from the prefix the same way `userdata.go` does, and (c) running `km init --dry-run=true` under a second prefix does NOT plan to switch the SES active rule set (operator opt-in, documented handoff procedure, or split rule-set per prefix — design choice resolved by the planner via CONTEXT.md).
 **Requirements**: CONFIG-PRESERVE-BARE, SVCHCL-PREFIX-FALLBACK, SES-ACTIVE-RULESET (synthetic IDs; gap closure from Phase 82-VERIFICATION.md + operator UAT discovery)
 **Depends on:** Phase 82
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 - [ ] 82.1-01-PLAN.md — Bare-path configure preserve: extend outputDir guard to findRepoRoot() fallback (Wave 1, TDD, Go-only)
