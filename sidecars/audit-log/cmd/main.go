@@ -233,11 +233,29 @@ func openAuditPipeWithRetry(pipePath string, maxAttempts int, baseBackoff time.D
 			lastErr = mkErr
 			log.Warn().Err(mkErr).Int("attempt", attempt).Msg("audit-log: cannot create pipe dir")
 		} else {
-			// Create FIFO if missing (ignore EEXIST).
-			if _, statErr := os.Stat(pipePath); os.IsNotExist(statErr) {
+			// Phase 79.1 Layer 2 self-heal. Three cases:
+			//   (a) path absent: create fresh FIFO.
+			//   (b) path exists as FIFO: do nothing, fall through to OpenFile.
+			//   (c) path exists as wrong type (e.g., regular file left by
+			//       km-presence's `tee` racing this sidecar on resumed
+			//       sandboxes before Phase 79.1 Layer 1 lands): unlink and
+			//       recreate as FIFO. Layer 1 (systemd-tmpfiles.d) handles
+			//       this on every boot for new sandboxes; this self-heal is
+			//       defense in depth + recovery path for any future race.
+			if info, statErr := os.Stat(pipePath); os.IsNotExist(statErr) {
 				if mkfErr := syscall.Mkfifo(pipePath, 0666); mkfErr != nil && !os.IsExist(mkfErr) {
 					lastErr = mkfErr
 					log.Warn().Err(mkfErr).Int("attempt", attempt).Msg("audit-log: mkfifo failed")
+				}
+			} else if statErr == nil && info.Mode()&os.ModeNamedPipe == 0 {
+				log.Warn().Str("pipe", pipePath).Str("mode", info.Mode().String()).
+					Int("attempt", attempt).Msg("audit-log: path exists as non-FIFO, replacing")
+				if rmErr := os.Remove(pipePath); rmErr != nil {
+					lastErr = rmErr
+					log.Warn().Err(rmErr).Int("attempt", attempt).Msg("audit-log: remove non-FIFO failed")
+				} else if mkfErr := syscall.Mkfifo(pipePath, 0666); mkfErr != nil && !os.IsExist(mkfErr) {
+					lastErr = mkfErr
+					log.Warn().Err(mkfErr).Int("attempt", attempt).Msg("audit-log: mkfifo after remove failed")
 				}
 			}
 			f, openErr := os.OpenFile(pipePath, os.O_RDWR, 0)
