@@ -1833,6 +1833,12 @@ User=root
 EnvironmentFile=-/etc/km/notify.env
 Environment=SANDBOX_ID={{ .SandboxID }}
 Environment=KM_SANDBOX_ID={{ .SandboxID }}
+# Phase 75.3: poller bash mirrors S3 attachments to /workspace/.km-slack/attachments/.
+# /etc/km/notify.env carries the spec.cli.notify* knobs but not KM_ARTIFACTS_BUCKET
+# (that's a userdata template variable, set per-substrate). Make it explicit here so
+# the bash set -u nounset check does not fail with KM_ARTIFACTS_BUCKET unbound variable
+# when the poller hits a file_share SQS message with attachments.
+Environment=KM_ARTIFACTS_BUCKET={{ .KMArtifactsBucket }}
 ExecStart=/opt/km/bin/km-slack-inbound-poller
 Restart=always
 RestartSec=5

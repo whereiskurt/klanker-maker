@@ -105,6 +105,31 @@ func TestUserdata_SlackInboundEnvVar(t *testing.T) {
 	}
 }
 
+// TestUserdata_SlackInboundPoller_KMArtifactsBucket_InSystemdUnit — Phase 75.3 regression.
+// The poller bash mirrors S3 attachments using ${KM_ARTIFACTS_BUCKET}; without an
+// explicit Environment= line in the systemd unit, the bash `set -u` check fires with
+// "KM_ARTIFACTS_BUCKET: unbound variable" the first time a file_share SQS message
+// reaches the poller. This regression test asserts the env line is present in the
+// inbound-poller unit when inbound is enabled.
+func TestUserdata_SlackInboundPoller_KMArtifactsBucket_InSystemdUnit(t *testing.T) {
+	p := minimalSlackInboundProfile(t, true)
+	out := compileInboundUserData(t, p)
+
+	// Find the inbound-poller unit block and assert KM_ARTIFACTS_BUCKET appears inside it.
+	start := strings.Index(out, "km-slack-inbound-poller.service << 'SLACKINBOUNDUNIT'")
+	if start < 0 {
+		t.Fatalf("did not find km-slack-inbound-poller systemd unit\n%s", abbreviateUD(out))
+	}
+	end := strings.Index(out[start:], "SLACKINBOUNDUNIT\n")
+	if end < 0 {
+		t.Fatalf("unit block has no closing SLACKINBOUNDUNIT delimiter")
+	}
+	block := out[start : start+end]
+	if !strings.Contains(block, "Environment=KM_ARTIFACTS_BUCKET=") {
+		t.Fatalf("km-slack-inbound-poller unit missing Environment=KM_ARTIFACTS_BUCKET — Phase 75 attachment mirror will fail with 'unbound variable'\nunit block:\n%s", block)
+	}
+}
+
 // TestUserdata_SlackInboundSystemctlEnable verifies that when inbound is enabled
 // the systemctl enable line contains km-slack-inbound-poller and has no double spaces.
 func TestUserdata_SlackInboundSystemctlEnable(t *testing.T) {
