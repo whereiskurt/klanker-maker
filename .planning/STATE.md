@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 82-08-PLAN.md — ECS modules SSM ARN literal replaced with var.km_label interpolation
-last_updated: "2026-05-16T13:14:59.282Z"
+stopped_at: "Completed 82-09-PLAN.md — km:resource-prefix tag emission added to all 6 Terraform modules"
+last_updated: "2026-05-16T13:20:40.855Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 90
   completed_phases: 80
   total_plans: 343
-  completed_plans: 304
+  completed_plans: 305
   percent: 93
 ---
 
@@ -343,6 +343,7 @@ Progress: [█████████░] 93%
 | Phase 82 P07 | 30s | 1 tasks | 3 files |
 | Phase 82-multi-instance-resource-prefix-isolation P06 | 39s | 1 tasks | 3 files |
 | Phase 82-multi-instance-resource-prefix-isolation P08 | 3min | 1 tasks | 3 files |
+| Phase 82-multi-instance-resource-prefix-isolation P09 | 220s | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -980,6 +981,7 @@ Recent decisions affecting current work:
 - [Phase 82]: email-handler: add standalone state_prefix variable (default tf-km) rather than overloading resource_prefix — keeps IAM policy scope separate from resource naming
 - [Phase 82-06]: No moved{} block for SES rule-set: existing km install evaluates to identical name — zero Terraform diff
 - [Phase 82-multi-instance-resource-prefix-isolation]: 82-08: No new km_label variable needed in ECS modules — all three already declared it (confirmed pre-flight); one-line substitution per module preserves backward compatibility
+- [Phase 82-multi-instance-resource-prefix-isolation]: 82-09: Added resource_prefix variable to ECS modules (ecs-task, ecs, ecs-cluster); all six Terraform modules now emit km:resource-prefix tag alongside km:sandbox-id
 
 ### Roadmap Evolution
 
@@ -1084,6 +1086,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T13:14:59.274Z
-Stopped at: Completed 82-08-PLAN.md — ECS modules SSM ARN literal replaced with var.km_label interpolation
+Last session: 2026-05-16T13:20:40.848Z
+Stopped at: Completed 82-09-PLAN.md — km:resource-prefix tag emission added to all 6 Terraform modules
 Resume file: None
