@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84-03-regional-ses-v2-module-PLAN.md
-last_updated: "2026-05-16T20:15:40.278Z"
+stopped_at: Completed 84-05-userdata-and-ses-pkg-operator-literal-PLAN.md
+last_updated: "2026-05-16T20:16:20.017Z"
 last_activity: 2026-05-16
 progress:
   total_phases: 93
   completed_phases: 82
   total_plans: 363
-  completed_plans: 312
+  completed_plans: 313
   percent: 93
 ---
 
@@ -351,6 +351,7 @@ Progress: [█████████░] 93%
 | Phase 84 P02 | 227 | 3 tasks | 4 files |
 | Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P06 | 182 | 1 tasks | 2 files |
 | Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P03 | 6 | 3 tasks | 4 files |
+| Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P05 | 5 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1001,6 +1002,8 @@ Recent decisions affecting current work:
 - [Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix]: rule_set_name is string constant 'sandbox-email-shared' — no aws_ses_receipt_rule_set data source exists in AWS Terraform provider
 - [Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix]: v2.0.0 S3 bucket policy preserves CloudWatch Logs export grants from v1.0.0 since only one aws_s3_bucket_policy can exist per bucket
 - [Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix]: v1.0.0 stays in tree untouched as historical reference per CONTEXT.md — not deleted, not modified
+- [Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix]: km-send heredoc uses backward-compat fallback: ${KM_OPERATOR_EMAIL:-operator@${KM_SANDBOX_DOMAIN:-...}} preserves old sandboxes
+- [Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix]: SendCreateNotification signature extended with resourcePrefix at position 6; call site passes cfg.GetResourcePrefix()
 
 ### Roadmap Evolution
 
@@ -1106,6 +1109,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T20:15:40.269Z
-Stopped at: Completed 84-03-regional-ses-v2-module-PLAN.md
+Last session: 2026-05-16T20:16:20.009Z
+Stopped at: Completed 84-05-userdata-and-ses-pkg-operator-literal-PLAN.md
 Resume file: None
