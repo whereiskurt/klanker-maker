@@ -781,7 +781,11 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 	}
 	streamTable := os.Getenv("KM_SLACK_STREAM_TABLE")
 	if streamTable == "" {
-		streamTable = "km-slack-stream-messages"
+		ec2StreamPrefix := os.Getenv("KM_RESOURCE_PREFIX")
+		if ec2StreamPrefix == "" {
+			ec2StreamPrefix = "km"
+		}
+		streamTable = ec2StreamPrefix + "-slack-stream-messages"
 	}
 	params.SlackStreamMessagesTableName = streamTable
 
