@@ -29,7 +29,7 @@ SIDECARS := dns-proxy http-proxy audit-log
 OTELCOL_VERSION ?= 0.120.0
 OTELCOL_URL     := https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$(OTELCOL_VERSION)/otelcol-contrib_$(OTELCOL_VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build build-km bump-version sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas build-create-handler build-email-create-handler push-create-handler clean fetch-otelcol sandbox-image smoke-test-sandbox generate-ebpf
+.PHONY: build build-km bump-version sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas build-create-handler build-email-create-handler push-create-handler clean fetch-otelcol sandbox-image smoke-test-sandbox generate-ebpf test-no-82.1-leftovers
 
 ## generate-ebpf: compile BPF C programs via bpf2go inside Docker (works from macOS)
 ## Regenerates pkg/ebpf/bpf_bpfel.go, pkg/ebpf/bpf_bpfel.o,
@@ -64,6 +64,17 @@ build: bump-version
 
 ## build-km: alias for build
 build-km: build
+
+## test-no-82.1-leftovers: Phase 84 W0-11 — grep gate for Phase 82.1 legacy symbols.
+## RED at Wave 0 (Phase 82.1 symbols still present in infra/ and OPERATOR-GUIDE.md).
+## Plan 84-08 Task 3 narrows the exclusion dirs and wires this into the test umbrella
+## once the deletions land, turning the gate GREEN.
+## Not added to the `test` umbrella target yet — that wiring happens in Plan 84-08
+## alongside the deletions, to avoid breaking CI green during Wave 1 execution.
+.PHONY: test-no-82.1-leftovers
+test-no-82.1-leftovers:
+	@! grep -rn "KM_SES_ACTIVATE_RULESET\|activate_rule_set" infra/ internal/ pkg/ cmd/ OPERATOR-GUIDE.md CLAUDE.md \
+		|| (echo "Phase 82.1 leftovers found — see Phase 84"; exit 1)
 
 ## fetch-otelcol: download otelcol-contrib binary for EC2 tracing sidecar
 fetch-otelcol:
