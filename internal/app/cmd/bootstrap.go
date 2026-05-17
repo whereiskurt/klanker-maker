@@ -693,7 +693,12 @@ func runBootstrapSharedSESPlanWithWriter(cfg *config.Config, w io.Writer, verbos
 	runner := terragrunt.NewRunner("klanker-terraform", repoRoot)
 	runner.Verbose = false // capture stdout per-module; echo via verbose flag below
 
-	sesDir := filepath.Join(repoRoot, "infra", "live", "use1", "ses-shared-rule-set")
+	regionLabel := compiler.RegionLabel(region)
+	regionDir := filepath.Join(repoRoot, "infra", "live", regionLabel)
+	if err := ensureRegionHCL(regionDir, regionLabel, region); err != nil {
+		return err
+	}
+	sesDir := filepath.Join(regionDir, "ses-shared-rule-set")
 
 	fmt.Fprintln(w, "km bootstrap --shared-ses --plan")
 	fmt.Fprintln(w)

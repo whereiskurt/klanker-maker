@@ -1056,6 +1056,10 @@ func RunInitPlanWithRunner(runner InitRunner, repoRoot, region string, verbose, 
 	regionLabel := compiler.RegionLabel(region)
 	regionDir := filepath.Join(repoRoot, "infra", "live", regionLabel)
 
+	if err := ensureRegionHCL(regionDir, regionLabel, region); err != nil {
+		return err
+	}
+
 	fmt.Printf("km init --plan: %s (%s)\n", region, regionLabel)
 	fmt.Println()
 
@@ -1102,6 +1106,25 @@ func RunInitPlanWithRunner(runner InitRunner, repoRoot, region string, verbose, 
 
 	printAggregateSummary(reports)
 	fmt.Println("Run 'km init --dry-run=false' to apply.")
+	return nil
+}
+
+// ensureRegionHCL writes infra/live/<regionLabel>/region.hcl if missing — the file
+// is gitignored, so fresh clones don't have it, and the foundation+regional
+// terragrunt.hcl files all `read_terragrunt_config("../region.hcl")`.
+// Idempotent; matches the cluster.go bootstrap pattern.
+func ensureRegionHCL(regionDir, regionLabel, region string) error {
+	regionHCLPath := filepath.Join(regionDir, "region.hcl")
+	if _, err := os.Stat(regionHCLPath); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(regionDir, 0o755); err != nil {
+		return fmt.Errorf("creating region directory: %w", err)
+	}
+	regionHCL := fmt.Sprintf("locals {\n  region_label = %q\n  region_full  = %q\n}\n", regionLabel, region)
+	if err := os.WriteFile(regionHCLPath, []byte(regionHCL), 0o644); err != nil {
+		return fmt.Errorf("writing region.hcl: %w", err)
+	}
 	return nil
 }
 
