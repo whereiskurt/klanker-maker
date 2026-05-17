@@ -1,6 +1,7 @@
 package terragrunt_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -510,5 +511,193 @@ func TestRunner_VerboseMode_NoHeartbeat(t *testing.T) {
 
 	if strings.Contains(buf.String(), "still running") {
 		t.Errorf("expected NO heartbeat in Verbose mode, got: %q", buf.String())
+	}
+}
+
+// ---- Phase 84.2: PlanWithOutput + ShowPlanJSON command construction + behaviour tests ----
+// Wave 0 RED scaffolding (Plan 01 Task 2): these tests reference symbols that Plan 03 will add.
+
+// TestRunner_PlanWithOutputCommand verifies that BuildPlanWithOutputCommand
+// constructs the correct exec.Cmd: Args == ["terragrunt", "plan", "-out=<absPath>"]
+// and cmd.Dir == sandboxDir. Tests both a simple absolute path and one with
+// special chars to assert path is passed verbatim (no escaping).
+func TestRunner_PlanWithOutputCommand(t *testing.T) {
+	r := terragrunt.NewRunner("klanker-terraform", "/repo/root")
+	sandboxDir := makeFakeSandboxDir(t)
+
+	cases := []struct {
+		name     string
+		planFile string
+	}{
+		{"absolute path", "/tmp/plan-test.tfplan"},
+		{"path with spaces", "/tmp/plan test.tfplan"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := r.BuildPlanWithOutputCommand(context.Background(), sandboxDir, tc.planFile)
+			args := cmd.Args
+			if len(args) < 3 {
+				t.Fatalf("expected at least 3 args, got %v", args)
+			}
+			if args[1] != "plan" {
+				t.Errorf("args[1] = %q, want %q", args[1], "plan")
+			}
+			wantFlag := "-out=" + tc.planFile
+			if args[2] != wantFlag {
+				t.Errorf("args[2] = %q, want %q", args[2], wantFlag)
+			}
+			if cmd.Dir != sandboxDir {
+				t.Errorf("cmd.Dir = %q, want %q", cmd.Dir, sandboxDir)
+			}
+		})
+	}
+}
+
+// TestRunner_PlanWithOutputCallsTerragrunt verifies end-to-end: the fake
+// terragrunt binary writes "plan stdout marker" to stdout; PlanWithOutput
+// must capture it into the caller-supplied *bytes.Buffer and return nil error.
+func TestRunner_PlanWithOutputCallsTerragrunt(t *testing.T) {
+	makeFakeTerragruntBin(t, `echo "plan stdout marker"`)
+
+	r := &terragrunt.Runner{
+		AWSProfile: "test",
+		RepoRoot:   t.TempDir(),
+		Verbose:    false,
+	}
+	sandboxDir := makeFakeSandboxDir(t)
+	planFile := filepath.Join(t.TempDir(), "plan.tfplan")
+
+	var buf bytes.Buffer
+	ctx := context.Background()
+	err := r.PlanWithOutput(ctx, sandboxDir, planFile, &buf)
+	if err != nil {
+		t.Fatalf("PlanWithOutput returned unexpected error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "plan stdout marker") {
+		t.Errorf("buf = %q, want to contain %q", buf.String(), "plan stdout marker")
+	}
+}
+
+// TestRunner_PlanWithOutputCapturesStdout verifies that the caller-supplied buffer
+// receives stdout regardless of r.Verbose (both quiet and verbose modes capture).
+func TestRunner_PlanWithOutputCapturesStdout(t *testing.T) {
+	for _, verbose := range []bool{false, true} {
+		t.Run(map[bool]string{false: "quiet", true: "verbose"}[verbose], func(t *testing.T) {
+			makeFakeTerragruntBin(t, `echo "stdout-capture-marker"`)
+
+			r := &terragrunt.Runner{
+				AWSProfile: "test",
+				RepoRoot:   t.TempDir(),
+				Verbose:    verbose,
+			}
+			sandboxDir := makeFakeSandboxDir(t)
+			planFile := filepath.Join(t.TempDir(), "plan.tfplan")
+
+			var buf bytes.Buffer
+			ctx := context.Background()
+			if err := r.PlanWithOutput(ctx, sandboxDir, planFile, &buf); err != nil {
+				t.Fatalf("PlanWithOutput (verbose=%v) error: %v", verbose, err)
+			}
+			if !strings.Contains(buf.String(), "stdout-capture-marker") {
+				t.Errorf("verbose=%v: buf = %q, want to contain %q", verbose, buf.String(), "stdout-capture-marker")
+			}
+		})
+	}
+}
+
+// TestRunner_PlanWithOutputCtxTimeout verifies that a context deadline causes
+// PlanWithOutput to return an error wrapping context.DeadlineExceeded — same
+// contract as Apply (Phase 84.1-02 runBounded inheritance).
+func TestRunner_PlanWithOutputCtxTimeout(t *testing.T) {
+	makeFakeTerragruntBin(t, "sleep 5")
+
+	r := &terragrunt.Runner{
+		AWSProfile: "test",
+		RepoRoot:   t.TempDir(),
+		Verbose:    false,
+	}
+	sandboxDir := makeFakeSandboxDir(t)
+	planFile := filepath.Join(t.TempDir(), "plan.tfplan")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	var buf bytes.Buffer
+	err := r.PlanWithOutput(ctx, sandboxDir, planFile, &buf)
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected error wrapping context.DeadlineExceeded, got: %v", err)
+	}
+}
+
+// TestRunner_ShowPlanJSONCommand verifies that BuildShowPlanJSONCommand
+// constructs Args == ["terragrunt", "show", "-json", "<planFile>"]
+// and cmd.Dir == sandboxDir.
+func TestRunner_ShowPlanJSONCommand(t *testing.T) {
+	r := terragrunt.NewRunner("klanker-terraform", "/repo/root")
+	sandboxDir := makeFakeSandboxDir(t)
+	planFile := "/tmp/plan-test.tfplan"
+
+	cmd := r.BuildShowPlanJSONCommand(context.Background(), sandboxDir, planFile)
+	args := cmd.Args
+	if len(args) < 4 {
+		t.Fatalf("expected at least 4 args, got %v", args)
+	}
+	if args[1] != "show" {
+		t.Errorf("args[1] = %q, want %q", args[1], "show")
+	}
+	if args[2] != "-json" {
+		t.Errorf("args[2] = %q, want %q", args[2], "-json")
+	}
+	if args[3] != planFile {
+		t.Errorf("args[3] = %q, want %q", args[3], planFile)
+	}
+	if cmd.Dir != sandboxDir {
+		t.Errorf("cmd.Dir = %q, want %q", cmd.Dir, sandboxDir)
+	}
+}
+
+// TestRunner_ShowPlanJSONReturnsBytes verifies that ShowPlanJSON returns the
+// stdout bytes from the fake terragrunt binary verbatim with err == nil.
+func TestRunner_ShowPlanJSONReturnsBytes(t *testing.T) {
+	wantJSON := `{"format_version":"1.0","resource_changes":[]}`
+	makeFakeTerragruntBin(t, `printf '{"format_version":"1.0","resource_changes":[]}'`)
+
+	r := &terragrunt.Runner{
+		AWSProfile: "test",
+		RepoRoot:   t.TempDir(),
+		Verbose:    false,
+	}
+	sandboxDir := makeFakeSandboxDir(t)
+	planFile := filepath.Join(t.TempDir(), "plan.tfplan")
+
+	got, err := r.ShowPlanJSON(context.Background(), sandboxDir, planFile)
+	if err != nil {
+		t.Fatalf("ShowPlanJSON returned unexpected error: %v", err)
+	}
+	if string(got) != wantJSON {
+		t.Errorf("ShowPlanJSON = %q, want %q", string(got), wantJSON)
+	}
+}
+
+// TestRunner_ShowPlanJSONNonZeroExit verifies that a non-zero exit from
+// terragrunt show -json causes ShowPlanJSON to return a non-nil error.
+// Per Pitfall 6: cmd.Output() puts stderr in *exec.ExitError.Stderr on failure.
+func TestRunner_ShowPlanJSONNonZeroExit(t *testing.T) {
+	makeFakeTerragruntBin(t, `echo "show failed" >&2; exit 1`)
+
+	r := &terragrunt.Runner{
+		AWSProfile: "test",
+		RepoRoot:   t.TempDir(),
+		Verbose:    false,
+	}
+	sandboxDir := makeFakeSandboxDir(t)
+	planFile := filepath.Join(t.TempDir(), "plan.tfplan")
+
+	_, err := r.ShowPlanJSON(context.Background(), sandboxDir, planFile)
+	if err == nil {
+		t.Fatal("expected non-nil error from non-zero exit, got nil")
 	}
 }

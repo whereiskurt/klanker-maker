@@ -106,6 +106,25 @@ func (r *Runner) BuildOutputCommand(ctx context.Context, sandboxDir string) *exe
 	return r.buildCommand(ctx, sandboxDir, "output", "-json")
 }
 
+// BuildPlanWithOutputCommand constructs the exec.Cmd for `terragrunt plan -out=<planFile>`
+// without running it. Used directly by PlanWithOutput() and exposed for command-construction tests.
+//
+// The planFile path MUST be absolute — see Pitfall 1 in
+// .planning/phases/84.2-.../84.2-RESEARCH.md: terragrunt resolves relative paths
+// inside .terragrunt-cache/<hash>/<module>/, which the caller cannot easily discover.
+// os.CreateTemp("", "...") returns absolute paths on macOS/Linux (the only platforms km targets).
+func (r *Runner) BuildPlanWithOutputCommand(ctx context.Context, sandboxDir, planFile string) *exec.Cmd {
+	return r.buildCommand(ctx, sandboxDir, "plan", "-out="+planFile)
+}
+
+// BuildShowPlanJSONCommand constructs the exec.Cmd for `terragrunt show -json <planFile>`
+// without running it. Used by ShowPlanJSON; exposed for command-construction tests.
+// Invoked via terragrunt (not terraform directly) so the .terragrunt-cache resolution
+// is consistent with BuildPlanWithOutputCommand.
+func (r *Runner) BuildShowPlanJSONCommand(ctx context.Context, sandboxDir, planFile string) *exec.Cmd {
+	return r.buildCommand(ctx, sandboxDir, "show", "-json", planFile)
+}
+
 // Reconfigure runs `terragrunt init -reconfigure` inside sandboxDir to refresh
 // the local .terragrunt-cache backend metadata. Used before destroy when the
 // backend bucket name resolves differently than when state was last written
@@ -130,6 +149,61 @@ func (r *Runner) Reconfigure(ctx context.Context, sandboxDir string) error {
 func (r *Runner) Plan(ctx context.Context, sandboxDir string) error {
 	cmd := r.buildCommand(ctx, sandboxDir, "plan")
 	return r.runCommand(ctx, cmd)
+}
+
+// PlanWithOutput runs `terragrunt plan -out=<planFile>` inside sandboxDir.
+//
+// Stdout is captured into stdoutBuf (for optional --verbose echo by the caller —
+// typically internal/app/cmd/runInitPlan and runBootstrapSharedSESPlan in Phase 84.2).
+// Stderr handling matches Apply: when r.Verbose, stderr streams to os.Stderr; when
+// r.Verbose is false, stderr is captured and only printed on failure (matches the
+// OPER-01 quiet-by-default contract).
+//
+// Phase 84.1-02: inherits the runner-layer ctx deadline + heartbeat via runBounded.
+// A bounded ctx returns context.DeadlineExceeded (wrapped) when the deadline trips —
+// do NOT add a local context.WithTimeout here (would double-wrap and confuse
+// ModuleTimeoutFunc bookkeeping in init.go).
+//
+// The planFile path MUST be absolute. Pass nil for stdoutBuf to discard stdout.
+func (r *Runner) PlanWithOutput(ctx context.Context, sandboxDir, planFile string, stdoutBuf *bytes.Buffer) error {
+	cmd := r.BuildPlanWithOutputCommand(ctx, sandboxDir, planFile)
+	if stdoutBuf == nil {
+		stdoutBuf = &bytes.Buffer{} // discard
+	}
+	// Always capture stdout to the caller-supplied buffer (independent of r.Verbose
+	// — callers decide later whether to echo the buffer to the terminal).
+	cmd.Stdout = stdoutBuf
+	var stderrBuf bytes.Buffer
+	if r.Verbose {
+		cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+	} else {
+		cmd.Stderr = &stderrBuf
+	}
+	err := r.runBounded(ctx, cmd)
+	if err != nil && !r.Verbose && stderrBuf.Len() > 0 {
+		// Surface terragrunt's stderr on failure when quiet mode would have hidden it.
+		fmt.Fprintln(os.Stderr, stderrBuf.String())
+	}
+	return err
+}
+
+// ShowPlanJSON runs `terragrunt show -json <planFile>` inside sandboxDir and returns
+// the JSON bytes for the caller to parse (typically via
+// pkg/terragrunt/planreport.Parse in Phase 84.2 init/bootstrap plan wiring).
+//
+// Uses cmd.Output() (not runBounded) for the same reason Output() does — we need
+// clean stdout-only bytes for the JSON parser. On non-zero exit, the returned error
+// is *exec.ExitError; its .Stderr field holds the terragrunt stderr so callers can
+// surface it with the module name.
+//
+// The planFile path MUST be absolute (same Pitfall 1 reasoning as PlanWithOutput).
+func (r *Runner) ShowPlanJSON(ctx context.Context, sandboxDir, planFile string) ([]byte, error) {
+	cmd := r.BuildShowPlanJSONCommand(ctx, sandboxDir, planFile)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("terragrunt show -json: %w", err)
+	}
+	return out, nil
 }
 
 // ApplyWithStderr runs apply, capturing stderr to the provided buffer (for error detection).
