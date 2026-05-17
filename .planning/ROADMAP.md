@@ -1832,7 +1832,7 @@ Plans:
 
 **Requirements**: GAP-1, GAP-2, GAP-3, GAP-4, GAP-5, GAP-6, GAP-7, GAP-8, DRIFT-A, DRIFT-B, DRIFT-C (synthetic IDs — gap-derived from Phase 84 UAT diagnosis 84-10-UAT.md)
 **Depends on:** Phase 84
-**Plans:** 1/5 plans executed
+**Plans:** 2/5 plans executed
 
 Plans (4-wave structure after plan-checker rev 2 — C-NEW-1 serialized init.go/bootstrap.go file conflicts):
 - [ ] 84.1-01-PLAN.md — Unified ExportTerragruntEnvVars helper closing GAP-1 + GAP-7 (Wave 1, TDD, Go-only, no deps)

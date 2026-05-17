@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.1-01 ses-upgrade-safety-gap-closure plan (GAP-1 + GAP-7)
-last_updated: "2026-05-17T00:05:08.389Z"
+stopped_at: Completed 84.1-03-PLAN.md detect-state-digest-drift-in-km-doctor
+last_updated: "2026-05-17T00:12:59.235Z"
 last_activity: 2026-05-17
 progress:
-  total_phases: 94
+  total_phases: 95
   completed_phases: 82
   total_plans: 368
-  completed_plans: 319
+  completed_plans: 320
   percent: 93
 ---
 
@@ -358,6 +358,7 @@ Progress: [█████████░] 93%
 | Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P07 | 45 | 3 tasks | 9 files |
 | Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P09 | 2min | 3 tasks | 4 files |
 | Phase 84.1 P01 | 16min | 2 tasks | 10 files |
+| Phase 84.1 P03 | 25min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1022,6 +1023,7 @@ Recent decisions affecting current work:
 - [Phase 84.1]: Plan 84.1-01: no deprecation shim for ExportConfigEnvVars→ExportTerragruntEnvVars rename (H5)
 - [Phase 84.1]: Plan 84.1-01: KM_REGION_LABEL derived via compiler.RegionLabel(cfg.PrimaryRegion), not added as a config field — single-sourced in pkg/compiler
 - [Phase 84.1]: Plan 84.1-01: exported RunBootstrapSharedSES as one-line test seam forwarder; cobra command path unchanged
+- [Phase 84.1]: Plan 84.1-03: Detection-only state-digest check (no auto-repair) — WARN level with copy-paste aws dynamodb update-item remediation; uses dynamodb.NewScanPaginator to handle >1MB lock-table scans
 
 ### Roadmap Evolution
 
@@ -1128,6 +1130,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-17T00:05:08.381Z
-Stopped at: Completed 84.1-01 ses-upgrade-safety-gap-closure plan (GAP-1 + GAP-7)
+Last session: 2026-05-17T00:12:59.228Z
+Stopped at: Completed 84.1-03-PLAN.md detect-state-digest-drift-in-km-doctor
 Resume file: None
