@@ -384,6 +384,28 @@ Which phases cover which requirements. Updated during roadmap creation.
 - eBPF requirements (Phase 40-41): 26 total
 
 ---
+
+## Phase 84.2 — Synthetic IDs (phase-local)
+
+These IDs are phase-local and synthetic — they derive from the Phase 84.2 design spec
+(docs/superpowers/specs/2026-05-16-km-init-plan-flag-and-destroy-class-gate-design.md) rather than
+the formal v1/v2 requirement process. Recorded here for plan-checker traceability.
+
+| ID | Description |
+|----|-------------|
+| DESTROY-CLASS-GATE | Curated compiled-in ProtectedTypes gate that halts km init --plan on protected destroys/replaces |
+| PROTECTED-TYPES-LIST | The ProtectedTypes list in protected.go with 10 entries (including aws_ses_receipt_rule) |
+| ACCEPT-DESTROYS-OVERRIDE | --i-accept-destroys flag that clears exit code to 0 without applying; trips still printed |
+| PLAN-FLAG | --plan flag on km init and km bootstrap --shared-ses; independent of --dry-run; never applies |
+| BOOTSTRAP-PLAN-PARITY | km bootstrap --shared-ses --plan runs the same destroy-class gate as km init --plan |
+| PLAN-OUTPUT-FORMAT | Per-module one-line summary + trip block always full + override notice + aggregate footer |
+| PLAN-ERROR-HANDLING | Hard-stop on plan failure; conservative-trip on parse/show failure; gate result as exit code |
+
+---
+
+*Last updated: 2026-05-17 — Phase 84.2 synthetic IDs added for plan-checker traceability*
+
+---
 *Requirements defined: 2026-03-21*
 *Last updated: 2026-03-21 — PROV-09, PROV-10 added; ECS moved from Out of Scope to v1; k8s added to v2; Docker/local remains out of scope*
 *Last updated: 2026-03-21 — INFR-08 added: no cross-repo dependency on defcon.run.34; all modules and app code must be copied and adapted into Klanker Maker repo*
