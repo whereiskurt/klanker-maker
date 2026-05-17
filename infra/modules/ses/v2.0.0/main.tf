@@ -3,6 +3,14 @@
 # The shared rule set, domain identity, DKIM, MX, and verification records are
 # owned by the foundation module (infra/modules/ses-shared-rule-set/v1.0.0).
 # This module ONLY manages: two prefix-named receipt rules + the S3 bucket policy.
+#
+# PHASE 84.1: This module ships with `removed {}` blocks at the bottom of the
+# file for the resources that v1.0.0 owned but v2.0.0 no longer manages
+# (rule set, domain identity, DKIM, MX, verification TXT). The corresponding
+# `import {}` blocks live in infra/modules/ses-shared-rule-set/v1.0.0/main.tf.
+# The pair makes the Phase 82.x → 84 in-place upgrade safe — zero AWS
+# destruction during cutover. See
+# .planning/phases/84.1-ses-upgrade-safety-gap-closure/84.1-04-PLAN.md.
 
 data "aws_caller_identity" "current" {}
 
@@ -121,4 +129,72 @@ data "aws_iam_policy_document" "artifacts_bucket" {
 resource "aws_s3_bucket_policy" "mail" {
   bucket = var.artifact_bucket_name
   policy = data.aws_iam_policy_document.artifacts_bucket.json
+}
+
+# ============================================================
+# Phase 84.1: removed blocks for in-place upgrade from v1.0.0
+# ============================================================
+# The v1.0.0 regional ses module owned these resources. Phase 84 moved them
+# to the foundation module (ses-shared-rule-set/v1.0.0/). On in-place
+# upgrade, the terragrunt source flip from v1.0.0 to v2.0.0 normally plans
+# a destroy for any resource present in state but absent from the new
+# source. These removed blocks tell terraform: "forget the state entry,
+# do NOT destroy the AWS object". The foundation module's import blocks
+# then bring the same AWS objects under foundation management.
+#
+# Fresh installs: state never had these resources → removed blocks are no-ops.
+# Phase 82.x upgrades: state has these resources → removed releases them
+# cleanly without AWS destruction. See Phase 84.1 GAP-6.
+#
+# Resource addresses verified against infra/modules/ses/v1.0.0/main.tf as
+# of 2026-05-16 (plan-checker rev 1 M10). Do NOT modify these names without
+# re-verifying against the actual v1.0.0 source.
+
+removed {
+  from = aws_ses_receipt_rule_set.km_sandbox
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = aws_ses_active_receipt_rule_set.km_sandbox
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = aws_ses_domain_identity.sandbox
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = aws_ses_domain_dkim.sandbox
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = aws_route53_record.dkim
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = aws_route53_record.ses_verification
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = aws_route53_record.mx
+  lifecycle {
+    destroy = false
+  }
 }
