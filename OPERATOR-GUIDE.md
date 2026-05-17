@@ -795,3 +795,57 @@ done
 ```
 
 See also: `CLAUDE.md` § Phase 84 for the architecture summary and operator address format.
+
+### Phase 84.2 plan-before-apply
+
+Phase 84.2 (2026-05-16) adds `km init --plan` and `km bootstrap --shared-ses --plan` —
+real `terragrunt plan` per module with a curated destroy-class safety gate. The gate
+trips on any destroy or replace of a resource type from a compiled-in protected list
+(initially: `aws_ses_domain_identity`, `aws_ses_domain_dkim`, `aws_ses_active_receipt_rule_set`,
+`aws_ses_receipt_rule_set`, `aws_route53_record`, `aws_s3_bucket`, `aws_s3_bucket_policy`,
+`aws_dynamodb_table`, `aws_kms_key` — each entry annotated with the incident that motivated it).
+
+**When to use:** Before `km init --dry-run=false` or `km bootstrap --shared-ses` on
+an upgrade, run the plan variant first to see what would actually change.
+
+**Example output — clean apply:**
+
+```
+km init --plan: us-east-1 (use1)
+
+  Planning network... 0 to add, 0 to change, 0 to destroy ✓
+  Planning ses... 2 to add, 1 to change, 0 to destroy ✓
+  …
+Total across 16 modules: 2 to add, 1 to change, 0 to destroy
+Run 'km init --dry-run=false' to apply.
+```
+
+**Example output — protected destroy tripped:**
+
+```
+✗ km init --plan would destroy 3 protected resources:
+
+  ses-shared-rule-set:
+    - aws_ses_domain_identity.sandboxes      [DESTROY]
+    - aws_ses_domain_dkim.sandboxes          [DESTROY]
+    - aws_route53_record.dkim[0]             [DESTROY]
+
+These resource types are on the protected list because past incidents
+caused unrecoverable data loss (see pkg/terragrunt/planreport/protected.go).
+
+To proceed anyway, re-run with --i-accept-destroys (you must understand
+why each resource is destroying — terragrunt apply will not ask again).
+```
+
+Exit code 1.
+
+**Override:** `--i-accept-destroys` is per-invocation only. It NEVER persists. It does
+NOT auto-apply. It only clears the `--plan` exit code from 1 to 0 so a CI pipeline
+can proceed past the gate. You still must separately run `--dry-run=false` to actually apply.
+
+**Bootstrap parity:** Same flags on `km bootstrap --shared-ses --plan` for the
+foundation module (closes Phase 84 Gaps 2, 3, 6 in the bootstrap path too).
+
+**Adding a protected type:** Edit `pkg/terragrunt/planreport/protected.go` and add
+the new resource type with a rationale comment citing the incident. PR review = the
+safety mechanism (intentionally NOT operator-configurable per CONTEXT.md Decision 6).

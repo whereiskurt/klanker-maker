@@ -56,7 +56,8 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `km cluster add --name <name> --oidc-provider-arn <arn>` — provision cross-account IRSA role (`--namespace`, `--service-account`, `--aws-profile`, `--region`, `--dry-run`, `--register-oidc-provider`)
 - `km cluster list` — show configured cross-account cluster roles
 - `km cluster rm <name>` — destroy a cluster IRSA role
-- `km init` — initialize regional infrastructure (`--sidecars` for fast binary deploy, `--lambdas` for Lambda-only deploy, `--dry-run=false` to actually apply)
+- `km init` — initialize regional infrastructure (`--sidecars` for fast binary deploy, `--lambdas` for Lambda-only deploy, `--plan` to preview with destroy-class safety gate, `--dry-run=false` to actually apply)
+- `km bootstrap --shared-ses` — provision foundation SES rule set (idempotent; `--plan` previews with destroy-class safety gate)
 - `km shell <sandbox-id>` — SSM shell (`--root`, `--ports`, `--no-bedrock`, `--learn`, `--ami`)
 - `km ami list` / `km ami bake <sandbox-id>` / `km ami copy <ami-id> --region <dest>` / `km ami delete <ami-id>` — operator-baked AMI lifecycle
 - `km info` — platform config, accounts, SES quota, AWS spend, DynamoDB tables
@@ -123,6 +124,12 @@ Phase 84.1 closes 8 gaps from Phase 84 UAT without changing the Phase 84 runtime
 - `lifecycle.prevent_destroy = true` on the shared rule set is preserved as a safety net for the new register_*=manage semantics.
 
 See `OPERATOR-GUIDE.md` § Phase 84.1 upgrade safety for the in-place upgrade runbook.
+
+### Phase 84.2: km init --plan flag with destroy-class gate (2026-05-16)
+
+Phase 84.2 adds `km init --plan` and `km bootstrap --shared-ses --plan` — real `terragrunt plan` per module with a curated destroy-class safety gate that trips on destroy/replace of protected resource types (SES identities, Route53 records, S3 buckets, DynamoDB tables, KMS keys, etc.). `--i-accept-destroys` is the per-invocation override (never persisted; does not auto-apply). `km doctor` nudges operators toward `--plan` before any future apply.
+
+See `OPERATOR-GUIDE.md` § Phase 84.2 plan-before-apply for the full runbook (when to use, trip-block format, override flow, bootstrap parity, and protected-type list).
 
 ## Network Enforcement
 

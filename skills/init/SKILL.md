@@ -39,9 +39,13 @@ make build
 ## Step 3: Bootstrap or upgrade regional infrastructure
 
 ```bash
-km init --dry-run=true     # default: terragrunt plan only — review what will change
+km init --plan             # Phase 84.2: real terragrunt plan per module + destroy-class safety gate (NEVER applies)
+km init --plan --i-accept-destroys   # same plan, but clear exit code if only protected-type destroys are blocking (per-invocation; no auto-apply)
+km init --dry-run=true     # static info dump — module ordering + skip annotations (does NOT run terragrunt plan)
 km init --dry-run=false    # actually apply
 ```
+
+Use `--plan` to see what `terragrunt apply` would actually change — it runs a real plan per module and trips on any destroy/replace of a curated protected resource type (Phase 84 incident protection). `--dry-run=true` is the older info-dump that lists module ordering and env-var skip annotations; it does NOT run terragrunt plan.
 
 `km init` defaults to `--dry-run=true`. Forgetting `--dry-run=false` produces a no-op that *looks* like a deploy ran. After a successful apply, verify Lambda config picked up:
 
@@ -158,7 +162,7 @@ export KM_SES_ACTIVATE_RULESET=false
 # 3. Build + init
 make build
 km init --sidecars
-km init --dry-run=true    # verify: no aws_ses_active_receipt_rule_set in plan
+km init --plan            # verify plan: no aws_ses_active_receipt_rule_set in destroy list
 km init --dry-run=false
 ```
 
