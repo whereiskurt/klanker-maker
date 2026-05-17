@@ -12,21 +12,42 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Runner wraps the Terragrunt binary and executes commands in sandbox directories.
 // Apply and Destroy stream output in real time to os.Stdout/os.Stderr when Verbose
 // is true, or capture output quietly (showing only errors/warnings) when Verbose is false.
 // The AWS_PROFILE env var is injected for every command.
+//
+// Phase 84.1-02 (GAP-4 + GAP-5): in quiet mode, the runner emits a periodic
+// heartbeat every ProgressInterval (default 15s) so a wedged terragrunt
+// surfaces as visible progress instead of a silent multi-minute hang. Callers
+// that pass a bounded context.Context get a context.DeadlineExceeded error
+// when the deadline trips — the spawned terragrunt process is SIGTERM'd
+// (cmd.Cancel) and then SIGKILL'd after a short WaitDelay.
 type Runner struct {
-	AWSProfile string // e.g. "klanker-terraform"
-	RepoRoot   string // absolute path to repo root (anchored by CLAUDE.md)
-	Verbose    bool   // when false (default), suppress raw output; when true, stream to terminal
+	AWSProfile       string        // e.g. "klanker-terraform"
+	RepoRoot         string        // absolute path to repo root (anchored by CLAUDE.md)
+	Verbose          bool          // when false (default), suppress raw output; when true, stream to terminal
+	ProgressInterval time.Duration // Phase 84.1-02: heartbeat cadence in quiet mode. Zero disables.
+	ProgressWriter   io.Writer     // Phase 84.1-02: where heartbeat ticks are written. Nil => os.Stderr.
 }
 
+// DefaultProgressInterval is the default heartbeat cadence for quiet-mode runs.
+// Long enough to avoid spamming logs during normal applies (seconds-to-minutes),
+// short enough to give operators useful feedback on multi-minute applies.
+const DefaultProgressInterval = 15 * time.Second
+
 // NewRunner returns a Runner configured with the given AWS profile and repo root.
+// Phase 84.1-02: ProgressInterval defaults to DefaultProgressInterval so every
+// production caller picks up the heartbeat behaviour automatically.
 func NewRunner(awsProfile, repoRoot string) *Runner {
-	return &Runner{AWSProfile: awsProfile, RepoRoot: repoRoot}
+	return &Runner{
+		AWSProfile:       awsProfile,
+		RepoRoot:         repoRoot,
+		ProgressInterval: DefaultProgressInterval,
+	}
 }
 
 // Apply runs `terragrunt apply -auto-approve` inside sandboxDir.

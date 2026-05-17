@@ -2,12 +2,32 @@ package terragrunt_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
 )
+
+// makeFakeTerragruntBin writes a shell script named `terragrunt` into a temp
+// bin dir and prepends it to PATH for the duration of the test. The script
+// behaviour is controlled by the supplied body (e.g. `sleep 5`).
+//
+// Phase 84.1-02: used to exercise the runner's timeout/heartbeat behaviour
+// without invoking real terragrunt. The fake shim ignores its arguments.
+func makeFakeTerragruntBin(t *testing.T, body string) {
+	t.Helper()
+	binDir := t.TempDir()
+	script := "#!/bin/sh\n" + body + "\n"
+	path := filepath.Join(binDir, "terragrunt")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake terragrunt: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
 
 // Helper: create a fake sandbox directory that looks like a real one
 // (has a service.hcl so the runner knows it's a sandbox dir).
@@ -360,5 +380,135 @@ func TestRunnerDestroyQuietModeField(t *testing.T) {
 	r.Verbose = true
 	if !r.Verbose {
 		t.Error("Runner.Verbose should be settable to true for verbose streaming")
+	}
+}
+
+// ---- Phase 84.1-02: bounded execution + heartbeat tests (GAP-4, GAP-5) ----
+
+// TestRunner_Apply_ContextTimeoutReturnsDeadlineExceededError verifies that
+// when the caller's context deadline expires, the runner returns an error
+// wrapping context.DeadlineExceeded (so callers can errors.Is-detect it).
+// Reproduces the wedged-terragrunt scenario from 84-10-UAT.md (lines 53-72).
+func TestRunner_Apply_ContextTimeoutReturnsDeadlineExceededError(t *testing.T) {
+	makeFakeTerragruntBin(t, "sleep 5")
+
+	r := &terragrunt.Runner{
+		AWSProfile: "test",
+		RepoRoot:   t.TempDir(),
+		Verbose:    false,
+	}
+	sandboxDir := makeFakeSandboxDir(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := r.Apply(ctx, sandboxDir)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	// Strict: callers must be able to errors.Is-detect a deadline-exceeded
+	// timeout so they can distinguish "module wedged" from "module returned an
+	// AWS API error". The naked exec.ExitError that exec.CommandContext returns
+	// when it SIGKILLs the child is not enough — the runner must wrap ctx.Err().
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected error wrapping context.DeadlineExceeded, got: %v", err)
+	}
+	if elapsed > 10*time.Second {
+		t.Errorf("Apply blocked for %s, expected to return within a few seconds of the timeout", elapsed)
+	}
+}
+
+// TestRunner_Apply_ContextCancellationKillsSubprocess verifies that cancelling
+// the context mid-flight returns promptly (does not block on a dead child).
+func TestRunner_Apply_ContextCancellationKillsSubprocess(t *testing.T) {
+	makeFakeTerragruntBin(t, "sleep 5")
+
+	r := &terragrunt.Runner{
+		AWSProfile: "test",
+		RepoRoot:   t.TempDir(),
+		Verbose:    false,
+	}
+	sandboxDir := makeFakeSandboxDir(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- r.Apply(ctx, sandboxDir)
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+	cancelStart := time.Now()
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected non-nil error after cancel, got nil")
+		}
+		// Without explicit cmd.Cancel + cmd.WaitDelay wiring, exec.CommandContext
+		// waits for the child to exit on its own after SIGKILL — which for a
+		// `sleep 5` shim can take seconds. The runner must escalate SIGTERM →
+		// SIGKILL promptly so Ctrl-C feels responsive.
+		if elapsed := time.Since(cancelStart); elapsed > 2*time.Second {
+			t.Errorf("Apply took %s to return after cancel — expected sub-2s response", elapsed)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("Apply did not return within 8s of context cancellation — child likely orphaned")
+	}
+}
+
+// TestRunner_QuietMode_EmitsHeartbeatEveryN verifies that quiet-mode runs
+// emit at least one heartbeat tick during a multi-second apply (closes GAP-4:
+// silent 10+ minute hang with no progress feedback).
+func TestRunner_QuietMode_EmitsHeartbeatEveryN(t *testing.T) {
+	makeFakeTerragruntBin(t, "sleep 2")
+
+	var buf strings.Builder
+	r := &terragrunt.Runner{
+		AWSProfile:       "test",
+		RepoRoot:         t.TempDir(),
+		Verbose:          false,
+		ProgressInterval: 200 * time.Millisecond,
+		ProgressWriter:   &buf,
+	}
+	sandboxDir := makeFakeSandboxDir(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_ = r.Apply(ctx, sandboxDir)
+
+	out := buf.String()
+	if !strings.Contains(out, "still running") {
+		t.Errorf("expected at least one 'still running' heartbeat tick in progress output, got: %q", out)
+	}
+}
+
+// TestRunner_VerboseMode_NoHeartbeat verifies the heartbeat is suppressed in
+// Verbose mode (raw stream already provides feedback).
+func TestRunner_VerboseMode_NoHeartbeat(t *testing.T) {
+	makeFakeTerragruntBin(t, "sleep 1")
+
+	var buf strings.Builder
+	r := &terragrunt.Runner{
+		AWSProfile:       "test",
+		RepoRoot:         t.TempDir(),
+		Verbose:          true,
+		ProgressInterval: 100 * time.Millisecond,
+		ProgressWriter:   &buf,
+	}
+	sandboxDir := makeFakeSandboxDir(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_ = r.Apply(ctx, sandboxDir)
+
+	if strings.Contains(buf.String(), "still running") {
+		t.Errorf("expected NO heartbeat in Verbose mode, got: %q", buf.String())
 	}
 }
