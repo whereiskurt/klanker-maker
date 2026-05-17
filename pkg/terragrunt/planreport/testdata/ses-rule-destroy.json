@@ -1,0 +1,17 @@
+{
+  "format_version": "1.0",
+  "terraform_version": "1.8.2",
+  "resource_changes": [
+    {
+      "address": "aws_ses_receipt_rule.sandbox_catchall",
+      "mode": "managed",
+      "type": "aws_ses_receipt_rule",
+      "name": "sandbox_catchall",
+      "change": {
+        "actions": ["delete"],
+        "before": {},
+        "after": null
+      }
+    }
+  ]
+}

@@ -11,6 +11,9 @@ func TestProtectedTypes_Contents(t *testing.T) {
 		"aws_ses_domain_dkim",
 		"aws_ses_active_receipt_rule_set",
 		"aws_ses_receipt_rule_set",
+		// Phase 82->84 incident — receipt rule children (operator inbound + sandbox catchall)
+		// destroyed via removed{destroy=true} orphan path; the parent rule_set alone is insufficient.
+		"aws_ses_receipt_rule",
 		"aws_route53_record",
 		"aws_s3_bucket",
 		"aws_s3_bucket_policy",

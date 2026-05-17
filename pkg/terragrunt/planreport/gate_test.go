@@ -190,6 +190,55 @@ func TestEvaluate_MultiModuleAggregation(t *testing.T) {
 	}
 }
 
+func TestEvaluate_SESReceiptRuleDestroy(t *testing.T) {
+	// GAP-1: aws_ses_receipt_rule was the exact resource type destroyed in the Phase 82->84
+	// incident. This test asserts the gate trips (Blocked=true) for that resource type.
+	r := Report{
+		Module: "ses",
+		Destroys: []ResourceChange{
+			{Address: "aws_ses_receipt_rule.sandbox_catchall", Type: "aws_ses_receipt_rule", Action: "delete"},
+		},
+	}
+	result := Evaluate([]Report{r}, false)
+	if !result.Blocked {
+		t.Errorf("expected Blocked=true for aws_ses_receipt_rule destroy (GAP-1 regression)")
+	}
+	if len(result.Trips) != 1 {
+		t.Fatalf("expected 1 Trip, got %d", len(result.Trips))
+	}
+	if result.Trips[0].Action != "DESTROY" {
+		t.Errorf("expected Trip.Action=DESTROY, got %q", result.Trips[0].Action)
+	}
+	if result.Trips[0].Type != "aws_ses_receipt_rule" {
+		t.Errorf("expected Trip.Type=aws_ses_receipt_rule, got %q", result.Trips[0].Type)
+	}
+	if result.Trips[0].Address != "aws_ses_receipt_rule.sandbox_catchall" {
+		t.Errorf("expected Trip.Address=aws_ses_receipt_rule.sandbox_catchall, got %q", result.Trips[0].Address)
+	}
+}
+
+func TestEvaluate_SESReceiptRuleOverride(t *testing.T) {
+	// Confirms override semantics: acceptDestroys=true clears Blocked but Trips still populated
+	// (operator visibility contract), even for the GAP-1 incident type.
+	r := Report{
+		Module: "ses",
+		Destroys: []ResourceChange{
+			{Address: "aws_ses_receipt_rule.sandbox_catchall", Type: "aws_ses_receipt_rule", Action: "delete"},
+		},
+	}
+	result := Evaluate([]Report{r}, true) // acceptDestroys=true
+	if result.Blocked {
+		t.Errorf("expected Blocked=false when acceptDestroys=true")
+	}
+	// Trips list STILL populated (operator visibility contract)
+	if len(result.Trips) != 1 {
+		t.Errorf("expected Trips still populated when override active, got %d trips", len(result.Trips))
+	}
+	if result.Trips[0].Type != "aws_ses_receipt_rule" {
+		t.Errorf("expected Trip.Type=aws_ses_receipt_rule, got %q", result.Trips[0].Type)
+	}
+}
+
 func TestEvaluate_TripsListedOnOverride(t *testing.T) {
 	r := Report{
 		Module: "ses",
