@@ -192,6 +192,28 @@ type Config struct {
 	Clusters []ClusterConfig `mapstructure:"clusters" yaml:"clusters"`
 }
 
+// accountsYamlAuthoritativeKeys lists the viper keys for which km-config.yaml
+// values take precedence over shell environment variables. This is an intentional
+// asymmetry introduced by Phase 84.3 closure (h):
+//
+//   - accounts.organization, accounts.dns_parent, accounts.application: these three
+//     account IDs are platform topology values that must reflect km-config.yaml so
+//     that every km command (km init, km doctor, km info) uses the same account
+//     regardless of what the operator has exported in their shell. Operators commonly
+//     export KM_ACCOUNTS_APPLICATION for one-off experiments that should NOT silently
+//     override the install-level topology for shared-account operations.
+//
+//   - accounts.terraform: INTENTIONALLY OMITTED. Operators legitimately set
+//     KM_ACCOUNTS_TERRAFORM for one-off invocations to a different infra account
+//     (e.g. staging vs production). Env-var precedence for this key is therefore
+//     preserved. See Phase 84.3 CONTEXT.md decision and RESEARCH.md Pitfall 1.
+var accountsYamlAuthoritativeKeys = map[string]bool{
+	"accounts.organization": true,
+	"accounts.dns_parent":   true,
+	"accounts.application":  true,
+	// accounts.terraform is intentionally absent — env wins for that key.
+}
+
 // isSetByEnv returns true if the given viper key has been overridden by an environment
 // variable (KM_ prefix). Viper maps "foo.bar" -> KM_FOO_BAR (dots become underscores).
 func isSetByEnv(_ *viper.Viper, key string) bool {
@@ -255,6 +277,10 @@ func Load() (*Config, error) {
 
 	// Environment variable overrides (KM_PROFILE_SEARCH_PATHS, KM_LOG_LEVEL, etc.)
 	v.SetEnvPrefix("KM")
+	// SetEnvKeyReplacer maps dot-notation viper keys to underscored env vars:
+	// "accounts.terraform" → KM_ACCOUNTS_TERRAFORM, "sso.start_url" → KM_SSO_START_URL.
+	// Without this, AutomaticEnv only handles flat (non-dot) keys correctly.
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	v.AutomaticEnv()
 
 	// Secondary config file: km-config.yaml in current directory or repo root.
@@ -307,7 +333,10 @@ func Load() (*Config, error) {
 			"container_substrates_enabled",
 			"clusters",
 		} {
-			if v2.IsSet(key) && !isSetByEnv(v, key) {
+			// yaml wins unconditionally for accountsYamlAuthoritativeKeys (organization,
+			// dns_parent, application). For all other keys, env-var takes precedence
+			// over yaml (standard viper merge semantics).
+			if v2.IsSet(key) && (accountsYamlAuthoritativeKeys[key] || !isSetByEnv(v, key)) {
 				v.Set(key, v2.Get(key))
 			}
 		}
