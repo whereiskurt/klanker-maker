@@ -129,3 +129,7 @@ Checking committed files exist:
 ---
 *Phase: 84-ses-per-install-rule-namespacing-via-operator-address-prefix*
 *Completed: 2026-05-16*
+
+## Phase 84.1 drift
+
+No code drift for Plan 84-04 itself. However, the `--reset-prefix` clearing path (operator_email cleared on reset, then re-derived on next configure) was NOT exercised in Phase 84 UAT (existing value was preserved). Plan 84.1-05 UAT exercises this path explicitly.

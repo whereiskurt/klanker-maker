@@ -89,3 +89,9 @@ Task 1 produced no commit (verification-only task with no file changes).
 - Makefile modified: confirmed (6 insertions, 6 deletions in commit 0d74a39)
 - `make test-no-82.1-leftovers` exits 0: confirmed GREEN
 - `infra/modules/ses/v1.0.0/` untouched: confirmed via git status
+
+## Phase 84.1 drift
+
+One inline UAT-time fix modified the Plan 84-08 grep gate scope:
+
+- `7aefed3 fix(84-08): scope grep gate to code dirs — docs may legitimately mention activate_rule_set` — the `test-no-82.1-leftovers` Makefile target now scopes its grep to `infra/ internal/ pkg/ cmd/` only, excluding `OPERATOR-GUIDE.md` and `CLAUDE.md` which legitimately reference the past-tense Phase 82.1 removal.

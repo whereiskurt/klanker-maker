@@ -135,3 +135,12 @@ None - no external service configuration required.
 ---
 *Phase: 84-ses-per-install-rule-namespacing-via-operator-address-prefix*
 *Completed: 2026-05-16*
+
+## Phase 84.1 drift
+
+Two inline UAT-time fixes modified the Plan 84-07 deliverables and should be considered authoritative:
+
+- `143798d fix(84-07): run terragrunt init -reconfigure before apply in km bootstrap --shared-ses` — `defaultApplyTerragrunt` now calls `runner.Reconfigure(ctx, dir)` before `Apply` so a fresh terragrunt cache dir gets its backend initialized.
+- `80b59a3 fix(84-07): reconfigure ses backend before apply in km init regional loop` — `InitRunner` interface gained `Reconfigure(ctx, dir) error`, and `RunInitWithRunner` calls it before the regional ses apply for the same reason (v1.0.0 → v2.0.0 source flip creates a new cache dir).
+
+Additionally, the `InitSESPreflight` block-until-shared-rule-set-exists path was NOT exercised in Phase 84 UAT (rule set was always present). Plan 84.1-05 UAT exercises this path by deliberately destroying the foundation rule set and confirming `km init` fails fast.
