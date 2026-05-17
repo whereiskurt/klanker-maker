@@ -168,9 +168,9 @@ spec:
     noBedrock: true
     claudeArgs:
       - "--dangerously-skip-permissions"
-    notifyOnIdle: true
-    notifyOnPermission: true
-    notifyEmailEnabled: true
+    notifyOnIdle: false
+    notifyOnPermission: false
+    notifyEmailEnabled: false
     notifySlackEnabled: true
     notifySlackPerSandbox: true
     notifySlackInboundEnabled: true
