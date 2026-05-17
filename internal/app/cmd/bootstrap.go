@@ -404,7 +404,7 @@ func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool,
 	sesDir := filepath.Join(findRepoRoot(), "infra", "live", "use1", "ses-shared-rule-set")
 
 	if dryRun {
-		fmt.Fprintf(w, "Dry run — would run: terragrunt plan %s\n", sesDir)
+		fmt.Fprintf(w, "Dry run — would run: terragrunt apply %s\n", sesDir)
 		fmt.Fprintf(w, "  KM_REGISTER_SHARED_RULESET=%s\n", os.Getenv("KM_REGISTER_SHARED_RULESET"))
 		fmt.Fprintf(w, "  KM_REGISTER_DOMAIN_IDENTITY=%s\n", os.Getenv("KM_REGISTER_DOMAIN_IDENTITY"))
 		return nil
@@ -1210,6 +1210,27 @@ func loadBootstrapConfig(cfg *config.Config) (*config.Config, error) {
 	return loadedCfg, nil
 }
 
+// warnEmptyAccountIDs emits one WARN line to w per empty required accounts.* key.
+// Required keys: accounts.organization, accounts.dns_parent, accounts.application.
+// accounts.terraform is intentionally excluded (env-precedence preserved per Plan 02).
+// Called at top of the runBootstrap status banner block so the operator sees the gap
+// before any AWS API is hit.
+func warnEmptyAccountIDs(cfg *config.Config, w io.Writer) {
+	checks := []struct {
+		key   string
+		value string
+	}{
+		{"accounts.organization", cfg.OrganizationAccountID},
+		{"accounts.dns_parent", cfg.DNSParentAccountID},
+		{"accounts.application", cfg.ApplicationAccountID},
+	}
+	for _, c := range checks {
+		if c.value == "" {
+			fmt.Fprintf(w, "WARN: %s is empty in km-config.yaml — required for this command\n", c.key)
+		}
+	}
+}
+
 // runBootstrap implements bootstrap validation, dry-run output, and SCP deployment.
 func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Writer) error {
 	if ctx == nil {
@@ -1220,6 +1241,8 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 	if err != nil {
 		return err
 	}
+
+	warnEmptyAccountIDs(loadedCfg, os.Stderr)
 
 	fmt.Fprintf(w, "Domain:  %s\n", loadedCfg.Domain)
 	fmt.Fprintf(w, "Region:  %s\n", loadedCfg.PrimaryRegion)
