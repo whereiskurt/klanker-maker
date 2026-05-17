@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.1-03-PLAN.md detect-state-digest-drift-in-km-doctor
-last_updated: "2026-05-17T00:12:59.235Z"
+stopped_at: Completed 84.1-02-PLAN.md terragrunt-timeout-and-heartbeat-for-km-init
+last_updated: "2026-05-17T00:38:10.692Z"
 last_activity: 2026-05-17
 progress:
   total_phases: 95
   completed_phases: 82
   total_plans: 368
-  completed_plans: 320
+  completed_plans: 321
   percent: 93
 ---
 
@@ -359,6 +359,7 @@ Progress: [█████████░] 93%
 | Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P09 | 2min | 3 tasks | 4 files |
 | Phase 84.1 P01 | 16min | 2 tasks | 10 files |
 | Phase 84.1 P03 | 25min | 2 tasks | 4 files |
+| Phase 84.1 P02 | 18 min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1024,6 +1025,10 @@ Recent decisions affecting current work:
 - [Phase 84.1]: Plan 84.1-01: KM_REGION_LABEL derived via compiler.RegionLabel(cfg.PrimaryRegion), not added as a config field — single-sourced in pkg/compiler
 - [Phase 84.1]: Plan 84.1-01: exported RunBootstrapSharedSES as one-line test seam forwarder; cobra command path unchanged
 - [Phase 84.1]: Plan 84.1-03: Detection-only state-digest check (no auto-repair) — WARN level with copy-paste aws dynamodb update-item remediation; uses dynamodb.NewScanPaginator to handle >1MB lock-table scans
+- [Phase 84.1]: Heartbeat lives at the runner layer, not the call-site layer — Putting the heartbeat goroutine inside runBounded means every km command that wraps terragrunt (km init, km bootstrap, km destroy, km cluster add, km slack init) inherits the heartbeat automatically without per-caller wiring
+- [Phase 84.1]: ModuleTimeoutFunc is a package-level var, not a const — Enables sub-second tests that exercise the timeout path; production behaviour unaffected. Same pattern as ApplyTerragruntFunc and InitSESPreflight test seams.
+- [Phase 84.1]: Single BootstrapApplyTimeout bounds Reconfigure+Apply together in defaultApplyTerragrunt — One budget for one module-apply, mirroring init.go per-module-Apply treatment. Separate bounds would have allowed 20 minutes wall-clock for a 10-minute-bootstrap-apply.
+- [Phase 84.1]: cmd.Cancel uses os.Interrupt not syscall.SIGTERM (plan-checker rev 1 L15) — syscall.SIGTERM is undefined on Windows builds. os.Interrupt maps to SIGINT on Unix and CTRL_BREAK_EVENT on Windows, achieving the give-the-child-a-chance-to-clean-up-before-SIGKILL semantics cross-platform.
 
 ### Roadmap Evolution
 
@@ -1130,6 +1135,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-17T00:12:59.228Z
-Stopped at: Completed 84.1-03-PLAN.md detect-state-digest-drift-in-km-doctor
+Last session: 2026-05-17T00:38:10.682Z
+Stopped at: Completed 84.1-02-PLAN.md terragrunt-timeout-and-heartbeat-for-km-init
 Resume file: None
