@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -54,9 +55,13 @@ func NewRunner(awsProfile, repoRoot string) *Runner {
 // When Verbose is true, stdout and stderr are streamed in real time to the terminal.
 // When Verbose is false (default), output is captured; on failure the captured stderr
 // is printed so errors are always visible. Warnings are always printed.
+//
+// Phase 84.1-02: honours ctx deadline/cancellation and emits a heartbeat in
+// quiet mode (see Runner doc). A bounded ctx returns context.DeadlineExceeded
+// (wrapped) when the deadline trips.
 func (r *Runner) Apply(ctx context.Context, sandboxDir string) error {
 	cmd := r.BuildApplyCommand(ctx, sandboxDir)
-	return r.runCommand(cmd)
+	return r.runCommand(ctx, cmd)
 }
 
 // Destroy runs `terragrunt destroy -auto-approve` inside sandboxDir.
@@ -65,7 +70,7 @@ func (r *Runner) Apply(ctx context.Context, sandboxDir string) error {
 // is printed so errors are always visible. Warnings are always printed.
 func (r *Runner) Destroy(ctx context.Context, sandboxDir string) error {
 	cmd := r.BuildDestroyCommand(ctx, sandboxDir)
-	return r.runCommand(cmd)
+	return r.runCommand(ctx, cmd)
 }
 
 // Output runs `terragrunt output -json` inside sandboxDir, captures the output,
@@ -113,7 +118,7 @@ func (r *Runner) BuildOutputCommand(ctx context.Context, sandboxDir string) *exe
 // Safe to call when no reconfigure is needed — it's a no-op in that case.
 func (r *Runner) Reconfigure(ctx context.Context, sandboxDir string) error {
 	cmd := r.buildCommand(ctx, sandboxDir, "init", "-reconfigure")
-	return r.runCommand(cmd)
+	return r.runCommand(ctx, cmd)
 }
 
 // Plan runs `terragrunt plan` inside sandboxDir for dry-run preview without
@@ -124,23 +129,25 @@ func (r *Runner) Reconfigure(ctx context.Context, sandboxDir string) error {
 // and prints warnings/errors when false. No -auto-approve flag (plan is read-only).
 func (r *Runner) Plan(ctx context.Context, sandboxDir string) error {
 	cmd := r.buildCommand(ctx, sandboxDir, "plan")
-	return r.runCommand(cmd)
+	return r.runCommand(ctx, cmd)
 }
 
 // ApplyWithStderr runs apply, capturing stderr to the provided buffer (for error detection).
 // When Verbose is true: stdout streams to terminal, stderr streams to both terminal and stderrBuf.
 // When Verbose is false: stdout is captured, stderr goes to stderrBuf and is printed on failure.
+//
+// Phase 84.1-02: same ctx + heartbeat treatment as runCommand.
 func (r *Runner) ApplyWithStderr(ctx context.Context, sandboxDir string, stderrBuf *strings.Builder) error {
 	cmd := r.BuildApplyCommand(ctx, sandboxDir)
 	if r.Verbose {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = io.MultiWriter(os.Stderr, stderrBuf)
-		return cmd.Run()
+		return r.runBounded(ctx, cmd)
 	}
 	var stdoutBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = stderrBuf
-	err := cmd.Run()
+	err := r.runBounded(ctx, cmd)
 	if err != nil {
 		printWarningsAndErrors(stderrBuf.String())
 	}
@@ -151,18 +158,20 @@ func (r *Runner) ApplyWithStderr(ctx context.Context, sandboxDir string, stderrB
 // When Verbose is true: stdout streams to terminal, stderr streams to both terminal and stderrBuf.
 // When Verbose is false: stdout is captured (discarded on success), stderr goes to both
 // stderrBuf and is printed on failure so errors are always visible.
+//
+// Phase 84.1-02: same ctx + heartbeat treatment as runCommand.
 func (r *Runner) DestroyWithStderr(ctx context.Context, sandboxDir string, stderrBuf *strings.Builder) error {
 	cmd := r.BuildDestroyCommand(ctx, sandboxDir)
 	if r.Verbose {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = io.MultiWriter(os.Stderr, stderrBuf)
-		return cmd.Run()
+		return r.runBounded(ctx, cmd)
 	}
 	// Quiet mode: capture stdout, send stderr to buffer only
 	var stdoutBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = stderrBuf
-	err := cmd.Run()
+	err := r.runBounded(ctx, cmd)
 	if err != nil {
 		// Always print stderr on failure so errors are visible
 		printWarningsAndErrors(stderrBuf.String())
@@ -174,24 +183,30 @@ func (r *Runner) DestroyWithStderr(ctx context.Context, sandboxDir string, stder
 // to bypass a stale state lock. Used after the operator confirms lock clearing.
 func (r *Runner) DestroyForceUnlock(ctx context.Context, sandboxDir string) error {
 	cmd := r.buildCommand(ctx, sandboxDir, "destroy", "-auto-approve", "-lock=false")
-	return r.runCommand(cmd)
+	return r.runCommand(ctx, cmd)
 }
 
 // runCommand executes the command in verbose or quiet mode based on r.Verbose.
 // In verbose mode: streams stdout and stderr directly to the terminal.
 // In quiet mode: captures stdout and stderr; on failure prints captured stderr;
 // warnings from stderr are always printed regardless of success.
-func (r *Runner) runCommand(cmd *exec.Cmd) error {
+//
+// Phase 84.1-02: ctx is honoured (deadline/cancel triggers SIGTERM then SIGKILL
+// via cmd.Cancel + cmd.WaitDelay) and a quiet-mode heartbeat is emitted at
+// r.ProgressInterval. When ctx.Err() is non-nil after cmd.Wait returns, the
+// runner wraps it so callers can errors.Is-detect context.DeadlineExceeded /
+// context.Canceled instead of seeing the raw "signal: killed" exec.ExitError.
+func (r *Runner) runCommand(ctx context.Context, cmd *exec.Cmd) error {
 	if r.Verbose {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		return cmd.Run()
+		return r.runBounded(ctx, cmd)
 	}
 	// Quiet mode: capture output
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
-	err := cmd.Run()
+	err := r.runBounded(ctx, cmd)
 	if err != nil {
 		// Always print captured stderr on failure so errors are visible
 		if stderrContent := stderrBuf.String(); stderrContent != "" {
@@ -204,6 +219,80 @@ func (r *Runner) runCommand(cmd *exec.Cmd) error {
 		printWarningsAndErrors(stderrContent)
 	}
 	return nil
+}
+
+// runBounded starts cmd, watches for ctx cancellation, fires a quiet-mode
+// heartbeat, and waits for completion. Returns ctx.Err() (wrapped) when ctx
+// caused the kill so callers can errors.Is-detect DeadlineExceeded/Canceled.
+//
+// Phase 84.1-02 (GAP-4 + GAP-5): centralises the bounded-execution semantics
+// for Apply / Destroy / Reconfigure / Plan / *WithStderr / DestroyForceUnlock.
+func (r *Runner) runBounded(ctx context.Context, cmd *exec.Cmd) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	// Quiet-mode heartbeat: tick every ProgressInterval until cmd exits or ctx
+	// fires. Verbose mode already streams raw output so no heartbeat is needed.
+	heartbeatDone := make(chan struct{})
+	if !r.Verbose && r.ProgressInterval > 0 {
+		w := r.ProgressWriter
+		if w == nil {
+			w = os.Stderr
+		}
+		go runHeartbeat(ctx, heartbeatDone, cmd, r.ProgressInterval, w)
+	}
+
+	waitErr := cmd.Wait()
+	close(heartbeatDone)
+
+	// When ctx fires, exec.CommandContext signals the process (via cmd.Cancel
+	// or default Kill) and cmd.Wait returns "signal: killed" or similar. Surface
+	// the ctx error so callers can errors.Is-detect timeouts vs cancellations
+	// vs real terragrunt failures.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if errors.Is(ctxErr, context.DeadlineExceeded) {
+			return fmt.Errorf("terragrunt %s: %w (process killed after timeout)", cmdName(cmd), ctxErr)
+		}
+		if errors.Is(ctxErr, context.Canceled) {
+			return fmt.Errorf("terragrunt %s: %w", cmdName(cmd), ctxErr)
+		}
+	}
+	return waitErr
+}
+
+// runHeartbeat writes a "... still running" tick to w every interval, until
+// either ctx fires or done is closed. Includes elapsed time and the child PID
+// so operators can correlate with `ps` / aws-cli observations during a hang.
+func runHeartbeat(ctx context.Context, done <-chan struct{}, cmd *exec.Cmd, interval time.Duration, w io.Writer) {
+	start := time.Now()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			return
+		case t := <-ticker.C:
+			pid := 0
+			if cmd.Process != nil {
+				pid = cmd.Process.Pid
+			}
+			fmt.Fprintf(w, "  ... still running (%s elapsed, pid=%d)\n",
+				t.Sub(start).Round(time.Second), pid)
+		}
+	}
+}
+
+// cmdName returns the first non-binary arg (the terragrunt subcommand) so
+// error messages read as "terragrunt apply: ..." instead of "terragrunt: ...".
+// Falls back to the binary path if no subcommand is present.
+func cmdName(cmd *exec.Cmd) string {
+	if len(cmd.Args) >= 2 {
+		return cmd.Args[1]
+	}
+	return cmd.Path
 }
 
 // printWarningsAndErrors scans each line of output and prints lines that
@@ -244,5 +333,12 @@ func (r *Runner) buildCommand(ctx context.Context, sandboxDir string, args ...st
 	if os.Getenv("TG_NON_INTERACTIVE") == "" {
 		cmd.Env = append(cmd.Env, "TG_NON_INTERACTIVE=true")
 	}
+	// Phase 84.1-02: graceful shutdown on ctx cancel — send os.Interrupt first
+	// (SIGINT on Unix, CTRL_BREAK_EVENT on Windows; per L15 from plan-checker
+	// rev 1, do NOT use syscall.SIGTERM which is non-portable). WaitDelay
+	// escalates to SIGKILL if the child doesn't exit cleanly within 5s so
+	// Ctrl-C feels responsive even when terragrunt holds state locks.
+	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	cmd.WaitDelay = 5 * time.Second
 	return cmd
 }
