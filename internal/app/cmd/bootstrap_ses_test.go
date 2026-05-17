@@ -123,3 +123,126 @@ func TestDetectSharedSESState(t *testing.T) {
 		}
 	})
 }
+
+// =============================================================================
+// Phase 84.1-04 Task 1: FoundationStateReader-aware auto-detect (GAP-2, GAP-3)
+// =============================================================================
+//
+// These tests lock in the Phase 84.1 semantic change: register_* flags mean
+// "manage this resource", not "create on first apply only". The auto-detect
+// MUST prefer foundation state ownership over AWS reality polling. If the
+// foundation already manages a resource in tfstate, register_* stays true so
+// terragrunt keeps managing it (no destroy planned, no prevent_destroy violation).
+
+// mockFoundationStateReader implements cmd.FoundationStateReader for testing.
+// owned is the set of resource addresses (e.g. "aws_ses_receipt_rule_set.shared[0]")
+// the foundation tfstate is asserted to own.
+type mockFoundationStateReader struct {
+	owned map[string]bool
+	err   error
+}
+
+func (m *mockFoundationStateReader) StateOwns(_ context.Context, addr string) (bool, error) {
+	if m.err != nil {
+		return false, m.err
+	}
+	return m.owned[addr], nil
+}
+
+// TestDetectSharedSESState_FoundationStateOwnership_PrefersStateOverAWS verifies
+// that when foundation tfstate already lists aws_ses_domain_identity.sandbox[0]
+// as a managed resource, DetectSharedSESState returns registerDomainIdentity=true
+// (NOT false), because foundation must keep managing what is in its state.
+// Closes GAP-2 + GAP-3.
+func TestDetectSharedSESState_FoundationStateOwnership_PrefersStateOverAWS(t *testing.T) {
+	const ruleSetName = "sandbox-email-shared"
+	const emailDomain = "sandboxes.example.com"
+
+	// Foundation state owns BOTH shared resources.
+	stateReader := &mockFoundationStateReader{
+		owned: map[string]bool{
+			"aws_ses_receipt_rule_set.shared[0]":   true,
+			"aws_ses_domain_identity.sandbox[0]":   true,
+		},
+	}
+
+	// AWS reality says: rule set + identity already exist. Old behaviour would
+	// have set both flags to false → terraform destroy → prevent_destroy block.
+	// New behaviour: state ownership wins, flags stay TRUE.
+	mock := &mockSESIdentityLister{
+		ruleSetNames:     []string{ruleSetName},
+		domainIdentities: []string{emailDomain},
+	}
+
+	registerRS, registerID, err := cmd.DetectSharedSESStateWithStateReader(
+		context.Background(), mock, stateReader, ruleSetName, emailDomain)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !registerRS {
+		t.Error("expected registerSharedRuleSet=true (foundation state owns it; must keep managing)")
+	}
+	if !registerID {
+		t.Error("expected registerDomainIdentity=true (foundation state owns it; must keep managing)")
+	}
+}
+
+// TestDetectSharedSESState_FoundationStateAbsent_FallsBackToAWSReality verifies
+// that when the foundation tfstate does NOT contain a resource, the auto-detect
+// falls through to the existing AWS-reality check. With the new semantics, AWS
+// presence still keeps the flag TRUE (relying on Task 2's import blocks to bring
+// the resource under foundation management). This preserves fresh-install
+// behaviour AND closes GAP-3: pre-existing AWS resources NOT in foundation
+// state are imported, not skipped.
+func TestDetectSharedSESState_FoundationStateAbsent_FallsBackToAWSReality(t *testing.T) {
+	const ruleSetName = "sandbox-email-shared"
+	const emailDomain = "sandboxes.example.com"
+
+	// Foundation state owns NOTHING (fresh install OR pre-Phase-84.1 install).
+	stateReader := &mockFoundationStateReader{owned: map[string]bool{}}
+
+	// AWS reality says: rule set + identity exist (legacy v1.0.0 owned them).
+	// GAP-3 scenario: previously this would have set both flags to FALSE and
+	// the regional cutover would have destroyed the resources. New behaviour:
+	// flags stay TRUE → foundation imports them via Task 2's import blocks.
+	mock := &mockSESIdentityLister{
+		ruleSetNames:     []string{ruleSetName},
+		domainIdentities: []string{emailDomain},
+	}
+
+	registerRS, registerID, err := cmd.DetectSharedSESStateWithStateReader(
+		context.Background(), mock, stateReader, ruleSetName, emailDomain)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !registerRS {
+		t.Error("expected registerSharedRuleSet=true (Phase 84.1 semantic: manage, not create-once)")
+	}
+	if !registerID {
+		t.Error("expected registerDomainIdentity=true (Phase 84.1 semantic: manage, not create-once)")
+	}
+}
+
+// TestDetectSharedSESState_FoundationStateMissing_FreshInstall verifies that
+// passing a nil FoundationStateReader (truly fresh account, no state at all,
+// or test bypass) results in both register flags defaulting to TRUE (create
+// everything). Matches the pre-84.1 fresh-install behaviour exactly.
+func TestDetectSharedSESState_FoundationStateMissing_FreshInstall(t *testing.T) {
+	const ruleSetName = "sandbox-email-shared"
+	const emailDomain = "sandboxes.example.com"
+
+	// No state reader at all (the nil-mode bypass for tests / fresh accounts).
+	mock := &mockSESIdentityLister{} // AWS reality: nothing exists either.
+
+	registerRS, registerID, err := cmd.DetectSharedSESStateWithStateReader(
+		context.Background(), mock, nil, ruleSetName, emailDomain)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !registerRS {
+		t.Error("expected registerSharedRuleSet=true (fresh install)")
+	}
+	if !registerID {
+		t.Error("expected registerDomainIdentity=true (fresh install)")
+	}
+}

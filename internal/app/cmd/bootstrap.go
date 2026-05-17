@@ -76,11 +76,58 @@ func (r *realSESLister) ListEmailIdentities(ctx context.Context, in *sesv2.ListE
 //   - registerSharedRuleSet: true when the rule set does NOT exist yet (i.e. Terraform should create it)
 //   - registerDomainIdentity: true when the domain identity does NOT exist yet (i.e. Terraform should create it)
 func DetectSharedSESState(ctx context.Context, lister SESIdentityLister, ruleSetName, emailDomain string) (registerSharedRuleSet, registerDomainIdentity bool, err error) {
-	return detectSharedSESState(ctx, lister, ruleSetName, emailDomain)
+	return detectSharedSESState(ctx, lister, nil, ruleSetName, emailDomain)
+}
+
+// DetectSharedSESStateWithStateReader is the Phase 84.1 variant of
+// DetectSharedSESState that also consults the foundation tfstate via a
+// FoundationStateReader. When stateReader.StateOwns reports that a shared
+// resource is already in foundation state, the corresponding register_* flag
+// stays TRUE — keeping foundation in charge of the resource (the new "manage"
+// semantic; GAP-2 closure).
+//
+// Pass nil for stateReader to fall back to the legacy AWS-reality check
+// (used by defaultSESPreflight in init.go — the documented "skip state check"
+// mode for read-only existence checks).
+//
+// Exported for use in tests (cmd_test package).
+func DetectSharedSESStateWithStateReader(ctx context.Context, lister SESIdentityLister, stateReader FoundationStateReader, ruleSetName, emailDomain string) (registerSharedRuleSet, registerDomainIdentity bool, err error) {
+	return detectSharedSESState(ctx, lister, stateReader, ruleSetName, emailDomain)
+}
+
+// FoundationStateReader returns true iff the named resource address is present
+// in the foundation module's terraform state.
+//
+// Phase 84.1: implementations may read the state file from S3 (production)
+// or from an in-memory map (tests). A nil-safe contract is enforced at the
+// caller: detectSharedSESState skips the state check when the reader is nil.
+//
+// Resource addresses use Terraform's address syntax — for count=1 resources,
+// always include the [0] suffix (e.g. "aws_ses_domain_identity.sandbox[0]").
+type FoundationStateReader interface {
+	// StateOwns reports whether resourceAddr is in foundation tfstate.
+	// Returns (false, nil) when the state file does not exist (fresh account).
+	// Returns (false, err) only on unexpected I/O errors — the caller treats
+	// errors as "not owned" to avoid blocking init on transient S3 issues.
+	StateOwns(ctx context.Context, resourceAddr string) (bool, error)
 }
 
 // detectSharedSESState is the unexported implementation called by DetectSharedSESState and runBootstrapSharedSES.
-func detectSharedSESState(ctx context.Context, lister SESIdentityLister, ruleSetName, emailDomain string) (registerSharedRuleSet, registerDomainIdentity bool, err error) {
+//
+// Phase 84.1 Task 1: signature extended with FoundationStateReader. When
+// stateReader is non-nil and reports state ownership for a shared resource,
+// the corresponding register_* flag stays TRUE — the new "manage this
+// resource" semantic (GAP-2). When stateReader is nil OR reports no ownership,
+// fall back to the legacy AWS-reality check.
+//
+// The new semantic: register_* flags mean "this module manages the resource",
+// NOT "create only on first apply". Once foundation owns the resource in
+// state, the flag stays true; flipping to false intentionally orphans the
+// resource (which prevent_destroy then blocks at the terraform layer).
+//
+// TODO(84.1-04 Task 1 GREEN): wire the stateReader.StateOwns calls.
+// RED commit currently only changes the signature so tests compile.
+func detectSharedSESState(ctx context.Context, lister SESIdentityLister, stateReader FoundationStateReader, ruleSetName, emailDomain string) (registerSharedRuleSet, registerDomainIdentity bool, err error) {
 	// Default: create both (safe idempotent starting point).
 	registerSharedRuleSet = true
 	registerDomainIdentity = true
@@ -161,7 +208,11 @@ func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool,
 		}
 	}
 
-	registerRS, registerID, err := detectSharedSESState(ctx, lister, "sandbox-email-shared", emailDomain)
+	// Phase 84.1 Task 1: pass nil for the FoundationStateReader in the RED commit.
+	// GREEN commit will construct an s3FoundationStateReader and wire it in here
+	// so re-running km bootstrap against an already-bootstrapped account is a true
+	// no-op (foundation state ownership keeps register_* flags TRUE).
+	registerRS, registerID, err := detectSharedSESState(ctx, lister, nil, "sandbox-email-shared", emailDomain)
 	if err != nil {
 		return fmt.Errorf("SES auto-detect: %w", err)
 	}

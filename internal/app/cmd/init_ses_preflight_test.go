@@ -89,3 +89,49 @@ func TestInitSESPreflight(t *testing.T) {
 		}
 	})
 }
+
+// TestDefaultSESPreflight_NilStateReader_FallsBackToAWS is the C2 (plan-checker
+// rev 1) regression test for the defaultSESPreflight signature cascade.
+//
+// Plan 84.1-04 Task 1 changes detectSharedSESState's signature to take a
+// FoundationStateReader. defaultSESPreflight (in init.go) passes nil for the
+// state reader — the documented "skip state check" mode used for read-only
+// rule-set existence checks. This test verifies the nil-state-reader branch
+// returns the same preflight result as before this plan landed:
+//   - rule set absent in AWS → preflight returns an actionable error
+//   - rule set present in AWS → preflight returns nil
+//
+// If a future plan removes the nil-mode bypass, defaultSESPreflight will need
+// to be updated, and this test will surface the regression.
+func TestDefaultSESPreflight_NilStateReader_FallsBackToAWS(t *testing.T) {
+	const ruleSetName = "sandbox-email-shared"
+
+	t.Run("RuleSetAbsent_ReturnsActionableError", func(t *testing.T) {
+		mock := &mockSESIdentityLister{} // empty → rule set absent
+		registerRS, _, err := cmd.DetectSharedSESStateWithStateReader(
+			context.Background(), mock, nil, ruleSetName, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// registerRS=true means the rule set does NOT exist — defaultSESPreflight
+		// would surface this as the "Foundation SES rule set ... not found" error.
+		if !registerRS {
+			t.Error("expected registerSharedRuleSet=true (rule set absent → preflight error)")
+		}
+	})
+
+	t.Run("RuleSetPresent_PreflightPasses", func(t *testing.T) {
+		mock := &mockSESIdentityLister{
+			ruleSetNames: []string{ruleSetName},
+		}
+		registerRS, _, err := cmd.DetectSharedSESStateWithStateReader(
+			context.Background(), mock, nil, ruleSetName, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// registerRS=false means rule set exists — preflight passes (returns nil).
+		if registerRS {
+			t.Error("expected registerSharedRuleSet=false (rule set present → preflight nil)")
+		}
+	})
+}

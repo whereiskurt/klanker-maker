@@ -81,7 +81,10 @@ func defaultSESPreflight(ctx context.Context) error {
 		// sesv2Client not needed for the rule-set check alone.
 		sesv2Client: sesv2.NewFromConfig(awsCfg),
 	}
-	registerRS, _, err := detectSharedSESState(ctx, lister, "sandbox-email-shared", "")
+	// Phase 84.1 Task 1 (C2): pass nil for the FoundationStateReader.
+	// Preflight only checks rule-set existence in AWS — no state reader needed.
+	// The nil branch preserves the pre-84.1 read-only AWS-reality behaviour.
+	registerRS, _, err := detectSharedSESState(ctx, lister, nil, "sandbox-email-shared", "")
 	if err != nil {
 		// Treat detection error as a skip (network issue, permission issue, etc.)
 		// rather than aborting init. The Terraform apply will surface the real error.
