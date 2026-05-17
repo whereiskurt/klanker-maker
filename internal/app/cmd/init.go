@@ -33,6 +33,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	smithy "github.com/aws/smithy-go"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
@@ -436,6 +437,14 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 	// and for the envReqs checks in regionalModules.
 	ExportTerragruntEnvVars(cfg)
 
+	// Phase 84.3: hard-fail early when the artifacts bucket doesn't exist —
+	// prevents confusing mid-flight failures in s3-replication, create-handler, etc.
+	if cfg.ArtifactsBucket != "" {
+		if err := ensureArtifactsBucketExists(ctx, cfg, os.Stderr, nil); err != nil {
+			return err
+		}
+	}
+
 	repoRoot := findRepoRoot()
 
 	printBanner("km init", fmt.Sprintf("%s (%s)", region, compiler.RegionLabel(region)))
@@ -734,51 +743,105 @@ func runInitPartial(cfg *config.Config, awsProfile, region string, verbose, side
 // Renamed in plan 84.1-01 Task 2 from its prior, narrower-scoped name — single
 // canonical helper across all 8 production callers, NO shim (H5, plan-checker rev 1).
 func ExportTerragruntEnvVars(cfg *config.Config) {
+	// Phase 84.3: warnAndSetEnv emits a drift WARN to stderr when an env var is
+	// already set to a different value than cfgVal, then sets the env var only when
+	// it is currently unset. env-wins semantics are preserved (no override).
+	// yamlKey is the dotted yaml path used in the WARN message (e.g. "region").
+	warnAndSetEnv := func(envKey, yamlKey, cfgVal string) {
+		if envVal := os.Getenv(envKey); envVal != "" && cfgVal != "" && envVal != cfgVal {
+			fmt.Fprintf(os.Stderr, "WARN: %s=%s (env) overrides km-config.yaml %s=%s\n", envKey, envVal, yamlKey, cfgVal)
+		}
+		if cfgVal != "" && os.Getenv(envKey) == "" {
+			os.Setenv(envKey, cfgVal)
+		}
+	}
+
 	// Phase 84.1: KM_ROUTE53_ZONE_ID — required by infra/live/use1/ses-shared-rule-set/
 	// terragrunt.hcl get_env("KM_ROUTE53_ZONE_ID", "") for DKIM / MX / verification
 	// records. Was previously set only inside runInit via ensureSandboxHostedZone,
 	// which never fires from km bootstrap. Closes GAP-1 (Phase 84 UAT).
-	if cfg.Route53ZoneID != "" && os.Getenv("KM_ROUTE53_ZONE_ID") == "" {
-		os.Setenv("KM_ROUTE53_ZONE_ID", cfg.Route53ZoneID)
-	}
+	warnAndSetEnv("KM_ROUTE53_ZONE_ID", "route53_zone_id", cfg.Route53ZoneID)
+
 	// Phase 84.1: KM_REGION_LABEL — short region form (e.g. "use1") consumed by
 	// site.hcl and various terragrunt.hcl files. Derived via compiler.RegionLabel.
-	if cfg.PrimaryRegion != "" && os.Getenv("KM_REGION_LABEL") == "" {
-		os.Setenv("KM_REGION_LABEL", compiler.RegionLabel(cfg.PrimaryRegion))
+	regionLabel := ""
+	if cfg.PrimaryRegion != "" {
+		regionLabel = compiler.RegionLabel(cfg.PrimaryRegion)
 	}
-	if cfg.ArtifactsBucket != "" && os.Getenv("KM_ARTIFACTS_BUCKET") == "" {
-		os.Setenv("KM_ARTIFACTS_BUCKET", cfg.ArtifactsBucket)
-	}
-	if cfg.OrganizationAccountID != "" && os.Getenv("KM_ACCOUNTS_ORGANIZATION") == "" {
-		os.Setenv("KM_ACCOUNTS_ORGANIZATION", cfg.OrganizationAccountID)
-	}
-	if cfg.DNSParentAccountID != "" && os.Getenv("KM_ACCOUNTS_DNS_PARENT") == "" {
-		os.Setenv("KM_ACCOUNTS_DNS_PARENT", cfg.DNSParentAccountID)
-	}
-	if cfg.ApplicationAccountID != "" && os.Getenv("KM_ACCOUNTS_APPLICATION") == "" {
-		os.Setenv("KM_ACCOUNTS_APPLICATION", cfg.ApplicationAccountID)
-	}
-	if cfg.Domain != "" && os.Getenv("KM_DOMAIN") == "" {
-		os.Setenv("KM_DOMAIN", cfg.Domain)
-	}
-	if cfg.PrimaryRegion != "" && os.Getenv("KM_REGION") == "" {
-		os.Setenv("KM_REGION", cfg.PrimaryRegion)
-	}
-	if cfg.OperatorEmail != "" && os.Getenv("KM_OPERATOR_EMAIL") == "" {
-		os.Setenv("KM_OPERATOR_EMAIL", cfg.OperatorEmail)
-	}
-	if cfg.SchedulerRoleARN != "" && os.Getenv("KM_SCHEDULER_ROLE_ARN") == "" {
-		os.Setenv("KM_SCHEDULER_ROLE_ARN", cfg.SchedulerRoleARN)
-	}
+	warnAndSetEnv("KM_REGION_LABEL", "region_label", regionLabel)
+
+	warnAndSetEnv("KM_ARTIFACTS_BUCKET", "artifacts_bucket", cfg.ArtifactsBucket)
+
+	// KM_ACCOUNTS_* — yaml-authoritative for reads (Phase 84.3 Plan 02); exports
+	// still happen so terragrunt subprocesses see the correct values.
+	warnAndSetEnv("KM_ACCOUNTS_ORGANIZATION", "accounts.organization", cfg.OrganizationAccountID)
+	warnAndSetEnv("KM_ACCOUNTS_DNS_PARENT", "accounts.dns_parent", cfg.DNSParentAccountID)
+	warnAndSetEnv("KM_ACCOUNTS_APPLICATION", "accounts.application", cfg.ApplicationAccountID)
+
+	warnAndSetEnv("KM_DOMAIN", "domain", cfg.Domain)
+	warnAndSetEnv("KM_REGION", "region", cfg.PrimaryRegion)
+	warnAndSetEnv("KM_OPERATOR_EMAIL", "operator_email", cfg.OperatorEmail)
+	warnAndSetEnv("KM_SCHEDULER_ROLE_ARN", "scheduler_role_arn", cfg.SchedulerRoleARN)
+
 	// Phase 66: multi-instance prefix and email subdomain.
 	// Always export these so site.hcl get_env("KM_RESOURCE_PREFIX", "km") picks up the value.
 	// An empty string is a valid export (site.hcl fallback "km" kicks in).
+	// No cfgVal guard — warnAndSetEnv only warns when cfgVal != ""; prefix can be "".
+	prefix := cfg.GetResourcePrefix()
+	if envVal := os.Getenv("KM_RESOURCE_PREFIX"); envVal != "" && prefix != "" && envVal != prefix {
+		fmt.Fprintf(os.Stderr, "WARN: KM_RESOURCE_PREFIX=%s (env) overrides km-config.yaml resource_prefix=%s\n", envVal, prefix)
+	}
 	if os.Getenv("KM_RESOURCE_PREFIX") == "" {
-		os.Setenv("KM_RESOURCE_PREFIX", cfg.GetResourcePrefix())
+		os.Setenv("KM_RESOURCE_PREFIX", prefix)
+	}
+
+	if envVal := os.Getenv("KM_EMAIL_SUBDOMAIN"); envVal != "" && cfg.EmailSubdomain != "" && envVal != cfg.EmailSubdomain {
+		fmt.Fprintf(os.Stderr, "WARN: KM_EMAIL_SUBDOMAIN=%s (env) overrides km-config.yaml email_subdomain=%s\n", envVal, cfg.EmailSubdomain)
 	}
 	if os.Getenv("KM_EMAIL_SUBDOMAIN") == "" {
 		os.Setenv("KM_EMAIL_SUBDOMAIN", cfg.EmailSubdomain)
 	}
+}
+
+// ensureArtifactsBucketExists checks that the configured artifacts bucket exists
+// in S3. If it does not exist (404), it returns a hard-fail error naming both
+// recovery commands so the operator knows their next step. This runs before any
+// terragrunt invocation in the apply path so the operator gets an actionable
+// message immediately rather than a confusing mid-flight failure.
+//
+// The io.Writer parameter is reserved for future structured output; the error
+// message carries all operator-visible text. The s3client variadic parameter
+// is the test seam — production callers pass no client and the real S3 client
+// is constructed from the ambient AWS config.
+func ensureArtifactsBucketExists(ctx context.Context, cfg *config.Config, _ io.Writer, s3client S3HeadBucketAPI) error {
+	var c S3HeadBucketAPI
+	if s3client != nil {
+		c = s3client
+	} else {
+		awsCfg, err := awspkg.LoadAWSConfigInRegion(ctx, "klanker-terraform", cfg.PrimaryRegion)
+		if err != nil {
+			return fmt.Errorf("load AWS config: %w", err)
+		}
+		c = s3.NewFromConfig(awsCfg)
+	}
+	_, err := c.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(cfg.ArtifactsBucket)})
+	if err == nil {
+		return nil
+	}
+	// Check for 404 / NotFound using smithy error pattern (matches test mock).
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		code := apiErr.ErrorCode()
+		if code == "NotFound" || code == "NoSuchBucket" {
+			return fmt.Errorf(`✗ artifacts bucket %s does not exist.
+
+Run: km bootstrap --all --dry-run=false
+(or `+"`km bootstrap --dry-run=false`"+` for just the SCP/artifacts subflow —
+ `+"`km bootstrap --shared-ses`"+` alone does NOT create the artifacts bucket.)`, cfg.ArtifactsBucket)
+		}
+	}
+	// Other errors (auth, network) propagate without masquerading as missing-bucket.
+	return fmt.Errorf("HeadBucket %s: %w", cfg.ArtifactsBucket, err)
 }
 
 // RunInitWithRunner implements the full init flow using an InitRunner interface.
