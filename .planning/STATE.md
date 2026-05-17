@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.2-06-PLAN.md (operator docs + doctor tip for km init --plan)
-last_updated: "2026-05-17T03:38:51.655Z"
+stopped_at: Completed 84.2-07-PLAN.md (operator UAT — diagnosed, 3 PASS / 1 FAIL / 5 DEFERRED; Phase 84.3 gap closure needed)
+last_updated: "2026-05-17T04:49:45.209Z"
 last_activity: 2026-05-17
 progress:
   total_phases: 95
-  completed_phases: 83
+  completed_phases: 84
   total_plans: 375
-  completed_plans: 329
+  completed_plans: 330
   percent: 88
 ---
 
@@ -368,6 +368,7 @@ Progress: [█████████░] 88%
 | Phase 84.2-km-init-plan-flag-and-destroy-class-gate P05 | 22min | 1 tasks | 3 files |
 | Phase 84.2-km-init-plan-flag-and-destroy-class-gate P04 | 933s | 2 tasks | 3 files |
 | Phase 84.2-km-init-plan-flag-and-destroy-class-gate P06 | 12min | 2 tasks | 5 files |
+| Phase 84.2-km-init-plan-flag-and-destroy-class-gate P07 | 45min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -1052,6 +1053,8 @@ Recent decisions affecting current work:
 - [Phase 84.2-06]: appendKmInitPlanTip extracted as io.Writer-injected helper for unit testability via bytes.Buffer without full doctor mocking harness
 - [Phase 84.2-06]: Doctor tip is unconditional (not gated on warnCount) — discovery channel must fire on every clean doctor run
 - [Phase 84.2-06]: Multi-instance SKILL.md pre-apply verification updated to km init --plan (--dry-run=true comment implied plan semantics)
+- [Phase 84.2-km-init-plan-flag-and-destroy-class-gate]: Phase 84.2 closes with status=diagnosed; GAP-1 (aws_ses_receipt_rule missing from ProtectedTypes) is regression-of-purpose requiring Phase 84.3 closure
+- [Phase 84.2-km-init-plan-flag-and-destroy-class-gate]: Scenarios 3, 4b, 4c, 6 deferred to Phase 84.3 UAT; Scenario 7 accepted as PASS via incidental capture during Scenario 2 first attempt
 
 ### Roadmap Evolution
 
@@ -1159,6 +1162,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-17T03:38:51.644Z
-Stopped at: Completed 84.2-06-PLAN.md (operator docs + doctor tip for km init --plan)
+Last session: 2026-05-17T04:49:45.202Z
+Stopped at: Completed 84.2-07-PLAN.md (operator UAT — diagnosed, 3 PASS / 1 FAIL / 5 DEFERRED; Phase 84.3 gap closure needed)
 Resume file: None
