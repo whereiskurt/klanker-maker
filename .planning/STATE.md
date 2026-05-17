@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.2-05-PLAN.md (bootstrap --plan + destroy-class gate)
-last_updated: "2026-05-17T03:19:53.660Z"
+stopped_at: Completed 84.2-04-PLAN.md (km init --plan flag wiring + destroy-class gate integration)
+last_updated: "2026-05-17T03:21:14.978Z"
 last_activity: 2026-05-17
 progress:
   total_phases: 95
   completed_phases: 83
   total_plans: 375
-  completed_plans: 327
+  completed_plans: 328
   percent: 88
 ---
 
@@ -366,6 +366,7 @@ Progress: [█████████░] 88%
 | Phase 84.2-km-init-plan-flag-and-destroy-class-gate P02 | 20min | 2 tasks | 11 files |
 | Phase 84.2-km-init-plan-flag-and-destroy-class-gate P01 | 7min | 3 tasks | 11 files |
 | Phase 84.2-km-init-plan-flag-and-destroy-class-gate P05 | 22min | 1 tasks | 3 files |
+| Phase 84.2-km-init-plan-flag-and-destroy-class-gate P04 | 933s | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1045,6 +1046,8 @@ Recent decisions affecting current work:
 - [Phase 84.2-km-init-plan-flag-and-destroy-class-gate]: planreport package is pure stdlib (encoding/json, slices, fmt, strings) — zero terragrunt/AWS/cmd dependencies for trivial unit testability
 - [Phase 84.2]: Wave 0 RED-scaffolding: blank-identifier forward references produce verifiable undefined-symbol vet errors; mockPlanRunner embedded type avoids cross-file field access; writer-injected test seams match NewBootstrapCmdWithWriter pattern
 - [Phase 84.2-km-init-plan-flag-and-destroy-class-gate]: Plan 04 auto-implemented as Rule 3 blocking prerequisite for Plan 05; runBootstrapSharedSESPlan reuses init.go helpers (same package)
+- [Phase 84.2-km-init-plan-flag-and-destroy-class-gate]: --plan wins over --dry-run: RunE checks plan branch BEFORE sidecars/lambdas/dryRun (CONTEXT.md Decision 1)
+- [Phase 84.2-km-init-plan-flag-and-destroy-class-gate]: runInitPlanWithWriter shim in cmd_test package (init_test.go) satisfies Wave 0 compile contract; InitRunner compile-time assertion catches runner drift
 
 ### Roadmap Evolution
 
@@ -1152,6 +1155,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-17T03:19:53.652Z
-Stopped at: Completed 84.2-05-PLAN.md (bootstrap --plan + destroy-class gate)
+Last session: 2026-05-17T03:21:14.971Z
+Stopped at: Completed 84.2-04-PLAN.md (km init --plan flag wiring + destroy-class gate integration)
 Resume file: None
