@@ -358,13 +358,24 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-SLACK-IN-LIFECYCLE | Phase 67 | Planned |
 | REQ-SLACK-IN-OBSERVABILITY | Phase 67 | Planned |
 | REQ-SLACK-IN-INIT | Phase 67 | Planned |
-| SES-PREFIX-ADDRESS | Phase 84 | Planned |
-| SES-SHARED-RULESET | Phase 84 | Planned |
-| SES-PER-INSTALL-RULES | Phase 84 | Planned |
-| SES-82.1-REMOVAL | Phase 84 | Planned |
-| SES-CONFIGURE-WIRING | Phase 84 | Planned |
-| SES-HANDLER-LOOKUP | Phase 84 | Planned |
-| SES-DOCTOR-ORPHANS | Phase 84 | Planned |
+| SES-PREFIX-ADDRESS | Phase 84 | Complete |
+| SES-SHARED-RULESET | Phase 84 | Complete |
+| SES-PER-INSTALL-RULES | Phase 84 | Complete |
+| SES-82.1-REMOVAL | Phase 84 | Complete |
+| SES-CONFIGURE-WIRING | Phase 84 | Complete |
+| SES-HANDLER-LOOKUP | Phase 84 | Complete |
+| SES-DOCTOR-ORPHANS | Phase 84 | Complete |
+| GAP-1 | Phase 84.1 | Complete |
+| GAP-2 | Phase 84.1 | Complete |
+| GAP-3 | Phase 84.1 | Complete |
+| GAP-4 | Phase 84.1 | Complete |
+| GAP-5 | Phase 84.1 | Complete |
+| GAP-6 | Phase 84.1 | Complete |
+| GAP-7 | Phase 84.1 | Complete |
+| GAP-8 | Phase 84.1 | Complete |
+| DRIFT-A | Phase 84.1 | Complete |
+| DRIFT-B | Phase 84.1 | Complete |
+| DRIFT-C | Phase 84.1 | Complete |
 
 **Coverage:**
 - v1 requirements: 89 total (81 original + 8 Slack Inbound)
