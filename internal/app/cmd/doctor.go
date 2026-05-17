@@ -259,6 +259,11 @@ type DoctorDeps struct {
 	// SESRulesClient is the SES classic v1 client for the receipt-rule orphan check (Phase 84).
 	// Nil causes the check to be skipped.
 	SESRulesClient SESReceiptRuleAPI
+	// StateLockS3Client + StateLockDDBClient back the Phase 84.1 GAP-8
+	// state-digest drift check. Read-only; never writes to either service.
+	// Either nil causes the check to be skipped.
+	StateLockS3Client  S3StateReader
+	StateLockDDBClient LockDigestReader
 	// Lister for sandbox summary check.
 	Lister SandboxLister
 	// KMS and IAM clients for stale resource cleanup checks.
@@ -2571,6 +2576,14 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkSESRules(ctx, sesRulesClient, localPrefix)
 	})
 
+	// Terraform state-lock digest drift check (Phase 84.1 GAP-8).
+	stateLockS3 := deps.StateLockS3Client
+	stateLockDDB := deps.StateLockDDBClient
+	lockTable := backendLockTableName(cfg)
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkStateLockDigest(ctx, stateLockS3, stateLockDDB, lockTable)
+	})
+
 	// Sandbox summary check.
 	lister := deps.Lister
 	checks = append(checks, func(ctx context.Context) CheckResult {
@@ -2905,6 +2918,12 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	deps.LambdaCleanup = lambda.NewFromConfig(awsCfg)
 	deps.SESClient = sesv2.NewFromConfig(awsCfg)
 	deps.SESRulesClient = ses.NewFromConfig(awsCfg)
+	// Phase 84.1 GAP-8: state-lock digest drift check. Distinct fields from
+	// deps.S3Client (S3HeadBucketAPI — no GetObject) and deps.DynamoClient
+	// (DynamoDescribeAPI — no Scan) so the existing narrow-interface
+	// convention is preserved.
+	deps.StateLockS3Client = s3.NewFromConfig(awsCfg)
+	deps.StateLockDDBClient = dynamodb.NewFromConfig(awsCfg)
 	deps.KMSCleanupClient = kms.NewFromConfig(awsCfg)
 	deps.IAMCleanupClient = iam.NewFromConfig(awsCfg)
 	deps.SchedulerClient = scheduler.NewFromConfig(awsCfg)
@@ -3390,6 +3409,17 @@ func checkStateLockDigest(ctx context.Context, s3Client S3StateReader, ddbClient
 		}
 	}
 	return CheckResult{Name: name, Status: CheckOK, Message: fmt.Sprintf("state digest consistent (%d items checked)", checked)}
+}
+
+// backendLockTableName returns the DynamoDB lock-table name for the given
+// km install, following the terragrunt convention
+// "tf-${resource_prefix}-locks-${region_label}" — see infra/live/site.hcl
+// and the Phase 82 backend resource_prefix isolation.
+//
+// Override via a future config field if/when the lock-table name becomes
+// independently configurable.
+func backendLockTableName(cfg DoctorConfigProvider) string {
+	return fmt.Sprintf("tf-%s-locks-%s", cfg.GetResourcePrefix(), compiler.RegionLabel(cfg.GetPrimaryRegion()))
 }
 
 // parseLockID splits a terragrunt LockID of the form "<bucket>/<key>-md5"
