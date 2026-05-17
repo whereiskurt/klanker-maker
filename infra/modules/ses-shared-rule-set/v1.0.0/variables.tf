@@ -25,13 +25,13 @@ variable "aws_region" {
 
 variable "register_shared_rule_set" {
   type        = bool
-  description = "When true (default), the module creates the singleton SES receipt rule set and sets it as active. When false, no rule-set resources are created — downstream modules reference the rule set by the constant string var.rule_set_name."
+  description = "When true (default), this module MANAGES the shared SES receipt rule set + active pointer. When false, no rule-set resources are created — assumes the resource exists and is managed elsewhere (sibling install or out-of-band). Phase 84.1: semantics changed from 'create only on first apply' to 'manage this resource'. Once foundation owns the resource in state, this flag stays true; flipping to false intentionally orphans the resource (which prevent_destroy on aws_ses_receipt_rule_set.shared then blocks at the terraform layer)."
   default     = true
 }
 
 variable "register_domain_identity" {
   type        = bool
-  description = "When false, the module skips creating the SES domain identity, DKIM, MX, and verification records — assumes they already exist in this account. Set by km bootstrap --shared-ses auto-detect logic (Plan 84-07)."
+  description = "When true (default), this module MANAGES the SES domain identity + DKIM + MX + verification records. When false, the module does not declare those resources — assumes they are managed elsewhere. Phase 84.1: same semantic change as register_shared_rule_set — 'manage this resource', not 'create only on first apply'. Auto-detect in km bootstrap (cmd/bootstrap.go detectSharedSESState) prefers foundation state ownership over AWS reality so re-runs are idempotent."
   default     = true
 }
 

@@ -112,49 +112,207 @@ type FoundationStateReader interface {
 	StateOwns(ctx context.Context, resourceAddr string) (bool, error)
 }
 
-// detectSharedSESState is the unexported implementation called by DetectSharedSESState and runBootstrapSharedSES.
+// detectSharedSESState is the unexported implementation called by
+// DetectSharedSESState, DetectSharedSESStateWithStateReader, and runBootstrapSharedSES.
 //
-// Phase 84.1 Task 1: signature extended with FoundationStateReader. When
-// stateReader is non-nil and reports state ownership for a shared resource,
-// the corresponding register_* flag stays TRUE — the new "manage this
-// resource" semantic (GAP-2). When stateReader is nil OR reports no ownership,
-// fall back to the legacy AWS-reality check.
+// Phase 84.1 Task 1 GREEN: signature extended with FoundationStateReader.
+// When stateReader is non-nil and reports state ownership for a shared
+// resource, the corresponding register_* flag stays TRUE — the new "manage
+// this resource" semantic (GAP-2 closure). When stateReader is nil OR
+// reports no ownership, fall back to the AWS-reality check, but with the
+// new semantic: even AWS-present-not-in-state stays TRUE so foundation can
+// import + manage the resource on the next apply (GAP-3 closure; relies on
+// Task 2's import {} blocks to actually bring the resource into state).
 //
-// The new semantic: register_* flags mean "this module manages the resource",
-// NOT "create only on first apply". Once foundation owns the resource in
-// state, the flag stays true; flipping to false intentionally orphans the
-// resource (which prevent_destroy then blocks at the terraform layer).
+// The semantic shift: register_* flags now mean "this module manages the
+// resource", NOT "create only on first apply". The only time a flag goes
+// false is a deliberate operator override (e.g. KM_REGISTER_SHARED_RULESET=false
+// on a sibling install in a multi-install account where the foundation
+// module should be a no-op for that install).
 //
-// TODO(84.1-04 Task 1 GREEN): wire the stateReader.StateOwns calls.
-// RED commit currently only changes the signature so tests compile.
+// nil-state-reader mode preserves the pre-84.1 read-only AWS-existence
+// semantic — used by defaultSESPreflight in init.go for the "is the rule set
+// here yet?" check that gates km init.
 func detectSharedSESState(ctx context.Context, lister SESIdentityLister, stateReader FoundationStateReader, ruleSetName, emailDomain string) (registerSharedRuleSet, registerDomainIdentity bool, err error) {
 	// Default: create both (safe idempotent starting point).
 	registerSharedRuleSet = true
 	registerDomainIdentity = true
 
-	rsOut, err := lister.ListReceiptRuleSets(ctx, &ses.ListReceiptRuleSetsInput{})
-	if err != nil {
-		return registerSharedRuleSet, registerDomainIdentity, fmt.Errorf("ListReceiptRuleSets: %w", err)
+	// Phase 84.1: prefer foundation-state ownership over AWS reality.
+	// If foundation already manages the resource, the register flag stays TRUE
+	// (means "keep managing"). When state ownership is known, we skip the
+	// AWS-reality consultation entirely — that's the whole point of the change.
+	var stateOwnsRuleSet, stateOwnsIdentity bool
+	if stateReader != nil {
+		stateOwnsRuleSet, _ = stateReader.StateOwns(ctx, "aws_ses_receipt_rule_set.shared[0]")
+		stateOwnsIdentity, _ = stateReader.StateOwns(ctx, "aws_ses_domain_identity.sandbox[0]")
+		// Errors are treated as "not owned" — the caller falls back to AWS
+		// reality, which is the same behaviour as a missing state file
+		// (fresh account). This avoids blocking bootstrap on a transient S3
+		// blip.
 	}
-	for _, rs := range rsOut.RuleSets {
-		if aws.ToString(rs.Name) == ruleSetName {
-			registerSharedRuleSet = false
-			break
+
+	if stateOwnsRuleSet {
+		// Foundation owns it — keep managing (register=TRUE).
+		registerSharedRuleSet = true
+	} else {
+		// Fall through to AWS-reality check.
+		rsOut, listErr := lister.ListReceiptRuleSets(ctx, &ses.ListReceiptRuleSetsInput{})
+		if listErr != nil {
+			return registerSharedRuleSet, registerDomainIdentity, fmt.Errorf("ListReceiptRuleSets: %w", listErr)
+		}
+		ruleSetExistsInAWS := false
+		for _, rs := range rsOut.RuleSets {
+			if aws.ToString(rs.Name) == ruleSetName {
+				ruleSetExistsInAWS = true
+				break
+			}
+		}
+		if stateReader != nil {
+			// Phase 84.1 semantic: when a state reader is in play (production
+			// bootstrap path), AWS-present-not-in-state still keeps the flag
+			// TRUE so foundation imports + manages the resource on next apply
+			// (GAP-3 closure). Task 2's import {} blocks make this safe.
+			registerSharedRuleSet = true
+			_ = ruleSetExistsInAWS // intentionally ignored under the new semantic
+		} else {
+			// nil-state-reader mode: legacy read-only behaviour preserved for
+			// defaultSESPreflight in init.go — "rule set absent in AWS"
+			// returns registerRS=true, which the preflight surfaces as the
+			// actionable "run km bootstrap --shared-ses first" error.
+			registerSharedRuleSet = !ruleSetExistsInAWS
 		}
 	}
 
-	idOut, err := lister.ListEmailIdentities(ctx, &sesv2.ListEmailIdentitiesInput{})
-	if err != nil {
-		return registerSharedRuleSet, registerDomainIdentity, fmt.Errorf("ListEmailIdentities: %w", err)
-	}
-	for _, id := range idOut.EmailIdentities {
-		if id.IdentityType == sesv2types.IdentityTypeDomain && aws.ToString(id.IdentityName) == emailDomain {
-			registerDomainIdentity = false
-			break
+	if stateOwnsIdentity {
+		// Foundation owns it — keep managing (register=TRUE).
+		registerDomainIdentity = true
+	} else {
+		// Fall through to AWS-reality check.
+		idOut, listErr := lister.ListEmailIdentities(ctx, &sesv2.ListEmailIdentitiesInput{})
+		if listErr != nil {
+			return registerSharedRuleSet, registerDomainIdentity, fmt.Errorf("ListEmailIdentities: %w", listErr)
+		}
+		identityExistsInAWS := false
+		for _, id := range idOut.EmailIdentities {
+			if id.IdentityType == sesv2types.IdentityTypeDomain && aws.ToString(id.IdentityName) == emailDomain {
+				identityExistsInAWS = true
+				break
+			}
+		}
+		if stateReader != nil {
+			// Same semantic shift as above (GAP-3): import + manage.
+			registerDomainIdentity = true
+			_ = identityExistsInAWS
+		} else {
+			// nil-state-reader mode: legacy behaviour for defaultSESPreflight.
+			registerDomainIdentity = !identityExistsInAWS
 		}
 	}
 
 	return registerSharedRuleSet, registerDomainIdentity, nil
+}
+
+// s3FoundationStateReader is the production FoundationStateReader implementation.
+// It downloads the foundation tfstate from S3 (key derived from the per-install
+// resource_prefix + region_label) and checks whether resourceAddr is in the
+// resources[] array.
+//
+// State file location follows the site.hcl backend convention:
+//   s3://tf-{prefix}-state-{regionLabel}/tf-{prefix}/{regionLabel}/ses-shared-rule-set/terraform.tfstate
+//
+// A missing state file returns (false, nil) — fresh-account semantics. This
+// matches the FoundationStateReader contract.
+type s3FoundationStateReader struct {
+	s3Client *s3.Client
+	bucket   string
+	key      string
+}
+
+// StateOwns downloads the foundation tfstate and reports whether resourceAddr
+// is present in the resources[] array. The resourceAddr format is the
+// Terraform address (e.g. "aws_ses_domain_identity.sandbox[0]").
+//
+// The Terraform state file is JSON with a top-level "resources" array, each
+// entry has "mode", "type", "name", and (for count/for_each) "instances" with
+// "index_key". We reconstruct the address as "type.name" or "type.name[index_key]"
+// and compare.
+func (r *s3FoundationStateReader) StateOwns(ctx context.Context, resourceAddr string) (bool, error) {
+	resp, err := r.s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(r.bucket),
+		Key:    aws.String(r.key),
+	})
+	if err != nil {
+		// Missing state file (or no access yet) → fresh-account semantics.
+		// We intentionally swallow the error rather than returning it; callers
+		// of FoundationStateReader treat both nil-error and false-result as
+		// "not owned" and fall back to AWS-reality.
+		return false, nil
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, fmt.Errorf("read tfstate body: %w", err)
+	}
+
+	var state struct {
+		Resources []struct {
+			Mode      string `json:"mode"`
+			Type      string `json:"type"`
+			Name      string `json:"name"`
+			Instances []struct {
+				IndexKey interface{} `json:"index_key,omitempty"`
+			} `json:"instances"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal(body, &state); err != nil {
+		return false, fmt.Errorf("parse tfstate: %w", err)
+	}
+
+	for _, res := range state.Resources {
+		if res.Mode != "managed" {
+			continue
+		}
+		base := fmt.Sprintf("%s.%s", res.Type, res.Name)
+		// Count=0 resources have no instances → no addresses to match.
+		if len(res.Instances) == 0 {
+			if base == resourceAddr {
+				return true, nil
+			}
+			continue
+		}
+		for _, inst := range res.Instances {
+			var addr string
+			switch v := inst.IndexKey.(type) {
+			case nil:
+				addr = base
+			case float64:
+				// JSON numbers decode as float64; integer count indices.
+				addr = fmt.Sprintf("%s[%d]", base, int(v))
+			case string:
+				addr = fmt.Sprintf("%s[%q]", base, v)
+			default:
+				addr = base
+			}
+			if addr == resourceAddr {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// foundationStateBucket derives the S3 bucket name for the foundation tfstate
+// using the site.hcl convention: tf-{prefix}-state-{regionLabel}.
+func foundationStateBucket(cfg *config.Config) string {
+	return fmt.Sprintf("tf-%s-state-%s", cfg.GetResourcePrefix(), cfg.GetRegionLabel())
+}
+
+// foundationStateKey derives the S3 key for the foundation tfstate using the
+// site.hcl convention: tf-{prefix}/{regionLabel}/ses-shared-rule-set/terraform.tfstate.
+func foundationStateKey(cfg *config.Config) string {
+	return fmt.Sprintf("tf-%s/%s/ses-shared-rule-set/terraform.tfstate", cfg.GetResourcePrefix(), cfg.GetRegionLabel())
 }
 
 // RunBootstrapSharedSES is the exported test seam for runBootstrapSharedSES.
@@ -190,9 +348,17 @@ func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool,
 	emailDomain := fmt.Sprintf("%s.%s", emailSubdomain, loadedCfg.Domain)
 
 	// Build the SES client pair (or use the override in tests).
+	// Phase 84.1 GREEN: also construct an s3FoundationStateReader so the
+	// auto-detect prefers state ownership over AWS reality (GAP-2 / GAP-3).
+	// In tests the listerOverride path skips the state reader entirely (nil),
+	// matching the legacy AWS-reality behaviour the existing test suite locks in.
 	var lister SESIdentityLister
+	var stateReader FoundationStateReader
 	if listerOverride != nil {
 		lister = listerOverride
+		// stateReader stays nil — tests inject their own via
+		// DetectSharedSESStateWithStateReader when state ownership is the
+		// subject under test.
 	} else {
 		region := loadedCfg.PrimaryRegion
 		if region == "" {
@@ -206,13 +372,14 @@ func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool,
 			sesClient:   ses.NewFromConfig(awsCfg),
 			sesv2Client: sesv2.NewFromConfig(awsCfg),
 		}
+		stateReader = &s3FoundationStateReader{
+			s3Client: s3.NewFromConfig(awsCfg),
+			bucket:   foundationStateBucket(loadedCfg),
+			key:      foundationStateKey(loadedCfg),
+		}
 	}
 
-	// Phase 84.1 Task 1: pass nil for the FoundationStateReader in the RED commit.
-	// GREEN commit will construct an s3FoundationStateReader and wire it in here
-	// so re-running km bootstrap against an already-bootstrapped account is a true
-	// no-op (foundation state ownership keeps register_* flags TRUE).
-	registerRS, registerID, err := detectSharedSESState(ctx, lister, nil, "sandbox-email-shared", emailDomain)
+	registerRS, registerID, err := detectSharedSESState(ctx, lister, stateReader, "sandbox-email-shared", emailDomain)
 	if err != nil {
 		return fmt.Errorf("SES auto-detect: %w", err)
 	}
