@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: "Completed 84.2-02-PLAN.md (planreport package: Parse, ProtectedTypes, Evaluate)"
-last_updated: "2026-05-17T03:00:14.434Z"
+stopped_at: Completed 84.2-01-PLAN.md (Wave 0 test scaffolding)
+last_updated: "2026-05-17T03:02:44.331Z"
 last_activity: 2026-05-17
 progress:
   total_phases: 95
   completed_phases: 83
   total_plans: 375
-  completed_plans: 325
+  completed_plans: 326
   percent: 88
 ---
 
@@ -364,6 +364,7 @@ Progress: [█████████░] 88%
 | Phase 84.1 P05 | 35min | 3 tasks | 9 files |
 | Phase 84.2-km-init-plan-flag-and-destroy-class-gate P03 | 177 | 1 tasks | 2 files |
 | Phase 84.2-km-init-plan-flag-and-destroy-class-gate P02 | 20min | 2 tasks | 11 files |
+| Phase 84.2-km-init-plan-flag-and-destroy-class-gate P01 | 7min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -1041,6 +1042,7 @@ Recent decisions affecting current work:
 - [Phase 84.2-03]: PlanWithOutput uses runBounded (Phase 84.1-02 ctx bounding + heartbeat) while ShowPlanJSON uses cmd.Output() for clean stdout bytes — separation of methods lets Plan 04 error-differentiate plan failure from show/parse failure
 - [Phase 84.2-km-init-plan-flag-and-destroy-class-gate]: Hand-rolled JSON struct over encoding/json instead of terraform-json library (forward-compat, library's own README warns against it)
 - [Phase 84.2-km-init-plan-flag-and-destroy-class-gate]: planreport package is pure stdlib (encoding/json, slices, fmt, strings) — zero terragrunt/AWS/cmd dependencies for trivial unit testability
+- [Phase 84.2]: Wave 0 RED-scaffolding: blank-identifier forward references produce verifiable undefined-symbol vet errors; mockPlanRunner embedded type avoids cross-file field access; writer-injected test seams match NewBootstrapCmdWithWriter pattern
 
 ### Roadmap Evolution
 
@@ -1148,6 +1150,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-17T03:00:14.426Z
-Stopped at: Completed 84.2-02-PLAN.md (planreport package: Parse, ProtectedTypes, Evaluate)
+Last session: 2026-05-17T03:02:44.323Z
+Stopped at: Completed 84.2-01-PLAN.md (Wave 0 test scaffolding)
 Resume file: None
