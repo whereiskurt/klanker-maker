@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: "Completed 84.2-03-PLAN.md (runner extension: PlanWithOutput + ShowPlanJSON)"
-last_updated: "2026-05-17T02:59:30.986Z"
+stopped_at: "Completed 84.2-02-PLAN.md (planreport package: Parse, ProtectedTypes, Evaluate)"
+last_updated: "2026-05-17T03:00:14.434Z"
 last_activity: 2026-05-17
 progress:
   total_phases: 95
   completed_phases: 83
   total_plans: 375
-  completed_plans: 324
+  completed_plans: 325
   percent: 88
 ---
 
@@ -363,6 +363,7 @@ Progress: [█████████░] 88%
 | Phase 84.1 P04 | 12min | 2 tasks | 9 files |
 | Phase 84.1 P05 | 35min | 3 tasks | 9 files |
 | Phase 84.2-km-init-plan-flag-and-destroy-class-gate P03 | 177 | 1 tasks | 2 files |
+| Phase 84.2-km-init-plan-flag-and-destroy-class-gate P02 | 20min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -1038,6 +1039,8 @@ Recent decisions affecting current work:
 - [Phase 84.1]: Plan 84.1-05: closed `passed-with-caveats` 2026-05-17 — minimal UAT scope (Steps 1+2 only; GAP-6 structurally verified via uat-gap6-check.sh helper script); Steps 3-9 + DRIFT-B/C empirical re-runs deferred to Phase 84.2. Introduces `passed-with-caveats` UAT status (between `passed` and `diagnosed`) for the case where work is complete and no regressions found, but the most operationally-heavy verifications were intentionally deferred rather than skipped-without-acknowledgement.
 - [Phase 84.1]: Plan 84.1-05: GAP-6 verification is structural (terraform validate + zero-destroy assertion against post-recovery regional state with no v1.0.0 resources to suppress) but NOT empirical (no Phase 82.x snapshot was constructed). Code is correct; the in-anger upgrade scenario was not re-exercised. Phase 84.2 will close this with the `km init --plan` flag against a fresh Phase 82.x install.
 - [Phase 84.2-03]: PlanWithOutput uses runBounded (Phase 84.1-02 ctx bounding + heartbeat) while ShowPlanJSON uses cmd.Output() for clean stdout bytes — separation of methods lets Plan 04 error-differentiate plan failure from show/parse failure
+- [Phase 84.2-km-init-plan-flag-and-destroy-class-gate]: Hand-rolled JSON struct over encoding/json instead of terraform-json library (forward-compat, library's own README warns against it)
+- [Phase 84.2-km-init-plan-flag-and-destroy-class-gate]: planreport package is pure stdlib (encoding/json, slices, fmt, strings) — zero terragrunt/AWS/cmd dependencies for trivial unit testability
 
 ### Roadmap Evolution
 
@@ -1145,6 +1148,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-17T02:59:30.979Z
-Stopped at: Completed 84.2-03-PLAN.md (runner extension: PlanWithOutput + ShowPlanJSON)
+Last session: 2026-05-17T03:00:14.426Z
+Stopped at: Completed 84.2-02-PLAN.md (planreport package: Parse, ProtectedTypes, Evaluate)
 Resume file: None
