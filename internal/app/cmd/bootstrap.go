@@ -347,6 +347,7 @@ func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool,
 		emailSubdomain = "sandboxes"
 	}
 	emailDomain := fmt.Sprintf("%s.%s", emailSubdomain, loadedCfg.Domain)
+	sesDir := filepath.Join(findRepoRoot(), "infra", "live", "use1", "ses-shared-rule-set")
 
 	// Build the SES client pair (or use the override in tests).
 	// Phase 84.1 GREEN: also construct an s3FoundationStateReader so the
@@ -360,6 +361,13 @@ func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool,
 		// stateReader stays nil — tests inject their own via
 		// DetectSharedSESStateWithStateReader when state ownership is the
 		// subject under test.
+	} else if dryRun {
+		// Dry-run without a listerOverride short-circuits AWS auto-detect entirely.
+		// Operators get deterministic dry-run output regardless of AWS connectivity;
+		// the KM_REGISTER_* env vars will be computed at apply time.
+		fmt.Fprintf(w, "Dry run — would run: terragrunt apply %s\n", sesDir)
+		fmt.Fprintln(w, "  (SES auto-detect deferred until apply; KM_REGISTER_* env vars unset)")
+		return nil
 	} else {
 		region := loadedCfg.PrimaryRegion
 		if region == "" {
@@ -400,8 +408,6 @@ func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool,
 	// Export the two Phase-84-specific vars.
 	os.Setenv("KM_REGISTER_SHARED_RULESET", strconv.FormatBool(registerRS))
 	os.Setenv("KM_REGISTER_DOMAIN_IDENTITY", strconv.FormatBool(registerID))
-
-	sesDir := filepath.Join(findRepoRoot(), "infra", "live", "use1", "ses-shared-rule-set")
 
 	if dryRun {
 		fmt.Fprintf(w, "Dry run — would run: terragrunt apply %s\n", sesDir)
