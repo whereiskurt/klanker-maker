@@ -19,6 +19,9 @@ var ProtectedTypes = []string{
 	"aws_ses_active_receipt_rule_set",
 	// Shared rule set — prevent_destroy in code, but plan-time check catches earlier
 	"aws_ses_receipt_rule_set",
+	// Phase 82->84 incident — receipt rule children (operator inbound + sandbox catchall)
+	// destroyed via removed{destroy=true} orphan path; the parent rule_set alone is insufficient
+	"aws_ses_receipt_rule",
 	// MX, DKIM CNAMEs, verification TXT — recovery required manual re-creation
 	"aws_route53_record",
 	// Mailbox + artifacts — data loss
