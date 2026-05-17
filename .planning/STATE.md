@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.2-07-PLAN.md (operator UAT — diagnosed, 3 PASS / 1 FAIL / 5 DEFERRED; Phase 84.3 gap closure needed)
-last_updated: "2026-05-17T04:49:45.209Z"
+stopped_at: Completed 84.2-08-PLAN.md (GAP-1 aws_ses_receipt_rule fix + behavioral test upgrade)
+last_updated: "2026-05-17T05:44:06.914Z"
 last_activity: 2026-05-17
 progress:
   total_phases: 95
-  completed_phases: 84
-  total_plans: 375
-  completed_plans: 330
+  completed_phases: 83
+  total_plans: 377
+  completed_plans: 331
   percent: 88
 ---
 
@@ -369,6 +369,7 @@ Progress: [█████████░] 88%
 | Phase 84.2-km-init-plan-flag-and-destroy-class-gate P04 | 933s | 2 tasks | 3 files |
 | Phase 84.2-km-init-plan-flag-and-destroy-class-gate P06 | 12min | 2 tasks | 5 files |
 | Phase 84.2-km-init-plan-flag-and-destroy-class-gate P07 | 45min | 2 tasks | 1 files |
+| Phase 84.2-km-init-plan-flag-and-destroy-class-gate P08 | 1219 | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1055,6 +1056,8 @@ Recent decisions affecting current work:
 - [Phase 84.2-06]: Multi-instance SKILL.md pre-apply verification updated to km init --plan (--dry-run=true comment implied plan semantics)
 - [Phase 84.2-km-init-plan-flag-and-destroy-class-gate]: Phase 84.2 closes with status=diagnosed; GAP-1 (aws_ses_receipt_rule missing from ProtectedTypes) is regression-of-purpose requiring Phase 84.3 closure
 - [Phase 84.2-km-init-plan-flag-and-destroy-class-gate]: Scenarios 3, 4b, 4c, 6 deferred to Phase 84.3 UAT; Scenario 7 accepted as PASS via incidental capture during Scenario 2 first attempt
+- [Phase 84.2-08]: aws_ses_receipt_rule added as 10th ProtectedTypes entry with Phase 82->84 incident comment (CONTEXT.md Decision 6 requirement)
+- [Phase 84.2-08]: Bootstrap behavioral tests use t.Skip+TODO — no RunBootstrapSharedSESPlanWithRunner seam exists (covered by UAT Scenario 4b/4c)
 
 ### Roadmap Evolution
 
@@ -1162,6 +1165,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-17T04:49:45.202Z
-Stopped at: Completed 84.2-07-PLAN.md (operator UAT — diagnosed, 3 PASS / 1 FAIL / 5 DEFERRED; Phase 84.3 gap closure needed)
+Last session: 2026-05-17T05:44:06.906Z
+Stopped at: Completed 84.2-08-PLAN.md (GAP-1 aws_ses_receipt_rule fix + behavioral test upgrade)
 Resume file: None
