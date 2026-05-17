@@ -246,7 +246,7 @@ locals {
 	// backend bucket against the operator's resource_prefix (tf-{prefix}-state-{region})
 	// instead of the default "km" prefix. Without this, non-default installs hit
 	// 403 HeadBucket on terragrunt apply/destroy. Same pattern as runInit / slack.go.
-	ExportConfigEnvVars(cfg)
+	ExportTerragruntEnvVars(cfg)
 
 	// Step 5: For EC2 substrate, explicitly terminate spot instance before destroy.
 	// Critical: aws_spot_instance_request destroy cancels the spot REQUEST but leaves

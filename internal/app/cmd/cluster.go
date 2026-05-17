@@ -333,7 +333,7 @@ func newClusterRmCmd(cfg *config.Config) *cobra.Command {
 // Flow:
 //  1. Idempotency: if name already in cfg.Clusters, print existing ARN and return.
 //  2. Pre-flight: AWS credential validation via LoadAWSConfig + ValidateCredentials.
-//  3. ExportConfigEnvVars — required before any terragrunt invocation.
+//  3. ExportTerragruntEnvVars — required before any terragrunt invocation.
 //  4. Compute regionLabel, dirs; bootstrap region.hcl if missing (Pitfall 1).
 //  5. Write cluster terragrunt.hcl.
 //  6. If dryRun: runner.Plan → print note → return (no state mutation).
@@ -394,7 +394,7 @@ func RunClusterAdd(cfg *config.Config, name, oidcProviderARN, namespace, service
 
 	// 3. Export config env vars BEFORE any terragrunt invocation.
 	// Avoids 403 HeadBucket on non-default resource_prefix installs (RESEARCH.md Pitfall).
-	ExportConfigEnvVars(cfg)
+	ExportTerragruntEnvVars(cfg)
 
 	// 4. Compute paths.
 	regionLabel := compiler.RegionLabel(region)
@@ -523,7 +523,7 @@ func runClusterList(w io.Writer, cfg *config.Config) error {
 // Flow:
 //  1. Find cluster by name in cfg.Clusters; error if not found.
 //  2. Pre-flight credential validation.
-//  3. ExportConfigEnvVars.
+//  3. ExportTerragruntEnvVars.
 //  4. Compute stackDir; build runner.
 //  5. If dryRun: runner.Plan (previews the destroy) → return without mutation.
 //  6. runner.Reconfigure → runner.Destroy (Pitfall 5: handles backend-config drift).
@@ -554,7 +554,7 @@ func RunClusterRm(cfg *config.Config, name, awsProfile, region string, verbose, 
 	}
 
 	// 3. Export config env vars BEFORE any terragrunt invocation.
-	ExportConfigEnvVars(cfg)
+	ExportTerragruntEnvVars(cfg)
 
 	// 4. Compute paths.
 	regionLabel := compiler.RegionLabel(region)

@@ -177,7 +177,7 @@ func runUninit(cfg *config.Config, awsProfile, region string, force bool, verbos
 	// are included — the previous hand-rolled copy missed those, which made
 	// terragrunt resolve the backend bucket as tf-km-state-* instead of the
 	// operator's tf-{prefix}-state-* and fail with HeadBucket 403.
-	ExportConfigEnvVars(cfg)
+	ExportTerragruntEnvVars(cfg)
 	if cfg.Route53ZoneID != "" && os.Getenv("KM_ROUTE53_ZONE_ID") == "" {
 		os.Setenv("KM_ROUTE53_ZONE_ID", cfg.Route53ZoneID)
 	}

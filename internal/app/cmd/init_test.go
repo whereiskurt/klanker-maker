@@ -517,7 +517,7 @@ func TestCreateHandlerColdStart_PropagatesError(t *testing.T) {
 	}
 }
 
-// TestInitExportsNewAccountEnvVars verifies that ExportConfigEnvVars sets
+// TestInitExportsNewAccountEnvVars verifies that ExportTerragruntEnvVars sets
 // KM_ACCOUNTS_ORGANIZATION and KM_ACCOUNTS_DNS_PARENT from the config.
 func TestInitExportsNewAccountEnvVars(t *testing.T) {
 	// Use t.Setenv for all env vars so Go's test framework restores them after
@@ -534,7 +534,7 @@ func TestInitExportsNewAccountEnvVars(t *testing.T) {
 		ApplicationAccountID:  "333333333333",
 	}
 
-	cmd.ExportConfigEnvVars(cfg)
+	cmd.ExportTerragruntEnvVars(cfg)
 
 	if got := os.Getenv("KM_ACCOUNTS_ORGANIZATION"); got != "111111111111" {
 		t.Errorf("KM_ACCOUNTS_ORGANIZATION = %q, want %q", got, "111111111111")
@@ -546,7 +546,7 @@ func TestInitExportsNewAccountEnvVars(t *testing.T) {
 	// preventing the set values from leaking into subsequent subprocess-based tests.
 }
 
-// TestInitExportsResourcePrefixAndEmailSubdomain verifies that ExportConfigEnvVars
+// TestInitExportsResourcePrefixAndEmailSubdomain verifies that ExportTerragruntEnvVars
 // exports KM_RESOURCE_PREFIX and KM_EMAIL_SUBDOMAIN from the config (Phase 66).
 func TestInitExportsResourcePrefixAndEmailSubdomain(t *testing.T) {
 	t.Setenv("KM_RESOURCE_PREFIX", "")
@@ -559,7 +559,7 @@ func TestInitExportsResourcePrefixAndEmailSubdomain(t *testing.T) {
 		EmailSubdomain: "mail",
 	}
 
-	cmd.ExportConfigEnvVars(cfg)
+	cmd.ExportTerragruntEnvVars(cfg)
 
 	if got := os.Getenv("KM_RESOURCE_PREFIX"); got != "km2" {
 		t.Errorf("KM_RESOURCE_PREFIX = %q, want %q", got, "km2")
@@ -577,11 +577,9 @@ func TestInitExportsResourcePrefixAndEmailSubdomain(t *testing.T) {
 //   - KM_REGION_LABEL was never exported (so site.hcl get_env("KM_REGION_LABEL")
 //     fell through to its empty-string default).
 //
-// In Task 1 the helper is still named ExportConfigEnvVars; Task 2 renames it to
-// ExportTerragruntEnvVars and propagates the new name across all 8 production
-// callers (no shim — H5 from plan-checker rev 1). These tests are written
-// against the post-Task-2 name so they fail in RED for the right reason and
-// don't require editing once the rename lands.
+// Task 2 of plan 84.1-01 renamed the helper to ExportTerragruntEnvVars across
+// all 8 production callers (no shim — H5 from plan-checker rev 1). These tests
+// pin the new canonical name.
 
 // TestExportTerragruntEnvVars_ExportsRoute53ZoneID verifies GAP-1 fix: the
 // helper exports KM_ROUTE53_ZONE_ID from cfg.Route53ZoneID.
@@ -593,7 +591,7 @@ func TestExportTerragruntEnvVars_ExportsRoute53ZoneID(t *testing.T) {
 		Route53ZoneID: "Z12345",
 	}
 
-	cmd.ExportConfigEnvVars(cfg)
+	cmd.ExportTerragruntEnvVars(cfg)
 
 	if got := os.Getenv("KM_ROUTE53_ZONE_ID"); got != "Z12345" {
 		t.Errorf("KM_ROUTE53_ZONE_ID = %q, want %q", got, "Z12345")
@@ -611,7 +609,7 @@ func TestExportTerragruntEnvVars_ExportsArtifactsBucket(t *testing.T) {
 		ArtifactsBucket: "km-artifacts-12345",
 	}
 
-	cmd.ExportConfigEnvVars(cfg)
+	cmd.ExportTerragruntEnvVars(cfg)
 
 	if got := os.Getenv("KM_ARTIFACTS_BUCKET"); got != "km-artifacts-12345" {
 		t.Errorf("KM_ARTIFACTS_BUCKET = %q, want %q", got, "km-artifacts-12345")
@@ -629,7 +627,7 @@ func TestExportTerragruntEnvVars_ExportsRegionLabel(t *testing.T) {
 		PrimaryRegion: "us-east-1",
 	}
 
-	cmd.ExportConfigEnvVars(cfg)
+	cmd.ExportTerragruntEnvVars(cfg)
 
 	if got := os.Getenv("KM_REGION_LABEL"); got != "use1" {
 		t.Errorf("KM_REGION_LABEL = %q, want %q", got, "use1")
@@ -646,7 +644,7 @@ func TestExportTerragruntEnvVars_DoesNotOverrideExistingEnv(t *testing.T) {
 		Route53ZoneID: "Z99999",
 	}
 
-	cmd.ExportConfigEnvVars(cfg)
+	cmd.ExportTerragruntEnvVars(cfg)
 
 	if got := os.Getenv("KM_ROUTE53_ZONE_ID"); got != "PRESET" {
 		t.Errorf("KM_ROUTE53_ZONE_ID = %q, want PRESET (operator override should win)", got)
@@ -664,7 +662,7 @@ func TestExportTerragruntEnvVars_BlankConfigSkipsExport(t *testing.T) {
 		Route53ZoneID: "",
 	}
 
-	cmd.ExportConfigEnvVars(cfg)
+	cmd.ExportTerragruntEnvVars(cfg)
 
 	if _, ok := os.LookupEnv("KM_ROUTE53_ZONE_ID"); ok {
 		t.Errorf("KM_ROUTE53_ZONE_ID should not be set when cfg.Route53ZoneID is blank; got %q", os.Getenv("KM_ROUTE53_ZONE_ID"))

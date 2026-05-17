@@ -399,7 +399,7 @@ func reprovisionECSSandbox(ctx context.Context, cfg *config.Config, sandboxID, a
 	// backend bucket against the operator's resource_prefix. Same pattern as
 	// runInit / slack.go / destroy.go — without this, non-default prefix
 	// installs hit 403 HeadBucket on terragrunt apply.
-	ExportConfigEnvVars(cfg)
+	ExportTerragruntEnvVars(cfg)
 
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
 	return runner.Apply(ctx, sandboxDir)

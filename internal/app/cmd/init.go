@@ -364,7 +364,7 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 
 	// Export config values as env vars for Terragrunt's site.hcl get_env() calls
 	// and for the envReqs checks in regionalModules.
-	ExportConfigEnvVars(cfg)
+	ExportTerragruntEnvVars(cfg)
 
 	repoRoot := findRepoRoot()
 
@@ -645,7 +645,7 @@ func runInitPartial(cfg *config.Config, awsProfile, region string, verbose, side
 	return nil
 }
 
-// ExportConfigEnvVars exports the full set of env vars that Terragrunt's site.hcl
+// ExportTerragruntEnvVars exports the full set of env vars that Terragrunt's site.hcl
 // (and the per-module terragrunt.hcl files) consume via get_env(). Exported so the
 // cmd_test package can verify the correct vars are set without triggering a full
 // runInit (which requires real AWS credentials).
@@ -661,9 +661,9 @@ func runInitPartial(cfg *config.Config, awsProfile, region string, verbose, side
 // Phase 84.1 (plan 01) added KM_ROUTE53_ZONE_ID + KM_REGION_LABEL to close GAP-1 /
 // GAP-7 from Phase 84 UAT (`km bootstrap --shared-ses` previously failed to apply
 // the foundation MX/DKIM/verification records because KM_ROUTE53_ZONE_ID was unset).
-// Task 2 of plan 84.1-01 renames this helper to ExportTerragruntEnvVars across all
-// production callers; the body is unchanged.
-func ExportConfigEnvVars(cfg *config.Config) {
+// Renamed in plan 84.1-01 Task 2 from its prior, narrower-scoped name — single
+// canonical helper across all 8 production callers, NO shim (H5, plan-checker rev 1).
+func ExportTerragruntEnvVars(cfg *config.Config) {
 	// Phase 84.1: KM_ROUTE53_ZONE_ID — required by infra/live/use1/ses-shared-rule-set/
 	// terragrunt.hcl get_env("KM_ROUTE53_ZONE_ID", "") for DKIM / MX / verification
 	// records. Was previously set only inside runInit via ensureSandboxHostedZone,
@@ -984,7 +984,7 @@ func fetchAndCacheOutputs(repoRoot, regionLabel, module string) ([]byte, error) 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Use KM_RESOURCE_PREFIX env var (set by ExportConfigEnvVars) to mirror site.hcl naming.
+	// Use KM_RESOURCE_PREFIX env var (set by ExportTerragruntEnvVars) to mirror site.hcl naming.
 	resourcePrefix := os.Getenv("KM_RESOURCE_PREFIX")
 	if resourcePrefix == "" {
 		resourcePrefix = "km"

@@ -96,6 +96,17 @@ func detectSharedSESState(ctx context.Context, lister SESIdentityLister, ruleSet
 	return registerSharedRuleSet, registerDomainIdentity, nil
 }
 
+// RunBootstrapSharedSES is the exported test seam for runBootstrapSharedSES.
+// Tests in the cmd_test package call this to exercise the env-var export +
+// shared-SES detection without going through the cobra command (which has no
+// hook for injecting an SESIdentityLister mock).
+//
+// Production code uses the unexported runBootstrapSharedSES via the cobra
+// command's RunE — this wrapper is intentionally a one-line forwarder.
+func RunBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool, w io.Writer, listerOverride SESIdentityLister) error {
+	return runBootstrapSharedSES(ctx, cfg, dryRun, w, listerOverride)
+}
+
 // runBootstrapSharedSES implements the `km bootstrap --shared-ses` workflow.
 // It auto-detects whether the shared SES rule set and domain identity exist,
 // sets the corresponding Terragrunt env vars, and applies
@@ -108,7 +119,7 @@ func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool,
 	}
 
 	// Ensure all config env vars are exported so Terragrunt site.hcl picks them up.
-	ExportConfigEnvVars(loadedCfg)
+	ExportTerragruntEnvVars(loadedCfg)
 
 	// Build the full email domain: {email_subdomain}.{domain}
 	emailSubdomain := loadedCfg.EmailSubdomain

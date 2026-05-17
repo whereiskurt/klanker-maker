@@ -717,7 +717,7 @@ func buildSlackCmdDeps(cfg *config.Config) (*SlackCmdDeps, error) {
 	// slack subcommands) hit the wrong backend state bucket — e.g. tf-km-state-use1
 	// instead of tf-kph-state-use1 — and fail with a 403 HeadBucket. km init does
 	// the same thing in runInit before its first terragrunt apply.
-	ExportConfigEnvVars(cfg)
+	ExportTerragruntEnvVars(cfg)
 
 	awsProfile := cfg.AWSProfile
 

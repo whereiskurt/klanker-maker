@@ -343,7 +343,7 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// backend bucket against the operator's resource_prefix. Local-substrate
 	// km create runs terragrunt directly; without this, non-default prefix
 	// installs hit 403 HeadBucket. Same pattern as runInit / slack.go.
-	ExportConfigEnvVars(cfg)
+	ExportTerragruntEnvVars(cfg)
 
 	// Step 5c: Enforce sandbox limit before any provisioning.
 	if cfg.StateBucket != "" {
@@ -1866,7 +1866,7 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 	// LoadNetworkOutputs → fetchAndCacheOutputs reads KM_RESOURCE_PREFIX
 	// (init.go:891) to build the S3 state-bucket path. On non-default-prefix
 	// installs this otherwise defaults to "km" and queries the wrong bucket.
-	ExportConfigEnvVars(cfg)
+	ExportTerragruntEnvVars(cfg)
 	networkOutputs, err := LoadNetworkOutputs(repoRoot, regionLabel)
 	if err != nil {
 		return "", fmt.Errorf("failed to load network config for %s: %w\nRun 'km init --region %s' first", region, err, region)
