@@ -1,0 +1,28 @@
+{
+  "format_version": "1.0",
+  "terraform_version": "1.8.2",
+  "resource_changes": [
+    {
+      "address": "aws_ses_receipt_rule.operator",
+      "mode": "managed",
+      "type": "aws_ses_receipt_rule",
+      "name": "operator",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {}
+      }
+    },
+    {
+      "address": "aws_ses_receipt_rule.catchall",
+      "mode": "managed",
+      "type": "aws_ses_receipt_rule",
+      "name": "catchall",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {}
+      }
+    }
+  ]
+}

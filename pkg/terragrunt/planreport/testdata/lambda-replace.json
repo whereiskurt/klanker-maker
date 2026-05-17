@@ -1,0 +1,17 @@
+{
+  "format_version": "1.0",
+  "terraform_version": "1.8.2",
+  "resource_changes": [
+    {
+      "address": "aws_lambda_function.create_handler",
+      "mode": "managed",
+      "type": "aws_lambda_function",
+      "name": "create_handler",
+      "change": {
+        "actions": ["delete", "create"],
+        "before": {},
+        "after": {}
+      }
+    }
+  ]
+}

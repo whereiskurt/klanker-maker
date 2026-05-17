@@ -1,0 +1,39 @@
+{
+  "format_version": "1.0",
+  "terraform_version": "1.8.2",
+  "resource_changes": [
+    {
+      "address": "aws_ses_domain_identity.sandboxes",
+      "mode": "managed",
+      "type": "aws_ses_domain_identity",
+      "name": "sandboxes",
+      "change": {
+        "actions": ["delete"],
+        "before": {},
+        "after": null
+      }
+    },
+    {
+      "address": "aws_ses_domain_dkim.sandboxes",
+      "mode": "managed",
+      "type": "aws_ses_domain_dkim",
+      "name": "sandboxes",
+      "change": {
+        "actions": ["delete"],
+        "before": {},
+        "after": null
+      }
+    },
+    {
+      "address": "aws_route53_record.dkim[0]",
+      "mode": "managed",
+      "type": "aws_route53_record",
+      "name": "dkim",
+      "change": {
+        "actions": ["delete"],
+        "before": {},
+        "after": null
+      }
+    }
+  ]
+}
