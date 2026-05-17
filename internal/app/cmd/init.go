@@ -126,6 +126,34 @@ func RegionalModules(regionDir string) []RegionalModule {
 	return out
 }
 
+// defaultModuleTimeout returns the apply timeout for a regional module.
+// Modules with known long propagation (DNS, DKIM, IAM) get longer bounds.
+//
+// Phase 84.1-02 (GAP-5): closes the unbounded-Apply hang documented in
+// 84-10-UAT.md by giving every regional module a sensible upper bound. The
+// defaults are well above any normal-case apply duration — they exist to
+// catch the wedged-terraform scenario, not to police normal latency.
+func defaultModuleTimeout(name string) time.Duration {
+	switch name {
+	case "network", "ses-shared-rule-set":
+		return 10 * time.Minute
+	case "ses", "ttl-handler", "create-handler", "email-handler", "lambda-slack-bridge":
+		return 5 * time.Minute
+	default:
+		return 3 * time.Minute
+	}
+}
+
+// ModuleTimeoutFunc is the package-level per-module timeout lookup used by
+// RunInitWithRunner. Exported as a var so tests can override it with a short
+// duration to exercise the timeout wrapper without waiting real minutes.
+var ModuleTimeoutFunc = defaultModuleTimeout
+
+// reconfigureTimeout bounds the per-module Reconfigure call in RunInitWithRunner.
+// Reconfigure is normally seconds; a 2-minute bound is plenty to absorb backend
+// re-bootstrap on a fresh terragrunt cache while still surfacing a hang quickly.
+var reconfigureTimeout = 2 * time.Minute
+
 // regionalModules returns the ordered slice of regional infrastructure modules
 // for the given region directory. Modules are returned in dependency order.
 func regionalModules(regionDir string) []regionalModule {

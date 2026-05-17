@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/whereiskurt/klanker-maker/internal/app/cmd"
@@ -15,15 +16,25 @@ import (
 )
 
 // mockRunner records Apply calls in order for testing.
+//
+// Phase 84.1-02: applyBlocks=true makes Apply block on ctx.Done so callers
+// can test per-module timeout wrapping (see TestRunInitWithRunner_PerModuleTimeout*).
 type mockRunner struct {
-	applied []string
-	failOn  string
-	outputs map[string]interface{}
+	applied     []string
+	failOn      string
+	outputs     map[string]interface{}
+	applyBlocks bool // when true, Apply blocks on ctx.Done() to exercise timeout paths
 }
 
-func (m *mockRunner) Apply(_ context.Context, dir string) error {
+func (m *mockRunner) Apply(ctx context.Context, dir string) error {
 	if m.failOn != "" && strings.HasSuffix(dir, m.failOn) {
 		return fmt.Errorf("mock apply failure for %s", dir)
+	}
+	if m.applyBlocks {
+		// Block until ctx fires — the test asserts the surrounding timeout
+		// wrapper cancels us instead of waiting forever.
+		<-ctx.Done()
+		return ctx.Err()
 	}
 	m.applied = append(m.applied, dir)
 	return nil
@@ -666,5 +677,103 @@ func TestExportTerragruntEnvVars_BlankConfigSkipsExport(t *testing.T) {
 
 	if _, ok := os.LookupEnv("KM_ROUTE53_ZONE_ID"); ok {
 		t.Errorf("KM_ROUTE53_ZONE_ID should not be set when cfg.Route53ZoneID is blank; got %q", os.Getenv("KM_ROUTE53_ZONE_ID"))
+	}
+}
+
+// ---- Phase 84.1-02: per-module timeout tests (GAP-4, GAP-5) ----
+
+// withShortModuleTimeout temporarily overrides cmd.ModuleTimeoutFunc so a
+// test can drive the per-module timeout wrapper without waiting 3-10 real
+// minutes for the default to expire. The override is restored on cleanup.
+func withShortModuleTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	orig := cmd.ModuleTimeoutFunc
+	cmd.ModuleTimeoutFunc = func(_ string) time.Duration { return d }
+	t.Cleanup(func() { cmd.ModuleTimeoutFunc = orig })
+}
+
+// TestRunInitWithRunner_PerModuleTimeoutPropagatesToRunner verifies that a
+// wedged module Apply returns context.DeadlineExceeded within the configured
+// timeout (closes GAP-5 — no more indefinite km init hangs).
+func TestRunInitWithRunner_PerModuleTimeoutPropagatesToRunner(t *testing.T) {
+	repoRoot := t.TempDir()
+	regionLabel := "use1"
+
+	// One module dir — the wedged Apply blocks on the very first module.
+	networkDir := filepath.Join(repoRoot, "infra", "live", regionLabel, "network")
+	if err := os.MkdirAll(networkDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	withShortModuleTimeout(t, 200*time.Millisecond)
+
+	mock := &mockRunner{applyBlocks: true}
+
+	start := time.Now()
+	err := cmd.RunInitWithRunner(mock, repoRoot, "us-east-1")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected timeout error from wedged Apply, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) &&
+		!strings.Contains(err.Error(), "deadline exceeded") &&
+		!strings.Contains(err.Error(), "wedged") {
+		t.Errorf("expected error wrapping context.DeadlineExceeded or mentioning 'wedged', got: %v", err)
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("RunInitWithRunner blocked for %s — expected to return within a few seconds of the 200ms timeout", elapsed)
+	}
+}
+
+// TestRunInitWithRunner_TimeoutErrorIncludesModuleName verifies the timeout
+// error string names which module wedged so operators don't have to guess.
+func TestRunInitWithRunner_TimeoutErrorIncludesModuleName(t *testing.T) {
+	repoRoot := t.TempDir()
+	regionLabel := "use1"
+	networkDir := filepath.Join(repoRoot, "infra", "live", regionLabel, "network")
+	if err := os.MkdirAll(networkDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	withShortModuleTimeout(t, 200*time.Millisecond)
+
+	mock := &mockRunner{applyBlocks: true}
+	err := cmd.RunInitWithRunner(mock, repoRoot, "us-east-1")
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	if !strings.Contains(err.Error(), "network") {
+		t.Errorf("expected error to name 'network' module, got: %v", err)
+	}
+}
+
+// TestRunInitWithRunner_FastApplyDoesNotTriggerTimeout verifies that the
+// timeout wrapper does not interfere with normal fast applies.
+func TestRunInitWithRunner_FastApplyDoesNotTriggerTimeout(t *testing.T) {
+	repoRoot := t.TempDir()
+	regionLabel := "use1"
+
+	moduleNames := []string{"network", "dynamodb-budget", "dynamodb-identities", "ssm-session-doc", "s3-replication", "ttl-handler", "ses"}
+	regionDir := filepath.Join(repoRoot, "infra", "live", regionLabel)
+	for _, m := range moduleNames {
+		if err := os.MkdirAll(filepath.Join(regionDir, m), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", m, err)
+		}
+	}
+
+	// Long enough timeout to easily cover any single Apply, short enough that
+	// a regression where the timeout fires unconditionally would surface.
+	withShortModuleTimeout(t, 30*time.Second)
+
+	t.Setenv("KM_ROUTE53_ZONE_ID", "Z1234567890")
+	t.Setenv("KM_ARTIFACTS_BUCKET", "my-artifacts-bucket")
+
+	mock := &mockRunner{}
+	if err := cmd.RunInitWithRunner(mock, repoRoot, "us-east-1"); err != nil {
+		t.Fatalf("RunInitWithRunner with fast applies: %v", err)
+	}
+	if len(mock.applied) != 7 {
+		t.Errorf("expected all 7 fast applies to succeed, got %d", len(mock.applied))
 	}
 }
