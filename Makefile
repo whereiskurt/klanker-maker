@@ -29,7 +29,7 @@ SIDECARS := dns-proxy http-proxy audit-log
 OTELCOL_VERSION ?= 0.120.0
 OTELCOL_URL     := https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$(OTELCOL_VERSION)/otelcol-contrib_$(OTELCOL_VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build build-km bump-version sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas build-create-handler build-email-create-handler push-create-handler clean fetch-otelcol sandbox-image smoke-test-sandbox generate-ebpf test-no-82.1-leftovers
+.PHONY: build build-km bump-version sidecars ecr-push ecr-login ecr-repos build-sidecars build-lambdas build-create-handler build-email-create-handler push-create-handler clean fetch-otelcol sandbox-image smoke-test-sandbox generate-ebpf test-no-82.1-leftovers test-phase-84-1-import-blocks test-phase-84-1-removed-blocks test-phase-84-1-terraform-validate
 
 ## generate-ebpf: compile BPF C programs via bpf2go inside Docker (works from macOS)
 ## Regenerates pkg/ebpf/bpf_bpfel.go, pkg/ebpf/bpf_bpfel.o,
@@ -77,6 +77,49 @@ test-no-82.1-leftovers:
 		"KM_SES_ACTIVATE_RULESET\|activate_rule_set" \
 		infra/ internal/ pkg/ cmd/ \
 		|| (echo "Phase 82.1 leftovers found — see Phase 84"; exit 1)
+
+## test-phase-84-1-import-blocks: Plan 84.1-04 Task 2 — foundation module must
+## have exactly 6 import {} blocks (H9 from plan-checker rev 1: NO DKIM CNAME
+## imports — DKIM record import is OPERATOR-RUN per OPERATOR-GUIDE.md because
+## DKIM token names are not knowable at plan time).
+## Expected: rule_set, active_rule_set, domain_identity, domain_dkim,
+## ses_verification (TXT), mx (MX).
+test-phase-84-1-import-blocks:
+	@count=$$(grep -cE '^import[[:space:]]*\{' infra/modules/ses-shared-rule-set/v1.0.0/main.tf); \
+	if [ "$$count" -ne 6 ]; then \
+		echo "FAIL: expected exactly 6 import blocks in foundation main.tf, found $$count (H9: NO DKIM import blocks — operator-run via OPERATOR-GUIDE.md)"; \
+		exit 1; \
+	fi
+	@echo "OK: foundation main.tf has 6 import blocks (H9-compliant, no DKIM imports)"
+
+## test-phase-84-1-removed-blocks: Plan 84.1-04 Task 2 — regional v2.0.0 module
+## must have exactly 7 removed {} blocks (one per v1.0.0-owned shared resource)
+## and 7 'destroy = false' lifecycle entries so the v1.0.0 → v2.0.0 cutover
+## releases state without destroying AWS objects (GAP-6).
+test-phase-84-1-removed-blocks:
+	@count=$$(grep -cE '^removed[[:space:]]*\{' infra/modules/ses/v2.0.0/main.tf); \
+	if [ "$$count" -ne 7 ]; then \
+		echo "FAIL: expected exactly 7 removed blocks in regional v2.0.0 main.tf, found $$count"; \
+		exit 1; \
+	fi
+	@destroy_count=$$(grep -cE 'destroy[[:space:]]*=[[:space:]]*false' infra/modules/ses/v2.0.0/main.tf); \
+	if [ "$$destroy_count" -ne 7 ]; then \
+		echo "FAIL: expected exactly 7 'destroy = false' lifecycle entries, found $$destroy_count"; \
+		exit 1; \
+	fi
+	@echo "OK: regional v2.0.0 main.tf has 7 removed blocks with destroy=false"
+
+## test-phase-84-1-terraform-validate: Plan 84.1-04 Task 2 (C4 from plan-checker
+## rev 1) — pre-UAT terraform-validate gate. Catches typos in import IDs,
+## removed-block addresses, and HCL syntax errors BEFORE the operator hits them
+## at UAT time against real AWS. Runs terraform fmt -check + init -backend=false
+## + validate against the foundation module + regional v2.0.0 module.
+test-phase-84-1-terraform-validate:
+	@for dir in infra/modules/ses-shared-rule-set/v1.0.0 infra/modules/ses/v2.0.0; do \
+		echo "==> terraform validate $$dir"; \
+		( cd $$dir && terraform fmt -check && terraform init -backend=false -input=false >/dev/null && terraform validate ) || exit 1; \
+	done
+	@echo "OK: foundation + regional v2.0.0 modules pass terraform validate"
 
 ## fetch-otelcol: download otelcol-contrib binary for EC2 tracing sidecar
 fetch-otelcol:
