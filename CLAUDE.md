@@ -110,6 +110,20 @@ km doctor
 
 See `OPERATOR-GUIDE.md` § Phase 84 upgrade for the detailed runbook and two-install coexistence scenario.
 
+### Phase 84.1: Upgrade-safety gap closure (2026-05-16)
+
+Phase 84.1 closes 8 gaps from Phase 84 UAT without changing the Phase 84 runtime design:
+
+- `ExportTerragruntEnvVars` (renamed from `ExportConfigEnvVars`) exports the full env-var set including `KM_ROUTE53_ZONE_ID` and `KM_ARTIFACTS_BUCKET`; every km command that invokes terragrunt calls it exactly once (GAP-1, GAP-7).
+- Terragrunt runner is bounded by per-module context timeouts (default 5–10 min) and emits a quiet-mode heartbeat every 15s — wedged applies no longer hang silently (GAP-4, GAP-5).
+- `km doctor` includes `Terraform state lock digest` check that detects S3-vs-DynamoDB drift and prints an exact `aws dynamodb update-item` recovery command (GAP-8). See OPERATOR-GUIDE.md § State-digest mismatch recovery.
+- Foundation `ses-shared-rule-set/v1.0.0/` register_* flags now mean "manage this resource", not "create only on first apply". Re-running `km bootstrap --shared-ses` is a true no-op (GAP-2).
+- Foundation auto-detect prefers foundation tfstate ownership over AWS reality, preventing the in-place-upgrade data-loss scenario (GAP-3).
+- Foundation main.tf ships with `import {}` blocks and regional `ses/v2.0.0/main.tf` ships with `removed { lifecycle { destroy = false } }` blocks — the v1.0.0 → v2.0.0 cutover destroys zero shared AWS resources (GAP-6, the highest-impact gap).
+- `lifecycle.prevent_destroy = true` on the shared rule set is preserved as a safety net for the new register_*=manage semantics.
+
+See `OPERATOR-GUIDE.md` § Phase 84.1 upgrade safety for the in-place upgrade runbook.
+
 ## Network Enforcement
 
 Three enforcement modes via `spec.network.enforcement`:
