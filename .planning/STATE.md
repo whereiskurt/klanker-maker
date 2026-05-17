@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.3-01-PLAN.md — Wave 0 RED test scaffolding
-last_updated: "2026-05-17T21:15:43.456Z"
+stopped_at: Completed 84.3-02-PLAN.md — configure.go closures a, e, f, h GREEN
+last_updated: "2026-05-17T21:36:19.526Z"
 last_activity: 2026-05-17
 progress:
   total_phases: 97
   completed_phases: 84
   total_plans: 391
-  completed_plans: 333
+  completed_plans: 334
   percent: 88
 ---
 
@@ -371,6 +371,7 @@ Progress: [█████████░] 88%
 | Phase 84.2-km-init-plan-flag-and-destroy-class-gate P07 | 45min | 2 tasks | 1 files |
 | Phase 84.2-km-init-plan-flag-and-destroy-class-gate P08 | 1219 | 3 tasks | 6 files |
 | Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted P01 | 524 | 3 tasks | 6 files |
+| Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted P02 | 9min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -1066,6 +1067,9 @@ Recent decisions affecting current work:
 - [Phase 84.3]: mockS3HeadBucketConfigure renamed from plan's mockS3HeadBucketClient to avoid collision with doctor_test.go declaration
 - [Phase 84.3]: init_plan_84_3_test.go created as new file (package cmd_test) per >600-line threshold rule; both files use existing mockPlanRunner
 - [Phase 84.3]: TestConfig_AccountsTerraformEnvWins is also RED (viper AutomaticEnv dot-notation limitation) — Plan 02 must add SetEnvKeyReplacer to fix both yaml-authority tests
+- [Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted]: validateArtifactsBucket uses strings.Index for angle-bracket detection to catch embedded tokens like <prefix>-artifacts-12345678
+- [Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted]: accountsYamlAuthoritativeKeys: yaml wins for organization/dns_parent/application; accounts.terraform env-precedence preserved intentionally
+- [Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted]: warnShellEnvConflict called before validation so drift WARNs emit even when required flags are missing
 
 ### Roadmap Evolution
 
@@ -1173,6 +1177,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-17T21:15:43.449Z
-Stopped at: Completed 84.3-01-PLAN.md — Wave 0 RED test scaffolding
+Last session: 2026-05-17T21:36:19.518Z
+Stopped at: Completed 84.3-02-PLAN.md — configure.go closures a, e, f, h GREEN
 Resume file: None
