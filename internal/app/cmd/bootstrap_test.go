@@ -3,15 +3,45 @@ package cmd_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/cmd"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
+
+// makeFakeTerragruntForBootstrap installs a sleeping fake terragrunt on PATH
+// so defaultApplyTerragrunt's runner spawns it instead of the real binary.
+// Mirrors makeFakeTerragruntBin in pkg/terragrunt/runner_test.go.
+//
+// Phase 84.1-02 H6: used to exercise BootstrapApplyTimeout without invoking
+// real terragrunt.
+func makeFakeTerragruntForBootstrap(t *testing.T, body string) {
+	t.Helper()
+	binDir := t.TempDir()
+	script := "#!/bin/sh\n" + body + "\n"
+	path := filepath.Join(binDir, "terragrunt")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake terragrunt: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// withShortBootstrapTimeout overrides cmd.BootstrapApplyTimeout for the
+// duration of the test and restores it on cleanup. Tests use this so the RED
+// path doesn't have to wait 10 real minutes for the default to fire.
+func withShortBootstrapTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	orig := cmd.BootstrapApplyTimeout
+	cmd.BootstrapApplyTimeout = d
+	t.Cleanup(func() { cmd.BootstrapApplyTimeout = orig })
+}
 
 // testTrustedBase returns a minimal trusted-base ARN slice for use in SCP tests.
 // Uses a fixed account ID so tests are deterministic without AWS access.
@@ -513,5 +543,66 @@ func TestRunBootstrapSharedSES_ExportsAllSiteHCLVars(t *testing.T) {
 		if got := os.Getenv(v); got == "" {
 			t.Errorf("%s not exported by RunBootstrapSharedSES (strict-superset violation)", v)
 		}
+	}
+}
+
+// ---- Phase 84.1-02 Task 3 (H6): bootstrap apply timeout tests ----
+
+// TestDefaultApplyTerragrunt_HonorsContextTimeout verifies that the bootstrap
+// apply path (defaultApplyTerragrunt, reached via the package-level
+// ApplyTerragruntFunc default) is bounded by BootstrapApplyTimeout. Without
+// this bound, a wedged terragrunt during `km bootstrap --shared-ses` hangs
+// indefinitely just like the km init regression in 84-10-UAT.md (GAP-4/5).
+//
+// Plan-checker revision 1 H6: this is the bootstrap-side mirror of Task 2's
+// init-side per-module timeout.
+func TestDefaultApplyTerragrunt_HonorsContextTimeout(t *testing.T) {
+	makeFakeTerragruntForBootstrap(t, "sleep 30")
+	withShortBootstrapTimeout(t, 200*time.Millisecond)
+
+	// Use a tmpdir as the apply target — terragrunt is faked anyway.
+	dir := t.TempDir()
+
+	start := time.Now()
+	err := cmd.ApplyTerragruntFunc(context.Background(), dir)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected timeout error from wedged terragrunt, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("expected error wrapping context.DeadlineExceeded, got: %v", err)
+	}
+	if elapsed > 10*time.Second {
+		t.Errorf("defaultApplyTerragrunt blocked for %s — expected to return within seconds of the 200ms BootstrapApplyTimeout", elapsed)
+	}
+}
+
+// TestRunBootstrapSharedSES_HonorsBootstrapTimeout verifies the end-to-end
+// flow: km bootstrap --shared-ses with dryRun=false invokes
+// ApplyTerragruntFunc, which is bounded by BootstrapApplyTimeout.
+func TestRunBootstrapSharedSES_HonorsBootstrapTimeout(t *testing.T) {
+	makeFakeTerragruntForBootstrap(t, "sleep 30")
+	withShortBootstrapTimeout(t, 200*time.Millisecond)
+	clearTerragruntEnv(t)
+
+	cfg := bootstrapSharedSESCfg()
+	mock := &mockSESIdentityLister{} // dry-run-safe — rule set + identity absent
+
+	start := time.Now()
+	err := cmd.RunBootstrapSharedSES(context.Background(), cfg, false, io.Discard, mock)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected timeout error from wedged terragrunt, got nil")
+	}
+	// Error string must mention either "deadline exceeded" or "wedged" so an
+	// operator reading km bootstrap output can diagnose the hang.
+	msg := err.Error()
+	if !strings.Contains(msg, "deadline exceeded") && !strings.Contains(msg, "wedged") {
+		t.Errorf("expected error to mention 'deadline exceeded' or 'wedged', got: %v", err)
+	}
+	if elapsed > 10*time.Second {
+		t.Errorf("RunBootstrapSharedSES blocked for %s — expected to return within seconds of the 200ms BootstrapApplyTimeout", elapsed)
 	}
 }

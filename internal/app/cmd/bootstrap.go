@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
@@ -24,6 +25,18 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
 )
+
+// BootstrapApplyTimeout bounds defaultApplyTerragrunt (Reconfigure + Apply).
+// Matches the 10-minute bound used for the foundation ses-shared-rule-set
+// regional module in init.go's defaultModuleTimeout (Plan 84.1-02 Task 2).
+//
+// Plan-checker rev 1 H6: without this bound, km bootstrap --shared-ses can
+// hang indefinitely on a wedged terragrunt — the same indefinite-hang surface
+// GAP-4 / GAP-5 closed in km init.
+//
+// Exported as a package-level var (not a const) so tests can lower the bound
+// for fast-running fake-terragrunt scenarios.
+var BootstrapApplyTimeout = 10 * time.Minute
 
 // =============================================================================
 // Phase 84: km bootstrap --shared-ses
