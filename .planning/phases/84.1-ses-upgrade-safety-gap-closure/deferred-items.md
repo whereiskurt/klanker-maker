@@ -43,3 +43,52 @@ unlock_test.go:73: error should mention 'state bucket', got: sandbox sb-aabbccdd
 - File under a future "test stability / DI hardening" plan.
 
 ---
+
+## Discovered during 84.1-03
+
+### Full `go test ./internal/app/cmd/...` suite hangs on cumulative HTTP/2 connections
+
+**Test:** Cumulative — appears to manifest after `TestListCmd_AliasEmpty` runs
+in the default sequential test order. Stack traces show goroutines stuck in
+`net/http.(*http2Transport).newClientConn` → `http2clientConnReadLoop.run` →
+TLS `Read` (i.e. an outbound AWS API connection that never returns).
+
+**Symptom:**
+```
+panic: test timed out after 1m30s
+FAIL  github.com/whereiskurt/klanker-maker/internal/app/cmd  90.846s
+```
+
+**Diagnosis:**
+- Individual tests pass cleanly when run in isolation
+  (`go test -run "TestListCmd_Alias|TestVSCode..." -timeout 10s` all PASS).
+- The hang only manifests with the full package suite and is unaffected by
+  `-p 1 -parallel 1` (so it is NOT a parallelism race).
+- Each Phase 84.1-03 scoped test set runs green in <3s:
+  `TestCheckStateLockDigest|TestParseLockID|TestBuildChecks|TestBackendLockTableName`
+  → all 11 PASS in 1.3s; broader doctor-scoped run (~14 tests) → PASS in 2.9s.
+- A test elsewhere in the suite (most likely an init / shell / VS Code / agent
+  flow) is constructing a real AWS HTTP client that holds open an idle
+  HTTP/2 connection past test exit, accumulating goroutines until the test
+  runtime panics with the deadline timeout.
+
+**Why out of scope for 84.1-03:**
+- Plan 84.1-03 closes GAP-8 (state-digest drift detection in `km doctor`)
+  via two new functions in `doctor.go` and a wiring update in `buildChecks`.
+- None of the new code opens HTTP/2 connections or AWS API clients beyond the
+  narrow-interface mocks used in tests (`mockS3StateReader`,
+  `mockLockDigestReader`) — both pure in-memory.
+- The hang is reproducible at HEAD before this plan's changes (Plan 84.1-01
+  completed independently in parallel; the symptom predates either plan).
+
+**Recommended remediation (separate plan):**
+- Bisect the test that leaks the HTTP/2 connection. Likely candidates:
+  `agent`-prefixed tests, `init`-prefixed integration tests, or any test
+  that calls `kmaws.LoadAWSConfig` without a `t.Cleanup` to close the
+  HTTP transport.
+- Add `t.Cleanup(func() { client.HTTPClient.CloseIdleConnections() })` to
+  the offending test once identified.
+- File under the same "test stability / DI hardening" track as the
+  84.1-01 deferred item.
+
+---
