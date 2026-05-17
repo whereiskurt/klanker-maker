@@ -2,12 +2,16 @@ package cmd
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	smithy "github.com/aws/smithy-go"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	"gopkg.in/yaml.v3"
@@ -59,6 +63,235 @@ type accountsConfig struct {
 type ssoConfig struct {
 	StartURL string `yaml:"start_url"`
 	Region   string `yaml:"region"`
+}
+
+// probeStateBucketInteractive performs an S3 HeadBucket check on the proposed
+// state bucket name and guides the operator interactively when the bucket is taken.
+//
+// Behaviour:
+//   - 404 (NotFound) or nil error: bucket is available or already owned → accept, return name.
+//   - 403 (Forbidden): bucket exists but is owned by another account.
+//     If accountID is non-empty: print suggestion "${name}-${accountID}" and prompt
+//     [Y / edit / abort].
+//     - Y: HeadBucket the suggestion; 403 again → error "pick a unique state_bucket via --state-bucket".
+//     - edit: prompt for a freeform name; HeadBucket; 403 → error "pick a unique …".
+//     - abort: return error "aborted by operator".
+//   - Other errors: propagated as-is.
+//
+// stdin is a *bufio.Reader so tests can inject strings without piping os.Stdin.
+// s3client is variadic-last so callers can omit it (nil → no probe; useful when
+// AWS credentials are not configured at wizard time).
+func probeStateBucketInteractive(
+	ctx context.Context,
+	initialName, accountID string,
+	in *bufio.Reader, out io.Writer,
+	s3client ...S3HeadBucketAPI,
+) (string, error) {
+	// If no client is provided, accept the name without probing.
+	if len(s3client) == 0 || s3client[0] == nil {
+		return initialName, nil
+	}
+	client := s3client[0]
+
+	// Helper: call HeadBucket and classify the error.
+	is403 := func(err error) bool {
+		if err == nil {
+			return false
+		}
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) {
+			return apiErr.ErrorCode() == "Forbidden" || apiErr.ErrorCode() == "AccessDenied"
+		}
+		return false
+	}
+	is404 := func(err error) bool {
+		if err == nil {
+			return false
+		}
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) {
+			return apiErr.ErrorCode() == "NotFound" || apiErr.ErrorCode() == "NoSuchBucket"
+		}
+		return false
+	}
+
+	// First probe: check the initial bucket name.
+	_, err := client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: &initialName})
+	if err == nil || is404(err) {
+		// nil = owned by us; 404 = available. Both are acceptable.
+		return initialName, nil
+	}
+	if !is403(err) {
+		return "", err
+	}
+
+	// 403: bucket is taken by another account. Prompt the operator.
+	suggestion := initialName + "-" + accountID
+	if accountID == "" {
+		// No account ID available — skip the suggestion path, prompt edit/abort only.
+		fmt.Fprintf(out, "state_bucket %q is taken (403 Forbidden). Enter a different name or type 'abort': ", initialName)
+		line, readErr := in.ReadString('\n')
+		if readErr != nil && line == "" {
+			return "", fmt.Errorf("reading input: %w", readErr)
+		}
+		line = strings.TrimSpace(line)
+		if line == "abort" || line == "" {
+			return "", fmt.Errorf("aborted by operator")
+		}
+		// HeadBucket the typed name.
+		_, err2 := client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: &line})
+		if is403(err2) {
+			return "", fmt.Errorf("state_bucket %q is also taken; pick a unique state_bucket via --state-bucket", line)
+		}
+		if err2 != nil && !is404(err2) {
+			return "", err2
+		}
+		return line, nil
+	}
+
+	fmt.Fprintf(out, "state_bucket %q is taken (403 Forbidden).\n", initialName)
+	fmt.Fprintf(out, "Suggestion: %s\n", suggestion)
+	fmt.Fprintf(out, "[Y / edit / abort]: ")
+
+	line, readErr := in.ReadString('\n')
+	if readErr != nil && line == "" {
+		return "", fmt.Errorf("reading input: %w", readErr)
+	}
+	line = strings.TrimSpace(line)
+	lower := strings.ToLower(line)
+
+	switch lower {
+	case "y", "yes", "":
+		// Accept the suggestion; HeadBucket it once.
+		_, err2 := client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: &suggestion})
+		if is403(err2) {
+			return "", fmt.Errorf("suggested state_bucket %q is also taken; pick a unique state_bucket via --state-bucket", suggestion)
+		}
+		if err2 != nil && !is404(err2) {
+			return "", err2
+		}
+		return suggestion, nil
+
+	case "edit":
+		fmt.Fprintf(out, "Enter a new state_bucket name: ")
+		custom, readErr2 := in.ReadString('\n')
+		if readErr2 != nil && custom == "" {
+			return "", fmt.Errorf("reading input: %w", readErr2)
+		}
+		custom = strings.TrimSpace(custom)
+		if custom == "" {
+			return "", fmt.Errorf("aborted by operator")
+		}
+		_, err2 := client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: &custom})
+		if is403(err2) {
+			return "", fmt.Errorf("state_bucket %q is also taken; pick a unique state_bucket via --state-bucket", custom)
+		}
+		if err2 != nil && !is404(err2) {
+			return "", err2
+		}
+		return custom, nil
+
+	case "abort":
+		return "", fmt.Errorf("aborted by operator")
+
+	default:
+		return "", fmt.Errorf("aborted by operator")
+	}
+}
+
+// deriveArtifactsBucket returns the canonical artifacts bucket name for an install:
+// "${prefix}-artifacts-${accountID}".
+func deriveArtifactsBucket(prefix, accountID string) string {
+	return fmt.Sprintf("%s-artifacts-%s", prefix, accountID)
+}
+
+// validateArtifactsBucket rejects placeholder values from km-config.example.yaml.
+// Returns a descriptive error for:
+//   - angle-bracket placeholders: any string containing a "<…>" token
+//     (e.g. "<prefix>-artifacts-<account-id>" or "<prefix>-artifacts-12345678")
+//   - the literal example sentinel: "km-artifacts-12345"
+//   - empty string (not a valid bucket name)
+//
+// Returns nil for any other non-empty string.
+func validateArtifactsBucket(name string) error {
+	if name == "" {
+		return fmt.Errorf("artifacts_bucket is empty; re-run `km configure` to derive ${prefix}-artifacts-${account_id} automatically")
+	}
+	// Reject any string that contains an angle-bracket token (e.g. "<prefix>").
+	// strings.Index("<") combined with a closing ">" at any position covers both
+	// full wrappers (<anything>) and prefix-tokens (<prefix>-artifacts-12345678).
+	if lt := strings.Index(name, "<"); lt >= 0 {
+		if gt := strings.Index(name[lt:], ">"); gt >= 0 {
+			return fmt.Errorf("artifacts_bucket=%q is a placeholder; re-run `km configure` to derive ${prefix}-artifacts-${account_id} automatically", name)
+		}
+	}
+	if name == "km-artifacts-12345" {
+		return fmt.Errorf("artifacts_bucket=%q is the km-config.example.yaml placeholder; re-run `km configure` to derive ${prefix}-artifacts-${account_id} automatically", name)
+	}
+	return nil
+}
+
+// nextStepsBlock returns the canonical bootstrap sequence as a multi-line string
+// for printing to stdout at the end of `km configure` and for embedding as `# `
+// header comments in the generated km-config.yaml.
+func nextStepsBlock() string {
+	return `Next steps:
+  1. km bootstrap --all --plan
+     (preview the foundation+regional sequence with destroy-class gate)
+
+  2. km bootstrap --all --dry-run=false
+     (apply foundation: SES rule set, KMS, SCP, artifacts bucket)
+
+  3. km init --plan
+     (preview regional infra deltas)
+
+  4. km init --dry-run=false
+     (apply regional infra: network, EFS, lambdas, etc.)
+
+Or run individually:
+  km bootstrap --dry-run=false                   # SCP + KMS + artifacts
+  km bootstrap --shared-ses --dry-run=false      # foundation SES
+  km init --dry-run=false                        # regional`
+}
+
+// warnShellEnvConflict walks known KM_* environment variables and emits a WARN
+// to w (stderr in production) for each env var that is set and conflicts with the
+// value being written to km-config.yaml. Does NOT block the wizard.
+//
+// Format: "WARN: KM_<KEY>=<env-value> exported in shell will shadow km-config.yaml
+// value (<yaml-value>) in current session"
+func warnShellEnvConflict(pc platformConfig, w io.Writer) {
+	type kvPair struct {
+		envKey   string
+		yamlVal  string
+	}
+	checks := []kvPair{
+		{"KM_REGION", pc.Region},
+		{"KM_DOMAIN", pc.Domain},
+		{"KM_RESOURCE_PREFIX", pc.ResourcePrefix},
+		{"KM_EMAIL_SUBDOMAIN", pc.EmailSubdomain},
+		{"KM_STATE_BUCKET", pc.StateBucket},
+		{"KM_ARTIFACTS_BUCKET", pc.ArtifactsBucket},
+		{"KM_OPERATOR_EMAIL", pc.OperatorEmail},
+		{"KM_SAFE_PHRASE", pc.SafePhrase},
+		{"KM_ACCOUNTS_ORGANIZATION", pc.Accounts.Organization},
+		{"KM_ACCOUNTS_DNS_PARENT", pc.Accounts.DNSParent},
+		{"KM_ACCOUNTS_TERRAFORM", pc.Accounts.Terraform},
+		{"KM_ACCOUNTS_APPLICATION", pc.Accounts.Application},
+		{"KM_SSO_START_URL", pc.SSO.StartURL},
+		{"KM_SSO_REGION", pc.SSO.Region},
+	}
+	for _, c := range checks {
+		envVal := os.Getenv(c.envKey)
+		if envVal == "" {
+			continue
+		}
+		if envVal == c.yamlVal {
+			continue
+		}
+		fmt.Fprintf(w, "WARN: %s=%s exported in shell will shadow km-config.yaml value (%s) in current session\n",
+			c.envKey, envVal, c.yamlVal)
+	}
 }
 
 // NewConfigureCmd creates the "km configure" wizard command.
@@ -221,6 +454,25 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 				}
 			}
 		}
+		// Phase 84.3: emit shell-env drift WARNs before validation so they reach
+		// the operator even when required flags are missing. Does not block the wizard.
+		warnShellEnvConflict(platformConfig{
+			ResourcePrefix: resourcePrefix,
+			EmailSubdomain: emailSubdomain,
+			Domain:         domain,
+			Accounts: accountsConfig{
+				Organization: organizationAcct,
+				DNSParent:    dnsParentAcct,
+				Terraform:    terraformAcct,
+				Application:  applicationAcct,
+			},
+			SSO:           ssoConfig{StartURL: ssoStartURL, Region: ssoRegion},
+			Region:        region,
+			StateBucket:   stateBucket,
+			ArtifactsBucket: artifactsBucket,
+			OperatorEmail: operatorEmail,
+			SafePhrase:    safePhrase,
+		}, os.Stderr)
 		// Validate required flags
 		missing := []string{}
 		if domain == "" {
@@ -410,13 +662,30 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		return fmt.Errorf("marshaling config: %w", err)
 	}
 
-	// Write header comment + YAML
-	header := "# km-config.yaml — generated by km configure\n# Add this file to .gitignore\n\n"
+	// Phase 84.3: build header comment block — the canonical next-steps sequence
+	// is embedded at the top of km-config.yaml so operators can reference it without
+	// re-running `km configure`.
+	nextSteps := nextStepsBlock()
+	var headerLines []string
+	headerLines = append(headerLines, "# km-config.yaml — generated by km configure")
+	headerLines = append(headerLines, "# Add this file to .gitignore")
+	headerLines = append(headerLines, "#")
+	for _, line := range strings.Split(nextSteps, "\n") {
+		headerLines = append(headerLines, "# "+line)
+	}
+	headerLines = append(headerLines, "")
+	header := strings.Join(headerLines, "\n") + "\n"
+
 	if err := os.WriteFile(outPath, append([]byte(header), data...), 0600); err != nil {
 		return fmt.Errorf("writing km-config.yaml: %w", err)
 	}
 
 	fmt.Fprintf(out, "Written: %s\n", outPath)
+
+	// Phase 84.3: print the next-steps block to stdout so the operator sees
+	// the canonical bootstrap sequence immediately after configure completes.
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, nextSteps)
 	return nil
 }
 

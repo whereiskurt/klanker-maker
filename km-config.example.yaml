@@ -80,8 +80,8 @@ safe_phrase: change-me-to-something-unique   # [REQUIRED]
 # state_bucket: tf-km-state-use1
 
 # S3 bucket for Lambda zips, sidecar binaries, and sandbox profiles/artifacts.
-# Default: km-artifacts-{random}  (created by km init)
-# artifacts_bucket: km-artifacts-12345
+# Auto-derived by `km configure` as ${resource_prefix}-artifacts-${account_id}.
+# artifacts_bucket: "<prefix>-artifacts-<account-id>"
 
 # DynamoDB table names (created by km init).
 # budget_table_name: km-budgets
