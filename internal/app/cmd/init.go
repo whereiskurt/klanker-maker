@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -37,6 +38,7 @@ import (
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
+	"github.com/whereiskurt/klanker-maker/pkg/terragrunt/planreport"
 	"github.com/whereiskurt/klanker-maker/pkg/version"
 	"gopkg.in/yaml.v3"
 )
@@ -47,7 +49,14 @@ type InitRunner interface {
 	Apply(ctx context.Context, dir string) error
 	Output(ctx context.Context, dir string) (map[string]interface{}, error)
 	Reconfigure(ctx context.Context, dir string) error
+	// Phase 84.2 additions (consumed by RunInitPlanWithRunner):
+	PlanWithOutput(ctx context.Context, dir, planFile string, stdoutBuf *bytes.Buffer) error
+	ShowPlanJSON(ctx context.Context, dir, planFile string) ([]byte, error)
 }
+
+// Compile-time assertion: *terragrunt.Runner must satisfy InitRunner.
+// If Plan 03 methods are missing this fails at build, not at runtime.
+var _ InitRunner = (*terragrunt.Runner)(nil)
 
 // SESPreflightFunc is a function that validates the shared SES rule set exists
 // before the regional ses module applies. It is called by RunInitWithRunner
@@ -64,6 +73,17 @@ type SESPreflightFunc func(ctx context.Context) error
 // InitSESPreflight is the package-level SES preflight function used by RunInitWithRunner.
 // Tests replace this variable to exercise the "missing rule set" branch.
 var InitSESPreflight SESPreflightFunc = defaultSESPreflight
+
+// RunInitPlanFunc is the package-level entry point for km init --plan, exported as a
+// var so cmd_test can override it with a mock to verify routing without needing real
+// AWS credentials / a real terragrunt binary. The default implementation is runInitPlan.
+//
+// Phase 84.2 test seam — mirrors ApplyTerragruntFunc (bootstrap.go) and InitSESPreflight
+// (init.go). The var is initialized after runInitPlan is defined (init.go near
+// RunInitWithRunner), so the zero-value is nil until then; Go initializes package vars
+// in declaration order, so both runInitPlan and RunInitPlanFunc must be in the same
+// file (this file) to guarantee ordering.
+var RunInitPlanFunc = runInitPlan
 
 // defaultSESPreflight is the real implementation: loads AWS config and checks
 // whether the shared SES receipt rule set exists.
@@ -269,6 +289,8 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 	var sidecarsOnly bool
 	var lambdasOnly bool
 	var dryRun bool
+	var plan bool
+	var acceptDestroys bool
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -277,6 +299,13 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if awsProfile == "" {
 				awsProfile = "klanker-application"
+			}
+			// Phase 84.2: --plan always wins over --dry-run / sidecars / lambdas (Decision 1).
+			if plan && (sidecarsOnly || lambdasOnly) {
+				return fmt.Errorf("--plan cannot be combined with --sidecars or --lambdas")
+			}
+			if plan {
+				return RunInitPlanFunc(cfg, awsProfile, region, verbose, acceptDestroys)
 			}
 			if sidecarsOnly || lambdasOnly {
 				return runInitPartial(cfg, awsProfile, region, verbose, sidecarsOnly, lambdasOnly)
@@ -300,6 +329,15 @@ func NewInitCmd(cfg *config.Config) *cobra.Command {
 		"Only rebuild and deploy Lambda functions (skip Terraform)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", true,
 		"Show what would be initialized without making changes (use --dry-run=false to execute)")
+	cmd.Flags().BoolVar(&plan, "plan", false,
+		"Run terragrunt plan per module with destroy-class safety gate; never applies (independent of --dry-run)")
+	cmd.Flags().BoolVar(&acceptDestroys, "i-accept-destroys", false,
+		"Clear --plan exit code from 1 to 0 when only failures are protected destroys (per-invocation; never persisted; does NOT auto-apply)")
+	if err := cmd.Flags().MarkHidden("i-accept-destroys"); err != nil {
+		// Hidden registration shouldn't fail — flag is being registered immediately above.
+		// Surface as panic at startup so the bug is loud (matches MarkHidden usage in create.go).
+		panic(fmt.Sprintf("MarkHidden i-accept-destroys: %v", err))
+	}
 
 	return cmd
 }
@@ -952,6 +990,241 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 	fmt.Printf("Init complete for %s. Ready for: km create <profile.yaml>\n", region)
 	return nil
 }
+
+// ─── Phase 84.2: km init --plan ──────────────────────────────────────────────
+
+// runInitPlan is the production entry point for km init --plan. Loads AWS config,
+// validates credentials, calls ExportTerragruntEnvVars (Phase 84.1-01 contract),
+// constructs the real *terragrunt.Runner, then delegates to RunInitPlanWithRunner
+// (the testable core). Mirrors the runInit → RunInitWithRunner split at init.go.
+//
+// Phase 84.2. Per CONTEXT.md decisions: --plan is independent of --dry-run; it
+// NEVER applies. --i-accept-destroys clears the exit code from 1 to 0 but still
+// prints the trip list (operator-visibility contract).
+func runInitPlan(cfg *config.Config, awsProfile, region string, verbose, acceptDestroys bool) error {
+	ctx := context.Background()
+
+	// 1. Validate AWS credentials (matches runInit credential check)
+	awsCfg, err := awspkg.LoadAWSConfig(ctx, awsProfile)
+	if err != nil {
+		return fmt.Errorf("failed to load AWS config (profile=%s): %w", awsProfile, err)
+	}
+	if err := awspkg.ValidateCredentials(ctx, awsCfg); err != nil {
+		return fmt.Errorf("AWS credential validation failed: %w", err)
+	}
+
+	// 2. Export env vars — Phase 84.1-01 contract (init.go ExportTerragruntEnvVars pattern).
+	//    MUST happen exactly once before any terragrunt invocation.
+	ExportTerragruntEnvVars(cfg)
+
+	// 3. Construct runner (Verbose=false — RunInitPlanWithRunner captures stdout
+	//    per-module and echoes based on verbose flag post-hoc).
+	repoRoot := findRepoRoot()
+	runner := terragrunt.NewRunner(awsProfile, repoRoot)
+	runner.Verbose = false
+
+	// 4. Delegate to testable core
+	return RunInitPlanWithRunner(runner, repoRoot, region, verbose, acceptDestroys)
+}
+
+// runInitPlanWithWriter is the writer-aware test seam for runInitPlan.
+// Production callers use runInitPlan (which writes to os.Stdout via fmt.Print*);
+// cmd_test uses this directly to exercise the plan loop without real AWS.
+// Note: output currently goes via fmt.Print* to os.Stdout; the w parameter is
+// reserved for future full writer-routing and is accepted but not used here
+// (bootstrap plan tests capture os.Stdout via pipe for trip/summary assertions).
+//
+// Phase 84.2 test seam — referenced by init_plan_test.go.
+func runInitPlanWithWriter(cfg *config.Config, awsProfile, region string, w io.Writer, verbose, acceptDestroys bool) error {
+	repoRoot := findRepoRoot()
+	runner := terragrunt.NewRunner(awsProfile, repoRoot)
+	runner.Verbose = false
+	_ = w // output goes via fmt.Print* to os.Stdout; w param reserved for future writer wiring
+	return RunInitPlanWithRunner(runner, repoRoot, region, verbose, acceptDestroys)
+}
+
+// RunInitPlanWithRunner is the testable core of runInitPlan: runs the per-module
+// plan loop + gate against an injected InitRunner. Mirrors RunInitWithRunner.
+// Production callers go through runInitPlan which constructs the real *terragrunt.Runner;
+// cmd_test uses this directly with a mockPlanRunner.
+//
+// The split keeps the production-only AWS setup (LoadAWSConfig, ValidateCredentials,
+// ExportTerragruntEnvVars) out of the testable core so Wave 0 tests don't need
+// real AWS / env-var manipulation.
+func RunInitPlanWithRunner(runner InitRunner, repoRoot, region string, verbose, acceptDestroys bool) error {
+	ctx := context.Background()
+	regionLabel := compiler.RegionLabel(region)
+	regionDir := filepath.Join(repoRoot, "infra", "live", regionLabel)
+
+	fmt.Printf("km init --plan: %s (%s)\n", region, regionLabel)
+	fmt.Println()
+
+	// Module loop (matches RunInitWithRunner skip semantics)
+	modules := regionalModules(regionDir)
+	reports := make([]planreport.Report, 0, len(modules))
+
+	for _, m := range modules {
+		if _, err := os.Stat(m.dir); os.IsNotExist(err) {
+			fmt.Printf("  [skip] %s — directory not found\n", m.name)
+			continue
+		}
+		skipped := false
+		for _, envVar := range m.envReqs {
+			if os.Getenv(envVar) == "" {
+				fmt.Printf("  [skip] %s — %s not set\n", m.name, envVar)
+				skipped = true
+				break
+			}
+		}
+		if skipped {
+			continue
+		}
+
+		report, planErr := planModule(ctx, runner, m, verbose)
+		if planErr != nil {
+			// Hard plan failure — stop loop with module-named stderr.
+			return fmt.Errorf("planning %s: %w", m.name, planErr)
+		}
+		reports = append(reports, report)
+	}
+
+	// Gate
+	result := planreport.Evaluate(reports, acceptDestroys)
+	if result.Blocked {
+		printTripBlock(result.Trips)
+		return fmt.Errorf("destroy-class gate tripped (re-run with --i-accept-destroys to override)")
+	}
+	if len(result.Trips) > 0 {
+		// Override active — trips listed for visibility per CONTEXT.md Decision 3.
+		printTripBlock(result.Trips)
+		fmt.Println("  (override active via --i-accept-destroys — exit 0; no apply will run)")
+	}
+
+	printAggregateSummary(reports)
+	fmt.Println("Run 'km init --dry-run=false' to apply.")
+	return nil
+}
+
+// planModule runs PlanWithOutput + ShowPlanJSON + planreport.Parse for a single module.
+// Returns (Report{ParseFailed: true}, nil) when show/parse fails — the gate treats
+// parse-fail as a conservative trip per the locked algorithm. Returns (Report{}, error)
+// only when terragrunt plan itself fails (hard-stop signal for the caller).
+//
+// Per RESEARCH § Pitfall 1, the planFile path passed to PlanWithOutput MUST be absolute —
+// os.CreateTemp returns abs paths on macOS/Linux.
+//
+// Per Pitfall 3, plan failure ≠ parse failure: hard-stop on plan failure (return error),
+// conservative-trip on parse failure (return Report{ParseFailed: true}).
+func planModule(ctx context.Context, runner InitRunner, m regionalModule, verbose bool) (planreport.Report, error) {
+	// Per-module timeout via the existing ModuleTimeoutFunc (init.go).
+	// Inherits Phase 84.1-02 runner-layer heartbeat for free via runBounded.
+	timeout := ModuleTimeoutFunc(m.name)
+	pctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	tmpFile, err := os.CreateTemp("", "km-plan-"+m.name+"-*.tfplan")
+	if err != nil {
+		// Temp-file create failed — log warning and conservative-trip.
+		fmt.Fprintf(os.Stderr, "  warning: %s tempfile create: %v (conservative-trip)\n", m.name, err)
+		return planreport.Report{Module: m.name, ParseFailed: true, ParseError: err}, nil
+	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close() // PlanWithOutput owns the file from here
+	defer os.Remove(tmpPath)
+
+	var stdoutBuf bytes.Buffer
+	fmt.Printf("  Planning %s...", m.name)
+	if err := runner.PlanWithOutput(pctx, m.dir, tmpPath, &stdoutBuf); err != nil {
+		fmt.Println(" FAILED")
+		if errors.Is(err, context.DeadlineExceeded) {
+			return planreport.Report{}, fmt.Errorf("module %s wedged after %s: %w", m.name, timeout, err)
+		}
+		return planreport.Report{}, err
+	}
+
+	jsonBytes, err := runner.ShowPlanJSON(pctx, m.dir, tmpPath)
+	if err != nil {
+		fmt.Println(" parse-fail (warn)")
+		fmt.Fprintf(os.Stderr, "  warning: %s show -json: %v (conservative-trip)\n", m.name, err)
+		return planreport.Report{Module: m.name, ParseFailed: true, ParseError: err}, nil
+	}
+	report, err := planreport.Parse(jsonBytes)
+	if err != nil {
+		fmt.Println(" parse-fail (warn)")
+		fmt.Fprintf(os.Stderr, "  warning: %s planreport.Parse: %v (conservative-trip)\n", m.name, err)
+		return planreport.Report{Module: m.name, ParseFailed: true, ParseError: err}, nil
+	}
+	report.Module = m.name
+	fmt.Printf(" %s\n", summarizeReport(report))
+	if verbose && stdoutBuf.Len() > 0 {
+		os.Stdout.Write(stdoutBuf.Bytes())
+		fmt.Println()
+	}
+	return report, nil
+}
+
+// summarizeReport returns a one-line summary like "2 to add, 0 to change, 1 to destroy".
+// Appends " ⚠" when there is ≥1 destroy or replace, " ✓" when fully clean.
+func summarizeReport(r planreport.Report) string {
+	adds := len(r.Adds)
+	changes := len(r.Changes)
+	destroys := len(r.Destroys) + len(r.Replaces) // replaces are destructive
+	suffix := " ✓"
+	if destroys > 0 {
+		suffix = " ⚠"
+	}
+	return fmt.Sprintf("%d to add, %d to change, %d to destroy%s", adds, changes, destroys, suffix)
+}
+
+// printTripBlock prints the destroy-class gate trip block per the locked format
+// in CONTEXT.md decisions § Trip block format. Always full —
+// never abbreviated by --verbose absence.
+func printTripBlock(trips []planreport.Trip) {
+	fmt.Println()
+	fmt.Printf("✗ km init --plan would destroy %d protected resources:\n\n", len(trips))
+	// Group by module for readable output
+	byModule := map[string][]planreport.Trip{}
+	moduleOrder := []string{}
+	for _, t := range trips {
+		if _, ok := byModule[t.Module]; !ok {
+			moduleOrder = append(moduleOrder, t.Module)
+		}
+		byModule[t.Module] = append(byModule[t.Module], t)
+	}
+	for _, mod := range moduleOrder {
+		fmt.Printf("  %s:\n", mod)
+		for _, t := range byModule[mod] {
+			if t.Action == "PARSE-FAIL" {
+				fmt.Printf("    - <parse failed> [PARSE-FAIL] — %s\n", t.Reason)
+				continue
+			}
+			fmt.Printf("    - %-40s [%s]\n", t.Address, t.Action)
+		}
+		fmt.Println()
+	}
+	fmt.Println("These resource types are on the protected list because past incidents")
+	fmt.Println("caused unrecoverable data loss (see pkg/terragrunt/planreport/protected.go).")
+	fmt.Println()
+	fmt.Println("To proceed anyway, re-run with --i-accept-destroys (you must understand")
+	fmt.Println("why each resource is destroying — terragrunt apply will not ask again).")
+	fmt.Println()
+}
+
+// printAggregateSummary prints the cross-module roll-up after a clean (or override-cleared) plan.
+func printAggregateSummary(reports []planreport.Report) {
+	var totalAdds, totalChanges, totalDestroys int
+	for _, r := range reports {
+		totalAdds += len(r.Adds)
+		totalChanges += len(r.Changes)
+		totalDestroys += len(r.Destroys) + len(r.Replaces)
+	}
+	fmt.Println()
+	fmt.Printf("Total across %d modules: %d to add, %d to change, %d to destroy\n",
+		len(reports), totalAdds, totalChanges, totalDestroys)
+	fmt.Println()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 func extractValue(v interface{}) interface{} {
 	if m, ok := v.(map[string]interface{}); ok {

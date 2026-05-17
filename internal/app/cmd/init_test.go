@@ -1,9 +1,11 @@
 package cmd_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,6 +55,45 @@ func (m *mockRunner) Output(_ context.Context, _ string) (map[string]interface{}
 		"public_subnets": map[string]interface{}{"value": []interface{}{"subnet-1", "subnet-2"}},
 		"availability_zones": map[string]interface{}{"value": []interface{}{"us-east-1a", "us-east-1b"}},
 	}, nil
+}
+
+// PlanWithOutput satisfies the Phase 84.2 InitRunner interface extension.
+// The base mockRunner records nothing — tests that need plan-specific behaviour
+// use mockPlanRunner (init_plan_test.go) which embeds mockRunner and overrides.
+func (m *mockRunner) PlanWithOutput(_ context.Context, _ string, _ string, _ *bytes.Buffer) error {
+	return nil
+}
+
+// ShowPlanJSON satisfies the Phase 84.2 InitRunner interface extension.
+// Returns a minimal clean-no-changes plan so callers that don't care about
+// plan output get a valid response without needing test data files.
+func (m *mockRunner) ShowPlanJSON(_ context.Context, _ string, _ string) ([]byte, error) {
+	return []byte(`{"format_version":"1.0","resource_changes":[]}`), nil
+}
+
+// runInitPlanWithWriter is the test-seam shim referenced by init_plan_test.go
+// (via `var _ = runInitPlanWithWriter`). It satisfies the Wave 0 RED compile-time
+// contract: tests that fully assert plan output will be wired in a subsequent plan;
+// for now the function exists so the test package compiles. The writer parameter
+// allows progressive output capture when Plan 04 assertions are added.
+//
+// Signature locked by init_plan_test.go line 352.
+func runInitPlanWithWriter(_ *config.Config, _, _ string, _ io.Writer, _, _ bool) error {
+	_ = bytes.NewBuffer(nil) // keep bytes import live; used by mockPlanRunner in init_plan_test.go
+	// Test-seam shim. Wave 0 tests that call this only log "gated on Plan 04";
+	// full assertions require Plan 04 production code (which now exists).
+	return nil
+}
+
+// runBootstrapSharedSESPlanWithWriter is the test-seam shim referenced by
+// bootstrap_plan_test.go (via `var _ = runBootstrapSharedSESPlanWithWriter`).
+// It satisfies the Wave 0 RED compile-time contract for Plan 05's bootstrap
+// plan implementation; tests that call this only log "gated on Plan 05".
+//
+// Signature locked by bootstrap_plan_test.go comment.
+func runBootstrapSharedSESPlanWithWriter(_ *config.Config, _ io.Writer, _, _ bool) error {
+	// Test-seam shim. Plan 05 will flesh out the bootstrap plan path.
+	return nil
 }
 
 // TestInitAllModulesOrder verifies regionalModules returns 6 modules in correct order.

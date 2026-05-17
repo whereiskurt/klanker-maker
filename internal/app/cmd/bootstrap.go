@@ -25,6 +25,7 @@ import (
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 	"github.com/whereiskurt/klanker-maker/pkg/terragrunt"
+	"github.com/whereiskurt/klanker-maker/pkg/terragrunt/planreport"
 )
 
 // BootstrapApplyTimeout bounds defaultApplyTerragrunt (Reconfigure + Apply).
@@ -607,6 +608,125 @@ type TerragruntApplyFunc func(ctx context.Context, dir string) error
 // Tests replace this variable to capture apply calls without executing terragrunt.
 var ApplyTerragruntFunc TerragruntApplyFunc = defaultApplyTerragrunt
 
+// RunBootstrapSharedSESPlanFunc is the package-level entry point for
+// km bootstrap --shared-ses --plan. Exported as a var so cmd_test can override it
+// with a mock to verify routing without real AWS credentials / terragrunt binary.
+// The default implementation is runBootstrapSharedSESPlan (Plan 05 will flesh this out).
+//
+// Phase 84.2 test seam — mirrors RunInitPlanFunc (init.go) and ApplyTerragruntFunc above.
+var RunBootstrapSharedSESPlanFunc = runBootstrapSharedSESPlan
+
+// runBootstrapSharedSESPlan is the production entry point for
+// km bootstrap --shared-ses --plan. Single-module analog of runInitPlan (Plan 04):
+// runs terragrunt plan against the foundation ses-shared-rule-set module and
+// applies the destroy-class gate over the result.
+//
+// Phase 84.2 Decision 4 (bootstrap parity): Phase 84 Gaps 2, 3, 6 happened in
+// the bootstrap path too. Symmetric coverage is cheap once the plumbing exists.
+//
+// Per CONTEXT.md decisions: --plan is independent of --dry-run; it NEVER applies.
+// --i-accept-destroys clears the exit code from 1 to 0 but still prints trips.
+func runBootstrapSharedSESPlan(cfg *config.Config, acceptDestroys bool) error {
+	return runBootstrapSharedSESPlanWithWriter(cfg, os.Stdout, false, acceptDestroys)
+}
+
+// runBootstrapSharedSESPlanWithWriter is the writer-aware test seam for
+// runBootstrapSharedSESPlan. Production callers use runBootstrapSharedSESPlan
+// (which writes to os.Stdout); cmd_test uses this directly to capture output
+// without real AWS / a real terragrunt binary.
+//
+// Note: plan output (fmt.Print* in planModule) goes to os.Stdout; the w
+// parameter captures header/footer output. Trip/summary assertions in tests
+// capture os.Stdout via pipe (same constraint as runInitPlanWithWriter).
+//
+// Phase 84.2 test seam — referenced by bootstrap_plan_test.go.
+func runBootstrapSharedSESPlanWithWriter(cfg *config.Config, w io.Writer, verbose, acceptDestroys bool) error {
+	ctx := context.Background()
+
+	loadedCfg, err := loadBootstrapConfig(cfg)
+	if err != nil {
+		return err
+	}
+
+	// 1. Export env vars — Phase 84.1-01 contract (matches bootstrap.go:341).
+	ExportTerragruntEnvVars(loadedCfg)
+
+	// 2. Set up SES auto-detect — same path as runBootstrapSharedSES so the plan
+	//    reflects the same register_* env vars the apply path would honor.
+	emailSubdomain := loadedCfg.EmailSubdomain
+	if emailSubdomain == "" {
+		emailSubdomain = "sandboxes"
+	}
+	emailDomain := fmt.Sprintf("%s.%s", emailSubdomain, loadedCfg.Domain)
+
+	var lister SESIdentityLister
+	var stateReader FoundationStateReader
+	region := loadedCfg.PrimaryRegion
+	if region == "" {
+		region = "us-east-1"
+	}
+	awsCfg, awsErr := awspkg.LoadAWSConfigInRegion(ctx, "klanker-terraform", region)
+	if awsErr != nil {
+		return fmt.Errorf("load AWS config: %w", awsErr)
+	}
+	lister = &realSESLister{
+		sesClient:   ses.NewFromConfig(awsCfg),
+		sesv2Client: sesv2.NewFromConfig(awsCfg),
+	}
+	stateReader = &s3FoundationStateReader{
+		s3Client: s3.NewFromConfig(awsCfg),
+		bucket:   foundationStateBucket(loadedCfg),
+		key:      foundationStateKey(loadedCfg),
+	}
+
+	registerRS, registerID, err := detectSharedSESState(ctx, lister, stateReader, "sandbox-email-shared", emailDomain)
+	if err != nil {
+		return fmt.Errorf("SES auto-detect: %w", err)
+	}
+	// Set the same register_* env vars the apply path uses so the plan output
+	// reflects what the actual apply would do.
+	os.Setenv("KM_REGISTER_SHARED_RULESET", strconv.FormatBool(registerRS))
+	os.Setenv("KM_REGISTER_DOMAIN_IDENTITY", strconv.FormatBool(registerID))
+
+	// 3. Construct runner and resolve module dir.
+	repoRoot := findRepoRoot()
+	runner := terragrunt.NewRunner("klanker-terraform", repoRoot)
+	runner.Verbose = false // capture stdout per-module; echo via verbose flag below
+
+	sesDir := filepath.Join(repoRoot, "infra", "live", "use1", "ses-shared-rule-set")
+
+	fmt.Fprintln(w, "km bootstrap --shared-ses --plan")
+	fmt.Fprintln(w)
+
+	m := regionalModule{
+		name:    "ses-shared-rule-set",
+		dir:     sesDir,
+		envReqs: nil,
+	}
+
+	// 4. Run planModule (package-private helper from init.go — same package).
+	report, planErr := planModule(ctx, runner, m, verbose)
+	if planErr != nil {
+		return fmt.Errorf("planning %s: %w", m.name, planErr)
+	}
+
+	// 5. Single-report gate (same algorithm as runInitPlan / RunInitPlanWithRunner).
+	reports := []planreport.Report{report}
+	result := planreport.Evaluate(reports, acceptDestroys)
+	if result.Blocked {
+		printTripBlock(result.Trips)
+		return fmt.Errorf("destroy-class gate tripped (re-run with --i-accept-destroys to override)")
+	}
+	if len(result.Trips) > 0 {
+		printTripBlock(result.Trips)
+		fmt.Fprintln(w, "  (override active via --i-accept-destroys — exit 0; no apply will run)")
+	}
+
+	printAggregateSummary(reports)
+	fmt.Fprintln(w, "Run 'km bootstrap --shared-ses' (without --plan) to apply.")
+	return nil
+}
+
 // defaultApplyTerragrunt runs `terragrunt apply -auto-approve` on the given directory
 // using the management-account AWS profile. Calls Reconfigure first to initialize the
 // S3 backend on first apply of a new module (e.g. the Phase 84 ses-shared-rule-set
@@ -661,6 +781,8 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 	var showPrereqs bool
 	var showSCP bool
 	var sharedSES bool
+	var plan bool
+	var acceptDestroys bool
 
 	cmd := &cobra.Command{
 		Use:   "bootstrap",
@@ -672,6 +794,11 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 			}
 			if showPrereqs {
 				return runShowPrereqs(cmd.Context(), cfg, w)
+			}
+			// Phase 84.2: --plan routes to RunBootstrapSharedSESPlanFunc (same seam pattern
+			// as RunInitPlanFunc on init). Must come before --dry-run check.
+			if sharedSES && plan {
+				return RunBootstrapSharedSESPlanFunc(cfg, acceptDestroys)
 			}
 			if sharedSES {
 				return runBootstrapSharedSES(cmd.Context(), cfg, dryRun, w, nil)
@@ -688,6 +815,13 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 		"Print the km-sandbox-containment SCP policy JSON and the km-org-admin role/trust policy")
 	cmd.Flags().BoolVar(&sharedSES, "shared-ses", false,
 		"Provision the account-shared SES rule set + domain identity (Phase 84); run before km init on a fresh account")
+	cmd.Flags().BoolVar(&plan, "plan", false,
+		"Run terragrunt plan for bootstrap modules with destroy-class safety gate; never applies (Phase 84.2)")
+	cmd.Flags().BoolVar(&acceptDestroys, "i-accept-destroys", false,
+		"Clear --plan exit code from 1 to 0 when only failures are protected destroys (per-invocation; never persisted; does NOT auto-apply)")
+	if err := cmd.Flags().MarkHidden("i-accept-destroys"); err != nil {
+		panic(fmt.Sprintf("MarkHidden i-accept-destroys on bootstrap: %v", err))
+	}
 
 	return cmd
 }
