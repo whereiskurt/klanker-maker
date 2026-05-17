@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Phase 84.4 context gathered
-last_updated: "2026-05-17T20:30:53.835Z"
+stopped_at: Completed 84.3-01-PLAN.md — Wave 0 RED test scaffolding
+last_updated: "2026-05-17T21:15:43.456Z"
 last_activity: 2026-05-17
 progress:
   total_phases: 97
   completed_phases: 84
-  total_plans: 377
-  completed_plans: 332
+  total_plans: 391
+  completed_plans: 333
   percent: 88
 ---
 
@@ -370,6 +370,7 @@ Progress: [█████████░] 88%
 | Phase 84.2-km-init-plan-flag-and-destroy-class-gate P06 | 12min | 2 tasks | 5 files |
 | Phase 84.2-km-init-plan-flag-and-destroy-class-gate P07 | 45min | 2 tasks | 1 files |
 | Phase 84.2-km-init-plan-flag-and-destroy-class-gate P08 | 1219 | 3 tasks | 6 files |
+| Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted P01 | 524 | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1062,6 +1063,9 @@ Recent decisions affecting current work:
 - [Phase 84.2-09]: Scenario 4b retargeted to aws_ses_active_receipt_rule_set (lifecycle.prevent_destroy=true on aws_ses_receipt_rule_set blocks gate evaluation — prevent_destroy is first-line defense; gate is second-tier net)
 - [Phase 84.2-09]: COSMETIC-1 deferred — printTripBlock headline hard-coded to km init --plan even when invoked via km bootstrap --shared-ses --plan; non-blocking, one-line fix queued for follow-up
 - [Phase 84.2-09]: Phase 84.2 is complete — no blocking gaps remaining; all 4 deferred UAT scenarios PASS; destroy-class gate ready for production use
+- [Phase 84.3]: mockS3HeadBucketConfigure renamed from plan's mockS3HeadBucketClient to avoid collision with doctor_test.go declaration
+- [Phase 84.3]: init_plan_84_3_test.go created as new file (package cmd_test) per >600-line threshold rule; both files use existing mockPlanRunner
+- [Phase 84.3]: TestConfig_AccountsTerraformEnvWins is also RED (viper AutomaticEnv dot-notation limitation) — Plan 02 must add SetEnvKeyReplacer to fix both yaml-authority tests
 
 ### Roadmap Evolution
 
@@ -1169,6 +1173,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-17T20:30:53.826Z
-Stopped at: Phase 84.4 context gathered
-Resume file: .planning/phases/84.4-multi-install-module-hardening/84.4-CONTEXT.md
+Last session: 2026-05-17T21:15:43.449Z
+Stopped at: Completed 84.3-01-PLAN.md — Wave 0 RED test scaffolding
+Resume file: None
