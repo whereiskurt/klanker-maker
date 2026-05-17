@@ -361,13 +361,6 @@ func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool,
 		// stateReader stays nil — tests inject their own via
 		// DetectSharedSESStateWithStateReader when state ownership is the
 		// subject under test.
-	} else if dryRun {
-		// Dry-run without a listerOverride short-circuits AWS auto-detect entirely.
-		// Operators get deterministic dry-run output regardless of AWS connectivity;
-		// the KM_REGISTER_* env vars will be computed at apply time.
-		fmt.Fprintf(w, "Dry run — would run: terragrunt apply %s\n", sesDir)
-		fmt.Fprintln(w, "  (SES auto-detect deferred until apply; KM_REGISTER_* env vars unset)")
-		return nil
 	} else {
 		region := loadedCfg.PrimaryRegion
 		if region == "" {
@@ -375,6 +368,14 @@ func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool,
 		}
 		awsCfg, err := awspkg.LoadAWSConfigInRegion(ctx, "klanker-terraform", region)
 		if err != nil {
+			// Dry-run tolerates missing AWS — operators (and unit tests) without
+			// creds still get the deterministic "would apply" output. With creds,
+			// auto-detect runs as usual and emits the richer KM_REGISTER_* lines.
+			if dryRun {
+				fmt.Fprintf(w, "Dry run — would run: terragrunt apply %s\n", sesDir)
+				fmt.Fprintln(w, "  (SES auto-detect skipped: AWS config unavailable; KM_REGISTER_* env vars will be computed at apply time)")
+				return nil
+			}
 			return fmt.Errorf("load AWS config: %w", err)
 		}
 		lister = &realSESLister{
@@ -390,6 +391,13 @@ func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool,
 
 	registerRS, registerID, err := detectSharedSESState(ctx, lister, stateReader, "sandbox-email-shared", emailDomain)
 	if err != nil {
+		// Dry-run tolerates auto-detect failure — print the apply intent and exit.
+		// Apply-mode propagates the error so the operator sees the underlying cause.
+		if dryRun {
+			fmt.Fprintf(w, "Dry run — would run: terragrunt apply %s\n", sesDir)
+			fmt.Fprintf(w, "  (SES auto-detect failed: %v; KM_REGISTER_* env vars will be computed at apply time)\n", err)
+			return nil
+		}
 		return fmt.Errorf("SES auto-detect: %w", err)
 	}
 
