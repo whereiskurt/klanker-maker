@@ -1851,7 +1851,7 @@ Phase closes when (a) `km init --plan` runs cleanly against the operator's alrea
 
 **Requirements:** PLAN-FLAG, BOOTSTRAP-PLAN-PARITY, DESTROY-CLASS-GATE, PROTECTED-TYPES-LIST, ACCEPT-DESTROYS-OVERRIDE, PLAN-OUTPUT-FORMAT, PLAN-ERROR-HANDLING (synthetic IDs — derived from the design spec's Decisions + Architecture sections)
 **Depends on:** Phase 84.1 (specifically 84.1-01 ExportTerragruntEnvVars helper; 84.1-02 runner timeouts are desirable but not strictly blocking)
-**Plans:** 8/9 plans executed
+**Plans:** 9/9 plans complete
 
 - [ ] 84.2-01-PLAN.md — Wave 0 test scaffolding: planreport package tests + 5 JSON fixtures, runner test extension, init_plan_test.go + bootstrap_plan_test.go (per Nyquist — Wave 0)
 - [ ] 84.2-02-PLAN.md — pkg/terragrunt/planreport/ package: protected.go (9-entry list) + report.go (Parse) + gate.go (Evaluate) — pure logic, no terragrunt/AWS deps (Wave 1)

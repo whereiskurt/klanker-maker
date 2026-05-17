@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.2-08-PLAN.md (GAP-1 aws_ses_receipt_rule fix + behavioral test upgrade)
-last_updated: "2026-05-17T05:44:06.914Z"
+stopped_at: Completed 84.2-09-PLAN.md (UAT re-run — all 4 deferred scenarios PASS, GAP-1 verified closed)
+last_updated: "2026-05-17T06:30:00.000Z"
 last_activity: 2026-05-17
 progress:
   total_phases: 95
@@ -1058,6 +1058,10 @@ Recent decisions affecting current work:
 - [Phase 84.2-km-init-plan-flag-and-destroy-class-gate]: Scenarios 3, 4b, 4c, 6 deferred to Phase 84.3 UAT; Scenario 7 accepted as PASS via incidental capture during Scenario 2 first attempt
 - [Phase 84.2-08]: aws_ses_receipt_rule added as 10th ProtectedTypes entry with Phase 82->84 incident comment (CONTEXT.md Decision 6 requirement)
 - [Phase 84.2-08]: Bootstrap behavioral tests use t.Skip+TODO — no RunBootstrapSharedSESPlanWithRunner seam exists (covered by UAT Scenario 4b/4c)
+- [Phase 84.2-09]: GAP-1 closure verified via UAT — gate catches aws_ses_receipt_rule (the Phase 82 incident type) at exit 1 for both km init --plan (Scenario 2) and km bootstrap --shared-ses --plan (Scenario 4b); override flag exits 0 with full trip block printed (Scenarios 3, 4c)
+- [Phase 84.2-09]: Scenario 4b retargeted to aws_ses_active_receipt_rule_set (lifecycle.prevent_destroy=true on aws_ses_receipt_rule_set blocks gate evaluation — prevent_destroy is first-line defense; gate is second-tier net)
+- [Phase 84.2-09]: COSMETIC-1 deferred — printTripBlock headline hard-coded to km init --plan even when invoked via km bootstrap --shared-ses --plan; non-blocking, one-line fix queued for follow-up
+- [Phase 84.2-09]: Phase 84.2 is complete — no blocking gaps remaining; all 4 deferred UAT scenarios PASS; destroy-class gate ready for production use
 
 ### Roadmap Evolution
 
@@ -1165,6 +1169,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-17T05:44:06.906Z
-Stopped at: Completed 84.2-08-PLAN.md (GAP-1 aws_ses_receipt_rule fix + behavioral test upgrade)
+Last session: 2026-05-17T06:30:00.000Z
+Stopped at: Completed 84.2-09-PLAN.md (UAT re-run — all 4 deferred scenarios PASS, GAP-1 verified closed; Phase 84.2 complete with no blocking gaps remaining)
 Resume file: None
