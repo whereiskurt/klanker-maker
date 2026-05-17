@@ -2389,6 +2389,10 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 		fmt.Fprintln(out, hint)
 	}
 
+	// Phase 84.2: always-on nudge toward the new plan-with-gate flow before any future apply.
+	// Low-cost addition — single yellow line on TTY, plain on pipe.
+	appendKmInitPlanTip(out, isTTY)
+
 	if !dryRun {
 		// Show post-cleanup summary for stale resource checks.
 		cleanupChecks := []string{
@@ -2423,6 +2427,20 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 		return fmt.Errorf("platform health check failed: %d error(s) found", errorCount)
 	}
 	return nil
+}
+
+// appendKmInitPlanTip writes the Phase 84.2 plan-before-apply Tip line to w.
+// When isTTY is true, the tip is wrapped in ANSI yellow color codes; otherwise
+// plain text. Extracted from runDoctor so unit tests can assert on the tip
+// content via a bytes.Buffer without needing the full doctor mocking harness.
+//
+// Phase 84.2 — see OPERATOR-GUIDE.md § Phase 84.2 plan-before-apply.
+func appendKmInitPlanTip(w io.Writer, isTTY bool) {
+	tip := "Tip: run `km init --plan` to preview the next apply for unexpected drift before running `km init --dry-run=false`."
+	if isTTY {
+		tip = ansiYellow + tip + ansiReset
+	}
+	fmt.Fprintln(w, tip)
 }
 
 // buildChecks assembles the full list of check closures.
