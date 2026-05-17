@@ -616,6 +616,53 @@ var ApplyTerragruntFunc TerragruntApplyFunc = defaultApplyTerragrunt
 // Phase 84.2 test seam — mirrors RunInitPlanFunc (init.go) and ApplyTerragruntFunc above.
 var RunBootstrapSharedSESPlanFunc = runBootstrapSharedSESPlan
 
+// Phase 84.3 test seams — package-level vars so tests can intercept each subflow without real AWS.
+// RunBootstrapFunc is the test seam for runBootstrap (foundation SCP + KMS + artifacts).
+// RunBootstrapSharedSESFunc is the test seam for runBootstrapSharedSES (shared SES rule set).
+// RunBootstrapAllFunc is the test seam for runBootstrapAll (chains both subflows in order).
+var (
+	RunBootstrapFunc          = runBootstrap
+	RunBootstrapSharedSESFunc = func(ctx context.Context, cfg *config.Config, dryRun bool, w io.Writer, listerOverride SESIdentityLister) error {
+		return runBootstrapSharedSES(ctx, cfg, dryRun, w, listerOverride)
+	}
+	RunBootstrapAllFunc = runBootstrapAll
+)
+
+// runBootstrapAll chains runBootstrap (foundation SCP + KMS + artifacts) then
+// runBootstrapSharedSES (shared SES rule set), in that order.
+//
+// Order is intentional: foundation infra must exist before the SES rule set
+// references it. On error in subflow 1, execution stops — subflow 2 is not run.
+//
+// Flag forwarding: dryRun, plan, and acceptDestroys are passed through to both
+// subflows symmetrically so --all --plan and --all --dry-run=false work as
+// expected. With plan=true, each subflow runs its own Phase 84.2 destroy-class
+// gate — a gate trip in either subflow propagates back as an error.
+func runBootstrapAll(ctx context.Context, cfg *config.Config, dryRun, plan, acceptDestroys bool, w io.Writer) error {
+	fmt.Fprintln(w, "=== Bootstrap: SCP + KMS + artifacts ===")
+	if plan {
+		if err := RunBootstrapSharedSESPlanFunc(cfg, acceptDestroys); err != nil {
+			return fmt.Errorf("runBootstrap plan (subflow 1) failed: %w", err)
+		}
+	} else {
+		if err := RunBootstrapFunc(ctx, cfg, dryRun, w); err != nil {
+			return fmt.Errorf("runBootstrap (subflow 1) failed: %w", err)
+		}
+	}
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "=== Bootstrap: shared SES rule set ===")
+	if plan {
+		if err := RunBootstrapSharedSESPlanFunc(cfg, acceptDestroys); err != nil {
+			return fmt.Errorf("runBootstrapSharedSES plan (subflow 2) failed: %w", err)
+		}
+	} else {
+		if err := RunBootstrapSharedSESFunc(ctx, cfg, dryRun, w, nil); err != nil {
+			return fmt.Errorf("runBootstrapSharedSES (subflow 2) failed: %w", err)
+		}
+	}
+	return nil
+}
+
 // runBootstrapSharedSESPlan is the production entry point for
 // km bootstrap --shared-ses --plan. Single-module analog of runInitPlan (Plan 04):
 // runs terragrunt plan against the foundation ses-shared-rule-set module and
@@ -788,6 +835,7 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 	var sharedSES bool
 	var plan bool
 	var acceptDestroys bool
+	var all bool
 
 	cmd := &cobra.Command{
 		Use:   "bootstrap",
@@ -800,15 +848,23 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 			if showPrereqs {
 				return runShowPrereqs(cmd.Context(), cfg, w)
 			}
+			// Phase 84.3: --all and --shared-ses are mutually exclusive.
+			if all && sharedSES {
+				return fmt.Errorf("--all and --shared-ses are mutually exclusive; --all runs both subflows in order")
+			}
+			// Phase 84.3: --all chains both subflows (foundation then shared SES).
+			if all {
+				return RunBootstrapAllFunc(cmd.Context(), cfg, dryRun, plan, acceptDestroys, cmd.OutOrStdout())
+			}
 			// Phase 84.2: --plan routes to RunBootstrapSharedSESPlanFunc (same seam pattern
 			// as RunInitPlanFunc on init). Must come before --dry-run check.
 			if sharedSES && plan {
 				return RunBootstrapSharedSESPlanFunc(cfg, acceptDestroys)
 			}
 			if sharedSES {
-				return runBootstrapSharedSES(cmd.Context(), cfg, dryRun, w, nil)
+				return RunBootstrapSharedSESFunc(cmd.Context(), cfg, dryRun, cmd.OutOrStdout(), nil)
 			}
-			return runBootstrap(cmd.Context(), cfg, dryRun, w)
+			return RunBootstrapFunc(cmd.Context(), cfg, dryRun, cmd.OutOrStdout())
 		},
 	}
 
@@ -827,6 +883,8 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 	if err := cmd.Flags().MarkHidden("i-accept-destroys"); err != nil {
 		panic(fmt.Sprintf("MarkHidden i-accept-destroys on bootstrap: %v", err))
 	}
+	cmd.Flags().BoolVar(&all, "all", false,
+		"Chain bootstrap subflows in order: SCP/KMS/artifacts (foundation) then shared SES rule set (Phase 84.3)")
 
 	return cmd
 }
