@@ -13,14 +13,14 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
-
-	"io"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -128,9 +128,10 @@ type NetworkOutputs struct {
 
 // regionalModule describes a single regional infrastructure module.
 type regionalModule struct {
-	name    string
-	dir     string
-	envReqs []string // environment variables required to apply this module
+	name            string
+	dir             string
+	envReqs         []string // environment variables required to apply this module
+	upstreamOutputs []string // upstream module names whose outputs.json must exist before planning
 }
 
 // RegionalModule is the exported view of a regional infrastructure module.
@@ -191,9 +192,12 @@ func regionalModules(regionDir string) []regionalModule {
 		{
 			// efs depends on network: its terragrunt.hcl reads network/outputs.json.
 			// Must come after network so outputs.json is present before EFS apply.
-			name:    "efs",
-			dir:     filepath.Join(regionDir, "efs"),
-			envReqs: nil,
+			// Phase 84.3: upstreamOutputs probe skips efs in --plan mode when
+			// network/outputs.json is absent (fresh install, network not yet applied).
+			name:            "efs",
+			dir:             filepath.Join(regionDir, "efs"),
+			envReqs:         nil,
+			upstreamOutputs: []string{"network"},
 		},
 		{
 			name:    "dynamodb-budget",
@@ -844,6 +848,26 @@ Run: km bootstrap --all --dry-run=false
 	return fmt.Errorf("HeadBucket %s: %w", cfg.ArtifactsBucket, err)
 }
 
+// upstreamOutputsExist checks whether each named upstream module has produced
+// an outputs.json file. moduleDir is the directory of the module being probed
+// (e.g. infra/live/use1/efs); upstream modules are resolved as siblings
+// (infra/live/use1/<upstream>/outputs.json). Returns the names of any upstream
+// modules whose outputs.json is missing.
+//
+// Phase 84.3 closure (d): used by RunInitPlanWithRunner to skip modules whose
+// upstream dependencies have not yet been applied. Only efs has a non-empty
+// upstreamOutputs list in Phase 84.3; all other modules carry a zero-value
+// slice and are never probed.
+func upstreamOutputsExist(moduleDir string, upstreamNames []string) (missing []string) {
+	for _, up := range upstreamNames {
+		outputsPath := filepath.Join(moduleDir, "..", up, "outputs.json")
+		if _, err := os.Stat(outputsPath); errors.Is(err, fs.ErrNotExist) {
+			missing = append(missing, up)
+		}
+	}
+	return missing
+}
+
 // RunInitWithRunner implements the full init flow using an InitRunner interface.
 // This function is the testable core — runInit wraps it with real runner construction.
 // Exported for use by tests in cmd_test package.
@@ -1144,6 +1168,16 @@ func RunInitPlanWithRunner(runner InitRunner, repoRoot, region string, verbose, 
 			}
 		}
 		if skipped {
+			continue
+		}
+
+		// Phase 84.3 closure (d): skip modules whose upstream outputs.json is missing.
+		// This handles fresh installs where only some modules have been applied.
+		// Skipped modules are NOT passed to planreport.Evaluate — gate only counts planned modules.
+		if missing := upstreamOutputsExist(m.dir, m.upstreamOutputs); len(missing) > 0 {
+			for _, up := range missing {
+				fmt.Printf("  [skip] %s — depends on %s/outputs.json (apply %s first)\n", m.name, up, up)
+			}
 			continue
 		}
 
