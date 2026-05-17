@@ -1851,4 +1851,12 @@ Phase closes when (a) `km init --plan` runs cleanly against the operator's alrea
 
 **Requirements:** PLAN-FLAG, BOOTSTRAP-PLAN-PARITY, DESTROY-CLASS-GATE, PROTECTED-TYPES-LIST, ACCEPT-DESTROYS-OVERRIDE, PLAN-OUTPUT-FORMAT, PLAN-ERROR-HANDLING (synthetic IDs — derived from the design spec's Decisions + Architecture sections)
 **Depends on:** Phase 84.1 (specifically 84.1-01 ExportTerragruntEnvVars helper; 84.1-02 runner timeouts are desirable but not strictly blocking)
-**Plans:** TBD (run `/gsd:plan-phase 84.2` after 84.1 completes)
+**Plans:** 7/7 plans drafted 2026-05-16 — execution pending
+
+- [ ] 84.2-01-PLAN.md — Wave 0 test scaffolding: planreport package tests + 5 JSON fixtures, runner test extension, init_plan_test.go + bootstrap_plan_test.go (per Nyquist — Wave 0)
+- [ ] 84.2-02-PLAN.md — pkg/terragrunt/planreport/ package: protected.go (9-entry list) + report.go (Parse) + gate.go (Evaluate) — pure logic, no terragrunt/AWS deps (Wave 1)
+- [ ] 84.2-03-PLAN.md — pkg/terragrunt/runner.go extension: PlanWithOutput + ShowPlanJSON + Build* helpers, inherits Phase 84.1-02 runBounded (Wave 1, parallel with 02)
+- [ ] 84.2-04-PLAN.md — internal/app/cmd/init.go wiring: --plan + --i-accept-destroys flags, runInitPlan + RunInitPlanWithRunner + planModule/summarizeReport/printTripBlock/printAggregateSummary helpers (Wave 2)
+- [ ] 84.2-05-PLAN.md — internal/app/cmd/bootstrap.go wiring: same flags on --shared-ses, runBootstrapSharedSESPlan, reuses Plan 04 helpers (Wave 2, parallel with 04)
+- [ ] 84.2-06-PLAN.md — Docs + skill updates: skills/init/SKILL.md (corrects always-wrong --dry-run=true claim), OPERATOR-GUIDE.md (Phase 84.2 runbook), CLAUDE.md, km doctor footer Tip (Wave 3)
+- [ ] 84.2-07-PLAN.md — Operator UAT: 7 manual scenarios on real AWS (clean + synthetic destroy + override for both init and bootstrap + mutual-exclusion + skip + plan-failure) — OPERATOR CHECKPOINT, NOT autonomous (Wave 4)
