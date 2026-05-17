@@ -79,6 +79,7 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 	root.AddCommand(NewRsyncCmd(cfg))
 	root.AddCommand(NewCloneCmd(cfg))
 	root.AddCommand(NewOtelCmd(cfg))
+	root.AddCommand(NewEnvCmd(cfg))
 	root.AddCommand(NewInfoCmd(cfg))
 	root.AddCommand(NewEmailCmd(cfg))
 	root.AddCommand(NewAMICmd(cfg))
