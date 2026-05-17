@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84-09 docs-claude-md-operator-guide-and-roadmap-PLAN.md
-last_updated: "2026-05-16T20:46:00.279Z"
-last_activity: 2026-05-16
+stopped_at: Completed 84.1-01 ses-upgrade-safety-gap-closure plan (GAP-1 + GAP-7)
+last_updated: "2026-05-17T00:05:08.389Z"
+last_activity: 2026-05-17
 progress:
-  total_phases: 93
+  total_phases: 94
   completed_phases: 82
-  total_plans: 363
-  completed_plans: 318
+  total_plans: 368
+  completed_plans: 319
   percent: 93
 ---
 
@@ -31,7 +31,7 @@ Plan: 6 of 6 in phase 79 (all complete; 79-05 closeout + UAT passed 2026-05-10)
 Total Plans in Phase: 6
 Current Plan: 14
 Status: in-progress
-Last activity: 2026-05-16
+Last activity: 2026-05-17
 
 Progress: [█████████░] 93%
 
@@ -357,6 +357,7 @@ Progress: [█████████░] 93%
 | Phase 84 P08 | 81 | 3 tasks | 2 files |
 | Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P07 | 45 | 3 tasks | 9 files |
 | Phase 84-ses-per-install-rule-namespacing-via-operator-address-prefix P09 | 2min | 3 tasks | 4 files |
+| Phase 84.1 P01 | 16min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -1018,6 +1019,9 @@ Recent decisions affecting current work:
 - [Phase 84-07]: SESIdentityLister combines ListReceiptRuleSets + ListEmailIdentities; InitSESPreflight is package-level func var for testable init gate; W0-06/W0-07 updated to use real mocks
 - [Phase 84-09]: CLAUDE.md Phase 84 section inserted between Architecture and Network Enforcement (Alternative anchor — no Phase History parent section exists)
 - [Phase 84-09]: KM_OPERATOR_EMAIL table row updated in OPERATOR-GUIDE.md not CLAUDE.md (variable description lives there; no duplicate created)
+- [Phase 84.1]: Plan 84.1-01: no deprecation shim for ExportConfigEnvVars→ExportTerragruntEnvVars rename (H5)
+- [Phase 84.1]: Plan 84.1-01: KM_REGION_LABEL derived via compiler.RegionLabel(cfg.PrimaryRegion), not added as a config field — single-sourced in pkg/compiler
+- [Phase 84.1]: Plan 84.1-01: exported RunBootstrapSharedSES as one-line test seam forwarder; cobra command path unchanged
 
 ### Roadmap Evolution
 
@@ -1124,6 +1128,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T20:46:00.272Z
-Stopped at: Completed 84-09 docs-claude-md-operator-guide-and-roadmap-PLAN.md
+Last session: 2026-05-17T00:05:08.381Z
+Stopped at: Completed 84.1-01 ses-upgrade-safety-gap-closure plan (GAP-1 + GAP-7)
 Resume file: None
