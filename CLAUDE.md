@@ -58,6 +58,8 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `km cluster rm <name>` — destroy a cluster IRSA role
 - `km init` — initialize regional infrastructure (`--sidecars` for fast binary deploy, `--lambdas` for Lambda-only deploy, `--plan` to preview with destroy-class safety gate, `--dry-run=false` to actually apply)
 - `km bootstrap --shared-ses` — provision foundation SES rule set (idempotent; `--plan` previews with destroy-class safety gate)
+- `km bootstrap --all` — Phase 84.3 chain: foundation (SCP/KMS/artifacts) + shared SES rule set in one command; mutex with `--shared-ses`; `--plan` honors the 84.2 destroy-class gate
+- `km env [--aws-profile]` — Phase 84.3 helper: print exportable `KM_*` block for `eval $(km env)` (excludes `AWS_PROFILE` by default; `KM_ACCOUNTS_TERRAFORM` intentionally omitted)
 - `km shell <sandbox-id>` — SSM shell (`--root`, `--ports`, `--no-bedrock`, `--learn`, `--ami`)
 - `km ami list` / `km ami bake <sandbox-id>` / `km ami copy <ami-id> --region <dest>` / `km ami delete <ami-id>` — operator-baked AMI lifecycle
 - `km info` — platform config, accounts, SES quota, AWS spend, DynamoDB tables
@@ -130,6 +132,44 @@ See `OPERATOR-GUIDE.md` § Phase 84.1 upgrade safety for the in-place upgrade ru
 Phase 84.2 adds `km init --plan` and `km bootstrap --shared-ses --plan` — real `terragrunt plan` per module with a curated destroy-class safety gate that trips on destroy/replace of protected resource types (SES identities, Route53 records, S3 buckets, DynamoDB tables, KMS keys, etc.). `--i-accept-destroys` is the per-invocation override (never persisted; does not auto-apply). `km doctor` nudges operators toward `--plan` before any future apply.
 
 See `OPERATOR-GUIDE.md` § Phase 84.2 plan-before-apply for the full runbook (when to use, trip-block format, override flow, bootstrap parity, and protected-type list).
+
+### Phase 84.3: Wrapper-level bootstrap UX (2026-05-17)
+
+Phase 84.3 tightens the operator path from `git clone` to first apply with eight wrapper-level closures (a–h). None change runtime; all change what the operator sees and types.
+
+**New commands & flags:**
+- `km env [--aws-profile]` — print exportable `KM_*` block; use with `eval $(km env)` for direct terragrunt invocation. Excludes `AWS_PROFILE` by default (operator-shell-local); `KM_ACCOUNTS_TERRAFORM` intentionally omitted (env-precedence asymmetry preserved per CONTEXT.md).
+- `km bootstrap --all` — single command chains foundation (SCP/KMS/artifacts) → shared SES rule set; mutex with `--shared-ses`; `--plan` honors the 84.2 destroy-class gate.
+
+**Configure-time changes (`km configure`):**
+- HeadBucket-checked `state_bucket` with `[Y/edit/abort]` retry UX on globally-taken names (closure a).
+- Auto-derived `artifacts_bucket = ${prefix}-artifacts-${account_id}`; angle-bracket and literal `km-artifacts-12345` placeholders rejected at load (closure e).
+- `Next steps:` finale prints the canonical bootstrap sequence to stdout AND embeds it as `#` header comments at the top of the generated yaml (closure f).
+- Shell-env conflict WARN per conflicting `KM_*` env var (closure h-shell).
+
+**Bootstrap-time changes (`km bootstrap`):**
+- Dry-run text now correctly says `would run: terragrunt apply` (closure b); degrades gracefully when AWS auto-detect is unreachable.
+- Status banner WARNs on empty required account IDs and shows `(not set)` (closure h-banner).
+- `--all` flag chains the two subflows (closure f).
+
+**Init-time changes (`km init`):**
+- Per-var drift WARN on env-vs-yaml mismatch (closure c) — see Partial-pass note below.
+- `km init --plan` skips fresh-install dependents missing upstream `outputs.json` (closure d) — exit 0, re-runs cleanly once `network` is applied.
+- Hard-fail on missing `artifacts_bucket` with recovery commands in error (closure f.6).
+
+**Behavior change — `accounts.*` yaml-authoritative (closure h):**
+- `accounts.organization`, `accounts.dns_parent`, `accounts.application`: yaml wins, env values do NOT override `cfg`. `KM_ACCOUNTS_*` still exported to terragrunt subprocesses.
+- `accounts.terraform`: env wins (asymmetry preserved — operators retain shell-local override for the cross-account terraform role).
+
+**Phase 84.3 UAT partial-pass — gap-closure pending (84.3.1):**
+- `gap-drift-warn-viper-binding-masks-env-bound-keys`: drift WARN doesn't fire for `KM_REGION`/`KM_DOMAIN`/`KM_ARTIFACTS_BUCKET` etc. because viper binds env → cfg before the check runs. Works for yaml-authoritative keys.
+- `gap-drift-warn-runBootstrap-missing`: `runBootstrap` (default `km bootstrap` without `--shared-ses`) doesn't invoke `ExportTerragruntEnvVars`; drift WARN only fires via `--shared-ses` path today.
+- `gap-validate-artifacts-bucket-not-wired-into-load`: `validateArtifactsBucket` exists and is unit-tested but no command calls it during `config.Load()` — placeholder values silently pass through.
+- `gap-init-hardfail-not-triggered-on-placeholder`: `km init --dry-run=true` succeeds against a placeholder bucket; hard-fail check needs to fire at config load, before any plan/apply.
+
+See `OPERATOR-GUIDE.md` § Phase 84.3 wrapper-level UX for the full runbook (configure-time, bootstrap-time, init-time changes, `km env` use cases, cross-references to Phase 84.4).
+
+Cross-reference: Phase 84.4 (module-level hard-coded `km-` prefix fixes) is required for full multi-install runtime parity — Phase 84.3 closures + Phase 84.4 module fixes together close the joint third-install scenario (i) in the 84.3 UAT.
 
 ## Network Enforcement
 

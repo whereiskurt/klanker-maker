@@ -872,3 +872,109 @@ foundation module (closes Phase 84 Gaps 2, 3, 6 in the bootstrap path too).
 **Adding a protected type:** Edit `pkg/terragrunt/planreport/protected.go` and add
 the new resource type with a rationale comment citing the incident. PR review = the
 safety mechanism (intentionally NOT operator-configurable per CONTEXT.md Decision 6).
+
+### Phase 84.3 wrapper-level UX
+
+Phase 84.3 (2026-05-17) tightens the operator path from `git clone` to first apply.
+Eight wrapper-level closures address ergonomic gaps surfaced during the Phase 84
+second-install UAT — none change the runtime; all change what the operator sees
+and types.
+
+**Configure-time changes (`km configure`):**
+
+- **HeadBucket-checked `state_bucket`** (closure a): when you type a globally-taken
+  name (`tf-state`, `s3`), `km configure` HeadBuckets it, prints
+  `<name> is taken`, suggests `<name>-<account_id>`, and offers `[Y / edit / abort]`.
+  `Y` accepts the suggestion, `edit` re-prompts freeform, `abort` exits cleanly.
+- **Auto-derived `artifacts_bucket`** (closure e): default is
+  `${prefix}-artifacts-${account_id}` (e.g. `km-artifacts-052251888500`). Two
+  placeholder forms are rejected by `validateArtifactsBucket` at load:
+  `<…>` angle-bracket tokens (e.g. `<prefix>-artifacts-12345678`) and the literal
+  example sentinel `km-artifacts-12345`. Error includes the recovery command
+  `re-run 'km configure'`.
+- **`Next steps:` finale** (closure f.7): after writing `km-config.yaml`, the wizard
+  prints the canonical bootstrap sequence (`km bootstrap --all --plan` →
+  `--dry-run=false` → `km init --plan` → `--dry-run=false`). The same lines are
+  embedded as `#` header comments at the top of the generated yaml.
+- **Shell-env conflict WARN** (closure h-shell): if `KM_*` env vars in your shell
+  conflict with values the wizard is about to write, each conflicting var prints a
+  `WARN: KM_<KEY>=<env-value>` line to stderr before validation, even when the
+  wizard would otherwise fail on missing required flags.
+
+**Bootstrap-time changes (`km bootstrap`):**
+
+- **`km bootstrap --all`** (closure f.1–f.5): single command chains foundation
+  (SCP + KMS + artifacts) then shared SES rule set. Mutually exclusive with
+  `--shared-ses` (error: `--all and --shared-ses are mutually exclusive; --all runs
+  both subflows in order`). `--all --plan` honors the Phase 84.2 destroy-class gate.
+  This is the recommended primary bootstrap command for new installs.
+- **Dry-run text says "apply"** (closure b): `km bootstrap --shared-ses --dry-run=true`
+  prints `Dry run — would run: terragrunt apply <path>`. Previously said "plan"
+  which was misleading because the operator would later `--dry-run=false` to
+  actually apply. Dry-run gracefully degrades when AWS auto-detect is unreachable
+  (stale SSO token, missing creds): a single-line apply intent prints, exit 0.
+- **Status banner WARNs on empty required account IDs** (closure h-banner): if
+  `accounts.organization`, `accounts.dns_parent`, or `accounts.application` is
+  empty in `km-config.yaml`, the bootstrap banner emits
+  `WARN: accounts.<key> is empty in km-config.yaml — required for this command`
+  to stderr; the banner shows `(not set)` in place of the value.
+
+**Init-time changes (`km init`):**
+
+- **Per-var drift WARN** (closure c): `ExportTerragruntEnvVars` emits one stderr
+  line per env-vs-yaml mismatch:
+  `WARN: KM_REGION=us-west-2 (env) overrides km-config.yaml region=us-east-1`.
+  Env still wins (no override of `os.Setenv`); the WARN exists so operators see
+  the precedence they're getting. **Phase 84.3 partial-pass note:** the drift
+  WARN currently fires reliably only for yaml-authoritative keys
+  (`accounts.organization`, `accounts.dns_parent`, `accounts.application`) called
+  via the `--shared-ses` path. Drift for env-bound keys (`KM_REGION`, `KM_DOMAIN`,
+  `KM_ARTIFACTS_BUCKET`, etc.) is masked by viper's env-binding into `cfg` at
+  `config.Load()` time — gap-closure planned for 84.3.1.
+- **`km init --plan` skips fresh-install dependents** (closure d): when an
+  upstream module's `outputs.json` is absent (e.g. `network` has not been
+  applied), `km init --plan` prints `[skip] efs — depends on network/outputs.json
+  (apply network first)` for each dependent module and exits 0. After
+  `terragrunt apply` in `network/`, re-running `km init --plan` plans the
+  dependents normally.
+- **Hard-fail on missing artifacts bucket** (closure f.6): `km init --dry-run=false`
+  HeadBuckets `cfg.artifacts_bucket` and, on 404, exits with an error naming
+  both recovery commands: `km bootstrap --all` (recommended) and
+  `km bootstrap --dry-run=false`.
+
+**New command — `km env`** (closure g):
+
+`km env` prints `export KEY=value` lines for the 11 `KM_*` env vars that
+Terragrunt's `site.hcl` reads via `get_env()`. Use with `eval $(km env)` to
+prepare an operator shell for direct terragrunt invocation:
+
+```bash
+eval $(km env)
+cd infra/live/use1/network/
+terragrunt apply
+```
+
+`--aws-profile` opt-in adds `export AWS_PROFILE=<current value>` (excluded by
+default to keep the export block portable across operator shells). `KM_ACCOUNTS_TERRAFORM`
+is intentionally excluded from the block — see "accounts.* yaml-authoritative" below.
+
+Use cases: recovering from a partial bootstrap, manual `terragrunt import`,
+debugging cfg-vs-env precedence, running terragrunt from a module directory
+without re-invoking `km` for each step.
+
+**Behavior change — `accounts.*` yaml-authoritative** (closure h):
+
+`accounts.organization`, `accounts.dns_parent`, `accounts.application` are
+yaml-authoritative: yaml wins unconditionally, env values do NOT override the
+in-memory `cfg`. `KM_ACCOUNTS_*` is still exported to terragrunt subprocesses
+(operator overrides reach terraform), but `cfg` reads always reflect yaml.
+
+`accounts.terraform` preserves env-precedence (env wins) — operators retain
+shell-local override for the cross-account terraform role; this asymmetry is
+intentional per CONTEXT.md.
+
+**Cross-references:**
+- Phase 84.4 owns module-level hard-coded `km-` prefix fixes — required for
+  full multi-install runtime parity. See § Phase 84.4 once it ships.
+- The eight closures map 1:1 to acceptance criteria in
+  `.planning/phases/84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted/84.3-CONTEXT.md`.
