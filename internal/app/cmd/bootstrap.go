@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -393,14 +394,33 @@ var ApplyTerragruntFunc TerragruntApplyFunc = defaultApplyTerragrunt
 // S3 backend on first apply of a new module (e.g. the Phase 84 ses-shared-rule-set
 // module on an in-place upgrade) — terragrunt's auto-init does not fire when the
 // backend config is new to this working tree.
+//
+// Phase 84.1-02 Task 3 (plan-checker rev 1 H6): Reconfigure + Apply are
+// wrapped in a single BootstrapApplyTimeout (default 10min) — the same upper
+// bound RunInitWithRunner uses for the regional ses-shared-rule-set module.
+// Without this bound, a wedged terragrunt blocks km bootstrap forever,
+// mirroring the original 84-10-UAT.md GAP-4/5 km init regression.
 func defaultApplyTerragrunt(ctx context.Context, dir string) error {
 	awsProfile := "klanker-terraform"
 	repoRoot := findRepoRoot()
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
-	if err := runner.Reconfigure(ctx, dir); err != nil {
+
+	boundCtx, cancel := context.WithTimeout(ctx, BootstrapApplyTimeout)
+	defer cancel()
+
+	if err := runner.Reconfigure(boundCtx, dir); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("terragrunt init -reconfigure %s wedged after %s — see OPERATOR-GUIDE.md § Phase 84.1 state-digest recovery: %w", dir, BootstrapApplyTimeout, err)
+		}
 		return fmt.Errorf("terragrunt init -reconfigure: %w", err)
 	}
-	return runner.Apply(ctx, dir)
+	if err := runner.Apply(boundCtx, dir); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("terragrunt apply %s wedged after %s — kill orphan terragrunt PID (see heartbeat above) and consult OPERATOR-GUIDE.md § Phase 84.1 state-digest recovery: %w", dir, BootstrapApplyTimeout, err)
+		}
+		return err
+	}
+	return nil
 }
 
 // NewBootstrapCmd creates the "km bootstrap" command using os.Stdout for output.
