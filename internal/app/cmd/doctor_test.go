@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	ed25519key "crypto/ed25519"
 	"crypto/rand"
@@ -2009,5 +2010,31 @@ func TestCheckSESRules_Orphans(t *testing.T) {
 	}
 	if !strings.Contains(result.Message, "xx-operator-inbound") {
 		t.Errorf("expected message to contain 'xx-operator-inbound', got: %s", result.Message)
+	}
+}
+
+// TestAppendKmInitPlanTip locks the Phase 84.2 Tip line into the test suite —
+// any future doctor refactor that drops the tip must fail this test.
+func TestAppendKmInitPlanTip(t *testing.T) {
+	// Plain mode (no TTY) — substring assertion on the tip text itself.
+	var buf bytes.Buffer
+	appendKmInitPlanTip(&buf, false)
+	got := buf.String()
+	if !strings.Contains(got, "km init --plan") {
+		t.Errorf("expected output to contain 'km init --plan', got:\n%s", got)
+	}
+	if strings.Contains(got, "\x1b[") {
+		t.Errorf("expected no ANSI escapes with isTTY=false, got:\n%q", got)
+	}
+
+	// TTY mode — verify ANSI yellow wrapper is present.
+	var ttyBuf bytes.Buffer
+	appendKmInitPlanTip(&ttyBuf, true)
+	ttyGot := ttyBuf.String()
+	if !strings.Contains(ttyGot, "km init --plan") {
+		t.Errorf("expected TTY output to contain 'km init --plan', got:\n%s", ttyGot)
+	}
+	if !strings.Contains(ttyGot, "\x1b[33m") { // yellow
+		t.Errorf("expected ANSI yellow escape with isTTY=true, got:\n%q", ttyGot)
 	}
 }
