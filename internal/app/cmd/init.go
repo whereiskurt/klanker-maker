@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -804,15 +805,38 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 		// directory whose .terraform/ has never been initialized. Auto-init
 		// doesn't fire when the backend config is new to this working tree.
 		// Reconfigure is a no-op when the backend is already initialized.
+		//
+		// Phase 84.1-02: bound Reconfigure by reconfigureTimeout (default 2min).
+		// Reconfigure is normally seconds; a 2-min bound surfaces a backend hang
+		// quickly without artificially cutting off a slow first-init.
 		if mod.name == "ses" {
-			if err := runner.Reconfigure(ctx, mod.dir); err != nil {
+			rcfgCtx, rcfgCancel := context.WithTimeout(ctx, reconfigureTimeout)
+			err := runner.Reconfigure(rcfgCtx, mod.dir)
+			rcfgCancel()
+			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) {
+					return fmt.Errorf("reconfiguring ses backend wedged after %s — see OPERATOR-GUIDE.md § Phase 84.1 state-digest recovery: %w", reconfigureTimeout, err)
+				}
 				return fmt.Errorf("reconfiguring ses backend: %w", err)
 			}
 		}
 
+		// Phase 84.1-02 (GAP-5): per-module Apply timeout. Without this bound a
+		// wedged terragrunt blocks km init forever (see 84-10-UAT.md lines 53-72:
+		// the original incident hung 10+ minutes before manual Ctrl-C). The
+		// default per-module bound comes from ModuleTimeoutFunc (test-overridable);
+		// production maps long-DNS/IAM-propagation modules to 10min, lambda+ses
+		// modules to 5min, and everything else to 3min.
 		fmt.Printf("  Applying %s...", mod.name)
-		if err := runner.Apply(ctx, mod.dir); err != nil {
+		timeout := ModuleTimeoutFunc(mod.name)
+		applyCtx, applyCancel := context.WithTimeout(ctx, timeout)
+		err := runner.Apply(applyCtx, mod.dir)
+		applyCancel()
+		if err != nil {
 			fmt.Println() // newline after the "Applying X..." prefix on failure
+			if errors.Is(err, context.DeadlineExceeded) {
+				return fmt.Errorf("module %s wedged after %s — kill orphan terragrunt PID (see heartbeat above) and consult OPERATOR-GUIDE.md § Phase 84.1 state-digest recovery for S3 state / DDB lock-table repair: %w", mod.name, timeout, err)
+			}
 			return fmt.Errorf("applying %s: %w", mod.name, err)
 		}
 		fmt.Println(" done")
