@@ -782,17 +782,40 @@ If the `km init --dry-run=true` step shows ANY destroy for a shared resource (`a
 
 ```bash
 cd infra/live/use1/ses-shared-rule-set
-# Discover the existing DKIM tokens:
-TOKENS=$(aws ses get-identity-dkim-attributes --identities sandboxes.example.com \
-  --query 'DkimAttributes."sandboxes.example.com".DkimTokens' --output text)
-# Import each one:
+
+# Export the env vars terragrunt needs for state-bucket resolution (omit any that are
+# already exported in your shell):
+export KM_RESOURCE_PREFIX=<your-prefix>     # e.g. km, whereiskurt
+export KM_REGION_LABEL=use1
+export KM_REGION=us-east-1
+export KM_DOMAIN=example.com
+export KM_EMAIL_SUBDOMAIN=sandboxes
+export KM_ROUTE53_ZONE_ID=Z...
+export AWS_PROFILE=klanker-terraform
+
+# Discover the existing DKIM tokens. The AWS CLI emits tab-separated text, and zsh
+# (default on macOS) does NOT word-split unquoted variable expansions the way bash
+# does — pipe through `tr` to get a clean newline-split array.
+TOKENS_ARR=($(aws ses get-identity-dkim-attributes --identities sandboxes.example.com \
+  --query 'DkimAttributes."sandboxes.example.com".DkimTokens' --output text | tr '\t' '\n'))
+echo "Got ${#TOKENS_ARR[@]} tokens: ${TOKENS_ARR[@]}"
+
+# Import each DKIM CNAME. Use the quoted array expansion to survive both bash and zsh:
 i=0
-for t in $TOKENS; do
+for t in "${TOKENS_ARR[@]}"; do
   terragrunt import "aws_route53_record.dkim[$i]" \
     "${KM_ROUTE53_ZONE_ID}_${t}._domainkey.sandboxes.example.com_CNAME"
   i=$((i+1))
 done
+
+# Same pattern if MX + verification TXT also pre-exist (skip if not):
+terragrunt import "aws_route53_record.mx[0]" \
+  "${KM_ROUTE53_ZONE_ID}_sandboxes.example.com_MX" || echo "(mx already managed or absent)"
+terragrunt import "aws_route53_record.ses_verification[0]" \
+  "${KM_ROUTE53_ZONE_ID}__amazonses.sandboxes.example.com_TXT" || echo "(verification already managed or absent)"
 ```
+
+After the imports complete, `cd` back to the repo root and re-run `km bootstrap --shared-ses --dry-run=false`.
 
 See also: `CLAUDE.md` § Phase 84 for the architecture summary and operator address format.
 
