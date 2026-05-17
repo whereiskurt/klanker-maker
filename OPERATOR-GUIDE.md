@@ -672,6 +672,8 @@ km doctor
 
 `km configure` derives and stores `KM_OPERATOR_EMAIL` as `operator-{resource_prefix}@{email_subdomain}.{domain}` (e.g. `operator-km@sandboxes.example.com`). Use `km configure --reset-prefix` to clear the stored email if you are changing `resource_prefix`.
 
+> **Phase 84.1 note:** the second `km bootstrap --shared-ses --dry-run=false` is a true no-op (idempotent). If `km init` reports a timeout error on a module, see § State-digest mismatch recovery below.
+
 #### Second install in an existing account
 
 A second install with a different `resource_prefix` (e.g. `km2`) follows the same sequence but skips re-running `km bootstrap --shared-ses` — the shared rule set is already active. If you do run it, the auto-detect path performs a no-op apply.
@@ -717,6 +719,79 @@ aws ses describe-receipt-rule-set \
 # Confirm km doctor is clean for this install
 km doctor | grep "SES rules"
 # Expected: ✓ SES rules healthy
+```
+
+#### State-digest mismatch recovery (Phase 84.1)
+
+If a `km init` or `km bootstrap` run is interrupted mid-flight (Ctrl-C, terminal closure, terminal session loss), terragrunt may leave the S3 state file and the DynamoDB lock-table digest out of sync. Subsequent terragrunt operations will report:
+
+```
+Error: Error acquiring the state lock
+Error message: state data in S3 does not have the expected content.
+```
+
+`km doctor` (Phase 84.1 onward) detects this via the `Terraform state lock digest` check and prints the exact recovery command in the WARN Remediation field. Manual recovery (mirrors what `km doctor` prints):
+
+1. Identify the mismatched LockID from `km doctor` output (format: `<bucket>/<state-key>-md5`).
+2. Download the S3 state object and compute MD5:
+   ```bash
+   aws s3 cp s3://<bucket>/<state-key> /tmp/state.tfstate
+   MD5=$(md5sum /tmp/state.tfstate | awk '{print $1}')
+   echo "Correct digest: $MD5"
+   ```
+3. Overwrite the stale Digest in the lock table:
+   ```bash
+   aws dynamodb update-item \
+     --table-name tf-km-locks-use1 \
+     --key '{"LockID":{"S":"<bucket>/<state-key>-md5"}}' \
+     --update-expression 'SET Digest = :d' \
+     --expression-attribute-values "{\":d\":{\"S\":\"$MD5\"}}"
+   ```
+4. Re-run `terragrunt apply` (or `km init`); the lock acquisition now succeeds.
+
+Phase 84.1's `km init` per-module timeout (default 5–10 min) prevents the indefinite-hang scenario that caused state-digest drift in Phase 84 UAT. If `km init` reports a timeout error referencing a specific module, the wedged terragrunt PID is printed in the heartbeat lines above the error; `kill -9 <pid>` to clean up the orphan before re-running.
+
+#### Phase 84.1 upgrade safety (in-place v1.0.0 → v2.0.0 cutover)
+
+Phase 84.1 closes the upgrade-path gaps surfaced in Phase 84's UAT:
+
+- `km bootstrap --shared-ses` is now idempotent. Re-running on an already-bootstrapped account is a true no-op (no destroy planned, no error).
+- Foundation module's auto-detect now respects foundation state ownership before consulting AWS reality. Pre-existing AWS resources owned by the old regional `ses/v1.0.0` module are brought under foundation management via Terraform `import {}` blocks during the first post-upgrade apply.
+- Regional `ses/v2.0.0` module ships with `removed { lifecycle { destroy = false } }` blocks for the shared resources, so the v1.0.0 → v2.0.0 source flip does NOT destroy domain identity, DKIM, MX, or verification records.
+
+**In-place upgrade procedure from Phase 82.x (UPDATED, supersedes the Phase 84 procedure for in-place upgrades):**
+
+```bash
+make build
+km init --sidecars
+km bootstrap --shared-ses --dry-run=true
+# Verify plan: existing AWS resources should be planned as "imported" (not created).
+km bootstrap --shared-ses --dry-run=false
+km init --dry-run=true
+# Verify plan: shared resources (domain identity, DKIM, MX, verification TXT,
+# rule set, active pointer) should show ZERO destroys. Only ADD of the
+# two prefix-named rules + S3 bucket policy update.
+km init --dry-run=false
+km configure
+km doctor
+```
+
+If the `km init --dry-run=true` step shows ANY destroy for a shared resource (`aws_ses_domain_identity`, `aws_ses_domain_dkim`, `aws_ses_receipt_rule_set`, `aws_ses_active_receipt_rule_set`, `aws_route53_record.dkim/mx/ses_verification`) — STOP and file a bug. Phase 84.1's removed blocks should suppress all of these.
+
+**DKIM import note:** The foundation module's DKIM import blocks may require a two-pass apply because terraform must read the domain identity before resolving DKIM token names. If the first apply fails on a DKIM import, run it again — the identity will be in state by then. Alternatively, import DKIM records manually:
+
+```bash
+cd infra/live/use1/ses-shared-rule-set
+# Discover the existing DKIM tokens:
+TOKENS=$(aws ses get-identity-dkim-attributes --identities sandboxes.example.com \
+  --query 'DkimAttributes."sandboxes.example.com".DkimTokens' --output text)
+# Import each one:
+i=0
+for t in $TOKENS; do
+  terragrunt import "aws_route53_record.dkim[$i]" \
+    "${KM_ROUTE53_ZONE_ID}_${t}._domainkey.sandboxes.example.com_CNAME"
+  i=$((i+1))
+done
 ```
 
 See also: `CLAUDE.md` § Phase 84 for the architecture summary and operator address format.
