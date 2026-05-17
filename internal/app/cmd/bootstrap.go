@@ -714,11 +714,11 @@ func runBootstrapSharedSESPlanWithWriter(cfg *config.Config, w io.Writer, verbos
 	reports := []planreport.Report{report}
 	result := planreport.Evaluate(reports, acceptDestroys)
 	if result.Blocked {
-		printTripBlock(result.Trips)
+		printTripBlock("km bootstrap --shared-ses --plan", result.Trips)
 		return fmt.Errorf("destroy-class gate tripped (re-run with --i-accept-destroys to override)")
 	}
 	if len(result.Trips) > 0 {
-		printTripBlock(result.Trips)
+		printTripBlock("km bootstrap --shared-ses --plan", result.Trips)
 		fmt.Fprintln(w, "  (override active via --i-accept-destroys — exit 0; no apply will run)")
 	}
 

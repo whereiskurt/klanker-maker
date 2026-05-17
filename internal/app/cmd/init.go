@@ -1091,12 +1091,12 @@ func RunInitPlanWithRunner(runner InitRunner, repoRoot, region string, verbose, 
 	// Gate
 	result := planreport.Evaluate(reports, acceptDestroys)
 	if result.Blocked {
-		printTripBlock(result.Trips)
+		printTripBlock("km init --plan", result.Trips)
 		return fmt.Errorf("destroy-class gate tripped (re-run with --i-accept-destroys to override)")
 	}
 	if len(result.Trips) > 0 {
 		// Override active — trips listed for visibility per CONTEXT.md Decision 3.
-		printTripBlock(result.Trips)
+		printTripBlock("km init --plan", result.Trips)
 		fmt.Println("  (override active via --i-accept-destroys — exit 0; no apply will run)")
 	}
 
@@ -1179,9 +1179,9 @@ func summarizeReport(r planreport.Report) string {
 // printTripBlock prints the destroy-class gate trip block per the locked format
 // in CONTEXT.md decisions § Trip block format. Always full —
 // never abbreviated by --verbose absence.
-func printTripBlock(trips []planreport.Trip) {
+func printTripBlock(invoker string, trips []planreport.Trip) {
 	fmt.Println()
-	fmt.Printf("✗ km init --plan would destroy %d protected resources:\n\n", len(trips))
+	fmt.Printf("✗ %s would destroy %d protected resources:\n\n", invoker, len(trips))
 	// Group by module for readable output
 	byModule := map[string][]planreport.Trip{}
 	moduleOrder := []string{}
