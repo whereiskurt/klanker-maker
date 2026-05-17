@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.1-02-PLAN.md terragrunt-timeout-and-heartbeat-for-km-init
-last_updated: "2026-05-17T00:38:10.692Z"
+stopped_at: Completed 84.1-04-PLAN.md (Wave 3 — GAP-2/3/6 closure)
+last_updated: "2026-05-17T00:57:24.727Z"
 last_activity: 2026-05-17
 progress:
   total_phases: 95
   completed_phases: 82
   total_plans: 368
-  completed_plans: 321
+  completed_plans: 322
   percent: 93
 ---
 
@@ -360,6 +360,7 @@ Progress: [█████████░] 93%
 | Phase 84.1 P01 | 16min | 2 tasks | 10 files |
 | Phase 84.1 P03 | 25min | 2 tasks | 4 files |
 | Phase 84.1 P02 | 18 min | 3 tasks | 6 files |
+| Phase 84.1 P04 | 12min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -1029,6 +1030,9 @@ Recent decisions affecting current work:
 - [Phase 84.1]: ModuleTimeoutFunc is a package-level var, not a const — Enables sub-second tests that exercise the timeout path; production behaviour unaffected. Same pattern as ApplyTerragruntFunc and InitSESPreflight test seams.
 - [Phase 84.1]: Single BootstrapApplyTimeout bounds Reconfigure+Apply together in defaultApplyTerragrunt — One budget for one module-apply, mirroring init.go per-module-Apply treatment. Separate bounds would have allowed 20 minutes wall-clock for a 10-minute-bootstrap-apply.
 - [Phase 84.1]: cmd.Cancel uses os.Interrupt not syscall.SIGTERM (plan-checker rev 1 L15) — syscall.SIGTERM is undefined on Windows builds. os.Interrupt maps to SIGINT on Unix and CTRL_BREAK_EVENT on Windows, achieving the give-the-child-a-chance-to-clean-up-before-SIGKILL semantics cross-platform.
+- [Phase 84.1]: Plan 84.1-04: foundation auto-detect prefers tfstate ownership over AWS reality (FoundationStateReader interface + s3FoundationStateReader impl); register_* flag semantics shifted from 'create only on first apply' to 'manage this resource' — closes GAP-2 (idempotency) + GAP-3 (state precedence)
+- [Phase 84.1]: Plan 84.1-04: 6 import {} blocks in foundation main.tf + 7 removed {} blocks (lifecycle.destroy=false) in regional v2.0.0 main.tf make in-place v1.0.0→v2.0.0 cutover destroy zero shared AWS resources — closes GAP-6 (highest-impact gap); H9 keeps DKIM CNAMEs OUT of import blocks (operator-run per OPERATOR-GUIDE.md from Plan 84.1-05)
+- [Phase 84.1]: Plan 84.1-04: Terraform required_version bumped 1.6.0 → 1.7.0 in infra/live/root.hcl (C3) for removed{} block support; bumped in separate chore commit BEFORE consuming syntax so operators see clean version-mismatch errors from terraform instead of parse errors
 
 ### Roadmap Evolution
 
@@ -1135,6 +1139,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-17T00:38:10.682Z
-Stopped at: Completed 84.1-02-PLAN.md terragrunt-timeout-and-heartbeat-for-km-init
+Last session: 2026-05-17T00:57:24.719Z
+Stopped at: Completed 84.1-04-PLAN.md (Wave 3 — GAP-2/3/6 closure)
 Resume file: None
