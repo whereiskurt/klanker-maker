@@ -1875,7 +1875,7 @@ Phase closes when: (a) `km configure` HeadBucket-checks `state_bucket` and re-pr
 
 **Depends on:** Phase 84.2 (specifically the `ensureRegionHCL` helper added in commit `c345229` — Phase 84.3 builds on the env-derivation patterns there)
 
-**Plans:** 5 plans (Wave 0 test scaffolding → Wave 1 configure+config → Wave 2 bootstrap → Wave 3 init+env → Wave 4 joint UAT)
+**Plans:** 5 original + 5 gap-closure = 10 plans (5 complete + 5 gap-closure pending)
 
 Plans:
 - [ ] 84.3-01-PLAN.md — Wave 0 RED test scaffolding for all 8 closures (configure_84_3_test.go, env_test.go, init_84_3_test.go, init_plan_test.go ext, bootstrap_84_3_test.go, config_84_3_test.go) — autonomous, Wave 0
@@ -1883,6 +1883,11 @@ Plans:
 - [ ] 84.3-03-PLAN.md — Wave 2: bootstrap.go — closures (b) dry-run text fix, (f) --all flag + runBootstrapAll chain, (h) banner WARN — autonomous, Wave 2
 - [ ] 84.3-04-PLAN.md — Wave 3: init.go + NEW env.go + root.go — closures (c) drift WARN, (d) outputs.json skip probe, (f) init hard-fail, (g) km env subcommand — autonomous, Wave 3
 - [ ] 84.3-05-PLAN.md — Wave 4: OPERATOR CHECKPOINT joint UAT (8 per-closure scenarios + joint scenario i with Phase 84.4) + OPERATOR-GUIDE.md + CLAUDE.md updates — NOT autonomous, Wave 4
+- [ ] 84.3-06-PLAN.md — Wave 5 gap-closure RED tests: integration tests for 4 UAT gaps (config_load_drift_test.go, bootstrap_drift_warn_test.go, load_validate_test.go) — autonomous, Wave 5
+- [ ] 84.3-07-PLAN.md — Wave 6 gap-closure: Config.YAMLDefaults snapshot + ExportTerragruntEnvVars uses snapshot for drift comparison (gap 1) — autonomous, Wave 6
+- [ ] 84.3-08-PLAN.md — Wave 6 gap-closure: wire ExportTerragruntEnvVars into runBootstrap (gap 2) — autonomous, Wave 6
+- [ ] 84.3-09-PLAN.md — Wave 6 gap-closure: isPlaceholderBucket in config.Load() + validateArtifactsBucket in runInitPlan (gaps 3+4) — autonomous, Wave 6
+- [ ] 84.3-10-PLAN.md — Wave 7 gap-closure: re-run UAT closures c/e/f.6/h autonomously, update UAT.md + REQUIREMENTS.md — autonomous, Wave 7
 
 ### Phase 84.4: Multi-install module hardening — infra/modules/ source fixes (INSERTED)
 
