@@ -1875,7 +1875,14 @@ Phase closes when: (a) `km configure` HeadBucket-checks `state_bucket` and re-pr
 
 **Depends on:** Phase 84.2 (specifically the `ensureRegionHCL` helper added in commit `c345229` — Phase 84.3 builds on the env-derivation patterns there)
 
-**Plans:** TBD (will be created by `/gsd:plan-phase 84.3` after `/gsd:discuss-phase 84.3`)
+**Plans:** 5 plans (Wave 0 test scaffolding → Wave 1 configure+config → Wave 2 bootstrap → Wave 3 init+env → Wave 4 joint UAT)
+
+Plans:
+- [ ] 84.3-01-PLAN.md — Wave 0 RED test scaffolding for all 8 closures (configure_84_3_test.go, env_test.go, init_84_3_test.go, init_plan_test.go ext, bootstrap_84_3_test.go, config_84_3_test.go) — autonomous, Wave 0
+- [ ] 84.3-02-PLAN.md — Wave 1: configure.go + config.go — closures (a) HeadBucket retry, (e) artifacts derivation + placeholder reject, (f) finale + yaml header comments, (h) configure-side WARN + accounts.* yaml-authoritative — autonomous, Wave 1
+- [ ] 84.3-03-PLAN.md — Wave 2: bootstrap.go — closures (b) dry-run text fix, (f) --all flag + runBootstrapAll chain, (h) banner WARN — autonomous, Wave 2
+- [ ] 84.3-04-PLAN.md — Wave 3: init.go + NEW env.go + root.go — closures (c) drift WARN, (d) outputs.json skip probe, (f) init hard-fail, (g) km env subcommand — autonomous, Wave 3
+- [ ] 84.3-05-PLAN.md — Wave 4: OPERATOR CHECKPOINT joint UAT (8 per-closure scenarios + joint scenario i with Phase 84.4) + OPERATOR-GUIDE.md + CLAUDE.md updates — NOT autonomous, Wave 4
 
 ### Phase 84.4: Multi-install module hardening — infra/modules/ source fixes (INSERTED)
 
@@ -1891,4 +1898,15 @@ Phase closes when: (a) `grep -rn '"km-' infra/modules/` returns zero results in 
 
 **Operator-visible probe state during planning:** The `klanker-maker-whereiskurt` install (resource_prefix: whereiskurt) is currently in a partial state on AWS account 052251888500 — has its own state bucket, KMS key alias, S3 artifacts bucket, foundation SES (imported DKIM CNAMEs from prior install), regional network apply complete, EFS apply FAILED (creation_token collision with km-/kph- install's EFS), SCP imported into whereiskurt state but its policy content actively DENIES whereiskurt's lambdas. This install is a probe — Phase 84.4 plans must include a clean-teardown task (`km uninit` + `km unbootstrap` + manual SCP detach + manual orphan-resource cleanup) verified by AWS-CLI before the fresh-prefix UAT runs. Do NOT attempt to "finish" the whereiskurt install — its purpose is exercising the failure modes that 84.4 codifies.
 
-**Plans:** TBD (will be created by `/gsd:plan-phase 84.4` after `/gsd:discuss-phase 84.4`)
+**Plans:** 9 plans (Wave 0 prerequisites → Wave 1 audit + v2.0.0 modules → Wave 2 live wiring + bootstrap auto-import → Wave 3 whereiskurt teardown UAT → Wave 4 fresh-prefix rg UAT)
+
+Plans:
+- [ ] 84.4-00-PLAN.md — Wave 0: prerequisites (hcl/v2 dep, Makefile test target, Runner.Import method, testdata fixtures, inventory-diff script)
+- [ ] 84.4-01-PLAN.md — Wave 1: HCL static-analysis audit test (pkg/terragrunt/modulehygiene_test.go) wired into make test
+- [ ] 84.4-02-PLAN.md — Wave 1: scp/v2.0.0/ prefix-templated module + 5KB precondition guard + BuildSCPPolicy(resourcePrefix) update + size unit tests
+- [ ] 84.4-03-PLAN.md — Wave 1: efs/v2.0.0/ prefix-templated creation_token + SG name + Name tags
+- [ ] 84.4-04-PLAN.md — Wave 1: s3-replication/v2.0.0/ prefix-templated IAM role + policy names + stale-literal grep audit
+- [ ] 84.4-05-PLAN.md — Wave 2: live wiring flip (scp/efs/s3-replication v1.0.0→v2.0.0) + operator zero-diff verification on km install — NOT autonomous
+- [ ] 84.4-06-PLAN.md — Wave 2: runBootstrapSharedSES auto-import for DKIM[0..2]/MX/_amazonses TXT via Runner.Import + mocked unit tests
+- [ ] 84.4-07-PLAN.md — Wave 3: whereiskurt probe teardown UAT (BEFORE snapshot → km uninit → manual SCP/EFS cleanup → km unbootstrap → AFTER diff) — NOT autonomous
+- [ ] 84.4-08-PLAN.md — Wave 4: fresh-prefix rg UAT (full lifecycle: configure → bootstrap → init → sandbox create/destroy → uninit → unbootstrap → km install isolation diff) + OPERATOR-GUIDE.md multi-install runbook — NOT autonomous
