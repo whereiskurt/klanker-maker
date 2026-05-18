@@ -1020,6 +1020,10 @@ make build
 ./bin/km bootstrap --shared-ses --dry-run=false
 
 # 5. Plan + apply
+make build-lambdas              # prereq for `km init --plan`: builds the 6 Lambda zips
+                                # that the create-handler module's filebase64sha256 needs.
+                                # `km init --dry-run=false` (full apply) builds zips itself;
+                                # `km init --plan` (Phase 84.2 read-only) does not.
 ./bin/km init --plan
 ./bin/km init --dry-run=false
 
@@ -1069,6 +1073,15 @@ HeadBucket-checks the accepted name. `km bootstrap` auto-writes `region.hcl`
 via a shared helper. `km unbootstrap` deletes the terragrunt-created DynamoDB
 lock table. `make build-lambdas` produces all 6 Lambda zips that
 `init.go:buildLambdaZips` enumerates.
+
+> **Note — `km init --plan` prerequisite on a fresh clone.** Unlike
+> `km init --dry-run=false` (full apply), which calls `buildLambdaZips`
+> automatically, `km init --plan` (Phase 84.2 read-only) skips the build step.
+> If `build/create-handler.zip` is missing, `terragrunt plan` for the
+> `create-handler` module fails at `filebase64sha256(var.lambda_zip_path)`
+> with `no such file or directory`. Run `make build-lambdas` (or
+> `./bin/km init --lambdas`) once before the first `km init --plan` on a
+> fresh clone; subsequent plans reuse the cached zips.
 
 #### AWS limits to watch
 
