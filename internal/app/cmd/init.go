@@ -1680,8 +1680,13 @@ func buildLambdaZips(repoRoot string) error {
 }
 
 // downloadTerraform downloads the terraform binary for linux/arm64 to the build directory.
+// Version must satisfy infra/live/root.hcl's `required_version` constraint (>= 1.7.0).
+// Bumped from 1.6.6 → 1.9.8 in Phase 84.4-08 UAT: km create on the rg fresh install failed
+// with `Unsupported Terraform Core version` because the toolchain shipped 1.6.6 but root.hcl
+// requires >= 1.7.0. The canonical km install escaped this only because its toolchain was
+// uploaded before the root.hcl bump.
 func downloadTerraform(buildDir string) error {
-	tfVersion := "1.6.6"
+	tfVersion := "1.9.8"
 	url := fmt.Sprintf("https://releases.hashicorp.com/terraform/%s/terraform_%s_linux_arm64.zip", tfVersion, tfVersion)
 	zipPath := filepath.Join(buildDir, "terraform_download.zip")
 
