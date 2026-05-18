@@ -606,3 +606,25 @@ func TestRunBootstrapSharedSES_HonorsBootstrapTimeout(t *testing.T) {
 		t.Errorf("RunBootstrapSharedSES blocked for %s — expected to return within seconds of the 200ms BootstrapApplyTimeout", elapsed)
 	}
 }
+
+// TestRunBootstrap_WritesRegionHCL verifies Phase 84.4.1 BOOTSTRAP-REGION-HCL-PREREQ:
+// runBootstrap (the plain SCP+KMS+artifacts subflow) must call ensureRegionHCL so
+// that fresh clones don't hit `read_terragrunt_config "../region.hcl"` errors.
+//
+// Wave 0: scaffolding only. Wave 2 plan 84.4.1-04 adds the ensureRegionHCL call.
+func TestRunBootstrap_WritesRegionHCL(t *testing.T) {
+	t.Skip("Wave 2 plan 84.4.1-04: insert ensureRegionHCL call after ExportTerragruntEnvVars in runBootstrap")
+	// Wave 2 body:
+	// (a) Construct cfg with PrimaryRegion="us-east-1", ResourcePrefix="test".
+	// (b) Use a tempdir as repo-root override; ensure infra/live/use1/ exists but no region.hcl.
+	// (c) Invoke runBootstrap (or extracted helper).
+	// (d) Assert infra/live/use1/region.hcl exists and is non-empty.
+}
+
+// TestRunBootstrapSharedSES_WritesRegionHCL verifies the same prereq for the --shared-ses path.
+//
+// Wave 0: scaffolding only. Wave 2 plan 84.4.1-04 adds the ensureRegionHCL call.
+func TestRunBootstrapSharedSES_WritesRegionHCL(t *testing.T) {
+	t.Skip("Wave 2 plan 84.4.1-04: insert ensureRegionHCL call after ExportTerragruntEnvVars in runBootstrapSharedSES")
+	// Wave 2 body: same shape as TestRunBootstrap_WritesRegionHCL but calling runBootstrapSharedSES.
+}

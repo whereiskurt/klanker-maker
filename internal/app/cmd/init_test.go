@@ -789,6 +789,20 @@ func TestRunInitWithRunner_TimeoutErrorIncludesModuleName(t *testing.T) {
 	}
 }
 
+// TestDownloadTerraform_CacheInvalidation verifies Phase 84.4.1
+// TERRAFORM-VERSION-CACHE-INVALIDATION: a cached terraform binary from a
+// previous tfVersion must be re-downloaded when the desired version changes.
+//
+// Wave 0: scaffolding only. Wave 2 plan 84.4.1-04 adds sidecar version file logic.
+func TestDownloadTerraform_CacheInvalidation(t *testing.T) {
+	t.Skip("Wave 2 plan 84.4.1-04: add sidecar build/terraform.version + version-aware cache check")
+	// Wave 2 body (RESEARCH.md Pattern 7, lines 665-743):
+	// (a) Create tempdir with a fake "terraform" binary (any bytes) and sidecar "terraform.version" = "1.6.6".
+	// (b) Invoke needsDownload(buildDir) helper (Wave 2 extracts this from init.go:1594-1601).
+	// (c) Assert needsDownload returns true because cached version != tfDesiredVersion="1.9.8".
+	// (d) Conversely: when sidecar matches tfDesiredVersion, needsDownload returns false.
+}
+
 // TestRunInitWithRunner_FastApplyDoesNotTriggerTimeout verifies that the
 // timeout wrapper does not interfere with normal fast applies.
 func TestRunInitWithRunner_FastApplyDoesNotTriggerTimeout(t *testing.T) {
