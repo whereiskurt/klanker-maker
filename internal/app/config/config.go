@@ -450,9 +450,15 @@ func Load() (*Config, error) {
 
 // isPlaceholderBucket reports whether the given artifacts_bucket value is a
 // placeholder from km-config.example.yaml that an operator has not replaced.
-// Returns true for:
-//   - angle-bracket tokens (e.g. "<prefix>-artifacts-12345678")
-//   - the literal example sentinel "km-artifacts-12345"
+// Returns true only for angle-bracket tokens (e.g. "<prefix>-artifacts-12345678") —
+// those are unambiguously fake.
+//
+// Phase 84.4-08 UAT removed the prior `name == "km-artifacts-12345"` literal check:
+// that name is a real, legitimate bucket on this operator's legacy install
+// (predating Phase 84.3's `${prefix}-artifacts-${account_id}` derivation), so
+// rejecting it broke `cfg.Load()` and every km command that read the config.
+// Anyone with a literal placeholder-shaped name today is genuinely using that
+// bucket; treat empty string as "unconfigured", not placeholder.
 //
 // Returns false for empty string (empty means unconfigured, not placeholder).
 // Inline in config.go to avoid cross-package imports from config → cmd.
@@ -465,7 +471,7 @@ func isPlaceholderBucket(name string) bool {
 			return true
 		}
 	}
-	return name == "km-artifacts-12345"
+	return false
 }
 
 // GetResourcePrefix returns the configured resource prefix, falling back to

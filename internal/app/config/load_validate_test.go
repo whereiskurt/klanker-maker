@@ -27,13 +27,17 @@ import (
 // Note: writeKMConfigDrift and changeToDir are declared in config_load_drift_test.go
 // (same package config_test). They are reused here without redeclaration.
 
-// TestConfigLoad_RejectsPlaceholderArtifactsBucket verifies that config.Load()
-// returns a non-nil error when km-config.yaml contains the exact placeholder
-// sentinel "km-artifacts-12345".
+// TestConfigLoad_AcceptsLegacyBucketLiteral verifies that config.Load() accepts
+// the literal bucket name "km-artifacts-12345" — it is NOT a placeholder.
 //
-// RED against current code: config.Load() returns nil error for any ArtifactsBucket
-// value (validateArtifactsBucket is not called from Load). Plan 09 wires it in.
-func TestConfigLoad_RejectsPlaceholderArtifactsBucket(t *testing.T) {
+// Phase 84.4-08 UAT reversed the prior assumption: real legacy operator installs
+// have legitimately-named buckets like km-artifacts-12345 (predating Phase 84.3's
+// `${prefix}-artifacts-${account_id}` auto-derivation). Rejecting them broke
+// cfg.Load() and every command on the install.
+//
+// Only angle-bracket tokens (e.g. "<prefix>-artifacts-12345678") are now
+// considered placeholders — see TestConfigLoad_RejectsAngleBracketPlaceholder.
+func TestConfigLoad_AcceptsLegacyBucketLiteral(t *testing.T) {
 	dir := t.TempDir()
 	writeKMConfigDrift(t, dir, `
 region: us-east-1
@@ -42,16 +46,10 @@ resource_prefix: km
 `)
 	changeToDir(t, dir)
 
-	cfg, err := config.Load()
-	if err == nil {
-		t.Errorf("config.Load() returned nil error for placeholder bucket km-artifacts-12345; want non-nil error (RED: Plan 09 will fix)")
-		t.Logf("cfg.ArtifactsBucket = %q", cfg.ArtifactsBucket)
-	} else {
-		// Already GREEN (unexpected — only after Plan 09 lands): verify error message quality.
-		msg := err.Error()
-		if !strings.Contains(msg, "placeholder") && !strings.Contains(msg, "km-artifacts-12345") {
-			t.Errorf("error %q should mention 'placeholder' or 'km-artifacts-12345'", msg)
-		}
+	_, err := config.Load()
+	if err != nil {
+		t.Errorf("config.Load() rejected legacy bucket km-artifacts-12345: %v", err)
+		t.Errorf("real legacy installs have this exact name — Load() must accept it")
 	}
 }
 
