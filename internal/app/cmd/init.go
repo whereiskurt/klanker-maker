@@ -55,6 +55,16 @@ type InitRunner interface {
 	ShowPlanJSON(ctx context.Context, dir, planFile string) ([]byte, error)
 }
 
+// tfDesiredVersion is the canonical terraform binary version bundled with the
+// TTL handler and toolchain by `km init --lambdas` / `km init --sidecars`.
+//
+// Phase 84.4.1: promoted from a local var in downloadTerraform to a package-level
+// constant so that terraformIsCurrent() can compare against it without calling
+// the downloaded binary (cross-arch exec problem on macOS → linux/arm64 binary).
+//
+// Closes TERRAFORM-VERSION-CACHE-INVALIDATION.
+const tfDesiredVersion = "1.9.8"
+
 // Compile-time assertion: *terragrunt.Runner must satisfy InitRunner.
 // If Plan 03 methods are missing this fails at build, not at runtime.
 var _ InitRunner = (*terragrunt.Runner)(nil)
@@ -1590,10 +1600,12 @@ func buildLambdaZips(repoRoot string) error {
 		{name: "km-slack-bridge", srcDir: "cmd/km-slack-bridge"},
 	}
 
-	// Ensure terraform binary is available for bundling with ttl-handler
+	// Ensure terraform binary is current (version-aware cache via sidecar file).
+	// Phase 84.4.1: replaced the os.IsNotExist-only check with terraformIsCurrent
+	// so a stale 1.6.6 binary is re-downloaded when tfDesiredVersion bumps.
 	terraformPath := filepath.Join(buildDir, "terraform")
-	if _, err := os.Stat(terraformPath); os.IsNotExist(err) {
-		fmt.Printf("  Downloading terraform for linux/arm64...\n")
+	if !terraformIsCurrent(buildDir) {
+		fmt.Printf("  Downloading terraform %s for linux/arm64...\n", tfDesiredVersion)
 		if dlErr := downloadTerraform(buildDir); dlErr != nil {
 			fmt.Printf("  [warn] terraform download failed: %v\n", dlErr)
 			fmt.Printf("  TTL handler will use SDK-only teardown (less complete).\n")
@@ -1679,6 +1691,29 @@ func buildLambdaZips(repoRoot string) error {
 	return nil
 }
 
+// terraformIsCurrent returns true if the cached terraform binary at
+// buildDir/terraform was downloaded for tfDesiredVersion, as recorded by the
+// sidecar file buildDir/terraform.version.
+//
+// Phase 84.4.1: replaces the os.IsNotExist-only cache check at init.go:1594-1601.
+// A pre-bump 1.6.6 binary was reused indefinitely because the old check only
+// tested binary existence, not version match. This function reads the sidecar
+// text file to compare. Cross-arch exec (linux/arm64 binary on macOS) is avoided.
+//
+// Closes TERRAFORM-VERSION-CACHE-INVALIDATION.
+func terraformIsCurrent(buildDir string) bool {
+	terraformPath := filepath.Join(buildDir, "terraform")
+	if _, err := os.Stat(terraformPath); os.IsNotExist(err) {
+		return false
+	}
+	versionFile := filepath.Join(buildDir, "terraform.version")
+	cached, err := os.ReadFile(versionFile)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(cached)) == tfDesiredVersion
+}
+
 // downloadTerraform downloads the terraform binary for linux/arm64 to the build directory.
 // Version must satisfy infra/live/root.hcl's `required_version` constraint (>= 1.7.0).
 // Bumped from 1.6.6 → 1.9.8 in Phase 84.4-08 UAT: km create on the rg fresh install failed
@@ -1686,8 +1721,7 @@ func buildLambdaZips(repoRoot string) error {
 // requires >= 1.7.0. The canonical km install escaped this only because its toolchain was
 // uploaded before the root.hcl bump.
 func downloadTerraform(buildDir string) error {
-	tfVersion := "1.9.8"
-	url := fmt.Sprintf("https://releases.hashicorp.com/terraform/%s/terraform_%s_linux_arm64.zip", tfVersion, tfVersion)
+	url := fmt.Sprintf("https://releases.hashicorp.com/terraform/%s/terraform_%s_linux_arm64.zip", tfDesiredVersion, tfDesiredVersion)
 	zipPath := filepath.Join(buildDir, "terraform_download.zip")
 
 	// Download
@@ -1706,6 +1740,14 @@ func downloadTerraform(buildDir string) error {
 
 	// Make executable
 	os.Chmod(filepath.Join(buildDir, "terraform"), 0o755)
+
+	// Phase 84.4.1: write sidecar version file so terraformIsCurrent() can
+	// detect cached-binary staleness without exec'ing the cross-arch binary.
+	// Closes TERRAFORM-VERSION-CACHE-INVALIDATION.
+	versionFile := filepath.Join(buildDir, "terraform.version")
+	if err := os.WriteFile(versionFile, []byte(tfDesiredVersion+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write terraform.version sidecar: %w", err)
+	}
 	return nil
 }
 
@@ -2013,10 +2055,12 @@ func uploadCreateHandlerToolchain(repoRoot, bucket string) error {
 	s3Upload(kmPath, bucket, "toolchain/km")
 	fmt.Printf("  Uploaded toolchain/km\n")
 
-	// 2. Ensure terraform binary exists (already downloaded by buildLambdaZips)
+	// 2. Ensure terraform binary is current (version-aware cache via sidecar file).
+	// Phase 84.4.1: replaced the os.IsNotExist-only check with terraformIsCurrent
+	// so a stale 1.6.6 binary is re-downloaded when tfDesiredVersion bumps.
 	terraformPath := filepath.Join(buildDir, "terraform")
-	if _, err := os.Stat(terraformPath); os.IsNotExist(err) {
-		fmt.Printf("  Downloading terraform for linux/arm64...\n")
+	if !terraformIsCurrent(buildDir) {
+		fmt.Printf("  Downloading terraform %s for linux/arm64...\n", tfDesiredVersion)
 		if dlErr := downloadTerraform(buildDir); dlErr != nil {
 			return fmt.Errorf("download terraform: %w", dlErr)
 		}
