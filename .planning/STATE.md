@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.4.1-03-PLAN.md — SES auto-import gate fix
-last_updated: "2026-05-18T21:37:27.187Z"
+stopped_at: Completed 84.4.1-01-PLAN.md
+last_updated: "2026-05-18T21:38:21.724Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 99
   completed_phases: 86
   total_plans: 407
-  completed_plans: 352
+  completed_plans: 353
   percent: 88
 ---
 
@@ -388,6 +388,7 @@ Progress: [█████████░] 88%
 | Phase 84.4-multi-install-module-hardening P05 | 3 | 1 tasks | 3 files |
 | Phase 84.4-multi-install-module-hardening P07 | 525755min | 3 tasks | 4 files |
 | Phase 84.4.1-multi-install-identity-permission-gap-closure P03 | 171s | 1 tasks | 2 files |
+| Phase 84.4.1-multi-install-identity-permission-gap-closure P01 | 232 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1121,6 +1122,8 @@ Recent decisions affecting current work:
 - [Phase 84.4-multi-install-module-hardening]: ssm-session-doc elevated to TIER-1: terragrunt import workaround for hardcoded-name modules is unsafe at teardown — destroys shared AWS resource; must not be used as substitute for v2.0.0 migration
 - [Phase 84.4.1-03]: Gate condition changed from !registerID to client-pair availability; registerID flag reflects state ownership not AWS existence
 - [Phase 84.4.1-03]: Extract wrapAutoImportError helper so recovery-message format string is unit-tested
+- [Phase 84.4.1-01]: SCP v2.0.0 updated in-place (no version bump): *-* wildcard patterns replace prefix-bound ARNs in trusted_arns slots; account wildcarded too. Security: operator-only IAM:CreateRole guards against misuse.
+- [Phase 84.4.1-01]: BuildSCPPolicyFromPrefix signature unchanged (3 params): resourcePrefix+applicationAccountID blanked with _ = for compat; callers require zero edits. Live apply deferred to Wave 3 plan 84.4.1-05.
 
 ### Roadmap Evolution
 
@@ -1230,6 +1233,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-18T21:37:27.179Z
-Stopped at: Completed 84.4.1-03-PLAN.md — SES auto-import gate fix
+Last session: 2026-05-18T21:38:21.716Z
+Stopped at: Completed 84.4.1-01-PLAN.md
 Resume file: None
