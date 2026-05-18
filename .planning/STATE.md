@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.4.1-02-PLAN.md
-last_updated: "2026-05-18T21:49:41.074Z"
+stopped_at: Completed 84.4.1-04-PLAN.md
+last_updated: "2026-05-18T22:17:41.512Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 99
   completed_phases: 86
   total_plans: 407
-  completed_plans: 355
+  completed_plans: 356
   percent: 88
 ---
 
@@ -391,6 +391,7 @@ Progress: [█████████░] 88%
 | Phase 84.4.1-multi-install-identity-permission-gap-closure P01 | 232 | 2 tasks | 4 files |
 | Phase 84.4.1-multi-install-identity-permission-gap-closure P00 | -215 | 3 tasks | 7 files |
 | Phase 84.4.1-multi-install-identity-permission-gap-closure P02 | 840 | 2 tasks | 11 files |
+| Phase 84.4.1-multi-install-identity-permission-gap-closure P04 | 851s | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -1130,6 +1131,9 @@ Recent decisions affecting current work:
 - [Phase 84.4.1-multi-install-identity-permission-gap-closure]: Interface-first contract: UnbootstrapDynamoDBAPI declared in unbootstrap.go with DynamoDB field in UnbootstrapDeps before any implementation (Wave 2 wires callsites)
 - [Phase 84.4.1-02]: AWS SSM does not support document rename; moved {} block is documentation only; apply is destroy+create with 1-2s window
 - [Phase 84.4.1-02]: execSSMSession receives cfg *config.Config rather than pre-computed docName, keeping function self-contained
+- [Phase 84.4.1-04]: terraform.version sidecar chosen over exec of cross-arch arm64 binary for version-aware cache invalidation
+- [Phase 84.4.1-04]: Internal package cmd test files created for unexported helper unit tests alongside external cmd_test scaffold stubs
+- [Phase 84.4.1-04]: configure HeadBucket probe gated on in!=nil rather than nonInteractive flag for defensive stdin handling
 
 ### Roadmap Evolution
 
@@ -1239,6 +1243,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-18T21:49:41.064Z
-Stopped at: Completed 84.4.1-02-PLAN.md
+Last session: 2026-05-18T22:17:41.503Z
+Stopped at: Completed 84.4.1-04-PLAN.md
 Resume file: None
