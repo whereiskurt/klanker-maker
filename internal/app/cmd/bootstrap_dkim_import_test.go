@@ -94,10 +94,14 @@ func (f *fakeStateOwner) StateOwns(_ context.Context, addr string) (bool, error)
 }
 
 // fakeImporter implements resourceImporter for unit tests.
-// Records calls to Import; returns importErr when non-nil.
+// Records calls to Import.
+// failOnCall: 0 = never fail; N = fail on the Nth call (1-indexed).
+// importErr: error to return on the failing call.
 type fakeImporter struct {
-	calls     []importCall
-	importErr error
+	calls      []importCall
+	importErr  error
+	failOnCall int // 0 = never; N = fail on call N (1-indexed)
+	failErr    error
 }
 
 type importCall struct {
@@ -107,6 +111,9 @@ type importCall struct {
 
 func (f *fakeImporter) Import(_ context.Context, _ string, address, id string) error {
 	f.calls = append(f.calls, importCall{addr: address, id: id})
+	if f.failOnCall > 0 && len(f.calls) == f.failOnCall {
+		return f.failErr
+	}
 	return f.importErr
 }
 
@@ -316,4 +323,71 @@ func TestRunBootstrapSharedSESAutoImport(t *testing.T) {
 			t.Errorf("expected 0 imports when DKIM tokens empty, got %d", len(imp.calls))
 		}
 	})
+}
+
+// TestRunBootstrapSharedSES_AutoImportFiresWhenStateOwnsIdentity verifies that
+// autoImportFoundationSESRecords still imports un-imported records even when
+// the foundation tfstate claims ownership of the domain identity
+// (registerID = true in Phase 84.1 import-and-manage semantic).
+//
+// Phase 84.4.1 gap: the old gate at bootstrap.go:595 was `!registerID && ...`
+// which prevented this path from running when registerID=true. This test
+// exercises the function body directly, proving it is idempotent and correct
+// regardless of the gate condition — the gate fix (dropping !registerID) is
+// verified by inspection + the compile-level gate change.
+func TestRunBootstrapSharedSES_AutoImportFiresWhenStateOwnsIdentity(t *testing.T) {
+	// Configure fakeStateOwner to claim foundation owns the identity (registerID=true
+	// scenario) but NOT yet the DKIM Route53 records. This mirrors the shared-domain
+	// second-install case that caused the Phase 84.4 UAT failure.
+	state := &fakeStateOwner{
+		owned: map[string]bool{
+			"aws_ses_domain_identity.sandbox[0]": true, // state owns identity
+			"aws_ses_receipt_rule_set.shared[0]": true, // state owns rule set
+			"aws_route53_record.dkim[0]":         false, // but DKIM not yet imported
+			"aws_route53_record.dkim[1]":         false,
+			"aws_route53_record.dkim[2]":         false,
+		},
+	}
+	dkim := &fakeSesDkimGetter{tokens: []string{"tok0", "tok1", "tok2"}}
+	r53 := &fakeRoute53RecordLister{hasMX: true, hasTXT: true, domain: "sandboxes.example.com"}
+	importer := &fakeImporter{}
+
+	err := autoImportFoundationSESRecords(
+		context.Background(), importer, "/fake/ses-dir", state, dkim, r53,
+		"sandboxes.example.com", "Z1ABC",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Expected: 3 DKIM + 1 MX + 1 TXT = 5 imports recorded.
+	if len(importer.calls) != 5 {
+		t.Errorf("expected 5 imports (3 DKIM + MX + TXT), got %d: %v", len(importer.calls), importer.calls)
+	}
+}
+
+// TestRunBootstrapSharedSES_FailFastRecoveryMessage verifies that wrapAutoImportError
+// produces an operator-actionable error message containing a `terragrunt import`
+// recovery command, the ses dir path, and the email domain.
+//
+// This is a direct test of the helper — if wrapAutoImportError's format string
+// changes and drops any of these elements, the test fails immediately.
+func TestRunBootstrapSharedSES_FailFastRecoveryMessage(t *testing.T) {
+	const sesDirPath = "/fake/ses-dir"
+	const domain = "sandboxes.example.com"
+
+	wrapped := wrapAutoImportError(errors.New("simulated terragrunt failure"), sesDirPath, domain)
+
+	if !strings.Contains(wrapped.Error(), "terragrunt import") {
+		t.Errorf("missing 'terragrunt import' recovery command in error: %v", wrapped)
+	}
+	if !strings.Contains(wrapped.Error(), sesDirPath) {
+		t.Errorf("missing foundation ses dir path %q in error: %v", sesDirPath, wrapped)
+	}
+	if !strings.Contains(wrapped.Error(), domain) {
+		t.Errorf("missing email domain %q in error: %v", domain, wrapped)
+	}
+	if !strings.Contains(wrapped.Error(), "simulated terragrunt failure") {
+		t.Errorf("inner error not wrapped; missing 'simulated terragrunt failure' in: %v", wrapped)
+	}
 }

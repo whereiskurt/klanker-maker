@@ -116,7 +116,7 @@ type FoundationStateReader interface {
 }
 
 // =============================================================================
-// Phase 84.4: DKIM/MX/TXT auto-import interfaces + helper
+// Phase 84.4: DKIM/MX/TXT auto-import interfaces + helpers
 // =============================================================================
 //
 // These interfaces make autoImportFoundationSESRecords mockable in unit tests.
@@ -141,16 +141,28 @@ type resourceImporter interface {
 	Import(ctx context.Context, dir, address, id string) error
 }
 
+// wrapAutoImportError enriches an auto-import failure with a copy-paste
+// recovery command so operators can unblock themselves without reading docs.
+//
+// Phase 84.4.1: extracted helper so production code and tests both call the
+// same format string — a change to the recovery message format is tested.
+func wrapAutoImportError(inner error, sesDir, emailDomain string) error {
+	return fmt.Errorf(
+		"auto-import SES Route53 records: %w\n\nRecovery: manually import the failed record then re-run `km bootstrap --shared-ses --dry-run=false`. Example:\n  cd %s\n  terragrunt import 'aws_route53_record.dkim[0]' '<zone-id>_<token>._domainkey.%s_CNAME'",
+		inner, sesDir, emailDomain,
+	)
+}
+
 // autoImportFoundationSESRecords imports any pre-existing Route53 DKIM/MX/TXT
 // records that exist in AWS but are missing from foundation tfstate.
 // Idempotent: skips records already owned by state.
 // Returns nil if there is nothing to import (state is clean OR records don't
 // exist in AWS yet).
 //
-// Called from runBootstrapSharedSES gated on !registerDomainIdentity (i.e. only
-// when the domain identity already exists in AWS from a prior install — if the
-// domain doesn't exist, apply creates everything fresh and there is nothing to
-// import).
+// Called from runBootstrapSharedSES whenever a real Route53/SES client pair is
+// available (Phase 84.4.1 gate — state-independent). autoImportFoundationSESRecords
+// is idempotent: it checks stateReader.StateOwns before each import and skips
+// records already managed by this install's foundation tfstate.
 //
 // RESEARCH.md Pattern 5 (Phase 84.4): import must happen BEFORE apply.
 // Import ID formats:
@@ -582,25 +594,27 @@ func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool,
 		return nil
 	}
 
-	// Phase 84.4: when the domain identity already exists in AWS (second install
-	// in a shared-domain account), auto-import DKIM/MX/TXT records that exist in
-	// Route53 but are not yet in this install's foundation tfstate. This prevents
-	// "resource already exists" errors during apply.
+	// Phase 84.4.1: independent auto-import gate. The previous !registerID gate
+	// (Phase 84.4) was incorrect because detectSharedSESState's registerID flag
+	// reflects state ownership ("foundation manages this"), NOT AWS existence
+	// ("Route53 records already exist"). The two concerns are independent:
+	// state ownership stays TRUE under the Phase 84.1 import-and-manage semantic,
+	// but Route53 records that pre-exist (from a sibling install) STILL need
+	// importing into this install's tfstate before apply.
 	//
-	// Gate conditions:
-	//   !registerID — detectSharedSESState found domain identity in AWS already
-	//   sesv1Client != nil — real production path (not listerOverride test path)
-	//   r53ImportClient != nil — Route53 client was constructed (production path)
-	//   stateReader != nil — s3FoundationStateReader was constructed (production path)
-	if !registerID && sesv1Client != nil && r53ImportClient != nil && stateReader != nil {
+	// New gate: any time we have a real Route53/SES client pair, probe Route53
+	// for the DKIM/MX/TXT records. autoImportFoundationSESRecords is already
+	// idempotent (skips records already owned by state — see bootstrap.go:194,
+	// 231-238, 244-256), so unconditional invocation is safe.
+	if sesv1Client != nil && r53ImportClient != nil && stateReader != nil {
 		hostedZoneID := loadedCfg.Route53ZoneID
 		if hostedZoneID == "" {
 			fmt.Fprintln(w, "WARN: route53_zone_id not set in km-config.yaml — skipping DKIM/MX/TXT auto-import")
 		} else {
 			runner := terragrunt.NewRunner("klanker-terraform", findRepoRoot())
-			fmt.Fprintln(w, "Auto-importing pre-existing DKIM/MX/TXT Route53 records...")
+			fmt.Fprintln(w, "Auto-importing pre-existing DKIM/MX/TXT Route53 records (idempotent — skips already-owned)...")
 			if err := autoImportFoundationSESRecords(ctx, runner, sesDir, stateReader, sesv1Client, r53ImportClient, emailDomain, hostedZoneID); err != nil {
-				return fmt.Errorf("auto-import SES Route53 records: %w", err)
+				return wrapAutoImportError(err, sesDir, emailDomain)
 			}
 		}
 	}
@@ -727,36 +741,45 @@ func BuildSCPPolicy(trustedBase, trustedInstance, trustedIAM, trustedSSM []strin
 }
 
 // BuildSCPPolicyFromPrefix is a convenience wrapper introduced in Phase 84.4.
-// It computes the trusted ARN sets from resourcePrefix and applicationAccountID,
-// then delegates to BuildSCPPolicy. The ARN set structure mirrors
-// infra/modules/scp/v2.0.0/main.tf locals (trusted_arns_*) with var.trusted_role_arns
-// at its default (SSO wildcard only). This keeps the JSON well within the 5,000-byte
-// threshold even for the maximum 12-char prefix (e.g. "whereiskurt").
+// It computes the trusted ARN sets then delegates to BuildSCPPolicy. The ARN
+// set structure mirrors infra/modules/scp/v2.0.0/main.tf locals (trusted_arns_*)
+// with var.trusted_role_arns at its default (SSO wildcard only).
+//
+// Phase 84.4.1: SCP cross-install composition — trusted slot construction uses
+// *-* suffix patterns (account + prefix both wildcarded) so multiple installs
+// sharing an application account do not deny each other's roles. The parameters
+// resourcePrefix and applicationAccountID are accepted for signature compatibility
+// but are no longer used in trusted slot construction (blanked with _ = to
+// satisfy the Go compiler). allowedRegion continues to be used for the region
+// lock condition.
 //
 // Returns the policy as a JSON string (indented) for display and size checks.
 // The 5,000-byte safety threshold (matching the HCL precondition) is NOT enforced
 // here — callers should check len(result) <= 5000 if needed.
-//
-// Backward compat: prefix "km" renders the same five canonical role-name patterns
-// (km-ecs-spot-handler, km-budget-enforcer-*, km-ec2spot-ssm-*,
-// km-github-token-refresher-*, km-ttl-handler) as the pre-84.4 hardcoded output.
 func BuildSCPPolicyFromPrefix(resourcePrefix, applicationAccountID, allowedRegion string) string {
+	// Phase 84.4.1: resourcePrefix and applicationAccountID are no longer used in
+	// trust slot construction. Accepted for backward-compatible signature.
+	_ = resourcePrefix
+	_ = applicationAccountID
+
 	// trustedBase mirrors trusted_arns_base = var.trusted_role_arns (default: SSO only).
-	// Keeping base minimal is critical for staying under the 5,000-byte limit with long prefixes.
 	trustedBase := []string{
 		"arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
 	}
-	// trustedInstance mirrors trusted_arns_instance: base + {prefix}-ecs-spot-handler.
+	// trustedInstance mirrors trusted_arns_instance: base + *-ecs-spot-handler.
+	// Phase 84.4.1: account + prefix wildcarded — trusts any install's spot handler.
 	trustedInstance := append(append([]string{}, trustedBase...),
-		fmt.Sprintf("arn:aws:iam::%s:role/%s-ecs-spot-handler", applicationAccountID, resourcePrefix))
-	// trustedIAM mirrors trusted_arns_iam: base + {prefix}-budget-enforcer-*.
+		"arn:aws:iam::*:role/*-ecs-spot-handler")
+	// trustedIAM mirrors trusted_arns_iam: base + *-budget-enforcer-*.
+	// Phase 84.4.1: account + prefix wildcarded.
 	trustedIAM := append(append([]string{}, trustedBase...),
-		fmt.Sprintf("arn:aws:iam::%s:role/%s-budget-enforcer-*", applicationAccountID, resourcePrefix))
+		"arn:aws:iam::*:role/*-budget-enforcer-*")
 	// trustedSSM mirrors trusted_arns_ssm: narrower set — only SSM-specific roles + SSO.
+	// Phase 84.4.1: account + prefix wildcarded across all SSM carve-out roles.
 	trustedSSM := []string{
-		fmt.Sprintf("arn:aws:iam::%s:role/%s-ec2spot-ssm-*", applicationAccountID, resourcePrefix),
-		fmt.Sprintf("arn:aws:iam::%s:role/%s-github-token-refresher-*", applicationAccountID, resourcePrefix),
-		fmt.Sprintf("arn:aws:iam::%s:role/%s-ttl-handler", applicationAccountID, resourcePrefix),
+		"arn:aws:iam::*:role/*-ec2spot-ssm-*",
+		"arn:aws:iam::*:role/*-github-token-refresher-*",
+		"arn:aws:iam::*:role/*-ttl-handler",
 		"arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
 	}
 
