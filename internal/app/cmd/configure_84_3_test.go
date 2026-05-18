@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -424,4 +425,74 @@ func TestConfigure_ShellEnvDriftWarn(t *testing.T) {
 			t.Errorf("expected no KM_REGION WARN when env matches yaml; got: %s", stderr)
 		}
 	})
+}
+
+// TestConfigurePath_PlaceholderBucketDoesNotBlockWizard verifies that the
+// km configure wizard can run successfully even when the EXISTING km-config.yaml
+// contains a placeholder artifacts_bucket value (km-artifacts-12345).
+//
+// WHY THIS MUST PASS: runConfigure reads existing yaml via os.ReadFile +
+// yaml.Unmarshal (NOT config.Load()). Therefore the new config.Load() placeholder
+// validation added in Plan 09 does NOT block the wizard from running. The wizard
+// is the CURE for a placeholder bucket, so it must never be blocked by the same
+// placeholder it exists to fix.
+//
+// The test writes a placeholder-bucket km-config.yaml, runs the wizard in
+// non-interactive mode with --artifacts-bucket corrected to a real value, and
+// asserts the wizard completes without error and writes the corrected bucket.
+func TestConfigurePath_PlaceholderBucketDoesNotBlockWizard(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write an existing km-config.yaml with a placeholder artifacts_bucket.
+	existingYAML := `resource_prefix: km
+email_subdomain: sandboxes
+domain: example.com
+accounts:
+  terraform: "123456789012"
+  application: "123456789012"
+region: us-east-1
+artifacts_bucket: km-artifacts-12345
+`
+	if err := os.WriteFile(filepath.Join(dir, "km-config.yaml"), []byte(existingYAML), 0600); err != nil {
+		t.Fatalf("write existing km-config.yaml: %v", err)
+	}
+
+	var out bytes.Buffer
+	// Run the wizard in non-interactive mode. The --artifacts-bucket flag provides
+	// the corrected value; the wizard overwrites the placeholder in the existing file.
+	err := runConfigure(
+		strings.NewReader(""), // stdin (non-interactive, unused)
+		&out,
+		dir,                     // outputDir
+		true,                    // nonInteractive
+		false,                   // resetPrefix
+		"km",                    // resourcePrefix
+		"sandboxes",             // emailSubdomain
+		"example.com",           // domain
+		"",                      // organizationAcct
+		"",                      // dnsParentAcct
+		"123456789012",          // terraformAcct
+		"123456789012",          // applicationAcct
+		"https://sso.example.com", // ssoStartURL
+		"us-east-1",             // ssoRegion
+		"us-east-1",             // region
+		"",                      // stateBucket
+		"km-artifacts-123456789012", // artifactsBucket (corrected value)
+		"",                      // operatorEmail
+		"",                      // safePhrase
+		0,                       // maxSandboxes
+	)
+	if err != nil {
+		t.Errorf("runConfigure returned error even though existing km-config.yaml had a placeholder bucket; wizard should be immune to config.Load() validation: %v", err)
+	}
+
+	// Verify the output km-config.yaml now contains the corrected bucket value.
+	raw, readErr := os.ReadFile(filepath.Join(dir, "km-config.yaml"))
+	if readErr != nil {
+		t.Fatalf("read output km-config.yaml: %v", readErr)
+	}
+	content := string(raw)
+	if !strings.Contains(content, "km-artifacts-123456789012") {
+		t.Errorf("output km-config.yaml does not contain corrected bucket 'km-artifacts-123456789012';\ngot:\n%s", content)
+	}
 }

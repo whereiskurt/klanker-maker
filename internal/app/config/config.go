@@ -435,7 +435,37 @@ func Load() (*Config, error) {
 		cfg.DoctorStaleAMIDays = 30
 	}
 
+	// Phase 84.3 gap 3: reject placeholder artifacts_bucket values that operators
+	// may have left from km-config.example.yaml without running km configure.
+	// Empty bucket is allowed (fresh install; km configure derives the correct value).
+	if isPlaceholderBucket(cfg.ArtifactsBucket) {
+		return nil, fmt.Errorf(
+			"artifacts_bucket=%q is a placeholder; re-run `km configure` to derive ${prefix}-artifacts-${account_id} automatically",
+			cfg.ArtifactsBucket,
+		)
+	}
+
 	return cfg, nil
+}
+
+// isPlaceholderBucket reports whether the given artifacts_bucket value is a
+// placeholder from km-config.example.yaml that an operator has not replaced.
+// Returns true for:
+//   - angle-bracket tokens (e.g. "<prefix>-artifacts-12345678")
+//   - the literal example sentinel "km-artifacts-12345"
+//
+// Returns false for empty string (empty means unconfigured, not placeholder).
+// Inline in config.go to avoid cross-package imports from config → cmd.
+func isPlaceholderBucket(name string) bool {
+	if name == "" {
+		return false
+	}
+	if lt := strings.Index(name, "<"); lt >= 0 {
+		if strings.Index(name[lt:], ">") >= 0 {
+			return true
+		}
+	}
+	return name == "km-artifacts-12345"
 }
 
 // GetResourcePrefix returns the configured resource prefix, falling back to
