@@ -499,6 +499,17 @@ func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool,
 	// Ensure all config env vars are exported so Terragrunt site.hcl picks them up.
 	ExportTerragruntEnvVars(loadedCfg)
 
+	// Phase 84.4.1: ensure region.hcl exists before any terragrunt invocation —
+	// fresh clones hit `read_terragrunt_config "../region.hcl"` failures without this.
+	// Closes BOOTSTRAP-REGION-HCL-PREREQ.
+	if sesRegion := loadedCfg.PrimaryRegion; sesRegion != "" {
+		sesRegionLabel := compiler.RegionLabel(sesRegion)
+		sesRegionDir := filepath.Join(findRepoRoot(), "infra", "live", sesRegionLabel)
+		if err := ensureRegionHCL(sesRegionDir, sesRegionLabel, sesRegion); err != nil {
+			return fmt.Errorf("ensure region.hcl: %w", err)
+		}
+	}
+
 	// Build the full email domain: {email_subdomain}.{domain}
 	emailSubdomain := loadedCfg.EmailSubdomain
 	if emailSubdomain == "" {
@@ -1544,6 +1555,18 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 	}
 
 	ExportTerragruntEnvVars(loadedCfg)
+
+	// Phase 84.4.1: ensure region.hcl exists before any terragrunt invocation —
+	// the gitignored file is only written by `km init`, so fresh clones hit
+	// `read_terragrunt_config` failures without this prereq.
+	// Closes BOOTSTRAP-REGION-HCL-PREREQ.
+	if region := loadedCfg.PrimaryRegion; region != "" {
+		regionLabel := compiler.RegionLabel(region)
+		regionDir := filepath.Join(findRepoRoot(), "infra", "live", regionLabel)
+		if err := ensureRegionHCL(regionDir, regionLabel, region); err != nil {
+			return fmt.Errorf("ensure region.hcl: %w", err)
+		}
+	}
 
 	warnEmptyAccountIDs(loadedCfg, os.Stderr)
 
