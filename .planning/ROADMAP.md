@@ -1930,7 +1930,7 @@ Phase closes when: (a) `infra/modules/ssm-session-doc/v2.0.0/` exists with `${va
 
 **Operator-visible probe state during planning:** As of 2026-05-18, the canonical `km` install is healthy after a manual `terragrunt apply` recovery of `ssm-session-doc` (re-created the `KM-Sandbox-Session` document destroyed during rg teardown). The `rg` probe install was cleanly torn down via `km uninit` + `km unbootstrap` (recovery sequence documented in 84.4-08 SUMMARY). Phase 84.4.1's UAT will require a fresh second probe install (suggested prefix: `tg`).
 
-**Plans:** 2/7 plans executed
+**Plans:** 3/7 plans executed
 
 Plans:
 - [ ] 84.4.1-00-PLAN.md — Wave 0: Test scaffolding (GetSandboxSessionDocumentName, UnbootstrapDynamoDBAPI interface, 8 scaffolded tests)
