@@ -30,11 +30,11 @@ remote_state {
 }
 
 terraform {
-  source = "${local.repo_root}/infra/modules/ssm-session-doc/v1.0.0"
+  source = "${local.repo_root}/infra/modules/ssm-session-doc/v2.0.0"
 }
 
 inputs = {
-  document_name = "KM-Sandbox-Session"
+  resource_prefix = get_env("KM_RESOURCE_PREFIX", "km")
   tags = {
     "km:component" = "ssm-session"
     "km:managed"   = "true"

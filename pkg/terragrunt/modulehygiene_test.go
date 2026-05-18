@@ -202,6 +202,59 @@ variable "resource_prefix" {
 	}
 }
 
+// TestModuleV1HardcodedLiteralsWarn walks every infra/modules/*/v1.0.0/ directory
+// and logs a WARNING for each resource attribute that contains a hardcoded "km-"
+// (or "KM-") literal. This is WARN-level, not FAIL-level — v1.0.0 modules are
+// historical and not subject to the strict audit. The purpose is to:
+//  1. Prove that the case-insensitive checkAttrExpr extension (Phase 84.4.1)
+//     now catches the "KM-Sandbox-Session" literal in ssm-session-doc/v1.0.0/,
+//     which the original case-sensitive check missed.
+//  2. Give future engineers a discovery mechanism: any v1.0.0 module still in
+//     use will surface here, prompting migration to v2.0.0.
+func TestModuleV1HardcodedLiteralsWarn(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := findRepoRoot(t)
+	base := filepath.Join(repoRoot, "infra", "modules")
+	moduleEntries, err := os.ReadDir(base)
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v", base, err)
+	}
+
+	allowlistPath := filepath.Join(repoRoot, "pkg", "terragrunt", "testdata", "allowlist.txt")
+	allowlist := loadAllowlist(t, allowlistPath)
+
+	for _, m := range moduleEntries {
+		if !m.IsDir() {
+			continue
+		}
+		v1Dir := filepath.Join(base, m.Name(), "v1.0.0")
+		entries, err := os.ReadDir(v1Dir)
+		if err != nil {
+			// No v1.0.0 directory — skip silently.
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".tf") {
+				continue
+			}
+			tfPath := filepath.Join(v1Dir, e.Name())
+			// Use a mockT so WARN-level findings don't fail the test.
+			mt := &mockT{}
+			checkTFFile(mt, tfPath, allowlist)
+			if mt.errored {
+				for _, msg := range mt.messages {
+					t.Logf("WARN v1.0.0 hardcoded literal: %s", msg)
+				}
+			}
+		}
+	}
+	// This test is WARN-only and never fails — v1.0.0 modules are historical.
+	// Its purpose is discovery: engineers can run this test to find v1.0.0
+	// modules with hardcoded names that still need migration to v2.0.0+.
+	t.Log("TestModuleV1HardcodedLiteralsWarn complete (WARN-only — no failures expected)")
+}
+
 // --------------------------------------------------------------------------
 // Walk helpers
 // --------------------------------------------------------------------------
@@ -295,7 +348,11 @@ func checkAttrExpr(t tLogger, path, attrName string, expr hclsyntax.Expression, 
 	case *hclsyntax.LiteralValueExpr:
 		// Bare literal: name = "km-foo"
 		v := e.Val.AsString()
-		if strings.Contains(v, "km-") && !isAllowlisted(v, allowlist) {
+		// Phase 84.4.1: case-insensitive matching — catches KM-* (uppercase)
+		// like ssm-session-doc/v1.0.0/main.tf's KM-Sandbox-Session that the
+		// case-sensitive check missed during Phase 84.4 Plan 01 audit.
+		vLower := strings.ToLower(v)
+		if strings.Contains(vLower, "km-") && !isAllowlisted(v, allowlist) {
 			t.Errorf("%s:%d: resource attribute %q = %q has hardcoded \"km-\" literal — use ${var.resource_prefix} instead",
 				path, srcRange.Start.Line, attrName, v)
 		}
@@ -311,7 +368,9 @@ func checkAttrExpr(t tLogger, path, attrName string, expr hclsyntax.Expression, 
 		for _, part := range e.Parts {
 			if lit, ok := part.(*hclsyntax.LiteralValueExpr); ok {
 				v := lit.Val.AsString()
-				if strings.Contains(v, "km-") && !isAllowlisted(v, allowlist) {
+				// Phase 84.4.1: case-insensitive matching (catches KM-* uppercase).
+				vLower := strings.ToLower(v)
+				if strings.Contains(vLower, "km-") && !isAllowlisted(v, allowlist) {
 					t.Errorf("%s:%d: resource attribute %q template contains hardcoded \"km-\" literal %q — template must reference var.resource_prefix",
 						path, srcRange.Start.Line, attrName, v)
 				}
