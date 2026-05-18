@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.4.1-00-PLAN.md Wave 0 test scaffolding
-last_updated: "2026-05-18T21:44:58.534Z"
+stopped_at: Completed 84.4.1-02-PLAN.md
+last_updated: "2026-05-18T21:49:41.074Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 99
   completed_phases: 86
   total_plans: 407
-  completed_plans: 354
+  completed_plans: 355
   percent: 88
 ---
 
@@ -390,6 +390,7 @@ Progress: [█████████░] 88%
 | Phase 84.4.1-multi-install-identity-permission-gap-closure P03 | 171s | 1 tasks | 2 files |
 | Phase 84.4.1-multi-install-identity-permission-gap-closure P01 | 232 | 2 tasks | 4 files |
 | Phase 84.4.1-multi-install-identity-permission-gap-closure P00 | -215 | 3 tasks | 7 files |
+| Phase 84.4.1-multi-install-identity-permission-gap-closure P02 | 840 | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -1127,6 +1128,8 @@ Recent decisions affecting current work:
 - [Phase 84.4.1-01]: BuildSCPPolicyFromPrefix signature unchanged (3 params): resourcePrefix+applicationAccountID blanked with _ = for compat; callers require zero edits. Live apply deferred to Wave 3 plan 84.4.1-05.
 - [Phase 84.4.1-multi-install-identity-permission-gap-closure]: GetSandboxSessionDocumentName implemented fully in Wave 0 (delegates to nil-safe GetResourcePrefix) — 3 tests pass immediately without deferring to Wave 1
 - [Phase 84.4.1-multi-install-identity-permission-gap-closure]: Interface-first contract: UnbootstrapDynamoDBAPI declared in unbootstrap.go with DynamoDB field in UnbootstrapDeps before any implementation (Wave 2 wires callsites)
+- [Phase 84.4.1-02]: AWS SSM does not support document rename; moved {} block is documentation only; apply is destroy+create with 1-2s window
+- [Phase 84.4.1-02]: execSSMSession receives cfg *config.Config rather than pre-computed docName, keeping function self-contained
 
 ### Roadmap Evolution
 
@@ -1236,6 +1239,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-18T21:44:58.527Z
-Stopped at: Completed 84.4.1-00-PLAN.md Wave 0 test scaffolding
+Last session: 2026-05-18T21:49:41.064Z
+Stopped at: Completed 84.4.1-02-PLAN.md
 Resume file: None
