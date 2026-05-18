@@ -39,7 +39,7 @@ dependency "identities" {
     table_name = "km-identities"
     table_arn  = "arn:aws:dynamodb:us-east-1:000000000000:table/km-identities"
   }
-  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply"]
+  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply", "show"]
 }
 
 # km-sandboxes: provides slack_channel_id for channel ownership checks
@@ -49,7 +49,7 @@ dependency "sandboxes" {
     table_name = "km-sandboxes"
     table_arn  = "arn:aws:dynamodb:us-east-1:000000000000:table/km-sandboxes"
   }
-  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply"]
+  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply", "show"]
 }
 
 # km-slack-bridge-nonces: provides the replay-protection nonce table
@@ -59,7 +59,7 @@ dependency "nonces" {
     table_name = "km-slack-bridge-nonces"
     table_arn  = "arn:aws:dynamodb:us-east-1:000000000000:table/km-slack-bridge-nonces"
   }
-  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply"]
+  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply", "show"]
 }
 
 # km-slack-threads: provides the Slack thread-to-session mapping table (Phase 67/Pitfall 9)
@@ -69,7 +69,7 @@ dependency "slack_threads" {
     table_name = "km-slack-threads"
     table_arn  = "arn:aws:dynamodb:us-east-1:000000000000:table/km-slack-threads"
   }
-  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply"]
+  mock_outputs_allowed_terraform_commands = ["validate", "plan", "destroy", "init", "apply", "show"]
 }
 
 inputs = {
