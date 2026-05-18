@@ -181,6 +181,26 @@ Per-sandbox channels accept `file_share` uploads (images, PDFs, etc.):
 
 Inside Claude's prompt, attachment files are available at `/workspace/.km-slack/attachments/<thread_ts>/`. Reference them by absolute path.
 
+### Returning the resume command when asked
+
+When the operator asks over Slack for the session ID, the resume command, or how to continue this conversation from a shell, reply with a one-line snippet they can paste into `km shell <sandbox-id>`:
+
+```
+cd / && claude --resume <session-id>
+```
+
+The session ID lives in the `${KM_RESOURCE_PREFIX:-km}-slack-threads` DynamoDB table, keyed by `(channel_id, thread_ts)`. Both env vars are already exported into the running Claude:
+
+```bash
+aws dynamodb get-item \
+  --table-name "${KM_SLACK_THREADS_TABLE:-${KM_RESOURCE_PREFIX:-km}-slack-threads}" \
+  --key "{\"channel_id\":{\"S\":\"$KM_SLACK_CHANNEL_ID\"},\"thread_ts\":{\"S\":\"$KM_SLACK_THREAD_TS\"}}" \
+  --region "${AWS_REGION:-$AWS_DEFAULT_REGION}" \
+  --query 'Item.claude_session_id.S' --output text
+```
+
+On the very first turn of a thread the row isn't written yet (the poller stores `claude_session_id` only after `claude -p` exits). If the lookup returns empty, tell the user to ask again after this reply lands.
+
 ## Limits
 
 | Limit | Value | Notes |
