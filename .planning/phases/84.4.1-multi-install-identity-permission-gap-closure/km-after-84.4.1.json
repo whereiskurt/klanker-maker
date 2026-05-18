@@ -1,0 +1,112 @@
+{
+  "dynamodb": {
+    "tables": []
+  },
+  "efs": {
+    "filesystems": []
+  },
+  "iam": {
+    "roles": [
+      [
+        "km-budget-enforcer-learn-60ec3c82",
+        "arn:aws:iam::052251888500:role/km-budget-enforcer-learn-60ec3c82",
+        "2026-05-18T22:07:04+00:00"
+      ],
+      [
+        "km-budget-scheduler-learn-60ec3c82",
+        "arn:aws:iam::052251888500:role/km-budget-scheduler-learn-60ec3c82",
+        "2026-05-18T22:07:04+00:00"
+      ],
+      [
+        "km-create-handler",
+        "arn:aws:iam::052251888500:role/km-create-handler",
+        "2026-03-27T20:46:45+00:00"
+      ],
+      [
+        "km-ec2spot-ssm-learn-60ec3c82-use1",
+        "arn:aws:iam::052251888500:role/km-ec2spot-ssm-learn-60ec3c82-use1",
+        "2026-05-18T22:05:58+00:00"
+      ],
+      [
+        "km-email-handler",
+        "arn:aws:iam::052251888500:role/km-email-handler",
+        "2026-05-06T21:38:28+00:00"
+      ],
+      [
+        "km-github-token-refresher-learn-60ec3c82",
+        "arn:aws:iam::052251888500:role/km-github-token-refresher-learn-60ec3c82",
+        "2026-05-18T22:07:38+00:00"
+      ],
+      [
+        "km-github-token-scheduler-learn-60ec3c82",
+        "arn:aws:iam::052251888500:role/km-github-token-scheduler-learn-60ec3c82",
+        "2026-05-18T22:07:38+00:00"
+      ],
+      [
+        "km-s3-replication-km-artifacts-12345",
+        "arn:aws:iam::052251888500:role/km-s3-replication-km-artifacts-12345",
+        "2026-05-06T21:36:05+00:00"
+      ],
+      [
+        "km-slack-bridge-role",
+        "arn:aws:iam::052251888500:role/km-slack-bridge-role",
+        "2026-05-06T21:39:48+00:00"
+      ],
+      [
+        "km-ttl-handler",
+        "arn:aws:iam::052251888500:role/km-ttl-handler",
+        "2026-03-25T00:56:38+00:00"
+      ],
+      [
+        "km-ttl-scheduler",
+        "arn:aws:iam::052251888500:role/km-ttl-scheduler",
+        "2026-03-25T00:56:38+00:00"
+      ]
+    ]
+  },
+  "kms": {
+    "aliases": []
+  },
+  "lambda": {
+    "functions": []
+  },
+  "meta": {
+    "captured_at": "2026-05-18T23:04:20Z",
+    "prefix": "km"
+  },
+  "route53": {
+    "hosted_zones": [
+      [
+        "/hostedzone/Z07395732OFT84NYHBE8C",
+        "sandboxes.test.example.com.",
+        false,
+        2
+      ],
+      [
+        "/hostedzone/Z08522462XE7ANTIK5FTX",
+        "sandboxes.klankermaker.ai.",
+        false,
+        7
+      ]
+    ]
+  },
+  "s3": {
+    "buckets": [
+      [
+        "km-artifacts-12345",
+        "2026-03-24T02:08:15+00:00"
+      ],
+      [
+        "km-artifacts-12345-replica",
+        "2026-03-25T00:56:27+00:00"
+      ]
+    ]
+  },
+  "ses": {
+    "rule_sets": [],
+    "rules": []
+  },
+  "ssm": {
+    "documents": []
+  }
+}

@@ -1,0 +1,161 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyInfraAndStorage",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:RevokeSecurityGroup*",
+        "ec2:ModifySecurityGroupRules",
+        "ec2:ExportImage",
+        "ec2:DeleteSecurityGroup",
+        "ec2:CreateVpc",
+        "ec2:CreateTransitGateway*",
+        "ec2:CreateSubnet",
+        "ec2:CreateSnapshot",
+        "ec2:CreateSecurityGroup",
+        "ec2:CreateRouteTable",
+        "ec2:CreateRoute",
+        "ec2:CreateNatGateway",
+        "ec2:CreateImage",
+        "ec2:CopySnapshot",
+        "ec2:CopyImage",
+        "ec2:AuthorizeSecurityGroup*",
+        "ec2:*VpcPeeringConnection",
+        "ec2:*InternetGateway"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalARN": [
+            "arn:aws:iam::052251888500:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
+            "arn:aws:iam::*:role/*-provisioner-*",
+            "arn:aws:iam::*:role/*-lifecycle-*",
+            "arn:aws:iam::*:role/*-ecs-spot-handler",
+            "arn:aws:iam::*:role/*-ttl-handler",
+            "arn:aws:iam::*:role/*-create-handler"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DenyInstanceMutation",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:RunInstances",
+        "ec2:ModifyInstanceMetadataOptions",
+        "ec2:ModifyInstanceAttribute"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalARN": [
+            "arn:aws:iam::052251888500:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
+            "arn:aws:iam::*:role/*-provisioner-*",
+            "arn:aws:iam::*:role/*-lifecycle-*",
+            "arn:aws:iam::*:role/*-ecs-spot-handler",
+            "arn:aws:iam::*:role/*-ttl-handler",
+            "arn:aws:iam::*:role/*-create-handler",
+            "arn:aws:iam::*:role/*-ecs-spot-handler"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DenyIAMEscalation",
+      "Effect": "Deny",
+      "Action": [
+        "iam:PassRole",
+        "iam:DetachRolePolicy",
+        "iam:CreateRole",
+        "iam:AttachRolePolicy",
+        "iam:AssumeRole"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalARN": [
+            "arn:aws:iam::052251888500:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
+            "arn:aws:iam::*:role/*-provisioner-*",
+            "arn:aws:iam::*:role/*-lifecycle-*",
+            "arn:aws:iam::*:role/*-ecs-spot-handler",
+            "arn:aws:iam::*:role/*-ttl-handler",
+            "arn:aws:iam::*:role/*-create-handler",
+            "arn:aws:iam::*:role/*-budget-enforcer-*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DenySSMPivot",
+      "Effect": "Deny",
+      "Action": [
+        "ssm:StartSession",
+        "ssm:SendCommand"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalARN": [
+            "arn:aws:iam::*:role/*-ec2spot-ssm-*",
+            "arn:aws:iam::*:role/*-github-token-refresher-*",
+            "arn:aws:iam::*:role/*-ttl-handler",
+            "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "DenyOrgDiscovery",
+      "Effect": "Deny",
+      "Action": [
+        "organizations:List*",
+        "organizations:Describe*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyOutsideRegion",
+      "Effect": "Deny",
+      "NotAction": [
+        "waf:*",
+        "trustedadvisor:*",
+        "support:*",
+        "sts:*",
+        "shield:*",
+        "s3:PutAccountPublicAccessBlock",
+        "s3:ListAllMyBuckets",
+        "s3:GetAccountPublicAccessBlock",
+        "route53domains:*",
+        "route53:*",
+        "pricing:*",
+        "organizations:*",
+        "networkmanager:*",
+        "iam:*",
+        "health:*",
+        "globalaccelerator:*",
+        "cur:*",
+        "cloudfront:*",
+        "ce:*",
+        "budgets:*",
+        "bedrock:*"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "ArnNotLike": {
+          "aws:PrincipalArn": [
+            "arn:aws:iam::052251888500:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
+            "arn:aws:iam::*:role/*-provisioner-*",
+            "arn:aws:iam::*:role/*-lifecycle-*",
+            "arn:aws:iam::*:role/*-ecs-spot-handler",
+            "arn:aws:iam::*:role/*-ttl-handler",
+            "arn:aws:iam::*:role/*-create-handler"
+          ]
+        },
+        "StringNotEquals": {
+          "aws:RequestedRegion": "us-east-1"
+        }
+      }
+    }
+  ]
+}
