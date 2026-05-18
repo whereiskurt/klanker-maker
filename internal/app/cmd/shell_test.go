@@ -89,8 +89,8 @@ func TestShellCmd_EC2(t *testing.T) {
 	if !strings.Contains(fullCmd, "us-east-1") {
 		t.Errorf("expected region 'us-east-1' in command, got: %s", fullCmd)
 	}
-	if !strings.Contains(fullCmd, "KM-Sandbox-Session") {
-		t.Errorf("expected '--document-name KM-Sandbox-Session' in command, got: %s", fullCmd)
+	if !strings.Contains(fullCmd, "km-Sandbox-Session") {
+		t.Errorf("expected '--document-name km-Sandbox-Session' in command, got: %s", fullCmd)
 	}
 	if strings.Contains(fullCmd, "sudo -u sandbox") {
 		t.Errorf("expected NO 'sudo -u sandbox' wrapper in command (runAsDefaultUser handles it), got: %s", fullCmd)
@@ -129,14 +129,14 @@ func TestShellCmd_EC2_Root(t *testing.T) {
 	if strings.Contains(fullCmd, "--document-name") {
 		t.Errorf("root path should NOT pass --document-name (regression guard), got: %s", fullCmd)
 	}
-	if strings.Contains(fullCmd, "KM-Sandbox-Session") {
-		t.Errorf("root path should NOT reference KM-Sandbox-Session, got: %s", fullCmd)
+	if strings.Contains(fullCmd, "km-Sandbox-Session") {
+		t.Errorf("root path should NOT reference km-Sandbox-Session, got: %s", fullCmd)
 	}
 }
 
 // TestShellCmd_MissingSSMDoc verifies that when `aws ssm start-session` returns
-// an InvalidDocument error for KM-Sandbox-Session, the error wrapping logic
-// produces an actionable message instructing the operator to run `km init <region>`.
+// an InvalidDocument error for the sandbox session document, the error wrapping
+// logic produces an actionable message instructing the operator to run `km init <region>`.
 //
 // Note: km shell deliberately discards the exec error (to avoid a spurious cobra
 // error print after the session ends normally). This test validates the error
@@ -180,7 +180,7 @@ func TestShellCmd_MissingSSMDoc(t *testing.T) {
 	}
 	var capturedError error
 	failingExec := func(c *exec.Cmd) error {
-		return fmt.Errorf("aws ssm start-session: An error occurred (InvalidDocument) when calling the StartSession operation: Document with name KM-Sandbox-Session does not exist")
+		return fmt.Errorf("aws ssm start-session: An error occurred (InvalidDocument) when calling the StartSession operation: Document with name km-Sandbox-Session does not exist")
 	}
 	// newShellCmdWithFetcherAndErrCapture runs the shell cmd and captures the error
 	// from runShell (bypassing the cobra _ = discard) using the execFn injection.
@@ -203,10 +203,14 @@ func TestShellCmd_MissingSSMDoc(t *testing.T) {
 	if !cmd.IsSSMDocumentMissingErr(capturedError) {
 		t.Errorf("expected capturedError to be detected as missing-doc error, got: %v", capturedError)
 	}
-	// Simulate the exact wrapping that execSSMSession does:
-	wrappedMsg := fmt.Sprintf("KM-Sandbox-Session not provisioned in region %s; run `km init %s` to update regional infrastructure (was: %v)", "ca-central-1", "ca-central-1", capturedError)
-	if !strings.Contains(wrappedMsg, "KM-Sandbox-Session not provisioned") {
-		t.Errorf("wrapped message missing 'KM-Sandbox-Session not provisioned': %s", wrappedMsg)
+	// Simulate the exact wrapping that execSSMSession does (Phase 84.4.1: docName is dynamic):
+	docName := cfg2.GetSandboxSessionDocumentName()
+	wrappedMsg := fmt.Sprintf("%s not provisioned in region %s; run `km init %s` to update regional infrastructure (was: %v)", docName, "ca-central-1", "ca-central-1", capturedError)
+	if !strings.Contains(wrappedMsg, "not provisioned") {
+		t.Errorf("wrapped message missing 'not provisioned': %s", wrappedMsg)
+	}
+	if !strings.Contains(wrappedMsg, docName) {
+		t.Errorf("wrapped message missing doc name %q: %s", docName, wrappedMsg)
 	}
 	if !strings.Contains(wrappedMsg, "km init") {
 		t.Errorf("wrapped message missing 'km init': %s", wrappedMsg)

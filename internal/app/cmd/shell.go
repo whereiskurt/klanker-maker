@@ -389,7 +389,7 @@ func runShellWithSSM(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetc
 			// session will surface any real auth failure to the operator.
 		}
 
-		return execSSMSession(ctx, instanceID, rec.Region, asRoot, noBedrock, notifyPerm, notifyIdle, transcriptStream, execFn)
+		return execSSMSession(ctx, cfg, instanceID, rec.Region, asRoot, noBedrock, notifyPerm, notifyIdle, transcriptStream, execFn)
 	case "ecs":
 		clusterARN, err := findResourceARN(rec.Resources, ":cluster/")
 		if err != nil {
@@ -420,16 +420,16 @@ const ssmRetryThreshold = 10 * time.Second
 const ssmRetryDelay = 3 * time.Second
 
 // execSSMSession builds and runs an SSM session.
-// When root is false, it uses the KM-Sandbox-Session document (Standard_Stream
-// + runAsDefaultUser=sandbox), which lands as the restricted sandbox user with
-// a real PTY so Ctrl+C is forwarded as a byte to the remote shell.
-// When root is true, it starts a default SSM session (root via SSM agent).
+// When root is false, it uses the per-install sandbox session document
+// (Standard_Stream + runAsDefaultUser=sandbox), which lands as the restricted
+// sandbox user with a real PTY so Ctrl+C is forwarded as a byte to the remote
+// shell. When root is true, it starts a default SSM session (root via SSM agent).
 //
 // notifyPerm and notifyIdle are Phase 62 (HOOK-04) per-invocation notify gate
 // overrides. transcriptStream is the Plan 68-07 Slack transcript-streaming
 // override. nil = no SSM SendCommand for notify (profile.d defaults apply).
 // Non-nil = write /etc/profile.d/zz-km-notify.sh before session, remove after.
-func execSSMSession(ctx context.Context, instanceID, region string, root, noBedrock bool, notifyPerm, notifyIdle, transcriptStream *bool, execFn ShellExecFunc) error {
+func execSSMSession(ctx context.Context, cfg *config.Config, instanceID, region string, root, noBedrock bool, notifyPerm, notifyIdle, transcriptStream *bool, execFn ShellExecFunc) error {
 	if root {
 		return execSSMWithRetry(ctx, func() *exec.Cmd {
 			return exec.CommandContext(ctx, "aws", "ssm", "start-session",
@@ -490,20 +490,21 @@ func execSSMSession(ctx context.Context, instanceID, region string, root, noBedr
 		}
 	}
 
-	// KM-Sandbox-Session uses Standard_Stream sessionType so Ctrl+C is forwarded
+	// The sandbox session document (Standard_Stream sessionType) forwards Ctrl+C
 	// as a PTY byte (SSH-like) instead of tearing down the session. No
 	// --parameters needed: the doc's `command` parameter defaults to "" which
 	// triggers the `exec bash -l` branch of the shellProfile (interactive shell
 	// as the sandbox user via runAsDefaultUser).
+	docName := cfg.GetSandboxSessionDocumentName()
 	c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
 		"--target", instanceID, "--region", region, "--profile", "klanker-terraform",
-		"--document-name", "KM-Sandbox-Session")
+		"--document-name", docName)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	err := runSSMInteractiveSubprocess(execFn, c)
 	if isSSMDocumentMissingErr(err) {
-		return fmt.Errorf("KM-Sandbox-Session not provisioned in region %s; run `km init %s` to update regional infrastructure (was: %w)", region, region, err)
+		return fmt.Errorf("%s not provisioned in region %s; run `km init %s` to update regional infrastructure (was: %w)", docName, region, region, err)
 	}
 	return err
 }

@@ -105,7 +105,7 @@ Examples:
 
 // runAgentAuthClaude mediates the claude CLI's OAuth login flow via an interactive
 // SSM session. It verifies credentials were written after the session exits.
-func runAgentAuthClaude(ctx context.Context, _ *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, console, sso, claudeai bool, email string) error {
+func runAgentAuthClaude(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string, console, sso, claudeai bool, email string) error {
 	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
 	if err != nil {
 		return fmt.Errorf("fetch sandbox: %w", err)
@@ -152,9 +152,10 @@ func runAgentAuthClaude(ctx context.Context, _ *config.Config, fetcher SandboxFe
 	go detectAndOpenOAuthURL(detectCtx, ssmClient, instanceID, teePath)
 
 	printClaudeAuthInstructions(sandboxID, loginArgs)
+	docName := cfg.GetSandboxSessionDocumentName()
 	c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
 		"--target", instanceID, "--region", rec.Region, "--profile", "klanker-terraform",
-		"--document-name", "KM-Sandbox-Session",
+		"--document-name", docName,
 		"--parameters", string(paramsJSON))
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
@@ -333,7 +334,7 @@ func openInBrowser(url string) error {
 // The SSM port-forward enables the codex OAuth callback:
 // browser hits laptop:1455 → SSM tunnel → sandbox:1455 where codex's callback
 // server completes the token exchange and writes ~/.codex/auth.json.
-func runAgentAuthCodex(ctx context.Context, _ *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string) error {
+func runAgentAuthCodex(ctx context.Context, cfg *config.Config, fetcher SandboxFetcher, execFn ShellExecFunc, ssmClient SSMSendAPI, sandboxID string) error {
 	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
 	if err != nil {
 		return fmt.Errorf("fetch sandbox: %w", err)
@@ -404,11 +405,12 @@ func runAgentAuthCodex(ctx context.Context, _ *config.Config, fetcher SandboxFet
 	defer cancelDetect()
 	go detectAndOpenCodexURL(detectCtx, ssmClient, instanceID, teePath)
 
+	docName := cfg.GetSandboxSessionDocumentName()
 	c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
 		"--target", instanceID,
 		"--region", rec.Region,
 		"--profile", "klanker-terraform",
-		"--document-name", "KM-Sandbox-Session",
+		"--document-name", docName,
 		"--parameters", string(paramsJSON))
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout

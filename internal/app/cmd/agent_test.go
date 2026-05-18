@@ -420,8 +420,8 @@ func TestAgentCmd_BackwardCompat(t *testing.T) {
 	if !strings.Contains(fullCmd, "claude") {
 		t.Errorf("expected 'claude' in command args, got: %s", fullCmd)
 	}
-	if !strings.Contains(fullCmd, "KM-Sandbox-Session") {
-		t.Errorf("expected '--document-name KM-Sandbox-Session', got: %s", fullCmd)
+	if !strings.Contains(fullCmd, "km-Sandbox-Session") {
+		t.Errorf("expected '--document-name km-Sandbox-Session', got: %s", fullCmd)
 	}
 	if strings.Contains(fullCmd, "sudo -u sandbox") {
 		t.Errorf("expected NO 'sudo -u sandbox' wrapper, got: %s", fullCmd)
@@ -846,8 +846,8 @@ func TestAgentAttach(t *testing.T) {
 	if !stderrSet {
 		t.Error("expected stderr to be wired")
 	}
-	if !strings.Contains(fullCmd, "KM-Sandbox-Session") {
-		t.Errorf("expected '--document-name KM-Sandbox-Session', got: %s", fullCmd)
+	if !strings.Contains(fullCmd, "km-Sandbox-Session") {
+		t.Errorf("expected '--document-name km-Sandbox-Session', got: %s", fullCmd)
 	}
 	if strings.Contains(fullCmd, "sudo -u sandbox") {
 		t.Errorf("expected NO 'sudo -u sandbox' wrapper, got: %s", fullCmd)
@@ -922,8 +922,8 @@ func TestAgentInteractive(t *testing.T) {
 	if !strings.Contains(fullCmd, "km-agent-") {
 		t.Errorf("expected 'km-agent-' session name in command, got: %s", fullCmd)
 	}
-	if !strings.Contains(fullCmd, "KM-Sandbox-Session") {
-		t.Errorf("expected '--document-name KM-Sandbox-Session', got: %s", fullCmd)
+	if !strings.Contains(fullCmd, "km-Sandbox-Session") {
+		t.Errorf("expected '--document-name km-Sandbox-Session', got: %s", fullCmd)
 	}
 	if strings.Contains(fullCmd, "sudo -u sandbox") {
 		t.Errorf("expected NO 'sudo -u sandbox' wrapper, got: %s", fullCmd)

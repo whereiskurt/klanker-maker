@@ -166,8 +166,9 @@ func TestRunInitWithRunnerAllModules(t *testing.T) {
 
 // TestRegionalModulesIncludesSSMDoc verifies the ssm-session-doc module is
 // registered in regionalModules() between dynamodb-schedules and s3-replication.
-// The custom KM-Sandbox-Session SSM document is required for `km shell` and
-// `km agent` interactive sessions to forward Ctrl+C correctly.
+// The per-install sandbox session document (Phase 84.4.1: km-Sandbox-Session for
+// the default prefix) is required for `km shell` and `km agent` interactive
+// sessions to forward Ctrl+C correctly.
 func TestRegionalModulesIncludesSSMDoc(t *testing.T) {
 	mods := cmd.RegionalModules(t.TempDir())
 

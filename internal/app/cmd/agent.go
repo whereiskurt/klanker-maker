@@ -339,9 +339,9 @@ func runAgent(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 		noBedrockPrefix = "nobedrock; "
 	}
 
-	// KM-Sandbox-Session runs as sandbox user via runAsDefaultUser; no `sudo -u
-	// sandbox -i bash -c "..."` wrapper needed. The doc's shellProfile invokes
-	// `bash -lc "{{ command }}"` for non-empty command, which sources
+	// The sandbox session document runs as sandbox user via runAsDefaultUser;
+	// no `sudo -u sandbox -i bash -c "..."` wrapper needed. The doc's shellProfile
+	// invokes `bash -lc "{{ command }}"` for non-empty command, which sources
 	// /etc/profile.d/ via login shell semantics. We retain explicit `source ...`
 	// for belt-and-suspenders (no-op if already sourced).
 	innerCmd := fmt.Sprintf(
@@ -351,16 +351,17 @@ func runAgent(cmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ex
 	if err != nil {
 		return fmt.Errorf("marshal --parameters: %w", err)
 	}
+	docName := cfg.GetSandboxSessionDocumentName()
 	c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
 		"--target", instanceID, "--region", rec.Region, "--profile", "klanker-terraform",
-		"--document-name", "KM-Sandbox-Session",
+		"--document-name", docName,
 		"--parameters", string(paramsJSON))
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	err = runSSMInteractiveSubprocess(execFn, c)
 	if isSSMDocumentMissingErr(err) {
-		return fmt.Errorf("KM-Sandbox-Session not provisioned in region %s; run `km init %s` to update regional infrastructure (was: %w)", rec.Region, rec.Region, err)
+		return fmt.Errorf("%s not provisioned in region %s; run `km init %s` to update regional infrastructure (was: %w)", docName, rec.Region, rec.Region, err)
 	}
 	return err
 }
@@ -418,23 +419,24 @@ Examples:
 				return fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
 			}
 
-			// KM-Sandbox-Session runs the inner command in `bash -lc "..."` as sandbox
-			// user. No sudo wrapper, no manual quote-escaping (json.Marshal handles it).
+			// The sandbox session document runs the inner command in `bash -lc "..."` as
+			// sandbox user. No sudo wrapper, no manual quote-escaping (json.Marshal handles it).
 			innerCmd := `tmux attach-session -t $(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep km-agent | tail -1) 2>/dev/null || echo No agent tmux sessions found`
 			paramsJSON, err := json.Marshal(map[string][]string{"command": {innerCmd}})
 			if err != nil {
 				return fmt.Errorf("marshal --parameters: %w", err)
 			}
+			docName := cfg.GetSandboxSessionDocumentName()
 			c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
 				"--target", instanceID, "--region", rec.Region, "--profile", "klanker-terraform",
-				"--document-name", "KM-Sandbox-Session",
+				"--document-name", docName,
 				"--parameters", string(paramsJSON))
 			c.Stdin = os.Stdin
 			c.Stdout = os.Stdout
 			c.Stderr = os.Stderr
 			err = runSSMInteractiveSubprocess(execFn, c)
 			if isSSMDocumentMissingErr(err) {
-				return fmt.Errorf("KM-Sandbox-Session not provisioned in region %s; run `km init %s` to update regional infrastructure (was: %w)", rec.Region, rec.Region, err)
+				return fmt.Errorf("%s not provisioned in region %s; run `km init %s` to update regional infrastructure (was: %w)", docName, rec.Region, rec.Region, err)
 			}
 			return err
 		},
@@ -607,23 +609,24 @@ func runAgentNonInteractive(ctx context.Context, cfg *config.Config, fetcher San
 		time.Sleep(2 * time.Second)
 
 		// Build SSM start-session with tmux new-session (attached, no -d)
-		// KM-Sandbox-Session runs as sandbox user via runAsDefaultUser. No sudo wrapper.
+		// The sandbox session document runs as sandbox user via runAsDefaultUser. No sudo wrapper.
 		sessionName := fmt.Sprintf("km-agent-%s", runID)
 		innerCmd := fmt.Sprintf("tmux new-session -s '%s' '/tmp/km-agent-run.sh; exec bash'", sessionName)
 		paramsJSON, err := json.Marshal(map[string][]string{"command": {innerCmd}})
 		if err != nil {
 			return fmt.Errorf("marshal --parameters: %w", err)
 		}
+		docName := cfg.GetSandboxSessionDocumentName()
 		c := exec.CommandContext(ctx, "aws", "ssm", "start-session",
 			"--target", instanceID, "--region", rec.Region, "--profile", "klanker-terraform",
-			"--document-name", "KM-Sandbox-Session",
+			"--document-name", docName,
 			"--parameters", string(paramsJSON))
 		c.Stdin = os.Stdin
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 		err = runSSMInteractiveSubprocess(execFn, c)
 		if isSSMDocumentMissingErr(err) {
-			return fmt.Errorf("KM-Sandbox-Session not provisioned in region %s; run `km init %s` to update regional infrastructure (was: %w)", rec.Region, rec.Region, err)
+			return fmt.Errorf("%s not provisioned in region %s; run `km init %s` to update regional infrastructure (was: %w)", docName, rec.Region, rec.Region, err)
 		}
 		return err
 	}
