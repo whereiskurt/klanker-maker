@@ -8,34 +8,48 @@
 # Phase 84.4: All hardcoded "km-" literals replaced by
 # "${var.resource_prefix}-" so multiple installs in the same
 # AWS account/Organization each guard their OWN role names.
-# With resource_prefix = "km" (default), rendered names are
-# byte-identical to v1.0.0 (zero-diff backward compatibility).
+#
+# Phase 84.4.1: SCP cross-install composition — trusted ARN slots
+# now use *-* suffix patterns (account + prefix both wildcarded)
+# so the canonical km install's SCP also trusts rg-, tg-, etc.
+# roles without requiring per-install policy-body editing.
+#
+# Security trade-off: operator-only IAM:CreateRole in the
+# application account is the primary guard; SCP is defense-in-
+# depth. Deployed roles still need cross-account assume-role
+# grants. Documented in OPERATOR-GUIDE.md (Phase 84.4.1-06).
 # ============================================================
 
 locals {
-  # Base trusted ARNs passed by the operator (SSO + future provisioner/lifecycle roles)
+  # Base trusted ARNs passed by the operator (SSO + provisioner/lifecycle roles).
+  # Phase 84.4.1: trusted_arns_base is passed via var.trusted_role_arns and uses
+  # *-* patterns at the caller (infra/live/management/scp/terragrunt.hcl).
   trusted_arns_base = var.trusted_role_arns
 
-  # Instance mutation carve-out: base roles + spot handler (which launches instances)
+  # Instance mutation carve-out: base roles + spot handler (which launches instances).
+  # Phase 84.4.1: account + prefix both wildcarded — trusts any install's spot handler.
   trusted_arns_instance = concat(
     local.trusted_arns_base,
-    ["arn:aws:iam::${var.application_account_id}:role/${var.resource_prefix}-ecs-spot-handler"]
+    ["arn:aws:iam::*:role/*-ecs-spot-handler"]
   )
 
-  # IAM escalation carve-out: base roles + budget-enforcer (needs AttachRolePolicy/DetachRolePolicy
-  # for Bedrock IAM revocation on budget breach)
+  # IAM escalation carve-out: base roles + budget-enforcer (needs AttachRolePolicy/
+  # DetachRolePolicy for Bedrock IAM revocation on budget breach).
+  # Phase 84.4.1: account + prefix both wildcarded.
   trusted_arns_iam = concat(
     local.trusted_arns_base,
-    ["arn:aws:iam::${var.application_account_id}:role/${var.resource_prefix}-budget-enforcer-*"]
+    ["arn:aws:iam::*:role/*-budget-enforcer-*"]
   )
 
-  # SSM pivot carve-out: only SSM instance roles and operator SSO — NOT the full trusted_arns_base.
-  # This is intentionally more restrictive: only roles that legitimately use SSM for instance access.
-  # {prefix}-github-token-refresher-* added here (not base/instance/iam) — it only needs SSM GetParameter/PutParameter.
+  # SSM pivot carve-out: only SSM instance roles and operator SSO — NOT the full
+  # trusted_arns_base. Intentionally more restrictive: only roles that legitimately
+  # use SSM for instance access.
+  # {prefix}-github-token-refresher-* only needs SSM GetParameter/PutParameter.
+  # Phase 84.4.1: account + prefix both wildcarded across all SSM carve-out roles.
   trusted_arns_ssm = [
-    "arn:aws:iam::${var.application_account_id}:role/${var.resource_prefix}-ec2spot-ssm-*",
-    "arn:aws:iam::${var.application_account_id}:role/${var.resource_prefix}-github-token-refresher-*",
-    "arn:aws:iam::${var.application_account_id}:role/${var.resource_prefix}-ttl-handler",
+    "arn:aws:iam::*:role/*-ec2spot-ssm-*",
+    "arn:aws:iam::*:role/*-github-token-refresher-*",
+    "arn:aws:iam::*:role/*-ttl-handler",
     "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
   ]
 }

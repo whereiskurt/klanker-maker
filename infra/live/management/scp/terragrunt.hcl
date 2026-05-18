@@ -68,21 +68,24 @@ inputs = {
   allowed_regions = [local.region.full]
 
   # Trusted roles that can bypass the containment Deny statements.
-  # Note: km-budget-enforcer-* and km-ec2spot-ssm-* are intentionally NOT listed here.
+  # Phase 84.4.1: pattern-based trust — account + prefix both wildcarded so this list
+  # works for multi-install in a shared application account. Any install's well-known
+  # role suffixes are trusted by name pattern rather than explicit prefix.
+  # Note: budget-enforcer-* and ec2spot-ssm-* roles are intentionally NOT listed here.
   # They are handled inside the module with statement-specific carve-outs (IAM and SSM only).
   trusted_role_arns = [
-    # Operator SSO roles — must always be able to manage infrastructure
+    # Operator SSO roles — must always be able to manage infrastructure (account-scoped)
     "arn:aws:iam::${local.accounts.application}:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
-    # Future dedicated provisioner role (not yet deployed as of Phase 10)
-    "arn:aws:iam::${local.accounts.application}:role/km-provisioner-*",
-    # Future dedicated lifecycle role (not yet deployed as of Phase 10)
-    "arn:aws:iam::${local.accounts.application}:role/km-lifecycle-*",
-    # Spot handler — launches EC2 Spot instances (instance mutation carve-out handled in module)
-    "arn:aws:iam::${local.accounts.application}:role/km-ecs-spot-handler",
+    # Provisioner roles — account + prefix wildcarded (Phase 84.4.1)
+    "arn:aws:iam::*:role/*-provisioner-*",
+    # Lifecycle roles — account + prefix wildcarded (Phase 84.4.1)
+    "arn:aws:iam::*:role/*-lifecycle-*",
+    # Spot handler — launches EC2 Spot instances; instance mutation carve-out in module
+    "arn:aws:iam::*:role/*-ecs-spot-handler",
     # TTL handler — tears down sandboxes on expiry
-    "arn:aws:iam::${local.accounts.application}:role/km-ttl-handler",
+    "arn:aws:iam::*:role/*-ttl-handler",
     # Create handler — provisions sandboxes remotely via EventBridge
-    "arn:aws:iam::${local.accounts.application}:role/km-create-handler",
+    "arn:aws:iam::*:role/*-create-handler",
   ]
 }
 
