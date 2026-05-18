@@ -42,3 +42,11 @@ is scoped to exclude the five pre-existing-failure packages:
 - pkg/compiler
 
 **Action required:** Fix these pre-existing failures in a separate cleanup phase.
+
+### pkg/terragrunt — TestModuleNamesUseResourcePrefix/scp/v2.0.0
+
+- **File:** infra/modules/scp/v2.0.0/main.tf:216
+- **Error:** `resource attribute "name" template contains hardcoded "km-" literal "km-sandbox-containment"`
+- **Root cause:** scp/v2.0.0 created by Plan 02 has a residual "km-sandbox-containment" literal in a name attribute template that does not reference var.resource_prefix.
+- **Discovered during:** Plan 03 (84.4-03) audit test run — the efs/v2.0.0 sub-test PASSES; scp failure is pre-existing from Plan 02.
+- **Status:** Out of scope for Plan 03. Plan 02 or a follow-up fix should address.

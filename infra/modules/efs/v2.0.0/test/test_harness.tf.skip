@@ -1,0 +1,30 @@
+# infra/modules/efs/v2.0.0/test/test_harness.tf.skip
+# Phase 84.4 test harness for efs/v2.0.0. NOT executed by terragrunt apply —
+# the .skip extension keeps it out of init/apply discovery. Documents intended
+# consumption with synthetic inputs and serves as the LOCKED test/ subdirectory
+# required by CONTEXT.md versioning strategy. Mirrors the pattern from
+# infra/modules/cluster-irsa/v1.0.0/test_harness.tf.skip.
+#
+# The audit test in pkg/terragrunt/modulehygiene_test.go (Plan 01) parses every
+# .tf file under v2.0.0+/, so any hardcoded "km-" literal added here would fail
+# TestModuleNamesUseResourcePrefix.
+
+module "efs_synthetic_kph" {
+  source = "../"
+
+  resource_prefix = "kph"         # 3-char prefix — lower-bound case
+  region_label    = "use1"
+  vpc_id          = "vpc-synthetic"
+  subnet_ids      = ["subnet-synthetic-a", "subnet-synthetic-b"]
+  km_label        = "klanker-maker"
+}
+
+module "efs_synthetic_whereiskurt" {
+  source = "../"
+
+  resource_prefix = "whereiskurt" # 11-char prefix — upper-bound case
+  region_label    = "use1"
+  vpc_id          = "vpc-synthetic"
+  subnet_ids      = ["subnet-synthetic-a", "subnet-synthetic-b"]
+  km_label        = "klanker-maker"
+}
