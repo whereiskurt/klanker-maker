@@ -1,14 +1,21 @@
 package cmd_test
 
-// bootstrap_scp_test.go — Phase 84.4 Plan 02 unit tests for BuildSCPPolicyFromPrefix.
+// bootstrap_scp_test.go — Phase 84.4.1 Plan 01 rewrite of SCP builder tests.
 //
-// These tests verify that the simplified per-prefix SCP builder:
-//   - renders policy JSON under the 5,000-byte Go-side safety threshold
-//   - templates role names from the prefix (no km- for non-km prefixes)
-//   - preserves backward compat: prefix "km" → byte-identical role names to v1.0.0
+// Phase 84.4.1: SCP cross-install composition — trusted ARN slots now use
+// *-* suffix patterns (account + prefix both wildcarded) so that multiple
+// installs sharing an application account do not deny each other's roles.
 //
-// The existing BuildSCPPolicy (accepting pre-computed ARN arrays) is tested in
-// bootstrap_test.go; this file tests the new prefix-based wrapper.
+// Previous behavior (Phase 84.4): prefix "km" → "km-ecs-spot-handler" etc.
+// New behavior (Phase 84.4.1): any prefix → "*-ecs-spot-handler" etc.
+// resourcePrefix and applicationAccountID accepted for signature compat but
+// no longer used in trust slot construction.
+//
+// Security trade-off: an attacker-deployed role named evil-create-handler
+// would pass the SCP pattern. Mitigations: operator-only IAM:CreateRole in
+// the application account; SCP is one defense-in-depth layer; deployed roles
+// still need cross-account assume-role grants. Documented in OPERATOR-GUIDE.md
+// (Wave 4 plan 84.4.1-06).
 
 import (
 	"strings"
@@ -18,14 +25,16 @@ import (
 )
 
 func TestBuildSCPPolicySize(t *testing.T) {
+	// Phase 84.4.1: all prefixes produce IDENTICAL output because prefix is ignored
+	// in the slot values. The parameterization is kept defensively — confirms that
+	// prefix truly does not appear in the trust slots for any input prefix.
 	cases := []struct {
 		prefix   string
 		maxBytes int
-		wantNoKM bool // for non-km prefixes, assert ":role/km-" doesn't appear
 	}{
-		{"km", 5000, false},
-		{"kph", 5000, true},
-		{"whereiskurt", 5000, true}, // 11-char prefix — upper bound case
+		{"km", 5000},
+		{"kph", 5000},
+		{"whereiskurt", 5000}, // 11-char prefix — upper bound case
 	}
 	for _, tc := range cases {
 		t.Run(tc.prefix, func(t *testing.T) {
@@ -33,29 +42,46 @@ func TestBuildSCPPolicySize(t *testing.T) {
 			if len(got) > tc.maxBytes {
 				t.Errorf("policy size %d bytes exceeds threshold %d for prefix %q", len(got), tc.maxBytes, tc.prefix)
 			}
-			if tc.wantNoKM && strings.Contains(got, ":role/km-") {
-				t.Errorf("non-km prefix %q produced policy still containing km- role names: %s", tc.prefix, got)
-			}
-			expectedRoleSubstring := ":role/" + tc.prefix + "-ecs-spot-handler"
+			// Phase 84.4.1: assert *-* pattern (prefix-agnostic)
+			expectedRoleSubstring := ":role/*-ecs-spot-handler"
 			if !strings.Contains(got, expectedRoleSubstring) {
 				t.Errorf("expected policy to contain %q, got: %s", expectedRoleSubstring, got)
+			}
+			// Phase 84.4.1: negative assertion — no prefix-bound substring must appear (catches regressions).
+			if strings.Contains(got, ":role/"+tc.prefix+"-ecs-spot-handler") {
+				t.Errorf("policy[%s] contains prefix-bound substring; expected *-pattern", tc.prefix)
 			}
 		})
 	}
 }
 
 func TestBuildSCPPolicyPrefix(t *testing.T) {
-	// Backward compat: BuildSCPPolicyFromPrefix("km", ...) renders identical role patterns to pre-84.4
+	// Phase 84.4.1: patterns are prefix-agnostic; verify *-* substrings present.
 	got := cmd.BuildSCPPolicyFromPrefix("km", "123456789012", "us-east-1")
+
+	// Positive assertions: *-* patterns must be present.
 	for _, want := range []string{
+		"*-ecs-spot-handler",
+		"*-budget-enforcer-*",
+		"*-ec2spot-ssm-*",
+		"*-github-token-refresher-*",
+		"*-ttl-handler",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q from rendered policy", want)
+		}
+	}
+
+	// Negative assertions: prefix-bound role names MUST NOT appear (catches re-prefixing regressions).
+	for _, notWanted := range []string{
 		"km-ecs-spot-handler",
 		"km-budget-enforcer-*",
 		"km-ec2spot-ssm-*",
 		"km-github-token-refresher-*",
 		"km-ttl-handler",
 	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("km-default policy missing expected role name %q", want)
+		if strings.Contains(got, notWanted) {
+			t.Errorf("policy contains prefix-bound %q; expected *-pattern", notWanted)
 		}
 	}
 }
