@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.4-06-PLAN.md — DKIM/MX/TXT auto-import for second installs
-last_updated: "2026-05-18T03:07:24.273Z"
+stopped_at: "Paused at 84.4-05 Task 2 checkpoint:human-verify (awaiting km init --plan zero-diff confirmation)"
+last_updated: "2026-05-18T03:11:42.227Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 97
   completed_phases: 85
   total_plans: 396
-  completed_plans: 348
+  completed_plans: 349
   percent: 88
 ---
 
@@ -385,6 +385,7 @@ Progress: [█████████░] 88%
 | Phase 84.4-multi-install-module-hardening P04 | 8 | 1 tasks | 5 files |
 | Phase 84.4-multi-install-module-hardening P02 | 891 | 2 tasks | 5 files |
 | Phase 84.4-multi-install-module-hardening P06 | 883 | 1 tasks | 2 files |
+| Phase 84.4-multi-install-module-hardening P05 | 3 | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1110,6 +1111,8 @@ Recent decisions affecting current work:
 - [Phase 84.4-02]: 5000-byte safety threshold in terraform_data precondition (120-byte buffer below AWS 5120-byte hard limit)
 - [Phase 84.4]: Plan 06: Gate DKIM auto-import on sesv1Client/r53ImportClient/stateReader non-nil — listerOverride (test) path unchanged
 - [Phase 84.4]: Plan 06: Route53 import IDs use double underscore for TXT (<zone>__amazonses.<domain>_TXT)
+- [Phase 84.4-05]: resource_prefix in all three live wiring files uses get_env with km default for exact backward compat
+- [Phase 84.4-05]: No additional region variants (use2/usw2) found — only use1 and management/scp needed flipping
 
 ### Roadmap Evolution
 
@@ -1217,6 +1220,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-18T03:07:24.265Z
-Stopped at: Completed 84.4-06-PLAN.md — DKIM/MX/TXT auto-import for second installs
+Last session: 2026-05-18T03:11:42.219Z
+Stopped at: Paused at 84.4-05 Task 2 checkpoint:human-verify (awaiting km init --plan zero-diff confirmation)
 Resume file: None
