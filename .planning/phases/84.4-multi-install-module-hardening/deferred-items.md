@@ -50,3 +50,24 @@ is scoped to exclude the five pre-existing-failure packages:
 - **Root cause:** scp/v2.0.0 created by Plan 02 has a residual "km-sandbox-containment" literal in a name attribute template that does not reference var.resource_prefix.
 - **Discovered during:** Plan 03 (84.4-03) audit test run — the efs/v2.0.0 sub-test PASSES; scp failure is pre-existing from Plan 02.
 - **Status:** Out of scope for Plan 03. Plan 02 or a follow-up fix should address.
+
+---
+
+## Phase 84.4-07 UAT Deferred Items
+
+### km doctor hangs in canonical km install
+
+- **Discovered during:** 84.4-07 whereiskurt teardown UAT session (2026-05-18), reported by operator as a separate observation not related to teardown itself.
+- **Symptom:** `km doctor` prints the banner then produces no further output. Process does not exit. `km list` works fine on the same install.
+- **Root cause (hypothesis):** Phase 84.x added `checkSESRules` and `checkStateLockDigest` to `doctor.go`. The `runChecks` function runs all checks in parallel with no per-check timeout. If any single check blocks (e.g., waiting on a hung AWS SDK call, SES describe-receipt-rule-set timeout, or S3-DynamoDB state lock digest comparison), all output is blocked because output is accumulated, not streamed.
+- **Triage approach:** Run `kill -SIGQUIT <km-doctor-pid>` to get a goroutine dump identifying the exact blocked goroutine. The blocked check's name will appear in the stack trace.
+- **Not a 84.4-07 finding** — separate triage item for Phase 84.x doctor hardening.
+- **Status:** Deferred — diagnose in a follow-up session with goroutine dump tooling.
+
+### km uninit nil-pointer panic (fixed, cross-reference)
+
+- **Fixed in commit:** 2861dbb (`fix(84.4): wire dynamoClient+tableName in km uninit's sandbox lister`)
+- **Root cause:** `uninit.go` lines 190-197 hand-rolled `awsSandboxLister` construction skipped `dynamoClient` and `tableName` — nil-pointer dereference on first lister call.
+- **Fix:** Use canonical `newRealLister(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())` constructor matching `ami.go`, `doctor.go`, `list.go`.
+- **Operational workaround (used in UAT):** `km uninit --force` bypasses the lister check.
+- **Status:** Fixed in klankrmkr/ working tree. Needs to be verified merged/pushed to remote.

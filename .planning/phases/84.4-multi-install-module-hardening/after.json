@@ -1,0 +1,112 @@
+{
+  "meta": {
+    "prefix": "whereiskurt",
+    "captured_at": "2026-05-18T05:15:00Z",
+    "account": "052251888500",
+    "region": "us-east-1",
+    "note": "Post-teardown snapshot — constructed from operator-confirmed outcomes (no AWS SSO available for automated re-snapshot). All whereiskurt-* resources confirmed removed by operator.",
+    "source": "operator-confirmed teardown outcomes from UAT session 2026-05-18"
+  },
+  "dynamodb": {
+    "tables": []
+  },
+  "ec2": {
+    "vpcs": [],
+    "subnets": [],
+    "security_groups": [],
+    "internet_gateways": [],
+    "note": "All whereiskurt-use1-vpc resources destroyed by km uninit --force. VPC vpc-0e5c73a8fbe72a056 gone. Orphan km-efs-use1 SG (sg-0ab33d3738b7e9ef7) in whereiskurt VPC gone (VPC delete cascades). Canonical km VPC vpc-027ba3e68c2e32549 untouched."
+  },
+  "efs": {
+    "filesystems": [],
+    "note": "No EFS filesystems existed pre-teardown (whereiskurt EFS apply failed before filesystem creation). No EFS cleanup required."
+  },
+  "iam": {
+    "roles": []
+  },
+  "kms": {
+    "aliases": [],
+    "note": "alias/km-platform-whereiskurt-use1 removed. Key d40b51c6-e319-4d2c-9d51-511ab08cfa4c in PendingDeletion state (7-day window; scheduled 2026-05-18, deletion after 2026-05-25)."
+  },
+  "kms_pending_deletion": [
+    {
+      "KeyId": "d40b51c6-e319-4d2c-9d51-511ab08cfa4c",
+      "AliasName": "alias/km-platform-whereiskurt-use1 (removed)",
+      "DeletionDate": "2026-05-25",
+      "Status": "PendingDeletion",
+      "DeletionWindowInDays": 7
+    }
+  ],
+  "lambda": {
+    "functions": []
+  },
+  "route53": {
+    "hosted_zones": [
+      ["/hostedzone/Z07395732OFT84NYHBE8C", "sandboxes.test.example.com.", false, 2],
+      ["/hostedzone/Z08522462XE7ANTIK5FTX", "sandboxes.klankermaker.ai.", false, 7]
+    ],
+    "note": "Whereiskurt Route53 zone was preserved (operator did NOT pass --include-zone to km unbootstrap). Intentional — zone preservation is the default; pass --include-zone only for permanent decommission. Both zones unchanged from before.json."
+  },
+  "s3": {
+    "buckets": [],
+    "whereiskurt_removed": [
+      "whereiskurt-artifacts-12345678",
+      "tf-whereiskurt-state-use1"
+    ],
+    "note": "Both whereiskurt S3 buckets deleted by km unbootstrap. aws s3api head-bucket returns 404 Not Found for both. 15 object versions + delete markers cleared from whereiskurt-artifacts-12345678; 29 from tf-whereiskurt-state-use1."
+  },
+  "ses": {
+    "rule_sets": ["sandbox-email-shared"],
+    "rules": [
+      {
+        "RuleSet": "sandbox-email-shared",
+        "Rules": ["km-operator-inbound", "km-sandbox-catchall"]
+      }
+    ],
+    "note": "SES rules unchanged. No whereiskurt-specific rules existed pre-teardown. km-operator-inbound and km-sandbox-catchall remain intact."
+  },
+  "scp": {
+    "note": "SCP state captured via km-org-admin role in management account 481723467561",
+    "all_policies": [
+      {"Id": "p-FullAWSAccess", "Name": "FullAWSAccess", "AwsManaged": true},
+      {"Id": "p-cvd490xt", "Name": "km-sandbox-containment", "AwsManaged": false}
+    ],
+    "attached_to_application_account_052251888500": [
+      {"Id": "p-FullAWSAccess", "Name": "FullAWSAccess", "AwsManaged": true},
+      {"Id": "p-cvd490xt", "Name": "km-sandbox-containment", "AwsManaged": false}
+    ],
+    "whereiskurt_resolution": {
+      "note": "SCP dual-tracking resolved via Step 0 (terraform state rm). Whereiskurt SCP module state (infra/live/management/scp/) had p-cvd490xt removed via 'terragrunt state rm aws_organizations_policy.sandbox_containment' + 'terragrunt state rm aws_organizations_policy_attachment.sandbox_containment'. No AWS resource was destroyed — only state tracking removed. km-sandbox-containment (p-cvd490xt) remains active and attached to account 052251888500.",
+      "status": "RESOLVED"
+    }
+  },
+  "ssm": {
+    "whereiskurt_parameters": [],
+    "deleted_count": 1,
+    "prefix": "/whereiskurt/",
+    "note": "1 SSM parameter under /whereiskurt/ deleted by km unbootstrap."
+  },
+  "diff_summary": {
+    "whereiskurt_resources_removed": {
+      "ec2_vpcs": 1,
+      "ec2_subnets": 8,
+      "ec2_security_groups": 3,
+      "ec2_internet_gateways": 1,
+      "s3_buckets": 2,
+      "ssm_parameters": 1,
+      "kms_aliases": 1,
+      "total_removed": 17
+    },
+    "km_resources_unchanged": {
+      "scp_policy": "p-cvd490xt km-sandbox-containment (UNCHANGED)",
+      "ses_rules": ["km-operator-inbound", "km-sandbox-catchall"],
+      "route53_zones": 2,
+      "note": "km canonical install resources confirmed intact. km list responsive. DynamoDB km-sandboxes table ACTIVE. km install byte-identical to pre-teardown state."
+    },
+    "outstanding_state": {
+      "kms_pending_deletion": "d40b51c6-e319-4d2c-9d51-511ab08cfa4c scheduled for deletion 2026-05-25",
+      "route53_zone_preserved": "sandboxes.test.example.com zone preserved — pass --include-zone for permanent decommission",
+      "canonical_km_install": "intact and verified"
+    }
+  }
+}

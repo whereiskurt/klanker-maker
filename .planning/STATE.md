@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: "Completed 84.4-05-PLAN.md — live wiring v2.0.0 flip operator-verified (whereiskurt km init --plan approved)"
-last_updated: "2026-05-18T03:20:00.000Z"
+stopped_at: Completed 84.4-07-PLAN.md — whereiskurt teardown UAT complete, TEARDOWN-AND-RESTART-VERIFICATION satisfied, closure criterion (f) proven
+last_updated: "2026-05-18T04:25:51.060Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 97
   completed_phases: 85
   total_plans: 396
-  completed_plans: 349
+  completed_plans: 350
   percent: 88
 ---
 
@@ -386,6 +386,7 @@ Progress: [█████████░] 88%
 | Phase 84.4-multi-install-module-hardening P02 | 891 | 2 tasks | 5 files |
 | Phase 84.4-multi-install-module-hardening P06 | 883 | 1 tasks | 2 files |
 | Phase 84.4-multi-install-module-hardening P05 | 3 | 1 tasks | 3 files |
+| Phase 84.4-multi-install-module-hardening P07 | 525755min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1113,6 +1114,8 @@ Recent decisions affecting current work:
 - [Phase 84.4]: Plan 06: Route53 import IDs use double underscore for TXT (<zone>__amazonses.<domain>_TXT)
 - [Phase 84.4-05]: resource_prefix in all three live wiring files uses get_env with km default for exact backward compat
 - [Phase 84.4-05]: No additional region variants (use2/usw2) found — only use1 and management/scp needed flipping
+- [Phase 84.4-multi-install-module-hardening]: SCP dual-tracking: when second install imports canonical SCP, use terragrunt state rm before km uninit — never terraform destroy the shared policy
+- [Phase 84.4-multi-install-module-hardening]: km uninit --force bypasses lister nil-pointer bug; canonical fix in commit 2861dbb (use newRealLister constructor)
 
 ### Roadmap Evolution
 
@@ -1220,6 +1223,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-18T03:20:00.000Z
-Stopped at: Completed 84.4-05-PLAN.md — live wiring v2.0.0 flip operator-verified (whereiskurt km init --plan approved)
+Last session: 2026-05-18T04:25:51.052Z
+Stopped at: Completed 84.4-07-PLAN.md — whereiskurt teardown UAT complete, TEARDOWN-AND-RESTART-VERIFICATION satisfied, closure criterion (f) proven
 Resume file: None
