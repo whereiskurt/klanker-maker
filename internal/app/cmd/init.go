@@ -1126,6 +1126,12 @@ func RunInitWithRunner(runner InitRunner, repoRoot, region string) error {
 // NEVER applies. --i-accept-destroys clears the exit code from 1 to 0 but still
 // prints the trip list (operator-visibility contract).
 func runInitPlan(cfg *config.Config, awsProfile, region string, verbose, acceptDestroys bool) error {
+	// Phase 84.3 gap 4: hard-fail early on placeholder artifacts_bucket.
+	// config.Load() is the primary gate; this is defense-in-depth for the plan path.
+	if err := validateArtifactsBucket(cfg.ArtifactsBucket); err != nil {
+		return fmt.Errorf("artifacts_bucket misconfigured: %w", err)
+	}
+
 	ctx := context.Background()
 
 	// 1. Validate AWS credentials (matches runInit credential check)
@@ -1160,6 +1166,11 @@ func runInitPlan(cfg *config.Config, awsProfile, region string, verbose, acceptD
 //
 // Phase 84.2 test seam — referenced by init_plan_test.go.
 func runInitPlanWithWriter(cfg *config.Config, awsProfile, region string, w io.Writer, verbose, acceptDestroys bool) error {
+	// Phase 84.3 gap 4: validate artifacts_bucket before any terragrunt work.
+	// Defense-in-depth: runInitPlan also validates, but tests call this seam directly.
+	if err := validateArtifactsBucket(cfg.ArtifactsBucket); err != nil {
+		return fmt.Errorf("artifacts_bucket misconfigured: %w", err)
+	}
 	repoRoot := findRepoRoot()
 	runner := terragrunt.NewRunner(awsProfile, repoRoot)
 	runner.Verbose = false
