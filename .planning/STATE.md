@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.3-09-PLAN.md — placeholder bucket validation in config.Load() and runInitPlan
-last_updated: "2026-05-18T00:32:06.449Z"
+stopped_at: Completed 84.3-10-PLAN.md — re-UAT gap closure; UAT and REQUIREMENTS updated
+last_updated: "2026-05-18T00:49:30.364Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 97
-  completed_phases: 84
+  completed_phases: 85
   total_plans: 396
-  completed_plans: 341
+  completed_plans: 342
   percent: 88
 ---
 
@@ -378,6 +378,7 @@ Progress: [█████████░] 88%
 | Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted P08 | 5 | 1 tasks | 1 files |
 | Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted P07 | 347 | 2 tasks | 3 files |
 | Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted P09 | 534 | 2 tasks | 3 files |
+| Phase 84.3 P10 | 12 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1087,6 +1088,8 @@ Recent decisions affecting current work:
 - [Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted]: warnAndSetEnv fallback to cfgVal when YAMLDefaults nil preserves backward compat for Plan 01 unit tests that build cfg directly without config.Load()
 - [Phase 84.3]: isPlaceholderBucket inlined in config.go (not imported from cmd) to avoid circular dependency
 - [Phase 84.3]: validateArtifactsBucket added to both runInitPlan and runInitPlanWithWriter (production + test seam)
+- [Phase 84.3]: UAT status set to closed_with_deferred: all 4 automated gaps closed (84.3-07/08/09); 6 operator-follow-up items remain DEFERRED
+- [Phase 84.3]: Phase 84.3 requirements tracked via REQUIREMENTS.md synthetic IDs (ENV-CONFIG-DRIFT-WARN, ARTIFACTS-BUCKET-DERIVATION, BOOTSTRAP-WORKFLOW-DISCOVERABILITY, CONFIG-DISPLAY-VS-YAML-AUTHORITY) following Phase 84.2 pattern
 
 ### Roadmap Evolution
 
@@ -1194,6 +1197,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-18T00:32:06.440Z
-Stopped at: Completed 84.3-09-PLAN.md — placeholder bucket validation in config.Load() and runInitPlan
+Last session: 2026-05-18T00:49:30.357Z
+Stopped at: Completed 84.3-10-PLAN.md — re-UAT gap closure; UAT and REQUIREMENTS updated
 Resume file: None
