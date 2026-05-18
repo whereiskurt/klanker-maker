@@ -1,0 +1,7 @@
+# Phase 84.4 audit allow-list. One pattern per line.
+# Tag VALUES (not resource names) are permitted to contain "km-" — they are labels.
+km:manager = "km-cluster"
+km:component = "km-slack-inbound"
+km:purpose = "km-foundation"
+# variable.default values legitimately set "km" as backward-compat default
+default = "km"
