@@ -57,10 +57,11 @@ remote_state {
 }
 
 terraform {
-  source = "${dirname(find_in_parent_folders("CLAUDE.md"))}/infra/modules/scp//v1.0.0"
+  source = "${dirname(find_in_parent_folders("CLAUDE.md"))}/infra/modules/scp//v2.0.0"
 }
 
 inputs = {
+  resource_prefix        = get_env("KM_RESOURCE_PREFIX", "km")
   application_account_id = local.accounts.application
 
   # Single region from site config — SCP region lock enforces this

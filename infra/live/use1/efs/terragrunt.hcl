@@ -33,12 +33,13 @@ remote_state {
 }
 
 terraform {
-  source = "${local.repo_root}/infra/modules/efs/v1.0.0"
+  source = "${local.repo_root}/infra/modules/efs/v2.0.0"
 }
 
 inputs = {
-  km_label      = local.site_vars.locals.site.label
-  region_label  = local.region_label
-  vpc_id        = local.network_outputs.vpc_id.value
-  subnet_ids    = local.network_outputs.public_subnets.value
+  resource_prefix = get_env("KM_RESOURCE_PREFIX", "km")
+  km_label        = local.site_vars.locals.site.label
+  region_label    = local.region_label
+  vpc_id          = local.network_outputs.vpc_id.value
+  subnet_ids      = local.network_outputs.public_subnets.value
 }

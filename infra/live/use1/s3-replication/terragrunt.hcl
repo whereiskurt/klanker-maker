@@ -59,10 +59,11 @@ remote_state {
 }
 
 terraform {
-  source = "${local.repo_root}/infra/modules/s3-replication/v1.0.0"
+  source = "${local.repo_root}/infra/modules/s3-replication/v2.0.0"
 }
 
 inputs = {
+  resource_prefix         = get_env("KM_RESOURCE_PREFIX", "km")
   source_bucket_name      = get_env("KM_ARTIFACTS_BUCKET", "")
   source_bucket_arn       = "arn:aws:s3:::${get_env("KM_ARTIFACTS_BUCKET", "")}"
   destination_region      = get_env("KM_REPLICA_REGION", "us-west-2")
