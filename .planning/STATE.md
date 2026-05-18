@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.3-04-PLAN.md — init.go + env.go closures c, d, f-init-side, g GREEN
-last_updated: "2026-05-17T21:56:00.985Z"
-last_activity: 2026-05-17
+stopped_at: Completed 84.3-06-PLAN.md — 4 RED integration tests for UAT gap closure (Plans 07/08/09)
+last_updated: "2026-05-18T00:10:41.699Z"
+last_activity: 2026-05-18
 progress:
   total_phases: 97
   completed_phases: 84
-  total_plans: 391
-  completed_plans: 336
+  total_plans: 396
+  completed_plans: 338
   percent: 88
 ---
 
@@ -31,7 +31,7 @@ Plan: 6 of 6 in phase 79 (all complete; 79-05 closeout + UAT passed 2026-05-10)
 Total Plans in Phase: 6
 Current Plan: 14
 Status: in-progress
-Last activity: 2026-05-17
+Last activity: 2026-05-18
 
 Progress: [█████████░] 88%
 
@@ -374,6 +374,7 @@ Progress: [█████████░] 88%
 | Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted P02 | 9min | 2 tasks | 8 files |
 | Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted P03 | 4min | 2 tasks | 2 files |
 | Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted P04 | 8min | 3 tasks | 5 files |
+| Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted P06 | 720 | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1075,6 +1076,9 @@ Recent decisions affecting current work:
 - [Phase 84.3-03]: --all routing inserted before sharedSES+plan check; mutex error returned before any AWS call; test seam vars RunBootstrapFunc/RunBootstrapSharedSESFunc/RunBootstrapAllFunc added to bootstrap.go
 - [Phase 84.3]: smithy.APIError used for 404 detection in ensureArtifactsBucketExists (matches configure.go precedent, test mock uses smithy errors)
 - [Phase 84.3]: ensureArtifactsBucketExists uses 4-arg signature (ctx, cfg, io.Writer, S3HeadBucketAPI) matching stub and test call site
+- [Phase 84.3-06]: makeEmptyRepoRoot + KM_REPO_ROOT override: fake repo root with no modules causes RunInitPlanWithRunner to skip all modules and return nil fast — enables fast RED assertion tests without blocking on terragrunt
+- [Phase 84.3-06]: isolateExportEnvVars helper: pre-register all 12 ExportTerragruntEnvVars output env vars via t.Setenv to prevent os.Setenv calls leaking between tests
+- [Phase 84.3-06]: TestRunBootstrap_DriftWarn_KM_REGION SKIP-guarded for Plan 07: YAMLDefaults field does not exist yet; test compiles clean and does not pollute CI FAIL count before Plan 07
 
 ### Roadmap Evolution
 
@@ -1182,6 +1186,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-17T21:56:00.977Z
-Stopped at: Completed 84.3-04-PLAN.md — init.go + env.go closures c, d, f-init-side, g GREEN
+Last session: 2026-05-18T00:10:41.691Z
+Stopped at: Completed 84.3-06-PLAN.md — 4 RED integration tests for UAT gap closure (Plans 07/08/09)
 Resume file: None
