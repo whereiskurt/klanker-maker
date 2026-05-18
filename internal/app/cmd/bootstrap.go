@@ -1314,6 +1314,8 @@ func runBootstrap(ctx context.Context, cfg *config.Config, dryRun bool, w io.Wri
 		return err
 	}
 
+	ExportTerragruntEnvVars(loadedCfg)
+
 	warnEmptyAccountIDs(loadedCfg, os.Stderr)
 
 	fmt.Fprintf(w, "Domain:  %s\n", loadedCfg.Domain)
