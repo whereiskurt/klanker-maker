@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aws/aws-sdk-go-v2/service/route53"
@@ -65,15 +66,24 @@ type UnbootstrapRoute53API interface {
 	DeleteHostedZone(ctx context.Context, params *route53.DeleteHostedZoneInput, optFns ...func(*route53.Options)) (*route53.DeleteHostedZoneOutput, error)
 }
 
+// UnbootstrapDynamoDBAPI is the DynamoDB subset unbootstrap uses for the
+// Terraform state-lock table cleanup (Phase 84.4.1 UNBOOTSTRAP-DDB-LOCK-CLEANUP).
+// Implemented by *dynamodb.Client from aws-sdk-go-v2.
+type UnbootstrapDynamoDBAPI interface {
+	DescribeTable(ctx context.Context, params *dynamodb.DescribeTableInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DescribeTableOutput, error)
+	DeleteTable(ctx context.Context, params *dynamodb.DeleteTableInput, optFns ...func(*dynamodb.Options)) (*dynamodb.DeleteTableOutput, error)
+}
+
 // UnbootstrapDeps groups the AWS clients unbootstrap needs. Pass nil for any
 // client to skip the corresponding cleanup step (used by tests, and by the
 // real path when --include-zone is false to avoid constructing a Route53
 // client we won't use).
 type UnbootstrapDeps struct {
-	SSM     UnbootstrapSSMAPI
-	S3      UnbootstrapS3API
-	KMS     UnbootstrapKMSAPI
-	Route53 UnbootstrapRoute53API
+	SSM      UnbootstrapSSMAPI
+	S3       UnbootstrapS3API
+	KMS      UnbootstrapKMSAPI
+	Route53  UnbootstrapRoute53API
+	DynamoDB UnbootstrapDynamoDBAPI
 }
 
 // UnbootstrapOpts captures the user-facing options for one unbootstrap run.
@@ -165,6 +175,8 @@ func buildUnbootstrapDeps(awsProfile, region string, includeZone bool) (Unbootst
 		SSM: ssm.NewFromConfig(awsCfg),
 		S3:  s3.NewFromConfig(awsCfg),
 		KMS: kms.NewFromConfig(awsCfg),
+		// TODO(84.4.1-04): wire deps.DynamoDB = dynamodb.NewFromConfig(awsCfg)
+		// in Wave 2 once deleteDynamoDBLockTable helper is added.
 	}
 	if includeZone {
 		deps.Route53 = route53.NewFromConfig(awsCfg)

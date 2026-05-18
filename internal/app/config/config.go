@@ -605,6 +605,18 @@ func (c *Config) GetSlackStreamMessagesTableName() string {
 	return c.GetResourcePrefix() + "-slack-stream-messages"
 }
 
+// GetSandboxSessionDocumentName returns the per-install SSM Session Manager
+// document name, e.g. "km-Sandbox-Session", "tg-Sandbox-Session". Mirrors the
+// computation in infra/modules/ssm-session-doc/v2.0.0/main.tf (Phase 84.4.1).
+//
+// Phase 84.4.1: replaces 5 hardcoded "KM-Sandbox-Session" callsites
+// (shell.go:500, agent.go:356/430/619, agent_auth.go:157/411). Note the
+// lowercase 'k' — v1.0.0 used "KM-Sandbox-Session" (uppercase); v2.0.0 uses
+// "${prefix}-Sandbox-Session" with lowercase prefix per the v2.0.0 contract.
+func (c *Config) GetSandboxSessionDocumentName() string {
+	return c.GetResourcePrefix() + "-Sandbox-Session"
+}
+
 // GetSandboxTableName returns the DynamoDB sandboxes table name.
 // Derives from GetResourcePrefix() + "-sandboxes", defaulting to "km-sandboxes".
 func (c *Config) GetSandboxTableName() string {

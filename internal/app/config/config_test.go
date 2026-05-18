@@ -646,3 +646,32 @@ func TestShouldBuildContainerImages_NilReceiver(t *testing.T) {
 		t.Error("ShouldBuildContainerImages on nil *Config: expected true (default), got false")
 	}
 }
+
+// TestGetSandboxSessionDocumentName_Default verifies fallback to "km" prefix.
+// Phase 84.4.1: GetSandboxSessionDocumentName() replaces 5 hardcoded callsites.
+func TestGetSandboxSessionDocumentName_Default(t *testing.T) {
+	cfg := &config.Config{}
+	got := cfg.GetSandboxSessionDocumentName()
+	if got != "km-Sandbox-Session" {
+		t.Errorf("expected km-Sandbox-Session, got %q", got)
+	}
+}
+
+// TestGetSandboxSessionDocumentName_Custom verifies per-install rename.
+func TestGetSandboxSessionDocumentName_Custom(t *testing.T) {
+	cfg := &config.Config{ResourcePrefix: "tg"}
+	got := cfg.GetSandboxSessionDocumentName()
+	if got != "tg-Sandbox-Session" {
+		t.Errorf("expected tg-Sandbox-Session, got %q", got)
+	}
+}
+
+// TestGetSandboxSessionDocumentName_NilSafe matches the GetEmailDomain nil-safety pattern.
+// A nil Config receiver must not panic and must return the "km" default.
+func TestGetSandboxSessionDocumentName_NilSafe(t *testing.T) {
+	var cfg *config.Config
+	got := cfg.GetSandboxSessionDocumentName()
+	if got != "km-Sandbox-Session" {
+		t.Errorf("expected km-Sandbox-Session (nil-safe), got %q", got)
+	}
+}

@@ -432,3 +432,18 @@ func TestUnbootstrapPerStepFailureContinues(t *testing.T) {
 		t.Error("KMS step should still execute when SSM step failed")
 	}
 }
+
+// TestRunUnbootstrap_DeletesDDBLockTable verifies Phase 84.4.1 UNBOOTSTRAP-DDB-LOCK-CLEANUP:
+// unbootstrap must delete the terragrunt state-lock DDB table "tf-{prefix}-locks-{regionLabel}".
+//
+// Wave 0: scaffolding only (skipped). Wave 2 plan 84.4.1-04 implements
+// deleteDynamoDBLockTable in unbootstrap.go and unskips this test.
+func TestRunUnbootstrap_DeletesDDBLockTable(t *testing.T) {
+	t.Skip("Wave 2 plan 84.4.1-04: implement deleteDynamoDBLockTable + wire deps.DynamoDB")
+	// Wave 2 body:
+	// (a) Construct fakeDynamoDB implementing UnbootstrapDynamoDBAPI; record DescribeTable + DeleteTable calls.
+	// (b) Inject via UnbootstrapDeps{DynamoDB: fake, ...}.
+	// (c) Assert: DescribeTable called for "tf-km-locks-use1" (km prefix, use1 region label).
+	// (d) Assert: DeleteTable called for that table.
+	// (e) Assert: idempotent — second invocation tolerates ResourceNotFoundException without erroring.
+}
