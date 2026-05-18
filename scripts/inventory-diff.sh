@@ -14,7 +14,8 @@
 # Services snapshotted:
 #   EFS (filesystems + mount targets), IAM (roles + policies), Lambda, DynamoDB,
 #   S3, KMS (key aliases), Route53 (record sets), SES (receipt rule sets),
-#   Organizations SCPs (requires management-account profile)
+#   Organizations SCPs (requires management-account profile),
+#   SSM documents (self-owned, captures prefix-namespaced session docs)
 set -euo pipefail
 
 # ---- helpers ----------------------------------------------------------------
@@ -114,6 +115,15 @@ do_snapshot() {
     --query "HostedZones[?starts_with(Name, '')].[Id,Name,Config.PrivateZone,ResourceRecordSetCount]" \
     --output json 2>/dev/null || echo "[]")
 
+  # SSM documents — self-owned (session docs are account-owned, not AWS-managed).
+  # Captures Name + DocumentType + DocumentVersion so the KM-Sandbox-Session ->
+  # km-Sandbox-Session rename shows up in inventory diffs.
+  local ssm_documents
+  ssm_documents=$(aws ssm list-documents \
+    --filters Key=Owner,Values=Self \
+    --query 'DocumentIdentifiers[].{Name:Name,DocumentType:DocumentType,DocumentVersion:DocumentVersion,PlatformTypes:PlatformTypes}' \
+    --output json 2>/dev/null || echo "[]")
+
   # Compose final snapshot JSON with sorted keys for stable diffs
   jq -n -S \
     --argjson efs          "$efs" \
@@ -125,6 +135,7 @@ do_snapshot() {
     --argjson ses_sets     "$ses_rule_sets" \
     --argjson ses_rules    "$ses_rules" \
     --argjson r53          "$r53_zones" \
+    --argjson ssm_docs     "$ssm_documents" \
     --arg     prefix       "$prefix" \
     --arg     captured_at  "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
     '{
@@ -136,7 +147,8 @@ do_snapshot() {
       s3: { buckets: $s3 },
       kms: { aliases: $kms },
       ses: { rule_sets: $ses_sets, rules: $ses_rules },
-      route53: { hosted_zones: $r53 }
+      route53: { hosted_zones: $r53 },
+      ssm: { documents: $ssm_docs }
     }' > "$output_file"
 
   echo "==> Snapshot written to: ${output_file}" >&2
