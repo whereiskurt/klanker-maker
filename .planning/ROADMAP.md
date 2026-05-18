@@ -1934,3 +1934,17 @@ Phase closes when: (a) `infra/modules/ssm-session-doc/v2.0.0/` exists with `${va
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 84.4.1 to break down)
+
+### Phase 85: doctor: orphan state-lock digest sweeper + report cleanup
+
+**Goal:** Close the Phase 84.1 digest-leak loop in `km doctor`: add a `--delete-state-digests` cleanup category (also folded into `--with-deletes`) that removes orphan rows from the Terragrunt state-lock DDB table where the sibling S3 state object is definitively gone (NoSuchKey + age > 24h). Replace the unreadable single-line digest-mismatch warn with a `summary + 10-item preview + --json full list` format matching Stale Lambdas. Parallelize the per-item S3 HEAD scan + BatchWriteItem deletes; target `km doctor` < 30s wall clock on accounts with hundreds of orphans (vs. ~1:40 today). Out of scope: plugging the upstream leak in `km destroy` / `km uninit` (separate follow-up phase).
+
+**Requirements**: See `.planning/phases/85-doctor-orphan-state-lock-digest-sweeper-report-cleanup/BRIEF.md` (in-scope items, safety guards, acceptance criteria, TDD test list).
+**Depends on:** Phase 84.1 (`checkStateLockDigest` + `StateLockS3Client`/`StateLockDDBClient` wiring)
+**Plans:** 4 plans
+
+Plans:
+- [ ] 85-01-PLAN.md — Wave 0 scaffolding: new file doctor_state_digest_sweeper.go with S3StateHeadAPI + LockDigestDeleterAPI interfaces, checkStateLockDigestSweeper stub; 7 red-state TDD test stubs in doctor_state_digest_test.go (Wave 0, autonomous)
+- [ ] 85-02-PLAN.md — Wave 1 TDD implementation: parallel HeadObject scan (10-worker semaphore), age guard via sandbox-lister cross-reference (parseSandboxIDFromLockID helper for shared-module fallback), s3types.NotFound classification, BatchWriteItem 25-item batches with UnprocessedItems retry; turn all 5 TDD tests + output-format + UnprocessedItems tests GREEN (Wave 1, autonomous, depends on 85-01)
+- [ ] 85-03-PLAN.md — Wave 2 integration: --delete-state-digests flag + --with-deletes fold-in + DoctorDeps fields + initRealDepsWithExisting wiring + buildChecks registration replacement; doctor.go-only changes (Wave 2, autonomous, depends on 85-02)
+- [ ] 85-04-PLAN.md — Wave 3 operator UAT: timed km doctor against ~275-orphan account; before/after lock-table snapshots; live sandbox lock-row safety verification; sign-off (Wave 3, NOT autonomous — operator checkpoint, depends on 85-03)
