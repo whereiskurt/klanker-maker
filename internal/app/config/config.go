@@ -190,6 +190,14 @@ type Config struct {
 	// application account. Maps to km-config.yaml key clusters (Plan 80).
 	// Absent key → empty slice (no error). Managed via `km cluster add/list/rm`.
 	Clusters []ClusterConfig `mapstructure:"clusters" yaml:"clusters"`
+
+	// YAMLDefaults holds the raw km-config.yaml values for env-bound keys,
+	// snapshotted during Load() BEFORE viper's AutomaticEnv binds env vars into
+	// the cfg fields. Used by ExportTerragruntEnvVars to detect drift between
+	// the env var and the yaml-configured value.
+	// Keys are dotted yaml paths (e.g. "region", "artifacts_bucket", "domain").
+	// Empty map when km-config.yaml is not found or key is absent in yaml.
+	YAMLDefaults map[string]string
 }
 
 // accountsYamlAuthoritativeKeys lists the viper keys for which km-config.yaml
@@ -299,6 +307,7 @@ func Load() (*Config, error) {
 			v2.AddConfigPath(repoRoot)
 		}
 	}
+	var yamlDefaults map[string]string
 	if err := v2.ReadInConfig(); err == nil {
 		// Merge platform keys from v2 into v only when not already overridden by env.
 		for _, key := range []string{
@@ -340,6 +349,21 @@ func Load() (*Config, error) {
 				v.Set(key, v2.Get(key))
 			}
 		}
+
+		// Snapshot raw yaml values for env-bound keys so ExportTerragruntEnvVars
+		// can detect drift between env vars and yaml values (Phase 84.3 gap closure 1).
+		// This snapshot is taken AFTER the merge loop so the v2 values are definitive,
+		// but BEFORE building cfg (whose fields are baked with env values by AutomaticEnv).
+		yamlDefaults = map[string]string{}
+		for _, key := range []string{
+			"region", "domain", "artifacts_bucket", "resource_prefix",
+			"operator_email", "route53_zone_id", "scheduler_role_arn",
+			"email_subdomain",
+		} {
+			if v2.IsSet(key) {
+				yamlDefaults[key] = v2.GetString(key)
+			}
+		}
 	}
 	// Not finding km-config.yaml is fine — continue with existing config.
 
@@ -377,6 +401,7 @@ func Load() (*Config, error) {
 		SlackStreamMessagesTableName: v.GetString("slack_stream_messages_table_name"),
 		ResourcePrefix:               v.GetString("resource_prefix"),
 		EmailSubdomain:               v.GetString("email_subdomain"),
+		YAMLDefaults:                 yamlDefaults,
 	}
 
 	// ContainerSubstratesEnabled is tri-state via *bool: only populated when
