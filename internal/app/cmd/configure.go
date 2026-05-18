@@ -14,6 +14,8 @@ import (
 	smithy "github.com/aws/smithy-go"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
+	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
+	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 	"gopkg.in/yaml.v3"
 )
 
@@ -561,9 +563,31 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 		if err != nil {
 			return err
 		}
+		// Phase 84.4.1: compute default tf-${prefix}-state-${region_label} when
+		// stateBucket is unset. Mirrors site.hcl:43 (backend.bucket =
+		// "${local.site.tf_state_prefix}-state-${local.region.label}").
+		// Closes CONFIGURE-STATE-BUCKET-UX.
+		if stateBucket == "" && resourcePrefix != "" && region != "" {
+			stateBucket = fmt.Sprintf("tf-%s-state-%s", resourcePrefix, compiler.RegionLabel(region))
+		}
 		stateBucket, err = prompt(out, scanner, "S3 state bucket for sandbox metadata (used by km list/status)", stateBucket)
 		if err != nil {
 			return err
+		}
+		// Phase 84.4.1: HeadBucket-check the accepted bucket name; offer [Y/edit/abort] on 403.
+		// Skip when in == nil (non-interactive wrapper with no stdin available).
+		if in != nil {
+			awsCfg, awsErr := awspkg.LoadAWSConfigInRegion(context.Background(), "klanker-terraform", region)
+			if awsErr == nil {
+				s3client := s3.NewFromConfig(awsCfg)
+				bufReader := bufio.NewReader(in)
+				stateBucket, err = probeStateBucketInteractive(context.Background(), stateBucket, applicationAcct, bufReader, out, s3client)
+				if err != nil {
+					return err
+				}
+			}
+			// If awsErr != nil (no AWS creds at configure time), skip silently —
+			// bootstrap will surface the issue when it actually needs to access S3.
 		}
 		artifactsBucket, err = prompt(out, scanner, "S3 artifacts bucket for Lambda zips, sidecars, sandbox artifacts", artifactsBucket)
 		if err != nil {

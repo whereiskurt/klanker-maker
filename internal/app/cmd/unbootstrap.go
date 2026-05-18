@@ -22,6 +22,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aws/aws-sdk-go-v2/service/route53"
@@ -172,11 +173,10 @@ func buildUnbootstrapDeps(awsProfile, region string, includeZone bool) (Unbootst
 		return UnbootstrapDeps{}, fmt.Errorf("load AWS config: %w", err)
 	}
 	deps := UnbootstrapDeps{
-		SSM: ssm.NewFromConfig(awsCfg),
-		S3:  s3.NewFromConfig(awsCfg),
-		KMS: kms.NewFromConfig(awsCfg),
-		// TODO(84.4.1-04): wire deps.DynamoDB = dynamodb.NewFromConfig(awsCfg)
-		// in Wave 2 once deleteDynamoDBLockTable helper is added.
+		SSM:      ssm.NewFromConfig(awsCfg),
+		S3:       s3.NewFromConfig(awsCfg),
+		KMS:      kms.NewFromConfig(awsCfg),
+		DynamoDB: dynamodb.NewFromConfig(awsCfg), // Phase 84.4.1: closes UNBOOTSTRAP-DDB-LOCK-CLEANUP
 	}
 	if includeZone {
 		deps.Route53 = route53.NewFromConfig(awsCfg)
@@ -237,6 +237,17 @@ func RunUnbootstrapWithDeps(cfg *config.Config, deps UnbootstrapDeps, opts Unboo
 			fmt.Fprintf(out, "  [warn] state bucket %s teardown failed: %v\n", stateBucket, err)
 		} else {
 			stateDeleted = true
+		}
+	}
+
+	// Step 3a (Phase 84.4.1): Delete the Terraform state-lock DynamoDB table.
+	// Name pattern mirrors site.hcl:44 (backend.dynamodb_table =
+	// "${local.site.tf_state_prefix}-locks-${local.region.label}").
+	// Closes UNBOOTSTRAP-DDB-LOCK-CLEANUP.
+	if deps.DynamoDB != nil {
+		lockTable := fmt.Sprintf("tf-%s-locks-%s", cfg.GetResourcePrefix(), regionLabel)
+		if err := deleteDynamoDBLockTable(ctx, deps.DynamoDB, lockTable, out); err != nil {
+			fmt.Fprintf(out, "  [warn] DynamoDB lock table %s teardown failed: %v\n", lockTable, err)
 		}
 	}
 
@@ -563,6 +574,37 @@ func deleteRoute53Zone(ctx context.Context, client UnbootstrapRoute53API, zoneNa
 	return nil
 }
 
+// deleteDynamoDBLockTable deletes the Terraform state-lock DynamoDB table.
+// Returns nil if the table doesn't exist (idempotent across re-runs).
+//
+// Phase 84.4.1: closes the orphan DDB table left behind by km unbootstrap.
+// The table is created by terragrunt's --backend-bootstrap option during the
+// first `km init`; it must be explicitly deleted because `km unbootstrap`
+// predated terragrunt's auto-creation behavior.
+//
+// Closes UNBOOTSTRAP-DDB-LOCK-CLEANUP.
+func deleteDynamoDBLockTable(ctx context.Context, client UnbootstrapDynamoDBAPI, table string, out io.Writer) error {
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "Tearing down DynamoDB lock table %s...\n", table)
+
+	_, err := client.DescribeTable(ctx, &dynamodb.DescribeTableInput{TableName: &table})
+	if err != nil {
+		var nfe *dynamodbtypes.ResourceNotFoundException
+		if errors.As(err, &nfe) {
+			fmt.Fprintf(out, "  [skip] DynamoDB lock table %s does not exist (idempotent)\n", table)
+			return nil
+		}
+		return fmt.Errorf("describe lock table: %w", err)
+	}
+
+	_, err = client.DeleteTable(ctx, &dynamodb.DeleteTableInput{TableName: &table})
+	if err != nil {
+		return fmt.Errorf("delete lock table: %w", err)
+	}
+	fmt.Fprintf(out, "  DynamoDB lock table %s deletion initiated (async)\n", table)
+	return nil
+}
+
 // Compile-time guard: ensure runtime types satisfy the interfaces. Keeps
 // signature drift in the real SDK from breaking us silently.
 var (
@@ -570,4 +612,5 @@ var (
 	_ UnbootstrapS3API      = (*s3.Client)(nil)
 	_ UnbootstrapKMSAPI     = (*kms.Client)(nil)
 	_ UnbootstrapRoute53API = (*route53.Client)(nil)
+	_ UnbootstrapDynamoDBAPI = (*dynamodb.Client)(nil)
 )

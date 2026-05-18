@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aws/aws-sdk-go-v2/service/route53"
@@ -433,17 +435,80 @@ func TestUnbootstrapPerStepFailureContinues(t *testing.T) {
 	}
 }
 
+// fakeDynamoDB satisfies cmd.UnbootstrapDynamoDBAPI for testing.
+// Records DescribeTable + DeleteTable calls; notFound simulates
+// ResourceNotFoundException on DescribeTable.
+type fakeDynamoDB struct {
+	describeCalls []string
+	deleteCalls   []string
+	notFound      bool // if true, DescribeTable returns ResourceNotFoundException
+}
+
+func (f *fakeDynamoDB) DescribeTable(_ context.Context, in *dynamodb.DescribeTableInput, _ ...func(*dynamodb.Options)) (*dynamodb.DescribeTableOutput, error) {
+	f.describeCalls = append(f.describeCalls, aws.ToString(in.TableName))
+	if f.notFound {
+		return nil, &dynamodbtypes.ResourceNotFoundException{Message: aws.String("table not found")}
+	}
+	return &dynamodb.DescribeTableOutput{}, nil
+}
+
+func (f *fakeDynamoDB) DeleteTable(_ context.Context, in *dynamodb.DeleteTableInput, _ ...func(*dynamodb.Options)) (*dynamodb.DeleteTableOutput, error) {
+	f.deleteCalls = append(f.deleteCalls, aws.ToString(in.TableName))
+	return &dynamodb.DeleteTableOutput{}, nil
+}
+
+// Compile-time assertion: fakeDynamoDB must satisfy cmd.UnbootstrapDynamoDBAPI.
+var _ cmd.UnbootstrapDynamoDBAPI = (*fakeDynamoDB)(nil)
+
 // TestRunUnbootstrap_DeletesDDBLockTable verifies Phase 84.4.1 UNBOOTSTRAP-DDB-LOCK-CLEANUP:
 // unbootstrap must delete the terragrunt state-lock DDB table "tf-{prefix}-locks-{regionLabel}".
 //
-// Wave 0: scaffolding only (skipped). Wave 2 plan 84.4.1-04 implements
-// deleteDynamoDBLockTable in unbootstrap.go and unskips this test.
+// Wave 2 plan 84.4.1-04: unskipped + implemented.
 func TestRunUnbootstrap_DeletesDDBLockTable(t *testing.T) {
-	t.Skip("Wave 2 plan 84.4.1-04: implement deleteDynamoDBLockTable + wire deps.DynamoDB")
-	// Wave 2 body:
-	// (a) Construct fakeDynamoDB implementing UnbootstrapDynamoDBAPI; record DescribeTable + DeleteTable calls.
-	// (b) Inject via UnbootstrapDeps{DynamoDB: fake, ...}.
-	// (c) Assert: DescribeTable called for "tf-km-locks-use1" (km prefix, use1 region label).
-	// (d) Assert: DeleteTable called for that table.
-	// (e) Assert: idempotent — second invocation tolerates ResourceNotFoundException without erroring.
+	// (a) fakeDynamoDB records calls.
+	fake := &fakeDynamoDB{}
+
+	// (b) Inject via RunUnbootstrapWithDeps — minimal deps (only DynamoDB set;
+	//     SSM/S3/KMS nil so those steps are no-ops).
+	cfg := &config.Config{}
+	cfg.ResourcePrefix = "km"
+
+	deps := cmd.UnbootstrapDeps{
+		DynamoDB: fake,
+	}
+	opts := cmd.UnbootstrapOpts{
+		Region: "us-east-1",
+	}
+
+	var out bytes.Buffer
+	_ = cmd.RunUnbootstrapWithDeps(cfg, deps, opts, &out)
+
+	// (c) DescribeTable called for "tf-km-locks-use1".
+	wantTable := "tf-km-locks-use1"
+	if len(fake.describeCalls) == 0 {
+		t.Fatalf("expected DescribeTable call for %q, got none", wantTable)
+	}
+	if fake.describeCalls[0] != wantTable {
+		t.Errorf("expected DescribeTable(%q), got %q", wantTable, fake.describeCalls[0])
+	}
+
+	// (d) DeleteTable called for that table.
+	if len(fake.deleteCalls) == 0 {
+		t.Fatalf("expected DeleteTable call for %q, got none", wantTable)
+	}
+	if fake.deleteCalls[0] != wantTable {
+		t.Errorf("expected DeleteTable(%q), got %q", wantTable, fake.deleteCalls[0])
+	}
+
+	// (e) Idempotent: ResourceNotFoundException is tolerated without error.
+	notFoundFake := &fakeDynamoDB{notFound: true}
+	depsNF := cmd.UnbootstrapDeps{DynamoDB: notFoundFake}
+	var out2 bytes.Buffer
+	if err := cmd.RunUnbootstrapWithDeps(cfg, depsNF, opts, &out2); err != nil {
+		// RunUnbootstrapWithDeps warns on errors instead of returning them, so this should be nil.
+		t.Errorf("expected nil when table not found (idempotent), got: %v", err)
+	}
+	if len(notFoundFake.deleteCalls) != 0 {
+		t.Errorf("expected no DeleteTable when table missing, got %v", notFoundFake.deleteCalls)
+	}
 }
