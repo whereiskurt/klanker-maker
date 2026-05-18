@@ -975,8 +975,8 @@ intentional per CONTEXT.md.
 
 **Cross-references:**
 - Phase 84.4 module-level hardening ships v2.0.0 modules for scp, efs, and s3-replication.
-  Cross-install identity/permission/sharing requires Phase 84.4.1 work before full
-  multi-install runtime parity is achieved. See § Phase 84.4 below.
+  Phase 84.4.1 completed the cross-install identity, permission, and sharing design.
+  Multi-install is production-ready as of Phase 84.4.1. See § Phase 84.4.1 below.
 - The eight closures map 1:1 to acceptance criteria in
   `.planning/phases/84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted/84.3-CONTEXT.md`.
 
@@ -988,178 +988,140 @@ resource names from `${var.resource_prefix}`. A second `km` install in the same
 AWS account/Organization can apply alongside the first without resource-name
 collisions. The live wiring in `infra/live/use1/` was flipped to v2.0.0 (Plan 05).
 
-**What is validated:** Resource-naming layer. `km init --plan` shows 0 destroys for a
-fresh second install. All 16 regional modules apply green. EFS per-install works (no
-`creation_token` collision). `km install` isolation is preserved when rg install is
-torn down — after manual recovery from the ssm-session-doc gap (see below).
+The Phase 84.4 fresh-prefix UAT (`rg`) uncovered three cross-install interaction
+gaps (ssm-session-doc shared naming, SCP AND-composition, SES auto-import).
+These were addressed in Phase 84.4.1. See the Phase 84.4.1 section below for the
+production-ready multi-install runbook.
 
-**What requires 84.4.1 before production use:** Cross-install identity, permission, and
-shared-resource interactions. Two blocking design gaps and one architectural gap were
-discovered during the Phase 84.4 fresh-prefix UAT (prefix `rg`).
+### Phase 84.4.1 — Multi-install: second/third install bootstrap
 
-#### AWS 5-SCP-per-target limit
+As of Phase 84.4.1 (2026-05-18), the multi-install design is production-ready. A
+second install in the same AWS account/Organization (e.g. `resource_prefix: tg`)
+bootstraps cleanly on a shared-domain account without operator-side workarounds.
 
-Each install owns `${var.resource_prefix}-sandbox-containment` SCP attached to
-its application account. AWS allows up to 5 SCPs per OU/account, so a maximum of
-5 km installs can share a single application account before hitting this limit.
+#### Quick start: second-install lifecycle
 
-#### SCP AND-composition gap (BLOCKING — requires 84.4.1)
-
-When two installs share an application account, both SCPs attach and compose with
-AND-logic. The first install's SCP (e.g., `km-sandbox-containment`) trusts only
-`km-*` role ARNs. The second install's create-handler (`rg-create-handler`) is
-denied by the first install's SCP — `ec2:CreateSecurityGroup` and `iam:CreateRole`
-are blocked for all rg operations.
-
-**Current workaround (unsafe for production):** Manually add the second install's
-create-handler ARN to the first install's deployed SCP via AWS console.
-
-**84.4.1 fix options:** Shared SCP with union of all trusted role patterns; per-install
-OUs; pattern-based `*-create-handler` ArnLike allow. See
-`.planning/phases/84.4-multi-install-module-hardening/deferred-items.md` for the
-full design options.
-
-#### ssm-session-doc shared-resource teardown gap (TIER-1 — requires 84.4.1)
-
-`infra/modules/ssm-session-doc/v1.0.0/main.tf` hardcodes the SSM document name
-`KM-Sandbox-Session`. Both installs create and import the same AWS resource. When
-the second install is torn down (`km uninit`), its `ssm-session-doc` module
-**deletes the shared document from AWS**, breaking the first install's `km shell`.
-
-**Symptom after rg teardown:**
-```
-InvalidDocument: Document with name KM-Sandbox-Session does not exist
-```
-
-**Recovery:**
-```bash
-cd /path/to/klankrmkr/infra/live/use1/ssm-session-doc/
-terragrunt apply -auto-approve
-```
-
-**84.4.1 fix:** Migrate `ssm-session-doc` to v2.0.0 with per-install
-`${prefix}-Sandbox-Session` naming. The `terragrunt import` workaround is unsafe
-at teardown time and must NOT be used as a workaround for similar shared-name gaps.
-
-#### SES auto-import gap (Plan 06 criterion — requires 84.4.1)
-
-`km bootstrap --shared-ses` on a second install in a shared-domain account should
-auto-detect the existing SES domain identity and import the Route53 DKIM CNAME
-records without operator intervention. In the Phase 84.4 UAT, `detectSharedSESState`
-returned `registerID = true` even though the domain identity already existed (owned
-by the km install). The auto-import path was skipped, and Terraform tried to create
-the already-existing DKIM records → Route53 `InvalidChangeBatch` errors.
-
-**Workaround:**
-```bash
-cd klanker-maker-rg/infra/live/use1/ses-shared-rule-set/
-# Get DKIM tokens:
-aws ses get-identity-dkim-attributes \
-  --identities <email_subdomain>.<domain> \
-  --query 'DkimAttributes.*.DkimTokens[]' --output text
-# Import each of the 3 DKIM CNAME records:
-terragrunt import 'aws_route53_record.dkim[0]' '<zone-id>_<token0>._domainkey.<subdomain>.<domain>_CNAME'
-terragrunt import 'aws_route53_record.dkim[1]' '<zone-id>_<token1>._domainkey.<subdomain>.<domain>_CNAME'
-terragrunt import 'aws_route53_record.dkim[2]' '<zone-id>_<token2>._domainkey.<subdomain>.<domain>_CNAME'
-# Then re-run bootstrap:
-./bin/km bootstrap --shared-ses --dry-run=false
-```
-
-#### Second-install bootstrap sequence (current procedure with known gaps)
-
-To stand up a second install (e.g., `resource_prefix: rg`) in an account that
-already has a canonical install:
+From a sibling working directory (e.g. `klanker-maker-tg/`):
 
 ```bash
 # 1. Clone the repo to a sibling working directory (NOT a subdirectory of klankrmkr/)
-git clone <repo-url> klanker-maker-rg
-cd klanker-maker-rg
+git clone <repo-url> klanker-maker-tg
+cd klanker-maker-tg
 make build
 
-# 2. Configure — review state_bucket default carefully (no auto-computed default yet)
+# 2. Configure (state_bucket default + HeadBucket retry are automatic)
 ./bin/km configure
-# resource_prefix: rg; email_subdomain: shared or separate
+# Set resource_prefix: tg; choose email_subdomain (shared or separate)
 
-# 3. Pre-requisite: write region.hcl (only needed for fresh clones, before km init runs)
-mkdir -p infra/live/use1
-cat > infra/live/use1/region.hcl <<EOF
-locals {
-  region_label = "use1"
-  region_full  = "us-east-1"
-}
-EOF
-
-# 4. Build Lambda zips (make build-lambdas is drifted — use km init --lambdas instead)
-./bin/km init --lambdas
-
-# 5. Plain bootstrap (SCP, KMS, artifacts, state)
+# 3. Plain bootstrap (SCP, KMS, artifacts, state) — region.hcl auto-prereq
 ./bin/km bootstrap --dry-run=false
 
-# 6. Shared SES (manually import DKIM CNAMEs if domain identity already exists — see gap above)
+# 4. Shared SES (auto-imports DKIM/MX/TXT records from sibling install — no manual import needed)
 ./bin/km bootstrap --shared-ses --dry-run=false
 
-# 7. Plan + apply
+# 5. Plan + apply
 ./bin/km init --plan
 ./bin/km init --dry-run=false
-# Note: ssm-session-doc apply will fail with DocumentAlreadyExists — import it:
-# cd infra/live/use1/ssm-session-doc/ && terragrunt import 'aws_ssm_document.km_sandbox_session' 'KM-Sandbox-Session'
-# Then re-run: ./bin/km init --dry-run=false
 
-# 8. Fix SCP AND-composition manually (see gap above)
-# Add second install's create-handler ARN to canonical install's SCP
+# 6. Sandbox lifecycle
+./bin/km create profiles/learn.yaml
+# ... use sandbox ...
+./bin/km destroy <sandbox-id> --remote --yes
+
+# 7. Clean teardown
+./bin/km uninit --dry-run=false
+./bin/km unbootstrap --dry-run=false
 ```
 
-#### Companion teardown (known gaps)
+#### How it works
+
+**Per-install resource naming.** All v2.0.0 modules (`scp`, `efs`, `s3-replication`,
+`ssm-session-doc`) template resource names from `${var.resource_prefix}`. The
+SSM Session Manager document is named `${prefix}-Sandbox-Session` (e.g.
+`km-Sandbox-Session`, `tg-Sandbox-Session`). Each install owns its own copy;
+teardown of one install does not affect another install's SSM documents.
+
+**Pattern-based SCP trust.** Each install's `${prefix}-sandbox-containment`
+SCP attaches to its own application account. The SCP body's `trusted_arns_*`
+allowlists use suffix patterns (`*-create-handler`, `*-ec2spot-ssm-*`,
+`*-budget-enforcer-*`, etc.) so any install's well-known role names are
+trusted by any other install's SCP via suffix matching. A second install's
+`tg-create-handler` is trusted by the canonical install's SCP without requiring
+a policy-body edit.
+
+**Security trade-off.** The wildcard pattern `arn:aws:iam::*:role/*-create-handler`
+means a hypothetical role named `evil-create-handler` deployed in ANY account
+would be trusted by the SCP. This is mitigated by layered defenses: (1)
+operator-only `iam:CreateRole` permission in the application account, (2)
+cross-account assume-role grants required to actually use deployed roles,
+(3) the SCP is one defense-in-depth layer, not the only one. Operators who
+want stricter isolation can move each install's application account into a
+per-install OU; this is a manual operation not currently automated by km.
+
+**DKIM auto-import on shared domains.** `km bootstrap --shared-ses` detects
+when Route53 DKIM/MX/TXT records already exist (from a sibling install) and
+automatically runs `terragrunt import` for each before the apply phase. No
+manual import workaround is required for second-install shared-domain bootstrap.
+
+**Fresh-clone DX.** `km configure` displays a computed default
+`[tf-${prefix}-state-${regionLabel}]` for the state bucket prompt and
+HeadBucket-checks the accepted name. `km bootstrap` auto-writes `region.hcl`
+via a shared helper. `km unbootstrap` deletes the terragrunt-created DynamoDB
+lock table. `make build-lambdas` produces all 6 Lambda zips that
+`init.go:buildLambdaZips` enumerates.
+
+#### AWS limits to watch
+
+**5 SCPs per OU/target.** AWS allows up to 5 SCPs per OU or account. Each install
+attaches its own `${prefix}-sandbox-containment` SCP; the account-level SCP count
+can reach 5 installs sharing a single application account before hitting this limit.
+
+**5,120-byte SCP policy size.** `infra/modules/scp/v2.0.0/main.tf` includes a
+`terraform_data.scp_size_guard` precondition that trips at plan-time if the rendered
+SCP policy JSON exceeds 5,000 bytes (120-byte buffer below the AWS hard limit). If
+a future `trusted_arns_*` addition would exceed the limit, the plan fails with a
+clear error before AWS rejects the apply.
+
+**1-2s SSM document outage during ssm-session-doc apply.** When applying
+`ssm-session-doc/v2.0.0` for the first time on an install that previously had
+v1.0.0, the AWS provider destroys the old document and creates the new
+`${prefix}-Sandbox-Session` in a ~1-2 second window. Active SSM sessions
+started before the destroy survive. New sessions started during the window fail
+with `InvalidDocument` and retry cleanly. Terminate active `km shell` sessions
+before applying this transition.
+
+#### Companion teardown
+
+`km uninit` destroys regional resources. `km unbootstrap` destroys the install's
+foundation (state bucket, KMS alias, artifacts bucket, DynamoDB lock table).
+The install's SCP is NOT auto-detached/deleted by either command — manually
+detach via:
 
 ```bash
-cd /path/to/klanker-maker-rg
-
-# 1. Detach SCP resources from state before uninit (prevents production SCP destruction)
-cd infra/live/us-east-1/scp/
-terragrunt state rm aws_organizations_policy_attachment.scp
-terragrunt state rm aws_organizations_policy.scp
-terragrunt state rm data.aws_iam_policy_document.scp
-
-# 2. Regional teardown (WARNING: destroys ssm-session-doc — breaks first install's km shell)
-./bin/km uninit --force
-
-# 3. Foundation teardown
-./bin/km unbootstrap
-
-# 4. Manual SCP cleanup (management account)
-AWS_PROFILE=management aws organizations detach-policy \
-  --policy-id <rg-scp-policy-id> --target-id <application-account-id>
-AWS_PROFILE=management aws organizations delete-policy \
-  --policy-id <rg-scp-policy-id>
-
-# 5. Manual DynamoDB lock table cleanup (km unbootstrap does not remove this)
-aws dynamodb delete-table --table-name tf-<prefix>-locks-<region>
-
-# 6. REQUIRED: Re-apply ssm-session-doc in canonical install to restore shared document
-cd /path/to/klankrmkr/infra/live/use1/ssm-session-doc/
-terragrunt apply -auto-approve
+AWS_PROFILE=<management-profile> aws organizations detach-policy \
+  --policy-id <id> --target-id <application-account-id>
+AWS_PROFILE=<management-profile> aws organizations delete-policy \
+  --policy-id <id>
 ```
 
-#### 5,120-byte SCP limit guard
+See Phase 84.4 Plan 07 for the canonical detach/delete sequence.
 
-`infra/modules/scp/v2.0.0/main.tf` includes a `terraform_data.scp_size_guard`
-precondition that trips at plan-time if the rendered SCP policy JSON exceeds
-5,000 bytes (120-byte buffer below the AWS 5,120-byte hard limit). If a future
-`trusted_arns_*` addition would exceed the limit, the plan fails with a clear
-error before AWS rejects the apply.
+#### History and commit references
 
-#### Phase 84.4.1 scope
+- Phase 84 (2026-05-16) — Per-install SES rule namespacing via operator address prefix
+- Phase 84.1 (2026-05-16) — Upgrade-safety gap closure (8 gaps)
+- Phase 84.2 (2026-05-16) — `km init --plan` with destroy-class gate
+- Phase 84.3 (2026-05-17) — Wrapper-level bootstrap UX
+- Phase 84.4 (2026-05-17) — v2.0.0 modules: scp, efs, s3-replication
+- Phase 84.4.1 (2026-05-18) — ssm-session-doc/v2.0.0, SCP `*-*` pattern allowlist,
+  SES auto-import gate separation, fresh-clone DX hardening (6 fixes)
 
-Phase 84.4.1 must address before multi-install is production-safe:
-
-1. **ssm-session-doc v2.0.0 migration** — per-install `${prefix}-Sandbox-Session` naming
-2. **SCP AND-composition design** — choose and implement a cross-install SCP composition model
-3. **Plan 06 auto-import fix** — `detectSharedSESState` must probe AWS for existing domain identity
-4. **km unbootstrap DynamoDB lock table cleanup** — include `tf-${prefix}-locks-${region}` deletion
-5. **region.hcl prereq** — write from bootstrap or remove from ses-shared-rule-set dependency
-6. **Terraform binary cache** — `downloadTerraform` must re-download if version drifted
-7. **Makefile build-lambdas drift** — sync with `init.go:buildLambdaZips()` 6-zip list
-8. **km configure state_bucket default** — compute and show `tf-${prefix}-state-${region}`
-
-See `.planning/phases/84.4-multi-install-module-hardening/deferred-items.md` for
-the full gap inventory with root causes, workarounds, and fix designs.
+Phase 84.4.1 changes:
+- `infra/modules/ssm-session-doc/v2.0.0/` — per-install `${prefix}-Sandbox-Session` naming
+- `infra/modules/scp/v2.0.0/` — pattern-based `*-create-handler` allowlist
+- `bootstrap.go` — SES auto-import gate separated from `registerID` check (state-independent)
+- Makefile `build-lambdas` target — 6-zip parity with `init.go:buildLambdaZips`
+- `bootstrap.go` `ensureRegionHCL` — auto-writes `region.hcl` as prerequisite for fresh clones
+- `configure.go` — `state_bucket` default prompt + HeadBucket retry UX
+- `unbootstrap.go` — DynamoDB lock table cleanup on teardown
+- `init.go` `downloadTerraform` — stale terraform binary cache invalidation
