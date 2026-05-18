@@ -1314,6 +1314,14 @@ func planModule(ctx context.Context, runner InitRunner, m regionalModule, verbos
 	if err != nil {
 		fmt.Println(" parse-fail (warn)")
 		fmt.Fprintf(os.Stderr, "  warning: %s show -json: %v (conservative-trip)\n", m.name, err)
+		// cmd.Output() in ShowPlanJSON puts terragrunt's stderr in *exec.ExitError.Stderr.
+		// Surface it so operators can see why the JSON render failed (provider mismatch,
+		// missing lambda zip, stale terragrunt cache, etc.) instead of just "exit status 1".
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+			indented := strings.ReplaceAll(strings.TrimRight(string(exitErr.Stderr), "\n"), "\n", "\n    ")
+			fmt.Fprintf(os.Stderr, "    %s\n", indented)
+		}
 		return planreport.Report{Module: m.name, ParseFailed: true, ParseError: err}, nil
 	}
 	report, err := planreport.Parse(jsonBytes)
