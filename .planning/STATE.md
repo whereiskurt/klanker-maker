@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.3-10-PLAN.md — re-UAT gap closure; UAT and REQUIREMENTS updated
-last_updated: "2026-05-18T02:17:04.387Z"
+stopped_at: Completed 84.4-00-PLAN.md — Wave 0 prerequisites (hcl/v2, Runner.Import, make test, testdata, inventory-diff)
+last_updated: "2026-05-18T02:42:11.977Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 97
   completed_phases: 85
   total_plans: 396
-  completed_plans: 342
+  completed_plans: 343
   percent: 88
 ---
 
@@ -379,6 +379,7 @@ Progress: [█████████░] 88%
 | Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted P07 | 347 | 2 tasks | 3 files |
 | Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted P09 | 534 | 2 tasks | 3 files |
 | Phase 84.3 P10 | 12 | 2 tasks | 3 files |
+| Phase 84.4-multi-install-module-hardening P00 | 1134 | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -1090,6 +1091,9 @@ Recent decisions affecting current work:
 - [Phase 84.3]: validateArtifactsBucket added to both runInitPlan and runInitPlanWithWriter (production + test seam)
 - [Phase 84.3]: UAT status set to closed_with_deferred: all 4 automated gaps closed (84.3-07/08/09); 6 operator-follow-up items remain DEFERRED
 - [Phase 84.3]: Phase 84.3 requirements tracked via REQUIREMENTS.md synthetic IDs (ENV-CONFIG-DRIFT-WARN, ARTIFACTS-BUCKET-DERIVATION, BOOTSTRAP-WORKFLOW-DISCOVERABILITY, CONFIG-DISPLAY-VS-YAML-AUTHORITY) following Phase 84.2 pattern
+- [Phase 84.4-multi-install-module-hardening]: hcl/v2 anchored via modulehygiene_stub_test.go import to survive go mod tidy until Plan 01
+- [Phase 84.4-multi-install-module-hardening]: make test: excludes 5 packages with pre-existing failures — documented in deferred-items.md
+- [Phase 84.4-multi-install-module-hardening]: BuildImportCommand exposed as public method mirroring existing Build*Command pattern for testability
 
 ### Roadmap Evolution
 
@@ -1197,6 +1201,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-18T00:49:30.357Z
-Stopped at: Completed 84.3-10-PLAN.md — re-UAT gap closure; UAT and REQUIREMENTS updated
+Last session: 2026-05-18T02:42:11.970Z
+Stopped at: Completed 84.4-00-PLAN.md — Wave 0 prerequisites (hcl/v2, Runner.Import, make test, testdata, inventory-diff)
 Resume file: None

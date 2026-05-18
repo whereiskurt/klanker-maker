@@ -1903,7 +1903,7 @@ Phase closes when: (a) `grep -rn '"km-' infra/modules/` returns zero results in 
 
 **Operator-visible probe state during planning:** The `klanker-maker-whereiskurt` install (resource_prefix: whereiskurt) is currently in a partial state on AWS account 052251888500 — has its own state bucket, KMS key alias, S3 artifacts bucket, foundation SES (imported DKIM CNAMEs from prior install), regional network apply complete, EFS apply FAILED (creation_token collision with km-/kph- install's EFS), SCP imported into whereiskurt state but its policy content actively DENIES whereiskurt's lambdas. This install is a probe — Phase 84.4 plans must include a clean-teardown task (`km uninit` + `km unbootstrap` + manual SCP detach + manual orphan-resource cleanup) verified by AWS-CLI before the fresh-prefix UAT runs. Do NOT attempt to "finish" the whereiskurt install — its purpose is exercising the failure modes that 84.4 codifies.
 
-**Plans:** 9 plans (Wave 0 prerequisites → Wave 1 audit + v2.0.0 modules → Wave 2 live wiring + bootstrap auto-import → Wave 3 whereiskurt teardown UAT → Wave 4 fresh-prefix rg UAT)
+**Plans:** 1/9 plans executed
 
 Plans:
 - [ ] 84.4-00-PLAN.md — Wave 0: prerequisites (hcl/v2 dep, Makefile test target, Runner.Import method, testdata fixtures, inventory-diff script)
