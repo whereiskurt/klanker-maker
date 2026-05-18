@@ -140,6 +140,23 @@ func (r *Runner) Reconfigure(ctx context.Context, sandboxDir string) error {
 	return r.runCommand(ctx, cmd)
 }
 
+// Import runs `terragrunt import <address> <id>` inside dir.
+// Used by runBootstrapSharedSES (Phase 84.4) to bring pre-existing
+// AWS resources (DKIM CNAMEs, MX, TXT) into foundation tfstate before apply.
+// Idempotency note: terragrunt import fails if the resource is already in state.
+// Callers must check state ownership first via FoundationStateReader.StateOwns.
+func (r *Runner) Import(ctx context.Context, dir, address, id string) error {
+	cmd := r.BuildImportCommand(ctx, dir, address, id)
+	return r.runCommand(ctx, cmd)
+}
+
+// BuildImportCommand constructs the exec.Cmd for `terragrunt import <address> <id>`
+// without running it. Used directly by Import() and exposed for testing.
+// Note: terragrunt import does NOT support -auto-approve.
+func (r *Runner) BuildImportCommand(ctx context.Context, dir, address, id string) *exec.Cmd {
+	return r.buildCommand(ctx, dir, "import", address, id)
+}
+
 // Plan runs `terragrunt plan` inside sandboxDir for dry-run preview without
 // mutating state. Used by km cluster add --dry-run=true so operators can review
 // the IAM role that WOULD be created before flipping --dry-run=false.

@@ -701,3 +701,84 @@ func TestRunner_ShowPlanJSONNonZeroExit(t *testing.T) {
 		t.Fatal("expected non-nil error from non-zero exit, got nil")
 	}
 }
+
+// ---- Phase 84.4-00: Runner.Import command construction tests ----
+
+// TestRunnerImportBuildsCorrectCommand verifies that Runner.Import builds
+// `terragrunt import <address> <id>` — no -auto-approve, no apply.
+// Phase 84.4-00: used by runBootstrapSharedSES to bring pre-existing AWS
+// resources (DKIM CNAMEs, MX, TXT) into foundation tfstate before apply.
+func TestRunnerImportBuildsCorrectCommand(t *testing.T) {
+	r := terragrunt.NewRunner("klanker-terraform", "/repo/root")
+	sandboxDir := makeFakeSandboxDir(t)
+
+	address := "aws_route53_record.dkim_cname[0]"
+	id := "Z1234567890/_dkim-key._domainkey.example.com/CNAME"
+
+	cmd := r.BuildImportCommand(context.Background(), sandboxDir, address, id)
+
+	args := cmd.Args
+	if len(args) < 4 {
+		t.Fatalf("expected at least 4 args (terragrunt import <address> <id>), got %v", args)
+	}
+	if args[1] != "import" {
+		t.Errorf("args[1] = %q, want %q", args[1], "import")
+	}
+	if args[2] != address {
+		t.Errorf("args[2] = %q, want %q", args[2], address)
+	}
+	if args[3] != id {
+		t.Errorf("args[3] = %q, want %q", args[3], id)
+	}
+	if cmd.Dir != sandboxDir {
+		t.Errorf("cmd.Dir = %q, want %q", cmd.Dir, sandboxDir)
+	}
+	// Must NOT have -auto-approve (import doesn't support it)
+	for _, arg := range args {
+		if arg == "-auto-approve" {
+			t.Errorf("import command must NOT contain -auto-approve, got args: %v", args)
+		}
+	}
+	// Must NOT have "apply" in the subcommand position
+	if args[1] == "apply" {
+		t.Errorf("import command must NOT use apply subcommand, got args: %v", args)
+	}
+}
+
+// TestRunnerImportCallsTerragrunt verifies end-to-end: Import routes through
+// runCommand using a fake terragrunt shim that exits 0.
+func TestRunnerImportCallsTerragrunt(t *testing.T) {
+	makeFakeTerragruntBin(t, `exit 0`)
+
+	r := &terragrunt.Runner{
+		AWSProfile: "test",
+		RepoRoot:   t.TempDir(),
+		Verbose:    false,
+	}
+	sandboxDir := makeFakeSandboxDir(t)
+
+	err := r.Import(context.Background(), sandboxDir,
+		"aws_ses_domain_identity.main", "example.com")
+	if err != nil {
+		t.Fatalf("Import returned unexpected error: %v", err)
+	}
+}
+
+// TestRunnerImportPropagatesError verifies that a non-zero exit from
+// `terragrunt import` causes Import to return a non-nil error.
+func TestRunnerImportPropagatesError(t *testing.T) {
+	makeFakeTerragruntBin(t, `echo "resource already in state" >&2; exit 1`)
+
+	r := &terragrunt.Runner{
+		AWSProfile: "test",
+		RepoRoot:   t.TempDir(),
+		Verbose:    false,
+	}
+	sandboxDir := makeFakeSandboxDir(t)
+
+	err := r.Import(context.Background(), sandboxDir,
+		"aws_ses_domain_identity.main", "example.com")
+	if err == nil {
+		t.Fatal("expected non-nil error from non-zero exit, got nil")
+	}
+}
