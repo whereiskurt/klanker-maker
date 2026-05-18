@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.4-03-PLAN.md — EFS v2.0.0 prefix-namespaced module
-last_updated: "2026-05-18T02:53:23.062Z"
+stopped_at: Completed 84.4-04-PLAN.md — s3-replication/v2.0.0 with prefix-templated IAM names
+last_updated: "2026-05-18T02:54:41.036Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 97
   completed_phases: 85
   total_plans: 396
-  completed_plans: 345
+  completed_plans: 346
   percent: 88
 ---
 
@@ -382,6 +382,7 @@ Progress: [█████████░] 88%
 | Phase 84.4-multi-install-module-hardening P00 | 1134 | 2 tasks | 11 files |
 | Phase 84.4-multi-install-module-hardening P01 | 153s | 1 tasks | 2 files |
 | Phase 84.4-03 P03 | 2min | 1 tasks | 4 files |
+| Phase 84.4-multi-install-module-hardening P04 | 8 | 1 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1100,6 +1101,8 @@ Recent decisions affecting current work:
 - [Phase 84.4-multi-install-module-hardening]: walkModulesV2Plus skips v1.0.0 explicitly but audits v1.1.0+ — any post-historical release is subject to prefix-clean enforcement
 - [Phase 84.4-03]: resource_prefix default=km renders creation_token byte-identical to v1.0.0 — no moved{} blocks needed for default installs
 - [Phase 84.4-03]: test_harness.tf.skip uses kph (3-char) and whereiskurt (11-char) synthetic prefixes to bracket the validation regex range
+- [Phase 84.4-04]: s3-replication/v2.0.0: inline provider alias block preserved verbatim from v1.0.0; no required_providers added (root.hcl manages providers)
+- [Phase 84.4-04]: doctor.go km-s3-replication- hardcoded literal fixed to rolePrefix+s3-replication- immediately on module parameterization (existing comment explicitly named this fix as pending)
 
 ### Roadmap Evolution
 
@@ -1207,6 +1210,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-18T02:53:23.054Z
-Stopped at: Completed 84.4-03-PLAN.md — EFS v2.0.0 prefix-namespaced module
+Last session: 2026-05-18T02:54:41.028Z
+Stopped at: Completed 84.4-04-PLAN.md — s3-replication/v2.0.0 with prefix-templated IAM names
 Resume file: None
