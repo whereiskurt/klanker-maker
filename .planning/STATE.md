@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.4-00-PLAN.md — Wave 0 prerequisites (hcl/v2, Runner.Import, make test, testdata, inventory-diff)
-last_updated: "2026-05-18T02:42:11.977Z"
+stopped_at: Completed 84.4-01-PLAN.md — HCL static-analysis audit test (TestModuleNamesUseResourcePrefix)
+last_updated: "2026-05-18T02:48:24.795Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 97
   completed_phases: 85
   total_plans: 396
-  completed_plans: 343
+  completed_plans: 344
   percent: 88
 ---
 
@@ -380,6 +380,7 @@ Progress: [█████████░] 88%
 | Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted P09 | 534 | 2 tasks | 3 files |
 | Phase 84.3 P10 | 12 | 2 tasks | 3 files |
 | Phase 84.4-multi-install-module-hardening P00 | 1134 | 2 tasks | 11 files |
+| Phase 84.4-multi-install-module-hardening P01 | 153s | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1094,6 +1095,8 @@ Recent decisions affecting current work:
 - [Phase 84.4-multi-install-module-hardening]: hcl/v2 anchored via modulehygiene_stub_test.go import to survive go mod tidy until Plan 01
 - [Phase 84.4-multi-install-module-hardening]: make test: excludes 5 packages with pre-existing failures — documented in deferred-items.md
 - [Phase 84.4-multi-install-module-hardening]: BuildImportCommand exposed as public method mirroring existing Build*Command pattern for testability
+- [Phase 84.4-multi-install-module-hardening]: tLogger interface + mockT enables negative tests in checkTFFile without outer test failure — avoids expected-failure semantics that testing.T doesn't natively support
+- [Phase 84.4-multi-install-module-hardening]: walkModulesV2Plus skips v1.0.0 explicitly but audits v1.1.0+ — any post-historical release is subject to prefix-clean enforcement
 
 ### Roadmap Evolution
 
@@ -1201,6 +1204,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-18T02:42:11.970Z
-Stopped at: Completed 84.4-00-PLAN.md — Wave 0 prerequisites (hcl/v2, Runner.Import, make test, testdata, inventory-diff)
+Last session: 2026-05-18T02:48:24.786Z
+Stopped at: Completed 84.4-01-PLAN.md — HCL static-analysis audit test (TestModuleNamesUseResourcePrefix)
 Resume file: None
