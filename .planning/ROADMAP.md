@@ -1930,10 +1930,16 @@ Phase closes when: (a) `infra/modules/ssm-session-doc/v2.0.0/` exists with `${va
 
 **Operator-visible probe state during planning:** As of 2026-05-18, the canonical `km` install is healthy after a manual `terragrunt apply` recovery of `ssm-session-doc` (re-created the `KM-Sandbox-Session` document destroyed during rg teardown). The `rg` probe install was cleanly torn down via `km uninit` + `km unbootstrap` (recovery sequence documented in 84.4-08 SUMMARY). Phase 84.4.1's UAT will require a fresh second probe install (suggested prefix: `tg`).
 
-**Plans:** 0/N plans (run /gsd:plan-phase 84.4.1 to break down)
+**Plans:** 7 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 84.4.1 to break down)
+- [ ] 84.4.1-00-PLAN.md — Wave 0: Test scaffolding (GetSandboxSessionDocumentName, UnbootstrapDynamoDBAPI interface, 8 scaffolded tests)
+- [ ] 84.4.1-01-PLAN.md — Wave 1: SCP *-* pattern fix (in-place v2.0.0 update + management/scp/terragrunt.hcl + BuildSCPPolicyFromPrefix Go mirror + test rewrite)
+- [ ] 84.4.1-02-PLAN.md — Wave 1: ssm-session-doc/v2.0.0 per-install rename + 5 Go callsite updates + audit case-insensitive matching
+- [ ] 84.4.1-03-PLAN.md — Wave 1: SES auto-import gate fix at bootstrap.go:595 + fail-fast recovery message + 2 tests
+- [ ] 84.4.1-04-PLAN.md — Wave 2: Fresh-clone DX hardening (Makefile 6 zips, region.hcl prereq, configure UX, unbootstrap DDB cleanup, downloadTerraform cache, isPlaceholderBucket regression)
+- [ ] 84.4.1-05-PLAN.md — Wave 3: OPERATOR CHECKPOINT — apply scp/v2.0.0 + ssm-session-doc/v2.0.0 to canonical km install (BEFORE/AFTER inventory snapshots) — NOT autonomous
+- [ ] 84.4.1-06-PLAN.md — Wave 4: OPERATOR CHECKPOINT — fresh-prefix tg UAT-2 + OPERATOR-GUIDE.md clean runbook (replaces gaps+workarounds prose) — NOT autonomous
 
 ### Phase 85: doctor: orphan state-lock digest sweeper + report cleanup
 
