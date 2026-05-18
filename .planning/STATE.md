@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.4-02-PLAN.md — scp/v2.0.0 prefix-namespaced module + BuildSCPPolicyFromPrefix
-last_updated: "2026-05-18T03:06:46.591Z"
+stopped_at: Completed 84.4-06-PLAN.md — DKIM/MX/TXT auto-import for second installs
+last_updated: "2026-05-18T03:07:24.273Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 97
@@ -384,6 +384,7 @@ Progress: [█████████░] 88%
 | Phase 84.4-03 P03 | 2min | 1 tasks | 4 files |
 | Phase 84.4-multi-install-module-hardening P04 | 8 | 1 tasks | 5 files |
 | Phase 84.4-multi-install-module-hardening P02 | 891 | 2 tasks | 5 files |
+| Phase 84.4-multi-install-module-hardening P06 | 883 | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1107,6 +1108,8 @@ Recent decisions affecting current work:
 - [Phase 84.4-02]: BuildSCPPolicyFromPrefix uses minimal trustedBase (SSO only) matching HCL module defaults — keeps JSON under 4KB even for 12-char prefix
 - [Phase 84.4-02]: scp/v2.0.0 variable resource_prefix with default='km' renders byte-identical names to v1.0.0 — no Terraform state migration required for default km install
 - [Phase 84.4-02]: 5000-byte safety threshold in terraform_data precondition (120-byte buffer below AWS 5120-byte hard limit)
+- [Phase 84.4]: Plan 06: Gate DKIM auto-import on sesv1Client/r53ImportClient/stateReader non-nil — listerOverride (test) path unchanged
+- [Phase 84.4]: Plan 06: Route53 import IDs use double underscore for TXT (<zone>__amazonses.<domain>_TXT)
 
 ### Roadmap Evolution
 
@@ -1214,6 +1217,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-18T03:06:46.583Z
-Stopped at: Completed 84.4-02-PLAN.md — scp/v2.0.0 prefix-namespaced module + BuildSCPPolicyFromPrefix
+Last session: 2026-05-18T03:07:24.265Z
+Stopped at: Completed 84.4-06-PLAN.md — DKIM/MX/TXT auto-import for second installs
 Resume file: None
