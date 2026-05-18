@@ -1911,7 +1911,7 @@ Plans:
 - [ ] 84.4-02-PLAN.md — Wave 1: scp/v2.0.0/ prefix-templated module + 5KB precondition guard + BuildSCPPolicy(resourcePrefix) update + size unit tests
 - [ ] 84.4-03-PLAN.md — Wave 1: efs/v2.0.0/ prefix-templated creation_token + SG name + Name tags
 - [ ] 84.4-04-PLAN.md — Wave 1: s3-replication/v2.0.0/ prefix-templated IAM role + policy names + stale-literal grep audit
-- [ ] 84.4-05-PLAN.md — Wave 2: live wiring flip (scp/efs/s3-replication v1.0.0→v2.0.0) + operator zero-diff verification on km install — NOT autonomous
+- [x] 84.4-05-PLAN.md — Wave 2: live wiring flip (scp/efs/s3-replication v1.0.0→v2.0.0) + operator zero-diff verification on km install — NOT autonomous
 - [ ] 84.4-06-PLAN.md — Wave 2: runBootstrapSharedSES auto-import for DKIM[0..2]/MX/_amazonses TXT via Runner.Import + mocked unit tests
 - [ ] 84.4-07-PLAN.md — Wave 3: whereiskurt probe teardown UAT (BEFORE snapshot → km uninit → manual SCP/EFS cleanup → km unbootstrap → AFTER diff) — NOT autonomous
 - [ ] 84.4-08-PLAN.md — Wave 4: fresh-prefix rg UAT (full lifecycle: configure → bootstrap → init → sandbox create/destroy → uninit → unbootstrap → km install isolation diff) + OPERATOR-GUIDE.md multi-install runbook — NOT autonomous
