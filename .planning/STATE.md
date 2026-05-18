@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.4-04-PLAN.md — s3-replication/v2.0.0 with prefix-templated IAM names
-last_updated: "2026-05-18T02:54:41.036Z"
+stopped_at: Completed 84.4-02-PLAN.md — scp/v2.0.0 prefix-namespaced module + BuildSCPPolicyFromPrefix
+last_updated: "2026-05-18T03:06:46.591Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 97
   completed_phases: 85
   total_plans: 396
-  completed_plans: 346
+  completed_plans: 348
   percent: 88
 ---
 
@@ -383,6 +383,7 @@ Progress: [█████████░] 88%
 | Phase 84.4-multi-install-module-hardening P01 | 153s | 1 tasks | 2 files |
 | Phase 84.4-03 P03 | 2min | 1 tasks | 4 files |
 | Phase 84.4-multi-install-module-hardening P04 | 8 | 1 tasks | 5 files |
+| Phase 84.4-multi-install-module-hardening P02 | 891 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1103,6 +1104,9 @@ Recent decisions affecting current work:
 - [Phase 84.4-03]: test_harness.tf.skip uses kph (3-char) and whereiskurt (11-char) synthetic prefixes to bracket the validation regex range
 - [Phase 84.4-04]: s3-replication/v2.0.0: inline provider alias block preserved verbatim from v1.0.0; no required_providers added (root.hcl manages providers)
 - [Phase 84.4-04]: doctor.go km-s3-replication- hardcoded literal fixed to rolePrefix+s3-replication- immediately on module parameterization (existing comment explicitly named this fix as pending)
+- [Phase 84.4-02]: BuildSCPPolicyFromPrefix uses minimal trustedBase (SSO only) matching HCL module defaults — keeps JSON under 4KB even for 12-char prefix
+- [Phase 84.4-02]: scp/v2.0.0 variable resource_prefix with default='km' renders byte-identical names to v1.0.0 — no Terraform state migration required for default km install
+- [Phase 84.4-02]: 5000-byte safety threshold in terraform_data precondition (120-byte buffer below AWS 5120-byte hard limit)
 
 ### Roadmap Evolution
 
@@ -1210,6 +1214,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-18T02:54:41.028Z
-Stopped at: Completed 84.4-04-PLAN.md — s3-replication/v2.0.0 with prefix-templated IAM names
+Last session: 2026-05-18T03:06:46.583Z
+Stopped at: Completed 84.4-02-PLAN.md — scp/v2.0.0 prefix-namespaced module + BuildSCPPolicyFromPrefix
 Resume file: None
