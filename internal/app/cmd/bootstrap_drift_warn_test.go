@@ -76,8 +76,6 @@ func TestRunBootstrap_DriftWarn_MissingExportCall(t *testing.T) {
 // values for PrimaryRegion (both appear equal in cfg after viper baking).
 // Plan 07's Task 2 action MUST remove this t.Skip call.
 func TestRunBootstrap_DriftWarn_KM_REGION(t *testing.T) {
-	t.Skip("needs Plan 07 — YAMLDefaults field not yet added to config.Config")
-
 	t.Setenv("KM_REGION", "us-west-2")
 
 	cfg := &config.Config{

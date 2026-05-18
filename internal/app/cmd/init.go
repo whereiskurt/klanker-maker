@@ -748,16 +748,37 @@ func runInitPartial(cfg *config.Config, awsProfile, region string, verbose, side
 // canonical helper across all 8 production callers, NO shim (H5, plan-checker rev 1).
 func ExportTerragruntEnvVars(cfg *config.Config) {
 	// Phase 84.3: warnAndSetEnv emits a drift WARN to stderr when an env var is
-	// already set to a different value than cfgVal, then sets the env var only when
-	// it is currently unset. env-wins semantics are preserved (no override).
+	// already set to a different value than the yaml-configured value, then sets
+	// the env var only when it is currently unset. env-wins semantics preserved.
 	// yamlKey is the dotted yaml path used in the WARN message (e.g. "region").
+	//
+	// Phase 84.3 gap closure 1: use cfg.YAMLDefaults[yamlKey] for the drift
+	// comparison instead of cfgVal. After viper AutomaticEnv(), cfgVal already
+	// equals envVal for env-bound keys (e.g. KM_REGION bakes into cfg.PrimaryRegion),
+	// so the comparison cfgVal != envVal is always false and no WARN fires. The
+	// YAMLDefaults snapshot captures the raw yaml value before env baking.
 	warnAndSetEnv := func(envKey, yamlKey, cfgVal string) {
-		if envVal := os.Getenv(envKey); envVal != "" && cfgVal != "" && envVal != cfgVal {
-			fmt.Fprintf(os.Stderr, "WARN: %s=%s (env) overrides km-config.yaml %s=%s\n", envKey, envVal, yamlKey, cfgVal)
+		envVal := os.Getenv(envKey)
+		if envVal == "" {
+			// env not set — no drift possible; set from cfgVal if available.
+			if cfgVal != "" {
+				os.Setenv(envKey, cfgVal) //nolint:errcheck
+			}
+			return
 		}
-		if cfgVal != "" && os.Getenv(envKey) == "" {
-			os.Setenv(envKey, cfgVal)
+		// Use yaml snapshot for drift comparison; fall back to cfgVal if no snapshot.
+		// After viper AutomaticEnv(), cfgVal == envVal for env-bound keys, so the
+		// snapshot is required to detect real yaml↔env divergence (Phase 84.3 gap 1).
+		yamlVal := cfgVal
+		if cfg.YAMLDefaults != nil {
+			if snap, ok := cfg.YAMLDefaults[yamlKey]; ok {
+				yamlVal = snap
+			}
 		}
+		if yamlVal != "" && envVal != yamlVal {
+			fmt.Fprintf(os.Stderr, "WARN: %s=%s (env) overrides km-config.yaml %s=%s\n", envKey, envVal, yamlKey, yamlVal)
+		}
+		// env wins — do not override with cfg value
 	}
 
 	// Phase 84.1: KM_ROUTE53_ZONE_ID — required by infra/live/use1/ses-shared-rule-set/
@@ -791,19 +812,35 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 	// Always export these so site.hcl get_env("KM_RESOURCE_PREFIX", "km") picks up the value.
 	// An empty string is a valid export (site.hcl fallback "km" kicks in).
 	// No cfgVal guard — warnAndSetEnv only warns when cfgVal != ""; prefix can be "".
+	//
+	// Phase 84.3 gap closure 1: use YAMLDefaults for drift comparison so the WARN
+	// fires even when env baking makes cfg.ResourcePrefix == envVal.
 	prefix := cfg.GetResourcePrefix()
-	if envVal := os.Getenv("KM_RESOURCE_PREFIX"); envVal != "" && prefix != "" && envVal != prefix {
-		fmt.Fprintf(os.Stderr, "WARN: KM_RESOURCE_PREFIX=%s (env) overrides km-config.yaml resource_prefix=%s\n", envVal, prefix)
+	yamlPrefix := prefix
+	if cfg.YAMLDefaults != nil {
+		if snap, ok := cfg.YAMLDefaults["resource_prefix"]; ok && snap != "" {
+			yamlPrefix = snap
+		}
+	}
+	if envVal := os.Getenv("KM_RESOURCE_PREFIX"); envVal != "" && yamlPrefix != "" && envVal != yamlPrefix {
+		fmt.Fprintf(os.Stderr, "WARN: KM_RESOURCE_PREFIX=%s (env) overrides km-config.yaml resource_prefix=%s\n", envVal, yamlPrefix)
 	}
 	if os.Getenv("KM_RESOURCE_PREFIX") == "" {
-		os.Setenv("KM_RESOURCE_PREFIX", prefix)
+		os.Setenv("KM_RESOURCE_PREFIX", prefix) //nolint:errcheck
 	}
 
-	if envVal := os.Getenv("KM_EMAIL_SUBDOMAIN"); envVal != "" && cfg.EmailSubdomain != "" && envVal != cfg.EmailSubdomain {
-		fmt.Fprintf(os.Stderr, "WARN: KM_EMAIL_SUBDOMAIN=%s (env) overrides km-config.yaml email_subdomain=%s\n", envVal, cfg.EmailSubdomain)
+	// Phase 84.3 gap closure 1: use YAMLDefaults for drift comparison for email_subdomain.
+	yamlSubdomain := cfg.EmailSubdomain
+	if cfg.YAMLDefaults != nil {
+		if snap, ok := cfg.YAMLDefaults["email_subdomain"]; ok && snap != "" {
+			yamlSubdomain = snap
+		}
+	}
+	if envVal := os.Getenv("KM_EMAIL_SUBDOMAIN"); envVal != "" && yamlSubdomain != "" && envVal != yamlSubdomain {
+		fmt.Fprintf(os.Stderr, "WARN: KM_EMAIL_SUBDOMAIN=%s (env) overrides km-config.yaml email_subdomain=%s\n", envVal, yamlSubdomain)
 	}
 	if os.Getenv("KM_EMAIL_SUBDOMAIN") == "" {
-		os.Setenv("KM_EMAIL_SUBDOMAIN", cfg.EmailSubdomain)
+		os.Setenv("KM_EMAIL_SUBDOMAIN", cfg.EmailSubdomain) //nolint:errcheck
 	}
 }
 
