@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted-08-PLAN.md
-last_updated: "2026-05-18T00:18:08.530Z"
+stopped_at: Completed 84.3-07-PLAN.md — YAMLDefaults drift detection gap closure
+last_updated: "2026-05-18T00:19:58.479Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 97
   completed_phases: 84
   total_plans: 396
-  completed_plans: 339
+  completed_plans: 340
   percent: 88
 ---
 
@@ -376,6 +376,7 @@ Progress: [█████████░] 88%
 | Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted P04 | 8min | 3 tasks | 5 files |
 | Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted P06 | 720 | 1 tasks | 4 files |
 | Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted P08 | 5 | 1 tasks | 1 files |
+| Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted P07 | 347 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1081,6 +1082,8 @@ Recent decisions affecting current work:
 - [Phase 84.3-06]: isolateExportEnvVars helper: pre-register all 12 ExportTerragruntEnvVars output env vars via t.Setenv to prevent os.Setenv calls leaking between tests
 - [Phase 84.3-06]: TestRunBootstrap_DriftWarn_KM_REGION SKIP-guarded for Plan 07: YAMLDefaults field does not exist yet; test compiles clean and does not pollute CI FAIL count before Plan 07
 - [Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted]: Gap 2 closed: ExportTerragruntEnvVars(loadedCfg) inserted in runBootstrap at line 1317, matching existing pattern in runBootstrapSharedSES and runBootstrapSharedSESPlanWithWriter
+- [Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted]: Snapshot v2 yaml values into Config.YAMLDefaults before env baking so ExportTerragruntEnvVars can compare envVal against yaml value, not the already-baked cfg field
+- [Phase 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted]: warnAndSetEnv fallback to cfgVal when YAMLDefaults nil preserves backward compat for Plan 01 unit tests that build cfg directly without config.Load()
 
 ### Roadmap Evolution
 
@@ -1188,6 +1191,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-18T00:18:08.522Z
-Stopped at: Completed 84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted-08-PLAN.md
+Last session: 2026-05-18T00:19:58.464Z
+Stopped at: Completed 84.3-07-PLAN.md — YAMLDefaults drift detection gap closure
 Resume file: None

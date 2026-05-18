@@ -1875,7 +1875,7 @@ Phase closes when: (a) `km configure` HeadBucket-checks `state_bucket` and re-pr
 
 **Depends on:** Phase 84.2 (specifically the `ensureRegionHCL` helper added in commit `c345229` — Phase 84.3 builds on the env-derivation patterns there)
 
-**Plans:** 7/10 plans executed
+**Plans:** 8/10 plans executed
 
 Plans:
 - [ ] 84.3-01-PLAN.md — Wave 0 RED test scaffolding for all 8 closures (configure_84_3_test.go, env_test.go, init_84_3_test.go, init_plan_test.go ext, bootstrap_84_3_test.go, config_84_3_test.go) — autonomous, Wave 0
