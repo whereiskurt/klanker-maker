@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aws/aws-sdk-go-v2/service/route53"
+	r53types "github.com/aws/aws-sdk-go-v2/service/route53/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/ses"
@@ -147,9 +148,16 @@ type resourceImporter interface {
 // exist in AWS yet).
 //
 // Called from runBootstrapSharedSES gated on !registerDomainIdentity (i.e. only
-// when the domain identity already exists in AWS from a prior install).
+// when the domain identity already exists in AWS from a prior install — if the
+// domain doesn't exist, apply creates everything fresh and there is nothing to
+// import).
 //
-// Phase 84.4 TDD RED stub — Step 4 replaces this body with the real implementation.
+// RESEARCH.md Pattern 5 (Phase 84.4): import must happen BEFORE apply.
+// Import ID formats:
+//
+//	DKIM CNAME: <zone>_<token>._domainkey.<domain>_CNAME
+//	MX:         <zone>_<domain>_MX
+//	TXT:        <zone>__amazonses.<domain>_TXT  (DOUBLE underscore)
 func autoImportFoundationSESRecords(
 	ctx context.Context,
 	runner resourceImporter,
@@ -160,7 +168,95 @@ func autoImportFoundationSESRecords(
 	emailDomain string,
 	hostedZoneID string,
 ) error {
-	return fmt.Errorf("autoImportFoundationSESRecords: not implemented (TDD RED stub — Step 4 fills this in)")
+	// 1. Fetch DKIM tokens for the domain.
+	dkimOut, err := sesClient.GetIdentityDkimAttributes(ctx, &ses.GetIdentityDkimAttributesInput{
+		Identities: []string{emailDomain},
+	})
+	if err != nil {
+		return fmt.Errorf("get DKIM attributes for %s: %w", emailDomain, err)
+	}
+	attrs, ok := dkimOut.DkimAttributes[emailDomain]
+	if !ok || len(attrs.DkimTokens) == 0 {
+		// Domain has no DKIM tokens yet — let apply create them.
+		fmt.Fprintf(os.Stderr, "warning: domain %s has no DKIM tokens yet — apply will create them\n", emailDomain)
+		return nil
+	}
+
+	// 2. Import each DKIM CNAME if not already in state.
+	// Foundation module declares count = 3; cap at 3.
+	limit := len(attrs.DkimTokens)
+	if limit > 3 {
+		limit = 3
+	}
+	for i := 0; i < limit; i++ {
+		token := attrs.DkimTokens[i]
+		addr := fmt.Sprintf("aws_route53_record.dkim[%d]", i)
+		owned, err := stateReader.StateOwns(ctx, addr)
+		if err != nil {
+			return fmt.Errorf("state check %s: %w", addr, err)
+		}
+		if owned {
+			fmt.Fprintf(os.Stderr, "  DKIM[%d] already in state, skipping import\n", i)
+			continue
+		}
+		id := fmt.Sprintf("%s_%s._domainkey.%s_CNAME", hostedZoneID, token, emailDomain)
+		fmt.Fprintf(os.Stderr, "  importing %s id=%s\n", addr, id)
+		if err := runner.Import(ctx, sesDir, addr, id); err != nil {
+			return fmt.Errorf("import %s: %w", addr, err)
+		}
+	}
+
+	// 3. Conditionally import MX and _amazonses TXT — check Route53 first.
+	records, err := r53Client.ListResourceRecordSets(ctx, &route53.ListResourceRecordSetsInput{
+		HostedZoneId:    aws.String(hostedZoneID),
+		StartRecordName: aws.String(emailDomain),
+	})
+	if err != nil {
+		return fmt.Errorf("list Route53 records for zone %s: %w", hostedZoneID, err)
+	}
+
+	var foundMX, foundTXT bool
+	for _, rec := range records.ResourceRecordSets {
+		name := strings.TrimSuffix(aws.ToString(rec.Name), ".")
+		if rec.Type == r53types.RRTypeMx && name == emailDomain {
+			foundMX = true
+		}
+		if rec.Type == r53types.RRTypeTxt && name == "_amazonses."+emailDomain {
+			foundTXT = true
+		}
+	}
+
+	if foundMX {
+		addr := "aws_route53_record.mx[0]"
+		owned, _ := stateReader.StateOwns(ctx, addr)
+		if !owned {
+			id := fmt.Sprintf("%s_%s_MX", hostedZoneID, emailDomain)
+			fmt.Fprintf(os.Stderr, "  importing %s id=%s\n", addr, id)
+			if err := runner.Import(ctx, sesDir, addr, id); err != nil {
+				return fmt.Errorf("import MX: %w", err)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "  MX already in state, skipping import\n")
+		}
+	}
+
+	if foundTXT {
+		addr := "aws_route53_record.ses_verification[0]"
+		owned, _ := stateReader.StateOwns(ctx, addr)
+		if !owned {
+			// DOUBLE underscore: record name "_amazonses.<domain>" gives
+			// import ID "<zone>__amazonses.<domain>_TXT".
+			id := fmt.Sprintf("%s__amazonses.%s_TXT", hostedZoneID, emailDomain)
+			fmt.Fprintf(os.Stderr, "  importing %s id=%s\n", addr, id)
+			if err := runner.Import(ctx, sesDir, addr, id); err != nil {
+				return fmt.Errorf("import TXT: %w", err)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "  _amazonses TXT already in state, skipping import\n")
+		}
+	}
+
+	return nil
 }
 
 // detectSharedSESState is the unexported implementation called by
@@ -404,13 +500,19 @@ func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool,
 	// auto-detect prefers state ownership over AWS reality (GAP-2 / GAP-3).
 	// In tests the listerOverride path skips the state reader entirely (nil),
 	// matching the legacy AWS-reality behaviour the existing test suite locks in.
+	//
+	// Phase 84.4: also stash sesv1Client and r53ImportClient for the DKIM/MX/TXT
+	// auto-import path (used only when domain identity already exists in AWS).
 	var lister SESIdentityLister
 	var stateReader FoundationStateReader
+	var sesv1Client sesDkimGetter      // Phase 84.4: SES v1 GetIdentityDkimAttributes
+	var r53ImportClient route53RecordLister // Phase 84.4: Route53 ListResourceRecordSets
 	if listerOverride != nil {
 		lister = listerOverride
-		// stateReader stays nil — tests inject their own via
-		// DetectSharedSESStateWithStateReader when state ownership is the
-		// subject under test.
+		// stateReader, sesv1Client, r53ImportClient stay nil — tests inject their
+		// own via DetectSharedSESStateWithStateReader when state ownership is the
+		// subject under test. The auto-import path is exercised directly via
+		// TestRunBootstrapSharedSESAutoImport (bootstrap_dkim_import_test.go).
 	} else {
 		region := loadedCfg.PrimaryRegion
 		if region == "" {
@@ -428,8 +530,9 @@ func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool,
 			}
 			return fmt.Errorf("load AWS config: %w", err)
 		}
+		realSES := ses.NewFromConfig(awsCfg)
 		lister = &realSESLister{
-			sesClient:   ses.NewFromConfig(awsCfg),
+			sesClient:   realSES,
 			sesv2Client: sesv2.NewFromConfig(awsCfg),
 		}
 		stateReader = &s3FoundationStateReader{
@@ -437,6 +540,11 @@ func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool,
 			bucket:   foundationStateBucket(loadedCfg),
 			key:      foundationStateKey(loadedCfg),
 		}
+		// Phase 84.4: stash for DKIM/MX/TXT auto-import below.
+		sesv1Client = realSES
+		// Route53 is global; the klanker-terraform profile has cross-account
+		// access to the dns_parent hosted zone.
+		r53ImportClient = route53.NewFromConfig(awsCfg)
 	}
 
 	registerRS, registerID, err := detectSharedSESState(ctx, lister, stateReader, "sandbox-email-shared", emailDomain)
@@ -472,6 +580,29 @@ func runBootstrapSharedSES(ctx context.Context, cfg *config.Config, dryRun bool,
 		fmt.Fprintf(w, "  KM_REGISTER_SHARED_RULESET=%s\n", os.Getenv("KM_REGISTER_SHARED_RULESET"))
 		fmt.Fprintf(w, "  KM_REGISTER_DOMAIN_IDENTITY=%s\n", os.Getenv("KM_REGISTER_DOMAIN_IDENTITY"))
 		return nil
+	}
+
+	// Phase 84.4: when the domain identity already exists in AWS (second install
+	// in a shared-domain account), auto-import DKIM/MX/TXT records that exist in
+	// Route53 but are not yet in this install's foundation tfstate. This prevents
+	// "resource already exists" errors during apply.
+	//
+	// Gate conditions:
+	//   !registerID — detectSharedSESState found domain identity in AWS already
+	//   sesv1Client != nil — real production path (not listerOverride test path)
+	//   r53ImportClient != nil — Route53 client was constructed (production path)
+	//   stateReader != nil — s3FoundationStateReader was constructed (production path)
+	if !registerID && sesv1Client != nil && r53ImportClient != nil && stateReader != nil {
+		hostedZoneID := loadedCfg.Route53ZoneID
+		if hostedZoneID == "" {
+			fmt.Fprintln(w, "WARN: route53_zone_id not set in km-config.yaml — skipping DKIM/MX/TXT auto-import")
+		} else {
+			runner := terragrunt.NewRunner("klanker-terraform", findRepoRoot())
+			fmt.Fprintln(w, "Auto-importing pre-existing DKIM/MX/TXT Route53 records...")
+			if err := autoImportFoundationSESRecords(ctx, runner, sesDir, stateReader, sesv1Client, r53ImportClient, emailDomain, hostedZoneID); err != nil {
+				return fmt.Errorf("auto-import SES Route53 records: %w", err)
+			}
+		}
 	}
 
 	fmt.Fprintln(w, "Applying ses-shared-rule-set...")
@@ -593,6 +724,48 @@ func BuildSCPPolicy(trustedBase, trustedInstance, trustedIAM, trustedSSM []strin
 			},
 		},
 	}
+}
+
+// BuildSCPPolicyFromPrefix is a convenience wrapper introduced in Phase 84.4.
+// It computes the trusted ARN sets from resourcePrefix and applicationAccountID,
+// then delegates to BuildSCPPolicy. The ARN set structure mirrors
+// infra/modules/scp/v2.0.0/main.tf locals (trusted_arns_*) with var.trusted_role_arns
+// at its default (SSO wildcard only). This keeps the JSON well within the 5,000-byte
+// threshold even for the maximum 12-char prefix (e.g. "whereiskurt").
+//
+// Returns the policy as a JSON string (indented) for display and size checks.
+// The 5,000-byte safety threshold (matching the HCL precondition) is NOT enforced
+// here — callers should check len(result) <= 5000 if needed.
+//
+// Backward compat: prefix "km" renders the same five canonical role-name patterns
+// (km-ecs-spot-handler, km-budget-enforcer-*, km-ec2spot-ssm-*,
+// km-github-token-refresher-*, km-ttl-handler) as the pre-84.4 hardcoded output.
+func BuildSCPPolicyFromPrefix(resourcePrefix, applicationAccountID, allowedRegion string) string {
+	// trustedBase mirrors trusted_arns_base = var.trusted_role_arns (default: SSO only).
+	// Keeping base minimal is critical for staying under the 5,000-byte limit with long prefixes.
+	trustedBase := []string{
+		"arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
+	}
+	// trustedInstance mirrors trusted_arns_instance: base + {prefix}-ecs-spot-handler.
+	trustedInstance := append(append([]string{}, trustedBase...),
+		fmt.Sprintf("arn:aws:iam::%s:role/%s-ecs-spot-handler", applicationAccountID, resourcePrefix))
+	// trustedIAM mirrors trusted_arns_iam: base + {prefix}-budget-enforcer-*.
+	trustedIAM := append(append([]string{}, trustedBase...),
+		fmt.Sprintf("arn:aws:iam::%s:role/%s-budget-enforcer-*", applicationAccountID, resourcePrefix))
+	// trustedSSM mirrors trusted_arns_ssm: narrower set — only SSM-specific roles + SSO.
+	trustedSSM := []string{
+		fmt.Sprintf("arn:aws:iam::%s:role/%s-ec2spot-ssm-*", applicationAccountID, resourcePrefix),
+		fmt.Sprintf("arn:aws:iam::%s:role/%s-github-token-refresher-*", applicationAccountID, resourcePrefix),
+		fmt.Sprintf("arn:aws:iam::%s:role/%s-ttl-handler", applicationAccountID, resourcePrefix),
+		"arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
+	}
+
+	policy := BuildSCPPolicy(trustedBase, trustedInstance, trustedIAM, trustedSSM, allowedRegion)
+	policyJSON, err := json.MarshalIndent(policy, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("error marshaling SCP policy: %v", err)
+	}
+	return string(policyJSON)
 }
 
 // WriteOperatorIAMGuidance writes the Phase 56 AMI-lifecycle positive-allow
@@ -1159,8 +1332,10 @@ func runShowPrereqs(ctx context.Context, cfg *config.Config, w io.Writer) error 
 	return nil
 }
 
-// runShowSCP prints the km-sandbox-containment SCP policy JSON and the km-org-admin
-// role/trust policy, with real account IDs from km-config.yaml substituted in.
+// runShowSCP prints the {prefix}-sandbox-containment SCP policy JSON and the
+// {prefix}-org-admin role/trust policy, with real account IDs from km-config.yaml
+// substituted in. Phase 84.4: uses cfg.ResourcePrefix (default "km") so non-km
+// installs display the correct role names.
 func runShowSCP(ctx context.Context, cfg *config.Config, w io.Writer) error {
 	loadedCfg, err := loadBootstrapConfig(cfg)
 	if err != nil {
@@ -1189,52 +1364,33 @@ func runShowSCP(ctx context.Context, cfg *config.Config, w io.Writer) error {
 		callerAccount = loadedCfg.TerraformAccountID
 	}
 
-	// --- Trusted role ARN sets (mirrors infra/modules/scp/v1.0.0/main.tf locals) ---
-	trustedBase := []string{
-		fmt.Sprintf("arn:aws:iam::%s:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*", appAccount),
-		fmt.Sprintf("arn:aws:iam::%s:role/km-provisioner-*", appAccount),
-		fmt.Sprintf("arn:aws:iam::%s:role/km-lifecycle-*", appAccount),
-		fmt.Sprintf("arn:aws:iam::%s:role/km-ecs-spot-handler", appAccount),
-		fmt.Sprintf("arn:aws:iam::%s:role/km-ttl-handler", appAccount),
-		fmt.Sprintf("arn:aws:iam::%s:role/km-create-handler", appAccount),
-	}
-	// trustedInstance is the same as trustedBase here because km-ecs-spot-handler
-	// is already in the base set (added via terragrunt inputs). In the Terraform module
-	// it's concat'd separately, but the result is equivalent.
-	trustedInstance := append([]string{}, trustedBase...)
-	trustedIAM := append(append([]string{}, trustedBase...), fmt.Sprintf("arn:aws:iam::%s:role/km-budget-enforcer-*", appAccount))
-	trustedSSM := []string{
-		fmt.Sprintf("arn:aws:iam::%s:role/km-ec2spot-ssm-*", appAccount),
-		fmt.Sprintf("arn:aws:iam::%s:role/km-github-token-refresher-*", appAccount),
-		fmt.Sprintf("arn:aws:iam::%s:role/km-ttl-handler", appAccount),
-		"arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*",
+	// Phase 84.4: use resource_prefix from config so non-km installs show correct role names.
+	resourcePrefix := loadedCfg.ResourcePrefix
+	if resourcePrefix == "" {
+		resourcePrefix = "km"
 	}
 
-	// Build SCP policy document (mirrors the Terraform data.aws_iam_policy_document).
-	policy := BuildSCPPolicy(trustedBase, trustedInstance, trustedIAM, trustedSSM, region)
-
-	policyJSON, err := json.MarshalIndent(policy, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal SCP policy: %w", err)
-	}
+	// Build SCP policy document via prefix-based builder (mirrors scp/v2.0.0/main.tf locals).
+	policyJSON := BuildSCPPolicyFromPrefix(resourcePrefix, appAccount, region)
 
 	// --- Print SCP policy ---
+	policyName := resourcePrefix + "-sandbox-containment"
 	fmt.Fprintln(w, "# ============================================================")
-	fmt.Fprintln(w, "# km-sandbox-containment SCP Policy")
+	fmt.Fprintf(w, "# %s SCP Policy\n", policyName)
 	fmt.Fprintln(w, "#")
 	fmt.Fprintf(w, "# Target: Application account %s\n", appAccount)
 	fmt.Fprintf(w, "# Region lock: %s\n", region)
 	fmt.Fprintln(w, "# ============================================================")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, string(policyJSON))
+	fmt.Fprintln(w, policyJSON)
 	fmt.Fprintln(w)
 
 	// Operator IAM positive-allow guidance for Phase 56 AMI lifecycle.
 	WriteOperatorIAMGuidance(w)
 	fmt.Fprintln(w)
 
-	// --- Print km-org-admin role/trust policy ---
-	roleName := "km-org-admin"
+	// --- Print {prefix}-org-admin role/trust policy ---
+	roleName := resourcePrefix + "-org-admin"
 
 	trustPolicy := map[string]interface{}{
 		"Version": "2012-10-17",
@@ -1249,7 +1405,7 @@ func runShowSCP(ctx context.Context, cfg *config.Config, w io.Writer) error {
 					"ArnLike": map[string]interface{}{
 						"aws:PrincipalArn": []string{
 							fmt.Sprintf("arn:aws:iam::%s:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_*", callerAccount),
-							fmt.Sprintf("arn:aws:iam::%s:role/km-provisioner-*", callerAccount),
+							fmt.Sprintf("arn:aws:iam::%s:role/%s-provisioner-*", callerAccount, resourcePrefix),
 						},
 					},
 				},
@@ -1292,7 +1448,7 @@ func runShowSCP(ctx context.Context, cfg *config.Config, w io.Writer) error {
 	rolePolicyJSON, _ := json.MarshalIndent(rolePolicy, "", "  ")
 
 	fmt.Fprintln(w, "# ============================================================")
-	fmt.Fprintf(w, "# km-org-admin Role — Organization account %s\n", orgAccount)
+	fmt.Fprintf(w, "# %s Role — Organization account %s\n", roleName, orgAccount)
 	fmt.Fprintln(w, "#")
 	fmt.Fprintf(w, "# Assumed by: Application account %s (SSO + provisioner roles)\n", callerAccount)
 	fmt.Fprintln(w, "# Used by:    km bootstrap --dry-run=false")
@@ -1303,13 +1459,13 @@ func runShowSCP(ctx context.Context, cfg *config.Config, w io.Writer) error {
 	fmt.Fprintln(w, string(trustJSON))
 	fmt.Fprintln(w)
 
-	fmt.Fprintf(w, "## Inline Policy (km-org-admin-policy) for role %s\n\n", roleName)
+	fmt.Fprintf(w, "## Inline Policy (%s-org-admin-policy) for role %s\n\n", resourcePrefix, roleName)
 	fmt.Fprintln(w, string(rolePolicyJSON))
 	fmt.Fprintln(w)
 
 	fmt.Fprintln(w, "# AWS CLI commands to create this role:")
 	fmt.Fprintf(w, "#   aws iam create-role --role-name %s --assume-role-policy-document '<trust-policy-json>'\n", roleName)
-	fmt.Fprintf(w, "#   aws iam put-role-policy --role-name %s --policy-name km-org-admin-policy --policy-document '<inline-policy-json>'\n", roleName)
+	fmt.Fprintf(w, "#   aws iam put-role-policy --role-name %s --policy-name %s-org-admin-policy --policy-document '<inline-policy-json>'\n", roleName, resourcePrefix)
 
 	return nil
 }
