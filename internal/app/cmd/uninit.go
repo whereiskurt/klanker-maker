@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
@@ -189,11 +188,13 @@ func runUninit(cfg *config.Config, awsProfile, region string, force bool, verbos
 
 	var lister SandboxLister
 	if cfg.StateBucket != "" {
-		s3Client := s3.NewFromConfig(awsCfg)
-		lister = &awsSandboxLister{
-			s3Client: s3Client,
-			bucket:   cfg.StateBucket,
-		}
+		// Use the canonical newRealLister constructor so dynamoClient + tableName
+		// are wired up. ListSandboxes is Dynamo-first with S3 fallback on
+		// ResourceNotFoundException, but the fallback only kicks in if dynamoClient
+		// is non-nil. A hand-rolled construction with only s3Client/bucket panics
+		// on first .Scan() — exposed by Phase 84.4's multi-install testbed where
+		// the probe install has no sandboxes table.
+		lister = newRealLister(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())
 	}
 
 	ecrDeleter := &awsCLIECRDeleter{awsProfile: awsProfile}
