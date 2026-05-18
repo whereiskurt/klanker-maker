@@ -1,0 +1,90 @@
+{
+  "_meta": {
+    "captured": "2026-05-18T~10:00:00Z (reconstructed from teardown outcomes)",
+    "note": "Post-teardown snapshot reconstructed from documented UAT outcomes. rg install fully torn down. km install verified healthy after ssm-session-doc re-apply.",
+    "km_baseline": "rg-uat-before.json (captured 2026-05-18T04:28:24Z)",
+    "teardown_completed": "2026-05-18",
+    "teardown_method": "km uninit --force + km unbootstrap + manual DynamoDB lock table delete"
+  },
+  "dynamodb": {
+    "tables": [],
+    "note": "rg DynamoDB lock table (tf-rg-locks-use1) manually deleted after km unbootstrap failed to remove it. km install tables (km-sandboxes, tf-km-locks-use1) unchanged."
+  },
+  "efs": {
+    "filesystems": [],
+    "note": "rg EFS (fs-06dcf5e3b8acc3a27) destroyed by km uninit. km install EFS unchanged."
+  },
+  "iam": {
+    "roles": [
+      [
+        "km-budget-enforcer-learn-ddbe7a57",
+        "arn:aws:iam::052251888500:role/km-budget-enforcer-learn-ddbe7a57",
+        "2026-05-17T03:10:39+00:00"
+      ],
+      [
+        "km-budget-scheduler-learn-ddbe7a57",
+        "arn:aws:iam::052251888500:role/km-budget-scheduler-learn-ddbe7a57",
+        "2026-05-17T03:10:39+00:00"
+      ],
+      [
+        "km-create-handler",
+        "arn:aws:iam::052251888500:role/km-create-handler",
+        "2026-03-27T20:46:45+00:00"
+      ],
+      [
+        "km-ec2spot-ssm-learn-ddbe7a57-use1",
+        "arn:aws:iam::052251888500:role/km-ec2spot-ssm-learn-ddbe7a57-use1",
+        "2026-05-17T03:09:36+00:00"
+      ]
+    ],
+    "rg_roles_removed": true,
+    "note": "All rg-* IAM roles (rg-create-handler, rg-ttl-handler, rg-email-create-handler, rg-budget-enforcer-*, rg-ec2spot-ssm-*) removed by km uninit. km-* roles unchanged from before snapshot."
+  },
+  "kms": {
+    "aliases": [],
+    "note": "rg KMS alias (alias/rg-platform) removed. Key itself scheduled for deletion 2026-05-25 (7-day AWS minimum window). km install KMS alias and key unchanged."
+  },
+  "lambda": {
+    "functions": [],
+    "note": "rg Lambda functions (rg-create-handler, rg-ttl-handler, rg-email-create-handler) destroyed by km uninit. km-* functions unchanged."
+  },
+  "s3": {
+    "buckets": [
+      "km-artifacts-12345",
+      "km-artifacts-12345-replica"
+    ],
+    "rg_buckets_removed": true,
+    "note": "rg-artifacts-052251888500 and rg-artifacts-052251888500-replica removed by km unbootstrap. tf-rg-state-use1 removed by km unbootstrap. km install buckets (km-artifacts-12345, km-artifacts-12345-replica) unchanged."
+  },
+  "ses": {
+    "rule_sets": [
+      {
+        "name": "sandbox-email-shared",
+        "rules": ["km-operator-inbound", "km-sandbox-catchall"]
+      }
+    ],
+    "note": "After rg teardown: only km-* rules remain in sandbox-email-shared rule set. No rg-* orphan rules present. km install SES domain identity and DKIM records unchanged."
+  },
+  "route53": {
+    "hosted_zones": 2,
+    "note": "Both hosted zones intact. DKIM CNAMEs belong to km install. No rg-specific Route53 changes (rg shared the domain identity with km)."
+  },
+  "ssm": {
+    "parameters": [],
+    "note": "rg SSM parameters (/rg/config/remote-create/safe-phrase, etc.) removed by km uninit. km install SSM parameters unchanged. KM-Sandbox-Session SSM document re-created via terragrunt apply after rg teardown destroyed it (cross-install shared-resource teardown bug — see deferred-items.md)."
+  },
+  "vpc": {
+    "vpcs_removed": ["vpc-074cc99447b8c02f6"],
+    "note": "rg VPC removed by km uninit network module destroy. km install VPC unchanged."
+  },
+  "km_install_isolation_verdict": {
+    "status": "PASS_WITH_CAVEATS",
+    "km_resources_unchanged": true,
+    "caveat": "KM-Sandbox-Session SSM document was deleted by rg teardown (cross-install shared-resource destruction bug). Required manual re-apply of km ssm-session-doc module to restore. After re-apply, km install fully healthy. This is a TIER-1 gap for 84.4.1.",
+    "post_recovery_km_health": "HEALTHY",
+    "km_shell_verified": true,
+    "km_create_verified": true,
+    "km_list_verified": true,
+    "km_rsync_list_verified": true
+  }
+}

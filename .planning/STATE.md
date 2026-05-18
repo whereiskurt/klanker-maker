@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.4-07-PLAN.md — whereiskurt teardown UAT complete, TEARDOWN-AND-RESTART-VERIFICATION satisfied, closure criterion (f) proven
-last_updated: "2026-05-18T04:25:51.060Z"
+stopped_at: Completed 84.4-08-PLAN.md — fresh-prefix rg UAT complete, PARTIAL PASS verdict, 84.4.1 gaps documented
+last_updated: "2026-05-18T16:23:16.805Z"
 last_activity: 2026-05-18
 progress:
   total_phases: 97
-  completed_phases: 85
+  completed_phases: 86
   total_plans: 396
-  completed_plans: 350
+  completed_plans: 351
   percent: 88
 ---
 
@@ -1116,6 +1116,8 @@ Recent decisions affecting current work:
 - [Phase 84.4-05]: No additional region variants (use2/usw2) found — only use1 and management/scp needed flipping
 - [Phase 84.4-multi-install-module-hardening]: SCP dual-tracking: when second install imports canonical SCP, use terragrunt state rm before km uninit — never terraform destroy the shared policy
 - [Phase 84.4-multi-install-module-hardening]: km uninit --force bypasses lister nil-pointer bug; canonical fix in commit 2861dbb (use newRealLister constructor)
+- [Phase 84.4-multi-install-module-hardening]: Plan 08 PARTIAL PASS: resource-naming layer validated (v2.0.0 modules, 113 adds/0 destroys, EFS isolation OK); cross-install SCP AND-composition + ssm-session-doc shared-resource teardown + Plan 06 auto-import failure require 84.4.1 before multi-install is production-safe
+- [Phase 84.4-multi-install-module-hardening]: ssm-session-doc elevated to TIER-1: terragrunt import workaround for hardcoded-name modules is unsafe at teardown — destroys shared AWS resource; must not be used as substitute for v2.0.0 migration
 
 ### Roadmap Evolution
 
@@ -1223,6 +1225,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-18T04:25:51.052Z
-Stopped at: Completed 84.4-07-PLAN.md — whereiskurt teardown UAT complete, TEARDOWN-AND-RESTART-VERIFICATION satisfied, closure criterion (f) proven
+Last session: 2026-05-18T16:23:08.874Z
+Stopped at: Completed 84.4-08-PLAN.md — fresh-prefix rg UAT complete, PARTIAL PASS verdict, 84.4.1 gaps documented
 Resume file: None
