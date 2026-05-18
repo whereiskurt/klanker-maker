@@ -406,6 +406,25 @@ the formal v1/v2 requirement process. Recorded here for plan-checker traceabilit
 *Last updated: 2026-05-17 — Phase 84.2 synthetic IDs added for plan-checker traceability*
 
 ---
+
+## Phase 84.3 — Synthetic IDs (phase-local, gap-closure)
+
+These IDs are phase-local and synthetic — they derive from the Phase 84.3 wrapper-level UX gap-closure
+work (plans 84.3-06 through 84.3-09) and the UAT re-verification (plan 84.3-10). Recorded here for
+plan-checker traceability.
+
+| ID | Description | Status |
+|----|-------------|--------|
+| ENV-CONFIG-DRIFT-WARN | Drift WARN fires for env-bound keys (KM_REGION, KM_ARTIFACTS_BUCKET, etc.) via YAMLDefaults snapshot in config.Load(); also fires on default km bootstrap path (runBootstrap) — gap closure 84.3-07 + 84.3-08 | Complete (gap closure 84.3-07, 84.3-08) |
+| ARTIFACTS-BUCKET-DERIVATION | Placeholder artifacts_bucket values (literal km-artifacts-12345 and angle-bracket forms) rejected at config.Load() time; validateArtifactsBucket wired into Load() — gap closure 84.3-09 | Complete (gap closure 84.3-09) |
+| BOOTSTRAP-WORKFLOW-DISCOVERABILITY | km init --plan hard-fails on placeholder artifacts_bucket (via config.Load); --all flag chains foundation + shared SES; Next steps header in yaml and finale to stdout — f.6 init hard-fail PASS; f.4/f.5/f.7 remain DEFERRED to operator | Complete — f.6 hard-fail PASS (gap closure 84.3-09); operator follow-up for f.4/f.5/f.7 |
+| CONFIG-DISPLAY-VS-YAML-AUTHORITY | Drift WARN fires on all bootstrap paths (runBootstrap + runBootstrapSharedSES); yaml-authoritative keys win over env overrides; empty-yaml emits banner WARN — gap closure 84.3-08 | Complete — drift WARN fires on all bootstrap paths (gap closure 84.3-08) |
+
+---
+
+*Last updated: 2026-05-17 — Phase 84.3 synthetic IDs added; all 4 gap-closure requirements marked Complete*
+
+---
 *Requirements defined: 2026-03-21*
 *Last updated: 2026-03-21 — PROV-09, PROV-10 added; ECS moved from Out of Scope to v1; k8s added to v2; Docker/local remains out of scope*
 *Last updated: 2026-03-21 — INFR-08 added: no cross-repo dependency on defcon.run.34; all modules and app code must be copied and adapted into Klanker Maker repo*
