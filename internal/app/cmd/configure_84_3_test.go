@@ -496,3 +496,31 @@ artifacts_bucket: km-artifacts-12345
 		t.Errorf("output km-config.yaml does not contain corrected bucket 'km-artifacts-123456789012';\ngot:\n%s", content)
 	}
 }
+
+// TestConfigure_StateBucketDefault verifies Phase 84.4.1 CONFIGURE-STATE-BUCKET-UX:
+// when stateBucket is empty in km-config.yaml, the prompt presents
+// tf-${prefix}-state-${regionLabel} as the default (mirrors site.hcl:43).
+//
+// Wave 0: scaffolding only. Wave 2 plan 84.4.1-04 wires computed default at configure.go:564.
+func TestConfigure_StateBucketDefault(t *testing.T) {
+	t.Skip("Wave 2 plan 84.4.1-04: add computed default at configure.go:564 prompt")
+	// Wave 2 body:
+	// (a) Construct configure-state with resourcePrefix="tg", region="us-east-1", stateBucket="".
+	// (b) Drive prompt with empty input (accept default).
+	// (c) Assert resulting stateBucket == "tf-tg-state-use1".
+}
+
+// TestConfigure_StateBucketHeadBucketRetry verifies the HeadBucket-on-403 retry UX
+// (Phase 84.4.1 CONFIGURE-STATE-BUCKET-UX). Wires probeStateBucketInteractive
+// (configure.go:84-200) into the state_bucket prompt.
+//
+// Wave 0: scaffolding only. Wave 2 plan 84.4.1-04 wires the probe.
+func TestConfigure_StateBucketHeadBucketRetry(t *testing.T) {
+	t.Skip("Wave 2 plan 84.4.1-04: wire probeStateBucketInteractive into state_bucket prompt")
+	// Wave 2 body:
+	// (a) Mock S3 HeadBucket to return 403 (bucket name globally taken).
+	// (b) Drive prompt: accept-default, then mock returns 403, prompt offers [Y/edit/abort].
+	// (c) Drive "edit" → operator enters new name with account-id suffix.
+	// (d) Mock returns 200; prompt accepts.
+	// (e) Assert resulting stateBucket value matches the edited name.
+}

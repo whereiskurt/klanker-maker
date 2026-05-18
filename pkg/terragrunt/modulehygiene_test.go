@@ -524,3 +524,4 @@ func (m *mockT) Fatalf(format string, args ...interface{}) {
 	m.messages = append(m.messages, msg)
 	panic("mockT.Fatalf: " + msg)
 }
+
