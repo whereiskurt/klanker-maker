@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
+	"github.com/aws/aws-sdk-go-v2/service/route53"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/ses"
@@ -111,6 +112,55 @@ type FoundationStateReader interface {
 	// Returns (false, err) only on unexpected I/O errors — the caller treats
 	// errors as "not owned" to avoid blocking init on transient S3 issues.
 	StateOwns(ctx context.Context, resourceAddr string) (bool, error)
+}
+
+// =============================================================================
+// Phase 84.4: DKIM/MX/TXT auto-import interfaces + helper
+// =============================================================================
+//
+// These interfaces make autoImportFoundationSESRecords mockable in unit tests.
+// The real types (*ses.Client, *route53.Client, FoundationStateReader,
+// *terragrunt.Runner) satisfy them structurally — no wrapper code needed.
+
+// sesDkimGetter is the SES v1 subset needed to fetch DKIM tokens for a domain.
+type sesDkimGetter interface {
+	GetIdentityDkimAttributes(ctx context.Context, in *ses.GetIdentityDkimAttributesInput, opts ...func(*ses.Options)) (*ses.GetIdentityDkimAttributesOutput, error)
+}
+
+// route53RecordLister is the Route53 subset needed to enumerate records in a
+// hosted zone. (Named route53RecordLister to avoid collision with unbootstrap.go's
+// UnbootstrapRoute53API which has a broader surface.)
+type route53RecordLister interface {
+	ListResourceRecordSets(ctx context.Context, in *route53.ListResourceRecordSetsInput, opts ...func(*route53.Options)) (*route53.ListResourceRecordSetsOutput, error)
+}
+
+// resourceImporter is the terragrunt.Runner subset needed to import resources.
+// Satisfied by *terragrunt.Runner (Plan 00 added this method).
+type resourceImporter interface {
+	Import(ctx context.Context, dir, address, id string) error
+}
+
+// autoImportFoundationSESRecords imports any pre-existing Route53 DKIM/MX/TXT
+// records that exist in AWS but are missing from foundation tfstate.
+// Idempotent: skips records already owned by state.
+// Returns nil if there is nothing to import (state is clean OR records don't
+// exist in AWS yet).
+//
+// Called from runBootstrapSharedSES gated on !registerDomainIdentity (i.e. only
+// when the domain identity already exists in AWS from a prior install).
+//
+// Phase 84.4 TDD RED stub — Step 4 replaces this body with the real implementation.
+func autoImportFoundationSESRecords(
+	ctx context.Context,
+	runner resourceImporter,
+	sesDir string,
+	stateReader FoundationStateReader,
+	sesClient sesDkimGetter,
+	r53Client route53RecordLister,
+	emailDomain string,
+	hostedZoneID string,
+) error {
+	return fmt.Errorf("autoImportFoundationSESRecords: not implemented (TDD RED stub — Step 4 fills this in)")
 }
 
 // detectSharedSESState is the unexported implementation called by

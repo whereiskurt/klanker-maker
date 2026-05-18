@@ -1,0 +1,30 @@
+# infra/modules/s3-replication/v2.0.0/test/test_harness.tf.skip
+# Phase 84.4 test harness for s3-replication/v2.0.0. NOT executed by terragrunt
+# apply — the .skip extension keeps it out of init/apply discovery. Documents
+# intended consumption with synthetic inputs and serves as the LOCKED test/
+# subdirectory required by CONTEXT.md versioning strategy. Mirrors the pattern
+# from infra/modules/cluster-irsa/v1.0.0/test_harness.tf.skip.
+#
+# The audit test in pkg/terragrunt/modulehygiene_test.go (Plan 01) parses every
+# .tf file under v2.0.0+/, so any hardcoded "km-" literal added here would fail
+# TestModuleNamesUseResourcePrefix.
+
+module "s3_replication_synthetic_kph" {
+  source = "../"
+
+  resource_prefix         = "kph"                        # 3-char prefix — lower-bound case
+  source_bucket_name      = "kph-artifacts-synthetic"
+  source_bucket_arn       = "arn:aws:s3:::kph-artifacts-synthetic"
+  destination_region      = "us-west-2"
+  destination_bucket_name = "kph-artifacts-synthetic-replica"
+}
+
+module "s3_replication_synthetic_whereiskurt" {
+  source = "../"
+
+  resource_prefix         = "whereiskurt"                # 11-char prefix — upper-bound case
+  source_bucket_name      = "whereiskurt-artifacts-synthetic"
+  source_bucket_arn       = "arn:aws:s3:::whereiskurt-artifacts-synthetic"
+  destination_region      = "us-west-2"
+  destination_bucket_name = "whereiskurt-artifacts-synthetic-replica"
+}
