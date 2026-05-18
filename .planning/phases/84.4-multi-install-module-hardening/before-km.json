@@ -1,0 +1,252 @@
+{
+  "dynamodb": {
+    "tables": [
+      "km-budgets",
+      "km-identities",
+      "km-sandboxes",
+      "km-schedules",
+      "km-slack-bridge-nonces",
+      "km-slack-stream-messages",
+      "km-slack-threads"
+    ]
+  },
+  "efs": {
+    "filesystems": [
+      [
+        "fs-0bd1911c39bff2d4d",
+        "km-shared-use1",
+        "available",
+        4
+      ]
+    ]
+  },
+  "iam": {
+    "roles": [
+      [
+        "km-budget-enforcer-learn-ddbe7a57",
+        "arn:aws:iam::052251888500:role/km-budget-enforcer-learn-ddbe7a57",
+        "2026-05-17T03:10:39+00:00"
+      ],
+      [
+        "km-budget-scheduler-learn-ddbe7a57",
+        "arn:aws:iam::052251888500:role/km-budget-scheduler-learn-ddbe7a57",
+        "2026-05-17T03:10:39+00:00"
+      ],
+      [
+        "km-create-handler",
+        "arn:aws:iam::052251888500:role/km-create-handler",
+        "2026-03-27T20:46:45+00:00"
+      ],
+      [
+        "km-ec2spot-ssm-learn-ddbe7a57-use1",
+        "arn:aws:iam::052251888500:role/km-ec2spot-ssm-learn-ddbe7a57-use1",
+        "2026-05-17T03:09:36+00:00"
+      ],
+      [
+        "km-email-handler",
+        "arn:aws:iam::052251888500:role/km-email-handler",
+        "2026-05-06T21:38:28+00:00"
+      ],
+      [
+        "km-github-token-refresher-learn-6e62a9f4",
+        "arn:aws:iam::052251888500:role/km-github-token-refresher-learn-6e62a9f4",
+        "2026-05-16T14:41:58+00:00"
+      ],
+      [
+        "km-github-token-refresher-learn-705c45b2",
+        "arn:aws:iam::052251888500:role/km-github-token-refresher-learn-705c45b2",
+        "2026-05-16T22:33:58+00:00"
+      ],
+      [
+        "km-github-token-refresher-learn-b0ddab03",
+        "arn:aws:iam::052251888500:role/km-github-token-refresher-learn-b0ddab03",
+        "2026-05-17T02:10:19+00:00"
+      ],
+      [
+        "km-github-token-refresher-learn-ddbe7a57",
+        "arn:aws:iam::052251888500:role/km-github-token-refresher-learn-ddbe7a57",
+        "2026-05-17T03:11:12+00:00"
+      ],
+      [
+        "km-github-token-refresher-learn-e43101b5",
+        "arn:aws:iam::052251888500:role/km-github-token-refresher-learn-e43101b5",
+        "2026-05-16T16:57:32+00:00"
+      ],
+      [
+        "km-github-token-scheduler-learn-6e62a9f4",
+        "arn:aws:iam::052251888500:role/km-github-token-scheduler-learn-6e62a9f4",
+        "2026-05-16T14:41:58+00:00"
+      ],
+      [
+        "km-github-token-scheduler-learn-705c45b2",
+        "arn:aws:iam::052251888500:role/km-github-token-scheduler-learn-705c45b2",
+        "2026-05-16T22:33:58+00:00"
+      ],
+      [
+        "km-github-token-scheduler-learn-b0ddab03",
+        "arn:aws:iam::052251888500:role/km-github-token-scheduler-learn-b0ddab03",
+        "2026-05-17T02:10:19+00:00"
+      ],
+      [
+        "km-github-token-scheduler-learn-ddbe7a57",
+        "arn:aws:iam::052251888500:role/km-github-token-scheduler-learn-ddbe7a57",
+        "2026-05-17T03:11:12+00:00"
+      ],
+      [
+        "km-github-token-scheduler-learn-e43101b5",
+        "arn:aws:iam::052251888500:role/km-github-token-scheduler-learn-e43101b5",
+        "2026-05-16T16:57:32+00:00"
+      ],
+      [
+        "km-s3-replication-km-artifacts-12345",
+        "arn:aws:iam::052251888500:role/km-s3-replication-km-artifacts-12345",
+        "2026-05-06T21:36:05+00:00"
+      ],
+      [
+        "km-slack-bridge-role",
+        "arn:aws:iam::052251888500:role/km-slack-bridge-role",
+        "2026-05-06T21:39:48+00:00"
+      ],
+      [
+        "km-ttl-handler",
+        "arn:aws:iam::052251888500:role/km-ttl-handler",
+        "2026-03-25T00:56:38+00:00"
+      ],
+      [
+        "km-ttl-scheduler",
+        "arn:aws:iam::052251888500:role/km-ttl-scheduler",
+        "2026-03-25T00:56:38+00:00"
+      ]
+    ]
+  },
+  "kms": {
+    "aliases": [
+      [
+        "alias/km-github-token-learn-ddbe7a57",
+        "cd0e536e-125c-4fed-a1d2-8b3c207b8684"
+      ],
+      [
+        "alias/km-platform",
+        "e7e08777-ed9c-46fe-bfc4-3f6effd19724"
+      ],
+      [
+        "alias/km-platform-km-use1",
+        "0ae4cdca-c565-4d3a-b4a0-0fd33ccbef92"
+      ],
+      [
+        "alias/km-platform-whereiskurt-use1",
+        "d40b51c6-e319-4d2c-9d51-511ab08cfa4c"
+      ]
+    ]
+  },
+  "lambda": {
+    "functions": [
+      [
+        "km-github-token-refresher-learn-b0ddab03",
+        "arn:aws:lambda:us-east-1:052251888500:function:km-github-token-refresher-learn-b0ddab03",
+        "provided.al2023",
+        "2026-05-17T02:10:29.234+0000"
+      ],
+      [
+        "km-slack-bridge",
+        "arn:aws:lambda:us-east-1:052251888500:function:km-slack-bridge",
+        "provided.al2023",
+        "2026-05-17T14:18:46.000+0000"
+      ],
+      [
+        "km-github-token-refresher-learn-e43101b5",
+        "arn:aws:lambda:us-east-1:052251888500:function:km-github-token-refresher-learn-e43101b5",
+        "provided.al2023",
+        "2026-05-16T16:57:42.054+0000"
+      ],
+      [
+        "km-github-token-refresher-learn-ddbe7a57",
+        "arn:aws:lambda:us-east-1:052251888500:function:km-github-token-refresher-learn-ddbe7a57",
+        "provided.al2023",
+        "2026-05-17T03:11:22.725+0000"
+      ],
+      [
+        "km-github-token-refresher-learn-6e62a9f4",
+        "arn:aws:lambda:us-east-1:052251888500:function:km-github-token-refresher-learn-6e62a9f4",
+        "provided.al2023",
+        "2026-05-16T14:42:08.472+0000"
+      ],
+      [
+        "km-email-create-handler",
+        "arn:aws:lambda:us-east-1:052251888500:function:km-email-create-handler",
+        "provided.al2023",
+        "2026-05-17T14:17:54.000+0000"
+      ],
+      [
+        "km-ttl-handler",
+        "arn:aws:lambda:us-east-1:052251888500:function:km-ttl-handler",
+        "provided.al2023",
+        "2026-05-17T14:17:24.000+0000"
+      ],
+      [
+        "km-budget-enforcer-learn-ddbe7a57",
+        "arn:aws:lambda:us-east-1:052251888500:function:km-budget-enforcer-learn-ddbe7a57",
+        "provided.al2023",
+        "2026-05-17T03:10:47.115+0000"
+      ],
+      [
+        "km-create-handler",
+        "arn:aws:lambda:us-east-1:052251888500:function:km-create-handler",
+        "provided.al2023",
+        "2026-05-17T14:16:41.000+0000"
+      ],
+      [
+        "km-github-token-refresher-learn-705c45b2",
+        "arn:aws:lambda:us-east-1:052251888500:function:km-github-token-refresher-learn-705c45b2",
+        "provided.al2023",
+        "2026-05-16T22:34:07.784+0000"
+      ]
+    ]
+  },
+  "meta": {
+    "captured_at": "2026-05-18T03:45:14Z",
+    "prefix": "km"
+  },
+  "route53": {
+    "hosted_zones": [
+      [
+        "/hostedzone/Z07395732OFT84NYHBE8C",
+        "sandboxes.test.example.com.",
+        false,
+        2
+      ],
+      [
+        "/hostedzone/Z08522462XE7ANTIK5FTX",
+        "sandboxes.klankermaker.ai.",
+        false,
+        7
+      ]
+    ]
+  },
+  "s3": {
+    "buckets": [
+      [
+        "km-artifacts-12345",
+        "2026-03-24T02:08:15+00:00"
+      ],
+      [
+        "km-artifacts-12345-replica",
+        "2026-03-25T00:56:27+00:00"
+      ]
+    ]
+  },
+  "ses": {
+    "rule_sets": [
+      "sandbox-email-shared"
+    ],
+    "rules": [
+      {
+        "RuleSet": "sandbox-email-shared",
+        "Rules": [
+          "km-operator-inbound",
+          "km-sandbox-catchall"
+        ]
+      }
+    ]
+  }
+}

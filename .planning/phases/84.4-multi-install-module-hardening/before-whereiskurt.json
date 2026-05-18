@@ -1,0 +1,59 @@
+{
+  "dynamodb": {
+    "tables": []
+  },
+  "efs": {
+    "filesystems": []
+  },
+  "iam": {
+    "roles": []
+  },
+  "kms": {
+    "aliases": []
+  },
+  "lambda": {
+    "functions": []
+  },
+  "meta": {
+    "captured_at": "2026-05-18T03:45:04Z",
+    "prefix": "whereiskurt"
+  },
+  "route53": {
+    "hosted_zones": [
+      [
+        "/hostedzone/Z07395732OFT84NYHBE8C",
+        "sandboxes.test.example.com.",
+        false,
+        2
+      ],
+      [
+        "/hostedzone/Z08522462XE7ANTIK5FTX",
+        "sandboxes.klankermaker.ai.",
+        false,
+        7
+      ]
+    ]
+  },
+  "s3": {
+    "buckets": [
+      [
+        "whereiskurt-artifacts-12345678",
+        "2026-05-17T19:31:10+00:00"
+      ]
+    ]
+  },
+  "ses": {
+    "rule_sets": [
+      "sandbox-email-shared"
+    ],
+    "rules": [
+      {
+        "RuleSet": "sandbox-email-shared",
+        "Rules": [
+          "km-operator-inbound",
+          "km-sandbox-catchall"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,93 @@
+{
+  "meta": {
+    "prefix": "whereiskurt",
+    "captured_at": "2026-05-18T03:50:00Z",
+    "account": "052251888500",
+    "region": "us-east-1",
+    "note": "Combined snapshot: inventory-diff.sh output + EC2/VPC resources not captured by script"
+  },
+  "dynamodb": {
+    "tables": []
+  },
+  "ec2": {
+    "vpcs": [
+      {
+        "VpcId": "vpc-0e5c73a8fbe72a056",
+        "Name": "whereiskurt-use1-vpc",
+        "State": "available"
+      }
+    ],
+    "subnets": [
+      {"SubnetId": "subnet-0c7f2f1ab4e998817", "Name": "whereiskurt-use1-public-us-east-1b", "VpcId": "vpc-0e5c73a8fbe72a056", "State": "available"},
+      {"SubnetId": "subnet-07c7a9e49cf0da67f", "Name": "whereiskurt-use1-private-us-east-1b", "VpcId": "vpc-0e5c73a8fbe72a056", "State": "available"},
+      {"SubnetId": "subnet-086c778f46d0d24e6", "Name": "whereiskurt-use1-private-us-east-1d", "VpcId": "vpc-0e5c73a8fbe72a056", "State": "available"},
+      {"SubnetId": "subnet-0076f7d2799abc77b", "Name": "whereiskurt-use1-private-us-east-1a", "VpcId": "vpc-0e5c73a8fbe72a056", "State": "available"},
+      {"SubnetId": "subnet-03d220830c28c1b35", "Name": "whereiskurt-use1-private-us-east-1c", "VpcId": "vpc-0e5c73a8fbe72a056", "State": "available"},
+      {"SubnetId": "subnet-00489233ced19cffb", "Name": "whereiskurt-use1-public-us-east-1a", "VpcId": "vpc-0e5c73a8fbe72a056", "State": "available"},
+      {"SubnetId": "subnet-0429d96e417f2374b", "Name": "whereiskurt-use1-public-us-east-1c", "VpcId": "vpc-0e5c73a8fbe72a056", "State": "available"},
+      {"SubnetId": "subnet-02e1700a09c87bd29", "Name": "whereiskurt-use1-public-us-east-1d", "VpcId": "vpc-0e5c73a8fbe72a056", "State": "available"}
+    ],
+    "security_groups": [
+      {"GroupId": "sg-071e39b63130f5b85", "GroupName": "whereiskurt-use1-sandbox-mgmt", "VpcId": "vpc-0e5c73a8fbe72a056"},
+      {"GroupId": "sg-004485e967628cbca", "GroupName": "whereiskurt-use1-sandbox-internal", "VpcId": "vpc-0e5c73a8fbe72a056"},
+      {"GroupId": "sg-0ab33d3738b7e9ef7", "GroupName": "km-efs-use1", "VpcId": "vpc-0e5c73a8fbe72a056", "note": "orphan from whereiskurt EFS state — v1.0.0 hardcoded name, should be whereiskurt-efs-use1"}
+    ],
+    "internet_gateways": [
+      {"IgwId": "igw-03212d99fcda2a904", "VpcId": "vpc-0e5c73a8fbe72a056", "State": "available"}
+    ]
+  },
+  "efs": {
+    "filesystems": []
+  },
+  "iam": {
+    "roles": []
+  },
+  "kms": {
+    "aliases": []
+  },
+  "lambda": {
+    "functions": []
+  },
+  "route53": {
+    "hosted_zones": [
+      ["/hostedzone/Z07395732OFT84NYHBE8C", "sandboxes.test.example.com.", false, 2],
+      ["/hostedzone/Z08522462XE7ANTIK5FTX", "sandboxes.klankermaker.ai.", false, 7]
+    ]
+  },
+  "s3": {
+    "buckets": [
+      ["whereiskurt-artifacts-12345678", "2026-05-17T19:31:10+00:00"],
+      ["tf-whereiskurt-state-use1", "2026-05-17T18:54:57+00:00"]
+    ]
+  },
+  "ses": {
+    "rule_sets": ["sandbox-email-shared"],
+    "rules": [
+      {
+        "RuleSet": "sandbox-email-shared",
+        "Rules": ["km-operator-inbound", "km-sandbox-catchall"]
+      }
+    ]
+  },
+  "scp": {
+    "note": "SCP state captured via km-org-admin role in management account 481723467561",
+    "all_policies": [
+      {"Id": "p-FullAWSAccess", "Name": "FullAWSAccess", "AwsManaged": true},
+      {"Id": "p-cvd490xt", "Name": "km-sandbox-containment", "AwsManaged": false}
+    ],
+    "attached_to_application_account_052251888500": [
+      {"Id": "p-FullAWSAccess", "Name": "FullAWSAccess", "AwsManaged": true},
+      {"Id": "p-cvd490xt", "Name": "km-sandbox-containment", "AwsManaged": false}
+    ],
+    "whereiskurt_state_tracking": {
+      "note": "whereiskurt SCP terraform state (infra/live/management/scp/) tracks p-cvd490xt (km-sandbox-containment). This is the SAME SCP as the canonical km install. No separate whereiskurt-* SCP exists in AWS.",
+      "terraform_state_resources": [
+        "data.aws_iam_policy_document.sandbox_containment",
+        "aws_organizations_policy.sandbox_containment",
+        "aws_organizations_policy_attachment.sandbox_containment"
+      ],
+      "policy_id_in_state": "p-cvd490xt",
+      "risk": "CRITICAL: km uninit does NOT destroy SCP (management path, not regional). But km destroy on the SCP module would delete km-sandbox-containment — which is the canonical km install SCP. Must remove SCP from whereiskurt state (terraform state rm) before any destroy."
+    }
+  }
+}
