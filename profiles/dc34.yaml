@@ -45,6 +45,22 @@ spec:
         {"trustedDirectories":["/home/sandbox","/workspace"],"autoApprove":["Bash","Read","Write","Edit","Glob","Grep","WebFetch","WebSearch","NotebookEdit"]}
       "/home/sandbox/.claude/plugins/known_marketplaces.json": |
         {"klanker-maker":{"source":{"source":"github","repo":"whereiskurt/klanker-maker"},"installLocation":"/home/sandbox/.claude/plugins/marketplaces/klanker-maker","lastUpdated":"2026-04-16T00:00:00Z"}}
+      "/home/sandbox/.claude/CLAUDE.md": |
+        ## Resuming this Slack conversation from a shell
+
+        If the user asks how to continue this conversation from a terminal, asks for the session ID, or asks for the resume command, look up the Claude session for the current Slack thread and reply with a one-line snippet they can paste after `km shell <sandbox-id>`:
+
+            cd / && claude --resume <session-id>
+
+        Find the session ID by reading DynamoDB. The required env vars (KM_SLACK_CHANNEL_ID, KM_SLACK_THREAD_TS, KM_RESOURCE_PREFIX) are already exported into this Claude turn:
+
+            aws dynamodb get-item \
+              --table-name "${KM_SLACK_THREADS_TABLE:-${KM_RESOURCE_PREFIX:-km}-slack-threads}" \
+              --key "{\"channel_id\":{\"S\":\"$KM_SLACK_CHANNEL_ID\"},\"thread_ts\":{\"S\":\"$KM_SLACK_THREAD_TS\"}}" \
+              --region "${AWS_REGION:-$AWS_DEFAULT_REGION}" \
+              --query 'Item.claude_session_id.S' --output text
+
+        On the very first turn of a thread the row is not written yet (the poller stores `claude_session_id` only after `claude -p` exits). If the lookup returns empty, tell the user to ask again after this reply lands.
 
     # For plugin-only snapshots, use rsyncPaths: [".claude/plugins"] in your profile
     rsyncPaths:
