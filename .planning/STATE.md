@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.4.1.1-02-PLAN.md
-last_updated: "2026-05-19T04:13:53.718Z"
+stopped_at: Completed 84.4.1.1-03-PLAN.md
+last_updated: "2026-05-19T04:26:05.540Z"
 last_activity: 2026-05-19
 progress:
   total_phases: 100
   completed_phases: 87
   total_plans: 414
-  completed_plans: 361
+  completed_plans: 362
   percent: 88
 ---
 
@@ -395,6 +395,7 @@ Progress: [█████████░] 88%
 | Phase 84.4.1.1-multi-install-follow-on-gaps P00 | 10 | 3 tasks | 7 files |
 | Phase 84.4.1.1-multi-install-follow-on-gaps P01 | 8 | 1 tasks | 2 files |
 | Phase 84.4.1.1-multi-install-follow-on-gaps P02 | 344 | 2 tasks | 4 files |
+| Phase 84.4.1.1-multi-install-follow-on-gaps P03 | 5 | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1143,6 +1144,8 @@ Recent decisions affecting current work:
 - [Phase 84.4.1.1-multi-install-follow-on-gaps]: Export buildLambdaZipsFunc as BuildLambdaZipsFunc so cmd_test (external package) can override it; warn-and-continue semantics mirror runInit at line 491-496
 - [Phase 84.4.1.1-02]: Validate yaml-authoritative bucket value in config.Load() (not viper env-merged) to preserve KM_ARTIFACTS_BUCKET env override semantics
 - [Phase 84.4.1.1-02]: TestConfigLoad_AcceptsLegacyBucketLiteral updated to expect error: km-artifacts-12345 now fails canonical regex (5-digit suffix)
+- [Phase 84.4.1.1-03]: Keep sentinel fast-path (km-artifacts-12345) even though regex catches it — better error message mentioning km-config.example.yaml placeholder
+- [Phase 84.4.1.1-03]: cmdCanonicalBucketRE named with cmd- prefix to distinguish from canonicalBucketRE in config package
 
 ### Roadmap Evolution
 
@@ -1253,6 +1256,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-19T04:13:53.708Z
-Stopped at: Completed 84.4.1.1-02-PLAN.md
+Last session: 2026-05-19T04:26:05.531Z
+Stopped at: Completed 84.4.1.1-03-PLAN.md
 Resume file: None
