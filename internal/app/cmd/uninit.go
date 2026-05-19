@@ -8,7 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
+	organizationstypes "github.com/aws/aws-sdk-go-v2/service/organizations/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
@@ -128,11 +132,12 @@ var ecrReposToDelete = []string{
 }
 
 // NewUninitCmd creates the "km uninit" subcommand.
-// Usage: km uninit [--region <region>] [--aws-profile <name>] [--force]
+// Usage: km uninit [--region <region>] [--aws-profile <name>] [--force] [--include-scp]
 //
 // Command flow:
 //  1. Validate AWS credentials
 //  2. Check for active sandboxes in the region (requires StateBucket; error if not set unless --force)
+//  2.5. SCP cleanup (only with --include-scp): detach+delete {prefix}-sandbox-containment before module destroy
 //  3. If active sandboxes exist and --force is not set: return error
 //  4. Destroy all regional modules in reverse dependency order
 func NewUninitCmd(cfg *config.Config) *cobra.Command {
@@ -141,6 +146,7 @@ func NewUninitCmd(cfg *config.Config) *cobra.Command {
 	var force bool
 	var yes bool
 	var verbose bool
+	var includeSCP bool
 
 	cmd := &cobra.Command{
 		Use:   "uninit",
@@ -159,7 +165,7 @@ func NewUninitCmd(cfg *config.Config) *cobra.Command {
 			if awsProfile == "" {
 				awsProfile = "klanker-application"
 			}
-			return runUninit(cfg, awsProfile, region, force, verbose)
+			return runUninit(cfg, awsProfile, region, force, verbose, includeSCP)
 		},
 	}
 
@@ -173,12 +179,14 @@ func NewUninitCmd(cfg *config.Config) *cobra.Command {
 		"Skip confirmation prompt")
 	cmd.Flags().BoolVar(&verbose, "verbose", false,
 		"Show full terragrunt/terraform output")
+	cmd.Flags().BoolVar(&includeSCP, "include-scp", false,
+		"Also detach and delete the install's sandbox-containment SCP from AWS Organizations (requires "+cfg.GetResourcePrefix()+"-org-admin role)")
 
 	return cmd
 }
 
 // runUninit is the top-level uninit logic (uses real AWS clients).
-func runUninit(cfg *config.Config, awsProfile, region string, force bool, verbose bool) error {
+func runUninit(cfg *config.Config, awsProfile, region string, force bool, verbose bool, includeSCP bool) error {
 	ctx := context.Background()
 
 	// Validate AWS credentials
@@ -218,7 +226,59 @@ func runUninit(cfg *config.Config, awsProfile, region string, force bool, verbos
 
 	ecrDeleter := &awsCLIECRDeleter{awsProfile: awsProfile}
 
-	return RunUninitWithDeps(cfg, runner, lister, ecrDeleter, region, UninitOpts{Force: force})
+	// Build the Organizations client for SCP cleanup (only when --include-scp set).
+	// Mirror the doctor.go:2900 pattern: use klanker-terraform profile + AssumeRole
+	// into {prefix}-org-admin in the organization management account.
+	var orgsClient UninitOrgsAPI
+	if includeSCP {
+		tfProfile := cfg.AWSProfile
+		if tfProfile == "" {
+			tfProfile = "klanker-terraform"
+		}
+		tfCfg, tfErr := awspkg.LoadAWSConfig(ctx, tfProfile)
+		if tfErr == nil {
+			orgAccountID := cfg.OrganizationAccountID
+			if orgAccountID != "" {
+				roleARN := fmt.Sprintf("arn:aws:iam::%s:role/%s-org-admin", orgAccountID, cfg.GetResourcePrefix())
+				stsClient := sts.NewFromConfig(tfCfg)
+				assumeOut, assumeErr := stsClient.AssumeRole(ctx, &sts.AssumeRoleInput{
+					RoleArn:         awssdk.String(roleARN),
+					RoleSessionName: awssdk.String("km-uninit"),
+				})
+				if assumeErr == nil {
+					orgsRegion := cfg.PrimaryRegion
+					if orgsRegion == "" {
+						orgsRegion = region
+					}
+					orgsCfg, _ := awsconfig.LoadDefaultConfig(ctx,
+						awsconfig.WithRegion(orgsRegion),
+						awsconfig.WithCredentialsProvider(
+							newStaticCredentials(
+								awssdk.ToString(assumeOut.Credentials.AccessKeyId),
+								awssdk.ToString(assumeOut.Credentials.SecretAccessKey),
+								awssdk.ToString(assumeOut.Credentials.SessionToken),
+							),
+						),
+					)
+					orgsClient = organizations.NewFromConfig(orgsCfg)
+				} else {
+					// AssumeRole failed — fall back to current profile (same as doctor.go pattern).
+					fmt.Printf("  [warn] AssumeRole into %s-org-admin failed: %v — using current credentials for SCP cleanup\n", cfg.GetResourcePrefix(), assumeErr)
+					orgsClient = organizations.NewFromConfig(tfCfg)
+				}
+			} else {
+				// No org account configured — use the terraform profile as-is.
+				orgsClient = organizations.NewFromConfig(tfCfg)
+			}
+		}
+		// If tfErr != nil, orgsClient stays nil; RunUninitWithDeps will warn and skip.
+	}
+
+	return RunUninitWithDeps(cfg, runner, lister, ecrDeleter, region, UninitOpts{
+		Force:      force,
+		IncludeSCP: includeSCP,
+		OrgsClient: orgsClient,
+	})
 }
 
 // RunUninitWithDeps is the testable core of uninit with dependency injection.
@@ -258,6 +318,59 @@ func RunUninitWithDeps(cfg *config.Config, runner UninitRunner, lister SandboxLi
 				activeCount, region,
 			)
 		}
+	}
+
+	// Step 2.5: SCP cleanup (Gap #3b, Phase 84.4.1.1).
+	// Detach and delete the install's sandbox-containment SCP before module destroy.
+	// Gated on --include-scp (default false). Warn-and-continue on failure.
+	scpName := cfg.GetResourcePrefix() + "-sandbox-containment"
+	if opts.IncludeSCP {
+		if opts.OrgsClient == nil {
+			fmt.Printf("  [warn] --include-scp set but no Organizations client available; SCP %s not cleaned up\n", scpName)
+			fmt.Printf("         To clean up manually, assume %s-org-admin and run:\n", cfg.GetResourcePrefix())
+			fmt.Printf("         aws organizations detach-policy --policy-id <id> --target-id %s\n", cfg.ApplicationAccountID)
+			fmt.Printf("         aws organizations delete-policy --policy-id <id>\n")
+		} else {
+			// Find the policy ID by listing SCPs on the application account.
+			targetOut, listErr := opts.OrgsClient.ListPoliciesForTarget(ctx, &organizations.ListPoliciesForTargetInput{
+				TargetId: awssdk.String(cfg.ApplicationAccountID),
+				Filter:   organizationstypes.PolicyTypeServiceControlPolicy,
+			})
+			var policyID string
+			if listErr == nil {
+				for _, p := range targetOut.Policies {
+					if awssdk.ToString(p.Name) == scpName {
+						policyID = awssdk.ToString(p.Id)
+						break
+					}
+				}
+			}
+			if policyID == "" {
+				fmt.Printf("  [warn] SCP %s not found on account %s — already detached or never attached\n",
+					scpName, cfg.ApplicationAccountID)
+			} else {
+				fmt.Printf("Detaching SCP %s (id: %s)...\n", scpName, policyID)
+				if _, detachErr := opts.OrgsClient.DetachPolicy(ctx, &organizations.DetachPolicyInput{
+					PolicyId: awssdk.String(policyID),
+					TargetId: awssdk.String(cfg.ApplicationAccountID),
+				}); detachErr != nil {
+					fmt.Printf("  [warn] DetachPolicy failed: %v — continuing with module destroy\n", detachErr)
+				} else {
+					fmt.Printf("  SCP detached\n")
+					if _, delErr := opts.OrgsClient.DeletePolicy(ctx, &organizations.DeletePolicyInput{
+						PolicyId: awssdk.String(policyID),
+					}); delErr != nil {
+						fmt.Printf("  [warn] DeletePolicy failed: %v — SCP detached but not deleted; delete manually\n", delErr)
+					} else {
+						fmt.Printf("  SCP deleted\n")
+					}
+				}
+			}
+		}
+	} else {
+		// Not --include-scp: print a WARN so operators know the SCP persists.
+		fmt.Printf("  [warn] SCP %s not cleaned up — re-run with --include-scp to detach+delete\n", scpName)
+		fmt.Printf("         Or manually: assume %s-org-admin, aws organizations detach-policy + delete-policy\n", cfg.GetResourcePrefix())
 	}
 
 	// Step 3: Destroy modules in REVERSE dependency order using the same

@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/service/organizations"
+	organizationstypes "github.com/aws/aws-sdk-go-v2/service/organizations/types"
 	"github.com/whereiskurt/klanker-maker/internal/app/cmd"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
@@ -481,11 +485,155 @@ func TestUninitContinuesPastECRDeleteErrors(t *testing.T) {
 	}
 }
 
+// fakeUninitOrgsAPI is a test double for UninitOrgsAPI.
+type fakeUninitOrgsAPI struct {
+	listPoliciesOut *organizations.ListPoliciesForTargetOutput
+	listPoliciesErr error
+	detachCalled    bool
+	detachErr       error
+	deleteCalled    bool
+	deleteErr       error
+}
+
+func (f *fakeUninitOrgsAPI) ListPoliciesForTarget(_ context.Context, _ *organizations.ListPoliciesForTargetInput, _ ...func(*organizations.Options)) (*organizations.ListPoliciesForTargetOutput, error) {
+	return f.listPoliciesOut, f.listPoliciesErr
+}
+func (f *fakeUninitOrgsAPI) DetachPolicy(_ context.Context, _ *organizations.DetachPolicyInput, _ ...func(*organizations.Options)) (*organizations.DetachPolicyOutput, error) {
+	f.detachCalled = true
+	return &organizations.DetachPolicyOutput{}, f.detachErr
+}
+func (f *fakeUninitOrgsAPI) DeletePolicy(_ context.Context, _ *organizations.DeletePolicyInput, _ ...func(*organizations.Options)) (*organizations.DeletePolicyOutput, error) {
+	f.deleteCalled = true
+	return &organizations.DeletePolicyOutput{}, f.deleteErr
+}
+
 // TestRunUninit_DetachesSCPWhenFlagSet verifies Gap #3b (Phase 84.4.1.1 Plan 05):
 // RunUninitWithDeps with opts.IncludeSCP=true calls DetachPolicy+DeletePolicy
 // via the injected OrgsClient; with opts.IncludeSCP=false emits a WARN and skips.
 func TestRunUninit_DetachesSCPWhenFlagSet(t *testing.T) {
-	t.Skip("RED scaffold — implemented by Plan 05 (84.4.1.1-05-PLAN.md)")
+	awssdk := func(s string) *string { return &s }
+
+	// Test A: IncludeSCP=true with a working fake — DetachPolicy and DeletePolicy both called.
+	t.Run("A_DetachesAndDeletesSCP", func(t *testing.T) {
+		fakeOrgs := &fakeUninitOrgsAPI{
+			listPoliciesOut: &organizations.ListPoliciesForTargetOutput{
+				Policies: []organizationstypes.PolicySummary{
+					{Name: awssdk("km-sandbox-containment"), Id: awssdk("p-test1234")},
+				},
+			},
+		}
+		runner := &mockUninitRunner{}
+		lister := &mockUninitLister{records: []kmaws.SandboxRecord{}}
+		cfg := &config.Config{StateBucket: "", ApplicationAccountID: "123456789012"}
+
+		_ = cmd.RunUninitWithDeps(cfg, runner, lister, nil, "ap-southeast-9", cmd.UninitOpts{
+			Force:      true,
+			IncludeSCP: true,
+			OrgsClient: fakeOrgs,
+		})
+
+		if !fakeOrgs.detachCalled {
+			t.Error("expected DetachPolicy to be called, but it was not")
+		}
+		if !fakeOrgs.deleteCalled {
+			t.Error("expected DeletePolicy to be called, but it was not")
+		}
+	})
+
+	// Test B: IncludeSCP=false — neither Detach nor Delete called; WARN references --include-scp.
+	t.Run("B_WarnWhenFlagNotSet", func(t *testing.T) {
+		fakeOrgs := &fakeUninitOrgsAPI{}
+		runner := &mockUninitRunner{}
+		lister := &mockUninitLister{records: []kmaws.SandboxRecord{}}
+		cfg := &config.Config{StateBucket: "", ApplicationAccountID: "123456789012"}
+
+		// Capture stdout
+		old := os.Stdout
+		r, w, _ := os.Pipe()
+		os.Stdout = w
+
+		_ = cmd.RunUninitWithDeps(cfg, runner, lister, nil, "ap-southeast-9", cmd.UninitOpts{
+			Force:      true,
+			IncludeSCP: false,
+			OrgsClient: fakeOrgs,
+		})
+
+		w.Close()
+		os.Stdout = old
+		var buf strings.Builder
+		io.Copy(&buf, r)
+		out := buf.String()
+
+		if fakeOrgs.detachCalled {
+			t.Error("DetachPolicy should NOT be called when IncludeSCP=false")
+		}
+		if fakeOrgs.deleteCalled {
+			t.Error("DeletePolicy should NOT be called when IncludeSCP=false")
+		}
+		if !strings.Contains(out, "--include-scp") {
+			t.Errorf("expected WARN output to reference '--include-scp', got: %q", out)
+		}
+	})
+
+	// Test C: IncludeSCP=true but OrgsClient=nil — should not panic; output mentions "no Organizations client".
+	t.Run("C_NilOrgsClientDoesNotPanic", func(t *testing.T) {
+		runner := &mockUninitRunner{}
+		lister := &mockUninitLister{records: []kmaws.SandboxRecord{}}
+		cfg := &config.Config{StateBucket: "", ApplicationAccountID: "123456789012"}
+
+		// Capture stdout to check message
+		old := os.Stdout
+		r, w, _ := os.Pipe()
+		os.Stdout = w
+
+		err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "ap-southeast-9", cmd.UninitOpts{
+			Force:      true,
+			IncludeSCP: true,
+			OrgsClient: nil,
+		})
+
+		w.Close()
+		os.Stdout = old
+		var buf strings.Builder
+		io.Copy(&buf, r)
+		out := buf.String()
+
+		// Should not return an error just because OrgsClient is nil.
+		if err != nil {
+			t.Errorf("expected no error with nil OrgsClient, got: %v", err)
+		}
+		if !strings.Contains(out, "no Organizations client") {
+			t.Errorf("expected output to mention 'no Organizations client', got: %q", out)
+		}
+	})
+
+	// Test D: DetachPolicy returns an error — DeletePolicy is NOT called (skip delete after failed detach).
+	t.Run("D_DetachErrorSkipsDelete", func(t *testing.T) {
+		fakeOrgs := &fakeUninitOrgsAPI{
+			listPoliciesOut: &organizations.ListPoliciesForTargetOutput{
+				Policies: []organizationstypes.PolicySummary{
+					{Name: awssdk("km-sandbox-containment"), Id: awssdk("p-test1234")},
+				},
+			},
+			detachErr: errors.New("simulated Organizations detach failure"),
+		}
+		runner := &mockUninitRunner{}
+		lister := &mockUninitLister{records: []kmaws.SandboxRecord{}}
+		cfg := &config.Config{StateBucket: "", ApplicationAccountID: "123456789012"}
+
+		_ = cmd.RunUninitWithDeps(cfg, runner, lister, nil, "ap-southeast-9", cmd.UninitOpts{
+			Force:      true,
+			IncludeSCP: true,
+			OrgsClient: fakeOrgs,
+		})
+
+		if !fakeOrgs.detachCalled {
+			t.Error("expected DetachPolicy to be attempted")
+		}
+		if fakeOrgs.deleteCalled {
+			t.Error("DeletePolicy should NOT be called after a failed DetachPolicy")
+		}
+	})
 }
 
 // TestRunUninitWithDeps_ActiveSandboxCheck verifies Gap #5 investigation (Phase 84.4.1.1 Plan 06):
