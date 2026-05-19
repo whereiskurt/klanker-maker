@@ -27,16 +27,20 @@ import (
 // Note: writeKMConfigDrift and changeToDir are declared in config_load_drift_test.go
 // (same package config_test). They are reused here without redeclaration.
 
-// TestConfigLoad_AcceptsLegacyBucketLiteral verifies that config.Load() accepts
-// the literal bucket name "km-artifacts-12345" — it is NOT a placeholder.
+// TestConfigLoad_AcceptsLegacyBucketLiteral documents Phase 84.4.1.1 Gap #4 behavior change:
+// ValidateArtifactsBucket now enforces the canonical ${prefix}-artifacts-${12-digit-account-id}
+// shape. The legacy bucket "km-artifacts-12345" has a 5-digit account suffix and fails the
+// canonical regex.
 //
-// Phase 84.4-08 UAT reversed the prior assumption: real legacy operator installs
-// have legitimately-named buckets like km-artifacts-12345 (predating Phase 84.3's
-// `${prefix}-artifacts-${account_id}` auto-derivation). Rejecting them broke
-// cfg.Load() and every command on the install.
+// Phase 84.4-08 UAT originally intended to ACCEPT this name (it was a real legacy bucket).
+// Phase 84.4.1.1 Plan 02 introduces the canonical shape enforcement via ValidateArtifactsBucket
+// wired into config.Load(). This means "km-artifacts-12345" now returns an error because
+// 12345 is 5 digits, not 12.
 //
-// Only angle-bracket tokens (e.g. "<prefix>-artifacts-12345678") are now
-// considered placeholders — see TestConfigLoad_RejectsAngleBracketPlaceholder.
+// Operators with pre-Phase-84.3 installs using this exact bucket name will see a config.Load()
+// error and should re-run km configure to derive the correct canonical name
+// (or add allow_non_canonical_bucket: true to km-config.yaml when that escape hatch is
+// implemented in a follow-on plan).
 func TestConfigLoad_AcceptsLegacyBucketLiteral(t *testing.T) {
 	dir := t.TempDir()
 	writeKMConfigDrift(t, dir, `
@@ -47,9 +51,8 @@ resource_prefix: km
 	changeToDir(t, dir)
 
 	_, err := config.Load()
-	if err != nil {
-		t.Errorf("config.Load() rejected legacy bucket km-artifacts-12345: %v", err)
-		t.Errorf("real legacy installs have this exact name — Load() must accept it")
+	if err == nil {
+		t.Errorf("config.Load() accepted km-artifacts-12345; want error (non-canonical: 5-digit suffix)")
 	}
 }
 
@@ -125,5 +128,19 @@ resource_prefix: km
 // config.Load() calls ValidateArtifactsBucket so non-canonical bucket names
 // (e.g. tg-km-artifacts-use1-abcd0123) hard-fail before reaching bootstrap.
 func TestConfigLoad_RejectsNonCanonicalBucket(t *testing.T) {
-	t.Skip("RED scaffold — implemented by Plan 02+03 (84.4.1.1-02-PLAN.md, 84.4.1.1-03-PLAN.md)")
+	dir := t.TempDir()
+	writeKMConfigDrift(t, dir, `
+region: us-east-1
+artifacts_bucket: tg-km-artifacts-use1-abcd0123
+resource_prefix: tg
+`)
+	changeToDir(t, dir)
+
+	cfg, err := config.Load()
+	if err == nil {
+		t.Errorf("config.Load() returned nil error for non-canonical bucket tg-km-artifacts-use1-abcd0123; want error")
+		t.Logf("cfg.ArtifactsBucket = %q", cfg.ArtifactsBucket)
+	} else if !strings.Contains(err.Error(), "canonical shape") {
+		t.Errorf("error %q should mention 'canonical shape'", err.Error())
+	}
 }

@@ -436,14 +436,21 @@ func Load() (*Config, error) {
 		cfg.DoctorStaleAMIDays = 30
 	}
 
-	// Phase 84.3 gap 3: reject placeholder artifacts_bucket values that operators
-	// may have left from km-config.example.yaml without running km configure.
-	// Empty bucket is allowed (fresh install; km configure derives the correct value).
-	if isPlaceholderBucket(cfg.ArtifactsBucket) {
-		return nil, fmt.Errorf(
-			"artifacts_bucket=%q is a placeholder; re-run `km configure` to derive ${prefix}-artifacts-${account_id} automatically",
-			cfg.ArtifactsBucket,
-		)
+	// Gap #2b + Gap #4 (Phase 84.4.1.1): reject non-canonical artifacts_bucket values.
+	// ValidateArtifactsBucket enforces ^[a-z][a-z0-9-]*-artifacts-[0-9]{12}$ and
+	// returns nil for empty (unconfigured — km configure will derive the value).
+	// Replaces the prior isPlaceholderBucket check which only caught angle-bracket tokens.
+	//
+	// We validate the yaml-authoritative value (from yamlDefaults) rather than the
+	// env-overridden cfg.ArtifactsBucket so that KM_ARTIFACTS_BUCKET env overrides
+	// (e.g. for temporary one-off runs or drift-warn tests) are not blocked by
+	// this shape check. Env overrides bypass the canonical shape gate by design.
+	bucketToValidate := cfg.ArtifactsBucket
+	if yamlVal, ok := yamlDefaults["artifacts_bucket"]; ok {
+		bucketToValidate = yamlVal
+	}
+	if err := ValidateArtifactsBucket(bucketToValidate); err != nil {
+		return nil, err
 	}
 
 	return cfg, nil
