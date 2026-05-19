@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.4.1.1-06-PLAN.md
-last_updated: "2026-05-19T04:51:40.855Z"
+stopped_at: Completed 85-01-PLAN.md
+last_updated: "2026-05-19T11:14:40.912Z"
 last_activity: 2026-05-19
 progress:
   total_phases: 100
   completed_phases: 88
   total_plans: 414
-  completed_plans: 365
+  completed_plans: 366
   percent: 88
 ---
 
@@ -399,6 +399,7 @@ Progress: [█████████░] 88%
 | Phase 84.4.1.1-multi-install-follow-on-gaps P05 | 3 | 1 tasks | 2 files |
 | Phase 84.4.1.1-multi-install-follow-on-gaps P04 | 4min | 1 tasks | 2 files |
 | Phase 84.4.1.1-multi-install-follow-on-gaps P06 | 8min | 1 tasks | 2 files |
+| Phase 85-doctor-orphan-state-lock-digest-sweeper-report-cleanup P01 | 3 min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1154,6 +1155,9 @@ Recent decisions affecting current work:
 - [Phase 84.4.1.1-04]: OrgsListAllPoliciesAPI interface kept separate from OrgsListPoliciesAPI to preserve narrow interface for checkSCP
 - [Phase 84.4.1.1-04]: checkOrphanSCPs filters by -sandbox-containment suffix (not allow-list), WARN level to avoid blocking operator workflow
 - [Phase 84.4.1.1-multi-install-follow-on-gaps]: uninit active-sandbox filter status==running is correct; TTL-expired sandboxes block until ttl-handler Lambda runs; --force is the escape hatch
+- [Phase 85-doctor-orphan-state-lock-digest-sweeper-report-cleanup]: Locked checkStateLockDigestSweeper signature with separate S3StateHeadAPI / LockDigestDeleterAPI seams (Phase 84.1 S3StateReader stays narrow)
+- [Phase 85-doctor-orphan-state-lock-digest-sweeper-report-cleanup]: Wave 0 stub returns CheckSkipped so callers compile cleanly while the 8 new TDD tests stay RED until Plan 02 implementation
+- [Phase 85-doctor-orphan-state-lock-digest-sweeper-report-cleanup]: doctor.go remains byte-identical in Plan 01; Plan 02 has a documented exception to add CheckResult.Details for --json full-list plumbing; Plan 03 swaps buildChecks
 
 ### Roadmap Evolution
 
@@ -1264,6 +1268,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-19T04:35:24.325Z
-Stopped at: Completed 84.4.1.1-06-PLAN.md
+Last session: 2026-05-19T11:14:32.623Z
+Stopped at: Completed 85-01-PLAN.md
 Resume file: None
