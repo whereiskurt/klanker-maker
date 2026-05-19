@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.4.1.1-05-PLAN.md
-last_updated: "2026-05-19T04:28:39.771Z"
+stopped_at: Completed 84.4.1.1-04-PLAN.md
+last_updated: "2026-05-19T04:31:23.759Z"
 last_activity: 2026-05-19
 progress:
   total_phases: 100
   completed_phases: 87
   total_plans: 414
-  completed_plans: 363
+  completed_plans: 364
   percent: 88
 ---
 
@@ -397,6 +397,7 @@ Progress: [█████████░] 88%
 | Phase 84.4.1.1-multi-install-follow-on-gaps P02 | 344 | 2 tasks | 4 files |
 | Phase 84.4.1.1-multi-install-follow-on-gaps P03 | 5 | 1 tasks | 2 files |
 | Phase 84.4.1.1-multi-install-follow-on-gaps P05 | 3 | 1 tasks | 2 files |
+| Phase 84.4.1.1-multi-install-follow-on-gaps P04 | 4min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1149,6 +1150,8 @@ Recent decisions affecting current work:
 - [Phase 84.4.1.1-03]: cmdCanonicalBucketRE named with cmd- prefix to distinguish from canonicalBucketRE in config package
 - [Phase 84.4.1.1-multi-install-follow-on-gaps]: SCP cleanup gated on --include-scp (default false) to avoid accidentally removing SCP during partial teardowns; warn-and-continue on failure so uninit is never blocked by Organizations API issues
 - [Phase 84.4.1.1-multi-install-follow-on-gaps]: Detach-then-delete ordering enforced for SCP cleanup: DeletePolicy only called after DetachPolicy succeeds, mirroring Organizations API requirements
+- [Phase 84.4.1.1-04]: OrgsListAllPoliciesAPI interface kept separate from OrgsListPoliciesAPI to preserve narrow interface for checkSCP
+- [Phase 84.4.1.1-04]: checkOrphanSCPs filters by -sandbox-containment suffix (not allow-list), WARN level to avoid blocking operator workflow
 
 ### Roadmap Evolution
 
@@ -1259,6 +1262,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-19T04:28:39.762Z
-Stopped at: Completed 84.4.1.1-05-PLAN.md
+Last session: 2026-05-19T04:31:23.751Z
+Stopped at: Completed 84.4.1.1-04-PLAN.md
 Resume file: None
