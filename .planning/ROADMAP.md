@@ -1941,6 +1941,22 @@ Plans:
 - [ ] 84.4.1-05-PLAN.md — Wave 3: OPERATOR CHECKPOINT — apply scp/v2.0.0 + ssm-session-doc/v2.0.0 to canonical km install (BEFORE/AFTER inventory snapshots) — NOT autonomous
 - [ ] 84.4.1-06-PLAN.md — Wave 4: OPERATOR CHECKPOINT — fresh-prefix tg UAT-2 + OPERATOR-GUIDE.md clean runbook (replaces gaps+workarounds prose) — NOT autonomous
 
+### Phase 84.4.1.1: Multi-install follow-on: km-init-plan lambda zips, configure artifacts-bucket derive, orphan SCP detach, validate bucket, uninit TTL bug (INSERTED)
+
+**Goal:** Close 5 post-UAT-2 multi-install correctness and DX gaps: Gap #1 buildLambdaZips in km init --plan, Gap #2 artifacts_bucket derive+validate, Gap #3a doctor orphan-SCP warn, Gap #3b km uninit --include-scp, Gap #4 canonical bucket regex, Gap #5 uninit TTL investigation.
+**Requirements**: INIT-PLAN-BUILDS-LAMBDAS, CONFIGURE-DERIVES-ARTIFACTS-BUCKET, VALIDATE-BUCKET-ON-LOAD, VALIDATE-CANONICAL-BUCKET-SHAPE, DOCTOR-WARNS-ON-ORPHAN-SCPS, UNINIT-DETACHES-SCP, UNINIT-TTL-INVESTIGATION
+**Depends on:** Phase 84.4.1
+**Plans:** 7 plans across 4 waves (Wave 0: plan 00; Wave 1: plans 01, 02; Wave 2: plans 03, 04, 05; Wave 3: plan 06)
+
+Plans:
+- [ ] 84.4.1.1-00-PLAN.md — Wave 0: interface contracts + t.Skip scaffolding (UninitOpts, UninitOrgsAPI, ValidateArtifactsBucket skeleton, 7 test stubs)
+- [ ] 84.4.1.1-01-PLAN.md — Wave 1: Gap #1 — buildLambdaZips in RunInitPlanWithRunner + TestRunInitPlan_BuildsLambdaZips GREEN
+- [ ] 84.4.1.1-02-PLAN.md — Wave 1: Gap #2 — configure derive-default + config.Load() ValidateArtifactsBucket wiring
+- [ ] 84.4.1.1-03-PLAN.md — Wave 2: Gap #4 — validateArtifactsBucket canonical regex + table test GREEN (after Plan 02 — same file)
+- [ ] 84.4.1.1-04-PLAN.md — Wave 2: Gap #3a — doctor checkOrphanSCPs + TestDoctor_WarnsOnOrphanSCPs GREEN
+- [ ] 84.4.1.1-05-PLAN.md — Wave 2: Gap #3b — km uninit --include-scp detach+delete + TestRunUninit_DetachesSCPWhenFlagSet GREEN
+- [ ] 84.4.1.1-06-PLAN.md — Wave 3: Gap #5 — uninit TTL investigation: structured logging + TestRunUninitWithDeps_ActiveSandboxCheck GREEN
+
 ### Phase 85: doctor: orphan state-lock digest sweeper + report cleanup
 
 **Goal:** Close the Phase 84.1 digest-leak loop in `km doctor`: add a `--delete-state-digests` cleanup category (also folded into `--with-deletes`) that removes orphan rows from the Terragrunt state-lock DDB table where the sibling S3 state object is definitively gone (NoSuchKey + age > 24h). Replace the unreadable single-line digest-mismatch warn with a `summary + 10-item preview + --json full list` format matching Stale Lambdas. Parallelize the per-item S3 HEAD scan + BatchWriteItem deletes; target `km doctor` < 30s wall clock on accounts with hundreds of orphans (vs. ~1:40 today). Out of scope: plugging the upstream leak in `km destroy` / `km uninit` (separate follow-up phase).
