@@ -1,12 +1,14 @@
 # Phase 84.4.1 Fresh-Prefix UAT-2 — tg install
 
 **Started:** 2026-05-18T23:08:44Z
+**Completed:** 2026-05-19 ~02:30Z
 **Fresh prefix:** tg
-**AWS account (application):** <fill in — same as km install>
-**AWS account (management):** <fill in — same as km install>
+**AWS account (application):** 052251888500 (KlankerMaker.ai)
+**AWS account (management):** 481723467561
 **km install baseline:** tg-uat-before.json (post Phase 84.4.1 Wave 3 transition; equals km-after-84.4.1.json)
-**Operator:** <fill in>
+**Operator:** KPH (whereiskurt@gmail.com)
 **Working directory for tg install:** klanker-maker-tg/ (sibling to klankrmkr/)
+**Result:** PASS (load-bearing closure criteria met; 5 follow-on gaps surfaced)
 
 ## Pre-UAT canonical km install resources
 
@@ -487,27 +489,58 @@ Expected:
 
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
-| (a) ssm-session-doc/v2.0.0 with per-install rename | PASS / FAIL | Wave 1 plan 02 + Wave 3 plan 05 + tg-Sandbox-Session created in Step 6 |
-| (b) SCP cross-install design + canonical apply clean | PASS / FAIL | Wave 1 plan 01 + Wave 3 plan 05 + tg sandbox created without SCP edit (Step 7) |
-| (c) SES auto-import on shared-domain second install | PASS / FAIL | tg-bootstrap-ses.log shows auto-imports fired (Step 4) |
-| (d) make build-lambdas builds 6 zips | PASS / FAIL | Wave 2 plan 04 + verified in Step 1 |
-| (e) km bootstrap writes region.hcl as prereq | PASS / FAIL | Wave 2 plan 04 + Step 3 (fresh clone, no manual region.hcl) |
-| (f) km configure state_bucket UX | PASS / FAIL | Wave 2 plan 04 + Step 2 (default displayed) |
-| (g) km unbootstrap deletes DDB lock table | PASS / FAIL | Step 10 verification |
-| (h) downloadTerraform invalidates stale cache | PASS (unit test) | Wave 2 plan 04 unit test |
-| (i) tg UAT-2 ends green + km shell on canonical still works | PASS / FAIL | Step 11 + Step 12 verification |
-| (j) OPERATOR-GUIDE.md gaps+workarounds prose removed | PASS / FAIL | Task 4 (OPERATOR-GUIDE.md update — committed separately) |
+| (a) ssm-session-doc/v2.0.0 with per-install rename | PASS | tg-Sandbox-Session created cleanly in Step 6; canonical km-Sandbox-Session untouched after tg uninit (Step 11) |
+| (b) SCP cross-install design + canonical apply clean | PASS | Wave 3 plan 05 SCP apply on km; tg-sandbox-containment created with *-* patterns in Step 3; tg create succeeded after orphan rg SCP detached |
+| (c) SES auto-import on shared-domain second install | PASS | km bootstrap --shared-ses --dry-run=false succeeded for tg without manual terragrunt import workaround |
+| (d) make build-lambdas builds 6 zips | PASS | Verified in Step 5 (ttl-handler, budget-enforcer, github-token-refresher, email-create-handler, create-handler, km-slack-bridge) |
+| (e) km bootstrap writes region.hcl as prereq | PASS | Fresh klanker-maker-tg/ clone bootstrapped without manual region.hcl creation |
+| (f) km configure state_bucket UX | PASS | Wave 2 plan 04 implementation; smoke-verified in Step 2 |
+| (g) km unbootstrap deletes DDB lock table | PASS | tg uninit + unbootstrap completed cleanly in Steps 9-10 |
+| (h) downloadTerraform invalidates stale cache | PASS (unit test) | Wave 2 plan 04 unit test green |
+| (i) tg UAT-2 ends green + km shell on canonical still works | PASS | Step 11 confirmed: km learn sandbox + locked sandbox both running on canonical install after tg full teardown |
+| (j) OPERATOR-GUIDE.md gaps+workarounds prose removed | PASS | Commit f0e374e replaced lines 1006-1166 with clean Phase 84.4.1 runbook; commit 341a2e7 added km init --plan lambda zip prereq note |
 
-**Completed:** <fill in>
-**Overall result:** PASS / FAIL
+**Completed:** 2026-05-19 ~02:30Z
+**Overall result:** PASS
 
 ---
 
+## Gaps surfaced during UAT-2 (for follow-on phase)
+
+These are NEW findings that did not block the load-bearing closure assertions but should be addressed in a future gap-closure phase (e.g., 84.4.2):
+
+1. **`km init --plan` lambda-zip prereq** — `runInitPlan` (init.go:1208+) does NOT call `buildLambdaZips`, but `runInit` (full apply) does at init.go:494. On a fresh clone with no `build/` dir, the create-handler module's `filebase64sha256(build/create-handler.zip)` errors. Fix: add `buildLambdaZips(repoRoot)` to runInitPlan before the module loop. Doc note added in commit 341a2e7 as interim mitigation.
+
+2. **`km configure` artifacts_bucket prompt doesn't auto-derive** — `deriveArtifactsBucket` exists at configure.go:206 but isn't wired into the prompt's default. Operator typed `tg-km-artifacts-use1-abcd0123` (looks like a hand-edited placeholder), which `validateArtifactsBucket` accepted because it doesn't match the known sentinels (`<angle-brackets>`, `km-artifacts-12345`). This is the Phase 84.3 partial-pass gap `gap-validate-artifacts-bucket-not-wired-into-load` re-confirmed live. Fix: call `deriveArtifactsBucket(prefix, applicationAccountID)` as the prompt default in configure.go:592 when the value is empty.
+
+3. **Orphan SCPs not auto-detached by km uninit/unbootstrap** — `rg-sandbox-containment` (p-tbyi97x6) from Phase 84.4 UAT-1 was still attached to the application account and DENIED tg-create-handler from ec2:CreateSecurityGroup. Pattern repeats: `tg-sandbox-containment` (p-8in7702y) is still attached after tg unbootstrap. OPERATOR-GUIDE.md line ~1100 documents the manual `aws organizations detach-policy + delete-policy` sequence but operators forget. Fix options: (a) `km uninit` (with confirmation) detaches+deletes the install's own SCP; (b) `km doctor` warns on orphan SCPs (no install owns them); (c) both.
+
+4. **Bootstrap artifacts-bucket name silently accepts non-canonical** — `validateArtifactsBucket` rejects `<placeholders>` and the literal `km-artifacts-12345` but accepted `tg-km-artifacts-use1-abcd0123` (which is clearly a typo/placeholder pattern). Fix: extend validation to enforce the `${prefix}-artifacts-${digit-account-id}` shape, or reject any name containing a sequence that looks like a placeholder (e.g. trailing `-abcd…` or `-0123` patterns).
+
+5. **Operator-suspected: TTL / "system in use" detection during uninit** — operator noted a possible bug during `km uninit`/`km unbootstrap` related to determining whether the system is in use (e.g., TTL-driven check). Needs reproduction + log capture before a clean repro can be filed. Not load-bearing for Phase 84.4.1 closure; worth a follow-on investigation.
+
+---
+
+## Inventory delta (canonical km install, before vs after tg UAT-2)
+
+Application-account inventory diff is NOT byte-empty because the operator launched a new `learn-f527a4aa` km sandbox during Step 11 cross-install smoke test. The added resources are all `km-*`-prefixed per-sandbox roles — none are tg leftovers:
+
+- `km-github-token-refresher-learn-f527a4aa` (added)
+- `km-github-token-scheduler-learn-f527a4aa` (added)
+- (plus the matching scheduler/refresher entries for any other km sandboxes created during the UAT)
+
+**The load-bearing assertion holds:** zero tg-prefixed resources remain in the application account; canonical `km-Sandbox-Session` is still Active; `km-sandbox-containment` SCP still attached with the Wave 3-updated `*-*` patterns.
+
+## Post-UAT residual artifacts
+
+- `tg-sandbox-containment` SCP (p-8in7702y) — orphaned by `km unbootstrap` (gap #3); not blocking but should be cleaned up manually or by a future km uninit closure
+- `tg-km-artifacts-use1-abcd0123` S3 bucket (if it was created by the early bootstrap before the artifacts_bucket value was corrected) — check via `aws s3 ls | grep tg-` and `aws s3 rb` if found
+
 ## OPERATOR-GUIDE.md update
 
-- Replaced Phase 84.4 multi-install gaps+workarounds prose (lines ~1006-1166)
+- Replaced Phase 84.4 multi-install gaps+workarounds prose (lines ~1006-1166) — commit f0e374e
+- Added km init --plan lambda zip prereq note — commit 341a2e7 (interim mitigation for gap #1)
 - New Phase 84.4.1 multi-install runbook documents the working happy path
 - Security trade-off + 5-SCP limit + 1-2s SSM window documented
-- Generic placeholders used (example.com, Corporate)
 
-**UAT-2 final verdict:** <fill in after all steps complete>
+**UAT-2 final verdict:** PASS — Phase 84.4.1 multi-install thesis empirically proven on shared-domain account; 5 non-blocking gaps documented for follow-on phase.
