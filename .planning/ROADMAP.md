@@ -1946,7 +1946,7 @@ Plans:
 **Goal:** Close 5 post-UAT-2 multi-install correctness and DX gaps: Gap #1 buildLambdaZips in km init --plan, Gap #2 artifacts_bucket derive+validate, Gap #3a doctor orphan-SCP warn, Gap #3b km uninit --include-scp, Gap #4 canonical bucket regex, Gap #5 uninit TTL investigation.
 **Requirements**: INIT-PLAN-BUILDS-LAMBDAS, CONFIGURE-DERIVES-ARTIFACTS-BUCKET, VALIDATE-BUCKET-ON-LOAD, VALIDATE-CANONICAL-BUCKET-SHAPE, DOCTOR-WARNS-ON-ORPHAN-SCPS, UNINIT-DETACHES-SCP, UNINIT-TTL-INVESTIGATION
 **Depends on:** Phase 84.4.1
-**Plans:** 7 plans across 4 waves (Wave 0: plan 00; Wave 1: plans 01, 02; Wave 2: plans 03, 04, 05; Wave 3: plan 06)
+**Plans:** 1/7 plans executed
 
 Plans:
 - [ ] 84.4.1.1-00-PLAN.md — Wave 0: interface contracts + t.Skip scaffolding (UninitOpts, UninitOrgsAPI, ValidateArtifactsBucket skeleton, 7 test stubs)

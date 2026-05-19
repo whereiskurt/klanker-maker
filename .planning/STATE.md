@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Paused 84.4.1-06-PLAN.md at Task 2 checkpoint (live AWS UAT-2 requires klanker-maker-tg/ sibling install — operator must execute Steps 3-12)
-last_updated: "2026-05-19T02:51:25.314Z"
-last_activity: 2026-05-18
+stopped_at: Completed 84.4.1.1-multi-install-follow-on-gaps-00-PLAN.md
+last_updated: "2026-05-19T04:05:43.322Z"
+last_activity: 2026-05-19
 progress:
-  total_phases: 99
+  total_phases: 100
   completed_phases: 87
-  total_plans: 407
-  completed_plans: 358
+  total_plans: 414
+  completed_plans: 359
   percent: 88
 ---
 
@@ -31,7 +31,7 @@ Plan: 6 of 6 in phase 79 (all complete; 79-05 closeout + UAT passed 2026-05-10)
 Total Plans in Phase: 6
 Current Plan: 14
 Status: in-progress
-Last activity: 2026-05-18
+Last activity: 2026-05-19
 
 Progress: [█████████░] 88%
 
@@ -392,6 +392,7 @@ Progress: [█████████░] 88%
 | Phase 84.4.1-multi-install-identity-permission-gap-closure P00 | -215 | 3 tasks | 7 files |
 | Phase 84.4.1-multi-install-identity-permission-gap-closure P02 | 840 | 2 tasks | 11 files |
 | Phase 84.4.1-multi-install-identity-permission-gap-closure P04 | 851s | 3 tasks | 12 files |
+| Phase 84.4.1.1-multi-install-follow-on-gaps P00 | 10 | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -1135,6 +1136,8 @@ Recent decisions affecting current work:
 - [Phase 84.4.1-04]: Internal package cmd test files created for unexported helper unit tests alongside external cmd_test scaffold stubs
 - [Phase 84.4.1-04]: configure HeadBucket probe gated on in!=nil rather than nonInteractive flag for defensive stdin handling
 - [Phase 84.4.1-06]: OPERATOR-GUIDE.md Phase 84.4 gaps+workarounds prose REPLACED with clean Phase 84.4.1 runbook (closure criterion j). Pattern-based SCP trust design, DKIM auto-import, and per-install SSM doc isolation documented as production-ready.
+- [Phase 84.4.1.1-multi-install-follow-on-gaps]: ValidateArtifactsBucket placed in config package to avoid import cycles from config.Load()
+- [Phase 84.4.1.1-multi-install-follow-on-gaps]: UninitOpts struct replaces positional force bool in RunUninitWithDeps, mirroring UnbootstrapOpts pattern
 
 ### Roadmap Evolution
 
@@ -1245,6 +1248,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-18T23:14:36.242Z
-Stopped at: Paused 84.4.1-06-PLAN.md at Task 2 checkpoint (live AWS UAT-2 requires klanker-maker-tg/ sibling install — operator must execute Steps 3-12)
+Last session: 2026-05-19T04:05:43.314Z
+Stopped at: Completed 84.4.1.1-multi-install-follow-on-gaps-00-PLAN.md
 Resume file: None
