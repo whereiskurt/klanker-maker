@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.4.1.1-04-PLAN.md
-last_updated: "2026-05-19T04:31:23.759Z"
+stopped_at: Completed 84.4.1.1-06-PLAN.md
+last_updated: "2026-05-19T04:35:24.334Z"
 last_activity: 2026-05-19
 progress:
   total_phases: 100
-  completed_phases: 87
+  completed_phases: 88
   total_plans: 414
-  completed_plans: 364
+  completed_plans: 365
   percent: 88
 ---
 
@@ -398,6 +398,7 @@ Progress: [█████████░] 88%
 | Phase 84.4.1.1-multi-install-follow-on-gaps P03 | 5 | 1 tasks | 2 files |
 | Phase 84.4.1.1-multi-install-follow-on-gaps P05 | 3 | 1 tasks | 2 files |
 | Phase 84.4.1.1-multi-install-follow-on-gaps P04 | 4min | 1 tasks | 2 files |
+| Phase 84.4.1.1-multi-install-follow-on-gaps P06 | 8min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1152,6 +1153,7 @@ Recent decisions affecting current work:
 - [Phase 84.4.1.1-multi-install-follow-on-gaps]: Detach-then-delete ordering enforced for SCP cleanup: DeletePolicy only called after DetachPolicy succeeds, mirroring Organizations API requirements
 - [Phase 84.4.1.1-04]: OrgsListAllPoliciesAPI interface kept separate from OrgsListPoliciesAPI to preserve narrow interface for checkSCP
 - [Phase 84.4.1.1-04]: checkOrphanSCPs filters by -sandbox-containment suffix (not allow-list), WARN level to avoid blocking operator workflow
+- [Phase 84.4.1.1-multi-install-follow-on-gaps]: uninit active-sandbox filter status==running is correct; TTL-expired sandboxes block until ttl-handler Lambda runs; --force is the escape hatch
 
 ### Roadmap Evolution
 
@@ -1262,6 +1264,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-19T04:31:23.751Z
-Stopped at: Completed 84.4.1.1-04-PLAN.md
+Last session: 2026-05-19T04:35:24.325Z
+Stopped at: Completed 84.4.1.1-06-PLAN.md
 Resume file: None
