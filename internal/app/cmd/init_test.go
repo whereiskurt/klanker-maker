@@ -850,5 +850,56 @@ func TestRunInitWithRunner_FastApplyDoesNotTriggerTimeout(t *testing.T) {
 // RunInitPlanWithRunner calls buildLambdaZips before the module loop so fresh-clone
 // `km init --plan` does not fail on filebase64sha256(build/create-handler.zip).
 func TestRunInitPlan_BuildsLambdaZips(t *testing.T) {
-	t.Skip("RED scaffold — implemented by Plan 01 (84.4.1.1-01-PLAN.md)")
+	t.Run("build func is called before module loop", func(t *testing.T) {
+		buildCalled := false
+		originalBuildFunc := cmd.BuildLambdaZipsFunc
+		cmd.BuildLambdaZipsFunc = func(repoRoot string) error {
+			buildCalled = true
+			return nil
+		}
+		t.Cleanup(func() { cmd.BuildLambdaZipsFunc = originalBuildFunc })
+
+		runner := &mockPlanRunner{}
+
+		repoRoot := t.TempDir()
+		regionDir := filepath.Join(repoRoot, "infra", "live", "use1")
+		if err := os.MkdirAll(regionDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		err := cmd.RunInitPlanWithRunner(runner, repoRoot, "us-east-1", false, false)
+		// No modules were found — error or nil is fine; we only care about buildCalled.
+		_ = err
+
+		if !buildCalled {
+			t.Error("RunInitPlanWithRunner did not call buildLambdaZipsFunc before the module loop")
+		}
+	})
+
+	t.Run("failed build does not abort the plan run", func(t *testing.T) {
+		originalBuildFunc := cmd.BuildLambdaZipsFunc
+		cmd.BuildLambdaZipsFunc = func(repoRoot string) error {
+			return fmt.Errorf("mock Lambda build failure")
+		}
+		t.Cleanup(func() { cmd.BuildLambdaZipsFunc = originalBuildFunc })
+
+		runner := &mockPlanRunner{}
+
+		repoRoot := t.TempDir()
+		regionDir := filepath.Join(repoRoot, "infra", "live", "use1")
+		if err := os.MkdirAll(regionDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		// RunInitPlanWithRunner must NOT return the build error (warn-and-continue).
+		// The only allowed error here is one from the plan runner itself (no modules,
+		// gate trip, etc.) — not the build error.
+		err := cmd.RunInitPlanWithRunner(runner, repoRoot, "us-east-1", false, false)
+		if err != nil {
+			// Ensure the error, if any, is not the build error we injected.
+			if strings.Contains(err.Error(), "mock Lambda build failure") {
+				t.Errorf("RunInitPlanWithRunner propagated build error but should warn-and-continue: %v", err)
+			}
+		}
+	})
 }

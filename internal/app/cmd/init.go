@@ -96,6 +96,13 @@ var InitSESPreflight SESPreflightFunc = defaultSESPreflight
 // file (this file) to guarantee ordering.
 var RunInitPlanFunc = runInitPlan
 
+// BuildLambdaZipsFunc is the testable seam for buildLambdaZips. Tests override
+// this var to capture or mock the Lambda zip build step without invoking the real
+// cross-compiler. The default points to the real buildLambdaZips implementation.
+// Exported so cmd_test (external test package) can override it, mirroring the
+// RunInitPlanFunc pattern above.
+var BuildLambdaZipsFunc = buildLambdaZips
+
 // defaultSESPreflight is the real implementation: loads AWS config and checks
 // whether the shared SES receipt rule set exists.
 func defaultSESPreflight(ctx context.Context) error {
@@ -1207,6 +1214,14 @@ func RunInitPlanWithRunner(runner InitRunner, repoRoot, region string, verbose, 
 
 	fmt.Printf("km init --plan: %s (%s)\n", region, regionLabel)
 	fmt.Println()
+
+	// Gap #1 (Phase 84.4.1.1): build Lambda zips before planning so
+	// filebase64sha256(build/create-handler.zip) succeeds on fresh clones.
+	// Warn-and-continue mirrors runInit's behavior at init.go:491-496.
+	fmt.Printf("Building Lambdas [%s]...\n", version.String())
+	if err := BuildLambdaZipsFunc(repoRoot); err != nil {
+		fmt.Printf("  [warn] Lambda build failed: %v\n", err)
+	}
 
 	// Module loop (matches RunInitWithRunner skip semantics)
 	modules := regionalModules(regionDir)
