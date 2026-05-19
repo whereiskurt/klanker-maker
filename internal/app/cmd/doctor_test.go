@@ -732,6 +732,55 @@ func TestDoctorCmd_IndividualDeleteFlag_DoesNotImplyOthers(t *testing.T) {
 	}
 }
 
+// TestDoctorCmd_WithDeletes_EnablesStateDigests asserts that --with-deletes
+// implicitly turns on --delete-state-digests (Phase 85), matching the precedent
+// set by --delete-{ebs,sqs,s3,lambdas,ssh,ssm}. Mirrors
+// TestDoctorCmd_WithDeletes_EnablesAllDeleteOptIns above.
+func TestDoctorCmd_WithDeletes_EnablesStateDigests(t *testing.T) {
+	deps := allOKDeps()
+	cmd := NewDoctorCmdWithDeps(minimalConfig(), deps)
+	cmd.SetOut(new(nopWriter))
+	if err := cmd.Flags().Set("with-deletes", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.RunE(cmd, []string{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !deps.DeleteStateDigests {
+		t.Error("--with-deletes should set DeleteStateDigests=true")
+	}
+	// Smoke: the Phase 84.1 fields are still folded in (regression catch — if a
+	// future refactor reorders the fold block, this test fails loudly).
+	if !deps.DeleteEBS || !deps.DeleteSQS || !deps.DeleteS3 || !deps.DeleteLambdas || !deps.DeleteSSH || !deps.DeleteSSM {
+		t.Errorf("--with-deletes regression — expected all Delete* fields true; got EBS=%v SQS=%v S3=%v Lambdas=%v SSH=%v SSM=%v",
+			deps.DeleteEBS, deps.DeleteSQS, deps.DeleteS3, deps.DeleteLambdas, deps.DeleteSSH, deps.DeleteSSM)
+	}
+}
+
+// TestDoctorCmd_DeleteStateDigestsAlone_DoesNotImplyOthers is the inverse —
+// passing --delete-state-digests by itself must NOT enable the other --delete-*
+// opt-ins. Mirrors TestDoctorCmd_IndividualDeleteFlag_DoesNotImplyOthers above.
+// Catches the regression where someone wires --delete-state-digests as an alias
+// for --with-deletes.
+func TestDoctorCmd_DeleteStateDigestsAlone_DoesNotImplyOthers(t *testing.T) {
+	deps := allOKDeps()
+	cmd := NewDoctorCmdWithDeps(minimalConfig(), deps)
+	cmd.SetOut(new(nopWriter))
+	if err := cmd.Flags().Set("delete-state-digests", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.RunE(cmd, []string{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !deps.DeleteStateDigests {
+		t.Error("--delete-state-digests alone should still set DeleteStateDigests=true")
+	}
+	if deps.DeleteEBS || deps.DeleteSQS || deps.DeleteS3 || deps.DeleteLambdas || deps.DeleteSSH || deps.DeleteSSM {
+		t.Errorf("--delete-state-digests alone must not enable other opt-ins; got EBS=%v SQS=%v S3=%v Lambdas=%v SSH=%v SSM=%v",
+			deps.DeleteEBS, deps.DeleteSQS, deps.DeleteS3, deps.DeleteLambdas, deps.DeleteSSH, deps.DeleteSSM)
+	}
+}
+
 func TestDoctorCmd_AllChecksPass_ExitZero(t *testing.T) {
 	deps := allOKDeps()
 	cmd := NewDoctorCmdWithDeps(minimalConfig(), deps)

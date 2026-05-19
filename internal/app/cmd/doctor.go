@@ -334,6 +334,13 @@ type DoctorDeps struct {
 	// (signing-key, encryption-key, safe-phrase, github-token) contain
 	// cryptographic secrets and are never auto-deleted without explicit opt-in.
 	DeleteSSM bool
+	// DeleteStateDigests opts the orphan state-lock digest sweeper into
+	// deletion. Honored only when DryRun is also false. Required because the
+	// sweeper writes to the terragrunt lock table — a false-positive delete
+	// on a live row would orphan an in-flight terragrunt apply. The sweeper
+	// only deletes rows where HeadObject returns NotFound (strict); live S3 +
+	// stale MD5 mismatches are reported but never deleted by this flag.
+	DeleteStateDigests bool
 	// LambdaCleanup is the Lambda client used by checkStaleLambdas for
 	// ListFunctions + DeleteFunction. Distinct from LambdaClient (which
 	// only has GetFunction for the existence check) so doctor can keep
@@ -2254,6 +2261,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 	var deleteLambdas bool
 	var deleteSSH bool
 	var deleteSSM bool
+	var deleteStateDigests bool
 	var withDeletes bool
 	var backfillTags bool
 
@@ -2311,8 +2319,9 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 				deleteLambdas = true
 				deleteSSH = true
 				deleteSSM = true
+				deleteStateDigests = true
 			}
-			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH, deleteSSM)
+			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH, deleteSSM, deleteStateDigests)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output results as JSON array")
@@ -2333,15 +2342,17 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 		"With --dry-run=false, remove stale 'Host km-{sandbox-id}' entries from ~/.ssh/config and matching key files in ~/.km/keys/. Local-only — needed because remote/TTL/budget destroys can't reach the operator filesystem.")
 	cmd.Flags().BoolVar(&deleteSSM, "delete-ssm", false,
 		"With --dry-run=false, delete per-sandbox SSM parameters (signing-key, encryption-key, safe-phrase, github-token) whose sandbox row is gone from DynamoDB. Explicit opt-in required because these parameters contain cryptographic secrets.")
+	cmd.Flags().BoolVar(&deleteStateDigests, "delete-state-digests", false,
+		"With --dry-run=false, delete orphan DDB lock rows where the S3 state object is definitively gone (HeadObject returns NotFound). Generic errors — network, 5xx, throttling — NEVER trigger deletion (logged as 'could not verify'). Live S3 + stale MD5 mismatches are reported but NEVER deleted by this flag.")
 	cmd.Flags().BoolVar(&withDeletes, "with-deletes", false,
-		"Shortcut for --delete-ebs --delete-sqs --delete-s3 --delete-lambdas --delete-ssh --delete-ssm. Pair with --dry-run=false for a full cleanup pass; with --dry-run=true (default) shows what each opt-in would clean.")
+		"Shortcut for --delete-ebs --delete-sqs --delete-s3 --delete-lambdas --delete-ssh --delete-ssm --delete-state-digests. Pair with --dry-run=false for a full cleanup pass; with --dry-run=true (default) shows what each opt-in would clean.")
 	cmd.Flags().BoolVar(&backfillTags, "backfill-tags", false,
 		"Retrofit km:resource-prefix tag onto pre-Phase-82 resources. Uses tag:GetResources(km:sandbox-id=*) filtered by this install's DDB sandbox table. Default --dry-run=true — pass --dry-run=false to apply.")
 	return cmd
 }
 
 // runDoctor is the core execution logic for km doctor.
-func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH, deleteSSM bool) error {
+func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH, deleteSSM, deleteStateDigests bool) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -2372,6 +2383,7 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 	deps.DeleteLambdas = deleteLambdas
 	deps.DeleteSSH = deleteSSH
 	deps.DeleteSSM = deleteSSM
+	deps.DeleteStateDigests = deleteStateDigests
 
 	// Run credential check first — if SSO is expired, skip all AWS checks
 	// rather than repeating the same credential error for every check.
