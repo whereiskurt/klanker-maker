@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -18,6 +19,12 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/compiler"
 	"gopkg.in/yaml.v3"
 )
+
+// cmdCanonicalBucketRE enforces the Phase 84.3 artifacts_bucket naming convention
+// for the configure interactive flow: ${prefix}-artifacts-${12-digit-account-id}.
+// Package-level MustCompile panics at startup on bad constant (acceptable for a
+// compile-time literal). Mirrors canonicalBucketRE in internal/app/config/config.go.
+var cmdCanonicalBucketRE = regexp.MustCompile(`^[a-z][a-z0-9-]*-artifacts-[0-9]{12}$`)
 
 // deriveOperatorEmail returns the canonical operator inbox address for a given
 // install. The address shape is locked by Phase 84 CONTEXT.md:
@@ -207,14 +214,17 @@ func deriveArtifactsBucket(prefix, accountID string) string {
 	return fmt.Sprintf("%s-artifacts-%s", prefix, accountID)
 }
 
-// validateArtifactsBucket rejects placeholder values from km-config.example.yaml.
+// validateArtifactsBucket rejects placeholder and non-canonical values.
 // Returns a descriptive error for:
+//   - empty string
 //   - angle-bracket placeholders: any string containing a "<…>" token
 //     (e.g. "<prefix>-artifacts-<account-id>" or "<prefix>-artifacts-12345678")
-//   - the literal example sentinel: "km-artifacts-12345"
-//   - empty string (not a valid bucket name)
+//   - the literal example sentinel: "km-artifacts-12345" (fast-path for clear error;
+//     also caught by the regex below since "12345" has 5 digits not 12)
+//   - any name that does not match the canonical shape
+//     ${prefix}-artifacts-${12-digit-account-id}
 //
-// Returns nil for any other non-empty string.
+// Returns nil only for canonical values (e.g. km-artifacts-052251888500).
 func validateArtifactsBucket(name string) error {
 	if name == "" {
 		return fmt.Errorf("artifacts_bucket is empty; re-run `km configure` to derive ${prefix}-artifacts-${account_id} automatically")
@@ -223,12 +233,21 @@ func validateArtifactsBucket(name string) error {
 	// strings.Index("<") combined with a closing ">" at any position covers both
 	// full wrappers (<anything>) and prefix-tokens (<prefix>-artifacts-12345678).
 	if lt := strings.Index(name, "<"); lt >= 0 {
-		if gt := strings.Index(name[lt:], ">"); gt >= 0 {
+		if strings.Index(name[lt:], ">") >= 0 {
 			return fmt.Errorf("artifacts_bucket=%q is a placeholder; re-run `km configure` to derive ${prefix}-artifacts-${account_id} automatically", name)
 		}
 	}
+	// Reject the literal km-config.example.yaml sentinel (fast-path for clear error;
+	// also caught by the regex below since "12345" has 5 digits not 12).
 	if name == "km-artifacts-12345" {
 		return fmt.Errorf("artifacts_bucket=%q is the km-config.example.yaml placeholder; re-run `km configure` to derive ${prefix}-artifacts-${account_id} automatically", name)
+	}
+	// Gap #4 (Phase 84.4.1.1): enforce canonical shape.
+	if !cmdCanonicalBucketRE.MatchString(name) {
+		return fmt.Errorf(
+			"artifacts_bucket=%q does not match canonical shape ${prefix}-artifacts-${12-digit-account-id} (e.g. km-artifacts-052251888500); re-run `km configure` to derive the correct value automatically",
+			name,
+		)
 	}
 	return nil
 }

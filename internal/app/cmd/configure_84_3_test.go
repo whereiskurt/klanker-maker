@@ -690,5 +690,33 @@ func TestConfigure_ArtifactsBucketDerivedDefault(t *testing.T) {
 // validateArtifactsBucket in configure.go enforces the canonical regex
 // ^[a-z][a-z0-9-]*-artifacts-[0-9]{12}$ so non-canonical names are rejected.
 func TestValidateArtifactsBucket_CanonicalShape(t *testing.T) {
-	t.Skip("RED scaffold — implemented by Plan 03 (84.4.1.1-03-PLAN.md)")
+	cases := []struct {
+		name    string
+		input   string
+		wantErr bool
+		wantMsg string
+	}{
+		{name: "canonical km prefix", input: "km-artifacts-052251888500", wantErr: false},
+		{name: "canonical tg prefix", input: "tg-artifacts-052251888500", wantErr: false},
+		{name: "canonical whereiskurt prefix", input: "whereiskurt-artifacts-987654321098", wantErr: false},
+		{name: "sentinel literal km-artifacts-12345", input: "km-artifacts-12345", wantErr: true, wantMsg: "placeholder"},
+		{name: "UAT-2 non-canonical tg-km-artifacts-use1-abcd0123", input: "tg-km-artifacts-use1-abcd0123", wantErr: true, wantMsg: "canonical shape"},
+		{name: "angle-bracket placeholder", input: "<prefix>-artifacts-<account-id>", wantErr: true, wantMsg: "placeholder"},
+		{name: "empty string", input: "", wantErr: true, wantMsg: "empty"},
+		{name: "no artifacts segment", input: "my-bucket", wantErr: true, wantMsg: "canonical shape"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateArtifactsBucket(tc.input)
+			if tc.wantErr && err == nil {
+				t.Errorf("validateArtifactsBucket(%q): expected error, got nil", tc.input)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("validateArtifactsBucket(%q): expected no error, got: %v", tc.input, err)
+			}
+			if tc.wantErr && tc.wantMsg != "" && err != nil && !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("validateArtifactsBucket(%q): error %q does not contain %q", tc.input, err.Error(), tc.wantMsg)
+			}
+		})
+	}
 }
