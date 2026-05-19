@@ -74,6 +74,12 @@ type CheckResult struct {
 	Status      CheckStatus `json:"status"`
 	Message     string      `json:"message"`
 	Remediation string      `json:"remediation,omitempty"`
+	// Details is the full, uncapped list of items associated with this check
+	// (e.g. orphan LockIDs from checkStateLockDigestSweeper). Populated only by
+	// checks that produce list-shaped detail. JSON tag uses omitempty so checks
+	// that don't populate it preserve their existing JSON shape (no breaking
+	// change for existing --json consumers). Phase 85 / ACCEPT-READ.
+	Details []string `json:"details,omitempty"`
 }
 
 // =============================================================================
