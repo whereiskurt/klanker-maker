@@ -597,3 +597,17 @@ func TestConfigure_StateBucketHeadBucketRetry(t *testing.T) {
 		t.Errorf("expected stateBucket 'tf-tg-state-use1-edited' after edit, got %q", result)
 	}
 }
+
+// TestConfigure_ArtifactsBucketDerivedDefault verifies Gap #2a (Phase 84.4.1.1 Plan 02):
+// The km configure prompt at configure.go:592 uses deriveArtifactsBucket(prefix, accountID)
+// as the default when artifactsBucket is empty, so operators don't type bucket names by hand.
+func TestConfigure_ArtifactsBucketDerivedDefault(t *testing.T) {
+	t.Skip("RED scaffold — implemented by Plan 02 (84.4.1.1-02-PLAN.md)")
+}
+
+// TestValidateArtifactsBucket_CanonicalShape verifies Gap #4 (Phase 84.4.1.1 Plan 03):
+// validateArtifactsBucket in configure.go enforces the canonical regex
+// ^[a-z][a-z0-9-]*-artifacts-[0-9]{12}$ so non-canonical names are rejected.
+func TestValidateArtifactsBucket_CanonicalShape(t *testing.T) {
+	t.Skip("RED scaffold — implemented by Plan 03 (84.4.1.1-03-PLAN.md)")
+}

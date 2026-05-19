@@ -845,3 +845,10 @@ func TestRunInitWithRunner_FastApplyDoesNotTriggerTimeout(t *testing.T) {
 		t.Errorf("expected all 7 fast applies to succeed, got %d", len(mock.applied))
 	}
 }
+
+// TestRunInitPlan_BuildsLambdaZips verifies Gap #1 (Phase 84.4.1.1 Plan 01):
+// RunInitPlanWithRunner calls buildLambdaZips before the module loop so fresh-clone
+// `km init --plan` does not fail on filebase64sha256(build/create-handler.zip).
+func TestRunInitPlan_BuildsLambdaZips(t *testing.T) {
+	t.Skip("RED scaffold — implemented by Plan 01 (84.4.1.1-01-PLAN.md)")
+}

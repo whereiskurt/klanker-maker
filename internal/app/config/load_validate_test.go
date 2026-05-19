@@ -120,3 +120,10 @@ resource_prefix: km
 		t.Errorf("config.Load() returned error for empty artifacts_bucket: %v", err)
 	}
 }
+
+// TestConfigLoad_RejectsNonCanonicalBucket verifies Gap #2b + Gap #4 (Phase 84.4.1.1 Plan 02+03):
+// config.Load() calls ValidateArtifactsBucket so non-canonical bucket names
+// (e.g. tg-km-artifacts-use1-abcd0123) hard-fail before reaching bootstrap.
+func TestConfigLoad_RejectsNonCanonicalBucket(t *testing.T) {
+	t.Skip("RED scaffold — implemented by Plan 02+03 (84.4.1.1-02-PLAN.md, 84.4.1.1-03-PLAN.md)")
+}

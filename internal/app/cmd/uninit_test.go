@@ -480,3 +480,17 @@ func TestUninitContinuesPastECRDeleteErrors(t *testing.T) {
 		t.Errorf("expected 5 ECR delete calls (all repos attempted), got %d: %v", len(ecrDel.calls), ecrDel.calls)
 	}
 }
+
+// TestRunUninit_DetachesSCPWhenFlagSet verifies Gap #3b (Phase 84.4.1.1 Plan 05):
+// RunUninitWithDeps with opts.IncludeSCP=true calls DetachPolicy+DeletePolicy
+// via the injected OrgsClient; with opts.IncludeSCP=false emits a WARN and skips.
+func TestRunUninit_DetachesSCPWhenFlagSet(t *testing.T) {
+	t.Skip("RED scaffold — implemented by Plan 05 (84.4.1.1-05-PLAN.md)")
+}
+
+// TestRunUninitWithDeps_ActiveSandboxCheck verifies Gap #5 investigation (Phase 84.4.1.1 Plan 06):
+// RunUninitWithDeps with 0/1/N running sandboxes behaves correctly:
+// 0 running → proceeds, 1 running → error unless --force, N mixed status → counts only "running".
+func TestRunUninitWithDeps_ActiveSandboxCheck(t *testing.T) {
+	t.Skip("RED scaffold — implemented by Plan 06 (84.4.1.1-06-PLAN.md)")
+}

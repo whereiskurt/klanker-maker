@@ -2038,3 +2038,10 @@ func TestAppendKmInitPlanTip(t *testing.T) {
 		t.Errorf("expected ANSI yellow escape with isTTY=true, got:\n%q", ttyGot)
 	}
 }
+
+// TestDoctor_WarnsOnOrphanSCPs verifies Gap #3a (Phase 84.4.1.1 Plan 04):
+// checkOrphanSCPs returns WARN when ListPolicies returns an SCP whose name
+// ends in -sandbox-containment but whose prefix is not the local install's resource_prefix.
+func TestDoctor_WarnsOnOrphanSCPs(t *testing.T) {
+	t.Skip("RED scaffold — implemented by Plan 04 (84.4.1.1-04-PLAN.md)")
+}
