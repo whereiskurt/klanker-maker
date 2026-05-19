@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/service/organizations"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
@@ -65,6 +66,24 @@ func (a *uninitRunnerAdapter) Reconfigure(ctx context.Context, dir string) error
 // loop idempotently across the well-known repo list.
 type ECRRepoDeleter interface {
 	DeleteRepository(ctx context.Context, region, name string) error
+}
+
+// UninitOrgsAPI covers the Organizations operations uninit needs for SCP cleanup
+// when --include-scp is set (Gap #3b, Phase 84.4.1.1).
+// The real *organizations.Client satisfies this interface.
+type UninitOrgsAPI interface {
+	ListPoliciesForTarget(ctx context.Context, params *organizations.ListPoliciesForTargetInput, optFns ...func(*organizations.Options)) (*organizations.ListPoliciesForTargetOutput, error)
+	DetachPolicy(ctx context.Context, params *organizations.DetachPolicyInput, optFns ...func(*organizations.Options)) (*organizations.DetachPolicyOutput, error)
+	DeletePolicy(ctx context.Context, params *organizations.DeletePolicyInput, optFns ...func(*organizations.Options)) (*organizations.DeletePolicyOutput, error)
+}
+
+// UninitOpts captures the user-facing options for one uninit run.
+// Use a struct (not positional booleans) so adding --include-scp does not
+// require updating all callers — mirrors UnbootstrapOpts in unbootstrap.go.
+type UninitOpts struct {
+	Force      bool
+	IncludeSCP bool
+	OrgsClient UninitOrgsAPI // injected for SCP detach; nil = skip SCP cleanup
 }
 
 // awsCLIECRDeleter shells out to the AWS CLI to match init.go's existing
@@ -199,7 +218,7 @@ func runUninit(cfg *config.Config, awsProfile, region string, force bool, verbos
 
 	ecrDeleter := &awsCLIECRDeleter{awsProfile: awsProfile}
 
-	return RunUninitWithDeps(cfg, runner, lister, ecrDeleter, region, force)
+	return RunUninitWithDeps(cfg, runner, lister, ecrDeleter, region, UninitOpts{Force: force})
 }
 
 // RunUninitWithDeps is the testable core of uninit with dependency injection.
@@ -208,19 +227,19 @@ func runUninit(cfg *config.Config, awsProfile, region string, force bool, verbos
 // (e.g. for tests that only exercise terragrunt destroy ordering).
 //
 // Exported for use in uninit_test.go.
-func RunUninitWithDeps(cfg *config.Config, runner UninitRunner, lister SandboxLister, ecrDeleter ECRRepoDeleter, region string, force bool) error {
+func RunUninitWithDeps(cfg *config.Config, runner UninitRunner, lister SandboxLister, ecrDeleter ECRRepoDeleter, region string, opts UninitOpts) error {
 	ctx := context.Background()
 
 	// Step 1: Verify we can check for active sandboxes.
 	// If StateBucket is not configured, we can't verify — require --force.
-	if cfg.StateBucket == "" && !force {
+	if cfg.StateBucket == "" && !opts.Force {
 		return fmt.Errorf(
 			"cannot verify active sandboxes — state_bucket not configured; use --force to proceed without the check",
 		)
 	}
 
 	// Step 2: Check for active sandboxes in the target region.
-	if lister != nil && !force {
+	if lister != nil && !opts.Force {
 		records, err := lister.ListSandboxes(ctx, false)
 		if err != nil {
 			return fmt.Errorf("failed to list sandboxes (use --force to skip this check): %w", err)

@@ -59,7 +59,7 @@ func TestUninitDestroyOrder(t *testing.T) {
 	lister := &mockUninitLister{records: []kmaws.SandboxRecord{}}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", cmd.UninitOpts{Force: false})
 	if err != nil {
 		t.Fatalf("runUninitWithDeps returned error: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestUninitRefusesWithActiveSandboxes(t *testing.T) {
 	}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", cmd.UninitOpts{Force: false})
 	if err == nil {
 		t.Fatal("expected error when active sandboxes exist and force=false, got nil")
 	}
@@ -139,7 +139,7 @@ func TestUninitProceedsWithForce(t *testing.T) {
 	}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", true)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", cmd.UninitOpts{Force: true})
 	if err != nil {
 		t.Fatalf("expected uninit to proceed with --force, got error: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestUninitProceedsNoActiveSandboxes(t *testing.T) {
 	}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", cmd.UninitOpts{Force: false})
 	if err != nil {
 		t.Fatalf("expected uninit to proceed with no active sandboxes in region, got: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestUninitSkipsMissingModuleDirectory(t *testing.T) {
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
 	// Use a non-existent region label so all module dirs are missing
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "ap-southeast-9", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "ap-southeast-9", cmd.UninitOpts{Force: false})
 	if err != nil {
 		t.Fatalf("expected uninit to continue past missing dirs, got: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestUninitContinuesPastModuleErrors(t *testing.T) {
 	lister := &mockUninitLister{records: []kmaws.SandboxRecord{}}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", cmd.UninitOpts{Force: false})
 	// Non-fatal error: uninit should not return an error even if one module fails
 	if err != nil {
 		t.Fatalf("expected uninit to continue past module errors, got: %v", err)
@@ -222,7 +222,7 @@ func TestUninitRequiresForceWhenStateBucketEmpty(t *testing.T) {
 	// lister is nil to simulate no lister available
 	cfg := &config.Config{StateBucket: ""}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, nil, nil, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, nil, nil, "us-east-1", cmd.UninitOpts{Force: false})
 	if err == nil {
 		t.Fatal("expected error when StateBucket is empty and force=false, got nil")
 	}
@@ -243,7 +243,7 @@ func TestUninitRequiresForceWhenStateBucketEmptyProceedsWithForce(t *testing.T) 
 	cfg := &config.Config{StateBucket: ""}
 
 	// With --force, should proceed even without state bucket
-	err := cmd.RunUninitWithDeps(cfg, runner, nil, nil, "us-east-1", true)
+	err := cmd.RunUninitWithDeps(cfg, runner, nil, nil, "us-east-1", cmd.UninitOpts{Force: true})
 	if err != nil {
 		t.Fatalf("expected uninit to proceed with --force and empty state bucket, got: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestUninitOnlyCountsRegionSandboxes(t *testing.T) {
 	}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", cmd.UninitOpts{Force: false})
 	if err != nil {
 		t.Fatalf("expected no error (no running sandboxes in us-east-1), got: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestUninitActiveSandboxErrorMessage(t *testing.T) {
 	}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", cmd.UninitOpts{Force: false})
 	if err == nil {
 		t.Fatal("expected error for active sandboxes")
 	}
@@ -352,7 +352,7 @@ func TestUninitDeletesECRRepos(t *testing.T) {
 	ecrDel := &mockECRDeleter{}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, ecrDel, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, ecrDel, "us-east-1", cmd.UninitOpts{Force: false})
 	if err != nil {
 		t.Fatalf("uninit returned error: %v", err)
 	}
@@ -383,7 +383,7 @@ func TestUninitReconfiguresBeforeEachDestroy(t *testing.T) {
 	lister := &mockUninitLister{records: []kmaws.SandboxRecord{}}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", cmd.UninitOpts{Force: false})
 	if err != nil {
 		t.Fatalf("uninit returned error: %v", err)
 	}
@@ -414,7 +414,7 @@ func TestUninitContinuesWhenReconfigureFails(t *testing.T) {
 	lister := &mockUninitLister{records: []kmaws.SandboxRecord{}}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", cmd.UninitOpts{Force: false})
 	if err != nil {
 		t.Fatalf("uninit should continue past Reconfigure failure, got: %v", err)
 	}
@@ -447,7 +447,7 @@ func TestUninitDetectsBackendDrift(t *testing.T) {
 	lister := &mockUninitLister{records: []kmaws.SandboxRecord{}}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, nil, "us-east-1", cmd.UninitOpts{Force: false})
 	if err != nil {
 		t.Fatalf("uninit should not return error on backend drift; should continue and surface in summary: %v", err)
 	}
@@ -471,7 +471,7 @@ func TestUninitContinuesPastECRDeleteErrors(t *testing.T) {
 	}
 	cfg := &config.Config{StateBucket: "my-bucket"}
 
-	err := cmd.RunUninitWithDeps(cfg, runner, lister, ecrDel, "us-east-1", false)
+	err := cmd.RunUninitWithDeps(cfg, runner, lister, ecrDel, "us-east-1", cmd.UninitOpts{Force: false})
 	if err != nil {
 		t.Fatalf("expected uninit to continue past ECR delete errors, got: %v", err)
 	}
