@@ -746,7 +746,11 @@ func buildBotMessageEventBody(t *testing.T, channel, ts, botID, text string) str
 // ============================================================
 
 // TestEventsHandler_Reactor_HappyPath: valid message → Reactor.Add called once
-// with (msg.Channel, msg.TS, "eyes") after SQS Send returns nil.
+// with (msg.Channel, msg.TS, "eyes") synchronously before Handle returns.
+//
+// Phase 75.2 lesson applied: the reactor runs inline, NOT in a goroutine,
+// because AWS Lambda freezes the runtime when Handle returns and any
+// in-flight retry's wall-clock context elapses during the freeze.
 func TestEventsHandler_Reactor_HappyPath(t *testing.T) {
 	now := time.Now()
 	h, sqs, _, _, _, _, reactor := newHandler(now)
@@ -767,18 +771,10 @@ func TestEventsHandler_Reactor_HappyPath(t *testing.T) {
 		t.Fatalf("expected 1 SQS message, got %d", len(sqs.sends))
 	}
 
-	// Goroutine — poll for up to 1s.
-	var calls []reactorCall
-	deadline := time.Now().Add(1 * time.Second)
-	for time.Now().Before(deadline) {
-		calls = reactor.snapshot()
-		if len(calls) >= 1 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	// Synchronous: reactor must already have been invoked by the time Handle returns.
+	calls := reactor.snapshot()
 	if len(calls) != 1 {
-		t.Fatalf("expected 1 reactor call, got %d", len(calls))
+		t.Fatalf("expected 1 reactor call after Handle returns, got %d", len(calls))
 	}
 	if calls[0].channel != "C01234567" || calls[0].ts != "1714280400.001" || calls[0].emoji != "eyes" {
 		t.Errorf("unexpected reactor call: %+v", calls[0])
@@ -787,6 +783,7 @@ func TestEventsHandler_Reactor_HappyPath(t *testing.T) {
 
 // TestEventsHandler_Reactor_FailureDoesNotBlock: Reactor.Add error does NOT
 // surface to caller; SQS still has the message; response is still 200.
+// The reactor runs synchronously but its error is logged and swallowed.
 func TestEventsHandler_Reactor_FailureDoesNotBlock(t *testing.T) {
 	now := time.Now()
 	h, sqs, _, _, _, _, reactor := newHandler(now)
@@ -807,8 +804,6 @@ func TestEventsHandler_Reactor_FailureDoesNotBlock(t *testing.T) {
 	if len(sqs.sends) != 1 {
 		t.Fatalf("expected SQS write to succeed despite reactor error, got %d sends", len(sqs.sends))
 	}
-	// Give the goroutine a chance to run so the test isn't flaky on race.
-	time.Sleep(50 * time.Millisecond)
 	if len(reactor.snapshot()) != 1 {
 		t.Errorf("expected reactor invoked exactly once even on error path")
 	}
@@ -836,8 +831,6 @@ func TestEventsHandler_Reactor_BotLoopSkips(t *testing.T) {
 	if len(sqs.sends) != 0 {
 		t.Errorf("expected NO SQS send for bot-loop, got %d", len(sqs.sends))
 	}
-	// Give any (would-be-buggy) goroutine a chance to fire.
-	time.Sleep(50 * time.Millisecond)
 	if calls := reactor.snapshot(); len(calls) != 0 {
 		t.Errorf("expected NO reactor calls for bot-loop, got %d: %+v", len(calls), calls)
 	}

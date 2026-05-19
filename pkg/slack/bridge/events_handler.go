@@ -85,9 +85,15 @@ func (h *EventsHandler) log() *slog.Logger {
 //  8. Send SQS message.
 //  9. If info.Paused, fire PauseHinter.PostIfCooldownExpired in a goroutine
 //     so we still return 200 within Slack's 3s ack window. Errors logged.
-//  10. If Reactor is wired, fire Reactor.Add in a goroutine to ACK with 👀
-//      (or whatever KM_SLACK_ACK_EMOJI is set to). Errors logged. NEVER blocks.
+//  10. If Reactor is wired, call Reactor.Add SYNCHRONOUSLY to ACK with 👀
+//      (or whatever KM_SLACK_ACK_EMOJI is set to). Errors logged.
 //      Reacts on msg.TS (the originating message), NOT threadTS.
+//      Synchronous (not goroutine) for the same reason as step 8's file
+//      download: AWS Lambda freezes the runtime when Handle returns, and
+//      any goroutine still mid-retry has its wall-clock context elapse
+//      during the freeze. If reactions.add pushes past Slack's 3s ack
+//      window, Slack re-fires the event → the event_id dedup in step 5
+//      returns 200 immediately; already_reacted is treated as success.
 //
 // Response codes:
 //   - 400 ONLY for malformed JSON / missing required fields (truly bad request)
@@ -297,28 +303,30 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 		}()
 	}
 
-	// 10. ACK reaction (Phase 67.1).
-	//     Fire-and-forget so the 200 still ships within Slack's 3s ack window.
+	// 10. ACK reaction (Phase 67.1; synchronous since Phase 75.2's lesson).
 	//     React on msg.TS — the originating message, NOT threadTS (which is the
 	//     session anchor and points to the thread root for in-thread replies).
 	//     RESEARCH.md Pitfall 1: using threadTS causes message_not_found for replies.
+	//
+	//     Synchronous handling (no goroutine): AWS Lambda freezes the runtime
+	//     when Handle returns. A goroutine mid-retry would see its wall-clock
+	//     context elapse during the freeze and resume on the next thaw to find
+	//     every operation timed out (Phase 75.2 UAT 2026-05-15). The 10s reactor
+	//     budget fits inside the 60s Lambda timeout; if reactions.add pushes
+	//     past Slack's 3s ack window, Slack re-fires the event and the event_id
+	//     dedup in step 5 absorbs the retry. already_reacted is success.
 	if h.Reactor != nil {
-		ch, msgTS := msg.Channel, msg.TS
 		emoji := h.AckEmoji
 		if emoji == "" {
 			emoji = "eyes"
 		}
-		go func() {
-			// Phase 67.2: 10s budget fits ~800ms of retry sleeps + up to
-			// 3 HTTP round-trips while leaving headroom for Slack-incident
-			// latency. The goroutine does not block the 200 response, so
-			// the extra wall-clock is free.
-			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if err := h.Reactor.Add(bgCtx, ch, msgTS, emoji); err != nil {
-				h.log().Warn("events: reaction failed", "err", err, "channel", ch, "ts", msgTS, "emoji", emoji)
-			}
-		}()
+		bgCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		if err := h.Reactor.Add(bgCtx, msg.Channel, msg.TS, emoji); err != nil {
+			h.log().Warn("events: reaction failed", "err", err, "channel", msg.Channel, "ts", msg.TS, "emoji", emoji)
+		} else {
+			h.log().Info("events: reaction posted", "channel", msg.Channel, "ts", msg.TS, "emoji", emoji)
+		}
+		cancel()
 	}
 
 	return EventsResponse{StatusCode: 200, Body: "ok"}
