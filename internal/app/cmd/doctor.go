@@ -283,6 +283,13 @@ type DoctorDeps struct {
 	// Either nil causes the check to be skipped.
 	StateLockS3Client  S3StateReader
 	StateLockDDBClient LockDigestReader
+	// Phase 85 — sweeper additions. Same AWS config as StateLockS3Client/
+	// DDBClient, just different method-set views. HeadObject (not GetObject)
+	// and BatchWriteItem (not Scan). See doctor_state_digest_sweeper.go for
+	// the function that consumes them. Either nil causes the sweeper to be
+	// skipped (preserving the Phase 84.1 read-only fallback behavior).
+	StateLockS3HeadClient   S3StateHeadAPI
+	StateLockDDBWriteClient LockDigestDeleterAPI
 	// Lister for sandbox summary check.
 	Lister SandboxLister
 	// KMS and IAM clients for stale resource cleanup checks.
@@ -2693,12 +2700,24 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkSESRules(ctx, sesRulesClient, localPrefix)
 	})
 
-	// Terraform state-lock digest drift check (Phase 84.1 GAP-8).
-	stateLockS3 := deps.StateLockS3Client
+	// Phase 85 — replace the Phase 84.1 read-only check with the sweeper.
+	// The sweeper subsumes the old check: paginated Scan + parallel HEAD scan,
+	// SandboxLister cross-reference age guard, optional BatchWriteItem cleanup
+	// gated on --delete-state-digests (also folded into --with-deletes). The
+	// old checkStateLockDigest function body remains in doctor.go so its
+	// Phase 84.1 tests keep passing; it is simply no longer registered here.
+	stateLockS3Head := deps.StateLockS3HeadClient
 	stateLockDDB := deps.StateLockDDBClient
+	stateLockDDBWrite := deps.StateLockDDBWriteClient
+	sandboxLister := deps.Lister
 	lockTable := backendLockTableName(cfg)
+	sweeperDryRun := deps.DryRun
+	sweeperDeleteDigests := deps.DeleteStateDigests
+	const sweeperMinOrphanAge = 24 * time.Hour
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkStateLockDigest(ctx, stateLockS3, stateLockDDB, lockTable)
+		return checkStateLockDigestSweeper(ctx, stateLockS3Head, stateLockDDB,
+			stateLockDDBWrite, sandboxLister, lockTable,
+			sweeperDryRun, sweeperDeleteDigests, sweeperMinOrphanAge)
 	})
 
 	// Sandbox summary check.
@@ -3046,6 +3065,13 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	// convention is preserved.
 	deps.StateLockS3Client = s3.NewFromConfig(awsCfg)
 	deps.StateLockDDBClient = dynamodb.NewFromConfig(awsCfg)
+	// Phase 85 — same awsCfg, different method-set views. The real *s3.Client
+	// satisfies both S3StateReader (GetObject) and S3StateHeadAPI (HeadObject);
+	// the real *dynamodb.Client satisfies both LockDigestReader (Scan) and
+	// LockDigestDeleterAPI (BatchWriteItem). Two fields are kept for testability
+	// — each interface can be mocked independently.
+	deps.StateLockS3HeadClient = s3.NewFromConfig(awsCfg)
+	deps.StateLockDDBWriteClient = dynamodb.NewFromConfig(awsCfg)
 	deps.KMSCleanupClient = kms.NewFromConfig(awsCfg)
 	deps.IAMCleanupClient = iam.NewFromConfig(awsCfg)
 	deps.SchedulerClient = scheduler.NewFromConfig(awsCfg)
