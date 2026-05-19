@@ -601,8 +601,89 @@ func TestConfigure_StateBucketHeadBucketRetry(t *testing.T) {
 // TestConfigure_ArtifactsBucketDerivedDefault verifies Gap #2a (Phase 84.4.1.1 Plan 02):
 // The km configure prompt at configure.go:592 uses deriveArtifactsBucket(prefix, accountID)
 // as the default when artifactsBucket is empty, so operators don't type bucket names by hand.
+//
+// Case 1 (derive): resourcePrefix="tg", applicationAcct="052251888500", artifactsBucket=""
+//   → prompt default = "tg-artifacts-052251888500"; operator presses Enter → written to yaml
+// Case 2 (preserve): artifactsBucket="existing-value-123456789012"
+//   → prompt default = "existing-value-123456789012" (no overwrite on re-run)
 func TestConfigure_ArtifactsBucketDerivedDefault(t *testing.T) {
-	t.Skip("RED scaffold — implemented by Plan 02 (84.4.1.1-02-PLAN.md)")
+	t.Run("derives default when empty", func(t *testing.T) {
+		tmp := t.TempDir()
+		var out bytes.Buffer
+		// Run nonInteractive with empty artifactsBucket + prefix + applicationAcct set.
+		// runConfigure nonInteractive path: if artifactsBucket == "" && resourcePrefix != "" && applicationAcct != "",
+		// it derives and writes tg-artifacts-052251888500.
+		err := runConfigure(
+			strings.NewReader(""),
+			&out,
+			tmp,
+			true,          // nonInteractive
+			false,         // resetPrefix
+			"tg",          // resourcePrefix
+			"sandboxes",   // emailSubdomain
+			"example.com", // domain
+			"",            // organizationAcct
+			"",            // dnsParentAcct
+			"222222222222", // terraformAcct
+			"052251888500", // applicationAcct
+			"https://sso.example.com", // ssoStartURL
+			"us-east-1",   // ssoRegion
+			"us-east-1",   // region
+			"",            // stateBucket
+			"",            // artifactsBucket (empty — expect derivation)
+			"",            // operatorEmail
+			"",            // safePhrase
+			0,             // maxSandboxes
+		)
+		if err != nil {
+			t.Fatalf("runConfigure returned error: %v", err)
+		}
+		content, readErr := os.ReadFile(filepath.Join(tmp, "km-config.yaml"))
+		if readErr != nil {
+			t.Fatalf("read km-config.yaml: %v", readErr)
+		}
+		if !strings.Contains(string(content), "tg-artifacts-052251888500") {
+			t.Errorf("km-config.yaml missing derived artifacts_bucket 'tg-artifacts-052251888500';\ngot:\n%s", string(content))
+		}
+	})
+
+	t.Run("preserves existing value on re-run", func(t *testing.T) {
+		tmp := t.TempDir()
+		var out bytes.Buffer
+		existing := "existing-value-123456789012"
+		err := runConfigure(
+			strings.NewReader(""),
+			&out,
+			tmp,
+			true,          // nonInteractive
+			false,         // resetPrefix
+			"tg",          // resourcePrefix
+			"sandboxes",   // emailSubdomain
+			"example.com", // domain
+			"",            // organizationAcct
+			"",            // dnsParentAcct
+			"222222222222",          // terraformAcct
+			"052251888500",          // applicationAcct
+			"https://sso.example.com", // ssoStartURL (required in non-interactive)
+			"us-east-1",             // ssoRegion (required in non-interactive)
+			"us-east-1",   // region
+			"",            // stateBucket
+			existing,      // artifactsBucket (pre-set — should not be overwritten)
+			"",            // operatorEmail
+			"",            // safePhrase
+			0,             // maxSandboxes
+		)
+		if err != nil {
+			t.Fatalf("runConfigure returned error: %v", err)
+		}
+		content, readErr := os.ReadFile(filepath.Join(tmp, "km-config.yaml"))
+		if readErr != nil {
+			t.Fatalf("read km-config.yaml: %v", readErr)
+		}
+		if !strings.Contains(string(content), existing) {
+			t.Errorf("km-config.yaml does not preserve existing artifacts_bucket %q;\ngot:\n%s", existing, string(content))
+		}
+	})
 }
 
 // TestValidateArtifactsBucket_CanonicalShape verifies Gap #4 (Phase 84.4.1.1 Plan 03):

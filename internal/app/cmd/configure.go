@@ -456,6 +456,12 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 				}
 			}
 		}
+		// Gap #2a (Phase 84.4.1.1): auto-derive artifacts_bucket default when not yet set.
+		// Mirrors the operator_email derivation pattern above.
+		// Only fires when both resourcePrefix and applicationAcct are known.
+		if artifactsBucket == "" && resourcePrefix != "" && applicationAcct != "" {
+			artifactsBucket = deriveArtifactsBucket(resourcePrefix, applicationAcct)
+		}
 		// Phase 84.3: emit shell-env drift WARNs before validation so they reach
 		// the operator even when required flags are missing. Does not block the wizard.
 		warnShellEnvConflict(platformConfig{
@@ -588,6 +594,13 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 			}
 			// If awsErr != nil (no AWS creds at configure time), skip silently —
 			// bootstrap will surface the issue when it actually needs to access S3.
+		}
+		// Gap #2a (Phase 84.4.1.1): auto-derive artifacts_bucket when not yet set.
+		// Mirrors the operator_email derivation pattern below this block.
+		// Only fires when both resourcePrefix and applicationAcct are known (they are
+		// collected earlier in runConfigureInteractive before this prompt).
+		if artifactsBucket == "" && resourcePrefix != "" && applicationAcct != "" {
+			artifactsBucket = deriveArtifactsBucket(resourcePrefix, applicationAcct)
 		}
 		artifactsBucket, err = prompt(out, scanner, "S3 artifacts bucket for Lambda zips, sidecars, sandbox artifacts", artifactsBucket)
 		if err != nil {
