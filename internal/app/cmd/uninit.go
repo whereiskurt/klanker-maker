@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
 	organizationstypes "github.com/aws/aws-sdk-go-v2/service/organizations/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
@@ -293,24 +294,38 @@ func RunUninitWithDeps(cfg *config.Config, runner UninitRunner, lister SandboxLi
 	// Step 1: Verify we can check for active sandboxes.
 	// If StateBucket is not configured, we can't verify — require --force.
 	if cfg.StateBucket == "" && !opts.Force {
+		log.Info().Str("region", region).Msg("uninit: state_bucket not configured, cannot verify active sandboxes")
 		return fmt.Errorf(
 			"cannot verify active sandboxes — state_bucket not configured; use --force to proceed without the check",
 		)
 	}
 
 	// Step 2: Check for active sandboxes in the target region.
+	// Only "running" status blocks uninit. Sandboxes in "stopping", "stopped",
+	// or "creating" are intentionally excluded — they do not represent active
+	// workloads that would conflict with infrastructure teardown.
+	//
+	// NOTE: TTL-expired sandboxes that have not yet been auto-destroyed by the
+	// ttl-handler Lambda will still show Status="running" and WILL block uninit.
+	// This is correct — the status filter does not consult TTLExpiry. If the
+	// operator needs to proceed before the Lambda runs, use --force.
 	if lister != nil && !opts.Force {
 		records, err := lister.ListSandboxes(ctx, false)
 		if err != nil {
 			return fmt.Errorf("failed to list sandboxes (use --force to skip this check): %w", err)
 		}
 
+		log.Info().Str("region", region).Int("total_records", len(records)).Msg("uninit: ListSandboxes returned")
+
 		activeCount := 0
 		for _, r := range records {
+			log.Debug().Str("sandbox_id", r.SandboxID).Str("status", r.Status).Str("sandbox_region", r.Region).Msg("uninit: evaluating sandbox record")
 			if r.Region == region && r.Status == "running" {
 				activeCount++
 			}
 		}
+
+		log.Info().Str("region", region).Int("active_running", activeCount).Msg("uninit: active sandbox count after filter")
 
 		if activeCount > 0 {
 			return fmt.Errorf(
