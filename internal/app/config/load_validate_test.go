@@ -27,20 +27,18 @@ import (
 // Note: writeKMConfigDrift and changeToDir are declared in config_load_drift_test.go
 // (same package config_test). They are reused here without redeclaration.
 
-// TestConfigLoad_AcceptsLegacyBucketLiteral documents Phase 84.4.1.1 Gap #4 behavior change:
-// ValidateArtifactsBucket now enforces the canonical ${prefix}-artifacts-${12-digit-account-id}
-// shape. The legacy bucket "km-artifacts-12345" has a 5-digit account suffix and fails the
-// canonical regex.
+// TestConfigLoad_AcceptsLegacyBucketLiteral preserves the Phase 84.4-08 UAT behavior:
+// the literal "km-artifacts-12345" is a real legacy bucket on at least one operator's
+// install (predating Phase 84.3's ${prefix}-artifacts-${account_id} derivation).
 //
-// Phase 84.4-08 UAT originally intended to ACCEPT this name (it was a real legacy bucket).
-// Phase 84.4.1.1 Plan 02 introduces the canonical shape enforcement via ValidateArtifactsBucket
-// wired into config.Load(). This means "km-artifacts-12345" now returns an error because
-// 12345 is 5 digits, not 12.
+// Phase 84.4.1.1 Plan 02 originally introduced canonical-shape enforcement at config.Load()
+// time. That broke this operator's km commands (every CLI invocation hard-failed on the
+// legacy literal). Phase 84.4.1.1 post-UAT softened Load() to placeholder-only — the
+// canonical-shape check lives in configure.go (catches typos at config-write time) but
+// not at Load() (legacy installs must keep working).
 //
-// Operators with pre-Phase-84.3 installs using this exact bucket name will see a config.Load()
-// error and should re-run km configure to derive the correct canonical name
-// (or add allow_non_canonical_bucket: true to km-config.yaml when that escape hatch is
-// implemented in a follow-on plan).
+// This test verifies Load() accepts the legacy literal. The canonical-shape rejection is
+// tested in cmd/configure_84_3_test.go (configure-time only).
 func TestConfigLoad_AcceptsLegacyBucketLiteral(t *testing.T) {
 	dir := t.TempDir()
 	writeKMConfigDrift(t, dir, `
@@ -51,8 +49,8 @@ resource_prefix: km
 	changeToDir(t, dir)
 
 	_, err := config.Load()
-	if err == nil {
-		t.Errorf("config.Load() accepted km-artifacts-12345; want error (non-canonical: 5-digit suffix)")
+	if err != nil {
+		t.Errorf("config.Load() rejected legacy literal km-artifacts-12345: %v; want nil (legacy installs must keep working)", err)
 	}
 }
 
@@ -124,10 +122,15 @@ resource_prefix: km
 	}
 }
 
-// TestConfigLoad_RejectsNonCanonicalBucket verifies Gap #2b + Gap #4 (Phase 84.4.1.1 Plan 02+03):
-// config.Load() calls ValidateArtifactsBucket so non-canonical bucket names
-// (e.g. tg-km-artifacts-use1-abcd0123) hard-fail before reaching bootstrap.
-func TestConfigLoad_RejectsNonCanonicalBucket(t *testing.T) {
+// TestConfigLoad_AcceptsNonCanonicalBucket documents Phase 84.4.1.1 post-UAT behavior:
+// non-canonical-shaped but real bucket names (e.g. tg-km-artifacts-use1-abcd0123) pass
+// at Load() time. Rationale: once a bucket is deployed, the config must keep working
+// even if the name predates the canonical-shape convention.
+//
+// The canonical-shape check still applies at configure time (cmd/configure.go's
+// cmdCanonicalBucketRE) — that catches typos when an operator writes a new config.
+// Configure-time enforcement covered by TestConfigure_ValidateArtifactsBucket_CanonicalShape.
+func TestConfigLoad_AcceptsNonCanonicalBucket(t *testing.T) {
 	dir := t.TempDir()
 	writeKMConfigDrift(t, dir, `
 region: us-east-1
@@ -136,11 +139,8 @@ resource_prefix: tg
 `)
 	changeToDir(t, dir)
 
-	cfg, err := config.Load()
-	if err == nil {
-		t.Errorf("config.Load() returned nil error for non-canonical bucket tg-km-artifacts-use1-abcd0123; want error")
-		t.Logf("cfg.ArtifactsBucket = %q", cfg.ArtifactsBucket)
-	} else if !strings.Contains(err.Error(), "canonical shape") {
-		t.Errorf("error %q should mention 'canonical shape'", err.Error())
+	_, err := config.Load()
+	if err != nil {
+		t.Errorf("config.Load() rejected non-canonical bucket tg-km-artifacts-use1-abcd0123: %v; want nil (canonical check lives in configure.go, not Load)", err)
 	}
 }
