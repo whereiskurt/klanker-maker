@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 85-03-PLAN.md
-last_updated: "2026-05-19T11:50:13.461Z"
+stopped_at: Completed 85-04-PLAN.md — Phase 85 ready for verification
+last_updated: "2026-05-19T07:56:00Z"
 last_activity: 2026-05-19
 progress:
   total_phases: 100
@@ -402,6 +402,7 @@ Progress: [█████████░] 88%
 | Phase 85-doctor-orphan-state-lock-digest-sweeper-report-cleanup P01 | 3 min | 3 tasks | 3 files |
 | Phase 85 P02 | 13min | 3 tasks | 4 files |
 | Phase 85 P03 | 13 min | 3 tasks | 3 files |
+| Phase 85 P04 | UAT | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1163,6 +1164,7 @@ Recent decisions affecting current work:
 - [Phase 85]: Phase 85 Plan 02: implemented checkStateLockDigestSweeper with parallel HEAD scan + ctx-safe semaphore + SandboxLister cross-reference age guard + 25-item BatchWriteItem batches + UnprocessedItems failure surfacing; added CheckResult.Details []string for --json ACCEPT-READ full-list output (documented file-ownership exception)
 - [Phase 85]: Hoisted DoctorDeps.DeleteStateDigests bool field from plan Task 2 into Task 1 commit (compile dependency for deps.DeleteStateDigests = deleteStateDigests inside runDoctor); Task 2 still owns the two interface fields + wiring as planned
 - [Phase 85]: buildChecks REPLACES (not duplicates) the Phase 84.1 checkStateLockDigest registration with checkStateLockDigestSweeper; the old function body stays at doctor.go:3486 as a regression baseline so the 7 TestCheckStateLockDigest_* tests still pass
+- [Phase 85 P04]: Live UAT PASS on klankermaker.ai — 278 orphan rows cleaned in 10.232s, read-only run 9.496s (~10.6× speedup vs ~1:41 baseline), post-cleanup ✓ state digest consistent (913 items checked); live state-locks + running sandbox lock preserved
 
 ### Roadmap Evolution
 
@@ -1273,6 +1275,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-19T11:50:13.453Z
-Stopped at: Completed 85-03-PLAN.md
+Last session: 2026-05-19T07:56:00Z
+Stopped at: Completed 85-04-PLAN.md — Phase 85 ready for verification
 Resume file: None

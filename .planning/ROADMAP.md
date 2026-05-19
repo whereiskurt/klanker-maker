@@ -1963,7 +1963,7 @@ Plans:
 
 **Requirements**: See `.planning/phases/85-doctor-orphan-state-lock-digest-sweeper-report-cleanup/BRIEF.md` (in-scope items, safety guards, acceptance criteria, TDD test list).
 **Depends on:** Phase 84.1 (`checkStateLockDigest` + `StateLockS3Client`/`StateLockDDBClient` wiring)
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 - [ ] 85-01-PLAN.md — Wave 0 scaffolding: new file doctor_state_digest_sweeper.go with S3StateHeadAPI + LockDigestDeleterAPI interfaces, checkStateLockDigestSweeper stub; 7 red-state TDD test stubs in doctor_state_digest_test.go (Wave 0, autonomous)
