@@ -327,3 +327,164 @@ var _ LockDigestReader = (*mockLockDigestReader)(nil)
 var errSentinel = errors.New("sentinel")
 
 var _ = errSentinel // referenced from future tests; keep linter happy
+
+// =============================================================================
+// Phase 85 — sweeper mocks (S3StateHeadAPI + LockDigestDeleterAPI)
+// =============================================================================
+
+// mockS3StateHead implements S3StateHeadAPI for sweeper tests.
+//   - Keys in `missing` (bucket+"/"+key form) return *s3types.NotFound.
+//   - If err is non-nil, ALL calls return that error (ambiguous-error case).
+//   - Otherwise returns empty HeadObjectOutput (object exists).
+type mockS3StateHead struct {
+	missing map[string]bool
+	err     error
+}
+
+func (m *mockS3StateHead) HeadObject(_ context.Context, params *s3.HeadObjectInput, _ ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	full := awssdk.ToString(params.Bucket) + "/" + awssdk.ToString(params.Key)
+	if m.missing[full] {
+		return nil, &s3types.NotFound{Message: awssdk.String("not found")}
+	}
+	return &s3.HeadObjectOutput{}, nil
+}
+
+// mockLockDigestDeleter implements LockDigestDeleterAPI for sweeper tests.
+// Records every BatchWriteItem call. On the FIRST call only (callCount==1),
+// echoes unprocessedLocks back via UnprocessedItems to exercise the retry path.
+type mockLockDigestDeleter struct {
+	calls            [][]string // each entry = one call's lockIDs in PK order
+	err              error
+	unprocessedLocks []string // returned as UnprocessedItems on first call
+	callCount        int
+}
+
+func (m *mockLockDigestDeleter) BatchWriteItem(_ context.Context, params *dynamodb.BatchWriteItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.BatchWriteItemOutput, error) {
+	m.callCount++
+	if m.err != nil {
+		return nil, m.err
+	}
+	var batch []string
+	var tableName string
+	for tn, reqs := range params.RequestItems {
+		tableName = tn
+		for _, r := range reqs {
+			if r.DeleteRequest != nil {
+				if av, ok := r.DeleteRequest.Key["LockID"].(*dynamodbtypes.AttributeValueMemberS); ok {
+					batch = append(batch, av.Value)
+				}
+			}
+		}
+	}
+	m.calls = append(m.calls, batch)
+	out := &dynamodb.BatchWriteItemOutput{}
+	if m.callCount == 1 && len(m.unprocessedLocks) > 0 {
+		unprocessed := make([]dynamodbtypes.WriteRequest, 0, len(m.unprocessedLocks))
+		for _, id := range m.unprocessedLocks {
+			unprocessed = append(unprocessed, dynamodbtypes.WriteRequest{
+				DeleteRequest: &dynamodbtypes.DeleteRequest{
+					Key: map[string]dynamodbtypes.AttributeValue{
+						"LockID": &dynamodbtypes.AttributeValueMemberS{Value: id},
+					},
+				},
+			})
+		}
+		out.UnprocessedItems = map[string][]dynamodbtypes.WriteRequest{tableName: unprocessed}
+	}
+	return out, nil
+}
+
+// =============================================================================
+// Phase 85 — red-state test stubs (8 total)
+//
+// Plan 02 turns these GREEN by implementing checkStateLockDigestSweeper.
+// DO NOT rename — Plans 02 / 03 and 85-VALIDATION.md reference them by name.
+// =============================================================================
+
+// TDD-1 — orphan + age passes → row deleted
+func TestDigestSweeper_OrphanAgePassesDeleted(t *testing.T) {
+	// ARRANGE: one orphan row whose embedded sandbox-id is NOT in the live lister
+	//          (so age guard passes). dryRun=false, deleteStateDigests=true.
+	//
+	// ACT:     call checkStateLockDigestSweeper.
+	//
+	// ASSERT:  ddbWrite.calls has length 1 with the single orphan LockID.
+	//          result.Status == CheckWarn.
+	//          result.Message contains "1 orphan" and the LockID.
+	//
+	// RED:     not yet implemented.
+	t.Fatalf("RED — TDD-1 not yet implemented in checkStateLockDigestSweeper")
+}
+
+// TDD-2 — orphan + age fails → row skipped (sandbox-id still resolves to live record)
+func TestDigestSweeper_OrphanAgeFailsSkipped(t *testing.T) {
+	// ARRANGE: one orphan row whose embedded sandbox-id IS in the live lister
+	//          (so age guard FAILS — we treat that as "still live", do not delete).
+	//          dryRun=false, deleteStateDigests=true.
+	// ACT/ASSERT: ddbWrite.calls is empty; result.Message mentions "skipped" or "could not verify".
+	t.Fatalf("RED — TDD-2 not yet implemented")
+}
+
+// TDD-3 — S3 HEAD returns network/5xx error → row skipped (NEVER delete on ambiguous error)
+func TestDigestSweeper_S3HeadAmbiguousError_Skipped(t *testing.T) {
+	// ARRANGE: mockS3StateHead.err = generic error (NOT s3types.NotFound).
+	//          dryRun=false, deleteStateDigests=true.
+	// ACT/ASSERT: ddbWrite.calls is empty regardless of age guard outcome.
+	t.Fatalf("RED — TDD-3 not yet implemented")
+}
+
+// TDD-4 — non-orphan mismatch (object exists, MD5 stale) → NEVER deleted by sweeper
+func TestDigestSweeper_LiveS3StaleDigest_NotDeletedBySweeper(t *testing.T) {
+	// ARRANGE: HeadObject returns success (object exists). dryRun=false, deleteStateDigests=true.
+	// ACT/ASSERT: ddbWrite.calls is empty. result.Message may report "other" mismatch type but NOT delete.
+	t.Fatalf("RED — TDD-4 not yet implemented")
+}
+
+// TDD-5 — batch of 26 items → splits into exactly 2 BatchWriteItem calls (25 + 1)
+func TestDigestSweeper_26Items_TwoBatches(t *testing.T) {
+	// ARRANGE: 26 orphan rows, all age-pass. dryRun=false, deleteStateDigests=true.
+	// ACT/ASSERT: ddbWrite.callCount == 2; ddbWrite.calls[0] has 25 items; ddbWrite.calls[1] has 1 item.
+	t.Fatalf("RED — TDD-5 not yet implemented")
+}
+
+// EXTRA — output format: summary + up to 10 inline + "… and N more (use --json for full list)"
+func TestDigestSweeper_OutputFormat(t *testing.T) {
+	// ARRANGE: 13 orphan rows in dry-run mode (no deletes).
+	// ACT/ASSERT: result.Message starts with "state digest mismatch in 13 item(s)"; contains the first 10 IDs;
+	//             contains "… and 3 more (use --json for full list)".
+	t.Fatalf("RED — TestDigestSweeper_OutputFormat not yet implemented")
+}
+
+// EXTRA — UnprocessedItems retry path: BatchWriteItem returns some lockIDs unprocessed → reported as failed
+func TestDigestSweeper_UnprocessedItems(t *testing.T) {
+	// ARRANGE: 3 orphan rows; mockLockDigestDeleter.unprocessedLocks holds one of them.
+	// ACT/ASSERT: result.Message reports 2 deleted, 1 failed (or equivalent); the unprocessed LockID is named.
+	t.Fatalf("RED — TestDigestSweeper_UnprocessedItems not yet implemented")
+}
+
+// EXTRA — shared-module LockID fallback (checker warning #3): a LockID with NO
+// "/sandboxes/" segment (e.g. ses, vpc, scp, management/* shared modules) goes
+// through parseSandboxIDFromLockID's ok=false branch. When the delete gate is
+// open AND S3 returns NotFound, the row IS deleted (no per-row owner to verify
+// against — strict NotFound + open gate is sufficient).
+func TestDigestSweeper_SharedModuleLockID_NoSandboxID(t *testing.T) {
+	// ARRANGE: one orphan row with LockID like
+	//          "tf-km-state-use1/tf-km/use1/ses/terraform.tfstate-md5"
+	//          (note: NO "/sandboxes/" segment — this is a shared SES module lock).
+	//          HeadObject returns s3types.NotFound. lister returns no live records.
+	//          dryRun=false, deleteStateDigests=true.
+	// ACT/ASSERT:
+	//   - parseSandboxIDFromLockID(lockID) returned ok=false (shared-module fallback)
+	//   - ddbWrite.calls has length 1 with that LockID (treated as deletable)
+	//   - result.Status == CheckWarn; result.Message references the LockID
+	// RATIONALE: bug in this branch would let orphan ses/vpc/scp rows accumulate
+	//   forever — the sandbox-id cross-reference is unable to detect them.
+	t.Fatalf("RED — TestDigestSweeper_SharedModuleLockID_NoSandboxID not yet implemented")
+}
+
+// Phase 85 — sweeper interface assertions
+var _ S3StateHeadAPI = (*mockS3StateHead)(nil)
+var _ LockDigestDeleterAPI = (*mockLockDigestDeleter)(nil)
