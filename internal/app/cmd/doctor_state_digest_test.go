@@ -16,12 +16,15 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dynamodbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+
+	kmaws "github.com/whereiskurt/klanker-maker/pkg/aws"
 )
 
 // -----------------------------------------------------------------------------
@@ -421,26 +424,90 @@ func TestDigestSweeper_OrphanAgePassesDeleted(t *testing.T) {
 
 // TDD-2 — orphan + age fails → row skipped (sandbox-id still resolves to live record)
 func TestDigestSweeper_OrphanAgeFailsSkipped(t *testing.T) {
-	// ARRANGE: one orphan row whose embedded sandbox-id IS in the live lister
-	//          (so age guard FAILS — we treat that as "still live", do not delete).
-	//          dryRun=false, deleteStateDigests=true.
-	// ACT/ASSERT: ddbWrite.calls is empty; result.Message mentions "skipped" or "could not verify".
-	t.Fatalf("RED — TDD-2 not yet implemented")
+	ctx := context.Background()
+	// Orphan row whose embedded sandbox-id IS in the live lister.
+	lockID := "tf-km-state-use1/tf-km/sandboxes/sb-alive9999/budget-enforcer/terraform.tfstate-md5"
+	bucket, key, _ := parseLockID(lockID)
+
+	s3mock := &mockS3StateHead{missing: map[string]bool{bucket + "/" + key: true}}
+	ddbScan := &mockLockDigestReader{pages: []*dynamodb.ScanOutput{{
+		Items: []map[string]dynamodbtypes.AttributeValue{
+			lockItem(lockID, "deadbeef"),
+		},
+	}}}
+	ddbWrite := &mockLockDigestDeleter{}
+	// Lister returns sb-alive9999 as live → age guard FAILS → row skipped.
+	lister := &fakeSandboxLister{records: []kmaws.SandboxRecord{{SandboxID: "sb-alive9999"}}}
+
+	res := checkStateLockDigestSweeper(ctx, s3mock, ddbScan, ddbWrite, lister,
+		"tf-km-locks-use1", false /*dryRun*/, true /*deleteStateDigests*/, 24*time.Hour)
+
+	if len(ddbWrite.calls) != 0 {
+		t.Fatalf("expected zero BatchWriteItem calls when age guard fails; got %d batches: %v", len(ddbWrite.calls), ddbWrite.calls)
+	}
+	if !strings.Contains(res.Message, "skipped") && !strings.Contains(res.Message, "sandbox still live") {
+		t.Fatalf("expected message to indicate row skipped; got %q", res.Message)
+	}
+	if res.Status != CheckWarn {
+		t.Fatalf("expected CheckWarn (orphan exists but skipped); got %v", res.Status)
+	}
 }
 
 // TDD-3 — S3 HEAD returns network/5xx error → row skipped (NEVER delete on ambiguous error)
 func TestDigestSweeper_S3HeadAmbiguousError_Skipped(t *testing.T) {
-	// ARRANGE: mockS3StateHead.err = generic error (NOT s3types.NotFound).
-	//          dryRun=false, deleteStateDigests=true.
-	// ACT/ASSERT: ddbWrite.calls is empty regardless of age guard outcome.
-	t.Fatalf("RED — TDD-3 not yet implemented")
+	ctx := context.Background()
+	lockID := "tf-km-state-use1/tf-km/sandboxes/sb-aaaa1111/budget-enforcer/terraform.tfstate-md5"
+
+	s3mock := &mockS3StateHead{err: fmt.Errorf("connection reset by peer")}
+	ddbScan := &mockLockDigestReader{pages: []*dynamodb.ScanOutput{{
+		Items: []map[string]dynamodbtypes.AttributeValue{
+			lockItem(lockID, "deadbeef"),
+		},
+	}}}
+	ddbWrite := &mockLockDigestDeleter{}
+	lister := &fakeSandboxLister{}
+
+	res := checkStateLockDigestSweeper(ctx, s3mock, ddbScan, ddbWrite, lister,
+		"tf-km-locks-use1", false /*dryRun*/, true /*deleteStateDigests*/, 24*time.Hour)
+
+	if len(ddbWrite.calls) != 0 {
+		t.Fatalf("expected zero BatchWriteItem calls on ambiguous error; got %d batches: %v", len(ddbWrite.calls), ddbWrite.calls)
+	}
+	// On ambiguous error the row is classified as cant-verify, not orphan.
+	// Message must indicate uncertain classification (0 orphan, 1 other) or
+	// contain "could not verify".
+	if !strings.Contains(res.Message, "could not verify") && !strings.Contains(res.Message, "0 orphan") {
+		t.Fatalf("expected message to indicate uncertain classification (0 orphan or 'could not verify'); got %q", res.Message)
+	}
 }
 
 // TDD-4 — non-orphan mismatch (object exists, MD5 stale) → NEVER deleted by sweeper
 func TestDigestSweeper_LiveS3StaleDigest_NotDeletedBySweeper(t *testing.T) {
-	// ARRANGE: HeadObject returns success (object exists). dryRun=false, deleteStateDigests=true.
-	// ACT/ASSERT: ddbWrite.calls is empty. result.Message may report "other" mismatch type but NOT delete.
-	t.Fatalf("RED — TDD-4 not yet implemented")
+	ctx := context.Background()
+	lockID := "tf-km-state-use1/tf-km/sandboxes/sb-livectx/budget-enforcer/terraform.tfstate-md5"
+
+	// mockS3StateHead returns success (no `missing` entry, no `err`) → object
+	// exists → sweeper must NOT classify as orphan.
+	s3mock := &mockS3StateHead{}
+	ddbScan := &mockLockDigestReader{pages: []*dynamodb.ScanOutput{{
+		Items: []map[string]dynamodbtypes.AttributeValue{
+			lockItem(lockID, "stale-md5-deadbeef"),
+		},
+	}}}
+	ddbWrite := &mockLockDigestDeleter{}
+	lister := &fakeSandboxLister{}
+
+	res := checkStateLockDigestSweeper(ctx, s3mock, ddbScan, ddbWrite, lister,
+		"tf-km-locks-use1", false /*dryRun*/, true /*deleteStateDigests*/, 24*time.Hour)
+
+	if len(ddbWrite.calls) != 0 {
+		t.Fatalf("expected zero BatchWriteItem calls when S3 object exists (sweeper out-of-scope for live+stale-MD5); got %d batches: %v", len(ddbWrite.calls), ddbWrite.calls)
+	}
+	// Result should report a clean state (live row not flagged as anything by
+	// this sweeper — md5 mismatch detection is OUT OF SCOPE per BRIEF.md).
+	if res.Status != CheckOK {
+		t.Fatalf("expected CheckOK (sweeper has no mismatches to flag when S3 object exists); got %v: %q", res.Status, res.Message)
+	}
 }
 
 // TDD-5 — batch of 26 items → splits into exactly 2 BatchWriteItem calls (25 + 1)
@@ -452,10 +519,39 @@ func TestDigestSweeper_26Items_TwoBatches(t *testing.T) {
 
 // EXTRA — output format: summary + up to 10 inline + "… and N more (use --json for full list)"
 func TestDigestSweeper_OutputFormat(t *testing.T) {
-	// ARRANGE: 13 orphan rows in dry-run mode (no deletes).
-	// ACT/ASSERT: result.Message starts with "state digest mismatch in 13 item(s)"; contains the first 10 IDs;
-	//             contains "… and 3 more (use --json for full list)".
-	t.Fatalf("RED — TestDigestSweeper_OutputFormat not yet implemented")
+	ctx := context.Background()
+	// 13 orphan rows — exercises the "10 inline + 'and N more'" continuation.
+	items := make([]map[string]dynamodbtypes.AttributeValue, 13)
+	missing := map[string]bool{}
+	for i := 0; i < 13; i++ {
+		lockID := fmt.Sprintf("tf-km-state-use1/tf-km/sandboxes/sb-fmt%04d/budget-enforcer/terraform.tfstate-md5", i)
+		bucket, key, _ := parseLockID(lockID)
+		missing[bucket+"/"+key] = true
+		items[i] = lockItem(lockID, "abc")
+	}
+	s3mock := &mockS3StateHead{missing: missing}
+	ddbScan := &mockLockDigestReader{pages: []*dynamodb.ScanOutput{{Items: items}}}
+	ddbWrite := &mockLockDigestDeleter{}
+	lister := &fakeSandboxLister{}
+
+	// Dry-run — no deletes, just reporting.
+	res := checkStateLockDigestSweeper(ctx, s3mock, ddbScan, ddbWrite, lister,
+		"tf-km-locks-use1", true /*dryRun*/, false /*deleteStateDigests*/, 24*time.Hour)
+
+	if !strings.Contains(res.Message, "state digest mismatch in 13 item(s)") {
+		t.Fatalf("expected summary 'state digest mismatch in 13 item(s)' in message; got: %s", res.Message)
+	}
+	if !strings.Contains(res.Message, "… and 3 more (use --json for full list)") {
+		t.Fatalf("expected '… and 3 more (use --json for full list)' continuation; got: %s", res.Message)
+	}
+	// ACCEPT-READ: the uncapped list MUST be in Details.
+	if len(res.Details) != 13 {
+		t.Fatalf("expected res.Details len 13 (full uncapped list for --json); got len %d: %v", len(res.Details), res.Details)
+	}
+	// Sanity: dry-run path should yield no BatchWriteItem calls.
+	if len(ddbWrite.calls) != 0 {
+		t.Fatalf("expected zero BatchWriteItem calls in dry-run; got %d", len(ddbWrite.calls))
+	}
 }
 
 // EXTRA — UnprocessedItems retry path: BatchWriteItem returns some lockIDs unprocessed → reported as failed
@@ -471,18 +567,44 @@ func TestDigestSweeper_UnprocessedItems(t *testing.T) {
 // open AND S3 returns NotFound, the row IS deleted (no per-row owner to verify
 // against — strict NotFound + open gate is sufficient).
 func TestDigestSweeper_SharedModuleLockID_NoSandboxID(t *testing.T) {
-	// ARRANGE: one orphan row with LockID like
-	//          "tf-km-state-use1/tf-km/use1/ses/terraform.tfstate-md5"
-	//          (note: NO "/sandboxes/" segment — this is a shared SES module lock).
-	//          HeadObject returns s3types.NotFound. lister returns no live records.
-	//          dryRun=false, deleteStateDigests=true.
-	// ACT/ASSERT:
-	//   - parseSandboxIDFromLockID(lockID) returned ok=false (shared-module fallback)
-	//   - ddbWrite.calls has length 1 with that LockID (treated as deletable)
-	//   - result.Status == CheckWarn; result.Message references the LockID
-	// RATIONALE: bug in this branch would let orphan ses/vpc/scp rows accumulate
-	//   forever — the sandbox-id cross-reference is unable to detect them.
-	t.Fatalf("RED — TestDigestSweeper_SharedModuleLockID_NoSandboxID not yet implemented")
+	ctx := context.Background()
+	// Shared-module LockID — NOTE: no "/sandboxes/" segment.
+	lockID := "tf-km-state-use1/tf-km/use1/ses/terraform.tfstate-md5"
+	bucket, key, _ := parseLockID(lockID)
+
+	// Self-check: confirm parseSandboxIDFromLockID treats this as ok=false.
+	if _, ok := parseSandboxIDFromLockID(lockID); ok {
+		t.Fatalf("test setup error: expected parseSandboxIDFromLockID(%q) ok=false (shared-module), got ok=true", lockID)
+	}
+
+	s3mock := &mockS3StateHead{missing: map[string]bool{bucket + "/" + key: true}}
+	ddbScan := &mockLockDigestReader{pages: []*dynamodb.ScanOutput{{
+		Items: []map[string]dynamodbtypes.AttributeValue{
+			lockItem(lockID, "cafebabe"),
+		},
+	}}}
+	ddbWrite := &mockLockDigestDeleter{}
+	lister := &fakeSandboxLister{} // empty — irrelevant; shared-module lockIDs bypass the lister cross-reference
+
+	res := checkStateLockDigestSweeper(ctx, s3mock, ddbScan, ddbWrite, lister,
+		"tf-km-locks-use1", false /*dryRun*/, true /*deleteStateDigests*/, 24*time.Hour)
+
+	if len(ddbWrite.calls) != 1 {
+		t.Fatalf("expected exactly 1 BatchWriteItem call for shared-module orphan; got %d calls: %v", len(ddbWrite.calls), ddbWrite.calls)
+	}
+	if len(ddbWrite.calls[0]) != 1 || ddbWrite.calls[0][0] != lockID {
+		t.Fatalf("expected the shared-module LockID in batch; got %v", ddbWrite.calls[0])
+	}
+	if res.Status != CheckWarn {
+		t.Fatalf("expected CheckWarn for orphan shared-module row; got %v", res.Status)
+	}
+	if !strings.Contains(res.Message, lockID) {
+		t.Fatalf("expected message to reference the shared-module LockID; got: %s", res.Message)
+	}
+	// ACCEPT-READ: Details must contain the uncapped list.
+	if len(res.Details) != 1 || !strings.Contains(res.Details[0], lockID) {
+		t.Fatalf("expected res.Details to contain the LockID; got: %v", res.Details)
+	}
 }
 
 // Phase 85 — sweeper interface assertions
