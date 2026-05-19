@@ -2039,9 +2039,113 @@ func TestAppendKmInitPlanTip(t *testing.T) {
 	}
 }
 
+// fakeOrgsListAllPoliciesClient is a hand-written fake (no mock frameworks) for
+// OrgsListAllPoliciesAPI used by checkOrphanSCPs tests (Gap #3a, Phase 84.4.1.1).
+type fakeOrgsListAllPoliciesClient struct {
+	// pages is a list of policy lists — each entry is one page of results.
+	// If pages is nil, policies is used as a single-page response.
+	policies []orgtypes.PolicySummary
+	pages    [][]orgtypes.PolicySummary
+	pageIdx  int
+	targets  map[string][]orgtypes.PolicyTargetSummary
+}
+
+func (f *fakeOrgsListAllPoliciesClient) ListPolicies(ctx context.Context, in *organizations.ListPoliciesInput, _ ...func(*organizations.Options)) (*organizations.ListPoliciesOutput, error) {
+	if f.pages != nil {
+		// Multi-page mode: return pages in order; set NextToken to signal more pages.
+		if f.pageIdx >= len(f.pages) {
+			return &organizations.ListPoliciesOutput{}, nil
+		}
+		page := f.pages[f.pageIdx]
+		f.pageIdx++
+		var nextToken *string
+		if f.pageIdx < len(f.pages) {
+			tok := "page-token"
+			nextToken = &tok
+		}
+		return &organizations.ListPoliciesOutput{Policies: page, NextToken: nextToken}, nil
+	}
+	return &organizations.ListPoliciesOutput{Policies: f.policies}, nil
+}
+
+func (f *fakeOrgsListAllPoliciesClient) ListTargetsForPolicy(ctx context.Context, in *organizations.ListTargetsForPolicyInput, _ ...func(*organizations.Options)) (*organizations.ListTargetsForPolicyOutput, error) {
+	id := aws.ToString(in.PolicyId)
+	return &organizations.ListTargetsForPolicyOutput{Targets: f.targets[id]}, nil
+}
+
 // TestDoctor_WarnsOnOrphanSCPs verifies Gap #3a (Phase 84.4.1.1 Plan 04):
 // checkOrphanSCPs returns WARN when ListPolicies returns an SCP whose name
 // ends in -sandbox-containment but whose prefix is not the local install's resource_prefix.
 func TestDoctor_WarnsOnOrphanSCPs(t *testing.T) {
-	t.Skip("RED scaffold — implemented by Plan 04 (84.4.1.1-04-PLAN.md)")
+	t.Run("warns on orphan prefix SCP", func(t *testing.T) {
+		client := &fakeOrgsListAllPoliciesClient{
+			policies: []orgtypes.PolicySummary{
+				{Name: aws.String("rg-sandbox-containment"), Id: aws.String("p-tbyi97x6")},
+				{Name: aws.String("FullAWSAccess"), Id: aws.String("p-full001")},
+			},
+		}
+		result := checkOrphanSCPs(context.Background(), client, "tg")
+		if result.Status != CheckWarn {
+			t.Errorf("status = %v; want CheckWarn", result.Status)
+		}
+		if !strings.Contains(result.Message, "rg-sandbox-containment") {
+			t.Errorf("message %q missing orphan SCP name", result.Message)
+		}
+		if !strings.Contains(result.Message, "p-tbyi97x6") {
+			t.Errorf("message %q missing orphan SCP ID", result.Message)
+		}
+	})
+
+	t.Run("ok when own SCP only", func(t *testing.T) {
+		client := &fakeOrgsListAllPoliciesClient{
+			policies: []orgtypes.PolicySummary{
+				{Name: aws.String("tg-sandbox-containment"), Id: aws.String("p-tgown")},
+			},
+		}
+		result := checkOrphanSCPs(context.Background(), client, "tg")
+		if result.Status != CheckOK {
+			t.Errorf("status = %v; want CheckOK", result.Status)
+		}
+	})
+
+	t.Run("ok when only AWS-managed SCPs", func(t *testing.T) {
+		client := &fakeOrgsListAllPoliciesClient{
+			policies: []orgtypes.PolicySummary{
+				{Name: aws.String("FullAWSAccess"), Id: aws.String("p-full001")},
+			},
+		}
+		result := checkOrphanSCPs(context.Background(), client, "km")
+		if result.Status != CheckOK {
+			t.Errorf("status = %v; want CheckOK", result.Status)
+		}
+	})
+
+	t.Run("skipped when client nil", func(t *testing.T) {
+		result := checkOrphanSCPs(context.Background(), nil, "km")
+		if result.Status != CheckSkipped {
+			t.Errorf("status = %v; want CheckSkipped", result.Status)
+		}
+	})
+
+	t.Run("pagination is handled", func(t *testing.T) {
+		// Two pages: page 1 has an orphan SCP, page 2 has own SCP + AWS-managed.
+		client := &fakeOrgsListAllPoliciesClient{
+			pages: [][]orgtypes.PolicySummary{
+				{
+					{Name: aws.String("rg-sandbox-containment"), Id: aws.String("p-rg001")},
+				},
+				{
+					{Name: aws.String("tg-sandbox-containment"), Id: aws.String("p-tg001")},
+					{Name: aws.String("FullAWSAccess"), Id: aws.String("p-full001")},
+				},
+			},
+		}
+		result := checkOrphanSCPs(context.Background(), client, "tg")
+		if result.Status != CheckWarn {
+			t.Errorf("status = %v; want CheckWarn (orphan from page 1 detected)", result.Status)
+		}
+		if !strings.Contains(result.Message, "rg-sandbox-containment") {
+			t.Errorf("message %q missing orphan from page 1", result.Message)
+		}
+	})
 }

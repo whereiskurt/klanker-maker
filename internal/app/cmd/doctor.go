@@ -30,6 +30,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
+	organizationstypes "github.com/aws/aws-sdk-go-v2/service/organizations/types"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -124,6 +125,15 @@ type IAMCleanupAPI interface {
 // OrgsListPoliciesAPI covers Organizations ListPoliciesForTarget.
 type OrgsListPoliciesAPI interface {
 	ListPoliciesForTarget(ctx context.Context, params *organizations.ListPoliciesForTargetInput, optFns ...func(*organizations.Options)) (*organizations.ListPoliciesForTargetOutput, error)
+}
+
+// OrgsListAllPoliciesAPI covers Organizations ListPolicies (paginated) and
+// ListTargetsForPolicy for the orphan SCP check (Gap #3a, Phase 84.4.1.1).
+// The real *organizations.Client satisfies this interface.
+// Kept separate from OrgsListPoliciesAPI to preserve the narrow interface for checkSCP.
+type OrgsListAllPoliciesAPI interface {
+	ListPolicies(ctx context.Context, params *organizations.ListPoliciesInput, optFns ...func(*organizations.Options)) (*organizations.ListPoliciesOutput, error)
+	ListTargetsForPolicy(ctx context.Context, params *organizations.ListTargetsForPolicyInput, optFns ...func(*organizations.Options)) (*organizations.ListTargetsForPolicyOutput, error)
 }
 
 // SSMReadAPI covers SSM GetParameter and GetParametersByPath.
@@ -249,7 +259,10 @@ type DoctorDeps struct {
 	DynamoClient  DynamoDescribeAPI
 	KMSClient     KMSDescribeAPI
 	OrgsClient    OrgsListPoliciesAPI
-	SSMReadClient SSMReadAPI
+	// OrgsListAllPoliciesClient backs the orphan SCP check (Gap #3a, Phase 84.4.1.1).
+	// Nil causes checkOrphanSCPs to be skipped.
+	OrgsListAllPoliciesClient OrgsListAllPoliciesAPI
+	SSMReadClient             SSMReadAPI
 	// EC2Clients is a map from region name to EC2 client (one per region checked).
 	EC2Clients map[string]EC2DescribeAPI
 	// Lambda client for TTL handler existence check.
@@ -651,6 +664,63 @@ func checkSCP(ctx context.Context, client OrgsListPoliciesAPI, accountID string)
 		Status:      CheckError,
 		Message:     fmt.Sprintf("policy %q not found on account %s", scpName, accountID),
 		Remediation: "Apply the SCP Terraform module to attach km-sandbox-containment to the application account",
+	}
+}
+
+// checkOrphanSCPs lists all SCPs in the account, filters for names ending in
+// "-sandbox-containment", and warns on any whose prefix is not localPrefix.
+// This catches SCPs left behind by km uninit runs that did not use --include-scp.
+// WARN level — not blocking. Provides a chain-assume recovery command.
+//
+// Gap #3a (Phase 84.4.1.1). Composes with existing checkSCP which verifies the
+// local install's own SCP is attached.
+func checkOrphanSCPs(ctx context.Context, client OrgsListAllPoliciesAPI, localPrefix string) CheckResult {
+	name := "Orphan SCPs"
+	if client == nil {
+		return CheckResult{Name: name, Status: CheckSkipped, Message: "Organizations client not available"}
+	}
+
+	var orphans []string
+	var nextToken *string
+	for {
+		out, err := client.ListPolicies(ctx, &organizations.ListPoliciesInput{
+			Filter:    organizationstypes.PolicyTypeServiceControlPolicy,
+			NextToken: nextToken,
+		})
+		if err != nil {
+			return CheckResult{Name: name, Status: CheckWarn, Message: fmt.Sprintf("ListPolicies failed: %v", err)}
+		}
+		for _, p := range out.Policies {
+			pName := awssdk.ToString(p.Name)
+			if !strings.HasSuffix(pName, "-sandbox-containment") {
+				continue // AWS-managed or unrelated SCPs
+			}
+			prefix := strings.TrimSuffix(pName, "-sandbox-containment")
+			if prefix != localPrefix {
+				orphans = append(orphans, fmt.Sprintf("%s (id: %s)", pName, awssdk.ToString(p.Id)))
+			}
+		}
+		if out.NextToken == nil {
+			break
+		}
+		nextToken = out.NextToken
+	}
+
+	if len(orphans) == 0 {
+		return CheckResult{Name: name, Status: CheckOK, Message: "no orphan sandbox-containment SCPs detected"}
+	}
+
+	orgRoleARN := fmt.Sprintf("arn:aws:iam::<management-account-id>:role/%s-org-admin", localPrefix)
+	return CheckResult{
+		Name:   name,
+		Status: CheckWarn,
+		Message: fmt.Sprintf(
+			"Orphan SCPs detected: %s\nThese SCPs may be left from a km uninit that did not use --include-scp.\n"+
+				"To clean up, assume %s and run:\n"+
+				"  aws organizations detach-policy --policy-id <id> --target-id <application-account-id>\n"+
+				"  aws organizations delete-policy --policy-id <id>",
+			strings.Join(orphans, ", "), orgRoleARN,
+		),
 	}
 }
 
@@ -2524,6 +2594,20 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkSCP(ctx, orgsClient, appAccount)
 	})
 
+	// Orphan SCP check — Gap #3a (Phase 84.4.1.1). WARN level.
+	orphanSCPClient := deps.OrgsListAllPoliciesClient
+	localResourcePrefix := cfg.GetResourcePrefix()
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		if !orgConfigured || orphanSCPClient == nil {
+			return CheckResult{
+				Name:    "Orphan SCPs",
+				Status:  CheckOK,
+				Message: "skipped — accounts.organization not configured",
+			}
+		}
+		return checkOrphanSCPs(ctx, orphanSCPClient, localResourcePrefix)
+	})
+
 	// GitHub config check.
 	ssmClient := deps.SSMReadClient
 	checks = append(checks, func(ctx context.Context) CheckResult {
@@ -2920,12 +3004,17 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 				),
 			)
 			deps.OrgsClient = organizations.NewFromConfig(orgsCfg)
+			// Use cfg.GetResourcePrefix() for new code paths — avoids hardcoding "km-org-admin".
+			// (The existing OrgsClient assume for checkSCP hardcodes "km-org-admin" — do not change that.)
+			deps.OrgsListAllPoliciesClient = organizations.NewFromConfig(orgsCfg)
 		} else {
 			// AssumeRole failed — fall back to current profile (demoted to warning in checkSCP)
 			deps.OrgsClient = organizations.NewFromConfig(awsCfg)
+			deps.OrgsListAllPoliciesClient = organizations.NewFromConfig(awsCfg)
 		}
 	} else {
 		deps.OrgsClient = organizations.NewFromConfig(awsCfg)
+		deps.OrgsListAllPoliciesClient = organizations.NewFromConfig(awsCfg)
 	}
 
 	// Lambda and SES clients for regional infra checks.
