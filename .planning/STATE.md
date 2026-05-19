@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 85-02-PLAN.md
-last_updated: "2026-05-19T11:31:50.845Z"
+stopped_at: Completed 85-03-PLAN.md
+last_updated: "2026-05-19T11:50:13.461Z"
 last_activity: 2026-05-19
 progress:
   total_phases: 100
   completed_phases: 88
   total_plans: 414
-  completed_plans: 367
+  completed_plans: 368
   percent: 88
 ---
 
@@ -401,6 +401,7 @@ Progress: [█████████░] 88%
 | Phase 84.4.1.1-multi-install-follow-on-gaps P06 | 8min | 1 tasks | 2 files |
 | Phase 85-doctor-orphan-state-lock-digest-sweeper-report-cleanup P01 | 3 min | 3 tasks | 3 files |
 | Phase 85 P02 | 13min | 3 tasks | 4 files |
+| Phase 85 P03 | 13 min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1160,6 +1161,8 @@ Recent decisions affecting current work:
 - [Phase 85-doctor-orphan-state-lock-digest-sweeper-report-cleanup]: Wave 0 stub returns CheckSkipped so callers compile cleanly while the 8 new TDD tests stay RED until Plan 02 implementation
 - [Phase 85-doctor-orphan-state-lock-digest-sweeper-report-cleanup]: doctor.go remains byte-identical in Plan 01; Plan 02 has a documented exception to add CheckResult.Details for --json full-list plumbing; Plan 03 swaps buildChecks
 - [Phase 85]: Phase 85 Plan 02: implemented checkStateLockDigestSweeper with parallel HEAD scan + ctx-safe semaphore + SandboxLister cross-reference age guard + 25-item BatchWriteItem batches + UnprocessedItems failure surfacing; added CheckResult.Details []string for --json ACCEPT-READ full-list output (documented file-ownership exception)
+- [Phase 85]: Hoisted DoctorDeps.DeleteStateDigests bool field from plan Task 2 into Task 1 commit (compile dependency for deps.DeleteStateDigests = deleteStateDigests inside runDoctor); Task 2 still owns the two interface fields + wiring as planned
+- [Phase 85]: buildChecks REPLACES (not duplicates) the Phase 84.1 checkStateLockDigest registration with checkStateLockDigestSweeper; the old function body stays at doctor.go:3486 as a regression baseline so the 7 TestCheckStateLockDigest_* tests still pass
 
 ### Roadmap Evolution
 
@@ -1270,6 +1273,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-19T11:31:43.653Z
-Stopped at: Completed 85-02-PLAN.md
+Last session: 2026-05-19T11:50:13.453Z
+Stopped at: Completed 85-03-PLAN.md
 Resume file: None
