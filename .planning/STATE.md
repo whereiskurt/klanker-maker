@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 84.4.1.1-multi-install-follow-on-gaps-00-PLAN.md
-last_updated: "2026-05-19T04:05:43.322Z"
+stopped_at: Completed 84.4.1.1-multi-install-follow-on-gaps-01-PLAN.md
+last_updated: "2026-05-19T04:09:22.742Z"
 last_activity: 2026-05-19
 progress:
   total_phases: 100
   completed_phases: 87
   total_plans: 414
-  completed_plans: 359
+  completed_plans: 360
   percent: 88
 ---
 
@@ -393,6 +393,7 @@ Progress: [█████████░] 88%
 | Phase 84.4.1-multi-install-identity-permission-gap-closure P02 | 840 | 2 tasks | 11 files |
 | Phase 84.4.1-multi-install-identity-permission-gap-closure P04 | 851s | 3 tasks | 12 files |
 | Phase 84.4.1.1-multi-install-follow-on-gaps P00 | 10 | 3 tasks | 7 files |
+| Phase 84.4.1.1-multi-install-follow-on-gaps P01 | 8 | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1138,6 +1139,7 @@ Recent decisions affecting current work:
 - [Phase 84.4.1-06]: OPERATOR-GUIDE.md Phase 84.4 gaps+workarounds prose REPLACED with clean Phase 84.4.1 runbook (closure criterion j). Pattern-based SCP trust design, DKIM auto-import, and per-install SSM doc isolation documented as production-ready.
 - [Phase 84.4.1.1-multi-install-follow-on-gaps]: ValidateArtifactsBucket placed in config package to avoid import cycles from config.Load()
 - [Phase 84.4.1.1-multi-install-follow-on-gaps]: UninitOpts struct replaces positional force bool in RunUninitWithDeps, mirroring UnbootstrapOpts pattern
+- [Phase 84.4.1.1-multi-install-follow-on-gaps]: Export buildLambdaZipsFunc as BuildLambdaZipsFunc so cmd_test (external package) can override it; warn-and-continue semantics mirror runInit at line 491-496
 
 ### Roadmap Evolution
 
@@ -1248,6 +1250,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-19T04:05:43.314Z
-Stopped at: Completed 84.4.1.1-multi-install-follow-on-gaps-00-PLAN.md
+Last session: 2026-05-19T04:09:22.734Z
+Stopped at: Completed 84.4.1.1-multi-install-follow-on-gaps-01-PLAN.md
 Resume file: None
