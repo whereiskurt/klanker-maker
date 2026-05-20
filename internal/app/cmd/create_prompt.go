@@ -164,14 +164,39 @@ func pushQueueFiles(ctx context.Context, ssmClient SSMSendAPI, instanceID string
 	return err
 }
 
-// kickQueueRunner issues `systemctl start km-queue` via SSM.
+// kickQueueRunner issues `systemctl start km-queue` via SSM. Includes a wait-for-
+// unit-loaded guard because userdata's `systemctl daemon-reload && systemctl enable
+// km-queue.service` may not have completed by the time the operator-side push is
+// done (DynamoDB metadata flips to "running" when EC2 reaches running state, not
+// when userdata's late steps finish). Without this guard, `systemctl start` would
+// hit "Unit not found" and `|| true` would silently swallow it — runner never starts.
 //
 // In Wave 1, the km-queue.service systemd unit does not yet exist on the box —
 // that lands in Plan 86-03 (userdata.go seeding). Until then, this call is a
 // harmless no-op (|| true suppresses the "unit not found" exit code).
 // Plan 86-03 will tighten this once the unit is present.
 func kickQueueRunner(ctx context.Context, ssmClient SSMSendAPI, instanceID string) error {
-	kickCmd := "systemctl start km-queue 2>&1 || true"
+	// Wait up to 2 minutes for systemd to know about km-queue.service. systemctl
+	// list-unit-files succeeds (returns the row) only after the unit file is on
+	// disk AND systemctl daemon-reload has been run. The userdata heredoc emits
+	// both, but they may not be complete when this runs.
+	kickCmd := `
+set -eu
+for i in $(seq 1 60); do
+  if systemctl list-unit-files km-queue.service 2>/dev/null | grep -q km-queue.service; then
+    break
+  fi
+  sleep 2
+done
+if ! systemctl list-unit-files km-queue.service 2>/dev/null | grep -q km-queue.service; then
+  echo "km-queue.service never registered with systemd after 120s" >&2
+  exit 1
+fi
+systemctl start km-queue.service
+# Brief check that it transitioned (not strictly required, but surfaces obvious failures)
+sleep 1
+systemctl is-active km-queue.service 2>&1 || true
+`
 	_, err := sendSSMAndWait(ctx, ssmClient, instanceID, kickCmd)
 	return err
 }
