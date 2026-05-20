@@ -386,6 +386,97 @@ km create profiles/open-dev.yaml
 
 The command prints the sandbox ID on completion.
 
+### km create --prompt — provision + queue prompts
+
+Phase 86 adds a repeatable `--prompt` flag that queues one or more Claude prompts for sequential
+execution immediately after the sandbox is reachable. The on-box `km-queue.service` systemd unit
+drains the queue; each entry runs as a standard `km agent run` session visible to `km agent list`.
+
+**Basic usage:**
+
+```bash
+# Queue a single prompt — returns as soon as sandbox is up and queue is written
+km create profiles/open-dev.yaml --prompt "clone https://github.com/acme/api.git && run tests"
+
+# Queue multiple prompts (run sequentially: second starts only after first succeeds)
+km create profiles/open-dev.yaml \
+  --prompt "clone the repo" \
+  --prompt "run lint and tests" \
+  --prompt "open a PR for any lint fixes"
+
+# Block until all prompts complete; exit code = 0 (all done) or 1 (first failure)
+km create profiles/open-dev.yaml --prompt "run the full suite" --wait
+
+# Use direct API (claude auth login credentials) instead of Bedrock
+km create profiles/open-dev.yaml --prompt "fix failing tests" --no-bedrock
+```
+
+**Prompt syntax:**
+
+| Syntax | Meaning |
+|--------|---------|
+| `--prompt "text"` | Literal prompt text |
+| `--prompt @path/to/file.txt` | Read file verbatim (UTF-8). Missing file fails before any AWS call. |
+| `--prompt @@literal` | Literal `@literal` (escape one leading `@`) |
+
+**--wait exit-code semantics:**
+
+- `0` — all prompts completed successfully
+- `1` — first failing prompt exited non-zero; remaining are marked `skipped`
+
+**Observability:**
+
+```bash
+# See queue entry status (index, status, timestamp, prompt preview)
+km agent list <sandbox-id> --queue
+
+# See individual run output (each queued prompt becomes a run)
+km agent list <sandbox-id>
+
+# Tail runner log on the box for auth probe / lifecycle events
+km shell <sandbox-id>
+journalctl -u km-queue -f              # runner lifecycle (auth probe, entry start/finish)
+cat /workspace/.km-agent/km-queue.log  # probe-status log (every 5 min when waiting for auth)
+```
+
+**Failure model:**
+
+- First non-zero exit: that entry is marked `failed`; all subsequent `pending` entries become `skipped`
+- Auth wait is indefinite (no timeout). The runner probes every 5 seconds and logs every 5 minutes.
+- On reboot or `km pause` + `km resume`, the runner reconciles: any entry marked `running` is reset
+  to `pending` and retried from the start.
+
+**Recovery procedure (abandon a stuck queue):**
+
+```bash
+km shell <sandbox-id>
+
+# Option 1: clear the whole queue (all entries abandoned)
+sudo rm /workspace/.km-agent/queue/*
+
+# Option 2: manually retry a failed or skipped entry
+sudo -u sandbox bash
+jq '.status = "pending"' /workspace/.km-agent/queue/003.meta.json > /tmp/m.json
+mv /tmp/m.json /workspace/.km-agent/queue/003.meta.json
+systemctl start km-queue   # kick the runner
+```
+
+**Constraints:**
+
+- EC2 substrate only. `--prompt + --docker` fails immediately with a clear error — Docker sandboxes
+  do not have systemd.
+- No per-prompt timeout, retry policy, or conditional execution in v1.
+- Bedrock auth probe incurs a tiny API call (~$0.000003) every 5 seconds when waiting for auth.
+  If a queue is stuck waiting, expect ~$0.05/day in probe cost per sandbox.
+- `--no-bedrock` mode: the runner checks for `~/.claude/credentials.json` instead of probing
+  Bedrock. Credentials must be seeded with `claude auth login` inside the sandbox before the
+  runner will proceed.
+
+**Reference:**
+
+- Full spec: `docs/superpowers/specs/2026-05-19-km-create-prompt-queue-design.md`
+- Phase brief: `.planning/phases/86-km-create-prompt-queue/BRIEF.md`
+
 ### List and Check Status
 
 ```bash
