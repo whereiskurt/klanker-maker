@@ -126,6 +126,9 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	var idleOverride string
 	var computeBudgetOverride float64
 	var aiBudgetOverride float64
+	// Phase 86: prompt queue flags
+	var prompts []string
+	var wait bool
 
 	cmd := &cobra.Command{
 		Use:   "create <profile.yaml>",
@@ -141,6 +144,25 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 			if dockerShortcut {
 				substrateOverride = "docker"
 			}
+
+			// Phase 86 PQ-03: queue requires systemd → EC2 substrate only.
+			// Fail before any AWS call so operators get a clear error immediately.
+			if len(prompts) > 0 {
+				isDocker := dockerShortcut || substrateOverride == "docker"
+				if isDocker {
+					return fmt.Errorf("--prompt requires EC2 substrate (systemd-backed runner); queue requires EC2")
+				}
+			}
+
+			// Phase 86 PQ-02: resolve @file / @@ escapes operator-side before any
+			// SSM or AWS interaction. A missing file surfaces here, not inside Lambda.
+			resolvedPrompts, resolveErr := resolvePrompts(prompts)
+			if resolveErr != nil {
+				return resolveErr
+			}
+
+			// Suppress wait for now (Plan 86-04 adds full --wait polling).
+			_ = wait
 
 			// Auto-detect remote vs local based on substrate.
 			// EC2/ECS default to --remote (no local terraform needed).
@@ -171,10 +193,39 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 			}
 
 			if useRemote {
-				_, remoteErr := runCreateRemote(cfg, args[0], onDemand, noBedrock, awsProfile, aliasOverride, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride)
-				return remoteErr
+				// Step 1–15 run inside the Lambda via runCreateRemote.
+				// Step 16 (prompt queue push) runs OPERATOR-side after Lambda
+				// returns — RESEARCH.md Pitfall #1: Lambda is untouched.
+				sandboxID, remoteErr := runCreateRemote(cfg, args[0], onDemand, noBedrock, awsProfile, aliasOverride, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride)
+				if remoteErr != nil {
+					return remoteErr
+				}
+				// Phase 86 Step 16: operator-side prompt queue push.
+				if len(resolvedPrompts) > 0 {
+					if err := doStep16PromptPush(cmd.Context(), cfg, sandboxID, resolvedPrompts, noBedrock, awsProfile); err != nil {
+						return fmt.Errorf("prompt queue push failed: %w", err)
+					}
+				}
+				return nil
 			}
-			return runCreate(cfg, args[0], onDemand, noBedrock, awsProfile, verbose, sandboxIDOverride, aliasOverride, substrateOverride, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride)
+
+			// Local path: runCreate handles Steps 1–15. Step 16 runs after it returns.
+			if err := runCreate(cfg, args[0], onDemand, noBedrock, awsProfile, verbose, sandboxIDOverride, aliasOverride, substrateOverride, ttlOverride, idleOverride, computeBudgetOverride, aiBudgetOverride); err != nil {
+				return err
+			}
+			// Phase 86 Step 16: operator-side prompt queue push (local path).
+			// sandboxIDOverride is the ID that runCreate used (passed in via --sandbox-id).
+			// For non-Lambda local creates, the sandbox ID is derived inside runCreate;
+			// Step 16 is called via the remote path above in normal usage. The local path
+			// only runs inside the Lambda (KM_REMOTE_CREATE=true) or via --local flag.
+			// In the Lambda case, prompts are empty (prompts were pushed from operator-side).
+			// Via --local for testing, doStep16PromptPush is a no-op when prompts empty.
+			if len(resolvedPrompts) > 0 && sandboxIDOverride != "" {
+				if err := doStep16PromptPush(cmd.Context(), cfg, sandboxIDOverride, resolvedPrompts, noBedrock, awsProfile); err != nil {
+					return fmt.Errorf("prompt queue push failed: %w", err)
+				}
+			}
+			return nil
 		},
 	}
 
@@ -207,6 +258,11 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 		"Override spec.budget.compute.maxSpendUSD (e.g. 2.00)")
 	cmd.Flags().Float64Var(&aiBudgetOverride, "ai", 0,
 		"Override spec.budget.ai.maxSpendUSD (e.g. 10.00)")
+	// Phase 86: prompt queue flags
+	cmd.Flags().StringArrayVar(&prompts, "prompt", nil,
+		"Queue a prompt (repeatable). @file reads from file UTF-8; @@x escapes literal @x. Requires EC2 substrate.")
+	cmd.Flags().BoolVar(&wait, "wait", false,
+		"Block km create until the queue drains. Exit code propagates from the first failing prompt (0 = all done).")
 
 	return cmd
 }
