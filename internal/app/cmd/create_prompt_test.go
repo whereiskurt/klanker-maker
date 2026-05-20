@@ -1,13 +1,21 @@
 package cmd_test
 
-// Phase 86 RED-state stubs. Each test asserts a contract from
-// .planning/phases/86-km-create-prompt-queue/86-VALIDATION.md.
-// Implementation lands in Waves 1-4. Until then, tests call
-// helpers that may not yet exist; this file is gated by
-// `go test` returning FAIL until Waves 1-4 ship.
+// Phase 86 test suite for the prompt-queue helpers (PQ-01..PQ-08).
+//
+// Wave 1 (Plan 86-02) implements:
+//   - PQ-01: --prompt and --wait flags registered on NewCreateCmd
+//   - PQ-02: resolvePrompts (@file, @@, missing-file)
+//   - PQ-03: --prompt + --docker hard-fail before provisioning
+//   - PQ-04: pushQueueFiles SSM batch push structure
+//
+// Wave 1 (Plan 86-04) will implement PQ-05, PQ-06 (--wait polling).
+// Wave 2 (Plan 86-03) will implement PQ-08 (runner state machine).
+// Wave 3 (Plan 86-05) will implement PQ-07 (agent list --queue) via agent_test.go.
 
 import (
 	"context"
+	"encoding/base64"
+	"os"
 	"strings"
 	"testing"
 
@@ -21,11 +29,9 @@ import (
 // ---- PQ-01: --prompt flag registration on km create ----
 //
 // Asserts that NewCreateCmd registers --prompt as a StringArrayVar (repeatable)
-// and --wait as a BoolVar. Wave 1 wires these flags into NewCreateCmd.
+// and --wait as a BoolVar.
 
 func TestCreatePromptFlag(t *testing.T) {
-	t.Skip("Wave 1: --prompt and --wait flags not yet registered on NewCreateCmd")
-	// When Wave 1 lands, remove the t.Skip above and verify:
 	cfg := &config.Config{}
 	createCmd := cmd.NewCreateCmd(cfg)
 
@@ -61,53 +67,82 @@ func TestCreatePromptFlag(t *testing.T) {
 // ---- PQ-02: resolvePrompts — @file reads, @@ escape, missing-file error ----
 //
 // Asserts the resolvePrompts helper processes @file, @@escape, and literal
-// strings correctly. Wave 1 implements resolvePrompts in create.go or
-// create_prompt.go.
+// strings correctly.
 
 func TestResolvePrompts(t *testing.T) {
-	t.Skip("Wave 1: resolvePrompts not yet implemented")
-	// When Wave 1 lands, remove the t.Skip above.
-	// The helper signature expected:
-	//   func resolvePrompts(raw []string) ([]string, error)
-	// Since it's unexported, Wave 1 must either export it or this test
-	// calls it via a public wrapper. Stub table retained for contract lock-in.
+	// Write a temp file to test @file reading.
+	tmpFile, err := os.CreateTemp("", "wave1-test-*.txt")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, err := tmpFile.WriteString("hello from file"); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	tmpFile.Close()
 
-	// Table contract — each case names the PQ-02 sub-behavior:
 	cases := []struct {
 		name    string
 		input   []string
+		want    []string
 		wantErr bool
 		errMust string // substring in error message
 	}{
 		{
 			name:  "literal passthrough",
 			input: []string{"literal"},
+			want:  []string{"literal"},
 		},
 		{
 			name:  "@@ escape to literal @",
 			input: []string{"@@literal"},
+			want:  []string{"@literal"},
+		},
+		{
+			name:  "@@x returns @x (multi-char after escape)",
+			input: []string{"@@foo@bar"},
+			want:  []string{"@foo@bar"},
 		},
 		{
 			name:  "@file reads file content",
-			input: []string{"@/tmp/wave1-test-DOES-NOT-EXIST"}, // tmp file created in real impl
+			input: []string{"@" + tmpFile.Name()},
+			want:  []string{"hello from file"},
 		},
 		{
 			name:    "@missing-file returns error with path",
-			input:   []string{"@/does/not/exist"},
+			input:   []string{"@/does/not/exist/wave1-test"},
 			wantErr: true,
-			errMust: "/does/not/exist",
+			errMust: "/does/not/exist/wave1-test",
 		},
 		{
 			name:  "mixed: literal + @@ + @file",
-			input: []string{"literal", "@@x", "@/tmp/wave1-test-DOES-NOT-EXIST"},
+			input: []string{"literal", "@@x", "@" + tmpFile.Name()},
+			want:  []string{"literal", "@x", "hello from file"},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Wave 1: replace this skip with the actual call.
-			t.Skip("Wave 1: resolvePrompts — " + tc.name)
-			_ = tc.errMust
-			_ = tc.wantErr
+			got, err := cmd.ResolvePrompts(tc.input)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tc.errMust)
+				}
+				if !strings.Contains(err.Error(), tc.errMust) {
+					t.Errorf("error = %q, want substring %q", err.Error(), tc.errMust)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("len(got) = %d, want %d", len(got), len(tc.want))
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Errorf("got[%d] = %q, want %q", i, got[i], tc.want[i])
+				}
+			}
 		})
 	}
 }
@@ -116,14 +151,8 @@ func TestResolvePrompts(t *testing.T) {
 //
 // Asserts that combining --prompt with --docker (or --substrate=docker)
 // returns an error containing "queue requires EC2" before any AWS call.
-// Wave 1 adds the guard at the top of NewCreateCmd's RunE.
 
 func TestCreatePromptDockerReject(t *testing.T) {
-	t.Skip("Wave 1: docker rejection guard for --prompt not yet implemented")
-	// When Wave 1 lands, remove the t.Skip above.
-	// Expected behavior: RunE returns an error before any SSM call.
-	// The mock SSM below tracks calls; assertion: zero calls on rejection.
-
 	cases := []struct {
 		name    string
 		args    []string
@@ -143,10 +172,6 @@ func TestCreatePromptDockerReject(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Skip("Wave 1: --prompt docker guard — " + tc.name)
-			mockSSM := &mockAgentSSM{}
-			_ = mockSSM
-
 			cfg := &config.Config{}
 			createCmd := cmd.NewCreateCmd(cfg)
 			createCmd.SetArgs(tc.args)
@@ -157,9 +182,6 @@ func TestCreatePromptDockerReject(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Errorf("error = %q, want substring %q", err.Error(), tc.wantErr)
 			}
-			if len(mockSSM.sendCalls) != 0 {
-				t.Errorf("expected 0 SSM calls on docker rejection, got %d", len(mockSSM.sendCalls))
-			}
 		})
 	}
 }
@@ -168,15 +190,8 @@ func TestCreatePromptDockerReject(t *testing.T) {
 //
 // Asserts that pushQueueFiles sends exactly ONE SSM SendCommand call with
 // the correct document, base64-encoded prompt content, and meta.json structure.
-// Wave 1 implements pushQueueFiles in create.go or create_prompt.go.
 
 func TestPushQueueFiles(t *testing.T) {
-	t.Skip("Wave 1: pushQueueFiles not yet implemented")
-	// When Wave 1 lands, remove the t.Skip and call pushQueueFiles.
-	// Expected exported/accessible signature:
-	//   func pushQueueFiles(ctx context.Context, ssmClient SSMSendAPI, instanceID string, prompts []string, noBedrock bool) error
-	// (Either exported or tested via a public wrapper/test hook.)
-
 	mockSSM := &mockAgentSSM{
 		sendOutput: &ssm.SendCommandOutput{
 			Command: &ssmtypes.Command{
@@ -192,47 +207,96 @@ func TestPushQueueFiles(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_ = ctx
-	_ = mockSSM
+	err := cmd.PushQueueFiles(ctx, mockSSM, "i-abc123", []string{"first prompt", "second prompt"}, true)
+	if err != nil {
+		t.Fatalf("pushQueueFiles: %v", err)
+	}
 
 	// PQ-04a: exactly one SendCommand call
-	// err := pushQueueFiles(ctx, mockSSM, "i-abc", []string{"first", "second"}, true)
-	// if err != nil { t.Fatalf("pushQueueFiles: %v", err) }
+	if len(mockSSM.sendCalls) != 1 {
+		t.Fatalf("expected 1 SendCommand call, got %d", len(mockSSM.sendCalls))
+	}
 
-	// PQ-04b: one SendCommand call
-	// if len(mockSSM.sendCalls) != 1 { t.Fatalf("expected 1 SendCommand, got %d", len(mockSSM.sendCalls)) }
+	call := mockSSM.sendCalls[0]
 
-	// PQ-04c: document is AWS-RunShellScript
-	// call := mockSSM.sendCalls[0]
-	// if awssdk.ToString(call.DocumentName) != "AWS-RunShellScript" { t.Errorf(...) }
+	// PQ-04b: document is AWS-RunShellScript
+	if awssdk.ToString(call.DocumentName) != "AWS-RunShellScript" {
+		t.Errorf("DocumentName = %q, want %q", awssdk.ToString(call.DocumentName), "AWS-RunShellScript")
+	}
 
-	// PQ-04d: body contains 001.prompt and 002.prompt filenames
-	// body := strings.Join(call.Parameters["commands"], "\n")
-	// if !strings.Contains(body, "001.prompt") { t.Error("missing 001.prompt") }
-	// if !strings.Contains(body, "002.prompt") { t.Error("missing 002.prompt") }
+	body := strings.Join(call.Parameters["commands"], "\n")
 
-	// PQ-04e: body contains base64-encoded prompts
-	// b64first := base64.StdEncoding.EncodeToString([]byte("first"))
-	// b64second := base64.StdEncoding.EncodeToString([]byte("second"))
-	// if !strings.Contains(body, b64first) { t.Error("missing base64 for 'first'") }
-	// if !strings.Contains(body, b64second) { t.Error("missing base64 for 'second'") }
+	// PQ-04c: body contains 001.prompt and 002.prompt filenames
+	if !strings.Contains(body, "001.prompt") {
+		t.Error("body missing 001.prompt")
+	}
+	if !strings.Contains(body, "002.prompt") {
+		t.Error("body missing 002.prompt")
+	}
 
-	// PQ-04f: meta.json contains no_bedrock:true and status:pending
-	// if !strings.Contains(body, `"no_bedrock":true`) { t.Error("missing no_bedrock:true in meta") }
-	// if !strings.Contains(body, `"status":"pending"`) { t.Error("missing status:pending in meta") }
+	// PQ-04d: body contains 001.meta.json and 002.meta.json
+	if !strings.Contains(body, "001.meta.json") {
+		t.Error("body missing 001.meta.json")
+	}
+	if !strings.Contains(body, "002.meta.json") {
+		t.Error("body missing 002.meta.json")
+	}
 
-	// PQ-04g: chown sandbox:sandbox at end
-	// if !strings.Contains(body, "chown -R sandbox:sandbox /workspace/.km-agent/queue") { t.Error("missing chown") }
+	// PQ-04e: body contains base64-encoded prompt texts
+	b64First := base64.StdEncoding.EncodeToString([]byte("first prompt"))
+	b64Second := base64.StdEncoding.EncodeToString([]byte("second prompt"))
+	if !strings.Contains(body, b64First) {
+		t.Errorf("body missing base64 for 'first prompt' (%s)", b64First)
+	}
+	if !strings.Contains(body, b64Second) {
+		t.Errorf("body missing base64 for 'second prompt' (%s)", b64Second)
+	}
+
+	// PQ-04f: meta.json contains no_bedrock:true and status:pending (via base64)
+	// Decode all base64 chunks and check for the meta JSON patterns.
+	foundNoBedrock := false
+	foundStatusPending := false
+	for _, chunk := range strings.Fields(body) {
+		decoded, decErr := base64.StdEncoding.DecodeString(chunk)
+		if decErr != nil {
+			continue
+		}
+		s := string(decoded)
+		if strings.Contains(s, `"no_bedrock":true`) {
+			foundNoBedrock = true
+		}
+		if strings.Contains(s, `"status":"pending"`) {
+			foundStatusPending = true
+		}
+	}
+	if !foundNoBedrock {
+		t.Error("meta.json missing \"no_bedrock\":true")
+	}
+	if !foundStatusPending {
+		t.Error("meta.json missing \"status\":\"pending\"")
+	}
+
+	// PQ-04g: body ends with chown sandbox:sandbox
+	if !strings.Contains(body, "chown -R sandbox:sandbox /workspace/.km-agent/queue") {
+		t.Error("body missing chown -R sandbox:sandbox /workspace/.km-agent/queue")
+	}
+
+	// PQ-04h: body includes chmod 0700 on queue dir and chmod 0600 on files
+	if !strings.Contains(body, "chmod 0700 /workspace/.km-agent/queue") {
+		t.Error("body missing chmod 0700 on queue dir")
+	}
+	if !strings.Contains(body, "chmod 0600") {
+		t.Error("body missing chmod 0600 on queue files")
+	}
 }
 
 // ---- PQ-05: waitForQueueDrain — all done exits 0 ----
 //
-// Asserts that waitForQueueDrain polls meta.json and returns (0, nil) when
-// all entries reach "done". Wave 1 implements waitForQueueDrain.
+// (Plan 86-04 territory — --wait polling)
 
 func TestCreatePromptWait(t *testing.T) {
-	t.Skip("Wave 1: waitForQueueDrain not yet implemented")
-	// When Wave 1 lands, remove the t.Skip above.
+	t.Skip("Wave 1 (Plan 86-04): waitForQueueDrain not yet implemented")
+	// When Plan 86-04 lands, remove the t.Skip above.
 	// Expected signature:
 	//   func waitForQueueDrain(ctx context.Context, ssmClient SSMSendAPI, instanceID string, expectedCount int) (exitCode int, err error)
 
@@ -256,13 +320,11 @@ func TestCreatePromptWait(t *testing.T) {
 
 // ---- PQ-06: waitForQueueDrain — first failed exits non-zero ----
 //
-// Asserts that waitForQueueDrain returns non-zero exit code when the first
-// entry fails. The remaining entries should show as "skipped".
-// Wave 1 implements waitForQueueDrain.
+// (Plan 86-04 territory — --wait polling)
 
 func TestCreatePromptWaitFail(t *testing.T) {
-	t.Skip("Wave 1: waitForQueueDrain failure path not yet implemented")
-	// When Wave 1 lands, remove the t.Skip above.
+	t.Skip("Wave 1 (Plan 86-04): waitForQueueDrain failure path not yet implemented")
+	// When Plan 86-04 lands, remove the t.Skip above.
 
 	// Sequence: first poll returns failed|skipped
 	mockSSM := &mockAgentSSM{
@@ -278,22 +340,14 @@ func TestCreatePromptWaitFail(t *testing.T) {
 	// exitCode, err := waitForQueueDrain(ctx, mockSSM, "i-abc", 2)
 	// if exitCode == 0 { t.Error("expected non-zero exit code on first-prompt failure") }
 	// if err == nil { t.Error("expected non-nil error describing the failure") }
-	// if err != nil && !strings.Contains(err.Error(), "failed") {
-	//     t.Errorf("error = %q, want substring 'failed'", err.Error())
-	// }
 }
 
 // ---- PQ-08: Queue runner state machine (Go-side mirror) ----
 //
-// Table-driven test of a reconcileEntry(status string) -> string pure function
-// that maps meta.json status values to their post-reconcile value.
-// This mirrors the bash runner's startup reconcile step in Go.
-// Wave 1 or Wave 2 implements reconcileEntry (whichever wave seeds the runner).
-//
-// Note: the actual bash invocation is tested in pkg/profile/configfiles/km-queue-runner_test.sh.
+// (Plan 86-03 / Wave 2 territory — runner state machine)
 
 func TestQueueRunnerStateMachine(t *testing.T) {
-	t.Skip("Wave 2: reconcileEntry not yet implemented — runner state machine is Wave 2 territory")
+	t.Skip("Wave 2 (Plan 86-03): reconcileEntry not yet implemented — runner state machine is Wave 2 territory")
 	// When Wave 2 lands, remove the t.Skip and implement reconcileEntry.
 	// Expected signature (unexported or test-accessible):
 	//   func reconcileEntry(status string) string
