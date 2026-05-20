@@ -2,8 +2,8 @@
 phase: 86
 slug: km-create-prompt-queue
 status: draft
-nyquist_compliant: false
-wave_0_complete: false
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-05-19
 ---
 
@@ -42,14 +42,14 @@ Tracks each acceptance criterion → automated test → status. Updated as Wave 
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 86-01-01 | 01 | 0 | PQ-01 (`--prompt` repeatable) | unit | `go test ./internal/app/cmd/ -run TestCreatePromptFlag -v` | ❌ W0 | ⬜ pending |
-| 86-01-02 | 01 | 0 | PQ-02 (`@file` + `@@` escape + missing-file error) | unit | `go test ./internal/app/cmd/ -run TestResolvePrompts -v` | ❌ W0 | ⬜ pending |
-| 86-01-03 | 01 | 0 | PQ-03 (`--prompt + --docker` reject) | unit | `go test ./internal/app/cmd/ -run TestCreatePromptDockerReject -v` | ❌ W0 | ⬜ pending |
-| 86-02-01 | 02 | 1 | PQ-04 (SSM queue-file push + meta.json shape) | unit (mock SSM) | `go test ./internal/app/cmd/ -run TestPushQueueFiles -v` | ❌ W0 | ⬜ pending |
-| 86-02-02 | 02 | 1 | PQ-05 (`--wait` polls until all `done`, exit 0) | unit (mock SSM) | `go test ./internal/app/cmd/ -run TestCreatePromptWait -v` | ❌ W0 | ⬜ pending |
-| 86-02-03 | 02 | 1 | PQ-06 (`--wait` exit non-zero on fail, remaining `skipped`) | unit (mock SSM) | `go test ./internal/app/cmd/ -run TestCreatePromptWaitFail -v` | ❌ W0 | ⬜ pending |
-| 86-03-01 | 03 | 1 | PQ-07 (`km agent list --queue` view) | unit (mock SSM) | `go test ./internal/app/cmd/ -run TestAgentListQueue -v` | ❌ W0 | ⬜ pending |
-| 86-04-01 | 04 | 2 | PQ-08 (runner reconcile + state machine) | unit (table-test) | `go test ./internal/app/cmd/ -run TestQueueRunnerStateMachine -v` | ❌ W0 | ⬜ pending |
+| 86-01-01 | 01 | 0 | PQ-01 (`--prompt` repeatable) | unit | `go test ./internal/app/cmd/ -run TestCreatePromptFlag -v` | ✅ W0 | ❌ red (skip) |
+| 86-01-02 | 01 | 0 | PQ-02 (`@file` + `@@` escape + missing-file error) | unit | `go test ./internal/app/cmd/ -run TestResolvePrompts -v` | ✅ W0 | ❌ red (skip) |
+| 86-01-03 | 01 | 0 | PQ-03 (`--prompt + --docker` reject) | unit | `go test ./internal/app/cmd/ -run TestCreatePromptDockerReject -v` | ✅ W0 | ❌ red (skip) |
+| 86-02-01 | 02 | 1 | PQ-04 (SSM queue-file push + meta.json shape) | unit (mock SSM) | `go test ./internal/app/cmd/ -run TestPushQueueFiles -v` | ✅ W0 | ❌ red (skip) |
+| 86-02-02 | 02 | 1 | PQ-05 (`--wait` polls until all `done`, exit 0) | unit (mock SSM) | `go test ./internal/app/cmd/ -run TestCreatePromptWait -v` | ✅ W0 | ❌ red (skip) |
+| 86-02-03 | 02 | 1 | PQ-06 (`--wait` exit non-zero on fail, remaining `skipped`) | unit (mock SSM) | `go test ./internal/app/cmd/ -run TestCreatePromptWaitFail -v` | ✅ W0 | ❌ red (skip) |
+| 86-03-01 | 03 | 1 | PQ-07 (`km agent list --queue` view) | unit (mock SSM) | `go test ./internal/app/cmd/ -run TestAgentListQueue -v` | ✅ W0 | ❌ red (skip) |
+| 86-04-01 | 04 | 2 | PQ-08 (runner reconcile + state machine) | unit (table-test) | `go test ./internal/app/cmd/ -run TestQueueRunnerStateMachine -v` | ✅ W0 | ❌ red (skip) |
 | 86-05-01 | 05 | 3 | PQ-09 (single-prompt happy path) | operator UAT | real-AWS, manual | n/a | ⬜ pending |
 | 86-05-02 | 05 | 3 | PQ-10 (two-prompt chain) | operator UAT | real-AWS, manual | n/a | ⬜ pending |
 | 86-05-03 | 05 | 3 | PQ-11 (fail-stops-chain) | operator UAT | real-AWS, manual | n/a | ⬜ pending |
@@ -67,7 +67,7 @@ Task IDs are tentative — planner may renumber when producing PLAN.md files.
 
 Test stubs that must be created (RED state) before implementation begins:
 
-- [ ] `internal/app/cmd/create_prompt_test.go` (new file) — stubs for PQ-01..PQ-06 and PQ-08:
+- [x] `internal/app/cmd/create_prompt_test.go` (new file) — stubs for PQ-01..PQ-06 and PQ-08:
   - `TestCreatePromptFlag` — verifies `--prompt` is `StringArrayVar` (preserves commas), repeatable.
   - `TestResolvePrompts` — `@file` reads UTF-8 verbatim, `@@literal` escape, missing-file returns clear error.
   - `TestCreatePromptDockerReject` — combining `--prompt` with `--docker` returns hard error before any AWS call.
@@ -75,7 +75,7 @@ Test stubs that must be created (RED state) before implementation begins:
   - `TestCreatePromptWait` — mock SSM polling; returns 0 when all entries become `done`.
   - `TestCreatePromptWaitFail` — mock SSM; first entry `failed`, asserts non-zero exit + others `skipped`.
   - `TestQueueRunnerStateMachine` — table-driven test of the Go-side helper that interprets meta.json transitions (the bash runner itself tested in Wave 2 via bash harness).
-- [ ] Augment `internal/app/cmd/agent_test.go` with:
+- [x] Augment `internal/app/cmd/agent_test.go` with:
   - `TestAgentListQueue` — mock SSM listing `/workspace/.km-agent/queue/`; render with statuses + truncated prompt preview.
 - [ ] No new test framework installs needed — `go test` already covers the project.
 
@@ -107,4 +107,4 @@ Behaviors that require real AWS infrastructure and operator-in-loop verification
 - [ ] Feedback latency < 60s for incremental scope
 - [ ] `nyquist_compliant: true` set in frontmatter after Wave 0 lands
 
-**Approval:** pending — flips to approved after Wave 0 stubs are merged in RED state.
+**Approval:** approved — Wave 0 stubs merged in RED state (2026-05-20). `nyquist_compliant: true`.
