@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 86-05-PLAN.md — Wave 2 km agent list --queue + docs
-last_updated: "2026-05-20T03:20:50.993Z"
+stopped_at: Completed 86-04-PLAN.md — Wave 2 --wait polling + ExitCodeError pattern
+last_updated: "2026-05-20T03:27:28.917Z"
 last_activity: 2026-05-20
 progress:
   total_phases: 101
   completed_phases: 89
   total_plans: 420
-  completed_plans: 373
+  completed_plans: 374
   percent: 88
 ---
 
@@ -407,6 +407,7 @@ Progress: [█████████░] 88%
 | Phase 86-km-create-prompt-queue P03 | 724 | 2 tasks | 4 files |
 | Phase 86-km-create-prompt-queue P02 | 815 | 2 tasks | 3 files |
 | Phase 86-km-create-prompt-queue P05 | 495 | 2 tasks | 4 files |
+| Phase 86-km-create-prompt-queue P04 | 900 | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1176,6 +1177,9 @@ Recent decisions affecting current work:
 - [Phase 86-km-create-prompt-queue]: Step 16 runs operator-side post runCreateRemote; Lambda untouched (RESEARCH.md Pitfall #1)
 - [Phase 86-km-create-prompt-queue]: ReconcileMetaStatus exported; PQ-08 TestQueueRunnerStateMachine GREEN ahead of Wave 2 schedule
 - [Phase 86-km-create-prompt-queue]: --queue is a BoolVar on existing agent list Cobra command (not new subcommand); runAgentListQueue uses nil-guard pattern identical to runAgentList
+- [Phase 86-km-create-prompt-queue]: ExitCodeError typed error (not inline os.Exit): preserves RunE/Cobra deferred cleanup; single os.Exit at outermost Execute() boundary in root.go
+- [Phase 86-km-create-prompt-queue]: QueuePollInterval exported var (not const) for cmd_test override; WaitForQueueDrain exported wrapper for external test package access
+- [Phase 86-km-create-prompt-queue]: SilenceErrors NOT set on create cmd: Cobra prints typed error once; boundary does not double-print before os.Exit
 
 ### Roadmap Evolution
 
@@ -1287,6 +1291,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-20T03:20:50.984Z
-Stopped at: Completed 86-05-PLAN.md — Wave 2 km agent list --queue + docs
+Last session: 2026-05-20T03:27:28.908Z
+Stopped at: Completed 86-04-PLAN.md — Wave 2 --wait polling + ExitCodeError pattern
 Resume file: None
