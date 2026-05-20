@@ -468,14 +468,115 @@ systemctl start km-queue   # kick the runner
 - No per-prompt timeout, retry policy, or conditional execution in v1.
 - Bedrock auth probe incurs a tiny API call (~$0.000003) every 5 seconds when waiting for auth.
   If a queue is stuck waiting, expect ~$0.05/day in probe cost per sandbox.
-- `--no-bedrock` mode: the runner checks for `~/.claude/credentials.json` instead of probing
-  Bedrock. Credentials must be seeded with `claude auth login` inside the sandbox before the
-  runner will proceed.
+- `--no-bedrock` mode: the runner checks for `~/.claude/.credentials.json` instead of probing
+  Bedrock. **Important:** `claude auth login --claudeai` on a minimal headless AMI completes the
+  OAuth exchange but cannot persist the token without libsecret + gnome-keyring + a session bus.
+  See **Claude auth modes for sandboxes** below for the three working options.
 
 **Reference:**
 
 - Full spec: `docs/superpowers/specs/2026-05-19-km-create-prompt-queue-design.md`
 - Phase brief: `.planning/phases/86-km-create-prompt-queue/BRIEF.md`
+
+### Claude auth modes for sandboxes
+
+A sandbox running a Claude-driven workload (`km agent run`, `km shell`, `km create --prompt`)
+needs Claude to authenticate to either Bedrock or the Anthropic API. There are three working
+modes; pick based on whether you want sandbox Claude to count against your Claude.ai subscription
+or a Bedrock IAM bill, and how much per-sandbox setup you're willing to do.
+
+#### Mode 1 — Bedrock (recommended default)
+
+Sandbox Claude calls Bedrock via the EC2 instance's IAM role. No token persistence needed; AWS
+handles auth via the IMDS-provided STS credentials that auto-rotate.
+
+```yaml
+spec:
+  execution:
+    useBedrock: true   # default
+```
+
+| Pro | Con |
+|---|---|
+| Just works — no setup beyond `km create` | Counts against AWS account's Bedrock spend, not your Claude.ai subscription |
+| Survives pause/resume cleanly (creds rotate from IMDS) | Requires `bedrock:InvokeModel` permission in the sandbox IAM role profile |
+| No interactive auth step needed | Some accounts need to opt model IDs into on-demand throughput first |
+| `km create --prompt --wait` works end-to-end out of the box | — |
+
+This is what most profiles use (e.g. `dc34.yaml`, `codex.yaml`). All Phase 86 live UAT scenarios
+that PASSed used Bedrock mode.
+
+#### Mode 2 — Direct API via `CLAUDE_CODE_OAUTH_TOKEN` env-var (recommended for Claude.ai subscribers)
+
+Obtain a Claude.ai OAuth token from a *desktop* machine where `claude auth login` works (macOS
+keychain stores it natively), then pass it into the sandbox via the profile's env block.
+Token survives pause/resume because it's in the profile, not on-box state.
+
+```yaml
+spec:
+  execution:
+    useBedrock: false
+    env:
+      CLAUDE_CODE_OAUTH_TOKEN: "${KM_CLAUDE_OAUTH_TOKEN}"   # populated from operator env
+```
+
+Or pin the literal token directly in the YAML (don't commit secrets to git — keep this profile
+gitignored or use a `${env}` reference).
+
+**Where to get the token:** on macOS, run `claude auth login` in Terminal, then read it back from
+the keychain:
+
+```bash
+security find-generic-password -s "Claude Code-credentials" -w
+```
+
+| Pro | Con |
+|---|---|
+| Uses your Claude.ai subscription (no Bedrock bill) | Tokens may expire — must refresh periodically |
+| Token in profile = portable across pause/resume cycles | Token in profile = handle as a secret (don't commit to git) |
+| No on-box keyring infrastructure required | macOS-specific extraction; Linux desktops vary |
+| Compatible with `km create --prompt --no-bedrock --wait` | — |
+
+#### Mode 3 — `km agent auth --claude` interactive flow (NOT working on default sandbox AMIs)
+
+`km agent auth <sandbox> --claude` opens an SSM session running `claude auth login --claudeai`,
+opens the OAuth URL in your local browser, and verifies via `claude auth status`. **This mode
+currently fails on the default Amazon Linux 2023 AMI** because `claude` v2.1.x on Linux uses
+libsecret for credential persistence, and the AMI doesn't ship libsecret + gnome-keyring + an
+unlocked session bus.
+
+You'll see this:
+
+```text
+$ km agent auth my-sandbox
+...
+Login successful.
+Error: claude OAuth succeeded but credentials were not persisted: ...
+  Most likely cause: claude v2.1.x on Linux persists OAuth tokens via libsecret
+  (system keyring). When neither libsecret nor gnome-keyring is installed (common
+  on minimal headless AMIs), the token exchange succeeds but the token is held
+  in-memory only, then lost when the auth process exits.
+```
+
+The error message points at Modes 1 and 2 as workarounds. Switch to one of those.
+
+**Making Mode 3 actually work** would require adding to your profile's `initCommands`:
+
+```yaml
+spec:
+  execution:
+    initCommands:
+      - "yum install -y libsecret gnome-keyring dbus-x11"
+      # Then, before claude runs, the sandbox user must have:
+      #   eval $(dbus-launch --sh-syntax)
+      #   gnome-keyring-daemon --unlock --components=secrets <<< ""
+      #   export DBUS_SESSION_BUS_ADDRESS GNOME_KEYRING_CONTROL
+```
+
+In practice this is brittle — the empty-password unlock is rejected on some distros, the daemon
+dies on pause/resume, each SSM session spawns its own bus, and claude version bumps shift the
+dbus probe behavior. **Mode 1 or Mode 2 is almost always the right answer.** Mode 3 is
+documented here for completeness, not recommendation.
 
 ### List and Check Status
 
