@@ -1347,3 +1347,134 @@ func TestBuildAgentShellCommands_NotifyOrderingBeforeAgentLaunch(t *testing.T) {
 		t.Errorf("export must appear before agent launch; perm at %d, claude at %d\nscript:\n%s", permIdx, claudeIdx, script)
 	}
 }
+
+// ---- PQ-07: km agent list --queue observability view ----
+//
+// Phase 86 RED-state stub. Wave 3 implements the --queue flag on newAgentListCmd.
+//
+// Asserts:
+//  1. --queue flag exists on agent list, is a BoolVar, defaults to false.
+//  2. Empty-dir scenario: no queue entries → no "NNN|status|" lines in output.
+//  3. Mixed-status scenario: 5 entries with different statuses → all five status
+//     labels appear in order, prompt preview truncated to <=80 chars.
+
+func TestAgentListQueue(t *testing.T) {
+	t.Skip("Wave 3: --queue flag on agent list not yet implemented")
+	// When Wave 3 lands, remove the t.Skip above.
+
+	// PQ-07a: flag introspection
+	t.Run("flag_registered", func(t *testing.T) {
+		t.Skip("Wave 3: --queue flag introspection")
+		cfg := &config.Config{}
+		agentCmd := cmd.NewAgentCmdWithDeps(cfg, nil, nil, nil, nil, nil)
+		// Find the "list" subcommand
+		var listCmd *cobra.Command
+		for _, sub := range agentCmd.Commands() {
+			if sub.Use == "list <sandbox-id | #number>" {
+				listCmd = sub
+				break
+			}
+		}
+		if listCmd == nil {
+			t.Fatal("agent list subcommand not found")
+		}
+		queueFlag := listCmd.Flags().Lookup("queue")
+		if queueFlag == nil {
+			t.Fatal("--queue flag not registered on agent list")
+		}
+		if queueFlag.Value.Type() != "bool" {
+			t.Errorf("--queue flag type = %q, want %q", queueFlag.Value.Type(), "bool")
+		}
+		if queueFlag.DefValue != "false" {
+			t.Errorf("--queue default = %q, want %q", queueFlag.DefValue, "false")
+		}
+	})
+
+	// PQ-07b: empty queue → no NNN|status| rows
+	t.Run("empty_queue", func(t *testing.T) {
+		t.Skip("Wave 3: --queue empty-dir scenario")
+		// Mock SSM returns empty stdout (no queue entries)
+		mockSSM := &mockAgentSSM{
+			invocations: []*ssm.GetCommandInvocationOutput{
+				{
+					Status:                ssmtypes.CommandInvocationStatusSuccess,
+					StandardOutputContent: awssdk.String(""),
+				},
+			},
+		}
+		fetcher := newRunningEC2Sandbox("sb-queue01")
+		_ = mockSSM
+		_ = fetcher
+
+		// Wave 3 code:
+		// root := &cobra.Command{Use: "km"}
+		// cfg := &config.Config{}
+		// agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, nil, nil)
+		// root.AddCommand(agentCmd)
+		// buf := &bytes.Buffer{}
+		// root.SetOut(buf)
+		// root.SetArgs([]string{"agent", "list", "--queue", "sb-queue01"})
+		// err := root.Execute()
+		// if err != nil { t.Fatalf("agent list --queue: %v", err) }
+		// output := buf.String()
+		// // Should contain no NNN|status| pattern rows
+		// if regexp.MustCompile(`\d{3}\|`).MatchString(output) {
+		//     t.Errorf("empty queue should produce no NNN|status| rows, got:\n%s", output)
+		// }
+	})
+
+	// PQ-07c: mixed-status scenario — 5 entries, all statuses, order preserved
+	t.Run("mixed_status", func(t *testing.T) {
+		t.Skip("Wave 3: --queue mixed-status rendering")
+		// Mock SSM returns 5 queue entries
+		queueOutput := strings.Join([]string{
+			"001|done|echo first prompt text",
+			"002|running|echo second longer prompt that might be truncated",
+			"003|pending|@plan.txt",
+			"004|failed|exit 1",
+			"005|skipped|never runs",
+		}, "\n")
+
+		mockSSM := &mockAgentSSM{
+			invocations: []*ssm.GetCommandInvocationOutput{
+				{
+					Status:                ssmtypes.CommandInvocationStatusSuccess,
+					StandardOutputContent: awssdk.String(queueOutput),
+				},
+			},
+		}
+		_ = mockSSM
+
+		// Wave 3 code:
+		// root := &cobra.Command{Use: "km"}
+		// cfg := &config.Config{}
+		// fetcher := newRunningEC2Sandbox("sb-queue02")
+		// agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, nil, nil)
+		// root.AddCommand(agentCmd)
+		// buf := &bytes.Buffer{}
+		// root.SetOut(buf)
+		// root.SetArgs([]string{"agent", "list", "--queue", "sb-queue02"})
+		// err := root.Execute()
+		// if err != nil { t.Fatalf("agent list --queue: %v", err) }
+		// output := buf.String()
+		//
+		// // All five status labels must appear
+		// for _, status := range []string{"done", "running", "pending", "failed", "skipped"} {
+		//     if !strings.Contains(output, status) {
+		//         t.Errorf("output missing status %q:\n%s", status, output)
+		//     }
+		// }
+		// // Order: 001 appears before 002
+		// idx001 := strings.Index(output, "001")
+		// idx002 := strings.Index(output, "002")
+		// if idx001 < 0 || idx002 < 0 || idx001 > idx002 {
+		//     t.Errorf("expected 001 before 002 in output:\n%s", output)
+		// }
+		// // Prompt preview truncated to <=80 chars (longest line check)
+		// for _, line := range strings.Split(output, "\n") {
+		//     if len(line) > 120 { // generous outer bound; prompt preview column <=80
+		//         t.Logf("WARN: line length %d may exceed preview limit: %q", len(line), line)
+		//     }
+		// }
+	})
+}
