@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 86-04-PLAN.md — Wave 2 --wait polling + ExitCodeError pattern
-last_updated: "2026-05-20T03:27:28.917Z"
+stopped_at: "86-06 Task 1 complete (UAT draft + pre-flight GREEN) — Task 2 awaiting operator UAT execution"
+last_updated: "2026-05-20T04:00:00.000Z"
 last_activity: 2026-05-20
 progress:
   total_phases: 101
