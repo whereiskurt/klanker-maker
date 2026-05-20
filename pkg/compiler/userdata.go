@@ -1905,8 +1905,8 @@ QUEUE_DIR="${QUEUE_DIR:-/workspace/.km-agent/queue}"
 RUNS_DIR="${RUNS_DIR:-/workspace/.km-agent/runs}"
 LOG_FILE="${LOG_FILE:-/workspace/.km-agent/km-queue.log}"
 SANDBOX_HOME="${SANDBOX_HOME:-/home/sandbox}"
-PROBE_INTERVAL=5
-PROBE_LOG_INTERVAL=300  # 5 minutes
+PROBE_INTERVAL="${PROBE_INTERVAL:-5}"
+PROBE_LOG_INTERVAL="${PROBE_LOG_INTERVAL:-300}"  # 5 minutes
 
 log() {
     local ts

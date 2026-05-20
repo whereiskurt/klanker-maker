@@ -2,6 +2,11 @@ package cmd
 
 // create_prompt.go — Phase 86 operator-side prompt-queue helpers.
 //
+// ReconcileMetaStatus mirrors the bash runner's startup reconcile step in Go.
+// It returns the post-reconcile status for a meta.json status field:
+//   - "running" → "pending"  (runner crashed/paused mid-execution; restart it)
+//   - all others → unchanged (done/failed/skipped/pending are idempotent)
+//
 // These helpers are intentionally kept in a separate file so unit tests can
 // exercise them without spinning up the full NewCreateCmd Cobra tree.
 //
@@ -121,6 +126,18 @@ func kickQueueRunner(ctx context.Context, ssmClient SSMSendAPI, instanceID strin
 	kickCmd := "systemctl start km-queue 2>&1 || true"
 	_, err := sendSSMAndWait(ctx, ssmClient, instanceID, kickCmd)
 	return err
+}
+
+// ReconcileMetaStatus is a pure Go mirror of the bash runner's startup reconcile step.
+// On every start the bash runner resets "running" entries back to "pending"
+// so that a reboot/pause-resume cycle does not permanently strand queue entries.
+//
+// Exported for unit testing from cmd_test (PQ-08).
+func ReconcileMetaStatus(status string) string {
+	if status == "running" {
+		return "pending"
+	}
+	return status
 }
 
 // doStep16PromptPush is the operator-side Step 16 hook: resolve the EC2

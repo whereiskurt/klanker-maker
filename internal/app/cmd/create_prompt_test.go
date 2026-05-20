@@ -347,11 +347,9 @@ func TestCreatePromptWaitFail(t *testing.T) {
 // (Plan 86-03 / Wave 2 territory — runner state machine)
 
 func TestQueueRunnerStateMachine(t *testing.T) {
-	t.Skip("Wave 2 (Plan 86-03): reconcileEntry not yet implemented — runner state machine is Wave 2 territory")
-	// When Wave 2 lands, remove the t.Skip and implement reconcileEntry.
-	// Expected signature (unexported or test-accessible):
-	//   func reconcileEntry(status string) string
-
+	// Wave 2 (86-03): ReconcileMetaStatus implemented in create_prompt.go.
+	// This is the Go-side mirror of the bash runner's startup reconcile step:
+	// "running" → "pending" on every start; all other statuses are idempotent.
 	cases := []struct {
 		input string
 		want  string
@@ -366,11 +364,10 @@ func TestQueueRunnerStateMachine(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.input+"->"+tc.want, func(t *testing.T) {
-			t.Skip("Wave 2: reconcileEntry — " + tc.desc)
-			// got := reconcileEntry(tc.input)
-			// if got != tc.want {
-			//     t.Errorf("reconcileEntry(%q) = %q, want %q (%s)", tc.input, got, tc.want, tc.desc)
-			// }
+			got := cmd.ReconcileMetaStatus(tc.input)
+			if got != tc.want {
+				t.Errorf("ReconcileMetaStatus(%q) = %q, want %q (%s)", tc.input, got, tc.want, tc.desc)
+			}
 		})
 	}
 }
