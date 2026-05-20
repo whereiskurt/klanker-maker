@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 86-03-PLAN.md — on-box runner + systemd unit seeded, 7 bash tests + 1 Go test GREEN
-last_updated: "2026-05-20T03:06:29.171Z"
+stopped_at: Completed 86-02-PLAN.md — Wave 1 --prompt flag + SSM batch push
+last_updated: "2026-05-20T03:07:18.515Z"
 last_activity: 2026-05-20
 progress:
   total_phases: 101
   completed_phases: 89
   total_plans: 420
-  completed_plans: 371
+  completed_plans: 372
   percent: 88
 ---
 
@@ -405,6 +405,7 @@ Progress: [█████████░] 88%
 | Phase 85 P04 | UAT | 3 tasks | 2 files |
 | Phase 86-km-create-prompt-queue P01 | 633s | 3 tasks | 4 files |
 | Phase 86-km-create-prompt-queue P03 | 724 | 2 tasks | 4 files |
+| Phase 86-km-create-prompt-queue P02 | 815 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1171,6 +1172,8 @@ Recent decisions affecting current work:
 - [Phase 86-km-create-prompt-queue]: Used t.Skip with Wave-N markers over compile-guard stubs — cleaner and matches go test SKIP semantics
 - [Phase 86-km-create-prompt-queue]: Restart=on-failure for km-queue.service: runner exits 0 on empty queue; Restart=always would busy-loop
 - [Phase 86-km-create-prompt-queue]: Unconditional seeding: every EC2 sandbox gets runner+unit via userdata.go (no profile flag); R1 regression is unit-installed-but-idle
+- [Phase 86-km-create-prompt-queue]: Step 16 runs operator-side post runCreateRemote; Lambda untouched (RESEARCH.md Pitfall #1)
+- [Phase 86-km-create-prompt-queue]: ReconcileMetaStatus exported; PQ-08 TestQueueRunnerStateMachine GREEN ahead of Wave 2 schedule
 
 ### Roadmap Evolution
 
@@ -1282,6 +1285,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-20T03:06:29.163Z
-Stopped at: Completed 86-03-PLAN.md — on-box runner + systemd unit seeded, 7 bash tests + 1 Go test GREEN
+Last session: 2026-05-20T03:07:18.507Z
+Stopped at: Completed 86-02-PLAN.md — Wave 1 --prompt flag + SSM batch push
 Resume file: None
