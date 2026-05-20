@@ -127,6 +127,12 @@ func PushQueueFiles(ctx context.Context, ssmClient SSMSendAPI, instanceID string
 func pushQueueFiles(ctx context.Context, ssmClient SSMSendAPI, instanceID string, prompts []string, noBedrock bool) error {
 	var sb strings.Builder
 	sb.WriteString("set -eu\n")
+	// Wait up to 60s for the `sandbox` user to exist — DynamoDB metadata flips to
+	// "running" when EC2 reaches running state, but userdata's user-creation step
+	// may still be in flight. Without this guard, chown -R sandbox:sandbox below
+	// fails with "invalid user" on a race.
+	sb.WriteString("for i in $(seq 1 30); do getent passwd sandbox >/dev/null && break; sleep 2; done\n")
+	sb.WriteString("getent passwd sandbox >/dev/null || { echo 'sandbox user never appeared after 60s'; exit 1; }\n")
 	sb.WriteString("mkdir -p /workspace/.km-agent/queue\n")
 	sb.WriteString("chmod 0700 /workspace/.km-agent/queue\n")
 
@@ -338,14 +344,34 @@ func doStep16PromptPush(ctx context.Context, cfg *config.Config, sandboxID strin
 	ssmClient := ssm.NewFromConfig(awsCfg)
 
 	// Resolve EC2 instance ID via the existing fetcher pattern (agent.go ~line 852).
+	// For --remote: runCreateRemote returns immediately after Lambda dispatch, so the
+	// instance won't exist yet. Poll up to 8 min for the sandbox to reach "running"
+	// status and expose its EC2 instance in metadata (Lambda provisioning is typically
+	// 3-5 min for EC2 + SSM-agent-ready).
 	fetcher := newRealFetcher(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())
-	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
-	if err != nil {
-		return fmt.Errorf("fetch sandbox: %w", err)
-	}
-	instanceID, err := extractResourceID(rec.Resources, ":instance/")
-	if err != nil {
-		return fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
+	const provisionTimeout = 8 * time.Minute
+	const pollInterval = 10 * time.Second
+	deadline := time.Now().Add(provisionTimeout)
+	var rec *kmaws.SandboxRecord
+	var instanceID string
+	for {
+		var fetchErr error
+		rec, fetchErr = fetcher.FetchSandbox(ctx, sandboxID)
+		if fetchErr == nil {
+			if id, idErr := extractResourceID(rec.Resources, ":instance/"); idErr == nil && rec.Status == "running" {
+				instanceID = id
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting %v for sandbox %s to reach running with EC2 instance (last status: %q)", provisionTimeout, sandboxID, rec.Status)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(pollInterval):
+		}
+		fmt.Printf("Step 16: waiting for sandbox %s to reach running (status=%q)...\n", sandboxID, rec.Status)
 	}
 
 	fmt.Printf("Step 16: pushing %d queued prompt(s) to sandbox %s...\n", len(prompts), sandboxID)

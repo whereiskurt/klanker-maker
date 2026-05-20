@@ -1934,11 +1934,14 @@ done
 
 # ---- Auth probes ----
 probe_bedrock() {
-    aws bedrock-runtime invoke-model \
-        --model-id anthropic.claude-haiku-4-5-20251001-v1:0 \
-        --body '{"messages":[{"role":"user","content":"hi"}],"max_tokens":1,"anthropic_version":"bedrock-2023-05-31"}' \
-        --cli-binary-format raw-in-base64-out \
-        /tmp/km-queue-probe.out >/dev/null 2>&1
+    # Verify the instance IAM role is callable (i.e., AWS credentials flow from IMDS).
+    # Originally this issued bedrock-runtime:InvokeModel against haiku-4-5, but that
+    # specific model ID requires an inference profile in many regions (not on-demand
+    # throughput-eligible) and the probe error was opaque to operators. STS
+    # GetCallerIdentity is universally allowed, never throttled, and proves the
+    # instance can reach AWS APIs. The actual claude invocation later surfaces any
+    # Bedrock-specific permission/model issue with a clear per-run error.
+    aws sts get-caller-identity >/dev/null 2>&1
 }
 
 probe_direct_api() {
