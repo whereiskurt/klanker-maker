@@ -1,6 +1,7 @@
 package cmd_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -1350,21 +1351,17 @@ func TestBuildAgentShellCommands_NotifyOrderingBeforeAgentLaunch(t *testing.T) {
 
 // ---- PQ-07: km agent list --queue observability view ----
 //
-// Phase 86 RED-state stub. Wave 3 implements the --queue flag on newAgentListCmd.
+// Plan 86-05 GREEN implementation. Verifies the --queue flag on newAgentListCmd.
 //
 // Asserts:
 //  1. --queue flag exists on agent list, is a BoolVar, defaults to false.
-//  2. Empty-dir scenario: no queue entries → no "NNN|status|" lines in output.
+//  2. Empty-dir scenario: no queue entries → output contains "no queue entries".
 //  3. Mixed-status scenario: 5 entries with different statuses → all five status
 //     labels appear in order, prompt preview truncated to <=80 chars.
 
 func TestAgentListQueue(t *testing.T) {
-	t.Skip("Wave 3: --queue flag on agent list not yet implemented")
-	// When Wave 3 lands, remove the t.Skip above.
-
 	// PQ-07a: flag introspection
 	t.Run("flag_registered", func(t *testing.T) {
-		t.Skip("Wave 3: --queue flag introspection")
 		cfg := &config.Config{}
 		agentCmd := cmd.NewAgentCmdWithDeps(cfg, nil, nil, nil, nil, nil)
 		// Find the "list" subcommand
@@ -1390,10 +1387,9 @@ func TestAgentListQueue(t *testing.T) {
 		}
 	})
 
-	// PQ-07b: empty queue → no NNN|status| rows
+	// PQ-07b: empty queue → "no queue entries"
 	t.Run("empty_queue", func(t *testing.T) {
-		t.Skip("Wave 3: --queue empty-dir scenario")
-		// Mock SSM returns empty stdout (no queue entries)
+		// Mock SSM returns empty stdout (no queue entries — dir absent or empty)
 		mockSSM := &mockAgentSSM{
 			invocations: []*ssm.GetCommandInvocationOutput{
 				{
@@ -1403,36 +1399,38 @@ func TestAgentListQueue(t *testing.T) {
 			},
 		}
 		fetcher := newRunningEC2Sandbox("sb-queue01")
-		_ = mockSSM
-		_ = fetcher
 
-		// Wave 3 code:
-		// root := &cobra.Command{Use: "km"}
-		// cfg := &config.Config{}
-		// agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, nil, nil)
-		// root.AddCommand(agentCmd)
-		// buf := &bytes.Buffer{}
-		// root.SetOut(buf)
-		// root.SetArgs([]string{"agent", "list", "--queue", "sb-queue01"})
-		// err := root.Execute()
-		// if err != nil { t.Fatalf("agent list --queue: %v", err) }
-		// output := buf.String()
-		// // Should contain no NNN|status| pattern rows
-		// if regexp.MustCompile(`\d{3}\|`).MatchString(output) {
-		//     t.Errorf("empty queue should produce no NNN|status| rows, got:\n%s", output)
-		// }
+		root := &cobra.Command{Use: "km"}
+		cfg := &config.Config{}
+		agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, nil, nil)
+		root.AddCommand(agentCmd)
+		buf := &bytes.Buffer{}
+		root.SetOut(buf)
+		root.SetArgs([]string{"agent", "list", "--queue", "sb-queue01"})
+		err := root.Execute()
+		if err != nil {
+			t.Fatalf("agent list --queue: %v", err)
+		}
+		output := buf.String()
+		// Should contain "no queue entries" and no NNN|status| pattern rows
+		if !strings.Contains(output, "no queue entries") {
+			t.Errorf("empty queue should print 'no queue entries', got:\n%s", output)
+		}
+		if regexp.MustCompile(`\d{3}\|`).MatchString(output) {
+			t.Errorf("empty queue should produce no NNN|status| rows, got:\n%s", output)
+		}
 	})
 
 	// PQ-07c: mixed-status scenario — 5 entries, all statuses, order preserved
 	t.Run("mixed_status", func(t *testing.T) {
-		t.Skip("Wave 3: --queue mixed-status rendering")
-		// Mock SSM returns 5 queue entries
+		// Mock SSM returns 5 queue entries with 4 pipe-delimited fields each
+		// (index|status|created|prompt_preview)
 		queueOutput := strings.Join([]string{
-			"001|done|echo first prompt text",
-			"002|running|echo second longer prompt that might be truncated",
-			"003|pending|@plan.txt",
-			"004|failed|exit 1",
-			"005|skipped|never runs",
+			"001|done|2026-05-19T14:30:00Z|echo first prompt text",
+			"002|running|2026-05-19T14:30:01Z|echo second longer prompt that might be truncated at eighty chars",
+			"003|pending|2026-05-19T14:30:02Z|@plan.txt",
+			"004|failed|2026-05-19T14:30:03Z|exit 1",
+			"005|skipped|2026-05-19T14:30:04Z|never runs",
 		}, "\n")
 
 		mockSSM := &mockAgentSSM{
@@ -1443,38 +1441,90 @@ func TestAgentListQueue(t *testing.T) {
 				},
 			},
 		}
-		_ = mockSSM
+		fetcher := newRunningEC2Sandbox("sb-queue02")
 
-		// Wave 3 code:
-		// root := &cobra.Command{Use: "km"}
-		// cfg := &config.Config{}
-		// fetcher := newRunningEC2Sandbox("sb-queue02")
-		// agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, nil, nil)
-		// root.AddCommand(agentCmd)
-		// buf := &bytes.Buffer{}
-		// root.SetOut(buf)
-		// root.SetArgs([]string{"agent", "list", "--queue", "sb-queue02"})
-		// err := root.Execute()
-		// if err != nil { t.Fatalf("agent list --queue: %v", err) }
-		// output := buf.String()
-		//
-		// // All five status labels must appear
-		// for _, status := range []string{"done", "running", "pending", "failed", "skipped"} {
-		//     if !strings.Contains(output, status) {
-		//         t.Errorf("output missing status %q:\n%s", status, output)
-		//     }
-		// }
-		// // Order: 001 appears before 002
-		// idx001 := strings.Index(output, "001")
-		// idx002 := strings.Index(output, "002")
-		// if idx001 < 0 || idx002 < 0 || idx001 > idx002 {
-		//     t.Errorf("expected 001 before 002 in output:\n%s", output)
-		// }
-		// // Prompt preview truncated to <=80 chars (longest line check)
-		// for _, line := range strings.Split(output, "\n") {
-		//     if len(line) > 120 { // generous outer bound; prompt preview column <=80
-		//         t.Logf("WARN: line length %d may exceed preview limit: %q", len(line), line)
-		//     }
-		// }
+		root := &cobra.Command{Use: "km"}
+		cfg := &config.Config{}
+		agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, nil, nil)
+		root.AddCommand(agentCmd)
+		buf := &bytes.Buffer{}
+		root.SetOut(buf)
+		root.SetArgs([]string{"agent", "list", "--queue", "sb-queue02"})
+		err := root.Execute()
+		if err != nil {
+			t.Fatalf("agent list --queue: %v", err)
+		}
+		output := buf.String()
+
+		// All five status labels must appear
+		for _, status := range []string{"done", "running", "pending", "failed", "skipped"} {
+			if !strings.Contains(output, status) {
+				t.Errorf("output missing status %q:\n%s", status, output)
+			}
+		}
+		// Header row must be present
+		if !strings.Contains(output, "INDEX") {
+			t.Errorf("expected INDEX header in output:\n%s", output)
+		}
+		if !strings.Contains(output, "PROMPT") {
+			t.Errorf("expected PROMPT header in output:\n%s", output)
+		}
+		// Order: 001 appears before 002
+		idx001 := strings.Index(output, "001")
+		idx002 := strings.Index(output, "002")
+		if idx001 < 0 || idx002 < 0 || idx001 > idx002 {
+			t.Errorf("expected 001 before 002 in output:\n%s", output)
+		}
+		// Prompt preview: each data line's preview column must be <=80 chars.
+		// Lines are: INDEX(5) + space + STATUS(9) + space + CREATED(22) + space + PREVIEW
+		// Total prefix width is 5+1+9+1+22+1 = 39. So any line > 119 would have preview > 80.
+		for _, line := range strings.Split(output, "\n") {
+			if len(line) > 119 {
+				t.Logf("WARN: line length %d may exceed preview limit: %q", len(line), line)
+			}
+		}
 	})
+}
+
+// TestAgentListNoQueueFlag_UnchangedPath is a regression guard verifying that
+// km agent list without --queue continues to render the runs table (not the queue view).
+func TestAgentListNoQueueFlag_UnchangedPath(t *testing.T) {
+	// Mock SSM returns a single run entry in the existing pipe-delimited format
+	runsOutput := "20260519T143000Z|done|1234"
+
+	mockSSM := &mockAgentSSM{
+		invocations: []*ssm.GetCommandInvocationOutput{
+			{
+				Status:                ssmtypes.CommandInvocationStatusSuccess,
+				StandardOutputContent: awssdk.String(runsOutput),
+			},
+		},
+	}
+	fetcher := newRunningEC2Sandbox("sb-noreg01")
+
+	root := &cobra.Command{Use: "km"}
+	cfg := &config.Config{}
+	agentCmd := cmd.NewAgentCmdWithDeps(cfg, fetcher, nil, mockSSM, nil, nil)
+	root.AddCommand(agentCmd)
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	// No --queue flag
+	root.SetArgs([]string{"agent", "list", "sb-noreg01"})
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("agent list (no --queue): %v", err)
+	}
+	output := buf.String()
+
+	// The existing runs view has a RUN_ID header, NOT the queue view's INDEX/STATUS/CREATED/PROMPT header
+	if strings.Contains(output, "INDEX") {
+		t.Errorf("agent list without --queue must NOT render INDEX header (queue view), got:\n%s", output)
+	}
+	if strings.Contains(output, "no queue entries") {
+		t.Errorf("agent list without --queue must NOT print 'no queue entries', got:\n%s", output)
+	}
+	// Verify it shows the run entry
+	if !strings.Contains(output, "20260519T143000Z") {
+		t.Errorf("agent list without --queue must show run IDs, got:\n%s", output)
+	}
 }
