@@ -1921,6 +1921,28 @@ chown sandbox:sandbox "$LOG_FILE"
 
 log "km-queue-runner starting (sandbox=${SANDBOX_ID:-unknown})"
 
+# ---- Wait for required runtime tools (tmux, claude, jq) before any work ----
+# The systemd unit's After=km-bootstrap.service only governs auto-start ordering,
+# NOT manual systemctl start. When operator-side km create kicks the unit early
+# (after queue files land), initCommands may still be installing tmux + claude.
+# Block here until all required tools are on PATH; gives clear log diagnosis
+# rather than entry-001-fails-127 mystery exits.
+for tool in tmux claude jq sudo base64; do
+    waited=0
+    while ! command -v "$tool" >/dev/null 2>&1; do
+        if [ "$waited" -ge 600 ]; then
+            log "runtime: $tool still missing after 600s — aborting"
+            exit 1
+        fi
+        if [ $((waited % 60)) -eq 0 ]; then
+            log "runtime: waiting for $tool to land on PATH (waited=${waited}s)"
+        fi
+        sleep 5
+        waited=$((waited + 5))
+    done
+done
+log "runtime: all required tools present (tmux=$(command -v tmux), claude=$(command -v claude), jq=$(command -v jq))"
+
 # ---- Reconcile: any running -> pending (pause/resume/reboot recovery) ----
 for meta in "$QUEUE_DIR"/*.meta.json; do
     [ -f "$meta" ] || continue
