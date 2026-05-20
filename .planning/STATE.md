@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 86-01-PLAN.md — Phase 86 Wave 0 Nyquist stubs ready
-last_updated: "2026-05-20T02:50:41.342Z"
+stopped_at: Completed 86-03-PLAN.md — on-box runner + systemd unit seeded, 7 bash tests + 1 Go test GREEN
+last_updated: "2026-05-20T03:06:29.171Z"
 last_activity: 2026-05-20
 progress:
   total_phases: 101
   completed_phases: 89
   total_plans: 420
-  completed_plans: 370
+  completed_plans: 371
   percent: 88
 ---
 
@@ -404,6 +404,7 @@ Progress: [█████████░] 88%
 | Phase 85 P03 | 13 min | 3 tasks | 3 files |
 | Phase 85 P04 | UAT | 3 tasks | 2 files |
 | Phase 86-km-create-prompt-queue P01 | 633s | 3 tasks | 4 files |
+| Phase 86-km-create-prompt-queue P03 | 724 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1168,6 +1169,8 @@ Recent decisions affecting current work:
 - [Phase 85 P04]: Live UAT PASS on klankermaker.ai — 278 orphan rows cleaned in 10.232s, read-only run 9.496s (~10.6× speedup vs ~1:41 baseline), post-cleanup ✓ state digest consistent (913 items checked); live state-locks + running sandbox lock preserved
 - [Phase 86-km-create-prompt-queue]: Used package cmd_test (not cmd) for Phase 86 stubs to match all other test files in the directory
 - [Phase 86-km-create-prompt-queue]: Used t.Skip with Wave-N markers over compile-guard stubs — cleaner and matches go test SKIP semantics
+- [Phase 86-km-create-prompt-queue]: Restart=on-failure for km-queue.service: runner exits 0 on empty queue; Restart=always would busy-loop
+- [Phase 86-km-create-prompt-queue]: Unconditional seeding: every EC2 sandbox gets runner+unit via userdata.go (no profile flag); R1 regression is unit-installed-but-idle
 
 ### Roadmap Evolution
 
@@ -1279,6 +1282,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-20T02:50:41.332Z
-Stopped at: Completed 86-01-PLAN.md — Phase 86 Wave 0 Nyquist stubs ready
+Last session: 2026-05-20T03:06:29.163Z
+Stopped at: Completed 86-03-PLAN.md — on-box runner + systemd unit seeded, 7 bash tests + 1 Go test GREEN
 Resume file: None
