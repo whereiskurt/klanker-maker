@@ -2089,6 +2089,15 @@ chmod +x /opt/km/bin/km-queue-runner
 chown root:root /opt/km/bin/km-queue-runner
 echo "[km-bootstrap] km-queue-runner installed at /opt/km/bin/km-queue-runner"
 
+# Phase 86: ensure tmux is available BEFORE the queue runner unit can start.
+# Profile-level initCommands install tmux later, but the queue runner unit may be
+# kicked operator-side (via SSM systemctl start) before initCommands have finished.
+# Without tmux, the runner can't spawn per-entry sessions and entry 001 fails 127.
+if ! command -v tmux >/dev/null 2>&1; then
+  (dnf install -y tmux 2>&1 || yum install -y tmux 2>&1) | tail -3
+fi
+echo "[km-bootstrap] tmux present: $(command -v tmux || echo MISSING)"
+
 # Phase 86: km-queue.service — systemd unit wrapping the queue runner.
 # Restart=on-failure: runner exits 0 on empty queue (no restart); only restarts on crash.
 # On reboot/resume systemd starts fresh because unit is enabled (WantedBy=multi-user.target).
