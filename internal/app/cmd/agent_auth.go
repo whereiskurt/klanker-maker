@@ -164,14 +164,18 @@ func runAgentAuthClaude(ctx context.Context, cfg *config.Config, fetcher Sandbox
 	sessionErr := runSSMInteractiveSubprocess(execFn, c)
 	cancelDetect()
 
+	// Post-exit: verify auth via `claude auth status` (BEFORE cleanup so the
+	// verifier can peek at the tee file for a precise diagnostic when status
+	// reports loggedIn=false despite OAuth succeeding — see verifyClaudeAuthStatus).
+	verifyErr := verifyCredentialsWritten(ctx, ssmClient, instanceID, "claude", sandboxID, sessionErr)
+
 	// Best-effort cleanup of the tee file (silent failure is fine — /tmp on the sandbox).
 	cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	_, _ = sendSSMAndWait(cleanCtx, ssmClient, instanceID, fmt.Sprintf("rm -f %s", teePath))
 	cleanCancel()
 
-	// Post-exit: verify credentials file was written on the sandbox
-	if err := verifyCredentialsWritten(ctx, ssmClient, instanceID, "claude", sandboxID, sessionErr); err != nil {
-		return err
+	if verifyErr != nil {
+		return verifyErr
 	}
 
 	// `claude auth login --claudeai` writes ~/.claude/.credentials.json but does
@@ -473,25 +477,37 @@ func buildClaudeAuthArgs(console, sso, claudeai bool, email string) (string, err
 	return "claude auth login --claudeai", nil
 }
 
-// verifyCredentialsWritten checks whether the CLI's credentials file exists on
-// the sandbox after the login session exits. cliType must be "claude" or "codex".
-// On success, prints a confirmation line to stdout. On failure, wraps sessionErr
-// if provided so the operator sees both the session failure and the missing-file fact.
+// verifyCredentialsWritten checks whether the CLI is authenticated after the
+// login session exits. cliType must be "claude" or "codex".
+//
+// For claude: runs `claude auth status` and parses the loggedIn JSON field.
+// This is more robust than a file-existence check because v2.1.x claude on
+// Linux uses libsecret/keyring for credential storage when available and
+// silently leaves credentials only in-memory when neither libsecret nor
+// gnome-keyring is installed (common on minimal headless AMIs). The
+// authoritative source of truth is `claude auth status`, not a file path
+// that may or may not exist depending on the storage backend.
+//
+// For codex: file-based check at /home/sandbox/.codex/auth.json (unchanged
+// — codex writes there by design).
+//
+// On success, prints a confirmation line. On failure, distinguishes between:
+//   - OAuth-succeeded-but-not-persisted (claude printed "Login successful"
+//     but `auth status` says loggedIn=false → libsecret missing diagnostic)
+//   - Login-actually-incomplete (no Login successful, just bailed out)
 func verifyCredentialsWritten(ctx context.Context, ssmClient SSMSendAPI, instanceID, cliType, sandboxID string, sessionErr error) error {
-	var credPath, cliName string
-	switch cliType {
-	case "codex":
-		credPath = "/home/sandbox/.codex/auth.json"
-		cliName = "codex"
-	default:
-		credPath = "/home/sandbox/.claude/.credentials.json"
-		cliName = "claude"
+	if cliType == "claude" {
+		return verifyClaudeAuthStatus(ctx, ssmClient, instanceID, sandboxID, sessionErr)
 	}
+
+	// codex still uses file-based check (codex writes ~/.codex/auth.json
+	// directly with no keyring dependency).
+	const credPath = "/home/sandbox/.codex/auth.json"
+	const cliName = "codex"
 
 	checkCmd := fmt.Sprintf("test -f '%s' && echo ok || echo missing", credPath)
 	out, err := sendSSMAndWait(ctx, ssmClient, instanceID, checkCmd)
 	if err != nil {
-		// SSM check failed — report session error if any, else the SSM error
 		if sessionErr != nil {
 			return fmt.Errorf("auth session error: %w", sessionErr)
 		}
@@ -500,19 +516,82 @@ func verifyCredentialsWritten(ctx context.Context, ssmClient SSMSendAPI, instanc
 
 	if strings.TrimSpace(out) == "ok" {
 		fmt.Println()
-		if cliType == "claude" {
-			fmt.Println("✓ OAuth code accepted")
-		}
 		fmt.Printf("✓ %s credentials written to %s\n", cliName, credPath)
 		fmt.Printf("  Run 'km shell --no-bedrock %s' or 'km agent run --no-bedrock %s --prompt ...'\n", sandboxID, sandboxID)
 		return nil
 	}
 
-	// Credentials not written
 	if sessionErr != nil {
 		return fmt.Errorf("auth session failed and credentials not found at %s: %w", credPath, sessionErr)
 	}
 	return fmt.Errorf("session exited but %s credentials not found at %s — login may have been incomplete", cliName, credPath)
+}
+
+// verifyClaudeAuthStatus runs `claude auth status` on the sandbox and parses
+// the JSON output. loggedIn=true is the authoritative success signal,
+// regardless of where credentials actually live on disk.
+//
+// On loggedIn=false, also peeks at the tee file from the auth session to see
+// whether OAuth completed ("Login successful" appears in stdout) and emits a
+// targeted diagnostic about the libsecret-missing failure mode. The tee path
+// is the same one the caller wrote to, by convention.
+func verifyClaudeAuthStatus(ctx context.Context, ssmClient SSMSendAPI, instanceID, sandboxID string, sessionErr error) error {
+	const cliName = "claude"
+	statusCmd := "sudo -u sandbox bash -lc 'claude auth status 2>&1' 2>&1"
+	out, err := sendSSMAndWait(ctx, ssmClient, instanceID, statusCmd)
+	if err != nil {
+		if sessionErr != nil {
+			return fmt.Errorf("auth session error: %w", sessionErr)
+		}
+		return fmt.Errorf("could not verify claude auth status: %w", err)
+	}
+
+	// claude auth status emits a JSON object with a `loggedIn` boolean.
+	// We do a string-level check because (a) the surrounding lines may
+	// include other config (`apiProvider`, `authMethod`), (b) we don't want
+	// to fail noisily on minor format drift between claude versions.
+	statusOut := strings.TrimSpace(out)
+	if strings.Contains(statusOut, `"loggedIn": true`) || strings.Contains(statusOut, `"loggedIn":true`) {
+		fmt.Println()
+		fmt.Println("✓ OAuth complete; claude reports authenticated")
+		fmt.Printf("  Verified via: claude auth status (loggedIn=true)\n")
+		fmt.Printf("  Run 'km shell --no-bedrock %s' or 'km agent run --no-bedrock %s --prompt ...'\n", sandboxID, sandboxID)
+		return nil
+	}
+
+	// Not logged in. Was OAuth at least started? Check the tee file (it may
+	// have been cleaned up by the caller — best-effort).
+	teePath := fmt.Sprintf("/tmp/km-claude-auth-%s.out", sandboxID)
+	teePeekCmd := fmt.Sprintf("cat '%s' 2>/dev/null | tail -20 || true", teePath)
+	teeOut, _ := sendSSMAndWait(ctx, ssmClient, instanceID, teePeekCmd)
+	oauthAppearedComplete := strings.Contains(teeOut, "Login successful")
+
+	if oauthAppearedComplete {
+		// This is the silent-persistence-failure case the operator just hit.
+		msg := strings.Builder{}
+		msg.WriteString("claude reported OAuth success but `claude auth status` says loggedIn=false.\n")
+		msg.WriteString("\n")
+		msg.WriteString("  Most likely cause: claude v2.1.x on Linux persists OAuth tokens via libsecret\n")
+		msg.WriteString("  (system keyring). When neither libsecret nor gnome-keyring is installed (common\n")
+		msg.WriteString("  on minimal headless AMIs), the token exchange succeeds but the token is held\n")
+		msg.WriteString("  in-memory only, then lost when the auth process exits.\n")
+		msg.WriteString("\n")
+		msg.WriteString("  Workarounds:\n")
+		msg.WriteString("    1. Use Bedrock-mode profiles (useBedrock: true) — IAM-based auth, no keyring needed.\n")
+		msg.WriteString("    2. Set CLAUDE_CODE_OAUTH_TOKEN env-var in spec.execution.env with a token from\n")
+		msg.WriteString("       a desktop machine where `claude auth login` works (see OPERATOR-GUIDE.md).\n")
+		msg.WriteString("    3. (Brittle) Install libsecret + gnome-keyring + dbus-launch session bus.\n")
+		if sessionErr != nil {
+			msg.WriteString(fmt.Sprintf("\n  (Session also reported: %v)\n", sessionErr))
+		}
+		return fmt.Errorf("%s OAuth succeeded but credentials were not persisted: %s", cliName, msg.String())
+	}
+
+	// OAuth did not complete (no "Login successful" in tee, or tee unavailable).
+	if sessionErr != nil {
+		return fmt.Errorf("auth session ended without completing OAuth: %w", sessionErr)
+	}
+	return fmt.Errorf("session exited but `claude auth status` reports loggedIn=false — OAuth flow may have been interrupted (browser tab closed without authorizing, or paste step skipped)")
 }
 
 // checkAgentSessionConflict checks whether a km-agent-* tmux session is active
