@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 86-02-PLAN.md — Wave 1 --prompt flag + SSM batch push
-last_updated: "2026-05-20T03:07:18.515Z"
+stopped_at: Completed 86-05-PLAN.md — Wave 2 km agent list --queue + docs
+last_updated: "2026-05-20T03:20:50.993Z"
 last_activity: 2026-05-20
 progress:
   total_phases: 101
   completed_phases: 89
   total_plans: 420
-  completed_plans: 372
+  completed_plans: 373
   percent: 88
 ---
 
@@ -406,6 +406,7 @@ Progress: [█████████░] 88%
 | Phase 86-km-create-prompt-queue P01 | 633s | 3 tasks | 4 files |
 | Phase 86-km-create-prompt-queue P03 | 724 | 2 tasks | 4 files |
 | Phase 86-km-create-prompt-queue P02 | 815 | 2 tasks | 3 files |
+| Phase 86-km-create-prompt-queue P05 | 495 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1174,6 +1175,7 @@ Recent decisions affecting current work:
 - [Phase 86-km-create-prompt-queue]: Unconditional seeding: every EC2 sandbox gets runner+unit via userdata.go (no profile flag); R1 regression is unit-installed-but-idle
 - [Phase 86-km-create-prompt-queue]: Step 16 runs operator-side post runCreateRemote; Lambda untouched (RESEARCH.md Pitfall #1)
 - [Phase 86-km-create-prompt-queue]: ReconcileMetaStatus exported; PQ-08 TestQueueRunnerStateMachine GREEN ahead of Wave 2 schedule
+- [Phase 86-km-create-prompt-queue]: --queue is a BoolVar on existing agent list Cobra command (not new subcommand); runAgentListQueue uses nil-guard pattern identical to runAgentList
 
 ### Roadmap Evolution
 
@@ -1285,6 +1287,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-20T03:07:18.507Z
-Stopped at: Completed 86-02-PLAN.md — Wave 1 --prompt flag + SSM batch push
+Last session: 2026-05-20T03:20:50.984Z
+Stopped at: Completed 86-05-PLAN.md — Wave 2 km agent list --queue + docs
 Resume file: None
