@@ -161,8 +161,7 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 				return resolveErr
 			}
 
-			// Suppress wait for now (Plan 86-04 adds full --wait polling).
-			_ = wait
+			// wait is passed through to doStep16PromptPush below (Plan 86-04).
 
 			// Auto-detect remote vs local based on substrate.
 			// EC2/ECS default to --remote (no local terraform needed).
@@ -201,9 +200,12 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 					return remoteErr
 				}
 				// Phase 86 Step 16: operator-side prompt queue push.
+				// *ExitCodeError from doStep16PromptPush flows up through RunE's
+				// error return; the outermost Execute() boundary detects it via
+				// errors.As and calls os.Exit(exitErr.Code) after all defers run.
 				if len(resolvedPrompts) > 0 {
-					if err := doStep16PromptPush(cmd.Context(), cfg, sandboxID, resolvedPrompts, noBedrock, awsProfile); err != nil {
-						return fmt.Errorf("prompt queue push failed: %w", err)
+					if err := doStep16PromptPush(cmd.Context(), cfg, sandboxID, resolvedPrompts, noBedrock, awsProfile, wait); err != nil {
+						return err // typed error flows up unchanged
 					}
 				}
 				return nil
@@ -221,8 +223,8 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 			// In the Lambda case, prompts are empty (prompts were pushed from operator-side).
 			// Via --local for testing, doStep16PromptPush is a no-op when prompts empty.
 			if len(resolvedPrompts) > 0 && sandboxIDOverride != "" {
-				if err := doStep16PromptPush(cmd.Context(), cfg, sandboxIDOverride, resolvedPrompts, noBedrock, awsProfile); err != nil {
-					return fmt.Errorf("prompt queue push failed: %w", err)
+				if err := doStep16PromptPush(cmd.Context(), cfg, sandboxIDOverride, resolvedPrompts, noBedrock, awsProfile, wait); err != nil {
+					return err // typed error flows up unchanged
 				}
 			}
 			return nil

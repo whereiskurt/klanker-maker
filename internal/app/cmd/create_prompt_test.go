@@ -8,16 +8,23 @@ package cmd_test
 //   - PQ-03: --prompt + --docker hard-fail before provisioning
 //   - PQ-04: pushQueueFiles SSM batch push structure
 //
-// Wave 1 (Plan 86-04) will implement PQ-05, PQ-06 (--wait polling).
-// Wave 2 (Plan 86-03) will implement PQ-08 (runner state machine).
+// Wave 2 (Plan 86-04) implements:
+//   - PQ-05: waitForQueueDrain all-done exits 0
+//   - PQ-06: waitForQueueDrain failure exits with first-failed entry's exit code
+//   - ExitCodeError type interface methods + errors.As round-trip
+//
+// Wave 1 (Plan 86-03) implements PQ-08 (runner state machine).
 // Wave 3 (Plan 86-05) will implement PQ-07 (agent list --queue) via agent_test.go.
 
 import (
 	"context"
 	"encoding/base64"
+	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -292,54 +299,163 @@ func TestPushQueueFiles(t *testing.T) {
 
 // ---- PQ-05: waitForQueueDrain — all done exits 0 ----
 //
-// (Plan 86-04 territory — --wait polling)
+// Mock SSM returns three sequenced poll responses:
+//   poll 1: "001|pending\n002|pending"    (not terminal — loop again)
+//   poll 2: "001|running\n002|pending"    (not terminal — loop again)
+//   poll 3: "001|done\n002|done"          (all terminal; no failures → exit 0)
+//
+// QueuePollInterval is overridden to 10ms to avoid 15s of test latency.
 
 func TestCreatePromptWait(t *testing.T) {
-	t.Skip("Wave 1 (Plan 86-04): waitForQueueDrain not yet implemented")
-	// When Plan 86-04 lands, remove the t.Skip above.
-	// Expected signature:
-	//   func waitForQueueDrain(ctx context.Context, ssmClient SSMSendAPI, instanceID string, expectedCount int) (exitCode int, err error)
+	// Override poll interval so the test completes instantly.
+	old := cmd.QueuePollInterval
+	cmd.QueuePollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { cmd.QueuePollInterval = old })
 
-	// Sequence: pending|pending -> running|pending -> done|done
+	// Each sendSSMAndWait call issues one SendCommand + one GetCommandInvocation.
+	// Invocations are consumed in order by mockAgentSSM.invIdx.
 	mockSSM := &mockAgentSSM{
 		invocations: []*ssm.GetCommandInvocationOutput{
-			{Status: ssmtypes.CommandInvocationStatusSuccess, StandardOutputContent: awssdk.String("pending|pending")},
-			{Status: ssmtypes.CommandInvocationStatusSuccess, StandardOutputContent: awssdk.String("running|pending")},
-			{Status: ssmtypes.CommandInvocationStatusSuccess, StandardOutputContent: awssdk.String("done|done")},
+			{Status: ssmtypes.CommandInvocationStatusSuccess, StandardOutputContent: awssdk.String("001|pending\n002|pending")},
+			{Status: ssmtypes.CommandInvocationStatusSuccess, StandardOutputContent: awssdk.String("001|running\n002|pending")},
+			{Status: ssmtypes.CommandInvocationStatusSuccess, StandardOutputContent: awssdk.String("001|done\n002|done")},
 		},
 	}
 
 	ctx := context.Background()
-	_ = ctx
-	_ = mockSSM
-
-	// exitCode, err := waitForQueueDrain(ctx, mockSSM, "i-abc", 2)
-	// if err != nil { t.Fatalf("waitForQueueDrain: %v", err) }
-	// if exitCode != 0 { t.Errorf("exitCode = %d, want 0", exitCode) }
+	exitCode, err := cmd.WaitForQueueDrain(ctx, mockSSM, "i-abc", 2)
+	if err != nil {
+		t.Fatalf("waitForQueueDrain: %v", err)
+	}
+	if exitCode != 0 {
+		t.Errorf("exitCode = %d, want 0 (all done)", exitCode)
+	}
 }
 
 // ---- PQ-06: waitForQueueDrain — first failed exits non-zero ----
 //
-// (Plan 86-04 territory — --wait polling)
+// Mock SSM returns a terminal failed|skipped state immediately on the first poll,
+// then returns "42" for the fetchFailedExitCode probe. The helper must return (42, nil).
 
 func TestCreatePromptWaitFail(t *testing.T) {
-	t.Skip("Wave 1 (Plan 86-04): waitForQueueDrain failure path not yet implemented")
-	// When Plan 86-04 lands, remove the t.Skip above.
+	// Override poll interval so the test completes instantly.
+	old := cmd.QueuePollInterval
+	cmd.QueuePollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { cmd.QueuePollInterval = old })
 
-	// Sequence: first poll returns failed|skipped
+	// Two SSM calls are made by waitForQueueDrain when a failed entry is detected:
+	//   call 1 (statusCmd poll): returns "001|failed\n002|skipped" → terminal with failure
+	//   call 2 (fetchFailedExitCode): returns "42" → exit code for the process
 	mockSSM := &mockAgentSSM{
 		invocations: []*ssm.GetCommandInvocationOutput{
-			{Status: ssmtypes.CommandInvocationStatusSuccess, StandardOutputContent: awssdk.String("failed|skipped")},
+			{Status: ssmtypes.CommandInvocationStatusSuccess, StandardOutputContent: awssdk.String("001|failed\n002|skipped")},
+			{Status: ssmtypes.CommandInvocationStatusSuccess, StandardOutputContent: awssdk.String("42")},
 		},
 	}
 
 	ctx := context.Background()
-	_ = ctx
-	_ = mockSSM
+	exitCode, err := cmd.WaitForQueueDrain(ctx, mockSSM, "i-abc", 2)
+	if err != nil {
+		t.Fatalf("waitForQueueDrain returned unexpected error: %v", err)
+	}
+	if exitCode == 0 {
+		t.Error("expected non-zero exit code on first-prompt failure, got 0")
+	}
+	if exitCode != 42 {
+		t.Errorf("exitCode = %d, want 42 (from mock fetchFailedExitCode)", exitCode)
+	}
+}
 
-	// exitCode, err := waitForQueueDrain(ctx, mockSSM, "i-abc", 2)
-	// if exitCode == 0 { t.Error("expected non-zero exit code on first-prompt failure") }
-	// if err == nil { t.Error("expected non-nil error describing the failure") }
+// ---- ExitCodeError type interface tests ----
+//
+// Verifies Error() message contains both code and inner error text, and that
+// errors.Is unwraps Inner correctly via Unwrap().
+
+func TestExitCodeError_ErrorAndUnwrap(t *testing.T) {
+	inner := io.EOF
+	e := &cmd.ExitCodeError{Code: 42, Inner: inner}
+
+	msg := e.Error()
+	if !strings.Contains(msg, "42") {
+		t.Errorf("Error() = %q, want to contain \"42\"", msg)
+	}
+	if !strings.Contains(msg, "EOF") {
+		t.Errorf("Error() = %q, want to contain \"EOF\"", msg)
+	}
+
+	// errors.Is should find io.EOF via Unwrap chain.
+	if !errors.Is(e, io.EOF) {
+		t.Error("errors.Is(e, io.EOF) = false, want true (Unwrap must expose Inner)")
+	}
+
+	// errors.As should extract the ExitCodeError itself.
+	var extracted *cmd.ExitCodeError
+	if !errors.As(e, &extracted) {
+		t.Fatal("errors.As(e, &extracted) = false, want true")
+	}
+	if extracted.Code != 42 {
+		t.Errorf("extracted.Code = %d, want 42", extracted.Code)
+	}
+
+	// No inner error: Error() should not panic.
+	noInner := &cmd.ExitCodeError{Code: 7}
+	noInnerMsg := noInner.Error()
+	if !strings.Contains(noInnerMsg, "7") {
+		t.Errorf("Error() without Inner = %q, want to contain \"7\"", noInnerMsg)
+	}
+}
+
+// ---- ExitCodeError round-trip through errors.As ----
+//
+// WaitForQueueDrain (when non-zero) is the source of the exit code. This test
+// drives WaitForQueueDrain end-to-end with a mock that returns a failed entry
+// (exit code 99), then simulates doStep16PromptPush returning &ExitCodeError{Code: 99}.
+// It verifies that errors.As(&ExitCodeError{}) succeeds and the code is preserved.
+//
+// A non-ExitCodeError (plain errors.New) is also verified to NOT match, confirming
+// the typed-error detection won't false-positive on arbitrary errors.
+
+func TestDoStep16PromptPush_ExitCodeError_RoundTrips(t *testing.T) {
+	// Override poll interval for speed.
+	old := cmd.QueuePollInterval
+	cmd.QueuePollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { cmd.QueuePollInterval = old })
+
+	// Mock returns a single failed entry, then "99" for the exit code probe.
+	mockSSM := &mockAgentSSM{
+		invocations: []*ssm.GetCommandInvocationOutput{
+			{Status: ssmtypes.CommandInvocationStatusSuccess, StandardOutputContent: awssdk.String("001|failed")},
+			{Status: ssmtypes.CommandInvocationStatusSuccess, StandardOutputContent: awssdk.String("99")},
+		},
+	}
+
+	ctx := context.Background()
+	exitCode, err := cmd.WaitForQueueDrain(ctx, mockSSM, "i-roundtrip", 1)
+	if err != nil {
+		t.Fatalf("unexpected SSM error from WaitForQueueDrain: %v", err)
+	}
+	if exitCode != 99 {
+		t.Fatalf("exitCode = %d, want 99", exitCode)
+	}
+
+	// Simulate what doStep16PromptPush returns on non-zero drain.
+	returnedErr := &cmd.ExitCodeError{Code: exitCode}
+
+	// errors.As must extract the ExitCodeError from the typed error.
+	var exitErr *cmd.ExitCodeError
+	if !errors.As(returnedErr, &exitErr) {
+		t.Fatal("errors.As(returnedErr, &exitErr) = false, want true (typed error round-trip failed)")
+	}
+	if exitErr.Code != 99 {
+		t.Errorf("exitErr.Code = %d, want 99", exitErr.Code)
+	}
+
+	// A plain errors.New (non-ExitCodeError) must NOT match ExitCodeError.
+	plainErr := errors.New("queue chain failed (exit code 99)")
+	var shouldNotMatch *cmd.ExitCodeError
+	if errors.As(plainErr, &shouldNotMatch) {
+		t.Error("errors.As(plain errors.New, &exitErr) = true, want false (should not match plain error)")
+	}
 }
 
 // ---- PQ-08: Queue runner state machine (Go-side mirror) ----
