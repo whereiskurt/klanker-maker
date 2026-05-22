@@ -1460,6 +1460,385 @@ func TestVSCodeEnabled_False(t *testing.T) {
 	}
 }
 
+// ============================================================
+// Phase 87 Wave 0: AdditionalSnapshotSpec type tests (SNAP-01)
+// ============================================================
+
+// TestAdditionalSnapshotSpec_YAMLParse verifies YAML round-trip for
+// AdditionalSnapshotSpec including *bool nil/true/false semantics.
+func TestAdditionalSnapshotSpec_YAMLParse(t *testing.T) {
+	// Helper to build a minimal profile YAML with the given runtime section
+	buildYAML := func(runtimeExtra string) []byte {
+		return []byte(`apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: snapshot-parse-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+` + runtimeExtra + `
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+  identity:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: false
+      image: "km-otel:latest"
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+  agent:
+    maxConcurrentTasks: 2
+    taskTimeout: 30m
+`)
+	}
+
+	t.Run("omitted additionalSnapshots is nil or empty", func(t *testing.T) {
+		p, err := profile.Parse(buildYAML(""))
+		if err != nil {
+			t.Fatalf("unexpected parse error: %v", err)
+		}
+		if len(p.Spec.Runtime.AdditionalSnapshots) != 0 {
+			t.Errorf("expected AdditionalSnapshots to be nil/empty, got %v", p.Spec.Runtime.AdditionalSnapshots)
+		}
+	})
+
+	t.Run("single entry with required fields", func(t *testing.T) {
+		yaml := buildYAML(`    additionalSnapshots:
+      - snapshotId: snap-0123456789abcdef0
+        mountPoint: /data
+`)
+		p, err := profile.Parse(yaml)
+		if err != nil {
+			t.Fatalf("unexpected parse error: %v", err)
+		}
+		if len(p.Spec.Runtime.AdditionalSnapshots) != 1 {
+			t.Fatalf("expected 1 entry, got %d", len(p.Spec.Runtime.AdditionalSnapshots))
+		}
+		s := p.Spec.Runtime.AdditionalSnapshots[0]
+		if s.SnapshotID != "snap-0123456789abcdef0" {
+			t.Errorf("expected SnapshotID=snap-0123456789abcdef0, got %q", s.SnapshotID)
+		}
+		if s.MountPoint != "/data" {
+			t.Errorf("expected MountPoint=/data, got %q", s.MountPoint)
+		}
+	})
+
+	t.Run("three entries preserve order", func(t *testing.T) {
+		yaml := buildYAML(`    additionalSnapshots:
+      - snapshotId: snap-aaaaaaaaaaaaaaaa1
+        mountPoint: /data1
+      - snapshotId: snap-bbbbbbbbbbbbbbb2
+        mountPoint: /data2
+      - snapshotId: snap-ccccccccccccccc3
+        mountPoint: /data3
+`)
+		p, err := profile.Parse(yaml)
+		if err != nil {
+			t.Fatalf("unexpected parse error: %v", err)
+		}
+		snaps := p.Spec.Runtime.AdditionalSnapshots
+		if len(snaps) != 3 {
+			t.Fatalf("expected 3 entries, got %d", len(snaps))
+		}
+		if snaps[0].SnapshotID != "snap-aaaaaaaaaaaaaaaa1" {
+			t.Errorf("snaps[0] order wrong: %q", snaps[0].SnapshotID)
+		}
+		if snaps[1].SnapshotID != "snap-bbbbbbbbbbbbbbb2" {
+			t.Errorf("snaps[1] order wrong: %q", snaps[1].SnapshotID)
+		}
+		if snaps[2].SnapshotID != "snap-ccccccccccccccc3" {
+			t.Errorf("snaps[2] order wrong: %q", snaps[2].SnapshotID)
+		}
+	})
+
+	t.Run("encrypted: true sets *bool non-nil true", func(t *testing.T) {
+		yaml := buildYAML(`    additionalSnapshots:
+      - snapshotId: snap-0123456789abcdef0
+        mountPoint: /data
+        encrypted: true
+`)
+		p, err := profile.Parse(yaml)
+		if err != nil {
+			t.Fatalf("unexpected parse error: %v", err)
+		}
+		s := p.Spec.Runtime.AdditionalSnapshots[0]
+		if s.Encrypted == nil {
+			t.Fatal("expected Encrypted to be non-nil for explicit true, got nil")
+		}
+		if !*s.Encrypted {
+			t.Errorf("expected *Encrypted=true, got false")
+		}
+	})
+
+	t.Run("encrypted: false sets *bool non-nil false", func(t *testing.T) {
+		yaml := buildYAML(`    additionalSnapshots:
+      - snapshotId: snap-0123456789abcdef0
+        mountPoint: /data
+        encrypted: false
+`)
+		p, err := profile.Parse(yaml)
+		if err != nil {
+			t.Fatalf("unexpected parse error: %v", err)
+		}
+		s := p.Spec.Runtime.AdditionalSnapshots[0]
+		if s.Encrypted == nil {
+			t.Fatal("expected Encrypted to be non-nil for explicit false, got nil")
+		}
+		if *s.Encrypted {
+			t.Errorf("expected *Encrypted=false, got true")
+		}
+	})
+
+	t.Run("encrypted omitted sets *bool nil (proves pointer semantics)", func(t *testing.T) {
+		yaml := buildYAML(`    additionalSnapshots:
+      - snapshotId: snap-0123456789abcdef0
+        mountPoint: /data
+`)
+		p, err := profile.Parse(yaml)
+		if err != nil {
+			t.Fatalf("unexpected parse error: %v", err)
+		}
+		s := p.Spec.Runtime.AdditionalSnapshots[0]
+		if s.Encrypted != nil {
+			t.Errorf("expected Encrypted=nil when omitted (pointer semantics), got %v", *s.Encrypted)
+		}
+	})
+
+	t.Run("explicit size parses into Size field", func(t *testing.T) {
+		yaml := buildYAML(`    additionalSnapshots:
+      - snapshotId: snap-0123456789abcdef0
+        mountPoint: /data
+        size: 50
+`)
+		p, err := profile.Parse(yaml)
+		if err != nil {
+			t.Fatalf("unexpected parse error: %v", err)
+		}
+		s := p.Spec.Runtime.AdditionalSnapshots[0]
+		if s.Size != 50 {
+			t.Errorf("expected Size=50, got %d", s.Size)
+		}
+	})
+
+	t.Run("omitted size yields 0", func(t *testing.T) {
+		yaml := buildYAML(`    additionalSnapshots:
+      - snapshotId: snap-0123456789abcdef0
+        mountPoint: /data
+`)
+		p, err := profile.Parse(yaml)
+		if err != nil {
+			t.Fatalf("unexpected parse error: %v", err)
+		}
+		s := p.Spec.Runtime.AdditionalSnapshots[0]
+		if s.Size != 0 {
+			t.Errorf("expected Size=0 when omitted, got %d", s.Size)
+		}
+	})
+
+	t.Run("device parses when provided", func(t *testing.T) {
+		yaml := buildYAML(`    additionalSnapshots:
+      - snapshotId: snap-0123456789abcdef0
+        mountPoint: /data
+        device: /dev/sdg
+`)
+		p, err := profile.Parse(yaml)
+		if err != nil {
+			t.Fatalf("unexpected parse error: %v", err)
+		}
+		s := p.Spec.Runtime.AdditionalSnapshots[0]
+		if s.Device != "/dev/sdg" {
+			t.Errorf("expected Device=/dev/sdg, got %q", s.Device)
+		}
+	})
+}
+
+// TestAdditionalSnapshotSpec_JSONSchemaValidation verifies JSON schema enforcement
+// for the additionalSnapshots array: bad snapshotId patterns, bad device, size 0,
+// and additional properties.
+func TestAdditionalSnapshotSpec_JSONSchemaValidation(t *testing.T) {
+	// buildSnapshotProfileRaw produces a profile YAML for schema validation.
+	buildSnapshotProfileRaw := func(snapshotEntry string) []byte {
+		return []byte(`apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: snapshot-schema-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+    additionalSnapshots:
+` + snapshotEntry + `
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+  identity:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+    sessionPolicy: minimal
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: false
+      image: "km-otel:latest"
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+  agent:
+    maxConcurrentTasks: 2
+    taskTimeout: 30m
+`)
+	}
+
+	t.Run("accepts snap-01234567 (8-char hex)", func(t *testing.T) {
+		raw := buildSnapshotProfileRaw(`      - snapshotId: snap-01234567
+        mountPoint: /data
+`)
+		errs := profile.Validate(raw)
+		if len(errs) != 0 {
+			t.Errorf("expected no errors for valid 8-char snapshotId, got: %v", errs)
+		}
+	})
+
+	t.Run("accepts snap-0123456789abcdef0 (17-char hex)", func(t *testing.T) {
+		raw := buildSnapshotProfileRaw(`      - snapshotId: snap-0123456789abcdef0
+        mountPoint: /data
+`)
+		errs := profile.Validate(raw)
+		if len(errs) != 0 {
+			t.Errorf("expected no errors for valid 17-char snapshotId, got: %v", errs)
+		}
+	})
+
+	t.Run("rejects snap-XYZ (non-hex chars)", func(t *testing.T) {
+		raw := buildSnapshotProfileRaw(`      - snapshotId: snap-XYZ
+        mountPoint: /data
+`)
+		errs := profile.Validate(raw)
+		if len(errs) == 0 {
+			t.Error("expected schema error for non-hex snapshotId, got none")
+		}
+	})
+
+	t.Run("rejects snap-0123abc (7 hex chars, too short)", func(t *testing.T) {
+		raw := buildSnapshotProfileRaw(`      - snapshotId: snap-0123abc
+        mountPoint: /data
+`)
+		errs := profile.Validate(raw)
+		if len(errs) == 0 {
+			t.Error("expected schema error for 7-char snapshotId (too short), got none")
+		}
+	})
+
+	t.Run("rejects device /dev/sda (root range, not in [f-p])", func(t *testing.T) {
+		raw := buildSnapshotProfileRaw(`      - snapshotId: snap-01234567
+        mountPoint: /data
+        device: /dev/sda
+`)
+		errs := profile.Validate(raw)
+		if len(errs) == 0 {
+			t.Error("expected schema error for device /dev/sda, got none")
+		}
+	})
+
+	t.Run("rejects device /dev/sdq (out of [f-p])", func(t *testing.T) {
+		raw := buildSnapshotProfileRaw(`      - snapshotId: snap-01234567
+        mountPoint: /data
+        device: /dev/sdq
+`)
+		errs := profile.Validate(raw)
+		if len(errs) == 0 {
+			t.Error("expected schema error for device /dev/sdq, got none")
+		}
+	})
+
+	t.Run("accepts device /dev/sdf through /dev/sdp", func(t *testing.T) {
+		for _, dev := range []string{"/dev/sdf", "/dev/sdg", "/dev/sdh", "/dev/sdi", "/dev/sdp"} {
+			dev := dev
+			t.Run(dev, func(t *testing.T) {
+				raw := buildSnapshotProfileRaw(`      - snapshotId: snap-01234567
+        mountPoint: /data
+        device: ` + dev + `
+`)
+				errs := profile.Validate(raw)
+				if len(errs) != 0 {
+					t.Errorf("expected no errors for device %q, got: %v", dev, errs)
+				}
+			})
+		}
+	})
+
+	t.Run("rejects size: 0 (must be >= 1)", func(t *testing.T) {
+		raw := buildSnapshotProfileRaw(`      - snapshotId: snap-01234567
+        mountPoint: /data
+        size: 0
+`)
+		errs := profile.Validate(raw)
+		if len(errs) == 0 {
+			t.Error("expected schema error for size: 0, got none")
+		}
+	})
+
+	t.Run("rejects unknown additional property kmsKeyId", func(t *testing.T) {
+		raw := buildSnapshotProfileRaw(`      - snapshotId: snap-01234567
+        mountPoint: /data
+        kmsKeyId: key-12345
+`)
+		errs := profile.Validate(raw)
+		if len(errs) == 0 {
+			t.Error("expected schema error for unknown property kmsKeyId, got none")
+		}
+	})
+}
+
 // TestParse_CLISpec_SlackFields_ExplicitFalse verifies that explicit false for
 // *bool Slack fields round-trips as non-nil pointer to false (not nil).
 // This is the key bool-vs-*bool discrimination test.

@@ -217,6 +217,39 @@
                 }
               }
             },
+            "additionalSnapshots": {
+              "type": "array",
+              "description": "Snapshot-backed EBS volumes (Phase 87). Each entry materialises a fresh aws_ebs_volume from an existing EBS snapshot. EC2-only.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["snapshotId", "mountPoint"],
+                "properties": {
+                  "snapshotId": {
+                    "type": "string",
+                    "pattern": "^snap-[0-9a-f]{8,17}$",
+                    "description": "AWS EBS snapshot ID (8- or 17-char hex)"
+                  },
+                  "mountPoint": {
+                    "type": "string",
+                    "pattern": "^/",
+                    "minLength": 1
+                  },
+                  "device": {
+                    "type": "string",
+                    "pattern": "^/dev/sd[f-p]$",
+                    "description": "Optional pin to device in /dev/sd[f-p] pool"
+                  },
+                  "encrypted": {
+                    "type": "boolean"
+                  },
+                  "size": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            },
             "hibernation": {
               "type": "boolean",
               "description": "Enable EC2 hibernation (on-demand only; incompatible with spot=true)"

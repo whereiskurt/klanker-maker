@@ -137,6 +137,25 @@ type AdditionalVolumeSpec struct {
 	Encrypted bool `yaml:"encrypted,omitempty" json:"encrypted,omitempty"`
 }
 
+// AdditionalSnapshotSpec describes one snapshot-backed EBS volume entry (Phase 87).
+// Multiple entries can coexist with the singular AdditionalVolume field.
+type AdditionalSnapshotSpec struct {
+	// SnapshotID is the AWS EBS snapshot ID to restore (e.g. snap-0123abcdef01234567).
+	SnapshotID string `yaml:"snapshotId" json:"snapshotId"`
+	// MountPoint is the filesystem path to mount the restored volume at (e.g. /data).
+	MountPoint string `yaml:"mountPoint" json:"mountPoint"`
+	// Device optionally pins the volume to a specific device in /dev/sd[f-p].
+	// When omitted, the compiler auto-selects the next available device.
+	Device string `yaml:"device,omitempty" json:"device,omitempty"`
+	// Encrypted is a pointer so omitted (nil) marshals to terraform null,
+	// allowing AWS to inherit the snapshot's encryption state.
+	// Plain bool would conflate "omitted" with "false" — wrong semantics.
+	Encrypted *bool `yaml:"encrypted,omitempty" json:"encrypted,omitempty"`
+	// Size optionally overrides the volume size in GB. Must be >= snapshot's VolumeSize.
+	// When 0/omitted, the snapshot's native size is used.
+	Size int `yaml:"size,omitempty" json:"size,omitempty"`
+}
+
 // RuntimeSpec controls the compute substrate and instance configuration.
 type RuntimeSpec struct {
 	// Substrate is the compute backend: ec2 or ecs.
@@ -151,6 +170,10 @@ type RuntimeSpec struct {
 	RootVolumeSize int `yaml:"rootVolumeSize,omitempty" json:"rootVolumeSize,omitempty"`
 	// AdditionalVolume defines an optional extra EBS volume to attach and auto-mount (EC2 only).
 	AdditionalVolume *AdditionalVolumeSpec `yaml:"additionalVolume,omitempty" json:"additionalVolume,omitempty"`
+	// AdditionalSnapshots defines zero or more snapshot-backed EBS volumes to attach and auto-mount (EC2 only, Phase 87).
+	// Each entry materialises a fresh aws_ebs_volume from an existing EBS snapshot.
+	// Multiple entries are allowed and processed in declaration order.
+	AdditionalSnapshots []AdditionalSnapshotSpec `yaml:"additionalSnapshots,omitempty" json:"additionalSnapshots,omitempty"`
 	// Hibernation enables EC2 hibernation (on-demand instances only; incompatible with spot).
 	Hibernation bool `yaml:"hibernation,omitempty" json:"hibernation,omitempty"`
 	// AMI is an AMI slug to resolve per-region (e.g. "ubuntu-24.04"). Empty defaults to amazon-linux-2023.
