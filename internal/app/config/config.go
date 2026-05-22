@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -485,42 +484,23 @@ func isPlaceholderBucket(name string) bool {
 	return false
 }
 
-// canonicalBucketRE enforces the Phase 84.3 artifacts_bucket naming convention:
-// ${prefix}-artifacts-${12-digit-account-id}
-// e.g. km-artifacts-052251888500, tg-artifacts-123456789012
-// Rejects: km-artifacts-12345 (short), tg-km-artifacts-use1-abcd0123 (non-canonical),
+// ValidateArtifactsBucket validates the artifacts_bucket value loaded from
+// km-config.yaml. Operators may use any S3 bucket name they choose; this
+// function only catches obviously-unconfigured values:
+//   - empty string returns nil (unconfigured is allowed at Load() time;
+//     km configure / km init enforce non-empty separately).
+//   - angle-bracket placeholders (any "<…>" token, e.g. the example.yaml
+//     "<prefix>-artifacts-<account-id>") return an error.
 //
-//	my-bucket (no -artifacts- segment).
-//
-// Populated in Wave 1 Plan 03; this line panics at startup if the constant is wrong.
-var canonicalBucketRE = regexp.MustCompile(`^[a-z][a-z0-9-]*-artifacts-[0-9]{12}$`)
-
-// ValidateArtifactsBucket validates the artifacts_bucket name against the
-// canonical Phase 84.3 shape: ${prefix}-artifacts-${12-digit-account-id}.
-// Returns nil for empty string (unconfigured is allowed; km configure derives the value).
-// Returns a descriptive error for:
-//   - angle-bracket placeholders (any "<…>" token)
-//   - the literal example sentinel "km-artifacts-12345" (5-digit account ID)
-//   - any non-matching string (wrong shape, non-canonical hand-edits)
-//
-// Lives in the config package to avoid import cycles from config.Load() calling cmd.validateArtifactsBucket.
-// Matches GetSandboxSessionDocumentName / GetResourcePrefix placement pattern.
-//
-// Wave 1 Plan 03 wires this into config.Load() and extends the table-driven tests.
+// Lives in the config package to avoid import cycles from config.Load().
 func ValidateArtifactsBucket(name string) error {
 	if name == "" {
-		return nil // unconfigured — km configure will derive the value
+		return nil
 	}
 	if lt := strings.Index(name, "<"); lt >= 0 {
 		if strings.Index(name[lt:], ">") >= 0 {
-			return fmt.Errorf("artifacts_bucket=%q is a placeholder; re-run `km configure` to derive ${prefix}-artifacts-${account_id} automatically", name)
+			return fmt.Errorf("artifacts_bucket=%q is a placeholder; set a real bucket name in km-config.yaml or re-run `km configure`", name)
 		}
-	}
-	if !canonicalBucketRE.MatchString(name) {
-		return fmt.Errorf(
-			"artifacts_bucket=%q does not match canonical shape ${prefix}-artifacts-${12-digit-account-id} (e.g. km-artifacts-052251888500); re-run `km configure` to derive the correct value automatically",
-			name,
-		)
 	}
 	return nil
 }

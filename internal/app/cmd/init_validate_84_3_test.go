@@ -74,7 +74,7 @@ func TestInitPlan_HardFailsOnPlaceholderBucket(t *testing.T) {
 
 	cfg := &config.Config{
 		PrimaryRegion:   "us-east-1",
-		ArtifactsBucket: "km-artifacts-12345", // the exact placeholder sentinel
+		ArtifactsBucket: "<prefix>-artifacts-<account-id>", // unreplaced km-config.example.yaml placeholder
 		ResourcePrefix:  "km",
 		AWSProfile:      "klanker-terraform",
 	}
@@ -82,12 +82,11 @@ func TestInitPlan_HardFailsOnPlaceholderBucket(t *testing.T) {
 
 	err := runInitPlanWithWriter(cfg, "klanker-terraform", "us-east-1", &buf, false, false)
 	if err == nil {
-		t.Errorf("runInitPlanWithWriter returned nil error for placeholder bucket km-artifacts-12345; want non-nil error (RED: Plan 09 will fix by adding validateArtifactsBucket call)")
+		t.Errorf("runInitPlanWithWriter returned nil error for angle-bracket placeholder bucket; want non-nil error")
 	} else {
-		// Already GREEN (only after Plan 09): verify error message quality.
 		msg := err.Error()
-		if !strings.Contains(msg, "placeholder") && !strings.Contains(msg, "km-artifacts-12345") {
-			t.Errorf("error %q should mention 'placeholder' or 'km-artifacts-12345'", msg)
+		if !strings.Contains(msg, "placeholder") {
+			t.Errorf("error %q should mention 'placeholder'", msg)
 		}
 	}
 }
@@ -133,8 +132,8 @@ func TestValidateArtifactsBucket_RejectsPlaceholder(t *testing.T) {
 		name   string
 		bucket string
 	}{
-		{"sentinel", "km-artifacts-12345"},
-		{"angle-bracket", "<prefix>-artifacts-12345678"},
+		{"angle-bracket prefix", "<prefix>-artifacts-12345678"},
+		{"angle-bracket full", "<my-bucket>"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

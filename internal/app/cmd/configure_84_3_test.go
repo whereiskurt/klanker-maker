@@ -254,7 +254,8 @@ func TestConfigure_DerivesArtifactsBucket(t *testing.T) {
 }
 
 // TestConfigure_RejectsPlaceholder verifies validateArtifactsBucket rejects
-// angle-bracket placeholders and the literal km-config.example.yaml sentinel value.
+// only empty strings and angle-bracket placeholders. Any other name —
+// canonical-shaped or not — is accepted (operators may bring their own bucket).
 func TestConfigure_RejectsPlaceholder(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -275,10 +276,9 @@ func TestConfigure_RejectsPlaceholder(t *testing.T) {
 			wantMsg: "placeholder",
 		},
 		{
-			name:    "literal example sentinel",
+			name:    "legacy short literal accepted",
 			input:   "km-artifacts-12345",
-			wantErr: true,
-			wantMsg: "placeholder",
+			wantErr: false,
 		},
 		{
 			name:    "valid real value km prefix",
@@ -288,6 +288,11 @@ func TestConfigure_RejectsPlaceholder(t *testing.T) {
 		{
 			name:    "valid real value custom prefix",
 			input:   "whereiskurt-artifacts-987654321098",
+			wantErr: false,
+		},
+		{
+			name:    "arbitrary operator-chosen name accepted",
+			input:   "my-team-bucket",
 			wantErr: false,
 		},
 		{
@@ -686,10 +691,11 @@ func TestConfigure_ArtifactsBucketDerivedDefault(t *testing.T) {
 	})
 }
 
-// TestValidateArtifactsBucket_CanonicalShape verifies Gap #4 (Phase 84.4.1.1 Plan 03):
-// validateArtifactsBucket in configure.go enforces the canonical regex
-// ^[a-z][a-z0-9-]*-artifacts-[0-9]{12}$ so non-canonical names are rejected.
-func TestValidateArtifactsBucket_CanonicalShape(t *testing.T) {
+// TestValidateArtifactsBucket_AcceptsAnyShape documents the relaxed policy:
+// validateArtifactsBucket accepts any non-placeholder string. Operators are
+// free to pick whatever S3 bucket name they own; the prior Phase 84.3
+// ${prefix}-artifacts-${12-digit-account-id} regex no longer applies.
+func TestValidateArtifactsBucket_AcceptsAnyShape(t *testing.T) {
 	cases := []struct {
 		name    string
 		input   string
@@ -699,11 +705,11 @@ func TestValidateArtifactsBucket_CanonicalShape(t *testing.T) {
 		{name: "canonical km prefix", input: "km-artifacts-052251888500", wantErr: false},
 		{name: "canonical tg prefix", input: "tg-artifacts-052251888500", wantErr: false},
 		{name: "canonical whereiskurt prefix", input: "whereiskurt-artifacts-987654321098", wantErr: false},
-		{name: "sentinel literal km-artifacts-12345", input: "km-artifacts-12345", wantErr: true, wantMsg: "placeholder"},
-		{name: "UAT-2 non-canonical tg-km-artifacts-use1-abcd0123", input: "tg-km-artifacts-use1-abcd0123", wantErr: true, wantMsg: "canonical shape"},
-		{name: "angle-bracket placeholder", input: "<prefix>-artifacts-<account-id>", wantErr: true, wantMsg: "placeholder"},
-		{name: "empty string", input: "", wantErr: true, wantMsg: "empty"},
-		{name: "no artifacts segment", input: "my-bucket", wantErr: true, wantMsg: "canonical shape"},
+		{name: "legacy short literal accepted", input: "km-artifacts-12345", wantErr: false},
+		{name: "non-canonical multi-segment accepted", input: "tg-km-artifacts-use1-abcd0123", wantErr: false},
+		{name: "operator-chosen plain name accepted", input: "my-bucket", wantErr: false},
+		{name: "angle-bracket placeholder still rejected", input: "<prefix>-artifacts-<account-id>", wantErr: true, wantMsg: "placeholder"},
+		{name: "empty string still rejected", input: "", wantErr: true, wantMsg: "empty"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
