@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: 87-03 complete — ValidateSnapshotsAWS pre-flight + boolPtrHCL + BDM gate fix
-last_updated: "2026-05-22T21:43:26.269Z"
+stopped_at: "Completed 87-04-PLAN.md — Wave 2 compiler: device allocation loop + additional_snapshots HCL render"
+last_updated: "2026-05-22T21:50:43.411Z"
 last_activity: 2026-05-22
 progress:
   total_phases: 102
   completed_phases: 89
   total_plans: 427
-  completed_plans: 377
+  completed_plans: 378
   percent: 88
 ---
 
@@ -411,6 +411,7 @@ Progress: [█████████░] 88%
 | Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile P01 | 307 | 2 tasks | 7 files |
 | Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile P02 | 165s | 2 tasks | 3 files |
 | Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile P03 | 342s | 2 tasks | 4 files |
+| Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile P04 | 242s | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1190,6 +1191,8 @@ Recent decisions affecting current work:
 - [Phase 87]: Reserved mountpoint list uses exact-match (size==0 valid=inherit; size<0 rejected at Layer 1)
 - [Phase 87-03]: UnauthorizedOperation (EC2-specific) → graceful WARN+nil; AccessDenied surfaces as error (different code path) per SNAP-03 aliasing risk
 - [Phase 87-03]: BDM gate broadened: triggers when AdditionalVolume != nil OR len(AdditionalSnapshots) > 0 (Risk #4 fix for UAT-4 snapshots-only profiles)
+- [Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile]: Pool exhaustion: string-return + caller-checks (minimal-diff vs returning (string, error) from pickAdditionalVolumeDevice)
+- [Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile]: additional_snapshots empty list renders as compact form [] (diff-stable; Wave 4 module default = [] accepts both)
 
 ### Roadmap Evolution
 
@@ -1302,6 +1305,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-22T21:43:26.261Z
-Stopped at: 87-03 complete — ValidateSnapshotsAWS pre-flight + boolPtrHCL + BDM gate fix
+Last session: 2026-05-22T21:50:43.403Z
+Stopped at: Completed 87-04-PLAN.md — Wave 2 compiler: device allocation loop + additional_snapshots HCL render
 Resume file: None
