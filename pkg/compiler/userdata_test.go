@@ -1965,3 +1965,20 @@ func TestUserDataVSCodeMissingKeyErrors(t *testing.T) {
 		t.Fatalf("error message missing remediation hint: %v", err)
 	}
 }
+
+// ============================================================
+// Phase 87 Wave 0: RED-state stubs for userdata generation (SNAP-06, SNAP-07)
+// Wave 3 plan-05 will implement these.
+// ============================================================
+
+func TestUserdataAdditionalVolumeOnly_GoldenByteIdentical(t *testing.T) {
+	t.Skip("RED — Wave 3 plan-05 golden file: legacy additionalVolume-only output byte-identical modulo ext4 → ${FSTYPE}")
+}
+
+func TestUserdataAdditionalSnapshots_LoopOrder(t *testing.T) {
+	t.Skip("RED — Wave 3 plan-05: one mount block per entry, declaration order, ${FSTYPE} substitution")
+}
+
+func TestUserdataBackwardCompat_ZeroDiffNoSnapshots(t *testing.T) {
+	t.Skip("RED — Wave 3 plan-05 + plan-04: SNAP-07 zero-HCL-diff cross-check for profiles without additionalSnapshots")
+}

@@ -530,3 +530,16 @@ func extractECSLines(s, substr string) string {
 	}
 	return strings.Join(matched, "\n")
 }
+
+// ============================================================
+// Phase 87 Wave 0: RED-state stubs for HCL rendering (SNAP-04, SNAP-05)
+// Wave 2 plan-04 will implement these.
+// ============================================================
+
+func TestAdditionalSnapshotsHCLRender(t *testing.T) {
+	t.Skip("RED — Wave 2 plan-04 will render additional_snapshots = [...] HCL block")
+}
+
+func TestBoolPtrHCLTemplateFunc(t *testing.T) {
+	t.Skip("RED — Wave 2 plan-04 will add boolPtrHCL to templateFuncs (nil→null, true→true, false→false)")
+}

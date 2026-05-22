@@ -415,6 +415,21 @@ func TestAdditionalVolumeDeviceNameInHCL(t *testing.T) {
 	})
 }
 
+// ============================================================
+// Phase 87 Wave 0: RED-state stub for extended device-picker (SNAP-04)
+// Wave 2 plan-04 will implement this.
+// ============================================================
+
+// TestPickAdditionalVolumeDevice_WithClaimedMap verifies the extended signature
+// pickAdditionalVolumeDevice(amiDevices []string, claimed map[string]bool) string
+// that accounts for explicit device pins across multiple snapshot entries.
+func TestPickAdditionalVolumeDevice_WithClaimedMap(t *testing.T) {
+	t.Skip("RED — Wave 2 plan-04 extends signature: pickAdditionalVolumeDevice(amiDevices []string, claimed map[string]bool) string")
+	// Add table case per 87-VALIDATION.md aliasing risk SNAP-04:
+	//   amiDevices=[/dev/sdf], explicit /dev/sdh on entry 0, auto on entry 1 → entry 1 lands on /dev/sdi
+	//   (NOT /dev/sdh which is claimed, NOT /dev/sdg which is additionalVolume's slot)
+}
+
 // TestHibernationRawAMIWarning verifies that hibernation=true + raw AMI ID emits a log warning
 // (not an error) and the HCL still contains the raw ami_id passthrough.
 func TestHibernationRawAMIWarning(t *testing.T) {

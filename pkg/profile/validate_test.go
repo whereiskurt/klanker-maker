@@ -969,3 +969,17 @@ func TestValidateSemantic_Slack_BackwardCompat_Phase62Profile(t *testing.T) {
 		t.Errorf("expected zero errors for Phase 62 backward-compat profile, got: %v", errs)
 	}
 }
+
+// ============================================================
+// Phase 87 Wave 0: RED-state stubs for Layer 1 validation (SNAP-02)
+// Wave 1 plan-02 will implement these.
+// ============================================================
+
+func TestValidateAdditionalSnapshots_Layer1(t *testing.T) {
+	t.Skip("RED — implemented in 87-02 (SNAP-02 Layer 1 validation)")
+	// Wave 1 plan-02 will fill in table-driven cases:
+	//   bad snapshotId regex / mountpoint blocklist / collision with additionalVolume.MountPoint
+	//   duplicate mountpoint across entries / explicit device duplicate
+	//   non-EC2 substrate rejection / size < 1
+	//   error path indices: spec.runtime.additionalSnapshots[N].field
+}
