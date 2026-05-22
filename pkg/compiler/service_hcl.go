@@ -144,6 +144,22 @@ const ec2ServiceHCLTemplate = `locals {
     additional_volume_encrypted  = {{ .AdditionalVolumeEncrypted }}
     additional_volume_device_name = "{{ .AdditionalVolumeDeviceName }}"
 
+    # Additional snapshot-backed EBS volumes (Phase 87)
+{{- if .AdditionalSnapshots }}
+    additional_snapshots = [
+{{- range .AdditionalSnapshots }}
+      {
+        snapshot_id = "{{ .SnapshotID }}"
+        device_name = "{{ .DeviceName }}"
+        encrypted   = {{ boolPtrHCL .Encrypted }}
+        size_gb     = {{ .SizeGB }}
+      },
+{{- end }}
+    ]
+{{- else }}
+    additional_snapshots = []
+{{- end }}
+
     # Phase 68 — Slack transcript streaming. Empty values cause the
     # ec2spot module to skip the corresponding IAM policies (PutObject on
     # transcripts/{sandbox_id}/* and PutItem on the stream-messages table).
@@ -443,6 +459,19 @@ const ecsServiceHCLTemplate = `locals {
 // EC2 template parameters
 // ============================================================
 
+// AdditionalSnapshotEntry is the per-entry render shape for spec.runtime.additionalSnapshots (Phase 87).
+// DeviceName is post-allocation: auto-picked or pinned from spec.runtime.additionalSnapshots[i].device.
+// Encrypted is *bool so the template emits terraform null for "inherit from snapshot" (nil).
+// SizeGB=0 means inherit snapshot size; the module conditionally skips resize when 0.
+// MountPoint is consumed by userdata (plan 05) via AdditionalVolumeMounts unified list, not the HCL block.
+type AdditionalSnapshotEntry struct {
+	SnapshotID string
+	DeviceName string // post-allocation: auto-picked or pinned
+	MountPoint string // used by userdata (plan 05), not the HCL block
+	Encrypted  *bool  // emitted via {{ boolPtrHCL .Encrypted }}: nil→null, *true→true, *false→false
+	SizeGB     int    // 0 = inherit (renders as 0; module conditionally skips resize)
+}
+
 // ec2HCLParams holds the data for the EC2 service.hcl template.
 type ec2HCLParams struct {
 	ProfileName       string
@@ -484,6 +513,9 @@ type ec2HCLParams struct {
 	AdditionalVolumeEncrypted  bool   // encrypt the additional EBS volume
 	AdditionalVolumeMountPoint string // mount point for the additional volume (e.g. "/data")
 	AdditionalVolumeDeviceName string // device name for the additional volume (e.g. "/dev/sdf" or "/dev/sdg")
+	// Phase 87 — additionalSnapshots render-ready entries (post device-allocation + cross-entry claimed dedup).
+	// Empty slice when profile has no additionalSnapshots (template renders additional_snapshots = []).
+	AdditionalSnapshots []AdditionalSnapshotEntry
 	// Phase 68 — Slack transcript streaming. Both fields default to empty,
 	// in which case the ec2spot module's transcript IAM policies are omitted.
 	// ArtifactsBucket = project-wide S3 bucket name (KM_ARTIFACTS_BUCKET).
@@ -800,6 +832,39 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		// pickAdditionalVolumeDevice returns "/dev/sdf" when amiBDMDeviceNames is nil/empty.
 		// nil claimed: additionalVolume is always a single entry, no cross-entry dedup needed.
 		AdditionalVolumeDeviceName: pickAdditionalVolumeDevice(amiBDMDeviceNames, nil),
+	}
+
+	// Phase 87 — allocate devices for additionalSnapshots entries.
+	// claimed tracks all devices assigned so far (additionalVolume + any explicitly-pinned
+	// snapshot entries) so auto-picks in later entries respect cross-entry dedup (SNAP-04).
+	if len(p.Spec.Runtime.AdditionalSnapshots) > 0 {
+		claimed := make(map[string]bool)
+		if params.AdditionalVolumeDeviceName != "" {
+			claimed[params.AdditionalVolumeDeviceName] = true
+		}
+		snapEntries := make([]AdditionalSnapshotEntry, 0, len(p.Spec.Runtime.AdditionalSnapshots))
+		for i, snap := range p.Spec.Runtime.AdditionalSnapshots {
+			device := snap.Device
+			if device == "" {
+				// Auto-pick respecting both AMI BDM and previously-claimed devices.
+				device = pickAdditionalVolumeDevice(amiBDMDeviceNames, claimed)
+				// Detect pool exhaustion: returned device is the fallback /dev/sdf which is
+				// already in occupied — this only happens when all 11 candidates are taken.
+				if claimed[device] {
+					return "", fmt.Errorf("spec.runtime.additionalSnapshots[%d]: device pool /dev/sd[f-p] exhausted (AMI BDM + %d previously-claimed devices)", i, len(claimed)+len(amiBDMDeviceNames))
+				}
+			}
+			// Add to claimed so the next entry's auto-pick skips it (cross-entry dedup).
+			claimed[device] = true
+			snapEntries = append(snapEntries, AdditionalSnapshotEntry{
+				SnapshotID: snap.SnapshotID,
+				DeviceName: device,
+				MountPoint: snap.MountPoint,
+				Encrypted:  snap.Encrypted,
+				SizeGB:     snap.Size,
+			})
+		}
+		params.AdditionalSnapshots = snapEntries
 	}
 
 	// Phase 68: wire transcript-streaming module inputs. ArtifactsBucket comes

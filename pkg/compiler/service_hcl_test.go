@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -536,8 +537,183 @@ func extractECSLines(s, substr string) string {
 // Wave 2 plan-04 will implement these.
 // ============================================================
 
+// TestAdditionalSnapshotsHCLRender verifies that generateEC2ServiceHCL renders the
+// additional_snapshots = [...] HCL block correctly for all Phase 87 cases.
+// Phase 87 Wave 2 plan-04 — flipped from RED to GREEN.
 func TestAdditionalSnapshotsHCLRender(t *testing.T) {
-	t.Skip("RED — Wave 2 plan-04 will render additional_snapshots = [...] HCL block")
+	boolTrue := true
+	boolFalse := false
+
+	// Case 1: zero_entries — profile without additionalSnapshots emits additional_snapshots = []
+	t.Run("zero_entries", func(t *testing.T) {
+		p := minimalEC2StorageProfile()
+		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(hcl, "additional_snapshots = []") {
+			t.Errorf("expected 'additional_snapshots = []' in HCL output\ngot:\n%s", hcl)
+		}
+	})
+
+	// Case 2: one_entry_minimal — auto device, encrypted omitted (nil→null), size 0 (inherit)
+	t.Run("one_entry_minimal", func(t *testing.T) {
+		p := minimalEC2StorageProfile()
+		p.Spec.Runtime.AdditionalSnapshots = []profile.AdditionalSnapshotSpec{
+			{SnapshotID: "snap-0123abcdef0123456", MountPoint: "/opt/models"},
+		}
+		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(hcl, `snapshot_id = "snap-0123abcdef0123456"`) {
+			t.Errorf("missing snapshot_id in HCL\ngot:\n%s", hcl)
+		}
+		if !strings.Contains(hcl, `device_name = "/dev/sdf"`) {
+			t.Errorf("expected auto-picked /dev/sdf\ngot:\n%s", hcl)
+		}
+		if !strings.Contains(hcl, "encrypted   = null") {
+			t.Errorf("expected encrypted = null (nil *bool)\ngot:\n%s", hcl)
+		}
+		if !strings.Contains(hcl, "size_gb     = 0") {
+			t.Errorf("expected size_gb = 0 (inherit)\ngot:\n%s", hcl)
+		}
+	})
+
+	// Case 3: one_entry_full — explicit device, encrypted:true, size:200
+	t.Run("one_entry_full", func(t *testing.T) {
+		p := minimalEC2StorageProfile()
+		p.Spec.Runtime.AdditionalSnapshots = []profile.AdditionalSnapshotSpec{
+			{SnapshotID: "snap-aabbccdd11223344", Device: "/dev/sdh", MountPoint: "/data", Encrypted: &boolTrue, Size: 200},
+		}
+		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(hcl, `device_name = "/dev/sdh"`) {
+			t.Errorf("expected explicit /dev/sdh\ngot:\n%s", hcl)
+		}
+		if !strings.Contains(hcl, "encrypted   = true") {
+			t.Errorf("expected encrypted = true\ngot:\n%s", hcl)
+		}
+		if !strings.Contains(hcl, "size_gb     = 200") {
+			t.Errorf("expected size_gb = 200\ngot:\n%s", hcl)
+		}
+	})
+
+	// Case 4: three_entries_order — mix of explicit/auto devices, declaration order preserved
+	t.Run("three_entries_order", func(t *testing.T) {
+		p := minimalEC2StorageProfile()
+		p.Spec.Runtime.AdditionalSnapshots = []profile.AdditionalSnapshotSpec{
+			{SnapshotID: "snap-00000000000000001", Device: "/dev/sdh", MountPoint: "/mnt1", Encrypted: &boolFalse, Size: 50},
+			{SnapshotID: "snap-00000000000000002", MountPoint: "/mnt2"}, // auto → /dev/sdf (no additionalVolume, sdf free)
+			{SnapshotID: "snap-00000000000000003", MountPoint: "/mnt3"}, // auto → /dev/sdg (sdf claimed by entry 1)
+		}
+		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// Verify all 3 snapshot IDs appear
+		for _, snapID := range []string{"snap-00000000000000001", "snap-00000000000000002", "snap-00000000000000003"} {
+			if !strings.Contains(hcl, snapID) {
+				t.Errorf("missing %s in HCL\ngot:\n%s", snapID, hcl)
+			}
+		}
+		// Entry 0 is pinned /dev/sdh
+		if !strings.Contains(hcl, `device_name = "/dev/sdh"`) {
+			t.Errorf("expected /dev/sdh for entry 0\ngot:\n%s", hcl)
+		}
+		// Entry 1 auto → /dev/sdf (first available, no additionalVolume)
+		if !strings.Contains(hcl, `device_name = "/dev/sdf"`) {
+			t.Errorf("expected /dev/sdf for entry 1\ngot:\n%s", hcl)
+		}
+		// Entry 2 auto → /dev/sdg (sdf claimed)
+		if !strings.Contains(hcl, `device_name = "/dev/sdg"`) {
+			t.Errorf("expected /dev/sdg for entry 2\ngot:\n%s", hcl)
+		}
+		// encrypted = false for entry 0
+		if !strings.Contains(hcl, "encrypted   = false") {
+			t.Errorf("expected encrypted = false\ngot:\n%s", hcl)
+		}
+	})
+
+	// Case 5: with_additional_volume_too — additionalVolume auto-picks /dev/sdf, 2 snaps land on /dev/sdg, /dev/sdh
+	t.Run("with_additional_volume_too", func(t *testing.T) {
+		p := minimalEC2StorageProfile()
+		p.Spec.Runtime.AdditionalVolume = &profile.AdditionalVolumeSpec{
+			Size:       100,
+			MountPoint: "/data",
+		}
+		p.Spec.Runtime.AdditionalSnapshots = []profile.AdditionalSnapshotSpec{
+			{SnapshotID: "snap-vol1vol1vol1vol10", MountPoint: "/mnt1"},
+			{SnapshotID: "snap-vol2vol2vol2vol20", MountPoint: "/mnt2"},
+		}
+		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// additionalVolume picks /dev/sdf (no AMI BDM)
+		if !strings.Contains(hcl, `additional_volume_device_name = "/dev/sdf"`) {
+			t.Errorf("expected additionalVolume on /dev/sdf\ngot:\n%s", hcl)
+		}
+		// snapshot 0 → /dev/sdg (/dev/sdf claimed by additionalVolume)
+		if !strings.Contains(hcl, `device_name = "/dev/sdg"`) {
+			t.Errorf("expected snapshot 0 on /dev/sdg\ngot:\n%s", hcl)
+		}
+		// snapshot 1 → /dev/sdh
+		if !strings.Contains(hcl, `device_name = "/dev/sdh"`) {
+			t.Errorf("expected snapshot 1 on /dev/sdh\ngot:\n%s", hcl)
+		}
+	})
+
+	// Case 6: with_ami_bdm — AMI BDM has /dev/sdf, additionalVolume → /dev/sdg, snap → /dev/sdh
+	t.Run("with_ami_bdm", func(t *testing.T) {
+		p := minimalEC2StorageProfile()
+		p.Spec.Runtime.AdditionalVolume = &profile.AdditionalVolumeSpec{
+			Size:       50,
+			MountPoint: "/data",
+		}
+		p.Spec.Runtime.AdditionalSnapshots = []profile.AdditionalSnapshotSpec{
+			{SnapshotID: "snap-bdmbdmbdmbdmbdm01", MountPoint: "/mnt1"},
+		}
+		amiBDM := []string{"/dev/sdf"}
+		hcl, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), amiBDM)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// AMI BDM blocks sdf; additionalVolume → /dev/sdg
+		if !strings.Contains(hcl, `additional_volume_device_name = "/dev/sdg"`) {
+			t.Errorf("expected additionalVolume on /dev/sdg (sdf blocked by AMI BDM)\ngot:\n%s", hcl)
+		}
+		// snapshot → /dev/sdh (/dev/sdg claimed)
+		if !strings.Contains(hcl, `device_name = "/dev/sdh"`) {
+			t.Errorf("expected snapshot on /dev/sdh\ngot:\n%s", hcl)
+		}
+	})
+
+	// Case 7: pool_exhaustion — 12 snapshots with no AMI BDM → error at index 11 (the 12th, 0-indexed)
+	t.Run("pool_exhaustion", func(t *testing.T) {
+		p := minimalEC2StorageProfile()
+		snaps := make([]profile.AdditionalSnapshotSpec, 12)
+		for i := range snaps {
+			snaps[i] = profile.AdditionalSnapshotSpec{
+				SnapshotID: fmt.Sprintf("snap-%017d", i),
+				MountPoint: fmt.Sprintf("/mnt/%d", i),
+			}
+		}
+		p.Spec.Runtime.AdditionalSnapshots = snaps
+		_, err := generateEC2ServiceHCL(p, "test-sb", false, nil, minimalIAMPolicy(), "", minimalEC2StorageNetwork(), nil)
+		if err == nil {
+			t.Fatal("expected pool exhaustion error for 12 snapshots, got nil")
+		}
+		// Error must name the offending entry index (11 = the 12th entry, 0-indexed)
+		if !strings.Contains(err.Error(), "11") {
+			t.Errorf("expected error to name offending entry index 11, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "additionalSnapshots") {
+			t.Errorf("expected error to mention additionalSnapshots, got: %v", err)
+		}
+	})
 }
 
 func TestBoolPtrHCLTemplateFunc(t *testing.T) {
