@@ -541,5 +541,19 @@ func TestAdditionalSnapshotsHCLRender(t *testing.T) {
 }
 
 func TestBoolPtrHCLTemplateFunc(t *testing.T) {
-	t.Skip("RED — Wave 2 plan-04 will add boolPtrHCL to templateFuncs (nil→null, true→true, false→false)")
+	fn, ok := templateFuncs["boolPtrHCL"].(func(*bool) string)
+	if !ok {
+		t.Fatal("boolPtrHCL not registered or wrong signature")
+	}
+	if got := fn(nil); got != "null" {
+		t.Errorf("nil case: got %q, want \"null\"", got)
+	}
+	tru := true
+	if got := fn(&tru); got != "true" {
+		t.Errorf("true case: got %q, want \"true\"", got)
+	}
+	fal := false
+	if got := fn(&fal); got != "false" {
+		t.Errorf("false case: got %q, want \"false\"", got)
+	}
 }

@@ -620,13 +620,27 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 	// Look up the AMI's block device mappings once (before the AZ retry loop) so the
 	// compiler can pick a non-colliding device name for the additional EBS volume.
 	var amiBDMDevices []string
-	if compiler.IsRawAMIID(resolvedProfile.Spec.Runtime.AMI) && resolvedProfile.Spec.Runtime.AdditionalVolume != nil {
+	if compiler.IsRawAMIID(resolvedProfile.Spec.Runtime.AMI) &&
+		(resolvedProfile.Spec.Runtime.AdditionalVolume != nil ||
+			len(resolvedProfile.Spec.Runtime.AdditionalSnapshots) > 0) {
 		ec2Client := ec2svc.NewFromConfig(awsCfg)
 		devices, lookupErr := awspkg.AMIBDMDeviceNames(ctx, ec2Client, resolvedProfile.Spec.Runtime.AMI)
 		if lookupErr != nil {
 			log.Warn().Err(lookupErr).Str("ami", resolvedProfile.Spec.Runtime.AMI).Msg("BDM lookup failed; defaulting to /dev/sdf")
 		} else {
 			amiBDMDevices = devices
+		}
+	}
+
+	// Phase 87 — Layer 2 AWS pre-flight: validate snapshot IDs, state, region, size.
+	// MUST run before compiler so zero terragrunt artifacts hit disk on failure.
+	// Uses the sandbox's resolved target region (not operator default profile region).
+	if len(resolvedProfile.Spec.Runtime.AdditionalSnapshots) > 0 {
+		snapPreflightClient := ec2svc.NewFromConfig(awsCfg, func(o *ec2svc.Options) {
+			o.Region = region
+		})
+		if err := profile.ValidateSnapshotsAWS(ctx, snapPreflightClient, resolvedProfile); err != nil {
+			return fmt.Errorf("snapshot pre-flight failed: %w", err)
 		}
 	}
 
