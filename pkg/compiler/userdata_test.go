@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -862,6 +863,7 @@ func TestUserDataTLSCaptureWithAllowedRepos(t *testing.T) {
 
 // TestUserDataAdditionalVolumeWaitMessage verifies that when additionalVolume is set,
 // user-data contains the wait message for EBS attachment.
+// Updated for Phase 87: label is "additional volume" and device letter "f" is included.
 func TestUserDataAdditionalVolumeWaitMessage(t *testing.T) {
 	p := baseProfile()
 	p.Spec.Runtime.AdditionalVolume = &profile.AdditionalVolumeSpec{
@@ -874,7 +876,7 @@ func TestUserDataAdditionalVolumeWaitMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateUserData failed: %v", err)
 	}
-	want := "[km-bootstrap] Waiting for additional EBS volume"
+	want := "[km-bootstrap] Waiting for additional volume to attach"
 	if !strings.Contains(out, want) {
 		t.Errorf("expected %q in user-data when additionalVolume is set\ngot (first 3000 chars):\n%s", want, out[:min(3000, len(out))])
 	}
@@ -1967,18 +1969,142 @@ func TestUserDataVSCodeMissingKeyErrors(t *testing.T) {
 }
 
 // ============================================================
-// Phase 87 Wave 0: RED-state stubs for userdata generation (SNAP-06, SNAP-07)
-// Wave 3 plan-05 will implement these.
+// Phase 87 Wave 3: Userdata generation tests (SNAP-06, SNAP-07)
 // ============================================================
 
+// TestUserdataAdditionalVolumeOnly_GoldenByteIdentical verifies that userdata for an
+// additionalVolume-only profile is byte-identical to the committed golden file.
+// The golden file is the pre-Phase-87 output with ext4 replaced by ${FSTYPE} in the fstab line.
 func TestUserdataAdditionalVolumeOnly_GoldenByteIdentical(t *testing.T) {
-	t.Skip("RED — Wave 3 plan-05 golden file: legacy additionalVolume-only output byte-identical modulo ext4 → ${FSTYPE}")
+	// Determine the testdata directory relative to this test file.
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Skip("runtime.Caller unavailable")
+	}
+	goldenPath := filepath.Join(filepath.Dir(thisFile), "testdata", "userdata_additional_volume_only.golden.sh")
+
+	p := baseProfile()
+	p.Spec.Runtime.AdditionalVolume = &profile.AdditionalVolumeSpec{
+		Size:       30,
+		MountPoint: "/data",
+	}
+
+	got, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("golden file not found at %s: %v\nRun tests once after implementing the refactor to generate the golden file.", goldenPath, err)
+	}
+
+	if string(got) != string(want) {
+		t.Errorf("userdata is not byte-identical to golden file.\nTo update: delete the golden file and re-run tests to regenerate.\ndiff (-want +got):\n%s",
+			diffStrings(string(want), string(got)))
+	}
+
+	// SNAP-07 aliasing-risk mitigation: explicit check that ${FSTYPE} is present as bash variable expansion.
+	if !strings.Contains(got, "${FSTYPE}") {
+		t.Error("rendered userdata MUST contain ${FSTYPE} (bash variable expansion) — not hardcoded ext4")
+	}
 }
 
+// diffStrings returns a simple line-by-line diff for test failure messages.
+func diffStrings(want, got string) string {
+	wantLines := strings.Split(want, "\n")
+	gotLines := strings.Split(got, "\n")
+	var sb strings.Builder
+	max := len(wantLines)
+	if len(gotLines) > max {
+		max = len(gotLines)
+	}
+	for i := 0; i < max; i++ {
+		var w, g string
+		if i < len(wantLines) {
+			w = wantLines[i]
+		}
+		if i < len(gotLines) {
+			g = gotLines[i]
+		}
+		if w != g {
+			sb.WriteString(fmt.Sprintf("line %d:\n  want: %q\n   got: %q\n", i+1, w, g))
+		}
+	}
+	return sb.String()
+}
+
+// TestUserdataAdditionalSnapshots_LoopOrder verifies that a profile with additionalVolume +
+// 2 additionalSnapshots renders 3 mount blocks in declaration order.
 func TestUserdataAdditionalSnapshots_LoopOrder(t *testing.T) {
-	t.Skip("RED — Wave 3 plan-05: one mount block per entry, declaration order, ${FSTYPE} substitution")
+	p := baseProfile()
+	p.Spec.Runtime.AdditionalVolume = &profile.AdditionalVolumeSpec{
+		Size: 30, MountPoint: "/data",
+	}
+	p.Spec.Runtime.AdditionalSnapshots = []profile.AdditionalSnapshotSpec{
+		{SnapshotID: "snap-0123456789abcdef0", MountPoint: "/opt/models", Device: "/dev/sdg"},
+		{SnapshotID: "snap-0123456789abcdef1", MountPoint: "/opt/cache", Device: "/dev/sdh"},
+	}
+
+	got, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	// Assert exactly 3 occurrences of the section header marker (one per mount block).
+	// The template renders: "# 2.6. Additional EBS volume: format and mount ({{ .Label }})"
+	const sectionMarker = "Additional EBS volume: format and mount ("
+	count := strings.Count(got, sectionMarker)
+	if count != 3 {
+		t.Errorf("expected 3 mount section blocks (got %d); marker=%q", count, sectionMarker)
+	}
+
+	// Assert ORDER: /data first, then /opt/models, then /opt/cache.
+	idxData := strings.Index(got, `mkdir -p "/data"`)
+	idxModels := strings.Index(got, `mkdir -p "/opt/models"`)
+	idxCache := strings.Index(got, `mkdir -p "/opt/cache"`)
+
+	if idxData == -1 || idxModels == -1 || idxCache == -1 {
+		t.Fatalf("missing mount points in output: /data=%d /opt/models=%d /opt/cache=%d", idxData, idxModels, idxCache)
+	}
+	if !(idxData < idxModels && idxModels < idxCache) {
+		t.Errorf("mount blocks not in declaration order: /data@%d /opt/models@%d /opt/cache@%d", idxData, idxModels, idxCache)
+	}
+
+	// Assert each device letter appears exactly once in the device probe list.
+	for _, letter := range []string{"f", "g", "h"} {
+		probe := fmt.Sprintf("/dev/xvd%s /dev/sd%s", letter, letter)
+		c := strings.Count(got, probe)
+		if c != 1 {
+			t.Errorf("expected device probe for letter %q exactly once, got %d: probe=%q", letter, c, probe)
+		}
+	}
+
+	// Assert ${FSTYPE} is present (blkid FS detection).
+	if !strings.Contains(got, "${FSTYPE}") {
+		t.Error("rendered userdata MUST contain ${FSTYPE} bash variable expansion")
+	}
 }
 
+// TestUserdataBackwardCompat_ZeroDiffNoSnapshots verifies that a profile with neither
+// additionalVolume nor additionalSnapshots renders zero mount blocks.
 func TestUserdataBackwardCompat_ZeroDiffNoSnapshots(t *testing.T) {
-	t.Skip("RED — Wave 3 plan-05 + plan-04: SNAP-07 zero-HCL-diff cross-check for profiles without additionalSnapshots")
+	p := baseProfile()
+	// No AdditionalVolume, no AdditionalSnapshots.
+
+	got, err := generateUserData(p, "test-sb", nil, "my-bucket", false, nil)
+	if err != nil {
+		t.Fatalf("generateUserData failed: %v", err)
+	}
+
+	// Zero mount blocks → ${FSTYPE} must be absent.
+	if strings.Contains(got, "${FSTYPE}") {
+		t.Error("rendered userdata MUST NOT contain ${FSTYPE} when no additional volumes/snapshots are configured")
+	}
+
+	// The additional EBS section header must not appear.
+	const sectionHeader = "Additional EBS volume: format and mount ("
+	if strings.Contains(got, sectionHeader) {
+		t.Error("rendered userdata MUST NOT contain mount section header when no additional volumes/snapshots are configured")
+	}
 }
