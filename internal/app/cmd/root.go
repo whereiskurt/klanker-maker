@@ -2,6 +2,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -121,7 +122,12 @@ func NewRootCmd(cfg *config.Config) *cobra.Command {
 }
 
 // Execute creates the Config, builds the command tree, and runs the CLI.
-// It exits with code 1 on any error.
+// It exits with code 1 on any error, or with the typed exit code when the
+// returned error is an *ExitCodeError (e.g. from --wait queue drain failure).
+//
+// This is the ONE place os.Exit is called for typed exit codes. Keeping it
+// here (outside RunE) ensures that any defer statements registered by RunE
+// or Cobra middleware have already run by the time os.Exit fires.
 func Execute() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -132,7 +138,14 @@ func Execute() {
 
 	root := NewRootCmd(cfg)
 	if err := root.Execute(); err != nil {
-		// cobra already prints the error; just exit non-zero
+		// Detect *ExitCodeError (e.g. --wait queue drain with first-failure exit code).
+		// Cobra has already printed the error message via its normal error path;
+		// we suppress the duplicate fmt.Fprintf here and just exit with the carried code.
+		var exitErr *ExitCodeError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.Code)
+		}
+		// Other errors: cobra already printed the error; just exit non-zero.
 		os.Exit(1)
 	}
 }

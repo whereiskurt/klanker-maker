@@ -386,6 +386,198 @@ km create profiles/open-dev.yaml
 
 The command prints the sandbox ID on completion.
 
+### km create --prompt — provision + queue prompts
+
+Phase 86 adds a repeatable `--prompt` flag that queues one or more Claude prompts for sequential
+execution immediately after the sandbox is reachable. The on-box `km-queue.service` systemd unit
+drains the queue; each entry runs as a standard `km agent run` session visible to `km agent list`.
+
+**Basic usage:**
+
+```bash
+# Queue a single prompt — returns as soon as sandbox is up and queue is written
+km create profiles/open-dev.yaml --prompt "clone https://github.com/acme/api.git && run tests"
+
+# Queue multiple prompts (run sequentially: second starts only after first succeeds)
+km create profiles/open-dev.yaml \
+  --prompt "clone the repo" \
+  --prompt "run lint and tests" \
+  --prompt "open a PR for any lint fixes"
+
+# Block until all prompts complete; exit code = 0 (all done) or 1 (first failure)
+km create profiles/open-dev.yaml --prompt "run the full suite" --wait
+
+# Use direct API (claude auth login credentials) instead of Bedrock
+km create profiles/open-dev.yaml --prompt "fix failing tests" --no-bedrock
+```
+
+**Prompt syntax:**
+
+| Syntax | Meaning |
+|--------|---------|
+| `--prompt "text"` | Literal prompt text |
+| `--prompt @path/to/file.txt` | Read file verbatim (UTF-8). Missing file fails before any AWS call. |
+| `--prompt @@literal` | Literal `@literal` (escape one leading `@`) |
+
+**--wait exit-code semantics:**
+
+- `0` — all prompts completed successfully
+- `1` — first failing prompt exited non-zero; remaining are marked `skipped`
+
+**Observability:**
+
+```bash
+# See queue entry status (index, status, timestamp, prompt preview)
+km agent list <sandbox-id> --queue
+
+# See individual run output (each queued prompt becomes a run)
+km agent list <sandbox-id>
+
+# Tail runner log on the box for auth probe / lifecycle events
+km shell <sandbox-id>
+journalctl -u km-queue -f              # runner lifecycle (auth probe, entry start/finish)
+cat /workspace/.km-agent/km-queue.log  # probe-status log (every 5 min when waiting for auth)
+```
+
+**Failure model:**
+
+- First non-zero exit: that entry is marked `failed`; all subsequent `pending` entries become `skipped`
+- Auth wait is indefinite (no timeout). The runner probes every 5 seconds and logs every 5 minutes.
+- On reboot or `km pause` + `km resume`, the runner reconciles: any entry marked `running` is reset
+  to `pending` and retried from the start.
+
+**Recovery procedure (abandon a stuck queue):**
+
+```bash
+km shell <sandbox-id>
+
+# Option 1: clear the whole queue (all entries abandoned)
+sudo rm /workspace/.km-agent/queue/*
+
+# Option 2: manually retry a failed or skipped entry
+sudo -u sandbox bash
+jq '.status = "pending"' /workspace/.km-agent/queue/003.meta.json > /tmp/m.json
+mv /tmp/m.json /workspace/.km-agent/queue/003.meta.json
+systemctl start km-queue   # kick the runner
+```
+
+**Constraints:**
+
+- EC2 substrate only. `--prompt + --docker` fails immediately with a clear error — Docker sandboxes
+  do not have systemd.
+- No per-prompt timeout, retry policy, or conditional execution in v1.
+- Bedrock auth probe incurs a tiny API call (~$0.000003) every 5 seconds when waiting for auth.
+  If a queue is stuck waiting, expect ~$0.05/day in probe cost per sandbox.
+- `--no-bedrock` mode: the runner checks for `~/.claude/.credentials.json` instead of probing
+  Bedrock. **Important:** `claude auth login --claudeai` on a minimal headless AMI completes the
+  OAuth exchange but cannot persist the token without libsecret + gnome-keyring + a session bus.
+  See **Claude auth modes for sandboxes** below for the three working options.
+
+**Reference:**
+
+- Full spec: `docs/superpowers/specs/2026-05-19-km-create-prompt-queue-design.md`
+- Phase brief: `.planning/phases/86-km-create-prompt-queue/BRIEF.md`
+
+### Claude auth modes for sandboxes
+
+A sandbox running a Claude-driven workload (`km agent run`, `km shell`, `km create --prompt`)
+needs Claude to authenticate to either Bedrock or the Anthropic API. There are three working
+modes; pick based on whether you want sandbox Claude to count against your Claude.ai subscription
+or a Bedrock IAM bill, and how much per-sandbox setup you're willing to do.
+
+#### Mode 1 — Bedrock (recommended default)
+
+Sandbox Claude calls Bedrock via the EC2 instance's IAM role. No token persistence needed; AWS
+handles auth via the IMDS-provided STS credentials that auto-rotate.
+
+```yaml
+spec:
+  execution:
+    useBedrock: true   # default
+```
+
+| Pro | Con |
+|---|---|
+| Just works — no setup beyond `km create` | Counts against AWS account's Bedrock spend, not your Claude.ai subscription |
+| Survives pause/resume cleanly (creds rotate from IMDS) | Requires `bedrock:InvokeModel` permission in the sandbox IAM role profile |
+| No interactive auth step needed | Some accounts need to opt model IDs into on-demand throughput first |
+| `km create --prompt --wait` works end-to-end out of the box | — |
+
+This is what most profiles use (e.g. `dc34.yaml`, `codex.yaml`). All Phase 86 live UAT scenarios
+that PASSed used Bedrock mode.
+
+#### Mode 2 — Direct API via `CLAUDE_CODE_OAUTH_TOKEN` env-var (recommended for Claude.ai subscribers)
+
+Obtain a Claude.ai OAuth token from a *desktop* machine where `claude auth login` works (macOS
+keychain stores it natively), then pass it into the sandbox via the profile's env block.
+Token survives pause/resume because it's in the profile, not on-box state.
+
+```yaml
+spec:
+  execution:
+    useBedrock: false
+    env:
+      CLAUDE_CODE_OAUTH_TOKEN: "${KM_CLAUDE_OAUTH_TOKEN}"   # populated from operator env
+```
+
+Or pin the literal token directly in the YAML (don't commit secrets to git — keep this profile
+gitignored or use a `${env}` reference).
+
+**Where to get the token:** on macOS, run `claude auth login` in Terminal, then read it back from
+the keychain:
+
+```bash
+security find-generic-password -s "Claude Code-credentials" -w
+```
+
+| Pro | Con |
+|---|---|
+| Uses your Claude.ai subscription (no Bedrock bill) | Tokens may expire — must refresh periodically |
+| Token in profile = portable across pause/resume cycles | Token in profile = handle as a secret (don't commit to git) |
+| No on-box keyring infrastructure required | macOS-specific extraction; Linux desktops vary |
+| Compatible with `km create --prompt --no-bedrock --wait` | — |
+
+#### Mode 3 — `km agent auth --claude` interactive flow (NOT working on default sandbox AMIs)
+
+`km agent auth <sandbox> --claude` opens an SSM session running `claude auth login --claudeai`,
+opens the OAuth URL in your local browser, and verifies via `claude auth status`. **This mode
+currently fails on the default Amazon Linux 2023 AMI** because `claude` v2.1.x on Linux uses
+libsecret for credential persistence, and the AMI doesn't ship libsecret + gnome-keyring + an
+unlocked session bus.
+
+You'll see this:
+
+```text
+$ km agent auth my-sandbox
+...
+Login successful.
+Error: claude OAuth succeeded but credentials were not persisted: ...
+  Most likely cause: claude v2.1.x on Linux persists OAuth tokens via libsecret
+  (system keyring). When neither libsecret nor gnome-keyring is installed (common
+  on minimal headless AMIs), the token exchange succeeds but the token is held
+  in-memory only, then lost when the auth process exits.
+```
+
+The error message points at Modes 1 and 2 as workarounds. Switch to one of those.
+
+**Making Mode 3 actually work** would require adding to your profile's `initCommands`:
+
+```yaml
+spec:
+  execution:
+    initCommands:
+      - "yum install -y libsecret gnome-keyring dbus-x11"
+      # Then, before claude runs, the sandbox user must have:
+      #   eval $(dbus-launch --sh-syntax)
+      #   gnome-keyring-daemon --unlock --components=secrets <<< ""
+      #   export DBUS_SESSION_BUS_ADDRESS GNOME_KEYRING_CONTROL
+```
+
+In practice this is brittle — the empty-password unlock is rejected on some distros, the daemon
+dies on pause/resume, each SSM session spawns its own bus, and claude version bumps shift the
+dbus probe behavior. **Mode 1 or Mode 2 is almost always the right answer.** Mode 3 is
+documented here for completeness, not recommendation.
+
 ### List and Check Status
 
 ```bash

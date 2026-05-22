@@ -1887,6 +1887,262 @@ RestartSec=5
 WantedBy=multi-user.target
 UNIT
 echo "[km-bootstrap] km-presence.service installed"
+
+# Phase 86: km-queue-runner bash script — drains /workspace/.km-agent/queue/ sequentially.
+# Seeded unconditionally on every EC2 sandbox. Launched by km-queue.service.
+cat > /opt/km/bin/km-queue-runner << 'KMQUEUE'
+#!/bin/bash
+# km-queue-runner: drain /workspace/.km-agent/queue/ sequentially.
+# Seeded by userdata.go. Launched by /etc/systemd/system/km-queue.service.
+# Reconciles "running" -> "pending" on every start (pause/resume recovery).
+# Failure stops chain: marks remaining "pending" as "skipped", exits non-zero.
+# Auth probe waits indefinitely; logs every 5 minutes to /workspace/.km-agent/km-queue.log.
+
+set -u
+
+# Overridable via env for testing
+QUEUE_DIR="${QUEUE_DIR:-/workspace/.km-agent/queue}"
+RUNS_DIR="${RUNS_DIR:-/workspace/.km-agent/runs}"
+LOG_FILE="${LOG_FILE:-/workspace/.km-agent/km-queue.log}"
+SANDBOX_HOME="${SANDBOX_HOME:-/home/sandbox}"
+PROBE_INTERVAL="${PROBE_INTERVAL:-5}"
+PROBE_LOG_INTERVAL="${PROBE_LOG_INTERVAL:-300}"  # 5 minutes
+
+log() {
+    local ts
+    ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "[$ts] $*" | tee -a "$LOG_FILE"
+}
+
+mkdir -p "$QUEUE_DIR" "$RUNS_DIR" "$(dirname "$LOG_FILE")"
+chown -R sandbox:sandbox "$(dirname "$QUEUE_DIR")"
+touch "$LOG_FILE"
+chown sandbox:sandbox "$LOG_FILE"
+
+log "km-queue-runner starting (sandbox=${SANDBOX_ID:-unknown})"
+
+# ---- Wait for required runtime tools (tmux, claude, jq) before any work ----
+# The systemd unit's After=km-bootstrap.service only governs auto-start ordering,
+# NOT manual systemctl start. When operator-side km create kicks the unit early
+# (after queue files land), initCommands may still be installing tmux + claude.
+# Block here until all required tools are on PATH; gives clear log diagnosis
+# rather than entry-001-fails-127 mystery exits.
+for tool in tmux claude jq sudo base64; do
+    waited=0
+    while ! command -v "$tool" >/dev/null 2>&1; do
+        if [ "$waited" -ge 600 ]; then
+            log "runtime: $tool still missing after 600s — aborting"
+            exit 1
+        fi
+        if [ $((waited % 60)) -eq 0 ]; then
+            log "runtime: waiting for $tool to land on PATH (waited=${waited}s)"
+        fi
+        sleep 5
+        waited=$((waited + 5))
+    done
+done
+log "runtime: all required tools present (tmux=$(command -v tmux), claude=$(command -v claude), jq=$(command -v jq))"
+
+# ---- Reconcile: any running -> pending (pause/resume/reboot recovery) ----
+for meta in "$QUEUE_DIR"/*.meta.json; do
+    [ -f "$meta" ] || continue
+    status=$(jq -r .status "$meta" 2>/dev/null || echo "")
+    if [ "$status" = "running" ]; then
+        tmp="${meta}.tmp.$$"
+        jq '.status = "pending"' "$meta" > "$tmp" && mv "$tmp" "$meta"
+        log "reconcile: $(basename "$meta") running -> pending"
+    fi
+done
+
+# ---- Auth probes ----
+probe_bedrock() {
+    # Verify the instance IAM role is callable (i.e., AWS credentials flow from IMDS).
+    # Originally this issued bedrock-runtime:InvokeModel against haiku-4-5, but that
+    # specific model ID requires an inference profile in many regions (not on-demand
+    # throughput-eligible) and the probe error was opaque to operators. STS
+    # GetCallerIdentity is universally allowed, never throttled, and proves the
+    # instance can reach AWS APIs. The actual claude invocation later surfaces any
+    # Bedrock-specific permission/model issue with a clear per-run error.
+    aws sts get-caller-identity >/dev/null 2>&1
+}
+
+probe_direct_api() {
+    local creds="$SANDBOX_HOME/.claude/.credentials.json"
+    [ -s "$creds" ] && sudo -u sandbox jq -e . "$creds" >/dev/null 2>&1
+}
+
+wait_for_auth() {
+    local mode="$1"  # "bedrock" or "direct"
+    local elapsed=0
+    local logged_at=0
+    while true; do
+        if [ "$mode" = "direct" ]; then
+            probe_direct_api && break
+        else
+            probe_bedrock && break
+        fi
+        sleep $PROBE_INTERVAL
+        elapsed=$((elapsed + PROBE_INTERVAL))
+        if [ $((elapsed - logged_at)) -ge $PROBE_LOG_INTERVAL ]; then
+            log "auth probe [$mode] still waiting (elapsed=${elapsed}s)"
+            logged_at=$elapsed
+        fi
+    done
+    log "auth probe [$mode] ready"
+}
+
+# ---- Set entry status atomically ----
+set_status() {
+    local meta="$1"
+    local new_status="$2"
+    local tmp="${meta}.tmp.$$"
+    jq --arg s "$new_status" '.status = $s' "$meta" > "$tmp" && mv "$tmp" "$meta"
+}
+
+# ---- Execute one entry ----
+run_entry() {
+    local num="$1"           # e.g. "001"
+    local meta="$QUEUE_DIR/${num}.meta.json"
+    local prompt_file="$QUEUE_DIR/${num}.prompt"
+    local no_bedrock
+    no_bedrock=$(jq -r .no_bedrock "$meta")
+    local run_id
+    run_id="$(date -u +%Y%m%dT%H%M%SZ)"
+    local run_dir="$RUNS_DIR/$run_id"
+
+    mkdir -p "$run_dir"
+    chown -R sandbox:sandbox "$run_dir"
+    echo "running" > "$run_dir/status"
+
+    set_status "$meta" "running"
+    log "entry $num running (run_id=$run_id no_bedrock=$no_bedrock)"
+
+    # Build claude invocation script (mirrors BuildAgentShellCommands pattern)
+    local script="/tmp/km-queue-run-${num}-$$.sh"
+    local b64prompt
+    b64prompt=$(base64 -w0 < "$prompt_file" 2>/dev/null || base64 < "$prompt_file" | tr -d '\n')
+    cat > "$script" << EOFSCRIPT
+#!/bin/bash
+export HOME=$SANDBOX_HOME
+source /etc/profile.d/km-profile-env.sh 2>/dev/null || true
+source /etc/profile.d/km-identity.sh 2>/dev/null || true
+PROMPT=\$(echo "$b64prompt" | base64 -d 2>/dev/null || echo "$b64prompt" | base64 -D)
+cd /workspace
+if [ "$no_bedrock" = "true" ]; then
+    unset AWS_BEDROCK_USE_BEDROCK
+fi
+claude -p "\$PROMPT" > "$run_dir/output.json" 2> "$run_dir/error.log"
+echo \$? > "$run_dir/exit_code"
+tmux wait-for -S "km-done-$run_id" 2>/dev/null || true
+EOFSCRIPT
+    chmod +x "$script"
+    chown sandbox:sandbox "$script"
+
+    sudo -u sandbox bash -c "tmux new-session -d -s 'km-agent-$run_id' '$script'"
+    sudo -u sandbox bash -c "tmux wait-for 'km-done-$run_id'" 2>/dev/null || true
+
+    local exit_code
+    exit_code=$(cat "$run_dir/exit_code" 2>/dev/null || echo "127")
+    rm -f "$script"
+    if [ "$exit_code" = "0" ]; then
+        set_status "$meta" "done"
+        echo "done" > "$run_dir/status"
+        log "entry $num done"
+        return 0
+    else
+        set_status "$meta" "failed"
+        echo "failed" > "$run_dir/status"
+        log "entry $num failed (exit=$exit_code)"
+        return 1
+    fi
+}
+
+# ---- Pick lowest-numbered pending entry ----
+pick_next() {
+    local sorted_metas
+    sorted_metas=$(ls -1 "$QUEUE_DIR"/*.meta.json 2>/dev/null | sort)
+    for meta in $sorted_metas; do
+        [ -f "$meta" ] || continue
+        status=$(jq -r .status "$meta" 2>/dev/null || echo "")
+        if [ "$status" = "pending" ]; then
+            basename "$meta" .meta.json
+            return
+        fi
+    done
+    echo ""
+}
+
+# ---- Mark all remaining pending as skipped ----
+skip_remaining() {
+    for meta in "$QUEUE_DIR"/*.meta.json; do
+        [ -f "$meta" ] || continue
+        status=$(jq -r .status "$meta" 2>/dev/null || echo "")
+        if [ "$status" = "pending" ]; then
+            set_status "$meta" "skipped"
+            log "$(basename "$meta" .meta.json) skipped (chain failure)"
+        fi
+    done
+}
+
+# ---- Main loop ----
+while true; do
+    num=$(pick_next)
+    if [ -z "$num" ]; then
+        log "no pending entries; runner exits 0"
+        exit 0
+    fi
+
+    # Probe auth based on THIS entry's mode
+    meta="$QUEUE_DIR/${num}.meta.json"
+    nb=$(jq -r .no_bedrock "$meta")
+    if [ "$nb" = "true" ]; then
+        wait_for_auth "direct"
+    else
+        wait_for_auth "bedrock"
+    fi
+
+    if ! run_entry "$num"; then
+        skip_remaining
+        exit 1
+    fi
+done
+KMQUEUE
+chmod +x /opt/km/bin/km-queue-runner
+chown root:root /opt/km/bin/km-queue-runner
+echo "[km-bootstrap] km-queue-runner installed at /opt/km/bin/km-queue-runner"
+
+# Phase 86: ensure tmux is available BEFORE the queue runner unit can start.
+# Profile-level initCommands install tmux later, but the queue runner unit may be
+# kicked operator-side (via SSM systemctl start) before initCommands have finished.
+# Without tmux, the runner can't spawn per-entry sessions and entry 001 fails 127.
+if ! command -v tmux >/dev/null 2>&1; then
+  (dnf install -y tmux 2>&1 || yum install -y tmux 2>&1) | tail -3
+fi
+echo "[km-bootstrap] tmux present: $(command -v tmux || echo MISSING)"
+
+# Phase 86: km-queue.service — systemd unit wrapping the queue runner.
+# Restart=on-failure: runner exits 0 on empty queue (no restart); only restarts on crash.
+# On reboot/resume systemd starts fresh because unit is enabled (WantedBy=multi-user.target).
+cat > /etc/systemd/system/km-queue.service << 'KMQUEUEUNIT'
+[Unit]
+Description=Klankrmkr prompt queue runner — drains /workspace/.km-agent/queue/ via claude
+After=network.target km-bootstrap.service
+[Service]
+User=root
+Environment=SANDBOX_ID={{ .SandboxID }}
+Environment=KM_ARTIFACTS_BUCKET={{ .KMArtifactsBucket }}
+ExecStart=/opt/km/bin/km-queue-runner
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+KMQUEUEUNIT
+echo "[km-bootstrap] km-queue.service installed"
+
+systemctl daemon-reload 2>/dev/null || true
+systemctl enable km-queue 2>/dev/null || true
+echo "[km-bootstrap] km-queue.service enabled (auto-starts on every boot incl. km resume)"
+
 {{- if .VSCodeEnabled }}
 # Phase 73: VS Code Remote-SSH access (sshd + authorized_keys + SELinux context)
 systemctl daemon-reload

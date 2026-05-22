@@ -288,57 +288,80 @@ func TestAgentAuth_ConflictRefuse(t *testing.T) {
 	}
 }
 
-// ---- AUTH-06: verifyCredentialsWritten success ----
+// ---- AUTH-06: verifyClaudeAuthStatus — loggedIn=true ----
 
-// TestVerifyCredentialsWritten_Success verifies that when test -f returns "ok",
-// verifyCredentialsWritten returns nil and prints the success confirmation line.
+// TestVerifyCredentialsWritten_Success verifies that when `claude auth status`
+// returns loggedIn=true, verifyCredentialsWritten returns nil and prints the
+// success confirmation. New behavior (Phase 86 follow-up): authoritative source
+// is `claude auth status` JSON, NOT file existence.
 func TestVerifyCredentialsWritten_Success(t *testing.T) {
 	mockSSM := &authTestSSM{
 		routedOutputs: []authSSMRoute{
-			{cmdSubstr: "test -f '/home/sandbox/.claude/.credentials.json'", output: "ok"},
+			{cmdSubstr: "claude auth status", output: `{"loggedIn": true, "authMethod": "claudeai"}`},
 		},
 	}
 
-	var printed string
-	printed = captureAuthStdout(func() {
+	printed := captureAuthStdout(func() {
 		err := verifyCredentialsWritten(context.Background(), mockSSM, "i-0abc123def456", "claude", "sb-test", nil)
 		if err != nil {
 			t.Errorf("expected nil error, got: %v", err)
 		}
 	})
 
-	if !strings.Contains(printed, "claude credentials written") {
-		t.Errorf("expected '✓ claude credentials written' in output, got: %q", printed)
+	if !strings.Contains(printed, "OAuth complete") {
+		t.Errorf("expected 'OAuth complete' in output, got: %q", printed)
 	}
-	if !strings.Contains(printed, "/home/sandbox/.claude/.credentials.json") {
-		t.Errorf("expected credential path in output, got: %q", printed)
+	if !strings.Contains(printed, "loggedIn=true") {
+		t.Errorf("expected 'loggedIn=true' in output, got: %q", printed)
 	}
 }
 
-// ---- AUTH-07: verifyCredentialsWritten missing ----
+// TestVerifyCredentialsWritten_LoggedInCompact verifies parsing tolerates the
+// no-space form (`"loggedIn":true`) some claude versions emit.
+func TestVerifyCredentialsWritten_LoggedInCompact(t *testing.T) {
+	mockSSM := &authTestSSM{
+		routedOutputs: []authSSMRoute{
+			{cmdSubstr: "claude auth status", output: `{"loggedIn":true,"authMethod":"claudeai"}`},
+		},
+	}
+	err := verifyCredentialsWritten(context.Background(), mockSSM, "i-x", "claude", "sb-x", nil)
+	if err != nil {
+		t.Errorf("expected nil error for compact JSON, got: %v", err)
+	}
+}
 
-// TestVerifyCredentialsWritten_Missing verifies that when test -f returns "missing",
-// verifyCredentialsWritten returns an error containing the expected message.
-func TestVerifyCredentialsWritten_Missing(t *testing.T) {
+// ---- AUTH-07: verifyClaudeAuthStatus — loggedIn=false branches ----
+
+// TestVerifyCredentialsWritten_OAuthDidNotComplete verifies that when
+// `claude auth status` reports loggedIn=false AND the tee file lacks "Login
+// successful" (or doesn't exist), the operator gets the "OAuth was interrupted"
+// diagnostic — not the libsecret one.
+func TestVerifyCredentialsWritten_OAuthDidNotComplete(t *testing.T) {
 	t.Run("sessionErr_nil", func(t *testing.T) {
 		mockSSM := &authTestSSM{
 			routedOutputs: []authSSMRoute{
-				{cmdSubstr: "test -f '/home/sandbox/.claude/.credentials.json'", output: "missing"},
+				{cmdSubstr: "claude auth status", output: `{"loggedIn": false, "authMethod": "none"}`},
+				// tee peek returns empty (file removed or never had Login successful)
+				{cmdSubstr: "cat '/tmp/km-claude-auth-", output: ""},
 			},
 		}
 		err := verifyCredentialsWritten(context.Background(), mockSSM, "i-0abc123def456", "claude", "sb-test", nil)
 		if err == nil {
-			t.Fatal("expected error for missing credentials, got nil")
+			t.Fatal("expected error for loggedIn=false + no OAuth completion, got nil")
 		}
-		if !strings.Contains(err.Error(), "not found at /home/sandbox/.claude/.credentials.json") {
-			t.Errorf("expected path in error message, got: %v", err)
+		if !strings.Contains(err.Error(), "loggedIn=false") {
+			t.Errorf("expected 'loggedIn=false' in error, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "interrupted") {
+			t.Errorf("expected 'interrupted' in error (OAuth-incomplete branch), got: %v", err)
 		}
 	})
 
 	t.Run("sessionErr_non_nil", func(t *testing.T) {
 		mockSSM := &authTestSSM{
 			routedOutputs: []authSSMRoute{
-				{cmdSubstr: "test -f '/home/sandbox/.claude/.credentials.json'", output: "missing"},
+				{cmdSubstr: "claude auth status", output: `{"loggedIn": false}`},
+				{cmdSubstr: "cat '/tmp/km-claude-auth-", output: ""},
 			},
 		}
 		sessionErr := fmt.Errorf("session exited non-zero")
@@ -350,6 +373,46 @@ func TestVerifyCredentialsWritten_Missing(t *testing.T) {
 			t.Errorf("expected wrapped sessionErr in error, got: %v", err)
 		}
 	})
+}
+
+// TestVerifyCredentialsWritten_OAuthOKButNotPersisted is the new diagnostic
+// for the libsecret-missing failure: claude printed "Login successful" but
+// `claude auth status` still says loggedIn=false. Operator gets a specific
+// hint about libsecret and the recommended workarounds.
+func TestVerifyCredentialsWritten_OAuthOKButNotPersisted(t *testing.T) {
+	mockSSM := &authTestSSM{
+		routedOutputs: []authSSMRoute{
+			{cmdSubstr: "claude auth status", output: `{"loggedIn": false}`},
+			{cmdSubstr: "cat '/tmp/km-claude-auth-", output: "Opening browser to sign in…\nLogin successful.\n"},
+		},
+	}
+	err := verifyCredentialsWritten(context.Background(), mockSSM, "i-0abc123def456", "claude", "sb-test", nil)
+	if err == nil {
+		t.Fatal("expected error for OAuth-OK-but-not-persisted, got nil")
+	}
+	if !strings.Contains(err.Error(), "libsecret") {
+		t.Errorf("expected 'libsecret' diagnostic in error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "useBedrock") {
+		t.Errorf("expected 'useBedrock' workaround in error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Errorf("expected CLAUDE_CODE_OAUTH_TOKEN workaround in error, got: %v", err)
+	}
+}
+
+// TestVerifyCredentialsWritten_Codex_PathBased verifies codex still uses the
+// file-based check (codex writes auth.json directly with no keyring).
+func TestVerifyCredentialsWritten_Codex_PathBased(t *testing.T) {
+	mockSSM := &authTestSSM{
+		routedOutputs: []authSSMRoute{
+			{cmdSubstr: "test -f '/home/sandbox/.codex/auth.json'", output: "ok"},
+		},
+	}
+	err := verifyCredentialsWritten(context.Background(), mockSSM, "i-x", "codex", "sb-x", nil)
+	if err != nil {
+		t.Errorf("expected nil error for codex success, got: %v", err)
+	}
 }
 
 // ---- AUTH-13: buildClaudeAuthArgs ----

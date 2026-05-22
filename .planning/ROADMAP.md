@@ -1970,3 +1970,19 @@ Plans:
 - [ ] 85-02-PLAN.md — Wave 1 TDD implementation: parallel HeadObject scan (10-worker semaphore), age guard via sandbox-lister cross-reference (parseSandboxIDFromLockID helper for shared-module fallback), s3types.NotFound classification, BatchWriteItem 25-item batches with UnprocessedItems retry; turn all 5 TDD tests + output-format + UnprocessedItems tests GREEN (Wave 1, autonomous, depends on 85-01)
 - [ ] 85-03-PLAN.md — Wave 2 integration: --delete-state-digests flag + --with-deletes fold-in + DoctorDeps fields + initRealDepsWithExisting wiring + buildChecks registration replacement; doctor.go-only changes (Wave 2, autonomous, depends on 85-02)
 - [ ] 85-04-PLAN.md — Wave 3 operator UAT: timed km doctor against ~275-orphan account; before/after lock-table snapshots; live sandbox lock-row safety verification; sign-off (Wave 3, NOT autonomous — operator checkpoint, depends on 85-03)
+
+### Phase 86: km-create-prompt-queue — operator-side --prompt flag with on-box queue runner
+
+**Goal:** Add repeatable `--prompt <text-or-@file>` to `km create` that queues prompts on-box at `/workspace/.km-agent/queue/` and drains them sequentially once Claude auth is available. Composes existing `km agent run` primitives — no schema/Lambda/Terragrunt changes. Linear chain semantics: indefinite auth wait, fail-stops-chain, remaining marked `skipped`. Add `km agent list --queue` view. Spec: `docs/superpowers/specs/2026-05-19-km-create-prompt-queue-design.md`.
+
+**Requirements**: PQ-01, PQ-02, PQ-03, PQ-04, PQ-05, PQ-06, PQ-07, PQ-08, PQ-09, PQ-10, PQ-11, PQ-12, PQ-13, R1 (see `.planning/phases/86-km-create-prompt-queue/BRIEF.md` § Acceptance criteria for full descriptions)
+**Depends on:** Phase 85 (clean doctor baseline for UAT sandbox lifecycle)
+**Plans:** 5/6 plans executed
+
+Plans:
+- [ ] 86-01-PLAN.md — Wave 0: RED-state test stubs for PQ-01..PQ-08 in `create_prompt_test.go`, augmented `agent_test.go`, bash test harness skeleton (Wave 0, autonomous)
+- [ ] 86-02-PLAN.md — Wave 1: `--prompt` repeatable flag + `--wait` flag on `km create`, `@file`/`@@` parsing, `--docker` mutex, SSM batch queue-file push (PQ-01..PQ-04 + R1; Wave 1, autonomous, depends on 86-01)
+- [ ] 86-03-PLAN.md — Wave 1: on-box bash runner + systemd unit via inline userdata.go heredocs (Restart=on-failure, reconcile, auth probes, fail-stops-chain); bash harness flipped GREEN (PQ-08; Wave 1, autonomous, depends on 86-01)
+- [ ] 86-04-PLAN.md — Wave 2: `--wait` polling loop with context cancellation + exit-code propagation via os.Exit (PQ-05, PQ-06; Wave 2, autonomous, depends on 86-02 + 86-03)
+- [ ] 86-05-PLAN.md — Wave 2: `km agent list --queue` view + CLAUDE.md/OPERATOR-GUIDE.md docs (PQ-07; Wave 2, autonomous, depends on 86-01)
+- [ ] 86-06-PLAN.md — Wave 3: operator UAT — pre-flight + UAT.md drafted (Task 1 auto) + 6 real-AWS scenarios executed by operator (Task 2 checkpoint) (PQ-09..PQ-13 + R1; Wave 3, NOT autonomous — operator checkpoint, depends on 86-02, 86-03, 86-04, 86-05)

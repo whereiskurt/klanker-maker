@@ -28,7 +28,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 ## CLI
 
 - `km validate <profile.yaml>` — validate a SandboxProfile
-- `km create <profile.yaml>` — provision a sandbox (`--no-bedrock`, `--docker`, `--alias`, `--on-demand`)
+- `km create <profile.yaml>` — provision a sandbox (`--no-bedrock`, `--docker`, `--alias`, `--on-demand`, `--prompt <text-or-@file>` repeatable, `--wait`)
 - `km destroy <sandbox-id>` — teardown a sandbox (`--remote` by default; `km kill` is an alias)
 - `km pause <sandbox-id>` — hibernate/pause an EC2 or Docker instance (preserves infra)
 - `km resume <sandbox-id>` — resume a paused or stopped sandbox
@@ -39,7 +39,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `km agent run <sandbox-id> --prompt "..."` — fire-and-forget non-interactive Claude in tmux (`--wait`, `--interactive`, `--no-bedrock`, `--auto-start`)
 - `km agent attach <sandbox-id>` — attach to a running agent's tmux session (Ctrl-B d to detach)
 - `km agent results <sandbox-id>` — fetch latest run output (`--run <id>` for specific run)
-- `km agent list <sandbox-id>` — list all agent runs with status and output size
+- `km agent list <sandbox-id>` — list all agent runs with status and output size (`--queue` to list on-box prompt queue entries instead)
 - `km at '<time>' <cmd>` — schedule deferred/recurring operations; supports `create`, `destroy`, `kill`, `stop`, `pause`, `resume`, `extend`, `budget-add`, `agent run` (`km schedule` is an alias)
 - `km at list` / `km at cancel <name>` — manage scheduled operations
 - `km email send` — send signed email between sandboxes or to/from operator (`--from`, `--to`, `--cc`, `--use-bcc`, `--reply-to`)

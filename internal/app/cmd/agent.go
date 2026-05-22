@@ -811,15 +811,18 @@ Examples:
 
 // newAgentListCmd creates the "km agent list" subcommand.
 func newAgentListCmd(cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI, s3Client S3GetAPI) *cobra.Command {
+	var queueView bool
+
 	cmd := &cobra.Command{
 		Use:   "list <sandbox-id | #number>",
 		Short: "List agent runs with status and output size",
 		Long: `Enumerate all agent runs on a sandbox with status and output size.
 
-Runs are listed newest-first.
+Runs are listed newest-first. Use --queue to see the on-box prompt queue instead.
 
 Examples:
-  km agent list sb-abc123`,
+  km agent list sb-abc123
+  km agent list sb-abc123 --queue`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -831,9 +834,15 @@ Examples:
 			if err != nil {
 				return err
 			}
+			if queueView {
+				return runAgentListQueue(ctx, cmd, cfg, fetcher, ssmClient, sandboxID)
+			}
 			return runAgentList(ctx, cmd, cfg, fetcher, ssmClient, s3Client, sandboxID)
 		},
 	}
+
+	cmd.Flags().BoolVar(&queueView, "queue", false,
+		"List on-box prompt queue entries from /workspace/.km-agent/queue/ instead of agent runs")
 
 	return cmd
 }
@@ -1086,6 +1095,86 @@ func runAgentList(ctx context.Context, cobraCmd *cobra.Command, cfg *config.Conf
 			continue
 		}
 		fmt.Fprintf(w, "%-22s %-10s %s\n", parts[0], parts[1], parts[2])
+	}
+
+	return nil
+}
+
+// runAgentListQueue lists the on-box prompt queue entries via SSM.
+// It reads /workspace/.km-agent/queue/*.meta.json and the paired .prompt files,
+// rendering a table: INDEX, STATUS, CREATED, PROMPT preview.
+// When the queue directory is empty or absent, it prints "no queue entries".
+func runAgentListQueue(ctx context.Context, cobraCmd *cobra.Command, cfg *config.Config, fetcher SandboxFetcher, ssmClient SSMSendAPI, sandboxID string) error {
+	// Initialize real clients if not injected
+	if fetcher == nil {
+		if cfg.StateBucket == "" {
+			return fmt.Errorf("state bucket not configured")
+		}
+		awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+		if err != nil {
+			return fmt.Errorf("load AWS config: %w", err)
+		}
+		fetcher = newRealFetcher(awsCfg, cfg.StateBucket, cfg.GetSandboxTableName())
+		if ssmClient == nil {
+			ssmClient = ssm.NewFromConfig(awsCfg)
+		}
+	}
+
+	rec, err := fetcher.FetchSandbox(ctx, sandboxID)
+	if err != nil {
+		return fmt.Errorf("fetch sandbox: %w", err)
+	}
+
+	if rec.Status == "stopped" {
+		return fmt.Errorf("sandbox %s is stopped -- start it with 'km resume %s' first", sandboxID, sandboxID)
+	}
+
+	instanceID, err := extractResourceID(rec.Resources, ":instance/")
+	if err != nil {
+		return fmt.Errorf("find EC2 instance for sandbox %s: %w", sandboxID, err)
+	}
+
+	// Shell command: enumerate meta.json files sorted by NNN index, print pipe-delimited record.
+	listQueueCmd := `sudo -u sandbox bash -c '
+for meta in $(ls -1 /workspace/.km-agent/queue/*.meta.json 2>/dev/null | sort); do
+    [ -f "$meta" ] || continue
+    num=$(basename "$meta" .meta.json)
+    status=$(jq -r .status "$meta" 2>/dev/null || echo "unknown")
+    created=$(jq -r .created_at "$meta" 2>/dev/null || echo "")
+    prompt_preview=$(head -c 80 "${meta%.meta.json}.prompt" 2>/dev/null | tr -d "\n\r")
+    echo "${num}|${status}|${created}|${prompt_preview}"
+done'`
+
+	output, err := sendSSMAndWait(ctx, ssmClient, instanceID, listQueueCmd)
+	if err != nil {
+		return fmt.Errorf("list queue entries: %w", err)
+	}
+
+	w := cobraCmd.OutOrStdout()
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		fmt.Fprintln(w, "no queue entries")
+		return nil
+	}
+
+	lines := strings.Split(trimmed, "\n")
+
+	// Print table header
+	fmt.Fprintf(w, "%-5s %-9s %-22s %s\n", "INDEX", "STATUS", "CREATED", "PROMPT")
+	fmt.Fprintf(w, "%-5s %-9s %-22s %s\n",
+		strings.Repeat("-", 5), strings.Repeat("-", 9), strings.Repeat("-", 22), strings.Repeat("-", 20))
+
+	for _, line := range lines {
+		parts := strings.SplitN(line, "|", 4)
+		if len(parts) != 4 {
+			continue
+		}
+		idx, status, created, preview := parts[0], parts[1], parts[2], parts[3]
+		// Truncate preview defensively (shell already does head -c 80, but guard in Go too)
+		if len(preview) > 80 {
+			preview = preview[:80]
+		}
+		fmt.Fprintf(w, "%-5s %-9s %-22s %s\n", idx, status, created, preview)
 	}
 
 	return nil
