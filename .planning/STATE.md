@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: 87-01 complete — AdditionalSnapshotSpec type + JSON schema + Wave-0 RED-state stubs
-last_updated: "2026-05-22T21:34:54.399Z"
+stopped_at: 87-02 complete — Layer 1 additionalSnapshots validation + compiler substrate gate
+last_updated: "2026-05-22T21:40:01.753Z"
 last_activity: 2026-05-22
 progress:
   total_phases: 102
   completed_phases: 89
   total_plans: 427
-  completed_plans: 375
+  completed_plans: 376
   percent: 88
 ---
 
@@ -409,6 +409,7 @@ Progress: [█████████░] 88%
 | Phase 86-km-create-prompt-queue P05 | 495 | 2 tasks | 4 files |
 | Phase 86-km-create-prompt-queue P04 | 900 | 1 tasks | 4 files |
 | Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile P01 | 307 | 2 tasks | 7 files |
+| Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile P02 | 165s | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1183,6 +1184,9 @@ Recent decisions affecting current work:
 - [Phase 86-km-create-prompt-queue]: SilenceErrors NOT set on create cmd: Cobra prints typed error once; boundary does not double-print before os.Exit
 - [Phase 87-additionalsnapshots]: Encrypted *bool (not plain bool) in AdditionalSnapshotSpec — nil maps to terraform null, inheriting snapshot encryption; distinguishes omitted from explicit false
 - [Phase 87-additionalsnapshots]: snapshotId regex ^snap-[0-9a-f]{8,17}$ enforced at JSON schema (Layer 0); device constrained to ^/dev/sd[f-p]$ pool
+- [Phase 87]: validateAdditionalSnapshots regexp at function scope (not package-level) — acceptable for non-hot-path validation
+- [Phase 87]: EC2-only gate in both validate.go (offline) and service_hcl.go (compile-time) for defense-in-depth parity with additionalVolume
+- [Phase 87]: Reserved mountpoint list uses exact-match (size==0 valid=inherit; size<0 rejected at Layer 1)
 
 ### Roadmap Evolution
 
@@ -1295,6 +1299,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-22T21:34:54.389Z
-Stopped at: 87-01 complete — AdditionalSnapshotSpec type + JSON schema + Wave-0 RED-state stubs
+Last session: 2026-05-22T21:40:01.745Z
+Stopped at: 87-02 complete — Layer 1 additionalSnapshots validation + compiler substrate gate
 Resume file: None
