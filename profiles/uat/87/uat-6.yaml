@@ -1,0 +1,169 @@
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: uat-87-6-snapshot-wrong-region
+  labels:
+    tier: uat
+    tool: learning-sandbox-unsafe
+  prefix: uat6
+
+# UAT-6: Snapshot in us-east-1, profile targets us-west-2.
+# Replace snap-REPLACE_UAT6 with a real snapshot ID that exists in us-east-1.
+#
+# Expected:
+#   km create exits non-zero (InvalidSnapshot.NotFound — snapshot not visible in us-west-2)
+#   Error references snapshot ID and includes region hint
+#   Zero terragrunt artifacts on disk
+
+spec:
+  lifecycle:
+    ttl: "8h"
+    idleTimeout: "1h"
+    teardownPolicy: stop
+
+  runtime:
+    ami: amazon-linux-2023
+    substrate: ec2
+    instanceType: t3.2xlarge
+    # Profile targets us-west-2 but snapshot exists in us-east-1
+    region: us-west-2
+
+    spot: false
+    hibernation: false
+    rootVolumeSize: 80
+
+    mountEFS: true
+    efsMountPoint: /shared
+
+    additionalVolume:
+      size: 30
+      mountPoint: /data
+
+    # Snapshot created in us-east-1 — will fail pre-flight when profile targets us-west-2
+    additionalSnapshots:
+      - snapshotId: snap-REPLACE_UAT6
+        mountPoint: /opt/uat6
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+
+    useBedrock: false
+
+    privileged: true
+    env:
+      SANDBOX_MODE: learn-v2-direct-api
+      GOOSE_MODE: auto
+      GOOSE_TELEMETRY_ENABLED: "false"
+      CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
+      OPENAI_API_KEY: ""
+    configFiles:
+      "/home/sandbox/.claude/settings.json": |
+        {"trustedDirectories":["/home/sandbox","/workspace"],"autoApprove":["Bash","Read","Write","Edit","Glob","Grep","WebFetch","WebSearch","NotebookEdit"]}
+      "/home/sandbox/.claude/plugins/known_marketplaces.json": |
+        {"klanker-maker":{"source":{"source":"github","repo":"whereiskurt/klanker-maker"},"installLocation":"/home/sandbox/.claude/plugins/marketplaces/klanker-maker","lastUpdated":"2026-04-16T00:00:00Z"}}
+
+    rsyncPaths:
+      - ".gitconfig"
+      - ".config/goose"
+      - ".claude"
+      - ".claude.json"
+      - ".codex"
+    initCommands:
+      - "yum install -y git nodejs npm python3 python3-pip bzip2 jq tar gzip unzip tmux cronie"
+      - "systemctl enable crond; systemctl start crond"
+      - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace /home/sandbox/.config /home/sandbox/.local"
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "*"
+      allowedRefs:
+        - "*"
+
+  network:
+    enforcement: both
+    egress:
+      allowedDNSSuffixes:
+        - "*"
+      allowedHosts:
+        - "*"
+
+  budget:
+    compute:
+      maxSpendUSD: 0.50
+    ai:
+      maxSpendUSD: 2.00
+    warningThreshold: 0.80
+
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 500
+
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-west-2
+    sessionPolicy: minimal
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    learnMode: true
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/network
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+    tlsCapture:
+      enabled: true
+      libraries:
+        - openssl
+      capturePayloads: false
+
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: required
+    allowedSenders:
+      - "*"
+
+  agent:
+    maxConcurrentTasks: 1
+    taskTimeout: "30m"
+    allowedTools:
+      - bash
+      - read_file
+      - write_file
+      - list_files
+
+  cli:
+    noBedrock: true
+    claudeArgs:
+      - "--dangerously-skip-permissions"
+    notifyOnIdle: false
+    notifyOnPermission: false
+    notifyEmailEnabled: false
+    notifySlackEnabled: true
+    notifySlackPerSandbox: true
+    notifySlackInboundEnabled: true
+    slackArchiveOnDestroy: false

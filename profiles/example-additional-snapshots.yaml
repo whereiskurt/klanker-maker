@@ -1,0 +1,140 @@
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: example-additional-snapshots
+  labels:
+    tier: development
+  prefix: snap
+
+# Phase 87 example — snapshot-backed EBS volumes in SandboxProfile.
+#
+# BEFORE running km create:
+#   Replace the snap-* placeholder IDs below with real EBS snapshot IDs.
+#   Placeholders pass km validate (valid hex format) but WILL FAIL km create
+#   at pre-flight with InvalidSnapshot.NotFound — that is expected and correct.
+#
+# To create your own snapshot:
+#   VOL=$(aws ec2 create-volume --region us-east-1 --availability-zone us-east-1a \
+#           --size 5 --volume-type gp3 --query VolumeId --output text)
+#   aws ec2 wait volume-available --region us-east-1 --volume-ids $VOL
+#   SNAP=$(aws ec2 create-snapshot --region us-east-1 --volume-id $VOL \
+#            --description "my-snapshot" --query SnapshotId --output text)
+#   aws ec2 wait snapshot-completed --region us-east-1 --snapshot-ids $SNAP
+#   echo $SNAP  # use this value below
+
+spec:
+  lifecycle:
+    ttl: "4h"
+    idleTimeout: "30m"
+    teardownPolicy: destroy
+
+  runtime:
+    ami: amazon-linux-2023
+    substrate: ec2
+    instanceType: t3.large
+    region: us-east-1
+    spot: false
+    hibernation: false
+    rootVolumeSize: 40
+
+    # Existing field — singular blank EBS volume, formatted ext4 at boot.
+    additionalVolume:
+      size: 10
+      mountPoint: /data
+
+    # NEW Phase 87 — list of snapshot-backed EBS volumes.
+    # Each entry materialises a fresh aws_ebs_volume from an existing EBS snapshot.
+    # Device assignment: auto-picks from /dev/sd[f-p], skipping AMI BDM and additionalVolume.
+    # Filesystem: detected via blkid at boot (no mkfs if snapshot already has a filesystem).
+    # Lifecycle: volumes are created and destroyed with the sandbox. Source snapshots survive.
+    #
+    # REPLACE the snap-* IDs with your own before running km create.
+    additionalSnapshots:
+      - snapshotId: snap-0000000000000dead   # REPLACE: regex ^snap-[0-9a-f]{8,17}$
+        mountPoint: /opt/models              # absolute path, not in reserved list
+        # device: omitted → auto-picked from /dev/sd[f-p]
+        # encrypted: omitted → inherit encryption from snapshot
+        # size: omitted → inherit size from snapshot's VolumeSize
+
+      - snapshotId: snap-00000000000ffffff   # REPLACE with your second snapshot ID
+        mountPoint: /opt/cache
+        device: /dev/sdh                     # explicit pin example (optional)
+        encrypted: true                      # override: force encrypted regardless of snapshot
+        size: 200                            # override: must be >= snapshot's VolumeSize (GiB)
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: true
+    privileged: false
+    env:
+      SANDBOX_MODE: example-additional-snapshots
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "*"
+      allowedRefs:
+        - "*"
+
+  network:
+    enforcement: proxy
+    egress:
+      allowedDNSSuffixes:
+        - "amazonaws.com"
+        - "github.com"
+      allowedHosts:
+        - "*"
+
+  budget:
+    compute:
+      maxSpendUSD: 1.00
+    ai:
+      maxSpendUSD: 1.00
+    warningThreshold: 0.80
+
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 200
+
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: false
+      image: km-tracing:latest
+
+  observability:
+    learnMode: false
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/network
+    claudeTelemetry:
+      enabled: false
+
+  agent:
+    maxConcurrentTasks: 1
+    taskTimeout: "30m"
+    allowedTools:
+      - bash
+      - read_file
+      - write_file
+      - list_files
