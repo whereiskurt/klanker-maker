@@ -1993,7 +1993,7 @@ Plans:
 
 **Requirements**: SNAP-01..SNAP-08 (see `.planning/phases/87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile/BRIEF.md`)
 **Depends on:** Phase 86
-**Plans:** 6/7 plans executed
+**Plans:** 7/7 plans complete
 
 Plans:
 - [ ] 87-01-PLAN.md — Wave 0: schema scaffolding (Go type + JSON schema) + 6 RED-state test stubs (SNAP-01)
