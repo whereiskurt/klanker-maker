@@ -24,6 +24,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Email protocol deep-dive (SES, IAM, signing) | `docs/multi-agent-email.md` |
 | Slack runbook (full setup, troubleshooting) | `docs/slack-notifications.md` |
 | VS Code runbook | `docs/vscode.md` |
+| Snapshot-backed EBS volumes in profiles | `OPERATOR-GUIDE.md` § Phase 87 additionalSnapshots |
 
 ## CLI
 
@@ -79,6 +80,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `infra/live/` — Terragrunt hierarchy
 - `profiles/` — Built-in SandboxProfile YAML files
 - `skills/` — User-invocable skills (klanker plugin)
+- `spec.runtime.additionalSnapshots` — list of snapshot-backed EBS volumes (Phase 87). Each entry materialises a fresh `aws_ebs_volume` from an existing EBS snapshot, attaches on `/dev/sd[f-p]`, mounts with userdata-detected filesystem. Coexists with `additionalVolume` (both can be set). EC2-only. Volume lifecycle = sandbox lifecycle. See `OPERATOR-GUIDE.md` § Phase 87 additionalSnapshots.
 
 ## Phase 84: SES per-install rule namespacing via operator address prefix
 

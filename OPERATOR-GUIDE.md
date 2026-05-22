@@ -1330,3 +1330,156 @@ Phase 84.4.1 changes:
 - `configure.go` — `state_bucket` default prompt + HeadBucket retry UX
 - `unbootstrap.go` — DynamoDB lock table cleanup on teardown
 - `init.go` `downloadTerraform` — stale terraform binary cache invalidation
+
+---
+
+## Phase 87 — additionalSnapshots (snapshot-backed EBS volumes)
+
+Phase 87 (2026-05-22) adds `spec.runtime.additionalSnapshots` — a list field on SandboxProfile
+that materialises fresh EBS volumes from existing snapshots at sandbox creation time.
+
+### When to use
+
+Use `additionalSnapshots` when your sandbox workload needs read-write access to a dataset
+that is too large to provision at boot (models, training data, build caches). Snapshot the
+data once, then reference it in any number of sandbox profiles. Each sandbox gets its own
+independent materialised copy — writes don't affect the source snapshot or sibling sandboxes.
+
+### Schema
+
+```yaml
+spec:
+  runtime:
+    substrate: ec2          # EC2 only — docker/ECS rejects at validation
+    additionalSnapshots:
+      - snapshotId: snap-0123abcdef0123456   # required; regex ^snap-[0-9a-f]{8,17}$
+        mountPoint: /opt/models              # required; absolute path, not in reserved list
+        device: /dev/sdh                     # optional; pin to /dev/sd[f-p]; omit for auto
+        encrypted: true                      # optional; omit = inherit from snapshot
+        size: 200                            # optional GiB; omit/0 = inherit from snapshot
+```
+
+Snapshot IDs use the standard AWS format: `snap-` followed by 8 to 17 lowercase hex digits.
+
+### Validation layers
+
+**Layer 1 — `km validate` (no AWS calls):**
+
+| Rule | Detail |
+|------|--------|
+| EC2-only substrate | `docker` / future ECS substrates are rejected with a clear error |
+| `snapshotId` format | Must match `^snap-[0-9a-f]{8,17}$` |
+| `mountPoint` safety | Must be absolute; must not equal a reserved path (`/`, `/shared`, `/workspace`, `/proc`, `/sys`, `/dev`, `/etc`, `/usr`, `/var`, `/root`, `/home`, `/boot`, `/tmp`, `/run`, or bare `/opt`) |
+| Mount collision | Must not collide with `additionalVolume.mountPoint` or another snapshot entry |
+| `device` (if explicit) | Must match `^/dev/sd[f-p]$`; must be unique across all entries |
+| `size` (if set) | Must be >= 1 |
+
+**Layer 2 — `km create` pre-flight (single AWS call before compile):**
+
+| Condition | Behaviour |
+|-----------|-----------|
+| Snapshot missing / wrong region / not shared | Aborts; error names the snap ID + 3-line hint (region / sharing / deletion) |
+| Snapshot in `pending` or `error` state | Aborts; error names snap ID + state |
+| `size` < `snapshot.VolumeSize` | Aborts; error states BOTH the requested size and the snapshot size |
+| Caller lacks `ec2:DescribeSnapshots` | WARN logged; pre-flight skipped; terragrunt apply becomes the fallback failure path |
+
+Pre-flight runs BEFORE the compiler emits any HCL — a rejection leaves zero terragrunt
+working directories on disk.
+
+### Device allocation
+
+The compiler allocates `/dev/sd[f-p]` (11 slots) across:
+
+1. AMI BlockDeviceMappings (reserved first — read from DescribeImages at compile time)
+2. `additionalVolume` (if set)
+3. `additionalSnapshots` entries in declaration order (explicit pins are claimed first,
+   then auto-pick fills remaining slots)
+
+Pool exhaustion (>11 total entries minus AMI BDM volumes) is a compile-time error naming
+the offending entry index.
+
+### Coexistence with `additionalVolume`
+
+Both fields can be set on the same profile. They use separate render fields. Device
+allocation pools them together so there is never a collision.
+
+```yaml
+spec:
+  runtime:
+    additionalVolume:
+      size: 10
+      mountPoint: /data        # auto-device: /dev/sdf
+
+    additionalSnapshots:
+      - snapshotId: snap-xxxx
+        mountPoint: /opt/models  # auto-device: /dev/sdg (sdf taken by additionalVolume)
+```
+
+### Filesystem detection at boot
+
+The userdata mount loop uses `blkid` to detect the filesystem type on each attached volume.
+If the volume already has a filesystem (e.g., `ext4` on a snapshot from a formatted volume),
+it is mounted directly — no `mkfs`. If no filesystem is detected (blank volume from
+`additionalVolume`), `mkfs.ext4` is run first.
+
+The fstab line uses a `${FSTYPE}` variable (resolved by userdata from `blkid` output).
+For blank `additionalVolume` volumes this resolves to `ext4`, preserving pre-Phase-87
+behaviour byte-for-byte.
+
+### Lifecycle
+
+- Materialised volumes are created and destroyed with the sandbox.
+- `km destroy` deletes all materialised `aws_ebs_volume.snapshot[*]` instances.
+- The **source snapshot is not touched** — it survives `km destroy` and can be reused
+  across multiple sandboxes or profiles.
+- On a pre-Phase-87 profile (no `additionalSnapshots`), rendered HCL is identical to the
+  old output except for the module source version bump (`ec2spot/v1.0.0` → `ec2spot/v1.1.0`).
+
+### Example profile
+
+See `profiles/example-additional-snapshots.yaml`. Replace the placeholder `snap-*` IDs with
+real snapshot IDs before running `km create`:
+
+```bash
+# Create a snapshot from an existing volume
+VOL=$(aws ec2 create-volume --region us-east-1 --availability-zone us-east-1a \
+        --size 5 --volume-type gp3 --query VolumeId --output text)
+aws ec2 wait volume-available --region us-east-1 --volume-ids "$VOL"
+SNAP=$(aws ec2 create-snapshot --region us-east-1 --volume-id "$VOL" \
+         --description "my-dataset" --query SnapshotId --output text)
+aws ec2 wait snapshot-completed --region us-east-1 --snapshot-ids "$SNAP"
+echo "Use this in your profile: snapshotId: $SNAP"
+```
+
+Then edit your profile to reference `$SNAP` and run `km validate` before `km create`.
+
+### UAT runbook
+
+`.planning/phases/87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile/87-07-UAT.md`
+contains 8 operator-driven UAT scenarios covering: single snapshot, multi-snapshot + additionalVolume,
+explicit device pin, AMI BDM collision, missing snapshot, wrong-region snapshot, size-override-larger,
+and size-override-smaller (pre-flight rejection).
+
+Pre-authored UAT profiles live in `profiles/uat/87/uat-{1..8}.yaml`.
+
+### Module version
+
+Phase 87 ships as `infra/modules/ec2spot/v1.1.0/` (additive minor version per Phase 80
+module-immutability convention). Existing sandboxes pinned to `v1.0.0` are unchanged.
+New sandboxes created after Phase 87 use `v1.1.0` via the bumped `infra/templates/sandbox/terragrunt.hcl`
+source path.
+
+### Failure mode reference
+
+| Condition | Caught where | Behaviour |
+|-----------|--------------|-----------|
+| `snapshotId` malformed | `km validate` | Profile rejected; error names entry index |
+| `mountPoint` collision or reserved | `km validate` | Profile rejected; error names colliding entries |
+| `device` duplicate (explicit) | `km validate` | Validation error |
+| `device` auto-pick exhaustion | Compiler | Compile error names offending entry |
+| Snapshot missing / wrong region / not shared | `km create` pre-flight | Create aborts; names snap ID + region + 3-line hint |
+| Snapshot in pending or error state | `km create` pre-flight | Create aborts; names snap ID + state |
+| `size` < `snapshot.VolumeSize` | `km create` pre-flight | Create aborts; states both sizes |
+| Caller lacks `ec2:DescribeSnapshots` | `km create` pre-flight | WARN logged; terragrunt apply is fallback |
+| EBS attach > 60s at boot | userdata | WARNING to `/var/log/km-bootstrap.log`; sandbox boots without mount |
+| Snapshot KMS decryption fails | EC2 boot | Volume attach fails; userdata WARNs; sandbox boots without mount. Fix: grant `kms:CreateGrant` to sandbox EC2 service role |
