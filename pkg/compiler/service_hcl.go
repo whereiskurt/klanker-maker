@@ -40,15 +40,32 @@ var additionalVolumeDeviceCandidates = []string{
 }
 
 // pickAdditionalVolumeDevice returns the first device name from additionalVolumeDeviceCandidates
-// that is not occupied by any device in amiDevices. Both /dev/sdX and /dev/xvdX aliases are
-// treated as equivalent (NVMe alias normalization — see RESEARCH.md Open Question 2).
-// Returns "/dev/sdf" (the first candidate) when amiDevices is nil or empty.
-// Returns "/dev/sdf" as fallback when all candidates are occupied (unreachable in practice).
-func pickAdditionalVolumeDevice(amiDevices []string) string {
-	occupied := make(map[string]bool, len(amiDevices)*2)
+// that is not occupied by any device in amiDevices AND not in claimed.
+// Both /dev/sdX and /dev/xvdX aliases are treated as equivalent (NVMe alias normalization —
+// see RESEARCH.md Open Question 2).
+//
+// claimed may be nil (back-compat for additionalVolume single-entry callers).
+// Phase 87: callers iterating additionalSnapshots build up claimed across entries to enforce
+// cross-entry device deduplication (aliasing-risk SNAP-04).
+//
+// Returns "/dev/sdf" (the first candidate) when amiDevices is nil/empty and claimed is nil/empty.
+// Returns "/dev/sdf" as fallback when all candidates are occupied; caller must detect collision
+// by checking whether the returned device is already in claimed (pool exhaustion).
+func pickAdditionalVolumeDevice(amiDevices []string, claimed map[string]bool) string {
+	occupied := make(map[string]bool, len(amiDevices)*2+len(claimed))
 	for _, d := range amiDevices {
 		occupied[d] = true
 		// Treat /dev/xvdX as occupying /dev/sdX and vice versa (NVMe alias)
+		if strings.HasPrefix(d, "/dev/xvd") {
+			occupied["/dev/sd"+d[len("/dev/xvd"):]] = true
+		}
+		if strings.HasPrefix(d, "/dev/sd") {
+			occupied["/dev/xvd"+d[len("/dev/sd"):]] = true
+		}
+	}
+	for d := range claimed {
+		occupied[d] = true
+		// Also block the xvd/sd alias for claimed entries — keeps semantics consistent.
 		if strings.HasPrefix(d, "/dev/xvd") {
 			occupied["/dev/sd"+d[len("/dev/xvd"):]] = true
 		}
@@ -61,7 +78,7 @@ func pickAdditionalVolumeDevice(amiDevices []string) string {
 			return c
 		}
 	}
-	return "/dev/sdf" // fallback: unreachable when AMI has fewer than 11 additional volumes
+	return "/dev/sdf" // fallback: caller detects collision against claimed (pool exhaustion)
 }
 
 // ============================================================
@@ -781,7 +798,8 @@ func generateEC2ServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 		}(),
 		// Phase 56.1: pick the first non-colliding device name from the AMI's BDMs.
 		// pickAdditionalVolumeDevice returns "/dev/sdf" when amiBDMDeviceNames is nil/empty.
-		AdditionalVolumeDeviceName: pickAdditionalVolumeDevice(amiBDMDeviceNames),
+		// nil claimed: additionalVolume is always a single entry, no cross-entry dedup needed.
+		AdditionalVolumeDeviceName: pickAdditionalVolumeDevice(amiBDMDeviceNames, nil),
 	}
 
 	// Phase 68: wire transcript-streaming module inputs. ArtifactsBucket comes

@@ -375,7 +375,7 @@ func TestPickAdditionalVolumeDevice(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			got := pickAdditionalVolumeDevice(tc.amiDevices)
+			got := pickAdditionalVolumeDevice(tc.amiDevices, nil)
 			if got != tc.want {
 				t.Errorf("pickAdditionalVolumeDevice(%v) = %q, want %q", tc.amiDevices, got, tc.want)
 			}
@@ -423,11 +423,37 @@ func TestAdditionalVolumeDeviceNameInHCL(t *testing.T) {
 // TestPickAdditionalVolumeDevice_WithClaimedMap verifies the extended signature
 // pickAdditionalVolumeDevice(amiDevices []string, claimed map[string]bool) string
 // that accounts for explicit device pins across multiple snapshot entries.
+// Phase 87 Wave 2 plan-04 — SNAP-04 aliasing-risk case.
 func TestPickAdditionalVolumeDevice_WithClaimedMap(t *testing.T) {
-	t.Skip("RED — Wave 2 plan-04 extends signature: pickAdditionalVolumeDevice(amiDevices []string, claimed map[string]bool) string")
-	// Add table case per 87-VALIDATION.md aliasing risk SNAP-04:
-	//   amiDevices=[/dev/sdf], explicit /dev/sdh on entry 0, auto on entry 1 → entry 1 lands on /dev/sdi
-	//   (NOT /dev/sdh which is claimed, NOT /dev/sdg which is additionalVolume's slot)
+	cases := []struct {
+		name       string
+		amiDevices []string
+		claimed    map[string]bool
+		want       string
+	}{
+		{"nil_claimed_back_compat_empty_ami", nil, nil, "/dev/sdf"},
+		{"nil_claimed_ami_sdf_blocked", []string{"/dev/sdf"}, nil, "/dev/sdg"},
+		{"nil_claimed_ami_xvdf_blocks_sdf", []string{"/dev/xvdf"}, nil, "/dev/sdg"},
+		{"empty_claimed", nil, map[string]bool{}, "/dev/sdf"},
+		{"claimed_skips_sdh", nil, map[string]bool{"/dev/sdh": true}, "/dev/sdf"},
+		{"claimed_plus_ami", []string{"/dev/sdf"}, map[string]bool{"/dev/sdg": true}, "/dev/sdh"},
+		// CRITICAL aliasing-risk SNAP-04 case:
+		// AMI BDM has /dev/sdf, additionalVolume auto-picked /dev/sdg (in claimed),
+		// entry-0 pinned /dev/sdh (in claimed), entry-1 auto-pick → must be /dev/sdi.
+		{"cross_entry_dedup",
+			[]string{"/dev/sdf"},                                // AMI BDM
+			map[string]bool{"/dev/sdg": true, "/dev/sdh": true}, // additionalVolume + entry-0 pin
+			"/dev/sdi"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := pickAdditionalVolumeDevice(tc.amiDevices, tc.claimed)
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
 }
 
 // TestHibernationRawAMIWarning verifies that hibernation=true + raw AMI ID emits a log warning
