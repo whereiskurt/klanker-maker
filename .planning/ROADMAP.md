@@ -1986,3 +1986,14 @@ Plans:
 - [ ] 86-04-PLAN.md — Wave 2: `--wait` polling loop with context cancellation + exit-code propagation via os.Exit (PQ-05, PQ-06; Wave 2, autonomous, depends on 86-02 + 86-03)
 - [ ] 86-05-PLAN.md — Wave 2: `km agent list --queue` view + CLAUDE.md/OPERATOR-GUIDE.md docs (PQ-07; Wave 2, autonomous, depends on 86-01)
 - [ ] 86-06-PLAN.md — Wave 3: operator UAT — pre-flight + UAT.md drafted (Task 1 auto) + 6 real-AWS scenarios executed by operator (Task 2 checkpoint) (PQ-09..PQ-13 + R1; Wave 3, NOT autonomous — operator checkpoint, depends on 86-02, 86-03, 86-04, 86-05)
+
+### Phase 87: additionalSnapshots — snapshot-backed EBS volumes in SandboxProfile
+
+**Goal:** Add `spec.runtime.additionalSnapshots: [...]` to SandboxProfile — a list of `(snapshotId, mountPoint, device?, encrypted?, size?)` tuples. Each entry materialises a fresh `aws_ebs_volume` from an existing EBS snapshot, attaches it on `/dev/sd[f-p]` (auto-allocated or pinned), and mounts via userdata-detected filesystem type. Layered validation: schema rules at `km validate`, `DescribeSnapshots` pre-flight at `km create`. Coexists with existing `additionalVolume` (separate field, both can be set). EC2-only. Requires new module version `ec2spot/v1.1.0` (additive); existing `additionalVolume` semantics unchanged. Volume lifecycle = sandbox lifecycle (destroyed with `km destroy`; source snapshot untouched). Spec: `docs/superpowers/specs/2026-05-21-additional-snapshots-design.md`.
+
+**Requirements**: SNAP-01..SNAP-08 (see `.planning/phases/87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile/BRIEF.md` after /gsd:plan-phase 87)
+**Depends on:** Phase 86
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 87 to break down)
