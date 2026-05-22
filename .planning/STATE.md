@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: 87-02 complete — Layer 1 additionalSnapshots validation + compiler substrate gate
-last_updated: "2026-05-22T21:40:01.753Z"
+stopped_at: 87-03 complete — ValidateSnapshotsAWS pre-flight + boolPtrHCL + BDM gate fix
+last_updated: "2026-05-22T21:43:26.269Z"
 last_activity: 2026-05-22
 progress:
   total_phases: 102
   completed_phases: 89
   total_plans: 427
-  completed_plans: 376
+  completed_plans: 377
   percent: 88
 ---
 
@@ -410,6 +410,7 @@ Progress: [█████████░] 88%
 | Phase 86-km-create-prompt-queue P04 | 900 | 1 tasks | 4 files |
 | Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile P01 | 307 | 2 tasks | 7 files |
 | Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile P02 | 165s | 2 tasks | 3 files |
+| Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile P03 | 342s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1187,6 +1188,8 @@ Recent decisions affecting current work:
 - [Phase 87]: validateAdditionalSnapshots regexp at function scope (not package-level) — acceptable for non-hot-path validation
 - [Phase 87]: EC2-only gate in both validate.go (offline) and service_hcl.go (compile-time) for defense-in-depth parity with additionalVolume
 - [Phase 87]: Reserved mountpoint list uses exact-match (size==0 valid=inherit; size<0 rejected at Layer 1)
+- [Phase 87-03]: UnauthorizedOperation (EC2-specific) → graceful WARN+nil; AccessDenied surfaces as error (different code path) per SNAP-03 aliasing risk
+- [Phase 87-03]: BDM gate broadened: triggers when AdditionalVolume != nil OR len(AdditionalSnapshots) > 0 (Risk #4 fix for UAT-4 snapshots-only profiles)
 
 ### Roadmap Evolution
 
@@ -1299,6 +1302,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-22T21:40:01.745Z
-Stopped at: 87-02 complete — Layer 1 additionalSnapshots validation + compiler substrate gate
+Last session: 2026-05-22T21:43:26.261Z
+Stopped at: 87-03 complete — ValidateSnapshotsAWS pre-flight + boolPtrHCL + BDM gate fix
 Resume file: None
