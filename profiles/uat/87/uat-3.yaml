@@ -8,7 +8,7 @@ metadata:
   prefix: uat3
 
 # UAT-3: Explicit device pin.
-# Replace snap-REPLACE_UAT3 with a real snapshot ID.
+# Replace snap-00000000000000a3 with a real snapshot ID.
 # Expected: rendered service.hcl contains device_name = "/dev/sdh";
 #           sandbox mounts /opt/uat3 at /dev/xvdh (or NVMe alias).
 
@@ -38,7 +38,7 @@ spec:
     # UAT-3: explicit device pin on /dev/sdh.
     # additionalVolume takes /dev/sdf (auto). Snapshot is pinned to /dev/sdh (skip sdg).
     additionalSnapshots:
-      - snapshotId: snap-REPLACE_UAT3
+      - snapshotId: snap-00000000000000a3
         mountPoint: /opt/uat3
         device: /dev/sdh    # explicit pin — compiler must respect this, not auto-pick
 

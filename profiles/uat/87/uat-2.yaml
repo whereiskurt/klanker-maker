@@ -8,7 +8,7 @@ metadata:
   prefix: uat2
 
 # UAT-2: Two snapshots + additionalVolume.
-# Replace snap-REPLACE_UAT2A and snap-REPLACE_UAT2B with real snapshot IDs.
+# Replace snap-00000000000000a2 and snap-00000000000000b2 with real snapshot IDs.
 # Expected: all 3 mounts present (/data, /opt/uat2a, /opt/uat2b);
 #           auto-devices on /dev/sdf, /dev/sdg, /dev/sdh without collision.
 
@@ -39,11 +39,11 @@ spec:
     # UAT-2: two snapshot entries with no explicit devices.
     # Compiler allocates: /dev/sdf (additionalVolume), /dev/sdg (snap A), /dev/sdh (snap B)
     additionalSnapshots:
-      - snapshotId: snap-REPLACE_UAT2A
+      - snapshotId: snap-00000000000000a2
         mountPoint: /opt/uat2a
         # device: omitted — auto-picked (/dev/sdg after additionalVolume takes /dev/sdf)
 
-      - snapshotId: snap-REPLACE_UAT2B
+      - snapshotId: snap-00000000000000b2
         mountPoint: /opt/uat2b
         # device: omitted — auto-picked (/dev/sdh)
 

@@ -8,7 +8,7 @@ metadata:
   prefix: uat7
 
 # UAT-7: Size override LARGER than snapshot.
-# Replace snap-REPLACE_UAT7 with a real snapshot ID created from a 5 GiB volume.
+# Replace snap-00000000000000a7 with a real snapshot ID created from a 5 GiB volume.
 # Profile sets size: 10 (larger than snapshot's 5 GiB).
 #
 # Expected:
@@ -41,7 +41,7 @@ spec:
 
     # Snapshot from a 5 GiB volume; size override = 10 GiB (larger — must succeed)
     additionalSnapshots:
-      - snapshotId: snap-REPLACE_UAT7
+      - snapshotId: snap-00000000000000a7
         mountPoint: /opt/uat7
         size: 10    # 10 GiB override on a 5 GiB snapshot (valid: 10 >= 5)
 

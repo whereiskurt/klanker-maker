@@ -8,7 +8,7 @@ metadata:
   prefix: uat6
 
 # UAT-6: Snapshot in us-east-1, profile targets us-west-2.
-# Replace snap-REPLACE_UAT6 with a real snapshot ID that exists in us-east-1.
+# Replace snap-00000000000000a6 with a real snapshot ID that exists in us-east-1.
 #
 # Expected:
 #   km create exits non-zero (InvalidSnapshot.NotFound — snapshot not visible in us-west-2)
@@ -41,7 +41,7 @@ spec:
 
     # Snapshot created in us-east-1 — will fail pre-flight when profile targets us-west-2
     additionalSnapshots:
-      - snapshotId: snap-REPLACE_UAT6
+      - snapshotId: snap-00000000000000a6
         mountPoint: /opt/uat6
 
   execution:

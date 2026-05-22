@@ -8,7 +8,7 @@ metadata:
   prefix: uat8
 
 # UAT-8: Size override SMALLER than snapshot — pre-flight rejection.
-# Replace snap-REPLACE_UAT8 with a real snapshot ID created from a 10 GiB volume.
+# Replace snap-00000000000000a8 with a real snapshot ID created from a 10 GiB volume.
 # Profile sets size: 5 (smaller than snapshot's 10 GiB).
 #
 # Expected:
@@ -48,7 +48,7 @@ spec:
     # Snapshot from a 10 GiB volume; size override = 5 GiB (invalid: 5 < 10)
     # Pre-flight must reject and name both sizes in the error message.
     additionalSnapshots:
-      - snapshotId: snap-REPLACE_UAT8
+      - snapshotId: snap-00000000000000a8
         mountPoint: /opt/uat8
         size: 5    # 5 GiB override on a 10 GiB snapshot (invalid — must reject)
 

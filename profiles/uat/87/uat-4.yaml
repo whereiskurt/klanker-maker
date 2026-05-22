@@ -8,8 +8,8 @@ metadata:
   prefix: uat4
 
 # UAT-4: AMI with BDM declaring /dev/sdf (Part A — additionalVolume + additionalSnapshots).
-# Replace ami-REPLACE_UAT4 with an AMI whose BDM includes /dev/sdf.
-# Replace snap-REPLACE_UAT4 with a real snapshot ID.
+# Replace ami-00000000000000a4 with an AMI whose BDM includes /dev/sdf.
+# Replace snap-00000000000000c4 with a real snapshot ID.
 #
 # Expected (Part A):
 #   additional_volume_device_name = "/dev/sdg"  (AMI has /dev/sdf → skip to sdg)
@@ -26,7 +26,7 @@ spec:
 
   runtime:
     # AMI with BDM that includes /dev/sdf — compiler must skip /dev/sdf for both volumes
-    ami: ami-REPLACE_UAT4
+    ami: ami-00000000000000a4
     substrate: ec2
     instanceType: t3.2xlarge
     region: us-east-1
@@ -46,7 +46,7 @@ spec:
     # snapshot: auto-device should skip /dev/sdf (AMI) and /dev/sdg (additionalVolume)
     # landing on /dev/sdh
     additionalSnapshots:
-      - snapshotId: snap-REPLACE_UAT4
+      - snapshotId: snap-00000000000000c4
         mountPoint: /opt/uat4
         # device: omitted — auto-pick must skip AMI BDM and additionalVolume device
 

@@ -8,7 +8,7 @@ metadata:
   prefix: uat1
 
 # UAT-1: Single snapshot, auto-device.
-# Replace snap-REPLACE_UAT1 with a real snapshot ID before running km create.
+# Replace snap-00000000000000a1 with a real snapshot ID before running km create.
 
 spec:
   lifecycle:
@@ -35,7 +35,7 @@ spec:
 
     # UAT-1: one snapshot entry, no explicit device (auto-picked).
     additionalSnapshots:
-      - snapshotId: snap-REPLACE_UAT1
+      - snapshotId: snap-00000000000000a1
         mountPoint: /opt/uat1
         # device: omitted — auto-picked from /dev/sd[f-p]
 
