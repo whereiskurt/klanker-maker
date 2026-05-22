@@ -1991,9 +1991,15 @@ Plans:
 
 **Goal:** Add `spec.runtime.additionalSnapshots: [...]` to SandboxProfile — a list of `(snapshotId, mountPoint, device?, encrypted?, size?)` tuples. Each entry materialises a fresh `aws_ebs_volume` from an existing EBS snapshot, attaches it on `/dev/sd[f-p]` (auto-allocated or pinned), and mounts via userdata-detected filesystem type. Layered validation: schema rules at `km validate`, `DescribeSnapshots` pre-flight at `km create`. Coexists with existing `additionalVolume` (separate field, both can be set). EC2-only. Requires new module version `ec2spot/v1.1.0` (additive); existing `additionalVolume` semantics unchanged. Volume lifecycle = sandbox lifecycle (destroyed with `km destroy`; source snapshot untouched). Spec: `docs/superpowers/specs/2026-05-21-additional-snapshots-design.md`.
 
-**Requirements**: SNAP-01..SNAP-08 (see `.planning/phases/87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile/BRIEF.md` after /gsd:plan-phase 87)
+**Requirements**: SNAP-01..SNAP-08 (see `.planning/phases/87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile/BRIEF.md`)
 **Depends on:** Phase 86
-**Plans:** 0 plans
+**Plans:** 7 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 87 to break down)
+- [ ] 87-01-PLAN.md — Wave 0: schema scaffolding (Go type + JSON schema) + 6 RED-state test stubs (SNAP-01)
+- [ ] 87-02-PLAN.md — Wave 1: Layer 1 validation in validate.go + EC2-only compiler gate parity (SNAP-02; depends on 87-01)
+- [ ] 87-03-PLAN.md — Wave 1: Layer 2 AWS DescribeSnapshots pre-flight + create.go wiring + BDM gate broadening + boolPtrHCL template func (SNAP-03; depends on 87-01)
+- [ ] 87-04-PLAN.md — Wave 2: compiler pickAdditionalVolumeDevice extension + additional_snapshots HCL render (SNAP-04; depends on 87-01, 87-02, 87-03)
+- [ ] 87-05-PLAN.md — Wave 3: userdata.go range-loop refactor + blkid FS detection + golden test for legacy byte-identity (SNAP-05, SNAP-07; depends on 87-01, 87-04)
+- [ ] 87-06-PLAN.md — Wave 3: new Terraform module ec2spot/v1.1.0/ (additive copy) + sandbox template version bump (SNAP-06, SNAP-07; depends on 87-04; parallel with 87-05)
+- [ ] 87-07-PLAN.md — Wave 4: operator UAT (8 scenarios + SNAP-07 cross-check) + CLAUDE.md/OPERATOR-GUIDE.md docs + example profile (SNAP-07, SNAP-08; NOT autonomous — operator checkpoint; depends on 87-01..06)
