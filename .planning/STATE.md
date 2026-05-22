@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: "Completed 87-04-PLAN.md — Wave 2 compiler: device allocation loop + additional_snapshots HCL render"
-last_updated: "2026-05-22T21:50:43.411Z"
+stopped_at: Completed 87-06-PLAN.md — Wave 3 ec2spot/v1.1.0 module + template version bump
+last_updated: "2026-05-22T21:55:12.088Z"
 last_activity: 2026-05-22
 progress:
   total_phases: 102
   completed_phases: 89
   total_plans: 427
-  completed_plans: 378
+  completed_plans: 379
   percent: 88
 ---
 
@@ -412,6 +412,7 @@ Progress: [█████████░] 88%
 | Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile P02 | 165s | 2 tasks | 3 files |
 | Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile P03 | 342s | 2 tasks | 4 files |
 | Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile P04 | 242s | 2 tasks | 3 files |
+| Phase 87-additionalsnapshots P06 | 121 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1193,6 +1194,7 @@ Recent decisions affecting current work:
 - [Phase 87-03]: BDM gate broadened: triggers when AdditionalVolume != nil OR len(AdditionalSnapshots) > 0 (Risk #4 fix for UAT-4 snapshots-only profiles)
 - [Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile]: Pool exhaustion: string-return + caller-checks (minimal-diff vs returning (string, error) from pickAdditionalVolumeDevice)
 - [Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile]: additional_snapshots empty list renders as compact form [] (diff-stable; Wave 4 module default = [] accepts both)
+- [Phase 87-06]: ec2spot v1.1.0 additive copy: for_each key=tostring(i), size=null inherits snapshot, encrypted=null inherits snapshot, Name tag uses var.resource_prefix, no required_providers block
 
 ### Roadmap Evolution
 
@@ -1305,6 +1307,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-22T21:50:43.403Z
-Stopped at: Completed 87-04-PLAN.md — Wave 2 compiler: device allocation loop + additional_snapshots HCL render
+Last session: 2026-05-22T21:55:12.079Z
+Stopped at: Completed 87-06-PLAN.md — Wave 3 ec2spot/v1.1.0 module + template version bump
 Resume file: None
