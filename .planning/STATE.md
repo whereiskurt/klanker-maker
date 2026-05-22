@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: "86-06 Task 1 complete (UAT draft + pre-flight GREEN) — Task 2 awaiting operator UAT execution"
-last_updated: "2026-05-20T04:00:00.000Z"
-last_activity: 2026-05-20
+stopped_at: 87-01 complete — AdditionalSnapshotSpec type + JSON schema + Wave-0 RED-state stubs
+last_updated: "2026-05-22T21:34:54.399Z"
+last_activity: 2026-05-22
 progress:
-  total_phases: 101
+  total_phases: 102
   completed_phases: 89
-  total_plans: 420
-  completed_plans: 374
+  total_plans: 427
+  completed_plans: 375
   percent: 88
 ---
 
@@ -31,7 +31,7 @@ Plan: 6 of 6 in phase 79 (all complete; 79-05 closeout + UAT passed 2026-05-10)
 Total Plans in Phase: 6
 Current Plan: 14
 Status: in-progress
-Last activity: 2026-05-20
+Last activity: 2026-05-22
 
 Progress: [█████████░] 88%
 
@@ -408,6 +408,7 @@ Progress: [█████████░] 88%
 | Phase 86-km-create-prompt-queue P02 | 815 | 2 tasks | 3 files |
 | Phase 86-km-create-prompt-queue P05 | 495 | 2 tasks | 4 files |
 | Phase 86-km-create-prompt-queue P04 | 900 | 1 tasks | 4 files |
+| Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile P01 | 307 | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -1180,6 +1181,8 @@ Recent decisions affecting current work:
 - [Phase 86-km-create-prompt-queue]: ExitCodeError typed error (not inline os.Exit): preserves RunE/Cobra deferred cleanup; single os.Exit at outermost Execute() boundary in root.go
 - [Phase 86-km-create-prompt-queue]: QueuePollInterval exported var (not const) for cmd_test override; WaitForQueueDrain exported wrapper for external test package access
 - [Phase 86-km-create-prompt-queue]: SilenceErrors NOT set on create cmd: Cobra prints typed error once; boundary does not double-print before os.Exit
+- [Phase 87-additionalsnapshots]: Encrypted *bool (not plain bool) in AdditionalSnapshotSpec — nil maps to terraform null, inheriting snapshot encryption; distinguishes omitted from explicit false
+- [Phase 87-additionalsnapshots]: snapshotId regex ^snap-[0-9a-f]{8,17}$ enforced at JSON schema (Layer 0); device constrained to ^/dev/sd[f-p]$ pool
 
 ### Roadmap Evolution
 
@@ -1292,6 +1295,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-20T03:27:28.908Z
-Stopped at: Completed 86-04-PLAN.md — Wave 2 --wait polling + ExitCodeError pattern
+Last session: 2026-05-22T21:34:54.389Z
+Stopped at: 87-01 complete — AdditionalSnapshotSpec type + JSON schema + Wave-0 RED-state stubs
 Resume file: None
