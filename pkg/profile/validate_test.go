@@ -971,15 +971,243 @@ func TestValidateSemantic_Slack_BackwardCompat_Phase62Profile(t *testing.T) {
 }
 
 // ============================================================
-// Phase 87 Wave 0: RED-state stubs for Layer 1 validation (SNAP-02)
-// Wave 1 plan-02 will implement these.
+// Phase 87 Wave 1 (plan-02 SNAP-02): Layer 1 validation tests
 // ============================================================
 
+// makeMinimalSnapshotProfile builds a SandboxProfile with just enough fields
+// populated for semantic validation of additionalSnapshots.
+func makeMinimalSnapshotProfile(substrate string, snapshots []profile.AdditionalSnapshotSpec, addlVol *profile.AdditionalVolumeSpec) *profile.SandboxProfile {
+	return &profile.SandboxProfile{
+		APIVersion: "klankermaker.ai/v1alpha1",
+		Kind:       "SandboxProfile",
+		Spec: profile.Spec{
+			Runtime: profile.RuntimeSpec{
+				Substrate:           substrate,
+				AdditionalSnapshots: snapshots,
+				AdditionalVolume:    addlVol,
+			},
+		},
+	}
+}
+
 func TestValidateAdditionalSnapshots_Layer1(t *testing.T) {
-	t.Skip("RED — implemented in 87-02 (SNAP-02 Layer 1 validation)")
-	// Wave 1 plan-02 will fill in table-driven cases:
-	//   bad snapshotId regex / mountpoint blocklist / collision with additionalVolume.MountPoint
-	//   duplicate mountpoint across entries / explicit device duplicate
-	//   non-EC2 substrate rejection / size < 1
-	//   error path indices: spec.runtime.additionalSnapshots[N].field
+	boolPtr := func(b bool) *bool { return &b }
+	_ = boolPtr // may be used below
+
+	tests := []struct {
+		name         string
+		profile      *profile.SandboxProfile
+		wantErrCount int   // -1 = at least one
+		wantPaths    []string // substrings that must appear in at least one error path
+		wantMsgs     []string // substrings that must appear in at least one error message
+	}{
+		// ------- REJECTION CASES -------
+		{
+			name: "bad_snapshot_id_regex_uppercase",
+			profile: makeMinimalSnapshotProfile("ec2", []profile.AdditionalSnapshotSpec{
+				{SnapshotID: "snap-XYZ", MountPoint: "/data"},
+			}, nil),
+			wantErrCount: -1,
+			wantPaths:    []string{"spec.runtime.additionalSnapshots[0].snapshotId"},
+			wantMsgs:     []string{"snap-XYZ"},
+		},
+		{
+			name: "bad_snapshot_id_too_short",
+			profile: makeMinimalSnapshotProfile("ec2", []profile.AdditionalSnapshotSpec{
+				{SnapshotID: "snap-01", MountPoint: "/data"},
+			}, nil),
+			wantErrCount: -1,
+			wantPaths:    []string{"spec.runtime.additionalSnapshots[0].snapshotId"},
+			wantMsgs:     []string{"snap-01"},
+		},
+		{
+			name: "mountpoint_not_absolute",
+			profile: makeMinimalSnapshotProfile("ec2", []profile.AdditionalSnapshotSpec{
+				{SnapshotID: "snap-0123abcd", MountPoint: "data"},
+			}, nil),
+			wantErrCount: -1,
+			wantPaths:    []string{"spec.runtime.additionalSnapshots[0].mountPoint"},
+			wantMsgs:     []string{"absolute"},
+		},
+		{
+			name: "mountpoint_reserved_root",
+			profile: makeMinimalSnapshotProfile("ec2", []profile.AdditionalSnapshotSpec{
+				{SnapshotID: "snap-0123abcd", MountPoint: "/"},
+			}, nil),
+			wantErrCount: -1,
+			wantPaths:    []string{"spec.runtime.additionalSnapshots[0].mountPoint"},
+			wantMsgs:     []string{"reserved"},
+		},
+		{
+			name: "mountpoint_reserved_workspace",
+			profile: makeMinimalSnapshotProfile("ec2", []profile.AdditionalSnapshotSpec{
+				{SnapshotID: "snap-0123abcd", MountPoint: "/workspace"},
+			}, nil),
+			wantErrCount: -1,
+			wantPaths:    []string{"spec.runtime.additionalSnapshots[0].mountPoint"},
+			wantMsgs:     []string{"reserved"},
+		},
+		{
+			name: "mountpoint_reserved_opt_exact",
+			profile: makeMinimalSnapshotProfile("ec2", []profile.AdditionalSnapshotSpec{
+				{SnapshotID: "snap-0123abcd", MountPoint: "/opt"},
+			}, nil),
+			wantErrCount: -1,
+			wantPaths:    []string{"spec.runtime.additionalSnapshots[0].mountPoint"},
+			wantMsgs:     []string{"reserved"},
+		},
+		{
+			name: "mountpoint_collision_with_additional_volume",
+			profile: makeMinimalSnapshotProfile("ec2", []profile.AdditionalSnapshotSpec{
+				{SnapshotID: "snap-0123abcd", MountPoint: "/models"},
+			}, &profile.AdditionalVolumeSpec{
+				Size:       100,
+				MountPoint: "/models",
+			}),
+			wantErrCount: -1,
+			wantPaths:    []string{"spec.runtime.additionalSnapshots[0].mountPoint"},
+			wantMsgs:     []string{"collides"},
+		},
+		{
+			name: "mountpoint_collision_across_snapshots",
+			profile: makeMinimalSnapshotProfile("ec2", []profile.AdditionalSnapshotSpec{
+				{SnapshotID: "snap-0123abcd", MountPoint: "/data"},
+				{SnapshotID: "snap-0123dcba", MountPoint: "/data"},
+			}, nil),
+			wantErrCount: -1,
+			wantPaths:    []string{"spec.runtime.additionalSnapshots[1].mountPoint"},
+			wantMsgs:     []string{"/data"},
+		},
+		{
+			name: "explicit_device_duplicate",
+			profile: makeMinimalSnapshotProfile("ec2", []profile.AdditionalSnapshotSpec{
+				{SnapshotID: "snap-0123abcd", MountPoint: "/data1", Device: "/dev/sdh"},
+				{SnapshotID: "snap-0123dcba", MountPoint: "/data2", Device: "/dev/sdh"},
+			}, nil),
+			wantErrCount: -1,
+			wantPaths:    []string{"spec.runtime.additionalSnapshots[1].device"},
+			wantMsgs:     []string{"/dev/sdh"},
+		},
+		{
+			name: "non_ec2_substrate_docker",
+			profile: makeMinimalSnapshotProfile("docker", []profile.AdditionalSnapshotSpec{
+				{SnapshotID: "snap-0123abcd", MountPoint: "/data"},
+			}, nil),
+			wantErrCount: -1,
+			wantPaths:    []string{"spec.runtime.additionalSnapshots"},
+			wantMsgs:     []string{"docker substrate"},
+		},
+		{
+			name: "size_negative",
+			profile: makeMinimalSnapshotProfile("ec2", []profile.AdditionalSnapshotSpec{
+				{SnapshotID: "snap-0123abcd", MountPoint: "/data", Size: -1},
+			}, nil),
+			wantErrCount: -1,
+			wantPaths:    []string{"spec.runtime.additionalSnapshots[0].size"},
+			wantMsgs:     []string{"-1"},
+		},
+
+		// ------- HAPPY PATH CASES (must produce NO errors) -------
+		{
+			name: "empty_snapshots_no_validation_overhead",
+			profile: makeMinimalSnapshotProfile("ec2", []profile.AdditionalSnapshotSpec{}, nil),
+			wantErrCount: 0,
+		},
+		{
+			name: "nil_snapshots_no_errors",
+			profile: makeMinimalSnapshotProfile("ec2", nil, nil),
+			wantErrCount: 0,
+		},
+		{
+			name: "single_minimal_entry_valid",
+			profile: makeMinimalSnapshotProfile("ec2", []profile.AdditionalSnapshotSpec{
+				{SnapshotID: "snap-0123abcd", MountPoint: "/data"},
+			}, nil),
+			wantErrCount: 0,
+		},
+		{
+			name: "canonical_17char_snapshot_id_valid",
+			profile: makeMinimalSnapshotProfile("ec2", []profile.AdditionalSnapshotSpec{
+				{SnapshotID: "snap-0123abcdef01234", MountPoint: "/data"},
+			}, nil),
+			wantErrCount: 0,
+		},
+		{
+			name: "mountpoint_subpath_of_opt_ok",
+			profile: makeMinimalSnapshotProfile("ec2", []profile.AdditionalSnapshotSpec{
+				{SnapshotID: "snap-0123abcd", MountPoint: "/opt/models"},
+			}, nil),
+			wantErrCount: 0,
+		},
+		{
+			name: "size_zero_is_ok_inherit",
+			profile: makeMinimalSnapshotProfile("ec2", []profile.AdditionalSnapshotSpec{
+				{SnapshotID: "snap-0123abcd", MountPoint: "/data", Size: 0},
+			}, nil),
+			wantErrCount: 0,
+		},
+		{
+			name: "three_entries_distinct",
+			profile: makeMinimalSnapshotProfile("ec2", []profile.AdditionalSnapshotSpec{
+				{SnapshotID: "snap-0123abcd", MountPoint: "/data1"},
+				{SnapshotID: "snap-0123dcba", MountPoint: "/data2"},
+				{SnapshotID: "snap-0000aaaa", MountPoint: "/data3"},
+			}, nil),
+			wantErrCount: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := profile.ValidateSemantic(tc.profile)
+			// Filter to only additionalSnapshots-related errors
+			var snapErrs []profile.ValidationError
+			for _, e := range errs {
+				if strings.Contains(e.Path, "additionalSnapshots") || strings.Contains(e.Message, "additionalSnapshots") {
+					snapErrs = append(snapErrs, e)
+				}
+			}
+
+			if tc.wantErrCount == 0 {
+				if len(snapErrs) != 0 {
+					t.Errorf("expected 0 additionalSnapshots errors, got %d:", len(snapErrs))
+					for _, e := range snapErrs {
+						t.Logf("  - %s: %s", e.Path, e.Message)
+					}
+				}
+				return
+			}
+
+			// wantErrCount == -1: expect at least one error
+			if len(snapErrs) == 0 {
+				t.Fatalf("expected at least one additionalSnapshots validation error, got none")
+			}
+
+			for _, wantPath := range tc.wantPaths {
+				found := false
+				for _, e := range snapErrs {
+					if strings.Contains(e.Path, wantPath) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected error with path containing %q, got errors: %v", wantPath, snapErrs)
+				}
+			}
+
+			for _, wantMsg := range tc.wantMsgs {
+				found := false
+				for _, e := range snapErrs {
+					if strings.Contains(e.Message, wantMsg) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected error with message containing %q, got errors: %v", wantMsg, snapErrs)
+				}
+			}
+		})
+	}
 }

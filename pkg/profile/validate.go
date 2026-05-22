@@ -407,6 +407,118 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 		}
 	}
 
+	// Phase 87 SNAP-02: Layer 1 semantic validation for additionalSnapshots.
+	errs = append(errs, validateAdditionalSnapshots(p)...)
+
+	return errs
+}
+
+// validateAdditionalSnapshots enforces Layer 1 (offline, no AWS calls) rules for the
+// additionalSnapshots field per SNAP-02. Path convention: spec.runtime.additionalSnapshots[i].<field>.
+func validateAdditionalSnapshots(p *SandboxProfile) []ValidationError {
+	if len(p.Spec.Runtime.AdditionalSnapshots) == 0 {
+		return nil
+	}
+
+	var errs []ValidationError
+
+	// EC2-only substrate check (also in service_hcl.go for compile-time defense-in-depth).
+	substrate := p.Spec.Runtime.Substrate
+	if !strings.HasPrefix(substrate, "ec2") {
+		errs = append(errs, ValidationError{
+			Path:    "spec.runtime.additionalSnapshots",
+			Message: fmt.Sprintf("additionalSnapshots is not supported for %s substrate", substrate),
+		})
+		// Continue — report all issues at once so the operator can fix them in one pass.
+	}
+
+	snapIDRe := regexp.MustCompile(`^snap-[0-9a-f]{8,17}$`)
+
+	// Reserved mount points (top-level exact match only — /opt/foo is fine, /opt is not).
+	reserved := map[string]bool{
+		"/": true, "/shared": true, "/workspace": true,
+		"/proc": true, "/sys": true, "/dev": true,
+		"/etc": true, "/usr": true, "/var": true,
+		"/root": true, "/home": true, "/boot": true,
+		"/tmp": true, "/run": true, "/opt": true,
+	}
+
+	seenMountPoints := map[string]int{} // mountPoint → first-seen index
+	seenDevices := map[string]int{}     // explicit device → first-seen index
+
+	// Pre-load additionalVolume mountPoint for collision check.
+	var addlVolMP string
+	if p.Spec.Runtime.AdditionalVolume != nil {
+		addlVolMP = p.Spec.Runtime.AdditionalVolume.MountPoint
+	}
+
+	for i, snap := range p.Spec.Runtime.AdditionalSnapshots {
+		pathBase := fmt.Sprintf("spec.runtime.additionalSnapshots[%d]", i)
+
+		// snapshotId regex: ^snap-[0-9a-f]{8,17}$
+		if !snapIDRe.MatchString(snap.SnapshotID) {
+			errs = append(errs, ValidationError{
+				Path:    pathBase + ".snapshotId",
+				Message: fmt.Sprintf("snapshotId %q does not match ^snap-[0-9a-f]{8,17}$", snap.SnapshotID),
+			})
+		}
+
+		// mountPoint must be an absolute path.
+		if !strings.HasPrefix(snap.MountPoint, "/") {
+			errs = append(errs, ValidationError{
+				Path:    pathBase + ".mountPoint",
+				Message: fmt.Sprintf("mountPoint %q must be an absolute path", snap.MountPoint),
+			})
+		} else if reserved[snap.MountPoint] {
+			// Reserved path (exact match only).
+			errs = append(errs, ValidationError{
+				Path:    pathBase + ".mountPoint",
+				Message: fmt.Sprintf("mountPoint %q is reserved", snap.MountPoint),
+			})
+		}
+
+		// Collision with additionalVolume.mountPoint.
+		if addlVolMP != "" && snap.MountPoint == addlVolMP {
+			errs = append(errs, ValidationError{
+				Path:    pathBase + ".mountPoint",
+				Message: fmt.Sprintf("mountPoint %q collides with spec.runtime.additionalVolume.mountPoint", snap.MountPoint),
+			})
+		}
+
+		// Collision across additionalSnapshots entries.
+		if snap.MountPoint != "" {
+			if prev, ok := seenMountPoints[snap.MountPoint]; ok {
+				errs = append(errs, ValidationError{
+					Path:    pathBase + ".mountPoint",
+					Message: fmt.Sprintf("mountPoint %q duplicates spec.runtime.additionalSnapshots[%d].mountPoint", snap.MountPoint, prev),
+				})
+			} else {
+				seenMountPoints[snap.MountPoint] = i
+			}
+		}
+
+		// Explicit device uniqueness (optional field).
+		if snap.Device != "" {
+			if prev, ok := seenDevices[snap.Device]; ok {
+				errs = append(errs, ValidationError{
+					Path:    pathBase + ".device",
+					Message: fmt.Sprintf("device %q duplicates spec.runtime.additionalSnapshots[%d].device", snap.Device, prev),
+				})
+			} else {
+				seenDevices[snap.Device] = i
+			}
+		}
+
+		// Size positivity: Layer 1 only checks < 0; Layer 2 enforces size >= snapshot.VolumeSize.
+		// Size == 0 is valid and means "inherit snapshot's native size".
+		if snap.Size < 0 {
+			errs = append(errs, ValidationError{
+				Path:    pathBase + ".size",
+				Message: fmt.Sprintf("size %d must be >= 1 when specified (0 means inherit snapshot size)", snap.Size),
+			})
+		}
+	}
+
 	return errs
 }
 
