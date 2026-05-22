@@ -900,6 +900,10 @@ aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/tracing/config.yaml" /etc/km/tra
 aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/otelcol-contrib" /opt/km/bin/otelcol-contrib
 chmod +x /opt/km/bin/km-*
 chmod +x /opt/km/bin/otelcol-contrib
+# Expose km-slack on /usr/local/bin so non-login shells (systemd units, cron,
+# ad-hoc invocations) resolve it without needing /opt/km/bin on PATH.
+# Internal callers in this userdata still use the absolute path.
+ln -sf /opt/km/bin/km-slack /usr/local/bin/km-slack
 {{- if or (eq .Enforcement "ebpf") (eq .Enforcement "both") }}
 
 # Download km binary for eBPF enforcer (km ebpf-attach command)
@@ -1478,11 +1482,13 @@ while true; do
   # || true keeps a claude failure from killing the poller (set -euo pipefail).
   # The output.json / exit_code files are inspected below to decide whether to
   # ack-and-continue or leave the message for redelivery.
-  # Source all profile.d files so claude inherits OTEL endpoints + KM_SLACK_*
-  # env (notify-hook needs KM_SLACK_BRIDGE_URL/CHANNEL_ID/SANDBOX_ID, OTEL needs
-  # OTEL_EXPORTER_OTLP_*). bash -c is non-interactive and skips profile.d by
-  # default, so we source it explicitly before launching claude.
-  sudo -u sandbox bash -c "
+  # bash -lc gives claude a login shell so ~/.bash_profile chains into ~/.bashrc,
+  # which loads nvm — claude is installed under /home/sandbox/.nvm/.../bin/ on
+  # nvm-based AMIs and is otherwise not on PATH. The explicit profile.d source
+  # loop below is defense-in-depth for OTEL endpoints + KM_SLACK_* env that the
+  # notify-hook needs (KM_SLACK_BRIDGE_URL/CHANNEL_ID/SANDBOX_ID,
+  # OTEL_EXPORTER_OTLP_*) in case .bash_profile does not chain.
+  sudo -u sandbox bash -lc "
     set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
     # Prefer the standalone claude binary in ~/.local/bin over the npm wrapper.
     export PATH=\"/home/sandbox/.local/bin:\$PATH\"
