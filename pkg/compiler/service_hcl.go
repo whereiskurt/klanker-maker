@@ -601,6 +601,18 @@ var templateFuncs = template.FuncMap{
 		name = strings.ReplaceAll(name, "/", "-")
 		return "vol-" + name
 	},
+	// boolPtrHCL marshals a *bool to an HCL literal: nil→"null", true→"true", false→"false".
+	// Used by Wave 2 (plan-04) when rendering additional_snapshots encrypted field.
+	// nil means "inherit from snapshot" → terraform null → AWS uses snapshot encryption state.
+	"boolPtrHCL": func(b *bool) string {
+		if b == nil {
+			return "null"
+		}
+		if *b {
+			return "true"
+		}
+		return "false"
+	},
 }
 
 // joinGitHubAllowedReposCSV returns the AllowedRepos slice as a comma-separated string
@@ -680,6 +692,11 @@ func validateEC2StorageFields(p *profile.SandboxProfile, useSpot bool) error {
 	}
 	if p.Spec.Runtime.AdditionalVolume != nil && !strings.HasPrefix(substrate, "ec2") {
 		return fmt.Errorf("additionalVolume is not supported for %s substrate", substrate)
+	}
+	// Phase 87: additionalSnapshots is EC2-only (defense-in-depth parity with additionalVolume check above;
+	// validate.go Layer 1 also checks this offline via km validate).
+	if len(p.Spec.Runtime.AdditionalSnapshots) > 0 && !strings.HasPrefix(substrate, "ec2") {
+		return fmt.Errorf("additionalSnapshots is not supported for %s substrate", substrate)
 	}
 	// Phase 33.1: hibernation + raw AMI ID requires the AMI's own root volume to be encrypted.
 	// The slug path encrypts via root_block_device override, but a raw AMI's encryption state
