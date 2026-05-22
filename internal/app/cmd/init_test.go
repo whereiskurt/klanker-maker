@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
+	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/whereiskurt/klanker-maker/internal/app/cmd"
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
@@ -489,10 +490,29 @@ func TestRegionalModulesIncludesSlackBridge(t *testing.T) {
 // forceSlackBridgeColdStart tests (SLCK-13)
 // ──────────────────────────────────────────────
 
-// fakeLambdaUpdater records the last UpdateFunctionConfiguration call.
+// fakeLambdaUpdater records the last UpdateFunctionConfiguration call and
+// returns a configurable existing env from GetFunctionConfiguration so tests
+// can verify the merge-not-replace contract.
 type fakeLambdaUpdater struct {
-	lastInput *lambda.UpdateFunctionConfigurationInput
-	err       error
+	lastInput   *lambda.UpdateFunctionConfigurationInput
+	err         error
+	getErr      error
+	existingEnv map[string]string
+}
+
+func (f *fakeLambdaUpdater) GetFunctionConfiguration(
+	_ context.Context,
+	_ *lambda.GetFunctionConfigurationInput,
+	_ ...func(*lambda.Options),
+) (*lambda.GetFunctionConfigurationOutput, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	out := &lambda.GetFunctionConfigurationOutput{}
+	if f.existingEnv != nil {
+		out.Environment = &lambdatypes.EnvironmentResponse{Variables: f.existingEnv}
+	}
+	return out, nil
 }
 
 func (f *fakeLambdaUpdater) UpdateFunctionConfiguration(
@@ -568,6 +588,71 @@ func TestCreateHandlerColdStart_PropagatesError(t *testing.T) {
 	if err := cmd.ForceCreateHandlerColdStartWith(context.Background(), f, "kph-create-handler"); err != wantErr {
 		t.Errorf("got err %v; want %v", err, wantErr)
 	}
+}
+
+// TestSlackBridgeColdStart_PreservesExistingEnvVars guards the merge-not-replace
+// contract. UpdateFunctionConfiguration REPLACES Environment.Variables on the
+// AWS side; a naive single-key update used to wipe every var set by terragrunt
+// (KM_SLACK_THREADS_TABLE, KM_RESOURCE_PREFIX, etc.), causing the bridge to
+// os.Exit(1) on next cold start and the Function URL to return 502. The helper
+// must read existing vars first and merge.
+func TestSlackBridgeColdStart_PreservesExistingEnvVars(t *testing.T) {
+	existing := map[string]string{
+		"KM_SLACK_THREADS_TABLE": "kph-slack-threads",
+		"KM_RESOURCE_PREFIX":     "kph",
+		"KM_ARTIFACTS_BUCKET":    "km-artifacts-kph-abc123",
+	}
+	f := &fakeLambdaUpdater{existingEnv: existing}
+	if err := cmd.ForceSlackBridgeColdStartWith(context.Background(), f, "kph-slack-bridge"); err != nil {
+		t.Fatalf("ForceSlackBridgeColdStartWith: %v", err)
+	}
+	if f.lastInput == nil || f.lastInput.Environment == nil {
+		t.Fatal("UpdateFunctionConfiguration not called with Environment")
+	}
+	got := f.lastInput.Environment.Variables
+	for k, v := range existing {
+		if got[k] != v {
+			t.Errorf("env var %q dropped or changed: got %q, want %q (merge contract broken)", k, got[k], v)
+		}
+	}
+	if _, ok := got["TOKEN_ROTATION_TS"]; !ok {
+		t.Errorf("TOKEN_ROTATION_TS not added; got keys %v", keysOf(got))
+	}
+}
+
+// TestCreateHandlerColdStart_PreservesExistingEnvVars mirrors the bridge
+// test for ForceCreateHandlerColdStartWith. Same merge-not-replace contract.
+func TestCreateHandlerColdStart_PreservesExistingEnvVars(t *testing.T) {
+	existing := map[string]string{
+		"KM_RESOURCE_PREFIX":  "kph",
+		"KM_ARTIFACTS_BUCKET": "km-artifacts-kph-abc123",
+	}
+	f := &fakeLambdaUpdater{existingEnv: existing}
+	if err := cmd.ForceCreateHandlerColdStartWith(context.Background(), f, "kph-create-handler"); err != nil {
+		t.Fatalf("ForceCreateHandlerColdStartWith: %v", err)
+	}
+	if f.lastInput == nil || f.lastInput.Environment == nil {
+		t.Fatal("UpdateFunctionConfiguration not called with Environment")
+	}
+	got := f.lastInput.Environment.Variables
+	for k, v := range existing {
+		if got[k] != v {
+			t.Errorf("env var %q dropped or changed: got %q, want %q (merge contract broken)", k, got[k], v)
+		}
+	}
+	if _, ok := got["TOOLCHAIN_VERSION"]; !ok {
+		t.Errorf("TOOLCHAIN_VERSION not added; got keys %v", keysOf(got))
+	}
+}
+
+// keysOf returns the keys of a map[string]string in arbitrary order — used
+// for clearer test failure messages without dragging in golang.org/x/exp/maps.
+func keysOf(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 // TestInitExportsNewAccountEnvVars verifies that ExportTerragruntEnvVars sets

@@ -2428,22 +2428,44 @@ func forceLambdaColdStart(ctx context.Context, awsCfg aws.Config, resourcePrefix
 // Exported for unit testing; production code should call forceLambdaColdStart.
 // functionName should be cfg.GetResourcePrefix() + "-create-handler".
 func ForceCreateHandlerColdStartWith(ctx context.Context, client lambdaConfigUpdater, functionName string) error {
-	_, err := client.UpdateFunctionConfiguration(ctx, &lambda.UpdateFunctionConfigurationInput{
-		FunctionName: aws.String(functionName),
-		Environment: &lambdatypes.Environment{
-			Variables: map[string]string{
-				"TOOLCHAIN_VERSION": version.String(),
-			},
-		},
-	})
-	return err
+	return upsertLambdaEnvVar(ctx, client, functionName, "TOOLCHAIN_VERSION", version.String())
 }
 
 // lambdaConfigUpdater is a narrow interface over the Lambda SDK client used by
-// forceSlackBridgeColdStartWith — exists solely to enable unit-test mocking
-// without a real AWS connection.
+// the cold-start helpers — exists solely to enable unit-test mocking without a
+// real AWS connection. Includes Get because UpdateFunctionConfiguration replaces
+// (does not merge) the Environment.Variables map, so we must fetch the current
+// set before writing.
 type lambdaConfigUpdater interface {
+	GetFunctionConfiguration(ctx context.Context, input *lambda.GetFunctionConfigurationInput, optFns ...func(*lambda.Options)) (*lambda.GetFunctionConfigurationOutput, error)
 	UpdateFunctionConfiguration(ctx context.Context, input *lambda.UpdateFunctionConfigurationInput, optFns ...func(*lambda.Options)) (*lambda.UpdateFunctionConfigurationOutput, error)
+}
+
+// upsertLambdaEnvVar fetches the Lambda's current Environment.Variables, sets
+// key=value (overwriting if already present), and writes the merged map back.
+// UpdateFunctionConfiguration REPLACES Environment.Variables on the AWS side,
+// so a naive update wipes every var terragrunt set (KM_SLACK_THREADS_TABLE,
+// KM_RESOURCE_PREFIX, etc.) and leaves the Lambda crashing with os.Exit(1) on
+// next cold start. This helper preserves the rest of the env.
+func upsertLambdaEnvVar(ctx context.Context, client lambdaConfigUpdater, functionName, key, value string) error {
+	cfg, err := client.GetFunctionConfiguration(ctx, &lambda.GetFunctionConfigurationInput{
+		FunctionName: aws.String(functionName),
+	})
+	if err != nil {
+		return fmt.Errorf("get %s configuration: %w", functionName, err)
+	}
+	vars := map[string]string{}
+	if cfg.Environment != nil {
+		for k, v := range cfg.Environment.Variables {
+			vars[k] = v
+		}
+	}
+	vars[key] = value
+	_, err = client.UpdateFunctionConfiguration(ctx, &lambda.UpdateFunctionConfigurationInput{
+		FunctionName: aws.String(functionName),
+		Environment:  &lambdatypes.Environment{Variables: vars},
+	})
+	return err
 }
 
 // ForceSlackBridgeColdStartWith updates the Slack bridge Lambda's environment
@@ -2452,15 +2474,7 @@ type lambdaConfigUpdater interface {
 // Exported for unit testing; production code should call forceSlackBridgeColdStart.
 // functionName should be cfg.GetResourcePrefix() + "-slack-bridge".
 func ForceSlackBridgeColdStartWith(ctx context.Context, client lambdaConfigUpdater, functionName string) error {
-	_, err := client.UpdateFunctionConfiguration(ctx, &lambda.UpdateFunctionConfigurationInput{
-		FunctionName: aws.String(functionName),
-		Environment: &lambdatypes.Environment{
-			Variables: map[string]string{
-				"TOKEN_ROTATION_TS": fmt.Sprintf("%d", time.Now().Unix()),
-			},
-		},
-	})
-	return err
+	return upsertLambdaEnvVar(ctx, client, functionName, "TOKEN_ROTATION_TS", fmt.Sprintf("%d", time.Now().Unix()))
 }
 
 // forceSlackBridgeColdStart updates the km-slack-bridge Lambda's environment
