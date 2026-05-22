@@ -40,7 +40,7 @@ remote_state {
 
 # Terraform source points to the appropriate module based on substrate
 terraform {
-  source = "${local.repo_root}/infra/modules/${local.svc_config.locals.substrate_module}/v1.0.0"
+  source = "${local.repo_root}/infra/modules/${local.svc_config.locals.substrate_module}/v1.1.0"
 }
 
 inputs = merge(
