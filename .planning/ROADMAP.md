@@ -1547,7 +1547,7 @@ Plans:
   8. **Top-level prefix routing:** On `agent: claude` profile, operator posts `codex: list workspace files` as new top-level → poller strips prefix, dispatches codex, writes new DDB row with `agent_type=codex` keyed on the new `thread_ts`; profile compiled `KM_AGENT` env var unchanged on disk
   9. **Same-agent prefix is no-op:** `claude: do another thing` inside an existing claude-rooted thread → strip + resume same session in same thread; no new thread, no new DDB row, no handoff post
   10. **Cross-agent mid-thread switch:** Inside running claude thread, operator posts `codex: check this` → bot posts "Switching to codex → continuing in this thread." with permalink in old thread; new top-level message appears with "Continuing from <permalink>" + truncated last assistant excerpt; codex's reply (seeded with prior assistant message) lands in new thread as first reply; DDB has two rows; old claude session is NOT killed and remains resumable
-**Plans:** 4/10 plans executed
+**Plans:** 5/10 plans executed
 
 Plans:
 - [ ] 70-00-PLAN.md — Spike: confirm `codex exec --json` fires hooks (Stop + last_assistant_message) on a learn-derived sandbox with Codex auth'd. ~30 minutes, single sandbox, discard.
