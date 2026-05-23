@@ -574,6 +574,21 @@ if [[ "$event" == "Stop" && "${KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED:-0}" == "1" ]]
   rm -f "/tmp/km-slack-thread.${st_sid}" "/tmp/km-slack-stream.${st_sid}.offset"
 fi
 
+# Phase 70 (Plan 70-05): When the Stop hook fires inside a poller-driven Codex
+# run, KM_CODEX_RUN_ID is exported inline in the sudo -u sandbox bash -lc
+# command string (per 70-RESEARCH.md Pitfall 3). Write the session_id from the
+# Stop payload to a per-run tempfile so the poller can extract it after dispatch.
+# /tmp is world-writable on AL2023; the hook runs as sandbox user — no permission
+# issue. The write is guarded on KM_CODEX_RUN_ID being non-empty to avoid any
+# effect on non-poller (terminal-initiated) Codex or Claude runs.
+if [[ "$event" == "Stop" && -n "${KM_CODEX_RUN_ID:-}" ]]; then
+  codex_sid=$(echo "$payload" | jq -r '.session_id // ""' 2>/dev/null || echo "")
+  if [[ -n "$codex_sid" ]]; then
+    echo "$codex_sid" > "/tmp/km-codex-session.${KM_CODEX_RUN_ID}"
+    chmod 0644 "/tmp/km-codex-session.${KM_CODEX_RUN_ID}" 2>/dev/null || true
+  fi
+fi
+
 exit 0
 KM_NOTIFY_HOOK_EOF
 chmod +x /opt/km/bin/km-notify-hook

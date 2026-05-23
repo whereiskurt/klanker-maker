@@ -870,6 +870,21 @@ if [[ "$event" == "Stop" && "${KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED:-0}" == "1" ]]
   rm -f "/tmp/km-slack-thread.${st_sid}" "/tmp/km-slack-stream.${st_sid}.offset"
 fi
 
+# Phase 70 (Plan 70-05): When the Stop hook fires inside a poller-driven Codex
+# run, KM_CODEX_RUN_ID is exported inline in the sudo -u sandbox bash -lc
+# command string (per 70-RESEARCH.md Pitfall 3). Write the session_id from the
+# Stop payload to a per-run tempfile so the poller can extract it after dispatch.
+# /tmp is world-writable on AL2023; the hook runs as sandbox user — no permission
+# issue. The write is guarded on KM_CODEX_RUN_ID being non-empty to avoid any
+# effect on non-poller (terminal-initiated) Codex or Claude runs.
+if [[ "$event" == "Stop" && -n "${KM_CODEX_RUN_ID:-}" ]]; then
+  codex_sid=$(echo "$payload" | jq -r '.session_id // ""' 2>/dev/null || echo "")
+  if [[ -n "$codex_sid" ]]; then
+    echo "$codex_sid" > "/tmp/km-codex-session.${KM_CODEX_RUN_ID}"
+    chmod 0644 "/tmp/km-codex-session.${KM_CODEX_RUN_ID}" 2>/dev/null || true
+  fi
+fi
+
 exit 0
 KM_NOTIFY_HOOK_EOF
 chmod +x /opt/km/bin/km-notify-hook
@@ -1344,6 +1359,11 @@ SANDBOX_ID="${KM_SANDBOX_ID:-}"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 THREADS_TABLE="${KM_SLACK_THREADS_TABLE:-${KM_RESOURCE_PREFIX:-km}-slack-threads}"
 
+# Phase 70 (Plan 70-05): AGENT is the profile default read at boot. Resolved from
+# KM_AGENT in /etc/km/notify.env (emitted by the compiler when spec.cli.agent is set).
+# Plan 70-06 per-message prefix parsing may override into EFFECTIVE_AGENT below.
+AGENT="${KM_AGENT:-claude}"
+
 # Export AWS_REGION so subprocesses (km-slack post, km-send, etc.) inherit it.
 # The systemd unit's EnvironmentFile=/etc/profile.d/km-notify-env.sh uses
 # shell-style 'export VAR=val' which systemd rejects ("Ignoring invalid
@@ -1470,6 +1490,15 @@ while true; do
     --region "$REGION" \
     --output json 2>/dev/null || true)
   CLAUDE_SESSION=$(echo "$DDB_ITEM" | jq -r '.Item.claude_session_id.S // empty' 2>/dev/null || true)
+  # Phase 70 (Plan 70-05): read agent_type + last_assistant_msg alongside session ID.
+  # agent_type defaults to AGENT (profile default) when absent — backward compat with
+  # pre-Phase-70 rows that predate this attribute. last_assistant_msg is consumed by
+  # Plan 70-06's cross-agent switch; loaded here so DDB lookup stays single-pass.
+  CURRENT_AGENT=$(echo "$DDB_ITEM" | jq -r '.Item.agent_type.S // empty' 2>/dev/null || true)
+  LAST_ASSISTANT_MSG=$(echo "$DDB_ITEM" | jq -r '.Item.last_assistant_msg.S // empty' 2>/dev/null || true)
+  [ -z "$CURRENT_AGENT" ] && CURRENT_AGENT="$AGENT"
+  # EFFECTIVE_AGENT = agent for this turn. Plan 70-06 prefix parser may override below.
+  EFFECTIVE_AGENT="$CURRENT_AGENT"
 
   RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
   RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
@@ -1536,36 +1565,111 @@ while true; do
   # Export KM_SLACK_THREAD_TS so km-notify-hook passes --thread to km-slack post (Phase 67).
   export KM_SLACK_THREAD_TS="$THREAD_TS"
 
-  # || true keeps a claude failure from killing the poller (set -euo pipefail).
-  # The output.json / exit_code files are inspected below to decide whether to
-  # ack-and-continue or leave the message for redelivery.
-  # bash -lc gives claude a login shell so ~/.bash_profile chains into ~/.bashrc,
-  # which loads nvm — claude is installed under /home/sandbox/.nvm/.../bin/ on
-  # nvm-based AMIs and is otherwise not on PATH. The explicit profile.d source
-  # loop below is defense-in-depth for OTEL endpoints + KM_SLACK_* env that the
-  # notify-hook needs (KM_SLACK_BRIDGE_URL/CHANNEL_ID/SANDBOX_ID,
-  # OTEL_EXPORTER_OTLP_*) in case .bash_profile does not chain.
-  sudo -u sandbox bash -lc "
-    set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
-    # Prefer the standalone claude binary in ~/.local/bin over the npm wrapper.
-    export PATH=\"/home/sandbox/.local/bin:\$PATH\"
-    export KM_SLACK_THREAD_TS='$THREAD_TS'
-    claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
-      --dangerously-skip-permissions $RESUME_ARG \
-      > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
-    echo \$? > '$RUN_DIR/exit_code'
-  " || true
+  # Phase 70 (Plan 70-05): dispatch fork — codex path (new) or claude path (existing, unchanged).
+  # EFFECTIVE_AGENT was set above from DDB agent_type (defaulting to AGENT if absent).
+  # Plan 70-06 prefix parser may have overridden EFFECTIVE_AGENT before this block.
+  if [ "$EFFECTIVE_AGENT" = "codex" ]; then
+    # Codex dispatch. KM_CODEX_RUN_ID is exported INLINE in the sudo -u sandbox
+    # command string (NOT as a separate export before sudo) per 70-RESEARCH.md
+    # Pitfall 3: sudo -u sandbox bash -lc drops root-side shell variables; the
+    # VAR=val prefix in the string is the only reliable cross-sudo env mechanism.
+    # The hook running as sandbox user reads KM_CODEX_RUN_ID to write the per-run
+    # session-ID file to /tmp, which the poller reads below.
+    if [ -n "$CLAUDE_SESSION" ]; then
+      # Codex resume — subcommand form (per Plan 70-00 spike). NOT --resume flag.
+      # codex exec resume SESSION PROMPT --flags is the canonical 2026 syntax.
+      sudo -u sandbox bash -lc "
+        set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+        export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+        export KM_CODEX_RUN_ID='$RUN_ID'
+        export KM_SLACK_THREAD_TS='$THREAD_TS'
+        codex exec resume '$CLAUDE_SESSION' \"\$(cat '$PROMPT_FILE')\" \
+          --json --dangerously-bypass-approvals-and-sandbox \
+          > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+        echo \$? > '$RUN_DIR/exit_code'
+      " || true
+    else
+      # Codex first turn — no prior session.
+      sudo -u sandbox bash -lc "
+        set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+        export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+        export KM_CODEX_RUN_ID='$RUN_ID'
+        export KM_SLACK_THREAD_TS='$THREAD_TS'
+        codex exec --json --dangerously-bypass-approvals-and-sandbox \"\$(cat '$PROMPT_FILE')\" \
+          > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+        echo \$? > '$RUN_DIR/exit_code'
+      " || true
+    fi
+  else
+    # Claude path — UNCHANGED (Phase 67). Kept verbatim; guarded by regression tests.
+    # || true keeps a claude failure from killing the poller (set -euo pipefail).
+    # The output.json / exit_code files are inspected below to decide whether to
+    # ack-and-continue or leave the message for redelivery.
+    # bash -lc gives claude a login shell so ~/.bash_profile chains into ~/.bashrc,
+    # which loads nvm — claude is installed under /home/sandbox/.nvm/.../bin/ on
+    # nvm-based AMIs and is otherwise not on PATH. The explicit profile.d source
+    # loop below is defense-in-depth for OTEL endpoints + KM_SLACK_* env that the
+    # notify-hook needs (KM_SLACK_BRIDGE_URL/CHANNEL_ID/SANDBOX_ID,
+    # OTEL_EXPORTER_OTLP_*) in case .bash_profile does not chain.
+    sudo -u sandbox bash -lc "
+      set -a; for f in /etc/profile.d/*.sh; do source \"\$f\" 2>/dev/null || true; done; set +a
+      # Prefer the standalone claude binary in ~/.local/bin over the npm wrapper.
+      export PATH=\"/home/sandbox/.local/bin:\$PATH\"
+      export KM_SLACK_THREAD_TS='$THREAD_TS'
+      claude -p \"\$(cat '$PROMPT_FILE')\" --output-format json \
+        --dangerously-skip-permissions $RESUME_ARG \
+        > '$RUN_DIR/output.json' 2>'$RUN_DIR/stderr.log'
+      echo \$? > '$RUN_DIR/exit_code'
+    " || true
+  fi
   rm -f "$PROMPT_FILE"
 
   RUN_EXIT=$(cat "$RUN_DIR/exit_code" 2>/dev/null || echo 1)
+  # Phase 70 (Plan 70-05): session-ID extraction is agent-aware.
+  # Codex: the Stop hook writes the session_id to /tmp/km-codex-session.$RUN_ID
+  # via KM_CODEX_RUN_ID; poll for up to 5s then read. The hook fires before
+  # codex exec returns (synchronous hook model per Plan 70-00 spike assumptions).
+  # Claude: session_id is in output.json directly (unchanged Phase 67 path).
   NEW_SESSION=""
   if [ "$RUN_EXIT" -eq 0 ] && [ -s "$RUN_DIR/output.json" ]; then
-    NEW_SESSION=$(jq -r '.session_id // empty' "$RUN_DIR/output.json" 2>/dev/null || true)
+    if [ "$EFFECTIVE_AGENT" = "codex" ]; then
+      SESSION_FILE="/tmp/km-codex-session.$RUN_ID"
+      for _w in 1 2 3 4 5; do
+        [ -f "$SESSION_FILE" ] && break
+        sleep 1
+      done
+      NEW_SESSION=$(cat "$SESSION_FILE" 2>/dev/null || true)
+      rm -f "$SESSION_FILE"
+    else
+      # Claude path — session_id is in output.json.
+      NEW_SESSION=$(jq -r '.session_id // empty' "$RUN_DIR/output.json" 2>/dev/null || true)
+    fi
   fi
 
   if [ -n "$NEW_SESSION" ]; then
     NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     TTL_EXPIRY=$(( $(date +%s) + 30*24*3600 ))
+
+    # Phase 70 (Plan 70-05): extract per-agent result text.
+    # Codex output.json (per Plan 70-00 spike): .last_assistant_message or .result.
+    # Claude output.json (Phase 67): .result.
+    if [ "$EFFECTIVE_AGENT" = "codex" ]; then
+      RESULT_TEXT=$(jq -r '.last_assistant_message // .result // ""' "$RUN_DIR/output.json" 2>/dev/null || echo "")
+    else
+      RESULT_TEXT=$(jq -r '.result // .response // ""' "$RUN_DIR/output.json" 2>/dev/null || echo "")
+    fi
+
+    # Phase 70 (Plan 70-05): JSON-encode RESULT_TEXT for the DDB put-item.
+    # CRITICAL (70-RESEARCH.md Pitfall 2): RESULT_TEXT may contain embedded
+    # double-quotes, backslashes, and newlines from agent replies. Direct shell
+    # interpolation into the DDB JSON literal would produce malformed JSON.
+    # jq -Rs . (raw input, string output) produces a properly-escaped JSON string
+    # *including* the surrounding double-quotes. Do NOT add extra quotes around
+    # $LAST_MSG_JSON in the item below — jq has already wrapped it.
+    LAST_MSG_JSON=$(echo "$RESULT_TEXT" | head -c 2000 | jq -Rs .)
+    # Defensive fallback in case jq is absent or RESULT_TEXT is empty.
+    [ -z "$LAST_MSG_JSON" ] && LAST_MSG_JSON='""'
+
     aws dynamodb put-item \
       --table-name "$THREADS_TABLE" \
       --region "$REGION" \
@@ -1573,6 +1677,8 @@ while true; do
         \"channel_id\":{\"S\":\"$CHANNEL\"},
         \"thread_ts\":{\"S\":\"$THREAD_TS\"},
         \"claude_session_id\":{\"S\":\"$NEW_SESSION\"},
+        \"agent_type\":{\"S\":\"$EFFECTIVE_AGENT\"},
+        \"last_assistant_msg\":{\"S\":$LAST_MSG_JSON},
         \"sandbox_id\":{\"S\":\"$SANDBOX_ID\"},
         \"last_turn_ts\":{\"S\":\"$NOW\"},
         \"ttl_expiry\":{\"N\":\"$TTL_EXPIRY\"}
@@ -1600,7 +1706,6 @@ while true; do
     # 'km agent list'. Documented trade-off: silence-on-failure is safer
     # than a misleading "(no recent assistant text)" fallback that operators
     # cannot distinguish from genuine empty replies.
-    RESULT_TEXT=$(jq -r '.result // empty' "$RUN_DIR/output.json" 2>/dev/null || true)
     if [ -n "$RESULT_TEXT" ] && [ -n "$KM_SLACK_CHANNEL_ID" ] && [ -n "$KM_SLACK_BRIDGE_URL" ]; then
       POST_FILE=$(mktemp /tmp/km-slack-inbound-post.XXXXXX)
       printf '%s' "$RESULT_TEXT" > "$POST_FILE"
