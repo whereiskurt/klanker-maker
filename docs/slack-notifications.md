@@ -1018,3 +1018,96 @@ km shell <sandbox-id> 'ls -laR /workspace/.km-slack/attachments/ 2>/dev/null | h
 
 **Authoritative design:** `docs/superpowers/specs/2026-05-15-slack-inbound-file-attachments-design.md` —
 full PRD with failure-handling matrix, Pitfall catalog, and rollback procedure.
+
+---
+
+## Prefix routing & agent switching (Phase 70)
+
+Phase 70 adds two related features to the Slack inbound flow:
+
+1. **Per-message prefix routing** — a Slack message starting with `claude:` or
+   `codex:` selects the agent for that turn (overriding the profile default).
+2. **Cross-agent mid-thread switching** — a prefix in an existing thread that
+   names the *other* agent spawns a new top-level message with a clean handoff
+   post in the original thread.
+
+For the full design, mechanism details, and troubleshooting matrix, see
+`docs/codex-parity.md`. This section is the Slack-scoped quick reference.
+
+### Prefix grammar
+
+Regex: `^([Cc][Ll][Aa][Uu][Dd][Ee]|[Cc][Oo][Dd][Ee][Xx]):[[:space:]]?`
+
+- Case-insensitive on agent name (`claude`, `Claude`, `CLAUDE` all match)
+- Anchored at message start — mid-sentence `claude:` is ignored
+- Exactly zero or one space after the colon
+- No tolerance for spaces before the colon (`claude :` does not match)
+
+### Behavior matrix
+
+| Scenario | Result |
+|---|---|
+| No prefix, existing thread | Dispatch the row's agent (Phase 67 unchanged) |
+| `codex: ...` on a fresh top-level in a claude-default sandbox | Codex dispatched; new DDB row with `agent_type=codex`; profile `KM_AGENT` on disk unchanged |
+| `claude: ...` inside an existing claude-rooted thread | No-op continuation: strip prefix, same dispatch, same thread, no handoff |
+| `codex: ...` inside an existing claude-rooted thread | Cross-agent switch: new top-level + handoff post + new DDB row + new Codex first turn |
+
+### Cross-agent switch artifacts
+
+In the **OLD** thread, after a switch:
+
+```
+Switching to codex → continuing in this thread.
+https://workspace.slack.com/archives/C12345/p1716393742000300
+```
+
+In the **NEW** top-level message (posted first, before the handoff):
+
+```
+Continuing from https://workspace.slack.com/archives/C12345/p1716393640000200
+
+Previous assistant (claude) said:
+> {first 500 chars of last_assistant_msg from the old DDB row}
+```
+
+The new agent's prompt seed (passed to the agent CLI, NOT posted to Slack) is:
+
+```
+{stripped_prompt}
+
+--- Context from prior thread (agent: claude) ---
+{up to 2000 chars of last_assistant_msg}
+```
+
+No placeholder string is ever sent to Slack. The OLD thread's permalink is
+fetched first (THREAD_TS is already known from the SQS event), so the new
+top-level body embeds it at post-time. `chat.update` is not used in the
+critical path.
+
+### km-slack sidecar additions (Phase 70-04)
+
+Three new surfaces added to the existing `km-slack` binary:
+
+- `km-slack post --new-message` — omits `thread_ts`; returns `ts=...` to
+  stdout (used to capture `NEW_TOP_TS` in step 3 of the switch sequence).
+- `km-slack permalink --channel C --ts T` — wraps `chat.getPermalink`.
+- `km-slack update --channel C --ts T --text "..."` — wraps `chat.update`
+  (subject to Slack's 10-minute bot edit window; not in the cross-agent
+  critical path).
+
+All three go through the bridge Lambda via signed Ed25519 envelopes; sandboxes
+never touch the raw Slack bot token.
+
+### km doctor checks (Phase 70)
+
+- **`codex_version_supports_jsonl`** — for each sandbox with
+  `spec.cli.agent: codex`, verifies the installed Codex binary supports
+  `--json` output (JSONL stream). WARN on mismatch.
+- **`agent_type_consistency`** — for each `km-slack-threads` row with
+  `agent_type` set, confirms the corresponding profile still declares the same
+  agent. WARN on drift (catches post-create profile flips).
+
+### See also
+
+`docs/codex-parity.md` — full operator guide including JSONL stream mechanism,
+SC-3 rationale, full switch sequence, and Phase 70 deferrals.

@@ -25,6 +25,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Slack runbook (full setup, troubleshooting) | `docs/slack-notifications.md` |
 | VS Code runbook | `docs/vscode.md` |
 | Snapshot-backed EBS volumes in profiles | `OPERATOR-GUIDE.md` § additionalSnapshots |
+| Codex parity, `spec.cli.agent`, Slack prefix routing & agent switching | `docs/codex-parity.md` (Phase 70) |
 
 ## CLI
 
@@ -197,3 +198,39 @@ spec:
 
 - `spec.execution.configFiles` — pre-seed tool config files (written after `initCommands`, owned by sandbox user)
 - `spec.cli.noBedrock` — operator-side default; doesn't affect sandbox provisioning, only CLI behavior when connecting
+
+### Agent: claude | codex (Phase 70)
+
+`spec.cli.agent` selects the default agent for `km shell` / `km agent run` /
+Slack inbound dispatch:
+
+```yaml
+spec:
+  cli:
+    agent: codex  # or "claude"; default claude; absence ≡ claude
+```
+
+The compiler writes `KM_AGENT` to `/etc/profile.d/km-notify-env.sh` and
+`/etc/km/notify.env`. It also writes `~/.codex/config.toml` on every sandbox
+regardless of value — Claude-default sandboxes have an inert config (forward-
+compat for when Codex ships a Claude-Code-style hook API).
+
+Per-turn override via Slack: a message starting with `claude:` or `codex:`
+selects the agent for that turn (case-insensitive, anchored at start, zero or
+one space after colon). Inside an existing thread, naming the *other* agent
+triggers an 8-step clean handoff to a new top-level message. See
+`docs/codex-parity.md` for the full switch sequence.
+
+**`km init --sidecars` is required** after this phase ships so management
+Lambdas pick up the schema addition. Existing sandboxes don't pick up
+`agent: codex` retroactively — `km destroy && km create`.
+
+### DDB column hangover (Phase 70)
+
+The `km-slack-threads.claude_session_id` column (Phase 67) now stores
+agent-agnostic session IDs — either a Claude session ID or a Codex session ID,
+based on the row's `agent_type`. The column name is a Phase 67 hangover;
+renaming would require a migration job we chose not to run (cosmetic only).
+
+Future agents (Goose etc.) slot in as new `agent_type` enum values without
+further DDB schema work.
