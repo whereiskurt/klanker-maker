@@ -60,6 +60,10 @@ func dispatch(args []string, stderr io.Writer) int {
 		return runUpload(args[1:], stderr)
 	case "record-mapping":
 		return runRecordMapping(args[1:], stderr)
+	case "permalink":
+		return runPermalink(args[1:], stderr)
+	case "update":
+		return runUpdate(args[1:], stderr)
 	case "-h", "--help", "help":
 		usage(stderr)
 		return 0
@@ -73,9 +77,11 @@ func dispatch(args []string, stderr io.Writer) int {
 func usage(w io.Writer) {
 	fmt.Fprintln(w, `usage: km-slack <subcommand> [args]
 Subcommands:
-  post           Post a message to a channel/thread (signs and POSTs to bridge).
+  post           Post a message to a channel/thread (signs and POSTs to bridge). --new-message omits thread_ts.
   upload         Upload a file via the bridge (3-step flow), referencing an S3 key.
-  record-mapping Write a (channel_id, slack_ts) → transcript-offset row to DDB.`)
+  record-mapping Write a (channel_id, slack_ts) → transcript-offset row to DDB.
+  permalink      Resolve a Slack permalink URL for --channel + --ts.
+  update         Edit a previously-posted bot message via --channel, --ts, and --text/--body.`)
 }
 
 // runPost is the Phase 63 post subcommand entry point. Returns a process exit
@@ -90,11 +96,13 @@ func runPost(args []string, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	var channel, subject, bodyPath, thread string
 	var renderMode string
+	var newMessage bool
 	fs.StringVar(&channel, "channel", "", "Slack channel ID (C...)")
 	fs.StringVar(&subject, "subject", "", "Optional subject text (rendered as bold header by bridge; omit for clean threaded replies)")
 	fs.StringVar(&bodyPath, "body", "", "Path to body file (stdin '-' NOT supported)")
 	fs.StringVar(&thread, "thread", "", "Thread parent ts")
 	fs.StringVar(&renderMode, "render", "", "Render mode: plain (default, no-op), mrkdwn (Phase 74 Tier 1 transformer), blocks (Phase 74 PR2 Tier 2 Block Kit; falls back to mrkdwn on 50-block cap)")
+	fs.BoolVar(&newMessage, "new-message", false, "Post as new top-level message (omits thread_ts); prints ts=<value> to stdout for poller capture. Phase 70.")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -122,9 +130,19 @@ func runPost(args []string, stderr io.Writer) int {
 		return 1
 	}
 
-	if err := run(channel, subject, bodyPath, thread, renderMode); err != nil {
+	// Phase 70: --new-message forces thread="" (new top-level) and prints ts to stdout.
+	threadArg := thread
+	if newMessage {
+		threadArg = ""
+	}
+
+	ts, err := run(channel, subject, bodyPath, threadArg, renderMode)
+	if err != nil {
 		fmt.Fprintf(stderr, "km-slack post: %v\n", err)
 		return 1
+	}
+	if newMessage {
+		fmt.Printf("ts=%s\n", ts) // STDOUT — poller captures with grep/sed
 	}
 	return 0
 }
@@ -265,21 +283,22 @@ func runRecordMapping(args []string, stderr io.Writer) int {
 // run is the outer entry point that loads env vars and the SSM key before
 // calling runWith. Separated so tests can inject an ephemeral key via runWith.
 // renderMode is one of "plain", "mrkdwn", "blocks" — resolved by runPost before calling run.
-func run(channel, subject, bodyPath, thread, renderMode string) error {
+// Returns the message ts on success (empty string if the bridge didn't return one).
+func run(channel, subject, bodyPath, thread, renderMode string) (string, error) {
 	sandboxID := os.Getenv("KM_SANDBOX_ID")
 	if sandboxID == "" {
-		return errors.New("KM_SANDBOX_ID env var not set")
+		return "", errors.New("KM_SANDBOX_ID env var not set")
 	}
 	bridgeURL := os.Getenv("KM_SLACK_BRIDGE_URL")
 	if bridgeURL == "" {
-		return errors.New("KM_SLACK_BRIDGE_URL env var not set")
+		return "", errors.New("KM_SLACK_BRIDGE_URL env var not set")
 	}
 	region := os.Getenv("AWS_REGION")
 	if region == "" {
 		region = os.Getenv("AWS_DEFAULT_REGION")
 	}
 	if region == "" {
-		return errors.New("AWS_REGION (or AWS_DEFAULT_REGION) not set")
+		return "", errors.New("AWS_REGION (or AWS_DEFAULT_REGION) not set")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
@@ -292,7 +311,7 @@ func run(channel, subject, bodyPath, thread, renderMode string) error {
 
 	priv, err := loadPrivateKey(ctx, region, sandboxID)
 	if err != nil {
-		return fmt.Errorf("load signing key: %w", err)
+		return "", fmt.Errorf("load signing key: %w", err)
 	}
 
 	return runWith(ctx, priv, sandboxID, bridgeURL, channel, subject, bodyPath, thread, renderMode)
@@ -312,17 +331,23 @@ func run(channel, subject, bodyPath, thread, renderMode string) error {
 // Overflow: if the rendered body exceeds slack.MaxRenderedBytes (35KB), it is
 // hard-truncated and a footer is appended. The existing MaxBodyBytes (40KB) check
 // remains as defense-in-depth AFTER the overflow truncation.
-func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL, channel, subject, bodyPath, thread, renderMode string) error {
+// runWith is the testable inner entry point. Tests inject an ephemeral key and
+// stub bridge server URL directly, bypassing SSM entirely.
+//
+// Returns the message ts from the bridge 200 response on success (empty string
+// if the bridge didn't include one). Phase 70 made this the return value so
+// runPost --new-message can print ts= to stdout for poller capture.
+func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL, channel, subject, bodyPath, thread, renderMode string) (string, error) {
 	if sandboxID == "" {
-		return errors.New("sandboxID is required")
+		return "", errors.New("sandboxID is required")
 	}
 	if bridgeURL == "" {
-		return errors.New("bridgeURL is required")
+		return "", errors.New("bridgeURL is required")
 	}
 
 	body, err := os.ReadFile(bodyPath)
 	if err != nil {
-		return fmt.Errorf("read body file: %w", err)
+		return "", fmt.Errorf("read body file: %w", err)
 	}
 
 	// Phase 74: apply renderer then check overflow before building envelope.
@@ -352,12 +377,12 @@ func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL,
 
 	// Defense-in-depth: the 40KB hard cap still applies post-render.
 	if len(rendered) > slack.MaxBodyBytes {
-		return fmt.Errorf("rendered body exceeds %d bytes (40KB Slack limit)", slack.MaxBodyBytes)
+		return "", fmt.Errorf("rendered body exceeds %d bytes (40KB Slack limit)", slack.MaxBodyBytes)
 	}
 
 	env, err := slack.BuildEnvelope(slack.ActionPost, sandboxID, channel, subject, rendered, thread)
 	if err != nil {
-		return err
+		return "", err
 	}
 	// Tier 2: populate the Blocks field if RenderBlocks succeeded.
 	if blocksJSON != "" {
@@ -366,9 +391,223 @@ func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL,
 
 	_, sig, err := slack.SignEnvelope(env, priv)
 	if err != nil {
-		return err
+		return "", err
 	}
 
+	resp, err := slack.PostToBridge(ctx, bridgeURL, env, sig)
+	if err != nil {
+		return "", err
+	}
+	if !resp.OK {
+		return "", fmt.Errorf("bridge returned not-ok: %s", resp.Error)
+	}
+	fmt.Fprintf(os.Stderr, "km-slack: posted ts=%s\n", resp.TS)
+	return resp.TS, nil
+}
+
+// runPermalink wraps chat.getPermalink via the bridge.
+// Output: permalink URL to stdout on success; error to stderr + non-zero exit on failure.
+// Phase 70 — used by Plan 70-06 cross-agent thread switch.
+func runPermalink(args []string, stderr io.Writer) int {
+	fs := flag.NewFlagSet("permalink", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var (
+		channel = fs.String("channel", "", "Slack channel ID (C...) — required")
+		ts      = fs.String("ts", "", "Slack message ts (NNNNNN.MMMMMM) — required")
+	)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *channel == "" || *ts == "" {
+		fmt.Fprintln(stderr, "km-slack permalink: --channel and --ts are required")
+		return 2
+	}
+
+	sandboxID := os.Getenv("KM_SANDBOX_ID")
+	bridgeURL := os.Getenv("KM_SLACK_BRIDGE_URL")
+	if sandboxID == "" || bridgeURL == "" {
+		fmt.Fprintln(stderr, "km-slack permalink: KM_SANDBOX_ID and KM_SLACK_BRIDGE_URL required")
+		return 2
+	}
+	region := os.Getenv("AWS_REGION")
+	if region == "" {
+		region = os.Getenv("AWS_DEFAULT_REGION")
+	}
+	if region == "" {
+		fmt.Fprintln(stderr, "km-slack permalink: AWS_REGION (or AWS_DEFAULT_REGION) not set")
+		return 2
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() { <-sigCh; cancel() }()
+
+	priv, err := loadPrivateKey(ctx, region, sandboxID)
+	if err != nil {
+		fmt.Fprintf(stderr, "km-slack permalink: load signing key: %v\n", err)
+		return 1
+	}
+
+	env, err := slack.BuildEnvelope(slack.ActionPermalink, sandboxID, *channel, "", "", "")
+	if err != nil {
+		fmt.Fprintf(stderr, "km-slack permalink: build envelope: %v\n", err)
+		return 1
+	}
+	env.MessageTS = *ts
+
+	permalink, err := postForPermalink(ctx, priv, bridgeURL, env)
+	if err != nil {
+		fmt.Fprintf(stderr, "km-slack permalink: bridge call failed: %v\n", err)
+		return 1
+	}
+	fmt.Println(permalink) // STDOUT — poller pipes/captures
+	return 0
+}
+
+// runUpdate wraps chat.update via the bridge. Subject to Slack's 10-minute
+// bot-edit window. Phase 70 — optional cleaner-UX path for Plan 70-06.
+func runUpdate(args []string, stderr io.Writer) int {
+	fs := flag.NewFlagSet("update", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var (
+		channel  = fs.String("channel", "", "Slack channel ID (C...) — required")
+		ts       = fs.String("ts", "", "Slack message ts — required")
+		text     = fs.String("text", "", "New message text (or use --body file)")
+		bodyPath = fs.String("body", "", "Path to body file (alternative to --text)")
+	)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *channel == "" || *ts == "" {
+		fmt.Fprintln(stderr, "km-slack update: --channel and --ts are required")
+		return 2
+	}
+	body := *text
+	if body == "" && *bodyPath != "" {
+		b, err := os.ReadFile(*bodyPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "km-slack update: read body file: %v\n", err)
+			return 1
+		}
+		body = string(b)
+	}
+	if body == "" {
+		fmt.Fprintln(stderr, "km-slack update: one of --text or --body required")
+		return 2
+	}
+
+	sandboxID := os.Getenv("KM_SANDBOX_ID")
+	bridgeURL := os.Getenv("KM_SLACK_BRIDGE_URL")
+	if sandboxID == "" || bridgeURL == "" {
+		fmt.Fprintln(stderr, "km-slack update: KM_SANDBOX_ID and KM_SLACK_BRIDGE_URL required")
+		return 2
+	}
+	region := os.Getenv("AWS_REGION")
+	if region == "" {
+		region = os.Getenv("AWS_DEFAULT_REGION")
+	}
+	if region == "" {
+		fmt.Fprintln(stderr, "km-slack update: AWS_REGION (or AWS_DEFAULT_REGION) not set")
+		return 2
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() { <-sigCh; cancel() }()
+
+	priv, err := loadPrivateKey(ctx, region, sandboxID)
+	if err != nil {
+		fmt.Fprintf(stderr, "km-slack update: load signing key: %v\n", err)
+		return 1
+	}
+
+	env, err := slack.BuildEnvelope(slack.ActionUpdate, sandboxID, *channel, "", "", "")
+	if err != nil {
+		fmt.Fprintf(stderr, "km-slack update: build envelope: %v\n", err)
+		return 1
+	}
+	env.MessageTS = *ts
+	env.Text = body
+
+	_, sig, err := slack.SignEnvelope(env, priv)
+	if err != nil {
+		fmt.Fprintf(stderr, "km-slack update: sign: %v\n", err)
+		return 1
+	}
+
+	resp, err := slack.PostToBridge(ctx, bridgeURL, env, sig)
+	if err != nil {
+		fmt.Fprintf(stderr, "km-slack update: bridge POST: %v\n", err)
+		return 1
+	}
+	if !resp.OK {
+		fmt.Fprintf(stderr, "km-slack update: bridge returned not-ok: %s\n", resp.Error)
+		return 1
+	}
+	return 0
+}
+
+// postForPermalink signs and POSTs a permalink envelope and returns the permalink URL.
+// The bridge returns {"ok":true,"permalink":"..."} decoded into PostResponse.Permalink.
+// Phase 70.
+func postForPermalink(ctx context.Context, priv ed25519.PrivateKey, bridgeURL string, env *slack.SlackEnvelope) (string, error) {
+	_, sig, err := slack.SignEnvelope(env, priv)
+	if err != nil {
+		return "", fmt.Errorf("sign: %w", err)
+	}
+	resp, err := slack.PostToBridge(ctx, bridgeURL, env, sig)
+	if err != nil {
+		return "", err
+	}
+	if !resp.OK {
+		return "", fmt.Errorf("bridge returned not-ok: %s", resp.Error)
+	}
+	return resp.Permalink, nil
+}
+
+// runPermalinkWith is the testable inner entry point for the permalink subcommand.
+// Tests inject an ephemeral key and stub bridge server URL directly, bypassing SSM.
+// Returns the permalink URL on success. Phase 70.
+func runPermalinkWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL, channel, messageTS string) (string, error) {
+	if sandboxID == "" {
+		return "", errors.New("sandboxID is required")
+	}
+	if bridgeURL == "" {
+		return "", errors.New("bridgeURL is required")
+	}
+	env, err := slack.BuildEnvelope(slack.ActionPermalink, sandboxID, channel, "", "", "")
+	if err != nil {
+		return "", fmt.Errorf("build envelope: %w", err)
+	}
+	env.MessageTS = messageTS
+	return postForPermalink(ctx, priv, bridgeURL, env)
+}
+
+// runUpdateWith is the testable inner entry point for the update subcommand.
+// Tests inject an ephemeral key and stub bridge server URL directly, bypassing SSM.
+// Returns nil on success. Phase 70.
+func runUpdateWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL, channel, messageTS, text string) error {
+	if sandboxID == "" {
+		return errors.New("sandboxID is required")
+	}
+	if bridgeURL == "" {
+		return errors.New("bridgeURL is required")
+	}
+	env, err := slack.BuildEnvelope(slack.ActionUpdate, sandboxID, channel, "", "", "")
+	if err != nil {
+		return fmt.Errorf("build envelope: %w", err)
+	}
+	env.MessageTS = messageTS
+	env.Text = text
+
+	_, sig, err := slack.SignEnvelope(env, priv)
+	if err != nil {
+		return fmt.Errorf("sign: %w", err)
+	}
 	resp, err := slack.PostToBridge(ctx, bridgeURL, env, sig)
 	if err != nil {
 		return err
@@ -376,7 +615,6 @@ func runWith(ctx context.Context, priv ed25519.PrivateKey, sandboxID, bridgeURL,
 	if !resp.OK {
 		return fmt.Errorf("bridge returned not-ok: %s", resp.Error)
 	}
-	fmt.Fprintf(os.Stderr, "km-slack: posted ts=%s\n", resp.TS)
 	return nil
 }
 

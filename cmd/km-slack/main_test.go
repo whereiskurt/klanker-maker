@@ -72,7 +72,7 @@ func TestKmSlackPost_HappyPath(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	err := runWith(context.Background(), priv, "sb-test", ts.URL, "C123", "Test subject", bodyPath, "", "plain")
+	_, err := runWith(context.Background(), priv, "sb-test", ts.URL, "C123", "Test subject", bodyPath, "", "plain")
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestKmSlackPost_BodyTooLarge_TruncatedAndSent(t *testing.T) {
 	_ = callCount
 
 	// Phase 74: oversized bodies are truncated, not rejected.
-	err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "subj", bodyPath, "", "plain")
+	_, err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "subj", bodyPath, "", "plain")
 	if err != nil {
 		t.Fatalf("expected oversized body to be truncated+sent, got error: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestKmSlackPost_MissingSandboxID_Exits1(t *testing.T) {
 	_, priv := genKey(t)
 	bodyPath := writeTmpBody(t, "test")
 
-	err := runWith(context.Background(), priv, "", "http://localhost/noop", "C123", "subj", bodyPath, "", "plain")
+	_, err := runWith(context.Background(), priv, "", "http://localhost/noop", "C123", "subj", bodyPath, "", "plain")
 	if err == nil {
 		t.Fatal("expected error for missing sandboxID")
 	}
@@ -122,7 +122,7 @@ func TestKmSlackPost_MissingBridgeURL_Exits1(t *testing.T) {
 	_, priv := genKey(t)
 	bodyPath := writeTmpBody(t, "test")
 
-	err := runWith(context.Background(), priv, "sb-test", "", "C123", "subj", bodyPath, "", "plain")
+	_, err := runWith(context.Background(), priv, "sb-test", "", "C123", "subj", bodyPath, "", "plain")
 	if err == nil {
 		t.Fatal("expected error for missing bridgeURL")
 	}
@@ -136,7 +136,7 @@ func TestKmSlackPost_BodyDash_Rejected(t *testing.T) {
 	// The stdin check is in main()'s flag validation, not in runWith.
 	// So we test it via the bodyPath "-" hitting the file-read path.
 	// runWith will try to os.ReadFile("-") which returns an error — that counts as exit 1.
-	err := runWith(context.Background(), priv, "sb-test", "http://localhost/noop", "C123", "subj", "-", "", "plain")
+	_, err := runWith(context.Background(), priv, "sb-test", "http://localhost/noop", "C123", "subj", "-", "", "plain")
 	if err == nil {
 		t.Fatal("expected error for body '-'")
 	}
@@ -155,7 +155,7 @@ func TestKmSlackPost_BridgeReturns401_Exit1(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	err := runWith(context.Background(), priv, "sb-test", ts.URL, "C123", "subj", bodyPath, "", "plain")
+	_, err := runWith(context.Background(), priv, "sb-test", ts.URL, "C123", "subj", bodyPath, "", "plain")
 	if err == nil {
 		t.Fatal("expected error for 401 response")
 	}
@@ -183,7 +183,7 @@ func TestKmSlackPost_BridgeReturns503ThenSuccess_Exit0(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	err := runWith(context.Background(), priv, "sb-test", ts.URL, "C123", "subj", bodyPath, "", "plain")
+	_, err := runWith(context.Background(), priv, "sb-test", ts.URL, "C123", "subj", bodyPath, "", "plain")
 	if err != nil {
 		t.Fatalf("expected success after 503 retries, got: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestKmSlackPost_SignatureVerifiesAtServer(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	err := runWith(context.Background(), priv, "sb-test", ts.URL, "C123", "verify-subj", bodyPath, "", "plain")
+	_, err := runWith(context.Background(), priv, "sb-test", ts.URL, "C123", "verify-subj", bodyPath, "", "plain")
 	if err != nil {
 		t.Fatalf("signature verify failed at server: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestRunWith_Plain(t *testing.T) {
 	input := "**bold**\n# heading\n"
 	bodyPath := writeTmpBody(t, input)
 
-	err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "subj", bodyPath, "", "plain")
+	_, err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "subj", bodyPath, "", "plain")
 	if err != nil {
 		t.Fatalf("runWith plain: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestRunWith_EnvOverride(t *testing.T) {
 			renderMode = "plain"
 		}
 
-		err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "subj", bodyPath, "", renderMode)
+		_, err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "subj", bodyPath, "", renderMode)
 		if err != nil {
 			t.Fatalf("runWith mrkdwn via env: %v", err)
 		}
@@ -323,7 +323,7 @@ func TestRunWith_EnvOverride(t *testing.T) {
 
 		// Explicit "--render=plain" wins over KM_SLACK_RENDER=mrkdwn.
 		// runPost logic: flag set → use flag (skip env lookup).
-		err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "subj", bodyPath, "", "plain")
+		_, err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "subj", bodyPath, "", "plain")
 		if err != nil {
 			t.Fatalf("runWith explicit plain over env: %v", err)
 		}
@@ -348,7 +348,7 @@ func TestRunWith_Overflow(t *testing.T) {
 	oversized := strings.Repeat("a", slack.MaxRenderedBytes+5000)
 	bodyPath := writeTmpBody(t, oversized)
 
-	err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "subj", bodyPath, "", "mrkdwn")
+	_, err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "subj", bodyPath, "", "mrkdwn")
 	if err != nil {
 		t.Fatalf("runWith overflow: %v", err)
 	}
@@ -380,7 +380,7 @@ func TestRunWith_Blocks(t *testing.T) {
 
 	bodyPath := writeTmpBody(t, "# Heading\n\nbody text\n")
 
-	err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "", bodyPath, "1234.5", "blocks")
+	_, err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "", bodyPath, "1234.5", "blocks")
 	if err != nil {
 		t.Fatalf("runWith blocks: %v", err)
 	}
@@ -428,14 +428,107 @@ func max(a, b int) int {
 	return b
 }
 
-// TestRunPost_NewMessage_Stub — Phase 70 Plan 70-04 seed. Real impl Task 2.
-// Verifies --new-message flag passes thread="" and prints ts to stdout.
-func TestRunPost_NewMessage_Stub(t *testing.T) { t.Skip("Wave 0 stub — Plan 70-04 Task 2") }
+// TestRunPost_NewMessage (Phase 70 Plan 70-04 Task 3): --new-message forces thread=""
+// and prints ts=<value> to stdout (via runWith which now returns (string, error)).
+func TestRunPost_NewMessage(t *testing.T) {
+	_, priv := genKey(t)
 
-// TestRunPermalink_Stub — Phase 70 Plan 70-04 seed. Real impl Task 3.
-// Verifies permalink subcommand routes to ActionPermalink + returns URL to stdout.
-func TestRunPermalink_Stub(t *testing.T) { t.Skip("Wave 0 stub — Plan 70-04 Task 3") }
+	var capturedEnv slack.SlackEnvelope
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&capturedEnv); err != nil {
+			http.Error(w, "bad body", 400)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"ok":true,"ts":"1701000000.001"}`)
+	}))
+	defer srv.Close()
 
-// TestRunUpdate_Stub — Phase 70 Plan 70-04 seed. Real impl Task 3.
-// Verifies update subcommand routes to ActionUpdate.
-func TestRunUpdate_Stub(t *testing.T) { t.Skip("Wave 0 stub — Plan 70-04 Task 3") }
+	bodyPath := writeTmpBody(t, "new top-level message body")
+
+	// Call runWith with thread="" to simulate --new-message behavior.
+	ts, err := runWith(context.Background(), priv, "sb-test", srv.URL, "C123", "", bodyPath, "", "plain")
+	if err != nil {
+		t.Fatalf("runWith(--new-message): %v", err)
+	}
+	// Verify the bridge received thread="" (no thread_ts).
+	if capturedEnv.ThreadTS != "" {
+		t.Errorf("--new-message: expected ThreadTS == \"\", got %q", capturedEnv.ThreadTS)
+	}
+	// Verify ts is returned correctly.
+	if ts != "1701000000.001" {
+		t.Errorf("--new-message: expected ts=1701000000.001, got %q", ts)
+	}
+}
+
+// TestRunPermalink (Phase 70 Plan 70-04 Task 3): permalink subcommand routes to
+// ActionPermalink and returns the URL to stdout.
+func TestRunPermalink(t *testing.T) {
+	_, priv := genKey(t)
+
+	var capturedEnv slack.SlackEnvelope
+	const wantPermalink = "https://wks.slack.com/archives/C123/p1701000000001"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&capturedEnv); err != nil {
+			http.Error(w, "bad body", 400)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"ok":true,"permalink":%q}`+"\n", wantPermalink)
+	}))
+	defer srv.Close()
+
+	permalink, err := runPermalinkWith(context.Background(), priv, "sb-test", srv.URL, "C123", "1701000000.001")
+	if err != nil {
+		t.Fatalf("runPermalinkWith: %v", err)
+	}
+	// Assert bridge received correct action + fields.
+	if capturedEnv.Action != slack.ActionPermalink {
+		t.Errorf("expected Action=%q, got %q", slack.ActionPermalink, capturedEnv.Action)
+	}
+	if capturedEnv.Channel != "C123" {
+		t.Errorf("expected Channel=C123, got %q", capturedEnv.Channel)
+	}
+	if capturedEnv.MessageTS != "1701000000.001" {
+		t.Errorf("expected MessageTS=1701000000.001, got %q", capturedEnv.MessageTS)
+	}
+	// Assert permalink URL returned correctly.
+	if permalink != wantPermalink {
+		t.Errorf("expected permalink=%q, got %q", wantPermalink, permalink)
+	}
+}
+
+// TestRunUpdate (Phase 70 Plan 70-04 Task 3): update subcommand routes to
+// ActionUpdate with channel, ts, and text fields.
+func TestRunUpdate(t *testing.T) {
+	_, priv := genKey(t)
+
+	var capturedEnv slack.SlackEnvelope
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&capturedEnv); err != nil {
+			http.Error(w, "bad body", 400)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"ok":true,"ts":"1701000000.001"}`)
+	}))
+	defer srv.Close()
+
+	err := runUpdateWith(context.Background(), priv, "sb-test", srv.URL, "C123", "1701000000.001", "edited body")
+	if err != nil {
+		t.Fatalf("runUpdateWith: %v", err)
+	}
+	// Assert bridge received correct action + fields.
+	if capturedEnv.Action != slack.ActionUpdate {
+		t.Errorf("expected Action=%q, got %q", slack.ActionUpdate, capturedEnv.Action)
+	}
+	if capturedEnv.Channel != "C123" {
+		t.Errorf("expected Channel=C123, got %q", capturedEnv.Channel)
+	}
+	if capturedEnv.MessageTS != "1701000000.001" {
+		t.Errorf("expected MessageTS=1701000000.001, got %q", capturedEnv.MessageTS)
+	}
+	if capturedEnv.Text != "edited body" {
+		t.Errorf("expected Text=%q, got %q", "edited body", capturedEnv.Text)
+	}
+}

@@ -405,9 +405,10 @@ func (c *Client) ArchiveChannel(ctx context.Context, channelID string) error {
 
 // PostResponse is the bridge Lambda's 200-path response shape.
 type PostResponse struct {
-	OK    bool   `json:"ok"`
-	TS    string `json:"ts,omitempty"`
-	Error string `json:"error,omitempty"`
+	OK        bool   `json:"ok"`
+	TS        string `json:"ts,omitempty"`
+	Error     string `json:"error,omitempty"`
+	Permalink string `json:"permalink,omitempty"` // Phase 70 — populated by ActionPermalink response
 }
 
 // BridgeBackoff is the retry schedule for network-level errors in PostToBridge.
