@@ -58,7 +58,7 @@ The drain logic itself is identical to the standard polling path (re-check meta.
 - [x] 5 live-AWS scenarios PASS (PQ-09, PQ-10, PQ-12, R1, PQ-07)
 - [x] PQ-11 PASS by bash-harness proxy (live-AWS infeasible per test infrastructure)
 - [~] PQ-13 PARTIAL — wait-half PASS live, drain-half deferred (operator-OAuth dependent)
-- [x] 6 inline bug fixes shipped via commits d93fefc, 108cd91, f88bd36, dca2b3a
+- [x] 6 inline bug fixes shipped via commits d93fefc, 108dc91, f88bd36, dca2b3a
 - [x] UAT.md frontmatter status: passed, final checkbox section updated
 
 ## Lambda refresh prerequisite
