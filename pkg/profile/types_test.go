@@ -2,6 +2,7 @@ package profile_test
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
@@ -1839,10 +1840,78 @@ spec:
 	})
 }
 
-// TestCLISpec_Agent_Stub seeds Wave 0 baseline for SC-1 (Phase 70 schema bit).
-// Plan 70-01 Task 2 replaces this with real assertions.
-func TestCLISpec_Agent_Stub(t *testing.T) {
-	t.Skip("Wave 0 stub — Plan 70-01 Task 2")
+// TestCLISpec_Agent_EnumValid: claude and codex are accepted.
+// SC-1: schema accepts the two locked enum values.
+func TestCLISpec_Agent_EnumValid(t *testing.T) {
+	cases := []struct {
+		name      string
+		agentLine string
+	}{
+		{"claude", "    agent: claude\n"},
+		{"codex", "    agent: codex\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := profile.Validate(minimalCLIProfileYAML(tc.agentLine))
+			if len(errs) > 0 {
+				t.Fatalf("expected no errors for agent=%s, got %v", tc.name, errs)
+			}
+		})
+	}
+}
+
+// TestCLISpec_Agent_EnumInvalid: anything not in {claude, codex} is rejected
+// with an error referencing the agent field.
+// SC-1: schema rejects out-of-enum values.
+func TestCLISpec_Agent_EnumInvalid(t *testing.T) {
+	cases := []struct {
+		name      string
+		agentLine string
+	}{
+		{"goose-rejected", "    agent: goose\n"},
+		{"uppercase-rejected", "    agent: CLAUDE\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := profile.Validate(minimalCLIProfileYAML(tc.agentLine))
+			if len(errs) == 0 {
+				t.Fatalf("expected validation error for agent line %q, got none", tc.agentLine)
+			}
+			found := false
+			for _, e := range errs {
+				if strings.Contains(e.Error(), "agent") {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("expected error message to reference agent field; got %v", errs)
+			}
+		})
+	}
+}
+
+// TestCLISpec_Agent_AbsenceIsClaudeDefault: when cli.agent is omitted entirely,
+// the profile validates and parses with p.Spec.CLI.Agent == "" (zero value).
+// The "default ≡ claude" behavior lives downstream in the compiler (Plan 70-02)
+// and the poller (Plan 70-05); the schema accepts absence.
+func TestCLISpec_Agent_AbsenceIsClaudeDefault(t *testing.T) {
+	// noBedrock: false provides a present-but-minimal cli block with no agent key.
+	yaml := minimalCLIProfileYAML("    noBedrock: false\n")
+	errs := profile.Validate(yaml)
+	if len(errs) > 0 {
+		t.Fatalf("expected no errors when cli.agent omitted, got %v", errs)
+	}
+	p, parseErr := profile.Parse(yaml)
+	if parseErr != nil {
+		t.Fatalf("parse error: %v", parseErr)
+	}
+	if p.Spec.CLI == nil {
+		t.Fatalf("expected p.Spec.CLI != nil")
+	}
+	if p.Spec.CLI.Agent != "" {
+		t.Fatalf("expected p.Spec.CLI.Agent == \"\" (zero value), got %q", p.Spec.CLI.Agent)
+	}
 }
 
 // TestParse_CLISpec_SlackFields_ExplicitFalse verifies that explicit false for
