@@ -556,6 +556,44 @@ func TestUserdata_SlackInbound_AllowsEmptyTextWhenAttachments(t *testing.T) {
 	}
 }
 
+// TestPoller_CodexDispatch_FirstTurn — confirms `codex exec --json --dangerously-bypass-approvals-and-sandbox`
+// appears in the poller bash when effective agent is codex on a first turn (no CLAUDE_SESSION).
+// SC-4: Plan 70-05 Task 2 implements; Wave 0 baseline stub.
+func TestPoller_CodexDispatch_FirstTurn(t *testing.T) {
+	t.Skip("Wave 0 stub — Plan 70-05 Task 2")
+}
+
+// TestPoller_CodexDispatch_Resume — confirms `codex exec resume <id>` (subcommand
+// form, NOT --resume flag) appears for the resume case. Per Plan 70-00 spike,
+// the 2026 canonical Codex resume syntax is the subcommand form.
+// SC-5: Plan 70-05 Task 2 implements; Wave 0 baseline stub.
+func TestPoller_CodexDispatch_Resume(t *testing.T) {
+	t.Skip("Wave 0 stub — Plan 70-05 Task 2")
+}
+
+// TestPoller_AgentTypeWriteback — confirms DDB put-item ALWAYS includes
+// "agent_type":{"S":"..."} attribute on every write (both codex and claude paths).
+// SC-4/SC-5: Plan 70-05 Task 2 implements; Wave 0 baseline stub.
+func TestPoller_AgentTypeWriteback(t *testing.T) {
+	t.Skip("Wave 0 stub — Plan 70-05 Task 2")
+}
+
+// TestPoller_LastAssistantMsg_JQEscaping_RoundTrip — synthetic reply containing
+// double-quote, backslash, and newline round-trips through jq -Rs . and produces
+// valid JSON the DDB put-item can parse. Guards 70-RESEARCH.md Pitfall 2.
+// SC-4/SC-5: Plan 70-05 Task 2 implements; Wave 0 baseline stub.
+func TestPoller_LastAssistantMsg_JQEscaping_RoundTrip(t *testing.T) {
+	t.Skip("Wave 0 stub — Plan 70-05 Task 2")
+}
+
+// TestPoller_ClaudePath_Unchanged — regression guard: when effective agent is
+// claude (or default), the `claude -p ... --dangerously-skip-permissions` dispatch
+// is byte-identical to Phase 67's existing path.
+// SC-6: Plan 70-05 Task 2 implements; Wave 0 baseline stub.
+func TestPoller_ClaudePath_Unchanged(t *testing.T) {
+	t.Skip("Wave 0 stub — Plan 70-05 Task 2")
+}
+
 // TestUserdata_ShellEnvFileStillWritten — Phase 67-11 follow-up.
 // The original shell-format /etc/profile.d/km-notify-env.sh must STILL be
 // written — interactive SSM sessions, the km-notify-hook bash script, and
