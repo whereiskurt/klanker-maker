@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed Phase 70 Plan 04 (km-slack permalink/update/new-message + bridge dispatch)
-last_updated: "2026-05-23T02:55:13.321Z"
+stopped_at: Completed Phase 70 Plan 03 (km-notify-hook PermissionRequest + last_assistant_message)
+last_updated: "2026-05-23T04:06:56.597Z"
 last_activity: 2026-05-23
 progress:
   total_phases: 103
   completed_phases: 91
   total_plans: 437
-  completed_plans: 384
+  completed_plans: 386
   percent: 88
 ---
 
@@ -416,6 +416,7 @@ Progress: [█████████░] 88%
 | Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile P05 | 281s | 1 tasks | 3 files |
 | Phase 70-codex-parity-for-operator-notify-slack-notify-and-slack-inbound-dispatcher P01 | 2min | 2 tasks | 3 files |
 | Phase 70-codex-parity-for-operator-notify-slack-notify-and-slack-inbound-dispatcher P04 | 591s | 3 tasks | 10 files |
+| Phase 70-codex-parity-for-operator-notify-slack-notify-and-slack-inbound-dispatcher P03 | 269s | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1204,6 +1205,8 @@ Recent decisions affecting current work:
 - [Phase 70-codex-parity-for-operator-notify-slack-notify-and-slack-inbound-dispatcher]: JSON Schema enum [claude,codex] rejects any other value including wrong case; no semantic validator needed
 - [Phase 70]: ActionPermalink + ActionUpdate added to SlackPoster interface; PostResponse.Permalink field added; runWith returns (string, error) to expose message ts to callers
 - [Phase 70]: runPermalinkWith + runUpdateWith testable inner functions mirror run/runWith pattern for unit testing new sidecar subcommands without SSM dependency
+- [Phase 70]: PermissionRequest and Notification share KM_NOTIFY_ON_PERMISSION gate via OR-pattern in case statement; tool_name field assumed per spike (UAT Plan 70-09 verifies)
+- [Phase 70]: last_assistant_message field name assumed per SPEC.md (MEDIUM confidence); Stop fast-path is 1-line fix if UAT finds different name
 
 ### Roadmap Evolution
 
@@ -1316,6 +1319,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-23T02:55:13.311Z
-Stopped at: Completed Phase 70 Plan 04 (km-slack permalink/update/new-message + bridge dispatch)
+Last session: 2026-05-23T04:06:56.588Z
+Stopped at: Completed Phase 70 Plan 03 (km-notify-hook PermissionRequest + last_assistant_message)
 Resume file: None
