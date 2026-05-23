@@ -44,12 +44,12 @@ This phase has 10 plans (70-00 through 70-09). Verification maps to plans, not i
 | 70-01 | 1 | SC-1 (schema bit), validation | unit | `go test ./pkg/profile -run TestCLISpec_Agent -count=1` | ❌ W0 — new test in `pkg/profile/types_test.go` | ⬜ pending |
 | 70-02 | 2 | SC-1 (config.toml file emitted), partial SC-4..6 (env var emitted) | compiler unit / golden | `go test ./pkg/compiler -run 'TestUserdata_CodexConfig\|TestUserdata_KMAgentEnv' -count=1` | ❌ W0 — new test in `pkg/compiler/userdata_codex_test.go` | ⬜ pending |
 | 70-03 | 2 | SC-2, SC-3 (hook behavior) | bash smoke (Go-wrapped) | `go test ./pkg/compiler -run 'TestNotifyHook_CodexPermission\|TestNotifyHook_LastAssistantMessage' -count=1` | ❌ W0 — new test in `pkg/compiler/notify_hook_test.go` | ⬜ pending |
-| 70-04 | 2 | (sidecar layer; supports SC-10) | unit | `go test ./sidecars/km-slack/... ./pkg/slack/... -run '70' -count=1` | ❌ W0 — new tests in `sidecars/km-slack/main_test.go` + `pkg/slack/payload_test.go` (bridge action) | ⬜ pending |
+| 70-04 | 2 | (sidecar layer; supports SC-10) | unit | `go test ./cmd/km-slack/... ./pkg/slack/... -run '70' -count=1` | ❌ W0 — new tests in `cmd/km-slack/main_test.go` + `pkg/slack/payload_test.go` (bridge action) | ⬜ pending |
 | 70-05 | 3 | SC-4, SC-5, SC-6, partial SC-1 (toml present) | compiler unit + DDB integration | `go test ./pkg/compiler -run 'TestPoller_CodexDispatch\|TestPoller_AgentTypeWriteback\|TestPoller_LastAssistantMsg' -count=1` | ❌ W0 — new test in `pkg/compiler/userdata_slack_inbound_test.go` (extend existing) | ⬜ pending |
 | 70-06 | 4 | SC-8, SC-9, SC-10 | compiler unit (table-driven parser) + DDB integration | `go test ./pkg/compiler -run 'TestPoller_PrefixParser\|TestPoller_CrossAgentSwitch' -count=1` | ❌ W0 — new test in `pkg/compiler/userdata_prefix_test.go` | ⬜ pending |
 | 70-07 | 4 | SC-7 | unit | `go test ./internal/app/cmd -run 'TestDoctor_CodexHookPresent\|TestDoctor_AgentTypeConsistency' -count=1` | ❌ W0 — new test in `internal/app/cmd/doctor_codex_test.go` | ⬜ pending |
 | 70-08 | 5 | (docs — manual review) | none (doc verification) | `test -f docs/codex-parity.md && grep -q "spec.cli.agent" CLAUDE.md` | N/A — bash one-liner | ⬜ pending |
-| 70-09 | 5 | All 10 SCs (E2E) | manual UAT | (operator runs the 9 demo flows; produces `70-VERIFY.md`) | N/A — manual | ⬜ pending |
+| 70-09 | 6 | All 10 SCs (E2E) | manual UAT | (operator runs the 9 demo flows; produces `70-VERIFY.md`) | N/A — manual | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -64,7 +64,7 @@ Wave 0 test stubs to create:
 - [ ] `pkg/profile/types_test.go` — extend existing file with `TestCLISpec_Agent_Stub` (covers SC-1 schema bit)
 - [ ] `pkg/compiler/userdata_codex_test.go` — new file with `TestUserdata_CodexConfig_Stub` (covers SC-1 file emission, SC-4..6 env var)
 - [ ] `pkg/compiler/notify_hook_test.go` — new file with `TestNotifyHook_Stub` (covers SC-2, SC-3)
-- [ ] `sidecars/km-slack/main_test.go` — extend or create with `TestKMSlack_NewMessage_Stub`, `TestKMSlack_Permalink_Stub`, `TestKMSlack_Update_Stub` (covers SC-10 dependencies)
+- [ ] `cmd/km-slack/main_test.go` — extend or create with `TestKMSlack_NewMessage_Stub`, `TestKMSlack_Permalink_Stub`, `TestKMSlack_Update_Stub` (covers SC-10 dependencies)
 - [ ] `pkg/slack/payload_test.go` — extend existing with `TestPayload_PermalinkAction_Stub`, `TestPayload_UpdateAction_Stub` (bridge action constants; covers SC-10)
 - [ ] `pkg/compiler/userdata_slack_inbound_test.go` — extend existing file with `TestPoller_CodexDispatch_Stub` (covers SC-4..6)
 - [ ] `pkg/compiler/userdata_prefix_test.go` — new file with `TestPoller_PrefixParser_Stub` (covers SC-8, SC-9, SC-10)
