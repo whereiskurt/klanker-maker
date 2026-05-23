@@ -260,9 +260,10 @@ func (f *SSMBotTokenFetcher) Fetch(ctx context.Context) (string, error) {
 
 // slackAPIResponse is the subset of Slack API response fields used by SlackPosterAdapter.
 type slackAPIResponse struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
-	TS    string `json:"ts,omitempty"`
+	OK        bool   `json:"ok"`
+	Error     string `json:"error,omitempty"`
+	TS        string `json:"ts,omitempty"`
+	Permalink string `json:"permalink,omitempty"` // Phase 70 — chat.getPermalink response
 }
 
 // SlackPosterAdapter implements SlackPoster via direct HTTP (not pkg/slack.Client)
@@ -424,6 +425,45 @@ func (s *SlackPosterAdapter) ArchiveChannel(ctx context.Context, channelID strin
 		return fmt.Errorf("bridge: conversations.archive: %s", resp.Error)
 	}
 	return nil
+}
+
+// GetPermalink returns a Slack permalink URL for the given channel + message ts.
+// Wraps chat.getPermalink. Phase 70 — used by Plan 70-06 cross-agent switch.
+func (s *SlackPosterAdapter) GetPermalink(ctx context.Context, channel, messageTS string) (string, error) {
+	resp, httpStatus, retryAfter, err := s.call(ctx, "chat.getPermalink", map[string]any{
+		"channel":    channel,
+		"message_ts": messageTS,
+	})
+	if err != nil {
+		return "", err
+	}
+	if rlErr := checkRateLimit(httpStatus, retryAfter, "chat.getPermalink"); rlErr != nil {
+		return "", rlErr
+	}
+	if !resp.OK {
+		return "", fmt.Errorf("bridge: chat.getPermalink: %s", resp.Error)
+	}
+	return resp.Permalink, nil
+}
+
+// UpdateMessage edits a previously-posted bot message via chat.update.
+// Phase 70 — used by Plan 70-06's optional handoff-edit path.
+func (s *SlackPosterAdapter) UpdateMessage(ctx context.Context, channel, ts, text string) (string, error) {
+	resp, httpStatus, retryAfter, err := s.call(ctx, "chat.update", map[string]any{
+		"channel": channel,
+		"ts":      ts,
+		"text":    text,
+	})
+	if err != nil {
+		return "", err
+	}
+	if rlErr := checkRateLimit(httpStatus, retryAfter, "chat.update"); rlErr != nil {
+		return "", rlErr
+	}
+	if !resp.OK {
+		return "", fmt.Errorf("bridge: chat.update: %s", resp.Error)
+	}
+	return resp.TS, nil
 }
 
 // ============================================================

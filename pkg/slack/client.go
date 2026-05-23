@@ -39,10 +39,11 @@ func (c *Client) SetBaseURL(u string) { c.baseURL = u }
 
 // SlackAPIResponse covers the subset of Slack response fields used in Phase 63.
 type SlackAPIResponse struct {
-	OK      bool   `json:"ok"`
-	Error   string `json:"error,omitempty"`
-	TS      string `json:"ts,omitempty"`
-	Channel struct {
+	OK        bool   `json:"ok"`
+	Error     string `json:"error,omitempty"`
+	TS        string `json:"ts,omitempty"`
+	Permalink string `json:"permalink,omitempty"` // Phase 70 — chat.getPermalink response
+	Channel   struct {
 		ID         string `json:"id"`
 		IsMember   bool   `json:"is_member"`
 		NumMembers int    `json:"num_members"`
@@ -134,6 +135,37 @@ func (c *Client) PostMessage(ctx context.Context, channel, subject, body, thread
 		payload["thread_ts"] = threadTS
 	}
 	resp, err := c.callJSON(ctx, "chat.postMessage", payload)
+	if err != nil {
+		return "", err
+	}
+	return resp.TS, nil
+}
+
+// GetPermalink returns a Slack permalink URL for the given channel + message ts.
+// Wraps chat.getPermalink. Phase 70 — used by Plan 70-06 cross-agent switch
+// to embed permalinks in handoff posts.
+func (c *Client) GetPermalink(ctx context.Context, channel, messageTS string) (string, error) {
+	payload := map[string]any{
+		"channel":    channel,
+		"message_ts": messageTS,
+	}
+	resp, err := c.callJSON(ctx, "chat.getPermalink", payload)
+	if err != nil {
+		return "", err
+	}
+	return resp.Permalink, nil
+}
+
+// UpdateMessage edits a previously-posted bot message. Subject to Slack's
+// 10-minute edit window for bot messages. Phase 70 — used by Plan 70-06's
+// optional handoff-edit path.
+func (c *Client) UpdateMessage(ctx context.Context, channel, ts, text string) (string, error) {
+	payload := map[string]any{
+		"channel": channel,
+		"ts":      ts,
+		"text":    text,
+	}
+	resp, err := c.callJSON(ctx, "chat.update", payload)
 	if err != nil {
 		return "", err
 	}

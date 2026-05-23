@@ -33,10 +33,12 @@ const EnvelopeVersion = 1
 
 // Allowed actions on the bridge envelope.
 const (
-	ActionPost    = "post"
-	ActionArchive = "archive"
-	ActionTest    = "test"
-	ActionUpload  = "upload"
+	ActionPost      = "post"
+	ActionArchive   = "archive"
+	ActionTest      = "test"
+	ActionUpload    = "upload"
+	ActionPermalink = "permalink" // Phase 70 — wraps chat.getPermalink
+	ActionUpdate    = "update"    // Phase 70 — wraps chat.update
 )
 
 // SenderOperator is the canonical sender_id for operator-signed envelopes.
@@ -73,16 +75,18 @@ type SlackEnvelope struct {
 	// leave this field empty and continue through the original PostMessage path
 	// (BRDG-01 backward-compat). Zero value ("") is signing-safe: canonical JSON
 	// always serializes the field so both sender and verifier produce identical bytes.
-	Blocks string `json:"blocks"`
-	Body   string `json:"body"`
+	Blocks      string `json:"blocks"`
+	Body        string `json:"body"`
 	Channel     string `json:"channel"`
 	ContentType string `json:"content_type"`
 	Filename    string `json:"filename"`
+	MessageTS   string `json:"message_ts"` // Phase 70 — used by permalink, update actions
 	Nonce       string `json:"nonce"`
 	S3Key       string `json:"s3_key"`
 	SenderID    string `json:"sender_id"`
 	SizeBytes   int64  `json:"size_bytes"`
 	Subject     string `json:"subject"`
+	Text        string `json:"text"` // Phase 70 — used by update action (new message text)
 	ThreadTS    string `json:"thread_ts"`
 	Timestamp   int64  `json:"timestamp"`
 	Version     int    `json:"version"`

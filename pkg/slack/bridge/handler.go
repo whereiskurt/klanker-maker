@@ -93,7 +93,7 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 		logger.WarnContext(ctx, "bridge: unsupported_version", "step", "parse", "version", env.Version, "status", 400)
 		return errResp(400, "unsupported_version")
 	}
-	if env.Action != slack.ActionPost && env.Action != slack.ActionArchive && env.Action != slack.ActionTest && env.Action != slack.ActionUpload {
+	if env.Action != slack.ActionPost && env.Action != slack.ActionArchive && env.Action != slack.ActionTest && env.Action != slack.ActionUpload && env.Action != slack.ActionPermalink && env.Action != slack.ActionUpdate {
 		logger.WarnContext(ctx, "bridge: unknown_action", "step", "parse", "action", env.Action, "status", 400)
 		return errResp(400, "unknown_action")
 	}
@@ -397,6 +397,65 @@ func (h *Handler) Handle(ctx context.Context, req *Request) *Response {
 			"status", 200,
 		)
 		return jsonResp(200, map[string]any{"ok": true, "file_id": fileID, "permalink": permalink})
+	case slack.ActionPermalink:
+		// Phase 70 — wraps chat.getPermalink. Channel-scope authorization is
+		// already enforced above (Step 6) for sandbox senders. Read-only, but
+		// defense-in-depth: sandboxes can only resolve permalinks for their own channel.
+		if env.MessageTS == "" {
+			logger.WarnContext(ctx, "bridge: missing_message_ts",
+				"step", "dispatch",
+				"action", env.Action,
+				"status", 400,
+			)
+			return errResp(400, "missing_message_ts")
+		}
+		permalink, err := h.Slack.GetPermalink(ctx, env.Channel, env.MessageTS)
+		if err != nil {
+			logger.ErrorContext(ctx, "bridge: slack_call_failed",
+				"step", "dispatch",
+				"action", env.Action,
+				"channel", env.Channel,
+				"slack_error", err.Error(),
+				"status", 502,
+			)
+			return slackResponse("", err)
+		}
+		logger.InfoContext(ctx, "bridge: ok", "action", env.Action, "channel", env.Channel, "status", 200)
+		return jsonResp(200, map[string]any{"ok": true, "permalink": permalink})
+
+	case slack.ActionUpdate:
+		// Phase 70 — wraps chat.update. Channel-scope authorization is already
+		// enforced above (Step 6) for sandbox senders: sandboxes can only update
+		// messages in their own channel.
+		if env.MessageTS == "" {
+			logger.WarnContext(ctx, "bridge: missing_message_ts",
+				"step", "dispatch",
+				"action", env.Action,
+				"status", 400,
+			)
+			return errResp(400, "missing_message_ts")
+		}
+		if env.Text == "" {
+			logger.WarnContext(ctx, "bridge: missing_text",
+				"step", "dispatch",
+				"action", env.Action,
+				"status", 400,
+			)
+			return errResp(400, "missing_text")
+		}
+		ts, err := h.Slack.UpdateMessage(ctx, env.Channel, env.MessageTS, env.Text)
+		if err != nil {
+			logger.ErrorContext(ctx, "bridge: slack_call_failed",
+				"step", "dispatch",
+				"action", env.Action,
+				"channel", env.Channel,
+				"slack_error", err.Error(),
+				"status", 502,
+			)
+			return slackResponse("", err)
+		}
+		logger.InfoContext(ctx, "bridge: ok", "action", env.Action, "channel", env.Channel, "ts", ts, "status", 200)
+		return slackResponse(ts, nil)
 	}
 	return errResp(500, "internal") // unreachable
 }

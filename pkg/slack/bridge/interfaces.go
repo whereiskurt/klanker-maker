@@ -62,6 +62,8 @@ type BotTokenFetcher interface {
 type SlackPoster interface {
 	PostMessage(ctx context.Context, channel, subject, body, threadTS string) (string, error)
 	ArchiveChannel(ctx context.Context, channelID string) error
+	GetPermalink(ctx context.Context, channel, messageTS string) (string, error)  // Phase 70 — chat.getPermalink
+	UpdateMessage(ctx context.Context, channel, ts, text string) (string, error)  // Phase 70 — chat.update
 }
 
 // BlockPoster is an optional Slack-API surface for posts carrying a Block Kit

@@ -39,6 +39,14 @@ func (f *fakeSlackPoster) ArchiveChannel(ctx context.Context, channelID string) 
 	return nil
 }
 
+func (f *fakeSlackPoster) GetPermalink(_ context.Context, channel, messageTS string) (string, error) {
+	return "https://example.slack.com/archives/" + channel + "/p" + messageTS, nil
+}
+
+func (f *fakeSlackPoster) UpdateMessage(_ context.Context, _, ts, _ string) (string, error) {
+	return ts, nil
+}
+
 // slowDownloader implements FileDownloader with a configurable delay,
 // used to verify that Handle returns before Download completes.
 type slowDownloader struct {

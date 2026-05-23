@@ -87,6 +87,14 @@ func (f *fakeSlack) ArchiveChannel(_ context.Context, ch string) error {
 	return nil
 }
 
+func (f *fakeSlack) GetPermalink(_ context.Context, channel, messageTS string) (string, error) {
+	return "https://example.slack.com/archives/" + channel + "/p" + messageTS, nil
+}
+
+func (f *fakeSlack) UpdateMessage(_ context.Context, _, ts, _ string) (string, error) {
+	return ts, nil
+}
+
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
@@ -733,6 +741,14 @@ func (f *fakeBlockPoster) PostMessageBlocks(_ context.Context, ch, subj, body, b
 	if ts == "" {
 		ts = "222.333"
 	}
+	return ts, nil
+}
+
+func (f *fakeBlockPoster) GetPermalink(_ context.Context, channel, messageTS string) (string, error) {
+	return "https://example.slack.com/archives/" + channel + "/p" + messageTS, nil
+}
+
+func (f *fakeBlockPoster) UpdateMessage(_ context.Context, _, ts, _ string) (string, error) {
 	return ts, nil
 }
 

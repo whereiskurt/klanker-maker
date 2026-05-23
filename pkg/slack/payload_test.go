@@ -116,11 +116,11 @@ func TestCanonicalJSON_FieldOrderAlphabetical(t *testing.T) {
 	// Fields in alphabetical-by-tag order. Phase 68 added four upload-only
 	// fields (content_type, filename, s3_key, size_bytes); they serialize
 	// as zero values for non-upload actions so canonical signing remains
-	// deterministic across all action types.
+	// deterministic across all action types. Phase 70 added message_ts and text.
 	fields := []string{
 		`"action"`, `"blocks"`, `"body"`, `"channel"`, `"content_type"`, `"filename"`,
-		`"nonce"`, `"s3_key"`, `"sender_id"`, `"size_bytes"`, `"subject"`,
-		`"thread_ts"`, `"timestamp"`, `"version"`,
+		`"message_ts"`, `"nonce"`, `"s3_key"`, `"sender_id"`, `"size_bytes"`, `"subject"`,
+		`"text"`, `"thread_ts"`, `"timestamp"`, `"version"`,
 	}
 	last := 0
 	for _, field := range fields {
@@ -139,7 +139,9 @@ func TestCanonicalJSON_FieldOrderAlphabetical(t *testing.T) {
 	// this (no trailing newline, fields alphabetical). The four Phase 68
 	// upload fields appear at their alphabetical positions with zero values.
 	// Phase 74 PR2 added "blocks" between "action" and "body" (alphabetical).
-	golden := `{"action":"post","blocks":"","body":"hello","channel":"C0123ABC","content_type":"","filename":"","nonce":"00000000000000000000000000000000","s3_key":"","sender_id":"sb-abc123","size_bytes":0,"subject":"[sb-abc123] needs permission","thread_ts":"","timestamp":1714280400,"version":1}`
+	// Phase 70 added "message_ts" (after filename, before nonce) and "text"
+	// (after subject, before thread_ts).
+	golden := `{"action":"post","blocks":"","body":"hello","channel":"C0123ABC","content_type":"","filename":"","message_ts":"","nonce":"00000000000000000000000000000000","s3_key":"","sender_id":"sb-abc123","size_bytes":0,"subject":"[sb-abc123] needs permission","text":"","thread_ts":"","timestamp":1714280400,"version":1}`
 	if s != golden {
 		t.Errorf("canonical JSON mismatch:\n  got:  %s\n  want: %s", s, golden)
 	}
@@ -221,8 +223,49 @@ func TestVerifyEnvelope_MutatedBody_Fails(t *testing.T) {
 	}
 }
 
-// TestPayload_PermalinkAction_Stub — Phase 70 Plan 70-04 seed. Real impl Task 2.
-func TestPayload_PermalinkAction_Stub(t *testing.T) { t.Skip("Wave 0 stub — Plan 70-04 Task 2") }
+// TestPayload_PermalinkAction asserts the ActionPermalink constant value and that a
+// permalink envelope carries the MessageTS field correctly. Phase 70 Plan 70-04.
+func TestPayload_PermalinkAction(t *testing.T) {
+	if slack.ActionPermalink != "permalink" {
+		t.Errorf("ActionPermalink = %q; want %q", slack.ActionPermalink, "permalink")
+	}
+	// Build a permalink envelope and confirm MessageTS round-trips through canonical JSON.
+	env, err := slack.BuildEnvelope(slack.ActionPermalink, "sb-test", "C123", "", "", "")
+	if err != nil {
+		t.Fatalf("BuildEnvelope(ActionPermalink): %v", err)
+	}
+	env.MessageTS = "1701000000.001"
+	b, err := slack.CanonicalJSON(env)
+	if err != nil {
+		t.Fatalf("CanonicalJSON: %v", err)
+	}
+	if !strings.Contains(string(b), `"message_ts":"1701000000.001"`) {
+		t.Errorf("canonical JSON missing message_ts; got: %s", string(b))
+	}
+}
 
-// TestPayload_UpdateAction_Stub — Phase 70 Plan 70-04 seed. Real impl Task 2.
-func TestPayload_UpdateAction_Stub(t *testing.T) { t.Skip("Wave 0 stub — Plan 70-04 Task 2") }
+// TestPayload_UpdateAction asserts the ActionUpdate constant value and that an
+// update envelope carries the MessageTS + Text fields correctly. Phase 70 Plan 70-04.
+func TestPayload_UpdateAction(t *testing.T) {
+	if slack.ActionUpdate != "update" {
+		t.Errorf("ActionUpdate = %q; want %q", slack.ActionUpdate, "update")
+	}
+	// Build an update envelope and confirm MessageTS + Text round-trip.
+	env, err := slack.BuildEnvelope(slack.ActionUpdate, "sb-test", "C123", "", "", "")
+	if err != nil {
+		t.Fatalf("BuildEnvelope(ActionUpdate): %v", err)
+	}
+	env.MessageTS = "1701000000.001"
+	env.Text = "edited body"
+	b, err := slack.CanonicalJSON(env)
+	if err != nil {
+		t.Fatalf("CanonicalJSON: %v", err)
+	}
+	s := string(b)
+	if !strings.Contains(s, `"message_ts":"1701000000.001"`) {
+		t.Errorf("canonical JSON missing message_ts; got: %s", s)
+	}
+	if !strings.Contains(s, `"text":"edited body"`) {
+		t.Errorf("canonical JSON missing text; got: %s", s)
+	}
+}
