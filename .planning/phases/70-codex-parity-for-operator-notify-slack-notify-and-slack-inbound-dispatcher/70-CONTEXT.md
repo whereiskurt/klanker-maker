@@ -1,10 +1,30 @@
 # Phase 70: Codex parity + Slack prefix routing & cross-agent thread switching - Context
 
-**Gathered:** 2026-05-22
-**Status:** Ready for planning
-**Source:** Brainstorming sessions 2026-05-05 (Tier 2 Codex parity) + 2026-05-22 (prefix routing + cross-agent switch) → SPEC.md
+**Gathered:** 2026-05-22; revised 2026-05-23 (Path B JSONL adoption)
+**Status:** In execution. Path B (JSONL stream parsing) locked 2026-05-23 after Plan 70-00 spike on Codex 0.121.0 + 0.133.0.
+**Source:** Brainstorming sessions 2026-05-05 (Tier 2 Codex parity) + 2026-05-22 (prefix routing + cross-agent switch) → SPEC.md; Spike Findings (Plan 70-00) v1/v2/v3 → 70-RESEARCH.md and SPEC.md "Path B redesign" section.
 
 For the full design narrative, demo storyboard, failure modes, and risk register, read `SPEC.md` in the same directory. This document is the locked-decisions surface for the planner.
+
+## Path B contract (2026-05-23 — supersedes hook-based items below where they conflict)
+
+After Plan 70-00 spike confirmed that Codex 0.121.0 and 0.133.0 do NOT fire hooks with the assumed `[[hooks.Stop]]` / `[[hooks.PermissionRequest]]` TOML schema (Codex's documented `hooks: stable, true` feature in 0.133 appears to refer to a different lifecycle event surface — undocumented schema; no Codex plugin we inspected uses it), the implementation pivots to parsing the `codex exec --json` JSONL stream:
+
+- **LOCKED:** Session-ID source: `thread_id` field on the first `{"type":"thread.started"}` event in the JSONL output of `codex exec --json`. Stored in DDB as `claude_session_id` (column-name hangover, agent-agnostic).
+- **LOCKED:** Assistant-message source: `item.text` from the LAST `{"type":"item.completed","item":{"type":"agent_message",...}}` event. Stored as `last_assistant_msg` in DDB; also the body posted to Slack and emailed to operator.
+- **LOCKED:** Idle/done signal: presence of `{"type":"turn.completed"}` event before process exit (or process exit on success). No idle hook event needed.
+- **LOCKED:** PermissionRequest: not emitted by Codex under `--dangerously-bypass-approvals-and-sandbox`. SC-3 (the PermissionRequest hook fires and notifies) is **dropped** from Phase 70's success criteria. Tools execute without an approval gate under bypass; documented as expected behavior in `docs/codex-parity.md`.
+- **LOCKED:** Codex `~/.codex/config.toml` written by Plan 70-02 with the hook entries is a no-op artifact under shipping Codex versions. Left in place (harmless, forward-compatible if Codex implements the Claude-Code-style hook API later). Plan 70-03's Codex branches in `km-notify-hook` are dead code under shipping Codex; left in place for the same reason. Neither is reverted.
+- **LOCKED:** Plan 70-10 is the new gap-closure plan that swaps the poller's hook-file session-ID extraction (shipped in Plan 70-05) for JSONL-stream parsing of `$OUT_FILE`. Wave assignment: 3.5 (between original 70-05 and Wave 4's 70-06/70-07).
+- **LOCKED:** `km doctor` `codex_hook_config_present` check is replaced by `codex_version_supports_jsonl` — SSM-probes `codex --version` and `codex exec --help | grep -- --json`. `agent_type_consistency` is unchanged.
+
+**Locked decisions below this point that the Path B contract overrides:**
+- The "Compiler: write both config files" decision: Plan 70-02 already shipped; the hook TOML written is harmless but unused. Not reverted.
+- The "km-notify-hook agent-aware branches" decisions: Plan 70-03 already shipped; the Codex PermissionRequest branch + `last_assistant_message` Stop fast-path are dead code under shipping Codex. Not reverted.
+- The "Inbound poller dispatch fork" decision around hook-file session-ID extraction: replaced by JSONL parse in Plan 70-10.
+- Success criterion SC-3 is dropped.
+
+Everything else in the lock list below stays in force.
 
 <domain>
 ## Phase Boundary

@@ -1625,23 +1625,24 @@ while true; do
   rm -f "$PROMPT_FILE"
 
   RUN_EXIT=$(cat "$RUN_DIR/exit_code" 2>/dev/null || echo 1)
-  # Phase 70 (Plan 70-05): session-ID extraction is agent-aware.
-  # Codex: the Stop hook writes the session_id to /tmp/km-codex-session.$RUN_ID
-  # via KM_CODEX_RUN_ID; poll for up to 5s then read. The hook fires before
-  # codex exec returns (synchronous hook model per Plan 70-00 spike assumptions).
-  # Claude: session_id is in output.json directly (unchanged Phase 67 path).
+  # Phase 70 Path B (Plan 70-10, supersedes 70-05): session-ID + result extraction.
+  # Codex 0.121/0.133 spike confirmed hooks do NOT fire from ~/.codex/config.toml,
+  # so the original hook-file approach (/tmp/km-codex-session.$RUN_ID) is dead.
+  # Instead, parse the JSONL stream that codex exec --json writes to
+  # $RUN_DIR/output.json. Canonical events from Codex 0.133:
+  #   {"type":"thread.started","thread_id":"<uuid>"}             - session ID
+  #   {"type":"item.completed","item":{"type":"agent_message","text":"<reply>"}}
+  #   {"type":"turn.completed","usage":{...}}
+  # Multiple agent_message items may appear per turn (reasoning + final answer);
+  # we take the LAST one as the user-facing reply.
+  # Claude path (Phase 67) unchanged: single-document output.json with .session_id + .result.
   NEW_SESSION=""
   if [ "$RUN_EXIT" -eq 0 ] && [ -s "$RUN_DIR/output.json" ]; then
     if [ "$EFFECTIVE_AGENT" = "codex" ]; then
-      SESSION_FILE="/tmp/km-codex-session.$RUN_ID"
-      for _w in 1 2 3 4 5; do
-        [ -f "$SESSION_FILE" ] && break
-        sleep 1
-      done
-      NEW_SESSION=$(cat "$SESSION_FILE" 2>/dev/null || true)
-      rm -f "$SESSION_FILE"
+      # Parse JSONL stream: first thread.started → thread_id.
+      NEW_SESSION=$(jq -r 'select(.type=="thread.started") | .thread_id // empty' "$RUN_DIR/output.json" 2>/dev/null | head -1 || true)
     else
-      # Claude path — session_id is in output.json.
+      # Claude path — session_id is in output.json (single JSON document).
       NEW_SESSION=$(jq -r '.session_id // empty' "$RUN_DIR/output.json" 2>/dev/null || true)
     fi
   fi
@@ -1650,11 +1651,11 @@ while true; do
     NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     TTL_EXPIRY=$(( $(date +%s) + 30*24*3600 ))
 
-    # Phase 70 (Plan 70-05): extract per-agent result text.
-    # Codex output.json (per Plan 70-00 spike): .last_assistant_message or .result.
-    # Claude output.json (Phase 67): .result.
+    # Phase 70 Path B (Plan 70-10): extract per-agent result text.
+    # Codex: LAST agent_message.text from the JSONL stream.
+    # Claude: .result // .response from output.json (single JSON document).
     if [ "$EFFECTIVE_AGENT" = "codex" ]; then
-      RESULT_TEXT=$(jq -r '.last_assistant_message // .result // ""' "$RUN_DIR/output.json" 2>/dev/null || echo "")
+      RESULT_TEXT=$(jq -rs 'map(select(.type=="item.completed" and .item.type=="agent_message")) | last | .item.text // ""' "$RUN_DIR/output.json" 2>/dev/null || echo "")
     else
       RESULT_TEXT=$(jq -r '.result // .response // ""' "$RUN_DIR/output.json" 2>/dev/null || echo "")
     fi

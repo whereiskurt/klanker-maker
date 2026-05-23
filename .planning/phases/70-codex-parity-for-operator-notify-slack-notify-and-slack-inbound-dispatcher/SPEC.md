@@ -1,7 +1,7 @@
 # Phase 70 — Codex parity for Phases 62/63/67 (Tier 2: notify + Slack inbound)
 
-**Status:** draft (pre-plan). Hand to `/gsd:plan-phase` once the operator approves the brief.
-**Author:** brainstormed 2026-05-05; extended 2026-05-22 with prefix routing + cross-agent thread switching.
+**Status:** in execution. Path B (JSONL stream parsing) adopted 2026-05-23 after Plan 70-00 spike on Codex 0.121.0 + 0.133.0 showed the assumed `[[hooks.Stop]]` / `[[hooks.PermissionRequest]]` TOML schema does NOT fire any hooks under either version. See "Path B redesign (JSONL stream is the contract)" section below.
+**Author:** brainstormed 2026-05-05; extended 2026-05-22 with prefix routing + cross-agent thread switching; redesigned 2026-05-23 onto JSONL stream contract.
 **Depends on:** Phase 58 (Codex CLI agent-run support + `spec.cli.codexArgs`), Phase 62 (operator-notify hook script), Phase 63 (Slack notify hook + km-slack sidecar + bridge Lambda), Phase 67 (Slack inbound poller + DDB threads table)
 
 ## Notation
@@ -40,6 +40,43 @@ A reviewer can verify each as TRUE end-to-end on a real EC2 sandbox.
 10. **Cross-agent mid-thread switch.** Inside a running claude thread (DDB row has `agent_type=claude`, `claude_session_id=<id>`, `last_assistant_msg` cached from the prior turn), operator posts `codex: check this`. The bot posts in the old thread: `Switching to codex → continuing in this thread.` followed by a Slack permalink to the new thread. A new top-level message appears in `#sb-x` containing `Continuing from <permalink-to-old-thread>` plus a truncated excerpt of the prior claude assistant message; Codex's reply to "check this" (seeded with the prior assistant message as context) posts as the first thread reply. DDB has two rows after the switch: the original claude row (unchanged, still resumable) and a new codex row keyed on the new `thread_ts`. The old claude session/process is NOT killed.
 
 ## Approach
+
+### Path B redesign (JSONL stream is the contract) — 2026-05-23
+
+Plan 70-00 spike v1/v2/v3 on the operator's `learn` sandbox (Codex CLI 0.121.0 then upgraded to 0.133.0) confirmed:
+
+- **`codex exec --json`, `--dangerously-bypass-approvals-and-sandbox`, and `codex exec resume <SESSION_ID> <PROMPT>` all work** as the spec assumed.
+- **The `[[hooks.Stop]]` / `[[hooks.PermissionRequest]]` TOML schema does NOT fire any hooks** in either tested version. Codex 0.121's `codex_hooks` feature is `under development, false`. Codex 0.133 renames the flag to `hooks` (and `plugin_hooks`) marked `stable, true`, but the same TOML schema still does not fire hooks. The actual hook config format is undocumented in CLI help / `codex doctor` / any installed plugin's `.codex-plugin/plugin.json` we inspected. Likely the "hooks" feature in 0.133 refers to MCP/plugin lifecycle hooks, not Claude-Code-style PostToolUse/Stop/PermissionRequest events.
+- **The JSONL stream from `codex exec --json` is fully sufficient** to power every Phase 70 flow. It emits `thread.started` with a `thread_id` (the session identifier for `codex exec resume`), one or more `item.completed` events with `item.type=agent_message` and `item.text` (the assistant reply), and a final `turn.completed` event before process exit.
+
+**Decision:** the implementation parses the JSONL stream instead of relying on Codex hooks. This makes Phase 70's Codex parity:
+
+- **Independent of the Codex hooks API.** Phase 70 ships on shipping Codex without any hook configuration. If/when Codex implements the Claude-Code-style hook API, Phase 70 can opt in later for cooldown semantics, but it is not required for parity with Phase 67's poller surface.
+- **Cleaner end-to-end.** No filesystem race conditions (`/tmp/km-codex-session.$RUN_ID`), no hook config drift, no per-AMI hook-availability variance.
+
+**What the JSONL parse extracts:**
+
+- `thread_id` from the first `{"type":"thread.started","thread_id":"..."}` event — this is the session ID stored as `claude_session_id` in DDB and passed to `codex exec resume`.
+- The text of the LAST `{"type":"item.completed","item":{"type":"agent_message","text":"..."}}` event — this is `last_assistant_msg` stored in DDB AND the body posted to Slack / emailed to the operator.
+- Optionally, the `turn.completed.usage` block — handy for spend metering future work; ignored in Phase 70.
+
+**Mechanical changes from the original hook-based spec:**
+
+| Subsection below | Original (hook-based) | Path B (JSONL) |
+|---|---|---|
+| "Compiler: write both config files" | Writes `~/.codex/config.toml` with hook entries | Writes no Codex config (or writes an empty/minimal config — Plan 70-02 already shipped the hook config; it is a no-op artifact, **harmless, left in place**) |
+| "km-notify-hook becomes agent-aware" | Adds PermissionRequest branch + `last_assistant_message` fast-path | Plan 70-03 already shipped these branches; they remain **dead code under shipping Codex** (Codex never invokes the hook). Harmless. Claude paths unaffected. **Revisit in a future quick task if Codex hooks ever ship.** |
+| "Phase 67 Slack inbound poller: dispatch fork + session-ID handling" | Codex Stop hook writes session ID to `/tmp/km-codex-session.$RUN_ID`; poller tails that file | **Plan 70-10 (Path B rework)**: poller parses `$OUT_FILE` (the JSONL captured from `codex exec --json > $OUT_FILE`) with `jq -c 'select(.type=="thread.started") | .thread_id' | head -1` and `jq -rs 'map(select(.type=="item.completed" and .item.type=="agent_message")) | last | .item.text'`. No hook dependency. |
+| "DDB schema: agent_type + last_assistant_msg" | Unchanged | Unchanged. Same writer/reader contract. |
+| "Slack prefix routing & mid-thread agent switching" | Unchanged | Unchanged. Operates on EFFECTIVE_AGENT and DDB rows the poller produces. |
+| "km doctor checks" | `codex_hook_config_present` SSM-probes `~/.codex/config.toml` for hook entries | `codex_version_supports_jsonl` SSM-probes `codex --version` and `codex exec --help` for `--json` flag presence. The `agent_type_consistency` check is unchanged. |
+| Success criterion SC-3 (PermissionRequest event) | Required | **Dropped.** Codex under `--dangerously-bypass-approvals-and-sandbox` does not emit PermissionRequest events; tools execute without an approval gate (verified in spike v2 — the file was created without any prompt-side event). SC-3 was already moot. |
+
+**Plans 70-02, 70-03, 70-05 are already shipped against the hook-based spec.** They are NOT reverted — the dead-code surfaces are harmless and the structural scaffolding (env-file emission, dispatch fork, DDB writeback, EFFECTIVE_AGENT variable) is the foundation Plan 70-10 builds on. The redo touches only the session-ID + assistant-message capture step in the poller.
+
+**Plan 70-10 (Path B rework)** is the new wave-3.5 plan that swaps the mechanism. After it lands, Wave 4 (70-06 prefix routing + 70-07 doctor) runs against the JSONL primitive.
+
+The rest of this Approach section describes the original hook-based design. **Treat it as historical context except where the Path B section above explicitly overrides.** The success criteria below have one revision: SC-3 is dropped (see Path B table).
 
 ### Profile schema additions
 

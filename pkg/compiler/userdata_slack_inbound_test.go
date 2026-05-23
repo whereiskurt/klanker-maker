@@ -599,8 +599,8 @@ func pollerWithAgentClaude(t *testing.T) string {
 // - dispatch fork guard: if [ "$EFFECTIVE_AGENT" = "codex" ]
 // - first-turn command: codex exec --json --dangerously-bypass-approvals-and-sandbox
 // - inline KM_CODEX_RUN_ID export (Pitfall 3 per 70-RESEARCH.md)
-// - hook-file session capture: SESSION_FILE="/tmp/km-codex-session.$RUN_ID"
-// SC-4: Plan 70-05.
+// - JSONL stream parse for thread_id (Plan 70-10 Path B; replaced 70-05's hook-file path)
+// SC-4: Plans 70-05 + 70-10.
 func TestPoller_CodexDispatch_FirstTurn(t *testing.T) {
 	poller := pollerWithAgentCodex(t)
 
@@ -608,11 +608,24 @@ func TestPoller_CodexDispatch_FirstTurn(t *testing.T) {
 		`if [ "$EFFECTIVE_AGENT" = "codex" ]; then`,
 		`codex exec --json --dangerously-bypass-approvals-and-sandbox`,
 		`export KM_CODEX_RUN_ID='$RUN_ID'`,
-		`SESSION_FILE="/tmp/km-codex-session.$RUN_ID"`,
+		// Plan 70-10 Path B: JSONL stream parsing replaces hook-file. The session ID
+		// comes from the thread.started event in $RUN_DIR/output.json.
+		`select(.type=="thread.started") | .thread_id`,
 	}
 	for _, m := range must {
 		if !strings.Contains(poller, m) {
 			t.Errorf("poller missing expected fragment:\n  want: %q\n%s", m, abbreviateUD(poller))
+		}
+	}
+
+	// Plan 70-10 Path B: ensure the dead hook-file path is GONE.
+	dead := []string{
+		`SESSION_FILE="/tmp/km-codex-session.$RUN_ID"`,
+		`for _w in 1 2 3 4 5; do`,
+	}
+	for _, d := range dead {
+		if strings.Contains(poller, d) {
+			t.Errorf("poller still contains dead hook-file marker (Path B should have replaced): %q\n%s", d, abbreviateUD(poller))
 		}
 	}
 }
