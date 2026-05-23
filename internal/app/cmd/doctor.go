@@ -404,6 +404,23 @@ type DoctorDeps struct {
 	// "/km/sandboxes/" (resource-prefix-aware). Passed through to
 	// checkPresenceDaemonHealthy verbatim.
 	PresenceLogGroupPrefix string
+
+	// Phase 70 — Codex parity doctor check dependencies (Plan 70-07).
+	// Nil fields cause the corresponding checks to be skipped without error.
+	//
+	// CodexListSandboxes returns sandbox refs for sandboxes with spec.cli.agent: codex.
+	// Scans km-sandboxes DDB + S3 profile fetch (production); mocked in tests.
+	CodexListSandboxes func(ctx context.Context) ([]codexSandboxRef, error)
+	// CodexSSMRunner runs a shell command on a sandbox EC2 instance via SSM.
+	// Nil in environments where SSM SendCommand is blocked by SCP (the check
+	// returns SKIPPED in that case, matching the pattern for other SSM-gated checks).
+	CodexSSMRunner SSMCodexRunner
+	// CodexScanThreadAgentRows returns km-slack-threads rows that have agent_type set.
+	// Paginated DDB Scan with Limit=100 (Pitfall 7 from 70-RESEARCH.md).
+	CodexScanThreadAgentRows func(ctx context.Context) ([]threadAgentRow, error)
+	// CodexFetchProfile returns the parsed SandboxProfile for a given sandbox ID.
+	// Wraps downloadProfileFromS3 + profile.Parse in production.
+	CodexFetchProfile ProfileFetcherFunc
 }
 
 // =============================================================================
@@ -2973,6 +2990,30 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return r
 	})
 
+	// Phase 70 — Codex parity doctor checks (Plan 70-07).
+	// Both checks are WARN-only — Codex parity drift is never a hard platform
+	// failure. SKIPPED when deps are nil (production: SSM SendCommand is blocked
+	// by the org-level SCP, so CodexSSMRunner may be nil on most installs).
+	codexListSandboxes := deps.CodexListSandboxes
+	codexSSMRunner := deps.CodexSSMRunner
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkCodexVersionSupportsJSONL(ctx, codexListSandboxes, codexSSMRunner)
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
+	codexScanRows := deps.CodexScanThreadAgentRows
+	codexFetchProfile := deps.CodexFetchProfile
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkAgentTypeConsistency(ctx, codexScanRows, codexFetchProfile)
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
 	// Phase 66: email-domain SES match check.
 	//
 	// The prefix-collision check (checkPrefixCollision) used to live here too
@@ -3231,6 +3272,71 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	// Log group prefix convention: "/{resource_prefix}/sandboxes/"
 	// Matches audit-log sidecar CW_LOG_GROUP default and pkg/aws sandbox log group helpers.
 	deps.PresenceLogGroupPrefix = "/" + cfg.GetResourcePrefix() + "/sandboxes/"
+
+	// Phase 70 — Codex parity doctor check deps (Plan 70-07).
+	//
+	// CodexListSandboxes: scan km-sandboxes DDB + S3 profile fetch, filter to
+	// sandboxes with spec.cli.agent: codex.
+	// Reuses the same DDB client as the Slack inbound scanner (ddbClientForInbound).
+	s3ClientForCodex := s3.NewFromConfig(awsCfg)
+	artifactsBucket := cfg.GetArtifactsBucket()
+	sandboxTableForCodex := cfg.GetSandboxTableName()
+	deps.CodexListSandboxes = func(innerCtx context.Context) ([]codexSandboxRef, error) {
+		metas, err := kmaws.ListAllSandboxMetadataDynamo(innerCtx, ddbClientForInbound, sandboxTableForCodex)
+		if err != nil {
+			return nil, fmt.Errorf("list sandboxes for codex check: %w", err)
+		}
+		var refs []codexSandboxRef
+		for _, m := range metas {
+			if m.Status != "" && m.Status != "running" {
+				continue // skip non-running sandboxes
+			}
+			profileBytes, fetchErr := downloadProfileFromS3(innerCtx, s3ClientForCodex, artifactsBucket, m.SandboxID)
+			if fetchErr != nil {
+				continue // profile unavailable — skip silently
+			}
+			prof, parseErr := profilepkg.Parse(profileBytes)
+			if parseErr != nil || prof == nil {
+				continue
+			}
+			if prof.Spec.CLI == nil || prof.Spec.CLI.Agent != "codex" {
+				continue
+			}
+			refs = append(refs, codexSandboxRef{
+				SandboxID: m.SandboxID,
+				// InstanceID is not stored in SandboxMetadata; SSM probe requires
+				// the EC2 instance ID. Left empty — checkCodexVersionSupportsJSONL
+				// skips SSM probes for sandboxes where InstanceID is empty.
+				// A future enhancement could resolve via EC2 DescribeInstances with
+				// the sandbox_id tag.
+				Region: m.Region,
+			})
+		}
+		return refs, nil
+	}
+
+	// CodexSSMRunner: production SSM SendCommand is blocked by the org-level SCP
+	// on the application account. Set to nil; checkCodexVersionSupportsJSONL returns
+	// SKIPPED when the runner is nil. A future task can wire a real SSM runner for
+	// environments that permit SendCommand (e.g. integration test accounts).
+	deps.CodexSSMRunner = nil
+
+	// CodexScanThreadAgentRows: paginated Scan of km-slack-threads for rows with agent_type.
+	threadsTableForCodex := cfg.GetSlackThreadsTableName()
+	ddbClientForThreads := dynamodb.NewFromConfig(awsCfg)
+	deps.CodexScanThreadAgentRows = func(innerCtx context.Context) ([]threadAgentRow, error) {
+		return scanThreadAgentRowsImpl(innerCtx, ddbClientForThreads, threadsTableForCodex)
+	}
+
+	// CodexFetchProfile: wraps downloadProfileFromS3 + profile.Parse for the
+	// agent_type_consistency check's per-sandbox profile lookup.
+	deps.CodexFetchProfile = func(innerCtx context.Context, sandboxID string) (*profilepkg.SandboxProfile, error) {
+		profileBytes, err := downloadProfileFromS3(innerCtx, s3ClientForCodex, artifactsBucket, sandboxID)
+		if err != nil {
+			return nil, err
+		}
+		return profilepkg.Parse(profileBytes)
+	}
 
 	return deps
 }
