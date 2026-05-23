@@ -220,3 +220,9 @@ func TestVerifyEnvelope_MutatedBody_Fails(t *testing.T) {
 		t.Error("expected verification to fail after body mutation, got nil")
 	}
 }
+
+// TestPayload_PermalinkAction_Stub — Phase 70 Plan 70-04 seed. Real impl Task 2.
+func TestPayload_PermalinkAction_Stub(t *testing.T) { t.Skip("Wave 0 stub — Plan 70-04 Task 2") }
+
+// TestPayload_UpdateAction_Stub — Phase 70 Plan 70-04 seed. Real impl Task 2.
+func TestPayload_UpdateAction_Stub(t *testing.T) { t.Skip("Wave 0 stub — Plan 70-04 Task 2") }

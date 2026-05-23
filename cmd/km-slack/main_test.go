@@ -427,3 +427,15 @@ func max(a, b int) int {
 	}
 	return b
 }
+
+// TestRunPost_NewMessage_Stub — Phase 70 Plan 70-04 seed. Real impl Task 2.
+// Verifies --new-message flag passes thread="" and prints ts to stdout.
+func TestRunPost_NewMessage_Stub(t *testing.T) { t.Skip("Wave 0 stub — Plan 70-04 Task 2") }
+
+// TestRunPermalink_Stub — Phase 70 Plan 70-04 seed. Real impl Task 3.
+// Verifies permalink subcommand routes to ActionPermalink + returns URL to stdout.
+func TestRunPermalink_Stub(t *testing.T) { t.Skip("Wave 0 stub — Plan 70-04 Task 3") }
+
+// TestRunUpdate_Stub — Phase 70 Plan 70-04 seed. Real impl Task 3.
+// Verifies update subcommand routes to ActionUpdate.
+func TestRunUpdate_Stub(t *testing.T) { t.Skip("Wave 0 stub — Plan 70-04 Task 3") }
