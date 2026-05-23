@@ -1977,7 +1977,7 @@ Plans:
 
 **Requirements**: PQ-01, PQ-02, PQ-03, PQ-04, PQ-05, PQ-06, PQ-07, PQ-08, PQ-09, PQ-10, PQ-11, PQ-12, PQ-13, R1 (see `.planning/phases/86-km-create-prompt-queue/BRIEF.md` § Acceptance criteria for full descriptions)
 **Depends on:** Phase 85 (clean doctor baseline for UAT sandbox lifecycle)
-**Plans:** 5/6 plans executed
+**Plans:** 6/6 plans complete
 
 Plans:
 - [ ] 86-01-PLAN.md — Wave 0: RED-state test stubs for PQ-01..PQ-08 in `create_prompt_test.go`, augmented `agent_test.go`, bash test harness skeleton (Wave 0, autonomous)
