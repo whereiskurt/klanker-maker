@@ -874,4 +874,64 @@ The spike is a critical risk-elimination step (30 minutes, one sandbox). Exact v
 - Pitfalls: HIGH — verified from existing code patterns and known gaps documented in SPEC.md
 
 **Research date:** 2026-05-22
+
+---
+
+## Spike Findings (Plan 70-00)
+
+**Run:** 2026-05-22, on sandbox `learn-4e69db3c` (Codex CLI `0.121.0`), via SSM-deployed `/tmp/spike-codex.sh`.
+
+**Status:** PARTIAL — CLI surface confirmed; hook firing could not be exercised due to a Codex-account API gating issue on the test sandbox (orthogonal to Phase 70 design).
+
+### Confirmed (HIGH confidence)
+
+| # | Question | Answer | Evidence |
+|---|----------|--------|----------|
+| 1 | `codex exec resume <SESSION_ID> <PROMPT>` subcommand form valid | YES | `codex exec --help`: `Commands: resume  Resume a previous session by id...`; `codex exec resume --help` shows `Usage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]` |
+| 2 | `--dangerously-bypass-approvals-and-sandbox` flag exists | YES | Help text confirms; flag accepted by `codex exec` |
+| 3 | `codex exec --json` mode exists | YES | `--json  Print events to stdout as JSONL` |
+| 4 | Codex CLI version on `learn` AMI | `codex-cli 0.121.0` | `codex --version` |
+| 5 | Codex auth model on baked AMI | ChatGPT OAuth (token-based) | `codex login status` → "Logged in using ChatGPT"; `auth.json` has `tokens: true, OPENAI_API_KEY: false` |
+
+### Unverified (deferred to Plan 70-09 UAT)
+
+| # | Question | Why unverified |
+|---|----------|----------------|
+| 6 | `Stop` hook payload contains `last_assistant_message` field | Every `codex exec` turn failed with `"The '<model>' model is not supported when using Codex with a ChatGPT account."` — turn.failed before any hook fires. Tried `gpt-5.2-codex` (default), `gpt-5`, `gpt-4o`, `o3-mini`; all rejected. ChatGPT-OAuth-account API gating on the test fixture. |
+| 7 | `Stop` hook payload contains `session_id` field | Same as #6 |
+| 8 | `PermissionRequest` hook fires under `--dangerously-bypass-approvals-and-sandbox` | Same as #6 |
+| 9 | `PermissionRequest` payload field name (`tool_name` vs `tool` vs other) | Same as #6 |
+| 10 | `KM_CODEX_RUN_ID` env visibility inside hook subprocess | Hook never fired (because no turn completed), so env-passing not testable |
+
+### Risk surface from unverified items
+
+For each unverified field, the implementation impact if the spec-assumed name turns out wrong is bounded:
+
+- **`last_assistant_message` field name wrong** → 1-line fix in `pkg/compiler/userdata.go` (km-notify-hook heredoc's jq path). Detected in UAT step 2 of Plan 70-09.
+- **`session_id` field name wrong** → 1-line fix in the Stop hook's session-ID extraction. Detected in UAT step 4.
+- **`PermissionRequest` not firing under bypass** → HARD STOP for SC-3 only; SC-1, SC-2, SC-4..10 still ship. Workaround documented as future-work in `docs/codex-parity.md`.
+- **`tool_name` field name wrong** → 1-line fix in the PermissionRequest branch of the hook script.
+- **`KM_CODEX_RUN_ID` not visible in hook subprocess** → already mitigated by 70-RESEARCH.md Pitfall #3 + Plan 70-05's locked decision to use `VAR=val sudo -u sandbox bash -lc "..."` inline-env pattern (not `export`).
+
+### Decision: proceed with documented field names
+
+Phase 70 execution **proceeds** under these assumptions, with Plan 70-09 UAT as the deferred verification:
+
+1. Stop payload field: `last_assistant_message` (per SPEC.md's research notes + Codex 2026 public docs)
+2. Session ID field: `session_id` (per SPEC.md's research notes)
+3. PermissionRequest field: `tool_name` (per SPEC.md)
+4. Hook fires under `--dangerously-bypass-approvals-and-sandbox` (per SPEC.md's strong prior + OpenAI engineering issue thread)
+5. `KM_CODEX_RUN_ID` env: passed via inline `VAR=val sudo -u sandbox bash -lc "..."` (Pitfall #3 mitigation)
+
+If UAT (Plan 70-09) discovers a mismatch, the fix is bounded: single field rename per item, in `pkg/compiler/userdata.go` only. No re-architecture.
+
+### Recommendation to operator
+
+Before Plan 70-09 UAT, fix Codex auth on the test fixture by either:
+1. **API-key login:** `printenv OPENAI_API_KEY | codex login --with-api-key` (unlocks all models)
+2. **Upgrade ChatGPT subscription** on the auth.json's account to a tier that includes Codex CLI API access
+
+Pre-flight check before UAT step 2: `codex exec --json --dangerously-bypass-approvals-and-sandbox "ping"` should produce a `turn.completed` event, not `turn.failed`.
+
+The `learn` sandbox auth issue does NOT block Phase 70 implementation — only its E2E verification surface. Plans 70-01..70-08 ship on documented field names; UAT confirms or corrects.
 **Valid until:** 2026-06-22 (stable monorepo; Codex hook API could change — check Codex changelog before planning if more than 30 days elapse)
