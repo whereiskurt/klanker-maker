@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Phase 87 (additionalSnapshots) UAT complete — 8/9 PASS, 1 DEFERRED (UAT-4 needs BDM AMI; covered by unit tests). All sandboxes + snapshots cleaned up. Ready for VERIFICATION.
-last_updated: "2026-05-23T00:48:31.141Z"
-last_activity: 2026-05-22
+stopped_at: Completed 70-01-PLAN.md (CLISpec Agent field + JSON Schema enum)
+last_updated: "2026-05-23T02:46:44.743Z"
+last_activity: 2026-05-23
 progress:
-  total_phases: 102
+  total_phases: 103
   completed_phases: 91
-  total_plans: 427
-  completed_plans: 382
+  total_plans: 437
+  completed_plans: 383
   percent: 88
 ---
 
@@ -31,7 +31,7 @@ Plan: 6 of 6 in phase 79 (all complete; 79-05 closeout + UAT passed 2026-05-10)
 Total Plans in Phase: 6
 Current Plan: 14
 Status: in-progress
-Last activity: 2026-05-22
+Last activity: 2026-05-23
 
 Progress: [█████████░] 88%
 
@@ -414,6 +414,7 @@ Progress: [█████████░] 88%
 | Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile P04 | 242s | 2 tasks | 3 files |
 | Phase 87-additionalsnapshots P06 | 121 | 2 tasks | 4 files |
 | Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile P05 | 281s | 1 tasks | 3 files |
+| Phase 70-codex-parity-for-operator-notify-slack-notify-and-slack-inbound-dispatcher P01 | 2min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1198,6 +1199,8 @@ Recent decisions affecting current work:
 - [Phase 87-06]: ec2spot v1.1.0 additive copy: for_each key=tostring(i), size=null inherits snapshot, encrypted=null inherits snapshot, Name tag uses var.resource_prefix, no required_providers block
 - [Phase 87-05]: Legacy additionalVolume always uses device letter 'f' (no Device field in AdditionalVolumeSpec — historical /dev/sdf); additionalSnapshots use explicit Device field or sequential auto-assign in generateUserData
 - [Phase 87-05]: No nvmeAlias Go template func added — bash-side device probe loop handles aliasing per critical_research_corrections #2
+- [Phase 70-codex-parity-for-operator-notify-slack-notify-and-slack-inbound-dispatcher]: Agent string yaml:agent,omitempty on CLISpec — absence parses as empty string; downstream treats empty as claude
+- [Phase 70-codex-parity-for-operator-notify-slack-notify-and-slack-inbound-dispatcher]: JSON Schema enum [claude,codex] rejects any other value including wrong case; no semantic validator needed
 
 ### Roadmap Evolution
 
@@ -1310,6 +1313,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-22T23:52:29.230Z
-Stopped at: Phase 87 (additionalSnapshots) UAT complete — 8/9 PASS, 1 DEFERRED (UAT-4 needs BDM AMI; covered by unit tests). All sandboxes + snapshots cleaned up. Ready for VERIFICATION.
+Last session: 2026-05-23T02:46:44.735Z
+Stopped at: Completed 70-01-PLAN.md (CLISpec Agent field + JSON Schema enum)
 Resume file: None
