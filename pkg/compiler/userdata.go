@@ -1500,6 +1500,40 @@ while true; do
   # EFFECTIVE_AGENT = agent for this turn. Plan 70-06 prefix parser may override below.
   EFFECTIVE_AGENT="$CURRENT_AGENT"
 
+  # Phase 70 Plan 70-06: prefix parser
+  # Strict grammar (CONTEXT.md): ^([Cc]laude|[Cc]odex|CLAUDE|CODEX):[[:space:]]?
+  # Case-insensitive on the agent name; exactly one optional space after the colon;
+  # anchored at message start (^ guards Pitfall 4 — mid-sentence claude: not routed).
+  REQUESTED_AGENT=""
+  STRIPPED_TEXT="$TEXT"
+  if [[ "$TEXT" =~ ^([Cc][Ll][Aa][Uu][Dd][Ee]|[Cc][Oo][Dd][Ee][Xx]):[[:space:]]? ]]; then
+    PREFIX="${BASH_REMATCH[1],,}"  # lowercase via bash ${var,,} parameter expansion
+    REQUESTED_AGENT="$PREFIX"
+    # Strip the matched prefix + one optional space from the beginning of TEXT.
+    STRIPPED_TEXT="${TEXT#*:}"
+    STRIPPED_TEXT="${STRIPPED_TEXT# }"
+  fi
+
+  # Phase 70 Plan 70-06: routing decision
+  # DO_SWITCH=1 only when a prefix matched, the requested agent differs from the
+  # thread-pinned agent, AND an existing DDB row confirms this is a mid-thread switch
+  # (CLAUDE_SESSION non-empty). Fresh-thread (no session) prefix selects the agent
+  # for that thread without triggering the full switch sequence.
+  DO_SWITCH=0
+  if [ -n "$REQUESTED_AGENT" ]; then
+    if [ "$REQUESTED_AGENT" != "$CURRENT_AGENT" ] && [ -n "$CLAUDE_SESSION" ]; then
+      # Cross-agent mid-thread switch — existing DDB row pins the thread to a
+      # different agent. Plan 70-06 Task 3 switch sequence handles this.
+      DO_SWITCH=1
+    else
+      # Top-level prefix on fresh thread (no CLAUDE_SESSION yet) OR same-agent
+      # prefix in existing thread → strip prefix, optionally override agent,
+      # continue in same thread with same DDB row.
+      EFFECTIVE_AGENT="$REQUESTED_AGENT"
+      TEXT="$STRIPPED_TEXT"
+    fi
+  fi
+
   RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
   RUN_DIR="/workspace/.km-agent/runs/$RUN_ID"
   mkdir -p "$RUN_DIR"
