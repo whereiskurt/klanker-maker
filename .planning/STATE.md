@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 70-05-PLAN.md
-last_updated: "2026-05-23T04:21:44.759Z"
+stopped_at: Completed 70-06-PLAN.md
+last_updated: "2026-05-23T04:50:28.814Z"
 last_activity: 2026-05-23
 progress:
   total_phases: 103
   completed_phases: 91
   total_plans: 437
-  completed_plans: 388
+  completed_plans: 389
   percent: 88
 ---
 
@@ -419,6 +419,7 @@ Progress: [█████████░] 88%
 | Phase 70-codex-parity-for-operator-notify-slack-notify-and-slack-inbound-dispatcher P03 | 269s | 2 tasks | 2 files |
 | Phase 70-codex-parity-for-operator-notify-slack-notify-and-slack-inbound-dispatcher P02 | 345 | 2 tasks | 3 files |
 | Phase 70 P05 | 10 | 2 tasks | 3 files |
+| Phase 70 P06 | 327s | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1213,6 +1214,8 @@ Recent decisions affecting current work:
 - [Phase 70]: KM_CODEX_RUN_ID exported inline in sudo command string (Pitfall 3 mitigation)
 - [Phase 70]: jq -Rs . for DDB last_assistant_msg encoding — no extra quotes around LAST_MSG_JSON
 - [Phase 70]: Codex resume uses subcommand form 'codex exec resume' NOT --resume flag
+- [Phase 70]: Cross-agent switch fetches OLD permalink FIRST so new top-level body embeds it at post-time — no placeholder ever posted to Slack, no chat.update in critical path
+- [Phase 70]: Test bash scripts use tr for case-folding (macOS bash 3.2 portability); production poller uses bash 4+ dollar-comma expansion on EC2 Linux
 
 ### Roadmap Evolution
 
@@ -1325,6 +1328,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-23T04:21:44.750Z
-Stopped at: Completed 70-05-PLAN.md
+Last session: 2026-05-23T04:50:28.805Z
+Stopped at: Completed 70-06-PLAN.md
 Resume file: None
