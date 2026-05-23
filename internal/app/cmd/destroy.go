@@ -40,7 +40,7 @@ import (
 var sandboxIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]{0,11}-[a-f0-9]{8}$`)
 
 // NewDestroyCmd creates the "km destroy" subcommand.
-// Usage: km destroy <sandbox-id> [--aws-profile <name>] [--force]
+// Usage: km destroy <sandbox-id> [--aws-profile <name>] [--yes] [--remote] [--verbose]
 //
 // Command flow:
 //  1. Validate sandbox ID format (must match sb-[a-f0-9]{8})

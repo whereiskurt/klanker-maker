@@ -52,7 +52,7 @@
 Before using Klanker Maker you need:
 
 1. **Go 1.25+** — for building `km` from source
-2. **Terraform 1.5+** and **Terragrunt 0.55+** — sandbox provisioning
+2. **Terraform 1.7+** and **Terragrunt 0.99+** — sandbox provisioning
 3. **AWS CLI v2** — configured with named profiles
 4. **AWS Account** — with the following set up:
    - An S3 bucket for Terraform state (e.g., `tf-km-state-use1`)

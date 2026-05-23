@@ -68,13 +68,13 @@ The log line `OIDC provider auto-detected: [creating | reusing existing arn:...]
 ```bash
 # 1. Plan (default --dry-run=true)
 km cluster add --name dev-use1-0 \
-  --oidc-provider-arn arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE \
+  --oidc-provider-arn arn:aws:iam::222222222222:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE \
   --namespace ai-pods \
   --service-account km
 
 # 2. Review the plan; if it looks right, apply
 km cluster add --name dev-use1-0 \
-  --oidc-provider-arn arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE \
+  --oidc-provider-arn arn:aws:iam::222222222222:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE \
   --namespace ai-pods \
   --service-account km \
   --dry-run=false
@@ -92,7 +92,7 @@ metadata:
   name: km
   namespace: ai-pods
   annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::052251888500:role/km-cluster-dev-use1-0
+    eks.amazonaws.com/role-arn: arn:aws:iam::333333333333:role/km-cluster-dev-use1-0
     eks.amazonaws.com/token-expiration: "3600"
 ```
 
@@ -105,10 +105,10 @@ metadata:
 ```yaml
 clusters:
   - name: dev-use1-0
-    oidc_provider_arn: arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE
+    oidc_provider_arn: arn:aws:iam::222222222222:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE
     namespace: ai-pods
     service_account: km
-    role_arn: arn:aws:iam::052251888500:role/km-cluster-dev-use1-0
+    role_arn: arn:aws:iam::333333333333:role/km-cluster-dev-use1-0
 ```
 
 Absent `clusters:` key is treated as empty slice — existing installs need no migration.

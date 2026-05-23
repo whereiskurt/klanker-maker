@@ -64,8 +64,8 @@ project memory index if your setup is split across management and application ac
 | Tool | Version | Install |
 |------|---------|---------|
 | aws-cli | v2 | https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html |
-| terragrunt | >= 0.67 | https://terragrunt.gruntwork.io/docs/getting-started/install/ |
-| terraform | >= 1.5 | https://developer.hashicorp.com/terraform/downloads |
+| terragrunt | >= 0.99 | https://terragrunt.gruntwork.io/docs/getting-started/install/ |
+| terraform | >= 1.7 | https://developer.hashicorp.com/terraform/downloads |
 | Go | >= 1.25 | https://go.dev/dl/ |
 | Docker | latest stable | https://docs.docker.com/engine/install/ — required for ECR image push |
 | sops | latest stable | https://github.com/getsops/sops/releases — required for secret encryption |
@@ -185,7 +185,7 @@ All flags are required in non-interactive mode.
   `[Y / edit / abort]`. `Y` accepts the suggestion, `edit` re-prompts freeform, `abort` exits
   cleanly.
 - **Auto-derived `artifacts_bucket`**: default is `${prefix}-artifacts-${account_id}` (e.g.
-  `km-artifacts-052251888500`). Angle-bracket placeholder tokens and the literal example sentinel
+  `km-artifacts-123456789012`). Angle-bracket placeholder tokens and the literal example sentinel
   `km-artifacts-12345` are rejected at load; the error includes the recovery command
   `re-run 'km configure'`.
 - **Shell-env conflict WARN**: if `KM_*` env vars in your shell conflict with values the wizard

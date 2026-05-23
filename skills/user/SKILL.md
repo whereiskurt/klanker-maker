@@ -19,7 +19,7 @@ This skill guides usage of the `km` CLI on the operator's workstation. It covers
 ### Prerequisites
 
 - AWS CLI configured with a `klanker-terraform` profile
-- Go 1.21+ (for building from source)
+- Go 1.25+ (for building from source)
 - `km` binary built: `make build`
 
 ### Configuration
