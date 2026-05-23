@@ -164,12 +164,13 @@ spec:
       - list_files
 
   cli:
+    agent: codex
     ##Setting noBedrock calls the noBedrock() bash function call on loading and prevents accidentally Bedrock
     noBedrock: true
     claudeArgs:
       - "--dangerously-skip-permissions"
-    notifyOnIdle: false
-    notifyOnPermission: false
+    notifyOnIdle: true
+    notifyOnPermission: true
     notifyEmailEnabled: false
     notifySlackEnabled: true
     notifySlackPerSandbox: true
