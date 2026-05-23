@@ -1839,6 +1839,12 @@ spec:
 	})
 }
 
+// TestCLISpec_Agent_Stub seeds Wave 0 baseline for SC-1 (Phase 70 schema bit).
+// Plan 70-01 Task 2 replaces this with real assertions.
+func TestCLISpec_Agent_Stub(t *testing.T) {
+	t.Skip("Wave 0 stub — Plan 70-01 Task 2")
+}
+
 // TestParse_CLISpec_SlackFields_ExplicitFalse verifies that explicit false for
 // *bool Slack fields round-trips as non-nil pointer to false (not nil).
 // This is the key bool-vs-*bool discrimination test.

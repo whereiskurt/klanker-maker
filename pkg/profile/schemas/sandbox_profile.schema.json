@@ -526,6 +526,11 @@
               "items": { "type": "string" },
               "description": "Extra args appended to the `codex exec` command when launching via km agent run --codex (e.g. --model o4-mini). User-supplied args still take precedence."
             },
+            "agent": {
+              "type": "string",
+              "enum": ["claude", "codex"],
+              "description": "Default agent CLI for Slack inbound dispatch and km agent run / km shell when no --claude/--codex flag is passed. Default 'claude'. Absence is equivalent to 'claude'. Phase 70."
+            },
             "notifyOnPermission": {
               "type": "boolean",
               "description": "Email the operator when Claude Code emits a Notification hook event (permission prompt). Default false. Override per invocation with --notify-on-permission / --no-notify-on-permission on km shell and km agent run."

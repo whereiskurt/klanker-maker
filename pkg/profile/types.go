@@ -393,6 +393,14 @@ type CLISpec struct {
 	// given profile. Args supplied after `--` on the CLI still take precedence.
 	CodexArgs []string `yaml:"codexArgs,omitempty"`
 
+	// Agent selects the default agent CLI for Slack inbound dispatch and
+	// `km agent run` / `km shell` when no --claude/--codex flag is passed.
+	// One of "claude" or "codex"; absence or "" is equivalent to "claude".
+	// Validated by the JSON Schema enum below; no extra semantic validator
+	// logic. Phase 70 — see docs/codex-parity.md for the runtime KM_AGENT
+	// env var emission and per-message Slack prefix routing.
+	Agent string `yaml:"agent,omitempty"`
+
 	// NotifyOnPermission enables emailing the operator when Claude Code emits a
 	// `Notification` hook event (typically a tool-permission prompt). Default false.
 	// When set, the compiler writes KM_NOTIFY_ON_PERMISSION=1 (or =0) into the
