@@ -486,7 +486,10 @@ case "$event" in
   PostToolUse)
     [[ "${KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED:-0}" == "1" ]] || exit 0
     ;;
-  Notification)
+  Notification|PermissionRequest)
+    # Phase 70 (Plan 70-03): PermissionRequest is Codex's synonym for Claude's
+    # Notification event. Both share the KM_NOTIFY_ON_PERMISSION gate so a
+    # single env-var controls permission notifications for both agents.
     [[ "${KM_NOTIFY_ON_PERMISSION:-0}" == "1" ]] || exit 0
     ;;
   Stop)
@@ -510,8 +513,10 @@ if [[ "$cooldown" -gt 0 && -f "$last_file" ]]; then
   now=$(date +%s)
   (( now - last < cooldown )) && cooldown_block=1
 fi
-# Notification: cooldown is fatal (preserves Phase 62 TestNotifyHook_Cooldown).
-if [[ "$cooldown_block" -eq 1 && "$event" == "Notification" ]]; then
+# Notification + PermissionRequest: cooldown is fatal.
+# Phase 70 (Plan 70-03): PermissionRequest shares the gate so rapid Codex tool
+# approvals don't spam operator notifications.
+if [[ "$cooldown_block" -eq 1 && ( "$event" == "Notification" || "$event" == "PermissionRequest" ) ]]; then
   exit 0
 fi
 # Stop with no transcript streaming: cooldown is fatal (preserves Phase 63).
@@ -675,7 +680,10 @@ fi
 # 5. Build subject + body for the email/slack-root path. Skipped when the only
 #    reason this Stop hook fired was transcript-streaming (KM_NOTIFY_ON_IDLE=0).
 do_email_branch=0
-if [[ "$event" == "Notification" ]]; then
+if [[ "$event" == "Notification" || "$event" == "PermissionRequest" ]]; then
+  # Phase 70 (Plan 70-03): PermissionRequest (Codex) routes through the same
+  # email+Slack branch as Notification (Claude). Both share the subject/body
+  # shape "[$sandbox_id] needs permission".
   do_email_branch=1
 elif [[ "$event" == "Stop" && "${KM_NOTIFY_ON_IDLE:-0}" == "1" ]]; then
   do_email_branch=1
@@ -700,14 +708,30 @@ if [[ "$do_email_branch" -eq 1 && "$cooldown_block" -ne 1 ]]; then
       msg=$(echo "$payload" | jq -r '.message // "(no message)"' 2>/dev/null || echo "(payload parse failed)")
       body_text="$msg"
       ;;
+    PermissionRequest)
+      # Phase 70 (Plan 70-03): Codex synonym of Claude's Notification.
+      # Tool name lives in .tool_name per Plan 70-00 spike findings (MEDIUM confidence;
+      # UAT in Plan 70-09 will confirm. If wrong, 1-line fix here). Falls back to
+      # .message for forward compat, then a default string.
+      # Exit 0 with no stdout body is guaranteed by hook contract (always exits 0).
+      subject="[$sandbox_id] needs permission"
+      msg=$(echo "$payload" | jq -r '.tool_name // .message // "(permission request)"' 2>/dev/null || echo "(payload parse failed)")
+      body_text="$msg"
+      ;;
     Stop)
       subject="[$sandbox_id] idle"
-      transcript=$(echo "$payload" | jq -r '.transcript_path // ""' 2>/dev/null || echo "")
-      body_text=""
-      if [[ -n "$transcript" && -f "$transcript" ]]; then
-        body_text=$(tail -n 50 "$transcript" 2>/dev/null \
-          | jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text' 2>/dev/null \
-          | tail -n 1 || echo "")
+      # Phase 70 (Plan 70-03): Codex fast-path. Stop payload may carry
+      # last_assistant_message directly (Codex CLI hook contract, confirmed by
+      # Plan 70-00 spike field-name assumption; UAT in Plan 70-09 verifies).
+      # Claude does not send this field — falls back to tailing transcript_path JSONL.
+      body_text=$(echo "$payload" | jq -r '.last_assistant_message // ""' 2>/dev/null || echo "")
+      if [[ -z "$body_text" ]]; then
+        transcript=$(echo "$payload" | jq -r '.transcript_path // ""' 2>/dev/null || echo "")
+        if [[ -n "$transcript" && -f "$transcript" ]]; then
+          body_text=$(tail -n 50 "$transcript" 2>/dev/null \
+            | jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text' 2>/dev/null \
+            | tail -n 1 || echo "")
+        fi
       fi
       [[ -z "$body_text" ]] && body_text="(no recent assistant text)"
       ;;
@@ -850,6 +874,36 @@ exit 0
 KM_NOTIFY_HOOK_EOF
 chmod +x /opt/km/bin/km-notify-hook
 echo "[km-bootstrap] km-notify-hook installed at /opt/km/bin/km-notify-hook"
+
+# Phase 70 (SC-1): Install ~/.codex/config.toml unconditionally for every sandbox.
+# Claude-default sandboxes never start Codex; the file is inert for them.
+# Both hook entries point at km-notify-hook (Plan 70-03 adds PermissionRequest + Stop branches).
+# No PostToolUse entry — Tier 3 (Phase 68 streaming parity) adds it in a later phase.
+echo "[km-bootstrap] Installing ~/.codex/config.toml..."
+install -d -m 0755 -o sandbox -g sandbox /home/sandbox/.codex
+cat > /home/sandbox/.codex/config.toml << 'KM_CODEX_CONFIG_EOF'
+[features]
+codex_hooks = true
+
+[[hooks.PermissionRequest]]
+matcher = ".*"
+
+[[hooks.PermissionRequest.hooks]]
+type = "command"
+command = "/opt/km/bin/km-notify-hook PermissionRequest"
+timeout = 30
+statusMessage = "km: notifying operator"
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "/opt/km/bin/km-notify-hook Stop"
+timeout = 30
+KM_CODEX_CONFIG_EOF
+chown sandbox:sandbox /home/sandbox/.codex/config.toml
+chmod 0644 /home/sandbox/.codex/config.toml
+echo "[km-bootstrap] ~/.codex/config.toml installed"
 
 {{- if .NotifyEnv }}
 # Phase 62 (HOOK-03): notify-hook env defaults from profile spec.cli fields.
@@ -3626,6 +3680,17 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 			// overwrites the empty value after creating the SQS queue.
 			notifyEnv["KM_SLACK_INBOUND_QUEUE_URL"] = ""
 		}
+		// Phase 70 (SC-1/SC-4/SC-5/SC-6): KM_AGENT carries spec.cli.agent into the
+		// sandbox env. Absence / "" defaults to "claude" per CONTEXT.md locked decision.
+		// Read by: km-slack-inbound-poller (Plan 70-05 dispatch fork) and
+		// /opt/km/bin/km-notify-hook (Plan 70-03 — for future agent-aware branching).
+		// Always emitted when Spec.CLI != nil (same gating as KM_NOTIFY_ON_PERMISSION).
+		agent := "claude"
+		if p.Spec.CLI.Agent == "codex" {
+			agent = "codex"
+		}
+		notifyEnv["KM_AGENT"] = agent
+
 		params.NotifyEnv = notifyEnv
 
 		// Phase 67: wire SlackInboundEnabled for template conditionals and
