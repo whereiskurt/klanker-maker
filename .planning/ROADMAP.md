@@ -1530,6 +1530,37 @@ Plans:
 - [ ] 69-09-PLAN.md — Documentation: docs/aws-allowlist.md operator guide + CLAUDE.md AWS allowlist section
 - [ ] 69-10-PLAN.md — Manual UAT: real EC2 sandbox running through 4-flow demo storyboard (wide-open + locked-down + observe + learn) + km doctor verification + 69-VERIFY.md captures
 
+### Phase 70: Codex parity for operator-notify, Slack notify, and Slack inbound dispatcher (Tier 2) + Slack prefix routing & cross-agent thread switching
+
+**Spec:** `.planning/phases/70-codex-parity-for-operator-notify-slack-notify-and-slack-inbound-dispatcher/SPEC.md`
+**Goal:** A SandboxProfile can declare `spec.cli.agent: codex` and the resulting sandbox gets the same operator-notify (Phase 62) and Slack notify (Phase 63) experience that Claude sandboxes get today, plus working Slack inbound bidirectional chat (Phase 67) — including multi-turn session resume — driven by Codex CLI instead of Claude Code. The hook plumbing is unified: a single `km-notify-hook` script handles both agents' payloads. The DDB schema gains `agent_type` + `last_assistant_msg` attributes on `km-slack-threads` so the same row can carry either a Claude or a Codex session. Beyond agent selection, the Slack inbound dispatcher learns per-message prefix routing: a Slack message starting with `claude:` or `codex:` routes the turn to the named agent. A prefix that names the *other* agent inside an existing thread triggers a clean handoff — bot posts a "Switching to {agent} → continuing in this thread." message with a Slack permalink, spawns a new top-level thread in the same channel, and seeds the new agent with the prior agent's last assistant message. Phase 68 transcript streaming parity is explicitly deferred to Tier 3.
+**Requirements**: Spec-driven (no REQ-* IDs) — see SPEC.md locked decisions from brainstorming sessions 2026-05-05 (Tier 2 parity) + 2026-05-22 (prefix routing + cross-agent switch)
+**Depends on:** Phase 58 (Codex CLI agent-run support + `spec.cli.codexArgs`), Phase 62 (operator-notify hook script), Phase 63 (Slack notify hook + km-slack sidecar + bridge Lambda), Phase 67 (Slack inbound poller + DDB threads table)
+**Success Criteria** (what must be TRUE — full verification text in SPEC.md § Success criteria):
+  1. Profile with `spec.cli.agent: codex` + existing notify/Slack toggles → after `km create`, sandbox has both `~/.claude/settings.json` AND fresh `~/.codex/config.toml` with `[features] codex_hooks = true` + `PermissionRequest` + `Stop` hooks pointing at `/opt/km/bin/km-notify-hook` (no `PostToolUse` entry; Tier 2 defers)
+  2. `km agent run --codex --prompt "What model are you?"` → `Stop` event payload contains `last_assistant_message`; notify hook reads it directly, sends operator email + Slack post; no transcript-tailing path runs
+  3. Codex `PermissionRequest` event → notify hook sends operator + Slack ping with tool name, exits 0 with no JSON body, `--dangerously-bypass-approvals-and-sandbox` continues to auto-approve
+  4. Operator types in `#sb-x` against inbound-enabled `agent: codex` sandbox → poller dispatches `codex exec --json --dangerously-bypass-approvals-and-sandbox`, captures session ID, writes `km-slack-threads` row with `agent_type=codex`
+  5. Follow-up Slack message → poller dispatches `codex exec resume <session-id> "<prompt>"`, conversation continues in Codex's session context
+  6. Stop hook gating on `KM_SLACK_THREAD_TS` works for Codex: poller-driven run → Stop hook's Slack branch silent; operator `km agent run --codex` → Stop hook posts as usual
+  7. `km doctor` runs `codex_hook_config_present` + `agent_type_consistency` green on `agent: codex` sandbox; no false positives on claude-default sandbox
+  8. **Top-level prefix routing:** On `agent: claude` profile, operator posts `codex: list workspace files` as new top-level → poller strips prefix, dispatches codex, writes new DDB row with `agent_type=codex` keyed on the new `thread_ts`; profile compiled `KM_AGENT` env var unchanged on disk
+  9. **Same-agent prefix is no-op:** `claude: do another thing` inside an existing claude-rooted thread → strip + resume same session in same thread; no new thread, no new DDB row, no handoff post
+  10. **Cross-agent mid-thread switch:** Inside running claude thread, operator posts `codex: check this` → bot posts "Switching to codex → continuing in this thread." with permalink in old thread; new top-level message appears with "Continuing from <permalink>" + truncated last assistant excerpt; codex's reply (seeded with prior assistant message) lands in new thread as first reply; DDB has two rows; old claude session is NOT killed and remains resumable
+**Plans:** 10 plans
+
+Plans:
+- [ ] 70-00-PLAN.md — Spike: confirm `codex exec --json` fires hooks (Stop + last_assistant_message) on a learn-derived sandbox with Codex auth'd. ~30 minutes, single sandbox, discard.
+- [ ] 70-01-PLAN.md — Schema + validation: `pkg/profile/types.go` adds `Agent string` to `CLISpec`, embedded JSON Schema enum (`claude` | `codex`), validator unit tests; absence ≡ `claude`
+- [ ] 70-02-PLAN.md — Compiler config-file writer: `pkg/compiler/userdata.go` writes `~/.codex/config.toml` for every sandbox + emits `KM_AGENT` to both `/etc/profile.d/km-notify-env.sh` and `/etc/km/notify.env`
+- [ ] 70-03-PLAN.md — `km-notify-hook` agent-aware branches: `PermissionRequest` (Codex) branch in the heredoc-inlined bash + `last_assistant_message` fallback in `Stop` clause; ~30 LOC; smoke tests piping canonical Codex + Claude payloads
+- [ ] 70-04-PLAN.md — `km-slack` sidecar API additions: `--new-message` flag on `post` (omits `thread_ts`, returns `ts`), `permalink` subcommand (wraps `chat.getPermalink`), `update` subcommand (wraps `chat.update`); thin REST wrappers, no business logic
+- [ ] 70-05-PLAN.md — Phase 67 poller dispatch fork + DDB attribute writeback: Codex first-turn + resume bash branches, hook-file session-ID extraction, writer always sets `agent_type` + `last_assistant_msg`, reader defaults to `claude` on missing attribute
+- [ ] 70-06-PLAN.md — Slack prefix routing & cross-agent switch: poller-side prefix parser, per-thread state lookup, switch sequence (post new top-level first → capture permalink → post handoff in old thread → compose seeded prompt → dispatch new agent → write new DDB row); uses km-slack flags from Plan 70-04
+- [ ] 70-07-PLAN.md — `km doctor` checks: `codex_hook_config_present` (SSM-probes `~/.codex/config.toml`) + `agent_type_consistency` (cross-checks DDB rows against S3 profile); honor `--all-regions`
+- [ ] 70-08-PLAN.md — Documentation: `docs/codex-parity.md` operator guide with prefix + switching examples; CLAUDE.md additions for `agent: codex` + `claude:`/`codex:` prefix; `docs/slack-notifications.md` "Prefix routing & agent switching" section
+- [ ] 70-09-PLAN.md — End-to-end manual UAT: nine demo flows on real EC2 sandboxes (one `agent: claude` + one `agent: codex` from learn-derived AMI); captures live in `70-VERIFY.md`
+
 ### Phase 71: Agent playbook orchestration — multi-step prompts with session continuity against existing sandboxes via cron and manual triggers
 
 **Spec:** `.planning/phases/71-agent-playbook-orchestration-multi-step-prompts-with-session-continuity-against-existing-sandboxes-via-cron-and-manual-triggers-driven-by-sandbox-side-runner-sidecar/SPEC.md`
