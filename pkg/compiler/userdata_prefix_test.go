@@ -191,19 +191,87 @@ func isWordBoundary(c byte) bool {
 }
 
 // TestPoller_CrossAgentSwitch_OrderingFetchesOldPermalinkFirst (SC-10): the
-// cross-agent switch block must call `km-slack permalink` (for the OLD thread,
-// with the already-known THREAD_TS) BEFORE `km-slack post --new-message`. The new
-// top-level body contains `Continuing from $OLD_PERMALINK` at post-time —
+// cross-agent switch block must call km-slack permalink (for the OLD thread,
+// with the already-known THREAD_TS) BEFORE km-slack post --new-message. The new
+// top-level body contains "Continuing from $OLD_PERMALINK" at post-time —
 // no placeholder is ever posted to Slack; no chat.update in the critical path.
-// Plan 70-06 Task 3 implements; Wave 0 baseline stub.
+// Plan 70-06 Task 3.
 func TestPoller_CrossAgentSwitch_OrderingFetchesOldPermalinkFirst(t *testing.T) {
-	t.Skip("Wave 0 stub — Plan 70-06 Task 3")
+	p := minimalSlackInboundProfile(t, true)
+	ud := compileInboundUserData(t, p)
+	poller := extractSlackInboundPoller(t, ud)
+
+	block := extractCrossAgentBlock(poller)
+	if block == "" {
+		t.Fatalf("cross-agent block (if [ \"$DO_SWITCH\" -eq 1 ]) not found in poller")
+	}
+
+	// The OLD permalink fetch (uses --ts "$THREAD_TS") MUST appear before
+	// the km-slack post --new-message call.
+	oldPermalinkIdx := strings.Index(block, "km-slack permalink")
+	newMessageIdx := strings.Index(block, "--new-message")
+	if oldPermalinkIdx < 0 {
+		t.Fatalf("cross-agent block missing km-slack permalink call")
+	}
+	if newMessageIdx < 0 {
+		t.Fatalf("cross-agent block missing --new-message flag")
+	}
+	if oldPermalinkIdx > newMessageIdx {
+		t.Errorf("ordering violation: km-slack permalink at %d appears AFTER --new-message at %d (OLD permalink must be fetched first so it can be embedded in the new top-level body)", oldPermalinkIdx, newMessageIdx)
+	}
+
+	// The first permalink call must reference $THREAD_TS (OLD thread), not $NEW_TOP_TS.
+	firstPermalinkRegion := block[oldPermalinkIdx:]
+	// Capture enough context for the multi-line invocation.
+	snippet := firstPermalinkRegion
+	if len(snippet) > 300 {
+		snippet = snippet[:300]
+	}
+	if !strings.Contains(snippet, `--ts "$THREAD_TS"`) {
+		t.Errorf("first km-slack permalink call must reference --ts \"$THREAD_TS\" (OLD thread); snippet: %q", snippet)
+	}
+
+	// The new top-level body builder must reference $OLD_PERMALINK —
+	// the value is substituted at post-time, not via chat.update later.
+	if !strings.Contains(block, "Continuing from $OLD_PERMALINK") {
+		t.Errorf("cross-agent block missing 'Continuing from $OLD_PERMALINK' in new top-level body — OLD permalink must be embedded at post-time")
+	}
+
+	// Guard rail: the v1 placeholder pattern must NOT appear.
+	if strings.Contains(block, "<permalink-placeholder>") {
+		t.Errorf("cross-agent block still contains <permalink-placeholder> — must use $OLD_PERMALINK substitution at post-time")
+	}
 }
 
 // TestPoller_CrossAgentSwitch_OldRowUntouched (SC-10): the cross-agent block
-// must NOT call `aws dynamodb update-item` or `aws dynamodb delete-item` on
-// the OLD thread_ts. The old DDB row stays resumable.
-// Plan 70-06 Task 3 implements; Wave 0 baseline stub.
+// must NOT call aws dynamodb update-item or delete-item on the OLD thread_ts.
+// The old DDB row stays intact and resumable. The block must rewrite THREAD_TS,
+// EFFECTIVE_AGENT, CLAUDE_SESSION, and PROMPT_FILE so Plan 70-05's dispatch fork
+// picks up the new agent as a first turn into the new thread.
+// Plan 70-06 Task 3.
 func TestPoller_CrossAgentSwitch_OldRowUntouched(t *testing.T) {
-	t.Skip("Wave 0 stub — Plan 70-06 Task 3")
+	p := minimalSlackInboundProfile(t, true)
+	ud := compileInboundUserData(t, p)
+	poller := extractSlackInboundPoller(t, ud)
+
+	block := extractCrossAgentBlock(poller)
+	if block == "" {
+		t.Fatalf("cross-agent block (if [ \"$DO_SWITCH\" -eq 1 ]) not found in poller")
+	}
+
+	if strings.Contains(block, "aws dynamodb update-item") {
+		t.Errorf("cross-agent block contains 'aws dynamodb update-item' — OLD row must remain unchanged")
+	}
+	if strings.Contains(block, "aws dynamodb delete-item") {
+		t.Errorf("cross-agent block contains 'aws dynamodb delete-item' — OLD row must remain resumable")
+	}
+	if !strings.Contains(block, `THREAD_TS="$NEW_TOP_TS"`) {
+		t.Errorf("cross-agent block missing THREAD_TS=\"$NEW_TOP_TS\" rewrite — new DDB row would key on wrong ts")
+	}
+	if !strings.Contains(block, `EFFECTIVE_AGENT="$NEW_AGENT"`) {
+		t.Errorf("cross-agent block missing EFFECTIVE_AGENT=\"$NEW_AGENT\" rewrite — dispatch would use wrong agent")
+	}
+	if !strings.Contains(block, `CLAUDE_SESSION=""`) {
+		t.Errorf("cross-agent block must reset CLAUDE_SESSION to empty (new agent first turn)")
+	}
 }

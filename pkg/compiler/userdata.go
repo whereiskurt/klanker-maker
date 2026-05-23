@@ -1596,6 +1596,99 @@ while true; do
     chown sandbox:sandbox "$PROMPT_FILE" || true
   fi
 
+  # Phase 70 Plan 70-06: cross-agent switch sequence (executed when DO_SWITCH=1).
+  # Locked ordering per CONTEXT.md: fetch OLD permalink FIRST (THREAD_TS already known
+  # from the inbound SQS event — no dep on the new top-level) → post new top-level
+  # with the OLD permalink already embedded in the body → fetch NEW permalink →
+  # handoff in old thread → seeded prompt → fall through to Plan 70-05 dispatch.
+  # No chat.update in the critical path: avoids Slack 10-min edit window AND avoids
+  # ever posting a <permalink-placeholder> string to Slack (v1 pattern).
+  if [ "$DO_SWITCH" -eq 1 ]; then
+    NEW_AGENT="$REQUESTED_AGENT"
+    OLD_AGENT="$CURRENT_AGENT"
+    PROMPT_TEXT="$STRIPPED_TEXT"
+
+    # Step 1: fetch OLD-thread permalink FIRST. THREAD_TS is already known from
+    # the inbound SQS event — this call has no dependency on the new top-level.
+    OLD_PERMALINK=$(/opt/km/bin/km-slack permalink \
+      --channel "$KM_SLACK_CHANNEL_ID" --ts "$THREAD_TS" 2>>"$RUN_DIR/stderr.log" || echo "(unavailable)")
+    [ -z "$OLD_PERMALINK" ] && OLD_PERMALINK="(unavailable)"
+
+    # Step 2: build the new top-level body WITH OLD_PERMALINK already embedded.
+    # No placeholder string is ever posted to Slack.
+    NEW_MSG_BODY=$(mktemp /tmp/km-new-thread.XXXXXX)
+    {
+      echo "Continuing from $OLD_PERMALINK"
+      echo ""
+      if [ -n "$LAST_ASSISTANT_MSG" ]; then
+        echo "Previous assistant ($OLD_AGENT) said:"
+        echo "> $(echo "$LAST_ASSISTANT_MSG" | head -c 500)"
+      fi
+    } > "$NEW_MSG_BODY"
+
+    # Step 3: post NEW top-level message; capture its ts from km-slack stdout.
+    NEW_TOP_TS=$(/opt/km/bin/km-slack post \
+      --channel "$KM_SLACK_CHANNEL_ID" \
+      --new-message \
+      --body "$NEW_MSG_BODY" 2>>"$RUN_DIR/stderr.log" \
+      | grep '^ts=' | head -n1 | sed 's/^ts=//')
+    rm -f "$NEW_MSG_BODY"
+
+    # Step 4: abort gracefully if new top-level post failed.
+    if [ -z "$NEW_TOP_TS" ]; then
+      echo "[km-slack-inbound-poller] cross-agent switch: failed to create new top-level; aborting" >&2
+      ERR_BODY=$(mktemp /tmp/km-switch-err.XXXXXX)
+      printf 'Failed to spawn new %s thread (see journald). Try again.\n' "$NEW_AGENT" > "$ERR_BODY"
+      /opt/km/bin/km-slack post \
+        --channel "$KM_SLACK_CHANNEL_ID" \
+        --thread "$THREAD_TS" \
+        --body "$ERR_BODY" 2>>"$RUN_DIR/stderr.log" || true
+      rm -f "$ERR_BODY"
+      # Delete the SQS message so it isn't redelivered indefinitely.
+      aws sqs delete-message --queue-url "$QUEUE_URL" --receipt-handle "$RECEIPT" --region "$REGION" 2>/dev/null || true
+      continue
+    fi
+
+    # Step 5: fetch NEW-thread permalink (for the handoff post in OLD thread).
+    NEW_PERMALINK=$(/opt/km/bin/km-slack permalink \
+      --channel "$KM_SLACK_CHANNEL_ID" --ts "$NEW_TOP_TS" 2>>"$RUN_DIR/stderr.log" || echo "(unavailable)")
+    [ -z "$NEW_PERMALINK" ] && NEW_PERMALINK="(unavailable)"
+
+    # Step 6: post handoff in OLD thread with NEW_PERMALINK embedded.
+    HANDOFF_BODY=$(mktemp /tmp/km-handoff.XXXXXX)
+    printf 'Switching to %s → continuing in this thread.\n%s\n' "$NEW_AGENT" "$NEW_PERMALINK" > "$HANDOFF_BODY"
+    /opt/km/bin/km-slack post \
+      --channel "$KM_SLACK_CHANNEL_ID" \
+      --thread "$THREAD_TS" \
+      --body "$HANDOFF_BODY" 2>>"$RUN_DIR/stderr.log" || true
+    rm -f "$HANDOFF_BODY"
+
+    # Step 7: compose seeded prompt (full LAST_ASSISTANT_MSG up to 2000 chars for context).
+    SEED_PROMPT_FILE=$(mktemp /tmp/km-seed-prompt.XXXXXX)
+    if [ -n "$LAST_ASSISTANT_MSG" ]; then
+      {
+        echo "$PROMPT_TEXT"
+        echo ""
+        echo "--- Context from prior thread (agent: $OLD_AGENT) ---"
+        echo "$LAST_ASSISTANT_MSG" | head -c 2000
+      } > "$SEED_PROMPT_FILE"
+    else
+      echo "$PROMPT_TEXT" > "$SEED_PROMPT_FILE"
+    fi
+
+    # Step 8: rewrite poller state so Plan 70-05's dispatch fork handles the new
+    # agent as a FIRST turn (no session resume) into the NEW thread.
+    # OLD DDB row is INTACT — we never issued update-item or delete-item on it.
+    # Plan 70-05's put-item below will write a NEW row keyed on (CHANNEL, NEW_TOP_TS)
+    # with agent_type=NEW_AGENT because we've rewritten both THREAD_TS and EFFECTIVE_AGENT.
+    CLAUDE_SESSION=""
+    THREAD_TS="$NEW_TOP_TS"
+    EFFECTIVE_AGENT="$NEW_AGENT"
+    PROMPT_FILE="$SEED_PROMPT_FILE"
+    chmod 644 "$PROMPT_FILE"
+    # Fall through to Plan 70-05's dispatch fork ...
+  fi
+
   # Export KM_SLACK_THREAD_TS so km-notify-hook passes --thread to km-slack post (Phase 67).
   export KM_SLACK_THREAD_TS="$THREAD_TS"
 
