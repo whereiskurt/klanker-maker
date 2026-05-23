@@ -10,9 +10,9 @@
 6. [CLI Email Tools](#cli-email-tools)
 7. [In-Sandbox Email Tools](#in-sandbox-email-tools)
 8. [Operator Email Features](#operator-email-features)
-9. [Signed Email (Phase 14)](#signed-email-phase-14)
-10. [Optional Encryption (Phase 14)](#optional-encryption-phase-14)
-11. [Profile spec.email Controls (Phase 14)](#profile-specemail-controls-phase-14)
+9. [Signed Email](#signed-email)
+10. [Optional Encryption](#optional-encryption)
+11. [Profile spec.email Controls](#profile-specemail-controls)
 12. [Lifecycle Notifications](#lifecycle-notifications)
 13. [Cross-Sandbox Orchestration](#cross-sandbox-orchestration)
 14. [Structured Email Format](#structured-email-format)
@@ -350,9 +350,9 @@ Outbound operator emails use RFC 5322 display-name format: `"operator" <operator
 
 ---
 
-## Signed Email (Phase 14)
+## Signed Email
 
-Phase 14 introduced an Ed25519-based email signing protocol for inter-sandbox trust. When signing is enabled, every outbound message carries cryptographic headers that allow the receiver to verify the sender's identity without relying solely on IAM sender restrictions.
+Klanker uses an Ed25519-based email signing protocol for inter-sandbox trust. When signing is enabled, every outbound message carries cryptographic headers that allow the receiver to verify the sender's identity without relying solely on IAM sender restrictions.
 
 ### How Signing Works
 
@@ -408,7 +408,7 @@ if err := aws.VerifyEmailSignature(record.PublicKeyB64, body, sig); err != nil {
 
 ---
 
-## Optional Encryption (Phase 14)
+## Optional Encryption
 
 In addition to signing, sandboxes can encrypt email content end-to-end using NaCl box encryption. Encryption is independent of signing — a message can be signed only, encrypted only, or both.
 
@@ -484,9 +484,9 @@ In Go, this is handled transparently by `SendSignedEmail` when `encryptionPolicy
 
 ---
 
-## Profile spec.email Controls (Phase 14)
+## Profile spec.email Controls
 
-Email signing and encryption behavior is controlled by the `spec.email` block in the sandbox profile. This field is a pointer on `Spec` — when omitted entirely (`nil`), email policy enforcement is disabled and the sandbox uses unrestricted plain email (default behavior for legacy sandboxes).
+Email signing and encryption behavior is controlled by the `spec.email` block in the sandbox profile. This field is a pointer on `Spec` — when omitted entirely (`nil`), email policy enforcement is disabled and the sandbox uses unrestricted plain email.
 
 ### Fields
 
@@ -521,7 +521,7 @@ spec:
 
 - The field is `nil` — not the zero value of `EmailSpec`.
 - Email policy is not enforced: signing is off, verification is skipped, all senders are accepted.
-- This preserves backward compatibility with sandboxes provisioned before Phase 14.
+- This preserves backward compatibility with sandboxes provisioned without a `spec.email` block.
 
 ### Built-in Profile Defaults
 

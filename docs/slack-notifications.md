@@ -1,6 +1,6 @@
 # Slack Notifications Guide
 
-Phase 63 extends the Phase 62 operator-notify hook with parallel Slack delivery.
+Klanker extends the operator-notify hook with parallel Slack delivery.
 The same `Notification` (permission prompt) and `Stop` (idle) events that trigger
 email also post to a Slack channel — shared or per-sandbox — via an Ed25519-signed
 bridge Lambda. The bot token never leaves AWS; sandboxes call the bridge with
@@ -27,7 +27,7 @@ signed payloads and the Lambda forwards to the Slack Web API.
 
 ## Overview
 
-Phase 63 adds Slack delivery alongside the existing email notification path:
+Klanker provides Slack delivery alongside the existing email notification path:
 
 - **Same triggers:** `Notification` (Claude Code permission prompt) and `Stop` (idle timeout) events, gated by `notifyOnPermission` and `notifyOnIdle`.
 - **Parallel channels:** email and Slack run simultaneously unless you explicitly disable one via `notifyEmailEnabled: false`.
@@ -138,7 +138,7 @@ All new fields are under `spec.cli`. All are optional with the defaults shown.
 
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
-| `notifyEmailEnabled` | `bool*` | `true` | Phase 62 backward compat: set `false` to skip email dispatch when Slack is on. Omitting the field preserves Phase 62 behavior (email always fires). |
+| `notifyEmailEnabled` | `bool*` | `true` | Set `false` to skip email dispatch when Slack is on. Omitting the field preserves the default (email always fires). |
 | `notifySlackEnabled` | `bool*` | `false` | Enable Slack delivery for events already gated by `notifyOnPermission` / `notifyOnIdle`. |
 | `notifySlackPerSandbox` | `bool` | `false` | Create `#sb-{sandbox-id}` at `km create`; archive at `km destroy`. Ignored when `notifySlackEnabled` is false. |
 | `notifySlackChannelOverride` | `string` | `""` | Hard-pin notifications to an existing Slack channel ID (format: `^C[A-Z0-9]+$`). Overrides both shared and per-sandbox modes. The bot must be a member. |
@@ -265,7 +265,7 @@ These are injected into the sandbox at `km create` time by the compiler.
 
 Variables are exported in the sandbox's `/etc/profile.d/km.sh` by the user-data script.
 
-Existing sandboxes provisioned before Phase 63 do **not** get these variables retroactively. Destroy and recreate to pick up the km-slack binary and env vars.
+Sandboxes provisioned before Slack was configured do **not** get these variables retroactively. Destroy and recreate to pick up the km-slack binary and env vars.
 
 ---
 
@@ -436,27 +436,25 @@ Fix options:
 
 ## See Also
 
-- `docs/multi-agent-email.md` — Phase 45 email protocol (signing model reused here)
-- `docs/superpowers/specs/2026-04-29-slack-notify-hook-design.md` — full Phase 63 design spec
+- `docs/multi-agent-email.md` — email protocol (signing model reused here)
+- `docs/superpowers/specs/2026-04-29-slack-notify-hook-design.md` — full Slack notify-hook design spec
 - `CLAUDE.md` — CLI quick reference, env var and SSM path conventions
-- Phase 62 email notification hook (predecessor to Phase 63 Slack delivery)
 
 ---
 
-## Inbound chat (Phase 67)
+## Inbound chat
 
-Phase 67 closes the loop opened by Phase 63: Slack messages in a per-sandbox
-channel become Claude turns inside that sandbox. The same `#sb-{id}` channel
-becomes a bidirectional chat surface.
+Slack messages in a per-sandbox channel become Claude turns inside that sandbox.
+The same `#sb-{id}` channel is a bidirectional chat surface.
 
 ### Prerequisites
 
-- Phase 63 already configured: bridge Lambda deployed, bot token persisted at
+- Slack notifications already configured: bridge Lambda deployed, bot token persisted at
   `/km/slack/bot-token`, shared channel created.
 - Slack App has these additional scopes (add via Slack App config → OAuth & Permissions):
   - `channels:history` — read messages in public channels
   - `groups:history` — read messages in private channels
-  - `reactions:write` — post the 👀 ACK reaction on accepted messages (Phase 67.1)
+  - `reactions:write` — post the 👀 ACK reaction on accepted messages
   After adding scopes, **reinstall the app** to your workspace.
 - Slack signing secret captured. Get it from Slack App config → **Basic
   Information → App Credentials → Signing Secret**.
@@ -489,7 +487,7 @@ spec:
     notifyEmailEnabled: false
     notifySlackEnabled: true
     notifySlackPerSandbox: true
-    notifySlackInboundEnabled: true   # Phase 67
+    notifySlackInboundEnabled: true
     slackArchiveOnDestroy: true
 ```
 
@@ -512,7 +510,7 @@ in v1.
 - `km destroy` drains in-flight turns up to 30s, posts a final "destroyed"
   message, deletes the SQS queue, and archives the channel.
 
-### ACK reaction (Phase 67.1)
+### ACK reaction
 
 When the bridge accepts an inbound message and successfully writes it to the
 sandbox's SQS queue, it adds a 👀 emoji reaction to the originating Slack
@@ -540,10 +538,9 @@ because this is a bridge-only change.
 - Bot kicked from channel → `events: reaction failed err=channel_not_found`. Re-invite the bot.
 - Slack delivered the same event twice (cold-start replay) → `already_reacted`. Treated as idempotent success — NOT logged at WARN.
 
-#### Phase 67.2: retry behavior
+#### ACK reaction retry behavior
 
-The Phase 67.1 single-attempt ACK reaction was upgraded to a bounded
-retry loop inside `SlackReactorAdapter.Add`. Transient Slack API
+The ACK reaction uses a bounded retry loop inside `SlackReactorAdapter.Add`. Transient Slack API
 failures — HTTP 429 (rate limit), HTTP 5xx, network errors, and
 Slack JSON errors `internal_error` / `service_unavailable` /
 `fatal_error` / `request_timeout` — now trigger up to 2 retries
@@ -674,15 +671,13 @@ redeploy) so the `SSMSigningSecretFetcher` cache invalidates within 15 minutes.
 - DM delivery, multi-recipient routing.
 - Permission-prompt round-trip via Slack reply.
 
-(Block Kit / rich formatting for outbound replies shipped in
-Phase 74 — see § Slack Block Kit rendering below.)
+(Block Kit / rich formatting for outbound replies is described in § Slack Block Kit rendering below.)
 
-## Slack transcript streaming (Phase 68)
+## Slack transcript streaming
 
 Per-turn streaming of Claude assistant text + tool one-liners to a per-sandbox
 Slack thread, plus a final gzipped JSONL transcript uploaded as a Slack file
-when the response ends. Replaces the Phase 63 single idle-ping for sandboxes
-that opt in.
+when the response ends. Replaces the single idle-ping for sandboxes that opt in.
 
 ### One-time operator setup
 
@@ -733,15 +728,15 @@ Sets `KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED=1`/`=0` in the SSM session env, taking 
    - `gzip` transcript, `aws s3 cp` to `s3://${KM_ARTIFACTS_BUCKET}/transcripts/{sandbox-id}/{session-id}.jsonl.gz`
    - Calls bridge `upload` action; bridge fetches from S3 (streamed), uploads to Slack via 3-step files API
 
-3. **Auto-thread-parent:** Operator-initiated runs (no Phase 67 inbound thread context) post a parent message `🤖 [sb-X] turn started — {prompt}` and cache its ts so all turns of the response thread under it.
+3. **Auto-thread-parent:** Operator-initiated runs (no inbound thread context) post a parent message `🤖 [sb-X] turn started — {prompt}` and cache its ts so all turns of the response thread under it.
 
 ### Security model
 
 - **Audience containment:** transcripts only land in per-sandbox channels (validation rejects shared channel + override combinations)
 - **Cross-sandbox isolation:** bridge enforces S3 prefix `transcripts/{envelope.sender_id}/` before GetObject; one sandbox cannot upload another's transcript via crafted envelope
-- **Trust boundary:** unchanged from Phase 63/67 — sandbox holds Ed25519 signing key; bridge holds Slack bot token
+- **Trust boundary:** sandbox holds Ed25519 signing key; bridge holds Slack bot token
 
-⚠️ **Transcripts contain whatever Claude saw.** Bash output, file reads, env dumps, API responses — all visible in the channel and the uploaded file. Do NOT enable for sandboxes processing sensitive data without operator awareness. Transcript redaction is OUT OF SCOPE for Phase 68.
+⚠️ **Transcripts contain whatever Claude saw.** Bash output, file reads, env dumps, API responses — all visible in the channel and the uploaded file. Do NOT enable for sandboxes processing sensitive data without operator awareness. Transcript redaction is not supported.
 
 ### Known limitations
 
@@ -771,7 +766,7 @@ affected — the upload silently fails and the operator gets no file.
   `notifySlackChannelOverride` to a host-workspace channel ID) — note
   this loses per-sandbox isolation
 
-**Phase 68.1 fix (planned):** detect channel type at `km create`,
+**Known fix path (planned):** detect channel type at `km create`,
 fall back to posting an S3 presigned-URL message in Connect channels
 instead of a native Slack file attachment.
 
@@ -781,13 +776,13 @@ instead of a native Slack file attachment.
 |---|---|---|
 | `km doctor` flags `slack_transcript_table_exists` WARN | DDB table not provisioned | `km init` (terraform apply) |
 | `km doctor` flags `slack_files_write_scope` WARN | Bot lacks files:write | Re-auth Slack App with files:write scope |
-| Per-turn chat lines appear but no .jsonl.gz file at Stop | Channel is Slack Connect (`is_ext_shared: true`) | Known limitation; pull from S3 directly. Phase 68.1 will add presigned-URL fallback |
+| Per-turn chat lines appear but no .jsonl.gz file at Stop | Channel is Slack Connect (`is_ext_shared: true`) | Known limitation; pull from S3 directly. A presigned-URL fallback is planned. |
 | Streaming works but file upload missing AND channel is internal | files:write missing on bot | Re-auth Slack App with files:write; bridge returns 400 scope_missing |
 | Bridge logs show `s3_key_prefix_mismatch` | Sandbox attempted upload with wrong prefix | Should never happen in normal flow; investigate sandbox compromise |
 | Bridge logs show `s3_get_failed` 403 AccessDenied | Bridge IAM missing `s3:GetObject` on `transcripts/*` | Confirm `KM_ARTIFACTS_BUCKET` is set in bridge env (`aws lambda get-function-configuration`); re-run `km init` if missing |
-| Bridge logs show `upload_failed: internal_error` | Slack Connect channel limitation (see Known Limitations above) | Phase 68.1 |
-| `km agent run` produces no transcript activity | `claude -p` (print mode) skips PostToolUse hooks per Claude Code platform | Use interactive `km shell` instead; Phase 68.1 will pivot to non-hook mechanism |
-| Multiple top-level "turn started" messages for one task | Subagent fan-out — each Task-tool spawn has its own session_id | Phase 68.1 will introduce operator-turn root grouping |
+| Bridge logs show `upload_failed: internal_error` | Slack Connect channel limitation (see Known Limitations above) | Pull from S3 directly |
+| `km agent run` produces no transcript activity | `claude -p` (print mode) skips PostToolUse hooks per Claude Code platform | Use interactive `km shell` instead |
+| Multiple top-level "turn started" messages for one task | Subagent fan-out — each Task-tool spawn has its own session_id | Expected behavior for subagent parallelism |
 | Lambda timeout / OOM during upload | Transcript >100 MB | Out of scope; current cap 100 MB |
 | Slack thread shows gaps during heavy runs | Slack rate limit | By design — file upload at Stop has the full record |
 | `km doctor` flags `slack_transcript_stale_objects` WARN | S3 has transcripts for destroyed sandboxes | Cleanup advisory; configure bucket lifecycle policy or `aws s3 rm s3://<bucket>/transcripts/<sandbox-id>/ --recursive` |
@@ -801,21 +796,21 @@ instead of a native Slack file attachment.
 5. Verify: `km doctor` should show `slack_files_write_scope` OK
 6. (Optional) Force bridge cold-start to pick up cached scope state: `km slack rotate-token` does this automatically
 
-### Phase 68 ↔ Phase 67 interaction
+### Inbound chat and transcript streaming interaction
 
-- Inbound (Phase 67) and transcript streaming (Phase 68) compose cleanly. When BOTH are on:
+Inbound chat and transcript streaming compose cleanly. When BOTH are enabled:
   - Inbound message arrives → poller dispatches `km agent run` with `KM_SLACK_THREAD_TS` set to the inbound thread parent
-  - PostToolUse hooks stream into THAT thread (no auto-parent created — Phase 67 thread used)
+  - PostToolUse hooks stream into THAT thread (no auto-parent created — inbound thread is used)
   - Stop hook uploads the transcript into the same thread
 - Inbound off + transcript on:
   - PostToolUse auto-creates a thread parent in the per-sandbox channel
   - All turns + final upload thread under it
 
-### Phase B preview (deferred, not part of Phase 68)
+### Future: reaction-triggered session fork
 
-The DynamoDB stream-messages table written by Phase 68 is the integration seam for a future "reaction-triggered session fork" phase: an operator reaction (e.g. 🍴) on a streamed message would mint a new Claude session forked at that transcript offset. Phase 68 has no consumer for the table — it just writes.
+The DynamoDB stream-messages table is the integration seam for a future "reaction-triggered session fork": an operator reaction (e.g. 🍴) on a streamed message would mint a new Claude session forked at that transcript offset. The table is written but has no consumer yet.
 
-## Slack Block Kit rendering (Phase 74)
+## Slack Block Kit rendering
 
 Two-tier markdown renderer that turns Claude's CommonMark output into
 valid Slack mrkdwn (Tier 1) or structured Block Kit (Tier 2). Eliminates
@@ -830,24 +825,21 @@ and a 50-block cap automatically falls back from Tier 2 → Tier 1.
 
 | Mode | Output | Default user |
 |---|---|---|
-| `plain` | Literal markdown — no transformation | Phase 62/63 notify-hook (no `--render` flag passed) |
+| `plain` | Literal markdown — no transformation | notify-hook (no `--render` flag passed) |
 | `mrkdwn` | Tier 1: tokenized markdown → Slack mrkdwn `text` field | Operators who want rendering without Block Kit |
-| `blocks` | Tier 2: Block Kit `blocks` field + Tier 1 mrkdwn fallback in `text` for mobile push previews; auto-falls-back to `mrkdwn` if the response exceeds 50 blocks | Phase 67 inbound poller reply + Phase 68 streaming hook on post-Phase-74 sandboxes |
+| `blocks` | Tier 2: Block Kit `blocks` field + Tier 1 mrkdwn fallback in `text` for mobile push previews; auto-falls-back to `mrkdwn` if the response exceeds 50 blocks | Inbound poller reply + streaming hook |
 
 ### Where Block Kit rendering is wired
 
-Phase 74 flips two paths from `plain` to `blocks` in
-`pkg/compiler/userdata.go`:
+Two paths in `pkg/compiler/userdata.go` use `blocks` rendering:
 
-- `_km_stream_drain` — per-turn streaming posts (interactive `km shell`
-  / Phase 68 path)
+- `_km_stream_drain` — per-turn streaming posts (interactive `km shell` / transcript streaming path)
 - `km-slack-inbound-poller` reply — final reply for Slack-inbound chat
-  (Phase 67 path)
 
 Both lines pass `--render "${KM_SLACK_RENDER:-blocks}"`, so the env
 override (below) takes precedence.
 
-Phase 62/63 idle-pings and permission-prompt notifications stay on
+Idle-pings and permission-prompt notifications stay on
 `plain` (the notify hook constructs envelopes without `--render`),
 so the existing email/Slack idle path is byte-identical.
 
@@ -867,9 +859,8 @@ Block-Kit-emitting paths).
 
 ### One-time operator setup
 
-Phase 74 is a pure code change — no new SSM params, no new DynamoDB
-tables, no new Slack scopes. Bot scope requirements are unchanged from
-Phase 67/68.
+Block Kit rendering is a code-only change — no new SSM params, no new DynamoDB
+tables, no new Slack scopes.
 
 ```bash
 make build
@@ -908,7 +899,7 @@ push previews and notification surfaces.
 The `BlockPoster` interface is optional — existing fakes that only
 implement `SlackPoster` keep working (additive change, BRDG-01).
 Any caller that omits the `Blocks` field hits the original
-`PostMessage` path; no Phase 62/63 callers set it.
+`PostMessage` path; notify-hook callers do not set it.
 
 ### Troubleshooting
 
@@ -916,17 +907,17 @@ Any caller that omits the `Blocks` field hits the original
 |---|---|---|
 | Slack reply shows literal `# heading` or `**bold**` | Sandbox was provisioned BEFORE the new userdata template landed | `km init --sidecars` (refreshes the create-handler toolchain), then `km destroy && km create` |
 | Reply renders as Tier 1 mrkdwn (bold/italic work, no header blocks) on a very long Claude response | Response exceeded the 50-block Block Kit cap → automatic Tier 1 fallback | Working as designed; trim or split the response to land in Block Kit |
-| Reply renders as plain markdown despite a post-Phase-74 sandbox | `KM_SLACK_RENDER=plain` in `/etc/km/notify.env` | Remove the override and reload systemd units (`sudo systemctl daemon-reload`), or pass `--render blocks` explicitly |
+| Reply renders as plain markdown despite Block Kit being configured | `KM_SLACK_RENDER=plain` in `/etc/km/notify.env` | Remove the override and reload systemd units (`sudo systemctl daemon-reload`), or pass `--render blocks` explicitly |
 | Bridge returns 400 or `unknown action:` from Slack Web API when blocks are present | Bridge Lambda predates the BRDG-02 dispatch wrap | `km init --dry-run=false` to redeploy. Verify: `aws lambda get-function-configuration --function-name km-slack-bridge` shows a recent `LastModified` |
-| Block Kit appears in `#sb-<id>` but NOT in the shared channel | Shared-channel callers (Phase 62/63 notify-hook) intentionally stay on `plain` | Working as designed; pass `--render blocks` from a custom caller if needed |
-| `km-slack-inbound-poller` log: `WARN: agent run failed (exit 1)` and `output.json` shows `api_error_status: 401` | Unrelated to Phase 74 — Anthropic OAuth token in the sandbox is stale (only affects `noBedrock: true` profiles) | `km shell <sandbox-id>` then `claude login` to refresh `~/.claude/.credentials.json` |
+| Block Kit appears in `#sb-<id>` but NOT in the shared channel | Shared-channel notify-hook callers intentionally stay on `plain` | Working as designed; pass `--render blocks` from a custom caller if needed |
+| `km-slack-inbound-poller` log: `WARN: agent run failed (exit 1)` and `output.json` shows `api_error_status: 401` | Anthropic OAuth token in the sandbox is stale (only affects `noBedrock: true` profiles) | `km shell <sandbox-id>` then `claude login` to refresh `~/.claude/.credentials.json` |
 
 ### Authoritative source
 
 Plan files and verification: `.planning/phases/74-slack-mrkdwn-…/`
 (`74-01-PLAN.md`, `74-02-PLAN.md`, `74-VERIFICATION.md`).
 
-## Slack inbound file attachments (Phase 75)
+## Slack inbound file attachments
 
 Users can drag-and-drop files (images, PDFs, etc.) into a per-sandbox
 `#sb-{sandbox-id}` channel. The bridge Lambda downloads each file from
@@ -936,15 +927,15 @@ A natural-language master-prompt wrapper is prepended to the Claude
 turn enumerating absolute paths and MIME types — Claude reads each file
 with its Read tool when relevant to the question.
 
-**Profile field:** No new field. Gated on the existing
-`spec.cli.notifySlackInboundEnabled: true` (Phase 67).
+**Profile field:** No separate field. Gated on the existing
+`spec.cli.notifySlackInboundEnabled: true`.
 
 **Caps:**
 
 - 25 files per message — over-cap files dropped with thread-reply warning
 - 100 MB per file — oversize files dropped with thread-reply warning
 
-**One-time operator setup (after Phase 75 deploys):**
+**One-time operator setup:**
 
 1. Add `files:read` to the Slack App's bot scopes (App config → OAuth & Permissions)
 2. Re-install the app to your workspace (admin approval may be required)
@@ -969,19 +960,19 @@ with its Read tool when relevant to the question.
      --query '{MemorySize:MemorySize, Timeout:Timeout, Vars:Environment.Variables}'
    ```
    Expected: `MemorySize=1024`, `Timeout=60`, `Vars` contains
-   `KM_ARTIFACTS_BUCKET` plus the rest of the Phase 67 set. If
+   `KM_ARTIFACTS_BUCKET` plus the rest of the inbound env var set. If
    `Vars` only has `TOKEN_ROTATION_TS`, the last `km slack rotate-token`
    blew away the env vars and Terraform hasn't replaced them — re-run
    `km init --dry-run=false`.
 6. Verify scopes via `km doctor` — `slack_app_events_subscription` should
    report `(channels:history, groups:history, reactions:write, files:read)`.
 
-**Sandbox provisioning:** Existing sandboxes do NOT get the Phase 75
+**Sandbox provisioning:** Existing sandboxes do NOT get file-attachment
 userdata changes retroactively (the poller bash is baked into userdata
 at create time). Run `km destroy && km create` on any sandbox that
 needs file-attachment support. **The sandbox MUST be created AFTER
 `km init --dry-run=false` runs** — otherwise the create-handler Lambda
-will use its stale bundled `km` toolchain and generate pre-Phase-75
+will use its stale bundled `km` toolchain and generate outdated
 userdata even though your local binary is current.
 
 **S3 staging layout:**
@@ -1005,7 +996,7 @@ userdata even though your local binary is current.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | 👀 appears but Claude doesn't read the file | `files:read` scope missing | Re-install app + `km slack rotate-token`; verify with `km doctor` |
-| 👀 appears, Claude replies as text-only ("I don't see any file path attached") | (a) Sandbox provisioned before Phase 75 deploy, **or** (b) sandbox created via `--remote` BEFORE `km init --dry-run=false` ran (stale create-handler toolchain) | `km init --dry-run=false` first, then `km destroy && km create` |
+| 👀 appears, Claude replies as text-only ("I don't see any file path attached") | (a) Sandbox provisioned before file-attachment support was deployed, **or** (b) sandbox created via `--remote` BEFORE `km init --dry-run=false` ran (stale create-handler toolchain) | `km init --dry-run=false` first, then `km destroy && km create` |
 | Sandbox journal: `KM_ARTIFACTS_BUCKET: unbound variable` from km-slack-inbound-poller | Pre-75.3 userdata — the poller systemd unit doesn't set `KM_ARTIFACTS_BUCKET` and bash `set -u` fires on first file_share | `km init --dry-run=false` to refresh the create-handler toolchain, then `km destroy && km create` |
 | Bridge logs `Get "": unsupported protocol scheme ""` | Modern Slack workspaces deliver stub file objects in event payloads (only `id` populated). The bridge must call `files.info` to enrich. Pre-75.1 bridges issued `http.Get("")` on the empty URL field. | Deploy ≥ 75.1: `make build && km init --dry-run=false` |
 | Bridge logs `Client.Timeout exceeded while awaiting headers` on `files.slack.com` | Pre-75.2 bridge used a goroutine that outlived the handler return. AWS Lambda freezes the runtime once the 200 ships, and the in-flight HTTP deadline elapses during freeze. 75.2 made `file_share` handling synchronous. | Deploy ≥ 75.2 + redeploy bridge; verify Lambda `Timeout` ≥ 60s and bridge logs `events: enqueued (files-sync)` not `(files-fork)` |

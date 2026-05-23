@@ -98,7 +98,7 @@ container. The main container's `/etc/resolv.conf` points to `127.0.0.1`.
 |---|---|
 | **Binary** | `sidecars/http-proxy/` (Go, `github.com/elazarl/goproxy`) |
 | **Listens** | TCP :3128 (standard Squid-compatible port) |
-| **Purpose** | Filter HTTP/HTTPS by host allowlist; Bedrock token metering (Phase 6) |
+| **Purpose** | Filter HTTP/HTTPS by host allowlist; Bedrock token metering |
 
 ### Environment Variables
 
@@ -122,7 +122,7 @@ The proxy handles two request types:
   Denied hosts receive a `403 Forbidden` response with body
   `Blocked by km sandbox policy`.
 
-**Bedrock interception** (Phase 6): The proxy intercepts
+**Bedrock interception**: The proxy intercepts
 `InvokeModel` responses from Bedrock, extracts input/output token counts from
 the response body, and increments counters in DynamoDB for quota enforcement.
 
@@ -131,7 +131,7 @@ requests to `api.anthropic.com` (used by Claude Code with `--no-bedrock` /
 direct API mode). The same MITM, token extraction, and DynamoDB spend
 tracking pipeline applies to Anthropic API calls as to Bedrock calls.
 
-**GitHub repo-level filtering** (Phase 28): When `KM_GITHUB_ALLOWED_REPOS` is
+**GitHub repo-level filtering**: When `KM_GITHUB_ALLOWED_REPOS` is
 set, the proxy uses MITM to intercept HTTPS connections to GitHub hosts
 (`github.com`, `api.github.com`, `raw.githubusercontent.com`,
 `codeload.githubusercontent.com`), extracts `owner/repo` from the URL path,

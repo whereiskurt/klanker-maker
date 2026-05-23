@@ -1,6 +1,6 @@
-# Phase 21 E2E Verification Checklist
+# E2E Verification Checklist
 
-This document is the operator procedure for verifying all Phase 21 features on live AWS infrastructure.
+This document is the operator procedure for verifying platform features on live AWS infrastructure.
 Work through each section in order. Record PASS or FAIL for each step.
 
 ---
@@ -14,7 +14,7 @@ Work through each section in order. Record PASS or FAIL for each step.
 
 ---
 
-## Section 1: Sidecar E2E Verification (Phase 21 Item 3)
+## Section 1: Sidecar E2E Verification
 
 ### Prerequisites
 
@@ -150,7 +150,7 @@ aws logs filter-log-events \
 
 ---
 
-## Section 2: GitHub Repo Cloning (Phase 21 Item 4)
+## Section 2: GitHub Repo Cloning
 
 ### Prerequisites
 
@@ -210,7 +210,7 @@ git push origin test-branch
 
 ---
 
-## Section 3: Inter-Sandbox Email (Phase 21 Item 5)
+## Section 3: Inter-Sandbox Email
 
 ### Prerequisites
 
@@ -269,7 +269,7 @@ aws s3 ls s3://<artifact-bucket>/mailboxes/<B-id>/
 
 ---
 
-## Section 4: Email Allow-List Enforcement (Phase 21 Item 6)
+## Section 4: Email Allow-List Enforcement
 
 ### Prerequisites
 
@@ -320,7 +320,7 @@ Body: Self message. KM-AUTH: selfphrase456
 
 ---
 
-## Section 5: Budget Precision (Phase 21 Plan 01)
+## Section 5: Budget Precision
 
 ### 5.1 km status shows 4-decimal budget amounts
 
@@ -352,7 +352,7 @@ km budget add <sandbox-id> 0.0050
 
 ---
 
-## Section 6: CloudWatch Log Export Before Destroy (Phase 21 Plan 01)
+## Section 6: CloudWatch Log Export Before Destroy
 
 ### 6.1 Destroy a test sandbox and verify S3 log export
 
@@ -421,7 +421,7 @@ Error:
 
 **Date:** _______________
 
-**Phase 21 approved:** [ ] YES  [ ] NO
+**Approved:** [ ] YES  [ ] NO
 
 **Notes / known failures:**
 

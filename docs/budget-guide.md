@@ -1,6 +1,6 @@
 # Klanker Maker Budget Guide
 
-Phase 6 budget enforcement for per-sandbox compute and AI spend control.
+Per-sandbox compute and AI spend control.
 
 ## Table of Contents
 

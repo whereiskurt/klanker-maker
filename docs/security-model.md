@@ -307,7 +307,7 @@ The `hardened` profile has `agent.allowedTools: [read_file]` and no GitHub confi
 
 **Deny-by-default contract:** Both a nil `sourceAccess.github` AND an explicitly empty `allowedRepos: []` result in zero GitHub token infrastructure being provisioned. The compiler gates all token infrastructure (GitHub token Lambda/EventBridge, per-sandbox SSM parameter, `github_token_inputs` HCL block, and the `GIT_ASKPASS` credential helper in EC2 user-data) behind the condition `GitHub != nil && len(AllowedRepos) > 0`. No token means no access -- this is the primary access control layer.
 
-**Network-level enforcement (Phase 28):** In addition to token scoping, the HTTP proxy enforces repo-level access at the network layer via MITM interception. When `sourceAccess.github.allowedRepos` is configured, the proxy:
+**Network-level enforcement:** In addition to token scoping, the HTTP proxy enforces repo-level access at the network layer via MITM interception. When `sourceAccess.github.allowedRepos` is configured, the proxy:
 1. Implicitly allows GitHub hosts (github.com, api.github.com, raw.githubusercontent.com, codeload.githubusercontent.com) — profiles do **not** need these in `network.egress.allowedHosts`.
 2. Intercepts HTTPS connections to GitHub hosts via MITM (using the platform CA already trusted by the sandbox).
 3. Extracts `owner/repo` from the URL path and checks it against the `allowedRepos` list.
@@ -607,8 +607,8 @@ The public keys are published to the `km-identities` DynamoDB table. Each sandbo
 | `signing_policy` | `required`, `optional`, or `off` |
 | `verify_inbound_policy` | `required`, `optional`, or `off` |
 | `encryption_policy` | `required`, `optional`, or `off` |
-| `alias` | Human-friendly dot-notation name (from Phase 17, optional) |
-| `allowed_senders` | DynamoDB StringSet of allow-list patterns (from Phase 17, optional) |
+| `alias` | Human-friendly dot-notation name (optional) |
+| `allowed_senders` | DynamoDB StringSet of allow-list patterns (optional) |
 
 Empty string means "not specified" -- the attribute is omitted from the row to preserve backward compatibility with sandboxes created before identity was added.
 

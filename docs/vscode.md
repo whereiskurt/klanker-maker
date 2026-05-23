@@ -1,6 +1,6 @@
 # VS Code Remote-SSH access to klankermaker sandboxes
 
-Phase 73 adds `km vscode start | status` so operators can connect their **local desktop VS Code**
+Klanker supports `km vscode start | status` so operators can connect their **local desktop VS Code**
 (via the Remote-SSH extension) to a sandbox over SSM port-forward.
 
 ## Table of Contents
@@ -47,8 +47,8 @@ edit the result with your full local IDE experience.
 make build && km init --sidecars
 ```
 
-`km init --sidecars` is required after Phase 73 ships so the management Lambda's km binary
-recognizes the new `VSCodeSSHPubKey` userdata field. Without it, `km create --remote` produces
+`km init --sidecars` is required so the management Lambda's km binary
+recognizes the `VSCodeSSHPubKey` userdata field. Without it, `km create --remote` produces
 a sandbox with broken authorized_keys (silent SSH failure).
 
 ---
@@ -102,7 +102,7 @@ this command's existence:
    from the bake-source sandbox. On relaunch from that AMI, cloud-init may mark itself
    "done" and skip the userdata block that writes the new pubkey, leaving the old key in
    place. Rekey forces the new key onto the sandbox via SSM.
-2. **Cross-laptop portability** — Phase 73 keys live on the creation machine only. An
+2. **Cross-laptop portability** — Keys live on the creation machine only. An
    operator who wants to `km vscode start` from a different laptop currently has to
    manually copy `~/.km/keys/<sandbox-id>*`. Rekey on the second laptop generates a fresh
    keypair locally and pushes the public key to the sandbox — no manual file copy.
@@ -188,14 +188,14 @@ $ km vscode rekey sb-abc12345 --yes
 Rekey complete. Reconnect VS Code to pick up the new key.
 ```
 
-**pre-Phase-73 sandbox (or `vscodeEnabled:false`):**
+**Pre-vscode sandbox (or `vscodeEnabled:false`):**
 
 ```
 $ km vscode rekey sb-old00001
 ✓ EC2 instance running (i-0... in us-east-1)
 ✗ VS Code not enabled in this sandbox's profile (set spec.cli.vscodeEnabled: true and recreate the sandbox)
 
-Hint: this sandbox predates Phase 73 or was created with vscodeEnabled:false.
+Hint: this sandbox was created with vscodeEnabled:false or before VS Code support was added.
 Rekey can't enable VS Code retroactively. Run: km destroy sb-old00001 --remote --yes && km create <profile.yaml>
 ```
 
@@ -256,7 +256,7 @@ spec:
 ```
 
 Set `vscodeEnabled: false` in profiles that do not need IDE access (e.g., headless agent
-sandboxes). Sandboxes created before Phase 73 do NOT get sshd provisioning retroactively —
+sandboxes). Sandboxes without `vscodeEnabled: true` do NOT get sshd provisioning retroactively —
 `km destroy` + `km create` to provision.
 
 ---
@@ -405,10 +405,10 @@ includes `.visualstudio.com` and `vscode.download.prss.microsoft.com`. See [Netw
 **"Permission denied (publickey)" in sshd**
 On AL2023, SELinux blocks sshd from reading `authorized_keys` if `restorecon` wasn't run.
 Check: `km vscode status $SB`. If sshd is active but SSH fails, the sandbox may have been
-created before Phase 73 shipped. `km destroy $SB --remote --yes && km create ...` to reprovision.
+provisioned without VS Code support. `km destroy $SB --remote --yes && km create ...` to reprovision.
 
 **sshd not active after `km vscode status`**
-The sandbox was created before Phase 73, or `vscodeEnabled: false` was set. Reprovision.
+The sandbox was created with `vscodeEnabled: false` or without VS Code support. Reprovision.
 
 ---
 
@@ -429,7 +429,7 @@ The sandbox was created before Phase 73, or `vscodeEnabled: false` was set. Repr
   `UserKnownHostsFile /dev/null`. Defense-in-depth comes from SSM/IAM authentication of the
   target instance; proper TOFU or cert-based host trust is a follow-up.
 
-- **Existing sandboxes need reprovisioning.** Sandboxes created before Phase 73 do NOT get
+- **Existing sandboxes need reprovisioning.** Sandboxes created without `vscodeEnabled: true` do NOT get
   sshd provisioning retroactively. `km destroy` + `km create` required.
 
 ---

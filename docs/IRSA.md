@@ -9,8 +9,8 @@ implementation-level walkthrough, not the marketing summary.
 The shorter operator-onboarding guide lives in
 [`docs/k8s/README.md`](k8s/README.md). The original design rationale is in
 [`docs/superpowers/specs/2026-05-11-km-cluster-cross-account-irsa-design.md`](superpowers/specs/2026-05-11-km-cluster-cross-account-irsa-design.md).
-This document is the union of both plus everything we learned implementing
-Phase 80, Phase 80.1, and the in-pod refactor that shipped with `v0.2.598`.
+This document is the union of both plus everything learned implementing
+the cross-account IRSA integration and the in-pod refactor that shipped with `v0.2.598`.
 
 ---
 
@@ -230,7 +230,7 @@ treats the literal `*` as a wildcard glob. Operators who want any
 ServiceAccount across any namespace pass `--namespace=*` and accept
 `StringLike` semantics.
 
-### 3.3 The auto-detect dual-mode (Phase 80.1)
+### 3.3 The auto-detect dual-mode
 
 Before generating the `terragrunt.hcl`, `km cluster add` calls
 `iam:ListOpenIDConnectProviders` against the target account and walks the
@@ -249,10 +249,10 @@ OIDC provider auto-detected: creating
 OIDC provider auto-detected: reusing existing arn:aws:iam::...:oidc-provider/...
 ```
 
-This lifts the Phase 80 restriction "one cluster-irsa stack per EKS issuer
-URL." Running `km cluster add` a second time against an EKS cluster whose
+Running `km cluster add` a second time against an EKS cluster whose
 mirror was registered by an earlier stack no longer fails with
-`EntityAlreadyExists` — auto-detect picks the reuse branch.
+`EntityAlreadyExists` — auto-detect picks the reuse branch, supporting
+multiple cluster-irsa stacks per EKS issuer URL.
 
 Manual override:
 
@@ -261,7 +261,7 @@ km cluster add ... --register-oidc-provider=true    # force create (fails if exi
 km cluster add ... --register-oidc-provider=false   # force reuse (fails if absent)
 ```
 
-The `moved {}` block at the top of the module migrates pre-Phase-80.1 state
+The `moved {}` block at the top of the module migrates older state
 from the unindexed `aws_iam_openid_connect_provider.this` to
 `aws_iam_openid_connect_provider.this[0]` on first apply — state-only
 operation, no IAM mutation.
@@ -641,9 +641,8 @@ duplication), but it means:
 
 If you ever want to truly split the surfaces, the move is to extract a
 read-only or scoped variant of the module and have `cluster-irsa` consume
-that instead. We did not do this in Phase 80 because the surface is small
-enough that operational consistency wins; revisit if the shared module
-grows.
+that instead. The surface is small enough that operational consistency wins;
+revisit if the shared module grows.
 
 ### 7.7 The managed-identity auto-detect is signal-based
 
@@ -711,7 +710,7 @@ have one today.
   https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/#projected-service-account-tokens
 - AWS Pod Identity Webhook source:
   https://github.com/aws/amazon-eks-pod-identity-webhook
-- Internal: design spec for Phase 80 (cross-account IRSA):
+- Internal: design spec (cross-account IRSA):
   [`docs/superpowers/specs/2026-05-11-km-cluster-cross-account-irsa-design.md`](superpowers/specs/2026-05-11-km-cluster-cross-account-irsa-design.md)
 - Internal: operator setup guide:
   [`docs/k8s/README.md`](k8s/README.md)

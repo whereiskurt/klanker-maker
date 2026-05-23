@@ -231,7 +231,7 @@ Klanker Maker is itself an AWS application. The `km` CLI is the front door, but 
 | **DynamoDB - `km-budget` (Global Table)** | Per-sandbox spend counters, replicated to every region where agents run. Sub-millisecond reads from inside the sandbox. |
 | **DynamoDB - `km-identities`** | Public Ed25519 keys for every sandbox; used by recipients to verify inbound email signatures. |
 | **DynamoDB - `km-slack-threads`** | `(channel_id, thread_ts) → claude_session_id` mapping for resumable Slack-driven Claude sessions. TTL-expired after 30 days. |
-| **DynamoDB - `km-slack-stream-messages`** | Per-turn message anchors for Phase 68 transcript streaming. Future: reaction-as-action triggers. |
+| **DynamoDB - `km-slack-stream-messages`** | Per-turn message anchors for transcript streaming. Future: reaction-as-action triggers. |
 | **DynamoDB - `km-schedules`** | Active `km at` schedules, surfaced by `km at list`. |
 | **SQS FIFO (per sandbox)** | `km-slack-inbound-{id}.fifo` - bridge enqueues Slack messages here; sandbox-side poller dequeues and dispatches to Claude. ContentBasedDeduplication off; FIFO ordering preserved. |
 | **SES** | Inbound: operator inbox, sandbox mailboxes ({id}@sandboxes.{domain}). Outbound: lifecycle notifications, inter-sandbox email, signed payloads. Domain DKIM + SPF auto-configured by `km init`. |
@@ -321,7 +321,7 @@ What happens at create:
 3. Inside the sandbox, the HTTP proxy is configured to inject the token as `Authorization: token …` for `*.github.com` and `*.githubusercontent.com` requests - but only for paths matching `allowedRepos`. Other repos return 403 even if the agent has the URL.
 4. Refs are enforced at the proxy layer too: `git push` to a non-allowlisted ref is rejected.
 
-Multi-account is supported (Phase 54): install the App on multiple GitHub accounts/orgs, and `km configure github --discover` writes an installation key per account. The compiler matches `org/repo` to the right installation.
+Multi-account is supported: install the App on multiple GitHub accounts/orgs, and `km configure github --discover` writes an installation key per account. The compiler matches `org/repo` to the right installation.
 
 See [`docs/github.md`](docs/github.md) for the full setup.
 
@@ -536,7 +536,7 @@ Budget enforcement tracks two spend pools per sandbox, stored in a **DynamoDB gl
 
 ### Compute budget
 
-Tracked as spot rate × elapsed minutes, sourced from the AWS Price List API at sandbox creation. Paused/hibernated intervals are excluded (Phase 60). When the compute budget is exhausted, the sandbox is *suspended* - not destroyed:
+Tracked as spot rate × elapsed minutes, sourced from the AWS Price List API at sandbox creation. Paused/hibernated intervals are excluded. When the compute budget is exhausted, the sandbox is *suspended* - not destroyed:
 
 - **EC2**: `StopInstances` preserves the EBS volume. No compute charges accrue while stopped.
 - **ECS Fargate**: Artifacts are uploaded, then the task is stopped. Re-provision from the stored S3 profile on top-up.
@@ -693,7 +693,7 @@ Profiles support **inheritance** via `extends` - start from a base and override 
 | **ECS Fargate** | Same as above, guaranteed capacity | ~$0.04/hr for 1 vCPU / 2GB |
 | **Docker** (local) | Docker Compose on local machine, sidecar containers, IAM roles via STS | Free (local compute) |
 
-Spot interruption handlers automatically upload artifacts to S3 before instances are reclaimed. EKS substrate is on the roadmap (Phase 38).
+Spot interruption handlers automatically upload artifacts to S3 before instances are reclaimed. EKS substrate is on the roadmap.
 
 ---
 
@@ -727,7 +727,7 @@ km agent run sb-abc123 --prompt "..." --no-bedrock --wait
 
 **Profile defaults:** Set `spec.cli.noBedrock: true` to default to direct API. Use `spec.execution.configFiles` to pre-seed Claude settings (trusted directories, etc.).
 
-**Codex parity (Phase 70):** the same `--prompt` / `--wait` / `--interactive` flags work for Codex via `--codex`, with notify hooks (Slack, email) and inbound dispatch wired identically.
+**Codex parity:** the same `--prompt` / `--wait` / `--interactive` flags work for Codex via `--codex`, with notify hooks (Slack, email) and inbound dispatch wired identically.
 
 ---
 

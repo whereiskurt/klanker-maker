@@ -1538,7 +1538,7 @@ km doctor --quiet && echo "platform healthy" || echo "platform has issues"
 
 ### Overview
 
-Phase 40 introduced eBPF-based network enforcement as an alternative to the traditional iptables DNAT + proxy sidecar approach. When a profile sets `spec.network.enforcement: "ebpf"` or `"both"`, the sandbox uses cgroup-attached BPF programs to enforce network allowlists at the kernel level.
+eBPF-based network enforcement is an alternative to the traditional iptables DNAT + proxy sidecar approach. When a profile sets `spec.network.enforcement: "ebpf"` or `"both"`, the sandbox uses cgroup-attached BPF programs to enforce network allowlists at the kernel level.
 
 ### How It Works
 
@@ -1603,11 +1603,11 @@ eBPF bytecode is compiled via `make generate-ebpf` using a Docker container with
 
 See [`docs/diagrams/ebpf-architecture.excalidraw`](diagrams/ebpf-architecture.excalidraw) for the full architecture diagram.
 
-## eBPF SSL Uprobe Observability (Phase 41)
+## eBPF SSL Uprobe Observability
 
 ### Overview
 
-An `ebpf-observer` sidecar uses eBPF uprobes to capture TLS plaintext without MITM certificates. This runs alongside the enforcement layer (Phase 40) and the MITM proxy, providing an independent audit trail.
+An `ebpf-observer` sidecar uses eBPF uprobes to capture TLS plaintext without MITM certificates. This runs alongside the eBPF enforcement layer and the MITM proxy, providing an independent audit trail.
 
 ### How It Works
 

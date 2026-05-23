@@ -1,6 +1,6 @@
 # eBPF Network Enforcement & TLS Observability
 
-Deep-dive into the eBPF implementation: cgroup-attached BPF programs for kernel-level network enforcement (Phase 40) and SSL uprobe plaintext capture for observability (Phase 41).
+Deep-dive into the eBPF implementation: cgroup-attached BPF programs for kernel-level network enforcement and SSL uprobe plaintext capture for observability.
 
 ## Table of Contents
 
@@ -13,13 +13,13 @@ Deep-dive into the eBPF implementation: cgroup-attached BPF programs for kernel-
   - [cgroup_skb/egress — Packet-Level Backstop](#cgroup_skbegress--packet-level-backstop)
 - [BPF Maps](#bpf-maps)
 - [DNS Resolver](#dns-resolver)
-- [Gatekeeper Mode — connect4 DNAT Rewrite (Phase 42)](#gatekeeper-mode--connect4-dnat-rewrite-phase-42)
+- [Gatekeeper Mode — connect4 DNAT Rewrite](#gatekeeper-mode--connect4-dnat-rewrite)
 - [Ring Buffer Audit Pipeline](#ring-buffer-audit-pipeline)
 - [Volatile Constants](#volatile-constants)
 - [Cgroup & Process Management](#cgroup--process-management)
 - [Pin Paths & Persistence](#pin-paths--persistence)
 - [Cleanup & Teardown](#cleanup--teardown)
-- [SSL Uprobe Observability (Phase 41)](#ssl-uprobe-observability-phase-41)
+- [SSL Uprobe Observability](#ssl-uprobe-observability)
 - [Request Flow Examples](#request-flow-examples)
 - [Build & Compilation](#build--compilation)
 - [Troubleshooting](#troubleshooting)
@@ -211,7 +211,7 @@ The enforcer runs a DNS resolver at 127.0.0.1:53 (configurable) that:
 
 ---
 
-## Gatekeeper Mode — connect4 DNAT Rewrite + Transparent Proxy (Phase 42)
+## Gatekeeper Mode — connect4 DNAT Rewrite + Transparent Proxy
 
 When `enforcement: "both"`, the eBPF layer acts as a **gatekeeper** that selectively redirects traffic to the L7 MITM proxy via kernel-level DNAT. This is the recommended production configuration — it combines kernel-level IP enforcement with userspace L7 inspection for hosts that need deep filtering (Bedrock token metering, GitHub repo-level allowlisting).
 
@@ -235,7 +235,7 @@ The application never sees the rewrite — `curl https://api.github.com` thinks 
 
 ### Transparent Proxy — BPF Map Lookup Chain
 
-The key innovation in Phase 42 is the **transparent proxy** (`sidecars/http-proxy/httpproxy/transparent.go`). Because BPF rewrites the destination at the syscall level, the HTTP proxy receives raw TLS (not HTTP CONNECT). The proxy recovers the original destination via a three-step BPF map lookup:
+The **transparent proxy** (`sidecars/http-proxy/httpproxy/transparent.go`) receives raw TLS connections because BPF rewrites the destination at the syscall level (not HTTP CONNECT). The proxy recovers the original destination via a three-step BPF map lookup:
 
 ```
                         ┌──────────────────────────────────────┐
@@ -278,7 +278,7 @@ The key innovation in Phase 42 is the **transparent proxy** (`sidecars/http-prox
 
 **Lazy map loading:** BPF maps are loaded from pinned bpffs paths (`/sys/fs/bpf/km/{sandboxID}/`) on first transparent connection, not at startup. This avoids startup ordering issues between the enforcer (which pins the maps) and the proxy.
 
-**Byte order handling:** A critical operational lesson from Phase 42 — BPF stores IPs and ports in network byte order. The proxy must use `binary.NativeEndian.PutUint32` and manual byte-swap for ports (`(raw >> 8) | (raw << 8)`) to correctly recover the original destination. Multiple E2E bug fixes addressed NBO/HBO mismatches.
+**Byte order handling:** BPF stores IPs and ports in network byte order. The proxy must use `binary.NativeEndian.PutUint32` and manual byte-swap for ports (`(raw >> 8) | (raw << 8)`) to correctly recover the original destination.
 
 ### Proxy IP Map Population
 
@@ -332,7 +332,7 @@ Verified on `goose-ebpf-gatekeeper` profile (EC2, AL2023 kernel 6.18, `enforceme
 - **`goose-ebpf-gatekeeper`** — gatekeeper mode with eBPF + proxy enforcement, GitHub repo filtering, and Bedrock token metering.
 - **`goose-ebpf`** — pure eBPF enforcement, no proxy. Maximum security, lowest overhead.
 
-### Operational Lessons from Phase 42
+### Operational Lessons
 
 1. **Byte order is the #1 source of bugs.** BPF stores IPs in network byte order (NBO) as `__u32`. cilium/ebpf's `Map.Lookup/Put` use `binary.NativeEndian` for marshaling. The proxy must convert NBO ports via manual byte-swap, not `binary.BigEndian`.
 
@@ -475,7 +475,7 @@ Pinning means the BPF programs continue enforcing even if the `km ebpf-attach` p
 
 ---
 
-## SSL Uprobe Observability (Phase 41)
+## SSL Uprobe Observability
 
 An `ebpf-observer` sidecar attaches uprobes to TLS library functions for passive plaintext capture. **E2E verified on AL2023 kernel 6.18** with 8 probes attaching successfully to OpenSSL 3.2.2.
 
@@ -504,7 +504,7 @@ An `ebpf-observer` sidecar attaches uprobes to TLS library functions for passive
 - **Replace the proxy** — the proxy provides active enforcement (GitHub repo filtering, budget 403s). Uprobes provide parallel observability.
 - **Parse HTTP/2** — the GitHub API uses HTTP/2 over TLS. Captured plaintext contains HPACK-compressed binary, not `GET /repos/... HTTP/1.1`. Git-smart-HTTP (clone/push) uses HTTP/1.1 and IS captured correctly.
 
-### Operational Lessons from Phase 41
+### Operational Lessons (SSL Uprobes)
 
 1. **BPF verifier on AL2023 kernel 6.18 is strict about `bpf_probe_read_user` length.** The verifier rejects calls where the length parameter might be negative (signed taint). The fix is a bitwise AND at the assignment point: `copy_len = len & 0x3FFF` — this statically bounds the value. If-clamping (`if (len > MAX) len = MAX`) is NOT sufficient because it doesn't remove the signed taint.
 
@@ -562,7 +562,7 @@ Claude Code ships as a Bun binary with BoringSSL statically linked. The symbols 
    → Inspect: is /repos/org/repo in allowedRepos? ✓
    → Connect to real 140.82.112.35:443, forward request and response
    ↓
-5. SSL uprobe (if Phase 41): observe SSL_write plaintext
+5. SSL uprobe (if SSL uprobe observability is enabled): observe SSL_write plaintext
    → Log: GET /repos/org/repo, Host: api.github.com
 ```
 
@@ -643,7 +643,7 @@ This runs:
 - `//go:build linux` — enforcer.go (real implementation)
 - `//go:build !linux` — enforcer_stub.go (no-op stubs for macOS dev)
 
-**E2E verification pipeline:** `make generate-ebpf` → `make build` → `make sidecars` (uploads km binary to S3) → `km create --remote` → SSM into instance → test enforcement → `km destroy`. Each cycle takes ~3-5 minutes. Phase 40 required 14 E2E iterations; Phase 41 required 3; Phase 42 required 8+ with byte-order bug fixes.
+**E2E verification pipeline:** `make generate-ebpf` → `make build` → `make sidecars` (uploads km binary to S3) → `km create --remote` → SSM into instance → test enforcement → `km destroy`. Each cycle takes ~3-5 minutes.
 
 ---
 

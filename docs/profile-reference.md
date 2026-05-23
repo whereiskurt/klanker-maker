@@ -1141,7 +1141,7 @@ spec:
 | Default    | -- (disabled)                  |
 | Validation | EC2 only; requires eBPF or both enforcement mode |
 
-Controls TLS/SSL plaintext capture via eBPF uprobes (Phase 41). When enabled, uprobes attach to TLS library functions (e.g. `SSL_read`/`SSL_write`) to capture plaintext before encryption / after decryption. Provides an audit trail independent of the MITM proxy.
+Controls TLS/SSL plaintext capture via eBPF uprobes. When enabled, uprobes attach to TLS library functions (e.g. `SSL_read`/`SSL_write`) to capture plaintext before encryption / after decryption. Provides an audit trail independent of the MITM proxy.
 
 ### `spec.observability.tlsCapture.enabled`
 

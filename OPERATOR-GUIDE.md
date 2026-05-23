@@ -29,11 +29,11 @@ application fields both point at the single account.
 
 The configure wizard detects single-account topology and prints a confirmation.
 
-> **Migration note (Phase 65):** The previous `accounts.management` field has been split into
-> `accounts.organization` (SCP target) and `accounts.dns_parent` (Route53 parent zone owner).
-> If your `km-config.yaml` still contains `accounts.management`, rename it to `accounts.dns_parent`
-> and add `accounts.organization` (leave blank to skip SCP). Run `km doctor` for remediation
-> guidance — it will flag legacy `accounts.management` with an error message and instructions.
+The `accounts.organization` field (SCP target) and `accounts.dns_parent` field (Route53 parent
+zone owner) are separate. If your `km-config.yaml` still contains a legacy `accounts.management`
+field, rename it to `accounts.dns_parent` and add `accounts.organization` (leave blank to skip
+SCP). Run `km doctor` for remediation guidance — it will flag legacy `accounts.management` with
+an error message and instructions.
 
 ### AWS SSO (IAM Identity Center)
 
@@ -117,7 +117,7 @@ deploying shared infrastructure in Section 4). Set these in your shell or a per-
 | `KM_ACCOUNTS_APPLICATION` | AWS account ID for the application (sandbox) account | `333333333333` |
 | `KM_ARTIFACTS_BUCKET` | S3 bucket for Lambda zips, sidecar binaries, artifacts | `my-km-artifacts` |
 | `KM_ROUTE53_ZONE_ID` | Route53 hosted zone ID for `sandboxes.<domain>` | `Z1234ABCDEFGH` |
-| `KM_OPERATOR_EMAIL` | Operator inbox address (operator-{resource_prefix}@{email_subdomain}.{domain}; derived by `km configure` from Phase 84 onward) | `operator-km@sandboxes.example.com` |
+| `KM_OPERATOR_EMAIL` | Operator inbox address (`operator-{resource_prefix}@{email_subdomain}.{domain}`; derived by `km configure`) | `operator-km@sandboxes.example.com` |
 | `KM_REGION` | AWS region (default: us-east-1) | `us-east-1` |
 
 Environment variables override values from `km-config.yaml` when both are present.
@@ -152,6 +152,16 @@ The command writes `./km-config.yaml` at the repo root. If all account IDs match
 a single-account topology and prints a confirmation. For multi-account topologies, it prints
 DNS delegation instructions.
 
+After writing `km-config.yaml`, the wizard prints the canonical bootstrap sequence and embeds
+it as `#` header comments at the top of the generated yaml:
+
+```
+km bootstrap --all --plan
+km bootstrap --all --dry-run=false
+km init --plan
+km init --dry-run=false
+```
+
 For non-interactive use (CI/CD or scripted setup), pass values as flags:
 
 ```bash
@@ -167,6 +177,19 @@ km configure --non-interactive \
 ```
 
 All flags are required in non-interactive mode.
+
+**Configure-time safeguards:**
+
+- **HeadBucket-checked `state_bucket`**: when you type a globally-taken name, `km configure`
+  HeadBuckets it, prints `<name> is taken`, suggests `<name>-<account_id>`, and offers
+  `[Y / edit / abort]`. `Y` accepts the suggestion, `edit` re-prompts freeform, `abort` exits
+  cleanly.
+- **Auto-derived `artifacts_bucket`**: default is `${prefix}-artifacts-${account_id}` (e.g.
+  `km-artifacts-052251888500`). Angle-bracket placeholder tokens and the literal example sentinel
+  `km-artifacts-12345` are rejected at load; the error includes the recovery command
+  `re-run 'km configure'`.
+- **Shell-env conflict WARN**: if `KM_*` env vars in your shell conflict with values the wizard
+  is about to write, each conflicting var prints a `WARN: KM_<KEY>=<env-value>` line to stderr.
 
 ### Verify AWS Access
 
@@ -189,7 +212,21 @@ aws sso login --sso-session <session-name>
 ### Set Environment Variables (for direct Terragrunt use)
 
 If you plan to run `terragrunt apply` directly (Section 4), export these values. You can
-derive them from `km-config.yaml`:
+derive them from `km-config.yaml`, or use `km env` to print the full block:
+
+```bash
+eval $(km env)
+```
+
+`km env` prints `export KEY=value` lines for the `KM_*` env vars that Terragrunt's `site.hcl`
+reads via `get_env()`. The `--aws-profile` flag opt-in adds `export AWS_PROFILE=<current value>`
+(excluded by default to keep the export block portable across operator shells).
+
+Use cases: recovering from a partial bootstrap, manual `terragrunt import`, debugging
+cfg-vs-env precedence, running terragrunt from a module directory without re-invoking `km`
+for each step.
+
+Or export values manually:
 
 ```bash
 export KM_DOMAIN=example.com
@@ -388,9 +425,9 @@ The command prints the sandbox ID on completion.
 
 ### km create --prompt — provision + queue prompts
 
-Phase 86 adds a repeatable `--prompt` flag that queues one or more Claude prompts for sequential
-execution immediately after the sandbox is reachable. The on-box `km-queue.service` systemd unit
-drains the queue; each entry runs as a standard `km agent run` session visible to `km agent list`.
+The `--prompt` flag queues one or more Claude prompts for sequential execution immediately
+after the sandbox is reachable. The on-box `km-queue.service` systemd unit drains the queue;
+each entry runs as a standard `km agent run` session visible to `km agent list`.
 
 **Basic usage:**
 
@@ -476,7 +513,6 @@ systemctl start km-queue   # kick the runner
 **Reference:**
 
 - Full spec: `docs/superpowers/specs/2026-05-19-km-create-prompt-queue-design.md`
-- Phase brief: `.planning/phases/86-km-create-prompt-queue/BRIEF.md`
 
 ### Claude auth modes for sandboxes
 
@@ -503,8 +539,7 @@ spec:
 | No interactive auth step needed | Some accounts need to opt model IDs into on-demand throughput first |
 | `km create --prompt --wait` works end-to-end out of the box | — |
 
-This is what most profiles use (e.g. `dc34.yaml`, `codex.yaml`). All Phase 86 live UAT scenarios
-that PASSed used Bedrock mode.
+This is what most profiles use (e.g. `dc34.yaml`, `codex.yaml`).
 
 #### Mode 2 — Direct API via `CLAUDE_CODE_OAUTH_TOKEN` env-var (recommended for Claude.ai subscribers)
 
@@ -801,7 +836,7 @@ containment for both.
 
 ### Doctor checks
 
-`km doctor` adds two Phase 66 checks for multi-instance operators:
+`km doctor` includes these multi-instance checks:
 
 - **Prefix Collision** — warns if `{prefix}-ttl-handler` Lambda already exists. If you have
   already run `km init`, this is expected and informational. If you have NOT run `km init`,
@@ -810,92 +845,67 @@ containment for both.
 - **Email Domain SES Match** — warns if `cfg.GetEmailDomain()` is not a verified SES identity.
   Run `km init` to verify the domain, or check DNS records if you recently changed `email_subdomain`.
 
-### Phase 82 isolation guarantees
+### Resource-prefix isolation guarantees
 
-Phase 82 (2026-05-16) completed the resource-prefix isolation work, making the two-install scenario safe:
+km fully isolates all per-install resources under the configured prefix, making the two-install
+scenario safe:
 
-**What changed:**
-- **SES module** — receipt rule set name is now `${resource_prefix}-sandbox-email` (was hard-coded `km-sandbox-email`). A second install with `resource_prefix: km2` gets `km2-sandbox-email` without touching the first install's rule set.
-- **email-handler module** — IAM policy ARNs and S3 paths now interpolate `state_prefix`. A second install's Lambda role is scoped to its own prefix.
-- **ECS modules** — SSM parameter ARN interpolates `km_label`. ECS task containers reference only their own install's parameters.
-- **Resource tag** — every per-install platform resource carries `km:resource-prefix=${prefix}`. `km doctor` untagged-resource checks and cross-install safety filters all key off this tag to prevent false-positive deletions.
+- **SES module** — receipt rule set name is `${resource_prefix}-sandbox-email`. A second install
+  with `resource_prefix: km2` gets `km2-sandbox-email` without touching the first install's rule set.
+- **email-handler module** — IAM policy ARNs and S3 paths interpolate `state_prefix`. A second
+  install's Lambda role is scoped to its own prefix.
+- **ECS modules** — SSM parameter ARN interpolates `km_label`. ECS task containers reference only
+  their own install's parameters.
+- **Resource tag** — every per-install platform resource carries `km:resource-prefix=${prefix}`.
+  `km doctor` untagged-resource checks and cross-install safety filters all key off this tag to
+  prevent false-positive deletions.
 
-**km configure preserve behavior:** Re-running `km configure` preserves the existing `resource_prefix` — it is never overwritten. Use `km configure --reset-prefix` to reset to the `km` default.
+**km configure preserve behavior:** Re-running `km configure` preserves the existing
+`resource_prefix` — it is never overwritten. Use `km configure --reset-prefix` to reset to the
+`km` default.
 
-**Upgrade procedure for existing installs (one-time):**
-```bash
-make build                   # rebuild km CLI
-km init --sidecars           # refresh management Lambda + sidecar binaries
-km init --dry-run=false      # apply Terraform module changes (tag additions only — no recreations)
-AWS_DEFAULT_REGION=us-east-1 AWS_PROFILE=<your-profile> \
-  km doctor --backfill-tags --dry-run=true    # preview which resources will be tagged
-AWS_DEFAULT_REGION=us-east-1 AWS_PROFILE=<your-profile> \
-  km doctor --backfill-tags --dry-run=false   # apply tags (idempotent — safe to re-run)
-```
-
-**Troubleshooting:** If `km doctor` reports WARN-level untagged-instance results after Phase 82 upgrade, run `km doctor --backfill-tags --dry-run=true` to preview, then `--dry-run=false` to commit. The cross-install safety guard skips resources whose `km:sandbox-id` tag does not match any row in the current install's DynamoDB sandbox table — those resources belong to a different install and are intentionally left alone.
-
-### Phase 84 upgrade — shared SES rule set + per-install rules
-
-Phase 84 (2026-05-16) replaces Phase 82.1's `activate_rule_set` handoff with per-install SES rule namespacing. Each install now adds prefix-named rules to a single account-shared rule set (`sandbox-email-shared`) that `km bootstrap --shared-ses` provisions. The operator inbound address becomes `operator-{resource_prefix}@{email_subdomain}.{domain}`.
-
-**This is a hard upgrade — Phase 82.1's `activate_rule_set` variable and `KM_SES_ACTIVATE_RULESET` path have been removed. No in-place rollback flag exists. Rollback requires checking out a pre-Phase-84 commit.**
-
-#### Prerequisites
-
-- `km` binary built from Phase 84 sources (`make build`)
-- AWS credentials with foundation scope (bootstrap account) and regional scope (application account)
-- For a second install: the primary operator has already run `km bootstrap --shared-ses` (the shared rule set must exist before any install runs `km init`)
-
-#### Single install or primary install in a multi-install account
+To backfill tags on existing resources:
 
 ```bash
-make build
-km init --sidecars
-km bootstrap --shared-ses --dry-run=true
-km bootstrap --shared-ses --dry-run=false
-km init --dry-run=true
-km init --dry-run=false
-km configure
-km doctor
+km doctor --backfill-tags --dry-run=true    # preview which resources will be tagged
+km doctor --backfill-tags --dry-run=false   # apply tags (idempotent — safe to re-run)
 ```
 
-`km bootstrap --shared-ses` auto-detects whether `sandbox-email-shared` already exists via `SESIdentityLister` — subsequent runs are no-ops.
+If `km doctor` reports WARN-level untagged-instance results, run the backfill sequence above.
+The cross-install safety guard skips resources whose `km:sandbox-id` tag does not match any row
+in the current install's DynamoDB sandbox table — those resources belong to a different install
+and are intentionally left alone.
 
-`km configure` derives and stores `KM_OPERATOR_EMAIL` as `operator-{resource_prefix}@{email_subdomain}.{domain}` (e.g. `operator-km@sandboxes.example.com`). Use `km configure --reset-prefix` to clear the stored email if you are changing `resource_prefix`.
+### SES per-install rule namespacing
 
-> **Phase 84.1 note:** the second `km bootstrap --shared-ses --dry-run=false` is a true no-op (idempotent). If `km init` reports a timeout error on a module, see § State-digest mismatch recovery below.
+km uses per-install SES rule namespacing so a second `km init` in the same AWS account never
+touches the first install's inbound email path.
 
-#### Second install in an existing account
+**Operator address format:** `operator-{resource_prefix}@{email_subdomain}.{domain}`
 
-A second install with a different `resource_prefix` (e.g. `km2`) follows the same sequence but skips re-running `km bootstrap --shared-ses` — the shared rule set is already active. If you do run it, the auto-detect path performs a no-op apply.
+Example: `operator-km@sandboxes.example.com` for the default install; `operator-km2@sandboxes.example.com`
+for a second install with `resource_prefix: km2`.
 
-```bash
-make build
-km init --sidecars
-km bootstrap --shared-ses --dry-run=true    # will plan no changes if rule set exists
-km bootstrap --shared-ses --dry-run=false   # no-op apply, safe to run
-km init --dry-run=true
-km init --dry-run=false
-km configure
-km doctor
-```
+**Shared rule set:** `sandbox-email-shared` — account-shared, provisioned once per account/region
+by `km bootstrap --shared-ses`; idempotent on re-apply.
 
-After `km init`, the second install's rules (`km2-operator-inbound`, `km2-sandbox-catchall`) are added to the shared rule set alongside the first install's rules (`km-operator-inbound`, `km-sandbox-catchall`). Both installs remain fully isolated.
+**Per-install rules:** Each install adds exactly two rules to the shared rule set:
+- `{prefix}-operator-inbound` — routes `operator-{prefix}@` to the operator Lambda
+- `{prefix}-sandbox-catchall` — routes all other `{sandbox-id}@` addresses to sandbox mailboxes
 
-`km doctor` will report `⚠ orphan SES rules: km-operator-inbound, km-sandbox-catchall` when run from the second install's context — this is EXPECTED. The first install's rules are healthy but unknown to the second install's `km-config.yaml`. Run `km doctor` from each install's shell context to get a clean report for that install.
+`km uninit` removes only this install's two rules and leaves the shared rule set and sibling
+installs' rules intact.
 
-#### Rollback
+**Bootstrap:** `km bootstrap --shared-ses` provisions the shared rule set (idempotent auto-detect —
+subsequent runs are no-ops). Must run once before `km init` on a fresh account. Use
+`km bootstrap --all` to chain foundation (SCP/KMS/artifacts) and shared SES rule set in one command.
 
-Phase 84 hard-removes Phase 82.1. No in-place rollback flag is available. To revert:
+**Doctor check:** `km doctor` reports `✓ SES rules healthy` when all rules in the shared rule set
+map to a known `resource_prefix`, or `⚠ orphan SES rules: <list>` when rules exist for prefixes
+not in the local `km-config.yaml`. The orphan check is WARN-level — expected when a sibling
+install is present.
 
-```bash
-git checkout <pre-phase-84-commit>
-make build
-# Re-run km init to restore Phase 82.1 Terraform resources
-```
-
-#### Validation
+**Validation:**
 
 ```bash
 # Confirm the shared rule set is active
@@ -913,115 +923,22 @@ km doctor | grep "SES rules"
 # Expected: ✓ SES rules healthy
 ```
 
-#### State-digest mismatch recovery (Phase 84.1)
+When `km doctor` is run from a second install's context, it will report
+`⚠ orphan SES rules: km-operator-inbound, km-sandbox-catchall` for the first install's rules —
+this is EXPECTED. Run `km doctor` from each install's shell context to get a clean report for
+that install.
 
-If a `km init` or `km bootstrap` run is interrupted mid-flight (Ctrl-C, terminal closure, terminal session loss), terragrunt may leave the S3 state file and the DynamoDB lock-table digest out of sync. Subsequent terragrunt operations will report:
+### Plan-before-apply
 
-```
-Error: Error acquiring the state lock
-Error message: state data in S3 does not have the expected content.
-```
-
-`km doctor` (Phase 84.1 onward) detects this via the `Terraform state lock digest` check and prints the exact recovery command in the WARN Remediation field. Manual recovery (mirrors what `km doctor` prints):
-
-1. Identify the mismatched LockID from `km doctor` output (format: `<bucket>/<state-key>-md5`).
-2. Download the S3 state object and compute MD5:
-   ```bash
-   aws s3 cp s3://<bucket>/<state-key> /tmp/state.tfstate
-   MD5=$(md5sum /tmp/state.tfstate | awk '{print $1}')
-   echo "Correct digest: $MD5"
-   ```
-3. Overwrite the stale Digest in the lock table:
-   ```bash
-   aws dynamodb update-item \
-     --table-name tf-km-locks-use1 \
-     --key '{"LockID":{"S":"<bucket>/<state-key>-md5"}}' \
-     --update-expression 'SET Digest = :d' \
-     --expression-attribute-values "{\":d\":{\"S\":\"$MD5\"}}"
-   ```
-4. Re-run `terragrunt apply` (or `km init`); the lock acquisition now succeeds.
-
-Phase 84.1's `km init` per-module timeout (default 5–10 min) prevents the indefinite-hang scenario that caused state-digest drift in Phase 84 UAT. If `km init` reports a timeout error referencing a specific module, the wedged terragrunt PID is printed in the heartbeat lines above the error; `kill -9 <pid>` to clean up the orphan before re-running.
-
-#### Phase 84.1 upgrade safety (in-place v1.0.0 → v2.0.0 cutover)
-
-Phase 84.1 closes the upgrade-path gaps surfaced in Phase 84's UAT:
-
-- `km bootstrap --shared-ses` is now idempotent. Re-running on an already-bootstrapped account is a true no-op (no destroy planned, no error).
-- Foundation module's auto-detect now respects foundation state ownership before consulting AWS reality. Pre-existing AWS resources owned by the old regional `ses/v1.0.0` module are brought under foundation management via Terraform `import {}` blocks during the first post-upgrade apply.
-- Regional `ses/v2.0.0` module ships with `removed { lifecycle { destroy = false } }` blocks for the shared resources, so the v1.0.0 → v2.0.0 source flip does NOT destroy domain identity, DKIM, MX, or verification records.
-
-**In-place upgrade procedure from Phase 82.x (UPDATED, supersedes the Phase 84 procedure for in-place upgrades):**
-
-```bash
-make build
-km init --sidecars
-km bootstrap --shared-ses --dry-run=true
-# Verify plan: existing AWS resources should be planned as "imported" (not created).
-km bootstrap --shared-ses --dry-run=false
-km init --dry-run=true
-# Verify plan: shared resources (domain identity, DKIM, MX, verification TXT,
-# rule set, active pointer) should show ZERO destroys. Only ADD of the
-# two prefix-named rules + S3 bucket policy update.
-km init --dry-run=false
-km configure
-km doctor
-```
-
-If the `km init --dry-run=true` step shows ANY destroy for a shared resource (`aws_ses_domain_identity`, `aws_ses_domain_dkim`, `aws_ses_receipt_rule_set`, `aws_ses_active_receipt_rule_set`, `aws_route53_record.dkim/mx/ses_verification`) — STOP and file a bug. Phase 84.1's removed blocks should suppress all of these.
-
-**DKIM import note:** The foundation module's DKIM import blocks may require a two-pass apply because terraform must read the domain identity before resolving DKIM token names. If the first apply fails on a DKIM import, run it again — the identity will be in state by then. Alternatively, import DKIM records manually:
-
-```bash
-cd infra/live/use1/ses-shared-rule-set
-
-# Export the env vars terragrunt needs for state-bucket resolution (omit any that are
-# already exported in your shell):
-export KM_RESOURCE_PREFIX=<your-prefix>     # e.g. km, whereiskurt
-export KM_REGION_LABEL=use1
-export KM_REGION=us-east-1
-export KM_DOMAIN=example.com
-export KM_EMAIL_SUBDOMAIN=sandboxes
-export KM_ROUTE53_ZONE_ID=Z...
-export AWS_PROFILE=klanker-terraform
-
-# Discover the existing DKIM tokens. The AWS CLI emits tab-separated text, and zsh
-# (default on macOS) does NOT word-split unquoted variable expansions the way bash
-# does — pipe through `tr` to get a clean newline-split array.
-TOKENS_ARR=($(aws ses get-identity-dkim-attributes --identities sandboxes.example.com \
-  --query 'DkimAttributes."sandboxes.example.com".DkimTokens' --output text | tr '\t' '\n'))
-echo "Got ${#TOKENS_ARR[@]} tokens: ${TOKENS_ARR[@]}"
-
-# Import each DKIM CNAME. Use the quoted array expansion to survive both bash and zsh:
-i=0
-for t in "${TOKENS_ARR[@]}"; do
-  terragrunt import "aws_route53_record.dkim[$i]" \
-    "${KM_ROUTE53_ZONE_ID}_${t}._domainkey.sandboxes.example.com_CNAME"
-  i=$((i+1))
-done
-
-# Same pattern if MX + verification TXT also pre-exist (skip if not):
-terragrunt import "aws_route53_record.mx[0]" \
-  "${KM_ROUTE53_ZONE_ID}_sandboxes.example.com_MX" || echo "(mx already managed or absent)"
-terragrunt import "aws_route53_record.ses_verification[0]" \
-  "${KM_ROUTE53_ZONE_ID}__amazonses.sandboxes.example.com_TXT" || echo "(verification already managed or absent)"
-```
-
-After the imports complete, `cd` back to the repo root and re-run `km bootstrap --shared-ses --dry-run=false`.
-
-See also: `CLAUDE.md` § Phase 84 for the architecture summary and operator address format.
-
-### Phase 84.2 plan-before-apply
-
-Phase 84.2 (2026-05-16) adds `km init --plan` and `km bootstrap --shared-ses --plan` —
-real `terragrunt plan` per module with a curated destroy-class safety gate. The gate
-trips on any destroy or replace of a resource type from a compiled-in protected list
-(initially: `aws_ses_domain_identity`, `aws_ses_domain_dkim`, `aws_ses_active_receipt_rule_set`,
-`aws_ses_receipt_rule_set`, `aws_route53_record`, `aws_s3_bucket`, `aws_s3_bucket_policy`,
-`aws_dynamodb_table`, `aws_kms_key` — each entry annotated with the incident that motivated it).
+`km init --plan` and `km bootstrap --shared-ses --plan` run real `terragrunt plan` per module
+with a curated destroy-class safety gate. The gate trips on any destroy or replace of a resource
+type from a compiled-in protected list (initially: `aws_ses_domain_identity`,
+`aws_ses_domain_dkim`, `aws_ses_active_receipt_rule_set`, `aws_ses_receipt_rule_set`,
+`aws_route53_record`, `aws_s3_bucket`, `aws_s3_bucket_policy`, `aws_dynamodb_table`,
+`aws_kms_key` — each entry annotated with the incident that motivated it).
 
 **When to use:** Before `km init --dry-run=false` or `km bootstrap --shared-ses` on
-an upgrade, run the plan variant first to see what would actually change.
+any apply, run the plan variant first to see what would actually change.
 
 **Example output — clean apply:**
 
@@ -1059,139 +976,83 @@ NOT auto-apply. It only clears the `--plan` exit code from 1 to 0 so a CI pipeli
 can proceed past the gate. You still must separately run `--dry-run=false` to actually apply.
 
 **Bootstrap parity:** Same flags on `km bootstrap --shared-ses --plan` for the
-foundation module (closes Phase 84 Gaps 2, 3, 6 in the bootstrap path too).
+foundation module.
 
 **Adding a protected type:** Edit `pkg/terragrunt/planreport/protected.go` and add
 the new resource type with a rationale comment citing the incident. PR review = the
 safety mechanism (intentionally NOT operator-configurable per CONTEXT.md Decision 6).
 
-### Phase 84.3 wrapper-level UX
+**Fresh-install note:** `km init --plan` skips modules whose upstream `outputs.json` is absent
+(e.g. `network` has not been applied yet), printing `[skip] efs — depends on network/outputs.json
+(apply network first)` and exiting 0. After `terragrunt apply` in `network/`, re-running
+`km init --plan` plans the dependents normally.
 
-Phase 84.3 (2026-05-17) tightens the operator path from `git clone` to first apply.
-Eight wrapper-level closures address ergonomic gaps surfaced during the Phase 84
-second-install UAT — none change the runtime; all change what the operator sees
-and types.
+### Bootstrap UX
 
-**Configure-time changes (`km configure`):**
+`km bootstrap --all` chains foundation (SCP + KMS + artifacts) then shared SES rule set in a
+single command. It is mutually exclusive with `--shared-ses`. `--all --plan` honors the
+destroy-class gate. This is the recommended primary bootstrap command for new installs.
 
-- **HeadBucket-checked `state_bucket`** (closure a): when you type a globally-taken
-  name (`tf-state`, `s3`), `km configure` HeadBuckets it, prints
-  `<name> is taken`, suggests `<name>-<account_id>`, and offers `[Y / edit / abort]`.
-  `Y` accepts the suggestion, `edit` re-prompts freeform, `abort` exits cleanly.
-- **Auto-derived `artifacts_bucket`** (closure e): default is
-  `${prefix}-artifacts-${account_id}` (e.g. `km-artifacts-052251888500`). Two
-  placeholder forms are rejected by `validateArtifactsBucket` at load:
-  `<…>` angle-bracket tokens (e.g. `<prefix>-artifacts-12345678`) and the literal
-  example sentinel `km-artifacts-12345`. Error includes the recovery command
-  `re-run 'km configure'`.
-- **`Next steps:` finale** (closure f.7): after writing `km-config.yaml`, the wizard
-  prints the canonical bootstrap sequence (`km bootstrap --all --plan` →
-  `--dry-run=false` → `km init --plan` → `--dry-run=false`). The same lines are
-  embedded as `#` header comments at the top of the generated yaml.
-- **Shell-env conflict WARN** (closure h-shell): if `KM_*` env vars in your shell
-  conflict with values the wizard is about to write, each conflicting var prints a
-  `WARN: KM_<KEY>=<env-value>` line to stderr before validation, even when the
-  wizard would otherwise fail on missing required flags.
+`km bootstrap --shared-ses` provisions only the shared SES rule set (idempotent). Use this
+when you need to re-run the SES step independently.
 
-**Bootstrap-time changes (`km bootstrap`):**
+The status banner warns on empty required account IDs. If `accounts.organization`,
+`accounts.dns_parent`, or `accounts.application` is empty in `km-config.yaml`, the bootstrap
+banner emits `WARN: accounts.<key> is empty in km-config.yaml — required for this command` and
+shows `(not set)` in place of the value.
 
-- **`km bootstrap --all`** (closure f.1–f.5): single command chains foundation
-  (SCP + KMS + artifacts) then shared SES rule set. Mutually exclusive with
-  `--shared-ses` (error: `--all and --shared-ses are mutually exclusive; --all runs
-  both subflows in order`). `--all --plan` honors the Phase 84.2 destroy-class gate.
-  This is the recommended primary bootstrap command for new installs.
-- **Dry-run text says "apply"** (closure b): `km bootstrap --shared-ses --dry-run=true`
-  prints `Dry run — would run: terragrunt apply <path>`. Previously said "plan"
-  which was misleading because the operator would later `--dry-run=false` to
-  actually apply. Dry-run gracefully degrades when AWS auto-detect is unreachable
-  (stale SSO token, missing creds): a single-line apply intent prints, exit 0.
-- **Status banner WARNs on empty required account IDs** (closure h-banner): if
-  `accounts.organization`, `accounts.dns_parent`, or `accounts.application` is
-  empty in `km-config.yaml`, the bootstrap banner emits
-  `WARN: accounts.<key> is empty in km-config.yaml — required for this command`
-  to stderr; the banner shows `(not set)` in place of the value.
+### accounts.* precedence
 
-**Init-time changes (`km init`):**
+`accounts.organization`, `accounts.dns_parent`, `accounts.application` are yaml-authoritative:
+yaml wins unconditionally, env values do NOT override the in-memory `cfg`. `KM_ACCOUNTS_*` is
+still exported to terragrunt subprocesses (operator overrides reach terraform), but `cfg` reads
+always reflect yaml.
 
-- **Per-var drift WARN** (closure c): `ExportTerragruntEnvVars` emits one stderr
-  line per env-vs-yaml mismatch:
-  `WARN: KM_REGION=us-west-2 (env) overrides km-config.yaml region=us-east-1`.
-  Env still wins (no override of `os.Setenv`); the WARN exists so operators see
-  the precedence they're getting. **Phase 84.3 partial-pass note:** the drift
-  WARN currently fires reliably only for yaml-authoritative keys
-  (`accounts.organization`, `accounts.dns_parent`, `accounts.application`) called
-  via the `--shared-ses` path. Drift for env-bound keys (`KM_REGION`, `KM_DOMAIN`,
-  `KM_ARTIFACTS_BUCKET`, etc.) is masked by viper's env-binding into `cfg` at
-  `config.Load()` time — gap-closure planned for 84.3.1.
-- **`km init --plan` skips fresh-install dependents** (closure d): when an
-  upstream module's `outputs.json` is absent (e.g. `network` has not been
-  applied), `km init --plan` prints `[skip] efs — depends on network/outputs.json
-  (apply network first)` for each dependent module and exits 0. After
-  `terragrunt apply` in `network/`, re-running `km init --plan` plans the
-  dependents normally.
-- **Hard-fail on missing artifacts bucket** (closure f.6): `km init --dry-run=false`
-  HeadBuckets `cfg.artifacts_bucket` and, on 404, exits with an error naming
-  both recovery commands: `km bootstrap --all` (recommended) and
-  `km bootstrap --dry-run=false`.
+`accounts.terraform` preserves env-precedence (env wins) — operators retain shell-local override
+for the cross-account terraform role; this asymmetry is intentional per CONTEXT.md.
 
-**New command — `km env`** (closure g):
+### State-digest mismatch recovery
 
-`km env` prints `export KEY=value` lines for the 11 `KM_*` env vars that
-Terragrunt's `site.hcl` reads via `get_env()`. Use with `eval $(km env)` to
-prepare an operator shell for direct terragrunt invocation:
+If a `km init` or `km bootstrap` run is interrupted mid-flight (Ctrl-C, terminal closure,
+terminal session loss), terragrunt may leave the S3 state file and the DynamoDB lock-table
+digest out of sync. Subsequent terragrunt operations will report:
 
-```bash
-eval $(km env)
-cd infra/live/use1/network/
-terragrunt apply
+```
+Error: Error acquiring the state lock
+Error message: state data in S3 does not have the expected content.
 ```
 
-`--aws-profile` opt-in adds `export AWS_PROFILE=<current value>` (excluded by
-default to keep the export block portable across operator shells). `KM_ACCOUNTS_TERRAFORM`
-is intentionally excluded from the block — see "accounts.* yaml-authoritative" below.
+`km doctor` detects this via the `Terraform state lock digest` check and prints the exact
+recovery command in the WARN Remediation field. Manual recovery (mirrors what `km doctor`
+prints):
 
-Use cases: recovering from a partial bootstrap, manual `terragrunt import`,
-debugging cfg-vs-env precedence, running terragrunt from a module directory
-without re-invoking `km` for each step.
+1. Identify the mismatched LockID from `km doctor` output (format: `<bucket>/<state-key>-md5`).
+2. Download the S3 state object and compute MD5:
+   ```bash
+   aws s3 cp s3://<bucket>/<state-key> /tmp/state.tfstate
+   MD5=$(md5sum /tmp/state.tfstate | awk '{print $1}')
+   echo "Correct digest: $MD5"
+   ```
+3. Overwrite the stale Digest in the lock table:
+   ```bash
+   aws dynamodb update-item \
+     --table-name tf-km-locks-use1 \
+     --key '{"LockID":{"S":"<bucket>/<state-key>-md5"}}' \
+     --update-expression 'SET Digest = :d' \
+     --expression-attribute-values "{\":d\":{\"S\":\"$MD5\"}}"
+   ```
+4. Re-run `terragrunt apply` (or `km init`); the lock acquisition now succeeds.
 
-**Behavior change — `accounts.*` yaml-authoritative** (closure h):
+`km init` applies per-module context timeouts (default 5–10 min) and emits a quiet-mode
+heartbeat every 15s — wedged applies no longer hang silently. If `km init` reports a timeout
+error referencing a specific module, the wedged terragrunt PID is printed in the heartbeat
+lines above the error; `kill -9 <pid>` to clean up the orphan before re-running.
 
-`accounts.organization`, `accounts.dns_parent`, `accounts.application` are
-yaml-authoritative: yaml wins unconditionally, env values do NOT override the
-in-memory `cfg`. `KM_ACCOUNTS_*` is still exported to terragrunt subprocesses
-(operator overrides reach terraform), but `cfg` reads always reflect yaml.
+### Multi-install quickstart
 
-`accounts.terraform` preserves env-precedence (env wins) — operators retain
-shell-local override for the cross-account terraform role; this asymmetry is
-intentional per CONTEXT.md.
-
-**Cross-references:**
-- Phase 84.4 module-level hardening ships v2.0.0 modules for scp, efs, and s3-replication.
-  Phase 84.4.1 completed the cross-install identity, permission, and sharing design.
-  Multi-install is production-ready as of Phase 84.4.1. See § Phase 84.4.1 below.
-- The eight closures map 1:1 to acceptance criteria in
-  `.planning/phases/84.3-second-install-bootstrap-ux-wrapper-level-fixes-inserted/84.3-CONTEXT.md`.
-
-### Phase 84.4 — Multi-install module hardening
-
-Phase 84.4 (2026-05-18) ships v2.0.0 directories for `infra/modules/scp/`,
-`infra/modules/efs/`, and `infra/modules/s3-replication/` that template all
-resource names from `${var.resource_prefix}`. A second `km` install in the same
-AWS account/Organization can apply alongside the first without resource-name
-collisions. The live wiring in `infra/live/use1/` was flipped to v2.0.0 (Plan 05).
-
-The Phase 84.4 fresh-prefix UAT (`rg`) uncovered three cross-install interaction
-gaps (ssm-session-doc shared naming, SCP AND-composition, SES auto-import).
-These were addressed in Phase 84.4.1. See the Phase 84.4.1 section below for the
-production-ready multi-install runbook.
-
-### Phase 84.4.1 — Multi-install: second/third install bootstrap
-
-As of Phase 84.4.1 (2026-05-18), the multi-install design is production-ready. A
-second install in the same AWS account/Organization (e.g. `resource_prefix: tg`)
-bootstraps cleanly on a shared-domain account without operator-side workarounds.
-
-#### Quick start: second-install lifecycle
+The multi-install design is production-ready. A second install in the same AWS account/Organization
+(e.g. `resource_prefix: tg`) bootstraps cleanly on a shared-domain account without operator-side
+workarounds.
 
 From a sibling working directory (e.g. `klanker-maker-tg/`):
 
@@ -1215,7 +1076,7 @@ make build
 make build-lambdas              # prereq for `km init --plan`: builds the 6 Lambda zips
                                 # that the create-handler module's filebase64sha256 needs.
                                 # `km init --dry-run=false` (full apply) builds zips itself;
-                                # `km init --plan` (Phase 84.2 read-only) does not.
+                                # `km init --plan` (read-only) does not.
 ./bin/km init --plan
 ./bin/km init --dry-run=false
 
@@ -1268,7 +1129,7 @@ lock table. `make build-lambdas` produces all 6 Lambda zips that
 
 > **Note — `km init --plan` prerequisite on a fresh clone.** Unlike
 > `km init --dry-run=false` (full apply), which calls `buildLambdaZips`
-> automatically, `km init --plan` (Phase 84.2 read-only) skips the build step.
+> automatically, `km init --plan` (read-only) skips the build step.
 > If `build/create-handler.zip` is missing, `terragrunt plan` for the
 > `create-handler` module fails at `filebase64sha256(var.lambda_zip_path)`
 > with `no such file or directory`. Run `make build-lambdas` (or
@@ -1309,34 +1170,12 @@ AWS_PROFILE=<management-profile> aws organizations delete-policy \
   --policy-id <id>
 ```
 
-See Phase 84.4 Plan 07 for the canonical detach/delete sequence.
-
-#### History and commit references
-
-- Phase 84 (2026-05-16) — Per-install SES rule namespacing via operator address prefix
-- Phase 84.1 (2026-05-16) — Upgrade-safety gap closure (8 gaps)
-- Phase 84.2 (2026-05-16) — `km init --plan` with destroy-class gate
-- Phase 84.3 (2026-05-17) — Wrapper-level bootstrap UX
-- Phase 84.4 (2026-05-17) — v2.0.0 modules: scp, efs, s3-replication
-- Phase 84.4.1 (2026-05-18) — ssm-session-doc/v2.0.0, SCP `*-*` pattern allowlist,
-  SES auto-import gate separation, fresh-clone DX hardening (6 fixes)
-
-Phase 84.4.1 changes:
-- `infra/modules/ssm-session-doc/v2.0.0/` — per-install `${prefix}-Sandbox-Session` naming
-- `infra/modules/scp/v2.0.0/` — pattern-based `*-create-handler` allowlist
-- `bootstrap.go` — SES auto-import gate separated from `registerID` check (state-independent)
-- Makefile `build-lambdas` target — 6-zip parity with `init.go:buildLambdaZips`
-- `bootstrap.go` `ensureRegionHCL` — auto-writes `region.hcl` as prerequisite for fresh clones
-- `configure.go` — `state_bucket` default prompt + HeadBucket retry UX
-- `unbootstrap.go` — DynamoDB lock table cleanup on teardown
-- `init.go` `downloadTerraform` — stale terraform binary cache invalidation
-
 ---
 
-## Phase 87 — additionalSnapshots (snapshot-backed EBS volumes)
+## 9. additionalSnapshots — snapshot-backed EBS volumes
 
-Phase 87 (2026-05-22) adds `spec.runtime.additionalSnapshots` — a list field on SandboxProfile
-that materialises fresh EBS volumes from existing snapshots at sandbox creation time.
+`spec.runtime.additionalSnapshots` materialises fresh EBS volumes from existing snapshots at
+sandbox creation time.
 
 ### When to use
 
@@ -1423,8 +1262,7 @@ it is mounted directly — no `mkfs`. If no filesystem is detected (blank volume
 `additionalVolume`), `mkfs.ext4` is run first.
 
 The fstab line uses a `${FSTYPE}` variable (resolved by userdata from `blkid` output).
-For blank `additionalVolume` volumes this resolves to `ext4`, preserving pre-Phase-87
-behaviour byte-for-byte.
+For blank `additionalVolume` volumes this resolves to `ext4`.
 
 ### Lifecycle
 
@@ -1432,8 +1270,6 @@ behaviour byte-for-byte.
 - `km destroy` deletes all materialised `aws_ebs_volume.snapshot[*]` instances.
 - The **source snapshot is not touched** — it survives `km destroy` and can be reused
   across multiple sandboxes or profiles.
-- On a pre-Phase-87 profile (no `additionalSnapshots`), rendered HCL is identical to the
-  old output except for the module source version bump (`ec2spot/v1.0.0` → `ec2spot/v1.1.0`).
 
 ### Example profile
 
@@ -1464,10 +1300,9 @@ Pre-authored UAT profiles live in `profiles/uat/87/uat-{1..8}.yaml`.
 
 ### Module version
 
-Phase 87 ships as `infra/modules/ec2spot/v1.1.0/` (additive minor version per Phase 80
+`additionalSnapshots` ships as `infra/modules/ec2spot/v1.1.0/` (additive minor version per the
 module-immutability convention). Existing sandboxes pinned to `v1.0.0` are unchanged.
-New sandboxes created after Phase 87 use `v1.1.0` via the bumped `infra/templates/sandbox/terragrunt.hcl`
-source path.
+New sandboxes use `v1.1.0` via the bumped `infra/templates/sandbox/terragrunt.hcl` source path.
 
 ### Failure mode reference
 
