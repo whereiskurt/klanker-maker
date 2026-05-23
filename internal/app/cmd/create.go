@@ -1970,15 +1970,31 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		stripBedrockEnvVars(resolvedProfile)
 	}
 
-	// Phase 56.1: BDM collision detection for additionalVolume + raw AMI combinations.
+	// Phase 56.1 + Phase 87: BDM collision detection for additionalVolume / additionalSnapshots
+	// + raw AMI combinations. Snapshots-only profiles must also trigger BDM lookup so the
+	// compiler can pick non-colliding device names (RESEARCH.md Risk #4).
 	var remoteAmiBDMDevices []string
-	if compiler.IsRawAMIID(resolvedProfile.Spec.Runtime.AMI) && resolvedProfile.Spec.Runtime.AdditionalVolume != nil {
+	if compiler.IsRawAMIID(resolvedProfile.Spec.Runtime.AMI) &&
+		(resolvedProfile.Spec.Runtime.AdditionalVolume != nil ||
+			len(resolvedProfile.Spec.Runtime.AdditionalSnapshots) > 0) {
 		ec2Client := ec2svc.NewFromConfig(awsCfg)
 		devices, lookupErr := awspkg.AMIBDMDeviceNames(ctx, ec2Client, resolvedProfile.Spec.Runtime.AMI)
 		if lookupErr != nil {
 			log.Warn().Err(lookupErr).Str("ami", resolvedProfile.Spec.Runtime.AMI).Msg("BDM lookup failed; defaulting to /dev/sdf")
 		} else {
 			remoteAmiBDMDevices = devices
+		}
+	}
+
+	// Phase 87 — Layer 2 AWS pre-flight: validate snapshot IDs, state, region, size.
+	// MUST run before compiler so zero terragrunt artifacts hit disk on failure.
+	// Uses the sandbox's resolved target region.
+	if len(resolvedProfile.Spec.Runtime.AdditionalSnapshots) > 0 {
+		snapPreflightClient := ec2svc.NewFromConfig(awsCfg, func(o *ec2svc.Options) {
+			o.Region = region
+		})
+		if err := profile.ValidateSnapshotsAWS(ctx, snapPreflightClient, resolvedProfile); err != nil {
+			return "", fmt.Errorf("snapshot pre-flight failed: %w", err)
 		}
 	}
 
