@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 70-01-PLAN.md (CLISpec Agent field + JSON Schema enum)
-last_updated: "2026-05-23T02:46:44.743Z"
+stopped_at: Completed Phase 70 Plan 04 (km-slack permalink/update/new-message + bridge dispatch)
+last_updated: "2026-05-23T02:55:13.321Z"
 last_activity: 2026-05-23
 progress:
   total_phases: 103
   completed_phases: 91
   total_plans: 437
-  completed_plans: 383
+  completed_plans: 384
   percent: 88
 ---
 
@@ -415,6 +415,7 @@ Progress: [█████████░] 88%
 | Phase 87-additionalsnapshots P06 | 121 | 2 tasks | 4 files |
 | Phase 87-additionalsnapshots-snapshot-backed-ebs-volumes-in-sandboxprofile P05 | 281s | 1 tasks | 3 files |
 | Phase 70-codex-parity-for-operator-notify-slack-notify-and-slack-inbound-dispatcher P01 | 2min | 2 tasks | 3 files |
+| Phase 70-codex-parity-for-operator-notify-slack-notify-and-slack-inbound-dispatcher P04 | 591s | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -1201,6 +1202,8 @@ Recent decisions affecting current work:
 - [Phase 87-05]: No nvmeAlias Go template func added — bash-side device probe loop handles aliasing per critical_research_corrections #2
 - [Phase 70-codex-parity-for-operator-notify-slack-notify-and-slack-inbound-dispatcher]: Agent string yaml:agent,omitempty on CLISpec — absence parses as empty string; downstream treats empty as claude
 - [Phase 70-codex-parity-for-operator-notify-slack-notify-and-slack-inbound-dispatcher]: JSON Schema enum [claude,codex] rejects any other value including wrong case; no semantic validator needed
+- [Phase 70]: ActionPermalink + ActionUpdate added to SlackPoster interface; PostResponse.Permalink field added; runWith returns (string, error) to expose message ts to callers
+- [Phase 70]: runPermalinkWith + runUpdateWith testable inner functions mirror run/runWith pattern for unit testing new sidecar subcommands without SSM dependency
 
 ### Roadmap Evolution
 
@@ -1313,6 +1316,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-23T02:46:44.735Z
-Stopped at: Completed 70-01-PLAN.md (CLISpec Agent field + JSON Schema enum)
+Last session: 2026-05-23T02:55:13.311Z
+Stopped at: Completed Phase 70 Plan 04 (km-slack permalink/update/new-message + bridge dispatch)
 Resume file: None
