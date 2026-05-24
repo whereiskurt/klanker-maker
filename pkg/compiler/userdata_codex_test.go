@@ -49,7 +49,9 @@ func TestUserdata_CodexConfig_Emitted(t *testing.T) {
 	ud := userdataForAgentTest(t, "") // no agent set → still emitted
 	musts := []string{
 		"cat > /home/sandbox/.codex/config.toml",
-		"codex_hooks = true",
+		// Codex 0.133+ renamed the feature flag from codex_hooks to hooks.
+		// We use the new name; old name emits deprecation warning every exec.
+		"hooks = true",
 		"[[hooks.PermissionRequest]]",
 		`matcher = ".*"`,
 		"/opt/km/bin/km-notify-hook PermissionRequest",

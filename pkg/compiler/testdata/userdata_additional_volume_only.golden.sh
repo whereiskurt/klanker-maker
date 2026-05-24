@@ -601,8 +601,14 @@ echo "[km-bootstrap] km-notify-hook installed at /opt/km/bin/km-notify-hook"
 echo "[km-bootstrap] Installing ~/.codex/config.toml..."
 install -d -m 0755 -o sandbox -g sandbox /home/sandbox/.codex
 cat > /home/sandbox/.codex/config.toml << 'KM_CODEX_CONFIG_EOF'
+# Phase 70: 'codex_hooks' was the Codex 0.121 feature flag name. In 0.133+ it
+# was renamed to 'hooks' and the old name emits a deprecation warning event
+# on every codex exec (filtered out by our JSONL parser, but noisy). The
+# flag remains harmless under Path B (JSONL parsing) — hooks may or may not
+# actually fire depending on Codex version; the platform does not depend on
+# them. See docs/codex-parity.md and the Path B section of SPEC.md.
 [features]
-codex_hooks = true
+hooks = true
 
 [[hooks.PermissionRequest]]
 matcher = ".*"
