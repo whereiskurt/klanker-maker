@@ -45,3 +45,5 @@ bin/
 
 #
 /km-config.yaml
+# Operator-local profile overrides (e.g. AMI ID pins for UAT)
+profiles/*.local.yaml
