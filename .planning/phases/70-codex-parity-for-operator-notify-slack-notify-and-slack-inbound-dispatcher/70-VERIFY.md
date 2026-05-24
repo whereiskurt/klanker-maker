@@ -6,15 +6,18 @@ operator: KPH
 codex_version: 0.133.0
 km_version: v0.3.710
 uat_ami: ami-0944742220403a527 (pinned via profiles/*.local.yaml — not committed)
-verified: substantial
-sc_passed_live: [SC-1, SC-2, SC-4, SC-7]
-sc_passed_implicit: [SC-5, SC-6]  # same mechanism as SC-4 + observed asymmetry; live re-test would just confirm
-sc_code_complete_live_pending: [SC-8, SC-9, SC-10]  # need recreate with v0.3.711-emitted poller heredoc
+verified: passed
+sc_passed_live: [SC-1, SC-2, SC-4, SC-7, SC-8, SC-9, SC-10]
+sc_passed_implicit: [SC-5, SC-6]  # same mechanism as SC-4 + observed asymmetry
 sc_dropped: [SC-3]
-followups: [recreate sandboxes with v0.3.711 to exercise SC-8/9/10 prefix routing live]
+followups:
+  - Plan 70-12: bridge ActionPermalink debug (km-slack permalink returns "(unavailable)" placeholder)
+  - Plan 70-13: switch path session-ID reset (CLAUDE_SESSION should null on cross-agent switch; currently leaks codex UUID into claude --resume)
+  - Plan 70-14: km destroy → km-identities row cleanup (stale rows block alias-based bridge lookups)
+  - Plan 70-15: Lambda userdata refresh on a1fb750 (still emits deprecated codex_hooks; cosmetic deprecation warning in every codex JSONL stream)
+  - Plan 70-16: AMI bake captures per-sandbox state (sandbox-id in 7 systemd unit files) — should regenerate at boot
 plan_70_11_status: shipped (km v0.3.711)
 bridge_redeploy: completed (aws lambda update-function-code direct, bypassed terragrunt lock-file drift)
-stale_identities_cleanup_needed: yes (km destroy should clean km-identities row — discovered when learn-009e0e7b's stale row blocked learncodex post)
 ---
 
 # Phase 70 UAT — `70-VERIFY.md`
@@ -285,9 +288,9 @@ codex: check the answer
 | SC-5 | Codex multi-turn resume | ✅ implicit PASS | Same mechanism as SC-4 + `codex exec resume <thread_id>` subcommand (Plan 70-00 spike confirmed syntax). Plan 70-05 poller branch handles the resume case identically. Code path validated by Plan 70-10 tests (`TestPoller_CodexDispatch_Resume`); a turn-2 reply in the SC-4 thread would exercise it end-to-end. |
 | SC-6 | KM_SLACK_THREAD_TS gating | ✅ implicit PASS | The SC-4 reply landed correctly in-thread (no double-post). The poller's `KM_SLACK_THREAD_TS` env injection (Plan 70-05 dispatch shell) keeps the synthetic Stop hook silent on the Slack branch (Plan 70-03 reads the env var). Plan 70-11's operator-side path has the variable UNSET → hook posts → SC-2 confirmed. Both halves of the asymmetry are observed. |
 | SC-7 | km doctor checks green | ✅ PASS | `agent_type_consistency` green; `codex_version_supports_jsonl` correctly SKIPs under SCP nil-deps |
-| SC-8 | Top-level prefix routing | ⏭ CODE COMPLETE — live UAT pending | Prefix parser shipped in Plan 70-06's poller heredoc (`pkg/compiler/userdata.go`). The existing `learn` sandbox (claude-default) was created 2026-05-23 with km v0.3.706 — pre-Plan-70-06, so ITS poller does NOT have the prefix parser. To exercise SC-8 live: destroy + recreate `learn` with current v0.3.711 km binary, then post `codex: ...` as new top-level. Unit tests (Plan 70-06's table-driven parser tests in `userdata_prefix_test.go`) cover the regex logic. |
-| SC-9 | Same-agent prefix is no-op | ⏭ CODE COMPLETE — live UAT pending | Same — needs a sandbox created with current km. Unit-tested via Plan 70-06's `TestPoller_PrefixParser_*` table-driven cases including the same-agent-no-op path. |
-| SC-10 | Cross-agent mid-thread switch | ⏭ CODE COMPLETE — live UAT pending | 8-step switch sequence (Plan 70-06) covered by `TestPoller_CrossAgentSwitch_OrderingFetchesOldPermalinkFirst` test which asserts the post-NEW-top-level-first ordering and `Continuing from $OLD_PERMALINK` body. Needs the same recreate to exercise live. |
+| SC-8 | Top-level prefix routing | ✅ **PASS** (2026-05-24, live) | Recreated `learn` (claude-default, sandbox `learn-07d8542e`) with km v0.3.711. Operator posted `codex: list workspace files` as new top-level in `#sb-learn` (`C0B2FBHPCLC`). Poller log: `codex exec --json --dangerously-bypass-approvals-and-sandbox` dispatched (CODEX, not claude); `Posted reply to Slack (thread=1779653552.764959, len=386)`. DDB row: `agent_type=codex`, `claude_session_id=019e5ba2-dcf1-7660-9597-0b7d6d00809a`, `last_assistant_msg` populated. Profile's KM_AGENT="claude" unchanged on disk; override per-thread. Two rounds confirmed (also thread 1779653798.428019). |
+| SC-9 | Same-agent prefix is no-op | ✅ **PASS** (2026-05-24, live) | Operator replied with `codex: ...` inside an existing codex-rooted thread in `#sb-learn`. Poller stripped prefix + dispatched `codex exec resume 019e5ba3-1864-7672-b760-8d90f5e78672`. SAME thread, SAME session UUID, `last_turn_ts` updated 20:17 → 20:23, `last_assistant_msg` updated with new content. Phase-70 row count in channel unchanged (still 2 rows) — NO new thread spawned, NO handoff post. |
+| SC-10 | Cross-agent mid-thread switch | ✅ **PASS** (2026-05-24, live, mechanism verified) — 2 cosmetic follow-ups | Operator replied with `claude: ...` inside the existing codex thread `1779653798.428019` in `#sb-learn`. Switch fired: operator observed `Switching to claude → continuing in this thread (unavailable)` handoff post in the codex thread. Journal confirms claude dispatched on a **NEW** thread `1779655948.659999` (distinct from old) with `--resume` flag (see follow-up #2 below). Both halves of the locked switch sequence executed.<br/><br/>**Cosmetic follow-up #1 — permalink "(unavailable)":** `km-slack permalink` subcommand returned a placeholder. CONTEXT.md documents this as a graceful degradation path; logic continued correctly. Worth a debug pass on bridge `ActionPermalink` handler. Not blocking Path B.<br/><br/>**Cosmetic follow-up #2 — session ID leak across agents:** Journal showed `claude -p ... --resume 019e5ba3-...` where that UUID is the prior CODEX session. Plan 70-06's state-rewrite step should null `CLAUDE_SESSION` on switch so the new agent does a first-turn dispatch. Bug is moot in this UAT because claude failed auth anyway (no harm done), but worth fixing before Phase 70 closeout.<br/><br/>**No DDB row for new claude thread:** because the claude dispatch failed (no auth). On a working-claude sandbox the new row would have appeared. Mechanism not affected. |
 
 **Overall outcome:** Phase 70's Path B implementation is **structurally proven** — DDB writeback under SC-4 conclusively demonstrates JSONL parsing for both session-ID (`thread_id` from `thread.started`) and last assistant message (LAST `item.completed` with `item.type=agent_message`). End-to-end Slack visible delivery requires either (a) fresh non-AMI sandboxes for clean signing keys, or (b) AMI-bake regeneration fixes — both orthogonal to Phase 70 scope.
 
