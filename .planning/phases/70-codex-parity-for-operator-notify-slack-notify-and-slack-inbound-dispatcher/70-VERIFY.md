@@ -278,7 +278,7 @@ codex: check the answer
 | SC | Description | Status | Notes |
 |---|---|---|---|
 | SC-1 | Codex sandbox provisioning + env emission | ✅ PASS | config.toml + KM_AGENT emitted to both env files; Codex 0.133.0 |
-| SC-2 | Operator-side Codex run idle notify | ✅ CODE LANDED — UAT pending | **Plan 70-11 shipped 2026-05-24** (km v0.3.711) — `BuildAgentShellCommands` codex branch now parses `output.json` JSONL post-exec and synthesizes a Stop hook payload pipe to `/opt/km/bin/km-notify-hook`. 4/4 tests PASS. Visible end-to-end Slack delivery awaits signing-key fix on a fresh sandbox (out-of-scope AMI-bake regression). |
+| SC-2 | Operator-side Codex run idle notify | ✅ **PASS** (2026-05-24, live) | `./km agent run --codex --prompt "Say pong" --wait learncodex` → JSONL stream parsed → synthetic Stop payload → `km-notify-hook` → `km-slack post: posted ts=1779647470.041669` → "pong" landed in `#sb-learncodex` channel. Operator visually confirmed. Plan 70-11 + Plan 70-10 + Plan 70-04 bridge redeploy = end-to-end working. |
 | SC-3 | PermissionRequest event | N/A | Dropped under Path B (Codex never emits under `--dangerously-bypass-approvals-and-sandbox`; verified empirically) |
 | SC-4 | Slack inbound first Codex turn | ⚠ PARTIAL | **Path B JSONL parse mechanism FULLY VERIFIED via DDB row**: `agent_type=codex`, `claude_session_id` from `thread.started`, `last_assistant_msg` from last `agent_message.text`. Visible Slack delivery blocked by AMI-bake signing-key mismatch (NOT a Phase 70 issue) |
 | SC-5 | Codex multi-turn resume | ⏭ DEFERRED | Same Slack delivery block. JSONL resume path is structurally identical to SC-4; would pass on a non-AMI-baked sandbox |
