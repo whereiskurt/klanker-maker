@@ -1280,7 +1280,26 @@ func BuildAgentShellCommands(prompt string, opts AgentRunOptions) ([]string, str
 		}
 		parts = append(parts, `"$PROMPT"`)
 		agentLine = strings.Join(parts, " ") + ` \
-  > "$RUN_DIR/output.json" 2>"$RUN_DIR/stderr.log"`
+  > "$RUN_DIR/output.json" 2>"$RUN_DIR/stderr.log"
+# Plan 70-11 (Path B): Codex 0.121/0.133 do NOT fire user-defined hooks from
+# ~/.codex/config.toml despite the documented [features].hooks flag. Plan 70-00
+# spike v1/v2/v3 confirmed empirically. Without an actual Stop event from
+# Codex, the operator-side km agent run --codex flow would never invoke
+# /opt/km/bin/km-notify-hook — no email, no Slack post. Fix: parse the JSONL
+# stream that codex exec --json wrote to output.json, synthesize a Stop hook
+# payload with last_assistant_message + session_id, and pipe it to the hook
+# script. Plan 70-03 already added the Codex-aware Stop branch in the hook
+# (reads .last_assistant_message directly), so this completes the operator-
+# side notify loop under Path B.
+if [ -s "$RUN_DIR/output.json" ]; then
+  KM_LAST_MSG=$(jq -rs 'map(select(.type=="item.completed" and .item.type=="agent_message")) | last | .item.text // ""' "$RUN_DIR/output.json" 2>/dev/null || echo "")
+  KM_SID=$(jq -r 'select(.type=="thread.started") | .thread_id // empty' "$RUN_DIR/output.json" 2>/dev/null | head -1 || echo "")
+  if [ -n "$KM_LAST_MSG" ]; then
+    jq -n --arg msg "$KM_LAST_MSG" --arg sid "$KM_SID" \
+      '{hook_event_name:"Stop", last_assistant_message:$msg, session_id:$sid}' \
+      | /opt/km/bin/km-notify-hook Stop 2>>"$RUN_DIR/stderr.log" || true
+  fi
+fi`
 		// noBedrockLines stays empty — codex never uses Bedrock env vars
 
 	default: // "", "claude", or anything unknown defaults to claude

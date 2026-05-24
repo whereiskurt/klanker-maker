@@ -767,6 +767,30 @@ func TestBuildAgentShellCommands_Codex(t *testing.T) {
 				"claude -p",
 			},
 		},
+		{
+			// Plan 70-11 — Path B post-exec notify hook for the codex branch.
+			// Codex 0.121/0.133 do not fire user-defined hooks, so we synthesize
+			// a Stop hook payload from the JSONL stream and pipe it to
+			// /opt/km/bin/km-notify-hook ourselves. Without this, operator-side
+			// km agent run --codex never triggers email + Slack notify.
+			name: "codex synthesizes Stop hook from JSONL stream (Path B)",
+			opts: cmd.AgentRunOptions{AgentType: "codex"},
+			mustContain: []string{
+				// jq filter for the LAST agent_message.text in the JSONL stream
+				`select(.type=="item.completed" and .item.type=="agent_message")`,
+				// jq filter for thread_id from thread.started
+				`select(.type=="thread.started") | .thread_id`,
+				// synthesizer: jq -n constructs a Stop hook payload
+				`jq -n --arg msg "$KM_LAST_MSG" --arg sid "$KM_SID"`,
+				// piped to the existing km-notify-hook with the Stop event arg
+				`/opt/km/bin/km-notify-hook Stop`,
+				// guarded on the output.json having content (no empty pipe)
+				`if [ -s "$RUN_DIR/output.json" ]; then`,
+				// reference to last_assistant_message field that Plan 70-03's
+				// hook script reads on the Codex Stop branch
+				`last_assistant_message`,
+			},
+		},
 	}
 
 	for _, tc := range tests {
