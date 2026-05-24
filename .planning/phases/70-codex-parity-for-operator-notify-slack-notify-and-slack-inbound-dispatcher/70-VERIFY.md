@@ -9,10 +9,11 @@ uat_ami: ami-0944742220403a527 (pinned via profiles/*.local.yaml — not committ
 verified: human_needed
 sc_passed: [SC-1, SC-7]
 sc_partial: [SC-4]
-sc_failed: [SC-2]
+sc_code_landed: [SC-2]  # Plan 70-11 shipped; UAT pending
 sc_deferred: [SC-5, SC-6, SC-8, SC-9, SC-10]
 sc_dropped: [SC-3]
-followups: [Plan 70-11 (agent-run JSONL parse), Plan 70-12 (UAT re-run on non-AMI sandboxes)]
+followups: [Plan 70-12 (UAT re-run on non-AMI sandboxes or after signing-key fix)]
+plan_70_11_status: shipped (km v0.3.711)
 ---
 
 # Phase 70 UAT — `70-VERIFY.md`
@@ -277,7 +278,7 @@ codex: check the answer
 | SC | Description | Status | Notes |
 |---|---|---|---|
 | SC-1 | Codex sandbox provisioning + env emission | ✅ PASS | config.toml + KM_AGENT emitted to both env files; Codex 0.133.0 |
-| SC-2 | Operator-side Codex run idle notify | ❌ FAIL | Codex hook does NOT fire on Stop; Plan 70-03 Codex branches dead under shipping Codex. **Plan 70-11 gap-closure** required: add JSONL parse + synthetic Stop hook invocation to `BuildAgentShellCommands` Codex branch |
+| SC-2 | Operator-side Codex run idle notify | ✅ CODE LANDED — UAT pending | **Plan 70-11 shipped 2026-05-24** (km v0.3.711) — `BuildAgentShellCommands` codex branch now parses `output.json` JSONL post-exec and synthesizes a Stop hook payload pipe to `/opt/km/bin/km-notify-hook`. 4/4 tests PASS. Visible end-to-end Slack delivery awaits signing-key fix on a fresh sandbox (out-of-scope AMI-bake regression). |
 | SC-3 | PermissionRequest event | N/A | Dropped under Path B (Codex never emits under `--dangerously-bypass-approvals-and-sandbox`; verified empirically) |
 | SC-4 | Slack inbound first Codex turn | ⚠ PARTIAL | **Path B JSONL parse mechanism FULLY VERIFIED via DDB row**: `agent_type=codex`, `claude_session_id` from `thread.started`, `last_assistant_msg` from last `agent_message.text`. Visible Slack delivery blocked by AMI-bake signing-key mismatch (NOT a Phase 70 issue) |
 | SC-5 | Codex multi-turn resume | ⏭ DEFERRED | Same Slack delivery block. JSONL resume path is structurally identical to SC-4; would pass on a non-AMI-baked sandbox |
@@ -291,10 +292,10 @@ codex: check the answer
 
 ### Follow-up plans needed before declaring Phase 70 done
 
-| ID | Title | Scope |
+| ID | Title | Status |
 |---|---|---|
-| **70-11** (Path B agent-run notify) | Add post-`codex exec` JSONL parse + synthetic `Stop` hook invocation to operator-side `km agent run --codex` shell wrapper | `internal/app/cmd/agent.go` `BuildAgentShellCommands`; ~15 LOC. Unblocks SC-2 + SC-6 |
-| **70-12** (UAT re-run on clean sandboxes) | Recreate `learn` + `learncodex` from non-AMI profiles, re-run Flows 4-10 to capture visible Slack delivery proof | Operator-driven UAT re-run; produces `70-VERIFY-v2.md` |
+| **70-11** (Path B agent-run notify) | Add post-`codex exec` JSONL parse + synthetic `Stop` hook invocation to operator-side `km agent run --codex` shell wrapper | ✅ **SHIPPED 2026-05-24** — km v0.3.711; 4 codex shell tests PASS; `BuildAgentShellCommands` codex branch + bash block |
+| **70-12** (UAT re-run on clean sandboxes) | Operator-driven UAT re-run on fresh non-AMI sandboxes to validate visible Slack delivery (SC-2/4/5/8/9/10) | ⏭ Pending operator — requires either fresh non-AMI sandboxes OR signing-key fix on existing learncodex |
 
 ### Out-of-scope issues discovered during UAT (file as separate phases)
 
