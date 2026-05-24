@@ -78,3 +78,9 @@ variable "schedules_table_name" {
   type        = string
   default     = "km-schedules"
 }
+
+variable "identities_table_name" {
+  description = "Name of the DynamoDB km-identities table — used by the TTL handler to delete the sandbox's identity row during teardown so a reused alias does not inherit a stale pubkey via the alias-index GSI."
+  type        = string
+  default     = "km-identities"
+}

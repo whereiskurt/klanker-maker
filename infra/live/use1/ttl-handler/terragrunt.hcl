@@ -48,4 +48,5 @@ inputs = {
   sandbox_table_name   = "${local.site_vars.locals.site.label}-sandboxes"
   budget_table_name    = "${local.site_vars.locals.site.label}-budgets"
   schedules_table_name = "${local.site_vars.locals.site.label}-schedules"
+  identities_table_name = "${local.site_vars.locals.site.label}-identities"
 }

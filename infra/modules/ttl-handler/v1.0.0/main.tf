@@ -306,6 +306,9 @@ resource "aws_lambda_function" "ttl_handler" {
       # falls back to literal "km" — silently wrong-prefix on non-default
       # installs.
       KM_RESOURCE_PREFIX = var.resource_prefix
+      # km-identities table — TTL handler deletes the sandbox row during teardown
+      # so a reused alias does not inherit a stale pubkey via the alias-index GSI.
+      KM_IDENTITIES_TABLE = var.identities_table_name
     }
   }
 
@@ -537,6 +540,37 @@ resource "aws_iam_role_policy" "dynamodb_sandboxes" {
         Resource = [
           "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.sandbox_table_name}",
           "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.sandbox_table_name}/index/alias-index",
+        ]
+      }
+    ]
+  })
+}
+
+# Policy: cleanup of the per-sandbox identity on teardown — DDB row + three SSM params
+# (signing-key, encryption-key, safe-phrase). Mirrors what internal/app/cmd/destroy.go
+# does on the local-destroy path so the remote-destroy path no longer leaks identity rows
+# (a stale row trips the bridge's alias-index lookup with 401 bad_signature when the alias is reused).
+resource "aws_iam_role_policy" "identity_cleanup" {
+  name = "${var.resource_prefix}-ttl-handler-identity-cleanup"
+  role = aws_iam_role.ttl_handler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "IdentityTableDelete"
+        Effect   = "Allow"
+        Action   = ["dynamodb:DeleteItem"]
+        Resource = "arn:aws:dynamodb:*:${data.aws_caller_identity.current.account_id}:table/${var.identities_table_name}"
+      },
+      {
+        Sid    = "IdentitySSMDelete"
+        Effect = "Allow"
+        Action = ["ssm:DeleteParameter"]
+        Resource = [
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.resource_prefix}/sandbox/*/signing-key",
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.resource_prefix}/sandbox/*/encryption-key",
+          "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/${var.resource_prefix}/sandbox/*/safe-phrase",
         ]
       }
     ]

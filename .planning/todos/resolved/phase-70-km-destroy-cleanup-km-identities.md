@@ -45,3 +45,23 @@ After fix: create + destroy + recreate a sandbox with the same alias should NOT 
 - `internal/app/cmd/destroy.go` (add identity cleanup step)
 - `internal/app/cmd/destroy_test.go` (assertion)
 - Optionally `internal/app/cmd/doctor.go` (new check for orphan identities)
+
+### Resolution (2026-05-24)
+The local-destroy path in `internal/app/cmd/destroy.go` already called `awspkg.CleanupSandboxIdentity` (line 442 EC2, line 697 Docker). The bug was that **`km destroy` defaults to `--remote=true`** and dispatches to the TTL handler Lambda (`cmd/ttl-handler/main.go`), which had no identity cleanup at all — so the alias-reuse 401 was an artifact of remote destroys.
+
+Fix landed in `cmd/ttl-handler/main.go`:
+- New `cleanupSandboxIdentity` + `cleanupSandboxIdentityWith` helpers wrapping `awspkg.CleanupSandboxIdentity`.
+- Called from `terraformDestroy` (after DDB metadata delete) and from `sdkOnlyTeardown` (after metadata delete). Best-effort / non-fatal — never blocks destroy.
+- New `IdentityTable` field on `TTLHandler` + `identitiesTable()` env-var helper (`KM_IDENTITIES_TABLE`, fallback `<prefix>-identities`).
+
+Terraform plumbing in `infra/modules/ttl-handler/v1.0.0`:
+- `KM_IDENTITIES_TABLE` env var on the Lambda.
+- New `identities_table_name` variable (default `km-identities`).
+- New IAM policy `${prefix}-ttl-handler-identity-cleanup` granting `dynamodb:DeleteItem` on the identities table and `ssm:DeleteParameter` on `/${prefix}/sandbox/*/{signing-key,encryption-key,safe-phrase}`.
+- Live wiring in `infra/live/use1/ttl-handler/terragrunt.hcl`.
+
+Tests in `cmd/ttl-handler/identity_cleanup_test.go` cover: the three SSM params + DDB row are deleted with the right keys; nil clients skip silently; env-var fallback uses `<resource_prefix>-identities`.
+
+**Deploy:** `km init --sidecars` to rebuild the TTL Lambda zip + `km init` (or a targeted `terragrunt apply` on `live/use1/ttl-handler`) to push the new IAM policy and `KM_IDENTITIES_TABLE` env var.
+
+Doctor orphan-row check deferred (not blocking).

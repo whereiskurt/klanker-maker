@@ -113,6 +113,10 @@ type TTLHandler struct {
 	OperatorEmail    string
 	Domain           string
 	SSMClient        *ssmpkg.Client
+	// IdentityTable is the DynamoDB table name for the km-identities table
+	// (default "<resource_prefix>-identities"). Used by cleanupSandboxIdentity to
+	// delete the sandbox row after terraform destroy. Sourced from KM_IDENTITIES_TABLE.
+	IdentityTable string
 	// BudgetClient is a DynamoDB client for the km-budgets table.
 	// Used by handleStop/handleResume/handleAgentRun to record pause/resume intervals.
 	// If nil, budget hooks are skipped (backward compatible with existing tests).
@@ -159,6 +163,15 @@ func schedulesTableName() string {
 		return v
 	}
 	return resourcePrefix() + "-schedules"
+}
+
+// identitiesTable returns the DynamoDB identities table name from KM_IDENTITIES_TABLE,
+// falling back to "<resource_prefix>-identities" if unset.
+func identitiesTable() string {
+	if v := os.Getenv("KM_IDENTITIES_TABLE"); v != "" {
+		return v
+	}
+	return resourcePrefix() + "-identities"
 }
 
 // ttlHandlerName returns the TTL handler Lambda function name from the KM_TTL_HANDLER_NAME env var.
@@ -1120,6 +1133,10 @@ module "sandbox" {
 			log.Warn().Err(delErr).Str("sandbox_id", sandboxID).Msg("failed to delete DynamoDB metadata (non-fatal)")
 		}
 	}
+	// Clean up the sandbox's identity (SSM signing/encryption/safe-phrase params + km-identities row).
+	// Without this, the next sandbox to reuse the alias inherits this row's stale pubkey via the
+	// bridge's alias-index GSI lookup — 401 bad_signature until manually deleted.
+	cleanupSandboxIdentity(ctx, h, sandboxID)
 	// Also clean up budget-enforcer state file from S3.
 	if h.StateBucket != "" {
 		// Also clean up budget-enforcer state file
@@ -1355,6 +1372,34 @@ func deleteIAMRole(ctx context.Context, iamClient *iampkg.Client, roleName strin
 	}
 }
 
+// cleanupSandboxIdentityWith deletes the sandbox's SSM signing/encryption/safe-phrase
+// parameters and its row from the km-identities DynamoDB table. Non-fatal: failures
+// are logged and swallowed so the parent destroy still succeeds. Skips silently when
+// either client is nil (mirrors the rest of the TTL handler's optional-dependency style).
+//
+// Without this, the bridge's alias-based identity lookup will return the destroyed
+// sandbox's stale pubkey for any subsequent sandbox that reuses the same alias,
+// producing 401 bad_signature on every signed request. The local-destroy path in
+// internal/app/cmd/destroy.go already does this cleanup; the remote/TTL Lambda did not.
+func cleanupSandboxIdentityWith(ctx context.Context, ssmClient awspkg.IdentitySSMAPI, dynClient awspkg.IdentityTableAPI, tableName, prefix, sandboxID string) {
+	if ssmClient == nil || dynClient == nil {
+		return
+	}
+	if err := awspkg.CleanupSandboxIdentity(ctx, ssmClient, dynClient, tableName, prefix, sandboxID); err != nil {
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).
+			Msg("failed to cleanup sandbox identity (non-fatal)")
+	}
+}
+
+// cleanupSandboxIdentity is the TTLHandler-bound wrapper around cleanupSandboxIdentityWith.
+func cleanupSandboxIdentity(ctx context.Context, h *TTLHandler, sandboxID string) {
+	tableName := h.IdentityTable
+	if tableName == "" {
+		tableName = identitiesTable()
+	}
+	cleanupSandboxIdentityWith(ctx, h.SSMClient, h.DynamoClient, tableName, resourcePrefix(), sandboxID)
+}
+
 // sdkOnlyTeardown is the fallback destroy path when terraform binary isn't bundled.
 // Terminates EC2 instances, cleans up security groups, instance profiles, IAM roles,
 // EventBridge schedules, KMS keys, and DynamoDB/CW state.
@@ -1435,6 +1480,9 @@ func sdkOnlyTeardown(ctx context.Context, h *TTLHandler, sandboxID string) error
 		}
 	}
 
+	// 5b. Clean up the sandbox's identity (SSM signing/encryption/safe-phrase params + km-identities row).
+	cleanupSandboxIdentity(ctx, h, sandboxID)
+
 	// 6. Export and delete CloudWatch logs.
 	if h.CWClient != nil {
 		if h.Bucket != "" {
@@ -1481,6 +1529,7 @@ func main() {
 		Scheduler:        scheduler.NewFromConfig(awsCfg),
 		CWClient:         cloudwatchlogs.NewFromConfig(awsCfg),
 		SSMClient:        ssmpkg.NewFromConfig(awsCfg),
+		IdentityTable:    identitiesTable(),
 		Bucket:           bucket,
 		StateBucket:      os.Getenv("KM_STATE_BUCKET"),
 		StatePrefix:      os.Getenv("KM_STATE_PREFIX"),
