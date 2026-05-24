@@ -275,3 +275,25 @@ func TestPoller_CrossAgentSwitch_OldRowUntouched(t *testing.T) {
 		t.Errorf("cross-agent block must reset CLAUDE_SESSION to empty (new agent first turn)")
 	}
 }
+
+// TestPoller_CrossAgentSwitch_ResetsResumeArg (Phase 70 follow-up): RESUME_ARG is
+// computed once at the top of the dispatch loop from the pre-switch CLAUDE_SESSION
+// and the claude dispatch consumes it verbatim. Resetting only CLAUDE_SESSION is not
+// enough — without resetting RESUME_ARG too, a claude-targeted switch from a prior
+// codex thread would call `claude -p ... --resume <prior-codex-UUID>`, which claude
+// either errors on or treats as a fresh session anyway. (Codex dispatch re-reads
+// CLAUDE_SESSION at fork time, so the empty-check branches to first-turn correctly.)
+func TestPoller_CrossAgentSwitch_ResetsResumeArg(t *testing.T) {
+	p := minimalSlackInboundProfile(t, true)
+	ud := compileInboundUserData(t, p)
+	poller := extractSlackInboundPoller(t, ud)
+
+	block := extractCrossAgentBlock(poller)
+	if block == "" {
+		t.Fatalf("cross-agent block (if [ \"$DO_SWITCH\" -eq 1 ]) not found in poller")
+	}
+
+	if !strings.Contains(block, `RESUME_ARG=""`) {
+		t.Errorf("cross-agent block must reset RESUME_ARG to empty alongside CLAUDE_SESSION — otherwise the claude dispatch passes --resume with the prior agent's session UUID")
+	}
+}

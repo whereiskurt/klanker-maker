@@ -1687,7 +1687,12 @@ while true; do
     # OLD DDB row is INTACT — we never issued update-item or delete-item on it.
     # Plan 70-05's put-item below will write a NEW row keyed on (CHANNEL, NEW_TOP_TS)
     # with agent_type=NEW_AGENT because we've rewritten both THREAD_TS and EFFECTIVE_AGENT.
+    # RESUME_ARG is reset alongside CLAUDE_SESSION: the codex dispatch re-reads
+    # CLAUDE_SESSION at fork time (so empty -> first-turn branch), but the claude
+    # dispatch consumes RESUME_ARG which was computed earlier from the pre-switch
+    # CLAUDE_SESSION -- without this reset, claude would --resume the prior agent's UUID.
     CLAUDE_SESSION=""
+    RESUME_ARG=""
     THREAD_TS="$NEW_TOP_TS"
     EFFECTIVE_AGENT="$NEW_AGENT"
     PROMPT_FILE="$SEED_PROMPT_FILE"

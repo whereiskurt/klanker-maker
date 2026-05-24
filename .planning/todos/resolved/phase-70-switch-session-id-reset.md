@@ -35,3 +35,17 @@ Add a unit test alongside `TestPoller_CrossAgentSwitch_OrderingFetchesOldPermali
 
 ### Verification
 After fix: SC-10 retry should show the new dispatch line with NO `--resume` flag (claude) or no `resume` subcommand (codex), confirming a fresh first turn on the new agent.
+
+### Resolution (2026-05-24)
+Original diagnosis was slightly off — `CLAUDE_SESSION=""` was already present in the DO_SWITCH=1 block (added by commit `19b3786`, before the todo was filed). The actual missed reset was **`RESUME_ARG`**, which is computed once at the top of the poller dispatch loop (`pkg/compiler/userdata.go:1550`) from the pre-switch `CLAUDE_SESSION` and never recomputed. The codex dispatch fork re-reads `CLAUDE_SESSION` at fork time (so the post-switch empty value correctly takes the first-turn branch), but the claude dispatch fork consumes the stale `RESUME_ARG` verbatim — producing the `--resume <prior-codex-UUID>` line seen in UAT.
+
+Fix added one line to the DO_SWITCH=1 block alongside the existing `CLAUDE_SESSION=""` reset:
+
+```bash
+CLAUDE_SESSION=""
+RESUME_ARG=""        # NEW — without this, claude -p inherits the prior agent's --resume arg
+```
+
+New unit test `TestPoller_CrossAgentSwitch_ResetsResumeArg` in `pkg/compiler/userdata_prefix_test.go` pins this — extracts the cross-agent block via `extractCrossAgentBlock` and asserts `RESUME_ARG=""` is present.
+
+**Deploy:** `km init --sidecars` to push the updated userdata template into the create-handler Lambda's toolchain. New sandboxes pick up the fix on next create; existing sandboxes need `km destroy && km create` (per the standard "userdata change → recreate" rule).
