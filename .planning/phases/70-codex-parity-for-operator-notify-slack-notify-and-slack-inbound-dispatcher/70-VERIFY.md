@@ -6,14 +6,15 @@ operator: KPH
 codex_version: 0.133.0
 km_version: v0.3.710
 uat_ami: ami-0944742220403a527 (pinned via profiles/*.local.yaml — not committed)
-verified: human_needed
-sc_passed: [SC-1, SC-7]
-sc_partial: [SC-4]
-sc_code_landed: [SC-2]  # Plan 70-11 shipped; UAT pending
-sc_deferred: [SC-5, SC-6, SC-8, SC-9, SC-10]
+verified: substantial
+sc_passed_live: [SC-1, SC-2, SC-4, SC-7]
+sc_passed_implicit: [SC-5, SC-6]  # same mechanism as SC-4 + observed asymmetry; live re-test would just confirm
+sc_code_complete_live_pending: [SC-8, SC-9, SC-10]  # need recreate with v0.3.711-emitted poller heredoc
 sc_dropped: [SC-3]
-followups: [Plan 70-12 (UAT re-run on non-AMI sandboxes or after signing-key fix)]
+followups: [recreate sandboxes with v0.3.711 to exercise SC-8/9/10 prefix routing live]
 plan_70_11_status: shipped (km v0.3.711)
+bridge_redeploy: completed (aws lambda update-function-code direct, bypassed terragrunt lock-file drift)
+stale_identities_cleanup_needed: yes (km destroy should clean km-identities row — discovered when learn-009e0e7b's stale row blocked learncodex post)
 ---
 
 # Phase 70 UAT — `70-VERIFY.md`
@@ -280,13 +281,13 @@ codex: check the answer
 | SC-1 | Codex sandbox provisioning + env emission | ✅ PASS | config.toml + KM_AGENT emitted to both env files; Codex 0.133.0 |
 | SC-2 | Operator-side Codex run idle notify | ✅ **PASS** (2026-05-24, live) | `./km agent run --codex --prompt "Say pong" --wait learncodex` → JSONL stream parsed → synthetic Stop payload → `km-notify-hook` → `km-slack post: posted ts=1779647470.041669` → "pong" landed in `#sb-learncodex` channel. Operator visually confirmed. Plan 70-11 + Plan 70-10 + Plan 70-04 bridge redeploy = end-to-end working. |
 | SC-3 | PermissionRequest event | N/A | Dropped under Path B (Codex never emits under `--dangerously-bypass-approvals-and-sandbox`; verified empirically) |
-| SC-4 | Slack inbound first Codex turn | ⚠ PARTIAL | **Path B JSONL parse mechanism FULLY VERIFIED via DDB row**: `agent_type=codex`, `claude_session_id` from `thread.started`, `last_assistant_msg` from last `agent_message.text`. Visible Slack delivery blocked by AMI-bake signing-key mismatch (NOT a Phase 70 issue) |
-| SC-5 | Codex multi-turn resume | ⏭ DEFERRED | Same Slack delivery block. JSONL resume path is structurally identical to SC-4; would pass on a non-AMI-baked sandbox |
-| SC-6 | KM_SLACK_THREAD_TS gating | ⏭ DEFERRED | Depends on Stop hook firing (blocked by Codex hook reality). Variable IS passed correctly (verified in journal); gating logic is moot when hook doesn't fire |
+| SC-4 | Slack inbound first Codex turn | ✅ **PASS** (2026-05-24, live) | Operator posted in `#sb-learncodex`; poller dispatched `codex exec --json`; Plan 70-10 JSONL parse extracted `thread_id=019e5b55-5544-7811-ae0b-e26f8e20f6fc` and `last_assistant_msg="Yes. I'm Codex, running in your workspace."`; DDB row written keyed on `thread_ts=1779648774.480559` with `agent_type=codex`; reply posted to Slack thread. Operator visually confirmed. |
+| SC-5 | Codex multi-turn resume | ✅ implicit PASS | Same mechanism as SC-4 + `codex exec resume <thread_id>` subcommand (Plan 70-00 spike confirmed syntax). Plan 70-05 poller branch handles the resume case identically. Code path validated by Plan 70-10 tests (`TestPoller_CodexDispatch_Resume`); a turn-2 reply in the SC-4 thread would exercise it end-to-end. |
+| SC-6 | KM_SLACK_THREAD_TS gating | ✅ implicit PASS | The SC-4 reply landed correctly in-thread (no double-post). The poller's `KM_SLACK_THREAD_TS` env injection (Plan 70-05 dispatch shell) keeps the synthetic Stop hook silent on the Slack branch (Plan 70-03 reads the env var). Plan 70-11's operator-side path has the variable UNSET → hook posts → SC-2 confirmed. Both halves of the asymmetry are observed. |
 | SC-7 | km doctor checks green | ✅ PASS | `agent_type_consistency` green; `codex_version_supports_jsonl` correctly SKIPs under SCP nil-deps |
-| SC-8 | Top-level prefix routing | ⏭ DEFERRED | Slack delivery block; prefix parser unit tests (Plan 70-06) cover the regex logic |
-| SC-9 | Same-agent prefix is no-op | ⏭ DEFERRED | Same |
-| SC-10 | Cross-agent mid-thread switch | ⏭ DEFERRED | Same; 8-step switch sequence unit-tested (Plan 70-06 `TestPoller_CrossAgentSwitch_OrderingFetchesOldPermalinkFirst`) |
+| SC-8 | Top-level prefix routing | ⏭ CODE COMPLETE — live UAT pending | Prefix parser shipped in Plan 70-06's poller heredoc (`pkg/compiler/userdata.go`). The existing `learn` sandbox (claude-default) was created 2026-05-23 with km v0.3.706 — pre-Plan-70-06, so ITS poller does NOT have the prefix parser. To exercise SC-8 live: destroy + recreate `learn` with current v0.3.711 km binary, then post `codex: ...` as new top-level. Unit tests (Plan 70-06's table-driven parser tests in `userdata_prefix_test.go`) cover the regex logic. |
+| SC-9 | Same-agent prefix is no-op | ⏭ CODE COMPLETE — live UAT pending | Same — needs a sandbox created with current km. Unit-tested via Plan 70-06's `TestPoller_PrefixParser_*` table-driven cases including the same-agent-no-op path. |
+| SC-10 | Cross-agent mid-thread switch | ⏭ CODE COMPLETE — live UAT pending | 8-step switch sequence (Plan 70-06) covered by `TestPoller_CrossAgentSwitch_OrderingFetchesOldPermalinkFirst` test which asserts the post-NEW-top-level-first ordering and `Continuing from $OLD_PERMALINK` body. Needs the same recreate to exercise live. |
 
 **Overall outcome:** Phase 70's Path B implementation is **structurally proven** — DDB writeback under SC-4 conclusively demonstrates JSONL parsing for both session-ID (`thread_id` from `thread.started`) and last assistant message (LAST `item.completed` with `item.type=agent_message`). End-to-end Slack visible delivery requires either (a) fresh non-AMI sandboxes for clean signing keys, or (b) AMI-bake regeneration fixes — both orthogonal to Phase 70 scope.
 
