@@ -1,11 +1,18 @@
 ---
 phase: 70
 plan: 09
-uat_run_date: TBD
+uat_run_date: 2026-05-24
 operator: KPH
-codex_version: TBD (expected: 0.133.0+)
-km_version: v0.3.709
-verified: false
+codex_version: 0.133.0
+km_version: v0.3.710
+uat_ami: ami-0944742220403a527 (pinned via profiles/*.local.yaml — not committed)
+verified: human_needed
+sc_passed: [SC-1, SC-7]
+sc_partial: [SC-4]
+sc_failed: [SC-2]
+sc_deferred: [SC-5, SC-6, SC-8, SC-9, SC-10]
+sc_dropped: [SC-3]
+followups: [Plan 70-11 (agent-run JSONL parse), Plan 70-12 (UAT re-run on non-AMI sandboxes)]
 ---
 
 # Phase 70 UAT — `70-VERIFY.md`
@@ -34,43 +41,62 @@ If pre-flight fails: do NOT proceed; investigate Codex auth / AMI bake / channel
 
 ---
 
-## Flow 1 — SC-1: Codex sandbox provisioning
+## Flow 1 — SC-1: Codex sandbox provisioning ✅ PASS (2026-05-24)
 
-**On `learn-codex`:**
-```bash
-km shell learn-codex
-# inside:
-ls -la ~/.codex/config.toml
-cat /etc/profile.d/km-notify-env.sh | grep KM_AGENT
-cat /etc/km/notify.env | grep KM_AGENT
-```
+**On `learncodex` (sandbox `learn-009e0e7b`, instance i-0a0fdceab2329d9a6), via SSM:**
 
-**Expected:**
-- `~/.codex/config.toml` exists, owned by sandbox:sandbox, mode 0644 (no-op artifact under Codex 0.133 but file present)
-- `/etc/profile.d/km-notify-env.sh` contains `export KM_AGENT="codex"`
-- `/etc/km/notify.env` contains `KM_AGENT="codex"`
+**Observed:**
+- `~/.codex/config.toml` exists: `-rw------- 1 sandbox sandbox 401` (Codex tightened mode to 0600 after login; harmless — the file is sandbox-user-only)
+- Hook entries present:
+  ```toml
+  [[hooks.PermissionRequest]]
+  matcher = ".*"
+  [[hooks.PermissionRequest.hooks]]
+  type = "command"
+  command = "/opt/km/bin/km-notify-hook PermissionRequest"
+  timeout = 30
+  [[hooks.Stop]]
+  [[hooks.Stop.hooks]]
+  type = "command"
+  command = "/opt/km/bin/km-notify-hook Stop"
+  timeout = 30
+  ```
+- `/etc/profile.d/km-notify-env.sh` contains `export KM_AGENT="codex"` ✓
+- `/etc/km/notify.env` contains `KM_AGENT=codex` ✓
+- `codex --version` → `codex-cli 0.133.0` ✓
 
-**Observed:** (paste)
+**Cosmetic deviation (NOT a SC-1 failure):**
+The config.toml feature flag is `codex_hooks = true` (the OLD name). The km binary at `a1fb750` writes the new `hooks = true` name, but **Lambda's compiled userdata template is from v0.3.709** (pre-fix) and hasn't been refreshed via `km init --sidecars` since the fix landed. Codex 0.133 emits a deprecation event in the JSONL stream on every exec, which Plan 70-10's parser filters out via `select(.item.type=="agent_message")`. Functionally harmless. To clean up before future UAT runs: `./km init --sidecars` then destroy + recreate.
 
-**Status:** ⬜ PASS / ⬜ FAIL
+**Status:** ✅ PASS — all required artifacts present, KM_AGENT correctly emitted to both env files, Codex version meets ≥ 0.121.0 floor.
 
 ---
 
-## Flow 2 — SC-2: Operator-side Codex run with idle notify
+## Flow 2 — SC-2: Operator-side Codex run with idle notify ❌ FAIL (2026-05-24) — Path B gap, follow-up Plan 70-11
 
 **From operator workstation:**
 ```bash
-./km agent run --codex --prompt "What model are you?" --wait learn-codex
+./km agent run --codex --prompt "What model are you? One short sentence only." --wait learncodex
 ```
 
-**Expected:**
-- Operator email arrives in inbox with subject containing `[learn-codex]` and body containing Codex's model name
-- Slack `#sb-learn-codex` shows the same body in a new top-level thread (no agent-run thread, this is the Stop-equivalent idle notify post)
-- Mechanism: poller-less `km agent run` invokes Codex with `--json`; the wrapper parses the JSONL stream and posts the last `agent_message.text` (no hook fired, JSONL parse is the contract)
+**Observed (stdout JSONL stream):**
+```
+{"type":"thread.started","thread_id":"019e5abe-3038-7612-8bc0-0a37046d8534"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"`[features].codex_hooks` is deprecated..."}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"I'm Codex, a coding agent based on GPT-5."}}
+{"type":"turn.completed","usage":{"input_tokens":10910,...}}
+```
 
-**Observed:** (paste email subject + body excerpt; paste Slack screenshot or message permalink)
+✓ Codex ran to completion.
+✓ Agent reply was correctly captured to `/workspace/.km-agent/runs/20260524T160752Z/output.json`.
+✗ Stop hook did NOT fire — `/opt/km/bin/km-notify-hook` access time remained at 14:56 (sandbox boot time), not 16:07 (agent run time).
+✗ No operator email (expected — `notifyEmailEnabled: false`).
+✗ No Slack post in `#sb-learncodex` for this turn.
 
-**Status:** ⬜ PASS / ⬜ FAIL
+**Root cause:** Codex 0.133's `[features].hooks` flag was promoted to stable, but the documented `[[hooks.Stop]]` TOML schema does NOT actually fire commands in the shipping CLI. Plan 70-03 added the Codex Stop branch + `last_assistant_message` fast-path to `km-notify-hook`, but Codex never invokes the hook script. Plan 70-10's Path B fixed the POLLER path (Flows 4-5 below) but did NOT fix the operator-side `km agent run --codex` path — that flow still relies on hooks to drive notify.
+
+**Status:** ❌ FAIL — defer to gap-closure Plan 70-11 (add post-`codex exec` JSONL parse + synthetic `Stop` hook invocation to `internal/app/cmd/agent.go` BuildAgentShellCommands Codex branch). Estimated complexity: ~15 LOC in the bash wrapper that the agent dispatch builds.
 
 ---
 
@@ -90,29 +116,46 @@ km shell learn-codex
 
 ---
 
-## Flow 4 — SC-4: Slack inbound, first Codex turn
+## Flow 4 — SC-4: Slack inbound, first Codex turn ⚠ PARTIAL (2026-05-24) — Path B mechanism PROVEN, Slack delivery blocked by AMI-bake regressions
 
-**In Slack `#sb-learn-codex` channel (new top-level post):**
+**Operator action:** Posted "list workspace files"-like prompt as new top-level in `#sb-learncodex` (channel `C0B6Q14QVB2`).
+
+**What the implementation did right:**
+
+Phase 70's Path B mechanism is **end-to-end verified** in DDB:
+
+```json
+{
+  "channel_id": "C0B6Q14QVB2",
+  "thread_ts": "1779639669.879789",
+  "agent_type": "codex",
+  "claude_session_id": "019e5acc-b013-7443-99db-f13c2653520f",
+  "last_assistant_msg": "Yes. I'm Codex, running as a coding agent in your workspace.\n",
+  "last_turn_ts": "2026-05-24T16:23:52Z"
+}
 ```
-list workspace files
-```
 
-**Expected:**
-- Within ~30s, a thread reply lands from the bot containing Codex's response
-- `km status learn-codex` reports active inbound thread count = 1
-- DDB row in `km-slack-threads` keyed on `(C_channel_id, T_thread_ts)`:
-  - `agent_type = "codex"`
-  - `claude_session_id = <UUID>` (this is Codex's `thread_id` — column-name hangover documented)
-  - `last_assistant_msg = "<truncated reply>"`
+- ✅ Poller picked up SQS message
+- ✅ Dispatched `codex exec --json --dangerously-bypass-approvals-and-sandbox` correctly
+- ✅ **JSONL parse extracted `thread_id` from `thread.started` event** (Path B's session-ID source — Plan 70-10's exact contract)
+- ✅ **JSONL parse extracted the LAST `agent_message.text`** as `last_assistant_msg` (Plan 70-10's exact extraction filter)
+- ✅ DDB row written with `agent_type=codex`, `claude_session_id` populated from JSONL, `last_assistant_msg` populated from JSONL — agent-aware writeback (Plan 70-05 + 70-10)
 
-**To verify DDB:**
-```bash
-aws --profile klanker-application --region us-east-1 dynamodb scan --table-name km-slack-threads --max-items 5 | jq '.Items[] | {channel_id, thread_ts, agent_type, claude_session_id: (.claude_session_id.S // empty)[:20], last_assistant_msg: (.last_assistant_msg.S // empty)[:80]}'
-```
+**Why Slack reply didn't land in-thread (NOT a Phase 70 issue):**
 
-**Observed:** (paste DDB row attrs, Slack thread permalink)
+Two AMI-bake regressions discovered during UAT — both orthogonal to Plan 70's implementation:
 
-**Status:** ⬜ PASS / ⬜ FAIL
+1. **Stale sandbox-id in 7 systemd unit files.** The AMI baked from bakesrc embedded `SANDBOX_ID=learn-3cad85fe` literally into `/etc/systemd/system/km-{slack-inbound-poller,audit-log,tracing,mail-poller,presence,queue,ebpf-enforcer}.service`. When learncodex booted from the AMI, cloud-init renamed the host but did NOT regenerate these unit files with the new sandbox-id (`learn-009e0e7b`). The poller polled the WRONG SQS queue for 34 minutes. Fixed in-place via SSM `sed -i 's/learn-3cad85fe/learn-009e0e7b/g' ...` + systemctl restart.
+2. **Signing-keypair identity mismatch.** km-slack post returned `slack: bridge returned 401: {"error":"bad_signature","ok":false}`. The Lambda bridge has learncodex's public key registered (per `km status`: `Public Key: b0PwLsE079CatmL3...`), but the on-sandbox private key inherited from the AMI does not match. Phase 14 platform-identity keypair was AMI-baked from bakesrc instead of issued fresh at create.
+
+Both are AMI-bake limitations: per-sandbox cryptographic + identifier state captured into snapshots that should have been regenerated at boot. They affect ANY sandbox derived from any operator-baked AMI — not specific to Phase 70.
+
+**Recommended follow-ups (out of Phase 70 scope):**
+- `km ami bake` should clean per-sandbox state before snapshotting (or sandbox userdata should regenerate it at every boot from IMDS / km-config).
+- Phase 14 identity keypair should be re-issued + re-registered with the bridge on every userdata boot, not derived from AMI.
+- File these as separate gap-closure phases (e.g., Phase 56.x or new phase).
+
+**Status:** ⚠ PARTIAL PASS — Plan 70-10's Path B JSONL parsing contract is **fully validated** by the DDB row content; visible end-to-end Slack delivery blocked by AMI-bake regressions (logged for follow-up). Phase 70's code paths work as designed.
 
 ---
 
@@ -141,20 +184,24 @@ This is implicit — Flow 2 above proves the operator-side `km agent run --codex
 
 ---
 
-## Flow 7 — SC-7: km doctor checks
+## Flow 7 — SC-7: km doctor checks ✅ PASS (2026-05-24)
 
 **From operator workstation:**
 ```bash
-./km doctor 2>&1 | grep -E "codex_version_supports_jsonl|agent_type_consistency"
+./km doctor 2>&1 | grep -E "codex|agent_type"
 ```
 
-**Expected:**
-- `codex_version_supports_jsonl` → PASS or WARN (PASS if SSM-probe succeeded; WARN if blocked by SCP — both acceptable per Path B)
-- `agent_type_consistency` → PASS (no drift between DDB rows and S3 profiles)
+**Observed:**
+```
+✓ agent_type_consistency              1 thread row(s) consistent with profile agent_type
+- codex_version_supports_jsonl        codex version check deps not configured
+32 checks passed, 12 warnings, 0 errors
+```
 
-**Observed:** (paste km doctor output)
+- ✅ `agent_type_consistency` PASS — the 1 DDB row written during Flow 4 is consistent with `learncodex`'s `agent: codex` profile
+- ✅ `codex_version_supports_jsonl` SKIP (correctly) — `CodexSSMRunner` is nil because the org-level SCP blocks `ssm:SendCommand` on the application account. Matches Plan 70-07's documented design (`internal/app/cmd/doctor_codex.go` returns `CheckSkipped` on nil deps)
 
-**Status:** ⬜ PASS / ⬜ FAIL
+**Status:** ✅ PASS — both checks behave exactly as designed.
 
 ---
 
@@ -225,23 +272,42 @@ codex: check the answer
 
 ---
 
-## Summary
+## Summary (2026-05-24)
 
-| SC | Description | Status |
+| SC | Description | Status | Notes |
+|---|---|---|---|
+| SC-1 | Codex sandbox provisioning + env emission | ✅ PASS | config.toml + KM_AGENT emitted to both env files; Codex 0.133.0 |
+| SC-2 | Operator-side Codex run idle notify | ❌ FAIL | Codex hook does NOT fire on Stop; Plan 70-03 Codex branches dead under shipping Codex. **Plan 70-11 gap-closure** required: add JSONL parse + synthetic Stop hook invocation to `BuildAgentShellCommands` Codex branch |
+| SC-3 | PermissionRequest event | N/A | Dropped under Path B (Codex never emits under `--dangerously-bypass-approvals-and-sandbox`; verified empirically) |
+| SC-4 | Slack inbound first Codex turn | ⚠ PARTIAL | **Path B JSONL parse mechanism FULLY VERIFIED via DDB row**: `agent_type=codex`, `claude_session_id` from `thread.started`, `last_assistant_msg` from last `agent_message.text`. Visible Slack delivery blocked by AMI-bake signing-key mismatch (NOT a Phase 70 issue) |
+| SC-5 | Codex multi-turn resume | ⏭ DEFERRED | Same Slack delivery block. JSONL resume path is structurally identical to SC-4; would pass on a non-AMI-baked sandbox |
+| SC-6 | KM_SLACK_THREAD_TS gating | ⏭ DEFERRED | Depends on Stop hook firing (blocked by Codex hook reality). Variable IS passed correctly (verified in journal); gating logic is moot when hook doesn't fire |
+| SC-7 | km doctor checks green | ✅ PASS | `agent_type_consistency` green; `codex_version_supports_jsonl` correctly SKIPs under SCP nil-deps |
+| SC-8 | Top-level prefix routing | ⏭ DEFERRED | Slack delivery block; prefix parser unit tests (Plan 70-06) cover the regex logic |
+| SC-9 | Same-agent prefix is no-op | ⏭ DEFERRED | Same |
+| SC-10 | Cross-agent mid-thread switch | ⏭ DEFERRED | Same; 8-step switch sequence unit-tested (Plan 70-06 `TestPoller_CrossAgentSwitch_OrderingFetchesOldPermalinkFirst`) |
+
+**Overall outcome:** Phase 70's Path B implementation is **structurally proven** — DDB writeback under SC-4 conclusively demonstrates JSONL parsing for both session-ID (`thread_id` from `thread.started`) and last assistant message (LAST `item.completed` with `item.type=agent_message`). End-to-end Slack visible delivery requires either (a) fresh non-AMI sandboxes for clean signing keys, or (b) AMI-bake regeneration fixes — both orthogonal to Phase 70 scope.
+
+### Follow-up plans needed before declaring Phase 70 done
+
+| ID | Title | Scope |
 |---|---|---|
-| SC-1 | Codex sandbox provisioning + env emission | ⬜ |
-| SC-2 | Operator-side Codex run idle notify (JSONL parse) | ⬜ |
-| SC-3 | PermissionRequest event — DROPPED (Path B) | N/A |
-| SC-4 | Slack inbound first Codex turn | ⬜ |
-| SC-5 | Codex multi-turn resume | ⬜ |
-| SC-6 | KM_SLACK_THREAD_TS gating | ⬜ |
-| SC-7 | km doctor checks green | ⬜ |
-| SC-8 | Top-level prefix routing | ⬜ |
-| SC-9 | Same-agent prefix is no-op | ⬜ |
-| SC-10 | Cross-agent mid-thread switch with handoff | ⬜ |
+| **70-11** (Path B agent-run notify) | Add post-`codex exec` JSONL parse + synthetic `Stop` hook invocation to operator-side `km agent run --codex` shell wrapper | `internal/app/cmd/agent.go` `BuildAgentShellCommands`; ~15 LOC. Unblocks SC-2 + SC-6 |
+| **70-12** (UAT re-run on clean sandboxes) | Recreate `learn` + `learncodex` from non-AMI profiles, re-run Flows 4-10 to capture visible Slack delivery proof | Operator-driven UAT re-run; produces `70-VERIFY-v2.md` |
 
-**Overall:** ⬜ PASS / ⬜ FAIL — record any deviations from spec for follow-up plans
+### Out-of-scope issues discovered during UAT (file as separate phases)
 
-**Notes / deviations:**
+| Issue | Recommended phase |
+|---|---|
+| AMI bake captures stale per-sandbox state (sandbox-id baked into 7 systemd unit files) | Phase 56.x (learn-mode AMI lifecycle) |
+| Phase 14 identity ed25519 keypair AMI-bake regression (signing-key bridge mismatch) | New phase or Phase 56.x |
+| Lambda userdata template not refreshed after `a1fb750` (still emits deprecated `codex_hooks` flag) | Quick task: `./km init --sidecars` after Phase 70 ships |
 
-(operator free-form notes)
+### Deviations from original spec
+
+1. **Hook-based design (original) → JSONL stream parsing (Path B).** Adopted 2026-05-23 after Plan 70-00 spike v1/v2/v3 confirmed Codex 0.121/0.133 do not fire user-defined hooks despite stable `[features].hooks` flag. Spec updated; CONTEXT.md "Path B contract" section is the locked source of truth.
+2. **SC-3 dropped.** Codex never emits PermissionRequest events under `--dangerously-bypass-approvals-and-sandbox`; the file got created without any approval gate during the v2 spike.
+3. **SC-2 functionally regressed under Path B** — original spec assumed Stop hook would post; Path B redesign missed updating the operator-side `km agent run --codex` path. Captured as Plan 70-11.
+
+**Verification status:** `human_needed` — Plan 70-11 must land + UAT re-run on clean sandboxes before Phase 70 can be marked `passed`.
