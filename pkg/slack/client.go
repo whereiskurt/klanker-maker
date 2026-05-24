@@ -144,16 +144,36 @@ func (c *Client) PostMessage(ctx context.Context, channel, subject, body, thread
 // GetPermalink returns a Slack permalink URL for the given channel + message ts.
 // Wraps chat.getPermalink. Phase 70 — used by Plan 70-06 cross-agent switch
 // to embed permalinks in handoff posts.
+//
+// Uses GET with query-string args (NOT POST + JSON like the other methods on this
+// client): chat.getPermalink is one of Slack's older read-only methods that
+// silently returns an empty permalink when given an application/json body. Matches
+// the slack-go SDK convention and the SlackPosterAdapter equivalent in pkg/slack/bridge.
 func (c *Client) GetPermalink(ctx context.Context, channel, messageTS string) (string, error) {
-	payload := map[string]any{
-		"channel":    channel,
-		"message_ts": messageTS,
-	}
-	resp, err := c.callJSON(ctx, "chat.getPermalink", payload)
+	q := url.Values{}
+	q.Set("channel", channel)
+	q.Set("message_ts", messageTS)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/chat.getPermalink?"+q.Encode(), nil)
 	if err != nil {
 		return "", err
 	}
-	return resp.Permalink, nil
+	req.Header.Set("Authorization", "Bearer "+c.botToken)
+
+	httpResp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer httpResp.Body.Close()
+
+	var apiResp SlackAPIResponse
+	if err := json.NewDecoder(httpResp.Body).Decode(&apiResp); err != nil {
+		return "", fmt.Errorf("slack: decode chat.getPermalink: %w", err)
+	}
+	if !apiResp.OK {
+		return "", &SlackAPIError{Method: "chat.getPermalink", Code: apiResp.Error}
+	}
+	return apiResp.Permalink, nil
 }
 
 // UpdateMessage edits a previously-posted bot message. Subject to Slack's

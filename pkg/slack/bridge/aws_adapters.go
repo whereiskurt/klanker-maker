@@ -37,6 +37,7 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -429,21 +430,56 @@ func (s *SlackPosterAdapter) ArchiveChannel(ctx context.Context, channelID strin
 
 // GetPermalink returns a Slack permalink URL for the given channel + message ts.
 // Wraps chat.getPermalink. Phase 70 — used by Plan 70-06 cross-agent switch.
+//
+// Uses GET with query-string arguments (NOT POST + JSON like the other methods on
+// this adapter). chat.getPermalink is one of Slack's older read-only methods that
+// rejects application/json bodies — sending JSON yielded a silent empty-permalink
+// response, surfacing in UAT as the literal "(unavailable)" fallback string in the
+// cross-agent switch handoff post. GET + query string matches the slack-go SDK's
+// convention and Slack's own docs example for this method.
 func (s *SlackPosterAdapter) GetPermalink(ctx context.Context, channel, messageTS string) (string, error) {
-	resp, httpStatus, retryAfter, err := s.call(ctx, "chat.getPermalink", map[string]any{
-		"channel":    channel,
-		"message_ts": messageTS,
-	})
+	token, err := s.Tokens.Fetch(ctx)
+	if err != nil {
+		return "", fmt.Errorf("bridge: get bot token for chat.getPermalink: %w", err)
+	}
+
+	q := url.Values{}
+	q.Set("channel", channel)
+	q.Set("message_ts", messageTS)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", s.getBaseURL()+"/chat.getPermalink?"+q.Encode(), nil)
 	if err != nil {
 		return "", err
 	}
-	if rlErr := checkRateLimit(httpStatus, retryAfter, "chat.getPermalink"); rlErr != nil {
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	hc := s.HTTPClient
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+
+	httpResp, err := hc.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer httpResp.Body.Close()
+
+	if rlErr := checkRateLimit(httpResp.StatusCode, httpResp.Header.Get("Retry-After"), "chat.getPermalink"); rlErr != nil {
 		return "", rlErr
 	}
-	if !resp.OK {
-		return "", fmt.Errorf("bridge: chat.getPermalink: %s", resp.Error)
+
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return "", fmt.Errorf("bridge: read chat.getPermalink response: %w", err)
 	}
-	return resp.Permalink, nil
+	var apiResp slackAPIResponse
+	if err := json.Unmarshal(body, &apiResp); err != nil {
+		return "", fmt.Errorf("bridge: decode chat.getPermalink: %w", err)
+	}
+	if !apiResp.OK {
+		return "", fmt.Errorf("bridge: chat.getPermalink: %s", apiResp.Error)
+	}
+	return apiResp.Permalink, nil
 }
 
 // UpdateMessage edits a previously-posted bot message via chat.update.

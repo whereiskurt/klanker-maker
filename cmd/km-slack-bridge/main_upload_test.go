@@ -54,6 +54,14 @@ func (s *uploadStubSlack) PostMessage(_ context.Context, _, _, _, _ string) (str
 }
 func (s *uploadStubSlack) ArchiveChannel(_ context.Context, _ string) error { return nil }
 
+// Phase 70 additions to bridge.SlackPoster — stubs return fixed values.
+func (s *uploadStubSlack) GetPermalink(_ context.Context, _, _ string) (string, error) {
+	return "https://example.slack.com/archives/C123/p1234567890000001", nil
+}
+func (s *uploadStubSlack) UpdateMessage(_ context.Context, _, ts, _ string) (string, error) {
+	return ts, nil
+}
+
 type uploadStubS3 struct {
 	called bool
 }

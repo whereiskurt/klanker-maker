@@ -356,6 +356,101 @@ func TestSlackPosterAdapter_PostMessage_HappyPath(t *testing.T) {
 	}
 }
 
+// TestSlackPosterAdapter_GetPermalink_UsesGETWithQueryString pins the wire format
+// for chat.getPermalink: GET with channel + message_ts as URL query parameters,
+// NOT POST + JSON body. Sending JSON to this older Slack method silently returned
+// an empty permalink in UAT (surfaces as the literal "(unavailable)" fallback in
+// the cross-agent switch handoff post). Regression-guards the format choice.
+func TestSlackPosterAdapter_GetPermalink_UsesGETWithQueryString(t *testing.T) {
+	var (
+		gotMethod      string
+		gotPath        string
+		gotChannelArg  string
+		gotMessageArg  string
+		gotContentType string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotChannelArg = r.URL.Query().Get("channel")
+		gotMessageArg = r.URL.Query().Get("message_ts")
+		gotContentType = r.Header.Get("Content-Type")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"ok":true,"channel":"C01234567","permalink":"https://example.slack.com/archives/C01234567/p1234567890123456"}`)
+	}))
+	defer srv.Close()
+
+	tokenFetcher := &bridge.SSMBotTokenFetcher{Client: &mockSSMClient{
+		getParam: func(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
+			return &ssm.GetParameterOutput{
+				Parameter: &ssmtypes.Parameter{Value: aws.String("xoxb-test")},
+			}, nil
+		},
+	}, Path: "/km/slack/bot-token"}
+
+	adapter := &bridge.SlackPosterAdapter{
+		HTTPClient: srv.Client(),
+		BaseURL:    srv.URL,
+		Tokens:     tokenFetcher,
+	}
+
+	link, err := adapter.GetPermalink(context.Background(), "C01234567", "1234567890.123456")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if link != "https://example.slack.com/archives/C01234567/p1234567890123456" {
+		t.Errorf("permalink: got %q", link)
+	}
+	if gotMethod != "GET" {
+		t.Errorf("HTTP method: want GET, got %q (older Slack methods like chat.getPermalink reject JSON POST)", gotMethod)
+	}
+	if gotPath != "/chat.getPermalink" {
+		t.Errorf("path: want /chat.getPermalink, got %q", gotPath)
+	}
+	if gotChannelArg != "C01234567" {
+		t.Errorf("channel query arg: want C01234567, got %q", gotChannelArg)
+	}
+	if gotMessageArg != "1234567890.123456" {
+		t.Errorf("message_ts query arg: want 1234567890.123456, got %q", gotMessageArg)
+	}
+	if strings.Contains(strings.ToLower(gotContentType), "application/json") {
+		t.Errorf("Content-Type should NOT be application/json for chat.getPermalink (got %q) — Slack ignores JSON bodies on this method", gotContentType)
+	}
+}
+
+// TestSlackPosterAdapter_GetPermalink_SlackError surfaces Slack's error code
+// when ok=false (e.g. message_not_found, missing_scope). The bridge handler
+// converts these to 502 + slackResponse for the caller.
+func TestSlackPosterAdapter_GetPermalink_SlackError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"ok":false,"error":"message_not_found"}`)
+	}))
+	defer srv.Close()
+
+	tokenFetcher := &bridge.SSMBotTokenFetcher{Client: &mockSSMClient{
+		getParam: func(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
+			return &ssm.GetParameterOutput{
+				Parameter: &ssmtypes.Parameter{Value: aws.String("xoxb-test")},
+			}, nil
+		},
+	}, Path: "/km/slack/bot-token"}
+
+	adapter := &bridge.SlackPosterAdapter{
+		HTTPClient: srv.Client(),
+		BaseURL:    srv.URL,
+		Tokens:     tokenFetcher,
+	}
+
+	_, err := adapter.GetPermalink(context.Background(), "C01234567", "1234567890.123456")
+	if err == nil {
+		t.Fatal("expected error from non-ok Slack response")
+	}
+	if !strings.Contains(err.Error(), "message_not_found") {
+		t.Errorf("error should surface Slack error code; got: %v", err)
+	}
+}
+
 func TestSlackPosterAdapter_ArchiveChannel_HappyPath(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

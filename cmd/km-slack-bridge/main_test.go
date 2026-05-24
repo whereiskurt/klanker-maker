@@ -49,6 +49,15 @@ func (s *stubSlackPoster) ArchiveChannel(_ context.Context, _ string) error {
 	return nil
 }
 
+// Phase 70 additions to bridge.SlackPoster — stubs return fixed values.
+func (s *stubSlackPoster) GetPermalink(_ context.Context, _, _ string) (string, error) {
+	return "https://example.slack.com/archives/C123/p1234567890000001", nil
+}
+
+func (s *stubSlackPoster) UpdateMessage(_ context.Context, _, ts, _ string) (string, error) {
+	return ts, nil
+}
+
 func TestHandle_BadEnvelope(t *testing.T) {
 	// Override global handler with stub
 	origHandler := handler
