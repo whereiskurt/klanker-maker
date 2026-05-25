@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/elazarl/goproxy"
-	"github.com/whereiskurt/klanker-maker/pkg/aws"
 	"github.com/whereiskurt/klanker-maker/sidecars/http-proxy/httpproxy"
 )
 
@@ -472,37 +471,9 @@ func TestHTTPProxy_GitHubNoFilter(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Phase 88 — OpenAI / Codex budget metering integration tests (RED wave 0)
+// TestOpenAIAIByModelIntegration (schema proof) is in openai_test.go to avoid
+// redeclaration with the captureModelIDStub in anthropic_test.go.
 // ---------------------------------------------------------------------------
-
-// TestOpenAIAIByModelIntegration proves that IncrementAISpend writes
-// SK=BUDGET#ai#{modelID} for OpenAI model IDs exactly as it does for Anthropic
-// models — no DynamoDB schema change required. This test GREENs immediately
-// because it exercises the agent-agnostic pkg/aws/budget.go path (no 88-04/05
-// production code needed).
-func TestOpenAIAIByModelIntegration(t *testing.T) {
-	stub := &captureModelIDStub{}
-
-	_, err := aws.IncrementAISpend(
-		context.Background(),
-		stub,
-		"km-budgets",
-		"sb-test",
-		"gpt-5.3-codex",
-		1000,
-		500,
-		0.00875,
-	)
-	if err != nil {
-		t.Fatalf("IncrementAISpend returned error: %v", err)
-	}
-
-	// IncrementAISpend writes SK = "BUDGET#ai#{modelID}".
-	// Verify the captured SK encodes the OpenAI model ID using the same shape.
-	const expectedSK = "BUDGET#ai#gpt-5.3-codex"
-	if stub.capturedSK != expectedSK {
-		t.Errorf("DynamoDB SK = %q, want %q", stub.capturedSK, expectedSK)
-	}
-}
 
 // newOpenAIMockServer starts an httptest.Server that responds to any POST with
 // the Responses API SSE body referencing gpt-5.5 and usage tokens suitable for
@@ -573,12 +544,18 @@ func TestHTTPProxy_OpenAIMetered(t *testing.T) {
 
 	// Drain the body to trigger the metering reader EOF callback.
 	_, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
 
-	// RED assertion: until 88-05 wires the OnResponse handler, capturedSK is
-	// empty. When 88-05 lands, it must be "BUDGET#ai#gpt-5.5".
+	// The meteringReader fires onComplete in a goroutine. Give it a brief
+	// moment to call IncrementAISpend and populate stub.capturedSK.
+	// 100ms is orders of magnitude more than needed for a local stub call.
+	time.Sleep(100 * time.Millisecond)
+
+	// Assert that the response was intercepted and IncrementAISpend was called
+	// with the OpenAI model ID from the SSE body.
 	const wantSK = "BUDGET#ai#gpt-5.5"
 	if stub.capturedSK != wantSK {
-		t.Errorf("DynamoDB SK = %q, want %q (RED — requires plan 88-05 proxy.go handler)", stub.capturedSK, wantSK)
+		t.Errorf("DynamoDB SK = %q, want %q (OnResponse handler must be registered for api.openai.com)", stub.capturedSK, wantSK)
 	}
 }
 

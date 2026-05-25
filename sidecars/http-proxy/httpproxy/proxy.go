@@ -429,6 +429,131 @@ func NewProxy(allowed []string, sandboxID string, opts ...ProxyOption) *goproxy.
 				return resp
 			},
 		)
+
+		// -----------------------------------------------------------------
+		// OpenAI direct API (api.openai.com) MITM handlers (Phase 88).
+		// Mirrors the Anthropic block above. Must be registered INSIDE this
+		// if-block (budget enforcement enabled) and BEFORE the general CONNECT
+		// handler — goproxy uses first-match for CONNECT.
+		// -----------------------------------------------------------------
+
+		// Pre-flight OnRequest check: reject OpenAI requests when the sandbox
+		// AI budget is already exhausted (cached check — no DynamoDB read).
+		proxy.OnRequest(goproxy.ReqHostMatches(openaiHostRegex)).DoFunc(
+			func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+				entry := be.cache.Get(sandboxID)
+				if entry != nil && entry.AILimit > 0 && entry.AISpent >= entry.AILimit {
+					log.Info().
+						Str("sandbox_id", sandboxID).
+						Str("event_type", "ai_budget_exhausted_preflight").
+						Str("host", req.Host).
+						Float64("spent", entry.AISpent).
+						Float64("limit", entry.AILimit).
+						Msg("")
+					return req, OpenAIBlockedResponse(req, sandboxID, "", entry.AISpent, entry.AILimit)
+				}
+				return req, nil
+			},
+		)
+
+		// MITM handler: AlwaysMitm for api.openai.com.
+		proxy.OnRequest(goproxy.ReqHostMatches(openaiHostRegex)).HandleConnect(goproxy.AlwaysMitm)
+
+		// OnResponse: intercept OpenAI /v1/responses (and /v1/chat/completions) responses,
+		// extract tokens, price, increment. Uses tee-reader approach (same as Bedrock/Anthropic)
+		// to handle streaming SSE responses without blocking.
+		proxy.OnResponse(goproxy.ReqHostMatches(openaiHostRegex)).DoFunc(
+			func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
+				if resp == nil || ctx.Req == nil {
+					return resp
+				}
+				req := ctx.Req
+
+				// Pre-flight budget check (cached).
+				entry := be.cache.Get(sandboxID)
+				if entry != nil && entry.AILimit > 0 && entry.AISpent >= entry.AILimit {
+					log.Info().
+						Str("sandbox_id", sandboxID).
+						Str("event_type", "ai_budget_exhausted_response").
+						Str("host", req.Host).
+						Float64("spent", entry.AISpent).
+						Float64("limit", entry.AILimit).
+						Msg("")
+					_ = resp.Body.Close()
+					return OpenAIBlockedResponse(req, sandboxID, "", entry.AISpent, entry.AILimit)
+				}
+
+				// Wrap body in metering reader — streams through to client,
+				// fires token extraction + DynamoDB metering on EOF.
+				resp.Body = newMeteringReader(resp.Body, func(captured []byte) {
+					modelID, inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens, parseErr := ExtractOpenAITokens(bytes.NewReader(captured))
+					if parseErr != nil || (inputTokens == 0 && outputTokens == 0) {
+						return
+					}
+
+					var costUSD float64
+					rate, ok := staticOpenAIRates[modelID]
+					if ok {
+						costUSD = CalculateOpenAICost(inputTokens, outputTokens, cachedInputTokens, rate)
+					} else {
+						log.Warn().
+							Str("sandbox_id", sandboxID).
+							Str("event_type", "openai_unknown_model").
+							Str("model", modelID).
+							Msg("openai model not in static rate table — row written with cost=0")
+					}
+
+					log.Info().
+						Str("sandbox_id", sandboxID).
+						Str("event_type", "openai_tokens_metered").
+						Str("model", modelID).
+						Int("input_tokens", inputTokens).
+						Int("output_tokens", outputTokens).
+						Int("cached_input_tokens", cachedInputTokens).
+						Int("reasoning_output_tokens", reasoningOutputTokens).
+						Float64("cost_usd", costUSD).
+						Msg("")
+
+					be.cache.UpdateLocalSpend(sandboxID, costUSD)
+
+					updatedSpend, incrementErr := aws.IncrementAISpend(
+						context.Background(),
+						be.client,
+						be.tableName,
+						sandboxID,
+						modelID,
+						inputTokens,
+						outputTokens,
+						costUSD,
+					)
+					if incrementErr != nil {
+						log.Error().
+							Str("sandbox_id", sandboxID).
+							Str("event_type", "openai_spend_increment_error").
+							Err(incrementErr).
+							Msg("")
+						return
+					}
+
+					cachedEntry := be.cache.Get(sandboxID)
+					if cachedEntry != nil {
+						cachedEntry.AISpent = updatedSpend
+						be.cache.Set(sandboxID, cachedEntry)
+					}
+
+					if be.onBudgetUpdate != nil {
+						limit := float64(0)
+						if cachedEntry != nil {
+							limit = cachedEntry.AILimit
+						}
+						remaining := limit - updatedSpend
+						be.onBudgetUpdate(remaining)
+					}
+				})
+
+				return resp
+			},
+		)
 	}
 
 	// -------------------------------------------------------------------------
@@ -552,6 +677,12 @@ The document has moved
 		}
 		if len(cfg.githubRepos) > 0 && githubHostsRegex.MatchString(req.Host) {
 			// GitHub hosts are handled by the GitHub-specific OnRequest handler.
+			return req, nil
+		}
+		if cfg.budget != nil && openaiHostRegex.MatchString(req.Host) {
+			// OpenAI hosts are handled by the budget-enforcement OnRequest handler.
+			// The host-level allowlist check is bypassed here; the budget preflight
+			// and OnResponse metering handler (registered above) own the lifecycle.
 			return req, nil
 		}
 		if !IsHostAllowed(req.Host, allowed) {
