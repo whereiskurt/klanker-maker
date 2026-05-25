@@ -31,3 +31,6 @@ This todo is just a reminder: after merging the a1fb750 commit (already on main)
 
 ### Verification
 After `km init --sidecars` + a fresh `km create`: the new sandbox's `~/.codex/config.toml` should contain `hooks = true` (not `codex_hooks = true`), and `codex exec --json` should NOT emit the deprecation event in the JSONL stream.
+
+### Resolution (2026-05-24)
+No code change needed — `a1fb750` already shipped the rename. Confirmed at `pkg/compiler/userdata.go:907` (`hooks = true`). KPH ran `./km init --sidecars` to push the rebuilt km binary into the create-handler Lambda's toolchain alongside the three other Phase 70 follow-up fixes (`15a5240` km-identities, `914f183` RESUME_ARG, `df00ebb` chat.getPermalink). That one deploy resolves all four todos.
