@@ -40,15 +40,28 @@ terragrunt run --all --queue-exclude-dir 'sandboxes/**' init -- -upgrade
 ## Solution
 
 In km's init / terragrunt runner (`pkg/terragrunt/runner.go`, driven by
-`internal/app/cmd/init.go`), detect this error class per-module and auto-retry
-that module's `init` with `-upgrade` before failing the run.
+`internal/app/cmd/init.go`), detect this error class per-module and self-heal
+before failing the run.
 
-- Prefer a **targeted retry on the specific error** ("Required plugins are not
-  installed" / "does not match any of the checksums recorded") over a blanket
-  `-upgrade` on every init — blanket `-upgrade` would silently float provider
-  versions on routine inits.
-- Retry once with `-upgrade`; if it still fails, surface the original error.
-- Consider emitting a one-line WARN so the operator knows a lock was healed.
+**Correct heal (NOT `-upgrade`):** on the specific error ("Required plugins are
+not installed" / "does not match any of the checksums recorded"), **delete that
+module's `.terraform.lock.hcl` and re-run plain `terraform/terragrunt init`,
+then retry apply.** Plain init records the hash of the package currently in the
+plugin cache — exactly what the strict `apply` verifies — so the lock and cache
+realign regardless of whether the cache entry is canonical.
+
+**Pitfalls confirmed 2026-05-24 (do not repeat):**
+- `init -upgrade` is the WRONG heal — it can record a registry/foreign h1 that
+  differs from the locally-installed dirhash, leaving apply still broken.
+- Do NOT heal via `terragrunt run --all init` — it's PARALLEL and Terraform does
+  not lock the shared `plugin_cache_dir`, so concurrent inits race the cache and
+  produce fresh checksum errors + cascade `dependency` errors. km init's own
+  apply loop is serial, so a per-module serial heal is safe.
+- Root trigger was a stale/non-canonical cache extraction (aws 6.46.0 hashed to
+  a bogus h1) that poisoned every gitignored lock; the cache later self-healed,
+  orphaning the locks. A periodic deeper heal could purge the suspect provider
+  from `~/.terraform.d/plugin-cache` and let it re-extract canonically.
+- Emit a one-line WARN so the operator knows a lock was healed.
 
 ### Related mitigations already applied (2026-05-24)
 
