@@ -1131,6 +1131,40 @@ func TestL7ProxyHostsBedrockOnly(t *testing.T) {
 	}
 }
 
+// TestL7ProxyHostsWithCodex verifies that a profile with spec.cli.agent: codex
+// returns api.openai.com for L7 proxy interception (Phase 88, OAI-BUDGET-07).
+// RED test — gate wired by plan 88-06.
+func TestL7ProxyHostsWithCodex(t *testing.T) {
+	p := baseProfile()
+	p.Spec.CLI = &profile.CLISpec{Agent: "codex"}
+	got := buildL7ProxyHosts(p)
+	want := "api.openai.com"
+	if got != want {
+		t.Errorf("buildL7ProxyHosts with Codex agent: got %q, want %q", got, want)
+	}
+}
+
+// TestL7ProxyHostsWithCodexAndBedrock verifies that a profile with spec.cli.agent: codex,
+// useBedrock: true, and GitHub sourceAccess returns ALL expected hosts (Phase 88, OAI-BUDGET-07).
+// Regression guard: ensures plan 88-06 does not drop or reorder the existing Anthropic/Bedrock
+// branch when wiring the Codex gate (RESEARCH.md § Pitfall #5). RED test until 88-06 lands.
+func TestL7ProxyHostsWithCodexAndBedrock(t *testing.T) {
+	p := baseProfile()
+	p.Spec.CLI = &profile.CLISpec{Agent: "codex"}
+	p.Spec.Execution.UseBedrock = true
+	p.Spec.SourceAccess = profile.SourceAccessSpec{
+		GitHub: &profile.GitHubAccess{
+			AllowedRepos: []string{"myorg/myrepo"},
+		},
+	}
+	got := buildL7ProxyHosts(p)
+	for _, want := range []string{"github.com", ".amazonaws.com", "api.anthropic.com", "api.openai.com"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("buildL7ProxyHosts with Codex+Bedrock+GitHub: got %q, missing %q", got, want)
+		}
+	}
+}
+
 // ============================================================
 // Phase 42 — eBPF gatekeeper mode: both-mode userdata tests
 // ============================================================
