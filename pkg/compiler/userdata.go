@@ -1621,10 +1621,13 @@ while true; do
     [ -z "$OLD_PERMALINK" ] && OLD_PERMALINK="(unavailable)"
 
     # Step 2: build the new top-level body WITH OLD_PERMALINK already embedded.
-    # No placeholder string is ever posted to Slack.
+    # No placeholder string is ever posted to Slack. Lead with the NEW agent's
+    # name (${NEW_AGENT^} capitalises the first letter -> "Claude"/"Codex") so the
+    # top-level message makes the handoff target obvious on its own — once it
+    # posts out of the old thread there's no other context for who is replying.
     NEW_MSG_BODY=$(mktemp /tmp/km-new-thread.XXXXXX)
     {
-      echo "Continuing from $OLD_PERMALINK"
+      echo "${NEW_AGENT^} will continue from $OLD_PERMALINK"
       echo ""
       if [ -n "$LAST_ASSISTANT_MSG" ]; then
         echo "Previous assistant ($OLD_AGENT) said:"

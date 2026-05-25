@@ -226,9 +226,10 @@ substituted before the post, so no placeholder string is ever sent to Slack and
    `km-slack permalink --channel C --ts $OLD_THREAD_TS`. Falls back to
    `(unavailable)` on Slack API hiccup.
 2. **Build the new top-level body** with `$OLD_PERMALINK` already substituted.
-   The body is finalised BEFORE the post:
+   The body leads with the NEW agent's name (capitalised) so the handoff target
+   is obvious once the message posts out of the old thread. Finalised BEFORE the post:
    ```
-   Continuing from {old_permalink}
+   {Claude|Codex} will continue from {old_permalink}
 
    Previous assistant ({old_agent}) said:
    > {first 500 chars of last_assistant_msg}

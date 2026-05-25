@@ -193,8 +193,8 @@ func isWordBoundary(c byte) bool {
 // TestPoller_CrossAgentSwitch_OrderingFetchesOldPermalinkFirst (SC-10): the
 // cross-agent switch block must call km-slack permalink (for the OLD thread,
 // with the already-known THREAD_TS) BEFORE km-slack post --new-message. The new
-// top-level body contains "Continuing from $OLD_PERMALINK" at post-time —
-// no placeholder is ever posted to Slack; no chat.update in the critical path.
+// top-level body contains "${NEW_AGENT^} will continue from $OLD_PERMALINK" at
+// post-time — no placeholder is ever posted to Slack; no chat.update in the critical path.
 // Plan 70-06 Task 3.
 func TestPoller_CrossAgentSwitch_OrderingFetchesOldPermalinkFirst(t *testing.T) {
 	p := minimalSlackInboundProfile(t, true)
@@ -232,9 +232,14 @@ func TestPoller_CrossAgentSwitch_OrderingFetchesOldPermalinkFirst(t *testing.T) 
 	}
 
 	// The new top-level body builder must reference $OLD_PERMALINK —
-	// the value is substituted at post-time, not via chat.update later.
-	if !strings.Contains(block, "Continuing from $OLD_PERMALINK") {
-		t.Errorf("cross-agent block missing 'Continuing from $OLD_PERMALINK' in new top-level body — OLD permalink must be embedded at post-time")
+	// the value is substituted at post-time, not via chat.update later. The body
+	// leads with the NEW agent's name (${NEW_AGENT^}) so "<Agent> will continue
+	// from <old_permalink>" makes the handoff target self-evident.
+	if !strings.Contains(block, "will continue from $OLD_PERMALINK") {
+		t.Errorf("cross-agent block missing 'will continue from $OLD_PERMALINK' in new top-level body — OLD permalink must be embedded at post-time")
+	}
+	if !strings.Contains(block, "${NEW_AGENT^} will continue from") {
+		t.Errorf("new top-level body must lead with the NEW agent name (${NEW_AGENT^}) so the handoff target is obvious once it posts out of the old thread")
 	}
 
 	// Guard rail: the v1 placeholder pattern must NOT appear.

@@ -1064,7 +1064,7 @@ https://workspace.slack.com/archives/C12345/p1716393742000300
 In the **NEW** top-level message (posted first, before the handoff):
 
 ```
-Continuing from https://workspace.slack.com/archives/C12345/p1716393640000200
+Codex will continue from https://workspace.slack.com/archives/C12345/p1716393640000200
 
 Previous assistant (claude) said:
 > {first 500 chars of last_assistant_msg from the old DDB row}
