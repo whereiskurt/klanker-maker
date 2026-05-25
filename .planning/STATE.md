@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 88-03-PLAN.md
-last_updated: "2026-05-25T22:24:29.861Z"
+stopped_at: Completed 88-01-PLAN.md
+last_updated: "2026-05-25T22:25:09.240Z"
 last_activity: 2026-05-25
 progress:
   total_phases: 104
   completed_phases: 91
   total_plans: 445
-  completed_plans: 393
+  completed_plans: 395
   percent: 88
 ---
 
@@ -423,6 +423,8 @@ Progress: [█████████░] 88%
 | Phase 70-codex-parity-for-operator-notify-slack-notify-and-slack-inbound-dispatcher P07 | 22 | 2 tasks | 3 files |
 | Phase 70 P08 | 191s | 2 tasks | 3 files |
 | Phase 88 P03 | 5min | 1 tasks | 1 files |
+| Phase 88 P01 | 3 | 3 tasks | 1 files |
+| Phase 88 P06 | 81 | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -1224,6 +1226,9 @@ Recent decisions affecting current work:
 - [Phase 70]: docs/codex-parity.md documents Path B (JSONL stream) as actual mechanism; config.toml noted as forward-compat artifact with no runtime effect under Codex 0.121-0.133
 - [Phase 70]: SC-3 drop documented: hooks don't fire under --dangerously-bypass-approvals-and-sandbox in shipping Codex; expected behavior not a bug
 - [Phase 88]: Gate Codex L7 proxy on p.Spec.CLI.Agent=="codex" exact match per RESEARCH.md; plan 88-06 must honor this gate
+- [Phase 88]: Gate Codex L7 proxy host on nil-safe p.Spec.CLI != nil && p.Spec.CLI.Agent == codex to avoid runtime panic on profiles without CLI block
+- [Phase 88]: OpenAI cache-token subtraction (uncached = input - cached) belongs in CalculateOpenAICost, NOT ExtractOpenAITokens — extractor returns inclusive input_tokens
+- [Phase 88]: All 11 RED tests in one file (openai_test.go), written atomically — mirrors single-file anthropic_test.go pattern
 
 ### Roadmap Evolution
 
@@ -1337,6 +1342,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-25T22:24:29.853Z
-Stopped at: Completed 88-03-PLAN.md
+Last session: 2026-05-25T22:25:09.232Z
+Stopped at: Completed 88-01-PLAN.md
 Resume file: None
