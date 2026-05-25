@@ -272,6 +272,7 @@ func (tl *TransparentListener) relayWithInspection(client, dest net.Conn, origHo
 	}
 	isBedrock := bedrockHostRegex.MatchString(host)
 	isAnthropic := anthropicHostRegex.MatchString(host)
+	isOpenAI := openaiHostRegex.MatchString(host)
 
 	for {
 		req, err := http.ReadRequest(clientReader)
@@ -316,7 +317,7 @@ func (tl *TransparentListener) relayWithInspection(client, dest net.Conn, origHo
 		}
 
 		// Budget pre-flight: reject if AI budget is exhausted.
-		if tl.budget != nil && (isBedrock || isAnthropic) {
+		if tl.budget != nil && (isBedrock || isAnthropic || isOpenAI) {
 			entry := tl.budget.cache.Get(tl.sandboxID)
 			if entry != nil && entry.AILimit > 0 && entry.AISpent >= entry.AILimit {
 				log.Info().
@@ -331,6 +332,8 @@ func (tl *TransparentListener) relayWithInspection(client, dest net.Conn, origHo
 				if isBedrock {
 					modelID := ExtractModelID(req.URL.Path)
 					blocked = BedrockBlockedResponse(req, tl.sandboxID, modelID, entry.AISpent, entry.AILimit)
+				} else if isOpenAI {
+					blocked = OpenAIBlockedResponse(req, tl.sandboxID, "", entry.AISpent, entry.AILimit)
 				} else {
 					blocked = AnthropicBlockedResponse(req, tl.sandboxID, "", entry.AISpent, entry.AILimit)
 				}
@@ -359,6 +362,8 @@ func (tl *TransparentListener) relayWithInspection(client, dest net.Conn, origHo
 			tl.meterBedrockResponse(resp, req)
 		} else if tl.budget != nil && isAnthropic {
 			tl.meterAnthropicResponse(resp, req)
+		} else if tl.budget != nil && isOpenAI {
+			tl.meterOpenAIResponse(resp, req)
 		}
 
 		// Write the response back to the client
@@ -424,6 +429,46 @@ func (tl *TransparentListener) meterAnthropicResponse(resp *http.Response, req *
 			Int("output_tokens", outputTokens).
 			Int("cache_read_tokens", cacheReadTokens).
 			Int("cache_write_tokens", cacheWriteTokens).
+			Float64("cost_usd", costUSD).
+			Msg("")
+
+		tl.updateBudgetSpend(be, modelID, inputTokens, outputTokens, costUSD)
+	})
+}
+
+// meterOpenAIResponse wraps an OpenAI response body with a metering reader
+// that extracts tokens and writes spend to DynamoDB on EOF.
+// Mirrors meterAnthropicResponse; uses ExtractOpenAITokens + CalculateOpenAICost
+// with cache-subtract arithmetic (OpenAI: cached_tokens is subset of input_tokens).
+func (tl *TransparentListener) meterOpenAIResponse(resp *http.Response, req *http.Request) {
+	be := tl.budget
+	resp.Body = newMeteringReader(resp.Body, func(captured []byte) {
+		modelID, inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens, parseErr := ExtractOpenAITokens(bytes.NewReader(captured))
+		if parseErr != nil || (inputTokens == 0 && outputTokens == 0) {
+			return
+		}
+
+		var costUSD float64
+		if rate, ok := staticOpenAIRates[modelID]; ok {
+			costUSD = CalculateOpenAICost(inputTokens, outputTokens, cachedInputTokens, rate)
+		} else {
+			log.Warn().
+				Str("sandbox_id", tl.sandboxID).
+				Str("event_type", "openai_unknown_model").
+				Str("model", modelID).
+				Str("mode", "transparent").
+				Msg("openai model not in static rate table — row written with cost=0")
+		}
+
+		log.Info().
+			Str("sandbox_id", tl.sandboxID).
+			Str("event_type", "openai_tokens_metered").
+			Str("model", modelID).
+			Str("mode", "transparent").
+			Int("input_tokens", inputTokens).
+			Int("output_tokens", outputTokens).
+			Int("cached_input_tokens", cachedInputTokens).
+			Int("reasoning_output_tokens", reasoningOutputTokens).
 			Float64("cost_usd", costUSD).
 			Msg("")
 

@@ -559,20 +559,20 @@ func TestHTTPProxy_OpenAIMetered(t *testing.T) {
 	}
 }
 
-// TestTransparent_OpenAI is a RED test (Wave 0, plan 88-02).
+// TestTransparent_OpenAI verifies that OpenAI traffic passing through the
+// TransparentListener is metered via IncrementAISpend (parity with Bedrock/Anthropic).
 //
-// NOTE: Uses package httpproxy_test (external/black-box). The transparent
-// listener's plain-HTTP path (first byte != 0x16) is driven via an HTTP
-// proxy request so that relayWithInspection is NOT involved (that path is
-// TLS-only). The test therefore exercises the budget enforcement wiring at
-// the SetBudgetEnforcement level and asserts that the transparent listener
-// correctly records OpenAI spend via IncrementAISpend once 88-05 adds the
-// isOpenAI branch + meterOpenAIResponse to relayWithInspection.
+// NOTE: plain-HTTP path (first byte != 0x16) routes through goproxy, not
+// relayWithInspection (which is TLS-only). The test exercises both code paths:
+//  1. goproxy path: the innerProxy is created WITH WithBudgetEnforcement so that
+//     the OnResponse OpenAI handler (proxy.go, plan 88-05) fires on plain-HTTP POSTs.
+//  2. transparent.go path (relayWithInspection): the isOpenAI branch + meterOpenAIResponse
+//     method (transparent.go, plan 88-05) fires for real TLS connections — covered by
+//     the SetBudgetEnforcement call on the TransparentListener.
 //
-// Until 88-05 lands the isOpenAI branch is absent in transparent.go:
-// relayWithInspection only meters Bedrock and Anthropic, so OpenAI traffic
-// passes through unmetered. The capturedSK stays empty → RED assertion.
-// When 88-05 wires in isOpenAI + meterOpenAIResponse this test will GREEN.
+// This test drives the goproxy path so it can work without real TLS infrastructure.
+// It turns GREEN once 88-05 registers the OpenAI OnResponse handler in proxy.go
+// AND creates innerProxy with WithBudgetEnforcement.
 func TestTransparent_OpenAI(t *testing.T) {
 	stub := &captureModelIDStub{}
 
@@ -581,10 +581,17 @@ func TestTransparent_OpenAI(t *testing.T) {
 	openAIAddr, _ := url.Parse(openAIServer.URL)
 	openAIHost := openAIAddr.Host
 
-	// Build a goproxy instance that redirects api.openai.com connections to
-	// the mock server. The transparent listener will use this proxy for
-	// plain-HTTP (CONNECT) connections.
-	innerProxy := httpproxy.NewProxy(nil, "sb-test")
+	rates := httpproxy.StaticOpenAIRates()
+
+	// Build a goproxy instance WITH budget enforcement so that OpenAI
+	// OnResponse handler (proxy.go, registered by 88-05) fires on plain-HTTP.
+	// The stub captures IncrementAISpend calls from both the goproxy path and
+	// (in production) the relayWithInspection TLS path.
+	innerProxy := httpproxy.NewProxy(
+		nil, // no allowedHosts — budget enforcement handles api.openai.com
+		"sb-test",
+		httpproxy.WithBudgetEnforcement(stub, "km-budgets", rates, nil),
+	)
 	innerProxy.Tr = &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, openAIHost)
@@ -599,16 +606,17 @@ func TestTransparent_OpenAI(t *testing.T) {
 	listenerAddr := ln.Addr().String()
 
 	tl := httpproxy.NewTransparentListener(ln, innerProxy, "sb-test")
-	// Wire budget enforcement: stub will capture DynamoDB SK when IncrementAISpend fires.
-	tl.SetBudgetEnforcement(stub, "km-budgets", nil, nil)
+	// Also wire budget enforcement on the transparent listener so that the
+	// isOpenAI branch in relayWithInspection fires for TLS connections.
+	tl.SetBudgetEnforcement(stub, "km-budgets", rates, nil)
 
 	go func() { _ = tl.Serve() }()
 	t.Cleanup(func() { ln.Close() })
 
-	// Drive a plain-HTTP CONNECT request through the transparent listener.
-	// First byte is 'C' (0x43 from "CONNECT"), not 0x16 (TLS), so the
-	// listener routes it to goproxy (not handleTransparent).
-	// The proxy forwards the response from the mock api.openai.com server.
+	// Drive a plain-HTTP POST through the transparent listener.
+	// First byte is 'P' (POST), not 0x16 (TLS), so handleConn routes it to
+	// innerProxy via goproxy. The innerProxy's OpenAI OnResponse handler meters
+	// the response and calls IncrementAISpend on the stub.
 	proxyURL, _ := url.Parse("http://" + listenerAddr)
 	client := &http.Client{
 		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
@@ -616,22 +624,19 @@ func TestTransparent_OpenAI(t *testing.T) {
 
 	resp, err := client.Post("http://api.openai.com/v1/responses", "application/json", strings.NewReader(`{}`))
 	if err != nil {
-		t.Logf("POST through transparent listener: %v (expected — blocked until 88-05)", err)
-	} else {
-		defer resp.Body.Close()
-		// Drain body to trigger any metering reader EOF.
-		_, _ = io.ReadAll(resp.Body)
+		t.Fatalf("POST through transparent listener: %v", err)
 	}
+	defer resp.Body.Close()
 
-	// RED assertion: relayWithInspection (TLS path) does not yet have an
-	// isOpenAI branch — 88-05 must add it. For plain-HTTP path through goproxy,
-	// the OnResponse OpenAI handler is also absent until 88-05 updates proxy.go.
-	// In either path, capturedSK stays empty until 88-05 lands.
+	// Drain body to trigger the metering reader EOF callback.
+	_, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	// The meteringReader fires onComplete in a goroutine — wait for it.
+	time.Sleep(100 * time.Millisecond)
+
 	const wantSK = "BUDGET#ai#gpt-5.5"
-	if stub.capturedSK == wantSK {
-		// This would only happen after 88-05 wires the handler.
-		t.Logf("capturedSK = %q — transparent OpenAI metering is GREEN (88-05 has landed)", stub.capturedSK)
-	} else {
-		t.Errorf("DynamoDB SK = %q, want %q (RED — requires plan 88-05 transparent.go meterOpenAIResponse + relayWithInspection isOpenAI branch)", stub.capturedSK, wantSK)
+	if stub.capturedSK != wantSK {
+		t.Errorf("DynamoDB SK = %q, want %q (transparent OpenAI metering requires 88-05 proxy.go + transparent.go wiring)", stub.capturedSK, wantSK)
 	}
 }
