@@ -3794,6 +3794,16 @@ func buildL7ProxyHosts(p *profile.SandboxProfile) string {
 		// the proxy transparently without MITM inspection.
 		hosts = append(hosts, ".amazonaws.com", "api.anthropic.com")
 	}
+	// Phase 88 (OAI-BUDGET-07): Codex agent profiles route to api.openai.com.
+	// Adding it here triggers connect4 DNAT redirect in enforcement: ebpf | both modes,
+	// so OpenAI traffic flows through the http-proxy MITM meter.
+	// Researcher recommendation: gate on Agent == "codex". Non-codex profiles that hit
+	// OpenAI directly (raw OpenAI SDK in a Claude sandbox) need an explicit profile flag
+	// — deferred to a follow-up phase. See 88-RESEARCH.md § Open Questions #2.
+	// NOTE: host order is GitHub, Bedrock/Anthropic, OpenAI — preserved for test contracts.
+	if p.Spec.CLI != nil && p.Spec.CLI.Agent == "codex" {
+		hosts = append(hosts, "api.openai.com")
+	}
 	return strings.Join(hosts, ",")
 }
 
