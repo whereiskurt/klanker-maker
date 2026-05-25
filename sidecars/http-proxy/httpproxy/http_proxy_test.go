@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/elazarl/goproxy"
+	"github.com/whereiskurt/klanker-maker/pkg/aws"
 	"github.com/whereiskurt/klanker-maker/sidecars/http-proxy/httpproxy"
 )
 
@@ -466,5 +467,194 @@ func TestHTTPProxy_GitHubNoFilter(t *testing.T) {
 
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("expected 403 when GitHub not in allowedHosts and no filter configured, got %d", resp.StatusCode)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 88 — OpenAI / Codex budget metering integration tests (RED wave 0)
+// ---------------------------------------------------------------------------
+
+// TestOpenAIAIByModelIntegration proves that IncrementAISpend writes
+// SK=BUDGET#ai#{modelID} for OpenAI model IDs exactly as it does for Anthropic
+// models — no DynamoDB schema change required. This test GREENs immediately
+// because it exercises the agent-agnostic pkg/aws/budget.go path (no 88-04/05
+// production code needed).
+func TestOpenAIAIByModelIntegration(t *testing.T) {
+	stub := &captureModelIDStub{}
+
+	_, err := aws.IncrementAISpend(
+		context.Background(),
+		stub,
+		"km-budgets",
+		"sb-test",
+		"gpt-5.3-codex",
+		1000,
+		500,
+		0.00875,
+	)
+	if err != nil {
+		t.Fatalf("IncrementAISpend returned error: %v", err)
+	}
+
+	// IncrementAISpend writes SK = "BUDGET#ai#{modelID}".
+	// Verify the captured SK encodes the OpenAI model ID using the same shape.
+	const expectedSK = "BUDGET#ai#gpt-5.3-codex"
+	if stub.capturedSK != expectedSK {
+		t.Errorf("DynamoDB SK = %q, want %q", stub.capturedSK, expectedSK)
+	}
+}
+
+// newOpenAIMockServer starts an httptest.Server that responds to any POST with
+// the Responses API SSE body referencing gpt-5.5 and usage tokens suitable for
+// metering assertions in TestHTTPProxy_OpenAIMetered.
+func newOpenAIMockServer(t *testing.T, body string) *httptest.Server {
+	t.Helper()
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(s.Close)
+	return s
+}
+
+// openAISSEBody is a minimal Responses API SSE stream containing a
+// response.completed event with gpt-5.5 and 120 input / 45 output tokens.
+const openAISSEBody = "" +
+	"event: response.created\n" +
+	`data: {"type":"response.created","response":{"id":"resp_abc","model":"gpt-5.5","status":"in_progress","output":[]}}` + "\n\n" +
+	"event: response.completed\n" +
+	`data: {"type":"response.completed","sequence_number":42,"response":{"id":"resp_abc","model":"gpt-5.5","status":"completed","output":[],"usage":{"input_tokens":120,"input_tokens_details":{"cached_tokens":0},"output_tokens":45,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":165}}}` + "\n\n"
+
+// TestHTTPProxy_OpenAIMetered is a RED test (Wave 0, plan 88-02).
+//
+// It pins down the requirement that 88-05 must register an openaiHostRegex
+// CONNECT handler + OnResponse metering reader in proxy.go — mirroring the
+// existing Anthropic and Bedrock paths. The test fails with a compile error
+// ("undefined: httpproxy.StaticOpenAIRates") until 88-04 lands, and at
+// runtime ("capturedSK empty") until 88-05 wires the OnResponse handler.
+func TestHTTPProxy_OpenAIMetered(t *testing.T) {
+	openAIServer := newOpenAIMockServer(t, openAISSEBody)
+	openAIAddr, _ := url.Parse(openAIServer.URL)
+	openAIHost := openAIAddr.Host
+
+	stub := &captureModelIDStub{}
+
+	// StaticOpenAIRates is defined in 88-04 (openai.go). This reference causes
+	// a compile failure (RED state) until plan 88-04 lands.
+	rates := httpproxy.StaticOpenAIRates()
+
+	proxy := httpproxy.NewProxy(
+		nil,         // no allowedHosts — budget enforcement overrides
+		"sb-test",
+		httpproxy.WithBudgetEnforcement(stub, "km-budgets", rates, nil),
+	)
+
+	// Redirect all connections to api.openai.com to our local mock server so
+	// the proxy can exercise the handler without real network access.
+	proxy.Tr = &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, openAIHost)
+		},
+	}
+
+	_, proxyAddr := startProxyServer(t, proxy)
+	client := proxyClient(t, proxyAddr)
+
+	// POST to api.openai.com/v1/responses — the proxy intercepts via MITM and
+	// wraps the response body in a meteringReader (once 88-05 lands). Until
+	// then the openaiHostRegex handler is not registered, no metering fires,
+	// and stub.capturedSK stays empty (RED assertion below).
+	resp, err := client.Post("http://api.openai.com/v1/responses", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("POST to api.openai.com failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Drain the body to trigger the metering reader EOF callback.
+	_, _ = io.ReadAll(resp.Body)
+
+	// RED assertion: until 88-05 wires the OnResponse handler, capturedSK is
+	// empty. When 88-05 lands, it must be "BUDGET#ai#gpt-5.5".
+	const wantSK = "BUDGET#ai#gpt-5.5"
+	if stub.capturedSK != wantSK {
+		t.Errorf("DynamoDB SK = %q, want %q (RED — requires plan 88-05 proxy.go handler)", stub.capturedSK, wantSK)
+	}
+}
+
+// TestTransparent_OpenAI is a RED test (Wave 0, plan 88-02).
+//
+// NOTE: Uses package httpproxy_test (external/black-box). The transparent
+// listener's plain-HTTP path (first byte != 0x16) is driven via an HTTP
+// proxy request so that relayWithInspection is NOT involved (that path is
+// TLS-only). The test therefore exercises the budget enforcement wiring at
+// the SetBudgetEnforcement level and asserts that the transparent listener
+// correctly records OpenAI spend via IncrementAISpend once 88-05 adds the
+// isOpenAI branch + meterOpenAIResponse to relayWithInspection.
+//
+// Until 88-05 lands the isOpenAI branch is absent in transparent.go:
+// relayWithInspection only meters Bedrock and Anthropic, so OpenAI traffic
+// passes through unmetered. The capturedSK stays empty → RED assertion.
+// When 88-05 wires in isOpenAI + meterOpenAIResponse this test will GREEN.
+func TestTransparent_OpenAI(t *testing.T) {
+	stub := &captureModelIDStub{}
+
+	// Start a mock api.openai.com upstream that returns the SSE body.
+	openAIServer := newOpenAIMockServer(t, openAISSEBody)
+	openAIAddr, _ := url.Parse(openAIServer.URL)
+	openAIHost := openAIAddr.Host
+
+	// Build a goproxy instance that redirects api.openai.com connections to
+	// the mock server. The transparent listener will use this proxy for
+	// plain-HTTP (CONNECT) connections.
+	innerProxy := httpproxy.NewProxy(nil, "sb-test")
+	innerProxy.Tr = &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, openAIHost)
+		},
+	}
+
+	// Create a listener on a random port.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	listenerAddr := ln.Addr().String()
+
+	tl := httpproxy.NewTransparentListener(ln, innerProxy, "sb-test")
+	// Wire budget enforcement: stub will capture DynamoDB SK when IncrementAISpend fires.
+	tl.SetBudgetEnforcement(stub, "km-budgets", nil, nil)
+
+	go func() { _ = tl.Serve() }()
+	t.Cleanup(func() { ln.Close() })
+
+	// Drive a plain-HTTP CONNECT request through the transparent listener.
+	// First byte is 'C' (0x43 from "CONNECT"), not 0x16 (TLS), so the
+	// listener routes it to goproxy (not handleTransparent).
+	// The proxy forwards the response from the mock api.openai.com server.
+	proxyURL, _ := url.Parse("http://" + listenerAddr)
+	client := &http.Client{
+		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
+	}
+
+	resp, err := client.Post("http://api.openai.com/v1/responses", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Logf("POST through transparent listener: %v (expected — blocked until 88-05)", err)
+	} else {
+		defer resp.Body.Close()
+		// Drain body to trigger any metering reader EOF.
+		_, _ = io.ReadAll(resp.Body)
+	}
+
+	// RED assertion: relayWithInspection (TLS path) does not yet have an
+	// isOpenAI branch — 88-05 must add it. For plain-HTTP path through goproxy,
+	// the OnResponse OpenAI handler is also absent until 88-05 updates proxy.go.
+	// In either path, capturedSK stays empty until 88-05 lands.
+	const wantSK = "BUDGET#ai#gpt-5.5"
+	if stub.capturedSK == wantSK {
+		// This would only happen after 88-05 wires the handler.
+		t.Logf("capturedSK = %q — transparent OpenAI metering is GREEN (88-05 has landed)", stub.capturedSK)
+	} else {
+		t.Errorf("DynamoDB SK = %q, want %q (RED — requires plan 88-05 transparent.go meterOpenAIResponse + relayWithInspection isOpenAI branch)", stub.capturedSK, wantSK)
 	}
 }
