@@ -2034,3 +2034,19 @@ Plans:
 - [ ] 87-05-PLAN.md — Wave 3: userdata.go range-loop refactor + blkid FS detection + golden test for legacy byte-identity (SNAP-05, SNAP-07; depends on 87-01, 87-04)
 - [ ] 87-06-PLAN.md — Wave 3: new Terraform module ec2spot/v1.1.0/ (additive copy) + sandbox template version bump (SNAP-06, SNAP-07; depends on 87-04; parallel with 87-05)
 - [ ] 87-07-PLAN.md — Wave 4: operator UAT (8 scenarios + SNAP-07 cross-check) + CLAUDE.md/OPERATOR-GUIDE.md docs + example profile (SNAP-07, SNAP-08; NOT autonomous — operator checkpoint; depends on 87-01..06)
+
+### Phase 88: Codex/OpenAI budget metering — http-proxy interceptor for api.openai.com + price table + IncrementAISpend wiring (mirrors Anthropic pipeline)
+
+**Goal:** http-proxy MITM sidecar meters OpenAI direct API (`api.openai.com`) traffic into the same `BUDGET#ai#{modelID}` DynamoDB rows as Bedrock + Anthropic, so Codex sandboxes accrue measurable AI spend and the existing IAM-revoke + proxy-403 enforcement paths fire on OpenAI rows without any enforcer code changes.
+**Requirements**: OAI-BUDGET-01, OAI-BUDGET-02, OAI-BUDGET-03, OAI-BUDGET-04, OAI-BUDGET-05, OAI-BUDGET-06, OAI-BUDGET-07, OAI-BUDGET-09
+**Depends on:** Phase 87
+**Plans:** 7 plans
+
+Plans:
+- [ ] 88-01-PLAN.md — Wave 0: openai_test.go RED scaffold (11 tests — 7 extractor + 1 rate-table + 2 cost + 1 blocked-response) [OAI-BUDGET-01..04]
+- [ ] 88-02-PLAN.md — Wave 0: http_proxy_test.go integration RED scaffold (3 tests — AIByModel + MITM end-to-end + transparent) [OAI-BUDGET-05, 06]
+- [ ] 88-03-PLAN.md — Wave 0: userdata_test.go L7 host gate RED scaffold (TestL7ProxyHostsWithCodex + Codex+Bedrock regression) [OAI-BUDGET-07]
+- [ ] 88-04-PLAN.md — Wave 1: openai.go production code + BedrockModelRate.CachedInputPricePer1KTokens extension; turns 88-01 GREEN [OAI-BUDGET-01..04] (depends on 88-01)
+- [ ] 88-05-PLAN.md — Wave 1: proxy.go third intercept block + transparent.go meterOpenAIResponse; turns 88-02 GREEN [OAI-BUDGET-05, 06] (depends on 88-02, 88-04)
+- [ ] 88-06-PLAN.md — Wave 1: userdata.go buildL7ProxyHosts Codex gate; turns 88-03 GREEN [OAI-BUDGET-07] (depends on 88-03)
+- [ ] 88-07-PLAN.md — Wave 2: make sidecars + km init --sidecars + live UAT (4 scenarios) + CLAUDE.md docs [OAI-BUDGET-09] (NOT autonomous — operator checkpoint; depends on 88-04, 88-05, 88-06)
