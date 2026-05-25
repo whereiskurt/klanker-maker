@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 88-04-PLAN.md
-last_updated: "2026-05-25T22:31:04.313Z"
+stopped_at: Completed 88-05-PLAN.md
+last_updated: "2026-05-25T22:34:06.074Z"
 last_activity: 2026-05-25
 progress:
   total_phases: 104
   completed_phases: 91
   total_plans: 445
-  completed_plans: 397
+  completed_plans: 398
   percent: 88
 ---
 
@@ -427,6 +427,7 @@ Progress: [█████████░] 88%
 | Phase 88 P06 | 81 | 1 tasks | 1 files |
 | Phase 88 P02 | 222s | 3 tasks | 1 files |
 | Phase 88 P04 | 7min | 2 tasks | 3 files |
+| Phase 88 P05 | 639 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1234,6 +1235,8 @@ Recent decisions affecting current work:
 - [Phase 88]: All 3 RED tests placed in http_proxy_test.go (not a new file); captureModelIDStub reused from anthropic_test.go; TestTransparent_OpenAI uses black-box external package pattern
 - [Phase 88]: Extend aws.BedrockModelRate with CachedInputPricePer1KTokens instead of parallel struct — uniform type across providers, Anthropic uses 0.1x multiplier, OpenAI uses explicit field
 - [Phase 88]: openaiHostRegex placed in openai.go for grep-ability; scanner buffer bumped to 10MB for large Responses API events
+- [Phase 88]: Added plain-HTTP bypass for OpenAI in proxy.go general handler (mirrors GitHub filter pattern) so budget-metered api.openai.com requests bypass allowlist check
+- [Phase 88]: TestTransparent_OpenAI redesigned to use innerProxy WITH WithBudgetEnforcement — goproxy plain-HTTP path exercises the same OpenAI OnResponse metering handler
 
 ### Roadmap Evolution
 
@@ -1347,6 +1350,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-25T22:31:04.305Z
-Stopped at: Completed 88-04-PLAN.md
+Last session: 2026-05-25T22:34:06.066Z
+Stopped at: Completed 88-05-PLAN.md
 Resume file: None
