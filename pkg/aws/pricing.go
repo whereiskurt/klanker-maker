@@ -26,10 +26,19 @@ type PricingAPI interface {
 }
 
 // BedrockModelRate holds the token pricing for a single Bedrock model.
+// The struct name is a legacy artifact — it is now used for Anthropic direct-API
+// and OpenAI rates as well. Rename deferred to a future cleanup phase.
 type BedrockModelRate struct {
 	ModelID                 string
 	InputPricePer1KTokens   float64 // USD per 1,000 input tokens
 	OutputPricePer1KTokens  float64 // USD per 1,000 output tokens
+	// CachedInputPricePer1KTokens is the rate for cached input tokens (OpenAI prompt
+	// caching). Only OpenAI rates populate this field; Anthropic and Bedrock leave
+	// it zero and compute cache cost via the InputPricePer1KTokens × 0.1 multiplier
+	// in httpproxy.CalculateAnthropicCost. The asymmetric usage is intentional —
+	// OpenAI publishes explicit per-model cache rates while Anthropic uses a derived
+	// multiplier. See RESEARCH.md § Open Questions #1 for rationale.
+	CachedInputPricePer1KTokens float64
 }
 
 // staticBedrockRates is the fallback pricing table used when the AWS Pricing API
