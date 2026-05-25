@@ -126,3 +126,43 @@ func TestUserdata_KMAgentEnv_BothFiles(t *testing.T) {
 		t.Errorf("userdata missing bare `KM_AGENT=codex` line (/etc/km/notify.env form)")
 	}
 }
+
+// TestUserdata_CrossAgentHandoff_ChownsStderrBeforeDispatch is a regression guard
+// for the cross-agent switch bug: the handoff block runs as ROOT and appends
+// km-slack post diagnostics to $RUN_DIR/stderr.log (steps 1/3/5/6), leaving the
+// file root-owned 0644. The agent dispatch then runs as the *sandbox* user with a
+// 2>$RUN_DIR/stderr.log redirect that O_TRUNCs the file -- a write the sandbox user
+// cannot perform on a root-owned file. bash fails the redirect (Permission denied)
+// before exec, so codex/claude never runs (exit 1, empty output.json) and the
+// $NEW_SESSION-gated Slack reply + DDB write are silently skipped. Observed symptom:
+// the handoff posts the new top-level message but no agent reply ever lands, and
+// no DDB row with the new agent_type is written so follow-up replies also fail.
+//
+// The fix chowns stderr.log to the sandbox user AFTER the handoff block and BEFORE
+// the dispatch fork. Ordering is the whole point -- a chown after dispatch is useless.
+func TestUserdata_CrossAgentHandoff_ChownsStderrBeforeDispatch(t *testing.T) {
+	out := compileInboundUserData(t, minimalSlackInboundProfile(t, true))
+
+	const (
+		handoff  = `EFFECTIVE_AGENT="$NEW_AGENT"`               // handoff step 8 (root has written stderr.log by now)
+		chownFix = `chown sandbox:sandbox "$RUN_DIR/stderr.log"` // the fix
+		dispatch = `if [ "$EFFECTIVE_AGENT" = "codex" ]; then`   // first occurrence == sandbox-user dispatch fork
+	)
+
+	iHandoff := strings.Index(out, handoff)
+	iChown := strings.Index(out, chownFix)
+	iDispatch := strings.Index(out, dispatch)
+
+	if iHandoff < 0 {
+		t.Fatalf("poller missing cross-agent handoff marker %q", handoff)
+	}
+	if iChown < 0 {
+		t.Fatalf("poller missing stderr.log chown fix %q -- cross-agent switch dispatch will fail with Permission denied", chownFix)
+	}
+	if iDispatch < 0 {
+		t.Fatalf("poller missing dispatch fork marker %q", dispatch)
+	}
+	if !(iHandoff < iChown && iChown < iDispatch) {
+		t.Fatalf("stderr.log chown must come AFTER the handoff block and BEFORE the dispatch fork; got handoff=%d chown=%d dispatch=%d", iHandoff, iChown, iDispatch)
+	}
+}

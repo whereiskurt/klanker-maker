@@ -1700,6 +1700,23 @@ while true; do
     # Fall through to Plan 70-05's dispatch fork ...
   fi
 
+  # Phase 70 bugfix: hand $RUN_DIR/stderr.log to the sandbox user before dispatch.
+  # The cross-agent handoff block above runs as ROOT and appends km-slack post
+  # diagnostics to $RUN_DIR/stderr.log (steps 1/3/5/6), leaving the file root-owned
+  # 0644. The agent dispatch below runs as the *sandbox* user with a
+  # 2-greater-than $RUN_DIR/stderr.log redirect, which O_TRUNCs the file -- a
+  # write the sandbox user cannot perform on a root-owned file. bash fails the
+  # redirect (Permission denied) BEFORE exec of codex/claude: agent never runs (empty
+  # output.json), so the $NEW_SESSION-gated Slack reply + DDB write are silently
+  # skipped. Symptom: handoff posts the new top-level but no agent reply ever
+  # lands, and no row with the new agent_type is written so follow-up replies in
+  # the new thread also fail. Guarded on -e so it is a no-op on the non-switch
+  # path (where the sandbox user creates stderr.log fresh). The poller runs as
+  # root, so the chown always succeeds when the file exists.
+  if [ -e "$RUN_DIR/stderr.log" ]; then
+    chown sandbox:sandbox "$RUN_DIR/stderr.log" 2>/dev/null || true
+  fi
+
   # Export KM_SLACK_THREAD_TS so km-notify-hook passes --thread to km-slack post (Phase 67).
   export KM_SLACK_THREAD_TS="$THREAD_TS"
 
