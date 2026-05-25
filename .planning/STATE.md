@@ -1236,7 +1236,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-7 pending in `.planning/todos/pending/` (most recent: `km-doctor-stale-ssm-parameter-cleanup.md` — discovered 2026-05-02 during Phase 65 UAT, slated as Phase 64 CLEAN-6).
+8 pending in `.planning/todos/pending/` (most recent: `2026-05-25-km-init-self-heal-on-provider-checksum-lock-errors.md` — operator-workstation plugin-cache lock drift periodically blocks `km init`; self-heal by retrying init with `-upgrade`).
 
 ### Blockers/Concerns
 
