@@ -135,9 +135,25 @@ The path from `git clone` to first apply is shaped by:
 Three enforcement modes via `spec.network.enforcement`:
 - `proxy` (default) — iptables DNAT → userspace proxy sidecars
 - `ebpf` — cgroup BPF programs (connect4, sendmsg4, sockops, egress) with LPM trie allowlist
-- `both` — eBPF primary + proxy for L7 inspection (Bedrock metering, GitHub filtering)
+- `both` — eBPF primary + proxy for L7 inspection (Bedrock metering, Anthropic metering, OpenAI metering, GitHub filtering)
 
 eBPF SSL uprobes provide passive TLS plaintext capture for audit/observability alongside enforcement.
+
+## Budget Metering Coverage (Phase 88)
+
+http-proxy MITM intercepts and meters three AI provider endpoints into the same
+`BUDGET#ai#{modelID}` DynamoDB row shape:
+
+- **Bedrock InvokeModel** (`bedrock-runtime.*.amazonaws.com`) — Claude on Bedrock (Phase 6)
+- **Anthropic direct API** (`api.anthropic.com`) — Claude Code (Phase 20)
+- **OpenAI direct API** (`api.openai.com`) — Codex CLI + raw OpenAI SDK (Phase 88)
+
+L7 proxy hosts are gated per profile:
+- `spec.execution.useBedrock: true` → adds `.amazonaws.com,api.anthropic.com`
+- `spec.cli.agent: codex` → adds `api.openai.com` (Phase 88)
+
+Unknown model IDs in any provider write rows with `spentUSD=0` and log
+`event_type=*_unknown_model` so operators see the gap in `km status`.
 
 ## Learn Mode
 
