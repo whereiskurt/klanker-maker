@@ -164,6 +164,7 @@ spec:
       - list_files
 
   cli:
+    agent: claude
     ##Setting noBedrock calls the noBedrock() bash function call on loading and prevents accidentally Bedrock
     noBedrock: true
     claudeArgs:
