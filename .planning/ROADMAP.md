@@ -2050,3 +2050,13 @@ Plans:
 - [ ] 88-05-PLAN.md — Wave 1: proxy.go third intercept block + transparent.go meterOpenAIResponse; turns 88-02 GREEN [OAI-BUDGET-05, 06] (depends on 88-02, 88-04)
 - [ ] 88-06-PLAN.md — Wave 1: userdata.go buildL7ProxyHosts Codex gate; turns 88-03 GREEN [OAI-BUDGET-07] (depends on 88-03)
 - [ ] 88-07-PLAN.md — Wave 2: make sidecars + km init --sidecars + live UAT (4 scenarios) + CLAUDE.md docs [OAI-BUDGET-09] (NOT autonomous — operator checkpoint; depends on 88-04, 88-05, 88-06)
+
+### Phase 89: SOPS secret injection for sandboxes
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 88
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 89 to break down)
