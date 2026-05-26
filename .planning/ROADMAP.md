@@ -2040,7 +2040,7 @@ Plans:
 **Goal:** http-proxy MITM sidecar meters OpenAI direct API (`api.openai.com`) traffic into the same `BUDGET#ai#{modelID}` DynamoDB rows as Bedrock + Anthropic, so Codex sandboxes accrue measurable AI spend and the existing IAM-revoke + proxy-403 enforcement paths fire on OpenAI rows without any enforcer code changes.
 **Requirements**: OAI-BUDGET-01, OAI-BUDGET-02, OAI-BUDGET-03, OAI-BUDGET-04, OAI-BUDGET-05, OAI-BUDGET-06, OAI-BUDGET-07, OAI-BUDGET-09
 **Depends on:** Phase 87
-**Plans:** 6/7 plans executed
+**Plans:** 7/7 plans complete
 
 Plans:
 - [ ] 88-01-PLAN.md — Wave 0: openai_test.go RED scaffold (11 tests — 7 extractor + 1 rate-table + 2 cost + 1 blocked-response) [OAI-BUDGET-01..04]
