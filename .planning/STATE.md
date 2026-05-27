@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 89-01-PLAN.md
-last_updated: "2026-05-27T20:44:05.702Z"
+stopped_at: Completed 89-02-PLAN.md (Terraform module surface for SOPS)
+last_updated: "2026-05-27T20:44:30.099Z"
 last_activity: 2026-05-27
 progress:
   total_phases: 105
   completed_phases: 92
   total_plans: 452
-  completed_plans: 400
+  completed_plans: 401
   percent: 88
 ---
 
@@ -430,6 +430,7 @@ Progress: [█████████░] 88%
 | Phase 88 P05 | 639 | 2 tasks | 3 files |
 | Phase 88 P07 | operator-led | 3 tasks | 2 files |
 | Phase 89 P01 | 197s | 2 tasks | 6 files |
+| Phase 89 P02 | 217 | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -1244,6 +1245,8 @@ Recent decisions affecting current work:
 - [Phase 89]: SecretsSpec as pointer on Spec (nil=absent) for backwards compat with pre-89 profiles
 - [Phase 89]: ValidateSemantic checks .enc.yaml suffix only; ValidateSopsBundleFile layered by callers for file existence + sops: block
 - [Phase 89]: Fixture generated via real sops v3.11.0 + age v1.3.1 (not synthetic fallback); downstream 89-05 can use age key for offline decrypt round-trip
+- [Phase 89]: No required_providers blocks in any module HCL — root.hcl is the single provider source (project_terragrunt_providers_in_root)
+- [Phase 89]: ec2spot IAM policies use kms:ResourceAliases condition instead of key ARN — sandbox compile does not need key ARN at template time
 
 ### Roadmap Evolution
 
@@ -1358,6 +1361,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-27T20:44:05.694Z
-Stopped at: Completed 89-01-PLAN.md
+Last session: 2026-05-27T20:44:30.090Z
+Stopped at: Completed 89-02-PLAN.md (Terraform module surface for SOPS)
 Resume file: None
