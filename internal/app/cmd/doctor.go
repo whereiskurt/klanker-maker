@@ -278,6 +278,9 @@ type DoctorDeps struct {
 	// SESRulesClient is the SES classic v1 client for the receipt-rule orphan check (Phase 84).
 	// Nil causes the check to be skipped.
 	SESRulesClient SESReceiptRuleAPI
+	// SecretsKeyClient backs the Phase 89 shared-secrets KMS key check.
+	// Nil causes checkSharedSecretsKey to return CheckSkipped (per WARNING 5).
+	SecretsKeyClient KMSAliasLister
 	// StateLockS3Client + StateLockDDBClient back the Phase 84.1 GAP-8
 	// state-digest drift check. Read-only; never writes to either service.
 	// Either nil causes the check to be skipped.
@@ -2717,6 +2720,15 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return checkSESRules(ctx, sesRulesClient, localPrefix)
 	})
 
+	// Shared secrets KMS key check (Phase 89, SOPS-18-DOCTOR-CHECK).
+	// SecretsKeyClient is nil when awsCfg is unavailable (initRealDeps returns early),
+	// causing the check to return CheckSkipped — locked by TestCheckSharedSecretsKey_NilClientIsSkipped.
+	secretsKeyClient := deps.SecretsKeyClient
+	secretsLocalPrefix := cfg.GetResourcePrefix()
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		return checkSharedSecretsKey(ctx, secretsKeyClient, secretsLocalPrefix)
+	})
+
 	// Phase 85 — replace the Phase 84.1 read-only check with the sweeper.
 	// The sweeper subsumes the old check: paginated Scan + parallel HEAD scan,
 	// SandboxLister cross-reference age guard, optional BatchWriteItem cleanup
@@ -3100,6 +3112,10 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 	deps.LambdaCleanup = lambda.NewFromConfig(awsCfg)
 	deps.SESClient = sesv2.NewFromConfig(awsCfg)
 	deps.SESRulesClient = ses.NewFromConfig(awsCfg)
+	// Phase 89 — shared secrets KMS key health check (SOPS-18-DOCTOR-CHECK).
+	// Constructed only when awsCfg is available (this function returns early when
+	// credentials are unavailable, leaving SecretsKeyClient nil → CheckSkipped).
+	deps.SecretsKeyClient = kms.NewFromConfig(awsCfg)
 	// Phase 84.1 GAP-8: state-lock digest drift check. Distinct fields from
 	// deps.S3Client (S3HeadBucketAPI — no GetObject) and deps.DynamoClient
 	// (DynamoDescribeAPI — no Scan) so the existing narrow-interface
@@ -3548,6 +3564,92 @@ func checkSESRules(ctx context.Context, client SESReceiptRuleAPI, localPrefix st
 		Name:    name,
 		Status:  CheckOK,
 		Message: fmt.Sprintf("SES rules healthy (%d rules for prefix %q)", ownCount, localPrefix),
+	}
+}
+
+// checkSharedSecretsKey lists KMS aliases and verifies that the per-install
+// sandbox-secrets alias (`alias/{localPrefix}-sandbox-secrets`) exists.
+//
+// It follows the orphan-WARN shape of checkSESRules verbatim with KMS
+// substituted for SES (Phase 89, SOPS-18-DOCTOR-CHECK).
+//
+// Returns:
+//   - CheckSkipped — client is nil (no AWS client, per WARNING 5)
+//   - CheckError   — ListAliases API call failed
+//   - CheckWarn    — own alias missing (most-actionable; returned when ownFound=false
+//     regardless of whether sibling aliases are present)
+//   - CheckWarn    — own alias present but sibling aliases exist (expected on
+//     multi-install accounts; message makes this clear)
+//   - CheckOK      — own alias present and no sibling sandbox-secrets aliases
+const checkNameSharedSecretsKey = "Shared secrets KMS key"
+
+func checkSharedSecretsKey(ctx context.Context, client KMSAliasLister, localPrefix string) CheckResult {
+	const name = checkNameSharedSecretsKey
+	const suffix = "-sandbox-secrets"
+
+	if client == nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "skipped (no AWS client)",
+		}
+	}
+
+	expectAlias := fmt.Sprintf("alias/%s%s", localPrefix, suffix)
+
+	var ownFound bool
+	var orphans []string
+	var marker *string
+
+	for {
+		out, err := client.ListAliases(ctx, &kms.ListAliasesInput{Marker: marker})
+		if err != nil {
+			return CheckResult{
+				Name:    name,
+				Status:  CheckError,
+				Message: fmt.Sprintf("ListAliases: %v", err),
+			}
+		}
+		for _, a := range out.Aliases {
+			n := awssdk.ToString(a.AliasName)
+			if !strings.HasSuffix(n, suffix) {
+				continue
+			}
+			if n == expectAlias {
+				ownFound = true
+			} else {
+				orphans = append(orphans, n)
+			}
+		}
+		if !out.Truncated {
+			break
+		}
+		marker = out.NextMarker
+	}
+
+	// Missing-own takes precedence over orphan list — most actionable warning.
+	if !ownFound {
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("alias %s not found", expectAlias),
+			Remediation: "Run `km bootstrap --shared-secrets-key`",
+		}
+	}
+
+	if len(orphans) > 0 {
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("orphan secrets KMS aliases: %s", strings.Join(orphans, ", ")),
+			Remediation: "Other installs' aliases — expected when sibling install present",
+		}
+	}
+
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("alias %s healthy", expectAlias),
 	}
 }
 
