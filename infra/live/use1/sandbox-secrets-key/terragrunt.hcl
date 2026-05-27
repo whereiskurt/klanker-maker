@@ -28,8 +28,9 @@ inputs = {
   register_secrets_key = tobool(get_env("KM_REGISTER_SECRETS_KEY", "true"))
 
   tags = {
-    "km:owner"     = "foundation"
-    "km:phase"     = "89"
-    "km:component" = "sandbox-secrets-key"
+    "km:owner"          = "foundation"
+    "km:phase"          = "89"
+    "km:component"      = "sandbox-secrets-key"
+    "km:resource_prefix" = local.resource_prefix
   }
 }

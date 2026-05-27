@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,8 @@ import (
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
+	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
 	organizationstypes "github.com/aws/aws-sdk-go-v2/service/organizations/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -275,6 +278,14 @@ func runUninit(cfg *config.Config, awsProfile, region string, force bool, verbos
 		// If tfErr != nil, orgsClient stays nil; RunUninitWithDeps will warn and skip.
 	}
 
+	// Phase 89: KMS cleanup — delete own-prefix sandbox-secrets alias + schedule-delete key.
+	// Runs BEFORE module destroy (reverse-bootstrap order: secrets-key → ses → foundation).
+	// Non-fatal: log + continue; sibling-install protection is inside deleteOwnSecretsKMSAlias.
+	kmsClient := kms.NewFromConfig(awsCfg)
+	if err := deleteOwnSecretsKMSAlias(ctx, kmsClient, cfg.GetResourcePrefix()); err != nil {
+		log.Warn().Err(err).Msg("delete own sandbox-secrets KMS alias")
+	}
+
 	return RunUninitWithDeps(cfg, runner, lister, ecrDeleter, region, UninitOpts{
 		Force:      force,
 		IncludeSCP: includeSCP,
@@ -508,4 +519,137 @@ func isBackendDriftError(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "Backend configuration block has changed") ||
 		strings.Contains(msg, "Backend initialization required")
+}
+
+// =============================================================================
+// Phase 89: KMS sandbox-secrets cleanup for km uninit
+// =============================================================================
+
+// KMSAliasDeleter abstracts the KMS operations needed by uninit to clean up the
+// per-install sandbox-secrets KMS alias and key. The real *kms.Client satisfies
+// this interface in production; tests inject a mock.
+type KMSAliasDeleter interface {
+	ListAliases(ctx context.Context, params *kms.ListAliasesInput, optFns ...func(*kms.Options)) (*kms.ListAliasesOutput, error)
+	DescribeKey(ctx context.Context, params *kms.DescribeKeyInput, optFns ...func(*kms.Options)) (*kms.DescribeKeyOutput, error)
+	ListKeys(ctx context.Context, params *kms.ListKeysInput, optFns ...func(*kms.Options)) (*kms.ListKeysOutput, error)
+	ListResourceTags(ctx context.Context, params *kms.ListResourceTagsInput, optFns ...func(*kms.Options)) (*kms.ListResourceTagsOutput, error)
+	DeleteAlias(ctx context.Context, params *kms.DeleteAliasInput, optFns ...func(*kms.Options)) (*kms.DeleteAliasOutput, error)
+	ScheduleKeyDeletion(ctx context.Context, params *kms.ScheduleKeyDeletionInput, optFns ...func(*kms.Options)) (*kms.ScheduleKeyDeletionOutput, error)
+}
+
+// deleteOwnSecretsKMSAlias deletes the per-install sandbox-secrets KMS alias and
+// schedules the underlying key for deletion with a 7-day pending window.
+//
+// Key discovery is two-stage per Option (a) revision (BLOCKER 2):
+//  1. Primary: DescribeKey("alias/{prefix}-sandbox-secrets") — one AWS round trip.
+//  2. Fallback (NotFoundException): paginate ListKeys + ListResourceTags looking for
+//     a key tagged with km:component=sandbox-secrets-key + km:resource_prefix={prefix}.
+//     This recovers from partial-destroy where the alias was deleted but the key leaked.
+//
+// The pending window is 7 days (not the module's 30-day default) because uninit
+// implies intentional teardown. Sibling-install aliases/keys are NEVER touched —
+// key discovery is scoped to the exact alias name "alias/{prefix}-sandbox-secrets".
+func deleteOwnSecretsKMSAlias(ctx context.Context, client KMSAliasDeleter, resourcePrefix string) error {
+	wantAlias := fmt.Sprintf("alias/%s-sandbox-secrets", resourcePrefix)
+
+	// Stage 1: alias→key via DescribeKey (one round trip; happy path).
+	var keyID string
+	aliasExists := false
+	descOut, descErr := client.DescribeKey(ctx, &kms.DescribeKeyInput{
+		KeyId: awssdk.String(wantAlias),
+	})
+	if descErr == nil && descOut != nil && descOut.KeyMetadata != nil {
+		keyID = awssdk.ToString(descOut.KeyMetadata.KeyId)
+		aliasExists = true
+	} else {
+		// Check if the error is the expected NotFoundException; treat other errors as fatal.
+		var nfe *kmstypes.NotFoundException
+		if descErr != nil && !errors.As(descErr, &nfe) {
+			return fmt.Errorf("describe key by alias %s: %w", wantAlias, descErr)
+		}
+		// Stage 2 (fallback): orphan-key recovery via tag-based scan.
+		recoveredID, err := scanOrphanedSecretsKey(ctx, client, resourcePrefix)
+		if err != nil {
+			return fmt.Errorf("scan for orphaned sandbox-secrets key: %w", err)
+		}
+		if recoveredID == "" {
+			log.Info().Str("resource_prefix", resourcePrefix).Msg("no own sandbox-secrets alias or orphaned key — skipping KMS cleanup")
+			return nil
+		}
+		keyID = recoveredID
+		log.Warn().Str("resource_prefix", resourcePrefix).Str("key_id", keyID).Msg("recovered orphaned sandbox-secrets key via tag-based scan (alias was missing)")
+	}
+
+	// Delete the alias (only if it exists), then schedule the key for deletion.
+	if aliasExists {
+		if _, err := client.DeleteAlias(ctx, &kms.DeleteAliasInput{
+			AliasName: awssdk.String(wantAlias),
+		}); err != nil {
+			return fmt.Errorf("delete alias %s: %w", wantAlias, err)
+		}
+	}
+	pendingDays := int32(7)
+	if _, err := client.ScheduleKeyDeletion(ctx, &kms.ScheduleKeyDeletionInput{
+		KeyId:               awssdk.String(keyID),
+		PendingWindowInDays: &pendingDays,
+	}); err != nil {
+		return fmt.Errorf("schedule key deletion %s: %w", keyID, err)
+	}
+	log.Info().Str("alias", wantAlias).Str("key_id", keyID).Int32("pending_days", pendingDays).Msg("scheduled sandbox-secrets KMS key deletion")
+	return nil
+}
+
+// scanOrphanedSecretsKey paginates ListKeys + ListResourceTags looking for a key
+// tagged with km:component=sandbox-secrets-key AND km:resource_prefix=${resourcePrefix}.
+//
+// Returns "" if zero matches.
+// Returns the keyID if exactly one match.
+// Returns "" and logs a warn if multiple matches (operator must intervene manually).
+func scanOrphanedSecretsKey(ctx context.Context, client KMSAliasDeleter, resourcePrefix string) (string, error) {
+	var marker *string
+	var matches []string
+	for {
+		listOut, err := client.ListKeys(ctx, &kms.ListKeysInput{Marker: marker})
+		if err != nil {
+			return "", fmt.Errorf("list keys: %w", err)
+		}
+		for _, k := range listOut.Keys {
+			id := awssdk.ToString(k.KeyId)
+			tagsOut, err := client.ListResourceTags(ctx, &kms.ListResourceTagsInput{
+				KeyId: awssdk.String(id),
+			})
+			if err != nil {
+				// Skip keys we can't read tags on (might be AWS-managed or access-denied).
+				log.Debug().Err(err).Str("key_id", id).Msg("skip key — cannot read tags")
+				continue
+			}
+			hasComponent := false
+			hasPrefix := false
+			for _, t := range tagsOut.Tags {
+				switch awssdk.ToString(t.TagKey) {
+				case "km:component":
+					hasComponent = awssdk.ToString(t.TagValue) == "sandbox-secrets-key"
+				case "km:resource_prefix":
+					hasPrefix = awssdk.ToString(t.TagValue) == resourcePrefix
+				}
+			}
+			if hasComponent && hasPrefix {
+				matches = append(matches, id)
+			}
+		}
+		if !listOut.Truncated {
+			break
+		}
+		marker = listOut.NextMarker
+	}
+	switch len(matches) {
+	case 0:
+		return "", nil
+	case 1:
+		return matches[0], nil
+	default:
+		log.Warn().Strs("candidate_keys", matches).Str("resource_prefix", resourcePrefix).
+			Msg("multiple orphaned sandbox-secrets keys match — refusing to auto-delete; operator must manually intervene")
+		return "", nil
+	}
 }

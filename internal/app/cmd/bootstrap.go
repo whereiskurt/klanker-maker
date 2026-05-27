@@ -899,6 +899,235 @@ var (
 	RunBootstrapAllFunc = runBootstrapAll
 )
 
+// =============================================================================
+// Phase 89: km bootstrap --shared-secrets-key
+// =============================================================================
+
+// KMSAliasLister abstracts the KMS ListAliases operation needed for
+// shared-secrets-key auto-detection. The real *kms.Client satisfies this interface
+// in production; tests inject a mock.
+type KMSAliasLister interface {
+	ListAliases(ctx context.Context, params *kms.ListAliasesInput, optFns ...func(*kms.Options)) (*kms.ListAliasesOutput, error)
+}
+
+// RunBootstrapSharedSecretsKeyFunc is the test seam for runBootstrapSharedSecretsKey
+// (shared sandbox-secrets KMS key). Mirrors RunBootstrapSharedSESFunc.
+//
+// Phase 89 test seam — referenced by bootstrap_secrets_test.go.
+var RunBootstrapSharedSecretsKeyFunc func(ctx context.Context, cfg *config.Config, dryRun bool, w io.Writer, override KMSAliasLister) error = runBootstrapSharedSecretsKey
+
+// runBootstrapSharedSecretsKey provisions the per-install shared KMS key for SOPS
+// bundle decryption (Phase 89). Mirrors runBootstrapSharedSES.
+//
+// Fresh-install plan-output expectation:
+//
+//	`km bootstrap --shared-secrets-key --plan` on a fresh install MUST print ~3 creates
+//	(aws_kms_key, aws_kms_alias, account-id data lookup) and ZERO destroys/replaces.
+//	The Phase 84.2 destroy-class gate fires only on destroy/replace — creates do NOT trip it.
+//
+//	If the gate trips unexpectedly on a fresh install, operators should:
+//	1. Run `km bootstrap --shared-secrets-key --i-accept-destroys --plan` to surface the diff.
+//	2. Capture the diff in 89-07 UAT log for diagnosis.
+//	3. Re-run `km bootstrap --shared-secrets-key` (without --plan) to apply once reviewed.
+//
+//	`--i-accept-destroys` is owned by Phase 84.2 (not introduced here); this function
+//	inherits the existing behavior unchanged.
+func runBootstrapSharedSecretsKey(ctx context.Context, cfg *config.Config, dryRun bool, w io.Writer, kmsListerOverride KMSAliasLister) error {
+	loadedCfg, err := loadBootstrapConfig(cfg)
+	if err != nil {
+		return err
+	}
+
+	// Ensure all config env vars are exported so Terragrunt site.hcl picks them up.
+	ExportTerragruntEnvVars(loadedCfg)
+
+	// Phase 84.4.1: ensure region.hcl exists before any terragrunt invocation.
+	if region := loadedCfg.PrimaryRegion; region != "" {
+		regionLabel := compiler.RegionLabel(region)
+		regionDir := filepath.Join(findRepoRoot(), "infra", "live", regionLabel)
+		if err := ensureRegionHCL(regionDir, regionLabel, region); err != nil {
+			return fmt.Errorf("ensure region.hcl: %w", err)
+		}
+	}
+
+	aliasName := fmt.Sprintf("alias/%s-sandbox-secrets", loadedCfg.GetResourcePrefix())
+	secretsKeyDir := filepath.Join(findRepoRoot(), "infra", "live", "use1", "sandbox-secrets-key")
+
+	// Build the KMS client (or use the override in tests).
+	var lister KMSAliasLister
+	if kmsListerOverride != nil {
+		lister = kmsListerOverride
+	} else {
+		region := loadedCfg.PrimaryRegion
+		if region == "" {
+			region = "us-east-1"
+		}
+		awsCfg, awsErr := awspkg.LoadAWSConfigInRegion(ctx, "klanker-terraform", region)
+		if awsErr != nil {
+			// Dry-run tolerates missing AWS — operators without creds still get the
+			// deterministic "would apply" output. Mirrors runBootstrapSharedSES:503-510.
+			if dryRun {
+				fmt.Fprintf(w, "Dry run — would run: terragrunt apply %s\n", secretsKeyDir)
+				fmt.Fprintln(w, "  (KMS auto-detect skipped: AWS config unavailable; KM_REGISTER_SECRETS_KEY will be computed at apply time)")
+				return nil
+			}
+			return fmt.Errorf("load AWS config: %w", awsErr)
+		}
+		lister = kms.NewFromConfig(awsCfg)
+	}
+
+	registerKey, err := detectSharedSecretsKeyState(ctx, lister, aliasName)
+	if err != nil {
+		// Dry-run tolerates auto-detect failure — print the apply intent and exit.
+		if dryRun {
+			fmt.Fprintf(w, "Dry run — would run: terragrunt apply %s\n", secretsKeyDir)
+			fmt.Fprintf(w, "  (KMS auto-detect failed: %v; KM_REGISTER_SECRETS_KEY will be computed at apply time)\n", err)
+			return nil
+		}
+		return fmt.Errorf("KMS auto-detect: %w", err)
+	}
+
+	// Log step-level summary (OPER-01 pattern).
+	if registerKey {
+		fmt.Fprintln(w, "Shared sandbox-secrets KMS key: creating")
+	} else {
+		fmt.Fprintln(w, "Shared sandbox-secrets KMS key: reusing existing")
+	}
+
+	// Export the Phase-89-specific env var consumed by 89-02's terragrunt.hcl.
+	os.Setenv("KM_REGISTER_SECRETS_KEY", strconv.FormatBool(registerKey))
+
+	if dryRun {
+		fmt.Fprintf(w, "Dry run — would run: terragrunt apply %s\n", secretsKeyDir)
+		fmt.Fprintf(w, "  KM_REGISTER_SECRETS_KEY=%s\n", os.Getenv("KM_REGISTER_SECRETS_KEY"))
+		return nil
+	}
+
+	fmt.Fprintln(w, "Applying sandbox-secrets-key...")
+	if err := ApplyTerragruntFunc(ctx, secretsKeyDir); err != nil {
+		return fmt.Errorf("sandbox-secrets-key apply: %w", err)
+	}
+	fmt.Fprintln(w, "sandbox-secrets-key applied.")
+	return nil
+}
+
+// detectSharedSecretsKeyState checks whether the sandbox-secrets KMS alias already exists.
+// Returns true (registerKey=create) if the alias is NOT yet present.
+// Returns false (registerKey=skip, count=0 in terraform) if the alias is already present.
+func detectSharedSecretsKeyState(ctx context.Context, lister KMSAliasLister, expectAlias string) (registerKey bool, err error) {
+	var marker *string
+	for {
+		out, listErr := lister.ListAliases(ctx, &kms.ListAliasesInput{Marker: marker})
+		if listErr != nil {
+			return true, listErr
+		}
+		for _, a := range out.Aliases {
+			if aws.ToString(a.AliasName) == expectAlias {
+				// Alias exists → skip create (count=0 in terraform).
+				return false, nil
+			}
+		}
+		if !out.Truncated {
+			break
+		}
+		marker = out.NextMarker
+	}
+	// Alias not found → terraform should create it.
+	return true, nil
+}
+
+// runBootstrapSharedSecretsKeyPlan is the production entry point for
+// km bootstrap --shared-secrets-key --plan.
+func runBootstrapSharedSecretsKeyPlan(cfg *config.Config, acceptDestroys bool) error {
+	return runBootstrapSharedSecretsKeyPlanWithWriter(context.Background(), cfg, os.Stdout, nil, acceptDestroys)
+}
+
+// runBootstrapSharedSecretsKeyPlanWithWriter is the writer-aware test seam for
+// runBootstrapSharedSecretsKeyPlan. Mirrors runBootstrapSharedSESPlanWithWriter.
+//
+// Phase 89 test seam — referenced by bootstrap_secrets_test.go.
+func runBootstrapSharedSecretsKeyPlanWithWriter(ctx context.Context, cfg *config.Config, w io.Writer, kmsListerOverride KMSAliasLister, acceptDestroys bool) error {
+	loadedCfg, err := loadBootstrapConfig(cfg)
+	if err != nil {
+		return err
+	}
+
+	// 1. Export env vars.
+	ExportTerragruntEnvVars(loadedCfg)
+
+	// 2. KMS auto-detect — set KM_REGISTER_SECRETS_KEY before planning.
+	aliasName := fmt.Sprintf("alias/%s-sandbox-secrets", loadedCfg.GetResourcePrefix())
+
+	var lister KMSAliasLister
+	if kmsListerOverride != nil {
+		lister = kmsListerOverride
+	} else {
+		region := loadedCfg.PrimaryRegion
+		if region == "" {
+			region = "us-east-1"
+		}
+		awsCfg, awsErr := awspkg.LoadAWSConfigInRegion(ctx, "klanker-terraform", region)
+		if awsErr != nil {
+			return fmt.Errorf("load AWS config: %w", awsErr)
+		}
+		lister = kms.NewFromConfig(awsCfg)
+	}
+
+	registerKey, err := detectSharedSecretsKeyState(ctx, lister, aliasName)
+	if err != nil {
+		return fmt.Errorf("KMS auto-detect: %w", err)
+	}
+	os.Setenv("KM_REGISTER_SECRETS_KEY", strconv.FormatBool(registerKey))
+
+	// 3. Construct runner and resolve module dir.
+	repoRoot := findRepoRoot()
+	runner := terragrunt.NewRunner("klanker-terraform", repoRoot)
+	runner.Verbose = false
+
+	region := loadedCfg.PrimaryRegion
+	if region == "" {
+		region = "us-east-1"
+	}
+	regionLabel := compiler.RegionLabel(region)
+	regionDir := filepath.Join(repoRoot, "infra", "live", regionLabel)
+	if err := ensureRegionHCL(regionDir, regionLabel, region); err != nil {
+		return err
+	}
+	secretsKeyDir := filepath.Join(repoRoot, "infra", "live", "use1", "sandbox-secrets-key")
+
+	fmt.Fprintln(w, "km bootstrap --shared-secrets-key --plan")
+	fmt.Fprintln(w)
+
+	m := regionalModule{
+		name:    "sandbox-secrets-key",
+		dir:     secretsKeyDir,
+		envReqs: nil,
+	}
+
+	// 4. Run planModule.
+	report, planErr := planModule(ctx, runner, m, false)
+	if planErr != nil {
+		return fmt.Errorf("planning %s: %w", m.name, planErr)
+	}
+
+	// 5. Single-report gate — aws_kms_key is already in ProtectedTypes so the
+	// gate fires correctly on destroy/replace (no change to protected.go needed).
+	reports := []planreport.Report{report}
+	result := planreport.Evaluate(reports, acceptDestroys)
+	if result.Blocked {
+		printTripBlock("km bootstrap --shared-secrets-key --plan", result.Trips)
+		return fmt.Errorf("destroy-class gate tripped (re-run with --i-accept-destroys to override)")
+	}
+	if len(result.Trips) > 0 {
+		printTripBlock("km bootstrap --shared-secrets-key --plan", result.Trips)
+		fmt.Fprintln(w, "  (override active via --i-accept-destroys — exit 0; no apply will run)")
+	}
+
+	printAggregateSummary(reports)
+	fmt.Fprintln(w, "Run 'km bootstrap --shared-secrets-key' (without --plan) to apply.")
+	return nil
+}
+
 // runBootstrapAll chains runBootstrap (foundation SCP + KMS + artifacts) then
 // runBootstrapSharedSES (shared SES rule set), in that order.
 //
@@ -929,6 +1158,17 @@ func runBootstrapAll(ctx context.Context, cfg *config.Config, dryRun, plan, acce
 	} else {
 		if err := RunBootstrapSharedSESFunc(ctx, cfg, dryRun, w, nil); err != nil {
 			return fmt.Errorf("runBootstrapSharedSES (subflow 2) failed: %w", err)
+		}
+	}
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "=== Bootstrap: shared sandbox-secrets KMS key ===")
+	if plan {
+		if err := runBootstrapSharedSecretsKeyPlanWithWriter(ctx, cfg, w, nil, acceptDestroys); err != nil {
+			return fmt.Errorf("runBootstrapSharedSecretsKey plan (subflow 3) failed: %w", err)
+		}
+	} else {
+		if err := RunBootstrapSharedSecretsKeyFunc(ctx, cfg, dryRun, w, nil); err != nil {
+			return fmt.Errorf("runBootstrapSharedSecretsKey (subflow 3) failed: %w", err)
 		}
 	}
 	return nil
@@ -1104,6 +1344,7 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 	var showPrereqs bool
 	var showSCP bool
 	var sharedSES bool
+	var sharedSecretsKey bool
 	var plan bool
 	var acceptDestroys bool
 	var all bool
@@ -1123,7 +1364,12 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 			if all && sharedSES {
 				return fmt.Errorf("--all and --shared-ses are mutually exclusive; --all runs both subflows in order")
 			}
+			// Phase 89: --all and --shared-secrets-key are mutually exclusive.
+			if all && sharedSecretsKey {
+				return fmt.Errorf("--all and --shared-secrets-key are mutually exclusive; --all runs all subflows in order")
+			}
 			// Phase 84.3: --all chains both subflows (foundation then shared SES).
+			// Phase 89: --all also chains the shared-secrets-key subflow.
 			if all {
 				return RunBootstrapAllFunc(cmd.Context(), cfg, dryRun, plan, acceptDestroys, cmd.OutOrStdout())
 			}
@@ -1134,6 +1380,13 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 			}
 			if sharedSES {
 				return RunBootstrapSharedSESFunc(cmd.Context(), cfg, dryRun, cmd.OutOrStdout(), nil)
+			}
+			// Phase 89: --shared-secrets-key flag routing (mirrors --shared-ses).
+			if sharedSecretsKey && plan {
+				return runBootstrapSharedSecretsKeyPlan(cfg, acceptDestroys)
+			}
+			if sharedSecretsKey {
+				return RunBootstrapSharedSecretsKeyFunc(cmd.Context(), cfg, dryRun, cmd.OutOrStdout(), nil)
 			}
 			return RunBootstrapFunc(cmd.Context(), cfg, dryRun, cmd.OutOrStdout())
 		},
@@ -1147,6 +1400,8 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 		"Print the km-sandbox-containment SCP policy JSON and the km-org-admin role/trust policy")
 	cmd.Flags().BoolVar(&sharedSES, "shared-ses", false,
 		"Provision the account-shared SES rule set + domain identity (Phase 84); run before km init on a fresh account")
+	cmd.Flags().BoolVar(&sharedSecretsKey, "shared-secrets-key", false,
+		"Provision the per-install shared sandbox-secrets KMS key for SOPS bundle decryption (Phase 89); idempotent; required before profiles can use spec.secrets.sopsFile. May be combined with --shared-ses (each calls its own subflow in order: ses then secrets-key).")
 	cmd.Flags().BoolVar(&plan, "plan", false,
 		"Run terragrunt plan for bootstrap modules with destroy-class safety gate; never applies (Phase 84.2)")
 	cmd.Flags().BoolVar(&acceptDestroys, "i-accept-destroys", false,
@@ -1155,7 +1410,7 @@ func NewBootstrapCmdWithWriter(cfg *config.Config, w io.Writer) *cobra.Command {
 		panic(fmt.Sprintf("MarkHidden i-accept-destroys on bootstrap: %v", err))
 	}
 	cmd.Flags().BoolVar(&all, "all", false,
-		"Chain bootstrap subflows in order: SCP/KMS/artifacts (foundation) then shared SES rule set (Phase 84.3)")
+		"Chain bootstrap subflows in order: foundation → shared SES rule set → shared sandbox-secrets KMS key (Phase 84.3/89)")
 
 	return cmd
 }
@@ -1810,3 +2065,7 @@ func ensureArtifactsBucket(ctx context.Context, cfg *config.Config, w io.Writer)
 	fmt.Fprintf(w, "S3 bucket %s created with versioning enabled.\n", bucketName)
 	return nil
 }
+
+
+// Ensure kms/kmstypes are used (compile guard for Phase 89-04 stubs).
+var _ = kmstypes.AliasListEntry{}
