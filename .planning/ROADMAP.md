@@ -2066,3 +2066,14 @@ Plans:
 - [ ] 89-05-PLAN.md — Wave 1: compiler — userdata sops fetch/decrypt/env-exposure/fail-abort block + create.go bundle upload + destroy.go bundle cleanup [SOPS-11, SOPS-12, SOPS-13, SOPS-14, SOPS-15, SOPS-16] (depends on 89-01)
 - [ ] 89-06-PLAN.md — Wave 2: checkSharedSecretsKey doctor check + operator IAM no-op verify + docs/sandbox-secrets.md + CLAUDE.md entry [SOPS-08, SOPS-18, SOPS-22] (depends on 89-02, 89-04)
 - [ ] 89-07-PLAN.md — Wave 3: live UAT — Codex sandbox with sops-injected OPENAI_API_KEY accrues BUDGET#ai#gpt-* in DDB; mirrors Phase 88 plan 07 [SOPS-23] (NOT autonomous — operator checkpoint; depends on 89-03, 89-04, 89-05, 89-06)
+
+### Phase 90: km init self-healing provider locks via reconfigure-upgrade per module
+
+**Goal:** `km init` (apply loop + `--plan` path) runs `terragrunt init -reconfigure -upgrade` per regional module so stale `.terraform.lock.hcl` files from an upgraded old install (observed on km 0.2.x) are moved forward to root.hcl's exact pins (aws 6.46.0, tls 4.3.0) automatically — no manual `init -upgrade` sweep. Destroy paths (uninit, cluster) and bootstrap foundation apply stay on plain `Reconfigure`.
+**Requirements**: TBD
+**Depends on:** Phase 89
+**Design:** docs/superpowers/specs/2026-05-27-km-init-self-healing-locks-design.md
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 90 to break down)
