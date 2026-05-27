@@ -424,6 +424,44 @@ plan-checker traceability.
 
 *Last updated: 2026-05-17 — Phase 84.3 synthetic IDs added; all 4 gap-closure requirements marked Complete*
 
+## Phase 89 — Synthetic IDs (phase-local)
+
+These IDs are phase-local and synthetic — they derive from the Phase 89 design
+(CONTEXT.md decisions + RESEARCH.md proposed mint) for the SOPS secret injection
+feature. Phase 89 has no formal v1/v2 requirement IDs in ROADMAP.md (entry was
+"TBD"); these IDs are recorded here for plan-checker traceability following the
+Phase 84.2/84.3 pattern.
+
+| ID | Description | Status |
+|----|-------------|--------|
+| SOPS-01-SCHEMA | `spec.secrets.sopsFile` parses, defaults empty; `SecretsSpec` struct added to `Spec` in `pkg/profile/types.go` | Planned |
+| SOPS-02-VALIDATION | `km validate` rejects missing `.enc.yaml` suffix and requires `sops:` metadata block; runs offline (no KMS calls) | Planned |
+| SOPS-03-KMS-MODULE | `infra/modules/sandbox-secrets-key/v1.0.0/` (aws_kms_key + alias + key policy + prevent_destroy + enable_key_rotation); `terraform validate` passes | Planned |
+| SOPS-04-MODULE-WIRING | `infra/live/use1/sandbox-secrets-key/terragrunt.hcl` mirrors ses-shared-rule-set; `terragrunt plan` clean | Planned |
+| SOPS-05-BOOTSTRAP-FLAG | `km bootstrap --shared-secrets-key` flag mirrors `--shared-ses`; new `runBootstrapSharedSecretsKey` function with test seam | Planned |
+| SOPS-06-BOOTSTRAP-PLAN | `--shared-secrets-key --plan` evaluates Phase 84.2 destroy-class gate (`aws_kms_key` already in ProtectedTypes) | Planned |
+| SOPS-07-BOOTSTRAP-ALL-CHAIN | `km bootstrap --all` chains foundation → shared-ses → shared-secrets-key; mutex with `--shared-secrets-key` | Planned |
+| SOPS-08-IAM-OPERATOR | No-op verify — operator IAM already grants `kms:*` (km-operator-policy/v1.0.0/main.tf:484) | Planned |
+| SOPS-09-IAM-SANDBOX | `infra/modules/ec2spot/v1.2.0/main.tf` emits `kms:Decrypt` with `kms:ResourceAliases` condition + S3 GetObject scoped to own sandbox bundle | Planned |
+| SOPS-10-SCHEMA-EXPORT | JSON Schema (`pkg/profile/schemas/sandbox_profile.schema.json`) gains `spec.secrets` object schema with `sopsFile` string property | Planned |
+| SOPS-11-COMPILER-UPLOAD | `create.go` uploads bundle bytes to `s3://${prefix}-artifacts-*/sandboxes/<id>/secrets.enc.yaml` in pre-terragrunt-apply step | Planned |
+| SOPS-12-USERDATA-FETCH | userdata template emits `aws s3 cp` of sops binary + bundle iff `SopsBundlePresent`; gated block after section 5 sidecar download | Planned |
+| SOPS-13-USERDATA-DECRYPT | Decrypt uses `sops decrypt --output-type dotenv > /etc/sandbox-secrets.env`; ownership root:root mode 0400 | Planned |
+| SOPS-14-USERDATA-ENV-EXPOSURE | `/etc/profile.d/zz-sandbox-secrets.sh` uses `set -a` / `. file` / `set +a` to export dotenv keys to login shells | Planned |
+| SOPS-15-BOOT-FAIL-ABORT | Decrypt failure path emits `exit 1` in user-data so sandbox enters failed state (hard-abort, not fail-open) | Planned |
+| SOPS-16-DESTROY-CLEANUP | `destroy.go` deletes bundle S3 object (non-fatal on missing — idempotent; S3 lifecycle is belt-and-suspenders) | Planned |
+| SOPS-17-S3-LIFECYCLE | `infra/modules/s3-artifacts-lifecycle/v1.1.0/main.tf` adds 7-day expiration rule for `sandboxes/` prefix | Planned |
+| SOPS-18-DOCTOR-CHECK | `checkSharedSecretsKey` returns OK / WARN(missing) / WARN(orphans); mirrors `checkSESRules` orphan-WARN | Planned |
+| SOPS-19-CONFIGURE-GITIGNORE | `km configure` idempotently appends `/secrets/*` + `!/secrets/*.enc.yaml` to `.gitignore` | Planned |
+| SOPS-20-SIDECARS-SOPS-DEPLOY | `km init --sidecars` downloads sops v3.13.1 linux/amd64 and uploads to `s3://${bucket}/binaries/sops` | Planned |
+| SOPS-21-UNINIT-CLEANUP | `km uninit` deletes own-prefix alias + schedule-deletes own key only; preserves sibling-install KMS resources | Planned |
+| SOPS-22-DOCS | `docs/sandbox-secrets.md` operator guide + CLAUDE.md "Where to look" entry + OPERATOR-GUIDE.md section | Planned |
+| SOPS-23-UAT-ACCEPTANCE | Live: Codex sandbox with `spec.secrets.sopsFile: ./secrets/codex.enc.yaml` accrues `BUDGET#ai#gpt-*` via sops-injected `OPENAI_API_KEY` (no operator post-create wiring) | Planned |
+
+---
+
+*Last updated: 2026-05-26 — Phase 89 synthetic IDs added for plan-checker traceability (23 IDs covering schema, KMS module, bootstrap CLI, compiler/userdata, lifecycle, doctor, sidecar deploy, docs, UAT)*
+
 ---
 *Requirements defined: 2026-03-21*
 *Last updated: 2026-03-21 — PROV-09, PROV-10 added; ECS moved from Out of Scope to v1; k8s added to v2; Docker/local remains out of scope*

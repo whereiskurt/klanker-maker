@@ -2053,10 +2053,16 @@ Plans:
 
 ### Phase 89: SOPS secret injection for sandboxes
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Declarative SOPS-encrypted secrets bundle attached to a profile (`spec.secrets.sopsFile: ./secrets/*.enc.yaml`); sandbox decrypts at boot using a shared per-install KMS key (provisioned by `km bootstrap --shared-secrets-key`) and exposes secret values as env vars via `/etc/profile.d/zz-sandbox-secrets.sh`. Acceptance: a Codex sandbox declares `spec.secrets.sopsFile: ./secrets/codex.enc.yaml`, boots, and Phase 88's OpenAI meter writes `BUDGET#ai#gpt-*` rows in DynamoDB without operator post-create wiring.
+**Requirements**: SOPS-01-SCHEMA, SOPS-02-VALIDATION, SOPS-03-KMS-MODULE, SOPS-04-MODULE-WIRING, SOPS-05-BOOTSTRAP-FLAG, SOPS-06-BOOTSTRAP-PLAN, SOPS-07-BOOTSTRAP-ALL-CHAIN, SOPS-08-IAM-OPERATOR, SOPS-09-IAM-SANDBOX, SOPS-10-SCHEMA-EXPORT, SOPS-11-COMPILER-UPLOAD, SOPS-12-USERDATA-FETCH, SOPS-13-USERDATA-DECRYPT, SOPS-14-USERDATA-ENV-EXPOSURE, SOPS-15-BOOT-FAIL-ABORT, SOPS-16-DESTROY-CLEANUP, SOPS-17-S3-LIFECYCLE, SOPS-18-DOCTOR-CHECK, SOPS-19-CONFIGURE-GITIGNORE, SOPS-20-SIDECARS-SOPS-DEPLOY, SOPS-21-UNINIT-CLEANUP, SOPS-22-DOCS, SOPS-23-UAT-ACCEPTANCE
 **Depends on:** Phase 88
-**Plans:** 0 plans
+**Plans:** 7 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 89 to break down)
+- [ ] 89-01-PLAN.md — Wave 0: Profile schema + JSON Schema + offline semantic validator + age-encrypted fixture [SOPS-01, SOPS-02, SOPS-10]
+- [ ] 89-02-PLAN.md — Wave 0: sandbox-secrets-key KMS module v1.0.0 + terragrunt live wiring + s3-artifacts-lifecycle v1.1.0 + ec2spot v1.2.0 additive IAM [SOPS-03, SOPS-04, SOPS-09, SOPS-17]
+- [ ] 89-03-PLAN.md — Wave 0: km init --sidecars sops binary upload + km configure gitignore append [SOPS-19, SOPS-20]
+- [ ] 89-04-PLAN.md — Wave 1: bootstrap CLI — --shared-secrets-key flag + runBootstrapSharedSecretsKey + plan flow + --all chain + mutex + km uninit cleanup [SOPS-05, SOPS-06, SOPS-07, SOPS-21] (depends on 89-02)
+- [ ] 89-05-PLAN.md — Wave 1: compiler — userdata sops fetch/decrypt/env-exposure/fail-abort block + create.go bundle upload + destroy.go bundle cleanup [SOPS-11, SOPS-12, SOPS-13, SOPS-14, SOPS-15, SOPS-16] (depends on 89-01)
+- [ ] 89-06-PLAN.md — Wave 2: checkSharedSecretsKey doctor check + operator IAM no-op verify + docs/sandbox-secrets.md + CLAUDE.md entry [SOPS-08, SOPS-18, SOPS-22] (depends on 89-02, 89-04)
+- [ ] 89-07-PLAN.md — Wave 3: live UAT — Codex sandbox with sops-injected OPENAI_API_KEY accrues BUDGET#ai#gpt-* in DDB; mirrors Phase 88 plan 07 [SOPS-23] (NOT autonomous — operator checkpoint; depends on 89-03, 89-04, 89-05, 89-06)
