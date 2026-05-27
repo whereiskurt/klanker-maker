@@ -1172,6 +1172,24 @@ AWS_PROFILE=<management-profile> aws organizations delete-policy \
 
 ---
 
+## SOPS secret injection
+
+Declarative secret injection into sandboxes via `spec.secrets.sopsFile`. Full
+runbook in [docs/sandbox-secrets.md](docs/sandbox-secrets.md). One-time setup:
+
+```bash
+km bootstrap --shared-secrets-key
+km init --sidecars       # if not already done since Phase 89 shipped
+km configure              # writes /secrets/* + !/secrets/*.enc.yaml to .gitignore
+```
+
+Then encrypt a bundle with `sops --kms alias/${resource_prefix}-sandbox-secrets`
+and reference it from a profile via `spec.secrets.sopsFile`.
+
+`km doctor` will report `✓ Shared secrets KMS key healthy` once the key is
+provisioned, and will WARN on orphan sibling aliases (expected when a sibling
+install is present on the same account).
+
 ## 9. additionalSnapshots — snapshot-backed EBS volumes
 
 `spec.runtime.additionalSnapshots` materialises fresh EBS volumes from existing snapshots at
