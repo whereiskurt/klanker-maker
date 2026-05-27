@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 89-02-PLAN.md (Terraform module surface for SOPS)
-last_updated: "2026-05-27T20:44:30.099Z"
+stopped_at: Completed 89-04-PLAN.md (bootstrap CLI + uninit cleanup for SOPS KMS key)
+last_updated: "2026-05-27T20:54:23.410Z"
 last_activity: 2026-05-27
 progress:
   total_phases: 105
   completed_phases: 92
   total_plans: 452
-  completed_plans: 401
+  completed_plans: 402
   percent: 88
 ---
 
@@ -431,6 +431,7 @@ Progress: [█████████░] 88%
 | Phase 88 P07 | operator-led | 3 tasks | 2 files |
 | Phase 89 P01 | 197s | 2 tasks | 6 files |
 | Phase 89 P02 | 217 | 3 tasks | 9 files |
+| Phase 89-sops-secret-injection-for-sandboxes P04 | 735s | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1247,6 +1248,7 @@ Recent decisions affecting current work:
 - [Phase 89]: Fixture generated via real sops v3.11.0 + age v1.3.1 (not synthetic fallback); downstream 89-05 can use age key for offline decrypt round-trip
 - [Phase 89]: No required_providers blocks in any module HCL — root.hcl is the single provider source (project_terragrunt_providers_in_root)
 - [Phase 89]: ec2spot IAM policies use kms:ResourceAliases condition instead of key ARN — sandbox compile does not need key ARN at template time
+- [Phase 89-sops-secret-injection-for-sandboxes]: KMSAliasDeleter defined in uninit.go (not bootstrap.go); Tasks 2+3 committed together due to test-package compile dependency; 7-day pending window for ScheduleKeyDeletion in uninit (vs 30-day module default); km:resource_prefix tag added to sandbox-secrets-key/terragrunt.hcl for orphan-recovery predicate
 
 ### Roadmap Evolution
 
@@ -1361,6 +1363,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-27T20:44:30.090Z
-Stopped at: Completed 89-02-PLAN.md (Terraform module surface for SOPS)
+Last session: 2026-05-27T20:54:23.401Z
+Stopped at: Completed 89-04-PLAN.md (bootstrap CLI + uninit cleanup for SOPS KMS key)
 Resume file: None
