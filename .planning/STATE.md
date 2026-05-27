@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 89-05-PLAN.md
-last_updated: "2026-05-27T20:56:30.168Z"
+stopped_at: Completed 89-06-PLAN.md
+last_updated: "2026-05-27T21:05:54.339Z"
 last_activity: 2026-05-27
 progress:
   total_phases: 105
   completed_phases: 92
   total_plans: 452
-  completed_plans: 404
+  completed_plans: 405
   percent: 88
 ---
 
@@ -434,6 +434,7 @@ Progress: [█████████░] 88%
 | Phase 89-sops-secret-injection-for-sandboxes P04 | 735s | 3 tasks | 4 files |
 | Phase 89 P03 | 833s | 2 tasks | 4 files |
 | Phase 89 P05 | 750s | 4 tasks | 9 files |
+| Phase 89 P06 | 5min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1256,6 +1257,9 @@ Recent decisions affecting current work:
 - [Phase 89]: klanker-terraform literal used directly in fetchAndUploadSops per project-wide convention (19 occurrences in init.go); no cfg.GetAWSProfile() method exists
 - [Phase 89]: Template version bump (ec2spot v1.1.0 → v1.2.0) lives in infra/templates/sandbox/terragrunt.hcl (copied at CreateSandboxDir), not Go source; compiler_secrets_test.go tests file directly
 - [Phase 89]: deleteSopsBundleNonFatal is intentionally void (no return value) — SOPS bundle cleanup must never block destroy; S3 lifecycle 7-day rule is belt-and-suspenders
+- [Phase 89]: KMSAliasLister reused from bootstrap.go (same package) — not redeclared in doctor.go
+- [Phase 89]: checkSharedSecretsKey: nil-client returns CheckSkipped; missing-own takes precedence over orphan list
+- [Phase 89]: SOPS-08-IAM-OPERATOR verified no-op: line 484 has exact kms:* broad grant in km-operator-policy; no code change needed
 
 ### Roadmap Evolution
 
@@ -1370,6 +1374,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-27T20:56:30.160Z
-Stopped at: Completed 89-05-PLAN.md
+Last session: 2026-05-27T21:05:54.330Z
+Stopped at: Completed 89-06-PLAN.md
 Resume file: None
