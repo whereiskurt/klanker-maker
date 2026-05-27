@@ -32,9 +32,8 @@ spec:
       SANDBOX_MODE: codex
       # Rust binary needs explicit CA cert path for MITM proxy TLS interception
       CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
-      # OPENAI_API_KEY must be injected post-provision or via OTP SSM mechanism.
-      # Do NOT hardcode a real key here — leave empty and inject at runtime.
-      OPENAI_API_KEY: ""
+      # OPENAI_API_KEY is injected at boot via the SOPS-encrypted bundle.
+      # See spec.secrets below — the declarative path replaces the old OTP/SSM workaround.
     rsyncPaths:
       - ".gitconfig"
       - ".codex"
@@ -136,3 +135,6 @@ spec:
       - read_file
       - write_file
       - list_files
+
+  secrets:
+    sopsFile: ./secrets/codex.enc.yaml
