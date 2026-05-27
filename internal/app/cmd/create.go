@@ -269,6 +269,45 @@ func NewCreateCmd(cfg *config.Config) *cobra.Command {
 	return cmd
 }
 
+// S3Putter is a minimal interface for S3 PutObject, used by uploadSopsBundleIfPresent.
+// Satisfied by *s3.Client (the real client) and by fake structs in tests.
+type S3Putter interface {
+	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+}
+
+// uploadSopsBundleIfPresent uploads the SOPS-encrypted bundle from the profile's
+// Spec.Secrets.SopsFile (resolved relative to profilePath) to S3 at:
+//
+//	s3://{artifactBucket}/sandboxes/{sandboxID}/secrets.enc.yaml
+//
+// It is a no-op when p is nil, Spec.Secrets is nil, or SopsFile is empty.
+// Pre-flight validates the bundle (profile.ValidateSopsBundleFile) before any S3 call.
+// Phase 89 SOPS-11-COMPILER-UPLOAD.
+func uploadSopsBundleIfPresent(ctx context.Context, s3c S3Putter, artifactBucket, sandboxID, profilePath string, p *profile.SandboxProfile) error {
+	if p == nil || p.Spec.Secrets == nil || p.Spec.Secrets.SopsFile == "" {
+		return nil
+	}
+	profileDir := filepath.Dir(profilePath)
+	bundlePath := filepath.Join(profileDir, p.Spec.Secrets.SopsFile)
+	if err := profile.ValidateSopsBundleFile(bundlePath); err != nil {
+		return fmt.Errorf("sops bundle pre-flight: %w", err)
+	}
+	bundleBytes, err := os.ReadFile(bundlePath)
+	if err != nil {
+		return fmt.Errorf("read sops bundle %s: %w", bundlePath, err)
+	}
+	if _, err := s3c.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(artifactBucket),
+		Key:         aws.String(fmt.Sprintf("sandboxes/%s/secrets.enc.yaml", sandboxID)),
+		Body:        bytes.NewReader(bundleBytes),
+		ContentType: aws.String("application/x-yaml"),
+	}); err != nil {
+		return fmt.Errorf("upload sops bundle: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "  ✓ SOPS bundle uploaded to s3://%s/sandboxes/%s/secrets.enc.yaml\n", artifactBucket, sandboxID)
+	return nil
+}
+
 // runCreate executes the full create workflow.
 func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock bool, awsProfile string, verbose bool, sandboxIDOverride string, aliasOverride string, substrateOverride string, ttlOverride string, idleOverride string, computeBudgetOverride float64, aiBudgetOverride float64, clonedFromOverride ...string) error {
 	createStart := time.Now()
@@ -690,6 +729,17 @@ func runCreate(cfg *config.Config, profilePath string, onDemand bool, noBedrock 
 					return fmt.Errorf("upload full user-data to S3: %w", putErr)
 				}
 				fmt.Fprintf(os.Stderr, "  ✓ Bootstrap script uploaded to S3 (%d bytes)\n", len(artifacts.FullUserData))
+			}
+		}
+
+		// Step 8.6: Upload SOPS-encrypted bundle to S3 (Phase 89 SOPS-11).
+		// Pre-flight validates the bundle before any AWS call; non-empty
+		// artifactsBucket is required for the upload to proceed.
+		if artifactsBucket != "" {
+			s3ClientSops := s3.NewFromConfig(awsCfg)
+			if sopsErr := uploadSopsBundleIfPresent(ctx, s3ClientSops, artifactsBucket, sandboxID, profilePath, resolvedProfile); sopsErr != nil {
+				_ = terragrunt.CleanupSandboxDir(sandboxDir)
+				return sopsErr
 			}
 		}
 
