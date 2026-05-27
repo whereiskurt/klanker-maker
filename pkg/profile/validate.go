@@ -3,6 +3,7 @@ package profile
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -410,6 +411,19 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 	// Phase 87 SNAP-02: Layer 1 semantic validation for additionalSnapshots.
 	errs = append(errs, validateAdditionalSnapshots(p)...)
 
+	// Phase 89 SOPS-02: spec.secrets.sopsFile must end with .enc.yaml (offline check).
+	// File existence and sops: block presence are layered on by callers
+	// (km validate / km create) via ValidateSopsBundleFile — ValidateSemantic
+	// itself does NOT touch the filesystem.
+	if p.Spec.Secrets != nil && p.Spec.Secrets.SopsFile != "" {
+		if !strings.HasSuffix(p.Spec.Secrets.SopsFile, ".enc.yaml") {
+			errs = append(errs, ValidationError{
+				Path:    "spec.secrets.sopsFile",
+				Message: fmt.Sprintf("sopsFile %q must end with .enc.yaml (SOPS-encrypted bundles must follow the .enc.yaml naming convention so they can be .gitignore'd)", p.Spec.Secrets.SopsFile),
+			})
+		}
+	}
+
 	return errs
 }
 
@@ -533,4 +547,29 @@ func parseDuration(s string) (time.Duration, error) {
 		return days * 24, nil
 	}
 	return time.ParseDuration(s)
+}
+
+// ValidateSopsBundleFile performs offline checks on a SOPS-encrypted YAML bundle:
+//   - the file exists and is readable
+//   - the file parses as valid YAML
+//   - the file contains a top-level "sops:" metadata block
+//
+// This function does NOT decrypt the bundle — no AWS / KMS access is performed.
+// It is called by km validate and km create to layer file-existence and sops: block
+// checks on top of the struct-only check in ValidateSemantic.
+//
+// Phase 89 SOPS-02.
+func ValidateSopsBundleFile(bundlePath string) error {
+	data, err := os.ReadFile(bundlePath)
+	if err != nil {
+		return fmt.Errorf("read sops bundle %s: %w", bundlePath, err)
+	}
+	var parsed map[string]any
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		return fmt.Errorf("parse sops bundle %s as YAML: %w", bundlePath, err)
+	}
+	if _, ok := parsed["sops"]; !ok {
+		return fmt.Errorf("sops bundle %s missing top-level 'sops:' metadata block (is the file encrypted with sops?)", bundlePath)
+	}
+	return nil
 }

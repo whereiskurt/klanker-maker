@@ -507,6 +507,17 @@
             }
           }
         },
+        "secrets": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Phase 89: optional SOPS-encrypted secret bundle to inject as environment variables at sandbox boot",
+          "properties": {
+            "sopsFile": {
+              "type": "string",
+              "description": "Path (relative to profile YAML) to a SOPS-encrypted YAML bundle (.enc.yaml). Top-level keys become env vars in /etc/sandbox-secrets.env at boot."
+            }
+          }
+        },
         "cli": {
           "type": "object",
           "additionalProperties": false,

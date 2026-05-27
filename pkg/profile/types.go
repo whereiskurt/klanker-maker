@@ -51,6 +51,10 @@ type Spec struct {
 	// CLI defines operator-side defaults for km shell / km agent commands.
 	// These don't affect sandbox provisioning — only CLI behavior when connecting.
 	CLI *CLISpec `yaml:"cli,omitempty"`
+	// Secrets defines an optional SOPS-encrypted bundle to inject as environment
+	// variables at sandbox boot. When nil (absent), no secret injection occurs —
+	// backwards compatible with all pre-Phase-89 profiles.
+	Secrets *SecretsSpec `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 }
 
 // OTPSpec defines one-time password secrets that are fetched from SSM at boot
@@ -372,6 +376,18 @@ type AgentSpec struct {
 	TaskTimeout string `yaml:"taskTimeout"`
 	// AllowedTools is the list of tool names the agent is permitted to use.
 	AllowedTools []string `yaml:"allowedTools,omitempty"`
+}
+
+// SecretsSpec defines SOPS-encrypted secret injection for sandboxes (Phase 89).
+// The bundle's top-level keys become environment variables in /etc/sandbox-secrets.env
+// at boot. Reserved keys "sops" and "_meta" are ignored.
+type SecretsSpec struct {
+	// SopsFile is a path (relative to the profile YAML location) to a
+	// SOPS-encrypted YAML bundle. The bundle's top-level keys become
+	// environment variables in /etc/sandbox-secrets.env at boot.
+	// Reserved keys "sops" and "_meta" are ignored (sops embeds metadata).
+	// Empty (the zero value) means no secret injection — backwards compatible.
+	SopsFile string `yaml:"sopsFile,omitempty" json:"sopsFile,omitempty"`
 }
 
 // CLISpec defines operator-side defaults for km shell / km agent commands.
