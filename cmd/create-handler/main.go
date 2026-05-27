@@ -32,6 +32,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/goccy/go-yaml"
 	"github.com/rs/zerolog/log"
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
@@ -169,6 +170,18 @@ func (h *CreateHandler) Handle(ctx context.Context, ebEvent events.CloudWatchEve
 	profileBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("read profile bytes: %w", err)
+	}
+
+	// Step 1b (Phase 89): if the profile declares spec.secrets.sopsFile, download
+	// the bundle from the remote-create prefix and rewrite the profile's sopsFile
+	// to an absolute /tmp path. The km subprocess then resolves it correctly and
+	// uploads to the sandbox's S3 destination via uploadSopsBundleIfPresent.
+	profileBytes, sopsBundlePath, err := patchProfileForSops(ctx, h.S3Client, event.ArtifactBucket, event.ArtifactPrefix, event.SandboxID, profileBytes)
+	if err != nil {
+		return fmt.Errorf("patch profile for sops: %w", err)
+	}
+	if sopsBundlePath != "" {
+		defer os.Remove(sopsBundlePath)
 	}
 
 	// Step 2: Write profile to /tmp/{sandbox-id}.yaml
@@ -406,6 +419,41 @@ func (h *CreateHandler) downloadToolchain(ctx context.Context, bucket string) er
 }
 
 // downloadS3File downloads an S3 object to a local file.
+// patchProfileForSops bridges the operator → Lambda → km subprocess gap for
+// Phase 89 SOPS bundles. When the profile declares spec.secrets.sopsFile (a
+// path relative to the profile YAML on the operator workstation), the Lambda
+// downloads the bundle from the remote-create S3 prefix and rewrites the
+// profile's sopsFile to an absolute /tmp path. The km subprocess then
+// resolves the path against the rewritten profile and uploads the bundle to
+// the sandbox's S3 destination via uploadSopsBundleIfPresent.
+//
+// No-op when the profile lacks Spec.Secrets or SopsFile is empty.
+// Returns the (possibly unchanged) profile bytes and the local bundle path
+// (empty when no bundle). Caller defers os.Remove(bundlePath) when non-empty.
+func patchProfileForSops(ctx context.Context, client S3GetAPI, bucket, prefix, sandboxID string, profileBytes []byte) ([]byte, string, error) {
+	p, err := profile.Parse(profileBytes)
+	if err != nil {
+		return nil, "", fmt.Errorf("parse profile: %w", err)
+	}
+	if p.Spec.Secrets == nil || p.Spec.Secrets.SopsFile == "" {
+		return profileBytes, "", nil
+	}
+
+	bundleKey := prefix + "/.km-secrets-bundle.enc.yaml"
+	bundlePath := filepath.Join("/tmp", sandboxID+"-secrets.enc.yaml")
+	if dlErr := downloadS3File(ctx, client, bucket, bundleKey, bundlePath); dlErr != nil {
+		return nil, "", fmt.Errorf("download sops bundle s3://%s/%s: %w", bucket, bundleKey, dlErr)
+	}
+
+	p.Spec.Secrets.SopsFile = bundlePath
+
+	newBytes, marshalErr := yaml.Marshal(p)
+	if marshalErr != nil {
+		return nil, bundlePath, fmt.Errorf("marshal patched profile: %w", marshalErr)
+	}
+	return newBytes, bundlePath, nil
+}
+
 func downloadS3File(ctx context.Context, client S3GetAPI, bucket, key, localPath string) error {
 	resp, err := client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),

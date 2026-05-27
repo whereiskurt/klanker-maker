@@ -2138,6 +2138,27 @@ func runCreateRemote(cfg *config.Config, profilePath string, onDemand bool, noBe
 		})
 	}
 
+	// Phase 89: include the SOPS bundle in remote-create artifacts so the
+	// create-handler Lambda can rewrite the profile to an absolute path before
+	// invoking km create (which then uploads to the sandbox's S3 destination).
+	// Pre-flight validates the bundle on the operator workstation so a bad
+	// bundle fails fast, before any S3 write or EventBridge dispatch.
+	if resolvedProfile.Spec.Secrets != nil && resolvedProfile.Spec.Secrets.SopsFile != "" {
+		bundlePath := filepath.Join(filepath.Dir(profilePath), resolvedProfile.Spec.Secrets.SopsFile)
+		if err := profile.ValidateSopsBundleFile(bundlePath); err != nil {
+			return "", fmt.Errorf("sops bundle pre-flight (remote): %w", err)
+		}
+		bundleBytes, readErr := os.ReadFile(bundlePath)
+		if readErr != nil {
+			return "", fmt.Errorf("read sops bundle %s: %w", bundlePath, readErr)
+		}
+		toUpload = append(toUpload, artifact{
+			key:     artifactPrefix + "/.km-secrets-bundle.enc.yaml",
+			content: string(bundleBytes),
+			mime:    "application/x-yaml",
+		})
+	}
+
 	fmt.Fprintf(os.Stderr, "  Uploading artifacts to s3://%s/%s/\n", artifactBucket, artifactPrefix)
 	for _, a := range toUpload {
 		_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{

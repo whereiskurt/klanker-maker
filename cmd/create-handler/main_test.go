@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -665,5 +666,142 @@ func TestCreateHandler_DDBWriteFailure_NonFatal(t *testing.T) {
 	// The handler must return the wrapped subprocess error, NOT the DDB error.
 	if !errors.Is(err, subprocErr) {
 		t.Errorf("expected wrapped subprocErr in return value, got: %v", err)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Phase 89 SOPS bundle bridge — patchProfileForSops
+// --------------------------------------------------------------------------
+
+// multiKeyS3 is an S3GetAPI mock that routes by S3 key, supporting both the
+// profile and the SOPS bundle in a single test.
+type multiKeyS3 struct {
+	bodies map[string]string
+	errs   map[string]error
+}
+
+func (m *multiKeyS3) GetObject(ctx context.Context, input *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	key := ""
+	if input.Key != nil {
+		key = *input.Key
+	}
+	if err, ok := m.errs[key]; ok && err != nil {
+		return nil, err
+	}
+	body, ok := m.bodies[key]
+	if !ok {
+		return nil, errors.New("not found: " + key)
+	}
+	return &s3.GetObjectOutput{Body: io.NopCloser(strings.NewReader(body))}, nil
+}
+
+func TestPatchProfileForSops_NoSecrets_NoOp(t *testing.T) {
+	profileYAML := `apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: nosec
+spec:
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  network:
+    enforcement: proxy
+`
+	mock := &multiKeyS3{bodies: map[string]string{}}
+	out, bundlePath, err := patchProfileForSops(context.Background(), mock, "bkt", "remote-create/sb-x", "sb-x", []byte(profileYAML))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bundlePath != "" {
+		t.Errorf("expected empty bundlePath when no secrets, got %q", bundlePath)
+	}
+	if string(out) != profileYAML {
+		t.Errorf("expected unchanged profile bytes when no secrets; got diff")
+	}
+}
+
+func TestPatchProfileForSops_WithSecrets_RewritesToAbsolutePath(t *testing.T) {
+	profileYAML := `apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: codex
+spec:
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  network:
+    enforcement: proxy
+  secrets:
+    sopsFile: ./secrets/codex.enc.yaml
+`
+	bundleContent := "OPENAI_API_KEY: ENC[AES256_GCM,data:fake]\nsops:\n  version: 3.11.0\n"
+	mock := &multiKeyS3{
+		bodies: map[string]string{
+			"remote-create/sb-xyz/.km-secrets-bundle.enc.yaml": bundleContent,
+		},
+	}
+
+	out, bundlePath, err := patchProfileForSops(context.Background(), mock, "bkt", "remote-create/sb-xyz", "sb-xyz", []byte(profileYAML))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer func() {
+		if bundlePath != "" {
+			_ = os.Remove(bundlePath)
+		}
+	}()
+
+	expectedBundle := "/tmp/sb-xyz-secrets.enc.yaml"
+	if bundlePath != expectedBundle {
+		t.Errorf("bundlePath = %q, want %q", bundlePath, expectedBundle)
+	}
+
+	// Bundle must exist on disk with the downloaded content.
+	got, readErr := os.ReadFile(bundlePath)
+	if readErr != nil {
+		t.Fatalf("bundle not written to %s: %v", bundlePath, readErr)
+	}
+	if string(got) != bundleContent {
+		t.Errorf("bundle content mismatch:\n got: %q\nwant: %q", got, bundleContent)
+	}
+
+	// Patched profile must reference the absolute path, not the relative one.
+	if !strings.Contains(string(out), expectedBundle) {
+		t.Errorf("patched profile missing absolute bundle path %q:\n%s", expectedBundle, out)
+	}
+	if strings.Contains(string(out), "./secrets/codex.enc.yaml") {
+		t.Errorf("patched profile still has original relative path:\n%s", out)
+	}
+}
+
+func TestPatchProfileForSops_DownloadError_Propagates(t *testing.T) {
+	profileYAML := `apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: codex
+spec:
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  network:
+    enforcement: proxy
+  secrets:
+    sopsFile: ./secrets/codex.enc.yaml
+`
+	mock := &multiKeyS3{
+		bodies: map[string]string{},
+		errs: map[string]error{
+			"remote-create/sb-err/.km-secrets-bundle.enc.yaml": errors.New("AccessDenied"),
+		},
+	}
+	_, _, err := patchProfileForSops(context.Background(), mock, "bkt", "remote-create/sb-err", "sb-err", []byte(profileYAML))
+	if err == nil {
+		t.Fatal("expected error when bundle download fails")
+	}
+	if !strings.Contains(err.Error(), "download sops bundle") {
+		t.Errorf("expected 'download sops bundle' in error, got: %v", err)
 	}
 }
