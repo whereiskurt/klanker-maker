@@ -989,6 +989,37 @@ aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sidecars/km" /usr/local/bin/km
 chmod +x /usr/local/bin/km
 echo "[km-bootstrap] km binary installed for eBPF enforcement"
 {{- end }}
+{{- if .SopsBundlePresent }}
+
+# ============================================================
+# 5.5. SOPS secret injection (Phase 89)
+# ============================================================
+echo "[km-bootstrap] Decrypting SOPS bundle..."
+aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/binaries/sops" /opt/km/bin/sops
+chmod +x /opt/km/bin/sops
+aws s3 cp "s3://${KM_ARTIFACTS_BUCKET}/sandboxes/{{ .SandboxID }}/secrets.enc.yaml" /etc/sandbox-secrets.enc.yaml
+chmod 0400 /etc/sandbox-secrets.enc.yaml
+# Decrypt to dotenv format; sops uses AWS SDK creds (instance profile) automatically.
+# --output-type dotenv emits KEY=VALUE lines (one per top-level YAML key).
+if ! /opt/km/bin/sops decrypt --output-type dotenv /etc/sandbox-secrets.enc.yaml > /etc/sandbox-secrets.env; then
+  echo "[km-bootstrap] FATAL: sops decrypt failed — aborting boot" >&2
+  exit 1
+fi
+chown root:root /etc/sandbox-secrets.env
+chmod 0400 /etc/sandbox-secrets.env
+# Expose key=value as exported env vars via /etc/profile.d/.
+cat > /etc/profile.d/zz-sandbox-secrets.sh << 'SOPSENV'
+# Phase 89: load decrypted secrets into login-shell env.
+# set -a/+a flips auto-export so dotenv KEY=VALUE lines become exported vars.
+if [ -r /etc/sandbox-secrets.env ]; then
+  set -a
+  . /etc/sandbox-secrets.env
+  set +a
+fi
+SOPSENV
+chmod 0644 /etc/profile.d/zz-sandbox-secrets.sh
+echo "[km-bootstrap] SOPS bundle decrypted to /etc/sandbox-secrets.env (root:root 0400)"
+{{- end }}
 
 # Ensure Claude Code native binary is installed.
 # On AMI-baked instances the platform binary may be missing. Re-run install.cjs
@@ -3640,6 +3671,11 @@ type userDataParams struct {
 	// multi-instance prefix overrides propagate to KM_SLACK_STREAM_TABLE consumers
 	// (Plan 68-09 hook script, Plan 68-10 km create env injection).
 	SlackStreamMessagesTableName string
+	// SopsBundlePresent gates the Phase 89 SOPS decrypt block (section 5.5).
+	// True iff resolvedProfile.Spec.Secrets != nil && resolvedProfile.Spec.Secrets.SopsFile != "".
+	// When false (the default, no profile change), the block is omitted entirely —
+	// existing sandbox userdata is byte-identical to pre-Phase-89 output.
+	SopsBundlePresent bool
 }
 
 // parseUserDataTemplate parses the userDataTemplate and returns the compiled template.
@@ -4111,6 +4147,10 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 
 	// Learn mode: enable --observe on eBPF enforcer for traffic recording.
 	params.LearnMode = p.Spec.Observability.LearnMode
+
+	// Phase 89: SOPS bundle present — gates section 5.5 template block.
+	// True iff profile declares spec.secrets.sopsFile (non-empty string).
+	params.SopsBundlePresent = p.Spec.Secrets != nil && p.Spec.Secrets.SopsFile != ""
 
 	// Phase 73: VS Code Remote-SSH access (default true).
 	// Only validate when network is non-nil (EC2 compile path). When network is nil
