@@ -1,10 +1,11 @@
 ---
 phase: 89
 slug: sops-secret-injection-for-sandboxes
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: approved
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-05-26
+approved: 2026-05-26
 ---
 
 # Phase 89 — Validation Strategy
@@ -114,4 +115,4 @@ Test scaffolds and fixtures that must exist before Wave 1 implementation tasks l
 - [ ] Feedback latency < 30s (quick command)
 - [ ] `nyquist_compliant: true` set in frontmatter after plan-checker pass
 
-**Approval:** pending
+**Approval:** approved 2026-05-26 (plan-checker iteration 2 PASS)
