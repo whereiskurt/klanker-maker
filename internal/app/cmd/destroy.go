@@ -39,6 +39,35 @@ import (
 // sandboxIDPattern matches valid sandbox IDs: {prefix}-{8hex}
 var sandboxIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]{0,11}-[a-f0-9]{8}$`)
 
+// S3Deleter is a minimal interface for S3 DeleteObject, used by deleteSopsBundleNonFatal.
+// Satisfied by *s3.Client (the real client) and by fake structs in tests.
+type S3Deleter interface {
+	DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+}
+
+// deleteSopsBundleNonFatal deletes the SOPS-encrypted bundle from S3:
+//
+//	s3://{artifactBucket}/sandboxes/{sandboxID}/secrets.enc.yaml
+//
+// This is intentionally non-fatal — S3 lifecycle (89-02, 7-day rule) is the
+// belt-and-suspenders. Logs a Warn on error, Info on success. Returns nothing.
+// Phase 89 SOPS-16-DESTROY-CLEANUP.
+func deleteSopsBundleNonFatal(ctx context.Context, s3c S3Deleter, artifactBucket, sandboxID string) {
+	if artifactBucket == "" || sandboxID == "" {
+		return
+	}
+	secretsKey := fmt.Sprintf("sandboxes/%s/secrets.enc.yaml", sandboxID)
+	if _, err := s3c.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(artifactBucket),
+		Key:    aws.String(secretsKey),
+	}); err != nil {
+		log.Warn().Err(err).Str("sandbox_id", sandboxID).Str("key", secretsKey).
+			Msg("delete sops bundle (non-fatal — S3 lifecycle will GC after 7 days)")
+	} else {
+		log.Info().Str("sandbox_id", sandboxID).Str("key", secretsKey).Msg("sops bundle deleted from S3")
+	}
+}
+
 // NewDestroyCmd creates the "km destroy" subcommand.
 // Usage: km destroy <sandbox-id> [--aws-profile <name>] [--yes] [--remote] [--verbose]
 //
@@ -536,6 +565,14 @@ locals {
 					Msg("S3 metadata delete (non-fatal, may not exist)")
 			}
 		}
+	}
+
+	// Step 12.1: Delete SOPS-encrypted bundle from S3 (Phase 89 SOPS-16).
+	// Non-fatal — S3 lifecycle rule (89-02, 7-day expiry on sandboxes/ prefix) is
+	// belt-and-suspenders. Always attempt regardless of whether SopsFile was set in
+	// the profile (the key simply won't exist and S3 DeleteObject is idempotent).
+	if artifactBucket != "" {
+		deleteSopsBundleNonFatal(ctx, s3Client, artifactBucket, sandboxID)
 	}
 
 	// Step 13: Export CloudWatch logs to S3 then delete the log group.
