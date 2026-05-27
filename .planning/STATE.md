@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 89-04-PLAN.md (bootstrap CLI + uninit cleanup for SOPS KMS key)
-last_updated: "2026-05-27T20:54:23.410Z"
+stopped_at: Completed Phase 89 Plan 03 (89-03-PLAN.md)
+last_updated: "2026-05-27T20:55:13.637Z"
 last_activity: 2026-05-27
 progress:
   total_phases: 105
   completed_phases: 92
   total_plans: 452
-  completed_plans: 402
+  completed_plans: 403
   percent: 88
 ---
 
@@ -432,6 +432,7 @@ Progress: [█████████░] 88%
 | Phase 89 P01 | 197s | 2 tasks | 6 files |
 | Phase 89 P02 | 217 | 3 tasks | 9 files |
 | Phase 89-sops-secret-injection-for-sandboxes P04 | 735s | 3 tasks | 4 files |
+| Phase 89 P03 | 833s | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1249,6 +1250,9 @@ Recent decisions affecting current work:
 - [Phase 89]: No required_providers blocks in any module HCL — root.hcl is the single provider source (project_terragrunt_providers_in_root)
 - [Phase 89]: ec2spot IAM policies use kms:ResourceAliases condition instead of key ARN — sandbox compile does not need key ARN at template time
 - [Phase 89-sops-secret-injection-for-sandboxes]: KMSAliasDeleter defined in uninit.go (not bootstrap.go); Tasks 2+3 committed together due to test-package compile dependency; 7-day pending window for ScheduleKeyDeletion in uninit (vs 30-day module default); km:resource_prefix tag added to sandbox-secrets-key/terragrunt.hcl for orphan-recovery predicate
+- [Phase 89]: fetchAndUploadSops uses exec.Command(curl,...) directly (not bash -c) so PATH shims work in tests
+- [Phase 89]: ensureSecretsGitignore uses line-anchored matching (TrimSpace+map) not strings.Contains to prevent false hits on partial-match gitignore lines
+- [Phase 89]: klanker-terraform literal used directly in fetchAndUploadSops per project-wide convention (19 occurrences in init.go); no cfg.GetAWSProfile() method exists
 
 ### Roadmap Evolution
 
@@ -1363,6 +1367,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-27T20:54:23.401Z
-Stopped at: Completed 89-04-PLAN.md (bootstrap CLI + uninit cleanup for SOPS KMS key)
+Last session: 2026-05-27T20:55:13.629Z
+Stopped at: Completed Phase 89 Plan 03 (89-03-PLAN.md)
 Resume file: None
