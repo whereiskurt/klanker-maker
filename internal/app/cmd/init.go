@@ -1870,10 +1870,60 @@ func buildAndUploadSidecars(repoRoot, bucket string) error {
 		fmt.Printf("  [warn] otelcol-contrib upload failed: %v\n", err)
 	}
 
+	// Fetch and upload sops binary for Phase 89 SOPS secret injection.
+	// S3 key binaries/sops is the contract consumed by 89-05's userdata block.
+	if err := fetchAndUploadSops(buildDir, bucket); err != nil {
+		return fmt.Errorf("fetchAndUploadSops: %w", err)
+	}
+
 	return nil
 }
 
 const otelcolContribVersion = "0.120.0"
+
+const sopsVersion = "3.13.1"
+
+// FetchAndUploadSops downloads sops v{sopsVersion} (cached in build/) and uploads
+// to s3://{bucket}/binaries/sops via aws-cli.
+//
+// AWS profile: the "klanker-terraform" literal is the project-wide convention
+// (init.go has ~17 occurrences as of 2026-05; there is no cfg.GetAWSProfile()
+// helper today). Future refactor: if a config-driven AWS profile method is
+// introduced, sweep all sidecar-upload helpers at once rather than one-off.
+//
+// Exported so it can be tested from the _test package (cmd_test).
+func FetchAndUploadSops(buildDir, bucket string) error {
+	return fetchAndUploadSops(buildDir, bucket)
+}
+
+// fetchAndUploadSops is the internal implementation — see FetchAndUploadSops.
+func fetchAndUploadSops(buildDir, bucket string) error {
+	binaryPath := filepath.Join(buildDir, "sops")
+	if _, err := os.Stat(binaryPath); err == nil {
+		fmt.Printf("  sops already in %s (skip download)\n", binaryPath)
+	} else {
+		url := fmt.Sprintf("https://github.com/getsops/sops/releases/download/v%s/sops-v%s.linux.amd64",
+			sopsVersion, sopsVersion)
+		fmt.Printf("  Downloading sops v%s...\n", sopsVersion)
+		dlCmd := exec.Command("curl", "-fsSL", url, "-o", binaryPath)
+		if out, err := dlCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("download sops: %s: %w", string(out), err)
+		}
+		if err := os.Chmod(binaryPath, 0o755); err != nil {
+			return fmt.Errorf("chmod sops: %w", err)
+		}
+	}
+	s3Key := "binaries/sops"
+	fmt.Printf("  Uploading sops to s3://%s/%s...\n", bucket, s3Key)
+	uploadCmd := exec.Command("aws", "s3", "cp", binaryPath,
+		fmt.Sprintf("s3://%s/%s", bucket, s3Key),
+		"--profile", "klanker-terraform")
+	if out, err := uploadCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("upload sops: %s: %w", string(out), err)
+	}
+	fmt.Printf("  Uploaded sops\n")
+	return nil
+}
 
 // fetchAndUploadOtelcolContrib downloads the otelcol-contrib binary from the
 // official GitHub releases and uploads it to s3://<bucket>/sidecars/otelcol-contrib.

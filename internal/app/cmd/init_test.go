@@ -988,3 +988,115 @@ func TestRunInitPlan_BuildsLambdaZips(t *testing.T) {
 		}
 	})
 }
+
+// TestFetchAndUploadSops exercises the fetchAndUploadSops helper using PATH
+// shims (executable shell scripts named aws/curl) so tests run without real
+// network access or AWS credentials.
+//
+// Pattern mirrors bootstrap_test.go makeFakeTerragruntForBootstrap.
+func TestFetchAndUploadSops(t *testing.T) {
+	t.Run("UsesCacheWhenPresent", func(t *testing.T) {
+		buildDir := t.TempDir()
+		shimDir := t.TempDir()
+
+		// Pre-create build/sops to simulate a cached binary.
+		binaryPath := filepath.Join(buildDir, "sops")
+		if err := os.WriteFile(binaryPath, []byte("fakesopsbinary"), 0o755); err != nil {
+			t.Fatalf("pre-create sops: %v", err)
+		}
+
+		// aws shim: records invocation args to a log file; exits 0.
+		logFile := filepath.Join(t.TempDir(), "aws-calls.log")
+		awsShim := "#!/bin/sh\necho \"$@\" >> \"" + logFile + "\"\n"
+		if err := os.WriteFile(filepath.Join(shimDir, "aws"), []byte(awsShim), 0o755); err != nil {
+			t.Fatalf("write aws shim: %v", err)
+		}
+		// curl shim: should NOT be called when cache is present.
+		curlShim := "#!/bin/sh\necho 'curl called unexpectedly' >&2\nexit 1\n"
+		if err := os.WriteFile(filepath.Join(shimDir, "curl"), []byte(curlShim), 0o755); err != nil {
+			t.Fatalf("write curl shim: %v", err)
+		}
+
+		t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		if err := cmd.FetchAndUploadSops(buildDir, "fake-bucket"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Verify aws was called exactly once with s3 cp and --profile klanker-terraform.
+		logContent, err := os.ReadFile(logFile)
+		if err != nil {
+			t.Fatalf("read aws log: %v", err)
+		}
+		calls := strings.TrimSpace(string(logContent))
+		if calls == "" {
+			t.Fatal("expected one aws s3 cp call but aws shim was not invoked")
+		}
+		lines := strings.Split(calls, "\n")
+		if len(lines) != 1 {
+			t.Errorf("expected exactly 1 aws invocation, got %d: %q", len(lines), calls)
+		}
+		if !strings.Contains(calls, "s3 cp") {
+			t.Errorf("expected aws s3 cp call, got: %q", calls)
+		}
+		if !strings.Contains(calls, "--profile klanker-terraform") {
+			t.Errorf("expected --profile klanker-terraform, got: %q", calls)
+		}
+	})
+
+	t.Run("DownloadFailureReturnsError", func(t *testing.T) {
+		buildDir := t.TempDir()
+		shimDir := t.TempDir()
+
+		// curl shim exits 1 to simulate download failure.
+		curlShim := "#!/bin/sh\necho 'download failed' >&2\nexit 1\n"
+		if err := os.WriteFile(filepath.Join(shimDir, "curl"), []byte(curlShim), 0o755); err != nil {
+			t.Fatalf("write curl shim: %v", err)
+		}
+		// aws shim: should NOT be called if curl fails.
+		logFile := filepath.Join(t.TempDir(), "aws-calls.log")
+		awsShim := "#!/bin/sh\necho \"$@\" >> \"" + logFile + "\"\n"
+		if err := os.WriteFile(filepath.Join(shimDir, "aws"), []byte(awsShim), 0o755); err != nil {
+			t.Fatalf("write aws shim: %v", err)
+		}
+
+		t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		err := cmd.FetchAndUploadSops(buildDir, "fake-bucket")
+		if err == nil {
+			t.Fatal("expected error from curl failure, got nil")
+		}
+
+		// aws should NOT have been called.
+		if _, statErr := os.Stat(logFile); statErr == nil {
+			logContent, _ := os.ReadFile(logFile)
+			if strings.TrimSpace(string(logContent)) != "" {
+				t.Errorf("aws was called after curl failure, expected no aws call: %q", string(logContent))
+			}
+		}
+	})
+
+	t.Run("UploadFailureReturnsError", func(t *testing.T) {
+		buildDir := t.TempDir()
+		shimDir := t.TempDir()
+
+		// Pre-stage build/sops so the download path is skipped.
+		binaryPath := filepath.Join(buildDir, "sops")
+		if err := os.WriteFile(binaryPath, []byte("fakesopsbinary"), 0o755); err != nil {
+			t.Fatalf("pre-create sops: %v", err)
+		}
+
+		// aws shim exits 1 to simulate upload failure.
+		awsShim := "#!/bin/sh\necho 'upload failed' >&2\nexit 1\n"
+		if err := os.WriteFile(filepath.Join(shimDir, "aws"), []byte(awsShim), 0o755); err != nil {
+			t.Fatalf("write aws shim: %v", err)
+		}
+
+		t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		err := cmd.FetchAndUploadSops(buildDir, "fake-bucket")
+		if err == nil {
+			t.Fatal("expected error from aws upload failure, got nil")
+		}
+	})
+}
