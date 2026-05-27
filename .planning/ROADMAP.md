@@ -2056,7 +2056,7 @@ Plans:
 **Goal:** Declarative SOPS-encrypted secrets bundle attached to a profile (`spec.secrets.sopsFile: ./secrets/*.enc.yaml`); sandbox decrypts at boot using a shared per-install KMS key (provisioned by `km bootstrap --shared-secrets-key`) and exposes secret values as env vars via `/etc/profile.d/zz-sandbox-secrets.sh`. Acceptance: a Codex sandbox declares `spec.secrets.sopsFile: ./secrets/codex.enc.yaml`, boots, and Phase 88's OpenAI meter writes `BUDGET#ai#gpt-*` rows in DynamoDB without operator post-create wiring.
 **Requirements**: SOPS-01-SCHEMA, SOPS-02-VALIDATION, SOPS-03-KMS-MODULE, SOPS-04-MODULE-WIRING, SOPS-05-BOOTSTRAP-FLAG, SOPS-06-BOOTSTRAP-PLAN, SOPS-07-BOOTSTRAP-ALL-CHAIN, SOPS-08-IAM-OPERATOR, SOPS-09-IAM-SANDBOX, SOPS-10-SCHEMA-EXPORT, SOPS-11-COMPILER-UPLOAD, SOPS-12-USERDATA-FETCH, SOPS-13-USERDATA-DECRYPT, SOPS-14-USERDATA-ENV-EXPOSURE, SOPS-15-BOOT-FAIL-ABORT, SOPS-16-DESTROY-CLEANUP, SOPS-17-S3-LIFECYCLE, SOPS-18-DOCTOR-CHECK, SOPS-19-CONFIGURE-GITIGNORE, SOPS-20-SIDECARS-SOPS-DEPLOY, SOPS-21-UNINIT-CLEANUP, SOPS-22-DOCS, SOPS-23-UAT-ACCEPTANCE
 **Depends on:** Phase 88
-**Plans:** 7 plans
+**Plans:** 1/7 plans executed
 
 Plans:
 - [ ] 89-01-PLAN.md — Wave 0: Profile schema + JSON Schema + offline semantic validator + age-encrypted fixture [SOPS-01, SOPS-02, SOPS-10]
