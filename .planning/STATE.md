@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed Phase 89 Plan 03 (89-03-PLAN.md)
-last_updated: "2026-05-27T20:55:13.637Z"
+stopped_at: Completed 89-05-PLAN.md
+last_updated: "2026-05-27T20:56:30.168Z"
 last_activity: 2026-05-27
 progress:
   total_phases: 105
   completed_phases: 92
   total_plans: 452
-  completed_plans: 403
+  completed_plans: 404
   percent: 88
 ---
 
@@ -433,6 +433,7 @@ Progress: [█████████░] 88%
 | Phase 89 P02 | 217 | 3 tasks | 9 files |
 | Phase 89-sops-secret-injection-for-sandboxes P04 | 735s | 3 tasks | 4 files |
 | Phase 89 P03 | 833s | 2 tasks | 4 files |
+| Phase 89 P05 | 750s | 4 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -1253,6 +1254,8 @@ Recent decisions affecting current work:
 - [Phase 89]: fetchAndUploadSops uses exec.Command(curl,...) directly (not bash -c) so PATH shims work in tests
 - [Phase 89]: ensureSecretsGitignore uses line-anchored matching (TrimSpace+map) not strings.Contains to prevent false hits on partial-match gitignore lines
 - [Phase 89]: klanker-terraform literal used directly in fetchAndUploadSops per project-wide convention (19 occurrences in init.go); no cfg.GetAWSProfile() method exists
+- [Phase 89]: Template version bump (ec2spot v1.1.0 → v1.2.0) lives in infra/templates/sandbox/terragrunt.hcl (copied at CreateSandboxDir), not Go source; compiler_secrets_test.go tests file directly
+- [Phase 89]: deleteSopsBundleNonFatal is intentionally void (no return value) — SOPS bundle cleanup must never block destroy; S3 lifecycle 7-day rule is belt-and-suspenders
 
 ### Roadmap Evolution
 
@@ -1367,6 +1370,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-27T20:55:13.629Z
-Stopped at: Completed Phase 89 Plan 03 (89-03-PLAN.md)
+Last session: 2026-05-27T20:56:30.160Z
+Stopped at: Completed 89-05-PLAN.md
 Resume file: None
