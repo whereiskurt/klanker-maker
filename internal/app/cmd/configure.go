@@ -713,10 +713,62 @@ func runConfigure(in io.Reader, out io.Writer, outputDir string, nonInteractive 
 
 	fmt.Fprintf(out, "Written: %s\n", outPath)
 
+	// Phase 89-03: idempotently add secrets gitignore lines so encrypted bundles
+	// are committed but plaintext workdir files never leak.
+	if err := ensureSecretsGitignore(outDir); err != nil {
+		return fmt.Errorf("ensureSecretsGitignore: %w", err)
+	}
+
 	// Phase 84.3: print the next-steps block to stdout so the operator sees
 	// the canonical bootstrap sequence immediately after configure completes.
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, nextSteps)
+	return nil
+}
+
+// EnsureSecretsGitignore is the exported entry point for ensureSecretsGitignore,
+// allowing _test package tests to call it directly.
+func EnsureSecretsGitignore(repoRoot string) error {
+	return ensureSecretsGitignore(repoRoot)
+}
+
+// ensureSecretsGitignore idempotently appends /secrets/* and !/secrets/*.enc.yaml
+// to .gitignore in repoRoot. Missing .gitignore is treated as empty (not an error).
+// A comment header is written on first append for operator readability.
+//
+// Line-anchored: we check each existing line for an exact match (after TrimSpace)
+// rather than a substring scan, so an unrelated line like `unrelated/secrets/*foo`
+// does not falsely satisfy the `/secrets/*` requirement.
+// (strings.Contains would have this pitfall — see TestEnsureSecretsGitignore_PartialMatchAvoidsFalseHit)
+func ensureSecretsGitignore(repoRoot string) error {
+	path := filepath.Join(repoRoot, ".gitignore")
+	existing, _ := os.ReadFile(path) // missing == empty == fine
+
+	needed := []string{"/secrets/*", "!/secrets/*.enc.yaml"}
+	presentLines := map[string]bool{}
+	for _, raw := range strings.Split(string(existing), "\n") {
+		line := strings.TrimSpace(raw)
+		presentLines[line] = true
+	}
+	var toAppend []string
+	for _, line := range needed {
+		if !presentLines[line] {
+			toAppend = append(toAppend, line)
+		}
+	}
+	if len(toAppend) == 0 {
+		return nil // idempotent — both lines already present
+	}
+	block := "\n# Phase 89: SOPS-encrypted secrets (km configure)\n" +
+		strings.Join(toAppend, "\n") + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(block); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
 	return nil
 }
 
