@@ -916,6 +916,26 @@ func (h *TTLHandler) handleDestroy(ctx context.Context, event TTLEvent) error {
 		}
 	}
 
+	// Step 7 (Phase 89 SOPS-16): delete the SOPS bundle from S3. The bundle is
+	// uploaded by km create via PutObject (outside terraform), so terraform
+	// destroy does not remove it. Local `km destroy` deletes it in destroy.go,
+	// but the remote/TTL path runs terraform destroy here — without this, the
+	// bundle is orphaned until the sandbox-secrets-7day lifecycle rule expires
+	// it. Best-effort + non-fatal; DeleteObject is idempotent on a missing key.
+	if h.S3Client != nil {
+		bundleKey := fmt.Sprintf("sandboxes/%s/secrets.enc.yaml", sandboxID)
+		if _, delErr := h.S3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket: awssdk.String(h.Bucket),
+			Key:    awssdk.String(bundleKey),
+		}); delErr != nil {
+			log.Warn().Err(delErr).Str("sandbox_id", sandboxID).
+				Msg("failed to delete SOPS bundle from S3 (non-fatal; lifecycle rule is the backstop)")
+		} else {
+			log.Info().Str("sandbox_id", sandboxID).Str("key", bundleKey).
+				Msg("deleted SOPS bundle from S3")
+		}
+	}
+
 	log.Info().Str("sandbox_id", sandboxID).Msg("TTL handler completed")
 	return nil
 }

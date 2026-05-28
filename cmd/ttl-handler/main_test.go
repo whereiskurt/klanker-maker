@@ -18,10 +18,11 @@ import (
 
 // mockS3GetPutAPI satisfies both S3GetAPI and S3PutAPI.
 type mockS3GetPutAPI struct {
-	getBody    string
-	getErr     error
-	putCalled  bool
-	putErr     error
+	getBody     string
+	getErr      error
+	putCalled   bool
+	putErr      error
+	deletedKeys []string
 }
 
 func (m *mockS3GetPutAPI) GetObject(ctx context.Context, input *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
@@ -39,6 +40,9 @@ func (m *mockS3GetPutAPI) PutObject(ctx context.Context, input *s3.PutObjectInpu
 }
 
 func (m *mockS3GetPutAPI) DeleteObject(ctx context.Context, input *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+	if input.Key != nil {
+		m.deletedKeys = append(m.deletedKeys, *input.Key)
+	}
 	return &s3.DeleteObjectOutput{}, nil
 }
 
@@ -265,6 +269,36 @@ func TestHandleTTLEvent_CallsTeardownFunc(t *testing.T) {
 	}
 	if calledWithID != "sb-aabbccdd" {
 		t.Errorf("expected TeardownFunc to be called with 'sb-aabbccdd', got: %q", calledWithID)
+	}
+}
+
+// TestHandleTTLEvent_DeletesSopsBundle: the remote/TTL destroy path must delete
+// the SOPS bundle from S3 (Phase 89 SOPS-16). terraform destroy doesn't remove
+// it (uploaded via PutObject outside terraform), so handleDestroy must.
+func TestHandleTTLEvent_DeletesSopsBundle(t *testing.T) {
+	mockS3 := &mockS3GetPutAPI{
+		getBody: profileNoArtifacts,
+	}
+	h := &TTLHandler{
+		S3Client:     mockS3,
+		SESClient:    &mockSESAPI{},
+		Scheduler:    &mockSchedulerAPI{},
+		Bucket:       "test-bucket",
+		Domain:       "sandboxes.klankermaker.ai",
+		TeardownFunc: func(ctx context.Context, sandboxID string) error { return nil },
+	}
+	if err := h.HandleTTLEvent(context.Background(), TTLEvent{SandboxID: "sb-aabbccdd"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "sandboxes/sb-aabbccdd/secrets.enc.yaml"
+	found := false
+	for _, k := range mockS3.deletedKeys {
+		if k == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected SOPS bundle %q to be deleted; deleted keys: %v", want, mockS3.deletedKeys)
 	}
 }
 
