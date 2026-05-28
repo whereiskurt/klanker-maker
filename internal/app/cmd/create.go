@@ -287,8 +287,13 @@ func uploadSopsBundleIfPresent(ctx context.Context, s3c S3Putter, artifactBucket
 	if p == nil || p.Spec.Secrets == nil || p.Spec.Secrets.SopsFile == "" {
 		return nil
 	}
-	profileDir := filepath.Dir(profilePath)
-	bundlePath := filepath.Join(profileDir, p.Spec.Secrets.SopsFile)
+	// Absolute paths are used by the create-handler Lambda after patchProfileForSops
+	// rewrites a relative operator-side path to /tmp/{sandbox-id}-secrets.enc.yaml.
+	// Without this guard, filepath.Join("/tmp", "/tmp/x") returns "/tmp/tmp/x".
+	bundlePath := p.Spec.Secrets.SopsFile
+	if !filepath.IsAbs(bundlePath) {
+		bundlePath = filepath.Join(filepath.Dir(profilePath), bundlePath)
+	}
 	if err := profile.ValidateSopsBundleFile(bundlePath); err != nil {
 		return fmt.Errorf("sops bundle pre-flight: %w", err)
 	}

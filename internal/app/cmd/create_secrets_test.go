@@ -179,3 +179,44 @@ func TestCreatePutSopsBundle_MissingFileReturnsError(t *testing.T) {
 		t.Errorf("expected zero PutObject calls when file is missing (validate should fire first); got %d", fake.callCount)
 	}
 }
+
+// TestCreatePutSopsBundle_AbsoluteSopsPath verifies that an absolute SopsFile
+// path is honored directly (not joined with profileDir). This is the path the
+// create-handler Lambda takes after patchProfileForSops rewrites a relative
+// operator-side path to /tmp/{sandbox-id}-secrets.enc.yaml. Without this
+// guard, filepath.Join("/tmp", "/tmp/x") returns "/tmp/tmp/x".
+func TestCreatePutSopsBundle_AbsoluteSopsPath(t *testing.T) {
+	fixturePath := filepath.Join(fixtureDir(t), "secrets-fixture.enc.yaml")
+	fixtureBytes, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	bundleAbsPath := filepath.Join(tmpDir, "abs-bundle.enc.yaml")
+	if writeErr := os.WriteFile(bundleAbsPath, fixtureBytes, 0o644); writeErr != nil {
+		t.Fatalf("write bundle: %v", writeErr)
+	}
+
+	// profilePath in a DIFFERENT directory — proves we don't join.
+	profileDir := t.TempDir()
+	profilePath := filepath.Join(profileDir, "profile.yaml")
+	p := &profile.SandboxProfile{
+		Spec: profile.Spec{
+			Secrets: &profile.SecretsSpec{
+				SopsFile: bundleAbsPath, // absolute
+			},
+		},
+	}
+
+	fake := &fakeS3Putter{}
+	if err := uploadSopsBundleIfPresent(context.Background(), fake, "bkt", "sb-abs", profilePath, p); err != nil {
+		t.Fatalf("uploadSopsBundleIfPresent (absolute) returned error: %v", err)
+	}
+	if fake.callCount != 1 {
+		t.Errorf("expected 1 PutObject call with absolute path; got %d", fake.callCount)
+	}
+	if !bytes.Equal(fake.lastBody, fixtureBytes) {
+		t.Error("body bytes do not match fixture when absolute path used")
+	}
+}
