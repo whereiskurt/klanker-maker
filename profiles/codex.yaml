@@ -9,6 +9,9 @@ metadata:
   prefix: codex
 
 spec:
+  cli:
+    agent: codex
+
   lifecycle:
     ttl: "4h"
     idleTimeout: "30m"
