@@ -1005,8 +1005,11 @@ if ! /opt/km/bin/sops decrypt --output-type dotenv /etc/sandbox-secrets.enc.yaml
   echo "[km-bootstrap] FATAL: sops decrypt failed — aborting boot" >&2
   exit 1
 fi
-chown root:root /etc/sandbox-secrets.env
-chmod 0400 /etc/sandbox-secrets.env
+# root owns; sandbox group reads. The sandbox user (whose login shell sources
+# this via profile.d) MUST be able to read it, but the km-sidecar user and
+# world must not. 0440 root:sandbox satisfies both.
+chown root:sandbox /etc/sandbox-secrets.env
+chmod 0440 /etc/sandbox-secrets.env
 # Expose key=value as exported env vars via /etc/profile.d/.
 cat > /etc/profile.d/zz-sandbox-secrets.sh << 'SOPSENV'
 # Phase 89: load decrypted secrets into login-shell env.
@@ -1018,7 +1021,7 @@ if [ -r /etc/sandbox-secrets.env ]; then
 fi
 SOPSENV
 chmod 0644 /etc/profile.d/zz-sandbox-secrets.sh
-echo "[km-bootstrap] SOPS bundle decrypted to /etc/sandbox-secrets.env (root:root 0400)"
+echo "[km-bootstrap] SOPS bundle decrypted to /etc/sandbox-secrets.env (root:sandbox 0440)"
 {{- end }}
 
 # Ensure Claude Code native binary is installed.

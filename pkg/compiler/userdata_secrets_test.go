@@ -59,6 +59,10 @@ func TestUserdataSopsBlock_PresentWhenTrue(t *testing.T) {
 		`/etc/profile.d/zz-sandbox-secrets.sh`,
 		// WARNING 7: encrypted-file chmod must be present (not just decrypted-file chmod)
 		`chmod 0400 /etc/sandbox-secrets.enc.yaml`,
+		// Decrypted file must be readable by the sandbox user (group), NOT root-only —
+		// otherwise the profile.d login-shell sourcing silently fails the [ -r ] guard.
+		`chown root:sandbox /etc/sandbox-secrets.env`,
+		`chmod 0440 /etc/sandbox-secrets.env`,
 	}
 	for _, want := range required {
 		if !strings.Contains(out, want) {
