@@ -166,6 +166,21 @@ func TestAgentShellCommands_PrepDirIsFirstAndChownsAsSandbox(t *testing.T) {
 	}
 }
 
+// TestAgentShellCommands_SourcesSandboxSecrets verifies the agent run script
+// sources /etc/profile.d/zz-sandbox-secrets.sh (Phase 89). Without this, an
+// injected OPENAI_API_KEY (or any SOPS secret) never reaches the agent's env —
+// codex/claude would run unauthenticated. The agent script runs in a non-login
+// shell, so it must source the secrets profile.d explicitly.
+func TestAgentShellCommands_SourcesSandboxSecrets(t *testing.T) {
+	for _, agentType := range []string{"claude", "codex"} {
+		cmds, _ := cmd.BuildAgentShellCommands("p", cmd.AgentRunOptions{AgentType: agentType})
+		joined := strings.Join(cmds, "\n")
+		if !strings.Contains(joined, "source /etc/profile.d/zz-sandbox-secrets.sh") {
+			t.Errorf("[%s] agent script must source /etc/profile.d/zz-sandbox-secrets.sh so SOPS-injected secrets reach the agent env", agentType)
+		}
+	}
+}
+
 // TestAgentNonInteractive_CommandConstruction verifies the shell command contains
 // the correct Claude flags and base64-encoded prompt.
 func TestAgentNonInteractive_CommandConstruction(t *testing.T) {
