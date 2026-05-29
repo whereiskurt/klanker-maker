@@ -1597,20 +1597,20 @@ Plans:
 
 ### Phase 72: slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator
 
-**Goal:** Support installing klankermaker into a corporate Slack workspace with auto-detected native vs Slack Connect invites, a `km slack manifest` generator that ships the new `users:read.email` scope as code, and profile-driven per-sandbox auto-invite (`spec.cli.notifySlackInviteEmails`).
+**Goal:** Support installing klankermaker into a corporate Slack workspace with auto-detected native vs Slack Connect invites, a `km slack manifest` generator that ships the new `users:read.email` scope as code, and profile-driven per-sandbox auto-invite (`spec.cli.notifySlackInviteEmails`) of ADDITIONAL collaborators beyond the always-invited primary operator. The primary operator invite (and the additional-folks loop) route through the auto-detect orchestrator; `spec.cli.useSlackConnect` (default true) gates the Connect fallback for the additional-folks list only.
 **Requirements**: VALIDATION-Layer-1..8 (CONTEXT.md decisions D1–D12; mapped to the 8 layers in 72-VALIDATION.md)
 **Depends on:** Phase 71
-**Plans:** 10 plans
+**Plans:** 1/10 plans executed
 
 Plans:
 - [ ] 72-00-PLAN.md — Wave 0 stub seeding: 9 test stub files + manifest template + golden fixture (failing tests for Layers 1-8)
 - [ ] 72-01-PLAN.md — pkg/slack client primitives: LookupUserByEmail (lowercase, miss=boolean) + InviteUserToChannel (idempotent on already_in_channel) + SlackAPIResponse.User extension (Layer 1)
-- [ ] 72-02-PLAN.md — Profile field notifySlackInviteEmails: types.go + JSON schema (atomic) + validate.go rules SE1/SE2 (Layer 6)
+- [ ] 72-02-PLAN.md — Profile fields notifySlackInviteEmails + useSlackConnect (*bool, default true): types.go + JSON schema (atomic) + validate.go rules SE1/SE2 (Layer 6)
 - [ ] 72-03-PLAN.md — km slack manifest cobra command: RenderSlackManifest + embedded text/template + golden-file test + scope warning includes users:read.email (Layer 5)
-- [ ] 72-04-PLAN.md — pkg/slack/invite.go orchestrator: EnsureMemberByEmail (7 result paths) + Prompter + InviteAPI + ErrAlreadyInChannel sentinel + InviteUserToChannelStrict (Layer 2)
+- [ ] 72-04-PLAN.md — pkg/slack/invite.go orchestrator: EnsureMemberByEmail (8 result paths incl. non-interactive AutoConnect) + EnsureMemberOpts.AutoConnect + Prompter + InviteAPI + ErrAlreadyInChannel sentinel + InviteUserToChannelStrict (Layer 2)
 - [ ] 72-05-PLAN.md — km slack invite cobra command: RunSlackInvite + ConnectFallbackPrompter (stdin) + channel resolution (name/ID/SSM-default) + exit codes 0/1/2 (Layer 3)
 - [ ] 72-06-PLAN.md — Refactor RunSlackInit to call orchestrator instead of InviteShared directly + add users:read.email scope warning at init time (Layer 4 + Pitfall 1 mitigation)
-- [ ] 72-07-PLAN.md — km create per-sandbox auto-invite loop: profile-driven email loop after channel creation, fail-soft on SkippedExternal/Failed (Layer 7)
+- [ ] 72-07-PLAN.md — km create: refactor primary operator invite through orchestrator (AutoConnect=true, always invited) + additional-folks loop gated by useSlackConnect, fail-soft on SkippedExternal/Failed (Layer 7)
 - [ ] 72-08-PLAN.md — km doctor slack_users_read_email_scope check: mirrors slack_files_write_scope pattern; surfaces scope drift before runtime errors (Layer 8)
 - [ ] 72-09-PLAN.md — Closeout: docs/slack-notifications.md Phase 72 section + CLAUDE.md updates + 72-VALIDATION.md Per-Task Verification Map populated + 72-UAT.md (5 operator scenarios) + blocking operator UAT checkpoint
 
