@@ -174,6 +174,8 @@ resource "aws_iam_role_policy" "ec2_provisioning" {
         Effect = "Allow"
         Action = [
           "ec2:RunInstances",
+          "ec2:StartInstances",
+          "ec2:StopInstances",
           "ec2:DescribeInstances",
           "ec2:DescribeInstanceTypes",
           "ec2:DescribeInstanceAttribute",
