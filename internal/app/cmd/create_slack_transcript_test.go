@@ -27,10 +27,18 @@ func (f *fakeSlackAPIWithMembers) CreateChannel(_ context.Context, _ string) (st
 func (f *fakeSlackAPIWithMembers) FindChannelByName(_ context.Context, _ string) (string, error) {
 	return "", nil
 }
-func (f *fakeSlackAPIWithMembers) JoinChannel(_ context.Context, _ string) error           { return nil }
-func (f *fakeSlackAPIWithMembers) InviteShared(_ context.Context, _, _ string) error       { return nil }
+func (f *fakeSlackAPIWithMembers) JoinChannel(_ context.Context, _ string) error      { return nil }
+func (f *fakeSlackAPIWithMembers) InviteShared(_ context.Context, _, _ string) error  { return nil }
 func (f *fakeSlackAPIWithMembers) ChannelInfo(_ context.Context, _ string) (int, bool, error) {
 	return f.members, f.isMem, f.err
+}
+
+// Phase 72 InviteAPI methods — stubs to satisfy the extended SlackAPI interface.
+func (f *fakeSlackAPIWithMembers) LookupUserByEmail(_ context.Context, _ string) (string, bool, error) {
+	return "", false, nil
+}
+func (f *fakeSlackAPIWithMembers) InviteUserToChannelStrict(_ context.Context, _, _ string) error {
+	return nil
 }
 
 // captureStderr is provided by testhelpers_test.go (shared across the package).

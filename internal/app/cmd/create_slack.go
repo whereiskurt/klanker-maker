@@ -62,6 +62,9 @@ type SlackAPI interface {
 	JoinChannel(ctx context.Context, channelID string) error
 	InviteShared(ctx context.Context, channelID, email string) error
 	ChannelInfo(ctx context.Context, channelID string) (memberCount int, isMember bool, err error)
+	// Phase 72 invite orchestrator methods (also implements slack.InviteAPI).
+	LookupUserByEmail(ctx context.Context, email string) (userID string, found bool, err error)
+	InviteUserToChannelStrict(ctx context.Context, channelID, userID string) error
 }
 
 // SSMParamStore is a narrow interface for reading SSM parameters. Used by
@@ -188,7 +191,7 @@ func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandbox
 			}
 		}
 
-		// Fetch the invite email from SSM so the bot can receive cross-workspace invites.
+		// Fetch the invite email from SSM so the operator is always invited.
 		inviteEmail, ssmErr := ssmStore.Get(ctx, slackPrefix+"invite-email", false)
 		if ssmErr != nil || inviteEmail == "" {
 			// Missing invite-email is configurational — the channel exists and
@@ -198,15 +201,37 @@ func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandbox
 			return chID, true, nil
 		}
 
-		if inviteErr := api.InviteShared(ctx, chID, inviteEmail); inviteErr != nil {
-			// Invite failure is non-fatal: the channel is live, the bot is in
-			// it, sandbox notifications will still flow. The cross-workspace
-			// invite is a convenience for the operator's external Slack;
-			// failing here used to abort sandbox provisioning, which was
-			// disproportionate (the failure typically means the operator
-			// already accepted the invite, the workspace isn't on Pro tier,
-			// or the email already has a connection).
-			log.Warn().Err(inviteErr).Str("channel", chID).Str("email", inviteEmail).Msg("Slack Connect invite failed (non-fatal — channel and bot are healthy; manually re-invite if needed)")
+		// Phase 72: route the primary operator invite through the unified
+		// orchestrator (EnsureMemberByEmail). AutoConnect=true is UNCONDITIONAL
+		// here — the operator is always invited regardless of useSlackConnect.
+		// Native workspace member → conversations.invite (fixes corporate case);
+		// external operator → Slack Connect (preserves prior PoC behavior).
+		//
+		// Pass channelName (e.g. "sb-test123") rather than the opaque Slack channel
+		// ID so that SkippedExternal hints render as a usable `km slack invite
+		// --channel sb-{name}` command.
+		opRes, opErr := slack.EnsureMemberByEmail(ctx, api, chID, inviteEmail, slack.EnsureMemberOpts{
+			Interactive: false,
+			AutoConnect: true,
+		})
+		slackInviteResultWarn(opRes, opErr, inviteEmail, channelName)
+
+		// Phase 72: profile-driven auto-invite for ADDITIONAL collaborators
+		// (beyond the primary operator above). AutoConnect is gated by
+		// useSlackConnect (nil ⇒ true). Interactive is always false — km create
+		// may run from km at / scheduled contexts. Non-fatal throughout.
+		autoConnect := cli.UseSlackConnect == nil || *cli.UseSlackConnect
+		for _, email := range cli.NotifySlackInviteEmails {
+			email = strings.TrimSpace(email)
+			if email == "" {
+				continue
+			}
+			res, err := slack.EnsureMemberByEmail(ctx, api, chID, email, slack.EnsureMemberOpts{
+				Interactive: false,
+				AutoConnect: autoConnect,
+				// Prompter intentionally nil — non-interactive path never calls it.
+			})
+			slackInviteResultWarn(res, err, email, channelName)
 		}
 
 		return chID, true, nil
@@ -218,6 +243,33 @@ func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandbox
 		return "", false, fmt.Errorf("%sshared-channel-id not set — run km slack init first", slackPrefix)
 	}
 	return chID, false, nil
+}
+
+// slackInviteResultWarn maps a non-success EnsureMemberByEmail result to the
+// appropriate fail-soft stderr warning. Returns nothing — km create never
+// aborts on invite outcomes (CONTEXT.md fail-soft mandate).
+//
+// InvitedDirect/InvitedConnect/AlreadyMember are silent info successes.
+// SkippedExternal emits a stderr hint so the operator knows to use
+// `km slack invite --external` for manual Connect.
+// Failed emits a stderr warning naming the email, channel, and error.
+func slackInviteResultWarn(res slack.EnsureMemberResult, err error, email, channelID string) {
+	switch res {
+	case slack.InvitedDirect, slack.InvitedConnect:
+		log.Info().Str("email", email).Str("channel", channelID).Str("result", res.String()).Msg("invited to Slack channel")
+	case slack.AlreadyMember:
+		log.Debug().Str("email", email).Str("channel", channelID).Msg("already in Slack channel — no-op")
+	case slack.SkippedExternal:
+		fmt.Fprintf(os.Stderr,
+			"[warn] %s is not a member of the Slack workspace; not sending Connect invite (useSlackConnect: false).\n  To send one: km slack invite --external %s --channel %s\n",
+			email, email, channelID,
+		)
+	case slack.Failed:
+		fmt.Fprintf(os.Stderr,
+			"[warn] Slack invite failed for %s on channel %s: %v (non-fatal — sandbox provisioning continues)\n",
+			email, channelID, err,
+		)
+	}
 }
 
 // sanitizeChannelName produces a Slack-legal channel name fragment from a

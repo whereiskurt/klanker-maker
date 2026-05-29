@@ -61,6 +61,18 @@ func (f *fakeSlackAPI) ChannelInfo(_ context.Context, _ string) (int, bool, erro
 	return f.channelInfoCount, f.channelInfoMember, f.channelInfoErr
 }
 
+// Phase 72 InviteAPI methods — required by the extended SlackAPI interface.
+// fakeSlackAPI stubs these with no-op behavior (lookup always misses,
+// InviteUserToChannelStrict always succeeds) so pre-Phase-72 tests that
+// don't need these methods continue to compile and pass unmodified.
+func (f *fakeSlackAPI) LookupUserByEmail(_ context.Context, _ string) (string, bool, error) {
+	return "", false, nil // lookup miss → triggers external/Connect path
+}
+
+func (f *fakeSlackAPI) InviteUserToChannelStrict(_ context.Context, _, _ string) error {
+	return nil
+}
+
 // fakeSSMParamStore implements SSMParamStore for tests.
 // Shared across create_slack_test.go and destroy_slack_test.go (same package).
 type fakeSSMParamStore struct {
