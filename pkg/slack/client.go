@@ -460,6 +460,38 @@ func (c *Client) InviteUserToChannel(ctx context.Context, channelID, userID stri
 	return nil
 }
 
+// ErrAlreadyInChannel is returned by InviteUserToChannelStrict when Slack
+// responds with "already_in_channel". Public callers prefer the idempotent
+// InviteUserToChannel, which swallows this signal as nil. The Strict variant
+// exists so the EnsureMemberByEmail orchestrator (pkg/slack/invite.go) can
+// distinguish "we just invited them" (return InvitedDirect) from "they were
+// already in" (return AlreadyMember).
+//
+// Use errors.Is(err, ErrAlreadyInChannel) to detect.
+var ErrAlreadyInChannel = errors.New("slack: user already in channel")
+
+// InviteUserToChannelStrict wraps conversations.invite without the idempotent
+// already_in_channel swallow. On already_in_channel returns ErrAlreadyInChannel
+// (use errors.Is); on any other Slack error returns *SlackAPIError; on success
+// returns nil.
+//
+// Prefer InviteUserToChannel for general use; this strict variant exists for
+// orchestrators that need to differentiate "freshly invited" from "no-op".
+func (c *Client) InviteUserToChannelStrict(ctx context.Context, channelID, userID string) error {
+	_, err := c.callJSON(ctx, "conversations.invite", map[string]any{
+		"channel": channelID,
+		"users":   userID,
+	})
+	if err != nil {
+		var apierr *SlackAPIError
+		if errors.As(err, &apierr) && apierr.Code == "already_in_channel" {
+			return ErrAlreadyInChannel
+		}
+		return err
+	}
+	return nil
+}
+
 // InviteShared sends a Slack Connect invite to email.
 func (c *Client) InviteShared(ctx context.Context, channelID, email string) error {
 	_, err := c.callJSON(ctx, "conversations.inviteShared", map[string]any{
