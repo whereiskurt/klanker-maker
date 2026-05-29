@@ -51,6 +51,8 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `km slack init` — bootstrap Slack integration (`--bot-token`, `--invite-email`, `--shared-channel`, `--signing-secret`, `--force`)
 - `km slack test` — end-to-end smoke test through the bridge
 - `km slack status` — print SSM-backed Slack config
+- `km slack invite <email>` — invite an email to a Slack channel; auto-detects native vs Connect (`--channel`, `--external`, `--dry-run`)
+- `km slack manifest` — render a deployment-specific Slack App manifest to stdout (`--app-name`)
 - `km slack rotate-token --bot-token <new>` — rotate Slack bot token + cold-start the bridge
 - `km slack rotate-signing-secret --signing-secret <new>` — rotate Slack App signing secret
 - `km vscode start <sandbox-id>` — open SSM port-forward + ssh-config Host entry for VS Code Remote-SSH (`--local-port`)
@@ -252,3 +254,36 @@ renaming would require a migration job we chose not to run (cosmetic only).
 
 Future agents (Goose etc.) slot in as new `agent_type` enum values without
 further DDB schema work.
+
+### Phase 72: Corporate workspace support — auto-detect invite + manifest generator
+
+Adds three capabilities for installing klankermaker into corporate Slack workspaces (where
+invitees are native workspace members rather than external collaborators):
+
+- `km slack manifest` — generates a deployment-specific Slack App manifest including the new
+  `users:read.email` scope. Pipe to a file and paste into Slack admin "From manifest" UI.
+- `km slack invite <email> [--channel <name|id>] [--external] [--dry-run]` — ad-hoc command to
+  add people to channels post-install. Auto-detects whether to use `conversations.invite`
+  (native) or `conversations.inviteShared` (Slack Connect, requires Pro tier). `--dry-run` is a
+  read-only probe: classifies the address without sending any invite or joining any channel.
+- `spec.cli.notifySlackInviteEmails: []string` — profile field that auto-invites ADDITIONAL
+  people (beyond the always-invited primary operator) to the per-sandbox `#sb-{id}` channel after
+  `km create` succeeds. Auto-detects native vs Connect.
+- `spec.cli.useSlackConnect: *bool` (default true) — gates the Connect fallback for the
+  `notifySlackInviteEmails` loop only. True: external addresses auto-Connected. False:
+  external addresses skipped with a fail-soft warning + follow-up command. Does NOT affect the
+  primary operator invite (always invited) or `km slack invite`/`km slack init`.
+
+**New required Slack bot scope:** `users:read.email`. Existing PoC installs need a one-time
+manifest update + reinstall + token rotation:
+
+```bash
+km slack manifest > /tmp/km-app.json
+# Paste into Slack admin → Apps → existing app → App Manifest → Save → Reinstall
+km slack rotate-token --bot-token <new-token>
+km doctor
+```
+
+**`km doctor` adds:** `slack_users_read_email_scope` (WARN if missing).
+
+See `docs/slack-notifications.md` § Phase 72 for the full operator guide.

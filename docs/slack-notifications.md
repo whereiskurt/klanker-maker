@@ -1111,3 +1111,186 @@ never touch the raw Slack bot token.
 
 `docs/codex-parity.md` — full operator guide including JSONL stream mechanism,
 SC-3 rationale, full switch sequence, and Phase 70 deferrals.
+
+---
+
+## Phase 72: Corporate workspace support — auto-detect invite + manifest generator
+
+Phase 72 adds three new capabilities for installing klankermaker into a corporate Slack workspace
+where most invitees are native workspace members (not external collaborators reachable only via
+Slack Connect).
+
+### What's new
+
+| Capability | Command / Surface |
+|---|---|
+| Render install manifest | `km slack manifest [--app-name <name>]` |
+| Ad-hoc invite by email | `km slack invite <email> [--channel <name|id>] [--external]` |
+| Profile-driven auto-invite | `spec.cli.notifySlackInviteEmails: [<email>, ...]` |
+| Scope drift diagnostic | `km doctor` adds `slack_users_read_email_scope` |
+
+### Scopes carried by the manifest
+
+Phase 72 requires the bot to have the `users:read.email` scope (for `users.lookupByEmail`). The
+`km slack manifest` output is the full 13-scope union and also includes `files:read` — required
+by Phase 75 (inbound file attachments) and enforced by `km doctor`'s inbound check. Installing or
+reinstalling from this manifest is the clean way to pick up BOTH scopes at once. EXISTING
+klankermaker installs provisioned before these phases do NOT have `users:read.email` (and may
+also be missing `files:read` if never updated for Phase 75) and MUST be reinstalled with the
+updated manifest.
+
+### Installing into a new corporate workspace (cross-account / cross-machine)
+
+Ordering matters — `km slack manifest` reads the bridge Lambda URL from SSM, which only exists
+after `km init` deploys the regional infrastructure into the target account. So you cannot render
+a usable manifest before the account is initialized, and you cannot finish the Slack app before
+you have the manifest. The sequence resolves the chicken-and-egg:
+
+> `km` reads all account state from SSM/AWS, so you can run these from any machine that has AWS
+> credentials for the target account — it does NOT need to be the machine the code was built on.
+> Just make sure that machine has a `km` binary built from this version (`make build`).
+
+```bash
+# 0. Point km at the target account (AWS creds/profile for the NEW account).
+eval $(km env --aws-profile <your-new-account-profile>)   # or export AWS_PROFILE
+
+# 1. Initialize regional infrastructure — this deploys the bridge Lambda and writes
+#    {prefix}/slack/bridge-url to SSM. Required BEFORE the manifest can be rendered.
+km init
+
+# 2. Render the manifest (now that bridge-url exists in SSM).
+km slack manifest > /tmp/km-app.json
+python3 -m json.tool < /tmp/km-app.json   # sanity-check valid JSON
+
+# 3. In Slack admin: Apps → Build → Create New App → From an app manifest →
+#    select your workspace → paste /tmp/km-app.json → Next → Create.
+#    Slack creates the app with all 13 scopes (incl. files:read + users:read.email).
+
+# 4. Install the app to your workspace from the app config UI; copy the Bot User OAuth Token.
+
+# 5. Initialize klankermaker's Slack integration with the token:
+km slack init --bot-token xoxb-... --invite-email <your-email-in-the-corp-workspace>
+# The orchestrator detects that --invite-email is a workspace member and uses a
+# regular conversations.invite (no Slack Connect needed).
+
+# 6. Verify:
+km doctor       # all slack_* checks should pass (incl. slack_users_read_email_scope + files:read)
+km slack test
+```
+
+If `km slack manifest` errors with "run km slack init first", you skipped step 1 — the bridge URL
+isn't in SSM yet. Run `km init` (it's idempotent) and retry the manifest.
+
+### Updating an existing PoC install (klankermaker workspace)
+
+The existing PoC workspace was provisioned with the Phase 63 scope set; `users:read.email` is
+absent. To enable Phase 72 features against the existing install:
+
+```bash
+# 1. Get the updated manifest
+km slack manifest > /tmp/km-app.json
+
+# 2. In Slack admin → Apps → existing klankermaker app → App Manifest tab →
+#    paste new manifest → Save Changes.
+#    Slack will require an "Update Permissions" / app reinstall.
+
+# 3. After reinstall, copy the new Bot User OAuth Token.
+
+# 4. Rotate the token in klankermaker:
+km slack rotate-token --bot-token xoxb-NEW-TOKEN
+
+# 5. Verify:
+km doctor
+```
+
+### `km slack invite` reference
+
+Invite a user to a Slack channel by email. Auto-detects whether the email is a workspace member:
+- **Native member** (in the workspace): `conversations.invite` (regular invite).
+- **External** (not in workspace): in interactive sessions, prompts before sending Slack Connect
+  (default N); in non-interactive sessions, returns `SkippedExternal` and exits with code 2 plus
+  a follow-up command hint.
+
+| Flag | Description |
+|---|---|
+| `--channel <name\|id>` | Channel name (`km-notifications`) or ID (`C012ABCDE3F`). Default: SSM-stored shared channel. |
+| `--external` | Skip lookup; force Slack Connect invite (no prompt). |
+| `--dry-run` | Read-only probe: look up the email and print whether it would be invited natively or via Slack Connect. Sends nothing, joins nothing, never prompts. Safe to run against a live workspace; needs no sandbox. |
+
+Exit codes:
+- `0` — InvitedDirect / InvitedConnect / AlreadyMember / any `--dry-run`
+- `1` — Failed (Slack API error)
+- `2` — SkippedExternal (non-interactive miss)
+
+`--dry-run` is the recommended first check after install — it exercises the same auto-detect
+orchestrator that `km create` uses, so you can confirm "is this address seen as a native member
+or an outsider?" without sending invites or provisioning a sandbox. Example:
+
+```bash
+km slack invite teammate@newcorp.com --dry-run   # [dry-run] ... would invite via conversations.invite
+km slack invite outsider@gmail.com  --dry-run    # [dry-run] ... NOT a workspace member — would require Slack Connect
+```
+
+### `km slack manifest` reference
+
+Renders a deployment-specific Slack App manifest to stdout. The manifest is parameterized by
+the install's `resource_prefix` and bridge Lambda Function URL.
+
+| Flag | Description |
+|---|---|
+| `--app-name <name>` | Override the auto-derived name (default: `KlankerMaker-{resource_prefix}`; max 35 chars). |
+
+Pipe to a file: `km slack manifest > app.json`. Paste into Slack admin → Apps → Build → New App
+→ From manifest.
+
+### Profile fields: `notifySlackInviteEmails` + `useSlackConnect`
+
+The **primary operator** (the address set at `km slack init`, stored in SSM
+`{prefix}/slack/invite-email`) is ALWAYS invited to each per-sandbox `#sb-{id}` channel at
+`km create` time — a native workspace member via regular invite, an external operator via Slack
+Connect. This is unchanged from prior behavior (just now auto-detected).
+
+`notifySlackInviteEmails` adds MORE people beyond the primary operator. `useSlackConnect`
+(default `true`) controls whether external addresses in that list are auto-invited via Slack
+Connect or skipped.
+
+```yaml
+spec:
+  cli:
+    notifySlackEnabled: true
+    notifySlackPerSandbox: true
+    useSlackConnect: true            # default true; omit for the same behavior
+    notifySlackInviteEmails:
+      - alice@example.com   # workspace member → regular invite
+      - bob@external.com    # not in workspace → auto Slack Connect (useSlackConnect true)
+```
+
+Behavior of the additional-folks list:
+- Internal members: regular invite (silent success).
+- External addresses, `useSlackConnect: true` (default): auto-invited via Slack Connect, no
+  warning. A Connect failure (e.g. free-tier workspace) is logged as a fail-soft warning.
+- External addresses, `useSlackConnect: false`: skipped with a stderr warning; `km create`
+  continues (fail-soft). Follow up with
+  `km slack invite --external bob@external.com --channel sb-{id}`.
+- Empty/unset list: no-op (the primary operator is still invited).
+
+Validation: `notifySlackInviteEmails` requires `notifySlackEnabled: true` (validation rule SE1).
+`useSlackConnect` has no validation rule — it is inert when the list is empty.
+
+### `km doctor` new check: `slack_users_read_email_scope`
+
+| Status | Meaning |
+|---|---|
+| OK | Bot has the scope |
+| WARN | Scope missing — run `km slack manifest`, update Slack App scopes, reinstall, rotate token |
+| SKIP | Slack not configured |
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `km slack invite` returns `missing_scope` | Bot doesn't have `users:read.email`. Run `km doctor`; remediation in WARN message. |
+| `km create` shows `[warn] bob@external.com is not a member ... (useSlackConnect: false)` | Expected when `useSlackConnect: false` and the address isn't a workspace member. Either set `useSlackConnect: true` (default) to auto-Connect, or run `km slack invite --external` afterward. |
+| `km slack manifest` says "run km slack init first" | SSM `{prefix}/slack/bridge-url` is unset. Run `km init` once first. |
+| Manifest pasted into Slack admin but app rejected | Confirm the JSON is valid (`python3 -m json.tool`). Confirm `display_information.name` ≤ 35 chars. |
+| `km slack invite` against private channel returns `not_in_channel` | Bot was kicked or never joined. The command auto-joins; if it still fails, manually `/invite @KlankerMaker` from Slack first. |
