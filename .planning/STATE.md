@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 72-08-PLAN.md
-last_updated: "2026-05-29T19:27:06.986Z"
+stopped_at: Completed 72-06-PLAN.md
+last_updated: "2026-05-29T19:35:37.166Z"
 last_activity: 2026-05-29
 progress:
   total_phases: 106
   completed_phases: 93
   total_plans: 452
-  completed_plans: 414
+  completed_plans: 415
   percent: 88
 ---
 
@@ -443,6 +443,7 @@ Progress: [█████████░] 88%
 | Phase 72 P07 | 31533176s | 1 tasks | 4 files |
 | Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P05 | 18min | 1 tasks | 4 files |
 | Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P08 | 12 | 1 tasks | 3 files |
+| Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P06 | 16min | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1284,6 +1285,9 @@ Recent decisions affecting current work:
 - [Phase 72]: channelName (sb-{id}) used in SkippedExternal warning hint rather than opaque Slack ID for operator-usable km slack invite command
 - [Phase 72-05]: Used ExitCodeError for SkippedExternal exit code 2; extended SlackAPI interface with LookupUserByEmail + InviteUserToChannelStrict (option a); ConnectFallbackPrompter uses direct bufio.Scanner (SlackPrompter has no Confirm method)
 - [Phase 72-08]: checkSlackUsersReadEmailScope placed in doctor_slack_transcript.go alongside checkSlackFilesWriteScope; tests in package cmd (not cmd_test); remediation in CheckResult.Remediation field
+- [Phase 72-06]: Interactive=false/AutoConnect=false in RunSlackInit invite: external emails warn to use km slack invite --external
+- [Phase 72-06]: users:read.email scope warning is standalone inline check (not added to VerifyEventsAPIScopes) to preserve existing scope tests
+- [Phase 72-06]: isSlackProWorkspaceError removed from RunSlackInit call site; orchestrator wrapConnectError owns Pro-tier hint
 
 ### Roadmap Evolution
 
@@ -1399,6 +1403,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-29T19:27:06.977Z
-Stopped at: Completed 72-08-PLAN.md
+Last session: 2026-05-29T19:35:37.157Z
+Stopped at: Completed 72-06-PLAN.md
 Resume file: None
