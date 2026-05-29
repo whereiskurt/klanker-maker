@@ -492,6 +492,34 @@ type CLISpec struct {
 	// Default: false. Profile-only — no CLI flag override (Phase 68).
 	NotifySlackTranscriptEnabled bool `yaml:"notifySlackTranscriptEnabled,omitempty" json:"notifySlackTranscriptEnabled,omitempty"`
 
+	// NotifySlackInviteEmails is a list of email addresses to auto-invite to the
+	// per-sandbox Slack channel after km create succeeds. Each address is run
+	// through the EnsureMemberByEmail orchestrator (pkg/slack/invite.go) with
+	// Interactive=false: native workspace members get a regular conversations.invite.
+	// Non-members are auto-invited via Slack Connect when UseSlackConnect is true
+	// (the default); when UseSlackConnect is false they emit a stderr warning
+	// instructing the operator to follow up with `km slack invite --external <email>`.
+	//
+	// Requires notifySlackEnabled=true. Empty list is a no-op. Profile-only — no
+	// CLI flag override for v1 (deferred ideas in 72-CONTEXT.md). Phase 72.
+	//
+	// Default: empty.
+	NotifySlackInviteEmails []string `yaml:"notifySlackInviteEmails,omitempty" json:"notifySlackInviteEmails,omitempty"`
+
+	// UseSlackConnect gates the Connect fallback for the km create auto-invite loop
+	// (NotifySlackInviteEmails). When true (the default), an address that is not a
+	// native workspace member is invited via Slack Connect automatically, with no
+	// prompt. When false, such addresses are skipped with a stderr warning and the
+	// operator follows up manually with `km slack invite --external <email>`.
+	//
+	// Pointer so an unset field (nil) defaults to true. Only affects the profile-
+	// driven km create loop — it does NOT change `km slack invite` (interactive
+	// prompt + --external) or `km slack init` (operator invite). Inert when
+	// NotifySlackInviteEmails is empty. Phase 72.
+	//
+	// Default: true.
+	UseSlackConnect *bool `yaml:"useSlackConnect,omitempty" json:"useSlackConnect,omitempty"`
+
 	// VSCodeEnabled gates the cloud-init block that enables sshd and writes the operator's
 	// ed25519 pubkey to /home/sandbox/.ssh/authorized_keys. Phase 73.
 	//

@@ -590,6 +590,17 @@
               "default": false,
               "description": "When true, every Claude PostToolUse fires per-turn streaming to the per-sandbox Slack thread, and Stop uploads the gzipped transcript JSONL as a Slack file. Requires notifySlackEnabled and notifySlackPerSandbox; incompatible with notifySlackChannelOverride."
             },
+            "notifySlackInviteEmails": {
+              "type": "array",
+              "items": { "type": "string", "format": "email" },
+              "default": [],
+              "description": "Emails to auto-invite to per-sandbox channel after km create. Requires notifySlackEnabled=true. Native workspace members get conversations.invite; non-members are auto-invited via Slack Connect when useSlackConnect is true (default), else emit a stderr warning."
+            },
+            "useSlackConnect": {
+              "type": "boolean",
+              "default": true,
+              "description": "When true (default), the km create auto-invite loop falls back to Slack Connect for addresses that are not native workspace members. When false, external addresses are skipped with a warning. Only affects the profile-driven km create loop."
+            },
             "vscodeEnabled": {
               "type": "boolean",
               "description": "Phase 73: enable sshd + authorized_keys provisioning for VS Code Remote-SSH via SSM port-forward. Default true (omit = enabled). Set false to skip SSH provisioning."
