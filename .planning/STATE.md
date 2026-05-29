@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 72-06-PLAN.md
-last_updated: "2026-05-29T19:35:37.166Z"
+stopped_at: "Checkpoint 72-09-T3: Operator UAT human-verify gate"
+last_updated: "2026-05-29T19:42:09.818Z"
 last_activity: 2026-05-29
 progress:
   total_phases: 106
-  completed_phases: 93
+  completed_phases: 94
   total_plans: 452
-  completed_plans: 415
+  completed_plans: 416
   percent: 88
 ---
 
@@ -444,6 +444,7 @@ Progress: [█████████░] 88%
 | Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P05 | 18min | 1 tasks | 4 files |
 | Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P08 | 12 | 1 tasks | 3 files |
 | Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P06 | 16min | 1 tasks | 3 files |
+| Phase 72 P09 | 8min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1288,6 +1289,7 @@ Recent decisions affecting current work:
 - [Phase 72-06]: Interactive=false/AutoConnect=false in RunSlackInit invite: external emails warn to use km slack invite --external
 - [Phase 72-06]: users:read.email scope warning is standalone inline check (not added to VerifyEventsAPIScopes) to preserve existing scope tests
 - [Phase 72-06]: isSlackProWorkspaceError removed from RunSlackInit call site; orchestrator wrapConnectError owns Pro-tier hint
+- [Phase 72]: Phase 72 docs: km slack manifest/invite/notifySlackInviteEmails/useSlackConnect documented in slack-notifications.md; UAT runbook written; awaiting operator live sign-off
 
 ### Roadmap Evolution
 
@@ -1403,6 +1405,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-29T19:35:37.157Z
-Stopped at: Completed 72-06-PLAN.md
+Last session: 2026-05-29T19:42:09.810Z
+Stopped at: Checkpoint 72-09-T3: Operator UAT human-verify gate
 Resume file: None
