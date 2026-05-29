@@ -1,0 +1,46 @@
+{
+  "display_information": {
+    "name": "KlankerMaker-test",
+    "description": "Get notifications from KlankerMaker sandboxes",
+    "background_color": "#000000"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "KlankerMaker-test",
+      "always_online": false
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "chat:write",
+        "channels:manage",
+        "channels:join",
+        "channels:read",
+        "channels:history",
+        "groups:write",
+        "groups:history",
+        "conversations.connect:write",
+        "reactions:read",
+        "reactions:write",
+        "files:write",
+        "files:read",
+        "users:read.email"
+      ]
+    },
+    "pkce_enabled": false
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://example.lambda-url.us-east-1.on.aws/events",
+      "bot_events": [
+        "message.channels",
+        "message.groups"
+      ]
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false,
+    "is_mcp_enabled": false
+  }
+}
