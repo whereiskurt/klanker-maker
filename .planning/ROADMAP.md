@@ -1600,7 +1600,7 @@ Plans:
 **Goal:** Support installing klankermaker into a corporate Slack workspace with auto-detected native vs Slack Connect invites, a `km slack manifest` generator that ships the new `users:read.email` scope as code, and profile-driven per-sandbox auto-invite (`spec.cli.notifySlackInviteEmails`) of ADDITIONAL collaborators beyond the always-invited primary operator. The primary operator invite (and the additional-folks loop) route through the auto-detect orchestrator; `spec.cli.useSlackConnect` (default true) gates the Connect fallback for the additional-folks list only.
 **Requirements**: VALIDATION-Layer-1..8 (CONTEXT.md decisions D1–D12; mapped to the 8 layers in 72-VALIDATION.md)
 **Depends on:** Phase 71
-**Plans:** 2/10 plans executed
+**Plans:** 3/10 plans executed
 
 Plans:
 - [ ] 72-00-PLAN.md — Wave 0 stub seeding: 9 test stub files + manifest template + golden fixture (failing tests for Layers 1-8)
