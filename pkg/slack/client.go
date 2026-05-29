@@ -422,6 +422,44 @@ func (c *Client) LookupUserByEmail(ctx context.Context, email string) (string, b
 	return resp.User.ID, true, nil
 }
 
+// InviteUserToChannel wraps conversations.invite for a single user.
+// Idempotent: treats already_in_channel as success (matching JoinChannel's
+// contract). All other Slack errors (cant_invite_self, user_is_restricted,
+// not_in_channel, missing_scope, etc.) are surfaced as *SlackAPIError so
+// callers can present audience-specific guidance.
+//
+// Single-user invocation only; bulk invites are explicitly deferred (see
+// CONTEXT.md). The Slack API supports a comma-list of up to 100 user IDs,
+// but Phase 72 wires this method as a one-at-a-time primitive.
+//
+// Bot scopes required (already in km Slack App): channels:manage (public),
+// groups:write (private). Phase 72 adds users:read.email for the lookup
+// step that produces userID.
+//
+// Common errors:
+//   - already_in_channel:  TREATED AS SUCCESS (returns nil)
+//   - not_in_channel:      bot is not in target channel — caller must JoinChannel first
+//   - cant_invite_self:    bot trying to invite itself
+//   - user_is_restricted:  target is a Slack guest — caller may want a typed warning
+//   - missing_scope:       install drift — surface remediation
+//   - channel_not_found / user_not_found: invalid IDs
+//
+// Rate limit: Tier 3 (50+/min).
+func (c *Client) InviteUserToChannel(ctx context.Context, channelID, userID string) error {
+	_, err := c.callJSON(ctx, "conversations.invite", map[string]any{
+		"channel": channelID,
+		"users":   userID, // Slack accepts single ID or comma-list; single is fine.
+	})
+	if err != nil {
+		var apierr *SlackAPIError
+		if errors.As(err, &apierr) && apierr.Code == "already_in_channel" {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 // InviteShared sends a Slack Connect invite to email.
 func (c *Client) InviteShared(ctx context.Context, channelID, email string) error {
 	_, err := c.callJSON(ctx, "conversations.inviteShared", map[string]any{
