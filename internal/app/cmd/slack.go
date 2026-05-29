@@ -72,6 +72,10 @@ type SlackPrompter interface {
 // Production: NewSlackCmd → buildSlackCmdDeps. Tests: construct directly with fakes.
 type SlackCmdDeps struct {
 	NewSlackAPI       func(token string) SlackInitAPI
+	// Slack is the full Slack client used by km create and km slack invite.
+	// Implements both SlackAPI and slack.InviteAPI. Populated by
+	// buildSlackCmdDeps from the bot token in SSM.
+	Slack             SlackAPI
 	SSM               SlackSSMStore
 	Terragrunt        SlackTerragruntRunner
 	Prompter          SlackPrompter
@@ -128,6 +132,7 @@ func newSlackCmdInternal(cfg *config.Config, deps *SlackCmdDeps) *cobra.Command 
 	slackCmd.AddCommand(newSlackRotateTokenCmd(cfg, deps))
 	slackCmd.AddCommand(newSlackRotateSigningSecretCmd(cfg, deps))
 	slackCmd.AddCommand(newSlackManifestCmd(cfg, deps))
+	slackCmd.AddCommand(newSlackInviteCmd(cfg, deps))
 	return slackCmd
 }
 
