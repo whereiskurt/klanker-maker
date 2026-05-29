@@ -1,0 +1,140 @@
+apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: phase72-invite-test
+  labels:
+    tier: test
+    phase: "72"
+  prefix: p72
+
+# Phase 72 UAT — Scenario B5 (km create operator-invite + additional-folks loop).
+#
+# This profile exercises the new Phase 72 invite surface inside km create's
+# resolveSlackChannel Mode 2 path (per-sandbox Slack channel):
+#
+#   1. The PRIMARY OPERATOR (from {prefix}/slack/invite-email in SSM) is always
+#      invited into #sb-{id} via EnsureMemberByEmail with AutoConnect=true.
+#      This used to silently no-op for native workspace members on corporate
+#      installs — Phase 72-07 is the fix.
+#
+#   2. After the channel is created, every address in notifySlackInviteEmails
+#      is run through EnsureMemberByEmail. AutoConnect is gated by
+#      useSlackConnect (nil/omitted ⇒ true).
+#
+# Before running, replace the two emails below:
+#   - teammate@newcorp.com  → a real address that IS a member of your Slack workspace
+#   - outsider@gmail.com    → an address that is NOT a workspace member
+#                              (gmail.com / icloud.com / personal addresses work)
+#
+# Then run the UAT in two passes:
+#
+#   # Pass A: useSlackConnect defaults to true (auto-Connect externals)
+#   km validate profiles/test-phase72-invite.yaml
+#   km create   profiles/test-phase72-invite.yaml --remote
+#   # → expect: operator in #sb-{id}, teammate native-invited, outsider auto-Connected
+#   km destroy <sb-id> --remote --yes
+#
+#   # Pass B: flip useSlackConnect:false at the bottom of cli: and re-run
+#   km create   profiles/test-phase72-invite.yaml --remote
+#   # → expect: operator + teammate still in channel; outsider SKIPPED with
+#   #          `[warn] ... (useSlackConnect: false)` + km slack invite --external hint;
+#   #          km create still exits 0 (fail-soft).
+#   km destroy <sb-id> --remote --yes
+
+spec:
+  cli:
+    notifySlackEnabled: true
+    notifySlackPerSandbox: true
+    # useSlackConnect omitted ⇒ defaults to true (auto-Connect externals)
+    # Flip this to `useSlackConnect: false` for Pass B of the B5 UAT scenario.
+    notifySlackInviteEmails:
+      - teammate@newcorp.com
+      - outsider@gmail.com
+
+  lifecycle:
+    ttl: "30m"
+    idleTimeout: "15m"
+    teardownPolicy: destroy
+
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.small
+    region: us-east-1
+    rootVolumeSize: 10
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    env:
+      SANDBOX_MODE: phase72-invite-test
+    initCommands:
+      - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace"
+      - "echo 'phase72 invite UAT sandbox ready' > /workspace/README.txt"
+
+  sourceAccess:
+    mode: none
+
+  network:
+    enforcement: proxy
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+      allowedHosts: []
+
+  budget:
+    compute:
+      maxSpendUSD: 0.50
+    ai:
+      maxSpendUSD: 0.00
+    warningThreshold: 0.80
+
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 100
+
+  identity:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+    sessionPolicy: minimal
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/network
+    learnMode: false
+
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: required
+    allowedSenders:
+      - "self"
+
+  agent:
+    maxConcurrentTasks: 1
+    taskTimeout: "30m"
+    allowedTools:
+      - bash
+      - read_file
+      - write_file
+      - list_files
