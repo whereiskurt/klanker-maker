@@ -48,6 +48,10 @@ type SlackAPIResponse struct {
 		IsMember   bool   `json:"is_member"`
 		NumMembers int    `json:"num_members"`
 	} `json:"channel,omitempty"`
+	// User is populated by users.lookupByEmail. Phase 72.
+	User struct {
+		ID string `json:"id"`
+	} `json:"user,omitempty"`
 
 	// Channels and ResponseMetadata are populated by conversations.list.
 	// JSON-decode-safe to leave them empty on responses that don't include them.
@@ -389,6 +393,33 @@ func (c *Client) FindChannelByName(ctx context.Context, name string) (string, er
 		}
 		cursor = resp.ResponseMetadata.NextCursor
 	}
+}
+
+// LookupUserByEmail wraps users.lookupByEmail. Returns (id, true, nil) on hit;
+// ("", false, nil) on users_not_found (typed boolean miss); ("", false, *SlackAPIError)
+// on any other Slack error including missing_scope.
+//
+// Requires the bot's users:read.email scope. When the scope is absent Slack
+// returns missing_scope; callers (km slack init) should surface that with an
+// actionable remediation pointing at km slack manifest. Phase 72 adds the
+// scope to the manifest template; existing PoC installs need a one-time
+// reinstall + token rotation (see docs/slack-notifications.md).
+//
+// Email is lowercased before sending — Slack matches on the email Slack stores
+// in the user profile, which is case-sensitive in some scenarios.
+//
+// Rate limit: Tier 3 (50+/min). One call per email; no batch.
+func (c *Client) LookupUserByEmail(ctx context.Context, email string) (string, bool, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	resp, err := c.callJSON(ctx, "users.lookupByEmail", map[string]any{"email": email})
+	if err != nil {
+		var apierr *SlackAPIError
+		if errors.As(err, &apierr) && apierr.Code == "users_not_found" {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return resp.User.ID, true, nil
 }
 
 // InviteShared sends a Slack Connect invite to email.
