@@ -39,18 +39,37 @@ var channelIDPattern = regexp.MustCompile(`^C[A-Z0-9]+$`)
 // `km slack invite` interactive sessions. It reads a y/Y confirmation from
 // stdin, defaulting to N (no).
 //
+// When Inner is non-nil (injected in tests or from RunSlackInit via the cmd
+// layer's SlackPrompter), ConfirmConnect delegates to Inner.PromptString so
+// tests can supply deterministic answers without requiring a real TTY.
+//
 // The prompt text explains that the email is not a workspace member and that
 // a Pro Slack workspace is required for the Connect invite.
-type ConnectFallbackPrompter struct{}
+type ConnectFallbackPrompter struct {
+	// Inner is an optional cmd-layer prompter. When set, ConfirmConnect uses
+	// Inner.PromptString instead of reading from os.Stdin. This makes the
+	// RunSlackInit path testable without a real TTY.
+	Inner SlackPrompter
+}
 
 // ConfirmConnect implements kmslack.Prompter. Prints the prompt to stderr and
-// reads a y/Y line from stdin. Any input other than y/Y → false.
+// reads a y/Y line from stdin (or from Inner when set). Any input other than
+// y/Y → false.
 func (p *ConnectFallbackPrompter) ConfirmConnect(email string) (bool, error) {
 	msg := fmt.Sprintf(
 		"%s is not a member of this Slack workspace.\n"+
 			"Send a Slack Connect invite (requires Pro Slack workspace)? [y/N]: ",
 		email,
 	)
+	if p.Inner != nil {
+		// Delegate to the injected prompter (tests or RunSlackInit cmd path).
+		resp, err := p.Inner.PromptString(msg)
+		if err != nil {
+			return false, err
+		}
+		resp = strings.TrimSpace(resp)
+		return resp == "y" || resp == "Y", nil
+	}
 	fmt.Fprint(os.Stderr, msg)
 	scanner := bufio.NewScanner(os.Stdin)
 	if !scanner.Scan() {

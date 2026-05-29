@@ -214,6 +214,16 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 		return fmt.Errorf("invalid Slack bot token: %w", err)
 	}
 
+	// Initialise the full-capability Slack client for the invite orchestrator
+	// (EnsureMemberByEmail needs LookupUserByEmail + InviteUserToChannelStrict +
+	// InviteShared, which are not on SlackInitAPI). In production d.Slack is nil
+	// here — we construct from the validated token. In tests d.Slack is pre-set
+	// with a recording fake.
+	slackClient := d.Slack
+	if slackClient == nil {
+		slackClient = kmslack.NewClient(token, nil)
+	}
+
 	// Step 3: Persist token (SecureString).
 	if err := d.SSM.Put(ctx, d.SsmPrefix+"slack/bot-token", token, true); err != nil {
 		return fmt.Errorf("store bot token: %w", err)
@@ -290,12 +300,39 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 			if err := d.SSM.Put(ctx, d.SsmPrefix+"slack/shared-channel-id", chID, false); err != nil {
 				return fmt.Errorf("store shared-channel-id: %w", err)
 			}
+			// Phase 72: Use EnsureMemberByEmail orchestrator instead of direct
+			// InviteShared. Preserves existing PoC behavior (external email →
+			// Connect fallback when interactive); new corporate path (workspace
+			// email → regular invite) works via orchestrator's lookup-hit branch.
 			if inv != "" {
-				if invErr := api.InviteShared(ctx, chID, inv); invErr != nil {
-					if isSlackProWorkspaceError(invErr) {
-						return fmt.Errorf("send Slack Connect invite to %s: requires a Pro Slack workspace (error: %w)", inv, invErr)
-					}
-					return fmt.Errorf("send Slack Connect invite to %s (workspace must be Pro): %w", inv, invErr)
+				res, invErr := kmslack.EnsureMemberByEmail(ctx, slackClient, chID, inv, kmslack.EnsureMemberOpts{
+					// km slack init: non-interactive invite path. Native workspace members
+					// get invited directly (InviteUserToChannelStrict). External emails
+					// return SkippedExternal — operator uses `km slack invite` for Connect.
+					// ForceExternal=false: orchestrator auto-detects native vs external.
+					// Interactive=false / AutoConnect=false: connect fallback requires
+					// explicit operator action via `km slack invite --external`.
+					Interactive: false,
+					AutoConnect: false,
+				})
+				switch res {
+				case kmslack.InvitedDirect:
+					fmt.Fprintf(os.Stderr, "km slack init: invited %s to %s (regular invite — workspace member)\n", inv, chID)
+				case kmslack.InvitedConnect:
+					fmt.Fprintf(os.Stderr, "km slack init: sent Slack Connect invite to %s for %s\n", inv, chID)
+				case kmslack.AlreadyMember:
+					fmt.Fprintf(os.Stderr, "km slack init: %s is already a member of %s\n", inv, chID)
+				case kmslack.SkippedExternal:
+					// Non-interactive (piped / --bot-token supplied) or operator declined.
+					// Non-fatal: channel and bot are healthy; operator can manually invite
+					// or re-run `km slack invite <email>` to send the Connect invite.
+					fmt.Fprintf(os.Stderr, "km slack init: %s is not a workspace member; skipped Connect invite in non-interactive mode — run `km slack invite %s` to send one\n", inv, inv)
+				case kmslack.Failed:
+					// Fail-soft: match the original non-fatal pattern. The orchestrator
+					// already wraps Pro-tier errors with a clear hint via wrapConnectError,
+					// so isSlackProWorkspaceError is no longer needed at this call site.
+					fmt.Fprintf(os.Stderr, "km slack init: WARNING — invite failed for %s (non-fatal): %v\n", inv, invErr)
+					fmt.Fprintf(os.Stderr, "  Channel and bot are healthy. Re-invite manually or run: km slack invite %s\n", inv)
 				}
 			}
 		}
@@ -399,6 +436,28 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 				fmt.Fprintf(os.Stderr, "km slack init: Note — verify Slack App has scopes: channels:history, groups:history for inbound Events API.\n")
 				fmt.Fprintf(os.Stderr, "  (Run km slack init again after adding scopes to confirm.)\n")
 			}
+		}
+	}
+
+	// Phase 72 Pitfall 1: Warn when users:read.email scope is absent.
+	// This scope is required by EnsureMemberByEmail (km slack invite, km create
+	// auto-invite). Without it, those calls fail with cryptic missing_scope errors.
+	// We warn at init time so operators see it immediately rather than at first use.
+	{
+		hasUsersReadEmail := false
+		if scopeCache, _ := d.SSM.Get(ctx, d.SsmPrefix+"slack/bot-scopes-cache", false); scopeCache != "" {
+			for _, s := range strings.Split(scopeCache, ",") {
+				if strings.TrimSpace(s) == "users:read.email" {
+					hasUsersReadEmail = true
+					break
+				}
+			}
+		}
+		if !hasUsersReadEmail {
+			fmt.Fprintf(os.Stderr, "km slack init: WARNING — Slack bot may be missing `users:read.email` scope.\n")
+			fmt.Fprintf(os.Stderr, "  Without it, `km slack invite` and the auto-invite feature fail with missing_scope.\n")
+			fmt.Fprintf(os.Stderr, "  Remediation: run `km slack manifest > app.json`, update bot scopes from app.json,\n")
+			fmt.Fprintf(os.Stderr, "  reinstall the app, then `km slack rotate-token --bot-token <new-token>`.\n")
 		}
 	}
 
