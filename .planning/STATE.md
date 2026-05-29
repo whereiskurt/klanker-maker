@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 72-04-PLAN.md
-last_updated: "2026-05-29T19:06:14.848Z"
+stopped_at: Completed 72-07-PLAN.md
+last_updated: "2026-05-29T19:18:01.663Z"
 last_activity: 2026-05-29
 progress:
   total_phases: 106
   completed_phases: 93
   total_plans: 452
-  completed_plans: 411
+  completed_plans: 413
   percent: 88
 ---
 
@@ -440,6 +440,7 @@ Progress: [█████████░] 88%
 | Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P02 | 3 | 2 tasks | 4 files |
 | Phase 72 P03 | 526s | 2 tasks | 4 files |
 | Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P04 | 5min | 2 tasks | 4 files |
+| Phase 72 P07 | 31533176s | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1277,6 +1278,8 @@ Recent decisions affecting current work:
 - [Phase 72]: Print manifest banner to stderr so stdout remains pure JSON and pipeable
 - [Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator]: Option 1 sentinel-error chosen for AlreadyMember detection: ErrAlreadyInChannel + InviteUserToChannelStrict preserves existing idempotent InviteUserToChannel contract
 - [Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator]: Interactive=true takes precedence over AutoConnect on lookup miss; AutoConnect only governs non-interactive path
+- [Phase 72]: Operator invite AutoConnect=true unconditional — not gated by useSlackConnect; native→conversations.invite, external→Connect; fixes corporate workspace case
+- [Phase 72]: channelName (sb-{id}) used in SkippedExternal warning hint rather than opaque Slack ID for operator-usable km slack invite command
 
 ### Roadmap Evolution
 
@@ -1392,6 +1395,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-29T19:06:14.839Z
-Stopped at: Completed 72-04-PLAN.md
+Last session: 2026-05-29T19:17:56.624Z
+Stopped at: Completed 72-07-PLAN.md
 Resume file: None
