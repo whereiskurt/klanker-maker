@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 72-07-PLAN.md
-last_updated: "2026-05-29T19:18:01.663Z"
+stopped_at: Completed 72-05-PLAN.md
+last_updated: "2026-05-29T19:18:12.422Z"
 last_activity: 2026-05-29
 progress:
   total_phases: 106
@@ -441,6 +441,7 @@ Progress: [█████████░] 88%
 | Phase 72 P03 | 526s | 2 tasks | 4 files |
 | Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P04 | 5min | 2 tasks | 4 files |
 | Phase 72 P07 | 31533176s | 1 tasks | 4 files |
+| Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P05 | 18min | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1280,6 +1281,7 @@ Recent decisions affecting current work:
 - [Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator]: Interactive=true takes precedence over AutoConnect on lookup miss; AutoConnect only governs non-interactive path
 - [Phase 72]: Operator invite AutoConnect=true unconditional — not gated by useSlackConnect; native→conversations.invite, external→Connect; fixes corporate workspace case
 - [Phase 72]: channelName (sb-{id}) used in SkippedExternal warning hint rather than opaque Slack ID for operator-usable km slack invite command
+- [Phase 72-05]: Used ExitCodeError for SkippedExternal exit code 2; extended SlackAPI interface with LookupUserByEmail + InviteUserToChannelStrict (option a); ConnectFallbackPrompter uses direct bufio.Scanner (SlackPrompter has no Confirm method)
 
 ### Roadmap Evolution
 
@@ -1395,6 +1397,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-29T19:17:56.624Z
-Stopped at: Completed 72-07-PLAN.md
+Last session: 2026-05-29T19:18:12.413Z
+Stopped at: Completed 72-05-PLAN.md
 Resume file: None
