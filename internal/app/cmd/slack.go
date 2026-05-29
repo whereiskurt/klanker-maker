@@ -127,6 +127,7 @@ func newSlackCmdInternal(cfg *config.Config, deps *SlackCmdDeps) *cobra.Command 
 	slackCmd.AddCommand(newSlackStatusCmd(cfg, deps))
 	slackCmd.AddCommand(newSlackRotateTokenCmd(cfg, deps))
 	slackCmd.AddCommand(newSlackRotateSigningSecretCmd(cfg, deps))
+	slackCmd.AddCommand(newSlackManifestCmd(cfg, deps))
 	return slackCmd
 }
 

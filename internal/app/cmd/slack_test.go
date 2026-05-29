@@ -861,8 +861,10 @@ func TestSlackInit_ScopeCheck_AllPresent(t *testing.T) {
 }
 
 // TestSlackInit_ScopeCheck_MissingOne verifies groups:history is detected missing.
+// Input includes all other required scopes (channels:history, reactions:write, files:read)
+// so that exactly one scope is absent.
 func TestSlackInit_ScopeCheck_MissingOne(t *testing.T) {
-	ok, missing := cmd.VerifyEventsAPIScopes([]string{"chat:write", "channels:history", "reactions:write"})
+	ok, missing := cmd.VerifyEventsAPIScopes([]string{"chat:write", "channels:history", "reactions:write", "files:read"})
 	if ok || len(missing) != 1 || missing[0] != "groups:history" {
 		t.Fatalf("expected groups:history missing, got ok=%v missing=%v", ok, missing)
 	}
