@@ -2969,6 +2969,15 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return r
 	})
 
+	// Plan 72-08 — users:read.email scope check (required by auto-invite and km slack invite).
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkSlackUsersReadEmailScope(ctx, slackScopes)
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
 	transcriptS3 := deps.SlackTranscriptS3
 	transcriptBucket := cfg.GetArtifactsBucket()
 	listSandboxIDs := deps.SlackListSandboxIDs

@@ -321,6 +321,61 @@ func checkSlackTranscriptStaleObjects(
 	}
 }
 
+// checkSlackUsersReadEmailScope verifies the bot has the users:read.email scope
+// required by the EnsureMemberByEmail orchestrator (Phase 72). Without this
+// scope, `km slack invite` and `km create` auto-invite both fail with cryptic
+// `missing_scope` errors. This check pre-empts that by surfacing scope drift at
+// `km doctor` time.
+//
+// Mirrors checkSlackFilesWriteScope verbatim — same closure-injection pattern,
+// same dep shape (getScopes func), same status semantics.
+//
+// Returns:
+//   - SKIPPED: getScopes is nil (bot token not configured / Slack not set up).
+//   - OK: users:read.email present in scopes.
+//   - WARN: users:read.email missing (auto-invite and km slack invite would fail
+//     with missing_scope at runtime).
+//   - WARN: getScopes returned an error (do not fail doctor on auth.test outage).
+func checkSlackUsersReadEmailScope(
+	ctx context.Context,
+	getScopes func(context.Context) ([]string, error),
+) CheckResult {
+	name := "Slack users:read.email scope"
+	if getScopes == nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "Slack auth-test scopes func not configured",
+		}
+	}
+	scopes, err := getScopes(ctx)
+	if err != nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckWarn,
+			Message: fmt.Sprintf("could not check Slack scopes: %v", err),
+		}
+	}
+	for _, s := range scopes {
+		if s == "users:read.email" {
+			return CheckResult{
+				Name:    name,
+				Status:  CheckOK,
+				Message: "Slack bot has users:read.email scope (auto-invite supported)",
+			}
+		}
+	}
+	return CheckResult{
+		Name:    name,
+		Status:  CheckWarn,
+		Message: "Slack bot is missing users:read.email scope — `km slack invite` and `km create` auto-invite will fail with missing_scope",
+		Remediation: "Run `km slack manifest > app.json`, update the Slack App's bot scopes from app.json " +
+			"(Slack Admin → Apps → your app → OAuth & Permissions → Bot Token Scopes → add users:read.email), " +
+			"reinstall the app to your workspace, then `km slack rotate-token --bot-token <new-token>`. " +
+			"Run `km doctor` again to verify.",
+	}
+}
+
 // listAllKeysUnderPrefix paginates ListObjectsV2 (no delimiter) and returns
 // every object key under the given prefix. Used by the Plan quick-7 cleanup
 // path to enumerate keys before batched DeleteObjects.
