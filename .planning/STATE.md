@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 72-03-PLAN.md
-last_updated: "2026-05-29T19:00:29.939Z"
+stopped_at: Completed 72-04-PLAN.md
+last_updated: "2026-05-29T19:06:14.848Z"
 last_activity: 2026-05-29
 progress:
   total_phases: 106
   completed_phases: 93
   total_plans: 452
-  completed_plans: 410
+  completed_plans: 411
   percent: 88
 ---
 
@@ -439,6 +439,7 @@ Progress: [█████████░] 88%
 | Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P01 | 2 | 2 tasks | 3 files |
 | Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P02 | 3 | 2 tasks | 4 files |
 | Phase 72 P03 | 526s | 2 tasks | 4 files |
+| Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P04 | 5min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1274,6 +1275,8 @@ Recent decisions affecting current work:
 - [Phase 72-02]: UseSlackConnect *bool: no validator rule; nil=default-true resolved at call time in Plan 72-07 km create loop (AutoConnect = cli.UseSlackConnect == nil || *cli.UseSlackConnect)
 - [Phase 72]: Export SlackManifestData for clean test injection without a wrapper helper
 - [Phase 72]: Print manifest banner to stderr so stdout remains pure JSON and pipeable
+- [Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator]: Option 1 sentinel-error chosen for AlreadyMember detection: ErrAlreadyInChannel + InviteUserToChannelStrict preserves existing idempotent InviteUserToChannel contract
+- [Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator]: Interactive=true takes precedence over AutoConnect on lookup miss; AutoConnect only governs non-interactive path
 
 ### Roadmap Evolution
 
@@ -1389,6 +1392,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-29T19:00:29.931Z
-Stopped at: Completed 72-03-PLAN.md
+Last session: 2026-05-29T19:06:14.839Z
+Stopped at: Completed 72-04-PLAN.md
 Resume file: None
