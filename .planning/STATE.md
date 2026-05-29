@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 72-05-PLAN.md
-last_updated: "2026-05-29T19:18:12.422Z"
+stopped_at: Completed 72-08-PLAN.md
+last_updated: "2026-05-29T19:27:06.986Z"
 last_activity: 2026-05-29
 progress:
   total_phases: 106
   completed_phases: 93
   total_plans: 452
-  completed_plans: 413
+  completed_plans: 414
   percent: 88
 ---
 
@@ -442,6 +442,7 @@ Progress: [█████████░] 88%
 | Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P04 | 5min | 2 tasks | 4 files |
 | Phase 72 P07 | 31533176s | 1 tasks | 4 files |
 | Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P05 | 18min | 1 tasks | 4 files |
+| Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P08 | 12 | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1282,6 +1283,7 @@ Recent decisions affecting current work:
 - [Phase 72]: Operator invite AutoConnect=true unconditional — not gated by useSlackConnect; native→conversations.invite, external→Connect; fixes corporate workspace case
 - [Phase 72]: channelName (sb-{id}) used in SkippedExternal warning hint rather than opaque Slack ID for operator-usable km slack invite command
 - [Phase 72-05]: Used ExitCodeError for SkippedExternal exit code 2; extended SlackAPI interface with LookupUserByEmail + InviteUserToChannelStrict (option a); ConnectFallbackPrompter uses direct bufio.Scanner (SlackPrompter has no Confirm method)
+- [Phase 72-08]: checkSlackUsersReadEmailScope placed in doctor_slack_transcript.go alongside checkSlackFilesWriteScope; tests in package cmd (not cmd_test); remediation in CheckResult.Remediation field
 
 ### Roadmap Evolution
 
@@ -1397,6 +1399,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-29T19:18:12.413Z
-Stopped at: Completed 72-05-PLAN.md
+Last session: 2026-05-29T19:27:06.977Z
+Stopped at: Completed 72-08-PLAN.md
 Resume file: None
