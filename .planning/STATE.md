@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 72-00-PLAN.md
-last_updated: "2026-05-29T18:42:36.917Z"
+stopped_at: Completed 72-01-PLAN.md
+last_updated: "2026-05-29T18:52:59.308Z"
 last_activity: 2026-05-29
 progress:
   total_phases: 106
   completed_phases: 93
   total_plans: 452
-  completed_plans: 407
+  completed_plans: 408
   percent: 88
 ---
 
@@ -436,6 +436,7 @@ Progress: [█████████░] 88%
 | Phase 89 P05 | 750s | 4 tasks | 9 files |
 | Phase 89 P06 | 5min | 2 tasks | 5 files |
 | Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P00 | 652 | 3 tasks | 10 files |
+| Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P01 | 2 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1263,6 +1264,9 @@ Recent decisions affecting current work:
 - [Phase 89]: SOPS-08-IAM-OPERATOR verified no-op: line 484 has exact kms:* broad grant in km-operator-policy; no code change needed
 - [Phase 72]: Wave 0 TDD stubs use pure t.Skip with no non-existent symbol references so go vet passes before production code lands
 - [Phase 72]: Manifest template scope list (13 scopes) adds files:read (Phase 75 inbound) and users:read.email (Phase 72) vs reference manifest; golden fixture committed for byte-exact assertion in Wave 1
+- [Phase 72-01]: users_not_found maps to (false, nil) not an error — orchestrator branches on boolean, not error inspection
+- [Phase 72-01]: already_in_channel swallowed to nil in InviteUserToChannel (idempotent) — matches JoinChannel contract; sentinel deferred to Plan 72-04
+- [Phase 72-01]: Email lowercased + trimmed before users.lookupByEmail dispatch per Pitfall 6 in 72-RESEARCH.md
 
 ### Roadmap Evolution
 
@@ -1378,6 +1382,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-29T18:42:36.907Z
-Stopped at: Completed 72-00-PLAN.md
+Last session: 2026-05-29T18:52:59.298Z
+Stopped at: Completed 72-01-PLAN.md
 Resume file: None
