@@ -406,6 +406,26 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 				})
 			}
 		}
+
+		// Phase 72 — Slack invite-email validation rules.
+
+		// Rule SE1 (error): invite-emails requires outbound Slack enabled.
+		// Empty list is a no-op (does not require notifySlackEnabled).
+		if len(cli.NotifySlackInviteEmails) > 0 && !slackOn {
+			errs = append(errs, ValidationError{
+				Path:    "spec.cli.notifySlackInviteEmails",
+				Message: "notifySlackInviteEmails requires notifySlackEnabled: true",
+			})
+		}
+		// Rule SE2 (error): each entry must be a syntactically valid email.
+		for i, e := range cli.NotifySlackInviteEmails {
+			if !emailLooksValid(e) {
+				errs = append(errs, ValidationError{
+					Path:    fmt.Sprintf("spec.cli.notifySlackInviteEmails[%d]", i),
+					Message: fmt.Sprintf("invalid email %q", e),
+				})
+			}
+		}
 	}
 
 	// Phase 87 SNAP-02: Layer 1 semantic validation for additionalSnapshots.
@@ -572,4 +592,13 @@ func ValidateSopsBundleFile(bundlePath string) error {
 		return fmt.Errorf("sops bundle %s missing top-level 'sops:' metadata block (is the file encrypted with sops?)", bundlePath)
 	}
 	return nil
+}
+
+// emailLooksValid is a permissive RFC-5322-ish check used by the
+// notifySlackInviteEmails validator (Rule SE2). It does not verify
+// deliverability — the Slack API call is the authoritative gate.
+var emailRegex = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
+
+func emailLooksValid(s string) bool {
+	return emailRegex.MatchString(s)
 }
