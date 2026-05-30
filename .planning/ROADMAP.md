@@ -2077,3 +2077,13 @@ Plans:
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 90 to break down)
+
+### Phase 91: Slack inbound @-mention-only mode for shared and override channels (polite-bot)
+
+**Goal:** Stop the km-slack bridge from forwarding every message in subscribed channels — only react when the message text contains `<@{bot_user_id}>`. Smart per-channel-mode defaults: per-sandbox `#sb-{id}` channels keep current every-message behaviour (the bot is the primary participant); shared (Mode 1) and operator-controlled override (Mode 3) channels default to @-mention-only. New profile field `cli.notifySlackInboundMentionOnly *bool` lets operators force on/off, otherwise the mode-derived default applies. Bridge handler detects mention via `<@{bot_user_id}>` substring scan; bot_user_id cached in SSM at `{prefix}slack/bot-user-id` (verify caching in `km slack init`). Compiler emits `KM_SLACK_MENTION_ONLY` env var into bridge config from resolved profile. `km doctor` sanity-checks bot_user_id cache when at least one profile has mention-only enabled. Origin: raised by operator during Phase 72 UAT (2026-05-30) — corporate-workspace install where shared `#km-notifications` would be too noisy if the bot 👀-reacted to every team message. Initial design note at `.planning/todos/pending/2026-05-30-slack-inbound-mention-only-mode.md`. **Out of scope:** per-channel runtime overrides (slash command), display-name mentions without `<@U...>` form, reactions-as-actions integration.
+**Requirements**: GOAL-1..6 (developer-experience phase — derive REQ-IDs during `/gsd:plan-phase 91`)
+**Depends on:** Phase 72 (uses `bot_user_id` from `auth.test` response shape established in 72-01; reuses `notifySlackEnabled`/`notifySlackPerSandbox`/`notifySlackChannelOverride` mode dispatch from `create_slack.go`)
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 91 to break down)
