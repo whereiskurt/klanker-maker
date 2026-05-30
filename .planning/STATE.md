@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 91-04-PLAN.md (bot-user-id SSM caching via AuthTestWithUserID)
-last_updated: "2026-05-30T22:36:06.354Z"
+stopped_at: "91-03-PLAN.md Tasks 1-3 complete; Task 4 checkpoint:human-verify pending operator terragrunt plan"
+last_updated: "2026-05-30T22:44:42.413Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 107
   completed_phases: 94
   total_plans: 459
-  completed_plans: 420
+  completed_plans: 421
   percent: 88
 ---
 
@@ -449,6 +449,7 @@ Progress: [█████████░] 88%
 | Phase 91-slack-inbound-mention-only-mode-for-shared-and-override-channels-polite-bot P01 | 140s | 3 tasks | 3 files |
 | Phase 91 P02 | 155s | 2 tasks | 2 files |
 | Phase 91 P04 | 726 | 2 tasks | 5 files |
+| Phase 91 P03 | 20min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -1302,6 +1303,8 @@ Recent decisions affecting current work:
 - [Phase 91]: Tri-state *bool (nil/&true/&false) for NotifySlackInboundMentionOnly matches UseSlackConnect/SlackArchiveOnDestroy precedent; no default in JSON Schema, Go compiler resolver handles nil
 - [Phase 91]: KM_SLACK_MENTION_ONLY emits 'true'/'false' string (not 0/1) to match bridge expectation; gated on NotifySlackEnabled==&true for back-compat
 - [Phase 91]: AuthTestWithUserID uses callJSONRaw companion to avoid touching polymorphic SlackAPIResponse decode; bot-user-id SSM Put is non-fatal WARN in both init and rotate-token flows
+- [Phase 91]: WireMentionOnly exported helper (not inlined) allows direct unit testing without Lambda cold-start AWS client init
+- [Phase 91]: CachedBotUserIDFetcher.PrimeCache no-ops on empty uid to prevent blank cache entries causing lookup-loop confusion
 
 ### Roadmap Evolution
 
@@ -1418,6 +1421,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-30T22:36:06.344Z
-Stopped at: Completed 91-04-PLAN.md (bot-user-id SSM caching via AuthTestWithUserID)
+Last session: 2026-05-30T22:44:42.405Z
+Stopped at: 91-03-PLAN.md Tasks 1-3 complete; Task 4 checkpoint:human-verify pending operator terragrunt plan
 Resume file: None
