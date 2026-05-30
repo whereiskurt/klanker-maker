@@ -154,3 +154,47 @@ func TestSchema_NotifySlackInboundMentionOnly(t *testing.T) {
 		}
 	})
 }
+
+// boolPtrMention is a local helper to create *bool values for mention tests.
+func boolPtrMention(b bool) *bool { return &b }
+
+// mentionOnlyFixture builds a minimal *SandboxProfile with the given NotifySlackInboundMentionOnly value
+// and a valid CLI block (notifySlackEnabled=true) so cross-field rules don't interfere.
+func mentionOnlyFixture(v *bool) *profile.SandboxProfile {
+	return &profile.SandboxProfile{
+		APIVersion: "klankermaker.ai/v1alpha1",
+		Kind:       "SandboxProfile",
+		Spec: profile.Spec{
+			CLI: &profile.CLISpec{
+				NotifySlackEnabled:            boolPtrMention(true),
+				NotifySlackInboundMentionOnly: v,
+			},
+		},
+	}
+}
+
+// TestValidateSemantic_NotifySlackInboundMentionOnly confirms POL-03:
+// ValidateSemantic accepts &true, &false, and nil for the new field
+// without emitting any error or warning that references the field name.
+func TestValidateSemantic_NotifySlackInboundMentionOnly(t *testing.T) {
+	cases := []struct {
+		name string
+		val  *bool
+	}{
+		{"force-true", boolPtrMention(true)},
+		{"force-false", boolPtrMention(false)},
+		{"nil-default", nil},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			p := mentionOnlyFixture(tc.val)
+			errs := profile.ValidateSemantic(p)
+			for _, e := range errs {
+				if strings.Contains(e.Message, "notifySlackInboundMentionOnly") || strings.Contains(e.Path, "notifySlackInboundMentionOnly") {
+					t.Fatalf("ValidateSemantic should not emit errors for notifySlackInboundMentionOnly (no semantic rules), got: %+v", e)
+				}
+			}
+		})
+	}
+}
