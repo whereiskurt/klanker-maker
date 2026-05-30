@@ -17,6 +17,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Send / receive email from inside a sandbox | `klanker:email` skill |
 | Inject SOPS-encrypted secrets into a sandbox | `docs/sandbox-secrets.md` (Phase 89) |
 | Post to Slack from inside a sandbox (incl. transcript streaming, inbound, attachments) | `klanker:slack` skill |
+| Polite-bot mode, `KM_SLACK_MENTION_ONLY`, per-channel @-mention-only inbound | `docs/slack-notifications.md` § Phase 91 |
 | Ask the operator to do something via email | `klanker:operator` skill |
 | Detect sandbox environment + verify tooling | `klanker:sandbox` skill |
 | VS Code Remote-SSH operator workflow | `klanker:vscode` skill |
@@ -48,7 +49,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `km email send` — send signed email between sandboxes or to/from operator (`--from`, `--to`, `--cc`, `--use-bcc`, `--reply-to`)
 - `km email read <sandbox>` — read sandbox mailbox with signature verification and auto-decryption (`--json`, `--mark-read`)
 - `km otel <sandbox-id>` — OTEL telemetry + AI spend summary (`--prompts`, `--events`, `--tools`, `--timeline`)
-- `km slack init` — bootstrap Slack integration (`--bot-token`, `--invite-email`, `--shared-channel`, `--signing-secret`, `--force`)
+- `km slack init` — bootstrap Slack integration (`--bot-token`, `--invite-email`, `--shared-channel`, `--signing-secret`, `--force`); also caches `bot_user_id` at `{prefix}/slack/bot-user-id` (Phase 91)
 - `km slack test` — end-to-end smoke test through the bridge
 - `km slack status` — print SSM-backed Slack config
 - `km slack invite <email>` — invite an email to a Slack channel; auto-detects native vs Connect (`--channel`, `--external`, `--dry-run`)
@@ -287,3 +288,34 @@ km doctor
 **`km doctor` adds:** `slack_users_read_email_scope` (WARN if missing).
 
 See `docs/slack-notifications.md` § Phase 72 for the full operator guide.
+
+### Phase 91: Polite-bot — @-mention-only inbound mode
+
+Introduces polite-bot mode so the bridge does not react to every message in shared team
+channels. The effective behaviour is determined by the channel mode + optional profile override:
+
+| Mode | Channel | Default |
+|------|---------|---------|
+| 1 | Shared (e.g. `#km-notifications`) | mention-only |
+| 2 | Per-sandbox `#sb-{id}` | every-message (back-compat) |
+| 3 | Operator override (`notifySlackChannelOverride`) | mention-only |
+
+- `spec.cli.notifySlackInboundMentionOnly: *bool` — tri-state override: nil = mode default,
+  `true` = force polite, `false` = force chatty. Omit for smart per-mode behaviour.
+- `KM_SLACK_MENTION_ONLY` — install-level Lambda env var (`"true"`/`"false"`; default `"false"`).
+- `KM_SLACK_BOT_USER_ID` — bot user ID for mention scan; compiled from SSM at `km init --sidecars`.
+- **`km doctor` adds:** `slack_bot_user_id_cached` (WARN if missing when mention-only is active).
+
+Rollout after upgrading to a Phase 91 build:
+
+```bash
+make build
+export KM_SLACK_MENTION_ONLY=true
+km slack init --force                                        # re-caches bot_user_id at SSM
+export KM_SLACK_BOT_USER_ID=$(aws ssm get-parameter --name /${KM_RESOURCE_PREFIX}/slack/bot-user-id --query Parameter.Value --output text)
+km init --sidecars                                           # redeploys bridge Lambda with new env vars
+km doctor
+km destroy <sandbox-id> --remote --yes && km create <profile>   # existing sandboxes pick up new field
+```
+
+See `docs/slack-notifications.md` § Phase 91 for the full operator guide and troubleshooting.
