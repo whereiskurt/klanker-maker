@@ -529,6 +529,26 @@ type CLISpec struct {
 	// Schema addition requires `make build && km init --sidecars` after deploy so the
 	// management Lambda's km binary recognizes the field.
 	VSCodeEnabled *bool `yaml:"vscodeEnabled,omitempty" json:"vscodeEnabled,omitempty"`
+
+	// NotifySlackInboundMentionOnly controls whether the km-slack bridge only processes
+	// inbound messages that @-mention the bot (Phase 91 polite-bot mode).
+	//
+	// Pointer-bool with tri-state semantics:
+	//   nil    ⇒ use the channel-mode-derived default:
+	//             Mode 1 (shared, e.g. #km-notifications)             → true (mention-only)
+	//             Mode 2 (per-sandbox #sb-{id})                       → false (every-message)
+	//             Mode 3 (operator override, notifySlackChannelOverride!="") → true (mention-only)
+	//   &true  ⇒ force polite-bot regardless of mode
+	//   &false ⇒ force chatty regardless of mode
+	//
+	// The bridge does a substring scan of `event.text` for `<@{bot_user_id}>` and skips
+	// dispatch (no 👀 reaction, no SQS write, no nonce slot consumed) when the message
+	// does not contain the bot mention.
+	//
+	// Schema addition requires `make build && km init --sidecars` after deploy so the
+	// management Lambda's km binary recognises the field. Existing sandboxes need
+	// `km destroy && km create` to pick up the new field. Phase 91.
+	NotifySlackInboundMentionOnly *bool `yaml:"notifySlackInboundMentionOnly,omitempty" json:"notifySlackInboundMentionOnly,omitempty"`
 }
 
 // IsVSCodeEnabled returns true when the operator's profile has not opted out of VS Code
