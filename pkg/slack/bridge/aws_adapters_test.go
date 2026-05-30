@@ -1639,3 +1639,77 @@ func TestReactor_UnknownErrorString_TreatedTransient(t *testing.T) {
 		t.Errorf("expected error to mention attempt=3 exhausted, got: %v", err)
 	}
 }
+
+// ============================================================
+// Phase 91: CachedBotUserIDFetcher.PrimeCache tests
+// ============================================================
+
+// fakeSlackAuthTestAPI91 counts AuthTest invocations and returns a configured uid/err.
+type fakeSlackAuthTestAPI91 struct {
+	calls int
+	uid   string
+	err   error
+}
+
+func (f *fakeSlackAuthTestAPI91) AuthTest(ctx context.Context, token string) (string, error) {
+	f.calls++
+	return f.uid, f.err
+}
+
+// fakeBotTokenFetcher91 returns a fixed token or error.
+type fakeBotTokenFetcher91 struct {
+	token string
+	err   error
+}
+
+func (f *fakeBotTokenFetcher91) Fetch(ctx context.Context) (string, error) {
+	return f.token, f.err
+}
+
+// TestCachedBotUserIDFetcher_PrimeCache_Hit verifies that after PrimeCache("UBOT123"),
+// Fetch returns "UBOT123" without calling SlackAPI.AuthTest at all.
+func TestCachedBotUserIDFetcher_PrimeCache_Hit(t *testing.T) {
+	authAPI := &fakeSlackAuthTestAPI91{uid: "SHOULD_NOT_BE_CALLED"}
+	tokenFetcher := &fakeBotTokenFetcher91{token: "xoxb-fake"}
+	f := &bridge.CachedBotUserIDFetcher{
+		SlackAPI:     authAPI,
+		TokenFetcher: tokenFetcher,
+	}
+
+	f.PrimeCache("UBOT123")
+
+	uid, err := f.Fetch(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error from Fetch after PrimeCache: %v", err)
+	}
+	if uid != "UBOT123" {
+		t.Errorf("expected uid=UBOT123, got %q", uid)
+	}
+	if authAPI.calls != 0 {
+		t.Errorf("expected SlackAPI.AuthTest NOT called after PrimeCache, got %d calls", authAPI.calls)
+	}
+}
+
+// TestCachedBotUserIDFetcher_PrimeCache_EmptyNoOp verifies that PrimeCache("") is a
+// no-op: the cache stays cold and Fetch falls through to the live auth.test call.
+func TestCachedBotUserIDFetcher_PrimeCache_EmptyNoOp(t *testing.T) {
+	authAPI := &fakeSlackAuthTestAPI91{uid: "ULIVE123"}
+	tokenFetcher := &fakeBotTokenFetcher91{token: "xoxb-fake"}
+	f := &bridge.CachedBotUserIDFetcher{
+		SlackAPI:     authAPI,
+		TokenFetcher: tokenFetcher,
+	}
+
+	f.PrimeCache("") // no-op
+
+	uid, err := f.Fetch(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error from Fetch: %v", err)
+	}
+	if uid != "ULIVE123" {
+		t.Errorf("expected live auth.test uid=ULIVE123, got %q", uid)
+	}
+	if authAPI.calls != 1 {
+		t.Errorf("expected SlackAPI.AuthTest called exactly once (PrimeCache empty was no-op), got %d calls", authAPI.calls)
+	}
+}

@@ -258,6 +258,9 @@ func wireEventsHandler() {
 		Logger:        slog.Default(),
 	}
 
+	// Phase 91: polite-bot mode. Read at cold-start; constant for Lambda lifetime.
+	WireMentionOnly(eventsHandler, botUserIDFetcher)
+
 	// Wire DDBPauseHinter to eventsHandler.PauseHinter.
 	postHintFn := bridge.PostHintFunc(func(ctx context.Context, channelID, threadTS, text string) error {
 		_, err := initPoster.PostMessage(ctx, channelID, "", text, threadTS)
@@ -302,6 +305,26 @@ func wireEventsHandler() {
 
 	// Phase 75: wire SlackPoster into EventsHandler.
 	eventsHandler.Slack = initPoster
+}
+
+// WireMentionOnly reads KM_SLACK_MENTION_ONLY and KM_SLACK_BOT_USER_ID from the
+// environment and applies them to h and fetcher respectively. Exported so tests can
+// call it directly without going through wireEventsHandler (which requires the full
+// Lambda cold-start AWS client init).
+//
+//   - KM_SLACK_MENTION_ONLY=true  → bridge filters to @-mention-only messages.
+//   - KM_SLACK_BOT_USER_ID=<UID> → prime CachedBotUserIDFetcher to avoid a live
+//     auth.test call on the first mention scan. Set by the lambda-slack-bridge
+//     Terraform module (var.slack_mention_only / var.slack_bot_user_id). Phase 91.
+func WireMentionOnly(h *bridge.EventsHandler, fetcher *bridge.CachedBotUserIDFetcher) {
+	h.MentionOnly = os.Getenv("KM_SLACK_MENTION_ONLY") == "true"
+	if uid := os.Getenv("KM_SLACK_BOT_USER_ID"); uid != "" {
+		fetcher.PrimeCache(uid)
+		slog.Info("km-slack-bridge: primed bot_user_id cache from KM_SLACK_BOT_USER_ID env",
+			"uid", uid)
+	}
+	slog.Info("km-slack-bridge: events handler mention-only mode",
+		"enabled", h.MentionOnly)
 }
 
 // handle converts a Lambda Function URL request into the appropriate handler request,

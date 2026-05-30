@@ -1067,6 +1067,27 @@ func (f *CachedBotUserIDFetcher) Fetch(ctx context.Context) (string, error) {
 	return uid, nil
 }
 
+// PrimeCache seeds the in-memory cache with a known bot user ID, avoiding a
+// live auth.test call on the first Fetch(). Used by the bridge cold-start
+// wiring (cmd/km-slack-bridge/main.go) when KM_SLACK_BOT_USER_ID is supplied
+// via Terraform. No-op when uid is empty (we never want to cache an empty
+// string and trigger lookup-loop confusion). Phase 91.
+func (f *CachedBotUserIDFetcher) PrimeCache(uid string) {
+	if uid == "" {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ttl := f.ttl
+	if ttl == 0 {
+		ttl = time.Hour
+	}
+	f.cache = tokenCache{
+		token:  uid,
+		expiry: time.Now().Add(ttl),
+	}
+}
+
 // ============================================================
 // Plan 67-05: DDBPauseHinter — PauseHintPoster implementation
 // Posts a one-time "paused; queued" hint into the Slack thread, gated by a
