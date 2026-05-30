@@ -55,6 +55,12 @@ type EventsHandler struct {
 	// downloads fail (e.g. oversize, 403, S3 failure). Optional — nil means warnings
 	// are suppressed. Shared with the main bridge Handler via wiring in main.go.
 	Slack SlackPoster
+
+	// Phase 91: MentionOnly, when true, makes Handle() skip messages that do not
+	// contain `<@{bot_user_id}>` in event.text. Default false → pre-Phase-91
+	// behaviour (every message processed). Set from KM_SLACK_MENTION_ONLY env var
+	// at Lambda cold-start by wireEventsHandler in cmd/km-slack-bridge/main.go.
+	MentionOnly bool
 }
 
 func (h *EventsHandler) now() time.Time {
@@ -163,6 +169,21 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	if h.isBotLoop(ctx, msg) {
 		h.log().Debug("events: bot-loop filter matched", "subtype", msg.Subtype, "bot_id", msg.BotID, "user", msg.User)
 		return EventsResponse{StatusCode: 200, Body: "ok"}
+	}
+
+	// 4b. Mention-only filter (Phase 91). When MentionOnly is set, skip messages
+	// that do not @-mention the bot. Placed BEFORE dedup (step 5) so non-mention
+	// messages don't consume a nonce slot. Fail-open on BotUserID fetch error
+	// to match isBotLoop's fail-open policy.
+	if h.MentionOnly {
+		uid, err := h.BotUserID.Fetch(ctx)
+		if err != nil {
+			h.log().Warn("events: mention-only: bot_user_id fetch failed; falling open (allow)", "err", err)
+		} else if uid != "" && !strings.Contains(msg.Text, "<@"+uid+">") {
+			h.log().Debug("events: mention-only: skipping non-mention message",
+				"channel", msg.Channel, "ts", msg.TS)
+			return EventsResponse{StatusCode: 200, Body: "ok"}
+		}
 	}
 
 	// 5. Dedup event_id

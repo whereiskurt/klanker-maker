@@ -960,11 +960,27 @@ func TestEventsHandler_WithFiles_Synchronous(t *testing.T) {
 	}
 }
 
-// TestEventsHandler_MentionOnly stubs the Wave 0 contract for POL-06 and POL-12.
-// Plan 91-03 will implement the real test once EventsHandler has a MentionOnly bool field
-// and Handle() inserts step 4b mention-scan logic.
+// fakeNoncesCounter wraps fakeNonces and counts CheckAndStore invocations.
+// Used by TestEventsHandler_MentionOnly to verify skipped messages do NOT
+// consume a nonce slot (must be placed before dedup, per PLAN 91-03 MUST-HAVE).
+type fakeNoncesCounter struct {
+	inner     fakeNonces
+	callCount int
+}
+
+func (f *fakeNoncesCounter) CheckAndStore(ctx context.Context, id string, ttl time.Duration) (bool, error) {
+	f.callCount++
+	return f.inner.CheckAndStore(ctx, id, ttl)
+}
+
+// TestEventsHandler_MentionOnly verifies the Phase 91 polite-bot mention-scan guard
+// (step 4b in Handle). The 7 cases exercise:
+//   - mention-only disabled: every message dispatched
+//   - mention-only enabled: dispatch when @mention present, skip when absent
+//   - edge cases: mention at start, mention at end, wrong-bot mention, fetch error
 //
-// Reuses the existing newHandler factory and fakeBotUserID fake — do NOT duplicate them.
+// Critically, skipped messages must NOT invoke Nonces.CheckAndStore (the guard sits
+// BEFORE step 5 dedup so non-mention messages don't consume nonce slots).
 func TestEventsHandler_MentionOnly(t *testing.T) {
 	now := time.Now()
 
@@ -1028,11 +1044,56 @@ func TestEventsHandler_MentionOnly(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
+	for i, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_ = now
-			_ = tc
-			t.Skip("TODO Plan 91-03: implement once EventsHandler has MentionOnly field and Handle() inserts step 4b mention-scan")
+			h, sqs, _, _, _, _, _ := newHandler(now)
+
+			// Replace BotUserID with a fake that returns the test's uid/err.
+			h.BotUserID = &fakeBotUserID{uid: tc.botUID, err: tc.botUIDErr}
+
+			// Replace BotUserID in isBotLoop path too — use a UID that won't
+			// match the message sender "U1" so isBotLoop passes through cleanly.
+			// (UBOT123 is the bot; messages are sent from "U1" — no conflict.)
+
+			// Swap in a counting nonce store.
+			nonceCounter := &fakeNoncesCounter{}
+			h.Nonces = nonceCounter
+
+			h.MentionOnly = tc.mentionOnly
+
+			// Build a unique event to avoid cross-test nonce collisions.
+			eventID := fmt.Sprintf("EMO-%d", i)
+			body := fmt.Sprintf(
+				`{"type":"event_callback","event_id":%q,"event":{"type":"message","channel":"C1","user":"U1","text":%q,"ts":"1.0"}}`,
+				eventID, tc.messageText,
+			)
+			tsHdr, sigHdr := signSlackPayload(t, body, now)
+			resp := h.Handle(context.Background(), EventsRequest{
+				Headers: map[string]string{
+					"x-slack-request-timestamp": tsHdr,
+					"x-slack-signature":         sigHdr,
+				},
+				Body: body,
+			})
+
+			if resp.StatusCode != 200 {
+				t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, resp.Body)
+			}
+
+			if tc.wantSkipped {
+				// Skipped: no SQS write, and no nonce slot consumed (guard is before step 5).
+				if len(sqs.sends) != 0 {
+					t.Errorf("expected no SQS write when skipped, got %d sends", len(sqs.sends))
+				}
+				if nonceCounter.callCount != 0 {
+					t.Errorf("expected nonce CheckAndStore NOT called when skipped (guard before dedup), got callCount=%d", nonceCounter.callCount)
+				}
+			} else {
+				// Dispatched: SQS write happened.
+				if len(sqs.sends) != 1 {
+					t.Errorf("expected 1 SQS send when dispatched, got %d", len(sqs.sends))
+				}
+			}
 		})
 	}
 }
