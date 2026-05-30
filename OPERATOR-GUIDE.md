@@ -1172,6 +1172,39 @@ AWS_PROFILE=<management-profile> aws organizations delete-policy \
 
 ---
 
+## Slack notifications
+
+klankermaker's Slack bridge routes sandbox output to a shared channel (`#km-notifications` or
+similar) and to per-sandbox `#sb-{id}` channels. Full setup runbook in
+[docs/slack-notifications.md](docs/slack-notifications.md).
+
+### Mention-only mode (polite-bot)
+
+Phase 91 introduced polite-bot mode: in shared (Mode 1) and operator-controlled override
+(Mode 3) Slack channels the bot only reacts to messages that explicitly @-mention it
+(`<@KlankerMaker>`). Per-sandbox `#sb-{id}` channels continue to process every message.
+
+```yaml
+spec:
+  cli:
+    notifySlackEnabled: true
+    # Tri-state *bool: nil = mode default, true = force polite, false = force chatty
+    notifySlackInboundMentionOnly: true
+```
+
+New `km doctor` check: `slack_bot_user_id_cached` — WARNs when at least one profile resolves
+to mention-only AND the bot user ID is not cached at `{prefix}/slack/bot-user-id` in SSM.
+Remediation: `km slack init --force`.
+
+See [docs/slack-notifications.md § Phase 91](docs/slack-notifications.md#phase-91-polite-bot--mention-only-mode-for-sharedoverride-channels)
+for the full operator guide, rollout sequence, and troubleshooting matrix.
+
+> **Schema addition requires `km init --sidecars`:** `notifySlackInboundMentionOnly` (Phase 91)
+> must flow through to the bridge Lambda via `km init --sidecars`. Existing sandboxes also
+> need `km destroy <id> --remote --yes && km create <profile>` to pick up the new field.
+
+---
+
 ## SOPS secret injection
 
 Declarative secret injection into sandboxes via `spec.secrets.sopsFile`. Full
