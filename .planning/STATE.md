@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 91-00-PLAN.md (Wave 0 stub seeding)
-last_updated: "2026-05-30T22:16:33.722Z"
+stopped_at: "Completed 91-01-PLAN.md (profile schema: NotifySlackInboundMentionOnly field)"
+last_updated: "2026-05-30T22:21:19.091Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 107
   completed_phases: 94
   total_plans: 459
-  completed_plans: 417
+  completed_plans: 418
   percent: 88
 ---
 
@@ -446,6 +446,7 @@ Progress: [█████████░] 88%
 | Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P06 | 16min | 1 tasks | 3 files |
 | Phase 72 P09 | 8min | 2 tasks | 4 files |
 | Phase 91 P00 | 204s | 3 tasks | 6 files |
+| Phase 91-slack-inbound-mention-only-mode-for-shared-and-override-channels-polite-bot P01 | 140s | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1296,6 +1297,7 @@ Recent decisions affecting current work:
 - [Phase 72-09]: Reinstall-ejects-bot documented as known Slack platform behavior in docs/slack-notifications.md § Phase 72; operator must re-invite bot or km slack init --force after manifest reinstall
 - [Phase 91]: Extended events_handler_test.go in place (single file) rather than creating a sibling to keep all bridge fakes co-located
 - [Phase 91]: Wave 0 stub pattern: t.Skip with TODO Plan 91-XX message locks validation contract before implementation lands
+- [Phase 91]: Tri-state *bool (nil/&true/&false) for NotifySlackInboundMentionOnly matches UseSlackConnect/SlackArchiveOnDestroy precedent; no default in JSON Schema, Go compiler resolver handles nil
 
 ### Roadmap Evolution
 
@@ -1412,6 +1414,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-30T22:16:33.714Z
-Stopped at: Completed 91-00-PLAN.md (Wave 0 stub seeding)
+Last session: 2026-05-30T22:21:19.082Z
+Stopped at: Completed 91-01-PLAN.md (profile schema: NotifySlackInboundMentionOnly field)
 Resume file: None
