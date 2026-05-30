@@ -88,6 +88,32 @@ func (f *fakeSlackAPIForInvite) ChannelInfo(_ context.Context, _ string) (int, b
 // Tests
 // ─────────────────────────────────────────────
 
+// TestSlackInvite_NoPreSetSlackAPI_NoBotTokenInSSM is the regression for the
+// Phase 72-05 production nil-deref where buildSlackCmdDeps returned deps with
+// d.Slack == nil (the bot token lives in SSM, not the constructor args) and
+// RunSlackInvite dereferenced d.Slack directly. The original symptom was a
+// panic inside pkg/slack.EnsureMemberByEmail with InviteAPI == nil.
+//
+// With the lazy-init in place, the missing-token path must surface a clear,
+// actionable error pointing the operator at `km slack init` — not panic.
+func TestSlackInvite_NoPreSetSlackAPI_NoBotTokenInSSM(t *testing.T) {
+	deps := &cmd.SlackCmdDeps{
+		Slack:     nil,               // production buildSlackCmdDeps returns this
+		SSM:       newFakeSSM(nil),    // empty SSM — no bot token
+		SsmPrefix: "/km/",
+	}
+	err := cmd.RunSlackInvite(context.Background(), deps, &config.Config{}, cmd.SlackInviteOpts{
+		Email:  "alice@example.com",
+		DryRun: true,
+	})
+	if err == nil {
+		t.Fatal("expected error when d.Slack is nil and SSM has no bot token; got nil")
+	}
+	if !strings.Contains(err.Error(), "km slack init") {
+		t.Errorf("error message should point at `km slack init`; got %q", err.Error())
+	}
+}
+
 func TestSlackInvite_HappyPath(t *testing.T) {
 	api := &fakeSlackAPIForInvite{lookupID: "U123", lookupFound: true}
 	deps := &cmd.SlackCmdDeps{

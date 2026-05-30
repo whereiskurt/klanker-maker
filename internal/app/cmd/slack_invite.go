@@ -93,6 +93,22 @@ func RunSlackInvite(ctx context.Context, d *SlackCmdDeps, cfg *config.Config, op
 		return fmt.Errorf("email is required")
 	}
 
+	// Lazy-init the full-capability Slack client from the SSM-stored bot token.
+	// In production buildSlackCmdDeps returns deps with d.Slack == nil because the
+	// token is in SSM rather than the constructor arguments — RunSlackInit follows
+	// the same pattern (see slack.go ~line 222). In tests d.Slack is pre-set with
+	// a recording fake so this branch short-circuits.
+	if d.Slack == nil {
+		token, err := d.SSM.Get(ctx, d.SsmPrefix+"slack/bot-token", true)
+		if err != nil {
+			return fmt.Errorf("read Slack bot token from SSM (%sslack/bot-token): %w; run `km slack init` first", d.SsmPrefix, err)
+		}
+		if token == "" {
+			return fmt.Errorf("Slack bot token not configured in SSM (%sslack/bot-token); run `km slack init` first", d.SsmPrefix)
+		}
+		d.Slack = kmslack.NewClient(token, nil)
+	}
+
 	// Resolve channel: ID format → use directly; name → FindChannelByName; empty → SSM default.
 	channelID, err := resolveInviteChannel(ctx, d, opts.Channel)
 	if err != nil {
