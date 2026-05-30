@@ -48,10 +48,10 @@ type SlackAPIResponse struct {
 		IsMember   bool   `json:"is_member"`
 		NumMembers int    `json:"num_members"`
 	} `json:"channel,omitempty"`
-	// User is populated by users.lookupByEmail. Phase 72.
-	User struct {
-		ID string `json:"id"`
-	} `json:"user,omitempty"`
+	// User is populated by users.lookupByEmail (object shape). The same field
+	// in auth.test responses is a string (the bot username), so SlackUserField
+	// tolerates both — string shape decodes to an empty User with ID == "".
+	User SlackUserField `json:"user,omitempty"`
 
 	// Channels and ResponseMetadata are populated by conversations.list.
 	// JSON-decode-safe to leave them empty on responses that don't include them.
@@ -59,6 +59,34 @@ type SlackAPIResponse struct {
 	ResponseMetadata struct {
 		NextCursor string `json:"next_cursor,omitempty"`
 	} `json:"response_metadata,omitempty"`
+}
+
+// SlackUserField decodes the polymorphic "user" field returned by Slack:
+//   - auth.test returns "user": "bot-username" (a string — the bot's display name)
+//   - users.lookupByEmail returns "user": {"id": "U...", ...} (an object)
+//
+// Only the ID is needed downstream; the bot-username string shape decodes to
+// SlackUserField{ID: ""} so the parent SlackAPIResponse decode succeeds for both.
+type SlackUserField struct {
+	ID string
+}
+
+func (u *SlackUserField) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	if b[0] == '"' {
+		// String shape (auth.test) — username string, no ID to extract.
+		return nil
+	}
+	var obj struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return err
+	}
+	u.ID = obj.ID
+	return nil
 }
 
 // SlackChannelSummary is the per-channel shape returned by conversations.list.

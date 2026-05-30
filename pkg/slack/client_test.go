@@ -61,6 +61,25 @@ func TestClient_AuthTest_OK(t *testing.T) {
 	}
 }
 
+// TestClient_AuthTest_RealShape asserts that the auth.test JSON body Slack
+// actually sends — where "user" is a STRING (the bot username) rather than an
+// object — round-trips cleanly through SlackAPIResponse. Regression for the
+// Phase 72-01 bug where SlackAPIResponse.User was a struct{ID string} and
+// users.lookupByEmail's object shape clashed with auth.test's string shape.
+func TestClient_AuthTest_RealShape(t *testing.T) {
+	body := []byte(`{"ok":true,"url":"https://example.slack.com/","team":"example","user":"klankermaker-bot","team_id":"T01234ABCD","user_id":"U01234ABCD","bot_id":"B01234ABCD"}`)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(body)
+	}))
+	defer ts.Close()
+
+	c := newClientAgainstServer(ts)
+	if err := c.AuthTest(context.Background()); err != nil {
+		t.Errorf("AuthTest against real auth.test JSON shape returned error: %v", err)
+	}
+}
+
 func TestClient_AuthTest_NotOK(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
