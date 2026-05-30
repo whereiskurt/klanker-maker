@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: "91-03-PLAN.md Tasks 1-3 complete; Task 4 checkpoint:human-verify pending operator terragrunt plan"
-last_updated: "2026-05-30T22:44:42.413Z"
+stopped_at: Completed 91-05-PLAN.md — checkSlackBotUserIDCached + doctor registration
+last_updated: "2026-05-30T22:53:07.430Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 107
   completed_phases: 94
   total_plans: 459
-  completed_plans: 421
+  completed_plans: 422
   percent: 88
 ---
 
@@ -450,6 +450,7 @@ Progress: [█████████░] 88%
 | Phase 91 P02 | 155s | 2 tasks | 2 files |
 | Phase 91 P04 | 726 | 2 tasks | 5 files |
 | Phase 91 P03 | 20min | 3 tasks | 9 files |
+| Phase 91 P05 | 12min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1305,6 +1306,8 @@ Recent decisions affecting current work:
 - [Phase 91]: AuthTestWithUserID uses callJSONRaw companion to avoid touching polymorphic SlackAPIResponse decode; bot-user-id SSM Put is non-fatal WARN in both init and rotate-token flows
 - [Phase 91]: WireMentionOnly exported helper (not inlined) allows direct unit testing without Lambda cold-start AWS client init
 - [Phase 91]: CachedBotUserIDFetcher.PrimeCache no-ops on empty uid to prevent blank cache entries causing lookup-loop confusion
+- [Phase 91]: Duplicated resolveMentionOnly logic into anyProfileMentionOnly in doctor.go (not exported from pkg/compiler) to keep compiler package sealed
+- [Phase 91]: anyProfileMentionOnly gates checkSlackBotUserIDCached registration so SKIPPED is returned when no local profile activates mention-only
 
 ### Roadmap Evolution
 
@@ -1421,6 +1424,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-30T22:44:42.405Z
-Stopped at: 91-03-PLAN.md Tasks 1-3 complete; Task 4 checkpoint:human-verify pending operator terragrunt plan
+Last session: 2026-05-30T22:53:07.421Z
+Stopped at: Completed 91-05-PLAN.md — checkSlackBotUserIDCached + doctor registration
 Resume file: None
