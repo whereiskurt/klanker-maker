@@ -2081,9 +2081,15 @@ Plans:
 ### Phase 91: Slack inbound @-mention-only mode for shared and override channels (polite-bot)
 
 **Goal:** Stop the km-slack bridge from forwarding every message in subscribed channels — only react when the message text contains `<@{bot_user_id}>`. Smart per-channel-mode defaults: per-sandbox `#sb-{id}` channels keep current every-message behaviour (the bot is the primary participant); shared (Mode 1) and operator-controlled override (Mode 3) channels default to @-mention-only. New profile field `cli.notifySlackInboundMentionOnly *bool` lets operators force on/off, otherwise the mode-derived default applies. Bridge handler detects mention via `<@{bot_user_id}>` substring scan; bot_user_id cached in SSM at `{prefix}slack/bot-user-id` (verify caching in `km slack init`). Compiler emits `KM_SLACK_MENTION_ONLY` env var into bridge config from resolved profile. `km doctor` sanity-checks bot_user_id cache when at least one profile has mention-only enabled. Origin: raised by operator during Phase 72 UAT (2026-05-30) — corporate-workspace install where shared `#km-notifications` would be too noisy if the bot 👀-reacted to every team message. Initial design note at `.planning/todos/pending/2026-05-30-slack-inbound-mention-only-mode.md`. **Out of scope:** per-channel runtime overrides (slash command), display-name mentions without `<@U...>` form, reactions-as-actions integration.
-**Requirements**: GOAL-1..6 (developer-experience phase — derive REQ-IDs during `/gsd:plan-phase 91`)
+**Requirements**: POL-01, POL-02, POL-03, POL-04, POL-05, POL-06, POL-07, POL-08, POL-09, POL-10, POL-11, POL-12, POL-13 (synthetic phase-local IDs, recorded in REQUIREMENTS.md following the Phase 84.2/84.3/89 precedent)
 **Depends on:** Phase 72 (uses `bot_user_id` from `auth.test` response shape established in 72-01; reuses `notifySlackEnabled`/`notifySlackPerSandbox`/`notifySlackChannelOverride` mode dispatch from `create_slack.go`)
-**Plans:** 0 plans
+**Plans:** 7 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 91 to break down)
+- [ ] 91-00-PLAN.md — Wave 0 test stub seeding (6 stub test files covering all POL-XX with automated commands)
+- [ ] 91-01-PLAN.md — Schema + types + validate: CLISpec.NotifySlackInboundMentionOnly *bool, JSON Schema property (POL-01/02/03)
+- [ ] 91-02-PLAN.md — Compiler resolveMentionOnly helper + KM_SLACK_MENTION_ONLY emission into notifyEnv (POL-04/11)
+- [ ] 91-03-PLAN.md — Bridge handler MentionOnly field + step 4b mention-scan guard + main.go wiring + Lambda Terraform vars (POL-05/06/09/12)
+- [ ] 91-04-PLAN.md — km slack init + km slack rotate-token cache bot_user_id to {prefix}slack/bot-user-id SSM (POL-07/08)
+- [ ] 91-05-PLAN.md — km doctor checkSlackBotUserIDCached WARN check (POL-10)
+- [ ] 91-06-PLAN.md — Documentation (slack-notifications.md, CLAUDE.md, OPERATOR-GUIDE.md) + UAT checkpoint (POL-13)
