@@ -32,6 +32,8 @@ resource "aws_ses_receipt_rule" "operator_inbound" {
     object_key_prefix = "mail/create/${var.resource_prefix}/"
     position          = 1
   }
+
+  depends_on = [aws_s3_bucket_policy.mail]
 }
 
 # Sandbox catchall: whole-domain match (AWS SES does not support per-rule wildcards).
@@ -52,6 +54,8 @@ resource "aws_ses_receipt_rule" "sandbox_catchall" {
     object_key_prefix = "mail/${var.resource_prefix}/"
     position          = 1
   }
+
+  depends_on = [aws_s3_bucket_policy.mail]
 }
 
 # ============================================================
