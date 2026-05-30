@@ -1601,3 +1601,161 @@ Validation: `notifySlackInviteEmails` requires `notifySlackEnabled: true` (valid
 ### Known reinstall consequence: bot ejected from channels
 
 When you reinstall the Slack app from an updated manifest (the Phase 72 manifest generator path), Slack ejects the bot from every pre-existing channel it was a member of — including the shared channel stored at `km slack init` time. After the reinstall and token rotation, run `/invite @KlankerMaker` in your shared channel from Slack (or re-run `km slack init --force`) to restore bridge posting. This is also why `km doctor` may transiently report a 502 `channel_not_found` on the `slack_bot_in_shared_channel` check immediately after a reinstall + rotate-token cycle; it resolves once the bot is re-invited.
+
+---
+
+## Phase 91: Polite-bot — @-mention-only mode for shared/override channels
+
+### Overview
+
+Before Phase 91, the km-slack bridge reacted to and dispatched every inbound message in every
+channel the bot was a member of. In a corporate Slack workspace where the bot shares a team
+channel like `#km-notifications` with many participants, this made the bot noisy — it reacted
+with 👀 to every message, even those not intended for it. Phase 91 introduces polite-bot mode:
+for shared (Mode 1) and operator-controlled override (Mode 3) channels, the bridge only reacts
+and dispatches when the message text contains `<@{bot_user_id}>` (a native Slack @-mention of
+the bot). Per-sandbox `#sb-{id}` channels (Mode 2) keep the existing every-message behaviour
+because the bot is the primary participant in those single-purpose channels. A new profile knob
+lets operators override the smart per-mode default in either direction.
+
+### Per-mode defaults
+
+| Mode | Channel | Default `mention_only` | Why |
+|------|---------|------------------------|-----|
+| 1 | Shared (e.g. `#km-notifications`) | `true` | Reduce noise in multi-participant corporate channels |
+| 2 | Per-sandbox `#sb-{id}` | `false` | Bot is the primary participant; every message is relevant |
+| 3 | Operator override (`notifySlackChannelOverride`) | `true` | Operator controls the channel; assume shared context |
+
+The effective value is: `notifySlackInboundMentionOnly` (if explicitly set) else the mode
+default above.
+
+### Profile field reference
+
+```yaml
+spec:
+  cli:
+    notifySlackEnabled: true
+    # Tri-state *bool: nil = use mode default (table above), true = force polite, false = force chatty.
+    # Omit the field entirely to accept the per-mode smart default (recommended).
+    notifySlackInboundMentionOnly: true
+```
+
+Field: `spec.cli.notifySlackInboundMentionOnly` (`*bool`, optional). Sibling of
+`notifySlackEnabled`, `notifySlackPerSandbox`, `notifySlackChannelOverride` (introduced
+Phase 72). Validation: any bool is accepted; no semantic error for Mode 2 + `true` (the
+operator is intentionally making a per-sandbox channel polite, e.g. multiple operators sharing
+one sandbox).
+
+### Operator override examples
+
+**Default — accept per-mode smart defaults (no field needed):**
+
+```yaml
+spec:
+  cli:
+    notifySlackEnabled: true
+    notifySlackPerSandbox: true
+    # mention_only: nil → Mode 2 default false → every-message behaviour
+```
+
+**Force polite in a per-sandbox channel (rare — useful when multiple operators share a
+sandbox and want to reduce chatter):**
+
+```yaml
+spec:
+  cli:
+    notifySlackEnabled: true
+    notifySlackPerSandbox: true
+    notifySlackInboundMentionOnly: true   # override Mode 2 default
+```
+
+**Force chatty in a shared channel (testing / single-operator installs only):**
+
+```yaml
+spec:
+  cli:
+    notifySlackEnabled: true
+    notifySlackChannelOverride: "#km-test-${KM_RESOURCE_PREFIX}"
+    notifySlackInboundMentionOnly: false  # override Mode 3 default
+```
+
+**Polite-mode on an operator-override channel (Mode 3, accepting the default):**
+
+```yaml
+spec:
+  cli:
+    notifySlackEnabled: true
+    notifySlackChannelOverride: "#km-notifications"
+    # mention_only: nil → Mode 3 default true → polite-bot behaviour
+```
+
+### Bridge env vars
+
+The resolved effective value is compiled into the bridge Lambda environment block. Operators
+set these before running `km init --sidecars`:
+
+| Env var | Values | Default | Purpose |
+|---------|--------|---------|---------|
+| `KM_SLACK_MENTION_ONLY` | `"true"` / `"false"` | `"false"` | Install-level default for the bridge; compiled profile field overrides per-sandbox |
+| `KM_SLACK_BOT_USER_ID` | Slack user ID (e.g. `U03ABCDEF`) | — | Bot user ID for the mention scan; primes `CachedBotUserIDFetcher` at cold-start |
+
+`KM_SLACK_BOT_USER_ID` is injected at compile time from the SSM parameter
+`{prefix}/slack/bot-user-id` (populated by `km slack init`). This avoids an extra SSM
+round-trip on every Lambda cold-start.
+
+To opt the whole install in to polite-bot as the default (recommended for corporate
+workspaces), export `KM_SLACK_MENTION_ONLY=true` before `km init --sidecars`. Profiles can
+still override on a per-sandbox basis via `notifySlackInboundMentionOnly`.
+
+### `km doctor` check: `slack_bot_user_id_cached`
+
+| Status | Meaning |
+|--------|---------|
+| OK | `{prefix}/slack/bot-user-id` SSM parameter is present and non-empty |
+| WARN | Parameter missing or empty AND at least one local profile resolves to `mention_only=true`; bridge would fall back to a runtime `auth.test` call on cold-start |
+| SKIP | Slack not configured / no profiles with mention-only enabled |
+
+Remediation: `km slack init --force` — re-runs `auth.test`, writes `bot_user_id` to SSM.
+
+### Rollout sequence
+
+After upgrading `km` to a Phase 91 build:
+
+```sh
+make build                                                    # rebuild km binary with Phase 91 schema
+
+export KM_SLACK_MENTION_ONLY=true                             # opt-in to polite-bot (install-level default)
+km slack init --force                                         # re-runs auth.test, caches bot_user_id at SSM
+export KM_SLACK_BOT_USER_ID=$(aws ssm get-parameter \
+  --name /${KM_RESOURCE_PREFIX}/slack/bot-user-id \
+  --query Parameter.Value --output text)
+km init --sidecars                                            # redeploys bridge Lambda with new env vars
+km doctor                                                     # verifies slack_bot_user_id_cached OK
+
+# For sandboxes created before Phase 91 (existing #sb-{id} channels):
+km destroy <sandbox-id> --remote --yes && km create <profile>  # picks up new schema field
+```
+
+`KM_SLACK_MENTION_ONLY` is install-level: it controls the Lambda default for sandboxes that
+don't set `notifySlackInboundMentionOnly` explicitly. Setting it to `"true"` makes
+Mode 1/3 channels polite and leaves Mode 2 (`#sb-{id}`) every-message unless the profile
+forces otherwise.
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| Bot still 👀-reacts to non-mention messages in a shared channel | Check `KM_SLACK_MENTION_ONLY` in Lambda env: `aws lambda get-function-configuration --function-name ${KM_RESOURCE_PREFIX}-slack-bridge \| jq .Environment.Variables.KM_SLACK_MENTION_ONLY`. If `"false"` or absent, re-export and re-run `km init --sidecars`. |
+| `km doctor` reports `slack_bot_user_id_cached` WARN | Run `km slack init --force` to re-cache the bot user ID; verify with `aws ssm get-parameter --name /${KM_RESOURCE_PREFIX}/slack/bot-user-id --query Parameter.Value --output text`. |
+| Bot ignores a message that DOES @-mention it | Confirm the user typed `@KlankerMaker` in the Slack UI (not a literal `<@U...>` string). Slack only canonicalises to `<@U...>` for real app/user mentions in the Slack UI, not for raw text strings. |
+| Mention-scan never fires; cold-start is slow | `KM_SLACK_BOT_USER_ID` is empty in Lambda env. Re-export from SSM before `km init --sidecars` (see rollout sequence above). |
+| Mode 2 (`#sb-{id}`) channel is polite when it should be chatty | Profile has `notifySlackInboundMentionOnly: true` set explicitly. Remove the field to restore the Mode 2 every-message default. |
+
+### Out of scope
+
+The following capabilities are explicitly deferred to a future phase:
+
+- **Per-channel runtime override via slash command** (e.g. `/km mention-only on`)
+- **Display-name mention detection** (`@klankermaker` typed without Slack canonicalising to
+  `<@U...>`) — Slack canonicalises on send so this is not expected to be a gap in practice
+- **Reactions-as-actions integration** — different phase
