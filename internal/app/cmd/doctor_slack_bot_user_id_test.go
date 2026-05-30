@@ -3,9 +3,97 @@ package cmd
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// TestAnyProfileMentionOnly verifies the helper that gates the bot-user-id
+// doctor check (Phase 91).
+func TestAnyProfileMentionOnly(t *testing.T) {
+	// Helper to write a profile yaml into a temp dir and return the dir path.
+	writeProfile := func(t *testing.T, content string) string {
+		t.Helper()
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "test.yaml"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	t.Run("empty dir → false", func(t *testing.T) {
+		dir := t.TempDir()
+		if anyProfileMentionOnly([]string{dir}) {
+			t.Error("expected false for empty dir")
+		}
+	})
+
+	t.Run("non-existent dir → false", func(t *testing.T) {
+		if anyProfileMentionOnly([]string{"/nonexistent-dir-phase91"}) {
+			t.Error("expected false for missing dir")
+		}
+	})
+
+	t.Run("profile without notifySlackEnabled → false", func(t *testing.T) {
+		dir := writeProfile(t, `
+spec:
+  cli:
+    notifySlackEnabled: false
+`)
+		if anyProfileMentionOnly([]string{dir}) {
+			t.Error("expected false when notifySlackEnabled is false")
+		}
+	})
+
+	t.Run("shared channel (Mode 1) + notifySlackEnabled → true", func(t *testing.T) {
+		dir := writeProfile(t, `
+spec:
+  cli:
+    notifySlackEnabled: true
+`)
+		if !anyProfileMentionOnly([]string{dir}) {
+			t.Error("expected true for Mode 1 profile (shared, default mention-only)")
+		}
+	})
+
+	t.Run("per-sandbox (Mode 2) → false", func(t *testing.T) {
+		dir := writeProfile(t, `
+spec:
+  cli:
+    notifySlackEnabled: true
+    notifySlackPerSandbox: true
+`)
+		if anyProfileMentionOnly([]string{dir}) {
+			t.Error("expected false for Mode 2 profile (per-sandbox, default every-message)")
+		}
+	})
+
+	t.Run("explicit mentionOnly: true on Mode 2 → true", func(t *testing.T) {
+		dir := writeProfile(t, `
+spec:
+  cli:
+    notifySlackEnabled: true
+    notifySlackPerSandbox: true
+    notifySlackInboundMentionOnly: true
+`)
+		if !anyProfileMentionOnly([]string{dir}) {
+			t.Error("expected true when explicit override is true")
+		}
+	})
+
+	t.Run("explicit mentionOnly: false on Mode 1 → false", func(t *testing.T) {
+		dir := writeProfile(t, `
+spec:
+  cli:
+    notifySlackEnabled: true
+    notifySlackInboundMentionOnly: false
+`)
+		if anyProfileMentionOnly([]string{dir}) {
+			t.Error("expected false when explicit override is false")
+		}
+	})
+}
 
 // TestCheckSlackBotUserIDCached exercises all four return paths of
 // checkSlackBotUserIDCached (POL-10, Phase 91):

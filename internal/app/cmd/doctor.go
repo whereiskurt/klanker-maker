@@ -2978,6 +2978,25 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		return r
 	})
 
+	// Phase 91 — bot-user-id SSM cache check. Build the getUID closure only
+	// when at least one local profile resolves to mention-only mode. If no
+	// such profile exists the check returns SKIPPED (nil closure path).
+	var getUID func(context.Context) (string, error)
+	if anyProfileMentionOnly(cfg.GetProfileSearchPaths()) {
+		ssmStore := slackSSMStore
+		ssmPrefix := cfg.GetSsmPrefix()
+		getUID = func(ctx context.Context) (string, error) {
+			return ssmStore.Get(ctx, ssmPrefix+"slack/bot-user-id", false)
+		}
+	}
+	checks = append(checks, func(ctx context.Context) CheckResult {
+		r := checkSlackBotUserIDCached(ctx, cfg.GetSsmPrefix(), getUID)
+		if r.Status == CheckError {
+			r.Status = CheckWarn
+		}
+		return r
+	})
+
 	transcriptS3 := deps.SlackTranscriptS3
 	transcriptBucket := cfg.GetArtifactsBucket()
 	listSandboxIDs := deps.SlackListSandboxIDs
@@ -3735,4 +3754,58 @@ func parseLockID(lockID string) (bucket, key string, ok bool) {
 		return "", "", false
 	}
 	return trimmed[:idx], trimmed[idx+1:], true
+}
+
+// anyProfileMentionOnly returns true if any *.yaml profile found in any of
+// the given search directories resolves to mention-only effective (Phase 91).
+// Used by km doctor to gate the bot-user-id cache check: when no local
+// profile activates mention-only mode the check is SKIPPED rather than
+// producing a spurious WARN.
+//
+// Resolution logic mirrors resolveMentionOnly in pkg/compiler/userdata.go
+// (deliberately duplicated here to avoid exporting the compiler helper):
+//  1. If cli.NotifySlackInboundMentionOnly is set explicitly, that wins.
+//  2. Mode 2 (cli.NotifySlackPerSandbox == true) defaults to false.
+//  3. Mode 1 (shared) and Mode 3 (cli.NotifySlackChannelOverride != "")
+//     both default to true.
+//
+// Profiles missing notifySlackEnabled:true are ignored — the bridge only
+// processes events for enabled profiles.
+func anyProfileMentionOnly(searchDirs []string) bool {
+	for _, dir := range searchDirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue // dir absent or unreadable — skip
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				continue
+			}
+			p, err := profilepkg.Parse(data)
+			if err != nil || p.Spec.CLI == nil {
+				continue
+			}
+			// Only enabled profiles drive bridge dispatch.
+			if p.Spec.CLI.NotifySlackEnabled == nil || !*p.Spec.CLI.NotifySlackEnabled {
+				continue
+			}
+			cli := p.Spec.CLI
+			// Inline copy of resolveMentionOnly from pkg/compiler.
+			if cli.NotifySlackInboundMentionOnly != nil {
+				if *cli.NotifySlackInboundMentionOnly {
+					return true
+				}
+				continue // explicit false → skip this profile
+			}
+			if cli.NotifySlackPerSandbox {
+				continue // Mode 2 default false
+			}
+			return true // Mode 1 or Mode 3 default true
+		}
+	}
+	return false
 }
