@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: "Completed 91-02-PLAN.md (compiler: resolveMentionOnly + KM_SLACK_MENTION_ONLY emission)"
-last_updated: "2026-05-30T22:26:26.866Z"
+stopped_at: Completed 91-04-PLAN.md (bot-user-id SSM caching via AuthTestWithUserID)
+last_updated: "2026-05-30T22:36:06.354Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 107
   completed_phases: 94
   total_plans: 459
-  completed_plans: 419
+  completed_plans: 420
   percent: 88
 ---
 
@@ -448,6 +448,7 @@ Progress: [█████████░] 88%
 | Phase 91 P00 | 204s | 3 tasks | 6 files |
 | Phase 91-slack-inbound-mention-only-mode-for-shared-and-override-channels-polite-bot P01 | 140s | 3 tasks | 3 files |
 | Phase 91 P02 | 155s | 2 tasks | 2 files |
+| Phase 91 P04 | 726 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1300,6 +1301,7 @@ Recent decisions affecting current work:
 - [Phase 91]: Wave 0 stub pattern: t.Skip with TODO Plan 91-XX message locks validation contract before implementation lands
 - [Phase 91]: Tri-state *bool (nil/&true/&false) for NotifySlackInboundMentionOnly matches UseSlackConnect/SlackArchiveOnDestroy precedent; no default in JSON Schema, Go compiler resolver handles nil
 - [Phase 91]: KM_SLACK_MENTION_ONLY emits 'true'/'false' string (not 0/1) to match bridge expectation; gated on NotifySlackEnabled==&true for back-compat
+- [Phase 91]: AuthTestWithUserID uses callJSONRaw companion to avoid touching polymorphic SlackAPIResponse decode; bot-user-id SSM Put is non-fatal WARN in both init and rotate-token flows
 
 ### Roadmap Evolution
 
@@ -1416,6 +1418,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-30T22:26:26.855Z
-Stopped at: Completed 91-02-PLAN.md (compiler: resolveMentionOnly + KM_SLACK_MENTION_ONLY emission)
+Last session: 2026-05-30T22:36:06.344Z
+Stopped at: Completed 91-04-PLAN.md (bot-user-id SSM caching via AuthTestWithUserID)
 Resume file: None
