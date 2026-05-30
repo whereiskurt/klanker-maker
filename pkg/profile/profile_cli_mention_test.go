@@ -81,8 +81,76 @@ func TestCLISpec_NotifySlackInboundMentionOnly(t *testing.T) {
 	})
 }
 
+// minimalProfileYAML returns a minimal valid SandboxProfile YAML for schema tests,
+// injecting any extra CLI fields supplied.
+func minimalProfileYAML(extraCLI string) []byte {
+	base := `apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata:
+  name: test
+spec:
+  runtime:
+    instanceType: t3.small
+  network:
+    allowedDomains:
+      - ".example.com"
+`
+	if extraCLI != "" {
+		base += "  cli:\n"
+		for _, line := range strings.Split(extraCLI, "\n") {
+			if line != "" {
+				base += "    " + line + "\n"
+			}
+		}
+	}
+	return []byte(base)
+}
+
 // TestSchema_NotifySlackInboundMentionOnly verifies the JSON Schema contract for POL-02.
 // Covers: true accepted, false accepted, string "yes" rejected, omitted accepted.
 func TestSchema_NotifySlackInboundMentionOnly(t *testing.T) {
-	t.Skip("TODO Plan 91-01 Task 2: implement after sandbox_profile.schema.json gains notifySlackInboundMentionOnly — assert valid bool accepted, non-bool rejected")
+	t.Run("true-accepted", func(t *testing.T) {
+		raw := minimalProfileYAML("notifySlackInboundMentionOnly: true")
+		errs := profile.ValidateSchema(raw)
+		for _, e := range errs {
+			if strings.Contains(e.Message, "notifySlackInboundMentionOnly") {
+				t.Fatalf("expected no schema error for bool true, got: %v", e.Message)
+			}
+		}
+	})
+
+	t.Run("false-accepted", func(t *testing.T) {
+		raw := minimalProfileYAML("notifySlackInboundMentionOnly: false")
+		errs := profile.ValidateSchema(raw)
+		for _, e := range errs {
+			if strings.Contains(e.Message, "notifySlackInboundMentionOnly") {
+				t.Fatalf("expected no schema error for bool false, got: %v", e.Message)
+			}
+		}
+	})
+
+	t.Run("string-rejected", func(t *testing.T) {
+		raw := minimalProfileYAML(`notifySlackInboundMentionOnly: "yes"`)
+		errs := profile.ValidateSchema(raw)
+		found := false
+		for _, e := range errs {
+			if strings.Contains(e.Message, "notifySlackInboundMentionOnly") || strings.Contains(e.Path, "notifySlackInboundMentionOnly") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected schema error for string value, got: %+v", errs)
+		}
+	})
+
+	t.Run("omitted-accepted", func(t *testing.T) {
+		raw := minimalProfileYAML("")
+		errs := profile.ValidateSchema(raw)
+		for _, e := range errs {
+			if strings.Contains(e.Message, "notifySlackInboundMentionOnly") {
+				t.Fatalf("expected no schema error when field is omitted, got: %v", e.Message)
+			}
+		}
+	})
 }

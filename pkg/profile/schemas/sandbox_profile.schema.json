@@ -604,6 +604,10 @@
             "vscodeEnabled": {
               "type": "boolean",
               "description": "Phase 73: enable sshd + authorized_keys provisioning for VS Code Remote-SSH via SSM port-forward. Default true (omit = enabled). Set false to skip SSH provisioning."
+            },
+            "notifySlackInboundMentionOnly": {
+              "type": "boolean",
+              "description": "When true, the km-slack bridge only processes inbound messages that @-mention the bot (Phase 91 polite-bot). When false, every message is processed. When omitted, the channel-mode default applies (Mode 1/3 → true, Mode 2 → false)."
             }
           }
         }
