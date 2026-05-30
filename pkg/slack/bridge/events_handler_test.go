@@ -959,3 +959,80 @@ func TestEventsHandler_WithFiles_Synchronous(t *testing.T) {
 		t.Fatalf("expected 1 synchronous SQS send, got %d", len(sqs.sends))
 	}
 }
+
+// TestEventsHandler_MentionOnly stubs the Wave 0 contract for POL-06 and POL-12.
+// Plan 91-03 will implement the real test once EventsHandler has a MentionOnly bool field
+// and Handle() inserts step 4b mention-scan logic.
+//
+// Reuses the existing newHandler factory and fakeBotUserID fake — do NOT duplicate them.
+func TestEventsHandler_MentionOnly(t *testing.T) {
+	now := time.Now()
+
+	tests := []struct {
+		name        string
+		mentionOnly bool
+		botUID      string
+		botUIDErr   error
+		messageText string
+		wantSkipped bool
+	}{
+		{
+			name:        "mention-only=false, no @mention → dispatched",
+			mentionOnly: false,
+			botUID:      "UBOT123",
+			messageText: "hello world",
+			wantSkipped: false,
+		},
+		{
+			name:        "mention-only=true, has @mention → dispatched",
+			mentionOnly: true,
+			botUID:      "UBOT123",
+			messageText: "hey <@UBOT123> do the thing",
+			wantSkipped: false,
+		},
+		{
+			name:        "mention-only=true, no @mention → skipped",
+			mentionOnly: true,
+			botUID:      "UBOT123",
+			messageText: "hello world",
+			wantSkipped: true,
+		},
+		{
+			name:        "mention-only=true, different @mention → skipped",
+			mentionOnly: true,
+			botUID:      "UBOT123",
+			messageText: "hey <@UOTHER456> do the thing",
+			wantSkipped: true,
+		},
+		{
+			name:        "mention-only=true, mention at start → dispatched",
+			mentionOnly: true,
+			botUID:      "UBOT123",
+			messageText: "<@UBOT123> please summarise",
+			wantSkipped: false,
+		},
+		{
+			name:        "mention-only=true, mention at end → dispatched",
+			mentionOnly: true,
+			botUID:      "UBOT123",
+			messageText: "please summarise <@UBOT123>",
+			wantSkipped: false,
+		},
+		{
+			name:        "mention-only=true, bot_uid fetch error → fail-open",
+			mentionOnly: true,
+			botUID:      "",
+			botUIDErr:   errors.New("ssm: parameter not found"),
+			messageText: "hello world",
+			wantSkipped: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_ = now
+			_ = tc
+			t.Skip("TODO Plan 91-03: implement once EventsHandler has MentionOnly field and Handle() inserts step 4b mention-scan")
+		})
+	}
+}
