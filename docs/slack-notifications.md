@@ -1294,3 +1294,8 @@ Validation: `notifySlackInviteEmails` requires `notifySlackEnabled: true` (valid
 | `km slack manifest` says "run km slack init first" | SSM `{prefix}/slack/bridge-url` is unset. Run `km init` once first. |
 | Manifest pasted into Slack admin but app rejected | Confirm the JSON is valid (`python3 -m json.tool`). Confirm `display_information.name` ≤ 35 chars. |
 | `km slack invite` against private channel returns `not_in_channel` | Bot was kicked or never joined. The command auto-joins; if it still fails, manually `/invite @KlankerMaker` from Slack first. |
+| `km doctor` shows `channel_not_found` / 502 for shared channel right after reinstall | Expected. When reinstalling the app from an updated manifest, Slack ejects the bot from all pre-existing channels. Re-invite the bot with `/invite @KlankerMaker` from Slack in each channel, or run `km slack init --force` to restore the bridge. |
+
+### Known reinstall consequence: bot ejected from channels
+
+When you reinstall the Slack app from an updated manifest (the Phase 72 manifest generator path), Slack ejects the bot from every pre-existing channel it was a member of — including the shared channel stored at `km slack init` time. After the reinstall and token rotation, run `/invite @KlankerMaker` in your shared channel from Slack (or re-run `km slack init --force`) to restore bridge posting. This is also why `km doctor` may transiently report a 502 `channel_not_found` on the `slack_bot_in_shared_channel` check immediately after a reinstall + rotate-token cycle; it resolves once the bot is re-invited.

@@ -1,7 +1,7 @@
 ---
 phase: 72
-status: draft
-last_run: never
+status: passed
+last_run: 2026-05-30
 ---
 
 # Phase 72 — Operator UAT
@@ -179,13 +179,37 @@ missing scope (Plan 72-08 check not wired).
 
 | Part / Scenario | Status | Operator Notes |
 |---|---|---|
-| A. Dev-machine `go test ./...` green | ⬜ | |
-| B0. Install ordering (init→manifest→install→init→doctor) | ⬜ | |
-| B1. Manifest renders correctly | ⬜ | |
-| B2. Install + init + doctor all-OK | ⬜ | |
-| B3. `km slack invite --dry-run` classifies native vs external | ⬜ | |
-| B4. `km slack invite` native + Connect | ⬜ | |
-| B5. Full `km create` (useSlackConnect true + false) | ⬜ | |
-| B6. Doctor scope drift | ⬜ | |
+| A. Dev-machine `go test ./...` green | ✅ | Phase 72 surface clean; pre-existing `pkg/compiler` failures are unrelated — same tests fail at `f0cd289` (pre-Phase-72 main tip). Flagged as separate cleanup. |
+| B0. Install ordering (init→manifest→install→init→doctor) | ✅ | Manifest installed cleanly; `km init` complete; doctor confirms all scopes. |
+| B1. Manifest renders correctly | ✅ | Operator pasted output into Slack admin → install succeeded → all 13 scopes present. |
+| B2. Install + init + doctor all-OK | ✅ | `slack_users_read_email_scope` OK, `slack_app_events_scopes` OK, `slack_files_write_scope` OK. Bridge 502 WARN (`channel_not_found` for C0B4YJF5EP2) is a pre-existing artifact from the reinstall — bot lost membership when the app was reinstalled. NOT a Phase 72 verification failure. |
+| B3. `km slack invite --dry-run` classifies native vs external | ✅ | `whereiskurt@gmail.com` classified native; `kurt.hundeck@greenhouse.io` classified external. |
+| B4. `km slack invite` native + Connect | ✅ | Native invite via `./km slack invite whereiskurt@gmail.com --channel sb-learn` printed `✓ Invited`. Connect side covered by operator-greenhouse path in B5. |
+| B5. Full `km create` (useSlackConnect true + false) | ✅ | `sb-phase72-fresh` channel created; `whereiskurt@gmail.com` landed in member list via additional-folks loop; greenhouse operator received Connect invite. All four orchestrator quadrants exercised in one create. |
+| B6. Doctor scope drift | ⏭ | DEFERRED — covered by `TestDoctor_SlackUsersReadEmailScope_Pass` + `_Warn` unit tests at Plan 72-08. Operator chose to skip the destructive scope-removal cycle. |
 
-Phase 72 is COMPLETE when Part A is green and every Part B row passes. Operator initials: __________  Date: ________
+Phase 72 is COMPLETE when Part A is green and every Part B row passes. Operator initials: KPH  Date: 2026-05-30
+
+---
+
+## Bugs Caught During UAT
+
+Three production bugs were caught and fixed during the live Part B run. Each includes a regression test.
+
+**1. `ec13e5b` — fix(72-01): tolerate auth.test "user": `<string>` shape in SlackAPIResponse**
+- Root cause: `auth.test` returns `"user": "<string>"` (top-level string) but the existing `SlackAPIResponse.User` struct expected `{ID string}`. The type mismatch caused a decode failure on any real `auth.test` call.
+- Fix: Added `SlackUserField` tolerant unmarshaller; added `TestClient_AuthTest_RealShape` regression test using real `auth.test` JSON body.
+
+**2. `6cf1deb` — fix(72-05): lazy-init SlackCmdDeps.Slack from SSM bot token in RunSlackInvite**
+- Root cause: `buildSlackCmdDeps` returns deps with `Slack=nil` — the token lives in SSM and is loaded lazily. `RunSlackInvite` called through the orchestrator without checking for nil first, causing a nil-pointer deref in production.
+- Fix: Added lazy-init at `slack.go:222–225` mirroring `RunSlackInit`'s pattern; added `TestSlackInvite_NoPreSetSlackAPI_NoBotTokenInSSM` regression test for the production deps shape.
+
+**3. `2653bc3` — fix(72-01): send users.lookupByEmail as form-encoded, not JSON**
+- Root cause: Slack's `users.lookupByEmail` is a legacy Web API method that rejects JSON request bodies with `invalid_arguments`. The implementation was sending JSON.
+- Fix: Added `callForm` helper and routed `LookupUserByEmail` through it; updated `TestClient_LookupUserByEmail_Found` to assert `Content-Type: application/x-www-form-urlencoded` and a literal form-encoded body.
+
+---
+
+## Reinstall UX Note
+
+When re-installing the Slack app from an updated manifest (the Phase 72 manifest generator path), Slack ejects the bot from all pre-existing channels including the shared-channel-id configured at `km slack init` time. After reinstalling, the operator must re-invite the bot to those channels (e.g., `/invite @KlankerMaker` from Slack) or run `km slack init --force` to re-run the full init sequence and restore bridge posting. This is expected behavior and is why `km doctor`'s `slack_bot_in_shared_channel` check may report a 502 `channel_not_found` immediately after a token rotation following a reinstall. See `docs/slack-notifications.md` § Phase 72 for the remediation steps.

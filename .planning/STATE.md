@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 14
+current_plan: 15
 status: in-progress
-stopped_at: "Checkpoint 72-09-T3: Operator UAT human-verify gate"
-last_updated: "2026-05-29T19:42:09.818Z"
-last_activity: 2026-05-29
+stopped_at: "Completed 72-09-PLAN.md — Phase 72 UAT sign-off and closeout complete"
+last_updated: "2026-05-30T00:00:00.000Z"
+last_activity: 2026-05-30
 progress:
   total_phases: 106
   completed_phases: 94
   total_plans: 452
-  completed_plans: 416
+  completed_plans: 417
   percent: 88
 ---
 
@@ -1290,6 +1290,9 @@ Recent decisions affecting current work:
 - [Phase 72-06]: users:read.email scope warning is standalone inline check (not added to VerifyEventsAPIScopes) to preserve existing scope tests
 - [Phase 72-06]: isSlackProWorkspaceError removed from RunSlackInit call site; orchestrator wrapConnectError owns Pro-tier hint
 - [Phase 72]: Phase 72 docs: km slack manifest/invite/notifySlackInviteEmails/useSlackConnect documented in slack-notifications.md; UAT runbook written; awaiting operator live sign-off
+- [Phase 72-09]: Operator UAT PASSED 2026-05-30 by KPH — 7/8 rows green; B6 (scope-drift) deferred (covered by TestDoctor_SlackUsersReadEmailScope_Pass + _Warn unit tests); Phase 72 COMPLETE
+- [Phase 72-09]: Three production bugs caught during live UAT: ec13e5b (auth.test decode shape), 6cf1deb (nil-ptr in RunSlackInvite lazy-init), 2653bc3 (form-encoded vs JSON for users.lookupByEmail)
+- [Phase 72-09]: Reinstall-ejects-bot documented as known Slack platform behavior in docs/slack-notifications.md § Phase 72; operator must re-invite bot or km slack init --force after manifest reinstall
 
 ### Roadmap Evolution
 

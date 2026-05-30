@@ -1603,16 +1603,16 @@ Plans:
 **Plans:** 10/10 plans complete
 
 Plans:
-- [ ] 72-00-PLAN.md — Wave 0 stub seeding: 9 test stub files + manifest template + golden fixture (failing tests for Layers 1-8)
-- [ ] 72-01-PLAN.md — pkg/slack client primitives: LookupUserByEmail (lowercase, miss=boolean) + InviteUserToChannel (idempotent on already_in_channel) + SlackAPIResponse.User extension (Layer 1)
-- [ ] 72-02-PLAN.md — Profile fields notifySlackInviteEmails + useSlackConnect (*bool, default true): types.go + JSON schema (atomic) + validate.go rules SE1/SE2 (Layer 6)
-- [ ] 72-03-PLAN.md — km slack manifest cobra command: RenderSlackManifest + embedded text/template + golden-file test + scope warning includes users:read.email (Layer 5)
-- [ ] 72-04-PLAN.md — pkg/slack/invite.go orchestrator: EnsureMemberByEmail (8 result paths incl. non-interactive AutoConnect) + EnsureMemberOpts.AutoConnect + Prompter + InviteAPI + ErrAlreadyInChannel sentinel + InviteUserToChannelStrict (Layer 2)
-- [ ] 72-05-PLAN.md — km slack invite cobra command: RunSlackInvite + ConnectFallbackPrompter (stdin) + channel resolution (name/ID/SSM-default) + exit codes 0/1/2 (Layer 3)
-- [ ] 72-06-PLAN.md — Refactor RunSlackInit to call orchestrator instead of InviteShared directly + add users:read.email scope warning at init time (Layer 4 + Pitfall 1 mitigation)
-- [ ] 72-07-PLAN.md — km create: refactor primary operator invite through orchestrator (AutoConnect=true, always invited) + additional-folks loop gated by useSlackConnect, fail-soft on SkippedExternal/Failed (Layer 7)
-- [ ] 72-08-PLAN.md — km doctor slack_users_read_email_scope check: mirrors slack_files_write_scope pattern; surfaces scope drift before runtime errors (Layer 8)
-- [x] 72-09-PLAN.md — Closeout: docs/slack-notifications.md Phase 72 section + CLAUDE.md updates + 72-VALIDATION.md Per-Task Verification Map populated + 72-UAT.md (5 operator scenarios) + blocking operator UAT checkpoint (completed 2026-05-29)
+- [x] 72-00-PLAN.md — Wave 0 stub seeding: 9 test stub files + manifest template + golden fixture (failing tests for Layers 1-8)
+- [x] 72-01-PLAN.md — pkg/slack client primitives: LookupUserByEmail (lowercase, miss=boolean) + InviteUserToChannel (idempotent on already_in_channel) + SlackAPIResponse.User extension (Layer 1)
+- [x] 72-02-PLAN.md — Profile fields notifySlackInviteEmails + useSlackConnect (*bool, default true): types.go + JSON schema (atomic) + validate.go rules SE1/SE2 (Layer 6)
+- [x] 72-03-PLAN.md — km slack manifest cobra command: RenderSlackManifest + embedded text/template + golden-file test + scope warning includes users:read.email (Layer 5)
+- [x] 72-04-PLAN.md — pkg/slack/invite.go orchestrator: EnsureMemberByEmail (8 result paths incl. non-interactive AutoConnect) + EnsureMemberOpts.AutoConnect + Prompter + InviteAPI + ErrAlreadyInChannel sentinel + InviteUserToChannelStrict (Layer 2)
+- [x] 72-05-PLAN.md — km slack invite cobra command: RunSlackInvite + ConnectFallbackPrompter (stdin) + channel resolution (name/ID/SSM-default) + exit codes 0/1/2 (Layer 3)
+- [x] 72-06-PLAN.md — Refactor RunSlackInit to call orchestrator instead of InviteShared directly + add users:read.email scope warning at init time (Layer 4 + Pitfall 1 mitigation)
+- [x] 72-07-PLAN.md — km create: refactor primary operator invite through orchestrator (AutoConnect=true, always invited) + additional-folks loop gated by useSlackConnect, fail-soft on SkippedExternal/Failed (Layer 7)
+- [x] 72-08-PLAN.md — km doctor slack_users_read_email_scope check: mirrors slack_files_write_scope pattern; surfaces scope drift before runtime errors (Layer 8)
+- [x] 72-09-PLAN.md — Closeout: docs/slack-notifications.md Phase 72 section + CLAUDE.md updates + 72-VALIDATION.md Per-Task Verification Map populated + 72-UAT.md (8 operator scenarios) + operator UAT sign-off (KPH 2026-05-30)
 
 ### Phase 73: km vscode remote session via SSM
 
