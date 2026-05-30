@@ -95,6 +95,13 @@ func TestSlackManifest_ScopesIncludeUsersReadEmail(t *testing.T) {
 	if !strings.Contains(out, `"files:read"`) {
 		t.Errorf("output missing files:read scope (Phase 75 inbound requirement); got:\n%s", out)
 	}
+	// groups:read lets the bot enumerate private/Connect channels via
+	// conversations.list and resolve channel IDs → names. Without it,
+	// km doctor / km slack invite can't see private shared channels even when
+	// they're configured in SSM.
+	if !strings.Contains(out, `"groups:read"`) {
+		t.Errorf("output missing groups:read scope (private/Connect channel discovery); got:\n%s", out)
+	}
 }
 
 // TestSlackManifest_OutputIsValidJSON verifies the rendered output is valid JSON.

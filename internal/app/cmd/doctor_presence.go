@@ -63,7 +63,7 @@ func checkPresenceDaemonHealthy(
 	lister runningSandboxLister,
 	logGroupPrefix string,
 ) CheckResult {
-	name := "Presence daemon healthy"
+	name := "Presence daemon"
 
 	if cw == nil {
 		return CheckResult{

@@ -524,6 +524,47 @@ func TestCheckUntaggedAvailableVolumes_VolumeWithSandboxIDExcluded(t *testing.T)
 	}
 }
 
+func TestCheckUntaggedAvailableVolumes_NameTagExcluded(t *testing.T) {
+	named := makeUntaggedVolume("vol-named", "us-east-1a", 30, 2*time.Hour)
+	named.Tags = append(named.Tags, ec2types.Tag{
+		Key:   awssdk.String("Name"),
+		Value: awssdk.String("km-ebs-testvolume"),
+	})
+	client := &fakeEC2VolumeClient{volumes: []ec2types.Volume{named}}
+	r := checkUntaggedAvailableVolumes(context.Background(), client, "kph")
+	if r.Status != CheckOK {
+		t.Fatalf("expected CheckOK when volume has Name tag, got %s: %s", r.Status, r.Message)
+	}
+}
+
+func TestCheckUntaggedAvailableVolumes_DoctorIgnoreTagExcluded(t *testing.T) {
+	ignored := makeUntaggedVolume("vol-ignored", "us-east-1a", 30, 2*time.Hour)
+	ignored.Tags = append(ignored.Tags, ec2types.Tag{
+		Key:   awssdk.String("km:doctor"),
+		Value: awssdk.String("ignore"),
+	})
+	client := &fakeEC2VolumeClient{volumes: []ec2types.Volume{ignored}}
+	r := checkUntaggedAvailableVolumes(context.Background(), client, "kph")
+	if r.Status != CheckOK {
+		t.Fatalf("expected CheckOK when volume has km:doctor=ignore, got %s: %s", r.Status, r.Message)
+	}
+}
+
+// km:doctor with any other value (typo, future expansion) does NOT exempt.
+// Locks the strict-match contract — only "ignore" suppresses, not arbitrary truthy values.
+func TestCheckUntaggedAvailableVolumes_DoctorOtherValueStillWarn(t *testing.T) {
+	misset := makeUntaggedVolume("vol-misset", "us-east-1a", 30, 2*time.Hour)
+	misset.Tags = append(misset.Tags, ec2types.Tag{
+		Key:   awssdk.String("km:doctor"),
+		Value: awssdk.String("true"),
+	})
+	client := &fakeEC2VolumeClient{volumes: []ec2types.Volume{misset}}
+	r := checkUntaggedAvailableVolumes(context.Background(), client, "kph")
+	if r.Status != CheckWarn {
+		t.Fatalf("expected CheckWarn for km:doctor=true (only =ignore exempts), got %s: %s", r.Status, r.Message)
+	}
+}
+
 func TestCheckUntaggedAvailableVolumes_DescribeError_Warn(t *testing.T) {
 	client := &fakeEC2VolumeClient{volumesErr: errors.New("AccessDenied")}
 	r := checkUntaggedAvailableVolumes(context.Background(), client, "kph")

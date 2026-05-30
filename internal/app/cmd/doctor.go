@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1246,6 +1245,11 @@ func checkStaleKMSKeys(ctx context.Context, kmsClient KMSCleanupAPI, lister Sand
 	const platformBrandPrefix = "alias/km-platform-"
 	legacyPlatformAlias := "alias/" + resourcePrefix + "-platform"
 	legacyRegionalPlatformPrefix := legacyPlatformAlias + "-"
+	// Phase 89: shared per-install sandbox-secrets KMS alias is account-singleton
+	// and tied to install lifecycle (km bootstrap --shared-secrets-key /
+	// km uninit), not per-sandbox. Without this exemption every
+	// `km doctor --dry-run=false` run schedules the key for 7-day deletion.
+	sharedSecretsAlias := "alias/" + resourcePrefix + "-sandbox-secrets"
 
 	// Identify stale aliases: extract sandbox ID from alias name pattern.
 	// Patterns: km-github-token-{name}-{hash}, km-docker-{name}-{hash}-{region}, etc.
@@ -1254,7 +1258,8 @@ func checkStaleKMSKeys(ctx context.Context, kmsClient KMSCleanupAPI, lister Sand
 		aliasName := awssdk.ToString(a.AliasName)
 		if strings.HasPrefix(aliasName, platformBrandPrefix) ||
 			aliasName == legacyPlatformAlias ||
-			strings.HasPrefix(aliasName, legacyRegionalPlatformPrefix) {
+			strings.HasPrefix(aliasName, legacyRegionalPlatformPrefix) ||
+			aliasName == sharedSecretsAlias {
 			continue
 		}
 		// Check if any active sandbox ID appears in the alias name as a
@@ -2873,11 +2878,6 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 		}
 	}
 
-	// Pinned dependency version checks — warn when newer versions are available.
-	checks = append(checks, func(_ context.Context) CheckResult {
-		return checkPinnedVersions()
-	})
-
 	// Slack health checks (Plan 63-09).
 	// Failures are non-blocking: Slack errors produce WARN/SKIPPED, never ERROR that
 	// would imply a broken platform.  Both checks are skipped when their deps are nil.
@@ -3376,73 +3376,6 @@ type doctorSandboxLister struct {
 func (l *doctorSandboxLister) ListSandboxes(ctx context.Context, useTagScan bool) ([]kmaws.SandboxRecord, error) {
 	inner := newRealLister(l.awsCfg, l.bucket, l.tableName)
 	return inner.ListSandboxes(ctx, useTagScan)
-}
-
-// pinnedDep describes a dependency pinned to a specific version in profiles.
-type pinnedDep struct {
-	Name       string // display name
-	PinnedVer  string // version currently pinned
-	LatestURL  string // npm registry URL to check latest
-	IssueURL   string // link to the upstream issue motivating the pin
-	PinReason  string // why it's pinned
-}
-
-// pinnedDeps is the central list of pinned dependencies to monitor.
-// Update this when adding or removing version pins in profiles.
-var pinnedDeps = []pinnedDep{
-	{
-		Name:      "@anthropic-ai/claude-code",
-		PinnedVer: "2.1.108",
-		LatestURL: "https://registry.npmjs.org/@anthropic-ai/claude-code/latest",
-		IssueURL:  "https://github.com/anthropics/claude-code/issues/47670",
-		PinReason: "pin to known-good version; v2.1.105-v2.1.107 had paste regression in SSM/SSH sessions",
-	},
-}
-
-// checkPinnedVersions queries upstream registries and warns when newer versions
-// are available for pinned dependencies. This reminds the operator to periodically
-// check whether the upstream issue has been fixed so the pin can be removed.
-func checkPinnedVersions() CheckResult {
-	name := "Pinned Dependency Versions"
-
-	type update struct {
-		dep       pinnedDep
-		latestVer string
-	}
-	var updates []update
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	for _, dep := range pinnedDeps {
-		resp, err := client.Get(dep.LatestURL)
-		if err != nil || resp.StatusCode != 200 {
-			continue
-		}
-		var meta struct {
-			Version string `json:"version"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&meta); err == nil && meta.Version != "" && meta.Version != dep.PinnedVer {
-			updates = append(updates, update{dep: dep, latestVer: meta.Version})
-		}
-		resp.Body.Close()
-	}
-
-	if len(updates) == 0 {
-		return CheckResult{
-			Name:    name,
-			Status:  CheckOK,
-			Message: fmt.Sprintf("%d pinned dep(s) — all at latest or registry unreachable", len(pinnedDeps)),
-		}
-	}
-
-	var msgs []string
-	for _, u := range updates {
-		msgs = append(msgs, fmt.Sprintf("%s pinned=%s latest=%s", u.dep.Name, u.dep.PinnedVer, u.latestVer))
-	}
-	return CheckResult{
-		Name:    name,
-		Status:  CheckOK,
-		Message: strings.Join(msgs, "; ") + " — update available, test before unpinning",
-	}
 }
 
 // initRealDeps creates real AWS clients from configuration (backward-compatible wrapper).

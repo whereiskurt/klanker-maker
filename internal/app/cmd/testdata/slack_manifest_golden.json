@@ -19,6 +19,7 @@
         "channels:read",
         "channels:history",
         "groups:write",
+        "groups:read",
         "groups:history",
         "conversations.connect:write",
         "reactions:read",

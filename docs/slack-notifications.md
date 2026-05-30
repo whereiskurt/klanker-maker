@@ -53,11 +53,7 @@ Modes are mutually exclusive: `notifySlackPerSandbox: true` and `notifySlackChan
 
 1. **Pro Slack workspace** at klankermaker.ai (or a test workspace). Slack Connect (`conversations.inviteShared`) requires Pro tier or higher; the free tier returns `not_allowed_token_type`.
 
-2. **Custom Slack App** installed in the workspace with these bot scopes:
-   - `chat:write` — post messages
-   - `channels:manage` — create and archive public channels
-   - `conversations.connect:write` — send Slack Connect invites
-   - `groups:write` — create and archive private channels
+2. **Custom Slack App** installed in the workspace with the full bot-scope set (14 scopes today). The canonical, version-current scope list is rendered by `km slack manifest`; paste the output into Slack admin → Apps → Build → New App → From manifest. Maintaining a hand-curated scope list in docs invariably drifts — see § Security Model § Complete bot scope inventory for the audit-friendly per-scope justification.
 
 3. **Bot token** (`xoxb-...`) captured from the Slack App's OAuth & Permissions page.
 
@@ -417,20 +413,326 @@ Fix options:
 
 ## Security Model
 
-**Signing:** every sandbox has an Ed25519 key pair. The private key lives in SSM at `/sandbox/{id}/signing-key` (SecureString, accessible only to the sandbox's IAM role). The `km-slack` binary signs the canonical JSON envelope before sending it to the bridge.
+This section is the integration's security-audit reference. It answers the
+two questions an external reviewer typically asks first — *"how does this work
+end-to-end?"* and *"does it follow Slack's stated best practices?"* — by
+enumerating scopes, secrets, trust boundaries, IAM scoping, replay defenses,
+data retention, and the threat model. Subsections are independent so an
+auditor can jump to the bit they care about.
+
+### Quick reference (notify-hook signing chain)
+
+**Signing:** every sandbox has an Ed25519 key pair. The private key lives in
+SSM at `/sandbox/{id}/signing-key` (SecureString, accessible only to the
+sandbox's own IAM role). The `km-slack` binary signs the canonical JSON
+envelope before sending it to the bridge.
 
 **Verification chain (bridge Lambda):**
 1. Parse JSON envelope.
 2. Reject if `timestamp` is more than ±5 minutes from current UTC (replay protection).
-3. Check DynamoDB nonce table: reject if `nonce` was seen within the replay window (dedup).
-4. Fetch sender public key from DynamoDB `km-identities` table using `sender_id`.
+3. Conditional `PutItem` on the nonce table: reject if `nonce` was seen within the replay window (dedup).
+4. Fetch sender public key from DynamoDB `km-identities` using `sender_id`.
 5. Verify the Ed25519 signature over the canonical JSON bytes.
-6. Assert channel ownership: sandbox `sender_id` must match the `channel` field's owning sandbox in DynamoDB `km-sandboxes` (prevents sandbox A posting to sandbox B's channel).
-7. Assert action authorization: sandbox identity may only perform `post`; `archive` and `test` require operator identity.
+6. Assert channel ownership: sandbox `sender_id` must match the `channel`'s owning sandbox in DynamoDB `km-sandboxes` (prevents sandbox A posting to sandbox B's channel).
+7. Assert action authorization: sandbox identity may only perform `post` / `upload` / `permalink` / `update`; `archive` and `test` require operator identity.
 
-**Bot token isolation:** `/km/slack/bot-token` is a KMS-encrypted SSM SecureString. Only the bridge Lambda's IAM role and the operator's IAM identity (for `km slack init`) have `ssm:GetParameter` permission on it. Sandbox IAM roles cannot read it.
+**Bot token isolation:** `/km/slack/bot-token` is a KMS-encrypted SSM
+SecureString. Only the bridge Lambda's IAM role and the operator's IAM
+identity have `ssm:GetParameter` permission on it. Sandbox IAM roles cannot
+read it.
 
-**Slack Connect:** the klankermaker.ai Slack workspace sends invites to the operator's email. The operator accepts from their own workspace. No credentials are shared; Slack Connect is a federated channel sharing protocol.
+**Slack Connect:** the klankermaker.ai workspace sends Connect invites to the
+operator's email. The operator accepts from their own workspace. No
+credentials are shared; Slack Connect is a federated channel-sharing protocol.
+
+### Trust boundaries
+
+```
+┌──────────────────────┐    Ed25519-signed envelope    ┌────────────────────┐
+│  Sandbox EC2 / Docker│  ────────────────────────────▶│  Bridge Lambda     │
+│  - own private key   │     POST  (HTTPS, no IAM)     │  - signature       │
+│    (SSM, per-sandbox)│                                │    verification    │
+│  - no bot token      │  ◀────── HTTP status ────────│  - SSM token cache │
+└──────────────────────┘                                │    (15-min TTL)    │
+                                                        └─────────┬──────────┘
+                                                                  │ Slack Web API
+                                                                  │ chat.* / conversations.* / files.*
+                                                                  ▼
+┌──────────────────────┐                              ┌─────────────────────┐
+│  Operator workstation│  read/write /km/slack/*      │  Slack Web API      │
+│  - AWS SSO/profile   │  via SSM (KMS SecureString)  │                     │
+│  - km CLI            │                              └──────────┬──────────┘
+└──────────────────────┘                                         │ Events API
+                                                                 │ (Slack signs with /km/slack/signing-secret)
+                                                                 ▼
+                                                       ┌─────────────────────┐
+                                                       │  Bridge /events     │
+                                                       │  - HMAC-SHA256      │
+                                                       │  - ±5min window     │
+                                                       │  - subtype allow-list│
+                                                       └──────────┬──────────┘
+                                                                  │ sqs:SendMessage
+                                                                  ▼
+                                                       ┌─────────────────────┐
+                                                       │  Per-sandbox        │
+                                                       │  SQS FIFO queue     │
+                                                       └──────────┬──────────┘
+                                                                  ▼
+                                                       ┌─────────────────────┐
+                                                       │  Sandbox poller     │
+                                                       │  (systemd, own IAM) │
+                                                       └─────────────────────┘
+```
+
+Three independent authentication domains, each with its own secret material:
+
+1. **Sandbox → bridge:** Ed25519 signature over canonical JSON envelope.
+2. **Slack → bridge (inbound events):** HMAC-SHA256 with the Slack signing secret + 5-min timestamp window.
+3. **Bridge → Slack Web API:** the bot token (`xoxb-…`), fetched from SSM on cold start, cached in-process for 15 minutes.
+
+The sandbox never sees the bot token. The bridge never sees a sandbox's
+Ed25519 private key. Slack never sees the per-sandbox Ed25519 material. A
+compromise of any one domain does not automatically compromise the others.
+
+### Complete bot scope inventory
+
+Render the canonical list at any time — this is the single source of truth:
+
+```bash
+km slack manifest | jq -r '.oauth_config.scopes.bot[]'
+```
+
+Audit-friendly per-scope table (14 scopes as of Phase 75 + Phase 72 + the
+`groups:read` follow-up):
+
+| Scope | Slack API methods used | Why klanker needs it | Notes |
+|---|---|---|---|
+| `chat:write` | `chat.postMessage`, `chat.update` | All notification, transcript, reply, and operator-test messages | Primary path — no alternative |
+| `channels:manage` | `conversations.create`, `conversations.archive`, `conversations.invite` (public) | Per-sandbox public channel lifecycle and operator invite at `km create` | Required for `notifySlackPerSandbox: true` and `km slack invite` |
+| `channels:join` | `conversations.join` | Self-rescue when the bot is ejected from a public channel during an app reinstall | Avoids requiring a human `/invite` after every token rotation |
+| `channels:read` | `conversations.info`, `conversations.list` | `km doctor` channel-name resolution; `km slack invite` channel lookup; bridge channel-membership probes | Read-only metadata on public channels |
+| `channels:history` | Events `message.channels` delivery; paginated reads | Inbound chat from public channels (poller consumes from per-sandbox SQS) | Pairs with the `message.channels` event subscription |
+| `groups:write` | `conversations.create` (private), `conversations.archive` (private), `conversations.invite` (private) | Per-sandbox private channel lifecycle when operator pre-creates private channels | |
+| `groups:read` | `conversations.info`, `conversations.list?types=private_channel` | `km doctor` and `km slack invite` against private and Slack Connect channels | Added as a Phase 72 follow-up after a reinstall produced `channel_not_found` for the shared Connect channel |
+| `groups:history` | Events `message.groups` delivery; paginated reads | Inbound chat from private channels | Pairs with the `message.groups` event subscription |
+| `conversations.connect:write` | `conversations.inviteShared` | Slack Connect invites for external operators and the auto-invite list when `useSlackConnect: true` | Requires Pro workspace tier; gracefully fails open on free tier |
+| `reactions:read` | (future) reaction-triggered session fork | Forward-compatibility seam for the planned reaction-fork feature; not actively consumed today | Removing this scope today blocks only the future fork feature |
+| `reactions:write` | `reactions.add` | 👀 ACK on every accepted inbound Slack message (user feedback that the sandbox saw the message) | Independent of message delivery — failure logged but does not block reply |
+| `files:write` | `files.getUploadURLExternal`, `files.completeUploadExternal` | End-of-response transcript upload (gzipped JSONL) into the per-sandbox thread | Required only for `notifySlackTranscriptEnabled: true` |
+| `files:read` | `files.info`; private-URL download with the bot token | Download user-attached files from inbound posts into `/workspace/.km-slack/attachments/` | Required for inbound file-attachment support (Phase 75) |
+| `users:read.email` | `users.lookupByEmail` | Auto-detect whether an invite address is a workspace member (regular invite) or external (Slack Connect); used by `km slack init`, `km slack invite`, and the `km create` auto-invite loop | Strictly narrower than `users:read` — does not enumerate the workspace directory |
+
+#### Scopes deliberately NOT requested
+
+A "negative-scope" inventory — adjacent-looking scopes that are absent from
+the manifest, with the rationale:
+
+| Scope not requested | Reasoning |
+|---|---|
+| Any User Token Scope | Integration is purely server-to-server; no user-impersonation. The manifest declares only Bot Token Scopes. |
+| Legacy `bot` scope | Deprecated by Slack — granular bot scopes only. |
+| `users:read` | Klanker only resolves *explicit* email addresses provided by the operator; it never enumerates the workspace directory. `users:read.email` is the narrower scope sufficient for `lookupByEmail`. |
+| `chat:write.public` | The bot must be explicitly invited to channels before posting. This is an intentional guardrail — if a channel ID drifts, the bot fails with `not_in_channel` rather than silently posting somewhere else. |
+| `chat:write.customize` | The bot posts under its installed display name and avatar uniformly. No per-message identity override. |
+| `im:read` / `im:write` / `im:history` | No DMs. All interaction happens in named channels (shared or per-sandbox). |
+| `mpim:*` | No multi-party DMs. |
+| `links:read` / `links:write` | No link unfurling; klanker does not register an unfurl domain. |
+| `app_mentions:read` | No `@klanker` mention handling. Sandbox routing is by channel, not by mention. |
+| `pins:*`, `bookmarks:*`, `usergroups:*`, `team:read`, `dnd:read` | No surface uses these. |
+| `admin.*` (Enterprise) | Klanker operates within a single workspace; no admin/Enterprise Grid scopes required. |
+| `commands` | No slash commands. (`km` is the operator CLI; no `/km` Slack command.) |
+| Socket Mode | `socket_mode_enabled: false` in the manifest. Bridge is reached over HTTPS at the Lambda Function URL. |
+| OAuth token rotation | `token_rotation_enabled: false`. Rotation is operator-driven via `km slack rotate-token` so the cold-start window is controlled. |
+| Interactive components (modals, buttons, shortcuts) | No interactivity today. Outbound Block Kit (Phase 74) is presentation-only. |
+
+#### Events API subscriptions
+
+Two bot events — no workspace-wide subscription pattern:
+
+| Event | Why |
+|---|---|
+| `message.channels` | Inbound chat from public per-sandbox channels |
+| `message.groups` | Inbound chat from private per-sandbox channels |
+
+The bridge filters every event through an **allow-list** at receipt:
+
+- `subtype == ""` (real human message) — forwarded
+- `subtype == "thread_broadcast"` (reply with broadcast) — forwarded
+- Every other subtype (`channel_join`, `channel_leave`, `channel_topic`, `pinned_item`, `bot_message`, `message_changed`, `me_message`, file_share system messages, etc.) — dropped at the bridge with `events: subtype filter dropped subtype=…` (debug log)
+
+A second-line `bot_user_id` filter drops any message authored by the bot
+itself, defending against a future Slack subtype slipping past the allow-list.
+
+### Secrets inventory
+
+| Secret | Storage | Encryption | Read access | Rotation command |
+|---|---|---|---|---|
+| Slack bot token (`xoxb-…`) | SSM `/km/slack/bot-token` | KMS SecureString (account-default AWS-managed key) | Bridge Lambda role + operator's local AWS identity | `km slack rotate-token --bot-token <new>` |
+| Slack signing secret | SSM `/km/slack/signing-secret` | KMS SecureString | Bridge Lambda role + operator | `km slack rotate-signing-secret --signing-secret <new>` |
+| Per-sandbox Ed25519 private key | SSM `/sandbox/{id}/signing-key` | KMS SecureString | Sandbox's own IAM role only (resource-ARN-scoped to its own ID) | Sandbox lifetime; rotated by `km destroy && km create` |
+| Per-sandbox Ed25519 public key | DynamoDB `km-identities` | At-rest AWS-managed KMS encryption | Bridge Lambda role | Paired with the private key |
+
+Nothing related to Slack is stored in profiles, environment variables, source
+files, or git history.
+
+### IAM scoping
+
+**Sandbox IAM role** (per-sandbox; least privilege):
+- `ssm:GetParameter` only on `/sandbox/{own-id}/signing-key` (resource ARN includes the sandbox's own ID; cannot read peers')
+- `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:ChangeMessageVisibility` only on its own queue ARN
+- `s3:PutObject` on `transcripts/{own-id}/*` only
+- **Cannot** read the bot token, the signing secret, peer sandboxes' keys, or peer queues
+
+**Bridge Lambda execution role:**
+- `ssm:GetParameter` on `/km/slack/*` (bot token + signing secret only — not sandbox keys)
+- `dynamodb:GetItem` on `km-identities`, `km-sandboxes`, `km-slack-threads`; `dynamodb:PutItem` on `km-slack-nonces` (conditional, for replay dedup)
+- `sqs:SendMessage` on the queue-name pattern `{prefix}-slack-inbound-*.fifo` (cannot `ReceiveMessage` — write-only into sandbox queues)
+- `s3:GetObject` on `transcripts/*` (read; for upload) and `slack-inbound/*` (read; for the poller's file mirror)
+- **Cannot** call `ec2:*`, `iam:*`, `sts:AssumeRole`, or any other AWS service
+
+**Operator IAM identity** (your local AWS profile):
+- Full read/write `/km/*` SSM (covers all rotations + initial bootstrap)
+- `lambda:UpdateFunctionConfiguration` on the bridge (for forced cold-start during rotation)
+- Read on operational DynamoDB tables (for `km doctor` / `km status`)
+- Gated by your org's AWS SSO / federation policy
+
+### Authentication chains
+
+**Outbound (sandbox → Slack):**
+
+```
+1. Hook fires in sandbox (notify-hook or systemd poller)
+2. km-slack builds canonical JSON envelope:
+     { sender_id, channel, action, body, timestamp, nonce, blocks? }
+3. Loads Ed25519 private key from SSM /sandbox/{id}/signing-key (cached in process)
+4. Signs canonical bytes; POSTs to https://{bridge-fn-url}/ with X-KM-Signature
+5. Bridge:
+     a. Parse envelope
+     b. Reject if |now - timestamp| > 5 min (replay window)
+     c. Conditional PutItem on km-slack-nonces — reject if nonce already seen (TTL ~5 min)
+     d. GetItem from km-identities for sender_id → public key
+     e. ed25519.Verify(pub, canonical, sig) — reject on failure
+     f. Channel-ownership assertion (sandbox can post only to its own channel,
+        cross-checked against km-sandboxes)
+     g. Action-authorization assertion (sandboxes: post/upload/permalink/update;
+        operator-only: archive/test)
+     h. GetParameter for /km/slack/bot-token (15-min in-process cache)
+     i. Dispatch to Slack Web API
+6. Slack response code returned to sandbox over HTTPS
+```
+
+**Inbound (Slack → sandbox):**
+
+```
+1. User posts in #sb-{id}
+2. Slack POSTs to https://{bridge-fn-url}/events with:
+     X-Slack-Signature: v0=<HMAC-SHA256 over "v0:{ts}:{body}">
+     X-Slack-Request-Timestamp: <unix-seconds>
+3. Bridge /events:
+     a. Reject if |now - ts| > 5 min (per Slack guidance)
+     b. HMAC-SHA256 verify with /km/slack/signing-secret — reject on mismatch
+     c. Parse event; auto-ack url_verification challenges
+     d. Subtype allow-list: drop anything outside { "", thread_broadcast }
+     e. Bot user_id filter: drop self-messages
+     f. Resolve channel → sandbox via km-sandboxes GSI on slack_channel_id
+     g. sqs:SendMessage to {prefix}-slack-inbound-{sandbox-id}.fifo
+     h. reactions.add(👀) on the originating message (best-effort, bounded retry, fail-soft)
+4. Sandbox poller (systemd):
+     a. ReceiveMessage from own queue (long-poll)
+     b. Export KM_SLACK_THREAD_TS into Claude's environment
+     c. Invoke claude -p (Bedrock or direct API)
+     d. On success: post Claude's reply via km-slack (re-enters outbound chain),
+        then SQS DeleteMessage
+     e. On failure: do not delete — SQS redelivers after visibility timeout
+```
+
+The Function URL is `AuthType: NONE` **deliberately**. The signature *is* the
+auth — adding IAM auth on the Function URL would require the sandbox to assume
+credentials reachable from Slack's HMAC verification flow, coupling the two
+inbound paths. Keeping the URL open and verifying the signature inside the
+handler preserves the separation of the three authentication domains.
+
+### Replay & timing-attack defenses
+
+- ±5-minute timestamp window on **both** the inbound Slack HMAC and the outbound Ed25519 envelope
+- DynamoDB `km-slack-nonces` table with TTL — single-use envelope nonces enforced via conditional PutItem (`attribute_not_exists(nonce)`)
+- Ed25519 + HMAC-SHA256 — both constant-time-comparable primitives in their reference implementations
+- Subtype allow-list (positive, not deny) — new Slack message subtypes fail closed
+- `bot_user_id` second-line filter prevents self-message loops
+
+### Data classification & retention
+
+| Surface | Data | Retention | Encryption |
+|---|---|---|---|
+| `s3://{artifacts-bucket}/transcripts/{sandbox-id}/` | Full Claude transcripts (JSONL.gz; includes Bash output, file reads, tool inputs) | Bucket lifecycle (operator-configured; apply per your compliance regime) | SSE-S3 (default) |
+| `s3://{artifacts-bucket}/slack-inbound/{sandbox-id}/{thread_ts}/` | User-uploaded files from Slack drag-drop | **30-day lifecycle expiration** | SSE-S3 |
+| DynamoDB `km-slack-threads` | `(channel_id, thread_ts, agent_type, session_id, last_assistant_msg[:500])` | Per-row TTL | At-rest AWS-managed KMS |
+| DynamoDB `km-slack-nonces` | Nonce bytes only | ~5-minute TTL | At-rest AWS-managed KMS |
+| DynamoDB `km-identities` | Per-sandbox public keys + metadata | Sandbox lifetime | At-rest AWS-managed KMS |
+| SQS `{prefix}-slack-inbound-{sandbox-id}.fifo` | Inbound message bodies | 14-day SQS max; consumed within seconds in normal operation | At-rest AWS-managed KMS |
+| Slack channels `#sb-{id}` | Per-turn streaming, final transcript upload, operator chat | Per-workspace retention policy; channel archived (not deleted) at `km destroy` unless `slackArchiveOnDestroy: false` | Slack-side |
+
+⚠ **Transcripts contain whatever Claude saw.** Operator-side compliance
+(HIPAA, PCI, SOC 2 evidence handling) requires owner review of the artifacts
+bucket lifecycle and the Slack workspace retention policy. Klanker does not
+redact transcripts; do not enable `notifySlackTranscriptEnabled` for sandboxes
+that process regulated data without explicit owner sign-off.
+
+### Slack security best-practices alignment
+
+| Slack platform guidance | Klanker implementation |
+|---|---|
+| Verify request signatures on every Events API call | HMAC-SHA256 with `/km/slack/signing-secret` inside bridge `handler.go`; ±5-min timestamp window |
+| Use granular Bot Token Scopes, not legacy `bot` | Manifest declares only granular scopes; no `bot`, no User Token Scopes |
+| Subscribe only to events you need | Two bot events (`message.channels`, `message.groups`); zero workspace-wide subscriptions |
+| Don't store bot tokens in source / CI / env vars | Stored only in SSM SecureString; never in code, environment variables, or git |
+| Provide a documented rotation procedure | `km slack rotate-token` (validates → persists → cold-starts bridge → smoke tests) plus a documented incident-response cycle |
+| Provide signing-secret rotation | `km slack rotate-signing-secret` |
+| Use least-privilege channel access | Per-sandbox channels; bot must be invited; bridge cross-checks that sandbox `sender_id` matches the channel's owning sandbox in DDB |
+| Don't enable OAuth token rotation unless needed | `token_rotation_enabled: false` — operator manages rotation explicitly so cold-start window is controlled |
+| No Socket Mode unless required | `socket_mode_enabled: false` — HTTPS Function URL only |
+| No interactive components unless needed | No modals, buttons, slash commands, or shortcuts |
+| Validate the team / channel in Events payloads | `team_id` checked; channel→sandbox lookup against own DDB before SQS dispatch |
+| Provide audit visibility | CloudWatch log group `/aws/lambda/km-slack-bridge` with structured `key=value` logs of every signature step, dispatched call, and error path |
+| Don't request `chat:write.public` unless required | Not requested — bot membership is a deliberate guardrail |
+
+### Audit & observability
+
+CloudWatch log group: **`/aws/lambda/km-slack-bridge`**. Every request logs
+structured `key=value` pairs:
+
+| Field | What an auditor learns |
+|---|---|
+| `action` | `post` / `archive` / `test` / `upload` / `permalink` / `update` |
+| `sender_id` | Sandbox ID or `operator` |
+| `channel` | Slack channel ID (target of the call) |
+| `nonce_prefix` | First 8 chars of the request nonce (cross-reference handle) |
+| `step` | Which verification step failed (`nonce` / `signature` / `token_fetch` / `dispatch`) |
+| `slack_error` | Slack API error code on dispatch failure (`not_in_channel`, `invalid_auth`, `channel_not_found`, …) |
+| `status` | HTTP status returned to caller |
+| `attempt=N` | Retry attempt count on reaction-add failures |
+
+Operator-side audit tools:
+
+- `km doctor` — checks every Slack-related secret, scope (cached), channel membership, table existence, and queue health
+- `km slack status` — current SSM state at a glance
+- DynamoDB `km-slack-nonces` TTL gives a forensic window for nonce-replay investigation
+
+### Threat model: out of scope
+
+Klanker's Slack integration explicitly does **not** defend against:
+
+- **Compromise of the operator's AWS identity** — gives full access to the bot token via SSM. Mitigation lives in your AWS identity provider's MFA + session controls, not in klanker.
+- **Compromise of a Slack workspace admin** — they can reinstall the app, exfiltrate the bot token from the Slack admin UI, change app scopes, etc.
+- **Insider with sandbox shell access** — they can read the sandbox's own Ed25519 private key from SSM via the sandbox's IAM role (by design: the sandbox needs it). Lateral movement from the sandbox to other surfaces is bounded by per-sandbox channel ownership + per-sandbox queue scoping.
+- **Slack platform compromise** — Slack's TLS termination, data residency, and admin UI security are out of scope and deferred to Slack.
+- **Bot token leak via Slack's own incident response** — if Slack reports the token compromised, the operator must rotate via `km slack rotate-token` per Slack's playbook.
+
+For the **in-scope** threats — sandbox impersonation, replay, cross-sandbox
+lateral movement, inbound message forgery, exfiltration via crafted envelopes
+— the layered controls above (Ed25519 signatures, per-sandbox IAM,
+channel-ownership assertion, subtype allow-list, nonce dedup, signing-secret
+HMAC, S3 prefix enforcement) are the defense.
 
 ---
 

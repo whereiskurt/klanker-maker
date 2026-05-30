@@ -1455,7 +1455,6 @@ All checks run in parallel. Results are sorted alphabetically by check name.
 | `Stale IAM Roles` | Detects orphaned IAM roles not associated with any active sandbox (use `--dry-run=false` to delete) |
 | `Stale EventBridge Schedules` | Detects orphaned EventBridge schedules not associated with any active sandbox (use `--dry-run=false` to delete) |
 | `Orphaned EC2 Instances` | Detects EC2 instances tagged as km-managed but not tracked in sandbox metadata (report-only, never terminates) |
-| `Pinned Dependency Versions` | Warns when newer versions of pinned dependencies are available |
 
 If `KM_REPLICA_REGION` is set or multiple EC2 clients are configured, additional `VPC` checks run for each region.
 

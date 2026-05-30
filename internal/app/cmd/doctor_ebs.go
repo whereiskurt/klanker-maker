@@ -230,6 +230,8 @@ func checkOrphanedEBSVolumes(ctx context.Context, ec2Client EC2VolumeAPI, lister
 //   - state: available (not attached to any instance)
 //   - tagged km_label={resourcePrefix} (Terragrunt default tag, proves km ownership)
 //   - NOT tagged km:sandbox-id (fell through the module tag gap)
+//   - NOT tagged Name (operator-named volumes are intentional, not orphans)
+//   - NOT tagged km:doctor=ignore (explicit opt-out for ad-hoc / test volumes)
 //
 // This catches root volumes from spot instance requests that were created before
 // volume_tags was added to the ec2spot module, as well as any future leak where
@@ -239,6 +241,13 @@ func checkOrphanedEBSVolumes(ctx context.Context, ec2Client EC2VolumeAPI, lister
 //
 // Volumes created within the last 10 minutes are excluded to avoid false
 // positives during active sandbox provisioning (create → attach races).
+//
+// Operator opt-outs:
+//   - Add a `Name` tag (any value) to mark a volume as intentional.
+//   - Add `km:doctor=ignore` to suppress this check without altering Name.
+//
+// Both opt-outs apply only to this check; other checks (e.g. cost-tracking)
+// still see the volume.
 func checkUntaggedAvailableVolumes(ctx context.Context, ec2Client EC2VolumeAPI, resourcePrefix string) CheckResult {
 	name := "Untagged Available EBS Volumes"
 	if ec2Client == nil {
@@ -276,14 +285,20 @@ func checkUntaggedAvailableVolumes(ctx context.Context, ec2Client EC2VolumeAPI, 
 	var found []stale
 	totalGB := int32(0)
 	for _, v := range volumes {
-		hasSandboxID := false
+		var hasSandboxID, hasName, doctorIgnore bool
 		for _, tag := range v.Tags {
-			if awssdk.ToString(tag.Key) == "km:sandbox-id" {
+			switch awssdk.ToString(tag.Key) {
+			case "km:sandbox-id":
 				hasSandboxID = true
-				break
+			case "Name":
+				hasName = true
+			case "km:doctor":
+				if awssdk.ToString(tag.Value) == "ignore" {
+					doctorIgnore = true
+				}
 			}
 		}
-		if hasSandboxID {
+		if hasSandboxID || hasName || doctorIgnore {
 			continue
 		}
 		if v.CreateTime != nil && v.CreateTime.After(provisioningCutoff) {
@@ -319,7 +334,7 @@ func checkUntaggedAvailableVolumes(ctx context.Context, ec2Client EC2VolumeAPI, 
 		Name:        name,
 		Status:      CheckWarn,
 		Message:     sb.String(),
-		Remediation: "These volumes have no sandbox-id tag; they are likely root volumes from destroyed spot instances. Verify the instance they belonged to is gone, then: 'aws ec2 delete-volume --volume-id <id>'. Going forward, the ec2spot module now sets volume_tags so new root volumes will carry km:sandbox-id and be caught by the Orphaned EBS Volumes check instead.",
+		Remediation: "These volumes have no sandbox-id tag; they are likely root volumes from destroyed spot instances. Verify the instance they belonged to is gone, then: 'aws ec2 delete-volume --volume-id <id>'. Going forward, the ec2spot module now sets volume_tags so new root volumes will carry km:sandbox-id and be caught by the Orphaned EBS Volumes check instead. To intentionally keep a volume (e.g. a named test volume), add a 'Name' tag or 'km:doctor=ignore' tag and this check will skip it.",
 	}
 }
 
