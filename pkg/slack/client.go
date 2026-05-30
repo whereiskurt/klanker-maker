@@ -180,6 +180,66 @@ func (c *Client) AuthTest(ctx context.Context) error {
 	return err
 }
 
+// AuthTestWithUserID validates the bot token and returns the bot's Slack user_id
+// (e.g. "UBOT123"). Phase 91 — km slack init / rotate-token cache this in SSM
+// at {prefix}slack/bot-user-id so the bridge Lambda can prime its mention-scan
+// bot ID without a live auth.test round-trip on cold-start.
+//
+// The wider auth.test response shape includes ok, team, user, user_id, team_id,
+// bot_id, etc. — we only need user_id. Returns ("", err) on transport error or
+// ok=false; caller decides whether to fail the whole flow or warn and continue.
+func (c *Client) AuthTestWithUserID(ctx context.Context) (string, error) {
+	// Use a dedicated struct that captures user_id directly. We cannot use the
+	// existing callJSON path because SlackAPIResponse.User is a polymorphic
+	// SlackUserField that captures the username string (not user_id) from auth.test.
+	// callJSONRaw gives us the raw bytes so we can decode into our own struct.
+	raw, err := c.callJSONRaw(ctx, "auth.test", nil)
+	if err != nil {
+		return "", err
+	}
+	var resp struct {
+		OK     bool   `json:"ok"`
+		Error  string `json:"error,omitempty"`
+		UserID string `json:"user_id"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return "", fmt.Errorf("slack: decode auth.test user_id: %w", err)
+	}
+	if !resp.OK {
+		return "", &SlackAPIError{Method: "auth.test", Code: resp.Error}
+	}
+	return resp.UserID, nil
+}
+
+// callJSONRaw is like callJSON but returns the raw response body bytes instead
+// of a decoded SlackAPIResponse. Used by methods that need fields beyond the
+// standard OK/Error envelope (e.g. AuthTestWithUserID needing user_id).
+// Transport and non-2xx HTTP errors are returned as errors; Slack ok=false is
+// NOT checked here — callers decode and check the ok field themselves.
+func (c *Client) callJSONRaw(ctx context.Context, method string, body any) ([]byte, error) {
+	var rdr io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("slack: marshal %s: %w", method, err)
+		}
+		rdr = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/"+method, rdr)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.botToken)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}
+
 // PostMessage posts to channel with the bold-header format from CONTEXT.md.
 // An empty subject renders the body alone (no bold header) — useful for
 // per-sandbox threaded replies where the channel already conveys context.

@@ -463,6 +463,67 @@ func TestPostToBridge_HeadersSet(t *testing.T) {
 	}
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// AuthTestWithUserID tests (Phase 91 Plan 04)
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestAuthTestWithUserID_OK(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true,"url":"https://example.slack.com/","team":"example","user":"klankermaker-bot","team_id":"T01234ABCD","user_id":"UBOT123","bot_id":"B01234ABCD"}`))
+	}))
+	defer ts.Close()
+
+	c := newClientAgainstServer(ts)
+	uid, err := c.AuthTestWithUserID(context.Background())
+	if err != nil {
+		t.Fatalf("AuthTestWithUserID returned error: %v", err)
+	}
+	if uid != "UBOT123" {
+		t.Errorf("user_id = %q; want %q", uid, "UBOT123")
+	}
+}
+
+func TestAuthTestWithUserID_NotOK(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(slackErr("invalid_auth"))
+	}))
+	defer ts.Close()
+
+	c := newClientAgainstServer(ts)
+	uid, err := c.AuthTestWithUserID(context.Background())
+	if err == nil {
+		t.Fatal("expected error on ok=false, got nil")
+	}
+	if uid != "" {
+		t.Errorf("user_id = %q; want empty on error", uid)
+	}
+	apiErr, ok := err.(*slack.SlackAPIError)
+	if !ok {
+		t.Fatalf("expected *SlackAPIError, got %T: %v", err, err)
+	}
+	if apiErr.Code != "invalid_auth" {
+		t.Errorf("Code = %q; want %q", apiErr.Code, "invalid_auth")
+	}
+}
+
+func TestAuthTestWithUserID_TransportError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := ts.URL
+	ts.Close() // close before request so transport fails
+
+	c := slack.NewClient("xoxb-test", nil)
+	c.SetBaseURL(url)
+	uid, err := c.AuthTestWithUserID(context.Background())
+	if err == nil {
+		t.Fatal("expected error on transport failure, got nil")
+	}
+	if uid != "" {
+		t.Errorf("user_id = %q; want empty on transport error", uid)
+	}
+}
+
 func TestPostToBridge_ContextCancel_ReturnsCtxErr(t *testing.T) {
 	started := make(chan struct{})
 	block := make(chan struct{})
