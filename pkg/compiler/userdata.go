@@ -3755,6 +3755,29 @@ func boolToZeroOne(b bool) string {
 	return "0"
 }
 
+// resolveMentionOnly returns the effective mention-only bool for the bridge,
+// given a CLI spec. Phase 91.
+//
+// Resolution order:
+//  1. Explicit override (cli.NotifySlackInboundMentionOnly != nil) wins.
+//  2. Mode 2 (per-sandbox, cli.NotifySlackPerSandbox == true) defaults to false (every-message).
+//  3. Mode 1 (shared) and Mode 3 (cli.NotifySlackChannelOverride != "") default to true (mention-only).
+//
+// Returns false when cli is nil — defensive: caller already gates on NotifySlackEnabled,
+// so this path should not be hit, but a nil deref would crash the compiler.
+func resolveMentionOnly(cli *profile.CLISpec) bool {
+	if cli == nil {
+		return false
+	}
+	if cli.NotifySlackInboundMentionOnly != nil {
+		return *cli.NotifySlackInboundMentionOnly
+	}
+	if cli.NotifySlackPerSandbox {
+		return false
+	}
+	return true
+}
+
 // mergeNotifyHookIntoSettings parses any user-supplied ~/.claude/settings.json
 // from configFiles, appends the km-notify-hook commands to hooks.Notification
 // and hooks.Stop arrays (preserving any existing entries), and writes the merged
