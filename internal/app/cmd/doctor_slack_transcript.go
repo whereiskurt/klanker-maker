@@ -376,6 +376,56 @@ func checkSlackUsersReadEmailScope(
 	}
 }
 
+// checkSlackBotUserIDCached verifies the {prefix}slack/bot-user-id SSM cache
+// is populated when mention-only mode is effective for at least one local
+// profile (Phase 91). Without the cached value, the bridge's mention-scan
+// falls back to a live auth.test call on cold-start, which is less reliable
+// and adds latency.
+//
+// Mirrors checkSlackUsersReadEmailScope verbatim — same closure-injection
+// pattern, same dep shape (getUID func), same status semantics.
+//
+// Returns:
+//   - SKIPPED: getUID is nil (Slack not configured OR no profile has mention-only effective).
+//   - OK: {prefix}slack/bot-user-id is set to a non-empty user_id.
+//   - WARN: parameter is empty (km slack init must be re-run to cache it).
+//   - WARN: SSM read failed transiently (do NOT fail doctor on a fetch error).
+func checkSlackBotUserIDCached(
+	ctx context.Context,
+	ssmPrefix string,
+	getUID func(context.Context) (string, error),
+) CheckResult {
+	name := "Slack bot-user-id cache"
+	if getUID == nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckSkipped,
+			Message: "no local profile has mention-only effective, or Slack not configured",
+		}
+	}
+	uid, err := getUID(ctx)
+	if err != nil {
+		return CheckResult{
+			Name:    name,
+			Status:  CheckWarn,
+			Message: fmt.Sprintf("could not read %sslack/bot-user-id: %v", ssmPrefix, err),
+		}
+	}
+	if uid == "" {
+		return CheckResult{
+			Name:        name,
+			Status:      CheckWarn,
+			Message:     fmt.Sprintf("%sslack/bot-user-id not cached — bridge mention-scan will fall back to live auth.test on every cold-start", ssmPrefix),
+			Remediation: "Run `km slack init --force` (or `km slack rotate-token --bot-token <token>`) to re-capture and cache the bot user_id.",
+		}
+	}
+	return CheckResult{
+		Name:    name,
+		Status:  CheckOK,
+		Message: fmt.Sprintf("Slack bot user_id cached at %sslack/bot-user-id (%s)", ssmPrefix, uid),
+	}
+}
+
 // listAllKeysUnderPrefix paginates ListObjectsV2 (no delimiter) and returns
 // every object key under the given prefix. Used by the Plan quick-7 cleanup
 // path to enumerate keys before batched DeleteObjects.
