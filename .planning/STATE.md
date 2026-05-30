@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: Completed 91-05-PLAN.md — checkSlackBotUserIDCached + doctor registration
-last_updated: "2026-05-30T22:53:07.430Z"
+stopped_at: "Completed 91-06-PLAN.md tasks 1-3; Task 4 (UAT) at checkpoint:human-verify"
+last_updated: "2026-05-30T22:58:24.332Z"
 last_activity: 2026-05-30
 progress:
   total_phases: 107
-  completed_phases: 94
+  completed_phases: 95
   total_plans: 459
-  completed_plans: 422
+  completed_plans: 423
   percent: 88
 ---
 
@@ -451,6 +451,7 @@ Progress: [█████████░] 88%
 | Phase 91 P04 | 726 | 2 tasks | 5 files |
 | Phase 91 P03 | 20min | 3 tasks | 9 files |
 | Phase 91 P05 | 12min | 2 tasks | 3 files |
+| Phase 91-slack-inbound-mention-only-mode-for-shared-and-override-channels-polite-bot P06 | 3min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1308,6 +1309,8 @@ Recent decisions affecting current work:
 - [Phase 91]: CachedBotUserIDFetcher.PrimeCache no-ops on empty uid to prevent blank cache entries causing lookup-loop confusion
 - [Phase 91]: Duplicated resolveMentionOnly logic into anyProfileMentionOnly in doctor.go (not exported from pkg/compiler) to keep compiler package sealed
 - [Phase 91]: anyProfileMentionOnly gates checkSlackBotUserIDCached registration so SKIPPED is returned when no local profile activates mention-only
+- [Phase 91-slack-inbound-mention-only-mode-for-shared-and-override-channels-polite-bot]: Phase 91 docs follow Phase 72 structural template: per-mode table + field ref + examples + env vars + doctor + rollout + troubleshooting
+- [Phase 91-slack-inbound-mention-only-mode-for-shared-and-override-channels-polite-bot]: OPERATOR-GUIDE.md gained a new ## Slack notifications top-level section (was absent); mention-only subsection placed before SOPS section
 
 ### Roadmap Evolution
 
@@ -1424,6 +1427,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-30T22:53:07.421Z
-Stopped at: Completed 91-05-PLAN.md — checkSlackBotUserIDCached + doctor registration
+Last session: 2026-05-30T22:58:24.324Z
+Stopped at: Completed 91-06-PLAN.md tasks 1-3; Task 4 (UAT) at checkpoint:human-verify
 Resume file: None
