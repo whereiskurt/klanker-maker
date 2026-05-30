@@ -176,3 +176,9 @@ spec:
     notifySlackPerSandbox: true
     notifySlackInboundEnabled: true
     slackArchiveOnDestroy: false
+    # Phase 72 — invite this list into the per-sandbox #sb-{id} channel after
+    # creation. useSlackConnect is omitted (defaults to true) so externals
+    # auto-Connect. Operator-invite (SSM /km/slack/invite-email) is separate
+    # and runs first.
+    notifySlackInviteEmails:
+      - whereiskurt@gmail.com
