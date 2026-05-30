@@ -2,7 +2,7 @@
 phase: 91
 slug: slack-inbound-mention-only-mode-for-shared-and-override-channels-polite-bot
 status: draft
-nyquist_compliant: false
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-05-30
 ---
