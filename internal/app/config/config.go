@@ -17,6 +17,22 @@ import (
 // IRSA (IAM Roles for Service Accounts) integration. Each entry maps a cluster's
 // OIDC provider to a per-namespace/service-account IAM role in the application account.
 // Populated from the km-config.yaml `clusters:` list (Plan 80).
+// SlackConfig holds install-level Slack defaults that flow into the bridge
+// Lambda environment via terragrunt.hcl get_env() calls. Phase 91.1 added
+// MentionOnly so operators no longer need to `export KM_SLACK_MENTION_ONLY=true`
+// before `km init` — set `slack.mention_only: true` in km-config.yaml instead.
+type SlackConfig struct {
+	// MentionOnly is the install-level default for the polite-bot @-mention
+	// filter. Tri-state via *bool:
+	//   nil    → key absent from yaml; bridge defaults to "false" (chatty)
+	//   &true  → polite mode (bridge only acts on messages containing <@{bot_user_id}>)
+	//   &false → chatty mode (bridge reacts to every message)
+	// Maps to km-config.yaml key slack.mention_only. Exported as
+	// KM_SLACK_MENTION_ONLY for infra/live/use1/lambda-slack-bridge/terragrunt.hcl
+	// get_env() at terragrunt-apply time during `km init`.
+	MentionOnly *bool `mapstructure:"mention_only" yaml:"mention_only,omitempty"`
+}
+
 type ClusterConfig struct {
 	Name            string `mapstructure:"name"              yaml:"name"`
 	OIDCProviderARN string `mapstructure:"oidc_provider_arn" yaml:"oidc_provider_arn"`
@@ -190,6 +206,11 @@ type Config struct {
 	// application account. Maps to km-config.yaml key clusters (Plan 80).
 	// Absent key → empty slice (no error). Managed via `km cluster add/list/rm`.
 	Clusters []ClusterConfig `mapstructure:"clusters" yaml:"clusters"`
+
+	// Slack holds install-level Slack defaults (Phase 91.1). Currently only
+	// MentionOnly is populated; future Slack-wide knobs slot in here. Maps to
+	// km-config.yaml key slack. Absent key → zero value (no error).
+	Slack SlackConfig `mapstructure:"slack" yaml:"slack,omitempty"`
 
 	// YAMLDefaults holds the raw km-config.yaml values for env-bound keys,
 	// snapshotted during Load() BEFORE viper's AutomaticEnv binds env vars into
@@ -410,6 +431,15 @@ func Load() (*Config, error) {
 	if v.IsSet("container_substrates_enabled") {
 		val := v.GetBool("container_substrates_enabled")
 		cfg.ContainerSubstratesEnabled = &val
+	}
+
+	// Phase 91.1: slack.mention_only is tri-state via *bool. Only populated when
+	// the operator has explicitly set the key — absent yaml key → nil pointer →
+	// ExportTerragruntEnvVars emits nothing → terragrunt.hcl get_env() default
+	// ("false") kicks in. Set to true to flip the install default to polite-bot.
+	if v.IsSet("slack.mention_only") {
+		val := v.GetBool("slack.mention_only")
+		cfg.Slack.MentionOnly = &val
 	}
 
 	// Clusters is a structured slice — viper's UnmarshalKey handles the

@@ -1691,21 +1691,40 @@ spec:
 
 ### Bridge env vars
 
-The resolved effective value is compiled into the bridge Lambda environment block. Operators
-set these before running `km init --sidecars`:
+The resolved effective value is compiled into the bridge Lambda environment block. Both
+env vars are populated automatically by `km init` (Phase 91.1):
 
-| Env var | Values | Default | Purpose |
-|---------|--------|---------|---------|
-| `KM_SLACK_MENTION_ONLY` | `"true"` / `"false"` | `"false"` | Install-level default for the bridge; compiled profile field overrides per-sandbox |
-| `KM_SLACK_BOT_USER_ID` | Slack user ID (e.g. `U03ABCDEF`) | — | Bot user ID for the mention scan; primes `CachedBotUserIDFetcher` at cold-start |
+| Env var | Values | Default | Source |
+|---------|--------|---------|--------|
+| `KM_SLACK_MENTION_ONLY` | `"true"` / `"false"` | `"false"` | `km-config.yaml` key `slack.mention_only` (Phase 91.1 — formerly required an `export`) |
+| `KM_SLACK_BOT_USER_ID` | Slack user ID (e.g. `U03ABCDEF`) | `""` | SSM `{prefix}slack/bot-user-id` (populated by `km slack init`); auto-read by `km init` |
 
-`KM_SLACK_BOT_USER_ID` is injected at compile time from the SSM parameter
-`{prefix}/slack/bot-user-id` (populated by `km slack init`). This avoids an extra SSM
-round-trip on every Lambda cold-start.
+**Polite vs chatty install-level default:**
 
-To opt the whole install in to polite-bot as the default (recommended for corporate
-workspaces), export `KM_SLACK_MENTION_ONLY=true` before `km init --sidecars`. Profiles can
-still override on a per-sandbox basis via `notifySlackInboundMentionOnly`.
+Add to `km-config.yaml`:
+
+```yaml
+slack:
+    mention_only: true     # polite-bot default for the whole install
+    # mention_only: false  # chatty default — every message routed
+    # (omit the slack: block entirely → terragrunt fallback "false" applies)
+```
+
+`km init` reads `slack.mention_only` and exports `KM_SLACK_MENTION_ONLY=true|false` into the
+terragrunt subprocess. The bridge Lambda's environment block is updated on terragrunt apply.
+
+**env-wins:** if `KM_SLACK_MENTION_ONLY` is already exported when `km init` runs and it
+disagrees with `slack.mention_only`, km emits a one-line drift WARN to stderr and the env
+value wins. Same semantics as `KM_REGION` / `KM_OPERATOR_EMAIL` / `KM_RESOURCE_PREFIX`.
+
+**`KM_SLACK_BOT_USER_ID` auto-read:** `km init` reads `{prefix}slack/bot-user-id` from SSM and
+exports it before invoking terragrunt — no operator `export` needed. First-install (param
+not yet written) silently skips with an `[info]` line; the terragrunt fallback (`""`) applies
+and the bridge falls back to a runtime `auth.test` call on cold-start, which still works but
+is slower.
+
+**Per-profile override** (`notifySlackInboundMentionOnly`) still wins over the install default
+at sandbox-create time — profiles can flip polite/chatty per sandbox.
 
 ### `km doctor` check: `slack_bot_user_id_cached`
 
@@ -1719,37 +1738,50 @@ Remediation: `km slack init --force` — re-runs `auth.test`, writes `bot_user_i
 
 ### Rollout sequence
 
-After upgrading `km` to a Phase 91 build:
+After upgrading `km` to a Phase 91.1 build:
 
 ```sh
-make build                                                    # rebuild km binary with Phase 91 schema
-
-export KM_SLACK_MENTION_ONLY=true                             # opt-in to polite-bot (install-level default)
+make build                                                    # rebuild km binary
 km slack init --force                                         # re-runs auth.test, caches bot_user_id at SSM
-export KM_SLACK_BOT_USER_ID=$(aws ssm get-parameter \
-  --name /${KM_RESOURCE_PREFIX}/slack/bot-user-id \
-  --query Parameter.Value --output text)
-km init --sidecars                                            # redeploys bridge Lambda with new env vars
+# Edit km-config.yaml — add (or change) the slack block:
+#   slack:
+#       mention_only: true
+km init --dry-run=false                                       # apply terragrunt — Lambda env block picks up KM_SLACK_MENTION_ONLY + KM_SLACK_BOT_USER_ID
 km doctor                                                     # verifies slack_bot_user_id_cached OK
 
 # For sandboxes created before Phase 91 (existing #sb-{id} channels):
 km destroy <sandbox-id> --remote --yes && km create <profile>  # picks up new schema field
 ```
 
+No `export KM_SLACK_*` shell incantations are required after Phase 91.1 — both env vars flow
+through `km init` automatically:
+
+1. `slack.mention_only` from `km-config.yaml` → `KM_SLACK_MENTION_ONLY` (drift-WARN aware).
+2. `{prefix}slack/bot-user-id` from SSM → `KM_SLACK_BOT_USER_ID` (env-wins; first-install skips).
+
 `KM_SLACK_MENTION_ONLY` is install-level: it controls the Lambda default for sandboxes that
 don't set `notifySlackInboundMentionOnly` explicitly. Setting it to `"true"` makes
 Mode 1/3 channels polite and leaves Mode 2 (`#sb-{id}`) every-message unless the profile
 forces otherwise.
 
+**Why `km init` and not `km init --sidecars`:** `--sidecars` only rebuilds the operator-side
+km binary plus sidecar zips and forces a Lambda cold-start — it does NOT run terragrunt
+apply. The bridge Lambda's environment block is owned by the
+`infra/modules/lambda-slack-bridge/v1.0.0/` Terraform module, which only updates on
+terragrunt apply (full `km init`). So a flip of `slack.mention_only` in `km-config.yaml`
+requires `km init --dry-run=false`, not `km init --sidecars`.
+
 ### Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| Bot still 👀-reacts to non-mention messages in a shared channel | Check `KM_SLACK_MENTION_ONLY` in Lambda env: `aws lambda get-function-configuration --function-name ${KM_RESOURCE_PREFIX}-slack-bridge \| jq .Environment.Variables.KM_SLACK_MENTION_ONLY`. If `"false"` or absent, re-export and re-run `km init --sidecars`. |
+| Bot still 👀-reacts to non-mention messages in a shared channel | Check `KM_SLACK_MENTION_ONLY` in Lambda env: `aws lambda get-function-configuration --function-name ${KM_RESOURCE_PREFIX}-slack-bridge \| jq .Environment.Variables.KM_SLACK_MENTION_ONLY`. If `"false"` or absent, confirm `slack.mention_only: true` is in `km-config.yaml` and re-run `km init --dry-run=false`. |
 | `km doctor` reports `slack_bot_user_id_cached` WARN | Run `km slack init --force` to re-cache the bot user ID; verify with `aws ssm get-parameter --name /${KM_RESOURCE_PREFIX}/slack/bot-user-id --query Parameter.Value --output text`. |
+| `km init` prints `WARN: KM_SLACK_MENTION_ONLY=... (env) overrides km-config.yaml slack.mention_only=...` | Operator has an old `export KM_SLACK_MENTION_ONLY=...` in their shell that disagrees with the yaml. Either `unset KM_SLACK_MENTION_ONLY` (yaml wins) or update the yaml to match the export. |
 | Bot ignores a message that DOES @-mention it | Confirm the user typed `@KlankerMaker` in the Slack UI (not a literal `<@U...>` string). Slack only canonicalises to `<@U...>` for real app/user mentions in the Slack UI, not for raw text strings. |
-| Mention-scan never fires; cold-start is slow | `KM_SLACK_BOT_USER_ID` is empty in Lambda env. Re-export from SSM before `km init --sidecars` (see rollout sequence above). |
+| Mention-scan never fires; cold-start is slow | `KM_SLACK_BOT_USER_ID` is empty in Lambda env. Confirm `km slack init` has been run (writes SSM) — `km init` auto-reads SSM on next apply. |
 | Mode 2 (`#sb-{id}`) channel is polite when it should be chatty | Profile has `notifySlackInboundMentionOnly: true` set explicitly. Remove the field to restore the Mode 2 every-message default. |
+| `km init --sidecars` doesn't change the polite/chatty behaviour | Expected: `--sidecars` only rebuilds km + sidecar binaries and forces a Lambda cold-start. The Lambda environment block (where `KM_SLACK_MENTION_ONLY` lives) only updates on full terragrunt apply: `km init --dry-run=false`. |
 
 ### Out of scope
 

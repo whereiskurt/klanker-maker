@@ -1184,6 +1184,20 @@ Phase 91 introduced polite-bot mode: in shared (Mode 1) and operator-controlled 
 (Mode 3) Slack channels the bot only reacts to messages that explicitly @-mention it
 (`<@KlankerMaker>`). Per-sandbox `#sb-{id}` channels continue to process every message.
 
+**Install-level default** (Phase 91.1) lives in `km-config.yaml`:
+
+```yaml
+slack:
+    mention_only: true     # polite-bot default for the whole install
+    # mention_only: false  # chatty default — every message routed
+    # (omit the slack: block → terragrunt fallback "false" applies)
+```
+
+`km init` reads this and exports `KM_SLACK_MENTION_ONLY` into terragrunt. The bridge Lambda's
+environment block is updated on `terragrunt apply` (full `km init`).
+
+**Per-profile override** still wins per sandbox:
+
 ```yaml
 spec:
   cli:
@@ -1193,15 +1207,17 @@ spec:
 ```
 
 New `km doctor` check: `slack_bot_user_id_cached` — WARNs when at least one profile resolves
-to mention-only AND the bot user ID is not cached at `{prefix}/slack/bot-user-id` in SSM.
+to mention-only AND the bot user ID is not cached at `{prefix}slack/bot-user-id` in SSM.
 Remediation: `km slack init --force`.
 
 See [docs/slack-notifications.md § Phase 91](docs/slack-notifications.md#phase-91-polite-bot--mention-only-mode-for-sharedoverride-channels)
 for the full operator guide, rollout sequence, and troubleshooting matrix.
 
-> **Schema addition requires `km init --sidecars`:** `notifySlackInboundMentionOnly` (Phase 91)
-> must flow through to the bridge Lambda via `km init --sidecars`. Existing sandboxes also
-> need `km destroy <id> --remote --yes && km create <profile>` to pick up the new field.
+> **Rollout (Phase 91.1):** edit `km-config.yaml` (`slack.mention_only: true`) → `km init
+> --dry-run=false` (full terragrunt apply — `--sidecars` alone is NOT enough; it only swaps
+> binaries and forces a cold-start, but the Lambda env block only updates on full apply).
+> `KM_SLACK_BOT_USER_ID` is auto-read from SSM by `km init`. Existing sandboxes need
+> `km destroy <id> --remote --yes && km create <profile>` to pick up the new schema field.
 
 ---
 

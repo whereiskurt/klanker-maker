@@ -300,20 +300,31 @@ channels. The effective behaviour is determined by the channel mode + optional p
 | 2 | Per-sandbox `#sb-{id}` | every-message (back-compat) |
 | 3 | Operator override (`notifySlackChannelOverride`) | mention-only |
 
-- `spec.cli.notifySlackInboundMentionOnly: *bool` — tri-state override: nil = mode default,
-  `true` = force polite, `false` = force chatty. Omit for smart per-mode behaviour.
+- `spec.cli.notifySlackInboundMentionOnly: *bool` — per-profile tri-state override: nil = mode
+  default, `true` = force polite, `false` = force chatty. Omit for smart per-mode behaviour.
 - `KM_SLACK_MENTION_ONLY` — install-level Lambda env var (`"true"`/`"false"`; default `"false"`).
-- `KM_SLACK_BOT_USER_ID` — bot user ID for mention scan; compiled from SSM at `km init --sidecars`.
+  **Phase 91.1:** populated from `km-config.yaml` key `slack.mention_only` automatically by
+  `km init`. No `export` required; env-wins drift WARN preserved.
+- `KM_SLACK_BOT_USER_ID` — bot user ID for the mention scan. **Phase 91.1:** auto-read from
+  SSM `{prefix}slack/bot-user-id` by `km init` (populated by `km slack init`); no `export`
+  required. First-install skips silently with `[info]` line.
 - **`km doctor` adds:** `slack_bot_user_id_cached` (WARN if missing when mention-only is active).
 
-Rollout after upgrading to a Phase 91 build:
+**Why `km init` and not `km init --sidecars`:** the bridge Lambda's `environment.variables`
+block is owned by the `lambda-slack-bridge` Terraform module, which only updates on full
+terragrunt apply (`km init`). `--sidecars` rebuilds binaries and forces a Lambda cold-start
+but does NOT update the env block — so flipping `slack.mention_only` requires
+`km init --dry-run=false`.
+
+Rollout after upgrading to a Phase 91.1 build:
 
 ```bash
 make build
-export KM_SLACK_MENTION_ONLY=true
-km slack init --force                                        # re-caches bot_user_id at SSM
-export KM_SLACK_BOT_USER_ID=$(aws ssm get-parameter --name /${KM_RESOURCE_PREFIX}/slack/bot-user-id --query Parameter.Value --output text)
-km init --sidecars                                           # redeploys bridge Lambda with new env vars
+km slack init --force          # re-runs auth.test, caches bot_user_id at SSM
+# Edit km-config.yaml — add:
+#   slack:
+#       mention_only: true
+km init --dry-run=false        # km auto-reads slack.mention_only + SSM bot_user_id; terragrunt apply
 km doctor
 km destroy <sandbox-id> --remote --yes && km create <profile>   # existing sandboxes pick up new field
 ```

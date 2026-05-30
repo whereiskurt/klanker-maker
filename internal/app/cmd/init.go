@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -458,6 +459,11 @@ func runInit(cfg *config.Config, awsProfile, region string, verbose bool) error 
 	// and for the envReqs checks in regionalModules.
 	ExportTerragruntEnvVars(cfg)
 
+	// Phase 91.1: auto-populate KM_SLACK_BOT_USER_ID from SSM at
+	// {prefix}slack/bot-user-id (written by km slack init / rotate-token).
+	// Non-fatal — first-install will silently skip when the param doesn't exist.
+	EnsureSlackBotUserIDFromSSM(ctx, cfg, awsCfg)
+
 	// Phase 84.3: hard-fail early when the artifacts bucket doesn't exist —
 	// prevents confusing mid-flight failures in s3-replication, create-handler, etc.
 	if cfg.ArtifactsBucket != "" {
@@ -859,6 +865,53 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 	if os.Getenv("KM_EMAIL_SUBDOMAIN") == "" {
 		os.Setenv("KM_EMAIL_SUBDOMAIN", cfg.EmailSubdomain) //nolint:errcheck
 	}
+
+	// Phase 91.1: KM_SLACK_MENTION_ONLY — install-level polite-bot default
+	// consumed by infra/live/use1/lambda-slack-bridge/terragrunt.hcl
+	// get_env("KM_SLACK_MENTION_ONLY", "false"). Only export when the operator
+	// has explicitly set slack.mention_only in km-config.yaml — absent
+	// (cfg.Slack.MentionOnly == nil) leaves any existing env var untouched and
+	// lets the terragrunt fallback ("false") apply. env-wins semantics preserved.
+	if cfg.Slack.MentionOnly != nil {
+		yamlSlackMentionOnly := strconv.FormatBool(*cfg.Slack.MentionOnly)
+		if envVal := os.Getenv("KM_SLACK_MENTION_ONLY"); envVal != "" && envVal != yamlSlackMentionOnly {
+			fmt.Fprintf(os.Stderr, "WARN: KM_SLACK_MENTION_ONLY=%s (env) overrides km-config.yaml slack.mention_only=%s\n", envVal, yamlSlackMentionOnly)
+		} else if envVal == "" {
+			os.Setenv("KM_SLACK_MENTION_ONLY", yamlSlackMentionOnly) //nolint:errcheck
+		}
+	}
+}
+
+// EnsureSlackBotUserIDFromSSM auto-populates KM_SLACK_BOT_USER_ID from SSM at
+// {prefix}slack/bot-user-id when the env var is not already set. Phase 91.1:
+// removes the operator burden of `export KM_SLACK_BOT_USER_ID=$(aws ssm ...)`
+// before every `km init`. The SSM parameter is written by `km slack init` /
+// `km slack rotate-token` (Phase 91 Plan 04). env-wins semantics: when the
+// operator has explicitly exported a value, this helper leaves it alone.
+//
+// Non-fatal on any error (missing param, network, IAM): logs a single WARN
+// line to stderr and returns nil so the terragrunt.hcl fallback ("") applies.
+// Callers should pass an awsCfg already validated by ValidateCredentials so we
+// know the SSM Get can run.
+func EnsureSlackBotUserIDFromSSM(ctx context.Context, cfg *config.Config, awsCfg aws.Config) {
+	if os.Getenv("KM_SLACK_BOT_USER_ID") != "" {
+		return // env wins
+	}
+	if cfg == nil {
+		return
+	}
+	ssmClient := ssm.NewFromConfig(awsCfg)
+	param := cfg.GetSsmPrefix() + "slack/bot-user-id"
+	out, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{Name: aws.String(param)})
+	if err != nil {
+		// Common during first-install (param doesn't exist yet) — quiet WARN.
+		fmt.Fprintf(os.Stderr, "  [info] KM_SLACK_BOT_USER_ID not auto-set (SSM %s unavailable: %v)\n", param, err)
+		return
+	}
+	if out.Parameter == nil || out.Parameter.Value == nil || *out.Parameter.Value == "" {
+		return
+	}
+	os.Setenv("KM_SLACK_BOT_USER_ID", *out.Parameter.Value) //nolint:errcheck
 }
 
 // ensureArtifactsBucketExists checks that the configured artifacts bucket exists
