@@ -35,32 +35,65 @@ not tribal knowledge.
 ### Detection Strategy (Q1: B — auto-detect with fallback)
 
 - **Primary path:** `users.lookupByEmail(email)` → on success, `conversations.invite(channelID, userID)`.
-- **Fallback path:** on `users_not_found`, prompt the operator (interactive only):
-  `"User not found in workspace. Send Slack Connect invite (requires Pro)? [y/N]"`. If yes,
-  call `conversations.inviteShared(channelID, email)`. If no or non-interactive, return a
-  `SkippedExternal` result so the caller can warn and proceed.
+- **Fallback path:** on `users_not_found`, the orchestrator chooses based on `EnsureMemberOpts`:
+  - `ForceExternal` → Connect directly, no prompt (the `km slack invite --external` path).
+  - `Interactive` + `Prompter` set → prompt the operator:
+    `"User not found in workspace. Send Slack Connect invite (requires Pro)? [y/N]"`. If yes,
+    `conversations.inviteShared(channelID, email)`; if no, `SkippedExternal`.
+  - `AutoConnect` true → Connect directly, no prompt (the `km create` path when
+    `spec.cli.useSlackConnect` is true; see Q3).
+  - otherwise → `SkippedExternal` so the caller can warn and proceed.
 - **Connect failure:** if Connect returns `not_allowed_token_type` (free tier), surface the
-  existing Pro-tier error message — don't swallow it.
+  existing Pro-tier error message — don't swallow it (caller maps to `Failed`).
 
 ### Where Invites Happen (Q2: C+D)
 
-Three call sites, all routed through one orchestrator:
+Four call sites, all routed through one orchestrator:
 1. **`km slack init`** — keeps existing `--invite-email` single-recipient invite to the shared
    channel. Refactored to call the orchestrator instead of `InviteShared` directly. Behavior
    unchanged for existing PoC installs (operator email is external → falls back to Connect).
-2. **New `km slack invite <email> [--channel <name|id>] [--external]`** — ad-hoc command for
-   adding people to any channel anytime. Default channel is the SSM-stored shared channel.
-   `--external` skips the lookup and goes straight to Connect (no prompt).
-3. **`km create` profile field** — new `spec.cli.notifySlackInviteEmails: []string` runs the
-   orchestrator for each email after the per-sandbox channel is created. **Fail-soft**: skip+warn
-   on Connect-needed addresses (since `km create` may run from `km at`/scheduled), do not block
-   the create.
+2. **New `km slack invite <email> [--channel <name|id>] [--external] [--dry-run]`** — ad-hoc
+   command for adding people to any channel anytime. Default channel is the SSM-stored shared
+   channel. `--external` skips the lookup and goes straight to Connect (no prompt). `--dry-run`
+   does the read-only lookup and prints the action it WOULD take (native invite vs Connect vs
+   not-a-member) without sending anything — a zero-side-effect probe for validating the
+   auto-detect against a live workspace without a sandbox or any writes.
+3. **`km create` primary operator invite** — the existing per-sandbox operator invite
+   (`create_slack.go` Mode 2: read `{prefix}/slack/invite-email` from SSM, then invite to
+   `#sb-{id}`) is refactored from raw `InviteShared` to the orchestrator with `Interactive=false`
+   and **`AutoConnect=true` unconditionally**. The primary operator is therefore ALWAYS invited
+   (preserving today's guarantee): a native workspace member gets `conversations.invite`; an
+   external operator still gets a Slack Connect invite. This fixes the corporate case where the
+   operator is a native member and the old Connect-only call would fail, leaving them out of the
+   per-sandbox channel. **NOT gated by `useSlackConnect`** — that flag governs only the additional
+   folks in call-site 4. Fail-soft (warn, never block).
+4. **`km create` additional-folks list** — new `spec.cli.notifySlackInviteEmails: []string` runs
+   the orchestrator for each ADDITIONAL email after the per-sandbox channel is created and the
+   primary operator has been invited. Purely additive — does NOT replace call-site 3. New
+   companion field `spec.cli.useSlackConnect` (`*bool`, **default true**) gates the Connect
+   fallback for THIS list only (see Q3). **Fail-soft** regardless: a failed Connect or invite
+   emits a stderr warning, never blocks the create (since `km create` may run from
+   `km at`/scheduled).
 
-### Connect Fallback UX (Q3: B — prompt before fallback)
+### Connect Fallback UX (Q3: prompt for ad-hoc; profile-gated auto-Connect for create)
 
-- Interactive (TTY): prompt before Connect, default `N`.
-- Non-interactive (piped, scheduled, `km create`): no prompt — return `SkippedExternal` and emit
-  a stderr warning telling the operator to follow up with `km slack invite --external <email>`.
+- **Ad-hoc `km slack invite` (interactive/TTY):** prompt before Connect, default `N`. Unchanged.
+- **`km create` (non-interactive, profile-driven):** governed by `spec.cli.useSlackConnect`
+  (`*bool`, default true; nil ⇒ true):
+  - `useSlackConnect: true` (default) → auto-Connect external addresses with **no prompt**
+    (`AutoConnect=true`). Result `InvitedConnect` on success; `Failed` (fail-soft warning) if
+    Connect errors, e.g. free-tier `not_allowed_token_type`.
+  - `useSlackConnect: false` → do **not** Connect; return `SkippedExternal` and emit a stderr
+    warning telling the operator to follow up with
+    `km slack invite --external <email> --channel sb-{id}`.
+- **Scope:** `useSlackConnect` only gates the additional-folks `notifySlackInviteEmails` loop
+  (Q2 call-site 4). It does NOT govern: `km slack invite` (call-site 2, interactive prompt +
+  `--external`), `km slack init` (call-site 1, operator invite), or the `km create` **primary
+  operator invite** (call-site 3, always `AutoConnect=true` so the operator is always invited).
+- **Rationale for default true:** an operator who lists external collaborators in
+  `notifySlackInviteEmails` almost always wants them invited; requiring a manual follow-up per
+  external address was friction. `useSlackConnect: false` preserves the prior skip+warn behavior
+  for operators who want to keep create-time invites workspace-internal only.
 
 ### Manifest Handling (Q4: A — `km slack manifest` generates)
 
@@ -74,10 +107,17 @@ Three call sites, all routed through one orchestrator:
     app name (≤35 chars, alphanumeric + spaces + hyphens).
   - `bot_user.display_name` mirrors the app name.
   - `oauth_config.scopes.bot` — full union of currently-used scopes PLUS the new
-    `users:read.email`. Final list:
+    `users:read.email`. Final list (13 scopes):
     `["chat:write", "channels:manage", "channels:join", "channels:read", "channels:history",
       "groups:write", "groups:history", "conversations.connect:write", "reactions:read",
-      "reactions:write", "files:write", "users:read.email"]`.
+      "reactions:write", "files:write", "files:read", "users:read.email"]`.
+    NOTE: `files:read` is REQUIRED by Phase 75 (inbound file attachments — `files.info` +
+    download from `files.slack.com`) and is verified by `km doctor`'s inbound-scope check
+    (`internal/app/cmd/doctor_slack.go` `required = [channels:history, groups:history,
+    reactions:write, files:read]`). The reference manifest at
+    `/Users/khundeck/Downloads/km-personal.json` predates Phase 75 and is MISSING `files:read` —
+    the Phase 72 manifest MUST include it so a freshly-installed app passes `km doctor` and can
+    process inbound files. `users:read.email` is the Phase-72-specific addition.
   - `settings.event_subscriptions.request_url` filled with the Lambda Function URL +
     `/events` path.
   - `settings.event_subscriptions.bot_events` retains `["message.channels", "message.groups"]`.
@@ -98,7 +138,10 @@ Three call sites, all routed through one orchestrator:
 
 **New orchestrator file `pkg/slack/invite.go`:**
 - `EnsureMemberByEmail(ctx, channelID, email string, opts EnsureMemberOpts) (EnsureMemberResult, error)`
-- `EnsureMemberOpts { ForceExternal bool; Interactive bool; Prompter Prompter }`
+- `EnsureMemberOpts { ForceExternal bool; Interactive bool; AutoConnect bool; Prompter Prompter }`
+  - `AutoConnect`: non-interactive auto-fallback to Connect on lookup miss (no prompt). Set by
+    the `km create` loop from `spec.cli.useSlackConnect`. Ignored when `ForceExternal` or a
+    `Prompter`-driven interactive prompt already handled the fallback.
 - `EnsureMemberResult` is a typed enum:
   - `InvitedDirect`   — looked up, regular invited
   - `InvitedConnect`  — fell back to Connect (and Connect succeeded)
@@ -113,11 +156,15 @@ Three call sites, all routed through one orchestrator:
   creation; call orchestrator with `Interactive=false` for each email.
 
 **Profile schema additions:**
-- `pkg/profile/types.go` — add `NotifySlackInviteEmails []string \`yaml:"notifySlackInviteEmails,omitempty" json:"notifySlackInviteEmails,omitempty"\`` to the `CLI` struct.
-- `pkg/profile/schemas/sandbox_profile.schema.json` — mirror the field with type `array`,
-  items `string`, `format: email`.
-- `pkg/profile/validate.go` — validate each entry with the same email-format check used
-  elsewhere; reject if `notifySlackEnabled` is false.
+- `pkg/profile/types.go` — add to the `CLI` struct:
+  - `NotifySlackInviteEmails []string \`yaml:"notifySlackInviteEmails,omitempty" json:"notifySlackInviteEmails,omitempty"\``
+  - `UseSlackConnect *bool \`yaml:"useSlackConnect,omitempty" json:"useSlackConnect,omitempty"\`` — pointer so nil ⇒ default true.
+- `pkg/profile/schemas/sandbox_profile.schema.json` — mirror `notifySlackInviteEmails` (type
+  `array`, items `string`, `format: email`) and `useSlackConnect` (type `boolean`, default
+  `true`).
+- `pkg/profile/validate.go` — validate each `notifySlackInviteEmails` entry with the same
+  email-format check used elsewhere; reject if `notifySlackEnabled` is false (Rule SE1).
+  `useSlackConnect` needs no new reject rule — it is inert when the invite list is empty.
 
 **Manifest command:**
 - `internal/app/cmd/slack_manifest.go` (NEW) — cobra command, registered under the
@@ -193,16 +240,21 @@ Three call sites, all routed through one orchestrator:
 }
 ```
 
-The Phase 72 manifest adds `users:read.email` to `oauth_config.scopes.bot`. All other fields
-parameterized by deployment.
+The Phase 72 manifest's `oauth_config.scopes.bot` is the full 13-scope union. Versus the
+reference manifest above (11 scopes, May 2026) it adds TWO: `files:read` (Phase 75 inbound file
+attachments — already shipped; the reference manifest is stale) and `users:read.email` (the
+Phase 72 addition). All other fields parameterized by deployment.
 
 ### CLI surface (new)
 
 ```
-km slack invite <email> [--channel <name|id>] [--external]
+km slack invite <email> [--channel <name|id>] [--external] [--dry-run]
   --channel  channel name (e.g. "km-notifications") or ID (e.g. "C012ABCDE3F")
              default: SSM-stored shared channel
   --external skip lookup, send Slack Connect invite directly
+  --dry-run  read-only: look up the email and print whether it would be invited
+             natively or via Slack Connect; send nothing (safe probe for a live
+             workspace, no sandbox required)
 
 km slack manifest [--app-name <name>]
   --app-name override the auto-derived app name (default: "KlankerMaker-{resource_prefix}")
@@ -216,22 +268,31 @@ spec:
   cli:
     notifySlackEnabled: true
     notifySlackPerSandbox: true
+    useSlackConnect: true          # default true; omit for the same behavior
     notifySlackInviteEmails:
       - alice@example.com
       - bob@example.com
 ```
 
-When `km create` provisions this sandbox:
+When `km create` provisions this sandbox (with `useSlackConnect` true/unset):
 1. Per-sandbox channel `#sb-{id}` is created (existing flow).
-2. For each email: orchestrator runs with `Interactive=false`.
-3. Internal users land via regular invite. External users emit a stderr warning:
-   `[warn] alice@external.com not in workspace; run \`km slack invite --external alice@external.com --channel sb-{id}\` to send a Connect invite.`
+2. For each email: orchestrator runs with `Interactive=false`, `AutoConnect=true`.
+3. Internal users land via regular invite (`InvitedDirect`); external users get an automatic
+   Slack Connect invite (`InvitedConnect`) — no prompt, no manual follow-up.
+4. If Connect fails (e.g. free-tier workspace) the email is logged as a fail-soft warning and
+   the create proceeds.
+
+With `useSlackConnect: false`, step 3 instead skips external users and emits a stderr warning:
+`[warn] bob@external.com is not a member of the Slack workspace; not sending Connect invite.`
+`  To send one: km slack invite --external bob@external.com --channel sb-{id}`
 
 ### Test surface
 
 - Unit tests for `LookupUserByEmail`, `InviteUserToChannel` (mock HTTP in pattern of existing
   `client_test.go`).
-- Unit tests for `EnsureMemberByEmail` covering all five result paths (mock client + mock prompter).
+- Unit tests for `EnsureMemberByEmail` covering all five result paths (mock client + mock
+  prompter), including the non-interactive `AutoConnect=true` → `InvitedConnect` path and the
+  `AutoConnect=false` non-interactive → `SkippedExternal` path.
 - Unit test for manifest rendering (golden-file compare against fixture).
 - Cmd-level test for `km slack invite` (mock orchestrator; verify flag wiring + exit codes).
 - Cmd-level test for `km slack manifest` (golden output for known SSM stub).
