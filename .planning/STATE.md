@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 14
 status: in-progress
-stopped_at: "Checkpoint 72-09-T3: Operator UAT human-verify gate"
-last_updated: "2026-05-30T21:24:20.525Z"
-last_activity: 2026-05-29
+stopped_at: Completed 91-00-PLAN.md (Wave 0 stub seeding)
+last_updated: "2026-05-30T22:16:33.722Z"
+last_activity: 2026-05-30
 progress:
-  total_phases: 106
+  total_phases: 107
   completed_phases: 94
-  total_plans: 452
-  completed_plans: 416
+  total_plans: 459
+  completed_plans: 417
   percent: 88
 ---
 
@@ -31,7 +31,7 @@ Plan: 6 of 6 in phase 79 (all complete; 79-05 closeout + UAT passed 2026-05-10)
 Total Plans in Phase: 6
 Current Plan: 14
 Status: in-progress
-Last activity: 2026-05-29
+Last activity: 2026-05-30
 
 Progress: [█████████░] 88%
 
@@ -445,6 +445,7 @@ Progress: [█████████░] 88%
 | Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P08 | 12 | 1 tasks | 3 files |
 | Phase 72-slack-corporate-workspace-support-with-auto-detect-invite-and-manifest-generator P06 | 16min | 1 tasks | 3 files |
 | Phase 72 P09 | 8min | 2 tasks | 4 files |
+| Phase 91 P00 | 204s | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1293,6 +1294,8 @@ Recent decisions affecting current work:
 - [Phase 72-09]: Operator UAT PASSED 2026-05-30 by KPH — 7/8 rows green; B6 (scope-drift) deferred (covered by TestDoctor_SlackUsersReadEmailScope_Pass + _Warn unit tests); Phase 72 COMPLETE
 - [Phase 72-09]: Three production bugs caught during live UAT: ec13e5b (auth.test decode shape), 6cf1deb (nil-ptr in RunSlackInvite lazy-init), 2653bc3 (form-encoded vs JSON for users.lookupByEmail)
 - [Phase 72-09]: Reinstall-ejects-bot documented as known Slack platform behavior in docs/slack-notifications.md § Phase 72; operator must re-invite bot or km slack init --force after manifest reinstall
+- [Phase 91]: Extended events_handler_test.go in place (single file) rather than creating a sibling to keep all bridge fakes co-located
+- [Phase 91]: Wave 0 stub pattern: t.Skip with TODO Plan 91-XX message locks validation contract before implementation lands
 
 ### Roadmap Evolution
 
@@ -1409,6 +1412,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-29T19:42:09.810Z
-Stopped at: Checkpoint 72-09-T3: Operator UAT human-verify gate
+Last session: 2026-05-30T22:16:33.714Z
+Stopped at: Completed 91-00-PLAN.md (Wave 0 stub seeding)
 Resume file: None
