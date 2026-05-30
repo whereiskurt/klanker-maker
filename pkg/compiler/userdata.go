@@ -3991,6 +3991,19 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		if p.Spec.CLI.NotifySlackEnabled != nil {
 			notifyEnv["KM_NOTIFY_SLACK_ENABLED"] = boolToZeroOne(*p.Spec.CLI.NotifySlackEnabled)
 		}
+		// Phase 91: emit KM_SLACK_MENTION_ONLY only when Slack is actively enabled
+		// (NotifySlackEnabled == &true). Same gate as the bridge Lambda — the env var
+		// is meaningless to a sandbox whose hook never dispatches to Slack.
+		//
+		// The effective bool follows the channel-mode-derived default unless the operator
+		// sets cli.NotifySlackInboundMentionOnly explicitly. See resolveMentionOnly().
+		if p.Spec.CLI.NotifySlackEnabled != nil && *p.Spec.CLI.NotifySlackEnabled {
+			if resolveMentionOnly(p.Spec.CLI) {
+				notifyEnv["KM_SLACK_MENTION_ONLY"] = "true"
+			} else {
+				notifyEnv["KM_SLACK_MENTION_ONLY"] = "false"
+			}
+		}
 		// Compile-time channel pinning via NotifySlackChannelOverride. If unset,
 		// Plan 08 (km create) injects KM_SLACK_CHANNEL_ID and KM_SLACK_BRIDGE_URL
 		// at runtime by appending to /etc/profile.d/km-notify-env.sh post-launch.
