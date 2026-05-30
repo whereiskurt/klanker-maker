@@ -108,6 +108,39 @@ func (e *SlackAPIError) Error() string {
 	return fmt.Sprintf("slack %s: %s", e.Method, e.Code)
 }
 
+// callForm dispatches to a Slack Web API method using
+// application/x-www-form-urlencoded body. Required for legacy methods that
+// reject JSON bodies with invalid_arguments (notably users.lookupByEmail and
+// users.info). Returns the parsed SlackAPIResponse and a *SlackAPIError on
+// non-OK responses.
+func (c *Client) callForm(ctx context.Context, method string, form url.Values) (*SlackAPIResponse, error) {
+	var rdr io.Reader
+	if form != nil {
+		rdr = strings.NewReader(form.Encode())
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/"+method, rdr)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.botToken)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var apiResp SlackAPIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil, fmt.Errorf("slack: decode %s: %w", method, err)
+	}
+	if !apiResp.OK {
+		return &apiResp, &SlackAPIError{Method: method, Code: apiResp.Error}
+	}
+	return &apiResp, nil
+}
+
 // callJSON is the shared JSON-body method dispatcher.
 func (c *Client) callJSON(ctx context.Context, method string, body any) (*SlackAPIResponse, error) {
 	var rdr io.Reader
@@ -439,7 +472,9 @@ func (c *Client) FindChannelByName(ctx context.Context, name string) (string, er
 // Rate limit: Tier 3 (50+/min). One call per email; no batch.
 func (c *Client) LookupUserByEmail(ctx context.Context, email string) (string, bool, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
-	resp, err := c.callJSON(ctx, "users.lookupByEmail", map[string]any{"email": email})
+	// users.lookupByEmail is a legacy method that rejects application/json
+	// with invalid_arguments — it only accepts form-urlencoded bodies.
+	resp, err := c.callForm(ctx, "users.lookupByEmail", url.Values{"email": {email}})
 	if err != nil {
 		var apierr *SlackAPIError
 		if errors.As(err, &apierr) && apierr.Code == "users_not_found" {

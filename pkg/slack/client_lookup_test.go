@@ -22,9 +22,14 @@ func TestClient_LookupUserByEmail_Found(t *testing.T) {
 		if got := r.URL.Path; got != "/users.lookupByEmail" {
 			t.Errorf("path = %q; want /users.lookupByEmail", got)
 		}
+		// users.lookupByEmail is a legacy Slack method that rejects JSON
+		// bodies with invalid_arguments — verify form-encoded wire format.
+		if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/x-www-form-urlencoded") {
+			t.Errorf("Content-Type = %q; want application/x-www-form-urlencoded", ct)
+		}
 		body, _ := io.ReadAll(r.Body)
-		if !strings.Contains(string(body), `"email":"alice@example.com"`) {
-			t.Errorf("body did not contain lowercased email: %s", body)
+		if got := string(body); got != "email=alice%40example.com" {
+			t.Errorf("body = %q; want form-encoded email=alice%%40example.com", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"ok": true, "user": {"id": "U123ABC"}}`))
@@ -104,7 +109,7 @@ func TestClient_LookupUserByEmail_LowercasesEmail(t *testing.T) {
 	c := newClientAgainstServer(ts)
 	_, _, _ = c.LookupUserByEmail(context.Background(), "MIXED.Case@EXAMPLE.COM")
 
-	if !strings.Contains(receivedBody, `"email":"mixed.case@example.com"`) {
-		t.Errorf("server received %q; want lowercased email mixed.case@example.com", receivedBody)
+	if receivedBody != "email=mixed.case%40example.com" {
+		t.Errorf("server received %q; want form-encoded email=mixed.case%%40example.com", receivedBody)
 	}
 }
