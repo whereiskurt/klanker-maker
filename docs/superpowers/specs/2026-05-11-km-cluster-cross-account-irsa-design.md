@@ -13,9 +13,9 @@ account"). Today the only way to invoke `km` commands is from a developer's
 local machine or from the create-handler Lambda — both authenticate via an AWS
 CLI profile or Lambda execution role respectively.
 
-A persistent k8s service running on an existing Kubernetes cluster (the
-Greenhouse `dev-use1-0` EKS cluster) needs to call `km` commands against the
-klanker account. Using a static IAM user key is insecure and operationally
+A persistent k8s service running on an existing Kubernetes cluster (e.g.
+an external EKS cluster `dev-use1-0` in account `123456789012`) needs to
+call `km` commands against the klanker account. Using a static IAM user key is insecure and operationally
 painful. The standard solution is **IRSA (IAM Roles for Service Accounts)**:
 the k8s pod authenticates via its projected service account token, exchanges it
 for short-lived AWS credentials via STS, and never touches a long-lived secret.
@@ -26,34 +26,30 @@ to wire into their k8s service account.
 
 ---
 
-## Background: How IRSA Works in the Greenhouse Ecosystem
+## Background: How Same-Account IRSA Works (typical pattern)
 
-Understanding the Greenhouse pattern is essential for seeing where klanker-maker
-diverges.
+Understanding the standard same-account IRSA flow is essential for seeing
+where klanker-maker diverges.
 
-### Same-account IRSA (the Greenhouse standard)
+### The typical pattern
 
-Every Greenhouse service that needs AWS access follows this flow:
+A typical in-cluster service that needs AWS access follows this flow:
 
 1. An EKS cluster has an **OIDC provider** registered in the same AWS account.
-   For `dev-use1-0`, this is an IAM OIDC identity provider in account
-   `874364631781` whose URL comes from
-   `data.aws_eks_cluster.this.identity[0].oidc[0].issuer` (see
-   `infrastructure/terraform/modules/ack/controllers/iam/main.tf:43-47`).
+   For a cluster like `dev-use1-0` in account `123456789012`, this is an IAM
+   OIDC identity provider whose URL comes from
+   `data.aws_eks_cluster.this.identity[0].oidc[0].issuer`.
 
-2. A Terraform module
-   (`infrastructure/terraform/modules/aws_irsa_role_lotus/main.tf`) creates an
-   IAM role in that **same** account. The trust policy sets the role's
+2. A Terraform module (a typical `aws_irsa_role` wrapper) creates an IAM
+   role in that **same** account. The trust policy sets the role's
    `Principal.Federated` to
-   `arn:aws:iam::874364631781:oidc-provider/<oidc-endpoint>` — the account ID
-   and the OIDC provider are both Greenhouse's.
+   `arn:aws:iam::123456789012:oidc-provider/<oidc-endpoint>` — the account ID
+   and the OIDC provider are both the cluster account's.
 
-3. The role is constrained by the `boundary_lotus_application` permissions
-   boundary created by the ACK IAM controller
-   (`infrastructure/terraform/modules/ack/controllers/iam/main.tf:141-164`).
-   That boundary caps the max permissions to a curated set (S3, DynamoDB, SQS,
-   SSM, SES, Events, Kinesis, KMS, Bedrock AgentCore, etc.). ACK enforces this
-   boundary on every Lotus app role it creates.
+3. The role is constrained by a permissions boundary (often managed by an
+   ACK IAM controller). The boundary caps the max permissions to a curated
+   set (S3, DynamoDB, SQS, SSM, SES, Events, Kinesis, KMS, Bedrock AgentCore,
+   etc.). Every in-cluster service role gets the same boundary applied.
 
 4. The k8s `ServiceAccount` is annotated with
    `eks.amazonaws.com/role-arn: <role-arn>`. EKS injects a projected web
@@ -62,40 +58,39 @@ Every Greenhouse service that needs AWS access follows this flow:
    it up automatically via the `AWS_WEB_IDENTITY_TOKEN_FILE` and `AWS_ROLE_ARN`
    env vars that EKS also injects.
 
-A real example: `infrastructure/services/product/interseller/dev.use1/dev/main.tf:80-94`
-creates an IRSA role for the interseller service with SQS, SSM, and S3
-policies. The Terraform runs in Greenhouse's AWS account, so everything stays
-in one account.
+Concrete shape: an internal Terraform stack creates an IRSA role for a
+service with SQS, SSM, and S3 policies, running entirely in the cluster's
+own AWS account so all resources stay co-located with the workload.
 
 ### Why klanker-maker is different
 
 klanker-maker's AWS resources (DynamoDB, Lambda, EC2, S3, SES, etc.) live in a
-**separate AWS account** — the klanker account (`850919910932` per
-`km-config.yaml`). The Greenhouse dev cluster lives in account `874364631781`.
+**separate AWS account** — the klanker account (`987654321098` per
+`km-config.yaml`). The external dev cluster lives in account `123456789012`.
 
 This creates a **cross-account IRSA trust**:
 
-- The OIDC identity provider is still registered in Greenhouse's account
-  (`874364631781`).
-- The IAM role must be created in the **klanker account** (`850919910932`) so
+- The OIDC identity provider is still registered in the cluster's account
+  (`123456789012`).
+- The IAM role must be created in the **klanker account** (`987654321098`) so
   it can grant access to klanker-account resources.
 - The role's trust policy `Principal.Federated` must reference the OIDC
-  provider by its ARN in the Greenhouse account:
-  `arn:aws:iam::874364631781:oidc-provider/<oidc-endpoint>`.
+  provider by its ARN in the cluster account:
+  `arn:aws:iam::123456789012:oidc-provider/<oidc-endpoint>`.
 
 This is valid IAM — cross-account principals in OIDC trust policies work the
-same as cross-account role assumptions. The difference is that the Greenhouse
-`aws_irsa_role` module always uses `data.aws_caller_identity.this.account_id`
-for the principal ARN (`main.tf:46-50`), which makes it same-account only. The
-klanker-maker module must accept the Greenhouse account's OIDC provider ARN as
-an explicit input instead.
+same as cross-account role assumptions. The difference is that a typical
+`aws_irsa_role` wrapper uses `data.aws_caller_identity.this.account_id` for
+the principal ARN, which makes it same-account only. The klanker-maker
+module must accept the cluster account's OIDC provider ARN as an explicit
+input instead.
 
-Additionally, klanker-maker needs far broader permissions than the
-`boundary_lotus_application` policy permits. It must create EC2 instances, ECS
-clusters, Lambda functions, IAM roles for sandboxes, EventBridge schedules,
-Route53 records, etc. The Greenhouse boundary intentionally excludes these.
-There is no ACK controller managing klanker-maker's role — it owns and manages
-its own IAM roles directly via Terraform.
+Additionally, klanker-maker needs far broader permissions than a typical
+boundary policy permits. It must create EC2 instances, ECS clusters, Lambda
+functions, IAM roles for sandboxes, EventBridge schedules, Route53 records,
+etc. The standard boundaries intentionally exclude such operations. There is
+no ACK controller managing klanker-maker's role — it owns and manages its
+own IAM roles directly via Terraform.
 
 ---
 
@@ -110,7 +105,7 @@ A new module, versioned at `v1.0.0`, that creates one IAM role per cluster in
 the klanker account with:
 
 - A trust policy referencing the caller-supplied OIDC provider ARN (which
-  lives in the Greenhouse account).
+  lives in the Corporate account).
 - The full set of inline IAM policies needed to run any `km` command — same
   surface as the `create-handler` Lambda role
   (`infra/modules/create-handler/v1.0.0/main.tf`), since a `km` process
@@ -136,7 +131,7 @@ variable "cluster_name" {
 
 variable "oidc_provider_arn" {
   type        = string
-  description = "Full ARN of the OIDC provider in the cluster's AWS account (e.g. arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/XXXX)."
+  description = "Full ARN of the OIDC provider in the cluster's AWS account (e.g. arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/XXXX)."
 }
 
 variable "namespace" {
@@ -187,10 +182,10 @@ locals {
   # e.g. "oidc.eks.us-east-1.amazonaws.com/id/XXXX"
   oidc_provider_host = replace(var.oidc_provider_arn, "/^arn:aws:iam::[0-9]+:oidc-provider\\//", "")
 
-  # Use StringLike when namespace is a wildcard (mirrors the Greenhouse
+  # Use StringLike when namespace is a wildcard (mirrors the Corporate
   # aws_irsa_role module's wildcard detection — variables.tf:78-83). This
-  # matches how aws_irsa_role_lotus sets service_account_namespace = "*" for
-  # all Lotus apps, trading tighter scoping for deployment flexibility.
+  # matches how aws_irsa_role sets service_account_namespace = "*" for
+  # all Corporate apps, trading tighter scoping for deployment flexibility.
   has_wildcard   = can(regex("\\*", var.namespace)) || can(regex("\\*", var.service_account_name))
   sub_condition  = local.has_wildcard ? "StringLike" : "StringEquals"
 }
@@ -331,7 +326,7 @@ km cluster
 | Flag | Default | Description |
 |---|---|---|
 | `--name` | required | Short cluster identifier, e.g. `dev-use1-0`. Used in the IAM role name and directory name. |
-| `--oidc-provider-arn` | required | Full ARN of the OIDC provider in the cluster's AWS account, e.g. `arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/XXXX`. |
+| `--oidc-provider-arn` | required | Full ARN of the OIDC provider in the cluster's AWS account, e.g. `arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/XXXX`. |
 | `--namespace` | `*` | Kubernetes namespace the service account lives in. Defaults to wildcard — any namespace on the cluster can assume the role, scoped only by service account name. Pass an exact namespace to tighten the trust policy to `StringEquals`. |
 | `--service-account` | `km` | Kubernetes service account name that will assume the role. |
 | `--aws-profile` | `klanker-application` | AWS CLI profile to authenticate with. |
@@ -368,10 +363,10 @@ km cluster
    ```yaml
    clusters:
      - name: dev-use1-0
-       oidc_provider_arn: arn:aws:iam::874364631781:oidc-provider/oidc.eks...
+       oidc_provider_arn: arn:aws:iam::123456789012:oidc-provider/oidc.eks...
        namespace: <namespace>
        service_account: km
-       role_arn: arn:aws:iam::850919910932:role/km-cluster-dev-use1-0
+       role_arn: arn:aws:iam::987654321098:role/km-cluster-dev-use1-0
    ```
 
    Use the same `persistKMConfigFields` pattern from `cmd/init.go:1719-1755`.
@@ -380,7 +375,7 @@ km cluster
    team:
 
    ```
-   ✓ IRSA role provisioned: arn:aws:iam::850919910932:role/km-cluster-dev-use1-0
+   ✓ IRSA role provisioned: arn:aws:iam::987654321098:role/km-cluster-dev-use1-0
 
    Annotate your Kubernetes ServiceAccount:
 
@@ -390,7 +385,7 @@ km cluster
          name: km
          namespace: <namespace>
          annotations:
-           eks.amazonaws.com/role-arn: arn:aws:iam::850919910932:role/km-cluster-dev-use1-0
+           eks.amazonaws.com/role-arn: arn:aws:iam::987654321098:role/km-cluster-dev-use1-0
            eks.amazonaws.com/token-expiration: "3600"
    ```
 
@@ -400,7 +395,7 @@ Reads `clusters:` from km-config.yaml and prints a table:
 
 ```
 NAME          NAMESPACE   SERVICE ACCOUNT   ROLE ARN
-dev-use1-0    <ns>        km                arn:aws:iam::850919910932:role/km-cluster-dev-use1-0
+dev-use1-0    <ns>        km                arn:aws:iam::987654321098:role/km-cluster-dev-use1-0
 ```
 
 #### `km cluster rm`
@@ -456,21 +451,21 @@ and `rm` as subcommands, following the same `cobra.Command` structure as
 This is the runtime flow once the role is provisioned:
 
 1. The k8s pod starts on `dev-use1-0`. EKS sees the `ServiceAccount` annotation
-   `eks.amazonaws.com/role-arn: arn:aws:iam::850919910932:role/km-cluster-dev-use1-0`
+   `eks.amazonaws.com/role-arn: arn:aws:iam::987654321098:role/km-cluster-dev-use1-0`
    and injects two env vars into the pod:
-   - `AWS_ROLE_ARN=arn:aws:iam::850919910932:role/km-cluster-dev-use1-0`
+   - `AWS_ROLE_ARN=arn:aws:iam::987654321098:role/km-cluster-dev-use1-0`
    - `AWS_WEB_IDENTITY_TOKEN_FILE=/var/run/secrets/eks.amazonaws.com/serviceaccount/token`
 
 2. The AWS SDK in the pod (Go SDK v2, `config.LoadDefaultConfig`) detects these
    env vars and automatically uses the Web Identity Token credential provider.
 
 3. The SDK calls `sts.AssumeRoleWithWebIdentity` in the **klanker account**
-   (`850919910932`), presenting the projected OIDC token from the file.
+   (`987654321098`), presenting the projected OIDC token from the file.
 
 4. STS validates the token against the OIDC provider referenced in the role's
-   trust policy (`arn:aws:iam::874364631781:oidc-provider/...`). AWS allows
-   cross-account validation — the OIDC provider lives in `874364631781` but the
-   role (and therefore the STS call) is in `850919910932`.
+   trust policy (`arn:aws:iam::123456789012:oidc-provider/...`). AWS allows
+   cross-account validation — the OIDC provider lives in `123456789012` but the
+   role (and therefore the STS call) is in `987654321098`.
 
 5. STS checks the `sub` condition:
    `system:serviceaccount:<namespace>:<service-account>` must match the token's
@@ -491,20 +486,19 @@ The `--oidc-provider-arn` flag takes the full ARN. To find it for
 `dev-use1-0`:
 
 ```bash
-# From any shell with Greenhouse dev account access:
+# From any shell with the cluster account's credentials:
 aws eks describe-cluster --name dev-use1-0 --query 'cluster.identity.oidc.issuer' --output text
 # Returns: https://oidc.eks.us-east-1.amazonaws.com/id/XXXX
 
-# The OIDC provider ARN in the Greenhouse account is:
-# arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/XXXX
+# The OIDC provider ARN in the cluster account is:
+# arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/XXXX
 # (strip the "https://" prefix, prepend the account ARN format)
 ```
 
-Alternatively, the ACK IAM controller Terraform at
-`infrastructure/services/infra/ack/dev.use1/global/main.tf:25-38` uses
-`data.aws_eks_cluster.this` and `data.aws_iam_openid_connect_provider.this` to
-look this up programmatically — the same data sources can be used to verify the
-ARN.
+Alternatively, Terraform's `data.aws_eks_cluster.this` +
+`data.aws_iam_openid_connect_provider.this` data sources look this up
+programmatically — the same pattern can be used to verify the ARN against a
+known cluster.
 
 ---
 
@@ -525,8 +519,8 @@ ARN.
 | Generated at runtime | `infra/live/{region-label}/cluster-{name}/terragrunt.hcl` |
 | Modified at runtime | `km-config.yaml` — `clusters:` list entries added/removed |
 
-No changes to `km init`, existing sandbox provisioning, or the Greenhouse
-infrastructure repo.
+No changes to `km init`, existing sandbox provisioning, or the cluster
+account's own infrastructure repo.
 
 ---
 

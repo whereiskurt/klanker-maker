@@ -38,7 +38,7 @@ Full add -> IAM verify -> list -> idempotency -> rm cycle against klanker-applic
 ### Test Parameters
 
 - **Cluster name:** `phase80-1778545070` (unique timestamp suffix)
-- **OIDC provider ARN:** `arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/SMOKE-TEST-80`
+- **OIDC provider ARN:** `arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/SMOKE-TEST-80`
 - **AWS account:** 052251888500 (klanker-application)
 - **Region:** us-east-1
 - **Role name:** `km-cluster-phase80-1778545070`
@@ -48,7 +48,7 @@ Full add -> IAM verify -> list -> idempotency -> rm cycle against klanker-applic
 ```
 ./km cluster add \
   --name "phase80-1778545070" \
-  --oidc-provider-arn arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/SMOKE-TEST-80 \
+  --oidc-provider-arn arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/SMOKE-TEST-80 \
   --aws-profile klanker-application \
   --region us-east-1 \
   --verbose
@@ -57,7 +57,7 @@ Full add -> IAM verify -> list -> idempotency -> rm cycle against klanker-applic
 Terragrunt plan output showed:
 - `aws_iam_role.cluster_irsa` will be created (name: `km-cluster-phase80-1778545070`, max_session_duration: 3600)
 - Trust policy: `sts:AssumeRoleWithWebIdentity`, `StringEquals aud = sts.amazonaws.com`, `StringLike sub = system:serviceaccount:*:km`
-- `Principal.Federated = arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/SMOKE-TEST-80`
+- `Principal.Federated = arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/SMOKE-TEST-80`
 - 14 `module.km_operator_policy.aws_iam_role_policy.*` resources will be created
 
 No km-config.yaml mutation. `grep "phase80-1778545070" km-config.yaml` returned nothing.
@@ -67,7 +67,7 @@ No km-config.yaml mutation. `grep "phase80-1778545070" km-config.yaml` returned 
 ```
 ./km cluster add \
   --name "phase80-1778545070" \
-  --oidc-provider-arn arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/SMOKE-TEST-80 \
+  --oidc-provider-arn arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/SMOKE-TEST-80 \
   --aws-profile klanker-application \
   --region us-east-1 \
   --dry-run=false
@@ -112,7 +112,7 @@ Next steps:
             {
                 "Effect": "Allow",
                 "Principal": {
-                    "Federated": "arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/SMOKE-TEST-80"
+                    "Federated": "arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/SMOKE-TEST-80"
                 },
                 "Action": "sts:AssumeRoleWithWebIdentity",
                 "Condition": {
@@ -155,7 +155,7 @@ Inline policies (14 total):
 All trust policy criteria met:
 - Effect: Allow
 - Action: sts:AssumeRoleWithWebIdentity
-- Principal.Federated: OIDC provider ARN from external account 874364631781
+- Principal.Federated: OIDC provider ARN from external account 123456789012
 - StringEquals on aud = sts.amazonaws.com
 - StringLike on sub = system:serviceaccount:*:km (wildcard namespace -> StringLike correct)
 - MaxSessionDuration: 3600
@@ -173,7 +173,7 @@ phase80-1778545070  *          km               arn:aws:iam::052251888500:role/k
 clusters:
   - name: phase80-1778545070
     namespace: '*'
-    oidc_provider_arn: arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/SMOKE-TEST-80
+    oidc_provider_arn: arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/SMOKE-TEST-80
     role_arn: arn:aws:iam::052251888500:role/km-cluster-phase80-1778545070
     service_account: km
 ```

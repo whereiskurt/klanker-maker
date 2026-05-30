@@ -18,10 +18,10 @@ import (
 //
 //	clusters:
 //	  - name: dev-use1-0
-//	    oidc_provider_arn: arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE
+//	    oidc_provider_arn: arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE
 //	    namespace: "*"
 //	    service_account: km
-//	    role_arn: arn:aws:iam::850919910932:role/km-cluster-dev-use1-0
+//	    role_arn: arn:aws:iam::987654321098:role/km-cluster-dev-use1-0
 func TestClustersField(t *testing.T) {
 	t.Run("single cluster entry round-trips", func(t *testing.T) {
 		dir := t.TempDir()
@@ -32,10 +32,10 @@ func TestClustersField(t *testing.T) {
 		content := `domain: example.com
 clusters:
   - name: dev-use1-0
-    oidc_provider_arn: arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE
+    oidc_provider_arn: arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE
     namespace: "*"
     service_account: km
-    role_arn: arn:aws:iam::850919910932:role/km-cluster-dev-use1-0
+    role_arn: arn:aws:iam::987654321098:role/km-cluster-dev-use1-0
 `
 		if err := os.WriteFile(cfgPath, []byte(content), 0600); err != nil {
 			t.Fatalf("write km-config.yaml: %v", err)
@@ -59,7 +59,7 @@ clusters:
 		if cfg.Clusters[0].Name != "dev-use1-0" {
 			t.Errorf("Name: got %q, want %q", cfg.Clusters[0].Name, "dev-use1-0")
 		}
-		if cfg.Clusters[0].OIDCProviderARN != "arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE" {
+		if cfg.Clusters[0].OIDCProviderARN != "arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE" {
 			t.Errorf("OIDCProviderARN: got %q", cfg.Clusters[0].OIDCProviderARN)
 		}
 		if cfg.Clusters[0].Namespace != "*" {
@@ -68,7 +68,7 @@ clusters:
 		if cfg.Clusters[0].ServiceAccount != "km" {
 			t.Errorf("ServiceAccount: got %q, want km", cfg.Clusters[0].ServiceAccount)
 		}
-		if cfg.Clusters[0].RoleARN != "arn:aws:iam::850919910932:role/km-cluster-dev-use1-0" {
+		if cfg.Clusters[0].RoleARN != "arn:aws:iam::987654321098:role/km-cluster-dev-use1-0" {
 			t.Errorf("RoleARN: got %q", cfg.Clusters[0].RoleARN)
 		}
 	})

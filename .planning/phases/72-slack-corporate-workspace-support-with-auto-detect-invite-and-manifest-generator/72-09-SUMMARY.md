@@ -116,8 +116,8 @@ completed: 2026-05-30
 | B0. Install ordering | ✅ | Manifest installed cleanly; km init complete; doctor confirms scopes |
 | B1. Manifest renders correctly | ✅ | Pasted into Slack admin → all 13 scopes present |
 | B2. Install + init + doctor | ✅ | slack_users_read_email_scope OK, slack_files_write_scope OK; bridge 502 is pre-existing/unrelated |
-| B3. `km slack invite --dry-run` | ✅ | whereiskurt@gmail.com native; kurt.hundeck@greenhouse.io external |
-| B4. `km slack invite` real | ✅ | Native invite to sb-learn printed `✓ Invited`; Connect via greenhouse path in B5 |
+| B3. `km slack invite --dry-run` | ✅ | whereiskurt@gmail.com native; operator@example.com external |
+| B4. `km slack invite` real | ✅ | Native invite to sb-learn printed `✓ Invited`; Connect via corporate path in B5 |
 | B5. Full `km create` | ✅ | sb-phase72-fresh created; both orchestrator quadrants (native + Connect) exercised |
 | B6. Doctor scope drift | ⏭ | Deferred — covered by TestDoctor_SlackUsersReadEmailScope_Pass + _Warn unit tests (Plan 72-08) |
 

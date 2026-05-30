@@ -51,7 +51,7 @@
 - `Principal.Federated` references the OIDC provider ARN in the *cluster's* AWS account (NOT klanker's `data.aws_caller_identity`). Pass `oidc_provider_arn` as an explicit Terraform input.
 - Strip `arn:aws:iam::<account>:oidc-provider/` prefix to derive the condition variable key (e.g. `oidc.eks.us-east-1.amazonaws.com/id/XXXX`).
 - `aud` condition: always `StringEquals "sts.amazonaws.com"`.
-- `sub` condition: `StringLike` when `--namespace` or `--service-account` contains `*`, else `StringEquals`. Mirrors Greenhouse `aws_irsa_role` module pattern.
+- `sub` condition: `StringLike` when `--namespace` or `--service-account` contains `*`, else `StringEquals`. Mirrors Corporate `aws_irsa_role` module pattern.
 - `--namespace` default: `*` (wildcard — any namespace can assume, scoped only by service account name).
 - `--service-account` default: `km`.
 
@@ -120,7 +120,7 @@ On successful apply, `km cluster add` prints a ready-to-paste ServiceAccount YAM
   - `internal/app/cmd/init.go:1719-1755` — `persistKMConfigFields` pattern.
   - `internal/app/cmd/init.go` — overall command structure including terragrunt runner usage.
   - `pkg/aws/client.go:23-40` — `LoadAWSConfig` profile-vs-environment fallback.
-- **Wildcard trust condition logic:** mirror `infrastructure/terraform/modules/aws_irsa_role_lotus/variables.tf:78-83` from the Greenhouse repo (referenced in spec).
+- **Wildcard trust condition logic:** mirror `infrastructure/terraform/modules/aws_irsa_role/variables.tf:78-83` from the Corporate repo (referenced in spec).
 - **Site-locals to consume:** `site_vars.locals.site.label` for `resource_prefix`, `site_vars.locals.backend.bucket` for `state_bucket`, `site_vars.locals.site.tf_state_prefix` for state key prefix — all already pulled from `infra/live/site.hcl` by existing modules.
 - **Acceptance criteria for the IAM JSON diff check:**
   - Run `cd infra/live/use1/create-handler && terragrunt plan -detailed-exitcode`.

@@ -13,7 +13,7 @@ Two scenarios are supported:
 
 | Scenario | Cluster account | klanker account | OIDC provider |
 |---|---|---|---|
-| **Cross-account** (typical) | Corporate `example.com`, `874364631781` | `123456789012` | `km cluster add` registers a *local mirror* of the cluster's issuer URL in the klanker account |
+| **Cross-account** (typical) | Corporate `example.com`, `123456789012` | `123456789012` | `km cluster add` registers a *local mirror* of the cluster's issuer URL in the klanker account |
 | **Same-account** | `123456789012` (same as klanker) | `123456789012` | `km cluster add` *references* the existing provider already registered by `eksctl`/Terraform/Console — does NOT register a duplicate |
 
 The non-obvious bit: **AWS STS validates `AssumeRoleWithWebIdentity` tokens

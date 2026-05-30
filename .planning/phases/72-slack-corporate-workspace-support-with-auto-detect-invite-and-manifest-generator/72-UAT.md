@@ -183,9 +183,9 @@ missing scope (Plan 72-08 check not wired).
 | B0. Install ordering (init→manifest→install→init→doctor) | ✅ | Manifest installed cleanly; `km init` complete; doctor confirms all scopes. |
 | B1. Manifest renders correctly | ✅ | Operator pasted output into Slack admin → install succeeded → all 13 scopes present. |
 | B2. Install + init + doctor all-OK | ✅ | `slack_users_read_email_scope` OK, `slack_app_events_scopes` OK, `slack_files_write_scope` OK. Bridge 502 WARN (`channel_not_found` for C0B4YJF5EP2) is a pre-existing artifact from the reinstall — bot lost membership when the app was reinstalled. NOT a Phase 72 verification failure. |
-| B3. `km slack invite --dry-run` classifies native vs external | ✅ | `whereiskurt@gmail.com` classified native; `kurt.hundeck@greenhouse.io` classified external. |
-| B4. `km slack invite` native + Connect | ✅ | Native invite via `./km slack invite whereiskurt@gmail.com --channel sb-learn` printed `✓ Invited`. Connect side covered by operator-greenhouse path in B5. |
-| B5. Full `km create` (useSlackConnect true + false) | ✅ | `sb-phase72-fresh` channel created; `whereiskurt@gmail.com` landed in member list via additional-folks loop; greenhouse operator received Connect invite. All four orchestrator quadrants exercised in one create. |
+| B3. `km slack invite --dry-run` classifies native vs external | ✅ | `whereiskurt@gmail.com` classified native; `operator@example.com` classified external. |
+| B4. `km slack invite` native + Connect | ✅ | Native invite via `./km slack invite whereiskurt@gmail.com --channel sb-learn` printed `✓ Invited`. Connect side covered by operator-corporate path in B5. |
+| B5. Full `km create` (useSlackConnect true + false) | ✅ | `sb-phase72-fresh` channel created; `whereiskurt@gmail.com` landed in member list via additional-folks loop; corporate operator received Connect invite. All four orchestrator quadrants exercised in one create. |
 | B6. Doctor scope drift | ⏭ | DEFERRED — covered by `TestDoctor_SlackUsersReadEmailScope_Pass` + `_Warn` unit tests at Plan 72-08. Operator chose to skip the destructive scope-removal cycle. |
 
 Phase 72 is COMPLETE when Part A is green and every Part B row passes. Operator initials: KPH  Date: 2026-05-30

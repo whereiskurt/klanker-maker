@@ -72,7 +72,7 @@ func (m *mockClusterRunner) Output(_ context.Context, _ string) (map[string]inte
 		return m.OutputResult, nil
 	}
 	return map[string]interface{}{
-		"role_arn": map[string]interface{}{"value": "arn:aws:iam::850919910932:role/km-cluster-dev-use1-0"},
+		"role_arn": map[string]interface{}{"value": "arn:aws:iam::987654321098:role/km-cluster-dev-use1-0"},
 	}, nil
 }
 
@@ -165,13 +165,13 @@ func TestGenerateClusterHCL(t *testing.T) {
 // TestClusterAdd verifies the km cluster add command wires the ClusterRunner correctly
 // via the NewClusterRunnerFunc seam.
 func TestClusterAdd(t *testing.T) {
-	const oidcARN = "arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/TESTEXAMPLE"
+	const oidcARN = "arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/TESTEXAMPLE"
 
 	t.Run("dryRun=false applies and persists", func(t *testing.T) {
 		repoRoot := makeTestRepoRoot(t)
 		mock := &mockClusterRunner{
 			OutputResult: map[string]interface{}{
-				"role_arn": map[string]interface{}{"value": "arn:aws:iam::850919910932:role/km-cluster-test"},
+				"role_arn": map[string]interface{}{"value": "arn:aws:iam::987654321098:role/km-cluster-test"},
 			},
 		}
 		cfg := &config.Config{}
@@ -207,7 +207,7 @@ func TestClusterAdd(t *testing.T) {
 		if len(cfg.Clusters) != 1 {
 			t.Errorf("expected 1 cluster in cfg.Clusters, got %d", len(cfg.Clusters))
 		}
-		if cfg.Clusters[0].RoleARN != "arn:aws:iam::850919910932:role/km-cluster-test" {
+		if cfg.Clusters[0].RoleARN != "arn:aws:iam::987654321098:role/km-cluster-test" {
 			t.Errorf("unexpected RoleARN: %s", cfg.Clusters[0].RoleARN)
 		}
 		// Plan must NOT have been called.
@@ -249,7 +249,7 @@ func TestClusterAdd(t *testing.T) {
 		mock := &mockClusterRunner{}
 		cfg := &config.Config{
 			Clusters: []config.ClusterConfig{
-				{Name: "test", RoleARN: "arn:aws:iam::850919910932:role/km-cluster-test"},
+				{Name: "test", RoleARN: "arn:aws:iam::987654321098:role/km-cluster-test"},
 			},
 		}
 
@@ -272,8 +272,8 @@ func TestClusterAdd(t *testing.T) {
 func TestClusterList(t *testing.T) {
 	cfg := &config.Config{
 		Clusters: []config.ClusterConfig{
-			{Name: "dev-use1-0", Namespace: "*", ServiceAccount: "km", RoleARN: "arn:aws:iam::850919910932:role/km-cluster-dev-use1-0"},
-			{Name: "prod-use1-0", Namespace: "prod", ServiceAccount: "km", RoleARN: "arn:aws:iam::850919910932:role/km-cluster-prod-use1-0"},
+			{Name: "dev-use1-0", Namespace: "*", ServiceAccount: "km", RoleARN: "arn:aws:iam::987654321098:role/km-cluster-dev-use1-0"},
+			{Name: "prod-use1-0", Namespace: "prod", ServiceAccount: "km", RoleARN: "arn:aws:iam::987654321098:role/km-cluster-prod-use1-0"},
 		},
 	}
 
@@ -301,7 +301,7 @@ func TestClusterRm(t *testing.T) {
 	mock := &mockClusterRunner{}
 	cfg := &config.Config{
 		Clusters: []config.ClusterConfig{
-			{Name: "dev-use1-0", OIDCProviderARN: "arn:aws:iam::874364631781:oidc-provider/fake", Namespace: "*", ServiceAccount: "km"},
+			{Name: "dev-use1-0", OIDCProviderARN: "arn:aws:iam::123456789012:oidc-provider/fake", Namespace: "*", ServiceAccount: "km"},
 		},
 	}
 
@@ -381,7 +381,7 @@ func TestClusterAddPersistFailure(t *testing.T) {
 
 	mock := &mockClusterRunner{
 		OutputResult: map[string]interface{}{
-			"role_arn": map[string]interface{}{"value": "arn:aws:iam::850919910932:role/km-cluster-failtest"},
+			"role_arn": map[string]interface{}{"value": "arn:aws:iam::987654321098:role/km-cluster-failtest"},
 		},
 	}
 	cfg := &config.Config{}
@@ -398,7 +398,7 @@ func TestClusterAddPersistFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { cmd.PersistClustersConfigFunc = origPersist })
 
-	err := cmd.RunClusterAdd(cfg, "failtest", "arn:aws:iam::874364631781:oidc-provider/fake", "*", "km", "klanker-application", "us-east-1", false, false, repoRoot, "false")
+	err := cmd.RunClusterAdd(cfg, "failtest", "arn:aws:iam::123456789012:oidc-provider/fake", "*", "km", "klanker-application", "us-east-1", false, false, repoRoot, "false")
 
 	// Must return an error.
 	if err == nil {
@@ -429,7 +429,7 @@ func TestClusterAddPersistFailure(t *testing.T) {
 // in the inputs block when registerOIDCProvider is false.
 func TestGenerateClusterHCL_RegisterOidcProviderFalse(t *testing.T) {
 	clusterName := "same-account-test"
-	oidcARN := "arn:aws:iam::850919910932:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/SAMEACCT"
+	oidcARN := "arn:aws:iam::987654321098:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/SAMEACCT"
 	namespace := "default"
 	serviceAccount := "km"
 
@@ -466,8 +466,8 @@ func TestGenerateClusterHCL_RegisterOidcProviderFalse(t *testing.T) {
 //   - propagates API errors
 func TestAutoDetectOidcProvider(t *testing.T) {
 	const targetURL = "https://oidc.eks.us-east-1.amazonaws.com/id/ABC123"
-	const matchingARN = "arn:aws:iam::874364631781:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/ABC123"
-	const otherARN = "arn:aws:iam::874364631781:oidc-provider/oidc.eks.eu-west-1.amazonaws.com/id/OTHER"
+	const matchingARN = "arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/ABC123"
+	const otherARN = "arn:aws:iam::123456789012:oidc-provider/oidc.eks.eu-west-1.amazonaws.com/id/OTHER"
 
 	t.Run("match found → register=false", func(t *testing.T) {
 		mock := &mockOidcLister{

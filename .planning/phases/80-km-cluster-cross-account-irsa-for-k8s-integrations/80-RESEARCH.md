@@ -83,7 +83,7 @@ Absent `clusters:` key = empty slice; no migration needed for existing installs.
 
 ## Summary
 
-Phase 80 adds cross-account IRSA support to klanker-maker so a persistent k8s service in the Greenhouse EKS account (`874364631781`) can invoke `km` commands against klanker resources in the klanker account (`850919910932`) without static IAM user keys.
+Phase 80 adds cross-account IRSA support to klanker-maker so a persistent k8s service in the Corporate EKS account (`123456789012`) can invoke `km` commands against klanker resources in the klanker account (`987654321098`) without static IAM user keys.
 
 The implementation has three interlocking pieces: (1) extract the 14 inline IAM policy resources from `infra/modules/create-handler/v1.0.0/main.tf` into a shared `km-operator-policy/v1.0.0/` module, refactor create-handler to consume it with zero net IAM diff; (2) create a new `cluster-irsa/v1.0.0/` module that provisions the cross-account trust role consuming the same shared policy module; (3) add a `km cluster add|list|rm` Cobra command tree in `internal/app/cmd/cluster.go` that generates a per-cluster `terragrunt.hcl`, runs apply/destroy, and persists cluster metadata to `km-config.yaml`.
 
@@ -161,7 +161,7 @@ km-config.yaml (clusters: list modified)
 **Why Option B over Option A (map of JSON strings):**
 - **Zero net diff guaranteed.** When create-handler switches from inline `aws_iam_role_policy` resources to `module.km_operator_policy.aws_iam_role_policy.*`, Terraform sees resource address changes (`aws_iam_role_policy.s3_artifacts` → `module.km_operator_policy.aws_iam_role_policy.s3_artifacts`). To get zero diff, both old and new addresses must resolve to the same physical resource. This is achievable by using `moved` blocks in create-handler's main.tf (Terraform 1.1+). With Option A, the caller creates policy resources with new addresses and the old ones are destroyed — this CANNOT be zero-diff without moved blocks regardless of approach.
 - **Option B is simpler to maintain.** The 14 policies live once, in the shared module. Adding a new policy in the future is a single-file change.
-- **Precedent:** Terraform's standard pattern for reusable IAM role policy bundles is "module accepts role ARN/ID, creates policies internally." This is the aws_irsa_role_lotus pattern in the Greenhouse repo.
+- **Precedent:** Terraform's standard pattern for reusable IAM role policy bundles is "module accepts role ARN/ID, creates policies internally." This is the aws_irsa_role pattern in the Corporate repo.
 
 **Implementation for zero-diff in create-handler:**
 ```hcl
@@ -663,7 +663,7 @@ From `slack_test.go` (verified):
 3. **Unit tests for `km cluster add` via mockRunner:** verify Apply called with correct dir, Output called to get role ARN, cluster entry added to config.
 4. **Unit tests for `km cluster list`:** load config with mock clusters, verify tabwriter output.
 5. **Unit tests for `km cluster rm`:** verify Destroy called, cluster entry removed from config, directory removed.
-6. **Integration test (phase-close):** `km cluster add --name dev-use1-0 --oidc-provider-arn arn:aws:iam::874364631781:... --aws-profile klanker-application --dry-run=false` → `aws iam get-role --role-name km-cluster-dev-use1-0` → `km cluster list` → `km cluster rm`.
+6. **Integration test (phase-close):** `km cluster add --name dev-use1-0 --oidc-provider-arn arn:aws:iam::123456789012:... --aws-profile klanker-application --dry-run=false` → `aws iam get-role --role-name km-cluster-dev-use1-0` → `km cluster list` → `km cluster rm`.
 
 No integration-test fixtures for full `terragrunt plan` runs exist in the codebase (tests mock the runner). The phase-close integration test is manual/CLI, not automated Go test.
 
