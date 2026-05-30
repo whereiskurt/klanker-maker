@@ -89,7 +89,19 @@ inputs = {
   resource_prefix          = local.site_vars.locals.site.label
   signing_secret_path      = "/${local.site_vars.locals.site.label}/slack/signing-secret"
   slack_threads_table_name = dependency.slack_threads.outputs.table_name
-  nonce_table_name         = "${local.site_vars.locals.site.label}-slack-bridge-nonces"
+  nonce_table_name = "${local.site_vars.locals.site.label}-slack-bridge-nonces"
+
+  # Phase 91 — polite-bot mode toggle (install-level default). Operators export
+  # KM_SLACK_MENTION_ONLY=true in their shell before `km init --sidecars` to flip
+  # the install to mention-only. Empty/unset → "false" (every-message).
+  slack_mention_only = get_env("KM_SLACK_MENTION_ONLY", "false")
+
+  # Phase 91 — pre-warmed bot user ID injected from operator shell. km slack init
+  # writes the value to SSM at {prefix}slack/bot-user-id; operators export
+  # KM_SLACK_BOT_USER_ID=<UID> before `km init --sidecars` to seed the Lambda env.
+  # When empty, the bridge falls back to a live auth.test call.
+  slack_bot_user_id = get_env("KM_SLACK_BOT_USER_ID", "")
+
   tags = {
     "km:component" = "slack-bridge"
     "km:managed"   = "true"

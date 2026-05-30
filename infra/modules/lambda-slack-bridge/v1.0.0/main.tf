@@ -322,6 +322,9 @@ resource "aws_lambda_function" "slack_bridge" {
       KM_SLACK_ACK_EMOJI = var.slack_ack_emoji
       # Phase 68 addition — S3 artifacts bucket (transcripts/* read path)
       KM_ARTIFACTS_BUCKET = var.artifacts_bucket
+      # Phase 91 — polite-bot mode flag + bot user ID for the mention scan
+      KM_SLACK_MENTION_ONLY = var.slack_mention_only
+      KM_SLACK_BOT_USER_ID  = var.slack_bot_user_id
     }
   }
 

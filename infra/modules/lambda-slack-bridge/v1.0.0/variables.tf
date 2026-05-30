@@ -95,3 +95,26 @@ variable "artifacts_bucket" {
   type        = string
   default     = ""
 }
+
+# ============================================================
+# Phase 91 — polite-bot @-mention-only mode
+# ============================================================
+
+# Phase 91: polite-bot mode toggle. When "true", the bridge events handler
+# only processes inbound Slack messages whose text contains <@{bot_user_id}>.
+# Default "false" → pre-Phase-91 every-message behaviour (full back-compat).
+variable "slack_mention_only" {
+  description = "When 'true', the bridge only processes messages that @-mention the bot (Phase 91 polite-bot). Default 'false' = every-message dispatch."
+  type        = string
+  default     = "false"
+}
+
+# Phase 91: pre-warmed bot user ID for the mention scan. Sourced from the SSM
+# parameter {prefix}slack/bot-user-id (written by km slack init / rotate-token).
+# Empty default → bridge falls back to a live auth.test call on the first
+# mention scan via the existing CachedBotUserIDFetcher.
+variable "slack_bot_user_id" {
+  description = "Slack bot user ID (e.g. UBOT123) for @-mention detection (Phase 91). Empty → bridge fetches lazily via auth.test."
+  type        = string
+  default     = ""
+}
