@@ -42,11 +42,20 @@ type fakeSlackInitAPI struct {
 	lookupCalls        []string
 	inviteStrictCalls  [][2]string // [channelID, userID]
 	inviteSharedCalls  [][2]string // [channelID, email] — recorded separately from inviteCalls
+
+	// Phase 91: bot user_id returned by AuthTestWithUserID.
+	userID string
 }
 
 func (f *fakeSlackInitAPI) AuthTest(_ context.Context) error {
 	f.authCalls++
 	return f.authErr
+}
+
+// Phase 91: AuthTestWithUserID returns the configured userID sentinel.
+func (f *fakeSlackInitAPI) AuthTestWithUserID(_ context.Context) (string, error) {
+	f.authCalls++
+	return f.userID, f.authErr
 }
 
 func (f *fakeSlackInitAPI) CreateChannel(_ context.Context, _ string) (string, error) {
@@ -202,6 +211,50 @@ func buildSlackTestDeps(api *fakeSlackInitAPI, ssm *fakeSSM, tg *fakeTerragrunt,
 		Terragrunt: tg,
 		Prompter:   prompter,
 		OperatorKeyLoader: func(ctx context.Context, region string) (ed25519.PrivateKey, error) {
+			return priv, nil
+		},
+		BridgePoster: poster.Post,
+		Region:       "use1",
+		RepoRoot:     "/repo",
+		SsmPrefix:    "/km/",
+	}
+}
+
+// buildSlackTestDepsWithCapturingSSM is like buildSlackTestDeps but accepts any
+// cmd.SlackSSMStore so tests can inject recording/error-injecting SSM variants.
+// Phase 91 Plan 04: used to verify bot-user-id SSM caching.
+func buildSlackTestDepsWithCapturingSSM(api *fakeSlackInitAPI, ssmStore cmd.SlackSSMStore, tg *fakeTerragrunt, prompter *fakePrompter, poster *fakeBridgePoster) *cmd.SlackCmdDeps {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	return &cmd.SlackCmdDeps{
+		NewSlackAPI: func(token string) cmd.SlackInitAPI {
+			return api
+		},
+		Slack:      api,
+		SSM:        ssmStore,
+		Terragrunt: tg,
+		Prompter:   prompter,
+		OperatorKeyLoader: func(ctx context.Context, region string) (ed25519.PrivateKey, error) {
+			return priv, nil
+		},
+		BridgePoster: poster.Post,
+		Region:       "use1",
+		RepoRoot:     "/repo",
+		SsmPrefix:    "/km/",
+	}
+}
+
+// buildRotateTokenDepsCapturing is like buildRotateTokenDeps but accepts any
+// cmd.SlackSSMStore so tests can inject recording/error-injecting SSM variants.
+// Phase 91 Plan 04: used to verify bot-user-id SSM caching in rotate-token.
+func buildRotateTokenDepsCapturing(api *fakeRotateAPI, ssmStore cmd.SlackSSMStore, cs *fakeBridgeColdStartCounter, poster *fakeBridgePoster) *cmd.SlackCmdDeps {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	return &cmd.SlackCmdDeps{
+		SSM: ssmStore,
+		NewSlackAPI: func(token string) cmd.SlackInitAPI {
+			return api
+		},
+		BridgeColdStart: cs.call,
+		OperatorKeyLoader: func(_ context.Context, _ string) (ed25519.PrivateKey, error) {
 			return priv, nil
 		},
 		BridgePoster: poster.Post,
@@ -694,11 +747,19 @@ func TestSlackCmd_Registered(t *testing.T) {
 type fakeRotateAPI struct {
 	authErr           error
 	authTestCallCount int
+	// Phase 91: bot user_id returned by AuthTestWithUserID.
+	userID string
 }
 
 func (f *fakeRotateAPI) AuthTest(_ context.Context) error {
 	f.authTestCallCount++
 	return f.authErr
+}
+
+// Phase 91: AuthTestWithUserID returns the configured userID sentinel.
+func (f *fakeRotateAPI) AuthTestWithUserID(_ context.Context) (string, error) {
+	f.authTestCallCount++
+	return f.userID, f.authErr
 }
 
 func (f *fakeRotateAPI) CreateChannel(_ context.Context, _ string) (string, error) {

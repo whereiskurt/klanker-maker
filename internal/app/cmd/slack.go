@@ -44,6 +44,11 @@ import (
 // (create_slack.go defines SlackAPI for km create; this adds AuthTest for bootstrap.)
 type SlackInitAPI interface {
 	AuthTest(ctx context.Context) error
+	// AuthTestWithUserID validates the bot token and returns the bot's Slack user_id.
+	// Phase 91: km slack init / rotate-token cache this in SSM at
+	// {prefix}slack/bot-user-id so the bridge Lambda can prime its mention-scan
+	// bot ID without a live auth.test round-trip on cold-start.
+	AuthTestWithUserID(ctx context.Context) (string, error)
 	CreateChannel(ctx context.Context, name string) (string, error)
 	FindChannelByName(ctx context.Context, name string) (string, error)
 	JoinChannel(ctx context.Context, channelID string) error
@@ -208,9 +213,10 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 		}
 	}
 
-	// Step 2: Validate via auth.test.
+	// Step 2: Validate via auth.test AND capture bot user_id (Phase 91).
 	api := d.NewSlackAPI(token)
-	if err := api.AuthTest(ctx); err != nil {
+	botUserID, err := api.AuthTestWithUserID(ctx)
+	if err != nil {
 		return fmt.Errorf("invalid Slack bot token: %w", err)
 	}
 
@@ -227,6 +233,15 @@ func RunSlackInit(ctx context.Context, d *SlackCmdDeps, opts SlackInitOpts) erro
 	// Step 3: Persist token (SecureString).
 	if err := d.SSM.Put(ctx, d.SsmPrefix+"slack/bot-token", token, true); err != nil {
 		return fmt.Errorf("store bot token: %w", err)
+	}
+
+	// Phase 91: cache bot user_id for the bridge mention-scan and km doctor. WARN
+	// on Put failure but do NOT abort — bot-token persistence is the primary success
+	// criterion; the bridge will fall back to a live auth.test if SSM is empty.
+	if err := d.SSM.Put(ctx, d.SsmPrefix+"slack/bot-user-id", botUserID, false); err != nil {
+		fmt.Fprintf(os.Stderr, "km slack init: WARN: failed to cache bot user_id at %sslack/bot-user-id: %v\n", d.SsmPrefix, err)
+	} else {
+		fmt.Printf("km slack init: cached bot user_id at %sslack/bot-user-id (%s)\n", d.SsmPrefix, botUserID)
 	}
 
 	// Step 4: Invite email.
@@ -657,9 +672,10 @@ func RunSlackRotateToken(ctx context.Context, d *SlackCmdDeps, opts SlackRotateT
 		token = strings.TrimSpace(t)
 	}
 
-	// Step 2: Validate via auth.test — fail fast before touching SSM.
+	// Step 2: Validate via auth.test AND capture bot user_id (Phase 91).
 	api := d.NewSlackAPI(token)
-	if err := api.AuthTest(ctx); err != nil {
+	botUserID, err := api.AuthTestWithUserID(ctx)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "km slack rotate-token: invalid token: %v\n", err)
 		return fmt.Errorf("invalid Slack bot token: %w", err)
 	}
@@ -671,6 +687,15 @@ func RunSlackRotateToken(ctx context.Context, d *SlackCmdDeps, opts SlackRotateT
 		return fmt.Errorf("persist token: %w", err)
 	}
 	fmt.Printf("km slack rotate-token: persisted token to %sslack/bot-token\n", d.SsmPrefix)
+
+	// Phase 91: re-cache bot user_id after rotation. WARN on Put failure but do NOT
+	// abort — bot-token persistence is the primary success criterion; the bridge will
+	// fall back to a live auth.test if SSM is empty.
+	if err := d.SSM.Put(ctx, d.SsmPrefix+"slack/bot-user-id", botUserID, false); err != nil {
+		fmt.Fprintf(os.Stderr, "km slack rotate-token: WARN: failed to cache bot user_id at %sslack/bot-user-id: %v\n", d.SsmPrefix, err)
+	} else {
+		fmt.Printf("km slack rotate-token: cached bot user_id at %sslack/bot-user-id (%s)\n", d.SsmPrefix, botUserID)
+	}
 
 	// Step 4: Force bridge Lambda cold-start (best-effort).
 	// Failure here does not abort — the token is already persisted and the bridge
