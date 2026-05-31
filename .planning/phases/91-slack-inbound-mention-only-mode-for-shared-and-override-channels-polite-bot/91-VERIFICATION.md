@@ -1,18 +1,24 @@
 ---
 phase: 91-slack-inbound-mention-only-mode-for-shared-and-override-channels-polite-bot
 verified: 2026-05-30T23:14:16Z
+re_verified: 2026-05-31T04:00:00Z
 status: human_needed
-score: 12/13 must-haves verified
+score: 12.5/13 must-haves verified (POL-05 verified live; POL-13 still requires Slack message UAT)
 human_verification:
-  - test: "Run terragrunt plan against infra/live/use1/lambda-slack-bridge to confirm KM_SLACK_MENTION_ONLY and KM_SLACK_BOT_USER_ID appear in the Lambda environment block (POL-05)"
-    expected: "aws_lambda_function.slack_bridge shows an in-place update with both new env keys; destroy-class gate stays green; exit code 0"
-    why_human: "No terraform unit-test framework in repo; requires real AWS credentials. Per 91-VALIDATION.md 'Manual-Only Verifications' table for POL-05."
   - test: "Live Slack UAT: deploy polite-bot bridge and verify scenarios 7-10 from 91-06 Plan Task 4"
     expected: "Non-mention message in shared channel → no 👀 reaction, no dispatch. @-mention message in shared channel → 👀 reaction + dispatch. Per-sandbox channel (#sb-{id}) → every-message dispatch preserved. Profile with notifySlackInboundMentionOnly:true in per-sandbox channel → mention-only behaviour."
     why_human: "Requires real Slack workspace + AWS credentials + deployed bridge Lambda. Operator explicitly chose not to generate Slack Connect invite requests during testing (per objective notes)."
+post_hoc_verification:
+  - test: "POL-05: terragrunt plan/apply against infra/live/use1/lambda-slack-bridge confirms KM_SLACK_MENTION_ONLY and KM_SLACK_BOT_USER_ID appear in the Lambda environment block"
+    when: "2026-05-31 after Phase 91.1 + hotfix 4d49544 deployed"
+    evidence: |
+      aws lambda get-function-configuration --function-name km-slack-bridge | jq '.Environment.Variables | {KM_SLACK_MENTION_ONLY, KM_SLACK_BOT_USER_ID}'
+      { "KM_SLACK_MENTION_ONLY": "true", "KM_SLACK_BOT_USER_ID": "U0B1Q96BX24" }
+    status: VERIFIED
 notes:
   - "CLAUDE.md km slack rotate-token CLI bullet does not mention bot_user_id caching (Phase 91) — this was called out in plan 91-06 task 2 action step 2 but is absent from the must_haves.truths section and from the final SUMMARY. Not a blocker; the km slack init bullet does have the note."
   - "Phase 72 validator rejects notifySlackInboundEnabled:true + notifySlackChannelOverride together — Mode 3 default-polite semantics are only observable once that constraint is loosened in a future phase. Mode 2 opt-in polite is the immediately useful path. Tracked as a planning observation, not a gap."
+  - "Phase 91.1 (commit 5550573 + hotfix 4d49544) closed POL-05 post-hoc by driving KM_SLACK_MENTION_ONLY from km-config.yaml slack.mention_only and auto-reading KM_SLACK_BOT_USER_ID from SSM. The infra-layer verification of POL-05 is now complete; POL-13 (Slack-message UAT) remains the only deferred gate."
 ---
 
 # Phase 91: Slack Inbound @-mention-only Mode Verification Report
