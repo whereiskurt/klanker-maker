@@ -111,6 +111,13 @@ func merge(parent, child *SandboxProfile) *SandboxProfile {
 	// field still inherits the parent's other settings (the pointer-merge bug fix).
 	result.Spec.Notification = mergeNotificationSpec(parent.Spec.Notification, child.Spec.Notification)
 
+	// Phase 92 (Wave 4): Spec.Agent is the second pointer-typed Spec section to
+	// get a field-level typed merger (same pointer-replace bug as Notification —
+	// a child setting only agent.default would otherwise clobber the parent's
+	// agent.claude.tools.*). result.Spec was bulk-copied from child above; deep-
+	// merge it here.
+	result.Spec.Agent = mergeAgentSpec(parent.Spec.Agent, child.Spec.Agent)
+
 	// Clear extends — resolved profile has no parent
 	result.Extends = ""
 
@@ -228,6 +235,95 @@ func mergeNotificationSlackInvitesSpec(parent, child *NotificationSlackInvitesSp
 	}
 	if len(child.Emails) > 0 {
 		out.Emails = child.Emails
+	}
+	return out
+}
+
+// mergeAgentSpec performs field-level nil-aware merge of parent and child
+// AgentSpec values (Phase 92 Wave 4). Child non-nil/non-empty fields override
+// parent; nil/empty fields inherit. Second pointer-typed Spec section to get a
+// typed merger (after Notification) — fixes the same pointer-replace bug.
+func mergeAgentSpec(parent, child *AgentSpec) *AgentSpec {
+	if parent == nil {
+		return child
+	}
+	if child == nil {
+		return parent
+	}
+	return &AgentSpec{
+		Default: pickString(parent.Default, child.Default),
+		Claude:  mergeAgentClaudeSpec(parent.Claude, child.Claude),
+		Codex:   mergeAgentCodexSpec(parent.Codex, child.Codex),
+	}
+}
+
+func mergeAgentClaudeSpec(parent, child *AgentClaudeSpec) *AgentClaudeSpec {
+	if parent == nil {
+		return child
+	}
+	if child == nil {
+		return parent
+	}
+	out := &AgentClaudeSpec{
+		TrustedDirectories: parent.TrustedDirectories,
+		Tools:              mergeAgentToolsSpec(parent.Tools, child.Tools),
+		Permissions:        mergePermissionsPassthrough(parent.Permissions, child.Permissions),
+		Args:               parent.Args,
+	}
+	if len(child.TrustedDirectories) > 0 {
+		out.TrustedDirectories = child.TrustedDirectories
+	}
+	if len(child.Args) > 0 {
+		out.Args = child.Args
+	}
+	return out
+}
+
+func mergeAgentCodexSpec(parent, child *AgentCodexSpec) *AgentCodexSpec {
+	if parent == nil {
+		return child
+	}
+	if child == nil {
+		return parent
+	}
+	out := &AgentCodexSpec{
+		Tools: mergeAgentToolsSpec(parent.Tools, child.Tools),
+		Args:  parent.Args,
+	}
+	if len(child.Args) > 0 {
+		out.Args = child.Args
+	}
+	return out
+}
+
+// mergeAgentToolsSpec is value-typed; child non-empty slices replace parent's.
+func mergeAgentToolsSpec(parent, child AgentToolsSpec) AgentToolsSpec {
+	out := parent
+	if len(child.AutoApprove) > 0 {
+		out.AutoApprove = child.AutoApprove
+	}
+	if len(child.Deny) > 0 {
+		out.Deny = child.Deny
+	}
+	return out
+}
+
+// mergePermissionsPassthrough top-level key-merges the two permissions maps;
+// child wins on collision. The passthrough map is the one untyped exception per
+// the CONTEXT.md locked decision, so the merge is a shallow key-union.
+func mergePermissionsPassthrough(parent, child map[string]any) map[string]any {
+	if parent == nil {
+		return child
+	}
+	if child == nil {
+		return parent
+	}
+	out := make(map[string]any, len(parent)+len(child))
+	for k, v := range parent {
+		out[k] = v
+	}
+	for k, v := range child {
+		out[k] = v
 	}
 	return out
 }
