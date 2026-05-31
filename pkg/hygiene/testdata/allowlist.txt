@@ -43,9 +43,6 @@ internal/app/cmd/destroy.go:km-docker-%s-%s
 internal/app/cmd/destroy.go:km-sidecar-%s-%s
 # Docker-substrate budget table (wrong shape AND prefix vs shared {prefix}-budgets):
 pkg/compiler/compose.go:km-budget-%s
-# github-token-refresher SSM config prefix — env block not yet wired (its own TODO);
-# pairs with the roll.go GitHub-key path fix. km2 reads km's GitHub config until wired.
-cmd/github-token-refresher/main.go:/km/config/github
 # SUSPECTED STALE: km budget resume restores Bedrock policy to "km-sandbox-{id}-role",
 # but the enforcer detaches from the real ec2spot role via ARN. Role name looks wrong
 # even on the default install — needs investigation, not a blind prefix swap.
