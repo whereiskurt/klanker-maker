@@ -46,7 +46,7 @@ func phase92IAMFixture(t *testing.T) *profile.SandboxProfile {
 	// Inject a representative allowedSecretPaths so the SSM-allowlist serialization
 	// is covered by the byte-identity contract (restricted-dev.yaml itself does
 	// not set this field).
-	p.Spec.Identity.AllowedSecretPaths = []string{
+	p.Spec.IAM.AllowedSecretPaths = []string{
 		"/sandbox/shared/db-password",
 		"/sandbox/shared/api-key",
 	}

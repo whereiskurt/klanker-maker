@@ -1,4 +1,4 @@
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: hardened
@@ -33,11 +33,10 @@ spec:
         - "sts.us-east-1.amazonaws.com"
         - "ssm.us-east-1.amazonaws.com"
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
 
   sidecars:
     dnsProxy:
@@ -69,9 +68,3 @@ spec:
       libraries:
         - openssl
       capturePayloads: false
-
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: "30m"
-    allowedTools:
-      - read_file

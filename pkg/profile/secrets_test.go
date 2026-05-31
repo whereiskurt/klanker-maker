@@ -42,7 +42,7 @@ import (
 
 // minimalSecretsBase is a complete spec with spec.secrets appended by each test case.
 // It mirrors the pattern used in validate_test.go for CLI tests.
-const minimalSecretsBase = `apiVersion: klankermaker.ai/v1alpha1
+const minimalSecretsBase = `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: secrets-test
@@ -65,11 +65,10 @@ spec:
       allowedDNSSuffixes:
         - ".amazonaws.com"
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -90,9 +89,6 @@ spec:
     networkLog:
       destination: cloudwatch
       logGroup: /klanker-maker/network
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "30m"
 `
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 // Package profile provides SandboxProfile type definitions and parsing logic
 // for the klanker-maker sandbox platform. Profiles follow a Kubernetes-style
-// apiVersion/kind/metadata/spec structure at klankermaker.ai/v1alpha1.
+// apiVersion/kind/metadata/spec structure at klankermaker.ai/v1alpha2.
 package profile
 
 import (
@@ -32,10 +32,13 @@ type Spec struct {
 	Execution     ExecutionSpec     `yaml:"execution"`
 	SourceAccess  SourceAccessSpec  `yaml:"sourceAccess"`
 	Network       NetworkSpec       `yaml:"network"`
-	Identity      IdentitySpec      `yaml:"identity"`
+	IAM           IAMSpec           `yaml:"iam"`
 	Sidecars      SidecarsSpec      `yaml:"sidecars"`
 	Observability ObservabilitySpec `yaml:"observability"`
-	Agent         AgentSpec         `yaml:"agent"`
+	// Phase 92 (Wave 1): the dead top-level `agent:` block (MaxConcurrentTasks,
+	// TaskTimeout, AllowedTools) was removed — it was never read by any code path.
+	// Wave 4 re-introduces an `agent:` block with brand-new structured tool-gating
+	// semantics as a *AgentSpec pointer.
 	// Artifacts defines optional artifact collection and upload settings.
 	// When nil, artifact collection is disabled.
 	Artifacts *ArtifactsSpec `yaml:"artifacts,omitempty"`
@@ -273,14 +276,14 @@ type EgressSpec struct {
 	AllowedHosts []string `yaml:"allowedHosts"`
 }
 
-// IdentitySpec controls AWS IAM identity and session configuration.
-type IdentitySpec struct {
+// IAMSpec controls AWS IAM identity and session configuration.
+// Phase 92 (Wave 1): renamed from IdentitySpec; the dead SessionPolicy field
+// was removed (never read by any code path).
+type IAMSpec struct {
 	// RoleSessionDuration is the maximum duration for assumed role sessions.
 	RoleSessionDuration string `yaml:"roleSessionDuration"`
 	// AllowedRegions is the list of AWS regions the sandbox may access.
 	AllowedRegions []string `yaml:"allowedRegions"`
-	// SessionPolicy is the IAM session policy scope: minimal, standard, etc.
-	SessionPolicy string `yaml:"sessionPolicy"`
 	// AllowedSecretPaths is the allowlist of SSM Parameter Store paths the sandbox
 	// may read at boot time. Secrets are injected as environment variables via user-data.
 	AllowedSecretPaths []string `yaml:"allowedSecretPaths,omitempty"`
@@ -368,15 +371,9 @@ type LogDestination struct {
 	LogGroup string `yaml:"logGroup,omitempty"`
 }
 
-// AgentSpec controls behavior of the AI agent workload running in the sandbox.
-type AgentSpec struct {
-	// MaxConcurrentTasks limits the number of parallel tasks the agent may run.
-	MaxConcurrentTasks int `yaml:"maxConcurrentTasks"`
-	// TaskTimeout is the maximum duration for a single agent task.
-	TaskTimeout string `yaml:"taskTimeout"`
-	// AllowedTools is the list of tool names the agent is permitted to use.
-	AllowedTools []string `yaml:"allowedTools,omitempty"`
-}
+// Phase 92 (Wave 1): the dead AgentSpec struct (MaxConcurrentTasks, TaskTimeout,
+// AllowedTools) was removed here. Wave 4 re-introduces an AgentSpec with new
+// structured tool-gating semantics.
 
 // SecretsSpec defines SOPS-encrypted secret injection for sandboxes (Phase 89).
 // The bundle's top-level keys become environment variables in /etc/sandbox-secrets.env

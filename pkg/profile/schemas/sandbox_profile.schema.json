@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://klankermaker.ai/schemas/sandbox-profile/v1alpha1",
+  "$id": "https://klankermaker.ai/schemas/sandbox-profile/v1alpha2",
   "title": "SandboxProfile",
   "description": "A declarative policy object that defines a controlled, auditable execution environment",
   "type": "object",
@@ -9,8 +9,8 @@
   "properties": {
     "apiVersion": {
       "type": "string",
-      "pattern": "^.+/v1alpha1$",
-      "description": "API version of the SandboxProfile resource (e.g. klankermaker.ai/v1alpha1)"
+      "pattern": "^.+/v1alpha2$",
+      "description": "API version of the SandboxProfile resource (e.g. klankermaker.ai/v1alpha2)"
     },
     "kind": {
       "type": "string",
@@ -53,10 +53,9 @@
         "execution",
         "sourceAccess",
         "network",
-        "identity",
+        "iam",
         "sidecars",
-        "observability",
-        "agent"
+        "observability"
       ],
       "additionalProperties": false,
       "properties": {
@@ -396,9 +395,9 @@
             }
           }
         },
-        "identity": {
+        "iam": {
           "type": "object",
-          "required": ["roleSessionDuration", "allowedRegions", "sessionPolicy"],
+          "required": ["roleSessionDuration", "allowedRegions"],
           "additionalProperties": false,
           "properties": {
             "roleSessionDuration": {
@@ -412,10 +411,10 @@
               "minItems": 1,
               "description": "AWS regions the sandbox may access"
             },
-            "sessionPolicy": {
-              "type": "string",
-              "enum": ["minimal", "standard", "elevated"],
-              "description": "IAM session policy scope"
+            "allowedSecretPaths": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Allowlist of SSM Parameter Store paths the sandbox may read at boot time (Phase 89; schema declared in Phase 92). Injected as environment variables via user-data."
             }
           }
         },
@@ -482,28 +481,6 @@
             "learnMode": {
               "type": "boolean",
               "description": "Enable traffic observation recording on the eBPF enforcer. When true, km shell --learn can generate a SandboxProfile from observed DNS/TLS traffic."
-            }
-          }
-        },
-        "agent": {
-          "type": "object",
-          "required": ["maxConcurrentTasks", "taskTimeout"],
-          "additionalProperties": false,
-          "properties": {
-            "maxConcurrentTasks": {
-              "type": "integer",
-              "minimum": 1,
-              "description": "Maximum number of parallel tasks the agent may run"
-            },
-            "taskTimeout": {
-              "type": "string",
-              "pattern": "^[0-9]+(s|m|h)$",
-              "description": "Maximum duration for a single agent task"
-            },
-            "allowedTools": {
-              "type": "array",
-              "items": { "type": "string" },
-              "description": "Tool names the agent is permitted to use"
             }
           }
         },

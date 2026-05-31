@@ -84,7 +84,7 @@ func TestCLISpec_NotifySlackInboundMentionOnly(t *testing.T) {
 // minimalProfileYAML returns a minimal valid SandboxProfile YAML for schema tests,
 // injecting any extra CLI fields supplied.
 func minimalProfileYAML(extraCLI string) []byte {
-	base := `apiVersion: klankermaker.ai/v1alpha1
+	base := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: test
@@ -162,7 +162,7 @@ func boolPtrMention(b bool) *bool { return &b }
 // and a valid CLI block (notifySlackEnabled=true) so cross-field rules don't interfere.
 func mentionOnlyFixture(v *bool) *profile.SandboxProfile {
 	return &profile.SandboxProfile{
-		APIVersion: "klankermaker.ai/v1alpha1",
+		APIVersion: "klankermaker.ai/v1alpha2",
 		Kind:       "SandboxProfile",
 		Spec: profile.Spec{
 			CLI: &profile.CLISpec{
@@ -209,7 +209,7 @@ func TestCLISpec_NotifySlackInboundReactAlways_RoundTrip(t *testing.T) {
 	}{
 		{
 			name: "absent → nil",
-			yaml: `apiVersion: klankermaker.ai/v1alpha1
+			yaml: `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata: {name: t, prefix: t}
 spec:
@@ -220,7 +220,7 @@ spec:
 		},
 		{
 			name: "true → &true",
-			yaml: `apiVersion: klankermaker.ai/v1alpha1
+			yaml: `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata: {name: t, prefix: t}
 spec:
@@ -231,7 +231,7 @@ spec:
 		},
 		{
 			name: "false → &false",
-			yaml: `apiVersion: klankermaker.ai/v1alpha1
+			yaml: `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata: {name: t, prefix: t}
 spec:

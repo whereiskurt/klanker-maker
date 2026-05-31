@@ -42,7 +42,7 @@ func containsInviteError(errs []profile.ValidationError, path, msg string) bool 
 // round-trips through Parse; the slice is intact and in order.
 func TestParse_NotifySlackInviteEmails(t *testing.T) {
 	const yaml = `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata: {name: t}
 spec:
@@ -68,7 +68,7 @@ spec:
 // → validation error SE1 with correct path and message fragment.
 func TestValidate_InviteEmails_RequiresSlackEnabled(t *testing.T) {
 	const yaml = `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata: {name: t}
 spec:
@@ -86,7 +86,7 @@ spec:
 // → validation error SE2 with path spec.cli.notifySlackInviteEmails[0] and "invalid email".
 func TestValidate_InviteEmails_InvalidEmail(t *testing.T) {
 	const yaml = `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata: {name: t}
 spec:
@@ -104,7 +104,7 @@ spec:
 func TestParse_UseSlackConnect(t *testing.T) {
 	// Explicit false round-trips.
 	const yamlFalse = `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata: {name: t}
 spec:
@@ -130,7 +130,7 @@ spec:
 
 	// Omitted field stays nil (resolved to true at read time in km create, not here).
 	const yamlOmit = `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata: {name: t}
 spec:
@@ -171,7 +171,7 @@ func TestSchema_InviteEmails(t *testing.T) {
 // → no error (empty list is a no-op).
 func TestValidate_InviteEmails_EmptyList_NoRequiresSlack(t *testing.T) {
 	const yaml = `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata: {name: t}
 spec:

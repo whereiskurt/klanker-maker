@@ -102,7 +102,7 @@ func TestValidateErrorFormat(t *testing.T) {
 
 func TestSemanticTTLShorterThanIdle(t *testing.T) {
 	// Profile with TTL=1h but idleTimeout=2h — TTL shorter than idleTimeout
-	yamlData := []byte(`apiVersion: klankermaker.ai/v1alpha1
+	yamlData := []byte(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: ttl-too-short
@@ -129,11 +129,10 @@ spec:
         - ".amazonaws.com"
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -155,9 +154,6 @@ spec:
       destination: cloudwatch
       logGroup: /klanker-maker/network
 
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "30m"
 `)
 
 	errs := profile.Validate(yamlData)
@@ -182,7 +178,7 @@ spec:
 
 // minimalCLIBase is a complete base profile YAML for CLI-related tests.
 // Tests append a `  cli:` block to this base.
-const minimalCLIBase = `apiVersion: klankermaker.ai/v1alpha1
+const minimalCLIBase = `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: notify-validate-test
@@ -205,11 +201,10 @@ spec:
       allowedDNSSuffixes:
         - ".amazonaws.com"
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -228,9 +223,6 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "30m"
 `
 
 // TestValidate_NotifyFields_AllSet verifies that a profile with all four notify
@@ -388,7 +380,7 @@ func minimalProfileWithPrefix(prefix string) []byte {
 	if prefix != "" {
 		prefixLine = "\n  prefix: " + prefix
 	}
-	return []byte(`apiVersion: klankermaker.ai/v1alpha1
+	return []byte(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: test-prefix` + prefixLine + `
@@ -413,11 +405,10 @@ spec:
         - ".amazonaws.com"
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -439,15 +430,12 @@ spec:
       destination: cloudwatch
       logGroup: /klanker-maker/network
 
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "30m"
 `)
 }
 
 // minimalExecutionProfile returns a full valid profile YAML with the given execution YAML block.
 func minimalExecutionProfile(executionYAML string) []byte {
-	return []byte(`apiVersion: klankermaker.ai/v1alpha1
+	return []byte(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: rsync-schema-test
@@ -471,11 +459,10 @@ spec:
         - ".amazonaws.com"
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -497,9 +484,6 @@ spec:
       destination: cloudwatch
       logGroup: /klanker-maker/network
 
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "30m"
 `)
 }
 
@@ -551,7 +535,7 @@ func TestRsyncSchemaValidation(t *testing.T) {
 
 	t.Run("rsyncPaths with non-string item (integer) is rejected", func(t *testing.T) {
 		// Use JSON-style inline array to embed a non-string
-		data := []byte(`apiVersion: klankermaker.ai/v1alpha1
+		data := []byte(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: rsync-bad-items
@@ -577,11 +561,10 @@ spec:
         - ".amazonaws.com"
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -603,9 +586,6 @@ spec:
       destination: cloudwatch
       logGroup: /klanker-maker/network
 
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "30m"
 `)
 		errs := profile.ValidateSchema(data)
 		if len(errs) == 0 {
@@ -616,7 +596,7 @@ spec:
 
 // minimalProfileWithTlsCapture returns a full valid profile YAML with the given tlsCapture YAML block.
 func minimalProfileWithTlsCapture(tlsCaptureYAML string) []byte {
-	return []byte(`apiVersion: klankermaker.ai/v1alpha1
+	return []byte(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: tls-capture-schema-test
@@ -641,11 +621,10 @@ spec:
         - ".amazonaws.com"
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -668,9 +647,6 @@ spec:
       logGroup: /klanker-maker/network
 ` + tlsCaptureYAML + `
 
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "30m"
 `)
 }
 
@@ -798,7 +774,7 @@ func TestValidateSchema_MetadataPrefix(t *testing.T) {
 // direct ValidateSemantic testing.
 func minimalCLISpecWith(cli *profile.CLISpec) *profile.SandboxProfile {
 	return &profile.SandboxProfile{
-		APIVersion: "klankermaker.ai/v1alpha1",
+		APIVersion: "klankermaker.ai/v1alpha2",
 		Kind:       "SandboxProfile",
 		Spec: profile.Spec{
 			CLI: cli,
@@ -978,7 +954,7 @@ func TestValidateSemantic_Slack_BackwardCompat_Phase62Profile(t *testing.T) {
 // populated for semantic validation of additionalSnapshots.
 func makeMinimalSnapshotProfile(substrate string, snapshots []profile.AdditionalSnapshotSpec, addlVol *profile.AdditionalVolumeSpec) *profile.SandboxProfile {
 	return &profile.SandboxProfile{
-		APIVersion: "klankermaker.ai/v1alpha1",
+		APIVersion: "klankermaker.ai/v1alpha2",
 		Kind:       "SandboxProfile",
 		Spec: profile.Spec{
 			Runtime: profile.RuntimeSpec{

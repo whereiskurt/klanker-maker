@@ -10,7 +10,7 @@ import (
 // TestSchemaRootVolumeParsing verifies that rootVolumeSize parses correctly from YAML.
 func TestSchemaRootVolumeParsing(t *testing.T) {
 	t.Run("rootVolumeSize 50 parses correctly", func(t *testing.T) {
-		yaml := `apiVersion: klankermaker.ai/v1alpha1
+		yaml := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: storage-test
@@ -33,10 +33,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions: ["us-east-1"]
-    sessionPolicy: standard
   sidecars:
     dnsProxy:
       enabled: false
@@ -55,9 +54,6 @@ spec:
       destination: stdout
     networkLog:
       destination: stdout
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: "1h"
 `
 		p, err := profile.Parse([]byte(yaml))
 		if err != nil {
@@ -69,7 +65,7 @@ spec:
 	})
 
 	t.Run("rootVolumeSize omitted parses as 0", func(t *testing.T) {
-		yaml := `apiVersion: klankermaker.ai/v1alpha1
+		yaml := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: storage-test-zero
@@ -91,10 +87,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions: ["us-east-1"]
-    sessionPolicy: standard
   sidecars:
     dnsProxy:
       enabled: false
@@ -113,9 +108,6 @@ spec:
       destination: stdout
     networkLog:
       destination: stdout
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: "1h"
 `
 		p, err := profile.Parse([]byte(yaml))
 		if err != nil {
@@ -130,7 +122,7 @@ spec:
 // TestSchemaAdditionalVolumeParsing verifies that additionalVolume parses correctly.
 func TestSchemaAdditionalVolumeParsing(t *testing.T) {
 	t.Run("additionalVolume with all fields parses correctly", func(t *testing.T) {
-		yaml := `apiVersion: klankermaker.ai/v1alpha1
+		yaml := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: storage-extra-vol
@@ -156,10 +148,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions: ["us-east-1"]
-    sessionPolicy: standard
   sidecars:
     dnsProxy:
       enabled: false
@@ -178,9 +169,6 @@ spec:
       destination: stdout
     networkLog:
       destination: stdout
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: "1h"
 `
 		p, err := profile.Parse([]byte(yaml))
 		if err != nil {
@@ -201,7 +189,7 @@ spec:
 	})
 
 	t.Run("additionalVolume omitted parses as nil", func(t *testing.T) {
-		yaml := `apiVersion: klankermaker.ai/v1alpha1
+		yaml := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: storage-no-extra-vol
@@ -223,10 +211,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions: ["us-east-1"]
-    sessionPolicy: standard
   sidecars:
     dnsProxy:
       enabled: false
@@ -245,9 +232,6 @@ spec:
       destination: stdout
     networkLog:
       destination: stdout
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: "1h"
 `
 		p, err := profile.Parse([]byte(yaml))
 		if err != nil {
@@ -261,7 +245,7 @@ spec:
 
 // TestSchemaHibernationParsing verifies that hibernation parses correctly.
 func TestSchemaHibernationParsing(t *testing.T) {
-	yaml := `apiVersion: klankermaker.ai/v1alpha1
+	yaml := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: hibernation-test
@@ -284,10 +268,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions: ["us-east-1"]
-    sessionPolicy: standard
   sidecars:
     dnsProxy:
       enabled: false
@@ -306,9 +289,6 @@ spec:
       destination: stdout
     networkLog:
       destination: stdout
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: "1h"
 `
 	p, err := profile.Parse([]byte(yaml))
 	if err != nil {
@@ -321,7 +301,7 @@ spec:
 
 // TestSchemaAMIParsing verifies that ami parses correctly.
 func TestSchemaAMIParsing(t *testing.T) {
-	yaml := `apiVersion: klankermaker.ai/v1alpha1
+	yaml := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: ami-test
@@ -344,10 +324,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions: ["us-east-1"]
-    sessionPolicy: standard
   sidecars:
     dnsProxy:
       enabled: false
@@ -366,9 +345,6 @@ spec:
       destination: stdout
     networkLog:
       destination: stdout
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: "1h"
 `
 	p, err := profile.Parse([]byte(yaml))
 	if err != nil {
@@ -381,7 +357,7 @@ spec:
 
 // minimalRuntimeYAML returns the base of a profile YAML with a customizable runtime section.
 func minimalRuntimeProfile(runtimeExtra string) string {
-	return `apiVersion: klankermaker.ai/v1alpha1
+	return `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: schema-validation-test
@@ -404,10 +380,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions: ["us-east-1"]
-    sessionPolicy: standard
   sidecars:
     dnsProxy:
       enabled: false
@@ -426,9 +401,6 @@ spec:
       destination: stdout
     networkLog:
       destination: stdout
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: "1h"
 `
 }
 

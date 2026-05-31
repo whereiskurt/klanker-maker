@@ -1028,9 +1028,9 @@ func generateECSServiceHCL(p *profile.SandboxProfile, sandboxID string, useSpot 
 	if artifactBucket != "" {
 		params.KMProxyCACertS3 = fmt.Sprintf("s3://%s/sidecars/km-proxy-ca.crt", artifactBucket)
 	}
-	// KM_SECRET_PATHS: comma-separated SSM paths from identity.allowedSecretPaths
-	if len(p.Spec.Identity.AllowedSecretPaths) > 0 {
-		params.KMSecretPaths = strings.Join(p.Spec.Identity.AllowedSecretPaths, ",")
+	// KM_SECRET_PATHS: comma-separated SSM paths from iam.allowedSecretPaths
+	if len(p.Spec.IAM.AllowedSecretPaths) > 0 {
+		params.KMSecretPaths = strings.Join(p.Spec.IAM.AllowedSecretPaths, ",")
 	}
 	// KM_OTP_PATHS: comma-separated OTP SSM paths from otp.secrets
 	if p.Spec.OTP != nil && len(p.Spec.OTP.Secrets) > 0 {

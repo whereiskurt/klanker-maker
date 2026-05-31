@@ -9,7 +9,7 @@ import (
 
 // minimalProfileYAML is a reusable base profile for email alias tests.
 // It omits the email section so tests can append their own.
-const minimalProfileBase = `apiVersion: klankermaker.ai/v1alpha1
+const minimalProfileBase = `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: email-alias-test
@@ -35,11 +35,10 @@ spec:
         - ".amazonaws.com"
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -61,9 +60,6 @@ spec:
       destination: cloudwatch
       logGroup: /klanker-maker/network
 
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "30m"
 `
 
 // TestParse_EmailAlias verifies that a profile with email.alias and

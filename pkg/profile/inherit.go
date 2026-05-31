@@ -98,10 +98,11 @@ func merge(parent, child *SandboxProfile) *SandboxProfile {
 	mergeSpecSection(&result.Spec.Execution, &parent.Spec.Execution, &child.Spec.Execution)
 	mergeSpecSection(&result.Spec.SourceAccess, &parent.Spec.SourceAccess, &child.Spec.SourceAccess)
 	mergeSpecSection(&result.Spec.Network, &parent.Spec.Network, &child.Spec.Network)
-	mergeSpecSection(&result.Spec.Identity, &parent.Spec.Identity, &child.Spec.Identity)
+	mergeSpecSection(&result.Spec.IAM, &parent.Spec.IAM, &child.Spec.IAM)
 	mergeSpecSection(&result.Spec.Sidecars, &parent.Spec.Sidecars, &child.Spec.Sidecars)
 	mergeSpecSection(&result.Spec.Observability, &parent.Spec.Observability, &child.Spec.Observability)
-	mergeSpecSection(&result.Spec.Agent, &parent.Spec.Agent, &child.Spec.Agent)
+	// Phase 92 (Wave 1): the dead top-level Spec.Agent merge was removed. Wave 4
+	// adds a typed merger for the new pointer-typed Spec.Agent.
 
 	// Clear extends — resolved profile has no parent
 	result.Extends = ""

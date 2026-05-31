@@ -1,4 +1,4 @@
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: circular-a
@@ -23,11 +23,10 @@ spec:
     egress:
       allowedDNSSuffixes: []
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -48,6 +47,3 @@ spec:
     networkLog:
       destination: stdout
       logGroup: ""
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: "10m"

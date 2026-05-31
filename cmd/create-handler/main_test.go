@@ -696,7 +696,7 @@ func (m *multiKeyS3) GetObject(ctx context.Context, input *s3.GetObjectInput, op
 }
 
 func TestPatchProfileForSops_NoSecrets_NoOp(t *testing.T) {
-	profileYAML := `apiVersion: klankermaker.ai/v1alpha1
+	profileYAML := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: nosec
@@ -722,7 +722,7 @@ spec:
 }
 
 func TestPatchProfileForSops_WithSecrets_RewritesToAbsolutePath(t *testing.T) {
-	profileYAML := `apiVersion: klankermaker.ai/v1alpha1
+	profileYAML := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: codex
@@ -777,7 +777,7 @@ spec:
 }
 
 func TestPatchProfileForSops_DownloadError_Propagates(t *testing.T) {
-	profileYAML := `apiVersion: klankermaker.ai/v1alpha1
+	profileYAML := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: codex

@@ -1,4 +1,4 @@
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: ec2-with-allowed-refs-test
@@ -38,11 +38,10 @@ spec:
       allowedHosts:
         - "api.github.com"
 
-  identity:
+  iam:
     roleSessionDuration: "2h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
     allowedSecretPaths:
       - "/km/sandboxes/my-sandbox/api-key"
 
@@ -67,7 +66,3 @@ spec:
     networkLog:
       destination: cloudwatch
       logGroup: /klanker-maker/network
-
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: "15m"

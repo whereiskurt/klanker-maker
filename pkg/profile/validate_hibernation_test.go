@@ -12,7 +12,7 @@ import (
 // rule to fire, nothing else.
 func hibernationProfile(instanceType string, rootVolumeSizeGB int, hibernation bool) *profile.SandboxProfile {
 	return &profile.SandboxProfile{
-		APIVersion: "klankermaker.ai/v1alpha1",
+		APIVersion: "klankermaker.ai/v1alpha2",
 		Kind:       "SandboxProfile",
 		Spec: profile.Spec{
 			Runtime: profile.RuntimeSpec{

@@ -14,7 +14,7 @@ func boolPtrTranscript(b bool) *bool { return &b }
 // minimalTranscriptProfile builds the smallest valid SandboxProfile with the given CLISpec.
 func minimalTranscriptProfile(cli *profile.CLISpec) *profile.SandboxProfile {
 	return &profile.SandboxProfile{
-		APIVersion: "klankermaker.ai/v1alpha1",
+		APIVersion: "klankermaker.ai/v1alpha2",
 		Kind:       "SandboxProfile",
 		Spec: profile.Spec{
 			CLI: cli,

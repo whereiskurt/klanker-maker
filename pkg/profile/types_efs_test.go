@@ -9,7 +9,7 @@ import (
 // TestEFSProfileFields verifies that mountEFS and efsMountPoint fields
 // round-trip correctly through YAML parsing on RuntimeSpec.
 func TestEFSProfileFields(t *testing.T) {
-	yamlData := `apiVersion: klankermaker.ai/v1alpha1
+	yamlData := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: efs-test
@@ -33,10 +33,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: false
@@ -55,9 +54,6 @@ spec:
       destination: stdout
     networkLog:
       destination: stdout
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: 1h
 `
 	p, err := profile.Parse([]byte(yamlData))
 	if err != nil {
@@ -75,7 +71,7 @@ spec:
 // TestEFSProfileFieldsOmitted verifies that mountEFS and efsMountPoint
 // default to their zero values when not present in YAML.
 func TestEFSProfileFieldsOmitted(t *testing.T) {
-	yamlData := `apiVersion: klankermaker.ai/v1alpha1
+	yamlData := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: no-efs-test
@@ -97,10 +93,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: false
@@ -119,9 +114,6 @@ spec:
       destination: stdout
     networkLog:
       destination: stdout
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: 1h
 `
 	p, err := profile.Parse([]byte(yamlData))
 	if err != nil {

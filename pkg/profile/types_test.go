@@ -11,7 +11,7 @@ import (
 // TestArtifactsSpecParsesFromYAML verifies that ArtifactsSpec round-trips from YAML.
 func TestArtifactsSpecParsesFromYAML(t *testing.T) {
 	yamlData := `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: artifact-test
@@ -34,10 +34,9 @@ spec:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -57,9 +56,6 @@ spec:
     networkLog:
       destination: cloudwatch
 
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
   artifacts:
     paths:
       - "./output/**"
@@ -117,8 +113,8 @@ func TestParseValidProfile(t *testing.T) {
 		t.Fatalf("expected valid profile to parse without error, got: %v", err)
 	}
 
-	if p.APIVersion != "klankermaker.ai/v1alpha1" {
-		t.Errorf("expected apiVersion 'klankermaker.ai/v1alpha1', got '%s'", p.APIVersion)
+	if p.APIVersion != "klankermaker.ai/v1alpha2" {
+		t.Errorf("expected apiVersion 'klankermaker.ai/v1alpha2', got '%s'", p.APIVersion)
 	}
 	if p.Kind != "SandboxProfile" {
 		t.Errorf("expected kind 'SandboxProfile', got '%s'", p.Kind)
@@ -155,17 +151,14 @@ func TestParsePreservesAllSections(t *testing.T) {
 	if p.Spec.Network.Egress.AllowedDNSSuffixes == nil {
 		t.Error("expected spec.network.egress.allowedDNSSuffixes to be populated")
 	}
-	if p.Spec.Identity.RoleSessionDuration == "" {
-		t.Error("expected spec.identity.roleSessionDuration to be populated")
+	if p.Spec.IAM.RoleSessionDuration == "" {
+		t.Error("expected spec.iam.roleSessionDuration to be populated")
 	}
 	if p.Spec.Sidecars.DNSProxy.Enabled == false {
 		t.Error("expected spec.sidecars.dnsProxy.enabled to be true")
 	}
 	if p.Spec.Observability.CommandLog.Destination == "" {
 		t.Error("expected spec.observability.commandLog.destination to be populated")
-	}
-	if p.Spec.Agent.MaxConcurrentTasks == 0 {
-		t.Error("expected spec.agent.maxConcurrentTasks to be populated")
 	}
 }
 
@@ -209,7 +202,7 @@ func TestMetadataLabels(t *testing.T) {
 // compute and AI budget limits.
 func TestBudgetSpecParsesFromYAML(t *testing.T) {
 	yamlData := `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: budget-test
@@ -232,10 +225,9 @@ spec:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -255,9 +247,6 @@ spec:
     networkLog:
       destination: cloudwatch
 
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
   budget:
     compute:
       maxSpendUSD: 2.00
@@ -297,7 +286,7 @@ spec:
 // to zero when omitted (caller can treat zero as "use default 0.8").
 func TestBudgetSpecWarningThresholdDefault(t *testing.T) {
 	yamlData := `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: budget-threshold-default
@@ -320,10 +309,9 @@ spec:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -343,9 +331,6 @@ spec:
     networkLog:
       destination: cloudwatch
 
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
   budget:
     ai:
       maxSpendUSD: 10.00
@@ -371,7 +356,7 @@ spec:
 // TestRsyncPathsParsing verifies that rsyncPaths and rsyncFileList parse correctly
 // from YAML into ExecutionSpec fields.
 func TestRsyncPathsParsing(t *testing.T) {
-	baseYAML := `apiVersion: klankermaker.ai/v1alpha1
+	baseYAML := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: rsync-test
@@ -394,10 +379,9 @@ spec:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -417,10 +401,7 @@ spec:
     networkLog:
       destination: cloudwatch
 
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m`
-
+`
 	t.Run("rsyncPaths parses into slice", func(t *testing.T) {
 		yamlData := baseYAML + `
   execution:
@@ -431,7 +412,7 @@ spec:
       - "projects/*/config"
 `
 		// Re-parse using a full YAML that replaces the execution block
-		fullYAML := `apiVersion: klankermaker.ai/v1alpha1
+		fullYAML := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: rsync-paths-test
@@ -457,10 +438,9 @@ spec:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -480,9 +460,6 @@ spec:
     networkLog:
       destination: cloudwatch
 
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
 `
 		_ = yamlData
 		p, err := profile.Parse([]byte(fullYAML))
@@ -502,7 +479,7 @@ spec:
 	})
 
 	t.Run("rsyncFileList parses into string", func(t *testing.T) {
-		fullYAML := `apiVersion: klankermaker.ai/v1alpha1
+		fullYAML := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: rsync-filelist-test
@@ -526,10 +503,9 @@ spec:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -549,9 +525,6 @@ spec:
     networkLog:
       destination: cloudwatch
 
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
 `
 		p, err := profile.Parse([]byte(fullYAML))
 		if err != nil {
@@ -563,7 +536,7 @@ spec:
 	})
 
 	t.Run("no rsyncPaths or rsyncFileList is backward compatible", func(t *testing.T) {
-		fullYAML := `apiVersion: klankermaker.ai/v1alpha1
+		fullYAML := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: rsync-compat-test
@@ -586,10 +559,9 @@ spec:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -609,9 +581,6 @@ spec:
     networkLog:
       destination: cloudwatch
 
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
 `
 		p, err := profile.Parse([]byte(fullYAML))
 		if err != nil {
@@ -629,7 +598,7 @@ spec:
 // TestTlsCaptureSpecParsesFromYAML verifies that TlsCaptureSpec round-trips from YAML.
 func TestTlsCaptureSpecParsesFromYAML(t *testing.T) {
 	yamlData := `
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: tls-capture-test
@@ -652,10 +621,9 @@ spec:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
 
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -680,9 +648,6 @@ spec:
         - openssl
       capturePayloads: false
 
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
 `
 
 	p, err := profile.Parse([]byte(yamlData))
@@ -818,7 +783,7 @@ func TestBudgetSpecOptional(t *testing.T) {
 // into a string slice and can be used to default extra args on km agent --claude.
 func TestCLISpec_ClaudeArgsParsesFromYAML(t *testing.T) {
 	yamlData := []byte(`
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: cli-claude-args-test
@@ -840,10 +805,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -890,7 +854,7 @@ spec:
 // as nil/empty when omitted.
 func TestCLISpec_ClaudeArgsOptional(t *testing.T) {
 	yamlData := []byte(`
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: cli-optional-test
@@ -912,10 +876,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -949,7 +912,7 @@ spec:
 // into a string slice and can be used to default extra args on km agent run --codex.
 func TestCLISpec_CodexArgsParsesFromYAML(t *testing.T) {
 	yamlData := []byte(`
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: cli-codex-args-test
@@ -971,10 +934,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -1021,7 +983,7 @@ spec:
 // as nil/empty when omitted.
 func TestCLISpec_CodexArgsOptional(t *testing.T) {
 	yamlData := []byte(`
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: cli-codex-optional-test
@@ -1043,10 +1005,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -1080,7 +1041,7 @@ spec:
 // notify fields round-trips correctly through profile.Parse().
 func TestParse_CLISpec_NotifyFields(t *testing.T) {
 	yamlData := []byte(`
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: notify-fields-test
@@ -1102,10 +1063,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -1124,9 +1084,6 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
   cli:
     notifyOnPermission: true
     notifyOnIdle: true
@@ -1159,7 +1116,7 @@ spec:
 // omitting all four notify fields parses cleanly with zero values (backwards compat).
 func TestParse_CLISpec_NotifyFields_DefaultsZero(t *testing.T) {
 	yamlData := []byte(`
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: notify-zero-defaults-test
@@ -1181,10 +1138,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -1203,9 +1159,6 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
   cli:
     noBedrock: true
 `)
@@ -1236,7 +1189,7 @@ spec:
 // for notifyOnPermission and notifyOnIdle round-trip correctly.
 func TestParse_CLISpec_NotifyFields_ExplicitFalse(t *testing.T) {
 	yamlData := []byte(`
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: notify-explicit-false-test
@@ -1258,10 +1211,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -1280,9 +1232,6 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
   cli:
     notifyOnPermission: false
     notifyOnIdle: false
@@ -1305,7 +1254,7 @@ spec:
 
 // minimalCLIProfileYAML returns a valid profile YAML with the cli section containing the given cliFields.
 func minimalCLIProfileYAML(cliFields string) []byte {
-	return []byte(`apiVersion: klankermaker.ai/v1alpha1
+	return []byte(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: slack-fields-test
@@ -1327,10 +1276,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -1349,9 +1297,6 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
   cli:
 ` + cliFields)
 }
@@ -1470,7 +1415,7 @@ func TestVSCodeEnabled_False(t *testing.T) {
 func TestAdditionalSnapshotSpec_YAMLParse(t *testing.T) {
 	// Helper to build a minimal profile YAML with the given runtime section
 	buildYAML := func(runtimeExtra string) []byte {
-		return []byte(`apiVersion: klankermaker.ai/v1alpha1
+		return []byte(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: snapshot-parse-test
@@ -1493,10 +1438,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -1515,9 +1459,6 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
 `)
 	}
 
@@ -1687,7 +1628,7 @@ spec:
 func TestAdditionalSnapshotSpec_JSONSchemaValidation(t *testing.T) {
 	// buildSnapshotProfileRaw produces a profile YAML for schema validation.
 	buildSnapshotProfileRaw := func(snapshotEntry string) []byte {
-		return []byte(`apiVersion: klankermaker.ai/v1alpha1
+		return []byte(`apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: snapshot-schema-test
@@ -1711,10 +1652,9 @@ spec:
     egress:
       allowedDNSSuffixes: [".amazonaws.com"]
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: ["us-east-1"]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -1733,9 +1673,6 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: 30m
 `)
 	}
 

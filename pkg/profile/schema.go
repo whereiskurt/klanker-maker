@@ -59,7 +59,7 @@ func compileSchemaForDomain(domain string) (*jsonschema.Schema, error) {
 		[]byte(domain),
 	)
 
-	id := "https://" + domain + "/schemas/sandbox-profile/v1alpha1"
+	id := "https://" + domain + "/schemas/sandbox-profile/v1alpha2"
 
 	// Sanity check: placeholder should be fully replaced.
 	if strings.Contains(string(schemaJSON), "__SCHEMA_DOMAIN__") {
