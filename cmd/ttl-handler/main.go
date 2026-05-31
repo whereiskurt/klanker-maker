@@ -1219,7 +1219,7 @@ func cleanupBudgetEnforcer(ctx context.Context, h *TTLHandler, sandboxID string)
 
 	// Delete budget-enforcer Lambda
 	lambdaClient := lambdapkg.NewFromConfig(awsCfg)
-	fnName := "km-budget-enforcer-" + sandboxID
+	fnName := resourcePrefix() + "-budget-enforcer-" + sandboxID
 	if _, delErr := lambdaClient.DeleteFunction(ctx, &lambdapkg.DeleteFunctionInput{
 		FunctionName: awssdk.String(fnName),
 	}); delErr != nil {
@@ -1230,7 +1230,7 @@ func cleanupBudgetEnforcer(ctx context.Context, h *TTLHandler, sandboxID string)
 
 	// Delete budget-enforcer EventBridge schedule
 	schedulerClient := scheduler.NewFromConfig(awsCfg)
-	schedName := "km-budget-" + sandboxID
+	schedName := resourcePrefix() + "-budget-" + sandboxID
 	if _, delErr := schedulerClient.DeleteSchedule(ctx, &scheduler.DeleteScheduleInput{
 		Name: awssdk.String(schedName),
 	}); delErr != nil {
@@ -1247,15 +1247,15 @@ func cleanupBudgetEnforcer(ctx context.Context, h *TTLHandler, sandboxID string)
 	// Delete budget-enforcer IAM roles.
 	iamClient := iampkg.NewFromConfig(awsCfg)
 	for _, roleName := range []string{
-		"km-budget-enforcer-" + sandboxID,
-		"km-budget-scheduler-" + sandboxID,
+		resourcePrefix() + "-budget-enforcer-" + sandboxID,
+		resourcePrefix() + "-budget-scheduler-" + sandboxID,
 	} {
 		deleteIAMRole(ctx, iamClient, roleName)
 	}
 
 	// Delete budget-enforcer log group
 	if h.CWClient != nil {
-		logGroup := "/aws/lambda/km-budget-enforcer-" + sandboxID
+		logGroup := "/aws/lambda/" + resourcePrefix() + "-budget-enforcer-" + sandboxID
 		h.CWClient.DeleteLogGroup(ctx, &cloudwatchlogs.DeleteLogGroupInput{
 			LogGroupName: awssdk.String(logGroup),
 		})
@@ -1278,7 +1278,7 @@ func cleanupGitHubToken(ctx context.Context, h *TTLHandler, sandboxID string) {
 	schedClient := scheduler.NewFromConfig(awsCfg)
 
 	// 1. Delete EventBridge schedule.
-	scheduleName := "km-github-token-" + sandboxID
+	scheduleName := resourcePrefix() + "-github-token-" + sandboxID
 	if _, delErr := schedClient.DeleteSchedule(ctx, &scheduler.DeleteScheduleInput{
 		Name: awssdk.String(scheduleName),
 	}); delErr != nil {
@@ -1290,7 +1290,7 @@ func cleanupGitHubToken(ctx context.Context, h *TTLHandler, sandboxID string) {
 	}
 
 	// 2. Delete Lambda function.
-	lambdaName := "km-github-token-refresher-" + sandboxID
+	lambdaName := resourcePrefix() + "-github-token-refresher-" + sandboxID
 	if _, delErr := lambdaClient.DeleteFunction(ctx, &lambdapkg.DeleteFunctionInput{
 		FunctionName: awssdk.String(lambdaName),
 	}); delErr != nil {
@@ -1303,7 +1303,7 @@ func cleanupGitHubToken(ctx context.Context, h *TTLHandler, sandboxID string) {
 
 	// 3. Delete CloudWatch log group.
 	if h.CWClient != nil {
-		logGroup := "/aws/lambda/km-github-token-refresher-" + sandboxID
+		logGroup := "/aws/lambda/" + resourcePrefix() + "-github-token-refresher-" + sandboxID
 		h.CWClient.DeleteLogGroup(ctx, &cloudwatchlogs.DeleteLogGroupInput{
 			LogGroupName: awssdk.String(logGroup),
 		})
@@ -1311,14 +1311,14 @@ func cleanupGitHubToken(ctx context.Context, h *TTLHandler, sandboxID string) {
 
 	// 4. Delete IAM roles (refresher + scheduler).
 	for _, roleName := range []string{
-		"km-github-token-refresher-" + sandboxID,
-		"km-github-token-scheduler-" + sandboxID,
+		resourcePrefix() + "-github-token-refresher-" + sandboxID,
+		resourcePrefix() + "-github-token-scheduler-" + sandboxID,
 	} {
 		deleteIAMRole(ctx, iamClient, roleName)
 	}
 
 	// 5. Schedule KMS key deletion and remove alias.
-	kmsAlias := "alias/km-github-token-" + sandboxID
+	kmsAlias := "alias/" + resourcePrefix() + "-github-token-" + sandboxID
 	descOut, descErr := kmsClient.DescribeKey(ctx, &kmspkg.DescribeKeyInput{
 		KeyId: awssdk.String(kmsAlias),
 	})
@@ -1376,8 +1376,8 @@ func deleteIAMRole(ctx context.Context, iamClient *iampkg.Client, roleName strin
 				RoleName:            awssdk.String(roleName),
 				InstanceProfileName: ip.InstanceProfileName,
 			})
-			// Also delete the instance profile if it's sandbox-specific.
-			if strings.Contains(awssdk.ToString(ip.InstanceProfileName), "km-") {
+			// Also delete the instance profile if it's sandbox-specific (this install's prefix).
+			if strings.Contains(awssdk.ToString(ip.InstanceProfileName), resourcePrefix()+"-") {
 				iamClient.DeleteInstanceProfile(ctx, &iampkg.DeleteInstanceProfileInput{
 					InstanceProfileName: ip.InstanceProfileName,
 				})
@@ -1476,11 +1476,11 @@ func sdkOnlyTeardown(ctx context.Context, h *TTLHandler, sandboxID string) error
 	}
 
 	// 3. Delete sandbox IAM role + instance profile.
-	ssmRoleName := "km-ec2spot-ssm-" + sandboxID + "-" + h.RegionLabel
+	ssmRoleName := resourcePrefix() + "-ec2spot-ssm-" + sandboxID + "-" + h.RegionLabel
 	deleteIAMRole(ctx, iamClient, ssmRoleName)
 
 	// Also clean instance profile directly (may have same name pattern).
-	ipName := "km-ec2spot-profile-" + sandboxID + "-" + h.RegionLabel
+	ipName := resourcePrefix() + "-ec2spot-profile-" + sandboxID + "-" + h.RegionLabel
 	iamClient.RemoveRoleFromInstanceProfile(ctx, &iampkg.RemoveRoleFromInstanceProfileInput{
 		RoleName:            awssdk.String(ssmRoleName),
 		InstanceProfileName: awssdk.String(ipName),
