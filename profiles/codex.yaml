@@ -9,8 +9,9 @@ metadata:
   prefix: codex
 
 spec:
-  cli:
-    agent: codex
+  # Phase 92 (Wave 4) — agent default moved out of spec.cli into spec.agent.default.
+  agent:
+    default: codex
 
   lifecycle:
     ttl: "4h"

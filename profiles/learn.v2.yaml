@@ -154,11 +154,17 @@ spec:
       - "*"
 
   cli:
-    agent: claude
     ##Setting noBedrock calls the noBedrock() bash function call on loading and prevents accidentally Bedrock
     noBedrock: true
-    claudeArgs:
-      - "--dangerously-skip-permissions"
+
+  # Phase 92 (Wave 4) — agent/claudeArgs/codexArgs moved out of spec.cli into the
+  # structured spec.agent block. tools.* (autoApprove/deny) is populated in Wave 5
+  # once the synthesizer lands; for now the inlined configFiles settings.json stays.
+  agent:
+    default: claude
+    claude:
+      args:
+        - "--dangerously-skip-permissions"
 
   # Phase 92 — notify* fields moved out of spec.cli into spec.notification.
   notification:

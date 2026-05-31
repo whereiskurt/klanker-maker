@@ -155,11 +155,16 @@ spec:
       - "*"
 
   cli:
-    agent: codex
     ##Setting noBedrock calls the noBedrock() bash function call on loading and prevents accidentally Bedrock
     noBedrock: true
-    claudeArgs:
-      - "--dangerously-skip-permissions"
+
+  # Phase 92 (Wave 4) — agent/claudeArgs/codexArgs moved out of spec.cli into the
+  # structured spec.agent block. tools.* is populated in Wave 5.
+  agent:
+    default: codex
+    claude:
+      args:
+        - "--dangerously-skip-permissions"
 
   # Phase 92 — notify* fields moved out of spec.cli into spec.notification.
   notification:

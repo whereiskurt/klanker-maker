@@ -1,6 +1,3 @@
-//go:build phase92_wave4
-// +build phase92_wave4
-
 package profile
 
 import (

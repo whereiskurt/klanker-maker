@@ -145,6 +145,8 @@ spec:
     allowedSenders:
       - "self"
 
-  cli:
-    claudeArgs:
-      - "--dangerously-skip-permissions"
+  # Phase 92 (Wave 4) — claudeArgs moved out of spec.cli into spec.agent.claude.args.
+  agent:
+    claude:
+      args:
+        - "--dangerously-skip-permissions"
