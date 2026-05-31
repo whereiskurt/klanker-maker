@@ -6,8 +6,8 @@
 // It:
 //  1. Reads the event payload (sandbox_id, installation_id, ssm_parameter_name,
 //     kms_key_arn, allowed_repos, permissions).
-//  2. Reads the GitHub App private key PEM from SSM at /km/config/github/private-key.
-//  3. Reads the GitHub App client ID from SSM at /km/config/github/app-client-id.
+//  2. Reads the GitHub App private key PEM from SSM at {prefix}/config/github/private-key.
+//  3. Reads the GitHub App client ID from SSM at {prefix}/config/github/app-client-id.
 //  4. Calls GenerateGitHubAppJWT to mint a short-lived RS256 JWT.
 //  5. Calls ExchangeForInstallationToken to obtain a scoped installation token.
 //  6. Calls WriteTokenToSSM with overwrite=true to store the refreshed token.
@@ -25,8 +25,8 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	awspkg "github.com/whereiskurt/klanker-maker/pkg/aws"
 	githubpkg "github.com/whereiskurt/klanker-maker/pkg/github"
 )
@@ -35,14 +35,24 @@ import (
 // SSM config paths
 // ============================================================
 
-// githubSsmConfigPrefix returns the SSM path prefix for GitHub App config from the
-// KM_GITHUB_SSM_CONFIG_PREFIX env var. Falls back to "/km/config/github" for
-// un-migrated installs until plan 04 wires the env block.
+// githubSsmConfigPrefix returns the SSM path prefix for GitHub App config.
+//
+// KM_GITHUB_SSM_CONFIG_PREFIX is authoritative: the github-token Terraform
+// module (infra/modules/github-token/v1.0.0/main.tf) sets it to
+// "/{resource_prefix}/config/github" on every deployed sandbox. The fallback
+// below only fires off-platform (local runs, or a sandbox provisioned before
+// that env block existed); it derives the prefix from KM_RESOURCE_PREFIX so a
+// non-default install never reads a sibling install's GitHub config, defaulting
+// to "km" when neither env var is present.
 func githubSsmConfigPrefix() string {
 	if v := os.Getenv("KM_GITHUB_SSM_CONFIG_PREFIX"); v != "" {
 		return v
 	}
-	return "/km/config/github"
+	prefix := os.Getenv("KM_RESOURCE_PREFIX")
+	if prefix == "" {
+		prefix = "km"
+	}
+	return "/" + prefix + "/config/github"
 }
 
 // ssmPrivateKeyPath returns the SSM path for the GitHub App RSA private key PEM.
