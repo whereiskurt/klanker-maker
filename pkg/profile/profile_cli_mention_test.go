@@ -10,80 +10,92 @@ import (
 )
 
 // TestCLISpec_NotifySlackInboundMentionOnly verifies the tri-state *bool contract for POL-01.
+// Phase 92 (Wave 2): the field moved to notification.slack.inbound.mentionOnly.
 // Covers: nil when omitted, &true when explicit true, &false when explicit false, and JSON round-trip.
 func TestCLISpec_NotifySlackInboundMentionOnly(t *testing.T) {
 	t.Run("omitted-yaml", func(t *testing.T) {
-		raw := []byte("apiVersion: v1\nkind: SandboxProfile\nmetadata:\n  name: t\nspec:\n  cli: {}\n")
+		raw := []byte("apiVersion: v1\nkind: SandboxProfile\nmetadata:\n  name: t\nspec:\n  notification:\n    slack:\n      inbound: {}\n")
 		var p profile.SandboxProfile
 		if err := yaml.Unmarshal(raw, &p); err != nil {
 			t.Fatalf("unmarshal error: %v", err)
 		}
-		if p.Spec.CLI == nil {
-			// nil CLI also means nil field — acceptable
+		if p.Spec.Notification == nil || p.Spec.Notification.Slack == nil || p.Spec.Notification.Slack.Inbound == nil {
+			// nil chain also means nil field — acceptable
 			return
 		}
-		if p.Spec.CLI.NotifySlackInboundMentionOnly != nil {
-			t.Fatalf("expected nil for omitted field, got %v", *p.Spec.CLI.NotifySlackInboundMentionOnly)
+		if p.Spec.Notification.Slack.Inbound.MentionOnly != nil {
+			t.Fatalf("expected nil for omitted field, got %v", *p.Spec.Notification.Slack.Inbound.MentionOnly)
 		}
 	})
 
 	t.Run("explicit-true", func(t *testing.T) {
-		raw := []byte("apiVersion: v1\nkind: SandboxProfile\nmetadata:\n  name: t\nspec:\n  cli:\n    notifySlackInboundMentionOnly: true\n")
+		raw := []byte("apiVersion: v1\nkind: SandboxProfile\nmetadata:\n  name: t\nspec:\n  notification:\n    slack:\n      inbound:\n        mentionOnly: true\n")
 		var p profile.SandboxProfile
 		if err := yaml.Unmarshal(raw, &p); err != nil {
 			t.Fatalf("unmarshal error: %v", err)
 		}
-		if p.Spec.CLI == nil || p.Spec.CLI.NotifySlackInboundMentionOnly == nil {
+		mo := mentionOnlyOf(&p)
+		if mo == nil {
 			t.Fatal("expected non-nil pointer for explicit true")
 		}
-		if !*p.Spec.CLI.NotifySlackInboundMentionOnly {
+		if !*mo {
 			t.Fatalf("expected *true, got *false")
 		}
 	})
 
 	t.Run("explicit-false", func(t *testing.T) {
-		raw := []byte("apiVersion: v1\nkind: SandboxProfile\nmetadata:\n  name: t\nspec:\n  cli:\n    notifySlackInboundMentionOnly: false\n")
+		raw := []byte("apiVersion: v1\nkind: SandboxProfile\nmetadata:\n  name: t\nspec:\n  notification:\n    slack:\n      inbound:\n        mentionOnly: false\n")
 		var p profile.SandboxProfile
 		if err := yaml.Unmarshal(raw, &p); err != nil {
 			t.Fatalf("unmarshal error: %v", err)
 		}
-		if p.Spec.CLI == nil || p.Spec.CLI.NotifySlackInboundMentionOnly == nil {
+		mo := mentionOnlyOf(&p)
+		if mo == nil {
 			t.Fatal("expected non-nil pointer for explicit false — must be distinguishable from omitted (nil)")
 		}
-		if *p.Spec.CLI.NotifySlackInboundMentionOnly {
+		if *mo {
 			t.Fatalf("expected *false, got *true")
 		}
 	})
 
 	t.Run("json-roundtrip", func(t *testing.T) {
 		falseVal := false
-		src := profile.CLISpec{
-			NotifySlackInboundMentionOnly: &falseVal,
+		src := profile.NotificationSlackInboundSpec{
+			MentionOnly: &falseVal,
 		}
 		data, err := json.Marshal(src)
 		if err != nil {
 			t.Fatalf("marshal error: %v", err)
 		}
-		// Confirm the JSON key is present (not omitted)
-		if !strings.Contains(string(data), "notifySlackInboundMentionOnly") {
-			t.Fatalf("expected JSON to contain notifySlackInboundMentionOnly, got: %s", data)
+		// Confirm the JSON key is present (not omitted by the false value, since
+		// pointer fields encode the value not the zero).
+		if !strings.Contains(string(data), "mentionOnly") {
+			t.Fatalf("expected JSON to contain mentionOnly, got: %s", data)
 		}
-		var dst profile.CLISpec
+		var dst profile.NotificationSlackInboundSpec
 		if err := json.Unmarshal(data, &dst); err != nil {
 			t.Fatalf("unmarshal error: %v", err)
 		}
-		if dst.NotifySlackInboundMentionOnly == nil {
-			t.Fatal("expected non-nil after JSON round-trip with &false — field not tagged with omitempty should preserve false")
+		if dst.MentionOnly == nil {
+			t.Fatal("expected non-nil after JSON round-trip with &false")
 		}
-		if *dst.NotifySlackInboundMentionOnly {
+		if *dst.MentionOnly {
 			t.Fatalf("expected *false after round-trip, got *true")
 		}
 	})
 }
 
+// mentionOnlyOf safely extracts notification.slack.inbound.mentionOnly.
+func mentionOnlyOf(p *profile.SandboxProfile) *bool {
+	if p.Spec.Notification == nil || p.Spec.Notification.Slack == nil || p.Spec.Notification.Slack.Inbound == nil {
+		return nil
+	}
+	return p.Spec.Notification.Slack.Inbound.MentionOnly
+}
+
 // minimalProfileYAML returns a minimal valid SandboxProfile YAML for schema tests,
-// injecting any extra CLI fields supplied.
-func minimalProfileYAML(extraCLI string) []byte {
+// injecting any extra notification.slack.inbound fields supplied.
+func minimalProfileYAML(extraInbound string) []byte {
 	base := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
@@ -95,11 +107,11 @@ spec:
     allowedDomains:
       - ".example.com"
 `
-	if extraCLI != "" {
-		base += "  cli:\n"
-		for _, line := range strings.Split(extraCLI, "\n") {
+	if extraInbound != "" {
+		base += "  notification:\n    slack:\n      inbound:\n"
+		for _, line := range strings.Split(extraInbound, "\n") {
 			if line != "" {
-				base += "    " + line + "\n"
+				base += "        " + line + "\n"
 			}
 		}
 	}
@@ -110,31 +122,31 @@ spec:
 // Covers: true accepted, false accepted, string "yes" rejected, omitted accepted.
 func TestSchema_NotifySlackInboundMentionOnly(t *testing.T) {
 	t.Run("true-accepted", func(t *testing.T) {
-		raw := minimalProfileYAML("notifySlackInboundMentionOnly: true")
+		raw := minimalProfileYAML("mentionOnly: true")
 		errs := profile.ValidateSchema(raw)
 		for _, e := range errs {
-			if strings.Contains(e.Message, "notifySlackInboundMentionOnly") {
+			if strings.Contains(e.Message, "mentionOnly") {
 				t.Fatalf("expected no schema error for bool true, got: %v", e.Message)
 			}
 		}
 	})
 
 	t.Run("false-accepted", func(t *testing.T) {
-		raw := minimalProfileYAML("notifySlackInboundMentionOnly: false")
+		raw := minimalProfileYAML("mentionOnly: false")
 		errs := profile.ValidateSchema(raw)
 		for _, e := range errs {
-			if strings.Contains(e.Message, "notifySlackInboundMentionOnly") {
+			if strings.Contains(e.Message, "mentionOnly") {
 				t.Fatalf("expected no schema error for bool false, got: %v", e.Message)
 			}
 		}
 	})
 
 	t.Run("string-rejected", func(t *testing.T) {
-		raw := minimalProfileYAML(`notifySlackInboundMentionOnly: "yes"`)
+		raw := minimalProfileYAML(`mentionOnly: "yes"`)
 		errs := profile.ValidateSchema(raw)
 		found := false
 		for _, e := range errs {
-			if strings.Contains(e.Message, "notifySlackInboundMentionOnly") || strings.Contains(e.Path, "notifySlackInboundMentionOnly") {
+			if strings.Contains(e.Message, "mentionOnly") || strings.Contains(e.Path, "mentionOnly") {
 				found = true
 				break
 			}
@@ -148,7 +160,7 @@ func TestSchema_NotifySlackInboundMentionOnly(t *testing.T) {
 		raw := minimalProfileYAML("")
 		errs := profile.ValidateSchema(raw)
 		for _, e := range errs {
-			if strings.Contains(e.Message, "notifySlackInboundMentionOnly") {
+			if strings.Contains(e.Message, "mentionOnly") {
 				t.Fatalf("expected no schema error when field is omitted, got: %v", e.Message)
 			}
 		}
@@ -158,24 +170,26 @@ func TestSchema_NotifySlackInboundMentionOnly(t *testing.T) {
 // boolPtrMention is a local helper to create *bool values for mention tests.
 func boolPtrMention(b bool) *bool { return &b }
 
-// mentionOnlyFixture builds a minimal *SandboxProfile with the given NotifySlackInboundMentionOnly value
-// and a valid CLI block (notifySlackEnabled=true) so cross-field rules don't interfere.
+// mentionOnlyFixture builds a minimal *SandboxProfile with the given mentionOnly value
+// and a valid notification block (slack.enabled=true) so cross-field rules don't interfere.
 func mentionOnlyFixture(v *bool) *profile.SandboxProfile {
 	return &profile.SandboxProfile{
 		APIVersion: "klankermaker.ai/v1alpha2",
 		Kind:       "SandboxProfile",
 		Spec: profile.Spec{
-			CLI: &profile.CLISpec{
-				NotifySlackEnabled:            boolPtrMention(true),
-				NotifySlackInboundMentionOnly: v,
+			Notification: &profile.NotificationSpec{
+				Slack: &profile.NotificationSlackSpec{
+					Enabled: boolPtrMention(true),
+					Inbound: &profile.NotificationSlackInboundSpec{MentionOnly: v},
+				},
 			},
 		},
 	}
 }
 
 // TestValidateSemantic_NotifySlackInboundMentionOnly confirms POL-03:
-// ValidateSemantic accepts &true, &false, and nil for the new field
-// without emitting any error or warning that references the field name.
+// ValidateSemantic accepts &true, &false, and nil for the field without emitting
+// any error or warning that references the field name.
 func TestValidateSemantic_NotifySlackInboundMentionOnly(t *testing.T) {
 	cases := []struct {
 		name string
@@ -191,8 +205,8 @@ func TestValidateSemantic_NotifySlackInboundMentionOnly(t *testing.T) {
 			p := mentionOnlyFixture(tc.val)
 			errs := profile.ValidateSemantic(p)
 			for _, e := range errs {
-				if strings.Contains(e.Message, "notifySlackInboundMentionOnly") || strings.Contains(e.Path, "notifySlackInboundMentionOnly") {
-					t.Fatalf("ValidateSemantic should not emit errors for notifySlackInboundMentionOnly (no semantic rules), got: %+v", e)
+				if strings.Contains(e.Message, "mentionOnly") || strings.Contains(e.Path, "mentionOnly") {
+					t.Fatalf("ValidateSemantic should not emit errors for mentionOnly (no semantic rules), got: %+v", e)
 				}
 			}
 		})

@@ -296,36 +296,46 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 		}
 	}
 
-	// Phase 63 — Slack notification validation (SLCK-01).
-	if p.Spec.CLI != nil {
-		cli := p.Spec.CLI
-		perSandbox := cli.NotifySlackPerSandbox
-		override := cli.NotifySlackChannelOverride
-		slackOn := cli.NotifySlackEnabled != nil && *cli.NotifySlackEnabled
-		emailOn := cli.NotifyEmailEnabled == nil || *cli.NotifyEmailEnabled // nil = backward-compat true
+	// Phase 63/67/68/72 — Slack notification validation (SLCK-01).
+	// Phase 92 (Wave 2): reads moved from spec.cli.notifySlack* to the structured
+	// spec.notification.slack.* block. Every read below is nil-safe through the
+	// notification → slack chain (the block is optional per locked decision).
+	if p.Spec.Notification != nil && p.Spec.Notification.Slack != nil {
+		slack := p.Spec.Notification.Slack
+
+		perSandbox := slack.PerSandbox != nil && *slack.PerSandbox
+		override := slack.ChannelOverride
+		slackOn := slack.Enabled != nil && *slack.Enabled
+
+		// Email default true (Phase 62 backward compat): nil email block or nil
+		// enabled both mean enabled.
+		emailOn := true
+		if p.Spec.Notification.Email != nil && p.Spec.Notification.Email.Enabled != nil {
+			emailOn = *p.Spec.Notification.Email.Enabled
+		}
 
 		// Rule S1 (error): perSandbox AND override → mutually exclusive.
 		if perSandbox && override != "" {
 			errs = append(errs, ValidationError{
-				Path:    "spec.cli",
-				Message: "notifySlackPerSandbox: true and notifySlackChannelOverride are mutually exclusive — choose one",
+				Path:    "spec.notification.slack",
+				Message: "notification.slack.perSandbox: true and notification.slack.channelOverride are mutually exclusive — choose one",
 			})
 		}
 
-		// Rule S2 (warning): perSandbox without slackEnabled → no-op.
-		if perSandbox && cli.NotifySlackEnabled != nil && !*cli.NotifySlackEnabled {
+		// Rule S2 (warning): perSandbox without slack.enabled → no-op.
+		if perSandbox && slack.Enabled != nil && !*slack.Enabled {
 			errs = append(errs, ValidationError{
-				Path:      "spec.cli.notifySlackPerSandbox",
-				Message:   "notifySlackPerSandbox: true has no effect when notifySlackEnabled is false",
+				Path:      "spec.notification.slack.perSandbox",
+				Message:   "notification.slack.perSandbox: true has no effect when notification.slack.enabled is false",
 				IsWarning: true,
 			})
 		}
 
-		// Rule S3 (warning): slackArchiveOnDestroy set without perSandbox → no-op.
-		if cli.SlackArchiveOnDestroy != nil && !perSandbox {
+		// Rule S3 (warning): archiveOnDestroy set without perSandbox → no-op.
+		if slack.ArchiveOnDestroy != nil && !perSandbox {
 			errs = append(errs, ValidationError{
-				Path:      "spec.cli.slackArchiveOnDestroy",
-				Message:   "slackArchiveOnDestroy is only meaningful when notifySlackPerSandbox: true",
+				Path:      "spec.notification.slack.archiveOnDestroy",
+				Message:   "notification.slack.archiveOnDestroy is only meaningful when notification.slack.perSandbox: true",
 				IsWarning: true,
 			})
 		}
@@ -335,7 +345,7 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 			ok, _ := regexp.MatchString(`^C[A-Z0-9]+$`, override)
 			if !ok {
 				errs = append(errs, ValidationError{
-					Path:    "spec.cli.notifySlackChannelOverride",
+					Path:    "spec.notification.slack.channelOverride",
 					Message: fmt.Sprintf("invalid Slack channel ID %q — must match ^C[A-Z0-9]+$", override),
 				})
 			}
@@ -344,34 +354,34 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 		// Rule S5 (warning): both channels off → no notification path.
 		if !slackOn && !emailOn {
 			errs = append(errs, ValidationError{
-				Path:      "spec.cli",
-				Message:   "notifyEmailEnabled: false and notifySlackEnabled: false — no notification channel will deliver",
+				Path:      "spec.notification",
+				Message:   "notification.email.enabled: false and notification.slack.enabled: false — no notification channel will deliver",
 				IsWarning: true,
 			})
 		}
 
 		// Phase 67 — Slack inbound validation rules.
-		inboundOn := cli.NotifySlackInboundEnabled
+		inboundOn := slack.Inbound != nil && slack.Inbound.Enabled != nil && *slack.Inbound.Enabled
 		if inboundOn {
 			// Rule SI1 (error): inbound requires outbound Slack enabled.
 			if !slackOn {
 				errs = append(errs, ValidationError{
-					Path:    "spec.cli.notifySlackInboundEnabled",
-					Message: "notifySlackInboundEnabled: true requires notifySlackEnabled: true",
+					Path:    "spec.notification.slack.inbound.enabled",
+					Message: "notification.slack.inbound.enabled: true requires notification.slack.enabled: true",
 				})
 			}
 			// Rule SI2 (error): inbound requires per-sandbox channel (1:1 routing).
 			if !perSandbox {
 				errs = append(errs, ValidationError{
-					Path:    "spec.cli.notifySlackInboundEnabled",
-					Message: "notifySlackInboundEnabled: true requires notifySlackPerSandbox: true",
+					Path:    "spec.notification.slack.inbound.enabled",
+					Message: "notification.slack.inbound.enabled: true requires notification.slack.perSandbox: true",
 				})
 			}
 			// Rule SI3 (error): inbound incompatible with channel override (ambiguous routing).
 			if override != "" {
 				errs = append(errs, ValidationError{
-					Path:    "spec.cli.notifySlackInboundEnabled",
-					Message: "notifySlackInboundEnabled: true is incompatible with notifySlackChannelOverride (channel→sandbox routing requires 1:1 mapping in v1)",
+					Path:    "spec.notification.slack.inbound.enabled",
+					Message: "notification.slack.inbound.enabled: true is incompatible with notification.slack.channelOverride (channel→sandbox routing requires 1:1 mapping in v1)",
 				})
 			}
 		}
@@ -380,20 +390,20 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 		// Mirror Phase 67 inbound: same prerequisites (outbound Slack + per-sandbox)
 		// and same incompatibility (channel override) — both flags require
 		// audience-containment guarantees.
-		transcriptOn := cli.NotifySlackTranscriptEnabled
+		transcriptOn := slack.Transcript != nil && slack.Transcript.Enabled != nil && *slack.Transcript.Enabled
 		if transcriptOn {
 			// Rule ST1 (error): transcript requires outbound Slack enabled.
 			if !slackOn {
 				errs = append(errs, ValidationError{
-					Path:    "spec.cli.notifySlackTranscriptEnabled",
-					Message: "notifySlackTranscriptEnabled requires notifySlackEnabled",
+					Path:    "spec.notification.slack.transcript.enabled",
+					Message: "notification.slack.transcript.enabled requires notification.slack.enabled",
 				})
 			}
 			// Rule ST2 (error): transcript requires per-sandbox channel.
 			if !perSandbox {
 				errs = append(errs, ValidationError{
-					Path:    "spec.cli.notifySlackTranscriptEnabled",
-					Message: "notifySlackTranscriptEnabled requires notifySlackPerSandbox",
+					Path:    "spec.notification.slack.transcript.enabled",
+					Message: "notification.slack.transcript.enabled requires notification.slack.perSandbox",
 				})
 			}
 			// Rule ST3 (error): transcript incompatible with channel override
@@ -401,27 +411,31 @@ func ValidateSemantic(p *SandboxProfile) []ValidationError {
 			// channel guarantees a known invitee list).
 			if override != "" {
 				errs = append(errs, ValidationError{
-					Path:    "spec.cli.notifySlackTranscriptEnabled",
-					Message: "notifySlackTranscriptEnabled is incompatible with notifySlackChannelOverride (transcript audience must be operator-controlled)",
+					Path:    "spec.notification.slack.transcript.enabled",
+					Message: "notification.slack.transcript.enabled is incompatible with notification.slack.channelOverride (transcript audience must be operator-controlled)",
 				})
 			}
 		}
 
 		// Phase 72 — Slack invite-email validation rules.
+		var inviteEmails []string
+		if slack.Invites != nil {
+			inviteEmails = slack.Invites.Emails
+		}
 
 		// Rule SE1 (error): invite-emails requires outbound Slack enabled.
-		// Empty list is a no-op (does not require notifySlackEnabled).
-		if len(cli.NotifySlackInviteEmails) > 0 && !slackOn {
+		// Empty list is a no-op (does not require slack.enabled).
+		if len(inviteEmails) > 0 && !slackOn {
 			errs = append(errs, ValidationError{
-				Path:    "spec.cli.notifySlackInviteEmails",
-				Message: "notifySlackInviteEmails requires notifySlackEnabled: true",
+				Path:    "spec.notification.slack.invites.emails",
+				Message: "notification.slack.invites.emails requires notification.slack.enabled: true",
 			})
 		}
 		// Rule SE2 (error): each entry must be a syntactically valid email.
-		for i, e := range cli.NotifySlackInviteEmails {
+		for i, e := range inviteEmails {
 			if !emailLooksValid(e) {
 				errs = append(errs, ValidationError{
-					Path:    fmt.Sprintf("spec.cli.notifySlackInviteEmails[%d]", i),
+					Path:    fmt.Sprintf("spec.notification.slack.invites.emails[%d]", i),
 					Message: fmt.Sprintf("invalid email %q", e),
 				})
 			}

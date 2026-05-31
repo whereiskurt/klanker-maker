@@ -1084,31 +1084,34 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  cli:
-    notifyOnPermission: true
-    notifyOnIdle: true
-    notifyCooldownSeconds: 120
-    notificationEmailAddress: "ops-team@example.com"
+  notification:
+    events:
+      onPermission: true
+      onIdle: true
+      cooldownSeconds: 120
+    email:
+      address: "ops-team@example.com"
 `)
 
 	p, err := profile.Parse(yamlData)
 	if err != nil {
 		t.Fatalf("expected profile with notify fields to parse without error, got: %v", err)
 	}
-	if p.Spec.CLI == nil {
-		t.Fatal("expected Spec.CLI to be set, got nil")
+	if p.Spec.Notification == nil || p.Spec.Notification.Events == nil {
+		t.Fatal("expected Spec.Notification.Events to be set, got nil")
 	}
-	if !p.Spec.CLI.NotifyOnPermission {
-		t.Error("expected CLI.NotifyOnPermission=true, got false")
+	ev := p.Spec.Notification.Events
+	if ev.OnPermission == nil || !*ev.OnPermission {
+		t.Error("expected events.OnPermission=true, got false/nil")
 	}
-	if !p.Spec.CLI.NotifyOnIdle {
-		t.Error("expected CLI.NotifyOnIdle=true, got false")
+	if ev.OnIdle == nil || !*ev.OnIdle {
+		t.Error("expected events.OnIdle=true, got false/nil")
 	}
-	if p.Spec.CLI.NotifyCooldownSeconds != 120 {
-		t.Errorf("expected CLI.NotifyCooldownSeconds=120, got %d", p.Spec.CLI.NotifyCooldownSeconds)
+	if ev.CooldownSeconds == nil || *ev.CooldownSeconds != 120 {
+		t.Errorf("expected events.CooldownSeconds=120, got %v", ev.CooldownSeconds)
 	}
-	if p.Spec.CLI.NotificationEmailAddress != "ops-team@example.com" {
-		t.Errorf("expected CLI.NotificationEmailAddress=%q, got %q", "ops-team@example.com", p.Spec.CLI.NotificationEmailAddress)
+	if p.Spec.Notification.Email == nil || p.Spec.Notification.Email.Address != "ops-team@example.com" {
+		t.Errorf("expected email.Address=%q, got %+v", "ops-team@example.com", p.Spec.Notification.Email)
 	}
 }
 
@@ -1170,18 +1173,9 @@ spec:
 	if p.Spec.CLI == nil {
 		t.Fatal("expected Spec.CLI to be set, got nil")
 	}
-	// All four notify fields must be zero-valued when omitted
-	if p.Spec.CLI.NotifyOnPermission {
-		t.Error("expected CLI.NotifyOnPermission=false (zero) when omitted, got true")
-	}
-	if p.Spec.CLI.NotifyOnIdle {
-		t.Error("expected CLI.NotifyOnIdle=false (zero) when omitted, got true")
-	}
-	if p.Spec.CLI.NotifyCooldownSeconds != 0 {
-		t.Errorf("expected CLI.NotifyCooldownSeconds=0 when omitted, got %d", p.Spec.CLI.NotifyCooldownSeconds)
-	}
-	if p.Spec.CLI.NotificationEmailAddress != "" {
-		t.Errorf("expected CLI.NotificationEmailAddress=\"\" when omitted, got %q", p.Spec.CLI.NotificationEmailAddress)
+	// The notification block must be nil when omitted (backwards compat).
+	if p.Spec.Notification != nil {
+		t.Errorf("expected Spec.Notification=nil when omitted, got %+v", p.Spec.Notification)
 	}
 }
 
@@ -1232,23 +1226,25 @@ spec:
       destination: cloudwatch
     networkLog:
       destination: cloudwatch
-  cli:
-    notifyOnPermission: false
-    notifyOnIdle: false
+  notification:
+    events:
+      onPermission: false
+      onIdle: false
 `)
 
 	p, err := profile.Parse(yamlData)
 	if err != nil {
 		t.Fatalf("expected profile to parse, got: %v", err)
 	}
-	if p.Spec.CLI == nil {
-		t.Fatal("expected Spec.CLI to be set, got nil")
+	if p.Spec.Notification == nil || p.Spec.Notification.Events == nil {
+		t.Fatal("expected Spec.Notification.Events to be set, got nil")
 	}
-	if p.Spec.CLI.NotifyOnPermission != false {
-		t.Error("expected CLI.NotifyOnPermission=false (explicit), got true")
+	ev := p.Spec.Notification.Events
+	if ev.OnPermission == nil || *ev.OnPermission != false {
+		t.Error("expected events.OnPermission=&false (explicit), got non-false/nil")
 	}
-	if p.Spec.CLI.NotifyOnIdle != false {
-		t.Error("expected CLI.NotifyOnIdle=false (explicit), got true")
+	if ev.OnIdle == nil || *ev.OnIdle != false {
+		t.Error("expected events.OnIdle=&false (explicit), got non-false/nil")
 	}
 }
 
@@ -1301,78 +1297,123 @@ spec:
 ` + cliFields)
 }
 
+// minimalNotificationProfileYAML returns a valid profile YAML with the notification
+// section containing the given notificationFields (indented under spec.notification).
+// Phase 92 (Wave 2): companion to minimalCLIProfileYAML for the structured block.
+func minimalNotificationProfileYAML(notificationFields string) []byte {
+	return []byte(`apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: notification-fields-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+  iam:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: true
+      image: "km-tracing:latest"
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+  notification:
+` + notificationFields)
+}
+
 // TestParse_CLISpec_SlackFields_AllSet verifies that a YAML profile setting all five
-// Phase 63 Slack fields round-trips correctly through profile.Parse().
+// Slack fields round-trips correctly through profile.Parse().
+// Phase 92 (Wave 2): migrated to the notification.slack block.
 func TestParse_CLISpec_SlackFields_AllSet(t *testing.T) {
-	yamlData := minimalCLIProfileYAML(`    notifyEmailEnabled: false
-    notifySlackEnabled: true
-    notifySlackPerSandbox: true
-    notifySlackChannelOverride: "C0123ABC"
-    slackArchiveOnDestroy: false
+	yamlData := minimalNotificationProfileYAML(`    email:
+      enabled: false
+    slack:
+      enabled: true
+      perSandbox: true
+      channelOverride: "C0123ABC"
+      archiveOnDestroy: false
 `)
 
 	p, err := profile.Parse(yamlData)
 	if err != nil {
 		t.Fatalf("expected profile with all five Slack fields to parse, got: %v", err)
 	}
-	if p.Spec.CLI == nil {
-		t.Fatal("expected Spec.CLI to be set, got nil")
+	if p.Spec.Notification == nil || p.Spec.Notification.Slack == nil {
+		t.Fatal("expected Spec.Notification.Slack to be set, got nil")
 	}
-	cli := p.Spec.CLI
-	if cli.NotifyEmailEnabled == nil {
-		t.Fatal("expected NotifyEmailEnabled to be non-nil, got nil")
+	slack := p.Spec.Notification.Slack
+	if p.Spec.Notification.Email == nil || p.Spec.Notification.Email.Enabled == nil {
+		t.Fatal("expected email.enabled to be non-nil, got nil")
 	}
-	if *cli.NotifyEmailEnabled != false {
-		t.Errorf("expected *NotifyEmailEnabled=false, got %v", *cli.NotifyEmailEnabled)
+	if *p.Spec.Notification.Email.Enabled != false {
+		t.Errorf("expected *email.enabled=false, got %v", *p.Spec.Notification.Email.Enabled)
 	}
-	if cli.NotifySlackEnabled == nil {
-		t.Fatal("expected NotifySlackEnabled to be non-nil, got nil")
+	if slack.Enabled == nil {
+		t.Fatal("expected slack.enabled to be non-nil, got nil")
 	}
-	if *cli.NotifySlackEnabled != true {
-		t.Errorf("expected *NotifySlackEnabled=true, got %v", *cli.NotifySlackEnabled)
+	if *slack.Enabled != true {
+		t.Errorf("expected *slack.enabled=true, got %v", *slack.Enabled)
 	}
-	if !cli.NotifySlackPerSandbox {
-		t.Error("expected NotifySlackPerSandbox=true, got false")
+	if slack.PerSandbox == nil || !*slack.PerSandbox {
+		t.Error("expected slack.perSandbox=true, got false/nil")
 	}
-	if cli.NotifySlackChannelOverride != "C0123ABC" {
-		t.Errorf("expected NotifySlackChannelOverride=%q, got %q", "C0123ABC", cli.NotifySlackChannelOverride)
+	if slack.ChannelOverride != "C0123ABC" {
+		t.Errorf("expected slack.channelOverride=%q, got %q", "C0123ABC", slack.ChannelOverride)
 	}
-	if cli.SlackArchiveOnDestroy == nil {
-		t.Fatal("expected SlackArchiveOnDestroy to be non-nil, got nil")
+	if slack.ArchiveOnDestroy == nil {
+		t.Fatal("expected slack.archiveOnDestroy to be non-nil, got nil")
 	}
-	if *cli.SlackArchiveOnDestroy != false {
-		t.Errorf("expected *SlackArchiveOnDestroy=false, got %v", *cli.SlackArchiveOnDestroy)
+	if *slack.ArchiveOnDestroy != false {
+		t.Errorf("expected *slack.archiveOnDestroy=false, got %v", *slack.ArchiveOnDestroy)
 	}
 }
 
 // TestParse_CLISpec_SlackFields_OmittedNilPointers verifies that a YAML profile with
-// no Slack fields parses cleanly with nil pointers (Phase 62 backward compat).
+// no Slack block parses cleanly with nil pointers (Phase 62 backward compat).
 func TestParse_CLISpec_SlackFields_OmittedNilPointers(t *testing.T) {
-	yamlData := minimalCLIProfileYAML(`    notifyOnPermission: true
+	yamlData := minimalNotificationProfileYAML(`    events:
+      onPermission: true
 `)
 
 	p, err := profile.Parse(yamlData)
 	if err != nil {
 		t.Fatalf("expected Phase 62 profile to parse cleanly, got: %v", err)
 	}
-	if p.Spec.CLI == nil {
-		t.Fatal("expected Spec.CLI to be set, got nil")
+	if p.Spec.Notification == nil {
+		t.Fatal("expected Spec.Notification to be set, got nil")
 	}
-	cli := p.Spec.CLI
-	if cli.NotifyEmailEnabled != nil {
-		t.Errorf("expected NotifyEmailEnabled=nil (unset), got %v", *cli.NotifyEmailEnabled)
+	if p.Spec.Notification.Slack != nil {
+		t.Errorf("expected notification.slack=nil (unset), got %+v", p.Spec.Notification.Slack)
 	}
-	if cli.NotifySlackEnabled != nil {
-		t.Errorf("expected NotifySlackEnabled=nil (unset), got %v", *cli.NotifySlackEnabled)
-	}
-	if cli.SlackArchiveOnDestroy != nil {
-		t.Errorf("expected SlackArchiveOnDestroy=nil (unset), got %v", *cli.SlackArchiveOnDestroy)
-	}
-	if cli.NotifySlackPerSandbox {
-		t.Error("expected NotifySlackPerSandbox=false (zero), got true")
-	}
-	if cli.NotifySlackChannelOverride != "" {
-		t.Errorf("expected NotifySlackChannelOverride=%q (empty), got %q", "", cli.NotifySlackChannelOverride)
+	if p.Spec.Notification.Email != nil {
+		t.Errorf("expected notification.email=nil (unset), got %+v", p.Spec.Notification.Email)
 	}
 }
 
@@ -1383,25 +1424,26 @@ func TestParse_CLISpec_SlackFields_OmittedNilPointers(t *testing.T) {
 // Note: boolPtr is defined in validate_test.go (same package) — reuse it here.
 
 // TestVSCodeEnabled_DefaultTrue asserts that IsVSCodeEnabled returns true for
-// nil CLISpec, empty CLISpec, and CLISpec{VSCodeEnabled: &true}.
+// nil RuntimeVSCodeSpec, empty RuntimeVSCodeSpec, and {Enabled: &true}.
+// Phase 92 (Wave 2): the gate moved from cli.vscodeEnabled to runtime.vscode.enabled.
 func TestVSCodeEnabled_DefaultTrue(t *testing.T) {
 	if !profile.IsVSCodeEnabled(nil) {
-		t.Fatal("nil cli should return true")
+		t.Fatal("nil vscode should return true")
 	}
-	if !profile.IsVSCodeEnabled(&profile.CLISpec{}) {
-		t.Fatal("empty CLISpec should return true")
+	if !profile.IsVSCodeEnabled(&profile.RuntimeVSCodeSpec{}) {
+		t.Fatal("empty RuntimeVSCodeSpec should return true")
 	}
 	tru := true
-	if !profile.IsVSCodeEnabled(&profile.CLISpec{VSCodeEnabled: &tru}) {
+	if !profile.IsVSCodeEnabled(&profile.RuntimeVSCodeSpec{Enabled: &tru}) {
 		t.Fatal("&true should return true")
 	}
 }
 
 // TestVSCodeEnabled_False asserts that IsVSCodeEnabled returns false when
-// CLISpec.VSCodeEnabled is explicitly set to &false.
+// RuntimeVSCodeSpec.Enabled is explicitly set to &false.
 func TestVSCodeEnabled_False(t *testing.T) {
 	fls := false
-	if profile.IsVSCodeEnabled(&profile.CLISpec{VSCodeEnabled: &fls}) {
+	if profile.IsVSCodeEnabled(&profile.RuntimeVSCodeSpec{Enabled: &fls}) {
 		t.Fatal("&false should return false")
 	}
 }
@@ -1855,28 +1897,29 @@ func TestCLISpec_Agent_AbsenceIsClaudeDefault(t *testing.T) {
 // *bool Slack fields round-trips as non-nil pointer to false (not nil).
 // This is the key bool-vs-*bool discrimination test.
 func TestParse_CLISpec_SlackFields_ExplicitFalse(t *testing.T) {
-	yamlData := minimalCLIProfileYAML(`    notifyEmailEnabled: false
-    notifySlackEnabled: false
+	yamlData := minimalNotificationProfileYAML(`    email:
+      enabled: false
+    slack:
+      enabled: false
 `)
 
 	p, err := profile.Parse(yamlData)
 	if err != nil {
 		t.Fatalf("expected profile with explicit false Slack booleans to parse, got: %v", err)
 	}
-	if p.Spec.CLI == nil {
-		t.Fatal("expected Spec.CLI to be set, got nil")
+	if p.Spec.Notification == nil || p.Spec.Notification.Email == nil || p.Spec.Notification.Slack == nil {
+		t.Fatal("expected Spec.Notification.Email and .Slack to be set, got nil")
 	}
-	cli := p.Spec.CLI
-	if cli.NotifyEmailEnabled == nil {
-		t.Fatal("expected NotifyEmailEnabled to be non-nil (explicit false), got nil")
+	if p.Spec.Notification.Email.Enabled == nil {
+		t.Fatal("expected email.enabled to be non-nil (explicit false), got nil")
 	}
-	if *cli.NotifyEmailEnabled != false {
-		t.Errorf("expected *NotifyEmailEnabled=false, got %v", *cli.NotifyEmailEnabled)
+	if *p.Spec.Notification.Email.Enabled != false {
+		t.Errorf("expected *email.enabled=false, got %v", *p.Spec.Notification.Email.Enabled)
 	}
-	if cli.NotifySlackEnabled == nil {
-		t.Fatal("expected NotifySlackEnabled to be non-nil (explicit false), got nil")
+	if p.Spec.Notification.Slack.Enabled == nil {
+		t.Fatal("expected slack.enabled to be non-nil (explicit false), got nil")
 	}
-	if *cli.NotifySlackEnabled != false {
-		t.Errorf("expected *NotifySlackEnabled=false, got %v", *cli.NotifySlackEnabled)
+	if *p.Spec.Notification.Slack.Enabled != false {
+		t.Errorf("expected *slack.enabled=false, got %v", *p.Spec.Notification.Slack.Enabled)
 	}
 }
