@@ -1267,3 +1267,61 @@ func TestEventsHandler_ReactAlways(t *testing.T) {
 		})
 	}
 }
+
+// TestEventsHandler_ReactAlways_PerSandboxOverride — Phase 91.5. When the
+// channel-lookup returns SandboxRoutingInfo with ReactAlways non-nil, the
+// per-sandbox value wins over the install-level h.ReactAlways. Truth table:
+//   h.ReactAlways × info.ReactAlways × msg.ThreadTS → reaction posted?
+func TestEventsHandler_ReactAlways_PerSandboxOverride(t *testing.T) {
+	now := time.Now()
+	boolPtr := func(b bool) *bool { return &b }
+
+	tests := []struct {
+		name        string
+		installRA   bool   // h.ReactAlways
+		perSbRA     *bool  // info.ReactAlways
+		threadTS    string
+		wantReact   bool
+	}{
+		{"install=true, per-sb nil, thread → reacts (install wins)", true, nil, "1.0", true},
+		{"install=false, per-sb nil, thread → silent (install wins)", false, nil, "1.0", false},
+		{"install=true, per-sb=&false, thread → silent (per-sb overrides)", true, boolPtr(false), "1.0", false},
+		{"install=false, per-sb=&true, thread → reacts (per-sb overrides)", false, boolPtr(true), "1.0", true},
+		{"install=true, per-sb=&false, top-level → reacts (engagement always)", true, boolPtr(false), "", true},
+		{"install=false, per-sb=&true, top-level → reacts (engagement)", false, boolPtr(true), "", true},
+	}
+
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _, threads, _, sandboxes, _, reactor := newHandler(now)
+			h.ReactAlways = tc.installRA
+			h.MentionOnly = false
+			sandboxes.info.ReactAlways = tc.perSbRA
+			if tc.threadTS != "" {
+				threads.sandboxByThread = map[string]string{"C1|" + tc.threadTS: "sb-abc"}
+			}
+
+			body := fmt.Sprintf(
+				`{"type":"event_callback","event_id":%q,"event":{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"%d.0","thread_ts":%q}}`,
+				fmt.Sprintf("EPS-%d", i), 700+i, tc.threadTS,
+			)
+			tsHdr, sigHdr := signSlackPayload(t, body, now)
+			resp := h.Handle(context.Background(), EventsRequest{
+				Headers: map[string]string{
+					"x-slack-request-timestamp": tsHdr,
+					"x-slack-signature":         sigHdr,
+				},
+				Body: body,
+			})
+			if resp.StatusCode != 200 {
+				t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, resp.Body)
+			}
+			if tc.wantReact && len(reactor.calls) != 1 {
+				t.Errorf("expected 1 reaction, got %d", len(reactor.calls))
+			}
+			if !tc.wantReact && len(reactor.calls) != 0 {
+				t.Errorf("expected no reaction, got %d", len(reactor.calls))
+			}
+		})
+	}
+}

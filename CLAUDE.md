@@ -319,6 +319,13 @@ channels. The effective behaviour is determined by the channel mode + optional p
   top-level engagement messages — thread replies dispatch silently. Profile field
   `cli.notifySlackInboundReactAlways *bool` shipped for forward-compat with future
   per-sandbox routing; runtime behaviour today is install-level.
+- **Phase 91.5 (km v0.3.776+):** per-sandbox `notifySlackInboundReactAlways` override.
+  When the profile sets the field explicitly, `km create` writes `slack_react_always`
+  to the sandbox's `km-sandboxes` row; the bridge's `FetchByChannel` reads it and the
+  per-sandbox value wins over the install-level default at step 10. Profile field is
+  now first-class — set it on individual profiles to deviate from `slack.react_always`.
+  Top-level engagement messages still always 👀-react regardless (the signal can't be
+  silenced).
 
 **Why `km init` and not `km init --sidecars`:** the bridge Lambda's `environment.variables`
 block is owned by the `lambda-slack-bridge` Terraform module, which only updates on full

@@ -986,6 +986,25 @@ func (f *DDBSandboxByChannel) FetchByChannel(ctx context.Context, channelID stri
 	if v, ok := item["state"].(*dynamodbtypes.AttributeValueMemberS); ok {
 		info.Paused = v.Value == "paused" || v.Value == "stopped"
 	}
+	// Phase 91.5: per-sandbox react_always override. Attribute is written by
+	// create_slack_inbound.go only when the profile sets cli.notifySlackInboundReactAlways
+	// explicitly, so absence here is meaningful: leave info.ReactAlways as nil
+	// and the handler falls back to the install-level default.
+	if v, ok := item["slack_react_always"].(*dynamodbtypes.AttributeValueMemberBOOL); ok {
+		b := v.Value
+		info.ReactAlways = &b
+	} else if v, ok := item["slack_react_always"].(*dynamodbtypes.AttributeValueMemberS); ok {
+		// Tolerate string-typed write (UpdateSandboxAttr writes strings today;
+		// future direct PutItem could use BOOL).
+		switch v.Value {
+		case "true":
+			t := true
+			info.ReactAlways = &t
+		case "false":
+			f := false
+			info.ReactAlways = &f
+		}
+	}
 	return info, nil
 }
 

@@ -329,3 +329,44 @@ func TestCreate_SlackInboundReadyAnnouncement_PostFailureNonFatal(t *testing.T) 
 		t.Fatalf("post failure must not bubble up: got %v", err)
 	}
 }
+
+// TestCreate_SlackInboundReactAlwaysOverride — Phase 91.5. When the profile
+// sets cli.NotifySlackInboundReactAlways explicitly, provisionSlackInboundQueue
+// MUST write slack_react_always="true"|"false" to the km-sandboxes row. When
+// the field is nil (omitted), the attribute MUST NOT be written so the bridge
+// falls back to the install-level KM_SLACK_REACT_ALWAYS default.
+func TestCreate_SlackInboundReactAlwaysOverride(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+	tests := []struct {
+		name      string
+		reactAlw  *bool
+		wantAttr  bool   // true = expect write
+		wantValue string // when wantAttr=true
+	}{
+		{"nil → no write (install default applies)", nil, false, ""},
+		{"&true → writes slack_react_always=true", boolPtr(true), true, "true"},
+		{"&false → writes slack_react_always=false", boolPtr(false), true, "false"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := &fakeSQS{}
+			deps, state := makeDeps(t, true, fs, nil, nil)
+			deps.Profile.Spec.CLI.NotifySlackInboundReactAlways = tc.reactAlw
+
+			if _, err := provisionSlackInboundQueue(context.Background(), deps); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			got, present := state.ddbAttrs["slack_react_always"]
+			if tc.wantAttr && !present {
+				t.Fatalf("expected slack_react_always write; attrs=%v", state.ddbAttrs)
+			}
+			if !tc.wantAttr && present {
+				t.Fatalf("expected NO slack_react_always write (install default); got %q", got)
+			}
+			if tc.wantAttr && got != tc.wantValue {
+				t.Errorf("slack_react_always: got %q want %q", got, tc.wantValue)
+			}
+		})
+	}
+}

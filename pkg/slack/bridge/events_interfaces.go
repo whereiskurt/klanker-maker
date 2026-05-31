@@ -39,6 +39,13 @@ type SandboxRoutingInfo struct {
 	SandboxID string
 	QueueURL  string // empty when notifySlackInboundEnabled was false
 	Paused    bool   // from km-sandboxes.state == "paused"
+	// Phase 91.5: per-sandbox override of the install-level KM_SLACK_REACT_ALWAYS.
+	// Tri-state via *bool — written by create_slack_inbound.go from the profile's
+	// cli.notifySlackInboundReactAlways field only when explicitly set, so:
+	//   nil    → row has no slack_react_always attribute → use install default
+	//   &true  → react on every dispatch for this sandbox
+	//   &false → react only on top-level engagement messages for this sandbox
+	ReactAlways *bool
 }
 
 // SigningSecretFetcher returns the Slack signing secret used for HMAC

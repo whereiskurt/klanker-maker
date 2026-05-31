@@ -122,6 +122,29 @@ func provisionSlackInboundQueue(ctx context.Context, deps slackInboundDeps) (que
 		return "", fmt.Errorf("persist slack_inbound_queue_url to DDB: %w", updateErr)
 	}
 
+	// Phase 91.5: per-sandbox react_always override. Only write the attribute
+	// when the profile explicitly sets cli.notifySlackInboundReactAlways —
+	// absent attribute on the DDB row signals "fall back to install-level
+	// KM_SLACK_REACT_ALWAYS" to the bridge. Stored as a string ("true"/"false")
+	// to match the existing UpdateSandboxAttr signature; the bridge tolerates
+	// both string and BOOL DDB types.
+	//
+	// Non-fatal: if this write fails the sandbox still works (install-level
+	// default applies). Log a warning and continue.
+	if cli.NotifySlackInboundReactAlways != nil {
+		v := "false"
+		if *cli.NotifySlackInboundReactAlways {
+			v = "true"
+		}
+		if updateErr := deps.UpdateSandboxAttr(ctx, deps.SandboxID, "slack_react_always", v); updateErr != nil {
+			log.Warn().Err(updateErr).Str("sandbox_id", deps.SandboxID).Str("value", v).
+				Msg("persist slack_react_always per-sandbox override failed; sandbox will use install-level default")
+		} else {
+			log.Info().Str("sandbox_id", deps.SandboxID).Str("value", v).
+				Msg("Slack: persisted per-sandbox react_always override")
+		}
+	}
+
 	// Publish queue URL to SSM Parameter Store. The sandbox poller reads
 	// /sandbox/{id}/slack-inbound-queue-url at startup with a retry/backoff
 	// fallback when KM_SLACK_INBOUND_QUEUE_URL is empty. SSM SendCommand is

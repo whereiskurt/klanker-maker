@@ -781,6 +781,84 @@ func TestDDBSandboxByChannel_Found_Paused(t *testing.T) {
 	}
 }
 
+// TestDDBSandboxByChannel_ReactAlways_Override — Phase 91.5. The
+// slack_react_always attribute on the km-sandboxes row populates
+// SandboxRoutingInfo.ReactAlways as a tri-state *bool. Tolerates both BOOL
+// and S (string) DDB types — the create-side writes S today via the
+// UpdateSandboxAttr interface; future direct PutItem writes could use BOOL.
+func TestDDBSandboxByChannel_ReactAlways_Override(t *testing.T) {
+	tests := []struct {
+		name      string
+		item      map[string]dynamodbtypes.AttributeValue
+		wantNil   bool
+		wantValue bool
+	}{
+		{
+			name: "attribute absent → ReactAlways nil (install default applies)",
+			item: map[string]dynamodbtypes.AttributeValue{
+				"sandbox_id":              &dynamodbtypes.AttributeValueMemberS{Value: "sb-A"},
+				"slack_inbound_queue_url": &dynamodbtypes.AttributeValueMemberS{Value: "https://sqs"},
+			},
+			wantNil: true,
+		},
+		{
+			name: "S 'true' → &true",
+			item: map[string]dynamodbtypes.AttributeValue{
+				"sandbox_id":              &dynamodbtypes.AttributeValueMemberS{Value: "sb-B"},
+				"slack_inbound_queue_url": &dynamodbtypes.AttributeValueMemberS{Value: "https://sqs"},
+				"slack_react_always":      &dynamodbtypes.AttributeValueMemberS{Value: "true"},
+			},
+			wantNil:   false,
+			wantValue: true,
+		},
+		{
+			name: "S 'false' → &false",
+			item: map[string]dynamodbtypes.AttributeValue{
+				"sandbox_id":              &dynamodbtypes.AttributeValueMemberS{Value: "sb-C"},
+				"slack_inbound_queue_url": &dynamodbtypes.AttributeValueMemberS{Value: "https://sqs"},
+				"slack_react_always":      &dynamodbtypes.AttributeValueMemberS{Value: "false"},
+			},
+			wantNil:   false,
+			wantValue: false,
+		},
+		{
+			name: "BOOL true → &true (forward-compat with future writers)",
+			item: map[string]dynamodbtypes.AttributeValue{
+				"sandbox_id":              &dynamodbtypes.AttributeValueMemberS{Value: "sb-D"},
+				"slack_inbound_queue_url": &dynamodbtypes.AttributeValueMemberS{Value: "https://sqs"},
+				"slack_react_always":      &dynamodbtypes.AttributeValueMemberBOOL{Value: true},
+			},
+			wantNil:   false,
+			wantValue: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := &mockDDBQueryGetPut{
+				query: func(ctx context.Context, in *dynamodb.QueryInput, opts ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+					return &dynamodb.QueryOutput{Items: []map[string]dynamodbtypes.AttributeValue{tc.item}}, nil
+				},
+			}
+			f := &bridge.DDBSandboxByChannel{Client: mock, TableName: "km-sandboxes", IndexName: "slack_channel_id-index"}
+			info, err := f.FetchByChannel(context.Background(), "C1")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.wantNil && info.ReactAlways != nil {
+				t.Fatalf("expected nil, got &%v", *info.ReactAlways)
+			}
+			if !tc.wantNil {
+				if info.ReactAlways == nil {
+					t.Fatalf("expected non-nil")
+				}
+				if *info.ReactAlways != tc.wantValue {
+					t.Errorf("got %v want %v", *info.ReactAlways, tc.wantValue)
+				}
+			}
+		})
+	}
+}
+
 // ============================================================
 // SSMSigningSecretFetcher tests
 // ============================================================

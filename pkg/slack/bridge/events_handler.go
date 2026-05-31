@@ -367,15 +367,23 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	//     past Slack's 3s ack window, Slack re-fires the event and the event_id
 	//     dedup in step 5 absorbs the retry. already_reacted is success.
 	if h.Reactor != nil {
-		// Phase 91.4: first-only-react. When ReactAlways=false AND the message
-		// is a thread reply, skip the reaction. The bot is already engaged in
-		// this thread (else it wouldn't have passed step 4b mention-only +
-		// 91.3 bypass), so a second 👀 adds noise without signal. Top-level
-		// engagement messages (msg.ThreadTS == "") still react regardless of
-		// ReactAlways — that's the user's signal that the bot saw them.
-		if !h.ReactAlways && msg.ThreadTS != "" {
+		// Phase 91.4: install-level first-only-react. ReactAlways=false +
+		// thread-reply → silent. Top-level always reacts (engagement signal).
+		//
+		// Phase 91.5: per-sandbox override. SandboxRoutingInfo.ReactAlways
+		// (tri-state *bool) wins over the install-level h.ReactAlways when
+		// non-nil. Source: km-sandboxes.slack_react_always attribute, written
+		// at sandbox-create time from the profile's
+		// cli.notifySlackInboundReactAlways field. Absent attribute leaves
+		// info.ReactAlways nil → install default applies.
+		effectiveReactAlways := h.ReactAlways
+		if info.ReactAlways != nil {
+			effectiveReactAlways = *info.ReactAlways
+		}
+		if !effectiveReactAlways && msg.ThreadTS != "" {
 			h.log().Debug("events: reaction skipped (react-always=false, thread reply)",
-				"channel", msg.Channel, "ts", msg.TS, "thread_ts", msg.ThreadTS)
+				"channel", msg.Channel, "ts", msg.TS, "thread_ts", msg.ThreadTS,
+				"sandbox", info.SandboxID, "per_sandbox_override", info.ReactAlways != nil)
 		} else {
 			emoji := h.AckEmoji
 			if emoji == "" {
