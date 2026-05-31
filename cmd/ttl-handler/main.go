@@ -333,9 +333,12 @@ func (h *TTLHandler) handleStop(ctx context.Context, event TTLEvent) error {
 		if hibernate {
 			status = "paused"
 		}
-		// Record pause start in budget table so paused intervals are excluded from cost.
-		// EC2 substrate only (handleStop is EC2-only by construction). Non-fatal.
-		if status == "paused" && h.BudgetClient != nil && h.BudgetTable != "" {
+		// Record pause start in budget table so the stopped interval is excluded
+		// from compute cost. Fires for both "stopped" and "paused" — AWS charges
+		// $0 compute in both cases, so the budget enforcer must not tick wall-clock
+		// against either. EC2 substrate only (handleStop is EC2-only by
+		// construction). Non-fatal.
+		if h.BudgetClient != nil && h.BudgetTable != "" {
 			if err := awspkg.RecordPauseStart(ctx, h.BudgetClient, h.BudgetTable, event.SandboxID, time.Now().UTC()); err != nil {
 				log.Warn().Err(err).Str("sandbox_id", event.SandboxID).Msg("failed to record pause start in budget table (non-fatal)")
 			}

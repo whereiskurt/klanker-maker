@@ -11,6 +11,31 @@ import (
 	"github.com/whereiskurt/klanker-maker/internal/app/config"
 )
 
+// TestStopRecordsTimestamp verifies that km stop's new pause-record wiring
+// (Phase 60.1) writes BUDGET#compute pausedAt the same way km pause does.
+// The full runStop function constructs AWS clients internally and cannot be
+// unit-tested without deep DI surgery — this test exercises the same exported
+// RecordPauseForEC2 helper that runStop now calls after StopInstances succeeds.
+// Companion to TestPauseRecordsTimestamp in pause_test.go.
+func TestStopRecordsTimestamp(t *testing.T) {
+	fake := newFakeBudgetClient(0, 0, 0)
+	ctx := context.Background()
+	err := cmd.RecordPauseForEC2(ctx, fake, "km-budgets", "sb-stop1234")
+	if err != nil {
+		t.Fatalf("RecordPauseForEC2 returned error: %v", err)
+	}
+	if len(fake.updateItemCalls) != 1 {
+		t.Fatalf("expected 1 UpdateItem call, got %d", len(fake.updateItemCalls))
+	}
+	expr := fake.updateItemCalls[0]
+	if !strings.Contains(expr, "pausedAt") {
+		t.Errorf("UpdateExpression should reference pausedAt, got: %q", expr)
+	}
+	if !strings.Contains(expr, "if_not_exists") {
+		t.Errorf("UpdateExpression should use if_not_exists for idempotency, got: %q", expr)
+	}
+}
+
 // ---- Fake EventBridge publisher ----
 
 type fakePublisher struct {

@@ -114,6 +114,11 @@ func runStop(ctx context.Context, cfg *config.Config, sandboxID string) error {
 		// If metadata not found or substrate is not docker, proceed with EC2 path.
 	}
 
+	budgetTable := cfg.GetResourcePrefix() + "-budgets"
+	if cfg.BudgetTableName != "" {
+		budgetTable = cfg.BudgetTableName
+	}
+
 	ec2Client := ec2.NewFromConfig(awsCfg)
 
 	descOut, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
@@ -143,6 +148,12 @@ func runStop(ctx context.Context, cfg *config.Config, sandboxID string) error {
 	if stopped == 0 {
 		return fmt.Errorf("no running instances found for sandbox %s", sandboxID)
 	}
+
+	// Record pause start so the budget enforcer subtracts the stopped window from
+	// compute cost. Stopped EC2 incurs $0 AWS compute, so without this the
+	// enforcer keeps ticking wall-clock spend until the next resume or destroy.
+	// Non-fatal.
+	RecordPauseForEC2(ctx, dynamoClient, budgetTable, sandboxID)
 
 	// Update metadata status to "stopped" and clear ttl_expiry so DynamoDB's native TTL
 	// doesn't auto-delete the record while the sandbox is stopped.
