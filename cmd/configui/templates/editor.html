@@ -66,7 +66,7 @@ let parentEditor = null;
 let validateDebounceTimer = null;
 
 const DEBOUNCE_MS = 500;
-const NEW_PROFILE_TEMPLATE = `apiVersion: {{.Domain}}/v1alpha1
+const NEW_PROFILE_TEMPLATE = `apiVersion: {{.Domain}}/v1alpha2
 kind: SandboxProfile
 metadata:
   name: new-profile
@@ -97,11 +97,10 @@ spec:
       allowedHosts: []
       allowedMethods:
         - GET
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -131,11 +130,6 @@ spec:
       writablePaths:
         - /workspace
         - /tmp
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "30m"
-    allowedTools:
-      - bash
 `;
 
 // ─── Initialize Monaco ────────────────────────────────────────────────────────

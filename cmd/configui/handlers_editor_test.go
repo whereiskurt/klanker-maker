@@ -20,7 +20,7 @@ func newEditorTestHandler(t *testing.T) (*Handler, string) {
 	dir := t.TempDir()
 
 	// Write sample profiles into temp dir
-	validYAML := `apiVersion: klankermaker.ai/v1alpha1
+	validYAML := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: test-profile
@@ -36,7 +36,7 @@ spec:
     region: us-east-1
 `
 	profileWithExtends := `extends: open-dev.yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: child-profile
@@ -71,7 +71,7 @@ func TestHandleValidate_ValidYAML(t *testing.T) {
 	h, _ := newEditorTestHandler(t)
 
 	// Full valid profile with all required spec fields.
-	validYAML := `apiVersion: klankermaker.ai/v1alpha1
+	validYAML := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: test
@@ -103,11 +103,10 @@ spec:
         - ".amazonaws.com"
       allowedHosts:
         - "api.github.com"
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:
       enabled: true
@@ -128,11 +127,6 @@ spec:
     networkLog:
       destination: cloudwatch
       logGroup: /km/network
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "30m"
-    allowedTools:
-      - bash
 `
 	req := httptest.NewRequest(http.MethodPost, "/api/validate", strings.NewReader(validYAML))
 	w := httptest.NewRecorder()
@@ -156,7 +150,7 @@ spec:
 func TestHandleValidate_InvalidYAML(t *testing.T) {
 	h, _ := newEditorTestHandler(t)
 
-	invalidYAML := `apiVersion: klankermaker.ai/v1alpha1
+	invalidYAML := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: test
@@ -294,7 +288,7 @@ func TestHandleProfileGet_NotFound(t *testing.T) {
 func TestHandleProfileSave_WritesFile(t *testing.T) {
 	h, dir := newEditorTestHandler(t)
 
-	newContent := `apiVersion: klankermaker.ai/v1alpha1
+	newContent := `apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: new-profile

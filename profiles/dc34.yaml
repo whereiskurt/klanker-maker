@@ -1,4 +1,4 @@
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: dc34
@@ -125,11 +125,10 @@ spec:
       - /workspace
     maxSizeMB: 500
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
 
   sidecars:
     dnsProxy:
@@ -171,15 +170,6 @@ spec:
       - "self"
       - "whereiskurt@gmail.com"
       - "kurt.hundeck@*"
-
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: "30m"
-    allowedTools:
-      - bash
-      - read_file
-      - write_file
-      - list_files
 
   cli:
     noBedrock: true

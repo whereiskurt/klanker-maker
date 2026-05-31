@@ -1,4 +1,4 @@
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: codex
@@ -90,11 +90,10 @@ spec:
       - /workspace
     maxSizeMB: 1000
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
 
   sidecars:
     dnsProxy:
@@ -129,15 +128,6 @@ spec:
     encryption: required
     allowedSenders:
       - "self"
-
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: "60m"
-    allowedTools:
-      - bash
-      - read_file
-      - write_file
-      - list_files
 
   secrets:
     sopsFile: ./secrets/codex.enc.yaml
