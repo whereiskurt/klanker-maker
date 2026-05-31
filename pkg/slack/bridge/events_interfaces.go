@@ -18,6 +18,13 @@ type SlackThreadStore interface {
 	// (attribute_not_exists condition). Idempotent on replay; never overwrites
 	// claude_session_id once set by the poller.
 	Upsert(ctx context.Context, channelID, threadTS, sandboxID string) error
+	// LookupSandbox returns the sandbox_id for (channel, thread_ts), empty
+	// string if no row exists. Phase 91.3: used by the events handler to
+	// bypass the mention-only filter on replies in threads the bot is already
+	// engaged with — sandbox_id is set at Upsert time (before the poller sets
+	// claude_session_id), so this signal fires as soon as the bot's first
+	// mention-triggered dispatch enqueues, not after the poller responds.
+	LookupSandbox(ctx context.Context, channelID, threadTS string) (sandboxID string, err error)
 }
 
 // SandboxByChannelFetcher resolves a Slack channel_id to sandbox routing info

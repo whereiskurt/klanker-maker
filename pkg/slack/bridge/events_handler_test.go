@@ -136,12 +136,21 @@ func (f *fakeSandboxes) FetchByChannel(ctx context.Context, ch string) (SandboxR
 type fakeThreads struct {
 	upserts []struct{ chan_, ts, sb string }
 	err     error
+	// Phase 91.3: simulate existing thread rows for LookupSandbox.
+	// Key: ch+"|"+ts → sandbox_id. Empty value = row not found.
+	sandboxByThread map[string]string
 }
 
 func (f *fakeThreads) Get(ctx context.Context, ch, ts string) (string, error) { return "", nil }
 func (f *fakeThreads) Upsert(ctx context.Context, ch, ts, sb string) error {
 	f.upserts = append(f.upserts, struct{ chan_, ts, sb string }{ch, ts, sb})
 	return f.err
+}
+func (f *fakeThreads) LookupSandbox(ctx context.Context, ch, ts string) (string, error) {
+	if f.sandboxByThread == nil {
+		return "", nil
+	}
+	return f.sandboxByThread[ch+"|"+ts], nil
 }
 
 type fakeSQS struct {
@@ -1093,6 +1102,90 @@ func TestEventsHandler_MentionOnly(t *testing.T) {
 				if len(sqs.sends) != 1 {
 					t.Errorf("expected 1 SQS send when dispatched, got %d", len(sqs.sends))
 				}
+			}
+		})
+	}
+}
+
+// TestEventsHandler_MentionOnly_ThreadBypass verifies the Phase 91.3 thread-bypass.
+// When MentionOnly=true and the message is a reply in a thread the bot already
+// owns (sandbox_id row exists in km-slack-threads), the mention requirement is
+// skipped. Top-level messages and replies in unknown threads still require mention.
+func TestEventsHandler_MentionOnly_ThreadBypass(t *testing.T) {
+	now := time.Now()
+
+	tests := []struct {
+		name         string
+		threadTS     string            // empty = top-level; non-empty = reply
+		sandboxByT   map[string]string // existing thread rows keyed by ch|ts
+		messageText  string
+		wantSkipped  bool
+		wantDispatch bool
+	}{
+		{
+			name:         "engaged thread, no mention → dispatched (bypass)",
+			threadTS:     "1.0",
+			sandboxByT:   map[string]string{"C1|1.0": "sb-abc"},
+			messageText:  "what about edge cases?",
+			wantDispatch: true,
+		},
+		{
+			name:         "engaged thread, with mention → dispatched (bypass + match)",
+			threadTS:     "1.0",
+			sandboxByT:   map[string]string{"C1|1.0": "sb-abc"},
+			messageText:  "<@UBOT123> what about edge cases?",
+			wantDispatch: true,
+		},
+		{
+			name:        "thread reply but no row, no mention → skipped (no bypass)",
+			threadTS:    "2.0",
+			sandboxByT:  map[string]string{}, // no row for C1|2.0
+			messageText: "hi",
+			wantSkipped: true,
+		},
+		{
+			name:         "top-level, no mention → skipped (bypass never applies)",
+			threadTS:     "", // top-level
+			sandboxByT:   map[string]string{"C1|3.0": "sb-abc"},
+			messageText:  "hi",
+			wantSkipped:  true,
+		},
+		{
+			name:         "top-level, with mention → dispatched (normal mention scan)",
+			threadTS:     "",
+			messageText:  "<@UBOT123> kick off a turn",
+			wantDispatch: true,
+		},
+	}
+
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, sqs, threads, _, _, _, _ := newHandler(now)
+			h.BotUserID = &fakeBotUserID{uid: "UBOT123"}
+			h.MentionOnly = true
+			threads.sandboxByThread = tc.sandboxByT
+
+			body := fmt.Sprintf(
+				`{"type":"event_callback","event_id":%q,"event":{"type":"message","channel":"C1","user":"U1","text":%q,"ts":"%d.0","thread_ts":%q}}`,
+				fmt.Sprintf("ETB-%d", i), tc.messageText, 100+i, tc.threadTS,
+			)
+			tsHdr, sigHdr := signSlackPayload(t, body, now)
+			resp := h.Handle(context.Background(), EventsRequest{
+				Headers: map[string]string{
+					"x-slack-request-timestamp": tsHdr,
+					"x-slack-signature":         sigHdr,
+				},
+				Body: body,
+			})
+			if resp.StatusCode != 200 {
+				t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, resp.Body)
+			}
+
+			if tc.wantSkipped && len(sqs.sends) != 0 {
+				t.Errorf("expected skip but got %d sends", len(sqs.sends))
+			}
+			if tc.wantDispatch && len(sqs.sends) != 1 {
+				t.Errorf("expected dispatch but got %d sends", len(sqs.sends))
 			}
 		})
 	}

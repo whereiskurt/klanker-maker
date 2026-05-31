@@ -886,6 +886,31 @@ func (s *DDBThreadStore) Get(ctx context.Context, channelID, threadTS string) (s
 	return "", nil
 }
 
+// LookupSandbox returns the sandbox_id for (channelID, threadTS), or "" if no
+// row exists. Phase 91.3: distinct from Get because Get returns
+// claude_session_id (which the poller sets later) — sandbox_id is set by
+// Upsert at dispatch time, so this returns non-empty as soon as the first
+// mention-triggered dispatch enqueues, enabling the events handler to bypass
+// the mention-only filter on subsequent replies in the same thread.
+func (s *DDBThreadStore) LookupSandbox(ctx context.Context, channelID, threadTS string) (string, error) {
+	out, err := s.Client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: awssdk.String(s.TableName),
+		Key: map[string]dynamodbtypes.AttributeValue{
+			"channel_id": &dynamodbtypes.AttributeValueMemberS{Value: channelID},
+			"thread_ts":  &dynamodbtypes.AttributeValueMemberS{Value: threadTS},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("threads lookup-sandbox: %w", err)
+	}
+	if v, ok := out.Item["sandbox_id"]; ok {
+		if sv, ok := v.(*dynamodbtypes.AttributeValueMemberS); ok {
+			return sv.Value, nil
+		}
+	}
+	return "", nil
+}
+
 // Upsert creates a new thread row keyed by (channelID, threadTS) only if one
 // does not already exist (attribute_not_exists condition). ConditionalCheckFailed
 // means the row already exists — this is the idempotent success path; we MUST NOT

@@ -175,14 +175,36 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	// that do not @-mention the bot. Placed BEFORE dedup (step 5) so non-mention
 	// messages don't consume a nonce slot. Fail-open on BotUserID fetch error
 	// to match isBotLoop's fail-open policy.
+	//
+	// Phase 91.3: thread-bypass. When the message is a reply in a thread the
+	// bot is already engaged with (a (channel, thread_ts) row exists in
+	// km-slack-threads with sandbox_id set), skip the mention requirement.
+	// Threads are 1:1 conversations with the bot by construction — once the
+	// first mention has dispatched and the upsert lands, every subsequent
+	// reply in that thread is logically directed at the bot. Fail-open on
+	// LookupSandbox error to match isBotLoop's policy.
 	if h.MentionOnly {
-		uid, err := h.BotUserID.Fetch(ctx)
-		if err != nil {
-			h.log().Warn("events: mention-only: bot_user_id fetch failed; falling open (allow)", "err", err)
-		} else if uid != "" && !strings.Contains(msg.Text, "<@"+uid+">") {
-			h.log().Debug("events: mention-only: skipping non-mention message",
-				"channel", msg.Channel, "ts", msg.TS)
-			return EventsResponse{StatusCode: 200, Body: "ok"}
+		bypassed := false
+		if msg.ThreadTS != "" {
+			sb, lookupErr := h.Threads.LookupSandbox(ctx, msg.Channel, msg.ThreadTS)
+			if lookupErr != nil {
+				h.log().Warn("events: mention-only: thread lookup failed; treating as new thread",
+					"err", lookupErr, "channel", msg.Channel, "thread_ts", msg.ThreadTS)
+			} else if sb != "" {
+				h.log().Debug("events: mention-only: bypassed for engaged thread",
+					"channel", msg.Channel, "thread_ts", msg.ThreadTS, "sandbox", sb)
+				bypassed = true
+			}
+		}
+		if !bypassed {
+			uid, err := h.BotUserID.Fetch(ctx)
+			if err != nil {
+				h.log().Warn("events: mention-only: bot_user_id fetch failed; falling open (allow)", "err", err)
+			} else if uid != "" && !strings.Contains(msg.Text, "<@"+uid+">") {
+				h.log().Debug("events: mention-only: skipping non-mention message",
+					"channel", msg.Channel, "ts", msg.TS)
+				return EventsResponse{StatusCode: 200, Body: "ok"}
+			}
 		}
 	}
 
