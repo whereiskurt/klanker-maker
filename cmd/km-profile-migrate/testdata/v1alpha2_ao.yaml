@@ -1,0 +1,168 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: ao
+  labels:
+    tier: development
+    tool: agent-orchestrator
+    builtin: "true"
+  prefix: ao
+
+spec:
+  lifecycle:
+    ttl: "8h"
+    idleTimeout: "1h"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    spot: true
+    instanceType: t3.large
+    region: us-east-1
+    rootVolumeSize: 15
+    hibernation: true
+    additionalVolume:
+      size: 20
+      mountPoint: /data
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    env:
+      SANDBOX_MODE: agent-orchestrator
+      # GITHUB_TOKEN is required for gh auth login — inject from SSM at provision time
+      # Never hardcode a real token here
+      GITHUB_TOKEN: ""
+      # Claude Code via Bedrock
+      ANTHROPIC_BASE_URL: "https://bedrock-runtime.us-east-1.amazonaws.com"
+      ANTHROPIC_DEFAULT_SONNET_MODEL: us.anthropic.claude-sonnet-4-6
+      ANTHROPIC_DEFAULT_OPUS_MODEL: us.anthropic.claude-opus-4-6-v1
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: us.anthropic.claude-haiku-4-5-20251001-v1:0
+      CLAUDE_CODE_USE_BEDROCK: "1"
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+      # Codex — OPENAI_API_KEY must be injected via SSM at runtime
+      OPENAI_API_KEY: ""
+      CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
+    rsyncPaths:
+      - ".gitconfig"
+      - ".agent-orchestrator"
+      - ".claude"
+      - ".claude.json"
+      - ".codex"
+    initCommands:
+      - "yum install -y git tmux jq tar gzip unzip"
+      - "curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - && yum install -y nodejs"
+      - "yum install -y dnf-plugins-core"
+      - "dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo && dnf install -y gh"
+      - "npm install -g @composio/ao @anthropic-ai/claude-code@2.1.108"
+      - "curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.117.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz"
+      - "tar -xzf /tmp/codex.tar.gz -C /tmp && install -m 755 /tmp/codex-x86_64-unknown-linux-musl /usr/local/bin/codex"
+      - "mkdir -p /home/sandbox/.codex"
+      - "echo \"$GITHUB_TOKEN\" | gh auth login --with-token"
+      - "mkdir -p /workspace ~/.agent-orchestrator ~/.worktrees && chown -R sandbox:sandbox /workspace ~/.agent-orchestrator ~/.worktrees /home/sandbox/.codex"
+      - "su - sandbox -c 'cd /workspace && git config --global user.name \"Agent Orchestrator Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
+      - "ao doctor --fix || true"
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - "whereiskurt/meshtk"
+        - "whereiskurt/defcon.run.34"
+      allowedRefs:
+        - "main"
+        - "develop"
+        - "feature/*"
+        - "fix/*"
+
+  network:
+    # Phase 42: eBPF gatekeeper mode — connect4 in block mode as primary enforcer,
+    # with selective DNAT rewrite to proxy for L7-required hosts (GitHub repo
+    # filtering, Bedrock token metering). Non-L7 traffic goes direct.
+    enforcement: both
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+        # Anthropic / Claude Code
+        - ".anthropic.com"
+        - ".claude.ai"
+        - ".claude.com"
+        - ".sentry.io"
+        - ".cloudfront.net"
+        # GitHub (needed for git clone + API)
+        - ".github.com"
+        - ".githubusercontent.com"
+        # npm / Node.js (for claude-code install)
+        - ".npmjs.org"
+        - ".npmjs.com"
+        - ".nodejs.org"
+        - ".npmmirror.com"
+        # OpenAI (codex)
+        - ".openai.com"
+        - ".chatgpt.com"
+        # Python (goose extensions via uvx)
+        - ".pypi.org"
+        - ".pythonhosted.org"
+        # Goose extensions / MCP
+        - ".pulsemcp.com"
+        # Google (goose telemetry, search)
+        - ".google.com"
+        - ".google-analytics.com"
+        - ".googletagmanager.com"
+      allowedHosts:
+        # Hosts not covered by allowedDNSSuffixes above
+        - "statsig.com"
+        - "api.statsig.com"
+        - "featuregates.org"
+        - "api.featuregates.org"
+
+  budget:
+    compute:
+      maxSpendUSD: 4.00
+    ai:
+      maxSpendUSD: 10.00
+    warningThreshold: 0.80
+
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 1000
+
+  iam:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klanker-maker/network
+    learnMode: false
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: required
+    allowedSenders:
+      - "self"

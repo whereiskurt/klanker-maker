@@ -1,0 +1,218 @@
+apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: locked
+  labels:
+    tier: development
+    tool: alltools
+  prefix: lock
+
+spec:
+  lifecycle:
+    ttl: "2h"
+    idleTimeout: "15m"
+    teardownPolicy: stop
+
+  runtime:
+    substrate: ec2
+    spot: false
+    instanceType: t3.large
+    region: us-east-1
+    rootVolumeSize: 15
+    hibernation: true
+    ami: amazon-linux-2023
+    mountEFS: true
+    efsMountPoint: /shared
+    additionalVolume:
+      size: 20
+      mountPoint: /data
+
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+    useBedrock: false
+    privileged: true
+    env:
+      SANDBOX_MODE: learn-v2-direct-api
+      GOOSE_MODE: auto
+      GOOSE_TELEMETRY_ENABLED: "false"
+      CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
+      OPENAI_API_KEY: ""
+    configFiles:
+      "/home/sandbox/.claude/plugins/known_marketplaces.json": |
+        {"klanker-maker":{"source":{"source":"github","repo":"whereiskurt/klanker-maker"},"installLocation":"/home/sandbox/.claude/plugins/marketplaces/klanker-maker","lastUpdated":"2026-04-16T00:00:00Z"},"security-plugin-marketplace":{"source":{"source":"github","repo":"grnhse/security-plugin-marketplace"},"installLocation":"/home/sandbox/.claude/plugins/marketplaces/security-plugin-marketplace","lastUpdated":"2026-05-06T00:00:00Z"}}
+
+    rsyncPaths:
+      - ".gitconfig"
+      - ".config/goose"
+      - ".claude"
+      - ".claude.json"
+      - ".codex"
+    initCommands:
+      - "yum install -y git nodejs npm python3 python3-pip bzip2 jq tar gzip unzip tmux cronie"
+      - "systemctl enable crond; systemctl start crond"
+      - "HOME=/root curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | HOME=/root CONFIGURE=false bash"
+      - "cp -r /root/.local/bin/goose /usr/local/bin/goose-bin || true"
+      - "printf 'export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf\\nexport OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318\\n' > /etc/profile.d/km-zz-goose-otel.sh"
+      - "cat /usr/local/share/ca-certificates/km-proxy-ca.crt >> /etc/pki/tls/certs/ca-bundle.crt"
+      - "echo export SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt >> /etc/profile.d/km-zz-goose-otel.sh"
+      - "mkdir -p /home/sandbox/.local/bin && cp /usr/local/bin/goose-bin /usr/local/bin/goose && cp /usr/local/bin/goose /home/sandbox/.local/bin/goose || true"
+      - "curl -fsSL https://github.com/openai/codex/releases/download/rust-v0.121.0/codex-x86_64-unknown-linux-musl.tar.gz -o /tmp/codex.tar.gz"
+      - "tar -xzf /tmp/codex.tar.gz -C /tmp && install -m 755 /tmp/codex-x86_64-unknown-linux-musl /usr/local/bin/codex"
+      - "mkdir -p /home/sandbox/.config/goose /home/sandbox/.codex && chown -R sandbox:sandbox /home/sandbox/.codex"
+      - "mkdir -p /workspace && chown -R sandbox:sandbox /workspace /home/sandbox/.config /home/sandbox/.local"
+      - "su - sandbox -c 'cd /workspace && git config --global user.name \"Learner Sandbox\" && git config --global user.email \"sandbox@klankermaker.ai\"'"
+      - "git clone --depth 1 https://github.com/whereiskurt/klanker-maker.git /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 2>/dev/null && mkdir -p /home/sandbox/.claude/plugins/marketplaces && ln -sfn /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 /home/sandbox/.claude/plugins/marketplaces/klanker-maker && KM_SHA=$(git -C /home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0 rev-parse HEAD) && KM_NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z) && printf '{\"version\":2,\"plugins\":{\"klanker@klanker-maker\":[{\"scope\":\"user\",\"installPath\":\"/home/sandbox/.claude/plugins/cache/klanker-maker/klanker/0.1.0\",\"version\":\"0.1.0\",\"installedAt\":\"%s\",\"lastUpdated\":\"%s\",\"gitCommitSha\":\"%s\"}]}}' \"$KM_NOW\" \"$KM_NOW\" \"$KM_SHA\" > /home/sandbox/.claude/plugins/installed_plugins.json && chown -R sandbox:sandbox /home/sandbox/.claude/plugins || true"
+      - "su - sandbox -c 'cd /workspace && curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash'"
+      - "su - sandbox -c 'nvm install 22'"
+      - "su - sandbox -c 'npm install -g @anthropic-ai/claude-code@2.1.132'"
+      - "su - sandbox -c 'npx -y get-shit-done-cc --claude --codex --global'"
+
+  sourceAccess:
+    mode: allowlist
+    github:
+      allowedRepos:
+        - grnhse/*
+        - nvm-sh/nvm
+        - openai/codex
+        - block/goose
+        - whereiskurt/klanker-maker
+      allowedRefs:
+        - "*"
+
+  network:
+    enforcement: both
+    egress:
+      allowedDNSSuffixes:
+        - ".amazonaws.com"
+        - "time.aws.com"
+
+        # Anthropic / Claude Code
+        - ".anthropic.com"
+        - ".claude.ai"
+        - ".claude.com"
+        - ".sentry.io"
+        - ".cloudfront.net"
+        # GitHub (needed for git clone + API)
+        - ".github.com"
+        - ".githubusercontent.com"
+        # npm / Node.js (for claude-code install)
+        - ".npmjs.org"
+        - ".npmjs.com"
+        - ".nodejs.org"
+        - ".npmmirror.com"
+        # OpenAI (codex)
+        - ".openai.com"
+        - ".chatgpt.com"
+        # Python (goose extensions via uvx)
+        - ".pypi.org"
+        - ".pythonhosted.org"
+        # Goose extensions / MCP
+        - ".pulsemcp.com"
+        # Google (goose telemetry, search)
+        - ".google.com"
+        - ".google-analytics.com"
+        - ".googletagmanager.com"
+        - ".statsig.com"
+        - ".featuregates.org"
+        # vscode
+        - ".visualstudio.com"
+      allowedHosts:
+        # vscode
+        - "vscode.download.prss.microsoft.com"
+        - "nodejs.org"
+
+  budget:
+    compute:
+      maxSpendUSD: 0.50
+    ai:
+      maxSpendUSD: 2.00
+    warningThreshold: 0.80
+
+  artifacts:
+    paths:
+      - /workspace
+    maxSizeMB: 500
+
+  iam:
+    roleSessionDuration: "1h"
+    allowedRegions:
+      - us-east-1
+
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: km-dns-proxy:latest
+    httpProxy:
+      enabled: true
+      image: km-http-proxy:latest
+    auditLog:
+      enabled: true
+      image: km-audit-log:latest
+    tracing:
+      enabled: true
+      image: km-tracing:latest
+
+  observability:
+    learnMode: true
+    commandLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/sandboxes
+    networkLog:
+      destination: cloudwatch
+      logGroup: /klankrmkr/network
+    claudeTelemetry:
+      enabled: true
+      logPrompts: true
+      logToolDetails: true
+    tlsCapture:
+      enabled: true
+      libraries:
+        - openssl
+      capturePayloads: false
+
+  email:
+    signing: required
+    verifyInbound: required
+    encryption: required
+    allowedSenders:
+      - "*"
+
+  cli:
+    noBedrock: true
+
+  # Phase 92 (Wave 5) — claudeArgs moved out of spec.cli; inlined Claude
+  # settings.json removed. settings.json is synthesized from agent.claude.tools.*
+  # + trustedDirectories (permissions.allow canonical). See docs/agent-tool-gating.md.
+  agent:
+    claude:
+      trustedDirectories:
+        - /home/sandbox
+        - /workspace
+      tools:
+        autoApprove:
+          - Bash
+          - Read
+          - Write
+          - Edit
+          - Glob
+          - Grep
+          - WebFetch
+          - WebSearch
+          - NotebookEdit
+      args:
+        - "--dangerously-skip-permissions"
+
+  # Phase 92 — notify* fields moved out of spec.cli into spec.notification.
+  notification:
+    events:
+      onIdle: true
+      onPermission: true
+    email:
+      enabled: true
+    slack:
+      enabled: false
+      # perSandbox: true
+      # archiveOnDestroy: false
+      # inbound:
+      #   enabled: true
