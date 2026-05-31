@@ -1,6 +1,3 @@
-//go:build phase92_wave5
-// +build phase92_wave5
-
 package compiler
 
 import (
