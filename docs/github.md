@@ -54,31 +54,112 @@ The sandbox gets a scoped GitHub token that can only access the repos and refs l
 
 ### Token Lifecycle
 
+Two completely independent loops keep the sandbox able to talk to GitHub: a
+**writer loop** (a per-sandbox Lambda fed by EventBridge) and a **reader loop**
+(a credential-helper sidecar inside the sandbox itself). They communicate only
+through a single per-sandbox SSM SecureString — never directly. The Lambda
+never sees the sandbox; the sandbox never holds long-lived GitHub creds.
+
 ```
-km create
-  |
-  +-- Read App credentials from SSM
-  |     /km/config/github/app-client-id
-  |     /km/config/github/private-key
-  |
-  +-- Resolve installation ID
-  |     Extract owner from allowedRepos (e.g., "my-user" from "my-user/my-repo")
-  |     Look up /km/config/github/installations/my-user
-  |     Fall back to /km/config/github/installation-id (legacy)
-  |
-  +-- Generate scoped installation token
-  |     POST /app/installations/{id}/access_tokens
-  |     Scoped to allowedRepos + permissions (read or write)
-  |
-  +-- Write token to SSM
-  |     /sandbox/{sandbox-id}/github-token (SecureString, per-sandbox KMS key)
-  |
-  +-- Deploy token refresher
-        EventBridge schedule: every 45 minutes
-        Lambda reads App credentials, generates new token, writes to SSM
+                         GitHub App credentials (one set, shared by all sandboxes)
+                         ───────────────────────────────────────────────
+                         SSM  /{prefix}/config/github/app-client-id
+                              /{prefix}/config/github/private-key   (KMS SecureString)
+                              /{prefix}/config/github/installations/<owner>
+                                                │
+                                                │ ssm:GetParameter
+                                                ▼
+   ┌──── WRITER LOOP (refresher) ──────────────────────────────────────────────────┐
+   │                                                                               │
+   │  ┌─────────────────────────────┐  rate(45 minutes)    ┌─────────────────────┐ │
+   │  │ EventBridge Scheduler       │ ──────────────────▶  │ {prefix}-github-    │ │
+   │  │ {prefix}-github-token-{id}  │   invokes            │ token-refresher-    │ │
+   │  │  per-sandbox; payload =     │   with JSON input    │{sandbox-id}         │ │
+   │  │   { sandbox_id,             │                      │  (Lambda; Go,       │ │
+   │  │     resource_prefix,        │                      │   provided.al2023,  │ │
+   │  │     installation_id,        │                      │   arm64, 128MB,     │ │
+   │  │     ssm_parameter_name,     │                      │   60s timeout)      │ │
+   │  │     kms_key_arn,            │                      └──────────┬──────────┘ │
+   │  │     allowed_repos,          │                                 │            │
+   │  │     permissions  }          │                                 │            │
+   │  └─────────────────────────────┘                                 │ 1. mint    │
+   │                                                                  │   RS256    │
+   │                                                                  │   JWT      │
+   │                                                                  │ 2. POST    │
+   │                                                                  ▼   GitHub   │
+   │                                                            api.github.com     │
+   │                                                            /app/installations/│
+   │                                                            {id}/access_tokens │
+   │                                                            (scoped to         │
+   │                                                             allowed_repos +   │
+   │                                                             permissions)      │
+   │                                                                  │            │
+   │                                                                  │ 3. PutParam│
+   │                                                                  │   Secure-  │
+   │                                                                  │   String   │
+   │                                                                  ▼            │
+   │                                            ┌───────────────────────────────┐  │
+   │                                            │ SSM (per-sandbox KMS key)     │  │
+   │                                            │ /sandbox/{id}/github-token    │  │
+   │                                            │   alias/{prefix}-github-      │  │
+   │                                            │   token-{sandbox-id}          │  │
+   │                                            └───────────────┬───────────────┘  │
+   └────────────────────────────────────────────────────────────│──────────────────┘
+                                                                │
+                                                                │ ssm:GetParameter
+                                                                │  --with-decryption
+                                                                │ (sandbox IAM role
+                                                                │  scoped to its own
+                                                                │  ARN ONLY)
+                                                                ▼
+   ┌──── READER LOOP (sandbox-side sidecar) ─────────────────────────────────────┐
+   │                                                                             │
+   │   Sandbox EC2 / Docker                                                      │
+   │   ┌────────────────────────────────────────────────────────────────────┐    │
+   │   │ git push / clone / fetch / pull                                    │    │
+   │   │   │                                                                │    │
+   │   │   ├─ via GIT_ASKPASS  ────▶ /opt/km/bin/km-git-askpass             │    │
+   │   │   │                          (interactive shells, plain git)       │    │
+   │   │   │                                                                │    │
+   │   │   └─ via credential.helper ▶ /opt/km/bin/km-git-credential-helper  │    │
+   │   │                              (Claude Code clears GIT_ASKPASS;      │    │
+   │   │                               core.askpass is bypassed, so a       │    │
+   │   │                               separate helper handles that path)   │    │
+   │   │                                                                    │    │
+   │   │     both shell scripts → aws ssm get-parameter                     │    │
+   │   │                          --name /sandbox/{id}/github-token         │    │
+   │   │                          --with-decryption                         │    │
+   │   │     →  username=x-access-token                                     │    │
+   │   │        password=<fresh installation token>                         │    │
+   │   └────────────────────────────────────────────────────────────────────┘    │
+   │                                  │ HTTPS (intercepted)                      │
+   │                                  ▼                                          │
+   │   ┌────────────────────────────────────────────────────────────────────┐    │
+   │   │ http-proxy sidecar (MITM)                                          │    │
+   │   │   - allow-list: github.com, api.github.com,                        │    │
+   │   │     raw.githubusercontent.com, codeload.githubusercontent.com      │    │
+   │   │   - URL filter: allowed_repos enforced at the request line         │    │
+   │   │   - pre-push hook (separate): blocks refs outside allowedRefs      │    │
+   │   └─────────────────────────────────┬──────────────────────────────────┘    │
+   │                                     │ HTTPS                                 │
+   └─────────────────────────────────────│───────────────────────────────────────┘
+                                         ▼
+                                  ┌────────────┐
+                                  │   GitHub   │
+                                  └────────────┘
 ```
 
-GitHub installation tokens expire after 1 hour. The 45-minute refresh cycle ensures continuous access with a 15-minute overlap buffer.
+GitHub installation tokens expire after 1 hour. The 45-minute refresh cycle
+gives a ~15-minute overlap buffer — a sandbox that wakes up immediately after a
+refresh has the full hour ahead of it, and any in-flight clone that holds a
+nearly-expired token completes long before the next refresh writes the new one.
+
+**Why two paths read from SSM, not one:** Claude Code launches `git` with
+`GIT_TERMINAL_PROMPT=0` and clears `GIT_ASKPASS`, which makes
+`core.askpass` ineffective. `credential.helper` is a separate code path that
+Claude Code does not override, so `km-git-credential-helper` covers the agent's
+git operations while `km-git-askpass` covers everything else (interactive
+shells, scripts, `claude shell` sessions).
 
 ### Credential Helper (km-git-askpass)
 
@@ -98,6 +179,12 @@ esac
 ```
 
 The token is fetched from SSM at git-operation time via `GIT_ASKPASS`. It is never exported as an environment variable, so it can't leak through `env`, `/proc`, or process listings.
+
+A second sidecar script, `/opt/km/bin/km-git-credential-helper`, is wired into
+`git config --system credential.helper`. It exists because Claude Code clears
+`GIT_ASKPASS` and bypasses `core.askpass`; `credential.helper` is a separate
+git code path that the agent does not override. Both scripts read the SAME
+per-sandbox SSM parameter — there is only ever one live token per sandbox.
 
 ### Ref Enforcement (Pre-push Hook)
 

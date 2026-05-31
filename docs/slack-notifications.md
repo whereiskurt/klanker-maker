@@ -199,37 +199,112 @@ spec:
 
 ## Architecture
 
+The bridge Lambda is the only component that ever holds the bot token. It serves
+**two HTTPS paths** on a single Function URL, each authenticated with a different
+secret:
+
+- `POST /`        — outbound from sandboxes (Ed25519 envelope, see `pkg/slack/payload.go`)
+- `POST /events`  — inbound from Slack Events API (HMAC-SHA256 over `/km/slack/signing-secret`)
+
+End-to-end flow, with every Lambda-side step that has shipped through Phase 91:
+
 ```
-sandbox EC2 instance
-  │
-  │  km-notify-hook (bash, fires on Notification/Stop events)
-  │    │
-  │    └── /opt/km/bin/km-slack  (Go binary, Ed25519 key from /sandbox/{id}/signing-key)
-  │          │
-  │          │  POST https://{function-url}/  (JSON envelope + X-KM-Signature header)
-  │          │  Retry on 5xx: 1s → 2s → 4s backoff
-  │          ▼
-  │        km-slack-bridge Lambda (Function URL, no auth URL — signature is the auth)
-  │          │
-  │          │  1. Parse envelope
-  │          │  2. Verify timestamp (±5 min window)
-  │          │  3. Check DynamoDB nonce table (replay prevention)
-  │          │  4. Fetch sender public key from DynamoDB km-identities
-  │          │  5. Verify Ed25519 signature
-  │          │  6. Assert channel ownership (sandbox can only post to its own channel)
-  │          │  7. Assert action authorization (sandbox: post only; operator: post+archive+test)
-  │          │  8. Fetch bot token from SSM SecureString (15-min in-memory cache)
-  │          │  9. POST to Slack Web API (chat.postMessage or conversations.archive)
-  │          │
-  │          └── Slack Web API ──► #km-notifications (or #sb-{id})
-  │                                    │
-  │                                    └── Slack Connect ──► operator's workspace
-  │
-operator workstation
-  km slack init / km slack test / km slack status
-    │
-    └── SSM: /km/slack/{bot-token,workspace,invite-email,shared-channel-id,bridge-url}
+                                       ┌──────────────────────────────────────┐
+                                       │  Slack workspace                     │
+                                       │   #km-notifications | #sb-{id} |     │
+                                       │   operator-override channel          │
+                                       └───────────┬──────────────────────────┘
+                                                   │ ▲
+                                                   │ │ chat.postMessage / chat.update
+                                            Events │ │ reactions.add(👀)
+                                            API    │ │ files.getUploadURLExternal
+                                                   │ │ files.completeUploadExternal
+                                                   │ │ conversations.{create,archive,invite,inviteShared,join}
+                                                   │ │ users.lookupByEmail
+                                                   ▼ │
+┌────────────────────────────┐          ┌────────────────────────────────────────────────────-──┐
+│  Sandbox (EC2 / Docker)    │          │   {prefix}-slack-bridge   Lambda                      │
+│                            │          │   (provided.al2023, arm64, 1024MB, 60s)               │
+│  ┌──────────────────────┐  │  HTTPS   │   Function URL — AuthType: NONE (signature is auth)   │
+│  │ km-notify-hook       │  │   POST   │                                                       │
+│  │ (Notification/Stop)  │  │  ──────▶ │  ┌────────────────────────────────────────────────┐   │
+│  └─────────┬────────────┘  │   /      │  │ POST /     (outbound from sandbox)             │   │
+│            │               │          │  │   1. Parse JSON envelope                       │   │
+│  ┌─────────▼────────────┐  │          │  │   2. ±5 min timestamp window                   │   │
+│  │ /opt/km/bin/km-slack │  │          │  │   3. PutItem km-slack-nonces  (replay dedup)   │   │
+│  │  - Ed25519 sign      │  │          │  │   4. GetItem km-identities    (sender pubkey)  │   │
+│  │  - retry 1/2/4s      │  │          │  │   5. ed25519.Verify(canonical bytes)           │   │
+│  └─────────┬────────────┘  │          │  │   6. Channel ownership vs km-sandboxes         │   │
+│            │               │          │  │   7. Action authz (sandbox: post/upload/       │   │
+│            │               │          │  │      permalink/update; operator: archive/test) │   │
+│ ┌──────────▼─────────────┐ │          │  │   8. GetParameter bot-token (15-min cache)     │   │
+│ │ PostToolUse hook       │ │          │  │   9. Dispatch → Slack Web API                  │   │
+│ │  → stream lines        │ │          │  │      (chat.postMessage / files.* / etc.)       │   │
+│ │  → record offsets in   │ │          │  └────────────────────────────────────────────────┘   │
+│ │    km-slack-stream-msg │ │          │                                                       │
+│ │  → upload at Stop      │ │          │  Slack ──HTTPS POST──▶                                │
+│ │    via S3 + bridge     │ │          │                                                       │
+│ └────────────────────────┘ │          │  ┌────────────────────────────────────────────────┐   │
+│            ▲               │          │  │ POST /events   (inbound from Slack)            │   │
+│            │ SQS long-poll │          │  │   1. HMAC-SHA256 vs /km/slack/signing-secret   │   │
+│            │ ReceiveMessage│          │  │   2. ±5 min window                             │   │
+│ ┌──────────┴─────────────┐ │          │  │   3. Subtype allow-list (""/thread_broadcast)  │   │
+│ │ km-slack-inbound-      │ │   SQS    │  │   4. bot_user_id self-message filter           │   │
+│ │ poller (systemd)       │ │  FIFO    │  │   5. POLITE-BOT mention scan ────────────────► │   │
+│ │  - dispatch claude/    │ │  ◀────── │  │      ┌─ Mode 1 shared       → require @bot  │  │   │
+│ │    codex per agent_    │ │ Send-    │  │      ├─ Mode 2 #sb-{id}     → every message │  │   │
+│ │    type in DDB row     │ │ Message  │  │      ├─ Mode 3 override     → require @bot  │  │   │
+│ │  - KM_SLACK_THREAD_TS  │ │          │  │      └─ thread-bypass: bot-engaged threads  │  │   │
+│ │  - PostToolUse stream  │ │          │  │         (Phase 91.3) always route through   │  │   │
+│ │  - mirror /events      │ │          │  │   6. Channel → sandbox (km-sandboxes GSI       │   │
+│ │    files to /workspace │ │          │  │      slack_channel_id-index)                   │   │
+│ │    /.km-slack/attach/  │ │          │  │   7. UpdateItem km-slack-threads               │   │
+│ └────────────────────────┘ │          │  │      (channel, thread_ts, agent_type,          │   │
+│                            │          │  │       session_id, last_assistant_msg[:500])    │   │
+│  ─ private keys ─          │          │  │   8. SendMessage → per-sandbox FIFO            │   │
+│  /sandbox/{id}/signing-key │          │  │   9. (file_share) GET files.info + PutObject   │   │
+│  (KMS SecureString;        │          │  │      → s3://artifacts/slack-inbound/{id}/...   │   │
+│   sandbox IAM role only)   │          │  │  10. reactions.add(👀) — gated on              │   │
+│                            │          │  │      KM_SLACK_REACT_ALWAYS (install default)   │   │
+└────────────────────────────┘          │  │      ◀ per-sandbox slack_react_always row on   │   │
+                                        │  │        km-sandboxes wins (Phase 91.5)          │   │
+                                        │  └────────────────────────────────────────────────┘   │
+                                        └──────┬────────────────┬───────────────────┬───────────┘
+                                               │                │                   │
+                              ┌────────────────▼─┐ ┌────────────▼──────┐ ┌──────────▼───────────┐
+                              │ SSM (KMS)        │ │ DynamoDB          │ │ S3 artifacts bucket  │
+                              │  /{prefix}/slack │ │  km-identities    │ │  transcripts/{id}/   │
+                              │   bot-token      │ │  km-sandboxes     │ │  slack-inbound/{id}/ │
+                              │   signing-secret │ │  km-slack-nonces  │ │   (30-day lifecycle) │
+                              │   bot-user-id    │ │  km-slack-threads │ └──────────────────────┘
+                              │   bridge-url     │ │  km-slack-stream- │
+                              │   workspace      │ │   messages        │
+                              │   shared-channel-│ └───────────────────┘
+                              │   id, invite-    │
+                              │   email          │
+                              └──────────────────┘
 ```
+
+### Lambda environment block
+
+Set by the `infra/modules/lambda-slack-bridge/v1.0.0/` module on every `km init`
+(full terragrunt apply — `km init --sidecars` only refreshes the zip):
+
+| Env var | Source | Purpose |
+|---------|--------|---------|
+| `KM_RESOURCE_PREFIX` | `km-config.yaml` | Multi-install isolation prefix |
+| `KM_IDENTITIES_TABLE` | terragrunt | DDB table for sender pubkey lookup |
+| `KM_SANDBOX_TABLE_NAME` | terragrunt | DDB table for channel→sandbox + react-always |
+| `KM_NONCE_TABLE` | terragrunt | DDB table for replay dedup (TTL ~5 min) |
+| `KM_SLACK_THREADS_TABLE` | terragrunt | DDB table for thread→session map (Phase 67) |
+| `KM_BOT_TOKEN_PATH` | terragrunt | SSM path (default `/{prefix}/slack/bot-token`) |
+| `KM_SIGNING_SECRET_PATH` | terragrunt | SSM path for inbound HMAC verification |
+| `KM_ARTIFACTS_BUCKET` | terragrunt | S3 bucket for transcripts + inbound files |
+| `KM_SLACK_ACK_EMOJI` | terragrunt | Reaction name (default `eyes`; no colons) |
+| `KM_SLACK_MENTION_ONLY` | `km-config.yaml` → `slack.mention_only` (Phase 91.1) | Install-level polite-bot default |
+| `KM_SLACK_BOT_USER_ID` | SSM `{prefix}/slack/bot-user-id` (auto-read by `km init`) | Polite-bot mention scan target |
+| `KM_SLACK_REACT_ALWAYS` | `km-config.yaml` → `slack.react_always` (Phase 91.4) | Install-level 👀-on-replies default |
+| `TOKEN_ROTATION_TS` | bumped by `km slack rotate-token` | Forces cold-start to invalidate 15-min cache |
 
 ---
 
