@@ -41,8 +41,6 @@ spec:
       CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
       OPENAI_API_KEY: ""
     configFiles:
-      "/home/sandbox/.claude/settings.json": |
-        {"trustedDirectories":["/home/sandbox","/workspace"]}
       "/home/sandbox/.claude/plugins/known_marketplaces.json": |
         {"klanker-maker":{"source":{"source":"github","repo":"whereiskurt/klanker-maker"},"installLocation":"/home/sandbox/.claude/plugins/marketplaces/klanker-maker","lastUpdated":"2026-04-16T00:00:00Z"}}
 
@@ -184,3 +182,12 @@ spec:
 
   cli:
     noBedrock: true
+
+  # Phase 92 (Wave 5) — inlined Claude settings.json removed; trustedDirectories
+  # synthesized from agent.claude.trustedDirectories. goose had no autoApprove set,
+  # so no tools.autoApprove is populated (no tool auto-approval — unchanged).
+  agent:
+    claude:
+      trustedDirectories:
+        - /home/sandbox
+        - /workspace

@@ -1,9 +1,12 @@
 package compiler
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
@@ -81,13 +84,26 @@ func TestCapturePre92Userdata(t *testing.T) {
 
 // TestUserdataLearnV2Phase92ByteIdentity verifies that the userdata generated for
 // profiles/learn.v2.yaml is byte-identical to the pre-Phase-92 baseline captured
-// in Wave 0. This guards the Phase 92 contract that the spec restructure (IAM
-// rename, notification block, dead-field removal, structured agent gating) is
-// semantically transparent: the YAML surface changes, but the effective userdata
-// emitted for an equivalent profile does not.
+// in Wave 0 — EXCEPT for the synthesized ~/.claude/settings.json content blob,
+// which Wave 5 intentionally migrates from the legacy {"autoApprove": [...]} form
+// to the canonical {"permissions": {"allow": [...]}} form (Wave 0 research
+// Option B — see .planning/research/codex-config-toml.md §1b and
+// docs/agent-tool-gating.md).
 //
-// On pre-Phase-92 main: PASS (golden matches generated output).
-// After Waves 1-5 land: must STILL PASS (byte-identity contract).
+// VC-3 RECONCILIATION (Wave 5 locked decision):
+//   - The byte-identity contract proves the spec restructure pipeline is
+//     SEMANTICALLY TRANSPARENT, not that every byte is frozen forever.
+//   - For everything OUTSIDE the settings.json blob (codex config.toml, all of
+//     the rest of the userdata) we keep STRICT byte-identity: both the pre-92
+//     baseline and the Wave-5 output have their settings.json blob replaced with
+//     a sentinel, then compared byte-for-byte.
+//   - For the settings.json blob itself we assert SEMANTIC EQUIVALENCE: the old
+//     legacy form and the new canonical form must yield the same effective
+//     auto-approved tool set, the same trustedDirectories, and the same km-notify
+//     hooks. A tool silently gaining or losing auto-approval is a FAILURE.
+//
+// On pre-Phase-92 main: PASS (golden matches generated output verbatim).
+// After Waves 1-5 land: PASS via the reconciled comparison above.
 //
 // VC-3
 func TestUserdataLearnV2Phase92ByteIdentity(t *testing.T) {
@@ -99,8 +115,146 @@ func TestUserdataLearnV2Phase92ByteIdentity(t *testing.T) {
 
 	got := generateLearnV2Userdata(t)
 
-	if got != string(want) {
-		t.Errorf("userdata for profiles/learn.v2.yaml drifted from pre-Phase-92 baseline:\n%s",
-			diffStrings(string(want), got))
+	// Fast path: if the output is verbatim byte-identical (e.g. running this test
+	// on pre-Phase-92 main, or if the canonical form ever matches the legacy
+	// bytes), accept immediately.
+	if got == string(want) {
+		return
 	}
+
+	// 1. Extract the ~/.claude/settings.json heredoc blob from both.
+	wantBlob, wantRest, ok1 := extractClaudeSettingsBlob(string(want))
+	gotBlob, gotRest, ok2 := extractClaudeSettingsBlob(got)
+	if !ok1 || !ok2 {
+		t.Fatalf("could not locate ~/.claude/settings.json heredoc in baseline(%v)/generated(%v); "+
+			"userdata drift is NOT confined to the settings.json blob:\n%s",
+			ok1, ok2, diffStrings(string(want), got))
+	}
+
+	// 2. Strict byte-identity for everything OUTSIDE the settings.json blob.
+	if wantRest != gotRest {
+		t.Errorf("userdata drifted from pre-Phase-92 baseline OUTSIDE the settings.json blob "+
+			"(this portion must stay byte-identical):\n%s", diffStrings(wantRest, gotRest))
+	}
+
+	// 3. Semantic equivalence of the settings.json blob: same effective tools,
+	//    trustedDirectories, and km-notify hooks.
+	assertClaudeSettingsSemanticEquivalence(t, wantBlob, gotBlob)
+}
+
+// extractClaudeSettingsBlob splits a rendered userdata string into the JSON body
+// of the ~/.claude/settings.json heredoc and "the rest" (with the blob replaced
+// by a stable sentinel so the surrounding bytes can be compared byte-for-byte).
+func extractClaudeSettingsBlob(userdata string) (blob, rest string, ok bool) {
+	const marker = "cat > '/home/sandbox/.claude/settings.json' << 'KM_CONFIG_EOF'\n"
+	const eof = "\nKM_CONFIG_EOF\n"
+	start := strings.Index(userdata, marker)
+	if start < 0 {
+		return "", "", false
+	}
+	bodyStart := start + len(marker)
+	end := strings.Index(userdata[bodyStart:], eof)
+	if end < 0 {
+		return "", "", false
+	}
+	blob = userdata[bodyStart : bodyStart+end]
+	rest = userdata[:bodyStart] + "<<<CLAUDE_SETTINGS_JSON>>>" + userdata[bodyStart+end:]
+	return blob, rest, true
+}
+
+// assertClaudeSettingsSemanticEquivalence parses two settings.json JSON blobs
+// (the pre-Phase-92 legacy form and the Wave-5 canonical form) and asserts they
+// grant the same effective Claude Code behavior: identical auto-approved tool
+// set, identical trustedDirectories, identical km-notify hooks.
+func assertClaudeSettingsSemanticEquivalence(t *testing.T, oldBlob, newBlob string) {
+	t.Helper()
+
+	var oldS, newS map[string]any
+	if err := json.Unmarshal([]byte(oldBlob), &oldS); err != nil {
+		t.Fatalf("parse baseline settings.json: %v\n%s", err, oldBlob)
+	}
+	if err := json.Unmarshal([]byte(newBlob), &newS); err != nil {
+		t.Fatalf("parse generated settings.json: %v\n%s", err, newBlob)
+	}
+
+	oldAllow := effectiveAutoApprove(oldS)
+	newAllow := effectiveAutoApprove(newS)
+	if !equalStringSets(oldAllow, newAllow) {
+		t.Errorf("auto-approved tool set changed by the Phase 92 migration (SECURITY-CRITICAL):\n"+
+			"  baseline (legacy autoApprove): %v\n  generated (permissions.allow): %v", oldAllow, newAllow)
+	}
+
+	oldDeny := effectiveDeny(oldS)
+	newDeny := effectiveDeny(newS)
+	if !equalStringSets(oldDeny, newDeny) {
+		t.Errorf("denied tool set changed by the Phase 92 migration (SECURITY-CRITICAL):\n"+
+			"  baseline: %v\n  generated: %v", oldDeny, newDeny)
+	}
+
+	if !reflect.DeepEqual(oldS["trustedDirectories"], newS["trustedDirectories"]) {
+		t.Errorf("trustedDirectories changed by the Phase 92 migration:\n  baseline: %v\n  generated: %v",
+			oldS["trustedDirectories"], newS["trustedDirectories"])
+	}
+
+	if !reflect.DeepEqual(oldS["hooks"], newS["hooks"]) {
+		t.Errorf("km-notify hooks changed by the Phase 92 migration:\n  baseline: %v\n  generated: %v",
+			oldS["hooks"], newS["hooks"])
+	}
+}
+
+// effectiveAutoApprove returns the auto-approved tool set from either the legacy
+// top-level "autoApprove" key or the canonical "permissions.allow" array.
+func effectiveAutoApprove(s map[string]any) []string {
+	if v, ok := s["autoApprove"].([]any); ok {
+		return toStringSlice(v)
+	}
+	if perms, ok := s["permissions"].(map[string]any); ok {
+		if v, ok := perms["allow"].([]any); ok {
+			return toStringSlice(v)
+		}
+	}
+	return nil
+}
+
+// effectiveDeny returns the denied tool set from either a legacy "disallowedTools"
+// key (none of our fixtures use it) or the canonical "permissions.deny" array.
+func effectiveDeny(s map[string]any) []string {
+	if v, ok := s["disallowedTools"].([]any); ok {
+		return toStringSlice(v)
+	}
+	if perms, ok := s["permissions"].(map[string]any); ok {
+		if v, ok := perms["deny"].([]any); ok {
+			return toStringSlice(v)
+		}
+	}
+	return nil
+}
+
+func toStringSlice(in []any) []string {
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func equalStringSets(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	m := map[string]int{}
+	for _, s := range a {
+		m[s]++
+	}
+	for _, s := range b {
+		m[s]--
+	}
+	for _, n := range m {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
 }

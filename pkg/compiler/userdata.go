@@ -897,30 +897,7 @@ echo "[km-bootstrap] km-notify-hook installed at /opt/km/bin/km-notify-hook"
 echo "[km-bootstrap] Installing ~/.codex/config.toml..."
 install -d -m 0755 -o sandbox -g sandbox /home/sandbox/.codex
 cat > /home/sandbox/.codex/config.toml << 'KM_CODEX_CONFIG_EOF'
-# Phase 70: 'codex_hooks' was the Codex 0.121 feature flag name. In 0.133+ it
-# was renamed to 'hooks' and the old name emits a deprecation warning event
-# on every codex exec (filtered out by our JSONL parser, but noisy). The
-# flag remains harmless under Path B (JSONL parsing) — hooks may or may not
-# actually fire depending on Codex version; the platform does not depend on
-# them. See docs/codex-parity.md and the Path B section of SPEC.md.
-[features]
-hooks = true
-
-[[hooks.PermissionRequest]]
-matcher = ".*"
-
-[[hooks.PermissionRequest.hooks]]
-type = "command"
-command = "/opt/km/bin/km-notify-hook PermissionRequest"
-timeout = 30
-statusMessage = "km: notifying operator"
-
-[[hooks.Stop]]
-
-[[hooks.Stop.hooks]]
-type = "command"
-command = "/opt/km/bin/km-notify-hook Stop"
-timeout = 30
+{{ .CodexConfigTOML -}}
 KM_CODEX_CONFIG_EOF
 chown sandbox:sandbox /home/sandbox/.codex/config.toml
 chmod 0644 /home/sandbox/.codex/config.toml
@@ -3600,6 +3577,12 @@ type userDataParams struct {
 	InitScripts []string
 	// ConfigFiles maps absolute paths to file contents to write during bootstrap.
 	ConfigFiles map[string]string
+	// CodexConfigTOML is the synthesized ~/.codex/config.toml content (Phase 92,
+	// Wave 5). Written EARLY in the userdata (before initCommands) so a profile's
+	// initCommands can still overwrite it (codex.yaml writes its own model/provider
+	// config this way). Byte-identical to the pre-Phase-92 heredoc for the base
+	// case — see synthesizeCodexConfig / VC-3.
+	CodexConfigTOML string
 	// ProfileEnv holds key=value pairs from profile spec.execution.env to export
 	// via /etc/profile.d/ so they're available in all login shells (SSM sessions).
 	ProfileEnv map[string]string
@@ -4186,6 +4169,49 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 			params.NotifySlackEnabled = true
 		}
 	}
+
+	// Phase 92 (Wave 5): synthesize the Claude Code settings.json from the typed
+	// spec.agent.claude block (permissions.allow/deny + trustedDirectories +
+	// passthrough) and inject it into configFiles. This replaces the pre-Phase-92
+	// inlined configFiles[".claude/settings.json"] antipattern. The pipeline order
+	// is: synthesizeClaudeSettings -> set into configFiles -> mergeNotifyHookInto
+	// Settings (adds km-notify hooks) -> write. Clone the map first so we never
+	// mutate the profile's own ConfigFiles (it aliases p.Spec.Execution.ConfigFiles).
+	{
+		const claudeSettingsPath = "/home/sandbox/.claude/settings.json"
+		cf := make(map[string]string, len(params.ConfigFiles)+1)
+		for k, v := range params.ConfigFiles {
+			cf[k] = v
+		}
+		settings, serr := synthesizeClaudeSettings(p.Spec.Agent)
+		if serr != nil {
+			return "", fmt.Errorf("synthesizeClaudeSettings: %w", serr)
+		}
+		// Only seed the configFiles entry when the synthesizer produced keys.
+		// When empty (codex-default profiles), mergeNotifyHookIntoSettings still
+		// writes a hooks-only settings.json — byte-identical to pre-Phase-92.
+		if len(settings) > 0 {
+			buf, merr := json.MarshalIndent(settings, "", "  ")
+			if merr != nil {
+				return "", fmt.Errorf("marshal synthesized claude settings.json: %w", merr)
+			}
+			cf[claudeSettingsPath] = string(buf)
+		}
+		params.ConfigFiles = cf
+	}
+
+	// Phase 92 (Wave 5): synthesize ~/.codex/config.toml from spec.agent.codex,
+	// replacing the hardcoded Phase 70 userdata heredoc body. The synthesizer
+	// emits a base hook block byte-identical to that heredoc (so VC-3 byte-identity
+	// holds) plus an args echo + tools asymmetry note when agent.codex is
+	// populated. It is rendered EARLY (before initCommands) via params.CodexConfigTOML
+	// so a profile's initCommands can still overwrite ~/.codex/config.toml (codex.yaml
+	// writes its own model/provider config that way — preserved).
+	codexTOML, cerr := synthesizeCodexConfig(p.Spec.Agent)
+	if cerr != nil {
+		return "", fmt.Errorf("synthesizeCodexConfig: %w", cerr)
+	}
+	params.CodexConfigTOML = codexTOML
 
 	// Phase 62 (HOOK-02): merge km-notify-hook entries into ~/.claude/settings.json.
 	// Always runs — every sandbox gets the hook wired into Claude Code settings.
