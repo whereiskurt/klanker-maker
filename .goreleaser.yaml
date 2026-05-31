@@ -1,0 +1,108 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: km
+
+# Run BEFORE the build matrix: fetch terraform + terragrunt for every target
+# platform into dist/extras/{os}_{arch}/ so the archive step can include them.
+before:
+  hooks:
+    - go mod tidy
+    - bash scripts/fetch-bundled-tools.sh 1.9.8 0.99.1
+
+builds:
+  - id: km
+    main: ./cmd/km
+    binary: km
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/whereiskurt/klanker-maker/pkg/version.Number=v{{ .Version }}
+      - -X github.com/whereiskurt/klanker-maker/pkg/version.GitCommit={{ .ShortCommit }}
+
+archives:
+  - id: km-bundle
+    ids: [km]
+    name_template: >-
+      {{ .ProjectName }}_v{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+    # Bundle the per-platform third-party binaries fetched by the before-hook.
+    # {{ .Os }} / {{ .Arch }} are evaluated PER archive, so each tarball
+    # gets only its own platform's toolchain.
+    files:
+      - src: dist/extras/{{ .Os }}_{{ .Arch }}/terraform
+        dst: bin/terraform
+        info:
+          mode: 0755
+      - src: dist/extras/{{ .Os }}_{{ .Arch }}/terragrunt
+        dst: bin/terragrunt
+        info:
+          mode: 0755
+      - LICENSE*
+      - README.md
+      - OPERATOR-GUIDE.md
+      - src: dist/extras/THIRD-PARTY-LICENSES.txt
+        dst: THIRD-PARTY-LICENSES.txt
+
+checksum:
+  name_template: "{{ .ProjectName }}_v{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ .Version }}-SNAPSHOT-{{ .ShortCommit }}"
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Documentation
+      regexp: '^.*?docs(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: Other
+      order: 999
+  filters:
+    exclude:
+      - '^test:'
+      - '^chore:'
+      - '^Merge '
+
+release:
+  github:
+    owner: whereiskurt
+    name: klanker-maker
+  draft: true
+  prerelease: auto
+  name_template: "km v{{ .Version }}"
+  header: |
+    ## Klanker Maker v{{ .Version }}
+
+    Single-archive download: includes `km`, `terraform` v1.9.8, and `terragrunt` v0.99.1.
+
+    ### Install
+    ```
+    tar -xzf km_v{{ .Version }}_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/').tar.gz
+    sudo install -m 0755 km /usr/local/bin/km
+    sudo install -m 0755 bin/terraform bin/terragrunt /usr/local/bin/
+    km doctor
+    ```
+
+    You still need: `aws` CLI + `session-manager-plugin` (operator-provided).
+  footer: |
+    ---
+    `terraform` is distributed under HashiCorp's Business Source License 1.1.
+    See `THIRD-PARTY-LICENSES.txt` in the archive for full attribution.
