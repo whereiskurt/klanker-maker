@@ -53,14 +53,23 @@ After `km create`, the sandbox carries:
   `km-slack-inbound-poller` systemd unit reads from here.
 - `~/.claude/settings.json` — unchanged (already present from Phase 62/63).
 - `~/.codex/config.toml` — NEW in Phase 70. Always written regardless of
-  `spec.cli.agent` value. Claude-default sandboxes never start Codex, so the
+  `spec.agent.default` value. Claude-default sandboxes never start Codex, so the
   file is an inert forward-compatibility artifact.
 
-### `~/.codex/config.toml` contents
+  **Phase 92 update:** the config.toml is no longer a hardcoded heredoc in the
+  userdata template — it is **synthesized** by `synthesizeCodexConfig(spec.agent)`
+  (`pkg/compiler/agent_codex.go`). The base hook block below is byte-identical to
+  the Phase 70 heredoc (so the Phase 92 byte-identity contract holds), but when a
+  profile populates `spec.agent.codex.args` or `spec.agent.codex.tools.*`, the
+  synthesizer appends an args echo and an explicit asymmetry NOTE — see
+  `docs/agent-tool-gating.md` for the full write-up. Inspect the rendered file on a
+  live sandbox with `cat /home/sandbox/.codex/config.toml`.
+
+### `~/.codex/config.toml` contents (base hook block)
 
 ```toml
 [features]
-codex_hooks = true
+hooks = true
 
 [[hooks.PermissionRequest]]
 matcher = ".*"

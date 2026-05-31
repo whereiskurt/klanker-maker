@@ -8,6 +8,16 @@ Policy-driven sandbox platform. See `.planning/PROJECT.md` for details.
 
 Multi-instance support: km supports multiple installs in a single AWS account via the `resource_prefix` knob in `km-config.yaml` (default `km`). `km configure` prompts for `resource_prefix` and `email_subdomain` (one-time choices propagated to terragrunt via `KM_RESOURCE_PREFIX` / `KM_EMAIL_SUBDOMAIN`). See `OPERATOR-GUIDE.md` § Multi-instance support and the `klanker:init` skill.
 
+**Phase 92 (2026-05-31) — SandboxProfile spec restructure (complete):**
+- `spec.identity:` → `spec.iam:` (with `allowedSecretPaths` declared).
+- `spec.cli.notify*` → `spec.notification:` (typed `events` / `email` / `slack` sub-blocks).
+- `spec.cli.vscodeEnabled` → `spec.runtime.vscode.enabled`.
+- `spec.cli.{agent,claudeArgs,codexArgs}` → `spec.agent:` block (`default` / `claude.args` / `codex.args`). `spec.cli` is now `noBedrock`-only.
+- Inlined `configFiles["/home/sandbox/.claude/settings.json"]` REMOVED everywhere; settings.json is synthesized from `spec.agent.claude.tools.*` + `trustedDirectories` (canonical `permissions.allow` / `permissions.deny`). Codex `config.toml` is synthesized too — Codex has no native tool gating, so it ships inert hooks + an asymmetry note. See `docs/agent-tool-gating.md`.
+- Mixed mode (typed `agent.claude.tools.*` + inlined settings.json) is a hard `km validate` error.
+- Sandbox-side env var names (`KM_NOTIFY_*`, `KM_SLACK_*`, `KM_AGENT`) are UNCHANGED; `apiVersion` stays `klankermaker.ai/v1alpha2`.
+- Post-merge: `make build && km init --sidecars` to refresh the management Lambdas.
+
 ## Where to look
 
 | You want to… | Look at |
@@ -27,7 +37,8 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Slack runbook (full setup, troubleshooting) | `docs/slack-notifications.md` |
 | VS Code runbook | `docs/vscode.md` |
 | Snapshot-backed EBS volumes in profiles | `OPERATOR-GUIDE.md` § additionalSnapshots |
-| Codex parity, `spec.cli.agent`, Slack prefix routing & agent switching | `docs/codex-parity.md` (Phase 70) |
+| Codex parity, `spec.agent.default`, Slack prefix routing & agent switching | `docs/codex-parity.md` (Phase 70) |
+| Structured Claude/Codex tool gating via `spec.agent:`, synthesizers, asymmetry note | `docs/agent-tool-gating.md` (Phase 92) |
 | Cut a release (goreleaser + GH Actions, tag-driven) | `docs/release.md` |
 | SOPS / SSM allowlist via `iam.allowedSecretPaths` | `docs/sandbox-secrets.md` (Phase 89, renamed `identity:`→`iam:` in Phase 92) |
 
@@ -197,7 +208,7 @@ http-proxy MITM intercepts and meters three AI provider endpoints into the same
 
 L7 proxy hosts are gated per profile:
 - `spec.execution.useBedrock: true` → adds `.amazonaws.com,api.anthropic.com`
-- `spec.cli.agent: codex` → adds `api.openai.com` (Phase 88)
+- `spec.agent.default: codex` → adds `api.openai.com` (Phase 88; field re-homed from `spec.cli.agent` in Phase 92)
 
 Unknown model IDs in any provider write rows with `spentUSD=0` and log
 `event_type=*_unknown_model` so operators see the gap in `km status`.
@@ -251,32 +262,44 @@ Output lands at `/workspace/.km-agent/runs/<timestamp>/output.json`. Detach from
 
 ```yaml
 spec:
+  # Phase 92: Claude/Codex tool gating + trustedDirectories are TYPED here, not
+  # inlined as configFiles JSON. The compiler synthesizes ~/.claude/settings.json
+  # (canonical permissions.allow/deny) + ~/.codex/config.toml. See docs/agent-tool-gating.md.
+  agent:
+    claude:
+      trustedDirectories: [/home/sandbox, /workspace]
+      tools:
+        autoApprove: [Bash, Read, Write, Edit, Glob, Grep]
   execution:
     configFiles:
-      "/home/sandbox/.claude/settings.json": |
-        {"trustedDirectories":["/home/sandbox","/workspace"]}
+      # OTHER config files are still inlined here; only the Claude settings.json
+      # key is forbidden (it is synthesized from spec.agent.claude).
+      "/home/sandbox/.claude/plugins/known_marketplaces.json": |
+        {"...": "..."}
   cli:
     noBedrock: true    # default to direct API for km shell / km agent run
 ```
 
-- `spec.execution.configFiles` — pre-seed tool config files (written after `initCommands`, owned by sandbox user)
+- `spec.agent.claude.tools.*` / `trustedDirectories` — typed Claude tool gating; synthesized into `~/.claude/settings.json` (Phase 92). Inlining `configFiles["/home/sandbox/.claude/settings.json"]` alongside these is a hard validation error.
+- `spec.execution.configFiles` — pre-seed OTHER tool config files (written after `initCommands`, owned by sandbox user)
 - `spec.cli.noBedrock` — operator-side default; doesn't affect sandbox provisioning, only CLI behavior when connecting
 
-### Agent: claude | codex (Phase 70)
+### Agent: claude | codex (Phase 70; restructured Phase 92)
 
-`spec.cli.agent` selects the default agent for `km shell` / `km agent run` /
+`spec.agent.default` selects the default agent for `km shell` / `km agent run` /
 Slack inbound dispatch:
 
 ```yaml
 spec:
-  cli:
-    agent: codex  # or "claude"; default claude; absence ≡ claude
+  agent:
+    default: codex  # or "claude"; default claude; absence ≡ claude
 ```
 
 The compiler writes `KM_AGENT` to `/etc/profile.d/km-notify-env.sh` and
-`/etc/km/notify.env`. It also writes `~/.codex/config.toml` on every sandbox
-regardless of value — Claude-default sandboxes have an inert config (forward-
-compat for when Codex ships a Claude-Code-style hook API).
+`/etc/km/notify.env`. It also synthesizes `~/.codex/config.toml` on every sandbox
+regardless of value (via `synthesizeCodexConfig`, Phase 92) — Claude-default
+sandboxes get an inert config (forward-compat for when Codex ships a
+Claude-Code-style hook API).
 
 Per-turn override via Slack: a message starting with `claude:` or `codex:`
 selects the agent for that turn (case-insensitive, anchored at start, zero or
@@ -286,7 +309,7 @@ triggers an 8-step clean handoff to a new top-level message. See
 
 **`km init --sidecars` is required** after this phase ships so management
 Lambdas pick up the schema addition. Existing sandboxes don't pick up
-`agent: codex` retroactively — `km destroy && km create`.
+`agent.default: codex` retroactively — `km destroy && km create`.
 
 ### DDB column hangover (Phase 70)
 
