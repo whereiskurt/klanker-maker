@@ -1649,7 +1649,7 @@ This walkthrough creates a sandboxed environment where Claude Code can clone a r
 Save this as `claude-code-sandbox.yaml`:
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: claude-code-sandbox
@@ -1699,7 +1699,7 @@ spec:
         - "develop"
         - "feature/*"
 
-  identity:
+  iam:
     roleSessionDuration: 1h
     allowedRegions: [us-east-1]
     allowedSecretPaths:
@@ -1726,9 +1726,6 @@ spec:
     networkLog:
       destination: cloudwatch
 
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: 30m
 ```
 
 ### Step 2: Store the Anthropic API Key
@@ -1841,7 +1838,7 @@ This walkthrough runs Block's [Goose](https://github.com/block/goose) agent with
 Save as `goose-budgeted.yaml`:
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: goose-budgeted
@@ -1889,7 +1886,7 @@ spec:
         - "github.com/mycompany/*"
       allowedRefs: ["*"]
 
-  identity:
+  iam:
     allowedSecretPaths:
       - "arn:aws:ssm:us-east-1::parameter/sandbox/anthropic-api-key"
 
@@ -1913,9 +1910,6 @@ spec:
       - "/workspace/.goose/**"
     maxSizeMB: 100
 
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: 30m
 ```
 
 ### Step 2: Create and Connect
@@ -1967,7 +1961,7 @@ Running red-team or security research agents like [redamon](https://github.com/s
 The built-in `sealed` profile has no egress, no GitHub access, and a 1-hour TTL. For a security agent that needs *some* network access (e.g., to scan an internal target), create a custom profile:
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: security-agent
@@ -2081,10 +2075,9 @@ spec:
 | `execution` | No | Shell, working directory, env vars, initCommands, configFiles, privileged |
 | `network` | Yes | DNS suffixes, hosts, `httpsOnly` toggle, `enforcement` mode (proxy/ebpf/both) |
 | `sourceAccess` | No | GitHub repos, refs |
-| `identity` | No | IAM session duration, allowed regions, `allowedSecretPaths` (SSM parameter allowlist) |
+| `iam` | Yes | IAM session duration, allowed regions, `allowedSecretPaths` (SSM parameter allowlist). Renamed from `identity` in Phase 92. |
 | `sidecars` | Yes | DNS proxy, HTTP proxy, audit log, tracing |
 | `observability` | No | Command and network log destinations, learnMode, claudeTelemetry, tlsCapture |
-| `agent` | No | Concurrent tasks, timeout, allowed tools |
 | `artifacts` | No | Paths to collect on exit, max size, replication region |
 | `budget` | No | Compute and AI spend limits, warning threshold |
 | `email` | No | Signing, inbound verification, encryption policy, allowed senders |

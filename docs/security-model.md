@@ -269,7 +269,7 @@ Secrets are stored in AWS SSM Parameter Store as `SecureString` parameters, encr
   2. SSM service (`ssm.amazonaws.com`) -- `Encrypt`, `Decrypt`, `GenerateDataKey*`, `DescribeKey` for parameter encryption/decryption.
   3. ECS tasks service (`ecs-tasks.amazonaws.com`) -- `Decrypt` and `DescribeKey` only, with `aws:SourceAccount` condition to prevent confused deputy attacks.
 
-**Secret injection at boot:** The user-data bootstrap script fetches each allowed secret path from SSM Parameter Store using `aws ssm get-parameter --with-decryption`, converts the path's basename to an uppercase environment variable name, and exports it into the shell environment. Only paths listed in `identity.allowedSecretPaths` in the profile are fetched. The profile compiler (`pkg/compiler/security.go`, `compileSecrets` function) builds this list at compile time.
+**Secret injection at boot:** The user-data bootstrap script fetches each allowed secret path from SSM Parameter Store using `aws ssm get-parameter --with-decryption`, converts the path's basename to an uppercase environment variable name, and exports it into the shell environment. Only paths listed in `iam.allowedSecretPaths` in the profile are fetched. The profile compiler (`pkg/compiler/security.go`, `compileSecrets` function) builds this list at compile time.
 
 **Secret redaction in audit logs:** The `RedactingDestination` in `sidecars/audit-log/auditlog.go` wraps the audit log destination and applies four redaction patterns before any event is persisted:
 

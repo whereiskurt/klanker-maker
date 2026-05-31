@@ -501,7 +501,7 @@ Email signing and encryption behavior is controlled by the `spec.email` block in
 ### Example Profile YAML
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: secure-worker
@@ -694,7 +694,7 @@ This example walks through a 3-sandbox pipeline where a planner breaks a task in
 **Planner** (`profiles/pipeline-planner.yaml`):
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: pipeline-planner
@@ -726,11 +726,10 @@ spec:
       allowedDNSSuffixes:
         - ".amazonaws.com"
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
 
   sidecars:
     dnsProxy:
@@ -743,19 +742,12 @@ spec:
       enabled: true
       image: km-audit-log:latest
 
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: "30m"
-    allowedTools:
-      - bash
-      - read_file
-      - write_file
 ```
 
 **Worker** (`profiles/pipeline-worker.yaml`):
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: pipeline-worker
@@ -804,11 +796,10 @@ spec:
         - "sum.golang.org"
         - "pkg.go.dev"
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
 
   sidecars:
     dnsProxy:
@@ -826,20 +817,12 @@ spec:
       - /workspace/output
     maxSizeMB: 100
 
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "30m"
-    allowedTools:
-      - bash
-      - read_file
-      - write_file
-      - list_files
 ```
 
 **Reviewer** (`profiles/pipeline-reviewer.yaml`):
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: pipeline-reviewer
@@ -885,11 +868,10 @@ spec:
         - "api.github.com"
         - "github.com"
 
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions:
       - us-east-1
-    sessionPolicy: minimal
 
   sidecars:
     dnsProxy:
@@ -902,12 +884,6 @@ spec:
       enabled: true
       image: km-audit-log:latest
 
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: "20m"
-    allowedTools:
-      - bash
-      - read_file
 ```
 
 ### Pipeline Flow

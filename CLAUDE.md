@@ -29,6 +29,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | Snapshot-backed EBS volumes in profiles | `OPERATOR-GUIDE.md` § additionalSnapshots |
 | Codex parity, `spec.cli.agent`, Slack prefix routing & agent switching | `docs/codex-parity.md` (Phase 70) |
 | Cut a release (goreleaser + GH Actions, tag-driven) | `docs/release.md` |
+| SOPS / SSM allowlist via `iam.allowedSecretPaths` | `docs/sandbox-secrets.md` (Phase 89, renamed `identity:`→`iam:` in Phase 92) |
 
 ## CLI
 
@@ -88,6 +89,15 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `profiles/` — Built-in SandboxProfile YAML files
 - `skills/` — User-invocable skills (klanker plugin)
 - `spec.runtime.additionalSnapshots` — list of snapshot-backed EBS volumes. Each entry materialises a fresh `aws_ebs_volume` from an existing EBS snapshot, attaches on `/dev/sd[f-p]`, mounts with userdata-detected filesystem. Coexists with `additionalVolume` (both can be set). EC2-only. Volume lifecycle = sandbox lifecycle. See `OPERATOR-GUIDE.md` § additionalSnapshots.
+
+## Profile spec — Phase 92 structural cleanup
+
+- **apiVersion bumped `v1alpha1` → `v1alpha2` (STRICT).** Profiles must declare `apiVersion: klankermaker.ai/v1alpha2`; `v1alpha1` is now rejected by the schema. No backwards compatibility (zero running sandboxes at cutover).
+- **`spec.identity:` → `spec.iam:`.** The IAM/session block moved out of the `identity:` namespace. `iam.{roleSessionDuration, allowedRegions, allowedSecretPaths}` are the surviving fields.
+- **`identity.sessionPolicy` removed** without replacement (it was never read by any code path).
+- **`iam.allowedSecretPaths`** (Phase 89 SOPS SSM allowlist) is now declared in the JSON schema (closes the Phase 89 schema drift).
+- **Dead top-level `spec.agent:` block removed** (`maxConcurrentTasks`, `taskTimeout`, `allowedTools` — never read). A new `agent:` block with structured tool-gating semantics is re-introduced later in Phase 92 (Waves 4/5).
+- `scripts/validate-all-profiles.sh` is the single-source-of-truth gate that runs `km validate` over the 20-file profile inventory (local-only; exits non-zero on any failure).
 
 ## Releases
 

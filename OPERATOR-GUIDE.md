@@ -4,6 +4,12 @@ This guide covers the full first-time setup procedure for deploying Klanker Make
 AWS account prerequisites through deploying shared infrastructure and creating the first
 sandbox. Follow the sections in order.
 
+> **Profile spec change — Phase 92 (2026-05-31):** `spec.identity:` → `spec.iam:`.
+> `sessionPolicy:` removed. Dead top-level `spec.agent:` block removed. The schema
+> gained `iam.allowedSecretPaths` (Phase 89 drift fix). Profiles must now declare
+> `apiVersion: klankermaker.ai/v1alpha2` (`v1alpha1` is rejected). Validate the full
+> built-in/profile inventory with `bash scripts/validate-all-profiles.sh`.
+
 ---
 
 ## 1. Prerequisites

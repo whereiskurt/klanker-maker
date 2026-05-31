@@ -9,7 +9,7 @@ SandboxProfiles follow a Kubernetes-style `apiVersion`/`kind`/`metadata`/`spec` 
 ## Document Structure
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: my-profile
@@ -22,10 +22,10 @@ spec:
   execution: { ... }
   sourceAccess: { ... }
   network: { ... }
-  identity: { ... }
+  iam: { ... }             # renamed from identity: in Phase 92
   sidecars: { ... }
   observability: { ... }
-  agent: { ... }
+  # agent: removed in Phase 92 (Wave 1); re-introduced with new shape in Waves 4/5
   artifacts: { ... }       # optional
   budget: { ... }          # optional
   email: { ... }           # optional
@@ -60,12 +60,13 @@ Each duration value must match the pattern `^[0-9]+(s|m|h|d)$` (a single integer
 | Type       | string                         |
 | Required   | Yes                            |
 | Default    | --                             |
-| Validation | Must be exactly `klankermaker.ai/v1alpha1` |
+| Validation | Must be exactly `klankermaker.ai/v1alpha2` |
 
-The API version of the SandboxProfile resource. Currently only `v1alpha1` is supported.
+The API version of the SandboxProfile resource. Currently only `v1alpha2` is
+supported (bumped from `v1alpha2` in Phase 92; `v1alpha2` is now rejected).
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 ```
 
 ### `kind`
@@ -864,21 +865,26 @@ spec:
 
 ---
 
-## `spec.identity`
+## `spec.iam`
 
 Controls AWS IAM identity and session configuration.
 
+> **Phase 92 (2026-05-31):** renamed from `spec.identity:`. The `sessionPolicy`
+> field was removed (never read by any code path). `allowedSecretPaths` is now
+> declared in the JSON schema (Phase 89 drift fix). Requires
+> `apiVersion: klankermaker.ai/v1alpha2`.
+
 | Property   | Value                          |
 |------------|--------------------------------|
-| YAML path  | `spec.identity`                |
+| YAML path  | `spec.iam`                     |
 | Type       | object                         |
 | Required   | Yes                            |
 
-### `spec.identity.roleSessionDuration`
+### `spec.iam.roleSessionDuration`
 
 | Property   | Value                          |
 |------------|--------------------------------|
-| YAML path  | `spec.identity.roleSessionDuration` |
+| YAML path  | `spec.iam.roleSessionDuration` |
 | Type       | duration string                |
 | Required   | Yes                            |
 | Default    | --                             |
@@ -888,15 +894,15 @@ Maximum duration for AWS STS assumed role sessions.
 
 ```yaml
 spec:
-  identity:
+  iam:
     roleSessionDuration: "1h"
 ```
 
-### `spec.identity.allowedRegions`
+### `spec.iam.allowedRegions`
 
 | Property   | Value                          |
 |------------|--------------------------------|
-| YAML path  | `spec.identity.allowedRegions` |
+| YAML path  | `spec.iam.allowedRegions`      |
 | Type       | list of strings                |
 | Required   | Yes                            |
 | Default    | --                             |
@@ -906,35 +912,17 @@ AWS regions the sandbox IAM session is permitted to access. At least one region 
 
 ```yaml
 spec:
-  identity:
+  iam:
     allowedRegions:
       - us-east-1
       - us-west-2
 ```
 
-### `spec.identity.sessionPolicy`
+### `spec.iam.allowedSecretPaths`
 
 | Property   | Value                          |
 |------------|--------------------------------|
-| YAML path  | `spec.identity.sessionPolicy`  |
-| Type       | string (enum)                  |
-| Required   | Yes                            |
-| Default    | --                             |
-| Validation | One of: `minimal`, `standard`, `elevated` |
-
-IAM session policy scope that determines the breadth of permissions available within the sandbox.
-
-```yaml
-spec:
-  identity:
-    sessionPolicy: minimal
-```
-
-### `spec.identity.allowedSecretPaths`
-
-| Property   | Value                          |
-|------------|--------------------------------|
-| YAML path  | `spec.identity.allowedSecretPaths` |
+| YAML path  | `spec.iam.allowedSecretPaths`  |
 | Type       | list of strings                |
 | Required   | No                             |
 | Default    | -- (empty)                     |
@@ -944,7 +932,7 @@ Allowlist of AWS SSM Parameter Store paths the sandbox may read at boot time. Se
 
 ```yaml
 spec:
-  identity:
+  iam:
     allowedSecretPaths:
       - "/klanker-maker/sandbox/api-key"
       - "/klanker-maker/sandbox/db-password"
@@ -1219,71 +1207,11 @@ km validate learned.*.yaml            # validate before use
 
 ## `spec.agent`
 
-Controls behavior of the AI agent workload running in the sandbox.
-
-| Property   | Value                          |
-|------------|--------------------------------|
-| YAML path  | `spec.agent`                   |
-| Type       | object                         |
-| Required   | Yes                            |
-
-### `spec.agent.maxConcurrentTasks`
-
-| Property   | Value                          |
-|------------|--------------------------------|
-| YAML path  | `spec.agent.maxConcurrentTasks`|
-| Type       | int                            |
-| Required   | Yes                            |
-| Default    | --                             |
-| Validation | `minimum: 1`                   |
-
-Maximum number of parallel tasks the agent may run simultaneously.
-
-```yaml
-spec:
-  agent:
-    maxConcurrentTasks: 4
-```
-
-### `spec.agent.taskTimeout`
-
-| Property   | Value                          |
-|------------|--------------------------------|
-| YAML path  | `spec.agent.taskTimeout`       |
-| Type       | duration string                |
-| Required   | Yes                            |
-| Default    | --                             |
-| Validation | Pattern `^[0-9]+(s\|m\|h)$` (days not allowed) |
-
-Maximum duration for a single agent task. The task is terminated if it exceeds this duration.
-
-```yaml
-spec:
-  agent:
-    taskTimeout: "30m"
-```
-
-### `spec.agent.allowedTools`
-
-| Property   | Value                          |
-|------------|--------------------------------|
-| YAML path  | `spec.agent.allowedTools`      |
-| Type       | list of strings                |
-| Required   | No                             |
-| Default    | -- (empty, meaning no tool restrictions) |
-| Validation | Array of strings               |
-
-Tool names the agent is permitted to use. When omitted, no tool-level restrictions are enforced.
-
-```yaml
-spec:
-  agent:
-    allowedTools:
-      - bash
-      - read_file
-      - write_file
-      - list_files
-```
+> **Phase 92 (2026-05-31):** the dead top-level `spec.agent:` block
+> (`maxConcurrentTasks`, `taskTimeout`, `allowedTools`) was **removed** — it was
+> never read by any code path, and the schema now rejects it. A new `agent:`
+> block with structured tool-gating semantics is re-introduced later in Phase 92
+> (Waves 4/5); this section will be rewritten with the new shape when that lands.
 
 ---
 
@@ -1606,7 +1534,7 @@ A profile can extend a parent profile using the `extends` field. Inheritance is 
 
 ```yaml
 # my-profile.yaml -- extends hardened, opens network access
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: my-profile
@@ -1654,7 +1582,7 @@ Seven built-in profiles ship with Klanker Maker: `open-dev`, `restricted-dev`, `
 Permissive development profile. Broad package registry and GitHub access, wide ref patterns, full agent tooling.
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: open-dev
@@ -1704,10 +1632,9 @@ spec:
         - "pypi.org"
         - "pkg.go.dev"
         - "sum.golang.org"
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions: [us-east-1, us-west-2]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:  { enabled: true, image: "km-dns-proxy:latest" }
     httpProxy: { enabled: true, image: "km-http-proxy:latest" }
@@ -1720,10 +1647,6 @@ spec:
       enabled: true
       logPrompts: true
       logToolDetails: true
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "30m"
-    allowedTools: [bash, read_file, write_file, list_files]
 ```
 
 ### `restricted-dev`
@@ -1731,7 +1654,7 @@ spec:
 Restricted development profile. Organization-scoped repos, limited refs, reduced agent concurrency.
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: restricted-dev
@@ -1776,10 +1699,9 @@ spec:
         - "pypi.org"
         - "pkg.go.dev"
         - "sum.golang.org"
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions: [us-east-1]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:  { enabled: true, image: "km-dns-proxy:latest" }
     httpProxy: { enabled: true, image: "km-http-proxy:latest" }
@@ -1792,10 +1714,6 @@ spec:
       enabled: true
       logPrompts: false
       logToolDetails: true
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: "20m"
-    allowedTools: [bash, read_file, write_file]
 ```
 
 ### `hardened`
@@ -1803,7 +1721,7 @@ spec:
 Production-grade profile. Minimal network access, single command, read-only agent tooling.
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: hardened
@@ -1831,10 +1749,9 @@ spec:
       allowedHosts:
         - "sts.us-east-1.amazonaws.com"
         - "ssm.us-east-1.amazonaws.com"
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions: [us-east-1]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:  { enabled: true, image: "km-dns-proxy:latest" }
     httpProxy: { enabled: true, image: "km-http-proxy:latest" }
@@ -1851,10 +1768,6 @@ spec:
       enabled: true
       libraries: [openssl]
       capturePayloads: false
-  agent:
-    maxConcurrentTasks: 2
-    taskTimeout: "30m"
-    allowedTools: [read_file]
 ```
 
 ### `sealed`
@@ -1862,7 +1775,7 @@ spec:
 Maximum restriction. No network egress, no source access, no commands, single-task agent.
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: sealed
@@ -1888,10 +1801,9 @@ spec:
     egress:
       allowedDNSSuffixes: []
       allowedHosts: []
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions: [us-east-1]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:  { enabled: true, image: "km-dns-proxy:latest" }
     httpProxy: { enabled: true, image: "km-http-proxy:latest" }
@@ -1908,9 +1820,6 @@ spec:
       enabled: true
       libraries: [openssl]
       capturePayloads: false
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: "15m"
 ```
 
 ### `goose`
@@ -1918,7 +1827,7 @@ spec:
 Goose AI agent (Block) with Bedrock access, Claude Code, Codex, MCP extensions, OTEL telemetry, EFS shared storage, eBPF gatekeeper enforcement, email, and hibernation support.
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: goose
@@ -2014,10 +1923,9 @@ spec:
     compute: { maxSpendUSD: 0.50 }
     ai: { maxSpendUSD: 1.00 }
     warningThreshold: 0.80
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions: [us-east-1]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:  { enabled: true, image: "km-dns-proxy:latest" }
     httpProxy: { enabled: true, image: "km-http-proxy:latest" }
@@ -2039,10 +1947,6 @@ spec:
     verifyInbound: required
     encryption: required
     allowedSenders: ["self"]
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: "30m"
-    allowedTools: [bash, read_file, write_file, list_files]
 ```
 
 ### `codex`
@@ -2050,7 +1954,7 @@ spec:
 OpenAI Codex agent sandbox with proxy enforcement, hibernation, email, and OTEL telemetry.
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: codex
@@ -2111,10 +2015,9 @@ spec:
     compute: { maxSpendUSD: 2.00 }
     ai: { maxSpendUSD: 5.00 }
     warningThreshold: 0.80
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions: [us-east-1]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:  { enabled: true, image: "km-dns-proxy:latest" }
     httpProxy: { enabled: true, image: "km-http-proxy:latest" }
@@ -2132,10 +2035,6 @@ spec:
     verifyInbound: required
     encryption: required
     allowedSenders: ["self"]
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: "60m"
-    allowedTools: [bash, read_file, write_file, list_files]
 ```
 
 ### `ao`
@@ -2143,7 +2042,7 @@ spec:
 Multi-agent orchestration sandbox with Claude Code, Codex, Composio's agent-orchestrator, eBPF gatekeeper enforcement, email, and hibernation support.
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: ao
@@ -2231,10 +2130,9 @@ spec:
     compute: { maxSpendUSD: 4.00 }
     ai: { maxSpendUSD: 10.00 }
     warningThreshold: 0.80
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions: [us-east-1]
-    sessionPolicy: minimal
   sidecars:
     dnsProxy:  { enabled: true, image: "km-dns-proxy:latest" }
     httpProxy: { enabled: true, image: "km-http-proxy:latest" }
@@ -2252,10 +2150,6 @@ spec:
     verifyInbound: required
     encryption: required
     allowedSenders: ["self"]
-  agent:
-    maxConcurrentTasks: 4
-    taskTimeout: "120m"
-    allowedTools: [bash, read_file, write_file, list_files]
 ```
 
 ### `learn` (not a built-in -- lives in `profiles/learn.yaml`)
@@ -2263,7 +2157,7 @@ spec:
 Permissive profile designed for traffic observation. Wide-open DNS suffixes covering common TLDs, `enforcement: both` for eBPF + proxy capture, `privileged: true` for sudo access, and `learnMode: true` to record traffic. Use with `km shell --learn` to generate a minimal SandboxProfile from observed traffic.
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: learn
@@ -2317,9 +2211,6 @@ spec:
       maxSpendUSD: 2.00
     ai:
       maxSpendUSD: 0.00
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: "30m"
 ```
 
 **Workflow:**
@@ -2355,8 +2246,6 @@ km validate learned.*.yaml            # validate, then use for production sandbo
 | `budget.compute.maxSpendUSD` | -- | -- | -- | -- | $0.50 | $2.00 | $4.00 | $2.00 |
 | `budget.ai.maxSpendUSD` | -- | -- | -- | -- | $1.00 | $5.00 | $10.00 | $0.00 |
 | `email` | -- | -- | -- | -- | required | required | required | -- |
-| `agent.maxConcurrentTasks` | 4 | 2 | 2 | 1 | 1 | 1 | 4 | 1 |
-| `agent.taskTimeout` | 30m | 20m | 30m | 15m | 30m | 60m | 120m | 30m |
 
 *\* `learn` is not a built-in profile; it lives in `profiles/learn.yaml`.*
 
@@ -2420,7 +2309,7 @@ spec:
 ### Creating a minimal air-gapped profile
 
 ```yaml
-apiVersion: klankermaker.ai/v1alpha1
+apiVersion: klankermaker.ai/v1alpha2
 kind: SandboxProfile
 metadata:
   name: air-gapped
@@ -2432,22 +2321,15 @@ spec:
     ttl: "2h"
     idleTimeout: "1h"
     teardownPolicy: destroy
-  agent:
-    maxConcurrentTasks: 1
-    taskTimeout: "30m"
-    allowedTools:
-      - read_file
-      - write_file
 ```
 
 ### Injecting secrets via SSM Parameter Store
 
 ```yaml
 spec:
-  identity:
+  iam:
     roleSessionDuration: "1h"
     allowedRegions: [us-east-1]
-    sessionPolicy: minimal
     allowedSecretPaths:
       - "/klanker-maker/sandbox/api-keys/github"
       - "/klanker-maker/sandbox/api-keys/npm"

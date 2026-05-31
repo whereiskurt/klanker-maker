@@ -1,5 +1,10 @@
 # SOPS secret injection for sandboxes (Phase 89)
 
+> **Phase 92 (2026-05-31):** `spec.identity:` was renamed to `spec.iam:`.
+> `iam.allowedSecretPaths` (the SSM-allowlist field, Phase 89) is now declared in
+> the JSON schema (schema-drift fix). `sessionPolicy` was removed without
+> replacement. Profiles must use `apiVersion: klankermaker.ai/v1alpha2`.
+
 Declarative SOPS-encrypted secrets attached to a SandboxProfile. At boot, the
 sandbox decrypts the bundle using a shared per-install KMS key and exposes the
 keys as environment variables in login shells (`/etc/sandbox-secrets.env` +
