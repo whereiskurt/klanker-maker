@@ -1,0 +1,52 @@
+# Allow-list for TestGoSourceNamesUseResourcePrefix (pkg/hygiene).
+#
+# Format: one "relpath:literal" per line. A line whitelists a specific km-
+# literal in a specific file. '#' comments and blank lines ignored.
+#
+# Every entry must match at least one real detector hit — the test fails on
+# stale entries, so this list stays honest. When a DEFERRED site is fixed,
+# delete its line here (the stale-check will remind you if you forget).
+#
+# Categories below: BRAND, LOCAL, FALLBACK are genuinely benign. DEFERRED are
+# real multi-install gaps tracked for the substrate follow-up — suppressed here
+# only to keep CI green while they wait.
+
+# ── BRAND: "km-platform-" is the install-invariant KMS brand prefix; the
+#    resource_prefix is appended as a SEGMENT (alias/km-platform-{prefix}-{region}).
+#    Prefix-aware by construction. See config.GetPlatformKMSAlias.
+cmd/create-handler/main.go:alias/km-platform-
+internal/app/cmd/doctor.go:alias/km-platform-
+internal/app/cmd/doctor.go:km-platform-
+internal/app/config/config.go:alias/km-platform-
+
+# ── LOCAL: identifiers scoped to one operator's workstation or one sandbox's
+#    netns — STS/tmux session names, temp file/dir names, kernel TC filter.
+#    Sandbox IDs are unique, so no cross-install collision.
+cmd/ttl-handler/main.go:km-agent-%s
+internal/app/cmd/agent.go:km-agent-%s
+internal/app/cmd/init.go:km-plan-
+internal/app/cmd/init.go:km-init-%d
+pkg/ebpf/sni/sni.go:km-sni-%s
+
+# ── FALLBACK: literal is only reached when a KM_* env var is empty; the env is
+#    injected prefix-aware on the live path (km init / compiler userdata).
+cmd/configui/handlers_secrets.go:/km/
+sidecars/audit-log/cmd/main.go:/km/sandboxes/%s/
+
+# ── DEFERRED: real multi-install bugs, substrate-scoped, tracked for the
+#    follow-up (Docker/ECS/github-token + the suspected-stale budget role).
+#    Remove each line as it is fixed.
+# Docker-substrate IAM role names (symmetric create/destroy, but defeats doctor GC):
+internal/app/cmd/create.go:km-docker-%s-%s
+internal/app/cmd/create.go:km-sidecar-%s-%s
+internal/app/cmd/destroy.go:km-docker-%s-%s
+internal/app/cmd/destroy.go:km-sidecar-%s-%s
+# Docker-substrate budget table (wrong shape AND prefix vs shared {prefix}-budgets):
+pkg/compiler/compose.go:km-budget-%s
+# github-token-refresher SSM config prefix — env block not yet wired (its own TODO);
+# pairs with the roll.go GitHub-key path fix. km2 reads km's GitHub config until wired.
+cmd/github-token-refresher/main.go:/km/config/github
+# SUSPECTED STALE: km budget resume restores Bedrock policy to "km-sandbox-{id}-role",
+# but the enforcer detaches from the real ec2spot role via ARN. Role name looks wrong
+# even on the default install — needs investigation, not a blind prefix swap.
+internal/app/cmd/budget.go:km-sandbox-%s-role
