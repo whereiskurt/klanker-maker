@@ -175,6 +175,13 @@ type Config struct {
 	// currently uses it. Maps to km-config.yaml key doctor_stale_ami_days. Defaults to 30.
 	DoctorStaleAMIDays int
 
+	// DoctorIgnorePrefixes lists sibling resource_prefix values (other km installs
+	// sharing this AWS account) that `km doctor` should treat as KNOWN — their
+	// cross-install resources (SCPs, SES rules, sandbox-secrets KMS aliases) are
+	// reported as OK rather than WARN. Maps to km-config.yaml key
+	// doctor_ignore_prefixes. The --ignore-prefix flag augments this list.
+	DoctorIgnorePrefixes []string
+
 	// SlackThreadsTableName is the DynamoDB table name for the Slack-inbound
 	// (channel_id, thread_ts) → claude_session_id mapping. Default
 	// "km-slack-threads"; respects ResourcePrefix when set (Phase 66
@@ -366,6 +373,7 @@ func Load() (*Config, error) {
 			"ttl_lambda_arn",
 			"scheduler_role_arn",
 			"doctor_stale_ami_days",
+			"doctor_ignore_prefixes",
 			"slack_threads_table_name",
 			"slack_stream_messages_table_name",
 			"resource_prefix",
@@ -432,6 +440,7 @@ func Load() (*Config, error) {
 		SchedulesTableName:           v.GetString("schedules_table_name"),
 		CreateHandlerLambdaARN:       v.GetString("create_handler_lambda_arn"),
 		DoctorStaleAMIDays:           v.GetInt("doctor_stale_ami_days"),
+		DoctorIgnorePrefixes:         v.GetStringSlice("doctor_ignore_prefixes"),
 		SlackThreadsTableName:        v.GetString("slack_threads_table_name"),
 		SlackStreamMessagesTableName: v.GetString("slack_stream_messages_table_name"),
 		ResourcePrefix:               v.GetString("resource_prefix"),
@@ -565,6 +574,16 @@ func (c *Config) GetResourcePrefix() string {
 		return "km"
 	}
 	return c.ResourcePrefix
+}
+
+// GetDoctorIgnorePrefixes returns the configured sibling resource_prefix values
+// that `km doctor` treats as known (suppresses their cross-install WARNs).
+// Returns nil when unset.
+func (c *Config) GetDoctorIgnorePrefixes() []string {
+	if c == nil {
+		return nil
+	}
+	return c.DoctorIgnorePrefixes
 }
 
 // ShouldBuildContainerImages reports whether `km init` should build and push

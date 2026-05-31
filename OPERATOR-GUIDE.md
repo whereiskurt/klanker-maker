@@ -905,6 +905,26 @@ map to a known `resource_prefix`, or `⚠ orphan SES rules: <list>` when rules e
 not in the local `km-config.yaml`. The orphan check is WARN-level — expected when a sibling
 install is present.
 
+**Silencing known siblings:** the three cross-install checks (`Orphan SCPs`, `SES rules`,
+`Shared secrets KMS key`) WARN on resources belonging to *other* installs in the same account.
+When you knowingly run siblings, declare them so those checks report OK (with a note) instead:
+
+```yaml
+# km-config.yaml — install-level, applies every run
+doctor_ignore_prefixes:
+  - km2
+  - rg
+```
+
+```bash
+# or ad-hoc, augmenting the config list
+km doctor --ignore-prefix=km2,rg
+```
+
+A still-unknown prefix (one you did not declare) continues to WARN, so genuine leftovers from a
+botched `km uninit` are not masked. The flag/key only affects these cross-install checks — the
+per-sandbox stale-resource scans already filter to your own `{resource_prefix}-*`.
+
 **Validation:**
 
 ```bash

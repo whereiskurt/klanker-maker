@@ -620,29 +620,30 @@ type testConfig struct {
 // doctorConfigProvider is the interface that checkConfig accepts.
 // Defined in doctor.go.
 
-func (c *testConfig) GetDomain() string                   { return c.domain }
-func (c *testConfig) GetOrganizationAccountID() string    { return c.orgAcct }
-func (c *testConfig) GetDNSParentAccountID() string       { return c.dnsParentAcct }
-func (c *testConfig) GetTerraformAccountID() string       { return c.tfAcct }
-func (c *testConfig) GetApplicationAccountID() string     { return c.appAcct }
-func (c *testConfig) GetSSOStartURL() string              { return c.ssoURL }
-func (c *testConfig) GetPrimaryRegion() string            { return c.region }
-func (c *testConfig) GetStateBucket() string              { return "" }
-func (c *testConfig) GetBudgetTableName() string          { return "" }
-func (c *testConfig) GetIdentityTableName() string        { return "" }
-func (c *testConfig) GetAWSProfile() string               { return "" }
-func (c *testConfig) GetArtifactsBucket() string          { return "" }
-func (c *testConfig) GetDoctorStaleAMIDays() int          { return 30 }
-func (c *testConfig) GetProfileSearchPaths() []string     { return nil }
+func (c *testConfig) GetDomain() string                { return c.domain }
+func (c *testConfig) GetOrganizationAccountID() string { return c.orgAcct }
+func (c *testConfig) GetDNSParentAccountID() string    { return c.dnsParentAcct }
+func (c *testConfig) GetTerraformAccountID() string    { return c.tfAcct }
+func (c *testConfig) GetApplicationAccountID() string  { return c.appAcct }
+func (c *testConfig) GetSSOStartURL() string           { return c.ssoURL }
+func (c *testConfig) GetPrimaryRegion() string         { return c.region }
+func (c *testConfig) GetStateBucket() string           { return "" }
+func (c *testConfig) GetBudgetTableName() string       { return "" }
+func (c *testConfig) GetIdentityTableName() string     { return "" }
+func (c *testConfig) GetAWSProfile() string            { return "" }
+func (c *testConfig) GetArtifactsBucket() string       { return "" }
+func (c *testConfig) GetDoctorStaleAMIDays() int       { return 30 }
+func (c *testConfig) GetProfileSearchPaths() []string  { return nil }
 func (c *testConfig) GetSlackStreamMessagesTableName() string {
 	return "km-slack-stream-messages"
 }
-func (c *testConfig) GetResourcePrefix() string        { return "km" }
-func (c *testConfig) GetEmailDomain() string           { return "sandboxes.klankermaker.ai" }
-func (c *testConfig) GetSsmPrefix() string             { return "/km/" }
-func (c *testConfig) GetSlackThreadsTableName() string { return "km-slack-threads" }
-func (c *testConfig) GetSandboxTableName() string      { return "km-sandboxes" }
-func (c *testConfig) GetClusterRoleNames() []string    { return nil }
+func (c *testConfig) GetResourcePrefix() string         { return "km" }
+func (c *testConfig) GetDoctorIgnorePrefixes() []string { return nil }
+func (c *testConfig) GetEmailDomain() string            { return "sandboxes.klankermaker.ai" }
+func (c *testConfig) GetSsmPrefix() string              { return "/km/" }
+func (c *testConfig) GetSlackThreadsTableName() string  { return "km-slack-threads" }
+func (c *testConfig) GetSandboxTableName() string       { return "km-sandboxes" }
+func (c *testConfig) GetClusterRoleNames() []string     { return nil }
 
 // =============================================================================
 // Tests: DoctorCmd (Task 2)
@@ -925,29 +926,30 @@ type testDoctorConfig struct {
 	awsProfile    string
 }
 
-func (c *testDoctorConfig) GetDomain() string                   { return c.domain }
-func (c *testDoctorConfig) GetOrganizationAccountID() string    { return c.orgAcct }
-func (c *testDoctorConfig) GetDNSParentAccountID() string       { return c.dnsParentAcct }
-func (c *testDoctorConfig) GetTerraformAccountID() string       { return c.tfAcct }
-func (c *testDoctorConfig) GetApplicationAccountID() string     { return c.appAcct }
-func (c *testDoctorConfig) GetSSOStartURL() string              { return c.ssoURL }
-func (c *testDoctorConfig) GetPrimaryRegion() string            { return c.region }
-func (c *testDoctorConfig) GetStateBucket() string              { return "" }
-func (c *testDoctorConfig) GetBudgetTableName() string          { return "" }
-func (c *testDoctorConfig) GetIdentityTableName() string        { return "" }
-func (c *testDoctorConfig) GetAWSProfile() string               { return c.awsProfile }
-func (c *testDoctorConfig) GetArtifactsBucket() string          { return "" }
-func (c *testDoctorConfig) GetDoctorStaleAMIDays() int          { return 30 }
-func (c *testDoctorConfig) GetProfileSearchPaths() []string     { return nil }
+func (c *testDoctorConfig) GetDomain() string                { return c.domain }
+func (c *testDoctorConfig) GetOrganizationAccountID() string { return c.orgAcct }
+func (c *testDoctorConfig) GetDNSParentAccountID() string    { return c.dnsParentAcct }
+func (c *testDoctorConfig) GetTerraformAccountID() string    { return c.tfAcct }
+func (c *testDoctorConfig) GetApplicationAccountID() string  { return c.appAcct }
+func (c *testDoctorConfig) GetSSOStartURL() string           { return c.ssoURL }
+func (c *testDoctorConfig) GetPrimaryRegion() string         { return c.region }
+func (c *testDoctorConfig) GetStateBucket() string           { return "" }
+func (c *testDoctorConfig) GetBudgetTableName() string       { return "" }
+func (c *testDoctorConfig) GetIdentityTableName() string     { return "" }
+func (c *testDoctorConfig) GetAWSProfile() string            { return c.awsProfile }
+func (c *testDoctorConfig) GetArtifactsBucket() string       { return "" }
+func (c *testDoctorConfig) GetDoctorStaleAMIDays() int       { return 30 }
+func (c *testDoctorConfig) GetProfileSearchPaths() []string  { return nil }
 func (c *testDoctorConfig) GetSlackStreamMessagesTableName() string {
 	return "km-slack-stream-messages"
 }
-func (c *testDoctorConfig) GetResourcePrefix() string        { return "km" }
-func (c *testDoctorConfig) GetEmailDomain() string           { return "sandboxes.klankermaker.ai" }
-func (c *testDoctorConfig) GetSsmPrefix() string             { return "/km/" }
-func (c *testDoctorConfig) GetSlackThreadsTableName() string { return "km-slack-threads" }
-func (c *testDoctorConfig) GetSandboxTableName() string      { return "km-sandboxes" }
-func (c *testDoctorConfig) GetClusterRoleNames() []string    { return nil }
+func (c *testDoctorConfig) GetResourcePrefix() string         { return "km" }
+func (c *testDoctorConfig) GetDoctorIgnorePrefixes() []string { return nil }
+func (c *testDoctorConfig) GetEmailDomain() string            { return "sandboxes.klankermaker.ai" }
+func (c *testDoctorConfig) GetSsmPrefix() string              { return "/km/" }
+func (c *testDoctorConfig) GetSlackThreadsTableName() string  { return "km-slack-threads" }
+func (c *testDoctorConfig) GetSandboxTableName() string       { return "km-sandboxes" }
+func (c *testDoctorConfig) GetClusterRoleNames() []string     { return nil }
 
 func allOKDeps() *DoctorDeps {
 	return &DoctorDeps{
@@ -1389,11 +1391,11 @@ func makeTestAMI(id string, ageDays float64) ec2types.Image {
 // doctorStaleAMIConfig is a minimal DoctorConfigProvider used in checkStaleAMIs tests.
 type doctorStaleAMIConfig struct {
 	testDoctorConfig
-	staleDays    int
-	searchPaths  []string
+	staleDays   int
+	searchPaths []string
 }
 
-func (c *doctorStaleAMIConfig) GetDoctorStaleAMIDays() int     { return c.staleDays }
+func (c *doctorStaleAMIConfig) GetDoctorStaleAMIDays() int      { return c.staleDays }
 func (c *doctorStaleAMIConfig) GetProfileSearchPaths() []string { return c.searchPaths }
 
 func newDoctorStaleAMICfg(staleDays int, searchPaths []string) *doctorStaleAMIConfig {
@@ -1604,9 +1606,9 @@ func TestDoctor_AllRegionsFlag_PopulatesMultipleAMIClients(t *testing.T) {
 	cfg := minimalConfig()
 	deps := &DoctorDeps{
 		EC2AMIClients: map[string]kmaws.EC2AMIAPI{
-			"us-east-1":  &mockEC2AMIDoctor{images: []ec2types.Image{}},
-			"us-west-2":  &mockEC2AMIDoctor{images: []ec2types.Image{}},
-			"eu-west-1":  &mockEC2AMIDoctor{images: []ec2types.Image{}},
+			"us-east-1": &mockEC2AMIDoctor{images: []ec2types.Image{}},
+			"us-west-2": &mockEC2AMIDoctor{images: []ec2types.Image{}},
+			"eu-west-1": &mockEC2AMIDoctor{images: []ec2types.Image{}},
 		},
 	}
 	checks := buildChecks(cfg, deps)
@@ -1707,8 +1709,8 @@ func TestCheckSlackTokenValidity_NoBridgeURL_Warn(t *testing.T) {
 func TestCheckSlackTokenValidity_BridgeReturnsOK_StatusOK(t *testing.T) {
 	priv := genDoctorKey(t)
 	ssm := &mockSlackSSMStore{params: map[string]string{
-		"/km/slack/bot-token":       "xoxb-test",
-		"/km/slack/bridge-url":      "https://bridge.example.com",
+		"/km/slack/bot-token":         "xoxb-test",
+		"/km/slack/bridge-url":        "https://bridge.example.com",
 		"/km/slack/shared-channel-id": "C0SHARED",
 	}}
 	keyLoader := func(_ context.Context, _ string) (ed25519key.PrivateKey, error) { return priv, nil }
@@ -1723,8 +1725,8 @@ func TestCheckSlackTokenValidity_BridgeReturnsOK_StatusOK(t *testing.T) {
 func TestCheckSlackTokenValidity_BridgeReturns401_Warn(t *testing.T) {
 	priv := genDoctorKey(t)
 	ssm := &mockSlackSSMStore{params: map[string]string{
-		"/km/slack/bot-token":       "xoxb-bad",
-		"/km/slack/bridge-url":      "https://bridge.example.com",
+		"/km/slack/bot-token":         "xoxb-bad",
+		"/km/slack/bridge-url":        "https://bridge.example.com",
 		"/km/slack/shared-channel-id": "C0SHARED",
 	}}
 	keyLoader := func(_ context.Context, _ string) (ed25519key.PrivateKey, error) { return priv, nil }
@@ -1739,8 +1741,8 @@ func TestCheckSlackTokenValidity_BridgeReturns401_Warn(t *testing.T) {
 func TestCheckSlackTokenValidity_BridgeReturns5xx_Error(t *testing.T) {
 	priv := genDoctorKey(t)
 	ssm := &mockSlackSSMStore{params: map[string]string{
-		"/km/slack/bot-token":       "xoxb-test",
-		"/km/slack/bridge-url":      "https://bridge.example.com",
+		"/km/slack/bot-token":         "xoxb-test",
+		"/km/slack/bridge-url":        "https://bridge.example.com",
 		"/km/slack/shared-channel-id": "C0SHARED",
 	}}
 	keyLoader := func(_ context.Context, _ string) (ed25519key.PrivateKey, error) { return priv, nil }
@@ -1910,12 +1912,12 @@ func TestCheckConfigDoesNotRequireManagement(t *testing.T) {
 	// A fully blank orgAcct should NOT cause checkConfig to return CheckError.
 	// The org account is optional; only the legacy-field check surfaces the migration need.
 	cfg := &testDoctorConfig{
-		orgAcct:  "", // blank — single-account topology
-		tfAcct:   "222222222222",
-		appAcct:  "333333333333",
-		ssoURL:   "https://sso.example.com/start",
-		region:   "us-east-1",
-		domain:   "example.com",
+		orgAcct: "", // blank — single-account topology
+		tfAcct:  "222222222222",
+		appAcct: "333333333333",
+		ssoURL:  "https://sso.example.com/start",
+		region:  "us-east-1",
+		domain:  "example.com",
 	}
 	result := checkConfig(cfg)
 	if result.Status == CheckError {
@@ -2028,7 +2030,7 @@ func TestCheckSESRules_AllOwn(t *testing.T) {
 	mock := &mockSESReceiptRuleAPI{
 		ruleNames: []string{"kph-operator-inbound", "kph-sandbox-catchall"},
 	}
-	result := checkSESRules(context.Background(), mock, "kph")
+	result := checkSESRules(context.Background(), mock, "kph", nil)
 	// Expected: CheckOK, message mentions "2 rules" and "kph".
 	if result.Status != CheckOK {
 		t.Errorf("expected CheckOK when all rules own prefix kph, got %s: %s", result.Status, result.Message)
@@ -2052,7 +2054,7 @@ func TestCheckSESRules_Orphans(t *testing.T) {
 			"xx-operator-inbound", // foreign prefix — orphan
 		},
 	}
-	result := checkSESRules(context.Background(), mock, "kph")
+	result := checkSESRules(context.Background(), mock, "kph", nil)
 	// Expected: CheckWarn, orphan list contains "xx-operator-inbound".
 	if result.Status != CheckWarn {
 		t.Errorf("expected CheckWarn when orphan rule xx-operator-inbound present, got %s: %s", result.Status, result.Message)
@@ -2133,7 +2135,7 @@ func TestDoctor_WarnsOnOrphanSCPs(t *testing.T) {
 				{Name: aws.String("FullAWSAccess"), Id: aws.String("p-full001")},
 			},
 		}
-		result := checkOrphanSCPs(context.Background(), client, "tg")
+		result := checkOrphanSCPs(context.Background(), client, "tg", nil)
 		if result.Status != CheckWarn {
 			t.Errorf("status = %v; want CheckWarn", result.Status)
 		}
@@ -2151,7 +2153,7 @@ func TestDoctor_WarnsOnOrphanSCPs(t *testing.T) {
 				{Name: aws.String("tg-sandbox-containment"), Id: aws.String("p-tgown")},
 			},
 		}
-		result := checkOrphanSCPs(context.Background(), client, "tg")
+		result := checkOrphanSCPs(context.Background(), client, "tg", nil)
 		if result.Status != CheckOK {
 			t.Errorf("status = %v; want CheckOK", result.Status)
 		}
@@ -2163,14 +2165,14 @@ func TestDoctor_WarnsOnOrphanSCPs(t *testing.T) {
 				{Name: aws.String("FullAWSAccess"), Id: aws.String("p-full001")},
 			},
 		}
-		result := checkOrphanSCPs(context.Background(), client, "km")
+		result := checkOrphanSCPs(context.Background(), client, "km", nil)
 		if result.Status != CheckOK {
 			t.Errorf("status = %v; want CheckOK", result.Status)
 		}
 	})
 
 	t.Run("skipped when client nil", func(t *testing.T) {
-		result := checkOrphanSCPs(context.Background(), nil, "km")
+		result := checkOrphanSCPs(context.Background(), nil, "km", nil)
 		if result.Status != CheckSkipped {
 			t.Errorf("status = %v; want CheckSkipped", result.Status)
 		}
@@ -2189,7 +2191,7 @@ func TestDoctor_WarnsOnOrphanSCPs(t *testing.T) {
 				},
 			},
 		}
-		result := checkOrphanSCPs(context.Background(), client, "tg")
+		result := checkOrphanSCPs(context.Background(), client, "tg", nil)
 		if result.Status != CheckWarn {
 			t.Errorf("status = %v; want CheckWarn (orphan from page 1 detected)", result.Status)
 		}

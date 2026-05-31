@@ -46,7 +46,7 @@ func TestCheckSESRules(t *testing.T) {
 		mock := &mockSESReceiptRuleAPI{
 			ruleNames: []string{"kph-operator-inbound", "kph-sandbox-catchall"},
 		}
-		result := checkSESRules(context.Background(), mock, "kph")
+		result := checkSESRules(context.Background(), mock, "kph", nil)
 		if result.Status != CheckOK {
 			t.Errorf("expected CheckOK when all rules belong to prefix kph, got %s: %s",
 				result.Status, result.Message)
@@ -67,7 +67,7 @@ func TestCheckSESRules(t *testing.T) {
 				"xx-operator-inbound", // foreign prefix — orphan
 			},
 		}
-		result := checkSESRules(context.Background(), mock, "kph")
+		result := checkSESRules(context.Background(), mock, "kph", nil)
 		if result.Status != CheckWarn {
 			t.Errorf("expected CheckWarn when orphan rule xx-operator-inbound present, got %s: %s",
 				result.Status, result.Message)
@@ -79,7 +79,7 @@ func TestCheckSESRules(t *testing.T) {
 
 	t.Run("NilClient_DoesNotPanic", func(t *testing.T) {
 		// nil client — production code returns CheckSkipped.
-		result := checkSESRules(context.Background(), nil, "kph")
+		result := checkSESRules(context.Background(), nil, "kph", nil)
 		if result.Status != CheckSkipped {
 			t.Errorf("expected CheckSkipped for nil client, got %s", result.Status)
 		}
