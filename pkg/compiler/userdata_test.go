@@ -561,14 +561,17 @@ func TestUserDataKMTracingServicectlStart(t *testing.T) {
 	lines := strings.Split(out, "\n")
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "systemctl start ") && strings.Contains(line, "km-dns-proxy") {
+		// Sidecars are brought up via `systemctl enable` (units auto-start on boot
+		// via WantedBy=multi-user.target); the old `systemctl start` form was
+		// refactored out. km-tracing must be co-enabled with km-dns-proxy.
+		if strings.HasPrefix(trimmed, "systemctl enable ") && strings.Contains(line, "km-dns-proxy") {
 			if !strings.Contains(line, "km-tracing") {
-				t.Errorf("sidecar systemctl start line does not include km-tracing: %q", line)
+				t.Errorf("sidecar systemctl enable line does not include km-tracing: %q", line)
 			}
 			return
 		}
 	}
-	t.Error("sidecar systemctl start line (containing km-dns-proxy) not found in user-data")
+	t.Error("sidecar systemctl enable line (containing km-dns-proxy) not found in user-data")
 }
 
 // TestUserDataKMTracingOTELS3BucketResolvesToArtifactsBucket verifies OTEL_S3_BUCKET in the
@@ -1661,12 +1664,14 @@ func TestAuditHookNonBlocking(t *testing.T) {
 		t.Errorf("expected _km_audit() definition in userdata")
 	}
 
-	// The timeout-tee pattern must appear at least twice:
-	// once in _km_audit, once in _km_heartbeat.
+	// The timeout-tee pattern keeps the audit write non-blocking (a stalled pipe
+	// reader can't hang the shell). Phase 79 moved the heartbeat out of a shell
+	// PROMPT_COMMAND hook (_km_heartbeat) into the km-presence systemd daemon, so
+	// the pattern now appears once — in _km_audit — rather than twice.
 	const pattern = "timeout 0.1 tee /run/km/audit-pipe"
 	count := strings.Count(out, pattern)
-	if count < 2 {
-		t.Errorf("expected timeout-tee pattern %q to appear >= 2 times in userdata (once per hook), got %d occurrences", pattern, count)
+	if count < 1 {
+		t.Errorf("expected timeout-tee pattern %q to appear (non-blocking _km_audit write), got %d occurrences", pattern, count)
 	}
 }
 

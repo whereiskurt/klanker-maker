@@ -9,6 +9,27 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
+// extractNotifyEnvBlock returns the body of the compile-time
+// /etc/profile.d/km-notify-env.sh heredoc (between the cat<<'KM_NOTIFY_ENV_EOF'
+// marker and its closing EOF), i.e. exactly what the compiler BAKES from the
+// .NotifyEnv map. Returns "" when the block isn't emitted.
+//
+// Phase 67-11 added a runtime SSM-resolution poller (and Phase 68/70 added
+// systemd EnvironmentFile= references) that mention the same KM_SLACK_* keys
+// elsewhere in the userdata blob. Tests asserting "key X is not baked at compile
+// time" must therefore scope to this block, not the whole userdata string.
+func extractNotifyEnvBlock(ud string) string {
+	const open = "cat > /etc/profile.d/km-notify-env.sh << 'KM_NOTIFY_ENV_EOF'\n"
+	_, rest, found := strings.Cut(ud, open)
+	if !found {
+		return ""
+	}
+	if body, _, ok := strings.Cut(rest, "KM_NOTIFY_ENV_EOF"); ok {
+		return body
+	}
+	return rest
+}
+
 // ============================================================
 // Task 1: Hook script emission + km-notify-env.sh (HOOK-01, HOOK-03)
 // ============================================================
@@ -52,8 +73,13 @@ func TestUserDataNotifyEnvVars_NoneSet_NoEnvBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateUserData: %v", err)
 	}
-	if strings.Contains(ud, "/etc/profile.d/km-notify-env.sh") {
-		t.Errorf("user-data should NOT write km-notify-env.sh when Spec.CLI is nil")
+	// The real invariant: no compile-time heredoc BLOCK when NotifyEnv is empty
+	// (guarded by `if p.Spec.CLI != nil` + `{{- if .NotifyEnv }}`). A whole-blob
+	// substring check for the path now false-positives because later phases
+	// (67-11 runtime poller, 68 systemd EnvironmentFile=, comments) reference it
+	// unconditionally.
+	if strings.Contains(ud, "cat > /etc/profile.d/km-notify-env.sh << 'KM_NOTIFY_ENV_EOF'") {
+		t.Errorf("user-data should NOT write the km-notify-env.sh heredoc block when Spec.CLI is nil")
 	}
 }
 
@@ -461,8 +487,8 @@ func TestUserDataNotifyEnv_NoChannelOverride_NoChannelID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(ud, `KM_SLACK_CHANNEL_ID=`) {
-		t.Errorf("user-data should NOT contain KM_SLACK_CHANNEL_ID when notifySlackChannelOverride is empty")
+	if block := extractNotifyEnvBlock(ud); strings.Contains(block, `KM_SLACK_CHANNEL_ID=`) {
+		t.Errorf("compile-time km-notify-env.sh should NOT bake KM_SLACK_CHANNEL_ID when notifySlackChannelOverride is empty (runtime SSM poller injects it); block:\n%s", block)
 	}
 }
 
@@ -476,8 +502,8 @@ func TestUserDataNotifyEnv_BridgeURLNeverEmittedAtCompileTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(ud, `KM_SLACK_BRIDGE_URL=`) {
-		t.Errorf("user-data must NOT contain KM_SLACK_BRIDGE_URL at compile time (Plan 08 injects at runtime)")
+	if block := extractNotifyEnvBlock(ud); strings.Contains(block, `KM_SLACK_BRIDGE_URL=`) {
+		t.Errorf("compile-time km-notify-env.sh must NOT bake KM_SLACK_BRIDGE_URL (runtime SSM lookup injects it); block:\n%s", block)
 	}
 }
 
