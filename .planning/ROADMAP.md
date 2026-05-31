@@ -593,7 +593,7 @@ Plans:
 - [ ] 23-02-PLAN.md — km roll creds Cobra command with --sandbox, --platform, --force-restart flags (CRED-01, CRED-02, CRED-03, CRED-05)
 - [ ] 23-03-PLAN.md — km doctor credential rotation age check (CRED-06)
 
-### Phase 24: Documentation Refresh (Phases 18-32)
+### Phase 24 — Documentation Refresh (Phases 18-32) — superseded; folded into ongoing docs work, no standalone phase directory
 
 **Goal:** Update operator guide, user manual, README, and inline docs to cover all features through Phase 32
 

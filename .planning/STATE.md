@@ -22,16 +22,18 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-21)
 
 **Core value:** A sandbox is a declarative policy object that compiles into a controlled, auditable execution environment
-**Current focus:** Phase 79 — km-presence daemon COMPLETE
+**Current focus:** Phase 91 — Slack inbound @-mention-only (polite-bot) — 91-06 at UAT checkpoint
 
 ## Current Position
 
-Phase: 79 (km-presence-daemon) — ALL 6 PLANS COMPLETE
-Plan: 6 of 6 in phase 79 (all complete; 79-05 closeout + UAT passed 2026-05-10)
-Total Plans in Phase: 6
+Phase: 91 (slack-inbound-mention-only-mode / polite-bot) — plans 91-00 → 91-06 complete on disk
+Plan: 91-06 — tasks 1–3 done; Task 4 (UAT) at checkpoint:human-verify
+Total Plans in Phase: 7 (91-00 → 91-06)
 Current Plan: 14
 Status: in-progress
 Last activity: 2026-05-30
+
+Next up: Phase 92 (profile-spec-restructure) — 7 plans planned (92-00 → 92-06), not yet executed
 
 Progress: [█████████░] 88%
 
@@ -1352,7 +1354,7 @@ Recent decisions affecting current work:
 ### Roadmap Evolution
 - Phase 22 added: Remote Sandbox Dispatch — km create/destroy/stop/extend --remote via Lambda
 - Phase 23 added: Email-Driven Operations — operator inbox, email-to-create, safe phrase auth, EventBridge
-- Phase 24 added: Credential Rotation — km roll creds for platform and sandbox secrets
+- Phase-24 added: Credential Rotation — km roll creds for platform and sandbox secrets (since renumbered; no standalone 24-* dir)
 - Phase 25 added: GitHub Source Access Restrictions — deep testing of repo allowlists, deny-by-default
 - Phase 26 added + completed: Live Operations Hardening — ~60 commits across 2-day session
 - Phase 27 added: Documentation Refresh (Phases 22-26)
