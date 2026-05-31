@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 92-03-PLAN.md (notification compiler/CLI/fixtures/docs; build-break closed; VC-1/VC-3/VC-11 GREEN)
-last_updated: "2026-05-31T22:21:46.170Z"
+stopped_at: Completed 92-04-PLAN.md (agent block types/schema/inherit/mixed-mode validator; VC-1/VC-3/VC-6/VC-11 GREEN; CLISpec now NoBedrock-only)
+last_updated: "2026-05-31T22:46:21.906Z"
 last_activity: 2026-05-31
 progress:
   total_phases: 107
   completed_phases: 95
   total_plans: 466
-  completed_plans: 427
+  completed_plans: 428
   percent: 91
 ---
 
@@ -460,6 +460,7 @@ Progress: [█████████░] 91%
 | Phase 92 P01 | 30min | 3 tasks | 78 files |
 | Phase 92 P02 | 12min | 3 tasks | 11 files |
 | Phase 92 P03 | 55min | 4 tasks | 36 files |
+| Phase 92 P04 | 20min | 4 tasks | 24 files |
 
 ## Accumulated Context
 
@@ -1326,6 +1327,8 @@ Recent decisions affecting current work:
 - [Phase 92]: 92-02: kept cli.notifySlackInboundReactAlways (15th notify field) on CLISpec — no target home in NotificationSlackInboundSpec; Wave 3 to resolve
 - [Phase 92]: Re-homed notifySlackInboundReactAlways off CLISpec into notification.slack.inbound.reactAlways (Wave-2 deferred item closed); CLISpec now exactly NoBedrock/Agent/ClaudeArgs/CodexArgs
 - [Phase 92]: NotifyEnv emission outer gate kept at Spec.CLI != nil (KM_AGENT still reads cli.Agent / Wave 4) so learn.v2 userdata stays byte-identical (VC-3)
+- [Phase 92]: 92-04: agent.claude.permissions is the only untyped passthrough (map[string]any / additionalProperties:true) per CONTEXT.md locked decision; everything else typed aggressively
+- [Phase 92]: 92-04: KM_AGENT keeps its Spec.CLI!=nil emission gate but sources value from agentDefault(p)=spec.agent.default; VC-3 byte-identity holds because learn.v2 carries both cli: and agent: blocks
 
 ### Roadmap Evolution
 
@@ -1443,6 +1446,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-31T22:21:39.213Z
-Stopped at: Completed 92-03-PLAN.md (notification compiler/CLI/fixtures/docs; build-break closed; VC-1/VC-3/VC-11 GREEN)
+Last session: 2026-05-31T22:46:15.583Z
+Stopped at: Completed 92-04-PLAN.md (agent block types/schema/inherit/mixed-mode validator; VC-1/VC-3/VC-6/VC-11 GREEN; CLISpec now NoBedrock-only)
 Resume file: None

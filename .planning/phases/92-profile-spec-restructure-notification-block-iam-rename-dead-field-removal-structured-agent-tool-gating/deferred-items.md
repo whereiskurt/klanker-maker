@@ -42,3 +42,11 @@ all pass.
   (`pkg/compiler/userdata.go`, `service_hcl.go`, `internal/app/cmd/*`). Wave 3 re-points all
   `p.Spec.CLI.Notify*` / `VSCodeEnabled` readers to `p.Spec.Notification.*` / `p.Spec.Runtime.VSCode`,
   rewrites profile YAMLs, and restores the pkg/compiler byte-identity goldens.
+
+## 92-04 deferred (out-of-scope, SCOPE BOUNDARY)
+
+- `internal/app/cmd/TestUnlockCmd_RequiresStateBucket` FAILS in the local env:
+  expects error mentioning "state bucket" but got "sandbox sb-aabbccdd is not
+  locked". Pre-existing, environment/credential-ordering dependent (km unlock
+  precondition check order), unrelated to the Phase 92 agent block. Not touched
+  by 92-04. All agent/codex/doctor cmd tests pass. Logged 2026-05-31.
