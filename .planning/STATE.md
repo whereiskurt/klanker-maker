@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 92-00-PLAN.md (Wave 0 baselines + RED stubs); Wave 1 unblocked
-last_updated: "2026-05-31T20:58:31.284Z"
+stopped_at: Completed 92-01-PLAN.md (Wave 1 IAM rename + apiVersion v1alpha2 bump)
+last_updated: "2026-05-31T21:35:41.172Z"
 last_activity: 2026-05-31
 progress:
   total_phases: 107
   completed_phases: 95
   total_plans: 466
-  completed_plans: 424
+  completed_plans: 425
   percent: 91
 ---
 
@@ -457,6 +457,7 @@ Progress: [█████████░] 91%
 | Phase 91 P05 | 12min | 2 tasks | 3 files |
 | Phase 91-slack-inbound-mention-only-mode-for-shared-and-override-channels-polite-bot P06 | 3min | 3 tasks | 3 files |
 | Phase 92 P00 | 4min | 3 tasks | 8 files |
+| Phase 92 P01 | 30min | 3 tasks | 78 files |
 
 ## Accumulated Context
 
@@ -1318,6 +1319,7 @@ Recent decisions affecting current work:
 - [Phase 91-slack-inbound-mention-only-mode-for-shared-and-override-channels-polite-bot]: OPERATOR-GUIDE.md gained a new ## Slack notifications top-level section (was absent); mention-only subsection placed before SOPS section
 - [Phase 92]: Phase 92 Wave 0: byte-identity goldens (learn.v2 userdata + IAM HCL) captured from pre-change main; Wave 1 IAM rename must keep both GREEN
 - [Phase 92]: RED stubs gated by per-wave build tags (phase92_wave2/4/5) so default go test stays green while each wave has a compile-failing target
+- [Phase 92]: Phase 92 Wave 1: spec.identity → spec.iam, dead spec.agent/sessionPolicy removed, iam.allowedSecretPaths schema drift closed, apiVersion bumped v1alpha1 → v1alpha2 (STRICT)
 
 ### Roadmap Evolution
 
@@ -1435,6 +1437,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-31T20:57:59.786Z
-Stopped at: Completed 92-00-PLAN.md (Wave 0 baselines + RED stubs); Wave 1 unblocked
+Last session: 2026-05-31T21:35:36.510Z
+Stopped at: Completed 92-01-PLAN.md (Wave 1 IAM rename + apiVersion v1alpha2 bump)
 Resume file: None
