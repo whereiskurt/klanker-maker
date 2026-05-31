@@ -97,6 +97,8 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - **`identity.sessionPolicy` removed** without replacement (it was never read by any code path).
 - **`iam.allowedSecretPaths`** (Phase 89 SOPS SSM allowlist) is now declared in the JSON schema (closes the Phase 89 schema drift).
 - **Dead top-level `spec.agent:` block removed** (`maxConcurrentTasks`, `taskTimeout`, `allowedTools` — never read). A new `agent:` block with structured tool-gating semantics is re-introduced later in Phase 92 (Waves 4/5).
+- **`spec.cli.notify*` → `spec.notification:` (Wave 3, 2026-05-31).** The 15 notify/Slack fields moved out of `spec.cli` into a structured `spec.notification:` block: `notification.events.{onPermission,onIdle,cooldownSeconds}`, `notification.email.{enabled,address}`, `notification.slack.{enabled,perSandbox,channelOverride,archiveOnDestroy}` plus `slack.inbound.{enabled,mentionOnly,reactAlways}`, `slack.transcript.enabled`, and `slack.invites.{emails,useConnect}`. Surviving `spec.cli` fields: `noBedrock`, `agent`, `claudeArgs`, `codexArgs`. **Sandbox-side env var names (`KM_NOTIFY_*`, `KM_SLACK_*`) are UNCHANGED** — only the YAML surface changed; userdata output is byte-identical.
+- **`spec.cli.vscodeEnabled` → `spec.runtime.vscode.enabled` (Wave 3).** `IsVSCodeEnabled` now takes a `*RuntimeVSCodeSpec`.
 - `scripts/validate-all-profiles.sh` is the single-source-of-truth gate that runs `km validate` over the 20-file profile inventory (local-only; exits non-zero on any failure).
 
 ## Releases
@@ -307,11 +309,11 @@ invitees are native workspace members rather than external collaborators):
   add people to channels post-install. Auto-detects whether to use `conversations.invite`
   (native) or `conversations.inviteShared` (Slack Connect, requires Pro tier). `--dry-run` is a
   read-only probe: classifies the address without sending any invite or joining any channel.
-- `spec.cli.notifySlackInviteEmails: []string` — profile field that auto-invites ADDITIONAL
+- `spec.notification.slack.invites.emails: []string` — profile field that auto-invites ADDITIONAL
   people (beyond the always-invited primary operator) to the per-sandbox `#sb-{id}` channel after
   `km create` succeeds. Auto-detects native vs Connect.
-- `spec.cli.useSlackConnect: *bool` (default true) — gates the Connect fallback for the
-  `notifySlackInviteEmails` loop only. True: external addresses auto-Connected. False:
+- `spec.notification.slack.invites.useConnect: *bool` (default true) — gates the Connect fallback for the
+  `notification.slack.invites.emails` loop only. True: external addresses auto-Connected. False:
   external addresses skipped with a fail-soft warning + follow-up command. Does NOT affect the
   primary operator invite (always invited) or `km slack invite`/`km slack init`.
 
@@ -338,9 +340,9 @@ channels. The effective behaviour is determined by the channel mode + optional p
 |------|---------|---------|
 | 1 | Shared (e.g. `#km-notifications`) | mention-only |
 | 2 | Per-sandbox `#sb-{id}` | every-message (back-compat) |
-| 3 | Operator override (`notifySlackChannelOverride`) | mention-only |
+| 3 | Operator override (`notification.slack.channelOverride`) | mention-only |
 
-- `spec.cli.notifySlackInboundMentionOnly: *bool` — per-profile tri-state override: nil = mode
+- `spec.notification.slack.inbound.mentionOnly: *bool` — per-profile tri-state override: nil = mode
   default, `true` = force polite, `false` = force chatty. Omit for smart per-mode behaviour.
 - `KM_SLACK_MENTION_ONLY` — install-level Lambda env var (`"true"`/`"false"`; default `"false"`).
   **Phase 91.1:** populated from `km-config.yaml` key `slack.mention_only` automatically by
@@ -357,9 +359,9 @@ channels. The effective behaviour is determined by the channel mode + optional p
 - **Phase 91.4 (km v0.3.773+):** first-only reactor toggle. `slack.react_always: false`
   in km-config.yaml flips the install-level default so the bridge posts 👀 only on
   top-level engagement messages — thread replies dispatch silently. Profile field
-  `cli.notifySlackInboundReactAlways *bool` shipped for forward-compat with future
+  `notification.slack.inbound.reactAlways *bool` shipped for forward-compat with future
   per-sandbox routing; runtime behaviour today is install-level.
-- **Phase 91.5 (km v0.3.776+):** per-sandbox `notifySlackInboundReactAlways` override.
+- **Phase 91.5 (km v0.3.776+):** per-sandbox `notification.slack.inbound.reactAlways` override.
   When the profile sets the field explicitly, `km create` writes `slack_react_always`
   to the sandbox's `km-sandboxes` row; the bridge's `FetchByChannel` reads it and the
   per-sandbox value wins over the install-level default at step 10. Profile field is
