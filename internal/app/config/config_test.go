@@ -322,6 +322,56 @@ doctor_stale_ami_days: 14
 	}
 }
 
+// TestConfig_DoctorIgnorePrefixes_FileOverride verifies that
+// doctor_ignore_prefixes in km-config.yaml is parsed and surfaced via the getter.
+func TestConfig_DoctorIgnorePrefixes_FileOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: test.example.com
+doctor_ignore_prefixes:
+  - km2
+  - rg
+`)
+
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	got := cfg.GetDoctorIgnorePrefixes()
+	if len(got) != 2 || got[0] != "km2" || got[1] != "rg" {
+		t.Errorf("GetDoctorIgnorePrefixes() = %v, want [km2 rg]", got)
+	}
+}
+
+// TestConfig_DoctorIgnorePrefixes_DefaultNil verifies the getter returns nil when
+// the key is absent (no siblings ignored by default).
+func TestConfig_DoctorIgnorePrefixes_DefaultNil(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, "domain: test.example.com\n")
+
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if got := cfg.GetDoctorIgnorePrefixes(); len(got) != 0 {
+		t.Errorf("GetDoctorIgnorePrefixes() = %v, want empty/nil", got)
+	}
+}
+
 // TestConfig_DoctorStaleAMIDays_ZeroFallsBackToDefault verifies that a zero value
 // is clamped back to 30 (guards against operator misconfiguration).
 func TestConfig_DoctorStaleAMIDays_ZeroFallsBackToDefault(t *testing.T) {

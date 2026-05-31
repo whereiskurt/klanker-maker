@@ -26,13 +26,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
-	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
 	organizationstypes "github.com/aws/aws-sdk-go-v2/service/organizations/types"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/ses"
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	sesv2types "github.com/aws/aws-sdk-go-v2/service/sesv2/types"
@@ -204,6 +204,9 @@ type DoctorConfigProvider interface {
 	GetSlackStreamMessagesTableName() string
 	// GetResourcePrefix returns the Phase-66 multi-instance prefix; "km" by default.
 	GetResourcePrefix() string
+	// GetDoctorIgnorePrefixes returns sibling resource_prefix values whose
+	// cross-install resources should be reported OK rather than WARN.
+	GetDoctorIgnorePrefixes() []string
 	// GetEmailDomain returns the SES email domain "{subdomain}.{domain}".
 	GetEmailDomain() string
 	// GetSsmPrefix returns the SSM parameter prefix "/{prefix}/".
@@ -227,24 +230,25 @@ func (a *appConfigAdapter) GetDomain() string                { return a.cfg.Doma
 func (a *appConfigAdapter) GetOrganizationAccountID() string { return a.cfg.OrganizationAccountID }
 func (a *appConfigAdapter) GetDNSParentAccountID() string    { return a.cfg.DNSParentAccountID }
 func (a *appConfigAdapter) GetTerraformAccountID() string    { return a.cfg.TerraformAccountID }
-func (a *appConfigAdapter) GetApplicationAccountID() string { return a.cfg.ApplicationAccountID }
-func (a *appConfigAdapter) GetSSOStartURL() string          { return a.cfg.SSOStartURL }
-func (a *appConfigAdapter) GetPrimaryRegion() string        { return a.cfg.PrimaryRegion }
-func (a *appConfigAdapter) GetStateBucket() string          { return a.cfg.StateBucket }
-func (a *appConfigAdapter) GetBudgetTableName() string      { return a.cfg.BudgetTableName }
-func (a *appConfigAdapter) GetIdentityTableName() string    { return a.cfg.IdentityTableName }
-func (a *appConfigAdapter) GetAWSProfile() string           { return a.cfg.AWSProfile }
-func (a *appConfigAdapter) GetArtifactsBucket() string      { return a.cfg.ArtifactsBucket }
-func (a *appConfigAdapter) GetDoctorStaleAMIDays() int      { return a.cfg.DoctorStaleAMIDays }
-func (a *appConfigAdapter) GetProfileSearchPaths() []string { return a.cfg.ProfileSearchPaths }
+func (a *appConfigAdapter) GetApplicationAccountID() string  { return a.cfg.ApplicationAccountID }
+func (a *appConfigAdapter) GetSSOStartURL() string           { return a.cfg.SSOStartURL }
+func (a *appConfigAdapter) GetPrimaryRegion() string         { return a.cfg.PrimaryRegion }
+func (a *appConfigAdapter) GetStateBucket() string           { return a.cfg.StateBucket }
+func (a *appConfigAdapter) GetBudgetTableName() string       { return a.cfg.BudgetTableName }
+func (a *appConfigAdapter) GetIdentityTableName() string     { return a.cfg.IdentityTableName }
+func (a *appConfigAdapter) GetAWSProfile() string            { return a.cfg.AWSProfile }
+func (a *appConfigAdapter) GetArtifactsBucket() string       { return a.cfg.ArtifactsBucket }
+func (a *appConfigAdapter) GetDoctorStaleAMIDays() int       { return a.cfg.DoctorStaleAMIDays }
+func (a *appConfigAdapter) GetProfileSearchPaths() []string  { return a.cfg.ProfileSearchPaths }
 func (a *appConfigAdapter) GetSlackStreamMessagesTableName() string {
 	return a.cfg.GetSlackStreamMessagesTableName()
 }
-func (a *appConfigAdapter) GetResourcePrefix() string        { return a.cfg.GetResourcePrefix() }
-func (a *appConfigAdapter) GetEmailDomain() string           { return a.cfg.GetEmailDomain() }
-func (a *appConfigAdapter) GetSsmPrefix() string             { return a.cfg.GetSsmPrefix() }
-func (a *appConfigAdapter) GetSlackThreadsTableName() string { return a.cfg.GetSlackThreadsTableName() }
-func (a *appConfigAdapter) GetSandboxTableName() string      { return a.cfg.GetSandboxTableName() }
+func (a *appConfigAdapter) GetResourcePrefix() string         { return a.cfg.GetResourcePrefix() }
+func (a *appConfigAdapter) GetDoctorIgnorePrefixes() []string { return a.cfg.GetDoctorIgnorePrefixes() }
+func (a *appConfigAdapter) GetEmailDomain() string            { return a.cfg.GetEmailDomain() }
+func (a *appConfigAdapter) GetSsmPrefix() string              { return a.cfg.GetSsmPrefix() }
+func (a *appConfigAdapter) GetSlackThreadsTableName() string  { return a.cfg.GetSlackThreadsTableName() }
+func (a *appConfigAdapter) GetSandboxTableName() string       { return a.cfg.GetSandboxTableName() }
 func (a *appConfigAdapter) GetClusterRoleNames() []string {
 	out := make([]string, 0, len(a.cfg.Clusters))
 	for _, c := range a.cfg.Clusters {
@@ -259,11 +263,11 @@ func (a *appConfigAdapter) GetClusterRoleNames() []string {
 // DoctorDeps holds all injected AWS clients for doctor checks.
 // Nil fields cause their corresponding checks to be skipped.
 type DoctorDeps struct {
-	STSClient     STSCallerAPI
-	S3Client      S3HeadBucketAPI
-	DynamoClient  DynamoDescribeAPI
-	KMSClient     KMSDescribeAPI
-	OrgsClient    OrgsListPoliciesAPI
+	STSClient    STSCallerAPI
+	S3Client     S3HeadBucketAPI
+	DynamoClient DynamoDescribeAPI
+	KMSClient    KMSDescribeAPI
+	OrgsClient   OrgsListPoliciesAPI
 	// OrgsListAllPoliciesClient backs the orphan SCP check (Gap #3a, Phase 84.4.1.1).
 	// Nil causes checkOrphanSCPs to be skipped.
 	OrgsListAllPoliciesClient OrgsListAllPoliciesAPI
@@ -358,13 +362,19 @@ type DoctorDeps struct {
 	// AllRegions controls whether regional checks run against all configured regions
 	// (PrimaryRegion + KM_REPLICA_REGION CSV) or only the primary region.
 	AllRegions bool
+	// IgnorePrefixes is the set of sibling resource_prefix values (other km installs
+	// in this account) treated as KNOWN by the cross-install checks (Orphan SCPs,
+	// SES rules, Shared secrets KMS key). Their resources are reported OK, not WARN.
+	// Merged from km-config.yaml doctor_ignore_prefixes + the --ignore-prefix flag,
+	// with the local prefix removed. Nil/empty ⇒ no siblings ignored.
+	IgnorePrefixes map[string]bool
 	// Slack health check dependencies (Plan 63-09).
 	// Nil fields cause the corresponding Slack checks to be skipped without error.
-	SlackSSMStore   SSMParamStore          // SSM store for /km/slack/* params
-	SlackRegion     string                 // AWS region used to load the signing key
-	SlackKeyLoader  PrivKeyLoaderFunc      // loads the operator Ed25519 signing key
-	SlackScanner    SlackMetadataScanner   // scans DynamoDB for Slack-enabled sandboxes
-	SlackEC2Lister  EC2InstanceLister      // checks whether a sandbox EC2 instance exists
+	SlackSSMStore  SSMParamStore        // SSM store for /km/slack/* params
+	SlackRegion    string               // AWS region used to load the signing key
+	SlackKeyLoader PrivKeyLoaderFunc    // loads the operator Ed25519 signing key
+	SlackScanner   SlackMetadataScanner // scans DynamoDB for Slack-enabled sandboxes
+	SlackEC2Lister EC2InstanceLister    // checks whether a sandbox EC2 instance exists
 
 	// Slack inbound health check dependencies (Plan 67-08).
 	// Nil fields cause the corresponding inbound checks to be skipped without error.
@@ -713,13 +723,35 @@ func checkSCP(ctx context.Context, client OrgsListPoliciesAPI, accountID string)
 //
 // Gap #3a (Phase 84.4.1.1). Composes with existing checkSCP which verifies the
 // local install's own SCP is attached.
-func checkOrphanSCPs(ctx context.Context, client OrgsListAllPoliciesAPI, localPrefix string) CheckResult {
+// ignoredNote renders a "; N ignored sibling(s): a, b" suffix for the
+// cross-install checks when --ignore-prefix / doctor_ignore_prefixes matched
+// some foreign resources. Returns "" when nothing was ignored. The slice may
+// contain duplicates (one entry per matched resource); they are de-duplicated
+// and sorted for a stable message.
+func ignoredNote(ignored []string) string {
+	if len(ignored) == 0 {
+		return ""
+	}
+	seen := map[string]bool{}
+	var uniq []string
+	for _, p := range ignored {
+		if !seen[p] {
+			seen[p] = true
+			uniq = append(uniq, p)
+		}
+	}
+	sort.Strings(uniq)
+	return fmt.Sprintf("; %d ignored sibling(s): %s", len(uniq), strings.Join(uniq, ", "))
+}
+
+func checkOrphanSCPs(ctx context.Context, client OrgsListAllPoliciesAPI, localPrefix string, ignore map[string]bool) CheckResult {
 	name := "Orphan SCPs"
 	if client == nil {
 		return CheckResult{Name: name, Status: CheckSkipped, Message: "Organizations client not available"}
 	}
 
 	var orphans []string
+	var ignored []string
 	var nextToken *string
 	for {
 		out, err := client.ListPolicies(ctx, &organizations.ListPoliciesInput{
@@ -735,9 +767,14 @@ func checkOrphanSCPs(ctx context.Context, client OrgsListAllPoliciesAPI, localPr
 				continue // AWS-managed or unrelated SCPs
 			}
 			prefix := strings.TrimSuffix(pName, "-sandbox-containment")
-			if prefix != localPrefix {
-				orphans = append(orphans, fmt.Sprintf("%s (id: %s)", pName, awssdk.ToString(p.Id)))
+			if prefix == localPrefix {
+				continue
 			}
+			if ignore[prefix] {
+				ignored = append(ignored, prefix)
+				continue
+			}
+			orphans = append(orphans, fmt.Sprintf("%s (id: %s)", pName, awssdk.ToString(p.Id)))
 		}
 		if out.NextToken == nil {
 			break
@@ -746,7 +783,7 @@ func checkOrphanSCPs(ctx context.Context, client OrgsListAllPoliciesAPI, localPr
 	}
 
 	if len(orphans) == 0 {
-		return CheckResult{Name: name, Status: CheckOK, Message: "no orphan sandbox-containment SCPs detected"}
+		return CheckResult{Name: name, Status: CheckOK, Message: "no orphan sandbox-containment SCPs detected" + ignoredNote(ignored)}
 	}
 
 	orgRoleARN := fmt.Sprintf("arn:aws:iam::<management-account-id>:role/%s-org-admin", localPrefix)
@@ -754,11 +791,11 @@ func checkOrphanSCPs(ctx context.Context, client OrgsListAllPoliciesAPI, localPr
 		Name:   name,
 		Status: CheckWarn,
 		Message: fmt.Sprintf(
-			"Orphan SCPs detected: %s\nThese SCPs may be left from a km uninit that did not use --include-scp.\n"+
+			"Orphan SCPs detected: %s%s\nThese SCPs may be left from a km uninit that did not use --include-scp.\n"+
 				"To clean up, assume %s and run:\n"+
 				"  aws organizations detach-policy --policy-id <id> --target-id <application-account-id>\n"+
 				"  aws organizations delete-policy --policy-id <id>",
-			strings.Join(orphans, ", "), orgRoleARN,
+			strings.Join(orphans, ", "), ignoredNote(ignored), orgRoleARN,
 		),
 	}
 }
@@ -1971,10 +2008,11 @@ func checkOrphanedEC2(ctx context.Context, ec2Client EC2InstanceAPI, lister Sand
 // by resolving sb.Profile to a YAML file in searchPaths and reading spec.runtime.ami.
 //
 // Resolution rule (per CONTEXT.md locked decision):
-//   For each dir in searchPaths (in order):
-//     candidate := filepath.Join(dir, sb.Profile + ".yaml")
-//     if file exists (case-insensitive base-name match) → parse and compare; first match wins.
-//   If no file is found → return false (cannot determine; don't flag false positives).
+//
+//	For each dir in searchPaths (in order):
+//	  candidate := filepath.Join(dir, sb.Profile + ".yaml")
+//	  if file exists (case-insensitive base-name match) → parse and compare; first match wins.
+//	If no file is found → return false (cannot determine; don't flag false positives).
 //
 // Limitation: this is profile-file-based. A running sandbox whose profile file has been
 // deleted or renamed after creation will NOT be detected as "using" the AMI; that AMI
@@ -2175,7 +2213,7 @@ func newStaticCredentials(accessKeyID, secretAccessKey, sessionToken string) *st
 func (s *staticCredentials) Retrieve(ctx context.Context) (awssdk.Credentials, error) {
 	return awssdk.Credentials{
 		AccessKeyID:     s.accessKeyID,
-		SecretAccessKey:  s.secretAccessKey,
+		SecretAccessKey: s.secretAccessKey,
 		SessionToken:    s.sessionToken,
 		Source:          "km-doctor-assume-role",
 	}, nil
@@ -2296,6 +2334,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 	var deleteStateDigests bool
 	var withDeletes bool
 	var backfillTags bool
+	var ignorePrefixes []string
 
 	cmd := &cobra.Command{
 		Use:          "doctor",
@@ -2353,7 +2392,7 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 				deleteSSM = true
 				deleteStateDigests = true
 			}
-			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH, deleteSSM, deleteStateDigests)
+			return runDoctor(cmd, provider, deps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH, deleteSSM, deleteStateDigests, ignorePrefixes)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output results as JSON array")
@@ -2380,11 +2419,13 @@ func NewDoctorCmdWithDeps(cfg interface{}, deps *DoctorDeps) *cobra.Command {
 		"Shortcut for --delete-ebs --delete-sqs --delete-s3 --delete-lambdas --delete-ssh --delete-ssm --delete-state-digests. Pair with --dry-run=false for a full cleanup pass; with --dry-run=true (default) shows what each opt-in would clean.")
 	cmd.Flags().BoolVar(&backfillTags, "backfill-tags", false,
 		"Retrofit km:resource-prefix tag onto pre-Phase-82 resources. Uses tag:GetResources(km:sandbox-id=*) filtered by this install's DDB sandbox table. Default --dry-run=true — pass --dry-run=false to apply.")
+	cmd.Flags().StringSliceVar(&ignorePrefixes, "ignore-prefix", nil,
+		"Treat these sibling resource_prefix values (other km installs in this account) as KNOWN: their cross-install resources (SCPs, SES rules, sandbox-secrets KMS aliases) report OK instead of WARN. Comma-separated or repeated, e.g. --ignore-prefix=km2,rg. Augments km-config.yaml doctor_ignore_prefixes.")
 	return cmd
 }
 
 // runDoctor is the core execution logic for km doctor.
-func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH, deleteSSM, deleteStateDigests bool) error {
+func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, jsonOutput, quietMode, dryRun, allRegions, deleteEBS, deleteSQS, deleteS3, deleteLambdas, deleteSSH, deleteSSM, deleteStateDigests bool, ignorePrefixes []string) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -2416,6 +2457,20 @@ func runDoctor(cmd *cobra.Command, cfg DoctorConfigProvider, deps *DoctorDeps, j
 	deps.DeleteSSH = deleteSSH
 	deps.DeleteSSM = deleteSSM
 	deps.DeleteStateDigests = deleteStateDigests
+
+	// Merge ignore-prefixes: km-config.yaml doctor_ignore_prefixes + --ignore-prefix
+	// flag, minus the local prefix (never ignore yourself). Preserves any value a
+	// caller pre-seeded on deps (tests).
+	if deps.IgnorePrefixes == nil {
+		deps.IgnorePrefixes = map[string]bool{}
+	}
+	localPrefix := cfg.GetResourcePrefix()
+	for _, p := range append(cfg.GetDoctorIgnorePrefixes(), ignorePrefixes...) {
+		p = strings.TrimSpace(p)
+		if p != "" && p != localPrefix {
+			deps.IgnorePrefixes[p] = true
+		}
+	}
 
 	// Run credential check first — if SSO is expired, skip all AWS checks
 	// rather than repeating the same credential error for every check.
@@ -2655,7 +2710,7 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 				Message: "skipped — accounts.organization not configured",
 			}
 		}
-		return checkOrphanSCPs(ctx, orphanSCPClient, localResourcePrefix)
+		return checkOrphanSCPs(ctx, orphanSCPClient, localResourcePrefix, deps.IgnorePrefixes)
 	})
 
 	// GitHub config check.
@@ -2722,7 +2777,7 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	sesRulesClient := deps.SESRulesClient
 	localPrefix := cfg.GetResourcePrefix()
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkSESRules(ctx, sesRulesClient, localPrefix)
+		return checkSESRules(ctx, sesRulesClient, localPrefix, deps.IgnorePrefixes)
 	})
 
 	// Shared secrets KMS key check (Phase 89, SOPS-18-DOCTOR-CHECK).
@@ -2731,7 +2786,7 @@ func buildChecks(cfg DoctorConfigProvider, deps *DoctorDeps) []func(context.Cont
 	secretsKeyClient := deps.SecretsKeyClient
 	secretsLocalPrefix := cfg.GetResourcePrefix()
 	checks = append(checks, func(ctx context.Context) CheckResult {
-		return checkSharedSecretsKey(ctx, secretsKeyClient, secretsLocalPrefix)
+		return checkSharedSecretsKey(ctx, secretsKeyClient, secretsLocalPrefix, deps.IgnorePrefixes)
 	})
 
 	// Phase 85 — replace the Phase 84.1 read-only check with the sweeper.
@@ -3470,7 +3525,7 @@ type SESReceiptRuleAPI interface {
 //   - CheckError    — DescribeReceiptRuleSet failed (rule set may not exist)
 //   - CheckWarn     — at least one rule has a foreign prefix (orphans listed)
 //   - CheckOK       — all rules belong to localPrefix (or rule set is empty)
-func checkSESRules(ctx context.Context, client SESReceiptRuleAPI, localPrefix string) CheckResult {
+func checkSESRules(ctx context.Context, client SESReceiptRuleAPI, localPrefix string, ignore map[string]bool) CheckResult {
 	const name = "SES rules"
 	const sharedRuleSet = "sandbox-email-shared"
 
@@ -3495,6 +3550,7 @@ func checkSESRules(ctx context.Context, client SESReceiptRuleAPI, localPrefix st
 	}
 
 	var orphans []string
+	var ignored []string
 	ownCount := 0
 	for _, r := range out.Rules {
 		n := awssdk.ToString(r.Name)
@@ -3505,9 +3561,12 @@ func checkSESRules(ctx context.Context, client SESReceiptRuleAPI, localPrefix st
 			continue
 		}
 		prefix := n[:idx]
-		if prefix == localPrefix {
+		switch {
+		case prefix == localPrefix:
 			ownCount++
-		} else {
+		case ignore[prefix]:
+			ignored = append(ignored, prefix)
+		default:
 			orphans = append(orphans, n)
 		}
 	}
@@ -3516,7 +3575,7 @@ func checkSESRules(ctx context.Context, client SESReceiptRuleAPI, localPrefix st
 		return CheckResult{
 			Name:        name,
 			Status:      CheckWarn,
-			Message:     fmt.Sprintf("orphan SES rules: %s", strings.Join(orphans, ", ")),
+			Message:     fmt.Sprintf("orphan SES rules: %s%s", strings.Join(orphans, ", "), ignoredNote(ignored)),
 			Remediation: "Other installs' rules — if no install owns them, delete via `aws ses delete-receipt-rule --rule-set-name sandbox-email-shared --rule-name <name>`",
 		}
 	}
@@ -3524,7 +3583,7 @@ func checkSESRules(ctx context.Context, client SESReceiptRuleAPI, localPrefix st
 	return CheckResult{
 		Name:    name,
 		Status:  CheckOK,
-		Message: fmt.Sprintf("SES rules healthy (%d rules for prefix %q)", ownCount, localPrefix),
+		Message: fmt.Sprintf("SES rules healthy (%d rules for prefix %q)%s", ownCount, localPrefix, ignoredNote(ignored)),
 	}
 }
 
@@ -3544,7 +3603,7 @@ func checkSESRules(ctx context.Context, client SESReceiptRuleAPI, localPrefix st
 //   - CheckOK      — own alias present and no sibling sandbox-secrets aliases
 const checkNameSharedSecretsKey = "Shared secrets KMS key"
 
-func checkSharedSecretsKey(ctx context.Context, client KMSAliasLister, localPrefix string) CheckResult {
+func checkSharedSecretsKey(ctx context.Context, client KMSAliasLister, localPrefix string, ignore map[string]bool) CheckResult {
 	const name = checkNameSharedSecretsKey
 	const suffix = "-sandbox-secrets"
 
@@ -3560,6 +3619,7 @@ func checkSharedSecretsKey(ctx context.Context, client KMSAliasLister, localPref
 
 	var ownFound bool
 	var orphans []string
+	var ignored []string
 	var marker *string
 
 	for {
@@ -3578,6 +3638,12 @@ func checkSharedSecretsKey(ctx context.Context, client KMSAliasLister, localPref
 			}
 			if n == expectAlias {
 				ownFound = true
+				continue
+			}
+			// Sibling alias: alias/{prefix}-sandbox-secrets → extract {prefix}.
+			siblingPrefix := strings.TrimSuffix(strings.TrimPrefix(n, "alias/"), suffix)
+			if ignore[siblingPrefix] {
+				ignored = append(ignored, siblingPrefix)
 			} else {
 				orphans = append(orphans, n)
 			}
@@ -3593,7 +3659,7 @@ func checkSharedSecretsKey(ctx context.Context, client KMSAliasLister, localPref
 		return CheckResult{
 			Name:        name,
 			Status:      CheckWarn,
-			Message:     fmt.Sprintf("alias %s not found", expectAlias),
+			Message:     fmt.Sprintf("alias %s not found%s", expectAlias, ignoredNote(ignored)),
 			Remediation: "Run `km bootstrap --shared-secrets-key`",
 		}
 	}
@@ -3602,7 +3668,7 @@ func checkSharedSecretsKey(ctx context.Context, client KMSAliasLister, localPref
 		return CheckResult{
 			Name:        name,
 			Status:      CheckWarn,
-			Message:     fmt.Sprintf("orphan secrets KMS aliases: %s", strings.Join(orphans, ", ")),
+			Message:     fmt.Sprintf("orphan secrets KMS aliases: %s%s", strings.Join(orphans, ", "), ignoredNote(ignored)),
 			Remediation: "Other installs' aliases — expected when sibling install present",
 		}
 	}
@@ -3610,7 +3676,7 @@ func checkSharedSecretsKey(ctx context.Context, client KMSAliasLister, localPref
 	return CheckResult{
 		Name:    name,
 		Status:  CheckOK,
-		Message: fmt.Sprintf("alias %s healthy", expectAlias),
+		Message: fmt.Sprintf("alias %s healthy%s", expectAlias, ignoredNote(ignored)),
 	}
 }
 

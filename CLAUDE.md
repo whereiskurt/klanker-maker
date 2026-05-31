@@ -70,7 +70,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `km shell <sandbox-id>` — SSM shell (`--root`, `--ports`, `--no-bedrock`, `--learn`, `--ami`)
 - `km ami list` / `km ami bake <sandbox-id>` / `km ami copy <ami-id> --region <dest>` / `km ami delete <ami-id>` — operator-baked AMI lifecycle
 - `km info` — platform config, accounts, SES quota, AWS spend, DynamoDB tables
-- `km doctor` — validate platform health (config, credentials, SES, Lambda, VPC, stale resources, AMIs, EBS, Slack inbound, presence daemon, etc.; `--all-regions`, `--backfill-tags`)
+- `km doctor` — validate platform health (config, credentials, SES, Lambda, VPC, stale resources, AMIs, EBS, Slack inbound, presence daemon, etc.; `--all-regions`, `--backfill-tags`, `--ignore-prefix=<csv>` to treat sibling installs' cross-install resources as known)
 
 ## Architecture
 

@@ -45,7 +45,7 @@ func TestCheckSharedSecretsKey(t *testing.T) {
 		fake := &doctorFakeKMSAliasLister{
 			aliasNames: []string{"alias/km-sandbox-secrets"},
 		}
-		result := checkSharedSecretsKey(context.Background(), fake, "km")
+		result := checkSharedSecretsKey(context.Background(), fake, "km", nil)
 		if result.Status != CheckOK {
 			t.Errorf("expected CheckOK, got %s: %s", result.Status, result.Message)
 		}
@@ -61,7 +61,7 @@ func TestCheckSharedSecretsKey(t *testing.T) {
 		fake := &doctorFakeKMSAliasLister{
 			aliasNames: []string{}, // nothing — own alias missing
 		}
-		result := checkSharedSecretsKey(context.Background(), fake, "km")
+		result := checkSharedSecretsKey(context.Background(), fake, "km", nil)
 		if result.Status != CheckWarn {
 			t.Errorf("expected CheckWarn for missing own alias, got %s: %s", result.Status, result.Message)
 		}
@@ -83,7 +83,7 @@ func TestCheckSharedSecretsKey(t *testing.T) {
 				"alias/km2-sandbox-secrets", // sibling — orphan
 			},
 		}
-		result := checkSharedSecretsKey(context.Background(), fake, "km")
+		result := checkSharedSecretsKey(context.Background(), fake, "km", nil)
 		if result.Status != CheckWarn {
 			t.Errorf("expected CheckWarn for sibling alias, got %s: %s", result.Status, result.Message)
 		}
@@ -107,7 +107,7 @@ func TestCheckSharedSecretsKey(t *testing.T) {
 				"alias/km2-sandbox-secrets", // only sibling, own is missing
 			},
 		}
-		result := checkSharedSecretsKey(context.Background(), fake, "km")
+		result := checkSharedSecretsKey(context.Background(), fake, "km", nil)
 		if result.Status != CheckWarn {
 			t.Errorf("expected CheckWarn, got %s: %s", result.Status, result.Message)
 		}
@@ -123,7 +123,7 @@ func TestCheckSharedSecretsKey(t *testing.T) {
 	// NilClientIsSkipped (WARNING 5) — nil client must not panic and must return
 	// a skip status. Mirrors the existing checkSESRules nil guard.
 	t.Run("NilClientIsSkipped", func(t *testing.T) {
-		result := checkSharedSecretsKey(context.Background(), nil, "km")
+		result := checkSharedSecretsKey(context.Background(), nil, "km", nil)
 		if result.Status != CheckSkipped {
 			t.Errorf("expected CheckSkipped for nil client, got %s: %s", result.Status, result.Message)
 		}
