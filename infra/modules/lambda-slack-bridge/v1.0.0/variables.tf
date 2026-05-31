@@ -118,3 +118,13 @@ variable "slack_bot_user_id" {
   type        = string
   default     = ""
 }
+
+# Phase 91.4: first-only-react toggle. When "false", the bridge posts the 👀
+# reaction ONLY on top-level engagement messages — thread replies that reach
+# the dispatcher dispatch silently. Default "true" → pre-Phase-91.4
+# chatty-reactor behaviour (full back-compat).
+variable "slack_react_always" {
+  description = "When 'true' (default), bridge posts 👀 on every dispatched message. When 'false', reacts only on top-level engagement messages (Phase 91.4)."
+  type        = string
+  default     = "true"
+}

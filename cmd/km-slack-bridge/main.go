@@ -323,8 +323,13 @@ func WireMentionOnly(h *bridge.EventsHandler, fetcher *bridge.CachedBotUserIDFet
 		slog.Info("km-slack-bridge: primed bot_user_id cache from KM_SLACK_BOT_USER_ID env",
 			"uid", uid)
 	}
+	// Phase 91.4: ReactAlways defaults to true (current behaviour). Set to false
+	// ONLY when KM_SLACK_REACT_ALWAYS is explicitly "false". Any other value
+	// (empty, "true", garbage) leaves the chatty-reactor behaviour intact.
+	h.ReactAlways = os.Getenv("KM_SLACK_REACT_ALWAYS") != "false"
 	slog.Info("km-slack-bridge: events handler mention-only mode",
-		"enabled", h.MentionOnly)
+		"enabled", h.MentionOnly,
+		"react_always", h.ReactAlways)
 }
 
 // handle converts a Lambda Function URL request into the appropriate handler request,

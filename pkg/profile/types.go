@@ -549,6 +549,28 @@ type CLISpec struct {
 	// management Lambda's km binary recognises the field. Existing sandboxes need
 	// `km destroy && km create` to pick up the new field. Phase 91.
 	NotifySlackInboundMentionOnly *bool `yaml:"notifySlackInboundMentionOnly,omitempty" json:"notifySlackInboundMentionOnly,omitempty"`
+
+	// NotifySlackInboundReactAlways controls whether the km-slack bridge posts a 👀
+	// reaction on every dispatched message, or only on the first message that
+	// engages a thread (Phase 91.4 first-only-react mode).
+	//
+	// Pointer-bool with tri-state semantics:
+	//   nil    ⇒ default true (current behaviour — react on every dispatch)
+	//   &true  ⇒ react on every dispatch (explicit current behaviour)
+	//   &false ⇒ react ONLY on top-level engagement messages; thread replies that
+	//            reach the dispatcher (via Phase 91.3 mention-bypass) are silent
+	//
+	// Architecture note (matches Phase 91 / 91.1): the bridge Lambda's runtime
+	// behaviour is governed by the install-level KM_SLACK_REACT_ALWAYS env var
+	// (driven by km-config.yaml key slack.react_always). This profile field is
+	// honoured at compile-time into per-sandbox userdata for forward-compat
+	// with a future per-sandbox routing path, but does NOT alter the bridge's
+	// reactor today. Set slack.react_always: false in km-config.yaml to flip the
+	// install default.
+	//
+	// Schema addition requires `make build && km init --sidecars` after deploy.
+	// Existing sandboxes need `km destroy && km create` to pick up. Phase 91.4.
+	NotifySlackInboundReactAlways *bool `yaml:"notifySlackInboundReactAlways,omitempty" json:"notifySlackInboundReactAlways,omitempty"`
 }
 
 // IsVSCodeEnabled returns true when the operator's profile has not opted out of VS Code

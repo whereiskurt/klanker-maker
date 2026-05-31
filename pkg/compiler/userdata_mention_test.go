@@ -270,3 +270,26 @@ func extractSlackLines(ud string) string {
 	}
 	return string(buf)
 }
+
+// TestResolveReactAlways — Phase 91.4 resolver. Symmetric with TestResolveMentionOnly
+// but simpler: explicit override wins; nil default = true (chatty-reactor).
+func TestResolveReactAlways(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+	tests := []struct {
+		name string
+		cli  *profile.CLISpec
+		want bool
+	}{
+		{"nil cli → true (defensive)", nil, true},
+		{"override nil → true (chatty default)", &profile.CLISpec{}, true},
+		{"override &true → true", &profile.CLISpec{NotifySlackInboundReactAlways: boolPtr(true)}, true},
+		{"override &false → false (first-only)", &profile.CLISpec{NotifySlackInboundReactAlways: boolPtr(false)}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveReactAlways(tc.cli); got != tc.want {
+				t.Errorf("got %v want %v", got, tc.want)
+			}
+		})
+	}
+}

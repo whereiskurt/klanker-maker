@@ -880,6 +880,21 @@ func ExportTerragruntEnvVars(cfg *config.Config) {
 			os.Setenv("KM_SLACK_MENTION_ONLY", yamlSlackMentionOnly) //nolint:errcheck
 		}
 	}
+
+	// Phase 91.4: KM_SLACK_REACT_ALWAYS — install-level first-only-react default
+	// consumed by infra/live/use1/lambda-slack-bridge/terragrunt.hcl
+	// get_env("KM_SLACK_REACT_ALWAYS", "true"). Only export when the operator
+	// has explicitly set slack.react_always in km-config.yaml — absent leaves
+	// any existing env var untouched and lets the terragrunt fallback ("true")
+	// apply. env-wins semantics preserved.
+	if cfg.Slack.ReactAlways != nil {
+		yamlSlackReactAlways := strconv.FormatBool(*cfg.Slack.ReactAlways)
+		if envVal := os.Getenv("KM_SLACK_REACT_ALWAYS"); envVal != "" && envVal != yamlSlackReactAlways {
+			fmt.Fprintf(os.Stderr, "WARN: KM_SLACK_REACT_ALWAYS=%s (env) overrides km-config.yaml slack.react_always=%s\n", envVal, yamlSlackReactAlways)
+		} else if envVal == "" {
+			os.Setenv("KM_SLACK_REACT_ALWAYS", yamlSlackReactAlways) //nolint:errcheck
+		}
+	}
 }
 
 // EnsureSlackBotUserIDFromSSM auto-populates KM_SLACK_BOT_USER_ID from SSM at

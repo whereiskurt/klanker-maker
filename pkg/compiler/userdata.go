@@ -3778,6 +3778,26 @@ func resolveMentionOnly(cli *profile.CLISpec) bool {
 	return true
 }
 
+// resolveReactAlways returns the effective react-always bool for the bridge,
+// given a CLI spec. Phase 91.4.
+//
+// Resolution:
+//   - Explicit override (cli.NotifySlackInboundReactAlways != nil) wins.
+//   - Otherwise defaults to true (current chatty-reactor behaviour, full back-compat).
+//
+// Returns true when cli is nil — defensive: maintains the chatty-reactor default
+// when the spec is missing. Caller already gates on NotifySlackEnabled before
+// emitting the env var, so this path should not be reached in normal flow.
+func resolveReactAlways(cli *profile.CLISpec) bool {
+	if cli == nil {
+		return true
+	}
+	if cli.NotifySlackInboundReactAlways != nil {
+		return *cli.NotifySlackInboundReactAlways
+	}
+	return true
+}
+
 // mergeNotifyHookIntoSettings parses any user-supplied ~/.claude/settings.json
 // from configFiles, appends the km-notify-hook commands to hooks.Notification
 // and hooks.Stop arrays (preserving any existing entries), and writes the merged
@@ -4002,6 +4022,16 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 				notifyEnv["KM_SLACK_MENTION_ONLY"] = "true"
 			} else {
 				notifyEnv["KM_SLACK_MENTION_ONLY"] = "false"
+			}
+			// Phase 91.4: KM_SLACK_REACT_ALWAYS. Forward-compat per-sandbox
+			// signal — today the bridge Lambda's reactor is install-level only
+			// (see Phase 91.4 FOLLOWUP), so this env var sits in per-sandbox
+			// userdata for a future per-sandbox routing pass to consume. Same
+			// gate as KM_SLACK_MENTION_ONLY (only emit when Slack is enabled).
+			if resolveReactAlways(p.Spec.CLI) {
+				notifyEnv["KM_SLACK_REACT_ALWAYS"] = "true"
+			} else {
+				notifyEnv["KM_SLACK_REACT_ALWAYS"] = "false"
 			}
 		}
 		// Compile-time channel pinning via NotifySlackChannelOverride. If unset,

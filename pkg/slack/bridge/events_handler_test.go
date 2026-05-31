@@ -1190,3 +1190,80 @@ func TestEventsHandler_MentionOnly_ThreadBypass(t *testing.T) {
 		})
 	}
 }
+
+// TestEventsHandler_ReactAlways verifies the Phase 91.4 first-only-react toggle
+// at step 10 of Handle(). When ReactAlways=true (default), every dispatched
+// message gets a 👀. When ReactAlways=false, only top-level messages
+// (msg.ThreadTS == "") get a reaction; thread replies dispatch silently.
+func TestEventsHandler_ReactAlways(t *testing.T) {
+	now := time.Now()
+
+	tests := []struct {
+		name        string
+		reactAlways bool
+		threadTS    string
+		wantReact   bool
+	}{
+		{
+			name:        "react-always=true, top-level → reacts",
+			reactAlways: true,
+			threadTS:    "",
+			wantReact:   true,
+		},
+		{
+			name:        "react-always=true, thread reply → reacts",
+			reactAlways: true,
+			threadTS:    "1.0",
+			wantReact:   true,
+		},
+		{
+			name:        "react-always=false, top-level → reacts (engagement)",
+			reactAlways: false,
+			threadTS:    "",
+			wantReact:   true,
+		},
+		{
+			name:        "react-always=false, thread reply → silent",
+			reactAlways: false,
+			threadTS:    "1.0",
+			wantReact:   false,
+		},
+	}
+
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _, threads, _, _, _, reactor := newHandler(now)
+			h.ReactAlways = tc.reactAlways
+			// Skip mention-only entirely so we focus the test on the reactor.
+			h.MentionOnly = false
+			// For thread replies, mark the thread as engaged so dispatch proceeds
+			// even when (in real flow) a mention-only filter might gate it.
+			if tc.threadTS != "" {
+				threads.sandboxByThread = map[string]string{"C1|" + tc.threadTS: "sb-abc"}
+			}
+
+			body := fmt.Sprintf(
+				`{"type":"event_callback","event_id":%q,"event":{"type":"message","channel":"C1","user":"U1","text":"hi","ts":"%d.0","thread_ts":%q}}`,
+				fmt.Sprintf("ERA-%d", i), 500+i, tc.threadTS,
+			)
+			tsHdr, sigHdr := signSlackPayload(t, body, now)
+			resp := h.Handle(context.Background(), EventsRequest{
+				Headers: map[string]string{
+					"x-slack-request-timestamp": tsHdr,
+					"x-slack-signature":         sigHdr,
+				},
+				Body: body,
+			})
+			if resp.StatusCode != 200 {
+				t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, resp.Body)
+			}
+
+			if tc.wantReact && len(reactor.calls) != 1 {
+				t.Errorf("expected 1 reaction, got %d", len(reactor.calls))
+			}
+			if !tc.wantReact && len(reactor.calls) != 0 {
+				t.Errorf("expected no reaction (first-only mode in thread), got %d", len(reactor.calls))
+			}
+		})
+	}
+}

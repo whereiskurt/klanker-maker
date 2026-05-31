@@ -186,6 +186,11 @@ spec:
     # for the deployed bridge to honour polite mode. Per-sandbox routing of
     # the flag is deferred (see 91-RESEARCH.md Open Question #1).
     notifySlackInboundMentionOnly: true
+    # Phase 91.4 — first-only reactor. When false, the 👀 reaction posts only
+    # on top-level engagement messages; thread replies dispatch silently.
+    # Set true (default, current behaviour) to react on every dispatched
+    # message. Install-level toggle lives in km-config.yaml as slack.react_always.
+    notifySlackInboundReactAlways: false
     # Phase 72 — operator invite list. useSlackConnect: false to fail-soft
     # skip any external addresses (avoids generating Slack Connect requests
     # in testing). whereiskurt@gmail.com only.

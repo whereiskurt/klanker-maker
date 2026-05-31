@@ -749,3 +749,75 @@ region: us-east-1
 		t.Errorf("Slack.MentionOnly: got &%v, want nil (key absent)", *cfg.Slack.MentionOnly)
 	}
 }
+
+// TestLoadSlackReactAlways_True verifies Phase 91.4 nested key slack.react_always
+// loads from yaml end-to-end (same merge-loop coverage as slack.mention_only).
+func TestLoadSlackReactAlways_True(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+slack:
+    react_always: true
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Slack.ReactAlways == nil {
+		t.Fatal("Slack.ReactAlways is nil; expected non-nil")
+	}
+	if *cfg.Slack.ReactAlways != true {
+		t.Errorf("Slack.ReactAlways: got %v, want true", *cfg.Slack.ReactAlways)
+	}
+}
+
+func TestLoadSlackReactAlways_False(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+slack:
+    react_always: false
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Slack.ReactAlways == nil {
+		t.Fatal("Slack.ReactAlways is nil")
+	}
+	if *cfg.Slack.ReactAlways != false {
+		t.Errorf("Slack.ReactAlways: got %v, want false", *cfg.Slack.ReactAlways)
+	}
+}
+
+func TestLoadSlackReactAlways_Absent(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Slack.ReactAlways != nil {
+		t.Errorf("Slack.ReactAlways: got &%v, want nil", *cfg.Slack.ReactAlways)
+	}
+}

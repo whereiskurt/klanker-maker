@@ -325,6 +325,8 @@ resource "aws_lambda_function" "slack_bridge" {
       # Phase 91 — polite-bot mode flag + bot user ID for the mention scan
       KM_SLACK_MENTION_ONLY = var.slack_mention_only
       KM_SLACK_BOT_USER_ID  = var.slack_bot_user_id
+      # Phase 91.4 — first-only-react toggle
+      KM_SLACK_REACT_ALWAYS = var.slack_react_always
     }
   }
 

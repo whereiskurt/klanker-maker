@@ -314,6 +314,11 @@ channels. The effective behaviour is determined by the channel mode + optional p
   subsequent reply in that thread bypasses the mention requirement. Threads are 1:1
   conversations with the bot — re-@-mentioning was unnatural. Top-level messages and
   replies in unknown threads still require mention.
+- **Phase 91.4 (km v0.3.773+):** first-only reactor toggle. `slack.react_always: false`
+  in km-config.yaml flips the install-level default so the bridge posts 👀 only on
+  top-level engagement messages — thread replies dispatch silently. Profile field
+  `cli.notifySlackInboundReactAlways *bool` shipped for forward-compat with future
+  per-sandbox routing; runtime behaviour today is install-level.
 
 **Why `km init` and not `km init --sidecars`:** the bridge Lambda's `environment.variables`
 block is owned by the `lambda-slack-bridge` Terraform module, which only updates on full

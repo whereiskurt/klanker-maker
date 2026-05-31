@@ -31,6 +31,16 @@ type SlackConfig struct {
 	// KM_SLACK_MENTION_ONLY for infra/live/use1/lambda-slack-bridge/terragrunt.hcl
 	// get_env() at terragrunt-apply time during `km init`.
 	MentionOnly *bool `mapstructure:"mention_only" yaml:"mention_only,omitempty"`
+
+	// ReactAlways is the install-level default for the Phase 91.4 first-only
+	// reactor. Tri-state via *bool:
+	//   nil    → key absent from yaml; bridge defaults to "true" (react on every dispatch)
+	//   &true  → react on every dispatch (current chatty-reactor behaviour)
+	//   &false → react ONLY on top-level engagement messages; thread replies
+	//            dispatched via Phase 91.3 mention-bypass are silent
+	// Maps to km-config.yaml key slack.react_always. Exported as
+	// KM_SLACK_REACT_ALWAYS for the bridge Lambda environment block.
+	ReactAlways *bool `mapstructure:"react_always" yaml:"react_always,omitempty"`
 }
 
 type ClusterConfig struct {
@@ -364,6 +374,8 @@ func Load() (*Config, error) {
 			"clusters",
 			// Phase 91.1: nested key for the polite-bot install-level default.
 			"slack.mention_only",
+			// Phase 91.4: nested key for the first-only reactor install-level default.
+			"slack.react_always",
 		} {
 			// yaml wins unconditionally for accountsYamlAuthoritativeKeys (organization,
 			// dns_parent, application). For all other keys, env-var takes precedence
@@ -442,6 +454,14 @@ func Load() (*Config, error) {
 	if v.IsSet("slack.mention_only") {
 		val := v.GetBool("slack.mention_only")
 		cfg.Slack.MentionOnly = &val
+	}
+
+	// Phase 91.4: slack.react_always is tri-state via *bool. Same shape as
+	// slack.mention_only. Absent → bridge default "true" (react on every
+	// dispatch). Set to false to flip to first-only-react.
+	if v.IsSet("slack.react_always") {
+		val := v.GetBool("slack.react_always")
+		cfg.Slack.ReactAlways = &val
 	}
 
 	// Clusters is a structured slice — viper's UnmarshalKey handles the

@@ -198,3 +198,63 @@ func TestValidateSemantic_NotifySlackInboundMentionOnly(t *testing.T) {
 		})
 	}
 }
+
+// TestCLISpec_NotifySlackInboundReactAlways_RoundTrip — Phase 91.4 field
+// shape parity with NotifySlackInboundMentionOnly (POL-01 analog).
+func TestCLISpec_NotifySlackInboundReactAlways_RoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want *bool
+	}{
+		{
+			name: "absent → nil",
+			yaml: `apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata: {name: t, prefix: t}
+spec:
+  runtime: {ami: amazon-linux-2023, substrate: ec2, region: us-east-1}
+  cli: {agent: claude}
+`,
+			want: nil,
+		},
+		{
+			name: "true → &true",
+			yaml: `apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata: {name: t, prefix: t}
+spec:
+  runtime: {ami: amazon-linux-2023, substrate: ec2, region: us-east-1}
+  cli: {agent: claude, notifySlackInboundReactAlways: true}
+`,
+			want: boolPtr(true),
+		},
+		{
+			name: "false → &false",
+			yaml: `apiVersion: klankermaker.ai/v1alpha1
+kind: SandboxProfile
+metadata: {name: t, prefix: t}
+spec:
+  runtime: {ami: amazon-linux-2023, substrate: ec2, region: us-east-1}
+  cli: {agent: claude, notifySlackInboundReactAlways: false}
+`,
+			want: boolPtr(false),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var p profile.SandboxProfile
+			err := yaml.Unmarshal([]byte(tc.yaml), &p)
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			got := p.Spec.CLI.NotifySlackInboundReactAlways
+			if (tc.want == nil) != (got == nil) {
+				t.Fatalf("nil mismatch: got %v want %v", got, tc.want)
+			}
+			if tc.want != nil && *got != *tc.want {
+				t.Errorf("value: got %v want %v", *got, *tc.want)
+			}
+		})
+	}
+}

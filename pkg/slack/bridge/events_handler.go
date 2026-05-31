@@ -61,6 +61,14 @@ type EventsHandler struct {
 	// behaviour (every message processed). Set from KM_SLACK_MENTION_ONLY env var
 	// at Lambda cold-start by wireEventsHandler in cmd/km-slack-bridge/main.go.
 	MentionOnly bool
+
+	// Phase 91.4: ReactAlways, when true (default), posts a 👀 reaction on every
+	// dispatched message in step 10. When false, the reaction is posted ONLY on
+	// top-level engagement messages (msg.ThreadTS == "") — thread replies that
+	// reach step 10 (via Phase 91.3 thread-bypass or a fresh mention in an
+	// existing thread) dispatch silently. Wired from KM_SLACK_REACT_ALWAYS env
+	// var at cold-start (defaults to true when env is unset or "true").
+	ReactAlways bool
 }
 
 func (h *EventsHandler) now() time.Time {
@@ -359,17 +367,28 @@ func (h *EventsHandler) Handle(ctx context.Context, req EventsRequest) EventsRes
 	//     past Slack's 3s ack window, Slack re-fires the event and the event_id
 	//     dedup in step 5 absorbs the retry. already_reacted is success.
 	if h.Reactor != nil {
-		emoji := h.AckEmoji
-		if emoji == "" {
-			emoji = "eyes"
-		}
-		bgCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		if err := h.Reactor.Add(bgCtx, msg.Channel, msg.TS, emoji); err != nil {
-			h.log().Warn("events: reaction failed", "err", err, "channel", msg.Channel, "ts", msg.TS, "emoji", emoji)
+		// Phase 91.4: first-only-react. When ReactAlways=false AND the message
+		// is a thread reply, skip the reaction. The bot is already engaged in
+		// this thread (else it wouldn't have passed step 4b mention-only +
+		// 91.3 bypass), so a second 👀 adds noise without signal. Top-level
+		// engagement messages (msg.ThreadTS == "") still react regardless of
+		// ReactAlways — that's the user's signal that the bot saw them.
+		if !h.ReactAlways && msg.ThreadTS != "" {
+			h.log().Debug("events: reaction skipped (react-always=false, thread reply)",
+				"channel", msg.Channel, "ts", msg.TS, "thread_ts", msg.ThreadTS)
 		} else {
-			h.log().Info("events: reaction posted", "channel", msg.Channel, "ts", msg.TS, "emoji", emoji)
+			emoji := h.AckEmoji
+			if emoji == "" {
+				emoji = "eyes"
+			}
+			bgCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			if err := h.Reactor.Add(bgCtx, msg.Channel, msg.TS, emoji); err != nil {
+				h.log().Warn("events: reaction failed", "err", err, "channel", msg.Channel, "ts", msg.TS, "emoji", emoji)
+			} else {
+				h.log().Info("events: reaction posted", "channel", msg.Channel, "ts", msg.TS, "emoji", emoji)
+			}
+			cancel()
 		}
-		cancel()
 	}
 
 	return EventsResponse{StatusCode: 200, Body: "ok"}

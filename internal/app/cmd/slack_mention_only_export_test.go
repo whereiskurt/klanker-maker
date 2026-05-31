@@ -102,3 +102,47 @@ func TestEnsureSlackBotUserIDFromSSM_NilCfg(t *testing.T) {
 		t.Fatalf("nil cfg should not set anything; got %q", got)
 	}
 }
+
+// Phase 91.4: ReactAlways tests mirror MentionOnly tests exactly.
+
+func TestExportTerragruntEnvVars_SlackReactAlways_Absent(t *testing.T) {
+	os.Unsetenv("KM_SLACK_REACT_ALWAYS")
+	cfg := &config.Config{Slack: config.SlackConfig{ReactAlways: nil}}
+	ExportTerragruntEnvVars(cfg)
+	if got := os.Getenv("KM_SLACK_REACT_ALWAYS"); got != "" {
+		t.Fatalf("nil pointer should not export; got %q", got)
+	}
+}
+
+func TestExportTerragruntEnvVars_SlackReactAlways_True(t *testing.T) {
+	os.Unsetenv("KM_SLACK_REACT_ALWAYS")
+	tru := true
+	cfg := &config.Config{Slack: config.SlackConfig{ReactAlways: &tru}}
+	ExportTerragruntEnvVars(cfg)
+	if got := os.Getenv("KM_SLACK_REACT_ALWAYS"); got != "true" {
+		t.Fatalf("want true; got %q", got)
+	}
+	os.Unsetenv("KM_SLACK_REACT_ALWAYS")
+}
+
+func TestExportTerragruntEnvVars_SlackReactAlways_False(t *testing.T) {
+	os.Unsetenv("KM_SLACK_REACT_ALWAYS")
+	flse := false
+	cfg := &config.Config{Slack: config.SlackConfig{ReactAlways: &flse}}
+	ExportTerragruntEnvVars(cfg)
+	if got := os.Getenv("KM_SLACK_REACT_ALWAYS"); got != "false" {
+		t.Fatalf("want false; got %q", got)
+	}
+	os.Unsetenv("KM_SLACK_REACT_ALWAYS")
+}
+
+func TestExportTerragruntEnvVars_SlackReactAlways_EnvWins(t *testing.T) {
+	os.Setenv("KM_SLACK_REACT_ALWAYS", "true")
+	defer os.Unsetenv("KM_SLACK_REACT_ALWAYS")
+	flse := false
+	cfg := &config.Config{Slack: config.SlackConfig{ReactAlways: &flse}}
+	ExportTerragruntEnvVars(cfg)
+	if got := os.Getenv("KM_SLACK_REACT_ALWAYS"); got != "true" {
+		t.Fatalf("env should win; got %q", got)
+	}
+}

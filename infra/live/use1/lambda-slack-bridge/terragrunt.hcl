@@ -102,6 +102,12 @@ inputs = {
   # When empty, the bridge falls back to a live auth.test call.
   slack_bot_user_id = get_env("KM_SLACK_BOT_USER_ID", "")
 
+  # Phase 91.4 — first-only-react toggle. Phase 91.1's ExportTerragruntEnvVars
+  # populates KM_SLACK_REACT_ALWAYS from km-config.yaml key slack.react_always
+  # (tri-state *bool). Empty/unset → "true" (chatty-reactor, current behaviour).
+  # Set km-config slack.react_always: false to flip to first-only reactions.
+  slack_react_always = get_env("KM_SLACK_REACT_ALWAYS", "true")
+
   tags = {
     "km:component" = "slack-bridge"
     "km:managed"   = "true"
