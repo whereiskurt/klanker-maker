@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 92-00 complete; next 92-01 (Wave 1 IAM rename)
 status: in-progress
-stopped_at: Completed 92-01-PLAN.md (Wave 1 IAM rename + apiVersion v1alpha2 bump)
-last_updated: "2026-05-31T21:35:41.172Z"
+stopped_at: Completed 92-02-PLAN.md (notification block types/schema/validator/inherit; compiler/cmd RED for Wave 3)
+last_updated: "2026-05-31T21:53:04.972Z"
 last_activity: 2026-05-31
 progress:
   total_phases: 107
   completed_phases: 95
   total_plans: 466
-  completed_plans: 425
+  completed_plans: 426
   percent: 91
 ---
 
@@ -458,6 +458,7 @@ Progress: [█████████░] 91%
 | Phase 91-slack-inbound-mention-only-mode-for-shared-and-override-channels-polite-bot P06 | 3min | 3 tasks | 3 files |
 | Phase 92 P00 | 4min | 3 tasks | 8 files |
 | Phase 92 P01 | 30min | 3 tasks | 78 files |
+| Phase 92 P02 | 12min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -1320,6 +1321,8 @@ Recent decisions affecting current work:
 - [Phase 92]: Phase 92 Wave 0: byte-identity goldens (learn.v2 userdata + IAM HCL) captured from pre-change main; Wave 1 IAM rename must keep both GREEN
 - [Phase 92]: RED stubs gated by per-wave build tags (phase92_wave2/4/5) so default go test stays green while each wave has a compile-failing target
 - [Phase 92]: Phase 92 Wave 1: spec.identity → spec.iam, dead spec.agent/sessionPolicy removed, iam.allowedSecretPaths schema drift closed, apiVersion bumped v1alpha1 → v1alpha2 (STRICT)
+- [Phase 92]: 92-02: spec.notification block replaces 14 cli.notify* fields; typed mergeNotificationSpec fixes pointer-merge inheritance bug (VC-7)
+- [Phase 92]: 92-02: kept cli.notifySlackInboundReactAlways (15th notify field) on CLISpec — no target home in NotificationSlackInboundSpec; Wave 3 to resolve
 
 ### Roadmap Evolution
 
@@ -1437,6 +1440,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-31T21:35:36.510Z
-Stopped at: Completed 92-01-PLAN.md (Wave 1 IAM rename + apiVersion v1alpha2 bump)
+Last session: 2026-05-31T21:52:59.324Z
+Stopped at: Completed 92-02-PLAN.md (notification block types/schema/validator/inherit; compiler/cmd RED for Wave 3)
 Resume file: None

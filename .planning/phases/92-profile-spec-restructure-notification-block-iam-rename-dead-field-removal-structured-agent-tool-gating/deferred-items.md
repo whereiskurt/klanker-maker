@@ -29,3 +29,16 @@ all pass.
   `docs/budget-guide.md`, `docs/security-model.md`: contain profile YAML examples. 92-01 bumped
   their `apiVersion` to v1alpha2 and migrated any `identity:`/`sessionPolicy:`/dead-`agent:` keys
   for correctness; notification/agent narrative updates are owned by Waves 2–5.
+
+## Wave 2 (92-02) discoveries — for Wave 3
+
+- **`cli.notifySlackInboundReactAlways` (Phase 91.4/91.5) NOT removed in Wave 2.** The plan's
+  14-field removal list and the target `NotificationSlackInboundSpec` (enabled + mentionOnly only)
+  both omit it, and `pkg/compiler/userdata.go:resolveReactAlways(p.Spec.CLI)` still reads it. Wave 2
+  left the field (and its schema property) on CLISpec to avoid a reader break with no target home.
+  **Wave 3 decision needed:** either (a) add `reactAlways *bool` to `NotificationSlackInboundSpec`
+  + schema + re-point `resolveReactAlways`, or (b) confirm it permanently stays on CLISpec.
+- **Compiler/CLI build RED at the CLISpec boundary** is the intended Wave 2→3 handoff state
+  (`pkg/compiler/userdata.go`, `service_hcl.go`, `internal/app/cmd/*`). Wave 3 re-points all
+  `p.Spec.CLI.Notify*` / `VSCodeEnabled` readers to `p.Spec.Notification.*` / `p.Spec.Runtime.VSCode`,
+  rewrites profile YAMLs, and restores the pkg/compiler byte-identity goldens.
