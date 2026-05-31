@@ -823,10 +823,12 @@ spec:
       image: "km-tracing:latest"
   cli:
     noBedrock: true
-    claudeArgs:
-      - "--dangerously-skip-permissions"
-      - "--model"
-      - "claude-opus-4-7"
+  agent:
+    claude:
+      args:
+        - "--dangerously-skip-permissions"
+        - "--model"
+        - "claude-opus-4-7"
 `)
 
 	p, err := profile.Parse(yamlData)
@@ -839,13 +841,16 @@ spec:
 	if !p.Spec.CLI.NoBedrock {
 		t.Error("expected CLI.NoBedrock=true")
 	}
+	if p.Spec.Agent == nil || p.Spec.Agent.Claude == nil {
+		t.Fatal("expected Spec.Agent.Claude to be set, got nil")
+	}
 	want := []string{"--dangerously-skip-permissions", "--model", "claude-opus-4-7"}
-	if got := p.Spec.CLI.ClaudeArgs; len(got) != len(want) {
-		t.Fatalf("expected %d claudeArgs, got %d: %v", len(want), len(got), got)
+	if got := p.Spec.Agent.Claude.Args; len(got) != len(want) {
+		t.Fatalf("expected %d claude args, got %d: %v", len(want), len(got), got)
 	}
 	for i, w := range want {
-		if p.Spec.CLI.ClaudeArgs[i] != w {
-			t.Errorf("claudeArgs[%d] = %q, want %q", i, p.Spec.CLI.ClaudeArgs[i], w)
+		if p.Spec.Agent.Claude.Args[i] != w {
+			t.Errorf("agent.claude.args[%d] = %q, want %q", i, p.Spec.Agent.Claude.Args[i], w)
 		}
 	}
 }
@@ -903,8 +908,8 @@ spec:
 	if p.Spec.CLI == nil {
 		t.Fatal("expected Spec.CLI to be set, got nil")
 	}
-	if len(p.Spec.CLI.ClaudeArgs) != 0 {
-		t.Errorf("expected empty claudeArgs, got %v", p.Spec.CLI.ClaudeArgs)
+	if p.Spec.Agent != nil && p.Spec.Agent.Claude != nil && len(p.Spec.Agent.Claude.Args) != 0 {
+		t.Errorf("expected empty claude args, got %v", p.Spec.Agent.Claude.Args)
 	}
 }
 
@@ -952,10 +957,12 @@ spec:
       image: "km-tracing:latest"
   cli:
     noBedrock: true
-    codexArgs:
-      - "--model"
-      - "o4-mini"
-      - "--dangerously-bypass-approvals-and-sandbox"
+  agent:
+    codex:
+      args:
+        - "--model"
+        - "o4-mini"
+        - "--dangerously-bypass-approvals-and-sandbox"
 `)
 
 	p, err := profile.Parse(yamlData)
@@ -968,13 +975,16 @@ spec:
 	if !p.Spec.CLI.NoBedrock {
 		t.Error("expected CLI.NoBedrock=true")
 	}
+	if p.Spec.Agent == nil || p.Spec.Agent.Codex == nil {
+		t.Fatal("expected Spec.Agent.Codex to be set, got nil")
+	}
 	want := []string{"--model", "o4-mini", "--dangerously-bypass-approvals-and-sandbox"}
-	if got := p.Spec.CLI.CodexArgs; len(got) != len(want) {
-		t.Fatalf("expected %d codexArgs, got %d: %v", len(want), len(got), got)
+	if got := p.Spec.Agent.Codex.Args; len(got) != len(want) {
+		t.Fatalf("expected %d codex args, got %d: %v", len(want), len(got), got)
 	}
 	for i, w := range want {
-		if p.Spec.CLI.CodexArgs[i] != w {
-			t.Errorf("codexArgs[%d] = %q, want %q", i, p.Spec.CLI.CodexArgs[i], w)
+		if p.Spec.Agent.Codex.Args[i] != w {
+			t.Errorf("agent.codex.args[%d] = %q, want %q", i, p.Spec.Agent.Codex.Args[i], w)
 		}
 	}
 }
@@ -1032,8 +1042,8 @@ spec:
 	if p.Spec.CLI == nil {
 		t.Fatal("expected Spec.CLI to be set, got nil")
 	}
-	if len(p.Spec.CLI.CodexArgs) != 0 {
-		t.Errorf("expected empty codexArgs, got %v", p.Spec.CLI.CodexArgs)
+	if p.Spec.Agent != nil && p.Spec.Agent.Codex != nil && len(p.Spec.Agent.Codex.Args) != 0 {
+		t.Errorf("expected empty codex args, got %v", p.Spec.Agent.Codex.Args)
 	}
 }
 
@@ -1295,6 +1305,58 @@ spec:
       destination: cloudwatch
   cli:
 ` + cliFields)
+}
+
+// minimalAgentDefaultProfileYAML returns a valid profile YAML with the structured
+// spec.agent block containing the given agentFields (indented under spec.agent).
+// Phase 92 (Wave 4): companion to minimalCLIProfileYAML for the re-homed
+// agent.default field (formerly cli.agent).
+func minimalAgentDefaultProfileYAML(agentFields string) []byte {
+	return []byte(`apiVersion: klankermaker.ai/v1alpha2
+kind: SandboxProfile
+metadata:
+  name: agent-default-test
+spec:
+  lifecycle:
+    ttl: 24h
+    idleTimeout: 1h
+    teardownPolicy: destroy
+  runtime:
+    substrate: ec2
+    instanceType: t3.medium
+    region: us-east-1
+  execution:
+    shell: /bin/bash
+    workingDir: /workspace
+  sourceAccess:
+    mode: allowlist
+  network:
+    egress:
+      allowedDNSSuffixes: [".amazonaws.com"]
+      allowedHosts: []
+  iam:
+    roleSessionDuration: 1h
+    allowedRegions: ["us-east-1"]
+  sidecars:
+    dnsProxy:
+      enabled: true
+      image: "km-dns-proxy:latest"
+    httpProxy:
+      enabled: true
+      image: "km-http-proxy:latest"
+    auditLog:
+      enabled: true
+      image: "km-audit-log:latest"
+    tracing:
+      enabled: true
+      image: "km-tracing:latest"
+  observability:
+    commandLog:
+      destination: cloudwatch
+    networkLog:
+      destination: cloudwatch
+  agent:
+` + agentFields)
 }
 
 // minimalNotificationProfileYAML returns a valid profile YAML with the notification
@@ -1821,17 +1883,18 @@ spec:
 
 // TestCLISpec_Agent_EnumValid: claude and codex are accepted.
 // SC-1: schema accepts the two locked enum values.
+// Phase 92 (Wave 4): the field moved from cli.agent to spec.agent.default.
 func TestCLISpec_Agent_EnumValid(t *testing.T) {
 	cases := []struct {
 		name      string
 		agentLine string
 	}{
-		{"claude", "    agent: claude\n"},
-		{"codex", "    agent: codex\n"},
+		{"claude", "    default: claude\n"},
+		{"codex", "    default: codex\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			errs := profile.Validate(minimalCLIProfileYAML(tc.agentLine))
+			errs := profile.Validate(minimalAgentDefaultProfileYAML(tc.agentLine))
 			if len(errs) > 0 {
 				t.Fatalf("expected no errors for agent=%s, got %v", tc.name, errs)
 			}
@@ -1847,12 +1910,12 @@ func TestCLISpec_Agent_EnumInvalid(t *testing.T) {
 		name      string
 		agentLine string
 	}{
-		{"goose-rejected", "    agent: goose\n"},
-		{"uppercase-rejected", "    agent: CLAUDE\n"},
+		{"goose-rejected", "    default: goose\n"},
+		{"uppercase-rejected", "    default: CLAUDE\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			errs := profile.Validate(minimalCLIProfileYAML(tc.agentLine))
+			errs := profile.Validate(minimalAgentDefaultProfileYAML(tc.agentLine))
 			if len(errs) == 0 {
 				t.Fatalf("expected validation error for agent line %q, got none", tc.agentLine)
 			}
@@ -1870,26 +1933,25 @@ func TestCLISpec_Agent_EnumInvalid(t *testing.T) {
 	}
 }
 
-// TestCLISpec_Agent_AbsenceIsClaudeDefault: when cli.agent is omitted entirely,
-// the profile validates and parses with p.Spec.CLI.Agent == "" (zero value).
+// TestCLISpec_Agent_AbsenceIsClaudeDefault: when spec.agent is omitted entirely,
+// the profile validates and parses with p.Spec.Agent == nil (zero value).
 // The "default ≡ claude" behavior lives downstream in the compiler (Plan 70-02)
 // and the poller (Plan 70-05); the schema accepts absence.
+// Phase 92 (Wave 4): the field moved from cli.agent to spec.agent.default, so
+// absence now means a nil *AgentSpec.
 func TestCLISpec_Agent_AbsenceIsClaudeDefault(t *testing.T) {
-	// noBedrock: false provides a present-but-minimal cli block with no agent key.
+	// noBedrock: false provides a present-but-minimal cli block with no agent block.
 	yaml := minimalCLIProfileYAML("    noBedrock: false\n")
 	errs := profile.Validate(yaml)
 	if len(errs) > 0 {
-		t.Fatalf("expected no errors when cli.agent omitted, got %v", errs)
+		t.Fatalf("expected no errors when spec.agent omitted, got %v", errs)
 	}
 	p, parseErr := profile.Parse(yaml)
 	if parseErr != nil {
 		t.Fatalf("parse error: %v", parseErr)
 	}
-	if p.Spec.CLI == nil {
-		t.Fatalf("expected p.Spec.CLI != nil")
-	}
-	if p.Spec.CLI.Agent != "" {
-		t.Fatalf("expected p.Spec.CLI.Agent == \"\" (zero value), got %q", p.Spec.CLI.Agent)
+	if p.Spec.Agent != nil && p.Spec.Agent.Default != "" {
+		t.Fatalf("expected p.Spec.Agent.Default == \"\" (zero value), got %q", p.Spec.Agent.Default)
 	}
 }
 

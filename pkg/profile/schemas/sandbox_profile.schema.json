@@ -509,26 +509,91 @@
         "cli": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Operator-side defaults for km shell / km agent commands. Does not affect sandbox provisioning.",
+          "description": "Operator-side defaults for km shell / km agent commands. Does not affect sandbox provisioning. Phase 92 (Wave 4) re-homed agent/claudeArgs/codexArgs into the structured spec.agent block; only noBedrock remains.",
           "properties": {
             "noBedrock": {
               "type": "boolean",
               "description": "Default to --no-bedrock for km shell and km agent run (use direct Anthropic API instead of Bedrock)"
-            },
-            "claudeArgs": {
-              "type": "array",
-              "items": { "type": "string" },
-              "description": "Extra args appended to the `claude` command when launching via km agent --claude (e.g. --dangerously-skip-permissions). User-supplied args after -- still take precedence."
-            },
-            "codexArgs": {
-              "type": "array",
-              "items": { "type": "string" },
-              "description": "Extra args appended to the `codex exec` command when launching via km agent run --codex (e.g. --model o4-mini). User-supplied args still take precedence."
-            },
-            "agent": {
+            }
+          }
+        },
+        "agent": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Structured agent block (Phase 92 Wave 4): default agent selection plus per-agent tool gating, trusted directories, permissions passthrough, and CLI args. Optional. Replaces cli.agent/cli.claudeArgs/cli.codexArgs.",
+          "properties": {
+            "default": {
               "type": "string",
               "enum": ["claude", "codex"],
               "description": "Default agent CLI for Slack inbound dispatch and km agent run / km shell when no --claude/--codex flag is passed. Default 'claude'. Absence is equivalent to 'claude'. Phase 70."
+            },
+            "claude": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Claude-Code-specific tool gating, trusted directories, permissions passthrough, and CLI args.",
+              "properties": {
+                "trustedDirectories": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Directories Claude Code trusts without prompting (settings.json trustedDirectories)."
+                },
+                "tools": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "Tool gating. Wave 5 synthesizes autoApprove into permissions.allow and deny into permissions.deny.",
+                  "properties": {
+                    "autoApprove": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "Tools auto-approved without prompting."
+                    },
+                    "deny": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "Tools denied outright."
+                    }
+                  }
+                },
+                "permissions": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "description": "Passthrough map for Claude-Code settings.json keys not worth typing individually. The one passthrough exception (CONTEXT.md locked decision)."
+                },
+                "args": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Extra args appended to the `claude` command when launching via km agent --claude (e.g. --dangerously-skip-permissions). User-supplied args after -- still take precedence."
+                }
+              }
+            },
+            "codex": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Codex-specific tool gating and CLI args.",
+              "properties": {
+                "tools": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "Tool gating for Codex.",
+                  "properties": {
+                    "autoApprove": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "Tools auto-approved without prompting."
+                    },
+                    "deny": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "Tools denied outright."
+                    }
+                  }
+                },
+                "args": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Extra args appended to the `codex exec` command when launching via km agent run --codex (e.g. --model o4-mini). User-supplied args still take precedence."
+                }
+              }
             }
           }
         },

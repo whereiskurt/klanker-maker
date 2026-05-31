@@ -54,6 +54,13 @@ type Spec struct {
 	// CLI defines operator-side defaults for km shell / km agent commands.
 	// These don't affect sandbox provisioning — only CLI behavior when connecting.
 	CLI *CLISpec `yaml:"cli,omitempty"`
+	// Agent defines the structured agent block (Phase 92 Wave 4): default agent
+	// selection plus per-agent (claude/codex) tool gating, trusted directories,
+	// permissions passthrough, and CLI args. Optional — when nil, the agent
+	// defaults to "claude" and no tool gating is synthesized. Replaces the
+	// re-homed cli.agent/cli.claudeArgs/cli.codexArgs fields. Wave 5 owns the
+	// synthesizer (agent.claude.tools.* → Claude-Code settings.json).
+	Agent *AgentSpec `yaml:"agent,omitempty" json:"agent,omitempty"`
 	// Secrets defines an optional SOPS-encrypted bundle to inject as environment
 	// variables at sandbox boot. When nil (absent), no secret injection occurs —
 	// backwards compatible with all pre-Phase-89 profiles.
@@ -512,27 +519,12 @@ type CLISpec struct {
 	// The sandbox is still provisioned with Bedrock vars; this only affects
 	// the operator's connection. Override with --bedrock on the CLI.
 	NoBedrock bool `yaml:"noBedrock,omitempty"`
-	// ClaudeArgs are appended to the `claude` command line when launching an
-	// interactive session via `km agent <sb> --claude`. Use to bake in flags
-	// like --dangerously-skip-permissions or --model for a given profile.
-	// Args supplied after `--` on the CLI still take precedence.
-	ClaudeArgs []string `yaml:"claudeArgs,omitempty"`
-	// CodexArgs are appended to the `codex exec` command line when launching
-	// a non-interactive run via `km agent run <sb> --codex` (and the interactive
-	// `km agent <sb> --codex` path). Use to bake in flags like --model for a
-	// given profile. Args supplied after `--` on the CLI still take precedence.
-	CodexArgs []string `yaml:"codexArgs,omitempty"`
 
-	// Agent selects the default agent CLI for Slack inbound dispatch and
-	// `km agent run` / `km shell` when no --claude/--codex flag is passed.
-	// One of "claude" or "codex"; absence or "" is equivalent to "claude".
-	// Validated by the JSON Schema enum below; no extra semantic validator
-	// logic. Phase 70 — see docs/codex-parity.md for the runtime KM_AGENT
-	// env var emission and per-message Slack prefix routing.
+	// Phase 92 (Wave 4) re-homed Agent/ClaudeArgs/CodexArgs out of CLISpec into
+	// the structured spec.agent block (AgentSpec). After Wave 4, CLISpec carries
+	// ONLY NoBedrock. Per RESEARCH.md Pitfall 6 we keep this as a single-field
+	// struct (not collapsed to a scalar spec.noBedrock) for naming consistency.
 	//
-	// Phase 92 (Wave 4) re-homes Agent/ClaudeArgs/CodexArgs out of CLISpec.
-	Agent string `yaml:"agent,omitempty"`
-
 	// Phase 92: the 15 notification fields formerly carried here
 	// (NotifyOnPermission, NotifyOnIdle, NotifyCooldownSeconds,
 	// NotificationEmailAddress, NotifyEmailEnabled, NotifySlackEnabled,
@@ -543,6 +535,73 @@ type CLISpec struct {
 	// of CLISpec into the new spec.notification block (see NotificationSpec below)
 	// and spec.runtime.vscode respectively. Wave 2 removed 14; Wave 3 re-homed the
 	// 15th (NotifySlackInboundReactAlways → notification.slack.inbound.reactAlways).
+}
+
+// AgentSpec is the Phase 92 (Wave 4) structured agent block. It carries the
+// default agent selection plus per-agent (claude/codex) tool gating, trusted
+// directories, a permissions passthrough, and per-invoke CLI args. It replaces
+// the re-homed cli.agent / cli.claudeArgs / cli.codexArgs fields.
+//
+// Optional (NOT in spec.required). When nil, the agent defaults to "claude" and
+// no tool-gating settings.json is synthesized. Wave 5 owns the synthesizer
+// (agent.claude.tools.* → Claude-Code settings.json permissions.allow/deny).
+type AgentSpec struct {
+	// Default selects the default agent CLI for Slack inbound dispatch and
+	// `km agent run` / `km shell` when no --claude/--codex flag is passed.
+	// One of "claude" or "codex"; absence or "" is equivalent to "claude".
+	// Validated by the JSON Schema enum. Phase 70 — see docs/codex-parity.md
+	// for the runtime KM_AGENT env var emission and per-message Slack prefix
+	// routing.
+	Default string `json:"default,omitempty" yaml:"default,omitempty"`
+	// Claude carries Claude-Code-specific tool gating, trusted directories,
+	// permissions passthrough, and CLI args. Optional.
+	Claude *AgentClaudeSpec `json:"claude,omitempty" yaml:"claude,omitempty"`
+	// Codex carries Codex-specific tool gating and CLI args. Optional.
+	Codex *AgentCodexSpec `json:"codex,omitempty" yaml:"codex,omitempty"`
+}
+
+// AgentClaudeSpec carries Claude-Code-specific configuration. Wave 5's
+// synthesizer reads Tools/TrustedDirectories/Permissions to emit a
+// ~/.claude/settings.json; this wave only defines the typed shape.
+type AgentClaudeSpec struct {
+	// TrustedDirectories is the list of directories Claude Code trusts without
+	// prompting (settings.json trustedDirectories).
+	TrustedDirectories []string `json:"trustedDirectories,omitempty" yaml:"trustedDirectories,omitempty"`
+	// Tools gates which tools are auto-approved / denied. Wave 5 synthesizes
+	// this into permissions.allow / permissions.deny.
+	Tools AgentToolsSpec `json:"tools,omitempty" yaml:"tools,omitempty"`
+	// Permissions is a passthrough map for Claude-Code settings.json keys not
+	// worth typing individually (e.g. per-release additions). The ONE
+	// passthrough exception per the CONTEXT.md locked decision — type
+	// everything else aggressively.
+	Permissions map[string]any `json:"permissions,omitempty" yaml:"permissions,omitempty"`
+	// Args are appended to the `claude` command line when launching via
+	// `km agent <sb> --claude`. Replaces cli.claudeArgs. User-supplied args
+	// after `--` still take precedence.
+	Args []string `json:"args,omitempty" yaml:"args,omitempty"`
+}
+
+// AgentCodexSpec carries Codex-specific configuration. Codex has no
+// trustedDirectories / permissions passthrough — only tool gating and args.
+type AgentCodexSpec struct {
+	// Tools gates which tools are auto-approved / denied for Codex.
+	Tools AgentToolsSpec `json:"tools,omitempty" yaml:"tools,omitempty"`
+	// Args are appended to the `codex exec` command line when launching via
+	// `km agent run <sb> --codex`. Replaces cli.codexArgs. User-supplied args
+	// still take precedence.
+	Args []string `json:"args,omitempty" yaml:"args,omitempty"`
+}
+
+// AgentToolsSpec is the shared tool-gating shape for both Claude and Codex.
+// Value-typed (embedded directly in the parent spec, not a pointer) — an empty
+// AgentToolsSpec means "no gating".
+type AgentToolsSpec struct {
+	// AutoApprove is the list of tools auto-approved without prompting. Wave 5
+	// synthesizes this into permissions.allow (NOT legacy autoApprove).
+	AutoApprove []string `json:"autoApprove,omitempty" yaml:"autoApprove,omitempty"`
+	// Deny is the list of tools denied outright. Wave 5 synthesizes this into
+	// permissions.deny (NOT legacy disallowedTools).
+	Deny []string `json:"deny,omitempty" yaml:"deny,omitempty"`
 }
 
 // IsVSCodeEnabled returns true when the operator's profile has not opted out of VS Code
