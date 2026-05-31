@@ -58,6 +58,113 @@ type Spec struct {
 	// variables at sandbox boot. When nil (absent), no secret injection occurs —
 	// backwards compatible with all pre-Phase-89 profiles.
 	Secrets *SecretsSpec `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	// Notification defines optional operator notification policy (email + Slack +
+	// per-event gates). When nil (absent), no notification is configured.
+	// Phase 92 (Wave 2): replaces the 14 cli.notify* fields with a structured
+	// block. Every sub-field is optional and pointer-typed where a tri-state
+	// (unset / true / false) matters, so child profiles can override individual
+	// settings without clobbering the parent (see mergeNotificationSpec).
+	Notification *NotificationSpec `yaml:"notification,omitempty" json:"notification,omitempty"`
+}
+
+// NotificationSpec is the Phase 92 structured replacement for the old
+// cli.notify* fields. All sub-blocks are optional pointers so inheritance can
+// merge them field-by-field.
+type NotificationSpec struct {
+	// Events gates which Claude Code hook events trigger a notification.
+	Events *NotificationEventsSpec `json:"events,omitempty" yaml:"events,omitempty"`
+	// Email configures email delivery of notifications.
+	Email *NotificationEmailSpec `json:"email,omitempty" yaml:"email,omitempty"`
+	// Slack configures Slack delivery of notifications (incl. inbound chat,
+	// transcript streaming, and auto-invites).
+	Slack *NotificationSlackSpec `json:"slack,omitempty" yaml:"slack,omitempty"`
+}
+
+// NotificationEventsSpec gates which hook events fire a notification.
+// Replaces cli.notifyOnPermission / notifyOnIdle / notifyCooldownSeconds.
+type NotificationEventsSpec struct {
+	// OnPermission emails/notifies the operator on a Claude Notification hook
+	// (permission prompt). nil = default false.
+	OnPermission *bool `json:"onPermission,omitempty" yaml:"onPermission,omitempty"`
+	// OnIdle emails/notifies the operator on a Claude Stop hook (idle / turn
+	// complete). nil = default false.
+	OnIdle *bool `json:"onIdle,omitempty" yaml:"onIdle,omitempty"`
+	// CooldownSeconds suppresses notifications within N seconds of the last send
+	// (per-sandbox, shared across event types). nil = no cooldown.
+	CooldownSeconds *int `json:"cooldownSeconds,omitempty" yaml:"cooldownSeconds,omitempty"`
+}
+
+// NotificationEmailSpec configures email delivery.
+// Replaces cli.notifyEmailEnabled / notificationEmailAddress.
+type NotificationEmailSpec struct {
+	// Enabled controls whether the notify-hook dispatches email. nil = default
+	// behaviorally true (Phase 62 backward compat); &false skips email.
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	// Address overrides the recipient (default operator inbox). Empty = default.
+	Address string `json:"address,omitempty" yaml:"address,omitempty"`
+}
+
+// NotificationSlackSpec configures Slack delivery.
+// Replaces cli.notifySlackEnabled / notifySlackPerSandbox /
+// notifySlackChannelOverride / slackArchiveOnDestroy and the inbound /
+// transcript / invites sub-blocks.
+type NotificationSlackSpec struct {
+	// Enabled enables Slack delivery. nil = disabled (default).
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	// PerSandbox creates a #sb-{id} channel at km create. nil = default false
+	// (use the platform-wide shared channel).
+	PerSandbox *bool `json:"perSandbox,omitempty" yaml:"perSandbox,omitempty"`
+	// ChannelOverride hard-pins notifications to a Slack channel ID
+	// (^C[A-Z0-9]+$). Mutually exclusive with PerSandbox=true. Empty = default.
+	ChannelOverride string `json:"channelOverride,omitempty" yaml:"channelOverride,omitempty"`
+	// ArchiveOnDestroy archives the per-sandbox channel at km destroy. nil =
+	// default true. Only meaningful when PerSandbox=true.
+	ArchiveOnDestroy *bool `json:"archiveOnDestroy,omitempty" yaml:"archiveOnDestroy,omitempty"`
+	// Inbound configures bidirectional Slack chat (Phase 67).
+	Inbound *NotificationSlackInboundSpec `json:"inbound,omitempty" yaml:"inbound,omitempty"`
+	// Transcript configures per-turn transcript streaming (Phase 68).
+	Transcript *NotificationSlackTranscriptSpec `json:"transcript,omitempty" yaml:"transcript,omitempty"`
+	// Invites configures auto-invite of operators to the per-sandbox channel (Phase 72).
+	Invites *NotificationSlackInvitesSpec `json:"invites,omitempty" yaml:"invites,omitempty"`
+}
+
+// NotificationSlackInboundSpec configures bidirectional Slack chat.
+// Replaces cli.notifySlackInboundEnabled / notifySlackInboundMentionOnly.
+type NotificationSlackInboundSpec struct {
+	// Enabled enables inbound dispatch. nil = default false. Requires
+	// slack.enabled=true and slack.perSandbox=true; incompatible with
+	// slack.channelOverride.
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	// MentionOnly gates polite-bot mode (Phase 91). nil = channel-mode default.
+	MentionOnly *bool `json:"mentionOnly,omitempty" yaml:"mentionOnly,omitempty"`
+}
+
+// NotificationSlackTranscriptSpec configures per-turn transcript streaming.
+// Replaces cli.notifySlackTranscriptEnabled.
+type NotificationSlackTranscriptSpec struct {
+	// Enabled enables transcript streaming. nil = default false. Requires
+	// slack.enabled=true and slack.perSandbox=true; incompatible with
+	// slack.channelOverride.
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+}
+
+// NotificationSlackInvitesSpec configures auto-invites to the per-sandbox channel.
+// Replaces cli.notifySlackInviteEmails / useSlackConnect.
+type NotificationSlackInvitesSpec struct {
+	// Emails is the list of addresses to auto-invite. Requires slack.enabled=true.
+	// Empty = no-op.
+	Emails []string `json:"emails,omitempty" yaml:"emails,omitempty"`
+	// UseConnect gates the Slack Connect fallback for non-native addresses. nil =
+	// default true.
+	UseConnect *bool `json:"useConnect,omitempty" yaml:"useConnect,omitempty"`
+}
+
+// RuntimeVSCodeSpec gates VS Code Remote-SSH provisioning.
+// Phase 92 (Wave 2): replaces cli.vscodeEnabled, re-homed under spec.runtime.vscode.
+type RuntimeVSCodeSpec struct {
+	// Enabled gates the sshd + authorized_keys userdata block. nil = default
+	// enabled (omit-means-true); &false skips SSH provisioning.
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
 
 // OTPSpec defines one-time password secrets that are fetched from SSM at boot
@@ -191,6 +298,10 @@ type RuntimeSpec struct {
 	MountEFS bool `yaml:"mountEFS,omitempty" json:"mountEFS,omitempty"`
 	// EFSMountPoint is the filesystem path where EFS is mounted. Defaults to "/shared" when omitted.
 	EFSMountPoint string `yaml:"efsMountPoint,omitempty" json:"efsMountPoint,omitempty"`
+	// VSCode gates VS Code Remote-SSH provisioning (sshd + authorized_keys).
+	// Phase 92 (Wave 2): replaces the old cli.vscodeEnabled gate. nil = default
+	// enabled. See IsVSCodeEnabled.
+	VSCode *RuntimeVSCodeSpec `yaml:"vscode,omitempty" json:"vscode,omitempty"`
 }
 
 // ExecutionSpec controls the shell environment within the sandbox.
@@ -412,140 +523,20 @@ type CLISpec struct {
 	// Validated by the JSON Schema enum below; no extra semantic validator
 	// logic. Phase 70 — see docs/codex-parity.md for the runtime KM_AGENT
 	// env var emission and per-message Slack prefix routing.
+	//
+	// Phase 92 (Wave 4) re-homes Agent/ClaudeArgs/CodexArgs out of CLISpec.
 	Agent string `yaml:"agent,omitempty"`
 
-	// NotifyOnPermission enables emailing the operator when Claude Code emits a
-	// `Notification` hook event (typically a tool-permission prompt). Default false.
-	// When set, the compiler writes KM_NOTIFY_ON_PERMISSION=1 (or =0) into the
-	// sandbox's /etc/profile.d/km-notify-env.sh; per-invocation
-	// --notify-on-permission/--no-notify-on-permission flags on `km shell` and
-	// `km agent run` override at SSM-launch time.
-	NotifyOnPermission bool `yaml:"notifyOnPermission,omitempty"`
-
-	// NotifyOnIdle enables emailing the operator when Claude Code emits a `Stop`
-	// hook event (turn complete / waiting for input). Default false. Same env-var
-	// + CLI override semantics as NotifyOnPermission, via KM_NOTIFY_ON_IDLE.
-	NotifyOnIdle bool `yaml:"notifyOnIdle,omitempty"`
-
-	// NotifyCooldownSeconds suppresses notify-hook emails within N seconds of the
-	// last successful send (per-sandbox, shared across both event types).
-	// Default 0 = no cooldown. Profile-only in v1 (no CLI flag).
-	NotifyCooldownSeconds int `yaml:"notifyCooldownSeconds,omitempty"`
-
-	// NotificationEmailAddress overrides the default notification recipient
-	// (which is the operator inbox per km-send default). E.g., a team alias.
-	// Profile-only in v1 (no CLI flag).
-	NotificationEmailAddress string `yaml:"notificationEmailAddress,omitempty"`
-
-	// --- Phase 63: Slack notifications ---
-
-	// NotifyEmailEnabled controls whether the notify-hook dispatches email.
-	// Pointer type so unset (nil) is distinguishable from explicit false (per
-	// RESEARCH.md Pitfall 4): nil means the compiler emits no env var, so the
-	// hook's KM_NOTIFY_EMAIL_ENABLED:-1 default takes effect (Phase 62 backward
-	// compat). &false skips email; &true forces email even if Slack is also set.
-	NotifyEmailEnabled *bool `yaml:"notifyEmailEnabled,omitempty"`
-
-	// NotifySlackEnabled enables Slack delivery for whatever events notifyOn*
-	// already gates. Pointer type for the same unset/explicit-false reason as
-	// NotifyEmailEnabled. nil = Slack disabled (Phase 62 default).
-	NotifySlackEnabled *bool `yaml:"notifySlackEnabled,omitempty"`
-
-	// NotifySlackPerSandbox creates a #sb-{id} channel at km create and archives
-	// it at km destroy. Default false → use the platform-wide shared channel
-	// configured at /km/slack/shared-channel-id. Ignored if NotifySlackEnabled
-	// is nil or &false.
-	NotifySlackPerSandbox bool `yaml:"notifySlackPerSandbox,omitempty"`
-
-	// NotifySlackChannelOverride hard-pins notifications to a specific Slack
-	// channel ID (matches ^C[A-Z0-9]+$). Mutually exclusive with
-	// NotifySlackPerSandbox=true. Empty = use shared or per-sandbox per the
-	// other fields.
-	NotifySlackChannelOverride string `yaml:"notifySlackChannelOverride,omitempty"`
-
-	// SlackArchiveOnDestroy archives the per-sandbox channel at km destroy.
-	// Default true. Set false to preserve the channel post-teardown for an audit
-	// trail. Only meaningful when NotifySlackPerSandbox=true; otherwise
-	// ValidateSemantic emits a no-op warning. Pointer type so unset is
-	// distinguishable from explicit false in tests.
-	SlackArchiveOnDestroy *bool `yaml:"slackArchiveOnDestroy,omitempty"`
-
-	// NotifySlackInboundEnabled enables bidirectional Slack chat — Slack messages
-	// in the per-sandbox channel become claude turns inside the sandbox via SQS
-	// FIFO dispatch. Requires NotifySlackEnabled=true AND NotifySlackPerSandbox=true.
-	// Incompatible with NotifySlackChannelOverride (channel→sandbox routing
-	// requires 1:1 mapping in v1).
-	//
-	// Default: false. Profile-only — no CLI flag override (Phase 67).
-	NotifySlackInboundEnabled bool `yaml:"notifySlackInboundEnabled,omitempty"`
-
-	// NotifySlackTranscriptEnabled enables per-turn Slack transcript streaming.
-	// When true, every Claude PostToolUse hook fires per-turn streaming to the
-	// per-sandbox Slack thread, and the Stop hook uploads the gzipped transcript
-	// JSONL as a Slack file. Requires NotifySlackEnabled=true AND
-	// NotifySlackPerSandbox=true. Incompatible with NotifySlackChannelOverride
-	// (transcript audience must be operator-controlled).
-	//
-	// Default: false. Profile-only — no CLI flag override (Phase 68).
-	NotifySlackTranscriptEnabled bool `yaml:"notifySlackTranscriptEnabled,omitempty" json:"notifySlackTranscriptEnabled,omitempty"`
-
-	// NotifySlackInviteEmails is a list of email addresses to auto-invite to the
-	// per-sandbox Slack channel after km create succeeds. Each address is run
-	// through the EnsureMemberByEmail orchestrator (pkg/slack/invite.go) with
-	// Interactive=false: native workspace members get a regular conversations.invite.
-	// Non-members are auto-invited via Slack Connect when UseSlackConnect is true
-	// (the default); when UseSlackConnect is false they emit a stderr warning
-	// instructing the operator to follow up with `km slack invite --external <email>`.
-	//
-	// Requires notifySlackEnabled=true. Empty list is a no-op. Profile-only — no
-	// CLI flag override for v1 (deferred ideas in 72-CONTEXT.md). Phase 72.
-	//
-	// Default: empty.
-	NotifySlackInviteEmails []string `yaml:"notifySlackInviteEmails,omitempty" json:"notifySlackInviteEmails,omitempty"`
-
-	// UseSlackConnect gates the Connect fallback for the km create auto-invite loop
-	// (NotifySlackInviteEmails). When true (the default), an address that is not a
-	// native workspace member is invited via Slack Connect automatically, with no
-	// prompt. When false, such addresses are skipped with a stderr warning and the
-	// operator follows up manually with `km slack invite --external <email>`.
-	//
-	// Pointer so an unset field (nil) defaults to true. Only affects the profile-
-	// driven km create loop — it does NOT change `km slack invite` (interactive
-	// prompt + --external) or `km slack init` (operator invite). Inert when
-	// NotifySlackInviteEmails is empty. Phase 72.
-	//
-	// Default: true.
-	UseSlackConnect *bool `yaml:"useSlackConnect,omitempty" json:"useSlackConnect,omitempty"`
-
-	// VSCodeEnabled gates the cloud-init block that enables sshd and writes the operator's
-	// ed25519 pubkey to /home/sandbox/.ssh/authorized_keys. Phase 73.
-	//
-	// Pointer-bool with omit-means-true semantics: nil ⇒ enabled (default), &false ⇒ skip
-	// userdata block. Mirrors NotifyEmailEnabled at line 403.
-	//
-	// Schema addition requires `make build && km init --sidecars` after deploy so the
-	// management Lambda's km binary recognizes the field.
-	VSCodeEnabled *bool `yaml:"vscodeEnabled,omitempty" json:"vscodeEnabled,omitempty"`
-
-	// NotifySlackInboundMentionOnly controls whether the km-slack bridge only processes
-	// inbound messages that @-mention the bot (Phase 91 polite-bot mode).
-	//
-	// Pointer-bool with tri-state semantics:
-	//   nil    ⇒ use the channel-mode-derived default:
-	//             Mode 1 (shared, e.g. #km-notifications)             → true (mention-only)
-	//             Mode 2 (per-sandbox #sb-{id})                       → false (every-message)
-	//             Mode 3 (operator override, notifySlackChannelOverride!="") → true (mention-only)
-	//   &true  ⇒ force polite-bot regardless of mode
-	//   &false ⇒ force chatty regardless of mode
-	//
-	// The bridge does a substring scan of `event.text` for `<@{bot_user_id}>` and skips
-	// dispatch (no 👀 reaction, no SQS write, no nonce slot consumed) when the message
-	// does not contain the bot mention.
-	//
-	// Schema addition requires `make build && km init --sidecars` after deploy so the
-	// management Lambda's km binary recognises the field. Existing sandboxes need
-	// `km destroy && km create` to pick up the new field. Phase 91.
-	NotifySlackInboundMentionOnly *bool `yaml:"notifySlackInboundMentionOnly,omitempty" json:"notifySlackInboundMentionOnly,omitempty"`
+	// Phase 92 (Wave 2): the 14 notification fields formerly carried here
+	// (NotifyOnPermission, NotifyOnIdle, NotifyCooldownSeconds,
+	// NotificationEmailAddress, NotifyEmailEnabled, NotifySlackEnabled,
+	// NotifySlackPerSandbox, NotifySlackChannelOverride, SlackArchiveOnDestroy,
+	// NotifySlackInboundEnabled, NotifySlackInboundMentionOnly,
+	// NotifySlackTranscriptEnabled, NotifySlackInviteEmails, UseSlackConnect) and
+	// VSCodeEnabled were lifted out of CLISpec into the new spec.notification
+	// block (see NotificationSpec below) and spec.runtime.vscode respectively.
+	// Wave 3 re-points the compiler + CLI cmd readers; the repo-wide build is
+	// RED between Wave 2 and Wave 3 by design.
 
 	// NotifySlackInboundReactAlways controls whether the km-slack bridge posts a 👀
 	// reaction on every dispatched message, or only on the first message that
@@ -571,16 +562,22 @@ type CLISpec struct {
 }
 
 // IsVSCodeEnabled returns true when the operator's profile has not opted out of VS Code
-// Remote-SSH provisioning. Default true (nil CLI or nil VSCodeEnabled both return true).
+// Remote-SSH provisioning. Default true (nil vscode block or nil Enabled both return true).
+//
+// Phase 92 (Wave 2): the gate moved from spec.cli.vscodeEnabled to
+// spec.runtime.vscode.enabled, so this helper now takes a *RuntimeVSCodeSpec.
+// Wave 3 updates the callers (pkg/compiler/userdata.go, internal/app/cmd/create.go,
+// internal/app/cmd/vscode.go) to pass p.Spec.Runtime.VSCode — they WILL fail to
+// compile until then, by design.
 //
 // Used by:
 //   - pkg/compiler/userdata.go to gate the conditional userdata block (Plan 73-04)
 //   - internal/app/cmd/create.go to decide whether to generate a keypair (Plan 73-05)
-func IsVSCodeEnabled(cli *CLISpec) bool {
-	if cli == nil || cli.VSCodeEnabled == nil {
+func IsVSCodeEnabled(vscode *RuntimeVSCodeSpec) bool {
+	if vscode == nil || vscode.Enabled == nil {
 		return true
 	}
-	return *cli.VSCodeEnabled
+	return *vscode.Enabled
 }
 
 // Parse unmarshals a SandboxProfile from raw YAML bytes.

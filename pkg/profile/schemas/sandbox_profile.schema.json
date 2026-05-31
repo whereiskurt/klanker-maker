@@ -269,6 +269,17 @@
               "type": "string",
               "minLength": 1,
               "description": "Filesystem path to mount EFS at (default /shared)"
+            },
+            "vscode": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "VS Code Remote-SSH provisioning (Phase 92, replaces cli.vscodeEnabled).",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Enable sshd + authorized_keys provisioning for VS Code Remote-SSH via SSM port-forward. Default true (omit = enabled). Set false to skip SSH provisioning."
+                }
+              }
             }
           }
         },
@@ -519,76 +530,118 @@
               "enum": ["claude", "codex"],
               "description": "Default agent CLI for Slack inbound dispatch and km agent run / km shell when no --claude/--codex flag is passed. Default 'claude'. Absence is equivalent to 'claude'. Phase 70."
             },
-            "notifyOnPermission": {
-              "type": "boolean",
-              "description": "Email the operator when Claude Code emits a Notification hook event (permission prompt). Default false. Override per invocation with --notify-on-permission / --no-notify-on-permission on km shell and km agent run."
-            },
-            "notifyOnIdle": {
-              "type": "boolean",
-              "description": "Email the operator when Claude Code emits a Stop hook event (turn complete / idle). Default false. Override per invocation with --notify-on-idle / --no-notify-on-idle on km shell and km agent run."
-            },
-            "notifyCooldownSeconds": {
-              "type": "integer",
-              "minimum": 0,
-              "description": "Suppress notify-hook emails within N seconds of the last successful send (per-sandbox, shared across both event types). Default 0 = no cooldown. Profile-only (no CLI flag)."
-            },
-            "notificationEmailAddress": {
-              "type": "string",
-              "description": "Override recipient for notify-hook emails. Default is the operator inbox configured in km-config.yaml. Profile-only (no CLI flag)."
-            },
-            "notifyEmailEnabled": {
-              "type": "boolean",
-              "description": "Phase 63: enable/disable email dispatch from the notify-hook. Default behaviorally true (Phase 62 backward compat); explicit false skips email even when notifyOn* events fire."
-            },
-            "notifySlackEnabled": {
-              "type": "boolean",
-              "description": "Phase 63: enable Slack delivery for events that pass notifyOn* gates. Default false. Requires km slack init to have provisioned the bridge Lambda."
-            },
-            "notifySlackPerSandbox": {
-              "type": "boolean",
-              "description": "Phase 63: create #sb-{id} channel at km create and archive at km destroy. Default false (use platform-wide shared channel). Ignored if notifySlackEnabled is false."
-            },
-            "notifySlackChannelOverride": {
-              "type": "string",
-              "pattern": "^C[A-Z0-9]+$",
-              "description": "Phase 63: Slack channel ID (must start with C) to hard-pin notifications. Mutually exclusive with notifySlackPerSandbox=true."
-            },
-            "slackArchiveOnDestroy": {
-              "type": "boolean",
-              "description": "Phase 63: archive the per-sandbox channel at km destroy. Default true. Only meaningful with notifySlackPerSandbox=true."
-            },
-            "notifySlackInboundEnabled": {
-              "type": "boolean",
-              "default": false,
-              "description": "Enable bidirectional Slack chat (per-sandbox channel inbound). Requires notifySlackEnabled=true and notifySlackPerSandbox=true; incompatible with notifySlackChannelOverride."
-            },
-            "notifySlackTranscriptEnabled": {
-              "type": "boolean",
-              "default": false,
-              "description": "When true, every Claude PostToolUse fires per-turn streaming to the per-sandbox Slack thread, and Stop uploads the gzipped transcript JSONL as a Slack file. Requires notifySlackEnabled and notifySlackPerSandbox; incompatible with notifySlackChannelOverride."
-            },
-            "notifySlackInviteEmails": {
-              "type": "array",
-              "items": { "type": "string", "format": "email" },
-              "default": [],
-              "description": "Emails to auto-invite to per-sandbox channel after km create. Requires notifySlackEnabled=true. Native workspace members get conversations.invite; non-members are auto-invited via Slack Connect when useSlackConnect is true (default), else emit a stderr warning."
-            },
-            "useSlackConnect": {
-              "type": "boolean",
-              "default": true,
-              "description": "When true (default), the km create auto-invite loop falls back to Slack Connect for addresses that are not native workspace members. When false, external addresses are skipped with a warning. Only affects the profile-driven km create loop."
-            },
-            "vscodeEnabled": {
-              "type": "boolean",
-              "description": "Phase 73: enable sshd + authorized_keys provisioning for VS Code Remote-SSH via SSM port-forward. Default true (omit = enabled). Set false to skip SSH provisioning."
-            },
-            "notifySlackInboundMentionOnly": {
-              "type": "boolean",
-              "description": "When true, the km-slack bridge only processes inbound messages that @-mention the bot (Phase 91 polite-bot). When false, every message is processed. When omitted, the channel-mode default applies (Mode 1/3 → true, Mode 2 → false)."
-            },
             "notifySlackInboundReactAlways": {
               "type": "boolean",
               "description": "When true (default, current behaviour), the bridge posts a 👀 reaction on every dispatched message. When false, the reaction is posted ONLY on top-level engagement messages — thread replies dispatch silently. Phase 91.4. Install-level via km-config.yaml slack.react_always."
+            }
+          }
+        },
+        "notification": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Operator notification policy (Phase 92): event gates + email + Slack delivery. Replaces the old cli.notify* fields. All sub-blocks are optional.",
+          "properties": {
+            "events": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Gates which Claude Code hook events trigger a notification.",
+              "properties": {
+                "onPermission": {
+                  "type": "boolean",
+                  "description": "Notify the operator on a Claude Notification hook (permission prompt). Default false."
+                },
+                "onIdle": {
+                  "type": "boolean",
+                  "description": "Notify the operator on a Claude Stop hook (idle / turn complete). Default false."
+                },
+                "cooldownSeconds": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Suppress notifications within N seconds of the last successful send (per-sandbox, shared across event types). Default 0 = no cooldown."
+                }
+              }
+            },
+            "email": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Email delivery of notifications.",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Enable/disable email dispatch from the notify-hook. Default behaviorally true (Phase 62 backward compat); explicit false skips email."
+                },
+                "address": {
+                  "type": "string",
+                  "format": "email",
+                  "description": "Override recipient for notify-hook emails. Default is the operator inbox configured in km-config.yaml."
+                }
+              }
+            },
+            "slack": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Slack delivery of notifications (incl. inbound chat, transcript streaming, auto-invites).",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Enable Slack delivery for events that pass the events.* gates. Default false. Requires km slack init to have provisioned the bridge Lambda."
+                },
+                "perSandbox": {
+                  "type": "boolean",
+                  "description": "Create #sb-{id} channel at km create and archive at km destroy. Default false (use platform-wide shared channel). Ignored if slack.enabled is false."
+                },
+                "channelOverride": {
+                  "type": "string",
+                  "pattern": "^C[A-Z0-9]+$",
+                  "description": "Slack channel ID (must start with C) to hard-pin notifications. Mutually exclusive with perSandbox=true."
+                },
+                "archiveOnDestroy": {
+                  "type": "boolean",
+                  "description": "Archive the per-sandbox channel at km destroy. Default true. Only meaningful with perSandbox=true."
+                },
+                "inbound": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "Bidirectional Slack chat (per-sandbox channel inbound, Phase 67).",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "Enable inbound dispatch. Default false. Requires slack.enabled=true and slack.perSandbox=true; incompatible with slack.channelOverride."
+                    },
+                    "mentionOnly": {
+                      "type": "boolean",
+                      "description": "Polite-bot mode (Phase 91): only process inbound messages that @-mention the bot. When omitted, the channel-mode default applies (Mode 1/3 → true, Mode 2 → false)."
+                    }
+                  }
+                },
+                "transcript": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "Per-turn Slack transcript streaming (Phase 68).",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "Enable transcript streaming. Default false. Requires slack.enabled and slack.perSandbox; incompatible with slack.channelOverride."
+                    }
+                  }
+                },
+                "invites": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "Auto-invite operators to the per-sandbox channel after km create (Phase 72).",
+                  "properties": {
+                    "emails": {
+                      "type": "array",
+                      "items": { "type": "string", "format": "email" },
+                      "description": "Emails to auto-invite. Requires slack.enabled=true. Native workspace members get conversations.invite; non-members are auto-invited via Slack Connect when useConnect is true (default)."
+                    },
+                    "useConnect": {
+                      "type": "boolean",
+                      "description": "When true (default), fall back to Slack Connect for addresses that are not native workspace members. When false, external addresses are skipped with a warning."
+                    }
+                  }
+                }
+              }
             }
           }
         }
