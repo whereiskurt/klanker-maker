@@ -2098,10 +2098,16 @@ Plans:
 
 ### Phase 92: Profile spec restructure — notification block + iam rename + dead-field removal + structured agent tool gating
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** A coherent SandboxProfile spec that is honest about what each section is and contains no dead fields. Four user-facing changes land together: (1) new `spec.notification:` block owns every email/Slack/invite/archive decision (14 `cli.notify*` fields move under structured sub-blocks); (2) `spec.identity:` → `spec.iam:` (rename to match reality — section is AWS IAM, not identity); (3) dead fields removed (`identity.sessionPolicy` + entire dead `spec.agent:` block); (4) structured `spec.agent:` block with Claude/Codex tool gating — compiler synthesizes `/home/sandbox/.claude/settings.json` and `~/.codex/config.toml` from typed fields, eliminating the inlined-JSON antipattern. Plus three correctness fixes: pointer-merge inheritance bug (typed `mergeNotificationSpec` + `mergeAgentSpec`), schema drift fix (`iam.allowedSecretPaths` declared in JSON schema), and `vscodeEnabled` relocated from `spec.cli:` to `spec.runtime.vscode.enabled` (provisioning-time, not CLI default). Zero running sandboxes constraint allows atomic YAML rewrites with no backwards compatibility.
+**Requirements**: Phase-local synthetic IDs (no formal REQ tracking — legacy/restructure phase). Validation criteria VC-1 through VC-11 in 92-VALIDATION.md.
 **Depends on:** Phase 91
-**Plans:** 0 plans
+**Plans:** 7 plans (Waves 0-6)
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 92 to break down)
+- [ ] 92-00-test-scaffolding-research-spikes-PLAN.md — Wave 0: capture pre-Phase-92 byte-identity baselines (userdata + IAM HCL) before any Wave 1 touch + 6 RED test stubs for synthesizers/inheritance/mixed-mode (VC-3, VC-4, VC-5, VC-6, VC-7)
+- [ ] 92-01-structural-cleanup-iam-rename-dead-field-removal-PLAN.md — Wave 1: IdentitySpec→IAMSpec rename (5 sites: 3 in security.go + 2 in service_hcl.go) + drop sessionPolicy + delete dead AgentSpec + fix allowedSecretPaths schema drift + update pkg/allowlistgen/generator.go + 30 YAML rewrites + scripts/validate-all-profiles.sh + doc sweep (VC-1, VC-2, VC-4, VC-11)
+- [ ] 92-02-notification-types-schema-validator-inherit-PLAN.md — Wave 2: NotificationSpec + 6 sub-types + RuntimeVSCodeSpec + schema additions + typed mergeNotificationSpec (pointer-merge bug fix) + Slack/transcript/invite validator rewires; 14 fields stripped from CLISpec (VC-1, VC-7)
+- [ ] 92-03-notification-compiler-cli-fixtures-docs-PLAN.md — Wave 3: 21 userdata.go .CLI.* notify reads relocated to Spec.Notification + Spec.Runtime.VSCode + 8 internal/app/cmd/ files migrated + vscode.go:422 error text update + 20 profile YAML rewrites + 3 doc sweeps (VC-1, VC-3, VC-11)
+- [ ] 92-04-agent-types-schema-inherit-mixed-mode-validator-PLAN.md — Wave 4: new AgentSpec/Claude/Codex/ToolsSpec types + schema + typed mergeAgentSpec + mixed-mode validator (autoApprove + inlined configFiles → error) + CLI cmd + userdata.go agent migrations (CLISpec now NoBedrock-only) (VC-1, VC-6)
+- [ ] 92-05-agent-synthesizers-fixture-rewrite-docs-PLAN.md — Wave 5: new agent_claude.go + agent_codex.go synthesizers (canonical permissions.allow/deny per Wave 0 research; Codex inert-config + asymmetry doc) + 20 fixture rewrites (inlined Claude settings.json removed; agent.claude.tools.* populated) + docs/agent-tool-gating.md (new) + codex-parity.md + CLAUDE.md (VC-1, VC-3, VC-5, VC-11)
+- [ ] 92-06-operator-uat-PLAN.md — Wave 6: 10-scenario operator UAT (Scenario 0 full-inventory validation is hard exit gate; scenarios cover stale-key rejection, real km create + SSM inspection, denied-tool refusal, Slack notify-hook idle, mentionOnly inbound, codex: prefix routing, km doctor); autonomous: false (VC-2, VC-8, VC-9, VC-10, VC-11)
