@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep",
+      "WebFetch",
+      "WebSearch",
+      "NotebookEdit"
+    ]
+  },
+  "trustedDirectories": [
+    "/home/sandbox",
+    "/workspace"
+  ]
+}

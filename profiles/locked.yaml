@@ -39,8 +39,6 @@ spec:
       CODEX_CA_CERTIFICATE: /usr/local/share/ca-certificates/km-proxy-ca.crt
       OPENAI_API_KEY: ""
     configFiles:
-      "/home/sandbox/.claude/settings.json": |
-        {"trustedDirectories":["/home/sandbox","/workspace"],"autoApprove":["Bash","Read","Write","Edit","Glob","Grep","WebFetch","WebSearch","NotebookEdit"]}
       "/home/sandbox/.claude/plugins/known_marketplaces.json": |
         {"klanker-maker":{"source":{"source":"github","repo":"whereiskurt/klanker-maker"},"installLocation":"/home/sandbox/.claude/plugins/marketplaces/klanker-maker","lastUpdated":"2026-04-16T00:00:00Z"},"security-plugin-marketplace":{"source":{"source":"github","repo":"grnhse/security-plugin-marketplace"},"installLocation":"/home/sandbox/.claude/plugins/marketplaces/security-plugin-marketplace","lastUpdated":"2026-05-06T00:00:00Z"}}
 
@@ -183,9 +181,25 @@ spec:
   cli:
     noBedrock: true
 
-  # Phase 92 (Wave 4) — claudeArgs moved out of spec.cli into spec.agent.claude.args.
+  # Phase 92 (Wave 5) — claudeArgs moved out of spec.cli; inlined Claude
+  # settings.json removed. settings.json is synthesized from agent.claude.tools.*
+  # + trustedDirectories (permissions.allow canonical). See docs/agent-tool-gating.md.
   agent:
     claude:
+      trustedDirectories:
+        - /home/sandbox
+        - /workspace
+      tools:
+        autoApprove:
+          - Bash
+          - Read
+          - Write
+          - Edit
+          - Glob
+          - Grep
+          - WebFetch
+          - WebSearch
+          - NotebookEdit
       args:
         - "--dangerously-skip-permissions"
 
