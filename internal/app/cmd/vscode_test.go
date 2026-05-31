@@ -351,8 +351,8 @@ func TestVSCodeStatus_SSHDInactive(t *testing.T) {
 }
 
 // TestVSCodeStatus_PrePhase73 verifies that vscode status returns an error
-// containing a "vscodeEnabled" hint when sshd is inactive AND authorized_keys
-// are absent (sandbox predates Phase 73 or vscodeEnabled=false).
+// containing a "vscode.enabled" hint when sshd is inactive AND authorized_keys
+// are absent (sandbox predates Phase 73 or runtime.vscode.enabled=false).
 func TestVSCodeStatus_PrePhase73(t *testing.T) {
 	mockSSM := &vsCodeSSMMock{
 		output: "=== sshd ===\ninactive\n=== authkeys exists ===\nno\n",
@@ -367,8 +367,8 @@ func TestVSCodeStatus_PrePhase73(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected non-nil error for pre-Phase-73 sandbox, got nil")
 	}
-	if !strings.Contains(err.Error(), "vscodeEnabled") {
-		t.Errorf("error missing 'vscodeEnabled' hint; got: %v", err)
+	if !strings.Contains(err.Error(), "vscode.enabled") {
+		t.Errorf("error missing 'vscode.enabled' hint; got: %v", err)
 	}
 }
 
@@ -539,8 +539,8 @@ func TestVSCodeRekey_Locked_WithForce(t *testing.T) {
 }
 
 // TestVSCodeRekey_VSCodeDisabled verifies that runVSCodeRekey returns an error
-// containing "vscodeEnabled" when sshd is inactive AND authorized_keys are absent
-// (pre-Phase-73 sandbox or vscodeEnabled:false).
+// containing "vscode.enabled" when sshd is inactive AND authorized_keys are absent
+// (pre-Phase-73 sandbox or runtime.vscode.enabled:false).
 func TestVSCodeRekey_VSCodeDisabled(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.Config{}
@@ -554,8 +554,8 @@ func TestVSCodeRekey_VSCodeDisabled(t *testing.T) {
 	if gotErr == nil {
 		t.Fatal("expected error for vscode-disabled sandbox, got nil")
 	}
-	if !strings.Contains(gotErr.Error(), "vscodeEnabled") {
-		t.Errorf("error missing 'vscodeEnabled' hint: %v", gotErr)
+	if !strings.Contains(gotErr.Error(), "vscode.enabled") {
+		t.Errorf("error missing 'vscode.enabled' hint: %v", gotErr)
 	}
 }
 

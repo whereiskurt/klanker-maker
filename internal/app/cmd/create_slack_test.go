@@ -94,10 +94,12 @@ func boolPtrCreate(b bool) *bool { return &b }
 
 func profileWithSlack(enabled *bool, perSandbox bool, override string) *profile.SandboxProfile {
 	p := &profile.SandboxProfile{}
-	p.Spec.CLI = &profile.CLISpec{
-		NotifySlackEnabled:         enabled,
-		NotifySlackPerSandbox:      perSandbox,
-		NotifySlackChannelOverride: override,
+	p.Spec.Notification = &profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			Enabled:         enabled,
+			PerSandbox:      boolPtrCreate(perSandbox),
+			ChannelOverride: override,
+		},
 	}
 	return p
 }

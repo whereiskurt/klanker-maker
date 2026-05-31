@@ -90,8 +90,9 @@ type slackInboundDeps struct {
 //   first successful post. This function MUST NOT call UpdateSandboxAttr for
 //   last_pause_hint_ts.
 func provisionSlackInboundQueue(ctx context.Context, deps slackInboundDeps) (queueURL string, err error) {
-	cli := deps.Profile.Spec.CLI
-	if cli == nil || !cli.NotifySlackInboundEnabled {
+	// Phase 92: inbound config moved to spec.notification.slack.inbound.*.
+	inbound := notificationSlackInbound(deps.Profile)
+	if inbound == nil || inbound.Enabled == nil || !*inbound.Enabled {
 		return "", nil
 	}
 
@@ -123,7 +124,7 @@ func provisionSlackInboundQueue(ctx context.Context, deps slackInboundDeps) (que
 	}
 
 	// Phase 91.5: per-sandbox react_always override. Only write the attribute
-	// when the profile explicitly sets cli.notifySlackInboundReactAlways —
+	// when the profile explicitly sets notification.slack.inbound.reactAlways —
 	// absent attribute on the DDB row signals "fall back to install-level
 	// KM_SLACK_REACT_ALWAYS" to the bridge. Stored as a string ("true"/"false")
 	// to match the existing UpdateSandboxAttr signature; the bridge tolerates
@@ -131,9 +132,9 @@ func provisionSlackInboundQueue(ctx context.Context, deps slackInboundDeps) (que
 	//
 	// Non-fatal: if this write fails the sandbox still works (install-level
 	// default applies). Log a warning and continue.
-	if cli.NotifySlackInboundReactAlways != nil {
+	if inbound.ReactAlways != nil {
 		v := "false"
-		if *cli.NotifySlackInboundReactAlways {
+		if *inbound.ReactAlways {
 			v = "true"
 		}
 		if updateErr := deps.UpdateSandboxAttr(ctx, deps.SandboxID, "slack_react_always", v); updateErr != nil {
@@ -205,7 +206,7 @@ func rollbackSlackInboundQueue(ctx context.Context, deps slackInboundDeps, queue
 // announcement does NOT abort km create. The user can always start a top-level
 // post.
 func postReadyAnnouncement(ctx context.Context, deps slackInboundDeps, channelID string) error {
-	if deps.Profile == nil || deps.Profile.Spec.CLI == nil || !deps.Profile.Spec.CLI.NotifySlackInboundEnabled {
+	if in := notificationSlackInbound(deps.Profile); in == nil || in.Enabled == nil || !*in.Enabled {
 		return nil
 	}
 	if deps.PostOperatorSigned == nil {

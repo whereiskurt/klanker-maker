@@ -120,11 +120,15 @@ func ptrBool(b bool) *bool { return &b }
 func perSandboxProfile(inviteEmails []string, useSlackConnect *bool) *profile.SandboxProfile {
 	p := &profile.SandboxProfile{}
 	enabled := true
-	p.Spec.CLI = &profile.CLISpec{
-		NotifySlackEnabled:      &enabled,
-		NotifySlackPerSandbox:   true,
-		NotifySlackInviteEmails: inviteEmails,
-		UseSlackConnect:         useSlackConnect,
+	p.Spec.Notification = &profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			Enabled:    &enabled,
+			PerSandbox: ptrBool(true),
+			Invites: &profile.NotificationSlackInvitesSpec{
+				Emails:     inviteEmails,
+				UseConnect: useSlackConnect,
+			},
+		},
 	}
 	return p
 }

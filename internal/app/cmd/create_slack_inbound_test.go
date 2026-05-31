@@ -95,11 +95,12 @@ func makeDeps(t *testing.T, inboundEnabled bool, fSQS *fakeSQS,
 	}
 
 	t.Helper()
-	cli := &profile.CLISpec{
-		NotifySlackInboundEnabled: inboundEnabled,
-	}
 	p := &profile.SandboxProfile{}
-	p.Spec.CLI = cli
+	p.Spec.Notification = &profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			Inbound: &profile.NotificationSlackInboundSpec{Enabled: &inboundEnabled},
+		},
+	}
 
 	return slackInboundDeps{
 		Profile:   p,
@@ -264,7 +265,11 @@ func TestCreate_SlackInboundDDBPersistFailure(t *testing.T) {
 // notifySlackInboundEnabled value. Used by the ready-announcement tests.
 func profileWithInbound(on bool) *profile.SandboxProfile {
 	p := &profile.SandboxProfile{}
-	p.Spec.CLI = &profile.CLISpec{NotifySlackInboundEnabled: on}
+	p.Spec.Notification = &profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			Inbound: &profile.NotificationSlackInboundSpec{Enabled: &on},
+		},
+	}
 	return p
 }
 
@@ -331,7 +336,7 @@ func TestCreate_SlackInboundReadyAnnouncement_PostFailureNonFatal(t *testing.T) 
 }
 
 // TestCreate_SlackInboundReactAlwaysOverride — Phase 91.5. When the profile
-// sets cli.NotifySlackInboundReactAlways explicitly, provisionSlackInboundQueue
+// sets notification.slack.inbound.reactAlways explicitly, provisionSlackInboundQueue
 // MUST write slack_react_always="true"|"false" to the km-sandboxes row. When
 // the field is nil (omitted), the attribute MUST NOT be written so the bridge
 // falls back to the install-level KM_SLACK_REACT_ALWAYS default.
@@ -351,7 +356,7 @@ func TestCreate_SlackInboundReactAlwaysOverride(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fs := &fakeSQS{}
 			deps, state := makeDeps(t, true, fs, nil, nil)
-			deps.Profile.Spec.CLI.NotifySlackInboundReactAlways = tc.reactAlw
+			deps.Profile.Spec.Notification.Slack.Inbound.ReactAlways = tc.reactAlw
 
 			if _, err := provisionSlackInboundQueue(context.Background(), deps); err != nil {
 				t.Fatalf("unexpected error: %v", err)

@@ -82,50 +82,79 @@ type SSMRunner interface {
 
 var channelIDRe = regexp.MustCompile(`^C[A-Z0-9]+$`)
 
+// notificationSlack returns p.Spec.Notification.Slack (nil-safe). Phase 92:
+// Slack delivery config lives under spec.notification.slack.*.
+func notificationSlack(p *profile.SandboxProfile) *profile.NotificationSlackSpec {
+	if p == nil || p.Spec.Notification == nil {
+		return nil
+	}
+	return p.Spec.Notification.Slack
+}
+
+// notificationSlackInbound returns p.Spec.Notification.Slack.Inbound (nil-safe).
+func notificationSlackInbound(p *profile.SandboxProfile) *profile.NotificationSlackInboundSpec {
+	sl := notificationSlack(p)
+	if sl == nil {
+		return nil
+	}
+	return sl.Inbound
+}
+
+// runtimeVSCode returns p.Spec.Runtime.VSCode (nil-safe). Phase 92: the VS Code
+// gate moved from spec.cli.vscodeEnabled to spec.runtime.vscode.enabled.
+func runtimeVSCode(p *profile.SandboxProfile) *profile.RuntimeVSCodeSpec {
+	if p == nil {
+		return nil
+	}
+	return p.Spec.Runtime.VSCode
+}
+
 // resolveSlackChannel determines the Slack channel ID and per-sandbox flag for
 // a sandbox being created. Returns ("", false, nil) when notifySlackEnabled is
 // false or unset — no Slack work is done.
 //
 // Three modes (mutually exclusive per schema validation in Plan 01):
 //
-//   - Mode 1 (shared, default): NotifySlackPerSandbox=false AND
-//     NotifySlackChannelOverride=="" → read /km/slack/shared-channel-id from
+//   - Mode 1 (shared, default): notification.slack.perSandbox=false AND
+//     notification.slack.channelOverride=="" → read /km/slack/shared-channel-id from
 //     SSM; no Slack API calls.
 //
-//   - Mode 2 (per-sandbox): NotifySlackPerSandbox=true → sanitize
+//   - Mode 2 (per-sandbox): notification.slack.perSandbox=true → sanitize
 //     alias/sandboxID into a Slack-legal name; conversations.create;
 //     conversations.inviteShared with /km/slack/invite-email; perSandbox=true.
 //
-//   - Mode 3 (override): NotifySlackChannelOverride != "" → validate the
+//   - Mode 3 (override): notification.slack.channelOverride != "" → validate the
 //     channel ID format + confirm bot membership via ChannelInfo; perSandbox=false
 //     (operator-controlled channel — do not archive at destroy).
 func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandboxID, alias string,
 	api SlackAPI, ssmStore SSMParamStore, ssmPrefix string) (channelID string, perSandbox bool, err error) {
 	slackPrefix := ssmPrefix + "slack/"
 
-	cli := p.Spec.CLI
-	if cli == nil || cli.NotifySlackEnabled == nil || !*cli.NotifySlackEnabled {
+	// Phase 92: Slack delivery config moved from spec.cli.notify* to
+	// spec.notification.slack.*.
+	sl := notificationSlack(p)
+	if sl == nil || sl.Enabled == nil || !*sl.Enabled {
 		return "", false, nil
 	}
 
 	// Mode 3 — override: operator-controlled channel.
-	if cli.NotifySlackChannelOverride != "" {
-		if !channelIDRe.MatchString(cli.NotifySlackChannelOverride) {
-			return "", false, fmt.Errorf("notifySlackChannelOverride %q does not match ^C[A-Z0-9]+$", cli.NotifySlackChannelOverride)
+	if sl.ChannelOverride != "" {
+		if !channelIDRe.MatchString(sl.ChannelOverride) {
+			return "", false, fmt.Errorf("notification.slack.channelOverride %q does not match ^C[A-Z0-9]+$", sl.ChannelOverride)
 		}
-		_, isMember, infoErr := api.ChannelInfo(ctx, cli.NotifySlackChannelOverride)
+		_, isMember, infoErr := api.ChannelInfo(ctx, sl.ChannelOverride)
 		if infoErr != nil {
-			return "", false, fmt.Errorf("validate override channel %s: %w", cli.NotifySlackChannelOverride, infoErr)
+			return "", false, fmt.Errorf("validate override channel %s: %w", sl.ChannelOverride, infoErr)
 		}
 		if !isMember {
-			return "", false, fmt.Errorf("bot is not a member of %s — invite km-bot to the channel first", cli.NotifySlackChannelOverride)
+			return "", false, fmt.Errorf("bot is not a member of %s — invite km-bot to the channel first", sl.ChannelOverride)
 		}
 		// perSandbox=false: operator-controlled channel should never be archived.
-		return cli.NotifySlackChannelOverride, false, nil
+		return sl.ChannelOverride, false, nil
 	}
 
 	// Mode 2 — per-sandbox: create a dedicated channel for this sandbox.
-	if cli.NotifySlackPerSandbox {
+	if sl.PerSandbox != nil && *sl.PerSandbox {
 		nameSeed := alias
 		if nameSeed == "" {
 			nameSeed = sandboxID
@@ -220,8 +249,16 @@ func resolveSlackChannel(ctx context.Context, p *profile.SandboxProfile, sandbox
 		// (beyond the primary operator above). AutoConnect is gated by
 		// useSlackConnect (nil ⇒ true). Interactive is always false — km create
 		// may run from km at / scheduled contexts. Non-fatal throughout.
-		autoConnect := cli.UseSlackConnect == nil || *cli.UseSlackConnect
-		for _, email := range cli.NotifySlackInviteEmails {
+		var invites *profile.NotificationSlackInvitesSpec
+		if sl != nil {
+			invites = sl.Invites
+		}
+		autoConnect := invites == nil || invites.UseConnect == nil || *invites.UseConnect
+		var inviteEmails []string
+		if invites != nil {
+			inviteEmails = invites.Emails
+		}
+		for _, email := range inviteEmails {
 			email = strings.TrimSpace(email)
 			if email == "" {
 				continue

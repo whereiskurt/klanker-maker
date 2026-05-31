@@ -246,14 +246,16 @@ Examples:
 			transcriptStreamPtr := resolveNotifyFlagAgent("transcript-stream", "no-transcript-stream", transcriptStream)
 
 			// If neither CLI flag set, check profile default.
+			// Phase 92: read notify-on-permission / notify-on-idle defaults from
+			// spec.notification.events.* (pointer-bool; nil ⇒ default false).
 			if notifyPermPtr == nil || notifyIdlePtr == nil {
-				if cli := loadProfileCLI(ctx, cfg, sandboxID); cli != nil {
+				if ev := loadProfileNotifyEvents(ctx, cfg, sandboxID); ev != nil {
 					if notifyPermPtr == nil {
-						v := cli.NotifyOnPermission
+						v := ev.OnPermission != nil && *ev.OnPermission
 						notifyPermPtr = &v
 					}
 					if notifyIdlePtr == nil {
-						v := cli.NotifyOnIdle
+						v := ev.OnIdle != nil && *ev.OnIdle
 						notifyIdlePtr = &v
 					}
 				}
@@ -1464,6 +1466,38 @@ func loadProfileCLI(ctx context.Context, cfg *config.Config, sandboxID string) *
 		return nil
 	}
 	return p.Spec.CLI
+}
+
+// loadProfileNotifyEvents loads the sandbox's stored profile and returns its
+// notification.events block (nil-safe). Phase 92: the notify-on-permission /
+// notify-on-idle defaults moved off spec.cli.* onto spec.notification.events.*.
+func loadProfileNotifyEvents(ctx context.Context, cfg *config.Config, sandboxID string) *profile.NotificationEventsSpec {
+	if cfg.ArtifactsBucket == "" {
+		return nil
+	}
+	awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+	if err != nil {
+		return nil
+	}
+	s3Client := s3.NewFromConfig(awsCfg)
+	profileKey := fmt.Sprintf("artifacts/%s/.km-profile.yaml", sandboxID)
+	obj, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: awssdk.String(cfg.ArtifactsBucket),
+		Key:    awssdk.String(profileKey),
+	})
+	if err != nil {
+		return nil
+	}
+	defer obj.Body.Close()
+	data, err := io.ReadAll(obj.Body)
+	if err != nil {
+		return nil
+	}
+	p, err := profile.Parse(data)
+	if err != nil || p == nil || p.Spec.Notification == nil {
+		return nil
+	}
+	return p.Spec.Notification.Events
 }
 
 // BuildAgentCommand composes an agent command line from a base command

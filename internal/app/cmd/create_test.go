@@ -358,7 +358,7 @@ func TestRunCreate_SlackIntegration(t *testing.T) {
 		{"resolveSlackChannel call", "resolveSlackChannel"},
 		{"slackChannelID assignment", "slackChannelID"},
 		{"slackPerSandbox assignment", "slackPerSandbox"},
-		{"NotifySlackEnabled guard", "NotifySlackEnabled"},
+		{"notification.slack enabled guard", "notificationSlack(resolvedProfile)"},
 		{"SlackChannelID metadata field", "SlackChannelID:"},
 		{"SlackPerSandbox metadata field", "SlackPerSandbox:"},
 		{"SlackArchiveOnDestroy metadata write", "SlackArchiveOnDestroy"},
@@ -375,7 +375,7 @@ func TestRunCreate_SlackIntegration(t *testing.T) {
 }
 
 // TestRunCreate_SlackArchiveOnDestroy verifies the metadata field population
-// for SlackArchiveOnDestroy from the resolved profile CLI spec.
+// for SlackArchiveOnDestroy from the resolved profile notification.slack spec.
 func TestRunCreate_SlackArchiveOnDestroy(t *testing.T) {
 	src, err := os.ReadFile("create.go")
 	if err != nil {
@@ -383,12 +383,12 @@ func TestRunCreate_SlackArchiveOnDestroy(t *testing.T) {
 	}
 	s := string(src)
 
-	// The field should be set from cli.SlackArchiveOnDestroy, nil round-trips as nil
+	// The field should be set from notification.slack.archiveOnDestroy, nil round-trips as nil
 	checks := []struct {
 		name    string
 		pattern string
 	}{
-		{"Spec.CLI nil guard", "resolvedProfile.Spec.CLI != nil"},
+		{"notification.slack nil guard", "notificationSlack(resolvedProfile)"},
 		{"SlackArchiveOnDestroy write", "meta.SlackArchiveOnDestroy"},
 		{"nil round-trip comment", "nil round-trips as nil"},
 	}

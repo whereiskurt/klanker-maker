@@ -3829,14 +3829,15 @@ func parseLockID(lockID string) (bucket, key string, ok bool) {
 // producing a spurious WARN.
 //
 // Resolution logic mirrors resolveMentionOnly in pkg/compiler/userdata.go
-// (deliberately duplicated here to avoid exporting the compiler helper):
-//  1. If cli.NotifySlackInboundMentionOnly is set explicitly, that wins.
-//  2. Mode 2 (cli.NotifySlackPerSandbox == true) defaults to false.
-//  3. Mode 1 (shared) and Mode 3 (cli.NotifySlackChannelOverride != "")
+// (deliberately duplicated here to avoid exporting the compiler helper).
+// Phase 92: the notify fields moved to spec.notification.slack.*:
+//  1. If notification.slack.inbound.mentionOnly is set explicitly, that wins.
+//  2. Mode 2 (notification.slack.perSandbox == true) defaults to false.
+//  3. Mode 1 (shared) and Mode 3 (notification.slack.channelOverride != "")
 //     both default to true.
 //
-// Profiles missing notifySlackEnabled:true are ignored — the bridge only
-// processes events for enabled profiles.
+// Profiles missing notification.slack.enabled:true are ignored — the bridge
+// only processes events for enabled profiles.
 func anyProfileMentionOnly(searchDirs []string) bool {
 	for _, dir := range searchDirs {
 		entries, err := os.ReadDir(dir)
@@ -3852,22 +3853,22 @@ func anyProfileMentionOnly(searchDirs []string) bool {
 				continue
 			}
 			p, err := profilepkg.Parse(data)
-			if err != nil || p.Spec.CLI == nil {
+			if err != nil || p.Spec.Notification == nil || p.Spec.Notification.Slack == nil {
 				continue
 			}
+			sl := p.Spec.Notification.Slack
 			// Only enabled profiles drive bridge dispatch.
-			if p.Spec.CLI.NotifySlackEnabled == nil || !*p.Spec.CLI.NotifySlackEnabled {
+			if sl.Enabled == nil || !*sl.Enabled {
 				continue
 			}
-			cli := p.Spec.CLI
 			// Inline copy of resolveMentionOnly from pkg/compiler.
-			if cli.NotifySlackInboundMentionOnly != nil {
-				if *cli.NotifySlackInboundMentionOnly {
+			if sl.Inbound != nil && sl.Inbound.MentionOnly != nil {
+				if *sl.Inbound.MentionOnly {
 					return true
 				}
 				continue // explicit false → skip this profile
 			}
-			if cli.NotifySlackPerSandbox {
+			if sl.PerSandbox != nil && *sl.PerSandbox {
 				continue // Mode 2 default false
 			}
 			return true // Mode 1 or Mode 3 default true
