@@ -3651,7 +3651,7 @@ type userDataParams struct {
 	// Set from profile.Spec.CLI.NotifySlackInboundEnabled (Phase 67).
 	SlackInboundEnabled bool
 	// VSCodeEnabled gates the cloud-init block that enables sshd and writes authorized_keys.
-	// Set from profile.IsVSCodeEnabled(p.Spec.CLI). Phase 73.
+	// Set from profile.IsVSCodeEnabled(p.Spec.Runtime.VSCode). Phase 73 / 92.
 	VSCodeEnabled bool
 	// VSCodeSSHPubKey is the single-line OpenSSH ed25519 public key content (no trailing newline)
 	// generated locally by sshkey.GenerateAndWrite during km create. Empty when VSCodeEnabled
@@ -3755,45 +3755,92 @@ func boolToZeroOne(b bool) string {
 	return "0"
 }
 
+// notifyEvents returns the profile's notification.events sub-spec (nil-safe).
+// Phase 92 (Wave 3): replaces direct cli.notify* event reads.
+func notifyEvents(p *profile.SandboxProfile) *profile.NotificationEventsSpec {
+	if p.Spec.Notification == nil {
+		return nil
+	}
+	return p.Spec.Notification.Events
+}
+
+// notifyEmail returns the profile's notification.email sub-spec (nil-safe).
+func notifyEmail(p *profile.SandboxProfile) *profile.NotificationEmailSpec {
+	if p.Spec.Notification == nil {
+		return nil
+	}
+	return p.Spec.Notification.Email
+}
+
+// notifySlack returns the profile's notification.slack sub-spec (nil-safe).
+func notifySlack(p *profile.SandboxProfile) *profile.NotificationSlackSpec {
+	if p.Spec.Notification == nil {
+		return nil
+	}
+	return p.Spec.Notification.Slack
+}
+
+// notifySlackInbound returns the profile's notification.slack.inbound sub-spec (nil-safe).
+func notifySlackInbound(p *profile.SandboxProfile) *profile.NotificationSlackInboundSpec {
+	s := notifySlack(p)
+	if s == nil {
+		return nil
+	}
+	return s.Inbound
+}
+
+// slackEnabled reports whether notification.slack.enabled is explicitly &true.
+func slackEnabled(p *profile.SandboxProfile) bool {
+	s := notifySlack(p)
+	return s != nil && s.Enabled != nil && *s.Enabled
+}
+
+// slackPerSandbox reports whether notification.slack.perSandbox is &true.
+func slackPerSandbox(p *profile.SandboxProfile) bool {
+	s := notifySlack(p)
+	return s != nil && s.PerSandbox != nil && *s.PerSandbox
+}
+
+// slackInboundEnabled reports whether notification.slack.inbound.enabled is &true.
+func slackInboundEnabled(p *profile.SandboxProfile) bool {
+	in := notifySlackInbound(p)
+	return in != nil && in.Enabled != nil && *in.Enabled
+}
+
+// slackTranscriptEnabled reports whether notification.slack.transcript.enabled is &true.
+func slackTranscriptEnabled(p *profile.SandboxProfile) bool {
+	s := notifySlack(p)
+	return s != nil && s.Transcript != nil && s.Transcript.Enabled != nil && *s.Transcript.Enabled
+}
+
 // resolveMentionOnly returns the effective mention-only bool for the bridge,
-// given a CLI spec. Phase 91.
+// given a profile. Phase 91 (re-homed to notification.slack.inbound.mentionOnly
+// in Phase 92).
 //
 // Resolution order:
-//  1. Explicit override (cli.NotifySlackInboundMentionOnly != nil) wins.
-//  2. Mode 2 (per-sandbox, cli.NotifySlackPerSandbox == true) defaults to false (every-message).
-//  3. Mode 1 (shared) and Mode 3 (cli.NotifySlackChannelOverride != "") default to true (mention-only).
-//
-// Returns false when cli is nil — defensive: caller already gates on NotifySlackEnabled,
-// so this path should not be hit, but a nil deref would crash the compiler.
-func resolveMentionOnly(cli *profile.CLISpec) bool {
-	if cli == nil {
-		return false
+//  1. Explicit override (notification.slack.inbound.mentionOnly != nil) wins.
+//  2. Mode 2 (per-sandbox, notification.slack.perSandbox == &true) defaults to false (every-message).
+//  3. Mode 1 (shared) and Mode 3 (notification.slack.channelOverride != "") default to true (mention-only).
+func resolveMentionOnly(p *profile.SandboxProfile) bool {
+	if in := notifySlackInbound(p); in != nil && in.MentionOnly != nil {
+		return *in.MentionOnly
 	}
-	if cli.NotifySlackInboundMentionOnly != nil {
-		return *cli.NotifySlackInboundMentionOnly
-	}
-	if cli.NotifySlackPerSandbox {
+	if slackPerSandbox(p) {
 		return false
 	}
 	return true
 }
 
 // resolveReactAlways returns the effective react-always bool for the bridge,
-// given a CLI spec. Phase 91.4.
+// given a profile. Phase 91.4 (re-homed to
+// notification.slack.inbound.reactAlways in Phase 92, Wave 3).
 //
 // Resolution:
-//   - Explicit override (cli.NotifySlackInboundReactAlways != nil) wins.
+//   - Explicit override (notification.slack.inbound.reactAlways != nil) wins.
 //   - Otherwise defaults to true (current chatty-reactor behaviour, full back-compat).
-//
-// Returns true when cli is nil — defensive: maintains the chatty-reactor default
-// when the spec is missing. Caller already gates on NotifySlackEnabled before
-// emitting the env var, so this path should not be reached in normal flow.
-func resolveReactAlways(cli *profile.CLISpec) bool {
-	if cli == nil {
-		return true
-	}
-	if cli.NotifySlackInboundReactAlways != nil {
-		return *cli.NotifySlackInboundReactAlways
+func resolveReactAlways(p *profile.SandboxProfile) bool {
+	if in := notifySlackInbound(p); in != nil && in.ReactAlways != nil {
+		return *in.ReactAlways
 	}
 	return true
 }
@@ -3980,45 +4027,50 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 	params.ConfigFiles = p.Spec.Execution.ConfigFiles
 	params.ProfileEnv = mergeBedrockEnv(p)
 
-	// Phase 62 (HOOK-03): populate NotifyEnv from spec.cli.notify* fields.
+	// Phase 62 (HOOK-03): populate NotifyEnv from spec.notification.* fields
+	// (Phase 92 migrated these off spec.cli.notify*).
 	// We emit env vars whenever Spec.CLI is non-nil (regardless of true/false booleans)
 	// because Go's bool zero value + omitempty YAML tag cannot distinguish "unset"
 	// from "explicit false". Behaviour: CLI block present → always emit ON_PERMISSION
 	// and ON_IDLE (0 or 1); cooldown and email are conditional on the field being set.
 	// This is a tracked deviation from CONTEXT.md's "iff field is set" literal wording.
-	// See 62-02-SUMMARY.md for rationale.
+	// See 62-02-SUMMARY.md for rationale. The KM_NOTIFY_* / KM_SLACK_* env var
+	// names are UNCHANGED (locked Phase 92 decision) — only the YAML source moved.
 	if p.Spec.CLI != nil {
+		ev := notifyEvents(p)
+		onPermission := ev != nil && ev.OnPermission != nil && *ev.OnPermission
+		onIdle := ev != nil && ev.OnIdle != nil && *ev.OnIdle
 		notifyEnv := map[string]string{
-			"KM_NOTIFY_ON_PERMISSION": boolToZeroOne(p.Spec.CLI.NotifyOnPermission),
-			"KM_NOTIFY_ON_IDLE":       boolToZeroOne(p.Spec.CLI.NotifyOnIdle),
+			"KM_NOTIFY_ON_PERMISSION": boolToZeroOne(onPermission),
+			"KM_NOTIFY_ON_IDLE":       boolToZeroOne(onIdle),
 			// KM_RESOURCE_PREFIX is required by km-slack (signing key SSM
 			// lookup) and any other sandbox-side reader that needs to scope
 			// /{prefix}/sandbox/... paths the same way the operator wrote them.
 			"KM_RESOURCE_PREFIX": params.ResourcePrefix,
 		}
-		if p.Spec.CLI.NotifyCooldownSeconds > 0 {
-			notifyEnv["KM_NOTIFY_COOLDOWN_SECONDS"] = strconv.Itoa(p.Spec.CLI.NotifyCooldownSeconds)
+		if ev != nil && ev.CooldownSeconds != nil && *ev.CooldownSeconds > 0 {
+			notifyEnv["KM_NOTIFY_COOLDOWN_SECONDS"] = strconv.Itoa(*ev.CooldownSeconds)
 		}
-		if p.Spec.CLI.NotificationEmailAddress != "" {
-			notifyEnv["KM_NOTIFY_EMAIL"] = p.Spec.CLI.NotificationEmailAddress
+		if em := notifyEmail(p); em != nil && em.Address != "" {
+			notifyEnv["KM_NOTIFY_EMAIL"] = em.Address
 		}
 		// Phase 63 — Slack-related env keys. *bool pointer semantics: nil = unset
 		// (don't emit the env var; the hook's :-default takes effect for Phase 62 compat).
 		// Non-nil = emit KEY=0|1.
-		if p.Spec.CLI.NotifyEmailEnabled != nil {
-			notifyEnv["KM_NOTIFY_EMAIL_ENABLED"] = boolToZeroOne(*p.Spec.CLI.NotifyEmailEnabled)
+		if em := notifyEmail(p); em != nil && em.Enabled != nil {
+			notifyEnv["KM_NOTIFY_EMAIL_ENABLED"] = boolToZeroOne(*em.Enabled)
 		}
-		if p.Spec.CLI.NotifySlackEnabled != nil {
-			notifyEnv["KM_NOTIFY_SLACK_ENABLED"] = boolToZeroOne(*p.Spec.CLI.NotifySlackEnabled)
+		if sl := notifySlack(p); sl != nil && sl.Enabled != nil {
+			notifyEnv["KM_NOTIFY_SLACK_ENABLED"] = boolToZeroOne(*sl.Enabled)
 		}
 		// Phase 91: emit KM_SLACK_MENTION_ONLY only when Slack is actively enabled
-		// (NotifySlackEnabled == &true). Same gate as the bridge Lambda — the env var
-		// is meaningless to a sandbox whose hook never dispatches to Slack.
+		// (notification.slack.enabled == &true). Same gate as the bridge Lambda — the env
+		// var is meaningless to a sandbox whose hook never dispatches to Slack.
 		//
 		// The effective bool follows the channel-mode-derived default unless the operator
-		// sets cli.NotifySlackInboundMentionOnly explicitly. See resolveMentionOnly().
-		if p.Spec.CLI.NotifySlackEnabled != nil && *p.Spec.CLI.NotifySlackEnabled {
-			if resolveMentionOnly(p.Spec.CLI) {
+		// sets notification.slack.inbound.mentionOnly explicitly. See resolveMentionOnly().
+		if slackEnabled(p) {
+			if resolveMentionOnly(p) {
 				notifyEnv["KM_SLACK_MENTION_ONLY"] = "true"
 			} else {
 				notifyEnv["KM_SLACK_MENTION_ONLY"] = "false"
@@ -4028,17 +4080,17 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 			// (see Phase 91.4 FOLLOWUP), so this env var sits in per-sandbox
 			// userdata for a future per-sandbox routing pass to consume. Same
 			// gate as KM_SLACK_MENTION_ONLY (only emit when Slack is enabled).
-			if resolveReactAlways(p.Spec.CLI) {
+			if resolveReactAlways(p) {
 				notifyEnv["KM_SLACK_REACT_ALWAYS"] = "true"
 			} else {
 				notifyEnv["KM_SLACK_REACT_ALWAYS"] = "false"
 			}
 		}
-		// Compile-time channel pinning via NotifySlackChannelOverride. If unset,
+		// Compile-time channel pinning via notification.slack.channelOverride. If unset,
 		// Plan 08 (km create) injects KM_SLACK_CHANNEL_ID and KM_SLACK_BRIDGE_URL
 		// at runtime by appending to /etc/profile.d/km-notify-env.sh post-launch.
-		if p.Spec.CLI.NotifySlackChannelOverride != "" {
-			notifyEnv["KM_SLACK_CHANNEL_ID"] = p.Spec.CLI.NotifySlackChannelOverride
+		if sl := notifySlack(p); sl != nil && sl.ChannelOverride != "" {
+			notifyEnv["KM_SLACK_CHANNEL_ID"] = sl.ChannelOverride
 		}
 		// KM_SLACK_BRIDGE_URL is intentionally NOT emitted at compile time —
 		// it requires a runtime SSM lookup of /km/slack/bridge-url. See Plan 08.
@@ -4048,7 +4100,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		// multi-instance overrides (e.g. stg-slack-threads). Also emit
 		// KM_SLACK_INBOUND_QUEUE_URL as an empty placeholder; km create fills
 		// it at runtime via SSM SendCommand after queue creation (Plan 67-06).
-		if p.Spec.CLI.NotifySlackInboundEnabled {
+		if slackInboundEnabled(p) {
 			threadsTable := os.Getenv("KM_SLACK_THREADS_TABLE")
 			if threadsTable == "" {
 				threadsTable = resourcePrefix + "-slack-threads"
@@ -4074,7 +4126,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 
 		// Phase 67: wire SlackInboundEnabled for template conditionals and
 		// SlackThreadsTableName for the systemd EnvironmentFile (informational).
-		if p.Spec.CLI.NotifySlackInboundEnabled {
+		if slackInboundEnabled(p) {
 			params.SlackInboundEnabled = true
 			threadsTable := os.Getenv("KM_SLACK_THREADS_TABLE")
 			if threadsTable == "" {
@@ -4106,7 +4158,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		// When false (or unset), emit neither — the hook's :-0 default keeps
 		// the feature off (Phase 62 convention: omit env lines for unset
 		// features).
-		if p.Spec.CLI.NotifySlackTranscriptEnabled {
+		if slackTranscriptEnabled(p) {
 			params.NotifyEnv["KM_NOTIFY_SLACK_TRANSCRIPT_ENABLED"] = "1"
 			params.NotifyEnv["KM_SLACK_STREAM_TABLE"] = params.SlackStreamMessagesTableName
 		}
@@ -4117,7 +4169,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 		// poller / hooks can source. ssm:SendCommand is denied by an org-level SCP
 		// for the application account, so the original push-into-the-instance
 		// approach silently fails.
-		if p.Spec.CLI.NotifySlackEnabled != nil && *p.Spec.CLI.NotifySlackEnabled {
+		if slackEnabled(p) {
 			params.NotifySlackEnabled = true
 		}
 	}
@@ -4225,7 +4277,7 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 	// Only validate when network is non-nil (EC2 compile path). When network is nil
 	// (ECS/Docker compile paths and unit tests), VSCodeEnabled has no effect (the
 	// template gate prevents the block from rendering without a pubkey).
-	params.VSCodeEnabled = profile.IsVSCodeEnabled(p.Spec.CLI)
+	params.VSCodeEnabled = profile.IsVSCodeEnabled(p.Spec.Runtime.VSCode)
 	if network != nil {
 		params.VSCodeSSHPubKey = network.VSCodeSSHPubKey
 		if params.VSCodeEnabled && params.VSCodeSSHPubKey == "" {

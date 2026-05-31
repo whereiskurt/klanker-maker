@@ -529,10 +529,6 @@
               "type": "string",
               "enum": ["claude", "codex"],
               "description": "Default agent CLI for Slack inbound dispatch and km agent run / km shell when no --claude/--codex flag is passed. Default 'claude'. Absence is equivalent to 'claude'. Phase 70."
-            },
-            "notifySlackInboundReactAlways": {
-              "type": "boolean",
-              "description": "When true (default, current behaviour), the bridge posts a 👀 reaction on every dispatched message. When false, the reaction is posted ONLY on top-level engagement messages — thread replies dispatch silently. Phase 91.4. Install-level via km-config.yaml slack.react_always."
             }
           }
         },
@@ -611,6 +607,10 @@
                     "mentionOnly": {
                       "type": "boolean",
                       "description": "Polite-bot mode (Phase 91): only process inbound messages that @-mention the bot. When omitted, the channel-mode default applies (Mode 1/3 → true, Mode 2 → false)."
+                    },
+                    "reactAlways": {
+                      "type": "boolean",
+                      "description": "When true (default), the bridge posts a 👀 reaction on every dispatched message. When false, the reaction is posted ONLY on top-level engagement messages — thread replies dispatch silently. Phase 91.4/91.5. Install-level default via km-config.yaml slack.react_always."
                     }
                   }
                 },

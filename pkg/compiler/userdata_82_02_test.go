@@ -7,30 +7,37 @@ import (
 	"github.com/whereiskurt/klanker-maker/pkg/profile"
 )
 
-// slackInboundProfileWithPrefix returns a SandboxProfile with NotifySlackInboundEnabled=true
-// for use with prefix-aware table-name tests.
+// slackInboundProfileWithPrefix returns a SandboxProfile with
+// notification.slack.inbound.enabled=true for use with prefix-aware table-name
+// tests. Phase 92: the notify fields moved off cli.* into spec.notification.*;
+// Spec.CLI is kept non-nil because the NotifyEnv emission block still gates on it.
 func slackInboundProfileWithPrefix(t *testing.T) *profile.SandboxProfile {
 	t.Helper()
-	slackEnabled := true
 	p := baseProfile()
-	p.Spec.CLI = &profile.CLISpec{
-		NotifySlackEnabled:        &slackEnabled,
-		NotifySlackPerSandbox:     true,
-		NotifySlackInboundEnabled: true,
+	p.Spec.CLI = &profile.CLISpec{}
+	p.Spec.Notification = &profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			Enabled:    boolPtr(true),
+			PerSandbox: boolPtr(true),
+			Inbound:    &profile.NotificationSlackInboundSpec{Enabled: boolPtr(true)},
+		},
 	}
 	return p
 }
 
 // slackTranscriptProfileWithPrefix returns a SandboxProfile with
-// NotifySlackTranscriptEnabled=true for use with stream-messages table-name tests.
+// notification.slack.transcript.enabled=true for use with stream-messages
+// table-name tests. Phase 92.
 func slackTranscriptProfileWithPrefix(t *testing.T) *profile.SandboxProfile {
 	t.Helper()
-	slackEnabled := true
 	p := baseProfile()
-	p.Spec.CLI = &profile.CLISpec{
-		NotifySlackEnabled:            &slackEnabled,
-		NotifySlackPerSandbox:         true,
-		NotifySlackTranscriptEnabled:  true,
+	p.Spec.CLI = &profile.CLISpec{}
+	p.Spec.Notification = &profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			Enabled:    boolPtr(true),
+			PerSandbox: boolPtr(true),
+			Transcript: &profile.NotificationSlackTranscriptSpec{Enabled: boolPtr(true)},
+		},
 	}
 	return p
 }

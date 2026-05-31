@@ -129,7 +129,8 @@ type NotificationSlackSpec struct {
 }
 
 // NotificationSlackInboundSpec configures bidirectional Slack chat.
-// Replaces cli.notifySlackInboundEnabled / notifySlackInboundMentionOnly.
+// Replaces cli.notifySlackInboundEnabled / notifySlackInboundMentionOnly /
+// notifySlackInboundReactAlways.
 type NotificationSlackInboundSpec struct {
 	// Enabled enables inbound dispatch. nil = default false. Requires
 	// slack.enabled=true and slack.perSandbox=true; incompatible with
@@ -137,6 +138,11 @@ type NotificationSlackInboundSpec struct {
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 	// MentionOnly gates polite-bot mode (Phase 91). nil = channel-mode default.
 	MentionOnly *bool `json:"mentionOnly,omitempty" yaml:"mentionOnly,omitempty"`
+	// ReactAlways controls whether the km-slack bridge posts a 👀 reaction on
+	// every inbound message (true, default) or only on top-level engagement
+	// messages (false). Phase 91.4/91.5 (re-homed from cli.notifySlackInboundReactAlways
+	// in Phase 92, Wave 3). nil = default true (chatty-reactor back-compat).
+	ReactAlways *bool `json:"reactAlways,omitempty" yaml:"reactAlways,omitempty"`
 }
 
 // NotificationSlackTranscriptSpec configures per-turn transcript streaming.
@@ -527,38 +533,16 @@ type CLISpec struct {
 	// Phase 92 (Wave 4) re-homes Agent/ClaudeArgs/CodexArgs out of CLISpec.
 	Agent string `yaml:"agent,omitempty"`
 
-	// Phase 92 (Wave 2): the 14 notification fields formerly carried here
+	// Phase 92: the 15 notification fields formerly carried here
 	// (NotifyOnPermission, NotifyOnIdle, NotifyCooldownSeconds,
 	// NotificationEmailAddress, NotifyEmailEnabled, NotifySlackEnabled,
 	// NotifySlackPerSandbox, NotifySlackChannelOverride, SlackArchiveOnDestroy,
 	// NotifySlackInboundEnabled, NotifySlackInboundMentionOnly,
-	// NotifySlackTranscriptEnabled, NotifySlackInviteEmails, UseSlackConnect) and
-	// VSCodeEnabled were lifted out of CLISpec into the new spec.notification
-	// block (see NotificationSpec below) and spec.runtime.vscode respectively.
-	// Wave 3 re-points the compiler + CLI cmd readers; the repo-wide build is
-	// RED between Wave 2 and Wave 3 by design.
-
-	// NotifySlackInboundReactAlways controls whether the km-slack bridge posts a 👀
-	// reaction on every dispatched message, or only on the first message that
-	// engages a thread (Phase 91.4 first-only-react mode).
-	//
-	// Pointer-bool with tri-state semantics:
-	//   nil    ⇒ default true (current behaviour — react on every dispatch)
-	//   &true  ⇒ react on every dispatch (explicit current behaviour)
-	//   &false ⇒ react ONLY on top-level engagement messages; thread replies that
-	//            reach the dispatcher (via Phase 91.3 mention-bypass) are silent
-	//
-	// Architecture note (matches Phase 91 / 91.1): the bridge Lambda's runtime
-	// behaviour is governed by the install-level KM_SLACK_REACT_ALWAYS env var
-	// (driven by km-config.yaml key slack.react_always). This profile field is
-	// honoured at compile-time into per-sandbox userdata for forward-compat
-	// with a future per-sandbox routing path, but does NOT alter the bridge's
-	// reactor today. Set slack.react_always: false in km-config.yaml to flip the
-	// install default.
-	//
-	// Schema addition requires `make build && km init --sidecars` after deploy.
-	// Existing sandboxes need `km destroy && km create` to pick up. Phase 91.4.
-	NotifySlackInboundReactAlways *bool `yaml:"notifySlackInboundReactAlways,omitempty" json:"notifySlackInboundReactAlways,omitempty"`
+	// NotifySlackInboundReactAlways, NotifySlackTranscriptEnabled,
+	// NotifySlackInviteEmails, UseSlackConnect) and VSCodeEnabled were lifted out
+	// of CLISpec into the new spec.notification block (see NotificationSpec below)
+	// and spec.runtime.vscode respectively. Wave 2 removed 14; Wave 3 re-homed the
+	// 15th (NotifySlackInboundReactAlways → notification.slack.inbound.reactAlways).
 }
 
 // IsVSCodeEnabled returns true when the operator's profile has not opted out of VS Code

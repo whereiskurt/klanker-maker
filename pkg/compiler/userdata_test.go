@@ -1940,7 +1940,7 @@ func TestUserDataVSCodeEnabled(t *testing.T) {
 func TestUserDataVSCodeDisabled(t *testing.T) {
 	fls := false
 	p := baseProfile()
-	p.Spec.CLI = &profile.CLISpec{VSCodeEnabled: &fls}
+	p.Spec.Runtime.VSCode = &profile.RuntimeVSCodeSpec{Enabled: &fls}
 	// Network is nil: when VSCodeEnabled=false the template block is skipped, no pubkey needed.
 	out, err := generateUserData(p, "sb-test", nil, "my-bucket", false, nil)
 	if err != nil {

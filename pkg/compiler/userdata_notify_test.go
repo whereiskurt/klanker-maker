@@ -88,9 +88,10 @@ func TestUserDataNotifyEnvVars_NoneSet_NoEnvBlock(t *testing.T) {
 // (HOOK-03 positive — partial)
 func TestUserDataNotifyEnvVars_PermissionOnly(t *testing.T) {
 	p := baseProfile()
-	p.Spec.CLI = &profile.CLISpec{
-		NotifyOnPermission: true,
-		// NotifyOnIdle, NotifyCooldownSeconds, NotificationEmailAddress: all zero/empty
+	p.Spec.CLI = &profile.CLISpec{}
+	p.Spec.Notification = &profile.NotificationSpec{
+		Events: &profile.NotificationEventsSpec{OnPermission: boolPtr(true)},
+		// onIdle, cooldownSeconds, email.address: all unset
 	}
 
 	ud, err := generateUserData(p, "sb-test03", nil, "my-bucket", false, nil)
@@ -117,9 +118,9 @@ func TestUserDataNotifyEnvVars_PermissionOnly(t *testing.T) {
 // notifyCooldownSeconds both appear in the env file (HOOK-03).
 func TestUserDataNotifyEnvVars_IdleAndCooldown(t *testing.T) {
 	p := baseProfile()
-	p.Spec.CLI = &profile.CLISpec{
-		NotifyOnIdle:          true,
-		NotifyCooldownSeconds: 30,
+	p.Spec.CLI = &profile.CLISpec{}
+	p.Spec.Notification = &profile.NotificationSpec{
+		Events: &profile.NotificationEventsSpec{OnIdle: boolPtr(true), CooldownSeconds: intPtr(30)},
 	}
 
 	ud, err := generateUserData(p, "sb-test04", nil, "my-bucket", false, nil)
@@ -139,8 +140,9 @@ func TestUserDataNotifyEnvVars_IdleAndCooldown(t *testing.T) {
 // produces a KM_NOTIFY_EMAIL env var in the env file (HOOK-03).
 func TestUserDataNotifyEnvVars_RecipientOverride(t *testing.T) {
 	p := baseProfile()
-	p.Spec.CLI = &profile.CLISpec{
-		NotificationEmailAddress: "team@example.com",
+	p.Spec.CLI = &profile.CLISpec{}
+	p.Spec.Notification = &profile.NotificationSpec{
+		Email: &profile.NotificationEmailSpec{Address: "team@example.com"},
 	}
 
 	ud, err := generateUserData(p, "sb-test05", nil, "my-bucket", false, nil)
@@ -160,9 +162,9 @@ func TestUserDataNotifyEnvVars_RecipientOverride(t *testing.T) {
 // Spec.CLI != nil.)  Documents the CONTEXT.md deviation (see SUMMARY.md).
 func TestUserDataNotifyEnvVars_ExplicitFalseStillEmitsZero(t *testing.T) {
 	p := baseProfile()
-	p.Spec.CLI = &profile.CLISpec{
-		NotifyOnPermission: false,
-		NotifyOnIdle:       false,
+	p.Spec.CLI = &profile.CLISpec{}
+	p.Spec.Notification = &profile.NotificationSpec{
+		Events: &profile.NotificationEventsSpec{OnPermission: boolPtr(false), OnIdle: boolPtr(false)},
 	}
 
 	ud, err := generateUserData(p, "sb-test06", nil, "my-bucket", false, nil)
@@ -370,11 +372,14 @@ func TestUserDataNotifySettingsJSON_InvalidUserJSON_FailsFast(t *testing.T) {
 // emailEnabled / slackEnabled are *bool (nil = not set). channelOverride is optional.
 func profileWithSlack(slackEnabled *bool, emailEnabled *bool, channelOverride string) *profile.SandboxProfile {
 	p := baseProfile()
-	p.Spec.CLI = &profile.CLISpec{
-		NotifyOnPermission:         true,
-		NotifySlackEnabled:         slackEnabled,
-		NotifyEmailEnabled:         emailEnabled,
-		NotifySlackChannelOverride: channelOverride,
+	p.Spec.CLI = &profile.CLISpec{}
+	p.Spec.Notification = &profile.NotificationSpec{
+		Events: &profile.NotificationEventsSpec{OnPermission: boolPtr(true)},
+		Email:  &profile.NotificationEmailSpec{Enabled: emailEnabled},
+		Slack: &profile.NotificationSlackSpec{
+			Enabled:         slackEnabled,
+			ChannelOverride: channelOverride,
+		},
 	}
 	return p
 }
@@ -512,11 +517,14 @@ func TestUserDataNotifyEnv_BridgeURLNeverEmittedAtCompileTime(t *testing.T) {
 // KM_SLACK_* entries — Phase 62 backward compatibility end-to-end.
 func TestUserDataNotifyHook_Phase62Profile_NoRegression(t *testing.T) {
 	p := baseProfile()
-	p.Spec.CLI = &profile.CLISpec{
-		NotifyOnPermission:       true,
-		NotifyOnIdle:             true,
-		NotifyCooldownSeconds:    60,
-		NotificationEmailAddress: "ops@example.com",
+	p.Spec.CLI = &profile.CLISpec{}
+	p.Spec.Notification = &profile.NotificationSpec{
+		Events: &profile.NotificationEventsSpec{
+			OnPermission:    boolPtr(true),
+			OnIdle:          boolPtr(true),
+			CooldownSeconds: intPtr(60),
+		},
+		Email: &profile.NotificationEmailSpec{Address: "ops@example.com"},
 		// No Slack fields — all nil/zero
 	}
 	ud, err := generateUserData(p, "sb-test-p63-09", nil, "my-bucket", false, nil)

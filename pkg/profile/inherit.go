@@ -196,6 +196,7 @@ func mergeNotificationSlackInboundSpec(parent, child *NotificationSlackInboundSp
 	return &NotificationSlackInboundSpec{
 		Enabled:     pickBoolPtr(parent.Enabled, child.Enabled),
 		MentionOnly: pickBoolPtr(parent.MentionOnly, child.MentionOnly),
+		ReactAlways: pickBoolPtr(parent.ReactAlways, child.ReactAlways),
 	}
 }
 

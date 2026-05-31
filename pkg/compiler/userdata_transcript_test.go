@@ -50,11 +50,13 @@ func TestUserData_PostToolUseHookRegistered(t *testing.T) {
 // but lets the caller toggle the new Phase 68 transcript flag.
 func transcriptProfile(transcriptOn bool) *profile.SandboxProfile {
 	p := baseProfile()
-	tru := true
-	p.Spec.CLI = &profile.CLISpec{
-		NotifyOnPermission:           true,
-		NotifySlackEnabled:           &tru,
-		NotifySlackTranscriptEnabled: transcriptOn,
+	p.Spec.CLI = &profile.CLISpec{}
+	p.Spec.Notification = &profile.NotificationSpec{
+		Events: &profile.NotificationEventsSpec{OnPermission: boolPtr(true)},
+		Slack: &profile.NotificationSlackSpec{
+			Enabled:    boolPtr(true),
+			Transcript: &profile.NotificationSlackTranscriptSpec{Enabled: boolPtr(transcriptOn)},
+		},
 	}
 	return p
 }

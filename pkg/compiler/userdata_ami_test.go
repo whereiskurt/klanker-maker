@@ -22,11 +22,13 @@ import (
 func TestUserdata_PerSandboxFilesAreUnconditionalTruncatingWrites(t *testing.T) {
 	// Enable every per-sandbox feature so the heredocs all render into the output.
 	p := baseProfile()
-	slackEnabled := true
-	p.Spec.CLI = &profile.CLISpec{
-		NotifySlackEnabled:        &slackEnabled,
-		NotifySlackPerSandbox:     true,
-		NotifySlackInboundEnabled: true,
+	p.Spec.CLI = &profile.CLISpec{}
+	p.Spec.Notification = &profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			Enabled:    boolPtr(true),
+			PerSandbox: boolPtr(true),
+			Inbound:    &profile.NotificationSlackInboundSpec{Enabled: boolPtr(true)},
+		},
 	}
 	// "both" enables km-ebpf-enforcer.service AND km-cgroup.sh writers.
 	p.Spec.Network.Enforcement = "both"
@@ -110,11 +112,13 @@ func TestUserdata_PerSandboxFilesAreUnconditionalTruncatingWrites(t *testing.T) 
 // to anywhere in userdata.
 func TestUserdata_PerSandboxUnitsHaveNoAppendOnlyWrites(t *testing.T) {
 	p := baseProfile()
-	slackEnabled := true
-	p.Spec.CLI = &profile.CLISpec{
-		NotifySlackEnabled:        &slackEnabled,
-		NotifySlackPerSandbox:     true,
-		NotifySlackInboundEnabled: true,
+	p.Spec.CLI = &profile.CLISpec{}
+	p.Spec.Notification = &profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			Enabled:    boolPtr(true),
+			PerSandbox: boolPtr(true),
+			Inbound:    &profile.NotificationSlackInboundSpec{Enabled: boolPtr(true)},
+		},
 	}
 	p.Spec.Network.Enforcement = "both"
 

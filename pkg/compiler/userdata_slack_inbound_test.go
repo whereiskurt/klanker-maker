@@ -12,12 +12,14 @@ import (
 // required for Slack inbound tests. inbound controls NotifySlackInboundEnabled.
 func minimalSlackInboundProfile(t *testing.T, inbound bool) *profile.SandboxProfile {
 	t.Helper()
-	slackEnabled := true
 	p := baseProfile()
-	p.Spec.CLI = &profile.CLISpec{
-		NotifySlackEnabled:        &slackEnabled,
-		NotifySlackPerSandbox:     true,
-		NotifySlackInboundEnabled: inbound,
+	p.Spec.CLI = &profile.CLISpec{}
+	p.Spec.Notification = &profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			Enabled:    boolPtr(true),
+			PerSandbox: boolPtr(true),
+			Inbound:    &profile.NotificationSlackInboundSpec{Enabled: boolPtr(inbound)},
+		},
 	}
 	return p
 }
@@ -565,13 +567,14 @@ func TestUserdata_SlackInbound_AllowsEmptyTextWhenAttachments(t *testing.T) {
 // Used by Plan 70-05 Task 2 dispatch-fork tests.
 func pollerWithAgentCodex(t *testing.T) string {
 	t.Helper()
-	slackEnabled := true
 	p := baseProfile()
-	p.Spec.CLI = &profile.CLISpec{
-		NotifySlackEnabled:        &slackEnabled,
-		NotifySlackPerSandbox:     true,
-		NotifySlackInboundEnabled: true,
-		Agent:                     "codex",
+	p.Spec.CLI = &profile.CLISpec{Agent: "codex"}
+	p.Spec.Notification = &profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			Enabled:    boolPtr(true),
+			PerSandbox: boolPtr(true),
+			Inbound:    &profile.NotificationSlackInboundSpec{Enabled: boolPtr(true)},
+		},
 	}
 	out := compileInboundUserData(t, p)
 	return extractSlackInboundPoller(t, out)
@@ -582,13 +585,15 @@ func pollerWithAgentCodex(t *testing.T) string {
 // Used by Plan 70-05 Task 2 regression-guard tests.
 func pollerWithAgentClaude(t *testing.T) string {
 	t.Helper()
-	slackEnabled := true
 	p := baseProfile()
-	p.Spec.CLI = &profile.CLISpec{
-		NotifySlackEnabled:        &slackEnabled,
-		NotifySlackPerSandbox:     true,
-		NotifySlackInboundEnabled: true,
-		// Agent intentionally omitted — defaults to claude
+	// Agent intentionally omitted — defaults to claude
+	p.Spec.CLI = &profile.CLISpec{}
+	p.Spec.Notification = &profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			Enabled:    boolPtr(true),
+			PerSandbox: boolPtr(true),
+			Inbound:    &profile.NotificationSlackInboundSpec{Enabled: boolPtr(true)},
+		},
 	}
 	out := compileInboundUserData(t, p)
 	return extractSlackInboundPoller(t, out)

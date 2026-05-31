@@ -131,11 +131,13 @@ func TestUserdata_PresenceEnabled_BothBranches(t *testing.T) {
 func TestUserdata_SlackInboundTouchesPresenceStamp(t *testing.T) {
 	// Render with SlackInboundEnabled=true via the profile.
 	p := basePresenceProfile()
-	slackEnabled := true
-	p.Spec.CLI = &profile.CLISpec{
-		NotifySlackEnabled:        &slackEnabled,
-		NotifySlackPerSandbox:     true,
-		NotifySlackInboundEnabled: true,
+	p.Spec.CLI = &profile.CLISpec{}
+	p.Spec.Notification = &profile.NotificationSpec{
+		Slack: &profile.NotificationSlackSpec{
+			Enabled:    boolPtr(true),
+			PerSandbox: boolPtr(true),
+			Inbound:    &profile.NotificationSlackInboundSpec{Enabled: boolPtr(true)},
+		},
 	}
 	rendered := renderPresenceUserdata(t, p)
 

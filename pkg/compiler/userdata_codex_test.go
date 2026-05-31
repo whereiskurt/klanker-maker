@@ -15,9 +15,10 @@ func userdataForAgentTest(t *testing.T, agentValue string) string {
 	t.Helper()
 	p := baseProfile()
 	p.Spec.CLI = &profile.CLISpec{
-		NotifyOnPermission: true,
-		NotifyOnIdle:       true,
-		Agent:              agentValue,
+		Agent: agentValue,
+	}
+	p.Spec.Notification = &profile.NotificationSpec{
+		Events: &profile.NotificationEventsSpec{OnPermission: boolPtr(true), OnIdle: boolPtr(true)},
 	}
 	ud, err := generateUserData(p, "sb-test70", nil, "my-bucket", false, nil)
 	if err != nil {

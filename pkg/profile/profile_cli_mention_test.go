@@ -215,7 +215,9 @@ func TestValidateSemantic_NotifySlackInboundMentionOnly(t *testing.T) {
 
 // TestCLISpec_NotifySlackInboundReactAlways_RoundTrip — Phase 91.4 field
 // shape parity with NotifySlackInboundMentionOnly (POL-01 analog).
-func TestCLISpec_NotifySlackInboundReactAlways_RoundTrip(t *testing.T) {
+// TestNotificationSlackInbound_ReactAlways_RoundTrip verifies the Phase 92 re-home
+// of cli.notifySlackInboundReactAlways onto notification.slack.inbound.reactAlways.
+func TestNotificationSlackInbound_ReactAlways_RoundTrip(t *testing.T) {
 	tests := []struct {
 		name string
 		yaml string
@@ -228,7 +230,7 @@ kind: SandboxProfile
 metadata: {name: t, prefix: t}
 spec:
   runtime: {ami: amazon-linux-2023, substrate: ec2, region: us-east-1}
-  cli: {agent: claude}
+  notification: {slack: {inbound: {enabled: true}}}
 `,
 			want: nil,
 		},
@@ -239,7 +241,7 @@ kind: SandboxProfile
 metadata: {name: t, prefix: t}
 spec:
   runtime: {ami: amazon-linux-2023, substrate: ec2, region: us-east-1}
-  cli: {agent: claude, notifySlackInboundReactAlways: true}
+  notification: {slack: {inbound: {reactAlways: true}}}
 `,
 			want: boolPtr(true),
 		},
@@ -250,7 +252,7 @@ kind: SandboxProfile
 metadata: {name: t, prefix: t}
 spec:
   runtime: {ami: amazon-linux-2023, substrate: ec2, region: us-east-1}
-  cli: {agent: claude, notifySlackInboundReactAlways: false}
+  notification: {slack: {inbound: {reactAlways: false}}}
 `,
 			want: boolPtr(false),
 		},
@@ -262,7 +264,10 @@ spec:
 			if err != nil {
 				t.Fatalf("load: %v", err)
 			}
-			got := p.Spec.CLI.NotifySlackInboundReactAlways
+			var got *bool
+			if p.Spec.Notification != nil && p.Spec.Notification.Slack != nil && p.Spec.Notification.Slack.Inbound != nil {
+				got = p.Spec.Notification.Slack.Inbound.ReactAlways
+			}
 			if (tc.want == nil) != (got == nil) {
 				t.Fatalf("nil mismatch: got %v want %v", got, tc.want)
 			}
