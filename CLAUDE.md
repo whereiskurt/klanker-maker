@@ -28,6 +28,7 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 | VS Code runbook | `docs/vscode.md` |
 | Snapshot-backed EBS volumes in profiles | `OPERATOR-GUIDE.md` § additionalSnapshots |
 | Codex parity, `spec.cli.agent`, Slack prefix routing & agent switching | `docs/codex-parity.md` (Phase 70) |
+| Cut a release (goreleaser + GH Actions, tag-driven) | `docs/release.md` |
 
 ## CLI
 
@@ -87,6 +88,35 @@ Multi-instance support: km supports multiple installs in a single AWS account vi
 - `profiles/` — Built-in SandboxProfile YAML files
 - `skills/` — User-invocable skills (klanker plugin)
 - `spec.runtime.additionalSnapshots` — list of snapshot-backed EBS volumes. Each entry materialises a fresh `aws_ebs_volume` from an existing EBS snapshot, attaches on `/dev/sd[f-p]`, mounts with userdata-detected filesystem. Coexists with `additionalVolume` (both can be set). EC2-only. Volume lifecycle = sandbox lifecycle. See `OPERATOR-GUIDE.md` § additionalSnapshots.
+
+## Releases
+
+Tag-driven via goreleaser + GH Actions. The `VERSION` file is the dev-build counter (auto-bumped by every `make build`); git tags (`vX.Y.Z`) are the release identity.
+
+**Artifacts produced per release:** four tarballs (`km_vX.Y.Z_{darwin,linux}_{amd64,arm64}.tar.gz`), each bundling `km` + `terraform` v1.9.8 + `terragrunt` v0.99.1 + `LICENSE` + `README.md` + `OPERATOR-GUIDE.md` + `THIRD-PARTY-LICENSES.txt`. Plus a SHA256 checksums file. Operators still provide `aws` CLI + `session-manager-plugin` themselves.
+
+**Cut-a-release workflow:**
+
+1. **Pre-flight:** verify `main` is green, GSD milestone is at a clean checkpoint, `CHANGELOG`-worthy commits use conventional-commit prefixes (`feat:`, `fix:`, `docs:` — goreleaser groups by these).
+2. **Local sanity check (no tag):**
+   ```bash
+   goreleaser check
+   goreleaser release --snapshot --clean
+   ls dist/ && tar -tzf dist/km_v*_darwin_arm64.tar.gz
+   ```
+3. **Tag and push:**
+   ```bash
+   git tag vX.Y.Z              # or vX.Y.Z-rc1 for prerelease (auto-flagged)
+   git push origin vX.Y.Z
+   ```
+4. **GH Actions runs `.github/workflows/release.yml`** → cuts a **Draft** release. Review assets, then publish manually from the GH UI.
+5. **Post-release:** bump the klanker plugin version (`plugin.json` + `marketplace.json`) in lockstep if any skill content changed — clients cache the old version otherwise (see [[project_plugin_version_gates_cache]]).
+
+**Pinned bundled-tool versions:** `terraform` 1.9.8, `terragrunt` 0.99.1. Bumping these is a one-line edit to `.goreleaser.yaml` `before.hooks` args + the cache-key in the workflow.
+
+**Files:** `.goreleaser.yaml` (release config), `scripts/fetch-bundled-tools.sh` (per-platform tool fetcher, cached at `~/.cache/km-bundle/`), `.github/workflows/release.yml` (tag-triggered).
+
+Full runbook + troubleshooting: `docs/release.md`.
 
 ## SES per-install rule namespacing
 
