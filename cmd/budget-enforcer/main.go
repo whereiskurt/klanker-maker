@@ -585,7 +585,7 @@ func (h *BudgetHandler) selfDeleteSchedule(ctx context.Context, sandboxID string
 		log.Warn().Str("sandbox_id", sandboxID).Msg("scheduler client is nil — cannot self-delete budget schedule")
 		return
 	}
-	schedName := "km-budget-" + sandboxID
+	schedName := resourcePrefix() + "-budget-" + sandboxID
 	if _, err := h.SchedulerClient.DeleteSchedule(ctx, &scheduler.DeleteScheduleInput{
 		Name: awssdk.String(schedName),
 	}); err != nil {

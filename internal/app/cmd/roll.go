@@ -426,7 +426,7 @@ func rotatePlatform(ctx context.Context, out interface{ Write([]byte) (int, erro
 
 	// Step 3: Optional GitHub App key rotation
 	if githubKeyFile != "" {
-		if err := rotateGitHubKey(ctx, out, jsonOutput, deps, githubKeyFile); err != nil {
+		if err := rotateGitHubKey(ctx, out, jsonOutput, deps, githubKeyFile, prefix); err != nil {
 			return fmt.Errorf("rotate GitHub App key: %w", err)
 		}
 	} else {
@@ -443,7 +443,9 @@ func rotatePlatform(ctx context.Context, out interface{ Write([]byte) (int, erro
 // ============================================================
 
 // rotateGitHubKey reads a PEM file, validates JWT generation, and writes to SSM.
-func rotateGitHubKey(ctx context.Context, out interface{ Write([]byte) (int, error) }, jsonOutput bool, deps *RollDeps, pemFile string) error {
+// prefix is the resource prefix (e.g. "km") used to namespace the SSM path so
+// multi-install operators rotate their own install's key, not a sibling's.
+func rotateGitHubKey(ctx context.Context, out interface{ Write([]byte) (int, error) }, jsonOutput bool, deps *RollDeps, pemFile, prefix string) error {
 	pemData, err := os.ReadFile(pemFile)
 	if err != nil {
 		return fmt.Errorf("read GitHub App PEM file %q: %w", pemFile, err)
@@ -461,8 +463,9 @@ func rotateGitHubKey(ctx context.Context, out interface{ Write([]byte) (int, err
 		return fmt.Errorf("validate GitHub App private key: %w", err)
 	}
 
-	// Write to SSM at /km/config/github/private-key
-	const githubKeySSMPath = "/km/config/github/private-key"
+	// Write to SSM at /{prefix}/config/github/private-key (matches the
+	// prefix-aware read paths in configure_github.go and create.go).
+	githubKeySSMPath := "/" + prefix + "/config/github/private-key"
 	_, ssmErr := deps.SSMClient.PutParameter(ctx, &ssm.PutParameterInput{
 		Name:      awssdk.String(githubKeySSMPath),
 		Value:     awssdk.String(string(pemData)),
