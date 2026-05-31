@@ -362,6 +362,8 @@ func Load() (*Config, error) {
 			"email_subdomain",
 			"container_substrates_enabled",
 			"clusters",
+			// Phase 91.1: nested key for the polite-bot install-level default.
+			"slack.mention_only",
 		} {
 			// yaml wins unconditionally for accountsYamlAuthoritativeKeys (organization,
 			// dns_parent, application). For all other keys, env-var takes precedence

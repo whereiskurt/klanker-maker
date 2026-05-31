@@ -675,3 +675,77 @@ func TestGetSandboxSessionDocumentName_NilSafe(t *testing.T) {
 		t.Errorf("expected km-Sandbox-Session (nil-safe), got %q", got)
 	}
 }
+
+// TestLoadSlackMentionOnly_True verifies Phase 91.1 nested key slack.mention_only
+// loads from yaml end-to-end (catches the merge-loop allowlist bug).
+func TestLoadSlackMentionOnly_True(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+slack:
+    mention_only: true
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Slack.MentionOnly == nil {
+		t.Fatal("Slack.MentionOnly is nil; expected non-nil from yaml load (merge-loop must include slack.mention_only)")
+	}
+	if *cfg.Slack.MentionOnly != true {
+		t.Errorf("Slack.MentionOnly: got %v, want true", *cfg.Slack.MentionOnly)
+	}
+}
+
+// TestLoadSlackMentionOnly_False — explicit false in yaml.
+func TestLoadSlackMentionOnly_False(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+slack:
+    mention_only: false
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Slack.MentionOnly == nil {
+		t.Fatal("Slack.MentionOnly is nil; expected non-nil &false")
+	}
+	if *cfg.Slack.MentionOnly != false {
+		t.Errorf("Slack.MentionOnly: got %v, want false", *cfg.Slack.MentionOnly)
+	}
+}
+
+// TestLoadSlackMentionOnly_Absent — yaml omits the slack block; pointer stays nil.
+func TestLoadSlackMentionOnly_Absent(t *testing.T) {
+	dir := t.TempDir()
+	writeKMConfig(t, dir, `
+domain: example.com
+region: us-east-1
+`)
+	orig, _ := os.Getwd()
+	t.Cleanup(func() { os.Chdir(orig) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Slack.MentionOnly != nil {
+		t.Errorf("Slack.MentionOnly: got &%v, want nil (key absent)", *cfg.Slack.MentionOnly)
+	}
+}
