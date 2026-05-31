@@ -3648,7 +3648,7 @@ type userDataParams struct {
 	NotifyEnv map[string]string
 	// SlackInboundEnabled gates conditional emission of the km-slack-inbound-poller
 	// bash script, its systemd unit, and the systemctl enable/start lines.
-	// Set from profile.Spec.CLI.NotifySlackInboundEnabled (Phase 67).
+	// Set from profile.Spec.Notification.Slack.Inbound.Enabled (Phase 67 / 92).
 	SlackInboundEnabled bool
 	// VSCodeEnabled gates the cloud-init block that enables sshd and writes authorized_keys.
 	// Set from profile.IsVSCodeEnabled(p.Spec.Runtime.VSCode). Phase 73 / 92.
@@ -3661,7 +3661,7 @@ type userDataParams struct {
 	// bootstrap step that polls /sandbox/{id}/slack-channel-id and
 	// /km/slack/bridge-url, writing them into /etc/profile.d/km-slack-runtime.sh.
 	// Replaces the SCP-blocked ssm:SendCommand path (Phase 63 Step 11d) — set
-	// from profile.Spec.CLI.NotifySlackEnabled.
+	// from profile.Spec.Notification.Slack.Enabled (Phase 92).
 	NotifySlackEnabled bool
 	// SlackThreadsTableName is the DynamoDB table name for km_slack_threads.
 	// Populated from KM_SLACK_THREADS_TABLE env var (fallback "km-slack-threads").
