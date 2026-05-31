@@ -80,3 +80,12 @@ variable "identities_table_name" {
   type        = string
   default     = "km-identities"
 }
+
+# Phase 91.6 — Slack threads table for postReadyAnnouncement upsert grant.
+# Wired through km_operator_policy below. Empty default preserves back-compat
+# for installs without Slack inbound enabled.
+variable "slack_threads_table_name" {
+  description = "Name of the km-slack-threads DynamoDB table for the postReadyAnnouncement upsert IAM grant (Phase 91.6 / Phase 67-07 closure). Empty disables the grant."
+  type        = string
+  default     = ""
+}

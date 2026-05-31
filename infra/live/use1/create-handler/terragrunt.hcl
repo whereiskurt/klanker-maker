@@ -54,4 +54,11 @@ inputs = {
   resource_prefix            = local.site_vars.locals.site.label
   sandbox_table_name         = "${local.site_vars.locals.site.label}-sandboxes"
   identities_table_name      = "${local.site_vars.locals.site.label}-identities"
+
+  # Phase 91.6 — closes Phase 67-07 IAM gap. Without this grant, the
+  # postReadyAnnouncement upsert into km-slack-threads silently fails with
+  # AccessDeniedException and Sandbox Ready threads have no anchor row, so
+  # user replies in them get blocked by the mention-only filter instead of
+  # triggering the Phase 91.3 thread-bypass. Empty value disables the grant.
+  slack_threads_table_name   = "${local.site_vars.locals.site.label}-slack-threads"
 }

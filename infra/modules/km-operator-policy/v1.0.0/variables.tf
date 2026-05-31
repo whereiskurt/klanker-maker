@@ -37,3 +37,15 @@ variable "identities_table_name" {
   description = "Name of the DynamoDB identities table"
   type        = string
 }
+
+# Phase 91.6 — Slack threads write permission for the create-handler Lambda.
+# Closes a Phase 67-07 bug: postReadyAnnouncement upsert silently failed with
+# AccessDeniedException because the create-handler role had no PutItem on
+# km-slack-threads. Result: Sandbox Ready threads had no anchor row, so user
+# replies got blocked by the mention-only filter instead of triggering the
+# Phase 91.3 thread-bypass.
+variable "slack_threads_table_name" {
+  description = "Name of the km-slack-threads DynamoDB table. Empty disables the IAM grant (back-compat for pre-Phase-67 installs)."
+  type        = string
+  default     = ""
+}

@@ -64,6 +64,7 @@ module "km_operator_policy" {
   dynamodb_budget_table_arn = var.dynamodb_budget_table_arn
   sandbox_table_name        = var.sandbox_table_name
   identities_table_name     = var.identities_table_name
+  slack_threads_table_name  = var.slack_threads_table_name
 }
 
 # ============================================================
