@@ -160,22 +160,30 @@ spec:
     noBedrock: true
     claudeArgs:
       - "--dangerously-skip-permissions"
-    notifyOnIdle: false
-    notifyOnPermission: false
-    notifyEmailEnabled: false
-    notifySlackEnabled: true
-    notifySlackPerSandbox: true
-    notifySlackInboundEnabled: true
-    slackArchiveOnDestroy: false
-    # Phase 91 — Mode 2 (per-sandbox #sb-{id}) with explicit chatty override.
-    # Mode 2 default is `false` (chatty) — setting it explicitly to `false`
-    # here is functionally a no-op but documents the operator intent. This
-    # fixture exists to prove the `*bool` tri-state accepts the `false`
-    # variant through the schema/validator (POL-01/02/03).
-    notifySlackInboundMentionOnly: false
-    # Phase 72 — operator invite list. useSlackConnect: false to fail-soft
-    # skip any external addresses (avoids generating Slack Connect requests
-    # in testing). whereiskurt@gmail.com only.
-    useSlackConnect: false
-    notifySlackInviteEmails:
-      - whereiskurt@gmail.com
+
+  # Phase 92 — notify* fields moved out of spec.cli into spec.notification.
+  notification:
+    events:
+      onIdle: false
+      onPermission: false
+    email:
+      enabled: false
+    slack:
+      enabled: true
+      perSandbox: true
+      archiveOnDestroy: false
+      inbound:
+        enabled: true
+        # Phase 91 — Mode 2 (per-sandbox #sb-{id}) with explicit chatty override.
+        # Mode 2 default is `false` (chatty) — setting it explicitly to `false`
+        # here is functionally a no-op but documents the operator intent. This
+        # fixture exists to prove the `*bool` tri-state accepts the `false`
+        # variant through the schema/validator (POL-01/02/03).
+        mentionOnly: false
+      # Phase 72 — operator invite list. invites.useConnect: false to fail-soft
+      # skip any external addresses (avoids generating Slack Connect requests
+      # in testing). whereiskurt@gmail.com only.
+      invites:
+        useConnect: false
+        emails:
+          - whereiskurt@gmail.com

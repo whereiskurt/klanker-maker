@@ -160,30 +160,38 @@ spec:
     noBedrock: true
     claudeArgs:
       - "--dangerously-skip-permissions"
-    notifyOnIdle: false
-    notifyOnPermission: false
-    notifyEmailEnabled: false
-    notifySlackEnabled: true
-    notifySlackPerSandbox: true
-    notifySlackInboundEnabled: true
-    slackArchiveOnDestroy: false
-    # Phase 91 — Mode 2 (per-sandbox #sb-{id}) operator override: force polite.
-    # Mode 2 default is `false` (chatty, every-message). Setting `true` here
-    # makes the bot only react when the message contains <@{bot_user_id}>,
-    # identical to shared-channel behaviour.
-    # NOTE: install-level KM_SLACK_MENTION_ONLY env var gates this at the
-    # Lambda level. Set KM_SLACK_MENTION_ONLY=true before `km init --sidecars`
-    # for the deployed bridge to honour polite mode. Per-sandbox routing of
-    # the flag is deferred (see 91-RESEARCH.md Open Question #1).
-    notifySlackInboundMentionOnly: true
-    # Phase 91.4 — first-only reactor. When false, the 👀 reaction posts only
-    # on top-level engagement messages; thread replies dispatch silently.
-    # Set true (default, current behaviour) to react on every dispatched
-    # message. Install-level toggle lives in km-config.yaml as slack.react_always.
-    notifySlackInboundReactAlways: false
-    # Phase 72 — operator invite list. useSlackConnect: false to fail-soft
-    # skip any external addresses (avoids generating Slack Connect requests
-    # in testing). whereiskurt@gmail.com only.
-    useSlackConnect: false
-    notifySlackInviteEmails:
-      - whereiskurt@gmail.com
+
+  # Phase 92 — notify* fields moved out of spec.cli into spec.notification.
+  notification:
+    events:
+      onIdle: false
+      onPermission: false
+    email:
+      enabled: false
+    slack:
+      enabled: true
+      perSandbox: true
+      archiveOnDestroy: false
+      inbound:
+        enabled: true
+        # Phase 91 — Mode 2 (per-sandbox #sb-{id}) operator override: force polite.
+        # Mode 2 default is `false` (chatty, every-message). Setting `true` here
+        # makes the bot only react when the message contains <@{bot_user_id}>,
+        # identical to shared-channel behaviour.
+        # NOTE: install-level KM_SLACK_MENTION_ONLY env var gates this at the
+        # Lambda level. Set KM_SLACK_MENTION_ONLY=true before `km init --sidecars`
+        # for the deployed bridge to honour polite mode. Per-sandbox routing of
+        # the flag is deferred (see 91-RESEARCH.md Open Question #1).
+        mentionOnly: true
+        # Phase 91.4 — first-only reactor. When false, the 👀 reaction posts only
+        # on top-level engagement messages; thread replies dispatch silently.
+        # Set true (default, current behaviour) to react on every dispatched
+        # message. Install-level toggle lives in km-config.yaml as slack.react_always.
+        reactAlways: false
+      # Phase 72 — operator invite list. invites.useConnect: false to fail-soft
+      # skip any external addresses (avoids generating Slack Connect requests
+      # in testing). whereiskurt@gmail.com only.
+      invites:
+        useConnect: false
+        emails:
+          - whereiskurt@gmail.com

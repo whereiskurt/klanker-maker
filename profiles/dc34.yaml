@@ -175,10 +175,17 @@ spec:
     noBedrock: true
     claudeArgs:
       - "--dangerously-skip-permissions"
-    notifyOnIdle: true
-    notifyOnPermission: true
-    notifyEmailEnabled: true
-    notifySlackEnabled: true
-    notifySlackPerSandbox: true
-    notifySlackInboundEnabled: true
-    slackArchiveOnDestroy: true
+
+  # Phase 92 — notify* fields moved out of spec.cli into spec.notification.
+  notification:
+    events:
+      onIdle: true
+      onPermission: true
+    email:
+      enabled: true
+    slack:
+      enabled: true
+      perSandbox: true
+      archiveOnDestroy: true
+      inbound:
+        enabled: true

@@ -159,16 +159,24 @@ spec:
     noBedrock: true
     claudeArgs:
       - "--dangerously-skip-permissions"
-    notifyOnIdle: false
-    notifyOnPermission: false
-    notifyEmailEnabled: false
-    notifySlackEnabled: true
-    notifySlackPerSandbox: true
-    notifySlackInboundEnabled: true
-    slackArchiveOnDestroy: false
-    # Phase 72 — invite this list into the per-sandbox #sb-{id} channel after
-    # creation. useSlackConnect is omitted (defaults to true) so externals
-    # auto-Connect. Operator-invite (SSM /km/slack/invite-email) is separate
-    # and runs first.
-    notifySlackInviteEmails:
-      - whereiskurt@gmail.com
+
+  # Phase 92 — notify* fields moved out of spec.cli into spec.notification.
+  notification:
+    events:
+      onIdle: false
+      onPermission: false
+    email:
+      enabled: false
+    slack:
+      enabled: true
+      perSandbox: true
+      archiveOnDestroy: false
+      inbound:
+        enabled: true
+      # Phase 72 — invite this list into the per-sandbox #sb-{id} channel after
+      # creation. invites.useConnect is omitted (defaults to true) so externals
+      # auto-Connect. Operator-invite (SSM /km/slack/invite-email) is separate
+      # and runs first.
+      invites:
+        emails:
+          - whereiskurt@gmail.com
