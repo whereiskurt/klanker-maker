@@ -309,6 +309,11 @@ channels. The effective behaviour is determined by the channel mode + optional p
   SSM `{prefix}slack/bot-user-id` by `km init` (populated by `km slack init`); no `export`
   required. First-install skips silently with `[info]` line.
 - **`km doctor` adds:** `slack_bot_user_id_cached` (WARN if missing when mention-only is active).
+- **Phase 91.3 (km v0.3.772+):** thread-bypass for the mention scan. Once the bot dispatches
+  a turn in a thread (sandbox_id is written to km-slack-threads at upsert time), every
+  subsequent reply in that thread bypasses the mention requirement. Threads are 1:1
+  conversations with the bot — re-@-mentioning was unnatural. Top-level messages and
+  replies in unknown threads still require mention.
 
 **Why `km init` and not `km init --sidecars`:** the bridge Lambda's `environment.variables`
 block is owned by the `lambda-slack-bridge` Terraform module, which only updates on full
