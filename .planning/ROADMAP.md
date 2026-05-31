@@ -2093,3 +2093,15 @@ Plans:
 - [ ] 91-04-PLAN.md — km slack init + km slack rotate-token cache bot_user_id to {prefix}slack/bot-user-id SSM (POL-07/08)
 - [ ] 91-05-PLAN.md — km doctor checkSlackBotUserIDCached WARN check (POL-10)
 - [ ] 91-06-PLAN.md — Documentation (slack-notifications.md, CLAUDE.md, OPERATOR-GUIDE.md) + UAT checkpoint (POL-13)
+
+**Phase 91.1 (in-place follow-up, 2026-05-30):** Drive `KM_SLACK_MENTION_ONLY` from `km-config.yaml` key `slack.mention_only` and auto-read `KM_SLACK_BOT_USER_ID` from SSM `{prefix}slack/bot-user-id` during `km init`. Eliminates the two pre-init `export` steps from the Phase 91 rollout. Surgical change across `internal/app/config/config.go` (new `SlackConfig{MentionOnly *bool}`), `internal/app/cmd/init.go` (`ExportTerragruntEnvVars` emits the var; new `EnsureSlackBotUserIDFromSSM` helper called from `runInit`), and docs (`docs/slack-notifications.md`, `CLAUDE.md`, `OPERATOR-GUIDE.md`). 6 new unit tests GREEN; verified end-to-end on application account (km v0.3.769) — `km init` shows the `[info]` line on first-install (SSM empty), `km doctor` fires `⚠ Slack bot-user-id cache` correctly. See `.planning/phases/91-.../91-91.1-FOLLOWUP.md`. Commits: `5550573` (code+docs), `cd4038a` (learn.v2 fixtures).
+
+### Phase 92: Profile spec restructure — notification block + iam rename + dead-field removal + structured agent tool gating
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 91
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 92 to break down)

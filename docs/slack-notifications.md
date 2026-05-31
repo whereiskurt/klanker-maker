@@ -1759,6 +1759,50 @@ through `km init` automatically:
 1. `slack.mention_only` from `km-config.yaml` → `KM_SLACK_MENTION_ONLY` (drift-WARN aware).
 2. `{prefix}slack/bot-user-id` from SSM → `KM_SLACK_BOT_USER_ID` (env-wins; first-install skips).
 
+### Either ordering works (init-first or slack-init-first)
+
+The rollout sequence above runs `km slack init --force` BEFORE `km init` so SSM is populated
+before the auto-read fires. But the inverse also works — Phase 91.1's auto-read is non-fatal
+when SSM is empty, and the bridge falls back to a runtime `auth.test` on cold-start when the
+Lambda env's `KM_SLACK_BOT_USER_ID` is empty:
+
+| Ordering | `km init` line | `km doctor` Phase 91 check | Lambda `KM_SLACK_BOT_USER_ID` | Runtime fallback |
+|----------|----------------|----------------------------|-------------------------------|------------------|
+| `km slack init --force` → `km init` | (silent — SSM populated, value injected) | ✓ OK | `U…` (live value) | not needed |
+| `km init` → `km slack init --force` | `[info] KM_SLACK_BOT_USER_ID not auto-set` | ⚠ WARN (until slack init runs) | `""` (until next `km init` re-runs) | one `auth.test` call per cold-start |
+
+After flipping the order, re-running `km init` once more closes the loop — the auto-read now
+finds the populated SSM param and injects it into the Lambda env on the next terragrunt
+apply.
+
+### First-install observed behavior
+
+When `km init` runs against a workspace where `km slack init` hasn't yet been run since
+Phase 91 shipped, expect this exact line near the top of the output:
+
+```
+  [info] KM_SLACK_BOT_USER_ID not auto-set (SSM /km/slack/bot-user-id unavailable:
+  operation error SSM: GetParameter, ... StatusCode: 400, RequestID: …,
+  ParameterNotFound: )
+```
+
+This is `EnsureSlackBotUserIDFromSSM` doing its non-fatal fallback — not an error, not a
+warning, just an info line. The init proceeds; the bridge Lambda's `KM_SLACK_BOT_USER_ID`
+env var is set to `""` (terragrunt fallback) and the bridge will use a runtime `auth.test`
+on each cold-start.
+
+Then `km doctor` (after init) shows:
+
+```
+⚠ Slack bot-user-id cache  /km/slack/bot-user-id not cached — bridge mention-scan will
+                           fall back to live auth.test on every cold-start
+  → Run `km slack init --force` (or `km slack rotate-token --bot-token <token>`) to
+    re-capture and cache the bot user_id.
+```
+
+Resolution: `km slack init --force` populates SSM; re-run `km init --dry-run=false` to flow
+the value into the Lambda env block; `km doctor` then shows the check as `✓ OK`.
+
 `KM_SLACK_MENTION_ONLY` is install-level: it controls the Lambda default for sandboxes that
 don't set `notifySlackInboundMentionOnly` explicitly. Setting it to `"true"` makes
 Mode 1/3 channels polite and leaves Mode 2 (`#sb-{id}`) every-message unless the profile
