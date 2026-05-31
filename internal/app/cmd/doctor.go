@@ -3398,7 +3398,8 @@ func initRealDepsWithExisting(ctx context.Context, cfg DoctorConfigProvider, dep
 			if parseErr != nil || prof == nil {
 				continue
 			}
-			if prof.Spec.CLI == nil || prof.Spec.CLI.Agent != "codex" {
+			// Phase 92 (Wave 4): agent default moved to spec.agent.default.
+			if profileAgentDefault(prof) != "codex" {
 				continue
 			}
 			refs = append(refs, codexSandboxRef{

@@ -1418,23 +1418,68 @@ func loadProfileCLINoBedrock(ctx context.Context, cfg *config.Config, sandboxID 
 }
 
 // loadProfileCLIClaudeArgs fetches the sandbox's profile from S3 and returns
-// the cli.claudeArgs list. Returns nil on any error (fail open).
+// the agent.claude.args list. Returns nil on any error (fail open).
+// Phase 92 (Wave 4): the args source moved from cli.claudeArgs to
+// spec.agent.claude.args; the function name is retained for caller stability.
 func loadProfileCLIClaudeArgs(ctx context.Context, cfg *config.Config, sandboxID string) []string {
-	p := loadProfileCLI(ctx, cfg, sandboxID)
-	if p == nil {
+	a := loadProfileAgent(ctx, cfg, sandboxID)
+	if a == nil || a.Claude == nil {
 		return nil
 	}
-	return p.ClaudeArgs
+	return a.Claude.Args
 }
 
 // loadProfileCLICodexArgs fetches the sandbox's profile from S3 and returns
-// the cli.codexArgs list. Returns nil on any error (fail open).
+// the agent.codex.args list. Returns nil on any error (fail open).
+// Phase 92 (Wave 4): the args source moved from cli.codexArgs to
+// spec.agent.codex.args; the function name is retained for caller stability.
 func loadProfileCLICodexArgs(ctx context.Context, cfg *config.Config, sandboxID string) []string {
-	p := loadProfileCLI(ctx, cfg, sandboxID)
-	if p == nil {
+	a := loadProfileAgent(ctx, cfg, sandboxID)
+	if a == nil || a.Codex == nil {
 		return nil
 	}
-	return p.CodexArgs
+	return a.Codex.Args
+}
+
+// loadProfileAgent fetches the sandbox's stored profile from S3 and returns its
+// spec.agent block (nil-safe, fail-open). Phase 92 (Wave 4) helper backing the
+// claudeArgs/codexArgs accessors and any agent-default reads.
+func loadProfileAgent(ctx context.Context, cfg *config.Config, sandboxID string) *profile.AgentSpec {
+	if cfg.ArtifactsBucket == "" {
+		return nil
+	}
+	awsCfg, err := kmaws.LoadAWSConfig(ctx, "klanker-terraform")
+	if err != nil {
+		return nil
+	}
+	s3Client := s3.NewFromConfig(awsCfg)
+	profileKey := fmt.Sprintf("artifacts/%s/.km-profile.yaml", sandboxID)
+	obj, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: awssdk.String(cfg.ArtifactsBucket),
+		Key:    awssdk.String(profileKey),
+	})
+	if err != nil {
+		return nil
+	}
+	defer obj.Body.Close()
+	data, err := io.ReadAll(obj.Body)
+	if err != nil {
+		return nil
+	}
+	p, err := profile.Parse(data)
+	if err != nil || p == nil {
+		return nil
+	}
+	return p.Spec.Agent
+}
+
+// profileAgentDefault returns prof.Spec.Agent.Default, nil-safe. Phase 92
+// (Wave 4): replaces the old prof.Spec.CLI.Agent read across the cmd package.
+func profileAgentDefault(prof *profile.SandboxProfile) string {
+	if prof == nil || prof.Spec.Agent == nil {
+		return ""
+	}
+	return prof.Spec.Agent.Default
 }
 
 // loadProfileCLI fetches the sandbox's profile from S3 and returns its CLISpec,

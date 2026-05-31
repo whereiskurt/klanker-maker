@@ -1139,7 +1139,7 @@ func TestL7ProxyHostsBedrockOnly(t *testing.T) {
 // RED test — gate wired by plan 88-06.
 func TestL7ProxyHostsWithCodex(t *testing.T) {
 	p := baseProfile()
-	p.Spec.CLI = &profile.CLISpec{Agent: "codex"}
+	p.Spec.Agent = &profile.AgentSpec{Default: "codex"}
 	got := buildL7ProxyHosts(p)
 	want := "api.openai.com"
 	if got != want {
@@ -1153,7 +1153,7 @@ func TestL7ProxyHostsWithCodex(t *testing.T) {
 // branch when wiring the Codex gate (RESEARCH.md § Pitfall #5). RED test until 88-06 lands.
 func TestL7ProxyHostsWithCodexAndBedrock(t *testing.T) {
 	p := baseProfile()
-	p.Spec.CLI = &profile.CLISpec{Agent: "codex"}
+	p.Spec.Agent = &profile.AgentSpec{Default: "codex"}
 	p.Spec.Execution.UseBedrock = true
 	p.Spec.SourceAccess = profile.SourceAccessSpec{
 		GitHub: &profile.GitHubAccess{

@@ -134,11 +134,11 @@ func TestDoctor_AgentTypeConsistency_AllConsistent(t *testing.T) {
 	scan := func(_ context.Context) ([]threadAgentRow, error) { return rows, nil }
 	fetch := func(_ context.Context, sandboxID string) (*profile.SandboxProfile, error) {
 		p := &profile.SandboxProfile{}
-		p.Spec.CLI = &profile.CLISpec{}
+		// Phase 92 (Wave 4): agent default moved to spec.agent.default.
 		if sandboxID == "sb-codex" {
-			p.Spec.CLI.Agent = "codex"
+			p.Spec.Agent = &profile.AgentSpec{Default: "codex"}
 		}
-		// sb-claude: Agent is "" → treated as "claude" (locked decision)
+		// sb-claude: Agent block absent → treated as "claude" (locked decision)
 		return p, nil
 	}
 	res := checkAgentTypeConsistency(context.Background(), scan, fetch)
@@ -160,8 +160,9 @@ func TestDoctor_AgentTypeConsistency_DriftWarns(t *testing.T) {
 	scan := func(_ context.Context) ([]threadAgentRow, error) { return rows, nil }
 	fetch := func(_ context.Context, _ string) (*profile.SandboxProfile, error) {
 		// Profile was flipped to claude after the thread was created with codex.
+		// Phase 92 (Wave 4): agent default moved to spec.agent.default.
 		p := &profile.SandboxProfile{}
-		p.Spec.CLI = &profile.CLISpec{Agent: "claude"}
+		p.Spec.Agent = &profile.AgentSpec{Default: "claude"}
 		return p, nil
 	}
 	res := checkAgentTypeConsistency(context.Background(), scan, fetch)
@@ -240,9 +241,10 @@ func TestCodexVersionSatisfied(t *testing.T) {
 // Kept for symmetry; most tests use strings.Contains directly.
 func containsStr(s, sub string) bool { return strings.Contains(s, sub) }
 
-// makeCodexProfile returns a minimal SandboxProfile with spec.cli.agent set.
+// makeCodexProfile returns a minimal SandboxProfile with spec.agent.default set.
+// Phase 92 (Wave 4): agent default moved off spec.cli.agent.
 func makeCodexProfile(agent string) *profile.SandboxProfile {
 	p := &profile.SandboxProfile{}
-	p.Spec.CLI = &profile.CLISpec{Agent: agent}
+	p.Spec.Agent = &profile.AgentSpec{Default: agent}
 	return p
 }

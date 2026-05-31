@@ -14,9 +14,11 @@ import (
 func userdataForAgentTest(t *testing.T, agentValue string) string {
 	t.Helper()
 	p := baseProfile()
-	p.Spec.CLI = &profile.CLISpec{
-		Agent: agentValue,
-	}
+	// Phase 92 (Wave 4): agent default moved to spec.agent.default. KM_AGENT
+	// emission still gates on Spec.CLI != nil, so keep a (NoBedrock-only) CLI
+	// block present alongside the new agent block.
+	p.Spec.CLI = &profile.CLISpec{}
+	p.Spec.Agent = &profile.AgentSpec{Default: agentValue}
 	p.Spec.Notification = &profile.NotificationSpec{
 		Events: &profile.NotificationEventsSpec{OnPermission: boolPtr(true), OnIdle: boolPtr(true)},
 	}

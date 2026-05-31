@@ -3789,6 +3789,16 @@ func notifySlackInbound(p *profile.SandboxProfile) *profile.NotificationSlackInb
 	return s.Inbound
 }
 
+// agentDefault returns the profile's spec.agent.default agent name (nil-safe).
+// Phase 92 (Wave 4): replaces the old p.Spec.CLI.Agent read. Empty string means
+// "claude" by downstream convention.
+func agentDefault(p *profile.SandboxProfile) string {
+	if p.Spec.Agent == nil {
+		return ""
+	}
+	return p.Spec.Agent.Default
+}
+
 // slackEnabled reports whether notification.slack.enabled is explicitly &true.
 func slackEnabled(p *profile.SandboxProfile) bool {
 	s := notifySlack(p)
@@ -3930,7 +3940,8 @@ func buildL7ProxyHosts(p *profile.SandboxProfile) string {
 	// OpenAI directly (raw OpenAI SDK in a Claude sandbox) need an explicit profile flag
 	// — deferred to a follow-up phase. See 88-RESEARCH.md § Open Questions #2.
 	// NOTE: host order is GitHub, Bedrock/Anthropic, OpenAI — preserved for test contracts.
-	if p.Spec.CLI != nil && p.Spec.CLI.Agent == "codex" {
+	// Phase 92 (Wave 4): read spec.agent.default via agentDefault (was p.Spec.CLI.Agent).
+	if agentDefault(p) == "codex" {
 		hosts = append(hosts, "api.openai.com")
 	}
 	return strings.Join(hosts, ",")
@@ -4111,13 +4122,15 @@ func generateUserData(p *profile.SandboxProfile, sandboxID string, secretPaths [
 			// overwrites the empty value after creating the SQS queue.
 			notifyEnv["KM_SLACK_INBOUND_QUEUE_URL"] = ""
 		}
-		// Phase 70 (SC-1/SC-4/SC-5/SC-6): KM_AGENT carries spec.cli.agent into the
+		// Phase 70 (SC-1/SC-4/SC-5/SC-6): KM_AGENT carries the agent default into the
 		// sandbox env. Absence / "" defaults to "claude" per CONTEXT.md locked decision.
 		// Read by: km-slack-inbound-poller (Plan 70-05 dispatch fork) and
 		// /opt/km/bin/km-notify-hook (Plan 70-03 — for future agent-aware branching).
-		// Always emitted when Spec.CLI != nil (same gating as KM_NOTIFY_ON_PERMISSION).
+		// Always emitted inside this Spec.CLI != nil block (same gating as
+		// KM_NOTIFY_ON_PERMISSION); the value source moved to spec.agent.default
+		// (Phase 92 Wave 4) but the env var name + value semantics are UNCHANGED.
 		agent := "claude"
-		if p.Spec.CLI.Agent == "codex" {
+		if agentDefault(p) == "codex" {
 			agent = "codex"
 		}
 		notifyEnv["KM_AGENT"] = agent

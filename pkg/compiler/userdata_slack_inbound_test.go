@@ -568,7 +568,10 @@ func TestUserdata_SlackInbound_AllowsEmptyTextWhenAttachments(t *testing.T) {
 func pollerWithAgentCodex(t *testing.T) string {
 	t.Helper()
 	p := baseProfile()
-	p.Spec.CLI = &profile.CLISpec{Agent: "codex"}
+	// Phase 92 (Wave 4): agent default moved to spec.agent.default; KM_AGENT
+	// emission still gates on Spec.CLI != nil, so keep a present CLI block.
+	p.Spec.CLI = &profile.CLISpec{}
+	p.Spec.Agent = &profile.AgentSpec{Default: "codex"}
 	p.Spec.Notification = &profile.NotificationSpec{
 		Slack: &profile.NotificationSlackSpec{
 			Enabled:    boolPtr(true),
