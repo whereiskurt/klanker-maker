@@ -78,6 +78,7 @@ spec:
       - "su - sandbox -c 'cd /workspace && curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash'"
       - "su - sandbox -c 'nvm install 22'"
       - "su - sandbox -c 'npx -y get-shit-done-cc --claude --codex --global'"
+      - "su - sandbox -c 'curl -fsSL https://herdr.dev/install.sh | sh'"
 
   sourceAccess:
     mode: allowlist
